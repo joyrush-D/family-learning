@@ -76,7 +76,8 @@ class Store:
         if len(ids)!=len(rows): raise CalendarError('孩子档案标识重复',409,'profile_error')
         return ids
 
-    def _fields(self,obj,children,source=False):
+    @staticmethod
+    def _fields(obj,children,source=False):
         ids=obj.get('child_ids')
         if not isinstance(ids,list) or not ids or any(not isinstance(i,str) or i not in children for i in ids) or len(set(ids))!=len(ids):
             raise CalendarError('请至少选择一位已存在的孩子，且不能重复')
@@ -222,3 +223,133 @@ class Store:
         events.sort(key=lambda r:(r['day'],r['start_time'],r['title'],r['id']))
         expanded.sort(key=lambda r:(r['day'],r['child_id'],r['id']))
         return dict(events=events,timetables=expanded,source_error=error)
+
+    def subscription_events(self):
+        """Read original series, including cancellations; never expand or truncate.
+
+        ponytail: 1,000 saved/source series; add archival policy if families reach it.
+        Keeping old rows avoids silently losing cancellation or reschedule updates.
+        """
+        children=self._children()
+        with self._db() as c:
+            ready=c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='calendar_events'").fetchone()
+            rows=c.execute('SELECT * FROM calendar_events ORDER BY id LIMIT 1001').fetchall() if ready else []
+        sources,_,error=self._sources(children)
+        if error: raise CalendarError('学校日历来源无法完整读取，请在系统内核对后重试',503,'calendar_source_unavailable')
+        if len(rows)+len(sources)>1000:
+            raise CalendarError('日历订阅超过1000条原始安排，请在系统内核对',503,'calendar_limit')
+        try:
+            result=[self._manual(row) for row in rows]+sources
+            for row in result: self._fields(row,children)
+        except (KeyError,TypeError,ValueError) as e:
+            if isinstance(e,CalendarError): raise
+            raise CalendarError('已保存日历无法完整核对',503,'calendar_data_error') from None
+        return result
+
+
+def _ics_text(value):
+    # RFC 5545 TEXT escaping; user content cannot create another property line.
+    return value.replace('\\','\\\\').replace('\r\n','\n').replace('\r','\n').replace('\n','\\n').replace(';','\\;').replace(',','\\,')
+
+
+def _ics_lines(lines):
+    """Fold on UTF-8 code point boundaries, counting the continuation space."""
+    folded=[]
+    try:
+        for line in lines:
+            part=''; size=0
+            for char in line:
+                width=len(char.encode('utf-8'))
+                if size+width>75:
+                    folded.append(part); part=' '; size=1
+                part+=char; size+=width
+            folded.append(part)
+        return ('\r\n'.join(folded)+'\r\n').encode('utf-8')
+    except UnicodeError:
+        raise CalendarError('日历包含无法编码的文字',503,'calendar_data_error') from None
+
+
+def _ics_utc(day,clock):
+    try:
+        local=dt.datetime.fromisoformat(day+'T'+clock).replace(tzinfo=dt.timezone(dt.timedelta(hours=8)))
+        value=local.astimezone(dt.timezone.utc)
+        return f'{value.year:04d}{value.month:02d}{value.day:02d}T{value.hour:02d}{value.minute:02d}00Z'
+    except (ValueError,OverflowError):
+        raise CalendarError('日历时间无法转换为UTC') from None
+
+
+def render_ics(events,profiles,as_of,uid_namespace,task_states=None):
+    """Pure, minimal family feed: original series in, RFC 5545 UTF-8 bytes out.
+
+    Only names, title, dates/times, status and location leave the application.
+    The caller supplies a trusted, stable deployment namespace, never a Host header.
+    Task overlays are per child; completion alone does not mean nonparticipation.
+    """
+    if not isinstance(events,list) or len(events)>1000:
+        raise CalendarError('日历订阅须为不超过1000条原始安排',503,'calendar_limit')
+    if not isinstance(profiles,list): raise CalendarError('孩子档案暂时无法核对',409,'profile_error')
+    children={}
+    for profile in profiles:
+        if not isinstance(profile,dict): raise CalendarError('孩子档案暂时无法核对',409,'profile_error')
+        ident=_text(profile,'id',128,required=True); name=_text(profile,'name',100,required=True)
+        if ident!=profile['id'] or any(ord(c)<32 for c in ident) or ident in children:
+            raise CalendarError('孩子档案标识无法核对',409,'profile_error')
+        children[ident]=name
+    if not isinstance(as_of,dt.datetime) or as_of.tzinfo is None or as_of.utcoffset() is None:
+        raise CalendarError('订阅生成时间须包含时区')
+    namespace=_text({'namespace':uid_namespace},'namespace',255,required=True)
+    if namespace!=uid_namespace or any(ord(c)<32 for c in namespace): raise CalendarError('订阅命名空间不正确')
+    states={} if task_states is None else task_states
+    if not isinstance(states,dict): raise CalendarError('事项参与状态无法核对')
+    for task_id,by_child in states.items():
+        if not isinstance(task_id,str) or not task_id or not isinstance(by_child,dict):
+            raise CalendarError('事项参与状态无法核对')
+        for child,status in by_child.items():
+            if child not in children or not isinstance(status,str) or status not in {'待跟进','进行中','已完成','不参加','不适用','已归档'}:
+                raise CalendarError('事项参与状态或孩子归属无法核对')
+    try:
+        stamp=as_of.astimezone(dt.timezone.utc)
+    except (ValueError,OverflowError): raise CalendarError('订阅生成时间无法转换为UTC') from None
+    timestamp=f'{stamp.year:04d}{stamp.month:02d}{stamp.day:02d}T{stamp.hour:02d}{stamp.minute:02d}{stamp.second:02d}Z'
+    lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Family Growth//Family Calendar//ZH','CALSCALE:GREGORIAN']
+    seen=set()
+    for item in events:
+        if not isinstance(item,dict): raise CalendarError('日历安排格式不正确')
+        ident=_text(item,'id',128,required=True)
+        if ident!=item['id'] or any(ord(c)<32 for c in ident) or ident in seen:
+            raise CalendarError('日历安排编号重复或无法核对')
+        seen.add(ident)
+        row=Store._fields(item,children)
+        origin=_day(item.get('series_day',row['day']))
+        # Feed only the original saved series, not duplicate snapshot occurrences.
+        if origin!=row['day']: raise CalendarError('日历订阅需要原始系列，不能使用已展开的每周实例')
+        task_id=_text(item,'task_id',100)
+        participants=[child for child in row['child_ids'] if states.get(task_id,{}).get(child) not in {'不参加','不适用'}]
+        status=row['status'] if participants else 'cancelled'
+        # Cancellation still identifies the original children; the cancelled label
+        # makes clear that these names no longer imply participation.
+        names='、'.join(children[child] for child in (participants or row['child_ids']))
+        title=(names+' · ' if names else '')+row['title']
+        if status=='tentative': title='[暂定] '+title
+        if status=='cancelled': title='[已取消] '+title
+        if not row['start_time']: title='[时间待定] '+title
+        try: uid=hashlib.sha256((namespace+'\0'+ident).encode('utf-8')).hexdigest()+'@family-calendar'
+        except UnicodeError: raise CalendarError('日历编号无法编码') from None
+        lines+=['BEGIN:VEVENT','UID:'+uid,'DTSTAMP:'+timestamp,'SUMMARY:'+_ics_text(title),
+                'STATUS:'+status.upper(),'TRANSP:'+('OPAQUE' if status=='confirmed' and row['start_time'] else 'TRANSPARENT')]
+        if row['start_time']:
+            lines.append('DTSTART:'+_ics_utc(origin,row['start_time']))
+            if row['end_time']: lines.append('DTEND:'+_ics_utc(origin,row['end_time']))
+        else:
+            # DATE without DTEND means one day; no guessed busy interval or clock.
+            lines.append('DTSTART;VALUE=DATE:'+origin.replace('-',''))
+        if row['repeat']=='weekly':
+            rule='RRULE:FREQ=WEEKLY'
+            if row['until']:
+                until=_ics_utc(row['until'],row['start_time']) if row['start_time'] else row['until'].replace('-','')
+                rule+=';UNTIL='+until
+            lines.append(rule)
+        if row['location']: lines.append('LOCATION:'+_ics_text(row['location']))
+        lines.append('END:VEVENT')
+    lines.append('END:VCALENDAR')
+    return _ics_lines(lines)

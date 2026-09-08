@@ -3,6 +3,7 @@ const calendarKinds={school:'学校安排',activity:'课外活动',study:'学习
 const calendarStatuses={tentative:'暂定',confirmed:'已确定',cancelled:'已取消'};
 const calendarState={week:'',day:'',childID:'',visible:false,result:null,range:'',error:'',loading:false,sequence:0,controller:null};
 let calendarPending=null,calendarSaving=false,calendarJump=0,calendarDraftContext=null;
+let calendarSyncVersion=0;
 function calendarAdd(day,n){const d=new Date(day+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10)}
 function calendarMonday(day){const n=new Date(day+'T12:00:00Z').getUTCDay();return calendarAdd(day,-((n+6)%7))}
 function calendarDays(){return Array.from({length:7},(_,i)=>calendarAdd(calendarState.week,i))}
@@ -31,7 +32,7 @@ function calendarHTML(){
  if(!calendarState.visible){calendarState.childID=data.children.find(c=>c.name===child)?.id||'';calendarState.visible=true}
  if(calendarState.childID&&!data.children.some(c=>c.id===calendarState.childID))calendarState.childID='';
  const days=calendarDays(),sat=calendarAdd(calendarMonday(data.today),5),sun=calendarAdd(sat,1);
- return `<section class="calendar-heading"><div><div class="orbit-label">OUR WEEK TO GROW</div><h1>成长日历</h1><p class="muted">看清学校安排，也给探索和相处留一点位置。</p></div><div class="toolbar"><button type="button" data-calendar-ask>说一句安排 / 查询</button><button class="primary" data-calendar-new="${calendarState.day}">＋ 新建安排</button></div></section><div class="calendar-controls"><div class="calendar-week-nav"><button data-calendar-shift="-7" aria-label="上一周">‹</button><h2>${esc(calendarState.week.slice(5).replace('-',' / '))}<span>—</span>${esc(days[6].slice(5).replace('-',' / '))}<small>${calendarState.week.slice(0,4)}${days[6].slice(0,4)!==calendarState.week.slice(0,4)?'–'+days[6].slice(0,4):''}</small></h2><button data-calendar-shift="7" aria-label="下一周">›</button></div><div class="calendar-view-actions"><button data-calendar-current>本周</button><button data-calendar-weekend>本周末</button></div></div><div class="calendar-kids" aria-label="选择日历里的孩子"><button data-calendar-child="" aria-pressed="${!calendarState.childID}">全家</button>${data.children.map(c=>`<button data-calendar-child="${esc(c.id)}" aria-pressed="${calendarState.childID===c.id}">${esc(c.name)}</button>`).join('')}</div><div class="calendar-day-picker" aria-label="选择一天">${days.map((d,i)=>`<button data-calendar-day="${d}" aria-pressed="${d===calendarState.day}" ${d===data.today?'aria-current="date"':''}><span>周${'一二三四五六日'[i]}</span><strong>${Number(d.slice(8))}</strong><i aria-hidden="true">${d===data.today?'•':' '}</i></button>`).join('')}</div>${calendarPending?'<p class="note" role="status">有一次安排保存结果尚未确认。<button data-calendar-resume>查看并重试</button></p>':''}<div id="calendarAgenda" aria-busy="${calendarState.loading}">${calendarAgendaHTML()}</div><section class="calendar-weekend card" id="calendarWeekend"><div><span class="orbit-label">A LITTLE ROOM FOR US</span><h2>本周末，想一起做点什么？</h2><p class="muted">先写个想法，和孩子商量。以下按钮只打开草稿，不会自动安排活动。</p></div><label>草稿日期<select id="calendarWeekendDay"><option value="${sat}">周六 · ${sat.slice(5)}</option><option value="${sun}">周日 · ${sun.slice(5)}</option></select></label><div class="calendar-weekend-drafts"><button data-calendar-draft="运动">留一段运动时间</button><button data-calendar-draft="自由探索">留一点自由探索</button><button data-calendar-draft="共读">留一段共读时光</button></div></section><p class="small muted">学校安排按出处展示，不等于已确认参加或完成。每周重复安排按填写日期展开，不自动推定假期或单双周。</p>`;
+ return `<section class="calendar-heading"><div><div class="orbit-label">OUR WEEK TO GROW</div><h1>成长日历</h1><p class="muted">看清学校安排，也给探索和相处留一点位置。</p></div><div class="toolbar"><button type="button" data-calendar-sync>同步到手机</button><button type="button" data-calendar-ask>说一句安排 / 查询</button><button class="primary" data-calendar-new="${calendarState.day}">＋ 新建安排</button></div></section><div class="calendar-controls"><div class="calendar-week-nav"><button data-calendar-shift="-7" aria-label="上一周">‹</button><h2>${esc(calendarState.week.slice(5).replace('-',' / '))}<span>—</span>${esc(days[6].slice(5).replace('-',' / '))}<small>${calendarState.week.slice(0,4)}${days[6].slice(0,4)!==calendarState.week.slice(0,4)?'–'+days[6].slice(0,4):''}</small></h2><button data-calendar-shift="7" aria-label="下一周">›</button></div><div class="calendar-view-actions"><button data-calendar-current>本周</button><button data-calendar-weekend>本周末</button></div></div><div class="calendar-kids" aria-label="选择日历里的孩子"><button data-calendar-child="" aria-pressed="${!calendarState.childID}">全家</button>${data.children.map(c=>`<button data-calendar-child="${esc(c.id)}" aria-pressed="${calendarState.childID===c.id}">${esc(c.name)}</button>`).join('')}</div><div class="calendar-day-picker" aria-label="选择一天">${days.map((d,i)=>`<button data-calendar-day="${d}" aria-pressed="${d===calendarState.day}" ${d===data.today?'aria-current="date"':''}><span>周${'一二三四五六日'[i]}</span><strong>${Number(d.slice(8))}</strong><i aria-hidden="true">${d===data.today?'•':' '}</i></button>`).join('')}</div>${calendarPending?'<p class="note" role="status">有一次安排保存结果尚未确认。<button data-calendar-resume>查看并重试</button></p>':''}<div id="calendarAgenda" aria-busy="${calendarState.loading}">${calendarAgendaHTML()}</div><section class="calendar-weekend card" id="calendarWeekend"><div><span class="orbit-label">A LITTLE ROOM FOR US</span><h2>本周末，想一起做点什么？</h2><p class="muted">先写个想法，和孩子商量。以下按钮只打开草稿，不会自动安排活动。</p></div><label>草稿日期<select id="calendarWeekendDay"><option value="${sat}">周六 · ${sat.slice(5)}</option><option value="${sun}">周日 · ${sun.slice(5)}</option></select></label><div class="calendar-weekend-drafts"><button data-calendar-draft="运动">留一段运动时间</button><button data-calendar-draft="自由探索">留一点自由探索</button><button data-calendar-draft="共读">留一段共读时光</button></div></section><p class="small muted">学校安排按出处展示，不等于已确认参加或完成。每周重复安排按填写日期展开，不自动推定假期或单双周。</p>`;
 }
 async function calendarRead(){
  const start=calendarState.week,end=calendarAdd(start,6),range=start+'/'+end;
@@ -44,6 +45,23 @@ async function calendarRead(){
  }finally{clearTimeout(timer);if(seq===calendarState.sequence){calendarState.loading=false;paint()}}
 }
 function wireCalendar(){if(!calendarState.error)calendarState.reading=calendarRead()}
+function calendarSyncOpen(){
+ const address=new URL(endpoint('/calendar.ics'),location.href),secure=address.protocol==='https:';
+ address.username='';address.password='';calendarSyncVersion++;
+ $('#calendarSyncURL').value=secure?address.href:'';$('#calendarSyncAddress').hidden=!secure;$('#calendarSyncCopy').disabled=!secure;$('#calendarSyncHelp').open=false;
+ $('#calendarSyncStatus').textContent=secure?'复制地址后，在手机日历中添加订阅。':'请从已登录的 HTTPS 家庭入口打开，再获取手机订阅地址。';
+ $('#calendarSyncDialog').showModal();
+}
+async function calendarSyncCopy(){
+ const field=$('#calendarSyncURL'),button=$('#calendarSyncCopy'),dialog=$('#calendarSyncDialog'),version=calendarSyncVersion;
+ if(button.disabled||!field.value)return;
+ button.disabled=true;$('#calendarSyncStatus').textContent='正在复制…';
+ try{await navigator.clipboard.writeText(field.value);if(dialog.open&&version===calendarSyncVersion)$('#calendarSyncStatus').textContent='已复制。请到手机日历添加订阅。'}
+ catch{if(dialog.open&&version===calendarSyncVersion){field.focus();field.select();field.setSelectionRange(0,field.value.length);$('#calendarSyncStatus').textContent='未能自动复制，已选中地址。请长按或使用复制快捷键，手动复制。'}}
+ finally{if(version===calendarSyncVersion)button.disabled=false}
+}
+$('#calendarSyncCopy').onclick=calendarSyncCopy;
+$('#calendarSyncDialog').addEventListener('close',()=>calendarSyncVersion++);
 function calendarNavigate(day){calendarJump++;calendarInvalidate();calendarState.week=calendarMonday(day);calendarState.day=day;page='calendar';render()}
 function calendarUUID(){return crypto.randomUUID().replaceAll('-','')}
 function calendarOpen(event=null,preset={}){
@@ -104,6 +122,7 @@ $('#calendarDialog').addEventListener('cancel',e=>{if(calendarSaving)e.preventDe
 window.addEventListener('beforeunload',e=>{if(calendarPending||calendarDraftContext&&!calendarDraftContext.saved){e.preventDefault();e.returnValue=''}});
 document.addEventListener('click',async e=>{
  const b=e.target.closest('button');if(!b)return;
+ if(b.hasAttribute('data-calendar-sync'))calendarSyncOpen();
  if(b.hasAttribute('data-calendar-child')){calendarJump++;calendarState.childID=b.dataset.calendarChild;child=data.children.find(c=>c.id===calendarState.childID)?.name||'';render()}
  if(b.dataset.calendarShift)calendarNavigate(calendarAdd(calendarState.day,Number(b.dataset.calendarShift)));
  if(b.hasAttribute('data-calendar-current'))calendarNavigate(data.today);

@@ -357,6 +357,25 @@ def guided_store():
 def calendar_store():
     return family_calendar.Store(connect,profiles,DATA)
 
+def calendar_subscription():
+    events=calendar_store().subscription_events()
+    linked={e['task_id'] for e in events if e.get('task_id')}
+    states={}
+    with connect() as c:
+        c.execute('BEGIN')
+        children=profiles(c)
+        by_name={p['name']:p['id'] for p in children}
+        updates={r['id']:r['status'] for r in c.execute('SELECT id,status FROM task_updates')}
+        for task in tasks(c):
+            if task['id'] not in linked: continue
+            if task['child'] not in by_name or task['id'] in states:
+                raise family_calendar.CalendarError('关联事项的孩子归属无法核对',503,'calendar_task_error')
+            states[task['id']]={by_name[task['child']]:task_status(task,updates.get(task['id']))}
+    if linked-set(states) or any(e.get('task_id') and not set(states[e['task_id']])<=set(e['child_ids']) for e in events):
+        raise family_calendar.CalendarError('关联事项或参加孩子无法核对',503,'calendar_task_error')
+    namespace=os.environ.get('FAMILY_CALENDAR_ID') or os.environ.get('FAMILY_HOST') or 'local-family-learning'
+    return family_calendar.render_ics(events,children,dt.datetime.now(dt.timezone.utc),namespace,states)
+
 def reading_store():
     return family_reading.Store(connect,profiles,tasks)
 
@@ -1190,6 +1209,9 @@ class Handler(BaseHTTPRequestHandler):
                 if set(query)!={'start','end'} or any(len(v)!=1 for v in query.values()):
                     raise family_calendar.CalendarError('请提供唯一的开始及结束日期')
                 return self.reply(200,calendar_store().snapshot(query['start'][0],query['end'][0]))
+            if path=='/calendar.ics':
+                if urlparse(self.path).query: raise family_calendar.CalendarError('家庭日历订阅不接受筛选参数')
+                return self.reply(200,calendar_subscription(),'text/calendar; charset=utf-8','inline; filename="family-calendar.ics"')
             if path=='/api/record/history' or path.startswith('/api/record/history/'):
                 ident=path.removeprefix('/api/record/history/')
                 if not re.fullmatch(r'[1-9][0-9]{0,18}',ident) or int(ident)>9223372036854775807:

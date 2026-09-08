@@ -7,9 +7,10 @@ const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>'
 function harness(){
  const elements=new Map(),handlers={},h={calls:[],notices:[],renders:0};
  const names=['id','version','title','category','day','start_time','end_time','location','note','status','repeat','until'];
- const get=id=>{if(!elements.has(id))elements.set(id,{innerHTML:'',textContent:'',disabled:false,open:false,classList:{toggle(){}},setAttribute(){},addEventListener(){},showModal(){this.open=true},close(){this.open=false},reset(){},elements:Object.fromEntries(names.map(n=>[n,{value:'',disabled:false}]))});return elements.get(id)};
+ const get=id=>{if(!elements.has(id))elements.set(id,{innerHTML:'',textContent:'',value:'',disabled:false,open:false,classList:{toggle(){}},setAttribute(){},addEventListener(){},showModal(){this.open=true},close(){this.open=false},focus(){h.focus=id},select(){this.selectionStart=0;this.selectionEnd=this.value.length},setSelectionRange(start,end){this.selectionStart=start;this.selectionEnd=end},reset(){},elements:Object.fromEntries(names.map(n=>[n,{value:'',disabled:false}]))});return elements.get(id)};
  h.reply=async()=>({ok:true,status:200,json:async()=>({events:[],timetables:[],source_error:''})});
  const ctx=vm.createContext({data:{today:'2026-09-08',token:'synthetic-first-token',children:[{id:'child-a',name:'小溪'},{id:'child-b',name:'小岚'}],tasks:[]},page:'calendar',child:'',window:{addEventListener(){}},document:{addEventListener(k,f){handlers[k]=f},querySelectorAll(){return[]}},$:get,esc:escape,endpoint:p=>'/family/'+p.replace(/^\//,''),status:t=>t.update.status,taskDismissed:t=>['不参加','不适用'].includes(t.update.status),taskStatusLabel:v=>v==='不适用'?'无需处理':v,render:()=>h.renders++,toast:s=>h.notices.push(s),crypto:{randomUUID},AbortController,setTimeout,clearTimeout,apiFetch:async(p,o)=>{h.calls.push({path:p,...o});return h.reply(p,o)},load:async()=>{},FormData:class{constructor(){return Object.entries(Object.fromEntries(names.map(n=>[n,get('#calendarForm').elements[n].value])))} }});
+ Object.assign(ctx,{URL,location:{href:'https://family.example/family/?child=child-a#week'},navigator:{clipboard:{async writeText(value){h.copied=value}}}});
  vm.runInContext(source,ctx);ctx.calendarHTML();Object.assign(h,{ctx,get,state:()=>vm.runInContext('calendarState',ctx),pending:()=>vm.runInContext('calendarPending',ctx),click:handlers.click});return h;
 }
 const event=(extra={})=>({id:'a'.repeat(32),version:1,child_ids:['child-a','child-b'],title:'虚构共同阅读',category:'family',day:'2026-09-12',series_day:'2026-09-05',start_time:'',end_time:'',location:'',note:'',status:'tentative',repeat:'weekly',until:'',editable:true,source:'',task_id:'',...extra});
@@ -52,4 +53,62 @@ test('lost save response preserves body and id; after token refresh retry uses t
 test('a definite validation/conflict response permits correction and failed reads can be retried',async()=>{
  const h=harness();for(const status of [400,409]){h.reply=async()=>({ok:false,status,json:async()=>({error:'synthetic rejection'})});await assert.rejects(h.ctx.calendarRequest({id:'a'.repeat(32),version:0}));assert.equal(h.pending(),null)}
  h.reply=async()=>{throw Error('synthetic unavailable')};await h.ctx.calendarRead();assert.match(h.state().error,/unavailable/);h.ctx.calendarInvalidate();h.reply=async()=>({ok:true,json:async()=>({events:[],timetables:[],source_error:'synthetic source gap'})});await h.ctx.calendarRead();assert.equal(h.state().error,'');assert.match(h.ctx.calendarAgendaHTML(),/synthetic source gap/);
+});
+test('phone subscription keeps HTTPS deployment prefix without page filters or credentials',async()=>{
+ const h=harness();h.ctx.location.href='https://synthetic-user:synthetic-password@family.example/family/?child=child-a#week';
+ h.ctx.calendarSyncOpen();assert.equal(h.get('#calendarSyncURL').value,'https://family.example/family/calendar.ics');assert.equal(h.get('#calendarSyncAddress').hidden,false);
+ await h.ctx.calendarSyncCopy();assert.equal(h.copied,'https://family.example/family/calendar.ics');assert.match(h.get('#calendarSyncStatus').textContent,/已复制/);assert.equal(h.calls.length,0,'opening/copying does not download or modify calendars');
+ h.ctx.location.href='http://127.0.0.1:8765/';h.ctx.calendarSyncOpen();assert.equal(h.get('#calendarSyncURL').value,'');assert.equal(h.get('#calendarSyncAddress').hidden,true);assert.equal(h.get('#calendarSyncCopy').disabled,true);assert.match(h.get('#calendarSyncStatus').textContent,/已登录的 HTTPS/);
+ h.copied=null;await h.ctx.calendarSyncCopy();assert.equal(h.copied,null,'loopback secure context is still not a mobile HTTPS source');
+});
+test('clipboard failure selects the address, but an old failure cannot take focus after reopening',async()=>{
+ const h=harness();h.ctx.calendarSyncOpen();h.ctx.navigator.clipboard=undefined;await h.ctx.calendarSyncCopy();
+ const field=h.get('#calendarSyncURL');assert.equal(h.focus,'#calendarSyncURL');assert.equal(field.selectionStart,0);assert.equal(field.selectionEnd,field.value.length);assert.match(h.get('#calendarSyncStatus').textContent,/手动复制/);assert.equal(h.get('#calendarSyncCopy').disabled,false);
+ let reject;h.ctx.navigator.clipboard={writeText:()=>new Promise((_,r)=>reject=r)};const pending=h.ctx.calendarSyncCopy();assert.equal(h.get('#calendarSyncCopy').disabled,true);
+ h.get('#calendarSyncDialog').close();h.ctx.calendarSyncOpen();h.focus='new-dialog-focus';const message=h.get('#calendarSyncStatus').textContent;reject(Error('synthetic denied'));await pending;
+ assert.equal(h.focus,'new-dialog-focus');assert.equal(h.get('#calendarSyncStatus').textContent,message);assert.equal(h.get('#calendarSyncCopy').disabled,false);
+});
+
+// Optional real-browser check: node test_calendar_ui.js --browser
+// Reuses test_calendar_draft_ui.cjs's disposable demo startup. HTTPS is a routed
+// synthetic origin; this tests the UI, not TLS, Basic Auth or an actual iPhone.
+if(process.argv.includes('--browser'))test('phone subscription dialog works at mobile and desktop widths',async()=>{
+ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),net=require('node:net');
+ const {spawn}=require('node:child_process'),{once}=require('node:events'),{setTimeout:delay}=require('node:timers/promises'),fs=require('node:fs/promises'),path=require('node:path');
+ async function eventually(check,label){const end=Date.now()+12000;while(Date.now()<end){if(await check())return;await delay(40)}throw Error('Timed out: '+label)}
+ const socket=net.createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');const port=socket.address().port;await new Promise(r=>socket.close(r));
+ const env={...process.env};for(const key of Object.keys(env))if(key.startsWith('FAMILY_'))delete env[key];
+ const proc=spawn(process.env.FAMILY_TEST_PYTHON||'python3',['demo.py','--port',String(port)],{cwd:__dirname,env,stdio:['ignore','pipe','pipe']});let error='',browser;
+ proc.stdout.resume();proc.stderr.on('data',x=>error+=String(x));proc.on('error',e=>error=e.message);
+ const local='http://127.0.0.1:'+port+'/',remote='https://family-calendar.example/family/',results=[];
+ const proof=async(p,name)=>{if(process.env.CALENDAR_SYNC_UI_PROOF_DIR){await fs.mkdir(process.env.CALENDAR_SYNC_UI_PROOF_DIR,{recursive:true});await p.screenshot({path:path.join(process.env.CALENDAR_SYNC_UI_PROOF_DIR,name+'.png')})}};
+ try{
+  await eventually(async()=>{if(proc.exitCode!==null||error)throw Error(error||'Demo exited');try{return(await fetch(local,{signal:AbortSignal.timeout(500)})).ok}catch{return false}},'synthetic demo ready');
+  browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
+  for(const width of [360,1440]){
+   const p=await browser.newPage({viewport:{width,height:900}}),errors=[],unexpected=[];
+   try{
+    p.on('pageerror',e=>errors.push(e.message));p.on('request',r=>{if(r.method()!=='GET'||new URL(r.url()).pathname.endsWith('/calendar.ics'))unexpected.push(r.method()+' '+new URL(r.url()).pathname)});
+    await p.route('https://family-calendar.example/**',async r=>{const u=new URL(r.request().url());assert.ok(u.pathname.startsWith('/family/'));await r.fulfill({response:await r.fetch({url:local+u.pathname.slice('/family/'.length)+u.search})})});
+    await p.addInitScript(()=>{window.__copied=[];window.__copyDenied=false;Object.defineProperty(navigator,'clipboard',{configurable:true,value:{async writeText(text){if(window.__copyDenied)throw Error('synthetic clipboard rejection');window.__copied.push(text)}}})});
+    const dialog=p.locator('#calendarSyncDialog'),address=p.locator('#calendarSyncURL'),copy=p.locator('#calendarSyncCopy'),entry=p.locator('[data-calendar-sync]');
+    const fit=async()=>{assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page fits '+width);assert.equal(await dialog.evaluate(x=>x.scrollWidth>x.clientWidth),false,'dialog fits '+width);assert.equal(await dialog.locator('button:visible,summary:visible').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'44px dialog controls '+width)};
+    const open=async()=>{await entry.focus();await p.keyboard.press('Enter');await eventually(()=>dialog.isVisible(),'subscription dialog')};
+    await p.goto(remote+'?child=example#week');await eventually(()=>p.locator('.today-dashboard').isVisible(),'synthetic home');await p.locator('nav [data-page="calendar"]').click();await eventually(()=>entry.isVisible(),'calendar toolbar');
+    await open();assert.equal(await address.inputValue(),remote+'calendar.ics');assert.equal(await address.getAttribute('readonly'),'');assert.equal(await p.locator('#calendarSyncHelp').getAttribute('open'),null);assert.equal(await p.locator('#calendarSyncStatus').getAttribute('role'),'status');await fit();await proof(p,'https-'+width);
+    await copy.click();assert.deepEqual(await p.evaluate(()=>window.__copied),[remote+'calendar.ics']);assert.match(await p.locator('#calendarSyncStatus').innerText(),/已复制/);
+    await p.evaluate(()=>window.__copyDenied=true);await copy.click();await eventually(async()=>/手动复制/.test(await p.locator('#calendarSyncStatus').innerText()),'manual copy fallback');
+    assert.equal(await address.evaluate(x=>document.activeElement===x&&x.selectionStart===0&&x.selectionEnd===x.value.length),true,'failed copy selects whole URL');await fit();await proof(p,'manual-copy-'+width);
+    await p.locator('#calendarSyncHelp summary').click();assert.match(await dialog.innerText(),/夫妻各自订阅/);assert.match(await dialog.innerText(),/不是 Apple／iCloud 密码/);assert.match(await dialog.innerText(),/不保证即时/);await fit();await proof(p,'help-'+width);
+    await p.keyboard.press('Escape');await eventually(async()=>!await dialog.isVisible(),'Escape closes dialog');assert.equal(await entry.evaluate(x=>document.activeElement===x),true,'Escape restores opener focus');
+    await open();assert.equal(await p.locator('#calendarSyncHelp').getAttribute('open'),null);await p.locator('[data-close="calendarSyncDialog"]').click();await eventually(async()=>!await dialog.isVisible(),'shared close handler');assert.equal(await entry.evaluate(x=>document.activeElement===x),true,'close button restores opener focus');
+    await p.goto(local);await eventually(()=>p.locator('.today-dashboard').isVisible(),'HTTP home');await p.locator('nav [data-page="calendar"]').click();await eventually(()=>entry.isVisible(),'HTTP calendar');await open();
+    assert.equal(await p.locator('#calendarSyncAddress').isVisible(),false);assert.equal(await address.inputValue(),'');assert.equal(await copy.isDisabled(),true);assert.match(await p.locator('#calendarSyncStatus').innerText(),/已登录的 HTTPS/);await fit();await proof(p,'http-'+width);
+    assert.deepEqual(errors,[]);assert.deepEqual(unexpected,[],'subscription setup never fetches ICS or posts data');results.push({width,httpsSubpath:true,copyAndFallback:true,nativeCloseAndFocus:true,noOverflow:true,httpUnavailable:true,pageErrors:0});
+   }finally{await p.close()}
+  }
+  console.log(JSON.stringify({calendarSyncUI:results,syntheticOnly:true,clipboardStubbed:true,httpsRoutedToLocalDemo:true,phoneAuthenticationTested:false}));
+ }finally{
+  await browser?.close();if(proc.exitCode===null&&proc.signalCode===null){const ended=once(proc,'exit');proc.kill('SIGINT');await Promise.race([ended,delay(2500)]);if(proc.exitCode===null&&proc.signalCode===null){proc.kill('SIGKILL');await ended}}
+ }
 });

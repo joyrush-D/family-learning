@@ -181,5 +181,48 @@ class CalendarTests(unittest.TestCase):
                 self.assertEqual(call('GET','/calendar.js'),(200,b'// synthetic calendar asset'))
         finally: server.shutdown();server.server_close();worker.join()
 
+    def test_subscription_http_auth_privacy_decisions_and_read_only(self):
+        self.store.save(self.request(status='confirmed'))
+        self.write_sources()
+        (app.ROOT/'跟踪台账.md').write_text('| T01 | 示例乙 | 虚构学校要求 | 待核对 | 待跟进 | 私有来源 | 私有细节 |\n')
+        server=ThreadingHTTPServer(('127.0.0.1',0),app.Handler)
+        worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
+        def get(path='/calendar.ics',host='127.0.0.1',login=''):
+            c=http.client.HTTPConnection('127.0.0.1',server.server_port,timeout=5)
+            c.request('GET',path,headers={'Host':host,'Tailscale-User-Login':login})
+            r=c.getresponse();result=r.status,dict(r.getheaders()),r.read();c.close();return result
+        try:
+            with patch.dict(os.environ,{'FAMILY_HOST':'family.invalid','FAMILY_USER':'parent@example.invalid','FAMILY_CALENDAR_ID':'synthetic-family'},clear=True):
+                before=self.dump()
+                code,headers,body=get(host='family.invalid',login='parent@example.invalid')
+                self.assertEqual(code,200);self.assertEqual(headers['Content-Type'],'text/calendar; charset=utf-8')
+                self.assertEqual(headers['Cache-Control'],'no-store')
+                text=body.decode().replace('\r\n ','')
+                self.assertEqual(text.count('BEGIN:VEVENT'),2)
+                for private in ['虚构约定','虚构教师通知','钟点待核对','私有细节','虚构课表','DESCRIPTION:','ATTACH:','VALARM']:
+                    self.assertNotIn(private,text)
+                self.assertEqual(get(host='family.invalid')[0],403)
+                self.assertEqual(get(host='untrusted.invalid')[0],403)
+                self.assertNotIn(b'BEGIN:VCALENDAR',get('/child/calendar.ics')[2])
+                self.assertEqual(get('/calendar.ics?child_id=child-1')[0],400)
+                self.assertEqual(self.dump(),before)
+                uids=[line for line in text.splitlines() if line.startswith('UID:')]
+                app.save_profile(dict(child_id='child-2',name='示例新称呼',grade='初一',classroom='示例班',version=0,reason='虚构更正'))
+                app.save_task(dict(id='T01',status='不参加',note='虚构决定',expected_updated=''))
+                before=self.dump();updated=get()[2].decode().replace('\r\n ','')
+                self.assertIn('STATUS:CANCELLED',updated)
+                self.assertIn('示例新称呼',updated)
+                self.assertEqual(uids,[line for line in updated.splitlines() if line.startswith('UID:')])
+                self.assertEqual(self.dump(),before)
+                ledger=app.ROOT/'跟踪台账.md';original=ledger.read_text();ledger.unlink()
+                self.assertEqual(get()[0],503)  # Missing original task must not undo nonparticipation.
+                ledger.write_text(original)
+                wrong_child=self.sources();wrong_child['events'][0]['child_ids']=['child-1'];self.write_sources(wrong_child)
+                self.assertEqual(get()[0],503)
+                self.source.write_text('{invalid')
+                code,headers,body=get();self.assertEqual(code,503)
+                self.assertNotIn(b'BEGIN:VCALENDAR',body)
+        finally: server.shutdown();server.server_close();worker.join()
+
 
 if __name__=='__main__': unittest.main()

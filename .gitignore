@@ -48,6 +48,7 @@
 
 !/family_calendar.py
 !/test_calendar.py
+!/test_calendar_ics.py
 !/calendar.js
 !/test_calendar_ui.js
 
