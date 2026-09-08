@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>我的成长营地</title>
+  <script src="./child.js"></script>
+  <link rel="stylesheet" href="./child.css">
+</head>
+<body>
+  <a class="skip" href="#camp">跳到今天的安排</a>
+  <header class="topbar">
+    <a href="./" class="brand" aria-label="成长营地首页"><span aria-hidden="true">✦</span> 成长营地</a>
+    <div class="top-actions"><form action="./" method="get"><button id="refresh" type="submit">刷新营地</button></form><button id="logout" type="button" hidden>退出</button></div>
+  </header>
+  <main id="camp">
+    <section class="camp-heading" aria-labelledby="greeting">
+      <span class="camp-mark" aria-hidden="true">✦</span><div><h1 id="greeting">我的成长营地</h1><p id="welcome">从今天的一件事开始。</p></div>
+    </section>
+    <p id="notice" class="notice" role="status" aria-live="polite">正在打开营地…如果长时间没有变化，可以刷新重试。</p>
+    <noscript><p class="notice">请在浏览器中开启 JavaScript，再打开营地。作品仍由家长保管。</p></noscript>
+    <form id="login" class="paper login" hidden>
+      <h2>拿着邀请，走进营地</h2><p>请家长从家庭系统给你一个专属邀请链接，也可以把邀请放在这里。</p>
+      <label for="invite">邀请链接或邀请码</label><input id="invite" name="invite" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="2000" required>
+      <button type="submit" class="primary">进入我的营地</button>
+      <p class="small">每个邀请只使用一次。在公共设备上，用完记得退出。</p>
+    </form>
+    <nav id="camp-tabs" class="camp-tabs" aria-label="营地区域" hidden>
+      <button id="study-tab" type="button" aria-pressed="true" aria-controls="child-study">今天的功课</button><button id="reading-tab" type="button" aria-pressed="false" aria-controls="journey">阅读路线</button>
+    </nav>
+    <section id="child-study" hidden aria-labelledby="study-title">
+      <div class="section-heading study-heading"><h2 id="study-title">今天要做什么</h2><label for="study-date">查看日期<input id="study-date" type="date"></label></div>
+      <p id="study-status" class="notice" role="status" aria-live="polite"></p>
+      <div id="study-summary"></div>
+      <div id="study-items" class="study-items"></div>
+      <div id="study-editor"></div>
+      <form id="study-add" class="paper study-add">
+        <h3>＋ 报一项功课</h3>
+        <label for="study-title-input">要做什么</label><input id="study-title-input" name="title" maxlength="200" placeholder="例如：完成数学练习第 3 页" required>
+        <div class="study-fields"><label for="study-subject">科目 · 可留空<input id="study-subject" name="subject" maxlength="60"></label><label for="study-plan">预计分钟 · 可留空<input id="study-plan" name="planned_minutes" type="number" min="0" max="1440" step="1" inputmode="numeric"></label></div>
+        <p class="small">也可以用手机键盘语音输入。</p><button type="submit" class="primary">加入今天</button>
+      </form>
+    </section>
+    <section id="guided-home" hidden aria-labelledby="guided-title"><div class="section-heading"><h2 id="guided-title">一起试一题</h2><button id="guided-refresh" type="button">刷新题目</button></div><p id="guided-status" class="notice" role="status"></p><div id="guided-cards" class="study-items"></div></section>
+    <div id="journey" hidden>
+      <section class="stamp-bar" aria-label="我的约定印章"><div><span class="stamp-icon" aria-hidden="true">✦</span><strong id="earned">0</strong><span>枚路线印章</span></div><p id="stamp-note">这里只展示当前阅读路线已经获得的印章。作品由家长核对后发章。</p></section>
+      <section aria-labelledby="books-title"><div class="section-heading"><div><p class="eyebrow">今天想去哪里探索？</p><h2 id="books-title">我的阅读路线</h2></div><span id="book-count" class="small"></span></div><div id="books" class="books"></div></section>
+    </div>
+    <section id="workshop" class="paper workshop" hidden aria-labelledby="work-title" tabindex="-1">
+      <button id="back" class="back" type="button">← 返回阅读路线</button>
+      <p class="eyebrow">把发现带回来</p><h2 id="work-title"></h2>
+      <div id="guided-problem" hidden></div><p id="guided-step" class="notice" hidden></p><div id="guided-actions" class="study-actions" hidden></div><details id="guided-history" hidden><summary>看自己的尝试和提示</summary><div></div></details>
+      <dl id="agreement" class="agreement"></dl>
+      <p id="work-status" class="notice" role="status" aria-live="polite"></p>
+      <form id="work-form">
+        <label for="work-text">我想分享的发现</label><textarea id="work-text" name="work_text" maxlength="6000" rows="6" placeholder="可以说说：哪一处让你停下来想了想？你从哪里发现的？也可以只交照片或录音。"></textarea>
+        <p class="small">文字、照片、录音都可以。按你和家长约定的方式来。</p>
+        <div class="capture-row">
+          <label class="file-button" for="photo"><span aria-hidden="true">▧</span> 拍照 / 选照片<input id="photo" type="file" accept="image/*" capture="environment" multiple></label>
+          <label class="file-button" for="file"><span aria-hidden="true">＋</span> 选文件<input id="file" type="file" accept="image/*,audio/*,.pdf,.doc,.docx,.ppt,.pptx,.txt,.md" multiple></label>
+          <button id="record" type="button">● 说一段</button>
+        </div>
+        <p id="record-hint" class="small" role="status"></p>
+        <div id="attachments" class="attachments" aria-label="这份作品的原件"></div>
+        <div id="transcript" class="transcript" hidden><label for="transcript-text">先听原音，再核对这段文字</label><textarea id="transcript-text" rows="4" maxlength="6000"></textarea><button id="use-transcript" type="button">放进我的分享</button><button id="cancel-transcript" type="button">收起转写</button></div>
+        <label id="guided-assistance" hidden>这次得到怎样的帮助？<select id="guided-assistance-input"><option value="">还没记录</option><option>独立尝试</option><option>少量提示</option><option>逐步帮助</option><option>看过讲解或答案</option></select></label>
+        <div class="work-actions"><button id="rest" type="button">先歇一会儿</button><button id="submit" type="submit" class="primary">交给家长看看</button></div>
+        <p class="small">提交后等家长核对。这里不自动发印章，也不替你完成阅读。</p>
+      </form>
+      <div id="saved-work" hidden></div>
+    </section>
+    <footer>休息时记得暂停。遇到困难，可以告诉家长。</footer>
+  </main>
+</body>
+</html>

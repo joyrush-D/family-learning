@@ -1,0 +1,127 @@
+// Disposable synthetic family only. Optional PLAYWRIGHT_MODULE, PLAYWRIGHT_CHANNEL,
+// FAMILY_TEST_PYTHON and STUDY_UI_PROOF_DIR; no real accounts, model, or device calls.
+const assert=require('node:assert/strict');
+const {spawn}=require('node:child_process');
+const {once}=require('node:events');
+const net=require('node:net');
+const {setTimeout:delay}=require('node:timers/promises');
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+async function eventually(check,label,timeout=12000){const until=Date.now()+timeout;while(Date.now()<until){if(await check())return;await delay(50)}throw Error('Timed out: '+label)}
+async function server(){
+ const socket=net.createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');const port=socket.address().port;await new Promise(resolve=>socket.close(resolve));
+ const env={...process.env};for(const k of Object.keys(env))if(k.startsWith('FAMILY_'))delete env[k];
+ // Seed a forgotten timer only inside demo.py's temporary directory. This Store
+ // instance uses a prior clock; HTTP requests still use the real current clock.
+ const launch=`import app, runpy, sys, datetime as dt, uuid
+prepare=app.prepare_assets
+def prepare_demo():
+    store=app.study_store()
+    prior=store._now()-dt.timedelta(days=5)
+    store._now=lambda:prior
+    base=dict(child_id='child-1',day=prior.date().isoformat(),version=0,request_key=str(uuid.uuid4()))
+    result=store.save_item(dict(base,title='虚构忘停计时',planned_minutes=20))
+    item=result['items'][0]
+    store.action(dict(base,id=item['id'],version=item['version'],request_key=str(uuid.uuid4()),action='start'))
+    prepare()
+app.prepare_assets=prepare_demo
+sys.argv=['demo.py','--port',sys.argv[1]]
+runpy.run_path('demo.py',run_name='__main__')`;
+ const child=spawn(process.env.FAMILY_TEST_PYTHON||'python3',['-c',launch,String(port)],{cwd:__dirname,env,stdio:['ignore','pipe','pipe']});let err='';child.stdout.resume();child.stderr.on('data',b=>err+=String(b));
+ const url='http://127.0.0.1:'+port+'/',stop=async()=>{if(child.exitCode!==null||child.signalCode!==null)return;const end=once(child,'exit');child.kill('SIGINT');await Promise.race([end,delay(2500)]);if(child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await end}};
+ try{await eventually(async()=>{if(child.exitCode!==null)throw Error(err||'Demo exited');try{return(await fetch(url,{signal:AbortSignal.timeout(400)})).ok}catch{return false}},'synthetic server');return{url,stop}}catch(e){await stop();throw e}
+}
+async function fit(p){assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'no horizontal overflow');assert.equal(await p.locator('.study-view button:visible').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'44px touch buttons')}
+async function proof(p,name){if(process.env.STUDY_UI_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.mkdir(process.env.STUDY_UI_PROOF_DIR,{recursive:true});await p.screenshot({path:path.join(process.env.STUDY_UI_PROOF_DIR,name+'.png'),fullPage:false})}}
+(async()=>{
+ let app,browser;const results=[];
+ try{
+  app=await server();browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
+  const state=await(await fetch(app.url+'api/state')).json(),child=state.children[0],other=state.children[1];
+  const read=async(who=child.id,day=state.today)=>await(await fetch(app.url+'api/study?'+new URLSearchParams({child_id:who,day}))).json();
+  const post=async(path,body)=>{const r=await fetch(app.url+path,{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify(body)});const data=await r.json();assert.equal(r.ok,true,JSON.stringify(data));return data};
+  for(const width of [360,1440]){
+   const p=await browser.newPage({viewport:{width,height:900}}),errors=[];p.on('pageerror',e=>errors.push(e.message));
+   try{
+    await p.goto(app.url);await p.locator('[data-study-child="'+child.id+'"]').click();await p.locator('[data-study-ready]').waitFor();await fit(p);
+    if(width===360){
+     const active=(await read()).active_item;assert.ok(active&&active.day<state.today,'forgotten timer is discoverable from today');
+     assert.match(await p.locator('.study-active-gap').innerText(),/有一项较早的计时未结束/);await proof(p,'study-forgotten-'+width);await p.locator('.study-active-gap button').click();await eventually(async()=>await p.locator('[data-study-date]').inputValue()===active.day,'jump to forgotten timer date');
+     const forgotten=p.locator('[data-study-item="'+active.id+'"]');await forgotten.locator('[data-study-action="pause"]').click();await eventually(async()=>(await read()).active_item===null,'pause old timer through real API');
+     assert.equal((await read(child.id,active.day)).items[0].actual_minutes,null,'forgotten duration stays unknown');await forgotten.locator('[data-study-editor="manual"]').click();let manual=p.locator('[data-study-form="manual"]');await manual.locator('[name="actual_minutes"]').fill('18');await manual.locator('[type="submit"]').click();await eventually(async()=>(await read(child.id,active.day)).items[0].actual_minutes===18,'parent corrects forgotten duration');
+     await p.locator('[data-study-date]').fill(state.today);await p.locator('[data-study-date]').dispatchEvent('change');await eventually(async()=>await p.locator('.study-active-gap').count()===0&&await p.locator('.study-item').count()===0,'today unblocked after correction');
+    }
+    const settings=p.locator('.study-settings');await settings.locator('summary').click();
+    const time=settings.locator('form');await time.locator('[name="start_time"]').fill('16:30');await time.locator('[name="stop_time"]').fill('21:00');await time.locator('[name="bed_time"]').fill('21:30');await time.locator('button').click();
+    await eventually(async()=>(await read()).day.stop_time==='21:00','night boundary saves');
+    const add=p.locator('[data-study-form="new"]');if(!await add.isVisible())await p.locator('.study-add>summary').click();
+    const title='虚构课后数学 '+width,requirement='虚构要求：读完第 3 页，再写两句自己的解释。\n保留自己的草稿。';
+    const sourceTask=(await post('api/task/new',{child:child.name,title,due:'虚构下次课前',action:requirement})).task;
+    const focusBody={id:sourceTask.id,version:0,mode:'next',next_action:'虚构下一步：先读第一题',waiting_for:'',review_on:'',request_key:crypto.randomUUID()};
+    await post('api/task/focus',focusBody);await p.locator('[data-study-refresh]').click();await eventually(async()=>await add.locator('[name="task_id"] option[value="'+sourceTask.id+'"]').count()===1,'new source selectable');
+    await add.locator('[name="task_id"]').selectOption(sourceTask.id);await add.locator('[name="subject"]').fill('数学');await add.locator('[name="planned_minutes"]').fill('25');
+    const keys=[];let drop=true;
+    const lost=async route=>{const body=route.request().postDataJSON();keys.push(body.request_key);if(drop){drop=false;const r=await route.fetch();assert.equal(r.ok(),true);await route.abort('failed')}else await route.continue()};
+    await p.route('**/api/study/item',lost);await add.locator('[type="submit"]').click();await p.locator('[data-study-retry]').waitFor();
+    assert.equal(await add.locator('[name="title"]').inputValue(),title,'lost response keeps entered text');await p.locator('[data-study-retry]').click();
+    await eventually(async()=>await p.locator('.study-item h3').filter({hasText:title}).count()===1,'retry shows one saved item');await p.unroute('**/api/study/item',lost);
+    assert.equal(keys.length,2);assert.equal(keys[0],keys[1],'same save request key on retry');let saved=(await read()).items.filter(x=>x.title===title);assert.equal(saved.length,1);const id=saved[0].id,item=p.locator('[data-study-item="'+id+'"]');
+    assert.match(await item.innerText(),/行动要求：虚构要求：读完第 3 页/);assert.match(await item.innerText(),/原截止：虚构下次课前/);
+    assert.equal(await item.locator('.study-note').filter({hasText:'虚构下一步：先读第一题'}).isVisible(),true,'next action visible without expanding');
+    assert.equal(await item.locator('.study-note').evaluateAll(xs=>xs.some(x=>x.closest('details'))),false,'requirements are outside collapsed details');
+    const beforeSource=(await read()).items.find(x=>x.id===id);
+    await post('api/task/focus',{...focusBody,version:1,next_action:'虚构下一步：圈出题目中的条件',request_key:crypto.randomUUID()});
+    await p.locator('[data-study-refresh]').click();await eventually(async()=>/虚构下一步：圈出题目中的条件/.test(await item.innerText()),'current source action changes on read');
+    const afterSource=(await read()).items.find(x=>x.id===id);assert.equal(afterSource.version,beforeSource.version);assert.equal(afterSource.elapsed_seconds,beforeSource.elapsed_seconds,'reading a new action never changes timer');
+    const missingSource=async route=>{const response=await route.fetch(),body=await response.json();body.items=body.items.map(x=>x.id===id?{...x,source_task_action:null,source_task_due:null,source_task_next_action:null}:x);await route.fulfill({response,json:body})};
+    await p.route('**/api/study?**',missingSource);await p.locator('[data-study-refresh]').click();await eventually(async()=>/原事项暂时无法核对/.test(await item.innerText()),'missing source is explicit');
+    assert.equal(await item.locator('.study-note').count(),0,'missing source does not invent requirements');await p.unroute('**/api/study?**',missingSource);await p.locator('[data-study-refresh]').click();await eventually(async()=>/虚构下一步：圈出题目中的条件/.test(await item.innerText()),'source recovers on read');
+    await item.getByRole('button',{name:'查看原事项',exact:true}).click();await p.locator('[data-query-target="task:'+sourceTask.id+'"]').waitFor();
+    await p.locator('nav [data-page="home"]').click();await p.locator('[data-study-child="'+child.id+'"]').click();await p.locator('[data-study-ready]').waitFor();await fit(p);await proof(p,'study-requirements-'+width);
+    await item.locator('[data-study-action="start"]').click();await eventually(async()=>(await read()).items.find(x=>x.id===id).status==='running','start timer');await item.locator('[data-study-clock]').waitFor();
+    await p.reload();await p.locator('[data-study-child="'+child.id+'"]').click();await p.locator('[data-study-ready]').waitFor();await item.locator('[data-study-clock]').waitFor();
+    await item.locator('[data-study-action="pause"]').click();await eventually(async()=>(await read()).items.find(x=>x.id===id).status==='paused','pause restored timer');
+    await item.locator('[data-study-editor="finish"]').click();let finish=p.locator('[data-study-form="finish"]');await finish.locator('[value="需要帮助"]').check();await finish.locator('[name="actual_minutes"]').fill('22');await finish.locator('summary').click();await finish.locator('[name="assistance"]').selectOption('少量提示');await finish.locator('[name="note"]').fill('虚构记录：最后一道题需要一起读题。');await fit(p);await proof(p,'study-feedback-'+width);await finish.locator('[type="submit"]').click();
+    await eventually(async()=>(await read()).items.find(x=>x.id===id).result==='需要帮助','partial outcome saved');await item.locator('[data-study-action="start"]').click();await eventually(async()=>(await read()).items.find(x=>x.id===id).status==='running','partial work resumes');
+    await item.locator('[data-study-editor="finish"]').click();finish=p.locator('[data-study-form="finish"]');await finish.locator('[value="完成"]').check();await finish.locator('[name="actual_minutes"]').fill('30');await finish.locator('[type="submit"]').click();await eventually(async()=>(await read()).items.find(x=>x.id===id).result==='完成','complete outcome saved');
+    await item.locator('[data-study-editor="manual"]').click();const manual=p.locator('[data-study-form="manual"]');await manual.locator('[name="actual_minutes"]').fill('28');await manual.locator('[type="submit"]').click();await eventually(async()=>(await read()).items.find(x=>x.id===id).actual_minutes===28,'manual correction saved');
+    const recordID=(await read()).items.find(x=>x.id===id).record_id;await item.locator('[data-study-record]').click();
+    const record=p.locator('[data-query-target="record:'+recordID+'"]');await record.locator('[data-record]').click();const recordForm=p.locator('#recordForm');await p.locator('#recordDialog').waitFor();
+    assert.equal(await recordForm.locator('h2').innerText(),'给这次功课补充原件');assert.match(await p.locator('#studyRecordNotice').innerText(),/用时、结果和说明统一在“放学后”更正/);
+    const owned=['child','day','category','subject','title','note','source','assistance'];for(const name of owned)assert.equal(await recordForm.locator('[name="'+name+'"]').isDisabled(),true,'study-owned field is locked: '+name);
+    assert.equal(await recordForm.locator('#fileInput').isEnabled(),true,'original upload remains available');await proof(p,'study-originals-'+width);await recordForm.locator('[data-close="recordDialog"]').click();
+    await p.locator('#add').click();await p.locator('#recordDialog').waitFor();assert.equal(await recordForm.locator('h2').innerText(),'记下一个成长瞬间');assert.equal(await p.locator('#studyRecordNotice').count(),0);for(const name of owned)assert.equal(await recordForm.locator('[name="'+name+'"]').isEnabled(),true,'ordinary capture unlocks field: '+name);await recordForm.locator('[name="title"]').fill('虚构普通观察草稿');await recordForm.locator('[data-close="recordDialog"]').click();
+    await p.locator('nav [data-page="home"]').click();await p.locator('[data-study-child="'+child.id+'"]').click();await p.locator('[data-study-ready]').waitFor();
+    // Concurrent estimate update must preserve the user's current edit on conflict.
+    const more='虚构待安排 '+width;if(!await add.isVisible())await p.locator('.study-add>summary').click();await add.locator('[name="title"]').fill(more);await add.locator('[name="planned_minutes"]').fill('10');await add.locator('[type="submit"]').click();await eventually(async()=>(await read()).items.some(x=>x.title===more),'another item saved');
+    const second=(await read()).items.find(x=>x.title===more),row=p.locator('[data-study-item="'+second.id+'"]');await row.locator('[data-study-editor="item"]').click();const edit=p.locator('[data-study-form="item"]');await edit.locator('[name="planned_minutes"]').fill('35');
+    await post('api/study/item',{child_id:child.id,day:state.today,request_key:crypto.randomUUID(),id:second.id,version:second.version,planned_minutes:15,subject:''});await edit.locator('[type="submit"]').click();await eventually(async()=>/刷新状态/.test(await p.locator('#studyStatus').innerText()),'conflict visible');assert.equal(await edit.locator('[name="planned_minutes"]').inputValue(),'35');await p.locator('[data-study-refresh]').click();await eventually(async()=>await row.innerText().then(t=>t.includes('15 分钟')),'latest state refresh');assert.equal(await edit.locator('[name="planned_minutes"]').inputValue(),'35','refresh preserves conflicting edit');await edit.locator('[type="submit"]').click();await eventually(async()=>(await read()).items.find(x=>x.id===second.id).planned_minutes===35,'revised estimate saves');
+    if(width===360){
+     await row.locator('[data-study-action="start"]').click();await eventually(async()=>(await read()).items.find(x=>x.id===second.id).status==='running','timer starts before family decision');
+     const started=(await read()).items.find(x=>x.id===second.id),beforeDecision=await(await fetch(app.url+'api/state')).json(),source=beforeDecision.tasks.find(t=>t.id===second.task_id);
+     await post('api/task',{id:source.id,status:'不参加',note:'虚构家庭决定：这次不参加',expected_updated:source.update?.updated||''});
+     await p.locator('[data-study-refresh]').click();await eventually(async()=>/原事项：不参加/.test(await row.innerText()),'study reads another parent dismissal');
+     const held=(await read()).items.find(x=>x.id===second.id);assert.equal(held.status,'paused');assert.equal(held.running_since,null);assert.equal(held.source_task_status,'不参加');assert.ok(held.elapsed_seconds>=started.elapsed_seconds,'recorded time is preserved');assert.equal(held.time_source,started.time_source);
+     assert.match(await row.innerText(),/已记用时保留/);assert.equal(await row.locator('[data-study-action="start"],[data-study-editor="finish"]').count(),0,'dismissed homework offers no start or finish');
+     assert.equal((await read()).summary.unfinished_count,0,'dismissed item leaves tonight pending count');await fit(p);await proof(p,'study-dismissed-'+width);
+     await row.locator('[data-study-task]').click();const sourceCard=p.locator('[data-query-target="task:'+source.id+'"]');await sourceCard.waitFor();
+     assert.equal(await p.locator('[data-view="已搁置"]').getAttribute('aria-pressed'),'true');assert.match(await sourceCard.innerText(),new RegExp(child.name));assert.equal(await sourceCard.locator('[data-check]').count(),0,'decision opens matching dismissed task');
+     await sourceCard.locator('[data-task-restore]').click();await eventually(async()=>!(await sourceCard.count()),'explicit restore from linked task');
+     await p.locator('nav [data-page="home"]').click();await p.locator('[data-study-child="'+child.id+'"]').click();await p.locator('[data-study-ready]').waitFor();
+     await row.locator('[data-study-action="start"]').click();await eventually(async()=>(await read()).items.find(x=>x.id===second.id).status==='running','restored homework can continue');
+     await row.locator('[data-study-action="pause"]').click();await eventually(async()=>(await read()).items.find(x=>x.id===second.id).status==='paused','restored timer can pause');
+     const afterDecision=await(await fetch(app.url+'api/state')).json();assert.deepEqual(afterDecision.records,beforeDecision.records,'decision and restore create no learning result');assert.deepEqual(afterDecision.rewards,beforeDecision.rewards,'decision and restore award no energy');
+    }
+    await p.locator('[data-study-close]').click();await eventually(async()=>Boolean((await read()).day.closed_at),'close night');assert.ok((await read()).items.find(x=>x.id===id).record_id,'result links a learning record');
+    const prior=new Date(state.today+'T12:00:00Z');prior.setUTCDate(prior.getUTCDate()-(width===360?1:2));const priorDay=prior.toISOString().slice(0,10);
+    await p.locator('[data-study-date]').fill(priorDay);await p.locator('[data-study-date]').dispatchEvent('change');await eventually(async()=>await p.locator('.study-item').count()===0,'select historical day');
+    assert.equal((await read(child.id,priorDay)).day.start_time,'','no invented schedule for another day');await add.locator('[name="title"]').fill('虚构历史作业 '+width);await add.locator('[type="submit"]').click();await eventually(async()=>(await read(child.id,priorDay)).items.length===1,'past task can be recorded');
+    const past=p.locator('.study-item');assert.equal(await past.locator('[data-study-action="start"]').isDisabled(),true,'past day cannot start live timer');await past.locator('[data-study-editor="finish"]').click();finish=p.locator('[data-study-form="finish"]');await finish.locator('[value="做了一部分"]').check();await finish.locator('[type="submit"]').click();await eventually(async()=>(await read(child.id,priorDay)).items[0].result==='做了一部分','past result saves without inventing duration');assert.equal((await read(child.id,priorDay)).items[0].actual_minutes,null);
+    await p.locator('[data-study-date]').fill(state.today);await p.locator('[data-study-date]').dispatchEvent('change');await eventually(async()=>await item.isVisible(),'return to today');
+    await p.locator('select[data-study-child]').selectOption(other.id);await eventually(async()=>await p.locator('.study-item').count()===0,'other child isolated');assert.equal((await read(other.id)).items.length,0);
+    await p.locator('select[data-study-child]').selectOption(child.id);await p.locator('.study-item').first().waitFor();await fit(p);await proof(p,'study-'+width);
+    assert.deepEqual(errors,[]);results.push({width,visibleRequirements:true,currentSourceWithoutTimerChange:true,activeSourceJump:true,persistentTimer:true,resultAndCorrection:true,originalsFieldOwnership:true,ordinaryCaptureReset:true,exactRetry:true,conflictPreservesInput:true,dismissedTimerCrossPage:width===360,childIsolation:true,noOverflow:true});
+   }finally{await p.close()}
+  }
+  console.log(JSON.stringify({passed:results.length,syntheticOnly:true,realPhone:false,checks:results},null,2));
+ }finally{await browser?.close();await app?.stop()}
+})().catch(e=>{console.error(e.stack);process.exitCode=1});
