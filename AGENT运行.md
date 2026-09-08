@@ -119,6 +119,8 @@ python3 family_collect.py --config private/collector.json --once
 
 每轮每个微信来源最多取一页 200 条，后续轮次从后台确认的游标继续；非文本消息保留未读内容缺口。QQ 只有实际提供历史读取能力且能核对既有原生消息锚点时才推进，不自动猜初始锚点、不登录或重启客户端。接口失败、电脑休眠、隧道断开均保留原游标与旧资料；恢复后下轮再尝试。正文读取成功不表示附件或完整历史已读。
 
+微信采集使用已核验CLI的 `history --view agent --order asc --strict-read-only`，零游标首次读取不传 `after_message`，后续传后台确认的消息锚点。查询顺序与本地消息编号大小并不等价，按接口原顺序及分页锚点继续；不能先取最新一页再排序冒充完整增量。旧CLI或返回契约不一致时保留失败和原游标，不静默跳过历史。
+
 macOS 可复用 `deploy/local.family-learning.collector.plist`：用文本编辑器将 `__PYTHON3__` 替换为 `command -v python3` 得到的绝对路径，将 `__APP_ROOT__` 替换为实际程序目录。路径含 `&` 或 `<` 时须按 XML 转义；launchd 不展开 `~` 或环境变量。确认 `private` 目录存在后安装：
 
 ```sh

@@ -44,7 +44,7 @@ class SettingsTests(unittest.TestCase):
                 state=save(groups); self.assertEqual(len(app.agent_store().collector_plan()['sources']),2)
                 first=app.agent_store().collector_plan()['sources'][0]
                 self.assertEqual(first['cursor'],'0')
-                envelope=dict(ok=True,tool='read_events',command='tail',data=dict(freshness=dict(message_source='live_message_db'),query=dict(chat='100000001@chatroom',limit=200,mode='messages'),events=[],cursor='local_id:0'))
+                envelope=dict(ok=True,tool='messages',command='history',data=dict(freshness=dict(message_source='live_message_db'),query=dict(chat='100000001@chatroom',limit=200,offset=0,order='asc',display_order='query',returned=0,has_more=False),messages=[]))
                 self.assertEqual(family_collect.wechat_page(envelope,first),([],'0',''))
                 old=state['revision'];stamp='2026-09-08T18:00:00+08:00'
                 app.agent_store().ingest(dict(source_id=groups[0]['id'],expected_cursor='0',cursor='17',checked_at=stamp,last_message_time=stamp,error='',

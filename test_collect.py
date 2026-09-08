@@ -18,16 +18,24 @@ TIME = '2026-02-10T08:00:00+08:00'
 
 
 def event(ident=11, kind='text', text='虚构学校通知'):
-    return dict(type='message', cursor='local_id:' + str(ident), event_time=TIME,
-                message=dict(id=dict(local_id=ident, talker=CHAT), time_iso=TIME, kind=kind, sender='示例老师', text=text))
+    return dict(id=dict(local_id=ident, talker=CHAT), time_iso=TIME, kind=kind, sender='示例老师', text=text)
 
 
-def page(events=None):
+def page(events=None, after=10, has_more=False):
     events = [event()] if events is None else events
-    return dict(ok=True, tool='read_events', command='tail', data=dict(
-        cursor=events[-1]['cursor'] if events else '', events=events,
-        freshness=dict(message_source='live_message_db'),
-        query=dict(chat=CHAT, limit=200, mode='messages', returned=len(events))))
+    query = dict(chat=CHAT, limit=200, offset=0, order='asc', display_order='query', returned=len(events), has_more=has_more)
+    if after:
+        query['after_message'] = 'local_id:' + str(after)
+    if events:
+        first, last = events[0]['id']['local_id'], events[-1]['id']['local_id']
+        query.update(talker=CHAT, cursor=dict(oldest_local_id=first, newest_local_id=last,
+                     next_before_message=first, next_after_message=last))
+        if has_more:
+            query['next_offset'] = len(events)
+    data = dict(freshness=dict(message_source='live_message_db'), query=query)
+    if events:
+        data['messages'] = events
+    return dict(ok=True, tool='messages', command='history', data=data)
 
 
 class FakeClient:
@@ -98,10 +106,10 @@ class CollectorTests(unittest.TestCase):
 
     def test_real_wechat_shape_quote_media_and_zero_page(self):
         quote = event(12, 'quote', '收到')
-        quote['message']['quote'] = dict(kind='text', text='虚构家长转述', sender='示例家长',
+        quote['quote'] = dict(kind='text', text='虚构家长转述', sender='示例家长',
                                          source_id=dict(local_id=11, talker=CHAT))
         media = event(13, 'file', '示例附件.wps')
-        media['message']['files'] = [dict(path='/unread/private/file.wps')]
+        media['files'] = [dict(path='/unread/private/file.wps')]
         result, cursor, latest = collect.wechat_page(page([event(), quote, media]), SOURCE)
         self.assertEqual(cursor, '13')
         self.assertEqual(latest, TIME)
@@ -112,7 +120,7 @@ class CollectorTests(unittest.TestCase):
         self.assertTrue(result[2]['unread'])
         self.assertIn('内容未读取', result[2]['text'])
         self.assertNotIn('/unread/', json.dumps(result))
-        quote['message']['quote']['source_id']['talker'] = '20002@chatroom'
+        quote['quote']['source_id']['talker'] = '20002@chatroom'
         result, _, _ = collect.wechat_page(page([quote]), SOURCE)
         self.assertTrue(result[0]['unread'])
         self.assertNotIn('虚构家长转述', result[0]['text'])
@@ -120,7 +128,8 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(len(result[0]['text']), 8000)
         self.assertTrue(result[0]['unread'])
         empty = page([])
-        del empty['data']['query']['returned']  # The real zero-result CLI omits this.
+        self.assertNotIn('cursor', empty['data']['query'])
+        self.assertNotIn('messages', empty['data'])
         self.assertEqual(collect.wechat_page(empty, SOURCE), ([], '10', ''))
         self.assertEqual(collect.wechat_page(page(), {**SOURCE, 'cursor': 'local_id:10'})[1], 'local_id:11')
 
@@ -128,11 +137,11 @@ class CollectorTests(unittest.TestCase):
         client = FakeClient([{**SOURCE, 'cursor': 'local_id:10'}])
         calls = []
         def many(args):
-            start = int(args[args.index('--since-local-id') + 1])
+            start = int(args[args.index('--after-message') + 1])
             calls.append(start)
             # An earlier long message must not prevent later ordinary notifications.
             envelope = page([event(n, text=('甲' * 20000 if n == 11 else '乙' * 8000))
-                             for n in range(start + 1, 211)])
+                             for n in range(start + 1, 211)], after=start)
             envelope['data']['freshness']['last_message_time'] = '2026-02-12 12:00:00'
             return envelope
         while int(client.sources[0]['cursor'].removeprefix('local_id:')) < 210:
@@ -152,16 +161,87 @@ class CollectorTests(unittest.TestCase):
         self.assertTrue(all(a < b for a, b in zip(calls, calls[1:])))
         self.assertEqual(collect.ingest_page([], 'local_id:210'), ([], 'local_id:210', ''))
 
+    def test_initial_and_backlogged_sources_ingest_earliest_pages_without_skipping(self):
+        for prefix in ('', 'local_id:'):
+            for initial in (0, 10):
+                with self.subTest(prefix=prefix, initial=initial):
+                    client = FakeClient([{**SOURCE, 'cursor': prefix + str(initial)}], fail=True)
+                    calls = []
+                    def history(args):
+                        self.assertEqual(args[:7], [CONFIG['wechat_cli'], 'history', CHAT, '--view', 'agent', '--order', 'asc'])
+                        self.assertEqual(args[-3:], ['--limit', '200', '--strict-read-only'])
+                        self.assertNotIn('--since-local-id', args)
+                        self.assertNotIn('--since-time', args)
+                        start = int(args[args.index('--after-message') + 1]) if '--after-message' in args else 0
+                        if '--after-message' in args:
+                            self.assertGreater(start, 0)
+                        calls.append(start)
+                        end = min(start + 200, 450)
+                        return page([event(ident) for ident in range(start + 1, end + 1)], after=start, has_more=end < 450)
+                    self.assertEqual(collect.run_once(CONFIG, client, history)[0]['status'], 'ingest_unconfirmed')
+                    self.assertEqual(client.sources[0]['cursor'], prefix + str(initial))
+                    client.fail = False
+                    while int(client.sources[0]['cursor'].removeprefix('local_id:')) < 450:
+                        self.assertEqual(collect.run_once(CONFIG, client, history)[0]['status'], 'ingested')
+                        self.assertLess(len(client.posts), 6)
+                    self.assertEqual(calls, [initial, initial, initial + 200, initial + 400])
+                    accepted = [message['id'] for body in client.posts[1:] for message in body['messages']]
+                    self.assertEqual(accepted, [str(ident) for ident in range(initial + 1, 451)])
+                    self.assertEqual(client.sources[0]['cursor'], prefix + '450')
+                    self.assertEqual(collect.run_once(CONFIG, client, history)[0]['messages'], 0)
+                    self.assertEqual(client.sources[0]['cursor'], prefix + '450')
+                    self.assertEqual(client.posts[-1]['last_message_time'], '')
+        empty = FakeClient([{**SOURCE, 'cursor': '0'}])
+        self.assertEqual(collect.run_once(CONFIG, empty, lambda args: page([], after=0))[0]['status'], 'ingested')
+        self.assertEqual(empty.sources[0]['cursor'], '0')
+        self.assertEqual(collect.run_once(CONFIG, empty, lambda args: page([event(1)], after=0))[0]['messages'], 1)
+        self.assertEqual(empty.sources[0]['cursor'], '1')
+
+    def test_positional_anchor_can_move_backwards_without_sorting_byte_limited_pages(self):
+        # The CLI query position, not numeric ID or timestamp order, defines
+        # which messages follow an anchor. All content is fictional.
+        ids = [100 - n // 2 if n % 2 == 0 else 1000 + n // 2 for n in range(90)]
+        client = FakeClient([{**SOURCE, 'cursor': 'local_id:200'}])
+        calls = []
+        def history(args):
+            anchor = int(args[args.index('--after-message') + 1])
+            calls.append(anchor)
+            start = 0 if anchor == 200 else ids.index(anchor) + 1
+            return page([event(ident, text='甲' * 8000) for ident in ids[start:start + 200]], after=anchor)
+        for _ in range(10):
+            result = collect.run_once(CONFIG, client, history)
+            self.assertEqual(result[0]['status'], 'ingested')
+            body = client.posts[-1]
+            self.assertLessEqual(len(json.dumps(body['messages'], ensure_ascii=False,
+                                     separators=(',', ':')).encode()), collect.MAX_BATCH_BYTES)
+            if not body['messages']:
+                break
+            self.assertEqual(body['cursor'], 'local_id:' + body['messages'][-1]['id'])
+        else:
+            self.fail('Positional pages did not finish')
+        self.assertGreater(len(client.posts), 2, 'The 700KiB bound must split the source page')
+        self.assertTrue(any(after < before for before, after in zip(calls, calls[1:])))
+        self.assertEqual([int(message['id']) for body in client.posts for message in body['messages']], ids)
+        self.assertEqual(calls, [200] + [int(body['messages'][-1]['id']) for body in client.posts if body['messages']])
+        self.assertEqual(client.sources[0]['cursor'], 'local_id:' + str(ids[-1]))
+        self.assertEqual(collect.wechat_page(page([event(9)], after=10), SOURCE)[1], '9')
+
     def test_binding_order_and_live_failures_never_advance(self):
         invalid = []
         wrong_query = page(); wrong_query['data']['query']['chat'] = '20002@chatroom'; invalid.append(wrong_query)
-        wrong_message = page(); wrong_message['data']['events'][0]['message']['id']['talker'] = '20002@chatroom'; invalid.append(wrong_message)
+        wrong_message = page(); wrong_message['data']['messages'][0]['id']['talker'] = '20002@chatroom'; invalid.append(wrong_message)
         cached = page(); cached['data']['freshness']['message_source'] = 'cache'; invalid.append(cached)
-        advanced = page(); advanced['data']['cursor'] = 'local_id:99'; invalid.append(advanced)
-        wrong_type = page(); wrong_type['data']['events'][0]['message']['kind'] = {}; invalid.append(wrong_type)
-        wrong_time = page(); wrong_time['data']['events'][0]['message']['time_iso'] = '2026-02-10 08:00:00'; invalid.append(wrong_time)
+        advanced = page(); advanced['data']['query']['cursor']['next_after_message'] = 99; invalid.append(advanced)
+        wrong_type = page(); wrong_type['data']['messages'][0]['kind'] = {}; invalid.append(wrong_type)
+        wrong_time = page(); wrong_time['data']['messages'][0]['time_iso'] = '2026-02-10 08:00:00'; invalid.append(wrong_time)
+        for changes in (dict(order='desc'), dict(display_order='asc'), dict(offset=200), dict(after_message='local_id:12'),
+                        dict(talker='20002@chatroom'), dict(returned=2), dict(next_offset=999)):
+            wrong_page = page(); wrong_page['data']['query'].update(changes); invalid.append(wrong_page)
+        old_tail = page(); old_tail.update(tool='read_events', command='tail'); invalid.append(old_tail)
+        missing_messages = page(); del missing_messages['data']['messages']; invalid.append(missing_messages)
+        unknown_empty = page([]); unknown_empty['data']['query']['has_more'] = True; invalid.append(unknown_empty)
         missing_quote = page([event(kind='quote')]); invalid.append(missing_quote)
-        invalid.extend([page([event(12), event(11)]), page([event(10)]), page([event(), event()])])
+        invalid.extend([page([event(10)]), page([event(), event()])])
         for envelope in invalid:
             with self.subTest(envelope=envelope):
                 client = FakeClient()
@@ -185,7 +265,8 @@ class CollectorTests(unittest.TestCase):
         client.fail = False
         collect.run_once(CONFIG, client, cli)
         self.assertEqual(client.sources[0]['cursor'], '11')
-        expected = [CONFIG['wechat_cli'], 'tail', CHAT, '--since-local-id', '10', '--limit', '200', '--strict-read-only']
+        expected = [CONFIG['wechat_cli'], 'history', CHAT, '--view', 'agent', '--order', 'asc', '--after-message', '10',
+                    '--limit', '200', '--strict-read-only']
         self.assertEqual(calls, [expected, expected])
         self.assertEqual(client.posts[0]['messages'], client.posts[1]['messages'])
         for source in ({**SOURCE, 'id': '--other'}, {**SOURCE, 'id': '20002'}, {**SOURCE, 'platform': 'shell'}):
@@ -211,9 +292,9 @@ class CollectorTests(unittest.TestCase):
         advanced_calls = []
         def following(args):
             advanced_calls.append(args)
-            return page([event(12)])
+            return page([event(12)], after=11)
         collect.run_once(CONFIG, committed, following)
-        self.assertEqual(advanced_calls[0][4], '11')
+        self.assertEqual(advanced_calls[0][advanced_calls[0].index('--after-message') + 1], '11')
         self.assertEqual([m['id'] for body in committed.posts for m in body['messages']], ['11', '12'])
 
     def test_qq_unavailable_and_native_anchor_continuity(self):

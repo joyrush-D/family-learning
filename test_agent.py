@@ -45,6 +45,7 @@ class AgentTests(unittest.TestCase):
         with sqlite3.connect(self.app.DB, timeout=0.1) as c:
             c.execute('BEGIN IMMEDIATE'); c.rollback()
         value = json.loads(messages[-1]['content'])
+        self.assertEqual(value['as_of'], self.now.astimezone(agent.TZ).date().isoformat())
         return {'proposals': [dict(title_quote='待核对原文', focus='school' if value['mode'] == 'school' else 'listen', due='',
             evidence=[{'ref': value['evidence'][0]['ref'], 'quote': '待核对原文'}])]}
 
@@ -197,6 +198,69 @@ class AgentTests(unittest.TestCase):
         with patch.object(agent.family_llm, '_chat_json', return_value=output):
             items = agent._select('school', [{'ref': 'message:synthetic:1', 'text': excerpt}])
         self.assertEqual(items[0]['evidence'][0]['text'], excerpt)
+
+    def test_school_history_uses_beijing_date_and_preserves_current_or_uncertain_requirements(self):
+        # The caller's UTC date is still September 8; this run is September 9 in China.
+        self.now = dt.datetime(2026, 9, 8, 16, 15, tzinfo=dt.timezone.utc)
+        old_time = '2026-03-09T09:00:00+08:00'
+        cases = [('11', '一次性准备截止2026-03-10', '2026-03-10', old_time),
+                 ('12', '未来活动截止2026-09-10', '2026-09-10', old_time),
+                 ('13', '今天活动截止2026-09-09', '2026-09-09', old_time),
+                 ('14', '长期阅读约定，请持续保留阅读记录。', '', old_time),
+                 ('15', '时间仍待核对，请带阅读材料。', '', '')]
+        payload = self.payload(cursor='15')
+        payload['messages'] = [dict(id=ident, time=stamp, kind='text', sender='示例老师', text=text, unread=False)
+                               for ident, text, due, stamp in cases]
+        self.store.ingest(payload)
+        # Existing parent decisions and their task must survive analysis of old messages.
+        fp = self.store._job('prior-school', 'prior', self.now)
+        item = dict(child_id='child-1', kind='school', title='已由家长核对的要求', body=agent.FOCUS['school'],
+                    evidence=[dict(ref='message:synthetic-prior:1', text='虚构的早期依据')], due='2026-03-10')
+        self.store._save('prior-school', fp, [item, {**item, 'title': '家长已忽略的要求'}], self.now)
+        prior = self.store.snapshot()['items']
+        self.store.act(dict(id=prior[0]['id'], action='accept'))
+        self.store.act(dict(id=prior[1]['id'], action='dismiss'))
+        with self.app.connect() as c:
+            before_items = [dict(row) for row in c.execute('SELECT * FROM agent_items ORDER BY id')]
+            before_tasks = [dict(row) for row in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+
+        with patch.object(agent.family_llm, '_chat_json', side_effect=agent.family_llm.LLMUnavailable('offline')):
+            self.assertEqual(agent.run_once(self.app, self.now)['failed'], 1)
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT SUM(processed) FROM agent_messages').fetchone()[0], 0)
+            self.assertEqual(c.execute('SELECT cursor FROM agent_sources').fetchone()[0], '15')
+
+        def school_model(messages, schema, name, timeout, *, data_path=None):
+            request = json.loads(messages[-1]['content'])
+            self.assertEqual(request['as_of'], '2026-09-09')
+            self.assertEqual([row['time'] for row in request['evidence']], [row[3] for row in cases])
+            self.assertIn('按各条消息的发送日期理解', messages[0]['content'])
+            return {'proposals': [dict(title_quote=text, focus='school', due=due,
+                evidence=[dict(ref='message:' + self.source['id'] + ':' + ident, quote=text)])
+                for ident, text, due, stamp in cases]}
+
+        with patch.object(agent.family_llm, '_chat_json', side_effect=school_model) as model:
+            result = agent.run_once(self.app, self.now + dt.timedelta(minutes=6))
+            self.assertEqual((result['created'], result['processed']), (4, 5))
+            self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(minutes=7))['created'], 0)
+            self.assertEqual(model.call_count, 1)
+        with self.app.connect() as c:
+            stored = [dict(row) for row in c.execute('SELECT * FROM agent_messages ORDER BY id')]
+            self.assertEqual([json.loads(row['payload'])['text'] for row in stored], [row[1] for row in cases])
+            self.assertTrue(all(row['processed'] == 1 for row in stored))
+            self.assertEqual(c.execute('SELECT cursor FROM agent_sources').fetchone()[0], '15')
+            self.assertEqual([dict(row) for row in c.execute("SELECT * FROM agent_items WHERE job_id='prior-school' ORDER BY id")], before_items)
+            self.assertEqual([dict(row) for row in c.execute('SELECT * FROM manual_tasks ORDER BY id')], before_tasks)
+        pending = self.store.snapshot()['items']
+        titles = [row['title'] for row in pending if row['state'] == 'pending']
+        self.assertEqual(set(titles), {'待核对：' + row[1] for row in cases[1:]})
+
+    def test_old_learning_evidence_is_not_filtered_by_school_expiry_rule(self):
+        evidence = [dict(ref='record:synthetic-old', text='2026-03-10 阅读观察')]
+        output = {'proposals': [dict(title_quote='阅读观察', focus='listen', due='2026-03-10',
+                                    evidence=[dict(ref=evidence[0]['ref'], quote=evidence[0]['text'])])]}
+        with patch.object(agent.family_llm, '_chat_json', return_value=output):
+            self.assertEqual(len(agent._select('learning', evidence, as_of='2026-09-09')), 1)
 
     def test_unread_media_remains_visible_after_processing_and_replay(self):
         payload = self.payload(); payload['messages'][0].update(kind='image', text='图片原件未读', unread=True)

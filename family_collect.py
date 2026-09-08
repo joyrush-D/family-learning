@@ -128,14 +128,11 @@ def ingest_page(messages, cursor):
     return batch, new_cursor, batch[-1]['time']
 
 
-def wechat_message(event, chat):
-    checked(isinstance(event, dict) and event.get('type') == 'message')
-    message = event.get('message')
+def wechat_message(message, chat):
     checked(isinstance(message, dict) and isinstance(message.get('id'), dict))
     ident = message['id']
     checked(ident.get('talker') == chat, 'source_mismatch')
     checked(type(ident.get('local_id')) is int and 0 < ident['local_id'] < 10 ** 32)
-    checked(event.get('cursor') == 'local_id:' + str(ident['local_id']), 'cursor_mismatch')
     kind, sender = message.get('kind'), message.get('sender', '')
     checked(isinstance(kind, str) and re.fullmatch(r'[a-z_]{1,40}', kind) is not None
             and isinstance(sender, str), 'invalid_message_type')
@@ -163,7 +160,6 @@ def wechat_message(event, chat):
         text = '[' + kind + '：内容未读取，仅保留消息说明]\n' + text
     text, truncated = bounded(text)
     timestamp = iso_time(message.get('time_iso'))
-    checked(iso_time(event.get('event_time')) == timestamp, 'message_time_mismatch')
     return dict(id=str(ident['local_id']), time=timestamp, kind=kind,
                 sender=sender[:200], text=text, unread=unread or truncated)
 
@@ -173,23 +169,41 @@ def wechat_page(envelope, source):
     cursor = source['cursor'].removeprefix('local_id:')
     checked(numeric(cursor), 'wechat_cursor_required')
     checked(isinstance(envelope, dict) and envelope.get('ok') is True
-            and envelope.get('tool') == 'read_events' and envelope.get('command') == 'tail', 'wechat_read_failed')
+            and envelope.get('tool') == 'messages' and envelope.get('command') == 'history', 'wechat_read_failed')
     data = envelope.get('data')
     checked(isinstance(data, dict) and isinstance(data.get('freshness'), dict)
             and data['freshness'].get('message_source') == 'live_message_db', 'wechat_live_read_required')
     query = data.get('query')
-    checked(isinstance(query, dict) and query.get('chat') == chat, 'source_mismatch')
-    checked(query.get('limit') == 200 and query.get('mode') == 'messages')
-    events = data.get('events')
-    checked(isinstance(events, list) and len(events) <= 200)
-    checked('returned' not in query or type(query['returned']) is int and query['returned'] == len(events))
-    messages = [wechat_message(event, chat) for event in events]
-    previous = int(cursor)
-    for message in messages:
-        checked(int(message['id']) > previous, 'non_monotonic_cursor')
-        previous = int(message['id'])
+    checked(isinstance(query, dict) and query.get('chat') == chat
+            and query.get('talker', chat) == chat, 'source_mismatch')
+    checked(query.get('limit') == 200 and type(query.get('offset')) is int and query['offset'] == 0
+            and query.get('order') == 'asc' and query.get('display_order') == 'query', 'wechat_order_unverified')
+    checked(query.get('after_message') == 'local_id:' + str(int(cursor)) if int(cursor) else 'after_message' not in query,
+            'cursor_mismatch')
+    # The verified CLI omits messages entirely for an empty history page;
+    # returned/has_more below must still explicitly confirm that empty result.
+    rows = data.get('messages', [])
+    checked(isinstance(rows, list) and len(rows) <= 200)
+    checked(type(query.get('returned')) is int and query['returned'] == len(rows)
+            and type(query.get('has_more')) is bool)
+    messages = [wechat_message(message, chat) for message in rows]
+    # after_message is a positional anchor in the CLI's query order, not a
+    # numeric local_id lower bound. IDs (and timestamps) can move backwards.
+    ids = [message['id'] for message in messages]
+    checked(len(set(ids)) == len(ids), 'duplicate_message_id')
+    checked(str(int(cursor)) not in ids, 'cursor_repeated')
+    previous = int(ids[-1]) if ids else int(cursor)
+    if messages:
+        page_cursor = query.get('cursor')
+        expected_ids = dict(oldest_local_id=int(messages[0]['id']), newest_local_id=previous,
+                            next_before_message=int(messages[0]['id']), next_after_message=previous)
+        checked(isinstance(page_cursor, dict) and all(type(page_cursor.get(key)) is int and page_cursor[key] == value
+                for key, value in expected_ids.items()), 'cursor_mismatch')
+    else:
+        checked('cursor' not in query and query['has_more'] is False, 'cursor_mismatch')
+    checked('next_offset' not in query or type(query['next_offset']) is int and query['next_offset'] == len(messages),
+            'cursor_mismatch')
     expected = 'local_id:' + str(previous)
-    checked(data.get('cursor') == expected if messages else data.get('cursor') in ('', expected), 'cursor_mismatch')
     new_cursor = expected if source['cursor'].startswith('local_id:') else str(previous)
     # Database freshness is not the end of this page's successfully ingested content.
     return messages, new_cursor, messages[-1]['time'] if messages else ''
@@ -313,7 +327,11 @@ def run_once(config, client=None, read_cli=cli_json):
                 checked(bool(config.get('wechat_cli')), 'wechat_cli_not_configured')
                 cursor = source['cursor'].removeprefix('local_id:')
                 checked(numeric(cursor), 'wechat_cursor_required')
-                envelope = read_cli([config['wechat_cli'], 'tail', chat, '--since-local-id', cursor,
+                # tail selects the newest limited window even with a lower bound.
+                # Ascending history queries preserve the earliest unread prefix,
+                # including a new source whose server-side sentinel is zero.
+                after = ['--after-message', cursor] if int(cursor) else []
+                envelope = read_cli([config['wechat_cli'], 'history', chat, '--view', 'agent', '--order', 'asc', *after,
                                      '--limit', '200', '--strict-read-only'])
                 messages, new_cursor, latest = wechat_page(envelope, source)
             else:
