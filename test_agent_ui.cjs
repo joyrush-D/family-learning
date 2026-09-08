@@ -2,6 +2,12 @@
 const assert=require('node:assert/strict'),{spawn}=require('node:child_process'),{once}=require('node:events'),net=require('node:net'),{setTimeout:delay}=require('node:timers/promises');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 async function until(check,label){for(let i=0;i<200;i++){if(await check())return;await delay(50)}throw Error(label)}
+async function fits(page){
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'no document overflow');
+ assert.equal(await page.locator('dialog[open]').evaluateAll(items=>items.some(d=>d.scrollWidth>d.clientWidth)),false,'no dialog overflow');
+ assert.equal(await page.locator('[data-school-record-agent]:visible,[data-school-record-task]:visible,#recordForm button:visible').evaluateAll(items=>items.some(b=>b.getBoundingClientRect().height<40)),false,'school learning actions are usable touch targets');
+}
+async function proof(page,name){if(process.env.AGENT_UI_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.mkdir(process.env.AGENT_UI_PROOF_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.AGENT_UI_PROOF_DIR,name+'.png')})}}
 const fixture=String.raw`
 import tempfile,os,json,datetime
 from pathlib import Path
@@ -14,9 +20,10 @@ with tempfile.TemporaryDirectory(prefix='synthetic-agent-ui-') as tmp:
  app.connect().close()
  today=datetime.datetime.now(family_agent.TZ).date().isoformat()
  app.save_record(dict(child='示例小宇',day=today,category='学习进展',title='虚构阅读尝试',note='还需要一次提示',subject='语文',source='家长观察'))
+ app.save_record(dict(child='示例小宇',day=today,category='学习进展',title='SIBLING_SAME_SOURCE_CANARY',note='另一孩子的同来源记录，不能代替当前孩子。',source='message:synthetic:0'))
  (app.DATA/'agent.json').write_text(json.dumps({'enabled':True,'sources':[]}))
  store=app.agent_store();now=datetime.datetime.now(family_agent.TZ)
- for i in range(2):
+ for i in range(4):
   store._save('school:'+str(i),'fixture',[dict(child_id='child-1',kind='school',title='虚构学校准备 '+str(i),body='核对后准备观察材料。',due=today,evidence=[{'ref':'message:synthetic:'+str(i),'text':'虚构老师通知：请准备观察材料。<img src=x onerror=alert(1)>'}])],now)
  store._save('record:1','fixture',[dict(child_id='child-2',kind='care',title='虚构学习跟进',body='请孩子讲讲自己的想法。',record_id=1,evidence=[{'ref':'record:1','text':'还需要一次提示'}])],now)
  store._runtime('ready',now)
@@ -33,20 +40,91 @@ with tempfile.TemporaryDirectory(prefix='synthetic-agent-ui-') as tmp:
  browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
  for(const width of [360,1440]){
   const page=await browser.newPage({viewport:{width,height:820}}),pageErrors=[];page.on('pageerror',e=>pageErrors.push(e.message));await page.goto(url);await page.locator('.today-dashboard').waitFor();
-  assert.equal(await page.locator('[data-today-child="child-2"] [data-agent-item]').count(),1);assert.equal(await page.locator('[data-today-child="child-1"] [data-followup]').count(),0);
-  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
-  const first=page.locator('[data-agent-accept]').first();await first.click();await page.locator('#agentDialog').waitFor();await page.locator('#agentForm [name="title"]').fill('虚构家长核对 '+width);await page.locator('#agentForm [name="body"]').fill('带一本笔记本');
+  assert.equal(await page.locator('[data-today-child="child-2"] [data-agent-item]').count(),1);assert.equal(await page.locator('[data-today-child="child-1"] [data-followup="1"]').count(),0);
+  await fits(page);
+  const before=await state(),sourceButton=page.locator('[data-school-record-agent]').first(),schoolID=await sourceButton.getAttribute('data-school-record-agent'),school=before.agent.items.find(x=>x.id===schoolID),ref=school.evidence[0].ref;
+  assert.ok(school&&school.kind==='school');
+  // A malformed source cannot fall through to the general form's default child.
+  await sourceButton.evaluate(b=>b.setAttribute('data-school-record-agent',''));
+  await page.locator('[data-school-record-agent=""]').click();await delay(150);
+  assert.equal(await page.locator('#recordDialog').isVisible(),false,'empty source ID never opens a default-child record');
+  assert.equal((await state()).records.length,before.records.length);
+  await page.reload();await page.locator('.today-dashboard').waitFor();
+  await page.locator('[data-school-record-agent="'+schoolID+'"]').click();await page.locator('#recordDialog').waitFor();
+  const record=page.locator('#recordForm');
+  assert.equal(await record.locator('[name="child"]').inputValue(),'示例星星');
+  assert.equal(await record.locator('[name="category"]').inputValue(),'学习进展');
+  assert.deepEqual(await record.locator('[name="category"]').evaluate(select=>[...select.options].map(option=>option.value)),['学习进展','成绩'],'school material can explicitly become a score record');
+  assert.equal(await record.locator('[name="source"]').inputValue(),ref);
+  assert.equal(await record.locator('[name="day"]').inputValue(),'','notification due is not the actual learning date');
+  assert.equal(await record.locator('[name="related_record_id"]').inputValue(),'');
+  assert.equal(await record.locator('[name="followup_kind"]').inputValue(),'');
+  assert.equal(await record.locator('[name="assistance"]').inputValue(),'');
+  const material=await record.locator('[name="note"]').inputValue();
+  assert.match(material,/虚构老师通知：请准备观察材料/);assert.match(material,/待核对/);assert.ok(material.includes('<img src=x onerror=alert(1)>'));
+  assert.equal(await page.locator('#recordDialog img').count(),0);
+  assert.equal((await state()).records.length,before.records.length,'opening a school source does not fabricate a learning fact');
+  await record.locator('[name="day"]').fill(before.today);await record.locator('[name="note"]').fill(material+'\n虚构家长补记：实际表现还要听孩子说明。');
+  const attempts=[];let recordPhase=0;
+  await page.route('**/api/record',async route=>{
+   attempts.push(route.request().postDataJSON());recordPhase++;
+   if(recordPhase===1)return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'虚构学校记录网络故障'})});
+   if(recordPhase===2){const response=await route.fetch();assert.equal(response.status(),200);return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'虚构学校记录回执丢失'})})}
+   await route.continue();
+  });
+  await record.locator('[type="submit"]').click();await until(async()=>/虚构学校记录网络故障/.test(await page.locator('#recordError').innerText()),'school save failure visible');
+  assert.equal((await state()).records.length,before.records.length);assert.equal(await record.locator('[name="source"]').inputValue(),ref);assert.match(await record.locator('[name="note"]').inputValue(),/虚构家长补记/);
+  await fits(page);await proof(page,'school-record-retry-'+width);
+  await record.locator('[type="submit"]').click();await until(async()=>/虚构学校记录回执丢失/.test(await page.locator('#recordError').innerText()),'lost receipt visible');
+  assert.equal((await state()).records.filter(r=>r.child==='示例星星'&&r.source===ref).length,1,'unknown response already saved exactly once');
+  await record.locator('[type="submit"]').click();await until(async()=>!(await page.locator('#recordDialog').isVisible()),'same source request retried');await page.unroute('**/api/record');
+  assert.equal(attempts.length,3);assert.ok(attempts[0].request_key);assert.deepEqual(attempts[1],attempts[0]);assert.deepEqual(attempts[2],attempts[0]);
+  let current=await state();const schoolRecord=current.records.find(r=>r.child==='示例星星'&&r.source===ref);assert.ok(schoolRecord);
+  assert.equal(current.records.length,before.records.length+1);assert.deepEqual(current.tasks,before.tasks,'school record does not create or complete a task');
+  const learning=()=>page.locator('[data-learning-case="'+schoolRecord.id+'"]');await until(()=>learning().isVisible(),'saved school record stays in its learning case');
+  assert.equal((await page.locator('.learning-journeys').innerText()).includes('SIBLING_SAME_SOURCE_CANARY'),false,'same source from a sibling cannot be selected or shown as this child case');
+  assert.doesNotMatch(await learning().innerText(),/尚无复测|还没有复测|订正 0|复测 0/,'ordinary school context does not force a correction/retest path');
+  await proof(page,'school-learning-case-'+width);
+  await page.locator('[data-page="home"]').first().click();
+  const first=page.locator('[data-agent-accept="'+schoolID+'"]');await first.click();await page.locator('#agentDialog').waitFor();await page.locator('#agentForm [name="title"]').fill('虚构家长核对 '+width);await page.locator('#agentForm [name="body"]').fill('带一本笔记本');
   await page.route('**/api/agent/action',r=>r.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'虚构网络暂不可用'})}),{times:1});
   await page.locator('#agentForm [type="submit"]').click();await until(()=>page.locator('#agentError').textContent().then(t=>t.includes('虚构网络')),'failed save visible');assert.equal(await page.locator('#agentForm [name="body"]').inputValue(),'带一本笔记本');
   assert.equal(await page.locator('#agentDialog').evaluate(d=>d.scrollWidth>d.clientWidth),false);
-  if(process.env.AGENT_UI_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.mkdir(process.env.AGENT_UI_PROOF_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.AGENT_UI_PROOF_DIR,'agent-form-'+width+'.png')})}
+  await proof(page,'agent-form-'+width);
   await page.locator('#agentForm [type="submit"]').click();await until(()=>page.locator('#agentDialog').isVisible().then(v=>!v),'saved');await page.reload();await page.locator('.today-dashboard').waitFor();
   const saved=await state();assert.equal(saved.tasks.filter(t=>t.title==='虚构家长核对 '+width).length,1);assert.equal(saved.tasks.find(t=>t.title==='虚构家长核对 '+width).child,'示例星星');
+  const acceptedTask=saved.tasks.find(t=>t.title==='虚构家长核对 '+width);
+  await page.locator('[data-page="tasks"]').first().click();await page.locator('[data-school-record-task="'+acceptedTask.id+'"]').click();await until(()=>learning().isVisible(),'accepted task opens existing same-source learning case');
+  assert.equal(await page.locator('#recordDialog').isVisible(),false);assert.equal((await state()).records.filter(r=>r.child==='示例星星'&&r.source===ref).length,1);
+  await learning().locator('[data-followup-kind="补充观察"]').click();await page.locator('#recordDialog').waitFor();
+  assert.ok((await record.locator('[name="category"]').evaluate(select=>[...select.options].map(option=>option.value))).includes('家长观察'),'ordinary followup restores the full record categories');
+  assert.equal(await record.locator('[name="child"]').inputValue(),'示例星星');assert.equal(await record.locator('[name="related_record_id"]').inputValue(),String(schoolRecord.id));assert.equal(await record.locator('[name="followup_kind"]').inputValue(),'补充观察');
+  await record.locator('[name="day"]').fill(saved.today);await record.locator('[name="title"]').fill('虚构孩子解释 '+width);await record.locator('[name="note"]').fill('孩子说想先画出观察到的形状；这次没有核对是否完成。');
+  await record.locator('[type="submit"]').click();await until(async()=>!(await page.locator('#recordDialog').isVisible()),'child explanation appended');
+  current=await state();const observation=current.records.find(r=>r.title==='虚构孩子解释 '+width);assert.equal(observation.related_record_id,schoolRecord.id);assert.equal(observation.child,schoolRecord.child);assert.equal(observation.followup_kind,'补充观察');assert.deepEqual(current.tasks.find(t=>t.id===acceptedTask.id),acceptedTask);
+  // A second source begins from an existing task so all task feedback must carry over.
+  const pendingSchool=current.agent.items.find(x=>x.kind==='school'&&x.state==='pending'),token=current.token;
+  const accept=await fetch(url+'api/agent/action',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':token},body:JSON.stringify({id:pendingSchool.id,action:'accept',title:'虚构已反馈事项 '+width,body:'核对原通知，和孩子商量观察材料。'})});assert.equal(accept.status,200);const secondTaskID=(await accept.json()).task_id,secondRef=pendingSchool.evidence[0].ref;
+  await page.reload();await page.locator('.today-dashboard').waitFor();await page.locator('[data-page="tasks"]').first().click();
+  for(const [status,note] of [['待跟进','虚构第一条反馈：还要核对当天安排。'],['进行中','虚构第二条反馈：孩子想先画图，请听他解释。']]){
+   await page.locator('[data-task="'+secondTaskID+'"]').click();await page.locator('#taskDialog').waitFor();await page.locator('#taskForm [name="status"]').selectOption(status);await page.locator('#taskForm [name="note"]').fill(note);await page.locator('#taskForm [type="submit"]').click();await until(async()=>!(await page.locator('#taskDialog').isVisible()),'task feedback saved');
+  }
+  const taskBeforeRecord=(await state()).tasks.find(t=>t.id===secondTaskID);
+  await page.locator('[data-school-record-task="'+secondTaskID+'"]').click();await page.locator('#recordDialog').waitFor();
+  assert.equal(await record.locator('[name="source"]').inputValue(),secondRef);assert.equal(await record.locator('[name="child"]').inputValue(),'示例星星');assert.equal(await record.locator('[name="day"]').inputValue(),'');
+  const feedback=await record.locator('[name="note"]').inputValue();assert.match(feedback,/虚构老师通知：请准备观察材料/);assert.match(feedback,/虚构第一条反馈/);assert.match(feedback,/虚构第二条反馈/);assert.match(feedback,/待核对/);assert.doesNotMatch(feedback,/已经完成|已经掌握|孩子未做|孩子没有做/);
+  await record.locator('[name="day"]').fill(current.today);await fits(page);await proof(page,'school-task-material-'+width);
+  await page.route('**/api/record',async route=>{const response=await route.fetch();assert.equal(response.status(),200);await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'虚构关闭前回执未知'})})},{times:1});
+  await record.locator('[type="submit"]').click();await until(async()=>/虚构关闭前回执未知/.test(await page.locator('#recordError').innerText()),'task-source receipt unknown');
+  await page.locator('[data-close="recordDialog"]').click();await page.locator('[data-school-record-task="'+secondTaskID+'"]').click();
+  const afterUnknown=await state(),taskRecord=afterUnknown.records.find(r=>r.child==='示例星星'&&r.source===secondRef);assert.ok(taskRecord);await until(()=>page.locator('[data-learning-case="'+taskRecord.id+'"]').isVisible(),'fresh state recovers an unknown saved receipt into existing case');
+  assert.equal(await page.locator('#recordDialog').isVisible(),false);assert.equal(afterUnknown.records.filter(r=>r.child==='示例星星'&&r.source===secondRef).length,1);assert.deepEqual(afterUnknown.tasks.find(t=>t.id===secondTaskID),taskBeforeRecord);
+  await page.locator('[data-page="home"]').first().click();
   await page.locator('[data-today-child="child-2"] [data-followup]').click();await page.locator('#recordDialog').waitFor();assert.equal(await page.locator('#recordForm [name="child"]').inputValue(),'示例小宇');assert.equal(await page.locator('#recordForm [name="related_record_id"]').inputValue(),'1');await page.locator('[data-close="recordDialog"]').click();
   await page.locator('[data-page="agent"]').first().click();await page.locator('.agent-status details summary').click();assert.equal(await page.locator('.agent-item img').count(),0);assert.match(await page.locator('.agent-status').innerText(),/上次整理/);
-  if(process.env.AGENT_UI_PROOF_DIR){const path=require('node:path');await page.screenshot({path:path.join(process.env.AGENT_UI_PROOF_DIR,'agent-'+width+'.png')})}
+  await fits(page);await proof(page,'agent-'+width);
   assert.deepEqual(pageErrors,[]);await page.close();
  }
- const p=await browser.newPage();await p.goto(url);await p.locator('.today-dashboard').waitFor();await p.locator('[data-agent-dismiss]').first().click();await until(async()=>!(await state()).agent.items.some(x=>x.kind==='care'&&x.state==='pending'),'dismiss saved');assert.equal((await state()).records.length,1,'acknowledgement does not fabricate child feedback');await p.close();
- console.log(JSON.stringify({passed:true,widths:[360,1440],realAPI:true,syntheticOnly:true,formRetry:true,childBinding:true,escapedEvidence:true,acknowledgementNotFeedback:true}));
+ const p=await browser.newPage();await p.goto(url);await p.locator('.today-dashboard').waitFor();const recordsBeforeDismiss=(await state()).records.length;await p.locator('[data-agent-dismiss]').first().click();await until(async()=>!(await state()).agent.items.some(x=>x.kind==='care'&&x.state==='pending'),'dismiss saved');assert.equal((await state()).records.length,recordsBeforeDismiss,'acknowledgement does not fabricate child feedback');await p.close();
+ console.log(JSON.stringify({passed:true,widths:[360,1440],realAPI:true,syntheticOnly:true,formRetry:true,childBinding:true,escapedEvidence:true,acknowledgementNotFeedback:true,schoolSourceEntry:true,actualDayNotGuessed:true,taskFeedbackPreserved:true,sameSourceSameCase:true,observationSameChain:true,stableRecordRetry:true,closedUnknownReceiptRecovered:true,recordDoesNotChangeTask:true,emptySourceNoDefaultChild:true,ordinarySchoolEventNoForcedRetest:true}));
 }finally{if(browser)await browser.close();if(proc&&proc.exitCode===null){proc.kill('SIGINT');await once(proc,'exit')}}})().catch(e=>{console.error(e);process.exitCode=1});
