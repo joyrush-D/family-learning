@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.family-learning.collector</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON3__</string>
+    <string>__APP_ROOT__/family_collect.py</string>
+    <string>--config</string><string>__APP_ROOT__/private/collector.json</string>
+    <string>--interval</string><string>300</string>
+  </array>
+  <key>WorkingDirectory</key><string>__APP_ROOT__</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>300</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>Umask</key><integer>63</integer>
+  <key>StandardOutPath</key><string>__APP_ROOT__/private/collector.stdout.log</string>
+  <key>StandardErrorPath</key><string>__APP_ROOT__/private/collector.stderr.log</string>
+</dict>
+</plist>

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the family learning agent every minute
+
+[Timer]
+OnCalendar=minutely
+Persistent=true
+AccuracySec=10s
+Unit=family-agent.service
+
+[Install]
+WantedBy=timers.target

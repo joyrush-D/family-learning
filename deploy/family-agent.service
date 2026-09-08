@@ -1,0 +1,11 @@
+[Unit]
+Description=Family learning agent cycle
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/family-learning
+EnvironmentFile=-%h/family-learning/private/model.env
+ExecStart=/usr/bin/python3 %h/family-learning/family_agent.py --once
+UMask=0077
+TimeoutStartSec=300
+NoNewPrivileges=true
