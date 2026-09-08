@@ -17,6 +17,7 @@ import family_reading
 TZ = dt.timezone(dt.timedelta(hours=8))
 SOURCE = '短引导尝试:'
 IMAGE_TYPES = ('image/jpeg', 'image/png', 'image/webp')
+PLAN_LIMITS = dict(goal=300, success_criteria=600, start=600, ask=600, help=600, stop=600, retry=600)
 
 
 class GuidedError(ValueError):
@@ -50,6 +51,15 @@ def _version(obj, minimum=1):
     if type(value) is not int or not minimum <= value <= 2147483647:
         raise GuidedError('请保留输入，刷新核对当前版本', 409, 'version_conflict')
     return value
+
+
+def _plan(value, confirmed=False):
+    if not isinstance(value, dict) or set(value) != set(PLAN_LIMITS):
+        raise GuidedError('请核对本次目标、观察条件和教学指南的格式')
+    result = {key: _text(value, key, limit) for key, limit in PLAN_LIMITS.items()}
+    if confirmed and (not result['goal'] or not result['success_criteria']):
+        raise GuidedError('请明确本次学习目标，以及可以观察到的表现；其余指南可以稍后补充。')
+    return result
 
 
 def _exists(c, table):
@@ -184,6 +194,38 @@ class Store:
             gaps.append('本次超过三张可用图片，请用文字补充核对摘录；未完整读取原件时不会猜测其内容。')
         return list(dict.fromkeys(gaps))
 
+    def _current_plan(self, c, ident):
+        event = c.execute("SELECT * FROM guided_events WHERE session_id=? AND kind='guide_plan' AND status='ready' AND id>(SELECT COALESCE(MAX(id),0) FROM guided_events WHERE session_id=? AND kind='material') ORDER BY id DESC LIMIT 1", (ident, ident)).fetchone()
+        if event is None:
+            return None
+        data = json.loads(event['data'])
+        return dict(id=event['id'], source=data['source'], share_goal=data['share_goal'], created=event['created'], **_plan(data['plan'], confirmed=True))
+
+    def _learning_goal(self, c, row):
+        plan = self._current_plan(c, row['id'])
+        if not row['shared'] or not plan or not plan['share_goal']:
+            return None
+        return dict(plan_event_id=plan['id'], goal=plan['goal'], success_criteria=plan['success_criteria'])
+
+    def _plan_draft(self, row, events):
+        drafts = [event for event in events if event['kind'] == 'guide_draft']
+        if not drafts:
+            return None
+        event = drafts[-1]
+        if any(e['kind'] == 'guide_plan' and json.loads(e['data']).get('based_on_draft_id') == event['id'] for e in events):
+            return None
+        data = json.loads(event['data'])
+        status = event['status']
+        if (status == 'pending' and (event['expires'] <= time.time() or event['context_version'] != row['version']) or
+                status == 'ready' and event['context_version'] + 1 != row['version']):
+            status = 'stale'
+        message = ('材料、目标或尝试已经变化，请保留当前输入并重新核对教学草稿。' if status == 'stale' else
+                   data.get('message', '教学草稿正在整理，孩子仍可继续尝试或暂停。' if status == 'pending' else '待家长核对，尚未成为学习约定。'))
+        return dict(id=event['id'], status=status, created=event['created'], message=message,
+                    plan=_plan(data['plan']) if status == 'ready' else None,
+                    uncertainties=data.get('uncertainties', []) if status == 'ready' else [],
+                    goal_source=data.get('goal_source', 'proposal'), success_criteria_source=data.get('success_criteria_source', 'proposal'))
+
     def _snapshot(self, c, child_id=None):
         if self.authorize:
             self._child(c, child_id)
@@ -202,6 +244,8 @@ class Store:
             value['material_gaps'] = self._gaps(c, row, events)
             visible = []
             for event in events:
+                if self.authorize and event['kind'] in ('guide_draft', 'guide_plan'):
+                    continue
                 data = json.loads(event['data'])
                 item = {k: event[k] for k in ('id', 'kind', 'actor', 'created', 'status')}
                 if event['kind'] == 'attempt':
@@ -209,6 +253,7 @@ class Store:
                     item['attachments'] = [self._metadata(c, i) for i in data['attachments']]
                     if not self.authorize:
                         item['record_id'] = event['record_id']
+                        item['plan_event_id'] = data.get('plan_event_id')
                 elif event['kind'] == 'hint':
                     item['actor'] = 'model'
                     if event['status'] == 'ready':
@@ -218,6 +263,8 @@ class Store:
                         if expired:
                             item['status'] = 'stale'
                         item['message'] = ('等待已结束，可重新请求一个提示。' if expired else data.get('message', '提示正在整理，可以暂停或跳过。'))
+                elif event['kind'] == 'guide_plan':
+                    item.update(plan=_plan(data['plan'], confirmed=True), source=data['source'], share_goal=data['share_goal'])
                 elif event['actor'] == 'child' or not self.authorize:
                     if 'note' in data:
                         item['text'] = data['note']
@@ -227,6 +274,7 @@ class Store:
             attempts = [e for e in events if e['kind'] == 'attempt']
             hints = [e for e in events if e['kind'] == 'hint' and e['status'] == 'ready']
             if self.authorize:
+                value['learning_goal'] = self._learning_goal(c, row)
                 actions = []
                 if row['state'] == 'active':
                     actions = ['pause', 'skip', 'finish']
@@ -244,8 +292,11 @@ class Store:
                     actions += ['pause', 'close']
                 elif row['state'] == 'paused':
                     actions += ['resume', 'close']
+                if row['state'] in ('draft', 'active', 'paused'):
+                    actions += ['guide_draft', 'guide_save']
                 value.update({k: row[k] for k in ('child_id', 'reference_text', 'related_record_id')})
                 value.update(shared=bool(row['shared']), reference_checked=bool(row['reference_checked']), editable=not bool(row['ever_shared']))
+                value.update(plan=self._current_plan(c, row['id']), plan_draft=self._plan_draft(row, events))
             value['allowed_actions'] = actions
             sessions.append(value)
         return dict(ok=True, sessions=sessions)
@@ -264,9 +315,9 @@ class Store:
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''', (row['id'], row['child_id'], self.actor, kind, key, digest, status,
             _json(data), record_id, record_hash, row['version'], expires, dt.datetime.now(TZ).isoformat())).lastrowid
 
-    def _invalidate(self, c, ident):
-        c.execute("UPDATE guided_events SET status='stale',data=? WHERE session_id=? AND kind='hint' AND status='pending'",
-                  (_json(dict(message='安排或尝试已经变化，旧提示未发布；需要时请重新请求。')), ident))
+    def _invalidate(self, c, ident, kinds=('hint', 'guide_draft')):
+        c.execute("UPDATE guided_events SET status='stale',data=? WHERE session_id=? AND kind IN (" + ','.join('?' for _ in kinds) + ") AND status='pending'",
+                  (_json(dict(message='安排或尝试已经变化，旧模型内容未发布；需要时请重新请求。')), ident, *kinds))
 
     def save_material(self, obj):
         if self.authorize:
@@ -278,7 +329,7 @@ class Store:
             child = self._child(c, obj.get('child_id'))
             key, digest, receipt = self._request(c, child['id'], obj)
             if receipt:
-                return self._result(c, child['id'])
+                return dict(self._result(c, child['id']), session_id=receipt['session_id'])
             previous = self._row(c, child['id'], obj['id']) if obj.get('id') else None
             if previous:
                 if _version(obj) != previous['version']:
@@ -314,12 +365,13 @@ class Store:
                        reference_text=reference, reference_checked=int(checked), related_record_id=relation,
                        practice_relation=practice, created=previous['created'] if previous else now, updated=now)
             if previous:
+                self._invalidate(c, row['id'])
                 fields = [k for k in row if k != 'id']
                 c.execute('UPDATE guided_sessions SET ' + ','.join(k + '=?' for k in fields) + ' WHERE id=?', [row[k] for k in fields] + [row['id']])
             else:
                 c.execute('INSERT INTO guided_sessions (' + ','.join(row) + ') VALUES (' + ','.join('?' for _ in row) + ')', tuple(row.values()))
             self._event(c, row, key, digest, 'material', {})
-            return self._result(c, child['id'])
+            return dict(self._result(c, child['id']), session_id=row['id'])
 
     def _record_hash(self, row):
         return _hash({k: row[k] for k in ('day', 'category', 'subject', 'title', 'note', 'source', 'attachments', 'assistance', 'related_record_id', 'practice_relation', 'comparison_note')})
@@ -355,15 +407,17 @@ class Store:
         hint_count = c.execute("SELECT COUNT(*) FROM guided_events WHERE session_id=? AND kind='hint' AND status='ready'", (row['id'],)).fetchone()[0]
         comparison = '本次表达前已提供 ' + str(hint_count) + ' 条系统提示；其他帮助以自述为准，不据此认定独立完成或掌握。'
         practice = '同一道题或同一片段' if attempts else row['practice_relation']
+        plan = self._current_plan(c, row['id'])
         record_id = c.execute('''INSERT INTO records
             (child,day,category,subject,title,note,source,created,attachments,related_record_id,followup_kind,assistance,practice_relation,comparison_note)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', (child['name'], now.date().isoformat(), '学习进展', row['subject'], title[:200],
             text, SOURCE + row['id'], now.isoformat(), _json(attachments), related, '补充观察', assistance, practice, comparison)).lastrowid
         record = c.execute('SELECT * FROM records WHERE id=?', (record_id,)).fetchone()
-        self._event(c, row, key, digest, 'attempt', dict(attempt_kind=kind, text=text, attachments=attachments, assistance=assistance),
+        self._event(c, row, key, digest, 'attempt', dict(attempt_kind=kind, text=text, attachments=attachments, assistance=assistance,
+                    plan_event_id=plan['id'] if plan else None),
                     record_id=record_id, record_hash=self._record_hash(record))
 
-    def _model_input(self, c, row):
+    def _model_input(self, c, row, guide=False):
         attempts, hints, pictures = [], [], []
         candidates = [(i, '题目原件', bool(row['question_text'])) for i in json.loads(row['question_attachments'])]
         for event in c.execute('SELECT * FROM guided_events WHERE session_id=? ORDER BY id', (row['id'],)):
@@ -375,11 +429,11 @@ class Store:
                 hints.append({k: value[k] for k in ('hint', 'question', 'uncertainties')})
         if not row['question_text'] and not candidates:
             raise GuidedError('题目尚未提供，先保留表达并请家长补充。', 409, 'material_missing')
-        if not attempts:
+        if not attempts and not guide:
             raise GuidedError('先保存自己的思路或卡点，再按需请求一个提示。')
         if not row['reference_checked'] or not row['reference_text']:
             raise GuidedError('请家长先提供并核对参考；原始尝试会保留。', 409, 'reference_missing')
-        if len(hints) >= 20:
+        if len(hints) >= 20 and not guide:
             raise GuidedError('这次已保留二十个提示，可以先结束并请家长安排回看。')
         omitted = 0
         for ident, label, has_text in candidates:
@@ -407,10 +461,14 @@ class Store:
         allowed = {'child_id', 'id', 'version', 'request_key', 'action'}
         if action == 'attempt':
             allowed |= {'kind', 'text', 'attachments', 'assistance'}
+        elif action == 'guide_draft':
+            allowed |= {'goal', 'success_criteria'}
+        elif action == 'guide_save':
+            allowed |= {'based_on_draft_id', 'share_goal', 'plan'}
         elif action in ('pause', 'resume', 'skip', 'finish', 'close', 'share', 'unshare'):
             allowed.add('note')
         _fields(obj, allowed)
-        operations = ('attempt', 'hint', 'pause', 'resume', 'skip', 'finish') if self.authorize else ('share', 'unshare', 'pause', 'resume', 'close')
+        operations = ('attempt', 'hint', 'pause', 'resume', 'skip', 'finish') if self.authorize else ('share', 'unshare', 'pause', 'resume', 'close', 'guide_draft', 'guide_save')
         if action not in operations:
             raise GuidedError('这个入口没有这项操作', 403, 'action_not_allowed')
         with self._db() as c:
@@ -425,18 +483,37 @@ class Store:
             active = row['state'] == 'active'
             if action in ('attempt', 'hint', 'pause', 'finish') and not active or action == 'resume' and row['state'] != 'paused' or action in ('skip', 'close') and row['state'] not in ('active', 'paused'):
                 raise GuidedError('这次引导已经暂停或结束，请先核对当前状态。', 409, 'state_conflict')
-            if action == 'hint':
-                pending = c.execute("SELECT * FROM guided_events WHERE session_id=? AND kind='hint' AND status='pending'", (row['id'],)).fetchall()
+            if action in ('guide_draft', 'guide_save') and row['state'] not in ('draft', 'active', 'paused'):
+                raise GuidedError('这次学习已经结束；请保留本次目标，另准备下一次学习。', 409, 'state_conflict')
+            if action in ('hint', 'guide_draft'):
+                pending = c.execute("SELECT * FROM guided_events WHERE session_id=? AND kind=? AND status='pending'", (row['id'], action)).fetchall()
                 if any(e['expires'] > time.time() for e in pending):
-                    raise GuidedError('已有一个提示正在整理，可以暂停或稍后查看。', 409, 'hint_pending')
-                self._invalidate(c, row['id'])
+                    raise GuidedError('已有一个模型请求正在整理，可以继续尝试、暂停或稍后查看。', 409, 'hint_pending' if action == 'hint' else 'guide_pending')
+                self._invalidate(c, row['id'], (action,))
                 self._verify_records(c, row, child)
-                model_input = self._model_input(c, row)
-                event_id = self._event(c, row, key, digest, 'hint', {}, 'pending', expires=time.time() + 90)
+                model_input = self._model_input(c, row, guide=action == 'guide_draft')
+                learning_goal = self._learning_goal(c, row)
+                draft_input = dict(goal=_text(obj, 'goal', 300), success_criteria=_text(obj, 'success_criteria', 600)) if action == 'guide_draft' else {}
+                provenance = {key + '_source': 'parent' if value else 'proposal' for key, value in draft_input.items()}
+                event_id = self._event(c, row, key, digest, action, provenance, 'pending', expires=time.time() + 90)
             else:
                 self._invalidate(c, row['id'])
                 if action == 'attempt':
                     self._attempt(c, row, child, obj, key, digest)
+                elif action == 'guide_save':
+                    plan = _plan(obj.get('plan'), confirmed=True)
+                    share = obj.get('share_goal')
+                    if type(share) is not bool:
+                        raise GuidedError('请明确是否向孩子分享本次目标和观察条件')
+                    based = obj.get('based_on_draft_id')
+                    if based is not None:
+                        if type(based) is not int or not 0 < based <= 9223372036854775807:
+                            raise GuidedError('教学草稿编号不正确')
+                        draft = c.execute("SELECT * FROM guided_events WHERE id=? AND session_id=? AND kind='guide_draft' AND actor='parent'", (based, row['id'])).fetchone()
+                        if draft is None or draft['status'] != 'ready' or draft['context_version'] + 1 != row['version']:
+                            raise GuidedError('教学草稿对应的材料或尝试已经变化，请保留输入并重新核对。', 409, 'guide_context_changed')
+                    self._event(c, row, key, digest, 'guide_plan', dict(plan=plan, share_goal=share,
+                                based_on_draft_id=based, source='model_reviewed' if based is not None else 'parent'))
                 else:
                     self._event(c, row, key, digest, action, dict(note=_text(obj, 'note', 1000)))
                     if action in ('share', 'unshare'):
@@ -453,15 +530,28 @@ class Store:
         error = None
         try:
             material, attempts, hints, images = model_input
-            result = family_llm.guided_hint(material, attempts, hints, images=images, data_path=self.app.DATA)
-            if (not isinstance(result, dict) or set(result) != {'hint', 'question', 'uncertainties'}
-                or any(not isinstance(result[k], str) or len(result[k]) > (500 if k == 'hint' else 200) or '\x00' in result[k] for k in ('hint', 'question'))
-                or not isinstance(result['uncertainties'], list) or len(result['uncertainties']) > 3
-                or any(not isinstance(v, str) or not v.strip() or len(v) > 300 or '\x00' in v for v in result['uncertainties'])
-                or not any([result['hint'].strip(), result['question'].strip(), result['uncertainties']])):
-                raise ValueError('invalid model shape')
+            if action == 'guide_draft':
+                result = family_llm.guided_plan(material, attempts, hints, images=images, data_path=self.app.DATA, **draft_input)
+                if (not isinstance(result, dict) or set(result) != {'plan', 'uncertainties'} or
+                        not isinstance(result['uncertainties'], list) or len(result['uncertainties']) > 3 or
+                        any(not isinstance(v, str) or not v.strip() or len(v) > 300 or any(ord(ch) < 32 and ch not in '\n\t' for ch in v) for v in result['uncertainties'])):
+                    raise ValueError('invalid model shape')
+                result = dict(plan=_plan(result['plan']), uncertainties=result['uncertainties'], **provenance)
+                for field, value in draft_input.items():
+                    if value:
+                        result['plan'][field] = value
+            else:
+                extra = dict(learning_goal={k: learning_goal[k] for k in ('goal', 'success_criteria')}) if learning_goal else {}
+                result = family_llm.guided_hint(material, attempts, hints, images=images, data_path=self.app.DATA, **extra)
+                if (not isinstance(result, dict) or set(result) != {'hint', 'question', 'uncertainties'}
+                    or any(not isinstance(result[k], str) or len(result[k]) > (500 if k == 'hint' else 200) or '\x00' in result[k] for k in ('hint', 'question'))
+                    or not isinstance(result['uncertainties'], list) or len(result['uncertainties']) > 3
+                    or any(not isinstance(v, str) or not v.strip() or len(v) > 300 or '\x00' in v for v in result['uncertainties'])
+                    or not any([result['hint'].strip(), result['question'].strip(), result['uncertainties']])):
+                    raise ValueError('invalid model shape')
         except (family_llm.LLMDraftError, ValueError, OSError, TimeoutError):
-            error = '提示暂不可用，原始尝试已保留。可以继续表达、找家长或稍后重新请求。'
+            error = ('教学草稿暂不可用；可以手动保存目标与指南，已有材料和尝试不变。' if action == 'guide_draft' else
+                     '提示暂不可用，原始尝试已保留。可以继续表达、找家长或稍后重新请求。')
         with self._db() as c:
             c.execute('BEGIN IMMEDIATE')
             try:
@@ -473,7 +563,8 @@ class Store:
                 c.commit()
                 raise
             event = c.execute('SELECT status,expires FROM guided_events WHERE id=?', (event_id,)).fetchone()
-            if current['version'] != row['version'] or current['state'] != 'active' or not event or event['status'] != 'pending' or event['expires'] <= time.time():
+            allowed_states = ('draft', 'active', 'paused') if action == 'guide_draft' else ('active',)
+            if current['version'] != row['version'] or current['state'] not in allowed_states or not event or event['status'] != 'pending' or event['expires'] <= time.time():
                 c.execute("UPDATE guided_events SET status='stale',data=? WHERE id=? AND status='pending'",
                           (_json(dict(message='安排或尝试已经变化，旧提示未发布；需要时请重新请求。')), event_id))
                 return self._result(c, child['id'])
@@ -484,6 +575,7 @@ class Store:
                 c.commit()
                 raise
             c.execute('UPDATE guided_events SET status=?,data=? WHERE id=?', ('failed' if error else 'ready',
-                      _json(dict(message=error) if error else result), event_id))
+                      _json(dict(message=error, **provenance) if error else result), event_id))
+            self._invalidate(c, row['id'])
             c.execute('UPDATE guided_sessions SET version=version+1,updated=? WHERE id=?', (dt.datetime.now(TZ).isoformat(), row['id']))
             return self._result(c, child['id'])

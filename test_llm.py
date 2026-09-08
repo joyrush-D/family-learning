@@ -245,4 +245,49 @@ with patch.object(llm,'_chat_json',return_value=dict(hint,reference_status='cons
     assert not halted['hint'] and '冲突' in halted['uncertainties'][0]
     assert 'PRIVATE_REFERENCE_CHECK' not in json.dumps(halted)
 
-print('PASS: draft, reading feedback, requested guided hint and audio; bounded context/output, auth, timeout and error redaction')
+plan=dict(goal='解释为什么先通分',success_criteria='能说清每一份大小相同才能相加，记录实际帮助。',
+          start='先请孩子自己说思路。',ask='这两种分数中的每一份一样大吗？',
+          help='卡住时用分割图提示；必要时示范相似的一步，再请孩子继续。',
+          stop='能表达本次理由或想休息时结束，保留真实尝试。',retry='商量后隔一段时间，不看讲解试相近新题。')
+raw_plan=dict(reference_status='consistent',reference_check='虚构参考与题目相符',plan=plan,uncertainties=[])
+with patch.object(llm,'_chat_json',return_value=raw_plan) as model:
+    proposal=llm.guided_plan(material,[],[],goal='家长明确目标',success_criteria='家长明确观察条件')
+    assert proposal['plan']['goal']=='家长明确目标' and proposal['plan']['success_criteria']=='家长明确观察条件'
+    args=model.call_args.args
+    assert args[2]=='family_guided_plan' and args[1]['additionalProperties'] is False
+    assert args[1]['properties']['plan']['additionalProperties'] is False
+    content=json.loads(args[0][1]['content'][0]['text'])
+    assert content==dict(material=material,attempts=[],hints=[],parent_goal='家长明确目标',parent_success_criteria='家长明确观察条件')
+    assert '不硬编码1/3/7天' in args[0][0]['content'] and '先独立尝试' in args[0][0]['content']
+    for changed in [dict(material=dict(material,parent_note='PRIVATE_CANARY')),dict(goal='x'*301),
+                    dict(success_criteria=False),dict(attempts=[dict(attempts[0],child_id='other')]),
+                    dict(images=[dict(mime='image/png',data=b'synthetic-image',label='家长参考')])]:
+        kwargs=dict(material=material,attempts=[],hints=[]);kwargs.update(changed)
+        try:llm.guided_plan(**kwargs)
+        except ValueError:pass
+        else:raise AssertionError('parent guide accepted unbounded or unrelated input')
+    model.reset_mock()
+    missing=llm.guided_plan(dict(material,reference_checked=False),[],[],goal='明确目标')
+    assert missing['plan']['goal']=='明确目标' and not missing['plan']['start'] and missing['uncertainties'] and not model.called
+    missing=llm.guided_plan(dict(material,question_text=''),[],[])
+    assert not missing['plan']['goal'] and missing['uncertainties'] and not model.called
+    for bad in [dict(raw_plan,mastered=True),dict(raw_plan,plan=dict(plan,goal='x'*301)),
+                dict(raw_plan,plan=dict(plan,help=None)),dict(raw_plan,plan=dict(plan,score=10)),
+                dict(raw_plan,uncertainties=['x']*4),dict(raw_plan,reference_status='approved')]:
+        model.return_value=bad
+        try:llm.guided_plan(material,attempts,[])
+        except llm.LLMDraftError:pass
+        else:raise AssertionError('unchecked parent teaching output accepted')
+    model.return_value=dict(raw_plan,reference_status='conflict',reference_check='虚构参考算式与原题不一致')
+    conflict=llm.guided_plan(material,attempts,[],goal='家长目标')
+    assert conflict['plan']['goal']=='家长目标' and not conflict['plan']['start'] and '冲突' in conflict['uncertainties'][0]
+
+with patch.object(llm,'_chat_json',return_value=dict(hint,reference_status='consistent',reference_check='核对相符',response_kind='hint')) as model:
+    shared_goal=dict(goal='家长核对的目标',success_criteria='能解释这一步并记录帮助程度')
+    assert llm.guided_hint(material,attempts,[],learning_goal=shared_goal)==hint
+    assert json.loads(model.call_args.args[0][1]['content'][0]['text'])['learning_goal']==shared_goal
+    try:llm.guided_hint(material,attempts,[],learning_goal=dict(shared_goal,parent_guide='PRIVATE_CANARY'))
+    except ValueError:pass
+    else:raise AssertionError('parent-only plan leaked into child hint context')
+
+print('PASS: draft, reading feedback, guided hints and parent teaching proposals, audio; bounded context/output, auth, timeout and error redaction')

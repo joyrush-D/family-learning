@@ -103,6 +103,12 @@ class GuidedTests(unittest.TestCase):
         row = self.row(ident)
         return self.store.action(self.request(id=ident, version=row['version'], child_id=row['child_id'], action=action, **fields))
 
+    def plan(self, **fields):
+        return dict(goal='解释合并两组数量为什么用加法', success_criteria='先说思路，再写出算式；记录实际用了什么帮助。',
+                    start='PARENT_GUIDE_PRIVATE_CANARY：先让孩子独立说思路。', ask='你想怎样表示这两组数量？',
+                    help='卡住时先指认已知数量；必要时示范相似一步，再让孩子继续。',
+                    stop='孩子能解释本次思路或想休息时停下，保留实际表现。', retry='商量之后另选一次机会，不看讲解试相近的新问题。') | fields
+
     def upload(self, mime='image/png', child=None):
         ident = secrets.token_hex(16)
         raw = b'fictional original bytes'
@@ -351,6 +357,209 @@ class GuidedTests(unittest.TestCase):
             with app.connect() as c:
                 self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM guided_events ORDER BY id')], expected)
                 self.assertEqual(c.execute('SELECT COUNT(*) FROM child_sessions').fetchone()[0], 0)
+
+    def test_manual_plan_privacy_attempt_anchor_and_no_invented_help(self):
+        row = self.material(reference_text='', reference_checked=False)
+        self.assertIsNone(row['plan']); self.assertIsNone(row['plan_draft'])
+        self.parent_action(row['id'], 'guide_save', plan=self.plan(), share_goal=False)
+        plan = self.row(row['id'])['plan']
+        self.assertEqual(plan['source'], 'parent')
+        child = self.call('state', {})[1]['sessions'][0]
+        self.assertIsNone(child['learning_goal'])
+        self.assertFalse(any(e['kind'] in ('guide_draft', 'guide_plan') for e in child['events']))
+        with app.connect() as c: self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0], 0)
+        self.parent_action(row['id'], 'guide_save', plan=self.plan(), share_goal=True)
+        first_plan = self.row(row['id'])['plan']
+        child = self.call('state', {})[1]['sessions'][0]
+        self.assertEqual(child['learning_goal'], {k: first_plan[k] for k in ('goal', 'success_criteria')} | dict(plan_event_id=first_plan['id']))
+        self.assertNotIn('PRIVATE_CANARY', json.dumps(child))
+        self.child_action(row['id'], 'attempt', kind='first', text='我先表示两种颜色。')
+        self.parent_action(row['id'], 'guide_save', plan=self.plan(goal='另一个明确核对的目标'), share_goal=False)
+        second_plan = self.row(row['id'])['plan']
+        self.child_action(row['id'], 'attempt', kind='explain_again', text='再次说清我的理由。')
+        attempts = [e for e in self.row(row['id'])['events'] if e['kind'] == 'attempt']
+        self.assertEqual([e['plan_event_id'] for e in attempts], [first_plan['id'], second_plan['id']])
+        self.assertIsNone(self.call('state', {})[1]['sessions'][0]['learning_goal'])
+        with app.connect() as c:
+            self.assertTrue(all('已提供 0 条系统提示' in r[0] for r in c.execute('SELECT comparison_note FROM records')))
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0], 0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM reading_awards').fetchone()[0], 0)
+
+    def test_proposal_zero_attempt_confirmation_and_lost_receipts(self):
+        row = self.material()
+        payload = self.request(child_id='child-1', id=row['id'], version=row['version'], action='guide_draft',
+                               goal='家长明确的加法目标', success_criteria='')
+        with patch.object(family_llm, 'guided_plan', return_value=dict(plan=self.plan(), uncertainties=[])) as model:
+            self.assertEqual(self.http('/api/guided/action', payload, parent=True)[0], 200)
+            model.assert_called_once()
+            self.assertEqual(model.call_args.args[1], [])
+            self.assertNotIn('GROUP_PRIVATE_CANARY', str(model.call_args))
+            draft = self.row(row['id'])['plan_draft']
+            self.assertEqual(draft['status'], 'ready')
+            self.assertEqual(draft['goal_source'], 'parent')
+            self.assertEqual(draft['success_criteria_source'], 'proposal')
+            self.assertEqual(draft['plan']['goal'], payload['goal'])
+            self.assertIsNone(self.row(row['id'])['plan'])
+            child = self.call('state', {})[1]['sessions'][0]
+            self.assertIsNone(child['learning_goal'])
+            self.assertNotIn('guide_draft', json.dumps(child))
+            self.assertEqual(self.http('/api/guided/action', payload, parent=True)[0], 200)
+            model.assert_called_once()
+            self.assertEqual(self.http('/api/guided/action', payload | dict(goal='不同请求'), parent=True)[0], 409)
+        save = self.request(child_id='child-1', id=row['id'], version=self.row(row['id'])['version'], action='guide_save',
+                            based_on_draft_id=draft['id'], share_goal=True, plan=draft['plan'] | dict(goal='家长修改后确认的目标'))
+        self.assertEqual(self.http('/api/guided/action', save, parent=True)[0], 200)
+        self.assertEqual(self.http('/api/guided/action', save, parent=True)[0], 200)
+        current = self.row(row['id'])
+        self.assertEqual(current['plan']['source'], 'model_reviewed')
+        self.assertIsNone(current['plan_draft'])
+        self.assertEqual(len([e for e in current['events'] if e['kind'] == 'guide_plan']), 1)
+        self.child_action(row['id'], 'attempt', kind='first', text='我先说自己的思路。')
+        with patch.object(family_llm, 'guided_hint', return_value=dict(hint='虚构小提示', question='', uncertainties=[])) as model:
+            self.assertEqual(self.child_action(row['id'], 'hint')[0][0], 200)
+            self.assertEqual(model.call_args.kwargs['learning_goal']['goal'], '家长修改后确认的目标')
+            self.assertNotIn('PARENT_GUIDE_PRIVATE_CANARY', str(model.call_args))
+
+    def test_guide_http_permissions_shapes_cross_session_and_stale_context(self):
+        row = self.material()
+        payload = self.request(id=row['id'], version=row['version'], child_id='child-1', action='guide_save', plan=self.plan(), share_goal=True)
+        self.assertEqual(self.http('/api/guided/action', payload)[0], 403)
+        self.assertEqual(self.http('/api/guided/action', payload, parent=True, headers={'Host':'untrusted.invalid'})[0], 403)
+        self.assertEqual(self.call('action', {k:v for k,v in payload.items() if k != 'child_id'})[0], 400)
+        self.assertEqual(self.http('/api/guided/action', payload | dict(child_id='child-2'), parent=True)[0], 404)
+        for change in [dict(share_goal=1),dict(plan=self.plan(goal='')),dict(plan=self.plan(success_criteria='')),
+                       dict(plan=self.plan(goal='x'*301)),dict(plan=self.plan(extra='forged')),
+                       dict(based_on_draft_id=True),dict(based_on_draft_id=999999),dict(source='parent')]:
+            self.assertIn(self.http('/api/guided/action', payload | change, parent=True)[0], (400,409))
+        with patch.object(family_llm, 'guided_plan', return_value=dict(plan=self.plan(), uncertainties=[])):
+            self.parent_action(row['id'], 'guide_draft', goal='', success_criteria='')
+            draft = self.row(row['id'])['plan_draft']
+            other = self.material(child_id='child-2', title='另一孩子的题目')
+            with self.assertRaises(family_guided.GuidedError):
+                self.parent_action(other['id'], 'guide_save', based_on_draft_id=draft['id'], share_goal=True, plan=self.plan())
+            self.child_action(row['id'], 'attempt', kind='first', text='孩子新增的事实优先保留。')
+            self.assertEqual(self.row(row['id'])['plan_draft']['status'], 'stale')
+            with self.assertRaises(family_guided.GuidedError):
+                self.parent_action(row['id'], 'guide_save', based_on_draft_id=draft['id'], share_goal=True, plan=self.plan())
+        self.assertIsNone(self.row(row['id'])['plan'])
+        self.parent_action(row['id'], 'close')
+        with self.assertRaises(family_guided.GuidedError): self.parent_action(row['id'], 'guide_save', plan=self.plan(), share_goal=False)
+
+    def test_pending_guide_allows_child_attempt_and_unshare_discards_late_reply(self):
+        row = self.material()
+        entered, release = threading.Event(), threading.Event()
+        def slow(*args, **kwargs):
+            entered.set(); self.assertTrue(release.wait(5))
+            return dict(plan=self.plan(start='LATE_GUIDE_PRIVATE_CANARY'), uncertainties=[])
+        with patch.object(family_llm, 'guided_plan', side_effect=slow), ThreadPoolExecutor(max_workers=1) as pool:
+            payload = self.request(child_id='child-1', id=row['id'], version=row['version'], action='guide_draft', goal='', success_criteria='')
+            pending = pool.submit(self.http, '/api/guided/action', payload, parent=True)
+            self.assertTrue(entered.wait(5))
+            self.assertEqual(self.row(row['id'])['version'], row['version'])
+            self.assertEqual(self.row(row['id'])['plan_draft']['status'], 'pending')
+            self.assertEqual(self.http('/api/guided/action', payload, parent=True)[0], 200)
+            self.assertEqual(self.child_action(row['id'], 'attempt', kind='first', text='生成指南时也能保存自己的表达。')[0][0], 200)
+            self.parent_action(row['id'], 'unshare')
+            release.set()
+            self.assertEqual(pending.result()[0], 200)
+        self.assertEqual(self.row(row['id'])['plan_draft']['status'], 'stale')
+        self.assertNotIn('LATE_GUIDE_PRIVATE_CANARY', json.dumps(self.store.snapshot()))
+        self.assertEqual(self.call('state', {})[1]['sessions'], [])
+
+    def test_confirming_plan_invalidates_pending_hint_without_counting_as_help(self):
+        row = self.material()
+        self.child_action(row['id'], 'attempt', kind='first', text='先自己想一想。')
+        entered, release = threading.Event(), threading.Event()
+        def slow(*args, **kwargs):
+            entered.set(); self.assertTrue(release.wait(5))
+            return dict(hint='OLD_PLAN_HINT_PRIVATE_CANARY', question='', uncertainties=[])
+        with patch.object(family_llm, 'guided_hint', side_effect=slow), ThreadPoolExecutor(max_workers=1) as pool:
+            payload = self.request(id=row['id'], version=self.row(row['id'])['version'], action='hint')
+            pending = pool.submit(self.call, 'action', payload)
+            self.assertTrue(entered.wait(5))
+            self.parent_action(row['id'], 'guide_save', plan=self.plan(), share_goal=True)
+            release.set(); self.assertEqual(pending.result()[0], 200)
+        self.assertNotIn('OLD_PLAN_HINT_PRIVATE_CANARY', json.dumps(self.store.snapshot()))
+        self.assertEqual([e['status'] for e in self.row(row['id'])['events'] if e['kind']=='hint'], ['stale'])
+        self.child_action(row['id'], 'attempt', kind='explain_again', text='继续自己表达。')
+        with app.connect() as c:
+            self.assertIn('已提供 0 条系统提示', c.execute('SELECT comparison_note FROM records ORDER BY id DESC LIMIT 1').fetchone()[0])
+
+    def test_expired_guide_receipt_cannot_invalidate_new_pending_request(self):
+        row = self.material()
+        entered = [threading.Event(), threading.Event()]
+        release = [threading.Event(), threading.Event()]
+        count = [0]
+        def slow(*args, **kwargs):
+            index = count[0]; count[0] += 1
+            entered[index].set(); self.assertTrue(release[index].wait(5))
+            return dict(plan=self.plan(start='旧草稿不得采用' if index == 0 else '新的可核对草稿'), uncertainties=[])
+        with patch.object(family_llm, 'guided_plan', side_effect=slow), ThreadPoolExecutor(max_workers=2) as pool:
+            payload = self.request(child_id='child-1', id=row['id'], version=row['version'], action='guide_draft', goal='', success_criteria='')
+            first = pool.submit(self.http, '/api/guided/action', payload, parent=True)
+            self.assertTrue(entered[0].wait(5))
+            with app.connect() as c:
+                c.execute("UPDATE guided_events SET expires=0 WHERE session_id=? AND kind='guide_draft'", (row['id'],))
+            self.assertEqual(self.http('/api/guided/action', payload, parent=True)[0], 200)
+            self.assertEqual(self.row(row['id'])['plan_draft']['status'], 'stale')
+            second = pool.submit(self.http, '/api/guided/action', payload | dict(request_key='fictional-new-guide-after-expiry'), parent=True)
+            self.assertTrue(entered[1].wait(5))
+            release[0].set(); self.assertEqual(first.result()[0], 200)
+            self.assertEqual(self.row(row['id'])['plan_draft']['status'], 'pending')
+            release[1].set(); self.assertEqual(second.result()[0], 200)
+        self.assertEqual(self.row(row['id'])['plan_draft']['plan']['start'], '新的可核对草稿')
+        self.assertNotIn('旧草稿不得采用', json.dumps(self.store.snapshot()))
+
+    def test_material_edit_immediately_releases_old_guide_pending_gate(self):
+        row = self.material(shared=False)
+        entered = [threading.Event(), threading.Event()]
+        release = [threading.Event(), threading.Event()]
+        count = [0]
+        def slow(*args, **kwargs):
+            index = count[0]; count[0] += 1
+            entered[index].set(); self.assertTrue(release[index].wait(5))
+            return dict(plan=self.plan(start='旧题草稿不得采用' if index == 0 else '新题的教学草稿'), uncertainties=[])
+        with patch.object(family_llm, 'guided_plan', side_effect=slow), ThreadPoolExecutor(max_workers=2) as pool:
+            payload = self.request(child_id='child-1', id=row['id'], version=row['version'], action='guide_draft', goal='', success_criteria='')
+            first = pool.submit(self.http, '/api/guided/action', payload, parent=True)
+            self.assertTrue(entered[0].wait(5))
+            edit = self.request(child_id='child-1', id=row['id'], version=row['version'], title='修改后的虚构原题',
+                                question_text='3+4=?', reference_text='7', reference_checked=True, shared=False)
+            self.assertEqual(self.http('/api/guided/material', edit, parent=True)[0], 200)
+            self.assertEqual(self.row(row['id'])['plan_draft']['status'], 'stale')
+            fresh = payload | dict(request_key='fictional-guide-after-material-edit', version=self.row(row['id'])['version'])
+            second = pool.submit(self.http, '/api/guided/action', fresh, parent=True)
+            self.assertTrue(entered[1].wait(5), 'new draft must start immediately, without waiting for old model or expiry')
+            release[0].set(); self.assertEqual(first.result()[0], 200)
+            self.assertEqual(self.row(row['id'])['plan_draft']['status'], 'pending')
+            release[1].set(); self.assertEqual(second.result()[0], 200)
+        self.assertEqual(self.row(row['id'])['plan_draft']['plan']['start'], '新题的教学草稿')
+        self.assertNotIn('旧题草稿不得采用', json.dumps(self.store.snapshot()))
+
+    def test_offline_manual_fallback_material_receipt_and_unshared_material_change(self):
+        payload = self.request(child_id='child-1', version=0, title='相同虚构名称', question_text='2+3=?', reference_text='5', reference_checked=True, shared=False)
+        first = self.store.save_material(payload)
+        second = self.store.save_material(payload | dict(request_key='fictional-distinct-material-key'))
+        self.assertNotEqual(first['session_id'], second['session_id'])
+        self.assertEqual(self.store.save_material(payload)['session_id'], first['session_id'])
+        ident = first['session_id']
+        with patch.object(family_llm, 'guided_plan', side_effect=family_llm.LLMDraftError('PRIVATE_FAILURE_CANARY')):
+            self.parent_action(ident, 'guide_draft', goal='', success_criteria='')
+        self.assertEqual(self.row(ident)['plan_draft']['status'], 'failed')
+        self.assertNotIn('PRIVATE_FAILURE_CANARY', json.dumps(self.store.snapshot()))
+        self.parent_action(ident, 'guide_save', plan=self.plan(start='',ask='',help='',stop='',retry=''), share_goal=False)
+        self.assertIsNotNone(self.row(ident)['plan'])
+        change = payload | dict(id=ident,version=self.row(ident)['version'],request_key='fictional-material-edit-key',question_text='3+4=?',reference_text='7')
+        self.store.save_material(change)
+        self.assertIsNone(self.row(ident)['plan'])
+        # Existing SQLite backup includes plans and receipts without schema changes.
+        self.parent_action(ident, 'guide_save', plan=self.plan(), share_goal=True)
+        expected = self.row(ident)['plan']
+        archive = family_backup.create(self.root, 'private/backups/guide-plan.zip')
+        restored = family_backup.restore(archive, self.root/'restored-plan')
+        with patch.multiple(app,ROOT=restored,DATA=restored/'private',DB=restored/'private/family.sqlite3'):
+            rows = family_guided.Store(app).snapshot()['sessions']
+            self.assertEqual(next(r for r in rows if r['id']==ident)['plan'],expected)
 
 
 if __name__ == '__main__':
