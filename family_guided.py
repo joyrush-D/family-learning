@@ -207,7 +207,74 @@ class Store:
             return None
         return dict(plan_event_id=plan['id'], goal=plan['goal'], success_criteria=plan['success_criteria'])
 
-    def _plan_draft(self, row, events):
+    def _observation_context(self, c, row, events=None):
+        """Return the small, parent-only observation context for a draft.
+
+        The relation is deliberately the same direct relation shown by the
+        guided page: the material's anchor and this session's attempt records.
+        Observation attachments are retained in records but are never opened
+        or passed to the model.
+        """
+        if events is None:
+            events = [dict(e) for e in c.execute(
+                'SELECT * FROM guided_events WHERE session_id=? ORDER BY id', (row['id'],))]
+        anchors = set()
+        relation = row.get('related_record_id')
+        if type(relation) is int and relation > 0:
+            anchors.add(relation)
+        for event in events:
+            if event['kind'] == 'attempt' and type(event.get('record_id')) is int and event['record_id'] > 0:
+                anchors.add(event['record_id'])
+
+        records = []
+        if anchors:
+            child = self._child(c, row['child_id'])
+            marks = ','.join('?' for _ in anchors)
+            params = [child['name'], *sorted(anchors)]
+            selected = c.execute(
+                "SELECT * FROM records WHERE child=? AND followup_kind='补充观察' "
+                f"AND related_record_id IN ({marks}) ORDER BY day DESC,id DESC", params).fetchall()
+            records = []
+            for original in selected:
+                record = dict(original)
+                if not str(record.get('source') or '').startswith(SOURCE):
+                    records.append(record)
+
+        latest = records[:6]
+        older_count = max(0, len(records) - len(latest))
+        observations = []
+        for record in latest:
+            day = record.get('day')
+            try:
+                dt.date.fromisoformat(day)
+            except (TypeError, ValueError):
+                raise GuidedError('家长观察日期格式无法核对，请先修正原记录。', 409, 'observation_changed') from None
+            try:
+                attachments = json.loads(record.get('attachments') or '[]')
+            except (TypeError, ValueError):
+                attachments = []
+            title = record.get('title') or ''
+            text = record.get('note') or ''
+            comparison = record.get('comparison_note') or ''
+            if attachments:
+                suffix = '此条观察的原件本次未读取'
+                prefix = comparison[:max(0, 2000 - len(suffix) - (1 if comparison else 0))]
+                comparison = prefix + ('；' if prefix else '') + suffix
+            assistance = record.get('assistance') or ''
+            if assistance not in self.app.ASSISTANCE:
+                assistance = ''
+            observations.append(dict(record_id=int(record['id']), day=day, title=title,
+                                     text=text, assistance=assistance,
+                                     comparison_note=comparison))
+
+        # Include the complete stored fields of the latest six records and the
+        # total count/anchors, so edits to source, attachments, or relation
+        # cannot silently reuse a draft. Older bodies are intentionally absent.
+        observation_hash = _hash(dict(anchors=sorted(anchors), count=len(records),
+                                      older_observations_count=older_count, records=latest))
+        return tuple(observations), older_count, observation_hash, len(latest)
+
+    def _plan_draft(self, c, row, events):
         drafts = [event for event in events if event['kind'] == 'guide_draft']
         if not drafts:
             return None
@@ -219,12 +286,27 @@ class Store:
         if (status == 'pending' and (event['expires'] <= time.time() or event['context_version'] != row['version']) or
                 status == 'ready' and event['context_version'] + 1 != row['version']):
             status = 'stale'
-        message = ('材料、目标或尝试已经变化，请保留当前输入并重新核对教学草稿。' if status == 'stale' else
+        if status in ('pending', 'ready'):
+            try:
+                _, older_count, observation_hash, observation_count = self._observation_context(c, row, events)
+                expected_hash = data.get('observation_hash')
+                if expected_hash:
+                    if expected_hash != observation_hash:
+                        status = 'stale'
+                elif observation_count or older_count:
+                    # Drafts written before observation context was captured are
+                    # safe to reuse only when there are no observations to miss.
+                    status = 'stale'
+            except GuidedError:
+                status = 'stale'
+        message = ('材料、目标、尝试或家长观察已经变化，请保留当前输入并重新核对教学草稿。' if status == 'stale' else
                    data.get('message', '教学草稿正在整理，孩子仍可继续尝试或暂停。' if status == 'pending' else '待家长核对，尚未成为学习约定。'))
         return dict(id=event['id'], status=status, created=event['created'], message=message,
                     plan=_plan(data['plan']) if status == 'ready' else None,
                     uncertainties=data.get('uncertainties', []) if status == 'ready' else [],
-                    goal_source=data.get('goal_source', 'proposal'), success_criteria_source=data.get('success_criteria_source', 'proposal'))
+                    goal_source=data.get('goal_source', 'proposal'), success_criteria_source=data.get('success_criteria_source', 'proposal'),
+                    observation_count=data.get('observation_count', 0),
+                    older_observations_count=data.get('older_observations_count', 0))
 
     def _snapshot(self, c, child_id=None):
         if self.authorize:
@@ -296,7 +378,7 @@ class Store:
                     actions += ['guide_draft', 'guide_save']
                 value.update({k: row[k] for k in ('child_id', 'reference_text', 'related_record_id')})
                 value.update(shared=bool(row['shared']), reference_checked=bool(row['reference_checked']), editable=not bool(row['ever_shared']))
-                value.update(plan=self._current_plan(c, row['id']), plan_draft=self._plan_draft(row, events))
+                value.update(plan=self._current_plan(c, row['id']), plan_draft=self._plan_draft(c, row, events))
             value['allowed_actions'] = actions
             sessions.append(value)
         return dict(ok=True, sessions=sessions)
@@ -486,8 +568,27 @@ class Store:
             if action in ('guide_draft', 'guide_save') and row['state'] not in ('draft', 'active', 'paused'):
                 raise GuidedError('这次学习已经结束；请保留本次目标，另准备下一次学习。', 409, 'state_conflict')
             if action in ('hint', 'guide_draft'):
+                observation_context = None
+                if action == 'guide_draft':
+                    observation_context = self._observation_context(c, row)
                 pending = c.execute("SELECT * FROM guided_events WHERE session_id=? AND kind=? AND status='pending'", (row['id'], action)).fetchall()
-                if any(e['expires'] > time.time() for e in pending):
+                live_pending = []
+                if action == 'guide_draft':
+                    observation_hash = observation_context[2]
+                    observation_count, older_count = observation_context[3], observation_context[1]
+                    for event in pending:
+                        data = json.loads(event['data'])
+                        expected = data.get('observation_hash')
+                        matches = (expected == observation_hash if expected else not (observation_count or older_count))
+                        if not matches:
+                            data['message'] = '家长观察已经变化，请重新核对教学草稿。'
+                            c.execute("UPDATE guided_events SET status='stale',data=? WHERE id=? AND status='pending'",
+                                      (_json(data), event['id']))
+                        elif event['expires'] > time.time():
+                            live_pending.append(event)
+                else:
+                    live_pending = [event for event in pending if event['expires'] > time.time()]
+                if live_pending:
                     raise GuidedError('已有一个模型请求正在整理，可以继续尝试、暂停或稍后查看。', 409, 'hint_pending' if action == 'hint' else 'guide_pending')
                 self._invalidate(c, row['id'], (action,))
                 self._verify_records(c, row, child)
@@ -495,6 +596,10 @@ class Store:
                 learning_goal = self._learning_goal(c, row)
                 draft_input = dict(goal=_text(obj, 'goal', 300), success_criteria=_text(obj, 'success_criteria', 600)) if action == 'guide_draft' else {}
                 provenance = {key + '_source': 'parent' if value else 'proposal' for key, value in draft_input.items()}
+                if action == 'guide_draft':
+                    observations, older_count, observation_hash, observation_count = observation_context
+                    provenance.update(observation_hash=observation_hash, observation_count=observation_count,
+                                      older_observations_count=older_count)
                 event_id = self._event(c, row, key, digest, action, provenance, 'pending', expires=time.time() + 90)
             else:
                 self._invalidate(c, row['id'])
@@ -512,6 +617,12 @@ class Store:
                         draft = c.execute("SELECT * FROM guided_events WHERE id=? AND session_id=? AND kind='guide_draft' AND actor='parent'", (based, row['id'])).fetchone()
                         if draft is None or draft['status'] != 'ready' or draft['context_version'] + 1 != row['version']:
                             raise GuidedError('教学草稿对应的材料或尝试已经变化，请保留输入并重新核对。', 409, 'guide_context_changed')
+                        draft_data = json.loads(draft['data'])
+                        _, older_count, observation_hash, observation_count = self._observation_context(c, row)
+                        expected_hash = draft_data.get('observation_hash')
+                        if ((expected_hash and expected_hash != observation_hash) or
+                                (not expected_hash and (observation_count or older_count))):
+                            raise GuidedError('家长观察已经变化，请重新核对教学草稿。', 409, 'guide_context_changed')
                     self._event(c, row, key, digest, 'guide_plan', dict(plan=plan, share_goal=share,
                                 based_on_draft_id=based, source='model_reviewed' if based is not None else 'parent'))
                 else:
@@ -531,7 +642,10 @@ class Store:
         try:
             material, attempts, hints, images = model_input
             if action == 'guide_draft':
-                result = family_llm.guided_plan(material, attempts, hints, images=images, data_path=self.app.DATA, **draft_input)
+                observations, older_count = observation_context[:2]
+                result = family_llm.guided_plan(material, attempts, hints, images=images, data_path=self.app.DATA,
+                                                parent_observations=observations,
+                                                older_observations_count=older_count, **draft_input)
                 if (not isinstance(result, dict) or set(result) != {'plan', 'uncertainties'} or
                         not isinstance(result['uncertainties'], list) or len(result['uncertainties']) > 3 or
                         any(not isinstance(v, str) or not v.strip() or len(v) > 300 or any(ord(ch) < 32 and ch not in '\n\t' for ch in v) for v in result['uncertainties'])):
@@ -566,7 +680,7 @@ class Store:
             allowed_states = ('draft', 'active', 'paused') if action == 'guide_draft' else ('active',)
             if current['version'] != row['version'] or current['state'] not in allowed_states or not event or event['status'] != 'pending' or event['expires'] <= time.time():
                 c.execute("UPDATE guided_events SET status='stale',data=? WHERE id=? AND status='pending'",
-                          (_json(dict(message='安排或尝试已经变化，旧提示未发布；需要时请重新请求。')), event_id))
+                          (_json(dict(message='材料、尝试或家长观察已经变化，旧提示未发布；需要时请重新请求。')), event_id))
                 return self._result(c, child['id'])
             try:
                 self._verify_records(c, current, current_child)
@@ -574,6 +688,17 @@ class Store:
                 self._invalidate(c, row['id'])
                 c.commit()
                 raise
+            if action == 'guide_draft':
+                event_data = json.loads(c.execute('SELECT data FROM guided_events WHERE id=?', (event_id,)).fetchone()['data'])
+                try:
+                    current_hash = self._observation_context(c, current)[2]
+                except GuidedError:
+                    current_hash = None
+                if event_data.get('observation_hash') != current_hash:
+                    event_data['message'] = '家长观察已经变化，请重新核对教学草稿。'
+                    c.execute("UPDATE guided_events SET status='stale',data=? WHERE id=? AND status='pending'",
+                              (_json(event_data), event_id))
+                    return self._result(c, child['id'])
             c.execute('UPDATE guided_events SET status=?,data=? WHERE id=?', ('failed' if error else 'ready',
                       _json(dict(message=error, **provenance) if error else result), event_id))
             self._invalidate(c, row['id'])

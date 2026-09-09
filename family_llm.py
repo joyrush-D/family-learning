@@ -621,7 +621,8 @@ question至多一个关于当前步骤的简短问题，追问只放这里；暂
     return {**{k:result[k].strip() for k in limits},'uncertainties':[v.strip() for v in result['uncertainties']]}
 
 
-def guided_plan(material,attempts,hints,goal='',success_criteria='',images=(),timeout=60,*,data_path=None):
+def guided_plan(material,attempts,hints,goal='',success_criteria='',images=(),timeout=60,*,data_path=None,
+                parent_observations=(),older_observations_count=0):
     """Parent-only teaching proposal from this question; never a mastery judgment."""
     material_limits={'title':200,'subject':80,'question_text':4500,'reference_text':4000}
     plan_limits=dict(goal=300,success_criteria=600,start=600,ask=600,help=600,stop=600,retry=600)
@@ -647,9 +648,33 @@ def guided_plan(material,attempts,hints,goal='',success_criteria='',images=(),ti
                 not isinstance(hint['uncertainties'],list) or len(hint['uncertainties'])>3 or
                 any(not text_ok(v,300) or not v.strip() for v in hint['uncertainties'])):
             raise ValueError('本次已保存提示格式不正确')
+    if type(older_observations_count) is not int or older_observations_count < 0:
+        raise ValueError('较早家长观察数量格式不正确')
+    if not isinstance(parent_observations,(list,tuple)) or len(parent_observations)>6:
+        raise ValueError('本次最多提供六条家长观察')
+    observation_fields={'record_id','day','title','text','assistance','comparison_note'}
+    observations=[]
+    for observation in parent_observations:
+        if not isinstance(observation,dict) or set(observation)!=observation_fields:
+            raise ValueError('家长观察格式不正确')
+        day=observation['day']
+        if (not isinstance(observation['record_id'],int) or type(observation['record_id']) is bool or
+                observation['record_id']<=0 or not isinstance(day,str) or len(day)!=10 or
+                day[4]!='-' or day[7]!='-' or not day.replace('-','').isdigit()):
+            raise ValueError('家长观察日期或记录编号格式不正确')
+        try: datetime.strptime(day,'%Y-%m-%d')
+        except ValueError: raise ValueError('家长观察日期或记录编号格式不正确') from None
+        for key,limit in (('title',200),('text',20000),('comparison_note',2000)):
+            if not text_ok(observation[key],limit): raise ValueError('家长观察格式不正确')
+        if observation['assistance'] not in ('','独立尝试','少量提示','逐步帮助','看过讲解或答案'):
+            raise ValueError('家长观察帮助程度格式不正确')
+        observations.append(dict(observation))
     if not isinstance(images,(list,tuple)) or len(images)>3:
         raise ValueError('本次最多查看3张题目和尝试原图')
     context=dict(material=material,attempts=attempts,hints=hints,parent_goal=goal,parent_success_criteria=success_criteria)
+    if observations or older_observations_count:
+        context['parent_observations']=observations
+        context['older_observations_count']=older_observations_count
     serialized=json.dumps(context,ensure_ascii=False,allow_nan=False)
     if len(serialized)>20000: raise ValueError('本次教学材料过多，请缩小到一个具体问题')
     total=len(serialized.encode('utf-8'));content=[dict(type='text',text=serialized)]
@@ -695,6 +720,10 @@ retry提出经家庭商量后隔一段时间不看讲解再试、或试一道相
 阅读可先口述观点，再找原文细节并解释依据如何支持观点；不默认必须交长篇读后感。
 每段优先一两句可执行的话，通常120字以内。不给“粗心”“基础差”等标签，不作心理诊断、排名或提分保证。
 指南生成不代表家长实际教过；看懂、跟着做对、独立做对分别记录，不因一次回答宣布掌握、作业完成或发奖励。'''
+    if observations or older_observations_count:
+        prompt+='''
+本次提供的parent_observations是家长观察、孩子自述的转述或其他家长记录，不是孩子在本题中的亲述，也不是已经验证的事实；older_observations_count只表示还有多少更早观察未提供，不可据此补写内容。
+只根据具体的新观察调整start、ask、help、stop、retry，且一次只推进一个小步骤，引用当前题目的具体步骤，不原样复述泛化指令。观察与孩子当前表达冲突时提出核对方式，不裁决哪一方正确；未读取的原件不得臆测。不得把私人观察原句或评价写入可分享的goal、success_criteria；已有明确的parent_goal和parent_success_criteria须原样保留。'''
     result=_chat_json([dict(role='system',content=prompt),dict(role='user',content=content)],
                       schema,'family_guided_plan',timeout,data_path=data_path)
     if (not isinstance(result,dict) or set(result)!={'reference_status','reference_check','plan','uncertainties'} or

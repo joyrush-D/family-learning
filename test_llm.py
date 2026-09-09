@@ -288,6 +288,7 @@ with patch.object(llm,'_chat_json',return_value=dict(hint,reference_status='cons
     assert args[2]=='family_guided_hint' and args[1]['additionalProperties'] is False
     content=json.loads(args[0][1]['content'][0]['text'])
     assert content==dict(material=material,attempts=attempts,hints=[])
+    assert 'parent_observations' not in content
     assert '不宣布作业完成' in args[0][0]['content'] and '不复述或引用家长参考原文' in args[0][0]['content']
     model.reset_mock()
     result=llm.guided_hint(dict(material,reference_checked=False),attempts,[])
@@ -324,6 +325,32 @@ with patch.object(llm,'_chat_json',return_value=raw_plan) as model:
     content=json.loads(args[0][1]['content'][0]['text'])
     assert content==dict(material=material,attempts=[],hints=[],parent_goal='家长明确目标',parent_success_criteria='家长明确观察条件')
     assert '不硬编码1/3/7天' in args[0][0]['content'] and '先独立尝试' in args[0][0]['content']
+    observation=dict(record_id=17,day='2026-09-08',title='虚构家长观察',
+                     text='孩子在第二步停下来，说分母还没有看清。',assistance='少量提示',comparison_note='孩子自述与家长观察待核对')
+    model.reset_mock()
+    proposal=llm.guided_plan(material,[],[],parent_observations=(observation,),older_observations_count=2)
+    assert proposal['plan']==plan
+    args=model.call_args.args
+    observed=json.loads(args[0][1]['content'][0]['text'])
+    assert observed['parent_observations']==[observation] and observed['older_observations_count']==2
+    assert '不是孩子在本题中的亲述' in args[0][0]['content']
+    assert '私人观察原句或评价' in args[0][0]['content']
+    model.reset_mock()
+    invalid_observations=[
+        {}, dict(observation,record_id=True), dict(observation,day='2026-02-30'),
+        dict(observation,title='x'*201), dict(observation,text='x'*20001),
+        dict(observation,comparison_note='x'*2001), dict(observation,assistance='未知'),
+        dict(observation,private='不允许'),
+    ]
+    for bad in invalid_observations:
+        try: llm.guided_plan(material,[],[],parent_observations=[bad])
+        except ValueError: pass
+        else: raise AssertionError('invalid parent observation accepted')
+    for count in (-1,True,1.5):
+        try: llm.guided_plan(material,[],[],older_observations_count=count)
+        except ValueError: pass
+        else: raise AssertionError('invalid older observation count accepted')
+    assert not model.called
     for changed in [dict(material=dict(material,parent_note='PRIVATE_CANARY')),dict(goal='x'*301),
                     dict(success_criteria=False),dict(attempts=[dict(attempts[0],child_id='other')]),
                     dict(images=[dict(mime='image/png',data=b'synthetic-image',label='家长参考')])]:

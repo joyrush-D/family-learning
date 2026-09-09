@@ -345,8 +345,15 @@ class GuidedTests(unittest.TestCase):
     def test_profile_rename_and_whole_database_restore(self):
         row = self.material()
         self.child_action(row['id'], 'attempt', kind='first', text='保留真实表达，帮助情况未知。')
+        attempt = next(e['record_id'] for e in self.row(row['id'])['events'] if e['kind'] == 'attempt')
+        observation = app.save_record(dict(child='示例甲', day='2026-09-08', category='家长观察', title='虚构反馈',
+            note='改名前的同孩观察', related_record_id=attempt, followup_kind='补充观察'))['record_id']
         app.save_profile(dict(child_id='child-1', version=0, name='示例新称呼', grade='四年级', classroom='', reason='虚构称呼更正'))
         self.assertEqual(self.child_action(row['id'], 'attempt', kind='explain_again', text='同一个孩子再次解释。')[0][0], 200)
+        with patch.object(family_llm, 'guided_plan', return_value=dict(plan=self.plan(), uncertainties=[])) as model:
+            self.parent_action(row['id'], 'guide_draft', goal='', success_criteria='')
+            self.assertEqual(model.call_args.kwargs['parent_observations'][0]['record_id'], observation)
+            self.assertEqual(model.call_args.kwargs['parent_observations'][0]['text'], '改名前的同孩观察')
         with app.connect() as c:
             expected = [tuple(r) for r in c.execute('SELECT * FROM guided_events ORDER BY id')]
         archive = family_backup.create(self.root, 'private/backups/guided.zip')
@@ -354,6 +361,8 @@ class GuidedTests(unittest.TestCase):
         with patch.multiple(app, ROOT=restored, DATA=restored / 'private', DB=restored / 'private/family.sqlite3'):
             snapshot = family_guided.Store(app).snapshot()
             self.assertEqual(snapshot['sessions'][0]['id'], row['id'])
+            self.assertEqual(snapshot['sessions'][0]['plan_draft']['status'], 'ready')
+            self.assertEqual(snapshot['sessions'][0]['plan_draft']['observation_count'], 1)
             with app.connect() as c:
                 self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM guided_events ORDER BY id')], expected)
                 self.assertEqual(c.execute('SELECT COUNT(*) FROM child_sessions').fetchone()[0], 0)
@@ -419,6 +428,123 @@ class GuidedTests(unittest.TestCase):
             self.assertEqual(self.child_action(row['id'], 'hint')[0][0], 200)
             self.assertEqual(model.call_args.kwargs['learning_goal']['goal'], '家长修改后确认的目标')
             self.assertNotIn('PARENT_GUIDE_PRIVATE_CANARY', str(model.call_args))
+
+    def test_parent_observations_are_bounded_direct_and_private(self):
+        base = dict(child='示例甲', day='2026-09-08', category='家长观察', title='虚构观察', note='PRIVATE_OBSERVATION', source='家长网页记录')
+        def record(**changes):
+            code, value, _ = self.http('/api/record', base | changes, parent=True)
+            self.assertEqual(code, 200, value)
+            return value['record_id']
+        anchor = record(title='原始学习记录')
+        row = self.material(related_record_id=anchor)
+        self.child_action(row['id'], 'attempt', kind='first', text='我的虚构尝试')
+        attempt = next(e['record_id'] for e in self.row(row['id'])['events'] if e['kind'] == 'attempt')
+        ids = [record(day='2026-09-09' if n == 0 else '2026-09-08', related_record_id=anchor if n % 2 else attempt,
+                      followup_kind='补充观察', note='PRIVATE_OBSERVATION_' + str(n)) for n in range(7)]
+        record(related_record_id=ids[-1], followup_kind='补充观察', note='NESTED_EXCLUDED')
+        record(related_record_id=anchor, followup_kind='订正', note='OTHER_KIND_EXCLUDED')
+        record(note='UNLINKED_EXCLUDED')
+        record(child='示例乙', note='OTHER_CHILD_EXCLUDED')
+        with patch.object(family_llm, 'guided_plan', return_value=dict(plan=self.plan(), uncertainties=[])) as model:
+            self.parent_action(row['id'], 'guide_draft', goal='', success_criteria='')
+            observations = model.call_args.kwargs['parent_observations']
+            self.assertEqual([v['record_id'] for v in observations], ids[:1] + list(reversed(ids[2:])))
+            self.assertEqual(model.call_args.kwargs['older_observations_count'], 1)
+            self.assertNotIn('EXCLUDED', str(model.call_args))
+            draft = self.row(row['id'])['plan_draft']
+            self.assertEqual((draft['observation_count'], draft['older_observations_count']), (6, 1))
+        with patch.object(family_llm, 'guided_hint', return_value=dict(hint='虚构小提示', question='', uncertainties=[])) as model:
+            self.assertEqual(self.child_action(row['id'], 'hint')[0][0], 200)
+            self.assertNotIn('parent_observations', model.call_args.kwargs)
+            self.assertNotIn('PRIVATE_OBSERVATION', str(model.call_args))
+        self.assertNotIn('PRIVATE_OBSERVATION', json.dumps(self.call('state', {})[1]))
+
+    def test_observation_edits_stale_draft_but_preserve_confirmed_guide(self):
+        base = dict(child='示例甲', day='2026-09-08', category='家长观察', title='虚构观察', note='原观察')
+        anchor = app.save_record(base)['record_id']
+        row = self.material(related_record_id=anchor)
+        self.parent_action(row['id'], 'guide_save', plan=self.plan(), share_goal=False)
+        confirmed = self.row(row['id'])['plan']
+        observation = base | dict(related_record_id=anchor, followup_kind='补充观察', attachments=[self.upload()])
+        ident = self.http('/api/record', observation, parent=True)[1]['record_id']
+        with patch.object(family_llm, 'guided_plan', return_value=dict(plan=self.plan(), uncertainties=[])) as model:
+            payload = self.request(id=row['id'], child_id='child-1', version=self.row(row['id'])['version'], action='guide_draft', goal='', success_criteria='')
+            self.assertEqual(self.http('/api/guided/action', payload, parent=True)[0], 200)
+            self.assertIn('此条观察的原件本次未读取', model.call_args.kwargs['parent_observations'][0]['comparison_note'])
+            self.assertEqual(model.call_args.kwargs['images'], [])
+            draft = self.row(row['id'])['plan_draft']
+            # An ordinary record edit does not change the session version.
+            version = self.row(row['id'])['version']
+            changed = observation | dict(id=ident, note='更正后的观察')
+            self.assertEqual(self.http('/api/record', changed, parent=True)[0], 200)
+            current = self.row(row['id'])
+            self.assertEqual(current['version'], version)
+            self.assertEqual(current['plan_draft']['status'], 'stale')
+            self.assertEqual(current['plan'], confirmed)
+            self.assertEqual(self.http('/api/guided/action', payload, parent=True)[0], 200)
+            model.assert_called_once()
+            save = self.request(id=row['id'], child_id='child-1', version=version, action='guide_save', plan=draft['plan'], share_goal=False, based_on_draft_id=draft['id'])
+            code, body, _ = self.http('/api/guided/action', save, parent=True)
+            self.assertEqual((code, body['code']), (409, 'guide_context_changed'))
+            self.parent_action(row['id'], 'guide_draft', goal='', success_criteria='')
+            self.assertEqual(model.call_args.kwargs['parent_observations'][0]['text'], changed['note'])
+            # Attachment/source edits also invalidate an unconfirmed draft.
+            self.assertEqual(self.http('/api/record', changed | dict(attachments=[], source='更正出处'), parent=True)[0], 200)
+            self.assertEqual(self.row(row['id'])['plan_draft']['status'], 'stale')
+
+    def test_observation_arriving_during_model_call_discards_old_output(self):
+        base = dict(child='示例甲', day='2026-09-08', category='家长观察', title='虚构观察', note='新的反馈')
+        anchor = app.save_record(base)['record_id']
+        row = self.material(related_record_id=anchor)
+        entered, release = threading.Event(), threading.Event()
+        newer_entered, newer_release = threading.Event(), threading.Event()
+        def slow(*args, **kwargs):
+            if kwargs['parent_observations']:
+                newer_entered.set()
+                self.assertTrue(newer_release.wait(5))
+                return dict(plan=self.plan(start='NEW_OBSERVATION_GUIDE'), uncertainties=[])
+            entered.set()
+            self.assertTrue(release.wait(5))
+            return dict(plan=self.plan(start='LATE_OLD_OBSERVATION_CANARY'), uncertainties=[])
+        with patch.object(family_llm, 'guided_plan', side_effect=slow), ThreadPoolExecutor(2) as pool:
+            future = pool.submit(self.parent_action, row['id'], 'guide_draft', goal='', success_criteria='')
+            try:
+                self.assertTrue(entered.wait(3))
+                self.assertEqual(self.row(row['id'])['plan_draft']['status'], 'pending')
+                saved = self.http('/api/record', base | dict(related_record_id=anchor, followup_kind='补充观察'), parent=True)
+                self.assertEqual(saved[0], 200)
+                self.assertEqual(self.row(row['id'])['plan_draft']['status'], 'stale')
+                newer = pool.submit(self.parent_action, row['id'], 'guide_draft', goal='', success_criteria='')
+                self.assertTrue(newer_entered.wait(3), 'Changed observations must release the old pending gate')
+                release.set()
+                self.assertNotIn('LATE_OLD_OBSERVATION_CANARY', json.dumps(future.result()))
+                self.assertEqual(self.row(row['id'])['plan_draft']['status'], 'pending', 'Old response must not invalidate the new request')
+            finally:
+                release.set()
+                newer_release.set()
+            self.assertIn('NEW_OBSERVATION_GUIDE', json.dumps(newer.result()))
+        self.assertEqual(self.row(row['id'])['plan_draft']['status'], 'ready')
+        with app.connect() as c:
+            self.assertEqual(c.execute('SELECT note FROM records WHERE id=?', (saved[1]['record_id'],)).fetchone()[0], '新的反馈')
+            self.assertFalse(c.execute("SELECT 1 FROM guided_events WHERE data LIKE '%LATE_OLD_OBSERVATION_CANARY%'").fetchone())
+
+    def test_legacy_draft_without_observation_hash_is_invalidated_when_feedback_exists(self):
+        base = dict(child='示例甲', day='2026-09-08', category='家长观察', title='虚构观察', note='虚构反馈')
+        anchor = app.save_record(base)['record_id']
+        row = self.material(related_record_id=anchor)
+        with patch.object(family_llm, 'guided_plan', return_value=dict(plan=self.plan(), uncertainties=[])):
+            self.parent_action(row['id'], 'guide_draft', goal='', success_criteria='')
+        draft = self.row(row['id'])['plan_draft']
+        with app.connect() as c:
+            data = json.loads(c.execute('SELECT data FROM guided_events WHERE id=?', (draft['id'],)).fetchone()[0])
+            for key in ('observation_hash', 'observation_count', 'older_observations_count'):
+                data.pop(key)
+            c.execute('UPDATE guided_events SET data=? WHERE id=?', (json.dumps(data), draft['id']))
+        self.assertEqual(self.row(row['id'])['plan_draft']['status'], 'ready')
+        app.save_record(base | dict(related_record_id=anchor, followup_kind='补充观察'))
+        self.assertEqual(self.row(row['id'])['plan_draft']['status'], 'stale')
+        with self.assertRaises(family_guided.GuidedError):
+            self.parent_action(row['id'], 'guide_save', plan=draft['plan'], share_goal=False, based_on_draft_id=draft['id'])
 
     def test_guide_http_permissions_shapes_cross_session_and_stale_context(self):
         row = self.material()
