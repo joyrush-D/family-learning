@@ -79,7 +79,7 @@
  function setSource(form){const source=snapshot.available_tasks.find(t=>String(t.id)===form.elements.task_id.value),title=form.elements.title;title.readOnly=!!source;title.required=!source;if(source)title.value=source.title}
  function change(e){
   if(busy||pending)return;
-  if(e.target.matches('[data-study-child],[data-study-date]')){const value=e.target.value;if(!value)return;ctx={...ctx,child_id:e.target.matches('[data-study-child]')?value:ctx.child_id,day:e.target.matches('[data-study-date]')?value:ctx.day};snapshot=null;editor=null;message='';paint();read()}
+  if(e.target.matches('[data-study-child],[data-study-date]')){const value=e.target.value;if(!value)return;ctx={...ctx,child_id:e.target.matches('[data-study-child]')?value:ctx.child_id,day:e.target.matches('[data-study-date]')?value:ctx.day};if(e.target.matches('[data-study-child]'))ctx.onChildChanged?.(ctx.child_id);snapshot=null;editor=null;message='';paint();read()}
   if(e.target.name==='task_id')setSource(e.target.form);
  }
  function click(e){
@@ -104,7 +104,7 @@
  function leave(){clearInterval(clock);clock=null;controller?.abort();sequence++;if(ctx?.root){ctx.root.removeEventListener('click',click);ctx.root.removeEventListener('submit',submit);ctx.root.removeEventListener('change',change)}ctx=null}
  function mount(options){
   leave();ctx={...options,day:options.day||today()};snapshot=null;editor=null;message=pending?'上次保存结果尚未核对，请先重试。':'';
-  if(pending){ctx.child_id=pending.body.child_id;ctx.day=pending.body.day}
+  if(pending){ctx.child_id=pending.body.child_id;ctx.day=pending.body.day;ctx.onChildChanged?.(ctx.child_id)}
   ctx.root.addEventListener('click',click);ctx.root.addEventListener('submit',submit);ctx.root.addEventListener('change',change);paint();read();clock=setInterval(tick,1000);
  }
  window.addEventListener('beforeunload',e=>{if(pending){e.preventDefault();e.returnValue=''}});

@@ -44,6 +44,12 @@ async function proof(p,name){if(process.env.STUDY_UI_PROOF_DIR){const fs=require
    try{
     await p.goto(app.url);await p.locator('[data-study-child="'+child.id+'"]').click();await p.locator('[data-study-ready]').waitFor();await fit(p);
     if(width===360){
+     await p.locator('select[data-study-child]').selectOption(other.id);await eventually(async()=>await p.locator('select[data-study-child]').inputValue()===other.id,'switch study child');
+     await p.locator('nav [data-page="calendar"]').click();await p.locator('nav [data-page="study"]').click();await p.locator('[data-study-ready]').waitFor();
+     assert.equal(await p.locator('select[data-study-child]').inputValue(),other.id,'main navigation preserves selected study child');
+     await p.locator('select[data-study-child]').selectOption(child.id);await eventually(async()=>await p.locator('select[data-study-child]').inputValue()===child.id,'restore primary study child');
+    }
+    if(width===360){
      const active=(await read()).active_item;assert.ok(active&&active.day<state.today,'forgotten timer is discoverable from today');
      assert.match(await p.locator('.study-active-gap').innerText(),/有一项较早的计时未结束/);await proof(p,'study-forgotten-'+width);await p.locator('.study-active-gap button').click();await eventually(async()=>await p.locator('[data-study-date]').inputValue()===active.day,'jump to forgotten timer date');
      const forgotten=p.locator('[data-study-item="'+active.id+'"]');await forgotten.locator('[data-study-action="pause"]').click();await eventually(async()=>(await read()).active_item===null,'pause old timer through real API');
@@ -62,7 +68,14 @@ async function proof(p,name){if(process.env.STUDY_UI_PROOF_DIR){const fs=require
     const keys=[];let drop=true;
     const lost=async route=>{const body=route.request().postDataJSON();keys.push(body.request_key);if(drop){drop=false;const r=await route.fetch();assert.equal(r.ok(),true);await route.abort('failed')}else await route.continue()};
     await p.route('**/api/study/item',lost);await add.locator('[type="submit"]').click();await p.locator('[data-study-retry]').waitFor();
-    assert.equal(await add.locator('[name="title"]').inputValue(),title,'lost response keeps entered text');await p.locator('[data-study-retry]').click();
+    assert.equal(await add.locator('[name="title"]').inputValue(),title,'lost response keeps entered text');
+    if(width===360){
+     await p.locator('nav [data-page="home"]').click();await p.locator('[data-study-child="'+other.id+'"]').click();await p.locator('[data-study-ready]').waitFor();
+     assert.equal(await p.locator('select[data-study-child]').inputValue(),child.id,'pending save takes priority over another child entry');
+     await p.locator('nav [data-page="calendar"]').click();await p.locator('nav [data-page="study"]').click();await p.locator('[data-study-ready]').waitFor();
+     assert.equal(await p.locator('select[data-study-child]').inputValue(),child.id,'pending restore keeps child ownership');assert.equal(await p.locator('[data-study-retry]').count(),1,'pending save remains actionable after remount');
+    }
+    await p.locator('[data-study-retry]').click();
     await eventually(async()=>await p.locator('.study-item h3').filter({hasText:title}).count()===1,'retry shows one saved item');await p.unroute('**/api/study/item',lost);
     assert.equal(keys.length,2);assert.equal(keys[0],keys[1],'same save request key on retry');let saved=(await read()).items.filter(x=>x.title===title);assert.equal(saved.length,1);const id=saved[0].id,item=p.locator('[data-study-item="'+id+'"]');await p.locator('nav [data-page="home"]').click();await eventually(async()=>await p.locator('[data-study-task-add="'+sourceTask.id+'"]').count()===1,'same school task opens again');for(const details of await p.locator('.today-backlog').all())if(!await details.evaluate(el=>el.open))await details.locator(':scope > summary').click();await p.locator('[data-study-task-add="'+sourceTask.id+'"]').click();await p.locator('[data-study-ready]').waitFor();await eventually(async()=>await p.locator('[data-study-item="'+id+'"]').evaluate(el=>document.activeElement===el),'existing task receives repeat open');assert.equal((await read()).items.filter(x=>x.task_id===sourceTask.id).length,1,'repeat open does not add duplicate');assert.equal(await p.locator('.study-add').evaluate(el=>el.open),false,'repeat open does not expand add form');
     const otherTitle='虚构另一孩子作业 '+width,otherTask=(await post('api/task/new',{child:other.name,title:otherTitle,due:'虚构另一孩子下次课前',action:'虚构另一孩子要求'})).task;await p.reload();await eventually(async()=>await p.locator('[data-study-task-add="'+otherTask.id+'"]').count()===1,'other child task opens study');for(const details of await p.locator('.today-backlog').all())if(!await details.evaluate(el=>el.open))await details.locator(':scope > summary').click();await p.locator('[data-study-task-add="'+otherTask.id+'"]').click();await p.locator('[data-study-ready]').waitFor();await eventually(async()=>await p.locator('select[data-study-child]').inputValue()===other.id&&await p.locator('[data-study-form="new"] [name="task_id"]').inputValue()===otherTask.id,'other child task stays owned');assert.equal(await p.locator('[data-study-form="new"] [name="title"]').inputValue(),otherTitle,'other child title is isolated');assert.equal((await read(other.id)).items.length,0,'other child task is not auto-added');await p.locator('select[data-study-child]').selectOption(child.id);await eventually(async()=>await p.locator('[data-study-item="'+id+'"]').isVisible(),'return to original child after cross-child check');
