@@ -46,11 +46,15 @@ async function sources(p){await p.locator('nav [data-page="more"]').click();awai
   let current={...base,sync,sync_error:'',tasks:[task('source-first',first,'虚构甲待办'),task('source-second',second,'虚构乙待办'),task('source-done',first,'虚构已完成事项','已完成')],agent:{...base.agent,enabled:true,state:'ready',sources:sourceStates}};
   browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});const p=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[],mutations=[],external=[];
   p.on('pageerror',e=>errors.push(e.message));
-  await p.route('**/*',async route=>{const req=route.request(),url=new URL(req.url());if(req.method()!=='GET'){mutations.push(req.method()+' '+url.pathname);return route.abort()}if(url.origin!==new URL(server.url).origin){external.push(url.origin);return route.abort()}if(url.pathname==='/api/state')return route.fulfill({json:current});return route.continue()});
+  await p.route('**/*',async route=>{const req=route.request(),url=new URL(req.url());if(req.method()!=='GET'){mutations.push(req.method()+' '+url.pathname);return route.abort()}if(url.origin!==new URL(server.url).origin){external.push(url.origin);return route.abort()}if(url.pathname==='/api/state')return route.fulfill({json:current});if(url.pathname==='/api/agent')return route.fulfill({json:current.agent});return route.continue()});
   // Capture the actual object handed to the app, so DOM interactions cannot
   // silently rewrite source history even if the network fixture stays intact.
   await p.addInitScript(()=>{const original=Response.prototype.json;Response.prototype.json=async function(){const value=await original.call(this);if(new URL(this.url).pathname==='/api/state')window.__sourceInput={value,before:JSON.stringify({sync:value.sync,sync_error:value.sync_error,tasks:value.tasks,children:value.children,agent:value.agent})};return value}});
-  await p.goto(server.url,{waitUntil:'domcontentloaded'});await eventually(async()=>await p.locator('#content').getAttribute('data-ready')==='true','home ready');await sources(p);
+  await p.goto(server.url,{waitUntil:'domcontentloaded'});await eventually(async()=>await p.locator('#content').getAttribute('data-ready')==='true','home ready');
+  assert.match(await p.locator('[data-source-coverage]').innerText(),/QQ.*虚构停用QQ.*已暂停，不同步新消息/);
+  assert.match(await p.locator('[data-source-coverage]').innerText(),/读取未成功，新消息可能未收录/);
+  assert.equal(await p.locator('[data-source-coverage] img,[data-source-coverage] svg,[data-source-coverage] script').count(),0);
+  await sources(p);
   const currentCard=id=>p.locator('[data-current-source="'+id+'"]'),card=key=>p.locator('[data-source-card="'+key+'"]'),qq=card('qq:synthetic-history');
   assert.equal(await p.locator('[data-current-source]').count(),4);
   assert.equal(await currentCard('wechat:current-school').locator('[data-current-source-status]').innerText(),'最近读取成功');
@@ -99,6 +103,38 @@ async function sources(p){await p.locator('nav [data-page="more"]').click();awai
   current={...current,sync:{},sync_error:'虚构来源状态损坏 <img src=x onerror="window.__sourceXss=4">'};await p.locator('#refresh').click();await p.locator('details[data-source-history] > summary').click();await eventually(()=>p.locator('[data-source-error]').isVisible(),'explicit damaged source state');assert.match(await p.locator('[data-source-error]').innerText(),/虚构来源状态损坏 <img/);assert.equal((await p.locator('#content').innerText()).includes('还没有保存的消息来源'),false);await p.locator('nav [data-page="tasks"]').click();assert.ok(await p.locator('.task').count()>0,'source error leaves saved tasks usable');await sources(p);
   current={...current,sync:{},sync_error:'',agent:{...current.agent,sources:[]}};await p.locator('#refresh').click();await eventually(async()=>(await p.locator('#content').innerText()).includes('还没有保存的消息来源'),'real empty source state');assert.equal(await p.locator('[data-source-error]').count(),0);assert.notEqual(await p.locator('details[data-source-history]').getAttribute('open'),null);
   checks.push('damaged source metadata stays explicit while basic records work; valid empty source list is separate');
+  const home=async(sources,changes={})=>{
+   const stamp=new Date().toISOString();current={...current,sync:{},sync_error:'',agent:{...current.agent,enabled:true,state:'ready',last_error:'',last_run:stamp,sources,...changes}};
+   await p.locator('nav [data-page="home"]').click();await p.locator('#refresh').click();
+   await eventually(()=>p.evaluate(stamp=>window.__sourceInput?.value.agent.last_run===stamp,stamp),'latest home coverage');
+  };
+  const healthy={...sourceStates[0],unread_count:0,last_success:new Date().toISOString()},disabledQQ=sourceStates[3];
+  const gradeConcern={id:'synthetic-grade-concern',kind:'care',child_id:base.children[1].id,state:'pending',title:'虚构英语学习跟进',body:'家长先和孩子核对这次英语困难，选一道愿意回看的题；记录卡点和实际帮助，再约定是否继续。',plan:{goal:'了解一个具体卡点',why_now:'虚构家长新增成绩观察',estimated_minutes:10,review_on:base.today},evidence:[{ref:'record:synthetic-grade-concern',text:'虚构家长成绩观察；不是实际家庭数据。'}]};
+  const followups=[gradeConcern,{id:'synthetic-review',kind:'review',child_id:base.children[1].id,state:'pending',title:'虚构到期回看',body:'先核对孩子实际反馈，再决定下一步。',evidence:[]},{id:'synthetic-school',kind:'school',child_id:base.children[1].id,state:'pending',title:'虚构学校提醒',body:'虚构要求',evidence:[]}];
+  for(const width of [360,1440]){
+   await p.setViewportSize({width,height:1000});await home([healthy,disabledQQ]);const notice=p.locator('[data-source-coverage]');
+   assert.equal(await notice.count(),1);const text=await notice.innerText();assert.ok(text.includes(second));assert.match(text,/QQ.*虚构停用QQ.*已暂停，不同步新消息/);assert.doesNotMatch(text,/虚构当前学校群/);
+   const box=await notice.boundingBox();assert.ok(box&&box.y>=0&&box.y+box.height<1000,'coverage is visible without scrolling '+width);await checkWidth(p,'home QQ '+width);
+   await p.screenshot({path:path.join(proofDir,'synthetic-home-coverage-'+width+'.png'),fullPage:true});await notice.click();await eventually(async()=>await p.locator('#content h1').innerText()==='来源与附件','coverage opens existing source page');
+   assert.equal(await currentCard('qq:current-disabled').locator('[data-current-source-status]').innerText(),'已停用');
+   await p.locator('nav [data-page="more"]').click();await p.locator('#content [data-page="agent"]').click();
+   assert.match(await p.locator('.agent-status > div').first().innerText(),/后台整理：已完成本轮整理/);assert.match(await p.locator('.agent-status [data-source-coverage]').innerText(),/QQ.*已暂停，不同步新消息/);
+   await home([{...healthy,unread_count:3}]);assert.match(await notice.innerText(),/3 条消息含未读内容/);assert.doesNotMatch(await notice.innerText(),/暂停|读取未成功|尚无成功/);await checkWidth(p,'home unread '+width);
+   await home([{...sourceStates[1],last_success:''},sourceStates[2]]);assert.match(await notice.innerText(),/尚无成功读取记录/);assert.match(await notice.innerText(),/读取未成功/);assert.ok((await notice.innerText()).includes('<svg onload='));assert.equal(await notice.locator('img,svg,script').count(),0);await checkWidth(p,'home unknown and escaped '+width);
+   await home([healthy],{enabled:false,state:'disabled'});assert.match(await notice.innerText(),/采集已暂停，不同步新消息/);
+   await home([healthy],{state:'error',last_error:'虚构模型整理失败'});assert.equal(await notice.count(),0,'processing failure does not mislabel successful source reads');
+   await home([],{enabled:false,state:'disabled'});assert.equal(await notice.count(),0,'manual family without sources has no source fault');assert.equal(await p.locator('[data-today-child]').count(),current.children.length);
+   await home([],{items:followups});const owner=p.locator('[data-today-child="'+base.children[1].id+'"]'),other=p.locator('[data-today-child="'+base.children[0].id+'"]'),care=owner.locator('[data-agent-item="synthetic-grade-concern"]');
+   assert.match(await owner.locator('.agent-child').innerText(),/需要核对与跟进 · 3/);assert.equal(await care.locator(':scope > p').innerText(),gradeConcern.body);assert.equal(await care.locator('[data-agent-accept]').innerText(),'核对并安排');assert.equal(await other.locator('[data-agent-item]').count(),0);
+   assert.deepEqual(await owner.locator('[data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem)),['synthetic-grade-concern','synthetic-review']);assert.equal(await owner.locator('.agent-child [data-page="agent"]').count(),1);await checkWidth(p,'home learning follow-up '+width);
+   await owner.scrollIntoViewIfNeeded();await p.screenshot({path:path.join(proofDir,'synthetic-home-learning-followup-'+width+'.png'),fullPage:true});
+   await care.locator('[data-agent-accept]').click();assert.equal(await p.locator('#agentForm textarea[name="body"]').inputValue(),gradeConcern.body);assert.equal(await p.locator('#agentForm input[name="id"]').inputValue(),gradeConcern.id);assert.equal(await p.locator('#agentForm button[type="submit"]').innerText(),'确认安排');await p.locator('[data-close="agentDialog"]').click();
+  }
+  await home([],{enabled:false,state:'error',last_error:'虚构来源状态不可读'});assert.match(await p.locator('[data-source-coverage]').innerText(),/学校信息状态暂时无法核对/);
+  assert.equal(await p.evaluate(()=>JSON.stringify({sync:window.__sourceInput.value.sync,sync_error:window.__sourceInput.value.sync_error,tasks:window.__sourceInput.value.tasks,children:window.__sourceInput.value.children,agent:window.__sourceInput.value.agent})===window.__sourceInput.before),true);
+  checks.push('360/1440 homepage names the affected child/platform/group; disabled QQ stays visible beside healthy sources and ready processing; source link reuses existing page');
+  checks.push('unread content, failed or never-successful reads, paused collection and manual/no-source households remain distinct; homepage errors and names are escaped');
+  checks.push('360/1440 grade-concern care and review appear only under their child with full action and existing confirmation form; at most two reminders and remaining-reminders link retained');
   assert.deepEqual(errors,[]);assert.deepEqual(mutations,[]);assert.deepEqual(external,[]);assert.equal(await p.evaluate(()=>window.__sourceXss),undefined);
   const proof={checkedAt:new Date().toISOString(),passed:checks.length,checks,syntheticOnly:true,mutationRequests:0,externalRequests:0,sourceInputUnchanged:true,realPhoneTested:false};await fs.writeFile(path.join(proofDir,'ui-proof.json'),JSON.stringify(proof,null,2)+'\n');console.log(JSON.stringify(proof,null,2));
  }finally{await browser?.close();await server?.stop()}

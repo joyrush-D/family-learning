@@ -68,7 +68,8 @@ function fixtures(base){
     assert.deepEqual(await p.locator('nav [data-page]').evaluateAll(xs=>xs.map(x=>x.dataset.page)),['home','study','tasks','calendar','more']);
     assert.deepEqual(await p.locator('nav [data-page]').evaluateAll(xs=>xs.map(x=>x.querySelector('span:last-child').textContent)),['今天','今日作业','学校待办','日历','更多']);
     assert.equal(await p.locator('.today-reading,[data-today-reading],[data-care],[data-query-target^="care:"],#content [data-page="reading"],#content [data-page="care"]').count(),0,'homepage omits reading and care modules');
-    assert.deepEqual(await p.locator('[data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem)),['synthetic-school'],'homepage keeps only school suggestions');
+    assert.deepEqual(await p.locator('[data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem)),['synthetic-school','synthetic-care'],'homepage shows at most two school or learning follow-ups');
+    assert.match(await first.locator('.agent-child').innerText(),/需要核对与跟进 · 3/);assert.equal(await first.locator('.agent-child [data-page="agent"]').count(),1);assert.equal(await second.locator('[data-agent-item]').count(),0);
     assert.equal(await p.locator('#growthWorld,.universe').count(),0);
     assert.equal(resources.some(x=>/growth-world\.js|three\.(core|module)/.test(x)),false,'homepage never requests Three.js');
     const position=await first.locator('.today-priorities [data-today-task] h3').first().boundingBox();
@@ -87,7 +88,7 @@ function fixtures(base){
      assert.equal(await p.locator('#content h1').innerText(),title,'more opens '+page);assert.equal(await p.locator('nav [data-page="more"]').getAttribute('class'),'active');await fit(p);
     }
     assert.deepEqual(errors,[]);
-    checks.push({width,kind:'classification',dateBuckets:true,schoolDeduplication:true,sharedCalendar:true,schoolOnlyHomepage:true,fiveNavigationItems:true,moreEntriesReachable:true,noThree:true,taskTop:position.y,noOverflow:true});
+    checks.push({width,kind:'classification',dateBuckets:true,schoolDeduplication:true,sharedCalendar:true,boundedChildFollowups:true,fiveNavigationItems:true,moreEntriesReachable:true,noThree:true,taskTop:position.y,noOverflow:true});
    }finally{await p.close()}
 
    // These writes go to the disposable demo's real API. No response fixture is active.

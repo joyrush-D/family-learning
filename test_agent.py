@@ -120,6 +120,47 @@ class AgentTests(unittest.TestCase):
             self.assertNotIn('score', item); self.assertNotIn('已完成', item['body'])
             if item['kind'] == 'school': self.assertIn(item['body'], agent.FOCUS.values())
 
+    def test_new_observations_do_not_wait_a_day_or_replace_prior_choices(self):
+        first = self.record()
+        with patch.object(agent.family_llm, '_chat_json', side_effect=self.model) as model:
+            self.assertEqual(agent.run_once(self.app, self.now)['created'], 1)
+            original = self.store.snapshot()['items'][0]
+            new = self.record(note='家长反映英语成绩不理想，考试日期、分数和试卷未知。')
+            with self.app.connect() as c:
+                c.execute("UPDATE records SET category='家长观察',subject='英语' WHERE id=?", (new,))
+            self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(minutes=1))['created'], 1)
+            self.assertEqual(model.call_count, 2)
+            evidence = json.loads(model.call_args.args[0][-1]['content'])['evidence']
+            self.assertIn('考试日期、分数和试卷未知', evidence[0]['text'])
+            self.assertEqual(evidence[0]['ref'], 'record:' + str(new))
+            self.assertEqual(next(x for x in self.store.snapshot()['items'] if x['id'] == original['id']), original)
+            self.store.act(dict(id=original['id'], action='dismiss'))
+            queued = [self.record(note='另一条虚构家长观察。') for _ in range(2)]
+            # A backlog is drained within the existing tick budget, one request per child per tick.
+            for minute in (2, 3):
+                before = model.call_count
+                self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(minutes=minute))['created'], 1)
+                self.assertEqual(model.call_count - before, 1)
+            self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(minutes=4))['created'], 0)
+            self.assertEqual(model.call_count, 4)
+        older = self.record(note='一条仍待核对的虚构观察。')
+        no_action = self.record(note='只保存情况，没有适合的下一步。')
+        with patch.object(agent.family_llm, '_chat_json', return_value={'proposal': None}) as model:
+            self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(minutes=5))['created'], 0)
+            self.assertEqual(model.call_count, 1)
+            self.assertFalse(any(x['record_id'] == no_action for x in self.store.snapshot()['items']))
+        with patch.object(agent.family_llm, '_chat_json', side_effect=self.model) as model:
+            self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(minutes=6))['created'], 1)
+            self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(minutes=7))['created'], 0)
+            self.assertEqual(model.call_count, 1)
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT state FROM agent_items WHERE id=?', (original['id'],)).fetchone()[0], 'dismissed')
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0], 0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0], 0)
+            self.assertEqual(tuple(c.execute('SELECT score,total FROM records WHERE id=?', (new,)).fetchone()), (None, None))
+            for ident in [first, new, *queued, older, no_action]:
+                self.assertEqual(c.execute('SELECT attempts,done FROM agent_jobs WHERE id=?', ('record:' + str(ident),)).fetchone()[:], (1, 1))
+
     def test_revocation_before_ingest_write_rejects_inflight_batch(self):
         self.source['id'] = '100000001@chatroom'
         settings = self.app.settings_store()

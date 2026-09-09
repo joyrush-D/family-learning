@@ -113,6 +113,18 @@ function currentSourceStatus(s){
  const time=Date.parse(s.last_success);
  return !Number.isFinite(time)||time>Date.now()+60000||Date.now()-time>15*60*1000?'读取待核对':'最近读取成功';
 }
+function sourceCoverageHTML(){
+ const sources=currentSources(),lines=sources.flatMap(s=>{
+  const status=currentSourceStatus(s),unread=Number.isSafeInteger(s.unread_count)&&s.unread_count>0?s.unread_count:0;
+  if(status==='最近读取成功'&&!unread)return [];
+  const owner=data.children.find(c=>c.id===s.child_id),platform=s.platform==='qq'?'QQ':s.platform==='wechat'?'微信':'消息来源';
+  const label=({'已停用':'已暂停，不同步新消息','采集已暂停':'采集已暂停，不同步新消息','最近读取未成功':'读取未成功，新消息可能未收录','尚未读取':'尚无成功读取记录','读取待核对':'读取已过时或时间待核对'})[status]||`${unread} 条消息含未读内容`;
+  return [`<span>${esc(owner?.name||'归属待核对')} · ${platform} · ${esc(s.name||'未命名来源')}：<strong>${esc(label)}</strong></span>`];
+ });
+ if(!lines.length&&(data.sync_error||(!sources.length&&data.agent?.last_error)))lines.push('<span>学校信息状态暂时无法核对，已有记录仍可查看。</span>');
+ if(!lines.length&&!sources.length&&Object.values(data.sync||{}).some(s=>s?.last_error||s?.collection_status==='awaiting_login'))lines.push('<span>历史来源接入或读取待核对，新消息可能未收录。</span>');
+ return lines.length?`<button type="button" class="source-coverage" data-source-coverage data-page="sources">${lines.join('')}<span class="source-coverage-link">查看来源 →</span></button>`:'';
+}
 function currentSourceCardsHTML(){
  if(!currentSources().length)return '';
  return `<div class="grid source-cards" data-current-sources>${currentSources().map(s=>{
@@ -251,8 +263,7 @@ function todayChildHTML(c,active){
  <footer class="today-child-footer"><button data-child="${esc(c.name)}">学习进展</button><button data-child-access="${esc(c.id)}">孩子入口</button><button data-profile="${esc(c.id)}" aria-label="更正${esc(c.name)}的档案">档案</button></footer></section>`;
 }
 function homeHTML(active){
- const sources=currentSources(),gaps=sources.length?(data.agent?.last_error||sources.some(s=>currentSourceStatus(s)!=='最近读取成功'||Number.isSafeInteger(s.unread_count)&&s.unread_count>0)):(data.sync_error||Object.values(data.sync||{}).some(s=>s?.last_error||s?.collection_status==='awaiting_login'));
- return `<section class="today-dashboard"><header class="today-heading"><h1>学校与作业</h1><button data-page="calendar">日历与课表 →</button></header>${gaps?'<p class="today-source-gap">学校信息尚有读取缺口 <button data-page="sources">查看来源</button></p>':''}${data.today_calendar?.source_error?`<p class="error" role="status">${esc(data.today_calendar.source_error)}</p>`:''}<div class="today-jump" aria-label="跳到孩子的今日事项">${data.children.map(c=>`<a href="#today-child-${esc(c.id)}">${esc(c.name)}</a>`).join('')}</div><div class="today-children">${data.children.map(c=>todayChildHTML(c,active)).join('')}</div>
+ return `<section class="today-dashboard"><header class="today-heading"><h1>学校与作业</h1><button data-page="calendar">日历与课表 →</button></header>${sourceCoverageHTML()}${data.today_calendar?.source_error?`<p class="error" role="status">${esc(data.today_calendar.source_error)}</p>`:''}<div class="today-jump" aria-label="跳到孩子的今日事项">${data.children.map(c=>`<a href="#today-child-${esc(c.id)}">${esc(c.name)}</a>`).join('')}</div><div class="today-children">${data.children.map(c=>todayChildHTML(c,active)).join('')}</div>
  <div class="today-shortcuts"><button data-page="tasks">待核对与跟进 · ${active.length}</button><button data-page="print">打印作业</button></div></section>`;
 }
 
@@ -828,13 +839,12 @@ function agentItemHTML(item){
  if(item.state==='pending')actions+=`<button data-agent-dismiss="${esc(item.id)}">${item.kind==='school'?'忽略这条':isPlannedCare?'暂不考虑':'已看过'}</button>`;
  return `<article class="agent-item" data-agent-item="${esc(item.id)}"><span class="small muted">${esc(c?.name||'归属待核对')} · ${item.kind==='school'?'学校信息':item.kind==='review'?'到期回看':'学习跟进'}</span><h3>${esc(displayTitle)}</h3><p>${esc(displayBody)}</p>${details}${item.kind==='school'?schoolOriginalButtons((item.evidence||[]).map(e=>e.ref),item.child_id):''}${item.due&&!isPlannedCare?`<p class="small">日期：${esc(item.due)}</p>`:''}<details><summary>查看依据</summary>${(item.evidence||[]).map(e=>`<blockquote>${esc(e.text||e.quote)}</blockquote><p class="small muted">${esc(e.ref)}</p>`).join('')}</details><div class="toolbar">${actions}</div></article>`;
 }
-function agentChildHTML(c){const items=agentPending(c.id).filter(item=>item.kind==='school');return items.length?`<div class="agent-child"><h3 class="today-section-label">学校新消息 · ${items.length}</h3>${items.slice(0,2).map(agentItemHTML).join('')}${items.length>2?'<button data-page="agent">查看其余提醒 →</button>':''}</div>`:''}
+function agentChildHTML(c){const items=agentPending(c.id).filter(item=>['school','care','review'].includes(item.kind));return items.length?`<div class="agent-child"><h3 class="today-section-label">需要核对与跟进 · ${items.length}</h3>${items.slice(0,2).map(agentItemHTML).join('')}${items.length>2?'<button data-page="agent">查看其余提醒 →</button>':''}</div>`:''}
 function agentStatusHTML(full){
- const a=data.agent;if(!a||(!a.enabled&&!a.last_error))return '';
+ const a=data.agent,coverage=sourceCoverageHTML();if(!a||(!a.enabled&&!a.last_error&&!coverage))return '';
  const stale=a.enabled&&a.last_run&&Date.now()-Date.parse(a.last_run)>10*60*1000;
  const state={waiting:'等待首次整理',running:'正在整理',ready:'已完成本轮整理',idle:'已完成本轮整理',error:'整理遇到问题',partial:'部分资料待重试',needs_attention:'部分资料待重试',interrupted:'整理中断，等待恢复',disabled:'尚未启用'}[a.state]||'已保存运行状态';
- const fault=a.last_error||stale||currentSources().some(s=>s.enabled&&currentSourceStatus(s)!=='最近读取成功');
- return `<section class="agent-status" aria-label="成长助手运行状态"><div><strong>成长助手</strong><span class="small">${fault?'有资料等待处理':state} · ${a.pending_count||0} 条待看</span></div>${full?'':'<button data-page="agent">查看提醒与状态 →</button>'}${full?`<p class="small">上次整理：${agentTime(a.last_run)}${stale?' · 已超过10分钟，请检查后台服务':''}</p>${a.last_error?`<p role="status" class="error">${esc(a.last_error)}</p>`:''}${a.failed_jobs?`<p class="error">${a.failed_jobs} 批资料仍未整理成功 <button data-agent-retry>重新尝试</button></p>`:''}<details><summary>消息来源与读取情况</summary>${currentSourceCardsHTML()||empty('尚未配置消息来源')}</details><p class="small muted">系统在后台整理；原件未读及历史未覆盖的内容仍需核对。此处提醒不代表已向微信或手机发送通知。</p>`:''}</section>`;
+ return `<section class="agent-status" aria-label="成长助手运行状态"><div><strong>成长助手</strong><span class="small">后台整理：${a.last_error||stale?'有资料待核对':state} · ${a.pending_count||0} 条待看</span></div>${coverage}${full?'':'<button data-page="agent">查看提醒与状态 →</button>'}${full?`<p class="small">上次整理：${agentTime(a.last_run)}${stale?' · 已超过10分钟，请检查后台服务':''}</p>${a.last_error?`<p role="status" class="error">${esc(a.last_error)}</p>`:''}${a.failed_jobs?`<p class="error">${a.failed_jobs} 批资料仍未整理成功 <button data-agent-retry>重新尝试</button></p>`:''}<details><summary>消息来源与读取情况</summary>${currentSourceCardsHTML()||empty('尚未配置消息来源')}</details><p class="small muted">后台整理只处理已保存资料，不代表所有群的新消息已同步。此处提醒不代表已向微信或手机发送通知。</p>`:''}</section>`;
 }
 function agentPageHTML(){return `<h1>成长助手</h1><div class="toolbar"><button data-page="home">返回今天</button><button data-agent-refresh>更新显示</button></div>${agentStatusHTML(true)}<section class="card">${agentPending().map(agentItemHTML).join('')||empty('目前没有待看的提醒；读取情况见上方。')}</section>${(data.agent?.items||[]).some(x=>x.state==='accepted')?`<details class="card"><summary>最近加入的待办与依据</summary>${data.agent.items.filter(x=>x.state==='accepted').map(agentItemHTML).join('')}</details>`:''}`}
 async function agentAction(obj){const r=await apiFetch('/api/agent/action',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify(obj)});const result=await r.json();if(!r.ok){const error=Error(result.error||'处理失败，请重试');error.status=r.status;throw error}return result}

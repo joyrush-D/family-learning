@@ -74,6 +74,7 @@ PLAN_PROMPT = '''你是家庭学习陪伴助手，只根据本次提供的一个
 请保护休息，不增加必须完成的额外作业；不要声称掌握、进步、节省时间，不做心理或能力诊断。
 孩子明确表示累了、想停止或按时休息时，action先结束本次学习，之后是否继续由家庭另行商量；核对旧题也占用时间，不能以“不新增题目”为由要求当下继续。
 区分孩子自述、家长观察和老师反馈；依据不足时proposal返回null。action只写本次可以一起做的一小步，goal写可观察目标，why_now说明与实际记录的关系。
+家长明确反映成绩或作业有问题，但缺考试日期、分数或原件时，可以先提出核对一份原件或询问一个具体情况的小步骤；不要把缺资料当成没有需要跟进的事，也不要猜失分原因或直接安排加练。记录日期不是考试日期，家长担忧不是已核实的老师结论。
 若输入包含已批准的计划和实际反馈，先核对原动作做到什么、用了多少帮助，再决定维持、缩小、换方法或暂停；why_now说明这一选择的具体依据。不要仅换标题重复原动作；确需维持时说明尚待核对的表现。不因次数增加或不同工作量的用时缩短推断进步。
 estimated_minutes只是建议时长，不是实际用时；review_on是建议回看日期，不是学校截止日期。建议可以是表达、核对或一次短尝试，不代替家长确认。
 evidence中的ref必须来自输入，quote必须逐字摘自对应资料且非空。不得输出其他字段、网址、工具调用或额外作业。'''
@@ -752,10 +753,11 @@ def run_once(app, now=None):
                 # ponytail: scan local records for older corrections; index revisions only if measured scale requires it.
                 records = [dict(row) for row in c.execute('SELECT * FROM records ORDER BY id DESC')]
                 by_id = {row['id']: row for row in records}
+            planned_children = set()
             for record in records:
                 if budget == 0: break
                 child_id = children.get(aliases.get(record['child'], record['child']))
-                if not child_id or (record['source'] or '').startswith('陪伴建议:'): continue
+                if not child_id or child_id in planned_children or (record['source'] or '').startswith('陪伴建议:'): continue
                 key = 'record:' + str(record['id'])
                 fields = ['id', 'day', 'category', 'subject', 'title', 'note', 'source', 'score', 'total', 'related_record_id', 'followup_kind', 'assistance', 'practice_relation', 'comparison_note', 'attachments']
                 value = {'child_id': child_id, **{field: record.get(field) for field in fields}}
@@ -779,17 +781,14 @@ def run_once(app, now=None):
                             'manual_task_status': update['status'] if update else task['original_status'],
                             'manual_task_note': update['note'] if update else '', 'task_focus': {
                                 key: focus.get(key, '') for key in ['mode', 'next_action', 'waiting_for', 'review_on']}})})
-                with store._db() as c:
-                    same_day = c.execute("SELECT state,record_id FROM agent_items WHERE kind='care' AND plan<>'{}' AND child_id=? AND created LIKE ?",
-                                         (child_id, now.date().isoformat() + '%')).fetchall()
-                if same_day and not any(row['state'] == 'pending' and row['record_id'] == record['id'] for row in same_day):
-                    continue
                 # Keep scheduling edits from re-planning the same record; record corrections still change this fingerprint.
                 job_value = {'record': value}
                 if related:
                     job_value['related'] = {field: related.get(field) for field in fields}
                 fp = store._job(key, job_value, now, model=True)
                 if not fp: continue
+                # New feedback must not wait for another day because an earlier suggestion exists.
+                planned_children.add(child_id)
                 budget -= 1
                 try:
                     proposal = _plan_learning(evidence, profiles[child_id], as_of=now.date().isoformat(), data_path=store.data)
