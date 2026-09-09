@@ -105,7 +105,7 @@ function calendarPayload(){const f=$('#calendarForm'),v=Object.fromEntries(new F
 async function calendarRequest(obj){
  if(!calendarPending)calendarPending=JSON.stringify(obj);
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
- try{const r=await apiFetch('/api/calendar/save',{method:'POST',signal:controller.signal,headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:calendarPending}),result=await r.json();if(!r.ok){if([400,404,409].includes(r.status))calendarPending=null;throw Error((result.error||'保存失败')+(r.status===409?'。请关闭表单刷新日历，重新打开最新安排后修改。':[401,403].includes(r.status)?'。可先关闭表单，点页面“刷新记录”，再回到日历按原内容重试。':''))}if(!result.event?.id)throw Error('保存响应暂时无法核对，请使用原内容重试');calendarPending=null;return result.event;
+ try{const r=await apiFetch('/api/calendar/save',{method:'POST',signal:controller.signal,headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:calendarPending}),result=await r.json();if(!r.ok){if([400,404,409].includes(r.status))calendarPending=null;throw Error((result.error||'保存失败')+(r.status===409?'。请关闭表单刷新日历，重新打开最新安排后修改。':[401,403].includes(r.status)?'。当前输入已保留；完成登录或恢复连接后，请在这里重试保存。':''))}if(!result.event?.id)throw Error('保存响应暂时无法核对，请使用原内容重试');calendarPending=null;return result.event;
  }finally{clearTimeout(timer)}
 }
 $('#calendarForm').onsubmit=async e=>{

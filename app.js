@@ -1,6 +1,15 @@
 const basePath=new URL('.',location.href).pathname;
 const endpoint=path=>basePath+path.replace(/^\//,'');
-const apiFetch=async(path,options)=>{const headers=new Headers(options?.headers);if(headers.has('X-Family-Token')&&data?.token)headers.set('X-Family-Token',data.token);const response=await fetch(endpoint(path),{...options,headers});if(response.status===401)showParentLogin();return response};
+const apiFetch=async(path,options)=>{
+ const headers=new Headers(options?.headers);if(headers.has('X-Family-Token')&&data?.token)headers.set('X-Family-Token',data.token);
+ const response=await fetch(endpoint(path),{...options,headers});
+ if(response.status===401)showParentLogin();
+ if(response.status===403&&headers.has('X-Family-Token')){
+  const result=await response.clone().json().catch(()=>null);
+  if(result?.code==='csrf_expired'&&typeof result.token==='string'&&/^[A-Za-z0-9_-]{43}$/.test(result.token)&&data?.token===headers.get('X-Family-Token'))data.token=result.token;
+ }
+ return response;
+};
 let data, page='home', child='', subject='', taskView='待跟进', busy=false;
 let studyChildID='',studyDay='',studyTaskID='',studyRecordContext=null,schoolRecordContext=null,schoolRecordOpening=false;
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -758,7 +767,7 @@ async function saveSchoolOriginal(){
  const s=schoolOriginal;if(!s||s.busy||!s.pending)return;s.busy=true;s.error='正在保存关联…';paintSchoolOriginal();
  try{
   const request=s.pending,r=await apiFetch('/api/agent/message/attachment',{method:'POST',signal:AbortSignal.timeout(15000),headers:{'Content-Type':'application/json','X-Family-Token':s.token},body:JSON.stringify(request)}),view=await r.json();
-  if(!r.ok){if([400,403,404,409,413,415,422].includes(r.status))s.pending=null;throw Error(view.error||'关联暂未保存')}
+  if(!r.ok){if(!(r.status===403&&view.code==='csrf_expired')&&[400,403,404,409,413,415,422].includes(r.status))s.pending=null;throw Error(view.error||'关联暂未保存')}
   verifySchoolOriginal(view,s);
   if(view.attachments.some(a=>a.id===request.attachment_id)!==(request.action==='attach'))throw Error('保存回执暂时无法核对');
   s.view=view;s.pending=null;s.selected='';s.error=request.action==='attach'?'原件已关联到这条通知。':'已移除关联，原文件仍保留。';

@@ -99,14 +99,14 @@
   if(busy||!pending)return;busy=true;status('正在保存…');const current=pending,active=ctx,abort=new AbortController(),timeout=setTimeout(()=>abort.abort(),20000);
   try{
    const response=await active.apiFetch(current.path,{method:'POST',signal:abort.signal,headers:{'Content-Type':'application/json','X-Family-Token':active.token},body:JSON.stringify(current.body)}),result=await response.json();
-   if(!response.ok){if([400,404,409,422].includes(response.status))pending=null;throw Error((result.error||'保存失败')+(response.status===409?'。输入已保留，请刷新状态后再保存。':''))}
+   if(!response.ok){if([400,404,409,422].includes(response.status))pending=null;if(response.status===403&&result.code==='csrf_expired'){status('尚未保存，填写已保留。请重试保存。');return}throw Error((result.error||'保存失败')+(response.status===409?'。输入已保留，请刷新状态后再保存。':''))}
    if(result.ok!==true||result.day?.child_id!==current.body.child_id||result.day?.day!==current.body.day||!Array.isArray(result.items)||!Array.isArray(result.available_tasks)||!Array.isArray(result.week)||!result.summary)throw Error('保存回执暂时无法核对');
    const view=drafts.get(current.context);if(current.form){view?.forms.delete(current.form);if(view?.editor&&current.form===view.editor.type+':'+view.editor.id)view.editor=null}
    pending=null;message='已保存';
    if(ctx&&contextKey(ctx)===current.context){if(current.form)resetForm(current.form);editor=view?.editor||null;snapshot=result;readAt=Date.now();paint()}
    try{await active.onSaved?.()}catch{message='已保存；首页暂未刷新。'}
   }catch(e){status((e.name==='AbortError'?'保存等待超时':e.message||'连接暂时中断')+(pending?'。结果尚未核对，内容已保留，请重试原请求。':''))}
-  finally{clearTimeout(timeout);busy=false;lock();if(!pending&&message==='已保存')await read()}
+  finally{clearTimeout(timeout);busy=false;lock();if(pending===current&&ctx===active){const retry=root()?.querySelector('[data-study-retry]');retry?.scrollIntoView({block:'nearest'});retry?.focus({preventScroll:true})}if(!pending&&message==='已保存')await read()}
  }
  function setSource(form){const source=snapshot.available_tasks.find(t=>String(t.id)===form.elements.task_id.value),title=form.elements.title;title.readOnly=!!form.elements.task_id.value;title.required=!title.readOnly;if(source)title.value=source.title}
  function change(e){

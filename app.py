@@ -1298,7 +1298,8 @@ class Handler(BaseHTTPRequestHandler):
         bridge=path.startswith('/api/print/bridge/')
         if bridge:
             if not self.bridge_authorized(): return self.reply(403,{'error':'打印桥接未授权'})
-        elif self.headers.get('X-Family-Token')!=TOKEN: return self.reply(403,{'error':'请刷新页面后重试'})
+        elif self.headers.get('X-Family-Token')!=TOKEN:
+            return self.reply(403,{'error':'连接已更新，请重试当前操作。填写已保留。','code':'csrf_expired','token':TOKEN})
         try:
             n=int(self.headers.get('Content-Length','0'))
             if self.path=='/api/upload':

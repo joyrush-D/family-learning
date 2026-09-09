@@ -197,9 +197,10 @@ class AccessTests(unittest.TestCase):
                     status, _, info = get('/', host='family.example.ts.net', headers={'Accept': 'text/html'})
                     self.assertEqual(status, 303)
                     self.assertTrue(info.get('Location', '').endswith('/family/login'))
-                    status, _, info = get('/api/state', host='family.example.ts.net')
+                    status, body, info = get('/api/state', host='family.example.ts.net')
                     self.assertEqual(status, 401)
                     self.assertNotIn('WWW-Authenticate', info)
+                    self.assertNotIn(b'"token"', body)
                     status, _, info = get('/calendar.ics', host='family.example.ts.net')
                     self.assertEqual(status, 401)
                     self.assertTrue(info.get('WWW-Authenticate', '').startswith('Basic '))
@@ -243,9 +244,33 @@ class AccessTests(unittest.TestCase):
                                          headers={'Cookie': parent_cookie})[0], 200)
                     self.assertEqual(get('/child/api/state', host='family.example.ts.net',
                                          headers={'Cookie': parent_cookie})[0], 401)
+                    # Rotating the application CSRF token expires only the old write token.
+                    csrf_calendar = {**calendar, 'id': 'c' * 32, 'title': '虚构轮转安排'}
+                    old_token = app.TOKEN
+                    new_token = 'n' * 43
+                    app.TOKEN = new_token
+                    try:
+                        status, body, _ = post('/api/calendar/save', csrf_calendar,
+                                               host='family.example.ts.net', headers={
+                                                   'Cookie': parent_cookie, 'X-Family-Token': old_token})
+                        self.assertEqual(status, 403)
+                        reply = json.loads(body)
+                        self.assertEqual(reply.get('code'), 'csrf_expired')
+                        self.assertEqual(reply.get('token'), new_token)
+                        with app.connect() as db:
+                            self.assertEqual(db.execute('SELECT count(*) FROM calendar_events WHERE id=?',
+                                                        (csrf_calendar['id'],)).fetchone()[0], 0)
+                        self.assertEqual(post('/api/calendar/save', csrf_calendar,
+                                              host='family.example.ts.net', headers={
+                                                  'Cookie': parent_cookie, 'X-Family-Token': new_token})[0], 200)
+                    finally:
+                        app.TOKEN = old_token
                     session_calendar = {**calendar, 'id': 'b' * 32, 'title': '虚构会话安排'}
-                    self.assertEqual(post('/api/calendar/save', session_calendar,
-                                          host='family.example.ts.net', headers={'Cookie': parent_cookie})[0], 403)
+                    status, body, _ = post('/api/calendar/save', session_calendar,
+                                           host='family.example.ts.net', headers={'Cookie': parent_cookie})
+                    self.assertEqual(status, 403)
+                    self.assertEqual(json.loads(body).get('code'), 'csrf_expired')
+                    self.assertEqual(json.loads(body).get('token'), app.TOKEN)
                     self.assertEqual(post('/api/calendar/save', session_calendar,
                                           host='family.example.ts.net', headers={'Cookie': parent_cookie,
                                                                                 'X-Family-Token': app.TOKEN})[0], 200)
@@ -280,10 +305,10 @@ class AccessTests(unittest.TestCase):
                     install_config()
                     status, _, info_d = parent_login()
                     self.assertEqual(status, 200)
-                    cookie_d = info_d['Set-Cookie'].split(';', 1)[0].encode('ascii')
+                    cookie_d = info_d['Set-Cookie'].split(';', 1)[0]
                     self.assertEqual(raw_status(
                         b'GET /api/state HTTP/1.1\r\nHost: family.example.ts.net\r\n'
-                        b'Cookie: ' + cookie_d + b'\r\nCookie: ' + cookie_d +
+                        b'Cookie: ' + cookie_d.encode('ascii') + b'\r\nCookie: ' + cookie_d.encode('ascii') +
                         b'\r\nConnection: close\r\n\r\n'), 401)
                     self.assertEqual(get('/api/state', host='family.example.ts.net', headers={
                         'Cookie': cookie_c + '; ' + cookie_c})[0], 401)
@@ -323,8 +348,10 @@ class AccessTests(unittest.TestCase):
                     child_cookie = info['Set-Cookie'].split(';', 1)[0]
                     self.assertEqual(get('/child/api/state', host='family.example.ts.net',
                                          headers={'Cookie': child_cookie})[0], 200)
-                    self.assertEqual(get('/api/state', host='family.example.ts.net',
-                                         headers={'Cookie': child_cookie})[0], 401)
+                    status, body, _ = get('/api/state', host='family.example.ts.net',
+                                          headers={'Cookie': child_cookie})
+                    self.assertEqual(status, 401)
+                    self.assertNotIn(b'"token"', body)
 
                     # A malformed or unsafe access record fails closed.
                     if os.name != 'nt':
@@ -350,8 +377,15 @@ class AccessTests(unittest.TestCase):
                         'Authorization': 'Bearer synthetic-print-token'})[0], 200)
                     self.assertEqual(get('/api/print/bridge/unknown', headers={
                         'Authorization': 'Bearer synthetic-print-token'})[0], 404)
-                    self.assertEqual(get('/api/print/bridge/unknown', headers={
-                        'Authorization': 'Bearer wrong'})[0], 403)
+                    status, body, _ = get('/api/print/bridge/unknown', headers={
+                        'Authorization': 'Bearer wrong'})
+                    self.assertEqual(status, 403)
+                    self.assertNotIn(b'"token"', body)
+                    status, body, _ = get('/api/print/bridge/unknown', host='family.example.ts.net', headers={
+                        'Cookie': cookie_d, 'Authorization': 'Bearer wrong'})
+                    self.assertEqual(status, 403)
+                    self.assertNotIn(b'"code"', body)
+                    self.assertNotIn(b'"token"', body)
 
                     with patch.object(access, '_login_attempts', [int(access.time.time())] * 10):
                         limited, _, limited_headers = parent_login()
