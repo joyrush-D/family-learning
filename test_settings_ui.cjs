@@ -26,8 +26,30 @@ with tempfile.TemporaryDirectory(prefix='synthetic-empty-settings-') as tmp:
  const url='http://127.0.0.1:'+port+'/',stop=async()=>{if(child.exitCode!==null||child.signalCode!==null)return;const end=once(child,'exit');child.kill('SIGINT');await Promise.race([end,delay(2500)]);if(child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await end}};
  try{await eventually(async()=>{if(child.exitCode!==null)throw Error(err||'Server exited');try{return(await fetch(url,{signal:AbortSignal.timeout(400)})).ok}catch{return false}},'empty household server');return{url,stop}}catch(e){await stop();throw e}
 }
-async function fit(p){assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'no horizontal overflow');assert.equal(await p.locator('.settings-view button:visible').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'44px touch buttons')}
+async function fit(p){assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'no horizontal overflow');assert.equal(await p.locator('.settings-view button:visible,.settings-view summary:visible').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'44px touch buttons and disclosures')}
 async function proof(p,name){if(process.env.SETTINGS_UI_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.mkdir(process.env.SETTINGS_UI_PROOF_DIR,{recursive:true});await p.screenshot({path:path.join(process.env.SETTINGS_UI_PROOF_DIR,name+'.png'),fullPage:false})}}
+async function usageDisplay(browser,width){
+ const app=await server(),p=await browser.newPage({viewport:{width,height:900}}),errors=[];p.on('pageerror',e=>errors.push(e.message));
+ let usage=null;
+ try{
+  await p.route('**/api/settings',async route=>{const response=await route.fetch(),body=await response.json();if(usage)body.usage=usage;await route.fulfill({response,json:body})});
+  await p.goto(app.url);await p.locator('[data-settings-usage]').waitFor();
+  const panel=p.locator('[data-settings-usage]');assert.equal(await panel.getAttribute('open'),null);assert.match(await panel.locator('summary').innerText(),/0 次/);
+  await panel.locator('summary').click();assert.match(await panel.innerText(),/合计 未知/);
+  const model=p.locator('[data-settings-form="model"] [name="model"]');await model.fill('synthetic-unsaved-model');
+  const unknown={calls:1,returned:0,failed:0,pending:1,input_tokens:null,output_tokens:null,total_tokens:null,unknown_usage:1,elapsed_ms:null};
+  usage={available:true,days:30,calls:4,returned:2,failed:1,pending:1,input_tokens:50,output_tokens:20,total_tokens:70,unknown_usage:3,elapsed_ms:1000,groups:[
+   {...unknown,task:'family_connection_test',model:'synthetic-model',protocol:'responses'},
+   {...unknown,task:'family_agent_selection',model:'synthetic-'+ 'x'.repeat(140)+'<img src=x onerror="window.usageInjected=true">',protocol:'chat',calls:3,returned:2,failed:1,pending:0,total_tokens:70,elapsed_ms:1000}]};
+  await panel.getByRole('button',{name:'刷新用量'}).click();await eventually(async()=>/4 次/.test(await panel.locator('summary').innerText()),'usage refreshed');
+  const content=await panel.innerText();assert.match(content,/输入 50 · 输出 20 · 合计 70/);assert.match(content,/3 次用量不完整/);assert.match(content,/失败 1 次/);assert.match(content,/未确认结束 1 次/);assert.match(content,/合计 未知 token/);
+  assert.equal(await panel.locator('img').count(),0);assert.equal(await p.evaluate(()=>window.usageInjected),undefined);
+  assert.equal(await model.inputValue(),'synthetic-unsaved-model');assert.equal(await panel.getAttribute('open'),'');
+  await panel.evaluate(el=>el.scrollIntoView({block:'start'}));await fit(p);await proof(p,'settings-usage-'+width);
+  usage={available:false};await panel.getByRole('button',{name:'刷新用量'}).click();await panel.getByRole('status').waitFor();assert.match(await panel.innerText(),/不能据此判断没有调用/);assert.equal(await model.inputValue(),'synthetic-unsaved-model');assert.deepEqual(errors,[]);
+  return{width,scenario:'model-usage',closedByDefault:true,knownSubtotal:true,unknownNotZero:true,failedAndPendingVisible:true,escapedModels:true,refreshPreservesDraft:true,unavailableNotEmpty:true,noOverflow:true};
+ }finally{await p.close();await app.stop()}
+}
 async function partialModelEnvironment(browser,width){
  const key='SYNTHETIC-ENV-ONLY-KEY-CANARY',app=await server({FAMILY_LLM_API_KEY:key});
  const p=await browser.newPage({viewport:{width,height:900}}),errors=[];p.on('pageerror',e=>errors.push(e.message));
@@ -66,6 +88,7 @@ async function partialModelEnvironment(browser,width){
  let browser;const results=[];
  try{
   browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
+  for(const width of [360,1440])results.push(await usageDisplay(browser,width));
   for(const width of [360,1440])results.push(await partialModelEnvironment(browser,width));
   for(const width of [360,1440]){
    const app=await server(),p=await browser.newPage({viewport:{width,height:900}}),errors=[];p.on('pageerror',e=>errors.push(e.message));

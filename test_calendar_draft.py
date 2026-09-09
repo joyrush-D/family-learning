@@ -33,7 +33,9 @@ class CalendarLanguageTests(unittest.TestCase):
     def tearDown(self):
         self.model.stop();self.env.stop();self.config.stop();self.tmp.cleanup()
     def dump(self):
-        with app.connect() as c:return '\n'.join(c.iterdump())
+        # A draft may record its model usage, but must not change any family business row.
+        with app.connect() as c:
+            return '\n'.join(s for s in c.iterdump() if not s.startswith(('CREATE TABLE llm_usage_ledger ', 'INSERT INTO "llm_usage_ledger"')))
     def event(self,**fields):
         value=dict(id='a'*32,version=0,child_ids=['child-1'],title='虚构游泳',category='activity',day='2026-12-31',
                    start_time='15:00',end_time='',location='虚构场地',note='带好毛巾',status='tentative',repeat='none',until='')

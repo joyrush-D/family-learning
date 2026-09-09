@@ -4,14 +4,19 @@ from email.parser import BytesParser
 from email.policy import default
 import json
 import os
+import sqlite3
+import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import family_llm as llm
 
 DRAFT=dict(title='虚构数学测验',subject='数学',score=85,total=100,note='虚构示例：订正情况未提供。',uncertainties=['订正情况未知'])
-state={'mode':'ok','calls':[],'redirect_calls':0}
+state={'mode':'ok','calls':[],'redirect_calls':0,'usage':None,'reported_model':None}
 
 class Mock(BaseHTTPRequestHandler):
     def log_message(self,*args): pass
@@ -27,6 +32,9 @@ class Mock(BaseHTTPRequestHandler):
             self.send_response(302);self.send_header('Location',f'http://localhost:{self.server.server_port}/leak');self.end_headers();return
         if mode=='http_error':
             self.send_response(500);self.end_headers();self.wfile.write(b'PRIVATE_RESPONSE synthetic-secret');return
+        if mode=='http_error_json':
+            self.send_response(500);self.send_header('Content-Type','application/json');self.end_headers()
+            self.wfile.write(json.dumps({'error':'PRIVATE_RESPONSE','usage':state['usage'],'model':state['reported_model']}).encode());return
         if mode=='timeout': time.sleep(.15)
         if audio: result=state.get('asr_result',{'text':'  虚构录音转写，等待核对。  '})
         else:
@@ -42,6 +50,8 @@ class Mock(BaseHTTPRequestHandler):
                     {'type':'message','role':'assistant','status':'completed','content':[
                         {'type':'output_text','text':json.dumps(DRAFT,ensure_ascii=False)}]}]}
                 if isinstance(mode,dict): result=mode
+            if state['usage'] is not None: result['usage']=state['usage']
+            if state['reported_model'] is not None: result['model']=state['reported_model']
         wire=json.dumps(result).encode()
         if audio and mode=='bad_json': wire=b'PRIVATE_RESPONSE invalid JSON'
         if mode=='large': wire=b'x'*(llm.MAX_RESPONSE+1)
@@ -328,4 +338,79 @@ with patch.object(llm,'_chat_json',return_value=dict(hint,reference_status='cons
     except ValueError:pass
     else:raise AssertionError('parent-only plan leaked into child hint context')
 
-print('PASS: draft, reading feedback, guided hints and parent teaching proposals, audio; bounded context/output, auth, timeout and error redaction')
+server=ThreadingHTTPServer(('127.0.0.1',0),Mock)
+threading.Thread(target=server.serve_forever,daemon=True).start()
+try:
+  with TemporaryDirectory() as temporary:
+    data_path=Path(temporary)
+    endpoint=f'http://127.0.0.1:{server.server_port}/v1'
+    env=dict(FAMILY_LLM_BASE_URL=endpoint,FAMILY_LLM_MODEL='configured-chat-model',
+             FAMILY_LLM_API_KEY='PRIVATE_KEY_CANARY')
+    state['mode']='ok';state['usage']={'prompt_tokens':11,'completion_tokens':7,'total_tokens':18}
+    state['reported_model']='provider-chat-model'
+    with patch.dict(os.environ,env,clear=True):
+        llm.extract_draft('PRIVATE_PROMPT_CANARY',data_path=data_path)
+        summary=llm.usage_summary(data_path)
+        assert summary['calls']==1 and summary['returned']==1 and summary['failed']==0
+        assert summary['input_tokens']==11 and summary['output_tokens']==7 and summary['total_tokens']==18
+        assert summary['unknown_usage']==0 and summary['groups'][0]['protocol']=='chat'
+        state['mode']='http_error_json';state['usage']={'prompt_tokens':13,'completion_tokens':2,'total_tokens':15}
+        try: llm.extract_draft('虚构资料',data_path=data_path)
+        except llm.LLMDraftError: pass
+        else: raise AssertionError('HTTP error accepted')
+        state['mode']=dict(DRAFT,extra='unexpected')
+        state['usage']={'prompt_tokens':17,'completion_tokens':3,'total_tokens':20}
+        try: llm.extract_draft('虚构资料',data_path=data_path)
+        except llm.LLMDraftError: pass
+        else: raise AssertionError('invalid result accepted')
+        summary=llm.usage_summary(data_path)
+        assert summary['failed']==1 and summary['returned']==2 and summary['total_tokens']==53
+        state['mode']='ok';state['usage']={'prompt_tokens':True,'completion_tokens':-2,'total_tokens':2**63}
+        llm.extract_draft('虚构资料',data_path=data_path)
+        summary=llm.usage_summary(data_path)
+        assert summary['unknown_usage']==1 and summary['input_tokens']==41 and summary['output_tokens']==12
+        state['mode']='ok';state['usage']={'input_tokens':23,'output_tokens':9,'total_tokens':32}
+        state['reported_model']='provider-responses-model'
+        os.environ['FAMILY_LLM_BASE_URL']=endpoint+'/responses'
+        os.environ['FAMILY_LLM_MODEL']='configured-responses-model'
+        llm.extract_draft('虚构资料',data_path=data_path)
+        state['usage']={}
+        llm.extract_draft('虚构资料',data_path=data_path)
+        summary=llm.usage_summary(data_path)
+        assert summary['groups'][-1]['protocol']=='responses'
+        assert summary['groups'][-1]['input_tokens']==23 and summary['groups'][-1]['output_tokens']==9
+        assert summary['groups'][-1]['unknown_usage']==1
+        assert llm.usage_summary(Path(os.path.relpath(data_path)))==summary
+        with sqlite3.connect(data_path/'family.sqlite3') as connection:
+            rows=connection.execute(
+                'SELECT task,model,reported_model,protocol,state,input_tokens,output_tokens,total_tokens '
+                'FROM llm_usage_ledger').fetchall()
+        dump=repr(rows)
+        assert 'PRIVATE_KEY_CANARY' not in dump and 'PRIVATE_PROMPT_CANARY' not in dump
+        assert 'provider-chat-model' in dump and 'provider-responses-model' in dump
+        before=len(state['calls'])
+        try: llm.extract_draft('虚构资料',data_path=data_path/'missing-parent')
+        except llm.LLMDraftError: pass
+        else: raise AssertionError('ledger failure accepted')
+        assert len(state['calls'])==before
+    with TemporaryDirectory() as empty:
+        absent=Path(empty)/'no-create'
+        assert llm.usage_summary(absent)['calls']==0 and not absent.exists()
+    with TemporaryDirectory() as pending_only:
+        # Abrupt exit at the transport boundary must leave a committed, unknown attempt.
+        script='''import os, sys, family_llm
+from unittest.mock import patch
+class Crash:
+    def open(self, request, timeout): os._exit(17)
+with patch.object(family_llm, 'build_opener', return_value=Crash()):
+    family_llm.extract_draft('synthetic crash check', data_path=sys.argv[1])
+'''
+        crashed=subprocess.run([sys.executable,'-c',script,pending_only],env=env,timeout=10)
+        assert crashed.returncode==17
+        pending=llm.usage_summary(Path(pending_only))
+        assert pending['calls']==pending['pending']==pending['unknown_usage']==1
+        assert pending['elapsed_ms'] is None and pending['total_tokens'] is None
+finally:
+    server.shutdown();server.server_close()
+
+print('PASS: draft, reading feedback, guided hints, audio and bounded usage ledger; isolated HTTP, redaction, failure and interruption checks')

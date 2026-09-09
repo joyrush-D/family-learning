@@ -100,6 +100,10 @@ class SettingsTests(unittest.TestCase):
                 loaded=family_review.load_app(root,data)
                 with patch.object(family_llm,'build_opener',return_value=Opener()):
                     self.assertEqual(family_agent.run_once(loaded)['processed'],1)
+                usage=store.snapshot()['usage']
+                self.assertEqual((usage['calls'],usage['returned'],usage['unknown_usage']),(1,1,1))
+                self.assertIsNone(usage['total_tokens'])
+                self.assertEqual(usage['groups'][0]['task'],'family_agent_selection')
                 self.assertEqual(captured[0][0],model['base_url']+'/chat/completions')
                 self.assertEqual(captured[0][1],'Bearer SYNTHETIC-KEY')
                 self.assertEqual(captured[0][2]['model'],'synthetic-model')
@@ -118,7 +122,8 @@ class SettingsTests(unittest.TestCase):
                     response=connection.getresponse();raw=response.read();connection.close()
                     return response.status,json.loads(raw)
                 try:
-                    self.assertEqual(call('GET','/api/settings')[0],200)
+                    code,settings=call('GET','/api/settings')
+                    self.assertEqual(code,200);self.assertEqual(settings['usage']['calls'],1)
                     with patch.object(family_llm,'_chat_json',return_value={'ok':True}) as model_call:
                         self.assertEqual(call('POST','/api/settings/model/test',{})[0],200)
                         self.assertEqual(model_call.call_args.kwargs['data_path'],data)

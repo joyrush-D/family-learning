@@ -59,7 +59,7 @@ class Store:
         return dict(children=self.app.profiles(),enabled=config['enabled'],sources=state['sources'],
                     revision=revision(raw_config(self.data/'agent.json')),
                     agent={key:state.get(key,'') for key in ['state','last_run','last_error']},
-                    model=self.model_state())
+                    model=self.model_state(),usage=family_llm.usage_summary(self.data))
 
     def create_child(self,obj):
         if set(obj)!={'name','grade','classroom','request_key'}:

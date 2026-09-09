@@ -269,7 +269,8 @@ class ReadingHTTPTests(unittest.TestCase):
                          attachments=[self.uploads[0]['id']] if attachments is None else attachments)
     def database_state(self):
         with sqlite3.connect(self.app.DB) as c:
-            tables=[r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+            # Usage accounting is allowed; every family business table remains unchanged.
+            tables=[r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name<>'llm_usage_ledger' ORDER BY name")]
             return {t:c.execute('SELECT * FROM "'+t+'" ORDER BY rowid').fetchall() for t in tables}
     def test_reading_routes_require_token_and_host(self):
         before=self.database_state()
@@ -338,6 +339,8 @@ class ReadingHTTPTests(unittest.TestCase):
         self.assertNotIn('SYNTHETIC_PRIVATE_KEY',json.dumps(result))
         self.assertNotIn('/synthetic/private-response',json.dumps(result))
         self.assertEqual(self.database_state(),before)
+        usage=self.app.family_llm.usage_summary(self.app.DATA)
+        self.assertEqual((usage['calls'],usage['failed'],usage['unknown_usage']),(1,1,1))
 
 
 if __name__=='__main__': unittest.main()

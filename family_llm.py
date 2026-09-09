@@ -13,6 +13,10 @@ import json
 import math
 import os
 import secrets
+import sqlite3
+import time
+from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from http.client import HTTPException
 from urllib.error import HTTPError, URLError
@@ -60,6 +64,7 @@ class NoRedirect(HTTPRedirectHandler):
 
 MODEL_ENV={'base_url':'FAMILY_LLM_BASE_URL','model':'FAMILY_LLM_MODEL',
            'api_key':'FAMILY_LLM_API_KEY','reasoning_effort':'FAMILY_LLM_REASONING_EFFORT'}
+LEDGER_TABLE='llm_usage_ledger'
 
 
 def environment_model():
@@ -102,6 +107,129 @@ def validate_model(config,allow_empty=False):
 
 def configuration(data_path=None):
     return validate_model(model_values(data_path))
+
+
+def _ledger_path(data_path=None):
+    value=data_path if data_path is not None else os.environ.get('FAMILY_DATA')
+    if value is None or not str(value).strip(): return None
+    return Path(value)/'family.sqlite3'
+
+
+def _ledger_start(data_path,task,model,protocol):
+    path=_ledger_path(data_path)
+    if path is None: return None
+    try:
+        with closing(sqlite3.connect(path,timeout=5)) as connection:
+            connection.execute(f'''CREATE TABLE IF NOT EXISTS {LEDGER_TABLE} (
+                id INTEGER PRIMARY KEY,
+                started_at TEXT NOT NULL,
+                task TEXT NOT NULL,
+                model TEXT NOT NULL,
+                reported_model TEXT,
+                protocol TEXT NOT NULL,
+                state TEXT NOT NULL,
+                elapsed_ms INTEGER,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                total_tokens INTEGER
+            )''')
+            cursor=connection.execute(
+                f'''INSERT INTO {LEDGER_TABLE}
+                   (started_at,task,model,protocol,state)
+                   VALUES (?,?,?,?,?)''',
+                (datetime.now(timezone.utc).isoformat(),task,model,protocol,'pending'))
+            connection.commit()
+            return path,cursor.lastrowid
+    except Exception:
+        raise LLMDraftError('模型用量记录无法保存，未发送请求；请稍后重试或手动记录') from None
+
+
+def _ledger_finish(handle,state,elapsed_ms,usage,reported_model=None):
+    if handle is None: return
+    path,row_id=handle
+    try:
+        with closing(sqlite3.connect(path,timeout=5)) as connection:
+            connection.execute(
+                f'''UPDATE {LEDGER_TABLE}
+                   SET state=?,elapsed_ms=?,input_tokens=?,output_tokens=?,total_tokens=?,reported_model=?
+                   WHERE id=?''',
+                (state,elapsed_ms,*usage,reported_model,row_id))
+            connection.commit()
+    except Exception:
+        raise LLMDraftError('模型用量记录无法更新，请稍后重试或手动记录') from None
+
+
+def _token(value):
+    return value if type(value) is int and 0<=value<=9223372036854775807 else None
+
+
+def _reported_model(value):
+    if (not isinstance(value,str) or not 0<len(value)<=200 or
+            any(ord(char)<32 or ord(char)==127 for char in value) or
+            any(not (('A'<=char<='Z') or ('a'<=char<='z') or ('0'<=char<='9') or char in '._:/-')
+                for char in value)):
+        return None
+    return value
+
+
+def _usage(result,responses):
+    reported=_reported_model(result.get('model')) if isinstance(result,dict) else None
+    if not isinstance(result,dict) or not isinstance(result.get('usage'),dict):
+        return (None,None,None),reported
+    usage=result['usage']
+    keys=('input_tokens','output_tokens','total_tokens') if responses else ('prompt_tokens','completion_tokens','total_tokens')
+    return tuple(_token(usage.get(key)) for key in keys),_reported_model(result.get('model'))
+
+
+def _empty_usage_summary(available=True):
+    return dict(available=available,days=30,calls=0,returned=0,failed=0,pending=0,
+                input_tokens=None,output_tokens=None,total_tokens=None,unknown_usage=0,
+                elapsed_ms=None,groups=[])
+
+
+def usage_summary(data_path=None):
+    """Return provider-reported usage for the last 30 UTC days without creating storage."""
+    summary=_empty_usage_summary()
+    path=_ledger_path(data_path)
+    if path is None or not path.is_file(): return summary
+    cutoff=(datetime.now(timezone.utc)-timedelta(days=30)).isoformat()
+    try:
+        uri=path.resolve().as_uri()+'?mode=ro'
+        with closing(sqlite3.connect(uri,uri=True)) as connection:
+            if not connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(LEDGER_TABLE,)).fetchone():
+                return summary
+            rows=connection.execute(
+                f'''SELECT task,model,protocol,state,input_tokens,output_tokens,total_tokens,elapsed_ms
+                    FROM {LEDGER_TABLE} WHERE started_at>=? ORDER BY id''',(cutoff,)).fetchall()
+    except Exception:
+        return _empty_usage_summary(False)
+
+    def totals(items):
+        values=[sum(row[index] for row in items if type(row[index]) is int and 0<=row[index]<=9223372036854775807)
+                if any(type(row[index]) is int and 0<=row[index]<=9223372036854775807 for row in items) else None
+                for index in (4,5,6)]
+        elapsed_values=[row[7] for row in items if type(row[7]) is int and row[7]>=0]
+        elapsed=sum(elapsed_values) if elapsed_values else None
+        unknown=sum(any(type(row[index]) is not int or not 0<=row[index]<=9223372036854775807 for index in (4,5,6)) for row in items)
+        counts={state:sum(row[3]==state for row in items) for state in ('returned','failed','pending')}
+        return counts,values,unknown,elapsed
+
+    counts,values,unknown,elapsed=totals(rows)
+    summary.update(calls=len(rows),returned=counts['returned'],failed=counts['failed'],pending=counts['pending'],
+                   input_tokens=values[0],output_tokens=values[1],total_tokens=values[2],
+                   unknown_usage=unknown,elapsed_ms=elapsed)
+    groups=[]
+    # ponytail: O(n²) grouping; the 30-day household ledger is expected to stay small.
+    for key in sorted({(row[0],row[1],row[2]) for row in rows}):
+        items=[row for row in rows if row[:3]==key]
+        counts,values,unknown,elapsed=totals(items)
+        groups.append(dict(task=key[0],model=key[1],protocol=key[2],calls=len(items),
+                           returned=counts['returned'],failed=counts['failed'],pending=counts['pending'],
+                           input_tokens=values[0],output_tokens=values[1],total_tokens=values[2],
+                           unknown_usage=unknown,elapsed_ms=elapsed))
+    summary['groups']=groups
+    return summary
 
 
 def validate_draft(value):
@@ -193,7 +321,7 @@ def extract_draft(text='',images=(),timeout=60,*,data_path=None):
 
 
 def _chat_json(messages,schema,name,timeout=60,*,data_path=None):
-    """Shared bounded transport; no tools, redirects, proxy or database access."""
+    """Shared bounded transport; no tools, redirects, proxy or business writes."""
     config=model_values(data_path)
     endpoint,model=validate_model(config)
     output_name={'family_learning_answer':'回答','family_reading_feedback':'反馈','family_guided_hint':'提示'}.get(name,'草稿')
@@ -228,19 +356,38 @@ def _chat_json(messages,schema,name,timeout=60,*,data_path=None):
     if key: headers['Authorization']='Bearer '+key
     # No redirects or ambient proxy: send this material only to the configured endpoint.
     opener=build_opener(ProxyHandler({}),NoRedirect())
+    ledger=_ledger_start(data_path,name,model,'responses' if responses else 'chat')
+    started=time.monotonic()
+    usage=(None,None,None);reported_model=None
     try:
         request=Request(endpoint,data=json.dumps(body,ensure_ascii=False,allow_nan=False).encode('utf-8'),headers=headers,method='POST')
         with opener.open(request,timeout=timeout) as response:
             raw=response.read(MAX_RESPONSE+1)
     except HTTPError as error:
-        code=error.code;error.close()
+        code=error.code
+        try:
+            error_body=error.read(MAX_RESPONSE+1)
+        except (OSError,ValueError):
+            error_body=b''
+        error.close()
+        try:
+            error_result=json.loads(error_body)
+        except (ValueError,TypeError):
+            error_result=None
+        usage,reported_model=_usage(error_result,responses)
+        _ledger_finish(ledger,'failed',round((time.monotonic()-started)*1000),usage,reported_model)
         if 300<=code<400: raise LLMDraftError('模型服务发生重定向，已停止发送资料，请检查配置') from None
         raise LLMDraftError('模型服务未能处理请求，请稍后重试或手动记录') from None
     except (URLError,TimeoutError,OSError,ValueError,HTTPException):
+        _ledger_finish(ledger,'failed',round((time.monotonic()-started)*1000),(None,None,None))
         raise LLMDraftError('模型服务连接失败或超时；原件未改动，请重试或手动记录') from None
-    if len(raw)>MAX_RESPONSE: raise LLMDraftError('模型返回内容过长，请缩小本次资料范围')
+    elapsed=round((time.monotonic()-started)*1000)
+    if len(raw)>MAX_RESPONSE:
+        _ledger_finish(ledger,'failed',elapsed,(None,None,None))
+        raise LLMDraftError('模型返回内容过长，请缩小本次资料范围')
     try:
         result=json.loads(raw)
+        usage,reported_model=_usage(result,responses)
         if responses:
             if result.get('status')!='completed':
                 raise LLMDraftError('模型尚未完成'+output_name+'，请缩小本次资料范围后重试')
@@ -262,8 +409,13 @@ def _chat_json(messages,schema,name,timeout=60,*,data_path=None):
         if not isinstance(answer,str) or not answer.strip():
             raise LLMDraftError('模型未返回可核对的'+output_name+'，请重试或手动记录')
         draft=json.loads(answer)
+    except LLMDraftError:
+        _ledger_finish(ledger,'failed',elapsed,usage,reported_model)
+        raise
     except (ValueError,KeyError,IndexError,TypeError,AttributeError):
+        _ledger_finish(ledger,'failed',elapsed,usage,reported_model)
         raise LLMDraftError('模型未返回有效'+output_name+'，请重试或手动记录') from None
+    _ledger_finish(ledger,'returned',elapsed,usage,reported_model)
     return draft
 
 

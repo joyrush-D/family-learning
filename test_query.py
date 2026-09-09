@@ -69,7 +69,9 @@ class QueryTests(unittest.TestCase):
         value=dict(child='示例甲',question='这次数学订正后有没有独立复测？');value.update(extra)
         return app.ask_family(value)
     def database(self):
-        with app.connect() as c: return '\n'.join(c.iterdump())
+        # A query may record its model usage, but must not change any family business row.
+        with app.connect() as c:
+            return '\n'.join(s for s in c.iterdump() if not s.startswith(('CREATE TABLE llm_usage_ledger ', 'INSERT INTO "llm_usage_ledger"')))
     def reading_call(self,action,row=None,**extra):
         self.reading_counter=getattr(self,'reading_counter',0)+1
         obj=dict(child_id='child-1',request_key='synthetic-reading-query-'+str(self.reading_counter))
