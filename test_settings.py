@@ -20,6 +20,32 @@ import init_family
 
 
 class SettingsTests(unittest.TestCase):
+    def test_incomplete_environment_is_visible_without_unlocking_or_leaking(self):
+        with tempfile.TemporaryDirectory(prefix='synthetic-model-environment-') as directory, patch.dict(os.environ,{},clear=True):
+            root=Path(directory);data=root/'private';data.mkdir()
+            with patch.multiple(app,ROOT=root,DATA=data,DB=data/'family.sqlite3'):
+                store=app.settings_store(); empty=store.model_state()
+                self.assertEqual(empty['error'],'');self.assertFalse(empty['configured'])
+                saved=dict(revision=empty['revision'],base_url='http://127.0.0.1:32123/v1',model='synthetic-file-model',api_key='SYNTHETIC-FILE-KEY')
+                store.save_model(saved);before=(data/'model.json').read_bytes()
+                cases=[{'FAMILY_LLM_API_KEY':'SYNTHETIC-ENV-KEY'},
+                       {'FAMILY_LLM_REASONING_EFFORT':'none'},
+                       {'FAMILY_LLM_BASE_URL':'http://127.0.0.1:32124/v1'},
+                       {'FAMILY_LLM_MODEL':'synthetic-env-model'},
+                       {'FAMILY_LLM_BASE_URL':'http://user:SYNTHETIC-URL-SECRET@localhost/v1','FAMILY_LLM_MODEL':'synthetic-env-model'}]
+                for env in cases:
+                    with self.subTest(fields=sorted(env)),patch.dict(os.environ,env,clear=True):
+                        state=store.model_state()
+                        self.assertEqual(state['origin'],'environment')
+                        self.assertFalse(state['configured']);self.assertTrue(state['error'],'invalid deployment configuration must explain why it cannot be used')
+                        for secret in ('SYNTHETIC-ENV-KEY','SYNTHETIC-FILE-KEY','SYNTHETIC-URL-SECRET'):
+                            self.assertNotIn(secret,json.dumps(state))
+                        with self.assertRaises(family_settings.SettingsError) as failure:store.save_model(saved)
+                        self.assertEqual(failure.exception.status,409)
+                        self.assertEqual((data/'model.json').read_bytes(),before)
+                        with self.assertRaises(family_llm.LLMUnavailable):family_llm.configuration(data)
+                self.assertTrue(store.model_state()['configured']);self.assertEqual(store.model_state()['origin'],'file')
+
     def test_first_visit_household_bindings_model_and_access(self):
         with tempfile.TemporaryDirectory(prefix='synthetic-settings-') as directory, patch.dict(os.environ,{},clear=True):
             root=Path(directory); data=root/'private';data.mkdir()

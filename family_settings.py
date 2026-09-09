@@ -154,12 +154,19 @@ class Store:
         try: raw=raw_config(self.data/'model.json')
         except (OSError,SettingsError):
             return dict(revision='',origin='file',base_url='',model='',has_api_key=False,reasoning_effort='',configured=False,error='模型配置无法读取；手动记录仍可使用，请先核对私有配置文件')
-        try:
-            config=family_llm.model_values(self.data)
-            family_llm.validate_model(config,allow_empty=True)
-            error=''
+        blank=dict(base_url='',model='',api_key='',reasoning_effort='')
+        try: config=family_llm.model_values(self.data)
         except family_llm.LLMUnavailable as failure:
-            config=dict(base_url='',model='',api_key='',reasoning_effort='',origin='file');error=str(failure)
+            config={**blank,'origin':'file'};error=str(failure)
+        else:
+            # A deployment environment stays the owner of its own configuration, including an
+            # incomplete or invalid one; report why without echoing its URL or key.
+            try:
+                family_llm.validate_model(config,allow_empty=config['origin']!='environment')
+                error=''
+            except family_llm.LLMUnavailable as failure:
+                error=str(failure) if config['base_url'] and config['model'] else '部署环境的模型配置不完整：请在部署配置中同时设置 FAMILY_LLM_BASE_URL 和 FAMILY_LLM_MODEL；网页不能覆盖'
+                config={**blank,'origin':config['origin']}
         return dict(revision=revision(raw),origin=config['origin'],base_url=config['base_url'],model=config['model'],
                     has_api_key=bool(config['api_key']),reasoning_effort=config['reasoning_effort'],
                     configured=bool(config['base_url'] and config['model'] and not error),error=error)
