@@ -34,6 +34,16 @@ def _hash(value):
     return hashlib.sha256(_json(value).encode()).hexdigest()
 
 
+def _hint_requires_attempt(events):
+    """Whether the latest meaningful guidance event is a ready hint."""
+    for event in reversed(events):
+        if event['kind'] == 'attempt':
+            return False
+        if event['kind'] == 'hint' and event['status'] == 'ready':
+            return True
+    return False
+
+
 def _fields(obj, allowed):
     if not isinstance(obj, dict) or set(obj) - set(allowed):
         raise GuidedError('字段格式不正确，请保留输入并核对')
@@ -362,7 +372,8 @@ class Store:
                     actions = ['pause', 'skip', 'finish']
                     if len(attempts) < 20:
                         actions.insert(0, 'attempt')
-                    if attempts and row['reference_checked'] and row['reference_text'] and not pending and len(hints) < 20:
+                    if (attempts and row['reference_checked'] and row['reference_text'] and not pending and len(hints) < 20
+                            and not _hint_requires_attempt(events)):
                         actions.insert(1, 'hint')
                 elif row['state'] == 'paused':
                     actions = ['resume', 'skip']
@@ -502,13 +513,17 @@ class Store:
     def _model_input(self, c, row, guide=False):
         attempts, hints, pictures = [], [], []
         candidates = [(i, '题目原件', bool(row['question_text'])) for i in json.loads(row['question_attachments'])]
-        for event in c.execute('SELECT * FROM guided_events WHERE session_id=? ORDER BY id', (row['id'],)):
+        events = [dict(event) for event in c.execute(
+            'SELECT * FROM guided_events WHERE session_id=? ORDER BY id', (row['id'],))]
+        for event in events:
             value = json.loads(event['data'])
             if event['kind'] == 'attempt':
                 attempts.append(dict(kind=value['attempt_kind'], text=value['text'], assistance=value['assistance']))
                 candidates.extend((i, '首次尝试原件' if value['attempt_kind'] == 'first' else '再次解释原件', bool(value['text'])) for i in value['attachments'])
             elif event['kind'] == 'hint' and event['status'] == 'ready':
                 hints.append({k: value[k] for k in ('hint', 'question', 'uncertainties')})
+        if not guide and _hint_requires_attempt(events):
+            raise GuidedError('请先保存新的想法或卡点，再请求下一个提示。', 400, 'new_attempt_required')
         if not row['question_text'] and not candidates:
             raise GuidedError('题目尚未提供，先保留表达并请家长补充。', 409, 'material_missing')
         if not attempts and not guide:

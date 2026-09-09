@@ -210,6 +210,7 @@ class GuidedTests(unittest.TestCase):
         self.child_action(textual['id'], 'attempt', kind='first', text='先读已知条件。')
         self.assertEqual(self.child_action(textual['id'], 'hint')[0][0], 200)
         self.assertIn('1 份原件未读取', self.calls[-1][0]['question_text'])
+        self.child_action(textual['id'], 'attempt', kind='explain_again', text='模型再次请求前先保存新的虚构思路。')
         with patch.object(family_llm, 'guided_hint', side_effect=family_llm.LLMDraftError('PRIVATE_MODEL_ERROR')):
             failed, payload = self.child_action(textual['id'], 'hint')
             self.assertEqual(failed[0], 200)
@@ -635,6 +636,51 @@ class GuidedTests(unittest.TestCase):
             release[1].set(); self.assertEqual(second.result()[0], 200)
         self.assertEqual(self.row(row['id'])['plan_draft']['plan']['start'], '新的可核对草稿')
         self.assertNotIn('旧草稿不得采用', json.dumps(self.store.snapshot()))
+
+    def test_hint_requires_new_attempt_after_ready_and_survives_restart_pause(self):
+        row = self.material()
+        self.child_action(row['id'], 'attempt', kind='first', text='先保存自己的虚构思路。')
+        with patch.object(family_llm, 'guided_hint', return_value=dict(hint='第一条虚构提示', question='', uncertainties=[])) as model:
+            reply, original_request = self.child_action(row['id'], 'hint')
+            self.assertEqual(reply[0], 200)
+            before = self.row(row['id'])
+            self.assertEqual(self.call('action', original_request)[0], 200)
+            duplicate, _ = self.child_action(row['id'], 'hint')
+            self.assertEqual((duplicate[0], duplicate[1]['code']), (400, 'new_attempt_required'))
+            self.assertEqual(model.call_count, 1)
+            self.assertEqual(len(self.row(row['id'])['events']), len(before['events']))
+            self.child_action(row['id'], 'pause')
+            self.child_action(row['id'], 'resume')
+            self.parent_action(row['id'], 'guide_save', plan=self.plan(), share_goal=True)
+            self.parent_action(row['id'], 'unshare')
+            self.parent_action(row['id'], 'share')
+            self.assertNotIn('hint', self.call('state', {})[1]['sessions'][0]['allowed_actions'])
+            restarted = family_guided.Store(app, authorize=lambda _c, _child_id: None)
+            current = self.row(row['id'])
+            with self.assertRaises(family_guided.GuidedError) as error:
+                restarted.action(self.request(child_id='child-1', id=row['id'], version=current['version'], action='hint'))
+            self.assertEqual((error.exception.code, model.call_count), ('new_attempt_required', 1))
+            self.assertEqual(len(self.row(row['id'])['events']), len(before['events']) + 5)
+        self.assertEqual(self.child_action(row['id'], 'attempt', kind='explain_again', text='保存新的虚构卡点后再请求。')[0][0], 200)
+        with patch.object(family_llm, 'guided_hint', return_value=dict(hint='第二条虚构提示', question='', uncertainties=[])) as model:
+            self.assertEqual(self.child_action(row['id'], 'hint')[0][0], 200)
+            model.assert_called_once()
+
+    def test_failed_hint_can_retry_and_new_attempt_can_request_again(self):
+        row = self.material()
+        self.child_action(row['id'], 'attempt', kind='first', text='先保存第一次虚构思路。')
+        with patch.object(family_llm, 'guided_hint', side_effect=[family_llm.LLMDraftError('PRIVATE_FAILURE_CANARY'),
+                                                                    dict(hint='恢复后的虚构提示', question='', uncertainties=[]),
+                                                                    dict(hint='新表达后的虚构提示', question='', uncertainties=[])]) as model:
+            failed, _ = self.child_action(row['id'], 'hint')
+            self.assertEqual(failed[0], 200)
+            self.assertEqual(failed[1]['sessions'][0]['events'][-1]['status'], 'failed')
+            retried, _ = self.child_action(row['id'], 'hint')
+            self.assertEqual(retried[0], 200)
+            self.assertEqual(retried[1]['sessions'][0]['events'][-1]['status'], 'ready')
+            self.child_action(row['id'], 'attempt', kind='explain_again', text='恢复后保存新的虚构表达。')
+            self.assertEqual(self.child_action(row['id'], 'hint')[0][0], 200)
+            self.assertEqual(model.call_count, 3)
 
     def test_material_edit_immediately_releases_old_guide_pending_gate(self):
         row = self.material(shared=False)
