@@ -6,9 +6,10 @@ const net=require('node:net');
 const {setTimeout:delay}=require('node:timers/promises');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 async function eventually(check,label,timeout=12000){const end=Date.now()+timeout;while(Date.now()<end){if(await check())return;await delay(50)}throw Error('Timed out: '+label)}
-async function server(){
+async function server(environment={}){
  const socket=net.createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');const port=socket.address().port;await new Promise(r=>socket.close(r));
  const env={...process.env};for(const key of Object.keys(env))if(key.startsWith('FAMILY_'))delete env[key];
+ Object.assign(env,environment);
  const launch=`import app, tempfile, shutil, sys
 from pathlib import Path
 with tempfile.TemporaryDirectory(prefix='synthetic-empty-settings-') as tmp:
@@ -27,10 +28,45 @@ with tempfile.TemporaryDirectory(prefix='synthetic-empty-settings-') as tmp:
 }
 async function fit(p){assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'no horizontal overflow');assert.equal(await p.locator('.settings-view button:visible').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'44px touch buttons')}
 async function proof(p,name){if(process.env.SETTINGS_UI_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.mkdir(process.env.SETTINGS_UI_PROOF_DIR,{recursive:true});await p.screenshot({path:path.join(process.env.SETTINGS_UI_PROOF_DIR,name+'.png'),fullPage:false})}}
+async function partialModelEnvironment(browser,width){
+ const key='SYNTHETIC-ENV-ONLY-KEY-CANARY',app=await server({FAMILY_LLM_API_KEY:key});
+ const p=await browser.newPage({viewport:{width,height:900}}),errors=[];p.on('pageerror',e=>errors.push(e.message));
+ const read=async route=>{const response=await fetch(app.url+route);assert.equal(response.status,200);return response.json()};
+ try{
+  await p.goto(app.url);await p.locator('.settings-view h1').waitFor();
+  assert.equal(await p.locator('.settings-view h1').innerText(),'先认识你的家庭');
+  const form=p.locator('[data-settings-form="model"]'),card=p.locator('.settings-view .card').filter({has:form});
+  const initial=await read('api/settings');
+  assert.equal(initial.model.origin,'environment','incomplete environment configuration stays environment-managed');
+  assert.equal(initial.model.configured,false);
+  for(const name of ['base_url','model','api_key'])assert.equal(await form.locator('[name="'+name+'"]').isDisabled(),true,'environment-managed '+name+' is disabled');
+  assert.equal(await form.locator('[type="submit"]').isDisabled(),true);assert.equal(await p.locator('[data-settings-test]').isDisabled(),true);
+  assert.equal(await form.locator('[name="api_key"]').inputValue(),'');
+  assert.equal(JSON.stringify(initial).includes(key),false);assert.equal(JSON.stringify(await read('api/state')).includes(key),false);assert.equal((await p.content()).includes(key),false);
+  // Model failure must not stop the independent manual setup path.
+  const child=p.locator('[data-settings-form="child"]');await child.locator('[name="name"]').fill('虚构配置检查孩子');await child.locator('[name="grade"]').fill('四年级');await child.locator('[type="submit"]').click();
+  await eventually(async()=>await p.locator('.settings-child').count()===1,'manual child setup works with incomplete model environment');
+  const saved=await read('api/settings');assert.equal(saved.children[0].name,'虚构配置检查孩子');assert.equal(saved.children.length,1);
+  assert.equal(saved.model.origin,'environment');assert.equal(saved.model.configured,false);
+  for(const name of ['base_url','model','api_key'])assert.equal(await form.locator('[name="'+name+'"]').isDisabled(),true);
+  assert.equal(await form.locator('[name="api_key"]').inputValue(),'');assert.equal(JSON.stringify(saved).includes(key),false);assert.equal(JSON.stringify(await read('api/state')).includes(key),false);assert.equal((await p.content()).includes(key),false);
+  await card.evaluate(el=>el.scrollIntoView({block:'start'}));await fit(p);
+  const visibleErrors=await card.locator('.error:visible,[role="alert"]:visible').allTextContents();
+  const evidence={width,scenario:'api-key-only-environment',model:{origin:saved.model.origin,configured:saved.model.configured,error:saved.model.error},visibleModelErrors:visibleErrors,environmentControlsDisabled:true,keyNotReturned:true,manualChildSetup:true,noOverflow:true,pageErrors:errors};
+  await proof(p,'settings-partial-environment-'+width);
+  if(process.env.SETTINGS_UI_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.writeFile(path.join(process.env.SETTINGS_UI_PROOF_DIR,'settings-partial-environment-'+width+'.json'),JSON.stringify(evidence,null,2)+'\n')}
+  assert.deepEqual(errors,[]);
+  assert.ok(typeof initial.model.error==='string'&&initial.model.error.trim(),'an API-key-only deployment must expose a nonempty model configuration error');
+  assert.ok(typeof saved.model.error==='string'&&saved.model.error.trim(),'configuration error survives manual child setup');
+  assert.ok(visibleErrors.some(text=>text.trim()&&text.includes(saved.model.error)),'the model card visibly displays the configuration error');
+  return evidence;
+ }finally{await p.close();await app.stop()}
+}
 (async()=>{
  let browser;const results=[];
  try{
   browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
+  for(const width of [360,1440])results.push(await partialModelEnvironment(browser,width));
   for(const width of [360,1440]){
    const app=await server(),p=await browser.newPage({viewport:{width,height:900}}),errors=[];p.on('pageerror',e=>errors.push(e.message));
    const read=async()=>await(await fetch(app.url+'api/settings')).json();
