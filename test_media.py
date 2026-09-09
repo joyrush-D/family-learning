@@ -202,31 +202,35 @@ class MediaTests(unittest.TestCase):
             config_bytes = json.dumps({'image_key': key, 'image_xor_key': 7,
                 'db_root': str(root / 'db')}).encode()
             config_path.write_bytes(config_bytes); config_path.chmod(0o600)
-            original = attach / 'original.dat'; original.write_bytes(b'encrypted-original')
-            thumbnail = attach / 'thumbnail.dat'; thumbnail.write_bytes(b'thumbnail')
             settings = {'wechat_cli': str(cli), 'wechat_config': str(config_path),
                         'wechat_config_sha256': hashlib.sha256(config_bytes).hexdigest(),
                         'ffmpeg': '/usr/bin/false', 'since': self.now - dt.timedelta(days=1)}
-            source = {**self.source}; message = self.message('7')
+            chat = '12345@chatroom'; source = {**self.source, 'id': 'wechat:' + chat}
+            message = self.message('7'); message['time'] = '2026-03-01T00:00:00+08:00'
+            original_body = b'encrypted-original'; original_md5 = 'a' * 32
+            chat_root = attach / hashlib.md5(chat.encode()).hexdigest()
+            month_dir = chat_root / '2026-03' / 'Img'; month_dir.mkdir(parents=True)
+            original = month_dir / (original_md5 + '.dat'); original.write_bytes(original_body)
+            previous_month = chat_root / '2026-02' / 'Img'; previous_month.mkdir(parents=True)
+            (previous_month / (original_md5 + '.dat')).write_bytes(b'wrong-month')
             response = {
-                'ok': True, 'data': {'query': {'chat': '12345@chatroom', 'type': 'image'}, 'media': [{
-                    'id': {'talker': '12345@chatroom', 'local_id': 7}, 'kind': 'image', 'time_iso': message['time'],
+                'ok': True, 'data': {'query': {'chat': chat, 'type': 'image'}, 'media': [{
+                    'id': {'talker': chat, 'local_id': 7}, 'kind': 'image', 'time_iso': message['time'],
                     'resources': [
-                        {'resource_family': 'image', 'variant_code': 1, 'size': 9,
-                         'local_path_details': [{'file_size': 9, 'storage_format': 'wechat_image_dat', 'path': str(thumbnail)}]},
-                        {'resource_family': 'image', 'variant_code': 2, 'size': len(b'encrypted-original'),
-                         'local_path_details': [
-                             {'file_size': 9, 'storage_format': 'wechat_image_dat', 'path': str(thumbnail)},
-                             {'file_size': len(b'encrypted-original'), 'storage_format': 'wechat_image_dat', 'path': str(original)},
-                         ]},
+                        {'resource_family': 'image', 'variant_code': 1, 'md5': 'b' * 32, 'size': 9},
+                        {'resource_family': 'image', 'variant_code': 2, 'md5': original_md5,
+                         'size': len(original_body)},
                     ],
                 }]}}
             real_read = media.read_file
+            captured_paths = []
             def invoke(value=response):
                 process = Mock(return_value=json.dumps(value).encode())
+                captured_paths.clear()
                 def read(path, limit=media.MAX_BYTES, private=False):
                     if Path(path) == cli: return b'cli'
                     if Path(path) == config_path: return config_bytes
+                    captured_paths.append(Path(path))
                     return real_read(path, limit, private)
                 with patch.object(media, 'CLI_SHA256', hashlib.sha256(b'cli').hexdigest()), \
                      patch.object(media, 'read_file', side_effect=read), \
@@ -236,7 +240,10 @@ class MediaTests(unittest.TestCase):
                      patch.dict(media.os.environ, {'WX_KEY_BIN': 'inherited-secret', 'WX_MCP_CONFIG': 'alternate-config',
                                                    'WECHAT_CLI_IMAGE_KEY': 'inherited-image-key', 'WX_MCP_IMAGE_KEY': 'inherited-mcp-key'}, clear=False):
                     result = media.fetch(settings, source, message)
-                    self.assertEqual(decrypt.call_args.args[0], b'encrypted-original')
+                    self.assertEqual(decrypt.call_args.args[0], original_body)
+                    args = process.call_args.args[0]
+                    self.assertEqual(args[-7:], ['--limit', '1', '--include-local-paths', 'false',
+                                                  '--include-debug', 'true', '--strict-read-only'])
                     env = process.call_args.args[1]
                     self.assertEqual(env['WX_KEY_BIN'], '/usr/bin/false')
                     self.assertEqual(env['WECHAT_CLI_CONFIG'], str(config_path))
@@ -248,6 +255,7 @@ class MediaTests(unittest.TestCase):
 
             result, process = invoke()
             self.assertEqual(result['data'], b'png'); self.assertEqual(process.call_count, 1)
+            self.assertEqual(captured_paths, [original])
             for mutate, code in (
                     (lambda value: value['data']['media'][0]['id'].update(talker='other@chatroom'), 'media_message_mismatch'),
                     (lambda value: value['data']['media'][0]['id'].update(local_id=8), 'media_message_mismatch'),
@@ -260,14 +268,38 @@ class MediaTests(unittest.TestCase):
                 self.assertEqual(raised.exception.code, code)
 
             outside = root / 'outside.dat'; outside.write_bytes(b'encrypted-outside')
-            bad = json.loads(json.dumps(response)); details = bad['data']['media'][0]['resources'][1]['local_path_details']; details[1]['path'] = str(outside)
-            with self.assertRaises(media.MediaError) as raised: invoke(bad)
+            original.unlink(); original.symlink_to(outside)
+            with self.assertRaises(media.MediaError) as raised: invoke()
             self.assertEqual(raised.exception.code, 'media_path_rejected')
-            linked = attach / 'linked.dat'; linked.symlink_to(outside)
-            bad = json.loads(json.dumps(response)); bad['data']['media'][0]['resources'][1]['local_path_details'][1]['path'] = str(linked)
-            with self.assertRaises(media.MediaError) as raised: invoke(bad)
-            self.assertEqual(raised.exception.code, 'media_path_rejected')
+            original.unlink()
 
+            # A valid-looking file in another chat's directory is never a fallback.
+            other_chat = attach / hashlib.md5(b'54321@chatroom').hexdigest() / '2026-03' / 'Img'
+            other_chat.mkdir(parents=True)
+            other_file = other_chat / (original_md5 + '.dat'); other_file.write_bytes(original_body)
+            with self.assertRaises(media.MediaError) as raised:
+                invoke()
+            self.assertEqual(raised.exception.code, 'media_original_unavailable')
+            self.assertNotIn(other_file, captured_paths)
+            other_file.unlink(); other_chat.rmdir(); (other_chat.parent).rmdir(); (other_chat.parent.parent).rmdir()
+            original.write_bytes(original_body)
+
+            # Multiple deterministic suffixes with the same size remain ambiguous.
+            alternate = month_dir / (original_md5 + '_h.dat'); alternate.write_bytes(original_body)
+            with self.assertRaises(media.MediaError) as raised: invoke()
+            self.assertEqual(raised.exception.code, 'media_original_unavailable')
+            alternate.unlink()
+
+            for mutate in (
+                    lambda value: value['data']['media'][0].update(resources=[]),
+                    lambda value: value['data']['media'][0]['resources'][1].update(md5='not-an-md5'),
+                    lambda value: value['data']['media'][0]['resources'][1].update(size=len(original_body) + 1),
+            ):
+                bad = json.loads(json.dumps(response)); mutate(bad)
+                with self.assertRaises(media.MediaError) as raised: invoke(bad)
+                self.assertEqual(raised.exception.code, 'media_original_unavailable')
+
+            # The CLI hash and private configuration are checked before any metadata call.
             with patch.object(media, 'CLI_SHA256', '0' * 64), patch.object(media, 'bounded_process') as process:
                 with self.assertRaises(media.MediaError) as raised: media.fetch(settings, source, message)
                 self.assertEqual(raised.exception.code, 'media_cli_unverified'); process.assert_not_called()

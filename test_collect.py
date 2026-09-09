@@ -136,7 +136,7 @@ class CollectorTests(unittest.TestCase):
     def test_byte_bounded_prefix_progress_and_oversized_single_message(self):
         client = FakeClient([{**SOURCE, 'cursor': 'local_id:10'}])
         calls = []
-        def many(args):
+        def many(args, env=None):
             start = int(args[args.index('--after-message') + 1])
             calls.append(start)
             # An earlier long message must not prevent later ordinary notifications.
@@ -167,9 +167,9 @@ class CollectorTests(unittest.TestCase):
                 with self.subTest(prefix=prefix, initial=initial):
                     client = FakeClient([{**SOURCE, 'cursor': prefix + str(initial)}], fail=True)
                     calls = []
-                    def history(args):
+                    def history(args, env=None):
                         self.assertEqual(args[:7], [CONFIG['wechat_cli'], 'history', CHAT, '--view', 'agent', '--order', 'asc'])
-                        self.assertEqual(args[-3:], ['--limit', '200', '--strict-read-only'])
+                        self.assertEqual(args[-5:], ['--limit', '200', '--strict-read-only', '--include-media-paths', 'false'])
                         self.assertNotIn('--since-local-id', args)
                         self.assertNotIn('--since-time', args)
                         start = int(args[args.index('--after-message') + 1]) if '--after-message' in args else 0
@@ -192,9 +192,9 @@ class CollectorTests(unittest.TestCase):
                     self.assertEqual(client.sources[0]['cursor'], prefix + '450')
                     self.assertEqual(client.posts[-1]['last_message_time'], '')
         empty = FakeClient([{**SOURCE, 'cursor': '0'}])
-        self.assertEqual(collect.run_once(CONFIG, empty, lambda args: page([], after=0))[0]['status'], 'ingested')
+        self.assertEqual(collect.run_once(CONFIG, empty, lambda args, env=None: page([], after=0))[0]['status'], 'ingested')
         self.assertEqual(empty.sources[0]['cursor'], '0')
-        self.assertEqual(collect.run_once(CONFIG, empty, lambda args: page([event(1)], after=0))[0]['messages'], 1)
+        self.assertEqual(collect.run_once(CONFIG, empty, lambda args, env=None: page([event(1)], after=0))[0]['messages'], 1)
         self.assertEqual(empty.sources[0]['cursor'], '1')
 
     def test_positional_anchor_can_move_backwards_without_sorting_byte_limited_pages(self):
@@ -203,7 +203,7 @@ class CollectorTests(unittest.TestCase):
         ids = [100 - n // 2 if n % 2 == 0 else 1000 + n // 2 for n in range(90)]
         client = FakeClient([{**SOURCE, 'cursor': 'local_id:200'}])
         calls = []
-        def history(args):
+        def history(args, env=None):
             anchor = int(args[args.index('--after-message') + 1])
             calls.append(anchor)
             start = 0 if anchor == 200 else ids.index(anchor) + 1
@@ -245,7 +245,7 @@ class CollectorTests(unittest.TestCase):
         for envelope in invalid:
             with self.subTest(envelope=envelope):
                 client = FakeClient()
-                rows = collect.run_once(CONFIG, client, lambda args: envelope)
+                rows = collect.run_once(CONFIG, client, lambda args, env=None: envelope)
                 self.assertEqual(rows[0]['status'], 'read_error')
                 body = client.posts[0]
                 self.assertEqual((body['expected_cursor'], body['cursor'], body['messages']), ('10', '10', []))
@@ -255,7 +255,7 @@ class CollectorTests(unittest.TestCase):
 
     def test_allowlist_commands_and_send_failure_retry(self):
         calls = []
-        def cli(args):
+        def cli(args, env=None):
             calls.append(args)
             return page()
         client = FakeClient(fail=True)
@@ -266,7 +266,7 @@ class CollectorTests(unittest.TestCase):
         collect.run_once(CONFIG, client, cli)
         self.assertEqual(client.sources[0]['cursor'], '11')
         expected = [CONFIG['wechat_cli'], 'history', CHAT, '--view', 'agent', '--order', 'asc', '--after-message', '10',
-                    '--limit', '200', '--strict-read-only']
+                    '--limit', '200', '--strict-read-only', '--include-media-paths', 'false']
         self.assertEqual(calls, [expected, expected])
         self.assertEqual(client.posts[0]['messages'], client.posts[1]['messages'])
         for source in ({**SOURCE, 'id': '--other'}, {**SOURCE, 'id': '20002'}, {**SOURCE, 'platform': 'shell'}):
@@ -290,19 +290,50 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(committed.sources[0]['cursor'], '11')
         committed.ingest = original_ingest
         advanced_calls = []
-        def following(args):
+        def following(args, env=None):
             advanced_calls.append(args)
             return page([event(12)], after=11)
         collect.run_once(CONFIG, committed, following)
         self.assertEqual(advanced_calls[0][advanced_calls[0].index('--after-message') + 1], '11')
         self.assertEqual([m['id'] for body in committed.posts for m in body['messages']], ['11', '12'])
 
+    def test_wechat_cli_flags_and_environment_are_media_closed(self):
+        calls = []
+
+        def cli(args, env=None):
+            calls.append((args, env))
+            return page()
+
+        inherited = {
+            'HOME': '/fictional/home', 'PATH': '/fictional/bin', 'TMPDIR': '/fictional/tmp',
+            'LANG': 'C', 'LC_ALL': 'C', 'WECHAT_CLI_CONFIG': '/fictional/wechat.json',
+            'WX_MCP_CONFIG': '/fictional/mcp.json', 'WX_KEY_BIN': '/fictional/key-helper',
+            'IMAGE_KEY': 'fictional-secret', 'WX_MCP_IMAGE_KEY': 'fictional-secret-2',
+        }
+        with patch.dict(collect.os.environ, inherited, clear=True):
+            result = collect.run_once(CONFIG, FakeClient(), cli)
+        self.assertEqual(result[0]['status'], 'ingested')
+        args, env = calls[0]
+        self.assertEqual(args[-5:], ['--limit', '200', '--strict-read-only', '--include-media-paths', 'false'])
+        self.assertEqual({key: env[key] for key in ('HOME', 'PATH', 'TMPDIR', 'LANG', 'LC_ALL',
+                                                     'WECHAT_CLI_CONFIG', 'WX_MCP_CONFIG')},
+                         {key: inherited[key] for key in ('HOME', 'PATH', 'TMPDIR', 'LANG', 'LC_ALL',
+                                                           'WECHAT_CLI_CONFIG', 'WX_MCP_CONFIG')})
+        self.assertEqual(env['WX_KEY_BIN'], collect.WECHAT_KEY_BIN)
+        self.assertEqual(env['WECHAT_CLI_DISABLE_AUTO_REFRESH'], '1')
+        self.assertNotIn('IMAGE_KEY', env)
+        self.assertNotIn('WX_MCP_IMAGE_KEY', env)
+
+        with patch.object(collect.Path, 'is_file', return_value=False):
+            with self.assertRaisesRegex(collect.CollectError, 'wechat_env_unavailable'):
+                collect.wechat_env()
+
     def test_qq_unavailable_and_native_anchor_continuity(self):
         source = dict(id='qq:10002', platform='qq', child_id='child-2', name='示例群', cursor='100')
         status = dict(status='ok', retcode=0, data=dict(online=None, good=False,
                       allowed_group_id='10002', capabilities=dict(status=True, history=False)))
         calls = []
-        def offline(args):
+        def offline(args, env=None):
             calls.append(args)
             return status
         client = FakeClient([source.copy()])

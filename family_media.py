@@ -12,7 +12,7 @@ import re
 import stat
 import tempfile
 
-from family_collect import source_chat
+from family_collect import source_chat, wechat_env
 from family_wechat_media import (MediaError, MAX_BYTES, bounded_process,
                                  decrypt_v2, validate_png, wxgf_first_frame)
 
@@ -55,7 +55,7 @@ def config(data):
 
 
 def fetch(settings, source, message):
-    """One exact message; only local original paths reported by that response."""
+    """One message's metadata, then a fixed set of paths in its chat directory."""
     chat = source_chat(source)
     require(re.fullmatch(r'[1-9][0-9]{0,31}', message['id']) is not None, 'media_message_invalid')
     cli = Path(settings['wechat_cli']).resolve(strict=True)
@@ -69,13 +69,11 @@ def fetch(settings, source, message):
     require(type(xor) is int and 0 <= xor <= 255, 'media_existing_key_required')
     root = Path(local['db_root']) / 'msg' / 'attach'
     require(root.is_absolute() and root.resolve(strict=True) == root, 'media_path_rejected')
-    # No inherited image-key, alternate-config, proxy or helper environment.
-    env = {k: os.environ[k] for k in ('HOME', 'PATH', 'TMPDIR', 'LANG', 'LC_ALL') if k in os.environ}
-    env.update(WX_KEY_BIN='/usr/bin/false', WECHAT_CLI_DISABLE_AUTO_REFRESH='1',
-               WECHAT_CLI_CONFIG=settings['wechat_config'], WX_MCP_CONFIG=settings['wechat_config'])
-    require(Path('/usr/bin/false').is_file(), 'media_helper_block_unavailable')
-    raw = bounded_process([str(cli), 'media', chat, '--local-id', message['id'], '--type', 'image', '--limit', '1'],
-                          env, timeout=15, max_stdout=8 * 1024 * 1024)
+    # The CLI's default media locator scans the account-wide temp directory.
+    # Disable it; debug keeps resource metadata that the display view hides.
+    raw = bounded_process([str(cli), 'media', chat, '--local-id', message['id'], '--type', 'image', '--limit', '1',
+                           '--include-local-paths', 'false', '--include-debug', 'true', '--strict-read-only'],
+                          wechat_env(settings['wechat_config']), timeout=15, max_stdout=8 * 1024 * 1024)
     require(read_file(settings['wechat_config'], 2 * 1024 * 1024, private=True) == original_config,
             'media_config_changed')
     result = json.loads(raw)
@@ -86,21 +84,30 @@ def fetch(settings, source, message):
     row = rows[0]; identity = row['id']
     require(identity.get('talker') == chat and type(identity.get('local_id')) is int
             and str(identity['local_id']) == message['id'] and row.get('kind') == 'image', 'media_message_mismatch')
-    require(dt.datetime.fromisoformat(row['time_iso']) == dt.datetime.fromisoformat(message['time']), 'media_message_mismatch')
+    moment = dt.datetime.fromisoformat(row['time_iso'])
+    require(moment.tzinfo is not None and moment == dt.datetime.fromisoformat(message['time']), 'media_message_mismatch')
     candidates = set()
-    for resource in row['resources']:
-        # This build lists thumbnail and original paths in both resource rows.
-        # Match the original variant's own size; never pick the first/largest path.
+    for resource in row.get('resources', []):
         if resource.get('resource_family') != 'image' or resource.get('variant_code') != 2:
             continue
-        for detail in resource.get('local_path_details', []):
-            if (detail.get('file_size') == resource.get('size')
-                    and detail.get('storage_format') == 'wechat_image_dat'):
-                candidate = Path(detail['path'])
-                require(candidate.is_absolute() and candidate.is_relative_to(root), 'media_path_rejected')
-                candidates.add(candidate)
+        md5, size = resource.get('md5'), resource.get('size')
+        require(isinstance(md5, str) and re.fullmatch(r'[a-f0-9]{32}', md5) is not None
+                and type(size) is int and 0 < size <= MAX_BYTES, 'media_original_unavailable')
+        # Use the CLI's offset-bearing month; do not try other months or chats.
+        directory = root / hashlib.md5(chat.encode()).hexdigest() / moment.strftime('%Y-%m') / 'Img'
+        for suffix in ('.dat', '_h.dat', '_t.dat'):
+            candidate = directory / (md5 + suffix)
+            try:
+                info = candidate.lstat()
+            except FileNotFoundError:
+                continue
+            require(stat.S_ISREG(info.st_mode) and candidate.resolve(strict=True) == candidate, 'media_path_rejected')
+            if info.st_size == size:
+                candidates.add((candidate, size))
     require(len(candidates) == 1, 'media_original_unavailable')
-    encrypted = read_file(candidates.pop())
+    candidate, expected_size = candidates.pop()
+    encrypted = read_file(candidate)
+    require(len(encrypted) == expected_size, 'media_file_changed')
     plaintext = decrypt_v2(encrypted, key.encode(), xor)
     return wxgf_first_frame(plaintext, settings['ffmpeg'])
 

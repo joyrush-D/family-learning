@@ -25,6 +25,9 @@ MAX_RESPONSE = 8 * 1024 * 1024
 MAX_TEXT = 8000
 MAX_BATCH_BYTES = 700 * 1024  # Leave space below the server's 1MiB normalized-message limit.
 TIMEZONE = dt.timezone(dt.timedelta(hours=8))
+WECHAT_KEY_BIN = '/usr/bin/false'
+_WECHAT_BASE_ENV = ('HOME', 'PATH', 'TMPDIR', 'LANG', 'LC_ALL')
+_WECHAT_CONFIG_ENV = ('WECHAT_CLI_CONFIG', 'WX_MCP_CONFIG')
 
 
 class CollectError(Exception):
@@ -109,6 +112,21 @@ def bounded(text):
         return text, False
     marker = '\n[正文过长，后续内容未读取]'
     return text[:MAX_TEXT - len(marker)] + marker, True
+
+
+def wechat_env(config_path=None):
+    """Return the closed environment used by the read-only WeChat CLI."""
+    checked(Path(WECHAT_KEY_BIN).is_file(), 'wechat_env_unavailable')
+    env = {key: os.environ[key] for key in _WECHAT_BASE_ENV if key in os.environ}
+    if config_path is None:
+        env.update({key: os.environ[key] for key in _WECHAT_CONFIG_ENV if key in os.environ})
+    else:
+        checked(isinstance(config_path, (str, os.PathLike)), 'wechat_env_invalid')
+        path = os.fspath(config_path)
+        checked('\x00' not in path, 'wechat_env_invalid')
+        env.update({key: path for key in _WECHAT_CONFIG_ENV})
+    env.update(WX_KEY_BIN=WECHAT_KEY_BIN, WECHAT_CLI_DISABLE_AUTO_REFRESH='1')
+    return env
 
 
 def ingest_page(messages, cursor):
@@ -264,9 +282,9 @@ def qq_page(envelope, source):
     return messages, messages[-1]['id'] if messages else cursor, messages[-1]['time'] if messages else ''
 
 
-def cli_json(args):
+def cli_json(args, env=None):
     try:
-        result = subprocess.run(args, capture_output=True, timeout=45, check=False)
+        result = subprocess.run(args, env=env, capture_output=True, timeout=45, check=False)
         checked(result.returncode == 0, 'cli_read_failed')
         checked(len(result.stdout) <= MAX_RESPONSE, 'cli_response_too_large')
         return json.loads(result.stdout)
@@ -332,7 +350,8 @@ def run_once(config, client=None, read_cli=cli_json):
                 # including a new source whose server-side sentinel is zero.
                 after = ['--after-message', cursor] if int(cursor) else []
                 envelope = read_cli([config['wechat_cli'], 'history', chat, '--view', 'agent', '--order', 'asc', *after,
-                                     '--limit', '200', '--strict-read-only'])
+                                     '--limit', '200', '--strict-read-only', '--include-media-paths', 'false'],
+                                    env=wechat_env())
                 messages, new_cursor, latest = wechat_page(envelope, source)
             else:
                 checked(bool(config.get('qq_cli')), 'qq_cli_not_configured')

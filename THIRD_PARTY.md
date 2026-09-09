@@ -58,3 +58,5 @@ GTD 在此作为事项处理方法参考：[官方五步介绍](https://gettingt
 2026-09-09核对：`family_wechat_media.py`依据已观测的V2分段格式独立实现，格式参照[wechatauto-replica媒体模块](https://github.com/fanyuantaier/wechatauto-replica/blob/main/wechatauto/media.py)及其[Apache-2.0许可](https://raw.githubusercontent.com/fanyuantaier/wechatauto-replica/main/LICENSE)；没有复制其下载器、取钥程序或源代码。仅支持既有密钥下的V2和已验证WXGF HEVC首帧，不是通用微信图片协议实现。后续若复制第三方代码，须另外保留其许可与归属。
 
 AES调用macOS系统CommonCrypto的公开API，签名依据[Apple官方头文件](https://github.com/apple-oss-distributions/CommonCrypto/blob/main/include/CommonCryptor.h)，不复制或分发系统库。FFmpeg作为安装者选择的外部命令执行，固定HEVC输入及本地文件/管道协议；其不同构建适用的LGPL/GPL条款见[FFmpeg许可说明](https://ffmpeg.org/legal.html)及[协议文档](https://ffmpeg.org/ffmpeg-protocols.html)。当前机器构建为GPLv3+，不把该二进制打包为本项目MIT内容。微信CLI、账号、密钥与媒体同样不随公开源码分发。
+
+本机CLI适配还核对了路径查找行为：`strict-read-only`本身不关闭默认的图片缓存读取。文字查询显式关闭`include-media-paths`；媒体查询关闭`include-local-paths`并开启`include-debug`保留资源元数据，随后由本应用检查对应群和月份中的固定候选。只支持固定构建，第三方CLI升级须重新验证这些参数和返回契约。
