@@ -16,6 +16,7 @@ import family_llm
 import family_reading
 import family_review
 import family_task_focus
+import family_media
 
 TZ = family_review.TIMEZONE
 MAX_ATTEMPTS = 3
@@ -148,6 +149,11 @@ class Store:
                 CREATE TABLE IF NOT EXISTS agent_message_attachments (
                     source_id TEXT NOT NULL, message_id TEXT NOT NULL, upload_id TEXT NOT NULL,
                     PRIMARY KEY(source_id,message_id,upload_id));
+                CREATE TABLE IF NOT EXISTS agent_media (
+                    source_id TEXT NOT NULL, message_id TEXT NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
+                    updated TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', upload_id TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY(source_id,message_id));
                 CREATE TABLE IF NOT EXISTS agent_jobs (
                     id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
                     next_try TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', done INTEGER NOT NULL DEFAULT 0);
@@ -322,9 +328,11 @@ class Store:
             except AgentError:
                 unavailable.append(row['upload_id']); continue  # No metadata/access from stale links.
             attachments.append(upload_info(attachment))
+        media = c.execute('SELECT state,attempts FROM agent_media WHERE source_id=? AND message_id=?',
+                          (source['id'], message['id'])).fetchone()
         return dict(child_id=source['child_id'], source_id=source['id'], message_id=message['id'],
                     source_name=source['name'], message=message, attachments=attachments,
-                    unavailable_attachment_ids=unavailable)
+                    unavailable_attachment_ids=unavailable, media=dict(media) if media else None)
 
     def message(self, obj, upload_info):
         if not isinstance(obj, dict) or set(obj) != {'child_id', 'source_id', 'message_id'}:
@@ -349,8 +357,12 @@ class Store:
                 # Parent-owned teaching material may serve both children. Do not claim
                 # reading_uploads or grant child access; recheck ownership on every read.
                 c.execute('INSERT OR IGNORE INTO agent_message_attachments VALUES (?,?,?)', args)
+                c.execute("UPDATE agent_media SET state='skipped',error='' WHERE source_id=? AND message_id=? AND state IN ('pending','error')", args[:2])
             else:
                 c.execute('DELETE FROM agent_message_attachments WHERE source_id=? AND message_id=? AND upload_id=?', args)
+                # Parent removal also stops an in-flight/future automatic reattachment.
+                c.execute("""INSERT INTO agent_media(source_id,message_id,state) VALUES (?,?,'dismissed')
+                    ON CONFLICT(source_id,message_id) DO UPDATE SET state='dismissed',error=''""", args[:2])
             return self._message_view(c, source, message, upload_info)
 
     def snapshot(self):
@@ -652,6 +664,8 @@ def run_once(app, now=None):
         store._runtime('running', now)
         created = processed = failed = 0
         try:
+            media = family_media.run_one(app, store, now)
+            if media['state'] == 'error': failed += 1
             try:
                 planned = _planned_reviews(store, now)
                 for candidate in planned:
@@ -789,8 +803,9 @@ def run_once(app, now=None):
                 exhausted = c.execute('SELECT COUNT(*) FROM agent_jobs WHERE done=0 AND attempts>=?', (MAX_ATTEMPTS,)).fetchone()[0]
             state = 'needs_attention' if failed or unresolved else 'ready'
             store._runtime(state, now, '部分任务已达到3次自动尝试上限，已暂停自动调用；原资料保留，可在助手状态中重试或手动处理。' if exhausted else
+                           '图片原件暂未自动保存，可打开通知手动补充；其他家庭功能继续可用。' if media['state'] == 'error' and failed == 1 and not unresolved else
                            '部分资料尚未整理成功；原资料保留，稍后重试或查看来源状态。' if failed or unresolved else '')
-            return {'state': state, 'created': created, 'processed': processed, 'failed': failed}
+            return {'state': state, 'created': created, 'processed': processed, 'failed': failed, 'media': media}
         except Exception:
             store._runtime('error', now, '本次Agent检查未完成；原资料保留，请查看服务运行状态。')
             raise

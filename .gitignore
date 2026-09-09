@@ -82,7 +82,11 @@
 !/test_today_ui.cjs
 
 !/family_agent.py
+!/family_media.py
+!/test_media.py
 !/family_collect.py
+!/family_wechat_media.py
+!/test_wechat_media.py
 !/test_agent.py
 !/test_agent_http.py
 !/test_agent_ui.cjs
