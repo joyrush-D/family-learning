@@ -62,6 +62,7 @@ function fixtures(base){
     assert.equal(await p.locator('[data-today-event="cancelled"],[data-today-event="cancelled-link"],[data-today-event="tomorrow"],[data-today-event="done-linked"]').count(),0);
     assert.equal(await p.locator('[data-today-event] input[type="checkbox"]').count(),0,'calendar-only events do not invent completion');
     assert.equal(await first.locator('[data-today-event="unlinked"]').count(),1);
+    assert.equal(await second.locator('.today-priorities .today-empty').count(),0,'saved appointments must not be labelled as an empty day');
     assert.match(await first.locator('.today-school').innerText(),/虚构数学.*虚构语文/);
     assert.match(await second.locator('.today-school').innerText(),/课表.*未录入/);
     assert.deepEqual(await p.locator('nav [data-page]').evaluateAll(xs=>xs.map(x=>x.dataset.page)),['home','study','tasks','calendar','more']);
@@ -72,6 +73,14 @@ function fixtures(base){
     assert.equal(resources.some(x=>/growth-world\.js|three\.(core|module)/.test(x)),false,'homepage never requests Three.js');
     const position=await first.locator('.today-priorities [data-today-task] h3').first().boundingBox();
     assert.ok(position&&position.y>=0&&position.y+position.height<820,'first actual task is in first screen');
+    if(width===360){
+     assert.ok(position&&position.y+position.height<560,'first actual task title stays above the mobile fold');
+     const firstTask=first.locator('.today-priorities [data-today-task]').first();
+     assert.equal(await firstTask.locator('.task-requirement').count(),1,'task requirement remains visible');
+     assert.equal(await firstTask.locator('details .task-requirement').count(),0,'task requirement is not hidden in details');
+     assert.equal(await firstTask.locator('[data-study-task-add]').isVisible(),true,'arrange action remains visible');
+     assert.equal(await firstTask.locator('[data-task-decisions]').isVisible(),true,'dismiss action remains visible');
+    }
     await proof(p,'today-'+width);
     for(const [page,title] of [['learning','学习任务与进展'],['growth','成长记录'],['reading','把一本书，变成一段旅程。'],['care','陪伴建议与反馈'],['agent','成长助手'],['print','家庭打印站'],['sources','来源与附件']]){
      await p.locator('nav [data-page="more"]').click();await p.locator('#content [data-page="'+page+'"]').click();

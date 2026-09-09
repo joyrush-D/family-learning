@@ -46,3 +46,41 @@ nav button .nav-symbol{display:inline-block;margin-right:10px}
 .book-body h2,.reading-criteria,.calendar-requirements{overflow-wrap:anywhere}.book-body{min-width:0}
 
 .more-links{display:grid;gap:12px;max-width:680px}.more-links button{text-align:left;min-height:48px}
+
+/* Everyday work has one visual priority; requirements and decisions stay visible. */
+.top button{background:transparent;color:var(--muted)}
+.today-heading{margin:16px 0 24px}.today-heading>button{background:transparent}
+.today-children{gap:24px}.today-child{background:var(--panel);border-radius:20px;border-top:3px solid #7acdb1;padding:22px}
+.today-child:nth-child(even){border-top-color:#b6a6e5}.today-child-head{padding-bottom:8px}
+.today-child-head h2{font-size:24px;letter-spacing:.02em}.today-child-head>button{background:transparent;border-color:transparent;font-weight:400}
+.today-study-entry{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:12px 0 24px;padding:14px 16px;background:#233e42;border-color:#496e69;color:#c5f9e4}
+.today-study-entry>span{font-size:14px;font-weight:400}.today-study-entry>strong{font-size:15px}
+.today-section-label{display:flex;align-items:center;justify-content:space-between;color:var(--ink);font-size:14px;font-weight:650;margin-bottom:6px}
+.today-count{font-size:12px;color:var(--muted);font-weight:400}
+.task .checkrow{position:relative;display:block}.task .checkhit,.task .task-dismiss-icon{position:absolute;right:0;top:0;width:44px;margin:0}
+.task .task-meta{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;padding-right:44px;min-height:32px}
+.task .task-meta .due{margin:0}.task h3{padding-right:36px;font-size:18px;margin:8px 0;line-height:1.55}
+.task .task-original-due{color:var(--muted);font-size:12px;margin:4px 0}
+.task .task-requirement{font-size:14px;color:var(--ink);line-height:1.75;margin:8px 0 12px}
+.tasktools{gap:6px 10px}.tasktools>button:not(.primary){background:transparent;border-color:transparent;color:var(--muted)}
+.tasktools>button[data-task]{color:var(--ink)}.tasktools>button:hover{border-color:#547d85}
+.task-reference{display:inline-block;vertical-align:top;margin:10px 18px 0 0;max-width:100%}.task-reference>summary{min-height:44px;align-content:center}
+.task-reference[open]{display:block}.today-child .task{padding:18px 0;border-top:0}
+.today-child .task h3{font-size:19px;margin:7px 0}.today-child .tasktools{gap:4px 8px}
+.today-child .tasktools button{padding:8px 10px}.today-school{border-top:0;margin:18px 0 0;padding:10px 0;color:var(--muted)}
+.today-school>p{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}.today-school button{min-height:44px}
+.today-child-footer{gap:4px;padding-top:6px}.today-child-footer button{min-height:44px}
+@media(max-width:850px){
+ html{scroll-padding-top:64px;scroll-padding-bottom:calc(96px + env(safe-area-inset-bottom))}
+ body[data-page=home] .top #date,body[data-page=study] .top #date,body[data-page=tasks] .top #date{display:none}
+ .top{padding-bottom:4px}.top>div:last-child{display:flex;gap:2px;justify-content:space-between;width:100%}.top button{padding:7px 9px;font-size:12px}
+ .today-heading{margin:10px 0 14px}.today-heading h1{font-size:26px}.today-heading>button{padding:8px 0;font-size:12px;border-color:transparent}
+ .today-jump{position:sticky;top:0;z-index:2;background:var(--paper);padding:8px 0;margin:0 0 10px;gap:8px}
+ .today-jump a{flex:1;text-align:center;padding:8px;border-radius:12px;background:var(--panel);font-size:14px}
+ .today-children{gap:20px}.today-child{padding:16px;border-radius:16px;scroll-margin-top:64px}
+ .today-child-head h2{font-size:22px}.today-child-head>button{font-size:12px;padding:8px}
+ .today-study-entry{margin:8px 0 18px;padding:11px 12px}.today-study-entry>strong{font-size:14px}
+ .today-child .task h3{font-size:18px}.today-child .tasktools{gap:2px 6px}.today-child .tasktools button{font-size:12px;padding:8px}
+ .task-reference{margin:4px 14px 0 0}.today-child .task-reference summary{font-size:12px}
+ nav button>span:last-child{font-size:11px}nav{padding-bottom:calc(8px + env(safe-area-inset-bottom))}
+}
