@@ -2,7 +2,7 @@ const basePath=new URL('.',location.href).pathname;
 const endpoint=path=>basePath+path.replace(/^\//,'');
 const apiFetch=(path,options)=>fetch(endpoint(path),options);
 let data, page='home', child='', subject='', taskView='待跟进', busy=false;
-let studyChildID='',studyTaskID='',studyRecordContext=null,schoolRecordContext=null,schoolRecordOpening=false;
+let studyChildID='',studyDay='',studyTaskID='',studyRecordContext=null,schoolRecordContext=null,schoolRecordOpening=false;
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const status=t=>t.update?.status || (['待跟进','进行中','已完成','不参加','不适用','已归档'].includes(t.original_status)?t.original_status:t.original_status.includes('已归档')?'已归档':'待跟进');
 const taskDismissed=t=>['不参加','不适用'].includes(status(t));
@@ -705,15 +705,15 @@ setInterval(async()=>{if(!data?.agent?.enabled||document.hidden||document.queryS
 
 function mountStudy(){
  const root=$('#studyRoot');if(!window.FamilyStudy){root.innerHTML=empty('放学后安排暂未加载，请刷新后重试。');return}
- window.FamilyStudy.mount({root,child_id:studyChildID||data.children[0]?.id,onChildChanged:id=>studyChildID=id,task_id:studyTaskID,onTaskSelected:()=>studyTaskID='',day:data.today,children:data.children,apiFetch,token:data.token,
+ window.FamilyStudy.mount({root,child_id:studyChildID||data.children[0]?.id,onChildChanged:id=>studyChildID=id,onDayChanged:day=>studyDay=day,task_id:studyTaskID,onTaskSelected:()=>studyTaskID='',day:studyDay||data.today,children:data.children,apiFetch,token:data.token,
   onSaved:async()=>{try{const response=await apiFetch('/api/state',{signal:AbortSignal.timeout(12000)});if(response.ok)data=await response.json()}catch{}},
   onTask:async id=>{const origin=$('#studyRoot');try{const response=await apiFetch('/api/state',{signal:AbortSignal.timeout(12000)});if(!response.ok)throw Error();const latest=await response.json();if(!origin?.isConnected)return;const task=latest.tasks.find(t=>t.id===id);if(!task)throw Error();data=latest;child=task.child;taskView=taskDismissed(task)?'已搁置':'全部';page='tasks';render();const target=document.querySelector('[data-query-target="task:'+id+'"]');target?.scrollIntoView({block:'center'});target?.focus({preventScroll:true})}catch{toast('最新决定暂时无法读取，请重试。')}},
   onRecord:id=>{const record=data.records.find(r=>r.id===Number(id));if(!record){toast('记录已保存，请刷新后查看。');return}child=record.child;page='learning';render();const target=document.querySelector('[data-query-target="record:'+Number(id)+'"]');revealLearningTarget(target)}
  });
 }
-document.addEventListener('click',e=>{const b=e.target.closest('button[data-study-child]');if(!b||!data)return;studyChildID=b.dataset.studyChild;studyTaskID='';page='study';render();window.scrollTo(0,0)});
+document.addEventListener('click',e=>{const b=e.target.closest('button[data-study-child]');if(!b||!data)return;studyChildID=b.dataset.studyChild;studyDay=data.today;studyTaskID='';page='study';render();window.scrollTo(0,0)});
 
-document.addEventListener('click',e=>{const b=e.target.closest('[data-study-task-add]');if(!b||!data)return;const task=data.tasks.find(t=>t.id===b.dataset.studyTaskAdd&&!taskClosed(t)),owner=data.children.find(c=>c.name===task?.child);if(!owner)return;studyChildID=owner.id;studyTaskID=task.id;page='study';render();window.scrollTo(0,0)});
+document.addEventListener('click',e=>{const b=e.target.closest('[data-study-task-add]');if(!b||!data)return;const task=data.tasks.find(t=>t.id===b.dataset.studyTaskAdd&&!taskClosed(t)),owner=data.children.find(c=>c.name===task?.child);if(!owner)return;studyChildID=owner.id;studyDay=data.today;studyTaskID=task.id;page='study';render();window.scrollTo(0,0)});
 
 const studyOwnedFields=['child','day','category','subject','title','note','source','assistance'];
 function resetStudyRecord(){studyRecordContext=null;$('#studyRecordNotice')?.remove();const f=$('#recordForm');for(const k of studyOwnedFields){if(f.elements[k])f.elements[k].disabled=false}}
