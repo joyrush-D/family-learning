@@ -307,6 +307,55 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
         self.assertFalse(normal_item['needs_task_details'])
         self.store.act(dict(id=normal_item['id'], action='accept'))
 
+    def test_qq_placeholders_stay_unknown_until_parent_writes_specific_action(self):
+        cases = [
+            '[包含未读取的非文字内容]',
+            '[已撤回，正文未读取]',
+            '[包含未读取的非文字内容]\n[已撤回，正文未读取]',
+            '[图片][包含未读取的非文字内容] [已撤回，正文未读取]',
+            '[image：内容未读取，仅保留消息说明]',
+        ]
+        for index, source_text in enumerate(cases):
+            self.assertTrue(agent._needs_task_details(source_text), source_text)
+        self.assertFalse(agent._needs_task_details('请打印材料\n[包含未读取的非文字内容]'))
+        self.assertFalse(agent._needs_task_details('请核对图片里的要求 [已撤回，正文未读取]'))
+
+        # The model may quote a harmless-looking substring, but the complete cited
+        # source is still only an unread/recalled placeholder.
+        selected = None
+        for index, source_text in enumerate(cases):
+            ref = 'message:synthetic-group:qq-placeholder-' + str(index)
+            quote = '说明' if '说明' in source_text else '未读取'
+            result = {'proposals': [dict(title_quote=quote, focus='school', due='',
+                                         evidence=[dict(ref=ref, quote=quote)])]}
+            with patch.object(agent.family_llm, '_chat_json', return_value=result):
+                selected = agent._select('school', [dict(ref=ref, text=source_text)], as_of='2026-02-10')
+            self.assertEqual(selected[0]['title'], '待核对：[资料]')
+            self.assertEqual(selected[0]['body'], agent.FOCUS['school'])
+
+        fp = self.store._job('qq-placeholder', 'qq-placeholder', self.now)
+        self.store._save('qq-placeholder', fp, [dict(child_id='child-1', kind='school',
+                           title=selected[0]['title'], body=selected[0]['body'],
+                           evidence=selected[0]['evidence'], due='')], self.now)
+        item = next(row for row in self.store.snapshot()['items'] if row['title'] == '待核对：[资料]')
+        with self.assertRaises(agent.AgentError):
+            self.store.act(dict(id=item['id'], action='accept'))
+        accepted = self.store.act(dict(id=item['id'], action='accept',
+                                       title='先向老师核对原件',
+                                       body='先向老师核对原件，再按确认后的具体要求安排。'))
+        self.assertEqual(accepted['state'], 'accepted')
+        with self.app.connect() as c:
+            task = dict(c.execute('SELECT * FROM manual_tasks').fetchone())
+        self.assertEqual(task['title'], '先向老师核对原件')
+
+        normal_text = '请打印材料\n[包含未读取的非文字内容]'
+        normal_ref = 'message:synthetic-group:qq-normal'
+        normal_result = {'proposals': [dict(title_quote='请打印材料', focus='school', due='',
+                                             evidence=[dict(ref=normal_ref, quote='请打印材料')])]}
+        with patch.object(agent.family_llm, '_chat_json', return_value=normal_result):
+            normal = agent._select('school', [dict(ref=normal_ref, text=normal_text)], as_of='2026-02-10')
+        self.assertEqual(normal[0]['title'], '待核对：请打印材料')
+
     def test_school_history_uses_beijing_date_and_preserves_current_or_uncertain_requirements(self):
         # The caller's UTC date is still September 8; this run is September 9 in China.
         self.now = dt.datetime(2026, 9, 8, 16, 15, tzinfo=dt.timezone.utc)

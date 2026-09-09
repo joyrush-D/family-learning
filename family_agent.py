@@ -13,6 +13,7 @@ import re
 import sqlite3
 
 import family_llm
+import family_reading
 import family_review
 import family_task_focus
 
@@ -26,11 +27,12 @@ FOCUS = {
     'clarify': '这份记录还有哪些不清楚的地方？可以补充当时情境、原件或孩子自己的说法。',
 }
 
-_COLLECTOR_PLACEHOLDER = re.compile(r'\s*(?:待核对\s*[:：]\s*)?\[(?:[a-z_]{1,40}\s*[:：]\s*内容未读取[^\]]*|图片|语音|视频|文件)\]\s*', re.IGNORECASE)
+_COLLECTOR_PLACEHOLDER = re.compile(r'\[(?:[a-z_]{1,40}\s*[:：]\s*内容未读取[^\]]*|图片|语音|视频|文件|资料|包含未读取的非文字内容|已撤回[，,]\s*正文未读取)\]', re.IGNORECASE)
 
 def _needs_task_details(title):
     """Return whether a collector placeholder is being mistaken for a task."""
-    return bool(_COLLECTOR_PLACEHOLDER.fullmatch(str(title or '')))
+    text = re.sub(r'^\s*待核对\s*[:：]\s*', '', str(title or ''))
+    return bool(_COLLECTOR_PLACEHOLDER.search(text)) and not _COLLECTOR_PLACEHOLDER.sub('', text).strip()
 SCHEMA = {'type': 'object', 'additionalProperties': False, 'required': ['proposals'], 'properties': {
     'proposals': {'type': 'array', 'maxItems': 5, 'items': {'type': 'object', 'additionalProperties': False,
         'required': ['title_quote', 'focus', 'due', 'evidence'], 'properties': {
@@ -143,6 +145,9 @@ class Store:
                 CREATE TABLE IF NOT EXISTS agent_messages (
                     source_id TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL,
                     processed INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(source_id,id));
+                CREATE TABLE IF NOT EXISTS agent_message_attachments (
+                    source_id TEXT NOT NULL, message_id TEXT NOT NULL, upload_id TEXT NOT NULL,
+                    PRIMARY KEY(source_id,message_id,upload_id));
                 CREATE TABLE IF NOT EXISTS agent_jobs (
                     id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
                     next_try TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', done INTEGER NOT NULL DEFAULT 0);
@@ -272,17 +277,93 @@ class Store:
                           (cursor, checked, checked, latest or (previous['last_message_time'] if previous else ''), '', receipt, source['id']))
         return {'ok': True, 'replayed': False, 'inserted': inserted, 'cursor': current if error else cursor}
 
+    def _message_context(self, c, obj):
+        child_id = _text(obj, 'child_id', 80, True)
+        for key in ('source_id', 'message_id'):
+            if not re.fullmatch(r'[A-Za-z0-9_:@.\-]+', _text(obj, key, 160, True)):
+                raise AgentError('来源或消息编号不正确')
+        if child_id not in {p['id'] for p in self.profiles(c)}:
+            raise AgentError('孩子档案不存在', 404, 'child_not_found')
+        source = next((s for s in self._config()['sources'] if s['id'] == obj['source_id']), None)
+        if source is None or source['child_id'] != child_id:
+            raise AgentError('消息来源不属于所选孩子', 403, 'source_not_allowed')
+        saved = c.execute('SELECT * FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
+        self._binding(source, saved)
+        message = c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
+                            (source['id'], obj['message_id'])).fetchone()
+        if saved is None or message is None:
+            raise AgentError('已保存的学校消息不存在', 404, 'message_not_found')
+        return source, json.loads(message['payload'])
+
+    def _message_upload(self, c, child_id, ident):
+        if not isinstance(ident, str) or not re.fullmatch(r'[a-f0-9]{32}', ident):
+            raise AgentError('原件编号不正确')
+        row = c.execute('SELECT * FROM uploads WHERE id=?', (ident,)).fetchone()
+        directory = self.data / 'uploads'; path = directory / ident
+        try:
+            available = (row is not None and type(row['size']) is int and row['size'] > 0
+                         and not directory.is_symlink() and not path.is_symlink() and path.is_file()
+                         and path.stat().st_size == row['size'])
+        except OSError:
+            available = False
+        if not available:
+            raise AgentError('原件暂不可读取，请重新上传或解除关联', 404, 'attachment_unavailable')
+        try:
+            family_reading.validate_record_attachments(c, child_id, [ident])
+        except family_reading.ReadingError:
+            raise AgentError('原件已归属另一位孩子，请使用对应孩子的资料', 403, 'attachment_child_conflict') from None
+        return row
+
+    def _message_view(self, c, source, message, upload_info):
+        attachments = []; unavailable = []
+        for row in c.execute('SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=? ORDER BY upload_id',
+                             (source['id'], message['id'])):
+            try: attachment = self._message_upload(c, source['child_id'], row['upload_id'])
+            except AgentError:
+                unavailable.append(row['upload_id']); continue  # No metadata/access from stale links.
+            attachments.append(upload_info(attachment))
+        return dict(child_id=source['child_id'], source_id=source['id'], message_id=message['id'],
+                    source_name=source['name'], message=message, attachments=attachments,
+                    unavailable_attachment_ids=unavailable)
+
+    def message(self, obj, upload_info):
+        if not isinstance(obj, dict) or set(obj) != {'child_id', 'source_id', 'message_id'}:
+            raise AgentError('请提供唯一的孩子、来源和消息编号')
+        with self._db() as c:
+            c.execute('BEGIN')
+            source, message = self._message_context(c, obj)
+            return self._message_view(c, source, message, upload_info)
+
+    def message_attachment(self, obj, upload_info):
+        if not isinstance(obj, dict) or set(obj) != {'child_id', 'source_id', 'message_id', 'attachment_id', 'action'}:
+            raise AgentError('原件关联结构不正确')
+        ident = _text(obj, 'attachment_id', 32, True)
+        if not re.fullmatch(r'[a-f0-9]{32}', ident) or obj['action'] not in ('attach', 'detach'):
+            raise AgentError('原件编号或关联操作不正确')
+        with self._db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            source, message = self._message_context(c, obj)
+            args = (source['id'], message['id'], ident)
+            if obj['action'] == 'attach':
+                self._message_upload(c, source['child_id'], ident)
+                # Parent-owned teaching material may serve both children. Do not claim
+                # reading_uploads or grant child access; recheck ownership on every read.
+                c.execute('INSERT OR IGNORE INTO agent_message_attachments VALUES (?,?,?)', args)
+            else:
+                c.execute('DELETE FROM agent_message_attachments WHERE source_id=? AND message_id=? AND upload_id=?', args)
+            return self._message_view(c, source, message, upload_info)
+
     def snapshot(self):
         try: config = self._config()
         except AgentError as error:
-            return dict(enabled=False, state='error', last_run='', last_error=str(error), pending_count=0, items=[], sources=[])
+            return dict(enabled=False, state='error', last_run='', last_error=str(error), pending_count=0, items=[], sources=[], linked_upload_ids=[])
         with self._db() as c:
             runtime = c.execute('SELECT * FROM agent_runtime WHERE id=1').fetchone()
             items = [dict(row) for row in c.execute("SELECT * FROM agent_items WHERE state IN ('pending','accepted') ORDER BY state='pending' DESC,updated DESC,id LIMIT 100")]
             for row in items:
                 row['evidence'] = json.loads(row['evidence']); row['plan'] = json.loads(row['plan']); row.pop('job_id')
                 row['needs_task_details'] = row['kind'] == 'school' and _needs_task_details(row['title'])
-            sources = []
+            sources = []; linked_upload_ids = set()
             for source in config['sources']:
                 saved = c.execute('SELECT * FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
                 try: self._binding(source, saved); binding_error = ''
@@ -292,13 +373,20 @@ class Store:
                     'error': binding_error or (saved['error'] if saved else ''),
                     'unread_count': saved['unread_count'] if saved else 0,
                     'cursor': saved['cursor'] if saved else source['cursor']})
+                if saved and not binding_error:
+                    for link in c.execute('''SELECT DISTINCT a.upload_id FROM agent_message_attachments a
+                        JOIN agent_messages m ON m.source_id=a.source_id AND m.id=a.message_id WHERE a.source_id=?''', (source['id'],)):
+                        try: self._message_upload(c, source['child_id'], link['upload_id'])
+                        except AgentError: continue
+                        linked_upload_ids.add(link['upload_id'])
             failed = c.execute('SELECT COUNT(*) FROM agent_jobs WHERE done=0 AND attempts>=?', (MAX_ATTEMPTS,)).fetchone()[0]
             pending = c.execute("SELECT COUNT(*) FROM agent_items WHERE state='pending'").fetchone()[0]
         state = runtime['state'] if runtime else 'waiting'
         if state == 'running' and runtime['last_run'] < (_now() - dt.timedelta(minutes=10)).isoformat(): state = 'interrupted'
         return dict(enabled=config['enabled'], state=state if config['enabled'] else 'disabled',
                     last_run=runtime['last_run'] if runtime else '', last_error=runtime['last_error'] if runtime else '',
-                    failed_jobs=failed, pending_count=pending, items=items, sources=sources)
+                    failed_jobs=failed, pending_count=pending, items=items, sources=sources,
+                    linked_upload_ids=sorted(linked_upload_ids))
 
     def act(self, obj):
         if not isinstance(obj, dict) or set(obj) - {'id', 'action', 'title', 'due', 'body', 'action_text',
@@ -440,6 +528,9 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None):
             cited.append({'ref': ref, 'text': text})
         if not any(title in refs[entry['ref']] for entry in cited):
             title = cited[0]['text'].strip()[:120]
+        if mode == 'school' and all(_needs_task_details(refs[entry['ref']]) for entry in cited):
+            # A model may quote only a word inside a marker; preserve the gap.
+            title = '[资料]'
         if due:
             if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', due) or not any(due in item['text'] for item in cited): raise AgentError('模型日期缺少原文依据')
             dt.date.fromisoformat(due)

@@ -76,7 +76,7 @@
   const taskID=view.task_id;if(!taskID)return;
   const existing=snapshot.items.find(item=>String(item.task_id)===String(taskID));
   if(existing){view.task_id='';const target=[...root()?.querySelectorAll('[data-study-item]')||[]].find(item=>item.dataset.studyItem===String(existing.id));if(target){target.tabIndex=-1;target.scrollIntoView({block:'center'});target.focus({preventScroll:true})}return}
-  if(!snapshot.available_tasks.some(task=>String(task.id)===String(taskID))){view.task_id='';return}
+  if(!snapshot.available_tasks.some(task=>String(task.id)===String(taskID))){view.task_id='';status('所选事项暂不可安排，请刷新后重新从事项卡进入');return}
   const form=root()?.querySelector('[data-study-form="new"]');if(!form)return;
   if(form.elements.task_id.value!==String(taskID)&&JSON.stringify(formValues(form))!==form.dataset.studyInitial){form.closest('details').open=true;status('已有未提交作业草稿，请先加入今晚或清空草稿，再安排刚选择的事项。');return}
   view.task_id='';form.closest('details').open=true;form.elements.task_id.value=String(taskID);setSource(form);remember();status('已带入所选事项，请核对后加入今晚。');form.scrollIntoView({block:'center'});

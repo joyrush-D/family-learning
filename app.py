@@ -1231,6 +1231,11 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/agent/collector': return self.reply(200,agent_store().collector_plan())
             if path=='/api/settings': return self.reply(200,settings_store().snapshot())
             if path=='/api/agent': return self.reply(200,agent_store().snapshot())
+            if path=='/api/agent/message':
+                query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+                if any(len(values)!=1 for values in query.values()):
+                    raise family_agent.AgentError('请提供唯一的孩子、来源和消息编号')
+                return self.reply(200,agent_store().message({key:values[0] for key,values in query.items()},upload_info))
             if path=='/api/study':
                 query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
                 if set(query)!={'child_id','day'} or any(len(v)!=1 for v in query.values()):
@@ -1317,6 +1322,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200,family_child.parent_action(SimpleNamespace(**globals()),path.removeprefix('/api/child-access/'),obj))
             if path=='/api/agent/ingest': return self.reply(200,agent_store().ingest(obj))
             if path=='/api/agent/action': return self.reply(200,agent_store().act(obj))
+            if path=='/api/agent/message/attachment': return self.reply(200,agent_store().message_attachment(obj,upload_info))
             if path=='/api/study/day': return self.reply(200,study_store().save_day(obj))
             if path=='/api/study/item': return self.reply(200,study_store().save_item(obj))
             if path=='/api/study/action': return self.reply(200,study_store().action(obj))
