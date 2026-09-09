@@ -36,6 +36,12 @@ class Mock(BaseHTTPRequestHandler):
             elif mode=='empty': result['choices'][0]['message']['content']=''
             elif mode=='length': result['choices'][0]['finish_reason']='length'
             elif mode=='bad_outer': result=[]
+            if self.path=='/v1/responses':
+                result={'status':'completed','output':[
+                    {'type':'reasoning','summary':[{'type':'summary_text','text':'PRIVATE_REASONING'}]},
+                    {'type':'message','role':'assistant','status':'completed','content':[
+                        {'type':'output_text','text':json.dumps(DRAFT,ensure_ascii=False)}]}]}
+                if isinstance(mode,dict): result=mode
         wire=json.dumps(result).encode()
         if audio and mode=='bad_json': wire=b'PRIVATE_RESPONSE invalid JSON'
         if mode=='large': wire=b'x'*(llm.MAX_RESPONSE+1)
@@ -210,6 +216,38 @@ try:
             except llm.LLMUnavailable as error:
                 assert 'password' not in str(error) and 'synthetic-secret' not in str(error)
             else: raise AssertionError('unsafe ASR endpoint accepted')
+    with patch.dict(os.environ,{'FAMILY_LLM_MODEL':'synthetic-model','FAMILY_LLM_API_KEY':'synthetic-secret',
+                               'FAMILY_LLM_BASE_URL':f'http://127.0.0.1:{server.server_port}/v1/responses',
+                               'FAMILY_LLM_REASONING_EFFORT':'low'},clear=True):
+        state['mode']='ok'
+        assert llm.extract_draft('虚构数学测验85/100',images=[dict(data=b'synthetic-image',mime='image/png')])==DRAFT
+        path,body,key=state['calls'][-1]
+        assert path=='/v1/responses', 'A full Responses endpoint must not gain /chat/completions'
+        assert body['store'] is False and body['stream'] is False and body['max_output_tokens']==3000
+        assert body['reasoning']=={'effort':'low'} and 'reasoning_effort' not in body
+        assert body['text']['format']==dict(type='json_schema',name='family_learning_draft',strict=True,schema=llm.SCHEMA)
+        assert body['input'][0]['role']=='system' and body['input'][0]['content']==llm.PROMPT
+        assert body['input'][1]['content']==[
+            dict(type='input_text',text='虚构数学测验85/100'),
+            dict(type='input_image',image_url='data:image/png;base64,c3ludGhldGljLWltYWdl')]
+        assert not {'messages','tools','previous_response_id','max_tokens','response_format'} & body.keys()
+        assert key=='Bearer synthetic-secret'
+        valid_message=dict(type='message',role='assistant',status='completed',content=[dict(type='output_text',text=json.dumps(DRAFT))])
+        for invalid in [dict(status='incomplete',output=[valid_message]),dict(status='failed',output=[valid_message]),
+                        dict(status='completed',output=[]),dict(status='completed',output=[dict(valid_message,role='user')]),
+                        dict(status='completed',output=[dict(valid_message,status='in_progress')]),
+                        dict(status='completed',output=[dict(valid_message,content=[dict(type='refusal',refusal='PRIVATE_RESPONSE')])]),
+                        dict(status='completed',output=[valid_message,dict(type='function_call',name='unsafe_tool')])]:
+            state['mode']=invalid
+            try: llm.extract_draft('虚构资料')
+            except llm.LLMDraftError as error:
+                assert 'PRIVATE_RESPONSE' not in str(error) and 'PRIVATE_REASONING' not in str(error)
+            else: raise AssertionError('An incomplete, refused or unexpected Responses output was accepted')
+        state['mode']='redirect';before_calls=len(state['calls'])
+        try: llm.extract_draft('虚构资料')
+        except llm.LLMDraftError: pass
+        else: raise AssertionError('Responses redirect accepted')
+        assert state['redirect_calls']==0 and len(state['calls'])==before_calls+1
 finally:
     server.shutdown();server.server_close()
 

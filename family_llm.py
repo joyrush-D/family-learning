@@ -3,6 +3,7 @@
 FAMILY_LLM_BASE_URL (for example http://127.0.0.1:1234/v1) and
 FAMILY_LLM_MODEL are required. FAMILY_LLM_API_KEY is optional for local servers.
 FAMILY_LLM_REASONING_EFFORT is sent only when explicitly configured; model support varies.
+Use a complete URL ending in /responses for a Responses API provider; other URLs are chat bases.
 Images are mappings with trusted ``data`` bytes and a JPEG/PNG/WebP ``mime``.
 FAMILY_ASR_URL is the complete transcription endpoint; FAMILY_ASR_MODEL defaults to base.
 FAMILY_ASR_API_KEY is optional for local transcription servers.
@@ -95,7 +96,8 @@ def validate_model(config,allow_empty=False):
         if config.get('reasoning_effort','') not in ('','none','minimal','low','medium','high','xhigh','max'): raise ValueError()
     except ValueError:
         raise LLMUnavailable('模型服务配置不正确，请检查后台配置') from None
-    return base+('/v1' if not parsed.path else '')+'/chat/completions',model
+    return (base if parsed.path.rstrip('/').endswith('/responses') else
+            base+('/v1' if not parsed.path else '')+'/chat/completions'),model
 
 
 def configuration(data_path=None):
@@ -200,11 +202,27 @@ def _chat_json(messages,schema,name,timeout=60,*,data_path=None):
     body=dict(model=model,messages=messages,
               response_format=dict(type='json_schema',json_schema=dict(name=name,strict=True,schema=schema)),
               temperature=0,max_tokens=3000,stream=False)
+    responses=endpoint.endswith('/responses')
+    if responses:
+        inputs=[]
+        for message in messages:
+            content=message['content']
+            if isinstance(content,list):
+                parts=[]
+                for part in content:
+                    if part['type']=='text': parts.append(dict(type='input_text',text=part['text']))
+                    elif part['type']=='image_url': parts.append(dict(type='input_image',image_url=part['image_url']['url']))
+                    else: raise ValueError('本次模型资料类型不支持')
+                content=parts
+            inputs.append(dict(role=message['role'],content=content))
+        body=dict(model=model,input=inputs,text=dict(format=dict(type='json_schema',name=name,strict=True,schema=schema)),
+                  temperature=0,max_output_tokens=3000,stream=False,store=False)
     effort=config['reasoning_effort']
     if effort:
         if effort not in ('none','minimal','low','medium','high','xhigh','max'):
             raise LLMUnavailable('模型推理参数配置不正确，请检查后台配置')
-        body['reasoning_effort']=effort
+        if responses: body['reasoning']=dict(effort=effort)
+        else: body['reasoning_effort']=effort
     headers={'Content-Type':'application/json','Accept':'application/json'}
     key=config['api_key']
     if key: headers['Authorization']='Bearer '+key
@@ -223,10 +241,24 @@ def _chat_json(messages,schema,name,timeout=60,*,data_path=None):
     if len(raw)>MAX_RESPONSE: raise LLMDraftError('模型返回内容过长，请缩小本次资料范围')
     try:
         result=json.loads(raw)
-        choice=result['choices'][0]
-        if choice.get('finish_reason')!='stop':
-            raise LLMDraftError('模型尚未完成'+output_name+'，请缩小本次资料范围后重试')
-        answer=choice['message']['content']
+        if responses:
+            if result.get('status')!='completed':
+                raise LLMDraftError('模型尚未完成'+output_name+'，请缩小本次资料范围后重试')
+            outputs=result['output']
+            if not isinstance(outputs,list) or any(item['type'] not in ('reasoning','message') for item in outputs):
+                raise ValueError()
+            replies=[item for item in outputs if item['type']=='message']
+            if len(replies)!=1 or replies[0]['role']!='assistant' or replies[0].get('status','completed')!='completed':
+                raise ValueError()
+            parts=replies[0]['content']
+            if not isinstance(parts,list) or not parts or any(part['type']!='output_text' for part in parts):
+                raise ValueError()
+            answer=''.join(part['text'] for part in parts)
+        else:
+            choice=result['choices'][0]
+            if choice.get('finish_reason')!='stop':
+                raise LLMDraftError('模型尚未完成'+output_name+'，请缩小本次资料范围后重试')
+            answer=choice['message']['content']
         if not isinstance(answer,str) or not answer.strip():
             raise LLMDraftError('模型未返回可核对的'+output_name+'，请重试或手动记录')
         draft=json.loads(answer)

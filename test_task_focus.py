@@ -1,5 +1,6 @@
 """python3 test_task_focus.py: isolated fictional follow-up choices and access checks."""
 from concurrent.futures import ThreadPoolExecutor
+import datetime as dt
 import http.client
 import json
 import os
@@ -22,7 +23,8 @@ with tempfile.TemporaryDirectory(prefix='synthetic-task-focus-') as folder, patc
     root=Path(folder).resolve();data=root/'private';data.mkdir()
     with patch.dict(os.environ,{'FAMILY_DATA':str(data)}):
         import app
-    with patch.multiple(app,ROOT=root,DATA=data,DB=data/'family.sqlite3'):
+    with patch.multiple(app,ROOT=root,DATA=data,DB=data/'family.sqlite3'), \
+         patch.object(app.family_study.Store,'_now',return_value=dt.datetime(2026,9,8,12,tzinfo=dt.timezone(dt.timedelta(hours=8)))):
         (root/'家庭运行规则.md').write_text('| child-1 | 示例甲 | 男 | 10岁 | 四年级 |\n')
         (root/'跟踪台账.md').write_text('| T01 | 示例甲 | 虚构学校事项 | 2026-09-09 | 待跟进 | 虚构通知 | 原始提交要求 |\n'
             '| T02 | 示例甲 | 虚构归档事项 | 2026-09-10 | 已归档（仅留存） | 虚构通知 | 原始要求 |\n')

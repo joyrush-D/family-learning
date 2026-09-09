@@ -5,6 +5,8 @@ import io
 import json
 from pathlib import Path
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -138,18 +140,77 @@ class AgentTests(unittest.TestCase):
                 self.assertEqual(connection.execute('SELECT COUNT(*) FROM agent_messages').fetchone()[0], 0)
                 self.assertEqual(connection.execute('SELECT cursor FROM agent_sources').fetchone()[0], '10')
 
-    def test_retry_limit_and_forged_evidence_never_create_a_fact(self):
+    def test_retry_limit_stops_same_fingerprint_until_manual_or_new_input(self):
         self.record()
         bad = {'proposals': [dict(title_quote='提高20分', focus='compare', due='', evidence=[{'ref': 'record:1', 'quote': '提高20分'}])]}
         with patch.object(agent.family_llm, '_chat_json', return_value=bad) as model:
-            for minutes in [0, 6, 17, 30]: agent.run_once(self.app, self.now + dt.timedelta(minutes=minutes))
+            for minutes in [0, 6, 17]: agent.run_once(self.app, self.now + dt.timedelta(minutes=minutes))
             self.assertEqual(model.call_count, 3)
+            # Each tick creates a fresh Store; a reopened process must still honor the cap.
+            reopened = agent.Store(self.app.connect, self.app.profiles, self.data)
+            self.assertEqual(reopened.snapshot()['failed_jobs'], 1)
+            agent.run_once(self.app, self.now + dt.timedelta(minutes=41))
+            self.assertEqual(model.call_count, 3)
+            self.assertIn('自动尝试上限', reopened.snapshot()['last_error'])
+        with self.app.connect() as c:
+            job = dict(c.execute('SELECT * FROM agent_jobs').fetchone())
+            self.assertEqual(job['attempts'], agent.MAX_ATTEMPTS)
+            self.assertIn('达到自动重试上限', job['error'])
+            self.assertIn('人工重试', job['error'])
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0], 1)
+            self.assertEqual(c.execute('SELECT note FROM records WHERE id=1').fetchone()[0], '孩子自述：愿意谈谈阅读。')
         self.assertEqual(self.store.snapshot()['failed_jobs'], 1)
         self.assertEqual(self.store.snapshot()['pending_count'], 0)
         with patch.object(agent.family_llm, '_chat_json', side_effect=self.model):
-            # Recovery proceeds without a parent or Codex retry request.
+            self.store.act({'action': 'retry'})
+            # A failure finishing after the parent's retry must not consume the restored budget.
+            self.store._fail('record:1', self.now + dt.timedelta(minutes=41), fingerprint=job['fingerprint'])
+            with self.app.connect() as c:
+                self.assertEqual(dict(c.execute('SELECT attempts,error FROM agent_jobs WHERE id=?', ('record:1',)).fetchone()),
+                                 {'attempts': 0, 'error': ''})
+            # Manual retry is the explicit recovery path for the same fingerprint.
             self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(minutes=41))['created'], 1)
+        self.store._fail('record:1', self.now + dt.timedelta(minutes=41), fingerprint=job['fingerprint'])
         self.store.act({'action': 'retry'})
+        with self.app.connect() as c:
+            self.assertEqual(dict(c.execute('SELECT attempts,done,error FROM agent_jobs WHERE id=?', ('record:1',)).fetchone()),
+                             {'attempts': 1, 'done': 1, 'error': ''})
+        with self.app.connect() as c:
+            c.execute('UPDATE records SET note=? WHERE id=1', ('更正后的虚构观察。',))
+        with patch.object(agent.family_llm, '_chat_json', side_effect=self.model) as model:
+            # A changed source fingerprint gets a fresh automatic attempt budget.
+            self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(minutes=42))['created'], 1)
+            self.assertEqual(model.call_count, 1)
+
+    def test_retry_limit_survives_process_exit_after_model_starts(self):
+        self.record()
+        marker = self.data / 'synthetic-model-calls'
+        script = '''
+import datetime as dt
+import os
+from pathlib import Path
+import sys
+import family_agent
+import family_review
+
+root, data, marker = map(Path, sys.argv[1:])
+app = family_review.load_app(root, data)
+def exit_during_model(*args, **kwargs):
+    with marker.open('a') as stream:
+        stream.write('call\\n')
+        stream.flush()
+        os.fsync(stream.fileno())
+    os._exit(17)
+family_agent._select = exit_during_model
+family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
+'''
+        commands = [[sys.executable, '-c', script, str(self.root), str(self.data), str(marker)] for _ in range(4)]
+        results = [subprocess.run(command, cwd=Path(__file__).resolve().parent, timeout=10) for command in commands]
+        self.assertEqual([result.returncode for result in results], [17, 17, 17, 0])
+        self.assertEqual(marker.read_text().splitlines(), ['call'] * agent.MAX_ATTEMPTS)
+        with self.app.connect() as c:
+            job = dict(c.execute('SELECT attempts,done FROM agent_jobs WHERE id=?', ('record:1',)).fetchone())
+        self.assertEqual(job, {'attempts': agent.MAX_ATTEMPTS, 'done': 0})
 
     def test_due_review_offline_declined_deferred_and_feedback_correction(self):
         care = dict(id='synthetic-care', child='示例甲', topic='阅读', title='讨论一次阅读', evidence='虚构记录，仅为回看依据。',
@@ -159,6 +220,8 @@ class AgentTests(unittest.TestCase):
         with patch.object(agent.family_llm, '_chat_json', side_effect=AssertionError('due checks do not need a model')):
             self.assertEqual(agent.run_once(self.app, self.now)['created'], 1)
             self.assertEqual(agent.run_once(self.app, self.now)['created'], 0)
+            with self.app.connect() as c:
+                self.assertEqual(c.execute("SELECT attempts FROM agent_jobs WHERE id LIKE 'review:%'").fetchone()[0], 0)
             self.assertEqual(self.store.snapshot()['items'][0]['care_id'], care['id'])
             state.write_text(json.dumps({care['id']: {'status': 'declined'}}))
             agent.run_once(self.app, self.now)

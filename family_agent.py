@@ -283,13 +283,16 @@ class Store:
         with self._db() as c:
             c.execute('INSERT OR REPLACE INTO agent_runtime(id,state,last_run,last_error) VALUES(1,?,?,?)', (state, now.isoformat(), error))
 
-    def _job(self, key, value, now):
+    def _job(self, key, value, now, *, model=False):
         fingerprint = _hash(value)
         with self._db() as c:
+            c.execute('BEGIN IMMEDIATE')
             row = c.execute('SELECT * FROM agent_jobs WHERE id=?', (key,)).fetchone()
             if row and row['fingerprint'] == fingerprint:
-                return None if row['done'] or row['next_try'] > now.isoformat() else fingerprint
-            c.execute('INSERT OR REPLACE INTO agent_jobs(id,fingerprint) VALUES(?,?)', (key, fingerprint))
+                if row['done'] or (model and row['attempts'] >= MAX_ATTEMPTS) or row['next_try'] > now.isoformat(): return None
+                if model: c.execute('UPDATE agent_jobs SET attempts=attempts+1 WHERE id=?', (key,))
+                return fingerprint
+            c.execute('INSERT OR REPLACE INTO agent_jobs(id,fingerprint,attempts) VALUES(?,?,?)', (key, fingerprint, int(model)))
         return fingerprint
 
     def _save(self, key, fingerprint, items, now, message_ids=()):
@@ -304,13 +307,16 @@ class Store:
             c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=? AND fingerprint=?", (key, fingerprint))
             c.executemany('UPDATE agent_messages SET processed=1 WHERE source_id=? AND id=?', message_ids)
 
-    def _fail(self, key, now):
+    def _fail(self, key, now, *, fingerprint=None):
         with self._db() as c:
-            row = c.execute('SELECT attempts FROM agent_jobs WHERE id=?', (key,)).fetchone()
-            attempt = min(row['attempts'] + 1, MAX_ATTEMPTS + 1)
-            c.execute('UPDATE agent_jobs SET attempts=?,next_try=?,error=? WHERE id=?',
-                (attempt, (now + dt.timedelta(minutes=5 * 2 ** (attempt - 1) if attempt <= MAX_ATTEMPTS else 60)).isoformat(),
-                 '模型整理未成功；原始资料保留，可重试或手动处理。', key))
+            row = c.execute('SELECT fingerprint,attempts FROM agent_jobs WHERE id=? AND done=0 AND attempts>0', (key,)).fetchone()
+            if row is None: return
+            if fingerprint is not None and row['fingerprint'] != fingerprint: return
+            fingerprint = row['fingerprint']
+            attempt = row['attempts']
+            c.execute('UPDATE agent_jobs SET next_try=?,error=? WHERE id=? AND fingerprint=? AND done=0 AND attempts=?',
+                ((now + dt.timedelta(minutes=5 * 2 ** (attempt - 1))).isoformat() if attempt < MAX_ATTEMPTS else '',
+                 '模型整理未成功；原始资料保留，自动尝试共3次，达到自动重试上限后需人工重试。', key, fingerprint, attempt))
 
 
 def _select(mode, evidence, profile=None, *, as_of=None, data_path=None):
@@ -423,7 +429,7 @@ def run_once(app, now=None):
                     batches[-1].append(json.loads(message['payload'])); size += len(message['payload'])
                 for values in batches:
                     key = 'messages:' + _hash([source['id'], [row['id'] for row in values]])[:40]
-                    fp = store._job(key, values, now)
+                    fp = store._job(key, values, now, model=True)
                     if not fp: continue
                     evidence = [dict(ref='message:' + source['id'] + ':' + row['id'], text=row['text'],
                         source=source['name'], time=row['time'], sender=row['sender'], content_incomplete=row['unread']) for row in values]
@@ -438,7 +444,7 @@ def run_once(app, now=None):
                         items = [{**item, 'child_id': source['child_id'], 'kind': 'school'} for item in proposals]
                         store._save(key, fp, items, now, [(source['id'], row['id']) for row in values])
                         created += len(items); processed += len(values)
-                    except (family_llm.LLMDraftError, AgentError, ValueError): store._fail(key, now); failed += 1
+                    except (family_llm.LLMDraftError, AgentError, ValueError): store._fail(key, now, fingerprint=fp); failed += 1
                     break  # One eligible batch per source leaves other sources a turn.
             with store._db() as c:
                 children = {p['name']: p['id'] for p in app.profiles(c)}
@@ -457,18 +463,20 @@ def run_once(app, now=None):
                 related = by_id.get(record.get('related_record_id'))
                 if related and children.get(aliases.get(related['child'], related['child'])) != child_id: related = None
                 if related: evidence.append({'ref': 'record:' + str(related['id']), 'text': '\n'.join(field + ': ' + str(related.get(field)) for field in fields)})
-                fp = store._job(key, evidence, now)
+                fp = store._job(key, evidence, now, model=True)
                 if not fp: continue
                 budget -= 1
                 try:
                     proposals = _select('learning', evidence, profiles[child_id], as_of=now.date().isoformat(), data_path=store.data)
                     items = [{**item, 'child_id': child_id, 'kind': 'care', 'record_id': record['id']} for item in proposals[:1]]
                     store._save(key, fp, items, now); created += len(items); processed += 1
-                except (family_llm.LLMDraftError, AgentError, ValueError): store._fail(key, now); failed += 1
+                except (family_llm.LLMDraftError, AgentError, ValueError): store._fail(key, now, fingerprint=fp); failed += 1
             with store._db() as c:
                 unresolved = c.execute('SELECT COUNT(*) FROM agent_jobs WHERE done=0 AND attempts>0').fetchone()[0]
+                exhausted = c.execute('SELECT COUNT(*) FROM agent_jobs WHERE done=0 AND attempts>=?', (MAX_ATTEMPTS,)).fetchone()[0]
             state = 'needs_attention' if failed or unresolved else 'ready'
-            store._runtime(state, now, '部分资料尚未整理成功；原资料保留，稍后重试或查看来源状态。' if failed or unresolved else '')
+            store._runtime(state, now, '部分任务已达到3次自动尝试上限，已暂停自动调用；原资料保留，可在助手状态中重试或手动处理。' if exhausted else
+                           '部分资料尚未整理成功；原资料保留，稍后重试或查看来源状态。' if failed or unresolved else '')
             return {'state': state, 'created': created, 'processed': processed, 'failed': failed}
         except Exception:
             store._runtime('error', now, '本次Agent检查未完成；原资料保留，请查看服务运行状态。')

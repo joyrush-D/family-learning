@@ -319,7 +319,7 @@ class ReadingHTTPTests(unittest.TestCase):
                 work_text='不能覆盖已保存作品',agreement={'book':'不能覆盖已保存约定'},excerpt='虚构篇目片段。'))
             self.assertEqual(status,200);self.assertEqual(result,dict(feedback=expected,version=task['version']))
             feedback.assert_called_once_with({k:task[k] for k in ['book','edition','scope','method','criteria']},
-                task['work_text'],[dict(mime='image/png',data=self.png)],'虚构篇目片段。')
+                task['work_text'],[dict(mime='image/png',data=self.png)],'虚构篇目片段。',data_path=self.app.DATA)
         self.assertEqual(self.database_state(),before)
         newer=self.call('submit',task,work_text='虚构修改后的作品')
         with patch.object(self.app.family_llm,'reading_feedback') as feedback:
