@@ -22,7 +22,7 @@ import zipfile
 DOCUMENTS = ('家庭运行规则.md', '消息来源.md', '跟踪台账.md', '学习与成长.md')
 DATABASE = 'private/family.sqlite3'
 DATA_FILES = ('private/采集状态.json', 'private/陪伴建议.json', 'private/陪伴提醒状态.json',
-              'private/日历来源.json', 'private/agent.json')
+              'private/日历来源.json', 'private/agent.json', 'private/打印机配置.json')
 FILE_DIRS = ('private/attachments', 'private/uploads', 'private/print')
 # ponytail: one family archive is capped at 10 GiB / 10,000 files; split larger archives.
 MAX_BYTES, MAX_FILES = 10 * 1024 ** 3, 10_000

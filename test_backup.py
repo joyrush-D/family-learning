@@ -56,6 +56,8 @@ with tempfile.TemporaryDirectory() as temporary:
     (root / 'private/attachments/example.txt').write_text('Synthetic file', encoding='utf-8')
     (root / 'private/陪伴建议.json').write_text('[]')
     (root / 'private/采集状态.json').write_text('{}')
+    printer_config = {'printers': [{'name': 'Synthetic_Printer', 'label': '虚构打印机', 'color': False, 'duplex': True}]}
+    (root / 'private/打印机配置.json').write_text(json.dumps(printer_config, ensure_ascii=False))
     reminder_state = {'example-care': {'notified_on': '2026-01-01', 'review_on': '2026-01-04'}}
     (root / 'private/陪伴提醒状态.json').write_text(json.dumps(reminder_state))
     (root / 'private/.env').write_text('DO_NOT_BACK_UP=yes')
@@ -128,12 +130,13 @@ with tempfile.TemporaryDirectory() as temporary:
     with sqlite3.connect(legacy / backup.DATABASE) as db:
         assert db.execute("SELECT name FROM sqlite_master WHERE name='print_jobs'").fetchone() is None
     assert (restored / 'private/uploads/example.bin').read_bytes() == data
+    assert json.loads((restored / 'private/打印机配置.json').read_text()) == printer_config
     assert json.loads((restored / 'private/陪伴提醒状态.json').read_text()) == reminder_state
     with zipfile.ZipFile(archive) as zipped:
         manifest = json.loads(zipped.read('manifest.json'))
         assert manifest['files']['private/uploads/example.bin']['sha256'] == hashlib.sha256(data).hexdigest()
         assert manifest['files']['private/print/' + prep['id'] + '.pdf']['sha256'] == hashlib.sha256(pdf).hexdigest()
-        assert len(manifest['files']) == 12
+        assert len(manifest['files']) == 13
         assert all('.env' not in p and not p.endswith('.log') for p in zipped.namelist())
         members = {name: zipped.read(name) for name in zipped.namelist()}
     assert restored.stat().st_mode & 0o777 == 0o700

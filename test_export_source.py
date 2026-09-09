@@ -126,17 +126,21 @@ with tempfile.TemporaryDirectory(prefix='family-source-check-') as temp:
         unused_invite = json.loads(get('/api/child-access/invite', json.dumps({'child_id': 'child-1'}).encode(), headers))['invite']
         expected_state = json.loads(get('/api/state'))
     # All writers are stopped before archiving the database and family files.
-    for name in ('model.env', '打印机配置.json', '网页访问凭据.json'):
+    for name in ('model.env', '网页访问凭据.json'):
         (clean / 'private' / name).write_text('SYNTHETIC_DEPLOYMENT_CONFIG_NOT_IN_DATA_BACKUP')
+    printer_config = {'printers': [{'name': 'Synthetic_Printer', 'label': '虚构打印机', 'color': False, 'duplex': True}]}
+    (clean / 'private/打印机配置.json').write_text(json.dumps(printer_config, ensure_ascii=False))
     subprocess.run([sys.executable, 'family_backup.py', 'create', 'private/backups/recovery.zip'], cwd=clean, env=env, check=True, capture_output=True)
     data_archive = temp / 'recovery.zip'
     shutil.copyfile(clean / 'private/backups/recovery.zip', data_archive)
     with zipfile.ZipFile(data_archive) as zipped:
         assert not any(name in zipped.namelist() for name in (
-            'app.py', 'private/model.env', 'private/打印机配置.json', 'private/网页访问凭据.json'))
+            'app.py', 'private/model.env', 'private/网页访问凭据.json'))
+        assert json.loads(zipped.read('private/打印机配置.json')) == printer_config
     recovered = temp / 'recovered'
     subprocess.run([sys.executable, str(clean / 'family_backup.py'), 'restore', str(data_archive), str(recovered)], env=env, check=True, capture_output=True)
     assert not (recovered / 'app.py').exists()
+    assert json.loads((recovered / 'private/打印机配置.json').read_text()) == printer_config
     with zipfile.ZipFile(archive) as zipped:
         for name in names:
             assert not (recovered / name).exists()
