@@ -39,10 +39,10 @@ async function usageDisplay(browser,width){
   const model=p.locator('[data-settings-form="model"] [name="model"]');await model.fill('synthetic-unsaved-model');
   const unknown={calls:1,returned:0,failed:0,pending:1,input_tokens:null,output_tokens:null,total_tokens:null,unknown_usage:1,elapsed_ms:null};
   usage={available:true,days:30,calls:4,returned:2,failed:1,pending:1,input_tokens:50,output_tokens:20,total_tokens:70,unknown_usage:3,elapsed_ms:1000,groups:[
-   {...unknown,task:'family_connection_test',model:'synthetic-model',protocol:'responses'},
+   {...unknown,task:'family_light_connection_test',model:'synthetic-model',protocol:'responses'},
    {...unknown,task:'family_agent_selection',model:'synthetic-'+ 'x'.repeat(140)+'<img src=x onerror="window.usageInjected=true">',protocol:'chat',calls:3,returned:2,failed:1,pending:0,total_tokens:70,elapsed_ms:1000}]};
   await panel.getByRole('button',{name:'刷新用量'}).click();await eventually(async()=>/4 次/.test(await panel.locator('summary').innerText()),'usage refreshed');
-  const content=await panel.innerText();assert.match(content,/输入 50 · 输出 20 · 合计 70/);assert.match(content,/3 次用量不完整/);assert.match(content,/失败 1 次/);assert.match(content,/未确认结束 1 次/);assert.match(content,/合计 未知 token/);
+  const content=await panel.innerText();assert.match(content,/输入 50 · 输出 20 · 合计 70/);assert.match(content,/3 次用量不完整/);assert.match(content,/失败 1 次/);assert.match(content,/未确认结束 1 次/);assert.match(content,/合计 未知 token/);assert.match(content,/轻模型连接检查/);
   assert.equal(await panel.locator('img').count(),0);assert.equal(await p.evaluate(()=>window.usageInjected),undefined);
   assert.equal(await model.inputValue(),'synthetic-unsaved-model');assert.equal(await panel.getAttribute('open'),'');
   await panel.evaluate(el=>el.scrollIntoView({block:'start'}));await fit(p);await proof(p,'settings-usage-'+width);
@@ -61,8 +61,8 @@ async function partialModelEnvironment(browser,width){
   const initial=await read('api/settings');
   assert.equal(initial.model.origin,'environment','incomplete environment configuration stays environment-managed');
   assert.equal(initial.model.configured,false);
-  for(const name of ['base_url','model','api_key'])assert.equal(await form.locator('[name="'+name+'"]').isDisabled(),true,'environment-managed '+name+' is disabled');
-  assert.equal(await form.locator('[type="submit"]').isDisabled(),true);assert.equal(await p.locator('[data-settings-test]').isDisabled(),true);
+  for(const name of ['base_url','model','light_model','api_key'])assert.equal(await form.locator('[name="'+name+'"]').isDisabled(),true,'environment-managed '+name+' is disabled');
+  assert.equal(await form.locator('[type="submit"]').isDisabled(),true);assert.equal(await p.locator('[data-settings-test=""]').isDisabled(),true);assert.equal(await p.locator('[data-settings-test="light"]').isDisabled(),true);
   assert.equal(await form.locator('[name="api_key"]').inputValue(),'');
   assert.equal(JSON.stringify(initial).includes(key),false);assert.equal(JSON.stringify(await read('api/state')).includes(key),false);assert.equal((await p.content()).includes(key),false);
   // Model failure must not stop the independent manual setup path.
@@ -70,7 +70,7 @@ async function partialModelEnvironment(browser,width){
   await eventually(async()=>await p.locator('.settings-child').count()===1,'manual child setup works with incomplete model environment');
   const saved=await read('api/settings');assert.equal(saved.children[0].name,'虚构配置检查孩子');assert.equal(saved.children.length,1);
   assert.equal(saved.model.origin,'environment');assert.equal(saved.model.configured,false);
-  for(const name of ['base_url','model','api_key'])assert.equal(await form.locator('[name="'+name+'"]').isDisabled(),true);
+  for(const name of ['base_url','model','light_model','api_key'])assert.equal(await form.locator('[name="'+name+'"]').isDisabled(),true);
   assert.equal(await form.locator('[name="api_key"]').inputValue(),'');assert.equal(JSON.stringify(saved).includes(key),false);assert.equal(JSON.stringify(await read('api/state')).includes(key),false);assert.equal((await p.content()).includes(key),false);
   await card.evaluate(el=>el.scrollIntoView({block:'start'}));await fit(p);
   const visibleErrors=await card.locator('.error:visible,[role="alert"]:visible').allTextContents();
@@ -84,12 +84,61 @@ async function partialModelEnvironment(browser,width){
   return evidence;
  }finally{await p.close();await app.stop()}
 }
+// This server only echoes the fixed synthetic connection-test schema; it is not a model.
+async function connectionServer(){
+ const calls=[],waiting=[];let hold=false;
+ const http=require('node:http'),service=http.createServer(async(req,res)=>{
+  let raw='';for await(const chunk of req)raw+=chunk;
+  const body=JSON.parse(raw);calls.push(body);
+  const reply=()=>{res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({model:body.model,choices:[{finish_reason:'stop',message:{content:'{"ok":true}'}}],usage:{prompt_tokens:4,completion_tokens:3,total_tokens:7}}))};
+  if(hold){hold=false;waiting.push(reply)}else reply();
+ });
+ service.listen(0,'127.0.0.1');await once(service,'listening');
+ return{url:'http://127.0.0.1:'+service.address().port+'/v1',calls,hold(){hold=true},release(){for(const reply of waiting.splice(0))reply()},stop:()=>new Promise(r=>service.close(r))};
+}
+async function lightModelSettings(browser,width){
+ const model=await connectionServer(),app=await server(),p=await browser.newPage({viewport:{width,height:900}}),errors=[];p.on('pageerror',e=>errors.push(e.message));
+ const read=async()=>await(await fetch(app.url+'api/settings')).json();
+ const post=async(path,body,expected=200,token=true)=>{const state=await(await fetch(app.url+'api/state')).json(),r=await fetch(app.url+path,{method:'POST',headers:{'Content-Type':'application/json',...(token?{'X-Family-Token':state.token}:{})},body:JSON.stringify(body)});assert.equal(r.status,expected);return r.json()};
+ const form=p.locator('[data-settings-form="model"]'),more=form.locator('[data-settings-model-options]'),light=form.locator('[name="light_model"]'),testLight=p.locator('[data-settings-test="light"]'),testMain=p.locator('[data-settings-test=""]');
+ const expand=async()=>{if(await more.getAttribute('open')===null)await more.locator('summary').click()};
+ const save=async()=>{await form.locator('[type="submit"]').click();await eventually(async()=>/已保存。/.test(await p.locator('#settingsStatus').innerText()),'model saved and repaint completed')};
+ try{
+  await p.goto(app.url);await form.waitFor();assert.equal(await more.getAttribute('open'),null);await expand();assert.equal(await testLight.isDisabled(),true);
+  await post('api/settings/model/test',{kind:'light'},400);assert.equal(model.calls.length,0,'missing light model does not test the default');
+  await form.locator('[name="base_url"]').fill(model.url);await form.locator('[name="model"]').fill('synthetic-default');await form.locator('[name="api_key"]').fill('SYNTHETIC-LIGHT-UI-KEY');await light.fill('synthetic-light');assert.equal(await testLight.isDisabled(),true,'unsaved light input is not testable');
+  await save();assert.equal((await read()).model.light_model,'synthetic-light');assert.equal(await form.locator('[name="api_key"]').inputValue(),'');assert.equal(JSON.stringify(await read()).includes('SYNTHETIC-LIGHT-UI-KEY'),false);
+  for(const body of [{kind:'main'},{kind:'light',model:'injected'},{kind:'light',prompt:'injected'},{kind:1},[]])await post('api/settings/model/test',body,400);
+  await post('api/settings/model/test',{kind:'light'},403,false);assert.equal(model.calls.length,0,'invalid bodies and missing token do not call the service');
+  await testMain.click();await eventually(async()=>/默认模型连接检查通过/.test(await p.locator('#settingsStatus').innerText()),'default test');assert.equal(model.calls.at(-1).model,'synthetic-default');assert.equal(model.calls.at(-1).response_format.json_schema.name,'family_connection_test');
+  await expand();await testLight.click();await eventually(async()=>/轻模型连接检查通过/.test(await p.locator('#settingsStatus').innerText()),'saved light test');model.hold();const count=model.calls.length;await testLight.click();await eventually(()=>model.calls.length===count+1,'light test pending');
+  assert.equal(await testMain.isDisabled(),true,'one connection test at a time');await light.fill('synthetic-light-draft');const during=await read();await post('api/settings/model',{revision:during.model.revision,base_url:model.url,model:'synthetic-default',light_model:'synthetic-concurrent-check'});model.release();await eventually(async()=>/配置已变化/.test(await p.locator('#settingsStatus').innerText()),'concurrent saved config is not reported as checked');
+  assert.equal(model.calls.at(-1).model,'synthetic-light');assert.equal(model.calls.at(-1).response_format.json_schema.name,'family_light_connection_test');assert.deepEqual(model.calls.at(-1).messages,[{role:'user',content:'Connection test only. Return {"ok":true}.'}]);assert.equal(await light.inputValue(),'synthetic-light-draft','test and usage refresh preserve in-progress input');
+  // A different settings writer changes the same model revision. Draft and disclosure survive CAS reload.
+  let current=await read();await post('api/settings/model',{revision:current.model.revision,base_url:model.url,model:'synthetic-default',light_model:'synthetic-other-parent'});
+  await form.locator('[type="submit"]').click();await p.locator('[data-settings-conflict]').waitFor();assert.equal(await light.inputValue(),'synthetic-light-draft');await p.locator('[data-settings-conflict]').click();await eventually(async()=>await p.locator('[data-settings-conflict]').count()===0,'model CAS reload');assert.equal(await more.getAttribute('open'),'');assert.equal(await light.inputValue(),'synthetic-light-draft');await save();assert.equal((await read()).model.light_model,'synthetic-light-draft');
+  await p.reload();await form.waitFor();await expand();assert.equal(await light.inputValue(),'synthetic-light-draft');assert.equal(await form.locator('[name="api_key"]').inputValue(),'');await fit(p);await more.evaluate(x=>x.scrollIntoView({block:'center'}));await proof(p,'settings-light-model-'+width);
+  await light.fill('');await save();assert.equal((await read()).model.light_model,'');await expand();assert.equal(await testLight.isDisabled(),true);assert.match(await more.innerText(),/留空时沿用默认模型/);const before=model.calls.length;await post('api/settings/model/test',{kind:'light'},400);assert.equal(model.calls.length,before);await testMain.click();await eventually(()=>model.calls.length===before+1,'default still available after clearing light');assert.equal(model.calls.at(-1).model,'synthetic-default');
+  await p.reload();await form.waitFor();await expand();assert.equal(await light.inputValue(),'');assert.equal(await testLight.isDisabled(),true);assert.equal((await p.content()).includes('SYNTHETIC-LIGHT-UI-KEY'),false);assert.deepEqual(errors,[]);
+  return{width,scenario:'optional-light-model',collapsedByDefault:true,savedOnlyTest:true,strictHTTPBody:true,tokenRequired:true,defaultAndLightSeparated:true,concurrentDraftPreserved:true,changedSavedConfigNotConfirmed:true,casDraftAndDisclosurePreserved:true,clearRestoresDefault:true,reloadPersists:true,keyNotReturned:true,noOverflow:true};
+ }finally{model.release();await p.close();await app.stop();await model.stop()}
+}
+async function lightModelEnvironment(browser,width){
+ const model=await connectionServer(),key='SYNTHETIC-LIGHT-ENV-KEY',app=await server({FAMILY_LLM_BASE_URL:model.url,FAMILY_LLM_MODEL:'synthetic-env-default',FAMILY_LLM_LIGHT_MODEL:'synthetic-env-light',FAMILY_LLM_API_KEY:key}),p=await browser.newPage({viewport:{width,height:900}});
+ try{
+  await p.goto(app.url);const form=p.locator('[data-settings-form="model"]');await form.waitFor();await form.locator('[data-settings-model-options] summary').click();assert.equal(await form.locator('[name="light_model"]').inputValue(),'synthetic-env-light');assert.equal(await form.locator('[name="light_model"]').isDisabled(),true);assert.equal(await form.locator('[type="submit"]').isDisabled(),true);
+  const check=p.locator('[data-settings-test="light"]');assert.equal(await check.isEnabled(),true,'saved environment light model can be tested without editing');await check.click();await eventually(async()=>/轻模型连接检查通过/.test(await p.locator('#settingsStatus').innerText()),'environment light check');assert.equal(model.calls.at(-1).model,'synthetic-env-light');assert.equal((await p.content()).includes(key),false);await fit(p);
+  return{width,scenario:'environment-light-model',readOnlyControls:true,savedEnvironmentTestable:true,keyNotReturned:true,noOverflow:true};
+ }finally{await p.close();await app.stop();await model.stop()}
+}
 (async()=>{
  let browser;const results=[];
  try{
   browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
   for(const width of [360,1440])results.push(await usageDisplay(browser,width));
   for(const width of [360,1440])results.push(await partialModelEnvironment(browser,width));
+  for(const width of [360,1440])results.push(await lightModelSettings(browser,width));
+  for(const width of [360,1440])results.push(await lightModelEnvironment(browser,width));
   for(const width of [360,1440]){
    const app=await server(),p=await browser.newPage({viewport:{width,height:900}}),errors=[];p.on('pageerror',e=>errors.push(e.message));
    const read=async()=>await(await fetch(app.url+'api/settings')).json();
@@ -110,12 +159,12 @@ async function partialModelEnvironment(browser,width){
     await form('agent').locator('[name="enabled"]').check();await form('agent').locator('[type="submit"]').click();await eventually(async()=>(await read()).enabled,'agent enabled');
     const group=p.locator('.settings-source').filter({hasText:'虚构兴趣群'});await group.locator('summary').click();await group.locator('[name="enabled"]').uncheck();await group.locator('[type="submit"]').click();await eventually(async()=>!(await read()).sources.find(x=>x.name==='虚构兴趣群').enabled,'group disabled');
     // A model draft must survive saving another form and a concurrent configuration refresh.
-    await form('model').locator('[name="base_url"]').fill('http://127.0.0.1:32123/v1');await form('model').locator('[name="model"]').fill('synthetic-model');await form('model').locator('[name="api_key"]').fill('SYNTHETIC-UI-KEY');
+    await form('model').locator('[name="base_url"]').fill('http://127.0.0.1:32123/v1');await form('model').locator('[name="model"]').fill('synthetic-model');await form('model').locator('[name="api_key"]').fill('SYNTHETIC-UI-KEY');await form('model').locator('[data-settings-model-options] summary').click();await form('model').locator('[name="light_model"]').fill('synthetic-retained-light');
     // Another parent changes the top-level switch while this tab edits a source.
     const current=p.locator('.settings-source').filter({hasText:'虚构主班级群'});await current.locator('summary').click();await current.locator('[name="name"]').fill('虚构未丢失备注');
     let state=await read();const rows=state.sources.map(({id,platform,child_id,name,enabled})=>({id,platform,child_id,name,enabled}));await post('api/settings/sources',{revision:state.revision,enabled:false,sources:rows});
     await current.locator('[type="submit"]').click();await p.locator('[data-settings-conflict]').waitFor();assert.equal(await current.locator('[name="name"]').inputValue(),'虚构未丢失备注');await p.locator('[data-settings-conflict]').click();await eventually(async()=>await p.locator('[data-settings-conflict]').count()===0,'CAS reload redraw complete');assert.equal(await current.locator('[name="name"]').inputValue(),'虚构未丢失备注');assert.equal(await form('agent').locator('[name="enabled"]').isChecked(),false,'untouched switch displays the other parent latest value');await current.locator('[type="submit"]').click();await eventually(async()=>(await read()).sources.some(x=>x.name==='虚构未丢失备注'),'CAS reload preserves draft');assert.equal((await read()).enabled,false,'does not undo concurrent switch');await eventually(async()=>await p.locator('.settings-source header strong').filter({hasText:'虚构未丢失备注'}).count()===1,'saved source redraw complete');
-    assert.equal(await form('model').locator('[name="base_url"]').inputValue(),'http://127.0.0.1:32123/v1','other form URL draft survives source save');assert.equal(await form('model').locator('[name="model"]').inputValue(),'synthetic-model','other form model draft survives source save');assert.equal(await form('model').locator('[name="api_key"]').inputValue(),'SYNTHETIC-UI-KEY','unsaved key draft survives source save');assert.equal((await read()).model.configured,false,'retained draft was not submitted implicitly');await form('model').locator('[type="submit"]').click();await eventually(async()=>(await read()).model.has_api_key,'model saved');await eventually(async()=>await form('model').locator('[name="api_key"]').inputValue()==='','key is cleared from form');assert.ok(!JSON.stringify(await read()).includes('SYNTHETIC-UI-KEY'));assert.ok(!await p.locator('body').innerText().then(text=>text.includes('SYNTHETIC-UI-KEY')));
+    assert.equal(await form('model').locator('[name="base_url"]').inputValue(),'http://127.0.0.1:32123/v1','other form URL draft survives source save');assert.equal(await form('model').locator('[name="model"]').inputValue(),'synthetic-model','other form model draft survives source save');assert.equal(await form('model').locator('[name="api_key"]').inputValue(),'SYNTHETIC-UI-KEY','unsaved key draft survives source save');assert.equal(await form('model').locator('[name="light_model"]').inputValue(),'synthetic-retained-light','light draft survives source save');assert.equal(await form('model').locator('[data-settings-model-options]').getAttribute('open'),'');assert.equal((await read()).model.configured,false,'retained draft was not submitted implicitly');await form('model').locator('[type="submit"]').click();await eventually(async()=>(await read()).model.has_api_key,'model saved');await eventually(async()=>await form('model').locator('[name="api_key"]').inputValue()==='','key is cleared from form');assert.ok(!JSON.stringify(await read()).includes('SYNTHETIC-UI-KEY'));assert.ok(!await p.locator('body').innerText().then(text=>text.includes('SYNTHETIC-UI-KEY')));
     await p.locator('.settings-start').click();await eventually(async()=>await p.locator('.settings-view').count()===0,'leave settings');await p.getByRole('button',{name:'家庭设置',exact:true}).click();await p.locator('.settings-view').waitFor();await eventually(async()=>await p.locator('.settings-source').count()===3,'return to saved settings');await fit(p);await proof(p,'settings-saved-'+width);
     await p.reload();await p.getByRole('button',{name:'家庭设置',exact:true}).click();await p.locator('.settings-view').waitFor();assert.equal(await form('model').locator('[name="api_key"]').inputValue(),'');assert.equal((await read()).children.length,2);assert.deepEqual(errors,[]);
     results.push({width,emptyFirstRun:true,childRetryNoDuplicate:true,rename:true,multipleGroups:true,sourceAndAgentToggles:true,casPreservesInput:true,untouchedFieldsRefresh:true,otherFormDraftPreserved:true,keyNotReturned:true,persistentAcrossPages:true,noOverflow:true});

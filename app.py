@@ -1298,11 +1298,14 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/settings/sources': return self.reply(200,settings_store().save_sources(obj))
             if path=='/api/settings/model': return self.reply(200,settings_store().save_model(obj))
             if path=='/api/settings/model/test':
-                if obj: raise ValueError('模型连接检查不接收家庭资料')
+                if obj and obj!={'kind':'light'}: raise ValueError('模型连接检查只接收已保存的连接类型，不接收模型名称或家庭资料')
+                light=obj.get('kind')=='light'
                 try:
+                    if light and not family_llm.model_values(DATA).get('light_model'):
+                        raise ValueError('尚未保存轻模型；请先保存轻模型名称，再检查连接')
                     result=family_llm._chat_json([dict(role='user',content='Connection test only. Return {"ok":true}.')],
                         dict(type='object',properties=dict(ok=dict(type='boolean')),required=['ok'],additionalProperties=False),
-                        'family_connection_test',timeout=10,data_path=DATA)
+                        'family_light_connection_test' if light else 'family_connection_test',timeout=10,data_path=DATA)
                     if result!={'ok':True}: raise family_llm.LLMDraftError('服务已响应，但返回格式未通过检查')
                     return self.reply(200,dict(ok=True))
                 except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))

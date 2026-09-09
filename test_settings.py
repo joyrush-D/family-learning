@@ -26,10 +26,11 @@ class SettingsTests(unittest.TestCase):
             with patch.multiple(app,ROOT=root,DATA=data,DB=data/'family.sqlite3'):
                 store=app.settings_store(); empty=store.model_state()
                 self.assertEqual(empty['error'],'');self.assertFalse(empty['configured'])
-                saved=dict(revision=empty['revision'],base_url='http://127.0.0.1:32123/v1',model='synthetic-file-model',api_key='SYNTHETIC-FILE-KEY')
+                saved=dict(revision=empty['revision'],base_url='http://127.0.0.1:32123/v1',model='synthetic-file-model',light_model='synthetic-light-model',api_key='SYNTHETIC-FILE-KEY')
                 store.save_model(saved);before=(data/'model.json').read_bytes()
                 cases=[{'FAMILY_LLM_API_KEY':'SYNTHETIC-ENV-KEY'},
                        {'FAMILY_LLM_REASONING_EFFORT':'none'},
+                       {'FAMILY_LLM_LIGHT_MODEL':'synthetic-light-model'},
                        {'FAMILY_LLM_BASE_URL':'http://127.0.0.1:32124/v1'},
                        {'FAMILY_LLM_MODEL':'synthetic-env-model'},
                        {'FAMILY_LLM_BASE_URL':'http://user:SYNTHETIC-URL-SECRET@localhost/v1','FAMILY_LLM_MODEL':'synthetic-env-model'}]
@@ -45,6 +46,7 @@ class SettingsTests(unittest.TestCase):
                         self.assertEqual((data/'model.json').read_bytes(),before)
                         with self.assertRaises(family_llm.LLMUnavailable):family_llm.configuration(data)
                 self.assertTrue(store.model_state()['configured']);self.assertEqual(store.model_state()['origin'],'file')
+                self.assertEqual(store.model_state()['light_model'],'synthetic-light-model')
 
     def test_first_visit_household_bindings_model_and_access(self):
         with tempfile.TemporaryDirectory(prefix='synthetic-settings-') as directory, patch.dict(os.environ,{},clear=True):
@@ -85,9 +87,10 @@ class SettingsTests(unittest.TestCase):
                 self.assertEqual(family_agent.run_once(app)['state'],'disabled')
                 groups[0]['enabled']=True;state=save(groups)
                 with app.connect() as c: self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_messages').fetchone()[0],1)
-                model=dict(revision=state['model']['revision'],base_url='http://127.0.0.1:32123/v1',model='synthetic-model',api_key='SYNTHETIC-KEY')
+                model=dict(revision=state['model']['revision'],base_url='http://127.0.0.1:32123/v1',model='synthetic-model',light_model='synthetic-light-model',api_key='SYNTHETIC-KEY')
                 configured=store.save_model(model)['model']
-                self.assertTrue(configured['has_api_key']);self.assertNotIn('SYNTHETIC-KEY',json.dumps(store.snapshot()))
+                self.assertTrue(configured['has_api_key']);self.assertEqual(configured['light_model'],'synthetic-light-model')
+                self.assertNotIn('SYNTHETIC-KEY',json.dumps(store.snapshot()))
                 self.assertEqual(stat.S_IMODE((data/'model.json').stat().st_mode),0o600)
                 self.assertTrue(app.snapshot()['llm']['configured'])
                 with self.assertRaises(family_settings.SettingsError): store.save_model({**model,'revision':configured['revision'],'base_url':'http://127.0.0.1:32124/v1','api_key':''})
@@ -106,7 +109,7 @@ class SettingsTests(unittest.TestCase):
                 self.assertEqual(usage['groups'][0]['task'],'family_agent_selection')
                 self.assertEqual(captured[0][0],model['base_url']+'/chat/completions')
                 self.assertEqual(captured[0][1],'Bearer SYNTHETIC-KEY')
-                self.assertEqual(captured[0][2]['model'],'synthetic-model')
+                self.assertEqual(captured[0][2]['model'],'synthetic-light-model')
                 with patch.dict(os.environ,{'FAMILY_LLM_BASE_URL':'http://127.0.0.1:32125/v1','FAMILY_LLM_MODEL':'environment-model'}):
                     self.assertEqual(store.model_state()['origin'],'environment');self.assertFalse(store.model_state()['has_api_key'])
                     with self.assertRaises(family_settings.SettingsError): store.save_model(model)
@@ -128,9 +131,17 @@ class SettingsTests(unittest.TestCase):
                         self.assertEqual(call('POST','/api/settings/model/test',{})[0],200)
                         self.assertEqual(model_call.call_args.kwargs['data_path'],data)
                         self.assertNotIn('示例',json.dumps(model_call.call_args.args,ensure_ascii=False))
+                        self.assertEqual(call('POST','/api/settings/model/test',{'kind':'light'})[0],200)
+                        self.assertEqual(model_call.call_args.args[2],'family_light_connection_test')
                         self.assertEqual(call('POST','/api/settings/model/test',{},token=False)[0],403)
+                        self.assertEqual(call('POST','/api/settings/model/test',{'kind':'unknown'})[0],400)
                         self.assertEqual(call('POST','/api/settings/model/test',{'text':'虚构家庭材料'})[0],400)
-                        self.assertEqual(model_call.call_count,1)
+                        self.assertEqual(model_call.call_count,2)
+                        self.assertEqual(call('POST','/api/settings/model/test',{'kind':'light'},token=False)[0],403)
+                        current=store.model_state()
+                        store.save_model(dict(revision=current['revision'],base_url=current['base_url'],model=current['model'],light_model=''))
+                        self.assertEqual(call('POST','/api/settings/model/test',{'kind':'light'})[0],400)
+                        self.assertEqual(model_call.call_count,2)
                     with patch.object(family_llm,'_chat_json',side_effect=family_llm.LLMDraftError('连接超时')):
                         self.assertEqual(call('POST','/api/settings/model/test',{})[0],503)
                     self.assertEqual(call('GET','/api/settings',host='unknown.invalid')[0],403)

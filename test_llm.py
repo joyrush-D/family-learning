@@ -76,6 +76,23 @@ try:
         assert body['model']=='synthetic-model' and body['stream'] is False
         assert 'reasoning_effort' not in body
         assert len(body['messages'])==2 and body['messages'][1]['content'][0]['text'].startswith('虚构数学卷')
+        try: llm._chat_json([dict(role='user',content='synthetic light connection')],llm.SCHEMA,
+                            'family_light_connection_test')
+        except llm.LLMUnavailable: pass
+        else: raise AssertionError('light connection check fell back to the primary model')
+        light_env={**env,'FAMILY_LLM_LIGHT_MODEL':'synthetic-light-model'}
+        with patch.dict(os.environ,light_env,clear=True):
+            state['mode']='ok'
+            llm._chat_json([dict(role='user',content='synthetic selection text')],llm.SCHEMA,'family_agent_selection',data_path=None)
+            assert state['calls'][-1][1]['model']=='synthetic-light-model'
+            llm._chat_json([dict(role='user',content=[dict(type='text',text='synthetic image context'),
+                                                       dict(type='image_url',image_url=dict(url='data:image/png;base64,eA=='))])],
+                            llm.SCHEMA,'family_agent_selection')
+            assert state['calls'][-1][1]['model']=='synthetic-model'
+            llm._chat_json([dict(role='user',content='synthetic plan text')],llm.SCHEMA,'family_agent_plan')
+            assert state['calls'][-1][1]['model']=='synthetic-model'
+            llm._chat_json([dict(role='user',content='synthetic connection text')],llm.SCHEMA,'family_light_connection_test')
+            assert state['calls'][-1][1]['model']=='synthetic-light-model'
         llm.extract_draft(images=[dict(data=b'synthetic-trusted-image',mime='image/png')])
         assert state['calls'][-1][1]['messages'][1]['content'][1]['image_url']['url'].startswith('data:image/png;base64,')
         os.environ['FAMILY_LLM_REASONING_EFFORT']='none'
@@ -341,11 +358,34 @@ with patch.object(llm,'_chat_json',return_value=dict(hint,reference_status='cons
 server=ThreadingHTTPServer(('127.0.0.1',0),Mock)
 threading.Thread(target=server.serve_forever,daemon=True).start()
 try:
+  with TemporaryDirectory() as legacy:
+    legacy_path=Path(legacy)
+    legacy_config=dict(base_url='http://127.0.0.1:1/v1',model='synthetic-primary',api_key='',reasoning_effort='')
+    (legacy_path/'model.json').write_text(json.dumps(legacy_config))
+    with patch.dict(os.environ,{},clear=True):
+        loaded=llm.model_values(legacy_path)
+        assert loaded['light_model']=='' and loaded['model']=='synthetic-primary'
+        (legacy_path/'model.json').write_text(json.dumps({**legacy_config,'light_model':'synthetic-light'}))
+        assert llm.model_values(legacy_path)['light_model']=='synthetic-light'
+        (legacy_path/'model.json').write_text(json.dumps({**legacy_config,'model':'','light_model':'synthetic-light'}))
+        try: llm.model_values(legacy_path)
+        except llm.LLMUnavailable: pass
+        else: raise AssertionError('light model accepted without primary configuration')
+    with patch.dict(os.environ,{
+            'FAMILY_LLM_BASE_URL':'http://127.0.0.1:1/v1','FAMILY_LLM_MODEL':'synthetic-primary',
+            'FAMILY_LLM_LIGHT_MODEL':'x'*201},clear=True):
+        try: llm.configuration()
+        except llm.LLMUnavailable: pass
+        else: raise AssertionError('oversized light model accepted')
+    try: llm.validate_model(dict(base_url='http://127.0.0.1:1/v1',model='synthetic-primary',
+                                 light_model='',api_key='bad\x00key',reasoning_effort=''))
+    except llm.LLMUnavailable: pass
+    else: raise AssertionError('control character in environment configuration accepted')
   with TemporaryDirectory() as temporary:
     data_path=Path(temporary)
     endpoint=f'http://127.0.0.1:{server.server_port}/v1'
     env=dict(FAMILY_LLM_BASE_URL=endpoint,FAMILY_LLM_MODEL='configured-chat-model',
-             FAMILY_LLM_API_KEY='PRIVATE_KEY_CANARY')
+             FAMILY_LLM_API_KEY='PRIVATE_KEY_CANARY',FAMILY_LLM_LIGHT_MODEL='configured-light-model')
     state['mode']='ok';state['usage']={'prompt_tokens':11,'completion_tokens':7,'total_tokens':18}
     state['reported_model']='provider-chat-model'
     with patch.dict(os.environ,env,clear=True):
@@ -388,6 +428,25 @@ try:
         dump=repr(rows)
         assert 'PRIVATE_KEY_CANARY' not in dump and 'PRIVATE_PROMPT_CANARY' not in dump
         assert 'provider-chat-model' in dump and 'provider-responses-model' in dump
+        state['mode']='ok';state['usage']={'prompt_tokens':5,'completion_tokens':2,'total_tokens':7}
+        os.environ['FAMILY_LLM_BASE_URL']=endpoint
+        os.environ['FAMILY_LLM_MODEL']='configured-chat-model'
+        os.environ['FAMILY_LLM_LIGHT_MODEL']='configured-light-model'
+        llm._chat_json([dict(role='user',content='synthetic light ledger call')],llm.SCHEMA,
+                       'family_agent_selection',data_path=data_path)
+        assert any(group['task']=='family_agent_selection' and group['model']=='configured-light-model'
+                   for group in llm.usage_summary(data_path)['groups'])
+        state['mode']='http_error';before=len(state['calls'])
+        try: llm._chat_json([dict(role='user',content='synthetic light failure')],llm.SCHEMA,
+                            'family_agent_selection',data_path=data_path)
+        except llm.LLMDraftError: pass
+        else: raise AssertionError('light model failure unexpectedly fell back')
+        assert len(state['calls'])==before+1 and state['calls'][-1][1]['model']=='configured-light-model'
+        state['mode']='ok';state['usage']={'input_tokens':3,'output_tokens':1,'total_tokens':4}
+        os.environ['FAMILY_LLM_BASE_URL']=endpoint+'/responses'
+        llm._chat_json([dict(role='user',content='synthetic responses light call')],llm.SCHEMA,
+                       'family_agent_selection',data_path=data_path)
+        assert state['calls'][-1][1]['model']=='configured-light-model'
         before=len(state['calls'])
         try: llm.extract_draft('虚构资料',data_path=data_path/'missing-parent')
         except llm.LLMDraftError: pass

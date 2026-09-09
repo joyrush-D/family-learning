@@ -63,7 +63,11 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 MODEL_ENV={'base_url':'FAMILY_LLM_BASE_URL','model':'FAMILY_LLM_MODEL',
-           'api_key':'FAMILY_LLM_API_KEY','reasoning_effort':'FAMILY_LLM_REASONING_EFFORT'}
+           'light_model':'FAMILY_LLM_LIGHT_MODEL','api_key':'FAMILY_LLM_API_KEY',
+           'reasoning_effort':'FAMILY_LLM_REASONING_EFFORT'}
+MODEL_FILE_KEYS={'base_url','model','light_model','api_key','reasoning_effort'}
+LEGACY_MODEL_FILE_KEYS=MODEL_FILE_KEYS-{'light_model'}
+LIGHT_TASKS={'family_agent_selection','family_light_connection_test'}
 LEDGER_TABLE='llm_usage_ledger'
 
 
@@ -80,8 +84,9 @@ def model_values(data_path=None):
     try:
         if path.is_symlink() or path.stat().st_size>16384: raise ValueError()
         obj=json.loads(path.read_text())
-        if not isinstance(obj,dict) or set(obj)!=set(MODEL_ENV): raise ValueError()
+        if not isinstance(obj,dict) or set(obj) not in (LEGACY_MODEL_FILE_KEYS,MODEL_FILE_KEYS): raise ValueError()
         if any(not isinstance(value,str) or len(value)>4096 or any(ord(ch)<32 or ord(ch)==127 for ch in value) for value in obj.values()): raise ValueError()
+        obj.setdefault('light_model','')
         validate_model(obj,allow_empty=True)
         return {**obj,'origin':'file'}
     except (OSError,ValueError,TypeError):
@@ -89,16 +94,21 @@ def model_values(data_path=None):
 
 
 def validate_model(config,allow_empty=False):
-    base=config['base_url'].strip().rstrip('/');model=config['model'].strip()
-    if not base and not model and allow_empty: return None
+    if not isinstance(config,dict): raise LLMUnavailable('模型服务配置不正确，请检查后台配置')
+    limits={'base_url':2000,'model':200,'light_model':200,'api_key':4096,'reasoning_effort':200}
+    values={key:config.get(key,'') for key in limits}
+    if any(not isinstance(value,str) or len(value)>limits[key] or any(ord(char)<32 or ord(char)==127 for char in value)
+           for key,value in values.items()):
+        raise LLMUnavailable('模型服务配置不正确，请检查后台配置')
+    base=values['base_url'].strip().rstrip('/');model=values['model'].strip();light=values['light_model'].strip()
+    if not base and not model and not light and allow_empty: return None
     if not base or not model:
         raise LLMUnavailable('尚未配置模型服务；原件和手动记录仍可保存')
     try:
         parsed=urlsplit(base)
         if parsed.scheme not in ('http','https') or not parsed.hostname or parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment or parsed.port==0:
             raise ValueError()
-        if len(model)>200 or len(base)>2000 or any(ord(c)<32 or ord(c)==127 for c in model+base): raise ValueError()
-        if config.get('reasoning_effort','') not in ('','none','minimal','low','medium','high','xhigh','max'): raise ValueError()
+        if values['reasoning_effort'] not in ('','none','minimal','low','medium','high','xhigh','max'): raise ValueError()
     except ValueError:
         raise LLMUnavailable('模型服务配置不正确，请检查后台配置') from None
     return (base if parsed.path.rstrip('/').endswith('/responses') else
@@ -107,6 +117,11 @@ def validate_model(config,allow_empty=False):
 
 def configuration(data_path=None):
     return validate_model(model_values(data_path))
+
+
+def _light_request(name,messages):
+    return name in LIGHT_TASKS and isinstance(messages,list) and all(
+        isinstance(message,dict) and isinstance(message.get('content'),str) for message in messages)
 
 
 def _ledger_path(data_path=None):
@@ -324,6 +339,13 @@ def _chat_json(messages,schema,name,timeout=60,*,data_path=None):
     """Shared bounded transport; no tools, redirects, proxy or business writes."""
     config=model_values(data_path)
     endpoint,model=validate_model(config)
+    light=config.get('light_model','').strip()
+    if name=='family_light_connection_test':
+        if not light or not _light_request(name,messages):
+            raise LLMUnavailable('轻模型未配置，无法检查轻模型连接')
+        model=light
+    elif _light_request(name,messages) and light:
+        model=light
     output_name={'family_learning_answer':'回答','family_reading_feedback':'反馈','family_guided_hint':'提示'}.get(name,'草稿')
     if type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=180:
         raise ValueError('模型请求等待时间不正确')

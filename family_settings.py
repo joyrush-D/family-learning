@@ -153,8 +153,8 @@ class Store:
     def model_state(self):
         try: raw=raw_config(self.data/'model.json')
         except (OSError,SettingsError):
-            return dict(revision='',origin='file',base_url='',model='',has_api_key=False,reasoning_effort='',configured=False,error='模型配置无法读取；手动记录仍可使用，请先核对私有配置文件')
-        blank=dict(base_url='',model='',api_key='',reasoning_effort='')
+            return dict(revision='',origin='file',base_url='',model='',light_model='',has_api_key=False,reasoning_effort='',configured=False,error='模型配置无法读取；手动记录仍可使用，请先核对私有配置文件')
+        blank=dict(base_url='',model='',light_model='',api_key='',reasoning_effort='')
         try: config=family_llm.model_values(self.data)
         except family_llm.LLMUnavailable as failure:
             config={**blank,'origin':'file'};error=str(failure)
@@ -167,12 +167,12 @@ class Store:
             except family_llm.LLMUnavailable as failure:
                 error=str(failure) if config['base_url'] and config['model'] else '部署环境的模型配置不完整：请在部署配置中同时设置 FAMILY_LLM_BASE_URL 和 FAMILY_LLM_MODEL；网页不能覆盖'
                 config={**blank,'origin':config['origin']}
-        return dict(revision=revision(raw),origin=config['origin'],base_url=config['base_url'],model=config['model'],
+        return dict(revision=revision(raw),origin=config['origin'],base_url=config['base_url'],model=config['model'],light_model=config['light_model'],
                     has_api_key=bool(config['api_key']),reasoning_effort=config['reasoning_effort'],
                     configured=bool(config['base_url'] and config['model'] and not error),error=error)
 
     def save_model(self,obj):
-        if not {'revision','base_url','model'}<=set(obj) or not set(obj)<={'revision','base_url','model','api_key','reasoning_effort','clear_api_key'}:
+        if not {'revision','base_url','model'}<=set(obj) or not set(obj)<={'revision','base_url','model','light_model','api_key','reasoning_effort','clear_api_key'}:
             raise SettingsError('模型配置字段不正确')
         if family_llm.environment_model(): raise SettingsError('当前模型由部署环境管理，请在部署配置中更改；网页未覆盖',409,'model_environment_managed')
         if type(obj.get('clear_api_key',False)) is not bool: raise SettingsError('清除密钥选项格式不正确')
@@ -183,7 +183,7 @@ class Store:
             except family_llm.LLMUnavailable: config={key:'' for key in family_llm.MODEL_ENV}
             old_base=config['base_url'].rstrip('/')
             old_key=config['api_key']
-            for key in ['base_url','model','api_key','reasoning_effort']:
+            for key in ['base_url','model','light_model','api_key','reasoning_effort']:
                 if key in obj:
                     value=obj[key]
                     if not isinstance(value,str) or len(value)>(4096 if key=='api_key' else 2000 if key=='base_url' else 200) or any(ord(ch)<32 or ord(ch)==127 for ch in value):
@@ -192,7 +192,7 @@ class Store:
             if obj.get('clear_api_key'): config['api_key']=''
             if config['base_url'].rstrip('/')!=old_base and old_key and not obj.get('api_key','').strip() and not obj.get('clear_api_key'):
                 raise SettingsError('更改模型地址时请重新填写密钥或明确清除原密钥',409,'model_key_endpoint_changed')
-            wanted={key:config[key] for key in ['base_url','model','api_key','reasoning_effort']}
+            wanted={key:config[key] for key in ['base_url','model','light_model','api_key','reasoning_effort']}
             try: family_llm.validate_model(wanted,allow_empty=True)
             except family_llm.LLMUnavailable as error: raise SettingsError(str(error)) from None
             check_revision(obj,current,wanted)
