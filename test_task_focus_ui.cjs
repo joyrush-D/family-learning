@@ -30,7 +30,7 @@ async function proof(p,name){if(process.env.TASK_FOCUS_UI_PROOF_DIR){const fs=re
    const ready=()=>eventually(()=>p.locator('.today-dashboard').isVisible(),'home ready'),tasks=async()=>{await p.locator('[data-page="tasks"]').first().click();await eventually(()=>p.locator('[data-view="等待中"]').isVisible(),'action list ready')};
    const card=id=>p.locator('[data-query-target="task:'+id+'"]'),form=p.locator('#taskFocusForm'),save=()=>form.locator('[type="submit"]').click();
    let id;
-   const fresh=async()=>(await read()).tasks.find(t=>t.id===id),open=async()=>{await card(id).locator('[data-task-focus]').click();await eventually(()=>p.locator('#taskFocusDialog').isVisible(),'focus form open')};
+   const fresh=async()=>(await read()).tasks.find(t=>t.id===id),open=async()=>{const button=card(id).locator('[data-task-focus]');if(!await button.isVisible())await card(id).locator('summary').filter({hasText:'更多操作'}).click();await button.click();await eventually(()=>p.locator('#taskFocusDialog').isVisible(),'focus form open')};
    const saved=()=>eventually(async()=>!(await p.locator('#taskFocusDialog').isVisible()),'focus saved and dialog closed');
    try{
     const before=await read(),due=addDays(before.today,7),tomorrow=addDays(before.today,1),title='虚构材料核对 '+width,action='数学练习第 12—14 页，完成第 1、3、5 题。\n打印第 2—3 页回执，周五上学前带给老师。';

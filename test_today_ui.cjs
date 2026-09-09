@@ -32,8 +32,8 @@ function fixtures(base){
   task('DONE',today,{update:{status:'已完成'}}),task('NA',today,{update:{status:'不适用'}}),task('DECLINED',today,{update:{status:'不参加'}}),task('ARCHIVE',today,{original_status:'已归档'}),task('LINK','尚未明确'),task('CANCEL-LINK','日期未定')];
  const event=(id,extra={})=>({id,title:'虚构安排 '+id,day:today,child_ids:[first.id],status:'confirmed',category:'school',start_time:'08:00',task_id:'',...extra});
  const events=[event('linked-one',{task_id:'LINK'}),event('linked-two',{task_id:'LINK'}),event('done-linked',{task_id:'DONE'}),event('shared',{child_ids:[first.id,second.id],category:'family'}),event('unlinked'),event('cancelled',{status:'cancelled'}),event('cancelled-link',{status:'cancelled',task_id:'CANCEL-LINK'}),event('tomorrow',{day:'2026-09-09'})];
- const reading=(id,state,planned_on=today)=>({id,child_id:first.id,child:first.name,book:'虚构阅读 '+id,state,planned_on});
- return {...base,today,tasks,today_calendar:{events,timetables:[{id:'synthetic-table',child_id:first.id,day:today,title:'虚构课表',source:'虚构课表原件',sessions:[{slot:'第一节',title:'虚构数学'},{slot:'第二节',title:'虚构语文'}]}],source_error:''},
+ const reading=(id,state,planned_on=today)=>({id,child_id:first.id,child:first.name,book:'虚构阅读 '+id,state,planned_on,attachments:[]});
+ return {...base,today,tasks,agent:{...base.agent,items:['school','care','review'].map(kind=>({id:'synthetic-'+kind,kind,child_id:first.id,state:'pending',title:'虚构提醒 '+kind,body:'虚构待核对内容',evidence:[]}))},today_calendar:{events,timetables:[{id:'synthetic-table',child_id:first.id,day:today,title:'虚构课表',source:'虚构课表原件',sessions:[{slot:'第一节',title:'虚构数学'},{slot:'第二节',title:'虚构语文'}]}],source_error:''},
   reading:{...base.reading,tasks:[reading('draft','草案'),reading('paused','暂停'),reading('finished','已完成'),reading('today-reading','进行中'),reading('more','需补充'),reading('past-reading','进行中','2026-09-07'),reading('parent-review','待确认',''),reading('future-reading','进行中','2026-09-09'),reading('undated-reading','进行中','')]}};
 }
 
@@ -64,14 +64,21 @@ function fixtures(base){
     assert.equal(await first.locator('[data-today-event="unlinked"]').count(),1);
     assert.match(await first.locator('.today-school').innerText(),/虚构数学.*虚构语文/);
     assert.match(await second.locator('.today-school').innerText(),/课表.*未录入/);
-    assert.deepEqual(await first.locator('[data-today-reading]').evaluateAll(xs=>xs.map(x=>x.dataset.todayReading).sort()),['more','parent-review','past-reading','today-reading']);
-    assert.match(await first.locator('.today-reading').filter({has:p.locator('[data-today-reading="parent-review"]')}).innerText(),/等家长看作品/);
+    assert.deepEqual(await p.locator('nav [data-page]').evaluateAll(xs=>xs.map(x=>x.dataset.page)),['home','study','tasks','calendar','more']);
+    assert.deepEqual(await p.locator('nav [data-page]').evaluateAll(xs=>xs.map(x=>x.querySelector('span:last-child').textContent)),['今天','今日作业','学校待办','日历','更多']);
+    assert.equal(await p.locator('.today-reading,[data-today-reading],[data-care],[data-query-target^="care:"],#content [data-page="reading"],#content [data-page="care"]').count(),0,'homepage omits reading and care modules');
+    assert.deepEqual(await p.locator('[data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem)),['synthetic-school'],'homepage keeps only school suggestions');
     assert.equal(await p.locator('#growthWorld,.universe').count(),0);
     assert.equal(resources.some(x=>/growth-world\.js|three\.(core|module)/.test(x)),false,'homepage never requests Three.js');
     const position=await first.locator('.today-priorities [data-today-task] h3').first().boundingBox();
     assert.ok(position&&position.y>=0&&position.y+position.height<820,'first actual task is in first screen');
-    await proof(p,'today-'+width);assert.deepEqual(errors,[]);
-    checks.push({width,kind:'classification',dateBuckets:true,schoolDeduplication:true,sharedCalendar:true,readingRoles:true,noThree:true,taskTop:position.y,noOverflow:true});
+    await proof(p,'today-'+width);
+    for(const [page,title] of [['learning','学习任务与进展'],['growth','成长记录'],['reading','把一本书，变成一段旅程。'],['care','陪伴建议与反馈'],['agent','成长助手'],['print','家庭打印站'],['sources','来源与附件']]){
+     await p.locator('nav [data-page="more"]').click();await p.locator('#content [data-page="'+page+'"]').click();
+     assert.equal(await p.locator('#content h1').innerText(),title,'more opens '+page);assert.equal(await p.locator('nav [data-page="more"]').getAttribute('class'),'active');await fit(p);
+    }
+    assert.deepEqual(errors,[]);
+    checks.push({width,kind:'classification',dateBuckets:true,schoolDeduplication:true,sharedCalendar:true,schoolOnlyHomepage:true,fiveNavigationItems:true,moreEntriesReachable:true,noThree:true,taskTop:position.y,noOverflow:true});
    }finally{await p.close()}
 
    // These writes go to the disposable demo's real API. No response fixture is active.

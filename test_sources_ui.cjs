@@ -1,5 +1,5 @@
 // Run as test_startup_ui.cjs with PLAYWRIGHT_MODULE / PLAYWRIGHT_CHANNEL.
-// Only demo.py's disposable family and intercepted synthetic sources; no POSTs.
+// Only demo.py's disposable family and intercepted synthetic sources; no POSTs. Optional SOURCES_UI_PROOF_DIR.
 const assert=require('node:assert/strict');
 const fs=require('node:fs/promises');
 const path=require('node:path');
@@ -17,10 +17,10 @@ async function demoServer(){
  const url='http://127.0.0.1:'+port+'/';try{await eventually(async()=>{if(failure)throw failure;if(proc.exitCode!==null)throw Error('Synthetic demo exited');try{return(await fetch(url,{signal:AbortSignal.timeout(400)})).ok}catch{return false}},'demo');return{url,stop}}catch(e){await stop();throw e}
 }
 async function checkWidth(p,label){assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,label+' page overflow');assert.equal(await p.locator('[data-source-card]').evaluateAll(cards=>cards.some(el=>el.scrollWidth>el.clientWidth)),false,label+' card overflow')}
-async function sources(p){await p.locator('nav [data-page="sources"]').click();await eventually(async()=>await p.locator('#content h1').innerText()==='来源与附件','sources page')}
+async function sources(p){await p.locator('nav [data-page="more"]').click();await p.locator('#content [data-page="sources"]').click();await eventually(async()=>await p.locator('#content h1').innerText()==='来源与附件','sources page')}
 
 (async()=>{
- let server,browser;const checks=[],proofDir=path.join(__dirname,'private/check-20260908/source-followup/ui');
+ let server,browser;const checks=[],proofDir=process.env.SOURCES_UI_PROOF_DIR||path.join(__dirname,'private/check-20260908/source-followup/ui');
  try{
   server=await demoServer();const base=await(await fetch(server.url+'api/state')).json(),first=base.children[0].name,second=base.children[1].name;
   const stringGap='<img src="/source-test-xss" onerror="window.__sourceXss=1"> 虚构图片尚未核对';
