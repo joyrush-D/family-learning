@@ -213,10 +213,10 @@ def restore(archive, destination):
                 hold_restored_print_jobs(db)
                 # Ordinary restarts resume timers; restoring old data must not.
                 hold_restored_study_timers(db)
-                # Old backups must not revive a child login or invitation that a
-                # parent revoked after the backup. Shared works remain intact.
+                # Restoring data must not revive parent/child logins or invitations.
+                # Shared works remain intact.
                 with db:
-                    for table in ('child_invites', 'child_sessions'):
+                    for table in ('child_invites', 'child_sessions', 'parent_sessions'):
                         if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
                             db.execute('DELETE FROM ' + table)
             # Verification above covers the original bytes. Only the isolated

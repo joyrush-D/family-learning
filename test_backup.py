@@ -453,7 +453,14 @@ def agent_restore_check():
             store._job('synthetic-retry',dict(record='synthetic'),now)
             store._fail('synthetic-retry',now)
             store._runtime('idle',now)
-            table_names=['agent_sources','agent_messages','agent_jobs','agent_items','agent_runtime','manual_tasks']
+            # Parent browser sessions are device credentials and must not survive restore.
+            with app.connect() as db:
+                db.execute('''CREATE TABLE IF NOT EXISTS parent_sessions
+                    (hash TEXT PRIMARY KEY, expires REAL NOT NULL, config_hash TEXT NOT NULL)''')
+                db.execute('INSERT OR REPLACE INTO parent_sessions VALUES (?,?,?)',
+                           ('s' * 64, 4102444800, 'c' * 64))
+            table_names=['agent_sources','agent_messages','agent_jobs','agent_items','agent_runtime','manual_tasks',
+                         'parent_sessions']
             def rows(base):
                 with sqlite3.connect(base/'private/family.sqlite3') as db:
                     return {name:db.execute('SELECT * FROM '+name+' ORDER BY rowid').fetchall() for name in table_names}
@@ -461,7 +468,9 @@ def agent_restore_check():
             archive=backup.create(root,'private/backups/agent.zip')
             archived_hash=hashlib.sha256(archive.read_bytes()).hexdigest()
             restored=backup.restore(archive,root.parent/'restored-agent')
-            assert rows(restored)==expected and rows(root)==expected
+            restored_rows=rows(restored)
+            assert rows(root)==expected
+            assert restored_rows==dict(expected,parent_sessions=[])
             recovered_config=restored/'private/agent.json'
             assert json.loads(recovered_config.read_text())==dict(config,enabled=False)
             assert recovered_config.stat().st_mode & 0o777 == 0o600
@@ -483,7 +492,7 @@ def agent_restore_check():
                     raise AssertionError('restore must not reactivate message collection')
                 # Parent decisions and their stable task IDs survive; no new task is created.
                 assert recovered.act(dict(id=item['id'],action='accept'))==accepted
-            assert rows(restored)==expected
+            assert rows(restored)==restored_rows
             # Malformed saved config stops isolated restore instead of enabling it or dropping bindings.
             config_path.write_text('[]')
             bad_archive=backup.create(root,'private/backups/bad-agent-config.zip')

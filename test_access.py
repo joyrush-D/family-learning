@@ -99,6 +99,9 @@ class AccessTests(unittest.TestCase):
             (root / name).write_text('# 虚构测试资料\n', encoding='utf-8')
         for name in ('child.html', 'child.js', 'child.css'):
             (root / name).write_text('synthetic child asset', encoding='utf-8')
+        (root / 'index.html').write_text('<!doctype html><title>虚构家庭</title>', encoding='utf-8')
+        (root / 'login.html').write_text('<!doctype html><title>虚构家庭登录</title>', encoding='utf-8')
+        (root / 'login.js').write_text('document.title = "synthetic login";', encoding='utf-8')
         # Delay app import until FAMILY_DATA points into this temporary case;
         # importing app otherwise creates its default private directory.
         with patch.dict(os.environ, {'FAMILY_DATA': str(data)}, clear=True):
@@ -139,6 +142,13 @@ class AccessTests(unittest.TestCase):
                 access_path.write_text(json.dumps(configured, ensure_ascii=False), encoding='utf-8')
                 if os.name != 'nt': access_path.chmod(0o600)
 
+            def parent_login(password_value=password, host='family.example.ts.net', headers=None):
+                values = {'Content-Type': 'application/json', 'X-Family-Login': '1',
+                          'Origin': 'https://family.example.ts.net'}
+                values.update(headers or {})
+                return post('/api/parent/login', {'username': 'parent', 'password': password_value},
+                            host=host, headers=values)
+
             def raw_status(raw_request):
                 sock = socket.create_connection(('127.0.0.1', server.server_port), timeout=5)
                 try:
@@ -178,10 +188,25 @@ class AccessTests(unittest.TestCase):
                         'Forwarded': 'for=192.0.2.10;proto=https;host=family.example.ts.net'})[0], 401)
                     self.assertEqual(get(host='localhost', headers={
                         'X-Forwarded-For': '192.0.2.10'})[0], 401)
+                    # The login page is public; the family HTML and API are not.
+                    status, body, info = get('/login', host='family.example.ts.net')
+                    self.assertEqual(status, 200)
+                    self.assertTrue(info.get('Content-Type', '').startswith('text/html'))
+                    self.assertNotIn(b'child-1', body)
+                    self.assertEqual(get('/login.js', host='family.example.ts.net')[0], 200)
+                    status, _, info = get('/', host='family.example.ts.net', headers={'Accept': 'text/html'})
+                    self.assertEqual(status, 303)
+                    self.assertTrue(info.get('Location', '').endswith('/family/login'))
+                    status, _, info = get('/api/state', host='family.example.ts.net')
+                    self.assertEqual(status, 401)
+                    self.assertNotIn('WWW-Authenticate', info)
+                    status, _, info = get('/calendar.ics', host='family.example.ts.net')
+                    self.assertEqual(status, 401)
+                    self.assertTrue(info.get('WWW-Authenticate', '').startswith('Basic '))
                     wrong_auth = 'Basic ' + base64.b64encode(b'parent:wrong-synthetic-password').decode()
                     status, _, challenge = get(host='family.example.ts.net', headers={'Authorization': wrong_auth})
                     self.assertEqual(status, 401)
-                    self.assertTrue(challenge['WWW-Authenticate'].startswith('Basic '))
+                    self.assertNotIn('WWW-Authenticate', challenge)
                     self.assertEqual(get(host='family.example.ts.net', headers={
                         'Authorization': parent_auth})[0], 200)
 
@@ -189,6 +214,90 @@ class AccessTests(unittest.TestCase):
                                     title='虚构家庭安排', category='activity', day='2026-09-12',
                                     start_time='09:00', end_time='10:00', location='虚构地点',
                                     note='虚构备注', status='tentative', repeat='none', until='')
+                    # Default HTTPS port is omitted from the browser Origin even when configured explicitly.
+                    port_config = access.make_config('https://FAMILY.example.ts.net:443/family', 'parent', password)
+                    access_path.write_text(json.dumps(port_config, ensure_ascii=False), encoding='utf-8')
+                    if os.name != 'nt': access_path.chmod(0o600)
+                    self.assertEqual(parent_login(headers={'Origin': 'https://family.example.ts.net'})[0], 200)
+                    self.assertIn(parent_login(headers={'Origin': 'https://family.example.ts.net:444'})[0], (400, 403))
+                    install_config()
+                    # Login binds a session to this config and stores only a digest.
+                    status, body, info = parent_login()
+                    self.assertEqual(status, 200)
+                    self.assertEqual(json.loads(body), {'ok': True})
+                    cookie = info['Set-Cookie']
+                    cookie_name, cookie_value = cookie.split(';', 1)[0].split('=', 1)
+                    self.assertEqual(cookie_name, 'family_parent_session')
+                    self.assertRegex(cookie_value, r'^[A-Za-z0-9_-]{43}$')
+                    attrs = {part.strip().lower() for part in cookie.split(';')[1:]}
+                    self.assertTrue({'secure', 'httponly', 'samesite=lax', 'path=/family/', 'max-age=604800'} <= attrs)
+                    parent_cookie = cookie.split(';', 1)[0]
+                    with app.connect() as db:
+                        session = db.execute('SELECT * FROM parent_sessions').fetchone()
+                        self.assertIsNotNone(session)
+                        self.assertNotIn(cookie_value, tuple(session))
+                        self.assertNotIn(password, tuple(session))
+                        self.assertEqual(len(session['hash']), 64)
+                        self.assertEqual(len(session['config_hash']), 64)
+                    self.assertEqual(get('/api/state', host='family.example.ts.net',
+                                         headers={'Cookie': parent_cookie})[0], 200)
+                    self.assertEqual(get('/child/api/state', host='family.example.ts.net',
+                                         headers={'Cookie': parent_cookie})[0], 401)
+                    session_calendar = {**calendar, 'id': 'b' * 32, 'title': '虚构会话安排'}
+                    self.assertEqual(post('/api/calendar/save', session_calendar,
+                                          host='family.example.ts.net', headers={'Cookie': parent_cookie})[0], 403)
+                    self.assertEqual(post('/api/calendar/save', session_calendar,
+                                          host='family.example.ts.net', headers={'Cookie': parent_cookie,
+                                                                                'X-Family-Token': app.TOKEN})[0], 200)
+
+                    # A second device remains valid when the first device logs out.
+                    status, _, info_b = parent_login()
+                    self.assertEqual(status, 200)
+                    cookie_b = info_b['Set-Cookie'].split(';', 1)[0]
+                    logout_headers = {'Cookie': parent_cookie, 'Content-Type': 'application/json',
+                                      'X-Family-Login': '1', 'Origin': 'https://family.example.ts.net'}
+                    status, _, logout_info = post('/api/parent/logout', {}, host='family.example.ts.net',
+                                                  headers=logout_headers)
+                    self.assertEqual(status, 200)
+                    self.assertIn('family_parent_session=', logout_info.get('Set-Cookie', ''))
+                    self.assertEqual(get('/api/state', host='family.example.ts.net',
+                                         headers={'Cookie': parent_cookie})[0], 401)
+                    self.assertEqual(get('/api/state', host='family.example.ts.net',
+                                         headers={'Cookie': cookie_b})[0], 200)
+                    with app.connect() as db:
+                        db.execute('UPDATE parent_sessions SET expires=0')
+                    self.assertEqual(get('/api/state', host='family.example.ts.net',
+                                         headers={'Cookie': cookie_b})[0], 401)
+                    status, _, info_c = parent_login()
+                    self.assertEqual(status, 200)
+                    cookie_c = info_c['Set-Cookie'].split(';', 1)[0]
+                    changed_config = access.make_config('https://family.example.ts.net/family', 'parent',
+                                                        password + '-changed')
+                    access_path.write_text(json.dumps(changed_config, ensure_ascii=False), encoding='utf-8')
+                    if os.name != 'nt': access_path.chmod(0o600)
+                    self.assertEqual(get('/api/state', host='family.example.ts.net',
+                                         headers={'Cookie': cookie_c})[0], 401)
+                    install_config()
+                    status, _, info_d = parent_login()
+                    self.assertEqual(status, 200)
+                    cookie_d = info_d['Set-Cookie'].split(';', 1)[0].encode('ascii')
+                    self.assertEqual(raw_status(
+                        b'GET /api/state HTTP/1.1\r\nHost: family.example.ts.net\r\n'
+                        b'Cookie: ' + cookie_d + b'\r\nCookie: ' + cookie_d +
+                        b'\r\nConnection: close\r\n\r\n'), 401)
+                    self.assertEqual(get('/api/state', host='family.example.ts.net', headers={
+                        'Cookie': cookie_c + '; ' + cookie_c})[0], 401)
+                    self.assertEqual(get('/api/state', host='family.example.ts.net', headers={
+                        'Cookie': 'family_parent_session=invalid', 'Authorization': parent_auth})[0], 401)
+                    self.assertEqual(get('/', host='family.example.ts.net', headers={
+                        'Accept': 'text/html', 'Cookie': 'family_parent_session=invalid',
+                        'Authorization': parent_auth})[0], 303)
+
+                    # Basic remains a supported parent credential, while writes need the app token.
+                    self.assertEqual(get('/api/state', host='family.example.ts.net',
+                                         headers={'Authorization': parent_auth})[0], 200)
+                    self.assertEqual(get('/', host='family.example.ts.net', headers={
+                        'Accept': 'text/html', 'Authorization': parent_auth})[0], 200)
                     parent_headers = {'Authorization': parent_auth, 'X-Family-Token': app.TOKEN}
                     self.assertEqual(post('/api/calendar/save', calendar,
                                           host='family.example.ts.net', headers={'Authorization': parent_auth})[0], 403)
@@ -243,6 +352,39 @@ class AccessTests(unittest.TestCase):
                         'Authorization': 'Bearer synthetic-print-token'})[0], 404)
                     self.assertEqual(get('/api/print/bridge/unknown', headers={
                         'Authorization': 'Bearer wrong'})[0], 403)
+
+                    with patch.object(access, '_login_attempts', [int(access.time.time())] * 10):
+                        limited, _, limited_headers = parent_login()
+                        self.assertEqual(limited, 429)
+                        self.assertEqual(limited_headers.get('Retry-After'), '60')
+
+                    # Login and logout reject unsafe origins, markers, content types and framing.
+                    self.assertIn(parent_login(headers={'Origin': 'https://evil.example.ts.net'})[0], (400, 403, 415))
+                    self.assertIn(parent_login(headers={'X-Family-Login': ''})[0], (400, 403, 415))
+                    self.assertIn(parent_login(headers={'Content-Type': 'text/plain'})[0], (400, 403, 415))
+                    self.assertIn(raw_status(
+                        b'POST /api/parent/login HTTP/1.1\r\n'
+                        b'Host: family.example.ts.net\r\n'
+                        b'Content-Type: application/json\r\nX-Family-Login: 1\r\n'
+                        b'Origin: https://family.example.ts.net\r\n'
+                        b'Content-Length: 2\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}'), (400, 411))
+                    self.assertIn(raw_status(
+                        b'POST /api/parent/login HTTP/1.1\r\n'
+                        b'Host: family.example.ts.net\r\nTransfer-Encoding: chunked\r\n'
+                        b'Content-Type: application/json\r\nX-Family-Login: 1\r\n'
+                        b'Origin: https://family.example.ts.net\r\nConnection: close\r\n\r\n0\r\n\r\n'), (400, 411))
+                    self.assertIn(raw_status(
+                        b'POST /api/parent/login HTTP/1.1\r\n'
+                        b'Host: family.example.ts.net\r\nContent-Type: application/json\r\n'
+                        b'X-Family-Login: 1\r\nOrigin: https://family.example.ts.net\r\n'
+                        b'Content-Length: 7\r\nConnection: close\r\n\r\nnot-json'), (400, 415))
+                    overlong = b'{' + b'a' * 20000 + b'}'
+                    self.assertIn(raw_status(
+                        b'POST /api/parent/login HTTP/1.1\r\n'
+                        b'Host: family.example.ts.net\r\nContent-Type: application/json\r\n'
+                        b'X-Family-Login: 1\r\nOrigin: https://family.example.ts.net\r\n'
+                        + ('Content-Length: %d\r\n' % len(overlong)).encode() +
+                        b'Connection: close\r\n\r\n' + overlong), (400, 413))
             finally:
                 server.shutdown()
                 server.server_close()

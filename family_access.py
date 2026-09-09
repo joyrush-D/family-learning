@@ -1,4 +1,4 @@
-"""Small, local parent BasicAuth configuration for an HTTPS Tailscale entrypoint."""
+"""Parent HTTPS login and sessions; Basic credentials also serve calendar clients."""
 import base64
 import binascii
 import hashlib
@@ -10,6 +10,10 @@ from pathlib import Path
 import re
 import secrets
 import stat
+import sqlite3
+import threading
+import time
+from contextlib import closing, contextmanager
 from urllib.parse import urlsplit
 
 
@@ -22,6 +26,10 @@ _PATH = re.compile(r'^/(?:[A-Za-z0-9._~-]+/)*[A-Za-z0-9._~-]+/?$', re.ASCII)
 _USERNAME = re.compile(r'^[\x21-\x7e]+$', re.ASCII)
 _BASIC = re.compile(r'^Basic ([A-Za-z0-9+/]+={0,2})$', re.ASCII | re.IGNORECASE)
 _success_cache = None
+COOKIE = 'family_parent_session'
+SESSION_AGE = 604800
+_login_attempts = []
+_login_lock = threading.Lock()
 
 
 class AccessError(ValueError):
@@ -111,16 +119,16 @@ def read_config(data_path):
     return _validate_config(config)
 
 
-def _authorization_values(headers):
+def _header_values(headers, name):
     try:
         if hasattr(headers, 'get_all'):
-            values = headers.get_all('Authorization') or []
+            values = headers.get_all(name) or []
         elif hasattr(headers, 'getheaders'):
-            values = headers.getheaders('Authorization') or []
+            values = headers.getheaders(name) or []
         else:
             values = []
             for key, value in headers.items():
-                if str(key).lower() == 'authorization':
+                if str(key).lower() == name.lower():
                     values.extend(value if isinstance(value, (list, tuple)) else [value])
     except (AttributeError, TypeError):
         return []
@@ -133,7 +141,7 @@ def authorized(headers, config):
     if not isinstance(config, dict):
         return False
     _validate_config(config)
-    values = _authorization_values(headers)
+    values = _header_values(headers, 'Authorization')
     if len(values) != 1 or not isinstance(values[0], str) or len(values[0]) > 4096:
         return False
     header = values[0]
@@ -162,4 +170,131 @@ def authorized(headers, config):
     if not hmac.compare_digest(candidate, expected):
         return False
     _success_cache = cache_key
+    return True
+
+
+def _fingerprint(config):
+    return hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def _cookies(headers):
+    values = _header_values(headers, 'Cookie')
+    if not values:
+        return []
+    if len(values) != 1 or not isinstance(values[0], str) or len(values[0]) > 8192:
+        return ['invalid']
+    raw = values[0]
+    return [part.strip().split('=', 1)[1] for part in raw.split(';')
+            if part.strip().startswith(COOKIE + '=')]
+
+
+def has_session_cookie(headers):
+    return bool(_cookies(headers))
+
+
+def _secret(headers):
+    values = _cookies(headers)
+    return values[0] if len(values) == 1 and re.fullmatch(r'[A-Za-z0-9_-]{43}', values[0]) else ''
+
+
+def _digest(secret):
+    return hashlib.sha256(secret.encode()).hexdigest()
+
+
+@contextmanager
+def _sessions(connect):
+    with closing(connect()) as c:
+        with c:
+            c.execute('CREATE TABLE IF NOT EXISTS parent_sessions (hash TEXT PRIMARY KEY, expires INTEGER NOT NULL, config_hash TEXT NOT NULL)')
+            yield c
+
+
+def session_authorized(headers, config, connect):
+    secret = _secret(headers)
+    if not secret:
+        return False
+    with _sessions(connect) as c:
+        return c.execute('SELECT 1 FROM parent_sessions WHERE hash=? AND expires>? AND config_hash=?',
+                         (_digest(secret), int(time.time()), _fingerprint(config))).fetchone() is not None
+
+
+def _path(config):
+    return urlsplit(config['base_url']).path.rstrip('/') + '/'
+
+
+def _cookie(config, secret):
+    return (COOKIE + '=' + secret + '; Path=' + _path(config) + '; Max-Age=' + str(SESSION_AGE)
+            + '; Secure; HttpOnly; SameSite=Lax')
+
+
+def dispatch(handler, config, connect, root):
+    """Handle only the public login surface after the caller has validated Host."""
+    path = urlsplit(handler.path).path
+    if path not in ('/login', '/login.js', '/api/parent/login', '/api/parent/logout'):
+        return False
+    handler.close_connection = True
+    def reply(status, body, kind='application/json; charset=utf-8', headers=None):
+        handler.reply(status, body, kind, headers={'Referrer-Policy': 'no-referrer', **(headers or {})})
+    try:
+        if path in ('/login', '/login.js'):
+            if handler.command != 'GET':
+                reply(405, {'error': '请打开登录页面'}); return True
+            if path == '/login' and session_authorized(handler.headers, config, connect):
+                reply(303, b'', headers={'Location': _path(config)}); return True
+            name, kind = ('login.html', 'text/html') if path == '/login' else ('login.js', 'text/javascript')
+            reply(200, (Path(root) / name).read_bytes(), kind + '; charset=utf-8'); return True
+        if handler.command != 'POST':
+            reply(405, {'error': '请使用登录页面提交'}); return True
+        parsed = urlsplit(config['base_url'])
+        origin = 'https://' + parsed.hostname + (':' + str(parsed.port) if parsed.port not in (None, 443) else '')
+        origins = handler.headers.get_all('Origin', [])
+        proto = handler.headers.get_all('X-Forwarded-Proto', [])
+        if (origins != [origin]
+                or proto not in ([], ['https']) or handler.headers.get_all('X-Family-Login', []) != ['1']):
+            reply(403, {'error': '请从家庭 HTTPS 入口登录'}); return True
+        lengths = handler.headers.get_all('Content-Length', [])
+        if (handler.headers.get('Transfer-Encoding') or len(lengths) != 1
+                or not re.fullmatch(r'[0-9]{1,5}', lengths[0])
+                or not 0 < int(lengths[0]) <= 4096
+                or handler.headers.get('Content-Type', '').split(';')[0].strip().lower() != 'application/json'):
+            reply(400, {'error': '请使用登录页面提交'}); return True
+        handler.connection.settimeout(10)
+        raw = handler.rfile.read(int(lengths[0]))
+        if len(raw) != int(lengths[0]):
+            raise ValueError()
+        obj = json.loads(raw)
+        if not isinstance(obj, dict):
+            raise ValueError()
+        if path == '/api/parent/logout':
+            if obj:
+                raise ValueError()
+            with _sessions(connect) as c:
+                c.execute('DELETE FROM parent_sessions WHERE hash=?', (_digest(_secret(handler.headers)),))
+            # Keep a non-secret marker so a browser's cached Basic header cannot log it back in.
+            reply(200, {'ok': True}, headers={'Set-Cookie': _cookie(config, 'logged-out')}); return True
+        if set(obj) != {'username', 'password'} or not all(isinstance(value, str) for value in obj.values()):
+            raise ValueError()
+        if not 0 < len(obj['username']) <= 64 or not 0 < len(obj['password']) <= 200:
+            raise ValueError()
+        now = int(time.time())
+        # ponytail: one family login budget per process; use a shared limiter only with multiple web workers.
+        with _login_lock:
+            _login_attempts[:] = [stamp for stamp in _login_attempts if stamp > now - 60]
+            if len(_login_attempts) >= 10:
+                reply(429, {'error': '尝试过于频繁，请一分钟后再试'}, headers={'Retry-After': '60'}); return True
+            _login_attempts.append(now)
+        header = 'Basic ' + base64.b64encode((obj['username'] + ':' + obj['password']).encode()).decode()
+        if not authorized({'Authorization': header}, config):
+            reply(401, {'error': '账号或密码不正确'}); return True
+        secret = secrets.token_urlsafe(32)
+        with _sessions(connect) as c:
+            c.execute('DELETE FROM parent_sessions WHERE expires<=? OR config_hash<>?', (now, _fingerprint(config)))
+            c.execute('DELETE FROM parent_sessions WHERE hash=?', (_digest(_secret(handler.headers)),))
+            c.execute('INSERT INTO parent_sessions VALUES (?,?,?)', (_digest(secret), now + SESSION_AGE, _fingerprint(config)))
+            c.execute('DELETE FROM parent_sessions WHERE hash NOT IN (SELECT hash FROM parent_sessions ORDER BY expires DESC, rowid DESC LIMIT 32)')
+        reply(200, {'ok': True}, headers={'Set-Cookie': _cookie(config, secret)})
+    except (OSError, sqlite3.Error):
+        reply(503, {'error': '登录暂未完成，请稍后重试'})
+    except (ValueError, TypeError, UnicodeError):
+        reply(400, {'error': '登录信息格式不正确'})
     return True

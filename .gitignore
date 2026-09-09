@@ -10,6 +10,8 @@
 !/test_app.py
 !/family_access.py
 !/test_access.py
+!/login.html
+!/login.js
 
 !/V1交付目标.md
 !/PRD.md
@@ -127,3 +129,5 @@
 !/guided.js
 !/test_guided.py
 !/test_guided_ui.cjs
+
+!/test_parent_login_ui.cjs

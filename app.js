@@ -1,6 +1,6 @@
 const basePath=new URL('.',location.href).pathname;
 const endpoint=path=>basePath+path.replace(/^\//,'');
-const apiFetch=(path,options)=>fetch(endpoint(path),options);
+const apiFetch=async(path,options)=>{const headers=new Headers(options?.headers);if(headers.has('X-Family-Token')&&data?.token)headers.set('X-Family-Token',data.token);const response=await fetch(endpoint(path),{...options,headers});if(response.status===401)showParentLogin();return response};
 let data, page='home', child='', subject='', taskView='待跟进', busy=false;
 let studyChildID='',studyDay='',studyTaskID='',studyRecordContext=null,schoolRecordContext=null,schoolRecordOpening=false;
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -11,12 +11,64 @@ const taskStatusLabel=value=>value==='不适用'?'无需处理':value;
 const selected=xs=>xs.filter(x=>!child||x.child===child);
 const empty=s=>`<div class="empty">${esc(s)}</div>`;
 function toast(s){$('#toast').textContent=s;$('#toast').style.display='block';setTimeout(()=>$('#toast').style.display='none',3500)}
+const parentLogoutAvailable=location.protocol==='https:'&&!['localhost','127.0.0.1','[::1]'].includes(location.hostname);
+let parentLoginCheck=null,parentLoginAuthenticated=false,parentLogoutBusy=false;
+function parentLoginURL(){const url=new URL(endpoint('/login'),location.href);url.hash=location.hash;return url.href}
+function paintParentLogin(){
+ const form=$('#parentLoginForm'),pending=!!parentLoginCheck;
+ form.elements.username.readOnly=pending||parentLoginAuthenticated;form.elements.password.readOnly=pending||parentLoginAuthenticated;form.elements.password.required=!parentLoginAuthenticated;
+ $('#parentLoginSubmit').disabled=pending;$('#parentLoginShow').disabled=pending;
+ $('#parentLoginSubmit').textContent=pending?'正在连接…':parentLoginAuthenticated?'重试连接':'登录并继续';
+}
+function showParentLogin(){
+ const dialog=$('#parentLoginDialog');$('#parentLoginNotice').classList.remove('hide');
+ if(!dialog.open){parentLoginAuthenticated=false;$('#parentLoginStatus').textContent='';paintParentLogin();dialog.showModal()}
+}
+async function checkParentLogin(event){
+ event.preventDefault();const form=$('#parentLoginForm');if(parentLoginCheck||!form.reportValidity())return;
+ if(location.protocol!=='https:'){$('#parentLoginStatus').textContent='请从 HTTPS 家庭入口登录。当前填写仍留在本页。';return}
+ const controller=new AbortController();parentLoginCheck=controller;const timer=setTimeout(()=>controller.abort(),20000);
+ paintParentLogin();$('#parentLoginStatus').textContent='正在恢复登录…';
+ try{
+  if(!parentLoginAuthenticated){
+   const response=await fetch(endpoint('/api/parent/login'),{method:'POST',credentials:'same-origin',signal:controller.signal,headers:{'Content-Type':'application/json','X-Family-Login':'1'},body:JSON.stringify({username:form.elements.username.value,password:form.elements.password.value})});
+   const result=await response.json();if(!response.ok||result.ok!==true)throw Error(typeof result.error==='string'?result.error:'登录未成功，请核对账号与密码。');
+   if(parentLoginCheck!==controller||!$('#parentLoginDialog').open)return;
+   parentLoginAuthenticated=true;form.elements.password.value='';form.elements.password.type='password';$('#parentLoginShow').textContent='显示';$('#parentLoginShow').setAttribute('aria-pressed','false');
+  }
+  const response=await apiFetch('/api/state',{signal:controller.signal,credentials:'same-origin',cache:'no-store'});
+  if(!response.ok){if(response.status===401)parentLoginAuthenticated=false;throw Error(response.status===401?'登录未能恢复，请重新填写密码。':'已登录，暂时无法核对家庭记录，请重试连接。')}
+  const next=await response.json();if(parentLoginCheck!==controller||!$('#parentLoginDialog').open)return;
+  if(data)data.token=next.token;
+  $('#parentLoginNotice').classList.add('hide');$('#parentLoginDialog').close();
+  if(data)toast('登录已恢复，请重试刚才的操作。');else await load().catch(showStartupError);
+ }catch(error){
+  if(parentLoginCheck===controller&&$('#parentLoginDialog').open)$('#parentLoginStatus').textContent=error.name==='AbortError'?'核对超时，请检查连接后重试。':error instanceof TypeError||error instanceof SyntaxError?'未能核对登录，请检查连接后重试。':error.message;
+ }finally{clearTimeout(timer);if(parentLoginCheck===controller){parentLoginCheck=null;paintParentLogin()}}
+}
+async function parentLogout(){
+ if(parentLogoutBusy)return;parentLogoutBusy=true;
+ const buttons=[...$('#parentLogoutDialog').querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);$('#parentLogoutStatus').textContent='正在退出…';
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);
+ try{
+  const response=await fetch(endpoint('/api/parent/logout'),{method:'POST',credentials:'same-origin',signal:controller.signal,headers:{'Content-Type':'application/json','X-Family-Login':'1'},body:'{}'});
+  const result=await response.json();if(!response.ok||result.ok!==true)throw Error(typeof result.error==='string'?result.error:'退出未成功，请重试。');
+  location.replace(parentLoginURL());
+ }catch(error){$('#parentLogoutStatus').textContent=error.name==='AbortError'?'退出结果尚未确认，请检查连接后重试。':error instanceof TypeError||error instanceof SyntaxError?'退出结果尚未确认，请重试。':error.message}
+ finally{clearTimeout(timer);parentLogoutBusy=false;buttons.forEach(b=>b.disabled=false)}
+}
+$('#parentLoginOpen').onclick=showParentLogin;$('#parentLoginForm').onsubmit=checkParentLogin;
+$('#parentLoginShow').onclick=()=>{const input=$('#parentLoginForm').elements.password,visible=input.type==='password';input.type=visible?'text':'password';$('#parentLoginShow').textContent=visible?'隐藏':'显示';$('#parentLoginShow').setAttribute('aria-pressed',String(visible))};
+$('#parentLoginDialog').addEventListener('close',()=>{parentLoginCheck?.abort();parentLoginCheck=null;parentLoginAuthenticated=false;const input=$('#parentLoginForm').elements.password;input.value='';input.type='password';$('#parentLoginShow').textContent='显示';$('#parentLoginShow').setAttribute('aria-pressed','false');paintParentLogin()});
+$('#parentLogoutConfirm').onclick=parentLogout;
+$('#parentLogoutDialog').addEventListener('cancel',event=>{if(parentLogoutBusy)event.preventDefault()});
+document.addEventListener('click',event=>{if(event.target.closest('[data-parent-logout]')&&parentLogoutAvailable){$('#parentLogoutStatus').textContent='';$('#parentLogoutDialog').showModal()}});
 let stateLoadSequence=0;
 async function load(){
  const seq=++stateLoadSequence,controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);
  try{
   const r=await apiFetch('/api/state',{signal:controller.signal});
-  if(!r.ok)throw Error([401,403].includes(r.status)?'登录已失效，请重新打开页面登录。':'家庭记录暂时无法读取，请重试。');
+  if(!r.ok)throw Error(r.status===401?'请先重新登录，再重试读取。':r.status===403?'当前入口没有访问权限，请核对家庭入口。':'家庭记录暂时无法读取，请重试。');
   const next=await r.json();if(seq!==stateLoadSequence)return;
   const selectedID=data?.children.find(c=>c.name===child)?.id,askedID=data?.children.find(c=>c.name===askState.child)?.id;
   data=next;if(!data.children.length)page='settings';if(selectedID)child=data.children.find(c=>c.id===selectedID)?.name||'';
@@ -242,7 +294,7 @@ html=`<div class="learning-heading"><div><h1>学习任务与进展</h1><p class=
 }else if(page==='calendar'){html=calendarHTML();
 }else if(page==='reading'){html=readingHTML();
 }else if(page==='print'){html=printHTML();
-}else if(page==='more'){html=`<h1>更多</h1><section class="card more-links">${[['print','打印作业'],['sources','消息来源与附件'],['learning','学习任务与进展'],['growth','成长记录'],['reading','阅读与作品'],['care','陪伴建议'],['agent','助手跟进'],['settings','家庭设置']].map(([key,label])=>`<button data-page="${key}">${label} →</button>`).join('')}</section>`;
+}else if(page==='more'){html=`<h1>更多</h1><section class="card more-links">${[['print','打印作业'],['sources','消息来源与附件'],['learning','学习任务与进展'],['growth','成长记录'],['reading','阅读与作品'],['care','陪伴建议'],['agent','助手跟进'],['settings','家庭设置']].map(([key,label])=>`<button data-page="${key}">${label} →</button>`).join('')}</section>${parentLogoutAvailable?'<button type="button" data-parent-logout>退出这台设备</button>':''}`;
  }else{html=`<h1>来源与附件</h1><p class="muted">这里展示已保存的采集结果。刷新页面不会立即扫描微信和QQ；历史记录也不代表接口此刻在线。</p>${currentSourceCardsHTML()}<details class="card" data-source-history ${currentSources().length?'':'open'}><summary>历史采集记录与覆盖说明</summary>${sourceCardsHTML()}</details>${inboxHTML()}<section class="card files"><h2>已保存附件</h2>${data.attachments.map(f=>`<a href="${endpoint('/attachment/')}${encodeURIComponent(f)}" download="${esc(f)}">↓ ${esc(f)}</a>`).join('')||empty('暂无附件')}</section><section class="card"><h2>来源与覆盖说明</h2><pre>${esc(data.sources)}</pre></section>`}
 document.body.dataset.page=page;$('#content').innerHTML=html;for(const p of document.querySelectorAll('details[data-learning-panel]'))p.open=openLearningPanels.includes(p.dataset.learningPanel);window.FamilyGuided?.sync?.();if(page==='world')mountWorld();if(page==='print')wirePrint();if(page==='ask')wireAsk();if(page==='learning')window.FamilyGuided?.wire();if(page==='reading')wireReading();if(page==='calendar')wireCalendar();if(page==='study')mountStudy();if(page==='settings')mountSettings();document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===page||(b.dataset.page==='more'&&!['home','study','tasks','calendar'].includes(page))));
 $('#childFilter')?.addEventListener('change',e=>{child=e.target.value;subject='';render()});$('#subjectFilter')?.addEventListener('change',e=>{subject=e.target.value;render()});restoreContentFocus(savedFocus);renderedPage=page;}

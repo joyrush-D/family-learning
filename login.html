@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0b1221">
+  <title>登录 · 一起长大</title>
+  <style>
+    :root{color-scheme:dark;font:16px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#edf3ff;background:#0b1221}
+    *{box-sizing:border-box}body{margin:0;min-height:100dvh;display:grid;place-items:center;padding:28px 20px;background:radial-gradient(ellipse at 20% 0,#1b3c40 0,transparent 55%)}
+    main{width:100%;max-width:420px}.brand{display:flex;align-items:center;gap:10px;color:#96efcf;font-size:15px;letter-spacing:.08em}.brand span{font-size:30px}
+    h1{font-size:30px;line-height:1.35;margin:26px 0 10px}p{margin:0 0 22px;color:#a0b0c8;font-size:14px}
+    form{padding:24px;border:1px solid #32475a;border-radius:22px;background:#132136;box-shadow:0 24px 80px #0003}
+    label{display:block;margin:0 0 7px;font-size:14px;font-weight:600}input,button{font:inherit;min-height:48px;border-radius:11px}
+    input{width:100%;min-width:0;padding:11px 12px;border:1px solid #496077;color:#edf3ff;background:#0b192a;outline-offset:3px}
+    #username{margin-bottom:20px}.password-field{display:flex;align-items:stretch;gap:8px}.password-field input{flex:1}
+    button{cursor:pointer;border:1px solid #496077;padding:10px 12px;color:#edf3ff;background:#1c3046;flex-shrink:0}
+    button:disabled{cursor:wait;opacity:.65}button:focus-visible,input:focus-visible{outline:2px solid #96efcf;outline-offset:3px}
+    #loginSubmit{width:100%;margin-top:4px;background:#96efcf;color:#12372e;border-color:#96efcf;font-weight:700}
+    #loginStatus{color:#ffb9a9;min-height:26px;margin:16px 0 8px;overflow-wrap:anywhere}#loginStatus[data-pending]{color:#a0b0c8}
+    .hint{font-size:13px;margin:14px 0 0}.foot{font-size:12px;text-align:center;margin:22px 8px 0}noscript p{color:#ffb9a9}
+    @media(max-width:420px){body{padding:24px 16px}form{padding:22px 18px}h1{font-size:27px}.password-field button{font-size:14px;padding:10px}}
+  </style>
+  <script src="./login.js" defer></script>
+</head>
+<body>
+  <main>
+    <div class="brand"><span aria-hidden="true">✧</span> 一起长大</div>
+    <h1>进入家庭学习空间</h1>
+    <p>用家庭网页的账号与密码登录。</p>
+    <form id="loginForm" method="post" action="./api/parent/login">
+      <label for="username">账号</label>
+      <input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="64" autofocus>
+      <label for="password">密码</label>
+      <div class="password-field">
+        <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="200">
+        <button id="showPassword" type="button" aria-controls="password" aria-pressed="false">显示</button>
+      </div>
+      <p id="loginStatus" role="status" aria-live="polite" aria-atomic="true"></p>
+      <button id="loginSubmit" type="submit" disabled>登录</button>
+      <p class="hint">这台设备保持登录 7 天；用完可在“更多”退出。</p>
+      <noscript><p>请启用 JavaScript 后重新加载，才能登录。</p></noscript>
+    </form>
+    <p class="foot">无需微信或 Apple 账号。</p>
+  </main>
+</body>
+</html>

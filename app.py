@@ -1207,8 +1207,17 @@ class Handler(BaseHTTPRequestHandler):
         path=urlparse(self.path).path
         if path=='/child' or path.startswith('/child/'):
             return True  # The child router requires its own invite/session; no parent identity is inherited.
-        if family_access.authorized(self.headers,config): return True
-        return deny(401,'请使用家庭访问凭据登录',{'WWW-Authenticate':'Basic realm="Family Agent", charset="UTF-8"'})
+        try:
+            if family_access.dispatch(self,config,connect,ROOT): return False
+            if family_access.session_authorized(self.headers,config,connect): return True
+        except (OSError,sqlite3.Error):
+            return deny(503,'登录状态暂不可读取，请稍后重试')
+        has_cookie=family_access.has_session_cookie(self.headers)
+        if (not has_cookie or path=='/calendar.ics') and family_access.authorized(self.headers,config): return True
+        if self.command=='GET' and path=='/' and 'text/html' in self.headers.get('Accept',''):
+            self.reply(303,b'',headers={'Location':urlsplit(config['base_url']).path.rstrip('/')+'/login'})
+            return False
+        return deny(401,'请登录家庭账号后重试，当前输入请保留',{'WWW-Authenticate':'Basic realm="Family Agent", charset="UTF-8"'} if path=='/calendar.ics' else {})
     def bridge_authorized(self):
         secret=os.environ.get('FAMILY_PRINT_BRIDGE_TOKEN','')
         header=self.headers.get('Authorization','')
