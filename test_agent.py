@@ -48,6 +48,11 @@ class AgentTests(unittest.TestCase):
             c.execute('BEGIN IMMEDIATE'); c.rollback()
         value = json.loads(messages[-1]['content'])
         self.assertEqual(value['as_of'], self.now.astimezone(agent.TZ).date().isoformat())
+        if name == 'family_agent_plan':
+            quote = value['evidence'][0]['text'][:40]
+            return {'proposal': dict(title='回看这次阅读', goal='能说出一次实际想法', action='一起说一说这次阅读中最想保留的一点。',
+                why_now='这条记录保留了本次实际表达。', estimated_minutes=10, review_on=value['as_of'],
+                evidence=[{'ref': value['evidence'][0]['ref'], 'quote': quote}])}
         return {'proposals': [dict(title_quote='待核对原文', focus='school' if value['mode'] == 'school' else 'listen', due='',
             evidence=[{'ref': value['evidence'][0]['ref'], 'quote': '待核对原文'}])]}
 
@@ -113,7 +118,7 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0], 0)
         for item in self.store.snapshot()['items']:
             self.assertNotIn('score', item); self.assertNotIn('已完成', item['body'])
-            self.assertIn(item['body'], agent.FOCUS.values())
+            if item['kind'] == 'school': self.assertIn(item['body'], agent.FOCUS.values())
 
     def test_revocation_before_ingest_write_rejects_inflight_batch(self):
         self.source['id'] = '100000001@chatroom'
@@ -142,7 +147,9 @@ class AgentTests(unittest.TestCase):
 
     def test_retry_limit_stops_same_fingerprint_until_manual_or_new_input(self):
         self.record()
-        bad = {'proposals': [dict(title_quote='提高20分', focus='compare', due='', evidence=[{'ref': 'record:1', 'quote': '提高20分'}])]}
+        bad = {'proposal': {'title': '提高20分', 'goal': 'x', 'action': 'x', 'why_now': 'x',
+                            'estimated_minutes': 10, 'review_on': '2026-02-10',
+                            'evidence': [{'ref': 'record:1', 'quote': '提高20分'}]}}
         with patch.object(agent.family_llm, '_chat_json', return_value=bad) as model:
             for minutes in [0, 6, 17]: agent.run_once(self.app, self.now + dt.timedelta(minutes=minutes))
             self.assertEqual(model.call_count, 3)
@@ -201,7 +208,7 @@ def exit_during_model(*args, **kwargs):
         stream.flush()
         os.fsync(stream.fileno())
     os._exit(17)
-family_agent._select = exit_during_model
+family_agent._plan_learning = exit_during_model
 family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
 '''
         commands = [[sys.executable, '-c', script, str(self.root), str(self.data), str(marker)] for _ in range(4)]
@@ -343,9 +350,9 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
             with self.app.connect() as c: c.execute('UPDATE records SET note=? WHERE id=?', ('更正旧观察。', old_id))
             self.assertEqual(agent.run_once(self.app, self.now)['created'], 1)
         self.record()
-        bad = {'proposals': [dict(title_quote='待核对原文', focus=[], due='', evidence=[])]}
+        bad = {'proposal': {'oops': 'invalid'}}
         with patch.object(agent.family_llm, '_chat_json', return_value=bad):
-            self.assertEqual(agent.run_once(self.app, self.now)['state'], 'needs_attention')
+            self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(days=1))['state'], 'needs_attention')
 
     def test_title_uses_cited_record_or_verified_excerpt_not_model_claim(self):
         evidence = [{'ref': 'record:1', 'text': 'title: 一次虚构阅读\nnote: 孩子说这段不太明白。'}]
@@ -371,6 +378,110 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
         with redirect_stdout(output):
             self.assertEqual(agent.main(['--once', '--root', str(self.root), '--data', str(self.data)]), 0)
         self.assertEqual(output.getvalue(), '')
+
+    def test_learning_plan_accept_feedback_due_deferral_dismiss_and_restart(self):
+        self.now = dt.datetime.now(agent.TZ).replace(microsecond=0)
+        first = self.record(note='孩子自述：分数题想再说一遍。')
+        calls = []
+
+        def planner(evidence, profile, *, as_of, data_path):
+            calls.append(evidence)
+            return dict(title='再说一次分数题', goal='能说出一步理由', action='一起说一说这次分数题最关键的一步。',
+                        why_now='记录中保留了孩子自己的表达。', estimated_minutes=8,
+                        review_on=(dt.date.fromisoformat(as_of) + dt.timedelta(days=2)).isoformat(),
+                        evidence=[dict(ref=evidence[0]['ref'], quote=evidence[0]['text'][:30])])
+
+        with patch.object(agent, '_plan_learning', side_effect=planner) as model:
+            self.assertEqual(agent.run_once(self.app, self.now)['created'], 1)
+            care = next(item for item in self.store.snapshot()['items'] if item['kind'] == 'care')
+            with self.assertRaises(agent.AgentError):
+                self.store.act(dict(id=care['id'], action='accept', title='确认小尝试', body='一起说一说关键一步。',
+                                     review_on='2026-02-31', estimated_minutes=8))
+            accepted = self.store.act(dict(id=care['id'], action='accept', title='家长确认的一小步', body='一起说一说关键一步。',
+                                            review_on=(self.now.date() + dt.timedelta(days=2)).isoformat(), estimated_minutes=8))
+            self.assertEqual(self.store.act(dict(id=care['id'], action='accept', title='迟到标题')), accepted)
+            task_id = accepted['task_id']
+            with self.app.connect() as c:
+                c.execute('INSERT INTO records(child,day,category,subject,title,note,source,created,related_record_id,followup_kind,assistance,practice_relation,comparison_note) '
+                          'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                          ('示例甲', (self.now.date() + dt.timedelta(days=1)).isoformat(), '学习进展', '语文', '分数题回看',
+                           '孩子说：这次先想每份一样大。', '家长记录', self.now.isoformat(), first, '订正', '', '', ''))
+                feedback_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+            self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(days=1))['created'], 1)
+            self.assertEqual(model.call_count, 2)
+            self.assertTrue(any(evidence['ref'].startswith('plan:') for evidence in calls[1]))
+            with self.app.connect() as c:
+                c.execute('UPDATE records SET note=? WHERE id=?', ('更正：这次实际先画图再说。', first))
+            self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(days=1, minutes=1))['created'], 1)
+            self.assertEqual(model.call_count, 3)
+            self.app.save_task(dict(id=task_id, status='已完成', note='虚构反馈：完成一次约定尝试。'))
+            due_day = self.now.date() + dt.timedelta(days=2)
+            self.assertGreaterEqual(agent.run_once(self.app, dt.datetime.combine(due_day, dt.time(8), tzinfo=agent.TZ))['created'], 1)
+            model_calls_before_defer = model.call_count
+            review = next(item for item in self.store.snapshot()['items'] if item['kind'] == 'review' and item['state'] == 'pending')
+            self.assertIn('补充实际用时、结果和帮助', review['body'])
+            care = next(item for item in self.store.snapshot()['items'] if item['id'] == care['id'])
+            deferred = self.store.act(dict(id=care['id'], action='defer', review_on=(self.now.date() + dt.timedelta(days=5)).isoformat(),
+                                            expected_updated=care['updated']))
+            self.assertFalse(deferred.get('replayed'))
+            self.assertTrue(self.store.act(dict(id=care['id'], action='defer', review_on=(self.now.date() + dt.timedelta(days=5)).isoformat(),
+                                                expected_updated=care['updated'])).get('replayed'))
+            with self.app.connect() as c:
+                self.assertEqual(c.execute("SELECT state FROM agent_items WHERE id=?", (review['id'],)).fetchone()[0], 'superseded')
+            due_day = self.now.date() + dt.timedelta(days=5)
+            self.assertGreaterEqual(agent.run_once(self.app, dt.datetime.combine(due_day, dt.time(8), tzinfo=agent.TZ))['created'], 1)
+            self.assertEqual(model.call_count, model_calls_before_defer)
+            review = next(item for item in self.store.snapshot()['items'] if item['kind'] == 'review' and item['state'] == 'pending')
+            self.store.act(dict(id=review['id'], action='dismiss'))
+            self.assertEqual(agent.run_once(self.app, dt.datetime.combine(due_day, dt.time(9), tzinfo=agent.TZ))['created'], 0)
+        reopened = agent.Store(self.app.connect, self.app.profiles, self.data)
+        self.assertEqual(agent.run_once(self.app, dt.datetime.combine(due_day, dt.time(9), tzinfo=agent.TZ))['created'], 0)
+
+    def test_planned_review_respects_focus_without_date_and_update_order(self):
+        self.now = dt.datetime.now(agent.TZ).replace(microsecond=0)
+        self.record()
+        review_dates = {}
+
+        def planner(evidence, profile, *, as_of, data_path):
+            review_dates['base'] = dt.date.fromisoformat(as_of) + dt.timedelta(days=2)
+            return dict(title='一次小尝试', goal='说出一步理由', action='一起说出这次尝试的一步理由。',
+                        why_now='记录保留了这次尝试。', estimated_minutes=5,
+                        review_on=review_dates['base'].isoformat(),
+                        evidence=[dict(ref=evidence[0]['ref'], quote=evidence[0]['text'][:20])])
+
+        with patch.object(agent, '_plan_learning', side_effect=planner):
+            self.assertEqual(agent.run_once(self.app, self.now)['created'], 1)
+        care = next(item for item in self.store.snapshot()['items'] if item['kind'] == 'care')
+        accepted = self.store.act(dict(id=care['id'], action='accept', review_on=review_dates['base'].isoformat(),
+                                       estimated_minutes=5, title='确认小尝试', body='一起说出这次尝试的一步理由。'))
+        task_id = accepted['task_id']
+        with self.app.connect() as c:
+            plan_changed = json.loads(c.execute('SELECT plan FROM agent_items WHERE id=?', (care['id'],)).fetchone()[0])['approved_changed_at']
+        def set_focus(mode, review_on, updated):
+            with self.app.connect() as c:
+                c.execute('''CREATE TABLE IF NOT EXISTS task_focus (
+                    task_id TEXT PRIMARY KEY, mode TEXT NOT NULL, next_action TEXT NOT NULL,
+                    waiting_for TEXT NOT NULL, review_on TEXT NOT NULL, version INTEGER NOT NULL, updated TEXT NOT NULL)''')
+                c.execute('''INSERT INTO task_focus VALUES (?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET
+                    mode=excluded.mode,next_action=excluded.next_action,waiting_for=excluded.waiting_for,
+                    review_on=excluded.review_on,version=excluded.version,updated=excluded.updated''',
+                          (task_id, mode, '', '等回复' if mode == 'waiting' else '', review_on, 1, updated))
+        changed = (dt.datetime.fromisoformat(plan_changed) + dt.timedelta(microseconds=1)).isoformat()
+        set_focus('waiting', '', changed)
+        self.assertEqual(agent._planned_reviews(self.store, dt.datetime.combine(review_dates['base'], dt.time(8), tzinfo=agent.TZ)), [])
+        focus_date = review_dates['base'] + dt.timedelta(days=1)
+        set_focus('later', focus_date.isoformat(), changed)
+        self.assertEqual(agent._planned_reviews(self.store, dt.datetime.combine(focus_date, dt.time(8), tzinfo=agent.TZ))[0]['review_on'], focus_date.isoformat())
+        care = next(item for item in self.store.snapshot()['items'] if item['id'] == care['id'])
+        defer_date = review_dates['base'] + dt.timedelta(days=2)
+        self.store.act(dict(id=care['id'], action='defer', review_on=defer_date.isoformat(), expected_updated=care['updated']))
+        self.assertEqual(agent._planned_reviews(self.store, dt.datetime.combine(defer_date, dt.time(8), tzinfo=agent.TZ))[0]['review_on'], defer_date.isoformat())
+        with self.app.connect() as c:
+            approved_changed = json.loads(c.execute('SELECT plan FROM agent_items WHERE id=?', (care['id'],)).fetchone()[0])['approved_changed_at']
+        latest_focus = (dt.datetime.fromisoformat(approved_changed) + dt.timedelta(microseconds=1)).isoformat()
+        later_date = defer_date + dt.timedelta(days=1)
+        set_focus('waiting', later_date.isoformat(), latest_focus)
+        self.assertEqual(agent._planned_reviews(self.store, dt.datetime.combine(later_date, dt.time(8), tzinfo=agent.TZ))[0]['review_on'], later_date.isoformat())
 
 
 if __name__ == '__main__':
