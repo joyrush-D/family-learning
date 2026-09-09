@@ -25,6 +25,12 @@ FOCUS = {
     'listen': '可以先问问孩子愿意谈哪一部分、有什么困难、希望得到什么帮助。',
     'clarify': '这份记录还有哪些不清楚的地方？可以补充当时情境、原件或孩子自己的说法。',
 }
+
+_COLLECTOR_PLACEHOLDER = re.compile(r'\s*(?:待核对\s*[:：]\s*)?\[(?:[a-z_]{1,40}\s*[:：]\s*内容未读取[^\]]*|图片|语音|视频|文件)\]\s*', re.IGNORECASE)
+
+def _needs_task_details(title):
+    """Return whether a collector placeholder is being mistaken for a task."""
+    return bool(_COLLECTOR_PLACEHOLDER.fullmatch(str(title or '')))
 SCHEMA = {'type': 'object', 'additionalProperties': False, 'required': ['proposals'], 'properties': {
     'proposals': {'type': 'array', 'maxItems': 5, 'items': {'type': 'object', 'additionalProperties': False,
         'required': ['title_quote', 'focus', 'due', 'evidence'], 'properties': {
@@ -275,6 +281,7 @@ class Store:
             items = [dict(row) for row in c.execute("SELECT * FROM agent_items WHERE state IN ('pending','accepted') ORDER BY state='pending' DESC,updated DESC,id LIMIT 100")]
             for row in items:
                 row['evidence'] = json.loads(row['evidence']); row['plan'] = json.loads(row['plan']); row.pop('job_id')
+                row['needs_task_details'] = row['kind'] == 'school' and _needs_task_details(row['title'])
             sources = []
             for source in config['sources']:
                 saved = c.execute('SELECT * FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
@@ -339,6 +346,11 @@ class Store:
                 body_key = 'action_text' if 'action_text' in obj else 'body'
                 body = _text(obj, body_key, 4000) if body_key in obj else row['body']
                 if not title.strip() or not body.strip(): raise AgentError('请填写待办标题和动作')
+                if row['kind'] == 'school' and _needs_task_details(row['title']):
+                    if 'title' not in obj or 'body' not in obj and 'action_text' not in obj:
+                        raise AgentError('这条学校消息只有未读资料占位，请填写具体待办标题和动作')
+                    if _needs_task_details(title) or _needs_task_details(body) or body.strip() == str(row['body']).strip() or body.strip() == FOCUS['school']:
+                        raise AgentError('这条学校消息只有未读资料占位，请填写具体待办标题和动作')
                 profiles = {p['id']: p['name'] for p in self.profiles(c)}
                 if row['child_id'] not in profiles: raise AgentError('孩子档案无法核对', 409)
                 task_id = 'AGENT-' + _hash(ident)[:24]

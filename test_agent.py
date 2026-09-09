@@ -269,6 +269,44 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
             items = agent._select('school', [{'ref': 'message:synthetic:1', 'text': excerpt}])
         self.assertEqual(items[0]['evidence'][0]['text'], excerpt)
 
+    def test_school_collector_placeholder_requires_explicit_task_details(self):
+        for title in ('[图片]', '待核对：[文件]', '[语音]', '[视频]', '[file：内容未读取，仅保留消息说明]'):
+            self.assertTrue(agent._needs_task_details(title))
+        self.assertFalse(agent._needs_task_details('请核对图片里的要求'))
+        fp = self.store._job('placeholder-school', 'placeholder', self.now)
+        evidence = [dict(ref='message:synthetic-group:20', text='图片内容尚未读取')]
+        placeholder = dict(child_id='child-1', kind='school',
+                           title='待核对：[image：内容未读取，仅保留消息说明]',
+                           body=agent.FOCUS['school'], evidence=evidence, due='')
+        self.store._save('placeholder-school', fp, [placeholder], self.now)
+        item = self.store.snapshot()['items'][0]
+        self.assertTrue(item['needs_task_details'])
+        with self.assertRaises(agent.AgentError):
+            self.store.act(dict(id=item['id'], action='accept'))
+        with self.assertRaises(agent.AgentError):
+            self.store.act(dict(id=item['id'], action='accept', title='带齐资料', body=agent.FOCUS['school']))
+        with self.assertRaises(agent.AgentError):
+            self.store.act(dict(id=item['id'], action='accept', title='核对资料', body='[图片]'))
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0], 0)
+        accepted = self.store.act(dict(id=item['id'], action='accept', title='找老师核对作业要求',
+                                       body='先向老师确认图片里的作业要求，再按确认内容安排。'))
+        replay = self.store.act(dict(id=item['id'], action='accept', title='另一标题', body='另一动作'))
+        self.assertEqual(accepted, replay)
+        with self.app.connect() as c:
+            task = dict(c.execute('SELECT * FROM manual_tasks').fetchone())
+            self.assertEqual(task['title'], '找老师核对作业要求')
+            self.assertIn('message:synthetic-group:20', task['source'])
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0], 1)
+
+        normal = dict(child_id='child-1', kind='school', title='明天带阅读材料',
+                      body=agent.FOCUS['school'], evidence=[dict(ref='message:synthetic-group:21', text='请带阅读材料')], due='')
+        fp = self.store._job('normal-school', 'normal', self.now)
+        self.store._save('normal-school', fp, [normal], self.now)
+        normal_item = next(row for row in self.store.snapshot()['items'] if row['title'] == normal['title'])
+        self.assertFalse(normal_item['needs_task_details'])
+        self.store.act(dict(id=normal_item['id'], action='accept'))
+
     def test_school_history_uses_beijing_date_and_preserves_current_or_uncertain_requirements(self):
         # The caller's UTC date is still September 8; this run is September 9 in China.
         self.now = dt.datetime(2026, 9, 8, 16, 15, tzinfo=dt.timezone.utc)
