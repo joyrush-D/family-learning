@@ -6,7 +6,7 @@
 
 | 组件 | 当前用途和文件 | 许可与来源 |
 | --- | --- | --- |
-| Three.js r185 | `world3d.js` 调用随源码提供的 `vendor/three.module.min.js`、`vendor/three.core.min.js`，绘制成长场景；必要操作保留普通网页入口 | [上游 r185](https://github.com/mrdoob/three.js/tree/r185)，[MIT](https://github.com/mrdoob/three.js/blob/r185/LICENSE)；本地保留 `vendor/THREE-LICENSE.txt` |
+| Three.js r185 | `growth-world.js` 调用随源码提供的 `vendor/three.module.min.js`、`vendor/three.core.min.js`，绘制成长场景；必要操作保留普通网页入口 | [上游 r185](https://github.com/mrdoob/three.js/tree/r185)，[MIT](https://github.com/mrdoob/three.js/blob/r185/LICENSE)；本地保留 `vendor/THREE-LICENSE.txt` |
 
 本应用的基础后台使用 Python 标准库与 SQLite；操作系统负责定时运行，已有模型、转写、打印和消息工具通过进程或接口接入。第三方应用、模型权重和个人登录态不随本源码包分发。
 
