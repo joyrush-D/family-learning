@@ -48,7 +48,7 @@ python3 configure_mac.py
 python3 configure_mac.py --install
 ```
 
-第一条只显示计划，无写入或启动；第二条明确安装加载本应用服务。默认程序目录为脚本所在目录，可用 `--root` 指定；程序和资料在同一应用目录，`FAMILY_DATA` 固定为该目录的 `private`。默认本地网页 `http://127.0.0.1:8765`，可用 `--app-url` 改为另一本机端口；本机配置命令不配置公网或远程服务。
+第一条只显示计划，无写入或启动；第二条明确安装加载本应用服务。默认程序目录为脚本所在目录，可用 `--root` 指定；程序和资料在同一应用目录，`FAMILY_DATA` 固定为该目录的 `private`。默认本地网页 `http://127.0.0.1:8765`，可用 `--app-url` 改为另一本机端口；本机配置命令不配置公网或远程服务。首次安装就需要手机访问时，改用下一节带 `--mobile-url` 的安装命令，不先重复安装一次。
 
 安装产物是 `private/collector.json` 及 `~/Library/LaunchAgents/local.family-learning.web.plist`、`local.family-learning.agent.plist`、`local.family-learning.collector.plist`。网页服务保持运行，Agent 每分钟检查，已配置的采集器每 5 分钟读取；无 CLI 时采集器保留停用。各进程使用同一应用目录，日志位于私有目录。首次打开网页创建孩子、绑定来源后，再明确启用 Agent；进程已加载不表示消息或模型已连通。
 
@@ -57,6 +57,35 @@ python3 configure_mac.py --install
 已有服务、私有采集配置或占用端口会使安装停止，保留原部署；不自动更新或卸载既有服务。升级沿用备份和服务维护流程。Mac 休眠、关机或退出登录会中断运行，登录服务不等同于无人登录的服务器服务；实际冷开机恢复与手机访问需另验收。
 
 `python3 test_configure_mac.py` 已通过隔离测试，覆盖配置产物、私有权限、已有安装保护和失败撤销；未在生产机器重复安装，也未将模拟启动结果当作新 Mac 的实际登录与消息验证。
+
+## 单机手机 HTTPS 入口
+
+已有反向代理若把 Host 改为 localhost，升级本版本前须先准备 access.json，并让代理保留家长 Authorization 头；带转发头的请求不再沿用本地 CLI 的免登录入口。可用 `--output-dir` 生成待核对文件，但不要覆盖现有服务、采集配置或主库。原有 FAMILY_HOST/FAMILY_USER 身份头模式只在没有 access.json 时保留；配置口令后家长改用口令登录，不自动叠加另一种身份权限。
+
+
+以下用于下一家的首次安装：Mac 与获准访问的手机已安装、登录 Tailscale，并位于允许相互访问的家庭 tailnet。Serve 只在 tailnet 内提供服务，仍受其访问规则限制；HTTPS 未启用时，命令会提示打开管理授权页面，可能需要管理员登录。不要启用 Funnel 或运行 `tailscale funnel`。本节使用独立设备域名的根路径，不需要增加 `/family` 挂载。[官方 Serve 前提](https://tailscale.com/docs/features/tailscale-serve)
+
+1. 将示例域名 `family-hub.example-tailnet.ts.net` 换成这台 Mac 在 Tailscale 中显示的 DNS 全名。先查看计划，再在尚未安装本应用服务的新 Mac 上安装：
+
+   ```sh
+   python3 configure_mac.py --mobile-url https://family-hub.example-tailnet.ts.net
+   python3 configure_mac.py --install --mobile-url https://family-hub.example-tailnet.ts.net
+   ```
+
+   `--mobile-url` 只生成应用配置，不安装 Tailscale、不申请证书，也不代表 HTTPS 已接通。安装器生成 `private/access.json`（家长账号、盐及口令哈希）和 `private/手机访问凭据.json`（家长账号及随机明文口令），两者均为 `0600`；只在本机私下查看凭据，不贴到日志或公开仓库。仅网页 LaunchAgent 增加孩子 HTTPS、安全 Cookie 路径和稳定日历标识配置；Agent、采集器继续访问原本机回环地址，不携带家长口令。
+
+2. 先运行 `tailscale serve status` 核对是否已有转发；已有配置时先由维护者核对，不覆盖其他服务。确认可使用这台设备的 HTTPS 443 根入口后，将其转发到本应用的回环端口：
+
+   ```sh
+   tailscale serve --bg --https=443 http://127.0.0.1:8765
+   tailscale serve status
+   ```
+
+   若安装时改了 `--app-url` 端口，这里的目标端口必须一致。核对 Serve 输出的 HTTPS 域名与安装参数相同，目标为 `127.0.0.1`；应用仍只监听回环，不开放局域网或公网 HTTP 端口。`--bg` 是官方后台运行选项，HTTPS 由 Serve 终止并提供证书；这些是配置行为，不代替本项目的重启验收。[官方命令与参数](https://tailscale.com/docs/reference/tailscale-cli/serve)
+
+3. 手机连接获准的 tailnet 后打开该 HTTPS 地址，使用私有凭据文件中的家长账号和口令登录。家长口令保护网页、家长 API、原件及日历订阅；孩子仅使用家长在网页生成的一次性邀请，邀请仍放在链接的 `#invite=` 片段，不向孩子提供家长口令或已登录家长的浏览器。先核对登录、记录读取与孩子入口，再分别实测拍照／录音、日历首次认证与后续刷新。真实手机、服务重启、冷开机及全新 Mac 整机尚未验收。
+
+已有家庭升级应先备份，按原服务维护流程更新代码与私有配置；不要重复执行 `--install`，也不要复制新安装样例覆盖主库。上述两份访问配置不包含在家庭数据备份中，恢复后须私下重新配置并核对权限，再开放入口。当前试用家庭仍保留既有远端认证 HTTPS 入口；本流程不表示已完成替换或可以停用原入口。
 
 ## 先核对本机路径
 

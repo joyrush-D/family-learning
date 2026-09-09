@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import secrets
 import shutil
 import socket
 import subprocess
@@ -16,10 +17,28 @@ import sys
 from urllib.parse import urlsplit
 
 from family_backup import no_links
+from family_access import validate_base_url, make_config
 from family_collect import app_url, CollectError
 
 
 LABEL = 'local.family-learning'
+
+
+def _mobile_paths(value):
+    base = urlsplit(value).path.rstrip('/')
+    child_path = (base if base != '/' else '') + '/child/'
+    return child_path, value + '/child/'
+
+
+def _mobile_files(value):
+    username = 'family'
+    password = secrets.token_urlsafe(24)
+    config = make_config(value, username, password)
+    credentials = dict(base_url=value, username=username, password=password)
+    return {
+        'private/access.json': (json.dumps(config, ensure_ascii=False, indent=2) + '\n').encode(),
+        'private/手机访问凭据.json': (json.dumps(credentials, ensure_ascii=False, indent=2) + '\n').encode(),
+    }
 
 
 def cli_path(value, *, executable=False):
@@ -31,7 +50,7 @@ def cli_path(value, *, executable=False):
     return str(path)
 
 
-def plan(root, url='http://127.0.0.1:8765', wechat_cli=None, qq_cli=None):
+def plan(root, url='http://127.0.0.1:8765', wechat_cli=None, qq_cli=None, mobile_url=None):
     if sys.version_info < (3, 10):
         raise ValueError('需要 Python 3.10 或以上版本；请使用已安装的新版本运行本命令')
     root = Path(root).expanduser().resolve(strict=True)
@@ -40,6 +59,8 @@ def plan(root, url='http://127.0.0.1:8765', wechat_cli=None, qq_cli=None):
     url = app_url(url)
     if urlsplit(url).hostname not in ('127.0.0.1', 'localhost'):
         raise ValueError('本机完整安装使用 http://127.0.0.1:端口 或 http://localhost:端口')
+    mobile = validate_base_url(mobile_url).rstrip('/') if mobile_url is not None else None
+    child_path, child_public = _mobile_paths(mobile) if mobile else ('', '')
     python = str(Path(sys.executable).resolve(strict=True))
     wechat = cli_path(wechat_cli or shutil.which('wechat-cli'), executable=True)
     qq = cli_path(qq_cli)
@@ -59,10 +80,14 @@ def plan(root, url='http://127.0.0.1:8765', wechat_cli=None, qq_cli=None):
             arguments += ['--root', str(root), '--data', str(private), '--once']
         if kind == 'collector':
             arguments += ['--config', str(private / 'collector.json'), '--interval', str(interval)]
+        environment = {'PATH': path, 'PYTHONUNBUFFERED': '1', 'FAMILY_DATA': str(private),
+                       'PORT': str(urlsplit(url).port or 80)}
+        if mobile and kind == 'web':
+            environment.update(FAMILY_CHILD_SECURE='1', FAMILY_CHILD_COOKIE_PATH=child_path,
+                               FAMILY_CHILD_PUBLIC_URL=child_public, FAMILY_CALENDAR_ID='local-family-learning')
         plist = dict(Label=LABEL + '.' + kind, ProgramArguments=arguments, WorkingDirectory=str(root),
                      RunAtLoad=kind != 'collector' or enabled, ProcessType='Background', Umask=0o077,
-                     EnvironmentVariables={'PATH': path, 'PYTHONUNBUFFERED': '1', 'FAMILY_DATA': str(private),
-                                           'PORT': str(urlsplit(url).port or 80)},
+                     EnvironmentVariables=environment,
                      StandardOutPath=str(private / (kind + '.stdout.log')),
                      StandardErrorPath=str(private / (kind + '.stderr.log')))
         if kind == 'collector':
@@ -74,7 +99,7 @@ def plan(root, url='http://127.0.0.1:8765', wechat_cli=None, qq_cli=None):
         if kind == 'collector' and not enabled:
             plist['Disabled'] = True
         files['LaunchAgents/' + plist['Label'] + '.plist'] = plistlib.dumps(plist)
-    return {'root': root, 'url': url, 'collector_enabled': enabled, 'files': files}
+    return {'root': root, 'url': url, 'mobile_url': mobile, 'collector_enabled': enabled, 'files': files}
 
 
 def exclusive_write(path, content):
@@ -89,7 +114,10 @@ def exclusive_write(path, content):
 def output(plan, directory):
     directory = no_links(Path(directory).expanduser())
     directory.mkdir(mode=0o700, parents=True, exist_ok=False)
-    for name, content in plan['files'].items():
+    files = dict(plan['files'])
+    if plan['mobile_url']:
+        files.update(_mobile_files(plan['mobile_url']))
+    for name, content in files.items():
         exclusive_write(directory / name, content)
     return directory
 
@@ -101,6 +129,10 @@ def install(plan):
     private = no_links(plan['root'] / 'private')
     targets = {private / 'collector.json': plan['files']['private/collector.json']}
     targets.update({agents / Path(name).name: content for name, content in plan['files'].items() if name.startswith('LaunchAgents/')})
+    for name in ('private/access.json', 'private/手机访问凭据.json'):
+        target = plan['root'] / name
+        if target.exists() or target.is_symlink():
+            raise ValueError('已有手机访问配置；不会覆盖，请先核对原安装')
     labels = [LABEL, LABEL + '.web', LABEL + '.agent', LABEL + '.collector']
     if any(p.exists() or p.is_symlink() for p in [*targets, agents / (LABEL + '.plist')]):
         raise ValueError('已有家庭服务或 collector.json；不会覆盖、卸载或改动，请先核对原安装')
@@ -121,6 +153,8 @@ def install(plan):
             raise ValueError('应用端口已占用或不可用；不会替换已有应用或隧道') from None
     written, attempted = [], []
     try:
+        if plan['mobile_url']:
+            targets.update({plan['root'] / name: content for name, content in _mobile_files(plan['mobile_url']).items()})
         for target, content in targets.items():
             exclusive_write(target, content)
             written.append(target)
@@ -156,9 +190,10 @@ def main(argv=None):
     parser.add_argument('--wechat-cli', help='已安装可执行文件；默认用 which 探测 wechat-cli')
     parser.add_argument('--qq-cli', help='已安装的兼容 QQ 只读 Python 脚本')
     parser.add_argument('--app-url', default='http://127.0.0.1:8765')
+    parser.add_argument('--mobile-url', help='已配置的HTTPS手机入口；只生成认证配置，不安装或操作入口服务')
     args = parser.parse_args(argv)
     try:
-        prepared = plan(args.root, args.app_url, args.wechat_cli, args.qq_cli)
+        prepared = plan(args.root, args.app_url, args.wechat_cli, args.qq_cli, args.mobile_url)
         if args.install:
             print('本应用服务已安装：' + str(install(prepared)))
         elif args.output_dir:
@@ -168,6 +203,10 @@ def main(argv=None):
         print('网页：' + prepared['url'] + '；Agent 每分钟检查。首次进入网页配置孩子、群归属并明确启用 Agent。')
         print('采集进程保持运行，每轮结束后等 5 分钟再检查；CLI 路径存在不代表登录或消息已读取。' if prepared['collector_enabled'] else
               '消息采集待配置：没有可用 CLI，collector 未加载；网页、手动记录和 Agent 服务仍可用。')
+        if prepared['mobile_url']:
+            print((f'手机入口 {prepared["mobile_url"]} 的认证配置已生成；请另行接通Tailscale Serve或其他HTTPS认证入口，URL不代表已经可访问。'
+                   if args.install or args.output_dir else
+                   f'已指定手机入口 {prepared["mobile_url"]}；当前仅查看计划，不生成认证凭据，仍需另行接通Tailscale Serve或其他HTTPS认证入口。'))
         print('登录后运行；Mac 休眠、关机或退出登录时不能持续工作。未安装或登录任何第三方应用。')
         return 0
     except (OSError, ValueError, CollectError, subprocess.TimeoutExpired) as error:

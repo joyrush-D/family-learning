@@ -28,11 +28,33 @@ async function launchDemo(){
   const publicPort=await listen(proxy);return {url:'http://127.0.0.1:'+publicPort+'/family/',stop:async()=>{proxy.closeAllConnections?.();await new Promise(r=>proxy.close(r));await stop()}};
  }catch(e){if(proxy)proxy.close();await stop();throw e}
 }
+async function inviteOrigins(context,local){
+ // HTTPS here is an intercepted synthetic origin, never a real TLS or phone check.
+ const remote='https://synthetic-family.example',fallback='https://configured-child.example/family/child/';
+ for(const prefix of ['/family/','/']){
+  const p=await context.newPage(),errors=[];p.on('pageerror',e=>errors.push(e.message));
+  let offered=fallback,issued='';
+  try{
+   await p.route(remote+'/**',async route=>{const url=new URL(route.request().url());assert.ok(url.pathname.startsWith(prefix));await route.fulfill({response:await route.fetch({url:local+url.pathname.slice(prefix.length)+url.search})})});
+   await p.route('**/api/child-access/invite',async route=>{const response=await route.fetch({url:local+'api/child-access/invite'}),body=await response.json();assert.equal(response.status(),200);issued=body.invite;await route.fulfill({response,json:{...body,entry_url:offered}})});
+   const open=async url=>{await p.goto(url);await p.locator('[data-child-access="child-1"]').click();await p.locator('[data-child-invite="child-1"]').waitFor()};
+   const generate=async()=>{await p.locator('[data-child-invite="child-1"]').click();await eventually(async()=>await p.locator('#childInviteLink').count()&&!!await p.locator('#childInviteLink').inputValue(),'origin-specific invitation');return new URL(await p.locator('#childInviteLink').inputValue())};
+   await open(remote+prefix+'?view=synthetic#old');const same=await generate();
+   assert.equal(same.origin,remote,'HTTPS ignores a different configured backend host');assert.equal(same.pathname,prefix+'child/','current deployment prefix is used exactly once');assert.equal(same.search,'');assert.equal(same.hash,'#invite='+encodeURIComponent(issued));
+   if(prefix==='/family/'){
+    await open(local);const configured=await generate();assert.equal(configured.origin,new URL(fallback).origin);assert.equal(configured.pathname,'/family/child/');assert.equal(configured.search,'');assert.equal(configured.hash,'#invite='+encodeURIComponent(issued),'HTTP fallback keeps the invite in the fragment');
+    offered='https://synthetic-user:synthetic-password@configured-child.example/family/child/?unsafe=1';await p.locator('[data-child-invite="child-1"]').click();await eventually(async()=>/入口地址无法核对/.test(await p.locator('#childAccessError').innerText()),'invalid fallback rejected');assert.equal(await p.locator('#childInviteLink').count(),0,'invalid fallback never receives the invite');
+   }
+   assert.deepEqual(errors,[]);
+  }finally{await p.close()}
+ }
+}
 (async()=>{
  let server,browser;const checks=[],contexts=[];
  try{
   server=await launchDemo();browser=await chromium.launch({headless:true,args:['--use-fake-ui-for-media-stream','--use-fake-device-for-media-stream'],...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
   const parentContext=await browser.newContext({viewport:{width:1440,height:980}});contexts.push(parentContext);const parent=await parentContext.newPage();
+  await inviteOrigins(parentContext,server.url);checks.push('synthetic HTTPS uses current origin and root or /family prefix; HTTP accepts only valid configured fallback; invitation stays in fragment');
   let parentState=await (await fetch(server.url+'api/state')).json();
   async function parentAPI(action,obj){const r=await fetch(server.url+'api/'+action,{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':parentState.token},body:JSON.stringify(obj)});const value=await r.json();assert.equal(r.status,200,value.error);return value}
   async function reading(action,obj){return (await parentAPI('reading/'+action,{request_key:randomUUID(),child_id:'child-1',...obj})).task}

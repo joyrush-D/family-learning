@@ -1,5 +1,14 @@
 // Parent controls use the existing authenticated API and native dialog.
 let childAccessBusy=false,childAccessOpen=0;
+function childInviteURL(entry,invite){
+ let link=new URL(endpoint('/child/'),location.origin);
+ if(location.protocol==='http:'&&entry){
+  let saved;try{saved=new URL(entry)}catch{throw Error('孩子入口地址无法核对，请检查后台配置。')}
+  if(typeof entry!=='string'||/[\x00-\x20\x7f]/.test(entry)||!['http:','https:'].includes(saved.protocol)||!saved.hostname||saved.username||saved.password||saved.search||saved.hash||!saved.pathname.endsWith('/child/'))throw Error('孩子入口地址无法核对，请检查后台配置。');
+  link=saved;
+ }
+ link.hash='invite='+encodeURIComponent(invite);return link.href;
+}
 async function childAccessRequest(action,obj){
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
  try{
@@ -31,9 +40,9 @@ document.addEventListener('click',async e=>{
   if(b.dataset.childInvite){
    const r=await childAccessRequest('invite',{child_id:b.dataset.childInvite});
    if(!out.isConnected||!$('#readingDialog').open)return;
-   const link=new URL(r.entry_url||endpoint('/child/'),location.origin);link.hash='invite='+encodeURIComponent(r.invite);
+   const link=childInviteURL(r.entry_url,r.invite);
    out.innerHTML='<label>仅交给这个孩子的邀请链接<input id="childInviteLink" readonly></label><p class="small muted">旧的未使用邀请已失效。链接只在这里显示；关闭前请复制，勿发到班级群。登录后链接不能再次使用。</p>';
-   $('#childInviteLink').value=link.href;$('#childInviteLink').focus();$('#childInviteLink').select();
+   $('#childInviteLink').value=link;$('#childInviteLink').focus();$('#childInviteLink').select();
   }else{await childAccessRequest('revoke',{child_id:b.dataset.childRevoke});out.textContent='已停用这个孩子的全部邀请和登录。已保存作品仍保留。'}
  }catch(err){error.textContent=err.message+' 如生成邀请的结果不明，可再生成一次，旧邀请将失效。'}
  finally{childAccessBusy=false;b.disabled=false}

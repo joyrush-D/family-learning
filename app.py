@@ -24,12 +24,13 @@ import family_child
 import family_agent
 import family_study
 import family_settings
+import family_access
 import family_task_focus
 import family_guided
 from types import SimpleNamespace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer as _ThreadingHTTPServer
 from socketserver import TCPServer
-from urllib.parse import urlparse, unquote, quote, parse_qs
+from urllib.parse import urlparse, urlsplit, unquote, quote, parse_qs
 
 
 class ThreadingHTTPServer(_ThreadingHTTPServer):
@@ -1177,12 +1178,43 @@ class Handler(BaseHTTPRequestHandler):
         if host == os.environ.get('FAMILY_HOST'):
             return bool(os.environ.get('FAMILY_USER')) and self.headers.get('Tailscale-User-Login') == os.environ['FAMILY_USER']
         return bool(host) and host in allowed
+    def authorize_request(self):
+        def deny(status, message, headers=None):
+            self.close_connection=True
+            self.reply(status,{'error':message},headers=headers)
+            return False
+        try:
+            hosts=self.headers.get_all('Host',[])
+            if len(hosts)!=1 or len(hosts[0])>255 or any(ord(c)<33 or ord(c)==127 for c in hosts[0]): raise ValueError()
+            parsed=urlsplit('//'+hosts[0])
+            if not parsed.hostname or parsed.username is not None or parsed.password is not None or parsed.path or parsed.query or parsed.fragment or parsed.port==0: raise ValueError()
+            host=parsed.hostname.lower()
+        except ValueError:
+            return deny(403,'访问地址未授权')
+        # Loopback tools stay local. A forwarded request cannot claim this exception by changing Host.
+        forwarded=any(name in self.headers for name in ('Forwarded','X-Forwarded-For','X-Forwarded-Host',
+                       'X-Forwarded-Proto','X-Real-IP','Tailscale-User-Login'))
+        if host in ('127.0.0.1','localhost') and not forwarded and self.client_address[0] in ('127.0.0.1','::1'):
+            return True
+        try: config=family_access.read_config(DATA)
+        except family_access.AccessError as error:
+            return deny(503,str(error))
+        if config is None:
+            if host in ('127.0.0.1','localhost'): return deny(403,'转发访问需要配置家庭认证')
+            return True if self.local_host() else deny(403,'访问地址未授权')
+        allowed={'127.0.0.1','localhost',urlsplit(config['base_url']).hostname,os.environ.get('FAMILY_HOST','')}
+        if host not in allowed: return deny(403,'访问地址未授权')
+        path=urlparse(self.path).path
+        if path=='/child' or path.startswith('/child/'):
+            return True  # The child router requires its own invite/session; no parent identity is inherited.
+        if family_access.authorized(self.headers,config): return True
+        return deny(401,'请使用家庭访问凭据登录',{'WWW-Authenticate':'Basic realm="Family Agent", charset="UTF-8"'})
     def bridge_authorized(self):
         secret=os.environ.get('FAMILY_PRINT_BRIDGE_TOKEN','')
         header=self.headers.get('Authorization','')
         return bool(secret) and secrets.compare_digest(header.encode(),('Bearer '+secret).encode())
     def do_GET(self):
-        if not self.local_host(): return self.reply(403,{'error':'访问地址未授权'})
+        if not self.authorize_request(): return
         path=urlparse(self.path).path
         if family_child.dispatch_get(SimpleNamespace(**globals()),self,path): return
         try:
@@ -1246,7 +1278,7 @@ class Handler(BaseHTTPRequestHandler):
         except (family_print.PrintError,family_calendar.CalendarError,ProfileError,family_child.ChildError,family_agent.AgentError,family_study.StudyError,family_settings.SettingsError) as e: return self.reply(e.status,dict(error=str(e),code=e.code))
         except (OSError,sqlite3.Error,json.JSONDecodeError): return self.reply(500,{'error':'读取失败，记录未更改'})
     def do_POST(self):
-        if not self.local_host(): return self.reply(403,{'error':'访问地址未授权'})
+        if not self.authorize_request(): return
         path=urlparse(self.path).path
         if family_child.dispatch_post(SimpleNamespace(**globals()),self,path): return
         bridge=path.startswith('/api/print/bridge/')

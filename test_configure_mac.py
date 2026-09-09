@@ -37,7 +37,7 @@ def check():
             with patch.object(setup.sys, 'version_info', (3, 9)):
                 refuses(lambda: setup.plan(root))
             prepared = setup.plan(root, wechat_cli=str(wechat), qq_cli=str(qq))
-            assert prepared['collector_enabled']
+            assert prepared['collector_enabled'] and prepared['mobile_url'] is None
             destination = setup.output(prepared, base / '检查输出 <&>')
             for path in destination.rglob('*'):
                 assert stat.S_IMODE(path.stat().st_mode) == (0o700 if path.is_dir() else 0o600)
@@ -51,6 +51,9 @@ def check():
                 assert plist['ProgramArguments'][0] == str(Path(setup.sys.executable).resolve())
                 assert plist['ProgramArguments'][1] == str(root / ('app.py' if kind == 'web' else 'family_' + kind.replace('collector', 'collect') + '.py'))
                 assert plist['EnvironmentVariables']['FAMILY_DATA'] == str(root / 'private')
+                assert all(key not in plist['EnvironmentVariables'] for key in
+                           ('FAMILY_CHILD_SECURE', 'FAMILY_CHILD_COOKIE_PATH', 'FAMILY_CHILD_PUBLIC_URL',
+                            'FAMILY_CALENDAR_ID'))
                 assert plist.get('StartInterval') == interval and plist['RunAtLoad']
                 if kind == 'collector':
                     assert plist['ProgramArguments'][-2:] == ['--interval', '300'] and '--once' not in plist['ProgramArguments']
@@ -139,7 +142,56 @@ def check():
                     refuses(lambda: setup.install(prepared))
                 assert not existing.exists() and not list(agents.iterdir())
                 assert len([args for args in calls if args[1] == 'bootout']) == 2
-                assert not any(args[-1].endswith('/local.family-learning.plist') for args in calls)
+            assert not any(args[-1].endswith('/local.family-learning.plist') for args in calls)
+
+            mobile = setup.plan(root, mobile_url='https://box.example.invalid/family')
+            assert mobile['mobile_url'] == 'https://box.example.invalid/family'
+            web = plistlib.loads(mobile['files']['LaunchAgents/' + setup.LABEL + '.web.plist'])
+            assert web['EnvironmentVariables']['FAMILY_CHILD_SECURE'] == '1'
+            assert web['EnvironmentVariables']['FAMILY_CHILD_COOKIE_PATH'] == '/family/child/'
+            assert web['EnvironmentVariables']['FAMILY_CHILD_PUBLIC_URL'] == 'https://box.example.invalid/family/child/'
+            assert web['EnvironmentVariables']['FAMILY_CALENDAR_ID'] == 'local-family-learning'
+            assert all(key not in web['EnvironmentVariables'] for key in ('FAMILY_LLM_API_KEY', 'FAMILY_USER'))
+            assert 'password' not in repr(mobile)
+            for invalid in ('http://box.example.invalid/family', 'https://box.example.invalid/family?x=1',
+                            'https://user:pass@box.example.invalid/family', ' https://box.example.invalid',
+                            'https://127.0.0.1/family', 'https://bad_host.example.invalid/family',
+                            'https://box.example.invalid/../family'):
+                refuses(lambda value=invalid: setup.plan(root, mobile_url=value))
+            root_mobile = setup.plan(root, mobile_url='https://box.example.invalid/')
+            root_web = plistlib.loads(root_mobile['files']['LaunchAgents/' + setup.LABEL + '.web.plist'])
+            assert root_web['EnvironmentVariables']['FAMILY_CHILD_COOKIE_PATH'] == '/child/'
+            assert root_web['EnvironmentVariables']['FAMILY_CHILD_PUBLIC_URL'] == 'https://box.example.invalid/child/'
+            destination = setup.output(mobile, base / '手机入口输出 <&>')
+            credentials_path = destination / 'private/手机访问凭据.json'
+            access_path = destination / 'private/access.json'
+            credentials = json.loads(credentials_path.read_text())
+            assert credentials['base_url'] == mobile['mobile_url'] and credentials['username'] == 'family'
+            assert len(credentials['password']) >= 24 and credentials['password'].encode() not in access_path.read_bytes()
+            assert stat.S_IMODE(credentials_path.stat().st_mode) == stat.S_IMODE(access_path.stat().st_mode) == 0o600
+            with contextlib.redirect_stdout(io.StringIO()) as printed, patch.object(setup.secrets, 'token_urlsafe', side_effect=AssertionError('No credential in dry run')):
+                assert setup.main(['--root', str(root), '--mobile-url', mobile['mobile_url']]) == 0
+            assert credentials['password'] not in printed.getvalue()
+            mobile_refuse = setup.plan(root, mobile_url=mobile['mobile_url'])
+            (root / 'private/access.json').write_text('existing access')
+            with patch.object(setup.subprocess, 'run', side_effect=AssertionError('Reject before launching')):
+                refuses(lambda: setup.install(mobile_refuse))
+            (root / 'private/access.json').unlink()
+            mobile_calls = []
+            def fails_mobile(args, **kwargs):
+                mobile_calls.append(args)
+                result = launchctl(args, **kwargs)
+                if args[1] == 'bootstrap' and args[-1].endswith('.agent.plist'):
+                    result.returncode = 5
+                return result
+            with patch.object(setup.subprocess, 'run', side_effect=fails_mobile), patch.object(setup.socket, 'socket'), \
+                    patch.object(setup.sys, 'platform', 'darwin'), patch.object(setup.os, 'getuid', return_value=501), \
+                    patch.object(Path, 'home', return_value=fake_home):
+                refuses(lambda: setup.install(mobile_refuse))
+            assert len([args for args in mobile_calls if args[1] == 'bootstrap']) == 2
+            assert len([args for args in mobile_calls if args[1] == 'bootout']) == 2
+            assert not (root / 'private/access.json').exists()
+            assert not (root / 'private/手机访问凭据.json').exists()
     print('PASS: Mac setup dry run, XML paths, permissions, missing CLI, old-service refusal and isolated install rollback')
 
 
