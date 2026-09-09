@@ -26,7 +26,7 @@ def check():
         base = Path(temporary).resolve()
         root = base / '示例应用 <a&b>'
         root.mkdir()
-        for name in ('app.py', 'family_agent.py', 'family_collect.py'):
+        for name in ('app.py', 'family_agent.py', 'family_collect.py', 'family_backup.py'):
             (root / name).write_text('# Synthetic; never execute.\n')
         wechat = base / 'wechat <&> cli'
         wechat.write_text('# Synthetic; never execute.\n')
@@ -43,7 +43,7 @@ def check():
                 assert stat.S_IMODE(path.stat().st_mode) == (0o700 if path.is_dir() else 0o600)
             config = json.loads((destination / 'private/collector.json').read_text())
             assert config == {'app_url': 'http://127.0.0.1:8765', 'wechat_cli': str(wechat), 'qq_cli': str(qq)}
-            for kind, interval in (('web', None), ('agent', 60), ('collector', None)):
+            for kind, interval in (('web', None), ('agent', 60), ('collector', None), ('backup', None)):
                 raw = (destination / ('LaunchAgents/' + setup.LABEL + '.' + kind + '.plist')).read_bytes()
                 plist = plistlib.loads(raw)
                 assert b'&amp;' in raw and b'&lt;' in raw
@@ -60,6 +60,10 @@ def check():
                     assert plist['KeepAlive'] == {'SuccessfulExit': False} and plist['ThrottleInterval'] == 300
                 elif kind == 'web':
                     assert plist['KeepAlive'] is True and plist['ThrottleInterval'] == 10
+                elif kind == 'backup':
+                    assert plist['ProgramArguments'][-3:] == ['--root', str(root), 'daily']
+                    assert plist['StartCalendarInterval'] == {'Hour': 2, 'Minute': 0}
+                    assert 'KeepAlive' not in plist and 'ThrottleInterval' not in plist
                 else:
                     assert plist['ProgramArguments'][-1] == '--once' and 'KeepAlive' not in plist
                 assert plist['Umask'] == 0o077 and 'shell' not in plist
@@ -122,7 +126,7 @@ def check():
                 calls.clear()
                 with patch.object(setup.subprocess, 'run', side_effect=launchctl), patch.object(setup.socket, 'socket'):
                     setup.install(absent)
-                assert len([args for args in calls if args[1] == 'bootstrap']) == 2
+                assert len([args for args in calls if args[1] == 'bootstrap']) == 3
                 assert not any(args[1] == 'bootout' for args in calls)
                 assert not any(args[1] == 'bootstrap' and args[-1].endswith('.collector.plist') for args in calls)
                 assert stat.S_IMODE(existing.stat().st_mode) == 0o600
@@ -142,6 +146,19 @@ def check():
                     refuses(lambda: setup.install(prepared))
                 assert not existing.exists() and not list(agents.iterdir())
                 assert len([args for args in calls if args[1] == 'bootout']) == 2
+                calls.clear()
+
+                def fails_backup(args, **kwargs):
+                    result = launchctl(args, **kwargs)
+                    if args[1] == 'bootstrap' and args[-1].endswith('.backup.plist'):
+                        result.returncode = 5
+                    return result
+
+                with patch.object(setup.subprocess, 'run', side_effect=fails_backup), patch.object(setup.socket, 'socket'):
+                    refuses(lambda: setup.install(prepared))
+                assert len([args for args in calls if args[1] == 'bootstrap']) == 4
+                assert len([args for args in calls if args[1] == 'bootout']) == 4
+                assert not existing.exists() and not list(agents.iterdir())
             assert not any(args[-1].endswith('/local.family-learning.plist') for args in calls)
 
             mobile = setup.plan(root, mobile_url='https://box.example.invalid/family')

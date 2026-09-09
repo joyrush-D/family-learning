@@ -17,6 +17,7 @@ import shutil
 import sqlite3
 import stat
 import tempfile
+import time
 import zipfile
 
 DOCUMENTS = ('家庭运行规则.md', '消息来源.md', '跟踪台账.md', '学习与成长.md')
@@ -48,8 +49,19 @@ def no_links(path):
     return path
 
 
-def sources(root):
+def check_deadline(deadline):
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError('Daily backup exceeded its time limit; no new daily archive was published')
+
+
+def sqlite_deadline(db, deadline):
+    if deadline is not None:
+        db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+
+
+def sources(root, deadline=None):
     for name in (*DOCUMENTS, *DATA_FILES):
+        check_deadline(deadline)
         path = no_links(root / name)
         if path.exists():
             yield name, path
@@ -60,7 +72,9 @@ def sources(root):
         if not base.is_dir():
             raise ValueError('A backed-up file directory is not a directory')
         for directory, dirs, files in os.walk(base, followlinks=False):
+            check_deadline(deadline)
             for entry in (*dirs, *files):
+                check_deadline(deadline)
                 no_links(Path(directory) / entry)
             dirs[:] = sorted(d for d in dirs if not d.startswith('.'))
             for file in sorted(files):
@@ -70,18 +84,26 @@ def sources(root):
                     yield relative, path
 
 
-def copy_hash(source, target):
+def copy_hash(source, target=None, deadline=None):
     digest, size = hashlib.sha256(), 0
-    while chunk := source.read(1024 * 1024):
+    while True:
+        check_deadline(deadline)
+        chunk = source.read(1024 * 1024)
+        check_deadline(deadline)
+        if not chunk:
+            break
         size += len(chunk)
         if size > MAX_BYTES:
             raise ValueError('File exceeds the backup size limit')
         digest.update(chunk)
-        target.write(chunk)
+        if target is not None:
+            target.write(chunk)
+        check_deadline(deadline)
     return {'size': size, 'sha256': digest.hexdigest()}
 
 
-def create(root, output):
+def create(root, output, deadline=None):
+    check_deadline(deadline)
     root = no_links(root)
     private = no_links(root / 'private')
     output = Path(output)
@@ -102,7 +124,9 @@ def create(root, output):
         tmp = Path(tmp)
         snapshot = tmp / 'family.sqlite3'
         with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as src, closing(sqlite3.connect(snapshot)) as dst:
-            src.backup(dst)
+            sqlite_deadline(dst, deadline)
+            src.backup(dst, pages=64, progress=lambda *_: check_deadline(deadline), sleep=0.01)
+            check_deadline(deadline)
             dst.execute('PRAGMA journal_mode=DELETE')  # The archive must not depend on WAL sidecars.
             if dst.execute('PRAGMA quick_check').fetchall() != [('ok',)]:
                 raise ValueError('Source SQLite snapshot failed validation')
@@ -110,19 +134,97 @@ def create(root, output):
         archive = tmp / 'backup.zip'
         with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as zipped:
             total = 0
-            for name, path in [(DATABASE, snapshot), *sources(root)]:
+            for name, path in [(DATABASE, snapshot), *sources(root, deadline)]:
+                check_deadline(deadline)
                 with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as source:
                     if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
                         raise ValueError('Only regular files can be backed up')
                     with zipped.open(name, 'w', force_zip64=True) as target:
-                        manifest['files'][name] = copy_hash(source, target)
+                        manifest['files'][name] = copy_hash(source, target, deadline)
                 total += manifest['files'][name]['size']
                 if total > MAX_BYTES or len(manifest['files']) > MAX_FILES:
                     raise ValueError('Backup exceeds the size/file count limit')
             zipped.writestr('manifest.json', json.dumps(manifest, ensure_ascii=False, indent=2))
         archive.chmod(0o600)
+        check_deadline(deadline)
         os.link(archive, output)  # Atomic publication; never overwrite an existing backup.
     return output
+
+
+def file_hashes(root, deadline):
+    """Hash the same explicit file selection as create; never read credentials."""
+    files, total = {}, 0
+    for name, path in sources(root, deadline):
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as source:
+            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                raise ValueError('Only regular files can be backed up')
+            files[name] = copy_hash(source, deadline=deadline)
+        total += files[name]['size']
+        if total > MAX_BYTES or len(files) >= MAX_FILES:
+            raise ValueError('Backup exceeds the size/file count limit')
+    check_deadline(deadline)
+    return files
+
+
+def daily(root, day=None, max_seconds=10, lock_wait=0.25):
+    """One verified archive per local date, without stopping any service.
+
+    A separate reserved SQLite lock covers snapshot/copy and matching before/after
+    file hashes. Checkpoints bound this window to at most 10 seconds; an OS-level
+    stalled filesystem call cannot be preempted by Python's cooperative deadline.
+    Restore verification runs only in our temporary directory, after releasing
+    the live write lock. Existing daily archives are verified, never replaced.
+    """
+    # ponytail: cap progress checks at 10s; larger families use the existing
+    # stopped-writer manual create/restore flow rather than lengthening this lock.
+    if not 0 < max_seconds <= 10 or not 0 <= lock_wait <= 0.25:
+        raise ValueError('Daily backup limits must be at most 10 seconds / 0.25 seconds')
+    day = dt.date.today() if day is None else day
+    if type(day) is not dt.date:
+        raise ValueError('Daily backup requires a local date')
+    root = no_links(root)
+    database = no_links(root / DATABASE)
+    if not database.is_file():
+        raise ValueError('Application database does not exist')
+    folder = no_links(root / 'private/backups')
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    output = no_links(folder / ('family-' + day.isoformat() + '.zip'))
+    created = False
+    with tempfile.TemporaryDirectory(prefix='.daily-backup-', dir=folder) as temporary:
+        temporary = Path(temporary)
+        candidate = temporary / 'candidate.zip'
+        if not output.exists():
+            deadline = time.monotonic() + max_seconds
+            with closing(sqlite3.connect(database.as_uri() + '?mode=rw', uri=True,
+                                        timeout=min(lock_wait, max_seconds))) as lock:
+                try:
+                    lock.execute('BEGIN IMMEDIATE')
+                    check_deadline(deadline)
+                    # A preceding process may have completed while we waited.
+                    if not output.exists():
+                        before = file_hashes(root, deadline)
+                        create(root, candidate, deadline=deadline)
+                        with zipfile.ZipFile(candidate) as zipped:
+                            archived = json.loads(zipped.read('manifest.json'))['files']
+                        archived.pop(DATABASE)
+                        after = file_hashes(root, deadline)
+                        if before != after or before != archived:
+                            raise ValueError('Family files changed during daily backup; no daily archive was published')
+                        check_deadline(deadline)
+                finally:
+                    lock.rollback()
+        # Full restore checks hashes, paths and SQLite without occupying the live
+        # write lock. A failure only removes this call's temporary files.
+        if candidate.exists():
+            restore(candidate, temporary / 'verified', deadline=time.monotonic() + max_seconds)
+            try:
+                os.link(candidate, output)
+                created = True
+            except FileExistsError:
+                pass  # Verify the actual winner; its filename proves nothing.
+        if not created:
+            restore(output, temporary / 'existing', deadline=time.monotonic() + max_seconds)
+    return {'status': 'created' if created else 'existing', 'date': day.isoformat(), 'path': str(output)}
 
 
 def hold_restored_print_jobs(db):
@@ -161,7 +263,8 @@ def hold_restored_study_timers(db):
             version=version+1,last_request_key='',last_request_hash='' WHERE running_since IS NOT NULL""")
 
 
-def restore(archive, destination):
+def restore(archive, destination, deadline=None):
+    check_deadline(deadline)
     archive, destination = no_links(archive), no_links(destination)
     if destination.exists() and (not destination.is_dir() or any(destination.iterdir())):
         raise ValueError('Restore destination must not exist or must be an empty directory')
@@ -175,6 +278,7 @@ def restore(archive, destination):
         if zipped.getinfo('manifest.json').file_size > 2 * 1024 ** 2:
             raise ValueError('Backup manifest is too large')
         manifest = json.loads(zipped.read('manifest.json'))
+        check_deadline(deadline)
         if not isinstance(manifest, dict) or manifest.get('format') != 1 or not isinstance(manifest.get('files'), dict):
             raise ValueError('Invalid backup manifest')
         files = manifest['files']
@@ -182,6 +286,7 @@ def restore(archive, destination):
             raise ValueError('Backup files do not match the manifest')
         total = 0
         for entry in entries:
+            check_deadline(deadline)
             mode = entry.external_attr >> 16
             if entry.is_dir() or stat.S_ISLNK(mode) or stat.S_IFMT(mode) not in (0, stat.S_IFREG):
                 raise ValueError('Archive contains a link or special file')
@@ -198,14 +303,16 @@ def restore(archive, destination):
         stage = Path(tempfile.mkdtemp(prefix='.family-restore-', dir=destination.parent))
         try:
             for name, expected in files.items():
+                check_deadline(deadline)
                 path = stage / name
                 path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 with zipped.open(name) as source, path.open('xb') as target:
-                    actual = copy_hash(source, target)
+                    actual = copy_hash(source, target, deadline)
                 path.chmod(0o600)
                 if actual != expected:
                     raise ValueError('Backup checksum does not match')
             with closing(sqlite3.connect((stage / DATABASE).as_uri() + '?mode=rw', uri=True)) as db:
+                sqlite_deadline(db, deadline)
                 if db.execute('PRAGMA quick_check').fetchall() != [('ok',)]:
                     raise ValueError('Restored SQLite database failed validation')
                 # Verify archive hashes first, then change only the isolated restore.
@@ -222,6 +329,7 @@ def restore(archive, destination):
             # Verification above covers the original bytes. Only the isolated
             # restored config changes; cursors, messages and Agent results stay intact.
             disable_restored_agent(stage)
+            check_deadline(deadline)
             no_links(destination)
             if destination.exists():
                 destination.rmdir()  # Fails if anything was added since the first check.
@@ -237,12 +345,16 @@ if __name__ == '__main__':
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parent)
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('create').add_argument('output', type=Path)
+    commands.add_parser('daily', help='verify or create one bounded backup for the local date')
     recovery = commands.add_parser('restore')
     recovery.add_argument('archive', type=Path)
     recovery.add_argument('destination', type=Path)
     args = parser.parse_args()
     try:
-        result = create(args.root, args.output) if args.command == 'create' else restore(args.archive, args.destination)
+        if args.command == 'daily':
+            result = json.dumps(daily(args.root))
+        else:
+            result = create(args.root, args.output) if args.command == 'create' else restore(args.archive, args.destination)
     except (OSError, ValueError, sqlite3.Error, zipfile.BadZipFile, RuntimeError) as error:
         parser.exit(1, f'Backup/restore failed: {error}\n')
     print(result)

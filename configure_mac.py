@@ -54,8 +54,8 @@ def plan(root, url='http://127.0.0.1:8765', wechat_cli=None, qq_cli=None, mobile
     if sys.version_info < (3, 10):
         raise ValueError('需要 Python 3.10 或以上版本；请使用已安装的新版本运行本命令')
     root = Path(root).expanduser().resolve(strict=True)
-    if not root.is_dir() or not all((root / name).is_file() for name in ('app.py', 'family_agent.py', 'family_collect.py')):
-        raise ValueError('应用目录缺少 app.py、family_agent.py 或 family_collect.py')
+    if not root.is_dir() or not all((root / name).is_file() for name in ('app.py', 'family_agent.py', 'family_collect.py', 'family_backup.py')):
+        raise ValueError('应用目录缺少网页、Agent、采集或备份程序')
     url = app_url(url)
     if urlsplit(url).hostname not in ('127.0.0.1', 'localhost'):
         raise ValueError('本机完整安装使用 http://127.0.0.1:端口 或 http://localhost:端口')
@@ -74,12 +74,14 @@ def plan(root, url='http://127.0.0.1:8765', wechat_cli=None, qq_cli=None, mobile
     path = os.pathsep.join(dict.fromkeys([str(Path(p).parent) for p in (python, wechat, qq) if p] +
                                        ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin']))
     files = {'private/collector.json': (json.dumps(config, ensure_ascii=False, indent=2) + '\n').encode()}
-    for kind, script, interval in (('web', 'app.py', None), ('agent', 'family_agent.py', 60), ('collector', 'family_collect.py', 300)):
+    for kind, script, interval in (('web', 'app.py', None), ('agent', 'family_agent.py', 60), ('collector', 'family_collect.py', 300), ('backup', 'family_backup.py', None)):
         arguments = [python, str(root / script)]
         if kind == 'agent':
             arguments += ['--root', str(root), '--data', str(private), '--once']
         if kind == 'collector':
             arguments += ['--config', str(private / 'collector.json'), '--interval', str(interval)]
+        if kind == 'backup':
+            arguments += ['--root', str(root), 'daily']
         environment = {'PATH': path, 'PYTHONUNBUFFERED': '1', 'FAMILY_DATA': str(private),
                        'PORT': str(urlsplit(url).port or 80)}
         if mobile and kind == 'web':
@@ -92,6 +94,8 @@ def plan(root, url='http://127.0.0.1:8765', wechat_cli=None, qq_cli=None, mobile
                      StandardErrorPath=str(private / (kind + '.stderr.log')))
         if kind == 'collector':
             plist.update(KeepAlive={'SuccessfulExit': False}, ThrottleInterval=interval)
+        elif kind == 'backup':
+            plist['StartCalendarInterval'] = {'Hour': 2, 'Minute': 0}
         elif interval:
             plist['StartInterval'] = interval
         else:
@@ -133,7 +137,7 @@ def install(plan):
         target = plan['root'] / name
         if target.exists() or target.is_symlink():
             raise ValueError('已有手机访问配置；不会覆盖，请先核对原安装')
-    labels = [LABEL, LABEL + '.web', LABEL + '.agent', LABEL + '.collector']
+    labels = [LABEL, LABEL + '.web', LABEL + '.agent', LABEL + '.collector', LABEL + '.backup']
     if any(p.exists() or p.is_symlink() for p in [*targets, agents / (LABEL + '.plist')]):
         raise ValueError('已有家庭服务或 collector.json；不会覆盖、卸载或改动，请先核对原安装')
     domain = 'gui/' + str(os.getuid())
@@ -158,7 +162,7 @@ def install(plan):
         for target, content in targets.items():
             exclusive_write(target, content)
             written.append(target)
-        for kind in ('web', 'agent', 'collector'):
+        for kind in ('web', 'agent', 'collector', 'backup'):
             if kind == 'collector' and not plan['collector_enabled']:
                 continue
             target = agents / (LABEL + '.' + kind + '.plist')
@@ -201,6 +205,7 @@ def main(argv=None):
         else:
             print('仅查看计划，未写入文件或启动服务：\n' + '\n'.join(prepared['files']))
         print('网页：' + prepared['url'] + '；Agent 每分钟检查。首次进入网页配置孩子、群归属并明确启用 Agent。')
+        print('备份在登录加载时及每天本地时间02:00检查；当天已有有效备份就跳过，不删除旧备份。')
         print('采集进程保持运行，每轮结束后等 5 分钟再检查；CLI 路径存在不代表登录或消息已读取。' if prepared['collector_enabled'] else
               '消息采集待配置：没有可用 CLI，collector 未加载；网页、手动记录和 Agent 服务仍可用。')
         if prepared['mobile_url']:

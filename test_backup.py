@@ -1,11 +1,16 @@
 """Run with python3 test_backup.py. Uses only synthetic data in a temporary directory."""
 import hashlib
+import datetime as dt
+import io
 import json
 import os
 from pathlib import Path
 import sqlite3
 import struct
+import subprocess
+import sys
 import tempfile
+import time
 from unittest.mock import patch
 import zipfile
 import zlib
@@ -561,9 +566,149 @@ def study_restore_check():
                     assert db.execute('SELECT id FROM records').fetchone()[0]==expected[second['id']]['record_id']
 
 
+def daily_backup_check():
+    """Online daily copies are checked, bounded and never replace an old archive."""
+    with tempfile.TemporaryDirectory(prefix='synthetic-daily-backup-') as temporary:
+        root = Path(temporary).resolve() / 'family'
+        data = root / 'private'
+        (data / 'uploads').mkdir(parents=True)
+        original = data / 'uploads' / 'example.bin'
+        original.write_bytes(b'Synthetic original file')
+        for name in backup.DOCUMENTS:
+            (root / name).write_text('Only a fictional family fixture.')
+        (data / 'agent.json').write_text('{"enabled":true,"sources":[]}')
+        (data / 'model.json').write_text('{"api_key":"synthetic-not-for-archive"}')
+        with sqlite3.connect(root / backup.DATABASE) as db:
+            db.execute('PRAGMA journal_mode=WAL')
+            db.execute('CREATE TABLE records (id INTEGER PRIMARY KEY, note TEXT)')
+            db.execute("INSERT INTO records VALUES (1,'Before daily backup')")
+            db.execute('CREATE TABLE parent_sessions (hash TEXT PRIMARY KEY)')
+            db.execute("INSERT INTO parent_sessions VALUES ('synthetic-session-hash')")
+            db.commit()
+        first_day = dt.date(2026, 1, 2)
+        result = backup.daily(root, day=first_day)
+        archive = Path(result['path'])
+        frozen = archive.read_bytes()
+        assert result == dict(status='created', date='2026-01-02', path=str(archive))
+        assert archive.name == 'family-2026-01-02.zip' and archive.stat().st_mode & 0o777 == 0o600
+        with zipfile.ZipFile(archive) as zipped:
+            assert 'private/model.json' not in zipped.namelist()
+        with sqlite3.connect(root / backup.DATABASE) as db:
+            db.execute("UPDATE records SET note='After daily backup'")
+            db.commit()
+        again = backup.daily(root, day=first_day)
+        assert again['status'] == 'existing' and archive.read_bytes() == frozen
+        next_day = backup.daily(root, day=first_day + dt.timedelta(days=1))
+        assert next_day['status'] == 'created' and next_day['path'] != str(archive)
+        restored = backup.restore(archive, root.parent / 'restored')
+        with sqlite3.connect(restored / backup.DATABASE) as db:
+            assert db.execute('SELECT note FROM records').fetchone()[0] == 'Before daily backup'
+            assert db.execute('SELECT COUNT(*) FROM parent_sessions').fetchone()[0] == 0
+        with sqlite3.connect(root / backup.DATABASE) as db:
+            assert db.execute('SELECT note FROM records').fetchone()[0] == 'After daily backup'
+            assert db.execute('SELECT COUNT(*) FROM parent_sessions').fetchone()[0] == 1
+        assert json.loads((data / 'agent.json').read_text())['enabled'] is True
+
+        real_create, real_copy = backup.create, backup.copy_hash
+        blocked_writer_seen = []
+        for offset, change in enumerate(('content', 'added', 'deleted'), 4):
+            original.write_bytes(b'Synthetic original file')
+            added = data / 'uploads' / 'late.bin'
+            added.unlink(missing_ok=True)
+            day = first_day + dt.timedelta(days=offset)
+            def change_during_create(root, output, deadline=None):
+                changed = False
+                def copying(source, target=None, deadline=None):
+                    nonlocal changed
+                    result = real_copy(source, target, deadline)
+                    if target is not None and not changed:
+                        changed = True
+                        # The source DB is really protected, not merely copied
+                        # with a fake lock. Independent file writers are detected.
+                        with sqlite3.connect(root / backup.DATABASE, timeout=0) as writer:
+                            try:
+                                writer.execute("UPDATE records SET note='Must not be saved'")
+                            except sqlite3.OperationalError as error:
+                                assert 'locked' in str(error)
+                                blocked_writer_seen.append(True)
+                            else:
+                                raise AssertionError('Daily backup did not hold a write lock')
+                        if change == 'content': original.write_bytes(b'Changed during copy')
+                        elif change == 'added': added.write_bytes(b'New during copy')
+                        else: original.unlink()
+                    return result
+                with patch.object(backup, 'copy_hash', side_effect=copying):
+                    return real_create(root, output, deadline=deadline)
+            with patch.object(backup, 'create', side_effect=change_during_create):
+                rejected(lambda: backup.daily(root, day=day))
+            assert not (data / 'backups' / ('family-' + day.isoformat() + '.zip')).exists()
+            assert archive.read_bytes() == frozen
+            assert not list((data / 'backups').glob('.daily-backup-*'))
+        assert len(blocked_writer_seen) == 3
+        original.write_bytes(b'Synthetic original file')
+        added.unlink(missing_ok=True)
+
+        locked_day = first_day + dt.timedelta(days=8)
+        with sqlite3.connect(root / backup.DATABASE) as writer:
+            writer.execute('BEGIN IMMEDIATE')
+            started = time.monotonic()
+            try:
+                backup.daily(root, day=locked_day, lock_wait=0.02, max_seconds=0.2)
+            except sqlite3.OperationalError as error:
+                assert 'locked' in str(error)
+            else:
+                raise AssertionError('An occupied source write lock was ignored')
+            assert time.monotonic() - started < 1
+            writer.rollback()
+        assert not (data / 'backups' / ('family-' + locked_day.isoformat() + '.zip')).exists()
+
+        timeout_day = first_day + dt.timedelta(days=9)
+        def slow_copy(source, target=None, deadline=None):
+            if target is not None: time.sleep(0.03)
+            return real_copy(source, target, deadline)
+        with patch.object(backup, 'copy_hash', side_effect=slow_copy):
+            rejected(lambda: backup.daily(root, day=timeout_day, max_seconds=0.02))
+        assert not (data / 'backups' / ('family-' + timeout_day.isoformat() + '.zip')).exists()
+        # Both timeout paths release the live lock and leave old archives intact.
+        with sqlite3.connect(root / backup.DATABASE, timeout=0) as writer:
+            writer.execute('BEGIN IMMEDIATE'); writer.rollback()
+        assert archive.read_bytes() == frozen
+        rejected(lambda: backup.copy_hash(io.BytesIO(b'x'), deadline=time.monotonic() - 1))
+
+        # A target created by a competing process must itself pass verification.
+        race_day = first_day + dt.timedelta(days=10)
+        race_path = data / 'backups' / ('family-' + race_day.isoformat() + '.zip')
+        real_link = os.link
+        def racing_link(source, destination, *args, **kwargs):
+            if Path(destination) == race_path:
+                race_path.write_bytes(b'Not a valid ZIP')
+            return real_link(source, destination, *args, **kwargs)
+        with patch.object(backup.os, 'link', side_effect=racing_link):
+            try: backup.daily(root, day=race_day)
+            except zipfile.BadZipFile: pass
+            else: raise AssertionError('A corrupt competing daily archive was accepted')
+        assert race_path.read_bytes() == b'Not a valid ZIP'
+        try: backup.daily(root, day=race_day)
+        except zipfile.BadZipFile: pass
+        else: raise AssertionError('An existing damaged archive was accepted')
+        assert race_path.read_bytes() == b'Not a valid ZIP' and archive.read_bytes() == frozen
+        assert not list((data / 'backups').glob('.daily-backup-*'))
+
+        command = [sys.executable, str(Path(backup.__file__).resolve()), '--root', str(root), 'daily']
+        reply = subprocess.run(command, capture_output=True, text=True, check=True)
+        assert json.loads(reply.stdout)['status'] == 'created'
+        reply = subprocess.run(command, capture_output=True, text=True, check=True)
+        assert json.loads(reply.stdout)['status'] == 'existing'
+        absent = root.parent / 'uninitialized'
+        rejected(lambda: backup.daily(absent))
+        assert not absent.exists()
+        rejected(lambda: backup.daily(root, max_seconds=11))
+
+
 reading_backup_result = reading_restore_check()
 calendar_restore_check()
 care_choice_restore_check()
 agent_restore_check()
 study_restore_check()
-print('Backup/restore checks passed: SQLite snapshot, Agent sources/cursors/results retained with Agent disabled, calendar/readings/retry keys, original uploads, print no-replay audit, study timers held for review, hashes and unsafe paths.')
+daily_backup_check()
+print('Backup/restore checks passed: SQLite snapshot, Agent sources/cursors/results retained with Agent disabled, calendar/readings/retry keys, original uploads, print no-replay audit, study timers held for review, hashes/unsafe paths, and bounded daily backups with idempotence, file changes, lock contention and corrupt-winner rejection.')

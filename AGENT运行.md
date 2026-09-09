@@ -52,7 +52,11 @@ python3 configure_mac.py --install
 
 第一条只显示计划，无写入或启动；第二条明确安装加载本应用服务。默认程序目录为脚本所在目录，可用 `--root` 指定；程序和资料在同一应用目录，`FAMILY_DATA` 固定为该目录的 `private`。默认本地网页 `http://127.0.0.1:8765`，可用 `--app-url` 改为另一本机端口；本机配置命令不配置公网或远程服务。首次安装就需要手机访问时，改用下一节带 `--mobile-url` 的安装命令，不先重复安装一次。
 
-安装产物是 `private/collector.json` 及 `~/Library/LaunchAgents/local.family-learning.web.plist`、`local.family-learning.agent.plist`、`local.family-learning.collector.plist`。网页服务保持运行，Agent 每分钟检查，已配置的采集器每 5 分钟读取；无 CLI 时采集器保留停用。各进程使用同一应用目录，日志位于私有目录。首次打开网页创建孩子、绑定来源后，再明确启用 Agent；进程已加载不表示消息或模型已连通。
+安装产物是 `private/collector.json` 及 `~/Library/LaunchAgents/local.family-learning.web.plist`、`local.family-learning.agent.plist`、`local.family-learning.collector.plist`、`local.family-learning.backup.plist`。网页服务保持运行，Agent 每分钟检查，已配置的采集器每 5 分钟读取；无 CLI 时采集器保留停用。各进程使用同一应用目录，日志位于私有目录。首次打开网页创建孩子、绑定来源后，再明确启用 Agent；进程已加载不表示消息或模型已连通。
+
+备份登录服务在加载时及每天本地时间02:00执行 `family_backup.py --root 应用目录 daily`，每天只保留一份本地日期归档，已有包需校验有效才跳过；失败保留已有备份，通过私有日志报告，不自动停服务、恢复主库或删除旧包。新家庭数据库尚未创建时首次执行会明确失败，初始化后可等待下一次定时或由部署者单独唤起此备份服务。休眠后的系统补跑仍须查看实际回执；不把加载或计划时刻当成已备份。
+
+已有安装仅增加备份服务时，先更新同版程序，用 `--output-dir` 输出到一个新的私有检查目录；只核对并安装其中 `local.family-learning.backup.plist`，保留已有网页、Agent、采集、打印与访问配置。不要重跑完整 `--install`，不要把生成的其它配置覆盖当前家庭。该任务不读取微信/QQ数据库、不发送资料到外部，也不能替代另存异机备份。
 
 `--wechat-cli /absolute/path/to/wechat-cli` 可指定已安装可执行文件，省略时从 PATH 探测；`--qq-cli /absolute/path/to/qq_reader.py` 可指定兼容只读脚本。仅生成检查文件可用 `--output-dir /absolute/path/to/new-directory`，不会安装或启动服务。未发现 CLI 可先使用网页；后续补接需按下文核对采集配置和登录服务。
 
