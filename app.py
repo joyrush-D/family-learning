@@ -1058,7 +1058,7 @@ def query_evidence(child,question,start=None,end=None,now=None):
     coverage+='帮助情况与练习关系按实际字段记录，空值为未知；旧的独立复测标签本身不能证明独立完成，不由分数变化推断掌握或前后可比较。不含附件正文、群聊原文、未录入资料及完整修改历史；本次未检索到不等于历史不存在。不能由成长能量推断奖励已兑现；待兑现与已兑现分别判断。'
     return selected,coverage
 
-def teacher_query_evidence(child, question, start=None, end=None):
+def teacher_query_evidence(child, question, start=None, end=None, now=None):
     # Query existing records without initializing optional tables or running a source check.
     with connect() as c:
         names = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -1069,37 +1069,38 @@ def teacher_query_evidence(child, question, start=None, end=None):
         teachers = {key: t for key,t in teachers.items() if child_id in t['child_ids'] and not t['archived']}
         if not any(word in question for word in ['老师','教师','表扬'] + [t['display_name'] for t in teachers.values()]):
             return [], ''
-        # Reuse the configuration validator without constructing its schema-writing Store.
-        try:
-            config = family_agent.Store._config(SimpleNamespace(data=DATA, profiles=profiles))
-            source_children = {r['id']:r['child_id'] for r in config['sources']}
-        except family_agent.AgentError:
-            source_children = {}
+        if start is None:
+            inferred = calendar_text_range(question, (now or dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))).date())
+            if inferred:
+                first, last = inferred
+                if not 0 <= (last-first).days < 31: raise ValueError('请选择按先后排列的1至31天（含首尾）')
+                start, end = first.isoformat(), last.isoformat()
         rows = []
         for raw in c.execute('SELECT * FROM teacher_observations'):
             row = family_teachers.Store._view(raw)
             teacher = teachers.get(row['teacher_id'])
             if teacher is None or row['status'] != 'active' or row['child_id'] and row['child_id'] != child_id:
                 continue
-            if row['source_id']:
-                if source_children.get(row['source_id']) != child_id: continue
-            elif not row['child_id'] and len(teacher['child_ids']) != 1:
-                continue  # A shared teacher's unassigned class feedback has unknown child scope.
+            if family_teachers.observation_scope(row, teacher) != child_id: continue
             if start and not start <= row['day'] <= end: continue
             rows.append(row)
     rows.sort(key=lambda r: (teachers[r['teacher_id']]['display_name'] in question,
                              bool(teachers[r['teacher_id']]['subject'] and teachers[r['teacher_id']]['subject'] in question),
                              r['day'], r['updated']), reverse=True)
     evidence = []
+    def excerpt(label, value, limit):
+        return label + value[:limit] + ('…（节选）' if len(value) > limit else '')
     for row in rows[:6]:
         teacher = teachers[row['teacher_id']]
-        detail = '；'.join([('行为或要求：' + row['behavior'])[:700],
-            ('老师明确说的理由：' + row['teacher_reason'])[:400] if row['teacher_reason'] else '尚未记录老师明确说的理由，原因未知',
-            ('家长待核实理解：' + row['parent_note'])[:400] if row['parent_note'] else '没有家长推测',
-            '对象：' + {'household':'本家孩子','other_students':'其他学生的行为','class':'全班'}[row['target']],
-            '来源：' + (row['source_url'] or row['source_id'] or '家长手动记录')])[:1100]
+        # Reserve scope and provenance before shortening free text; never cut away whose praise this is.
+        detail = '；'.join(['对象：' + {'household':'本家孩子','other_students':'其他学生的行为','class':'全班'}[row['target']],
+            excerpt('来源：', row['source_url'] or row['source_id'] or '家长手动记录', 180),
+            excerpt('行为或要求：', row['behavior'], 330),
+            excerpt('老师明确说的理由：', row['teacher_reason'], 220) if row['teacher_reason'] else '尚未记录老师明确说的理由，原因未知',
+            excerpt('家长待核实理解：', row['parent_note'], 220) if row['parent_note'] else '没有家长推测'])
         evidence.append(dict(id='teacher_observation:'+row['id'],kind='teacher',target_id=teacher['id'],
-            title=teacher['display_name']+' · '+{'requirement':'明确要求','praise':'表扬记录','preference':'明确教学偏好'}[row['kind']],
+            title=teacher['display_name']+' · '+{'requirement':'明确要求','praise':'表扬记录','preference':'明确教学偏好'}[row['kind']]
+                +' · '+{'household':'本家孩子','other_students':'其他学生','class':'全班'}[row['target']],
             child=child,day=row['day'],detail=detail))
     return evidence, ('老师观察范围：'+(start+'至'+end if start else '已保存历史，未限定日期')+'。本次另选同一孩子老师档案中最近或与问题相关的'+str(len(evidence))+'/'+str(len(rows))+
         '条有效观察。老师明确理由与家长理解分开；理由未记录就说未知。不能从一次表扬推断长期偏好、人格或偏爱某人；'
@@ -1119,7 +1120,7 @@ def ask_family(obj):
     date_range=calendar_query_range(question,obj.get('start'),obj.get('end'),now=now)
     evidence,coverage=query_evidence(child,question,date_range['start'],date_range['end'],now=now)
     teacher_evidence,teacher_coverage=teacher_query_evidence(child,question,
-        None if date_range['defaulted'] else date_range['start'], None if date_range['defaulted'] else date_range['end'])
+        None if date_range['defaulted'] else date_range['start'], None if date_range['defaulted'] else date_range['end'], now=now)
     if teacher_coverage:
         evidence=(teacher_evidence+evidence)[:12]
         coverage='以下常规资料数量是合并老师证据前的候选统计，不等于最终纳入数量：'+coverage+teacher_coverage

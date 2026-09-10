@@ -24,6 +24,13 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False)
 
 
+def observation_scope(observation, teacher):
+    if 'scope_child_id' in observation: return observation['scope_child_id']
+    if observation['child_id']: return observation['child_id']
+    # Legacy single-child profiles at version 1 have never been reassigned. Shared scope stays unknown.
+    return teacher['child_ids'][0] if teacher['version'] == 1 and len(teacher['child_ids']) == 1 else ''
+
+
 def _text(obj, key, limit, required=False):
     value = obj.get(key, '')
     if not isinstance(value, str) or len(value) > limit or any(ord(c) < 32 and c not in '\n\t' or ord(c) == 127 for c in value):
@@ -132,13 +139,18 @@ class Store:
             fields['source_ids'] = _ids(obj, 'source_ids', {s['id'] for s in sources if s['child_id'] in fields['child_ids']})
             old = c.execute('SELECT * FROM teachers WHERE id=?', (request[0],)).fetchone()
             if old:
-                for row in c.execute('SELECT data FROM teacher_observations'):
+                for row in c.execute('SELECT id,data FROM teacher_observations'):
                     observation = json.loads(row['data'])
                     if observation['teacher_id'] != request[0]: continue
-                    if (observation['child_id'] and observation['child_id'] not in fields['child_ids']
+                    scope = observation_scope(observation, self._view(old))
+                    if (scope and scope not in fields['child_ids']
                             or observation['source_id'] and observation['source_id'] not in fields['source_ids']):
                         raise TeacherError('已有观察使用这位孩子或群来源，请先更正观察，或归档老师并保留原关联',
                                            409, 'teacher_binding_conflict')
+                    if 'scope_child_id' not in observation:
+                        # Freeze legacy scope before any profile edit can change its inference.
+                        observation['scope_child_id'] = scope
+                        c.execute('UPDATE teacher_observations SET data=? WHERE id=?', (_json(observation), row['id']))
             row = self._persist(c, 'teachers', request, fields, old)
             return dict(ok=True, teacher=self._teacher(c, row))
 
@@ -171,6 +183,7 @@ class Store:
             teacher_row = c.execute('SELECT * FROM teachers WHERE id=?', (fields['teacher_id'],)).fetchone()
             if teacher_row is None: raise TeacherError('老师档案不存在', 404, 'teacher_missing')
             teacher = json.loads(teacher_row['data'])
+            source = None
             if fields['target'] == 'household' and (fields['child_id'] not in teacher['child_ids']
                     or fields['child_id'] not in {p['id'] for p in self.app.profiles(c)}):
                 raise TeacherError('请选择这位老师关联的本家孩子')
@@ -195,5 +208,11 @@ class Store:
             if old and json.loads(old['data'])['teacher_id'] != fields['teacher_id']:
                 raise TeacherError('已有观察不能改给另一位老师；请撤回后在正确档案新建', 409, 'teacher_binding_conflict')
             if teacher['archived'] and old is None: raise TeacherError('老师档案已归档，请先恢复后新增观察', 409)
+            fields['scope_child_id'] = (fields['child_id'] or (source['child_id'] if source else
+                teacher['child_ids'][0] if len(teacher['child_ids']) == 1 else ''))
+            if old:
+                previous = json.loads(old['data'])
+                if all(previous[key] == fields[key] for key in ('target', 'child_id', 'source_id')):
+                    fields['scope_child_id'] = observation_scope(previous, self._view(teacher_row))
             row = self._persist(c, 'teacher_observations', request, fields, old)
             return dict(ok=True, observation=self._view(row))

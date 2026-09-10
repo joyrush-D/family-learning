@@ -1,5 +1,6 @@
 """Parent teacher APIs and evidence lookup on the existing synthetic HTTP fixture."""
 import datetime as dt
+import json
 from unittest.mock import patch
 import unittest
 
@@ -8,6 +9,67 @@ import test_agent_http as http_checks
 
 
 class TeacherHTTPTests(http_checks.AgentHTTPTests):
+    def test_teacher_question_date_without_calendar_words(self):
+        store = app.teacher_store()
+        teacher = store.save_teacher(dict(display_name='虚构老师', child_ids=['child-1'],
+            version=0, request_key='synthetic-dated-profile'))['teacher']
+        today = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).date().isoformat()
+        for day in ('2020-01-01', today):
+            store.save_observation(dict(teacher_id=teacher['id'], day=day, kind='praise', target='household',
+                child_id='child-1', behavior='虚构：独立核对步骤', version=0, request_key='synthetic-date-'+day))
+        with patch.object(app.family_llm, 'answer_question', return_value=dict(answer='虚构回答', citation_ids=[])) as answer:
+            app.ask_family(dict(child='示例星星', question='今天老师为什么表扬？'))
+            rows = answer.call_args.args[2]
+            self.assertEqual([r['day'] for r in rows if r['kind']=='teacher'], [today])
+            self.assertIn('老师观察范围：'+today+'至'+today, answer.call_args.args[3])
+            app.ask_family(dict(child='示例星星', question='今天老师为什么表扬？', start='2020-01-01', end='2020-01-01'))
+            self.assertEqual([r['day'] for r in answer.call_args.args[2] if r['kind']=='teacher'], ['2020-01-01'])
+
+    def test_teacher_source_scope_survives_rebinding_and_legacy_profile_edit(self):
+        store = app.teacher_store()
+        profile = dict(display_name='虚构老师', child_ids=['child-1','child-2'], source_ids=[self.source['id']],
+            version=0, request_key='synthetic-bound-profile')
+        teacher = store.save_teacher(profile)['teacher']
+        observation = dict(teacher_id=teacher['id'], day='2020-01-01', kind='praise', target='class', child_id='',
+            source_id=self.source['id'], behavior='虚构：全班主动核对步骤', version=0, request_key='synthetic-bound-observation')
+        saved = store.save_observation(observation)['observation']
+        self.write_config(self.config | dict(sources=[self.source | dict(child_id='child-2')]))
+        self.assertEqual(app.teacher_query_evidence('示例月亮','老师表扬')[0], [])
+        self.assertEqual(len(app.teacher_query_evidence('示例星星','老师表扬')[0]), 1)
+        self.write_config(self.config | dict(sources=[]))
+        self.assertEqual(len(app.teacher_query_evidence('示例星星','老师表扬')[0]), 1)
+        self.write_config(self.config)
+        # Legacy shared records cannot infer the historical child from today's source configuration.
+        with app.connect() as c:
+            row = c.execute('SELECT data FROM teacher_observations WHERE id=?', (saved['id'],)).fetchone()
+            data = json.loads(row['data']); data.pop('scope_child_id', None)
+            c.execute('UPDATE teacher_observations SET data=? WHERE id=?', (json.dumps(data), saved['id']))
+        self.assertEqual(app.teacher_query_evidence('示例星星','老师表扬')[0], [])
+        # A never-reassigned single-child legacy profile has a known scope; freeze it before editing.
+        with app.connect() as c:
+            row = c.execute('SELECT data FROM teachers WHERE id=?', (teacher['id'],)).fetchone()
+            data = json.loads(row['data']); data['child_ids']=['child-1']
+            c.execute('UPDATE teachers SET data=? WHERE id=?', (json.dumps(data), teacher['id']))
+        self.assertEqual(len(app.teacher_query_evidence('示例星星','老师表扬')[0]), 1)
+        store.save_teacher(profile | dict(id=teacher['id'],version=1,request_key='synthetic-expand-profile'))
+        self.assertEqual(len(app.teacher_query_evidence('示例星星','老师表扬')[0]), 1)
+        self.assertEqual(app.teacher_query_evidence('示例月亮','老师表扬')[0], [])
+
+    def test_long_teacher_evidence_retains_target_and_provenance(self):
+        store = app.teacher_store()
+        teacher = store.save_teacher(dict(display_name='虚构老师', child_ids=['child-1'],
+            version=0, request_key='synthetic-length-profile'))['teacher']
+        store.save_observation(dict(teacher_id=teacher['id'], day=dt.date.today().isoformat(),
+            kind='praise', target='other_students', child_id='', behavior='虚构行为'*600,
+            teacher_reason='虚构理由'*400, parent_note='家长待核实想法'*250,
+            source_url='https://school.example/'+('a'*1800), version=0,
+            request_key='synthetic-length-observation'))
+        detail = app.teacher_query_evidence('示例星星', '老师表扬')[0][0]['detail']
+        for label in ('对象：其他学生的行为', '来源：https://school.example/', '行为或要求：',
+                      '老师明确说的理由：', '家长待核实理解：', '…（节选）'):
+            self.assertIn(label, detail)
+        self.assertLessEqual(len(detail), 1100)
+
     def test_teacher_parent_api_and_query_scope(self):
         today = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).date().isoformat()
         status, state, _ = self.request('GET', '/api/teachers')
