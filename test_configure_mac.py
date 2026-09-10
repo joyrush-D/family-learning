@@ -124,8 +124,15 @@ def check():
                     refuses(lambda: setup.install(prepared))
                 assert not existing.exists() and not list(agents.iterdir())
                 calls.clear()
-                with patch.object(setup.subprocess, 'run', side_effect=launchctl), patch.object(setup.socket, 'socket'):
+                def ready_after_web(plan):
+                    loaded = [args for args in calls if args[1] == 'bootstrap']
+                    assert len(loaded) == 1 and loaded[0][-1].endswith('.web.plist')
+                    assert plan is absent
+
+                with patch.object(setup.subprocess, 'run', side_effect=launchctl), patch.object(setup.socket, 'socket'), \
+                        patch.object(setup, 'wait_for_web', side_effect=ready_after_web) as readiness:
                     setup.install(absent)
+                readiness.assert_called_once_with(absent)
                 assert len([args for args in calls if args[1] == 'bootstrap']) == 3
                 assert not any(args[1] == 'bootout' for args in calls)
                 assert not any(args[1] == 'bootstrap' and args[-1].endswith('.collector.plist') for args in calls)
@@ -136,13 +143,22 @@ def check():
                 existing.unlink()
                 calls.clear()
 
+                with patch.object(setup.subprocess, 'run', side_effect=launchctl), patch.object(setup.socket, 'socket'), \
+                        patch.object(setup, 'wait_for_web', side_effect=ValueError('Synthetic unready web')):
+                    refuses(lambda: setup.install(prepared))
+                assert len([args for args in calls if args[1] == 'bootstrap']) == 1
+                assert len([args for args in calls if args[1] == 'bootout']) == 1
+                assert not existing.exists() and not list(agents.iterdir())
+                calls.clear()
+
                 def fails_agent(args, **kwargs):
                     result = launchctl(args, **kwargs)
                     if args[1] == 'bootstrap' and args[-1].endswith('.agent.plist'):
                         result.returncode = 5
                     return result
 
-                with patch.object(setup.subprocess, 'run', side_effect=fails_agent), patch.object(setup.socket, 'socket'):
+                with patch.object(setup.subprocess, 'run', side_effect=fails_agent), patch.object(setup.socket, 'socket'), \
+                        patch.object(setup, 'wait_for_web'):
                     refuses(lambda: setup.install(prepared))
                 assert not existing.exists() and not list(agents.iterdir())
                 assert len([args for args in calls if args[1] == 'bootout']) == 2
@@ -154,7 +170,8 @@ def check():
                         result.returncode = 5
                     return result
 
-                with patch.object(setup.subprocess, 'run', side_effect=fails_backup), patch.object(setup.socket, 'socket'):
+                with patch.object(setup.subprocess, 'run', side_effect=fails_backup), patch.object(setup.socket, 'socket'), \
+                        patch.object(setup, 'wait_for_web'):
                     refuses(lambda: setup.install(prepared))
                 assert len([args for args in calls if args[1] == 'bootstrap']) == 4
                 assert len([args for args in calls if args[1] == 'bootout']) == 4
@@ -203,7 +220,7 @@ def check():
                 return result
             with patch.object(setup.subprocess, 'run', side_effect=fails_mobile), patch.object(setup.socket, 'socket'), \
                     patch.object(setup.sys, 'platform', 'darwin'), patch.object(setup.os, 'getuid', return_value=501), \
-                    patch.object(Path, 'home', return_value=fake_home):
+                    patch.object(Path, 'home', return_value=fake_home), patch.object(setup, 'wait_for_web'):
                 refuses(lambda: setup.install(mobile_refuse))
             assert len([args for args in mobile_calls if args[1] == 'bootstrap']) == 2
             assert len([args for args in mobile_calls if args[1] == 'bootout']) == 2

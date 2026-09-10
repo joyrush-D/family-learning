@@ -14,11 +14,12 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
 from urllib.parse import urlsplit
 
 from family_backup import no_links
 from family_access import validate_base_url, make_config
-from family_collect import app_url, CollectError
+from family_collect import app_url, Client, CollectError
 
 
 LABEL = 'local.family-learning'
@@ -126,6 +127,22 @@ def output(plan, directory):
     return directory
 
 
+def wait_for_web(plan):
+    """The first state request initializes SQLite before dependent jobs start."""
+    deadline = time.monotonic() + 10
+    client = Client(plan['url'])
+    while time.monotonic() < deadline:
+        try:
+            state = client.request('/api/state', deadline=deadline)
+            if (isinstance(state.get('children'), list) and isinstance(state.get('token'), str)
+                    and no_links(plan['root'] / 'private/family.sqlite3').is_file()):
+                return
+        except (CollectError, OSError):
+            pass
+        time.sleep(0.1)
+    raise ValueError('网页与数据库未在10秒内就绪；正在撤销本次安装，已有资料保留')
+
+
 def install(plan):
     if sys.platform != 'darwin' or os.getuid() == 0:
         raise ValueError('--install 只支持已登录的 macOS 普通用户；不要使用 sudo')
@@ -169,6 +186,8 @@ def install(plan):
             attempted.append(target)
             if run('bootstrap', domain, str(target)).returncode:
                 raise ValueError('新服务加载失败；正在撤销本次安装的服务文件，已有家庭资料保留')
+            if kind == 'web':
+                wait_for_web(plan)
     except BaseException as error:
         rollback_failed = False
         for target in reversed(attempted):
