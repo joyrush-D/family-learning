@@ -110,8 +110,9 @@ function currentSourceStatus(s){
  if(data.agent?.enabled===false)return '采集已暂停';
  if(s.error)return '最近读取未成功';
  if(!s.last_success)return '尚未读取';
- const time=Date.parse(s.last_success);
- return !Number.isFinite(time)||time>Date.now()+60000||Date.now()-time>15*60*1000?'读取待核对':'最近读取成功';
+ const time=Date.parse(s.last_success),due=Date.parse(s.next_collection_at),interval=data.agent?.collection_interval_minutes;
+ const overdue=Number.isFinite(due)?Date.now()>due+5*60*1000:Date.now()-time>([30,60].includes(interval)?interval+5:15)*60*1000;
+ return !Number.isFinite(time)||time>Date.now()+60000||overdue?'读取待核对':'最近读取成功';
 }
 function sourceCoverageHTML(){
  const sources=currentSources(),lines=sources.flatMap(s=>{
@@ -129,7 +130,7 @@ function currentSourceCardsHTML(){
  if(!currentSources().length)return '';
  return `<div class="grid source-cards" data-current-sources>${currentSources().map(s=>{
   const owner=data.children.find(c=>c.id===s.child_id),label=currentSourceStatus(s),unread=Number.isSafeInteger(s.unread_count)&&s.unread_count>0?s.unread_count:null;
-  return `<section class="card agent-source" data-current-source="${esc(s.id)}"><span class="chip ${label==='最近读取成功'?'':'amber'}" data-current-source-status>${label}</span><h3>${esc(s.name||'未命名来源')}</h3><p>${esc(owner?.name||'归属待核对')} · ${s.platform==='wechat'?'微信':s.platform==='qq'?'QQ':'平台待核对'}</p><p class="small source">最近成功：${agentTime(s.last_success)}<br>最近尝试：${agentTime(s.last_attempt)}<br>已读消息最新时间：${agentTime(s.last_message_time)}</p>${s.error?`<p class="error" role="status">${esc(s.error)}</p>`:''}${unread?`<p class="small" data-current-source-unread>${unread} 条已保存消息含未读图片、附件或截断内容。</p>`:'<p class="small muted">未列出内容缺口不代表历史或原件全部读完。</p>'}${label==='读取待核对'?'<p class="small muted">最近成功时间已超过15分钟或无法核对，请检查采集电脑与连接。</p>':''}${owner?`<button data-source-tasks="${esc(owner.name)}">查看这个孩子的待办</button>`:''}</section>`;
+  return `<section class="card agent-source" data-current-source="${esc(s.id)}"><span class="chip ${label==='最近读取成功'?'':'amber'}" data-current-source-status>${label}</span><h3>${esc(s.name||'未命名来源')}</h3><p>${esc(owner?.name||'归属待核对')} · ${s.platform==='wechat'?'微信':s.platform==='qq'?'QQ':'平台待核对'}</p><p class="small source">最近成功：${agentTime(s.last_success)}<br>最近尝试：${agentTime(s.last_attempt)}<br>已读消息最新时间：${agentTime(s.last_message_time)}</p>${s.error?`<p class="error" role="status">${esc(s.error)}</p>`:''}${unread?`<p class="small" data-current-source-unread>${unread} 条已保存消息含未读图片、附件或截断内容。</p>`:'<p class="small muted">未列出内容缺口不代表历史或原件全部读完。</p>'}${label==='读取待核对'?'<p class="small muted">已超过下次读取时间与轮询余量，或时间无法核对，请检查采集电脑与连接。</p>':''}${owner?`<button data-source-tasks="${esc(owner.name)}">查看这个孩子的待办</button>`:''}</section>`;
  }).join('')}</div>`;
 }
 function sourceCardsHTML(){

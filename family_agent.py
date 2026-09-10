@@ -117,6 +117,26 @@ def _now(value=None):
     return value.astimezone(TZ)
 
 
+def collection_interval_minutes(now=None):
+    hour = _now(now).hour
+    return 30 if 11 <= hour < 14 or 16 <= hour < 22 else 60
+
+
+def next_collection_at(last_attempt):
+    """First due time under the household's local 30/60-minute windows."""
+    attempt = dt.datetime.fromisoformat(_time(last_attempt))
+    earliest = attempt + dt.timedelta(minutes=30)
+    due = attempt + dt.timedelta(minutes=60)
+    if collection_interval_minutes(earliest) == 30:
+        return earliest
+    # Entering a faster window can make a source due before its slow interval.
+    for hour in (11, 16):
+        start = attempt.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if earliest <= start < due:
+            due = start
+    return due
+
+
 def _review_date(value, today, *, future=False):
     try:
         if not isinstance(value, str) or not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', value): raise ValueError()
@@ -214,13 +234,15 @@ class Store:
         except (OSError, ValueError, KeyError, TypeError):
             raise AgentError('Agent配置无法核对，请检查已授权来源和孩子归属', 409, 'agent_config') from None
 
-    def collector_plan(self):
-        config = self._config(); sources = []
+    def collector_plan(self, now=None):
+        config = self._config(); sources = []; now = _now(now)
         with self._db() as c:
             for source in config['sources']:
                 if not source['enabled']: continue
                 row = c.execute('SELECT * FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
                 self._binding(source, row)
+                if config['enabled'] and row and row['last_attempt'] and now < next_collection_at(row['last_attempt']):
+                    continue
                 sources.append({**{key: source[key] for key in ['id', 'platform', 'child_id', 'name']},
                                 'cursor': row['cursor'] if row else source['cursor']})
         return {'enabled': config['enabled'], 'sources': sources}
@@ -381,10 +403,13 @@ class Store:
                 saved = c.execute('SELECT * FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
                 try: self._binding(source, saved); binding_error = ''
                 except AgentError as error: binding_error = str(error)
+                try: due = next_collection_at(saved['last_attempt']).isoformat() if saved and saved['last_attempt'] else ''
+                except AgentError: due = ''
                 sources.append({**{k: source[k] for k in ['id', 'platform', 'child_id', 'name', 'enabled']},
                     **{k: saved[k] if saved else '' for k in ['last_attempt', 'last_success', 'last_message_time', 'error']},
                     'error': binding_error or (saved['error'] if saved else ''),
                     'unread_count': saved['unread_count'] if saved else 0,
+                    'next_collection_at': due,
                     'cursor': saved['cursor'] if saved else source['cursor']})
                 if saved and not binding_error:
                     for link in c.execute('''SELECT DISTINCT a.upload_id FROM agent_message_attachments a
@@ -399,6 +424,7 @@ class Store:
         return dict(enabled=config['enabled'], state=state if config['enabled'] else 'disabled',
                     last_run=runtime['last_run'] if runtime else '', last_error=runtime['last_error'] if runtime else '',
                     failed_jobs=failed, pending_count=pending, items=items, sources=sources,
+                    collection_interval_minutes=collection_interval_minutes(),
                     linked_upload_ids=sorted(linked_upload_ids))
 
     def act(self, obj):

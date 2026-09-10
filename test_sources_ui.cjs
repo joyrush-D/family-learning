@@ -43,7 +43,7 @@ async function sources(p){await p.locator('nav [data-page="more"]').click();awai
    {id:'wechat:current-failed',platform:'wechat',name:'虚构当前失败群 <svg onload="window.__sourceXss=5">',child_id:base.children[1].id,child:'虚构旧失败归属',enabled:true,last_attempt:recent,last_success:'not-a-date',last_message_time:recent,error:'虚构读取失败 <img src=x onerror="window.__sourceXss=6">',unread_count:-1},
    {id:'qq:current-disabled',platform:'qq',name:'虚构停用QQ',child_id:base.children[1].id,child:'虚构旧停用归属',enabled:false,last_attempt:recent,last_success:recent,last_message_time:recent,error:'',unread_count:'5'},
   ];
-  let current={...base,sync,sync_error:'',tasks:[task('source-first',first,'虚构甲待办'),task('source-second',second,'虚构乙待办'),task('source-done',first,'虚构已完成事项','已完成')],agent:{...base.agent,enabled:true,state:'ready',sources:sourceStates}};
+  let current={...base,sync,sync_error:'',tasks:[task('source-first',first,'虚构甲待办'),task('source-second',second,'虚构乙待办'),task('source-done',first,'虚构已完成事项','已完成')],agent:{...base.agent,enabled:true,state:'ready',sources:sourceStates,collection_interval_minutes:30}};
   browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});const p=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[],mutations=[],external=[];
   p.on('pageerror',e=>errors.push(e.message));
   await p.route('**/*',async route=>{const req=route.request(),url=new URL(req.url());if(req.method()!=='GET'){mutations.push(req.method()+' '+url.pathname);return route.abort()}if(url.origin!==new URL(server.url).origin){external.push(url.origin);return route.abort()}if(url.pathname==='/api/state')return route.fulfill({json:current});if(url.pathname==='/api/agent')return route.fulfill({json:current.agent});return route.continue()});
@@ -123,6 +123,10 @@ async function sources(p){await p.locator('nav [data-page="more"]').click();awai
    await home([{...sourceStates[1],last_success:''},sourceStates[2]]);assert.match(await notice.innerText(),/尚无成功读取记录/);assert.match(await notice.innerText(),/读取未成功/);assert.ok((await notice.innerText()).includes('<svg onload='));assert.equal(await notice.locator('img,svg,script').count(),0);await checkWidth(p,'home unknown and escaped '+width);
    await home([healthy],{enabled:false,state:'disabled'});assert.match(await notice.innerText(),/采集已暂停，不同步新消息/);
    await home([healthy],{state:'error',last_error:'虚构模型整理失败'});assert.equal(await notice.count(),0,'processing failure does not mislabel successful source reads');
+   const olderSuccess=new Date(Date.now()-50*60*1000).toISOString();
+   await home([{...healthy,last_success:olderSuccess,next_collection_at:new Date(Date.now()+10*60*1000).toISOString()}],{collection_interval_minutes:30});assert.equal(await notice.count(),0,'scheduled slow-window read is not overdue when current interval becomes fast');
+   await home([{...healthy,last_success:olderSuccess,next_collection_at:new Date(Date.now()-4*60*1000).toISOString()}],{collection_interval_minutes:60});assert.equal(await notice.count(),0,'allow one existing collector polling interval');
+   await home([{...healthy,last_success:olderSuccess,next_collection_at:new Date(Date.now()-6*60*1000).toISOString()}],{collection_interval_minutes:60});assert.match(await notice.innerText(),/读取已过时或时间待核对/);
    await home([],{enabled:false,state:'disabled'});assert.equal(await notice.count(),0,'manual family without sources has no source fault');assert.equal(await p.locator('[data-today-child]').count(),current.children.length);
    await home([],{items:followups});const owner=p.locator('[data-today-child="'+base.children[1].id+'"]'),other=p.locator('[data-today-child="'+base.children[0].id+'"]'),care=owner.locator('[data-agent-item="synthetic-grade-concern"]');
    assert.match(await owner.locator('.agent-child').innerText(),/需要核对与跟进 · 3/);assert.equal(await care.locator(':scope > p').innerText(),gradeConcern.body);assert.equal(await care.locator('[data-agent-accept]').innerText(),'核对并安排');assert.equal(await other.locator('[data-agent-item]').count(),0);
@@ -135,6 +139,7 @@ async function sources(p){await p.locator('nav [data-page="more"]').click();awai
   checks.push('360/1440 homepage names the affected child/platform/group; disabled QQ stays visible beside healthy sources and ready processing; source link reuses existing page');
   checks.push('unread content, failed or never-successful reads, paused collection and manual/no-source households remain distinct; homepage errors and names are escaped');
   checks.push('360/1440 grade-concern care and review appear only under their child with full action and existing confirmation form; at most two reminders and remaining-reminders link retained');
+  checks.push('360/1440 source freshness follows the server next collection time across 30/60-minute windows with polling grace; due reads do not become false failures');
   assert.deepEqual(errors,[]);assert.deepEqual(mutations,[]);assert.deepEqual(external,[]);assert.equal(await p.evaluate(()=>window.__sourceXss),undefined);
   const proof={checkedAt:new Date().toISOString(),passed:checks.length,checks,syntheticOnly:true,mutationRequests:0,externalRequests:0,sourceInputUnchanged:true,realPhoneTested:false};await fs.writeFile(path.join(proofDir,'ui-proof.json'),JSON.stringify(proof,null,2)+'\n');console.log(JSON.stringify(proof,null,2));
  }finally{await browser?.close();await server?.stop()}

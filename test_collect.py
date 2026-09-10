@@ -60,6 +60,12 @@ class FakeClient:
 
 
 class CollectorTests(unittest.TestCase):
+    def test_no_due_sources_does_not_call_a_cli_or_ingest(self):
+        client = FakeClient(sources=[])
+        with patch.object(collect, 'cli_json', side_effect=AssertionError('No source is due')) as cli:
+            self.assertEqual(collect.run_once(CONFIG, client=client, read_cli=cli), [])
+        self.assertEqual(client.posts, [])
+
     def test_once_interval_failures_and_normal_stop(self):
         success = [{'status': 'ingested'}]
         for argv in (['--config', 'synthetic.json'], ['--config', 'synthetic.json', '--once']):

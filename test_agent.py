@@ -80,6 +80,50 @@ class AgentTests(unittest.TestCase):
         with self.assertRaises(agent.AgentError) as raised: self.store.collector_plan()
         self.assertEqual(raised.exception.code, 'source_binding_conflict')
 
+    def test_collection_windows_and_exact_due_boundaries(self):
+        for attempted, expected in [('10:10', '11:00'), ('10:40', '11:10'), ('11:00', '11:30'),
+                                    ('13:29', '13:59'), ('13:40', '14:40'), ('14:00', '15:00'),
+                                    ('15:10', '16:00'), ('15:40', '16:10'), ('16:00', '16:30'),
+                                    ('21:29', '21:59'), ('21:40', '22:40'), ('22:00', '23:00')]:
+            with self.subTest(attempted=attempted):
+                attempt = dt.datetime.fromisoformat('2026-02-10T' + attempted + ':00+08:00')
+                due = agent.next_collection_at(attempt.isoformat())
+                self.assertEqual(due.isoformat(), '2026-02-10T' + expected + ':00+08:00')
+                payload = self.payload(expected='10', cursor='10'); payload.update(messages=[], checked_at=attempt.isoformat())
+                with self.app.connect() as c:
+                    c.execute('DELETE FROM agent_sources')
+                self.store.ingest(payload)
+                self.assertEqual(self.store.collector_plan(due - dt.timedelta(microseconds=1))['sources'], [])
+                self.assertEqual(self.store.collector_plan(due)['sources'][0]['cursor'], '10')
+                self.assertEqual(self.store.snapshot()['sources'][0]['next_collection_at'], due.isoformat())
+        self.assertEqual(agent.next_collection_at('2026-02-10T23:40:00+08:00').isoformat(), '2026-02-11T00:40:00+08:00')
+        self.assertEqual(agent.next_collection_at('2026-02-10T07:10:00+00:00').isoformat(), '2026-02-10T16:00:00+08:00')
+
+    def test_collection_failures_are_throttled_without_rewriting_source_state(self):
+        self.store.ingest(self.payload())
+        failed = self.payload(expected='11', offset=20)
+        failed.update(messages=[], error='wechat_cli_not_configured')
+        self.store.ingest(failed)
+        second = dict(id='qq:20002', platform='qq', child_id='child-2', name='虚构第二群', cursor='90', enabled=True)
+        config = {'enabled': True, 'sources': [self.source, second]}
+        path = self.data / 'agent.json'; path.write_text(json.dumps(config))
+        with self.app.connect() as c:
+            before = [tuple(row) for row in c.execute('SELECT * FROM agent_sources ORDER BY id')]
+        self.assertEqual([s['id'] for s in self.store.collector_plan(self.now + dt.timedelta(minutes=79))['sources']], [second['id']])
+        self.assertEqual([s['id'] for s in self.store.collector_plan(self.now + dt.timedelta(minutes=80))['sources']], [self.source['id'], second['id']])
+        self.assertEqual(self.store.collector_plan(self.now - dt.timedelta(days=1))['sources'][0]['id'], second['id'])
+        saved = self.store.snapshot()['sources'][0]
+        self.assertEqual(saved['last_success'], self.now.isoformat())
+        self.assertEqual(saved['last_attempt'], failed['checked_at'])
+        self.assertEqual(saved['cursor'], '11'); self.assertTrue(saved['error'])
+        with self.app.connect() as c:
+            self.assertEqual([tuple(row) for row in c.execute('SELECT * FROM agent_sources ORDER BY id')], before)
+        second['enabled'] = False; path.write_text(json.dumps(config))
+        self.assertEqual(self.store.collector_plan(self.now + dt.timedelta(minutes=79))['sources'], [])
+        config['enabled'] = False; path.write_text(json.dumps(config))
+        self.assertFalse(self.store.collector_plan(self.now)['enabled'])
+        path.unlink(); self.assertEqual(self.store.collector_plan(self.now), {'enabled': False, 'sources': []})
+
     def test_worker_model_failure_backoff_dedup_corrected_input_and_idempotent_accept(self):
         self.store.ingest(self.payload()); ident = self.record()
         with patch.object(agent.family_llm, '_chat_json', side_effect=agent.family_llm.LLMUnavailable('offline')) as model:
