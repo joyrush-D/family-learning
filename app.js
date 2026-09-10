@@ -11,7 +11,7 @@ const apiFetch=async(path,options)=>{
  return response;
 };
 let teacherSelectedID='';
-let data, page='home', child='', subject='', taskView='待跟进', busy=false;
+let data, page='home', child='', subject='', taskView='待跟进', busy=false, pendingTask=null;
 let studyChildID='',studyDay='',studyTaskID='',studyRecordContext=null,schoolRecordContext=null,schoolRecordOpening=false;
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const status=t=>t.update?.status || (['待跟进','进行中','已完成','不参加','不适用','已归档'].includes(t.original_status)?t.original_status:t.original_status.includes('已归档')?'已归档':'待跟进');
@@ -97,11 +97,27 @@ function taskFocus(t){return t.focus||{mode:'next',next_action:'',waiting_for:''
 function taskReviewDue(t){if(taskClosed(t))return false;const f=taskFocus(t);return f.mode!=='next'&&exactTaskDay(f.review_on)&&f.review_on<=data.today}
 function taskActionHTML(t){const f=taskFocus(t);return `${f.next_action?`<p class="task-next"><span>下一步</span>${esc(f.next_action)}</p>`:''}${t.action?`<p class="task-requirement">${esc(t.action)}</p>`:!f.next_action?'<p class="task-needs-action">还没有具体要求，可以先明确下一步。</p>':''}${f.mode==='waiting'?`<p class="task-waiting">等待：${esc(f.waiting_for)}${f.review_on?' · '+esc(f.review_on)+' 回看':''}</p>`:f.mode==='later'?`<p class="task-waiting">${f.review_on?'改天回看：'+esc(f.review_on):'以后再说 · 尚未约定回看日期'}</p>`:''}${taskReviewDue(t)?'<p class="task-review-due">到了回看日期，确认现在能否推进。</p>':''}`}
 function taskHTML(t,options={}){
- const compact=options.compact===true,done=status(t)==='已完成',dismissed=taskDismissed(t);
- return `<article class="task ${done?'done':''}" data-query-target="task:${esc(t.id)}" ${compact?`data-today-task="${esc(t.id)}"`:''} tabindex="-1"><div class="checkrow">${dismissed?'<span class="task-dismiss-icon" aria-hidden="true">−</span>':`<label class="checkhit"><input type="checkbox" data-check="${esc(t.id)}" ${done?'checked':''} aria-label="${done?'撤销完成':'确认完成'}：${esc(t.title)}"><span class="sr-only">${done?'撤销完成':'确认完成'}</span></label>`}<div class="taskbody"><div class="task-meta">${compact?'':`<span class="chip">${esc(t.child)}</span>`}<span class="chip ${done?'':'amber'}">${esc(taskStatusLabel(status(t)))}</span><p class="due">${esc(options.when||t.due)}</p></div><h3>${esc(t.title)}</h3>${options.when&&t.due&&!(options.when==='今天到期'&&t.due===data.today)?`<p class="task-original-due">原日期要求：${esc(t.due)}</p>`:''}${taskActionHTML(t)}${schoolOriginalButtons(String(t.source||'').split('\n').filter(r=>r.startsWith('message:')),data.children.find(c=>c.name===t.child)?.id)}${t.update?.note?`<p class="feedback">${esc(t.update.note)}</p>`:''}<div class="tasktools">${!taskClosed(t)?`<button class="primary" data-study-task-add="${esc(t.id)}">安排作业</button>`:''}${!compact&&!taskClosed(t)?`<button data-task-focus="${esc(t.id)}">${taskFocus(t).version?'调整安排':'安排下一步'}</button>`:''}${dismissed?`<button data-task-restore="${esc(t.id)}">恢复跟进</button>`:!done?`<button data-task-decisions="${esc(t.id)}">不参加 / 不用做</button>`:''}${!dismissed&&t.title.includes('打印')?'<button data-page="print">准备打印</button>':''}<button data-task="${esc(t.id)}">${compact?'说说进展':'反馈进展'}</button>${!compact?`<button data-school-record-task="${esc(t.id)}">留作学习记录</button>`:''}${!compact&&/阅读|读书|篇目|读后感/.test(t.title+t.action)?`<button data-reading-source="${esc(t.id)}">约定阅读任务</button>`:''}</div>${compact?`<details class="task-reference"><summary>更多操作</summary><div class="tasktools">${!taskClosed(t)?`<button data-task-focus="${esc(t.id)}">调整安排</button>`:''}<button data-school-record-task="${esc(t.id)}">留作学习记录</button>${/阅读|读书|篇目|读后感/.test(t.title+t.action)?`<button data-reading-source="${esc(t.id)}">约定阅读任务</button>`:''}</div></details>`:''}<details class="task-reference"><summary>出处与历史${t.history?.length?' · '+t.history.length:''}</summary><div class="source">${esc(t.source)}<br>整理状态：${esc(t.original_status)}</div>${(t.history||[]).map(h=>`<p class="history"><time>${esc(h.updated.slice(0,16).replace('T',' '))}</time> · ${esc(taskStatusLabel(h.status))}<br>${esc(h.note||'已更新状态')}</p>`).join('')}</details></div></div></article>`;
+ const compact=options.compact===true,done=status(t)==='已完成',dismissed=taskDismissed(t),pending=pendingTask?.id===t.id;
+ return `<article class="task ${done?'done':''}" data-query-target="task:${esc(t.id)}" aria-busy="${pending}" ${compact?`data-today-task="${esc(t.id)}"`:''} tabindex="-1"><div class="checkrow">${dismissed?'<span class="task-dismiss-icon" aria-hidden="true">−</span>':`<label class="checkhit"><input type="checkbox" data-check="${esc(t.id)}" ${(pending?pendingTask.checked:done)?'checked':''} ${pendingTask?'aria-disabled="true"':''} aria-label="${done?'撤销完成':'确认完成'}：${esc(t.title)}"><span class="sr-only">${done?'撤销完成':'确认完成'}</span></label>`}<div class="taskbody"><div class="task-meta">${compact?'':`<span class="chip">${esc(t.child)}</span>`}<span class="chip ${done?'':'amber'}">${pending?'<span role="status">正在保存…</span>':esc(taskStatusLabel(status(t)))}</span><p class="due">${esc(options.when||t.due)}</p></div><h3>${esc(t.title)}</h3>${options.when&&t.due&&!(options.when==='今天到期'&&t.due===data.today)?`<p class="task-original-due">原日期要求：${esc(t.due)}</p>`:''}${taskActionHTML(t)}${schoolOriginalButtons(String(t.source||'').split('\n').filter(r=>r.startsWith('message:')),data.children.find(c=>c.name===t.child)?.id)}${t.update?.note?`<p class="feedback">${esc(t.update.note)}</p>`:''}<div class="tasktools">${!taskClosed(t)?`<button class="primary" data-study-task-add="${esc(t.id)}">安排作业</button>`:''}${!compact&&!taskClosed(t)?`<button data-task-focus="${esc(t.id)}">${taskFocus(t).version?'调整安排':'安排下一步'}</button>`:''}${dismissed?`<button data-task-restore="${esc(t.id)}">恢复跟进</button>`:!done?`<button data-task-decisions="${esc(t.id)}">不参加 / 不用做</button>`:''}${!dismissed&&t.title.includes('打印')?'<button data-page="print">准备打印</button>':''}<button data-task="${esc(t.id)}">${compact?'说说进展':'反馈进展'}</button>${!compact?`<button data-school-record-task="${esc(t.id)}">留作学习记录</button>`:''}${!compact&&/阅读|读书|篇目|读后感/.test(t.title+t.action)?`<button data-reading-source="${esc(t.id)}">约定阅读任务</button>`:''}</div>${compact?`<details class="task-reference"><summary>更多操作</summary><div class="tasktools">${!taskClosed(t)?`<button data-task-focus="${esc(t.id)}">调整安排</button>`:''}<button data-school-record-task="${esc(t.id)}">留作学习记录</button>${/阅读|读书|篇目|读后感/.test(t.title+t.action)?`<button data-reading-source="${esc(t.id)}">约定阅读任务</button>`:''}</div></details>`:''}<details class="task-reference"><summary>出处与历史${t.history?.length?' · '+t.history.length:''}</summary><div class="source">${esc(t.source)}<br>整理状态：${esc(t.original_status)}</div>${(t.history||[]).map(h=>`<p class="history"><time>${esc(h.updated.slice(0,16).replace('T',' '))}</time> · ${esc(taskStatusLabel(h.status))}<br>${esc(h.note||'已更新状态')}</p>`).join('')}</details></div></div></article>`;
 }
-async function postTask(obj){const r=await apiFetch('/api/task',{method:'POST',signal:AbortSignal.timeout(15000),headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify({...obj,expected_updated:obj.expected_updated??data.tasks.find(t=>t.id===obj.id)?.update?.updated??''})});const result=await r.json();if(!r.ok){const error=Error(result.error||'保存失败');error.status=r.status;throw error}return result;}
-document.addEventListener('change',async e=>{const el=e.target;if(!el.dataset.check)return;const t=data.tasks.find(t=>t.id===el.dataset.check),done=el.checked;el.checked=!done;if(busy)return;busy=true;document.querySelectorAll('[data-check]').forEach(x=>x.setAttribute('aria-disabled','true'));try{await postTask({id:t.id,status:done?'已完成':'待跟进',note:done?'家长通过清单勾选确认此事项已完成。':'家长撤销完成，继续跟进。'});await load();toast(done?'已完成；在“已完成”中取消勾选可撤销':'已恢复待跟进')}catch(err){toast(err.message)}finally{busy=false;document.querySelectorAll('[data-check]').forEach(x=>x.removeAttribute('aria-disabled'))}});
+async function postTask(obj){
+ const r=await apiFetch('/api/task',{method:'POST',signal:AbortSignal.timeout(15000),headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify({...obj,expected_updated:obj.expected_updated??data.tasks.find(t=>t.id===obj.id)?.update?.updated??''})});
+ const result=await r.json();if(!r.ok){const error=Error(result.error||'保存失败');error.status=r.status;throw error}
+ if(result.task?.id===obj.id){
+  ++stateLoadSequence; // A state read started before this save must not undo its acknowledgement.
+  data.tasks=data.tasks.map(t=>t.id===obj.id?result.task:t);window.FamilyCalendar?.invalidate();
+ }else await load(); // Older servers still return only {ok:true} during an upgrade.
+ return result;
+}
+document.addEventListener('change',async e=>{
+ const el=e.target;if(!el.dataset.check)return;const t=data.tasks.find(t=>t.id===el.dataset.check),done=el.checked;
+ if(busy){el.checked=!done;return}
+ // ponytail: serialize task decisions in this page; use per-task locks if concurrent editing is needed.
+ busy=true;pendingTask={id:t.id,checked:done};render();
+ try{await postTask({id:t.id,status:done?'已完成':'待跟进',note:done?'家长通过清单勾选确认此事项已完成。':'家长撤销完成，继续跟进。'});toast(done?'已完成；在“已完成”中取消勾选可撤销':'已恢复待跟进')}
+ catch(err){toast(err.message||'保存结果未确认，请重试核对。')}
+ finally{busy=false;pendingTask=null;render()}
+});
 function uploadHTML(a){return `<div class="upload-item"><a href="${endpoint('/upload/')}${encodeURIComponent(a.id)}" target="_blank" rel="noopener">${esc(a.name)}</a> <span class="muted small">${(a.size/1024/1024).toFixed(2)} MB</span>${['image/jpeg','image/png','image/webp'].includes(a.mime)?`<img src="${endpoint('/upload/')}${encodeURIComponent(a.id)}" alt="${esc(a.name)}" loading="lazy">`:a.mime.startsWith('audio/')?`<audio controls preload="none" src="${endpoint('/upload/')}${encodeURIComponent(a.id)}"></audio>`:''}</div>`}
 function recordUploads(r){return (r.attachments||[]).map(id=>(data.uploads||[]).find(a=>a.id===id)).filter(Boolean).map(uploadHTML).join('')}
 function inboxHTML(){const linked=new Set([...data.records,...(data.reading?.tasks||[])].flatMap(r=>r.attachments||[]).concat(data.agent?.linked_upload_ids||[])),items=(data.uploads||[]).filter(a=>!linked.has(a.id));return `<section class="card"><h2>待整理资料${items.length?' · '+items.length:''}</h2><p class="muted">原件已保存。可以关联学校通知，需要记录实际学习情况时再补充记录。</p>${items.map(a=>`${uploadHTML(a)}<button data-upload="${esc(a.id)}">补充记录</button>`).join('')||empty('没有待整理资料。')}</section>`}
@@ -339,6 +355,7 @@ async function submit(e,path,dialog,error){
  try{
   let result;
   if(care)result=await submitCareFeedback(f);
+  else if(path==='/api/task')result=await postTask(Object.fromEntries(new FormData(f)));
   else{
    const r=await apiFetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify({...Object.fromEntries(new FormData(f)),...(f===$('#recordForm')?{attachments:pendingIDs,related_record_id:f.elements.related_record_id.value?Number(f.elements.related_record_id.value):null,...(studyRecordContext&&String(studyRecordContext.id)===f.elements.id.value?studyRecordContext.values:{}),...(school?{child:school.child,source:school.source,request_key:school.request_key}:{})}:{})})});result=await r.json();if(!r.ok)throw Error(result.error);
   }
@@ -346,7 +363,7 @@ async function submit(e,path,dialog,error){
   if(care&&result.care){const current=data.care.items.find(c=>c.id===result.care.id);if(current)Object.assign(current,result.care);render()}
   const careMessage=!result.care||result.care_error?'反馈已保存，当前安排待核对。':!result.record.care_choice?'反馈已保存；只记录反馈不改安排。':result.care.choice_record_id!==result.record.id?'反馈已保存；已有更新选择，当前安排以最新记录为准。':'选择与反馈已保存；愿意试试不代表已经做过。';
   toast(care?careMessage:'已保存到家庭记录');
-  try{await load();if(school)openSchoolLearningRecord(result.record_id)}catch{toast('已保存，但列表暂时无法刷新。请稍后点“刷新记录”核对。')}
+  try{if(path==='/api/task')render();else await load();if(school)openSchoolLearningRecord(result.record_id)}catch{toast('已保存，但列表暂时无法刷新。请稍后点“刷新记录”核对。')}
  }catch(err){$(error).textContent=err.message+(school?'。输入仍保留；重试沿用本次编号。也可关闭后从原入口核对已保存记录。':'')}
  finally{delete f.dataset.saving;b.removeAttribute('aria-disabled');if(care)b.textContent=careFeedbackPending?'核对并重试':'保存选择与反馈'}
 }
@@ -923,13 +940,13 @@ function openTaskDecision(id){
 document.addEventListener('click',async e=>{
  const b=e.target.closest('button');if(!b)return;
  if(b.dataset.taskDecisions)openTaskDecision(b.dataset.taskDecisions);
- if(b.dataset.taskRestore&&!busy){busy=true;b.disabled=true;try{await postTask({id:b.dataset.taskRestore,status:'待跟进',note:'家长恢复此事项，继续跟进。'});try{await load();toast('已恢复跟进')}catch{toast('已恢复，列表暂未刷新，请刷新记录核对')}}catch(err){toast(err.message)}finally{busy=false;if(b.isConnected)b.disabled=false}}
+ if(b.dataset.taskRestore&&!busy){busy=true;b.disabled=true;try{await postTask({id:b.dataset.taskRestore,status:'待跟进',note:'家长恢复此事项，继续跟进。'});render();toast('已恢复跟进')}catch(err){toast(err.message)}finally{busy=false;if(b.isConnected)b.disabled=false}}
 });
 $('#taskDecisionForm').onsubmit=async e=>{
  e.preventDefault();if(busy)return;const f=e.target;if(!f.reportValidity())return;
  const v=Object.fromEntries(new FormData(f));v.note='家长选择'+taskStatusLabel(v.status)+'；从待跟进移出。'+(v.note.trim()?' '+v.note.trim():'');
  busy=true;for(const c of f.querySelectorAll('button,input,textarea'))c.disabled=true;$('#taskDecisionError').textContent='';
- try{await postTask(v);$('#taskDecisionDialog').close();try{await load();toast('已移到“已搁置”，可随时恢复')}catch{toast('决定已保存，列表暂未刷新，请刷新记录核对')}}
+ try{await postTask(v);$('#taskDecisionDialog').close();render();toast('已移到“已搁置”，可随时恢复')}
  catch(err){$('#taskDecisionError').textContent=(err.message||'暂时无法保存')+(err.status===409?'。选择与说明已保留，请读取最新状态后核对。':'。选择与说明已保留，可以重试核对。');$('#taskDecisionReload').hidden=err.status!==409}
  finally{busy=false;for(const c of f.querySelectorAll('button,input,textarea'))c.disabled=false}
 };

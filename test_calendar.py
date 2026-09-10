@@ -204,23 +204,23 @@ class CalendarTests(unittest.TestCase):
                 self.assertEqual(get(host='family.invalid')[0],403)
                 self.assertEqual(get(host='untrusted.invalid')[0],403)
                 self.assertNotIn(b'BEGIN:VCALENDAR',get('/child/calendar.ics')[2])
-                self.assertEqual(get('/calendar.ics?child_id=child-1')[0],400)
+                self.assertEqual(get('/calendar.ics?child_id=child-1',host='family.invalid',login='parent@example.invalid')[0],400)
                 self.assertEqual(self.dump(),before)
                 uids=[line for line in text.splitlines() if line.startswith('UID:')]
                 app.save_profile(dict(child_id='child-2',name='示例新称呼',grade='初一',classroom='示例班',version=0,reason='虚构更正'))
                 app.save_task(dict(id='T01',status='不参加',note='虚构决定',expected_updated=''))
-                before=self.dump();updated=get()[2].decode().replace('\r\n ','')
+                before=self.dump();updated=get(host='family.invalid',login='parent@example.invalid')[2].decode().replace('\r\n ','')
                 self.assertIn('STATUS:CANCELLED',updated)
                 self.assertIn('示例新称呼',updated)
                 self.assertEqual(uids,[line for line in updated.splitlines() if line.startswith('UID:')])
                 self.assertEqual(self.dump(),before)
                 ledger=app.ROOT/'跟踪台账.md';original=ledger.read_text();ledger.unlink()
-                self.assertEqual(get()[0],503)  # Missing original task must not undo nonparticipation.
+                self.assertEqual(get(host='family.invalid',login='parent@example.invalid')[0],503)  # Missing original task must not undo nonparticipation.
                 ledger.write_text(original)
                 wrong_child=self.sources();wrong_child['events'][0]['child_ids']=['child-1'];self.write_sources(wrong_child)
-                self.assertEqual(get()[0],503)
+                self.assertEqual(get(host='family.invalid',login='parent@example.invalid')[0],503)
                 self.source.write_text('{invalid')
-                code,headers,body=get();self.assertEqual(code,503)
+                code,headers,body=get(host='family.invalid',login='parent@example.invalid');self.assertEqual(code,503)
                 self.assertNotIn(b'BEGIN:VCALENDAR',body)
         finally: server.shutdown();server.server_close();worker.join()
 

@@ -724,16 +724,19 @@ def save_task(obj):
         task=next((t for t in tasks(c) if t['id']==ident),None)
         if task is None: raise TaskError('事项不存在，请刷新',404,'task_missing')
         previous=c.execute('SELECT * FROM task_updates WHERE id=?',(ident,)).fetchone()
-        if previous and previous['status']==status and previous['note']==note: return
-        if expected is not None and expected!=(previous['updated'] if previous else ''):
-            raise TaskError('事项已在别处更新，请刷新核对；本次选择尚未保存',409,'task_conflict')
-        if previous and not c.execute('SELECT 1 FROM task_history WHERE task_id=?',(ident,)).fetchone():
-            c.execute('INSERT INTO task_history (task_id,status,note,updated) VALUES (?,?,?,?)',tuple(previous))
-        values=(ident,status,note,dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat())
-        if status in TASK_CLOSED or task_status(task,previous['status'] if previous else None) in TASK_DISMISSED:
-            family_study.task_changed(c,ident,dt.datetime.fromisoformat(values[3]))
-        c.execute('INSERT INTO task_history (task_id,status,note,updated) VALUES (?,?,?,?)',values)
-        c.execute('INSERT OR REPLACE INTO task_updates VALUES (?,?,?,?)',values)
+        if not (previous and previous['status']==status and previous['note']==note):
+            if expected is not None and expected!=(previous['updated'] if previous else ''):
+                raise TaskError('事项已在别处更新，请刷新核对；本次选择尚未保存',409,'task_conflict')
+            if previous and not c.execute('SELECT 1 FROM task_history WHERE task_id=?',(ident,)).fetchone():
+                c.execute('INSERT INTO task_history (task_id,status,note,updated) VALUES (?,?,?,?)',tuple(previous))
+            values=(ident,status,note,dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat())
+            if status in TASK_CLOSED or task_status(task,previous['status'] if previous else None) in TASK_DISMISSED:
+                family_study.task_changed(c,ident,dt.datetime.fromisoformat(values[3]))
+            c.execute('INSERT INTO task_history (task_id,status,note,updated) VALUES (?,?,?,?)',values)
+            c.execute('INSERT OR REPLACE INTO task_updates VALUES (?,?,?,?)',values)
+        task['update']=dict(c.execute('SELECT * FROM task_updates WHERE id=?',(ident,)).fetchone())
+        task['history']=[dict(r) for r in c.execute('SELECT * FROM task_history WHERE task_id=? ORDER BY id DESC',(ident,))]
+    return task
 
 def material_images(ids):
     if not isinstance(ids,list) or len(ids)>3 or any(not isinstance(i,str) or not re.fullmatch('[a-f0-9]{32}',i) for i in ids):
@@ -1471,7 +1474,7 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError as e: return self.reply(400,dict(error=str(e)))
                 except (sqlite3.Error,OSError): return self.reply(503,dict(error='查询资料读取失败，请稍后重试；原记录未更改'))
             if self.path=='/api/record': return self.reply(200,save_record(obj))
-            elif self.path=='/api/task': save_task(obj)
+            elif self.path=='/api/task': return self.reply(200,dict(ok=True,task=save_task(obj)))
             else: return self.reply(404,{'error':'不存在'})
             self.reply(200,{'ok':True})
         except RecordError as e: self.reply(e.status,dict(error=str(e),code=e.code,not_saved=e.not_saved,request_known=e.request_known))

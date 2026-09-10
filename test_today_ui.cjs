@@ -99,8 +99,28 @@ function fixtures(base){
    formPage.on('pageerror',e=>formErrors.push(e.message));formPage.on('request',r=>{if(r.method()==='POST')posts.push(new URL(r.url()).pathname)});
    try{
     await formPage.goto(server.url,{waitUntil:'load'});await ready(formPage);await fit(formPage);
+    // A rejected save must keep the task visible and restore its unchecked state.
+    await formPage.route('**/api/task',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'虚构保存失败，请重试'})}));
     await formPage.locator('[data-today-task="'+task.id+'"] [data-check]').click();
+    await eventually(async()=>await formPage.locator('[data-today-task="'+task.id+'"]').getAttribute('aria-busy')==='false','failed save restored');
+    assert.equal(await formPage.locator('[data-today-task="'+task.id+'"] [data-check]').isChecked(),false);
+    assert.notEqual((await read()).tasks.find(t=>t.id===task.id).update?.status,'已完成');
+    await formPage.unroute('**/api/task');posts.length=0;
+    let releaseSave;const heldSave=new Promise(resolve=>releaseSave=resolve);let saveHeld=false,stateReads=0;
+    await formPage.route('**/api/task',async route=>{saveHeld=true;await heldSave;await route.continue()});
+    await formPage.route('**/api/state',async route=>{stateReads++;await route.abort('failed')});
+    const checkbox=formPage.locator('[data-today-task="'+task.id+'"] [data-check]');
+    try{
+     await checkbox.click();await eventually(()=>saveHeld,'save held for slow network');
+     assert.equal(await checkbox.isChecked(),true,'click remains visibly selected while saving');
+     assert.equal(await formPage.locator('[data-today-task="'+task.id+'"]').getAttribute('aria-busy'),'true');
+     assert.match(await formPage.locator('[data-today-task="'+task.id+'"]').innerText(),/正在保存/);
+     assert.notEqual((await read()).tasks.find(t=>t.id===task.id).update?.status,'已完成','pending is not committed');
+     await proof(formPage,'task-saving-'+width);
+    }finally{releaseSave()}
     await eventually(async()=>await formPage.locator('[data-today-task="'+task.id+'"]').count()===0&&(await read()).tasks.find(t=>t.id===task.id).update?.status==='已完成','checkbox saved to real demo API');
+    assert.equal(stateReads,0,'confirmed task renders without reloading all family data');
+    await formPage.unroute('**/api/task');await formPage.unroute('**/api/state');
     await formPage.reload({waitUntil:'load'});await ready(formPage);assert.equal(await formPage.locator('[data-today-task="'+task.id+'"]').count(),0);
     await formPage.locator('[data-today-capture="'+other.id+'"]').click();await eventually(()=>formPage.locator('#recordDialog').isVisible(),'child contextual capture');
     const form=formPage.locator('#recordForm');assert.equal(await form.locator('[name="child"]').inputValue(),other.name);assert.equal(await form.locator('[name="category"]').inputValue(),'学习进展');
@@ -110,7 +130,7 @@ function fixtures(base){
     await formPage.reload({waitUntil:'load'});await ready(formPage);
     const saved=(await read()).records.filter(r=>r.title===recordTitle);assert.equal(saved.length,1);assert.equal(saved[0].child,other.name);assert.equal(saved[0].category,'学习进展');assert.equal(saved[0].note,recordNote);
     assert.equal(posts.filter(x=>x==='/api/task').length,1);assert.equal(posts.filter(x=>x==='/api/record').length,1);assert.deepEqual(formErrors,[]);
-    checks.push({width,kind:'persistent-interactions',checkboxPersists:true,selectedChildCorrect:true,manualRecordSavedOnce:true,noOverflow:true,pageErrors:0});
+    checks.push({width,kind:'persistent-interactions',checkboxPersists:true,immediatePendingState:true,failedSaveRestored:true,postSaveFullStateRequests:stateReads,selectedChildCorrect:true,manualRecordSavedOnce:true,noOverflow:true,pageErrors:0});
    }finally{await formPage.close()}
 
    // Explicit dismissal uses the same disposable API and never fabricates completion.

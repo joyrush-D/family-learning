@@ -24,8 +24,10 @@ with tempfile.TemporaryDirectory() as tmp:
     app.save_record(dict(id=1,child='示例甲',day='2026-09-07',category='成绩',subject='数学',title='核对后的单元复测',score='86',total='100'))
     assert app.snapshot()['records'][0]['score']==86
     with app.connect() as c: assert c.execute('SELECT count(*) FROM revisions').fetchone()[0]==1
-    app.save_task(dict(id='T01',status='已完成',note='家长已核查'))
+    saved_task=app.save_task(dict(id='T01',status='已完成',note='家长已核查'))
     s=app.snapshot();assert len(s['records'])==1 and s['tasks'][0]['update']['status']=='已完成'
+    assert saved_task==s['tasks'][0], 'save must return the committed task without a second full-state request'
+    assert app.save_task(dict(id='T01',status='已完成',note='家长已核查'))==saved_task
     app.save_task(dict(id='T01',status='待跟进',note='复查'))
     assert app.snapshot()['tasks'][0]['update']['status']=='待跟进'
     history=app.snapshot()['tasks'][0]['history']
@@ -147,7 +149,8 @@ with tempfile.TemporaryDirectory() as tmp:
                  'learning.js':b'const syntheticLearning=syntheticAccess+1;',
                  'study.js':b'const syntheticStudy=syntheticLearning+1;',
                  'settings.js':b'const syntheticSettings=1;',
-                 'guided.js':b'const syntheticGuided=syntheticLearning+1;'}
+                 'guided.js':b'const syntheticGuided=syntheticLearning+1;',
+                 'teachers.js':b'const syntheticTeachers=1;'}
         for name,content in modules.items(): (app.ROOT/name).write_bytes(content)
         def get_raw(path,headers=None):
             client=http.client.HTTPConnection('127.0.0.1',server.server_port,timeout=5)
