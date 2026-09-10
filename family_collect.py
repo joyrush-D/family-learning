@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read only server-authorized chats through local CLIs, then ingest one page.
+"""Read only server-authorized chats through local CLIs, then ingest a bounded batch.
 
 Run once with --config PRIVATE_JSON --once, or stay alive with --interval 300.
 The server owns cursors; this command never edits family files or a database.
@@ -24,6 +24,9 @@ import urllib.request
 MAX_RESPONSE = 8 * 1024 * 1024
 MAX_TEXT = 8000
 MAX_BATCH_BYTES = 700 * 1024  # Leave space below the server's 1MiB normalized-message limit.
+QQ_MAX_PAGES = 10
+QQ_ROUND_SECONDS = 30
+QQ_RECEIPT_SECONDS = 5
 TIMEZONE = dt.timezone(dt.timedelta(hours=8))
 WECHAT_KEY_BIN = '/usr/bin/false'
 _WECHAT_BASE_ENV = ('HOME', 'PATH', 'TMPDIR', 'LANG', 'LC_ALL')
@@ -132,7 +135,7 @@ def wechat_env(config_path=None):
 def ingest_page(messages, cursor):
     """Fit an ordered prefix; unsubmitted messages remain behind the server cursor."""
     batch, size = [], 2
-    for message in messages:
+    for message in messages[:200]:
         length = len(json.dumps(message, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
         if size + length + bool(batch) > MAX_BATCH_BYTES:
             break
@@ -232,12 +235,20 @@ def qq_status(envelope, chat):
             and type(envelope.get('retcode')) is int and envelope['retcode'] == 0, 'qq_status_failed')
     data = envelope.get('data')
     checked(isinstance(data, dict) and data.get('allowed_group_id') == chat, 'source_mismatch')
-    checked(isinstance(data.get('capabilities'), dict)
-            and data['capabilities'].get('history') is True, 'qq_history_unavailable')
+    capabilities = data.get('capabilities')
+    checked(isinstance(capabilities, dict) and type(capabilities.get('history')) is bool,
+            'qq_history_unavailable')
+    # This bridge cannot verify history until its first native read succeeds.
+    # A captured session permits a bounded attempt; it does not prove login or success.
+    probe = (capabilities['history'] is False and data.get('transport') == 'local_ntqq_native'
+             and data.get('session_available') is True)
+    checked((data.get('online') is None or data.get('online') is True)
+            and (capabilities['history'] is True or probe), 'qq_history_unavailable')
 
 
-def qq_page(envelope, source):
-    chat, cursor = source_chat(source), source['cursor']
+def qq_native_page(envelope, source):
+    """Validate one native page; message IDs identify rows, not their chronology."""
+    chat = source_chat(source)
     checked(isinstance(envelope, dict) and envelope.get('status') == 'ok'
             and type(envelope.get('retcode')) is int and envelope['retcode'] == 0, 'qq_read_failed')
     data = envelope.get('data')
@@ -246,10 +257,10 @@ def qq_page(envelope, source):
     checked(isinstance(rows, list) and len(rows) <= 20 and type(data.get('count')) is int
             and data['count'] == len(rows) and data.get('coverage') == 'returned_native_page_only'
             and data.get('complete_history') is False and data.get('media_content_read') is False)
-    messages = []
+    entries = []
     for row in rows:
         checked(isinstance(row, dict) and row.get('group_id') == chat, 'source_mismatch')
-        checked(numeric(row.get('message_id'), False) and numeric(row.get('message_seq')))
+        checked(numeric(row.get('message_id'), False) and numeric(row.get('message_seq'), False))
         checked(type(row.get('time')) is int and 0 <= row['time'] < 253402300800
                 and type(row.get('recalled')) is bool and type(row.get('content_complete')) is bool)
         parts, gaps = row.get('message'), row.get('unread_elements')
@@ -270,21 +281,82 @@ def qq_page(envelope, source):
         elif gaps:
             text += '\n[包含未读取的非文字内容]'
         text, truncated = bounded(text)
-        messages.append(dict(id=row['message_id'], time=dt.datetime.fromtimestamp(row['time'], TIMEZONE).isoformat(),
+        message = dict(id=row['message_id'], time=dt.datetime.fromtimestamp(row['time'], TIMEZONE).isoformat(),
             kind='recalled' if row['recalled'] else 'text', sender=sender_name[:200], text=text,
-            unread=not row['content_complete'] or truncated))
-    ids = [message['id'] for message in messages]
+            unread=not row['content_complete'] or truncated)
+        entries.append((int(row['message_seq']), row['time'], message, row))
+    ids = [entry[2]['id'] for entry in entries]
     checked(len(set(ids)) == len(ids), 'duplicate_message_id')
     checked(data.get('next_before_id') == min(ids, key=int, default=None), 'cursor_mismatch')
-    # ponytail: one native page; a missing anchor requires explicit history reconciliation.
+    return qq_order(entries)
+
+
+def qq_order(entries):
+    ordered = sorted(entries, key=lambda entry: entry[0])
+    checked(len({entry[0] for entry in ordered}) == len(ordered)
+            and all(a[1] <= b[1] for a, b in zip(ordered, ordered[1:])), 'qq_order_unverified')
+    return ordered
+
+
+def qq_after(entries, cursor):
+    ids = [entry[2]['id'] for entry in entries]
     checked(numeric(cursor, False) and cursor in ids, 'qq_continuity_unverified')
-    messages = sorted((message for message in messages if int(message['id']) > int(cursor)), key=lambda message: int(message['id']))
+    messages = [entry[2] for entry in entries[ids.index(cursor) + 1:]]
     return messages, messages[-1]['id'] if messages else cursor, messages[-1]['time'] if messages else ''
 
 
-def cli_json(args, env=None):
+def qq_page(envelope, source):
+    return qq_after(qq_native_page(envelope, source), source['cursor'])
+
+
+def remaining(deadline):
+    seconds = deadline - time.monotonic()
+    checked(seconds > 0, 'qq_collection_timeout')
+    return seconds
+
+
+def qq_history(config, source, read_cli, deadline, bootstrap=False):
+    """Join overlapping native pages before committing any verified unread prefix."""
+    checked(bool(config.get('qq_cli')), 'qq_cli_not_configured')
+    cursor = source['cursor']
+    initial = bootstrap and cursor == ''
+    checked(initial or numeric(cursor, False), 'qq_continuity_unverified')
+
+    def read(arguments):
+        envelope = read_cli([sys.executable, config['qq_cli'], *arguments], timeout=remaining(deadline))
+        remaining(deadline)
+        return envelope
+
+    qq_status(read(['status']), source_chat(source))
+    saved, before = {}, ''
+    for _ in range(QQ_MAX_PAGES):
+        entries = qq_native_page(read(['history', *(['--before', before] if before else [])]), source)
+        remaining(deadline)
+        page_ids = [entry[2]['id'] for entry in entries]
+        if before:
+            checked(before in page_ids and entries[0][0] < saved[before][0]
+                    and entries[-1][0] <= saved[before][0], 'qq_page_stalled')
+        for entry in entries:
+            ident = entry[2]['id']
+            checked(ident not in saved or saved[ident][3] == entry[3], 'qq_message_conflict')
+            saved[ident] = entry
+        ordered = qq_order(list(saved.values()))
+        if initial:
+            checked(ordered, 'qq_bootstrap_empty')
+            messages = [entry[2] for entry in ordered]
+            return messages, messages[-1]['id'], messages[-1]['time']
+        if cursor in saved:
+            return qq_after(ordered, cursor)
+        checked(entries, 'qq_continuity_unverified')
+        # The native envelope's numeric-min hint is retained and checked above;
+        # use the oldest verified msgSeq's ID for the next inclusive native page.
+        before = entries[0][2]['id']
+    raise CollectError('qq_continuity_unverified')
+
+
+def cli_json(args, env=None, timeout=45):
     try:
-        result = subprocess.run(args, env=env, capture_output=True, timeout=45, check=False)
+        result = subprocess.run(args, env=env, capture_output=True, timeout=timeout, check=False)
         checked(result.returncode == 0, 'cli_read_failed')
         checked(len(result.stdout) <= MAX_RESPONSE, 'cli_response_too_large')
         return json.loads(result.stdout)
@@ -297,35 +369,37 @@ class Client:
         self.url = app_url(url)
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
-    def request(self, path, body=None, token=''):
+    def request(self, path, body=None, token='', deadline=None):
         headers = {'Content-Type': 'application/json'}
         if token:
             headers['X-Family-Token'] = token
         url = self.url + path
         request = urllib.request.Request(url, data=None if body is None else json.dumps(body, ensure_ascii=False).encode(), headers=headers)
         try:
-            with self.opener.open(request, timeout=30) as response:
+            with self.opener.open(request, timeout=remaining(deadline) if deadline is not None else 30) as response:
                 checked(response.getcode() == 200 and response.geturl() == url, 'app_request_failed')
                 raw = response.read(MAX_RESPONSE + 1)
                 checked(len(raw) <= MAX_RESPONSE, 'app_response_too_large')
+            if deadline is not None:
+                remaining(deadline)
             value = json.loads(raw)
             checked(isinstance(value, dict), 'app_invalid_response')
             return value
         except (OSError, ValueError, urllib.error.URLError):
             raise CollectError('app_request_failed') from None
 
-    def ingest(self, body):
-        state = self.request('/api/state')
+    def ingest(self, body, deadline=None):
+        state = self.request('/api/state', deadline=deadline)
         token = state.get('token')
         checked(isinstance(token, str) and re.fullmatch(r'[A-Za-z0-9_-]{24,200}', token) is not None, 'app_token_missing')
-        reply = self.request('/api/agent/ingest', body, token)
+        reply = self.request('/api/agent/ingest', body, token, deadline=deadline)
         checked(reply.get('ok') is True and type(reply.get('replayed')) is bool
                 and type(reply.get('inserted')) is int and 0 <= reply['inserted'] <= len(body['messages'])
                 and reply.get('cursor') == body['cursor'], 'ingest_unconfirmed')
         return reply
 
 
-def run_once(config, client=None, read_cli=cli_json):
+def run_once(config, client=None, read_cli=cli_json, bootstrap_qq=False):
     client = client or Client(config['app_url'])
     settings = client.request('/api/agent/collector')
     checked(type(settings.get('enabled')) is bool, 'invalid_collector_settings')
@@ -338,6 +412,9 @@ def run_once(config, client=None, read_cli=cli_json):
             and len({(source['platform'], chat) for source, chat in zip(sources, chats)}) == len(sources), 'duplicate_source')
     results = []
     for source, chat in zip(sources, chats):
+        if bootstrap_qq and (source['platform'] != 'qq' or source['cursor'] != ''):
+            continue
+        deadline = time.monotonic() + QQ_ROUND_SECONDS if source['platform'] == 'qq' else None
         body = dict(source_id=source['id'], expected_cursor=source['cursor'], cursor=source['cursor'],
                     checked_at='', last_message_time='', messages=[], error='')
         try:
@@ -354,19 +431,25 @@ def run_once(config, client=None, read_cli=cli_json):
                                     env=wechat_env())
                 messages, new_cursor, latest = wechat_page(envelope, source)
             else:
-                checked(bool(config.get('qq_cli')), 'qq_cli_not_configured')
-                qq_status(read_cli([sys.executable, config['qq_cli'], 'status']), chat)
-                checked(numeric(source['cursor'], False), 'qq_continuity_unverified')
-                messages, new_cursor, latest = qq_page(read_cli([sys.executable, config['qq_cli'], 'history']), source)
+                messages, new_cursor, latest = qq_history(config, source, read_cli,
+                    deadline - QQ_RECEIPT_SECONDS, bootstrap=bootstrap_qq)
             messages, new_cursor, latest = ingest_page(messages, source['cursor'])
+            if deadline is not None:
+                remaining(deadline - QQ_RECEIPT_SECONDS)
             body.update(messages=messages, cursor=new_cursor, last_message_time=latest)
         except CollectError as error:
             body['error'] = str(error)
         body['checked_at'] = dt.datetime.now(TIMEZONE).isoformat()
         try:
-            client.ingest(body)
+            if deadline is None:
+                client.ingest(body)
+            else:
+                client.ingest(body, deadline=deadline)
             results.append(dict(source_id=source['id'], status='read_error' if body['error'] else 'ingested',
                                 messages=len(body['messages']), error=body['error']))
+            if bootstrap_qq and source['platform'] == 'qq' and source['cursor'] == '' and not body['error']:
+                results[-1].update(bootstrap=True, coverage='returned_native_page_only',
+                                   earlier_history_verified=False)
         except CollectError:
             # No local cursor: an unacknowledged POST is reconciled by server CAS on the next run.
             results.append(dict(source_id=source['id'], status='ingest_unconfirmed'))
@@ -376,12 +459,16 @@ def run_once(config, client=None, read_cli=cli_json):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True, help='仅本机可读的JSON配置文件（权限0600）')
+    parser.add_argument('--bootstrap-qq', action='store_true',
+                        help='仅本轮为已授权且游标为空的QQ来源保存首个原生页；不代表此前历史已覆盖')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--once', action='store_true', help='执行一轮；默认同样仅执行一轮')
     mode.add_argument('--interval', type=int, help='保持同一采集进程，每轮结束后间隔60至86400秒再次读取')
     args = parser.parse_args(argv)
     if args.interval is not None and not 60 <= args.interval <= 86400:
         parser.error('--interval 必须为60至86400之间的整数秒')
+    if args.bootstrap_qq and args.interval is not None:
+        parser.error('--bootstrap-qq 仅可单次执行，不能与 --interval 同用')
     previous = {}
     if args.interval is not None:
         # AppData consent can be scoped to the responsible process's lifetime.
@@ -394,7 +481,8 @@ def main(argv=None):
         while True:
             try:
                 # Reload the private configuration and server allowlist each round.
-                results = run_once(load_config(args.config))
+                config = load_config(args.config)
+                results = run_once(config, bootstrap_qq=True) if args.bootstrap_qq else run_once(config)
                 print(json.dumps({'sources': results}, ensure_ascii=False), flush=True)
                 failed = int(any(row['status'] in ('read_error', 'ingest_unconfirmed') for row in results))
             except CollectError as error:
