@@ -48,6 +48,34 @@ async function guardChecks(){
  assert.match(changedSummary({...current,assistance:'独立尝试'},old),/帮助情况/,'actual changed help is still shown');
  return 'same-child and corrupt-chain guards, signed gaps, legacy unknowns, missing originals and old-schema history diff are checked';
 }
+async function draftChildChecks(p,url,proofDir){
+ const state=await(await fetch(url+'api/state')).json(),[a,b]=state.children,recordCount=state.records.length;
+ await p.route('**/api/state',async route=>{const r=await route.fetch(),body=await r.json();body.llm={...body.llm,configured:true};await route.fulfill({response:r,json:body})});
+ let hold,release,seen=false,mismatch=false,lastBody;
+ await p.route('**/api/draft',async route=>{
+  lastBody=route.request().postDataJSON();seen=true;if(hold)await hold;
+  const selected=state.children.find(c=>c.id===lastBody.child_id);assert.ok(selected,'selected child id was sent');
+  await route.fulfill({json:{child_id:mismatch?a.id:selected.id,child_name:mismatch?a.name:selected.name,draft:{title:'虚构英语听写记录',subject:'英语',score:selected.id===a.id?91:42,total:100,note:'虚构成绩表中对应行，尚未核对订正情况。',uncertainties:[]}}});
+ });
+ await p.locator('#refresh').click();await eventually(()=>p.locator('#draftButton').isEnabled(),'draft model configured');await p.locator('#add').click();
+ const field=name=>p.locator('#recordForm [name="'+name+'"]');await field('child').selectOption(a.name);await field('title').fill('家长原先填写的标题');
+ // A -> B -> A still invalidates an in-flight request, even when its response arrives for A.
+ hold=new Promise(r=>release=r);await p.locator('#draftButton').click();await eventually(()=>seen,'draft sent');assert.equal(lastBody.child_id,a.id);
+ await field('child').selectOption(b.name);await field('child').selectOption(a.name);release();await eventually(()=>p.locator('#draftButton').isEnabled(),'late draft discarded');hold=null;
+ assert.equal(await p.locator('#applyDraft').count(),0);assert.equal(await field('title').inputValue(),'家长原先填写的标题');
+ await p.locator('#draftButton').click();await p.locator('#applyDraft').waitFor();assert.match(await p.locator('#draftResult').innerText(),new RegExp(a.name));
+ await p.locator('#applyDraft').click();assert.equal(await field('score').inputValue(),'91');await field('note').fill('家长后来补写的观察');
+ await field('child').selectOption(b.name);assert.equal(await field('score').inputValue(),'');assert.equal(await field('total').inputValue(),'');assert.equal(await field('title').inputValue(),'家长原先填写的标题');assert.equal(await field('note').inputValue(),'家长后来补写的观察');assert.equal(await p.locator('#applyDraft').count(),0);
+ assert.equal((await(await fetch(url+'api/state')).json()).records.length,recordCount,'extracting and applying never auto-save');
+ mismatch=true;await p.locator('#draftButton').click();await eventually(()=>p.locator('#draftButton').isEnabled(),'mismatched response rejected');assert.match(await p.locator('#draftStatus').innerText(),/孩子归属已变化/);assert.equal(await p.locator('#applyDraft').count(),0);
+ mismatch=false;await p.locator('#draftButton').click();await p.locator('#applyDraft').waitFor();assert.equal(lastBody.child_id,b.id);
+ for(const width of [360,1440]){await p.setViewportSize({width,height:1000});assert.equal(await p.locator('#recordDialog').evaluate(el=>el.scrollWidth>el.clientWidth),false,'draft dialog width '+width);if(proofDir)await p.screenshot({path:path.join(proofDir,'synthetic-child-draft-'+width+'.png')})}
+ await p.locator('#applyDraft').click();await p.locator('#recordForm [type="submit"]').click();await eventually(async()=>!(await p.locator('#recordDialog').isVisible()),'selected child draft saved');
+ const saved=(await(await fetch(url+'api/state')).json()).records;assert.equal(saved.length,recordCount+1);assert.equal(saved[0].child,b.name);assert.equal(saved[0].score,42);
+ await p.locator('#add').click();await field('title').fill('下一条手动记录');await field('child').selectOption(a.name);assert.equal(await field('title').inputValue(),'下一条手动记录','previous draft tracking reset for new record');await p.locator('[data-close="recordDialog"]').click();
+ await p.unroute('**/api/state');await p.unroute('**/api/draft');
+ return 'selected-child draft binding, A/B/A late responses, wrong-child metadata, applied-field rollback preserving manual edits, explicit-save ownership and responsive dialog (mock model; real application UI/storage)';
+}
 (async()=>{
  let runtime,browser;const checks=[await guardChecks()],proofDir=process.env.LEARNING_UI_PROOF_DIR;
  try{
@@ -84,6 +112,7 @@ async function guardChecks(){
   for(const width of [360,400,1440]){await p.setViewportSize({width,height:1000});assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'learning page width '+width);assert.equal(await card().evaluate(el=>el.scrollWidth>el.clientWidth),false,'comparison width '+width);if(proofDir){await p.evaluate(()=>scrollTo(0,0));await p.screenshot({path:path.join(proofDir,'synthetic-viewport-'+width+'.png')});await p.screenshot({path:path.join(proofDir,'synthetic-learning-'+width+'.png'),fullPage:true});await card().screenshot({path:path.join(proofDir,'synthetic-comparison-'+width+'.png')});await eventCard.screenshot({path:path.join(proofDir,'synthetic-school-event-'+width+'.png')})}}
   await p.locator('#childFilter').selectOption({label:second});assert.equal(await p.locator('[data-learning-case="'+original.id+'"]').count(),0);assert.match(await p.locator('.learning-journeys').innerText(),/OTHER_CHILD_LEARNING_CANARY/);await p.reload();await learningPage();await p.locator('#childFilter').selectOption({label:first});assert.equal((await p.locator('.learning-journeys').innerText()).includes('OTHER_CHILD_LEARNING_CANARY'),false);assert.deepEqual(errors,[]);
   checks.push('360 / 400 / 1440 responsive comparisons, readable text contrast, child filtering and reload persistence');
+  checks.push(await draftChildChecks(p,runtime.url,proofDir));assert.deepEqual(errors,[]);
   const proof={checkedAt:new Date().toISOString(),passed:checks.length,checks,syntheticOnly:true,realPhoneTested:false};if(proofDir)await fs.writeFile(path.join(proofDir,'ui-proof.json'),JSON.stringify(proof,null,2)+'\n');console.log(JSON.stringify(proof,null,2));
  }finally{await browser?.close();await runtime?.stop()}
 })().catch(e=>{console.error(e.stack||e.message);process.exitCode=1});

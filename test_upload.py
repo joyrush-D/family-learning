@@ -119,17 +119,19 @@ with tempfile.TemporaryDirectory() as tmp:
         assert status==200 and all(isinstance(r['attachments'],list) for r in json.loads(body)['records'])
         records_before=app.snapshot()['records']
         draft=dict(title='虚构数学记录',subject='数学',score=85,total=100,note='仅为待核对草稿',uncertainties=['订正情况未知'])
-        draft_body=json.dumps(dict(text='只整理本次虚构资料',attachments=[first['id']])).encode()
+        draft_body=json.dumps(dict(child_id='child-1',text='只整理本次虚构资料',attachments=[first['id']])).encode()
         with patch.object(app.family_llm,'extract_draft',return_value=draft) as extract:
             assert request('POST','/api/draft',draft_body)[0]==403
             assert request('POST','/api/draft',draft_body,dict(headers,**{'X-Family-Token':'wrong'}))[0]==403
             assert request('POST','/api/draft',draft_body,dict(headers,Host='untrusted.example'))[0]==403
             for ids in [['f'*32],['../uploads'],[first['id']]*4]:
-                assert request('POST','/api/draft',json.dumps(dict(attachments=ids)).encode(),headers)[0]==400
+                assert request('POST','/api/draft',json.dumps(dict(child_id='child-1',attachments=ids)).encode(),headers)[0]==400
+            for child_id in ['', 'unknown', 123]:
+                assert request('POST','/api/draft',json.dumps(dict(child_id=child_id,text='虚构资料')).encode(),headers)[0]==400
             extract.assert_not_called()
             status,_,body=request('POST','/api/draft',draft_body,headers)
-            assert status==200 and json.loads(body)==dict(draft=draft)
-            extract.assert_called_once_with('只整理本次虚构资料',[dict(mime='image/png',data=PNG)],data_path=app.DATA)
+            assert status==200 and json.loads(body)==dict(draft=draft,child_id='child-1',child_name='示例甲')
+            extract.assert_called_once_with('只整理本次虚构资料',[dict(mime='image/png',data=PNG)],target_child='示例甲',data_path=app.DATA)
         assert app.snapshot()['records']==records_before
         class Offline:
             def open(self,*args,**kwargs): raise URLError('SYNTHETIC_PRIVATE_KEY /sensitive/raw-response')

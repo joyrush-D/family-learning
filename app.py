@@ -751,7 +751,11 @@ def material_images(ids):
     return images
 
 def draft_from_material(obj):
-    return family_llm.extract_draft(clean(obj,'text',6000),material_images(obj.get('attachments',[])),data_path=DATA)
+    child=next((p for p in profiles() if p['id']==clean(obj,'child_id',100)),None)
+    if child is None: raise ValueError('请先选择孩子，再整理草稿')
+    draft=family_llm.extract_draft(clean(obj,'text',6000),material_images(obj.get('attachments',[])),
+                                   target_child=child['name'],data_path=DATA)
+    return dict(draft=draft,child_id=child['id'],child_name=child['name'])
 
 def reading_feedback(obj):
     task=next((t for t in reading_store().snapshot()['tasks'] if t['id']==obj.get('id') and t['child_id']==obj.get('child_id')),None)
@@ -1458,7 +1462,7 @@ class Handler(BaseHTTPRequestHandler):
                 except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
                 except ValueError as e: return self.reply(400,dict(error=str(e)))
             if self.path=='/api/draft':
-                try: return self.reply(200,dict(draft=draft_from_material(obj)))
+                try: return self.reply(200,draft_from_material(obj))
                 except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
                 except ValueError as e: return self.reply(400,dict(error=str(e)))
             if self.path=='/api/ask':

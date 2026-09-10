@@ -76,6 +76,16 @@ try:
         assert body['model']=='synthetic-model' and body['stream'] is False
         assert 'reasoning_effort' not in body
         assert len(body['messages'])==2 and body['messages'][1]['content'][0]['text'].startswith('虚构数学卷')
+        llm.extract_draft('虚构多人听写表',target_child='示例乙')
+        messages=state['calls'][-1][1]['messages']
+        assert json.loads(messages[1]['content'][1]['text'])==dict(target_child='示例乙')
+        assert '不输出其他学生' in messages[0]['content'] and '没有匹配行' in messages[0]['content']
+        before=len(state['calls'])
+        for name in [None, 'x'*81, '无效\n称呼']:
+            try: llm.extract_draft('虚构资料',target_child=name)
+            except ValueError: pass
+            else: raise AssertionError('invalid target child accepted')
+        assert len(state['calls'])==before
         try: llm._chat_json([dict(role='user',content='synthetic light connection')],llm.SCHEMA,
                             'family_light_connection_test')
         except llm.LLMUnavailable: pass
