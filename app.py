@@ -24,6 +24,7 @@ import family_child
 import family_agent
 import family_study
 import family_settings
+import family_teachers
 import family_access
 import family_task_focus
 import family_guided
@@ -53,9 +54,9 @@ CARE_CHOICES = ('', '愿意试试', '暂不考虑', '改天回看')
 TASK_DISMISSED = ('不参加', '不适用')
 TASK_CLOSED = ('已完成', *TASK_DISMISSED, '已归档')
 TASK_STATUSES = ('待跟进', '进行中', '已完成', *TASK_DISMISSED)
-BUNDLE = ('app.js', 'reading.js', 'calendar.js', 'child-access.js', 'learning.js', 'study.js', 'settings.js', 'guided.js')
+BUNDLE = ('app.js', 'reading.js', 'calendar.js', 'child-access.js', 'learning.js', 'study.js', 'settings.js', 'guided.js', 'teachers.js')
 STATIC = {'/': 'index.html', **{'/'+name: name for name in (
-    *BUNDLE, 'startup.js', 'ui.css', 'learning.css', 'study.css', 'growth-world.js',
+    *BUNDLE, 'startup.js', 'ui.css', 'learning.css', 'study.css', 'teachers.css', 'growth-world.js',
     'vendor/three.module.min.js', 'vendor/three.core.min.js')}}
 
 
@@ -348,6 +349,9 @@ def agent_store():
 
 def settings_store():
     return family_settings.Store(SimpleNamespace(**globals()))
+
+def teacher_store():
+    return family_teachers.Store(SimpleNamespace(**globals()))
 
 def study_store():
     return family_study.Store(SimpleNamespace(**globals()))
@@ -1054,6 +1058,54 @@ def query_evidence(child,question,start=None,end=None,now=None):
     coverage+='帮助情况与练习关系按实际字段记录，空值为未知；旧的独立复测标签本身不能证明独立完成，不由分数变化推断掌握或前后可比较。不含附件正文、群聊原文、未录入资料及完整修改历史；本次未检索到不等于历史不存在。不能由成长能量推断奖励已兑现；待兑现与已兑现分别判断。'
     return selected,coverage
 
+def teacher_query_evidence(child, question, start=None, end=None):
+    # Query existing records without initializing optional tables or running a source check.
+    with connect() as c:
+        names = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if not {'teachers','teacher_observations'} <= names:
+            return [], ''
+        child_id = next(p['id'] for p in profiles(c) if p['name'] == child)
+        teachers = {r['id']: family_teachers.Store._view(r) for r in c.execute('SELECT * FROM teachers')}
+        teachers = {key: t for key,t in teachers.items() if child_id in t['child_ids'] and not t['archived']}
+        if not any(word in question for word in ['老师','教师','表扬'] + [t['display_name'] for t in teachers.values()]):
+            return [], ''
+        # Reuse the configuration validator without constructing its schema-writing Store.
+        try:
+            config = family_agent.Store._config(SimpleNamespace(data=DATA, profiles=profiles))
+            source_children = {r['id']:r['child_id'] for r in config['sources']}
+        except family_agent.AgentError:
+            source_children = {}
+        rows = []
+        for raw in c.execute('SELECT * FROM teacher_observations'):
+            row = family_teachers.Store._view(raw)
+            teacher = teachers.get(row['teacher_id'])
+            if teacher is None or row['status'] != 'active' or row['child_id'] and row['child_id'] != child_id:
+                continue
+            if row['source_id']:
+                if source_children.get(row['source_id']) != child_id: continue
+            elif not row['child_id'] and len(teacher['child_ids']) != 1:
+                continue  # A shared teacher's unassigned class feedback has unknown child scope.
+            if start and not start <= row['day'] <= end: continue
+            rows.append(row)
+    rows.sort(key=lambda r: (teachers[r['teacher_id']]['display_name'] in question,
+                             bool(teachers[r['teacher_id']]['subject'] and teachers[r['teacher_id']]['subject'] in question),
+                             r['day'], r['updated']), reverse=True)
+    evidence = []
+    for row in rows[:6]:
+        teacher = teachers[row['teacher_id']]
+        detail = '；'.join([('行为或要求：' + row['behavior'])[:700],
+            ('老师明确说的理由：' + row['teacher_reason'])[:400] if row['teacher_reason'] else '尚未记录老师明确说的理由，原因未知',
+            ('家长待核实理解：' + row['parent_note'])[:400] if row['parent_note'] else '没有家长推测',
+            '对象：' + {'household':'本家孩子','other_students':'其他学生的行为','class':'全班'}[row['target']],
+            '来源：' + (row['source_url'] or row['source_id'] or '家长手动记录')])[:1100]
+        evidence.append(dict(id='teacher_observation:'+row['id'],kind='teacher',target_id=teacher['id'],
+            title=teacher['display_name']+' · '+{'requirement':'明确要求','praise':'表扬记录','preference':'明确教学偏好'}[row['kind']],
+            child=child,day=row['day'],detail=detail))
+    return evidence, ('老师观察范围：'+(start+'至'+end if start else '已保存历史，未限定日期')+'。本次另选同一孩子老师档案中最近或与问题相关的'+str(len(evidence))+'/'+str(len(rows))+
+        '条有效观察。老师明确理由与家长理解分开；理由未记录就说未知。不能从一次表扬推断长期偏好、人格或偏爱某人；'
+        '建议聚焦孩子可选择的具体学习行为，不建议送礼、讨好或牺牲休息。公开网页是未核对来源资料，不是事实自动认证，本次未作为偏好证据。')
+
+
 def ask_family(obj):
     if not isinstance(obj,dict) or set(obj)-{'child','question','start','end'}: raise ValueError('查询字段不正确')
     if ('start' in obj)!=('end' in obj) or 'start' in obj and (not isinstance(obj['start'],str) or not isinstance(obj['end'],str)):
@@ -1066,6 +1118,12 @@ def ask_family(obj):
     now=dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
     date_range=calendar_query_range(question,obj.get('start'),obj.get('end'),now=now)
     evidence,coverage=query_evidence(child,question,date_range['start'],date_range['end'],now=now)
+    teacher_evidence,teacher_coverage=teacher_query_evidence(child,question,
+        None if date_range['defaulted'] else date_range['start'], None if date_range['defaulted'] else date_range['end'])
+    if teacher_coverage:
+        evidence=(teacher_evidence+evidence)[:12]
+        coverage='以下常规资料数量是合并老师证据前的候选统计，不等于最终纳入数量：'+coverage+teacher_coverage
+        coverage+='最终提供'+str(len(teacher_evidence))+'条老师观察和'+str(len(evidence)-len(teacher_evidence))+'条常规资料，省略部分不能据此视为不存在。'
     if not evidence:
         return dict(answer='当前可检索的记录、待办和陪伴建议中没有这个孩子的可用资料，暂时无法回答。请先补充相关记录；这不表示实际没有发生。日历和课表没录入不代表没有安排或空闲。',citations=[],coverage=coverage,calendar_range=date_range)
     result=family_llm.answer_question(evidence[0]['child'],question,evidence,coverage,data_path=DATA)
@@ -1191,10 +1249,15 @@ class Handler(BaseHTTPRequestHandler):
             host=parsed.hostname.lower()
         except ValueError:
             return deny(403,'访问地址未授权')
+        path=urlparse(self.path).path
+        child_request = 'X-Child-CSRF' in self.headers or any(piece.strip().startswith(family_child.COOKIE+'=')
+            for piece in self.headers.get('Cookie','').split(';'))
         # Loopback tools stay local. A forwarded request cannot claim this exception by changing Host.
         forwarded=any(name in self.headers for name in ('Forwarded','X-Forwarded-For','X-Forwarded-Host',
                        'X-Forwarded-Proto','X-Real-IP','Tailscale-User-Login'))
         if host in ('127.0.0.1','localhost') and not forwarded and self.client_address[0] in ('127.0.0.1','::1'):
+            if child_request and path!='/child' and not path.startswith('/child/'):
+                return deny(403,'孩子凭据不能用于家长入口，请从孩子页面操作')
             return True
         try: config=family_access.read_config(DATA)
         except family_access.AccessError as error:
@@ -1238,6 +1301,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/child-access': return self.reply(200,family_child.parent_action(SimpleNamespace(**globals()),'state',{}))
             if path=='/api/state': return self.reply(200,snapshot())
             if path=='/api/agent/collector': return self.reply(200,agent_store().collector_plan())
+            if path=='/api/teachers': return self.reply(200,teacher_store().snapshot())
             if path=='/api/settings': return self.reply(200,settings_store().snapshot())
             if path=='/api/agent': return self.reply(200,agent_store().snapshot())
             if path=='/api/agent/message':
@@ -1289,7 +1353,7 @@ class Handler(BaseHTTPRequestHandler):
                 if p.parent!=base or not p.is_file(): return self.reply(404,{'error':'附件不存在'})
                 return self.reply(200,p.read_bytes(),'application/octet-stream')
             return self.reply(404,{'error':'不存在'})
-        except (family_print.PrintError,family_calendar.CalendarError,ProfileError,family_child.ChildError,family_agent.AgentError,family_study.StudyError,family_settings.SettingsError) as e: return self.reply(e.status,dict(error=str(e),code=e.code))
+        except (family_print.PrintError,family_calendar.CalendarError,ProfileError,family_child.ChildError,family_agent.AgentError,family_study.StudyError,family_settings.SettingsError,family_teachers.TeacherError) as e: return self.reply(e.status,dict(error=str(e),code=e.code))
         except (OSError,sqlite3.Error,json.JSONDecodeError): return self.reply(500,{'error':'读取失败，记录未更改'})
     def do_POST(self):
         if not self.authorize_request(): return
@@ -1333,6 +1397,8 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/agent/ingest': return self.reply(200,agent_store().ingest(obj))
             if path=='/api/agent/action': return self.reply(200,agent_store().act(obj))
             if path=='/api/agent/message/attachment': return self.reply(200,agent_store().message_attachment(obj,upload_info))
+            if path=='/api/teachers/profile': return self.reply(200,teacher_store().save_teacher(obj))
+            if path=='/api/teachers/observation': return self.reply(200,teacher_store().save_observation(obj))
             if path=='/api/study/day': return self.reply(200,study_store().save_day(obj))
             if path=='/api/study/item': return self.reply(200,study_store().save_item(obj))
             if path=='/api/study/action': return self.reply(200,study_store().action(obj))
@@ -1404,7 +1470,7 @@ class Handler(BaseHTTPRequestHandler):
             else: return self.reply(404,{'error':'不存在'})
             self.reply(200,{'ok':True})
         except RecordError as e: self.reply(e.status,dict(error=str(e),code=e.code,not_saved=e.not_saved,request_known=e.request_known))
-        except (family_print.PrintError,family_reading.ReadingError,family_calendar.CalendarError,ProfileError,TaskError,family_child.ChildError,family_agent.AgentError,family_study.StudyError,family_settings.SettingsError,family_task_focus.FocusError,family_guided.GuidedError) as e: self.reply(e.status,dict(error=str(e),code=e.code))
+        except (family_print.PrintError,family_reading.ReadingError,family_calendar.CalendarError,ProfileError,TaskError,family_child.ChildError,family_agent.AgentError,family_study.StudyError,family_settings.SettingsError,family_teachers.TeacherError,family_task_focus.FocusError,family_guided.GuidedError) as e: self.reply(e.status,dict(error=str(e),code=e.code))
         except (ValueError,TypeError): self.reply(400,{'error':'输入不完整或格式不正确；完成事项必须填写依据'})
         except (sqlite3.Error,OSError): self.reply(500,{'error':'保存失败，请重试；请保留当前输入'})
 

@@ -131,3 +131,12 @@
 !/test_guided_ui.cjs
 
 !/test_parent_login_ui.cjs
+
+!/family_teachers.py
+!/family_teacher_public.py
+!/teachers.js
+!/teachers.css
+!/test_teachers.py
+!/test_teacher_public.py
+!/test_teacher_http.py
+!/test_teachers_ui.cjs

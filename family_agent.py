@@ -17,6 +17,7 @@ import family_reading
 import family_review
 import family_task_focus
 import family_media
+import family_teacher_public
 
 TZ = family_review.TIMEZONE
 MAX_ATTEMPTS = 3
@@ -691,6 +692,10 @@ def run_once(app, now=None):
         store._runtime('running', now)
         created = processed = failed = 0
         try:
+            try:
+                teacher_public = family_teacher_public.run_one(app, now)
+            except (OSError,ValueError,TypeError,sqlite3.Error):
+                teacher_public = {'state': 'error'}
             media = family_media.run_one(app, store, now)
             if media['state'] == 'error': failed += 1
             try:
@@ -830,7 +835,7 @@ def run_once(app, now=None):
             store._runtime(state, now, '部分任务已达到3次自动尝试上限，已暂停自动调用；原资料保留，可在助手状态中重试或手动处理。' if exhausted else
                            '图片原件暂未自动保存，可打开通知手动补充；其他家庭功能继续可用。' if media['state'] == 'error' and failed == 1 and not unresolved else
                            '部分资料尚未整理成功；原资料保留，稍后重试或查看来源状态。' if failed or unresolved else '')
-            return {'state': state, 'created': created, 'processed': processed, 'failed': failed, 'media': media}
+            return {'state': state, 'created': created, 'processed': processed, 'failed': failed, 'media': media, 'teacher_public': teacher_public}
         except Exception:
             store._runtime('error', now, '本次Agent检查未完成；原资料保留，请查看服务运行状态。')
             raise
