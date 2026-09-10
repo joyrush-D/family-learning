@@ -63,4 +63,4 @@ AES调用macOS系统CommonCrypto的公开API，签名依据[Apple官方头文件
 
 ## 可选的Mac QQ独立读取服务
 
-2026-09-10：`family_qq_llbot.py`独立实现对[LLBot v8.1.10](https://github.com/LLOneBot/LuckyLilliaBot/tree/v8.1.10) WebUI HTTP接口的只读适配，没有复制其源码。上游源码标示[GPL-2.0](https://github.com/LLOneBot/LuckyLilliaBot/blob/v8.1.10/LICENSE)；本项目不分发其服务、原生SDK、Node二进制或个人会话。原生签名SDK与Auth Token服务是另外的运行依赖，公开源码不能说明其完整内部数据处理；由家庭自行选择、安装与授权，不能将其当作本项目MIT代码或腾讯官方接口。文字读取与选定原图已在Mac实测；持续可用性和桌面账号并存另验。
+2026-09-10：`family_qq_llbot.py`独立实现对[LLBot v8.1.10](https://github.com/LLOneBot/LuckyLilliaBot/tree/v8.1.10) WebUI HTTP接口的只读适配，没有复制其源码。上游源码标示[GPL-2.0](https://github.com/LLOneBot/LuckyLilliaBot/blob/v8.1.10/LICENSE)；本项目不分发其服务、原生SDK、Node二进制或个人会话。原生签名SDK与Auth Token服务是另外的运行依赖，公开源码不能说明其完整内部数据处理；由家庭自行选择、安装与授权，不能将其当作本项目MIT代码或腾讯官方接口。文字读取与选定原图曾在Mac实测，但后续同账号试用出现桌面QQ退出和操作受影响，共存未通过，已撤回日常采集部署。接口实现保留为实验代码，不据读取成功推荐自动登录或宣称可替代桌面日常使用。
