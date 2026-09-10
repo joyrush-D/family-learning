@@ -185,6 +185,20 @@ python3 family_collect.py --config private/collector.json --once
 
 首次接入须核对CLI与指定群的授权配置，然后明确执行一次 `python3 family_collect.py --config private/collector.json --bootstrap-qq`。会话已捕获但尚未验证读取时，允许进行有界原生读取尝试；明确离线时不读取，状态接口响应不计为采集成功。该操作只处理已授权且游标为空的QQ来源，把实际首个原生页和对应游标一起提交；空页不建立游标，也不触及微信或已有QQ游标。结果中的 `earlier_history_verified: false` 表示此前历史尚未覆盖；不能直接填一个最新ID来跳过未读记录。后续使用普通采集模式，只有后台确认接收才推进。更换采集程序须受控重新加载运行进程，旧Python进程不会自动加载新增分页逻辑；仅更改CLI路径不能让旧解析器接受多页结果。跨页方向与真实QQ版本兼容性需在部署机实际核验，合成测试不能代替接入验收。
 
+### Mac QQ 可选只读适配器
+
+`family_qq_llbot.py`对接单独安装的[LLBot v8.1.10](https://github.com/LLOneBot/LuckyLilliaBot/releases/tag/v8.1.10)原生协议模式；不注入或改写桌面QQ，只用回环HTTP GET读取一个明确授权的群。LLBot、第三方服务Auth Token和QQ登录由安装者按上游说明配置，不随本项目安装或分发。该服务令牌与WebUI密码是不同凭据；本适配器只读取WebUI密码文件，不能代替上游服务令牌。
+
+在脚本同目录新建Git忽略的 `family_qq_llbot.json`（下面全是占位示例，须替换为本家庭配置）：
+
+```json
+{"url":"http://127.0.0.1:15703","token_file":"/absolute/path/to/llbot/data/webui_token.txt","allowed_groups":["10002"]}
+```
+
+配置与密码文件均须是当前用户拥有、权限600的普通文件，不能是符号链接。`allowed_groups`当前只支持一个群，并须与网页授权来源一致；其它群不自动读取。将 `private/collector.json` 的 `qq_cli` 指向本脚本绝对路径，再按上面的首次接入步骤操作。已有游标继续普通采集，禁止清空重建。单独检查可用 `python3 family_qq_llbot.py status`，也可用 `--config` 指定私有配置文件；`self-check`仅用虚构消息，不需要账号。
+
+本版保留原生消息ID，以群内序号分页；适配器显式报告 `history_cursor: message_seq`，旧CLI默认仍按消息ID传递翻页锚点。已在Apple Silicon Mac实测原生跨页文本读取与选定原图通过现有上传入口关联；CLI本身只同步文字，图片、表情、文件等保留内容缺口，不宣称全部历史或自动取图。桌面同时收发、自然增量及冷开机要按每家实际账号另验。应用采集器不负责重启LLBot，退出、令牌失效或账号离线会保留上次成功游标并报错；生产部署需单独安排读取服务随家庭电脑登录启动。
+
 微信采集使用已核验CLI的 `history --view agent --order asc --strict-read-only --include-media-paths false`，零游标首次读取不传 `after_message`，后续传后台确认的消息锚点。查询顺序与本地消息编号大小并不等价，按接口原顺序及分页锚点继续；不能先取最新一页再排序冒充完整增量。旧CLI或返回契约不一致时保留失败和原游标，不静默跳过历史。微信文字采集关闭媒体路径补充，避免CLI默认遍历账号图片缓存；只继承基础环境和显式配置路径，固定禁止取钥并关闭元数据自动刷新。
 
 macOS 可复用 `deploy/local.family-learning.collector.plist`：用文本编辑器将 `__PYTHON3__` 替换为 `command -v python3` 得到的绝对路径，将 `__APP_ROOT__` 替换为实际程序目录。路径含 `&` 或 `<` 时须按 XML 转义；launchd 不展开 `~` 或环境变量。确认 `private` 目录存在后安装：

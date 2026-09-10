@@ -38,21 +38,25 @@ def qq_ready():
 
 class QQHistory:
     """Synthetic inclusive older pages; actual native direction needs device verification."""
-    def __init__(self, rows):
+    def __init__(self, rows, sequence_cursor=False):
         self.rows = rows
         self.calls = []
+        self.sequence_cursor = sequence_cursor
 
     def __call__(self, args, env=None, timeout=45):
         assert 0 < timeout <= collect.QQ_ROUND_SECONDS - collect.QQ_RECEIPT_SECONDS
         self.calls.append((args, timeout))
         assert args[:2] == [collect.sys.executable, CONFIG['qq_cli']]
         if args[2:] == ['status']:
-            return qq_ready()
+            result = qq_ready()
+            if self.sequence_cursor: result['data']['history_cursor'] = 'message_seq'
+            return result
         assert args[2] == 'history'
         end = len(self.rows)
         if len(args) > 3:
             assert args[3] == '--before' and len(args) == 5
-            end = next(i + 1 for i, row in enumerate(self.rows) if row['message_id'] == args[4])
+            key = 'message_seq' if self.sequence_cursor else 'message_id'
+            end = next(i + 1 for i, row in enumerate(self.rows) if row[key] == args[4])
         return qq_envelope(list(reversed(self.rows[max(0, end - 20):end])))
 
 
@@ -414,6 +418,18 @@ class CollectorTests(unittest.TestCase):
         envelope['data']['messages'][0]['group_id'] = '10003'
         with self.assertRaisesRegex(collect.CollectError, 'source_mismatch'):
             collect.qq_page(envelope, source)
+
+    def test_qq_sequence_pagination_preserves_native_message_ids(self):
+        rows = [qq_event(seq) for seq in range(1, 51)]
+        cli = QQHistory(rows, sequence_cursor=True)
+        client = FakeClient([{**QQ_SOURCE, 'cursor': rows[0]['message_id']}])
+        result = collect.run_once(CONFIG, client, cli)[0]
+        self.assertEqual((result['status'], result['messages']), ('ingested', 49))
+        self.assertEqual([r['id'] for r in client.posts[0]['messages']], [r['message_id'] for r in rows[1:]])
+        self.assertEqual([args[-1] for args, _ in cli.calls if '--before' in args], ['31', '12'])
+        status = qq_ready(); status['data']['history_cursor'] = 'unknown'
+        with self.assertRaisesRegex(collect.CollectError, 'qq_cursor_unsupported'):
+            collect.qq_status(status, '10002')
 
     def test_qq_bootstrap_is_explicit_authorized_nonempty_native_page_only(self):
         rows = [qq_event(seq) for seq in range(1, 26)]

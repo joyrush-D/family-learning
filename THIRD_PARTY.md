@@ -60,3 +60,7 @@ GTD 在此作为事项处理方法参考：[官方五步介绍](https://gettingt
 AES调用macOS系统CommonCrypto的公开API，签名依据[Apple官方头文件](https://github.com/apple-oss-distributions/CommonCrypto/blob/main/include/CommonCryptor.h)，不复制或分发系统库。FFmpeg作为安装者选择的外部命令执行，固定HEVC输入及本地文件/管道协议；其不同构建适用的LGPL/GPL条款见[FFmpeg许可说明](https://ffmpeg.org/legal.html)及[协议文档](https://ffmpeg.org/ffmpeg-protocols.html)。当前机器构建为GPLv3+，不把该二进制打包为本项目MIT内容。微信CLI、账号、密钥与媒体同样不随公开源码分发。
 
 本机CLI适配还核对了路径查找行为：`strict-read-only`本身不关闭默认的图片缓存读取。文字查询显式关闭`include-media-paths`；媒体查询关闭`include-local-paths`并开启`include-debug`保留资源元数据，随后由本应用检查对应群和月份中的固定候选。只支持固定构建，第三方CLI升级须重新验证这些参数和返回契约。
+
+## 可选的Mac QQ独立读取服务
+
+2026-09-10：`family_qq_llbot.py`独立实现对[LLBot v8.1.10](https://github.com/LLOneBot/LuckyLilliaBot/tree/v8.1.10) WebUI HTTP接口的只读适配，没有复制其源码。上游源码标示[GPL-2.0](https://github.com/LLOneBot/LuckyLilliaBot/blob/v8.1.10/LICENSE)；本项目不分发其服务、原生SDK、Node二进制或个人会话。原生签名SDK与Auth Token服务是另外的运行依赖，公开源码不能说明其完整内部数据处理；由家庭自行选择、安装与授权，不能将其当作本项目MIT代码或腾讯官方接口。文字读取与选定原图已在Mac实测；持续可用性和桌面账号并存另验。

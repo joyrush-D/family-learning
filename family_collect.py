@@ -244,6 +244,9 @@ def qq_status(envelope, chat):
              and data.get('session_available') is True)
     checked((data.get('online') is None or data.get('online') is True)
             and (capabilities['history'] is True or probe), 'qq_history_unavailable')
+    cursor_kind = data.get('history_cursor', 'message_id')
+    checked(cursor_kind in ('message_id', 'message_seq'), 'qq_cursor_unsupported')
+    return cursor_kind
 
 
 def qq_native_page(envelope, source):
@@ -327,10 +330,11 @@ def qq_history(config, source, read_cli, deadline, bootstrap=False):
         remaining(deadline)
         return envelope
 
-    qq_status(read(['status']), source_chat(source))
+    cursor_kind = qq_status(read(['status']), source_chat(source))
     saved, before = {}, ''
     for _ in range(QQ_MAX_PAGES):
-        entries = qq_native_page(read(['history', *(['--before', before] if before else [])]), source)
+        argument = str(saved[before][0]) if before and cursor_kind == 'message_seq' else before
+        entries = qq_native_page(read(['history', *(['--before', argument] if before else [])]), source)
         remaining(deadline)
         page_ids = [entry[2]['id'] for entry in entries]
         if before:

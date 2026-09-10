@@ -140,3 +140,5 @@
 !/test_teacher_public.py
 !/test_teacher_http.py
 !/test_teachers_ui.cjs
+
+!/family_qq_llbot.py
