@@ -399,6 +399,8 @@ class Store:
             for row in items:
                 row['evidence'] = json.loads(row['evidence']); row['plan'] = json.loads(row['plan']); row.pop('job_id')
                 row['needs_task_details'] = row['kind'] == 'school' and _needs_task_details(row['title'])
+                row['goal_id'] = row['plan'].get('parent_goal_id') or (row['id'] if row['kind']=='care' and row['state']=='accepted' else '')
+            items = [r for r in items if not (r['state']=='accepted' and r['plan'].get('parent_goal_id'))]
             sources = []; linked_upload_ids = set()
             for source in config['sources']:
                 saved = c.execute('SELECT * FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
@@ -433,6 +435,22 @@ class Store:
                                                      'review_on', 'estimated_minutes', 'expected_updated'}:
             raise AgentError('处理结构不正确')
         action = _text(obj, 'action', 20, True)
+        # All acceptance entry points share the same goal/version validation.
+        if action in ('accept', 'dismiss') and isinstance(obj.get('id'), str):
+            with self._db() as check:
+                candidate = check.execute('SELECT * FROM agent_items WHERE id=?', (obj['id'],)).fetchone()
+            proposal = json.loads(candidate['plan']) if candidate else {}
+            if proposal.get('parent_goal_id'):
+                if candidate['state']=='accepted' and action=='accept': return dict(ok=True,state='accepted',task_id=candidate['task_id'])
+                if candidate['state']=='dismissed' and action=='dismiss': return dict(ok=True,state='dismissed')
+                from types import SimpleNamespace
+                from family_goals import Store as Goals
+                approved = {**proposal, **{k:obj[k] for k in ('title','estimated_minutes','review_on') if k in obj}}
+                if 'body' in obj or 'action_text' in obj: approved['action']=obj.get('action_text',obj.get('body'))
+                result=Goals(SimpleNamespace(connect=self.connect,profiles=self.profiles,DATA=self.data),self).action(dict(
+                    id=proposal['parent_goal_id'],action='approve' if action=='accept' else 'keep',proposal_id=candidate['id'],
+                    expected_version=proposal['base_version'],context_hash=proposal['context_hash'],request_key='agent-goal-'+_hash(obj)[:64],plan=approved))
+                return {**result,'state':'accepted' if action=='accept' else 'dismissed'}
         with self._db() as c:
             c.execute('BEGIN IMMEDIATE')
             if action == 'retry':
@@ -458,6 +476,7 @@ class Store:
                 changed = _now().isoformat()
                 plan.setdefault('review_history', []).append({'review_on': approved.get('review_on', ''), 'changed_at': changed})
                 approved['review_on'] = review_on; plan['approved'] = approved; plan['approved_changed_at'] = changed
+                plan['goal_version'] = plan.get('goal_version',1) + 1
                 c.execute('UPDATE agent_items SET plan=?,updated=? WHERE id=?', (_json(plan), changed, ident))
                 for review in c.execute("SELECT id,plan FROM agent_items WHERE kind='review' AND state='pending'").fetchall():
                     try: parent = json.loads(review['plan']).get('parent_item_id')
@@ -502,6 +521,13 @@ class Store:
             if action == 'accept' and row['kind'] == 'care':
                 c.execute('UPDATE agent_items SET state=?,task_id=?,plan=?,updated=? WHERE id=?',
                           (state, task_id, _json(plan), values[2], ident))
+                from types import SimpleNamespace
+                from family_goals import Store as Goals
+                goals=Goals(SimpleNamespace(connect=self.connect,profiles=self.profiles,DATA=self.data),self)
+                root=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone())
+                context=goals._context(c,root)
+                plan.update(goal_version=1,handled_hash=context['evidence_hash'],approved_evidence_hash=context['evidence_hash'])
+                c.execute('UPDATE agent_items SET plan=? WHERE id=?',(_json(plan),ident))
             else:
                 c.execute('UPDATE agent_items SET state=?,task_id=?,updated=? WHERE id=?', values)
         return {'ok': True, 'state': state, 'task_id': task_id}
@@ -627,6 +653,7 @@ def _planned_reviews(store, now):
         for row in rows:
             try: plan = json.loads(row['plan'])
             except (TypeError, ValueError): continue
+            if plan.get('parent_goal_id') or plan.get('lifecycle')=='paused': continue
             approved = plan.get('approved') if isinstance(plan, dict) else None
             task_id = row['task_id'] or (plan.get('task_id') if isinstance(plan, dict) else '')
             if not isinstance(approved, dict) or not task_id: continue
@@ -784,11 +811,20 @@ def run_once(app, now=None):
                 # ponytail: scan local records for older corrections; index revisions only if measured scale requires it.
                 records = [dict(row) for row in c.execute('SELECT * FROM records ORDER BY id DESC')]
                 by_id = {row['id']: row for row in records}
-            planned_children = set()
+            from family_goals import Store as Goals
+            goals = Goals(app, store)
+            progress = goals.run(now, budget)
+            budget -= progress['used']; created += progress['created']; processed += progress['used']; failed += progress['failed']
+            managed = goals.managed_ids()
+            # A linked record belongs to its continuous goal, not a parallel one-record plan.
+            with store._db() as c:
+                for ident in managed:
+                    c.execute("UPDATE agent_items SET state='superseded',updated=? WHERE job_id=? AND state='pending' AND kind='care'", (now.isoformat(), 'record:'+str(ident)))
+            planned_children = progress['children']
             for record in records:
                 if budget == 0: break
                 child_id = children.get(aliases.get(record['child'], record['child']))
-                if not child_id or child_id in planned_children or (record['source'] or '').startswith('陪伴建议:'): continue
+                if record['id'] in managed or not child_id or child_id in planned_children or (record['source'] or '').startswith('陪伴建议:'): continue
                 key = 'record:' + str(record['id'])
                 fields = ['id', 'day', 'category', 'subject', 'title', 'note', 'source', 'score', 'total', 'related_record_id', 'followup_kind', 'assistance', 'practice_relation', 'comparison_note', 'attachments']
                 value = {'child_id': child_id, **{field: record.get(field) for field in fields}}

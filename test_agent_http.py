@@ -303,6 +303,16 @@ class AgentHTTPTests(unittest.TestCase):
         self.assertEqual(self.post('/api/agent/action', action)[0], 200)
         self.assertEqual(state['records'], []); self.model_mock.assert_not_called()
 
+    def test_goals_parent_http_replay_and_child_denial(self):
+        payload=dict(action='create',child_id='child-1',title='虚构学习目标',subject='英语',request_key='synthetic-http-goal-create')
+        self.assertEqual(self.post('/api/goals/action',payload,headers={})[0],403)
+        first=self.post('/api/goals/action',payload);self.assertEqual(first[0],200)
+        self.assertTrue(self.post('/api/goals/action',payload)[1]['replayed'])
+        status,value,_=self.request('GET','/api/goals');self.assertEqual(status,200);self.assertEqual(len(value['goals']),1)
+        child={'Cookie':app.family_child.COOKIE+'=synthetic-invalid','X-Child-CSRF':'synthetic'}
+        self.assertEqual(self.request('GET','/api/goals',headers=child)[0],403)
+        self.assertEqual(self.post('/api/goals/action',payload,headers=child)[0],403)
+
     def test_child_session_cannot_read_or_modify_agent(self):
         self.proposal(child_id='child-2')
         invitation = app.family_child.parent_action(app, 'invite', {'child_id':'child-1'})

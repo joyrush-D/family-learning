@@ -84,6 +84,10 @@
 !/test_today_ui.cjs
 
 !/family_agent.py
+!/family_goals.py
+!/goals.js
+!/test_goals.py
+!/test_goals_ui.cjs
 !/family_media.py
 !/test_media.py
 !/family_collect.py

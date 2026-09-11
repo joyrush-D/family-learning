@@ -28,6 +28,7 @@ import family_teachers
 import family_access
 import family_task_focus
 import family_guided
+import family_goals
 from types import SimpleNamespace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer as _ThreadingHTTPServer
 from socketserver import TCPServer
@@ -54,7 +55,7 @@ CARE_CHOICES = ('', '愿意试试', '暂不考虑', '改天回看')
 TASK_DISMISSED = ('不参加', '不适用')
 TASK_CLOSED = ('已完成', *TASK_DISMISSED, '已归档')
 TASK_STATUSES = ('待跟进', '进行中', '已完成', *TASK_DISMISSED)
-BUNDLE = ('app.js', 'reading.js', 'calendar.js', 'child-access.js', 'learning.js', 'study.js', 'settings.js', 'guided.js', 'teachers.js')
+BUNDLE = ('app.js', 'reading.js', 'calendar.js', 'child-access.js', 'learning.js', 'study.js', 'settings.js', 'guided.js', 'teachers.js', 'goals.js')
 STATIC = {'/': 'index.html', **{'/'+name: name for name in (
     *BUNDLE, 'startup.js', 'ui.css', 'learning.css', 'study.css', 'teachers.css', 'growth-world.js',
     'vendor/three.module.min.js', 'vendor/three.core.min.js')}}
@@ -358,6 +359,9 @@ def study_store():
 
 def guided_store():
     return family_guided.Store(SimpleNamespace(**globals()))
+
+def goal_store():
+    return family_goals.Store(SimpleNamespace(**globals()))
 
 def calendar_store():
     return family_calendar.Store(connect,profiles,DATA)
@@ -1312,6 +1316,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/teachers': return self.reply(200,teacher_store().snapshot())
             if path=='/api/settings': return self.reply(200,settings_store().snapshot())
             if path=='/api/agent': return self.reply(200,agent_store().snapshot())
+            if path=='/api/goals': return self.reply(200,goal_store().snapshot())
             if path=='/api/agent/message':
                 query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
                 if any(len(values)!=1 for values in query.values()):
@@ -1382,7 +1387,7 @@ class Handler(BaseHTTPRequestHandler):
                 try: attachment=save_upload(self.rfile,n,self.headers.get('X-File-Name',''))
                 except ValueError: return self.reply(400,{'error':'文件为空、文件名不正确或内容与支持的类型不符'})
                 return self.reply(200,dict(ok=True,attachment=attachment))
-            max_json=2*1024*1024 if path=='/api/agent/ingest' else 65536 if path=='/api/guided/material' else 20000
+            max_json=2*1024*1024 if path=='/api/agent/ingest' else 65536 if path in ('/api/guided/material','/api/goals/action') else 20000
             if not 0<n<=max_json: raise ValueError('请求过大或为空')
             if path=='/api/agent/ingest':
                 self.close_connection=True
@@ -1404,6 +1409,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200,family_child.parent_action(SimpleNamespace(**globals()),path.removeprefix('/api/child-access/'),obj))
             if path=='/api/agent/ingest': return self.reply(200,agent_store().ingest(obj))
             if path=='/api/agent/action': return self.reply(200,agent_store().act(obj))
+            if path=='/api/goals/action': return self.reply(200,goal_store().action(obj))
             if path=='/api/agent/message/attachment': return self.reply(200,agent_store().message_attachment(obj,upload_info))
             if path=='/api/teachers/profile': return self.reply(200,teacher_store().save_teacher(obj))
             if path=='/api/teachers/observation': return self.reply(200,teacher_store().save_observation(obj))

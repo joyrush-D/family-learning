@@ -563,7 +563,14 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
                         review_on=(dt.date.fromisoformat(as_of) + dt.timedelta(days=2)).isoformat(),
                         evidence=[dict(ref=evidence[0]['ref'], quote=evidence[0]['text'][:30])])
 
-        with patch.object(agent, '_plan_learning', side_effect=planner) as model:
+        contexts=[]
+        def goal_planner(messages,schema,name,timeout,**kwargs):
+            value=json.loads(messages[-1]['content']);contexts.append(value)
+            p=planner(value['evidence'],value['profile'],as_of=value['as_of'],data_path=kwargs['data_path'])
+            p.update(assessment='核对新反馈',hypotheses=[],resource='已有材料',mastery_check='独立说明一步',choice='核实')
+            return {'proposal':p}
+
+        with patch.object(agent, '_plan_learning', side_effect=planner) as model, patch.object(agent.family_llm,'_chat_json',side_effect=goal_planner) as goal_model:
             self.assertEqual(agent.run_once(self.app, self.now)['created'], 1)
             care = next(item for item in self.store.snapshot()['items'] if item['kind'] == 'care')
             with self.assertRaises(agent.AgentError):
@@ -580,12 +587,12 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
                            '孩子说：这次先想每份一样大。', '家长记录', self.now.isoformat(), first, '订正', '', '', ''))
                 feedback_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
             self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(days=1))['created'], 1)
-            self.assertEqual(model.call_count, 2)
-            self.assertTrue(any(evidence['ref'].startswith('plan:') for evidence in calls[1]))
+            self.assertEqual(goal_model.call_count, 1)
+            self.assertEqual(contexts[0]['current_plan']['title'],'家长确认的一小步')
             with self.app.connect() as c:
                 c.execute('UPDATE records SET note=? WHERE id=?', ('更正：这次实际先画图再说。', first))
             self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(days=1, minutes=1))['created'], 1)
-            self.assertEqual(model.call_count, 3)
+            self.assertEqual(goal_model.call_count, 2)
             self.app.save_task(dict(id=task_id, status='已完成', note='虚构反馈：完成一次约定尝试。'))
             due_day = self.now.date() + dt.timedelta(days=2)
             self.assertGreaterEqual(agent.run_once(self.app, dt.datetime.combine(due_day, dt.time(8), tzinfo=agent.TZ))['created'], 1)

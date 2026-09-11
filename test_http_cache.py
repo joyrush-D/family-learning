@@ -17,7 +17,7 @@ def check():
         data = root / 'private'
         data.mkdir()
         files = ('index.html', 'app.js', 'reading.js', 'calendar.js', 'child-access.js',
-                 'learning.js', 'study.js', 'settings.js', 'guided.js', 'startup.js', 'ui.css', 'learning.css', 'study.css', 'growth-world.js',
+                 'learning.js', 'study.js', 'settings.js', 'guided.js', 'teachers.js', 'goals.js', 'startup.js', 'ui.css', 'learning.css', 'study.css', 'growth-world.js',
                  'vendor/three.module.min.js', 'vendor/three.core.min.js',
                  'child.html', 'child.js', 'child.css')
         for name in files:
@@ -71,7 +71,7 @@ def check():
                     assert unchanged['content-security-policy'] == csp
 
                 status, _, body = request('/app.bundle.js', {'Accept-Encoding': 'gzip'})
-                names = ('app.js', 'reading.js', 'calendar.js', 'child-access.js', 'learning.js', 'study.js', 'settings.js', 'guided.js')
+                names = ('app.js', 'reading.js', 'calendar.js', 'child-access.js', 'learning.js', 'study.js', 'settings.js', 'guided.js', 'teachers.js', 'goals.js')
                 expected = b'(()=>{\n' + b'\n;\n'.join((root / name).read_bytes() for name in names) + b'\n})();\n'
                 assert status == 200 and gzip.decompress(body) == expected
 

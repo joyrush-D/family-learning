@@ -150,7 +150,8 @@ with tempfile.TemporaryDirectory() as tmp:
                  'study.js':b'const syntheticStudy=syntheticLearning+1;',
                  'settings.js':b'const syntheticSettings=1;',
                  'guided.js':b'const syntheticGuided=syntheticLearning+1;',
-                 'teachers.js':b'const syntheticTeachers=1;'}
+                 'teachers.js':b'const syntheticTeachers=1;',
+                 'goals.js':b'const syntheticGoals=1;'}
         for name,content in modules.items(): (app.ROOT/name).write_bytes(content)
         def get_raw(path,headers=None):
             client=http.client.HTTPConnection('127.0.0.1',server.server_port,timeout=5)
