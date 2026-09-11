@@ -144,5 +144,36 @@ class GoalTests(unittest.TestCase):
         self.assertIsNotNone(self.goal()['pending'])
         with self.app.connect() as c:self.assertEqual(c.execute("SELECT count(*) FROM agent_jobs WHERE id LIKE 'record:%'").fetchone()[0],0)
 
+    def test_unknown_causes_and_raw_feedback_drive_same_plan_without_promoting_guesses(self):
+        self.action('edit',id=self.ident,expected_version=self.goal()['version'],baseline='不知道卡在哪里。',
+                    hypotheses='未经验证的词义猜测',verification='计划尝试听音比较，但尚未执行')
+        first=self.evaluate()
+        facts='\n'.join(e['text'] for e in self.last_input['evidence'])
+        self.assertIn('不知道卡在哪里',facts)
+        self.assertNotIn('未经验证的词义猜测',facts)
+        self.assertNotIn('计划尝试听音比较',facts)
+        self.assertEqual(self.last_input['learning_goal']['hypotheses'],'未经验证的词义猜测')
+        self.assertEqual(goals.SCHEMA['properties']['proposal']['type'],'object')
+        task=self.approve(first)['task_id'];original=self.goal()['current_plan']
+        self.feedback('读过解释后答对了原题；孩子说困了，不想再写。',assistance='看过讲解或答案',practice_relation='同一道题或同一片段')
+        def adjusted(*args,**kwargs):
+            answer=self.reply(*args,**kwargs);p=answer['proposal']
+            p.update(choice='暂停',why_now='本次有疲倦反馈；看过解释后答对原题不代表独立掌握。',
+                     action='今天结束练习，保留原目标；休息后再安排一小步。')
+            return answer
+        self.model.side_effect=adjusted
+        pending=self.evaluate()
+        self.assertEqual(self.last_input['current_plan'],original)
+        self.assertIn('看过讲解或答案',self.last_input['evidence'][-1]['text'])
+        self.assertEqual(pending['pending']['choice'],'暂停')
+        self.assertEqual(pending['current_plan'],original)
+        self.assertEqual(self.approve(pending)['task_id'],task)
+        self.assertIn('今天结束练习',self.goal()['current_plan']['action'])
+        self.feedback('家长还不知道下次怎么安排。')
+        self.model.side_effect=lambda *a,**k:{'proposal':None}
+        self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'error')
+        self.assertIsNone(self.goal()['pending'])
+        self.assertIn('今天结束练习',self.goal()['current_plan']['action'])
+
 
 if __name__=='__main__':unittest.main()

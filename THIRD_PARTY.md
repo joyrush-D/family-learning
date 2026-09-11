@@ -1,6 +1,6 @@
 # 第三方复用与取舍
 
-核查日期：2026-09-08。以下分清已使用的代码、可接入的接口，以及交互参考；候选不代表已经接通。组件许可与本项目 MIT 许可分别保留。
+核查日期：2026-09-08；新增候选核查至2026-09-11。以下分清已使用的代码、可接入的接口，以及交互参考；候选不代表已经接通。组件许可与本项目 MIT 许可分别保留。
 
 ## 已直接使用
 
@@ -9,6 +9,20 @@
 | Three.js r185 | `growth-world.js` 调用随源码提供的 `vendor/three.module.min.js`、`vendor/three.core.min.js`，绘制成长场景；必要操作保留普通网页入口 | [上游 r185](https://github.com/mrdoob/three.js/tree/r185)，[MIT](https://github.com/mrdoob/three.js/blob/r185/LICENSE)；本地保留 `vendor/THREE-LICENSE.txt` |
 
 本应用的基础后台使用 Python 标准库与 SQLite；操作系统负责定时运行，已有模型、转写、打印和消息工具通过进程或接口接入。第三方应用、模型权重和个人登录态不随本源码包分发。
+
+## QQ读取与渐进式英语学习的新候选（2026-09-11）
+
+本节是文档核查与推荐路线，未安装、启用或实测这些工具，也未改变当前消息读取授权或停用状态。
+
+| 候选 | 本项目取舍 | 尚需核对 |
+| --- | --- | --- |
+| [Cua Driver](https://cua.ai/docs/how-to-guides/driver/use-sdk-in-process) | 若采用Computer Use，优先验证由Family Agent调用SDK读取官方QQ窗口；文字与图片识别结果复用既有通知入库 | 这是界面读取，不是QQ消息API。后台操作仅为[尽力保证](https://cua.ai/docs/concepts/the-no-foreground-contract)，权限属于运行宿主；文档部分类型化窗口示例面向下一次破坏性版本，实施须固定实际版本。先验证一个授权群、最近20条和一张图片，核对来源、重复、漏读及日常QQ共存；看见一页不算历史完整 |
+| [ego-lite](https://github.com/citrolabs/ego-lite) | 保留为学校网站或已有学习平台网页版的可选工具；借鉴独立工作区和结构化页面读取 | 公开接口控制其Chromium浏览器，不能直接读取桌面QQ。支持[自建Agent](https://lite.ego.app/document/en/docs/custom-agent-harness)。仓库MIT不代表另行下载的整个浏览器可以按MIT分发；没有网页需求时不引入 |
+| [Read Frog](https://github.com/mengxi-ream/read-frog) | 借鉴按需解释、朗读、阅读材料转学习卡及真实回忆反馈；作为可选学习工具，家庭目标和证据继续留在本应用 | 上游为GPLv3／商业双许可，不复制到本项目MIT文件。Notebase要求云端登录；不能当作已可本地部署的完整学习后台。具体渐进设计见PRD第2.5节 |
+
+Read Frog的[Notebase指南](https://www.readfrog.app/en/docs/notebase-beta)描述笔记、卡片模板及Again／Hard／Good／Easy复习评分；这类回忆评分不等于综合英语能力。[自定义AI动作](https://www.readfrog.app/en/docs/custom-actions)可对选中文字返回固定字段，适合复用小任务。上游说明存在版本差异，具体调度算法不据宣传推断。
+
+它还提供[远程MCP](https://www.readfrog.app/en/docs/mcp)，通过OAuth授权读取或管理笔记、卡片和学习活动；当前要求Ultra权益。MCP不会自行获取任意网页或解析PDF，也没有专用复习队列工具。后续家庭选择使用时先按孩子明确映射Notebase、只读接入并保留外部ID与时间，不把两个孩子记录混合；我们的MCP适配尚未实现。现有手动反馈和原件上传继续独立工作，不为候选创建账号、购买订阅或上传家庭资料。
 
 ## 可以直接接入，但本版尚未接入
 
