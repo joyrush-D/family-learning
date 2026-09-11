@@ -175,5 +175,24 @@ class GoalTests(unittest.TestCase):
         self.assertIsNone(self.goal()['pending'])
         self.assertIn('今天结束练习',self.goal()['current_plan']['action'])
 
+    def test_school_requirements_are_citable_but_never_proof_of_a_learning_deficit(self):
+        original='虚构课堂任务：任选一种说明顺序，介绍文具的两点用途；篇幅和截止未说明。'
+        self.action('edit',id=self.ident,expected_version=self.goal()['version'],school_target=original)
+        g=self.evaluate();requirement=next(e for e in self.last_input['evidence'] if e.get('kind')=='school_requirement')
+        self.assertEqual(requirement['text'],original)
+        self.assertEqual(g['pending']['evidence'][0]['ref'],requirement['ref'])
+        with self.store.agent._db() as c:ctx=self.store._context(c,self.store._get(c,self.ident))
+        for field in ('support','against'):
+            invalid=synthetic_plan(self.last_input);invalid['proposal']['hypotheses'][0][field]=[requirement['ref']]
+            with self.assertRaisesRegex(agent.AgentError,'学校要求不是'):self.store._proposal(invalid,ctx,self.now)
+        self.approve(g)
+        self.action('edit',id=self.ident,expected_version=self.goal()['version'],school_target='虚构老师更正：本次只介绍一个用途。')
+        updated=self.goal();self.assertTrue(updated['evidence_changed'])
+        self.assertEqual(updated['history'][-1]['previous']['school_target'],original)
+        self.assertIsNotNone(updated['current_plan'])
+        other=self.action('create',child_id='child-2',title='另一位孩子的目标',subject='语文')['id']
+        with self.store.agent._db() as c:other_context=self.store._context(c,self.store._get(c,other))
+        self.assertFalse(any(e.get('kind')=='school_requirement' for e in other_context['evidence']))
+
 
 if __name__=='__main__':unittest.main()
