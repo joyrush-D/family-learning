@@ -54,7 +54,8 @@ class AgentTests(unittest.TestCase):
                 why_now='这条记录保留了本次实际表达。', estimated_minutes=10, review_on=value['as_of'],
                 evidence=[{'ref': value['evidence'][0]['ref'], 'quote': quote}])}
         return {'proposals': [dict(title_quote='待核对原文', focus='school' if value['mode'] == 'school' else 'listen', due='',
-            evidence=[{'ref': value['evidence'][0]['ref'], 'quote': '待核对原文'}])]}
+            **(dict(learning_subject='',learning_goal_id='') if 'learning_goals' in value else {}),
+            evidence=[{'ref': value['evidence'][0]['ref'], **({} if 'learning_goals' in value else {'quote': '待核对原文'})}])]}
 
     def test_ingest_allowlist_cas_retry_immutability_and_failure_cursor(self):
         payload = self.payload()
@@ -354,6 +355,20 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
             items = agent._select('school', [{'ref': 'message:synthetic:1', 'text': excerpt}])
         self.assertEqual(items[0]['evidence'][0]['text'], excerpt)
 
+    def test_source_quotes_restore_no_break_spaces_without_accepting_rewrites(self):
+        original = '学校通知\n1.\u00a0选一本书\n2.\u202f任选一段，示例\u2007A'
+        quoted = original.translate(str.maketrans('\u00a0\u2007\u202f', '   '))
+        result = {'proposals': [dict(title_quote='选一本书', focus='school', due='',
+                  evidence=[dict(ref='message:synthetic:1', quote=quoted)])]}
+        with patch.object(agent.family_llm, '_chat_json', return_value=result):
+            items = agent._select('school', [dict(ref='message:synthetic:1', text=original)])
+        self.assertEqual(items[0]['evidence'][0]['text'], original)
+        for bad in [quoted.replace('任选', '必须'), quoted.replace('一本', '两本'),
+                    quoted.replace('\n2. ', ''), quoted.replace('，', ',')]:
+            with self.assertRaises(agent.AgentError): agent._source_quote({'source': original}, 'source', bad)
+        with self.assertRaises(agent.AgentError): agent._source_quote({'source': 'can not'}, 'source', 'cannot')
+        with self.assertRaises(agent.AgentError): agent._source_quote({'source': original}, 'foreign', quoted)
+
     def test_school_collector_placeholder_requires_explicit_task_details(self):
         for title in ('[图片]', '待核对：[文件]', '[语音]', '[视频]', '[file：内容未读取，仅保留消息说明]'):
             self.assertTrue(agent._needs_task_details(title))
@@ -477,8 +492,8 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
             self.assertEqual(request['as_of'], '2026-09-09')
             self.assertEqual([row['time'] for row in request['evidence']], [row[3] for row in cases])
             self.assertIn('按各条消息的发送日期理解', messages[0]['content'])
-            return {'proposals': [dict(title_quote=text, focus='school', due=due,
-                evidence=[dict(ref='message:' + self.source['id'] + ':' + ident, quote=text)])
+            return {'proposals': [dict(title_quote=text, focus='school', due=due, learning_subject='', learning_goal_id='',
+                evidence=[dict(ref='message:' + self.source['id'] + ':' + ident)])
                 for ident, text, due, stamp in cases]}
 
         with patch.object(agent.family_llm, '_chat_json', side_effect=school_model) as model:

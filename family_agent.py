@@ -4,6 +4,7 @@ The authenticated application owns its SQLite inbox, proposals and acknowledgeme
 Collectors only ingest configured sources; model selections never write growth facts.
 """
 import argparse
+import copy
 from contextlib import contextmanager
 import datetime as dt
 import hashlib
@@ -42,6 +43,17 @@ SCHEMA = {'type': 'object', 'additionalProperties': False, 'required': ['proposa
             'due': {'type': 'string'}, 'evidence': {'type': 'array', 'minItems': 1, 'maxItems': 3,
                 'items': {'type': 'object', 'additionalProperties': False, 'required': ['ref', 'quote'],
                     'properties': {'ref': {'type': 'string'}, 'quote': {'type': 'string'}}}}}}}}}
+SCHOOL_SCHEMA = copy.deepcopy(SCHEMA)
+_school_fields = SCHOOL_SCHEMA['properties']['proposals']['items']
+_school_fields['required'] += ['learning_subject', 'learning_goal_id']
+_school_fields['properties'].update(learning_subject={'type': 'string', 'maxLength': 40},
+                                   learning_goal_id={'type': 'string', 'maxLength': 80})
+_school_fields['properties']['evidence']['items'] = {'type': 'object', 'additionalProperties': False,
+    'required': ['ref'], 'properties': {'ref': {'type': 'string'}}}
+SCHOOL_PROMPT = '''\n学校消息额外返回learning_subject和learning_goal_id。只有已读文字中有具体教学、习作、练习或订正要求时，learning_subject填写规范科目（如语文、英语）；普通行政通知、报名、用品、闲聊、仅有成绩或未读图片均留空。不要因为尚无孩子作答而漏掉具体教学要求。
+学校消息的evidence每项只返回ref，不返回quote或复述原文；程序按消息编号提取原文，后续教学分析读取完整消息。
+learning_goal_id只从输入learning_goals选择同一科目且适合本要求的目标；已有合适目标优先沿用，科目相同但训练点不相关时也留空，系统建立或沿用学校学习目标。不生成目标编号，不改变暂停状态；明确匹配到暂停目标时只关联资料，不恢复分析或另建目标绕过暂停。非教学要求两个字段均为空。
+任务要求与老师的后续更正、撤销一起保留原消息作为规划依据；不把它们当成孩子表现。发布者称呼不等于教师身份已确认，不凭群名推断任课老师，不将家长转发说成老师直接发布。保持必须、任选、示例和条件要求，不能读出未提供的图片或链接内容。'''
 PLAN_SCHEMA = {'type': 'object', 'additionalProperties': False, 'required': ['proposal'], 'properties': {
     'proposal': {'anyOf': [
         {'type': 'null'},
@@ -100,6 +112,17 @@ def _text(obj, key, limit, required=False):
         raise AgentError('字段格式或长度不正确：' + key)
     if required and not value.strip(): raise AgentError('缺少字段：' + key)
     return value
+
+
+def _source_quote(refs, ref, quote):
+    ref = _text({'ref': ref}, 'ref', 400, True)
+    quote = _text({'quote': quote}, 'quote', 600, True)
+    if ref not in refs: raise AgentError('引用无法核对')
+    # Normalize only same-width no-break spaces, then store the exact original slice.
+    spaces = str.maketrans('\u00a0\u2007\u202f', '   ')
+    start = refs[ref].translate(spaces).find(quote.translate(spaces))
+    if start < 0: raise AgentError('引用无法核对')
+    return refs[ref][start:start + len(quote)]
 
 
 def _time(value, optional=False):
@@ -399,7 +422,7 @@ class Store:
             for row in items:
                 row['evidence'] = json.loads(row['evidence']); row['plan'] = json.loads(row['plan']); row.pop('job_id')
                 row['needs_task_details'] = row['kind'] == 'school' and _needs_task_details(row['title'])
-                row['goal_id'] = row['plan'].get('parent_goal_id') or (row['id'] if row['kind']=='care' and row['state']=='accepted' else '')
+                row['goal_id'] = row['plan'].get('parent_goal_id') or row['plan'].get('school_goal_id') or (row['id'] if row['kind']=='care' and row['state']=='accepted' else '')
             items = [r for r in items if not (r['state']=='accepted' and r['plan'].get('parent_goal_id'))]
             sources = []; linked_upload_ids = set()
             for source in config['sources']:
@@ -572,15 +595,19 @@ class Store:
                  '模型整理未成功；原始资料保留，自动尝试共3次，达到自动重试上限后需人工重试。', key, fingerprint, attempt))
 
 
-def _select(mode, evidence, profile=None, *, as_of=None, data_path=None):
+def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None):
     as_of = dt.date.fromisoformat(as_of).isoformat() if as_of is not None else _now().date().isoformat()
-    result = family_llm._chat_json([{'role': 'system', 'content': PROMPT},
-        {'role': 'user', 'content': _json({'mode': mode, 'as_of': as_of, 'child': profile or {}, 'evidence': evidence})}], SCHEMA, 'family_agent_selection', timeout=45, data_path=data_path)
+    routing = mode == 'school' and school_goals is not None
+    content = {'mode': mode, 'as_of': as_of, 'child': profile or {}, 'evidence': evidence}
+    if routing: content['learning_goals'] = school_goals
+    result = family_llm._chat_json([{'role': 'system', 'content': PROMPT + (SCHOOL_PROMPT if routing else '')},
+        {'role': 'user', 'content': _json(content)}], SCHOOL_SCHEMA if routing else SCHEMA, 'family_agent_selection', timeout=45, data_path=data_path)
     if not isinstance(result, dict) or set(result) != {'proposals'} or not isinstance(result['proposals'], list) or len(result['proposals']) > 5:
         raise AgentError('模型筛选结构不正确')
     refs = {entry['ref']: entry['text'] for entry in evidence}; output = []
     for proposal in result['proposals']:
-        if not isinstance(proposal, dict) or set(proposal) != {'title_quote', 'focus', 'due', 'evidence'}: raise AgentError('模型筛选字段不正确')
+        fields = {'title_quote', 'focus', 'due', 'evidence'} | ({'learning_subject', 'learning_goal_id'} if routing else set())
+        if not isinstance(proposal, dict) or set(proposal) != fields: raise AgentError('模型筛选字段不正确')
         title = _text(proposal, 'title_quote', 120, True); due = _text(proposal, 'due', 10)
         allowed = {'school'} if mode == 'school' else set(FOCUS) - {'school'}
         if not isinstance(proposal['focus'], str) or proposal['focus'] not in allowed: raise AgentError('模型建议类别不正确')
@@ -588,9 +615,11 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None):
         if not isinstance(quotes, list) or not 1 <= len(quotes) <= 3: raise AgentError('模型建议缺少依据')
         cited = []
         for quote in quotes:
-            if not isinstance(quote, dict) or set(quote) != {'ref', 'quote'}: raise AgentError('模型引用格式不正确')
-            ref = _text(quote, 'ref', 400, True); text = _text(quote, 'quote', 600, True)
-            if ref not in refs or text not in refs[ref]: raise AgentError('模型引用无法核对')
+            if not isinstance(quote, dict) or set(quote) != ({'ref'} if routing else {'ref', 'quote'}): raise AgentError('模型引用格式不正确')
+            ref = _text(quote, 'ref', 400, True)
+            if ref not in refs: raise AgentError('引用无法核对')
+            # School selection chooses message identities; copying source text is the application's job.
+            text = refs[ref][:600] if routing else _source_quote(refs, ref, _text(quote, 'quote', 600, True))
             cited.append({'ref': ref, 'text': text})
         if not any(title in refs[entry['ref']] for entry in cited):
             title = cited[0]['text'].strip()[:120]
@@ -602,6 +631,14 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None):
             dt.date.fromisoformat(due)
             if mode == 'school' and due < as_of: continue
         item = dict(title='待核对：' + title, body=FOCUS[proposal['focus']], due=due, evidence=cited)
+        if routing:
+            subject = _text(proposal, 'learning_subject', 40).strip(); goal_id = _text(proposal, 'learning_goal_id', 80).strip()
+            if goal_id and (not subject or not any(g['id'] == goal_id and g['subject'] == subject for g in school_goals)):
+                raise AgentError('学校要求的目标归属无法核对')
+            # Known content gaps keep their ordinary notice, without failing other messages in the batch.
+            if subject and any(e['ref'] in {q['ref'] for q in cited} and not e.get('content_incomplete')
+                               and not _needs_task_details(e['text']) for e in evidence):
+                item['plan'] = {'school_learning': {'subject': subject, 'goal_id': goal_id}}
         if item not in output: output.append(item)
     return output
 
@@ -638,7 +675,7 @@ def _plan_learning(evidence, profile=None, *, as_of=None, data_path=None):
         if not isinstance(quote, dict) or set(quote) != {'ref', 'quote'}:
             raise AgentError('学习提案引用格式不正确')
         ref = _text(quote, 'ref', 400, required=True); text = _text(quote, 'quote', 600, required=True)
-        if ref not in refs or text not in refs[ref]: raise AgentError('学习提案引用无法核对')
+        text = _source_quote(refs, ref, text)
         cited.append({'ref': ref, 'quote': text})
     return dict(title=proposal['title'].strip(), goal=proposal['goal'].strip(), action=proposal['action'].strip(),
                 why_now=proposal['why_now'].strip(), estimated_minutes=minutes, review_on=review_on,
@@ -770,6 +807,8 @@ def run_once(app, now=None):
                             c.execute("UPDATE agent_items SET state='superseded',updated=? WHERE job_id=? AND state='pending'", (now.isoformat(), row['job_id']))
             # ponytail: at most three model calls per tick; increase only if measured backlog needs it.
             budget = 3
+            from family_goals import Store as Goals
+            goals = Goals(app, store)
             profiles = {p['id']: {key: p.get(key, '') for key in ['id', 'name', 'age', 'grade', 'classroom']} for p in app.profiles()}
             with store._db() as c:
                 oldest = dict(c.execute('SELECT source_id,MIN(rowid) FROM agent_messages WHERE processed=0 GROUP BY source_id'))
@@ -788,19 +827,24 @@ def run_once(app, now=None):
                     batches[-1].append(json.loads(message['payload'])); size += len(message['payload'])
                 for values in batches:
                     key = 'messages:' + _hash([source['id'], [row['id'] for row in values]])[:40]
-                    fp = store._job(key, values, now, model=True)
+                    fp = store._job(key, {'school_learning_policy': 4, 'messages': values}, now, model=True)
                     if not fp: continue
                     evidence = [dict(ref='message:' + source['id'] + ':' + row['id'], text=row['text'],
                         source=source['name'], time=row['time'], sender=row['sender'], content_incomplete=row['unread']) for row in values]
                     budget -= 1
                     try:
-                        proposals = _select('school', evidence, profiles[source['child_id']], as_of=now.date().isoformat(), data_path=store.data)
+                        proposals = _select('school', evidence, profiles[source['child_id']], as_of=now.date().isoformat(), data_path=store.data,
+                                            school_goals=goals.school_candidates(source['child_id']))
                         anchors = {entry['ref']: entry for entry in evidence}
                         for item in proposals:
                             for quote in item['evidence']:
                                 anchor = anchors[quote['ref']]
                                 quote['text'] = source['name'] + ' · ' + anchor['time'] + '\n' + quote['text'] + ('\n（本条资料不完整，附件或被截断部分未读。）' if anchor['content_incomplete'] else '')
                         items = [{**item, 'child_id': source['child_id'], 'kind': 'school'} for item in proposals]
+                        for item in items:
+                            if item.get('plan', {}).get('school_learning'):
+                                item['plan']['school_messages'] = [dict(source_id=source['id'], message_id=row['id']) for row in values
+                                    if 'message:' + source['id'] + ':' + row['id'] in {e['ref'] for e in item['evidence']}]
                         store._save(key, fp, items, now, [(source['id'], row['id']) for row in values])
                         created += len(items); processed += len(values)
                     except (family_llm.LLMDraftError, AgentError, ValueError): store._fail(key, now, fingerprint=fp); failed += 1
@@ -811,8 +855,7 @@ def run_once(app, now=None):
                 # ponytail: scan local records for older corrections; index revisions only if measured scale requires it.
                 records = [dict(row) for row in c.execute('SELECT * FROM records ORDER BY id DESC')]
                 by_id = {row['id']: row for row in records}
-            from family_goals import Store as Goals
-            goals = Goals(app, store)
+            created += goals.route_school()
             progress = goals.run(now, budget)
             budget -= progress['used']; created += progress['created']; processed += progress['used']; failed += progress['failed']
             managed = goals.managed_ids()

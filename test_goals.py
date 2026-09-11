@@ -194,5 +194,116 @@ class GoalTests(unittest.TestCase):
         with self.store.agent._db() as c:other_context=self.store._context(c,self.store._get(c,other))
         self.assertFalse(any(e.get('kind')=='school_requirement' for e in other_context['evidence']))
 
+    def test_independent_message_to_goal_plan_feedback_and_teacher_correction(self):
+        source=dict(id='synthetic-school',platform='wechat',child_id='child-1',name='虚构班级',cursor='100',enabled=True)
+        (self.data/'agent.json').write_text(json.dumps(dict(enabled=True,sources=[source])))
+        original='英语口头介绍：\u00a0观察家里一件文具，说出两点用途。开头任选提问或直接介绍，用自己的真实观察。'
+        def ingest(ident,text):
+            self.store.agent.ingest(dict(source_id=source['id'],expected_cursor=str(ident-1),cursor=str(ident),
+                checked_at=self.now.isoformat(),last_message_time=self.now.isoformat(),error='',
+                messages=[dict(id=str(ident),time=self.now.isoformat(),kind='text',sender='虚构发布者',text=text,unread=False)]))
+        requests=[]
+        def model(messages,schema,name,timeout,**kwargs):
+            value=json.loads(messages[-1]['content']);requests.append((name,value))
+            if name=='family_agent_selection':
+                self.assertEqual([g['id'] for g in value['learning_goals']],[self.ident])
+                e=value['evidence'][0]
+                return dict(proposals=[dict(title_quote=e['text'][:30],focus='school',due='',learning_subject='英语',
+                    learning_goal_id=self.ident,evidence=[dict(ref=e['ref'])])])
+            result=synthetic_plan(value)
+            for e in result['proposal']['evidence']: e['quote']=e['quote'].replace('\u00a0',' ')
+            return result
+        self.model.side_effect=model;ingest(101,original)
+        agent.run_once(self.app,self.now)
+        g=self.goal();self.assertIsNotNone(g['pending']);self.assertEqual(g['school_target'],'')
+        self.assertEqual(g['school_messages'][0]['text'],original);self.assertEqual(g['school_messages'][0]['source'],'虚构班级')
+        self.assertEqual([n for n,v in requests],['family_agent_selection','family_learning_plan'])
+        self.assertTrue(any(e.get('source_kind')=='group_message' for e in requests[-1][1]['evidence']))
+        self.assertIn('\u00a0',g['pending']['evidence'][0]['quote'])
+        invalid=synthetic_plan(requests[-1][1]);invalid['proposal']['hypotheses'][0]['support']=[g['school_messages'][0]['ref']]
+        with self.store.agent._db() as c:ctx=self.store._context(c,self.store._get(c,self.ident))
+        with self.assertRaisesRegex(agent.AgentError,'学校要求不是'):self.store._proposal(invalid,ctx,self.now)
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT count(*) FROM records').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
+        self.assertEqual(agent.run_once(self.app,self.now)['created'],0);self.assertEqual(len(requests),2)
+        self.approve(g);task=self.goal()['task_id'];old_plan=self.goal()['current_plan']
+        self.feedback('孩子原话：它可以写字；第二点用途需要家长提示。')
+        self.now+=dt.timedelta(minutes=1);agent.run_once(self.app,self.now)
+        self.assertIn('第二点用途需要家长提示',agent._json(requests[-1][1]['evidence']))
+        self.assertEqual(self.goal()['current_plan'],old_plan)
+        self.now+=dt.timedelta(minutes=1);correction='更正英语口头介绍：本次只说一点用途，开头仍可任选。'
+        ingest(102,correction);agent.run_once(self.app,self.now)
+        g=self.goal();self.assertEqual([m['text'] for m in g['school_messages']],[original,correction])
+        self.assertEqual(g['task_id'],task);self.assertEqual(g['current_plan'],old_plan);self.assertIsNotNone(g['pending'])
+        self.store.agent.act(dict(action='dismiss',id=g['school_messages'][-1]['item_id']))
+        g=self.goal();self.assertTrue(g['pending_stale']);self.assertIsNone(g['pending'])
+        self.assertEqual([m['text'] for m in g['school_messages']],[original]);self.assertEqual(g['current_plan'],old_plan)
+        source['child_id']='child-2';(self.data/'agent.json').write_text(json.dumps(dict(enabled=True,sources=[source])))
+        self.assertEqual(self.goal()['school_messages'],[]);self.assertEqual(self.goal()['school_missing'],1)
+
+    def test_school_routing_creates_one_goal_and_respects_pause(self):
+        source=dict(id='synthetic-school-two',platform='wechat',child_id='child-2',name='另一虚构班级',cursor='0',enabled=True)
+        (self.data/'agent.json').write_text(json.dumps(dict(enabled=True,sources=[source])))
+        def model(messages,schema,name,timeout,**kwargs):
+            value=json.loads(messages[-1]['content'])
+            if name=='family_agent_selection':
+                self.assertFalse(any(g['id']==self.ident for g in value['learning_goals']))
+                return dict(proposals=[dict(title_quote=e['text'],focus='school',due='',learning_subject='语文',learning_goal_id='',
+                    evidence=[dict(ref=e['ref'])]) for e in value['evidence']])
+            return synthetic_plan(value)
+        self.model.side_effect=model
+        self.store.agent.ingest(dict(source_id=source['id'],expected_cursor='0',cursor='2',checked_at=self.now.isoformat(),last_message_time=self.now.isoformat(),error='',
+            messages=[dict(id=str(i),time=self.now.isoformat(),kind='text',sender='虚构老师',text=t,unread=False)
+                for i,t in [(1,'语文观察练习：介绍一种文具。'),(2,'语文补充：按使用顺序说。')]]))
+        agent.run_once(self.app,self.now);other=[g for g in self.store.snapshot()['goals'] if g['child_id']=='child-2']
+        self.assertEqual(len(other),1);g=other[0];self.assertEqual(len(g['school_messages']),2)
+        self.assertFalse(self.goal()['school_messages']);self.assertIsNotNone(g['pending'])
+        self.action('pause',id=g['id'],expected_version=g['version'])
+        self.now+=dt.timedelta(minutes=2);before=self.model.call_count
+        agent.run_once(self.app,self.now);self.assertEqual(self.model.call_count,before)
+        g=next(g for g in self.store.snapshot()['goals'] if g['child_id']=='child-2')
+        self.action('resume',id=g['id'],expected_version=g['version'])
+        for message in g['school_messages']:self.store.agent.act(dict(action='dismiss',id=message['item_id']))
+        agent.run_once(self.app,self.now);self.assertEqual(self.model.call_count,before)
+        g=next(g for g in self.store.snapshot()['goals'] if g['child_id']=='child-2')
+        self.assertEqual(g['school_messages'],[]);self.assertEqual(g['processing'],'current')
+
+    def test_school_selector_rejects_foreign_goal_and_unread_requirements(self):
+        evidence=[dict(ref='message:synthetic:1',text='[图片]',content_incomplete=True)]
+        result=dict(proposals=[dict(title_quote='[图片]',focus='school',due='',learning_subject='英语',learning_goal_id='foreign-goal',
+                                   evidence=[dict(ref=evidence[0]['ref'])])])
+        self.model.side_effect=lambda *a,**k:result
+        with self.assertRaisesRegex(agent.AgentError,'归属'):
+            agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+        result['proposals'][0]['learning_goal_id']=''
+        selected=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+        self.assertEqual(len(selected),1);self.assertNotIn('plan',selected[0])
+        evidence.append(dict(ref='message:synthetic:2',text='英语口述：介绍一种文具。',content_incomplete=False))
+        result['proposals'].append(dict(title_quote=evidence[1]['text'],focus='school',due='',learning_subject='英语',learning_goal_id='',
+                                       evidence=[dict(ref=evidence[1]['ref'])]))
+        selected=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+        self.assertEqual(len(selected),2);self.assertIn('plan',selected[1])
+        self.assertEqual(selected[1]['evidence'][0]['text'],evidence[1]['text'])
+        result['proposals'][1]['evidence'][0]['ref']='message:foreign:1'
+        with self.assertRaisesRegex(agent.AgentError,'引用'):
+            agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+
+    def test_bad_source_does_not_block_routing_and_no_match_is_not_forced(self):
+        source=dict(id='synthetic-routing',platform='wechat',child_id='child-1',name='虚构班级',cursor='0',enabled=True)
+        (self.data/'agent.json').write_text(json.dumps(dict(enabled=True,sources=[source])))
+        self.store.agent.ingest(dict(source_id=source['id'],expected_cursor='0',cursor='1',checked_at=self.now.isoformat(),last_message_time=self.now.isoformat(),error='',
+            messages=[dict(id='1',time=self.now.isoformat(),kind='text',sender='虚构发布者',text='英语口述：介绍文具。',unread=False)]))
+        item=dict(child_id='child-1',kind='school',title='英语口述',body='待核对',due='',evidence=[],
+                  plan=dict(school_learning=dict(subject='英语',goal_id=''),school_messages=[dict(source_id=source['id'],message_id='1')]))
+        bad={**item,'plan':{**item['plan'],'school_messages':[dict(source_id='removed-source',message_id='1')]}}
+        fp=self.store.agent._job('synthetic-routing-receipt',{},self.now)
+        self.store.agent._save('synthetic-routing-receipt',fp,[bad,item],self.now,[(source['id'],'1')])
+        self.assertEqual(self.store.route_school(),1)
+        self.assertEqual(self.goal()['school_messages'],[])
+        generated=next(g for g in self.store.snapshot()['goals'] if g['id']!=self.ident)
+        self.assertEqual(generated['subject'],'英语');self.assertEqual(len(generated['school_messages']),1)
+        self.assertEqual(self.store.route_school(),0)
+
 
 if __name__=='__main__':unittest.main()

@@ -8,6 +8,7 @@ import family_agent as agent
 import family_llm
 import family_study
 
+SCHOOL_BASELINE = '由学校学习要求启动，尚无孩子实际作答或掌握证据。'
 FIELDS = {'title': 120, 'subject': 80, 'school_target': 1600, 'curriculum': 500,
           'baseline': 2400, 'hypotheses': 1600, 'verification': 1600, 'resources': 1600}
 RECORD_FIELDS = ('id', 'child', 'day', 'category', 'subject', 'title', 'note', 'source', 'score', 'total',
@@ -34,11 +35,11 @@ evidence的quote必须是该ref的text中逐字连续的短片段；不能拼接
 家长不知道卡在哪里是正常的，不要求家长诊断原因、设计测验或先给出解决办法。家长负责提供原始情况、转述孩子回答和审核执行。
 learning_goal中的要求、猜测和待核对事项是规划输入，不是实际作答证据；之前的建议、假设和预期结果也不是已执行记录。不得据此声称某个原因已有支持。
 学校目标、教材、家长观察与孩子转述各有来源；教材未核实不引用页码，不以年级或一次分数认定基础缺失。
-kind为school_requirement的资料是家长提供的学校要求与范围，可引用为安排依据，不能放入原因假设的support/against。是否原文、转发者、老师、日期、截止和适用范围只按所提供信息说明，未知保留未知；一次习作要求不概括成老师长期偏好。区分必须、可选、示例与条件要求，不能把“三选一”“可以”变成全做，也不能漏掉明确要求。
+kind为school_requirement的资料是学校要求与范围，可引用为安排依据，不能放入原因假设的support/against。source_kind为group_message时是后台从已保存的群消息自动关联，按source、sender、time及原文说明出处；发布者称呼不是已确认的教师身份，不把转发者冒称老师。学校要求可能包含后续更正或撤销，按各原发送时间核对最新适用要求；冲突无法消解时明确待核对，不再布置已明确取消的任务。是否原文、转发者、老师、日期、截止和适用范围只按所提供信息说明，未知保留未知；一次习作要求不概括成老师长期偏好。区分必须、可选、示例与条件要求，不能把“三选一”“可以”变成全做，也不能漏掉明确要求。
 assessment说明已知与未知；hypotheses列至多四项可验证的候选原因，support/against仅填输入中的ref。
 每项test要能区分原因；没有支持证据时只能待验证，不作性格或临床诊断。不将家长转述称为孩子直接回答。
 没有具体学校任务时，action每次只安排一个最有辨别价值的小核对或学习步骤，不把所有假设的test同时布置。给出具体材料选择、可直接照读的问题、先不提示再按需帮助的顺序；不能只说“找出薄弱点”“观察后调整”。材料未知时可用本周现有作业中一道不确定的题，让孩子读题并说出当时怎么想；不要等待家长先判断困难类型。首次核对建议5至10分钟，提前结束也可；不要给同一孩子所有科目叠加每日练习。
-已有明确学校任务时，action先把老师要求转成孩子听得懂的3至6个小步骤，标出先做哪一步、家长能照读的提示；不因缺少能力评估而推迟任务或另加测验。步骤须覆盖任务起步到完成自查的完整路线；可以先只做第一小步并分次完成，但不能只给选材或核对片段而省略后续正文、结尾和自查。作文可先口述选材、选理由，再拟题、选一种开头、写主体与结尾，最后对照老师要求自查。沿用孩子真实经历与原话，不编造去过哪里、看到或吃过什么，不代写成稿；没有素材时先问孩子和家长，不强迫凑齐所有类别或感官。老师说“可以从”时只作为素材提示，自查也不能将它改成必须限定在这些类别。
+已有明确学校任务时，action先把老师要求转成孩子听得懂的3至6个小步骤（每步另起一行，用短句），标出先做哪一步、家长能照读的提示；不因缺少能力评估而推迟任务或另加测验。步骤须覆盖任务起步到完成自查的完整路线；可以先只做第一小步并分次完成，但不能只给选材或核对片段而省略后续正文、结尾和自查。作文可先口述选材、选理由，再拟题、选一种开头、写主体与结尾，最后对照老师要求自查。沿用孩子真实经历与原话，不编造去过哪里、看到或吃过什么，不代写成稿；没有素材时先问孩子和家长，不强迫凑齐所有类别或感官。老师说“可以从”时只作为素材提示，自查也不能将它改成必须限定在这些类别。
 resource优先使用输入中的现有材料和设备；未知时明确待核对，不编造App入口、题号或已下发任务。
 照读问题必须与选用材料一致：未提供新题原文时用“你怎么答、为什么”这类通用提问，不把原题的固定选项套到任意新题，也不让家长自己改题或编题。
 mastery_check说明如何观察独立解释或相近材料中的表现；把平台完成率、投入、孩子感受与掌握证据分开。
@@ -60,6 +61,63 @@ class Store:
     def __init__(self, app, agent_store=None):
         self.app = app
         self.agent = agent_store or agent.Store(app.connect, app.profiles, app.DATA)
+
+    def school_candidates(self, child_id):
+        with self.agent._db() as c:
+            return [dict(id=r['id'], title=ctx['fields']['title'], subject=ctx['fields']['subject'],
+                         paused=ctx['plan'].get('lifecycle') == 'paused')
+                    for r in self.roots(c) if r['child_id'] == child_id for ctx in [self._context(c, r)]]
+
+    def route_school(self):
+        """Create/link in one transaction; a parent dismissal cannot leave an orphan goal."""
+        created = 0
+        with self.agent._db() as c:
+            items = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state IN ('pending','accepted') ORDER BY created,id")]
+        for item in items:
+            plan = json.loads(item['plan']); routing = plan.get('school_learning')
+            if not routing or plan.get('school_goal_id'): continue
+            with self.agent._db() as c:
+                c.execute('BEGIN IMMEDIATE')
+                current = c.execute('SELECT * FROM agent_items WHERE id=?', (item['id'],)).fetchone()
+                if current is None or current['state'] not in ('pending','accepted') or current['plan'] != item['plan']: continue
+                try:
+                    for identity in plan['school_messages']:
+                        self.agent._message_context(c, dict(child_id=item['child_id'], **identity))
+                except agent.AgentError: continue
+                matches = [r for r in self.roots(c) if r['child_id'] == item['child_id']
+                           and self._context(c, r)['fields']['subject'] == routing['subject']]
+                target = routing['goal_id']
+                if target and not any(g['id'] == target for g in matches): continue
+                if not target:
+                    key = 'school-goal-' + agent._hash([item['child_id'], routing['subject']])[:40]
+                    obj = dict(action='create', request_key=key, child_id=item['child_id'],
+                               title=routing['subject'] + '：学校学习要求', subject=routing['subject'], baseline=SCHOOL_BASELINE)
+                    result = self._create(c, obj, key, agent._hash(obj), agent._now()); target = result['id']
+                    if not result.get('replayed'):
+                        created += 1; row = self._get(c, target); root_plan = json.loads(row['plan'])
+                        root_plan['school_origin'] = True; self._store(c, row, root_plan, agent._now())
+                row = self._get(c, target); ctx = self._context(c, row)
+                if row['child_id'] != item['child_id'] or ctx['fields']['subject'] != routing['subject']: continue
+                plan['school_goal_id'] = target
+                c.execute('UPDATE agent_items SET plan=? WHERE id=?', (agent._json(plan), item['id']))
+        return created
+
+    def _school_context(self, c, row):
+        messages = {}; missing = 0
+        # ponytail: reuse school items and immutable messages; index links if household volume warrants it.
+        for item in c.execute("SELECT * FROM agent_items WHERE kind='school' AND child_id=? AND state IN ('pending','accepted') ORDER BY created,id", (row['child_id'],)).fetchall():
+            plan = json.loads(item['plan'])
+            if plan.get('school_goal_id') != row['id']: continue
+            for identity in plan['school_messages']:
+                try: source, message = self.agent._message_context(c, dict(child_id=row['child_id'], **identity))
+                except agent.AgentError: missing += 1; continue
+                ref = 'school:message:' + source['id'] + ':' + message['id']
+                messages[ref] = dict(ref=ref, kind='school_requirement', source_kind='group_message',
+                    text=message['text'], source=source['name'], sender=message['sender'], time=message['time'],
+                    content_incomplete=message['unread'], item_id=item['id'], state=item['state'])
+        ordered = sorted(messages.values(), key=lambda m: (m['time'], m['ref']))
+        # ponytail: six recent originals per goal; retain all originals, add retrieval when this limit is measured.
+        return ordered[-6:], max(0, len(ordered)-6), missing
 
     def _get(self, c, ident):
         row = c.execute('SELECT * FROM agent_items WHERE id=?', (ident,)).fetchone()
@@ -90,16 +148,22 @@ class Store:
         fields['title'] = fields['title'] or plan.get('goal', row['title'])
         fields['subject'] = fields['subject'] or (records[0]['subject'] if records else '')
         missing = sorted(ids - {r['id'] for r in records})
+        school, school_omitted, school_missing = self._school_context(c, row)
         evidence_hash = agent._hash({'assessment_policy': 2, 'fields': fields, 'records': records, 'missing': missing,
+                                    **({'school_messages': [{k:v for k,v in m.items() if k != 'state'} for m in school],
+                                        'school_missing':school_missing} if school or school_missing else {}),
                                     'profile': {k: profile.get(k, '') for k in ('id', 'name', 'grade', 'classroom')}})
         chosen = records[-24:]
         if records and records[0] not in chosen: chosen = [records[0], *chosen[-23:]]
-        evidence = [{'ref': 'goal:' + row['id'], 'text': '家长提供的情况（尚需结合实际作答核对）：\n' + (fields['baseline'] or '尚未提供具体表现记录。')}]
+        evidence = [{'ref': 'goal:' + row['id'], 'text': ('系统建立的跟进背景（尚无作答证据）：\n' if plan.get('school_origin') and fields['baseline'] == SCHOOL_BASELINE else '家长提供的情况（尚需结合实际作答核对）：\n') + (fields['baseline'] or '尚未提供具体表现记录。')}]
         if fields['school_target']:
             evidence.append({'ref': 'school:' + row['id'], 'kind': 'school_requirement', 'text': fields['school_target']})
         evidence += [{'ref': 'record:' + str(r['id']), 'text': agent._json(r)} for r in chosen]
+        evidence += school
         return dict(plan=plan, meta=meta, fields=fields, profile=profile, records=records, ids=ids,
                     missing=missing, evidence_hash=evidence_hash, evidence=evidence,
+                    school_messages=school, school_omitted=school_omitted, school_missing=school_missing,
+                    awaiting_school=bool(plan.get('school_origin') and not school and not records and not fields['school_target'] and fields['baseline']==SCHOOL_BASELINE),
                     version=plan.get('goal_version', 1), input_records=chosen, omitted_count=max(0, len(records)-len(chosen)))
 
     def roots(self, c):
@@ -127,11 +191,12 @@ class Store:
                     evidence_changed=bool(plan.get('approved') and reviewed != ctx['evidence_hash']),
                     records=[{**r, 'attachments': json.loads(r['attachments'])} for r in ctx['input_records']],
                     omitted_count=ctx['omitted_count'], missing_count=len(ctx['missing']),
+                    school_messages=ctx['school_messages'], school_omitted=ctx['school_omitted'], school_missing=ctx['school_missing'],
                     history=plan.get('goal_history', [])[-10:], history_count=len(plan.get('goal_history', [])),
                     pending=({**proposal, 'id': pending['id']} if current else None),
                     pending_stale=bool(pending and not current), context_hash=ctx['evidence_hash'],
                     processing=('error' if job and job['error'] else 'ready' if current else
-                                'waiting' if plan.get('handled_hash') != ctx['evidence_hash'] else 'current'),
+                                'waiting' if not ctx['awaiting_school'] and plan.get('handled_hash') != ctx['evidence_hash'] else 'current'),
                     error=job['error'] if job else ''))
             return dict(goals=goals, children=self.app.profiles(c))
 
@@ -140,6 +205,22 @@ class Store:
 
     def _supersede(self, c, ident, now):
         c.execute("UPDATE agent_items SET state='superseded',updated=? WHERE job_id=? AND state='pending'", (now.isoformat(), 'goal:' + ident))
+
+    def _create(self, c, obj, key, digest, now):
+        ident = 'goal-' + agent._hash(key)[:32]
+        old = c.execute('SELECT plan FROM agent_items WHERE id=?', (ident,)).fetchone()
+        if old:
+            if json.loads(old['plan']).get('create_hash') != digest: raise agent.AgentError('同一提交内容不一致', 409)
+            return dict(ok=True, id=ident, replayed=True)
+        child_id = agent._text(obj, 'child_id', 80, True)
+        if not any(p['id'] == child_id for p in self.app.profiles(c)): raise agent.AgentError('请选择孩子')
+        fields = {k: agent._text(obj, k, limit, k in ('title','subject')).strip() for k, limit in FIELDS.items()}
+        ids = obj.get('record_ids', [])
+        self._validate_ids(c, child_id, ids)
+        plan = dict(learning={**fields, 'record_ids': ids}, goal_version=1, create_hash=digest, goal_history=[], lifecycle='active')
+        c.execute('INSERT INTO agent_items(id,job_id,child_id,kind,title,body,evidence,due,state,created,updated,plan) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                  (ident, 'manual-goal:'+ident, child_id, 'care', fields['title'], fields['baseline'], '[]', '', 'draft', now.isoformat(), now.isoformat(), agent._json(plan)))
+        return dict(ok=True, id=ident)
 
     def action(self, obj):
         allowed = {'action','id','child_id','request_key','expected_version','record_ids','record_id','day','note','source',
@@ -156,21 +237,7 @@ class Store:
         if action == 'feedback': return self.feedback(obj, key)
         with self.agent._db() as c:
             c.execute('BEGIN IMMEDIATE')
-            if action == 'create':
-                ident = 'goal-' + agent._hash(key)[:32]
-                old = c.execute('SELECT plan FROM agent_items WHERE id=?', (ident,)).fetchone()
-                if old:
-                    if json.loads(old['plan']).get('create_hash') != digest: raise agent.AgentError('同一提交内容不一致', 409)
-                    return dict(ok=True, id=ident, replayed=True)
-                child_id = agent._text(obj, 'child_id', 80, True)
-                if not any(p['id'] == child_id for p in self.app.profiles(c)): raise agent.AgentError('请选择孩子')
-                fields = {k: agent._text(obj, k, limit, k in ('title','subject')).strip() for k, limit in FIELDS.items()}
-                ids = obj.get('record_ids', [])
-                self._validate_ids(c, child_id, ids)
-                plan = dict(learning={**fields, 'record_ids': ids}, goal_version=1, create_hash=digest, goal_history=[], lifecycle='active')
-                c.execute('INSERT INTO agent_items(id,job_id,child_id,kind,title,body,evidence,due,state,created,updated,plan) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-                          (ident, 'manual-goal:'+ident, child_id, 'care', fields['title'], fields['baseline'], '[]', '', 'draft', now.isoformat(), now.isoformat(), agent._json(plan)))
-                return dict(ok=True, id=ident)
+            if action == 'create': return self._create(c, obj, key, digest, now)
             ident = agent._text(obj, 'id', 80, True); row = self._get(c, ident); ctx = self._context(c, row); plan = ctx['plan']
             receipts = plan.setdefault('operation_receipts', {})
             if key in receipts:
@@ -280,6 +347,7 @@ class Store:
         with self.agent._db() as c:
             row=self._get(c,ident);ctx=self._context(c,row)
             if ctx['plan'].get('lifecycle')=='paused': return dict(state='paused',created=0)
+            if not explicit and ctx['awaiting_school']: return dict(state='current',created=0)
             if not explicit and ctx['plan'].get('handled_hash')==ctx['evidence_hash']: return dict(state='current',created=0)
             value={'evidence_hash':ctx['evidence_hash'],'version':ctx['version']}
         key='goal:'+ident
@@ -292,7 +360,9 @@ class Store:
         content=dict(as_of=now.date().isoformat(),profile=ctx['profile'],evidence=ctx['evidence'],current_plan=previous,
                      learning_goal={k:v for k,v in ctx['fields'].items() if k!='baseline'},
                      previous_assessment=ctx['plan'].get('assessment'),previous_hypotheses=ctx['plan'].get('hypotheses',[]),previous_assessment_stale=ctx['plan'].get('approved_evidence_hash')!=ctx['evidence_hash'],
-                     omitted_records=ctx['omitted_count'],missing_records=len(ctx['missing']),attachments='原件仅已保存；本次仅使用核对后的文字，未读图像、录音或外部App。')
+                     omitted_records=ctx['omitted_count'],missing_records=len(ctx['missing']),
+                     omitted_school_messages=ctx['school_omitted'],missing_school_messages=ctx['school_missing'],
+                     attachments='原件仅已保存；本次仅使用核对后的文字，未读图像、录音或外部App。')
         try:
             result=family_llm._chat_json([{'role':'system','content':PROMPT},{'role':'user','content':agent._json(content)}],SCHEMA,'family_learning_plan',timeout=90,data_path=self.app.DATA)
             proposal=self._proposal(result,ctx,now)
@@ -325,7 +395,8 @@ class Store:
         refs={e['ref']:e['text'] for e in ctx['evidence']}
         if not isinstance(p['evidence'],list) or not 1<=len(p['evidence'])<=3:raise agent.AgentError('建议缺少证据')
         for e in p['evidence']:
-            if not isinstance(e,dict) or set(e)!={'ref','quote'} or e['ref'] not in refs or not isinstance(e['quote'],str) or not e['quote'].strip() or len(e['quote'])>600 or e['quote'] not in refs[e['ref']]:raise agent.AgentError('引用无法核对')
+            if not isinstance(e,dict) or set(e)!={'ref','quote'}:raise agent.AgentError('引用无法核对')
+            e['quote'] = agent._source_quote(refs, e['ref'], e['quote'])
         if not isinstance(p['hypotheses'],list) or len(p['hypotheses'])>4:raise agent.AgentError('原因假设格式不正确')
         for h in p['hypotheses']:
             if not isinstance(h,dict) or set(h)!={'reason','support','against','test','status'}:raise agent.AgentError('原因假设字段不正确')
