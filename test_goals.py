@@ -37,6 +37,30 @@ class GoalTests(unittest.TestCase):
     def feedback(self,note='家长转述孩子：会认单词，但说不出为什么。',**obj):
         return self.action('feedback',id=self.ident,day=self.now.date().isoformat(),source='家长转述孩子',note=note,**obj)
 
+    def test_word_directions_remain_separate_retry_and_feed_goal(self):
+        before=self.goal();self.approve(self.evaluate());approved=self.goal()['current_plan']
+        check=dict(word='pen',meaning='用于写字的笔',material='虚构课堂词表',phase='首次核对',
+                   results=dict(hear_meaning='答错',read_meaning='本次独立答对',hear_spelling='提示后答对'))
+        obj=dict(action='feedback',request_key='synthetic-word-feedback-0001',id=self.ident,
+                 day=self.now.date().isoformat(),source='家长观察',note='只听时选择了“书”；见到词形后选择“笔”。',word_check=check)
+        r=self.store.action(obj);self.assertTrue(self.store.action(obj)['replayed'])
+        g=self.goal();self.assertEqual(len(g['records']),len(before['records'])+1);self.assertEqual(g['current_plan'],approved)
+        note=g['records'][-1]['note'];self.assertIn('听英文 → 选中文：答错',note)
+        self.assertEqual(g['records'][-1]['assistance'],'');self.assertEqual(g['records'][-1]['practice_relation'],'')
+        self.assertIn('看英文 → 选中文：本次独立答对',note);self.assertIn('看中文 → 说英文：未测',note)
+        changed=json.loads(json.dumps(obj));changed['word_check']['results']['hear_meaning']='本次独立答对'
+        with self.assertRaises(Exception):self.store.action(changed)
+        self.assertEqual(self.goal()['records'][-1]['note'],note)
+        self.evaluate();self.assertEqual(note,json.loads(next(e['text'] for e in self.last_input['evidence'] if e['ref']=='record:'+str(r['record_id'])))['note'])
+        self.assertEqual(self.goal()['current_plan'],approved)
+        for bad in [dict(check,phase='刚练过或看过答案'),dict(check,phase='尚未核对'),dict(check,results={'unknown':'答错'}),
+                    dict(check,results={'hear_meaning':'已掌握'}),dict(check,results={}),dict(check,results={'hear_meaning':'未测'})]:
+            with self.assertRaises(agent.AgentError):goals.word_check_note(bad)
+        with self.assertRaisesRegex(agent.AgentError,'各方向'):
+            self.store.action(dict(obj,request_key='synthetic-word-bad-assistance',assistance='独立尝试'))
+        other=self.action('create',child_id='child-2',title='另一位孩子英语',subject='英语')['id']
+        self.assertFalse(next(x for x in self.store.snapshot()['goals'] if x['id']==other)['records'])
+
     def reply(self,messages,schema,name,timeout,**kwargs):
         self.assertEqual(name,'family_learning_plan');self.assertEqual(kwargs['data_path'],self.data)
         with sqlite3.connect(self.app.DB,timeout=.1) as c:c.execute('BEGIN IMMEDIATE');c.rollback()

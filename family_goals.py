@@ -9,6 +9,40 @@ import family_llm
 import family_study
 
 SCHOOL_BASELINE = '由学校学习要求启动，尚无孩子实际作答或掌握证据。'
+WORD_MODES = {
+    'hear_meaning': ('听英文 → 选中文', '不显示英文词形；只听后选意思'),
+    'hear_spelling': ('听英文 → 拼英文', '不显示英文词形；记录实际拼写'),
+    'hear_chinese_spelling': ('听中文 → 拼英文', '用明确词义或语境读题，不显示英文'),
+    'read_meaning': ('看英文 → 选中文', '不播放英文读音'),
+    'read_aloud': ('看英文 → 读英文', '先不示范读音，由家长核对'),
+    'meaning_speaking': ('看中文 → 说英文', '不显示英文或播放英文提示'),
+    'meaning_spelling': ('看中文 → 拼英文', '不显示英文，使用已确认的目标义'),
+}
+WORD_RESULTS = ('未测', '本次独立答对', '提示后答对', '答错', '未作答', '结果待核对')
+WORD_PHASES = ('尚未核对', '首次核对', '刚练过或看过答案', '间隔后复测')
+
+
+def word_check_note(value):
+    if not isinstance(value, dict) or set(value) != {'word','meaning','material','phase','results'}:
+        raise agent.AgentError('单词核对格式不正确')
+    fields = {k: agent._text(value,k,limit,k in ('word','meaning')).strip()
+              for k,limit in [('word',80),('meaning',200),('material',200),('phase',30)]}
+    if any('\n' in v or '\t' in v for v in fields.values()): raise agent.AgentError('单词、词义和材料请各用一行填写')
+    results = value['results']
+    if fields['phase'] not in WORD_PHASES or not isinstance(results,dict) or set(results)-WORD_MODES.keys():
+        raise agent.AgentError('单词核对方式不正确')
+    if not results or any(not isinstance(v,str) or v not in WORD_RESULTS for v in results.values()) or all(v=='未测' for v in results.values()):
+        raise agent.AgentError('请记录至少一项本次核对结果，其余可留未测')
+    if fields['phase'] in ('尚未核对','刚练过或看过答案') and '本次独立答对' in results.values():
+        raise agent.AgentError('请先核对测试条件；刚练过或看过答案的答对请记为提示后答对')
+    return '\n'.join(['【单词分项核对 · 家长填写，非系统自动判分】',
+        '单词：'+fields['word'], '本次目标义 / 语境：'+fields['meaning'],
+        '材料 / 词表：'+(fields['material'] or '未提供'), '核对条件：'+fields['phase'],
+        *[label+'：'+results.get(mode,'未测') for mode,(label,_) in WORD_MODES.items()],
+        '帮助条件按上面各方向分别记录，不合并成整词独立；具体提示程度未填时保持未知。',
+        '只记录本次对应词义和方向；未测为未知，不能由一次全对认定稳定掌握。'])
+
+
 FIELDS = {'title': 120, 'subject': 80, 'school_target': 1600, 'curriculum': 500,
           'baseline': 2400, 'hypotheses': 1600, 'verification': 1600, 'resources': 1600}
 RECORD_FIELDS = ('id', 'child', 'day', 'category', 'subject', 'title', 'note', 'source', 'score', 'total',
@@ -45,6 +79,10 @@ resource优先使用输入中的现有材料和设备；未知时明确待核对
 mastery_check说明如何观察独立解释或相近材料中的表现；把平台完成率、投入、孩子感受与掌握证据分开。
 有学校任务时，mastery_check分别写“本次要求自查”和“学习表现记录”：自查对应老师具体要求，保留任选、条件和示例；记录孩子原话、作品、实际帮助及卡住的步骤。完成作文或套用词语不代表独立掌握；教师没给字数、截止或评分标准时不擅自添加。
 mastery_check同时给出家长可直接记录的原始反馈：题目或材料、孩子原话/作答、实际帮助、用时、感受；不要求家长判定是否掌握或选择原因。只有提示后答对、看过答案或同题重复时不能据此提高难度；有独立迁移证据才考虑逐步推进。若疲倦、负担过大或方法被拒绝，先减量、换方式或暂停；没反馈不等于退步或不配合。
+英语单词按词条、目标义/语境、测试方向和提示条件分别核对，不用一个掌握率合并。方向包括听英文选中文、听英文拼写、听中文拼英文、看英文选中文、看英文读出、看中文说英文、看中文拼英文；未测、提示后答对、答错和独立答对分开。具体需要覆盖的方向按家长要求，分次补齐，不要求每天把全部词的所有方向重测。
+纯听题不同时展示英文词形；看英文认义时不播放发音；带文字或读音提示后答对不能作为无提示听辨、读出或提取证据。切换方向会泄露答案，应先做需要隐藏词形的核对，刚展示答案后的同词测试保留提示/练习条件，隔开后再核对独立表现。
+选择题答对可能受选项帮助，需保留所选答案/选项和孩子原话；不能代替自由说出或拼写。选项只用现有已确认材料；未提供选项时先将该选择方向留未测，核对无需选项的方向，不要求家长临时编题或凑干扰项，不把口述中文偷换成选择题已通过。中文多义/同义表达先确定本次学校词表中的词义或语境，合理不同词不得直接判错。语音识别转写不能独立判断发音正确。快慢只记录实际条件和用时，不擅定统一几秒及格线；先核对准确性、听懂及是否靠提示。
+单词分项核对是家长填写的本次结果，不是系统施测或自动判分。未测保持未知；单次全对仅代表本次对应词义、对应方向通过，不等于稳定掌握，还需适当间隔后的独立表现与语境使用。只练实际有证据的薄弱方向，不因听写错就断言听不懂、基础全面薄弱或态度有问题；先区分听辨、词义提取与拼写，保护休息，记录孩子能接受的方式。没有真实词表时先核对学校材料，不编造已学词、已完成测试或分项结果。
 选择暂停时estimated_minutes为null，action只说明本次停止和收到什么新反馈后再评估，不安排补做或限期完成。review_on只是回看日期，不是练习截止；没有明确安排记录，不能声称原定今天执行。
 对照反馈和当前方案选择核实、尝试、维持、调整或暂停。旧判断标为依据已变化时只能作为历史，不能当成当前事实。
 why_now明确说明哪条实际反馈使哪一步需要改变、保持或暂缓；尚无反馈时说明先核对什么，不编造进步。已有计划时action给出本轮完整可执行方案，保留仍适用的部分，并明确本轮调整。
@@ -198,7 +236,9 @@ class Store:
                     processing=('error' if job and job['error'] else 'ready' if current else
                                 'waiting' if not ctx['awaiting_school'] and plan.get('handled_hash') != ctx['evidence_hash'] else 'current'),
                     error=job['error'] if job else ''))
-            return dict(goals=goals, children=self.app.profiles(c))
+            return dict(goals=goals, children=self.app.profiles(c), word_check=dict(
+                modes=[dict(id=k,label=v[0],instruction=v[1]) for k,v in WORD_MODES.items()],
+                results=WORD_RESULTS, phases=WORD_PHASES))
 
     def _store(self, c, row, plan, now):
         c.execute('UPDATE agent_items SET plan=?,updated=? WHERE id=?', (agent._json(plan), now.isoformat(), row['id']))
@@ -224,9 +264,10 @@ class Store:
 
     def action(self, obj):
         allowed = {'action','id','child_id','request_key','expected_version','record_ids','record_id','day','note','source',
-                   'assistance','practice_relation','attachments','proposal_id','context_hash','plan', *FIELDS}
+                   'assistance','practice_relation','attachments','proposal_id','context_hash','plan','word_check', *FIELDS}
         if not isinstance(obj, dict) or set(obj)-allowed: raise agent.AgentError('学习目标请求格式不正确')
         action = agent._text(obj, 'action', 20, True)
+        if 'word_check' in obj and action!='feedback': raise agent.AgentError('单词核对只能保存到反馈')
         key = agent._text(obj, 'request_key', 128, True)
         if not re.fullmatch(r'[A-Za-z0-9_-]{16,128}', key): raise agent.AgentError('提交标识不正确')
         digest = agent._hash(obj); now = agent._now()
@@ -310,7 +351,12 @@ class Store:
         ident = agent._text(obj, 'id', 80, True)
         with self.agent._db() as c:
             row = self._get(c, ident); ctx = self._context(c, row)
-        note = agent._text(obj, 'note', 6000, True)
+        note = agent._text(obj, 'note', 6000, 'word_check' not in obj)
+        if 'word_check' in obj:
+            if not re.search('英语|英文|english',ctx['fields']['subject'],re.I): raise agent.AgentError('请将单词核对保存到英语目标')
+            if obj.get('assistance') or obj.get('practice_relation'): raise agent.AgentError('单词帮助条件按各方向记录，不能用整条反馈的帮助或同题标签覆盖')
+            note = word_check_note(obj['word_check']) + ('\n家长补充原始作答、帮助、用时和感受：\n'+note if note.strip() else '')
+            agent._text({'note':note},'note',6000,True)
         source = agent._text(obj, 'source', 30, True)
         if source not in ('家长观察','家长转述孩子','老师反馈','平台报告'): raise agent.AgentError('请选择反馈来源')
         day = agent._text(obj, 'day', 10, True)
