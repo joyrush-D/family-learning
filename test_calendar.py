@@ -23,6 +23,34 @@ class CalendarTests(unittest.TestCase):
         self.store=app.calendar_store()
         self.source=app.DATA/'日历来源.json'
 
+    def test_timetable_import_is_confirmed_dated_owned_and_retryable(self):
+        self.write_sources()
+        obj=dict(id='b'*32,version=0,child_id='child-1',title='虚构核对课表',effective_from='2026-09-14',effective_until='2026-09-21',note='虚构来源',attachments=[],week=[dict(weekday=1,sessions=[dict(slot='第一节',title='数学')])])
+        saved=self.store.save_timetable(obj,app.timetable_uploads)
+        self.assertEqual(saved['version'],1)
+        self.assertEqual(self.store.save_timetable(obj,app.timetable_uploads)['version'],1)
+        self.assertEqual(len(self.store.saved_timetables()),1)
+        before=self.store.snapshot('2026-09-08','2026-09-08')['timetables'];self.assertEqual(before[0]['sessions'][0]['title'],'虚构数学')
+        after=self.store.snapshot('2026-09-14','2026-09-14')['timetables'];self.assertEqual(len(after),1);self.assertEqual(after[0]['sessions'][0]['title'],'数学')
+        self.assertEqual(self.store.snapshot('2026-09-22','2026-09-22')['timetables'],[]) # No reappearance of expired legacy timetable.
+        for wrong in [dict(obj,title='变更'),dict(obj,version=1,child_id='child-2'),dict(obj,id='c'*32,effective_from=''),dict(obj,id='c'*32,attachments=['d'*32]),dict(obj,id='c'*32,week=[dict(weekday=1,sessions=[dict(slot='第一节',title='语文'),dict(slot='第一节',title='英语')])])]:
+            with self.assertRaises(ValueError): self.store.save_timetable(wrong,app.timetable_uploads)
+        self.assertEqual(len(self.store.saved_timetables()),1)
+        fresh=self.store.save_timetable(dict(obj,version=1,title='更正后的课表'),app.timetable_uploads)
+        self.assertEqual(fresh['version'],2)
+
+    def test_timetable_draft_does_not_save_or_invent_dates(self):
+        import family_llm
+        draft=dict(week=[dict(weekday=3,sessions=[dict(slot='下午第一节',title='英语')])],uncertainties=['适用学期待核对'])
+        with patch.object(family_llm,'configuration',return_value=('https://example.invalid','synthetic')),patch.object(family_llm,'_chat_json',return_value=draft) as request:
+            result=app.timetable_draft(dict(child_id='child-1',text='虚构课表：周三下午第一节英语',attachments=[]))
+        self.assertEqual(result['draft'],draft);self.assertEqual(self.store.saved_timetables(),[])
+        self.assertEqual(request.call_args.args[2],'family_timetable_draft')
+        self.assertNotIn('effective_from',result['draft'])
+        with patch.object(family_llm,'extract_draft') as model:
+            with self.assertRaises(ValueError):app.timetable_draft(dict(child_id='missing',text='虚构',attachments=[]))
+            model.assert_not_called()
+
     def tearDown(self):
         app.ROOT,app.DATA,app.DB=self.old; self.tmp.cleanup()
 

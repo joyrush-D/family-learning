@@ -784,6 +784,22 @@ def material_images(ids):
             images.append(dict(mime=row['mime'],data=p.read_bytes()))
     return images
 
+def timetable_uploads(c,child_id,ids):
+    if not isinstance(ids,list) or len(ids)>3 or any(not isinstance(i,str) or not re.fullmatch('[a-f0-9]{32}',i) for i in ids) or len(set(ids))!=len(ids): raise ValueError('课表最多关联三份已保存原件')
+    family_reading.validate_record_attachments(c,child_id,ids)
+    for ident in ids:
+        row=c.execute('SELECT size FROM uploads WHERE id=?',(ident,)).fetchone();p=DATA/'uploads'/ident
+        if row is None or p.parent.is_symlink() or p.is_symlink() or not p.is_file() or p.stat().st_size!=row['size']: raise ValueError('课表原件不可读取，请重新上传')
+
+def timetable_draft(obj):
+    if set(obj)-{'child_id','text','attachments'}: raise ValueError('课表识别字段不正确')
+    child=next((p for p in profiles() if p['id']==clean(obj,'child_id',100)),None)
+    if child is None: raise ValueError('请选择孩子')
+    ids=obj.get('attachments',[])
+    with connect() as c: timetable_uploads(c,child['id'],ids)
+    draft=family_llm.extract_draft(clean(obj,'text',6000),material_images(ids),target_child=child['name'],data_path=DATA,timetable=True)
+    return dict(draft=draft,child_id=child['id'])
+
 def draft_from_material(obj):
     child=next((p for p in profiles() if p['id']==clean(obj,'child_id',100)),None)
     if child is None: raise ValueError('请先选择孩子，再整理草稿')
@@ -1085,7 +1101,7 @@ def query_evidence(child,question,start=None,end=None,now=None):
     coverage+=(f"日历查询范围：{date_range['start']}至{date_range['end']}（北京时间日期）；已读同孩安排{len(calendar_events)}项、课表日期{len(calendar_tables)}项，本次纳入{included_calendar}项，未纳入{len(calendar_events)+len(calendar_tables)-included_calendar}项。"
                '没有录入不等于没有实际安排，也不能推定空闲；只有课次的课表不能推定上课钟点。')
     if calendar['source_error']: coverage+='日历缺口：'+calendar['source_error']+'。'
-    if not (DATA/'日历来源.json').exists(): coverage+='学校日历与课表来源尚未录入。'
+    if not (DATA/'日历来源.json').exists() and not calendar_tables: coverage+='学校日历与课表来源尚未录入。'
     elif not calendar_tables: coverage+='本范围没有载入该孩子的课表，可能未覆盖这些日期。'
     if reading_ready and (reading_total or redemption_total):
         coverage+=(f'阅读任务按最近更新时间选{len(reading_rows)}/{reading_total}项候选，本次纳入{amounts["reading"]}项；'
@@ -1338,6 +1354,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(200,body,'application/pdf',"attachment; filename*=UTF-8''"+quote(name,safe=''))
                 return self.reply(404,{'error':'不存在'})
             if path=='/api/child-access': return self.reply(200,family_child.parent_action(SimpleNamespace(**globals()),'state',{}))
+            if path=='/api/calendar/timetables': return self.reply(200,dict(timetables=calendar_store().saved_timetables()))
             if path=='/api/state': return self.reply(200,snapshot())
             if path=='/api/agent/collector': return self.reply(200,agent_store().collector_plan())
             if path=='/api/teachers': return self.reply(200,teacher_store().snapshot())
@@ -1468,6 +1485,11 @@ class Handler(BaseHTTPRequestHandler):
                 try: return self.reply(200,dict(profile=save_profile(obj)))
                 except ProfileError: raise
                 except ValueError as e: return self.reply(400,dict(error=str(e)))
+            if path=='/api/calendar/timetable/save':
+                return self.reply(200,dict(timetable=calendar_store().save_timetable(obj,timetable_uploads)))
+            if path=='/api/calendar/timetable/draft':
+                try: return self.reply(200,timetable_draft(obj))
+                except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
             if path=='/api/calendar/save':
                 return self.reply(200,dict(event=calendar_store().save(obj)))
             if path=='/api/calendar/draft':

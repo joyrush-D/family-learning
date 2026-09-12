@@ -45,6 +45,23 @@ def _clock(value):
     return value
 
 
+def timetable_week(week):
+    if not isinstance(week,list) or len(week)>7: raise CalendarError('每周课表最多七天')
+    days={}
+    for w in week:
+        if not isinstance(w,dict) or set(w)!={'weekday','sessions'} or type(w['weekday']) is not int or not 1<=w['weekday']<=7 or w['weekday'] in days:
+            raise CalendarError('课表星期须为不重复的1至7')
+        sessions=w['sessions']
+        if not isinstance(sessions,list) or len(sessions)>30: raise CalendarError('每日课程最多30项')
+        normalized=[]
+        for session in sessions:
+            if not isinstance(session,dict) or set(session)!={'slot','title'}: raise CalendarError('课程结构不正确')
+            normalized.append(dict(slot=_text(session,'slot',100,required=True),title=_text(session,'title',200,required=True)))
+        if len({s['slot'] for s in normalized})!=len(normalized): raise CalendarError('同一天的节次不能重复，请核对原课表')
+        days[w['weekday']]=normalized
+    return days
+
+
 class Store:
     def __init__(self,connect,profiles,data,initialize=True):
         self.connect=connect; self.profiles=profiles; self.data=Path(data)
@@ -170,19 +187,7 @@ class Store:
                     attachment=_text(item,'attachment',255)
                     if attachment and (attachment in {'.','..'} or '/' in attachment or '\\' in attachment or ':' in attachment or any(ord(c)<32 for c in attachment)):
                         raise CalendarError('课表原件须为本项目附件文件名')
-                    week=item.get('week')
-                    if not isinstance(week,list) or len(week)>7: raise CalendarError('每周课表结构不正确')
-                    days={}
-                    for w in week:
-                        if not isinstance(w,dict) or set(w)!={'weekday','sessions'} or type(w['weekday']) is not int or not 1<=w['weekday']<=7 or w['weekday'] in days:
-                            raise CalendarError('课表星期须为不重复的1至7')
-                        sessions=w['sessions']
-                        if not isinstance(sessions,list) or len(sessions)>30: raise CalendarError('每日课程最多30项')
-                        normalized=[]
-                        for session in sessions:
-                            if not isinstance(session,dict) or set(session)!={'slot','title'}: raise CalendarError('课程结构不正确')
-                            normalized.append(dict(slot=_text(session,'slot',100,required=True),title=_text(session,'title',200,required=True)))
-                        days[w['weekday']]=normalized
+                    days=timetable_week(item.get('week'))
                     timetables.append(dict(id=ident,child_id=child,effective_from=first,effective_until=last,
                         title=_text(item,'title',200,required=True),source=_text(item,'source',1000,required=True),
                         attachment=attachment,note=_text(item,'note',4000),week=days))
@@ -191,6 +196,38 @@ class Store:
         except (OSError,ValueError,UnicodeError,RecursionError) as e:
             detail=str(e) if isinstance(e,CalendarError) else '文件无法读取或JSON格式损坏'
             return [],[],'学校日历来源未载入：'+detail+'；手动安排仍可使用。'
+
+    def saved_timetables(self):
+        with self._db() as c:
+            if not c.execute("SELECT 1 FROM sqlite_master WHERE name='calendar_timetables'").fetchone(): return []
+            return [json.loads(r['payload'])|dict(id=r['id'],version=r['version'],updated=r['updated']) for r in c.execute('SELECT * FROM calendar_timetables ORDER BY updated DESC')]
+
+    def save_timetable(self,obj,validate_uploads):
+        fields={'child_id','title','effective_from','effective_until','note','week','attachments'}
+        if not isinstance(obj,dict) or set(obj)!=fields|{'id','version'}: raise CalendarError('课表字段不正确')
+        ident=obj['id'];version=obj['version']
+        if not isinstance(ident,str) or not re.fullmatch('[a-f0-9]{32}',ident) or type(version) is not int or not 0<=version<2147483647: raise CalendarError('课表编号或版本不正确')
+        child=_text(obj,'child_id',100,required=True)
+        if child not in self._children(): raise CalendarError('请选择孩子')
+        week=timetable_week(obj['week'])
+        if not any(week.values()): raise CalendarError('还没有明确课程，请先识别或填写课表')
+        first=_day(obj['effective_from']);last=_day(obj['effective_until'],optional=True)
+        if last and last<first: raise CalendarError('课表结束日期早于生效日期')
+        row=dict(child_id=child,title=_text(obj,'title',200,required=True),effective_from=first,effective_until=last,
+                 note=_text(obj,'note',4000),week=[dict(weekday=d,sessions=s) for d,s in sorted(week.items())],attachments=obj['attachments'])
+        digest=hashlib.sha256(_json(dict(id=ident,version=version,**row)).encode()).hexdigest()
+        with self._db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            validate_uploads(c,child,row['attachments'])
+            c.execute('CREATE TABLE IF NOT EXISTS calendar_timetables (id TEXT PRIMARY KEY, version INTEGER NOT NULL, payload TEXT NOT NULL, last_request_hash TEXT NOT NULL, updated TEXT NOT NULL)')
+            old=c.execute('SELECT * FROM calendar_timetables WHERE id=?',(ident,)).fetchone()
+            if old and old['last_request_hash']==digest: return json.loads(old['payload'])|dict(id=ident,version=old['version'])
+            if (old is None and version!=0) or (old and (old['version']!=version or json.loads(old['payload'])['child_id']!=child)):
+                raise CalendarError('课表已更新或孩子归属不同；输入已保留，请重新打开核对',409,'timetable_conflict')
+            now=dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat()
+            c.execute('INSERT INTO calendar_timetables VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET version=excluded.version,payload=excluded.payload,last_request_hash=excluded.last_request_hash,updated=excluded.updated',
+                      (ident,version+1,_json(row),digest,now))
+        return row|dict(id=ident,version=version+1)
 
     def snapshot(self,start,end):
         first=dt.date.fromisoformat(_day(start)); last=dt.date.fromisoformat(_day(end))
@@ -214,14 +251,24 @@ class Store:
             elif first<=origin<=last: events.append(row)
         sources,tables,error=self._sources(children)
         events.extend(row for row in sources if start<=row['day']<=end)
+        for row in self.saved_timetables():
+            if row['child_id'] not in children: raise CalendarError('已导入课表的孩子归属无法核对')
+            tables.append(dict(row,week=timetable_week(row['week']),source='家长核对导入',attachment=''))
         expanded=[]
         for offset in range((last-first).days+1):
             date=first+dt.timedelta(days=offset); day=date.isoformat()
+            # ponytail: one current school timetable per child; activity plans remain calendar events.
+            selected={}
             for table in tables:
-                if day<table['effective_from'] or (table['effective_until'] and day>table['effective_until']): continue
+                if day<table['effective_from']: continue
+                rank=(bool(table.get('version')),table['effective_from'],table.get('updated',''))
+                previous=selected.get(table['child_id'])
+                if previous is None or rank>previous[0]: selected[table['child_id']]=(rank,table)
+            for _,table in selected.values():
+                if table['effective_until'] and day>table['effective_until']: continue
                 sessions=table['week'].get(date.isoweekday(),[])
                 if sessions:
-                    expanded.append(dict((k,table[k]) for k in ('id','child_id','title','source','attachment','note'))|dict(day=day,sessions=sessions))
+                    expanded.append(dict((k,table[k]) for k in ('id','child_id','title','source','attachment','note'))|dict(day=day,sessions=sessions,import_id=table['id'] if 'version' in table else '',uploads=table.get('attachments',[])))
         events.sort(key=lambda r:(r['day'],r['start_time'],r['title'],r['id']))
         expanded.sort(key=lambda r:(r['day'],r['child_id'],r['id']))
         return dict(events=events,timetables=expanded,source_error=error)
