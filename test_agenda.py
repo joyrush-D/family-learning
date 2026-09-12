@@ -45,6 +45,9 @@ class AgendaTest(unittest.TestCase):
         for text in ['今天学习了第二课','2026-02-30前完成','今晚完成作业，明天提交回执']:
             self.assertEqual(agenda.deadline(text,'2026-09-12'),'')
         self.assertEqual(agenda.deadline('明天提交回执',''),'')
+        today=dt.datetime.now(app.dt.timezone(app.dt.timedelta(hours=8))).date().isoformat()
+        unknown=dict(agenda=dict(published_on='',due_on='2099-12-31',scheduled_on=''),closed=False)
+        self.assertTrue(agenda.visible_on(unknown,today))
         app.calendar_snapshot('2026-09-12','2026-09-13')
         with app.connect() as c:before='\n'.join(c.iterdump())
         app.calendar_snapshot('2026-09-12','2026-09-13')

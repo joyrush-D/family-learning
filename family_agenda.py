@@ -77,7 +77,8 @@ def visible_on(item,day):
         return day in {published,scheduled,due,item.get('closed_on','')} and (not item.get('closed_on') or day<=item['closed_on'])
     if day==published or day==scheduled:return True
     # An undated item remains in the inbox; a deadline carries forward until a parent closes it.
-    return bool(due and day>=(published or min(due,scheduled or due)))
+    # Unknown publication stays unknown, but a known deadline must not hide from today's work.
+    return bool(due and day>=(published or min(due,scheduled or due,dt.datetime.now(family_agent.TZ).date().isoformat())))
 
 
 def snapshot(app,start,end):
