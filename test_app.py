@@ -60,7 +60,8 @@ with tempfile.TemporaryDirectory() as tmp:
         except sqlite3.IntegrityError: pass
         else: raise AssertionError('duplicate ID overwrote manual task')
     finally: app.secrets.token_hex=original_token_hex
-    assert app.tasks()[0]=={**manual,'focus':app.family_task_focus.default()}
+    assert {k:v for k,v in app.tasks()[0].items() if k!='agenda'}=={**manual,'focus':app.family_task_focus.default()}
+    assert app.tasks()[0]['agenda']['published_on']==''
     app.save_task(dict(id=manual['id'],status='已完成',note='虚构确认'))
     app.save_task(dict(id=manual['id'],status='待跟进',note='虚构复查'))
     assert [h['status'] for h in app.snapshot()['tasks'][0]['history']]==['待跟进','已完成']

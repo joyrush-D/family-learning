@@ -11,13 +11,13 @@ class FocusError(ValueError):
 
 
 def default():
-    return dict(mode='next',next_action='',waiting_for='',review_on='',version=0,updated='')
+    return dict(mode='next',next_action='',waiting_for='',review_on='',version=0,updated='',category='',published_on='',due_on='',scheduled_on='')
 
 
 def read_all(connection):
     if not connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_focus'").fetchone():
         return {}
-    return {row['task_id']:{key:row[key] for key in default()} for row in connection.execute('SELECT * FROM task_focus')}
+    return {row['task_id']:{key:dict(row).get(key,value) for key,value in default().items()} for row in connection.execute('SELECT * FROM task_focus')}
 
 
 def _text(obj, key, limit):
@@ -46,7 +46,15 @@ def save(app, obj):
         raise FocusError('请填写在等谁或等什么')
     if focus['mode']!='waiting': focus['waiting_for']=''
     if focus['mode']=='next': focus['review_on']=''
-    digest=hashlib.sha256(json.dumps(dict(id=ident,version=version,**focus),ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+    organization={k:_text(obj,k,20 if k=='category' else 10) for k in ('category','published_on','due_on','scheduled_on') if k in obj}
+    if organization.get('category','') not in ('','unknown','homework','todo'): raise FocusError('请选择课内作业、待办事项或待分类')
+    for key,value in organization.items():
+        if key=='category' or not value: continue
+        try:
+            if not re.fullmatch(r'\d{4}-\d{2}-\d{2}',value): raise ValueError()
+            dt.date.fromisoformat(value)
+        except ValueError: raise FocusError('请填写有效日期') from None
+    digest=hashlib.sha256(json.dumps(dict(id=ident,version=version,**focus,**organization),ensure_ascii=False,sort_keys=True).encode()).hexdigest()
     c=app.connect()
     try:
         with c:
@@ -62,6 +70,9 @@ def save(app, obj):
             c.execute('''CREATE TABLE IF NOT EXISTS task_focus_history (
                 request_key TEXT PRIMARY KEY, task_id TEXT NOT NULL, request_hash TEXT NOT NULL,
                 previous TEXT NOT NULL, current TEXT NOT NULL, updated TEXT NOT NULL)''')
+            columns={r['name'] for r in c.execute('PRAGMA table_info(task_focus)')}
+            for key in ('category','published_on','due_on','scheduled_on'):
+                if key not in columns: c.execute('ALTER TABLE task_focus ADD COLUMN '+key+" TEXT NOT NULL DEFAULT ''")
             receipt=c.execute('SELECT * FROM task_focus_history WHERE request_key=?',(request_key,)).fetchone()
             if receipt:
                 if receipt['task_id']!=ident or receipt['request_hash']!=digest:
@@ -72,14 +83,16 @@ def save(app, obj):
             previous=task['focus']
             if previous['version']!=version:
                 raise FocusError('事项安排已在别处更新，请读取最新安排后核对；本次输入尚未保存',409,'task_focus_conflict')
+            focus.update({k:organization.get(k,previous.get(k,'')) for k in ('category','published_on','due_on','scheduled_on')})
             updated=dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat()
             focus.update(version=version+1,updated=updated)
-            c.execute('''INSERT INTO task_focus VALUES (?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET
+            c.execute('''INSERT INTO task_focus (task_id,mode,next_action,waiting_for,review_on,version,updated,category,published_on,due_on,scheduled_on) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET
                 mode=excluded.mode,next_action=excluded.next_action,waiting_for=excluded.waiting_for,
-                review_on=excluded.review_on,version=excluded.version,updated=excluded.updated''',
+                review_on=excluded.review_on,version=excluded.version,updated=excluded.updated,
+                category=excluded.category,published_on=excluded.published_on,due_on=excluded.due_on,scheduled_on=excluded.scheduled_on''',
                 (ident,*(focus[key] for key in default())))
             c.execute('INSERT INTO task_focus_history VALUES (?,?,?,?,?,?)',
                 (request_key,ident,digest,json.dumps(previous,ensure_ascii=False),json.dumps(focus,ensure_ascii=False),updated))
-            task['focus']=focus
+            task=next(t for t in app.tasks(c) if t['id']==ident)
             return dict(task=task,focus=focus,request_replayed=False)
     finally: c.close()

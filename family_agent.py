@@ -179,8 +179,9 @@ def _minutes(value):
 
 
 class Store:
-    def __init__(self, connect, profiles, data_path):
+    def __init__(self, connect, profiles, data_path, initialize=True):
         self.connect = connect; self.profiles = profiles; self.data = Path(data_path)
+        if not initialize: return
         with self._db() as c:
             c.executescript('''
                 CREATE TABLE IF NOT EXISTS agent_sources (

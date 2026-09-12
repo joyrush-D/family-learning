@@ -84,3 +84,8 @@ nav button .nav-symbol{display:inline-block;margin-right:10px}
  .task-reference{margin:4px 14px 0 0}.today-child .task-reference summary{font-size:12px}
  nav button>span:last-child{font-size:11px}nav{padding-bottom:calc(8px + env(safe-area-inset-bottom))}
 }
+
+/* Calendar chooses a day; the same records appear below at every screen size. */
+.calendar-day-picker{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}.calendar-day-picker button{min-width:0;min-height:58px}.calendar-day-picker strong{display:block;font-size:20px}.agenda-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:start}.agenda-group{min-width:0}.agenda-group h2{font-size:18px}.agenda-group .task{padding:16px 0}.agenda-dates{display:flex;flex-wrap:wrap;gap:8px;font-size:12px;color:#b7c8dc}.agenda-school{border-bottom:1px solid #ffffff15;padding:14px 0}.agenda-school .agent-item{border:0;padding:0}.agenda-day-title{font-size:19px;margin:20px 0}.calendar-controls{flex-wrap:wrap}.calendar-controls label{margin:0}body[data-page="calendar"] main{max-width:1600px}.calendar-heading .toolbar{flex-wrap:wrap}@media(max-width:850px){nav{grid-template-columns:repeat(4,minmax(0,1fr))}.agenda-groups{grid-template-columns:1fr}.calendar-day-picker{gap:3px}.calendar-day-picker button{padding:8px 3px}.calendar-heading .toolbar{gap:6px}.calendar-heading .toolbar button{font-size:12px}.agenda-group{padding:16px}}
+
+.calendar-day-picker button[aria-pressed="true"]{background:#adedd6;color:#102f29;box-shadow:inset 0 0 0 2px #d1ffec}.agenda-task>.chip{margin-top:14px}.agenda-task .task{padding-top:8px}.agenda-group .task-meta>.due{display:none}

@@ -64,13 +64,18 @@ class CalendarTests(unittest.TestCase):
              dict(start_time='',end_time='10:00'),dict(start_time='10:00',end_time='10:00'),
              dict(start_time='23:00',end_time='01:00'),dict(start_time='9:00'),dict(child_ids=[]),
              dict(child_ids=['missing-child']),dict(child_ids=['child-1','child-1']),dict(child_ids=['child-1',{}]),
-             dict(title=' '*4),dict(note='a'*4001),dict(category='automatic'),dict(status='completed'),
+             dict(title=' '*4),dict(note='a'*4001),dict(category='automatic'),dict(status='invalid'),
              dict(repeat='daily'),dict(repeat='none',until='2026-10-01'),dict(repeat='weekly',until='2026-09-11'),
              dict(version=True),dict(id='source:school-day'),dict(source='pretend-school-source')]
         for extra in bad:
             with self.subTest(extra=extra),self.assertRaises(family_calendar.CalendarError): self.store.save(self.request(**extra))
         self.assertEqual(self.dump(),before)
         self.store.save(self.request(day='2028-02-29',start_time='',end_time=''))
+
+    def test_single_plan_completion_and_repeat_guard(self):
+        result=self.store.save(self.request(status='completed'))
+        self.assertEqual(result['status'],'completed')
+        with self.assertRaises(family_calendar.CalendarError):self.store.save(self.request(version=1,status='completed',repeat='weekly'))
 
     def test_query_window_is_inclusive_and_bounded(self):
         self.store.save(self.request(day='2026-09-30'))

@@ -22,8 +22,8 @@ test('shared activities appear once per selected child; read-only schools link t
  const h=harness(),s=h.state(),items=[event(),event({id:'b'.repeat(32),child_ids:['child-b']})];s.childID='child-a';assert.equal(h.ctx.calendarItems(items,'2026-09-12').length,1);s.childID='child-b';assert.equal(h.ctx.calendarItems(items,'2026-09-12').length,2);s.childID='';assert.equal(h.ctx.calendarItems(items,'2026-09-12').length,2);
  h.ctx.data.tasks=[{id:'X1',child:'小溪',update:{status:'不适用'}}];const html=h.ctx.calendarEventHTML(event({id:'source:x',task_id:'X1',editable:false,status:'confirmed'}));assert.match(html,/核对原事项/);assert.match(html,/小溪：无需处理/);assert.match(html,/calendar-confirmed/);assert.doesNotMatch(html,/小岚：无需处理|学校已取消/);assert.doesNotMatch(html,/data-calendar-edit/);h.ctx.data.tasks[0].update.status='不参加';assert.match(h.ctx.calendarEventHTML(event({task_id:'X1'})),/小溪：不参加/);h.ctx.data.tasks[0].child='未知归属';assert.doesNotMatch(h.ctx.calendarEventHTML(event({task_id:'X1'})),/家庭决定|：不参加/);
 });
-test('source/title fields are escaped, missing weekday tables stay explicit and weekend has no missing warning',()=>{
- const h=harness();h.state().result={events:[],timetables:[],source_error:''};assert.match(h.ctx.calendarDayHTML('2026-09-08',1),/尚未提供当天课表/);assert.doesNotMatch(h.ctx.calendarDayHTML('2026-09-12',5),/calendar-missing/);
+test('source/title fields are escaped and the selected day keeps missing timetable explicit',()=>{
+ const h=harness();h.state().result={events:[],timetables:[],source_error:''};assert.match(h.ctx.calendarAgendaHTML(),/当天课表尚未提供/);assert.match(h.ctx.calendarAgendaHTML(),/2026-09-08/);
  const html=h.ctx.calendarEventHTML(event({title:'<img src=x onerror="bad()">',note:'<script>bad()</script>',source:'"<&',status:'cancelled'}));assert.doesNotMatch(html,/<img|<script>/);assert.match(html,/已取消/);assert.match(html,/&lt;img/);assert.match(html,/时间未填写/);
 });
 test('preparation stays outside collapsed metadata, even without a source',()=>{
@@ -111,4 +111,10 @@ if(process.argv.includes('--browser'))test('phone subscription dialog works at m
  }finally{
   await browser?.close();if(proc.exitCode===null&&proc.signalCode===null){const ended=once(proc,'exit');proc.kill('SIGINT');await Promise.race([ended,delay(2500)]);if(proc.exitCode===null&&proc.signalCode===null){proc.kill('SIGKILL');await ended}}
  }
+});
+
+test('task inbox does not replace attachment inbox in the shared bundle',()=>{
+ const core=readFileSync(__dirname+'/app.js','utf8'),calendar=readFileSync(__dirname+'/calendar.js','utf8');
+ assert.match(core,/html=taskInboxHTML\(\)/);assert.match(core,/function inboxHTML\(\)/);
+ assert.match(calendar,/function taskInboxHTML\(\)/);assert.doesNotMatch(calendar,/function inboxHTML\(\)/);
 });

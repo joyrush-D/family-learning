@@ -88,7 +88,9 @@ class Store:
                  status=_text(obj,'status',20,'tentative'),repeat='none' if source else _text(obj,'repeat',20,'none'),
                  until='' if source else _day(obj.get('until',''),optional=True))
         if row['category'] not in CATEGORIES: raise CalendarError('安排类别不正确')
-        if row['status'] not in {'tentative','confirmed','cancelled'}: raise CalendarError('安排状态不正确')
+        if row['status'] not in {'tentative','confirmed','cancelled','completed'}: raise CalendarError('安排状态不正确')
+        if row['status']=='completed' and (source or row['repeat']!='none'):
+            raise CalendarError('仅单次手动计划可以确认完成；重复安排请逐次记录反馈')
         if row['repeat'] not in {'none','weekly'}: raise CalendarError('重复方式不正确')
         if row['end_time'] and (not row['start_time'] or row['end_time']<=row['start_time']):
             raise CalendarError('结束时间须晚于同日开始时间')
@@ -332,11 +334,12 @@ def render_ics(events,profiles,as_of,uid_namespace,task_states=None):
         title=(names+' · ' if names else '')+row['title']
         if status=='tentative': title='[暂定] '+title
         if status=='cancelled': title='[已取消] '+title
+        if status=='completed': title='[已完成] '+title
         if not row['start_time']: title='[时间待定] '+title
         try: uid=hashlib.sha256((namespace+'\0'+ident).encode('utf-8')).hexdigest()+'@family-calendar'
         except UnicodeError: raise CalendarError('日历编号无法编码') from None
         lines+=['BEGIN:VEVENT','UID:'+uid,'DTSTAMP:'+timestamp,'SUMMARY:'+_ics_text(title),
-                'STATUS:'+status.upper(),'TRANSP:'+('OPAQUE' if status=='confirmed' and row['start_time'] else 'TRANSPARENT')]
+                'STATUS:'+('CONFIRMED' if status=='completed' else status.upper()),'TRANSP:'+('OPAQUE' if status=='confirmed' and row['start_time'] else 'TRANSPARENT')]
         if row['start_time']:
             lines.append('DTSTART:'+_ics_utc(origin,row['start_time']))
             if row['end_time']: lines.append('DTEND:'+_ics_utc(origin,row['end_time']))

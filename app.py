@@ -27,6 +27,7 @@ import family_settings
 import family_teachers
 import family_access
 import family_task_focus
+import family_agenda
 import family_guided
 import family_goals
 from types import SimpleNamespace
@@ -233,7 +234,7 @@ def tasks(connection=None):
     for task in manual+result:
         task['child']=names.get(task['child'],task['child'])
         task['focus']=focuses.get(task['id'],family_task_focus.default())
-    return manual+result
+    return family_agenda.enrich(SimpleNamespace(**globals()),connection,manual+result)
 
 def care_notes(connection=None):
     p=DATA/'陪伴建议.json'
@@ -333,7 +334,7 @@ def snapshot():
     attachments = [p.name for p in (DATA/'attachments').glob('*') if p.is_file() and not p.is_symlink()]
     today=dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).date().isoformat()
     try:
-        today_calendar=calendar_store().snapshot(today,today)
+        today_calendar=calendar_snapshot(today,today)
     except (OSError,sqlite3.Error,ValueError,TypeError,RecursionError):
         today_calendar=dict(events=[],timetables=[],source_error='今日日历暂时无法读取，请到日历重试；不能据此判断今天没有安排。')
     try:
@@ -365,6 +366,11 @@ def goal_store():
 
 def calendar_store():
     return family_calendar.Store(connect,profiles,DATA)
+
+def calendar_snapshot(start,end):
+    result=calendar_store().snapshot(start,end)
+    result.update(family_agenda.snapshot(SimpleNamespace(**globals()),start,end))
+    return result
 
 def calendar_subscription():
     events=calendar_store().subscription_events()
@@ -1331,7 +1337,7 @@ class Handler(BaseHTTPRequestHandler):
                 query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
                 if set(query)!={'start','end'} or any(len(v)!=1 for v in query.values()):
                     raise family_calendar.CalendarError('请提供唯一的开始及结束日期')
-                return self.reply(200,calendar_store().snapshot(query['start'][0],query['end'][0]))
+                return self.reply(200,calendar_snapshot(query['start'][0],query['end'][0]))
             if path=='/calendar.ics':
                 if urlparse(self.path).query: raise family_calendar.CalendarError('家庭日历订阅不接受筛选参数')
                 return self.reply(200,calendar_subscription(),'text/calendar; charset=utf-8','inline; filename="family-calendar.ics"')

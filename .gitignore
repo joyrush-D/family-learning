@@ -51,6 +51,8 @@
 !/test_reading_ui.js
 
 !/family_calendar.py
+!/family_agenda.py
+!/test_agenda.py
 !/test_calendar.py
 !/test_calendar_ics.py
 !/calendar.js
