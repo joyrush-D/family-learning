@@ -234,6 +234,13 @@ def tasks(connection=None):
     for task in manual+result:
         task['child']=names.get(task['child'],task['child'])
         task['focus']=focuses.get(task['id'],family_task_focus.default())
+        if task['source'].startswith('Agent建议:'):
+            origin=task['source'].splitlines()[0].removeprefix('Agent建议:')
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE name='agent_items'").fetchone():
+                proposal=connection.execute('SELECT plan FROM agent_items WHERE id=?',(origin,)).fetchone()
+                if proposal: task['advice']=json.loads(proposal['plan']).get('school_task',{}).get('advice','')
+        if task['focus']['title']: task['original_title']=task['title'];task['title']=task['focus']['title']
+        if task['focus']['goal']: task['original_action']=task['action'];task['action']=task['focus']['goal']
     return family_agenda.enrich(SimpleNamespace(**globals()),connection,manual+result)
 
 def care_notes(connection=None):
@@ -709,7 +716,11 @@ def new_task(obj):
     child=clean(obj,'child',100)
     title=clean(obj,'title',200)
     if not title: raise ValueError('请填写待办标题')
-    task=dict(id='MANUAL-'+secrets.token_hex(10),child=child,title=title,
+    key=clean(obj,'request_key',64)
+    if key and not re.fullmatch(r'[A-Za-z0-9_-]{16,64}',key): raise ValueError('请保留本次提交标识后重试')
+    box=clean(obj,'box',10) or 'inbox'; category=clean(obj,'category',20);advice=clean(obj,'advice',2000)
+    if box not in ('inbox','wish'): raise ValueError('请选择收集箱或心愿')
+    task=dict(id='MANUAL-'+(hashlib.sha256(key.encode()).hexdigest()[:20] if key else secrets.token_hex(10)),child=child,title=title,
               due=clean(obj,'due',200) or '无明确截止',original_status='待跟进',
               source=clean(obj,'source',200) or '家长录入',action=clean(obj,'action'))
     with connect() as c:
@@ -717,7 +728,17 @@ def new_task(obj):
         names=child_names(c)
         if child not in names: raise ValueError('请选择孩子')
         task['child']=names[child]
+        existing=c.execute('SELECT * FROM manual_tasks WHERE id=?',(task['id'],)).fetchone()
+        if existing:
+            if not key: raise sqlite3.IntegrityError('Duplicate manual task id')
+            creation=c.execute('SELECT current FROM task_focus_history WHERE request_key=?',('new-task-'+key,)).fetchone()
+            initial=json.loads(creation['current']) if creation else {}
+            if dict(existing)!=task or (initial.get('box'),initial.get('category'),initial.get('next_action'))!=(box,category,advice):
+                raise TaskError('这次收集已保存，内容已变化，请先到收集箱核对原事项',409,'task_create_conflict')
+            return next(t for t in tasks(c) if t['id']==task['id'])
         c.execute('INSERT INTO manual_tasks (id,child,title,due,original_status,source,action) VALUES (?,?,?,?,?,?,?)',tuple(task.values()))
+        if key or any(k in obj for k in ('box','category','advice')):
+            family_task_focus.save(SimpleNamespace(**globals()),dict(id=task['id'],version=0,request_key='new-task-'+(key or secrets.token_hex(16)),mode='next',next_action=advice,waiting_for='',review_on='',box=box,category=category,due_on=family_agenda.date(task['due'])),connection=c)
     return task
 
 def task_status(task, update=None):

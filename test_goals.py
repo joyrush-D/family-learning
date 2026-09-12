@@ -79,6 +79,7 @@ class GoalTests(unittest.TestCase):
         g=self.evaluate();self.assertEqual(len(self.last_input['evidence']),3)
         self.assertIsNone(g['current_plan']);self.assertEqual(len(g['records']),2)
         original=self.approve(g)['task_id'];self.assertTrue(original)
+        agent.family_task_focus.save(self.app,dict(id=original,version=0,request_key='synthetic-task-card-wording',mode='next',next_action='旧可选做法',waiting_for='',review_on='',title='家长另写的旧标题',goal='家长另写的旧目标'))
         g=self.goal();self.assertFalse(g['evidence_changed']);self.assertIsNone(g['pending'])
         self.feedback('第二次家长转述：同样练习很无聊，愿意换口头讲解。')
         self.assertTrue(self.goal()['evidence_changed']);g=self.evaluate()
@@ -86,6 +87,8 @@ class GoalTests(unittest.TestCase):
         payload=dict(action='approve',id=self.ident,expected_version=g['version'],proposal_id=g['pending']['id'],context_hash=g['context_hash'],request_key='synthetic-repeat-approval')
         self.assertEqual(self.store.action(payload)['task_id'],original)
         self.assertTrue(self.store.action(payload)['replayed'])
+        task=next(t for t in self.app.tasks() if t['id']==original)
+        self.assertEqual(task['title'],self.goal()['current_plan']['title']);self.assertEqual(task['focus']['next_action'],'')
         with self.app.connect() as c:
             self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],1)
             self.assertEqual(c.execute('SELECT count(*) FROM task_history').fetchone()[0],1)

@@ -198,6 +198,7 @@ class Store:
                     task_id = _text(obj, 'task_id', 30); title = _text(obj, 'title', 200)
                     if task_id:
                         task = next((t for t in self.app.tasks(c) if t['id'] == task_id and t['child'] == child['name']), None)
+                        if task and task.get('focus',{}).get('box')=='wish': raise StudyError('请先将心愿转成计划，再执行作业')
                         if task is None: raise StudyError('只能加入同一个孩子的现有待办')
                         update = c.execute('SELECT status FROM task_updates WHERE id=?', (task_id,)).fetchone()
                         if self.app.task_status(task, update['status'] if update else None) in self.app.TASK_CLOSED:
@@ -371,7 +372,7 @@ class Store:
                 row['source_task_next_action'] = (task.get('focus') or {}).get('next_action', '') if task else missing
             used = {r['task_id'] for r in items}
             available = [dict(id=t['id'],title=t['title'],due=t['due'],status=self.app.task_status(t,updates.get(t['id'])))
-                for t in tasks.values() if t['child'] == child['name'] and t['id'] not in used
+                for t in tasks.values() if t['child'] == child['name'] and t['id'] not in used and t.get('focus',{}).get('box')!='wish'
                 and self.app.task_status(t,updates.get(t['id'])) not in self.app.TASK_CLOSED]
         planned_items = [r for r in items if r['source_task_status'] not in self.app.TASK_DISMISSED]
         summary = dict(planned_minutes=round(sum(r['planned_minutes'] or 0 for r in planned_items),2),

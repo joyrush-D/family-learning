@@ -312,6 +312,10 @@ class Store:
                         if task is None or task['child'] != ctx['profile']['name']: raise agent.AgentError('原任务归属无法核对', 409)
                         family_study.task_changed(c, task_id, now)
                         c.execute('UPDATE manual_tasks SET title=?,action=? WHERE id=?', (approved['title'], approved['action'], task_id))
+                        # A newly approved plan supersedes older task-card wording and optional advice.
+                        columns={r['name'] for r in c.execute('PRAGMA table_info(task_focus)')}
+                        if {'title','goal','box'}<=columns:
+                            c.execute("UPDATE task_focus SET title='',goal='',next_action='',box='inbox',version=version+1,updated=? WHERE task_id=?",(now.isoformat(),task_id))
                         # Parent approval changes the plan, never completion, rewards or a school deadline.
                         update = c.execute('SELECT * FROM task_updates WHERE id=?', (task_id,)).fetchone()
                         status = update['status'] if update else task['original_status']

@@ -118,3 +118,25 @@ test('task inbox does not replace attachment inbox in the shared bundle',()=>{
  assert.match(core,/html=taskInboxHTML\(\)/);assert.match(core,/function inboxHTML\(\)/);
  assert.match(calendar,/function taskInboxHTML\(\)/);assert.doesNotMatch(calendar,/function inboxHTML\(\)/);
 });
+
+test('today lists undated homework, excludes wishes, and inbox boxes retain the same task',()=>{
+ const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.taskHTML=t=>`<article>${t.title}</article>`;h.ctx.taskClosed=t=>false;h.ctx.taskActionHTML=t=>t.action;h.ctx.taskView='Inbox';
+ d.tasks=[{id:'todo',title:'虚构未定期作业',child:'小溪',focus:{box:'inbox'}},{id:'wish',title:'虚构心愿',action:'想留下的成果',child:'小溪',focus:{box:'wish'}}];
+ d.today_calendar={inbox:d.tasks.map(t=>({id:t.id,task_id:t.id,kind:'task',child_ids:['child-a'],closed:false,agenda:{category:'homework',box:t.focus.box,scheduled_on:''}})),agenda:[],events:[]};
+ const today=h.ctx.todayTasksHTML();assert.match(today,/虚构未定期作业/);assert.doesNotMatch(today,/虚构心愿/);
+ assert.equal(h.ctx.taskBoxes().Wish.length,1);assert.equal(h.ctx.taskBoxes().Inbox.length,1);
+ h.ctx.taskView='Wish';const wish=h.ctx.taskInboxHTML();assert.match(wish,/转成计划/);assert.doesNotMatch(wish,/type="checkbox"/);
+ h.ctx.child='小岚';assert.equal(h.ctx.taskBoxes().Wish.length,0);
+});
+test('task card puts completion goal before optional advice',()=>{
+ const core=readFileSync(__dirname+'/app.js','utf8'),start=core.indexOf('function taskActionHTML'),end=core.indexOf('function taskHTML',start),ctx=vm.createContext({esc:escape,taskFocus:t=>t.focus,taskReviewDue:()=>false});
+ vm.runInContext(core.slice(start,end),ctx);const html=ctx.taskActionHTML({action:'虚构成果目标',focus:{mode:'next',next_action:'虚构可选做法'}});
+ assert.ok(html.indexOf('完成目标')<html.indexOf('操作建议'));assert.ok(html.indexOf('虚构成果目标')<html.indexOf('虚构可选做法'));
+});
+
+test('completion acknowledges both today and inbox without reloading all data',async()=>{
+ const core=readFileSync(__dirname+'/app.js','utf8'),start=core.indexOf('async function postTask'),end=core.indexOf("document.addEventListener('change'",start),task={id:'synthetic-task',update:{status:'已完成',updated:'2026-09-12T18:00:00+08:00'}};
+ const data={tasks:[{id:task.id}],today_calendar:{inbox:[{task_id:task.id,closed:false}],agenda:[{task_id:task.id,closed:false}]}};
+ const ctx=vm.createContext({data,stateLoadSequence:0,AbortSignal,apiFetch:async()=>({ok:true,json:async()=>({task})}),status:t=>t.update.status,taskClosed:t=>t.update.status==='已完成',window:{FamilyCalendar:{invalidate(){}}},load:async()=>{throw Error('Unneeded full reload')}});
+ vm.runInContext(core.slice(start,end),ctx);await ctx.postTask({id:task.id,status:'已完成'});assert.ok(data.today_calendar.inbox[0].closed);assert.ok(data.today_calendar.agenda[0].closed);
+});

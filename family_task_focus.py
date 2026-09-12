@@ -1,4 +1,5 @@
 """Family follow-up choices over existing task IDs; no school or time-account edits."""
+from contextlib import nullcontext
 import datetime as dt
 import hashlib
 import json
@@ -11,7 +12,7 @@ class FocusError(ValueError):
 
 
 def default():
-    return dict(mode='next',next_action='',waiting_for='',review_on='',version=0,updated='',category='',published_on='',due_on='',scheduled_on='')
+    return dict(mode='next',next_action='',waiting_for='',review_on='',version=0,updated='',category='',published_on='',due_on='',scheduled_on='',box='inbox',title='',goal='')
 
 
 def read_all(connection):
@@ -27,7 +28,7 @@ def _text(obj, key, limit):
     return value.strip()
 
 
-def save(app, obj):
+def save(app, obj, connection=None):
     ident=_text(obj,'id',100); request_key=_text(obj,'request_key',100)
     if not ident or not re.fullmatch(r'[A-Za-z0-9_-]{8,100}',request_key):
         raise FocusError('事项或请求标识不正确，请刷新后重试')
@@ -54,11 +55,14 @@ def save(app, obj):
             if not re.fullmatch(r'\d{4}-\d{2}-\d{2}',value): raise ValueError()
             dt.date.fromisoformat(value)
         except ValueError: raise FocusError('请填写有效日期') from None
+    details={key:_text(obj,key,limit) for key,limit in [('box',10),('title',200),('goal',4000)] if key in obj}
+    if details.get('box','inbox') not in ('inbox','wish'): raise FocusError('请选择收集箱或心愿清单')
+    organization.update(details)
     digest=hashlib.sha256(json.dumps(dict(id=ident,version=version,**focus,**organization),ensure_ascii=False,sort_keys=True).encode()).hexdigest()
-    c=app.connect()
+    c=connection or app.connect()
     try:
-        with c:
-            c.execute('BEGIN IMMEDIATE')
+        with c if connection is None else nullcontext():
+            if connection is None: c.execute('BEGIN IMMEDIATE')
             task=next((t for t in app.tasks(c) if t['id']==ident),None)
             if task is None: raise FocusError('事项不存在，请刷新',404,'task_missing')
             update=c.execute('SELECT * FROM task_updates WHERE id=?',(ident,)).fetchone()
@@ -71,8 +75,8 @@ def save(app, obj):
                 request_key TEXT PRIMARY KEY, task_id TEXT NOT NULL, request_hash TEXT NOT NULL,
                 previous TEXT NOT NULL, current TEXT NOT NULL, updated TEXT NOT NULL)''')
             columns={r['name'] for r in c.execute('PRAGMA table_info(task_focus)')}
-            for key in ('category','published_on','due_on','scheduled_on'):
-                if key not in columns: c.execute('ALTER TABLE task_focus ADD COLUMN '+key+" TEXT NOT NULL DEFAULT ''")
+            for key in ('category','published_on','due_on','scheduled_on','box','title','goal'):
+                if key not in columns: c.execute('ALTER TABLE task_focus ADD COLUMN '+key+" TEXT NOT NULL DEFAULT '"+str(default()[key])+"'")
             receipt=c.execute('SELECT * FROM task_focus_history WHERE request_key=?',(request_key,)).fetchone()
             if receipt:
                 if receipt['task_id']!=ident or receipt['request_hash']!=digest:
@@ -83,16 +87,17 @@ def save(app, obj):
             previous=task['focus']
             if previous['version']!=version:
                 raise FocusError('事项安排已在别处更新，请读取最新安排后核对；本次输入尚未保存',409,'task_focus_conflict')
-            focus.update({k:organization.get(k,previous.get(k,'')) for k in ('category','published_on','due_on','scheduled_on')})
+            focus.update({k:organization.get(k,previous.get(k,'')) for k in ('category','published_on','due_on','scheduled_on','box','title','goal')})
             updated=dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat()
             focus.update(version=version+1,updated=updated)
-            c.execute('''INSERT INTO task_focus (task_id,mode,next_action,waiting_for,review_on,version,updated,category,published_on,due_on,scheduled_on) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET
-                mode=excluded.mode,next_action=excluded.next_action,waiting_for=excluded.waiting_for,
-                review_on=excluded.review_on,version=excluded.version,updated=excluded.updated,
-                category=excluded.category,published_on=excluded.published_on,due_on=excluded.due_on,scheduled_on=excluded.scheduled_on''',
-                (ident,*(focus[key] for key in default())))
+            if focus['box']=='wish' and c.execute("SELECT 1 FROM sqlite_master WHERE name='study_items'").fetchone() and c.execute('SELECT 1 FROM study_items WHERE task_id=?',(ident,)).fetchone():
+                raise FocusError('已有作业执行记录的事项保留在收集箱，不能改成心愿')
+            fields=list(default())
+            c.execute('INSERT INTO task_focus (task_id,'+','.join(fields)+') VALUES ('+','.join('?' for _ in range(len(fields)+1))+') ON CONFLICT(task_id) DO UPDATE SET '+','.join(k+'=excluded.'+k for k in fields),
+                      (ident,*(focus[key] for key in fields)))
             c.execute('INSERT INTO task_focus_history VALUES (?,?,?,?,?,?)',
                 (request_key,ident,digest,json.dumps(previous,ensure_ascii=False),json.dumps(focus,ensure_ascii=False),updated))
             task=next(t for t in app.tasks(c) if t['id']==ident)
             return dict(task=task,focus=focus,request_replayed=False)
-    finally: c.close()
+    finally:
+        if connection is None: c.close()

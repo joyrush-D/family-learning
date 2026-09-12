@@ -57,21 +57,23 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None):
     category=focus.get('category','')
     if not category:
         if re.search('打印|报名|缴费|回执|签字|带.*(?:用品|材料)|通知|活动',title):category='todo'
-        elif re.search('作业|习作|作文|听写|默写|背诵|练习|订正',title):category='homework'
+        elif re.search('作业|习作|作文|听写|默写|背诵|练习|订正|摘抄|朗读|^(?:语文|英语|数学|科学|历史|地理|生物|物理|化学)[：:]',title):category='homework'
     return dict(category=category if category!='unknown' else '',published_on=published,due_on=due_on,scheduled_on=focus.get('scheduled_on',''),
-                category_confirmed=bool(focus.get('category')),publication_known=bool(published))
+                category_confirmed=bool(focus.get('category')),publication_known=bool(published),box=focus.get('box') or 'inbox')
 
 
 def enrich(app,c,tasks):
     owners={p['name']:p['id'] for p in app.profiles(c)}
     for task in tasks:
         refs=[x.strip() for x in task['source'].splitlines() if x.strip().startswith('message:')]
-        task['agenda']=metadata(app,c,owners.get(task['child'],''),task['title'],task['due'],refs,task.get('focus'))
+        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),task['due'],refs,task.get('focus'))
     return tasks
 
 
 def visible_on(item,day):
-    m=item['agenda'];published=m['published_on'];due=m['due_on'];scheduled=m['scheduled_on']
+    m=item['agenda']
+    if m.get('box')=='wish': return False
+    published=m['published_on'];due=m['due_on'];scheduled=m['scheduled_on']
     if published and day<published:return False
     if item['closed']:
         return day in {published,scheduled,due,item.get('closed_on','')} and (not item.get('closed_on') or day<=item['closed_on'])

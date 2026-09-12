@@ -84,5 +84,43 @@ class AgendaTest(unittest.TestCase):
             separate=agenda.metadata(app,c,'child-1','英语作业','',['message:synthetic-class:1'])
         self.assertEqual(separate['due_on'],'')
 
+    def test_wish_capture_promotion_and_retry_preserve_one_task(self):
+        today=dt.datetime.now(app.dt.timezone(app.dt.timedelta(hours=8))).date().isoformat()
+        obj=dict(child='示例甲',title='想做一份观察手册',action='留下一份自己的观察',due='2099-12-31',box='wish',category='homework',advice='先选择一种植物',request_key='synthetic-wish-capture-01')
+        task=app.new_task(obj);ident=task['id']
+        self.assertEqual(app.new_task(obj)['id'],ident)
+        self.assertFalse(any(x['id']==ident for x in app.calendar_snapshot(today,today)['agenda']))
+        self.assertFalse(any(x['id']==ident for x in app.study_store().snapshot('child-1',today)['available_tasks']))
+        with self.assertRaises(app.family_study.StudyError):app.study_store().save_item(dict(child_id='child-1',day=today,request_key='synthetic-wish-study-reject',task_id=ident))
+        with self.assertRaises(app.TaskError):app.new_task(dict(obj,title='重复请求的另一标题'))
+        with app.connect() as c:before=c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0]
+        with self.assertRaises(focus.FocusError):app.new_task(dict(obj,request_key='synthetic-invalid-create',category='bad'))
+        with app.connect() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],before)
+        result=focus.save(app,dict(id=ident,version=1,request_key='synthetic-wish-promotion',mode='next',next_action='先画出叶子的形状',waiting_for='',review_on='',box='inbox',title='完成植物观察手册',goal='一页图画和自己的观察',scheduled_on=today))
+        self.assertEqual(result['task']['title'],'完成植物观察手册')
+        self.assertEqual(result['task']['action'],'一页图画和自己的观察')
+        self.assertEqual(result['task']['original_action'],obj['action'])
+        snap=app.calendar_snapshot(today,today)
+        self.assertEqual(len([x for x in snap['agenda'] if x['id']==ident]),1)
+        self.assertEqual(app.new_task(obj)['focus']['box'],'inbox')  # An old capture retry cannot undo promotion.
+        with app.connect() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],before)
+
+    def test_school_task_goal_and_advice_are_separate(self):
+        agent=app.family_agent;text='语文习作：介绍一个熟悉的地方，写出两个特点。开头方式任选。不规定字数。'
+        evidence=[dict(ref='message:synthetic-class:1',text=text,time='2026-09-12T12:00:00+08:00')]
+        result=dict(proposals=[dict(title_quote='语文习作',focus='school',due='',learning_subject='语文',learning_goal_id='',evidence=[dict(ref=evidence[0]['ref'])],task_title='语文：完成地方介绍习作',task_goal='介绍一个熟悉地方，写出两个特点；开头任选，未规定字数。',task_advice='可以先说说最想介绍的两个特点。')])
+        with patch.object(agent.family_llm,'_chat_json',return_value=result):
+            selected=agent._select('school',evidence,dict(id='child-1'),as_of='2026-09-12',data_path=self.tmp.name,school_goals=[])[0]
+        self.assertEqual(selected['title'],'语文：完成地方介绍习作')
+        self.assertNotIn('可以',selected['body'])
+        self.assertIn('可以',selected['plan']['school_task']['advice'])
+        self.assertEqual(selected['evidence'][0]['text'],text)
+        selected.update(child_id='child-1',kind='school')
+        self.store._save('synthetic-brief-job','synthetic-brief-fp',[selected],dt.datetime.fromisoformat('2026-09-12T12:00:00+08:00'))
+        row=next(x for x in self.store.snapshot()['items'] if x['kind']=='school')
+        accepted=self.store.act(dict(id=row['id'],action='accept'))
+        task=next(t for t in app.tasks() if t['id']==accepted['task_id'])
+        self.assertEqual(task['action'],selected['body']);self.assertEqual(task['advice'],selected['plan']['school_task']['advice'])
+
 
 if __name__=='__main__':unittest.main()
