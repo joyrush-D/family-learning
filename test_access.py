@@ -223,6 +223,7 @@ class AccessTests(unittest.TestCase):
                     self.assertIn(parent_login(headers={'Origin': 'https://family.example.ts.net:444'})[0], (400, 403))
                     install_config()
                     # Login binds a session to this config and stores only a digest.
+                    login_started = int(access.time.time())
                     status, body, info = parent_login()
                     self.assertEqual(status, 200)
                     self.assertEqual(json.loads(body), {'ok': True})
@@ -231,15 +232,25 @@ class AccessTests(unittest.TestCase):
                     self.assertEqual(cookie_name, 'family_parent_session')
                     self.assertRegex(cookie_value, r'^[A-Za-z0-9_-]{43}$')
                     attrs = {part.strip().lower() for part in cookie.split(';')[1:]}
-                    self.assertTrue({'secure', 'httponly', 'samesite=lax', 'path=/family/', 'max-age=604800'} <= attrs)
+                    self.assertTrue({'secure', 'httponly', 'samesite=lax', 'path=/family/', 'max-age=15552000'} <= attrs)
                     parent_cookie = cookie.split(';', 1)[0]
                     with app.connect() as db:
-                        session = db.execute('SELECT * FROM parent_sessions').fetchone()
+                        session = db.execute('SELECT * FROM parent_sessions WHERE hash=?',
+                                             (access._digest(cookie_value),)).fetchone()
                         self.assertIsNotNone(session)
                         self.assertNotIn(cookie_value, tuple(session))
                         self.assertNotIn(password, tuple(session))
                         self.assertEqual(len(session['hash']), 64)
                         self.assertEqual(len(session['config_hash']), 64)
+                    self.assertEqual(access.SESSION_AGE, 180 * 24 * 60 * 60)
+                    # Both persistence layers must last six months, with a fixed end.
+                    expiry = session['expires']
+                    self.assertGreaterEqual(expiry, login_started + access.SESSION_AGE)
+                    self.assertLessEqual(expiry, int(access.time.time()) + access.SESSION_AGE)
+                    with patch.object(access.time, 'time', return_value=expiry - 1):
+                        self.assertTrue(access.session_authorized({'Cookie': parent_cookie}, access.read_config(app.DATA), app.connect))
+                    with patch.object(access.time, 'time', return_value=expiry):
+                        self.assertFalse(access.session_authorized({'Cookie': parent_cookie}, access.read_config(app.DATA), app.connect))
                     self.assertEqual(get('/api/state', host='family.example.ts.net',
                                          headers={'Cookie': parent_cookie})[0], 200)
                     self.assertEqual(get('/child/api/state', host='family.example.ts.net',

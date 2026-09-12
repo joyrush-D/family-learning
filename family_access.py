@@ -27,7 +27,7 @@ _USERNAME = re.compile(r'^[\x21-\x7e]+$', re.ASCII)
 _BASIC = re.compile(r'^Basic ([A-Za-z0-9+/]+={0,2})$', re.ASCII | re.IGNORECASE)
 _success_cache = None
 COOKIE = 'family_parent_session'
-SESSION_AGE = 604800
+SESSION_AGE = 180 * 24 * 60 * 60  # Parent devices: 180 days from login.
 _login_attempts = []
 _login_lock = threading.Lock()
 
