@@ -37,6 +37,70 @@ class GoalTests(unittest.TestCase):
     def feedback(self,note='家长转述孩子：会认单词，但说不出为什么。',**obj):
         return self.action('feedback',id=self.ident,day=self.now.date().isoformat(),source='家长转述孩子',note=note,**obj)
 
+    def test_registered_work_and_rest_reach_analysis_without_other_child_or_fake_free_time(self):
+        self.evaluate();self.assertIsNone(self.last_input['day_context'])
+        study=family_study.Store(self.app);day=self.now.date().isoformat()
+        study.save_day(dict(child_id='child-1',day=day,request_key='synthetic-rest-boundary',start_time='19:30',stop_time='20:00',bed_time='20:30'))
+        for child,title,minutes in [('child-1','已有语文功课',50),('child-1','未估时间的数学',None),('child-2','另一孩子私有功课',40)]:
+            study.save_item(dict(child_id=child,day=day,request_key='synthetic-work-'+child+str(minutes),title=title,subject='综合',planned_minutes=minutes))
+        pending=self.evaluate();context=self.last_input['day_context']
+        self.assertEqual(context['stop_time'],'20:00');self.assertEqual(context['bed_time'],'20:30')
+        self.assertEqual({i['title'] for i in context['other_registered_work']},{'已有语文功课','未估时间的数学'})
+        self.assertTrue(any(i['planned_minutes'] is None for i in context['other_registered_work']))
+        self.assertNotIn('free_minutes',context);self.assertFalse(context['closed_at'])
+        self.assertNotIn('另一孩子私有功课',json.dumps(self.last_input,ensure_ascii=False))
+        with self.app.connect() as c: c.execute("UPDATE study_days SET stop_time='19:45' WHERE child_id='child-1' AND day=?",(day,))
+        self.assertTrue(self.goal()['pending_stale'])
+        with self.assertRaises(agent.AgentError):self.approve(pending)
+        current=self.evaluate();self.assertEqual(self.last_input['day_context']['stop_time'],'19:45')
+        self.approve(current);calls=self.model.call_count
+        self.assertEqual(goals.Store(self.app).process(self.ident,self.now)['state'],'current')
+        self.assertEqual(self.model.call_count,calls)
+
+        before_stop=self.now.replace(hour=19,minute=44,second=0,microsecond=0)
+        after_stop=before_stop+dt.timedelta(minutes=1)
+        with self.app.connect() as c:
+            row=self.store._get(c,self.ident)
+            early=self.store._context(c,row,before_stop)
+            self.assertFalse(early['day_context']['after_stop_time'])
+            self.assertEqual(early['evidence_hash'],self.store._context(c,row,before_stop+dt.timedelta(seconds=50))['evidence_hash'])
+            late=self.store._context(c,row,after_stop)
+            self.assertTrue(late['day_context']['after_stop_time'])
+            self.assertNotEqual(early['evidence_hash'],late['evidence_hash'])
+
+    def test_day_context_change_during_analysis_discards_plan_and_keeps_time_account(self):
+        study=family_study.Store(self.app);day=self.now.date().isoformat()
+        saved=study.save_item(dict(child_id='child-1',day=day,request_key='synthetic-work-concurrent',title='原有学校功课',planned_minutes=20))
+        original=self.reply
+        def changed(*args,**kwargs):
+            value=original(*args,**kwargs)
+            with self.app.connect() as c:c.execute('UPDATE study_items SET planned_minutes=60 WHERE id=?',(saved['saved_item_id'],))
+            return value
+        self.model.side_effect=changed
+        self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'stale')
+        self.assertIsNone(self.goal()['pending']);self.assertIsNone(self.goal()['current_plan'])
+        self.assertEqual(study.snapshot('child-1',day)['items'][0]['planned_minutes'],60)
+
+    def test_day_context_bounds_current_task_and_reassigned_work(self):
+        self.approve(self.evaluate());task_id=self.goal()['task_id'];study=family_study.Store(self.app);day=self.now.date().isoformat()
+        own=study.save_item(dict(child_id='child-1',day=day,request_key='synthetic-current-goal-work',task_id=task_id,planned_minutes=8))
+        other=study.save_item(dict(child_id='child-1',day=day,request_key='synthetic-reassigned-work',title='不能串入的功课',planned_minutes=30))
+        with self.app.connect() as c:
+            c.execute("UPDATE manual_tasks SET child='示例乙' WHERE id=?",(other['saved_item_id'],))
+        self.evaluate();context=self.last_input['day_context']
+        self.assertTrue(context['current_goal_registered']);self.assertEqual(context['unavailable_items'],1)
+        self.assertEqual(context['other_registered_work'],[])
+        before=self.goal()['context_hash']
+        with self.app.connect() as c:c.execute('UPDATE study_items SET elapsed_seconds=90 WHERE id=?',(own['saved_item_id'],))
+        self.assertEqual(self.goal()['context_hash'],before,'timer ticks do not trigger repeated model calls')
+        with self.app.connect() as c:
+            for i in range(26):
+                ident='synthetic-work-'+str(i)
+                c.execute('INSERT INTO manual_tasks VALUES (?,?,?,?,?,?,?)',(ident,'示例甲','学校功课 '+str(i),day,'待跟进','虚构登记',''))
+                c.execute('INSERT INTO study_items(id,child_id,day,task_id,title,subject,version,creation_hash,last_request_key,last_request_hash) VALUES(?,?,?,?,?,?,?,?,?,?)',(ident,'child-1',day,ident,'学校功课 '+str(i),'综合',1,'h','k','h'))
+        self.evaluate();context=self.last_input['day_context']
+        self.assertEqual(len(context['other_registered_work']),24);self.assertEqual(context['omitted_items'],2)
+
     def test_legacy_plan_goal_survives_read_and_edit_without_recreating_task(self):
         self.approve(self.evaluate());before=self.goal();expected=before['current_plan']['goal']
         with self.store.agent._db() as c:
