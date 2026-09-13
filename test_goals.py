@@ -190,6 +190,53 @@ class GoalTests(unittest.TestCase):
         saved=self.goal();self.assertEqual(saved['task_id'],before['task_id']);self.assertEqual(saved['current_plan']['goal'],expected)
         self.assertEqual(saved['records'],before['records'])
 
+    def test_course_context_is_bounded_same_child_subject_and_never_ability_evidence(self):
+        body=dict(child='示例甲',day='2026-09-01',category='课程进度',subject='英语',title='虚构教材第二单元',
+                  note='老师说今天讲到问路；下周是否继续未知。版本待核对。',source='老师反馈',request_key='synthetic-course-record')
+        for field in ('subject','note'):
+            with self.assertRaises(ValueError): self.app.save_record(dict(body,**{field:' '}))
+        saved=self.app.save_record(body);self.assertEqual(self.app.save_record(body)['record_id'],saved['record_id'])
+        for child,subject in [('示例乙','英语'),('示例甲','语文')]:
+            self.app.save_record(dict(body,child=child,subject=subject,request_key='',note='OTHER_CONTEXT_PRIVATE_CANARY'))
+        g=self.evaluate();self.assertEqual(g['records'],[])
+        self.assertEqual([r['id'] for r in g['course_records']],[saved['record_id']])
+        self.assertNotIn('OTHER_CONTEXT_PRIVATE_CANARY',json.dumps(self.last_input))
+        evidence=next(e for e in self.last_input['evidence'] if e['ref']=='record:'+str(saved['record_id']))
+        self.assertEqual(evidence['kind'],'school_requirement')
+        self.assertEqual(g['pending']['hypotheses'][0]['support'],[])
+        with self.store.agent._db() as c: ctx=self.store._context(c,self.store._get(c,self.ident))
+        malicious=synthetic_plan(self.last_input);malicious['proposal']['hypotheses'][0].update(support=[evidence['ref']],status='有支持')
+        with self.assertRaisesRegex(agent.AgentError,'学校要求'): self.store._proposal(malicious,ctx,self.now)
+        self.approve(g);before=self.goal()['current_plan'];self.feedback('家长转述：孩子尚未试过这些内容。')
+        pending=self.evaluate();changed=dict(body,id=saved['record_id'],request_key='',note='老师更正：明天才讲，今天只介绍主题。')
+        self.app.save_record(changed);g=self.goal()
+        self.assertTrue(g['pending_stale']);self.assertEqual(g['current_plan'],before)
+        with self.assertRaises(agent.AgentError):self.approve(pending)
+        self.evaluate();self.assertIn(changed['note'],json.dumps(self.last_input,ensure_ascii=False))
+        with self.app.connect() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM revisions WHERE record_id=?',(saved['record_id'],)).fetchone()[0],1)
+        observed=self.app.save_record(dict(child='示例甲',day='2026-09-02',category='家长观察',subject='',title='虚构课后反馈',note='家长转述：愿意指图，还没有独立表达。',source='家长转述孩子',related_record_id=saved['record_id'],followup_kind='补充观察'))
+        self.evaluate();self.assertIn(observed['record_id'],[r['id'] for r in self.goal()['records']])
+        self.assertIn(observed['record_id'],self.store.managed_ids())
+        self.assertNotEqual(next(e for e in self.last_input['evidence'] if e['ref']=='record:'+str(observed['record_id'])).get('kind'),'school_requirement')
+        # Explicitly linking the same record does not duplicate the automatic context or turn it into performance.
+        self.action('link',id=self.ident,expected_version=self.goal()['version'],record_ids=[saved['record_id']])
+        self.evaluate();self.assertEqual(self.goal()['course_records'],[])
+        self.assertEqual(sum(e['ref']==evidence['ref'] for e in self.last_input['evidence']),1)
+        self.assertEqual(next(e for e in self.last_input['evidence'] if e['ref']==evidence['ref'])['kind'],'school_requirement')
+
+    def test_course_context_retains_reviewed_original_and_reports_omitted_records(self):
+        for number in range(8):
+            self.app.save_record(dict(child='示例甲',day=f'2026-09-{number+1:02}',category='课程进度',subject='英语',
+                title=f'虚构课次{number}',note='计划学习本课，实际是否讲过未知。',source='家长转述老师'))
+        self.evaluate();g=self.goal();self.assertEqual(len(g['course_records']),6);self.assertEqual(g['course_omitted'],2)
+        self.assertEqual([r['title'] for r in g['course_records']],[f'虚构课次{i}' for i in range(2,8)])
+        self.approve(g);retained=g['pending']['evidence'][0]['ref']
+        for number in range(8,15):
+            self.app.save_record(dict(child='示例甲',day=f'2026-09-{number+1:02}',category='课程进度',subject='英语',
+                title=f'虚构课次{number}',note='后续计划，是否适用于此目标未知。',source='老师反馈'))
+        self.evaluate();self.assertIn(retained,[e['ref'] for e in self.last_input['evidence']])
+        self.assertEqual(self.goal()['course_omitted'],9)
+
     def test_school_only_citations_cannot_be_hypothesis_support(self):
         evidence=[dict(ref='school:message:54321@chatroom:1',text='任选一个地方介绍。')]
         schema=agent._evidence_schema(goals.SCHEMA,evidence)
@@ -398,7 +445,7 @@ class GoalTests(unittest.TestCase):
         self.assertEqual(properties['evidence']['items']['properties']['ref']['enum'],refs)
         for field in ('support','against'):
             self.assertEqual(properties['hypotheses']['items']['properties'][field]['items']['enum'],
-                             [ref for ref in refs if not ref.startswith('school:')])
+                             [e['ref'] for e in value['evidence'] if not e['ref'].startswith('school:') and e.get('kind')!='school_requirement'])
         self.assertNotIn('enum',goals.PROPOSAL['properties']['evidence']['items']['properties']['ref'])
         return synthetic_plan(value)
 

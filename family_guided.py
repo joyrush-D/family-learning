@@ -265,6 +265,7 @@ class Store:
                 attachments = []
             title = record.get('title') or ''
             text = record.get('note') or ''
+            if record['category']=='课程进度': text = '课程进度（课堂背景，不是孩子的作答）：\n' + text
             comparison = record.get('comparison_note') or ''
             if attachments:
                 suffix = '此条观察的原件本次未读取'

@@ -27,6 +27,18 @@ class AgentTests(unittest.TestCase):
         self.source = dict(id='synthetic-group', platform='wechat', child_id='child-1', name='虚构班级', cursor='10', enabled=True)
         self.config()
 
+    def test_course_record_does_not_create_parallel_practice_and_reclassification_retires_pending(self):
+        ident=self.record()
+        with self.app.connect() as c:
+            c.execute("UPDATE records SET category='课程进度' WHERE id=?",(ident,))
+            c.execute("INSERT INTO agent_items(id,job_id,child_id,kind,title,body,evidence,due,state,created,updated,plan) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                ('synthetic-course-old','record:'+str(ident),'child-1','care','旧建议','待核对','[]','','pending',self.now.isoformat(),self.now.isoformat(),'{}'))
+        with patch.object(agent.family_llm,'_chat_json') as model:
+            agent.run_once(self.app,self.now);model.assert_not_called()
+        with self.app.connect() as c:
+            self.assertEqual(c.execute("SELECT state FROM agent_items WHERE id='synthetic-course-old'").fetchone()[0],'superseded')
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],0)
+
     def config(self, enabled=True):
         (self.data / 'agent.json').write_text(json.dumps({'enabled': enabled, 'sources': [self.source]}))
 

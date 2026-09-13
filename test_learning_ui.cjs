@@ -33,6 +33,8 @@ async function guardChecks(){
  const appSource=await fs.readFile(path.join(__dirname,'app.js'),'utf8');
  const plain=record(150,'测试甲',{title:'作业收取反馈待核对',note:'老师的反馈，实际收取情况待核对。'}),explanation=record(151,'测试甲',{category:'家长观察',related_record_id:150,followup_kind:'补充观察',title:'孩子解释：没有写名字，尚待核实',note:'家长转述孩子自述，老师是否确认还不知道。'});
  context.data.records=[plain,explanation];const ordinary=api.learningJourneysHTML();assert.match(ordinary,/孩子解释：没有写名字，尚待核实/);assert.match(ordinary,/老师的反馈/);assert.equal(/订正 0|复测 0|尚无复测|还没有复测|一起试这题/.test(ordinary),false);assert.match(ordinary,/准备学习任务/);assert.match(ordinary,/data-followup-kind="补充观察"/);assert.equal(ordinary.includes('材料关系未记录'),false);
+ context.data.records=[record(160,'测试甲',{category:'课程进度',subject:'英语',followup_kind:'复测',note:'课堂上讲过如何检查答案。'})];const course=api.learningJourneysHTML();assert.match(course,/课堂进度不代表孩子已经掌握/);assert.equal(/一起试这题|复测 1|尚无复测/.test(course),false);
+ context.data.records=[record(160,'测试甲',{category:'课程进度',subject:'英语'}),record(161,'测试甲',{related_record_id:160,followup_kind:'复测',note:'一次实际尝试，帮助情况待核对。'})];const observed=api.learningJourneysHTML();assert.match(observed,/复测 1/);assert.match(observed,/课程进度 · 非个人表现/);assert.match(observed,/一次实际尝试/);
  const sourceCode=appSource.slice(appSource.indexOf('function schoolRecordEvidence('),appSource.indexOf('function openSchoolLearningRecord('));
  const school={id:'agent-synthetic',child_id:'child-1',kind:'school',title:'虚构学校反馈',task_id:'task-1',evidence:[{ref:'message:synthetic:11',text:'虚构图片未读说明'}]},task={id:'task-1',child:'测试甲',title:'虚构事项',source:'Agent建议:agent-synthetic\nmessage:synthetic:11\n虚构图片未读说明',history:[{updated:'2026-09-02',status:'进行中',note:'孩子自述没有写名字'},{updated:'2026-09-01',status:'待跟进',note:'老师反馈待核对'}]};
  const evidenceData={children:[{id:'child-1',name:'测试甲'}],agent:{items:[school]},tasks:[task]},schoolEvidence=vm.runInNewContext(sourceCode+'\n;schoolRecordEvidence',{data:evidenceData,taskStatusLabel:s=>s});
@@ -72,9 +74,34 @@ async function draftChildChecks(p,url,proofDir){
  for(const width of [360,1440]){await p.setViewportSize({width,height:1000});assert.equal(await p.locator('#recordDialog').evaluate(el=>el.scrollWidth>el.clientWidth),false,'draft dialog width '+width);if(proofDir)await p.screenshot({path:path.join(proofDir,'synthetic-child-draft-'+width+'.png')})}
  await p.locator('#applyDraft').click();await p.locator('#recordForm [type="submit"]').click();await eventually(async()=>!(await p.locator('#recordDialog').isVisible()),'selected child draft saved');
  const saved=(await(await fetch(url+'api/state')).json()).records;assert.equal(saved.length,recordCount+1);assert.equal(saved[0].child,b.name);assert.equal(saved[0].score,42);
- await p.locator('#add').click();await field('title').fill('下一条手动记录');await field('child').selectOption(a.name);assert.equal(await field('title').inputValue(),'下一条手动记录','previous draft tracking reset for new record');await p.locator('[data-close="recordDialog"]').click();
+ await p.locator('#add').click();await field('title').fill('下一条手动记录');await field('child').selectOption(a.name);assert.equal(await field('title').inputValue(),'下一条手动记录','previous draft tracking reset for new record');await field('category').selectOption('课程进度');await p.locator('#draftButton').click();await p.locator('#applyDraft').waitFor();await p.locator('#applyDraft').click();assert.equal(await field('category').inputValue(),'课程进度');assert(await p.locator('#courseRecordHint').isVisible());await p.locator('[data-close="recordDialog"]').click();
  await p.unroute('**/api/state');await p.unroute('**/api/draft');
  return 'selected-child draft binding, A/B/A late responses, wrong-child metadata, applied-field rollback preserving manual edits, explicit-save ownership and responsive dialog (mock model; real application UI/storage)';
+}
+async function courseChecks(p,url,proofDir){
+ const state=await(await fetch(url+'api/state')).json(),first=state.children[0];
+ const field=name=>p.locator('#recordForm [name="'+name+'"]');
+ await p.locator('.child-filters').getByRole('button',{name:first.name,exact:true}).click();
+ await p.getByRole('button',{name:'记课程进度',exact:true}).click();
+ assert.equal(await field('category').inputValue(),'课程进度');assert(await p.locator('#courseRecordHint').isVisible());assert.equal(await field('subject').evaluate(e=>e.required&&!e.validity.valid),true);await field('category').selectOption('家长观察');assert.equal(await field('subject').evaluate(e=>e.required),false);await field('category').selectOption('课程进度');
+ await field('title').fill('虚构英语第二单元课堂进度');await field('subject').fill('英语');
+ await p.locator('#recordForm [type="submit"]').click();await p.locator('#recordError').getByText(/课堂讲到哪里/).waitFor();
+ assert.equal(await field('title').inputValue(),'虚构英语第二单元课堂进度');
+ await field('note').fill('老师转述：本周计划学习问路；今天是否已讲、教材版本都待核对。');
+ await p.route('**/api/record',route=>route.fulfill({status:503,json:{error:'虚构保存失败，请重试'}}));
+ await p.locator('#recordForm [type="submit"]').click();await p.locator('#recordError').getByText(/虚构保存失败/).waitFor();assert.match(await field('note').inputValue(),/本周计划/);await p.unroute('**/api/record');
+ await p.locator('#recordForm [type="submit"]').click();await p.locator('#recordDialog').waitFor({state:'hidden'});
+ const saved=(await(await fetch(url+'api/state')).json()).records.find(r=>r.title==='虚构英语第二单元课堂进度');assert(saved);assert.equal(saved.score,null);
+ await p.reload();await p.locator('nav [data-page="more"]').click();await p.locator('#content [data-page="learning"]').click();const card=p.locator('[data-learning-case="'+saved.id+'"]');await card.waitFor();assert.match(await card.innerText(),/课堂进度不代表孩子已经掌握/);
+ for(const width of [360,1440]){await p.setViewportSize({width,height:1000});assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);if(proofDir){await fs.mkdir(proofDir,{recursive:true});await card.screenshot({path:path.join(proofDir,'course-'+width+'.png')})}}
+ await card.locator('.learning-compare > summary').click();await card.locator('[data-record="'+saved.id+'"]').click();assert(await p.locator('#courseRecordHint').isVisible());
+ await field('note').fill('老师更正：今天只介绍主题，明天开始问路。教材版本仍待核对。');await p.locator('#recordForm [type="submit"]').click();await p.locator('#recordDialog').waitFor({state:'hidden'});await card.getByText(/老师更正：今天只介绍主题/).first().waitFor();
+ const response=await fetch(url+'api/goals/action',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify({action:'create',request_key:'synthetic-course-ui-goal',child_id:first.id,title:'虚构课堂衔接目标',subject:'英语',baseline:'尚未收集个人表现'})});assert.equal(response.status,200,await response.text());
+ await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="goals"]').click();await p.getByRole('heading',{name:'虚构课堂衔接目标',exact:true}).waitFor();
+ await p.locator('#goal-school-requirement summary').click();const course=p.locator('#goal-school-requirement [id="goal-record-'+saved.id+'"]');assert.match(await course.innerText(),/老师更正/);
+ for(const width of [360,1440]){await p.setViewportSize({width,height:1000});assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);if(proofDir)await p.locator('#goal-school-requirement').screenshot({path:path.join(proofDir,'goal-course-'+width+'.png')})}
+ await course.locator('[data-goal-record]').click();await p.locator('#recordDialog').waitFor({state:'visible'});assert.match(await field('note').inputValue(),/老师更正/);await p.locator('[data-close="recordDialog"]').click();
+ return 'course entry validation, failed save/retry, reload, original correction, automatic same-subject goal context and source access at 360/1440; classroom coverage never implies mastery';
 }
 (async()=>{
  let runtime,browser;const checks=[await guardChecks()],proofDir=process.env.LEARNING_UI_PROOF_DIR;
@@ -112,7 +139,7 @@ async function draftChildChecks(p,url,proofDir){
   for(const width of [360,400,1440]){await p.setViewportSize({width,height:1000});assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'learning page width '+width);assert.equal(await card().evaluate(el=>el.scrollWidth>el.clientWidth),false,'comparison width '+width);if(proofDir){await p.evaluate(()=>scrollTo(0,0));await p.screenshot({path:path.join(proofDir,'synthetic-viewport-'+width+'.png')});await p.screenshot({path:path.join(proofDir,'synthetic-learning-'+width+'.png'),fullPage:true});await card().screenshot({path:path.join(proofDir,'synthetic-comparison-'+width+'.png')});await eventCard.screenshot({path:path.join(proofDir,'synthetic-school-event-'+width+'.png')})}}
   await p.locator('.child-filters').getByRole('button',{name:second,exact:true}).click();assert.equal(await p.locator('[data-learning-case="'+original.id+'"]').count(),0);assert.match(await p.locator('.learning-journeys').innerText(),/OTHER_CHILD_LEARNING_CANARY/);await p.reload();await learningPage();await p.locator('.child-filters').getByRole('button',{name:first,exact:true}).click();assert.equal((await p.locator('.learning-journeys').innerText()).includes('OTHER_CHILD_LEARNING_CANARY'),false);assert.deepEqual(errors,[]);
   checks.push('360 / 400 / 1440 responsive comparisons, readable text contrast, child filtering and reload persistence');
-  checks.push(await draftChildChecks(p,runtime.url,proofDir));assert.deepEqual(errors,[]);
+  checks.push(await draftChildChecks(p,runtime.url,proofDir));await learningPage();checks.push(await courseChecks(p,runtime.url,proofDir));assert.deepEqual(errors,[]);
   const proof={checkedAt:new Date().toISOString(),passed:checks.length,checks,syntheticOnly:true,realPhoneTested:false};if(proofDir)await fs.writeFile(path.join(proofDir,'ui-proof.json'),JSON.stringify(proof,null,2)+'\n');console.log(JSON.stringify(proof,null,2));
  }finally{await browser?.close();await runtime?.stop()}
 })().catch(e=>{console.error(e.stack||e.message);process.exitCode=1});

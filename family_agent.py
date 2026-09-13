@@ -180,6 +180,7 @@ def _evidence_schema(schema, evidence):
                              if isinstance(entry, dict) and isinstance(entry.get('ref'), str)
                              and isinstance(entry.get('text'), str)))
     result = copy.deepcopy(schema)
+    requirements = {e['ref'] for e in evidence if isinstance(e, dict) and e.get('kind') == 'school_requirement' and isinstance(e.get('ref'), str)}
     # ponytail: provider enum limits vary; keep original validation above this
     # repeated-schema ceiling. Use short request aliases if large cases need them.
     if not refs or len(refs) > 64 or sum(len(ref) for ref in refs) > 2000:
@@ -193,7 +194,7 @@ def _evidence_schema(schema, evidence):
                 properties['ref']['enum'] = refs
             for key in ('support', 'against'):
                 if key in properties:
-                    observed = [ref for ref in refs if not ref.startswith('school:')]
+                    observed = [ref for ref in refs if not ref.startswith('school:') and ref not in requirements]
                     if observed: properties[key]['items']['enum'] = observed
                     else: properties[key]['maxItems'] = 0
             for value in node.values(): visit(value)
@@ -1055,6 +1056,7 @@ def run_once(app, now=None):
             progress = goals.run(now, budget)
             budget -= progress['used']; created += progress['created']; processed += progress['used']; failed += progress['failed']
             managed = goals.managed_ids()
+            managed.update(r['id'] for r in records if r['category']=='课程进度')
             # A linked record belongs to its continuous goal, not a parallel one-record plan.
             with store._db() as c:
                 for ident in managed:

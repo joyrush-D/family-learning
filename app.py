@@ -48,7 +48,7 @@ DATA = Path(os.environ.get('FAMILY_DATA', ROOT / 'private'))
 DATA.mkdir(parents=True, exist_ok=True)
 DB = DATA / 'family.sqlite3'
 TOKEN = secrets.token_urlsafe(32)
-CATEGORIES = ['学习进展', '成绩', '兴趣', '情绪', '家长观察']
+CATEGORIES = ['学习进展', '课程进度', '成绩', '兴趣', '情绪', '家长观察']
 MAX_UPLOAD = 20 * 1024 * 1024
 ASSISTANCE = ('', '独立尝试', '少量提示', '逐步帮助', '看过讲解或答案')
 PRACTICE_RELATIONS = ('', '同一道题或同一片段', '相近的新题或新片段', '范围或难度不同')
@@ -355,7 +355,7 @@ def snapshot():
         agent=dict(enabled=False,state='error',last_error='成长助手状态暂时无法读取，已有记录仍可使用。',items=[],sources=[])
     printing=printer_config();printing['jobs']=print_store().list_jobs()
     return dict(asr=dict(configured=bool(os.environ.get('FAMILY_ASR_URL'))),llm=dict(configured=settings_store().model_state()['configured']),children=children, tasks=ts, records=records, sync=sync, sync_error=sync_error, attachments=attachments, uploads=uploads, care=care,
-                growth=read('学习与成长.md'), sources=read('消息来源.md'), token=TOKEN,
+                growth=read('学习与成长.md'), sources=read('消息来源.md'), token=TOKEN, record_categories=CATEGORIES,
                 rewards=family_growth.summarize(children,records,ts,today),reading=family_reading.Store(connect,lambda:children,lambda:ts).snapshot(),printing=printing,today=today,today_calendar=today_calendar,agent=agent)
 
 def agent_store():
@@ -485,6 +485,8 @@ def _save_record(obj,care_only,receipt):
     title=clean(obj,'title',200)
     if not title: raise ValueError('请填写记录标题')
     subject=clean(obj,'subject',80);note=clean(obj,'note');source=clean(obj,'source',200)
+    if category=='课程进度' and (not subject.strip() or not note.strip()):
+        raise RecordError('课程进度请填写科目，以及课堂讲到哪里或老师的具体要求')
     request_key=clean(obj,'request_key',128)
     if request_key and not re.fullmatch(r'[A-Za-z0-9_-]{16,128}',request_key): raise RecordError('提交标识格式不正确')
     if care_only and (obj.get('id') not in (None,'') or not source.startswith('陪伴建议:') or not request_key):

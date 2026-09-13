@@ -441,7 +441,7 @@ class GuidedTests(unittest.TestCase):
         self.child_action(row['id'], 'attempt', kind='first', text='我的虚构尝试')
         attempt = next(e['record_id'] for e in self.row(row['id'])['events'] if e['kind'] == 'attempt')
         ids = [record(day='2026-09-09' if n == 0 else '2026-09-08', related_record_id=anchor if n % 2 else attempt,
-                      followup_kind='补充观察', note='PRIVATE_OBSERVATION_' + str(n)) for n in range(7)]
+                      followup_kind='补充观察', category='课程进度' if n==0 else '家长观察', subject='英语', note='PRIVATE_OBSERVATION_' + str(n)) for n in range(7)]
         record(related_record_id=ids[-1], followup_kind='补充观察', note='NESTED_EXCLUDED')
         record(related_record_id=anchor, followup_kind='订正', note='OTHER_KIND_EXCLUDED')
         record(note='UNLINKED_EXCLUDED')
@@ -450,6 +450,7 @@ class GuidedTests(unittest.TestCase):
             self.parent_action(row['id'], 'guide_draft', goal='', success_criteria='')
             observations = model.call_args.kwargs['parent_observations']
             self.assertEqual([v['record_id'] for v in observations], ids[:1] + list(reversed(ids[2:])))
+            self.assertTrue(observations[0]['text'].startswith('课程进度（课堂背景，不是孩子的作答）'))
             self.assertEqual(model.call_args.kwargs['older_observations_count'], 1)
             self.assertNotIn('EXCLUDED', str(model.call_args))
             draft = self.row(row['id'])['plan_draft']
