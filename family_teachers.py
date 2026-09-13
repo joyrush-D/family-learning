@@ -83,10 +83,10 @@ class Store:
             c.rollback(); raise
         finally: c.close()
 
-    def _sources(self):
+    def _sources(self, connection=None):
         try:
             return [{key: row[key] for key in ('id', 'name', 'platform', 'child_id', 'enabled')}
-                    for row in self.agent._config()['sources']], ''
+                    for row in self.agent._config(connection)['sources']], ''
         except family_agent.AgentError:
             return [], '群来源暂时无法核对；仍可手动记录，来源关联请修复配置后重试'
 
@@ -188,7 +188,7 @@ class Store:
                     or fields['child_id'] not in {p['id'] for p in self.app.profiles(c)}):
                 raise TeacherError('请选择这位老师关联的本家孩子')
             if fields['source_id']:
-                sources, source_error = self._sources()
+                sources, source_error = self._sources(c)
                 source = next((s for s in sources if s['id'] == fields['source_id']), None)
                 if source_error: raise TeacherError(source_error, 409, 'teacher_source_unavailable')
                 if (source is None or source['id'] not in teacher['source_ids'] or source['child_id'] not in teacher['child_ids']

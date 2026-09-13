@@ -284,7 +284,7 @@ class Store:
             c.rollback(); raise
         finally: c.close()
 
-    def _config(self):
+    def _config(self, connection=None):
         path = self.data / 'agent.json'
         if not path.exists(): return {'enabled': False, 'sources': []}
         try:
@@ -292,7 +292,8 @@ class Store:
             obj = json.loads(path.read_text())
             if not isinstance(obj, dict) or set(obj) != {'enabled', 'sources'} or type(obj['enabled']) is not bool:
                 raise ValueError()
-            rows = obj['sources']; children = {p['id'] for p in self.profiles()}
+            # A second reader can wait behind a writer waiting for our first transaction.
+            rows = obj['sources']; children = {p['id'] for p in (self.profiles(connection) if connection is not None else self.profiles())}
             if not isinstance(rows, list) or len(rows) > 20: raise ValueError()
             seen = set()
             for row in rows:
@@ -350,7 +351,7 @@ class Store:
         with self._db() as c:
             c.execute('BEGIN IMMEDIATE')
             # Serialize authorization with settings writes, including already in-flight batches.
-            config = self._config()
+            config = self._config(c)
             source = next((s for s in config['sources'] if s['id'] == obj['source_id'] and s['enabled']), None)
             if not config['enabled'] or source is None: raise AgentError('来源未获授权或Agent已停用', 403, 'source_disabled')
             receipt = _hash([source['id'], expected, cursor, checked, latest, clean, bool(error)])
@@ -397,7 +398,7 @@ class Store:
                 raise AgentError('来源或消息编号不正确')
         if child_id not in {p['id'] for p in self.profiles(c)}:
             raise AgentError('孩子档案不存在', 404, 'child_not_found')
-        source = next((s for s in self._config()['sources'] if s['id'] == obj['source_id']), None)
+        source = next((s for s in self._config(c)['sources'] if s['id'] == obj['source_id']), None)
         if source is None or source['child_id'] != child_id:
             raise AgentError('消息来源不属于所选孩子', 403, 'source_not_allowed')
         saved = c.execute('SELECT * FROM agent_sources WHERE id=?', (source['id'],)).fetchone()

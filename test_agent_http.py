@@ -1,10 +1,13 @@
 """Synthetic real-HTTP Agent integration; no family data, model or message CLI calls."""
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
+from contextlib import closing
 import json
 from pathlib import Path
 import tempfile
 import threading
+import sqlite3
+import time
 import unittest
 from unittest.mock import patch
 from urllib.parse import quote, urlencode
@@ -99,6 +102,61 @@ class AgentHTTPTests(unittest.TestCase):
         batch = self.batch(); batch['source_id'] = second['id']
         self.assertEqual(self.post('/api/agent/ingest', batch)[0], 200)
         return self.message_keys(child_id='child-2', source_id=second['id'])
+
+    def test_school_reads_finish_while_a_background_commit_waits_for_their_snapshot(self):
+        self.assertEqual(self.post('/api/agent/ingest', self.batch())[0], 200)
+        app.new_task(dict(child='示例星星',title='英语：完成虚构练习',action='保留原通知出处',
+                          source='message:'+self.source['id']+':101'))
+        record=app.save_record(dict(child='示例星星',day='2026-02-10',category='家长观察',title='虚构后台回执'))['record_id']
+        self.assertEqual(self.request('GET','/api/state')[0],200)  # Existing, initialized database.
+        original=app.family_agent.Store._message_context
+        paths=['/api/state','/api/calendar?start=2026-02-10&end=2026-02-10',
+               '/api/agent/message?'+urlencode(self.message_keys())]
+        for index,path in enumerate(paths):
+            with self.subTest(path=path):
+                started=threading.Event();committing=threading.Event();outcome=[];observed=[]
+                value='虚构后台已保存'+str(index)
+                def write():
+                    try:
+                        if not started.wait(3):raise AssertionError('Read did not reach its source check')
+                        with closing(sqlite3.connect(app.DB,timeout=8)) as c:
+                            c.execute('BEGIN IMMEDIATE')
+                            c.execute('UPDATE records SET note=? WHERE id=?',(value,record))
+                            committing.set();c.commit()
+                        outcome.append('committed')
+                    except Exception as error:outcome.append(type(error).__name__)
+                def source_check(store,c,obj):
+                    if not started.is_set():
+                        self.assertTrue(c.in_transaction)
+                        c.execute('SELECT id FROM records').fetchone()  # Establish the reader's snapshot.
+                        started.set();self.assertTrue(committing.wait(2))
+                        # Observe SQLite's pending writer; do not rely on a timing-only sleep.
+                        deadline=time.monotonic()+2
+                        while True:
+                            try:
+                                with closing(sqlite3.connect(app.DB,timeout=0)) as probe:
+                                    probe.execute('SELECT count(*) FROM records').fetchone()
+                            except sqlite3.OperationalError as error:
+                                if error.sqlite_errorcode!=sqlite3.SQLITE_BUSY:raise
+                                observed.append('writer_waiting');break
+                            if time.monotonic()>deadline:raise AssertionError('Writer never reached its commit')
+                            time.sleep(.01)
+                    return original(store,c,obj)
+                writer=threading.Thread(target=write);writer.start()
+                try:
+                    begin=time.monotonic()
+                    with patch.object(app.family_agent.Store,'_message_context',source_check):
+                        status,body,_=self.request('GET',path)
+                    elapsed=time.monotonic()-begin
+                finally:
+                    started.set();writer.join(timeout=10)
+                self.assertEqual(observed,['writer_waiting'])
+                self.assertEqual(status,200,body)
+                self.assertLess(elapsed,2,'A read must not wait for its own transaction to release')
+                self.assertEqual(outcome,['committed'])
+                with closing(sqlite3.connect(app.DB)) as c:
+                    self.assertEqual(c.execute('SELECT note FROM records WHERE id=?',(record,)).fetchone()[0],value)
+                self.assertIn('虚构',json.dumps(body,ensure_ascii=False))
 
     def test_message_attachment_round_trip_and_reopen_preserve_original_facts(self):
         batch = self.batch(); batch['messages'][0].update(kind='image', text='[图片]', unread=True)

@@ -113,7 +113,7 @@ def fetch(settings, source, message):
 
 
 def _authorized(store, c, source, message):
-    current = store._config()
+    current = store._config(c)
     require(current['enabled'] and any(s == source and s['enabled'] for s in current['sources']), 'media_source_changed')
     _, saved = store._message_context(c, dict(child_id=source['child_id'], source_id=source['id'], message_id=message['id']))
     require(saved == message, 'media_message_mismatch')
@@ -177,7 +177,7 @@ def run_one(app, store, now):
             return {'state': 'disabled'}
         with store._db() as c:
             c.execute('BEGIN IMMEDIATE')
-            sources = store._config()
+            sources = store._config(c)
             if not sources['enabled']:
                 return {'state': 'disabled'}
             allowed = {s['id']: s for s in sources['sources'] if s['enabled'] and s['platform'] == 'wechat'}

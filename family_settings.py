@@ -120,7 +120,7 @@ class Store:
         if not isinstance(rows,list) or len(rows)>20: raise SettingsError('当前最多支持20个群来源')
         with self.agent._db() as c:
             c.execute('BEGIN IMMEDIATE')
-            current=raw_config(self.data/'agent.json'); old=self.agent._config()
+            current=raw_config(self.data/'agent.json'); old=self.agent._config(c)
             known={row['id']:row for row in old['sources']}; children={p['id'] for p in self.app.profiles(c)}
             sources=[]; seen=set()
             for row in rows:
