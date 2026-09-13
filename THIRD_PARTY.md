@@ -17,6 +17,7 @@
 | 候选 | 本项目取舍 | 尚需核对 |
 | --- | --- | --- |
 | [Cua Driver](https://cua.ai/docs/how-to-guides/driver/use-sdk-in-process) | 当前正在验证的QQ保底路线：由Family Agent调用SDK读取官方QQ窗口，保留真实出处与覆盖缺口；现有通知入库可复用，但不能伪造原生ID直接套用CLI返回 | 这是界面读取，不是QQ消息API。后台操作仅为[尽力保证](https://cua.ai/docs/concepts/the-no-foreground-contract)，权限属于运行宿主；文档示例与发布版本须分别核对；本轮固定0.26.0，并按实际包内接口与运行回执验证。先验证一个授权群、最近20条和一张图片，核对来源、重复、漏读及日常QQ共存；看见一页不算历史完整 |
+| [LLBot Mac CLI 8.2.0](https://github.com/LLOneBot/LuckyLilliaBot/releases/tag/v8.2.0) | 非界面候选；核对发行包哈希后，已验证Mac ARM启动帮助、随包Node和原生模块可在禁网、禁家庭文件及禁子进程条件下运行。未登录、未触碰官方QQ，未恢复采集 | 区分Mac运行平台与QQ协议身份。默认仍是独立Linux协议；[多协议文档](https://github.com/LLOneBot/LuckyLilliaBot/blob/v8.2.0/docs/multi-protocol.md)明确列出其他协议的签名后端和Watch设备参数阻碍。此前同账号共存失败仍有效。GPL及原生SDK/服务单独核对，不随MIT项目分发 |
 | [NapCat Mac安装器](https://github.com/NapNeko/NapCat-Mac-Installer) | Mac非界面候选保留；仅核对文档，未安装或改QQ | 上游明确修改QQ启动入口，并在原QQ/NapCat入口间切换；有Mac安装器不证明桌面共存。安装器MIT不涵盖其加载的所有组件，接入前继续核对兼容与许可 |
 | [SnowLuma](https://github.com/SnowLuma/SnowLuma) | 仅作协议接口候选调研，未安装或接入 | 当前快速开始列Windows/Linux；许可证为非商业源码可见，并非OSI开源，公开派生分发需书面许可；不并入本项目MIT代码或小盒子交付 |
 | [ego-lite](https://github.com/citrolabs/ego-lite) | 保留为学校网站或已有学习平台网页版的可选工具；借鉴独立工作区和结构化页面读取 | 公开接口控制其Chromium浏览器，不能直接读取桌面QQ。支持[自建Agent](https://lite.ego.app/document/en/docs/custom-agent-harness)。仓库MIT不代表另行下载的整个浏览器可以按MIT分发；没有网页需求时不引入 |
@@ -82,3 +83,6 @@ AES调用macOS系统CommonCrypto的公开API，签名依据[Apple官方头文件
 2026-09-10：`family_qq_llbot.py`独立实现对[LLBot v8.1.10](https://github.com/LLOneBot/LuckyLilliaBot/tree/v8.1.10) WebUI HTTP接口的只读适配，没有复制其源码。上游源码标示[GPL-2.0](https://github.com/LLOneBot/LuckyLilliaBot/blob/v8.1.10/LICENSE)；本项目不分发其服务、原生SDK、Node二进制或个人会话。原生签名SDK与Auth Token服务是另外的运行依赖，公开源码不能说明其完整内部数据处理；由家庭自行选择、安装与授权，不能将其当作本项目MIT代码或腾讯官方接口。文字读取与选定原图曾在Mac实测，但后续同账号试用出现桌面QQ退出和操作受影响，共存未通过，已撤回日常采集部署。接口实现保留为实验代码，不据读取成功推荐自动登录或宣称可替代桌面日常使用。
 
 Cua Python SDK 0.26.0的已安装包元数据标示MIT；本项目仅调用其公开接口，未复制SDK源码或分发SDK、原生库、Python运行时。宿主嵌入使用Python标准C API的`Py_BytesMain`；具体家庭需要已有兼容Python动态库和SDK环境。
+
+2026-09-14版本复核：8.2.0的Mac ARM CLI发布资产已下载并核对上游SHA256，三个受限离线检查通过。发行包最初没有执行位，按其启动脚本只补实验目录内CLI/Node执行位；没有运行脚本中的清除隔离属性或登录步骤。新版说明修复假在线、二维码与WebQQ会话问题，没有提供同账号桌面共存验收；源码的多协议支持还明确保留端到端阻碍。后续先核对上游条件及具体账号方式，再决定是否执行新登录测试，不重复旧失败登录。
+发行包内也已检出多协议实现；单独运行其中的参数解析函数，六个无账号案例确认默认及错误参数均回退Linux。这解决代码是否打包的疑问，仍不证明其他设备协议或同账号共存可用。
