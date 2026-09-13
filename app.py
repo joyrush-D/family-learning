@@ -849,7 +849,7 @@ def calendar_text_range(text,today):
             start+=dt.timedelta(days='一二三四五六日'.index('日' if weekday=='天' else weekday));end=start
         else: end=start+dt.timedelta(days=6)
         ranges.append((start,end));return ' '
-    remaining=re.sub(r'(上上|下下|上|下|本|这)?(?:周|星期)([一二三四五六日天末])?',add_week,remaining)
+    remaining=re.sub(r'(?:(上上|下下|上|下|本|这)个?)?(?:周|星期)([一二三四五六日天末])?',add_week,remaining)
     if re.search(r'\d{4}/\d+/\d+|\d+月|月底|月初|下个月|下月|明年|下星期几|周几|(?:最近|过去|近)[两二三四五六七八九十\d]+周',remaining):
         raise ValueError('这句里的日期还不能明确，请选择查询日期范围或写成 YYYY-MM-DD')
     if not ranges:return None
@@ -1193,6 +1193,45 @@ def ask_family(obj):
     mapping={item['id']:item for item in evidence}
     return dict(answer=result['answer'],citations=[mapping[i] for i in result['citation_ids']],coverage=coverage,calendar_range=date_range)
 
+def calendar_proposal_date(phrase,text,today):
+    """Resolve a quoted date using the existing query rules; never trust model dates alone."""
+    if not phrase:return ''
+    matches=list(re.finditer(re.escape(phrase),text))
+    # Do not accept a chopped qualifier: 周一 inside 下周一, or 9月1日 inside 2027年9月1日.
+    if not matches or not any(not re.search(r'(?:每个?|(?:下下?|上上?|本|这)个?|[0-9年月一二三四五六七八九十])$',text[:m.start()]) and not re.match(r'[0-9年月日号一二三四五六七八九十]|(?:之|以)?[前后]|左右',text[m.end():]) for m in matches):
+        raise family_llm.LLMDraftError('日期引用不完整或不在原话中，请重新整理')
+    if re.search(r'每(?:个)?(?:周|星期|月)|每[天日]',phrase):raise ValueError('重复规则没有指定起点日期')
+    value=re.sub(r'(上上|下下|上|下|本|这)个(?=周|星期)',r'\1',phrase)
+    def number(token):
+        if token.isdigit():return int(token)
+        digits='零一二三四五六七八九'
+        if '十' in token:
+            a,b=token.split('十');return (digits.index(a) if a else 1)*10+(digits.index(b) if b else 0)
+        return digits.index(token)
+    value=re.sub(r'([一二三四五六七八九十]{1,3})(?=[月日号])',lambda m:str(number(m[1])),value)
+    value=re.sub(r'(今年|明年|后年)(?=\d+月)',lambda m:str(today.year+{'今年':0,'明年':1,'后年':2}[m[1]])+'年',value)
+    value=re.sub(r'(\d{4})-(\d{1,2})-(\d{1,2})',lambda m:f'{int(m[1]):04d}-{int(m[2]):02d}-{int(m[3]):02d}',value)
+    # Month boundaries have exact meanings; vague "下月" alone still stays unknown.
+    boundary=re.fullmatch(r'(?:从|到|至|截至)?(本|这(?:个)?|下(?:个)?)?月(初|底|末)(?:开始|起|为止|止)?',value)
+    if boundary:
+        year,month=today.year,today.month+(1 if (boundary[1] or '').startswith('下') else 0)
+        if month==13:year+=1;month=1
+        first=dt.date(year,month,1)
+        if boundary[2]=='初':return first.isoformat()
+        next_month=dt.date(year+1,1,1) if month==12 else dt.date(year,month+1,1)
+        return (next_month-dt.timedelta(days=1)).isoformat()
+    # Query extraction tolerates surrounding prose; a proposed date must not drop unknown qualifiers.
+    exact=re.fullmatch(r'(?:从|自|到|至|截至)?(.+?)(?:开始|起|为止|止)?',value)
+    if not exact or not re.fullmatch(r'(?:\d{4}-\d{2}-\d{2}|(?:\d{4}年)?\d{1,2}月\d{1,2}[日号]?|大后天|后天|明天|今天|昨天|前天|(?:上上|下下|上|下|本|这)?(?:周|星期)[一二三四五六日天末]?)(?:上午|下午|晚上|早上|早晨|晚间)?',exact[1]):
+        raise ValueError('日期限定还需人工核对')
+    bounds=calendar_text_range(value,today)
+    if bounds and bounds[0]==bounds[1]:
+        if bounds[0]<today and re.match(r'(?:周|星期)[一二三四五六日天]',exact[1]):raise ValueError('未限定的星期已过去，请确认日期')
+        return bounds[0].isoformat()
+    if bounds and re.search(r'(?:从|自).*(?:周|星期)(?:开始|起)$',value):return bounds[0].isoformat()
+    raise ValueError('日期还不是明确的一天')
+
+
 def calendar_draft_from_text(obj):
     if not isinstance(obj,dict) or set(obj)!={'text','child_ids'}: raise ValueError('请提供安排文字和明确选择的孩子')
     text=clean(obj,'text',2000)
@@ -1201,7 +1240,7 @@ def calendar_draft_from_text(obj):
     if not isinstance(selected,list) or any(not isinstance(i,str) or i not in known for i in selected) or len(set(selected))!=len(selected):
         raise ValueError('请选择现有孩子，或留空后在草稿里确认')
     today=dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).date();reference=today.isoformat();notes=[]
-    intent='cancel' if re.search(r'取消|不去|不参加',text) else 'edit' if re.search(r'改期|改到|改成|改为|推迟|提前到|挪到|调整原|修改原',text) else ''
+    intent='cancel' if re.match(r'^(?:请|帮我)?取消',text) else 'edit' if re.match(r'^(?:请|帮我)?(?:把[^，,。；;\n不别]{0,80}?)?(?:改期|改到|改成|改为|推迟|提前到|挪到|调整原|修改原)',text) else ''
     if intent:
         return dict(intent=intent,draft=None,needs_review=['这句话涉及已有安排，请从日历打开原安排，再修改或取消；没有新增任何安排。'],reference_date=reference)
     named=[ident for ident,name in known.items() if name and name in text]
@@ -1213,26 +1252,49 @@ def calendar_draft_from_text(obj):
         allowed=[];notes.append('请明确这次参加的是哪两个孩子。')
     try: inferred=calendar_text_range(text,today)
     except (ValueError,OverflowError):
-        inferred=None;notes.append('原话中的日期还不能明确，请在草稿里选择具体日期。')
+        inferred=None
     day_hint=inferred[0].isoformat() if inferred and inferred[0]==inferred[1] else ''
     if re.search(r'每(?:个)?(?:周|星期)',text) and not re.search(r'\d{4}-\d{2}-\d{2}|\d+月\d+|今天|明天|后天',text):
-        day_hint='';notes.append('每周安排需要确认第一次发生的具体日期。')
+        day_hint=''
     result=family_llm.calendar_draft(text,[dict(id=i,name=n) for i,n in known.items()],allowed,reference,day_hint,data_path=DATA)
     intent=result.pop('intent');notes.extend(result.pop('needs_review'))
     if intent!='create':
         notes.append('请从日历打开原安排修改或取消。' if intent in ('edit','cancel') else '这句话尚未明确要新增什么，请补充安排内容；查询可用“查资料”。')
         return dict(intent=intent,draft=None,needs_review=list(dict.fromkeys(notes)),reference_date=reference)
     try:
-        for key in ('day','until'): family_calendar._day(result[key],optional=True)
-        for key in ('start_time','end_time'): family_calendar._clock(result[key])
-        if result['end_time'] and (not result['start_time'] or result['end_time']<=result['start_time']): raise ValueError()
-        if result['repeat']=='weekly' and not re.search(r'每(?:个)?(?:周|星期)',text): raise ValueError()
-        if result['until'] and (result['repeat']!='weekly' or result['until'] not in text or not result['day'] or result['until']<result['day']): raise ValueError()
+        for key in ('day','until'):
+            family_calendar._day(result[key],optional=True)
+            phrase=result.pop(key+'_text')
+            try: resolved=calendar_proposal_date(phrase,text,today)
+            except ValueError:
+                result[key]='';notes.append(('起点' if key=='day' else '截止')+'日期尚需核对：'+phrase);continue
+            if result[key] and resolved!=result[key]:raise ValueError('日期与原话无法核对')
+            result[key]=resolved
+        mode=result['repeat'];patterns={'daily':r'每[天日]','weekends':r'每(?:个)?周末','weekly':r'每(?:个)?(?:周|星期)','monthly':r'每(?:个)?月'}
+        if mode!='none' and not re.search(patterns[mode],text):raise ValueError('重复方式没有原话依据')
+        if result['until'] and mode=='none':raise ValueError('单次安排不能保存循环截止日')
+        days=result['repeat_days'];limit=7 if mode=='weekly' else 31 if mode=='monthly' else 0
+        if len(days)>limit or len(set(days))!=len(days) or any(not 1<=d<=limit for d in days):raise ValueError('重复日期不能重复或越界')
+        periods=[dict(start_time=result['start_time'],end_time=result['end_time'])]+result['extra_times']
+        if mode=='none' and result['extra_times']:raise ValueError('单次安排不能包含循环时段')
+        for period in periods:
+            for key in ('start_time','end_time'):family_calendar._clock(period[key])
+            if period['end_time'] and (not period['start_time'] or period['end_time']<=period['start_time']):raise ValueError('结束时间须晚于开始')
+        result['extra_times']=[dict(p,id=secrets.token_hex(8)) for p in result['extra_times']]
+        # Validate known fields with the saving path. Temporary placeholders only permit an incomplete draft;
+        # they never enter the returned proposal, a prompt, or any stored record.
+        known_periods=[p for p in periods if p['start_time']]
+        check=dict(result,day=result['day'] or reference,until=result['until'] if result['day'] else '',
+                   title=result['title'] or '待核对',child_ids=result['child_ids'] or list(known)[:1] or ['draft'],
+                   **(known_periods[0] if known_periods else dict(start_time='',end_time='')),
+                   extra_times=[dict(p,id=f'{n:016x}') for n,p in enumerate(known_periods[1:])])
+        family_calendar.Store._fields(check,set(known) or {'draft'})
     except (ValueError,TypeError):
         raise family_llm.LLMDraftError('日历草稿日期、钟点或重复规则无法核验，请重试或手动填写') from None
     result['status']='tentative'
-    if re.search(r'每(?:天|日|月|个?周末)|每天.{0,12}(?:次|早晚)|每(?:周|星期).{0,12}[、，,]',text):
-        notes.append('原话包含重复日期或多时段，请在下面核对重复方式、指定日期和各时段；当前文字草稿尚未完整表达这些设置。')
+    if mode=='none' and re.search(r'每(?:天|日|月|个?周末|周|星期)',text):notes.append('原话涉及循环，当前尚未整理出明确规则，请在表单核对。')
+    if mode in ('weekly','monthly') and not days:notes.append('请核对每周哪几天。' if mode=='weekly' else '请核对每月哪几日；留空时表单沿用起点的月日。')
+    if len(periods)>1 and any(not p['start_time'] for p in periods):notes.append('每天多个时段已分开，请补充尚未明确的开始钟点。')
     if not result['title']: notes.append('请补充具体要安排什么。')
     if not result['child_ids']: notes.append('请明确选择参加的孩子。')
     if not result['day']: notes.append('请确认具体日期，系统没有替你选择今天或周末某一天。')

@@ -28,7 +28,7 @@ class CalendarLanguageTests(unittest.TestCase):
             if self.output is not None:return copy.deepcopy(self.output)
             if name=='family_learning_answer':return dict(answer='仅根据虚构范围内已录安排回答。',citation_ids=[i['id'] for i in context['evidence']])
             return dict(intent='create',title='虚构游泳',category='activity',day=context['exact_day'],child_ids=context['allowed_child_ids'],
-                        start_time='',end_time='',location='',note='',repeat='none',until='',needs_review=[])
+                        start_time='',end_time='',location='',note='',repeat='none',until='',day_text=('明天' if '明天' in context['text'] else '周六') if context['exact_day'] else '',until_text='',repeat_days=[],extra_times=[],needs_review=[])
         self.model=patch.object(family_llm,'_chat_json',side_effect=model);self.model.start()
     def tearDown(self):
         self.model.stop();self.env.stop();self.config.stop();self.tmp.cleanup()
@@ -44,7 +44,7 @@ class CalendarLanguageTests(unittest.TestCase):
         return app.calendar_draft_from_text(dict(text=text,child_ids=[] if child_ids is None else child_ids))
     def test_date_ranges_cross_year_sunday_midnight_and_explicit_priority(self):
         sunday=dt.datetime(2027,1,3,23,59,tzinfo=dt.timezone(dt.timedelta(hours=8)))
-        expected={'本周末有什么安排':('2027-01-02','2027-01-03'),'下周末有什么安排':('2027-01-09','2027-01-10'),
+        expected={'本周末有什么安排':('2027-01-02','2027-01-03'),'下周末有什么安排':('2027-01-09','2027-01-10'),'下个周末有什么安排':('2027-01-09','2027-01-10'),'上个周六有什么安排':('2026-12-26','2026-12-26'),
                   '明天有什么安排':('2027-01-04','2027-01-04'),'明天要带什么去学校？':('2027-01-04','2027-01-04'),'下周有什么安排':('2027-01-04','2027-01-10'),
                   '2026-12-31到2027-01-02有什么安排':('2026-12-31','2027-01-02')}
         for question,bounds in expected.items():
@@ -123,10 +123,10 @@ class CalendarLanguageTests(unittest.TestCase):
         before=self.dump()
         for phrase in ['示例甲每天早晚阅读','示例甲每月1、15日复习','示例甲每周末运动','示例甲每周一、三、五阅读']:
             result=self.draft(phrase)
-            self.assertTrue(any('重复日期或多时段' in note for note in result['needs_review']))
+            self.assertTrue(any('循环' in note for note in result['needs_review']))
         self.assertEqual(self.dump(),before)
     def test_untrusted_model_fields_children_dates_and_clocks_are_rejected(self):
-        valid=self.draft()['draft'];valid.pop('status');valid.update(intent='create',needs_review=[])
+        valid=self.draft()['draft'];valid.pop('status');valid.update(intent='create',needs_review=[],day_text='明天',until_text='')
         before=self.dump()
         for changed in [dict(child_ids=['child-2']),dict(child_ids=['unknown']),dict(child_ids=['child-1','child-1']),dict(day='2026-02-30'),
                         dict(day='2099-01-01'),dict(start_time='25:00'),dict(start_time='15:00',end_time='14:00'),dict(status='confirmed'),
@@ -135,6 +135,53 @@ class CalendarLanguageTests(unittest.TestCase):
             with self.subTest(changed=changed),self.assertRaises(family_llm.LLMDraftError):self.draft()
         self.output=valid|dict(intent='edit');self.assertIsNone(self.draft()['draft'])
         self.assertEqual(self.dump(),before)
+
+    def test_quoted_dates_keep_qualifiers_and_resolve_month_and_year_boundaries(self):
+        today=dt.date(2026,12,31)
+        for phrase,day in [('明天','2027-01-01'),('下周一','2027-01-04'),('下个月初','2027-01-01'),
+                           ('月底','2026-12-31'),('下月底','2027-01-31'),('明年一月二日','2027-01-02'),
+                           ('2026-9-14','2026-09-14'),('从下周开始','2027-01-04'),('下个周六','2027-01-09')]:
+            self.assertEqual(app.calendar_proposal_date(phrase,'安排从'+phrase+'阅读',today),day)
+        for phrase,text in [('周一','从下周一开始'),('9月1日','从2027年9月1日开始'),('周六','每周六阅读'),('明天','今天阅读'),('周六','下个周六阅读'),('2026-09-1','从2026-09-14开始'),('9月1','从9月10日开始'),('明天','明天之后的一天')]:
+            with self.assertRaises(family_llm.LLMDraftError):app.calendar_proposal_date(phrase,text,today)
+        for phrase in ['周末','下个月','每周一','下个月随便一天','去年12月31日','明天之后的一天','下周一左右']:
+            with self.assertRaises(ValueError):app.calendar_proposal_date(phrase,phrase,today)
+        self.assertEqual(app.calendar_proposal_date('下月底','下月底',dt.date(2028,1,30)),'2028-02-29')
+        with self.assertRaises(ValueError):app.calendar_proposal_date('周六','周六游泳',dt.date(2026,9,13))
+        self.assertEqual(app.calendar_proposal_date('本周六','本周六游泳',dt.date(2026,9,13)),'2026-09-12')
+
+    def test_extended_proposals_populate_the_same_rule_and_slots_without_saving(self):
+        before=self.dump()
+        base=dict(intent='create',title='虚构共读',category='family',day='2026-09-14',day_text='2026-09-14',
+                  until='2026-12-31',until_text='2026-12-31',child_ids=['child-1'],start_time='07:00',end_time='07:15',
+                  location='',note='每次讲一个发现',repeat_days=[],extra_times=[dict(start_time='19:00',end_time='19:20')],needs_review=[])
+        for mode,phrase,days in [('daily','每天',[]),('weekends','每个周末',[]),('weekly','每周一三五',[1,3,5]),('monthly','每月1、15、31日',[1,15,31])]:
+            self.output=base|dict(repeat=mode,repeat_days=days)
+            result=self.draft('示例甲从2026-09-14到2026-12-31，'+phrase+'07:00到07:15和19:00到19:20共读，不改到月底')['draft']
+            self.assertEqual(result['repeat'],mode);self.assertEqual(result['repeat_days'],days);self.assertEqual(result['until'],'2026-12-31')
+            self.assertEqual(result['extra_times'][0]['start_time'],'19:00');self.assertRegex(result['extra_times'][0]['id'],r'^[a-f0-9]{16}$')
+            self.assertEqual(result['status'],'tentative');self.assertFalse(set(result)&{'day_text','until_text','id','version'})
+            # The regular save validator accepts this exact draft; no second calendar schema or database.
+            family_calendar.Store._fields(result,{'child-1','child-2'})
+        self.assertEqual(self.dump(),before)
+        self.output=base|dict(repeat='daily',day='',day_text='',until='',until_text='',start_time='',end_time='',extra_times=[dict(start_time='',end_time='')])
+        partial=self.draft('示例甲每天早晚读一会儿')
+        self.assertEqual(partial['draft']['day'],'');self.assertEqual(partial['draft']['start_time'],'');self.assertEqual(partial['draft']['extra_times'][0]['start_time'],'')
+        self.assertTrue(any('多个时段' in note for note in partial['needs_review']));self.assertEqual(self.dump(),before)
+        for change in [dict(repeat_days=[1]),dict(extra_times='bad'),dict(extra_times=[dict(start_time='07:05',end_time='07:30')]),
+                       dict(extra_times=[dict(start_time='19:00',end_time='18:00')]),dict(until='2026-09-01'),dict(day_text='2027-01-01'),
+                       dict(extra_times=[dict(start_time='19:00',end_time='',id='injected')]),dict(repeat_days=[True])]:
+            self.output=base|dict(repeat='daily')|change
+            with self.subTest(change=change),self.assertRaises(family_llm.LLMDraftError):self.draft('示例甲每天从2026-09-14到2026-12-31共读')
+        self.assertEqual(self.dump(),before)
+    def test_unparsed_dates_keep_other_fields_and_negative_new_plan_is_not_edit(self):
+        before=self.dump()
+        self.output=dict(intent='create',title='虚构复习',category='study',child_ids=['child-1'],day='2026-10-05',day_text='下月5号',
+                         until='',until_text='',start_time='19:00',end_time='19:20',location='',note='',repeat='monthly',repeat_days=[31],extra_times=[],needs_review=[])
+        result=self.draft('把示例甲下月5号起每月31日复习记上，没有31日就跳过，不改到月底')['draft']
+        self.assertEqual(result['day'],'');self.assertEqual(result['repeat_days'],[31]);self.assertEqual(result['start_time'],'19:00');self.assertEqual(result['title'],'虚构复习')
+        self.assertEqual(len(self.calls),1);self.assertEqual(self.dump(),before)
+
     def test_http_auth_draft_review_then_original_save_with_parent_edits(self):
         app.calendar_store();before=self.dump()
         server=app.ThreadingHTTPServer(('127.0.0.1',0),app.Handler)

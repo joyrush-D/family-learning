@@ -119,13 +119,13 @@ async function calendarSyncCopy(){
 $('#calendarSyncCopy').onclick=calendarSyncCopy;
 $('#calendarSyncDialog').addEventListener('close',()=>calendarSyncVersion++);
 function calendarNavigate(day){calendarJump++;calendarInvalidate();calendarState.week=calendarMonday(day);calendarState.day=day;page='calendar';render()}
-function calendarUUID(){return crypto.randomUUID().replaceAll('-','')}
+function calendarUUID(){return crypto.randomUUID?crypto.randomUUID().replaceAll('-',''):[...crypto.getRandomValues(new Uint8Array(16))].map(n=>n.toString(16).padStart(2,'0')).join('')}
 function calendarOpen(event=null,preset={}){
  if(calendarSaving||occurrenceSaving)return false;
  if(occurrencePending){$('#calendarOccurrenceDialog').showModal();return false}
  if(calendarPending){$('#calendarDialog').showModal();return false}
  calendarRememberDraft();calendarDraftContext=null;
- document.getElementById?.('calendarDraftDetails')?.remove();
+ document.getElementById?.('calendarDraftDetails')?.remove();document.getElementById?.('calendarDraftSchedule')?.remove();
  const e=event||{id:calendarUUID(),version:0,child_ids:calendarState.childID?[calendarState.childID]:data.children.map(c=>c.id),title:'',category:'activity',day:calendarState.day||data.today,start_time:'',end_time:'',location:'',note:'',status:'tentative',repeat:'none',until:'',...preset};
  const f=$('#calendarForm');f.reset();for(const k of ['id','version','title','category','start_time','end_time','location','note','status','repeat','until'])f.elements[k].value=e[k]??'';f.elements.day.value=e.series_day||e.day;f.elements.id.value=e.series_id||e.id;f.elements.start_time.value=e.series_start_time??e.start_time;f.elements.end_time.value=e.series_end_time??e.end_time;
  const days=e.repeat_days||[];calendarWeekdaysChosen=e.repeat==='weekly'&&days.length>0;const weekday=new Date((e.series_day||e.day||data.today)+'T12:00:00Z').getUTCDay()||7;for(const input of f.querySelectorAll('[name=repeat_weekday]'))input.checked=(e.repeat==='weekly'&&days.length?days:[weekday]).includes(Number(input.value));f.elements.repeat_monthdays.value=e.repeat==='monthly'?days.join('、'):'';$('#calendarExtraRows').innerHTML=(e.extra_times||[]).map((slot,n)=>calendarExtraHTML(slot,n,e.id===e.series_id+'.'+slot.id)).join('');
@@ -133,14 +133,16 @@ function calendarOpen(event=null,preset={}){
  $('#calendarDialogTitle').textContent=event?'编辑安排':'写下一个安排';$('#calendarEditNote').textContent=event&&event.repeat!=='none'?'修改未单独处理的重复日期；已单独改期、完成或取消的记录保留。':'可以先暂定，和孩子商量后再确定。';$('#calendarFormError').textContent='';$('#calendarRetryNote').textContent='';calendarFormLock(false);calendarRepeat();$('#calendarDialog').showModal();const active=$('#calendarExtraRows').querySelector?.('.is-selected-slot');if(active){active.scrollIntoView({block:'center'});active.focus({preventScroll:true})}return true;
 }
 function calendarDraftMissing(context){const d=context.form||context.draft;return d?[!d.child_ids?.length?'孩子':'',!d.title?.trim()?'安排内容':'',!d.day?'日期':''].filter(Boolean).join('、'):''}
-function calendarDraftDetails(context,id=''){return `<details class="ask-citation" ${id?`id="${esc(id)}"`:''}><summary>原话与核对说明</summary><p class="source">${esc(context.text)}</p>${context.needs_review.length?`<ul>${context.needs_review.map(x=>`<li class="source">${esc(x)}</li>`).join('')}</ul>`:''}</details>`}
+function calendarDraftSchedule(context){const d=context.form||context.draft;if(!d||d.repeat==='none')return '';const times=[d,...(d.extra_times||[])].map((p,n)=>p.start_time?p.start_time+(p.end_time?'–'+p.end_time:''):'时段'+(n+1)+'钟点待定');return (d.day?'从 '+d.day:'起点待定')+(d.until?' 至 '+d.until:' · 未设截止')+' · '+calendarRepeatLabel(d)+' · '+times.join('、')}
+function calendarDraftDetails(context,id=''){const schedule=calendarDraftSchedule(context);return `${schedule?`<p class="source" ${id?'id="calendarDraftSchedule"':''}>${esc(schedule)}</p>`:''}<details class="ask-citation" ${id?`id="${esc(id)}"`:''}><summary>原话与核对说明</summary><p class="source">${esc(context.text)}</p>${context.needs_review.length?`<ul>${context.needs_review.map(x=>`<li class="source">${esc(x)}</li>`).join('')}</ul>`:''}</details>`}
 function calendarDraftNote(context){const missing=calendarDraftMissing(context);return '按 '+context.reference_date+' 理解相对日期。'+(missing?'待核对：'+missing+'。':'请核对后保存。')}
-function calendarRememberDraft(){if(calendarDraftContext&&!calendarSaving&&!calendarPending){calendarDraftContext.form=calendarPayload();$('#calendarEditNote').textContent=calendarDraftNote(calendarDraftContext)}}
+function calendarRememberDraft(){if(calendarDraftContext&&!calendarSaving&&!calendarPending){calendarDraftContext.form=calendarPayload();$('#calendarEditNote').textContent=calendarDraftNote(calendarDraftContext);const schedule=document.getElementById?.('calendarDraftSchedule');if(schedule)schedule.textContent=calendarDraftSchedule(calendarDraftContext)}}
 function calendarOpenAssistant(context){
  if(calendarSaving||calendarPending)return false;
  if(!context?.draft||context.saved)return false;
  const preset=context.form||{...context.draft,child_ids:context.draft.child_ids||[],day:context.draft.day||''};
  if(!calendarOpen(null,preset))return false;
+ if(preset.repeat==='weekly'&&!preset.repeat_days?.length){calendarWeekdaysChosen=true;for(const input of $('#calendarForm').querySelectorAll('[name=repeat_weekday]'))input.checked=false;calendarRepeat()}
  calendarDraftContext=context;calendarRememberDraft();
  $('#calendarDialogTitle').textContent='核对一句话安排';
  $('#calendarEditNote').textContent=calendarDraftNote(context);
@@ -190,8 +192,8 @@ $('#calendarForm').onsubmit=async e=>{
 };
 $('#calendarForm').elements.repeat.onchange=calendarRepeat;
 for(const type of ['input','change'])$('#calendarForm').addEventListener(type,calendarRememberDraft);
-$('#calendarCancel').onclick=()=>{if(!calendarSaving){calendarRememberDraft();$('#calendarDialog').close();if(page==='calendar')render()}};
-$('#calendarDialog').addEventListener('cancel',e=>{if(calendarSaving)e.preventDefault();else{calendarRememberDraft();if(page==='calendar')setTimeout(render,0)}});
+$('#calendarCancel').onclick=()=>{if(!calendarSaving){calendarRememberDraft();$('#calendarDialog').close();if(['calendar','ask'].includes(page))render()}};
+$('#calendarDialog').addEventListener('cancel',e=>{if(calendarSaving)e.preventDefault();else{calendarRememberDraft();if(['calendar','ask'].includes(page))setTimeout(render,0)}});
 window.addEventListener('beforeunload',e=>{if(calendarPending||calendarDraftContext&&!calendarDraftContext.saved){e.preventDefault();e.returnValue=''}});
 document.addEventListener('click',async e=>{
  const b=e.target.closest('button');if(!b)return;
