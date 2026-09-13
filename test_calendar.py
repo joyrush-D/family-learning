@@ -93,7 +93,7 @@ class CalendarTests(unittest.TestCase):
              dict(start_time='23:00',end_time='01:00'),dict(start_time='9:00'),dict(child_ids=[]),
              dict(child_ids=['missing-child']),dict(child_ids=['child-1','child-1']),dict(child_ids=['child-1',{}]),
              dict(title=' '*4),dict(note='a'*4001),dict(category='automatic'),dict(status='invalid'),
-             dict(repeat='daily'),dict(repeat='none',until='2026-10-01'),dict(repeat='weekly',until='2026-09-11'),
+             dict(repeat='unsupported'),dict(repeat='none',until='2026-10-01'),dict(repeat='weekly',until='2026-09-11'),
              dict(version=True),dict(id='source:school-day'),dict(source='pretend-school-source')]
         for extra in bad:
             with self.subTest(extra=extra),self.assertRaises(family_calendar.CalendarError): self.store.save(self.request(**extra))
@@ -123,6 +123,51 @@ class CalendarTests(unittest.TestCase):
                          ['2026-09-06','2026-09-13','2026-09-20','2026-09-27'])
         self.store.save(self.request(id='b'*32,day='9999-12-31',repeat='weekly',until=''))
         self.assertIn('9999-12-31',[r['day'] for r in self.store.snapshot('9999-12-31','9999-12-31')['events']])
+
+    def test_repeat_rules_extra_times_and_legacy_clients_preserve_one_series(self):
+        cases=[('daily',[],['2026-09-14','2026-09-15','2026-09-16','2026-09-17','2026-09-18','2026-09-19','2026-09-20']),
+               ('weekends',[],['2026-09-19','2026-09-20']),
+               ('weekly',[1,3,5],['2026-09-14','2026-09-16','2026-09-18'])]
+        for n,(mode,days,expected) in enumerate(cases):
+            ident=str(n+1)*32
+            obj=self.request(id=ident,day='2026-09-14',repeat=mode,until='2026-09-20',repeat_days=days)
+            saved=self.store.save(obj);self.assertEqual(self.store.save(obj),saved)
+            rows=[r for r in self.store.snapshot('2026-09-13','2026-09-21')['events'] if r['id']==ident]
+            self.assertEqual([r['day'] for r in rows],expected)
+        monthly=self.request(id='d'*32,day='2026-01-30',repeat='monthly',repeat_days=[31],until='2026-03-31',start_time='07:00',end_time='07:10',extra_times=[dict(id='e'*16,start_time='19:00',end_time='19:10')])
+        first=self.store.save(monthly)
+        self.assertEqual([r for r in self.store.snapshot('2026-02-01','2026-02-28')['events'] if r['id'].startswith('d')],[])
+        rows=[r for r in self.store.snapshot('2026-03-01','2026-03-31')['events'] if r['id'].startswith('d')]
+        self.assertEqual([(r['day'],r['start_time']) for r in rows],[('2026-03-31','07:00'),('2026-03-31','19:00')])
+        self.assertEqual(rows[1]['series_id'],'d'*32);self.assertEqual(rows[1]['series_start_time'],'07:00')
+        with self.assertRaises(family_calendar.CalendarError):self.store.save({k:v for k,v in dict(monthly,version=1).items() if k not in family_calendar.REPEAT_FIELDS})
+        self.assertEqual(self.store.save(monthly),first)
+        changed=dict(monthly,version=1,title='虚构改名')
+        self.store.save(changed)
+        self.assertEqual(self.store.snapshot('2026-03-31','2026-03-31')['events'][-1]['id'],rows[-1]['id'])
+        before=self.dump()
+        for extra in [dict(repeat_days=[True]),dict(repeat_days=[0]),dict(repeat_days=[31,31]),
+                      dict(extra_times=[dict(id='e'*16,start_time='07:05',end_time='07:20')]),
+                      dict(extra_times=[dict(id='e'*16,start_time='19:00',end_time='18:00')]),
+                      dict(until='2026-01-30'),dict(status='completed')]:
+            with self.assertRaises(family_calendar.CalendarError): self.store.save(dict(monthly,version=2,**extra))
+        self.assertEqual(self.dump(),before)
+
+    def test_legacy_series_retry_survives_new_columns(self):
+        import hashlib
+        obj=self.request(repeat='weekly');first=self.store.save(obj)
+        legacy=hashlib.sha256(family_calendar._json(dict(id=obj['id'],version=0,**{k:v for k,v in self.store._fields(obj,{'child-1','child-2'}).items() if k not in family_calendar.REPEAT_FIELDS})).encode()).hexdigest()
+        with app.connect() as c:
+            c.execute('UPDATE calendar_events SET last_request_hash=? WHERE id=?',(legacy,obj['id']))
+            # Recreate the pre-upgrade table, then run the real additive migration twice.
+            columns=[r[1] for r in c.execute('PRAGMA table_info(calendar_events)') if r[1] not in family_calendar.REPEAT_FIELDS]
+            c.execute('CREATE TABLE calendar_legacy AS SELECT '+','.join(columns)+' FROM calendar_events')
+            c.execute('DROP TABLE calendar_events');c.execute('ALTER TABLE calendar_legacy RENAME TO calendar_events')
+        self.assertEqual(self.store.snapshot('2026-09-12','2026-09-12')['events'],[first])
+        with ThreadPoolExecutor(max_workers=2) as pool: migrated=list(pool.map(lambda _:app.calendar_store(),range(2)))
+        self.store=migrated[0];app.calendar_store()
+        self.assertEqual(self.store.save(obj),first)
+        self.assertEqual(self.store.snapshot('2026-09-12','2026-09-12')['events'],[first])
 
     def test_lost_response_retry_and_conflicting_version(self):
         obj=self.request(); first=self.store.save(obj); saved=self.dump()

@@ -91,6 +91,25 @@ class CalendarICSRenderTests(unittest.TestCase):
         with self.assertRaises(calendar.CalendarError): render([row,dict(row,day='2026-01-09')])
         with self.assertRaises(calendar.CalendarError): render([dict(row,day='2026-01-09')])
 
+    def test_local_repeat_days_and_multiple_times_match_web_dates(self):
+        row=event(day='2026-09-14',repeat='weekly',repeat_days=[3,5],until='2026-09-25',extra_times=[dict(id='b'*16,start_time='19:00',end_time='19:10')])
+        result=lines(render([row]))
+        self.assertEqual(result.count('BEGIN:VEVENT'),2)
+        self.assertIn('DTSTART;TZID=Asia/Shanghai:20260916T073000',result)
+        self.assertIn('DTSTART;TZID=Asia/Shanghai:20260916T190000',result)
+        self.assertIn('RRULE:FREQ=WEEKLY;BYDAY=WE,FR;UNTIL=20260924T233000Z',result)
+        self.assertIn('RRULE:FREQ=WEEKLY;BYDAY=WE,FR;UNTIL=20260925T110000Z',result)
+        identifiers=[x for x in result if x.startswith('UID:')]
+        self.assertEqual(len(set(identifiers)),2)
+        self.assertEqual(identifiers,[x for x in lines(render([dict(row,title='虚构更名')])) if x.startswith('UID:')])
+        weekend=lines(render([event(day='2026-09-14',repeat='weekends',until='2026-09-20')]))
+        self.assertIn('DTSTART;TZID=Asia/Shanghai:20260919T073000',weekend)
+        self.assertIn('RRULE:FREQ=WEEKLY;BYDAY=SA,SU;UNTIL=20260919T233000Z',weekend)
+        monthly=lines(render([event(day='2026-02-01',repeat='monthly',repeat_days=[31],start_time='',end_time='')]))
+        self.assertIn('DTSTART;VALUE=DATE:20260331',monthly)
+        self.assertIn('RRULE:FREQ=MONTHLY;BYMONTHDAY=31',monthly)
+        self.assertIn('RRULE:FREQ=DAILY',lines(render([event(repeat='daily')])) )
+
     def test_names_reschedule_and_namespace_do_not_leak_private_data(self):
         row=event(id='source:PRIVATE_SOURCE_ID',source='PRIVATE_MESSAGE_CANARY',
                   attachment='PRIVATE_IMAGE_CANARY',score='PRIVATE_SCORE_CANARY',mood='PRIVATE_MOOD_CANARY')
@@ -120,7 +139,7 @@ class CalendarICSRenderTests(unittest.TestCase):
     def test_invalid_data_fails_whole_feed_instead_of_empty_or_partial_success(self):
         invalid=[dict(day='2027-02-29'),dict(start_time='24:00'),dict(child_ids=['missing']),
                  dict(child_ids=['child-a','child-a']),dict(id='\n'),dict(title=''),dict(status='done'),
-                 dict(repeat='daily'),dict(until='2026-01-01'),dict(title='bad\ud800'),
+                 dict(repeat='unsupported'),dict(until='2026-01-01'),dict(title='bad\ud800'),
                  dict(day='0001-01-01',start_time='01:00',end_time='02:00')]
         for change in invalid:
             with self.subTest(change=change),self.assertRaises(calendar.CalendarError): render([event(**change)])

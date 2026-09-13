@@ -958,11 +958,13 @@ def query_evidence(child,question,start=None,end=None,now=None):
         for kind,entries in [('calendar',calendar_events),('timetable',calendar_tables)]:
             for row in entries:
                 if kind=='calendar':
+                    repeat_text={'none':'单次','daily':'每日','weekly':'每周','weekends':'每个周末','monthly':'每月'}[row['repeat']]
+                    if row.get('repeat_days'): repeat_text+='：'+'、'.join('周'+'一二三四五六日'[d-1] if row['repeat']=='weekly' else str(d)+'日' for d in row['repeat_days'])
                     detail='；'.join(label+'：'+clipped(value) for label,value in [
-                        ('安排状态',{'confirmed':'已确定，不代表已参加或完成','tentative':'暂定，尚未确认','cancelled':'已取消'}[row['status']]),
+                        ('安排状态',{'confirmed':'已确定，不代表已参加或完成','tentative':'暂定，尚未确认','cancelled':'已取消','completed':'家长已确认完成'}[row['status']]),
                         ('开始',row['start_time'] or '未填钟点'),('结束',row['end_time'] or '未填钟点'),
                         ('地点',row['location'] or '未填写'),('要求',row['note']),('来源',row['source'] or '家长手动安排'),
-                        ('重复','每周，当前日期为这一次发生日' if row['repeat']=='weekly' else '单次')])
+                        ('重复',repeat_text+'；当前日期为这一次发生日')])
                     linked=task_lookup.get(row['task_id']) if row['task_id'] else None
                     if linked: detail+='；家庭当前事项决定：'+task_status(linked,updates.get(linked['id'],{}).get('status'))+'；保留学校原安排不代表家庭参加'
                 else:
@@ -1224,6 +1226,8 @@ def calendar_draft_from_text(obj):
     except (ValueError,TypeError):
         raise family_llm.LLMDraftError('日历草稿日期、钟点或重复规则无法核验，请重试或手动填写') from None
     result['status']='tentative'
+    if re.search(r'每(?:天|日|月|个?周末)|每天.{0,12}(?:次|早晚)|每(?:周|星期).{0,12}[、，,]',text):
+        notes.append('原话包含重复日期或多时段，请在下面核对重复方式、指定日期和各时段；当前文字草稿尚未完整表达这些设置。')
     if not result['title']: notes.append('请补充具体要安排什么。')
     if not result['child_ids']: notes.append('请明确选择参加的孩子。')
     if not result['day']: notes.append('请确认具体日期，系统没有替你选择今天或周末某一天。')

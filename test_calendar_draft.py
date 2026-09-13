@@ -111,6 +111,20 @@ class CalendarLanguageTests(unittest.TestCase):
         for phrase in ['把周六游泳改到周日','取消周末游泳']:
             count=len(self.calls);result=self.draft(phrase)
             self.assertIsNone(result['draft']);self.assertIn(result['intent'],('edit','cancel'));self.assertEqual(len(self.calls),count)
+    def test_recurrence_evidence_names_weekdays_monthdays_and_completed(self):
+        self.event(day='2026-09-14',repeat='weekly',repeat_days=[1,3,5],until='2026-09-20')
+        self.event(id='b'*32,day='2026-09-14',repeat='monthly',repeat_days=[15],until='2026-09-20')
+        self.event(id='c'*32,day='2026-09-16',status='completed')
+        app.ask_family(dict(child='示例甲',question='日历安排',start='2026-09-14',end='2026-09-20'))
+        evidence=json.dumps(self.calls[-1][1]['evidence'],ensure_ascii=False)
+        self.assertIn('每周：周一、周三、周五',evidence);self.assertIn('每月：15日',evidence)
+        self.assertIn('家长已确认完成',evidence);self.assertNotIn('指定日期 1,3,5',evidence)
+    def test_extended_recurrence_is_flagged_for_parent_review(self):
+        before=self.dump()
+        for phrase in ['示例甲每天早晚阅读','示例甲每月1、15日复习','示例甲每周末运动','示例甲每周一、三、五阅读']:
+            result=self.draft(phrase)
+            self.assertTrue(any('重复日期或多时段' in note for note in result['needs_review']))
+        self.assertEqual(self.dump(),before)
     def test_untrusted_model_fields_children_dates_and_clocks_are_rejected(self):
         valid=self.draft()['draft'];valid.pop('status');valid.update(intent='create',needs_review=[])
         before=self.dump()

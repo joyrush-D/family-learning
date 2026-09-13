@@ -14,6 +14,8 @@ class CalendarError(ValueError):
 
 
 FIELDS=('child_ids','title','category','day','start_time','end_time','location','note','status','repeat','until')
+REPEAT_FIELDS=('repeat_days','extra_times')
+FIELDS+=REPEAT_FIELDS
 CATEGORIES={'school','activity','study','family','other'}
 
 
@@ -45,6 +47,33 @@ def _clock(value):
     return value
 
 
+def occurs(row, day):
+    origin=dt.date.fromisoformat(row['day'])
+    if day<origin or row['until'] and day.isoformat()>row['until']: return False
+    mode=row['repeat']; days=row.get('repeat_days',[])
+    return (day==origin if mode=='none' else True if mode=='daily' else
+            day.isoweekday()>=6 if mode=='weekends' else
+            day.isoweekday() in (days or [origin.isoweekday()]) if mode=='weekly' else
+            day.day in (days or [origin.day]))
+
+
+def first_day(row):
+    origin=dt.date.fromisoformat(row['day'])
+    # A requested 31st can skip February; no occurrence needs a >62-day search.
+    for offset in range(min(62,(dt.date.max-origin).days+1)):
+        day=origin+dt.timedelta(days=offset)
+        if occurs(row,day): return day.isoformat()
+    raise CalendarError('所选日期范围没有符合重复规则的日期，请核对起止日期')
+
+
+def slots(row):
+    yield row
+    for slot in row.get('extra_times',[]):
+        yield dict(row,id=row['id']+'.'+slot['id'],series_id=row['id'],
+                   series_start_time=row['start_time'],series_end_time=row['end_time'],
+                   start_time=slot['start_time'],end_time=slot['end_time'])
+
+
 def timetable_week(week):
     if not isinstance(week,list) or len(week)>7: raise CalendarError('每周课表最多七天')
     days={}
@@ -74,6 +103,12 @@ class Store:
                 location TEXT NOT NULL, note TEXT NOT NULL, status TEXT NOT NULL,
                 repeat TEXT NOT NULL, until TEXT NOT NULL, last_request_hash TEXT NOT NULL,
                 created TEXT NOT NULL, updated TEXT NOT NULL)''')
+            columns={r[1] for r in c.execute('PRAGMA table_info(calendar_events)')}
+            for name in REPEAT_FIELDS:
+                if name not in columns:
+                    try: c.execute('ALTER TABLE calendar_events ADD COLUMN '+name+" TEXT NOT NULL DEFAULT '[]'")
+                    except sqlite3.OperationalError:
+                        if name not in {r[1] for r in c.execute('PRAGMA table_info(calendar_events)')}: raise
 
     @contextmanager
     def _db(self):
@@ -108,17 +143,38 @@ class Store:
         if row['status'] not in {'tentative','confirmed','cancelled','completed'}: raise CalendarError('安排状态不正确')
         if row['status']=='completed' and (source or row['repeat']!='none'):
             raise CalendarError('仅单次手动计划可以确认完成；重复安排请逐次记录反馈')
-        if row['repeat'] not in {'none','weekly'}: raise CalendarError('重复方式不正确')
+        if row['repeat'] not in {'none','daily','weekly','weekends','monthly'}: raise CalendarError('重复方式不正确')
         if row['end_time'] and (not row['start_time'] or row['end_time']<=row['start_time']):
             raise CalendarError('结束时间须晚于同日开始时间')
-        if row['until'] and (row['repeat']!='weekly' or row['until']<row['day']):
+        if row['until'] and (row['repeat']=='none' or row['until']<row['day']):
             raise CalendarError('重复结束日期须不早于首次日期；单次安排不填写重复结束日期')
+        days=obj.get('repeat_days',[]); extra=obj.get('extra_times',[])
+        limit=31 if row['repeat']=='monthly' else 7 if row['repeat']=='weekly' else 0
+        if (not isinstance(days,list) or len(days)>limit or
+                any(type(d) is not int or not 1<=d<=limit for d in days) or len(set(days))!=len(days)):
+            raise CalendarError('请选择不重复的星期或每月日期')
+        if not isinstance(extra,list) or len(extra)>7 or extra and (source or row['repeat']=='none' or not row['start_time']):
+            raise CalendarError('重复计划最多每天8个时段，添加时段前请填写首次时间')
+        normalized=[]; ids=set(); periods=[(row['start_time'],row['end_time'])]
+        for slot in extra:
+            if not isinstance(slot,dict) or set(slot)!={'id','start_time','end_time'} or not isinstance(slot['id'],str) or not re.fullmatch('[a-f0-9]{16}',slot['id']) or slot['id'] in ids:
+                raise CalendarError('重复时段标识不正确')
+            start=_clock(slot['start_time']); end=_clock(slot['end_time'])
+            if not start or end and end<=start: raise CalendarError('请填写时段开始时间，结束须晚于开始')
+            ids.add(slot['id']);periods.append((start,end));normalized.append(dict(slot))
+        periods.sort()
+        if any(a[0]==b[0] or a[1] and a[1]>b[0] for a,b in zip(periods,periods[1:])):
+            raise CalendarError('同一计划的时段不能重复或重叠')
+        row.update(repeat_days=sorted(days),extra_times=normalized)
+        first_day(row)
         return row
 
     @staticmethod
     def _manual(row):
-        result={k:row[k] for k in ('id','version')+FIELDS+('created','updated')}
+        raw=dict(row)
+        result={k:raw.get(k,'[]') if k in REPEAT_FIELDS else raw[k] for k in ('id','version')+FIELDS+('created','updated')}
         result['child_ids']=json.loads(result['child_ids'])
+        for key in REPEAT_FIELDS: result[key]=json.loads(result[key])
         result.update(series_day=result['day'],editable=True,source='',task_id='')
         return result
 
@@ -135,12 +191,18 @@ class Store:
             old=c.execute('SELECT * FROM calendar_events WHERE id=?',(ident,)).fetchone()
             # Reconcile a lost response before rejecting the now-stale version.
             if old and old['last_request_hash']==digest: return self._manual(old)
+            if old and not any(key in obj or json.loads(old[key]) for key in REPEAT_FIELDS):
+                legacy=hashlib.sha256(_json(dict(id=ident,version=version,**{k:v for k,v in fields.items() if k not in REPEAT_FIELDS})).encode()).hexdigest()
+                if old['last_request_hash']==legacy: return self._manual(old)
             if (old is None and version!=0) or (old is not None and old['version']!=version):
                 raise CalendarError('这条安排已更新，请刷新核对；当前输入未覆盖',409,'calendar_conflict')
+            if old and any(key not in obj and json.loads(old[key]) for key in REPEAT_FIELDS):
+                raise CalendarError('此计划包含新的重复设置，请刷新页面后修改',409,'calendar_conflict')
             now=dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat(timespec='seconds')
             values=dict(id=ident,version=version+1,**fields,last_request_hash=digest,
                         created=old['created'] if old else now,updated=now)
             values['child_ids']=_json(values['child_ids'])
+            for key in REPEAT_FIELDS: values[key]=_json(values[key])
             if old:
                 columns=[k for k in values if k!='id']
                 c.execute('UPDATE calendar_events SET '+','.join(k+'=?' for k in columns)+' WHERE id=?',
@@ -164,7 +226,7 @@ class Store:
             result=[]; timetables=[]; seen=set()
             for n,item in enumerate(events,1):
                 try:
-                    if not isinstance(item,dict) or set(item)-set(FIELDS)-{'id','source','task_id'} or 'repeat' in item or 'until' in item:
+                    if not isinstance(item,dict) or set(item)-set(FIELDS)-{'id','source','task_id'} or set(item)&{'repeat','until',*REPEAT_FIELDS}:
                         raise CalendarError('来源安排结构不正确')
                     ident=_text(item,'id',100,required=True)
                     if ident in seen: raise CalendarError('来源安排编号重复')
@@ -235,20 +297,15 @@ class Store:
         children=self._children()
         with self._db() as c:
             ready=c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='calendar_events'").fetchone()
-            rows=c.execute("SELECT * FROM calendar_events WHERE day<=? AND (repeat='weekly' OR day>=?) ORDER BY day,id",(end,start)).fetchall() if ready else []
+            rows=c.execute("SELECT * FROM calendar_events WHERE day<=? AND (repeat!='none' OR day>=?) ORDER BY day,id",(end,start)).fetchall() if ready else []
         events=[]
         for raw in rows:
             row=self._manual(raw)
             if any(i not in children for i in row['child_ids']): raise CalendarError('手动安排的孩子归属无法核对',409,'profile_error')
-            origin=dt.date.fromisoformat(row['series_day'])
-            if row['repeat']=='weekly':
-                offset=max(0,((first-origin).days+6)//7)*7
-                # Do not add a week beyond date.max merely to terminate iteration.
-                for number in range(offset, (last-origin).days+1, 7):
-                    day=(origin+dt.timedelta(days=number)).isoformat()
-                    if row['until'] and day>row['until']: break
-                    events.append(dict(row,day=day))
-            elif first<=origin<=last: events.append(row)
+            self._fields(row,children)
+            for offset in range((last-first).days+1):
+                day=first+dt.timedelta(days=offset)
+                if occurs(row,day): events.extend(dict(slot,day=day.isoformat()) for slot in slots(row))
         sources,tables,error=self._sources(children)
         events.extend(row for row in sources if start<=row['day']<=end)
         for row in self.saved_timetables():
@@ -361,8 +418,16 @@ def render_ics(events,profiles,as_of,uid_namespace,task_states=None):
     except (ValueError,OverflowError): raise CalendarError('订阅生成时间无法转换为UTC') from None
     timestamp=f'{stamp.year:04d}{stamp.month:02d}{stamp.day:02d}T{stamp.hour:02d}{stamp.minute:02d}{stamp.second:02d}Z'
     lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Family Growth//Family Calendar//ZH','CALSCALE:GREGORIAN']
-    seen=set()
+    # Custom local weekdays/month-days must not shift when morning time is UTC's previous day.
+    lines+=['BEGIN:VTIMEZONE','TZID:Asia/Shanghai','BEGIN:STANDARD','DTSTART:19700101T000000',
+            'TZOFFSETFROM:+0800','TZOFFSETTO:+0800','END:STANDARD','END:VTIMEZONE']
+    expanded=[]
     for item in events:
+        if not isinstance(item,dict): raise CalendarError('日历安排格式不正确')
+        Store._fields(item,children)
+        expanded.extend(dict(slot,extra_times=[]) for slot in slots(item))
+    seen=set()
+    for item in expanded:
         if not isinstance(item,dict): raise CalendarError('日历安排格式不正确')
         ident=_text(item,'id',128,required=True)
         if ident!=item['id'] or any(ord(c)<32 for c in ident) or ident in seen:
@@ -372,6 +437,7 @@ def render_ics(events,profiles,as_of,uid_namespace,task_states=None):
         origin=_day(item.get('series_day',row['day']))
         # Feed only the original saved series, not duplicate snapshot occurrences.
         if origin!=row['day']: raise CalendarError('日历订阅需要原始系列，不能使用已展开的每周实例')
+        origin=first_day(row)
         task_id=_text(item,'task_id',100)
         participants=[child for child in row['child_ids'] if states.get(task_id,{}).get(child) not in {'不参加','不适用'}]
         status=row['status'] if participants else 'cancelled'
@@ -387,14 +453,22 @@ def render_ics(events,profiles,as_of,uid_namespace,task_states=None):
         except UnicodeError: raise CalendarError('日历编号无法编码') from None
         lines+=['BEGIN:VEVENT','UID:'+uid,'DTSTAMP:'+timestamp,'SUMMARY:'+_ics_text(title),
                 'STATUS:'+('CONFIRMED' if status=='completed' else status.upper()),'TRANSP:'+('OPAQUE' if status=='confirmed' and row['start_time'] else 'TRANSPARENT')]
+        local_rule=row['repeat'] in {'daily','weekends','monthly'} or bool(row['repeat_days'])
+        def date_time(key,clock):
+            return (key+';TZID=Asia/Shanghai:'+origin.replace('-','')+'T'+clock.replace(':','')+'00'
+                    if local_rule else key+':'+_ics_utc(origin,clock))
         if row['start_time']:
-            lines.append('DTSTART:'+_ics_utc(origin,row['start_time']))
-            if row['end_time']: lines.append('DTEND:'+_ics_utc(origin,row['end_time']))
+            lines.append(date_time('DTSTART',row['start_time']))
+            if row['end_time']: lines.append(date_time('DTEND',row['end_time']))
         else:
             # DATE without DTEND means one day; no guessed busy interval or clock.
             lines.append('DTSTART;VALUE=DATE:'+origin.replace('-',''))
-        if row['repeat']=='weekly':
-            rule='RRULE:FREQ=WEEKLY'
+        if row['repeat']!='none':
+            rule='RRULE:FREQ='+{'daily':'DAILY','weekly':'WEEKLY','weekends':'WEEKLY','monthly':'MONTHLY'}[row['repeat']]
+            if row['repeat']=='weekends': rule+=';BYDAY=SA,SU'
+            elif row['repeat']=='weekly' and row['repeat_days']:
+                rule+=';BYDAY='+','.join(['MO','TU','WE','TH','FR','SA','SU'][d-1] for d in row['repeat_days'])
+            elif row['repeat']=='monthly': rule+=';BYMONTHDAY='+','.join(map(str,row['repeat_days'] or [dt.date.fromisoformat(row['day']).day]))
             if row['until']:
                 until=_ics_utc(row['until'],row['start_time']) if row['start_time'] else row['until'].replace('-','')
                 rule+=';UNTIL='+until
