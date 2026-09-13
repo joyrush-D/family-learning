@@ -92,6 +92,64 @@ raise SystemExit(13)
             if process.poll() is None:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=3)
+        # Python may exit before a CLI, or both may ignore SIGTERM. Neither may
+        # leave a reader behind; cleanup must not signal an unrelated process.
+        (root / 'family_collect.py').write_text('''import json, os, signal, subprocess, sys, time
+from pathlib import Path
+mode = Path('private/mode').read_text()
+if mode == 'stop': signal.signal(signal.SIGTERM, signal.SIG_IGN)
+child_code = """import signal, time
+from pathlib import Path
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+Path('private/reader-ready').write_text('ready')
+while True: time.sleep(.02)
+"""
+child = subprocess.Popen([sys.executable, '-c', child_code])
+while not Path('private/reader-ready').exists(): time.sleep(.02)
+Path('private/orphan.json').write_text(json.dumps(dict(pid=os.getpid(), group=os.getpgrp(), child=child.pid)))
+if mode != 'stop': raise SystemExit(int(mode))
+while True: time.sleep(.02)
+''')
+        unrelated = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+        try:
+            for mode in ('0', '13', 'stop'):
+                for name in ('reader-ready', 'orphan.json'):
+                    (private / name).unlink(missing_ok=True)
+                (private / 'mode').write_text(mode)
+                process = subprocess.Popen([str(binary)])
+                reader = None
+                cleaned = False
+                try:
+                    deadline = time.monotonic() + 8
+                    while not (private / 'orphan.json').exists():
+                        assert time.monotonic() < deadline, 'Reader failed to start'
+                        time.sleep(.02)
+                    reader = json.loads((private / 'orphan.json').read_text())
+                    assert reader['group'] == reader['pid'] != process.pid
+                    started = time.monotonic()
+                    if mode == 'stop': process.send_signal(signal.SIGTERM)
+                    assert process.wait(timeout=6) == (137 if mode == 'stop' else int(mode))
+                    assert time.monotonic() - started < 5
+                    deadline = time.monotonic() + 3
+                    while True:
+                        state = subprocess.run(['/bin/ps', '-p', str(reader['child']), '-o', 'state='],
+                            capture_output=True, text=True, timeout=2).stdout.strip()
+                        if not state or state.startswith('Z'): break
+                        assert time.monotonic() < deadline, 'Reader survived collector exit'
+                        time.sleep(.02)
+                    assert unrelated.poll() is None, 'Unrelated process must remain running'
+                    assert config.read_bytes() == original
+                    cleaned = True
+                finally:
+                    if reader and not cleaned:
+                        try: os.killpg(reader['group'], signal.SIGKILL)
+                        except ProcessLookupError: pass
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait(timeout=3)
+        finally:
+            unrelated.terminate()
+            unrelated.wait(timeout=3)
         with patch.object(package.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'synthetic-build')):
             try:
                 package.build(root, config, base / 'failed-build')
@@ -117,7 +175,7 @@ raise SystemExit(13)
         else:
             raise AssertionError('Missing application log/lock directory must be refused')
         assert not (base / 'uninitialized-app').exists()
-    print('PASS: native app, fixed command, private configuration, signal/child cleanup and failed build')
+    print('PASS: native app, fixed command, private configuration, exit/orphan/forced-stop cleanup and failed build')
 
 
 if __name__ == '__main__':

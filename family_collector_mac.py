@@ -20,7 +20,7 @@ BUNDLE_ID = LABEL + '.collector-host'
 APP_NAME = 'FamilyCollector.app'
 
 # A native parent gives macOS a product identity. exec() would replace that parent
-# with Python. Keep the parent alive and forward termination to its own group.
+# with Python. Keep it alive; only the collector's separate group is terminated.
 HOST_SOURCE = r'''
 #include <CoreFoundation/CoreFoundation.h>
 #include <errno.h>
@@ -36,11 +36,17 @@ HOST_SOURCE = r'''
 #include <unistd.h>
 extern char **environ;
 static volatile sig_atomic_t stopping = 0;
+static volatile sig_atomic_t child_group = 0;
+static void force_stop(int signum) {
+    (void)signum;
+    if (child_group) kill(-child_group, SIGKILL);
+}
 static void stop(int signum) {
     (void)signum;
     if (stopping) return;
     stopping = 1;
-    kill(-getpid(), SIGTERM);
+    if (child_group) kill(-child_group, SIGTERM);
+    alarm(3);
 }
 static int path(CFStringRef key, char *buffer) {
     CFTypeRef value = CFBundleGetValueForInfoDictionaryKey(CFBundleGetMainBundle(), key);
@@ -73,14 +79,34 @@ int main(int argc, char **argv) {
     sigemptyset(&action.sa_mask);
     sigaction(SIGTERM, &action, NULL);
     sigaction(SIGINT, &action, NULL);
+    action.sa_handler = force_stop;
+    sigaction(SIGALRM, &action, NULL);
     char *arguments[] = {python, script, "--config", config, "--interval", "300", NULL};
     pid_t pid;
-    int error = posix_spawn(&pid, python, NULL, NULL, arguments, environ);
+    posix_spawnattr_t attributes;
+    int error = posix_spawnattr_init(&attributes);
+    if (error) return 71;
+    error = posix_spawnattr_setpgroup(&attributes, 0);
+    if (!error) error = posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP);
+    if (!error) error = posix_spawn(&pid, python, NULL, &attributes, arguments, environ);
+    posix_spawnattr_destroy(&attributes);
     if (error) {
         fputs("Family collector: Python could not start.\n", stderr);
         return 71;
     }
-    if (stopping) kill(-getpid(), SIGTERM);
+    child_group = pid;
+    if (stopping) { kill(-pid, SIGTERM); alarm(3); }
+    // Reserve the leader PID until cleanup, even if Python exits before its CLI.
+    // ponytail: children must stay in this group; detached daemons need a service manager.
+    siginfo_t finished;
+    while (waitid(P_PID, pid, &finished, WEXITED | WNOWAIT) < 0) {
+        if (errno == EINTR) continue;
+        stop(SIGTERM);
+        return 71;
+    }
+    force_stop(SIGALRM);
+    child_group = 0;
+    alarm(0);
     int status;
     while (waitpid(pid, &status, 0) < 0) {
         if (errno == EINTR) continue;
