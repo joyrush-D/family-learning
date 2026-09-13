@@ -99,6 +99,72 @@ class GoalTests(unittest.TestCase):
         for status,note in [('已完成','家长通过清单勾选确认此事项已完成。'),('待跟进','家长撤销完成，继续跟进。')]:
             self.app.save_task(dict(id=task,status=status,note=note));self.assertEqual(self.goal()['context_hash'],original_hash)
 
+    def test_reviewed_old_evidence_and_counterexample_survive_recent_window(self):
+        self.feedback('最初情况尚待核对。')
+        early=self.feedback('只看词形能解释；纯听时选错了意思。')['record_id']
+        ref='record:'+str(early)
+        def anchored(*args,**kwargs):
+            result=self.reply(*args,**kwargs);p=result['proposal']
+            e=next(e for e in self.last_input['evidence'] if e['ref']==ref)
+            p['evidence']=[dict(ref=ref,quote='只看词形能解释')]
+            p['hypotheses'][0].update(reason='听音识义尚需核对',support=[ref],against=[],status='有支持')
+            return result
+        self.model.side_effect=anchored;self.approve(self.evaluate());formal=self.goal()['current_plan']
+        self.assertEqual(self.goal()['reviewed_evidence'][0]['quote'],'只看词形能解释')
+        with self.app.connect() as c:
+            row=c.execute('SELECT plan FROM agent_items WHERE id=?',(self.ident,)).fetchone();plan=json.loads(row['plan']);del plan['approved_evidence']
+            c.execute('UPDATE agent_items SET plan=? WHERE id=?',(json.dumps(plan),self.ident))
+        self.assertEqual(self.goal()['reviewed_evidence'][0]['ref'],ref,'legacy accepted proposal remains readable')
+        counter=self.app.save_record(dict(child='示例甲',day=self.now.date().isoformat(),category='家长观察',title='不同条件下的核对',note='另一词条无词形提示时能解释，但范围有限。',source='家长观察',related_record_id=early,followup_kind='独立复测',assistance='独立尝试'))['record_id']
+        for i in range(30):self.feedback('后续日常记录'+str(i))
+        self.model.side_effect=self.reply;self.evaluate()
+        refs={e['ref'] for e in self.last_input['evidence']}
+        self.assertIn(ref,refs);self.assertIn('record:'+str(counter),refs)
+        self.assertEqual(len(self.goal()['records']),24);self.assertEqual(self.goal()['current_plan'],formal)
+        self.app.save_record(dict(id=early,child='示例甲',day=self.now.date().isoformat(),category='家长观察',title='已更正的早期核对',note='更正：当时先听过解释，不能算独立。',source='家长观察',assistance='看过讲解或答案'))
+        self.assertTrue(self.goal()['pending_stale']);self.evaluate()
+        current=next(e['text'] for e in self.last_input['evidence'] if e['ref']==ref)
+        self.assertIn('更正：当时先听过解释',current);self.assertNotIn('只看词形能解释',current)
+        self.assertEqual(self.goal()['current_plan'],formal)
+        quoted=self.goal()['reviewed_evidence'][0];self.assertEqual(quoted['quote'],'只看词形能解释');self.assertTrue(quoted['quote_changed'])
+
+    def test_reviewed_task_note_is_retrieved_and_missing_ownership_is_not_leaked(self):
+        self.approve(self.evaluate());task=self.goal()['task_id']
+        self.app.save_task(dict(id=task,status='进行中',note='早期方法反馈：孩子愿意口述，未确认书面独立。'))
+        self.approve(self.evaluate());ref=self.goal()['reviewed_evidence'][0]['ref']
+        for i in range(30):self.app.save_task(dict(id=task,status='进行中',note='后续作息反馈'+str(i)))
+        self.evaluate();self.assertIn(ref,{e['ref'] for e in self.last_input['evidence']})
+        self.assertEqual(len(self.goal()['task_feedback']),24);self.assertEqual(self.goal()['task_feedback_omitted'],7)
+        with self.app.connect() as c:c.execute("UPDATE manual_tasks SET child='示例乙' WHERE id=?",(task,))
+        g=self.goal();self.assertIn(ref,g['unavailable_reviewed_refs']);self.assertEqual(g['reviewed_evidence'][0]['quote'],'')
+        self.assertNotIn('早期方法反馈',json.dumps(g,ensure_ascii=False))
+
+    def test_evidence_budget_reports_reviewed_refs_it_cannot_include(self):
+        for i in range(24):self.feedback('虚构条件记录'+str(i))
+        def many_refs(*args,**kwargs):
+            result=self.reply(*args,**kwargs);refs=[e['ref'] for e in self.last_input['evidence'] if e['ref'].startswith('record:')]
+            result['proposal']['hypotheses']=[dict(reason='需结合条件核对的假设'+str(i),support=refs[i*6:i*6+4],against=refs[i*6+4:i*6+6],test='核对原始条件，不把次数当掌握。',status='有反证') for i in range(4)]
+            return result
+        self.model.side_effect=many_refs;self.approve(self.evaluate());formal=self.goal()['current_plan']
+        for i in range(6):self.feedback('最新补充条件'+str(i))
+        self.model.side_effect=self.reply;self.evaluate();g=self.goal()
+        self.assertEqual(len(g['records']),24);self.assertEqual(len(g['omitted_reviewed_refs']),6)
+        self.assertEqual(g['omitted_reviewed_refs'],self.last_input['omitted_reviewed_refs'])
+        self.assertFalse(self.last_input['unavailable_reviewed_refs']);self.assertEqual(g['current_plan'],formal)
+
+    def test_revoked_reference_cannot_return_through_old_model_summary_or_plan(self):
+        self.approve(self.evaluate());task=self.goal()['task_id'];note='仅用于范围核验的原记录词句'
+        self.app.save_task(dict(id=task,status='进行中',note=note))
+        def derived(*args,**kwargs):
+            result=self.reply(*args,**kwargs);p=result['proposal'];p['assessment']='仍待核对：'+note;p['action']='请核对：'+note
+            return result
+        self.model.side_effect=derived;self.approve(self.evaluate());formal=self.goal()['current_plan']
+        with self.app.connect() as c:c.execute("UPDATE manual_tasks SET child='示例乙' WHERE id=?",(task,))
+        self.model.side_effect=self.reply;self.evaluate()
+        self.assertNotIn(note,json.dumps(self.last_input,ensure_ascii=False))
+        self.assertTrue(self.last_input['previous_context_unavailable']);self.assertIsNone(self.last_input['current_plan'])
+        self.assertEqual(self.goal()['current_plan'],formal,'parent audit plan remains stored; it is withheld from the model')
+
     def test_word_directions_remain_separate_retry_and_feed_goal(self):
         before=self.goal();self.approve(self.evaluate());approved=self.goal()['current_plan']
         check=dict(word='pen',meaning='用于写字的笔',material='虚构课堂词表',phase='首次核对',
@@ -247,7 +313,7 @@ class GoalTests(unittest.TestCase):
         self.feedback('读过解释后答对了原题；孩子说困了，不想再写。',assistance='看过讲解或答案',practice_relation='同一道题或同一片段')
         def adjusted(*args,**kwargs):
             answer=self.reply(*args,**kwargs);p=answer['proposal']
-            p.update(choice='暂停',why_now='本次有疲倦反馈；看过解释后答对原题不代表独立掌握。',
+            p.update(choice='暂停',estimated_minutes=None,why_now='本次有疲倦反馈；看过解释后答对原题不代表独立掌握。',
                      action='今天结束练习，保留原目标；休息后再安排一小步。')
             return answer
         self.model.side_effect=adjusted
@@ -255,6 +321,9 @@ class GoalTests(unittest.TestCase):
         self.assertEqual(self.last_input['current_plan'],original)
         self.assertIn('看过讲解或答案',self.last_input['evidence'][-1]['text'])
         self.assertEqual(pending['pending']['choice'],'暂停')
+        with self.store.agent._db() as c:ctx=self.store._context(c,self.store._get(c,self.ident))
+        invalid={'proposal':{k:v for k,v in pending['pending'].items() if k in goals.PROPOSAL['required']}};invalid['proposal']['estimated_minutes']=5
+        with self.assertRaisesRegex(agent.AgentError,'暂停建议'):self.store._proposal(invalid,ctx,self.now)
         self.assertEqual(pending['current_plan'],original)
         self.assertEqual(self.approve(pending)['task_id'],task)
         self.assertIn('今天结束练习',self.goal()['current_plan']['action'])

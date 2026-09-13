@@ -68,6 +68,7 @@ PROMPT = '''你是一起成长Agent，负责根据实际证据定位学习困难
 review_on为本次日期起30天内的回看日，estimated_minutes为一次尝试的1至60分钟或null。
 evidence的quote必须是该ref的text中逐字连续的短片段；不能拼接不同字段、改写、补标点或加入标签。引用一条完整反馈即可。使用‘孩子’称呼，不猜测性别。保护休息；反馈困倦或想停止时先结束当次练习，不增加加练。''' + '''
 kind为task_feedback的资料是家长在关联任务上保存的反馈，time是保存时间，未说明发生时间时保持未知；按先后保留更正与反证，不能把历史说法都当成当前事实。content_incomplete表示只提供了原反馈的前1200字，未提供部分保持未知；同一作息记录在任务状态与学习记录中出现时是同一尝试，不计为多次表现；status仅是任务状态，不等于知识掌握；勾选完成、恢复跟进或计划调整本身不是学习表现证据。text可能含家长转述，不冒称孩子直接访谈。task_title是当前任务标题，不是反馈当时的题目。
+evidence在既定数量内优先回取已确认方案的依据、支持/反证及同孩关联后续，再补近期反馈；它不是全部历史。omitted_reviewed_refs是本轮预算未纳入的旧依据或后续，unavailable_reviewed_refs是当前归属/内容无法核对的旧依据；不能用previous_assessment或旧假设代替这些未提供的原文，也不能把本轮未见反证当成没有反证。若当前证据不足以验证旧判断，说明缺口并维持待核对，不重复早期已被更正的表述。历史方法接受程度只描述对应时间和情境，不当成永久偏好。
 本轮围绕一个持续学习目标，家长是主要用户；汇合提供的全部反馈再判断，不把每条反馈当成新的任务。
 家长不知道卡在哪里是正常的，不要求家长诊断原因、设计测验或先给出解决办法。家长负责提供原始情况、转述孩子回答和审核执行。
 learning_goal中的要求、猜测和待核对事项是规划输入，不是实际作答证据；之前的建议、假设和预期结果也不是已执行记录。不得据此声称某个原因已有支持。
@@ -86,7 +87,7 @@ mastery_check同时给出家长可直接记录的原始反馈：题目或材料�
 纯听题不同时展示英文词形；看英文认义时不播放发音；带文字或读音提示后答对不能作为无提示听辨、读出或提取证据。切换方向会泄露答案，应先做需要隐藏词形的核对，刚展示答案后的同词测试保留提示/练习条件，隔开后再核对独立表现。
 选择题答对可能受选项帮助，需保留所选答案/选项和孩子原话；不能代替自由说出或拼写。选项只用现有已确认材料；未提供选项时先将该选择方向留未测，核对无需选项的方向，不要求家长临时编题或凑干扰项，不把口述中文偷换成选择题已通过。中文多义/同义表达先确定本次学校词表中的词义或语境，合理不同词不得直接判错。语音识别转写不能独立判断发音正确。快慢只记录实际条件和用时，不擅定统一几秒及格线；先核对准确性、听懂及是否靠提示。
 单词分项核对是家长填写的本次结果，不是系统施测或自动判分。未测保持未知；单次全对仅代表本次对应词义、对应方向通过，不等于稳定掌握，还需适当间隔后的独立表现与语境使用。只练实际有证据的薄弱方向，不因听写错就断言听不懂、基础全面薄弱或态度有问题；先区分听辨、词义提取与拼写，保护休息，记录孩子能接受的方式。没有真实词表时先核对学校材料，不编造已学词、已完成测试或分项结果。
-选择暂停时estimated_minutes为null，action只说明本次停止和收到什么新反馈后再评估，不安排补做或限期完成。review_on只是回看日期，不是练习截止；没有明确安排记录，不能声称原定今天执行。
+选择暂停时estimated_minutes为null，action只说明本次停止和收到什么新反馈后再评估，不安排补做或限期完成；也不在“休息后”“愿意后”等条件句里预先布置下次测验或分钟数。先等实际恢复情况，再生成新的待审核建议。review_on只是回看日期，不是练习截止；没有明确安排记录，不能声称原定今天执行。
 对照反馈和当前方案选择核实、尝试、维持、调整或暂停。旧判断标为依据已变化时只能作为历史，不能当成当前事实。
 why_now明确说明哪条实际反馈使哪一步需要改变、保持或暂缓；尚无反馈时说明先核对什么，不编造进步。已有计划时action给出本轮完整可执行方案，保留仍适用的部分，并明确本轮调整。
 核对原因时先提出可区分不同原因的小尝试；一次测验表现只支持本次范围的暂时判断，不能说一次达标就代表长期掌握。首次核对的review_on建议在本次日期后7天内，属于待审核回看日。Agent新拟的数字标准为试行建议，老师原文的数字和条件保持原意。只输出schema允许字段；形成建议不修改正式计划，所有执行与变化由家长确认。证据不足时提出具体核对建议，不能返回null或把找原因的工作退给家长。
@@ -96,6 +97,16 @@ SCHEMA['properties']['proposal'] = PROPOSAL
 
 def _root(row):
     return row['kind'] == 'care' and row['state'] in ('draft', 'accepted') and not json.loads(row['plan']).get('parent_goal_id')
+
+
+def select_evidence(entries, refs, limit):
+    """Keep fresh observations and retrieve reviewed evidence within the existing budget."""
+    selected = {e['ref'] for e in entries[-max(1, limit//4):]}
+    for candidates in ([e for e in entries if e['ref'] in refs], entries):
+        for e in reversed(candidates):
+            if len(selected) >= limit: break
+            selected.add(e['ref'])
+    return [e for e in entries if e['ref'] in selected]
 
 
 class Store:
@@ -157,8 +168,17 @@ class Store:
                     text=message['text'], source=source['name'], sender=message['sender'], time=message['time'],
                     content_incomplete=message['unread'], item_id=item['id'], state=item['state'])
         ordered = sorted(messages.values(), key=lambda m: (m['time'], m['ref']))
-        # ponytail: six recent originals per goal; retain all originals, add retrieval when this limit is measured.
-        return ordered[-6:], max(0, len(ordered)-6), missing
+        return ordered, missing
+
+    def _approved_evidence(self, c, row, plan):
+        if 'approved_evidence' in plan: return plan['approved_evidence']
+        # Older roots did not retain the quotes; recover only the matching accepted proposal.
+        for item in c.execute("SELECT plan FROM agent_items WHERE job_id=? AND child_id=? AND state='accepted' ORDER BY updated DESC,id DESC", ('goal:'+row['id'],row['child_id'])):
+            proposal = json.loads(item['plan'])
+            if (plan.get('approved_evidence_hash') and proposal.get('context_hash') == plan['approved_evidence_hash']
+                    and proposal.get('assessment') == plan.get('assessment') and proposal.get('hypotheses') == plan.get('hypotheses')):
+                return proposal.get('evidence', [])
+        return []
 
     def _get(self, c, ident):
         row = c.execute('SELECT * FROM agent_items WHERE id=?', (ident,)).fetchone()
@@ -214,27 +234,45 @@ class Store:
         fields['title'] = fields['title'] or plan.get('goal', row['title'])
         fields['subject'] = fields['subject'] or (records[0]['subject'] if records else '')
         missing = sorted(ids - {r['id'] for r in records})
-        school, school_omitted, school_missing = self._school_context(c, row)
-        evidence_hash = agent._hash({'assessment_policy': 2, 'fields': fields, 'records': records, 'missing': missing,
-                                    **({'school_messages': [{k:v for k,v in m.items() if k != 'state'} for m in school],
-                                        'school_missing':school_missing} if school or school_missing else {}),
+        school_all, school_missing = self._school_context(c, row)
+        evidence_hash = agent._hash({'assessment_policy': 3, 'fields': fields, 'records': records, 'missing': missing,
+                                    **({'school_messages': [{k:v for k,v in m.items() if k != 'state'} for m in school_all],
+                                        'school_missing':school_missing} if school_all or school_missing else {}),
                                     **({'task_feedback': [{k:v for k,v in h.items() if k != 'task_title'} for h in feedback],
                                         'task_missing':task_missing} if feedback or task_missing else {}),
                                     'profile': {k: profile.get(k, '') for k in ('id', 'name', 'grade', 'classroom')}})
-        chosen = records[-24:]
-        if records and records[0] not in chosen: chosen = [records[0], *chosen[-23:]]
+        approved_evidence = self._approved_evidence(c, row, plan)
+        reviewed_refs = {e['ref'] for e in approved_evidence}
+        reviewed_refs.update(ref for h in plan.get('hypotheses', []) for key in ('support','against') for ref in h[key])
+        related_refs = set(reviewed_refs)
+        while True:
+            extra = {'record:'+str(r['id']) for r in records if 'record:'+str(r['related_record_id']) in related_refs}
+            if extra <= related_refs: break
+            related_refs |= extra
+        record_evidence = [dict(ref='record:'+str(r['id']),text=agent._json(r)) for r in records]
+        selected_records = select_evidence(record_evidence, related_refs | ({record_evidence[0]['ref']} if record_evidence else set()), 24)
+        chosen_refs = {e['ref'] for e in selected_records}
+        chosen = [r for r in records if 'record:'+str(r['id']) in chosen_refs]
+        school = school_all[-6:]
         evidence = [{'ref': 'goal:' + row['id'], 'text': ('系统建立的跟进背景（尚无作答证据）：\n' if plan.get('school_origin') and fields['baseline'] == SCHOOL_BASELINE else '家长提供的情况（尚需结合实际作答核对）：\n') + (fields['baseline'] or '尚未提供具体表现记录。')}]
         if fields['school_target']:
             evidence.append({'ref': 'school:' + row['id'], 'kind': 'school_requirement', 'text': fields['school_target']})
-        evidence += [{'ref': 'record:' + str(r['id']), 'text': agent._json(r)} for r in chosen]
+        background = list(evidence)
+        evidence += selected_records
         evidence += school
-        # ponytail: 24 recent task notes per goal; keep full history on tasks, add retrieval when measured.
-        selected_feedback = feedback[-24:]
+        selected_feedback = select_evidence(feedback, reviewed_refs, 24)
         evidence += [{**h, 'text':h['text'][:1200], 'content_incomplete':len(h['text'])>1200} for h in selected_feedback]
+        available = {e['ref']:e['text'] for e in [*background,*record_evidence,*school_all,*feedback]}
+        omitted_refs = sorted((related_refs & available.keys()) - {e['ref'] for e in evidence})
+        unavailable_refs = sorted(reviewed_refs - available.keys())
+        reviewed = [dict(ref=e['ref'],quote=e['quote'] if e['ref'] in available else '',
+                         available=e['ref'] in available, included=any(v['ref']==e['ref'] for v in evidence),
+                         quote_changed=e['ref'] in available and e['quote'] not in available[e['ref']]) for e in approved_evidence]
         return dict(plan=plan, meta=meta, fields=fields, profile=profile, records=records, ids=ids,
                     missing=missing, evidence_hash=evidence_hash, evidence=evidence,
-                    task_feedback=selected_feedback, task_feedback_omitted=max(0,len(feedback)-24), task_missing=len(task_missing),
-                    school_messages=school, school_omitted=school_omitted, school_missing=school_missing,
+                    reviewed_evidence=reviewed, omitted_reviewed_refs=omitted_refs, unavailable_reviewed_refs=unavailable_refs,
+                    task_feedback=selected_feedback, task_feedback_omitted=len(feedback)-len(selected_feedback), task_missing=len(task_missing),
+                    school_messages=school, school_omitted=len(school_all)-len(school), school_missing=school_missing,
                     awaiting_school=bool(plan.get('school_origin') and not school and not records and not feedback and not fields['school_target'] and fields['baseline']==SCHOOL_BASELINE),
                     version=plan.get('goal_version', 1), input_records=chosen, omitted_count=max(0, len(records)-len(chosen)))
 
@@ -260,6 +298,7 @@ class Store:
                 goals.append(dict(id=row['id'], child_id=row['child_id'], **ctx['fields'], version=ctx['version'],
                     lifecycle=plan.get('lifecycle', 'active'), task_id=row['task_id'],
                     current_plan=plan.get('approved'), assessment=plan.get('assessment'), hypotheses_detail=plan.get('hypotheses', []),
+                    reviewed_evidence=ctx['reviewed_evidence'], omitted_reviewed_refs=ctx['omitted_reviewed_refs'], unavailable_reviewed_refs=ctx['unavailable_reviewed_refs'],
                     evidence_changed=bool(plan.get('approved') and reviewed != ctx['evidence_hash']),
                     records=[{**r, 'attachments': json.loads(r['attachments'])} for r in ctx['input_records']],
                     omitted_count=ctx['omitted_count'], missing_count=len(ctx['missing']),
@@ -340,6 +379,7 @@ class Store:
                 if action in ('approve','manual'):
                     approved = self._approved(obj.get('plan', proposal), now)
                     old = {k:plan.get(k) for k in ('approved','assessment','hypotheses','approved_evidence_hash','goal_version')}
+                    old['approved_evidence'] = self._approved_evidence(c, row, plan)
                     plan.setdefault('goal_history', []).append(dict(kind='计划确认', at=now.isoformat(), previous=old))
                     task_id = row['task_id'] or 'AGENT-' + agent._hash(ident)[:24]
                     if row['task_id']:
@@ -367,6 +407,7 @@ class Store:
                     row['task_id'] = task_id
                     c.execute("UPDATE agent_items SET state='accepted',task_id=? WHERE id=?", (task_id, ident))
                     plan.update(approved=approved, assessment=proposal.get('assessment',''), hypotheses=proposal.get('hypotheses',[]),
+                                approved_evidence=proposal.get('evidence',[]),
                                 approved_evidence_hash=ctx['evidence_hash'], approved_changed_at=now.isoformat())
                     c.execute("UPDATE agent_items SET state='accepted',task_id=? WHERE id=?", (task_id, proposal_id))
                 else:
@@ -444,11 +485,14 @@ class Store:
                 c.execute("UPDATE agent_jobs SET attempts=0,next_try='',error='' WHERE id=? AND done=0 AND attempts>=?",(key,agent.MAX_ATTEMPTS))
         fp=self.agent._job(key,value,now,model=True)
         if not fp:return dict(state='current',created=0)
-        previous=ctx['plan'].get('approved')
+        prior_available=not ctx['unavailable_reviewed_refs']
+        previous=ctx['plan'].get('approved') if prior_available else None
         content=dict(as_of=now.date().isoformat(),profile=ctx['profile'],evidence=ctx['evidence'],current_plan=previous,
                      learning_goal={k:v for k,v in ctx['fields'].items() if k!='baseline'},
-                     previous_assessment=ctx['plan'].get('assessment'),previous_hypotheses=ctx['plan'].get('hypotheses',[]),previous_assessment_stale=ctx['plan'].get('approved_evidence_hash')!=ctx['evidence_hash'],
+                     previous_assessment=ctx['plan'].get('assessment') if prior_available else None,previous_hypotheses=ctx['plan'].get('hypotheses',[]) if prior_available else [],previous_assessment_stale=ctx['plan'].get('approved_evidence_hash')!=ctx['evidence_hash'],
+                     previous_context_unavailable=not prior_available,
                      omitted_records=ctx['omitted_count'],missing_records=len(ctx['missing']),
+                     omitted_reviewed_refs=ctx['omitted_reviewed_refs'], unavailable_reviewed_refs=ctx['unavailable_reviewed_refs'],
                      omitted_task_feedback=ctx['task_feedback_omitted'], missing_tasks=ctx['task_missing'],
                      omitted_school_messages=ctx['school_omitted'],missing_school_messages=ctx['school_missing'],
                      attachments='原件仅已保存；本次仅使用核对后的文字，未读图像、录音或外部App。')
@@ -481,6 +525,7 @@ class Store:
         self._approved(p,now)
         for field,limit in [('assessment',2000),('why_now',400)]:agent._text(p,field,limit,True)
         if p['choice'] not in ('核实','尝试','维持','调整','暂停'):raise agent.AgentError('建议类型不正确')
+        if p['choice']=='暂停' and p['estimated_minutes'] is not None:raise agent.AgentError('暂停建议不能安排练习分钟数')
         refs={e['ref']:e['text'] for e in ctx['evidence']}
         if not isinstance(p['evidence'],list) or not 1<=len(p['evidence'])<=3:raise agent.AgentError('建议缺少证据')
         for e in p['evidence']:
