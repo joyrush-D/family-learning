@@ -70,6 +70,17 @@ class AgendaTest(unittest.TestCase):
             self.assertEqual(agenda.metadata(app,c,'child-1',homework[0],'',focus={'category':'unknown'})['category'],'todo')
             self.assertEqual(before,'\n'.join(c.iterdump()))
 
+    def test_chinese_deadlines_and_single_day_windows_share_send_date_rules(self):
+        cases=[('截止时间：2026 年 2 月 18 日','2026-02-18'),('2026年2月18日前完成','2026-02-18'),
+               ('选课时间为2月14日8:30‑18:00❗','2026-02-14'),('报名时间：2月14日08:30至18:00','2026-02-14')]
+        for text,expected in cases:self.assertEqual(agenda.deadline(text,'2026-02-10'),expected,text)
+        for text in ['2月14日开始活动','截止时间：2月30日','截止时间：3月14日','选课时间为2月14日开始',
+                     '报名时间为2月14日8:30至2月16日18:00','选课时间为2月14日8:30至28:00','报名时间为2月14日22:00至8:00',
+                     '截止时间：2月14日；截止时间：2月16日']:
+            self.assertEqual(agenda.deadline(text,'2026-02-10'),'',text)
+        self.assertEqual(agenda.deadline('截止时间：2月14日',''),'')
+        self.assertEqual(agenda.deadline('截止时间：2026年2月14日',''),'2026-02-14')
+
     def test_correction_and_legacy_focus_migration_preserve_deadline_original(self):
         self.organize()
         request=dict(id='T01',version=1,request_key='synthetic-correct-02',mode='later',next_action='',waiting_for='',review_on='2026-09-20',category='unknown',published_on='',due_on='',scheduled_on='2026-09-16')

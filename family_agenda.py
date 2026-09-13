@@ -21,6 +21,14 @@ def sent_day(value):
 
 def deadline(text,published):
     """Only an unambiguous deadline phrase; an event date alone is not a deadline."""
+    anchor=date(published)
+    def chinese_date(match):
+        year,month,day=match.groups()
+        # ponytail: an omitted year is grounded only within the sending month; other cases need review.
+        if not year and (not anchor or int(month)!=int(anchor[5:7])): return match[0]
+        value=f'{int(year or anchor[:4]):04d}-{int(month):02d}-{int(day):02d}'
+        return value if date(value) else match[0]
+    text=re.sub(r'(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日',chinese_date,text or '')
     if date(text): return text
     candidates=set()
     pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:[^。；;\n]{0,8}?)(?:前|截止|完成|提交|上交|交齐|带到|带来|交作业)'
@@ -31,6 +39,14 @@ def deadline(text,published):
             try:value=(dt.date.fromisoformat(published)+dt.timedelta(days=offset)).isoformat()
             except OverflowError:pass
         if value:candidates.add(value)
+    for match in re.finditer(r'截止(?:时间|日期)?\s*[：:为是]*\s*(\d{4}-\d{2}-\d{2})',text):
+        if date(match[1]): candidates.add(match[1])
+    for match in re.finditer(r'(?:报名|填报|选课|提交|上交)时间\s*[：:为是]*\s*(\d{4}-\d{2}-\d{2})([^。；;\n]*)',text):
+        day,tail=match.groups()
+        clock=r'(?:[01]?\d|2[0-3])[:：][0-5]\d'
+        if date(day) and not re.search(r'\d{4}-\d{2}-\d{2}|起|开始|持续',tail) and re.fullmatch(r'\s*'+clock+r'\s*[-–—‑~～至到]\s*'+clock+r'[！!❗‼️\s]*',tail):
+            start,end=[tuple(map(int,t)) for t in re.findall(r'(\d{1,2})[:：](\d{2})',tail)]
+            if start<=end:candidates.add(day)
     return next(iter(candidates)) if len(candidates)==1 else ''
 
 

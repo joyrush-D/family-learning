@@ -638,7 +638,7 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
 
         with patch.object(agent.family_llm, '_chat_json', side_effect=school_model) as model:
             result = agent.run_once(self.app, self.now + dt.timedelta(minutes=6))
-            self.assertEqual((result['created'], result['processed']), (4, 5))
+            self.assertEqual((result['created'], result['processed']), (5, 5))
             self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(minutes=7))['created'], 0)
             self.assertEqual(model.call_count, 1)
         with self.app.connect() as c:
@@ -650,7 +650,10 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
             self.assertEqual([dict(row) for row in c.execute('SELECT * FROM manual_tasks ORDER BY id')], before_tasks)
         pending = self.store.snapshot()['items']
         titles = [row['title'] for row in pending if row['state'] == 'pending']
-        self.assertEqual(set(titles), {'待核对：' + row[1] for row in cases[1:]})
+        self.assertEqual(set(titles), {'待核对：' + row[1] for row in cases})
+        expired=next(row for row in pending if row['title']=='待核对：'+cases[0][1])
+        self.assertEqual(expired['due'],'2026-03-10');self.assertEqual(expired['plan']['school_task']['state'],'review')
+        self.assertIn('原截止日期已过',expired['plan']['school_task']['reason'])
 
     def test_old_learning_evidence_is_not_filtered_by_school_expiry_rule(self):
         evidence = [dict(ref='record:synthetic-old', text='2026-03-10 阅读观察')]
@@ -667,7 +670,27 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
             for rows in ([{**evidence[0],'time':''}],[{**evidence[0],'time':'2026-02-08T16:30:00Z'}],
                          [{**evidence[0],'text':'明天带来。后天提交。'}]):
                 with self.assertRaises(agent.AgentError):agent._select('school',rows,as_of='2026-02-10')
-            self.assertEqual(agent._select('school',evidence,as_of='2026-02-12'),[])
+            self.assertEqual(agent._select('school',evidence,as_of='2026-02-12')[0]['due'],'2026-02-11')
+
+    def test_uncertain_school_date_stays_review_without_poisoning_valid_batch(self):
+        payload=self.payload(cursor='13');payload['messages'][0]['text']='请准备阅读材料，日期另行通知。'
+        payload['messages'].extend([dict(id='12',time=self.now.isoformat(),kind='text',sender='虚构老师',text='请填回执，截止时间：2026 年 2 月 12 日。',unread=False),
+                                   dict(id='13',time=self.now.isoformat(),kind='text',sender='虚构老师',text='2026-02-11开始阅读活动，请准备阅读材料，提交日期另行通知。',unread=False)]);self.store.ingest(payload)
+        def model(*args,**kwargs):
+            return {'proposals':[dict(title_quote=r['text'],focus='school',due=due,learning_subject='',learning_goal_id='',
+                task_title=title,task_goal=r['text'],task_advice='',task_state='ready',task_reason='明确要求。',evidence=[dict(ref='message:synthetic-group:'+r['id'])])
+                for r,due,title in zip(payload['messages'],['2026-02-31','2026-02-12','2026-02-11'],['准备阅读材料','填写回执','活动准备'])]}
+        with patch.object(agent.family_llm,'_chat_json',side_effect=model) as called:
+            result=agent.run_once(self.app,self.now);self.assertEqual(result['failed'],0);self.assertEqual(called.call_count,1)
+            agent.run_once(self.app,self.now+dt.timedelta(minutes=1));self.assertEqual(called.call_count,1)
+        with self.app.connect() as c:
+            rows={r['title']:dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")}
+            self.assertEqual(c.execute('SELECT SUM(processed) FROM agent_messages').fetchone()[0],3)
+            tasks=[dict(r) for r in c.execute('SELECT * FROM manual_tasks')];self.assertEqual(len(tasks),1);self.assertEqual(tasks[0]['due'],'2026-02-12')
+        pending=rows['准备阅读材料'];self.assertEqual(pending['state'],'pending');self.assertEqual(pending['due'],'')
+        brief=json.loads(pending['plan'])['school_task'];self.assertEqual(brief['state'],'review');self.assertIn('未采用模型日期',brief['reason'])
+        self.assertEqual(rows['填写回执']['state'],'accepted')
+        self.assertEqual(rows['活动准备']['state'],'pending');self.assertEqual(rows['活动准备']['due'],'')
 
     def test_unread_media_remains_visible_after_processing_and_replay(self):
         payload = self.payload(); payload['messages'][0].update(kind='image', text='图片原件未读', unread=True)
