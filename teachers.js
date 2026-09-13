@@ -70,7 +70,7 @@
    drafts.delete(operation.key);pending=null;conflict=null;
    if(operation.kind==='profile'&&selected==='new')selected=item.id;
    if(operation.kind==='observation'&&editing===operation.body.id)editing='';
-   message='已保存。';busy=false;paint(false);
+   message='已保存。';paint(false);
    if(root()&&!await read())status('已保存，列表刷新失败；可刷新记录，不必再次提交。');
   }catch(e){
    if(e.status>=400&&e.status<500&&![401,403,408,429].includes(e.status)){pending=null;if(e.status===409)conflict={key:operation.key,refreshed:false}}

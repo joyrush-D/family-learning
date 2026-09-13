@@ -14,7 +14,10 @@ def model(messages,schema,name,*args,**kwargs):
   e=value['evidence'][0]
   return dict(proposals=[dict(title_quote=e['text'],focus='school',due='',learning_subject='语文',learning_goal_id='',evidence=[dict(ref=e['ref'])])])
  if name=='family_agent_plan':return dict(proposal=None)
- return synthetic_plan(value)
+ result=synthetic_plan(value)
+ teacher=next((e for e in value['evidence'] if e.get('source_kind')=='teacher_record'),None)
+ if teacher:result['proposal']['evidence']=[dict(ref=teacher['ref'],quote=teacher['text'][:30])]
+ return result
 family_llm._chat_json=model
 prepare=app.prepare_assets
 def seed():
@@ -122,6 +125,38 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   await reviewed.getByRole('link',{name:'作业反馈',exact:true}).click();const retained=(await(await p.request.get(url+'api/goals')).json()).goals.find(g=>g.id===savedGoal.id);assert.equal(retained.task_feedback.length,24);assert.ok(retained.task_feedback.some(h=>h.text===taskNote));assert.deepEqual(retained.current_plan,confirmedMemoryPlan);
   assert.equal(await reviewed.locator('summary,a').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'reviewed evidence controls remain touchable');
   await reviewed.scrollIntoViewIfNeeded();if(process.env.GOALS_UI_PROOF_DIR)await p.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'reviewed-memory-'+width+'.png'),fullPage:false});checks++;
+  // A parent records a requirement once; the existing goal reads it and tracks correction/withdrawal.
+  await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="teachers"]').click();
+  await p.locator('[data-teacher-select="new"]').click();await p.locator('[data-teacher-form="profile"]').waitFor();
+  const teacherProfile=p.locator('[data-teacher-form="profile"]');
+  await teacherProfile.getByLabel('老师称呼').fill('虚构英语教师 '+width);await teacherProfile.getByLabel('科目',{exact:true}).fill('英语');
+  await teacherProfile.locator('[name="child_ids"][value="child-1"]').check();
+  let releaseTeacherRefresh,teacherRefreshSeen,teacherRefreshDone;const refreshGate=new Promise(r=>releaseTeacherRefresh=r),refreshStarted=new Promise(r=>teacherRefreshSeen=r),refreshFinished=new Promise(r=>teacherRefreshDone=r);
+  await p.route('**/api/teachers',async route=>{teacherRefreshSeen();await refreshGate;await route.continue();teacherRefreshDone()});
+  await teacherProfile.getByRole('button',{name:'保存档案',exact:true}).click();await refreshStarted;
+  try{assert(await p.locator('[data-teacher-form="observation"] [name="behavior"]').isDisabled(),'save must remain locked until its own refresh finishes')}finally{releaseTeacherRefresh()}
+  await refreshFinished;await p.unroute('**/api/teachers');
+  const teacherForm=p.locator('[data-teacher-form="observation"]');await teacherForm.waitFor();
+  const requirement='从课本任选两句，说出时间线索。<img src=x onerror="window.teacherInjected=true">';
+  await teacherForm.getByLabel('原话或观察到的具体行为').fill(requirement);await teacherForm.getByRole('button',{name:'保存记录',exact:true}).click();
+  await p.locator('.teacher-behavior').getByText(requirement,{exact:true}).waitFor().catch(async e=>{console.error('teacher save diagnostic',await p.locator('#teachersStatus').innerText(),await p.locator('.teacher-records').innerText());throw e});
+  const teacherState=await(await p.request.get(url+'api/teachers')).json(),teacherSaved=teacherState.teachers.find(t=>t.display_name==='虚构英语教师 '+width),teacherObservation=teacherState.observations.find(o=>o.teacher_id===teacherSaved.id);
+  const reopenTeacherGoal=async()=>{await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="goals"]').click();const b=p.locator(`[data-goal-select="${savedGoal.id}"]`);if(await b.count())await b.click();await p.locator('#goal-school-requirement summary').click()};
+  await reopenTeacherGoal();const teacherCard=p.locator('[data-goal-teacher-requirement]');await teacherCard.getByText(requirement,{exact:true}).waitFor();
+  assert.equal(await p.evaluate(()=>window.teacherInjected),undefined);assert.equal(await teacherCard.locator('img').count(),0);
+  await p.locator('[data-goal-action="evaluate"]').click();await p.locator('[data-goal-form="approve"]').waitFor();
+  await p.getByText('为什么这样安排 · 判断与依据',{exact:true}).click();await p.getByText('本次引用原文',{exact:true}).click();await p.getByRole('link',{name:'本次学校要求',exact:true}).first().click();
+  assert(await p.locator('#goal-school-requirement').evaluate(e=>e.open));assert.equal(await teacherCard.locator('button').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false);
+  if(process.env.GOALS_UI_PROOF_DIR)await teacherCard.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'teacher-requirement-'+width+'.png')});
+  await teacherCard.getByRole('button',{name:'查看 / 更正老师记录',exact:true}).click();await p.locator(`[data-teacher-edit="${teacherObservation.id}"]`).click();
+  await teacherForm.getByLabel('原话或观察到的具体行为').fill('更正：只选一句，不用抄写。');
+  let teacherFailed=false;await p.route('**/api/teachers/observation',async route=>{if(!teacherFailed){teacherFailed=true;await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic teacher save failure'})})}else await route.continue()});
+  await teacherForm.getByRole('button',{name:'保存更正',exact:true}).click();await p.getByText(/Synthetic teacher save failure/).waitFor();assert.equal(await teacherForm.getByLabel('原话或观察到的具体行为').inputValue(),'更正：只选一句，不用抄写。');
+  await p.locator('[data-teacher-retry]').click();await p.locator('.teacher-behavior').getByText('更正：只选一句，不用抄写。',{exact:true}).waitFor();await p.unroute('**/api/teachers/observation');
+  await p.reload();await reopenTeacherGoal();await teacherCard.getByText('更正：只选一句，不用抄写。',{exact:true}).waitFor();
+  const correctedTeacherGoal=(await(await p.request.get(url+'api/goals')).json()).goals.find(g=>g.id===savedGoal.id);assert(correctedTeacherGoal.pending_stale);assert.deepEqual(correctedTeacherGoal.current_plan,confirmedMemoryPlan);
+  await teacherCard.getByRole('button',{name:'查看 / 更正老师记录',exact:true}).click();await p.locator(`[data-teacher-edit="${teacherObservation.id}"]`).click();await teacherForm.locator('[name="status"]').selectOption('withdrawn');await teacherForm.getByRole('button',{name:'保存更正',exact:true}).click();await p.locator('.teacher-withdrawn').getByText('更正：只选一句，不用抄写。',{exact:true}).waitFor();
+  await reopenTeacherGoal();assert.equal(await teacherCard.count(),0);assert.equal((await(await p.request.get(url+'api/goals')).json()).goals.find(g=>g.id===savedGoal.id).teacher_requirements.length,0);checks++;
   assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'no horizontal overflow');assert.deepEqual(errors,[]);
   await p.locator('[data-goal-child-select="child-2"]').click();const autoGoal=(await(await p.request.get(url+'api/goals')).json()).goals.find(g=>g.school_messages?.length);assert(autoGoal);const autoSelect=p.locator(`[data-goal-select="${autoGoal.id}"]`);if(await autoSelect.count())await autoSelect.click();await p.getByRole('heading',{name:autoGoal.title,exact:true}).waitFor();await p.locator('#goal-school-requirement summary').click();assert(await p.getByText('Agent从群消息自动关联 · 适用性待核对',{exact:true}).isVisible());assert.match(await p.locator('#goal-school-requirement').innerText(),/任选一种顺序介绍文具/);await p.getByRole('button',{name:'查看原消息与原件',exact:true}).click();await p.locator('#schoolOriginalDialog[open] blockquote').waitFor();assert.match(await p.locator('#schoolOriginalDialog').innerText(),/虚构发布者/);await p.locator('[data-school-original-close]').click();checks++;
   const schoolItem=autoGoal.school_messages[0].item_id;await p.locator('nav [data-page="more"]').click();await p.locator('[data-page="agent"]').click();for(const attr of ['data-agent-accept','data-school-record-agent','data-agent-dismiss'])assert(await p.locator(`[${attr}="${schoolItem}"]`).isVisible());await p.locator(`[data-agent-accept="${schoolItem}"]`).click();await p.locator('#agentDialog[open]').waitFor();await p.locator('[data-close="agentDialog"]').click();

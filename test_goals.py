@@ -37,6 +37,53 @@ class GoalTests(unittest.TestCase):
     def feedback(self,note='家长转述孩子：会认单词，但说不出为什么。',**obj):
         return self.action('feedback',id=self.ident,day=self.now.date().isoformat(),source='家长转述孩子',note=note,**obj)
 
+    def test_teacher_requirements_reach_goals_and_withdrawal_invalidates_only_suggestions(self):
+        teachers=self.app.teacher_store()
+        profile=dict(display_name='虚构英语教师',subject='英语',child_ids=['child-1'],version=0,request_key='synthetic-goal-teacher')
+        teacher=teachers.save_teacher(profile)['teacher']
+        body=dict(teacher_id=teacher['id'],day=self.now.date().isoformat(),kind='requirement',target='class',
+                  behavior='从已有课本任选两句，先说时间线索，再解释选择。',teacher_reason='听清楚思考过程',
+                  parent_note='家长推测：可能因为基础差。',version=0,request_key='synthetic-teacher-requirement')
+        observation=teachers.save_observation(body)['observation']
+        pending=self.evaluate();ref='school:teacher:'+observation['id']
+        e=next(e for e in self.last_input['evidence'] if e['ref']==ref)
+        self.assertEqual(e['kind'],'school_requirement');self.assertEqual(e['text'],body['behavior'])
+        self.assertEqual(e['teacher_reason'],body['teacher_reason']);self.assertEqual(e['recorded_by'],'parent')
+        self.assertNotIn(body['parent_note'],json.dumps(self.last_input,ensure_ascii=False))
+        self.assertEqual(self.goal()['teacher_requirements'][0]['ref'],ref)
+        invalid=synthetic_plan(self.last_input);invalid['proposal']['hypotheses'][0].update(support=[ref],status='有支持')
+        with self.store.agent._db() as c:context=self.store._context(c,self.store._get(c,self.ident))
+        with self.assertRaises(agent.AgentError):self.store._proposal(invalid,context,self.now)
+        self.approve(pending);approved=self.goal()['current_plan']
+        corrected=teachers.save_observation(dict(body,id=observation['id'],version=1,request_key='synthetic-requirement-edit',behavior='更正：只选一句，不用书面抄写。'))['observation']
+        changed=self.goal();self.assertTrue(changed['evidence_changed']);self.assertEqual(changed['current_plan'],approved)
+        self.assertTrue(changed['reviewed_evidence'][0]['quote_changed'])
+        stale=self.evaluate()
+        teachers.save_observation(dict(body,id=corrected['id'],version=2,request_key='synthetic-requirement-withdraw',status='withdrawn'))
+        current=self.goal();self.assertEqual(current['teacher_requirements'],[]);self.assertTrue(current['pending_stale'])
+        self.assertIn(ref,current['unavailable_reviewed_refs']);self.assertEqual(current['current_plan'],approved)
+        with self.assertRaises(agent.AgentError):self.approve(stale)
+
+    def test_teacher_requirements_respect_child_subject_kind_archive_and_existing_read_budget(self):
+        teachers=self.app.teacher_store();profiles=[]
+        for index,(child,subject) in enumerate([('child-1','英语'),('child-2','英语'),('child-1','语文'),('child-1','')]):
+            profiles.append(teachers.save_teacher(dict(display_name='虚构教师'+str(index),subject=subject,child_ids=[child],version=0,request_key='synthetic-teacher-scope-'+str(index)))['teacher'])
+        for index,teacher in enumerate(profiles):
+            for kind in ['requirement','praise','preference']:
+                for target in ['class','other_students']:
+                    teachers.save_observation(dict(teacher_id=teacher['id'],day=self.now.date().isoformat(),kind=kind,target=target,
+                        behavior=f'虚构限定材料 {index} {kind} {target}',version=0,request_key=f'synthetic-teacher-scope-{index}-{kind}-{target}'))
+        first=self.evaluate();self.assertEqual(len(self.goal()['teacher_requirements']),1)
+        self.assertEqual(self.goal()['teacher_requirements'][0]['text'],'虚构限定材料 0 requirement class')
+        self.approve(first);retained=first['pending']['evidence'][0]['ref']
+        for i in range(8):
+            teachers.save_observation(dict(teacher_id=profiles[0]['id'],day=self.now.date().isoformat(),kind='requirement',target='class',
+                behavior='后续虚构要求 '+str(i),version=0,request_key='synthetic-teacher-budget-'+str(i)))
+        self.evaluate();g=self.goal();self.assertEqual(len(g['teacher_requirements']),6);self.assertEqual(g['teacher_requirements_omitted'],3)
+        self.assertIn(retained,[e['ref'] for e in g['teacher_requirements']]);self.assertEqual(self.last_input['omitted_teacher_requirements'],3)
+        teacher=profiles[0];teachers.save_teacher({k:v for k,v in teacher.items() if k in ('id','display_name','subject','child_ids','source_ids','archived','public_url','version')}|dict(archived=True,request_key='synthetic-teacher-archive'))
+        self.assertEqual(self.goal()['teacher_requirements'],[])
+
     def test_calendar_constrains_learning_without_a_time_account_and_preserves_recurring_exceptions(self):
         calendar=self.app.calendar_store();day=self.now.date().isoformat()
         body=dict(id='c'*32,version=0,child_ids=['child-1','child-2'],title='共享运动安排',category='activity',

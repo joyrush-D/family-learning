@@ -1032,6 +1032,7 @@ $('#taskFocusDialog').addEventListener('cancel',e=>{if(busy)e.preventDefault()})
 let goalChildID='',goalSelectedID='';
 document.addEventListener('click',e=>{const b=e.target.closest('[data-goal-id]');if(b){goalSelectedID=b.dataset.goalId;goalChildID=b.dataset.goalChild;page='goals';render();window.scrollTo(0,0)}});
 
+document.addEventListener('click',e=>{const b=e.target.closest('[data-goal-teacher]');if(!b||b.disabled)return;teacherSelectedID=b.dataset.goalTeacher;page='teachers';render();window.scrollTo(0,0)});
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-goal-record],[data-goal-task]');if(!b)return;const record=b.dataset.goalRecord,task=b.dataset.goalTask;b.disabled=true;try{await load(false);const exists=record?data.records.some(r=>r.id===Number(record)):data.tasks.some(t=>t.id===task);if(!exists)throw Error('记录已变化，请更新显示');const open=document.createElement('button');if(record)open.dataset.record=record;else open.dataset.task=task;open.hidden=true;document.body.append(open);open.click();open.remove()}catch(error){const label=document.querySelector('[data-goal-status]');if(label)label.textContent=error.message||'读取失败，请重试'}finally{b.disabled=false}});
 
 document.addEventListener('click',e=>{if(!e.target.closest('[data-course-record]'))return;$('#add').click();if(!$('#recordDialog').open)return;const f=$('#recordForm');f.elements.category.value='课程进度';f.elements.source.value='老师反馈';$('#recordDialog h2').textContent='记课程进度';updateRecordCategory();f.elements.subject.focus()});

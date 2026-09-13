@@ -1124,12 +1124,9 @@ def query_evidence(child,question,start=None,end=None,now=None):
 def teacher_query_evidence(child, question, start=None, end=None, now=None):
     # Query existing records without initializing optional tables or running a source check.
     with connect() as c:
-        names = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if not {'teachers','teacher_observations'} <= names:
-            return [], ''
         child_id = next(p['id'] for p in profiles(c) if p['name'] == child)
-        teachers = {r['id']: family_teachers.Store._view(r) for r in c.execute('SELECT * FROM teachers')}
-        teachers = {key: t for key,t in teachers.items() if child_id in t['child_ids'] and not t['archived']}
+        teachers, rows = family_teachers.active_observations(c, child_id)
+        if not teachers: return [], ''
         if not any(word in question for word in ['老师','教师','表扬'] + [t['display_name'] for t in teachers.values()]):
             return [], ''
         if start is None:
@@ -1138,15 +1135,7 @@ def teacher_query_evidence(child, question, start=None, end=None, now=None):
                 first, last = inferred
                 if not 0 <= (last-first).days < 31: raise ValueError('请选择按先后排列的1至31天（含首尾）')
                 start, end = first.isoformat(), last.isoformat()
-        rows = []
-        for raw in c.execute('SELECT * FROM teacher_observations'):
-            row = family_teachers.Store._view(raw)
-            teacher = teachers.get(row['teacher_id'])
-            if teacher is None or row['status'] != 'active' or row['child_id'] and row['child_id'] != child_id:
-                continue
-            if family_teachers.observation_scope(row, teacher) != child_id: continue
-            if start and not start <= row['day'] <= end: continue
-            rows.append(row)
+        if start: rows = [row for row in rows if start <= row['day'] <= end]
     rows.sort(key=lambda r: (teachers[r['teacher_id']]['display_name'] in question,
                              bool(teachers[r['teacher_id']]['subject'] and teachers[r['teacher_id']]['subject'] in question),
                              r['day'], r['updated']), reverse=True)

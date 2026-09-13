@@ -31,6 +31,20 @@ def observation_scope(observation, teacher):
     return teacher['child_ids'][0] if teacher['version'] == 1 and len(teacher['child_ids']) == 1 else ''
 
 
+def active_observations(c, child_id):
+    """Read parent records in their saved child scope; never initialize tables or collect."""
+    names = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if not {'teachers', 'teacher_observations'} <= names: return {}, []
+    teachers = {r['id']: Store._view(r) for r in c.execute('SELECT * FROM teachers')}
+    teachers = {key:t for key,t in teachers.items() if child_id in t['child_ids'] and not t['archived']}
+    rows = []
+    for raw in c.execute('SELECT * FROM teacher_observations'):
+        row = Store._view(raw); teacher = teachers.get(row['teacher_id'])
+        if (teacher and row['status'] == 'active' and (not row['child_id'] or row['child_id'] == child_id)
+                and observation_scope(row, teacher) == child_id): rows.append(row)
+    return teachers, rows
+
+
 def _text(obj, key, limit, required=False):
     value = obj.get(key, '')
     if not isinstance(value, str) or len(value) > limit or any(ord(c) < 32 and c not in '\n\t' or ord(c) == 127 for c in value):

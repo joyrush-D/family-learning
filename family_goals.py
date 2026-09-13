@@ -8,6 +8,7 @@ import family_agent as agent
 import family_llm
 import family_study
 import family_calendar
+import family_teachers
 
 PLAN_ADJUSTMENT_NOTE = '家长确认学习计划调整，原版本保留在学习目标。'
 TASK_STATUS_NOTES = (PLAN_ADJUSTMENT_NOTE, '家长通过清单勾选确认此事项已完成。', '家长撤销完成，继续跟进。')
@@ -108,6 +109,8 @@ assessment说明已知与未知；hypotheses列至多四项可验证的候选原
 resource优先使用输入中的现有材料和设备；未知时明确待核对，不编造App入口、题号或已下发任务。
 照读问题必须与选用材料一致：未提供新题原文时用“你怎么答、为什么”这类通用提问，不把原题的固定选项套到任意新题，也不让家长自己改题或编题。
 mastery_check说明如何观察独立解释或相近材料中的表现；把平台完成率、投入、孩子感受与掌握证据分开。
+source_kind为teacher_record的是家长已保存的老师明确要求，按teacher_name、day、target与原文核对；recorded_by为parent，不表示系统已核实老师身份或直接听到老师原话。记录日期不证明要求持续生效，区分当天作业、长期要求与已过时要求，当前适用性不明先核对；teacher_reason是家长记录的老师说明，不能从它推断孩子能力。群消息与老师档案指向同一条原消息时只算一项要求，不重复布置。
+
 有学校任务时，mastery_check分别写“本次要求自查”和“学习表现记录”：自查对应老师具体要求，保留任选、条件和示例；记录孩子原话、作品、实际帮助及卡住的步骤。完成作文或套用词语不代表独立掌握；教师没给字数、截止或评分标准时不擅自添加。
 mastery_check同时给出家长可直接记录的原始反馈：题目或材料、孩子原话/作答、实际帮助、用时、感受；不要求家长判定是否掌握或选择原因。只有提示后答对、看过答案或同题重复时不能据此提高难度；有独立迁移证据才考虑逐步推进。若疲倦、负担过大或方法被拒绝，先减量、换方式或暂停；没反馈不等于退步或不配合。
 英语单词按词条、目标义/语境、测试方向和提示条件分别核对，不用一个掌握率合并。方向包括听英文选中文、听英文拼写、听中文拼英文、看英文选中文、看英文读出、看中文说英文、看中文拼英文；未测、提示后答对、答错和独立答对分开。具体需要覆盖的方向按家长要求，分次补齐，不要求每天把全部词的所有方向重测。
@@ -206,6 +209,16 @@ class Store:
                     and proposal.get('assessment') == plan.get('assessment') and proposal.get('hypotheses') == plan.get('hypotheses')):
                 return proposal.get('evidence', [])
         return []
+
+    def _teacher_requirements(self, c, child_id, subject):
+        teachers, rows = family_teachers.active_observations(c, child_id)
+        rows = [r for r in rows if r['kind'] == 'requirement' and r['target'] in ('class', 'household')
+                and subject.strip() and teachers[r['teacher_id']]['subject'].strip() == subject.strip()]
+        rows.sort(key=lambda r: (r['day'], r['updated'], r['id']))
+        return [dict(ref='school:teacher:'+r['id'], kind='school_requirement', source_kind='teacher_record',
+                     text=r['behavior'], teacher_id=r['teacher_id'], teacher_name=teachers[r['teacher_id']]['display_name'],
+                     day=r['day'], target=r['target'], teacher_reason=r['teacher_reason'], recorded_by='parent',
+                     source_id=r['source_id'], message_id=r['message_id']) for r in rows]
 
     def _get(self, c, ident):
         row = c.execute('SELECT * FROM agent_items WHERE id=?', (ident,)).fetchone()
@@ -345,9 +358,11 @@ class Store:
         records.sort(key=lambda r:(r['day'],r['id']))
         missing = sorted(ids - {r['id'] for r in records})
         school_all, school_missing = self._school_context(c, row)
+        teacher_all = self._teacher_requirements(c, row['child_id'], fields['subject'])
         day_context = self._day_context(c, row, owners, now or agent._now())
         evidence_hash = agent._hash({'assessment_policy': 4, 'fields': fields, 'records': records, 'missing': missing,
                                     **({'course_records':courses} if courses else {}),
+                                    **({'teacher_requirements':teacher_all} if teacher_all else {}),
                                     **({'day_context':day_context} if day_context else {}),
                                     **({'school_messages': [{k:v for k,v in m.items() if k != 'state'} for m in school_all],
                                         'school_missing':school_missing} if school_all or school_missing else {}),
@@ -369,6 +384,7 @@ class Store:
         chosen = [r for r in records if 'record:'+str(r['id']) in chosen_refs]
         course_evidence = [dict(ref='record:'+str(r['id']),text=agent._json(r),kind='school_requirement') for r in courses]
         selected_courses = select_evidence(course_evidence, reviewed_refs, 6)
+        teacher_requirements = select_evidence(teacher_all, reviewed_refs, 6)
         course_refs = {e['ref'] for e in selected_courses}
         school = school_all[-6:]
         evidence = [{'ref': 'goal:' + row['id'], 'text': ('系统建立的跟进背景（尚无作答证据）：\n' if plan.get('school_origin') and fields['baseline'] == SCHOOL_BASELINE else '家长提供的情况（尚需结合实际作答核对）：\n') + (fields['baseline'] or '尚未提供具体表现记录。')}]
@@ -378,9 +394,10 @@ class Store:
         evidence += selected_records
         evidence += selected_courses
         evidence += school
+        evidence += teacher_requirements
         selected_feedback = select_evidence(feedback, reviewed_refs, 24)
         evidence += [{**h, 'text':h['text'][:1200], 'content_incomplete':len(h['text'])>1200} for h in selected_feedback]
-        available = {e['ref']:e['text'] for e in [*background,*record_evidence,*course_evidence,*school_all,*feedback]}
+        available = {e['ref']:e['text'] for e in [*background,*record_evidence,*course_evidence,*school_all,*teacher_all,*feedback]}
         omitted_refs = sorted((related_refs & available.keys()) - {e['ref'] for e in evidence})
         unavailable_refs = sorted(reviewed_refs - available.keys())
         reviewed = [dict(ref=e['ref'],quote=e['quote'] if e['ref'] in available else '',
@@ -388,11 +405,12 @@ class Store:
                          quote_changed=e['ref'] in available and e['quote'] not in available[e['ref']]) for e in approved_evidence]
         return dict(plan=plan, meta=meta, fields=fields, profile=profile, records=records, ids=ids, day_context=day_context,
                     course_records=[r for r in courses if 'record:'+str(r['id']) in course_refs], course_omitted=len(courses)-len(selected_courses),
+                    teacher_requirements=teacher_requirements, teacher_requirements_omitted=len(teacher_all)-len(teacher_requirements),
                     missing=missing, evidence_hash=evidence_hash, evidence=evidence,
                     reviewed_evidence=reviewed, omitted_reviewed_refs=omitted_refs, unavailable_reviewed_refs=unavailable_refs,
                     task_feedback=selected_feedback, task_feedback_omitted=len(feedback)-len(selected_feedback), task_missing=len(task_missing),
                     school_messages=school, school_omitted=len(school_all)-len(school), school_missing=school_missing,
-                    awaiting_school=bool(plan.get('school_origin') and not school and not records and not feedback and not fields['school_target'] and fields['baseline']==SCHOOL_BASELINE),
+                    awaiting_school=bool(plan.get('school_origin') and not school and not teacher_all and not records and not feedback and not fields['school_target'] and fields['baseline']==SCHOOL_BASELINE),
                     version=plan.get('goal_version', 1), input_records=chosen, omitted_count=max(0, len(records)-len(chosen)))
 
     def roots(self, c):
@@ -421,6 +439,7 @@ class Store:
                     evidence_changed=bool(plan.get('approved') and reviewed != ctx['evidence_hash']),
                     records=[{**r, 'attachments': json.loads(r['attachments'])} for r in ctx['input_records']],
                     course_records=[{**r,'attachments':json.loads(r['attachments'])} for r in ctx['course_records']], course_omitted=ctx['course_omitted'],
+                    teacher_requirements=ctx['teacher_requirements'], teacher_requirements_omitted=ctx['teacher_requirements_omitted'],
                     word_history=word_history(ctx['records']),
                     omitted_count=ctx['omitted_count'], missing_count=len(ctx['missing']),
                     task_feedback=ctx['task_feedback'], task_feedback_omitted=ctx['task_feedback_omitted'], task_missing=ctx['task_missing'],
@@ -614,6 +633,7 @@ class Store:
                      previous_context_unavailable=not prior_available,
                      omitted_records=ctx['omitted_count'],missing_records=len(ctx['missing']),
                      omitted_course_records=ctx['course_omitted'],
+                     omitted_teacher_requirements=ctx['teacher_requirements_omitted'],
                      omitted_reviewed_refs=ctx['omitted_reviewed_refs'], unavailable_reviewed_refs=ctx['unavailable_reviewed_refs'],
                      omitted_task_feedback=ctx['task_feedback_omitted'], missing_tasks=ctx['task_missing'],
                      omitted_school_messages=ctx['school_omitted'],missing_school_messages=ctx['school_missing'],
