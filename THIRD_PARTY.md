@@ -87,6 +87,17 @@ Cua Python SDK 0.26.0的已安装包元数据标示MIT；本项目仅调用其�
 2026-09-14版本复核：8.2.0的Mac ARM CLI发布资产已下载并核对上游SHA256，三个受限离线检查通过。发行包最初没有执行位，按其启动脚本只补实验目录内CLI/Node执行位；没有运行脚本中的清除隔离属性或登录步骤。新版说明修复假在线、二维码与WebQQ会话问题，没有提供同账号桌面共存验收；源码的多协议支持还明确保留端到端阻碍。后续先核对上游条件及具体账号方式，再决定是否执行新登录测试，不重复旧失败登录。
 发行包内也已检出多协议实现；单独运行其中的参数解析函数，六个无账号案例确认默认及错误参数均回退Linux。这解决代码是否打包的疑问，仍不证明其他设备协议或同账号共存可用。
 
+## QQ本地数据库与命令行候选
+
+2026-09-14限定核验：
+
+- [qqcli-rs](https://github.com/2233admin/qqcli-rs)提供会话、历史、搜索和JSON输出；当前README明确安装与解密流程仅支持Windows。旧版包文档曾列macOS，不据旧说明推荐当前Mac安装。保留Windows条件候选，尚未接入。
+- [QQLore固定源码](https://github.com/Will-hxw/QQLore/tree/8195c7f9c4c9c56b9eb5ae0a73fba52d2cf81425)的QQProvider确有本地数据库读取、指定群筛选、回复关联与媒体解析。它要求已有数据库密钥、SQLCipher及原生文件扩展；不提供Mac取钥。消息查询允许省略群号，连接未强制只读；接入时须通过本产品既有来源授权限定群，强制只读连接，单独核验版本、消息分页、回复与原件。不能直接启动全群同步，或把SELECT查询等同于底层文件不会写入。只借鉴必要读取部分，不安装其整套检索与模型服务。
+- 其扩展的构建依赖清单指向ntdb_unwrap项目路径；进一步核验了独立上游[ntdb_unwrap](https://github.com/artiga033/ntdb_unwrap/tree/b1c5420a1957a833787b57f616243d4fa120526d/sqlite_extension)的1024字节文件头适配。已从固定源码在Mac ARM构建，在虚构数据库验证读取、默认连接允许写入、显式只读拒绝写入且源文件哈希不变、缺失文件不被创建。此项不验证真实QQ解密、消息、并发增量或桌面共存。扩展会注册进程级默认文件接口；后续验证必须与家庭主库进程隔离。QQLore自带二进制未直接执行，不将自行构建结果等同于该二进制的来源证明。
+- [QQBackup的Mac取钥说明](https://qqbackup.github.io/QQDecrypt/decrypt/extract/NTQQ%20(macOS%20ARM%EF%BC%8C%E6%97%A0%E9%9C%80%E5%85%B3%E9%97%AD%20SIP).html)虽不要求关闭SIP，仍要求重新签名QQ并用调试器取得密钥；当前Mac版本兼容未确认。本轮只检查公开脚本，没有执行取钥或改变客户端。已有合法密钥、兼容版本及不会影响日常QQ的验证条件具备后，再做指定群实测；不据“支持Mac”自动重新签名、注入或登录家庭账号。
+
+QQLore根目录与ntdb_unwrap扩展分别标示MIT；其余依赖和取钥资料许可仍须分别核对。本轮未把第三方代码、二进制、账号或密钥加入公开分发。新加坡限定评审已返回并核对成功读取材料，确认只读、取钥、群过滤和版本前提；评审不能替代本机实测。非界面读取仍为首选，LLBot、官方机器人与已授权窗口保底继续保留。
+
 ## QQ官方机器人候选：普通群消息
 
 2026-09-14核验[腾讯官方Node SDK 1.0.4](https://github.com/tencent-connect/qqbot-nodejs/tree/ca55d9c395b582b7fcfad0ec27209c35dd04e0b3)：[事件解析代码](https://github.com/tencent-connect/qqbot-nodejs/blob/ca55d9c395b582b7fcfad0ec27209c35dd04e0b3/src/protocol/gateway/event-dispatcher.ts)同时处理`GROUP_MESSAGE_CREATE`和`GROUP_AT_MESSAGE_CREATE`。在隔离目录执行该版本的实际解析代码，虚构的未@群消息可保留文字、发言人、原消息ID、时间和附件信息；不同群及引用消息保持各自标识。解析器本身不做持久去重。这是协议代码验证，没有连接机器人、读取家庭群或验证附件下载。
