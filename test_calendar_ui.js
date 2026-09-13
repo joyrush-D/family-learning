@@ -152,3 +152,16 @@ test('completion acknowledges both today and inbox without reloading all data',a
 });
 
 test('timetable text preserves day and slot and refuses ambiguous rows',()=>{const h=harness(),week=h.ctx.timetableWeek('周一 第一节 语文\n星期三 下午第一节 英语');assert.deepEqual(clean(week),[{weekday:1,sessions:[{slot:'第一节',title:'语文'}]},{weekday:3,sessions:[{slot:'下午第一节',title:'英语'}]}]);assert.equal(h.ctx.timetableLines(week),'周一｜第一节｜语文\n周三｜下午第一节｜英语');assert.deepEqual(clean(h.ctx.timetableWeek(h.ctx.timetableLines(week))),clean(week));assert.throws(()=>h.ctx.timetableWeek('语文 数学 英语'),/每行/)});
+
+test('daily UI keeps collection navigation in inbox and pending notifications distinct',()=>{
+ const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.taskHTML=t=>`<article>${t.title}</article>`;h.ctx.taskView='Inbox';
+ d.today_calendar={inbox:[],agenda:[],events:[],timetables:[]};
+ assert.doesNotMatch(h.ctx.todayTasksHTML(),/data-task-box=/);assert.doesNotMatch(h.ctx.calendarHTML(),/data-task-box=/);
+ assert.match(h.ctx.taskInboxHTML(),/data-task-box="Wish"/);assert.match(h.ctx.todayTasksHTML(),/href="#task-group-todo"/);
+ const unconfirmed=h.ctx.taskGroupsHTML([{id:'synthetic-pending',kind:'school',child_ids:['child-a'],title:'虚构待核对要求',agenda:{category:'homework'}}],'今日作业');assert.match(unconfirmed,/今日作业 · 0/);assert.match(unconfirmed,/待核对 1/);
+ const core=readFileSync(__dirname+'/app.js','utf8'),start=core.indexOf('function agentItemHTML'),end=core.indexOf('function agentChildHTML',start);
+ const ctx=vm.createContext({data:{children:[{id:'child-a',name:'虚构孩子'}],tasks:[]},esc:escape,agendaDateHTML:h.ctx.agendaDateHTML,schoolOriginalButtons:()=>''});vm.runInContext(core.slice(start,end),ctx);
+ const title='待核对：阅读要求\n'+('很长的虚构原通知。'.repeat(40)),item={id:'synthetic-school',kind:'school',child_id:'child-a',state:'pending',title,body:'请核对这条通知是否适用',evidence:[{text:'<script>unsafe</script>',ref:'synthetic:notice'}]};
+ const html=ctx.agentItemHTML(item,{compact:true,agenda:{published_on:'2026-09-08'}});
+ assert.match(html,/待核对通知/);assert.match(html,/<h3>阅读要求<\/h3>/);assert.match(html,/发布：2026-09-08/);assert.match(html,/data-agent-accept="synthetic-school"/);assert.doesNotMatch(html,/type="checkbox"|<script>/);assert.match(html,/&lt;script/);assert.ok(html.includes(escape(title)),'full source title is preserved in the original notification');
+});
