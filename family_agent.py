@@ -244,6 +244,10 @@ class Store:
                 CREATE TABLE IF NOT EXISTS agent_message_attachments (
                     source_id TEXT NOT NULL, message_id TEXT NOT NULL, upload_id TEXT NOT NULL,
                     PRIMARY KEY(source_id,message_id,upload_id));
+                CREATE TABLE IF NOT EXISTS agent_message_drafts (
+                    source_id TEXT NOT NULL, message_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
+                    payload TEXT NOT NULL, updated TEXT NOT NULL,
+                    PRIMARY KEY(source_id,message_id));
                 CREATE TABLE IF NOT EXISTS agent_media (
                     source_id TEXT NOT NULL, message_id TEXT NOT NULL,
                     state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
@@ -440,7 +444,8 @@ class Store:
                           (source['id'], message['id'])).fetchone()
         return dict(child_id=source['child_id'], source_id=source['id'], message_id=message['id'],
                     source_name=source['name'], message=message, attachments=attachments,
-                    unavailable_attachment_ids=unavailable, media=dict(media) if media else None)
+                    unavailable_attachment_ids=unavailable, media=dict(media) if media else None,
+                    material_draft=family_media.draft_view(self,c,source,message))
 
     def message(self, obj, upload_info):
         if not isinstance(obj, dict) or set(obj) != {'child_id', 'source_id', 'message_id'}:
@@ -538,7 +543,11 @@ class Store:
         with self._db() as c:
             c.execute('BEGIN IMMEDIATE')
             if action == 'retry':
-                c.execute("UPDATE agent_jobs SET attempts=0,next_try='',error='' WHERE done=0")
+                if 'id' in obj:
+                    key = _text(obj, 'id', 100, True)
+                    c.execute("UPDATE agent_jobs SET attempts=0,next_try='',error='' WHERE done=0 AND id=?", (key,))
+                else:
+                    c.execute("UPDATE agent_jobs SET attempts=0,next_try='',error='' WHERE done=0")
                 return {'ok': True, 'state': 'retry_pending'}
             ident = _text(obj, 'id', 80, True)
             row = c.execute('SELECT * FROM agent_items WHERE id=?', (ident,)).fetchone()
@@ -955,6 +964,8 @@ def run_once(app, now=None):
                             c.execute("UPDATE agent_items SET state='superseded',updated=? WHERE job_id=? AND state='pending'", (now.isoformat(), row['job_id']))
             # ponytail: at most three model calls per tick; increase only if measured backlog needs it.
             budget = 3
+            material = family_media.prepare_draft(store, now)
+            budget -= material['used']; processed += material['used']; failed += material['failed']
             from family_goals import Store as Goals
             goals = Goals(app, store)
             profiles = {p['id']: {key: p.get(key, '') for key in ['id', 'name', 'age', 'grade', 'classroom']} for p in app.profiles()}

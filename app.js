@@ -753,6 +753,13 @@ function resetSchoolRecord(){
  schoolRecordContext=null;const f=$('#recordForm');for(const key of ['child','source','category'])f.elements[key].disabled=false;f.elements.category.innerHTML=['学习进展','成绩','兴趣','情绪','家长观察'].map(v=>'<option>'+v+'</option>').join('');
 }
 function schoolRecordEvidence(origin){
+ if(origin.material){
+  const view=origin.material,owner=data.children.find(c=>c.id===view.child_id),d=view.material_draft;
+  if(!owner||d?.state!=='ready'||!d.upload_ids?.length||d.upload_ids.some(id=>!view.attachments.some(a=>a.id===id)))return null;
+  const source='message:'+view.source_id+':'+view.message_id;if(source.length>200)return null;
+  const draft=d.draft,note=('图片识别草稿，待家长核对；不能据此认定完成或掌握。\n'+draft.note+(draft.uncertainties?.length?'\n待核对：'+draft.uncertainties.join('；'):'')).slice(0,4000);
+  return {child:owner.name,child_id:owner.id,title:draft.title,source,aliases:[source],note,draft,attachments:d.upload_ids};
+ }
  const item=origin.agent?(data.agent?.items||[]).find(x=>x.id===origin.agent&&x.kind==='school'):null;
  const task=origin.task?data.tasks.find(t=>t.id===origin.task):item?.task_id?data.tasks.find(t=>t.id===item.task_id):null;
  if(!item&&!task)return null;
@@ -784,7 +791,12 @@ async function openSchoolRecord(origin,button){
  try{
   const response=await apiFetch('/api/state',{signal:AbortSignal.timeout(12000)});if(!response.ok)throw Error('当前资料无法核对，请刷新后重试。');
   const latest=await response.json();if(seq!==stateLoadSequence||!button.isConnected||document.querySelector('dialog[open]'))return;
-  data=latest;const evidence=schoolRecordEvidence(origin);if(!evidence)throw Error('来源或孩子归属已变化，请刷新后核对。');
+  data=latest;
+  if(origin.message){
+   const r=await apiFetch('/api/agent/message?'+new URLSearchParams(origin.message),{signal:AbortSignal.timeout(12000)});
+   if(!r.ok)throw Error('原通知或图片已变化，请重新打开核对。');const view=await r.json();verifySchoolOriginal(view,{identity:origin.message});origin={material:view};
+  }
+  const evidence=schoolRecordEvidence(origin);if(!evidence)throw Error('来源或孩子归属已变化，请刷新后核对。');
   const existing=data.records.filter(r=>r.child===evidence.child&&evidence.aliases.includes(r.source)&&(['学习进展','成绩'].includes(r.category)||r.related_record_id||r.followup_kind)).sort((a,b)=>a.id-b.id)[0];
   if(existing){openSchoolLearningRecord(existing.id);toast('已有这条来源的学习记录，可以补充观察。');return}
   const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([evidence.child_id,evidence.source])));
@@ -794,6 +806,11 @@ async function openSchoolRecord(origin,button){
   f.elements.child.value=evidence.child;f.elements.category.innerHTML='<option>学习进展</option><option>成绩</option>';f.elements.category.value='学习进展';f.elements.source.add(new Option(evidence.source,evidence.source,false,true));
   for(const key of ['child','source'])f.elements[key].disabled=true;
   f.elements.title.value=evidence.title;f.elements.note.value=evidence.note;f.elements.day.value='';
+  if(evidence.draft){
+   f.elements.subject.value=evidence.draft.subject;f.elements.score.value=evidence.draft.score??'';f.elements.total.value=evidence.draft.total??'';
+   f.elements.category.value=evidence.draft.score!==null?'成绩':'学习进展';$('#scoreFields').classList.toggle('hide',f.elements.category.value!=='成绩');
+   pendingIDs=[...evidence.attachments];drawPending();
+  }
   $('#recordDialog h2').textContent='留作学习记录';$('#recordDialog .muted').textContent='请核对各方说法；日期不清楚，可填记录日并在正文注明。保存不改变事项状态，图片需添加原件核对。';
   f.elements.day.focus();
  }catch(error){toast(error.message||'暂时无法读取，请重试。')}finally{schoolRecordOpening=false;if(button.isConnected)button.disabled=false}
@@ -814,9 +831,11 @@ let schoolOriginal=null;
 function paintSchoolOriginal(){
  const s=schoolOriginal,dialog=$('#schoolOriginalDialog');if(!s||!dialog)return;
  const view=s.view,attachments=view?.attachments||[],unavailable=view?.unavailable_attachment_ids||[],linked=new Set(attachments.map(a=>a.id));
+ const d=view?.material_draft,draftHTML=d?d.state==='ready'?`<section class="note" data-school-material-draft><strong>Agent已整理 · 待家长核对</strong><p>${esc(d.draft.title)}</p><p>${esc(d.draft.subject)}${d.draft.score!==null?' · '+esc(d.draft.score)+' / '+esc(d.draft.total??'满分待核对'):''}</p><p class="source">${esc(d.draft.note)}</p>${d.draft.uncertainties?.length?`<p>待核对：${d.draft.uncertainties.map(esc).join('；')}</p>`:''}<button data-school-material-record>核对并填入学习记录</button><p class="small muted">只整理所附图片；保存前请核对原图、孩子归属和实际日期。</p></section>`:`<p data-school-material-status>${esc(d.explanation)}${d.state==='error'?'<button data-school-material-retry>重试这份原件</button>':''}</p>`:'';
+
  const available=(data.uploads||[]).filter(a=>!linked.has(a.id)),owner=data.children.find(c=>c.id===s.identity.child_id);
  const mediaNote=view?.media?.state==='error'?(view.media.attempts>=3?'自动取图已暂停，可在下面补充原件。':'自动取图暂未成功，可在下面补充原件。'):view?.media?.state==='saved'&&attachments.length?'已自动保存可读首帧，完整内容仍需核对。':view?.media?.state==='dismissed'?'已停止自动关联，可手动补充。':'';
- dialog.innerHTML=`<h2>通知原件</h2><p class="small">${esc(owner?.name||'孩子归属待核对')} · ${esc(view?.source_name||currentSources().find(x=>x.id===s.identity.source_id)?.name||'来源待核对')}</p>${view?`<p class="small muted">${esc(view.message.sender||'发送者未记录')} · ${agentTime(view.message.time)}</p><blockquote class="source">${esc(view.message.text)}</blockquote>${mediaNote?`<p class="small muted" data-school-media-note>${esc(mediaNote)}</p>`:''}<div data-school-original-files>${attachments.map(a=>`${uploadHTML(a)}<button data-school-original-detach="${esc(a.id)}">移除关联</button>`).join('')}${unavailable.map(id=>`<p class="error">一份关联原件暂不可读取，请核对文件或重新上传。</p><button data-school-original-detach="${esc(id)}">移除失效关联</button>`).join('')}${!attachments.length&&!unavailable.length&&!mediaNote?'<p>这条通知还没有关联原件，可以在下面补充。</p>':''}</div><p class="small muted">原件用于核对通知，作者、具体要求和完成情况仍需确认。</p><label>拍照或上传原件<input type="file" data-school-original-upload accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.txt,.mp3,.m4a,.wav,.webm"></label><label>选择已保存的原件<select name="attachment_id"><option value="">请选择</option>${available.map(a=>`<option value="${esc(a.id)}"${s.selected===a.id?' selected':''}>${esc(a.name)}</option>`).join('')}</select></label><button data-school-original-attach>关联所选原件</button>`:''}<p role="status" aria-live="polite" data-school-original-status>${esc(s.error||(s.busy?'正在读取…':''))}</p>${s.pending||!view?'<button data-school-original-retry>重试</button>':''}<div class="toolbar"><button data-school-original-close>关闭</button></div>`;
+ dialog.innerHTML=`<h2>通知原件</h2><p class="small">${esc(owner?.name||'孩子归属待核对')} · ${esc(view?.source_name||currentSources().find(x=>x.id===s.identity.source_id)?.name||'来源待核对')}</p>${view?`<p class="small muted">${esc(view.message.sender||'发送者未记录')} · ${agentTime(view.message.time)}</p><blockquote class="source">${esc(view.message.text)}</blockquote>${mediaNote?`<p class="small muted" data-school-media-note>${esc(mediaNote)}</p>`:''}${draftHTML}<div data-school-original-files>${attachments.map(a=>`${uploadHTML(a)}<button data-school-original-detach="${esc(a.id)}">移除关联</button>`).join('')}${unavailable.map(id=>`<p class="error">一份关联原件暂不可读取，请核对文件或重新上传。</p><button data-school-original-detach="${esc(id)}">移除失效关联</button>`).join('')}${!attachments.length&&!unavailable.length&&!mediaNote?'<p>这条通知还没有关联原件，可以在下面补充。</p>':''}</div><p class="small muted">原件用于核对通知，作者、具体要求和完成情况仍需确认。</p><label>拍照或上传原件<input type="file" data-school-original-upload accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.txt,.mp3,.m4a,.wav,.webm"></label><label>选择已保存的原件<select name="attachment_id"><option value="">请选择</option>${available.map(a=>`<option value="${esc(a.id)}"${s.selected===a.id?' selected':''}>${esc(a.name)}</option>`).join('')}</select></label><button data-school-original-attach>关联所选原件</button>`:''}<p role="status" aria-live="polite" data-school-original-status>${esc(s.error||(s.busy?'正在读取…':''))}</p>${s.pending||!view?'<button data-school-original-retry>重试</button>':''}<div class="toolbar"><button data-school-original-close>关闭</button></div>`;
  for(const control of dialog.querySelectorAll('button,input,select'))control.disabled=s.busy||!!s.pending&&!control.hasAttribute('data-school-original-retry')&&!control.hasAttribute('data-school-original-close');
 }
 function verifySchoolOriginal(view,s){
@@ -873,6 +892,13 @@ function openSchoolOriginal(ref,childID){
    if(b.hasAttribute('data-school-original-close')){dialog.close();return}
    if(b.hasAttribute('data-school-original-retry')){s.pending?saveSchoolOriginal():readSchoolOriginal();return}
    if(s.pending)return;
+   if(b.hasAttribute('data-school-material-record')){const identity={...s.identity};dialog.close();openSchoolRecord({message:identity},b);return}
+   if(b.hasAttribute('data-school-material-retry')){
+    s.busy=true;s.error='';paintSchoolOriginal();
+    apiFetch('/api/agent/action',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':s.token},body:JSON.stringify({action:'retry',id:s.view.material_draft.job_id})})
+     .then(r=>{if(!r.ok)throw Error('重试未能安排，请稍后再试。');s.error='已安排后台重试，可稍后重开核对。'})
+     .catch(e=>{s.error=e.message}).finally(()=>{s.busy=false;paintSchoolOriginal()});return;
+   }
    const detach=b.dataset.schoolOriginalDetach,attach=b.hasAttribute('data-school-original-attach');
    if(detach||attach){const id=detach||s.selected;if(!id){s.error='请先选择一份已保存的原件。';paintSchoolOriginal();return}s.pending={...s.identity,attachment_id:id,action:detach?'detach':'attach'};saveSchoolOriginal()}
   });

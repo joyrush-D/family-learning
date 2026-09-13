@@ -309,5 +309,61 @@ class MediaTests(unittest.TestCase):
                 self.assertEqual(raised.exception.code, 'media_config_changed'); process.assert_not_called()
 
 
+    def test_background_draft_preserves_facts_reuses_model_budget_and_hides_stale_originals(self):
+        import family_llm
+        message=self.message();self.ingest(message);ident=self.seed_upload()
+        self.store.message_attachment(dict(child_id='child-1',source_id=self.source['id'],message_id='1',
+            attachment_id=ident,action='attach'),lambda row:dict(row))
+        result=dict(title='虚构听写结果',subject='英语',score=None,total=None,note='表中目标行标记F；数值未知。',uncertainties=['具体错词尚未提供'])
+        original=self.db_rows('SELECT payload FROM agent_messages');before=self.db_rows('SELECT * FROM records')
+        with patch.object(family_llm,'extract_draft',return_value=result) as model, patch.object(family_llm,'_chat_json',return_value={'proposals':[]}):
+            agent.run_once(self.app,self.now)
+            model.assert_called_once();self.assertEqual(model.call_args.kwargs['target_child'],'示例甲')
+            self.assertEqual(model.call_args.kwargs['data_path'],self.data)
+            view=self.store.message(dict(child_id='child-1',source_id=self.source['id'],message_id='1'),dict)['material_draft']
+            self.assertEqual(view['state'],'ready');self.assertEqual(view['draft'],result);self.assertEqual(view['upload_ids'],[ident])
+            agent.run_once(self.app,self.now+dt.timedelta(minutes=1));self.assertEqual(model.call_count,1)
+            self.assertEqual(self.db_rows('SELECT * FROM records'),before);self.assertEqual(self.db_rows('SELECT * FROM manual_tasks'),[])
+            self.assertEqual(self.db_rows('SELECT payload FROM agent_messages'),original)
+            file=self.data/'uploads'/ident;body=file.read_bytes();file.write_bytes(body[:-1]+bytes([body[-1]^1]))
+            self.assertEqual(self.store.message(dict(child_id='child-1',source_id=self.source['id'],message_id='1'),dict)['material_draft']['state'],'pending')
+            self.store.message_attachment(dict(child_id='child-1',source_id=self.source['id'],message_id='1',attachment_id=ident,action='detach'),dict)
+            self.assertIsNone(self.store.message(dict(child_id='child-1',source_id=self.source['id'],message_id='1'),dict)['material_draft'])
+            self.assertEqual(model.call_count,1)  # Opening/removing never calls a model.
+
+    def test_draft_retries_are_bounded_and_only_the_selected_failed_job_is_retried(self):
+        import family_llm
+        message=self.message();self.ingest(message);ident=self.seed_upload()
+        self.store.message_attachment(dict(child_id='child-1',source_id=self.source['id'],message_id='1',attachment_id=ident,action='attach'),dict)
+        with patch.object(family_llm,'extract_draft',side_effect=family_llm.LLMDraftError('synthetic failure')) as model:
+            for minute in [0,1,6,7,17,40]:media.prepare_draft(self.store,self.now+dt.timedelta(minutes=minute))
+            self.assertEqual(model.call_count,3)
+        view=self.store.message(dict(child_id='child-1',source_id=self.source['id'],message_id='1'),dict)['material_draft'];self.assertEqual(view['state'],'error')
+        other=self.store._job('other-job',{},self.now,model=True);self.store._fail('other-job',self.now,fingerprint=other)
+        self.store.act(dict(action='retry',id=view['job_id']))
+        rows=self.db_rows('SELECT id,attempts FROM agent_jobs')
+        self.assertEqual(next(r['attempts'] for r in rows if r['id']==view['job_id']),0)
+        self.assertEqual(next(r['attempts'] for r in rows if r['id']=='other-job'),1)
+        self.assertEqual(self.db_rows('SELECT * FROM agent_message_drafts'),[])
+
+    def test_draft_rechecks_source_and_attachment_ownership_after_inference(self):
+        import family_llm
+        message=self.message();self.ingest(message);ident=self.seed_upload()
+        self.store.message_attachment(dict(child_id='child-1',source_id=self.source['id'],message_id='1',attachment_id=ident,action='attach'),dict)
+        result=dict(title='虚构草稿',subject='',score=None,total=None,note='待核对',uncertainties=[])
+        def change(*args,**kwargs):
+            self.store.message_attachment(dict(child_id='child-1',source_id=self.source['id'],message_id='1',attachment_id=ident,action='detach'),dict)
+            return result
+        with patch.object(family_llm,'extract_draft',side_effect=change):
+            self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=1,failed=1))
+        self.assertEqual(self.db_rows('SELECT * FROM agent_message_drafts'),[])
+        self.store.message_attachment(dict(child_id='child-1',source_id=self.source['id'],message_id='1',attachment_id=ident,action='attach'),dict)
+        self.write_config(enabled=False)
+        with patch.object(family_llm,'extract_draft') as model:
+            self.assertEqual(media.prepare_draft(self.store,self.now+dt.timedelta(minutes=10))['used'],0);model.assert_not_called()
+        self.assertEqual(self.store.message(dict(child_id='child-1',source_id=self.source['id'],message_id='1'),dict)['material_draft']['state'],'unavailable')
+        with self.assertRaises(agent.AgentError):self.store.message(dict(child_id='child-2',source_id=self.source['id'],message_id='1'),dict)
+
+
 if __name__ == '__main__':
     unittest.main()

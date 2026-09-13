@@ -37,6 +37,20 @@ class GoalTests(unittest.TestCase):
     def feedback(self,note='家长转述孩子：会认单词，但说不出为什么。',**obj):
         return self.action('feedback',id=self.ident,day=self.now.date().isoformat(),source='家长转述孩子',note=note,**obj)
 
+    def test_legacy_plan_goal_survives_read_and_edit_without_recreating_task(self):
+        self.approve(self.evaluate());before=self.goal();expected=before['current_plan']['goal']
+        with self.store.agent._db() as c:
+            plan=json.loads(c.execute('SELECT plan FROM agent_items WHERE id=?',(self.ident,)).fetchone()['plan'])
+            plan['goal']=plan['approved'].pop('goal');legacy=agent._json(plan)
+            c.execute('UPDATE agent_items SET plan=? WHERE id=?',(legacy,self.ident))
+        current=self.goal();self.assertEqual(current['current_plan']['goal'],expected)
+        with self.store.agent._db() as c:
+            self.assertEqual(c.execute('SELECT plan FROM agent_items WHERE id=?',(self.ident,)).fetchone()['plan'],legacy)
+        self.action('manual',id=self.ident,expected_version=current['version'],context_hash=current['context_hash'],
+                    plan={**current['current_plan'],'review_on':(self.now.date()+dt.timedelta(days=7)).isoformat()})
+        saved=self.goal();self.assertEqual(saved['task_id'],before['task_id']);self.assertEqual(saved['current_plan']['goal'],expected)
+        self.assertEqual(saved['records'],before['records'])
+
     def test_task_feedback_reaches_goal_and_revises_without_changing_plan(self):
         self.approve(self.evaluate());before=self.goal();task=before['task_id']
         payload=dict(id=task,status='进行中',note='家长转述：孩子说困了，今天先停；只在提示后完成。',expected_updated='')

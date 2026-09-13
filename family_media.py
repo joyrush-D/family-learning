@@ -1,7 +1,8 @@
 """Optional, bounded local WeChat image saving inside the existing Agent cycle.
 
 Only the pinned CLI's original V2/WXGF still-image variant is supported. No
-key extraction, downloads, OCR, model calls, or changes to message payloads.
+key extraction or downloads. Linked images can be interpreted as parent-review
+drafts by the existing model budget; message payloads and family facts stay intact.
 """
 import datetime as dt
 import hashlib
@@ -219,3 +220,110 @@ def run_one(app, store, now):
                 c.execute("UPDATE agent_media SET state='error',error=?,updated=? WHERE source_id=? AND message_id=? AND state='pending'",
                           (code, now.isoformat(), selected[0]['id'], selected[1]['id']))
         return {'state': 'error', 'error': code}
+
+
+# Drafts are derived from linked originals; they never overwrite messages or learning facts.
+def draft_input(store, c, source, message):
+    links = [r['upload_id'] for r in c.execute(
+        'SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=? ORDER BY upload_id',
+        (source['id'], message['id']))]
+    if not links:
+        return None
+    _authorized(store, c, source, message)
+    require(len(links) <= 3, 'draft_too_many_originals')
+    child = next(p for p in store.profiles(c) if p['id'] == source['child_id'])
+    images, originals = [], []
+    for ident in links:
+        row = store._message_upload(c, source['child_id'], ident)
+        require(row['mime'] in ('image/jpeg', 'image/png', 'image/webp'), 'draft_image_required')
+        body = read_file(store.data / 'uploads' / ident)
+        require(len(body) == row['size'], 'media_file_changed')
+        images.append(dict(mime=row['mime'], data=body))
+        originals.append([ident, row['mime'], hashlib.sha256(body).hexdigest()])
+    text = json.dumps(dict(source_message=message, source_name=source['name']), ensure_ascii=False)
+    require(sum(len(i['data']) for i in images) + len(text.encode()) <= 20 * 1024 * 1024, 'draft_originals_too_large')
+    fingerprint = hashlib.sha256(json.dumps([1, source, child, message, originals],
+        ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    return dict(fingerprint=fingerprint, images=images, text=text, child=child['name'], upload_ids=links)
+
+
+def draft_key(source, message):
+    return 'message-draft:' + hashlib.sha256(json.dumps([source['id'], message['id']]).encode()).hexdigest()[:40]
+
+
+def draft_view(store, c, source, message):
+    try:
+        value = draft_input(store, c, source, message)
+        if value is None:
+            return None
+    except Exception as error:
+        explanation = {'draft_image_required':'目前自动整理支持JPG、PNG、WebP图片；其他文件可保留并手动记录。',
+                       'draft_too_many_originals':'一次最多整理3张原件，请分次关联或手动记录。',
+                       'draft_originals_too_large':'本次原件与文字超过20MiB，可分次关联或手动记录。'}.get(
+                           error.code if isinstance(error, MediaError) else '', '当前原件或授权无法完整核对，可保留原件并手动记录。')
+        return dict(state='unavailable', explanation=explanation)
+    row = c.execute('SELECT * FROM agent_message_drafts WHERE source_id=? AND message_id=?',
+                    (source['id'], message['id'])).fetchone()
+    if row and row['fingerprint'] == value['fingerprint']:
+        return dict(state='ready', draft=json.loads(row['payload']), updated=row['updated'], upload_ids=value['upload_ids'])
+    key = draft_key(source, message)
+    job = c.execute('SELECT * FROM agent_jobs WHERE id=?', (key,)).fetchone()
+    current = hashlib.sha256(json.dumps({'material': value['fingerprint']}, ensure_ascii=False,
+        separators=(',', ':'), sort_keys=True).encode()).hexdigest()
+    failed = job and job['fingerprint'] == current and job['error']
+    return dict(state='error' if failed else 'pending', job_id=key,
+                explanation='原件整理暂未成功；原图保留，可稍后重试或手动记录。' if failed else 'Agent将在后台整理已关联的图片，结果仍需家长核对。')
+
+
+def prepare_draft(store, now):
+    """Use one existing model slot for a linked picture; existing jobs bound retries."""
+    import family_llm
+    selected = None
+    with store._db() as c:
+        config = store._config(c)
+        if not config['enabled']:
+            return dict(used=0, failed=0)
+        sources = {s['id']: s for s in config['sources'] if s['enabled']}
+        # ponytail: inspect at most 200 linked messages; add an indexed queue if this family backlog grows.
+        rows = c.execute("""SELECT m.source_id,m.payload FROM agent_messages m WHERE EXISTS
+            (SELECT 1 FROM agent_message_attachments a WHERE a.source_id=m.source_id AND a.message_id=m.id)
+            ORDER BY m.rowid DESC LIMIT 200""").fetchall()
+    for row in rows:
+        source = sources.get(row['source_id'])
+        if source is None:
+            continue
+        message = json.loads(row['payload'])
+        try:
+            with store._db() as c:
+                value = draft_input(store, c, source, message)
+                if not value:
+                    continue
+                old = c.execute('SELECT fingerprint FROM agent_message_drafts WHERE source_id=? AND message_id=?',
+                                (source['id'], message['id'])).fetchone()
+                if old and old['fingerprint'] == value['fingerprint']:
+                    continue
+        except Exception:
+            continue  # No model receives unreadable, unsupported, or foreign originals.
+        key = draft_key(source, message)
+        fp = store._job(key, {'material': value['fingerprint']}, now, model=True)
+        if fp:
+            selected = (source, message, value, key, fp)
+            break
+    if selected is None:
+        return dict(used=0, failed=0)
+    source, message, value, key, fp = selected
+    try:
+        result = family_llm.extract_draft(value['text'], value['images'], target_child=value['child'], timeout=45, data_path=store.data)
+        with store._db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            current = draft_input(store, c, source, message)
+            job = c.execute('SELECT fingerprint FROM agent_jobs WHERE id=?', (key,)).fetchone()
+            require(current is not None and current['fingerprint'] == value['fingerprint']
+                    and job is not None and job['fingerprint'] == fp, 'draft_material_changed')
+            c.execute('INSERT OR REPLACE INTO agent_message_drafts VALUES(?,?,?,?,?)',
+                      (source['id'], message['id'], value['fingerprint'], json.dumps(result, ensure_ascii=False), now.isoformat()))
+            c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=? AND fingerprint=?", (key, fp))
+        return dict(used=1, failed=0)
+    except Exception:
+        store._fail(key, now, fingerprint=fp)
+        return dict(used=1, failed=1)

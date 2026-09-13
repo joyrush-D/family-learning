@@ -211,6 +211,10 @@ class Store:
 
     def _context(self, c, row):
         plan = json.loads(row['plan']); meta = plan.get('learning', {})
+        # Older approvals kept their explicit goal on the root plan.
+        approved = plan.get('approved')
+        if isinstance(approved, dict) and 'goal' not in approved and isinstance(plan.get('goal'), str):
+            approved['goal'] = plan['goal']
         profile = next(p for p in self.app.profiles(c) if p['id'] == row['child_id'])
         aliases = {r['alias']: r['child_id'] for r in c.execute('SELECT * FROM profile_aliases')}
         owners = {p['name']: p['id'] for p in self.app.profiles(c)} | aliases
