@@ -27,6 +27,17 @@ def _text(obj, key, limit, default=''):
     return value.strip()
 
 
+def report_fields(value):
+    if not isinstance(value,dict) or set(value)-{'text','explanation','excerpt','goal','attachments'}:
+        raise StudyError('作业原始材料字段不正确')
+    report={k:_text(value,k,limit) for k,limit in [('text',6000),('explanation',3000),('excerpt',2000),('goal',2000)]}
+    ids=value.get('attachments',[])
+    if not isinstance(ids,list) or len(ids)>3 or any(not isinstance(i,str) or not re.fullmatch('[a-f0-9]{32}',i) for i in ids) or len(set(ids))!=len(ids):
+        raise StudyError('每次最多关联三份已上传的作业照片或录音')
+    report['attachments']=ids
+    return report
+
+
 def _day(value):
     try:
         if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value): raise ValueError()
@@ -90,6 +101,10 @@ class Store:
                 c.execute("ALTER TABLE study_items ADD COLUMN record_hash TEXT NOT NULL DEFAULT ''")
             if 'result_actor' not in {r['name'] for r in c.execute('PRAGMA table_info(study_items)')}:
                 c.execute("ALTER TABLE study_items ADD COLUMN result_actor TEXT NOT NULL DEFAULT 'parent'")
+            if 'report' not in {r['name'] for r in c.execute('PRAGMA table_info(study_items)')}:
+                try: c.execute("ALTER TABLE study_items ADD COLUMN report TEXT NOT NULL DEFAULT '{}'")
+                except sqlite3.OperationalError:
+                    if 'report' not in {r['name'] for r in c.execute('PRAGMA table_info(study_items)')}: raise
 
     @contextmanager
     def _db(self):
@@ -165,20 +180,49 @@ class Store:
                     (child_id, day, start, stop, bed, old['closed_at'] if old else '', version+1, key, digest))
         return dict(ok=True, **self.snapshot(child_id, day))
 
+    def _materials(self,c,child_id,ids):
+        import family_reading
+        family_reading.validate_record_attachments(c,child_id,ids)
+        for ident in ids:
+            row=c.execute('SELECT size,mime FROM uploads WHERE id=?',(ident,)).fetchone();p=self.app.DATA/'uploads'/ident
+            if row is None or row['mime'] not in {'image/jpeg','image/png','image/webp','audio/wav','audio/mpeg','audio/mp4','audio/webm','audio/ogg'}:
+                raise StudyError('请选择已上传的作业照片或录音')
+            if self.actor=='child' and not c.execute('SELECT 1 FROM child_uploads WHERE upload_id=? AND child_id=?',(ident,child_id)).fetchone():
+                raise StudyError('只能使用自己上传的作业原件',403,'report_not_owned')
+            if p.parent.is_symlink() or p.is_symlink() or not p.is_file() or p.stat().st_size!=row['size']:
+                raise StudyError('作业原件暂时无法读取，请重新上传')
+
+    def draft_report(self,obj):
+        if not isinstance(obj,dict) or set(obj)-{'child_id','day','text','explanation','attachments'}: raise StudyError('请只提供这次报作业的材料')
+        day=_day(obj.get('day'));child_id=obj.get('child_id');report=report_fields({k:v for k,v in obj.items() if k not in {'child_id','day'}})
+        with self._db() as c:
+            child=self._child(c,child_id);self._child_edit(c,child,day,None);self._materials(c,child_id,report['attachments'])
+            image_ids=[i for i in report['attachments'] if c.execute('SELECT mime FROM uploads WHERE id=?',(i,)).fetchone()['mime'].startswith('image/')]
+        if not report['text'] and not report['explanation'] and not image_ids: raise StudyError('请先转写录音或补充原话，也可以直接填写功课')
+        result=self.app.family_llm.extract_draft(_json(dict(original=report['text'],explanation=report['explanation'])),
+            self.app.material_images(image_ids),target_child=child['name'],data_path=self.app.DATA,homework=True,timeout=90)
+        with self._db() as c:self._child(c,child_id);self._materials(c,child_id,report['attachments'])
+        return dict(draft=result,child_id=child_id,day=day)
+
     def save_item(self, obj):
-        child_id, day, key, version, digest = self._request(obj, {'id', 'task_id', 'title', 'subject', 'planned_minutes'})
+        child_id, day, key, version, digest = self._request(obj, {'id', 'task_id', 'title', 'subject', 'planned_minutes', 'report'})
         ident = _text(obj, 'id', 30)
         if ident and not re.fullmatch(r'STUDY-[a-f0-9]{24}', ident): raise StudyError('功课编号不正确')
         creating = not ident
+        report=report_fields(obj['report']) if 'report' in obj else {}
+        if report and (not creating or obj.get('task_id')): raise StudyError('作业原文随新增功课保存；已有学校事项请保留原来源')
         ident = ident or 'STUDY-' + hashlib.sha256(_json([child_id, day, key]).encode()).hexdigest()[:24]
         with self._db() as c:
             c.execute('BEGIN IMMEDIATE'); child = self._child(c, child_id)
             old = c.execute('SELECT * FROM study_items WHERE id=?', (ident,)).fetchone()
             if old and (old['child_id'] != child_id or old['day'] != day): raise StudyError('功课归属不正确')
-            self._child_edit(c,child,day,old)
+            report_replay=bool(creating and old and report and old['creation_hash']==digest)
+            if not report_replay:
+                self._child_edit(c,child,day,old)
+                if report: self._materials(c,child_id,report['attachments'])
             if creating and old:
                 # An old creation request must not overwrite subsequent timer or feedback changes.
-                if old['last_request_key'] == key and old['creation_hash'] == digest:
+                if old['creation_hash'] == digest and (report or old['last_request_key'] == key):
                     pass
                 else: raise StudyError('这次添加已保存并有后续进展，请刷新核对', 409, 'study_conflict')
             elif not self._replay(old, key, version, digest):
@@ -208,13 +252,15 @@ class Store:
                         if not title: raise StudyError('请填写功课，或选择已有待办')
                         task_id = ident
                         c.execute('INSERT INTO manual_tasks VALUES (?,?,?,?,?,?,?)',
-                            (task_id, child['name'], title, day, '待跟进', '孩子自述功课，待家长核对' if self.actor=='child' else '家庭放学后录入', ''))
+                            (task_id, child['name'], title, day, '待跟进', '孩子自述功课，待家长核对' if self.actor=='child' else '家庭放学后录入', report.get('goal','')))
                     if c.execute('SELECT 1 FROM study_items WHERE child_id=? AND day=? AND task_id=?', (child_id, day, task_id)).fetchone():
                         raise StudyError('这项待办已加入当天安排，请刷新核对', 409, 'study_task_duplicate')
                     c.execute('''INSERT INTO study_items (id,child_id,day,task_id,title,subject,planned_minutes,version,
                         creation_hash,last_request_key,last_request_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
                         (ident, child_id, day, task_id, title, subject, planned, 1, digest, key, digest))
-        return dict(ok=True, **self.snapshot(child_id, day))
+                    if report:
+                        c.execute('UPDATE study_items SET report=? WHERE id=?',(_json(dict(report,actor=self.actor,confirmed_at=self._now().isoformat() if self.actor=='parent' else '')),ident))
+        return dict(ok=True, saved_item_id=ident, **self.snapshot(child_id, day))
 
     @staticmethod
     def _elapsed(row, now):
@@ -227,7 +273,7 @@ class Store:
         return round(seconds, 2), review
 
     def _item(self, row, now):
-        item = dict(row); seconds, review = self._elapsed(row, now)
+        item = dict(row); item['report']=json.loads(item.get('report','{}')); seconds, review = self._elapsed(row, now)
         item.update(elapsed_seconds=seconds, time_needs_review=review,
             actual_minutes=round(seconds/60, 2) if row['time_source'] and not review else None)
         for key in ('creation_hash', 'last_request_key', 'last_request_hash', 'task_completion_note', 'record_hash'): item.pop(key, None)
@@ -236,7 +282,8 @@ class Store:
     def action(self, obj):
         child_id, day, key, version, digest = self._request(obj, {'action', 'id', 'result', 'assistance', 'note', 'actual_minutes'})
         action = _text(obj, 'action', 30); now = self._now()
-        if action not in ('start', 'pause', 'finish', 'manual', 'close_day'): raise StudyError('作息操作不正确')
+        if action not in ('start', 'pause', 'finish', 'manual', 'close_day', 'confirm_report'): raise StudyError('作息操作不正确')
+        if action=='confirm_report' and self.actor!='parent': raise StudyError('作业要求由家长核对',403,'parent_required')
         allowed={'child_id','day','request_key','version','action'} | ({'id'} if action != 'close_day' else set())
         if action == 'finish': allowed |= {'result','assistance','note','actual_minutes'}
         if action == 'manual': allowed.add('actual_minutes')
@@ -270,7 +317,12 @@ class Store:
                             raise StudyError('原待办已搁置；要继续请先到原待办恢复跟进', 409, 'study_task_dismissed')
                         if action == 'start' and source_status in self.app.TASK_CLOSED:
                             raise StudyError('原待办已经结束；需要继续时请先核对原待办', 409, 'study_task_closed')
-                    if action == 'start':
+                    if action=='confirm_report':
+                        report=json.loads(row.get('report','{}'))
+                        if not report: raise StudyError('这项功课没有待核对的原始材料')
+                        report['confirmed_at']=now.isoformat();row['report']=_json(report)
+                        c.execute("UPDATE manual_tasks SET source='孩子自述功课，家长已核对要求' WHERE id=? AND source='孩子自述功课，待家长核对'",(row['task_id'],))
+                    elif action == 'start':
                         if day != now.date().isoformat(): raise StudyError('实时计时只用于今天；过去用时请手动补录')
                         if row['result'] == '完成': raise StudyError('这项功课已确认完成；需要继续时先更正本次结果')
                         if review: raise StudyError('这段计时需要核对，请先手动补录实际分钟')

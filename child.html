@@ -5,8 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>我的成长营地</title>
+  <script src="./homework-input.js"></script>
   <script src="./child.js"></script>
-  <link rel="stylesheet" href="./child.css">
+  <link rel="stylesheet" href="./child.css"><link rel="stylesheet" href="./homework-input.css">
 </head>
 <body>
   <a class="skip" href="#camp">跳到今天的安排</a>
@@ -36,7 +37,7 @@
       <div id="study-items" class="study-items"></div>
       <div id="study-editor"></div>
       <form id="study-add" class="paper study-add">
-        <h3>＋ 报一项功课</h3>
+        <h3>＋ 报一项功课</h3><button type="button" id="study-report-material">用登记本 / 语音来报</button>
         <label for="study-title-input">要做什么</label><input id="study-title-input" name="title" maxlength="200" placeholder="例如：完成数学练习第 3 页" required>
         <div class="study-fields"><label for="study-subject">科目 · 可留空<input id="study-subject" name="subject" maxlength="60"></label><label for="study-plan">预计分钟 · 可留空<input id="study-plan" name="planned_minutes" type="number" min="0" max="1440" step="1" inputmode="numeric"></label></div>
         <p class="small">也可以用手机键盘语音输入。</p><button type="submit" class="primary">加入今天</button>

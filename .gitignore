@@ -148,3 +148,8 @@
 !/test_teachers_ui.cjs
 
 !/family_qq_llbot.py
+
+!/homework-input.js
+!/homework-input.css
+!/test_homework_report.py
+!/test_homework_report_ui.cjs

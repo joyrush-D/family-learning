@@ -56,9 +56,9 @@ CARE_CHOICES = ('', '愿意试试', '暂不考虑', '改天回看')
 TASK_DISMISSED = ('不参加', '不适用')
 TASK_CLOSED = ('已完成', *TASK_DISMISSED, '已归档')
 TASK_STATUSES = ('待跟进', '进行中', '已完成', *TASK_DISMISSED)
-BUNDLE = ('app.js', 'reading.js', 'calendar.js', 'child-access.js', 'learning.js', 'study.js', 'settings.js', 'guided.js', 'teachers.js', 'goals.js')
+BUNDLE = ('app.js', 'reading.js', 'calendar.js', 'child-access.js', 'learning.js', 'study.js', 'homework-input.js', 'settings.js', 'guided.js', 'teachers.js', 'goals.js')
 STATIC = {'/': 'index.html', **{'/'+name: name for name in (
-    *BUNDLE, 'startup.js', 'ui.css', 'learning.css', 'study.css', 'teachers.css', 'growth-world.js',
+    *BUNDLE, 'startup.js', 'ui.css', 'learning.css', 'study.css', 'homework-input.css', 'teachers.css', 'growth-world.js',
     'vendor/three.module.min.js', 'vendor/three.core.min.js')}}
 
 
@@ -322,12 +322,17 @@ def snapshot():
         for r in records: r['attachments'] = json.loads(r['attachments'])
         uploads = [upload_info(r) for r in c.execute('SELECT * FROM uploads ORDER BY created DESC,id DESC')]
         updates = {r['id']:dict(r) for r in c.execute('SELECT * FROM task_updates')}
+        report_meta={}
+        if 'report' in {r[1] for r in c.execute('PRAGMA table_info(study_items)')}:
+            for row in c.execute("SELECT task_id,day,report FROM study_items WHERE report<>'{}'"):
+                report=json.loads(row['report']);report_meta[row['task_id']]=dict(day=row['day'],needs_review=report.get('actor')=='child' and not report.get('confirmed_at'))
         history = {}
         for r in c.execute('SELECT * FROM task_history ORDER BY id DESC'):
             history.setdefault(r['task_id'], []).append(dict(r))
     for t in ts:
         t['update'] = updates.get(t['id'])
         t['history'] = history.get(t['id'], [])
+        if t['id'] in report_meta: t['homework_report']=report_meta[t['id']]
     p = DATA / '采集状态.json'
     sync_error=''
     try:
@@ -1463,6 +1468,9 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/teachers/observation': return self.reply(200,teacher_store().save_observation(obj))
             if path=='/api/study/day': return self.reply(200,study_store().save_day(obj))
             if path=='/api/study/item': return self.reply(200,study_store().save_item(obj))
+            if path=='/api/study/draft':
+                try: return self.reply(200,study_store().draft_report(obj))
+                except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
             if path=='/api/study/action': return self.reply(200,study_store().action(obj))
             if path=='/api/guided/state':
                 if set(obj)-{'child_id'}: raise family_guided.GuidedError('请只选择要回看的孩子')

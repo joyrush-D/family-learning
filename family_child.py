@@ -212,7 +212,8 @@ def _guided(app, secret, action, obj):
 
 def _study(app, secret, action, obj):
     allowed={'day'}
-    if action=='item': allowed|={'request_key','id','version','title','subject','planned_minutes'}
+    if action=='item': allowed|={'request_key','id','version','title','subject','planned_minutes','report'}
+    elif action=='draft': allowed|={'text','explanation','attachments'}
     elif action=='action': allowed|={'request_key','id','version','action','result','assistance','note','actual_minutes'}
     elif action!='state': raise ChildError('孩子入口没有这项功课操作',404,'not_found')
     _fields(obj,allowed)
@@ -229,6 +230,9 @@ def _study(app, secret, action, obj):
         if not _study_enabled(connection,ident): raise ChildError('家长尚未开放每日功课，请先联系家长',403,'study_not_shared')
     store=family_study.Store(app,authorize=authorize)
     payload=dict(obj,child_id=child['id'])
+    if action=='draft':
+        try: return store.draft_report(payload)
+        except app.family_llm.LLMDraftError: raise ChildError('整理暂不可用，原话和原件保留，可直接填写或稍后重试',503,'draft_unavailable') from None
     state=store.snapshot(child['id'],day) if action=='state' else getattr(store,'save_item' if action=='item' else 'action')(payload)
     fields=('id','day','title','subject','planned_minutes','elapsed_seconds','running_since','status','result','result_actor',
             'assistance','note','actual_minutes','time_source','time_needs_review','version',
@@ -238,9 +242,10 @@ def _study(app, secret, action, obj):
         item={key:row[key] for key in fields}
         item['editable']=row['source_task_status'] not in (*app.TASK_CLOSED,'待核对') and not (row['result_actor']=='parent' and row['result']=='完成')
         if row['result_actor']!='child': item['note']=''
+        item['report']=row.get('report',{}) if row.get('report',{}).get('actor')=='child' else {}
         items.append(item)
     return dict(ok=True,day={key:value for key,value in state['day'].items() if key!='child_id'},
-                items=items,summary=state['summary'],active_item=state['active_item'])
+                items=items,summary=state['summary'],active_item=state['active_item'],**({'saved_item_id':state['saved_item_id']} if 'saved_item_id' in state else {}))
 
 
 def _shared(c, child, task_id):
@@ -329,7 +334,7 @@ def dispatch_get(app, handler, path):
             handler.end_headers()
             return
         static = {'/child/': ('child.html', 'text/html'), '/child/child.js': ('child.js', 'text/javascript'),
-                  '/child/child.css': ('child.css', 'text/css')}
+                  '/child/child.css': ('child.css', 'text/css'), '/child/homework-input.js': ('homework-input.js','text/javascript'), '/child/homework-input.css': ('homework-input.css','text/css')}
         if path in static:
             name, kind = static[path]
             return handler.reply_static((app.ROOT / name,), kind + '; charset=utf-8',
@@ -366,7 +371,7 @@ def dispatch_post(app, handler, path):
         return False
     handler.close_connection = True
     def action():
-        allowed = {'/child/api/' + item for item in ('login', 'logout', 'upload', 'submit', 'transcribe','study/state','study/item','study/action','guided/state','guided/action')}
+        allowed = {'/child/api/' + item for item in ('login', 'logout', 'upload', 'submit', 'transcribe','study/state','study/item','study/action','study/draft','guided/state','guided/action')}
         if path not in allowed:
             raise ChildError('孩子入口没有这项操作', 404, 'not_found')
         if handler.headers.get('Transfer-Encoding') or len(handler.headers.get_all('Content-Length', [])) != 1:
