@@ -119,6 +119,8 @@
 !/test_settings_ui.cjs
 !/configure_mac.py
 !/test_configure_mac.py
+!/family_collector_mac.py
+!/test_collector_mac.py
 !/THIRD_PARTY.md
 
 !/family_task_focus.py
