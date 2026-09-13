@@ -1,7 +1,7 @@
 // Calendar dates are date-only values. UTC arithmetic avoids daylight-saving shifts.
 const calendarKinds={school:'学校安排',activity:'课外活动',study:'学习安排',family:'家庭时光',other:'其他'};
 const calendarStatuses={tentative:'暂定',confirmed:'已确定',cancelled:'已取消',completed:'已完成'};
-const calendarState={week:'',day:'',childID:'',visible:false,result:null,range:'',error:'',loading:false,sequence:0,controller:null};
+const calendarState={week:'',day:'',childID:'',visible:false,result:null,range:'',error:'',loading:false,dirty:false,sequence:0,controller:null};
 let calendarPending=null,calendarSaving=false,calendarJump=0,calendarDraftContext=null;
 let calendarSyncVersion=0;
 function calendarAdd(day,n){const d=new Date(day+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10)}
@@ -9,12 +9,12 @@ function calendarMonday(day){const n=new Date(day+'T12:00:00Z').getUTCDay();retu
 function calendarDays(){return Array.from({length:7},(_,i)=>calendarAdd(calendarState.week,i))}
 function calendarNames(ids){return (ids||[]).map(id=>data.children.find(c=>c.id===id)?.name||'档案待核对').join('、')}
 function calendarItems(items,day){return items.filter(x=>x.day===day&&(!calendarState.childID||(x.child_ids||[x.child_id]).includes(calendarState.childID)))}
-function calendarInvalidate(){calendarState.sequence++;calendarState.controller?.abort();calendarState.loading=false;calendarState.result=null;calendarState.range='';calendarState.error=''}
+function calendarInvalidate(keep=false){calendarState.sequence++;calendarState.controller?.abort();calendarState.loading=false;calendarState.dirty=true;if(!keep){calendarState.result=null;calendarState.range=''}calendarState.error=''}
 window.FamilyCalendar={invalidate:calendarInvalidate,hasPending:()=>!!calendarPending,openDraft:calendarOpenAssistant,openCitation:calendarOpenCitation,leave(){if(calendarState.visible){calendarJump++;calendarState.visible=false;calendarState.sequence++;calendarState.controller?.abort();calendarState.loading=false}}};
 function calendarHomeHTML(){return `<section class="calendar-entry"><span aria-hidden="true">▦</span><div><h2>把一周留给成长</h2><p>上学、探索、一起度过的时间，放在同一张日历里。</p></div><div class="calendar-entry-actions"><button class="primary" data-page="calendar">打开成长日历</button><button data-calendar-weekend-home>看看本周末</button></div></section>`}
 function calendarEventHTML(e){
  const t=e.task_id?data.tasks.find(t=>t.id===e.task_id&&e.child_ids.includes(data.children.find(c=>c.name===t.child)?.id)):null;
- return `<article tabindex="-1" data-query-target="calendar:${esc(e.id)}:${esc(e.day)}" class="calendar-event ${e.status==='cancelled'?'calendar-cancelled':''}"><div class="calendar-event-meta"><span>${esc(calendarKinds[e.category]||'安排')}</span><span class="calendar-status calendar-${esc(e.status)}">${esc(calendarStatuses[e.status]||'状态待核对')}</span></div><h3>${esc(e.title)}</h3><p class="calendar-time">${e.start_time?esc(e.start_time)+(e.end_time?'–'+esc(e.end_time):''):'时间未填写'}</p><p class="calendar-who">${esc(calendarNames(e.child_ids))}${e.repeat==='weekly'?' · 每周':''}</p>${e.location?`<p class="calendar-location">⌖ ${esc(e.location)}</p>`:''}${e.note?`<p class="source calendar-requirements">${esc(e.note)}</p>`:''}${e.source||e.repeat==='weekly'?`<details><summary>出处与重复规则</summary>${e.source?`<p class="source">出处：${esc(e.source)}</p>`:''}${e.repeat==='weekly'?`<p>起点 ${esc(e.series_day)}${e.until?' · 截至 '+esc(e.until):' · 未设截止'}</p>`:''}</details>`:''}${t?`<p class="calendar-task-status ${taskDismissed(t)?'calendar-family-decision':''}">${taskDismissed(t)?esc(t.child)+'：':'清单：'}${esc(taskStatusLabel(status(t)))}</p>`:''}${e.task_id?`<button class="calendar-card-action" data-calendar-task="${esc(e.task_id)}">核对原事项 →</button>`:''}${e.editable&&e.repeat==='none'&&!['cancelled','completed'].includes(e.status)?`<button data-calendar-complete="${esc(e.id)}">确认完成</button>`:''}${e.editable?`<button class="calendar-card-action" data-calendar-edit="${esc(e.id)}">${e.repeat==='weekly'?'编辑整条重复安排':'编辑安排'}</button>`:''}</article>`;
+ return `<article tabindex="-1" data-query-target="calendar:${esc(e.id)}:${esc(e.day)}" class="calendar-event ${e.status==='cancelled'?'calendar-cancelled':''}"><div class="calendar-event-meta"><span>${esc(calendarKinds[e.category]||'安排')}</span><span class="calendar-status calendar-${esc(e.status)}">${esc(calendarStatuses[e.status]||'状态待核对')}</span></div><h3>${esc(e.title)}</h3><p class="calendar-time">${esc(e.day)} · ${e.start_time?esc(e.start_time)+(e.end_time?'–'+esc(e.end_time):''):'时间未填写'}</p><p class="calendar-who">${esc(calendarNames(e.child_ids))}${e.repeat==='weekly'?' · 每周':''}</p>${e.location?`<p class="calendar-location">⌖ ${esc(e.location)}</p>`:''}${e.note?`<p class="source calendar-requirements">${esc(e.note)}</p>`:''}${e.source||e.repeat==='weekly'?`<details><summary>出处与重复规则</summary>${e.source?`<p class="source">出处：${esc(e.source)}</p>`:''}${e.repeat==='weekly'?`<p>起点 ${esc(e.series_day)}${e.until?' · 截至 '+esc(e.until):' · 未设截止'}</p>`:''}</details>`:''}${t?`<p class="calendar-task-status ${taskDismissed(t)?'calendar-family-decision':''}">${taskDismissed(t)?esc(t.child)+'：':'清单：'}${esc(taskStatusLabel(status(t)))}</p>`:''}${e.task_id?`<button class="calendar-card-action" data-calendar-task="${esc(e.task_id)}">核对原事项 →</button>`:''}${e.editable&&e.repeat==='none'&&!['cancelled','completed'].includes(e.status)?`<button data-calendar-complete="${esc(e.id)}">确认完成</button>`:''}${e.editable?`<button class="calendar-card-action" data-calendar-edit="${esc(e.id)}">${e.repeat==='weekly'?'编辑整条重复安排':'编辑安排'}</button>`:''}</article>`;
 }
 function calendarTimetableHTML(t){return `<details tabindex="-1" data-query-target="timetable:${esc(t.id)}:${esc(t.day)}" class="calendar-timetable"><summary><span>课表 · ${esc(calendarNames([t.child_id]))}</span><small>${t.sessions.length} 个节次</small></summary><p class="small">${esc(t.title)}</p><ol>${t.sessions.map(s=>`<li><span>${esc(s.slot)}</span><strong>${esc(s.title)}</strong></li>`).join('')}</ol>${t.note?`<p class="source small">${esc(t.note)}</p>`:''}${t.source?`<p class="source small">出处：${esc(t.source)}</p>`:''}${(t.uploads||[]).map(id=>`<a href="${endpoint('/upload/')}${encodeURIComponent(id)}" target="_blank" rel="noopener">查看课表原件</a>`).join(' ')}${t.import_id?`<button data-timetable-edit="${esc(t.import_id)}">更正课表</button>`:''}${t.attachment?`<a href="${endpoint('/attachment/')}${encodeURIComponent(t.attachment)}" target="_blank" rel="noopener">查看课表原件 ↗</a>`:''}<p class="small muted">按已提供节次展示，未填写的钟点和单双周仍待核对。</p></details>`}
 function agendaDateHTML(m,day=data.today){return `<p class="agenda-dates"><span>发布：${esc(m.published_on||'待核对')}</span><span>${m.due_on?`${m.due_on<day?'逾期 · ':''}截止：${esc(m.due_on)}`:'截止待核对'}</span>${m.scheduled_on?`<span>计划：${esc(m.scheduled_on)}</span>`:''}</p>`}
@@ -25,39 +25,57 @@ function agendaItemHTML(item){
  const source=(data.agent?.items||[]).find(x=>x.id===item.id);
  return `<div class="agenda-school">${source?agentItemHTML(source,{compact:true,agenda:item.agenda}):`<h3>${esc(item.title)}</h3><p>此条尚未载入详情，请在学校信息中核对。</p><button data-page="agent">查看学校信息</button>`}</div>`;
 }
-function agendaStudyHTML(item){return `<article class="task agenda-study"><span class="chip">${esc(calendarNames(item.child_ids))}</span><h3>${esc(item.title)}</h3><p>${esc(item.result||(item.status==='running'?'正在计时':item.status==='paused'?'已暂停':'待开始'))}${item.result_actor==='child'?' · 孩子自述待核对':''}</p><button data-agenda-study="${esc(item.child_ids[0])}" data-agenda-day="${item.day}">打开作业执行</button></article>`}
+function calendarStudyStatus(item){return (item.result||(item.status==='running'?'正在计时':item.status==='paused'?'已暂停':'待开始'))+(item.result_actor==='child'?' · 孩子自述待核对':'')}
+function agendaStudyHTML(item){return `<article class="task agenda-study"><span class="chip">${esc(calendarNames(item.child_ids))}</span><h3>${esc(item.title)}</h3><p>${esc(calendarStudyStatus(item))}</p><button data-agenda-study="${esc(item.child_ids[0])}" data-agenda-day="${item.day}">打开作业执行</button></article>`}
+function calendarDayItems(day){
+ const r=calendarState.result,items=calendarItems(r.agenda||[],day),linked=new Set(items.map(x=>x.task_id).filter(Boolean));
+ return [...items,...calendarItems(r.study||[],day).filter(x=>!items.some(i=>i.id===x.id)&&(!x.task_id||!linked.has(x.task_id)))];
+}
+function calendarRevealDay(){
+ const strip=$('.calendar-week-scroll'),column=$('[data-calendar-column="'+calendarState.day+'"]');
+ if(strip&&column&&strip.scrollWidth>strip.clientWidth)strip.scrollLeft=column.offsetLeft;
+}
+function calendarWeekHTML(){
+ if(calendarState.range!==calendarState.week+'/'+calendarAdd(calendarState.week,6))return '<p role="status">正在读取一周安排…</p>';
+ const r=calendarState.result;
+ return `<p class="small muted calendar-week-help">一周总览 · 可滚动查看全部事项，点击日期在下方跟进。<span>左右滑动查看整周。</span></p><div class="calendar-week-scroll" tabindex="0" role="region" aria-label="一周事项总览"><div class="calendar-week-grid">${calendarDays().map((day,i)=>{
+  const rows=calendarDayItems(day),events=calendarItems(r.events,day),tables=calendarItems(r.timetables,day);
+  const groups=[['作业',rows.filter(x=>x.kind==='study'||x.agenda?.category==='homework')],['待办',rows.filter(x=>x.kind!=='study'&&x.agenda?.category!=='homework')]];
+  const item=(title,meta,closed=false)=>`<button class="calendar-week-item${closed?' is-closed':''}" data-calendar-day="${day}" data-calendar-detail><strong>${esc(title)}</strong><small>${esc(meta)}</small></button>`;
+  return `<section class="calendar-day${day===data.today?' is-today':''}" data-calendar-column="${day}"><button class="calendar-day-heading" data-calendar-day="${day}" data-calendar-detail aria-pressed="${day===calendarState.day}" ${day===data.today?'aria-current="date"':''}><span>周${'一二三四五六日'[i]}</span><strong>${Number(day.slice(5,7))}/${Number(day.slice(8))}</strong>${day===data.today?'<small>今天</small>':''}</button><div class="calendar-day-body">${groups.map(([label,list])=>list.length?`<h3>${label}</h3>${list.map(x=>item(x.title||data.tasks.find(t=>t.id===x.task_id)?.title||'事项待核对',[calendarNames(x.child_ids),x.kind==='school'?'待核对':x.kind==='study'?calendarStudyStatus(x):taskStatusLabel(x.status)].filter(Boolean).join(' · '),x.closed)).join('')}`:'').join('')}${events.length?`<h3>计划</h3>${events.map(x=>item(x.title,[x.start_time||'时间待定',calendarNames(x.child_ids),calendarStatuses[x.status]].join(' · '),['completed','cancelled'].includes(x.status))).join('')}`:''}${tables.length?`<h3>课表</h3>${tables.map(x=>item(x.sessions.map(s=>s.title).join(' · '),calendarNames([x.child_id]))).join('')}`:''}${!rows.length&&!events.length&&!tables.length?'<p class="small muted">暂无已收录安排</p>':''}</div></section>`;
+ }).join('')}</div></div>`;
+}
 function calendarAgendaHTML(){
  if(calendarState.loading&&!calendarState.result)return '<p role="status">正在读取安排…</p>';
  if(calendarState.error)return `<p class="error" role="alert">${esc(calendarState.error)}</p><button data-calendar-retry>重试</button>`;
  if(!calendarState.result)return '<p role="status">准备读取日历…</p>';
- const r=calendarState.result,day=calendarState.day,items=calendarItems(r.agenda||[],day),studies=calendarItems(r.study||[],day),linked=new Set(items.map(x=>x.task_id).filter(Boolean));
+ const r=calendarState.result,day=calendarState.day,items=calendarDayItems(day);
  const groups=[['homework','课内作业'],['todo','待办事项']];
  const section=(title,html)=>`<section class="card agenda-group"><h2>${title}</h2>${html||'<p class="small muted">没有已收录的事项</p>'}</section>`;
- return `${r.source_error?`<p class="error">${esc(r.source_error)}</p>`:''}<h2 class="agenda-day-title">${esc(day)}${day===data.today?' · 今天':''}</h2><div class="agenda-groups">${groups.map(([kind,label])=>{const rows=items.filter(x=>(x.agenda.category==='homework'?'homework':'todo')===kind);let html=rows.map(agendaItemHTML).join('');if(kind==='homework')html+=studies.filter(x=>!items.some(i=>i.id===x.id)&&(!x.task_id||!linked.has(x.task_id))).map(agendaStudyHTML).join('');return kind===''&&!html?'':section(label,html)}).join('')}${section('手动计划与课程',(calendarItems(r.timetables,day).map(calendarTimetableHTML).join('')||'<p class="small muted">当天课表尚未提供</p>')+calendarItems(r.events,day).map(calendarEventHTML).join(''))}</div><p class="small muted">限期事项每天显示直到完成；逾期继续保留。未明确日期的事项在收集箱核对。</p>`;
+ return `${r.source_error?`<p class="error">${esc(r.source_error)}</p>`:''}${calendarWeekHTML()}<h2 class="agenda-day-title" id="calendarDayDetails" tabindex="-1">${esc(day)}${day===data.today?' · 今天':''} · 当天详情</h2><div class="agenda-groups">${groups.map(([kind,label])=>section(label,items.filter(x=>(x.kind==='study'||x.agenda?.category==='homework'?'homework':'todo')===kind).map(agendaItemHTML).join(''))).join('')}${section('手动计划与课程',(calendarItems(r.timetables,day).map(calendarTimetableHTML).join('')||'<p class="small muted">当天课表尚未提供</p>')+calendarItems(r.events,day).map(calendarEventHTML).join(''))}</div><p class="small muted">限期事项每天显示直到完成；逾期继续保留。未明确日期的事项在收集箱核对。</p>`;
 }
 function calendarHTML(){
  if(!calendarState.week){calendarState.week=calendarMonday(data.today);calendarState.day=data.today;calendarState.result=data.today_calendar;calendarState.range=data.today+'/'+data.today}
  if(!calendarState.visible){calendarState.childID=data.children.find(c=>c.name===child)?.id||'';calendarState.visible=true}
  if(calendarState.childID&&!data.children.some(c=>c.id===calendarState.childID))calendarState.childID='';
- const days=calendarDays();
- return `<section class="calendar-heading"><div><h1>家庭日历</h1></div><div class="toolbar"><button class="primary" data-calendar-new="${calendarState.day}">＋ 新建计划</button><button data-calendar-ask>说一句安排</button><details class="calendar-tools"><summary>课表与设置</summary><div class="toolbar"><button data-timetable-open>导入 / 管理课表</button><button data-calendar-sync>同步到手机</button><button data-new-task="yes">收集事务</button></div></details></div></section><div class="calendar-controls"><button data-calendar-shift="-7" aria-label="上一周">‹</button><label><span class="sr-only">跳到日期</span><input type="date" data-agenda-date value="${calendarState.day}"></label><button data-calendar-shift="7" aria-label="下一周">›</button><button data-calendar-current>今天</button></div><div class="calendar-kids"><button data-calendar-child="" aria-pressed="${!calendarState.childID}">全部孩子</button>${data.children.map(c=>`<button data-calendar-child="${esc(c.id)}" aria-pressed="${c.id===calendarState.childID}">${esc(c.name)}</button>`).join('')}</div><div class="calendar-day-picker" aria-label="选择一天">${days.map((d,i)=>`<button data-calendar-day="${d}" aria-pressed="${d===calendarState.day}" ${d===data.today?'aria-current="date"':''}><span>周${'一二三四五六日'[i]}</span><strong>${Number(d.slice(8))}</strong></button>`).join('')}</div>${calendarPending?'<p role="status">上次保存未确认。<button data-calendar-resume>继续核对</button></p>':''}<div id="calendarAgenda">${calendarAgendaHTML()}</div>`;
+ return `<section class="calendar-heading"><div><h1>家庭日历</h1></div><div class="toolbar"><button class="primary" data-calendar-new="${calendarState.day}">＋ 新建计划</button><button data-calendar-ask>说一句安排</button><details class="calendar-tools"><summary>课表与设置</summary><div class="toolbar"><button data-timetable-open>导入 / 管理课表</button><button data-calendar-sync>同步到手机</button><button data-new-task="yes">收集事务</button></div></details></div></section><div class="calendar-controls"><button data-calendar-shift="-7" aria-label="上一周">‹</button><label><span class="sr-only">跳到日期</span><input type="date" data-agenda-date value="${calendarState.day}"></label><button data-calendar-shift="7" aria-label="下一周">›</button><button data-calendar-current>今天</button></div><div class="calendar-kids"><button data-calendar-child="" aria-pressed="${!calendarState.childID}">全部孩子</button>${data.children.map(c=>`<button data-calendar-child="${esc(c.id)}" aria-pressed="${c.id===calendarState.childID}">${esc(c.name)}</button>`).join('')}</div>${calendarPending?'<p role="status">上次保存未确认。<button data-calendar-resume>继续核对</button></p>':''}<div id="calendarAgenda">${calendarAgendaHTML()}</div>`;
 }
 function taskInboxItems(){return (data.today_calendar?.inbox||[]).filter(x=>!child||x.child_ids.includes(data.children.find(c=>c.name===child)?.id))}
 function taskItemCompleted(x){return x.closed&&(x.kind==='task'?x.status==='已完成':x.kind==='event'?x.event.status==='completed':x.kind==='study'&&x.result==='完成'&&x.result_actor==='parent')}
 function taskItemOverdue(x){const day=exactTaskDay(x.agenda.due_on||x.agenda.scheduled_on);return !x.closed&&x.agenda.box!=='wish'&&x.event?.repeat!=='weekly'&&!!day&&day<data.today}
 function taskBoxes(){const all=taskInboxItems(),open=all.filter(x=>!x.closed);return {'Inbox':open.filter(x=>x.agenda.box!=='wish'),'Wish':open.filter(x=>x.agenda.box==='wish'),'计划':open.filter(x=>x.agenda.box!=='wish'&&x.agenda.scheduled_on),'已完成':all.filter(taskItemCompleted),'已逾期':all.filter(taskItemOverdue),'已搁置':all.filter(x=>x.closed&&!taskItemCompleted(x)),'全部':all}}
-function taskBoxesHTML(){return `<div class="tasktabs task-boxes">${Object.entries(taskBoxes()).map(([name,rows])=>`<button data-task-box="${name}" aria-pressed="${page==='tasks'&&taskView===name}">${({Inbox:'收集箱',Wish:'心愿'})[name]||name} <span>${rows.length}</span></button>`).join('')}</div>`}
+function taskBoxesHTML(){return `<div class="tasktabs task-boxes">${Object.entries(taskBoxes()).sort(([a],[b])=>a==='全部'?-1:b==='全部'?1:0).map(([name,rows])=>`<button data-task-box="${name}" aria-pressed="${page==='tasks'&&taskView===name}">${({Inbox:'收集箱',Wish:'心愿'})[name]||name} <span>${rows.length}</span></button>`).join('')}</div>`}
 function wishTaskHTML(t){return `<article class="task wish-task" data-query-target="task:${esc(t.id)}"><span class="chip">${esc(t.child)} · 心愿</span><h3>${esc(t.title)}</h3>${taskActionHTML(t)}<div class="tasktools">${!taskClosed(t)?`<button class="primary" data-task-plan="${esc(t.id)}">转成计划</button><button data-task-focus="${esc(t.id)}">编辑心愿</button><button data-task-decisions="${esc(t.id)}">暂时放下</button>`:`<button data-task-restore="${esc(t.id)}">恢复心愿</button>`}</div></article>`}
 function taskGroupsHTML(items,homeworkLabel='课内作业'){
  return [['homework',homeworkLabel],['todo','待办事项']].map(([kind,label])=>{
   const rows=items.filter(x=>(x.agenda.category==='homework'?'homework':'todo')===kind),confirmed=rows.filter(x=>x.kind!=='school'),pending=rows.filter(x=>x.kind==='school');
-  return `<section class="card agenda-group" id="task-group-${kind}"><h2>${label} · ${confirmed.length}${pending.length?` <span class="review-badge">待核对 ${pending.length}</span>`:''}</h2>${confirmed.map(agendaItemHTML).join('')||'<p class="small muted">暂无已确认事项</p>'}${pending.map(agendaItemHTML).join('')}</section>`;
+  return `<section class="card agenda-group" id="task-group-${kind}" tabindex="-1"><div class="task-group-heading"><h2>${label} · ${confirmed.length}${pending.length?` <span class="review-badge">待核对 ${pending.length}</span>`:''}</h2>${homeworkLabel==='今日作业'?`<button class="task-show-all" data-task-all="${kind}">所有${kind==='homework'?'作业':'待办'} →</button>`:''}</div>${confirmed.map(agendaItemHTML).join('')||'<p class="small muted">暂无已确认事项</p>'}${pending.map(agendaItemHTML).join('')}</section>`;
  }).join('');
 }
 function taskInboxHTML(){
  if(!Array.isArray(data.today_calendar?.inbox))return `<h1>事务收集箱</h1><p role="alert" class="error">${esc(data.today_calendar?.source_error||'收集箱暂时无法读取，请刷新记录；不能据此判断没有待办。')}</p>`;
  const views=taskBoxes();if(!(taskView in views))taskView='Inbox';
- return `<header class="today-heading"><h1>${taskView==='Wish'?'心愿清单':'收集箱'}</h1><button class="primary" data-new-task="${taskView==='Wish'?'wish':'yes'}">${taskView==='Wish'?'＋ 记心愿':'＋ 记一件事'}</button></header>${filters()}${taskBoxesHTML()}<p class="small muted">${({'Inbox':'所有未完成事务，包含已安排和已逾期的事项。','Wish':'想做的事先留在这里，选定日期再转成计划。','计划':'已安排日期、尚未完成的事项。','已完成':'已确认完成的事项，可撤销完成。','已逾期':'截止日已过；未填截止日时按计划日判断。重复安排不计入。','已搁置':'不参加、无需处理、已取消等事项，保留原决定。','全部':'所有已收集的事务与心愿。'})[taskView]}</p>${taskView==='Wish'?`<section class="card checklist">${views[taskView].map(agendaItemHTML).join('')||'<p>这里暂时没有心愿。</p>'}</section>`:`<div class="today-task-groups">${taskGroupsHTML(views[taskView])}</div>`}`;
+ return `<header class="today-heading"><h1>${taskView==='Wish'?'心愿清单':taskView==='全部'?'所有作业与待办':'收集箱'}</h1><button class="primary" data-new-task="${taskView==='Wish'?'wish':'yes'}">${taskView==='Wish'?'＋ 记心愿':'＋ 记一件事'}</button></header>${filters()}${taskBoxesHTML()}<p class="small muted">${({'Inbox':'所有未完成事务，包含已安排和已逾期的事项。','Wish':'想做的事先留在这里，选定日期再转成计划。','计划':'已安排日期、尚未完成的事项。','已完成':'已确认完成的事项，可撤销完成。','已逾期':'截止日已过；未填截止日时按计划日判断。重复安排不计入。','已搁置':'不参加、无需处理、已取消等事项，保留原决定。','全部':'所有日期的作业与待办，包含未完成、已完成及已搁置；心愿单独标注。'})[taskView]}</p>${taskView==='Wish'?`<section class="card checklist">${views[taskView].map(agendaItemHTML).join('')||'<p>这里暂时没有心愿。</p>'}</section>`:`<div class="today-task-groups">${taskGroupsHTML(views[taskView])}</div>`}`;
 }
 function todayTasksHTML(){
  const r=data.today_calendar;if(!Array.isArray(r?.inbox))return taskInboxHTML();
@@ -68,15 +86,19 @@ function todayTasksHTML(){
 }
 async function calendarRead(){
  const start=calendarState.week,end=calendarAdd(start,6),range=start+'/'+end;
- if(calendarState.loading||calendarState.range===range&&calendarState.result)return;
+ if(calendarState.loading||calendarState.range===range&&calendarState.result&&!calendarState.dirty)return;
  const seq=++calendarState.sequence;calendarState.controller?.abort();const controller=new AbortController();calendarState.controller=controller;calendarState.loading=true;calendarState.error='';
  const timer=setTimeout(()=>controller.abort(),20000);
- const paint=()=>{if(page==='calendar'&&calendarState.visible&&$('#calendarAgenda')){$('#calendarAgenda').innerHTML=calendarAgendaHTML();$('#calendarAgenda').setAttribute('aria-busy',String(calendarState.loading))}};paint();
- try{const r=await apiFetch('/api/calendar?start='+start+'&end='+end,{signal:controller.signal}),result=await r.json();if(!r.ok)throw Error(result.error||'读取日历失败');if(!Array.isArray(result.events)||!Array.isArray(result.timetables))throw Error('日历资料格式无法读取，请重试');if(seq!==calendarState.sequence||start!==calendarState.week)return;calendarState.result=result;calendarState.range=range;
+ const paint=()=>{if(page==='calendar'&&calendarState.visible&&$('#calendarAgenda')){
+  const pane=$('#calendarAgenda'),active=document.activeElement,ref=active?.closest?.('[data-query-target]')?.dataset.queryTarget;
+  pane.innerHTML=calendarAgendaHTML();pane.setAttribute('aria-busy',String(calendarState.loading));calendarRevealDay();
+  if(ref&&!active.isConnected&&!document.querySelector('dialog[open]')){const target=[...pane.querySelectorAll('[data-query-target]')].find(x=>x.dataset.queryTarget===ref);if(target){target.tabIndex=-1;target.focus({preventScroll:true})}}
+ }};paint();
+ try{const r=await apiFetch('/api/calendar?start='+start+'&end='+end,{signal:controller.signal}),result=await r.json();if(!r.ok)throw Error(result.error||'读取日历失败');if(!Array.isArray(result.events)||!Array.isArray(result.timetables))throw Error('日历资料格式无法读取，请重试');if(seq!==calendarState.sequence||start!==calendarState.week)return;calendarState.result=result;calendarState.range=range;calendarState.dirty=false;
  }catch(err){if(seq!==calendarState.sequence)return;calendarState.error=err.name==='AbortError'?'读取超时，请稍后重试。':['TypeError','SyntaxError'].includes(err.name)?'暂时无法读取，请检查登录或连接后重试。':err.message;
  }finally{clearTimeout(timer);if(seq===calendarState.sequence){calendarState.loading=false;paint()}}
 }
-function wireCalendar(){if(!calendarState.error)calendarState.reading=calendarRead()}
+function wireCalendar(){if(!calendarState.error)calendarState.reading=calendarRead();calendarRevealDay()}
 function calendarSyncOpen(){
  const address=new URL(endpoint('/calendar.ics'),location.href),secure=address.protocol==='https:';
  address.username='';address.password='';calendarSyncVersion++;
@@ -143,7 +165,7 @@ async function calendarRequest(obj){
 $('#calendarForm').onsubmit=async e=>{
  e.preventDefault();if(calendarSaving)return;const obj=calendarPending?JSON.parse(calendarPending):calendarPayload();if(!obj.child_ids.length){$('#calendarFormError').textContent='请至少选择一位孩子。';return}
  calendarSaving=true;calendarFormLock(true);$('#calendarFormError').textContent='';
- try{await calendarRequest(obj);if(calendarDraftContext){calendarDraftContext.saved=true;calendarDraftContext.form=null;calendarDraftContext=null}$('#calendarDialog').close();toast('安排已保存');calendarInvalidate();try{await load()}catch{if(page==='calendar')render();toast('安排已保存，最新资料暂时无法刷新，请稍后刷新日历。')}}
+ try{const saved=await calendarRequest(obj);if(page==='calendar'&&obj.version===0){calendarState.day=saved.day;calendarState.week=calendarMonday(saved.day)}if(calendarDraftContext){calendarDraftContext.saved=true;calendarDraftContext.form=null;calendarDraftContext=null}$('#calendarDialog').close();toast('安排已保存');calendarInvalidate(page==='calendar');try{await load()}catch{if(page==='calendar')render();toast('安排已保存，最新资料暂时无法刷新，请稍后刷新日历。')}}
  catch(err){$('#calendarFormError').textContent=['TypeError','SyntaxError'].includes(err.name)?'暂时无法核对保存结果，请检查连接后重试。':err.name==='AbortError'?'保存响应超时，请用原内容重试。':err.message;$('#calendarRetryNote').textContent=calendarPending?'保留了这次的内容与编号，重试不会新建另一条安排。可以先关闭，稍后在日历继续重试。':'';}
  finally{calendarSaving=false;calendarFormLock(!!calendarPending)}
 };
@@ -154,6 +176,7 @@ $('#calendarDialog').addEventListener('cancel',e=>{if(calendarSaving)e.preventDe
 window.addEventListener('beforeunload',e=>{if(calendarPending||calendarDraftContext&&!calendarDraftContext.saved){e.preventDefault();e.returnValue=''}});
 document.addEventListener('click',async e=>{
  const b=e.target.closest('button');if(!b)return;
+ if(['homework','todo'].includes(b.dataset.taskAll)){taskView='全部';page='tasks';render();const target=$('#task-group-'+b.dataset.taskAll);target?.scrollIntoView({block:'start'});target?.focus({preventScroll:true});return}
  if(b.dataset.taskBox){taskView=b.dataset.taskBox;page='tasks';render();return}
  if(b.dataset.taskPlan){openTaskFocus(b.dataset.taskPlan);const f=$('#taskFocusForm');f.elements.box.value='inbox';f.elements.scheduled_on.required=true;if(f.elements.category.value==='unknown')f.elements.category.value='todo';$('#taskFocusScheduleLabel').textContent='计划在哪天做 · 必填';$('#taskFocusTitle').textContent='选定日期，转成计划';return}
  if(b.dataset.agendaStudy){studyChildID=b.dataset.agendaStudy;studyDay=b.dataset.agendaDay;studyTaskID='';page='study';render();return}
@@ -162,7 +185,7 @@ document.addEventListener('click',async e=>{
  if(b.dataset.calendarShift)calendarNavigate(calendarAdd(calendarState.day,Number(b.dataset.calendarShift)));
  if(b.hasAttribute('data-calendar-current'))calendarNavigate(data.today);
  if(b.hasAttribute('data-calendar-weekend')||b.hasAttribute('data-calendar-weekend-home')){calendarNavigate(calendarAdd(calendarMonday(data.today),5));$('#calendarWeekend')?.scrollIntoView({behavior:'auto',block:'center'})}
- if(b.dataset.calendarDay){calendarJump++;calendarState.day=b.dataset.calendarDay;render()}
+ if(b.dataset.calendarDay){calendarJump++;calendarState.day=b.dataset.calendarDay;const left=$('.calendar-week-scroll')?.scrollLeft||0;render();const strip=$('.calendar-week-scroll');if(strip)strip.scrollLeft=left;if(b.hasAttribute('data-calendar-detail')){$('#calendarDayDetails')?.scrollIntoView({block:'start'});$('#calendarDayDetails')?.focus({preventScroll:true})}}
  if(b.hasAttribute('data-calendar-retry')){calendarInvalidate();render()}
  if(b.hasAttribute('data-calendar-new'))calendarOpen(null,{day:b.dataset.calendarNew});
  if(b.hasAttribute('data-calendar-resume'))$('#calendarDialog').showModal();

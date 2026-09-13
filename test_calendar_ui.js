@@ -32,6 +32,7 @@ test('preparation stays outside collapsed metadata, even without a source',()=>{
  assert.ok(html.indexOf('class="source calendar-requirements"')<html.indexOf('<details>'));
  assert.ok(html.indexOf(note)<html.indexOf('<details>'));
  assert.ok(html.indexOf('出处：虚构通知')>html.indexOf('<details>'));
+ assert.match(html,/2026-09-12/);
  const ordinary=h.ctx.calendarEventHTML(event({note,repeat:'none',source:''}));assert.match(ordinary,/calendar-requirements/);assert.doesNotMatch(ordinary,/<details>/);
  assert.match(h.ctx.calendarEventHTML(event({note:'',source:''})),/起点 2026-09-05/,'weekly rules remain reachable without a source');
 });
@@ -157,8 +158,8 @@ test('today and inbox group legacy undated tasks without reopening closed items 
 test('completion acknowledges both today and inbox without reloading all data',async()=>{
  const core=readFileSync(__dirname+'/app.js','utf8'),start=core.indexOf('async function postTask'),end=core.indexOf("document.addEventListener('change'",start),task={id:'synthetic-task',update:{status:'已完成',updated:'2026-09-12T18:00:00+08:00'}};
  const data={tasks:[{id:task.id}],today_calendar:{inbox:[{task_id:task.id,closed:false}],agenda:[{task_id:task.id,closed:false}]}};
- const ctx=vm.createContext({data,stateLoadSequence:0,AbortSignal,apiFetch:async()=>({ok:true,json:async()=>({task})}),status:t=>t.update.status,taskClosed:t=>t.update.status==='已完成',window:{FamilyCalendar:{invalidate(){}}},load:async()=>{throw Error('Unneeded full reload')}});
- vm.runInContext(core.slice(start,end),ctx);await ctx.postTask({id:task.id,status:'已完成'});assert.ok(data.today_calendar.inbox[0].closed);assert.ok(data.today_calendar.agenda[0].closed);
+ const invalidated=[];const ctx=vm.createContext({data,page:'calendar',stateLoadSequence:0,AbortSignal,apiFetch:async()=>({ok:true,json:async()=>({task})}),status:t=>t.update.status,taskClosed:t=>t.update.status==='已完成',window:{FamilyCalendar:{invalidate(keep){invalidated.push(keep)}}},load:async()=>{throw Error('Unneeded full reload')}});
+ vm.runInContext(core.slice(start,end),ctx);await ctx.postTask({id:task.id,status:'已完成'});assert.ok(data.today_calendar.inbox[0].closed);assert.ok(data.today_calendar.agenda[0].closed);assert.deepEqual(invalidated,[true]);
 });
 
 test('timetable text preserves day and slot and refuses ambiguous rows',()=>{const h=harness(),week=h.ctx.timetableWeek('周一 第一节 语文\n星期三 下午第一节 英语');assert.deepEqual(clean(week),[{weekday:1,sessions:[{slot:'第一节',title:'语文'}]},{weekday:3,sessions:[{slot:'下午第一节',title:'英语'}]}]);assert.equal(h.ctx.timetableLines(week),'周一｜第一节｜语文\n周三｜下午第一节｜英语');assert.deepEqual(clean(h.ctx.timetableWeek(h.ctx.timetableLines(week))),clean(week));assert.throws(()=>h.ctx.timetableWeek('语文 数学 英语'),/每行/)});
@@ -174,4 +175,18 @@ test('daily UI keeps collection navigation in inbox and pending notifications di
  const title='待核对：阅读要求\n'+('很长的虚构原通知。'.repeat(40)),item={id:'synthetic-school',kind:'school',child_id:'child-a',state:'pending',title,body:'请核对这条通知是否适用',evidence:[{text:'<script>unsafe</script>',ref:'synthetic:notice'}]};
  const html=ctx.agentItemHTML(item,{compact:true,agenda:{published_on:'2026-09-08'}});
  assert.match(html,/待核对通知/);assert.match(html,/<h3>阅读要求<\/h3>/);assert.match(html,/发布：2026-09-08/);assert.match(html,/data-agent-accept="synthetic-school"/);assert.doesNotMatch(html,/type="checkbox"|<script>/);assert.match(html,/&lt;script/);assert.ok(html.includes(escape(title)),'full source title is preserved in the original notification');
+});
+
+test('week overview includes every day, preserves child/status boundaries and deduplicates linked study',()=>{
+ const h=harness(),state=h.state();state.week='2026-09-07';state.day='2026-09-08';state.range='2026-09-07/2026-09-13';
+ const task={id:'synthetic-work',task_id:'synthetic-work',kind:'task',day:'2026-09-08',title:'<b>虚构作业</b>',child_ids:['child-a'],status:'不参加',closed:true,agenda:{category:'homework'}};
+ state.result={agenda:[task],study:[{id:'linked',task_id:task.id,child_ids:task.child_ids,day:task.day,title:'不应重复的计时项',kind:'study'},{id:'oral',task_id:'',child_ids:['child-a'],day:'2026-09-09',title:'虚构口头作业',kind:'study',result:'完成',result_actor:'child'}],events:[event({title:'虚构周末安排'})],timetables:[]};
+ let html=h.ctx.calendarWeekHTML();assert.equal((html.match(/data-calendar-column=/g)||[]).length,7);assert.match(html,/虚构周末安排/);assert.match(html,/&lt;b&gt;虚构作业&lt;\/b&gt;/);assert.doesNotMatch(html,/<b>虚构作业|不应重复的计时项|data-check=/);assert.match(html,/不参加/);assert.match(html,/完成 · 孩子自述/);
+ assert.equal(h.ctx.calendarStudyStatus({status:'running'}),'正在计时');assert.equal(h.ctx.calendarStudyStatus({status:'paused'}),'已暂停');
+ state.childID='child-b';html=h.ctx.calendarWeekHTML();assert.doesNotMatch(html,/虚构作业|虚构口头作业/);assert.match(html,/虚构周末安排/);
+ state.range='2026-09-08/2026-09-08';assert.doesNotMatch(h.ctx.calendarWeekHTML(),/暂无已收录安排/,'a one-day cache is not a complete empty week');
+});
+
+test('refresh after a save preserves the loaded week while explicitly fetching fresh data',async()=>{
+ const h=harness();await h.ctx.calendarRead();const cached=h.state().result;h.ctx.calendarInvalidate(true);assert.equal(h.state().result,cached);assert.equal(h.state().dirty,true);const calls=h.calls.length;await h.ctx.calendarRead();assert.equal(h.calls.length,calls+1);assert.equal(h.state().dirty,false);h.ctx.calendarInvalidate();assert.equal(h.state().result,null);
 });
