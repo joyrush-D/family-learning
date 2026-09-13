@@ -632,9 +632,17 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(client.posts[0]['messages'], [])
         self.assertEqual(client.sources[0]['cursor'], qq_event(1)['message_id'])
         with patch.object(collect.subprocess, 'run', side_effect=collect.subprocess.TimeoutExpired('fictional', .4)) as run:
-            with self.assertRaisesRegex(collect.CollectError, 'cli_read_failed'):
+            with self.assertRaisesRegex(collect.CollectError, '^cli_read_timeout$'):
                 collect.cli_json(['fictional'], timeout=.4)
             self.assertEqual(run.call_args.kwargs['timeout'], .4)
+            self.assertEqual(run.call_args.kwargs['stdin'], collect.subprocess.DEVNULL)
+        for result, error, expected in [
+                (None, OSError('private path'), 'cli_unavailable'),
+                (collect.subprocess.CompletedProcess([], 0, b'private invalid json', b''), None, 'cli_response_invalid'),
+                (collect.subprocess.CompletedProcess([], 1, b'private stdout', b'private stderr'), None, 'cli_read_failed')]:
+            with patch.object(collect.subprocess, 'run', return_value=result, side_effect=error):
+                with self.assertRaisesRegex(collect.CollectError, '^'+expected+'$'):
+                    collect.cli_json(['fictional'], timeout=.4)
         # Token lookup and ingest share the remaining API budget. A timed-out
         # POST may already have committed; it must not produce a success receipt.
         now[0] = 0

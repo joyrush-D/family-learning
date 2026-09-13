@@ -360,12 +360,16 @@ def qq_history(config, source, read_cli, deadline, bootstrap=False):
 
 def cli_json(args, env=None, timeout=45):
     try:
-        result = subprocess.run(args, env=env, capture_output=True, timeout=timeout, check=False)
+        result = subprocess.run(args, env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout, check=False)
         checked(result.returncode == 0, 'cli_read_failed')
         checked(len(result.stdout) <= MAX_RESPONSE, 'cli_response_too_large')
         return json.loads(result.stdout)
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        raise CollectError('cli_read_failed') from None
+    except subprocess.TimeoutExpired:
+        raise CollectError('cli_read_timeout') from None
+    except OSError:
+        raise CollectError('cli_unavailable') from None
+    except ValueError:
+        raise CollectError('cli_response_invalid') from None
 
 
 class Client:

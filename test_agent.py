@@ -210,6 +210,30 @@ class AgentTests(unittest.TestCase):
         self.assertFalse(self.store.collector_plan(self.now)['enabled'])
         path.unlink(); self.assertEqual(self.store.collector_plan(self.now), {'enabled': False, 'sources': []})
 
+    def test_collection_failure_reasons_preserve_success_and_hide_untrusted_details(self):
+        self.store.ingest(self.payload())
+        cases = [('wechat_cli_not_configured', '本机微信读取工具尚未接通'),
+                 ('qq_cli_not_configured', '本机QQ读取工具尚未接通'),
+                 ('cli_read_timeout', '本机读取工具响应超时'),
+                 ('cli_read_failed', '本机读取工具未能完成读取'),
+                 ('cli_response_invalid', '读取结果格式无法核对'),
+                 ('cli_unavailable', '本机读取工具无法启动'),
+                 ('qq_collection_timeout', '本次QQ读取超时'),
+                 ('qq_continuity_unverified', 'QQ消息与上次读取位置尚未衔接'),
+                 ('untrusted-secret <script> denied permission', '本次消息读取未通过核对')]
+        for offset, (code, reason) in enumerate(cases, 1):
+            failed = self.payload(expected='11', offset=offset)
+            failed.update(messages=[], error=code)
+            self.store.ingest(failed)
+            saved = self.store.snapshot()['sources'][0]
+            self.assertEqual(saved['error'], reason + '；本次未同步新消息，上次成功记录保留。')
+            self.assertEqual(saved['last_success'], self.now.isoformat())
+            self.assertEqual(saved['cursor'], '11')
+            with self.app.connect() as c:
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_messages').fetchone()[0], 1)
+        self.store.ingest(self.payload(expected='11', cursor='12', message='12', offset=20))
+        self.assertEqual(self.store.snapshot()['sources'][0]['error'], '')
+
     def test_worker_model_failure_backoff_dedup_corrected_input_and_idempotent_accept(self):
         self.store.ingest(self.payload()); ident = self.record()
         with patch.object(agent.family_llm, '_chat_json', side_effect=agent.family_llm.LLMUnavailable('offline')) as model:

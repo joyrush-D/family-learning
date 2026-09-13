@@ -357,8 +357,18 @@ class Store:
                     c.execute('INSERT INTO agent_messages(source_id,id,payload) VALUES(?,?,?)', (source['id'], row['id'], encoded)); inserted += 1
                     if row['unread']: c.execute('UPDATE agent_sources SET unread_count=unread_count+1 WHERE id=?', (source['id'],))
             if error:
+                reason = {
+                    'wechat_cli_not_configured': '本机微信读取工具尚未接通',
+                    'qq_cli_not_configured': '本机QQ读取工具尚未接通',
+                    'cli_read_timeout': '本机读取工具响应超时',
+                    'qq_collection_timeout': '本次QQ读取超时',
+                    'cli_unavailable': '本机读取工具无法启动',
+                    'cli_read_failed': '本机读取工具未能完成读取',
+                    'cli_response_invalid': '读取结果格式无法核对',
+                    'qq_continuity_unverified': 'QQ消息与上次读取位置尚未衔接',
+                }.get(error, '本次消息读取未通过核对')
                 c.execute('UPDATE agent_sources SET last_attempt=?,error=?,receipt=? WHERE id=?',
-                          (checked, '采集未成功；保留上次成功游标，请检查本机采集器状态。', receipt, source['id']))
+                          (checked, reason + '；本次未同步新消息，上次成功记录保留。', receipt, source['id']))
             else:
                 c.execute('UPDATE agent_sources SET cursor=?,last_attempt=?,last_success=?,last_message_time=?,error=?,receipt=? WHERE id=?',
                           (cursor, checked, checked, latest or (previous['last_message_time'] if previous else ''), '', receipt, source['id']))

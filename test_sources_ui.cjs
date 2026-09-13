@@ -19,6 +19,13 @@ async function demoServer(){
 async function checkWidth(p,label){assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,label+' page overflow');assert.equal(await p.locator('[data-source-card]').evaluateAll(cards=>cards.some(el=>el.scrollWidth>el.clientWidth)),false,label+' card overflow')}
 async function sources(p){await p.locator('nav [data-page="more"]').click();await p.locator('#content [data-page="sources"]').click();await eventually(async()=>await p.locator('#content h1').innerText()==='来源与附件','sources page')}
 
+async function reloadPage(p){
+ const previous=await p.locator('body').getAttribute('data-page');
+ await p.reload({waitUntil:'domcontentloaded'});await eventually(async()=>await p.locator('#content').getAttribute('data-ready')==='true','reopened saved state');
+ if(previous==='sources')await sources(p);
+ else if(previous&&previous!=='home')await p.locator('nav [data-page="'+previous+'"]').click();
+}
+
 (async()=>{
  let server,browser;const checks=[],proofDir=process.env.SOURCES_UI_PROOF_DIR||path.join(__dirname,'private/check-20260908/source-followup/ui');
  try{
@@ -44,6 +51,7 @@ async function sources(p){await p.locator('nav [data-page="more"]').click();awai
    {id:'qq:current-disabled',platform:'qq',name:'虚构停用QQ',child_id:base.children[1].id,child:'虚构旧停用归属',enabled:false,last_attempt:recent,last_success:recent,last_message_time:recent,error:'',unread_count:'5'},
   ];
   let current={...base,sync,sync_error:'',tasks:[task('source-first',first,'虚构甲待办'),task('source-second',second,'虚构乙待办'),task('source-done',first,'虚构已完成事项','已完成')],agent:{...base.agent,enabled:true,state:'ready',sources:sourceStates,collection_interval_minutes:30}};
+  current.today_calendar={...base.today_calendar,inbox:current.tasks.map(t=>({id:t.id,task_id:t.id,kind:'task',child_ids:[base.children.find(c=>c.name===t.child).id],closed:t.original_status==='已完成',status:t.original_status,agenda:{category:'todo',box:'inbox',published_on:'',scheduled_on:'',due_on:''}}))};
   browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});const p=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[],mutations=[],external=[];
   p.on('pageerror',e=>errors.push(e.message));
   await p.route('**/*',async route=>{const req=route.request(),url=new URL(req.url());if(req.method()!=='GET'){mutations.push(req.method()+' '+url.pathname);return route.abort()}if(url.origin!==new URL(server.url).origin){external.push(url.origin);return route.abort()}if(url.pathname==='/api/state')return route.fulfill({json:current});if(url.pathname==='/api/agent')return route.fulfill({json:current.agent});return route.continue()});
@@ -80,7 +88,7 @@ async function sources(p){await p.locator('nav [data-page="more"]').click();awai
   for(const key of ['wechat:synthetic-missing','wechat:synthetic-bad-count'])assert.match(await card(key).locator('[data-source-count]').innerText(),/消息数量未记录/);
   assert.match(await card('wechat:synthetic-scanned').locator('[data-source-count]').innerText(),/3 条；不代表完整历史/);assert.match(await card('wechat:synthetic-scanned').locator('[data-source-gaps]').innerText(),/完整历史范围仍以来源说明为准/);
   checks.push('zero, absent and invalid counts never turn missing content into complete coverage');
-  await currentCard('wechat:current-reading').locator('[data-source-tasks]').click();assert.equal(await p.locator('#childFilter').inputValue(),first);assert.equal(await p.locator('[data-view="待跟进"]').getAttribute('aria-pressed'),'true');await sources(p);
+  await currentCard('wechat:current-reading').locator('[data-source-tasks]').click();assert.equal(await p.locator('[data-child-filter][aria-pressed="true"]').innerText(),first);assert.equal(await p.locator('[data-task-box="Inbox"]').getAttribute('aria-pressed'),'true');await sources(p);
   await p.locator('nav [data-page="more"]').click();await p.locator('#content [data-page="agent"]').click();await eventually(async()=>await p.locator('#content h1').innerText()==='成长助手','agent page');const agentSources=p.locator('.agent-status [data-current-source]');assert.equal(await agentSources.count(),4);assert.equal(await agentSources.filter({has: p.locator('[data-current-source-status]')}).count(),4);await sources(p);
   checks.push('agent full status reuses the same four current source cards without an extra request');
   await fs.mkdir(proofDir,{recursive:true});
@@ -88,24 +96,24 @@ async function sources(p){await p.locator('nav [data-page="more"]').click();awai
   for(const width of [360,1440]){
    await p.setViewportSize({width,height:1000});await checkWidth(p,String(width));await p.evaluate(()=>scrollTo(0,0));await p.screenshot({path:path.join(proofDir,'synthetic-sources-'+width+'.png'),fullPage:true});
    // Start with another view: a source shortcut must reset both child and tab.
-   await p.locator('nav [data-page="tasks"]').click();await p.locator('[data-view="全部"]').click();await sources(p);await p.locator('details[data-source-history] > summary').click();
+   await p.locator('nav [data-page="tasks"]').click();await p.locator('[data-task-box="全部"]').click();await sources(p);await p.locator('details[data-source-history] > summary').click();
    for(const [key,name,title] of [['qq:synthetic-history',first,'虚构甲待办'],['wechat:synthetic-zero',second,'虚构乙待办']]){
-    await card(key).locator('[data-source-tasks]').click();assert.equal(await p.locator('#childFilter').inputValue(),name);assert.equal(await p.locator('[data-view="待跟进"]').getAttribute('aria-pressed'),'true');assert.deepEqual(await p.locator('.checklist .task h3').allTextContents(),[title]);await checkWidth(p,'tasks '+width);await sources(p);await p.locator('details[data-source-history] > summary').click();
+    await card(key).locator('[data-source-tasks]').click();assert.equal(await p.locator('[data-child-filter][aria-pressed="true"]').innerText(),name);assert.equal(await p.locator('[data-task-box="Inbox"]').getAttribute('aria-pressed'),'true');assert.deepEqual(await p.locator('.today-task-groups .task h3').allTextContents(),[title]);await checkWidth(p,'tasks '+width);await sources(p);await p.locator('details[data-source-history] > summary').click();
    }
    // Restore expanded source content for the next viewport.
    await p.locator('[data-source-gaps]').evaluateAll(details=>details.forEach(d=>{d.open=true}));
   }
   checks.push('360 and 1440 layouts fit; each source opens only that child pending checklist without writing');
-  current={...current,children:current.children.map(c=>c.id===base.children[0].id?{...c,name:'虚构甲改名'}:c)};await p.locator('#refresh').click();await eventually(async()=>await p.locator('[data-current-source="wechat:current-school"]').count()===1,'renamed current source');await sources(p);assert.match(await currentCard('wechat:current-school').innerText(),/虚构甲改名/);assert.doesNotMatch(await currentCard('wechat:current-school').innerText(),/虚构旧归属名/);assert.equal(await currentCard('wechat:current-school').locator('[data-source-tasks]').getAttribute('data-source-tasks'),'虚构甲改名');checks.push('renaming a child updates current source ownership by stable child ID');
-  current={...current,agent:{...current.agent,sources:current.agent.sources.map(s=>s.id==='wechat:current-reading'?{...s,last_success:'invalid-time'}:s)}};await p.locator('#refresh').click();await eventually(async()=>await p.locator('[data-current-source="wechat:current-reading"] [data-current-source-status]').innerText()==='读取待核对','invalid current source time');
-  current={...current,agent:{...current.agent,sources:current.agent.sources.map(s=>s.id==='wechat:current-reading'?{...s,last_success:'',error:''}:s)}};await p.locator('#refresh').click();await eventually(async()=>await p.locator('[data-current-source="wechat:current-reading"] [data-current-source-status]').innerText()==='尚未读取','unread current source');checks.push('invalid and missing last-success timestamps stay unknown rather than becoming successful');
+  current={...current,children:current.children.map(c=>c.id===base.children[0].id?{...c,name:'虚构甲改名'}:c)};await reloadPage(p);await eventually(async()=>await p.locator('[data-current-source="wechat:current-school"]').count()===1,'renamed current source');await sources(p);assert.match(await currentCard('wechat:current-school').innerText(),/虚构甲改名/);assert.doesNotMatch(await currentCard('wechat:current-school').innerText(),/虚构旧归属名/);assert.equal(await currentCard('wechat:current-school').locator('[data-source-tasks]').getAttribute('data-source-tasks'),'虚构甲改名');checks.push('renaming a child updates current source ownership by stable child ID');
+  current={...current,agent:{...current.agent,sources:current.agent.sources.map(s=>s.id==='wechat:current-reading'?{...s,last_success:'invalid-time'}:s)}};await reloadPage(p);await eventually(async()=>await p.locator('[data-current-source="wechat:current-reading"] [data-current-source-status]').innerText()==='读取待核对','invalid current source time');
+  current={...current,agent:{...current.agent,sources:current.agent.sources.map(s=>s.id==='wechat:current-reading'?{...s,last_success:'',error:''}:s)}};await reloadPage(p);await eventually(async()=>await p.locator('[data-current-source="wechat:current-reading"] [data-current-source-status]').innerText()==='尚未读取','unread current source');checks.push('invalid and missing last-success timestamps stay unknown rather than becoming successful');
   assert.equal(await p.evaluate(()=>JSON.stringify({sync:window.__sourceInput.value.sync,sync_error:window.__sourceInput.value.sync_error,tasks:window.__sourceInput.value.tasks,children:window.__sourceInput.value.children,agent:window.__sourceInput.value.agent})===window.__sourceInput.before),true);
-  current={...current,sync:{},sync_error:'虚构来源状态损坏 <img src=x onerror="window.__sourceXss=4">'};await p.locator('#refresh').click();await p.locator('details[data-source-history] > summary').click();await eventually(()=>p.locator('[data-source-error]').isVisible(),'explicit damaged source state');assert.match(await p.locator('[data-source-error]').innerText(),/虚构来源状态损坏 <img/);assert.equal((await p.locator('#content').innerText()).includes('还没有保存的消息来源'),false);await p.locator('nav [data-page="tasks"]').click();assert.ok(await p.locator('.task').count()>0,'source error leaves saved tasks usable');await sources(p);
-  current={...current,sync:{},sync_error:'',agent:{...current.agent,sources:[]}};await p.locator('#refresh').click();await eventually(async()=>(await p.locator('#content').innerText()).includes('还没有保存的消息来源'),'real empty source state');assert.equal(await p.locator('[data-source-error]').count(),0);assert.notEqual(await p.locator('details[data-source-history]').getAttribute('open'),null);
+  current={...current,sync:{},sync_error:'虚构来源状态损坏 <img src=x onerror="window.__sourceXss=4">'};await reloadPage(p);await p.locator('details[data-source-history] > summary').click();await eventually(()=>p.locator('[data-source-error]').isVisible(),'explicit damaged source state');assert.match(await p.locator('[data-source-error]').innerText(),/虚构来源状态损坏 <img/);assert.equal((await p.locator('#content').innerText()).includes('还没有保存的消息来源'),false);await p.locator('nav [data-page="tasks"]').click();assert.ok(await p.locator('.task').count()>0,'source error leaves saved tasks usable');await sources(p);
+  current={...current,sync:{},sync_error:'',agent:{...current.agent,sources:[]}};await reloadPage(p);await eventually(async()=>(await p.locator('#content').innerText()).includes('还没有保存的消息来源'),'real empty source state');assert.equal(await p.locator('[data-source-error]').count(),0);assert.notEqual(await p.locator('details[data-source-history]').getAttribute('open'),null);
   checks.push('damaged source metadata stays explicit while basic records work; valid empty source list is separate');
   const home=async(sources,changes={})=>{
    const stamp=new Date().toISOString();current={...current,sync:{},sync_error:'',agent:{...current.agent,enabled:true,state:'ready',last_error:'',last_run:stamp,sources,...changes}};
-   await p.locator('nav [data-page="home"]').click();await p.locator('#refresh').click();
+   await p.locator('nav [data-page="home"]').click();await reloadPage(p);
    await eventually(()=>p.evaluate(stamp=>window.__sourceInput?.value.agent.last_run===stamp,stamp),'latest home coverage');
   };
   const healthy={...sourceStates[0],unread_count:0,last_success:new Date().toISOString()},disabledQQ=sourceStates[3];
@@ -127,18 +135,22 @@ async function sources(p){await p.locator('nav [data-page="more"]').click();awai
    await home([{...healthy,last_success:olderSuccess,next_collection_at:new Date(Date.now()+10*60*1000).toISOString()}],{collection_interval_minutes:30});assert.equal(await notice.count(),0,'scheduled slow-window read is not overdue when current interval becomes fast');
    await home([{...healthy,last_success:olderSuccess,next_collection_at:new Date(Date.now()-4*60*1000).toISOString()}],{collection_interval_minutes:60});assert.equal(await notice.count(),0,'allow one existing collector polling interval');
    await home([{...healthy,last_success:olderSuccess,next_collection_at:new Date(Date.now()-6*60*1000).toISOString()}],{collection_interval_minutes:60});assert.match(await notice.innerText(),/读取已过时或时间待核对/);
-   await home([],{enabled:false,state:'disabled'});assert.equal(await notice.count(),0,'manual family without sources has no source fault');assert.equal(await p.locator('[data-today-child]').count(),current.children.length);
-   await home([],{items:followups});const owner=p.locator('[data-today-child="'+base.children[1].id+'"]'),other=p.locator('[data-today-child="'+base.children[0].id+'"]'),care=owner.locator('[data-agent-item="synthetic-grade-concern"]');
-   assert.match(await owner.locator('.agent-child').innerText(),/需要核对与跟进 · 3/);assert.equal(await care.locator(':scope > p').innerText(),gradeConcern.body);assert.equal(await care.locator('[data-agent-accept]').innerText(),'核对并安排');assert.equal(await other.locator('[data-agent-item]').count(),0);
-   assert.deepEqual(await owner.locator('[data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem)),['synthetic-grade-concern','synthetic-review']);assert.equal(await owner.locator('.agent-child [data-page="agent"]').count(),1);await checkWidth(p,'home learning follow-up '+width);
-   await owner.scrollIntoViewIfNeeded();await p.screenshot({path:path.join(proofDir,'synthetic-home-learning-followup-'+width+'.png'),fullPage:true});
+   await home([],{enabled:false,state:'disabled'});assert.equal(await notice.count(),0,'manual family without sources has no source fault');assert.equal(await p.locator('[data-child-filter]').count(),current.children.length+1);
+   await home([],{items:followups});
+   // Current Today prioritizes school work. Learning follow-ups remain available
+   // in the existing Agent page, with their owner and full plan preserved.
+   await p.locator('nav [data-page="more"]').click();await p.locator('#content [data-page="agent"]').click();
+   const care=p.locator('[data-agent-item="synthetic-grade-concern"]');
+   assert.deepEqual(await p.locator('[data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem)),followups.map(x=>x.id));
+   assert.match(await care.innerText(),new RegExp(second));assert.equal(await care.locator(':scope > p').innerText(),gradeConcern.body);assert.equal(await care.locator('[data-agent-accept]').innerText(),'核对并安排');
+   await checkWidth(p,'learning follow-up '+width);await care.scrollIntoViewIfNeeded();await p.screenshot({path:path.join(proofDir,'synthetic-learning-followup-'+width+'.png'),fullPage:true});
    await care.locator('[data-agent-accept]').click();assert.equal(await p.locator('#agentForm textarea[name="body"]').inputValue(),gradeConcern.body);assert.equal(await p.locator('#agentForm input[name="id"]').inputValue(),gradeConcern.id);assert.equal(await p.locator('#agentForm button[type="submit"]').innerText(),'确认安排');await p.locator('[data-close="agentDialog"]').click();
   }
   await home([],{enabled:false,state:'error',last_error:'虚构来源状态不可读'});assert.match(await p.locator('[data-source-coverage]').innerText(),/学校信息状态暂时无法核对/);
   assert.equal(await p.evaluate(()=>JSON.stringify({sync:window.__sourceInput.value.sync,sync_error:window.__sourceInput.value.sync_error,tasks:window.__sourceInput.value.tasks,children:window.__sourceInput.value.children,agent:window.__sourceInput.value.agent})===window.__sourceInput.before),true);
   checks.push('360/1440 homepage names the affected child/platform/group; disabled QQ stays visible beside healthy sources and ready processing; source link reuses existing page');
   checks.push('unread content, failed or never-successful reads, paused collection and manual/no-source households remain distinct; homepage errors and names are escaped');
-  checks.push('360/1440 grade-concern care and review appear only under their child with full action and existing confirmation form; at most two reminders and remaining-reminders link retained');
+  checks.push('360/1440 learning follow-ups remain reachable from More and Agent with exact child ownership, full action and existing confirmation form');
   checks.push('360/1440 source freshness follows the server next collection time across 30/60-minute windows with polling grace; due reads do not become false failures');
   assert.deepEqual(errors,[]);assert.deepEqual(mutations,[]);assert.deepEqual(external,[]);assert.equal(await p.evaluate(()=>window.__sourceXss),undefined);
   const proof={checkedAt:new Date().toISOString(),passed:checks.length,checks,syntheticOnly:true,mutationRequests:0,externalRequests:0,sourceInputUnchanged:true,realPhoneTested:false};await fs.writeFile(path.join(proofDir,'ui-proof.json'),JSON.stringify(proof,null,2)+'\n');console.log(JSON.stringify(proof,null,2));
