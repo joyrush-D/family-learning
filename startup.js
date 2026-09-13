@@ -1,6 +1,18 @@
 // Independent of the application bundle: missing scripts still leave a way back.
 (() => {
   let failure='';
+  const pages=['home','calendar','tasks','more','ask','settings'];
+  document.addEventListener('click',event=>{
+    const button=event.target.closest('nav[aria-label="主导航"] button[data-page], .top-actions button[data-page]');
+    const root=document.getElementById('content');
+    if(!button||!root||root.dataset.ready==='true'||!pages.includes(button.dataset.page))return;
+    document.body.dataset.startupPage=button.dataset.page;
+    document.querySelectorAll('nav button[data-page]').forEach(b=>b.classList.toggle('active',b.dataset.page===button.dataset.page||(b.dataset.page==='more'&&!['home','calendar','tasks'].includes(button.dataset.page))));
+    if(root.querySelector('[data-startup-error]'))return;
+    const message=document.createElement('p');message.setAttribute('role','status');
+    message.textContent='正在准备“'+button.textContent+'”，读取家庭记录后打开。';root.replaceChildren(message);
+  });
+  document.querySelectorAll('nav button[data-page], .top-actions button[data-page]').forEach(b=>{if(pages.includes(b.dataset.page))b.disabled=false});
   function show(message){
     const root=document.getElementById('content');
     if(!root||root.dataset.ready==='true'||root.querySelector('[data-startup-error]'))return;

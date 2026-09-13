@@ -34,7 +34,7 @@ async function newPage(browser,width=400){
  await p.route(url=>url.pathname==='/',async r=>{const response=await r.fetch(),html=await response.text();await r.fulfill({response,body:html.replace('<head>','<head><script src="./__startup-global-fixture.js"></script>')})});
  return {p,errors,posts};
 }
-async function homeReady(p){await eventually(async()=>await p.locator('.today-dashboard').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','ready home with today agenda')}
+async function homeReady(p){await eventually(async()=>await p.locator('body[data-page="home"] .today-task-groups').isVisible()&&await p.locator('#task-group-homework').isVisible()&&await p.locator('#task-group-todo').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','ready home with homework and todo groups')}
 async function checkIsolation(p){
  const result=await p.evaluate(()=>({original:window.__startupFixture(),leaked:['load','render','esc','apiFetch','readingHomeHTML','calendarHomeHTML'].filter(k=>typeof window[k]!=='undefined')}));
  assert.deepEqual(result.original,{page:'fixture-page',data:{source:'fixture-only'},basePath:'fixture-base'});assert.deepEqual(result.leaked,[]);
@@ -63,14 +63,14 @@ async function keyboardStaticChecks(browser,url){
    await tabTo('[data-new-task]');await p.keyboard.press('Enter');await eventually(()=>p.locator('#newTaskDialog').isVisible(),'new task dialog');
    await tabTo('#newTaskForm [type="submit"]');await p.keyboard.press('Enter');assert.equal(await focused('#newTaskForm [name="title"]'),true,'required field receives focus');await fit();
    await p.keyboard.press('Shift+Tab');assert.equal(await focused('#newTaskForm [name="child"]'),true);await p.keyboard.press('Tab');
-   const title='虚构键盘待办 '+width,note='虚构键盘反馈：已核对要求。';await p.keyboard.insertText(title);await tabTo('#newTaskForm [name="due"]');await p.keyboard.insertText('虚构下周');await tabTo('#newTaskForm [type="submit"]');await p.keyboard.press('Enter');
+   const title='虚构键盘待办 '+width,note='虚构键盘反馈：已核对要求。';await p.keyboard.insertText(title);await tabTo('#newTaskForm [name="action"]');await p.keyboard.insertText('虚构目标：核对具体要求');await tabTo('#newTaskForm [type="submit"]');await p.keyboard.press('Enter');
    await eventually(async()=>!(await p.locator('#newTaskDialog').isVisible())&&(await read()).tasks.some(t=>t.title===title),'new task persisted');await eventually(()=>focused('[data-new-task]'),'new task opener restored after render');await fit();
-   const task=(await read()).tasks.find(t=>t.title===title),checkbox='[data-check="'+task.id+'"]',feedback='[data-task="'+task.id+'"]';
+   const task=(await read()).tasks.find(t=>t.title===title);assert.equal(task.action,'虚构目标：核对具体要求');const checkbox='[data-check="'+task.id+'"]',feedback='[data-task="'+task.id+'"]';
    // Hold only this synthetic write: a second Space must not enqueue another update.
    let held=0;const gate=new Promise(resolve=>release=resolve);await p.route('**/api/task',async route=>{if(route.request().method()==='POST'&&held++===0)await gate;await route.continue()});
    await tabTo(checkbox);await p.keyboard.press('Space');await eventually(()=>held===1,'held checkbox request');assert.equal(await focused(checkbox),true);assert.equal(await p.locator(checkbox).getAttribute('aria-disabled'),'true');await p.keyboard.press('Space');assert.equal(posts.filter(x=>x==='POST /api/task').length,1,'busy checkbox refuses duplicate');release();
-   await eventually(async()=>(await read()).tasks.find(t=>t.id===task.id).update?.status==='已完成'&&await p.locator(checkbox).count()===0,'checked task persisted and filtered');await eventually(()=>focused('[data-view="待跟进"][aria-pressed="true"]'),'removed checkbox returns to current filter');await p.unroute('**/api/task');
-   await tabTo('[data-view="已完成"]');await p.keyboard.press('Enter');assert.equal(await focused('[data-view="已完成"]'),true,'filter retains keyboard focus');await tabTo(feedback);await p.keyboard.press('Enter');await eventually(()=>p.locator('#taskDialog').isVisible(),'feedback dialog');
+   await eventually(async()=>(await read()).tasks.find(t=>t.id===task.id).update?.status==='已完成'&&await p.locator(checkbox).count()===0,'checked task persisted and filtered');await eventually(()=>focused('[data-task-box="Inbox"][aria-pressed="true"]'),'removed checkbox returns to current filter');await p.unroute('**/api/task');
+   await tabTo('[data-task-box="已完成"]');await p.keyboard.press('Enter');assert.equal(await focused('[data-task-box="已完成"]'),true,'filter retains keyboard focus');await tabTo(feedback);await p.keyboard.press('Enter');await eventually(()=>p.locator('#taskDialog').isVisible(),'feedback dialog');
    // Default selected status is sufficient; native select popup driving is not claimed.
    await tabTo('#taskForm [name="note"]');await p.keyboard.insertText(note);await fit();await tabTo('#taskForm [type="submit"]');await p.keyboard.press('Enter');
    await eventually(async()=>!(await p.locator('#taskDialog').isVisible())&&(await read()).tasks.find(t=>t.id===task.id).update?.note===note,'feedback persisted');await eventually(()=>focused(feedback),'feedback opener restored after render');
@@ -88,6 +88,22 @@ async function keyboardStaticChecks(browser,url){
  let server,browser;const passed=[];
  try{
   server=await demoServer();browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
+  for(const width of [360,1440]){
+   const {p,errors,posts}=await newPage(browser,width);let release,held=0,reads=0;
+   const gate=new Promise(resolve=>release=resolve);
+   await p.route('**/app.bundle.js',async route=>{held++;await gate;await route.continue()});
+   p.on('request',r=>{if(new URL(r.url()).pathname==='/api/state')reads++});
+   try{
+    await p.goto(server.url,{waitUntil:'commit'});await eventually(()=>held===1,'initial bundle held');
+    await eventually(()=>p.locator('nav [data-page="more"]').isEnabled(),'lightweight navigation ready');
+    assert(await p.locator('#add').isDisabled());assert(await p.locator('#refresh').isDisabled());
+    for(const target of ['ask','settings']){if(target==='settings')await p.locator('.top-tools > summary').click();await p.locator('.top-actions [data-page="'+target+'"]').click();assert.equal(await p.locator('nav [data-page="more"]').evaluate(e=>e.classList.contains('active')),true)}
+    for(const target of ['calendar','tasks','more']){await p.locator('nav [data-page="'+target+'"]').click();assert.equal(await p.locator('nav [data-page="'+target+'"]').evaluate(e=>e.classList.contains('active')),true,'navigation acknowledges selection while bundle is pending');assert.match(await p.locator('#content [role="status"]').innerText(),/准备|读取/)}
+    assert.equal(reads,0,'navigation does not start source or model work');if(process.env.STARTUP_UI_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.mkdir(process.env.STARTUP_UI_PROOF_DIR,{recursive:true});await p.screenshot({path:path.join(process.env.STARTUP_UI_PROOF_DIR,'pending-navigation-'+width+'.png')})}release();
+    await eventually(()=>p.locator('.more-links [data-page="goals"]').isVisible(),'last requested page opens after bundle/state');assert.equal(reads,1,'one initial state read');assert(await p.locator('#add').isEnabled());await checkWidth(p);await checkIsolation(p);
+    await p.locator('.more-links [data-page="goals"]').click();await eventually(()=>p.locator('[data-goal-form="create"]').count(),'goals reachable from selected page');assert.deepEqual(errors,[]);assert.deepEqual(posts,[]);passed.push('early navigation queues latest page without extra work at '+width+'px');
+   }finally{release?.();await p.close()}
+  }
   if(process.argv.includes('--keyboard-static-only')){const checks=await keyboardStaticChecks(browser,server.url);console.log(JSON.stringify({passed:checks.length,checks,syntheticOnly:true,onlyNewKeyboardChecks:true},null,2));return}
   {
    // Routing disables Chromium's HTTP cache; use an untouched page for this check.
@@ -105,23 +121,28 @@ async function keyboardStaticChecks(browser,url){
   }
   for(const width of [360,400,1440]){
    const {p,errors,posts}=await newPage(browser,width);
-   try{await p.goto(server.url,{waitUntil:'domcontentloaded'});await homeReady(p);await checkWidth(p);await checkIsolation(p);await p.locator('nav [data-page="calendar"]').click();await eventually(()=>p.locator('.calendar-week-grid').isVisible(),'calendar agenda');assert.equal(await p.locator('.calendar-day:visible').count(),width<=850?1:7);await checkWidth(p);await checkIsolation(p);assert.deepEqual(errors,[]);assert.deepEqual(posts,[]);passed.push('global-name collision, homepage/calendar and '+width+'px layout')}finally{await p.close()}
+   try{await p.goto(server.url,{waitUntil:'domcontentloaded'});await homeReady(p);await checkWidth(p);await checkIsolation(p);await p.locator('nav [data-page="calendar"]').click();await eventually(()=>p.locator('.calendar-week-grid').isVisible(),'calendar agenda');assert.equal(await p.locator('.calendar-day:visible').count(),7,'all seven days remain available in the week overview');if(width<=850)assert.equal(await p.locator('.calendar-week-scroll').evaluate(e=>e.scrollWidth>e.clientWidth),true,'mobile week scrolls within its panel');await checkWidth(p);await checkIsolation(p);assert.deepEqual(errors,[]);assert.deepEqual(posts,[]);passed.push('global-name collision, homepage/calendar and '+width+'px layout')}finally{await p.close()}
   }
   {
    const {p,errors,posts}=await newPage(browser);let held=0;
    await p.route('**/vendor/three.core.min.js',()=>{held++});
    try{await p.goto(server.url,{waitUntil:'domcontentloaded'});await homeReady(p);assert.equal(held,0,'today does not request Three');assert.deepEqual(errors,[]);assert.deepEqual(posts,[]);passed.push('homepage works without requesting Three')}finally{await p.close()}
   }
+  {
+   const {p,errors,posts}=await newPage(browser);
+   await p.route('**/startup.js',r=>r.fulfill({status:503,contentType:'text/javascript',body:'/* synthetic startup unavailable */'}));
+   try{await p.goto(server.url,{waitUntil:'domcontentloaded'});await homeReady(p);assert(await p.locator('nav [data-page="more"]').isEnabled());await p.locator('nav [data-page="more"]').click();await eventually(()=>p.locator('.more-links').isVisible(),'main bundle retains navigation if startup helper fails');assert.deepEqual(errors,[]);assert.deepEqual(posts,[]);passed.push('startup helper failure does not disable the loaded application')}finally{await p.close()}
+  }
   for(const mode of ['503','pending']){
    const {p,posts}=await newPage(browser);let held=0;
    await p.clock.install();
    await p.route('**/app.bundle.js',async route=>{held++;if(mode==='503')await route.fulfill({status:503,contentType:'text/javascript',body:'/* synthetic bundle unavailable */'})});
-   try{await p.goto(server.url,{waitUntil:'commit'});await eventually(()=>held===1,'blocked application bundle');await p.clock.fastForward(21000);await eventually(()=>p.locator('[data-startup-error]').isVisible(),'explicit bundle startup failure');const message=await p.locator('[data-startup-error]').innerText();assert.match(message,mode==='503'?/页面程序未能加载|页面加载超时/:/页面加载超时/);const retry=await retryLink(p);assert.equal(await p.locator('.calendar-entry').count(),0);await p.unroute('**/app.bundle.js');await retry.click();await homeReady(p);await checkIsolation(p);assert.deepEqual(posts,[]);passed.push('bundle '+mode+' exposes usable recovery and reload succeeds')}finally{await p.close()}
+   try{await p.goto(server.url,{waitUntil:'commit'});await eventually(()=>held===1,'blocked application bundle');await eventually(()=>p.locator('nav [data-page="more"]').isEnabled(),'startup recovery script ready');await p.clock.fastForward(21000);await eventually(()=>p.locator('[data-startup-error]').isVisible(),'explicit bundle startup failure');const message=await p.locator('[data-startup-error]').innerText();assert.match(message,mode==='503'?/页面程序未能加载|页面加载超时/:/页面加载超时/);const retry=await retryLink(p);assert.equal(await p.locator('.calendar-entry').count(),0);await p.unroute('**/app.bundle.js');await retry.click();await homeReady(p);await checkIsolation(p);assert.deepEqual(posts,[]);passed.push('bundle '+mode+' exposes usable recovery and reload succeeds')}finally{await p.close()}
   }
   {
    const {p,errors,posts}=await newPage(browser);let held=0;
    await p.clock.install();await p.route('**/api/state',()=>{held++});
-   try{await p.goto(server.url,{waitUntil:'domcontentloaded'});await eventually(()=>held===1,'pending initial state');await p.clock.fastForward(13000);await eventually(async()=>/超时/.test(await p.locator('#content').innerText()),'explicit state timeout');await p.unroute('**/api/state');await p.locator('#refresh').click();await homeReady(p);await checkIsolation(p);assert.deepEqual(errors,[]);assert.deepEqual(posts,[]);passed.push('initial state timeout is explicit and refresh recovers')}finally{await p.close()}
+   try{await p.goto(server.url,{waitUntil:'domcontentloaded'});await eventually(()=>held===1,'pending initial state');await p.locator('nav [data-page="more"]').click();await p.clock.fastForward(13000);await eventually(async()=>/超时/.test(await p.locator('#content').innerText()),'explicit state timeout');await p.unroute('**/api/state');await p.getByRole('button',{name:'重试读取',exact:true}).click();await eventually(()=>p.locator('.more-links').isVisible(),'retry opens the selected page');await checkIsolation(p);assert.deepEqual(errors,[]);assert.deepEqual(posts,[]);passed.push('initial state timeout is explicit and refresh recovers the selected page')}finally{await p.close()}
   }
   passed.push(...await keyboardStaticChecks(browser,server.url));
   console.log(JSON.stringify({passed:passed.length,checks:passed,syntheticOnly:true,keyboardWritesOnlyDisposableDemo:true},null,2));
