@@ -37,6 +37,68 @@ class GoalTests(unittest.TestCase):
     def feedback(self,note='家长转述孩子：会认单词，但说不出为什么。',**obj):
         return self.action('feedback',id=self.ident,day=self.now.date().isoformat(),source='家长转述孩子',note=note,**obj)
 
+    def test_task_feedback_reaches_goal_and_revises_without_changing_plan(self):
+        self.approve(self.evaluate());before=self.goal();task=before['task_id']
+        payload=dict(id=task,status='进行中',note='家长转述：孩子说困了，今天先停；只在提示后完成。',expected_updated='')
+        self.app.save_task(payload);self.app.save_task(payload)
+        g=self.goal();self.assertEqual(len(g['task_feedback']),1);self.assertTrue(g['evidence_changed'])
+        self.assertEqual(g['current_plan'],before['current_plan']);self.assertEqual(g['records'],[])
+        g=self.evaluate();e=self.last_input['evidence'][-1]
+        self.assertEqual(e['kind'],'task_feedback');self.assertEqual(e['text'],payload['note'])
+        self.assertEqual(e['task_id'],task);self.assertEqual(e['source_kind'],'parent_task_feedback')
+        self.approve(g);self.assertFalse(self.goal()['evidence_changed'])
+        self.assertEqual(self.store.process(self.ident,self.now)['state'],'current')
+        self.assertEqual(len(self.goal()['task_feedback']),1,'plan approval is not learning feedback')
+        old=self.goal();self.app.save_task(dict(id=task,status='进行中',note='更正：刚才并未完成，只讲了第一步。'))
+        self.assertTrue(self.goal()['evidence_changed']);g=self.evaluate()
+        self.assertEqual(len(self.last_input['evidence']),3);self.assertIn('更正',self.last_input['evidence'][-1]['text'])
+        self.assertEqual(self.goal()['current_plan'],old['current_plan'])
+        self.assertEqual(len(goals.Store(self.app).snapshot()['goals'][0]['task_feedback']),2)
+        original=self.reply
+        def concurrent(*args,**kwargs):
+            result=original(*args,**kwargs);self.app.save_task(dict(id=task,status='进行中',note='分析时补充：孩子愿意明天口述。'));return result
+        self.app.save_task(dict(id=task,status='进行中',note='补充：准备重新核对第一步。'))
+        self.model.side_effect=concurrent
+        self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'stale')
+        with self.assertRaises(agent.AgentError):self.approve(g)
+
+    def test_school_task_feedback_and_results_follow_explicit_links_and_child(self):
+        def school_task(child, goal):
+            task=self.app.new_task(dict(child=child,title='英语：介绍一种文具',category='homework'))['id']
+            with self.app.connect() as c:
+                c.execute("INSERT INTO agent_items(id,job_id,child_id,kind,title,body,evidence,due,state,created,updated,task_id,plan) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ('school-'+task,'synthetic-school-link', 'child-1' if child=='示例甲' else 'child-2','school','文具练习','','[]','','accepted',self.now.isoformat(),self.now.isoformat(),task,json.dumps(dict(school_goal_id=goal,school_messages=[]))))
+            self.app.save_task(dict(id=task,status='进行中',note=child+'家长转述：第二点需要提示。'))
+            return task
+        own=school_task('示例甲',self.ident);school_task('示例乙',self.ident)
+        other=self.action('create',child_id='child-1',title='另一英语目标',subject='英语')['id']
+        school_task('示例甲',other)
+        self.assertEqual([x['task_id'] for x in self.goal()['task_feedback']],[own])
+        family_study.Store(self.app)
+        record=self.app.save_record(dict(child='示例甲',day=self.now.date().isoformat(),category='家长观察',subject='英语',title='虚构作业结果',note='本次独立讲出第一点。',source='虚构作业计时'))
+        with self.app.connect() as c:
+            c.execute("INSERT INTO study_items(id,child_id,day,task_id,title,subject,record_id,version,creation_hash,last_request_key,last_request_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?)",('school-result','child-1',self.now.date().isoformat(),own,'文具练习','英语',record['record_id'],1,'h','k','h'))
+        self.assertEqual([r['id'] for r in self.goal()['records']],[record['record_id']])
+        self.evaluate();self.assertEqual(len([e for e in self.last_input['evidence'] if e.get('kind')=='task_feedback']),1)
+        with self.app.connect() as c:c.execute("UPDATE manual_tasks SET child='示例乙' WHERE id=?",(own,))
+        g=self.goal();self.assertFalse(g['task_feedback']);self.assertFalse(g['records']);self.assertEqual(g['task_missing'],1);self.assertTrue(g['pending_stale'])
+
+    def test_task_feedback_bounds_and_legacy_note_are_explicit(self):
+        self.approve(self.evaluate());task=self.goal()['task_id']
+        for i in range(30):self.app.save_task(dict(id=task,status='进行中',note='虚构反馈'+str(i)+('甲'*1500 if i==29 else '')))
+        g=self.goal();self.assertEqual(len(g['task_feedback']),24);self.assertEqual(g['task_feedback_omitted'],6)
+        self.evaluate();e=self.last_input['evidence'][-1];self.assertEqual(len(e['text']),1200);self.assertTrue(e['content_incomplete'])
+        self.assertGreater(len(g['task_feedback'][-1]['text']),1200)
+        with self.app.connect() as c:c.execute('DELETE FROM task_history WHERE task_id=?',(task,))
+        g=self.goal();self.assertEqual(len(g['task_feedback']),1);original_feedback=g['task_feedback']
+        self.approve(self.evaluate());g=self.goal();self.assertEqual(g['task_feedback'],original_feedback);self.assertFalse(g['evidence_changed'])
+        self.assertEqual(self.store.process(self.ident,self.now)['state'],'current')
+        self.app.save_task(dict(id=task,status='进行中',note='更正：原文字是尚待核对的转述。'))
+        g=self.goal();self.assertEqual(len(g['task_feedback']),2);self.assertEqual(len({h['ref'] for h in g['task_feedback']}),2)
+        original_hash=g['context_hash']
+        for status,note in [('已完成','家长通过清单勾选确认此事项已完成。'),('待跟进','家长撤销完成，继续跟进。')]:
+            self.app.save_task(dict(id=task,status=status,note=note));self.assertEqual(self.goal()['context_hash'],original_hash)
+
     def test_word_directions_remain_separate_retry_and_feed_goal(self):
         before=self.goal();self.approve(self.evaluate());approved=self.goal()['current_plan']
         check=dict(word='pen',meaning='用于写字的笔',material='虚构课堂词表',phase='首次核对',
