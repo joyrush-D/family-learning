@@ -57,7 +57,7 @@ SCHOOL_PROMPT = '''\n学校消息额外返回task_title、task_goal、task_advic
 learning_goal_id只从输入learning_goals选择同一科目且适合本要求的目标；已有合适目标优先沿用，科目相同但训练点不相关时也留空，系统建立或沿用学校学习目标。不生成目标编号，不改变暂停状态；明确匹配到暂停目标时只关联资料，不恢复分析或另建目标绕过暂停。非教学要求两个字段均为空。
 任务要求与老师的后续更正、撤销一起保留原消息作为规划依据；不把它们当成孩子表现。发布者称呼不等于教师身份已确认，不凭群名推断任课老师，不将家长转发说成老师直接发布。保持必须、任选、示例和条件要求，不能读出未提供的图片或链接内容。'''
 # One saved interpretation feeds the task list; it never records child performance.
-SCHOOL_TASK_POLICY = 3
+SCHOOL_TASK_POLICY = 4
 TASK_BRIEF_SCHEMA = {'type':'object','additionalProperties':False,'required':['title','goal','advice','state','reason'],
     'properties':{**{key:{'type':'string','maxLength':limit} for key,limit in [('title',80),('goal',2000),('advice',1200),('reason',400)]},
                   'state':{'type':'string','enum':['ready','review','reference']}}}
@@ -66,20 +66,36 @@ title简短写要完成什么，goal保留学校明确成果和必须/任选/示
 ready：已读文字明确要求全班或本孩子完成的具体学校作业/事务，系统只收集为未完成任务，不代替家庭报名、打印、确认执行或批准额外教学计划。学校发布的当前单元习作指南，只要有明确中心主题和文章结构、推荐理由等具体完成标准，即使没出现“完成/提交”二字，也按ready收集一项完成该习作的任务。标题使用“语文：完成《主题》习作”。仅缺截止日期不是适用条件未知，不因此降为review。不把例文、一般写作技巧或示例地点当额外作业。学校明确结构/标准全部放goal，不当作可选advice，也不提高为学校未要求的字数/练习量。
 review：资料未读、适用条件未知、一次性历史要求是否仍需补做不明；reason具体指出还缺什么，不用通用套话。不要将几天前的“今天抄写”安排到今天。
 reference：表格列标题/成绩符号说明、已完成汇报、一般教学参考等，本身没有新增行动要求。比如“第一列是订正记录，第二列是默写”是表格说明，不能推断本孩子缺交或要求重做。
+向群友索要课本页、照片、文件等资料的个人求助，不等于全班或本孩子的学校要求；仅提到科目、页码或活动主题也不能自动创建核对待办、学习目标或加练。批处理可跳过，已有候选归reference。若同批另有明确作业要求，应引用那条要求并保留转述身份，不能只引用求助句。
 as_of为当前日期，原发送日期不能改成今天；当前孩子/来源绑定已由家庭指定，但不代表消息每项条件均适用。只处理candidate所指这一件事，不能扩大到其他列或其他孩子。reason说明分类依据；缺具体内容时title/goal/advice可留空。"""
 _school_fields['required'] += ['task_state','task_reason']
 _school_fields['properties'].update(task_state=TASK_BRIEF_SCHEMA['properties']['state'],task_reason=TASK_BRIEF_SCHEMA['properties']['reason'])
 SCHOOL_PROMPT += '\n还返回task_state和task_reason，按以下状态规则整理。\n'+SCHOOL_TASK_PROMPT+'\n本次为学校批处理，按proposals结构返回；上述title/goal/advice/state/reason均使用task_前缀，其余既有字段照常返回。'
 
 
-def _school_brief(value, incomplete=False, evidence=()):
-    brief={key:_text(value,key,limit).strip() for key,limit in [('title',80),('goal',2000),('advice',1200),('reason',400)]}
-    state=value.get('state','review')
-    if state not in ('ready','review','reference'): raise AgentError('学校事项状态无法核对')
+def _reference_brief(evidence):
+    """Recognize explicit non-assignment text in both new and saved notices."""
     texts=[e.get('text','').strip() for e in evidence]
     columns=lambda text: len(text.splitlines())>=2 and all(re.match(r'^第[一二三四五六七八九十百0-9]+列[：:]',line.strip()) for line in text.splitlines() if line.strip())
     if texts and all(columns(text) for text in texts):
         return dict(title='学校检查表列说明',goal='这段内容解释表格各列，不能据此判断孩子缺交或要求重做。',advice='',state='reference',reason='原文逐列解释检查或成绩表，没有新增行动要求。',policy=SCHOOL_TASK_POLICY)
+    def resource_request(text):
+        # ponytail: explicit resource questions only; quoted or mixed instructions stay in normal review.
+        return (len(text)<=500 and re.match(r'^(?:请问[，,：:\s]*)?(?:(?:有没有|有哪位|哪位)家长|谁有)',text)
+                and re.search(r'课本|教材|页面|页|照片|资料|讲义|练习|作业|图片|记录表|课件|文件',text)
+                and re.search(r'发(?:一?下|我|到群|给)|拍(?:一?下|照|张)|分享|借|提供',text)
+                and not re.search(r'(?:老师(?:说|让|要求|布置)|请(?:同学们|全体|全班|大家))[^。！？\n]{0,80}(?:完成|提交|上交|准备|携带|带来|抄写|背诵|练习)',text))
+    if texts and not any(e.get('unread') or e.get('content_incomplete') for e in evidence) and all(resource_request(text) for text in texts):
+        return dict(title='群内资料求助',goal='本条是在询问资料，尚未给出本家庭须完成的学校要求。',advice='',state='reference',reason='只有向群友索要资料的请求，不能据此给孩子新增待办或学习目标。',policy=SCHOOL_TASK_POLICY)
+    return None
+
+
+def _school_brief(value, incomplete=False, evidence=()):
+    brief={key:_text(value,key,limit).strip() for key,limit in [('title',80),('goal',2000),('advice',1200),('reason',400)]}
+    state=value.get('state','review')
+    if state not in ('ready','review','reference'): raise AgentError('学校事项状态无法核对')
+    reference=_reference_brief(evidence)
+    if reference: return reference
     if incomplete:
         brief.update(title='',goal='',advice='');state='review';brief['reason']='原件或具体要求尚未读全，请先核对。'
     if state=='ready' and (not brief['title'] or not brief['goal']):
@@ -681,7 +697,10 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             # A model may quote only a word inside a marker; preserve the gap.
             title = '[资料]'
         if due:
-            if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', due) or not any(due in item['text'] for item in cited): raise AgentError('模型日期缺少原文依据')
+            from family_agenda import deadline, sent_day
+            cited_evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}]
+            relative={deadline(e['text'],sent_day(e.get('time',''))) for e in cited_evidence} - {''} if mode=='school' else set()
+            if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', due) or not (any(due in item['text'] for item in cited) or relative=={due}): raise AgentError('模型日期缺少原文依据')
             dt.date.fromisoformat(due)
             if mode == 'school' and due < as_of: continue
         item = dict(title='待核对：' + title, body=FOCUS[proposal['focus']], due=due, evidence=cited)
@@ -711,7 +730,6 @@ def _refresh_school(app, store, now, budget):
     for row in pending:
         plan=json.loads(row['plan']);brief=plan.get('school_task',{})
         if brief.get('policy')!=SCHOOL_TASK_POLICY:
-            if used>=budget: continue
             evidence=[];source_error=None
             try:
                 with store._db() as c:
@@ -722,16 +740,20 @@ def _refresh_school(app, store, now, budget):
                         evidence.append(dict(ref=quote['ref'],source=source['name'],**message))
                 if not evidence: raise AgentError('学校消息缺少原文')
             except (AgentError,ValueError,KeyError,TypeError) as error: source_error=error
+            reference=_reference_brief(evidence) if not source_error else None
+            if not reference and used>=budget: continue
             context=dict(as_of=now.date().isoformat(),candidate=row['title'],child_id=row['child_id'],evidence=evidence)
-            key='school-task:'+row['id'];fp=store._job(key,dict(policy=SCHOOL_TASK_POLICY,candidate=row['title'],child_id=row['child_id'],evidence=evidence,plan=row['plan'],updated=row['updated']),now,model=True)
+            key='school-task:'+row['id'];fp=store._job(key,dict(policy=SCHOOL_TASK_POLICY,candidate=row['title'],child_id=row['child_id'],evidence=evidence,plan=row['plan'],updated=row['updated']),now,model=reference is None)
             if not fp: continue
-            used+=1
             try:
                 if source_error: raise AgentError('学校消息原文暂不可读取') from source_error
-                result=family_llm._chat_json([{'role':'system','content':SCHOOL_TASK_PROMPT},{'role':'user','content':_json(context)}],
-                    TASK_BRIEF_SCHEMA,'family_school_task',timeout=45,data_path=store.data)
-                if not isinstance(result,dict) or set(result)!=set(TASK_BRIEF_SCHEMA['required']): raise AgentError('学校事项结构无法核对')
-                brief=_school_brief(result,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in evidence),evidence=evidence)
+                if reference: brief=reference
+                else:
+                    used+=1
+                    result=family_llm._chat_json([{'role':'system','content':SCHOOL_TASK_PROMPT},{'role':'user','content':_json(context)}],
+                        TASK_BRIEF_SCHEMA,'family_school_task',timeout=45,data_path=store.data)
+                    if not isinstance(result,dict) or set(result)!=set(TASK_BRIEF_SCHEMA['required']): raise AgentError('学校事项结构无法核对')
+                    brief=_school_brief(result,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in evidence),evidence=evidence)
                 if brief['state']=='reference': plan.pop('school_learning',None)
                 plan['school_task']=brief
                 with store._db() as c:
@@ -946,7 +968,7 @@ def run_once(app, now=None):
                     batches[-1].append(json.loads(message['payload'])); size += len(message['payload'])
                 for values in batches:
                     key = 'messages:' + _hash([source['id'], [row['id'] for row in values]])[:40]
-                    fp = store._job(key, {'school_learning_policy': 4, 'messages': values}, now, model=True)
+                    fp = store._job(key, {'school_learning_policy': 5, 'messages': values}, now, model=True)
                     if not fp: continue
                     evidence = [dict(ref='message:' + source['id'] + ':' + row['id'], text=row['text'],
                         source=source['name'], time=row['time'], sender=row['sender'], content_incomplete=row['unread']) for row in values]

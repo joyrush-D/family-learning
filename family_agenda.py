@@ -23,7 +23,7 @@ def deadline(text,published):
     """Only an unambiguous deadline phrase; an event date alone is not a deadline."""
     if date(text): return text
     candidates=set()
-    pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:[^。；;\n]{0,8}?)(?:前|截止|完成|提交|上交|交齐|带到|交作业)'
+    pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:[^。；;\n]{0,8}?)(?:前|截止|完成|提交|上交|交齐|带到|带来|交作业)'
     for match in re.finditer(pattern,text or ''):
         token=match[1];value=date(token)
         if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):

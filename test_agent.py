@@ -77,10 +77,10 @@ class AgentTests(unittest.TestCase):
             self.assertTrue(ctx['evidence'][0]['text']);self.assertEqual(ctx['child_id'],'child-1')
             return dict(title='语文：完成虚构习作',goal='提交一篇自己的习作。',advice='可以先口述。',state='ready',reason='这是表格说明。' if ctx['candidate']=='legend' else '明确学校要求。')
         with patch.object(agent.family_llm,'_chat_json',side_effect=model) as mocked:
-            for i in range(4):self.assertEqual(agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=i+1),1)['used'],1)
+            for i in range(3):self.assertEqual(agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=i+1),1)['used'],1)
             self.assertEqual(agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=6),1)['used'],0)
-            self.assertEqual(mocked.call_count,4)
-        self.assertEqual(order,['expired','unread','legend','clear'])
+            self.assertEqual(mocked.call_count,3)
+        self.assertEqual(order,['expired','unread','clear'])
         with self.app.connect() as c:
             rows={r['id']:dict(r) for r in c.execute('SELECT * FROM agent_items')}
             self.assertEqual(before,[tuple(r) for r in c.execute("SELECT * FROM agent_items WHERE id IN (?,?) ORDER BY id",(ids['accepted'],ids['dismissed']))])
@@ -124,6 +124,37 @@ class AgentTests(unittest.TestCase):
         with self.app.connect() as c:
             plan=json.loads(c.execute('SELECT plan FROM agent_items WHERE job_id=?',(key,)).fetchone()[0]);self.assertEqual(plan['school_task']['state'],'review')
             self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],0)
+
+    def test_resource_request_is_reference_in_new_and_saved_notices_without_hiding_instructions(self):
+        text='有没有家长能拍一下科学第8页的观察记录？谢谢'
+        payload=self.payload();payload['messages'][0]['text']=text;self.store.ingest(payload)
+        evidence=[dict(ref='message:synthetic-group:11',text=text,content_incomplete=False)]
+        wrong=dict(title_quote='科学第8页',focus='school',due='',learning_subject='科学',learning_goal_id='',
+            task_title='科学：核对观察记录',task_goal='找到观察记录并完成。',task_advice='',task_state='ready',task_reason='提到课程。',evidence=[dict(ref=evidence[0]['ref'])])
+        with patch.object(agent.family_llm,'_chat_json',return_value={'proposals':[wrong]}):
+            selected=agent._select('school',evidence,school_goals=[])
+        self.assertEqual(selected[0]['plan']['school_task']['state'],'reference')
+        self.assertNotIn('school_learning',selected[0]['plan'])
+        key='synthetic-resource-request';fp=self.store._job(key,{},self.now)
+        self.store._save(key,fp,[dict(child_id='child-1',kind='school',title='旧资料求助候选',body='旧说明',evidence=evidence,
+            plan={'school_learning':{'subject':'科学','goal_id':''},'school_messages':[dict(source_id='synthetic-group',message_id='11')]})],self.now)
+        with patch.object(agent.family_llm,'_chat_json') as model:
+            result=agent._refresh_school(self.app,self.store,self.now,0);model.assert_not_called()
+        self.assertEqual(result,dict(used=0,failed=0,created=0))
+        import family_goals,family_agenda
+        self.assertEqual(family_goals.Store(self.app,self.store).route_school(),0)
+        self.assertEqual(family_agenda.snapshot(self.app,'2026-02-10','2026-02-10')['inbox'],[])
+        with self.app.connect() as c:
+            row=c.execute('SELECT * FROM agent_items WHERE job_id=?',(key,)).fetchone()
+            self.assertEqual(json.loads(row['plan'])['school_task']['state'],'reference')
+            self.assertNotIn('school_learning',json.loads(row['plan']))
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],0)
+            self.assertEqual(json.loads(c.execute('SELECT payload FROM agent_messages').fetchone()[0])['text'],text)
+        ready=dict(title='科学：完成观察记录',goal='完成记录并带到课堂。',advice='',state='ready',reason='明确要求。')
+        instruction='请同学们完成科学第8页的观察记录，明天带来。'
+        for texts in ([instruction],[text,instruction],[text+'\n老师要求：完成观察记录。']):
+            self.assertEqual(agent._school_brief(ready,evidence=[dict(text=t) for t in texts])['state'],'ready')
+        self.assertEqual(agent._school_brief(ready,incomplete=True,evidence=[dict(text=text,unread=True)])['state'],'review')
 
     def test_school_backfill_does_not_overwrite_parent_and_failed_retries_stop(self):
         self.store.ingest(self.payload());key='synthetic-race';fp=self.store._job(key,{},self.now)
@@ -627,6 +658,16 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
                                     evidence=[dict(ref=evidence[0]['ref'], quote=evidence[0]['text'])])]}
         with patch.object(agent.family_llm, '_chat_json', return_value=output):
             self.assertEqual(len(agent._select('learning', evidence, as_of='2026-09-09')), 1)
+
+    def test_school_relative_deadline_uses_original_beijing_send_date(self):
+        evidence=[dict(ref='message:synthetic-group:11',text='完成观察记录，明天带来。',time='2026-02-09T16:30:00Z')]
+        proposal=dict(title_quote='观察记录',focus='school',due='2026-02-11',evidence=[dict(ref=evidence[0]['ref'],quote='完成观察记录，明天带来。')])
+        with patch.object(agent.family_llm,'_chat_json',return_value={'proposals':[proposal]}):
+            self.assertEqual(agent._select('school',evidence,as_of='2026-02-10')[0]['due'],'2026-02-11')
+            for rows in ([{**evidence[0],'time':''}],[{**evidence[0],'time':'2026-02-08T16:30:00Z'}],
+                         [{**evidence[0],'text':'明天带来。后天提交。'}]):
+                with self.assertRaises(agent.AgentError):agent._select('school',rows,as_of='2026-02-10')
+            self.assertEqual(agent._select('school',evidence,as_of='2026-02-12'),[])
 
     def test_unread_media_remains_visible_after_processing_and_replay(self):
         payload = self.payload(); payload['messages'][0].update(kind='image', text='图片原件未读', unread=True)
