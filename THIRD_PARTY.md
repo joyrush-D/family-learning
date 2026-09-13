@@ -98,6 +98,10 @@ Cua Python SDK 0.26.0的已安装包元数据标示MIT；本项目仅调用其�
 
 QQLore根目录与ntdb_unwrap扩展分别标示MIT；其余依赖和取钥资料许可仍须分别核对。本轮未把第三方代码、二进制、账号或密钥加入公开分发。新加坡限定评审已返回并核对成功读取材料，确认只读、取钥、群过滤和版本前提；评审不能替代本机实测。非界面读取仍为首选，LLBot、官方机器人与已授权窗口保底继续保留。
 
+2026-09-14补充加密与增量基础检查：从[SQLCipher 4.19.0固定源码](https://github.com/sqlcipher/sqlcipher/tree/c4b275a47932888216bade83aff2bbc73df0ff85)在私有实验目录构建Mac ARM命令行及动态库，使用系统CommonCrypto，未全局安装或加入应用运行依赖。采用QQLore明确的页大小4096、KDF迭代4000、HMAC-SHA1和PBKDF2-HMAC-SHA512参数，配合前轮自行构建的ntdb_unwrap扩展；在虚构普通消息表上验证了加密文件头适配、只读拒绝写入、错误密钥/损坏页面拒绝、缺失文件不创建，以及独立读进程看不到未提交内容、能读到提交后的WAL新增、写连接正常关闭后仍可读取。实际命令行JSON结果与C接口一致。读取前后主文件与WAL哈希不变；不据此推断共享内存侧文件完全不变、崩溃恢复、WAL轮转或真实QQ共存已通过。
+
+当前QQ 7.0.1的实际数据库只读取前1024字节，确认文件头标记与候选匹配，未打开消息页或获取密钥。这是开发执行上下文的文件访问结果，不是独立产品宿主权限验收；真实QQ字段、分页和原件仍待实际密钥与兼容条件具备后核验。新加坡Haiku4.5完成这份小型验证的限定复核，认可实验边界；未据此启用生产采集。SQLCipher社区源码为BSD-3-Clause，SQLite与系统加密库分别适用其许可；本项目未分发上述实验二进制。跨设备不能默认复用同一密钥，必须核对密钥与目标数据库对应，[上游讨论](https://github.com/orgs/QQBackup/discussions/87)仅作为取钥路线的线索，不替代实际解密验收。
+
 ## QQ官方机器人候选：普通群消息
 
 2026-09-14核验[腾讯官方Node SDK 1.0.4](https://github.com/tencent-connect/qqbot-nodejs/tree/ca55d9c395b582b7fcfad0ec27209c35dd04e0b3)：[事件解析代码](https://github.com/tencent-connect/qqbot-nodejs/blob/ca55d9c395b582b7fcfad0ec27209c35dd04e0b3/src/protocol/gateway/event-dispatcher.ts)同时处理`GROUP_MESSAGE_CREATE`和`GROUP_AT_MESSAGE_CREATE`。在隔离目录执行该版本的实际解析代码，虚构的未@群消息可保留文字、发言人、原消息ID、时间和附件信息；不同群及引用消息保持各自标识。解析器本身不做持久去重。这是协议代码验证，没有连接机器人、读取家庭群或验证附件下载。
