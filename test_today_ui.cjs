@@ -49,6 +49,7 @@ function fixtures(base){
    p.on('pageerror',e=>errors.push(e.message));p.on('request',r=>resources.push(new URL(r.url()).pathname));
    try{
     const state=fixtures(await read()),homework=p.locator('#task-group-homework'),todos=p.locator('#task-group-todo');
+    state.agent.items.find(i=>i.id==='synthetic-school').title='待核对：⚠️重要通知⚠️\n\n请准备虚构活动材料。';
     state.agent.items.push({id:'synthetic-reference',kind:'school',child_id:state.children[0].id,state:'pending',title:'虚构成绩表说明',body:'第一列表示课堂默写记录。',evidence:[],plan:{school_task:{state:'reference',reason:'这段内容解释列标题，没有新作业。'}}});
     const card=id=>p.locator('[data-query-target="task:'+id+'"]');
     await p.route('**/api/state',r=>r.fulfill({contentType:'application/json',body:JSON.stringify(state)}));
@@ -62,6 +63,8 @@ function fixtures(base){
     assert.match(await homework.locator('h2').innerText(),/今日作业 · 8.*待核对 1/);assert.equal(await p.locator('[data-agent-item] [data-check]').count(),0,'unconfirmed notifications cannot be completed');
     assert.deepEqual(await p.locator('[data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem)),['synthetic-school']);
     assert.match(await p.locator('[data-agent-item="synthetic-school"]').innerText(),/需要核对是否参加这次活动。/);
+    assert.equal(await p.locator('[data-agent-item="synthetic-school"] h3').innerText(),'请准备虚构活动材料。');
+    assert.match(await p.locator('[data-agent-item="synthetic-school"] details').textContent(),/⚠️重要通知⚠️/,'original heading is retained');
     const shared=p.locator('[data-query-target="calendar:shared:'+state.today+'"]');assert.equal(await shared.count(),1);assert.match(await shared.innerText(),new RegExp(state.children[0].name+'、'+state.children[1].name));
     assert.equal(await p.locator('.calendar-cancelled').count(),0);assert.equal(await p.locator('.calendar-event [data-check]').count(),0,'calendar-only events do not invent task completion');
     await p.locator('.calendar-timetable summary').click();assert.match(await p.locator('.calendar-timetable').innerText(),/虚构数学[\s\S]*虚构语文/);
@@ -80,7 +83,7 @@ function fixtures(base){
     assert.equal(await p.locator('#childFilter').count(),0);assert.equal(await p.locator('[data-child-filter=""]').getAttribute('aria-pressed'),'true');assert.equal(await p.locator('[data-child-filter=""]').evaluate(x=>x===document.activeElement),true,'child choice preserves keyboard focus');assert.equal(await p.locator('.child-filters button').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false);
     await proof(p,'today-'+width);
     await p.locator('[data-task-all="homework"]').click();assert.equal(await p.locator('[data-task-box="全部"]').getAttribute('aria-pressed'),'true');for(const id of ['DONE','PAST','FUTURE','PLANNED','NA','DECLINED'])assert.equal(await card(id).count(),1,'all dates and decisions remain reachable: '+id);assert.equal(await homework.evaluate(x=>document.activeElement===x),true);
-    await p.locator('[data-child-filter="'+state.children[1].id+'"]').click();assert.equal(await card('SIBLING').count(),1);assert.equal(await card('DONE').count(),0);await p.locator('nav [data-page="home"]').click();await p.locator('[data-task-all="todo"]').click();assert.equal(await todos.evaluate(x=>document.activeElement===x),true);assert.equal(await card('PLANNED').count(),1);await fit(p);await proof(p,'all-items-'+width);
+    await p.locator('[data-child-filter="'+state.children[1].id+'"]').click();assert.equal(await card('SIBLING').count(),1);assert.equal(await card('DONE').count(),0);await p.locator('nav [data-page="home"]').click();await p.locator('[data-task-all="todo"]').click();assert.equal(await todos.evaluate(x=>document.activeElement===x),true);assert.equal(await card('PLANNED').count(),1);assert.equal(await p.locator('[data-agent-item="synthetic-school"] h3').innerText(),'请准备虚构活动材料。');await fit(p);await proof(p,'all-items-'+width);
     await p.locator('nav [data-page="tasks"]').click();await p.locator('[data-task-box="已搁置"]').click();for(const id of ['NA','DECLINED','ARCHIVE']){assert.equal(await card(id).locator('[data-check]').count(),0,'closed non-completion has no completion checkbox');assert.equal(await card(id).locator('[data-task-restore]').isVisible(),true)}await p.locator('[data-task-box="已完成"]').click();assert.equal(await card('DONE').count(),1);assert.equal(await card('DECLINED').count(),0);assert.equal(await card('NA').count(),0);await proof(p,'completed-'+width);
     await p.locator('[data-task-box="已逾期"]').click();assert.equal(await card('PAST').count(),1);assert.equal(await card('INVALID').count(),0);assert.equal(await card('DONE').count(),0);await proof(p,'overdue-'+width);await fit(p);
     await p.locator('[data-task-box="Wish"]').click();assert.equal(await card('WISH').count(),1);await p.locator('[data-child-filter="'+state.children[1].id+'"]').click();assert.equal(await card('WISH').count(),0);assert.equal(await p.locator('[data-task-box="Wish"]').getAttribute('aria-pressed'),'true');await p.locator('[data-child-filter=""]').click();await fit(p);await proof(p,'wish-'+width);
