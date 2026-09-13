@@ -33,7 +33,7 @@ function fixtures(base){
  const event=(id,extra={})=>({id,title:'虚构安排 '+id,day:today,child_ids:[first.id],status:'confirmed',category:'school',start_time:'08:00',task_id:'',...extra});
  const events=[event('shared',{child_ids:[first.id,second.id],category:'family'}),event('unlinked'),event('cancelled',{status:'cancelled'})];
  const reading=(id,state,planned_on=today)=>({id,child_id:first.id,child:first.name,book:'虚构阅读 '+id,state,planned_on,attachments:[]});
- const inbox=tasks.map(t=>({id:t.id,task_id:t.id,kind:'task',child_ids:[t.child===first.name?first.id:second.id],closed:['已完成','不适用','不参加','已归档'].includes(t.update?.status||t.original_status),agenda:t.agenda}));
+ const inbox=tasks.map(t=>({id:t.id,task_id:t.id,kind:'task',status:t.update?.status||t.original_status,child_ids:[t.child===first.name?first.id:second.id],closed:['已完成','不适用','不参加','已归档'].includes(t.update?.status||t.original_status),agenda:t.agenda}));
  inbox.push({id:'synthetic-school',kind:'school',child_ids:[first.id],closed:false,agenda:{category:'homework',published_on:today,due_on:'',scheduled_on:'',box:'inbox'}});
  return {...base,today,tasks,agent:{...base.agent,items:['school','care','review'].map(kind=>({id:'synthetic-'+kind,kind,child_id:first.id,state:'pending',title:'虚构提醒 '+kind,body:'虚构待核对内容',evidence:[]}))},today_calendar:{inbox,agenda:[],events,timetables:[{id:'synthetic-table',child_id:first.id,day:today,title:'虚构课表',source:'虚构课表原件',sessions:[{slot:'第一节',title:'虚构数学'},{slot:'第二节',title:'虚构语文'}]}],source_error:''},
   reading:{...base.reading,tasks:[reading('draft','草案'),reading('paused','暂停'),reading('finished','已完成'),reading('today-reading','进行中'),reading('more','需补充'),reading('past-reading','进行中','2026-09-07'),reading('parent-review','待确认',''),reading('future-reading','进行中','2026-09-09'),reading('undated-reading','进行中','')]}};
@@ -72,26 +72,38 @@ function fixtures(base){
     assert.ok(position&&position.y>=0&&position.y+position.height<(width===360?560:820),'first task is on first screen');
     assert.equal(await firstTask.locator('.task-requirement').isVisible(),true);assert.equal(await firstTask.locator('details .task-requirement').count(),0,'goal is not hidden');
     assert.equal(await firstTask.locator('[data-study-task-add]').innerText(),'作业计时');assert.equal(await firstTask.locator('[data-task-decisions]').isVisible(),true);
-    assert.equal(await firstTask.locator('.checkhit,button:visible').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'44px actions');
-    await p.locator('#childFilter').selectOption(state.children[1].name);assert.equal(await card('SIBLING').isVisible(),true);assert.equal(await card('TODAY').count(),0);assert.equal(await p.locator('[data-agent-item]').count(),0);assert.equal(await shared.count(),1);
-    await p.locator('#childFilter').selectOption('');
+    assert.equal(await firstTask.locator('.checkhit,button:visible,summary:visible').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'44px actions');
+    await p.locator('[data-child-filter="'+state.children[1].id+'"]').click();assert.equal(await card('SIBLING').isVisible(),true);assert.equal(await card('TODAY').count(),0);assert.equal(await p.locator('[data-agent-item]').count(),0);assert.equal(await shared.count(),1);
+    await p.locator('[data-child-filter=""]').click();
+    assert.equal(await p.locator('#childFilter').count(),0);assert.equal(await p.locator('[data-child-filter=""]').getAttribute('aria-pressed'),'true');assert.equal(await p.locator('[data-child-filter=""]').evaluate(x=>x===document.activeElement),true,'child choice preserves keyboard focus');assert.equal(await p.locator('.child-filters button').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false);
     await proof(p,'today-'+width);
+    await p.locator('nav [data-page="tasks"]').click();await p.locator('[data-task-box="已搁置"]').click();for(const id of ['NA','DECLINED','ARCHIVE']){assert.equal(await card(id).locator('[data-check]').count(),0,'closed non-completion has no completion checkbox');assert.equal(await card(id).locator('[data-task-restore]').isVisible(),true)}await p.locator('[data-task-box="已完成"]').click();assert.equal(await card('DONE').count(),1);assert.equal(await card('DECLINED').count(),0);assert.equal(await card('NA').count(),0);await proof(p,'completed-'+width);
+    await p.locator('[data-task-box="已逾期"]').click();assert.equal(await card('PAST').count(),1);assert.equal(await card('INVALID').count(),0);assert.equal(await card('DONE').count(),0);await proof(p,'overdue-'+width);await fit(p);
+    await p.locator('[data-task-box="Wish"]').click();assert.equal(await card('WISH').count(),1);await p.locator('[data-child-filter="'+state.children[1].id+'"]').click();assert.equal(await card('WISH').count(),0);assert.equal(await p.locator('[data-task-box="Wish"]').getAttribute('aria-pressed'),'true');await p.locator('[data-child-filter=""]').click();await fit(p);await proof(p,'wish-'+width);
+
     for(const [page,title] of [['learning','学习任务与进展'],['growth','成长记录'],['reading','把一本书，变成一段旅程。'],['care','陪伴建议与反馈'],['agent','成长助手'],['print','家庭打印站'],['sources','来源与附件']]){
      await p.locator('nav [data-page="more"]').click();await p.locator('#content [data-page="'+page+'"]').click();
-     assert.equal(await p.locator('#content h1').innerText(),title,'more opens '+page);assert.equal(await p.locator('nav [data-page="more"]').getAttribute('class'),'active');await fit(p);
+     assert.equal(await p.locator('#content h1').innerText(),title,'more opens '+page);assert.equal(await p.locator('nav [data-page="more"]').getAttribute('class'),'active');if(['learning','growth','reading'].includes(page)){assert.equal(await p.locator('.child-filters button').count(),state.children.length+1);await p.locator('[data-child-filter="'+state.children[1].id+'"]').click();assert.equal(await p.locator('[data-child-filter="'+state.children[1].id+'"]').getAttribute('aria-pressed'),'true');await p.locator('[data-child-filter=""]').click()}await fit(p);
     }
     assert.deepEqual(errors,[]);
     checks.push({width,kind:'classification',homeworkAndTodo:true,deadlinesCarryForward:true,wishesAndFuturePlansExcluded:true,pendingSeparate:true,childIsolation:true,sharedCalendar:true,fourNavigationItems:true,moreEntriesReachable:true,noThree:true,taskTop:position.y,noOverflow:true});
    }finally{await p.close()}
 
    // These writes go to the disposable demo's real API. No response fixture is active.
-   const current=await read(),who=current.children[0],other=current.children[1],title='虚构首页勾选 '+width;
+   const current=await read(),who=current.children[0],other=current.children[1],title='虚构数学作业 '+width;
    const response=await fetch(server.url+'api/task/new',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':current.token},body:JSON.stringify({child:who.name,title,due:current.today,source:'虚构测试通知',action:'虚构要求'})});
    assert.equal(response.ok,true);const task=(await read()).tasks.find(t=>t.title===title);assert.ok(task);
    const formPage=await browser.newPage({viewport:{width,height:820}}),formErrors=[],posts=[];
    formPage.on('pageerror',e=>formErrors.push(e.message));formPage.on('request',r=>{if(r.method()==='POST')posts.push(new URL(r.url()).pathname)});
    try{
     await formPage.goto(server.url,{waitUntil:'load'});await ready(formPage);await fit(formPage);
+    // Preserve the school task -> timer -> result -> original task journey.
+    await formPage.locator('[data-study-task-add="'+task.id+'"]').click();await eventually(()=>formPage.locator('[data-study-ready]').isVisible(),'task opens timer');assert.equal(await formPage.locator('nav [data-page="more"]').getAttribute('class'),'active');
+    const add=formPage.locator('[data-study-form="new"]');await eventually(async()=>await add.locator('[name="task_id"]').inputValue()===task.id,'source selected');assert.equal(await add.locator('[name="title"]').inputValue(),title);await add.locator('[name="planned_minutes"]').fill('10');await add.locator('[type="submit"]').click();
+    const studyRead=async()=>await(await fetch(server.url+'api/study?child_id='+who.id+'&day='+current.today)).json();await eventually(async()=>(await studyRead()).items.some(x=>x.task_id===task.id),'study item saved');const studyID=(await studyRead()).items.find(x=>x.task_id===task.id).id,study=formPage.locator('[data-study-item="'+studyID+'"]');
+    await study.locator('[data-study-action="start"]').click();await eventually(async()=>(await studyRead()).items.find(x=>x.id===studyID).status==='running','timer started');await study.locator('[data-study-action="pause"]').click();await eventually(async()=>(await studyRead()).items.find(x=>x.id===studyID).status==='paused','timer paused');
+    await study.locator('[data-study-editor="finish"]').click();const finish=formPage.locator('[data-study-form="finish"]');await finish.locator('[value="需要帮助"]').check();await finish.locator('[name="actual_minutes"]').fill('8');await finish.locator('summary').click();await finish.locator('[name="note"]').fill('虚构反馈：最后一题需要提示');await finish.locator('[type="submit"]').click();await eventually(async()=>(await studyRead()).items.find(x=>x.id===studyID).result==='需要帮助','partial result saved');
+    assert.notEqual((await read()).tasks.find(t=>t.id===task.id).update?.status,'已完成','needs help never completes source task');await study.locator('[data-study-task]').click();await eventually(()=>formPage.locator('[data-query-target="task:'+task.id+'"]').isVisible(),'source task reachable from timer');await formPage.locator('nav [data-page="home"]').click();await ready(formPage);
     // A rejected save must keep the task visible and restore its unchecked state.
     await formPage.route('**/api/task',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'虚构保存失败，请重试'})}));
     await formPage.locator('[data-today-task="'+task.id+'"] [data-check]').click();
@@ -115,7 +127,8 @@ function fixtures(base){
     assert.equal(stateReads,0,'confirmed task renders without reloading all family data');
     await formPage.unroute('**/api/task');await formPage.unroute('**/api/state');
     await formPage.reload({waitUntil:'load'});await ready(formPage);assert.equal(await formPage.locator('[data-today-task="'+task.id+'"]').count(),0);
-    await formPage.locator('#childFilter').selectOption(other.name);await formPage.locator('nav [data-page="more"]').click();await formPage.locator('[data-capture]').click();await eventually(()=>formPage.locator('#recordDialog').isVisible(),'record feedback for selected child');
+    await formPage.locator('nav [data-page="tasks"]').click();await formPage.locator('[data-task-box="已完成"]').click();assert.equal(await formPage.locator('[data-query-target="task:'+task.id+'"] [data-check]').isChecked(),true,'saved completion remains in completed box after reload');
+    await formPage.locator('[data-child-filter="'+other.id+'"]').click();await formPage.locator('nav [data-page="more"]').click();await formPage.locator('[data-capture]').click();await eventually(()=>formPage.locator('#recordDialog').isVisible(),'record feedback for selected child');
     const form=formPage.locator('#recordForm');assert.equal(await form.locator('[name="child"]').inputValue(),other.name);assert.equal(await form.locator('[name="category"]').inputValue(),'学习进展');
     const recordTitle='虚构首页学习记录 '+width,recordNote='虚构观察：能说出思路，最后一步仍需要提示。';
     await form.locator('[name="title"]').fill(recordTitle);await form.locator('[name="note"]').fill(recordNote);await fit(formPage);await proof(formPage,'today-capture-'+width);
@@ -123,7 +136,7 @@ function fixtures(base){
     await formPage.reload({waitUntil:'load'});await ready(formPage);
     const saved=(await read()).records.filter(r=>r.title===recordTitle);assert.equal(saved.length,1);assert.equal(saved[0].child,other.name);assert.equal(saved[0].category,'学习进展');assert.equal(saved[0].note,recordNote);
     assert.equal(posts.filter(x=>x==='/api/task').length,1);assert.equal(posts.filter(x=>x==='/api/record').length,1);assert.deepEqual(formErrors,[]);
-    checks.push({width,kind:'persistent-interactions',checkboxPersists:true,immediatePendingState:true,failedSaveRestored:true,postSaveFullStateRequests:stateReads,selectedChildCorrect:true,manualRecordSavedOnce:true,noOverflow:true,pageErrors:0});
+    checks.push({width,kind:'persistent-interactions',checkboxPersists:true,immediatePendingState:true,failedSaveRestored:true,postSaveFullStateRequests:stateReads,selectedChildCorrect:true,manualRecordSavedOnce:true,timerAndResultSourceJourney:true,noOverflow:true,pageErrors:0});
    }finally{await formPage.close()}
 
    // Explicit dismissal uses the same disposable API and never fabricates completion.
@@ -139,7 +152,7 @@ function fixtures(base){
    },choose=async(status,note='')=>{
     await d.locator('#taskDecisionForm [name="status"][value="'+status+'"]').check();await d.locator('#taskDecisionForm [name="note"]').fill(note);
    },save=()=>d.locator('#taskDecisionForm [type="submit"]').click(),goTasks=async()=>{
-    await d.locator('nav [data-page="tasks"]').click();await eventually(()=>d.locator('[data-task-box="已结束"]').isVisible(),'inbox history ready');
+    await d.locator('nav [data-page="tasks"]').click();await eventually(()=>d.locator('[data-task-box="已搁置"]').isVisible(),'inbox history ready');
    },readTask=async id=>(await read()).tasks.find(t=>t.id===id);
    try{
     await d.goto(server.url,{waitUntil:'load'});await ready(d);await open(decline.id);
@@ -150,7 +163,7 @@ function fixtures(base){
     assert.equal(await card(sibling.id).count(),1,'other child remains visible');
     await d.reload({waitUntil:'load'});await ready(d);assert.equal(await card(decline.id).count(),0,'dismiss persists after refresh');
     await goTasks();assert.equal(await card(decline.id).count(),0,'dismissal is no longer active');assert.equal((await readTask(decline.id)).update.status,'不参加','dismissal is not completion');
-    await d.locator('[data-task-box="已结束"]').click();assert.equal(await card(decline.id).count(),1);assert.equal(await card(decline.id).locator('[data-check]').count(),0,'dismissed card cannot be accidentally checked complete');
+    await d.locator('[data-task-box="已完成"]').click();assert.equal(await card(decline.id).count(),0,'declined is never completed');await d.locator('[data-task-box="已搁置"]').click();assert.equal(await card(decline.id).count(),1);assert.equal(await card(decline.id).locator('[data-check]').count(),0,'dismissed card cannot be accidentally checked complete');
     assert.match(await card(decline.id).innerText(),/不参加/);await fit(d);await proof(d,'dismissed-'+width);
     await card(decline.id).locator('[data-task-restore]').click();await eventually(async()=>!(await card(decline.id).count())&&(await readTask(decline.id)).update?.status==='待跟进','restore returns to active');
     await d.locator('[data-task-box="Inbox"]').click();assert.equal(await card(decline.id).count(),1);assert.equal(await card(decline.id).locator('[data-check]').count(),1);
@@ -163,7 +176,7 @@ function fixtures(base){
     const committed=await readTask(ignore.id);await d.unroute('**/api/task');await save();
     await eventually(async()=>!(await d.locator('#taskDecisionDialog').isVisible()),'same dismissal retry reconciled');
     assert.deepEqual((await readTask(ignore.id)).history,committed.history,'lost response retry adds no duplicate history');
-    await d.locator('[data-task-box="已结束"]').click();assert.match(await card(ignore.id).innerText(),/无需处理/);assert.equal(await card(ignore.id).locator('[data-check]').count(),0);
+    await d.locator('[data-task-box="已搁置"]').click();assert.match(await card(ignore.id).innerText(),/无需处理/);assert.equal(await card(ignore.id).locator('[data-check]').count(),0);
 
     // A second parent changing the task wins over this stale form; keep its draft for review.
     await d.locator('[data-task-box="Inbox"]').click();await open(decline.id);await choose('不参加','虚构保留的选择');

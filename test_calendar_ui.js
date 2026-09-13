@@ -11,6 +11,7 @@ function harness(){
  h.reply=async()=>({ok:true,status:200,json:async()=>({events:[],timetables:[],source_error:''})});
  const ctx=vm.createContext({data:{today:'2026-09-08',token:'synthetic-first-token',children:[{id:'child-a',name:'小溪'},{id:'child-b',name:'小岚'}],tasks:[]},page:'calendar',child:'',window:{addEventListener(){}},document:{addEventListener(k,f){const prior=handlers[k];handlers[k]=e=>{prior?.(e);f(e)}},querySelectorAll(){return[]}},$:get,esc:escape,endpoint:p=>'/family/'+p.replace(/^\//,''),status:t=>t.update.status,taskDismissed:t=>['不参加','不适用'].includes(t.update.status),taskStatusLabel:v=>v==='不适用'?'无需处理':v,render:()=>h.renders++,toast:s=>h.notices.push(s),crypto:{randomUUID},AbortController,setTimeout,clearTimeout,apiFetch:async(p,o)=>{h.calls.push({path:p,...o});return h.reply(p,o)},load:async()=>{},FormData:class{constructor(){return Object.entries(Object.fromEntries(names.map(n=>[n,get('#calendarForm').elements[n].value])))} }});
  Object.assign(ctx,{URL,location:{href:'https://family.example/family/?child=child-a#week'},navigator:{clipboard:{async writeText(value){h.copied=value}}}});
+ const app=readFileSync(__dirname+'/app.js','utf8');vm.runInContext(app.slice(app.indexOf('function exactTaskDay('),app.indexOf('function todayChildHTML(')),ctx);
  vm.runInContext(source,ctx);ctx.calendarHTML();Object.assign(h,{ctx,get,state:()=>vm.runInContext('calendarState',ctx),pending:()=>vm.runInContext('calendarPending',ctx),click:handlers.click});return h;
 }
 const event=(extra={})=>({id:'a'.repeat(32),version:1,child_ids:['child-a','child-b'],title:'虚构共同阅读',category:'family',day:'2026-09-12',series_day:'2026-09-05',start_time:'',end_time:'',location:'',note:'',status:'tentative',repeat:'weekly',until:'',editable:true,source:'',task_id:'',...extra});
@@ -67,6 +68,15 @@ test('clipboard failure selects the address, but an old failure cannot take focu
  let reject;h.ctx.navigator.clipboard={writeText:()=>new Promise((_,r)=>reject=r)};const pending=h.ctx.calendarSyncCopy();assert.equal(h.get('#calendarSyncCopy').disabled,true);
  h.get('#calendarSyncDialog').close();h.ctx.calendarSyncOpen();h.focus='new-dialog-focus';const message=h.get('#calendarSyncStatus').textContent;reject(Error('synthetic denied'));await pending;
  assert.equal(h.focus,'new-dialog-focus');assert.equal(h.get('#calendarSyncStatus').textContent,message);assert.equal(h.get('#calendarSyncCopy').disabled,false);
+});
+
+test('inbox separates completion, dismissal and known-date overdue without changing records',()=>{
+ const h=harness(),row=(id,extra={})=>({id,kind:'task',status:'待跟进',closed:false,child_ids:['child-a'],agenda:{category:'todo',box:'inbox',due_on:'',scheduled_on:''},...extra});
+ const dated=(id,due,scheduled='')=>row(id,{agenda:{category:'todo',box:'inbox',due_on:due,scheduled_on:scheduled}});
+ const rows=[row('open'),dated('late','2026-09-07'),dated('today','2026-09-08'),dated('future','2026-09-09'),dated('planned-late','','2026-09-07'),dated('deadline-priority','2026-09-10','2026-09-07'),dated('invalid','2026-02-30'),dated('unknown','稍后核对'),row('done',{closed:true,status:'已完成'}),row('declined',{closed:true,status:'不参加'}),row('ignored',{closed:true,status:'不适用'}),row('archived',{closed:true,status:'已归档'}),row('wish',{agenda:{box:'wish',due_on:'2026-09-01',scheduled_on:'2026-09-02'}}),row('study-parent',{kind:'study',closed:true,result:'完成',result_actor:'parent'}),row('study-child',{kind:'study',result:'完成',result_actor:'child'}),row('event-done',{kind:'event',closed:true,event:{status:'completed'}}),row('event-cancelled',{kind:'event',closed:true,event:{status:'cancelled'}}),{...dated('weekly','','2026-09-01'),kind:'event',event:{repeat:'weekly',status:'confirmed'}},row('sibling',{closed:true,status:'已完成',child_ids:['child-b']})];
+ h.ctx.data.today_calendar={inbox:rows};const before=JSON.stringify(rows),boxes=clean(h.ctx.taskBoxes()),ids=name=>boxes[name].map(x=>x.id);
+ assert.deepEqual(ids('已完成'),['done','study-parent','event-done','sibling']);assert.deepEqual(ids('已搁置'),['declined','ignored','archived','event-cancelled']);assert.deepEqual(ids('已逾期'),['late','planned-late']);assert.deepEqual(ids('计划'),['planned-late','deadline-priority','weekly']);assert.deepEqual(ids('Wish'),['wish']);assert.ok(ids('Inbox').includes('planned-late'));assert.ok(ids('Inbox').includes('study-child'));assert.equal(ids('全部').length,rows.length);assert.equal(JSON.stringify(rows),before,'filters do not alter completion or plans');
+ h.ctx.child='小溪';assert.equal(h.ctx.taskBoxes()['已完成'].some(x=>x.id==='sibling'),false,'all filters respect child ownership');
 });
 
 // Optional real-browser check: node test_calendar_ui.js --browser
