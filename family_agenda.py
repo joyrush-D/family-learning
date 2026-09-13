@@ -123,9 +123,12 @@ def snapshot(app,start,end):
                         closed=row['result']=='完成' and entry['result_actor']=='parent',closed_on=row['day']))
         plans=[]
         if 'calendar_events' in tables:
-            for row in c.execute('SELECT * FROM calendar_events ORDER BY day,id'):
-                event=family_calendar.Store._manual(row)
+            saved=family_calendar.Store.saved_rows(c,ids)
+            parents={e['id']:e for e in saved if not e['occurrence']}
+            for event in saved:
                 if any(child not in ids for child in event['child_ids']):continue
+                if event['occurrence']:
+                    event['occurrence']=dict(event['occurrence'],version=event['version'],series_version=parents[event['occurrence']['series_id']]['version'])
                 plans.append(dict(id='calendar:'+event['id'],task_id='',kind='event',child_ids=event['child_ids'],title=event['title'],
                     agenda=dict(category='todo',published_on='',due_on='',scheduled_on=event['day']),closed=event['status'] in ('cancelled','completed'),event=event))
     first=dt.date.fromisoformat(start);count=(dt.date.fromisoformat(end)-first).days+1

@@ -4,18 +4,19 @@ const calendarStatuses={tentative:'暂定',confirmed:'已确定',cancelled:'已�
 const calendarState={week:'',day:'',childID:'',visible:false,result:null,range:'',error:'',loading:false,dirty:false,sequence:0,controller:null};
 let calendarPending=null,calendarSaving=false,calendarJump=0,calendarDraftContext=null;
 let calendarSyncVersion=0,calendarWeekdaysChosen=false;
+let occurrenceContext=null,occurrencePending=null,occurrenceSaving=false,occurrenceConflict=false;
 function calendarAdd(day,n){const d=new Date(day+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10)}
 function calendarMonday(day){const n=new Date(day+'T12:00:00Z').getUTCDay();return calendarAdd(day,-((n+6)%7))}
 function calendarDays(){return Array.from({length:7},(_,i)=>calendarAdd(calendarState.week,i))}
 function calendarNames(ids){return (ids||[]).map(id=>data.children.find(c=>c.id===id)?.name||'档案待核对').join('、')}
 function calendarItems(items,day){return items.filter(x=>x.day===day&&(!calendarState.childID||(x.child_ids||[x.child_id]).includes(calendarState.childID)))}
 function calendarInvalidate(keep=false){calendarState.sequence++;calendarState.controller?.abort();calendarState.loading=false;calendarState.dirty=true;if(!keep){calendarState.result=null;calendarState.range=''}calendarState.error=''}
-window.FamilyCalendar={invalidate:calendarInvalidate,hasPending:()=>!!calendarPending,openDraft:calendarOpenAssistant,openCitation:calendarOpenCitation,leave(){if(calendarState.visible){calendarJump++;calendarState.visible=false;calendarState.sequence++;calendarState.controller?.abort();calendarState.loading=false}}};
+window.FamilyCalendar={invalidate:calendarInvalidate,hasPending:()=>!!(calendarPending||occurrencePending),openDraft:calendarOpenAssistant,openCitation:calendarOpenCitation,leave(){if(calendarState.visible){calendarJump++;calendarState.visible=false;calendarState.sequence++;calendarState.controller?.abort();calendarState.loading=false}}};
 function calendarHomeHTML(){return `<section class="calendar-entry"><span aria-hidden="true">▦</span><div><h2>把一周留给成长</h2><p>上学、探索、一起度过的时间，放在同一张日历里。</p></div><div class="calendar-entry-actions"><button class="primary" data-page="calendar">打开成长日历</button><button data-calendar-weekend-home>看看本周末</button></div></section>`}
 function calendarRepeatLabel(e){const mode={none:'',daily:'每天',weekly:'每周',weekends:'周末',monthly:'每月'}[e.repeat]||'';return mode+(e.repeat_days?.length?' '+e.repeat_days.map(d=>e.repeat==='weekly'?'周'+'一二三四五六日'[d-1]:d+'日').join('、'):'')}
 function calendarEventHTML(e){
  const t=e.task_id?data.tasks.find(t=>t.id===e.task_id&&e.child_ids.includes(data.children.find(c=>c.name===t.child)?.id)):null;
- return `<article tabindex="-1" data-query-target="calendar:${esc(e.id)}:${esc(e.day)}" class="calendar-event ${e.status==='cancelled'?'calendar-cancelled':''}"><div class="calendar-event-meta"><span>${esc(calendarKinds[e.category]||'安排')}</span><span class="calendar-status calendar-${esc(e.status)}">${esc(calendarStatuses[e.status]||'状态待核对')}</span></div><h3>${esc(e.title)}</h3><p class="calendar-time">${esc(e.day)} · ${e.start_time?esc(e.start_time)+(e.end_time?'–'+esc(e.end_time):''):'时间未填写'}</p><p class="calendar-who">${esc(calendarNames(e.child_ids))}${calendarRepeatLabel(e)?' · '+esc(calendarRepeatLabel(e)):''}</p>${e.location?`<p class="calendar-location">⌖ ${esc(e.location)}</p>`:''}${e.note?`<p class="source calendar-requirements">${esc(e.note)}</p>`:''}${e.source||e.repeat!=='none'?`<details><summary>出处与重复规则</summary>${e.source?`<p class="source">出处：${esc(e.source)}</p>`:''}${e.repeat!=='none'?`<p>起点 ${esc(e.series_day)}${e.until?' · 截至 '+esc(e.until):' · 未设截止'}</p>`:''}</details>`:''}${t?`<p class="calendar-task-status ${taskDismissed(t)?'calendar-family-decision':''}">${taskDismissed(t)?esc(t.child)+'：':'清单：'}${esc(taskStatusLabel(status(t)))}</p>`:''}${e.task_id?`<button class="calendar-card-action" data-calendar-task="${esc(e.task_id)}">核对原事项 →</button>`:''}${e.editable&&e.repeat==='none'&&!['cancelled','completed'].includes(e.status)?`<button data-calendar-complete="${esc(e.id)}">确认完成</button>`:''}${e.editable?`<button class="calendar-card-action" data-calendar-edit="${esc(e.id)}">${e.repeat!=='none'?'编辑整条重复安排':'编辑安排'}</button>`:''}</article>`;
+ return `<article tabindex="-1" data-query-target="calendar:${esc(e.id)}:${esc(e.day)}" class="calendar-event ${e.status==='cancelled'?'calendar-cancelled':''}"><div class="calendar-event-meta"><span>${esc(calendarKinds[e.category]||'安排')}</span><span class="calendar-status calendar-${esc(e.status)}">${esc(calendarStatuses[e.status]||'状态待核对')}</span></div><h3>${esc(e.title)}</h3><p class="calendar-time">${esc(e.day)} · ${e.start_time?esc(e.start_time)+(e.end_time?'–'+esc(e.end_time):''):'时间未填写'}</p><p class="calendar-who">${esc(calendarNames(e.child_ids))}${calendarRepeatLabel(e)?' · '+esc(calendarRepeatLabel(e)):''}</p>${e.location?`<p class="calendar-location">⌖ ${esc(e.location)}</p>`:''}${e.note?`<p class="source calendar-requirements">${esc(e.note)}</p>`:''}${e.source||e.repeat!=='none'?`<details><summary>出处与重复规则</summary>${e.source?`<p class="source">出处：${esc(e.source)}</p>`:''}${e.repeat!=='none'?`<p>起点 ${esc(e.series_day)}${e.until?' · 截至 '+esc(e.until):' · 未设截止'}</p>`:''}</details>`:''}${t?`<p class="calendar-task-status ${taskDismissed(t)?'calendar-family-decision':''}">${taskDismissed(t)?esc(t.child)+'：':'清单：'}${esc(taskStatusLabel(status(t)))}</p>`:''}${e.task_id?`<button class="calendar-card-action" data-calendar-task="${esc(e.task_id)}">核对原事项 →</button>`:''}${e.editable&&!e.occurrence?.series_id&&e.repeat==='none'&&!['cancelled','completed'].includes(e.status)?`<button data-calendar-complete="${esc(e.id)}">确认完成</button>`:''}${e.occurrence?.series_id?`<p class="small muted">${e.occurrence.day!==e.day?'从 '+esc(e.occurrence.day)+' 改期 · ':''}本次记录独立保留</p><button data-calendar-once="${esc(e.id)}" data-occurrence-day="${esc(e.day)}">处理本次</button>`:''}${e.editable&&(!e.occurrence?.series_id||e.repeat!=='none')?`<button class="calendar-card-action" data-calendar-edit="${esc(e.id)}">${e.repeat!=='none'?'编辑重复规则':'编辑安排'}</button>`:''}</article>`;
 }
 function calendarTimetableHTML(t){return `<details tabindex="-1" data-query-target="timetable:${esc(t.id)}:${esc(t.day)}" class="calendar-timetable"><summary><span>课表 · ${esc(calendarNames([t.child_id]))}</span><small>${t.sessions.length} 个节次</small></summary><p class="small">${esc(t.title)}</p><ol>${t.sessions.map(s=>`<li><span>${esc(s.slot)}</span><strong>${esc(s.title)}</strong></li>`).join('')}</ol>${t.note?`<p class="source small">${esc(t.note)}</p>`:''}${t.source?`<p class="source small">出处：${esc(t.source)}</p>`:''}${(t.uploads||[]).map(id=>`<a href="${endpoint('/upload/')}${encodeURIComponent(id)}" target="_blank" rel="noopener">查看课表原件</a>`).join(' ')}${t.import_id?`<button data-timetable-edit="${esc(t.import_id)}">更正课表</button>`:''}${t.attachment?`<a href="${endpoint('/attachment/')}${encodeURIComponent(t.attachment)}" target="_blank" rel="noopener">查看课表原件 ↗</a>`:''}<p class="small muted">按已提供节次展示，未填写的钟点和单双周仍待核对。</p></details>`}
 function agendaDateHTML(m,day=data.today){return `<p class="agenda-dates"><span>发布：${esc(m.published_on||'待核对')}</span><span>${m.due_on?`${m.due_on<day?'逾期 · ':''}截止：${esc(m.due_on)}`:'截止待核对'}</span>${m.scheduled_on?`<span>计划：${esc(m.scheduled_on)}</span>`:''}</p>`}
@@ -59,7 +60,7 @@ function calendarHTML(){
  if(!calendarState.week){calendarState.week=calendarMonday(data.today);calendarState.day=data.today;calendarState.result=data.today_calendar;calendarState.range=data.today+'/'+data.today}
  if(!calendarState.visible){calendarState.childID=data.children.find(c=>c.name===child)?.id||'';calendarState.visible=true}
  if(calendarState.childID&&!data.children.some(c=>c.id===calendarState.childID))calendarState.childID='';
- return `<section class="calendar-heading"><div><h1>家庭日历</h1></div><div class="toolbar"><button class="primary" data-calendar-new="${calendarState.day}">＋ 新建计划</button><button data-calendar-ask>说一句安排</button><details class="calendar-tools"><summary>课表与设置</summary><div class="toolbar"><button data-timetable-open>导入 / 管理课表</button><button data-calendar-sync>同步到手机</button><button data-new-task="yes">收集事务</button></div></details></div></section><div class="calendar-controls"><button data-calendar-shift="-7" aria-label="上一周">‹</button><label><span class="sr-only">跳到日期</span><input type="date" data-agenda-date value="${calendarState.day}"></label><button data-calendar-shift="7" aria-label="下一周">›</button><button data-calendar-current>今天</button></div><div class="calendar-kids"><button data-calendar-child="" aria-pressed="${!calendarState.childID}">全部孩子</button>${data.children.map(c=>`<button data-calendar-child="${esc(c.id)}" aria-pressed="${c.id===calendarState.childID}">${esc(c.name)}</button>`).join('')}</div>${calendarPending?'<p role="status">上次保存未确认。<button data-calendar-resume>继续核对</button></p>':''}<div id="calendarAgenda">${calendarAgendaHTML()}</div>`;
+ return `<section class="calendar-heading"><div><h1>家庭日历</h1></div><div class="toolbar"><button class="primary" data-calendar-new="${calendarState.day}">＋ 新建计划</button><button data-calendar-ask>说一句安排</button><details class="calendar-tools"><summary>课表与设置</summary><div class="toolbar"><button data-timetable-open>导入 / 管理课表</button><button data-calendar-sync>同步到手机</button><button data-new-task="yes">收集事务</button></div></details></div></section><div class="calendar-controls"><button data-calendar-shift="-7" aria-label="上一周">‹</button><label><span class="sr-only">跳到日期</span><input type="date" data-agenda-date value="${calendarState.day}"></label><button data-calendar-shift="7" aria-label="下一周">›</button><button data-calendar-current>今天</button></div><div class="calendar-kids"><button data-calendar-child="" aria-pressed="${!calendarState.childID}">全部孩子</button>${data.children.map(c=>`<button data-calendar-child="${esc(c.id)}" aria-pressed="${c.id===calendarState.childID}">${esc(c.name)}</button>`).join('')}</div>${calendarPending||occurrencePending?'<p role="status">上次保存未确认。<button data-calendar-resume>继续核对</button></p>':''}<div id="calendarAgenda">${calendarAgendaHTML()}</div>`;
 }
 function taskInboxItems(){return (data.today_calendar?.inbox||[]).filter(x=>!child||x.child_ids.includes(data.children.find(c=>c.name===child)?.id))}
 function taskItemCompleted(x){return x.closed&&(x.kind==='task'?x.status==='已完成':x.kind==='event'?x.event.status==='completed':x.kind==='study'&&x.result==='完成'&&x.result_actor==='parent')}
@@ -120,7 +121,8 @@ $('#calendarSyncDialog').addEventListener('close',()=>calendarSyncVersion++);
 function calendarNavigate(day){calendarJump++;calendarInvalidate();calendarState.week=calendarMonday(day);calendarState.day=day;page='calendar';render()}
 function calendarUUID(){return crypto.randomUUID().replaceAll('-','')}
 function calendarOpen(event=null,preset={}){
- if(calendarSaving)return false;
+ if(calendarSaving||occurrenceSaving)return false;
+ if(occurrencePending){$('#calendarOccurrenceDialog').showModal();return false}
  if(calendarPending){$('#calendarDialog').showModal();return false}
  calendarRememberDraft();calendarDraftContext=null;
  document.getElementById?.('calendarDraftDetails')?.remove();
@@ -128,7 +130,7 @@ function calendarOpen(event=null,preset={}){
  const f=$('#calendarForm');f.reset();for(const k of ['id','version','title','category','start_time','end_time','location','note','status','repeat','until'])f.elements[k].value=e[k]??'';f.elements.day.value=e.series_day||e.day;f.elements.id.value=e.series_id||e.id;f.elements.start_time.value=e.series_start_time??e.start_time;f.elements.end_time.value=e.series_end_time??e.end_time;
  const days=e.repeat_days||[];calendarWeekdaysChosen=e.repeat==='weekly'&&days.length>0;const weekday=new Date((e.series_day||e.day||data.today)+'T12:00:00Z').getUTCDay()||7;for(const input of f.querySelectorAll('[name=repeat_weekday]'))input.checked=(e.repeat==='weekly'&&days.length?days:[weekday]).includes(Number(input.value));f.elements.repeat_monthdays.value=e.repeat==='monthly'?days.join('、'):'';$('#calendarExtraRows').innerHTML=(e.extra_times||[]).map((slot,n)=>calendarExtraHTML(slot,n,e.id===e.series_id+'.'+slot.id)).join('');
  $('#calendarChildChoices').innerHTML=data.children.map(c=>`<label><input type="checkbox" name="child_ids" value="${esc(c.id)}" ${(e.child_ids||[]).includes(c.id)?'checked':''}><span>${esc(c.name)}</span></label>`).join('');
- $('#calendarDialogTitle').textContent=event?'编辑安排':'写下一个安排';$('#calendarEditNote').textContent=event&&event.repeat!=='none'?'保存会修改整条重复安排及所有展开日期。':'可以先暂定，和孩子商量后再确定。';$('#calendarFormError').textContent='';$('#calendarRetryNote').textContent='';calendarFormLock(false);calendarRepeat();$('#calendarDialog').showModal();const active=$('#calendarExtraRows').querySelector?.('.is-selected-slot');if(active){active.scrollIntoView({block:'center'});active.focus({preventScroll:true})}return true;
+ $('#calendarDialogTitle').textContent=event?'编辑安排':'写下一个安排';$('#calendarEditNote').textContent=event&&event.repeat!=='none'?'修改未单独处理的重复日期；已单独改期、完成或取消的记录保留。':'可以先暂定，和孩子商量后再确定。';$('#calendarFormError').textContent='';$('#calendarRetryNote').textContent='';calendarFormLock(false);calendarRepeat();$('#calendarDialog').showModal();const active=$('#calendarExtraRows').querySelector?.('.is-selected-slot');if(active){active.scrollIntoView({block:'center'});active.focus({preventScroll:true})}return true;
 }
 function calendarDraftMissing(context){const d=context.form||context.draft;return d?[!d.child_ids?.length?'孩子':'',!d.title?.trim()?'安排内容':'',!d.day?'日期':''].filter(Boolean).join('、'):''}
 function calendarDraftDetails(context,id=''){return `<details class="ask-citation" ${id?`id="${esc(id)}"`:''}><summary>原话与核对说明</summary><p class="source">${esc(context.text)}</p>${context.needs_review.length?`<ul>${context.needs_review.map(x=>`<li class="source">${esc(x)}</li>`).join('')}</ul>`:''}</details>`}
@@ -161,7 +163,7 @@ function calendarRepeat(){
  if(!calendarWeekdaysChosen&&weekday)for(const input of f.querySelectorAll('[name=repeat_weekday]'))input.checked=Number(input.value)===weekday;
  for(const [id,visible] of [['calendarUntil',repeats],['calendarWeekdays',mode==='weekly'],['calendarMonthdays',mode==='monthly'],['calendarExtraTimes',repeats]]){const el=$('#'+id);el.classList.toggle('hide',!visible);for(const input of el.querySelectorAll('input,button'))input.disabled=!visible}
  $('#calendarPrimaryLabel').textContent=repeats?'时段 1 · 开始时间':'开始时间 · 可不填';
- let note=repeats?'在起止日期内重复，编辑会修改整条安排。'+(mode==='monthly'?'没有所选日期的月份会跳过。':''):'';
+ let note=repeats?'在起止日期内重复；单独处理过的日期保留原记录。'+(mode==='monthly'?'没有所选日期的月份会跳过。':''):'';
  const days=[...f.querySelectorAll('[name=repeat_weekday]:checked')].map(x=>Number(x.value));if(mode==='weekly'&&weekday&&days.length){const offset=Array.from({length:7},(_,n)=>n).find(n=>days.includes((weekday+n-1)%7+1));note+='首次日期：'+calendarAdd(date,offset)+'。'}
  $('#calendarRepeatNote').textContent=note;
 }
@@ -205,7 +207,8 @@ document.addEventListener('click',async e=>{
  if(b.dataset.calendarDay){calendarJump++;calendarState.day=b.dataset.calendarDay;const left=$('.calendar-week-scroll')?.scrollLeft||0;render();const strip=$('.calendar-week-scroll');if(strip)strip.scrollLeft=left;if(b.hasAttribute('data-calendar-detail')){$('#calendarDayDetails')?.scrollIntoView({block:'start'});$('#calendarDayDetails')?.focus({preventScroll:true})}}
  if(b.hasAttribute('data-calendar-retry')){calendarInvalidate();render()}
  if(b.hasAttribute('data-calendar-new'))calendarOpen(null,{day:b.dataset.calendarNew});
- if(b.hasAttribute('data-calendar-resume'))$('#calendarDialog').showModal();
+ if(b.hasAttribute('data-calendar-resume'))$(occurrencePending?'#calendarOccurrenceDialog':'#calendarDialog').showModal();
+ if(b.dataset.calendarOnce){const e=occurrenceEvents().find(x=>x.id===b.dataset.calendarOnce&&x.day===b.dataset.occurrenceDay);if(e)occurrenceOpen(e);return}
  if(b.dataset.calendarComplete){const event=calendarState.result?.events.find(x=>x.id===b.dataset.calendarComplete)||(data.today_calendar?.inbox||[]).find(x=>x.kind==='event'&&x.event.id===b.dataset.calendarComplete)?.event;if(event&&calendarOpen(event)){$('#calendarForm').elements.status.value='completed';$('#calendarDialogTitle').textContent='核对后确认完成'}}
  if(b.dataset.calendarEdit){const event=calendarState.result?.events.find(x=>x.id===b.dataset.calendarEdit&&x.editable)||(data.today_calendar?.inbox||[]).find(x=>x.kind==='event'&&x.event.id===b.dataset.calendarEdit)?.event;if(event)calendarOpen(event)}
  if(b.dataset.calendarDraft){const kind=b.dataset.calendarDraft;calendarOpen(null,{day:$('#calendarWeekendDay').value,title:{'运动':'一起留一段运动时间','自由探索':'一段自由探索时间','共读':'一起读一会儿'}[kind],category:kind==='共读'?'family':'activity',status:'tentative',note:'先和孩子商量想做什么、何时开始，以及需要准备什么。'})}
@@ -262,3 +265,50 @@ $('#timetableForm').onsubmit=async e=>{
 $('#timetableDialog').addEventListener('cancel',e=>{if(timetableBusy)e.preventDefault()});
 
 document.addEventListener('click',e=>{const b=e.target.closest('[data-timetable-detach]');if(b?.dataset.timetableDetach&&!timetableBusy&&!timetablePending){timetableUploads=timetableUploads.filter(id=>id!==b.dataset.timetableDetach);timetableOriginals();$('#timetableForm').elements.confirmed.checked=false;$('#timetableUploadStatus').textContent='已从本课表移除，原件仍保存在资料中。'}});
+
+// One explicit occurrence uses the existing event record, never another repeating series.
+function occurrenceEvents(){return [...(calendarState.result?.events||[]),...(data.today_calendar?.events||[]),...(data.today_calendar?.inbox||[]).filter(x=>x.kind==='event').map(x=>x.event)]}
+function occurrenceKey(e){const o=e.occurrence;return o.series_id+'/'+o.day+'/'+o.slot_id}
+function occurrenceValues(){return Object.fromEntries(new FormData($('#calendarOccurrenceForm')))}
+function occurrenceDirty(){return occurrenceContext&&JSON.stringify(occurrenceValues())!==occurrenceContext.initial}
+function occurrenceHistory(e){const o=e.occurrence,original=o.original||{};return `<p>原日期：${esc(o.day)} · ${esc(original.start_time||'时间未定')}${original.end_time?'–'+esc(original.end_time):''}</p>${original.note?`<p class="source">原说明：${esc(original.note)}</p>`:''}${(o.history||[]).map(h=>`<p class="source">${esc(new Date(h.at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}))} · ${esc(calendarStatuses[h.status])} · ${esc(h.day)} ${esc(h.start_time)}${h.end_time?'–'+esc(h.end_time):''}${h.note?'\n'+esc(h.note):''}</p>`).join('')}`}
+function occurrenceHeader(e){$('#calendarOccurrenceContext').textContent=calendarNames(e.child_ids)+' · '+e.title;$('#calendarOccurrenceHistory').innerHTML=occurrenceHistory(e);$('#calendarOccurrenceSummary').textContent='原安排：'+e.occurrence.day+' '+(e.occurrence.original?.start_time||'时间未定')+' · 更改记录'}
+function occurrenceLock(){const locked=occurrenceSaving||!!occurrencePending;$('#calendarOccurrenceFields').disabled=locked;$('#calendarOccurrenceSave').disabled=occurrenceSaving||occurrenceConflict;$('#calendarOccurrenceClose').disabled=occurrenceSaving;$('#calendarOccurrenceRefresh').hidden=!occurrenceConflict;$('#calendarOccurrenceRefresh').disabled=occurrenceSaving;$('#calendarOccurrenceSave').textContent=occurrencePending?'核对并重试这次保存':'保存这一次'}
+function occurrenceOpen(e){
+ if(occurrenceSaving||calendarSaving)return;
+ if(calendarPending){$('#calendarDialog').showModal();return}
+ if(occurrencePending){$('#calendarOccurrenceDialog').showModal();return}
+ if(!e.occurrence?.series_id)return;
+ if(occurrenceContext&&occurrenceKey(e)===occurrenceKey(occurrenceContext.event)&&!occurrenceConflict){$('#calendarOccurrenceDialog').showModal();return}
+ if(occurrenceDirty()&&!confirm('切换安排会清除这份尚未保存的输入，继续吗？'))return;
+ const f=$('#calendarOccurrenceForm');f.reset();for(const k of ['day','start_time','end_time','status','note'])f.elements[k].value=e[k]||'';
+ occurrenceContext={event:e,initial:JSON.stringify(occurrenceValues())};occurrenceConflict=false;occurrenceHeader(e);$('#calendarOccurrenceStatus').textContent='';occurrenceLock();$('#calendarOccurrenceDialog').showModal();
+}
+$('#calendarOccurrenceForm').onsubmit=async e=>{
+ e.preventDefault();if(occurrenceSaving||occurrenceConflict||!occurrenceContext)return;
+ if(!occurrencePending){const o=occurrenceContext.event.occurrence;occurrencePending=JSON.stringify({...occurrenceValues(),series_id:o.series_id,series_version:o.series_version,origin_day:o.day,slot_id:o.slot_id,version:o.version})}
+ occurrenceSaving=true;$('#calendarOccurrenceStatus').textContent='正在保存这一次…';occurrenceLock();
+ try{
+  const r=await apiFetch('/api/calendar/occurrence',{method:'POST',signal:AbortSignal.timeout(20000),headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:occurrencePending}),v=await r.json();
+  if(!r.ok){if([400,404,409].includes(r.status))occurrencePending=null;if(r.status===409)occurrenceConflict=true;throw Error(v.error||'保存未完成')}
+  if(!v.event?.id||!v.event.occurrence?.series_id)throw Error('保存回执尚未核对，请重试原请求');
+  occurrencePending=null;occurrenceContext=null;$('#calendarOccurrenceDialog').close();calendarState.day=v.event.day;calendarState.week=calendarMonday(v.event.day);page='calendar';calendarInvalidate();
+  try{await load();toast('这次安排已保存，其余日期保留')}catch{render();toast('已经保存，最新日历暂时无法读取，请重试读取')}
+ }catch(err){$('#calendarOccurrenceStatus').textContent=(['AbortError','TimeoutError'].includes(err.name)?'保存回执超时':err.message||'保存暂未完成')+'；输入保留。'+(occurrencePending?'请重试同一次保存。':occurrenceConflict?'请读取最新状态后核对。':'请核对后再保存。')}
+ finally{occurrenceSaving=false;occurrenceLock()}
+};
+$('#calendarOccurrenceRefresh').onclick=async()=>{
+ if(occurrenceSaving||!occurrenceContext)return;const old=occurrenceContext.event,o=old.occurrence,typed=occurrenceValues(),initial=JSON.parse(occurrenceContext.initial);occurrenceSaving=true;occurrenceLock();
+ try{
+  await load();let fresh=(data.today_calendar?.inbox||[]).filter(x=>x.kind==='event').map(x=>x.event).find(e=>e.occurrence?.series_id&&occurrenceKey(e)===occurrenceKey(old)&&e.occurrence.version>0);
+  if(!fresh){const r=await apiFetch('/api/calendar?start='+o.day+'&end='+o.day,{signal:AbortSignal.timeout(20000)}),v=await r.json();if(!r.ok)throw Error(v.error||'读取失败');fresh=v.events.find(e=>e.occurrence?.series_id&&occurrenceKey(e)===occurrenceKey(old))}
+  if(!fresh)throw Error('原计划已不包含这一次，请返回日历重新选择');
+  if([...fresh.child_ids].sort().join()!==[...old.child_ids].sort().join())throw Error('参加孩子已变化，请返回日历重新打开这次安排');
+  const baseline=Object.fromEntries(Object.keys(initial).map(k=>[k,fresh[k]||''])),updated=[],labels={day:'日期',start_time:'开始时间',end_time:'结束时间',status:'状态',note:'说明'};
+  for(const k of Object.keys(initial))if(typed[k]===initial[k]){if(typed[k]!==baseline[k])updated.push(labels[k]);$('#calendarOccurrenceForm').elements[k].value=baseline[k]}
+  occurrenceContext={event:fresh,initial:JSON.stringify(baseline)};occurrenceConflict=false;occurrenceHeader(fresh);$('#calendarOccurrenceStatus').textContent='最新记录：'+calendarStatuses[fresh.status]+' · '+fresh.day+' '+(fresh.start_time||'时间未定')+'。'+(updated.length?'你未修改的'+updated.join('、')+'已更新。':'')+'你的修改已保留，请核对后再次保存。';
+ }catch(err){$('#calendarOccurrenceStatus').textContent=err.message||'读取最新状态失败，可以重试'}finally{occurrenceSaving=false;occurrenceLock()}
+};
+$('#calendarOccurrenceClose').onclick=()=>{if(!occurrenceSaving)$('#calendarOccurrenceDialog').close()};
+$('#calendarOccurrenceDialog').addEventListener('cancel',e=>{if(occurrenceSaving)e.preventDefault()});
+window.addEventListener('beforeunload',e=>{if(occurrencePending||occurrenceDirty()){e.preventDefault();e.returnValue=''}});

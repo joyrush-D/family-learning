@@ -67,11 +67,17 @@ def first_day(row):
 
 
 def slots(row):
-    yield row
+    excluded=row.get('excluded_dates',{})
+    yield dict(row,excluded_days=excluded['']) if '' in excluded else row
     for slot in row.get('extra_times',[]):
         yield dict(row,id=row['id']+'.'+slot['id'],series_id=row['id'],
                    series_start_time=row['start_time'],series_end_time=row['end_time'],
-                   start_time=slot['start_time'],end_time=slot['end_time'])
+                   start_time=slot['start_time'],end_time=slot['end_time'],
+                   **({'excluded_days':excluded[slot['id']]} if slot['id'] in excluded else {}))
+
+
+def occurrence_id(series,day,slot):
+    return hashlib.sha256(('calendar-occurrence\0'+series+'\0'+day+'\0'+slot).encode()).hexdigest()[:32]
 
 
 def timetable_week(week):
@@ -104,9 +110,10 @@ class Store:
                 repeat TEXT NOT NULL, until TEXT NOT NULL, last_request_hash TEXT NOT NULL,
                 created TEXT NOT NULL, updated TEXT NOT NULL)''')
             columns={r[1] for r in c.execute('PRAGMA table_info(calendar_events)')}
-            for name in REPEAT_FIELDS:
+            for name in (*REPEAT_FIELDS,'occurrence'):
                 if name not in columns:
-                    try: c.execute('ALTER TABLE calendar_events ADD COLUMN '+name+" TEXT NOT NULL DEFAULT '[]'")
+                    default='{}' if name=='occurrence' else '[]'
+                    try: c.execute('ALTER TABLE calendar_events ADD COLUMN '+name+" TEXT NOT NULL DEFAULT '"+default+"'")
                     except sqlite3.OperationalError:
                         if name not in {r[1] for r in c.execute('PRAGMA table_info(calendar_events)')}: raise
 
@@ -176,7 +183,63 @@ class Store:
         result['child_ids']=json.loads(result['child_ids'])
         for key in REPEAT_FIELDS: result[key]=json.loads(result[key])
         result.update(series_day=result['day'],editable=True,source='',task_id='')
+        result['occurrence']=json.loads(raw.get('occurrence','{}'))
+        if not isinstance(result['occurrence'],dict):
+            raise CalendarError('逐次安排记录格式无法核对，请保留记录并检查备份',503,'calendar_data_error')
         return result
+
+    @staticmethod
+    def saved_rows(c,children):
+        rows=[Store._manual(r) for r in c.execute('SELECT * FROM calendar_events ORDER BY day,id')]
+        parents={r['id']:r for r in rows if not r['occurrence']}
+        for row in rows:
+            Store._fields(row,children)
+            origin=row['occurrence']
+            if not origin: continue
+            Store._origin(row,children)
+            parent=parents.get(origin['series_id'])
+            if parent is None:
+                raise CalendarError('逐次安排的归属无法核对',503,'calendar_data_error')
+            parent.setdefault('excluded_dates',{}).setdefault(origin['slot_id'],[]).append(origin['day'])
+        return rows
+
+    @staticmethod
+    def _origin(row,children):
+        """Check saved history before reads, edits or restoring a private database."""
+        try:
+            o=row['occurrence']
+            if not isinstance(o,dict) or set(o)!={'series_id','day','slot_id','original','history'}: raise ValueError()
+            if not isinstance(o['series_id'],str) or not re.fullmatch('[a-f0-9]{32}',o['series_id']): raise ValueError()
+            if not isinstance(o['slot_id'],str) or not re.fullmatch('(?:[a-f0-9]{16})?',o['slot_id']): raise ValueError()
+            if row['repeat']!='none' or row['id']!=occurrence_id(o['series_id'],_day(o['day']),o['slot_id']): raise ValueError()
+            original=o['original'];history=o['history']
+            if not isinstance(original,dict) or set(original)!=set(FIELDS) or original['day']!=o['day'] or original['repeat']!='none': raise ValueError()
+            Store._fields(original,children)
+            if not isinstance(history,list) or len(history)!=row['version']: raise ValueError()
+            for version,h in enumerate(history,1):
+                if not isinstance(h,dict) or set(h)!=set(FIELDS)|{'version','at'} or type(h['version']) is not int or h['version']!=version or h['repeat']!='none': raise ValueError()
+                if dt.datetime.fromisoformat(h['at']).tzinfo is None: raise ValueError()
+                Store._fields(h,children)
+                if any(h[k]!=original[k] for k in set(FIELDS)-{'day','start_time','end_time','status','note'}): raise ValueError()
+            if not history or any(history[-1][k]!=row[k] for k in FIELDS): raise ValueError()
+        except (KeyError,TypeError,ValueError):
+            raise CalendarError('逐次安排的原记录或历史无法核对，请保留记录并检查备份',503,'calendar_data_error') from None
+
+    @staticmethod
+    def _write(c,ident,version,fields,digest,old,origin=None):
+        now=dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat(timespec='seconds')
+        values=dict(id=ident,version=version+1,**fields,last_request_hash=digest,
+                    created=old['created'] if old else now,updated=now)
+        values['child_ids']=_json(values['child_ids'])
+        for key in REPEAT_FIELDS: values[key]=_json(values[key])
+        if origin is not None: values['occurrence']=_json(origin)
+        if old:
+            columns=[k for k in values if k!='id']
+            c.execute('UPDATE calendar_events SET '+','.join(k+'=?' for k in columns)+' WHERE id=?',
+                      [values[k] for k in columns]+[ident])
+        else:
+            c.execute('INSERT INTO calendar_events ('+','.join(values)+') VALUES ('+','.join('?' for _ in values)+')',list(values.values()))
+        return Store._manual(values)
 
     def save(self,obj):
         if not isinstance(obj,dict) or set(obj)-set(FIELDS)-{'id','version'}:
@@ -189,6 +252,7 @@ class Store:
         with self._db() as c:
             c.execute('BEGIN IMMEDIATE')
             old=c.execute('SELECT * FROM calendar_events WHERE id=?',(ident,)).fetchone()
+            if old and json.loads(old['occurrence']): raise CalendarError('请从“处理本次”修改这次安排',409,'calendar_occurrence_required')
             # Reconcile a lost response before rejecting the now-stale version.
             if old and old['last_request_hash']==digest: return self._manual(old)
             if old and not any(key in obj or json.loads(old[key]) for key in REPEAT_FIELDS):
@@ -198,18 +262,41 @@ class Store:
                 raise CalendarError('这条安排已更新，请刷新核对；当前输入未覆盖',409,'calendar_conflict')
             if old and any(key not in obj and json.loads(old[key]) for key in REPEAT_FIELDS):
                 raise CalendarError('此计划包含新的重复设置，请刷新页面后修改',409,'calendar_conflict')
-            now=dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat(timespec='seconds')
-            values=dict(id=ident,version=version+1,**fields,last_request_hash=digest,
-                        created=old['created'] if old else now,updated=now)
-            values['child_ids']=_json(values['child_ids'])
-            for key in REPEAT_FIELDS: values[key]=_json(values[key])
+            if old and old['repeat']!='none' and fields['repeat']=='none' and any(
+                    json.loads(r[0]).get('series_id')==ident for r in c.execute("SELECT occurrence FROM calendar_events WHERE occurrence!='{}'")):
+                raise CalendarError('此重复计划已有逐次记录，请保留重复规则；需要单次安排时可另建一条',409,'calendar_conflict')
+            return self._write(c,ident,version,fields,digest,old)
+
+    def save_occurrence(self,obj):
+        allowed={'series_id','series_version','origin_day','slot_id','version','day','start_time','end_time','status','note'}
+        if not isinstance(obj,dict) or set(obj)!=allowed: raise CalendarError('请只填写本次安排的日期、时间、状态与反馈')
+        series=obj['series_id'];slot_id=obj['slot_id'];day=_day(obj['origin_day']);version=obj['version']
+        if not isinstance(series,str) or not re.fullmatch('[a-f0-9]{32}',series) or not isinstance(slot_id,str) or slot_id and not re.fullmatch('[a-f0-9]{16}',slot_id):
+            raise CalendarError('原重复计划或时段标识不正确')
+        if any(type(v) is not int or not 0<=v<2147483647 for v in [version,obj['series_version']]): raise CalendarError('本次安排的版本不正确')
+        ident=occurrence_id(series,day,slot_id);digest=hashlib.sha256(_json(obj).encode()).hexdigest();children=self._children()
+        with self._db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            raw=c.execute('SELECT * FROM calendar_events WHERE id=?',(series,)).fetchone()
+            if raw is None or json.loads(raw['occurrence']): raise CalendarError('原重复计划不存在',404,'calendar_missing')
+            parent=self._manual(raw);self._fields(parent,children)
+            old=c.execute('SELECT * FROM calendar_events WHERE id=?',(ident,)).fetchone()
             if old:
-                columns=[k for k in values if k!='id']
-                c.execute('UPDATE calendar_events SET '+','.join(k+'=?' for k in columns)+' WHERE id=?',
-                          [values[k] for k in columns]+[ident])
-            else:
-                c.execute('INSERT INTO calendar_events ('+','.join(values)+') VALUES ('+','.join('?' for _ in values)+')',list(values.values()))
-            return self._manual(values)
+                origin=json.loads(old['occurrence']);current=self._manual(old);self._fields(current,children)
+                self._origin(current,children)
+                if not origin or (origin['series_id'],origin['day'],origin['slot_id'])!=(series,day,slot_id): raise CalendarError('本次安排的标识冲突',409,'calendar_conflict')
+                if old['last_request_hash']==digest:return current
+            if (old['version'] if old else 0)!=version or raw['version']!=obj['series_version']:
+                raise CalendarError('这次安排或原计划已更新，请刷新核对；当前输入未覆盖',409,'calendar_conflict')
+            if not old:
+                slot=next((s for s in slots(parent) if s['id']==series+('.'+slot_id if slot_id else '')),None)
+                if parent['repeat']=='none' or slot is None or not occurs(parent,dt.date.fromisoformat(day)):
+                    raise CalendarError('这一天或时段不在原重复计划中，请刷新核对',409,'calendar_conflict')
+                current={k:slot[k] for k in FIELDS};current.update(day=day,repeat='none',until='',repeat_days=[],extra_times=[])
+                origin=dict(series_id=series,day=day,slot_id=slot_id,original=dict(current),history=[])
+            fields=self._fields(dict(current,**{k:obj[k] for k in ['day','start_time','end_time','status','note']}),children)
+            origin['history'].append(dict(version=version+1,at=dt.datetime.now(dt.timezone.utc).isoformat(),**fields))
+            return self._write(c,ident,version,fields,digest,old,origin)
 
     def _sources(self,children):
         path=self.data/'日历来源.json'
@@ -297,15 +384,21 @@ class Store:
         children=self._children()
         with self._db() as c:
             ready=c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='calendar_events'").fetchone()
-            rows=c.execute("SELECT * FROM calendar_events WHERE day<=? AND (repeat!='none' OR day>=?) ORDER BY day,id",(end,start)).fetchall() if ready else []
+            rows=self.saved_rows(c,children) if ready else []
         events=[]
-        for raw in rows:
-            row=self._manual(raw)
-            if any(i not in children for i in row['child_ids']): raise CalendarError('手动安排的孩子归属无法核对',409,'profile_error')
-            self._fields(row,children)
+        parents={r['id']:r for r in rows if not r['occurrence']}
+        for row in rows:
             for offset in range((last-first).days+1):
                 day=first+dt.timedelta(days=offset)
-                if occurs(row,day): events.extend(dict(slot,day=day.isoformat()) for slot in slots(row))
+                if not occurs(row,day):continue
+                for slot in slots(row):
+                    if day.isoformat() in slot.get('excluded_days',[]):continue
+                    event=dict(slot,day=day.isoformat())
+                    if row['repeat']!='none':
+                        event['occurrence']=dict(series_id=row['id'],day=day.isoformat(),slot_id=slot['id'][len(row['id'])+1:],original={k:event[k] for k in ['day','start_time','end_time']},history=[])
+                    if event['occurrence']:
+                        event['occurrence']=dict(event['occurrence'],version=row['version'] if row['occurrence'] else 0,series_version=parents[event['occurrence']['series_id']]['version'])
+                    events.append(event)
         sources,tables,error=self._sources(children)
         events.extend(row for row in sources if start<=row['day']<=end)
         for row in self.saved_timetables():
@@ -339,13 +432,13 @@ class Store:
         children=self._children()
         with self._db() as c:
             ready=c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='calendar_events'").fetchone()
-            rows=c.execute('SELECT * FROM calendar_events ORDER BY id LIMIT 1001').fetchall() if ready else []
+            rows=self.saved_rows(c,children) if ready else []
         sources,_,error=self._sources(children)
         if error: raise CalendarError('学校日历来源无法完整读取，请在系统内核对后重试',503,'calendar_source_unavailable')
         if len(rows)+len(sources)>1000:
             raise CalendarError('日历订阅超过1000条原始安排，请在系统内核对',503,'calendar_limit')
         try:
-            result=[self._manual(row) for row in rows]+sources
+            result=rows+sources
             for row in result: self._fields(row,children)
         except (KeyError,TypeError,ValueError) as e:
             if isinstance(e,CalendarError): raise
@@ -454,9 +547,9 @@ def render_ics(events,profiles,as_of,uid_namespace,task_states=None):
         lines+=['BEGIN:VEVENT','UID:'+uid,'DTSTAMP:'+timestamp,'SUMMARY:'+_ics_text(title),
                 'STATUS:'+('CONFIRMED' if status=='completed' else status.upper()),'TRANSP:'+('OPAQUE' if status=='confirmed' and row['start_time'] else 'TRANSPARENT')]
         local_rule=row['repeat'] in {'daily','weekends','monthly'} or bool(row['repeat_days'])
-        def date_time(key,clock):
-            return (key+';TZID=Asia/Shanghai:'+origin.replace('-','')+'T'+clock.replace(':','')+'00'
-                    if local_rule else key+':'+_ics_utc(origin,clock))
+        def date_time(key,clock,on=origin):
+            return (key+';TZID=Asia/Shanghai:'+on.replace('-','')+'T'+clock.replace(':','')+'00'
+                    if local_rule else key+':'+_ics_utc(on,clock))
         if row['start_time']:
             lines.append(date_time('DTSTART',row['start_time']))
             if row['end_time']: lines.append(date_time('DTEND',row['end_time']))
@@ -473,6 +566,13 @@ def render_ics(events,profiles,as_of,uid_namespace,task_states=None):
                 until=_ics_utc(row['until'],row['start_time']) if row['start_time'] else row['until'].replace('-','')
                 rule+=';UNTIL='+until
             lines.append(rule)
+        excluded=item.get('excluded_days',[])
+        if not isinstance(excluded,list) or any(not isinstance(day,str) for day in excluded): raise CalendarError('逐次安排的排除日期无法核对')
+        # A saved one-off keeps its own stable UID; EXDATE removes only its original slot.
+        # RFC 5545 3.8.5.1 also allows excluding DTSTART itself; the master keeps DTSTART.
+        for day in sorted(set(excluded)):
+            _day(day)
+            lines.append(date_time('EXDATE',row['start_time'],day) if row['start_time'] else 'EXDATE;VALUE=DATE:'+day.replace('-',''))
         if row['location']: lines.append('LOCATION:'+_ics_text(row['location']))
         lines.append('END:VEVENT')
     lines.append('END:VCALENDAR')

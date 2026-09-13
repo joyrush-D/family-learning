@@ -153,3 +153,5 @@
 !/homework-input.css
 !/test_homework_report.py
 !/test_homework_report_ui.cjs
+
+!/test_calendar_occurrence_ui.cjs

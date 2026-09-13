@@ -160,14 +160,14 @@ class CalendarTests(unittest.TestCase):
         with app.connect() as c:
             c.execute('UPDATE calendar_events SET last_request_hash=? WHERE id=?',(legacy,obj['id']))
             # Recreate the pre-upgrade table, then run the real additive migration twice.
-            columns=[r[1] for r in c.execute('PRAGMA table_info(calendar_events)') if r[1] not in family_calendar.REPEAT_FIELDS]
+            columns=[r[1] for r in c.execute('PRAGMA table_info(calendar_events)') if r[1] not in (*family_calendar.REPEAT_FIELDS,'occurrence')]
             c.execute('CREATE TABLE calendar_legacy AS SELECT '+','.join(columns)+' FROM calendar_events')
             c.execute('DROP TABLE calendar_events');c.execute('ALTER TABLE calendar_legacy RENAME TO calendar_events')
-        self.assertEqual(self.store.snapshot('2026-09-12','2026-09-12')['events'],[first])
+        expanded=self.store.snapshot('2026-09-12','2026-09-12')['events'];self.assertEqual(expanded[0]['occurrence']['version'],0);self.assertEqual(expanded[0]['occurrence']['day'],'2026-09-12');self.assertEqual([dict(e,occurrence={}) for e in expanded],[first])
         with ThreadPoolExecutor(max_workers=2) as pool: migrated=list(pool.map(lambda _:app.calendar_store(),range(2)))
         self.store=migrated[0];app.calendar_store()
         self.assertEqual(self.store.save(obj),first)
-        self.assertEqual(self.store.snapshot('2026-09-12','2026-09-12')['events'],[first])
+        expanded=self.store.snapshot('2026-09-12','2026-09-12')['events'];self.assertEqual(expanded[0]['occurrence']['version'],0);self.assertEqual(expanded[0]['occurrence']['day'],'2026-09-12');self.assertEqual([dict(e,occurrence={}) for e in expanded],[first])
 
     def test_lost_response_retry_and_conflicting_version(self):
         obj=self.request(); first=self.store.save(obj); saved=self.dump()
@@ -204,6 +204,83 @@ class CalendarTests(unittest.TestCase):
         data=self.sources(); data['timetables'][0]['effective_until']='2026-09-08'; self.write_sources(data)
         self.assertEqual(len(self.store.snapshot('2026-09-07','2026-09-15')['timetables']),1)
         with self.assertRaises(family_calendar.CalendarError): self.store.save(self.request(id=source['id']))
+
+    def test_occurrence_changes_only_one_day_and_slot_with_history_and_exact_retry(self):
+        parent=self.store.save(self.request(repeat='daily',until='2026-09-14',status='confirmed',extra_times=[dict(id='1'*16,start_time='18:00',end_time='18:20')]))
+        body=dict(series_id=parent['id'],series_version=1,origin_day='2026-09-12',slot_id='1'*16,version=0,
+                  day='2026-10-03',start_time='17:00',end_time='17:20',status='confirmed',note='虚构反馈：本次改到周末')
+        saved=self.store.save_occurrence(body);before=self.dump()
+        self.assertEqual(self.store.save_occurrence(body),saved);self.assertEqual(self.dump(),before)
+        original=self.store.snapshot('2026-09-12','2026-09-14')['events']
+        self.assertEqual(len(original),5);self.assertFalse(any(e['day']=='2026-09-12' and e['start_time']=='18:00' for e in original))
+        moved=self.store.snapshot('2026-10-03','2026-10-03')['events'];self.assertEqual(len(moved),1);self.assertEqual(moved[0]['id'],saved['id'])
+        finished=self.store.save_occurrence(dict(body,version=1,status='completed',note='虚构完成依据'))
+        self.assertEqual(len(finished['occurrence']['history']),2);self.assertEqual(finished['occurrence']['original']['start_time'],'18:00')
+        with app.connect() as c:
+            self.assertEqual(c.execute('SELECT version,status FROM calendar_events WHERE id=?',(parent['id'],)).fetchone()[:],(1,'confirmed'))
+        fresh=app.calendar_store().snapshot('2026-10-03','2026-10-03')['events'][0]
+        self.assertEqual(fresh['status'],'completed');self.assertEqual(fresh['occurrence']['history'][0]['day'],'2026-10-03')
+        with self.assertRaises(family_calendar.CalendarError):self.store.save(dict(self.request(),id=saved['id'],version=2))
+
+    def test_occurrence_rejects_missing_slots_stale_series_and_cross_scope_fields(self):
+        parent=self.store.save(self.request(repeat='weekly',until='2026-10-12'))
+        body=dict(series_id=parent['id'],series_version=1,origin_day='2026-09-12',slot_id='',version=0,day='2026-09-12',start_time='09:00',end_time='10:00',status='cancelled',note='虚构本次不参加')
+        before=self.dump()
+        for bad in [dict(body,origin_day='2026-09-13'),dict(body,slot_id='2'*16),dict(body,series_id='source:school'),dict(body,series_version=0),dict(body,child_ids=['child-2']),dict(body,status='finished'),dict(body,end_time='08:00')]:
+            with self.assertRaises(family_calendar.CalendarError):self.store.save_occurrence(bad)
+        self.assertEqual(self.dump(),before)
+        with ThreadPoolExecutor(max_workers=2) as pool:out=list(pool.map(self.store.save_occurrence,[body,body]))
+        self.assertEqual(out[0],out[1]);self.assertEqual(len(out[0]['occurrence']['history']),1)
+        self.store.save(dict(self.request(),version=1,repeat='weekly',until='2026-10-12',child_ids=['child-2'],start_time='10:00',end_time='11:00'))
+        # A changed template does not reassign a parent's already-recorded occurrence.
+        row=app.calendar_store().snapshot('2026-09-12','2026-09-12')['events'][0]
+        self.assertEqual(row['child_ids'],['child-1']);self.assertEqual(row['status'],'cancelled');self.assertEqual(row['start_time'],'09:00')
+        self.assertEqual(self.store.save_occurrence(body)['id'],row['id'])
+        with self.assertRaises(family_calendar.CalendarError):self.store.save_occurrence(dict(body,version=1,status='confirmed'))
+        restored=self.store.save_occurrence(dict(body,version=1,series_version=2,status='confirmed'))
+        self.assertEqual(restored['child_ids'],['child-1']);self.assertEqual(len(restored['occurrence']['history']),2)
+
+    def test_occurrence_subscription_excludes_original_and_keeps_replacement_uid(self):
+        import datetime as dt
+        parent=self.store.save(self.request(day='2026-09-12',repeat='daily',status='confirmed',start_time='00:30',end_time='00:45'))
+        body=dict(series_id=parent['id'],series_version=1,origin_day='2026-09-12',slot_id='',version=0,day='2026-09-20',start_time='01:00',end_time='01:15',status='confirmed',note='PRIVATE_OCCURRENCE_NOTE')
+        saved=self.store.save_occurrence(body)
+        def feed():return family_calendar.render_ics(self.store.subscription_events(),app.profiles(),dt.datetime.now(dt.timezone.utc),'synthetic').decode().replace('\r\n ','')
+        text=feed();self.assertIn('EXDATE;TZID=Asia/Shanghai:20260912T003000',text);self.assertIn('DTSTART:20260919T170000Z',text)
+        self.assertEqual(text.count('BEGIN:VEVENT'),2);self.assertNotIn('PRIVATE_OCCURRENCE_NOTE',text)
+        uids=[line for line in text.splitlines() if line.startswith('UID:')]
+        self.store.save_occurrence(dict(body,version=1,status='cancelled'))
+        self.assertEqual([line for line in feed().splitlines() if line.startswith('UID:')],uids);self.assertIn('STATUS:CANCELLED',feed())
+        self.assertEqual(self.store.snapshot('2026-09-20','2026-09-20')['events'][-1]['occurrence']['day'],'2026-09-12')
+
+    def test_occurrence_backup_and_corrupt_history_fail_without_overwrite(self):
+        import copy
+        import sqlite3
+        parent=self.store.save(self.request(repeat='daily',until='2026-09-14'))
+        body=dict(series_id=parent['id'],series_version=1,origin_day=parent['day'],slot_id='',version=0,
+                  day=parent['day'],start_time='',end_time='',status='completed',note='虚构家长确认')
+        saved=self.store.save_occurrence(body);before=self.dump()
+        backup=app.DATA/'synthetic-backup.sqlite3'
+        with app.connect() as c,sqlite3.connect(backup) as dst:c.backup(dst)
+        restored=family_calendar.Store(lambda:sqlite3.connect(backup),app.profiles,app.DATA)
+        self.assertEqual(restored.snapshot(parent['day'],parent['day']),self.store.snapshot(parent['day'],parent['day']))
+        with self.assertRaises(family_calendar.CalendarError):self.store.save(self.request(version=1,repeat='none'))
+        self.assertEqual(self.dump(),before)
+        for mutate in [lambda o:o.update(slot_id=[]),lambda o:o.update(slot_id='f'),lambda o:o.update(history=[]),
+                       lambda o:o['history'][0].update(child_ids=['child-2']),lambda o:o['history'][0].update(note='被改写'),
+                       lambda o:o['original'].update(day='2026-01-01'),None]:
+            origin=copy.deepcopy(saved['occurrence'])
+            if mutate:mutate(origin)
+            else:origin=[]
+            with app.connect() as c:c.execute('UPDATE calendar_events SET occurrence=? WHERE id=?',(json.dumps(origin),saved['id']))
+            broken=self.dump()
+            for action in [lambda:self.store.snapshot(parent['day'],parent['day']),self.store.subscription_events,
+                           lambda:self.store.save_occurrence(dict(body,version=1,status='confirmed'))]:
+                with self.assertRaises(family_calendar.CalendarError) as caught:action()
+                self.assertEqual(caught.exception.code,'calendar_data_error')
+                self.assertEqual(self.dump(),broken)
+            with app.connect() as c:c.execute('UPDATE calendar_events SET occurrence=? WHERE id=?',(family_calendar._json(saved['occurrence']),saved['id']))
+        self.assertEqual(self.dump(),before)
 
     def test_invalid_source_is_explicit_and_manual_calendar_survives(self):
         self.store.save(self.request())

@@ -1504,6 +1504,8 @@ class Handler(BaseHTTPRequestHandler):
                 except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
             if path=='/api/calendar/save':
                 return self.reply(200,dict(event=calendar_store().save(obj)))
+            if path=='/api/calendar/occurrence':
+                return self.reply(200,dict(event=calendar_store().save_occurrence(obj)))
             if path=='/api/calendar/draft':
                 try: return self.reply(200,calendar_draft_from_text(obj))
                 except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
