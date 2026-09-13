@@ -46,6 +46,30 @@ def word_check_note(value):
         '只记录本次对应词义和方向；未测为未知，不能由一次全对认定稳定掌握。'])
 
 
+def word_history(records):
+    """Project current canonical notes; corrections stay in the original records."""
+    checks, unparsed = [], []
+    for r in reversed(records):
+        note = r['note']
+        if not note.startswith('【单词分项核对'): continue
+        lines = note.split('\n'); size = 7 + len(WORD_MODES)
+        try:
+            fields = {key: lines[i].removeprefix(label) for i,(key,label) in enumerate([
+                ('word','单词：'), ('meaning','本次目标义 / 语境：'),
+                ('material','材料 / 词表：'), ('phase','核对条件：')], 1)}
+            fields['results'] = {mode: lines[i].removeprefix(label+'：')
+                                 for i,(mode,(label,_)) in enumerate(WORD_MODES.items(), 5)}
+            # A hand-edited note must still round-trip; never guess its previous values.
+            if word_check_note(fields) != '\n'.join(lines[:size]): raise ValueError('changed format')
+            if len(lines) > size and lines[size] != '家长补充原始作答、帮助、用时和感受：': raise ValueError('changed format')
+        except (agent.AgentError, IndexError, ValueError):
+            unparsed.append(dict(id=r['id'], day=r['day'])); continue
+        checks.append(dict(id=r['id'], day=r['day'], source=r['source'].split(' · 学习目标:')[0],
+                           has_note=len(lines) > size, **fields))
+    # ponytail: household-size projection; paginate if measured response size requires it.
+    return dict(checks=checks, unparsed=unparsed)
+
+
 FIELDS = {'title': 120, 'subject': 80, 'school_target': 1600, 'curriculum': 500,
           'baseline': 2400, 'hypotheses': 1600, 'verification': 1600, 'resources': 1600}
 RECORD_FIELDS = ('id', 'child', 'day', 'category', 'subject', 'title', 'note', 'source', 'score', 'total',
@@ -373,6 +397,7 @@ class Store:
                     reviewed_evidence=ctx['reviewed_evidence'], omitted_reviewed_refs=ctx['omitted_reviewed_refs'], unavailable_reviewed_refs=ctx['unavailable_reviewed_refs'],
                     evidence_changed=bool(plan.get('approved') and reviewed != ctx['evidence_hash']),
                     records=[{**r, 'attachments': json.loads(r['attachments'])} for r in ctx['input_records']],
+                    word_history=word_history(ctx['records']),
                     omitted_count=ctx['omitted_count'], missing_count=len(ctx['missing']),
                     task_feedback=ctx['task_feedback'], task_feedback_omitted=ctx['task_feedback_omitted'], task_missing=ctx['task_missing'],
                     school_messages=ctx['school_messages'], school_omitted=ctx['school_omitted'], school_missing=ctx['school_missing'],

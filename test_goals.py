@@ -340,6 +340,10 @@ class GoalTests(unittest.TestCase):
         note=g['records'][-1]['note'];self.assertIn('听英文 → 选中文：答错',note)
         self.assertEqual(g['records'][-1]['assistance'],'');self.assertEqual(g['records'][-1]['practice_relation'],'')
         self.assertIn('看英文 → 选中文：本次独立答对',note);self.assertIn('看中文 → 说英文：未测',note)
+        history=g['word_history'];self.assertEqual(len(history['checks']),1);self.assertFalse(history['unparsed'])
+        self.assertEqual(history['checks'][0]['results']['hear_meaning'],'答错')
+        self.assertEqual(history['checks'][0]['results']['meaning_speaking'],'未测')
+        self.assertTrue(history['checks'][0]['has_note'])
         changed=json.loads(json.dumps(obj));changed['word_check']['results']['hear_meaning']='本次独立答对'
         with self.assertRaises(Exception):self.store.action(changed)
         self.assertEqual(self.goal()['records'][-1]['note'],note)
@@ -352,6 +356,38 @@ class GoalTests(unittest.TestCase):
             self.store.action(dict(obj,request_key='synthetic-word-bad-assistance',assistance='独立尝试'))
         other=self.action('create',child_id='child-2',title='另一位孩子英语',subject='英语')['id']
         self.assertFalse(next(x for x in self.store.snapshot()['goals'] if x['id']==other)['records'])
+        self.assertEqual(next(x for x in self.store.snapshot()['goals'] if x['id']==other)['word_history'],dict(checks=[],unparsed=[]))
+
+    def test_word_history_retains_dates_senses_and_current_corrections_beyond_model_window(self):
+        check=dict(word='pen',meaning='写字用的笔',material='虚构词表',phase='首次核对',results=dict(hear_meaning='答错'))
+        past=(self.now.date()-dt.timedelta(days=3)).isoformat();today=self.now.date().isoformat()
+        first=self.action('feedback',id=self.ident,day=past,source='家长观察',note='',word_check=check)['record_id']
+        second=self.feedback('',word_check=dict(check,phase='间隔后复测',results=dict(hear_meaning='本次独立答对')))['record_id']
+        third=self.feedback('',word_check=dict(check,meaning='围栏',results=dict(read_meaning='提示后答对')))['record_id']
+        for i in range(30):self.feedback('虚构日常反馈 '+str(i))
+        g=self.goal();history=g['word_history']['checks']
+        self.assertEqual([r['id'] for r in history],[third,second,first])
+        self.assertEqual([r['day'] for r in history],[today,today,past])
+        self.assertEqual([r['meaning'] for r in history],['围栏','写字用的笔','写字用的笔'])
+        self.assertEqual(history[1]['results']['hear_meaning'],'本次独立答对')
+        self.assertEqual(history[2]['results']['hear_meaning'],'答错')
+        self.assertEqual(history[1]['results']['hear_spelling'],'未测')
+        self.assertEqual(len(g['records']),24);self.assertGreater(g['omitted_count'],0)
+        self.assertNotIn(second,{r['id'] for r in g['records']})
+        self.assertEqual(goals.Store(self.app).snapshot()['goals'][0]['word_history'],g['word_history'])
+        # Correct the same original record, keeping its revision; no stale second database.
+        base=dict(id=second,child='示例甲',day=today,category='家长观察',title='已更正的核对',source='家长观察')
+        self.app.save_record(dict(base,note=goals.word_check_note(dict(check,phase='刚练过或看过答案',results=dict(hear_meaning='提示后答对')))))
+        updated=next(r for r in self.goal()['word_history']['checks'] if r['id']==second)
+        self.assertEqual(updated['results']['hear_meaning'],'提示后答对');self.assertEqual(updated['phase'],'刚练过或看过答案')
+        malformed=goals.word_check_note(check).replace('听英文 → 选中文：答错','听英文 → 选中文：需重测')
+        self.app.save_record(dict(base,note=malformed))
+        history=self.goal()['word_history'];self.assertNotIn(second,{r['id'] for r in history['checks']})
+        self.assertEqual(history['unparsed'],[dict(id=second,day=today)])
+        self.app.save_record(dict(base,note='更正：这次仅讨论词义，没有测验。'))
+        history=self.goal()['word_history'];self.assertFalse(history['unparsed'])
+        self.assertNotIn(second,{r['id'] for r in history['checks']})
+        with self.app.connect() as c:self.assertEqual(c.execute('SELECT count(*) FROM revisions WHERE record_id=?',(second,)).fetchone()[0],3)
 
     def reply(self,messages,schema,name,timeout,**kwargs):
         self.assertEqual(name,'family_learning_plan');self.assertEqual(kwargs['data_path'],self.data)
