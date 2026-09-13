@@ -55,6 +55,43 @@ def config(data):
     return value
 
 
+def collection_view(store, c, source, message, attachments):
+    """Describe saved evidence and current eligibility; never fetch or enqueue on view."""
+    row = c.execute('SELECT state,attempts,error FROM agent_media WHERE source_id=? AND message_id=?',
+                    (source['id'], message['id'])).fetchone()
+    supported = source['platform'] == 'wechat' and message['kind'] == 'image'
+    if row is None and not supported:
+        return None
+    result = dict(state=row['state'] if row else 'not_started', attempts=row['attempts'] if row else 0)
+    if attachments:
+        note = '已自动保存可读首帧，完整内容仍需核对。' if result['state'] == 'saved' else ''
+    elif result['state'] == 'dismissed':
+        note = '已停止自动关联，可手动补充。'
+    else:
+        reason = {'process_timeout': '上次读取原图超时。',
+                  'media_original_unavailable': '上次未在本机找到可用原图。'}.get(
+                      row['error'] if row and row['state'] == 'error' else '', '')
+        if not supported:
+            status = '这类消息尚不支持自动取图。'
+        elif not source['enabled'] or not store._config(c)['enabled']:
+            status = '此来源的自动读取已暂停。'
+        else:
+            try:
+                settings = config(store.data)
+                if settings is None:
+                    status = '自动取图未启用。'
+                elif not message['time'] or dt.datetime.fromisoformat(message['time']) < settings['since']:
+                    status = '这条图片不在已配置的自动取图时间范围内。'
+                elif result['state'] == 'error' and result['attempts'] >= 3:
+                    status = '这张图片自动取图已达重试上限。'
+                else:
+                    status = '尚未取得原图。' if not reason else ''
+            except (OSError, ValueError, TypeError, MediaError):
+                status = '自动取图配置待修复。'
+        note = status + reason + '可在下面补充原件。'
+    return {**result, 'explanation': note}
+
+
 def fetch(settings, source, message):
     """One message's metadata, then a fixed set of paths in its chat directory."""
     chat = source_chat(source)

@@ -189,10 +189,54 @@ class MediaTests(unittest.TestCase):
     def test_missing_media_config_does_not_stop_text_agent(self):
         message = self.message('text', kind='text', unread=False); self.ingest(message)
         self.assertEqual(media.run_one(self.app, self.store, self.now)['state'], 'disabled')
+        self.assertIsNone(self.store.message(dict(child_id='child-1', source_id=self.source['id'], message_id='text'), lambda row: dict(row))['media'])
         with patch.object(agent.family_llm, '_chat_json', return_value={'proposals': []}):
             result = agent.run_once(self.app, self.now)
         self.assertGreaterEqual(result['processed'], 1)
         self.assertEqual(self.db_rows('SELECT processed FROM agent_messages')[0]['processed'], 1)
+
+    def test_original_view_reports_current_collection_without_fetch_or_writes(self):
+        message = self.message(); self.ingest(message)
+        identity = dict(child_id='child-1', source_id=self.source['id'], message_id=message['id'])
+        read = lambda: self.store.message(identity, lambda row: dict(row))['media']
+        with patch.object(media, 'fetch', side_effect=AssertionError('opening a notice must not collect')):
+            self.assertIn('未启用', read()['explanation'])
+            self.assertEqual(self.db_rows('SELECT * FROM agent_media'), [])
+            with patch.object(media, 'config', return_value=self.settings()):
+                self.assertIn('尚未取得', read()['explanation'])
+            with patch.object(media, 'config', return_value={**self.settings(), 'since': self.now + dt.timedelta(days=1)}):
+                self.assertIn('时间范围', read()['explanation'])
+            self.seed_job(message, 'error')
+            with self.store._db() as c:
+                c.execute("UPDATE agent_media SET attempts=1,error='process_timeout'")
+            before = self.db_rows('SELECT * FROM agent_media')
+            self.assertIn('未启用', read()['explanation'])
+            self.assertIn('超时', read()['explanation'])
+            self.assertEqual(read()['attempts'], 1)
+            with patch.object(media, 'config', return_value=self.settings()):
+                self.assertIn('超时', read()['explanation'])
+                self.assertNotIn('未启用', read()['explanation'])
+            with patch.object(media, 'config', side_effect=ValueError('PRIVATE_CONFIG_CANARY')):
+                self.assertIn('配置待修复', read()['explanation'])
+                self.assertNotIn('PRIVATE_CONFIG_CANARY', json.dumps(read()))
+            self.write_config(enabled=False)
+            self.assertIn('已暂停', read()['explanation'])
+            self.write_config()
+            self.assertEqual(self.db_rows('SELECT * FROM agent_media'), before)
+            with patch.object(media, 'config', return_value=self.settings()):
+                for state, error, expected in [('error', 'media_original_unavailable', '未在本机找到'),
+                                               ('error', 'PRIVATE_ERROR_CANARY', '重试上限'),
+                                               ('pending', '', '尚未取得')]:
+                    with self.store._db() as c:
+                        c.execute('UPDATE agent_media SET state=?,attempts=3,error=?', (state, error))
+                    snapshot = self.db_rows('SELECT * FROM agent_media')
+                    self.assertIn(expected, read()['explanation'])
+                    self.assertNotIn('PRIVATE_ERROR_CANARY', json.dumps(read()))
+                    self.assertEqual(self.db_rows('SELECT * FROM agent_media'), snapshot)
+            upload = self.seed_upload()
+            view = self.store.message_attachment({**identity, 'attachment_id': upload, 'action': 'attach'}, lambda row: dict(row))
+            self.assertFalse(view['media']['explanation'])
+            self.assertEqual([row['id'] for row in view['attachments']], [upload])
 
     def test_fetch_requires_exact_identity_original_variant_and_clean_helper_env(self):
         with tempfile.TemporaryDirectory(prefix='synthetic-wx-') as directory:

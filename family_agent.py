@@ -471,11 +471,10 @@ class Store:
             except AgentError:
                 unavailable.append(row['upload_id']); continue  # No metadata/access from stale links.
             attachments.append(upload_info(attachment))
-        media = c.execute('SELECT state,attempts FROM agent_media WHERE source_id=? AND message_id=?',
-                          (source['id'], message['id'])).fetchone()
         return dict(child_id=source['child_id'], source_id=source['id'], message_id=message['id'],
                     source_name=source['name'], message=message, attachments=attachments,
-                    unavailable_attachment_ids=unavailable, media=dict(media) if media else None,
+                    unavailable_attachment_ids=unavailable,
+                    media=family_media.collection_view(self,c,source,message,attachments),
                     material_draft=family_media.draft_view(self,c,source,message))
 
     def message(self, obj, upload_info):
