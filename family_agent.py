@@ -174,6 +174,33 @@ def _source_quote(refs, ref, quote):
     return refs[ref][start:start + len(quote)]
 
 
+def _evidence_schema(schema, evidence):
+    """Constrain model citations to this request; keep canonical IDs and validation."""
+    refs = list(dict.fromkeys(entry['ref'] for entry in evidence
+                             if isinstance(entry, dict) and isinstance(entry.get('ref'), str)
+                             and isinstance(entry.get('text'), str)))
+    result = copy.deepcopy(schema)
+    # ponytail: provider enum limits vary; keep original validation above this
+    # repeated-schema ceiling. Use short request aliases if large cases need them.
+    if not refs or len(refs) > 64 or sum(len(ref) for ref in refs) > 2000:
+        return result
+    def visit(node):
+        if isinstance(node, list):
+            for value in node: visit(value)
+        elif isinstance(node, dict):
+            properties = node.get('properties', {})
+            if refs and 'ref' in properties:
+                properties['ref']['enum'] = refs
+            for key in ('support', 'against'):
+                if key in properties:
+                    observed = [ref for ref in refs if not ref.startswith('school:')]
+                    if observed: properties[key]['items']['enum'] = observed
+                    else: properties[key]['maxItems'] = 0
+            for value in node.values(): visit(value)
+    visit(result)
+    return result
+
+
 def _time(value, optional=False):
     if optional and value == '': return ''
     try:
@@ -680,7 +707,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     content = {'mode': mode, 'as_of': as_of, 'child': profile or {}, 'evidence': evidence}
     if routing: content['learning_goals'] = school_goals
     result = family_llm._chat_json([{'role': 'system', 'content': PROMPT + (SCHOOL_PROMPT if routing else '')},
-        {'role': 'user', 'content': _json(content)}], SCHOOL_SCHEMA if routing else SCHEMA, 'family_agent_selection', timeout=45, data_path=data_path)
+        {'role': 'user', 'content': _json(content)}], _evidence_schema(SCHOOL_SCHEMA if routing else SCHEMA, evidence), 'family_agent_selection', timeout=45, data_path=data_path)
     if not isinstance(result, dict) or set(result) != {'proposals'} or not isinstance(result['proposals'], list) or len(result['proposals']) > 5:
         raise AgentError('模型筛选结构不正确')
     refs = {entry['ref']: entry['text'] for entry in evidence}; output = []
@@ -804,7 +831,7 @@ def _plan_learning(evidence, profile=None, *, as_of=None, data_path=None):
     as_of = dt.date.fromisoformat(as_of).isoformat() if as_of is not None else _now().date().isoformat()
     result = family_llm._chat_json([{'role': 'system', 'content': PLAN_PROMPT},
         {'role': 'user', 'content': _json({'as_of': as_of, 'profile': profile or {}, 'evidence': evidence})}],
-        PLAN_SCHEMA, 'family_agent_plan', timeout=90, data_path=data_path)
+        _evidence_schema(PLAN_SCHEMA, evidence), 'family_agent_plan', timeout=90, data_path=data_path)
     if not isinstance(result, dict) or set(result) != {'proposal'}:
         raise AgentError('学习提案结构不正确')
     proposal = result['proposal']

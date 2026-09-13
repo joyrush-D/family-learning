@@ -495,6 +495,28 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
             items = agent._select('school', [{'ref': 'message:synthetic:1', 'text': excerpt}])
         self.assertEqual(items[0]['evidence'][0]['text'], excerpt)
 
+    def test_citation_choices_are_scoped_to_each_request(self):
+        evidence = [dict(ref='message:54321@chatroom:12', text='本周阅读通知。')]
+        with patch.object(agent.family_llm, '_chat_json', return_value=dict(proposals=[])) as model:
+            agent._select('school', evidence)
+        refs = model.call_args.args[1]['properties']['proposals']['items']['properties']['evidence']['items']['properties']['ref']
+        self.assertEqual(refs['enum'], [evidence[0]['ref']])
+        self.assertNotIn('enum', agent.SCHEMA['properties']['proposals']['items']['properties']['evidence']['items']['properties']['ref'])
+        other = [dict(ref='record:2', text='家长转述：孩子说想休息。')]
+        with patch.object(agent.family_llm, '_chat_json', return_value=dict(proposal=None)) as model:
+            agent._plan_learning(other)
+        refs = model.call_args.args[1]['properties']['proposal']['anyOf'][1]['properties']['evidence']['items']['properties']['ref']
+        self.assertEqual(refs['enum'], ['record:2'])
+        self.assertNotIn('enum', agent.PLAN_SCHEMA['properties']['proposal']['anyOf'][1]['properties']['evidence']['items']['properties']['ref'])
+        with self.assertRaises(agent.AgentError):
+            agent._source_quote({evidence[0]['ref']: evidence[0]['text']}, 'message:5432112', evidence[0]['text'])
+        self.assertEqual(agent._evidence_schema(agent.PLAN_SCHEMA,[None,{},dict(ref=1,text='x')]),agent.PLAN_SCHEMA)
+        self.assertEqual(agent._evidence_schema(agent.PLAN_SCHEMA,evidence+[None,{}]),
+                         agent._evidence_schema(agent.PLAN_SCHEMA,evidence))
+        for entries in ([dict(ref='record:'+str(i),text='x') for i in range(65)],
+                        [dict(ref='r'*2001,text='x')]):
+            self.assertEqual(agent._evidence_schema(agent.PLAN_SCHEMA,entries),agent.PLAN_SCHEMA)
+
     def test_source_quotes_restore_no_break_spaces_without_accepting_rewrites(self):
         original = '学校通知\n1.\u00a0选一本书\n2.\u202f任选一段，示例\u2007A'
         quoted = original.translate(str.maketrans('\u00a0\u2007\u202f', '   '))

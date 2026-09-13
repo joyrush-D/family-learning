@@ -51,6 +51,17 @@ class GoalTests(unittest.TestCase):
         saved=self.goal();self.assertEqual(saved['task_id'],before['task_id']);self.assertEqual(saved['current_plan']['goal'],expected)
         self.assertEqual(saved['records'],before['records'])
 
+    def test_school_only_citations_cannot_be_hypothesis_support(self):
+        evidence=[dict(ref='school:message:54321@chatroom:1',text='任选一个地方介绍。')]
+        schema=agent._evidence_schema(goals.SCHEMA,evidence)
+        properties=schema['properties']['proposal']['properties']
+        self.assertEqual(properties['evidence']['items']['properties']['ref']['enum'],[evidence[0]['ref']])
+        for field in ('support','against'):
+            self.assertEqual(properties['hypotheses']['items']['properties'][field]['maxItems'],0)
+            self.assertNotIn('enum',properties['hypotheses']['items']['properties'][field]['items'])
+        self.assertNotIn('enum',goals.PROPOSAL['properties']['evidence']['items']['properties']['ref'])
+        self.assertEqual(agent._evidence_schema(agent.PLAN_SCHEMA,[]),agent.PLAN_SCHEMA)
+
     def test_task_feedback_reaches_goal_and_revises_without_changing_plan(self):
         self.approve(self.evaluate());before=self.goal();task=before['task_id']
         payload=dict(id=task,status='进行中',note='家长转述：孩子说困了，今天先停；只在提示后完成。',expected_updated='')
@@ -207,6 +218,13 @@ class GoalTests(unittest.TestCase):
         self.assertEqual(name,'family_learning_plan');self.assertEqual(kwargs['data_path'],self.data)
         with sqlite3.connect(self.app.DB,timeout=.1) as c:c.execute('BEGIN IMMEDIATE');c.rollback()
         value=json.loads(messages[-1]['content']);self.last_input=value;e=value['evidence'][-1]
+        properties=schema['properties']['proposal']['properties']
+        refs=[e['ref'] for e in value['evidence']]
+        self.assertEqual(properties['evidence']['items']['properties']['ref']['enum'],refs)
+        for field in ('support','against'):
+            self.assertEqual(properties['hypotheses']['items']['properties'][field]['items']['enum'],
+                             [ref for ref in refs if not ref.startswith('school:')])
+        self.assertNotIn('enum',goals.PROPOSAL['properties']['evidence']['items']['properties']['ref'])
         return synthetic_plan(value)
 
     def evaluate(self):
