@@ -1,7 +1,9 @@
 """Synthetic QQ evidence checks; no real QQ, account, family data or model calls."""
 import asyncio
 import base64
+import datetime as dt
 import json
+import plistlib
 from pathlib import Path
 import struct
 import subprocess
@@ -177,7 +179,7 @@ def check_worker():
     for changed in (False,True):
         sent=[]
         def request(path, body=None, token='', **kwargs):
-            if path=='/api/agent/collector': return dict(enabled=True,sources=[SOURCE])
+            if path=='/api/agent/fragment/plan': return dict(enabled=True,sources=[SOURCE])
             if path=='/api/state': return dict(token='synthetic-token')
             assert path=='/api/agent/fragment' and token=='synthetic-token'
             sent.append(body)
@@ -189,7 +191,7 @@ def check_worker():
                 patch.object(qq,'capture',AsyncMock(return_value=('synthetic scoped text',png()))), \
                 patch.object(qq,'settings',return_value=None if changed else local), \
                 patch.object(host,'native_host_id',return_value=host.HOST_ID),patch.object(host,'screen_locked',return_value=False):
-            try: result=asyncio.run(qq.capture_once(dict(app_url='http://127.0.0.1:8765'),Path(directory),local))
+            try: result=asyncio.run(qq.capture_once(dict(app_url='http://127.0.0.1:8765'),Path(directory).resolve(),local))
             except qq.CollectError as error: assert changed and str(error)=='qq_capture_config_changed'
             else: assert not changed and result['status']=='fragment_saved'
         driver.shutdown.assert_awaited_once()
@@ -198,7 +200,60 @@ def check_worker():
     print('PASS: cropped-only submission, rechecked authorization/configuration and explicit server acknowledgement')
 
 
+def check_cadence():
+    case=AgentHTTPTests();case.setUp()
+    try:
+        import app
+        case.source=SOURCE.copy();case.config=dict(enabled=True,sources=[case.source]);case.write_config(case.config)
+        store=app.agent_store();data=app.DATA;now=agent._now().replace(hour=10,minute=55,second=0,microsecond=0)
+        native=app.ROOT/'Synthetic QQ Reader.app';(native/'Contents/MacOS').mkdir(parents=True)
+        info=dict(CFBundleIdentifier=host.HOST_ID,CFBundleExecutable='FamilyCollector',FamilyQQPreflight=True,
+                  FamilyRoot=str(app.ROOT),FamilyConfig=str(data/'collector.json'))
+        (native/'Contents/Info.plist').write_bytes(plistlib.dumps(info))
+        binary=native/'Contents/MacOS/FamilyCollector';binary.write_text('#!/bin/sh\nexit 1\n');binary.chmod(0o700)
+        local=dict(enabled=True,source_id=SOURCE['id'],host_app=str(native));config=data/'qq-cua.json'
+        config.write_text(json.dumps(local));config.chmod(0o600)
+        calls=[]
+        def run(moment,*,status='permission_required',locked=False,stale=False):
+            def launch(args,env,timeout,max_stdout):
+                assert args==[str(binary)] and timeout==50 and max_stdout==8192
+                assert [k for k in env if k.startswith('FAMILY_')]==['FAMILY_QQ_WORKDIR']
+                work=Path(env['FAMILY_QQ_WORKDIR']);assert work.parent==data and work.is_dir()
+                (work/'synthetic-window.png').write_bytes(png())
+                calls.append(args)
+                receipt=dict(checked_at=(moment-dt.timedelta(minutes=1) if stale else moment).isoformat(),
+                             host_bundle_id=host.HOST_ID,source_id=SOURCE['id'],status=status,messages_ingested=0,
+                             cursor_advanced=False,coverage='window_fragment',observations_inserted=1)
+                p=data/'qq-cua-preflight.json';p.write_text(json.dumps(receipt));p.chmod(0o600)
+                if status=='permission_required':raise qq.MediaError('process_failed')
+                return b''
+            with patch.object(qq,'bounded_process',side_effect=launch),patch.object(host,'screen_locked',return_value=locked),patch.object(agent,'_now',side_effect=lambda value=None:value or moment):
+                return qq.run_one(app,store,moment)
+        result=run(now);assert result['state']=='permission_required' and result['next_at']==(now+dt.timedelta(minutes=30)).isoformat()
+        result=run(now+dt.timedelta(minutes=5));assert result['state']=='not_due' and len(calls)==1
+        result=run(now+dt.timedelta(minutes=30),status='fragment_saved');assert result['state']=='fragment_saved' and len(calls)==2
+        result=run(now+dt.timedelta(minutes=60),stale=True);assert result['state']=='not_confirmed'
+        count=len(calls);result=run(now+dt.timedelta(minutes=90),locked=True);assert result['state']=='screen_locked' and len(calls)==count
+        # Native source attempts cannot starve the independent window schedule.
+        batch=case.batch();batch['checked_at']=agent._now().isoformat();assert case.post('/api/agent/ingest',batch)[0]==200
+        assert case.request('GET','/api/agent/collector')[1]['sources']==[]
+        plan=case.request('GET','/api/agent/fragment/plan')[1];assert [s['id'] for s in plan['sources']]==[SOURCE['id']]
+        assert case.request('GET','/api/agent/fragment/plan',headers=case.child_headers('child-1'))[0]==403
+        # A QQ configuration failure leaves the ordinary independent Agent running.
+        with store._db() as c:c.execute('UPDATE agent_messages SET processed=1')
+        info['FamilyRoot']='/synthetic-other-family';(native/'Contents/Info.plist').write_bytes(plistlib.dumps(info))
+        with patch.object(qq,'bounded_process') as launch:
+            result=agent.run_once(app)
+        launch.assert_not_called();assert result['qq_fragment']['state']=='configuration_error' and result['state']=='ready'
+        config.unlink();assert qq.run_one(app,store,now)['state']=='disabled'
+        assert not list(data.glob('*.plist'))
+        assert not list(data.glob('.qq-cycle-*'))
+    finally:case.tearDown()
+    print('PASS: independent 30/60 cadence, persisted retry wait, stale receipts, locked skip, exact installation and unaffected Agent work')
+
+
 if __name__=='__main__':
     check_layout_and_pixels()
     check_http()
     check_worker()
+    check_cadence()

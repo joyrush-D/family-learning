@@ -1428,6 +1428,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/calendar/timetables': return self.reply(200,dict(timetables=calendar_store().saved_timetables()))
             if path=='/api/state': return self.reply(200,snapshot())
             if path=='/api/agent/collector': return self.reply(200,agent_store().collector_plan())
+            if path=='/api/agent/fragment/plan': return self.reply(200,agent_store().collector_plan(fragment=True))
             if path=='/api/teachers': return self.reply(200,teacher_store().snapshot())
             if path=='/api/settings': return self.reply(200,settings_store().snapshot())
             if path=='/api/agent': return self.reply(200,agent_store().snapshot())

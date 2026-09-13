@@ -1,8 +1,8 @@
 """QQ Cua host readiness check and explicitly configured window evidence capture.
 
 Run from the named native app to check its real background permissions. A check
-from a developer terminal does not establish the app's permissions. This is the
-default is preflight only. Optional private/qq-cua.json enables one authorized
+from a developer terminal does not establish the app's permissions. The default
+is preflight only. Optional private/qq-cua.json enables one authorized
 group's visible fragment; this never advances native message cursors.
 """
 import argparse
@@ -91,7 +91,7 @@ async def check_host():
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config', required=True, type=Path, help='已有本机采集配置；不会改动配置或连接消息来源')
+    parser.add_argument('--config', required=True, type=Path, help='已有本机采集配置；默认只检查，可按私有配置读取授权QQ窗口')
     args = parser.parse_args(argv)
     try:
         config = no_links(args.config.expanduser())
@@ -102,10 +102,11 @@ def main(argv=None):
         return 1
     result = {}
     try:
+        from family_qq_capture import settings, capture_once
+        local = settings(config.parent)
         result = asyncio.run(asyncio.wait_for(check_host(), timeout=20))
+        if local and local['enabled']: result['source_id'] = local['source_id']
         if result['status'] == 'host_ready':
-            from family_qq_capture import settings, capture_once
-            local = settings(config.parent)
             if local and local['enabled']:
                 result.update(asyncio.run(asyncio.wait_for(capture_once(collector, config.parent, local), timeout=40)))
     except CollectError as error:

@@ -340,14 +340,15 @@ class Store:
         except (OSError, ValueError, KeyError, TypeError):
             raise AgentError('Agent配置无法核对，请检查已授权来源和孩子归属', 409, 'agent_config') from None
 
-    def collector_plan(self, now=None):
+    def collector_plan(self, now=None, *, fragment=False):
         config = self._config(); sources = []; now = _now(now)
         with self._db() as c:
             for source in config['sources']:
                 if not source['enabled']: continue
+                if fragment and source['platform'] != 'qq': continue
                 row = c.execute('SELECT * FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
                 self._binding(source, row)
-                if config['enabled'] and row and row['last_attempt'] and now < next_collection_at(row['last_attempt']):
+                if not fragment and config['enabled'] and row and row['last_attempt'] and now < next_collection_at(row['last_attempt']):
                     continue
                 sources.append({**{key: source[key] for key in ['id', 'platform', 'child_id', 'name']},
                                 'cursor': row['cursor'] if row else source['cursor']})
@@ -946,6 +947,8 @@ def run_once(app, now=None):
         store._runtime('running', now)
         created = processed = failed = 0
         try:
+            from family_qq_capture import run_one as read_qq_fragment
+            qq_fragment = read_qq_fragment(app, store, now)
             try:
                 teacher_public = family_teacher_public.run_one(app, now)
             except (OSError,ValueError,TypeError,sqlite3.Error):
@@ -1107,7 +1110,7 @@ def run_once(app, now=None):
             store._runtime(state, now, '部分任务已达到3次自动尝试上限，已暂停自动调用；原资料保留，可在助手状态中重试或手动处理。' if exhausted else
                            '图片原件暂未自动保存，可打开通知手动补充；其他家庭功能继续可用。' if media['state'] == 'error' and failed == 1 and not unresolved else
                            '部分资料尚未整理成功；原资料保留，稍后重试或查看来源状态。' if failed or unresolved else '')
-            return {'state': state, 'created': created, 'processed': processed, 'failed': failed, 'media': media, 'teacher_public': teacher_public}
+            return {'state': state, 'created': created, 'processed': processed, 'failed': failed, 'media': media, 'teacher_public': teacher_public, 'qq_fragment': qq_fragment}
         except Exception:
             store._runtime('error', now, '本次Agent检查未完成；原资料保留，请查看服务运行状态。')
             raise
