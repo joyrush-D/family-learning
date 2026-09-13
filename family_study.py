@@ -63,6 +63,27 @@ def _minute(clock):
     hours, minutes = map(int, clock.split(':')); return hours * 60 + minutes
 
 
+def windows_between(start, stop, intervals):
+    """Separate windows outside known appointments; unrecorded time is not covered."""
+    windows=[]; cursor=start
+    for begin,finish in sorted(intervals):
+        begin=max(begin,start); finish=min(finish,stop)
+        if begin<finish:
+            if begin>cursor: windows.append((cursor,begin))
+            cursor=max(cursor,finish)
+    if cursor<stop: windows.append((cursor,stop))
+    return windows
+
+
+def available_between(start, stop, intervals):
+    return round(sum(end-begin for begin,end in windows_between(start,stop,intervals)),2)
+
+
+def is_fixed_activity(event, registered_tasks):
+    """Deduplicate explicit study slots, never a school activity linked to its paperwork."""
+    return event['status']=='confirmed' and not (event.get('category')=='study' and event.get('task_id','') in registered_tasks)
+
+
 def task_changed(c, task_id, now):
     """Pause and invalidate linked timers inside the original task's transaction."""
     if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='study_items'").fetchone(): return
@@ -439,7 +460,7 @@ class Store:
         gaps = [calendar.get('source_error','')] if calendar.get('source_error') else []
         intervals = []
         for event in calendar['events']:
-            if child_id not in event['child_ids'] or event['status'] != 'confirmed': continue
+            if child_id not in event['child_ids'] or not is_fixed_activity(event,used): continue
             task = tasks.get(event.get('task_id'))
             if task and task['child'] == child['name'] and self.app.task_status(task,updates.get(task['id'])) in self.app.TASK_DISMISSED: continue
             if not event['start_time'] or not event['end_time']:
@@ -448,17 +469,10 @@ class Store:
                 start=max(_minute(plan['start_time']),_minute(event['start_time'])); stop=min(_minute(plan['stop_time']),_minute(event['end_time']))
                 if start<stop: intervals.append((start,stop))
         if plan['start_time'] and plan['stop_time']:
-            def available_between(start, stop):
-                covered=0; end=-1
-                for begin,finish in sorted(intervals):
-                    begin=max(begin,start); finish=min(finish,stop)
-                    if begin<finish:
-                        covered += max(0,finish-max(begin,end)); end=max(end,finish)
-                return max(0,round(stop-start-covered,2))
-            summary['available_minutes'] = available_between(_minute(plan['start_time']),_minute(plan['stop_time']))
+            summary['available_minutes'] = available_between(_minute(plan['start_time']),_minute(plan['stop_time']),intervals)
             summary['over_budget_minutes'] = max(0,round(summary['planned_minutes']-summary['available_minutes'],2))
             if day == now.date().isoformat():
-                summary['remaining_available_minutes'] = available_between(max(_minute(plan['start_time']),now.hour*60+now.minute+now.second/60),_minute(plan['stop_time']))
+                summary['remaining_available_minutes'] = available_between(max(_minute(plan['start_time']),now.hour*60+now.minute+now.second/60),_minute(plan['stop_time']),intervals)
                 summary['remaining_over_budget_minutes'] = max(0,round(summary['remaining_minutes']-summary['remaining_available_minutes'],2))
         warning=[]
         if summary['unknown_estimates']: warning.append(str(summary['unknown_estimates'])+' 项还没估时间')

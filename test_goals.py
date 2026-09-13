@@ -37,6 +37,81 @@ class GoalTests(unittest.TestCase):
     def feedback(self,note='家长转述孩子：会认单词，但说不出为什么。',**obj):
         return self.action('feedback',id=self.ident,day=self.now.date().isoformat(),source='家长转述孩子',note=note,**obj)
 
+    def test_calendar_constrains_learning_without_a_time_account_and_preserves_recurring_exceptions(self):
+        calendar=self.app.calendar_store();day=self.now.date().isoformat()
+        body=dict(id='c'*32,version=0,child_ids=['child-1','child-2'],title='共享运动安排',category='activity',
+                  day=day,start_time='19:10',end_time='19:40',location='不需要发给模型的地点',note='私有日历备注不进入分析',status='confirmed',repeat='daily',until='')
+        calendar.save(body);self.evaluate();context=self.last_input['day_context']
+        self.assertEqual([e['title'] for e in context['calendar_events']],['共享运动安排'])
+        self.assertIsNone(context['window_minutes_after_known_appointments'])
+        self.assertNotIn(body['note'],json.dumps(self.last_input,ensure_ascii=False));self.assertNotIn(body['location'],json.dumps(self.last_input,ensure_ascii=False))
+        family_study.Store(self.app).save_day(dict(child_id='child-1',day=day,request_key='synthetic-calendar-day',start_time='19:00',stop_time='20:00',bed_time='20:30'))
+        calendar.save(dict(body,id='d'*32,child_ids=['child-1'],title='重叠的已确认安排',repeat='none',start_time='19:30',end_time='19:50'))
+        for ident,child,status in [('e','child-2','confirmed'),('f','child-1','tentative'),('a','child-1','cancelled')]:
+            calendar.save(dict(body,id=ident*32,child_ids=[child],title='另一孩子私有安排' if child=='child-2' else status,repeat='none',status=status,start_time='19:00',end_time='20:00'))
+        pending=self.evaluate();context=self.last_input['day_context']
+        self.assertEqual(context['window_minutes_after_known_appointments'],20,'overlap counts once; tentative/cancelled do not reserve time')
+        self.assertEqual(context['known_windows'],[dict(start_time='19:00',end_time='19:10'),dict(start_time='19:50',end_time='20:00')])
+        self.assertNotIn('另一孩子私有安排',json.dumps(self.last_input,ensure_ascii=False))
+        study=family_study.Store(self.app)
+        work=study.save_item(dict(child_id='child-1',day=day,request_key='synthetic-calendar-work-link',title='日历中的同一份作业',planned_minutes=20))
+        linked=dict(id='synthetic-work-slot',child_ids=['child-1'],title='日历中的同一份作业',category='study',day=day,start_time='19:00',end_time='19:10',status='confirmed',source='虚构安排',task_id=work['saved_item_id'])
+        (self.data/'日历来源.json').write_text(json.dumps(dict(events=[linked])))
+        pending=self.evaluate();context=self.last_input['day_context']
+        self.assertEqual(context['window_minutes_after_known_appointments'],20,'one assignment must not be counted as extra calendar load')
+        self.assertEqual(study.snapshot('child-1',day)['summary']['available_minutes'],20)
+        calendar.save_occurrence(dict(series_id=body['id'],series_version=1,origin_day=day,slot_id='',version=0,day=day,start_time='19:10',end_time='19:40',status='cancelled',note='今天取消一次'))
+        self.assertTrue(self.goal()['pending_stale'])
+        with self.assertRaises(agent.AgentError):self.approve(pending)
+        self.evaluate();self.assertEqual(self.last_input['day_context']['window_minutes_after_known_appointments'],40)
+        tomorrow=(self.now.date()+dt.timedelta(days=1)).isoformat()
+        self.assertEqual(calendar.snapshot(tomorrow,tomorrow)['events'][0]['status'],'confirmed')
+
+    def test_calendar_gaps_remain_unknown_and_changes_during_analysis_discard_old_suggestions(self):
+        calendar=self.app.calendar_store();day=self.now.date().isoformat()
+        body=dict(id='b'*32,version=0,child_ids=['child-1'],title='钟点未确定的学校安排',category='activity',day=day,start_time='',end_time='',status='confirmed',repeat='none',until='')
+        calendar.save(body);self.evaluate();context=self.last_input['day_context']
+        self.assertEqual(context['confirmed_events_without_clock'],1);self.assertIsNone(context['window_minutes_after_known_appointments'])
+        original=self.reply
+        def changed(*args,**kwargs):
+            result=original(*args,**kwargs);calendar.save(dict(body,version=1,start_time='19:00',end_time='20:00'));return result
+        self.feedback('补充本次原始反馈，重新分析安排')
+        self.model.side_effect=changed
+        self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'stale')
+        self.model.side_effect=original
+        (self.data/'日历来源.json').write_text('{broken')
+        self.evaluate();context=self.last_input['day_context']
+        self.assertTrue(context['calendar_incomplete']);self.assertEqual(context['calendar_events'][0]['title'],body['title'])
+        self.assertNotIn('{broken',json.dumps(self.last_input,ensure_ascii=False))
+        other=self.app.new_task(dict(child='示例乙',title='另一孩子的私有待办',category='todo'))['id']
+        source=dict(body,id='synthetic-other-link',task_id=other,title='不能提供的错误关联',source='虚构来源')
+        source.pop('version');source.pop('repeat');source.pop('until')
+        shared=dict(source,id='synthetic-shared-link',child_ids=['child-1','child-2'],title='两个孩子的共享活动',start_time='19:00',end_time='20:00')
+        (self.data/'日历来源.json').write_text(json.dumps(dict(events=[source,shared])))
+        calendar.save_timetable(dict(id='a'*32,version=0,child_id='child-1',title='只有节次的课表',effective_from=day,effective_until='',note='',attachments=[],week=[dict(weekday=self.now.isoweekday(),sessions=[dict(slot='第一节',title='语文')])]),self.app.timetable_uploads)
+        self.evaluate();context=self.last_input['day_context']
+        self.assertEqual(context['unavailable_calendar_events'],1);self.assertEqual(context['timetables_without_clock'],1)
+        self.assertNotIn('不能提供的错误关联',json.dumps(self.last_input,ensure_ascii=False))
+        self.assertNotIn('另一孩子的私有待办',json.dumps(self.last_input,ensure_ascii=False))
+        self.assertEqual(next(e for e in context['calendar_events'] if e['title']==shared['title'])['task_id'],'')
+        family_study.Store(self.app).save_day(dict(child_id='child-1',day=day,request_key='synthetic-timetable-gap',start_time='19:00',stop_time='21:00'))
+        self.evaluate();context=self.last_input['day_context']
+        self.assertEqual(context['window_minutes_after_known_appointments'],60,'clockless timetable flags uncertainty, not an extra duration')
+        self.assertEqual(context['timetables_without_clock'],1)
+        self.approve(self.goal());calls=self.model.call_count
+        self.assertEqual(goals.Store(self.app).process(self.ident,self.now)['state'],'current');self.assertEqual(self.model.call_count,calls)
+
+    def test_omitted_calendar_titles_do_not_erase_their_time_constraints(self):
+        day=self.now.date().isoformat();calendar=self.app.calendar_store()
+        family_study.Store(self.app).save_day(dict(child_id='child-1',day=day,request_key='synthetic-many-appointments',start_time='19:00',stop_time='20:00'))
+        for i in range(25):
+            calendar.save(dict(id=f'{i+100:032x}',version=0,child_ids=['child-1'],title='虚构已确认安排 '+str(i),category='activity',
+                day=day,start_time='19:10' if i<24 else '19:50',end_time='19:50' if i<24 else '20:00',status='confirmed',repeat='none',until=''))
+        self.evaluate();context=self.last_input['day_context']
+        self.assertEqual(len(context['calendar_events']),24);self.assertEqual(context['omitted_calendar_events'],1)
+        self.assertEqual(context['window_minutes_after_known_appointments'],10)
+        self.assertEqual(context['known_windows'],[dict(start_time='19:00',end_time='19:10')])
+
     def test_registered_work_and_rest_reach_analysis_without_other_child_or_fake_free_time(self):
         self.evaluate();self.assertIsNone(self.last_input['day_context'])
         study=family_study.Store(self.app);day=self.now.date().isoformat()
@@ -44,7 +119,7 @@ class GoalTests(unittest.TestCase):
         for child,title,minutes in [('child-1','已有语文功课',50),('child-1','未估时间的数学',None),('child-2','另一孩子私有功课',40)]:
             study.save_item(dict(child_id=child,day=day,request_key='synthetic-work-'+child+str(minutes),title=title,subject='综合',planned_minutes=minutes))
         pending=self.evaluate();context=self.last_input['day_context']
-        self.assertEqual(context['stop_time'],'20:00');self.assertEqual(context['bed_time'],'20:30')
+        self.assertEqual(context['stop_time'],'20:00');self.assertEqual(context['preparing_for_bed_at'],'20:30')
         self.assertEqual({i['title'] for i in context['other_registered_work']},{'已有语文功课','未估时间的数学'})
         self.assertTrue(any(i['planned_minutes'] is None for i in context['other_registered_work']))
         self.assertNotIn('free_minutes',context);self.assertFalse(context['closed_at'])

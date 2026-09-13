@@ -118,7 +118,13 @@ class Store:
                         if name not in {r[1] for r in c.execute('PRAGMA table_info(calendar_events)')}: raise
 
     @contextmanager
-    def _db(self):
+    def _db(self, connection=None):
+        """A supplied sqlite3.Row connection remains owned by the caller."""
+        if connection is not None:
+            if connection.row_factory is not sqlite3.Row:
+                raise CalendarError('传入的日历连接须使用 sqlite3.Row')
+            yield connection
+            return
         c=self.connect(); c.row_factory=sqlite3.Row
         try:
             yield c
@@ -346,8 +352,8 @@ class Store:
             detail=str(e) if isinstance(e,CalendarError) else '文件无法读取或JSON格式损坏'
             return [],[],'学校日历来源未载入：'+detail+'；手动安排仍可使用。'
 
-    def saved_timetables(self):
-        with self._db() as c:
+    def saved_timetables(self, connection=None):
+        with self._db(connection) as c:
             if not c.execute("SELECT 1 FROM sqlite_master WHERE name='calendar_timetables'").fetchone(): return []
             return [json.loads(r['payload'])|dict(id=r['id'],version=r['version'],updated=r['updated']) for r in c.execute('SELECT * FROM calendar_timetables ORDER BY updated DESC')]
 
@@ -378,11 +384,11 @@ class Store:
                       (ident,version+1,_json(row),digest,now))
         return row|dict(id=ident,version=version+1)
 
-    def snapshot(self,start,end):
+    def snapshot(self,start,end,connection=None):
         first=dt.date.fromisoformat(_day(start)); last=dt.date.fromisoformat(_day(end))
         if not 0<=(last-first).days<31: raise CalendarError('每次查询须为按先后排列的1至31天（包含结束日）')
         children=self._children()
-        with self._db() as c:
+        with self._db(connection) as c:
             ready=c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='calendar_events'").fetchone()
             rows=self.saved_rows(c,children) if ready else []
         events=[]
@@ -401,7 +407,7 @@ class Store:
                     events.append(event)
         sources,tables,error=self._sources(children)
         events.extend(row for row in sources if start<=row['day']<=end)
-        for row in self.saved_timetables():
+        for row in self.saved_timetables(connection):
             if row['child_id'] not in children: raise CalendarError('已导入课表的孩子归属无法核对')
             tables.append(dict(row,week=timetable_week(row['week']),source='家长核对导入',attachment=''))
         expanded=[]

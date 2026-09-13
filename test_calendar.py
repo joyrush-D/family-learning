@@ -4,6 +4,7 @@ import http.client
 from http.server import ThreadingHTTPServer
 import json
 import os
+import sqlite3
 from pathlib import Path
 import tempfile
 import threading
@@ -62,6 +63,23 @@ class CalendarTests(unittest.TestCase):
 
     def dump(self):
         with app.connect() as c: return '\n'.join(c.iterdump())
+
+    def test_snapshot_reuses_callers_transaction_without_committing_or_closing_it(self):
+        self.store.save(self.request(status='confirmed'))
+        with app.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            c.execute("UPDATE calendar_events SET title='尚未提交的安排'")
+            scoped=family_calendar.Store(app.connect,lambda:app.profiles(c),app.DATA,initialize=False)
+            with patch.object(scoped,'connect',side_effect=AssertionError('nested connection')):
+                result=scoped.snapshot('2026-09-12','2026-09-12',connection=c)
+            self.assertEqual(result['events'][0]['title'],'尚未提交的安排')
+            self.assertTrue(c.in_transaction)
+            c.rollback()
+        self.assertEqual(self.store.snapshot('2026-09-12','2026-09-12')['events'][0]['title'],'虚构周末观察')
+        with sqlite3.connect(':memory:') as plain:
+            with self.assertRaisesRegex(family_calendar.CalendarError,'sqlite3.Row'):
+                self.store.saved_timetables(connection=plain)
+            self.assertIsNone(plain.row_factory);self.assertEqual(plain.execute('SELECT 1').fetchone(),(1,))
 
     def sources(self):
         return dict(events=[dict(id='school-day',child_ids=['child-2'],title='虚构学校材料上交',category='school',
