@@ -1,8 +1,9 @@
-"""QQ Cua host readiness check. No permission prompts, chat reads or QQ changes.
+"""QQ Cua host readiness check and explicitly configured window evidence capture.
 
 Run from the named native app to check its real background permissions. A check
 from a developer terminal does not establish the app's permissions. This is the
-preflight stage of the QQ fallback; it does not ingest messages or advance cursors.
+default is preflight only. Optional private/qq-cua.json enables one authorized
+group's visible fragment; this never advances native message cursors.
 """
 import argparse
 import asyncio
@@ -94,20 +95,26 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         config = no_links(args.config.expanduser())
-        load_config(config)
+        collector = load_config(config)
         target = no_links(config.parent / 'qq-cua-preflight.json')
     except (OSError, ValueError, CollectError):
         print(json.dumps({'status': 'not_checked', 'error': 'private_config_required'}))
         return 1
+    result = {}
     try:
         result = asyncio.run(asyncio.wait_for(check_host(), timeout=20))
+        if result['status'] == 'host_ready':
+            from family_qq_capture import settings, capture_once
+            local = settings(config.parent)
+            if local and local['enabled']:
+                result.update(asyncio.run(asyncio.wait_for(capture_once(collector, config.parent, local), timeout=40)))
     except CollectError as error:
-        result = dict(status='not_checked', error=str(error))
+        result.update(status='not_collected' if result else 'not_checked', error=str(error))
     except TimeoutError:
-        result = dict(status='not_checked', error='qq_preflight_timeout')
+        result.update(status='not_collected' if result else 'not_checked', error='qq_read_timeout')
     except Exception:
         # Native errors may contain application/window text or machine paths.
-        result = dict(status='not_checked', error='qq_preflight_unavailable')
+        result.update(status='not_collected' if result else 'not_checked', error='qq_read_unavailable')
     result.update(checked_at=datetime.now(timezone.utc).isoformat(), messages_ingested=0,
                   cursor_advanced=False, permission_prompted=False)
     try:
@@ -116,7 +123,7 @@ def main(argv=None):
         print(json.dumps({'status': 'not_checked', 'error': 'qq_receipt_not_saved'}))
         return 1
     print(json.dumps(result, ensure_ascii=False))
-    return 0 if result['status'] == 'host_ready' else 1
+    return 0 if result['status'] in ('host_ready', 'fragment_saved') else 1
 
 
 if __name__ == '__main__':

@@ -18,7 +18,7 @@ import app
 class AgentHTTPTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='synthetic-agent-http-')
-        root = Path(self.temp.name); private = root / 'private'; private.mkdir()
+        root = Path(self.temp.name).resolve(); private = root / 'private'; private.mkdir()
         (root / '家庭运行规则.md').write_text('| child-1 | 示例星星 | 男 | 10岁 | 四年级 |\n| child-2 | 示例月亮 | 男 | 13岁 | 初一 |\n')
         for name in ('消息来源.md', '学习与成长.md', '跟踪台账.md'):
             (root / name).write_text('SYNTHETIC_PARENT_ONLY')

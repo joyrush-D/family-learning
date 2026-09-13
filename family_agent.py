@@ -373,6 +373,8 @@ class Store:
             row = {key: _text(message, key, size, key in {'id', 'kind'}) for key, size in
                    [('id', 160), ('kind', 40), ('sender', 200), ('text', 8000)]}
             row.update(time=_time(message['time'], True), unread=message['unread'])
+            if row['kind'] == 'qq_window_fragment':
+                raise AgentError('窗口片段须使用专用入口，不能标为完整消息同步')
             if not re.fullmatch(r'[A-Za-z0-9_:@.\-]+', row['id']) or row['id'] in seen or type(row['unread']) is not bool:
                 raise AgentError('消息编号须稳定且不能重复，未读标记须为布尔值')
             seen.add(row['id']); clean.append(row)
@@ -531,6 +533,10 @@ class Store:
                     'next_collection_at': due,
                     'cursor': saved['cursor'] if saved else source['cursor']})
                 if saved and not binding_error:
+                    fragment = c.execute("""SELECT id,json_extract(payload,'$.captured_at') AS captured_at
+                        FROM agent_messages WHERE source_id=? AND json_extract(payload,'$.kind')='qq_window_fragment'
+                        ORDER BY rowid DESC LIMIT 1""", (source['id'],)).fetchone()
+                    if fragment: sources[-1]['fragment'] = dict(fragment)
                     for link in c.execute('''SELECT DISTINCT a.upload_id FROM agent_message_attachments a
                         JOIN agent_messages m ON m.source_id=a.source_id AND m.id=a.message_id WHERE a.source_id=?''', (source['id'],)):
                         try: self._message_upload(c, source['child_id'], link['upload_id'])

@@ -111,6 +111,22 @@ async function reloadPage(p){
   current={...current,sync:{},sync_error:'虚构来源状态损坏 <img src=x onerror="window.__sourceXss=4">'};await reloadPage(p);await p.locator('details[data-source-history] > summary').click();await eventually(()=>p.locator('[data-source-error]').isVisible(),'explicit damaged source state');assert.match(await p.locator('[data-source-error]').innerText(),/虚构来源状态损坏 <img/);assert.equal((await p.locator('#content').innerText()).includes('还没有保存的消息来源'),false);await p.locator('nav [data-page="tasks"]').click();assert.ok(await p.locator('.task').count()>0,'source error leaves saved tasks usable');await sources(p);
   current={...current,sync:{},sync_error:'',agent:{...current.agent,sources:[]}};await reloadPage(p);await eventually(async()=>(await p.locator('#content').innerText()).includes('还没有保存的消息来源'),'real empty source state');assert.equal(await p.locator('[data-source-error]').count(),0);assert.notEqual(await p.locator('details[data-source-history]').getAttribute('open'),null);
   checks.push('damaged source metadata stays explicit while basic records work; valid empty source list is separate');
+  const fragmentID='fragment-'+'a'.repeat(40),qqSource={...sourceStates[3],fragment:{id:fragmentID,captured_at:recent}};
+  current={...current,agent:{...current.agent,sources:[qqSource]}};let fragmentFails=1;
+  await p.route('**/api/agent/message?*',async route=>{const u=new URL(route.request().url());assert.equal(u.searchParams.get('source_id'),qqSource.id);assert.equal(u.searchParams.get('child_id'),qqSource.child_id);assert.equal(u.searchParams.get('message_id'),fragmentID);if(fragmentFails-->0)return route.fulfill({status:503,json:{error:'虚构读取失败，请重试'}});return route.fulfill({json:{source_id:qqSource.id,child_id:qqSource.child_id,message_id:fragmentID,source_name:qqSource.name,message:{id:fragmentID,kind:'qq_window_fragment',time:'',sender:'',captured_at:recent,text:'虚构窗口内容 <img src=x onerror="window.__sourceXss=9">'},attachments:[],unavailable_attachment_ids:[],material_draft:{state:'pending',explanation:'后台整理待家长核对'}}})});
+  await reloadPage(p);await sources(p);
+  for(const width of [360,1440]){
+   await p.setViewportSize({width,height:1000});assert.equal(await currentCard(qqSource.id).locator('[data-current-source-status]').innerText(),'已停用');
+   await currentCard(qqSource.id).getByRole('button',{name:'查看窗口片段'}).click();
+   if(width===360){await eventually(async()=>(await p.locator('[data-school-original-status]').innerText()).includes('虚构读取失败'),'fragment retry');await p.locator('[data-school-original-retry]').click()}
+   await eventually(async()=>(await p.locator('#schoolOriginalDialog h2').innerText())==='QQ群窗口片段','fragment dialog');
+   assert.match(await p.locator('[data-fragment-note]').innerText(),/不是老师附件原件.*发布时间与发言人仍需核对/);
+   assert.equal(await p.locator('#schoolOriginalDialog img').count(),0);assert.equal(await p.evaluate(()=>window.__sourceXss),undefined);
+   assert.equal(await p.locator('#schoolOriginalDialog').evaluate(e=>e.scrollWidth>e.clientWidth),false);
+   await p.screenshot({path:path.join(proofDir,'fragment-'+width+'.png'),fullPage:true});
+   await p.locator('[data-school-original-close]').click();await reloadPage(p);await sources(p);
+  }
+  checks.push('QQ fragment opens from source on mobile/desktop, preserves failed/disabled sync, retries and reopens with escaped evidence and explicit capture/publication distinction');
   const home=async(sources,changes={})=>{
    const stamp=new Date().toISOString();current={...current,sync:{},sync_error:'',agent:{...current.agent,enabled:true,state:'ready',last_error:'',last_run:stamp,sources,...changes}};
    await p.locator('nav [data-page="home"]').click();await reloadPage(p);

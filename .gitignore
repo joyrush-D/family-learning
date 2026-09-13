@@ -86,6 +86,8 @@
 !/test_today_ui.cjs
 
 !/family_agent.py
+!/family_qq_capture.py
+!/test_qq_capture.py
 !/family_goals.py
 !/goals.js
 !/test_goals.py

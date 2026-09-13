@@ -1502,9 +1502,9 @@ class Handler(BaseHTTPRequestHandler):
                 try: attachment=save_upload(self.rfile,n,self.headers.get('X-File-Name',''))
                 except ValueError: return self.reply(400,{'error':'文件为空、文件名不正确或内容与支持的类型不符'})
                 return self.reply(200,dict(ok=True,attachment=attachment))
-            max_json=2*1024*1024 if path=='/api/agent/ingest' else 65536 if path in ('/api/guided/material','/api/goals/action') else 20000
+            max_json=2*1024*1024 if path in ('/api/agent/ingest','/api/agent/fragment') else 65536 if path in ('/api/guided/material','/api/goals/action') else 20000
             if not 0<n<=max_json: raise ValueError('请求过大或为空')
-            if path=='/api/agent/ingest':
+            if path in ('/api/agent/ingest','/api/agent/fragment'):
                 self.close_connection=True
                 if self.headers.get('Transfer-Encoding'): return self.reply(400,{'error':'采集请求格式不正确'})
                 self.connection.settimeout(30)
@@ -1523,6 +1523,9 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith('/api/child-access/'):
                 return self.reply(200,family_child.parent_action(SimpleNamespace(**globals()),path.removeprefix('/api/child-access/'),obj))
             if path=='/api/agent/ingest': return self.reply(200,agent_store().ingest(obj))
+            if path=='/api/agent/fragment':
+                from family_qq_capture import save_fragment
+                return self.reply(200,save_fragment(agent_store(),obj))
             if path=='/api/agent/action': return self.reply(200,agent_store().act(obj))
             if path=='/api/goals/action': return self.reply(200,goal_store().action(obj))
             if path=='/api/agent/message/attachment': return self.reply(200,agent_store().message_attachment(obj,upload_info))
