@@ -134,6 +134,16 @@ test('task card puts completion goal before optional advice',()=>{
  assert.ok(html.indexOf('完成目标')<html.indexOf('操作建议'));assert.ok(html.indexOf('虚构成果目标')<html.indexOf('虚构可选做法'));
 });
 
+test('today and inbox group legacy undated tasks without reopening closed items or showing future plans',()=>{
+ const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.taskHTML=t=>`<article>${t.title}</article>`;h.ctx.taskView='Inbox';
+ const row=(id,category,extra={})=>({id,task_id:id,kind:'task',child_ids:['child-a'],closed:false,agenda:{category,box:'inbox',scheduled_on:'',published_on:'',...extra}});
+ const rows=[row('assignment','homework'),row('undated-admin','todo'),row('legacy-admin',''),{...row('closed','homework'),closed:true},row('future-plan','todo',{scheduled_on:'2026-09-15'}),row('future-notice','homework',{published_on:'2026-09-15'}),{...row('other-child','todo'),child_ids:['child-b']}];
+ d.tasks=rows.map(x=>({id:x.id,title:x.id,child:x.child_ids[0]==='child-a'?'小溪':'小岚',focus:{box:'inbox'}}));d.today_calendar={inbox:rows,agenda:[],events:[],timetables:[]};h.ctx.child='小溪';
+ const today=h.ctx.todayTasksHTML();assert.match(today,/今日作业 · 1/);assert.match(today,/待办事项 · 2/);assert.match(today,/undated-admin|legacy-admin/);assert.doesNotMatch(today,/<article>(?:closed|future-plan|future-notice|other-child)<\/article>|待分类/);
+ const inbox=h.ctx.taskInboxHTML();assert.match(inbox,/课内作业 · 2/);assert.match(inbox,/待办事项 · 3/);assert.match(inbox,/<article>future-plan<\/article>/);assert.doesNotMatch(inbox,/<article>closed<\/article>|待分类/);
+ rows[0].closed=true;assert.match(h.ctx.todayTasksHTML(),/今日作业 · 0/);
+});
+
 test('completion acknowledges both today and inbox without reloading all data',async()=>{
  const core=readFileSync(__dirname+'/app.js','utf8'),start=core.indexOf('async function postTask'),end=core.indexOf("document.addEventListener('change'",start),task={id:'synthetic-task',update:{status:'已完成',updated:'2026-09-12T18:00:00+08:00'}};
  const data={tasks:[{id:task.id}],today_calendar:{inbox:[{task_id:task.id,closed:false}],agenda:[{task_id:task.id,closed:false}]}};

@@ -973,7 +973,7 @@ function taskFocusFields(){
 function openTaskFocus(id){
  if(busy)return;const t=data.tasks.find(t=>t.id===id);if(!t||taskClosed(t))return;
  const f=$('#taskFocusForm'),focus=taskFocus(t);f.reset();f.elements.id.value=id;f.elements.version.value=focus.version;f.elements.request_key.value=crypto.randomUUID();
- for(const key of ['mode','next_action','waiting_for','review_on','category','published_on','due_on','scheduled_on'])f.elements[key].value=['category','published_on','due_on','scheduled_on'].includes(key)?(t.agenda?.[key]||(key==='category'?'unknown':'')):(focus[key]||'');
+ for(const key of ['mode','next_action','waiting_for','review_on','category','published_on','due_on','scheduled_on'])f.elements[key].value=['category','published_on','due_on','scheduled_on'].includes(key)?(t.agenda?.[key]||(key==='category'?'todo':'')):(focus[key]||'');
  f.elements.title.value=t.title;f.elements.goal.value=t.action||'';f.elements.box.value=focus.box||'inbox';f.elements.scheduled_on.required=false;f.classList.toggle('wish-mode',focus.box==='wish');$('#taskFocusDeadline').hidden=focus.box==='wish';$('#taskFocusTask').hidden=true;$('#taskFocusScheduleLabel').textContent='计划在哪天做 · 可选';$('#taskFocusTitle').textContent=focus.box==='wish'?'编辑心愿':'整理任务与目标';
  $('#taskFocusTask').textContent=t.title;$('#taskFocusDeadline').textContent='原日期要求：'+(t.due||'尚未明确');
  $('#taskFocusError').textContent='';$('#taskFocusLatest').textContent='';$('#taskFocusReload').hidden=true;taskFocusFields();$('#taskFocusDialog').showModal();

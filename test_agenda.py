@@ -53,6 +53,23 @@ class AgendaTest(unittest.TestCase):
         app.calendar_snapshot('2026-09-12','2026-09-13')
         with app.connect() as c:self.assertEqual(before,'\n'.join(c.iterdump()))
 
+    def test_legacy_tasks_and_pending_school_items_use_two_categories_without_writes(self):
+        homework=['英语：朗读第二课','今天抄写课文','寓言阅读单','订正练习册']
+        todos=['打印英语练习纸','核对作业平台入口','阅读与练习册署名','听写成绩反馈',
+               '数学用品清单','周末活动登记','填写确认书','[图片内容未读取]']
+        with app.connect() as c:
+            before='\n'.join(c.iterdump())
+            for titles,category in [(homework,'homework'),(todos,'todo')]:
+                for title in titles:
+                    for prefix in ['','待核对：']:
+                        row=agenda.metadata(app,c,'child-1',prefix+title,'')
+                        self.assertEqual(row['category'],category,title)
+                        self.assertFalse(row['category_confirmed'])
+                        self.assertEqual(row['due_on'],'')
+            self.assertEqual(agenda.metadata(app,c,'child-1',homework[0],'',focus={'category':'todo'})['category'],'todo')
+            self.assertEqual(agenda.metadata(app,c,'child-1',homework[0],'',focus={'category':'unknown'})['category'],'todo')
+            self.assertEqual(before,'\n'.join(c.iterdump()))
+
     def test_correction_and_legacy_focus_migration_preserve_deadline_original(self):
         self.organize()
         request=dict(id='T01',version=1,request_key='synthetic-correct-02',mode='later',next_action='',waiting_for='',review_on='2026-09-20',category='unknown',published_on='',due_on='',scheduled_on='2026-09-16')

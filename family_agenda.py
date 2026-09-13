@@ -34,6 +34,17 @@ def deadline(text,published):
     return next(iter(candidates)) if len(candidates)==1 else ''
 
 
+def task_category(title):
+    """Classify the requested work, not a school subject mentioned by an admin task."""
+    title=re.sub(r'^待核对[：:]?\s*','',title)
+    if re.search(r'打印|报名|缴费|回执|签字|署名|登记|确认书|请假|接送|招新|选拔|提交渠道|(?:作业|学习)入口|^核(?:对|查)|(?:听写|考试|测验)(?:情况|结果|成绩)|等级',title):
+        return 'todo'
+    if re.search(r'作业|习作|作文|听写|默写|背诵|练习|订正|摘抄|抄写|朗读|阅读单|阅读任务|预习|复习|^(?:语文|英语|数学|科学|历史|地理|生物|物理|化学)[：:]',title):
+        return 'homework'
+    # ponytail: uncertain school material stays a to-do to review, never an invented assignment.
+    return 'todo'
+
+
 def metadata(app,c,child_id,title,due,refs=(),focus=None):
     focus=focus or {};messages=[]
     store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
@@ -53,13 +64,10 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None):
     dates={deadline(clause,sent_day(m.get('time',''))) for m in messages
            for clause in re.split(r'[。；;，,\n]',m.get('text','')) if subject and subject in clause}-{''}
     due_on=focus.get('due_on','') if organized else deadline(due,published) or deadline(title,published) or (next(iter(dates)) if len(dates)==1 else '')
-    # ponytail: conservative visible-word classification; parents can correct it in the existing arrangement form.
     category=focus.get('category','')
-    if not category:
-        if re.search('打印|报名|缴费|回执|签字|带.*(?:用品|材料)|通知|活动',title):category='todo'
-        elif re.search('作业|习作|作文|听写|默写|背诵|练习|订正|摘抄|朗读|^(?:语文|英语|数学|科学|历史|地理|生物|物理|化学)[：:]',title):category='homework'
-    return dict(category=category if category!='unknown' else '',published_on=published,due_on=due_on,scheduled_on=focus.get('scheduled_on',''),
-                category_confirmed=bool(focus.get('category')),publication_known=bool(published),box=focus.get('box') or 'inbox')
+    if category not in ('homework','todo'):category='todo' if category=='unknown' else task_category(title)
+    return dict(category=category,published_on=published,due_on=due_on,scheduled_on=focus.get('scheduled_on',''),
+                category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox')
 
 
 def enrich(app,c,tasks):
