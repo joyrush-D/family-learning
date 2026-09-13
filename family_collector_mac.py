@@ -10,6 +10,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import sysconfig
 
 from configure_mac import LABEL, exclusive_write, plan
 from family_backup import no_links
@@ -23,6 +24,7 @@ APP_NAME = 'FamilyCollector.app'
 # with Python. Keep it alive; only the collector's separate group is terminated.
 HOST_SOURCE = r'''
 #include <CoreFoundation/CoreFoundation.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -56,16 +58,18 @@ static int path(CFStringRef key, char *buffer) {
 int main(int argc, char **argv) {
     (void)argv;
     char python[PATH_MAX], root[PATH_MAX], config[PATH_MAX], script[PATH_MAX], lock_path[PATH_MAX];
+    int qq_check = CFBundleGetValueForInfoDictionaryKey(CFBundleGetMainBundle(), CFSTR("FamilyQQPreflight")) == kCFBooleanTrue;
     if (argc != 1 || getuid() == 0 || !path(CFSTR("FamilyPython"), python)
         || !path(CFSTR("FamilyRoot"), root) || !path(CFSTR("FamilyConfig"), config)
-        || snprintf(script, sizeof(script), "%s/family_collect.py", root) >= (int)sizeof(script)
+        || snprintf(script, sizeof(script), "%s/%s", root, qq_check ? "family_qq_cua.py" : "family_collect.py") >= (int)sizeof(script)
         || chdir(root) || access(python, X_OK) || access(script, R_OK) || access(config, R_OK)
         || (getpgrp() != getpid() && setpgid(0, 0))) {
         fputs("Family collector: invalid installation; nothing started.\n", stderr);
         return 78;
     }
     umask(0077);
-    if (snprintf(lock_path, sizeof(lock_path), "%s/private/.collector-host.lock", root) >= (int)sizeof(lock_path)) return 78;
+    if (snprintf(lock_path, sizeof(lock_path), "%s/private/%s", root,
+                 qq_check ? ".qq-cua-host.lock" : ".collector-host.lock") >= (int)sizeof(lock_path)) return 78;
     int lock = open(lock_path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0600);
     struct stat info;
     if (lock < 0 || fstat(lock, &info) || !S_ISREG(info.st_mode) || info.st_uid != getuid()) return 78;
@@ -74,6 +78,19 @@ int main(int argc, char **argv) {
     unsetenv("PYTHONPATH");
     setenv("PYTHONNOUSERSITE", "1", 1);
     setenv("PYTHONUNBUFFERED", "1", 1);
+    if (qq_check) {
+        // Load the SDK in this named app process, not a generic Python child.
+        char library[PATH_MAX];
+        if (!path(CFSTR("FamilyPythonLibrary"), library)) return 78;
+        void *handle = dlopen(library, RTLD_NOW | RTLD_GLOBAL);
+        int (*python_main)(int, char **) = handle ? dlsym(handle, "Py_BytesMain") : NULL;
+        if (!python_main) {
+            fputs("Family QQ: Python runtime unavailable; nothing read.\n", stderr);
+            return 78;
+        }
+        char *qq_arguments[] = {python, "-E", "-s", "-u", script, "--config", config, NULL};
+        return python_main(7, qq_arguments);
+    }
     struct sigaction action = {0};
     action.sa_handler = stop;
     sigemptyset(&action.sa_mask);
@@ -118,26 +135,38 @@ int main(int argc, char **argv) {
 '''
 
 
-def build(root, config_path, output):
+def build(root, config_path, output, *, qq_preflight=False):
     if sys.platform != 'darwin' or os.getuid() == 0:
         raise ValueError('请使用已登录的 macOS 普通用户构建，不使用 sudo')
     root = no_links(Path(root).expanduser())
     config_path = no_links(Path(config_path).expanduser())
     config = load_config(config_path)
     prepared = plan(root, config['app_url'], config.get('wechat_cli'), config.get('qq_cli'))
+    if qq_preflight and not (root / 'family_qq_cua.py').is_file():
+        raise ValueError('应用目录缺少QQ独立宿主检查程序')
+    if qq_preflight:
+        library = (Path(sysconfig.get_config_var('PYTHONFRAMEWORKPREFIX') or sysconfig.get_config_var('LIBDIR'))
+                   / sysconfig.get_config_var('LDLIBRARY')).resolve(strict=True)
+        if not library.is_file():
+            raise ValueError('当前Python未提供可嵌入的动态库')
     if not (root / 'private').is_dir():
         raise ValueError('应用私有目录尚未初始化，请先核对原安装')
     output = no_links(Path(output).expanduser())
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
-    app = output / APP_NAME
+    app = output / ('FamilyQQReader.app' if qq_preflight else APP_NAME)
+    bundle_id = LABEL + '.qq-reader' if qq_preflight else BUNDLE_ID
+    display_name = '一起成长 QQ 读取' if qq_preflight else '一起成长消息采集'
     try:
         source = output / 'collector-host.c'
         exclusive_write(source, HOST_SOURCE.encode())
-        info = dict(CFBundleIdentifier=BUNDLE_ID, CFBundleName='一起成长消息采集',
-                    CFBundleDisplayName='一起成长消息采集', CFBundleExecutable='FamilyCollector',
+        info = dict(CFBundleIdentifier=bundle_id, CFBundleName=display_name,
+                    CFBundleDisplayName=display_name, CFBundleExecutable='FamilyCollector',
                     CFBundlePackageType='APPL', CFBundleVersion='1', LSBackgroundOnly=True,
-                    FamilyPython=str(Path(sys.executable).resolve(strict=True)),
-                    FamilyRoot=str(root), FamilyConfig=str(config_path))
+                    # Keep the venv entry path: resolving its symlink loses installed SDKs.
+                    FamilyPython=str(Path(sys.executable).absolute()),
+                    FamilyRoot=str(root), FamilyConfig=str(config_path), FamilyQQPreflight=qq_preflight)
+        if qq_preflight:
+            info['FamilyPythonLibrary'] = str(library)
         exclusive_write(app / 'Contents/Info.plist', plistlib.dumps(info))
         binary = app / 'Contents/MacOS/FamilyCollector'
         binary.parent.mkdir(mode=0o700)
@@ -154,9 +183,14 @@ def build(root, config_path, output):
         source.unlink()
         plist = plistlib.loads(prepared['files']['LaunchAgents/' + LABEL + '.collector.plist'])
         enabled = bool(config.get('wechat_cli') or config.get('qq_cli'))
-        plist.update(ProgramArguments=[str(binary)], AssociatedBundleIdentifiers=[BUNDLE_ID],
+        plist.update(ProgramArguments=[str(binary)], AssociatedBundleIdentifiers=[bundle_id],
                      RunAtLoad=enabled, Disabled=not enabled)
-        exclusive_write(output / (LABEL + '.collector.plist'), plistlib.dumps(plist))
+        if qq_preflight:
+            plist.update(Label=LABEL + '.qq-preflight', RunAtLoad=False, KeepAlive=False, Disabled=False,
+                         StandardOutPath=str(root / 'private/qq-preflight.stdout.log'),
+                         StandardErrorPath=str(root / 'private/qq-preflight.stderr.log'))
+            plist.pop('ThrottleInterval', None)
+        exclusive_write(output / (plist['Label'] + '.plist'), plistlib.dumps(plist))
         return app
     except BaseException:
         shutil.rmtree(output)
@@ -168,9 +202,11 @@ def main(argv=None):
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parent)
     parser.add_argument('--config', type=Path, help='已有私有采集配置，默认应用目录内 private/collector.json')
     parser.add_argument('--output-dir', type=Path, required=True, help='新的固定存放目录，不能覆盖已有内容')
+    parser.add_argument('--qq-preflight', action='store_true', help='构建QQ单次权限检查入口，不读取聊天或启动原采集器')
     args = parser.parse_args(argv)
     try:
-        app = build(args.root, args.config or args.root / 'private/collector.json', args.output_dir)
+        app = build(args.root, args.config or args.root / 'private/collector.json', args.output_dir,
+                    qq_preflight=args.qq_preflight)
         print('已构建但未启动或授权：' + str(app))
         return 0
     except (OSError, ValueError, CollectError, subprocess.SubprocessError):

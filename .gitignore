@@ -121,6 +121,8 @@
 !/test_configure_mac.py
 !/family_collector_mac.py
 !/test_collector_mac.py
+!/family_qq_cua.py
+!/test_qq_cua.py
 !/THIRD_PARTY.md
 
 !/family_task_focus.py

@@ -228,6 +228,22 @@ launchctl print "gui/$(id -u)/local.family-learning.collector"
 
 模板在登录后启动并保持同一个采集进程，每轮结束后等五分钟再检查，日志保存在私有目录。正常停止不自动重启，异常退出由系统限速重启。修改已加载的模板时先 `launchctl bootout "gui/$(id -u)/local.family-learning.collector"` 再安装加载；不要重复创建其他采集任务。Mac 退出登录、休眠或 CLI 不可用时不能持续读取消息，系统应显示实际覆盖缺口。
 
+## QQ独立宿主检查（尚未接通采集）
+
+`family_qq_cua.py`只检查运行它的应用身份、Cua SDK 0.26.0、辅助功能/录屏权限和锁屏状态；不弹授权、不打开QQ、不读取聊天、不调用模型、不提交消息。回执写在既有采集配置同目录的`qq-cua-preflight.json`，保持私有权限。`host_ready`仅表示本次具名宿主检查通过，不代表来源已同步；开发工具中直接执行不能代替具名应用验收。
+
+用**已安装Cua SDK的虚拟环境Python**运行下面的构建命令。复用原`private/collector.json`只为核对安装位置，不修改配置或调用其中的微信工具。生成目录必须全新，构建不安装SDK、不启动或替换服务：
+
+```bash
+/已安装cua环境/bin/python family_collector_mac.py --root "/实际应用目录" --qq-preflight --output-dir "$HOME/Library/Application Support/Family Learning/qq-reader-host"
+```
+
+生成`FamilyQQReader.app`，显示名称“一起成长 QQ 读取”，应用标识`local.family-learning.qq-reader`。它在原生应用进程内加载现有Python动态库与SDK，保留虚拟环境路径；不会把检查交给通用Python子进程。单独打开应用只检查一次；生成的LaunchAgent没有周期和自动重试，也不随构建启用。读取器与微信原采集入口分开，不切换正在工作的微信服务。
+
+实际检查得到`permission_required`时，由家庭在macOS“隐私与安全性”的“辅助功能”和“屏幕与系统音频录制”（名称随系统版本不同）中核对并授权该应用，再重新打开检查。无需全盘访问权限。SDK的宿主提示字段可能为空，因此同时用CoreFoundation读取实际进程应用标识；不会手写环境变量冒充系统身份。当前完成具名检查，不将此应用描述为已经能自动采集QQ；指定群核对、受限内容提取、原件、去重及持续入库仍待实现或验收。
+
+`python3 test_qq_cua.py`与`python3 test_collector_mac.py`覆盖拒绝/未知权限、未知锁屏、错误应用身份、SDK变化、私有回执、虚拟环境与原生进程身份；检查不用真实聊天或系统授权。
+
 ## macOS 采集权限与重复弹窗
 
 `--interval 300`复用同一个Python采集进程，各轮重新读取私有配置、后台授权来源与游标；不新增聊天范围、不更改系统隐私授权。`--once`仍可用于单次诊断。生成的Mac采集配置与上面的模板均使用持续进程，不再每五分钟退出后重建。

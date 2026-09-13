@@ -158,6 +158,29 @@ while True: time.sleep(.02)
             else:
                 raise AssertionError('Build failure must be reported')
         assert not (base / 'failed-build').exists() and config.read_bytes() == original
+        # A separate one-shot QQ app must neither start the WeChat collector nor
+        # lose the venv containing its SDK when the Python entry is a symlink.
+        (root / 'family_qq_cua.py').write_text('''import json, sys
+from pathlib import Path
+sys.path.insert(0, %r)
+from family_qq_cua import native_host_id
+Path('private/qq-check.json').write_text(json.dumps(dict(args=sys.argv[1:], prefix=sys.prefix, host=native_host_id())))
+''' % str(Path(__file__).resolve().parent))
+        venv = base / 'qq-venv'
+        subprocess.run([sys.executable, '-m', 'venv', '--without-pip', str(venv)], check=True, timeout=30)
+        python = venv / 'bin/python3'
+        with patch.object(package.sys, 'executable', str(python)):
+            qq_app = package.build(root, config, base / 'qq-host', qq_preflight=True)
+        qq_info = plistlib.loads((qq_app / 'Contents/Info.plist').read_bytes())
+        qq_plist = plistlib.loads((base / 'qq-host' / (package.LABEL + '.qq-preflight.plist')).read_bytes())
+        assert qq_info['FamilyPython'] == str(python) and qq_info['FamilyQQPreflight'] is True
+        assert qq_info['CFBundleIdentifier'] == package.LABEL + '.qq-reader'
+        assert qq_plist['KeepAlive'] is False and qq_plist['RunAtLoad'] is False
+        assert 'StartInterval' not in qq_plist and 'StartCalendarInterval' not in qq_plist
+        assert subprocess.run([str(qq_app / 'Contents/MacOS/FamilyCollector')], timeout=5).returncode == 0
+        assert json.loads((private / 'qq-check.json').read_text()) == dict(args=['--config', str(config)],
+            prefix=str(venv), host=package.LABEL + '.qq-reader')
+        assert config.read_bytes() == original
         link = base / 'linked-config'
         link.symlink_to(config)
         try:

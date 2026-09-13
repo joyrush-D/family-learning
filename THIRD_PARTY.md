@@ -1,6 +1,6 @@
 # 第三方复用与取舍
 
-核查日期：2026-09-08；候选与实际状态更新至2026-09-13。以下分清已使用的代码、可接入的接口，以及交互参考；候选不代表已经接通。组件许可与本项目 MIT 许可分别保留。
+核查日期：2026-09-08；候选与实际状态更新至2026-09-14。以下分清已使用的代码、可接入的接口，以及交互参考；候选不代表已经接通。组件许可与本项目 MIT 许可分别保留。
 
 ## 已直接使用
 
@@ -12,11 +12,13 @@
 
 ## QQ读取与渐进式英语学习的新候选（2026-09-11）
 
-本节保留各候选的用途与许可，不把调研当成交付。2026-09-13已明确允许QQ使用Computer Use保底：Cua Driver 0.26.0已在隔离环境安装，独立Python SDK加载、官方QQ定位与当前宿主权限预检通过；窗口内容未取得，随后确认Mac锁屏。QQ持续采集仍未恢复，独立后台宿主权限、指定群/原件/增量入库与桌面共存仍待验收。ego-lite与Read Frog尚未接入。需求及路线切换以[V1交付目标](V1交付目标.md)的R08/S02、R21/S05及R33/S07为准。
+本节保留各候选的用途与许可，不把调研当成交付。2026-09-13已明确允许QQ使用Computer Use保底：Cua Driver 0.26.0已在隔离环境安装，解锁后的开发宿主读到指定QQ窗口与群号；新产品命名宿主在自身进程内加载SDK，实际检查两项权限尚未授予。此入口目前只作检查，不读取聊天，不能算持续采集。QQ持续采集仍未恢复，独立后台宿主权限、指定群/原件/增量入库与桌面共存仍待验收。ego-lite与Read Frog尚未接入。需求及路线切换以[V1交付目标](V1交付目标.md)的R08/S02、R21/S05及R33/S07为准。
 
 | 候选 | 本项目取舍 | 尚需核对 |
 | --- | --- | --- |
 | [Cua Driver](https://cua.ai/docs/how-to-guides/driver/use-sdk-in-process) | 当前正在验证的QQ保底路线：由Family Agent调用SDK读取官方QQ窗口，保留真实出处与覆盖缺口；现有通知入库可复用，但不能伪造原生ID直接套用CLI返回 | 这是界面读取，不是QQ消息API。后台操作仅为[尽力保证](https://cua.ai/docs/concepts/the-no-foreground-contract)，权限属于运行宿主；文档示例与发布版本须分别核对；本轮固定0.26.0，并按实际包内接口与运行回执验证。先验证一个授权群、最近20条和一张图片，核对来源、重复、漏读及日常QQ共存；看见一页不算历史完整 |
+| [NapCat Mac安装器](https://github.com/NapNeko/NapCat-Mac-Installer) | Mac非界面候选保留；仅核对文档，未安装或改QQ | 上游明确修改QQ启动入口，并在原QQ/NapCat入口间切换；有Mac安装器不证明桌面共存。安装器MIT不涵盖其加载的所有组件，接入前继续核对兼容与许可 |
+| [SnowLuma](https://github.com/SnowLuma/SnowLuma) | 仅作协议接口候选调研，未安装或接入 | 当前快速开始列Windows/Linux；许可证为非商业源码可见，并非OSI开源，公开派生分发需书面许可；不并入本项目MIT代码或小盒子交付 |
 | [ego-lite](https://github.com/citrolabs/ego-lite) | 保留为学校网站或已有学习平台网页版的可选工具；借鉴独立工作区和结构化页面读取 | 公开接口控制其Chromium浏览器，不能直接读取桌面QQ。支持[自建Agent](https://lite.ego.app/document/en/docs/custom-agent-harness)。仓库MIT不代表另行下载的整个浏览器可以按MIT分发；没有网页需求时不引入 |
 | [Read Frog](https://github.com/mengxi-ream/read-frog) | 借鉴按需解释、朗读、阅读材料转学习卡及真实回忆反馈；作为可选学习工具，家庭目标和证据继续留在本应用 | 上游为GPLv3／商业双许可，不复制到本项目MIT文件。Notebase要求云端登录；不能当作已可本地部署的完整学习后台。具体渐进设计见PRD第2.5节 |
 
@@ -78,3 +80,5 @@ AES调用macOS系统CommonCrypto的公开API，签名依据[Apple官方头文件
 ## 可选的Mac QQ独立读取服务
 
 2026-09-10：`family_qq_llbot.py`独立实现对[LLBot v8.1.10](https://github.com/LLOneBot/LuckyLilliaBot/tree/v8.1.10) WebUI HTTP接口的只读适配，没有复制其源码。上游源码标示[GPL-2.0](https://github.com/LLOneBot/LuckyLilliaBot/blob/v8.1.10/LICENSE)；本项目不分发其服务、原生SDK、Node二进制或个人会话。原生签名SDK与Auth Token服务是另外的运行依赖，公开源码不能说明其完整内部数据处理；由家庭自行选择、安装与授权，不能将其当作本项目MIT代码或腾讯官方接口。文字读取与选定原图曾在Mac实测，但后续同账号试用出现桌面QQ退出和操作受影响，共存未通过，已撤回日常采集部署。接口实现保留为实验代码，不据读取成功推荐自动登录或宣称可替代桌面日常使用。
+
+Cua Python SDK 0.26.0的已安装包元数据标示MIT；本项目仅调用其公开接口，未复制SDK源码或分发SDK、原生库、Python运行时。宿主嵌入使用Python标准C API的`Py_BytesMain`；具体家庭需要已有兼容Python动态库和SDK环境。
