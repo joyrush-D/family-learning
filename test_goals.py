@@ -305,7 +305,7 @@ class GoalTests(unittest.TestCase):
             agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
         result['proposals'][0]['learning_goal_id']=''
         selected=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
-        self.assertEqual(len(selected),1);self.assertNotIn('plan',selected[0])
+        self.assertEqual(len(selected),1);self.assertNotIn('school_learning',selected[0]['plan']);self.assertEqual(selected[0]['plan']['school_task']['state'],'review');self.assertEqual(selected[0]['plan']['school_task']['title'],'')
         evidence.append(dict(ref='message:synthetic:2',text='英语口述：介绍一种文具。',content_incomplete=False))
         result['proposals'].append(dict(title_quote=evidence[1]['text'],focus='school',due='',learning_subject='英语',learning_goal_id='',
                                        evidence=[dict(ref=evidence[1]['ref'])]))

@@ -106,7 +106,7 @@ def snapshot(app,start,end):
                 closed_on=date(u.get('updated','')[:10]),body=task['action']))
         if 'agent_items' in tables:
             for row in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='pending' ORDER BY created,id"):
-                if row['child_id'] not in ids:continue
+                if row['child_id'] not in ids or json.loads(row['plan']).get('school_task',{}).get('state')=='reference':continue
                 refs=[e['ref'] for e in json.loads(row['evidence'])]
                 m=metadata(app,c,row['child_id'],row['title'],row['due'],refs)
                 items.append(dict(id=row['id'],task_id='',kind='school',child_ids=[row['child_id']],title=row['title'],

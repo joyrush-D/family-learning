@@ -35,7 +35,7 @@ function fixtures(base){
  const reading=(id,state,planned_on=today)=>({id,child_id:first.id,child:first.name,book:'虚构阅读 '+id,state,planned_on,attachments:[]});
  const inbox=tasks.map(t=>({id:t.id,task_id:t.id,kind:'task',status:t.update?.status||t.original_status,child_ids:[t.child===first.name?first.id:second.id],closed:['已完成','不适用','不参加','已归档'].includes(t.update?.status||t.original_status),agenda:t.agenda}));
  inbox.push({id:'synthetic-school',kind:'school',child_ids:[first.id],closed:false,agenda:{category:'homework',published_on:today,due_on:'',scheduled_on:'',box:'inbox'}});
- return {...base,today,tasks,agent:{...base.agent,items:['school','care','review'].map(kind=>({id:'synthetic-'+kind,kind,child_id:first.id,state:'pending',title:'虚构提醒 '+kind,body:'虚构待核对内容',evidence:[]}))},today_calendar:{inbox,agenda:[],events,timetables:[{id:'synthetic-table',child_id:first.id,day:today,title:'虚构课表',source:'虚构课表原件',sessions:[{slot:'第一节',title:'虚构数学'},{slot:'第二节',title:'虚构语文'}]}],source_error:''},
+ return {...base,today,tasks,agent:{...base.agent,items:['school','care','review'].map(kind=>({id:'synthetic-'+kind,kind,child_id:first.id,state:'pending',title:'虚构提醒 '+kind,body:'虚构待核对内容',plan:kind==='school'?{school_task:{state:'review',reason:'需要核对是否参加这次活动。'}}:{},evidence:[]}))},today_calendar:{inbox,agenda:[],events,timetables:[{id:'synthetic-table',child_id:first.id,day:today,title:'虚构课表',source:'虚构课表原件',sessions:[{slot:'第一节',title:'虚构数学'},{slot:'第二节',title:'虚构语文'}]}],source_error:''},
   reading:{...base.reading,tasks:[reading('draft','草案'),reading('paused','暂停'),reading('finished','已完成'),reading('today-reading','进行中'),reading('more','需补充'),reading('past-reading','进行中','2026-09-07'),reading('parent-review','待确认',''),reading('future-reading','进行中','2026-09-09'),reading('undated-reading','进行中','')]}};
 }
 
@@ -49,6 +49,7 @@ function fixtures(base){
    p.on('pageerror',e=>errors.push(e.message));p.on('request',r=>resources.push(new URL(r.url()).pathname));
    try{
     const state=fixtures(await read()),homework=p.locator('#task-group-homework'),todos=p.locator('#task-group-todo');
+    state.agent.items.push({id:'synthetic-reference',kind:'school',child_id:state.children[0].id,state:'pending',title:'虚构成绩表说明',body:'第一列表示课堂默写记录。',evidence:[],plan:{school_task:{state:'reference',reason:'这段内容解释列标题，没有新作业。'}}});
     const card=id=>p.locator('[data-query-target="task:'+id+'"]');
     await p.route('**/api/state',r=>r.fulfill({contentType:'application/json',body:JSON.stringify(state)}));
     await p.goto(server.url,{waitUntil:'load'});await ready(p);await fit(p);
@@ -60,6 +61,7 @@ function fixtures(base){
     assert.match(await card('PAST').innerText(),/逾期/);assert.match(await card('ADMIN').innerText(),/发布：待核对/);
     assert.match(await homework.locator('h2').innerText(),/今日作业 · 8.*待核对 1/);assert.equal(await p.locator('[data-agent-item] [data-check]').count(),0,'unconfirmed notifications cannot be completed');
     assert.deepEqual(await p.locator('[data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem)),['synthetic-school']);
+    assert.match(await p.locator('[data-agent-item="synthetic-school"]').innerText(),/需要核对是否参加这次活动。/);
     const shared=p.locator('[data-query-target="calendar:shared:'+state.today+'"]');assert.equal(await shared.count(),1);assert.match(await shared.innerText(),new RegExp(state.children[0].name+'、'+state.children[1].name));
     assert.equal(await p.locator('.calendar-cancelled').count(),0);assert.equal(await p.locator('.calendar-event [data-check]').count(),0,'calendar-only events do not invent task completion');
     await p.locator('.calendar-timetable summary').click();assert.match(await p.locator('.calendar-timetable').innerText(),/虚构数学[\s\S]*虚构语文/);
@@ -83,6 +85,7 @@ function fixtures(base){
 
     for(const [page,title] of [['learning','学习任务与进展'],['growth','成长记录'],['reading','把一本书，变成一段旅程。'],['care','陪伴建议与反馈'],['agent','成长助手'],['print','家庭打印站'],['sources','来源与附件']]){
      await p.locator('nav [data-page="more"]').click();await p.locator('#content [data-page="'+page+'"]').click();
+     if(page==='agent'){const ref=p.locator('[data-agent-item="synthetic-reference"]');assert.match(await ref.innerText(),/资料要点/);assert.match(await ref.innerText(),/参考说明 · 这段内容解释列标题，没有新作业。/);assert.equal(await ref.locator('[data-check]').count(),0);await proof(p,'school-reference-'+width)}
      assert.equal(await p.locator('#content h1').innerText(),title,'more opens '+page);assert.equal(await p.locator('nav [data-page="more"]').getAttribute('class'),'active');if(['learning','growth','reading'].includes(page)){assert.equal(await p.locator('.child-filters button').count(),state.children.length+1);await p.locator('[data-child-filter="'+state.children[1].id+'"]').click();assert.equal(await p.locator('[data-child-filter="'+state.children[1].id+'"]').getAttribute('aria-pressed'),'true');await p.locator('[data-child-filter=""]').click()}await fit(p);
     }
     assert.deepEqual(errors,[]);

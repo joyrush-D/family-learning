@@ -57,6 +57,91 @@ class AgentTests(unittest.TestCase):
             **(dict(learning_subject='',learning_goal_id='') if 'learning_goals' in value else {}),
             evidence=[{'ref': value['evidence'][0]['ref'], **({} if 'learning_goals' in value else {'quote': '待核对原文'})}])]}
 
+    def test_school_backfill_is_bounded_preserves_decisions_and_does_not_invent_work(self):
+        cases=[('clear','语文：完成虚构习作。'),('legend','第一列：虚构练习订正记录。\n第二列：虚构课堂默写成绩。'),
+               ('unread','今天抄写任务[图片]'),('expired','2026-02-09前完成练习。'),('accepted','带虚构材料。'),('dismissed','交虚构回执。')]
+        payload=self.payload();payload['messages']=[dict(id=str(i+11),time=self.now.isoformat(),kind='text',sender='示例老师',text=text,unread=name=='unread') for i,(name,text) in enumerate(cases)];payload['cursor']='16'
+        self.store.ingest(payload);ids={}
+        for i,(name,text) in enumerate(cases):
+            key='synthetic-backfill:'+name;fp=self.store._job(key,name,self.now)
+            item=dict(child_id='child-1',kind='school',title=name,body='旧说明',evidence=[dict(ref='message:synthetic-group:'+str(i+11),text=text)],due='2026-02-09' if name=='expired' else '')
+            if name=='legend':item['plan']={'school_learning':{'subject':'语文','goal_id':''},'school_messages':[dict(source_id='synthetic-group',message_id=str(i+11))]}
+            self.store._save(key,fp,[item],self.now+dt.timedelta(seconds=i))
+            with self.app.connect() as c:ids[name]=c.execute('SELECT id FROM agent_items WHERE job_id=?',(key,)).fetchone()[0]
+        for name in ('accepted','dismissed'):self.store.act(dict(id=ids[name],action='accept' if name=='accepted' else 'dismiss'))
+        with self.app.connect() as c:before=[tuple(r) for r in c.execute("SELECT * FROM agent_items WHERE state!='pending' ORDER BY id")]
+        order=[]
+        def model(messages,*args,**kwargs):
+            with sqlite3.connect(self.app.DB,timeout=.1) as c:c.execute('BEGIN IMMEDIATE');c.rollback()
+            ctx=json.loads(messages[-1]['content']);order.append(ctx['candidate']);self.assertEqual(ctx['as_of'],'2026-02-10')
+            self.assertTrue(ctx['evidence'][0]['text']);self.assertEqual(ctx['child_id'],'child-1')
+            return dict(title='语文：完成虚构习作',goal='提交一篇自己的习作。',advice='可以先口述。',state='ready',reason='这是表格说明。' if ctx['candidate']=='legend' else '明确学校要求。')
+        with patch.object(agent.family_llm,'_chat_json',side_effect=model) as mocked:
+            for i in range(4):self.assertEqual(agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=i+1),1)['used'],1)
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=6),1)['used'],0)
+            self.assertEqual(mocked.call_count,4)
+        self.assertEqual(order,['expired','unread','legend','clear'])
+        with self.app.connect() as c:
+            rows={r['id']:dict(r) for r in c.execute('SELECT * FROM agent_items')}
+            self.assertEqual(before,[tuple(r) for r in c.execute("SELECT * FROM agent_items WHERE id IN (?,?) ORDER BY id",(ids['accepted'],ids['dismissed']))])
+            tasks=[dict(r) for r in c.execute('SELECT * FROM manual_tasks')];self.assertEqual(len(tasks),2)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
+        self.assertEqual(rows[ids['clear']]['state'],'accepted');self.assertTrue(json.loads(rows[ids['clear']]['plan'])['school_task']['auto_added'])
+        for name in ('unread','expired'):
+            self.assertEqual(rows[ids[name]]['state'],'pending');self.assertEqual(json.loads(rows[ids[name]]['plan'])['school_task']['state'],'review')
+        self.assertEqual(json.loads(rows[ids['unread']]['plan'])['school_task']['title'],'')
+        self.assertNotIn('school_learning',json.loads(rows[ids['legend']]['plan']))
+        import family_agenda
+        inbox=family_agenda.snapshot(self.app,'2026-02-10','2026-02-10')['inbox']
+        self.assertNotIn(ids['legend'],[r['id'] for r in inbox]);self.assertIn(ids['legend'],[r['id'] for r in self.store.snapshot()['items']])
+
+    def test_new_school_notice_uses_one_selection_and_reference_creates_no_learning_goal(self):
+        self.store.ingest(self.payload())
+        def select(messages,schema,name,**kwargs):
+            ctx=json.loads(messages[-1]['content']);self.assertEqual(ctx['mode'],'school')
+            return {'proposals':[dict(title_quote='待核对原文',focus='school',due='',learning_subject='',learning_goal_id='',
+                task_title='带阅读材料',task_goal='带一份阅读材料到校。',task_advice='可以提前放入书包。',task_state='ready',task_reason='全班明确要求。',evidence=[dict(ref=ctx['evidence'][0]['ref'])])]}
+        with patch.object(agent.family_llm,'_chat_json',side_effect=select) as mocked:
+            agent.run_once(self.app,self.now);self.assertEqual(mocked.call_count,1)
+            agent.run_once(self.app,self.now+dt.timedelta(minutes=1));self.assertEqual(mocked.call_count,1)
+        with self.app.connect() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+        proposal=select([dict(content=json.dumps(dict(mode='school',evidence=[dict(ref='message:synthetic-group:11')])) )],None,None)
+        proposal['proposals'][0].update(task_state='reference',learning_subject='语文',task_reason='成绩列说明。')
+        with patch.object(agent.family_llm,'_chat_json',return_value=proposal):
+            selected=agent._select('school',[dict(ref='message:synthetic-group:11',text='待核对原文：第一列是默写成绩。')],school_goals=[])
+        self.assertNotIn('school_learning',selected[0]['plan'])
+
+    def test_auto_collection_error_leaves_review_and_does_not_block_other_notices(self):
+        self.store.ingest(self.payload());key='synthetic-auto-error';fp=self.store._job(key,{},self.now)
+        brief=agent._school_brief(dict(title='准备材料',goal='带材料到校。',advice='',state='ready',reason='明确要求'))
+        self.store._save(key,fp,[dict(child_id='child-1',kind='school',title='准备材料',body='带材料到校。',plan={'school_task':brief},evidence=[dict(ref='message:synthetic-group:11',text='准备材料')])],self.now)
+        with patch.object(self.store,'act',side_effect=agent.AgentError('synthetic invalid task',400)) as action,patch.object(agent.family_llm,'_chat_json') as model:
+            result=agent._refresh_school(self.app,self.store,self.now,1)
+            self.assertEqual(result['failed'],1);self.assertEqual(result['created'],0)
+            agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=1),1)
+            self.assertEqual(action.call_count,1);model.assert_not_called()
+        with self.app.connect() as c:
+            plan=json.loads(c.execute('SELECT plan FROM agent_items WHERE job_id=?',(key,)).fetchone()[0]);self.assertEqual(plan['school_task']['state'],'review')
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],0)
+
+    def test_school_backfill_does_not_overwrite_parent_and_failed_retries_stop(self):
+        self.store.ingest(self.payload());key='synthetic-race';fp=self.store._job(key,{},self.now)
+        self.store._save(key,fp,[dict(child_id='child-1',kind='school',title='带材料',body='旧说明',evidence=[dict(ref='message:synthetic-group:11',text='带材料')])],self.now)
+        with self.app.connect() as c:ident=c.execute('SELECT id FROM agent_items WHERE job_id=?',(key,)).fetchone()[0]
+        def racing(*args,**kwargs):
+            self.store.act(dict(id=ident,action='dismiss'))
+            return dict(title='带材料',goal='准备材料',advice='',state='ready',reason='明确要求')
+        with patch.object(agent.family_llm,'_chat_json',side_effect=racing):agent._refresh_school(self.app,self.store,self.now,1)
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT state FROM agent_items WHERE id=?',(ident,)).fetchone()[0],'dismissed')
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],0)
+        key='synthetic-failure';fp=self.store._job(key,{},self.now)
+        self.store._save(key,fp,[dict(child_id='child-1',kind='school',title='待核对材料',body='旧说明',evidence=[dict(ref='message:synthetic-group:11',text='原文')])],self.now)
+        with patch.object(agent.family_llm,'_chat_json',side_effect=agent.AgentError('synthetic error')) as mocked:
+            for day in range(5):agent._refresh_school(self.app,self.store,self.now+dt.timedelta(days=day),1)
+            self.assertEqual(mocked.call_count,3)
+
     def test_ingest_allowlist_cas_retry_immutability_and_failure_cursor(self):
         payload = self.payload()
         self.assertEqual(self.store.ingest(payload)['inserted'], 1)
