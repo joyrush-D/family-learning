@@ -143,10 +143,10 @@ class AgentTests(unittest.TestCase):
         self.app.save_task(dict(id=task_id,status='已完成',note='虚构家长补充真实帮助情况。'))
         with self.assertRaises(agent.AgentError):agent.apply_school_change(self.app,self.store,payload)
         payload=request(change,task_id);result=agent.apply_school_change(self.app,self.store,payload)
-        self.assertEqual(result['task_id'],task_id);self.assertTrue(agent.apply_school_change(self.app,self.store,payload)['replayed'])
+        self.assertTrue(result['completion_needs_review']);self.assertEqual(result['task_id'],task_id);self.assertTrue(agent.apply_school_change(self.app,self.store,payload)['replayed'])
         with self.assertRaises(agent.AgentError):agent.apply_school_change(self.app,self.store,dict(payload,body='重试时内容已变'))
         with self.app.connect() as c:
-            task=next(t for t in self.app.tasks(c) if t['id']==task_id);self.assertEqual(task['action'],payload['body']);self.assertEqual(task['agenda']['due_on'],'2026-02-12')
+            task=next(t for t in self.app.tasks(c) if t['id']==task_id);self.assertTrue(task['school_completion_needs_review']);self.assertEqual(task['action'],payload['body']);self.assertEqual(task['agenda']['due_on'],'2026-02-12')
             self.assertIn('message:synthetic-group:11',task['source']);self.assertIn('message:synthetic-group:12',task['source'])
             self.assertEqual(c.execute('SELECT status FROM task_updates WHERE id=?',(task_id,)).fetchone()[0],'已完成')
             self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)

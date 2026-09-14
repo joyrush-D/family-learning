@@ -837,7 +837,7 @@ def apply_school_change(app, store, obj):
         plan=json.loads(row['plan']);receipt=plan.get('school_change_receipt')
         if receipt:
             if receipt['hash']!=digest: raise AgentError('这条变更已处理，请读取最新记录',409)
-            return dict(ok=True,state='accepted',task_id=receipt['task_id'],school_changed=True,replayed=True)
+            return dict(ok=True,state='accepted',task_id=receipt['task_id'],school_changed=True,replayed=True,completion_needs_review=receipt.get('completion_needs_review',False))
         if row['state']!='pending' or row['updated']!=expected: raise AgentError('通知已在别处处理，请读取最新记录',409)
         owner=next((p['name'] for p in app.profiles(c) if p['id']==row['child_id']),None)
         task=next((t for t in app.tasks(c) if t['id']==target_id and t['child']==owner),None)
@@ -872,10 +872,10 @@ def apply_school_change(app, store, obj):
         c.execute('UPDATE agent_items SET plan=?,updated=? WHERE id=?',(_json(original_plan),now,canonical['id']))
         source=task['source']+'\n\n'+'\n\n'.join(e['ref']+'\n'+e['text'] for e in evidence)
         c.execute('UPDATE manual_tasks SET source=? WHERE id=?',(source,target_id))
-        plan.update(school_change_of=canonical['id'],school_change_receipt=dict(hash=digest,task_id=target_id,change=change))
+        plan.update(school_change_of=canonical['id'],school_change_receipt=dict(hash=digest,task_id=target_id,change=change,completion_needs_review=status=='已完成' and change=='update'))
         for key in ('school_learning','school_goal_id'): plan.pop(key,None)
         c.execute("UPDATE agent_items SET state='accepted',task_id=?,plan=?,updated=? WHERE id=?",(target_id,_json(plan),now,ident))
-    return dict(ok=True,state='accepted',task_id=target_id,school_changed=True,replayed=False)
+    return dict(ok=True,state='accepted',task_id=target_id,school_changed=True,replayed=False,completion_needs_review=status=='已完成' and change=='update')
 
 
 def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None, school_tasks=()):

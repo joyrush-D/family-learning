@@ -232,6 +232,7 @@ def tasks(connection=None):
             result.append(dict(zip(['id','child','title','due','original_status','source','action'], cells)))
     manual=[dict(r) for r in connection.execute('SELECT * FROM manual_tasks ORDER BY rowid DESC')]
     focuses=family_task_focus.read_all(connection)
+    updates={r['id']:dict(r) for r in connection.execute('SELECT id,status,updated FROM task_updates')}
     for task in manual+result:
         task['child']=names.get(task['child'],task['child'])
         task['focus']=focuses.get(task['id'],family_task_focus.default())
@@ -242,6 +243,8 @@ def tasks(connection=None):
                 if proposal:
                     task['advice']=json.loads(proposal['plan']).get('school_task',{}).get('advice','')
                     task['school_origin']=proposal['kind']=='school' and proposal['state']=='accepted' and proposal['task_id']==task['id']
+                    changes=json.loads(proposal['plan']).get('school_changes',[]);last=changes[-1] if changes else {};update=updates.get(task['id'],{})
+                    task['school_completion_needs_review']=bool(task['school_origin'] and last.get('change')=='update' and update.get('status')=='已完成' and update.get('updated','')<last.get('confirmed_at',''))
         if task['focus']['title']: task['original_title']=task['title'];task['title']=task['focus']['title']
         if task['focus']['goal']: task['original_action']=task['action'];task['action']=task['focus']['goal']
     return family_agenda.enrich(SimpleNamespace(**globals()),connection,manual+result)
