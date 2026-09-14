@@ -452,6 +452,33 @@ class GoalTests(unittest.TestCase):
         self.assertFalse(next(x for x in self.store.snapshot()['goals'] if x['id']==other)['records'])
         self.assertEqual(next(x for x in self.store.snapshot()['goals'] if x['id']==other)['word_history'],dict(checks=[],unparsed=[],words=[],retest_days=goals.WORD_RETEST_DAYS,retest_candidates=[],retest_omitted=0),'another child sees no word history or candidates')
 
+    def test_direction_progress_is_deterministic_and_reaches_the_model(self):
+        today=self.now.date();ago=lambda n:(today-dt.timedelta(days=n)).isoformat()
+        wc=lambda word,phase,res:dict(word=word,meaning='老师',material='虚构词表',phase=phase,results={'meaning_spelling':res})
+        # A direction that climbs 答错 -> 提示后答对 -> 间隔后独立答对 (间隔后复测, gap>=7) reads as 改善 and reached.
+        for day,phase,res in [(ago(20),'首次核对','答错'),(ago(12),'刚练过或看过答案','提示后答对'),(ago(2),'间隔后复测','本次独立答对')]:
+            self.action('feedback',id=self.ident,day=day,source='家长观察',note='',word_check=wc('teacher',phase,res))
+        # A flat direction: 提示后答对 twice, never independent.
+        for day in (ago(15),ago(3)):
+            self.action('feedback',id=self.ident,day=day,source='家长观察',note='',word_check=dict(wc('please','首次核对','提示后答对'),word='please',meaning='请'))
+        words={(w['word'],w['meaning']):w for w in self.goal()['word_history']['words']}
+        climbed=words[('teacher','老师')]['progress']['meaning_spelling']
+        self.assertEqual((climbed['first_status'],climbed['latest_status'],climbed['reached_independent'],climbed['trend']),('答错','间隔后独立答对',True,'改善'))
+        flat=words[('please','请')]['progress']['meaning_spelling']
+        self.assertEqual((flat['first_status'],flat['latest_status'],flat['reached_independent'],flat['trend']),('提示后答对','提示后答对',False,'持平'))
+        # A single dated check gives '仅一次，证据不足'; undated checks yield no trajectory.
+        self.action('feedback',id=self.ident,day=ago(1),source='家长观察',note='',word_check=dict(wc('eat','首次核对','答错'),word='eat',meaning='吃'))
+        once=next(w for w in self.goal()['word_history']['words'] if w['word']=='eat')['progress']['meaning_spelling']
+        self.assertEqual(once['trend'],'仅一次，证据不足')
+        # The deterministic progress and the plan-confirmation date reach the model input.
+        self.approve(self.evaluate())
+        self.evaluate()
+        rows={(r['word'],r['direction']):r for r in self.last_input['progress']}
+        self.assertEqual(rows[('teacher','看中文 → 拼英文')]['trend'],'改善')
+        self.assertTrue(rows[('teacher','看中文 → 拼英文')]['reached_independent'])
+        self.assertEqual(rows[('please','看中文 → 拼英文')]['reached_independent'],False)
+        self.assertRegex(self.last_input['current_plan_confirmed_on'],r'^\d{4}-\d{2}-\d{2}$')
+
     def test_word_status_and_interval_retest_candidates_follow_stated_rules(self):
         today=self.now.date();ago=lambda n:(today-dt.timedelta(days=n)).isoformat()
         check=lambda day,word_check:self.action('feedback',id=self.ident,day=day,source='家长观察',note='',word_check=word_check)

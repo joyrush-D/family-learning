@@ -93,6 +93,35 @@ def word_status(checks, today):
     return directions
 
 
+_PROGRESS_RANK = {'答错':0,'未作答':0,'最近答错':0,'最近未作答':0,'提示后答对':1,'本次独立答对':2,'一次独立答对':2,'间隔后独立答对':3}
+
+
+def _direction_progress(items, mode, latest, today):
+    """Deterministic trajectory of one (word, direction): earliest vs latest independent-performance,
+    using only dated, comparable checks. Reports observed change, never a causal claim or a rate."""
+    byday = {}
+    for c in items:
+        result = c['results'].get(mode, '未测')
+        if result == '未测': continue
+        if not _word_day(c['day']): return None
+        byday.setdefault(c['day'], set()).add(result)
+    if not byday: return None
+    days = sorted(byday)
+    first_day = days[0]
+    first = '同日多次结果不一' if len(byday[first_day]) > 1 else next(iter(byday[first_day]))
+    reached = bool(latest.get('verified'))
+    first_rank, latest_rank = _PROGRESS_RANK.get(first), _PROGRESS_RANK.get(latest.get('status'))
+    if len(days) < 2:
+        trend = '仅一次，证据不足'
+    elif first_rank is None or latest_rank is None:
+        trend = '证据不足'
+    elif latest_rank > first_rank: trend = '改善'
+    elif latest_rank < first_rank: trend = '退步'
+    else: trend = '持平'
+    return dict(first_day=first_day, first_status=first, latest_day=latest.get('day'),
+               latest_status=latest.get('status'), reached_independent=reached, trend=trend, checks=len(days))
+
+
 def word_history(records, today=None):
     """Project current canonical notes; corrections stay in the original records."""
     checks, unparsed = [], []
@@ -119,7 +148,8 @@ def word_history(records, today=None):
     words = []
     for (word, meaning), items in grouped.items():
         directions = word_status(items, today)
-        words.append(dict(word=word, meaning=meaning, last_day=max(c['day'] for c in items), directions=directions,
+        progress = {m: pr for m in directions for pr in [_direction_progress(items, m, directions[m], today)] if pr}
+        words.append(dict(word=word, meaning=meaning, last_day=max(c['day'] for c in items), directions=directions, progress=progress,
                           retest_due=[m for m, v in directions.items() if v['retest_due']],
                           verified=[m for m, v in directions.items() if v['verified']]))
     due = sorted((w for w in words if w['retest_due']), key=lambda w: (w['last_day'], w['word'], w['meaning']))
@@ -180,6 +210,8 @@ mastery_check同时给出家长可直接记录的原始反馈：题目或材料�
 对照反馈和当前方案选择核实、尝试、维持、调整或暂停。旧判断标为依据已变化时只能作为历史，不能当成当前事实。
 why_now明确说明哪条实际反馈使哪一步需要改变、保持或暂缓；尚无反馈时说明先核对什么，不编造进步。已有计划时action给出本轮完整可执行方案，保留仍适用的部分，并明确本轮调整。
 核对原因时先提出可区分不同原因的小尝试；一次测验表现只支持本次范围的暂时判断，不能说一次达标就代表长期掌握。首次核对的review_on建议在本次日期后7天内，属于待审核回看日。Agent新拟的数字标准为试行建议，老师原文的数字和条件保持原意。只输出schema允许字段；形成建议不修改正式计划，所有执行与变化由家长确认。证据不足时提出具体核对建议，不能返回null或把找原因的工作退给家长。
+progress是系统按规则算出的每个词各方向的进展轨迹（first_status到latest_status、trend、reached_independent），只统计有日期、可比较的核对；reached_independent仅指“间隔后复测且满7天的独立答对”。current_plan_confirmed_on是家长上次确认现计划的日期。据此形成效果闭环，作为选下一步的主要依据：current_plan针对的方向若在确认后trend为持平或退步、仍停在提示后答对或答错、或reached_independent为false且已到可复测时间，说明这条方法尚未见效，应更换方法、材料或测法，不要原样重复上一步；已reached_independent的方向可推进到未覆盖方向或提高难度，不在该方向反复练。只依据progress里可核对的变化，用“观察到”表述，不断言是这条方法造成的因果，也只在同一个词同一方向内比较；无可比复测时如实说“待复测”。这套“期望→执行→结果→按进展调整”的闭环同样适用于其它有结果的事项（如考试成绩、老师评测），当输入提供其结果时按同样方式核对是否达成再定下一步。
+核对原因时不因progress改善就停止观察，也不因一次改善认定长期掌握。
 '''
 SCHEMA['properties']['proposal'] = PROPOSAL
 
@@ -686,7 +718,12 @@ class Store:
         if not fp:return dict(state='current',created=0)
         prior_available=not ctx['unavailable_reviewed_refs']
         previous=ctx['plan'].get('approved') if prior_available else None
+        # Effect loop: deterministic per-direction progress + when the current method was confirmed.
+        progress=[dict(word=w['word'],meaning=w['meaning'],direction=WORD_MODES[m][0],**{k:pr[k] for k in ('first_day','first_status','latest_day','latest_status','reached_independent','trend')})
+                  for w in word_history(ctx['records'],now.date())['words'] for m,pr in w.get('progress',{}).items()]
+        confirmed_on=(ctx['plan'].get('approved_changed_at') or '')[:10]
         content=dict(as_of=now.date().isoformat(),as_of_time=now.strftime('%H:%M'),day_context=ctx['day_context'],profile=ctx['profile'],evidence=ctx['evidence'],current_plan=previous,
+                     progress=progress,current_plan_confirmed_on=confirmed_on if previous else '',
                      learning_goal={k:v for k,v in ctx['fields'].items() if k!='baseline'},
                      previous_assessment=ctx['plan'].get('assessment') if prior_available else None,previous_hypotheses=ctx['plan'].get('hypotheses',[]) if prior_available else [],previous_assessment_stale=ctx['plan'].get('approved_evidence_hash')!=ctx['evidence_hash'],
                      previous_context_unavailable=not prior_available,
