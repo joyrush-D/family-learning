@@ -61,6 +61,8 @@ def plan(root, url='http://127.0.0.1:8765', wechat_cli=None, qq_cli=None, mobile
     if urlsplit(url).hostname not in ('127.0.0.1', 'localhost'):
         raise ValueError('本机完整安装使用 http://127.0.0.1:端口 或 http://localhost:端口')
     mobile = validate_base_url(mobile_url).rstrip('/') if mobile_url is not None else None
+    if mobile and urlsplit(mobile).scheme == 'http' and (urlsplit(mobile).port or 80) != (urlsplit(url).port or 80):
+        raise ValueError('局域网地址的端口须与本机应用端口一致')
     child_path, child_public = _mobile_paths(mobile) if mobile else ('', '')
     python = str(Path(sys.executable).resolve(strict=True))
     wechat = cli_path(wechat_cli or shutil.which('wechat-cli'), executable=True)
@@ -86,7 +88,7 @@ def plan(root, url='http://127.0.0.1:8765', wechat_cli=None, qq_cli=None, mobile
         environment = {'PATH': path, 'PYTHONUNBUFFERED': '1', 'FAMILY_DATA': str(private),
                        'PORT': str(urlsplit(url).port or 80)}
         if mobile and kind == 'web':
-            environment.update(FAMILY_CHILD_SECURE='1', FAMILY_CHILD_COOKIE_PATH=child_path,
+            environment.update(FAMILY_CHILD_SECURE='1' if urlsplit(mobile).scheme == 'https' else '0', FAMILY_CHILD_COOKIE_PATH=child_path,
                                FAMILY_CHILD_PUBLIC_URL=child_public, FAMILY_CALENDAR_ID='local-family-learning')
         plist = dict(Label=LABEL + '.' + kind, ProgramArguments=arguments, WorkingDirectory=str(root),
                      RunAtLoad=kind != 'collector' or enabled, ProcessType='Background', Umask=0o077,

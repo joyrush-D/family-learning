@@ -49,6 +49,7 @@ async function proof(p,name){if(process.env.PARENT_LOGIN_UI_PROOF_DIR){await fs.
 async function login(p,value=password){await p.locator('#username').fill('parent');await p.locator('#password').fill(value);await p.locator('#loginSubmit').click()}
 async function apiFetchChecks(){
  const source=await fs.readFile(path.join(__dirname,'app.js'),'utf8'),end=source.indexOf('\nlet data,');assert.ok(end>0);
+ const cryptoSource={getRandomValues:require('node:crypto').webcrypto.getRandomValues.bind(require('node:crypto').webcrypto)},uuidContext={URL,Headers,Uint8Array,crypto:cryptoSource,location:{href:home}};vm.createContext(uuidContext);vm.runInContext(source.slice(0,end),uuidContext);const ids=Array.from({length:100},()=>cryptoSource.randomUUID());assert.equal(new Set(ids).size,100);assert.ok(ids.every(id=>/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id)));
  const old='a'.repeat(43),next='b'.repeat(43),third='c'.repeat(43),options={method:'POST',headers:{'X-Family-Token':'stale-mounted-token'}};
  const setup=fetcher=>{const calls=[],context={URL,Headers,location:{href:home},data:{token:old},showParentLogin:()=>{},fetch:async(url,init)=>{calls.push({url,init});return fetcher()}};vm.createContext(context);vm.runInContext(source.slice(0,end)+'\nglobalThis.checkFetch=apiFetch;',context);return{context,calls}};
  const raw=new Response(JSON.stringify({code:'csrf_expired',token:next}),{status:403}),good=setup(()=>raw);
@@ -101,13 +102,13 @@ async function apiFetchChecks(){
     await p.locator('#showPassword').click();assert.equal(await p.locator('#password').getAttribute('type'),'password');
     await login(p,'synthetic-wrong-password');await eventually(async()=>/账号或密码不正确/.test(await p.locator('#loginStatus').innerText()),'wrong password');
     assert.equal(await p.locator('#username').inputValue(),'parent');await fit(p);
-    await login(p);await eventually(()=>p.locator('.today-dashboard').isVisible(),'authenticated home');
+    await login(p);await eventually(()=>p.locator('body[data-page="home"] [data-task-all="todo"]').isVisible(),'authenticated home');
     assert.equal(p.url(),home+'#synthetic-place');
     const cookie=(await context.cookies(home)).find(x=>x.name==='family_parent_session');
     assert.ok(cookie&&cookie.secure&&cookie.httpOnly&&cookie.sameSite==='Lax');assert.equal(cookie.path,'/family/');assert.ok(cookie.expires-Date.now()/1000>604700);
-    assert.deepEqual(await p.evaluate(()=>({local:localStorage.length,session:sessionStorage.length})),{local:0,session:0});
+    const stored=await p.evaluate(()=>JSON.stringify({local:{...localStorage},session:{...sessionStorage}}));assert.equal(stored.includes(password)||stored.includes(cookie.value),false,'navigation preferences may persist; credentials must not');
     const before=(await read()).records.length;
-    await p.locator('#add').click();await p.locator('#recordForm [name="title"]').fill('虚构未保存记录 '+width);await p.locator('#recordForm [name="note"]').fill('虚构草稿，登录过期也要保留。');
+    await p.locator('nav [data-page="more"]').click();await p.locator('#content [data-capture]').click();await p.locator('#recordForm [name="title"]').fill('虚构未保存记录 '+width);await p.locator('#recordForm [name="note"]').fill('虚构草稿，登录过期也要保留。');
     await context.addCookies([{name:'family_parent_session',value:'synthetic-expired',domain:'family.example.test',path:'/family/',secure:true,httpOnly:true,sameSite:'Lax'}]);
     await p.locator('#recordForm [type="submit"]').click();await eventually(()=>p.locator('#parentLoginDialog').isVisible(),'expired login prompt');
     await eventually(async()=>await p.locator('#recordForm').getAttribute('data-saving')===null,'failed request completed');
@@ -121,7 +122,7 @@ async function apiFetchChecks(){
     assert.equal(writes,1,'login never replays a mutation');assert.equal((await read()).records.length,before);
     await p.locator('#recordForm [type="submit"]').click();await eventually(async()=>!(await p.locator('#recordDialog').isVisible()),'explicit retry saved');assert.equal(writes,2);assert.equal((await read()).records.length,before+1);
     // Study retains its mounted token. A web restart changes TOKEN; shared apiFetch must refresh it.
-    await p.locator('nav [data-page="study"]').click();await eventually(()=>p.locator('[data-study-ready]').isVisible(),'study ready');
+    await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="study"]').click();await eventually(()=>p.locator('[data-study-ready]').isVisible(),'study ready');
     if(await p.locator('.study-add').getAttribute('open')===null)await p.locator('.study-add>summary').click();
     // A real restart keeps the parent session. Only the CSRF token changes.
     const csrfTitle='虚构连接恢复的作业 '+width,studyForm=p.locator('[data-study-form="new"]');
@@ -159,9 +160,9 @@ async function apiFetchChecks(){
     assert.equal(loginRequests,4);holdLogin=true;await p.clock.install();await login(p);await eventually(()=>!!heldLogin,'synthetic held login');await p.clock.runFor(15001);
     await eventually(async()=>/超时/.test(await p.locator('#loginStatus').innerText()),'login timeout is readable');assert.equal(await p.locator('#loginSubmit').isEnabled(),true);await heldLogin.abort().catch(()=>{});heldLogin=null;
     assert.deepEqual(errors,[]);results.push({width,realAPI:true,mountPrefix:true,secureCookie:true,wrongPassword:true,draftPreserved:true,inlineLogin:true,stateFailureRetry:true,noAutomaticReplay:true,explicitRetrySaved:true,mountedTokenRefreshed:true,cookieValidTokenRotation:true,sameRequestKeyAndBody:true,noRecoveryRender:true,retryVisibleAndFocused:true,singlePersistedItem:true,logout:true,timeout:true,pageErrors:0});
-   }finally{await context.close()}
+   }catch(error){await proof(p,'failure-'+width).catch(()=>{});throw error}finally{await context.close()}
   }
-  const local=await browser.newPage();await local.goto('http://127.0.0.1:'+server.port+'/');await eventually(()=>local.locator('.today-dashboard').isVisible(),'loopback home');await local.locator('nav [data-page="more"]').click();assert.equal(await local.locator('[data-parent-logout]').count(),0);await local.close();
+  const local=await browser.newPage();await local.goto('http://127.0.0.1:'+server.port+'/');await eventually(()=>local.locator('body[data-page="home"] [data-task-all="todo"]').isVisible(),'loopback home');await local.locator('nav [data-page="more"]').click();assert.equal(await local.locator('[data-parent-logout]').count(),0);await local.close();
   console.log(JSON.stringify({passed:results.length,results,fetchBoundaries,loopbackUnauthenticated:true,syntheticOnly:true,phoneHardwareTested:false},null,2));
  }finally{await browser?.close();await server?.stop()}
 })().catch(e=>{console.error(e.stack||e.message);process.exitCode=1});

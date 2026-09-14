@@ -187,6 +187,12 @@ def check():
             assert web['EnvironmentVariables']['FAMILY_CALENDAR_ID'] == 'local-family-learning'
             assert all(key not in web['EnvironmentVariables'] for key in ('FAMILY_LLM_API_KEY', 'FAMILY_USER'))
             assert 'password' not in repr(mobile)
+            lan = setup.plan(root, mobile_url='http://192.168.50.2:8765')
+            lan_web = plistlib.loads(lan['files']['LaunchAgents/' + setup.LABEL + '.web.plist'])
+            assert lan_web['EnvironmentVariables']['FAMILY_CHILD_SECURE'] == '0'
+            assert lan_web['EnvironmentVariables']['FAMILY_CHILD_COOKIE_PATH'] == '/child/'
+            assert lan_web['EnvironmentVariables']['FAMILY_CHILD_PUBLIC_URL'] == 'http://192.168.50.2:8765/child/'
+            refuses(lambda: setup.plan(root, mobile_url='http://192.168.50.2:9000'))
             for invalid in ('http://box.example.invalid/family', 'https://box.example.invalid/family?x=1',
                             'https://user:pass@box.example.invalid/family', ' https://box.example.invalid',
                             'https://127.0.0.1/family', 'https://bad_host.example.invalid/family',

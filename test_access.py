@@ -42,6 +42,11 @@ class AccessTests(unittest.TestCase):
             with self.subTest(password=password):
                 with self.assertRaises(access.AccessError): access.make_config('https://family.example.ts.net', 'parent', password)
         with self.assertRaises(access.AccessError): access.make_config('https://family.example.ts.net', 'bad:user', self.password)
+        for url in ('http://192.168.50.2:8765', 'http://10.20.30.40', 'http://172.16.0.2:8765/', 'http://family-box.local:8765'):
+            self.assertEqual(access.validate_base_url(url), url)
+        for url in ('http://8.8.8.8', 'http://127.0.0.1', 'http://169.254.1.1', 'http://172.32.0.1',
+                    'http://192.168.50.2/family', 'http://family-box.local.evil.invalid', 'http://-bad.local'):
+            with self.assertRaises(access.AccessError): access.validate_base_url(url)
 
     def test_bad_config_is_safe_and_permissions_or_symlink_are_rejected(self):
         bad = dict(self.config, password_hash='not-a-secret-hash')
@@ -179,6 +184,30 @@ class AccessTests(unittest.TestCase):
                     self.assertEqual(get(host='localhost', headers={
                         'X-Forwarded-For': '192.0.2.10'})[0], 403)
 
+                    # Direct LAN keeps account/session checks and rejects forwarded or non-LAN clients.
+                    lan_host = '192.168.50.2:8765'
+                    lan_url = 'http://' + lan_host
+                    lan_config = access.make_config(lan_url, 'parent', password)
+                    access_path.write_text(json.dumps(lan_config)); access_path.chmod(0o600)
+                    self.assertEqual(get(host=lan_host)[0], 401)
+                    self.assertEqual(get('/login', host=lan_host)[0], 200)
+                    status, _, info = parent_login(host=lan_host, headers={'Origin': lan_url})
+                    self.assertEqual(status, 200)
+                    lan_cookie = info['Set-Cookie'].split(';', 1)[0]
+                    self.assertNotIn('; Secure', info['Set-Cookie'])
+                    self.assertIn('Max-Age=15552000', info['Set-Cookie'])
+                    self.assertIn('; HttpOnly; SameSite=Lax', info['Set-Cookie'])
+                    self.assertEqual(get(host=lan_host, headers={'Cookie': lan_cookie})[0], 200)
+                    self.assertEqual(parent_login(host=lan_host, headers={'Origin': 'http://evil.invalid'})[0], 403)
+                    self.assertEqual(get(host=lan_host, headers={'Authorization': parent_auth, 'X-Forwarded-Proto': 'https'})[0], 403)
+                    with patch.object(server, 'finish_request', side_effect=lambda req, addr: app.Handler(req, ('203.0.113.10', addr[1]), server)):
+                        self.assertEqual(get(host=lan_host, headers={'Authorization': parent_auth})[0], 403)
+                    with patch.object(server, 'finish_request', side_effect=lambda req, addr: app.Handler(req, ('192.168.50.3', addr[1]), server)):
+                        self.assertEqual(get(host='localhost')[0], 401)
+                        self.assertEqual(get(host=lan_host, headers={'Cookie': lan_cookie})[0], 200)
+                    self.assertEqual(post('/api/parent/logout', {}, host=lan_host, headers={'Cookie': lan_cookie, 'Origin': lan_url, 'X-Family-Login': '1'})[0], 200)
+                    self.assertEqual(get(host=lan_host, headers={'Cookie': lan_cookie})[0], 401)
+                    access._login_attempts.clear()
                     install_config()
                     # A forwarded Serve request always needs the parent credential;
                     # a Tailscale identity alone and a spoofed localhost Host do not.

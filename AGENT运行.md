@@ -82,6 +82,16 @@ python3 configure_mac.py --install
 
 2026-09-10 已在另一台 Apple Silicon Mac、macOS 26.5.2 / Python 3.12.14 上，用虚构家庭实际安装系统服务，核对 Agent 与备份执行成功、网页进程自动恢复及记录保留；测试服务已撤除。首次备份早于数据库创建的问题已修复，冷开机、手机、真实来源及打印仍单独验收。
 
+## 仅本机局域网访问
+
+家庭电脑运行网页、Agent、数据库、消息采集与打印；手机连接同一家庭网络直接访问，无需Joy、公网域名或外部反向代理。外部模型仍按家庭已有配置调用，局域网入口不表示模型改为本地或已离线运行。
+
+新安装示例：`python3 configure_mac.py --install --mobile-url http://192.168.50.2:8765`。替换为本机实际RFC1918内网IP，也可使用实际可解析的`.local`名称；HTTP入口不能带子路径，端口必须与`--app-url`一致。未配置手机入口及HTTPS部署仍只监听回环；显式内网HTTP配置才监听局域网。家长仍须登录，Cookie为HttpOnly、SameSite=Lax、180天；仅HTTPS使用Secure。非法来源、未知Host、代理转发和错误登录Origin继续拒绝，不能用伪造localhost跳过远端认证。
+
+已有家庭只修改原本地`private/access.json`的`base_url`，保留账号、盐和密码哈希；将原网页服务的`FAMILY_CHILD_PUBLIC_URL`、`FAMILY_CHILD_COOKIE_PATH`改为对应`/child/`入口、`FAMILY_CHILD_SECURE`设为`0`，然后受控重载网页服务。先备份这些配置和服务文件，核对实际局域网登录与记录后再停止本应用旧外部转发，失败恢复配置和代码，不能用旧库覆盖家庭记录。原Agent、采集器和打印桥仍通过127.0.0.1访问，无需改动。
+
+浏览器登录、重新登录保留填写、显式重试、退出和保存后重开已用虚构家庭核验；HTTP缺少randomUUID时使用浏览器getRandomValues生成保存编号，避免设置、作业与反馈失效。真实iPhone仍须在家中Wi-Fi实际使用核对。Mac休眠、关机或断网时手机无法访问；IP由路由器改变后需同步访问地址，可在路由器给家庭电脑保留固定地址。HTTP页面不能直接使用浏览器麦克风和当前HTTPS日历订阅入口，可用键盘语音输入和文件上传；这些能力的局域网HTTPS方案保留待验收。
+
 ## 单机手机 HTTPS 入口
 
 已有反向代理若把 Host 改为 localhost，升级本版本前须先准备 access.json，并让代理保留家长 Authorization 头；带转发头的请求不再沿用本地 CLI 的免登录入口。可用 `--output-dir` 生成待核对文件，但不要覆盖现有服务、采集配置或主库。原有 FAMILY_HOST/FAMILY_USER 身份头模式只在没有 access.json 时保留；配置口令后家长改用口令登录，不自动叠加另一种身份权限。

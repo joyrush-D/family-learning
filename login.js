@@ -3,15 +3,16 @@
   const form=document.getElementById('loginForm'),username=document.getElementById('username'),password=document.getElementById('password');
   const submit=document.getElementById('loginSubmit'),show=document.getElementById('showPassword'),status=document.getElementById('loginStatus');
   let pending=false;
-  const secure=location.protocol==='https:';
-  submit.disabled=!secure;
-  if(!secure)status.textContent='请从 HTTPS 家庭入口打开此页后登录。';
+  // The server serves this page only for the configured HTTPS or direct LAN host.
+  const canLogin=['https:','http:'].includes(location.protocol);
+  submit.disabled=!canLogin;
+  if(!canLogin)status.textContent='请从配置的家庭入口打开此页后登录。';
   show.addEventListener('click',()=>{
     const visible=password.type==='password';password.type=visible?'text':'password';
     show.textContent=visible?'隐藏':'显示';show.setAttribute('aria-pressed',String(visible));
   });
   form.addEventListener('submit',async event=>{
-    event.preventDefault();if(pending||!secure||!form.reportValidity())return;
+    event.preventDefault();if(pending||!canLogin||!form.reportValidity())return;
     pending=true;submit.disabled=true;username.readOnly=true;password.readOnly=true;show.disabled=true;
     status.dataset.pending='true';status.textContent='正在登录…';form.setAttribute('aria-busy','true');
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);

@@ -1,4 +1,10 @@
 const basePath=new URL('.',location.href).pathname;
+// LAN HTTP has getRandomValues but no randomUUID; keep all save/retry IDs cryptographically random.
+if(typeof crypto!=='undefined'&&!crypto.randomUUID)crypto.randomUUID=()=>{
+ const bytes=crypto.getRandomValues(new Uint8Array(16));bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;
+ const hex=Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
+ return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+};
 const endpoint=path=>basePath+path.replace(/^\//,'');
 const apiFetch=async(path,options)=>{
  const headers=new Headers(options?.headers);if(headers.has('X-Family-Token')&&data?.token)headers.set('X-Family-Token',data.token);
@@ -21,7 +27,7 @@ const taskStatusLabel=value=>value==='不适用'?'无需处理':value;
 const selected=xs=>xs.filter(x=>!child||x.child===child);
 const empty=s=>`<div class="empty">${esc(s)}</div>`;
 function toast(s){$('#toast').textContent=s;$('#toast').style.display='block';setTimeout(()=>$('#toast').style.display='none',3500)}
-const parentLogoutAvailable=location.protocol==='https:'&&!['localhost','127.0.0.1','[::1]'].includes(location.hostname);
+const parentLogoutAvailable=['https:','http:'].includes(location.protocol)&&!['localhost','127.0.0.1','[::1]'].includes(location.hostname);
 let parentLoginCheck=null,parentLoginAuthenticated=false,parentLogoutBusy=false;
 function parentLoginURL(){const url=new URL(endpoint('/login'),location.href);url.hash=location.hash;return url.href}
 function paintParentLogin(){
@@ -36,7 +42,7 @@ function showParentLogin(){
 }
 async function checkParentLogin(event){
  event.preventDefault();const form=$('#parentLoginForm');if(parentLoginCheck||!form.reportValidity())return;
- if(location.protocol!=='https:'){$('#parentLoginStatus').textContent='请从 HTTPS 家庭入口登录。当前填写仍留在本页。';return}
+ if(!parentLogoutAvailable){$('#parentLoginStatus').textContent='请从配置的家庭入口登录。当前填写仍留在本页。';return}
  const controller=new AbortController();parentLoginCheck=controller;const timer=setTimeout(()=>controller.abort(),20000);
  paintParentLogin();$('#parentLoginStatus').textContent='正在恢复登录…';
  try{

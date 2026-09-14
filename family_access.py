@@ -1,4 +1,4 @@
-"""Parent HTTPS login and sessions; Basic credentials also serve calendar clients."""
+"""Parent login over HTTPS or explicitly configured home LAN HTTP."""
 import base64
 import binascii
 import hashlib
@@ -30,6 +30,15 @@ COOKIE = 'family_parent_session'
 SESSION_AGE = 180 * 24 * 60 * 60  # Parent devices: 180 days from login.
 _login_attempts = []
 _login_lock = threading.Lock()
+_LAN_NETWORKS = tuple(ipaddress.ip_network(value) for value in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
+
+
+def lan_address(value):
+    try:
+        address = ipaddress.ip_address(value)
+        return any(address in network for network in _LAN_NETWORKS)
+    except ValueError:
+        return False
 
 
 class AccessError(ValueError):
@@ -50,7 +59,8 @@ def validate_base_url(value):
     except ValueError:
         raise AccessError('访问配置不正确') from None
     host = parsed.hostname
-    if (parsed.scheme != 'https' or not host or parsed.username is not None or parsed.password is not None or
+    lan = parsed.scheme == 'http' and host and (lan_address(host) or host.lower().endswith('.local'))
+    if (parsed.scheme != 'https' and not lan or not host or parsed.username is not None or parsed.password is not None or
             parsed.query or parsed.fragment or port is not None and not 1 <= port <= 65535 or
             host.lower() in {'localhost', 'localhost.localdomain'}):
         raise AccessError('访问配置不正确')
@@ -59,8 +69,11 @@ def validate_base_url(value):
     except ValueError:
         pass
     else:
+        if not lan:
+            raise AccessError('访问配置不正确')
+    if len(host) > 253 or not (lan_address(host) and lan) and not _HOST.fullmatch(host):
         raise AccessError('访问配置不正确')
-    if len(host) > 253 or not _HOST.fullmatch(host):
+    if lan and parsed.path not in ('', '/'):
         raise AccessError('访问配置不正确')
     if (parsed.path not in ('', '/') and
             (not _PATH.fullmatch(parsed.path) or any(segment in ('.', '..') for segment in parsed.path.split('/')))):
@@ -224,7 +237,7 @@ def _path(config):
 
 def _cookie(config, secret):
     return (COOKIE + '=' + secret + '; Path=' + _path(config) + '; Max-Age=' + str(SESSION_AGE)
-            + '; Secure; HttpOnly; SameSite=Lax')
+            + ('; Secure' if urlsplit(config['base_url']).scheme == 'https' else '') + '; HttpOnly; SameSite=Lax')
 
 
 def dispatch(handler, config, connect, root):
@@ -246,12 +259,14 @@ def dispatch(handler, config, connect, root):
         if handler.command != 'POST':
             reply(405, {'error': '请使用登录页面提交'}); return True
         parsed = urlsplit(config['base_url'])
-        origin = 'https://' + parsed.hostname + (':' + str(parsed.port) if parsed.port not in (None, 443) else '')
+        default_port = 443 if parsed.scheme == 'https' else 80
+        origin = parsed.scheme + '://' + parsed.hostname + (':' + str(parsed.port) if parsed.port not in (None, default_port) else '')
         origins = handler.headers.get_all('Origin', [])
         proto = handler.headers.get_all('X-Forwarded-Proto', [])
         if (origins != [origin]
-                or proto not in ([], ['https']) or handler.headers.get_all('X-Family-Login', []) != ['1']):
-            reply(403, {'error': '请从家庭 HTTPS 入口登录'}); return True
+                or proto not in ([], ['https']) or parsed.scheme == 'http' and proto
+                or handler.headers.get_all('X-Family-Login', []) != ['1']):
+            reply(403, {'error': '请从配置的家庭入口登录'}); return True
         lengths = handler.headers.get_all('Content-Length', [])
         if (handler.headers.get('Transfer-Encoding') or len(lengths) != 1
                 or not re.fullmatch(r'[0-9]{1,5}', lengths[0])

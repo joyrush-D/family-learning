@@ -1388,6 +1388,9 @@ class Handler(BaseHTTPRequestHandler):
         if config is None:
             if host in ('127.0.0.1','localhost'): return deny(403,'转发访问需要配置家庭认证')
             return True if self.local_host() else deny(403,'访问地址未授权')
+        if urlsplit(config['base_url']).scheme == 'http':
+            if forwarded or not (family_access.lan_address(self.client_address[0]) or self.client_address[0] in ('127.0.0.1','::1')):
+                return deny(403,'此入口仅供家庭局域网直接访问')
         allowed={'127.0.0.1','localhost',urlsplit(config['base_url']).hostname,os.environ.get('FAMILY_HOST','')}
         if host not in allowed: return deny(403,'访问地址未授权')
         path=urlparse(self.path).path
@@ -1619,5 +1622,7 @@ if __name__=='__main__':
     connect().close()
     prepare_assets()
     port=int(os.environ.get('PORT','8765'))
+    access_config=family_access.read_config(DATA)
+    bind='0.0.0.0' if access_config and urlsplit(access_config['base_url']).scheme=='http' else '127.0.0.1'
     print('家庭学习助手 http://127.0.0.1:'+str(port),flush=True)
-    ThreadingHTTPServer(('127.0.0.1',port),Handler).serve_forever()
+    ThreadingHTTPServer((bind,port),Handler).serve_forever()
