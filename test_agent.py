@@ -42,6 +42,76 @@ class AgentTests(unittest.TestCase):
     def config(self, enabled=True):
         (self.data / 'agent.json').write_text(json.dumps({'enabled': enabled, 'sources': [self.source]}))
 
+    def test_identical_school_notice_keeps_one_task_decision_and_all_sources(self):
+        sources=[self.source,dict(self.source,id='synthetic-second',name='虚构另一班群'),
+                 dict(self.source,id='synthetic-sibling',name='虚构另一孩子班群',child_id='child-2')]
+        (self.data/'agent.json').write_text(json.dumps(dict(enabled=True,sources=sources)))
+        text='语文：完成虚构观察记录。明天带到学校。'
+        cursors={s['id']:'10' for s in sources}
+        def candidate(source, index, *, content=text, stamp=None, title='语文：完成观察记录', unread=False):
+            stamp=stamp or self.now.isoformat()
+            self.store.ingest(dict(self.payload(expected=cursors[source['id']],cursor=str(index),message=str(index)),
+                source_id=source['id'],messages=[dict(id=str(index),time=stamp,kind='text',sender='示例老师',text=content,unread=unread)]))
+            cursors[source['id']]=str(index)
+            item=dict(child_id=source['child_id'],kind='school',title=title,body='完成一份自己的观察记录。',due='',
+                evidence=[dict(ref='message:'+source['id']+':'+str(index),text=content)],
+                plan=dict(school_task=dict(title=title,goal='完成一份自己的观察记录。',advice='',state='ready',reason='明确要求',policy=agent.SCHOOL_TASK_POLICY),
+                          school_learning=dict(subject='语文',goal_id=''),school_messages=[dict(source_id=source['id'],message_id=str(index))]))
+            key='synthetic-copy:'+str(index);self.store._save(key,'fixture',[item],self.now)
+            with self.app.connect() as c:return c.execute('SELECT id FROM agent_items WHERE job_id=?',(key,)).fetchone()[0]
+        first=candidate(sources[0],11)
+        task=self.store.act(dict(id=first,action='accept'))['task_id']
+        from family_goals import Store as Goals
+        goals=Goals(self.app,self.store)
+        self.assertEqual(goals.route_school(),1)
+        self.app.save_task(dict(id=task,status='不适用',note='虚构家长已确认不需要。'))
+        with self.app.connect() as c:
+            before_updates=[tuple(r) for r in c.execute('SELECT * FROM task_updates')]
+            before_task=dict(c.execute('SELECT * FROM manual_tasks WHERE id=?',(task,)).fetchone())
+        second=candidate(sources[1],12)
+        with patch.object(agent.family_llm,'_chat_json') as model:
+            refreshed=agent._refresh_school(self.app,self.store,self.now,0);model.assert_not_called()
+        self.assertEqual(refreshed['created'],0)
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+            self.assertEqual(before_updates,[tuple(r) for r in c.execute('SELECT * FROM task_updates')])
+            saved=dict(c.execute('SELECT * FROM manual_tasks WHERE id=?',(task,)).fetchone())
+            self.assertEqual({k:v for k,v in saved.items() if k!='source'},{k:v for k,v in before_task.items() if k!='source'})
+            self.assertIn('message:synthetic-group:11',saved['source'])
+            self.assertIn('message:synthetic-second:12',saved['source'])
+            item=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(second,)).fetchone())
+            self.assertEqual(item['task_id'],task)
+            canonical=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(first,)).fetchone())
+            self.assertEqual(len(json.loads(canonical['evidence'])),2)
+        self.assertEqual(self.store.act(dict(id=second,action='accept'))['task_id'],task)
+        reopened=agent.Store(self.app.connect,self.app.profiles,self.data)
+        self.assertEqual(reopened.act(dict(id=second,action='accept'))['task_id'],task)
+        self.assertEqual(goals.route_school(),0)
+        with self.app.connect() as c:
+            roots=goals.roots(c);self.assertEqual(len(roots),1)
+            context,missing=goals._school_context(c,roots[0])
+            self.assertEqual(len(context),2);self.assertEqual(missing,0)
+        # Same wording on another day, changed full text, sibling, another split task and unread media are distinct.
+        variants=[(sources[0],dict(stamp=(self.now+dt.timedelta(days=1)).isoformat())),
+                  (sources[0],dict(content=text+'补充新的要求。')),(sources[2],{}),
+                  (sources[0],dict(title='语文：另一个独立成果')),(sources[0],dict(unread=True))]
+        for index,(source,extra) in enumerate(variants,20):
+            ident=candidate(source,index,**extra)
+            result=self.store.act(dict(id=ident,action='accept'))
+            self.assertNotEqual(result['task_id'],task);self.assertNotIn('deduplicated',result)
+        with self.app.connect() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],6)
+        skipped=candidate(sources[0],30,title='虚构不需跟进的事项')
+        self.store.act(dict(id=skipped,action='dismiss'))
+        repeated=candidate(sources[1],31,title='虚构不需跟进的事项')
+        decision=self.store.act(dict(id=repeated,action='accept'))
+        self.assertEqual(decision,dict(ok=True,state='dismissed',task_id='',deduplicated=True))
+        self.assertEqual(self.store.act(dict(id=repeated,action='accept')),decision)
+        with self.app.connect() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],6)
+        with self.app.connect() as c:
+            row=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(first,)).fetchone())
+            for refs in ([dict(ref='message:broken')],[dict(ref=None)],[None]):
+                self.assertIsNone(self.store._school_identity(c,dict(row,evidence=json.dumps(refs))))
+
     def payload(self, expected='10', cursor='11', message='11', offset=0):
         stamp = (self.now + dt.timedelta(minutes=offset)).isoformat()
         return dict(source_id=self.source['id'], expected_cursor=expected, cursor=cursor,

@@ -553,6 +553,62 @@ class Store:
                     collection_interval_minutes=collection_interval_minutes(),
                     linked_upload_ids=sorted(linked_upload_ids))
 
+    def _school_identity(self, c, row):
+        """Conservative identity for one fully read, same-day school instruction."""
+        from family_agenda import sent_day
+        originals = set()
+        try:
+            for evidence in json.loads(row['evidence']):
+                if not isinstance(evidence, dict) or not isinstance(evidence.get('ref'), str): return None
+                if not evidence['ref'].startswith('message:'): return None
+                source_id, message_id = evidence['ref'][8:].rsplit(':', 1)
+                _, message = self._message_context(c, dict(child_id=row['child_id'], source_id=source_id, message_id=message_id))
+                text = message.get('text', '').replace('\r\n', '\n').strip()
+                day = sent_day(message.get('time', ''))
+                if message.get('kind') != 'text' or message.get('unread') or not text or not day: return None
+                originals.add((day, text))
+        except (AgentError, ValueError, KeyError, TypeError, AttributeError):
+            return None
+        if not originals: return None
+        # Split tasks from one notice must remain distinct. Model paraphrases are not fuzzy-matched.
+        return _hash([row['child_id'], row['title'].strip(), row['body'].strip(), row['due'], sorted(originals)])
+
+    def _reuse_school(self, c, row):
+        identity = self._school_identity(c, row)
+        if identity is None: return None
+        # ponytail: scan this child's collected school items; index only when measured volume warrants it.
+        candidates = c.execute("SELECT * FROM agent_items WHERE child_id=? AND kind='school' AND state IN ('accepted','dismissed') AND trim(title)=? AND trim(body)=? AND due=? ORDER BY created,id",
+                               (row['child_id'], row['title'].strip(), row['body'].strip(), row['due'])).fetchall()
+        for existing in candidates:
+            old_plan = json.loads(existing['plan'])
+            if old_plan.get('school_duplicate_of') or self._school_identity(c, existing) != identity: continue
+            task = c.execute('SELECT * FROM manual_tasks WHERE id=?', (existing['task_id'],)).fetchone() if existing['task_id'] else None
+            if existing['state'] == 'accepted':
+                if task is None or task['child'] != next((p['name'] for p in self.profiles(c) if p['id'] == row['child_id']), None): continue
+                if not task['source'].startswith('Agent建议:' + existing['id'] + '\n'): continue
+            evidence = json.loads(existing['evidence'])
+            known = {e['ref'] for e in evidence}
+            added = []
+            for entry in json.loads(row['evidence']):
+                if entry['ref'] not in known: added.append(entry); known.add(entry['ref'])
+            evidence.extend(added)
+            # The canonical item alone owns learning routing; duplicated sources are still available there.
+            if old_plan.get('school_learning'):
+                old_plan['school_messages'] = [dict(zip(('source_id', 'message_id'), e['ref'][8:].rsplit(':', 1))) for e in evidence]
+            now = _now().isoformat()
+            if added:
+                c.execute('UPDATE agent_items SET evidence=?,plan=?,updated=? WHERE id=?', (_json(evidence), _json(old_plan), now, existing['id']))
+                if task:
+                    source = task['source'] + '\n\n' + '\n\n'.join(e['ref'] + '\n' + e['text'] for e in added)
+                    c.execute('UPDATE manual_tasks SET source=? WHERE id=?', (source, task['id']))
+            plan = json.loads(row['plan'])
+            plan['school_duplicate_of'] = existing['id']
+            for key in ('school_learning', 'school_goal_id'): plan.pop(key, None)
+            c.execute('UPDATE agent_items SET state=?,task_id=?,plan=?,updated=? WHERE id=?',
+                      (existing['state'], existing['task_id'], _json(plan), now, row['id']))
+            return dict(ok=True, state=existing['state'], task_id=existing['task_id'], deduplicated=True)
+        return None
+
     def act(self, obj, *, school_auto=False):
         if not isinstance(obj, dict) or set(obj) - {'id', 'action', 'title', 'due', 'body', 'action_text',
                                                      'review_on', 'estimated_minutes', 'expected_updated','advice'}:
@@ -587,6 +643,8 @@ class Store:
             row = c.execute('SELECT * FROM agent_items WHERE id=?', (ident,)).fetchone()
             if row is None: raise AgentError('建议不存在，请刷新', 404)
             if action not in {'accept', 'dismiss', 'defer'}: raise AgentError('操作不正确')
+            if action == 'accept' and row['state'] in ('accepted', 'dismissed') and json.loads(row['plan']).get('school_duplicate_of'):
+                return dict(ok=True, state=row['state'], task_id=row['task_id'], deduplicated=True)
             if row['state'] == 'accepted' and action == 'accept': return {'ok': True, 'state': 'accepted', 'task_id': row['task_id']}
             if row['state'] == 'dismissed' and action == 'dismiss': return {'ok': True, 'state': 'dismissed'}
             if action == 'defer':
@@ -632,6 +690,9 @@ class Store:
                         raise AgentError('这条学校消息只有未读资料占位，请填写具体待办标题和动作')
                 profiles = {p['id']: p['name'] for p in self.profiles(c)}
                 if row['child_id'] not in profiles: raise AgentError('孩子档案无法核对', 409)
+                if row['kind'] == 'school':
+                    reused = self._reuse_school(c, row)
+                    if reused is not None: return reused
                 task_id = 'AGENT-' + _hash(ident)[:24]
                 evidence = json.loads(row['evidence'])
                 plan = json.loads(row['plan'])
@@ -824,7 +885,8 @@ def _refresh_school(app, store, now, budget):
                 c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=?",(_json(plan),row['id'],row['updated']))
         if brief.get('state')=='ready':
             try:
-                store.act(dict(id=row['id'],action='accept',expected_updated=row['updated']),school_auto=True);created+=1
+                result=store.act(dict(id=row['id'],action='accept',expected_updated=row['updated']),school_auto=True)
+                created+=not result.get('deduplicated',False)
             except (AgentError,sqlite3.IntegrityError) as error:
                 if isinstance(error,AgentError) and error.status==409: continue
                 expected=_json(plan);brief.update(state='review',reason='自动收集未成功，请核对事项后再加入。');plan['school_task']=brief

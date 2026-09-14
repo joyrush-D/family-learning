@@ -54,6 +54,21 @@ with tempfile.TemporaryDirectory(prefix='synthetic-agent-ui-') as tmp:
   store._save('school:draft:'+str(width),'fixture',[dict(child_id='child-1',kind='school',title='虚构原件草稿 '+str(width),body='请核对实际表现。',evidence=[{'ref':'message:synthetic:draft:'+str(width),'text':'虚构听写原件'}])],now)
  with patch.object(family_llm,'extract_draft',return_value=dict(title='虚构听写记录',subject='英语',score=None,total=None,note='图片目标行标记F；不能换算成0分。<img src=x onerror=alert(1)>',uncertainties=['错词尚未提供'])):
   for _ in (360,1440): assert family_media.prepare_draft(store,now)==dict(used=1,failed=0)
+ # Fully read repeated notifications use the same task and preserve a parent's closed decision.
+ cfg=json.loads((app.DATA/'agent.json').read_text())
+ for name in ('copy-a','copy-b'):cfg['sources'].append(dict(id=name,platform='wechat',child_id='child-1',name='虚构重复通知群 '+name,cursor='',enabled=True))
+ (app.DATA/'agent.json').write_text(json.dumps(cfg))
+ for name in ('copy-a','copy-b'):
+  store.ingest(dict(source_id=name,expected_cursor='',cursor='page-1',checked_at=now.isoformat(),last_message_time=now.isoformat(),error='',messages=[dict(id=str(width),time=now.isoformat(),kind='text',sender='示例老师',text='虚构同日通知 '+str(width)+'：明天带观察记录。',unread=False) for width in (360,1440)]))
+ for width in (360,1440):
+  for name in ('copy-a','copy-b'):
+   title='虚构同日重复事项 '+str(width)
+   item=dict(child_id='child-1',kind='school',title=title,body='带一份观察记录。',due=today,evidence=[dict(ref='message:'+name+':'+str(width),text='虚构同日通知 '+str(width)+'：明天带观察记录。')],plan=dict(school_task=dict(title=title,goal='带一份观察记录。',advice='',state='ready',reason='明确学校安排',policy=family_agent.SCHOOL_TASK_POLICY)))
+   key='copy:'+name+':'+str(width);store._save(key,'fixture',[item],now)
+   if name=='copy-a':
+    with store._db() as c:ident=c.execute('SELECT id FROM agent_items WHERE job_id=?',(key,)).fetchone()[0]
+    task=store.act(dict(id=ident,action='accept'))['task_id']
+    app.save_task(dict(id=task,status='不适用',note='虚构家长已确认不需处理。'))
  store._runtime('ready',now)
  app.prepare_assets()
  server=app.ThreadingHTTPServer(('127.0.0.1',int(os.environ['TEST_AGENT_PORT'])),app.Handler)
@@ -70,6 +85,33 @@ with tempfile.TemporaryDirectory(prefix='synthetic-agent-ui-') as tmp:
   const page=await browser.newPage({viewport:{width,height:820}}),pageErrors=[];page.on('pageerror',e=>pageErrors.push(e.message));await page.goto(url);try{await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor()}catch(error){await proof(page,'startup-failed-'+width);throw Error('Synthetic startup: '+(await page.locator('body').innerText()).slice(-1600)+'; '+pageErrors.join('; '))}
   assert.equal(await page.locator('[data-today-child="child-2"] [data-agent-item]').count(),0,'care reminders stay off the school summary');assert.equal(await page.locator('[data-today-child="child-1"] [data-followup="1"]').count(),0);
   await fits(page);
+  const duplicateTitle='虚构同日重复事项 '+width,copyBefore=await state(),copyTask=copyBefore.tasks.find(t=>t.title===duplicateTitle);
+  const copyItem=copyBefore.agent.items.find(i=>i.title===duplicateTitle&&i.state==='pending');assert.ok(copyTask&&copyItem);
+  await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();
+  await page.locator('[data-agent-accept="'+copyItem.id+'"]').click();await page.locator('#agentDialog').waitFor();
+  await page.route('**/api/agent/action',async route=>{const response=await route.fetch();assert.equal(response.status(),200);await route.fulfill({status:503,json:{error:'虚构重复通知回执丢失'}})},{times:1});
+  await page.locator('#agentForm [type="submit"]').click();await until(async()=>/虚构重复通知回执丢失/.test(await page.locator('#agentError').innerText()),'duplicate receipt unknown');
+  assert.equal(await page.locator('#agentForm [name="title"]').inputValue(),duplicateTitle);
+  await page.locator('#agentForm [type="submit"]').click();await page.locator('#agentDialog').waitFor({state:'hidden'});
+  await until(async()=>/相同通知已收集，保留原事项及处理状态/.test(await page.locator('#toast').innerText()),'duplicate acknowledgement');await fits(page);await proof(page,'school-duplicate-'+width);
+  await page.reload();await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();
+  const copyAfter=await state(),sameTask=copyAfter.tasks.find(t=>t.id===copyTask.id);
+  assert.equal(copyAfter.tasks.length,copyBefore.tasks.length);assert.equal(copyAfter.tasks.filter(t=>t.title===duplicateTitle).length,1);
+  assert.deepEqual(sameTask.update,copyTask.update);assert.deepEqual(sameTask.history,copyTask.history);
+  assert.equal(copyAfter.agent.items.find(i=>i.id===copyItem.id).task_id,copyTask.id);
+  assert.match(sameTask.source,new RegExp('message:copy-a:'+width));assert.match(sameTask.source,new RegExp('message:copy-b:'+width));
+  assert.deepEqual(copyAfter.records,copyBefore.records);
+  await page.locator('nav [data-page="tasks"]').click();await page.locator('[data-task-box="已搁置"]').click();const copyCard=page.locator('[data-query-target="task:'+copyTask.id+'"]');await copyCard.waitFor();
+  const copyDetails=copyCard.locator('.task-more');if(await copyDetails.getAttribute('open')===null)await copyDetails.locator(':scope > summary').click();
+  assert.equal(await copyCard.locator('[data-school-original-ref]').count(),2);
+  for(const source of ['copy-a','copy-b']){
+   const response=page.waitForResponse(r=>r.url().includes('/api/agent/message?')&&r.request().method()==='GET');
+   await copyCard.locator('[data-school-original-ref="message:'+source+':'+width+'"]').click();
+   const reply=await response;assert.equal(reply.status(),200);const view=await reply.json();assert.equal(view.source_id,source);assert.equal(view.message_id,String(width));assert.equal(view.child_id,'child-1');
+   await page.locator('#schoolOriginalDialog').waitFor();assert.match(await page.locator('#schoolOriginalDialog').innerText(),/明天带观察记录/);await fits(page);
+   await page.locator('[data-school-original-close]').click();
+  }
+  await proof(page,'school-duplicate-origins-'+width);await page.locator('[data-task-box="全部"]').click();await page.locator('nav [data-page="home"]').click();await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();
   const imageTitle='待核对：[image：内容未读取，仅保留消息说明]';await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();await page.locator('#content h1').waitFor();let imageState=await state(),imageItem=imageState.agent.items.find(x=>x.kind==='school'&&x.state==='pending'&&x.title===imageTitle);assert.ok(imageItem,'image placeholder school item is pending');const imageCard=page.locator('[data-agent-item="'+imageItem.id+'"]');assert.equal(await imageCard.locator('h3').innerText(),'原件内容待核对');assert.equal(await imageCard.locator('[data-agent-accept]').innerText(),'补充具体要求');await imageCard.locator('[data-agent-accept]').click();await page.locator('#agentDialog').waitFor();const imageForm=page.locator('#agentForm');assert.equal(await imageForm.locator('[name="title"]').inputValue(),'');assert.equal(await imageForm.locator('[name="body"]').inputValue(),'');assert.equal(await imageForm.locator('[name="title"]').getAttribute('required'),'');assert.equal(await imageForm.locator('[name="body"]').getAttribute('required'),'');assert.match(await imageForm.innerText(),/原件内容尚未读取，请先核对并填写具体事项。也可以明确安排先核对原件。/);await imageForm.locator('details > summary').click();assert.match(await imageForm.innerText(),/虚构图片消息说明：原件内容尚未读取/);const imageRecordsBefore=imageState.records.length,imageTasksBefore=imageState.tasks.length;await imageForm.locator('[name="title"]').fill('虚构核对后的具体事项 '+width);await imageForm.locator('[name="body"]').fill('虚构明确动作：先核对图片原件，再按通知准备材料。');await imageForm.locator('[type="submit"]').click();await until(async()=>!(await page.locator('#agentDialog').isVisible()),'image placeholder accepted');const imageAfter=await state(),acceptedImage=imageAfter.agent.items.find(x=>x.id===imageItem.id),imageTask=imageAfter.tasks.find(t=>t.title==='虚构核对后的具体事项 '+width);assert.equal(acceptedImage.state,'accepted');assert.ok(imageTask,'accepted image source creates school task');assert.equal(imageAfter.records.length,imageRecordsBefore,'accepting image source creates no learning record');assert.equal(imageAfter.tasks.length,imageTasksBefore+1,'accepting image source creates exactly one task');assert.match(imageTask.source,/message:synthetic:image:/);assert.equal(imageTask.original_status,'待跟进');await page.locator('[data-page="tasks"]').first().click();const imageFollowup=page.locator('[data-query-target="task:'+imageTask.id+'"]');await imageFollowup.waitFor();assert.equal(imageTask.agenda.category,'todo','checking an original is school administration');assert.equal(await imageFollowup.locator('[data-study-task-add]').count(),0,'administration does not become homework');assert.equal(await imageFollowup.locator('[data-task="'+imageTask.id+'"]').count(),1,'accepted school administration can be followed up');await page.locator('[data-page="home"]').first().click();await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();
   // Original-message review is scoped to one child and one message; it must not create a learning fact.
   const originalRef='message:synthetic:original:'+width,original=(await state()).agent.items.find(x=>x.kind==='school'&&x.state==='pending'&&x.evidence?.some(e=>e.ref===originalRef));assert.ok(original,'synthetic original-message school item is pending');const originalBase=await state(),existing=originalBase.uploads.find(x=>x.name==='synthetic-existing.png'),originalIDs={child_id:'child-1',source_id:'synthetic',message_id:'original:'+width};assert.ok(existing,'unlinked existing image is available');
@@ -194,5 +236,5 @@ with tempfile.TemporaryDirectory(prefix='synthetic-agent-ui-') as tmp:
   assert.deepEqual(pageErrors,[]);await page.close();
  }
  const p=await browser.newPage();await p.goto(url);await p.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();await p.locator('nav [data-page="more"]').click();await p.locator('#content [data-page="agent"]').click();await p.locator('#content h1').waitFor();const recordsBeforeDismiss=(await state()).records.length;const pendingCare=(await state()).agent.items.find(x=>x.kind==='care'&&x.state==='pending');assert.ok(pendingCare);await p.locator('[data-agent-item="'+pendingCare.id+'"] [data-agent-dismiss]').click();await until(async()=>!(await state()).agent.items.some(x=>x.kind==='care'&&x.state==='pending'),'dismiss saved');assert.equal((await state()).records.length,recordsBeforeDismiss,'acknowledgement does not fabricate child feedback');await p.close();
- console.log(JSON.stringify({passed:true,widths:[360,1440],realAPI:true,syntheticOnly:true,formRetry:true,childBinding:true,escapedEvidence:true,acknowledgementNotFeedback:true,schoolSourceEntry:true,actualDayNotGuessed:true,taskFeedbackPreserved:true,sameSourceSameCase:true,observationSameChain:true,stableRecordRetry:true,closedUnknownReceiptRecovered:true,recordDoesNotChangeTask:true,emptySourceNoDefaultChild:true,ordinarySchoolEventNoForcedRetest:true,plannedCareLostReceipt:true,plannedCareConcurrentDeferral:true,preparedImageDraft:true,letterGradeNotNumeric:true,imageDraftEditableAndLinked:true,draftSaveRetryAndReopen:true}));
+ console.log(JSON.stringify({passed:true,widths:[360,1440],realAPI:true,syntheticOnly:true,formRetry:true,childBinding:true,escapedEvidence:true,acknowledgementNotFeedback:true,schoolSourceEntry:true,actualDayNotGuessed:true,taskFeedbackPreserved:true,sameSourceSameCase:true,observationSameChain:true,stableRecordRetry:true,closedUnknownReceiptRecovered:true,recordDoesNotChangeTask:true,emptySourceNoDefaultChild:true,ordinarySchoolEventNoForcedRetest:true,plannedCareLostReceipt:true,plannedCareConcurrentDeferral:true,preparedImageDraft:true,letterGradeNotNumeric:true,imageDraftEditableAndLinked:true,draftSaveRetryAndReopen:true,duplicateNoticePreservesDecision:true,allDuplicateOriginsReadable:true}));
 }finally{if(browser)await browser.close();if(proc&&proc.exitCode===null){proc.kill('SIGINT');await once(proc,'exit')}}})().catch(e=>{console.error(e);process.exitCode=1});
