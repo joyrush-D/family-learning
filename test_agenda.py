@@ -88,7 +88,8 @@ class AgendaTest(unittest.TestCase):
                ('星期四听写第二单元','2026-09-17'),('礼拜二穿校服','2026-09-15'),('周一交','2026-09-14'),('下周日带','2026-09-27')]
         for text,expected in cases:self.assertEqual(agenda.deadline(text,monday),expected,text)
         # Recurring, past, ranged, unanchored or bare event dates are not deadlines.
-        for text in ['每周五交作业','上周五交的作业','下周一到周三春游','周末愉快','2月14日开始活动','周五']:
+        for text in ['每周五交作业','上周五交的作业','每个星期五交作业','上个星期五交的作业','下下周五交作业',
+                     '周一到周三交作业','本周五到下周一提交','下周一至三交作业','下周一到周三春游','周末愉快','2月14日开始活动','周五']:
             self.assertEqual(agenda.deadline(text,monday),'',text)
         self.assertEqual(agenda.deadline('周五交',''),'')
         self.assertEqual(agenda.deadline('本周一交','2026-09-16'),'','a weekday already gone this week stays for review')

@@ -27,13 +27,14 @@ def _relative_weekday(text,anchor):
     if not anchor: return text
     sent=dt.date.fromisoformat(anchor); monday=sent-dt.timedelta(days=sent.weekday())
     def resolve(match):
+        if match.group('range'): return match[0]
         prefix,name=match.group('prefix') or '',_WEEKDAYS[match.group('day')]
         if prefix in ('本','这','这个','本个'): value=monday+dt.timedelta(days=name)
         elif prefix in ('下','下个'): value=monday+dt.timedelta(days=7+name)
         else: value=monday+dt.timedelta(days=name+(7 if name<sent.weekday() else 0))
         # A day already gone this week is not a usable deadline; leave the phrase for review.
         return value.isoformat() if value>=sent else match[0]
-    return re.sub(r'(?<![每上])(?P<prefix>本个|这个|下个|本|这|下)?(?:周|星期|礼拜)(?P<day>[一二三四五六日天])(?![周月年])',resolve,text)
+    return re.sub(r'(?<![每上本这下个])(?P<prefix>本个|这个|下个|本|这|下)?(?:周|星期|礼拜)(?P<day>[一二三四五六日天])(?P<range>\s*(?:到|至|[-–—~～])\s*(?:本个|这个|下个|本|这|下)?(?:周|星期|礼拜)?[一二三四五六日天])?(?![周月年])',resolve,text)
 
 
 def deadlines(text,published):
