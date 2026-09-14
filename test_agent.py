@@ -22,7 +22,7 @@ class AgentTests(unittest.TestCase):
         self.root = Path(directory.name); self.data = self.root / 'private'; self.data.mkdir()
         (self.root / '家庭运行规则.md').write_text('| child-1 | 示例甲 | 男 | 10岁 | 四年级 |\n| child-2 | 示例乙 | 男 | 13岁 | 初一 |\n')
         self.app = family_review.load_app(self.root, self.data)
-        self.store = agent.Store(self.app.connect, self.app.profiles, self.data)
+        self.store = agent.Store(self.app.connect, self.app.profiles, self.data, app=self.app)
         self.now = dt.datetime(2026, 2, 10, 8, tzinfo=agent.TZ)
         self.source = dict(id='synthetic-group', platform='wechat', child_id='child-1', name='虚构班级', cursor='10', enabled=True)
         self.config()
@@ -84,7 +84,7 @@ class AgentTests(unittest.TestCase):
             canonical=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(first,)).fetchone())
             self.assertEqual(len(json.loads(canonical['evidence'])),2)
         self.assertEqual(self.store.act(dict(id=second,action='accept'))['task_id'],task)
-        reopened=agent.Store(self.app.connect,self.app.profiles,self.data)
+        reopened=agent.Store(self.app.connect,self.app.profiles,self.data,app=self.app)
         self.assertEqual(reopened.act(dict(id=second,action='accept'))['task_id'],task)
         self.assertEqual(goals.route_school(),0)
         with self.app.connect() as c:
@@ -111,6 +111,77 @@ class AgentTests(unittest.TestCase):
             row=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(first,)).fetchone())
             for refs in ([dict(ref='message:broken')],[dict(ref=None)],[None]):
                 self.assertIsNone(self.store._school_identity(c,dict(row,evidence=json.dumps(refs))))
+
+    def test_school_change_requires_parent_and_preserves_task_history(self):
+        from family_goals import Store as Goals
+        def add(index, text, *, change='new', target='', cid='child-1', unread=False):
+            source=self.source if cid=='child-1' else dict(self.source,id='synthetic-other',child_id=cid)
+            with self.app.connect() as c:
+                previous=c.execute('SELECT cursor FROM agent_sources WHERE id=?',(source['id'],)).fetchone()
+                current=previous['cursor'] if previous else '10'
+            self.store.ingest(dict(self.payload(expected=current,cursor=str(index),message=str(index)),source_id=source['id'],messages=[dict(id=str(index),time=self.now.isoformat(),sender='虚构老师',text=text,unread=unread,kind='text')]))
+            tasks=agent.school_targets(self.app,self.store,cid)
+            raw=dict(proposals=[dict(title_quote=text,focus='school',due='',evidence=[dict(ref='message:'+source['id']+':'+str(index))],learning_subject='语文',learning_goal_id='',task_title='语文：观察记录',task_goal=text,task_advice='',task_state='ready',task_reason='原文要求',task_change=change,task_target_id=target)])
+            with patch.object(agent.family_llm,'_chat_json',return_value=raw):
+                items=agent._select('school',[dict(ref='message:'+source['id']+':'+str(index),text=text,time=self.now.isoformat(),content_incomplete=unread)],school_goals=[],school_tasks=tasks,as_of=self.now.date().isoformat())
+            item=items[0];item.update(child_id=cid,kind='school')
+            if item['plan'].get('school_learning'):item['plan']['school_messages']=[dict(source_id=source['id'],message_id=str(index))]
+            self.store._save('change:'+str(index),'fixture',[item],self.now)
+            with self.app.connect() as c:return c.execute('SELECT id FROM agent_items WHERE job_id=?',('change:'+str(index),)).fetchone()[0]
+        def request(ident,target,change='update'):
+            with self.app.connect() as c:
+                task=next(t for t in self.app.tasks(c) if t['id']==target);update=c.execute('SELECT updated FROM task_updates WHERE id=?',(target,)).fetchone();row=c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone()
+                return dict(action='school_change',id=ident,target_id=target,change=change,title='语文：完成观察记录',body='只写两点观察，不用画图。',due='2026-02-12',expected_updated=row['updated'],target_version=task['focus']['version'],target_updated=update['updated'] if update else '')
+        first=add(11,'请写三点观察并画一幅图。');task_id=self.store.act(dict(id=first,action='accept'))['task_id']
+        goals=Goals(self.app,self.store);self.assertEqual(goals.route_school(),1)
+        change=add(12,'更正：观察记录只写两点，不用画图。',change='update',target=task_id)
+        with patch.object(agent.family_llm,'_chat_json') as model:
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,0)['created'],0);model.assert_not_called()
+        with self.assertRaises(agent.AgentError):self.store.act(dict(id=change,action='accept'))
+        self.app.save_task(dict(id=task_id,status='已完成',note='虚构家长已核对原成果。'))
+        payload=request(change,task_id)
+        self.app.save_task(dict(id=task_id,status='已完成',note='虚构家长补充真实帮助情况。'))
+        with self.assertRaises(agent.AgentError):agent.apply_school_change(self.app,self.store,payload)
+        payload=request(change,task_id);result=agent.apply_school_change(self.app,self.store,payload)
+        self.assertEqual(result['task_id'],task_id);self.assertTrue(agent.apply_school_change(self.app,self.store,payload)['replayed'])
+        with self.assertRaises(agent.AgentError):agent.apply_school_change(self.app,self.store,dict(payload,body='重试时内容已变'))
+        with self.app.connect() as c:
+            task=next(t for t in self.app.tasks(c) if t['id']==task_id);self.assertEqual(task['action'],payload['body']);self.assertEqual(task['agenda']['due_on'],'2026-02-12')
+            self.assertIn('message:synthetic-group:11',task['source']);self.assertIn('message:synthetic-group:12',task['source'])
+            self.assertEqual(c.execute('SELECT status FROM task_updates WHERE id=?',(task_id,)).fetchone()[0],'已完成')
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_focus_history').fetchone()[0],1)
+            context,missing=goals._school_context(c,goals.roots(c)[0]);self.assertEqual(len(context),2);self.assertEqual(missing,0)
+        self.assertEqual(goals.route_school(),0)
+        # Same original notice after the correction preserves both correction sources and the closed decision.
+        repeat=add(13,'请写三点观察并画一幅图。');self.assertEqual(self.store.act(dict(id=repeat,action='accept'))['task_id'],task_id)
+        with self.app.connect() as c:self.assertEqual(len(goals._school_context(c,goals.roots(c)[0])[0]),3)
+        cancel=add(14,'取消本次观察记录。',change='cancel',target=task_id)
+        agent.apply_school_change(self.app,self.store,request(cancel,task_id,'cancel'))
+        with self.app.connect() as c:self.assertEqual(c.execute('SELECT status FROM task_updates WHERE id=?',(task_id,)).fetchone()[0],'已完成')
+        self.app.save_task(dict(id=task_id,status='待跟进',note='虚构家长恢复核对。'))
+        cancel2=add(15,'再次确认：取消本次观察记录。',change='cancel',target=task_id)
+        cancel_request=request(cancel2,task_id,'cancel');save=self.app.save_task
+        def fail_after_status(*args,**kwargs):
+            save(*args,**kwargs);raise RuntimeError('synthetic interruption after status write')
+        with patch.object(self.app,'save_task',side_effect=fail_after_status):
+            with self.assertRaises(RuntimeError):agent.apply_school_change(self.app,self.store,cancel_request)
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT status FROM task_updates WHERE id=?',(task_id,)).fetchone()[0],'待跟进')
+            self.assertEqual(c.execute('SELECT state FROM agent_items WHERE id=?',(cancel2,)).fetchone()[0],'pending')
+        agent.apply_school_change(self.app,self.store,cancel_request)
+        with self.app.connect() as c:self.assertEqual(c.execute('SELECT status FROM task_updates WHERE id=?',(task_id,)).fetchone()[0],'不适用')
+        unread=add(16,'变更原件尚未读清。',change='update',target=task_id,unread=True)
+        with self.assertRaises(agent.AgentError):agent.apply_school_change(self.app,self.store,request(unread,task_id))
+        with self.app.connect() as c:c.execute('UPDATE agent_items SET evidence=? WHERE id=?',(json.dumps([dict(ref=None)]),unread))
+        with self.assertRaises(agent.AgentError):agent.apply_school_change(self.app,self.store,request(unread,task_id))
+        # Source/child changes cannot attach a sibling notice to this child's task.
+        config=json.loads((self.data/'agent.json').read_text());config['sources'].append(dict(self.source,id='synthetic-other',child_id='child-2'));(self.data/'agent.json').write_text(json.dumps(config))
+        sibling=add(17,'取消另一孩子的活动。',change='cancel',cid='child-2')
+        with self.assertRaises(agent.AgentError):agent.apply_school_change(self.app,self.store,request(sibling,task_id,'cancel'))
+        self.assertNotIn(task_id,[x['id'] for x in agent.school_targets(self.app,self.store,'child-2')])
+        # Unmatched corrections stay reviewable; a forged model target is rejected.
+        with self.assertRaises(agent.AgentError):agent._school_brief(dict(title='变更',goal='请核对',advice='',reason='',state='ready',change='update',target_id='other-child-task'))
 
     def payload(self, expected='10', cursor='11', message='11', offset=0):
         stamp = (self.now + dt.timedelta(minutes=offset)).isoformat()
@@ -462,7 +533,7 @@ class AgentTests(unittest.TestCase):
             for minutes in [0, 6, 17]: agent.run_once(self.app, self.now + dt.timedelta(minutes=minutes))
             self.assertEqual(model.call_count, 3)
             # Each tick creates a fresh Store; a reopened process must still honor the cap.
-            reopened = agent.Store(self.app.connect, self.app.profiles, self.data)
+            reopened = agent.Store(self.app.connect, self.app.profiles, self.data, app=self.app)
             self.assertEqual(reopened.snapshot()['failed_jobs'], 1)
             agent.run_once(self.app, self.now + dt.timedelta(minutes=41))
             self.assertEqual(model.call_count, 3)
@@ -905,7 +976,7 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
             review = next(item for item in self.store.snapshot()['items'] if item['kind'] == 'review' and item['state'] == 'pending')
             self.store.act(dict(id=review['id'], action='dismiss'))
             self.assertEqual(agent.run_once(self.app, dt.datetime.combine(due_day, dt.time(9), tzinfo=agent.TZ))['created'], 0)
-        reopened = agent.Store(self.app.connect, self.app.profiles, self.data)
+        reopened = agent.Store(self.app.connect, self.app.profiles, self.data, app=self.app)
         self.assertEqual(agent.run_once(self.app, dt.datetime.combine(due_day, dt.time(9), tzinfo=agent.TZ))['created'], 0)
 
     def test_planned_review_respects_focus_without_date_and_update_order(self):

@@ -57,7 +57,7 @@ SCHOOL_PROMPT = '''\n学校消息额外返回task_title、task_goal、task_advic
 learning_goal_id只从输入learning_goals选择同一科目且适合本要求的目标；已有合适目标优先沿用，科目相同但训练点不相关时也留空，系统建立或沿用学校学习目标。不生成目标编号，不改变暂停状态；明确匹配到暂停目标时只关联资料，不恢复分析或另建目标绕过暂停。非教学要求两个字段均为空。
 任务要求与老师的后续更正、撤销一起保留原消息作为规划依据；不把它们当成孩子表现。发布者称呼不等于教师身份已确认，不凭群名推断任课老师，不将家长转发说成老师直接发布。保持必须、任选、示例和条件要求，不能读出未提供的图片或链接内容。'''
 # One saved interpretation feeds the task list; it never records child performance.
-SCHOOL_TASK_POLICY = 5
+SCHOOL_TASK_POLICY = 6
 TASK_BRIEF_SCHEMA = {'type':'object','additionalProperties':False,'required':['title','goal','advice','state','reason'],
     'properties':{**{key:{'type':'string','maxLength':limit} for key,limit in [('title',80),('goal',2000),('advice',1200),('reason',400)]},
                   'state':{'type':'string','enum':['ready','review','reference']}}}
@@ -68,9 +68,14 @@ review：资料未读、适用条件未知、一次性历史要求是否仍需�
 reference：表格列标题/成绩符号说明、已完成汇报、一般教学参考等，本身没有新增行动要求。比如“第一列是订正记录，第二列是默写”是表格说明，不能推断本孩子缺交或要求重做。
 向群友索要课本页、照片、文件等资料的个人求助，不等于全班或本孩子的学校要求；仅提到科目、页码或活动主题也不能自动创建核对待办、学习目标或加练。批处理可跳过，已有候选归reference。若同批另有明确作业要求，应引用那条要求并保留转述身份，不能只引用求助句。
 as_of为当前日期，原发送日期不能改成今天；当前孩子/来源绑定已由家庭指定，但不代表消息每项条件均适用。只处理candidate所指这一件事，不能扩大到其他列或其他孩子。reason说明分类依据；缺具体内容时title/goal/advice可留空。"""
+TASK_BRIEF_SCHEMA['required'] += ['change','target_id']
+TASK_BRIEF_SCHEMA['properties'].update(change={'type':'string','enum':['new','update','cancel']},target_id={'type':'string','maxLength':80})
+SCHOOL_TASK_PROMPT += '\n若通知是在更正、改期或取消已有要求，change选update或cancel，state必须review，不能新增一个执行任务。target_id仅从school_tasks选择明确对应的原事项；不确定或列表省略时留空让家长选择，不按同科目强行匹配。title/goal写更正后的完整要求，未明确保留的旧要求不擅自补齐；取消时goal写原文的取消内容。普通新要求change=new且target_id为空。既有事项的完成/不参加与家长反馈不能覆盖或恢复。'
+_school_fields['required'] += ['task_change','task_target_id']
+_school_fields['properties'].update(task_change=TASK_BRIEF_SCHEMA['properties']['change'],task_target_id=TASK_BRIEF_SCHEMA['properties']['target_id'])
 _school_fields['required'] += ['task_state','task_reason']
 _school_fields['properties'].update(task_state=TASK_BRIEF_SCHEMA['properties']['state'],task_reason=TASK_BRIEF_SCHEMA['properties']['reason'])
-SCHOOL_PROMPT += '\n还返回task_state和task_reason，按以下状态规则整理。\n'+SCHOOL_TASK_PROMPT+'\n本次为学校批处理，按proposals结构返回；上述title/goal/advice/state/reason均使用task_前缀，其余既有字段照常返回。'
+SCHOOL_PROMPT += '\n还返回task_state和task_reason，按以下状态规则整理。\n'+SCHOOL_TASK_PROMPT+'\n本次为学校批处理，按proposals结构返回；上述title/goal/advice/state/reason/change/target_id均使用task_前缀，其余既有字段照常返回。'
 
 
 def _reference_brief(evidence):
@@ -90,7 +95,7 @@ def _reference_brief(evidence):
     return None
 
 
-def _school_brief(value, incomplete=False, evidence=()):
+def _school_brief(value, incomplete=False, evidence=(), school_tasks=()):
     brief={key:_text(value,key,limit).strip() for key,limit in [('title',80),('goal',2000),('advice',1200),('reason',400)]}
     state=value.get('state','review')
     if state not in ('ready','review','reference'): raise AgentError('学校事项状态无法核对')
@@ -100,7 +105,13 @@ def _school_brief(value, incomplete=False, evidence=()):
         brief.update(title='',goal='',advice='');state='review';brief['reason']='原件或具体要求尚未读全，请先核对。'
     if state=='ready' and (not brief['title'] or not brief['goal']):
         state='review';brief['reason']='原件或具体要求尚未读全，请先核对。'
-    return dict(brief,state=state,policy=SCHOOL_TASK_POLICY)
+    change=value.get('change','new');target=_text(value,'target_id',80)
+    if change not in ('new','update','cancel'): raise AgentError('学校通知变更类型无法核对')
+    if target and not any(t['id']==target for t in school_tasks): raise AgentError('原事项不在本次可核对范围')
+    if change=='new' and target: raise AgentError('新增事项不能指向原事项')
+    if change!='new':
+        state='review';brief['reason']='学校要求有变更，请核对原事项及新要求后确认；原状态和反馈保留。'
+    return dict(brief,state=state,policy=SCHOOL_TASK_POLICY,change=change,target_id=target)
 
 
 PLAN_SCHEMA = {'type': 'object', 'additionalProperties': False, 'required': ['proposal'], 'properties': {
@@ -256,8 +267,8 @@ def _minutes(value):
 
 
 class Store:
-    def __init__(self, connect, profiles, data_path, initialize=True):
-        self.connect = connect; self.profiles = profiles; self.data = Path(data_path)
+    def __init__(self, connect, profiles, data_path, initialize=True, *, app=None):
+        self.connect = connect; self.profiles = profiles; self.data = Path(data_path); self.app=app
         if not initialize: return
         with self._db() as c:
             c.executescript('''
@@ -594,7 +605,10 @@ class Store:
             evidence.extend(added)
             # The canonical item alone owns learning routing; duplicated sources are still available there.
             if old_plan.get('school_learning'):
-                old_plan['school_messages'] = [dict(zip(('source_id', 'message_id'), e['ref'][8:].rsplit(':', 1))) for e in evidence]
+                known_messages=old_plan.setdefault('school_messages',[])
+                for e in evidence:
+                    message=dict(zip(('source_id','message_id'),e['ref'][8:].rsplit(':',1)))
+                    if message not in known_messages: known_messages.append(message)
             now = _now().isoformat()
             if added:
                 c.execute('UPDATE agent_items SET evidence=?,plan=?,updated=? WHERE id=?', (_json(evidence), _json(old_plan), now, existing['id']))
@@ -611,7 +625,7 @@ class Store:
 
     def act(self, obj, *, school_auto=False):
         if not isinstance(obj, dict) or set(obj) - {'id', 'action', 'title', 'due', 'body', 'action_text',
-                                                     'review_on', 'estimated_minutes', 'expected_updated','advice'}:
+                                                     'review_on', 'estimated_minutes', 'expected_updated','advice','school_new'}:
             raise AgentError('处理结构不正确')
         action = _text(obj, 'action', 20, True)
         # All acceptance entry points share the same goal/version validation.
@@ -622,11 +636,11 @@ class Store:
             if proposal.get('parent_goal_id'):
                 if candidate['state']=='accepted' and action=='accept': return dict(ok=True,state='accepted',task_id=candidate['task_id'])
                 if candidate['state']=='dismissed' and action=='dismiss': return dict(ok=True,state='dismissed')
-                from types import SimpleNamespace
+                if self.app is None: raise AgentError('当前入口无法完整核对作业安排，请在家庭网页重试',409)
                 from family_goals import Store as Goals
                 approved = {**proposal, **{k:obj[k] for k in ('title','estimated_minutes','review_on') if k in obj}}
                 if 'body' in obj or 'action_text' in obj: approved['action']=obj.get('action_text',obj.get('body'))
-                result=Goals(SimpleNamespace(connect=self.connect,profiles=self.profiles,DATA=self.data),self).action(dict(
+                result=Goals(self.app,self).action(dict(
                     id=proposal['parent_goal_id'],action='approve' if action=='accept' else 'keep',proposal_id=candidate['id'],
                     expected_version=proposal['base_version'],context_hash=proposal['context_hash'],request_key='agent-goal-'+_hash(obj)[:64],plan=approved))
                 return {**result,'state':'accepted' if action=='accept' else 'dismissed'}
@@ -676,6 +690,8 @@ class Store:
                     raise AgentError('学校事项已变化，请重新核对',409)
 
             task_id = ''
+            if action == 'accept' and row['kind']=='school' and json.loads(row['plan']).get('school_task',{}).get('change','new')!='new':
+                if school_auto or obj.get('school_new') is not True: raise AgentError('请核对要更新或取消的原事项',409)
             if action == 'accept':
                 if row['kind'] not in {'school', 'care'}: raise AgentError('回看建议不能直接确认行动')
                 title = _text(obj, 'title', 200) if 'title' in obj else row['title']
@@ -718,9 +734,9 @@ class Store:
             if action == 'accept' and row['kind'] == 'care':
                 c.execute('UPDATE agent_items SET state=?,task_id=?,plan=?,updated=? WHERE id=?',
                           (state, task_id, _json(plan), values[2], ident))
-                from types import SimpleNamespace
+                if self.app is None: raise AgentError('当前入口无法完整核对作业安排，请在家庭网页重试',409)
                 from family_goals import Store as Goals
-                goals=Goals(SimpleNamespace(connect=self.connect,profiles=self.profiles,DATA=self.data),self)
+                goals=Goals(self.app,self)
                 root=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone())
                 context=goals._context(c,root)
                 plan.update(goal_version=1,handled_hash=context['evidence_hash'],approved_evidence_hash=context['evidence_hash'])
@@ -769,20 +785,115 @@ class Store:
                  '模型整理未成功；原始资料保留，自动尝试共3次，达到自动重试上限后需人工重试。', key, fingerprint, attempt))
 
 
-def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None):
+SCHOOL_CANCEL_NOTE = '家长按学校取消通知确认无需处理，原文保留在原通知。'
+
+
+def _school_origin(store, c, task, child_id):
+    if not task or not task['source'].startswith('Agent建议:'): raise AgentError('请选择已收集的学校事项')
+    ident=task['source'].splitlines()[0].removeprefix('Agent建议:')
+    row=c.execute("SELECT * FROM agent_items WHERE id=? AND task_id=? AND child_id=? AND kind='school' AND state='accepted'",(ident,task['id'],child_id)).fetchone()
+    if row is None: raise AgentError('原事项与孩子的学校来源无法核对',409)
+    try:
+        refs=json.loads(row['evidence'])
+        if not refs: raise ValueError()
+        for entry in refs:
+            if not isinstance(entry,dict) or not isinstance(entry.get('ref'),str) or not entry['ref'].startswith('message:'): raise ValueError()
+            source,message=entry['ref'][8:].rsplit(':',1)
+            store._message_context(c,dict(child_id=child_id,source_id=source,message_id=message))
+    except (ValueError,KeyError,TypeError): raise AgentError('原事项来源不完整，请先核对') from None
+    return row
+
+
+def school_targets(app, store, child_id):
+    """Bounded saved tasks for the existing school model call, no new collector."""
+    with store._db() as c:
+        name=next((p['name'] for p in app.profiles(c) if p['id']==child_id),None)
+        updates={r['id']:r['status'] for r in c.execute('SELECT id,status FROM task_updates')};result=[]
+        # ponytail: latest 24 collected school tasks; unlisted or ambiguous targets need parent selection.
+        for task in app.tasks(c):
+            if task['child']!=name: continue
+            try: _school_origin(store,c,task,child_id)
+            except (AgentError,ValueError,KeyError,TypeError): continue
+            result.append(dict(id=task['id'],title=task['title'][:200],goal=task['action'][:400],due=task['agenda']['due_on'],status=app.task_status(task,updates.get(task['id']))))
+            if len(result)==24: break
+        return result
+
+
+def apply_school_change(app, store, obj):
+    """Parent confirmation atomically links original messages and edits the same task."""
+    fields={'action','id','target_id','change','title','body','due','expected_updated','target_version','target_updated'}
+    if set(obj)!=fields or obj.get('action')!='school_change': raise AgentError('学校变更请求格式不正确')
+    ident=_text(obj,'id',80,True);target_id=_text(obj,'target_id',80,True);change=_text(obj,'change',10,True)
+    title=_text(obj,'title',200,True);body=_text(obj,'body',4000,True);due=_text(obj,'due',10)
+    expected=_text(obj,'expected_updated',100,True);target_updated=_text(obj,'target_updated',100)
+    from family_agenda import date
+    if change not in ('update','cancel') or (due and not date(due)): raise AgentError('请选择变更方式并核对日期')
+    if type(obj['target_version']) is not int or obj['target_version']<0: raise AgentError('事项版本无法核对')
+    digest=_hash(obj)
+    with store._db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        row=c.execute("SELECT * FROM agent_items WHERE id=? AND kind='school'",(ident,)).fetchone()
+        if row is None: raise AgentError('学校通知不存在',404)
+        plan=json.loads(row['plan']);receipt=plan.get('school_change_receipt')
+        if receipt:
+            if receipt['hash']!=digest: raise AgentError('这条变更已处理，请读取最新记录',409)
+            return dict(ok=True,state='accepted',task_id=receipt['task_id'],school_changed=True,replayed=True)
+        if row['state']!='pending' or row['updated']!=expected: raise AgentError('通知已在别处处理，请读取最新记录',409)
+        owner=next((p['name'] for p in app.profiles(c) if p['id']==row['child_id']),None)
+        task=next((t for t in app.tasks(c) if t['id']==target_id and t['child']==owner),None)
+        canonical=_school_origin(store,c,task,row['child_id'])
+        update=c.execute('SELECT * FROM task_updates WHERE id=?',(target_id,)).fetchone()
+        if task['focus']['version']!=obj['target_version'] or (update['updated'] if update else '')!=target_updated:
+            raise AgentError('原事项已有新的安排或反馈，请读取最新记录后核对',409)
+        evidence=json.loads(row['evidence']);links=[]
+        if not evidence: raise AgentError('变更缺少原通知')
+        for entry in evidence:
+            if not isinstance(entry,dict) or not isinstance(entry.get('ref'),str) or not entry['ref'].startswith('message:'): raise AgentError('变更的原通知无法核对')
+            parts=entry['ref'][8:].rsplit(':',1)
+            if len(parts)!=2: raise AgentError('变更的原通知无法核对')
+            source,message_id=parts
+            _,message=store._message_context(c,dict(child_id=row['child_id'],source_id=source,message_id=message_id))
+            if message['unread'] or message['kind']!='text' or not message['text'].strip(): raise AgentError('请先读清变更原件，不能据占位内容修改原事项')
+            links.append(dict(source_id=source,message_id=message_id))
+        status=app.task_status(task,update['status'] if update else None)
+        if change=='update':
+            focus=task['focus'];agenda=task['agenda']
+            family_task_focus.save(app,dict(id=target_id,version=focus['version'],request_key='school-change-'+_hash(ident)[:32],
+                **{k:focus[k] for k in ('mode','next_action','waiting_for','review_on','scheduled_on','box')},
+                category=agenda['category'],published_on=agenda['published_on'],due_on=due,title=title,goal=body),connection=c,allow_closed=True)
+        elif status not in app.TASK_CLOSED:
+            app.save_task(dict(id=target_id,status='不适用',note=SCHOOL_CANCEL_NOTE,expected_updated=target_updated),connection=c)
+        original_plan=json.loads(canonical['plan'])
+        if original_plan.get('school_learning'):
+            known=original_plan.setdefault('school_messages',[])
+            known.extend(x for x in links if x not in known)
+        now=_now().isoformat()
+        original_plan.setdefault('school_changes',[]).append(dict(item_id=ident,change=change,confirmed_at=now,title=title,goal=body,due=due))
+        c.execute('UPDATE agent_items SET plan=?,updated=? WHERE id=?',(_json(original_plan),now,canonical['id']))
+        source=task['source']+'\n\n'+'\n\n'.join(e['ref']+'\n'+e['text'] for e in evidence)
+        c.execute('UPDATE manual_tasks SET source=? WHERE id=?',(source,target_id))
+        plan.update(school_change_of=canonical['id'],school_change_receipt=dict(hash=digest,task_id=target_id,change=change))
+        for key in ('school_learning','school_goal_id'): plan.pop(key,None)
+        c.execute("UPDATE agent_items SET state='accepted',task_id=?,plan=?,updated=? WHERE id=?",(target_id,_json(plan),now,ident))
+    return dict(ok=True,state='accepted',task_id=target_id,school_changed=True,replayed=False)
+
+
+def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None, school_tasks=()):
     as_of = dt.date.fromisoformat(as_of).isoformat() if as_of is not None else _now().date().isoformat()
     routing = mode == 'school' and school_goals is not None
     content = {'mode': mode, 'as_of': as_of, 'child': profile or {}, 'evidence': evidence}
-    if routing: content['learning_goals'] = school_goals
+    if routing: content.update(learning_goals=school_goals,school_tasks=school_tasks)
+    schema=_evidence_schema(SCHOOL_SCHEMA if routing else SCHEMA,evidence)
+    if routing: schema['properties']['proposals']['items']['properties']['task_target_id']['enum']=['']+[t['id'] for t in school_tasks]
     result = family_llm._chat_json([{'role': 'system', 'content': PROMPT + (SCHOOL_PROMPT if routing else '')},
-        {'role': 'user', 'content': _json(content)}], _evidence_schema(SCHOOL_SCHEMA if routing else SCHEMA, evidence), 'family_agent_selection', timeout=45, data_path=data_path)
+        {'role': 'user', 'content': _json(content)}], schema, 'family_agent_selection', timeout=45, data_path=data_path)
     if not isinstance(result, dict) or set(result) != {'proposals'} or not isinstance(result['proposals'], list) or len(result['proposals']) > 5:
         raise AgentError('模型筛选结构不正确')
     refs = {entry['ref']: entry['text'] for entry in evidence}; output = []
     for proposal in result['proposals']:
         fields = {'title_quote', 'focus', 'due', 'evidence'} | ({'learning_subject', 'learning_goal_id'} if routing else set())
         extra={'task_title','task_goal','task_advice'} if routing else set(); triage={'task_state','task_reason'} if routing else set()
-        if not isinstance(proposal, dict) or set(proposal) not in (fields,fields|extra,fields|extra|triage): raise AgentError('模型筛选字段不正确')
+        if not isinstance(proposal, dict) or set(proposal) not in (fields,fields|extra,fields|extra|triage,fields|extra|triage|{'task_change','task_target_id'}): raise AgentError('模型筛选字段不正确')
         title = _text(proposal, 'title_quote', 120, True); due = _text(proposal, 'due', 10)
         allowed = {'school'} if mode == 'school' else set(FOCUS) - {'school'}
         if not isinstance(proposal['focus'], str) or proposal['focus'] not in allowed: raise AgentError('模型建议类别不正确')
@@ -819,14 +930,14 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             if subject and any(e['ref'] in {q['ref'] for q in cited} and not e.get('content_incomplete')
                                and not _needs_task_details(e['text']) for e in evidence):
                 item['plan'] = {'school_learning': {'subject': subject, 'goal_id': goal_id}}
-            brief=_school_brief({key:proposal.get('task_'+key,'review' if key=='state' else '') for key in ['title','goal','advice','state','reason']},
-                                incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence if e['ref'] in {q['ref'] for q in cited}),evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}])
+            brief=_school_brief({key:proposal.get('task_'+key,'review' if key=='state' else 'new' if key=='change' else '') for key in ['title','goal','advice','state','reason','change','target_id']},
+                                incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence if e['ref'] in {q['ref'] for q in cited}),evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}],school_tasks=school_tasks)
             if uncertain_due and brief['state']!='reference':
                 brief.update(state='review',reason=brief['reason'][:300]+' 截止日期尚无法从原文核对，未采用模型日期；请核对原通知。')
             elif due and due<as_of and brief['state']!='reference':
                 brief.update(state='review',reason=brief['reason'][:300]+' 原截止日期已过，请核对是否已处理或仍需补办；不推定完成或安排今天补做。')
             if brief['title'] and brief['goal']: item.update(title=brief['title'],body=brief['goal'])
-            if brief['state']=='reference': item.get('plan',{}).pop('school_learning',None)
+            if brief['state']=='reference' or brief.get('change','new')!='new': item.get('plan',{}).pop('school_learning',None)
             item.setdefault('plan',{})['school_task']=brief
 
         if item not in output: output.append(item)
@@ -853,7 +964,8 @@ def _refresh_school(app, store, now, budget):
             except (AgentError,ValueError,KeyError,TypeError) as error: source_error=error
             reference=_reference_brief(evidence) if not source_error else None
             if not reference and used>=budget: continue
-            context=dict(as_of=now.date().isoformat(),candidate=row['title'],child_id=row['child_id'],evidence=evidence)
+            targets=school_targets(app,store,row['child_id'])
+            context=dict(as_of=now.date().isoformat(),candidate=row['title'],child_id=row['child_id'],evidence=evidence,school_tasks=targets)
             key='school-task:'+row['id'];fp=store._job(key,dict(policy=SCHOOL_TASK_POLICY,candidate=row['title'],child_id=row['child_id'],evidence=evidence,plan=row['plan'],updated=row['updated']),now,model=reference is None)
             if not fp: continue
             try:
@@ -861,11 +973,12 @@ def _refresh_school(app, store, now, budget):
                 if reference: brief=reference
                 else:
                     used+=1
+                    schema=copy.deepcopy(TASK_BRIEF_SCHEMA);schema['properties']['target_id']['enum']=['']+[t['id'] for t in targets]
                     result=family_llm._chat_json([{'role':'system','content':SCHOOL_TASK_PROMPT},{'role':'user','content':_json(context)}],
-                        TASK_BRIEF_SCHEMA,'family_school_task',timeout=45,data_path=store.data)
-                    if not isinstance(result,dict) or set(result)!=set(TASK_BRIEF_SCHEMA['required']): raise AgentError('学校事项结构无法核对')
-                    brief=_school_brief(result,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in evidence),evidence=evidence)
-                if brief['state']=='reference': plan.pop('school_learning',None)
+                        schema,'family_school_task',timeout=45,data_path=store.data)
+                    if not isinstance(result,dict) or set(result) not in (set(TASK_BRIEF_SCHEMA['required']),{'title','goal','advice','state','reason'}): raise AgentError('学校事项结构无法核对')
+                    brief=_school_brief(result,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in evidence),evidence=evidence,school_tasks=targets)
+                if brief['state']=='reference' or brief.get('change','new')!='new': plan.pop('school_learning',None)
                 plan['school_task']=brief
                 with store._db() as c:
                     c.execute('BEGIN IMMEDIATE')
@@ -1001,7 +1114,7 @@ def _lock(path):
 
 
 def run_once(app, now=None):
-    now = _now(now); store = Store(app.connect, app.profiles, app.DATA)
+    now = _now(now); store = Store(app.connect, app.profiles, app.DATA, app=app)
     config = store._config()
     if not config['enabled']: return {'state': 'disabled', 'created': 0, 'processed': 0}
     with _lock(store.data / '.agent.lock') as locked:
@@ -1084,14 +1197,14 @@ def run_once(app, now=None):
                     batches[-1].append(json.loads(message['payload'])); size += len(message['payload'])
                 for values in batches:
                     key = 'messages:' + _hash([source['id'], [row['id'] for row in values]])[:40]
-                    fp = store._job(key, {'school_learning_policy': 6, 'messages': values}, now, model=True)
+                    fp = store._job(key, {'school_learning_policy': 7, 'messages': values}, now, model=True)
                     if not fp: continue
                     evidence = [dict(ref='message:' + source['id'] + ':' + row['id'], text=row['text'],
                         source=source['name'], time=row['time'], sender=row['sender'], content_incomplete=row['unread']) for row in values]
                     budget -= 1
                     try:
                         proposals = _select('school', evidence, profiles[source['child_id']], as_of=now.date().isoformat(), data_path=store.data,
-                                            school_goals=goals.school_candidates(source['child_id']))
+                                            school_goals=goals.school_candidates(source['child_id']),school_tasks=school_targets(app,store,source['child_id']))
                         anchors = {entry['ref']: entry for entry in evidence}
                         for item in proposals:
                             for quote in item['evidence']:

@@ -31,6 +31,7 @@ import family_agenda
 import family_guided
 import family_goals
 from types import SimpleNamespace
+from contextlib import nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer as _ThreadingHTTPServer
 from socketserver import TCPServer
 from urllib.parse import urlparse, urlsplit, unquote, quote, parse_qs
@@ -237,8 +238,10 @@ def tasks(connection=None):
         if task['source'].startswith('Agent建议:'):
             origin=task['source'].splitlines()[0].removeprefix('Agent建议:')
             if connection.execute("SELECT 1 FROM sqlite_master WHERE name='agent_items'").fetchone():
-                proposal=connection.execute('SELECT plan FROM agent_items WHERE id=?',(origin,)).fetchone()
-                if proposal: task['advice']=json.loads(proposal['plan']).get('school_task',{}).get('advice','')
+                proposal=connection.execute('SELECT plan,kind,state,task_id FROM agent_items WHERE id=?',(origin,)).fetchone()
+                if proposal:
+                    task['advice']=json.loads(proposal['plan']).get('school_task',{}).get('advice','')
+                    task['school_origin']=proposal['kind']=='school' and proposal['state']=='accepted' and proposal['task_id']==task['id']
         if task['focus']['title']: task['original_title']=task['title'];task['title']=task['focus']['title']
         if task['focus']['goal']: task['original_action']=task['action'];task['action']=task['focus']['goal']
     return family_agenda.enrich(SimpleNamespace(**globals()),connection,manual+result)
@@ -359,7 +362,7 @@ def snapshot():
                 rewards=family_growth.summarize(children,records,ts,today),reading=family_reading.Store(connect,lambda:children,lambda:ts).snapshot(),printing=printing,today=today,today_calendar=today_calendar,agent=agent)
 
 def agent_store():
-    return family_agent.Store(connect,profiles,DATA)
+    return family_agent.Store(connect,profiles,DATA,app=SimpleNamespace(**globals()))
 
 def settings_store():
     return family_settings.Store(SimpleNamespace(**globals()))
@@ -752,13 +755,13 @@ def task_status(task, update=None):
     original=task['original_status']
     return update or (original if original in (*TASK_STATUSES,'已归档') else '已归档' if '已归档' in original else '待跟进')
 
-def save_task(obj):
+def save_task(obj, connection=None):
     ident=clean(obj,'id',30);status=clean(obj,'status',30);note=clean(obj,'note')
     if status not in TASK_STATUSES: raise TaskError('状态不正确')
     if status in ('已完成',*TASK_DISMISSED) and not note: raise TaskError('请补充完成依据或不参加、无需处理的原因')
     expected=clean(obj,'expected_updated',100) if 'expected_updated' in obj else None
-    with connect() as c:
-        c.execute('BEGIN IMMEDIATE')
+    with connect() if connection is None else nullcontext(connection) as c:
+        if connection is None: c.execute('BEGIN IMMEDIATE')
         task=next((t for t in tasks(c) if t['id']==ident),None)
         if task is None: raise TaskError('事项不存在，请刷新',404,'task_missing')
         previous=c.execute('SELECT * FROM task_updates WHERE id=?',(ident,)).fetchone()
@@ -1518,7 +1521,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/agent/fragment':
                 from family_qq_capture import save_fragment
                 return self.reply(200,save_fragment(agent_store(),obj))
-            if path=='/api/agent/action': return self.reply(200,agent_store().act(obj))
+            if path=='/api/agent/action': return self.reply(200,family_agent.apply_school_change(SimpleNamespace(**globals()),agent_store(),obj) if obj.get('action')=='school_change' else agent_store().act(obj))
             if path=='/api/goals/action': return self.reply(200,goal_store().action(obj))
             if path=='/api/agent/message/attachment': return self.reply(200,agent_store().message_attachment(obj,upload_info))
             if path=='/api/teachers/profile': return self.reply(200,teacher_store().save_teacher(obj))

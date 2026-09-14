@@ -28,7 +28,7 @@ def _text(obj, key, limit):
     return value.strip()
 
 
-def save(app, obj, connection=None):
+def save(app, obj, connection=None, *, allow_closed=False):
     ident=_text(obj,'id',100); request_key=_text(obj,'request_key',100)
     if not ident or not re.fullmatch(r'[A-Za-z0-9_-]{8,100}',request_key):
         raise FocusError('事项或请求标识不正确，请刷新后重试')
@@ -82,7 +82,7 @@ def save(app, obj, connection=None):
                 if receipt['task_id']!=ident or receipt['request_hash']!=digest:
                     raise FocusError('该请求已用于另一份安排，请刷新核对',409,'task_focus_request_conflict')
                 return dict(task=task,focus=task['focus'],request_replayed=True)
-            if app.task_status(task,update['status'] if update else None) in app.TASK_CLOSED:
+            if not allow_closed and app.task_status(task,update['status'] if update else None) in app.TASK_CLOSED:
                 raise FocusError('事项已完成或已搁置，请先恢复跟进再安排',409,'task_focus_closed')
             previous=task['focus']
             if previous['version']!=version:

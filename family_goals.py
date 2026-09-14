@@ -11,7 +11,7 @@ import family_calendar
 import family_teachers
 
 PLAN_ADJUSTMENT_NOTE = '家长确认学习计划调整，原版本保留在学习目标。'
-TASK_STATUS_NOTES = (PLAN_ADJUSTMENT_NOTE, '家长通过清单勾选确认此事项已完成。', '家长撤销完成，继续跟进。')
+TASK_STATUS_NOTES = (agent.SCHOOL_CANCEL_NOTE, PLAN_ADJUSTMENT_NOTE, '家长通过清单勾选确认此事项已完成。', '家长撤销完成，继续跟进。')
 SCHOOL_BASELINE = '由学校学习要求启动，尚无孩子实际作答或掌握证据。'
 WORD_MODES = {
     'hear_meaning': ('听英文 → 选中文', '不显示英文词形；只听后选意思'),
@@ -142,7 +142,7 @@ def select_evidence(entries, refs, limit):
 class Store:
     def __init__(self, app, agent_store=None):
         self.app = app
-        self.agent = agent_store or agent.Store(app.connect, app.profiles, app.DATA)
+        self.agent = agent_store or agent.Store(app.connect, app.profiles, app.DATA, app=app)
 
     def school_candidates(self, child_id):
         with self.agent._db() as c:
