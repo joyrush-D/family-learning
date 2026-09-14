@@ -24,6 +24,8 @@ WORD_MODES = {
 }
 WORD_RESULTS = ('未测', '本次独立答对', '提示后答对', '答错', '未作答', '结果待核对')
 WORD_PHASES = ('尚未核对', '首次核对', '刚练过或看过答案', '间隔后复测')
+WORD_RETEST_DAYS = 7  # PRD 2.8: independent performance counts as spaced only after an interval since the last check of that direction.
+WORD_RETEST_LIMIT = 20
 
 
 def word_check_note(value):
@@ -47,7 +49,47 @@ def word_check_note(value):
         '只记录本次对应词义和方向；未测为未知，不能由一次全对认定稳定掌握。'])
 
 
-def word_history(records):
+def _word_day(value):
+    try: return dt.date.fromisoformat(value)
+    except (TypeError, ValueError): return None
+
+
+def word_status(checks, today):
+    """Latest recorded result per direction, plus whether an interval retest is still open.
+
+    Deterministic and stated to parents: only the latest non-未测 result of a direction counts; a
+    本次独立答对 recorded as 间隔后复测 at least WORD_RETEST_DAYS after the previous check of the same
+    direction is 间隔后独立答对. Same-day order is unknown, so differing same-day results are reported,
+    not guessed. No mastery rate is computed and nothing is scheduled.
+    """
+    directions = {}
+    for mode in WORD_MODES:
+        entries = [(c['day'], c['results'].get(mode, '未测'), c['phase']) for c in checks if c['results'].get(mode, '未测') != '未测']
+        if not entries: continue
+        dated = [e for e in entries if _word_day(e[0])]
+        if not dated:
+            directions[mode] = dict(status='日期无法核对', day='', days_since=None, gap_days=None, retest_due=False, verified=False); continue
+        latest_day = max(e[0] for e in dated)
+        latest = [e for e in dated if e[0] == latest_day]
+        previous = [e[0] for e in dated if e[0] != latest_day]
+        gap = (_word_day(latest_day) - _word_day(max(previous))).days if previous else None
+        days_since = (today - _word_day(latest_day)).days
+        verified = retest = False
+        if len({e[1] for e in latest}) > 1:
+            status = '同日多次结果不一'
+        else:
+            result, phase = latest[0][1], latest[0][2]
+            if result == '本次独立答对':
+                if phase == '间隔后复测' and gap is not None and gap >= WORD_RETEST_DAYS: status, verified = '间隔后独立答对', True
+                else: status, retest = '一次独立答对', days_since >= WORD_RETEST_DAYS
+            elif result == '提示后答对': status, retest = '提示后答对', days_since >= WORD_RETEST_DAYS
+            elif result in ('答错', '未作答'): status = '最近' + result
+            else: status = '结果待核对'
+        directions[mode] = dict(status=status, day=latest_day, days_since=days_since, gap_days=gap, retest_due=retest, verified=verified)
+    return directions
+
+
+def word_history(records, today=None):
     """Project current canonical notes; corrections stay in the original records."""
     checks, unparsed = [], []
     for r in reversed(records):
@@ -67,8 +109,21 @@ def word_history(records):
             unparsed.append(dict(id=r['id'], day=r['day'])); continue
         checks.append(dict(id=r['id'], day=r['day'], source=r['source'].split(' · 学习目标:')[0],
                            has_note=len(lines) > size, **fields))
+    today = today or agent._now().date()
+    grouped = {}
+    for c in checks: grouped.setdefault((c['word'], c['meaning']), []).append(c)
+    words = []
+    for (word, meaning), items in grouped.items():
+        directions = word_status(items, today)
+        words.append(dict(word=word, meaning=meaning, last_day=max(c['day'] for c in items), directions=directions,
+                          retest_due=[m for m, v in directions.items() if v['retest_due']],
+                          verified=[m for m, v in directions.items() if v['verified']]))
+    due = sorted((w for w in words if w['retest_due']), key=lambda w: (w['last_day'], w['word'], w['meaning']))
     # ponytail: household-size projection; paginate if measured response size requires it.
-    return dict(checks=checks, unparsed=unparsed)
+    return dict(checks=checks, unparsed=unparsed, words=words, retest_days=WORD_RETEST_DAYS,
+                retest_candidates=[dict(word=w['word'], meaning=w['meaning'], modes=w['retest_due'],
+                                        day=max(w['directions'][m]['day'] for m in w['retest_due'])) for w in due[:WORD_RETEST_LIMIT]],
+                retest_omitted=max(0, len(due) - WORD_RETEST_LIMIT))
 
 
 FIELDS = {'title': 120, 'subject': 80, 'school_target': 1600, 'curriculum': 500,

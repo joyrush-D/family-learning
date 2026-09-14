@@ -98,6 +98,23 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   assert.equal(await history.locator('tbody tr').first().locator('th').evaluate(e=>{e.before(document.createTextNode('\n'));return getComputedStyle(e).position}),'sticky','whitespace does not change element first-child matching');
   const historyScroll=history.locator('.word-history-scroll');await historyScroll.evaluate(e=>e.scrollLeft=e.scrollWidth);assert.ok(await history.locator(`[data-goal-record="${oldWordId}"]`).evaluate(e=>e.getBoundingClientRect().right<=innerWidth),'older attempt reachable within viewport');await historyScroll.evaluate(e=>e.scrollLeft=0);
   await history.scrollIntoViewIfNeeded();if(process.env.GOALS_UI_PROOF_DIR)await history.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'word-history-'+width+'.png')});checks++;
+  // Per-direction status follows the stated rule; a word checked 9 days ago with one independent answer becomes an interval-retest candidate the parent can pick, never a scheduled task.
+  assert.match(await history.locator('[data-word-status]').innerText(),/听英文 → 选中文.*最近答错/,'latest result per direction is shown, not a mastery rate');
+  assert.equal(await history.locator('[data-word-retest-list]').count(),0,'wrong or recent answers are not retest candidates');
+  const nineDaysAgo=new Date(Date.now()+8*3600000-9*86400000).toISOString().slice(0,10);
+  const bookPost=await p.request.post(url+'api/goals/action',{headers:{'X-Family-Token':historyAuth},data:{action:'feedback',id:wordSnapshot.id,request_key:'synthetic-word-retest-'+width,day:nineDaysAgo,source:'家长观察',note:'',word_check:{word:'book',meaning:'书',material:'虚构词表',phase:'首次核对',results:{read_meaning:'本次独立答对'}}}});assert.equal(bookPost.status(),200,await bookPost.text());
+  await reopenWordHistory();await draftWord.fill('pencil');
+  const candidate=history.locator('[data-word-retest-list] button');assert.equal(await candidate.count(),1);assert.match(await candidate.innerText(),/book · 书 · 看英文 → 选中文 · /);
+  assert.equal(await draftWord.inputValue(),'pencil','listing candidates does not touch the unsaved check');
+  const tasksBefore=(await(await p.request.get(url+'api/state')).json()).tasks.length;
+  p.once('dialog',d=>d.accept());await candidate.click();
+  assert.equal(await draftWord.inputValue(),'book');assert.equal(await p.locator('[data-goal-form="word"] [name="meaning"]').inputValue(),'书');assert.equal(await p.locator('[data-goal-form="word"] [name="phase"]').inputValue(),'间隔后复测');
+  assert.match(await history.locator('[data-word-status]').innerText(),/看英文 → 选中文.*一次独立答对.*可以间隔复测/);
+  assert.equal((await(await p.request.get(url+'api/state')).json()).tasks.length,tasksBefore,'no task or plan is created by picking a candidate');
+  assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'candidate list fits the viewport');
+  assert.equal(await history.locator('button,select').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'candidate buttons remain touchable');
+  if(process.env.GOALS_UI_PROOF_DIR)await history.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'word-retest-'+width+'.png')});
+  await draftWord.fill('');checks++;
   const edit=p.locator('[data-goal-form="edit"]');await edit.getByLabel('目前实际表现').evaluate(e=>{for(let p=e.parentElement;p;p=p.parentElement)if(p.tagName==='DETAILS')p.open=true});await edit.getByLabel('目前实际表现').fill('家长保留的修改内容');
   const live=await(await p.request.get(url+'api/goals')).json(),target=live.goals.find(g=>g.task_id===original),auth=await(await p.request.get(url+'api/state')).json();const other=await p.request.post(url+'api/goals/action',{headers:{'X-Family-Token':auth.token},data:{action:'edit',id:target.id,expected_version:target.version,request_key:'synthetic-other-parent-'+width,curriculum:'另一位家长刚核对的教材'}});assert.equal(other.status(),200);
   await edit.getByRole('button',{name:'保存背景更正'}).click();await edit.locator('[data-goal-rebase]').waitFor();assert.equal(await edit.getByLabel('目前实际表现').inputValue(),'家长保留的修改内容');await edit.locator('[data-goal-rebase]').click();assert.equal(await edit.getByLabel('年级与教材版本').inputValue(),'另一位家长刚核对的教材');await edit.getByRole('button',{name:'保存背景更正'}).click();await edit.locator('[data-goal-rebase]').waitFor({state:'detached'});checks++;

@@ -450,7 +450,57 @@ class GoalTests(unittest.TestCase):
             self.store.action(dict(obj,request_key='synthetic-word-bad-assistance',assistance='独立尝试'))
         other=self.action('create',child_id='child-2',title='另一位孩子英语',subject='英语')['id']
         self.assertFalse(next(x for x in self.store.snapshot()['goals'] if x['id']==other)['records'])
-        self.assertEqual(next(x for x in self.store.snapshot()['goals'] if x['id']==other)['word_history'],dict(checks=[],unparsed=[]))
+        self.assertEqual(next(x for x in self.store.snapshot()['goals'] if x['id']==other)['word_history'],dict(checks=[],unparsed=[],words=[],retest_days=goals.WORD_RETEST_DAYS,retest_candidates=[],retest_omitted=0),'another child sees no word history or candidates')
+
+    def test_word_status_and_interval_retest_candidates_follow_stated_rules(self):
+        today=self.now.date();ago=lambda n:(today-dt.timedelta(days=n)).isoformat()
+        check=lambda day,word_check:self.action('feedback',id=self.ident,day=day,source='家长观察',note='',word_check=word_check)
+        pen=dict(word='pen',meaning='写字用的笔',material='虚构词表',phase='首次核对',results=dict(hear_meaning='答错'))
+        check(ago(20),pen)
+        check(ago(13),dict(pen,phase='刚练过或看过答案',results=dict(hear_meaning='提示后答对')))
+        check(ago(12),dict(pen,results=dict(hear_meaning='本次独立答对',read_meaning='本次独立答对')))
+        check(ago(2),dict(pen,word='fence',meaning='围栏',results=dict(read_meaning='答错')))
+        history=self.goal()['word_history'];self.assertEqual(history['retest_days'],goals.WORD_RETEST_DAYS)
+        status={(w['word'],w['meaning']):w for w in history['words']}
+        hear=status[('pen','写字用的笔')]['directions']['hear_meaning']
+        # A next-day independent answer is only "once"; the previous same-direction check was one day earlier.
+        self.assertEqual((hear['status'],hear['day'],hear['gap_days'],hear['days_since'],hear['verified'],hear['retest_due']),('一次独立答对',ago(12),1,12,False,True))
+        read=status[('pen','写字用的笔')]['directions']['read_meaning']
+        self.assertEqual((read['status'],read['gap_days'],read['retest_due']),('一次独立答对',None,True))
+        self.assertNotIn('hear_spelling',status[('pen','写字用的笔')]['directions'],'untested directions stay unknown')
+        self.assertEqual(status[('fence','围栏')]['directions']['read_meaning']['status'],'最近答错')
+        self.assertEqual(status[('fence','围栏')]['retest_due'],[],'wrong answers need practice, not an interval retest')
+        self.assertEqual(history['retest_candidates'],[dict(word='pen',meaning='写字用的笔',modes=['hear_meaning','read_meaning'],day=ago(12))])
+        # A spaced retest recorded 10 days after the previous hear check verifies that direction only.
+        check(ago(2),dict(pen,phase='间隔后复测',results=dict(hear_meaning='本次独立答对')))
+        words={(w['word'],w['meaning']):w for w in self.goal()['word_history']['words']}
+        hear=words[('pen','写字用的笔')]['directions']['hear_meaning']
+        self.assertEqual((hear['status'],hear['gap_days'],hear['verified'],hear['retest_due']),('间隔后独立答对',10,True,False))
+        self.assertEqual(words[('pen','写字用的笔')]['verified'],['hear_meaning']);self.assertEqual(words[('pen','写字用的笔')]['retest_due'],['read_meaning'])
+        self.assertEqual(self.goal()['word_history']['retest_candidates'][0]['modes'],['read_meaning'])
+        # Without the 间隔后复测 condition, an interval retest too soon afterwards, or a prompted answer, is not verification.
+        check(ago(2),dict(pen,results=dict(read_meaning='本次独立答对')))
+        read=next(w for w in self.goal()['word_history']['words'] if w['word']=='pen')['directions']['read_meaning']
+        self.assertEqual((read['status'],read['gap_days'],read['verified'],read['retest_due']),('一次独立答对',10,False,False))
+        check(ago(1),dict(pen,phase='间隔后复测',results=dict(read_meaning='本次独立答对')))
+        read=next(w for w in self.goal()['word_history']['words'] if w['word']=='pen')['directions']['read_meaning']
+        self.assertEqual((read['status'],read['gap_days'],read['verified'],read['retest_due']),('一次独立答对',1,False,False))
+        self.assertEqual(self.goal()['word_history']['retest_candidates'],[],'a check within the interval is not yet due again')
+        check(ago(0),dict(pen,phase='间隔后复测',results=dict(hear_meaning='提示后答对')))
+        hear=next(w for w in self.goal()['word_history']['words'] if w['word']=='pen')['directions']['hear_meaning']
+        self.assertEqual((hear['status'],hear['verified'],hear['retest_due']),('提示后答对',False,False))
+        # Same-day results that differ are reported rather than ordered by guess.
+        check(ago(0),dict(pen,phase='首次核对',results=dict(hear_meaning='答错')))
+        hear=next(w for w in self.goal()['word_history']['words'] if w['word']=='pen')['directions']['hear_meaning']
+        self.assertEqual((hear['status'],hear['retest_due'],hear['verified']),('同日多次结果不一',False,False))
+        # Direct projection with an explicit date: candidates are capped and the overflow is counted.
+        records=[dict(id=i,day=ago(9),source='家长观察',note=goals.word_check_note(dict(pen,word='w%02d'%i,results=dict(read_meaning='本次独立答对')))) for i in range(25)]
+        projected=goals.word_history(records,today=today)
+        self.assertEqual((len(projected['retest_candidates']),projected['retest_omitted']),(goals.WORD_RETEST_LIMIT,5))
+        self.assertEqual(projected['retest_candidates'][0]['word'],'w00')
+        self.assertEqual(goals.word_history(records,today=today-dt.timedelta(days=5))['retest_candidates'],[],'not due before the interval')
+        odd=goals.word_history([dict(records[0],day='未知日期')],today=today)['words'][0]['directions']['read_meaning']
+        self.assertEqual((odd['status'],odd['retest_due']),('日期无法核对',False))
 
     def test_word_history_retains_dates_senses_and_current_corrections_beyond_model_window(self):
         check=dict(word='pen',meaning='写字用的笔',material='虚构词表',phase='首次核对',results=dict(hear_meaning='答错'))
