@@ -11,6 +11,10 @@ const path=require('node:path');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const secretNote='SYNTHETIC_PARENT_PRIVATE_NOTE',otherBook='SYNTHETIC_OTHER_CHILD_BOOK';
 async function eventually(check,label,timeout=10000){const end=Date.now()+timeout;while(Date.now()<end){if(await check())return;await delay(40)}throw Error('Timed out: '+label)}
+// Current parent layout: the top bar is hidden on 今天, so 家庭设置 (with 孩子入口), 刷新记录 and secondary pages open from 更多.
+async function morePage(page,name){await page.locator('nav [data-page="more"]').click();await page.locator('.more-links [data-page="'+name+'"]').click()}
+async function parentSettings(page){await morePage(page,'settings');await page.locator('.settings-view').waitFor()}
+async function parentRefresh(page){await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-refresh-records]').click()}
 async function listen(server){server.listen(0,'127.0.0.1');await once(server,'listening');return server.address().port}
 async function launchDemo(){
  const reserve=http.createServer(),port=await listen(reserve);await new Promise(r=>reserve.close(r));
@@ -37,7 +41,7 @@ async function inviteOrigins(context,local){
   try{
    await p.route(remote+'/**',async route=>{const url=new URL(route.request().url());assert.ok(url.pathname.startsWith(prefix));await route.fulfill({response:await route.fetch({url:local+url.pathname.slice(prefix.length)+url.search})})});
    await p.route('**/api/child-access/invite',async route=>{const response=await route.fetch({url:local+'api/child-access/invite'}),body=await response.json();assert.equal(response.status(),200);issued=body.invite;await route.fulfill({response,json:{...body,entry_url:offered}})});
-   const open=async url=>{await p.goto(url);await p.locator('[data-child-access="child-1"]').click();await p.locator('[data-child-invite="child-1"]').waitFor()};
+   const open=async url=>{await p.goto(url);await parentSettings(p);await p.locator('[data-child-access="child-1"]').click();await p.locator('[data-child-invite="child-1"]').waitFor()};
    const generate=async()=>{await p.locator('[data-child-invite="child-1"]').click();await eventually(async()=>await p.locator('#childInviteLink').count()&&!!await p.locator('#childInviteLink').inputValue(),'origin-specific invitation');return new URL(await p.locator('#childInviteLink').inputValue())};
    await open(remote+prefix+'?view=synthetic#old');const same=await generate();
    assert.equal(same.origin,remote,'HTTPS ignores a different configured backend host');assert.equal(same.pathname,prefix+'child/','current deployment prefix is used exactly once');assert.equal(same.search,'');assert.equal(same.hash,'#invite='+encodeURIComponent(issued));
@@ -72,11 +76,11 @@ async function inviteOrigins(context,local){
    const event=inspect.locator('.calendar-event').filter({has:inspect.getByRole('heading',{name:calendarTitle,exact:true})});await eventually(()=>event.isVisible(),'calendar requirements visible');
    await visibleRequirement(event.locator('.calendar-requirements'),'带上水杯与已签字回执');assert.equal(await event.locator('.calendar-requirements').innerText(),calendarNote);await visibleRequirement(event.locator('.calendar-time'),'16:00');await visibleRequirement(event.locator('.calendar-location'),'活动中心');assert.equal(await event.locator('details').getAttribute('open'),null);assert.equal(await inspect.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'calendar action layout '+width);
    if(shots)await inspect.screenshot({path:path.join(shots,'synthetic-calendar-'+width+'.png'),fullPage:true});
-   await inspect.goto(server.url);await eventually(()=>inspect.locator('[data-page="reading"]').first().isVisible(),'reading entry ready');await inspect.locator('[data-page="reading"]').first().click();const book=inspect.locator('[data-reading-target="'+task.id+'"]');await eventually(()=>book.isVisible(),'parent reading requirements visible');
+   await inspect.goto(server.url);await morePage(inspect,'reading');const book=inspect.locator('[data-reading-target="'+task.id+'"]');await eventually(()=>book.isVisible(),'parent reading requirements visible');
    await visibleRequirement(book.locator('.reading-method'),task.method);await visibleRequirement(book.locator('.reading-criteria'),task.criteria);assert.equal(await book.locator(':scope > .book-body > details').getAttribute('open'),null);assert.equal(await inspect.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'parent reading action layout '+width);if(shots)await inspect.screenshot({path:path.join(shots,'synthetic-parent-reading-'+width+'.png'),fullPage:true});
   }
   await inspect.close();checks.push('calendar preparation, time and place plus parent reading criteria are visible outside details at 360 / 1440 widths');
-  await parent.goto(server.url);await eventually(()=>parent.locator('[data-child-access="child-1"]').isVisible(),'parent access button');
+  await parent.goto(server.url);await parentSettings(parent);await eventually(()=>parent.locator('[data-child-access="child-1"]').isVisible(),'parent access button');
   await parent.locator('[data-child-access="child-1"]').click();await eventually(()=>parent.locator('[data-child-invite="child-1"]').isVisible(),'parent access dialog');
   assert.equal(await parent.locator('[data-child-share="'+task.id+'"]').isChecked(),false,'tasks default private');
   await parent.locator('[data-child-invite="child-1"]').click();await eventually(async()=>!!await parent.locator('#childInviteLink').inputValue(),'one-use invite');
@@ -108,7 +112,7 @@ async function inviteOrigins(context,local){
   await child.locator('#submit').click();await eventually(async()=>/作品交好了/.test(await child.locator('#work-status').innerText()),'same submission retried');assert.deepEqual(submitBodies[0],submitBodies[1]);await child.unroute('**/child/api/submit');
   parentState=await (await fetch(server.url+'api/state')).json();task=parentState.reading.tasks.find(t=>t.id===task.id);assert.equal(task.state,'待确认');assert.equal(task.attachments.length,2);assert.equal(task.history.filter(h=>h.action==='submit').length,1);assert.equal(task.award,null);
   checks.push('rest preserves draft, failed photo upload retries, fake microphone saves original, lost submission response retries once');
-  await parent.locator('[data-close="readingDialog"]').last().click();await parent.locator('#refresh').click();await eventually(()=>parent.locator('[data-page="reading"]').first().isVisible(),'parent refreshed');await parent.locator('[data-page="reading"]').first().click();
+  await parent.locator('[data-close="readingDialog"]').last().click();await parentRefresh(parent);await morePage(parent,'reading');
   await eventually(()=>parent.locator('[data-reading-action="confirm"][data-id="'+task.id+'"]').isVisible(),'parent sees child submission');await parent.locator('[data-reading-action="confirm"][data-id="'+task.id+'"]').click();await parent.locator('#readingActionForm textarea').fill('虚构检查：看过图与录音，已找到自己的观察细节。');await parent.locator('#readingActionForm [type="submit"]').click();await eventually(async()=>!(await parent.locator('#readingDialog').isVisible()),'parent confirmation saved');
   await child.locator('#refresh').click();await eventually(async()=>await child.locator('#earned').innerText()==='2','actual award reaches child');assert.equal(await child.locator('#work-form').isVisible(),false);assert.match(await child.locator('#saved-work').innerText(),/已获得 2 枚/);
   checks.push('parent reads current submitted work and confirms through UI; child refresh sees actual award');
@@ -124,7 +128,7 @@ async function inviteOrigins(context,local){
   }
   checks.push('360 / 400 / 1440 CSS pixel camp and submission layouts have no horizontal overflow');
   await child.clock.install();await child.route('**/child/api/state',()=>{});await child.locator('#refresh').click();await child.clock.fastForward(13000);await eventually(async()=>/超时/.test(await child.locator('#notice').innerText()),'state timeout visible');await child.unroute('**/child/api/state');await child.locator('#refresh').click();await eventually(async()=>await child.locator('#notice').innerText()==='','state timeout recovers');await child.clock.resume();
-  await parent.goto(server.url);await parent.locator('[data-child-access="child-1"]').click();await eventually(()=>parent.locator('[data-child-share="'+task.id+'"]').isVisible(),'parent access reopened');await parent.locator('[data-child-share="'+task.id+'"]').click();await eventually(async()=>!(await parent.locator('[data-child-share="'+task.id+'"]').isChecked()),'unshare saved');await child.locator('#refresh').click();await eventually(()=>child.locator('#journey').isVisible(),'unshared task closes');assert.equal(await child.locator('[data-open]').count(),0);
+  await parent.goto(server.url);await parentSettings(parent);await parent.locator('[data-child-access="child-1"]').click();await eventually(()=>parent.locator('[data-child-share="'+task.id+'"]').isVisible(),'parent access reopened');await parent.locator('[data-child-share="'+task.id+'"]').click();await eventually(async()=>!(await parent.locator('[data-child-share="'+task.id+'"]').isChecked()),'unshare saved');await child.locator('#refresh').click();await eventually(()=>child.locator('#journey').isVisible(),'unshared task closes');assert.equal(await child.locator('[data-open]').count(),0);
   await parent.locator('[data-child-revoke="child-1"]').click();await eventually(async()=>/已停用/.test(await parent.locator('#childInviteResult').innerText()),'revoke saved');await child.locator('#refresh').click();await eventually(()=>child.locator('#login').isVisible(),'revoked session loses access');
   assert.equal((await childContext.request.get(server.url+'child/api/state')).status(),401);assert.equal(requests.some(r=>new URL(r.url).pathname.startsWith('/family/api/')),false,'child UI never requests parent APIs');assert.deepEqual(errors,[]);
   checks.push('bounded state timeout recovers; unsharing and session revocation remove child access');

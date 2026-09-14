@@ -1,9 +1,9 @@
 // Run: node --test test_print_ui.js. Isolated browser state and HTTP; no printer I/O.
 const test=require('node:test'),assert=require('node:assert/strict');
 const {readFileSync}=require('node:fs'),vm=require('node:vm'),{randomUUID}=require('node:crypto');
-const appSource=readFileSync(__dirname+'/app.js','utf8'),start=appSource.indexOf('let printBusy=');
-assert.ok(start>=0,'Printing UI section is present');
-const source=appSource.slice(start),copy=x=>JSON.parse(JSON.stringify(x));
+const appSource=readFileSync(__dirname+'/app.js','utf8'),start=appSource.indexOf('let printBusy='),end=appSource.indexOf('\nconst askState=');
+assert.ok(start>=0&&end>start,'Printing UI section is present and ends where the ask section begins');
+const source=appSource.slice(start,end),copy=x=>JSON.parse(JSON.stringify(x));
 const reply=value=>({ok:true,status:200,json:async()=>value});
 const preparation=i=>({id:String(i+1).repeat(32),name:['first.pdf','second.pdf'][i],pdf_sha256:'a'.repeat(64),page_count:i?4:8,preview_url:'/api/print/preview/'+String(i+1).repeat(32)});
 function harness(storage=new Map()){
