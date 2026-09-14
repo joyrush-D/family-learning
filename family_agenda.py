@@ -19,8 +19,25 @@ def sent_day(value):
     except (ValueError,TypeError,AttributeError):return ''
 
 
-def deadline(text,published):
-    """Only an unambiguous deadline phrase; an event date alone is not a deadline."""
+_WEEKDAYS={'一':0,'二':1,'三':2,'四':3,'五':4,'六':5,'日':6,'天':6}
+
+
+def _relative_weekday(text,anchor):
+    """Ground 本周X/下周X/周X against the sending day; recurring (每周), past (上周) or unknown anchors stay as written."""
+    if not anchor: return text
+    sent=dt.date.fromisoformat(anchor); monday=sent-dt.timedelta(days=sent.weekday())
+    def resolve(match):
+        prefix,name=match.group('prefix') or '',_WEEKDAYS[match.group('day')]
+        if prefix in ('本','这','这个','本个'): value=monday+dt.timedelta(days=name)
+        elif prefix in ('下','下个'): value=monday+dt.timedelta(days=7+name)
+        else: value=monday+dt.timedelta(days=name+(7 if name<sent.weekday() else 0))
+        # A day already gone this week is not a usable deadline; leave the phrase for review.
+        return value.isoformat() if value>=sent else match[0]
+    return re.sub(r'(?<![每上])(?P<prefix>本个|这个|下个|本|这|下)?(?:周|星期|礼拜)(?P<day>[一二三四五六日天])(?![周月年])',resolve,text)
+
+
+def deadlines(text,published):
+    """Every date the text ties to a required action or dated school event, grounded on the sending day."""
     anchor=date(published)
     def chinese_date(match):
         year,month,day=match.groups()
@@ -29,9 +46,11 @@ def deadline(text,published):
         value=f'{int(year or anchor[:4]):04d}-{int(month):02d}-{int(day):02d}'
         return value if date(value) else match[0]
     text=re.sub(r'(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日',chinese_date,text or '')
-    if date(text): return text
+    if date(text): return {text}
+    text=_relative_weekday(text,anchor)
     candidates=set()
-    pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:[^。；;\n]{0,8}?)(?:前|截止|完成|提交|上交|交齐|带到|带来|交作业)'
+    # A date alone is not a deadline; it must be tied to handing in, bringing or a dated test the child sits.
+    pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:[^。；;\n]{0,8}?)(?:前|截止|完成|提交|上交|交齐|带到|带来|交作业|带|穿|交(?!流|通|换|谈)|测验|考试|听写|默写|检测)'
     for match in re.finditer(pattern,text or ''):
         token=match[1];value=date(token)
         if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):
@@ -47,6 +66,12 @@ def deadline(text,published):
         if date(day) and not re.search(r'\d{4}-\d{2}-\d{2}|起|开始|持续',tail) and re.fullmatch(r'\s*'+clock+r'\s*[-–—‑~～至到]\s*'+clock+r'[！!❗‼️\s]*',tail):
             start,end=[tuple(map(int,t)) for t in re.findall(r'(\d{1,2})[:：](\d{2})',tail)]
             if start<=end:candidates.add(day)
+    return candidates
+
+
+def deadline(text,published):
+    """Only an unambiguous deadline phrase; several different dates need review."""
+    candidates=deadlines(text,published)
     return next(iter(candidates)) if len(candidates)==1 else ''
 
 

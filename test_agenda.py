@@ -81,6 +81,21 @@ class AgendaTest(unittest.TestCase):
         self.assertEqual(agenda.deadline('截止时间：2月14日',''),'')
         self.assertEqual(agenda.deadline('截止时间：2026年2月14日',''),'2026-02-14')
 
+    def test_relative_weekdays_and_dated_tests_ground_on_the_sending_day(self):
+        monday='2026-09-14'
+        cases=[('下周一美术课请带一盒水彩笔','2026-09-21'),('本周五（09月18日）英语单元测验，范围Unit 1到Unit 3','2026-09-18'),
+               ('本周五英语单元测验','2026-09-18'),('周五交','2026-09-18'),('下周三前交','2026-09-23'),('这周日前上交','2026-09-20'),
+               ('星期四听写第二单元','2026-09-17'),('礼拜二穿校服','2026-09-15'),('周一交','2026-09-14'),('下周日带','2026-09-27')]
+        for text,expected in cases:self.assertEqual(agenda.deadline(text,monday),expected,text)
+        # Recurring, past, ranged, unanchored or bare event dates are not deadlines.
+        for text in ['每周五交作业','上周五交的作业','下周一到周三春游','周末愉快','2月14日开始活动','周五']:
+            self.assertEqual(agenda.deadline(text,monday),'',text)
+        self.assertEqual(agenda.deadline('周五交',''),'')
+        self.assertEqual(agenda.deadline('本周一交','2026-09-16'),'','a weekday already gone this week stays for review')
+        notice='今天英语作业：抄写单词。本周五（09月18日）英语单元测验。另外下周一美术课请带一盒水彩笔。'
+        self.assertEqual(agenda.deadline(notice,monday),'','several dated requirements need per-item dates')
+        self.assertEqual(agenda.deadlines(notice,monday),{'2026-09-18','2026-09-21'})
+
     def test_correction_and_legacy_focus_migration_preserve_deadline_original(self):
         self.organize()
         request=dict(id='T01',version=1,request_key='synthetic-correct-02',mode='later',next_action='',waiting_for='',review_on='2026-09-20',category='unknown',published_on='',due_on='',scheduled_on='2026-09-16')

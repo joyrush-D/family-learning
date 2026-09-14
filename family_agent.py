@@ -55,6 +55,7 @@ _school_fields['properties']['evidence']['items'] = {'type': 'object', 'addition
 SCHOOL_PROMPT = '''\n学校消息额外返回task_title、task_goal、task_advice、learning_subject和learning_goal_id。task_title是简短可执行的待办标题（建议40字以内，科目+完成什么），不要使用待核对、辅导建议或整段通知当标题。task_goal仅写本次完成后应得到的成果、老师明确的完成标准，保留必须/任选/示例/条件，不能编造字数、截止或额外要求；task_advice最后给可选操作建议，不可将建议混入学校要求。未读原件时三项留空，不能猜内容。允许学校模式基于原文整理上述待家长核对的事项，不宣称已完成或已掌握；title_quote仍须逐字引用。\n学校消息额外返回learning_subject和learning_goal_id。只有已读文字中有具体教学、习作、练习或订正要求时，learning_subject填写规范科目（如语文、英语）；普通行政通知、报名、用品、闲聊、仅有成绩或未读图片均留空。不要因为尚无孩子作答而漏掉具体教学要求。
 学校消息的evidence每项只返回ref，不返回quote或复述原文；程序按消息编号提取原文，后续教学分析读取完整消息。
 learning_goal_id只从输入learning_goals选择同一科目且适合本要求的目标；已有合适目标优先沿用，科目相同但训练点不相关时也留空，系统建立或沿用学校学习目标。不生成目标编号，不改变暂停状态；明确匹配到暂停目标时只关联资料，不恢复分析或另建目标绕过暂停。非教学要求两个字段均为空。
+老师宣布的考试、测验、听写、默写、比赛、家长会或需要带物品/穿着的日期安排，即使不是作业，也必须各自单独返回一项：task_title写科目+事件+原文的日期或星期（如“英语：Unit1–3单元测验（周五）”），task_goal写范围与要求；不要因为它没有“完成/提交”字样就省略。due只在原文写明日期或“本周五/下周一/明天”这类可按发送日换算的表述时填写YYYY-MM-DD，按该消息的发送日期换算；同一条消息里不同事项分别填各自日期，换算不了留空。
 任务要求与老师的后续更正、撤销一起保留原消息作为规划依据；不把它们当成孩子表现。发布者称呼不等于教师身份已确认，不凭群名推断任课老师，不将家长转发说成老师直接发布。保持必须、任选、示例和条件要求，不能读出未提供的图片或链接内容。'''
 # One saved interpretation feeds the task list; it never records child performance.
 SCHOOL_TASK_POLICY = 6
@@ -912,15 +913,19 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         if mode == 'school' and all(_needs_task_details(refs[entry['ref']]) for entry in cited):
             # A model may quote only a word inside a marker; preserve the gap.
             title = '[资料]'
-        uncertain_due=False
+        uncertain_due=ambiguous_due=False
         if due:
-            from family_agenda import date, deadline, sent_day
+            from family_agenda import date, deadlines, sent_day
             cited_evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}]
-            relative={deadline(e['text'],sent_day(e.get('time',''))) for e in cited_evidence} - {''} if mode=='school' else set()
-            grounded=relative=={due} if mode=='school' else any(due in item['text'] for item in cited)
+            # One notice may carry several dated requirements; the model's date must be one the sending day grounds.
+            relative=set().union(*(deadlines(e['text'],sent_day(e.get('time',''))) for e in cited_evidence)) if mode=='school' else set()
+            grounded=due in relative if mode=='school' else any(due in item['text'] for item in cited)
             if not date(due) or not grounded:
                 if not routing: raise AgentError('模型日期缺少原文依据')
                 due='';uncertain_due=True
+            elif len(relative)>1:
+                if not routing: raise AgentError('原文含多个日期，需家长核对')
+                ambiguous_due=True
         item = dict(title='待核对：' + title, body=FOCUS[proposal['focus']], due=due, evidence=cited)
         if routing:
             subject = _text(proposal, 'learning_subject', 40).strip(); goal_id = _text(proposal, 'learning_goal_id', 80).strip()
@@ -936,6 +941,8 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 brief.update(state='review',reason=brief['reason'][:300]+' 截止日期尚无法从原文核对，未采用模型日期；请核对原通知。')
             elif due and due<as_of and brief['state']!='reference':
                 brief.update(state='review',reason=brief['reason'][:300]+' 原截止日期已过，请核对是否已处理或仍需补办；不推定完成或安排今天补做。')
+            elif ambiguous_due and brief['state']=='ready':
+                brief.update(state='review',reason=brief['reason'][:300]+' 原通知含多个日期，已按原文取'+due+'；请核对这一天是否属于本事项。')
             if brief['title'] and brief['goal']: item.update(title=brief['title'],body=brief['goal'])
             if brief['state']=='reference' or brief.get('change','new')!='new': item.get('plan',{}).pop('school_learning',None)
             item.setdefault('plan',{})['school_task']=brief

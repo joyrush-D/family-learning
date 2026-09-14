@@ -847,6 +847,26 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
                 with self.assertRaises(agent.AgentError):agent._select('school',rows,as_of='2026-02-10')
             self.assertEqual(agent._select('school',evidence,as_of='2026-02-12')[0]['due'],'2026-02-11')
 
+    def test_one_notice_with_several_dated_requirements_keeps_each_date_for_review(self):
+        # A Monday notice: homework today, a unit test on Friday and supplies next Monday; each item keeps its own grounded date.
+        sent='2026-02-09T16:05:00+08:00'  # Monday in Beijing time
+        text='今天英语作业：抄写Unit 3单词。本周五（2月13日）英语单元测验，范围Unit 1到Unit 3。另外下周一美术课请带一盒水彩笔。'
+        payload=self.payload(cursor='11');payload['messages'][0].update(text=text,time=sent);self.store.ingest(payload)
+        def model(*args,**kwargs):
+            base=dict(title_quote=text,focus='school',learning_subject='',learning_goal_id='',task_goal=text,task_advice='',task_reason='明确要求。',task_change='new',task_target_id='',evidence=[dict(ref='message:synthetic-group:11')])
+            return {'proposals':[dict(base,due='',task_title='英语：抄写Unit 3单词',task_state='ready'),
+                                 dict(base,due='2026-02-13',task_title='英语：Unit1–3单元测验（周五）',task_state='ready'),
+                                 dict(base,due='2026-02-16',task_title='美术：下周一带一盒水彩笔',task_state='ready'),
+                                 dict(base,due='2026-02-20',task_title='编造的下周五要求',task_state='ready')]}
+        with patch.object(agent.family_llm,'_chat_json',side_effect=model):
+            self.assertEqual(agent.run_once(self.app,self.now)['failed'],0)
+        with self.app.connect() as c:rows={r['title']:dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")}
+        self.assertEqual(rows['英语：抄写Unit 3单词']['state'],'accepted');self.assertEqual(rows['英语：抄写Unit 3单词']['due'],'')
+        for title,due in (('英语：Unit1–3单元测验（周五）','2026-02-13'),('美术：下周一带一盒水彩笔','2026-02-16')):
+            self.assertEqual((rows[title]['state'],rows[title]['due']),('pending',due),title)
+            brief=json.loads(rows[title]['plan'])['school_task'];self.assertEqual(brief['state'],'review');self.assertIn('含多个日期',brief['reason']);self.assertIn(due,brief['reason'])
+        invented=rows['编造的下周五要求'];self.assertEqual(invented['due'],'');self.assertIn('未采用模型日期',json.loads(invented['plan'])['school_task']['reason'])
+
     def test_uncertain_school_date_stays_review_without_poisoning_valid_batch(self):
         payload=self.payload(cursor='13');payload['messages'][0]['text']='请准备阅读材料，日期另行通知。'
         payload['messages'].extend([dict(id='12',time=self.now.isoformat(),kind='text',sender='虚构老师',text='请填回执，截止时间：2026 年 2 月 12 日。',unread=False),
