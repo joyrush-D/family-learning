@@ -230,3 +230,35 @@ class Store:
                     fields['scope_child_id'] = observation_scope(previous, self._view(teacher_row))
             row = self._persist(c, 'teacher_observations', request, fields, old)
             return dict(ok=True, observation=self._view(row))
+
+    def save_message_requirement(self, obj):
+        """Parent confirms the teacher and scope; preserve a literal saved-message quote."""
+        if not isinstance(obj, dict) or set(obj) != {'child_id', 'source_id', 'message_id', 'teacher_id', 'day', 'target', 'quote'}:
+            raise TeacherError('请选择原消息、老师及适用范围')
+        quote = _text(obj, 'quote', 3000, True)
+        if obj['target'] not in ('class', 'household'): raise TeacherError('请选择全班或本家孩子')
+        teacher_id = _text(obj, 'teacher_id', 40, True)
+        with self._db() as c:
+            try: source, message = self.agent._message_context(c, obj)
+            except family_agent.AgentError as error:
+                raise TeacherError(str(error), error.status, 'teacher_message_unavailable') from None
+            if message.get('kind') == 'qq_window_fragment' or quote not in message.get('text', '').replace('\r\n', '\n'):
+                raise TeacherError('请引用这条已保存消息中的原文；窗口片段请先人工核对后记录')
+            teacher_row = c.execute('SELECT * FROM teachers WHERE id=?', (teacher_id,)).fetchone()
+            if teacher_row is None: raise TeacherError('老师档案不存在', 404, 'teacher_missing')
+            teacher = self._view(teacher_row)
+            if source['id'] not in teacher['source_ids'] or source['child_id'] not in teacher['child_ids']:
+                raise TeacherError('请先将这位老师关联到该孩子和群来源', 403, 'teacher_source_conflict')
+            key = 'message-requirement-' + family_agent._hash([source['child_id'], source['id'], message['id'], teacher_id])[:40]
+            ident = 'TEACHOBS-' + hashlib.sha256(key.encode()).hexdigest()[:24]
+            existing = c.execute('SELECT * FROM teacher_observations WHERE id=?', (ident,)).fetchone()
+            if existing:
+                # Reopening a message must never overwrite a parent's later correction or withdrawal.
+                saved = self._view(existing)
+                if saved['source_id'] != source['id'] or saved['message_id'] != message['id']:
+                    raise TeacherError('原归档的出处已更正，请到老师档案核对；不会覆盖已有记录', 409, 'teacher_source_conflict')
+                return dict(ok=True, observation=saved, already_saved=True)
+        fields = dict(request_key=key, teacher_id=teacher_id, day=obj['day'], kind='requirement', target=obj['target'],
+                      child_id=source['child_id'] if obj['target'] == 'household' else '', behavior=quote,
+                      source_id=source['id'], message_id=message['id'])
+        return self.save_observation(fields) | {'already_saved': False}

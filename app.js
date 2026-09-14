@@ -829,22 +829,50 @@ function schoolOriginalButtons(refs,childID){
 }
 // One unresolved association keeps its exact message and upload ID until retried.
 let schoolOriginal=null;
+function schoolOriginalPending(s){return s?.pending||s?.teacher?.pending}
+function schoolTeacherHTML(s){
+ const t=s.teacher,m=s.view?.message;if(!m?.text?.trim()||m.kind==='qq_window_fragment')return '';
+ if(!t)return '<p><button data-school-teacher-open>存为老师要求</button></p>';
+ if(t.saved)return `<section class="note" data-school-teacher-saved><p>${esc(t.notice)}</p><button data-school-teacher-profile="${esc(t.saved.teacher_id)}">查看 / 更正老师记录</button></section>`;
+ if(!t.profiles)return `<section class="note"><p>${esc(t.notice||'正在读取已保存的老师档案…')}</p>${!s.busy?'<button data-school-teacher-open>重试读取老师</button>':''}</section>`;
+ if(!t.profiles.length)return '<section class="note"><p>还没有老师关联到这个孩子和群。</p><button data-school-teacher-profile="new">添加 / 关联老师</button></section>';
+ const f=t.fields;
+ return `<section class="note"><h3>存为老师要求</h3><p class="small">请确认这段话来自哪位老师、适用于谁；发送者称呼不能代替身份确认。只保存文字，未读附件仍待核对。</p><form data-school-teacher-form><label>老师<select name="teacher_id" required><option value="">请选择已确认的老师</option>${t.profiles.map(x=>`<option value="${esc(x.id)}"${x.id===f.teacher_id?' selected':''}>${esc(x.display_name)} · ${esc(x.subject||'科目待填写')}</option>`).join('')}</select></label><label>适用范围<select name="target" required><option value="">请选择</option><option value="class"${f.target==='class'?' selected':''}>全班</option><option value="household"${f.target==='household'?' selected':''}>本家孩子</option></select></label><label>要求日期 · 请核对<input name="day" type="date" required max="${esc(data.today)}" value="${esc(f.day)}"></label><label>保留的原话<textarea name="quote" rows="5" maxlength="3000" required>${esc(f.quote)}</textarea></label>${m.text.length>3000?'<p class="small">原消息较长，请从上方选取本次要求的原文，最多3000字。</p>':''}<p class="small">可保留原文中的一段；同一消息和老师只归档一次，后续到原记录更正。</p><p role="status">${esc(t.notice||'')}</p><button type="submit"${t.pending?' disabled':''}>确认并保存</button>${t.pending?'<button type="button" data-school-teacher-retry>核对并重试保存</button>':''}</form></section>`;
+}
+async function openSchoolTeacher(){
+ const s=schoolOriginal;if(!s||s.busy||schoolOriginalPending(s))return;
+ if(!s.teacher){const m=s.view.message,date=new Date(m.time);s.teacher={fields:{teacher_id:'',target:'',day:m.time&&!isNaN(date)?new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(date):'',quote:m.text.length<=3000?m.text:''},profiles:null}}
+ s.busy=true;s.teacher.notice='';paintSchoolOriginal();
+ try{const r=await apiFetch('/api/teachers',{signal:AbortSignal.timeout(12000)}),view=await r.json();if(!r.ok||!Array.isArray(view.teachers))throw Error(view.error||'老师档案暂不可读取');s.teacher.profiles=view.teachers.filter(t=>!t.archived&&t.child_ids.includes(s.identity.child_id)&&t.source_ids.includes(s.identity.source_id))}
+ catch(e){s.teacher.notice=e.message||'读取失败，请重试。'}finally{s.busy=false;paintSchoolOriginal();$('#schoolOriginalDialog [data-school-teacher-form]')?.scrollIntoView({block:'nearest'})}
+}
+async function saveSchoolTeacher(){
+ const s=schoolOriginal,t=s?.teacher;if(!t?.pending||s.busy)return;s.busy=true;t.notice='正在保存…';paintSchoolOriginal();
+ try{
+  const body=t.pending,r=await apiFetch('/api/teachers/message',{method:'POST',signal:AbortSignal.timeout(15000),headers:{'Content-Type':'application/json','X-Family-Token':s.token},body:JSON.stringify(body)}),result=await r.json();
+  if(!r.ok){if(!(r.status===403&&result.code==='csrf_expired')&&[400,403,404,409,422].includes(r.status))t.pending=null;throw Error(result.error||'暂未保存')}
+  const o=result.observation;if(!result.ok||!o?.id||o.teacher_id!==body.teacher_id||o.source_id!==body.source_id||o.message_id!==body.message_id)throw Error('保存回执暂时无法核对');
+  t.saved=o;t.pending=null;t.notice=result.already_saved?'这条消息已有记录，保留现有更正与撤回状态。':'已保存到老师档案，可继续核对原通知。';
+ }catch(e){t.notice=(e.message||'连接中断')+(t.pending?'；填写已保留，请核对并重试保存。':'；填写已保留。')}
+ finally{s.busy=false;paintSchoolOriginal()}
+}
 function paintSchoolOriginal(){
  const s=schoolOriginal,dialog=$('#schoolOriginalDialog');if(!s||!dialog)return;
+ const teacherForm=dialog.querySelector('[data-school-teacher-form]');if(teacherForm&&s.teacher)for(const el of teacherForm.elements)if(el.name)s.teacher.fields[el.name]=el.value;
  const view=s.view,attachments=view?.attachments||[],unavailable=view?.unavailable_attachment_ids||[],linked=new Set(attachments.map(a=>a.id));
  const d=view?.material_draft,draftHTML=d?d.state==='ready'?`<section class="note" data-school-material-draft><strong>Agent已整理 · 待家长核对</strong><p>${esc(d.draft.title)}</p><p>${esc(d.draft.subject)}${d.draft.score!==null?' · '+esc(d.draft.score)+' / '+esc(d.draft.total??'满分待核对'):''}</p><p class="source">${esc(d.draft.note)}</p>${d.draft.uncertainties?.length?`<p>待核对：${d.draft.uncertainties.map(esc).join('；')}</p>`:''}<button data-school-material-record>核对并填入学习记录</button><p class="small muted">只整理所附图片；保存前请核对原图、孩子归属和实际日期。</p></section>`:`<p data-school-material-status>${esc(d.explanation)}${d.state==='error'?'<button data-school-material-retry>重试这份原件</button>':''}</p>`:'';
 
  const available=(data.uploads||[]).filter(a=>!linked.has(a.id)),owner=data.children.find(c=>c.id===s.identity.child_id);
  const mediaNote=view?.media?.explanation||'';
- dialog.innerHTML=`<h2>${view?.message.kind==='qq_window_fragment'?'QQ群窗口片段':'通知原件'}</h2>${view?.message.kind==='qq_window_fragment'?`<p class="note" data-fragment-note>采集于 ${agentTime(view.message.captured_at)}。仅本次可见内容，不是老师附件原件；发布时间与发言人仍需核对。</p>`:''}<p class="small">${esc(owner?.name||'孩子归属待核对')} · ${esc(view?.source_name||currentSources().find(x=>x.id===s.identity.source_id)?.name||'来源待核对')}</p>${view?`<p class="small muted">${esc(view.message.sender||'发送者未记录')} · ${agentTime(view.message.time)}</p><blockquote class="source">${esc(view.message.text)}</blockquote>${mediaNote?`<p class="small muted" data-school-media-note>${esc(mediaNote)}</p>`:''}${draftHTML}<div data-school-original-files>${attachments.map(a=>`${uploadHTML(a)}<button data-school-original-detach="${esc(a.id)}">移除关联</button>`).join('')}${unavailable.map(id=>`<p class="error">一份关联原件暂不可读取，请核对文件或重新上传。</p><button data-school-original-detach="${esc(id)}">移除失效关联</button>`).join('')}${!attachments.length&&!unavailable.length&&!mediaNote?'<p>这条通知还没有关联原件，可以在下面补充。</p>':''}</div><p class="small muted">原件用于核对通知，作者、具体要求和完成情况仍需确认。</p><label>拍照或上传原件<input type="file" data-school-original-upload accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.txt,.mp3,.m4a,.wav,.webm"></label><label>选择已保存的原件<select name="attachment_id"><option value="">请选择</option>${available.map(a=>`<option value="${esc(a.id)}"${s.selected===a.id?' selected':''}>${esc(a.name)}</option>`).join('')}</select></label><button data-school-original-attach>关联所选原件</button>`:''}<p role="status" aria-live="polite" data-school-original-status>${esc(s.error||(s.busy?'正在读取…':''))}</p>${s.pending||!view?'<button data-school-original-retry>重试</button>':''}<div class="toolbar"><button data-school-original-close>关闭</button></div>`;
- for(const control of dialog.querySelectorAll('button,input,select'))control.disabled=s.busy||!!s.pending&&!control.hasAttribute('data-school-original-retry')&&!control.hasAttribute('data-school-original-close');
+ dialog.innerHTML=`<h2>${view?.message.kind==='qq_window_fragment'?'QQ群窗口片段':'通知原件'}</h2>${view?.message.kind==='qq_window_fragment'?`<p class="note" data-fragment-note>采集于 ${agentTime(view.message.captured_at)}。仅本次可见内容，不是老师附件原件；发布时间与发言人仍需核对。</p>`:''}<p class="small">${esc(owner?.name||'孩子归属待核对')} · ${esc(view?.source_name||currentSources().find(x=>x.id===s.identity.source_id)?.name||'来源待核对')}</p>${view?`<p class="small muted">${esc(view.message.sender||'发送者未记录')} · ${agentTime(view.message.time)}</p><blockquote class="source">${esc(view.message.text)}</blockquote>${schoolTeacherHTML(s)}${mediaNote?`<p class="small muted" data-school-media-note>${esc(mediaNote)}</p>`:''}${draftHTML}<div data-school-original-files>${attachments.map(a=>`${uploadHTML(a)}<button data-school-original-detach="${esc(a.id)}">移除关联</button>`).join('')}${unavailable.map(id=>`<p class="error">一份关联原件暂不可读取，请核对文件或重新上传。</p><button data-school-original-detach="${esc(id)}">移除失效关联</button>`).join('')}${!attachments.length&&!unavailable.length&&!mediaNote?'<p>这条通知还没有关联原件，可以在下面补充。</p>':''}</div><p class="small muted">原件用于核对通知，作者、具体要求和完成情况仍需确认。</p><label>拍照或上传原件<input type="file" data-school-original-upload accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.txt,.mp3,.m4a,.wav,.webm"></label><label>选择已保存的原件<select name="attachment_id"><option value="">请选择</option>${available.map(a=>`<option value="${esc(a.id)}"${s.selected===a.id?' selected':''}>${esc(a.name)}</option>`).join('')}</select></label><button data-school-original-attach>关联所选原件</button>`:''}<p role="status" aria-live="polite" data-school-original-status>${esc(s.error||(s.busy?'正在读取…':''))}</p>${s.pending||!view?'<button data-school-original-retry>重试</button>':''}<div class="toolbar"><button data-school-original-close>关闭</button></div>`;
+ for(const control of dialog.querySelectorAll('button,input,select,textarea'))control.disabled=s.busy||!!schoolOriginalPending(s)&&!control.hasAttribute('data-school-original-retry')&&!control.hasAttribute('data-school-teacher-retry')&&!control.hasAttribute('data-school-original-close');
 }
 function verifySchoolOriginal(view,s){
  if(!view||Object.entries(s.identity).some(([k,v])=>view[k]!==v)||!view.message||!Array.isArray(view.attachments))throw Error('原件归属暂时无法核对，请重试。');
  return view;
 }
 async function readSchoolOriginal(){
- const s=schoolOriginal;if(!s||s.busy||s.pending)return;s.busy=true;s.error='';paintSchoolOriginal();
+ const s=schoolOriginal;if(!s||s.busy||schoolOriginalPending(s))return;s.busy=true;s.error='';paintSchoolOriginal();
  try{const r=await apiFetch('/api/agent/message?'+new URLSearchParams(s.identity),{signal:AbortSignal.timeout(12000)}),view=await r.json();if(!r.ok)throw Error(view.error||'这条通知暂时无法读取');s.view=verifySchoolOriginal(view,s)}
  catch(error){s.error=error.name==='TimeoutError'?'读取超时，请重试。':error.message||'暂时无法读取，请重试。'}
  finally{s.busy=false;paintSchoolOriginal()}
@@ -862,7 +890,7 @@ async function saveSchoolOriginal(){
  finally{s.busy=false;paintSchoolOriginal()}
 }
 async function uploadSchoolOriginal(file){
- const s=schoolOriginal;if(!s||s.busy||s.pending||!file)return;
+ const s=schoolOriginal;if(!s||s.busy||schoolOriginalPending(s)||!file)return;
  if(!file.size||file.size>20*1024*1024){s.error='文件为空或超过20MB';paintSchoolOriginal();return}
  s.busy=true;s.error='正在保存原件…';paintSchoolOriginal();
  try{
@@ -886,13 +914,17 @@ function openSchoolOriginal(ref,childID){
  if(!dialog){
   dialog=document.createElement('dialog');dialog.id='schoolOriginalDialog';document.body.append(dialog);
   dialog.addEventListener('cancel',e=>{if(schoolOriginal?.busy)e.preventDefault()});
-  dialog.addEventListener('close',()=>{if(!schoolOriginal?.pending)schoolOriginal=null});
+  dialog.addEventListener('close',()=>{if(!schoolOriginalPending(schoolOriginal))schoolOriginal=null});
+  dialog.addEventListener('submit',e=>{const f=e.target.closest('[data-school-teacher-form]'),s=schoolOriginal;if(!f||!s)return;e.preventDefault();if(s.busy||schoolOriginalPending(s)||!f.reportValidity())return;s.teacher.pending={...s.identity,...Object.fromEntries(new FormData(f))};saveSchoolTeacher()});
   dialog.addEventListener('change',e=>{if(e.target.matches('[data-school-original-upload]'))uploadSchoolOriginal(e.target.files[0]);if(e.target.name==='attachment_id'&&schoolOriginal)schoolOriginal.selected=e.target.value});
   dialog.addEventListener('click',e=>{
    const b=e.target.closest('button'),s=schoolOriginal;if(!b||!s||s.busy)return;
    if(b.hasAttribute('data-school-original-close')){dialog.close();return}
    if(b.hasAttribute('data-school-original-retry')){s.pending?saveSchoolOriginal():readSchoolOriginal();return}
-   if(s.pending)return;
+   if(b.hasAttribute('data-school-teacher-retry')){saveSchoolTeacher();return}
+   if(schoolOriginalPending(s))return;
+   if(b.hasAttribute('data-school-teacher-open')){openSchoolTeacher();return}
+   if(b.hasAttribute('data-school-teacher-profile')){const id=b.dataset.schoolTeacherProfile;dialog.close();teacherSelectedID=id;page='teachers';render();window.scrollTo(0,0);return}
    if(b.hasAttribute('data-school-material-record')){const identity={...s.identity};dialog.close();openSchoolRecord({message:identity},b);return}
    if(b.hasAttribute('data-school-material-retry')){
     s.busy=true;s.error='';paintSchoolOriginal();
@@ -904,12 +936,12 @@ function openSchoolOriginal(ref,childID){
    if(detach||attach){const id=detach||s.selected;if(!id){s.error='请先选择一份已保存的原件。';paintSchoolOriginal();return}s.pending={...s.identity,attachment_id:id,action:detach?'detach':'attach'};saveSchoolOriginal()}
   });
  }
- if(!schoolOriginal?.pending)schoolOriginal={identity,token:data.token,view:null,busy:false,pending:null,selected:'',error:''};
- else schoolOriginal.error='请先核对上次未确认的关联；这里仍是上次选择的孩子和通知。';
- paintSchoolOriginal();dialog.showModal();if(!schoolOriginal.pending)readSchoolOriginal();
+ if(!schoolOriginalPending(schoolOriginal))schoolOriginal={identity,token:data.token,view:null,busy:false,pending:null,selected:'',error:''};
+ else schoolOriginal.error='请先核对上次未确认的保存；这里仍是上次选择的孩子和通知。';
+ paintSchoolOriginal();dialog.showModal();if(!schoolOriginalPending(schoolOriginal))readSchoolOriginal();
 }
 document.addEventListener('click',e=>{const b=e.target.closest('[data-school-original-ref]');if(b)openSchoolOriginal(b.dataset.schoolOriginalRef,b.dataset.schoolOriginalChild)});
-window.addEventListener('beforeunload',e=>{if(schoolOriginal?.pending||schoolOriginal?.busy){e.preventDefault();e.returnValue=''}});
+window.addEventListener('beforeunload',e=>{if(schoolOriginalPending(schoolOriginal)||schoolOriginal?.busy){e.preventDefault();e.returnValue=''}});
 function agentItemHTML(item,options={}){
  const c=data.children.find(c=>c.id===item.child_id),care=item.care_id&&(data.care?.items||[]).some(c=>c.id===item.care_id),record=item.record_id&&data.records.some(r=>r.id===item.record_id),plan=item.plan&&typeof item.plan==='object'&&Object.keys(item.plan).length;
  const isPlannedCare=item.kind==='care'&&plan, reviewPlan=item.kind==='review'&&plan,needsDetails=item.kind==='school'&&item.needs_task_details&&item.state==='pending';

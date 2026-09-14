@@ -96,6 +96,33 @@ def main():
         with connect() as c: before = '\n'.join(c.iterdump())
         store.snapshot()
         with connect() as c: assert '\n'.join(c.iterdump()) == before
+        # The message shortcut keeps literal evidence and never overwrites later parent corrections.
+        teacher3 = store.save_teacher(request(display_name='虚构消息教师', subject='语文',
+            child_ids=['child-1'], source_ids=['qq:100001']))['teacher']
+        capture = dict(child_id='child-1', source_id='qq:100001', message_id='message-1',
+                       teacher_id=teacher3['id'], day=date, target='class', quote='虚构教学通知')
+        saved = store.save_message_requirement(capture)
+        assert not saved['already_saved'] and saved['observation']['behavior'] == capture['quote']
+        assert saved['observation']['scope_child_id'] == 'child-1'
+        assert store.save_message_requirement(capture)['already_saved']
+        reject(lambda: store.save_message_requirement(capture | {'quote': '并不存在的要求'}))
+        reject(lambda: store.save_message_requirement(capture | {'child_id': 'child-2'}), 'teacher_message_unavailable')
+        reject(lambda: store.save_message_requirement(capture | {'teacher_id': teacher2['id']}), 'teacher_source_conflict')
+        reject(lambda: store.save_message_requirement(capture | {'message_id': 'absent'}), 'teacher_message_unavailable')
+        reject(lambda: store.save_message_requirement(capture | {'target': 'other_students'}))
+        old = saved['observation']
+        fields = {k: old[k] for k in family_teachers.OBSERVATION_FIELDS}
+        fields.update(id=old['id'], version=old['version'], request_key='message-correction-001',
+                      behavior='虚构家长更正：这次要求已取消', status='withdrawn')
+        corrected = store.save_observation(fields)['observation']
+        assert store.save_message_requirement(capture)['observation'] == corrected
+        assert len([o for o in store.snapshot()['observations'] if o['teacher_id'] == teacher3['id']]) == 1
+        with agent._db() as c:
+            for mid, kind, text in [('crlf', 'text', '第一行\r\n第二行'), ('fragment', 'qq_window_fragment', '窗口文字')]:
+                c.execute('INSERT INTO agent_messages(source_id,id,payload) VALUES (?,?,?)',
+                          ('qq:100001', mid, json.dumps(dict(id=mid, kind=kind, text=text, time=linked['time']))))
+        assert store.save_message_requirement(capture | {'message_id':'crlf', 'quote':'第一行\n第二行'})['observation']['behavior'] == '第一行\n第二行'
+        reject(lambda: store.save_message_requirement(capture | {'message_id':'fragment', 'quote':'窗口文字'}))
         (data / 'agent.json').write_text('{')
         assert store.snapshot()['source_error']
         assert store.save_teacher(request(display_name='虚构手动档案', child_ids=['child-2']))['teacher']['source_ids'] == []
