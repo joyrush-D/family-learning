@@ -30,8 +30,8 @@ ${esc(d.values.action)}</p><button type="button" data-goal-clear-draft="${esc(d.
  const modeLabel=id=>state.word_check.modes.find(m=>m.id===id)?.label||id;
  function wordStatusHTML(g){
   const entry=(g.word_history?.words||[]).find(w=>wordKey(w)===wordSelections[g.id]);if(!entry)return '';
-  const items=state.word_check.modes.filter(m=>entry.directions[m.id]).map(m=>{const d=entry.directions[m.id];return `<li><strong>${esc(m.label)}</strong>：${esc(d.status)}${d.day?` · ${esc(d.day)}${d.days_since!=null?`（${d.days_since} 天前）`:''}`:''}${d.verified&&d.gap_days!=null?` · 距上次同方向核对 ${d.gap_days} 天`:d.retest_due?' · 可以间隔复测':''}</li>`});
-  return `<div data-word-status><p class="small">各方向最近一次结果（按规则整理，不是掌握率）：</p><ul class="word-status">${items.join('')}</ul><p class="small">只有在“间隔后复测”条件下、距上次同方向核对满 ${esc(g.word_history.retest_days)} 天的独立答对记为“间隔后独立答对”；其余都不视为稳定掌握。同一天多次结果不一时请看原记录。</p></div>`;
+  const items=state.word_check.modes.filter(m=>entry.directions[m.id]).map(m=>{const d=entry.directions[m.id];return `<li><strong>${esc(m.label)}</strong>：${esc(d.status)}${d.day?` · ${esc(d.day)}${d.days_since!=null&&d.days_since>=0?`（${d.days_since} 天前）`:''}`:''}${d.verified&&d.gap_days!=null?` · 距上次同方向核对 ${d.gap_days} 天`:d.retest_due?' · 可以间隔复测':''}</li>`});
+  return `<div data-word-status><p class="small">各方向最近一次结果（按规则整理，不是掌握率）：</p><ul class="word-status">${items.join('')}</ul><p class="small">只有在“间隔后复测”条件下、距上次同方向核对满 ${esc(g.word_history.retest_days)} 天的独立答对记为“间隔后独立答对”；其余都不视为稳定掌握。同日结果或核对条件不一、日期不明或在未来时，请先核对原记录。</p></div>`;
  }
  function wordRetestHTML(g){
   const h=g.word_history||{};const list=h.retest_candidates||[];if(!list.length)return '';
@@ -105,8 +105,9 @@ ${esc(d.values.action)}</p><button type="button" data-goal-clear-draft="${esc(d.
  root.querySelectorAll('form').forEach(f=>{const a=f.dataset.goalForm;const d=draft(a,a==='create'?null:g);f.dataset.draftKey=d.key;for(const [k,v] of Object.entries(d.values))if(f.elements[k]&&f.elements[k].type!=='file')f.elements[k].value=v;f.oninput=event=>{d.dirty=true;d.changed.add(event.target.name);if(f.elements.files?.files.length)d.pendingFiles=[...f.elements.files.files];for(const [k,v] of new FormData(f))if(typeof v==='string')d.values[k]=v};f.onsubmit=e=>{e.preventDefault();submit(a,g,f,d)}});
  root.querySelector('[data-word-history-select]')?.addEventListener('change',e=>{wordSelections[g.id]=e.target.value;root.querySelector('[data-word-history-results]').innerHTML=wordHistoryResults(g)});
  root.querySelectorAll('button[data-word-retest]').forEach(b=>b.onclick=()=>{if(busy||retry)return;const [word,meaning]=JSON.parse(b.dataset.wordRetest),form=root.querySelector('[data-goal-form="word"]'),d=drafts[form?.dataset.draftKey];if(!form||!d)return;
-  const current=form.elements.word.value.trim();if(d.dirty&&current&&current!==word&&!confirm('表单里已有未保存的单词填写，替换为 '+word+' 吗？'))return;
-  for(const [k,v] of Object.entries({word,meaning,phase:'间隔后复测'})){form.elements[k].value=v;d.values[k]=v;d.changed.add(k)}d.dirty=true;
+  if(d.dirty&&!confirm('表单有未保存的填写。开始 '+word+' 的新一轮核对并清空本轮填写吗？'))return;
+  const values={word,meaning,day:day(),phase:'间隔后复测',material:'',listen_choices:'',note:'',...Object.fromEntries(state.word_check.modes.map(m=>['word_result_'+m.id,'未测']))};
+  for(const [k,v] of Object.entries(values)){form.elements[k].value=v;d.values[k]=v;d.changed.add(k)}d.dirty=true;
   wordSelections[g.id]=b.dataset.wordRetest;const select=root.querySelector('[data-word-history-select]');if(select)select.value=b.dataset.wordRetest;root.querySelector('[data-word-history-results]').innerHTML=wordHistoryResults(g);
   status('已填入 '+word+'，条件为“间隔后复测”；请先准备材料，再核对并记录本次结果。');form.elements.word.focus()});
  root.querySelectorAll('[data-word-listen]').forEach(b=>b.onclick=()=>{if(!busy&&!retry)listen(b.closest('form'),g)});

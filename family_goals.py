@@ -67,7 +67,7 @@ def word_status(checks, today):
         entries = [(c['day'], c['results'].get(mode, '未测'), c['phase']) for c in checks if c['results'].get(mode, '未测') != '未测']
         if not entries: continue
         dated = [e for e in entries if _word_day(e[0])]
-        if not dated:
+        if len(dated) != len(entries):
             directions[mode] = dict(status='日期无法核对', day='', days_since=None, gap_days=None, retest_due=False, verified=False); continue
         latest_day = max(e[0] for e in dated)
         latest = [e for e in dated if e[0] == latest_day]
@@ -75,8 +75,12 @@ def word_status(checks, today):
         gap = (_word_day(latest_day) - _word_day(max(previous))).days if previous else None
         days_since = (today - _word_day(latest_day)).days
         verified = retest = False
-        if len({e[1] for e in latest}) > 1:
+        if days_since < 0:
+            status = '日期在未来，待核对'
+        elif len({e[1] for e in latest}) > 1:
             status = '同日多次结果不一'
+        elif len({e[2] for e in latest}) > 1:
+            status = '同日核对条件不一'
         else:
             result, phase = latest[0][1], latest[0][2]
             if result == '本次独立答对':

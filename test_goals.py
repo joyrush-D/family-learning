@@ -502,6 +502,19 @@ class GoalTests(unittest.TestCase):
         odd=goals.word_history([dict(records[0],day='未知日期')],today=today)['words'][0]['directions']['read_meaning']
         self.assertEqual((odd['status'],odd['retest_due']),('日期无法核对',False))
 
+    def test_word_status_does_not_infer_order_or_future_results(self):
+        rows=[dict(day='2026-09-01',phase='首次核对',results={'hear_meaning':'本次独立答对'}),
+              dict(day='2026-09-10',phase='间隔后复测',results={'hear_meaning':'本次独立答对'})]
+        today=dt.date(2026,9,14)
+        conflicting=rows+[dict(rows[-1],phase='刚练过或看过答案')]
+        for checks in (conflicting,list(reversed(conflicting))):
+            result=goals.word_status(checks,today)['hear_meaning']
+            self.assertEqual((result['status'],result['verified'],result['retest_due']),('同日核对条件不一',False,False))
+        future=goals.word_status(rows,dt.date(2026,9,5))['hear_meaning']
+        self.assertEqual((future['status'],future['verified'],future['retest_due']),('日期在未来，待核对',False,False))
+        unknown=goals.word_status(rows+[dict(rows[-1],day='未知日期')],today)['hear_meaning']
+        self.assertEqual((unknown['status'],unknown['verified']),('日期无法核对',False))
+
     def test_word_history_retains_dates_senses_and_current_corrections_beyond_model_window(self):
         check=dict(word='pen',meaning='写字用的笔',material='虚构词表',phase='首次核对',results=dict(hear_meaning='答错'))
         past=(self.now.date()-dt.timedelta(days=3)).isoformat();today=self.now.date().isoformat()

@@ -107,8 +107,15 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   const candidate=history.locator('[data-word-retest-list] button');assert.equal(await candidate.count(),1);assert.match(await candidate.innerText(),/book · 书 · 看英文 → 选中文 · /);
   assert.equal(await draftWord.inputValue(),'pencil','listing candidates does not touch the unsaved check');
   const tasksBefore=(await(await p.request.get(url+'api/state')).json()).tasks.length;
+  const retestForm=p.locator('[data-goal-form="word"]');
+  if(!await retestForm.locator('details').evaluate(d=>d.open))await retestForm.getByText('只听声音来核对',{exact:true}).click();
+  await retestForm.locator('[name="meaning"]').fill('旧词义');await retestForm.locator('[name="note"]').fill('旧词回答');await retestForm.locator('[name="listen_choices"]').fill('旧选项甲\n旧选项乙');
+  await retestForm.locator('[name="word_result_read_meaning"]').selectOption('本次独立答对');
+  p.once('dialog',d=>d.dismiss());await candidate.click();assert.equal(await draftWord.inputValue(),'pencil');assert.equal(await retestForm.locator('[name="note"]').inputValue(),'旧词回答');
   p.once('dialog',d=>d.accept());await candidate.click();
   assert.equal(await draftWord.inputValue(),'book');assert.equal(await p.locator('[data-goal-form="word"] [name="meaning"]').inputValue(),'书');assert.equal(await p.locator('[data-goal-form="word"] [name="phase"]').inputValue(),'间隔后复测');
+  assert.deepEqual(await retestForm.locator('select[name^="word_result_"]').evaluateAll(xs=>[...new Set(xs.map(x=>x.value))]),['未测']);
+  for(const name of ['note','material','listen_choices'])assert.equal(await retestForm.locator(`[name="${name}"]`).inputValue(),'','old word evidence is not carried into the retest');
   assert.match(await history.locator('[data-word-status]').innerText(),/看英文 → 选中文.*一次独立答对.*可以间隔复测/);
   assert.equal((await(await p.request.get(url+'api/state')).json()).tasks.length,tasksBefore,'no task or plan is created by picking a candidate');
   assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'candidate list fits the viewport');
