@@ -122,6 +122,19 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   assert.equal(await history.locator('button,select').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'candidate buttons remain touchable');
   if(process.env.GOALS_UI_PROOF_DIR)await history.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'word-retest-'+width+'.png')});
   await draftWord.fill('');checks++;
+  // Read-only child profile: aggregates the child's reached-independence directions (and any judgments) with links to the original record.
+  const profSeed=(day,check,suf)=>p.request.post(url+'api/goals/action',{headers:{'X-Family-Token':historyAuth},data:{action:'feedback',id:wordSnapshot.id,request_key:'synthetic-profile-'+width+'-'+suf,day,source:'家长观察',note:'',word_check:check}});
+  const pDay=n=>new Date(Date.now()+8*3600000-n*86400000).toISOString().slice(0,10);
+  assert.equal((await profSeed(pDay(16),{word:'torch',meaning:'手电',material:'虚构',phase:'首次核对',results:{meaning_spelling:'答错'}},'s0')).status(),200);
+  assert.equal((await profSeed(pDay(1),{word:'torch',meaning:'手电',material:'虚构',phase:'间隔后复测',results:{meaning_spelling:'本次独立答对'}},'s1')).status(),200);
+  await reopenWordHistory();
+  const profile=p.locator('[data-child-profile]');assert.equal(await profile.count(),1,'child profile renders for a child with a goal');
+  await profile.locator('summary').click();assert.match(await profile.innerText(),/我们目前怎么理解TA/);
+  assert.match(await profile.locator('[data-profile-reached]').innerText(),/torch · 手电[\s\S]*已达间隔独立/,'reached-independence direction is summarised in the profile');
+  assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'child profile fits the viewport');
+  const profRecord=profile.locator('[data-goal-record]').first();
+  if(await profRecord.count()){await profRecord.click();await p.locator('#recordDialog[open]').waitFor();await p.locator('#recordDialog').evaluate(d=>d.close())}
+  if(process.env.GOALS_UI_PROOF_DIR)await profile.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'child-profile-'+width+'.png')});checks++;
   const edit=p.locator('[data-goal-form="edit"]');await edit.getByLabel('目前实际表现').evaluate(e=>{for(let p=e.parentElement;p;p=p.parentElement)if(p.tagName==='DETAILS')p.open=true});await edit.getByLabel('目前实际表现').fill('家长保留的修改内容');
   const live=await(await p.request.get(url+'api/goals')).json(),target=live.goals.find(g=>g.task_id===original),auth=await(await p.request.get(url+'api/state')).json();const other=await p.request.post(url+'api/goals/action',{headers:{'X-Family-Token':auth.token},data:{action:'edit',id:target.id,expected_version:target.version,request_key:'synthetic-other-parent-'+width,curriculum:'另一位家长刚核对的教材'}});assert.equal(other.status(),200);
   await edit.getByRole('button',{name:'保存背景更正'}).click();await edit.locator('[data-goal-rebase]').waitFor();assert.equal(await edit.getByLabel('目前实际表现').inputValue(),'家长保留的修改内容');await edit.locator('[data-goal-rebase]').click();assert.equal(await edit.getByLabel('年级与教材版本').inputValue(),'另一位家长刚核对的教材');await edit.getByRole('button',{name:'保存背景更正'}).click();await edit.locator('[data-goal-rebase]').waitFor({state:'detached'});checks++;
