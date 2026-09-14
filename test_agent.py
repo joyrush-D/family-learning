@@ -27,6 +27,42 @@ class AgentTests(unittest.TestCase):
         self.source = dict(id='synthetic-group', platform='wechat', child_id='child-1', name='虚构班级', cursor='10', enabled=True)
         self.config()
 
+    def test_exam_result_loop_prompts_after_the_date_until_closed(self):
+        with self.app.connect() as c:
+            for tid,title,due in [('MANUAL-examsynthetic1','英语 Unit1-3 单元测验','2026-02-05'),
+                                  ('MANUAL-examsynthetic2','数学 P45 练习十一','2026-02-05'),
+                                  ('MANUAL-examsynthetic3','语文 单元测验','2026-02-20')]:
+                c.execute("INSERT INTO manual_tasks (id,child,title,due,original_status,source,action) VALUES (?,?,?,?,?,?,?)",
+                          (tid,'child-1',title,due,'待跟进','家长录入','范围本单元'))
+        with patch.object(agent.family_llm,'_chat_json') as model:
+            agent.run_once(self.app,self.now); model.assert_not_called()
+        def exam_items():
+            with self.app.connect() as c:
+                return [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='review' AND title LIKE '记录考试结果%'")]
+        items=exam_items()
+        # Only the past-dated exam prompts; the plain homework and the future exam do not.
+        self.assertEqual([i['child_id'] for i in items],['child-1'])
+        self.assertEqual(len(items),1); item=items[0]
+        self.assertIn('英语 Unit1-3 单元测验',item['title'])
+        self.assertEqual(json.loads(item['plan']).get('exam_result_pending'),True)
+        self.assertIn('task:MANUAL-examsynthetic1',item['evidence'])
+        self.assertEqual(item['due'],'2026-02-05')
+        # Re-running does not duplicate (deterministic, deduped by job).
+        with patch.object(agent.family_llm,'_chat_json') as model:
+            agent.run_once(self.app,self.now+dt.timedelta(minutes=1)); model.assert_not_called()
+        self.assertEqual(len(exam_items()),1)
+        # Once the parent closes the exam item, no new prompt is generated.
+        with self.app.connect() as c:
+            c.execute("INSERT INTO task_updates(id,status,note,updated) VALUES(?,?,?,?)",
+                      ('MANUAL-examsynthetic1','已完成','已记成绩',self.now.isoformat()))
+        with self.app.connect() as c:
+            c.execute("DELETE FROM agent_jobs WHERE id LIKE 'exam-review:%'")  # allow regeneration attempt
+        with patch.object(agent.family_llm,'_chat_json') as model:
+            agent.run_once(self.app,self.now+dt.timedelta(minutes=2)); model.assert_not_called()
+        with self.app.connect() as c:
+            fresh=c.execute("SELECT COUNT(*) FROM agent_items WHERE kind='review' AND title LIKE '记录考试结果%' AND created>?",(item['created'],)).fetchone()[0]
+        self.assertEqual(fresh,0,'a closed exam produces no new result prompt')
+
     def test_course_record_does_not_create_parallel_practice_and_reclassification_retires_pending(self):
         ident=self.record()
         with self.app.connect() as c:

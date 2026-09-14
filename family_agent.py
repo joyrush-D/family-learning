@@ -1120,6 +1120,29 @@ def _lock(path):
             else: fcntl.flock(stream, fcntl.LOCK_UN)
 
 
+def _exam_reviews(store, now):
+    """Deterministic: an exam/测验 item whose date has passed, still open, prompts to record its result.
+
+    Closes when the parent records the score (as a learning record that flows to the subject goal) and
+    marks the item done, or marks 未参加. No model; reuses the review-item mechanism."""
+    import family_agenda
+    today = now.date().isoformat(); out = []
+    with store._db() as c:
+        children = {p['id'] for p in store.profiles(c)}  # app.tasks maps task['child'] to the stable id
+        tasks = store.app.tasks(c)
+        family_agenda.enrich(store.app, c, tasks)
+        for task in tasks:
+            update = c.execute('SELECT status FROM task_updates WHERE id=?', (task['id'],)).fetchone()
+            status = update['status'] if update else task['original_status']
+            if status in store.app.TASK_CLOSED: continue
+            due = (task.get('agenda') or {}).get('due_on', '')
+            if not due or due >= today: continue
+            if not family_agenda.is_exam(task['title'] + ' ' + (task.get('action') or '')): continue
+            if task['child'] not in children: continue
+            out.append(dict(task_id=task['id'], child_id=task['child'], title=task['title'], review_on=due, action=task.get('action') or ''))
+    return out
+
+
 def run_once(app, now=None):
     now = _now(now); store = Store(app.connect, app.profiles, app.DATA, app=app)
     config = store._config()
@@ -1148,6 +1171,19 @@ def run_once(app, now=None):
                         evidence=candidate['evidence'] + [{'ref': 'task:' + candidate['task_id'], 'text': candidate['action']}],
                         due=candidate['review_on'], record_id=candidate['record_id'], task_id=candidate['task_id'],
                         plan={'parent_item_id': candidate['id']})
+                    store._save(key, fp, [item], now); created += 1
+            except (AgentError, ValueError, sqlite3.Error):
+                failed += 1
+            # Exam-result loop: an exam past its date prompts for its result until recorded or 未参加.
+            try:
+                for exam in _exam_reviews(store, now):
+                    key = 'exam-review:' + exam['task_id'] + ':' + exam['review_on']
+                    fp = store._job(key, exam, now)
+                    if not fp: continue
+                    item = dict(child_id=exam['child_id'], kind='review', title='记录考试结果：' + exam['title'],
+                        body='这场测验/考试（' + exam['review_on'] + '）已过。补充结果——分数或哪里错了，作为该科目的学习记录；没参加就在事项里标“未参加/无需处理”。记录后可把这条事项标为已完成。',
+                        evidence=[{'ref': 'task:' + exam['task_id'], 'text': exam['title'] + (chr(10) + exam['action'] if exam['action'] else '')}],
+                        due=exam['review_on'], task_id=exam['task_id'], plan={'exam_result_pending': True})
                     store._save(key, fp, [item], now); created += 1
             except (AgentError, ValueError, sqlite3.Error):
                 failed += 1

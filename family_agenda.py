@@ -76,6 +76,14 @@ def deadline(text,published):
     return next(iter(candidates)) if len(candidates)==1 else ''
 
 
+_EXAM_RE = re.compile(r'测验|测试|考试|单元测|小测|月考|期中|期末|检测|统考|联考|水平测|质检|摸底')
+
+
+def is_exam(text):
+    """A graded test event worth recording a result for; daily 听写/默写 homework is not one."""
+    return bool(_EXAM_RE.search(text or ''))
+
+
 def task_category(title):
     """Classify the requested work, not a school subject mentioned by an admin task."""
     title=re.sub(r'^待核对[：:]?\s*','',title)
