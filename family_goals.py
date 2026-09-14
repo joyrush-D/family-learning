@@ -93,7 +93,7 @@ def word_status(checks, today):
     return directions
 
 
-_PROGRESS_RANK = {'答错':0,'未作答':0,'最近答错':0,'最近未作答':0,'提示后答对':1,'本次独立答对':2,'一次独立答对':2,'间隔后独立答对':3}
+_PROGRESS_RANK = {'答错':0,'最近答错':0,'提示后答对':1,'本次独立答对':2,'一次独立答对':2,'间隔后独立答对':2}
 
 
 def _direction_progress(items, mode, latest, today):
@@ -108,7 +108,9 @@ def _direction_progress(items, mode, latest, today):
     if not byday: return None
     days = sorted(byday)
     first_day = days[0]
-    first = '同日多次结果不一' if len(byday[first_day]) > 1 else next(iter(byday[first_day]))
+    first_checks = [c for c in items if c['day'] == first_day]
+    first_state = word_status(first_checks, today)[mode]['status']
+    first = next(iter(byday[first_day])) if first_state in _PROGRESS_RANK else first_state
     reached = bool(latest.get('verified'))
     first_rank, latest_rank = _PROGRESS_RANK.get(first), _PROGRESS_RANK.get(latest.get('status'))
     if len(days) < 2:
@@ -210,8 +212,9 @@ mastery_check同时给出家长可直接记录的原始反馈：题目或材料�
 对照反馈和当前方案选择核实、尝试、维持、调整或暂停。旧判断标为依据已变化时只能作为历史，不能当成当前事实。
 why_now明确说明哪条实际反馈使哪一步需要改变、保持或暂缓；尚无反馈时说明先核对什么，不编造进步。已有计划时action给出本轮完整可执行方案，保留仍适用的部分，并明确本轮调整。
 核对原因时先提出可区分不同原因的小尝试；一次测验表现只支持本次范围的暂时判断，不能说一次达标就代表长期掌握。首次核对的review_on建议在本次日期后7天内，属于待审核回看日。Agent新拟的数字标准为试行建议，老师原文的数字和条件保持原意。只输出schema允许字段；形成建议不修改正式计划，所有执行与变化由家长确认。证据不足时提出具体核对建议，不能返回null或把找原因的工作退给家长。
-progress是系统按规则算出的每个词各方向的进展轨迹（first_status到latest_status、trend、reached_independent），只统计有日期、可比较的核对；reached_independent仅指“间隔后复测且满7天的独立答对”。current_plan_confirmed_on是家长上次确认现计划的日期。据此形成效果闭环，作为选下一步的主要依据：current_plan针对的方向若在确认后trend为持平或退步、仍停在提示后答对或答错、或reached_independent为false且已到可复测时间，说明这条方法尚未见效，应更换方法、材料或测法，不要原样重复上一步；已reached_independent的方向可推进到未覆盖方向或提高难度，不在该方向反复练。只依据progress里可核对的变化，用“观察到”表述，不断言是这条方法造成的因果，也只在同一个词同一方向内比较；无可比复测时如实说“待复测”。这套“期望→执行→结果→按进展调整”的闭环同样适用于其它有结果的事项（如考试成绩、老师评测），当输入提供其结果时按同样方式核对是否达成再定下一步。
-核对原因时不因progress改善就停止观察，也不因一次改善认定长期掌握。
+progress是本轮已选记录中同词、同目标义、同方向的首末对照，不是连续趋势或方法效果判定；未作答、日期/条件不清不能作为升降依据。reached_independent仅表示最近记录满足“间隔后复测且距前次核对满7天的独立答对”；两次都独立答对的表现记持平，间隔证据另行保留，不代表长期掌握。
+current_plan_confirmed_on是现计划确认日，不是已经执行的证明。先核对反馈是否明确执行了该方法、发生日期是否在确认后，再结合可比作答评估；同日先后不明、只有确认前资料、未复测或未提供执行反馈时保持效果未知，不据全历史trend断言现方法有效或无效。已有执行和可比反馈仍困难时提出换方法/材料/测法供家长审核；已有间隔独立表现可减少重复、关注未覆盖方向，但不保证永久掌握或强制提高难度。不到间隔或reached_independent为false本身不表示方法失败。建议依据引用本轮evidence，资料不足就给一个可执行的小核对，不编造因果；考试和老师评测也须依据实际结果，正式计划仍由家长确认。
+
 '''
 SCHEMA['properties']['proposal'] = PROPOSAL
 
@@ -451,7 +454,7 @@ class Store:
         school_all, school_missing = self._school_context(c, row)
         teacher_all = self._teacher_requirements(c, row['child_id'], fields['subject'])
         day_context = self._day_context(c, row, owners, now or agent._now())
-        evidence_hash = agent._hash({'assessment_policy': 4, 'fields': fields, 'records': records, 'missing': missing,
+        evidence_hash = agent._hash({'assessment_policy': 5, 'fields': fields, 'records': records, 'missing': missing,
                                     **({'course_records':courses} if courses else {}),
                                     **({'teacher_requirements':teacher_all} if teacher_all else {}),
                                     **({'day_context':day_context} if day_context else {}),
@@ -720,10 +723,10 @@ class Store:
         previous=ctx['plan'].get('approved') if prior_available else None
         # Effect loop: deterministic per-direction progress + when the current method was confirmed.
         progress=[dict(word=w['word'],meaning=w['meaning'],direction=WORD_MODES[m][0],**{k:pr[k] for k in ('first_day','first_status','latest_day','latest_status','reached_independent','trend')})
-                  for w in word_history(ctx['records'],now.date())['words'] for m,pr in w.get('progress',{}).items()]
+                  for w in word_history(ctx['input_records'],now.date())['words'] for m,pr in w.get('progress',{}).items()]
         confirmed_on=(ctx['plan'].get('approved_changed_at') or '')[:10]
         content=dict(as_of=now.date().isoformat(),as_of_time=now.strftime('%H:%M'),day_context=ctx['day_context'],profile=ctx['profile'],evidence=ctx['evidence'],current_plan=previous,
-                     progress=progress,current_plan_confirmed_on=confirmed_on if previous else '',
+                     progress=progress,progress_scope='仅本轮已选的至多24条记录；首末对照不代表计划确认后的趋势，省略数见omitted_records',current_plan_confirmed_on=confirmed_on if previous else '',
                      learning_goal={k:v for k,v in ctx['fields'].items() if k!='baseline'},
                      previous_assessment=ctx['plan'].get('assessment') if prior_available else None,previous_hypotheses=ctx['plan'].get('hypotheses',[]) if prior_available else [],previous_assessment_stale=ctx['plan'].get('approved_evidence_hash')!=ctx['evidence_hash'],
                      previous_context_unavailable=not prior_available,

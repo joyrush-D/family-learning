@@ -479,6 +479,28 @@ class GoalTests(unittest.TestCase):
         self.assertEqual(rows[('please','看中文 → 拼英文')]['reached_independent'],False)
         self.assertRegex(self.last_input['current_plan_confirmed_on'],r'^\d{4}-\d{2}-\d{2}$')
 
+    def test_progress_keeps_nonanswers_conditions_and_interval_evidence_separate(self):
+        today=self.now.date();ago=lambda n:(today-dt.timedelta(days=n)).isoformat();mode='meaning_spelling'
+        def progress(rows):
+            items=[dict(day=d,phase=p,results={mode:r}) for d,p,r in rows]
+            return goals._direction_progress(items,mode,goals.word_status(items,today)[mode],today)
+        first=(ago(10),'首次核对','本次独立答对');last=(ago(1),'间隔后复测','本次独立答对')
+        value=progress([first,last]);self.assertEqual(value['trend'],'持平');self.assertTrue(value['reached_independent'])
+        self.assertEqual(progress([(ago(10),'首次核对','未作答'),(ago(1),'首次核对','提示后答对')])['trend'],'证据不足')
+        self.assertEqual(progress([first,(ago(10),'间隔后复测','本次独立答对'),(ago(1),'首次核对','答错')])['trend'],'证据不足')
+        self.assertEqual(progress([first,(ago(1),'首次核对','答错')])['trend'],'退步')
+        self.assertEqual(progress([first,((today+dt.timedelta(days=1)).isoformat(),'间隔后复测','本次独立答对')])['trend'],'证据不足')
+
+    def test_model_progress_reuses_the_existing_record_window(self):
+        for i in range(30):
+            self.action('feedback',id=self.ident,day=(self.now.date()-dt.timedelta(days=30-i)).isoformat(),source='家长观察',note='',
+                        word_check=dict(word='syntheticword'+str(i),meaning='虚构目标义',material='虚构词表',phase='首次核对',results={'meaning_spelling':'提示后答对'}))
+        self.evaluate()
+        included={goals.word_history([json.loads(e['text'])],self.now.date())['words'][0]['word'] for e in self.last_input['evidence'] if e['ref'].startswith('record:')}
+        self.assertEqual({r['word'] for r in self.last_input['progress']},included)
+        self.assertLessEqual(len(included),24);self.assertGreater(self.last_input['omitted_records'],0)
+        self.assertIn('首末对照',self.last_input['progress_scope'])
+
     def test_word_status_and_interval_retest_candidates_follow_stated_rules(self):
         today=self.now.date();ago=lambda n:(today-dt.timedelta(days=n)).isoformat()
         check=lambda day,word_check:self.action('feedback',id=self.ident,day=day,source='家长观察',note='',word_check=word_check)
