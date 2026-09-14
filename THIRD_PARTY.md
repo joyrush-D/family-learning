@@ -106,6 +106,10 @@ QQLore根目录与ntdb_unwrap扩展分别标示MIT；其余依赖和取钥资料
 
 当前客户端仍为腾讯原始签名，启用Hardened Runtime且没有Get task allow；[Apple调试权限说明](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.cs.debugger)说明普通调试器仍需目标程序允许调试。找到函数不能跳过这一条件，也不将通用文件访问权限当作解决方案。保持日常QQ不变，继续核验一次性取钥方式的影响与可恢复性；既有官方机器人、具名窗口保底及Windows CLI候选不撤销。自写离线诊断仅用于候选核验，QQ二进制、反汇编和任何密钥均未加入公开分发。
 
+2026-09-14新增Mac CLI软件：`family_qq_local.py`参考[qqcli-rs固定提交](https://github.com/2233admin/qqcli-rs/tree/1ba82dddee83bb4cbd6e8c2e1f0e57c2abd9de52)的init/doctor/sessions/history/search与JSON流程，独立实现，不是上游Rust包的Mac发行版。上游MIT许可证已核对（Copyright 2024 Curry），未复制其Rust代码。其部分群字段定义与QQLore不同，未照搬dataline/备用正文猜测。仅按QQLore上列固定版本的公开群字段、Protobuf字段与加密参数实现必要查询；没有复制其TypeScript代码或协议文件，不分发任何第三方原生库。SQLCipher与ntdb_unwrap仍须另行构建并遵守各自许可。
+
+CLI每次在独立子进程加载库，强制只读，限定显式配置的群；保留64位消息ID、同秒分页和一页一页的文字搜索。未读图片/文件/引用与未知结构保持缺口，不猜正文、不读取附带路径、不展开其他聊天。诊断不输出密钥或内容，配置和密钥文件须为本用户600权限的普通文件。虚构QQ字段/加密/WAL检查通过，实际账号配置只核对到缺少密钥。取钥、QQ实际字段、迟到历史/撤回/轮转、原件、桌面共存和完整采集器对接均未验收，输出固定标记collector_compatible=false；不可将此脚本写入生产qq_cli。新加坡实际Haiku4.5完成限定代码复核；实测与结论分别留证，不把只读查询组件通过写成QQ同步恢复。
+
 ## QQ官方机器人候选：普通群消息
 
 2026-09-14核验[腾讯官方Node SDK 1.0.4](https://github.com/tencent-connect/qqbot-nodejs/tree/ca55d9c395b582b7fcfad0ec27209c35dd04e0b3)：[事件解析代码](https://github.com/tencent-connect/qqbot-nodejs/blob/ca55d9c395b582b7fcfad0ec27209c35dd04e0b3/src/protocol/gateway/event-dispatcher.ts)同时处理`GROUP_MESSAGE_CREATE`和`GROUP_AT_MESSAGE_CREATE`。在隔离目录执行该版本的实际解析代码，虚构的未@群消息可保留文字、发言人、原消息ID、时间和附件信息；不同群及引用消息保持各自标识。解析器本身不做持久去重。这是协议代码验证，没有连接机器人、读取家庭群或验证附件下载。

@@ -198,6 +198,40 @@ python3 family_collect.py --config private/collector.json --once
 
 首次接入须核对CLI与指定群的授权配置，然后明确执行一次 `python3 family_collect.py --config private/collector.json --bootstrap-qq`。会话已捕获但尚未验证读取时，允许进行有界原生读取尝试；明确离线时不读取，状态接口响应不计为采集成功。该操作只处理已授权且游标为空的QQ来源，把实际首个原生页和对应游标一起提交；空页不建立游标，也不触及微信或已有QQ游标。结果中的 `earlier_history_verified: false` 表示此前历史尚未覆盖；不能直接填一个最新ID来跳过未读记录。后续使用普通采集模式，只有后台确认接收才推进。更换采集程序须受控重新加载运行进程，旧Python进程不会自动加载新增分页逻辑；仅更改CLI路径不能让旧解析器接受多页结果。跨页方向与真实QQ版本兼容性需在部署机实际核验，合成测试不能代替接入验收。
 
+### Mac QQ本地数据库CLI（实验版）
+
+`family_qq_local.py` 是参考qqcli-rs流程的独立Mac工具，不是其官方Mac发行包。只支持明确配置的群，当前字段候选为 `group_msg_table` 数字列；不自动搜索账号或扫描全部聊天。标准Python负责配置、查询和JSON，SQLCipher及NTQQ文件头扩展仅在一次性子进程加载，不影响Family Agent的SQLite。无截图、QQ登录、消息发送或模型调用。
+
+需要Python 3.10+、与本机架构一致的SQLCipher动态库、ntdb_unwrap扩展，以及与目标数据库匹配的密钥。开发机已从THIRD_PARTY.md所列固定版本构建并验证Mac ARM组件；本项目不附带第三方二进制，Intel Mac尚未实测。构建SQLCipher 4.19.0时使用其官方configure/make，参数为 `--with-tempstore=yes --disable-readline`，CFLAGS为 `-O2 -DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_CC -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown`，LDFLAGS为 `-framework Security -framework CoreFoundation`；产物为构建目录的 `libsqlite3.dylib`。在固定ntdb_unwrap源码目录运行 `RUSTFLAGS="-C panic=abort -C link-arg=-lSystem" cargo build --release -p sqlite_ext_ntqq_db --features _cdylib`，产物为 `target/release/libsqlite_ext_ntqq_db.dylib`。构建需要Xcode命令行工具、Rust及SQLCipher构建依赖；不是已经完成的新系统自动安装器。
+
+将已有密钥在本机写入私有文件，权限设为600，不粘贴到命令参数、日志或公开配置。QQ取钥是另外的运行期步骤；当前官方签名不允许普通调试附加，CLI不会擅自改签名、重启或重新登录QQ。以下仅使用虚构路径和群号，替换为自己明确授权的值：
+
+```sh
+python3 family_qq_local.py --config private/qq-local.json init \
+  --database /absolute/path/nt_msg.db \
+  --sqlcipher /absolute/path/libsqlite3.dylib \
+  --vfs /absolute/path/libsqlite_ext_ntqq_db.dylib \
+  --key-file /absolute/private/qq-database.key --group 10002
+python3 family_qq_local.py --config private/qq-local.json doctor
+python3 family_qq_local.py --config private/qq-local.json sessions
+python3 family_qq_local.py --config private/qq-local.json history 10002 --since 2026-09-01 --limit 50
+python3 family_qq_local.py --config private/qq-local.json search 10002 听写 --since 2026-09-01
+```
+
+配置与密钥都须为本用户所有、600权限、非符号链接的普通文件；`init`拒绝覆盖已有配置。可重复传入 `--group` 明确允许的群，须与家庭网页来源一致。所有操作默认输出JSON，`--json`可放在命令前。操作成功退出0，配置或读取失败退出3；命令语法错误由参数解析器退出2。`init`成功只表示配置已保存；`doctor`明确显示key_required、依赖缺失、读取错误或结构不支持，成功只验证结构可读，不认证真实消息。诊断不输出密钥、正文或路径。
+
+历史按时间与原64位ID升序，使用返回的 `next_cursor` 传入 `--after` 续读，日期按北京时间解释。搜索每次扫描最多200条授权群记录；即使本页无匹配，`has_more=true`仍需续读。不建立额外搜索数据库。较晚补到本地的旧消息、原消息撤回和数据库轮转尚未支持持续追溯，不能把到达本地库末尾理解为云端全历史已读。
+
+图片、文件、引用和未知Protobuf结构标为未读；只识别确定的文字片段，不读取消息内的路径、不下载原件或展开其他群的引用。结果固定报告 `collector_compatible=false`，**不要填入现有collector.json的qq_cli字段**；实际QQ密钥/结构/自然新增/原件及正常桌面使用验收通过后，才适配原采集器的连续性核对和入库。现有失败状态、旧游标、桌面QQ保持。
+
+可运行独立检查：
+
+```sh
+python3 test_qq_local.py --sqlcipher /absolute/path/libsqlite3.dylib --vfs /absolute/path/libsqlite_ext_ntqq_db.dylib
+```
+
+只使用临时虚构加密记录，覆盖指定群、64位ID、分页/搜索、错误拒绝和已提交WAL；不带两项原生参数时仅检查解析器，并明确报告native_checks=not_run。主文件/WAL读取前后散列不变不表示共享内存侧文件不变、崩溃恢复或真实QQ共存通过。
+
 ### Mac QQ 实验性只读适配器（桌面共存未通过）
 
 当前同账号试用出现桌面QQ退出及操作受影响，已撤回日常采集部署。下面仅记录实验接口配置，不是桌面共存安装建议。读取器会独立登录QQ；只读HTTP请求、不修改QQ文件不能保证官方客户端会话不受影响。在有新兼容性证据前，不应给该读取器配置自动启动或自动重新登录。已有冲突实例应先停止读取器并撤销自启、停用QQ来源；保留消息与成功游标，恢复官方QQ日常使用，再核对下一步。
