@@ -18,7 +18,8 @@ import time
 from urllib.parse import urlsplit
 
 from family_backup import no_links
-from family_access import validate_base_url, make_config
+from family_access import validate_base_url, make_config, tls_entry
+import family_tls
 from family_collect import app_url, Client, CollectError
 
 
@@ -63,6 +64,11 @@ def plan(root, url='http://127.0.0.1:8765', wechat_cli=None, qq_cli=None, mobile
     mobile = validate_base_url(mobile_url).rstrip('/') if mobile_url is not None else None
     if mobile and urlsplit(mobile).scheme == 'http' and (urlsplit(mobile).port or 80) != (urlsplit(url).port or 80):
         raise ValueError('局域网地址的端口须与本机应用端口一致')
+    tls_hosts = [urlsplit(mobile).hostname.lower()] if mobile and tls_entry(mobile) else []
+    if tls_hosts and (urlsplit(mobile).port or 443) == (urlsplit(url).port or 80):
+        raise ValueError('局域网 HTTPS 端口须与本机应用 HTTP 端口不同，例如 https://192.168.50.2:8443')
+    if tls_hosts:
+        family_tls.openssl_binary()
     child_path, child_public = _mobile_paths(mobile) if mobile else ('', '')
     python = str(Path(sys.executable).resolve(strict=True))
     wechat = cli_path(wechat_cli or shutil.which('wechat-cli'), executable=True)
@@ -106,7 +112,7 @@ def plan(root, url='http://127.0.0.1:8765', wechat_cli=None, qq_cli=None, mobile
         if kind == 'collector' and not enabled:
             plist['Disabled'] = True
         files['LaunchAgents/' + plist['Label'] + '.plist'] = plistlib.dumps(plist)
-    return {'root': root, 'url': url, 'mobile_url': mobile, 'collector_enabled': enabled, 'files': files}
+    return {'root': root, 'url': url, 'mobile_url': mobile, 'collector_enabled': enabled, 'files': files, 'tls_hosts': tls_hosts}
 
 
 def exclusive_write(path, content):
@@ -126,6 +132,8 @@ def output(plan, directory):
         files.update(_mobile_files(plan['mobile_url']))
     for name, content in files.items():
         exclusive_write(directory / name, content)
+    if plan['tls_hosts']:
+        family_tls.issue(directory / 'private', plan['tls_hosts'])
     return directory
 
 
@@ -152,7 +160,7 @@ def install(plan):
     private = no_links(plan['root'] / 'private')
     targets = {private / 'collector.json': plan['files']['private/collector.json']}
     targets.update({agents / Path(name).name: content for name, content in plan['files'].items() if name.startswith('LaunchAgents/')})
-    for name in ('private/access.json', 'private/手机访问凭据.json'):
+    for name in ('private/access.json', 'private/手机访问凭据.json', *(('private/tls',) if plan['tls_hosts'] else ())):
         target = plan['root'] / name
         if target.exists() or target.is_symlink():
             raise ValueError('已有手机访问配置；不会覆盖，请先核对原安装')
@@ -169,11 +177,15 @@ def install(plan):
             raise ValueError('已有家庭服务运行；不会替换或卸载')
         if result.returncode not in (3, 113):
             raise ValueError('无法确认旧服务状态，未进行安装')
-    with socket.socket() as probe:
-        try:
-            probe.bind(('127.0.0.1', urlsplit(plan['url']).port or 80))
-        except OSError:
-            raise ValueError('应用端口已占用或不可用；不会替换已有应用或隧道') from None
+    ports = [('127.0.0.1', urlsplit(plan['url']).port or 80)]
+    if plan['tls_hosts']:
+        ports.append(('0.0.0.0', urlsplit(plan['mobile_url']).port or 443))
+    for address in ports:
+        with socket.socket() as probe:
+            try:
+                probe.bind(address)
+            except OSError:
+                raise ValueError('应用端口已占用或不可用；不会替换已有应用或隧道') from None
     written, attempted = [], []
     try:
         if plan['mobile_url']:
@@ -181,6 +193,9 @@ def install(plan):
         for target, content in targets.items():
             exclusive_write(target, content)
             written.append(target)
+        if plan['tls_hosts']:
+            family_tls.issue(private, plan['tls_hosts'])
+            written.extend(family_tls.paths(private).values())
         for kind in ('web', 'agent', 'collector', 'backup'):
             if kind == 'collector' and not plan['collector_enabled']:
                 continue
@@ -200,8 +215,12 @@ def install(plan):
         if rollback_failed:
             raise ValueError('新服务加载失败且撤销未确认；保留本次配置，请核对 launchctl 状态，未处理其他旧服务') from error
         for target in written:
-            if not target.is_symlink() and target.read_bytes() == targets[target]:
+            if not target.is_symlink() and (target not in targets or target.read_bytes() == targets[target]):
                 target.unlink()
+        if plan['tls_hosts']:
+            tls_dir = private / family_tls.DIRECTORY
+            if tls_dir.is_dir() and not any(tls_dir.iterdir()):
+                tls_dir.rmdir()
         raise
     return agents
 
@@ -215,7 +234,7 @@ def main(argv=None):
     parser.add_argument('--wechat-cli', help='已安装可执行文件；默认用 which 探测 wechat-cli')
     parser.add_argument('--qq-cli', help='已安装的兼容 QQ 只读 Python 脚本')
     parser.add_argument('--app-url', default='http://127.0.0.1:8765')
-    parser.add_argument('--mobile-url', help='已配置的HTTPS手机入口；只生成认证配置，不安装或操作入口服务')
+    parser.add_argument('--mobile-url', help='手机入口：https://内网IP:8443 由本应用签发家庭证书并直接提供 HTTPS；http://内网IP:端口 为局域网 HTTP；其他 HTTPS 域名只生成认证配置')
     args = parser.parse_args(argv)
     try:
         prepared = plan(args.root, args.app_url, args.wechat_cli, args.qq_cli, args.mobile_url)
@@ -229,13 +248,21 @@ def main(argv=None):
         print('备份在登录加载时及每天本地时间02:00检查；当天已有有效备份就跳过，不删除旧备份。')
         print('采集进程保持运行，每轮结束后等 5 分钟再检查；CLI 路径存在不代表登录或消息已读取。' if prepared['collector_enabled'] else
               '消息采集待配置：没有可用 CLI，collector 未加载；网页、手动记录和 Agent 服务仍可用。')
-        if prepared['mobile_url']:
+        if prepared['tls_hosts']:
+            print((f'家庭局域网 HTTPS 入口 {prepared["mobile_url"]} 的认证配置与家庭证书已生成：手机首次访问先安装并信任 private/tls/ca.crt（可隔空投送，或在手机打开该地址下的 /family-ca.crt），再登录。'
+                   if args.install or args.output_dir else
+                   f'已指定家庭局域网 HTTPS 入口 {prepared["mobile_url"]}；当前仅查看计划，不生成凭据或证书。'))
+        elif prepared['mobile_url'] and urlsplit(prepared['mobile_url']).scheme == 'http':
+            print((f'家庭局域网入口 {prepared["mobile_url"]} 的认证配置已生成；浏览器录音与手机日历订阅需要 HTTPS，可改用 https://内网IP:8443 形式重新配置。'
+                   if args.install or args.output_dir else
+                   f'已指定家庭局域网入口 {prepared["mobile_url"]}；当前仅查看计划，不生成认证凭据。'))
+        elif prepared['mobile_url']:
             print((f'手机入口 {prepared["mobile_url"]} 的认证配置已生成；请另行接通Tailscale Serve或其他HTTPS认证入口，URL不代表已经可访问。'
                    if args.install or args.output_dir else
                    f'已指定手机入口 {prepared["mobile_url"]}；当前仅查看计划，不生成认证凭据，仍需另行接通Tailscale Serve或其他HTTPS认证入口。'))
         print('登录后运行；Mac 休眠、关机或退出登录时不能持续工作。未安装或登录任何第三方应用。')
         return 0
-    except (OSError, ValueError, CollectError, subprocess.TimeoutExpired) as error:
+    except (OSError, ValueError, CollectError, family_tls.TLSError, subprocess.TimeoutExpired) as error:
         print('配置未完成：' + str(error), file=sys.stderr)
         return 1
 

@@ -163,3 +163,7 @@
 !/test_homework_report_ui.cjs
 
 !/test_calendar_occurrence_ui.cjs
+
+!/family_tls.py
+!/test_tls.py
+!/test_lan_https_ui.cjs

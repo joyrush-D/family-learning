@@ -149,6 +149,7 @@ with tempfile.TemporaryDirectory() as tmp:
                  'child-access.js':b'const syntheticAccess=syntheticCalendar+1;',
                  'learning.js':b'const syntheticLearning=syntheticAccess+1;',
                  'study.js':b'const syntheticStudy=syntheticLearning+1;',
+                 'homework-input.js':b'const syntheticHomeworkInput=syntheticStudy+1;',
                  'settings.js':b'const syntheticSettings=1;',
                  'guided.js':b'const syntheticGuided=syntheticLearning+1;',
                  'teachers.js':b'const syntheticTeachers=1;',

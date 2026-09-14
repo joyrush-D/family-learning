@@ -1,4 +1,4 @@
-"""Parent login over HTTPS or explicitly configured home LAN HTTP."""
+"""Parent login over HTTPS (proxy or the app's own home-network certificate) or explicitly configured home LAN HTTP."""
 import base64
 import binascii
 import hashlib
@@ -41,6 +41,21 @@ def lan_address(value):
         return False
 
 
+def _lan_host(host):
+    return bool(host) and (lan_address(host) or host.lower().endswith('.local'))
+
+
+def lan_entry(base_url):
+    """A validated base URL served directly on the home network (HTTP or the app's own HTTPS)."""
+    parsed = urlsplit(base_url)
+    return parsed.scheme in ('http', 'https') and _lan_host(parsed.hostname)
+
+
+def tls_entry(base_url):
+    """A home-network HTTPS entry: the application terminates TLS with the family certificate."""
+    return lan_entry(base_url) and urlsplit(base_url).scheme == 'https'
+
+
 class AccessError(ValueError):
     """Safe configuration or authentication input error."""
 
@@ -59,7 +74,7 @@ def validate_base_url(value):
     except ValueError:
         raise AccessError('访问配置不正确') from None
     host = parsed.hostname
-    lan = parsed.scheme == 'http' and host and (lan_address(host) or host.lower().endswith('.local'))
+    lan = parsed.scheme in ('http', 'https') and _lan_host(host)
     if (parsed.scheme != 'https' and not lan or not host or parsed.username is not None or parsed.password is not None or
             parsed.query or parsed.fragment or port is not None and not 1 <= port <= 65535 or
             host.lower() in {'localhost', 'localhost.localdomain'}):

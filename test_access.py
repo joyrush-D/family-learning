@@ -42,11 +42,17 @@ class AccessTests(unittest.TestCase):
             with self.subTest(password=password):
                 with self.assertRaises(access.AccessError): access.make_config('https://family.example.ts.net', 'parent', password)
         with self.assertRaises(access.AccessError): access.make_config('https://family.example.ts.net', 'bad:user', self.password)
-        for url in ('http://192.168.50.2:8765', 'http://10.20.30.40', 'http://172.16.0.2:8765/', 'http://family-box.local:8765'):
+        for url in ('http://192.168.50.2:8765', 'http://10.20.30.40', 'http://172.16.0.2:8765/', 'http://family-box.local:8765',
+                    'https://192.168.50.2:8443', 'https://10.20.30.40', 'https://family-box.local:8443/'):
             self.assertEqual(access.validate_base_url(url), url)
         for url in ('http://8.8.8.8', 'http://127.0.0.1', 'http://169.254.1.1', 'http://172.32.0.1',
-                    'http://192.168.50.2/family', 'http://family-box.local.evil.invalid', 'http://-bad.local'):
+                    'http://192.168.50.2/family', 'http://family-box.local.evil.invalid', 'http://-bad.local',
+                    'https://8.8.8.8', 'https://192.168.50.2:8443/family', 'https://169.254.1.1'):
             with self.assertRaises(access.AccessError): access.validate_base_url(url)
+        # The app's own home-network HTTPS is a LAN entry; proxy HTTPS domains and loopback are not.
+        for url, lan, tls in (('https://192.168.50.2:8443', True, True), ('https://family-box.local', True, True),
+                              ('http://192.168.50.2:8765', True, False), ('https://family.example.ts.net/family', False, False)):
+            self.assertEqual((access.lan_entry(url), access.tls_entry(url)), (lan, tls), url)
 
     def test_bad_config_is_safe_and_permissions_or_symlink_are_rejected(self):
         bad = dict(self.config, password_hash='not-a-secret-hash')

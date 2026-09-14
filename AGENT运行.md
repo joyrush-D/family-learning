@@ -90,7 +90,28 @@ python3 configure_mac.py --install
 
 已有家庭只修改原本地`private/access.json`的`base_url`，保留账号、盐和密码哈希；将原网页服务的`FAMILY_CHILD_PUBLIC_URL`、`FAMILY_CHILD_COOKIE_PATH`改为对应`/child/`入口、`FAMILY_CHILD_SECURE`设为`0`，然后受控重载网页服务。先备份这些配置和服务文件，核对实际局域网登录与记录后再停止本应用旧外部转发，失败恢复配置和代码，不能用旧库覆盖家庭记录。原Agent、采集器和打印桥仍通过127.0.0.1访问，无需改动。
 
-浏览器登录、重新登录保留填写、显式重试、退出和保存后重开已用虚构家庭核验；HTTP缺少randomUUID时使用浏览器getRandomValues生成保存编号，避免设置、作业与反馈失效。真实iPhone仍须在家中Wi-Fi实际使用核对。Mac休眠、关机或断网时手机无法访问；IP由路由器改变后需同步访问地址，可在路由器给家庭电脑保留固定地址。HTTP页面不能直接使用浏览器麦克风和当前HTTPS日历订阅入口，可用键盘语音输入和文件上传；这些能力的局域网HTTPS方案保留待验收。
+浏览器登录、重新登录保留填写、显式重试、退出和保存后重开已用虚构家庭核验；HTTP缺少randomUUID时使用浏览器getRandomValues生成保存编号，避免设置、作业与反馈失效。真实iPhone仍须在家中Wi-Fi实际使用核对。Mac休眠、关机或断网时手机无法访问；IP由路由器改变后需同步访问地址，可在路由器给家庭电脑保留固定地址。HTTP页面不能直接使用浏览器麦克风和手机日历订阅，可用键盘语音输入和文件上传；需要这两项时按下一节改用家庭证书的局域网HTTPS。
+
+### 局域网 HTTPS：家庭证书（main 增量，真实 iPhone 待验收）
+
+浏览器录音和 iPhone 日历订阅要求 HTTPS。本应用可以自己在家庭电脑上提供 HTTPS：用系统自带的 `openssl` 生成一份只属于这个家庭的私有 CA 和一张包含家庭电脑内网 IP（可加 `.local` 名称）的服务器证书，网页进程在第二个端口直接终止 TLS。不申请公网证书、不上传任何内容、不依赖 Tailscale 或 Joy；Agent、采集器和打印桥仍走本机 `http://127.0.0.1:端口`。证书目录 `private/tls/` 为 `0700`，四个文件 `0600`，不进入家庭数据备份，换机后重新签发。
+
+新安装：`python3 configure_mac.py --install --mobile-url https://192.168.50.2:8443`。IP 换成本机实际内网地址；HTTPS 端口须与 `--app-url` 的 HTTP 端口不同。安装器生成 `private/access.json`、`private/手机访问凭据.json` 与 `private/tls/`，网页服务同时监听 `127.0.0.1:8765`（HTTP）和 `0.0.0.0:8443`（HTTPS）。已有 `private/tls` 或访问配置时拒绝安装；安装失败会撤销本次证书。
+
+已有家庭（不重装）：
+
+```sh
+python3 family_tls.py --data private issue --host 192.168.50.2
+python3 family_tls.py --data private status
+```
+
+然后把 `private/access.json` 的 `base_url` 改为 `https://192.168.50.2:8443`（保留账号、盐和密码哈希；改地址会让家长旧会话失效，需重新登录），网页服务的 `FAMILY_CHILD_PUBLIC_URL` 改为 `https://192.168.50.2:8443/child/`、`FAMILY_CHILD_SECURE` 设为 `1`，再受控重载网页服务。先备份这些配置，核对 `private/web.stdout.log` 出现“家庭局域网 HTTPS”并在手机实际登录后，才停用原 HTTP 局域网入口；失败恢复配置和代码，不动数据库。
+
+手机首次使用：把 `private/tls/ca.crt` 隔空投送到 iPhone，或在手机 Safari 打开 `https://192.168.50.2:8443/family-ca.crt`（该地址无需登录，只返回公开的 CA 证书）。iPhone 依次进入“设置 → 已下载描述文件 → 安装”，再到“通用 → 关于本机 → 证书信任设置”为该证书打开完全信任；Mac 上可双击导入钥匙串并设为始终信任。之后打开家庭地址登录，录音、日历“同步到手机”的 HTTPS 订阅地址和孩子入口都在同一证书下。安装的是家庭自己的根证书，只应装在家里的设备上；不要把 `ca.key` 或 `server.key` 发给任何人。
+
+续签与换 IP：服务器证书有效期 820 天（Apple 对用户安装的根证书签发的服务器证书限制为 825 天内）；到期或路由器分配了新 IP 时，再次运行 `issue --host 新IP` 会沿用原 CA 重新签发，手机无需再装证书；同时把 `access.json` 的地址改为新 IP 并重载网页。删除 `ca.key`/`ca.crt` 后重新签发会生成新的 CA，所有手机都要重装。启动时证书不含 `base_url` 的主机名只提示，不阻止运行；缺少证书或 HTTPS 端口与 HTTP 端口相同则网页拒绝启动，日志说明原因。
+
+本轮验收：`python3 test_tls.py` 覆盖签发/续签/权限/只读 CA、Python 客户端按主机名验证、应用 TLS 监听的登录、Secure Cookie、日历 Basic 认证、转发头与未知 Host 拒绝、明文或停滞连接不阻塞其他连接、启动拒绝；`node test_lan_https_ui.cjs` 在 390/1440 像素通过家庭证书完成登录页证书提示、浏览器实际录音上传、日历订阅地址、重开后原件仍在与退出。另用公开源码在本机隔离目录以真实内网 IP 完成 `--install`，网页进程被终止后由系统恢复且 HTTPS 仍在，备份包不含证书，测试服务已撤除。真实 iPhone 安装证书、录音和日历订阅仍待家长在家中验证。
 
 ## 单机手机 HTTPS 入口
 

@@ -52,7 +52,7 @@ QQ保底新增实验性窗口片段接入：具名应用在实际获权及明确
 
 ### 在父母的 iPhone 查看安排
 
-从已登录的 HTTPS 家庭入口打开“日历 → 同步到手机”，复制订阅地址。在 iPhone“日历 → 日历列表 → 添加日历 → 添加订阅日历”中粘贴；父母各自添加一次。按提示填写家庭网页的服务账号与密码，浏览器登录不能代替日历认证；这里不需要向本应用提供 Apple 账号。操作路径见 [Apple 订阅说明](https://support.apple.com/zh-cn/102301)。本地 HTTP 地址不提供手机分享。
+从已登录的 HTTPS 家庭入口（Tailscale、代理或家庭证书的局域网 HTTPS）打开“日历 → 同步到手机”，复制订阅地址。在 iPhone“日历 → 日历列表 → 添加日历 → 添加订阅日历”中粘贴；父母各自添加一次。按提示填写家庭网页的服务账号与密码，浏览器登录不能代替日历认证；这里不需要向本应用提供 Apple 账号。操作路径见 [Apple 订阅说明](https://support.apple.com/zh-cn/102301)。本地 HTTP 地址不提供手机分享；局域网 HTTPS 需先在手机安装家庭证书，见 [AGENT运行.md](AGENT运行.md#局域网-https家庭证书main-增量真实-iphone-待验收)。
 
 订阅只读，新增、改期和取消仍在本系统完成；刷新由手机控制，不承诺即时提醒。仅订阅事件标题、参加孩子、日期时间、状态及地点，不包含原始消息、备注、成绩或附件；暂定和时间待定会标明，取消或明确不参加会反映在订阅中。课表节次暂不输出为手机事件，也不自动添加闹铃。夫妻不同 Apple 账号分别订阅，同一账号是否同步至其他设备由其 iCloud 设置决定。
 
@@ -250,7 +250,7 @@ Python 3.10及以上，基础后台无需第三方Python依赖。在应用目录
 
 已有 Python 和本应用源码后，在应用目录运行 `python3 configure_mac.py` 只看配置计划；需要应用随当前用户登录运行时，执行 `python3 configure_mac.py --install`。该命令仅安装本应用的网页、每分钟 Agent 检查、保持运行并每轮间隔 5 分钟采集的三个登录服务，并创建私有采集配置；不安装或登录微信、QQ、CLI或模型。未发现消息 CLI 时不加载采集服务，仍可打开网页填写家庭资料和手动记录。
 
-只在家中使用时，手机和电脑连接同一家庭局域网，直接访问家庭电脑即可，不需要服务器转发或公网域名。新安装可用 `python3 configure_mac.py --install --mobile-url http://192.168.50.2:8765`；示例IP须换成家庭电脑的实际内网地址，端口须与本机应用一致。安装器生成私有家长账号和口令，保持登录180天；孩子仍用独立邀请。已有家庭按[局域网直连步骤](AGENT运行.md#仅本机局域网访问)修改原部署，不重新安装或迁移数据。此能力为alpha.5之后的main增量。需要HTTPS时仍可按下一节配置，但家庭局域网使用不以它为前提。
+只在家中使用时，手机和电脑连接同一家庭局域网，直接访问家庭电脑即可，不需要服务器转发或公网域名。新安装可用 `python3 configure_mac.py --install --mobile-url http://192.168.50.2:8765`；示例IP须换成家庭电脑的实际内网地址，端口须与本机应用一致。要在家里用浏览器录音和 iPhone 日历订阅，改用 `--mobile-url https://192.168.50.2:8443`：安装器生成家庭证书，手机装一次证书后同一账号登录。安装器生成私有家长账号和口令，保持登录180天；孩子仍用独立邀请。已有家庭按[局域网直连步骤](AGENT运行.md#仅本机局域网访问)修改原部署，不重新安装或迁移数据。此能力为alpha.5之后的main增量。需要HTTPS时仍可按下一节配置，但家庭局域网使用不以它为前提。
 
 若刚才在终端手动运行了本应用的 `python3 app.py`，先在原终端按 Ctrl+C 停止它，再安装登录服务，避免占用同一端口。也可以直接安装服务，无需先手动启动；已有家庭服务按升级流程维护，不重复安装。
 
@@ -266,7 +266,7 @@ Python 3.10及以上，基础后台无需第三方Python依赖。在应用目录
 
 来源整理按独立会话进行：一个孩子可以对应多个已授权群，各群分别维护采集游标、最近成功读取时间和内容缺口。同一通知跨群出现时，应合并事项并保留多个来源；主要群用于突出展示，不得因此遗漏其他授权群。班级群信息读取不依赖微信对话机器人，未读附件和未覆盖历史继续单独记录。
 
-未配置局域网入口时，默认仅监听本机回环地址；显式配置内网HTTP入口后开放局域网监听，仍核验家长账号，拒绝公网来源和代理转发。局域网HTTP的浏览器内录音和手机日历订阅入口仍受HTTPS要求限制，可先使用手机键盘语音输入、上传照片或已有录音。可选单机手机HTTPS访问使用 Tailscale Serve 提供家庭私网内的 HTTPS，应用通过私有 access.json 核验家长口令，孩子另用自己的邀请；手机须能访问该 tailnet。旧的 FAMILY_HOST/FAMILY_USER 身份头模式在未配置 access.json 时保持兼容，新家庭按上面的单机入口步骤配置。本项目不启用 Funnel。
+未配置局域网入口时，默认仅监听本机回环地址；显式配置内网HTTP入口后开放局域网监听，仍核验家长账号，拒绝公网来源和代理转发。局域网HTTP的浏览器内录音和手机日历订阅入口受HTTPS要求限制，可先使用手机键盘语音输入、上传照片或已有录音；需要这两项时改用 `--mobile-url https://内网IP:8443`，应用用系统 `openssl` 签发家庭自己的证书并在第二个端口直接提供 HTTPS，手机安装一次 `private/tls/ca.crt`（或打开该地址下的 `/family-ca.crt`）后录音与日历订阅即可使用，步骤见[局域网 HTTPS](AGENT运行.md#局域网-https家庭证书main-增量真实-iphone-待验收)。可选单机手机HTTPS访问使用 Tailscale Serve 提供家庭私网内的 HTTPS，应用通过私有 access.json 核验家长口令，孩子另用自己的邀请；手机须能访问该 tailnet。旧的 FAMILY_HOST/FAMILY_USER 身份头模式在未配置 access.json 时保持兼容，新家庭按上面的单机入口步骤配置。本项目不启用 Funnel。
 
 已支持网页上传照片、PDF、办公文件、文本与语音原件，单文件最多20MiB；可关联成长记录，未关联文件保留在待整理资料。支持浏览器录音（需HTTPS或localhost及麦克风权限），上传失败可重试。配置模型后，文字与JPEG/PNG/WebP图片可生成待核对草稿；每次最多3张且合计不超过20MiB。草稿不会自动入档，需填入表单、人工纠正再保存。配置语音服务后，录音可转为可编辑文字，再整理草稿。PDF、办公文件和HEIC目前只保留原件，尚未自动解析。可用手机键盘语音输入文字后整理；教材支持仍为规划。
 
@@ -364,7 +364,7 @@ Python 3.10及以上，基础后台无需第三方Python依赖。在应用目录
 
 基础后台无需第三方Python依赖，Python 3.10及以上。`python3 demo.py --port 8766`启动临时的虚构家庭，适合体验上传、记录和反馈；退出后演示数据清除，请勿用于保存真实资料。首次正式使用可直接运行`python3 app.py`并在网页初始化，也可先用`python3 init_family.py`交互初始化。私有SQLite保存网页档案与记录，已有家庭Markdown继续保留。模型尚未配置时，原件与手动记录仍可保存。
 
-检查：`python3 test_app.py`、`python3 test_upload.py`、`python3 test_followup.py`、`python3 test_llm.py`、`python3 test_query.py`、`python3 test_reading.py`、`python3 test_backup.py`、`python3 test_init_family.py`、`python3 test_growth.py`、`python3 test_print.py`、`python3 test_print_http.py`、`node test_print_ui.js`、`node test_reading_ui.js`。所有检查使用隔离的虚构资料；模型HTTP检查使用本地模拟响应，不上传家庭资料。
+检查：`python3 test_app.py`、`python3 test_tls.py`、`node test_lan_https_ui.cjs`、`python3 test_upload.py`、`python3 test_followup.py`、`python3 test_llm.py`、`python3 test_query.py`、`python3 test_reading.py`、`python3 test_backup.py`、`python3 test_init_family.py`、`python3 test_growth.py`、`python3 test_print.py`、`python3 test_print_http.py`、`node test_print_ui.js`、`node test_reading_ui.js`。所有检查使用隔离的虚构资料；模型HTTP检查使用本地模拟响应，不上传家庭资料。
 
 网页主程序由后台按固定顺序合并为`app.bundle.js`，运行在独立函数作用域内，避免与同一页面中的全局变量冲突。3D资源独立异步加载；首次读取12秒超时会提示重试，程序未能加载时也保留原生页面重载按钮与20秒超时提示。`node test_startup_ui.cjs`使用已安装的Playwright和隔离演示进程，检查全局变量冲突、资源卡住、读取超时、重载恢复及桌面和窄屏日历；可用`PLAYWRIGHT_MODULE`指定模块位置、`PLAYWRIGHT_CHANNEL=chrome`使用已安装的Chrome。
 

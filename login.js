@@ -7,6 +7,9 @@
   const canLogin=['https:','http:'].includes(location.protocol);
   submit.disabled=!canLogin;
   if(!canLogin)status.textContent='请从配置的家庭入口打开此页后登录。';
+  // The app's own home-network HTTPS: phones install the family CA once, then recording and calendar subscriptions work.
+  const host=location.hostname,homeHost=/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)\d+\.\d+$/.test(host)||host.endsWith('.local');
+  document.getElementById('certificateHint').hidden=!(location.protocol==='https:'&&homeHost);
   show.addEventListener('click',()=>{
     const visible=password.type==='password';password.type=visible?'text':'password';
     show.textContent=visible?'隐藏':'显示';show.setAttribute('aria-pressed',String(visible));

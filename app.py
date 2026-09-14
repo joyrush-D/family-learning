@@ -26,6 +26,7 @@ import family_study
 import family_settings
 import family_teachers
 import family_access
+import family_tls
 import family_task_focus
 import family_agenda
 import family_guided
@@ -33,6 +34,8 @@ import family_goals
 from types import SimpleNamespace
 from contextlib import nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer as _ThreadingHTTPServer
+import ssl
+import threading
 from socketserver import TCPServer
 from urllib.parse import urlparse, urlsplit, unquote, quote, parse_qs
 
@@ -44,11 +47,30 @@ class ThreadingHTTPServer(_ThreadingHTTPServer):
         self.server_name, self.server_port = self.server_address[:2]
 
 
+class TLSServer(ThreadingHTTPServer):
+    """Home-network HTTPS listener sharing Handler; the handshake runs in the connection thread."""
+    def __init__(self, address, handler, context):
+        super().__init__(address, handler)
+        self.context = context
+    def get_request(self):
+        connection, address = self.socket.accept()
+        return self.context.wrap_socket(connection, server_side=True, do_handshake_on_connect=False), address
+    def finish_request(self, request, client_address):
+        try:
+            request.settimeout(15)
+            request.do_handshake()
+            request.settimeout(None)
+        except (OSError, ssl.SSLError):
+            return  # Plain HTTP or an untrusting client; other connections keep being served.
+        super().finish_request(request, client_address)
+
+
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get('FAMILY_DATA', ROOT / 'private'))
 DATA.mkdir(parents=True, exist_ok=True)
 DB = DATA / 'family.sqlite3'
 TOKEN = secrets.token_urlsafe(32)
+CA_ROUTE = '/family-ca.crt'
 CATEGORIES = ['学习进展', '课程进度', '成绩', '兴趣', '情绪', '家长观察']
 MAX_UPLOAD = 20 * 1024 * 1024
 ASSISTANCE = ('', '独立尝试', '少量提示', '逐步帮助', '看过讲解或答案')
@@ -1388,12 +1410,13 @@ class Handler(BaseHTTPRequestHandler):
         if config is None:
             if host in ('127.0.0.1','localhost'): return deny(403,'转发访问需要配置家庭认证')
             return True if self.local_host() else deny(403,'访问地址未授权')
-        if urlsplit(config['base_url']).scheme == 'http':
+        if family_access.lan_entry(config['base_url']):
             if forwarded or not (family_access.lan_address(self.client_address[0]) or self.client_address[0] in ('127.0.0.1','::1')):
                 return deny(403,'此入口仅供家庭局域网直接访问')
         allowed={'127.0.0.1','localhost',urlsplit(config['base_url']).hostname,os.environ.get('FAMILY_HOST','')}
         if host not in allowed: return deny(403,'访问地址未授权')
         path=urlparse(self.path).path
+        if path==CA_ROUTE and family_access.tls_entry(config['base_url']): return True  # Public CA certificate for phone trust.
         if path=='/child' or path.startswith('/child/'):
             return True  # The child router requires its own invite/session; no parent identity is inherited.
         try:
@@ -1413,6 +1436,10 @@ class Handler(BaseHTTPRequestHandler):
         return bool(secret) and secrets.compare_digest(header.encode(),('Bearer '+secret).encode())
     def do_GET(self):
         if not self.authorize_request(): return
+        if urlparse(self.path).path==CA_ROUTE:
+            certificate=family_tls.ca_certificate(DATA)
+            if certificate is None: return self.reply(404,{'error':'尚未签发家庭证书'})
+            return self.reply(200,certificate,'application/x-x509-ca-cert',disposition='attachment; filename="family-ca.crt"')
         path=urlparse(self.path).path
         if family_child.dispatch_get(SimpleNamespace(**globals()),self,path): return
         try:
@@ -1623,6 +1650,17 @@ if __name__=='__main__':
     prepare_assets()
     port=int(os.environ.get('PORT','8765'))
     access_config=family_access.read_config(DATA)
-    bind='0.0.0.0' if access_config and urlsplit(access_config['base_url']).scheme=='http' else '127.0.0.1'
-    print('家庭学习助手 http://127.0.0.1:'+str(port),flush=True)
+    entry=access_config['base_url'] if access_config else ''
+    secure=None
+    if entry and family_access.tls_entry(entry):
+        tls_port=urlsplit(entry).port or 443
+        if tls_port==port: raise SystemExit('家庭局域网 HTTPS 端口须与本机应用端口不同：'+entry)
+        try: context=family_tls.server_context(DATA)
+        except family_tls.TLSError as error: raise SystemExit('家庭局域网 HTTPS 未启动：'+str(error))
+        if not family_tls.covers(DATA,urlsplit(entry).hostname):
+            print('注意：家庭证书未包含 '+urlsplit(entry).hostname+'，手机会提示证书不匹配；请重新签发',flush=True)
+        secure=TLSServer(('0.0.0.0',tls_port),Handler,context)
+        threading.Thread(target=secure.serve_forever,daemon=True).start()
+    bind='0.0.0.0' if entry and family_access.lan_entry(entry) and not secure else '127.0.0.1'
+    print('家庭学习助手 http://127.0.0.1:'+str(port)+('；家庭局域网 HTTPS '+entry if secure else ''),flush=True)
     ThreadingHTTPServer((bind,port),Handler).serve_forever()

@@ -232,7 +232,48 @@ def check():
             assert len([args for args in mobile_calls if args[1] == 'bootout']) == 2
             assert not (root / 'private/access.json').exists()
             assert not (root / 'private/手机访问凭据.json').exists()
-    print('PASS: Mac setup dry run, XML paths, permissions, missing CLI, old-service refusal and isolated install rollback')
+            # Home-network HTTPS: the app terminates TLS itself with a family certificate on a second port.
+            assert mobile['tls_hosts'] == [] and lan['tls_hosts'] == []
+            secure = setup.plan(root, mobile_url='https://192.168.50.2:8443')
+            assert secure['tls_hosts'] == ['192.168.50.2'] and secure['mobile_url'] == 'https://192.168.50.2:8443'
+            secure_web = plistlib.loads(secure['files']['LaunchAgents/' + setup.LABEL + '.web.plist'])
+            assert secure_web['EnvironmentVariables']['FAMILY_CHILD_SECURE'] == '1'
+            assert secure_web['EnvironmentVariables']['FAMILY_CHILD_PUBLIC_URL'] == 'https://192.168.50.2:8443/child/'
+            assert secure_web['EnvironmentVariables']['PORT'] == '8765'
+            assert setup.plan(root, mobile_url='https://Family-Box.local:8443')['tls_hosts'] == ['family-box.local']
+            refuses(lambda: setup.plan(root, mobile_url='https://192.168.50.2:8765'))
+            refuses(lambda: setup.plan(root, mobile_url='https://192.168.50.2:8443/family'))
+            with patch.object(setup.family_tls, 'openssl_binary', side_effect=setup.family_tls.TLSError('no openssl')):
+                refuses(lambda: setup.plan(root, mobile_url='https://192.168.50.2:8443'))
+            with contextlib.redirect_stdout(io.StringIO()) as printed, patch.object(setup.secrets, 'token_urlsafe', side_effect=AssertionError('No credential in dry run')):
+                assert setup.main(['--root', str(root), '--mobile-url', 'https://192.168.50.2:8443']) == 0
+            assert '仅查看计划' in printed.getvalue() and not (root / 'private/tls').exists()
+            secure_out = setup.output(secure, base / 'lan-https-output')
+            for name in ('ca.key', 'ca.crt', 'server.key', 'server.crt'):
+                assert stat.S_IMODE((secure_out / 'private/tls' / name).stat().st_mode) == 0o600
+            assert stat.S_IMODE((secure_out / 'private/tls').stat().st_mode) == 0o700
+            assert setup.family_tls.status(secure_out / 'private')['hosts'] == ['192.168.50.2']
+            assert json.loads((secure_out / 'private/access.json').read_text())['base_url'] == 'https://192.168.50.2:8443'
+            (root / 'private/tls').mkdir(parents=True)
+            with patch.object(setup.subprocess, 'run', side_effect=AssertionError('Reject before launching')):
+                refuses(lambda: setup.install(secure))
+            (root / 'private/tls').rmdir()
+            secure_calls, real_run = [], setup.subprocess.run
+            def fails_secure(args, **kwargs):
+                if 'openssl' in str(args[0]):
+                    return real_run(args, **kwargs)
+                secure_calls.append(args)
+                result = launchctl(args, **kwargs)
+                if args[1] == 'bootstrap' and args[-1].endswith('.agent.plist'):
+                    result.returncode = 5
+                return result
+            with patch.object(setup.subprocess, 'run', side_effect=fails_secure), patch.object(setup.socket, 'socket'), \
+                    patch.object(setup.sys, 'platform', 'darwin'), patch.object(setup.os, 'getuid', return_value=501), \
+                    patch.object(Path, 'home', return_value=fake_home), patch.object(setup, 'wait_for_web'):
+                refuses(lambda: setup.install(secure))
+            assert len([args for args in secure_calls if args[1] == 'bootstrap']) == 2
+            assert not (root / 'private/access.json').exists() and not (root / 'private/tls').exists(), 'rollback removes the issued certificate'
+    print('PASS: Mac setup dry run, XML paths, permissions, missing CLI, old-service refusal, LAN HTTPS certificate and isolated install rollback')
 
 
 if __name__ == '__main__':
