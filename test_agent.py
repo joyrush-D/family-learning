@@ -27,6 +27,50 @@ class AgentTests(unittest.TestCase):
         self.source = dict(id='synthetic-group', platform='wechat', child_id='child-1', name='虚构班级', cursor='10', enabled=True)
         self.config()
 
+    def test_exam_result_loop_uses_real_task_flow_and_retires_closed_or_rescheduled_reminders(self):
+        exam = self.app.new_task(dict(child='示例甲', title='英语 Unit1-3 单元测验', due='2026-02-05'))
+        for title, due in [('数学练习', '2026-02-05'), ('语文单元测验', '2026-02-20'),
+                ('英语测试', '2026-02-10'), ('打印英语考试卷', '2026-02-05'),
+                ('订正测验', '2026-02-05'), ('核酸检测', '2026-02-05'),
+                ('期末复习', '2026-02-05'), ('英语考试', '无明确截止')]:
+            self.app.new_task(dict(child='示例乙', title=title, due=due, action='为英语考试做准备'))
+        self.app.new_task(dict(child='示例乙', title='参加英语考试', due='2026-02-05', box='wish'))
+        def items():
+            with self.app.connect() as c:
+                return [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='review' AND title LIKE '记录考试结果%'")]
+        def tick():
+            # Separate existing record analysis from the deterministic exam reminder.
+            with patch.object(agent, '_plan_learning', return_value=None), patch.object(agent.family_llm, '_chat_json') as model:
+                agent.run_once(self.app, self.now); model.assert_not_called()
+            self.now += dt.timedelta(minutes=1)
+            return [i for i in items() if i['state'] == 'pending']
+        self.assertEqual(len(tick()), 1)
+        item = items()[0]
+        self.assertEqual(item['child_id'], 'child-1')
+        self.assertIn('task:' + exam['id'], item['evidence'])
+        self.assertTrue(json.loads(item['plan'])['exam_result_pending'])
+        tick(); self.assertEqual(len(items()), 1)
+        # Saving a result is evidence, not a parent's completion decision.
+        self.app.save_record(dict(child='示例甲', day='2026-02-05', category='成绩', subject='英语',
+            title='虚构考试结果', note='拼写需要核对', source='事项:' + exam['id'], score=60, total=100))
+        self.assertEqual(len(tick()), 1)
+        for closed in ('已完成', '不参加', '不适用'):
+            self.app.save_task(dict(id=exam['id'], status=closed, note='虚构家长确认'))
+            self.assertEqual(tick(), [])
+            self.assertFalse(any(i['state']=='pending' for i in items()))
+            self.app.save_task(dict(id=exam['id'], status='待跟进', note='虚构家长重新打开'))
+            self.assertEqual(len(tick()), 1)
+        # Rescheduling retires the old reminder; a later past date gets one new reminder.
+        with self.app.connect() as c:
+            c.execute("UPDATE manual_tasks SET due='2026-02-20' WHERE id=?", (exam['id'],))
+        self.assertEqual(tick(), [])
+        with self.app.connect() as c:
+            c.execute("UPDATE manual_tasks SET due='2026-02-06' WHERE id=?", (exam['id'],))
+        pending=tick(); self.assertEqual(len(pending), 1); self.assertEqual(pending[0]['due'], '2026-02-06')
+        self.store.act(dict(id=pending[0]['id'], action='dismiss'))
+        self.assertEqual(tick(), [], 'acknowledged reminder is not regenerated without a change')
+
+
     def test_course_record_does_not_create_parallel_practice_and_reclassification_retires_pending(self):
         ident=self.record()
         with self.app.connect() as c:

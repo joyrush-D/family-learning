@@ -1120,6 +1120,30 @@ def _lock(path):
             else: fcntl.flock(stream, fcntl.LOCK_UN)
 
 
+def _exam_reviews(store, now):
+    """Review dated test events until the parent closes them; no model or inferred results."""
+    import family_agenda
+    today = now.date().isoformat(); out = []
+    with store._db() as c:
+        children = store.app.profile_state(c)[1]
+        updates = {r['id']: dict(r) for r in c.execute('SELECT * FROM task_updates')}
+        for task in store.app.tasks(c):
+            update = updates.get(task['id'], {})
+            if store.app.task_status(task, update.get('status')) in store.app.TASK_CLOSED: continue
+            if (task.get('focus') or {}).get('box') == 'wish': continue
+            due = (task.get('agenda') or {}).get('due_on', '')
+            if not due or due >= today or not family_agenda.is_exam(task['title']): continue
+            child_id = children.get(task['child'])
+            if not child_id: continue
+            out.append(dict(task_id=task['id'], child_id=child_id, title=task['title'], review_on=due,
+                action=task.get('action') or '', task_version=update.get('updated', '')))
+        active = {(item['task_id'], item['review_on']) for item in out}
+        for row in c.execute("SELECT id,task_id,due,plan FROM agent_items WHERE kind='review' AND state='pending'").fetchall():
+            if json.loads(row['plan']).get('exam_result_pending') and (row['task_id'], row['due']) not in active:
+                c.execute("UPDATE agent_items SET state='superseded',updated=? WHERE id=?", (now.isoformat(), row['id']))
+    return out
+
+
 def run_once(app, now=None):
     now = _now(now); store = Store(app.connect, app.profiles, app.DATA, app=app)
     config = store._config()
@@ -1151,6 +1175,19 @@ def run_once(app, now=None):
                     store._save(key, fp, [item], now); created += 1
             except (AgentError, ValueError, sqlite3.Error):
                 failed += 1
+            # Exam-result loop: result recording and parent closure remain separate actions.
+            try:
+                for exam in _exam_reviews(store, now):
+                    key = 'exam-review:' + exam['task_id'] + ':' + exam['review_on']
+                    fp = store._job(key, exam, now)
+                    if not fp: continue
+                    item = dict(child_id=exam['child_id'], kind='review', title='记录考试结果：' + exam['title'],
+                        body='这场测验/考试（' + exam['review_on'] + '）已过。补充结果——分数或哪里错了，保存为学习记录后，请在事项里确认完成；没参加可选择“不参加 / 不用做”。保存记录本身不会关闭事项。',
+                        evidence=[{'ref': 'task:' + exam['task_id'], 'text': exam['title'] + (chr(10) + exam['action'] if exam['action'] else '')}],
+                        due=exam['review_on'], task_id=exam['task_id'], plan={'exam_result_pending': True})
+                    store._save(key, fp, [item], now); created += 1
+            except (AgentError, ValueError, sqlite3.Error):
+                failed += 1
             # Due notices are deterministic and remain useful without a model.
             try:
                 candidates, errors = family_review.read_candidates(Path(app.ROOT), Path(app.DATA), now.date().isoformat())
@@ -1175,10 +1212,8 @@ def run_once(app, now=None):
                         record_id=candidate['feedback'][-1]['id'] if candidate['feedback'] else None)
                     store._save(key, fp, [item], now); created += 1
                 with store._db() as c:
-                    for row in c.execute("SELECT DISTINCT job_id,plan FROM agent_items WHERE kind='review' AND state='pending'").fetchall():
-                        try: planned_review = bool(json.loads(row['plan']).get('parent_item_id'))
-                        except (TypeError, ValueError, AttributeError): planned_review = False
-                        if not planned_review and row['job_id'] not in keys:
+                    for row in c.execute("SELECT DISTINCT job_id FROM agent_items WHERE kind='review' AND state='pending' AND job_id LIKE 'review:%'").fetchall():
+                        if row['job_id'] not in keys:
                             c.execute("UPDATE agent_items SET state='superseded',updated=? WHERE job_id=? AND state='pending'", (now.isoformat(), row['job_id']))
             # ponytail: at most three model calls per tick; increase only if measured backlog needs it.
             budget = 3
