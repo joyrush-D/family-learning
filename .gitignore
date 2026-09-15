@@ -92,6 +92,8 @@
 !/goals.js
 !/test_goals.py
 !/test_goals_ui.cjs
+!/family_learner_memory.py
+!/test_learner_memory.py
 !/family_media.py
 !/test_media.py
 !/family_collect.py

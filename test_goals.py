@@ -37,6 +37,17 @@ class GoalTests(unittest.TestCase):
     def feedback(self,note='家长转述孩子：会认单词，但说不出为什么。',**obj):
         return self.action('feedback',id=self.ident,day=self.now.date().isoformat(),source='家长转述孩子',note=note,**obj)
 
+    def test_confirming_a_plan_persists_the_judgment_to_learner_memory(self):
+        import family_learner_memory as lm
+        pending=self.evaluate();self.approve(pending)
+        with self.store.agent._db() as c:card=lm.learner_card(c,'child-1')
+        self.assertEqual(len(card),1)
+        self.assertEqual(card[0]['goal_id'],self.ident)
+        self.assertEqual(card[0]['assessment'],'现有反馈不足以确定知识缺口。')
+        self.assertEqual([h['reason'] for h in card[0]['hypotheses']],['句子中时间线索理解可能不牢'])
+        # A confirmation records once; nothing else here re-approves, so history stays two rows.
+        with self.store.agent._db() as c:self.assertEqual(len(lm.timeline(c,'child-1',self.ident)),2)
+
     def test_teacher_requirements_reach_goals_and_withdrawal_invalidates_only_suggestions(self):
         teachers=self.app.teacher_store()
         profile=dict(display_name='虚构英语教师',subject='英语',child_ids=['child-1'],version=0,request_key='synthetic-goal-teacher')

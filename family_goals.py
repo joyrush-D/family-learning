@@ -9,6 +9,7 @@ import family_llm
 import family_study
 import family_calendar
 import family_teachers
+import family_learner_memory
 
 PLAN_ADJUSTMENT_NOTE = '家长确认学习计划调整，原版本保留在学习目标。'
 TASK_STATUS_NOTES = (agent.SCHOOL_CANCEL_NOTE, PLAN_ADJUSTMENT_NOTE, '家长通过清单勾选确认此事项已完成。', '家长撤销完成，继续跟进。')
@@ -643,6 +644,13 @@ class Store:
                     plan.update(approved=approved, assessment=proposal.get('assessment',''), hypotheses=proposal.get('hypotheses',[]),
                                 approved_evidence=proposal.get('evidence',[]),
                                 approved_evidence_hash=ctx['evidence_hash'], approved_changed_at=now.isoformat())
+                    # Persist the confirmed judgment to correctable long-term memory (R26), so a later
+                    # re-evaluation reads what we already believed instead of cold-starting from 24 records.
+                    family_learner_memory.record_confirmation(
+                        c, now, child_id=row['child_id'], goal_id=ident,
+                        subject=ctx['fields']['subject'], title=approved.get('title', ''),
+                        confirmed_on=now.date().isoformat(), assessment=proposal.get('assessment', ''),
+                        hypotheses=proposal.get('hypotheses', []), evidence_hash=ctx['evidence_hash'])
                     c.execute("UPDATE agent_items SET state='accepted',task_id=? WHERE id=?", (task_id, proposal_id))
                 else:
                     c.execute("UPDATE agent_items SET state='dismissed' WHERE id=?", (proposal_id,))
