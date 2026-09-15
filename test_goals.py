@@ -48,6 +48,19 @@ class GoalTests(unittest.TestCase):
         # A confirmation records once; nothing else here re-approves, so history stays two rows.
         with self.store.agent._db() as c:self.assertEqual(len(lm.timeline(c,'child-1',self.ident)),2)
 
+    def test_prior_confirmations_reach_re_evaluation_only_after_supersession(self):
+        p1=self.evaluate();self.approve(p1)                       # judgment recorded, still current
+        self.feedback(note='家长转述：按上次方法做了，仍卡在同一处。')  # evidence changes
+        self.evaluate()                                            # current judgment not yet superseded
+        self.assertEqual(self.last_input['prior_confirmations'],[])
+        self.approve()                                             # new confirmation supersedes the first
+        self.feedback(note='家长转述：又核对了一次。')
+        self.evaluate()                                            # the first confirmation is now prior history
+        prior=self.last_input['prior_confirmations']
+        self.assertEqual(len(prior),1)
+        self.assertEqual(prior[0]['assessment'],'现有反馈不足以确定知识缺口。')
+        self.assertEqual(prior[0]['confirmed_on'],self.now.date().isoformat())
+
     def test_teacher_requirements_reach_goals_and_withdrawal_invalidates_only_suggestions(self):
         teachers=self.app.teacher_store()
         profile=dict(display_name='虚构英语教师',subject='英语',child_ids=['child-1'],version=0,request_key='synthetic-goal-teacher')

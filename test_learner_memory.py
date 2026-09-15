@@ -87,6 +87,20 @@ class LearnerMemoryTest(unittest.TestCase):
         self.assertEqual(lm.learner_card(c, 'child-1'), [])
         self.assertEqual(lm.timeline(c, 'child-1'), [])
 
+    def test_prior_confirmations_returns_only_superseded_events_newest_first(self):
+        c = conn()
+        confirm(c, NOW1, evidence='h1', assessment='第一次判断', hypotheses=HYP[:1])
+        # No supersession yet: the current confirmation is not a "prior" one.
+        self.assertEqual(lm.prior_confirmations(c, 'child-1', 'goal-1'), [])
+        confirm(c, NOW2, evidence='h2', assessment='第二次判断', hypotheses=HYP)
+        prior = lm.prior_confirmations(c, 'child-1', 'goal-1')
+        self.assertEqual(len(prior), 1)  # the first confirmation is now superseded history
+        self.assertEqual(prior[0]['assessment'], '第一次判断')
+        self.assertEqual(prior[0]['confirmed_on'], '2026-09-10')
+        self.assertEqual([h['reason'] for h in prior[0]['hypotheses']], ['ea/ee 形音对应不稳定'])
+        # The current (valid) judgment is excluded from prior_confirmations.
+        self.assertEqual(lm.learner_card(c, 'child-1')[0]['assessment'], '第二次判断')
+
     def test_manual_plan_placeholder_is_recorded_as_confirmed_state(self):
         c = conn()
         n = confirm(c, NOW1, evidence='m1', assessment='家长制定的计划，尚无本轮助手评估。', hypotheses=[])

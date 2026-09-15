@@ -137,6 +137,29 @@ def learner_card(c, child_id, *, limit_goals=12):
     return ordered[:limit_goals]
 
 
+def prior_confirmations(c, child_id, goal_id, *, limit=5):
+    """Past (already superseded) confirmed judgments for one goal, newest first, as events.
+
+    The current confirmation (invalid_from IS NULL) is excluded; this shows how the belief
+    evolved before now so a re-evaluation can see what was already tried and refined instead
+    of cold-starting. Each event groups the rows written in one confirmation (shared valid_from).
+    """
+    if not _has_table(c):
+        return []
+    rows = [dict(r) for r in c.execute(
+        "SELECT * FROM learner_memory WHERE child_id=? AND goal_id=? AND invalid_from IS NOT NULL ORDER BY id ASC",
+        (child_id, goal_id)).fetchall()]
+    events = {}
+    for r in rows:
+        e = events.setdefault(r['valid_from'], dict(confirmed_on=r['confirmed_on'], assessment='', hypotheses=[]))
+        if r['kind'] == 'assessment' and not e['assessment']:
+            e['assessment'] = r['text']
+        elif r['kind'] == 'hypothesis':
+            e['hypotheses'].append(dict(reason=r['text'], status=r['status']))
+    ordered = sorted(events.values(), key=lambda e: e['confirmed_on'], reverse=True)
+    return ordered[:limit]
+
+
 def timeline(c, child_id, goal_id=None):
     """Full readable history for audit, including superseded judgments, newest first."""
     if not _has_table(c):
