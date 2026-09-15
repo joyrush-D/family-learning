@@ -124,6 +124,17 @@ ${esc(d.values.action)}</p><button type="button" data-goal-clear-draft="${esc(d.
   }
   const byDay=a=>a.sort((x,y)=>String(y.r.day).localeCompare(String(x.r.day))).slice(0,6);
   const methods=goals.filter(g=>g.current_plan).map(g=>({g,plan:g.current_plan}));
+  // Exam/teacher outcomes recorded AFTER a judgment was confirmed (not among its reviewed refs) close the loop: recheck the judgment.
+  const outcomeOf=r=>(r.score!=null&&r.score!=='')||(r.total!=null&&r.total!=='')||r.category==='成绩'||['老师反馈','平台报告'].includes((r.source||'').split(' · 学习目标')[0])||['订正','复测'].includes(r.followup_kind);
+  const recheck=[];
+  for(const g of goals){
+   if(!g.current_plan)continue;
+   const reviewed=new Set((g.reviewed_evidence||[]).map(e=>e.ref));
+   const outs=(g.records||[]).filter(r=>r.id!=null&&outcomeOf(r)&&!reviewed.has('record:'+r.id)).sort((a,b)=>String(b.day).localeCompare(String(a.day)));
+   if(outs.length)recheck.push({g,r:outs[0]});
+  }
+  const recheckIds=new Set(recheck.map(x=>x.r.id));
+  const factsShown=facts.filter(x=>!recheckIds.has(x.r.id));
   if(!judgments.length&&!reached.length&&!attention.length&&!facts.length&&!reports.length&&!methods.length)return '';
   const goalLink=g=>`<button type="button" data-goal-select="${esc(g.id)}">查看目标：${esc(g.title)}</button>${g.lifecycle==='paused'?' · 已暂缓':''}`;
   const recExcerpt=r=>`${esc(r.title||'记录')}${r.score!=null&&r.score!==''?' · '+esc(r.score)+(r.total?'/'+esc(r.total):''):''}`+(r.note?' — '+esc(String(r.note).split('\n')[0].slice(0,60)):'');
@@ -132,11 +143,12 @@ ${esc(d.values.action)}</p><button type="button" data-goal-clear-draft="${esc(d.
   return `<details class="card" data-child-profile><summary>孩子画像 · 我们目前怎么理解TA</summary>
    <p class="small">按目标和日期汇总已保存的证据；同词在不同目标下可能不同，请结合原记录核对。首末对照不代表连续趋势或方法效果，已达间隔独立只对应当时的核对，不代表永久掌握。</p>
    ${judgments.length?`<h4>已确认时的判断（按目标）</h4>${judgments.map(({h,g})=>`<article class="note" data-profile-judgment><strong>${esc(h.reason)} · ${esc(h.status)}</strong><p class="small muted">${esc(g.subject)} · ${esc(g.title)}${g.lifecycle==='paused'?' · 已暂缓':''}</p>${g.evidence_changed?'<p class="note">依据已变化，旧判断待重新评估。</p>':''}<p>支持：${(h.support||[]).map(ref=>profileRef(ref,g)).join('、')||'尚无'}；反证：${(h.against||[]).map(ref=>profileRef(ref,g)).join('、')||'尚无'}</p>${goalLink(g)}</article>`).join('')}`:''}
+   ${recheck.length?`<h4>新的考试 / 老师结果 · 待核对判断</h4><p class="small">这些结果在当前判断确认之后录入；请结合它重新核对判断，需要就调整。一次结果只支持本次范围，不代表长期掌握。</p><ul class="word-status" data-profile-recheck>${recheck.map(({g,r})=>`<li>${recExcerpt(r)} <span class="small muted">(${esc(g.subject)} · ${esc((r.source||'来源待核对').split(' · 学习目标')[0])} · ${esc(r.day||'日期待核对')})</span> <button type="button" data-goal-record="${esc(r.id)}">更正</button> ${goalLink(g)}</li>`).join('')}</ul>`:''}
    ${reached.length?`<h4>已达间隔后独立</h4><ul class="word-status" data-profile-reached>${reached.map(dline).join('')}</ul>`:''}
    ${attention.length?`<h4>待回看（首末退步或已到复测间隔）</h4><ul class="word-status" data-profile-attention>${attention.map(dline).join('')}</ul>`:''}
-   ${facts.length||reports.length?'<p class="small">以下为各目标本轮纳入的记录摘录，每类最多显示最近6条，不是完整档案；来源与成绩仍需核对，课程进度不代表孩子掌握。</p>':''}
+   ${factsShown.length||reports.length?'<p class="small">以下为各目标本轮纳入的记录摘录，每类最多显示最近6条，不是完整档案；来源与成绩仍需核对，课程进度不代表孩子掌握。</p>':''}
    ${goals.some(g=>g.omitted_count||g.missing_count)?'<p class="small">部分目标还有未纳入或暂不可核对的记录，请到对应目标查看。</p>':''}
-   ${facts.length?`<h4>学业与外部来源记录 · ${Math.min(6,facts.length)}/${facts.length}</h4><ul class="word-status" data-profile-facts>${byDay(facts).map(recLine).join('')}</ul>`:''}
+   ${factsShown.length?`<h4>学业与外部来源记录 · ${Math.min(6,factsShown.length)}/${factsShown.length}</h4><ul class="word-status" data-profile-facts>${byDay(factsShown).map(recLine).join('')}</ul>`:''}
    ${reports.length?`<h4>家长转述与观察 · ${Math.min(6,reports.length)}/${reports.length}</h4><ul class="word-status" data-profile-reports>${byDay(reports).map(recLine).join('')}</ul>`:''}
    ${methods.length?`<h4>已确认的计划</h4><p class="small">确认不代表已经执行；接受度与效果需结合后续反馈核对。</p><ul class="word-status" data-profile-methods>${methods.map(({g,plan})=>`<li>${esc(plan.title)} <span class="small muted">(${esc(g.subject)}${plan.review_on?' · 回看 '+esc(plan.review_on):''})</span> ${goalLink(g)}</li>`).join('')}</ul>`:''}
    <p class="small">每条“查看 / 更正”打开原记录核对或修改；更正后依赖它的判断会标记待重新评估。其他依据及完整分方向进展可在对应目标查看。</p>

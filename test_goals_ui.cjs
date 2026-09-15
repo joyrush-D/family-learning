@@ -135,6 +135,10 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   await profile.locator('summary').click();assert.match(await profile.innerText(),/我们目前怎么理解TA/);
   assert.match(await profile.locator('[data-profile-reached]').innerText(),/torch · 手电[\s\S]*已达间隔独立/,'reached-independence direction is summarised in the profile');
   // Record layers keep source labels; approved plans are not evidence of execution.
+  // A teacher evaluation recorded after the judgment closes the loop: it is flagged for judgment recheck.
+  const teacherEval=await p.request.post(url+'api/goals/action',{headers:{'X-Family-Token':historyAuth},data:{action:'feedback',id:wordSnapshot.id,request_key:'synthetic-teachereval-'+width,day:pDay(0),source:'老师反馈',note:'老师说这次单元测验拼写扣分偏多，建议多练 ea/ee。'}});assert.equal(teacherEval.status(),200,await teacherEval.text());
+  await reopenWordHistory();await profile.locator('summary').click();
+  assert.match(await profile.locator('[data-profile-recheck]').innerText(),/老师说这次单元测验拼写扣分偏多[\s\S]*老师反馈/,'a post-judgment teacher result is flagged for recheck');
   assert.match(await profile.locator('[data-profile-reports]').innerText(),/虚构反馈/,'parent-report records are layered in the profile');
   assert.ok(await profile.locator('[data-profile-methods]').count()>=1,'the approved plan is listed');
   assert.match(await profile.innerText(),/已确认的计划/);assert.doesNotMatch(await profile.innerText(),/试过的方法|事实与外部证据/);
