@@ -135,7 +135,9 @@ ${esc(d.values.action)}</p><button type="button" data-goal-clear-draft="${esc(d.
   }
   const recheckIds=new Set(recheck.map(x=>x.r.id));
   const factsShown=facts.filter(x=>!recheckIds.has(x.r.id));
-  if(!judgments.length&&!reached.length&&!attention.length&&!facts.length&&!reports.length&&!methods.length)return '';
+  // Correctable long-term memory (R26): how a goal's confirmed judgment changed across confirmations.
+  const evolution=goals.filter(g=>(g.prior_confirmations||[]).length);
+  if(!judgments.length&&!reached.length&&!attention.length&&!facts.length&&!reports.length&&!methods.length&&!evolution.length)return '';
   const goalLink=g=>`<button type="button" data-goal-select="${esc(g.id)}">查看目标：${esc(g.title)}</button>${g.lifecycle==='paused'?' · 已暂缓':''}`;
   const recExcerpt=r=>`${esc(r.title||'记录')}${r.score!=null&&r.score!==''?' · '+esc(r.score)+(r.total?'/'+esc(r.total):''):''}`+(r.note?' — '+esc(String(r.note).split('\n')[0].slice(0,60)):'');
   const recLine=x=>`<li>${recExcerpt(x.r)} <span class="small muted">(${esc(x.r.subject||'科目待核对')} · ${esc((x.r.source||'来源待核对').split(' · 学习目标')[0])} · ${esc(x.r.day||'日期待核对')})</span> <button type="button" data-goal-record="${esc(x.r.id)}">查看 / 更正</button></li>`;
@@ -144,6 +146,7 @@ ${esc(d.values.action)}</p><button type="button" data-goal-clear-draft="${esc(d.
    <p class="small">按目标和日期汇总已保存的证据；同词在不同目标下可能不同，请结合原记录核对。首末对照不代表连续趋势或方法效果，已达间隔独立只对应当时的核对，不代表永久掌握。</p>
    ${judgments.length?`<h4>已确认时的判断（按目标）</h4>${judgments.map(({h,g})=>`<article class="note" data-profile-judgment><strong>${esc(h.reason)} · ${esc(h.status)}</strong><p class="small muted">${esc(g.subject)} · ${esc(g.title)}${g.lifecycle==='paused'?' · 已暂缓':''}</p>${g.evidence_changed?'<p class="note">依据已变化，旧判断待重新评估。</p>':''}<p>支持：${(h.support||[]).map(ref=>profileRef(ref,g)).join('、')||'尚无'}；反证：${(h.against||[]).map(ref=>profileRef(ref,g)).join('、')||'尚无'}</p>${goalLink(g)}</article>`).join('')}`:''}
    ${recheck.length?`<h4>新的考试 / 老师结果 · 待核对判断</h4><p class="small">这些结果在当前判断确认之后录入；请结合它重新核对判断，需要就调整。一次结果只支持本次范围，不代表长期掌握。</p><ul class="word-status" data-profile-recheck>${recheck.map(({g,r})=>`<li>${recExcerpt(r)} <span class="small muted">(${esc(g.subject)} · ${esc((r.source||'来源待核对').split(' · 学习目标')[0])} · ${esc(r.day||'日期待核对')})</span> <button type="button" data-goal-record="${esc(r.id)}">更正</button> ${goalLink(g)}</li>`).join('')}</ul>`:''}
+   ${evolution.length?`<h4>判断的演化 · 跨阶段回看</h4><p class="small">同一目标此前已确认、后来被更新取代的判断，按时间保留，供回看我们的理解如何变化；这是历史，不代表当前判断。</p>${evolution.map(g=>`<article class="note" data-profile-evolution><p class="small muted">${esc(g.subject)} · ${esc(g.title)}</p><ol class="word-status">${[...g.prior_confirmations].reverse().map(e=>`<li><span class="small muted">${esc(e.confirmed_on||'日期待核对')}</span>：${esc((e.assessment||'（无评估）').split('\n')[0].slice(0,80))}${(e.hypotheses||[]).length?`<div class="small muted">假设：${e.hypotheses.map(h=>esc(h.reason)+(h.status?'（'+esc(h.status)+'）':'')).join('；')}</div>`:''}</li>`).join('')}<li><strong>现判断</strong>：${esc((g.assessment||'（无评估）').split('\n')[0].slice(0,80))}</li></ol>${goalLink(g)}</article>`).join('')}`:''}
    ${reached.length?`<h4>已达间隔后独立</h4><ul class="word-status" data-profile-reached>${reached.map(dline).join('')}</ul>`:''}
    ${attention.length?`<h4>待回看（首末退步或已到复测间隔）</h4><ul class="word-status" data-profile-attention>${attention.map(dline).join('')}</ul>`:''}
    ${factsShown.length||reports.length?'<p class="small">以下为各目标本轮纳入的记录摘录，每类最多显示最近6条，不是完整档案；来源与成绩仍需核对，课程进度不代表孩子掌握。</p>':''}

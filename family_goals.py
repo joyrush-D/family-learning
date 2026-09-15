@@ -540,6 +540,7 @@ class Store:
                     task_feedback=ctx['task_feedback'], task_feedback_omitted=ctx['task_feedback_omitted'], task_missing=ctx['task_missing'],
                     school_messages=ctx['school_messages'], school_omitted=ctx['school_omitted'], school_missing=ctx['school_missing'],
                     history=plan.get('goal_history', [])[-10:], history_count=len(plan.get('goal_history', [])),
+                    prior_confirmations=family_learner_memory.prior_confirmations(c, row['child_id'], row['id']),
                     pending=({**proposal, 'id': pending['id']} if current else None),
                     pending_stale=bool(pending and not current), context_hash=ctx['evidence_hash'],
                     processing=('error' if job and job['error'] else 'ready' if current else

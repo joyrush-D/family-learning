@@ -142,6 +142,9 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   assert.match(await profile.locator('[data-profile-reports]').innerText(),/虚构反馈/,'parent-report records are layered in the profile');
   assert.ok(await profile.locator('[data-profile-methods]').count()>=1,'the approved plan is listed');
   assert.match(await profile.innerText(),/已确认的计划/);assert.doesNotMatch(await profile.innerText(),/试过的方法|事实与外部证据/);
+  // A goal confirmed more than once shows how our judgment changed across confirmations (R26 memory).
+  assert.ok(await profile.locator('[data-profile-evolution]').count()>=1,'a re-confirmed goal shows its judgment evolution');
+  assert.match(await profile.locator('[data-profile-evolution]').first().innerText(),/判断的演化[\s\S]*现判断|现判断/,'the evolution view marks the current judgment against prior ones');
   const rowFix=profile.locator('[data-profile-reports] [data-goal-record]').first();assert.match(await rowFix.innerText(),/更正/);
   await rowFix.click();await p.locator('#recordDialog[open]').waitFor();assert.match(await p.locator('#recordForm [name="note"]').inputValue(),/虚构反馈/,'correcting from the profile opens the editable original record');await p.locator('#recordDialog').evaluate(d=>d.close());
   assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'child profile fits the viewport');
