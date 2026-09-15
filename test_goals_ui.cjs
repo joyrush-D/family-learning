@@ -134,6 +134,11 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   const profile=p.locator('[data-child-profile]');assert.equal(await profile.count(),1,'child profile renders for a child with a goal');
   await profile.locator('summary').click();assert.match(await profile.innerText(),/我们目前怎么理解TA/);
   assert.match(await profile.locator('[data-profile-reached]').innerText(),/torch · 手电[\s\S]*已达间隔独立/,'reached-independence direction is summarised in the profile');
+  // Fact/report layers and the 试过的方法 layer complete the profile; every record row can be corrected in place.
+  assert.match(await profile.locator('[data-profile-reports]').innerText(),/虚构反馈/,'parent-report records are layered in the profile');
+  assert.ok(await profile.locator('[data-profile-methods]').count()>=1,'the tried method is listed');
+  const rowFix=profile.locator('[data-profile-reports] [data-goal-record]').first();assert.match(await rowFix.innerText(),/更正/);
+  await rowFix.click();await p.locator('#recordDialog[open]').waitFor();assert.match(await p.locator('#recordForm [name="note"]').inputValue(),/虚构反馈/,'correcting from the profile opens the editable original record');await p.locator('#recordDialog').evaluate(d=>d.close());
   assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'child profile fits the viewport');
   if(process.env.GOALS_UI_PROOF_DIR)await profile.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'child-profile-'+width+'.png')});checks++;
   // Equal word/direction across goals must not silently discard another goal's contrary evidence.

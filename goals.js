@@ -114,14 +114,30 @@ ${esc(d.values.action)}</p><button type="button" data-goal-clear-draft="${esc(d.
   const reached=directions.filter(x=>x.pr.reached_independent);
   const attention=directions.filter(x=>!x.pr.reached_independent&&(x.pr.trend==='退步'||(x.pr.trend==='持平'&&x.d.retest_due)));
   if(!judgments.length&&!reached.length&&!attention.length)return '';
+  // Fact / parent-report layers from the same goal records (word checks are shown above as directions).
+  const seenRec=new Set(),facts=[],reports=[];
+  for(const g of goals)for(const r of g.records||[]){
+   if(r.id==null||seenRec.has(r.id))continue;seenRec.add(r.id);
+   if((r.note||'').startsWith('【单词分项核对'))continue;
+   const scored=r.score!=null&&r.score!==''||r.total!=null&&r.total!=='';
+   const isFact=scored||['订正','复测'].includes(r.followup_kind)||/老师反馈|平台报告|试卷/.test(r.source||'')||r.category==='成绩'||r.category==='课程进度';
+   (isFact?facts:reports).push({g,r,scored});
+  }
+  const byDay=a=>a.sort((x,y)=>String(y.r.day).localeCompare(String(x.r.day))).slice(0,6);
+  const methods=goals.filter(g=>g.current_plan).map(g=>({g,plan:g.current_plan}));
   const goalLink=g=>`<button type="button" data-goal-select="${esc(g.id)}">查看目标：${esc(g.title)}</button>${g.lifecycle==='paused'?' · 已暂缓':''}`;
+  const recExcerpt=r=>`${esc(r.title||'记录')}${r.score!=null&&r.score!==''?' · '+esc(r.score)+(r.total?'/'+esc(r.total):''):''}`+(r.note?' — '+esc(String(r.note).split('\n')[0].slice(0,60)):'');
+  const recLine=x=>`<li>${recExcerpt(x.r)} <span class="small muted">(${esc(x.g.subject)} · ${esc((x.r.source||'').split(' · 学习目标')[0])} · ${esc(x.r.day||'日期待核对')})</span> <button type="button" data-goal-record="${esc(x.r.id)}">更正</button></li>`;
   const dline=x=>`<li>${esc(x.word)} · ${esc(x.meaning)} <span class="small muted">(${esc(x.g.subject)} · ${esc(x.label)})</span>：${esc(x.d.status)} · ${esc(x.d.day||'日期待核对')}${progressTag(x.pr)}<div>${goalLink(x.g)}</div></li>`;
   return `<details class="card" data-child-profile><summary>孩子画像 · 我们目前怎么理解TA</summary>
    <p class="small">按目标和日期汇总已保存的证据；同词在不同目标下可能不同，请结合原记录核对。首末对照不代表连续趋势或方法效果，已达间隔独立只对应当时的核对，不代表永久掌握。</p>
    ${judgments.length?`<h4>已确认时的判断（按目标）</h4>${judgments.map(({h,g})=>`<article class="note" data-profile-judgment><strong>${esc(h.reason)} · ${esc(h.status)}</strong><p class="small muted">${esc(g.subject)} · ${esc(g.title)}${g.lifecycle==='paused'?' · 已暂缓':''}</p>${g.evidence_changed?'<p class="note">依据已变化，旧判断待重新评估。</p>':''}<p>支持：${(h.support||[]).map(ref=>profileRef(ref,g)).join('、')||'尚无'}；反证：${(h.against||[]).map(ref=>profileRef(ref,g)).join('、')||'尚无'}</p>${goalLink(g)}</article>`).join('')}`:''}
    ${reached.length?`<h4>已达间隔后独立</h4><ul class="word-status" data-profile-reached>${reached.map(dline).join('')}</ul>`:''}
    ${attention.length?`<h4>待回看（首末退步或已到复测间隔）</h4><ul class="word-status" data-profile-attention>${attention.map(dline).join('')}</ul>`:''}
-   <p class="small">点原记录可核对、更正；其他依据及完整分方向进展可在对应目标查看。</p>
+   ${facts.length?`<h4>事实与外部证据</h4><ul class="word-status" data-profile-facts>${byDay(facts).map(recLine).join('')}</ul>`:''}
+   ${reports.length?`<h4>家长转述与观察</h4><ul class="word-status" data-profile-reports>${byDay(reports).map(recLine).join('')}</ul>`:''}
+   ${methods.length?`<h4>试过的方法（结合上方进展核对是否见效，非因果判定）</h4><ul class="word-status" data-profile-methods>${methods.map(({g,plan})=>`<li>${esc(plan.title)} <span class="small muted">(${esc(g.subject)}${plan.review_on?' · 回看 '+esc(plan.review_on):''})</span> ${goalLink(g)}</li>`).join('')}</ul>`:''}
+   <p class="small">每条“查看 / 更正”打开原记录核对或修改；更正后依赖它的判断会标记待重新评估。其他依据及完整分方向进展可在对应目标查看。</p>
   </details>`;
  }
  function detail(g){const d=draft('feedback',g,{day:day(),source:'家长观察',note:'',assistance:'',practice_relation:''});const p=g.pending;
