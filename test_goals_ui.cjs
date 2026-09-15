@@ -50,7 +50,7 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   const feedback=p.locator('[data-goal-form="feedback"]');await feedback.getByLabel('孩子怎么答的、用了什么帮助、用时和感受').fill('虚构反馈：练了八分钟，需要少量提示；孩子愿意口头讲。');await feedback.getByLabel('信息来源').selectOption('家长转述孩子');await feedback.getByLabel('获得的帮助').locator('xpath=ancestor::details').evaluate(e=>e.open=true);await feedback.getByLabel('获得的帮助').selectOption('少量提示');await feedback.locator('input[type="file"]').setInputFiles({name:'synthetic-evidence.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQ0AAAAASUVORK5CYII=','base64')});
   // Simulate a lost response after the server has saved the exact request.
   let intercepted=false;await p.route('**/api/goals/action',async route=>{const body=route.request().postDataJSON();if(body.action==='feedback'&&!intercepted){intercepted=true;await route.fetch();if(width===360)await route.abort('failed');else await route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'Synthetic failure after save'})})}else await route.continue()});
-  await feedback.getByRole('button',{name:'保存反馈'}).click();await p.getByText(/结果未确认，请点原按钮重试/).waitFor();assert(await feedback.getByLabel('孩子怎么答的、用了什么帮助、用时和感受').isDisabled());await feedback.getByRole('button',{name:'保存反馈'}).click();await p.getByText('虚构反馈：练了八分钟，需要少量提示；孩子愿意口头讲。',{exact:true}).waitFor();assert.equal(await p.locator('[data-goal-record]').filter({hasText:'查看'}).count(),1);assert.equal(await p.getByRole('link',{name:'查看原件',exact:true}).count(),1);const originalURL=await p.getByRole('link',{name:'查看原件',exact:true}).getAttribute('href');assert.equal((await p.request.get(new URL(originalURL,url).href)).status(),200);checks++;
+  await feedback.getByRole('button',{name:'保存反馈'}).click();await p.getByText(/结果未确认，请点原按钮重试/).waitFor();assert(await feedback.getByLabel('孩子怎么答的、用了什么帮助、用时和感受').isDisabled());await feedback.getByRole('button',{name:'保存反馈'}).click();await p.getByText('虚构反馈：练了八分钟，需要少量提示；孩子愿意口头讲。',{exact:true}).waitFor();assert.equal(await p.locator('[id^="goal-record-"] > [data-goal-record]').count(),1);assert.equal(await p.getByRole('link',{name:'查看原件',exact:true}).count(),1);const originalURL=await p.getByRole('link',{name:'查看原件',exact:true}).getAttribute('href');assert.equal((await p.request.get(new URL(originalURL,url).href)).status(),200);checks++;
   const recordTrigger=await p.locator('[id^="goal-record-"] > [data-goal-record]').elementHandle();await recordTrigger.click();await p.locator('#recordDialog[open]').waitFor();assert(await recordTrigger.evaluate(e=>e.isConnected),'opening a source preserves the current goal panel');assert.match(await p.locator('#recordForm [name="note"]').inputValue(),/虚构反馈/);await p.locator('#recordDialog').evaluate(d=>d.close());checks++;
   const manual2=p.locator('[data-goal-form="manual"]');await manual2.locator('xpath=ancestor::details').evaluate(e=>e.open=true);await manual2.getByLabel('家长怎么带着做、怎么问孩子').fill('保留口头解释，缩为五分钟，先问孩子想从哪一道开始。');await manual2.getByRole('button',{name:'确认并更新原计划'}).click();await p.getByText('保留口头解释，缩为五分钟，先问孩子想从哪一道开始。',{exact:true}).first().waitFor();assert.equal(await p.locator('[data-goal-task]').getAttribute('data-goal-task'),original);checks++;
   await p.locator('[data-goal-action="evaluate"]').click();await p.locator('[data-goal-form="approve"]').waitFor();assert(await p.locator('[data-goal-next-step]').isVisible());
@@ -134,9 +134,10 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   const profile=p.locator('[data-child-profile]');assert.equal(await profile.count(),1,'child profile renders for a child with a goal');
   await profile.locator('summary').click();assert.match(await profile.innerText(),/我们目前怎么理解TA/);
   assert.match(await profile.locator('[data-profile-reached]').innerText(),/torch · 手电[\s\S]*已达间隔独立/,'reached-independence direction is summarised in the profile');
-  // Fact/report layers and the 试过的方法 layer complete the profile; every record row can be corrected in place.
+  // Record layers keep source labels; approved plans are not evidence of execution.
   assert.match(await profile.locator('[data-profile-reports]').innerText(),/虚构反馈/,'parent-report records are layered in the profile');
-  assert.ok(await profile.locator('[data-profile-methods]').count()>=1,'the tried method is listed');
+  assert.ok(await profile.locator('[data-profile-methods]').count()>=1,'the approved plan is listed');
+  assert.match(await profile.innerText(),/已确认的计划/);assert.doesNotMatch(await profile.innerText(),/试过的方法|事实与外部证据/);
   const rowFix=profile.locator('[data-profile-reports] [data-goal-record]').first();assert.match(await rowFix.innerText(),/更正/);
   await rowFix.click();await p.locator('#recordDialog[open]').waitFor();assert.match(await p.locator('#recordForm [name="note"]').inputValue(),/虚构反馈/,'correcting from the profile opens the editable original record');await p.locator('#recordDialog').evaluate(d=>d.close());
   assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'child profile fits the viewport');
@@ -265,6 +266,25 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   await p.locator(`[data-goal-id="${autoGoal.id}"]`).first().click();await p.getByRole('heading',{name:autoGoal.title,exact:true}).waitFor();checks++;
   if(process.env.GOALS_UI_PROOF_DIR){await fs.mkdir(process.env.GOALS_UI_PROOF_DIR,{recursive:true});await p.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'goals-'+width+'.png'),fullPage:true})}
   await p.locator('[data-goal-child-select="child-2"]').click();assert.equal(await p.locator('[data-goal-task]').count(),0);checks++;
+  // Records alone must show a correctable profile, without an approved judgment or plan.
+  for(let i=0;i<7;i++)await profilePost({action:'feedback',id:autoGoal.id,day:pDay(i),source:i===0?'老师反馈':'家长观察',note:'虚构分层记录 '+width+' '+i});
+  await p.reload();await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="goals"]').click();await p.locator('[data-goal-child-select="child-2"]').click();
+  const layerProfile=p.locator('[data-child-profile]');await layerProfile.waitFor();await layerProfile.locator('summary').click();
+  assert.equal(await layerProfile.locator('[data-profile-judgment],[data-profile-methods]').count(),0);
+  assert.match(await layerProfile.innerText(),/来源与成绩仍需核对/);assert.doesNotMatch(await layerProfile.innerText(),/事实与外部证据|试过的方法/);
+  const layerRow=layerProfile.locator('[data-profile-facts] li').filter({hasText:'虚构分层记录 '+width+' 0'});await layerRow.waitFor();assert.match(await layerRow.innerText(),/老师反馈/);
+  const layerRecord=await layerRow.locator('[data-goal-record]').getAttribute('data-goal-record');
+  await layerRow.locator('[data-goal-record]').click();await p.locator('#recordDialog[open]').waitFor();
+  await p.locator('#recordForm [name="note"]').fill('虚构更正：尚未核对原件 '+width);await p.locator('#recordForm [name="category"]').selectOption('成绩');await p.locator('#recordForm [name="subject"]').fill('数学');await p.locator('#recordForm [name="score"]').fill('7');await p.locator('#recordForm [name="total"]').fill('10');await p.locator('#recordForm [name="source"]').selectOption('家长观察');
+  let layerLost=true;const layerWrites=[];await p.route('**/api/record',async route=>{layerWrites.push(route.request().postDataJSON());if(layerLost){layerLost=false;assert.equal((await route.fetch()).status(),200);await route.abort('connectionreset')}else await route.continue()});
+  await p.locator('#recordForm [type="submit"]').click();await p.locator('#recordForm [type="submit"]:not([disabled])').waitFor();assert(await p.locator('#recordDialog[open]').isVisible());assert.equal(await p.locator('#recordForm [name="note"]').inputValue(),'虚构更正：尚未核对原件 '+width);
+  await p.locator('#recordForm [type="submit"]').click();await p.locator('#recordDialog').waitFor({state:'hidden'});await p.unroute('**/api/record');assert.equal(layerWrites.length,2);assert.deepEqual(layerWrites[0],layerWrites[1]);
+  await p.reload();await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="goals"]').click();await p.locator('[data-goal-child-select="child-2"]').click();await layerProfile.locator('summary').click();
+  const correctedRow=layerProfile.locator('[data-profile-facts] li').filter({hasText:'虚构更正：尚未核对原件 '+width});assert.equal(await correctedRow.count(),1);assert.match(await correctedRow.innerText(),/7\/10[\s\S]*数学 · 家长观察/);
+  assert.equal(await layerProfile.locator('[data-profile-reports] > li').count(),6);assert.match(await layerProfile.innerText(),/每类最多显示最近6条/);assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  const layerSaved=(await(await p.request.get(url+'api/state')).json()).records.filter(r=>String(r.id)===layerRecord);assert.equal(layerSaved.length,1);assert.equal(layerSaved[0].note,'虚构更正：尚未核对原件 '+width);
+  assert.equal((await(await p.request.get(url+'api/goals')).json()).goals.find(g=>g.id===autoGoal.id).current_plan,null);
+  if(process.env.GOALS_UI_PROOF_DIR)await layerProfile.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'profile-layers-corrected-'+width+'.png')});checks++;
   await p.close();
  }
  console.log(JSON.stringify({passed:true,checks,viewports:[360,1440],synthetic_only:true}));
