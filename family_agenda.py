@@ -67,6 +67,19 @@ def deadlines(text,published):
         if date(day) and not re.search(r'\d{4}-\d{2}-\d{2}|起|开始|持续',tail) and re.fullmatch(r'\s*'+clock+r'\s*[-–—‑~～至到]\s*'+clock+r'[！!❗‼️\s]*',tail):
             start,end=[tuple(map(int,t)) for t in re.findall(r'(\d{1,2})[:：](\d{2})',tail)]
             if start<=end:candidates.add(day)
+    # A dated test the child sits: the subject and unit name (e.g. 英语Unit1-3单元) often sit between the
+    # date and the exam word, past the tight window above. Allow that gap but stop before another date
+    # or a clause break so separate items keep their own dates. 测试/检测 stay out here: 设备测试/核酸检测
+    # are not tests the child sits, and the tight pass already covers their own phrasings.
+    exam_event=r'单元测|小测|月考|期中|期末|测验|考试|统考|联考|水平测|质检|摸底'
+    span=r'(?:(?!\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)[^。；;\n]){0,16}?'
+    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)'+span+r'(?:'+exam_event+r')',text or ''):
+        token=match[1];value=date(token)
+        if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):
+            offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[token]
+            try:value=(dt.date.fromisoformat(published)+dt.timedelta(days=offset)).isoformat()
+            except OverflowError:pass
+        if value:candidates.add(value)
     return candidates
 
 
@@ -114,8 +127,15 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None):
     published=focus.get('published_on','') if organized else (days[0] if len(days)==1 else '')
     # Only borrow a source deadline from the clause naming this task, not a sibling instruction.
     subject=re.sub(r'^待核对[：:]?\s*','',title).rstrip('。')
-    dates={deadline(clause,sent_day(m.get('time',''))) for m in messages
-           for clause in re.split(r'[。；;，,\n]',m.get('text','')) if subject and subject in clause}-{''}
+    # Borrow a source deadline only from the clause naming THIS task, not a sibling instruction.
+    # An exam task's title is usually rewritten (subject prefix, weekday suffix), so it is no longer a
+    # literal substring of the notice; for a dated test, match the exam clause by its nature instead so
+    # the date still grounds the result reminder. Two different exam dates stay ambiguous, as before.
+    named=[(clause,m) for m in messages for clause in re.split(r'[。；;，,\n]',m.get('text','')) if subject and subject in clause]
+    # A dated test's title is usually rewritten, so it is no longer a substring of any clause; fall back to
+    # the exam clause by its nature so the date still grounds the reminder. Two different exam dates stay ambiguous.
+    selected=named or ([(clause,m) for m in messages for clause in re.split(r'[。；;，,\n]',m.get('text','')) if is_exam(clause)] if is_exam(subject) else [])
+    dates={deadline(clause,sent_day(m.get('time',''))) for clause,m in selected}-{''}
     due_on=focus.get('due_on','') if organized else deadline(due,published) or deadline(title,published) or (next(iter(dates)) if len(dates)==1 else '')
     category=focus.get('category','')
     if category not in ('homework','todo'):category='todo' if category=='unknown' else task_category(title)

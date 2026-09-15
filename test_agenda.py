@@ -85,7 +85,10 @@ class AgendaTest(unittest.TestCase):
         monday='2026-09-14'
         cases=[('下周一美术课请带一盒水彩笔','2026-09-21'),('本周五（09月18日）英语单元测验，范围Unit 1到Unit 3','2026-09-18'),
                ('本周五英语单元测验','2026-09-18'),('周五交','2026-09-18'),('下周三前交','2026-09-23'),('这周日前上交','2026-09-20'),
-               ('星期四听写第二单元','2026-09-17'),('礼拜二穿校服','2026-09-15'),('周一交','2026-09-14'),('下周日带','2026-09-27')]
+               ('星期四听写第二单元','2026-09-17'),('礼拜二穿校服','2026-09-15'),('周一交','2026-09-14'),('下周日带','2026-09-27'),
+               # The subject and a Latin unit name between the date and the exam word must not drop the date.
+               ('本周五（09月18日）英语Unit1-3单元测验','2026-09-18'),('本周五英语Unit1-3单元测验','2026-09-18'),
+               ('本周五（09月18日）英语Unit1-3单元测验，请复习','2026-09-18'),('周五数学Unit 5 期中考试','2026-09-18')]
         for text,expected in cases:self.assertEqual(agenda.deadline(text,monday),expected,text)
         # Recurring, past, ranged, unanchored or bare event dates are not deadlines.
         for text in ['每周五交作业','上周五交的作业','每个星期五交作业','上个星期五交的作业','下下周五交作业',
@@ -127,6 +130,20 @@ class AgendaTest(unittest.TestCase):
             c.execute("UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?",(json.dumps(payload),'synthetic-class','1'))
             separate=agenda.metadata(app,c,'child-1','英语作业','',['message:synthetic-class:1'])
         self.assertEqual(separate['due_on'],'')
+
+    def test_rewritten_exam_title_borrows_the_exam_clause_deadline(self):
+        # The interpreter usually rewrites an exam title (subject prefix, weekday suffix), so it is no
+        # longer a literal substring of the notice clause. The dated test must still ground its date so
+        # the result reminder can fire; a non-exam sibling in the same message must not borrow that date.
+        stamp='2026-09-15T08:00:00+08:00'  # a Tuesday send day, so 本周五 grounds to 2026-09-18
+        text='各位家长好：本周五（09月18日）英语Unit1-3单元测验，请复习。今天作业：抄写Unit3单词每个两遍。'
+        self.store.ingest(dict(source_id='synthetic-class',expected_cursor='0',cursor='1',checked_at=stamp,last_message_time=stamp,error='',
+                               messages=[dict(id='9',time=stamp,kind='text',sender='示例老师',text=text,unread=False)]))
+        with app.connect() as c:
+            exam=agenda.metadata(app,c,'child-1','英语：Unit1-3单元测验（本周五）','',['message:synthetic-class:9'])
+            homework=agenda.metadata(app,c,'child-1','英语：抄写Unit3单词每个两遍','',['message:synthetic-class:9'])
+        self.assertEqual(exam['due_on'],'2026-09-18')
+        self.assertEqual(homework['due_on'],'')
 
     def test_wish_capture_promotion_and_retry_preserve_one_task(self):
         today=dt.datetime.now(app.dt.timezone(app.dt.timedelta(hours=8))).date().isoformat()
