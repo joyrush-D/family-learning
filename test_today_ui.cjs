@@ -167,6 +167,7 @@ function fixtures(base){
    },readTask=async id=>(await read()).tasks.find(t=>t.id===id);
    try{
     await d.goto(server.url,{waitUntil:'load'});await ready(d);await open(decline.id);
+    assert.equal(await d.locator('#taskDecisionForm > p.small.muted').innerText(),'移到收集箱“已搁置”，保留出处和决定，随时可以恢复。这里的选择不会向学校发送消息。');
     assert.equal(await d.locator('#taskDecisionForm [name="status"]:checked').count(),0,'dismissal requires an explicit choice');
     const postCount=writes.length;await save();assert.equal(writes.length,postCount,'empty choice never writes');
     await choose('不参加','虚构反馈：这次想休息');await fit(d);await proof(d,'dismiss-choice-'+width);await save();
