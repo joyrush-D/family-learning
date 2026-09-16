@@ -109,7 +109,8 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=()):
     change=value.get('change','new');target=_text(value,'target_id',80)
     if change not in ('new','update','cancel'): raise AgentError('学校通知变更类型无法核对')
     if target and not any(t['id']==target for t in school_tasks): raise AgentError('原事项不在本次可核对范围')
-    if change=='new' and target: raise AgentError('新增事项不能指向原事项')
+    if change=='new' and target:
+        target='';state='review';brief['reason']='模型同时给出新增事项和原事项，请家长核对是新要求还是学校变更。'
     if change!='new':
         state='review';brief['reason']='学校要求有变更，请核对原事项及新要求后确认；原状态和反馈保留。'
     return dict(brief,state=state,policy=SCHOOL_TASK_POLICY,change=change,target_id=target)
@@ -774,16 +775,20 @@ class Store:
             c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=? AND fingerprint=?", (key, fingerprint))
             c.executemany('UPDATE agent_messages SET processed=1 WHERE source_id=? AND id=?', message_ids)
 
-    def _fail(self, key, now, *, fingerprint=None):
+    def _fail(self, key, now, *, fingerprint=None, reason=''):
         with self._db() as c:
             row = c.execute('SELECT fingerprint,attempts FROM agent_jobs WHERE id=? AND done=0 AND attempts>0', (key,)).fetchone()
             if row is None: return
             if fingerprint is not None and row['fingerprint'] != fingerprint: return
             fingerprint = row['fingerprint']
             attempt = row['attempts']
+            reason=''.join(char for char in str(reason) if ord(char)>=32 and ord(char)!=127).strip()[:300]
+            message='模型整理未成功'+(('：'+reason) if reason else '')+'；原始资料保留。'
+            message+=(' 自动尝试共3次，达到自动重试上限后需人工重试。' if attempt>=MAX_ATTEMPTS else
+                      ' 将按计划自动进行第'+str(attempt+1)+'次尝试。')
             c.execute('UPDATE agent_jobs SET next_try=?,error=? WHERE id=? AND fingerprint=? AND done=0 AND attempts=?',
                 ((now + dt.timedelta(minutes=5 * 2 ** (attempt - 1))).isoformat() if attempt < MAX_ATTEMPTS else '',
-                 '模型整理未成功；原始资料保留，自动尝试共3次，达到自动重试上限后需人工重试。', key, fingerprint, attempt))
+                 message, key, fingerprint, attempt))
 
 
 SCHOOL_CANCEL_NOTE = '家长按学校取消通知确认无需处理，原文保留在原通知。'
@@ -997,8 +1002,8 @@ def _refresh_school(app, store, now, budget):
                         (brief['title'] or row['title'],brief['goal'] or row['body'],_json(plan),updated,row['id']))
                     c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=? AND fingerprint=?",(key,fp))
                     row['updated']=updated
-            except (family_llm.LLMDraftError,AgentError,ValueError):
-                store._fail(key,now,fingerprint=fp);failed+=1;continue
+            except (family_llm.LLMDraftError,AgentError,ValueError) as error:
+                store._fail(key,now,fingerprint=fp,reason=error);failed+=1;continue
         if brief.get('state')=='ready' and re.fullmatch(r'\d{4}-\d{2}-\d{2}',row['due'] or '') and row['due']<now.date().isoformat():
             brief.update(state='review',reason='原截止日期已过，请核对是否仍需补做；不推定已完成。');plan['school_task']=brief
             with store._db() as c:
@@ -1259,7 +1264,7 @@ def run_once(app, now=None):
                                     if 'message:' + source['id'] + ':' + row['id'] in {e['ref'] for e in item['evidence']}]
                         store._save(key, fp, items, now, [(source['id'], row['id']) for row in values])
                         created += len(items); processed += len(values)
-                    except (family_llm.LLMDraftError, AgentError, ValueError): store._fail(key, now, fingerprint=fp); failed += 1
+                    except (family_llm.LLMDraftError, AgentError, ValueError) as error: store._fail(key, now, fingerprint=fp, reason=error); failed += 1
                     break  # One eligible batch per source leaves other sources a turn.
             with store._db() as c:
                 children = {p['name']: p['id'] for p in app.profiles(c)}
@@ -1320,7 +1325,7 @@ def run_once(app, now=None):
                         body=proposal['action'], due='', record_id=record['id'], evidence=[
                             {'ref': quote['ref'], 'text': quote['quote']} for quote in proposal['evidence']], plan=proposal)]
                     store._save(key, fp, items, now); created += len(items); processed += 1
-                except (family_llm.LLMDraftError, AgentError, ValueError): store._fail(key, now, fingerprint=fp); failed += 1
+                except (family_llm.LLMDraftError, AgentError, ValueError) as error: store._fail(key, now, fingerprint=fp, reason=error); failed += 1
             with store._db() as c:
                 unresolved = c.execute('SELECT COUNT(*) FROM agent_jobs WHERE done=0 AND attempts>0').fetchone()[0]
                 exhausted = c.execute('SELECT COUNT(*) FROM agent_jobs WHERE done=0 AND attempts>=?', (MAX_ATTEMPTS,)).fetchone()[0]

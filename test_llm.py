@@ -94,7 +94,7 @@ try:
         with patch.dict(os.environ,light_env,clear=True):
             state['mode']='ok'
             llm._chat_json([dict(role='user',content='synthetic selection text')],llm.SCHEMA,'family_agent_selection',data_path=None)
-            assert state['calls'][-1][1]['model']=='synthetic-light-model'
+            assert state['calls'][-1][1]['model']=='synthetic-light-model' and state['calls'][-1][1]['max_tokens']==6000
             llm._chat_json([dict(role='user',content=[dict(type='text',text='synthetic image context'),
                                                        dict(type='image_url',image_url=dict(url='data:image/png;base64,eA=='))])],
                             llm.SCHEMA,'family_agent_selection')
@@ -483,7 +483,7 @@ try:
         os.environ['FAMILY_LLM_BASE_URL']=endpoint+'/responses'
         llm._chat_json([dict(role='user',content='synthetic responses light call')],llm.SCHEMA,
                        'family_agent_selection',data_path=data_path)
-        assert state['calls'][-1][1]['model']=='configured-light-model'
+        assert state['calls'][-1][1]['model']=='configured-light-model' and state['calls'][-1][1]['max_output_tokens']==6000
         before=len(state['calls'])
         try: llm.extract_draft('虚构资料',data_path=data_path/'missing-parent')
         except llm.LLMDraftError: pass

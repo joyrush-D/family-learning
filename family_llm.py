@@ -379,12 +379,13 @@ def _chat_json(messages,schema,name,timeout=60,*,data_path=None):
         model=light
     elif _light_request(name,messages) and light:
         model=light
+    output_tokens=6000 if name=='family_agent_selection' else 3000
     output_name={'family_learning_answer':'回答','family_reading_feedback':'反馈','family_guided_hint':'提示'}.get(name,'草稿')
     if type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=180:
         raise ValueError('模型请求等待时间不正确')
     body=dict(model=model,messages=messages,
               response_format=dict(type='json_schema',json_schema=dict(name=name,strict=True,schema=schema)),
-              temperature=0,max_tokens=3000,stream=False)
+              temperature=0,max_tokens=output_tokens,stream=False)
     responses=endpoint.endswith('/responses')
     if responses:
         inputs=[]
@@ -399,7 +400,7 @@ def _chat_json(messages,schema,name,timeout=60,*,data_path=None):
                 content=parts
             inputs.append(dict(role=message['role'],content=content))
         body=dict(model=model,input=inputs,text=dict(format=dict(type='json_schema',name=name,strict=True,schema=schema)),
-                  temperature=0,max_output_tokens=3000,stream=False,store=False)
+                  temperature=0,max_output_tokens=output_tokens,stream=False,store=False)
     effort=config['reasoning_effort']
     if effort:
         if effort not in ('none','minimal','low','medium','high','xhigh','max'):

@@ -226,6 +226,9 @@ class AgentTests(unittest.TestCase):
         self.assertNotIn(task_id,[x['id'] for x in agent.school_targets(self.app,self.store,'child-2')])
         # Unmatched corrections stay reviewable; a forged model target is rejected.
         with self.assertRaises(agent.AgentError):agent._school_brief(dict(title='变更',goal='请核对',advice='',reason='',state='ready',change='update',target_id='other-child-task'))
+        ambiguous=agent._school_brief(dict(title='新增要求',goal='请核对',advice='',reason='模型判断',state='ready',change='new',target_id=task_id),school_tasks=[dict(id=task_id)])
+        self.assertEqual((ambiguous['state'],ambiguous['change'],ambiguous['target_id']),('review','new',''))
+        self.assertIn('新要求还是学校变更',ambiguous['reason'])
 
     def payload(self, expected='10', cursor='11', message='11', offset=0):
         stamp = (self.now + dt.timedelta(minutes=offset)).isoformat()
@@ -587,6 +590,7 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(job['attempts'], agent.MAX_ATTEMPTS)
             self.assertIn('达到自动重试上限', job['error'])
             self.assertIn('人工重试', job['error'])
+            self.assertIn('引用无法核对', job['error'])
             self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0], 1)
             self.assertEqual(c.execute('SELECT note FROM records WHERE id=1').fetchone()[0], '孩子自述：愿意谈谈阅读。')
         self.assertEqual(self.store.snapshot()['failed_jobs'], 1)
