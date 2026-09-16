@@ -425,6 +425,9 @@ class Store:
             for task_id in tasks:
                 ids.update(r['record_id'] for r in c.execute('SELECT record_id FROM study_items WHERE task_id=? AND child_id=? AND record_id IS NOT NULL', (task_id, row['child_id'])))
         rows = {r['id']: dict(r) for r in c.execute('SELECT * FROM records')}
+        task_sources = {'事项:' + task_id for task_id in tasks}
+        ids.update(r['id'] for r in rows.values() if r['source'] in task_sources
+                   and r['category'] in ('学习进展','课程进度','成绩') and owners.get(r['child']) == row['child_id'])
         # ponytail: explicit ancestry over household records; index case links if this becomes a measured bottleneck.
         while True:
             extra = {r['id'] for r in rows.values() if r['related_record_id'] in ids and owners.get(r['child']) == row['child_id']}

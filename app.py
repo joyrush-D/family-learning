@@ -544,6 +544,11 @@ def _save_record(obj,care_only,receipt):
                 if names.get(prior['child'])!=child or prior['source']!=source:
                     raise RecordError('这条已保存反馈的归属或来源后来已更正，请先核对原记录',409,'request_context_changed')
                 return record_result(c,prior['id'],True)
+        if source.startswith('事项:'):
+            task_id=source[len('事项:'):]
+            task=next((task for task in tasks(c) if task['id']==task_id),None)
+            if task is None or task['child']!=child:
+                raise RecordError('关联事项不存在或孩子归属不一致，请从原事项重新打开',409,'record_task_mismatch')
         if source.startswith('陪伴建议:'):
             notes=care_notes(c)
             if notes['error']: raise RecordError('陪伴建议或提醒状态暂时无法核对，请刷新后重试',409,'care_unverified')

@@ -365,6 +365,40 @@ class GoalTests(unittest.TestCase):
         with self.app.connect() as c:c.execute("UPDATE manual_tasks SET child='示例乙' WHERE id=?",(own,))
         g=self.goal();self.assertFalse(g['task_feedback']);self.assertFalse(g['records']);self.assertEqual(g['task_missing'],1);self.assertTrue(g['pending_stale'])
 
+    def test_exam_result_source_follows_only_the_exact_linked_task(self):
+        def task(child,title):
+            return self.app.new_task(dict(child=child,title=title,due=self.now.date().isoformat(),category='todo'))['id']
+        linked=task('示例甲','英语 Unit1 单元测验')
+        unlinked=task('示例甲','英语 Unit2 单元测验')
+        foreign=task('示例乙','英语 Unit1 单元测验')
+        with self.app.connect() as c:
+            c.execute("INSERT INTO agent_items(id,job_id,child_id,kind,title,body,evidence,due,state,created,updated,task_id,plan) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ('school-exam-link','synthetic-exam-link','child-1','school','英语 Unit1 单元测验','','[]',self.now.date().isoformat(),'accepted',self.now.isoformat(),self.now.isoformat(),linked,
+                 json.dumps(dict(school_goal_id=self.ident,school_messages=[]))))
+        self.evaluate()
+        result=dict(child='示例甲',day=self.now.date().isoformat(),category='成绩',subject='英语',title='Unit1 测验结果',
+                    note='听写中有两个词需要核对。',source='事项:'+linked,score=78,total=100,request_key='synthetic-exam-result-link')
+        saved=self.app.save_record(result)
+        replayed=self.app.save_record(result)
+        self.assertEqual(replayed['record_id'],saved['record_id']);self.assertTrue(replayed['replayed'])
+        current=self.goal()
+        self.assertEqual([r['id'] for r in current['records']],[saved['record_id']])
+        self.assertTrue(current['pending_stale']);self.assertIn(saved['record_id'],self.store.managed_ids())
+        self.assertEqual(self.app.task_status(next(t for t in self.app.tasks() if t['id']==linked)),'待跟进')
+
+        unrelated=self.app.save_record(dict(result,title='Unit2 测验结果',note='同科但未关联的事项。',source='事项:'+unlinked,
+                                               request_key='synthetic-unlinked-exam-result'))
+        self.assertEqual([r['id'] for r in self.goal()['records']],[saved['record_id']])
+        self.assertNotIn(unrelated['record_id'],self.store.managed_ids())
+        for source in ('事项:'+foreign,'事项:missing-task'):
+            with self.assertRaises(self.app.RecordError) as failure:
+                self.app.save_record(dict(result,source=source,request_key='synthetic-invalid-'+str(len(source))))
+            self.assertEqual(failure.exception.code,'record_task_mismatch')
+
+        self.evaluate()
+        evidence=json.dumps(self.last_input['evidence'],ensure_ascii=False)
+        self.assertIn(result['note'],evidence);self.assertNotIn('同科但未关联的事项',evidence)
+
     def test_task_feedback_bounds_and_legacy_note_are_explicit(self):
         self.approve(self.evaluate());task=self.goal()['task_id']
         for i in range(30):self.app.save_task(dict(id=task,status='进行中',note='虚构反馈'+str(i)+('甲'*1500 if i==29 else '')))

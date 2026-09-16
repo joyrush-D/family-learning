@@ -88,7 +88,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-agent-ui-') as tmp:
     app.save_task(dict(id=target,status='待跟进',note='虚构家长反馈：已口述一部分。'))
     study=app.study_store();study.save_item(dict(child_id='child-1',day=today,request_key='school-change-study-'+str(width),task_id=target,planned_minutes=10))
  for width in (360,1440):
-  exam=app.new_task(dict(child='示例星星',title='虚构英语单元测验 '+str(width),due=today))
+  exam=app.new_task(dict(child='示例星星',title='虚构英语单元测验 '+str(width),due=today,source='message:copy-a:before'+str(width)))
   store._save('exam-review:'+exam['id']+':'+today,'fixture',[dict(child_id='child-1',kind='review',title='记录考试结果：'+exam['title'],body='保存结果后请在事项确认完成；没参加可选择不参加。',task_id=exam['id'],due=today,evidence=[dict(ref='task:'+exam['id'],text=exam['title'])],plan=dict(exam_result_pending=True))],now)
  store._runtime('ready',now)
  app.prepare_assets()
