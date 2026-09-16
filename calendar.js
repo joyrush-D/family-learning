@@ -25,7 +25,7 @@ function agendaItemHTML(item){
  if(item.kind==='study')return agendaStudyHTML(item);
  if(item.kind==='task'){const t=data.tasks.find(t=>t.id===item.task_id);if(t?.focus?.box==='wish')return wishTaskHTML(t);return t?`<div class="agenda-task">${taskHTML(t,{compact:true})}</div>`:''}
  const source=(data.agent?.items||[]).find(x=>x.id===item.id);
- return `<div class="agenda-school">${source?agentItemHTML(source,{compact:true,agenda:item.agenda}):`<h3>${esc(item.title)}</h3><p>此条尚未载入详情，请在学校信息中核对。</p><button data-page="agent">查看学校信息</button>`}</div>`;
+ return `<div class="agenda-school" id="school-review-${esc(item.id)}" data-query-target="school-review:${esc(item.id)}" tabindex="-1">${source?agentItemHTML(source,{compact:true,agenda:item.agenda}):`<h3>${esc(item.title)}</h3><p>此条尚未载入详情，请在学校信息中核对。</p><button data-page="agent">查看学校信息</button>`}</div>`;
 }
 function calendarStudyStatus(item){return (item.result||(item.status==='running'?'正在计时':item.status==='paused'?'已暂停':'待开始'))+(item.result_actor==='child'?' · 孩子自述待核对':'')}
 function agendaStudyHTML(item){return `<article class="task agenda-study"><span class="chip">${esc(calendarNames(item.child_ids))}</span><h3>${esc(item.title)}</h3><p>${esc(calendarStudyStatus(item))}</p><button data-agenda-study="${esc(item.child_ids[0])}" data-agenda-day="${item.day}">打开作业执行</button></article>`}
@@ -71,7 +71,7 @@ function wishTaskHTML(t){return `<article class="task wish-task" data-query-targ
 function taskGroupsHTML(items,homeworkLabel='课内作业'){
  return [['homework',homeworkLabel],['todo','待办事项']].map(([kind,label])=>{
   const rows=items.filter(x=>(x.agenda.category==='homework'?'homework':'todo')===kind),confirmed=rows.filter(x=>x.kind!=='school'),pending=rows.filter(x=>x.kind==='school');
-  return `<section class="card agenda-group" id="task-group-${kind}" tabindex="-1"><div class="task-group-heading"><h2>${label} · ${confirmed.length}${pending.length?` <span class="review-badge">待核对 ${pending.length}</span>`:''}</h2>${homeworkLabel==='今日作业'?`<button class="task-show-all" data-task-all="${kind}">所有${kind==='homework'?'作业':'待办'} →</button>`:''}</div>${confirmed.map(agendaItemHTML).join('')||'<p class="small muted">暂无已确认事项</p>'}${pending.map(agendaItemHTML).join('')}</section>`;
+  return `<section class="card agenda-group" id="task-group-${kind}" tabindex="-1"><div class="task-group-heading"><h2>${label} · ${confirmed.length}${pending.length?` <a class="review-badge review-link" href="#school-review-${esc(pending[0].id)}">待核对 ${pending.length}</a>`:''}</h2>${homeworkLabel==='今日作业'?`<button class="task-show-all" data-task-all="${kind}">所有${kind==='homework'?'作业':'待办'} →</button>`:''}</div>${pending.map(agendaItemHTML).join('')}${confirmed.map(agendaItemHTML).join('')||'<p class="small muted">暂无已确认事项</p>'}</section>`;
  }).join('');
 }
 function taskInboxHTML(){

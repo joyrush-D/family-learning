@@ -61,6 +61,9 @@ function fixtures(base){
     assert.equal(await card('LINK').count(),1,'one task is not duplicated');
     assert.match(await card('PAST').innerText(),/逾期/);assert.match(await card('ADMIN').innerText(),/发布：待核对/);
     assert.match(await homework.locator('h2').innerText(),/今日作业 · 8.*待核对 1/);assert.equal(await p.locator('[data-agent-item] [data-check]').count(),0,'unconfirmed notifications cannot be completed');
+    const review=homework.locator('#school-review-synthetic-school'),reviewLink=homework.locator('.review-link');
+    assert.ok((await review.boundingBox()).y<(await card('TODAY').boundingBox()).y,'pending school notice appears before confirmed homework');
+    assert.ok((await reviewLink.boundingBox()).height>=44,'pending review link is touch sized');await reviewLink.click();assert.equal(await review.evaluate(x=>document.activeElement===x),true,'pending review link focuses the notice');assert.notEqual(await review.evaluate(x=>getComputedStyle(x).outlineStyle),'none','focused notice remains visible to keyboard users');
     assert.deepEqual(await p.locator('[data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem)),['synthetic-school']);
     assert.match(await p.locator('[data-agent-item="synthetic-school"]').innerText(),/需要核对是否参加这次活动。/);
     assert.equal(await p.locator('[data-agent-item="synthetic-school"] h3').innerText(),'请准备虚构活动材料。');
@@ -73,8 +76,8 @@ function fixtures(base){
     assert.equal(await p.locator('[data-task-box]').count(),0,'collection tabs belong to inbox');
     assert.equal(await p.locator('#growthWorld,.universe').count(),0);assert.equal(resources.some(x=>/growth-world\.js|three\.(core|module)/.test(x)),false,'homepage never requests Three.js');
     await p.evaluate(()=>scrollTo(0,0)); // The timetable check above scrolled below the initial screen.
-    const firstTask=card('TODAY'),position=await firstTask.locator('h3').boundingBox();
-    assert.ok(position&&position.y>=0&&position.y+position.height<(width===360?560:820),'first task is on first screen');
+    const firstTask=card('TODAY'),position=await firstTask.locator('h3').boundingBox(),viewportHeight=await p.evaluate(()=>innerHeight);
+    assert.ok(position&&position.y>=0&&position.y+position.height<viewportHeight-60,'first confirmed task follows the pending notice on the first screen');
     assert.equal(await firstTask.locator('.task-requirement').isVisible(),true);assert.equal(await firstTask.locator('details .task-requirement').count(),0,'goal is not hidden');
     assert.equal(await firstTask.locator('[data-study-task-add]').innerText(),'作业计时');assert.equal(await firstTask.locator('[data-task-decisions]').isVisible(),true);
     assert.equal(await firstTask.locator('.checkhit,button:visible,summary:visible').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'44px actions');

@@ -169,7 +169,7 @@ test('daily UI keeps collection navigation in inbox and pending notifications di
  d.today_calendar={inbox:[],agenda:[],events:[],timetables:[]};
  assert.doesNotMatch(h.ctx.todayTasksHTML(),/data-task-box=/);assert.doesNotMatch(h.ctx.calendarHTML(),/data-task-box=/);
  assert.match(h.ctx.taskInboxHTML(),/data-task-box="Wish"/);assert.match(h.ctx.todayTasksHTML(),/href="#task-group-todo"/);
- const unconfirmed=h.ctx.taskGroupsHTML([{id:'synthetic-pending',kind:'school',child_ids:['child-a'],title:'虚构待核对要求',agenda:{category:'homework'}}],'今日作业');assert.match(unconfirmed,/今日作业 · 0/);assert.match(unconfirmed,/待核对 1/);
+ const unconfirmed=h.ctx.taskGroupsHTML([{id:'synthetic-pending',kind:'school',child_ids:['child-a'],title:'虚构待核对要求',agenda:{category:'homework'}}],'今日作业');assert.match(unconfirmed,/今日作业 · 0/);assert.match(unconfirmed,/href="#school-review-synthetic-pending">待核对 1/);assert.match(unconfirmed,/id="school-review-synthetic-pending" data-query-target="school-review:synthetic-pending" tabindex="-1"/);
  const core=readFileSync(__dirname+'/app.js','utf8'),start=core.indexOf('function agentItemHTML'),end=core.indexOf('function agentChildHTML',start);
  const ctx=vm.createContext({data:{children:[{id:'child-a',name:'虚构孩子'}],tasks:[]},esc:escape,agendaDateHTML:h.ctx.agendaDateHTML,schoolOriginalButtons:()=>''});vm.runInContext(core.slice(start,end),ctx);
  const title='待核对：阅读要求\n'+('很长的虚构原通知。'.repeat(40)),item={id:'synthetic-school',kind:'school',child_id:'child-a',state:'pending',title,body:'请核对这条通知是否适用',evidence:[{text:'<script>unsafe</script>',ref:'synthetic:notice'}]};
