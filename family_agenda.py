@@ -51,7 +51,7 @@ def deadlines(text,published):
     text=_relative_weekday(text,anchor)
     candidates=set()
     # A date alone is not a deadline; it must be tied to handing in, bringing or a dated test the child sits.
-    pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:[^。；;\n]{0,8}?)(?:前|截止|完成|提交|上交|交齐|带到|带来|交作业|带|穿|交(?!流|通|换|谈)|测验|考试|听写|默写|检测)'
+    pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:[^。；;，,\n]{0,8}?)(?:前|截止|完成|提交|上交|交齐|带到|带来|交作业|带|穿|交(?!流|通|换|谈)|测验|考试|听写|默写|检测)'
     for match in re.finditer(pattern,text or ''):
         token=match[1];value=date(token)
         if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):
@@ -71,8 +71,8 @@ def deadlines(text,published):
     # date and the exam word, past the tight window above. Allow that gap but stop before another date
     # or a clause break so separate items keep their own dates. 测试/检测 stay out here: 设备测试/核酸检测
     # are not tests the child sits, and the tight pass already covers their own phrasings.
-    exam_event=r'单元测|小测|月考|期中|期末|测验|考试|统考|联考|水平测|质检|摸底'
-    span=r'(?:(?!\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)[^。；;\n]){0,16}?'
+    exam_event=r'单元测|体育测试|小测|月考|期中|期末|测验|考试|统考|联考|水平测|质检|摸底'
+    span=r'(?:(?!\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)[^。；;，,\n]){0,16}?'
     for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)'+span+r'(?:'+exam_event+r')',text or ''):
         token=match[1];value=date(token)
         if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):
@@ -90,6 +90,18 @@ def deadline(text,published):
 
 
 _EXAM_RE = re.compile(r'测验|测试|考试|单元测|小测|月考|期中|期末|检测|统考|联考|水平测|质检|摸底')
+
+
+def _exam_identity(text):
+    """The smallest stable identity needed to keep one subject's exams apart."""
+    text=(text or '').lower()
+    kind=next((x for x in ('单元','期中','期末','月考','小测','统考','联考','水平测','质检','摸底') if x in text),
+              '测验' if '测验' in text else '考试' if '考试' in text else '测试' if re.search(r'测试|检测',text) else '')
+    units=set()
+    for value in re.findall(r'unit\s*\d+(?:\s*[-–—~～至到]\s*(?:unit\s*)?\d+)?',text,re.I):
+        units.add('unit'+'-'.join(re.findall(r'\d+',value)))
+    units.update(re.findall(r'第?[一二三四五六七八九十百0-9]+单元',text))
+    return kind,units
 
 
 def is_exam(text):
@@ -125,18 +137,22 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None):
     days=sorted({sent_day(m.get('time','')) for m in messages}-{''})
     organized=focus.get('category') in ('unknown','homework','todo')
     published=focus.get('published_on','') if organized else (days[0] if len(days)==1 else '')
-    # Only borrow a source deadline from the clause naming this task, not a sibling instruction.
     subject=re.sub(r'^待核对[：:]?\s*','',title).rstrip('。')
     # Borrow a source deadline only from the clause naming THIS task, not a sibling instruction.
     # An exam task's title is usually rewritten (subject prefix, weekday suffix), so it is no longer a
-    # literal substring of the notice; for a dated test, match the exam clause by its nature instead so
-    # the date still grounds the result reminder. Two different exam dates stay ambiguous, as before.
-    named=[(clause,m) for m in messages for clause in re.split(r'[。；;，,\n]',m.get('text','')) if subject and subject in clause]
-    # A dated test's title is usually rewritten, so it is no longer a substring of any clause; fall back to
-    # the exam clause by its nature so the date still grounds the reminder. Two different exam dates stay ambiguous.
-    selected=named or ([(clause,m) for m in messages for clause in re.split(r'[。；;，,\n]',m.get('text','')) if is_exam(clause)] if is_exam(subject) else [])
+    # literal substring of the notice. Match its school subject; do not borrow another exam's date.
+    clauses=[(clause,m) for m in messages for clause in re.split(r'[。；;，,\n]',m.get('text',''))]
+    named=[(clause,m) for clause,m in clauses if subject and subject in clause]
+    prefix=re.match(r'\s*([^：:]{1,12})[：:]',subject)
+    exam_subject=prefix[1].strip() if prefix else ''
+    exam_kind,exam_units=_exam_identity(subject)
+    fallback=[(clause,m) for clause,m in clauses if exam_subject and exam_subject in clause and
+              _exam_identity(clause)[0]==exam_kind and (not exam_units or exam_units & _exam_identity(clause)[1])]
+    selected=(named or fallback) if is_exam(subject) else named
     dates={deadline(clause,sent_day(m.get('time',''))) for clause,m in selected}-{''}
-    due_on=focus.get('due_on','') if organized else deadline(due,published) or deadline(title,published) or (next(iter(dates)) if len(dates)==1 else '')
+    source_unknown=any(re.search(r'(?:时间|日期).{0,6}(?:另行通知|另行安排|待定|未定)',clause) for clause,_ in selected)
+    source_due=next(iter(dates)) if len(dates)==1 and not source_unknown else ''
+    due_on=focus.get('due_on','') if organized else deadline(due,published) or deadline(title,published) or source_due
     category=focus.get('category','')
     if category not in ('homework','todo'):category='todo' if category=='unknown' else task_category(title)
     return dict(category=category,published_on=published,due_on=due_on,scheduled_on=focus.get('scheduled_on',''),

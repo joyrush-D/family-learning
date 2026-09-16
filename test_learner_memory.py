@@ -13,6 +13,7 @@ def conn():
 
 
 NOW1 = dt.datetime(2026, 9, 10, 20, 0, 0)
+NOW1_LATER = dt.datetime(2026, 9, 10, 21, 0, 0)
 NOW2 = dt.datetime(2026, 9, 20, 20, 0, 0)
 
 
@@ -48,6 +49,14 @@ class LearnerMemoryTest(unittest.TestCase):
         self.assertEqual(again, 0)  # same evidence_hash on the current valid rows -> replay, no write
         self.assertEqual(len(lm.timeline(c, 'child-1')), 3)
 
+    def test_same_evidence_with_changed_judgment_is_a_new_confirmation(self):
+        c = conn()
+        confirm(c, NOW1, evidence='h1', assessment='旧判断', hypotheses=HYP[:1])
+        written = confirm(c, NOW2, evidence='h1', assessment='家长核对后的新判断', hypotheses=HYP[1:])
+        self.assertEqual(written, 2)
+        self.assertEqual(lm.learner_card(c, 'child-1')[0]['assessment'], '家长核对后的新判断')
+        self.assertEqual(len(lm.prior_confirmations(c, 'child-1', 'goal-1')), 1)
+
     def test_new_confirmation_supersedes_and_keeps_history(self):
         c = conn()
         confirm(c, NOW1, evidence='h1', assessment='旧判断：ea/ee 混', hypotheses=HYP[:1])
@@ -65,6 +74,10 @@ class LearnerMemoryTest(unittest.TestCase):
         self.assertEqual(len(current), 2)  # new assessment + new hypothesis
         self.assertTrue(all(r['confirmed_on'] == '2026-09-10' for r in invalidated))
         self.assertEqual({r['invalid_from'] for r in invalidated}, {NOW2.isoformat()})
+        raw = c.execute('SELECT id,invalid_from,superseded_by FROM learner_memory ORDER BY id').fetchall()
+        replacement = next(r['id'] for r in raw if r['invalid_from'] is None)
+        self.assertTrue(all(r['superseded_by'] == replacement for r in raw if r['invalid_from'] is not None))
+        self.assertTrue(all(r['superseded_by'] is None for r in raw if r['invalid_from'] is None))
 
     def test_per_goal_supersession_is_independent(self):
         c = conn()
@@ -100,6 +113,18 @@ class LearnerMemoryTest(unittest.TestCase):
         self.assertEqual([h['reason'] for h in prior[0]['hypotheses']], ['ea/ee 形音对应不稳定'])
         # The current (valid) judgment is excluded from prior_confirmations.
         self.assertEqual(lm.learner_card(c, 'child-1')[0]['assessment'], '第二次判断')
+
+    def test_prior_confirmations_orders_same_day_by_confirmation_time(self):
+        c = conn()
+        confirm(c, NOW1, evidence='h1', assessment='当天第一次判断', hypotheses=[])
+        confirm(c, NOW1_LATER, evidence='h2', assessment='当天第二次判断', hypotheses=[])
+        confirm(c, NOW2, evidence='h3', assessment='现判断', hypotheses=[])
+        self.assertEqual([x['assessment'] for x in lm.prior_confirmations(c, 'child-1', 'goal-1')],
+                         ['当天第二次判断', '当天第一次判断'])
+        c = conn()
+        confirm(c, NOW1, goal='goal-A', evidence='a1', assessment='目标A', hypotheses=[])
+        confirm(c, NOW1_LATER, goal='goal-B', evidence='b1', assessment='目标B', hypotheses=[])
+        self.assertEqual([x['goal_id'] for x in lm.learner_card(c, 'child-1')], ['goal-B', 'goal-A'])
 
     def test_manual_plan_placeholder_is_recorded_as_confirmed_state(self):
         c = conn()

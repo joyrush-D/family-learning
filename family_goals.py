@@ -530,6 +530,7 @@ class Store:
                 goals.append(dict(id=row['id'], child_id=row['child_id'], **ctx['fields'], version=ctx['version'],
                     lifecycle=plan.get('lifecycle', 'active'), task_id=row['task_id'],
                     current_plan=plan.get('approved'), assessment=plan.get('assessment'), hypotheses_detail=plan.get('hypotheses', []),
+                    current_plan_confirmed_at=plan.get('approved_changed_at', ''),
                     reviewed_evidence=ctx['reviewed_evidence'], omitted_reviewed_refs=ctx['omitted_reviewed_refs'], unavailable_reviewed_refs=ctx['unavailable_reviewed_refs'],
                     evidence_changed=bool(plan.get('approved') and reviewed != ctx['evidence_hash']),
                     records=[{**r, 'attachments': json.loads(r['attachments'])} for r in ctx['input_records']],

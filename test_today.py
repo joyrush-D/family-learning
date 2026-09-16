@@ -15,7 +15,7 @@ class FixedDatetime(dt.datetime):
 
 
 with tempfile.TemporaryDirectory(prefix='synthetic-today-') as folder:
-    root=Path(folder); data=root/'private'
+    root=Path(folder); data=root/'private'; data.mkdir()
     with patch.dict(os.environ, {'FAMILY_DATA':str(data)}):
         import app
     with patch.multiple(app, ROOT=root, DATA=data, DB=data/'family.sqlite3'), patch.object(app.dt, 'datetime', FixedDatetime):

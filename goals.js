@@ -128,16 +128,17 @@ ${esc(d.values.action)}</p><button type="button" data-goal-clear-draft="${esc(d.
   const outcomeOf=r=>(r.score!=null&&r.score!=='')||(r.total!=null&&r.total!=='')||r.category==='成绩'||['老师反馈','平台报告'].includes((r.source||'').split(' · 学习目标')[0])||['订正','复测'].includes(r.followup_kind);
   const recheck=[];
   for(const g of goals){
-   if(!g.current_plan)continue;
-   const reviewed=new Set((g.reviewed_evidence||[]).map(e=>e.ref));
-   const outs=(g.records||[]).filter(r=>r.id!=null&&outcomeOf(r)&&!reviewed.has('record:'+r.id)).sort((a,b)=>String(b.day).localeCompare(String(a.day)));
+   const confirmed=String(g.current_plan_confirmed_at||'');
+   if(!g.current_plan||!confirmed)continue;
+   const outs=(g.records||[]).filter(r=>r.id!=null&&outcomeOf(r)&&String(r.created||'')>confirmed)
+    .sort((a,b)=>String(b.created||b.day).localeCompare(String(a.created||a.day)));
    if(outs.length)recheck.push({g,r:outs[0]});
   }
   const recheckIds=new Set(recheck.map(x=>x.r.id));
   const factsShown=facts.filter(x=>!recheckIds.has(x.r.id));
   // Correctable long-term memory (R26): how a goal's confirmed judgment changed across confirmations.
   const evolution=goals.filter(g=>(g.prior_confirmations||[]).length);
-  if(!judgments.length&&!reached.length&&!attention.length&&!facts.length&&!reports.length&&!methods.length&&!evolution.length)return '';
+  if(!judgments.length&&!reached.length&&!attention.length&&!factsShown.length&&!reports.length&&!methods.length&&!recheck.length&&!evolution.length)return '';
   const goalLink=g=>`<button type="button" data-goal-select="${esc(g.id)}">查看目标：${esc(g.title)}</button>${g.lifecycle==='paused'?' · 已暂缓':''}`;
   const recExcerpt=r=>`${esc(r.title||'记录')}${r.score!=null&&r.score!==''?' · '+esc(r.score)+(r.total?'/'+esc(r.total):''):''}`+(r.note?' — '+esc(String(r.note).split('\n')[0].slice(0,60)):'');
   const recLine=x=>`<li>${recExcerpt(x.r)} <span class="small muted">(${esc(x.r.subject||'科目待核对')} · ${esc((x.r.source||'来源待核对').split(' · 学习目标')[0])} · ${esc(x.r.day||'日期待核对')})</span> <button type="button" data-goal-record="${esc(x.r.id)}">查看 / 更正</button></li>`;

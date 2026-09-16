@@ -11,16 +11,12 @@ bi-temporal knowledge graph:
   invalid_from  when it stopped being believed: NULL while current, set to the
                 moment a newer confirmation for the same goal supersedes it
 
-Nothing is ever deleted or overwritten: a superseded judgment stays readable as
-history. This module owns only its own table and never imports the goal/app code,
+Judgment text is never deleted or overwritten: a superseded row only gains its
+validity end and replacement link, and stays readable as history. This module owns only its own table and never imports the goal/app code,
 so it adds no new service and minimal coupling; writes run inside the caller's
 existing transaction cursor.
 """
-import datetime as dt
 import json
-
-
-KINDS = ('assessment', 'hypothesis')
 
 
 def _ensure(c):
@@ -55,17 +51,15 @@ def record_confirmation(c, now, *, child_id, goal_id, subject, title, confirmed_
                         assessment, hypotheses, evidence_hash):
     """Append the judgment confirmed now; supersede the goal's previous still-valid rows.
 
-    Idempotent: if the goal's current valid rows already carry this evidence_hash,
-    the same confirmation is being replayed and nothing is written. Returns the number
-    of rows inserted (0 on replay or when there is nothing to record).
+    Idempotent only for an exact replay of the same judgment and evidence. Returns the
+    number of rows inserted (0 on replay or when there is nothing to record).
     """
     _ensure(c)
     stamp = now.isoformat()
     current = c.execute(
-        "SELECT id, evidence_hash FROM learner_memory WHERE goal_id=? AND child_id=? AND invalid_from IS NULL",
+        "SELECT id,kind,text,status,support,against,evidence_hash FROM learner_memory "
+        "WHERE goal_id=? AND child_id=? AND invalid_from IS NULL ORDER BY id",
         (goal_id, child_id)).fetchall()
-    if current and all(row['evidence_hash'] == evidence_hash for row in current) and evidence_hash:
-        return 0  # This confirmation is already recorded; a replay must not duplicate it.
     rows = []
     if isinstance(assessment, str) and assessment.strip():
         rows.append(('assessment', assessment.strip(), '', [], []))
@@ -79,6 +73,12 @@ def record_confirmation(c, now, *, child_id, goal_id, subject, title, confirmed_
         rows.append(('hypothesis', reason.strip(), status, _refs(h.get('support')), _refs(h.get('against'))))
     if not rows:
         return 0
+    serialized = [(kind, text, status, json.dumps(support, ensure_ascii=False),
+                   json.dumps(against, ensure_ascii=False))
+                  for kind, text, status, support, against in rows]
+    current_payload = [(r['kind'], r['text'], r['status'], r['support'], r['against']) for r in current]
+    if current and current_payload == serialized and all(r['evidence_hash'] == (evidence_hash or '') for r in current):
+        return 0  # Exact replay; the same evidence with a changed judgment is a new confirmation.
     # Only invalidate the prior belief once we know we have a new one to write in its place.
     if current:
         c.execute("UPDATE learner_memory SET invalid_from=? WHERE goal_id=? AND child_id=? AND invalid_from IS NULL",
@@ -88,15 +88,16 @@ def record_confirmation(c, now, *, child_id, goal_id, subject, title, confirmed_
         cur = c.execute(
             "INSERT INTO learner_memory(child_id,goal_id,kind,text,status,support,against,subject,title,"
             "confirmed_on,recorded_at,valid_from,invalid_from,superseded_by,evidence_hash) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?)",
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,?)",
             (child_id, goal_id, kind, text, status, json.dumps(support, ensure_ascii=False),
              json.dumps(against, ensure_ascii=False), subject or '', title or '',
-             confirmed_on, stamp, stamp, first_id, evidence_hash or ''))
+             confirmed_on, stamp, stamp, evidence_hash or ''))
         first_id = first_id or cur.lastrowid
     # Point the superseded rows at the assessment/first row of the batch that replaced them.
     if current and first_id is not None:
-        c.execute("UPDATE learner_memory SET superseded_by=? WHERE goal_id=? AND child_id=? AND invalid_from=? AND superseded_by IS NULL",
-                  (first_id, goal_id, child_id, stamp))
+        ids=[r['id'] for r in current]
+        c.execute(f"UPDATE learner_memory SET superseded_by=? WHERE id IN ({','.join('?' for _ in ids)})",
+                  (first_id,*ids))
     return len(rows)
 
 
@@ -127,13 +128,14 @@ def learner_card(c, child_id, *, limit_goals=12):
     goals = {}
     for r in rows:
         g = goals.setdefault(r['goal_id'], dict(goal_id=r['goal_id'], subject=r['subject'], title=r['title'],
-                                                confirmed_on=r['confirmed_on'], assessment='', hypotheses=[]))
+                                                confirmed_on=r['confirmed_on'], _valid_from=r['valid_from'], assessment='', hypotheses=[]))
         if r['kind'] == 'assessment' and not g['assessment']:
             g['assessment'] = r['text']
         elif r['kind'] == 'hypothesis':
             g['hypotheses'].append(dict(reason=r['text'], status=r['status'],
                                         support=json.loads(r['support']), against=json.loads(r['against'])))
-    ordered = sorted(goals.values(), key=lambda g: g['confirmed_on'], reverse=True)
+    ordered = sorted(goals.values(), key=lambda g: (g['confirmed_on'], g['_valid_from']), reverse=True)
+    for g in ordered: g.pop('_valid_from')
     return ordered[:limit_goals]
 
 
@@ -156,8 +158,8 @@ def prior_confirmations(c, child_id, goal_id, *, limit=5):
             e['assessment'] = r['text']
         elif r['kind'] == 'hypothesis':
             e['hypotheses'].append(dict(reason=r['text'], status=r['status']))
-    ordered = sorted(events.values(), key=lambda e: e['confirmed_on'], reverse=True)
-    return ordered[:limit]
+    ordered = sorted(events.items(), key=lambda item: (item[1]['confirmed_on'], item[0]), reverse=True)
+    return [event for _,event in ordered[:limit]]
 
 
 def timeline(c, child_id, goal_id=None):

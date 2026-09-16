@@ -94,6 +94,7 @@ class AgendaTest(unittest.TestCase):
         for text in ['每周五交作业','上周五交的作业','每个星期五交作业','上个星期五交的作业','下下周五交作业',
                      '周一到周三交作业','本周五到下周一提交','下周一至三交作业','下周一到周三春游','周末愉快','2月14日开始活动','周五']:
             self.assertEqual(agenda.deadline(text,monday),'',text)
+        self.assertEqual(agenda.deadline('本周五英语复习，数学考试时间另行通知',monday),'','a date cannot cross a comma into another event')
         self.assertEqual(agenda.deadline('周五交',''),'')
         self.assertEqual(agenda.deadline('本周一交','2026-09-16'),'','a weekday already gone this week stays for review')
         notice='今天英语作业：抄写单词。本周五（09月18日）英语单元测验。另外下周一美术课请带一盒水彩笔。'
@@ -144,6 +145,37 @@ class AgendaTest(unittest.TestCase):
             homework=agenda.metadata(app,c,'child-1','英语：抄写Unit3单词每个两遍','',['message:synthetic-class:9'])
         self.assertEqual(exam['due_on'],'2026-09-18')
         self.assertEqual(homework['due_on'],'')
+
+        text='本周五英语单元测验，英语期中考试时间另行通知，数学期中考试时间另行通知。'
+        self.store.ingest(dict(source_id='synthetic-class',expected_cursor='1',cursor='2',checked_at=stamp,last_message_time=stamp,error='',
+                               messages=[dict(id='10',time=stamp,kind='text',sender='示例老师',text=text,unread=False)]))
+        with app.connect() as c:
+            english=agenda.metadata(app,c,'child-1','英语：单元测验','',['message:synthetic-class:10'])
+            english_midterm=agenda.metadata(app,c,'child-1','英语：期中考试','',['message:synthetic-class:10'])
+            math=agenda.metadata(app,c,'child-1','数学：期中考试','',['message:synthetic-class:10'])
+        self.assertEqual(english['due_on'],'2026-09-18')
+        self.assertEqual(english_midterm['due_on'],'')
+        self.assertEqual(math['due_on'],'')
+
+        text='本周五英语Unit1单元测验，下周一英语Unit2单元测验，英语Unit3单元测验时间另行通知。'
+        self.store.ingest(dict(source_id='synthetic-class',expected_cursor='2',cursor='3',checked_at=stamp,last_message_time=stamp,error='',
+                               messages=[dict(id='11',time=stamp,kind='text',sender='示例老师',text=text,unread=False)]))
+        with app.connect() as c:
+            unit1=agenda.metadata(app,c,'child-1','英语：Unit1单元测验','',['message:synthetic-class:11'])
+            unit2=agenda.metadata(app,c,'child-1','英语：Unit2单元测验','',['message:synthetic-class:11'])
+            unit3=agenda.metadata(app,c,'child-1','英语：Unit3单元测验','',['message:synthetic-class:11'])
+        self.assertEqual(unit1['due_on'],'2026-09-18')
+        self.assertEqual(unit2['due_on'],'2026-09-21')
+        self.assertEqual(unit3['due_on'],'')
+
+        text='本周五体育测试。下周一信息Unit1小测。'
+        self.store.ingest(dict(source_id='synthetic-class',expected_cursor='3',cursor='4',checked_at=stamp,last_message_time=stamp,error='',
+                               messages=[dict(id='12',time=stamp,kind='text',sender='示例老师',text=text,unread=False)]))
+        with app.connect() as c:
+            exact=agenda.metadata(app,c,'child-1','体育测试','',['message:synthetic-class:12'])
+            rewritten=agenda.metadata(app,c,'child-1','信息：Unit1小测（下周一）','',['message:synthetic-class:12'])
+        self.assertEqual(exact['due_on'],'2026-09-18')
+        self.assertEqual(rewritten['due_on'],'2026-09-21')
 
     def test_wish_capture_promotion_and_retry_preserve_one_task(self):
         today=dt.datetime.now(app.dt.timezone(app.dt.timedelta(hours=8))).date().isoformat()
