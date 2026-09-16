@@ -71,7 +71,7 @@ function wishTaskHTML(t){return `<article class="task wish-task" data-query-targ
 function taskGroupsHTML(items,homeworkLabel='课内作业'){
  return [['homework',homeworkLabel],['todo','待办事项']].map(([kind,label])=>{
   const rows=items.filter(x=>(x.agenda.category==='homework'?'homework':'todo')===kind),confirmed=rows.filter(x=>x.kind!=='school'),pending=rows.filter(x=>x.kind==='school');
-  return `<section class="card agenda-group" id="task-group-${kind}" tabindex="-1"><div class="task-group-heading"><h2>${label} · ${confirmed.length}${pending.length?` <a class="review-badge review-link" href="#school-review-${esc(pending[0].id)}">待核对 ${pending.length}</a>`:''}</h2>${homeworkLabel==='今日作业'?`<button class="task-show-all" data-task-all="${kind}">所有${kind==='homework'?'作业':'待办'} →</button>`:''}</div>${pending.map(agendaItemHTML).join('')}${confirmed.map(agendaItemHTML).join('')||'<p class="small muted">暂无已确认事项</p>'}</section>`;
+  return `<section class="card agenda-group" id="task-group-${kind}" tabindex="-1"><div class="task-group-heading"><h2>${label} · ${confirmed.length}${pending.length?` <a class="review-badge review-link" href="#school-review-${esc(pending[0].id)}">待核对 ${pending.length}</a>`:''}</h2>${homeworkLabel==='今日作业'?`<button class="task-show-all" data-task-all="${kind}">所有${kind==='homework'?'作业':'待办'} →</button>`:''}</div>${confirmed.map(agendaItemHTML).join('')||'<p class="small muted">暂无已确认事项</p>'}${pending.map(agendaItemHTML).join('')}</section>`;
  }).join('');
 }
 function taskInboxHTML(){
