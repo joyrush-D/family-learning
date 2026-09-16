@@ -940,8 +940,13 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             if subject and any(e['ref'] in {q['ref'] for q in cited} and not e.get('content_incomplete')
                                and not _needs_task_details(e['text']) for e in evidence):
                 item['plan'] = {'school_learning': {'subject': subject, 'goal_id': goal_id}}
+            raw_change=proposal.get('task_change','new');raw_target=proposal.get('task_target_id','')
             brief=_school_brief({key:proposal.get('task_'+key,'review' if key=='state' else 'new' if key=='change' else '') for key in ['title','goal','advice','state','reason','change','target_id']},
                                 incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence if e['ref'] in {q['ref'] for q in cited}),evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}],school_tasks=school_tasks)
+            target=next((t for t in school_tasks if t['id']==raw_target),None)
+            status_reply=cited and all(e['text'].strip('。！! ') in {'已签署','已完成','已处理','已确认','已提交','已报名','已打卡','已阅读','已知悉'} for e in cited)
+            if status_reply and raw_change=='new' and target and brief['title'].strip()==target['title'].strip() and brief['goal'].strip()==target['goal'].strip() and (not due or due==target.get('due','')):
+                continue
             if uncertain_due and brief['state']!='reference':
                 brief.update(state='review',reason=brief['reason'][:300]+' 截止日期尚无法从原文核对，未采用模型日期；请核对原通知。')
             elif due and due<as_of and brief['state']!='reference':

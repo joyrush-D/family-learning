@@ -230,6 +230,29 @@ class AgentTests(unittest.TestCase):
         self.assertEqual((ambiguous['state'],ambiguous['change'],ambiguous['target_id']),('review','new',''))
         self.assertIn('新要求还是学校变更',ambiguous['reason'])
 
+    def test_school_selection_discards_model_copy_of_existing_task(self):
+        evidence=[dict(ref='message:synthetic-group:11',text='已签署',time=self.now.isoformat(),content_incomplete=False)]
+        task=dict(id='task-1',title='语文：完成观察记录',goal='完成一份自己的观察记录。',due='',status='待跟进')
+        proposal=dict(title_quote='已处理',focus='school',due='',evidence=[dict(ref=evidence[0]['ref'])],learning_subject='',learning_goal_id='',
+            task_title=task['title'],task_goal=task['goal'],task_advice='',task_state='ready',task_reason='模型整理',task_change='new',task_target_id=task['id'])
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):
+            self.assertEqual(agent._select('school',evidence,school_goals=[],school_tasks=[task],as_of=self.now.date().isoformat()),[])
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[dict(proposal,task_goal='新增一项不同要求。')])):
+            kept=agent._select('school',evidence,school_goals=[],school_tasks=[task],as_of=self.now.date().isoformat())
+        self.assertEqual(len(kept),1);self.assertEqual(kept[0]['plan']['school_task']['state'],'review')
+        cancelled=[dict(evidence[0],text='已取消')]
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[dict(proposal,title_quote=cancelled[0]['text'])])):
+            kept=agent._select('school',cancelled,school_goals=[],school_tasks=[task],as_of=self.now.date().isoformat())
+        self.assertEqual(len(kept),1)
+        repeated=[dict(evidence[0],text='再做一次')]
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[dict(proposal,title_quote=repeated[0]['text'])])):
+            kept=agent._select('school',repeated,school_goals=[],school_tasks=[task],as_of=self.now.date().isoformat())
+        self.assertEqual(len(kept),1)
+        dated=[dict(evidence[0],text='后天提交观察记录。')]
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[dict(proposal,title_quote=dated[0]['text'],due='2026-02-12')])):
+            kept=agent._select('school',dated,school_goals=[],school_tasks=[task],as_of=self.now.date().isoformat())
+        self.assertEqual(len(kept),1);self.assertEqual(kept[0]['due'],'2026-02-12')
+
     def payload(self, expected='10', cursor='11', message='11', offset=0):
         stamp = (self.now + dt.timedelta(minutes=offset)).isoformat()
         return dict(source_id=self.source['id'], expected_cursor=expected, cursor=cursor,
