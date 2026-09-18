@@ -30,6 +30,7 @@ import family_tls
 import family_task_focus
 import family_wrong_questions
 import family_wrong_review
+import family_diagnosis
 import family_agenda
 import family_guided
 import family_goals
@@ -405,6 +406,10 @@ def guided_store():
 
 def wrong_review_store():
     return family_wrong_review.Store(SimpleNamespace(**globals()))
+
+def diagnosis_run(obj):
+    if not isinstance(obj,dict) or set(obj)-{'child_id','subject'}: raise ValueError('诊断请求字段不正确')
+    return family_diagnosis.diagnose(SimpleNamespace(**globals()),clean(obj,'child_id',80),clean(obj,'subject',80),data_path=DATA)
 
 def goal_store():
     return family_goals.Store(SimpleNamespace(**globals()))
@@ -1651,6 +1656,12 @@ class Handler(BaseHTTPRequestHandler):
                 try: return self.reply(200,wrong_review_store().save(obj))
                 except family_wrong_review.WrongReviewError as e: return self.reply(e.status,dict(error=str(e),code=e.code))
                 except RecordError as e: return self.reply(e.status,dict(error=str(e),code=e.code,not_saved=e.not_saved,request_known=e.request_known))
+            if self.path=='/api/diagnosis/run':
+                self.connection.settimeout(150)
+                try: return self.reply(200,diagnosis_run(obj))
+                except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
+                except family_diagnosis.DiagnosisError as e: return self.reply(e.status,dict(error=str(e),code=e.code))
+                except ValueError as e: return self.reply(400,dict(error=str(e)))
             if self.path=='/api/ask':
                 try: return self.reply(200,ask_family(obj))
                 except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
