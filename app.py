@@ -28,6 +28,8 @@ import family_teachers
 import family_access
 import family_tls
 import family_task_focus
+import family_wrong_questions
+import family_wrong_review
 import family_agenda
 import family_guided
 import family_goals
@@ -79,9 +81,9 @@ CARE_CHOICES = ('', '愿意试试', '暂不考虑', '改天回看')
 TASK_DISMISSED = ('不参加', '不适用')
 TASK_CLOSED = ('已完成', *TASK_DISMISSED, '已归档')
 TASK_STATUSES = ('待跟进', '进行中', '已完成', *TASK_DISMISSED)
-BUNDLE = ('app.js', 'reading.js', 'calendar.js', 'child-access.js', 'learning.js', 'study.js', 'homework-input.js', 'settings.js', 'guided.js', 'teachers.js', 'goals.js')
+BUNDLE = ('app.js', 'reading.js', 'calendar.js', 'child-access.js', 'learning.js', 'study.js', 'homework-input.js', 'settings.js', 'guided.js', 'teachers.js', 'goals.js', 'wrong-review.js')
 STATIC = {'/': 'index.html', **{'/'+name: name for name in (
-    *BUNDLE, 'startup.js', 'ui.css', 'learning.css', 'study.css', 'homework-input.css', 'teachers.css', 'growth-world.js',
+    *BUNDLE, 'startup.js', 'ui.css', 'learning.css', 'study.css', 'homework-input.css', 'teachers.css', 'wrong-review.css', 'growth-world.js',
     'vendor/three.module.min.js', 'vendor/three.core.min.js')}}
 
 
@@ -400,6 +402,9 @@ def study_store():
 
 def guided_store():
     return family_guided.Store(SimpleNamespace(**globals()))
+
+def wrong_review_store():
+    return family_wrong_review.Store(SimpleNamespace(**globals()))
 
 def goal_store():
     return family_goals.Store(SimpleNamespace(**globals()))
@@ -1636,6 +1641,16 @@ class Handler(BaseHTTPRequestHandler):
                 try: return self.reply(200,draft_from_material(obj))
                 except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
                 except ValueError as e: return self.reply(400,dict(error=str(e)))
+            if self.path=='/api/wrong/annotate':
+                self.connection.settimeout(180)
+                try: return self.reply(200,wrong_review_store().annotate(obj))
+                except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
+                except family_wrong_review.WrongReviewError as e: return self.reply(e.status,dict(error=str(e),code=e.code))
+                except ValueError as e: return self.reply(400,dict(error=str(e)))
+            if self.path=='/api/wrong/save':
+                try: return self.reply(200,wrong_review_store().save(obj))
+                except family_wrong_review.WrongReviewError as e: return self.reply(e.status,dict(error=str(e),code=e.code))
+                except RecordError as e: return self.reply(e.status,dict(error=str(e),code=e.code,not_saved=e.not_saved,request_known=e.request_known))
             if self.path=='/api/ask':
                 try: return self.reply(200,ask_family(obj))
                 except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))

@@ -173,3 +173,9 @@
 
 !/family_wrong_questions.py
 !/test_wrong_questions.py
+
+!/family_wrong_review.py
+!/test_wrong_review.py
+!/wrong-review.js
+!/wrong-review.css
+!/test_wrong_review_ui.cjs
