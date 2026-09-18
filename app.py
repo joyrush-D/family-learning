@@ -80,7 +80,7 @@ CARE_CHOICES = ('', '愿意试试', '暂不考虑', '改天回看')
 TASK_DISMISSED = ('不参加', '不适用')
 TASK_CLOSED = ('已完成', *TASK_DISMISSED, '已归档')
 TASK_STATUSES = ('待跟进', '进行中', '已完成', *TASK_DISMISSED)
-BUNDLE = ('app.js', 'reading.js', 'calendar.js', 'child-access.js', 'learning.js', 'study.js', 'homework-input.js', 'settings.js', 'guided.js', 'teachers.js', 'goals.js')
+BUNDLE = ('app.js', 'reading.js', 'calendar.js', 'child-access.js', 'learning.js', 'study.js', 'homework-input.js', 'wrong-questions.js', 'settings.js', 'guided.js', 'teachers.js', 'goals.js')
 STATIC = {'/': 'index.html', **{'/'+name: name for name in (
     *BUNDLE, 'startup.js', 'ui.css', 'learning.css', 'study.css', 'homework-input.css', 'teachers.css', 'growth-world.js',
     'vendor/three.module.min.js', 'vendor/three.core.min.js')}}

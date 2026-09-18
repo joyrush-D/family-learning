@@ -172,6 +172,7 @@
 !/test_lan_https_ui.cjs
 
 !/family_wrong_questions.py
+!/wrong-questions.js
 !/test_wrong_questions.py
 !/test_wrong_question_review.py
 !/交接-错题VL-第二开发.md

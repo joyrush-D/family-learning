@@ -9,6 +9,8 @@ const wait=ms=>new Promise(r=>setTimeout(r,ms));
 from pathlib import Path
 from test_goals import synthetic_plan
 def model(messages,schema,name,*args,**kwargs):
+ if name=='family_wrong_questions_annotate':
+  return dict(pages=[dict(page=1,regions=[dict(kind='wrong_item',box=dict(x=100,y=120,w=300,h=90),label='第3题',text='27 + 8 = ?',answer='35',correction='正确 35',uncertain=False),dict(kind='layout',box=dict(x=0,y=0,w=1000,h=60),label='卷头',text='数学小测',answer='',correction='',uncertain=False)])],uncertainties=['第3题字迹较淡，请核对'])
  value=json.loads(messages[-1]['content'])
  if name=='family_agent_selection':
   e=value['evidence'][0]
@@ -21,6 +23,7 @@ def model(messages,schema,name,*args,**kwargs):
  if teacher:result['proposal']['evidence']=[dict(ref=teacher['ref'],quote=teacher['text'][:30])]
  return result
 family_llm._chat_json=model
+family_llm.configuration=lambda *a,**k:None
 prepare=app.prepare_assets
 def seed():
  prepare()
@@ -294,6 +297,24 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   const layerSaved=(await(await p.request.get(url+'api/state')).json()).records.filter(r=>String(r.id)===layerRecord);assert.equal(layerSaved.length,1);assert.equal(layerSaved[0].note,'虚构更正：尚未核对原件 '+width);
   assert.equal((await(await p.request.get(url+'api/goals')).json()).goals.find(g=>g.id===autoGoal.id).current_plan,null);
   if(process.env.GOALS_UI_PROOF_DIR)await layerProfile.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'profile-layers-corrected-'+width+'.png')});checks++;
+  // Wrong-question photo review: upload -> annotate (mocked draft) -> boxes+form -> save as 错题 record.
+  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQ0AAAAASUVORK5CYII=','base64');
+  await p.locator('[data-goal-wrongq]').click();await p.locator('#wrongQDialog[open]').waitFor();
+  await p.locator('#wrongQDialog [data-wq-files]').first().setInputFiles({name:'错题.png',mimeType:'image/png',buffer:png});
+  await p.locator('#wrongQDialog').getByText('已上传',{exact:false}).waitFor();
+  await p.locator('[data-wq-annotate]').click();
+  await p.locator('#wrongQDialog [data-wq-item]').first().waitFor();
+  assert.ok(await p.locator('#wrongQDialog .wq-box.wq-wrong_item').count()>=1,'a wrong_item box is drawn over the photo');
+  assert.equal(await p.locator('#wrongQDialog [data-wq-item]').count(),1,'one wrong_item drafted for review');
+  assert.equal(await p.locator('#wrongQDialog [data-wq-item] [data-wq-field="text"]').inputValue(),'27 + 8 = ?','transcription is editable');
+  assert.match(await p.locator('#wrongQDialog').innerText(),/模型提示需核对/,'uncertainties surfaced');
+  assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'wrong-question dialog fits the viewport');
+  if(process.env.GOALS_UI_PROOF_DIR)await p.locator('#wrongQDialog').screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'wrong-question-review-'+width+'.png')});
+  await p.locator('[data-wq-save]').click();await p.getByText(/已保存 \d+ 道错题/).waitFor();
+  const wq=(await(await p.request.get(url+'api/state')).json()).records.filter(r=>r.category==='错题');
+  assert.ok(wq.length>=1,'a 错题 record was saved');  // both widths share one backend
+  const mine=wq.find(r=>/题面：27 \+ 8/.test(r.note));assert.ok(mine,'saved 错题 carries the reviewed transcription');assert.equal(mine.attachments.length,1,'original photo attached');
+  checks++;
   await p.close();
  }
  console.log(JSON.stringify({passed:true,checks,viewports:[360,1440],synthetic_only:true}));
