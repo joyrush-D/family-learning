@@ -31,6 +31,7 @@ import family_task_focus
 import family_wrong_questions
 import family_wrong_review
 import family_diagnosis
+import family_remediation
 import family_agenda
 import family_guided
 import family_goals
@@ -1661,6 +1662,11 @@ class Handler(BaseHTTPRequestHandler):
                 try: return self.reply(200,diagnosis_run(obj))
                 except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
                 except family_diagnosis.DiagnosisError as e: return self.reply(e.status,dict(error=str(e),code=e.code))
+                except ValueError as e: return self.reply(400,dict(error=str(e)))
+            if self.path=='/api/wrong/remediate':
+                try: return self.reply(200,family_remediation.from_wrong_question(SimpleNamespace(**globals()),obj))
+                except family_remediation.RemediationError as e: return self.reply(e.status,dict(error=str(e),code=e.code))
+                except family_guided.GuidedError as e: return self.reply(e.status,dict(error=str(e),code=e.code))
                 except ValueError as e: return self.reply(400,dict(error=str(e)))
             if self.path=='/api/ask':
                 try: return self.reply(200,ask_family(obj))
