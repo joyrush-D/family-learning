@@ -170,3 +170,6 @@
 !/family_tls.py
 !/test_tls.py
 !/test_lan_https_ui.cjs
+
+!/family_wrong_questions.py
+!/test_wrong_questions.py

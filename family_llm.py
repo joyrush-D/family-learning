@@ -379,7 +379,8 @@ def _chat_json(messages,schema,name,timeout=60,*,data_path=None):
         model=light
     elif _light_request(name,messages) and light:
         model=light
-    output_tokens=6000 if name=='family_agent_selection' else 3000
+    # 错题图片标注每页最多30个区域并转写题面，3000输出token会截断整批草稿。
+    output_tokens = 6000 if name in ('family_agent_selection', 'family_wrong_questions_annotate') else 3000
     output_name={'family_learning_answer':'回答','family_reading_feedback':'反馈','family_guided_hint':'提示'}.get(name,'草稿')
     if type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=180:
         raise ValueError('模型请求等待时间不正确')
