@@ -25,6 +25,7 @@ import family_agent
 import family_study
 import family_settings
 import family_teachers
+import family_wrong_questions
 import family_access
 import family_tls
 import family_task_focus
@@ -71,7 +72,7 @@ DATA.mkdir(parents=True, exist_ok=True)
 DB = DATA / 'family.sqlite3'
 TOKEN = secrets.token_urlsafe(32)
 CA_ROUTE = '/family-ca.crt'
-CATEGORIES = ['学习进展', '课程进度', '成绩', '兴趣', '情绪', '家长观察']
+CATEGORIES = ['学习进展', '课程进度', '成绩', '兴趣', '情绪', '家长观察', '错题']
 MAX_UPLOAD = 20 * 1024 * 1024
 ASSISTANCE = ('', '独立尝试', '少量提示', '逐步帮助', '看过讲解或答案')
 PRACTICE_RELATIONS = ('', '同一道题或同一片段', '相近的新题或新片段', '范围或难度不同')
@@ -823,6 +824,58 @@ def material_images(ids):
             if p.is_symlink(): raise ValueError('原件无法读取')
             images.append(dict(mime=row['mime'],data=p.read_bytes()))
     return images
+
+
+def wrong_questions_annotate(obj):
+    """错题照片标注：读已上传的照片，出待核对草稿；不保存任何家庭数据。"""
+    if not isinstance(obj,dict) or set(obj)-{'child_id','subject_hint','attachments'}:
+        raise ValueError('错题标注请求字段不正确')
+    child_id=clean(obj,'child_id',80)
+    with connect() as c:
+        if not any(p['id']==child_id for p in profiles(c)): raise ValueError('请选择孩子')
+    subject_hint=clean(obj,'subject_hint',80)
+    ids=list(dict.fromkeys(obj.get('attachments',[])))
+    images=material_images(ids)  # ≤3 张，校验图片类型并读取原件
+    draft=family_wrong_questions.annotate_pages(images,subject_hint,data_path=DATA)
+    # page 顺序与去重后的 attachments 顺序一致，返回该顺序供前端把每页挂回对应原件。
+    return dict(ok=True,draft=draft,attachments=ids)
+
+
+def wrong_questions_save(obj):
+    """把家长核对后的错题保存为学习记录（category 错题），关联原件。仅家长确认才成事实。"""
+    if not isinstance(obj,dict) or set(obj)-{'child_id','day','subject','request_key','items'}:
+        raise ValueError('错题保存请求字段不正确')
+    child_id=clean(obj,'child_id',80)
+    day=clean(obj,'day',10); dt.date.fromisoformat(day)
+    subject=clean(obj,'subject',80)
+    base=clean(obj,'request_key',128)
+    if not re.fullmatch(r'[A-Za-z0-9_-]{16,124}',base): raise ValueError('提交标识不正确')
+    items=obj.get('items',[])
+    if not isinstance(items,list) or not 1<=len(items)<=30: raise ValueError('错题数量不正确')
+    with connect() as c:
+        prof=next((p for p in profiles(c) if p['id']==child_id),None)
+    if prof is None: raise ValueError('请选择孩子')
+    saved=[]
+    for i,item in enumerate(items):
+        if not isinstance(item,dict) or set(item)-{'label','text','answer','correction','topic_hint','error_hint','upload_id'}:
+            raise ValueError('错题项格式不正确')
+        label=clean(item,'label',80); text=clean(item,'text',2000)
+        answer=clean(item,'answer',1000); correction=clean(item,'correction',1000)
+        topic=clean(item,'topic_hint',80); error=clean(item,'error_hint',80)
+        upload_id=clean(item,'upload_id',64)
+        if upload_id and not re.fullmatch(r'[a-f0-9]{32}',upload_id): raise ValueError('原件标识不正确')
+        title='错题：'+(label or (text.split('\n')[0][:40] if text else '待核对'))
+        lines=[]
+        if text: lines.append('题面：'+text)
+        if answer: lines.append('学生作答：'+answer)
+        if correction: lines.append('订正/正确答案：'+correction)
+        if topic: lines.append('知识点候选（待核对）：'+topic)
+        if error: lines.append('错误类型候选（待核对）：'+error)
+        lines.append('说明：错题照片标注草稿，家长核对后保存；转写与归属仍以原件为准。')
+        saved.append(save_record(dict(child=prof['name'],day=day,category='错题',title=title,subject=subject,
+            note='\n'.join(lines),source='错题照片标注（待核对）',
+            attachments=[upload_id] if upload_id else [],request_key=base+'-'+str(i).zfill(2))))
+    return dict(ok=True,saved=saved)
 
 def timetable_uploads(c,child_id,ids):
     if not isinstance(ids,list) or len(ids)>3 or any(not isinstance(i,str) or not re.fullmatch('[a-f0-9]{32}',i) for i in ids) or len(set(ids))!=len(ids): raise ValueError('课表最多关联三份已保存原件')
@@ -1642,6 +1695,8 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError as e: return self.reply(400,dict(error=str(e)))
                 except (sqlite3.Error,OSError): return self.reply(503,dict(error='查询资料读取失败，请稍后重试；原记录未更改'))
             if self.path=='/api/record': return self.reply(200,save_record(obj))
+            elif self.path=='/api/wrong-questions/annotate': return self.reply(200,wrong_questions_annotate(obj))
+            elif self.path=='/api/wrong-questions/save': return self.reply(200,wrong_questions_save(obj))
             elif self.path=='/api/task': return self.reply(200,dict(ok=True,task=save_task(obj)))
             else: return self.reply(404,{'error':'不存在'})
             self.reply(200,{'ok':True})
