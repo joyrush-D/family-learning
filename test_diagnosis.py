@@ -73,6 +73,25 @@ class DiagnosisTest(unittest.TestCase):
                 with self.assertRaises(family_llm.LLMDraftError):
                     diag.diagnose(_app(), 'child-1', '数学')
 
+    def test_interval_recheck_scheduled_and_due(self):
+        import datetime as dt
+        refs = list(self._refs_seen())
+        draft = dict(knowledge_components=[
+            dict(name='两位数进位加法', error_type='进位漏加', misconception='个位满十未进1', status='有支持',
+                 evidence=[refs[0]], suggestion='用小棒摆一摆'),
+            dict(name='读题', error_type='', misconception='待核对', status='待验证', evidence=[], suggestion='')],
+            summary='先解决进位', uncertainties=[])
+        base = dt.datetime(2026, 9, 20, 10, 0, 0)
+        with patch.object(family_llm, '_chat_json', return_value=draft):
+            out = diag.diagnose(_app(), 'child-1', '数学', now=base)
+        comps = {c['name']: c for c in out['diagnosis']['knowledge_components']}
+        self.assertEqual(comps['两位数进位加法']['review_on'], '2026-09-27')  # supported weakness gets a re-check date
+        self.assertEqual(comps['读题']['review_on'], '')                      # 待验证 is not scheduled
+        self.assertEqual(diag.due_reviews(_app(), 'child-1', now=base + dt.timedelta(days=6)), [])
+        due = diag.due_reviews(_app(), 'child-1', now=base + dt.timedelta(days=7))
+        self.assertEqual([d['name'] for d in due], ['两位数进位加法'])
+        self.assertEqual(due[0]['subject'], '数学')
+
     def test_no_evidence_returns_note_without_calling_model(self):
         called = []
         with patch.object(family_llm, '_chat_json', side_effect=lambda *a, **k: called.append(1)):

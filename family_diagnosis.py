@@ -25,6 +25,8 @@ import family_llm
 MAX_EVIDENCE = 24
 MAX_COMPONENTS = 6
 STATUSES = ('有支持', '待验证', '有反证')
+# ⑤ 间隔复测：先用固定间隔（沿用单词"满7天复测"的确定性做法）；有稳定知识点体系(R17)后再换 FSRS 记忆模型。
+REVIEW_DAYS = 7
 _LIMITS = dict(name=60, error_type=40, misconception=300, suggestion=400, summary=800, uncertainty=200)
 
 # 错题来自 Hermes 的网页核对流程（来源标记）；成绩为考试证据；其余为同科目学习进展。
@@ -156,6 +158,11 @@ def diagnose(app, child_id, subject='', now=None, *, data_path=None, timeout=90)
                                     dict(role='user', content=json.dumps(content, ensure_ascii=False))],
                                    SCHEMA, 'family_diagnosis', timeout, data_path=data_path)
     diagnosis = _validate(result, refs)
+    # ⑤ schedule an interval re-check for each supported weakness; verification is a later re-diagnosis
+    # on a fresh attempt (reuses ③), so nothing here claims mastery — it only says when to look again.
+    review_on = (now.date() + dt.timedelta(days=REVIEW_DAYS)).isoformat()
+    for comp in diagnosis['knowledge_components']:
+        comp['review_on'] = review_on if comp['status'] == '有支持' else ''
     ev_hash = hashlib.sha256(json.dumps([e['ref'] for e in ev], ensure_ascii=False).encode()).hexdigest()
     payload = json.dumps(dict(diagnosis=diagnosis, evidence=ev), ensure_ascii=False)
     with app.connect() as c:
@@ -183,3 +190,18 @@ def latest(app, child_id, subject=None):
         payload = json.loads(r['payload'])
         out.append(dict(subject=r['subject'], created=r['created'], **payload))
     return out
+
+
+def due_reviews(app, child_id, now=None):
+    """⑤ Weak knowledge points whose interval re-check is due — a reminder to try a fresh similar
+    item and re-diagnose, not a mastery claim. Deterministic: only reads stored review_on."""
+    today = (now or dt.datetime.now()).date().isoformat()
+    due = []
+    for d in latest(app, child_id):
+        for comp in d.get('diagnosis', {}).get('knowledge_components', []):
+            if comp.get('status') == '有支持' and comp.get('review_on') and comp['review_on'] <= today:
+                due.append(dict(subject=d['subject'], name=comp['name'], error_type=comp['error_type'],
+                                review_on=comp['review_on'], suggestion=comp.get('suggestion', ''),
+                                diagnosed_on=d['created'][:10]))
+    due.sort(key=lambda x: x['review_on'])
+    return due
