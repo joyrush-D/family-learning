@@ -7,7 +7,6 @@ family_guided 里重做这道错题、按需取一小步提示，是否独立由
 
 对接层只读错题记录、不改其语义；教学层的实际引导与验证仍由 family_guided（④）与后续 FSRS 复测（⑤）负责。
 """
-import json
 import re
 
 # 与 Hermes 的错题入库来源标记一致（family_wrong_review.SOURCE）。
@@ -54,7 +53,7 @@ def from_wrong_question(app, obj):
         prof = next((p for p in app.profiles(c) if p['id'] == child_id), None)
         if prof is None:
             raise RemediationError('请选择孩子')
-        row = c.execute('SELECT id,child,subject,title,note,source,attachments FROM records WHERE id=?', (record_id,)).fetchone()
+        row = c.execute('SELECT id,child,subject,title,note,source FROM records WHERE id=?', (record_id,)).fetchone()
         if row is None or row['child'] != prof['name']:
             raise RemediationError('错题记录不存在或不属于该孩子', 404, 'not_found')
         if WRONG_SOURCE not in (row['source'] or ''):
@@ -66,14 +65,14 @@ def from_wrong_question(app, obj):
             if draft:
                 return dict(ok=True, session_id=draft['id'], reused=True)
         note = row['note'] or ''
-        attachments = json.loads(row['attachments']) if row['attachments'] else []
         subject = row['subject'] or ''
         title = row['title'] or '错题订正'
     question, reference = parse_wrong_note(note)
     material = dict(child_id=child_id, version=0, request_key=request_key,
                     title=('订正 · ' + title)[:200], subject=subject[:80],
                     question_text=(question or title)[:4000],
-                    question_attachments=attachments[:3],
+                    # Reviewed photos may contain answers or other questions; keep them in the parent record.
+                    question_attachments=[],
                     reference_text=reference[:4000], reference_checked=False,
                     related_record_id=record_id, practice_relation='同一道题或同一片段', shared=False)
     return app.guided_store().save_material(material)

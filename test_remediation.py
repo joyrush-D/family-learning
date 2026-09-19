@@ -1,4 +1,5 @@
 """④ 引导讲解播种：从一道已核对错题开一个短引导草稿（复用 family_guided，答案安全）。合成数据。"""
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -34,10 +35,15 @@ class RemediationTest(unittest.TestCase):
         self.assertEqual(q, '27 + 8 = ?'); self.assertEqual(ref, '35')
 
     def test_seeds_a_guided_draft_from_the_wrong_question(self):
+        with app.connect() as c:
+            c.execute('UPDATE records SET attachments=? WHERE id=?', (json.dumps(['synthetic-annotated-answer-photo']), self.rid))
         out = rem.from_wrong_question(_ns(), dict(child_id='child-1', record_id=self.rid, request_key='synthetic-remediate-0001'))
         sid = out['session_id']; self.assertTrue(sid)
         with app.connect() as c:
             s = c.execute('SELECT * FROM guided_sessions WHERE id=?', (sid,)).fetchone()
+        self.assertEqual(json.loads(s['question_attachments']), [])  # original answer photo stays parent-only
+        with app.connect() as c:
+            self.assertEqual(json.loads(c.execute('SELECT attachments FROM records WHERE id=?', (self.rid,)).fetchone()[0]), ['synthetic-annotated-answer-photo'])
         self.assertEqual(s['question_text'], '27 + 8 = ?')       # child re-works the same mistake
         self.assertEqual(s['reference_text'], '35')               # parent reference carried, not shown to child yet
         self.assertEqual(s['reference_checked'], 0)               # parent must confirm the reference in the 短引导 UI
