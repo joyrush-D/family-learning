@@ -146,7 +146,7 @@ with tempfile.TemporaryDirectory() as temporary:
         manifest = json.loads(zipped.read('manifest.json'))
         assert manifest['files']['private/uploads/example.bin']['sha256'] == hashlib.sha256(data).hexdigest()
         assert manifest['files']['private/print/' + prep['id'] + '.pdf']['sha256'] == hashlib.sha256(pdf).hexdigest()
-        assert len(manifest['files']) == 13
+        assert len(manifest['files']) == 15  # Original 13 plus QQ inbox config and pending capture.
         assert all('.env' not in p and not p.endswith('.log') for p in zipped.namelist())
         members = {name: zipped.read(name) for name in zipped.namelist()}
     assert restored.stat().st_mode & 0o777 == 0o700
@@ -579,6 +579,9 @@ def daily_backup_check():
         (data / 'uploads').mkdir(parents=True)
         original = data / 'uploads' / 'example.bin'
         original.write_bytes(b'Synthetic original file')
+        (data / 'qq-inbox').mkdir()
+        (data / 'qq-inbox/pending.png').write_bytes(b'Synthetic pending capture')
+        (data / 'qq-inbox.json').write_text('{"enabled":true,"source_id":"qq:123456"}')
         for name in backup.DOCUMENTS:
             (root / name).write_text('Only a fictional family fixture.')
         (data / 'agent.json').write_text('{"enabled":true,"sources":[]}')
@@ -606,8 +609,8 @@ def daily_backup_check():
         next_day = backup.daily(root, day=first_day + dt.timedelta(days=1))
         assert next_day['status'] == 'created' and next_day['path'] != str(archive)
         restored = backup.restore(archive, root.parent / 'restored')
-    assert (restored / 'private/qq-inbox/pending.png').read_bytes() == b'Synthetic pending capture'
-    assert json.loads((restored / 'private/qq-inbox.json').read_text())['source_id'] == 'qq:123456'
+        assert (restored / 'private/qq-inbox/pending.png').read_bytes() == b'Synthetic pending capture'
+        assert json.loads((restored / 'private/qq-inbox.json').read_text())['source_id'] == 'qq:123456'
         with sqlite3.connect(restored / backup.DATABASE) as db:
             assert db.execute('SELECT note FROM records').fetchone()[0] == 'Before daily backup'
             assert db.execute('SELECT COUNT(*) FROM parent_sessions').fetchone()[0] == 0
