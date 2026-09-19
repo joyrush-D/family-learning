@@ -174,6 +174,26 @@ class WrongReviewHTTPTest(unittest.TestCase):
                                         request_key=uuid.uuid4().hex, items=over_error))
         self.assertEqual(status, 400, out)
 
+    def test_overlong_second_item_rejects_whole_batch_and_can_retry(self):
+        img = self.upload('synthetic-long.png', PNG)
+        first = dict(attachment=img, label='第1题', text='28+14=', answer='32', correction='42',
+                     topic_hint='进位加法', error_hint='进位漏加')
+        second = dict(attachment=img, label='第2题', text='Q' * 2000, answer='A' * 1000,
+                      correction='C' * 1000, topic_hint='候选', error_hint='待核对')
+        payload = dict(child='示例甲', day='2026-09-18', subject='数学',
+                       request_key=uuid.uuid4().hex, items=[first, second])
+        status, out = self.request('/api/wrong/save', payload)
+        self.assertEqual(status, 400, out)
+        self.assertIn('第2条错题总内容超过4000字', out['error'])
+        self.assertEqual(self.request('/api/state')[1]['records'], [])
+        second.update(text='3×4=', answer='7', correction='12')
+        status, out = self.request('/api/wrong/save', payload)
+        self.assertEqual(status, 200, out)
+        records = self.request('/api/state')[1]['records']
+        self.assertEqual(len(records), 2)
+        self.assertTrue(any('错误类型（家长核对）：进位漏加' in r['note'] for r in records))
+        self.assertTrue(any('可见订正/正确答案：12' in r['note'] for r in records))
+
     def test_rejections(self):
         img = self.upload('a.png', PNG)
         doc = self.upload('note.txt', b'not an image')

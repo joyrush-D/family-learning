@@ -41,7 +41,7 @@ function html() {
       <p class="error" data-wrong-error role="alert"></p>
     </section>
     <div data-wrong-result></div>
-    <p class="small muted">模型只整理本次所选照片，不读其他原件；框选与转写都可能有误，保存的只是你核对过的错题记录，不判知识点或掌握程度。打开本页不调用模型。</p>
+    <p class="small muted">模型只整理本次所选照片，不读其他原件；框选与转写都可能有误，保存的只是你核对过的错题记录，候选标签不是错因或掌握结论。打开本页不调用模型。</p>
   </div>`;
 }
 
@@ -85,11 +85,17 @@ function resultHTML() {
             <label>学生原答<input data-wrong-field="answer" maxlength="1000" value="${esc(item.answer)}"></label>
             <label>订正/正确答案<input data-wrong-field="correction" maxlength="1000" value="${esc(item.correction)}"></label>
           </div>
+          <div class="formrow">
+            <label>知识点候选（可改或清空）<input data-wrong-field="topic_hint" maxlength="60" value="${esc(item.topic_hint)}"></label>
+            <label>错误类型候选（可改或清空）<input data-wrong-field="error_hint" maxlength="40" value="${esc(item.error_hint)}"></label>
+          </div>
+          <p class="small muted">候选仅供后续核对，不是对孩子能力的结论。</p>
           <label>家长备注（可选）<textarea data-wrong-field="note" maxlength="1000" placeholder="例如：让孩子先讲错在哪，不直接判原因。">${esc(item.note)}</textarea></label>
         </article>`).join('') || '<p>这一页没有标出疑似错题；如确认漏标，可直接用上方“记录反馈”手动记。</p>'}
     </div>
     ${othersCount ? `<details class="wrong-others"><summary>模型标出的手写区域与版面块（${othersCount}，仅供对照，不保存）</summary>
       ${d.pages.map(p => `<p class="small">第${p.page}页：${p.regions.filter(r => r.kind !== 'wrong_item').map(r => KIND_LABEL[r.kind] + (r.label ? '·' + r.label : '')).join('，') || '无'}</p>`).join('')}</details>` : ''}
+    <p class="error" data-wrong-save-error role="alert"></p>
     <div class="wrong-actions">
       <button type="button" class="primary" data-wrong-save ${state.review.length ? '' : 'disabled'}>保存勾选的错题为学习记录</button>
       <button type="button" data-wrong-discard>放弃这批草稿</button>
@@ -103,7 +109,8 @@ function findItem(uid) {
 
 function setError(msg) {
   state.error = msg || '';
-  const el = root.querySelector('[data-wrong-error]');
+  root.querySelectorAll('[data-wrong-error], [data-wrong-save-error]').forEach(el => { el.textContent = ''; });
+  const el = root.querySelector('[data-wrong-save-error]') || root.querySelector('[data-wrong-error]');
   if (el) el.textContent = state.error;
 }
 
@@ -166,7 +173,8 @@ async function annotate() {
     state.draft = out;
     state.review = out.pages.flatMap(p => p.regions.filter(r => r.kind === 'wrong_item')
       .map(r => ({uid: uid(), page: p.page, attachment: p.attachment.id, uncertain: !!r.uncertain, keep: true,
-                  label: r.label || '', text: r.text || '', answer: r.answer || '', correction: r.correction || '', note: ''})));
+                  label: r.label || '', text: r.text || '', answer: r.answer || '', correction: r.correction || '', note: '',
+                  topic_hint: r.topic_hint || '', error_hint: r.error_hint || ''})));
     rerenderResult();
   } catch (e) {
     if (gen === state.generation) root.querySelector('[data-wrong-result]').innerHTML = '';
@@ -181,7 +189,8 @@ async function save() {
   remember();
   const items = state.review.filter(item => item.keep)
     .map(item => ({attachment: item.attachment, label: item.label || '', text: item.text || '',
-                  answer: item.answer || '', correction: item.correction || '', note: (item.note || '').slice(0, 1000)}))
+                  answer: item.answer || '', correction: item.correction || '', note: item.note || '',
+                  topic_hint: item.topic_hint || '', error_hint: item.error_hint || ''}))
     .filter(r => r.label || r.text || r.answer || r.correction);
   if (!items.length) return setError('没有勾选要保存的错题；可放弃草稿或重新勾选。');
   busy = true; setError('');

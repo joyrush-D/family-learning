@@ -135,7 +135,7 @@ class Store:
                                    answer=answer, correction=correction, note=note_extra,
                                    topic_hint=topic_hint, error_hint=error_hint))
 
-        saved = []
+        records = []
         for index, item in enumerate(parsed, 1):
             heading = (subject + '错题' if subject else '错题') + ('：' + item['label'] if item['label'] else '')
             if not item['label']:
@@ -156,11 +156,17 @@ class Store:
             lines.append('由照片标注生成，家长已核对；这不是掌握程度结论。')
             record = dict(
                 child=child, day=day, category='学习进展', subject=subject,
-                title=heading[:200], note='\n'.join(lines)[:4000], source=SOURCE,
+                title=heading[:200], note='\n'.join(lines), source=SOURCE,
                 attachments=[item['attachment']], followup_kind='',
                 request_key=('%s-%02d' % (batch, index))[:128],
             )
+            if len(record['note']) > 4000:
+                raise WrongReviewError('第%d条错题总内容超过4000字，本批尚未保存；请精简题面、原答、订正或备注后重试，草稿仍保留。' % index)
+            records.append(record)
+
+        saved = []
+        for record in records:
             result = self.app.save_record(record)
             saved.append(dict(id=result.get('record_id'),
-                              existing=bool(result.get('replayed')), title=heading))
+                              existing=bool(result.get('replayed')), title=record['title']))
         return dict(ok=True, saved=saved, count=len(saved))

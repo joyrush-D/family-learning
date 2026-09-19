@@ -32,7 +32,7 @@ def annotate(images, subject_hint='', timeout=90, **kw):
       {'page': 1, 'regions': [
         {'kind':'layout','box':{'x':10,'y':5,'w':900,'h':70},'label':'卷头','text':'虚构数学小测','answer':'','correction':'','uncertain':False},
         {'kind':'wrong_item','box':{'x':30,'y':200,'w':700,'h':120},'label':'第2题','text':'42 - 17 =','answer':'35','correction':'25','uncertain':False},
-        {'kind':'wrong_item','box':{'x':30,'y':430,'w':690,'h':120},'label':'第4题','text':'81 ÷ 9 =','answer':'8','correction':'9','uncertain':True},
+        {'kind':'wrong_item','box':{'x':30,'y':430,'w':690,'h':120},'label':'第4题','text':'81 ÷ 9 =','answer':'8','correction':'9','uncertain':True,'topic_hint':'整除','error_hint':'商算错'},
       ]},
       {'page': 2, 'regions': [
         {'kind':'wrong_item','box':{'x':40,'y':500,'w':400,'h':150},'label':'第3题','text':'chuāng wài','answer':'窗处','correction':'窗外','uncertain':True},
@@ -138,6 +138,35 @@ async function proof(p, name) {
         await first.locator('[data-wrong-keep]').uncheck();
         await p.locator('.wrong-item').nth(1).locator('[data-wrong-field="note"]').fill('先让孩子讲错在哪');
 
+        const kept = p.locator('.wrong-item').nth(1), last = p.locator('.wrong-item').nth(2);
+        assert.equal(await kept.locator('[data-wrong-field="topic_hint"]').inputValue(), '整除');
+        assert.equal(await kept.locator('[data-wrong-field="error_hint"]').inputValue(), '商算错');
+        assert.equal(await last.locator('[data-wrong-field="topic_hint"]').inputValue(), '', 'old untagged model response');
+        await kept.locator('[data-wrong-field="topic_hint"]').fill('除法口诀');
+        await kept.locator('[data-wrong-field="error_hint"]').fill('口诀混淆');
+        for (const field of ['topic_hint', 'error_hint']) {
+          await last.locator('[data-wrong-field="'+field+'"]').fill('删除这个候选');
+          await last.locator('[data-wrong-field="'+field+'"]').fill('');
+        }
+        // 各字段合法但整条过长：后一条失败不能使前一条被保存，原输入须保留。
+        await last.locator('[data-wrong-field="text"]').fill('题'.repeat(2000));
+        await last.locator('[data-wrong-field="answer"]').fill('答'.repeat(1000));
+        await last.locator('[data-wrong-field="correction"]').fill('正'.repeat(1000));
+        await p.locator('[data-wrong-save]').click();
+        await eventually(async () => /第2条错题总内容超过4000字/.test(await p.locator('[data-wrong-save-error]').innerText()), 'whole batch rejected');
+        assert.equal((await (await fetch(host.url+'api/state')).json()).records.filter(r=>r.source==='错题照片核对').length, 0);
+        assert.equal(await last.locator('[data-wrong-field="text"]').inputValue(), '题'.repeat(2000));
+        assert.equal(await last.locator('[data-wrong-field="correction"]').inputValue(), '正'.repeat(1000));
+        assert.equal(await kept.locator('[data-wrong-field="topic_hint"]').inputValue(), '除法口诀');
+        assert.equal(await last.locator('[data-wrong-field="error_hint"]').inputValue(), '');
+        await fit(p);
+        const errorBox = await p.locator('[data-wrong-save-error]').boundingBox();
+        assert(errorBox && errorBox.y >= 0 && errorBox.y < 900, 'save error visible beside submit');
+        await proof(p, 'wrong-length-error-' + width);
+        await last.locator('[data-wrong-field="text"]').fill('chuāng wài');
+        await last.locator('[data-wrong-field="answer"]').fill('窗处');
+        await last.locator('[data-wrong-field="correction"]').fill('窗外');
+
         // 保存勾选的 2 条
         p.once('dialog', d => d.dismiss());
         await p.locator('[data-wrong-save]').click();
@@ -152,9 +181,21 @@ async function proof(p, name) {
         }, 'two review records persisted');
         await fit(p);
         await proof(p, 'wrong-saved-' + width);
+        const persisted = (await (await fetch(host.url+'api/state')).json()).records.filter(r=>r.source==='错题照片核对');
+        const tagged = persisted.find(r=>r.title.includes('第4题'));
+        assert(tagged.note.includes('知识点（家长核对）：除法口诀'));
+        assert(tagged.note.includes('错误类型（家长核对）：口诀混淆'));
+        assert(!persisted.find(r=>r.title.includes('第3题')).note.includes('（家长核对）'));
+        await p.reload();
+        await p.locator('nav [data-page="more"]').click();
+        await p.locator('.more-links [data-page="growth"]').click();
+        await p.locator('[data-record="'+tagged.id+'"]').click();
+        assert.equal(await p.locator('#recordForm [name="note"]').inputValue(), tagged.note);
+        await fit(p);
+        await proof(p, 'wrong-reopened-' + width);
         assert.deepEqual(errors, []);
         checks.push({width, parentReview: true, upload: true, failureRetry: true,
-          boxesAndCards: true, editAndDrop: true, persisted: true, noOverflow: true});
+          boxesAndCards: true, editAndDrop: true, candidateEditClear: true, wholeBatchLengthGuard: true, persisted: true, reopen: true, noOverflow: true});
         await p.close();
       } catch (e) {
         await proof(p, 'wrong-failure-' + width);
