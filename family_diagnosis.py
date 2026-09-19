@@ -18,6 +18,7 @@ uncertainties；家长核对后才作为理解依据。模型不可用时不影�
 
 家长核对错题照片时保留的知识点/错误类型候选（note 中固定前缀的两行）是诊断的核对起点：随所属错题
 一起交给模型对照题面与作答，不单独成为证据；没有真实记录引用的判断一律记为待验证，后来的反证照常覆盖。
+只含候选行（及保存路径固定说明行、自动标题）的错题即使被引用，也没有可对照的题面或作答：引用保留，判断仍记为待验证。
 """
 import datetime as dt
 import hashlib
@@ -38,6 +39,10 @@ WRONG_SOURCE = '错题照片核对'
 # 只表示家长保存了该候选，是诊断的核对起点；不是证据，也不是错因或掌握结论。旧记录没有这两行，照原路径诊断。
 _HINT_PREFIX = dict(topic_hint='知识点（家长核对）：', error_hint='错误类型（家长核对）：')
 _HINT_LIMIT = dict(topic_hint=_LIMITS['name'], error_hint=_LIMITS['error_type'])
+# ② 保存路径（family_wrong_review.save）写入 note 的字段前缀和固定说明行。前缀后没有内容的行、说明行，以及自动标题
+# 「科目错题：题号」，都不是题面、作答或订正。
+_SAVED_FIELDS = ('题面：', '学生原答：', '可见订正/正确答案：', '家长备注：')
+_SAVED_LINE = '由照片标注生成，家长已核对；这不是掌握程度结论。'
 
 PROMPT = '''你是一起成长Agent的诊断层，面向家长，像一位资深全科老师看错题本：不是记一笔对错，而是判断
 「孩子在哪个知识点没通、犯的是哪一类错、背后可能是什么误解」。只依据本次提供的 records（学习记录，
@@ -169,7 +174,19 @@ def _clean(value, limit):
     return value[:limit]
 
 
-def _validate(result, refs):
+def _candidate_only(item):
+    """A tagged 错题 that gave the model nothing to check the candidate against: apart from the parent-kept
+    candidate lines its text holds at most the save path's fixed line and field labels left empty, and a 错题
+    heading (科目错题：题号) is not a question or an answer. The record is real, but citing it says nothing
+    about what the child did. Untagged records are never judged here, so they validate exactly as before."""
+    if not any(item.get(key) for key in _HINT_PREFIX): return False
+    empty, kept = ('', _SAVED_LINE) + _SAVED_FIELDS, tuple(_HINT_PREFIX.values())
+    return not any(line.strip() not in empty and not line.strip().startswith(kept) for line in (item.get('text') or '').split('\n'))
+
+
+def _validate(result, ev):
+    refs = {e['ref'] for e in ev}
+    checkable = {e['ref'] for e in ev if not _candidate_only(e)}
     if not isinstance(result, dict) or set(result) != {'knowledge_components', 'summary', 'uncertainties'}:
         raise family_llm.LLMDraftError('诊断结果结构无法核对')
     comps = result['knowledge_components']
@@ -188,7 +205,9 @@ def _validate(result, refs):
             misconception=_clean(comp.get('misconception'), _LIMITS['misconception']),
             # 有支持/有反证 are claims about this child's records. With no real cited record behind it (a
             # parent-kept candidate tag or an invented ref is not one) the point stays a hypothesis to check.
-            status=comp['status'] if cited else '待验证', evidence=cited,
+            # A real 错题 that holds only the kept candidate is no such record either: its ref stays cited, so
+            # the parent can open it and add the question or answer, but it cannot carry the status.
+            status=comp['status'] if checkable.intersection(cited) else '待验证', evidence=cited,
             suggestion=_clean(comp.get('suggestion'), _LIMITS['suggestion'])))
     unc = result['uncertainties']
     if not isinstance(unc, list) or len(unc) > 8: raise family_llm.LLMDraftError('诊断待核对项无法核对')
@@ -203,12 +222,11 @@ def diagnose(app, child_id, subject='', now=None, *, data_path=None, timeout=90)
     if not ev:
         return dict(ok=True, diagnosis=dict(knowledge_components=[], summary='', uncertainties=['暂无错题或考试记录，先积累几条再诊断。']),
                     evidence=[], created=now.isoformat())
-    refs = {e['ref'] for e in ev}
     content = dict(subject=subject or '（未指定，仅看错题与考试）', as_of=now.date().isoformat(), records=ev)
     result = family_llm._chat_json([dict(role='system', content=PROMPT),
                                     dict(role='user', content=json.dumps(content, ensure_ascii=False))],
                                    SCHEMA, 'family_diagnosis', timeout, data_path=data_path)
-    diagnosis = _validate(result, refs)
+    diagnosis = _validate(result, ev)
     # ⑤ schedule an interval re-check for each supported weakness; verification is a later re-diagnosis
     # on a fresh attempt (reuses ③), so nothing here claims mastery — it only says when to look again.
     prev = next(iter(latest(app, child_id, subject or '')), None)
@@ -229,11 +247,12 @@ def diagnose(app, child_id, subject='', now=None, *, data_path=None, timeout=90)
 def _review_on(comp, prev, ev, now):
     """⑤ Re-check date for a supported weakness: 7 days after it was diagnosed. A re-run keeps the earlier
     date for the same weakness (overlapping cited records) unless it cites something newer than that
-    diagnosis: a new mistake or a failed re-check restarts the interval, an unrelated record does not."""
+    diagnosis: a new mistake or a failed re-check restarts the interval, an unrelated record does not.
+    Nor does a newer 错题 that holds only a parent-kept candidate: nothing in it shows a mistake on this point."""
     fresh = (now.date() + dt.timedelta(days=REVIEW_DAYS)).isoformat()
     if not prev: return fresh
     since, refs = prev['created'][:10], set(comp['evidence'])
-    if any((e.get('day') or '') > since for e in ev if e['ref'] in refs): return fresh
+    if any((e.get('day') or '') > since for e in ev if e['ref'] in refs and not _candidate_only(e)): return fresh
     for old in prev.get('diagnosis', {}).get('knowledge_components', []):
         if old.get('status') == '有支持' and old.get('review_on') and refs & set(old.get('evidence') or []):
             return old['review_on']

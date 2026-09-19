@@ -322,6 +322,135 @@ class DiagnosisTest(unittest.TestCase):
         cited = run(('两位数进位加法', '有支持', ['record:%d' % tagged]))[0]
         self.assertEqual((cited['status'], cited['evidence'], cited['review_on']), ('有支持', ['record:%d' % tagged], '2026-09-27'))
 
+    def _diagnosed(self, when, *comps):
+        draft = dict(knowledge_components=[dict(name=name, error_type='进位漏加', misconception='个位满十未进1', status=status,
+                     evidence=refs, suggestion='') for name, status, refs in comps], summary='', uncertainties=[])
+        with patch.object(family_llm, '_chat_json', return_value=draft):
+            return diag.diagnose(_app(), 'child-1', '数学', now=when)['diagnosis']['knowledge_components']
+
+    def _wrong(self, title, note, day='2026-09-15'):
+        return app.save_record(dict(child='小明', day=day, category='学习进展', subject='数学', title=title, note=note,
+                                    source=diag.WRONG_SOURCE))['record_id']
+
+    def test_a_validly_cited_tag_only_record_cannot_support_or_refute(self):
+        import datetime as dt
+        base = dt.datetime(2026, 9, 20, 10, 0, 0)
+        legacy = diag.evidence(_app(), 'child-1', '数学')
+        tags = self.TOPIC + '两位数进位加法\n' + self.ERROR + '进位漏加'
+        # Real records of this child and subject, so every ref below is valid — but none holds a question or an answer:
+        # only the kept candidate lines, with or without the save path's heading, fixed line and emptied field labels.
+        hollow = [self._wrong('数学错题：第8题', tags),
+                  self._wrong('数学错题：第9题', tags + '\n' + self.TAIL),
+                  self._wrong('数学错题（第1处）', '\n' + self.TAIL + '\n\n  ' + self.ERROR + '进位漏加  \n'),
+                  self._wrong('错题：第10题', self.TOPIC + '两位数进位加法'),
+                  self._wrong('数学错题：第11题', '题面：\n学生原答： \n可见订正/正确答案：\n家长备注：\n' + tags + '\n' + self.TAIL)]
+        refs = ['record:%d' % rid for rid in hollow]
+        for rid in hollow:  # each ref is one the model was really given, and each record carries a kept candidate
+            self.assertTrue({'topic_hint', 'error_hint'} & set(self._item(rid)))
+        for status in ('有反证', '有支持'):  # the 有支持 attempt is the one left stored for the checks below
+            comps = self._diagnosed(base, *[('候选%d' % n, status, [ref]) for n, ref in enumerate(refs)], ('全部一起引用', status, refs))
+            self.assertEqual(len(comps), len(refs) + 1)
+            for comp in comps:
+                self.assertEqual((comp['status'], comp['review_on']), ('待验证', ''), (status, comp['name']))
+            # The ref stays cited: the parent can open that record and add the question or answer.
+            self.assertEqual([c['evidence'] for c in comps], [[ref] for ref in refs] + [refs])
+        self.assertEqual(diag.due_reviews(_app(), 'child-1', now=base + dt.timedelta(days=30)), [])  # no re-check, no reminder
+        view = self._math(now=base + dt.timedelta(days=30))
+        self.assertEqual((view['due_count'], {k['status'] for k in view['diagnosis']['knowledge_components']}), (0, {'待验证'}))
+        shown = view['diagnosis']['knowledge_components'][0]['evidence'][0]
+        self.assertEqual((shown['id'], shown['available'], shown['topic_hint'], shown['error_hint']), (hollow[0], True, '两位数进位加法', '进位漏加'))
+        # The guard changes no evidence item, so nothing is re-run: older records keep their window, the stored
+        # window matches the current one, and the downgraded diagnosis is not left looking out of date.
+        self.assertEqual([e for e in diag.evidence(_app(), 'child-1', '数学') if e['ref'] not in refs], legacy)
+        self.assertNotIn('数学', [s['subject'] for s in diag.stale_subjects(_app(), 'child-1')])
+        self.assertFalse(view['evidence_changed'])
+        with app.connect() as c:  # the parent's records are left exactly as saved
+            self.assertEqual(c.execute('SELECT note FROM records WHERE id=?', (hollow[1],)).fetchone()[0], tags + '\n' + self.TAIL)
+
+    def test_usable_records_still_carry_the_status_next_to_a_tag_only_one(self):
+        import datetime as dt
+        base = dt.datetime(2026, 9, 20, 10, 0, 0)
+        tags = self.TOPIC + '两位数进位加法\n' + self.ERROR + '进位漏加'
+        hollow, usable = 'record:%d' % self._wrong('数学错题：第8题', tags + '\n' + self.TAIL), 'record:%d' % self._tagged()
+        untagged = 'record:%d' % self._math_ids()[0]
+        # Anything besides the candidate lines and the fixed line is material the candidate can be checked against.
+        answer_only = 'record:%d' % self._wrong('数学错题：第11题', '学生原答：313\n' + tags + '\n' + self.TAIL)
+        remark_only = 'record:%d' % self._wrong('数学错题：第12题', tags + '\n家长备注：他说个位满十忘了进位\n' + self.TAIL)
+        comps = self._diagnosed(base, ('带候选且有题面', '有支持', [usable]), ('无候选旧记录', '有支持', [untagged]),
+                                ('只有原答', '有支持', [answer_only]), ('只有家长备注', '有反证', [remark_only]),
+                                ('混合引用', '有支持', [hollow, usable]), ('只有候选', '有支持', [hollow]))
+        self.assertEqual([(c['status'], c['evidence'], c['review_on']) for c in comps], [
+            ('有支持', [usable], '2026-09-27'), ('有支持', [untagged], '2026-09-27'), ('有支持', [answer_only], '2026-09-27'),
+            ('有反证', [remark_only], ''), ('有支持', [hollow, usable], '2026-09-27'), ('待验证', [hollow], '')])
+        due = diag.due_reviews(_app(), 'child-1', now=base + dt.timedelta(days=7))
+        self.assertEqual([d['name'] for d in due], ['带候选且有题面', '无候选旧记录', '只有原答', '混合引用'])
+
+    def test_a_newer_tag_only_record_does_not_restart_the_recheck_interval(self):
+        import datetime as dt
+        base = dt.datetime(2026, 9, 20, 10, 0, 0)
+        usable = 'record:%d' % self._tagged()
+        self.assertEqual(self._diagnosed(base, ('两位数进位加法', '有支持', [usable]))[0]['review_on'], '2026-09-27')
+        tags = self.TOPIC + '两位数进位加法\n' + self.ERROR + '进位漏加\n' + self.TAIL
+        hollow = 'record:%d' % self._wrong('数学错题：第8题', tags, day='2026-09-22')
+        again = self._diagnosed(base + dt.timedelta(days=3), ('两位数进位加法', '有支持', [usable, hollow]))[0]
+        # Still supported by the real record; the candidate-only 错题 is cited but is no new mistake on this point.
+        self.assertEqual((again['status'], again['evidence'], again['review_on']), ('有支持', [usable, hollow], '2026-09-27'))
+        self.assertEqual([d['name'] for d in diag.due_reviews(_app(), 'child-1', now=base + dt.timedelta(days=7))], ['两位数进位加法'])
+        # Once the parent adds what the child actually wrote, the correction asks for a re-run and the record can
+        # carry the status by itself.
+        app.save_record(dict(id=int(hollow[7:]), child='小明', day='2026-09-22', category='学习进展', subject='数学', title='数学错题：第8题',
+                             note='题面：57+6=？\n学生原答：513\n' + tags, source=diag.WRONG_SOURCE))
+        self.assertIn('数学', [s['subject'] for s in diag.stale_subjects(_app(), 'child-1')])
+        alone = self._diagnosed(base + dt.timedelta(days=4), ('两位数进位加法', '有支持', [hollow]))[0]
+        self.assertEqual((alone['status'], alone['evidence'], alone['review_on']), ('有支持', [hollow], '2026-09-27'))
+        # A later mistake with the child's actual answer restarts the interval as before, also next to a candidate-only one.
+        newer = 'record:%d' % self._wrong('数学错题：第9题', '题面：68+7=？\n学生原答：615\n' + tags, day='2026-09-25')
+        bare = 'record:%d' % self._wrong('数学错题：第10题', tags, day='2026-09-25')
+        restarted = self._diagnosed(base + dt.timedelta(days=6), ('两位数进位加法', '有支持', [hollow, bare, newer]))[0]
+        self.assertEqual((restarted['status'], restarted['evidence'], restarted['review_on']), ('有支持', [hollow, bare, newer], '2026-10-03'))
+
+    def test_the_product_save_path_placeholders_are_not_material(self):
+        import datetime as dt
+        import family_wrong_review
+        base = dt.datetime(2026, 9, 20, 10, 0, 0)
+        upload = 'a1' * 16
+        with app.connect() as c:
+            c.execute('INSERT INTO uploads(id,name,size,mime,created) VALUES(?,?,?,?,?)', (upload, '虚构卷.png', 4, 'image/png', base.isoformat()))
+        (app.DATA / 'uploads').mkdir(exist_ok=True); (app.DATA / 'uploads' / upload).write_bytes(b'fake')
+        # The real ② save: 题号 only (the photo's question could not be read) next to a fully transcribed item.
+        saved = family_wrong_review.Store(app).save(dict(child='小明', day='2026-09-15', subject='数学', request_key='synthetic-batch-0001', items=[
+            dict(attachment=upload, label='第8题', text='', answer='', correction='', note=''),
+            dict(attachment=upload, label='', text='57+6=？', answer='513', correction='63', note='虚构备注')]))['saved']
+        bare, full = (s['id'] for s in saved)
+        with app.connect() as c:
+            rows = {r['id']: dict(r) for r in c.execute('SELECT * FROM records WHERE id IN (?,?)', (bare, full)).fetchall()}
+        # What the product wrote for the 题号-only item is exactly the heading and the fixed line this guard sets aside,
+        # and its field labels are the ones the guard treats as empty when nothing follows them.
+        self.assertEqual((rows[bare]['title'], rows[bare]['note']), ('数学错题：第8题', diag._SAVED_LINE))
+        self.assertEqual(rows[full]['title'], '数学错题（第2处）')
+        self.assertEqual(rows[full]['note'].split('\n'), [label + value for label, value in zip(
+            diag._SAVED_FIELDS, ('57+6=？', '513', '63', '虚构备注'))] + [diag._SAVED_LINE])
+        ref, full_ref = 'record:%d' % bare, 'record:%d' % full
+        # Untagged, it validates as it always did (unchanged on purpose; this guard only judges kept candidates).
+        self.assertEqual(self._diagnosed(base, ('旧行为', '有支持', [ref]))[0]['status'], '有支持')
+        kept = [self.TOPIC + '两位数进位加法', self.ERROR + '进位漏加']
+        def tagged_notes(rid):  # ② appends the kept lines to this note (交接-错题VL-第二开发.md): before or after the fixed line
+            body = rows[rid]['note'].split('\n')
+            return ['\n'.join(body[:-1] + kept + body[-1:]), '\n'.join(body + kept)]
+        def rewrite(rid, note):
+            app.save_record(dict({k: rows[rid][k] or '' for k in ('child', 'day', 'category', 'subject', 'title', 'source')}, id=rid, note=note))
+        for note in tagged_notes(bare):
+            rewrite(bare, note)
+            self.assertEqual(self._item(bare)['topic_hint'], '两位数进位加法')
+            for status in ('有支持', '有反证'):
+                comp = self._diagnosed(base, ('两位数进位加法', status, [ref]))[0]
+                self.assertEqual((comp['status'], comp['evidence'], comp['review_on']), ('待验证', [ref], ''))
+            self.assertEqual(diag.due_reviews(_app(), 'child-1', now=base + dt.timedelta(days=30)), [])
+        for note in tagged_notes(full):  # the same kept lines on a transcribed 错题: a record the candidate can be checked against
+            rewrite(full, note)
+            comp = self._diagnosed(base, ('两位数进位加法', '有支持', [full_ref]))[0]
+            self.assertEqual((comp['status'], comp['evidence'], comp['review_on']), ('有支持', [full_ref], '2026-09-27'))
+
     def test_counter_evidence_overrides_a_parent_kept_tag(self):
         import datetime as dt
         tagged = self._tagged()
