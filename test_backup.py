@@ -56,6 +56,9 @@ with tempfile.TemporaryDirectory() as temporary:
     (root / 'private/attachments').mkdir()
     for name in backup.DOCUMENTS:
         (root / name).write_text('虚构示例：甲同学的学习记录。', encoding='utf-8')
+    (root / 'private/qq-inbox').mkdir()
+    (root / 'private/qq-inbox/pending.png').write_bytes(b'Synthetic pending capture')
+    (root / 'private/qq-inbox.json').write_text('{"enabled":true,"source_id":"qq:123456"}')
     data = b'Example attachment content\x00\x01'
     (root / 'private/uploads/example.bin').write_bytes(data)
     (root / 'private/attachments/example.txt').write_text('Synthetic file', encoding='utf-8')
@@ -91,6 +94,8 @@ with tempfile.TemporaryDirectory() as temporary:
         db.execute("UPDATE records SET score=91, assistance='独立尝试', comparison_note='虚构备份之后的更新'")
         db.commit()
     restored = backup.restore(archive, root.parent / 'restored')
+    assert (restored / 'private/qq-inbox/pending.png').read_bytes() == b'Synthetic pending capture'
+    assert json.loads((restored / 'private/qq-inbox.json').read_text())['source_id'] == 'qq:123456'
     with sqlite3.connect(restored / backup.DATABASE) as db:
         assert db.execute('SELECT name, score FROM records').fetchall() == [('示例甲', 85)]
         assert db.execute('SELECT assistance,practice_relation,comparison_note FROM records').fetchone() == tuple(learning_context.values())
@@ -601,6 +606,8 @@ def daily_backup_check():
         next_day = backup.daily(root, day=first_day + dt.timedelta(days=1))
         assert next_day['status'] == 'created' and next_day['path'] != str(archive)
         restored = backup.restore(archive, root.parent / 'restored')
+    assert (restored / 'private/qq-inbox/pending.png').read_bytes() == b'Synthetic pending capture'
+    assert json.loads((restored / 'private/qq-inbox.json').read_text())['source_id'] == 'qq:123456'
         with sqlite3.connect(restored / backup.DATABASE) as db:
             assert db.execute('SELECT note FROM records').fetchone()[0] == 'Before daily backup'
             assert db.execute('SELECT COUNT(*) FROM parent_sessions').fetchone()[0] == 0
