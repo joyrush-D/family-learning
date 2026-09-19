@@ -27,6 +27,22 @@ class AgentTests(unittest.TestCase):
         self.source = dict(id='synthetic-group', platform='wechat', child_id='child-1', name='虚构班级', cursor='10', enabled=True)
         self.config()
 
+    def test_diagnosis_review_reminder_lists_due_weak_knowledge_points(self):
+        import family_diagnosis, family_llm
+        from unittest.mock import patch
+        self.app.save_record(dict(child='示例甲', day='2026-02-01', category='学习进展', subject='数学',
+            title='错题：进位', note='题面：27+8=? 学生原答：315', source=family_diagnosis.WRONG_SOURCE))
+        draft = dict(knowledge_components=[dict(name='两位数进位加法', error_type='进位漏加',
+            misconception='个位满十未进1', status='有支持', evidence=[], suggestion='摆小棒进位')],
+            summary='', uncertainties=[])
+        with patch.object(family_llm, '_chat_json', return_value=draft):
+            family_diagnosis.diagnose(self.app, 'child-1', '数学', now=dt.datetime(2026, 2, 1))
+        due = agent._diagnosis_reviews(self.store, self.now)  # review_on 2026-02-08 <= now 2026-02-10
+        self.assertEqual([d['name'] for d in due], ['两位数进位加法'])
+        self.assertEqual(due[0]['subject'], '数学')
+        # Not yet due if we look before the interval elapses.
+        self.assertEqual(agent._diagnosis_reviews(self.store, dt.datetime(2026, 2, 3, tzinfo=agent.TZ)), [])
+
     def test_exam_result_loop_uses_real_task_flow_and_retires_closed_or_rescheduled_reminders(self):
         exam = self.app.new_task(dict(child='示例甲', title='英语 Unit1-3 单元测验', due='2026-02-05'))
         for title, due in [('数学练习', '2026-02-05'), ('语文单元测验', '2026-02-20'),

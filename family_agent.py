@@ -1154,6 +1154,32 @@ def _exam_reviews(store, now):
     return out
 
 
+def _diagnosis_reviews(store, now):
+    """⑤ Due interval re-checks per diagnosed weak knowledge point; deterministic, no model.
+
+    Reminds the parent to try a fresh similar item and re-diagnose; it never claims mastery.
+    Supersedes pending diagnosis-review items whose knowledge point is no longer due.
+    """
+    import family_diagnosis
+    app = store.app
+    with store._db() as c:
+        child_ids = [p['id'] for p in app.profiles(c)]
+    out = []
+    for child_id in child_ids:
+        try:
+            for r in family_diagnosis.due_reviews(app, child_id, now):
+                out.append(dict(child_id=child_id, **r))
+        except (ValueError, TypeError, KeyError, sqlite3.Error):
+            continue
+    with store._db() as c:
+        active = {(item['child_id'], item.get('subject', ''), item['name']) for item in out}
+        for row in c.execute("SELECT id,child_id,plan FROM agent_items WHERE kind='review' AND state='pending'").fetchall():
+            plan = json.loads(row['plan'])
+            if plan.get('diagnosis_review_pending') and (row['child_id'], plan.get('subject', ''), plan.get('kc', '')) not in active:
+                c.execute("UPDATE agent_items SET state='superseded',updated=? WHERE id=?", (now.isoformat(), row['id']))
+    return out
+
+
 def run_once(app, now=None):
     now = _now(now); store = Store(app.connect, app.profiles, app.DATA, app=app)
     config = store._config()
@@ -1195,6 +1221,22 @@ def run_once(app, now=None):
                         body='这场测验/考试（' + exam['review_on'] + '）已过。补充结果——分数或哪里错了，保存为学习记录后，请在事项里确认完成；没参加可选择“不参加 / 不用做”。保存记录本身不会关闭事项。',
                         evidence=[{'ref': 'task:' + exam['task_id'], 'text': exam['title'] + (chr(10) + exam['action'] if exam['action'] else '')}],
                         due=exam['review_on'], task_id=exam['task_id'], plan={'exam_result_pending': True})
+                    store._save(key, fp, [item], now); created += 1
+            except (AgentError, ValueError, sqlite3.Error):
+                failed += 1
+            # ⑤ Wrong-question loop: remind when a diagnosed weak knowledge point is due for a re-check.
+            try:
+                for rev in _diagnosis_reviews(store, now):
+                    key = 'diagnosis-review:' + rev['child_id'] + ':' + rev.get('subject', '') + ':' + rev['name'] + ':' + rev['review_on']
+                    fp = store._job(key, rev, now)
+                    if not fp: continue
+                    label = (rev.get('subject', '') + ' · ' if rev.get('subject') else '') + rev['name']
+                    item = dict(child_id=rev['child_id'], kind='review', title='到期复测：' + label,
+                        body='这个知识点（' + rev['name'] + ('，' + rev['error_type'] if rev.get('error_type') else '') + '）到了复测时间。'
+                             '找一道同类的新题，看孩子能不能独立做对；' + (rev.get('suggestion') or '') +
+                             ' 做完把结果记下来，再重新诊断，就能看出是否真的学会。这是提醒，不代表已经掌握。',
+                        evidence=[], due=rev['review_on'],
+                        plan={'diagnosis_review_pending': True, 'subject': rev.get('subject', ''), 'kc': rev['name']})
                     store._save(key, fp, [item], now); created += 1
             except (AgentError, ValueError, sqlite3.Error):
                 failed += 1
