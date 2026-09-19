@@ -32,7 +32,8 @@ MAX_IMAGES = 3
 MAX_SIDE = 1000
 MAX_REGIONS = 30
 MAX_UNCERTAINTIES = 10
-LIMITS = dict(label=80, text=2000, answer=1000, correction=1000, uncertainty=300, subject=80)
+LIMITS = dict(label=80, text=2000, answer=1000, correction=1000, uncertainty=300, subject=80,
+              topic_hint=60, error_hint=40)
 SCALE = MAX_SIDE
 MIN_BOX_SIDE = 1
 IMAGE_TYPES = ('image/jpeg', 'image/png', 'image/webp')
@@ -52,7 +53,10 @@ PROMPT = '''你将把作业/试卷照片标注成给家长核对的错题草稿�
 - answer：wrong_item 中可见的学生原作答；其他类型留空。
 - correction：wrong_item 中可见的订正或正确答案；没有留空。
 - uncertain：区域归属、边界或转写任一看不清时为 true。
-不要输出其他学生姓名、分数排名、知识点、错因或掌握程度判断；不要把答对、未作答或空白题标成 wrong_item。
+- topic_hint：仅 wrong_item 可选，知识点候选（不超过60字，如“两位数进位加法”），没把握留空。
+- error_hint：仅 wrong_item 可选，错误类型候选（不超过40字，如“进位漏加”），没把握留空。
+两个 hint 都只是供家长核对的草稿提示，不是事实或掌握结论；handwriting/layout 必须留空。
+不要输出其他学生姓名、分数排名或掌握程度判断；不要把答对、未作答或空白题标成 wrong_item。
 整页没有可标注区域时 regions 输出空数组；图片模糊、裁切不全、题目归属不明等问题写入 uncertainties。
 本次输出仅供家长核对，不会自动保存为事实。'''
 
@@ -70,6 +74,8 @@ _REGION = dict(type='object', additionalProperties=False,
                    'answer': dict(type='string', maxLength=LIMITS['answer']),
                    'correction': dict(type='string', maxLength=LIMITS['correction']),
                    'uncertain': dict(type='boolean'),
+                   'topic_hint': dict(type='string', maxLength=LIMITS['topic_hint']),
+                   'error_hint': dict(type='string', maxLength=LIMITS['error_hint']),
                })
 SCHEMA = dict(
     type='object', additionalProperties=False,
@@ -116,7 +122,9 @@ def _validated(result, page_count):
             raise family_llm.LLMDraftError('第%d页标注数量无法核对，请缩小范围后重试' % number)
         regions = []
         for raw in raw_regions:
-            if not isinstance(raw, dict) or set(raw) != {'kind', 'box', 'label', 'text', 'answer', 'correction', 'uncertain'}:
+            required_keys = {'kind', 'box', 'label', 'text', 'answer', 'correction', 'uncertain'}
+            if (not isinstance(raw, dict) or not required_keys <= set(raw)
+                    or set(raw) - required_keys - {'topic_hint', 'error_hint'}):
                 raise family_llm.LLMDraftError('第%d页存在格式不正确的标注' % number)
             if raw['kind'] not in ('wrong_item', 'handwriting', 'layout'):
                 raise family_llm.LLMDraftError('第%d页标注类型无法核对' % number)
@@ -144,11 +152,15 @@ def _validated(result, page_count):
                 'answer': _clean_text(raw['answer'], LIMITS['answer'], '学生作答'),
                 'correction': _clean_text(raw['correction'], LIMITS['correction'], '订正内容'),
                 'uncertain': raw['uncertain'],
+                'topic_hint': _clean_text(raw.get('topic_hint', ''), LIMITS['topic_hint'], '知识点候选'),
+                'error_hint': _clean_text(raw.get('error_hint', ''), LIMITS['error_hint'], '错误类型候选'),
             }
             if region['kind'] != 'wrong_item':
                 # 其他区域不承载作答判断，防止模型把答案混进手写/版面块。
                 region['answer'] = ''
                 region['correction'] = ''
+                region['topic_hint'] = ''
+                region['error_hint'] = ''
             regions.append(region)
         # 同一页面内完全重复的标注只保留一条；随后按阅读带（上→下，带内左→右）稳定排序。
         unique = []

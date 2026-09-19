@@ -127,10 +127,13 @@ class Store:
                 answer = _text(item, 'answer', fwq.LIMITS['answer'], name='原答案')
                 correction = _text(item, 'correction', fwq.LIMITS['correction'], name='订正')
                 note_extra = _text(item, 'note', 1000, name='备注')
+                topic_hint = _text(item, 'topic_hint', fwq.LIMITS['topic_hint'], name='知识点候选')
+                error_hint = _text(item, 'error_hint', fwq.LIMITS['error_hint'], name='错误类型候选')
                 if not (label or text or answer or correction):
                     raise WrongReviewError('第%d条错题没有可保存的内容' % index)
                 parsed.append(dict(attachment=row['id'], label=label, text=text,
-                                   answer=answer, correction=correction, note=note_extra))
+                                   answer=answer, correction=correction, note=note_extra,
+                                   topic_hint=topic_hint, error_hint=error_hint))
 
         saved = []
         for index, item in enumerate(parsed, 1):
@@ -146,6 +149,10 @@ class Store:
                 lines.append('可见订正/正确答案：' + item['correction'])
             if item['note']:
                 lines.append('家长备注：' + item['note'])
+            if item['topic_hint']:
+                lines.append('知识点（家长核对）：' + item['topic_hint'])
+            if item['error_hint']:
+                lines.append('错误类型（家长核对）：' + item['error_hint'])
             lines.append('由照片标注生成，家长已核对；这不是掌握程度结论。')
             record = dict(
                 child=child, day=day, category='学习进展', subject=subject,

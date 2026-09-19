@@ -138,6 +138,42 @@ class WrongReviewHTTPTest(unittest.TestCase):
         status, state = self.request('/api/state')
         self.assertEqual(len([r for r in state['records'] if r['source'] == '错题照片核对']), 2)
 
+    def test_confirmed_candidate_tags_saved_as_reviewed_lines(self):
+        img = self.upload('虚构标签卷.png', PNG)
+        items = [
+            dict(attachment=img, label='第1题', text='28 + 14 =', answer='32', correction='42',
+                 note='', topic_hint='两位数进位加法', error_hint='进位漏加'),
+            dict(attachment=img, label='第2题', text='1+1=', answer='3', correction='2',
+                 note='', topic_hint='  ', error_hint=''),
+        ]
+        status, saved = self.request('/api/wrong/save',
+                                     dict(child='示例甲', day='2026-09-18', subject='数学',
+                                          request_key=uuid.uuid4().hex, items=items))
+        self.assertEqual(status, 200, saved)
+        status, state = self.request('/api/state')
+        records = [r for r in state['records'] if r['source'] == '错题照片核对']
+        first = next(r for r in records if '第1题' in r['title'])
+        self.assertIn('知识点（家长核对）：两位数进位加法', first['note'])
+        self.assertIn('错误类型（家长核对）：进位漏加', first['note'])
+        self.assertIn('题面：28 + 14 =', first['note'])  # 原题面前缀不变
+        self.assertIn('可见订正/正确答案：42', first['note'])
+        second = next(r for r in records if '第2题' in r['title'])
+        self.assertNotIn('知识点（家长核对）', second['note'])  # 清空不写行
+        self.assertNotIn('错误类型（家长核对）', second['note'])
+
+        over_topic = [dict(attachment=img, label='第3题', text='x', answer='', correction='',
+                           topic_hint='知' * 61, error_hint='')]
+        status, out = self.request('/api/wrong/save',
+                                   dict(child='示例甲', day='2026-09-18', subject='数学',
+                                        request_key=uuid.uuid4().hex, items=over_topic))
+        self.assertEqual(status, 400, out)
+        over_error = [dict(attachment=img, label='第3题', text='x', answer='', correction='',
+                           topic_hint='', error_hint='错' * 41)]
+        status, out = self.request('/api/wrong/save',
+                                   dict(child='示例甲', day='2026-09-18', subject='数学',
+                                        request_key=uuid.uuid4().hex, items=over_error))
+        self.assertEqual(status, 400, out)
+
     def test_rejections(self):
         img = self.upload('a.png', PNG)
         doc = self.upload('note.txt', b'not an image')

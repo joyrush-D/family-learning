@@ -122,6 +122,29 @@ class AnnotateTests(unittest.TestCase):
             with self.assertRaises(family_llm.LLMDraftError, msg=str(result)):
                 self._call(result)
 
+    def test_candidate_hints_kept_for_wrong_items_only(self):
+        hinted = dict(region(), topic_hint=' 两位数进位加法 ', error_hint=' 进位漏加 ')
+        stray = dict(region('handwriting', label='', text='草稿', answer='', correction=''),
+                     topic_hint='不应保留', error_hint='不应保留')
+        draft, capture = self._call(dict(pages=[page(1, hinted, stray)], uncertainties=[]))
+        wrong, hand = draft['pages'][0]['regions']
+        self.assertEqual(wrong['topic_hint'], '两位数进位加法')
+        self.assertEqual(wrong['error_hint'], '进位漏加')
+        self.assertEqual(hand['topic_hint'], '')
+        self.assertEqual(hand['error_hint'], '')  # 非 wrong_item 不保留标签
+        self.assertIn('topic_hint', capture.calls[0]['messages'][0]['content'])
+        omitted, _ = self._call(dict(pages=[page(1, region())], uncertainties=[]))
+        only = omitted['pages'][0]['regions'][0]
+        self.assertEqual(only['topic_hint'], '')  # 旧无标签草稿兼容
+        self.assertEqual(only['error_hint'], '')
+        for bad in (dict(region(), topic_hint='知' * 61),
+                    dict(region(), error_hint='错' * 41),
+                    dict(region(), topic_hint=123)):
+            with self.assertRaises(family_llm.LLMDraftError):
+                self._call(dict(pages=[page(1, bad)], uncertainties=[]))
+        self.assertEqual(fwq.LIMITS['topic_hint'], 60)
+        self.assertEqual(fwq.LIMITS['error_hint'], 40)
+
     def test_input_validation(self):
         with self.assertRaises(ValueError):
             fwq.annotate_pages([])
