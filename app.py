@@ -419,7 +419,15 @@ def goals_snapshot():
     snap=goal_store().snapshot()
     # ③⑤ read-only: current wrong-question diagnoses and due re-checks per child; never calls the model.
     now=dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
-    try: snap['diagnosis']={p['id']:family_diagnosis.overview(SimpleNamespace(**globals()),p['id'],now) for p in snap['children']}
+    try:
+        snap['diagnosis']={p['id']:family_diagnosis.overview(SimpleNamespace(**globals()),p['id'],now) for p in snap['children']}
+        with connect() as c:
+            if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_jobs'").fetchone():
+                # A background diagnosis that stopped after its retry cap says why, so the parent can use the button.
+                for child_id,view in snap['diagnosis'].items():
+                    for s in view['subjects']:
+                        row=c.execute('SELECT error FROM agent_jobs WHERE id=? AND done=0 AND attempts>=?',('diagnosis:'+child_id+':'+s['subject'],family_agent.MAX_ATTEMPTS)).fetchone()
+                        if row and (s['diagnosis'] is None or s['evidence_changed']): s['auto_paused']=row['error'] or '后台诊断暂未成功。'
     except (OSError,sqlite3.Error,ValueError,TypeError,KeyError):
         snap['diagnosis']={};snap['diagnosis_error']='错题诊断暂时无法读取；错题原记录仍在，可稍后更新显示。'
     return snap

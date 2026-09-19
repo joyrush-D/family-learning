@@ -90,6 +90,10 @@ def _kind(row):
     return 'progress'
 
 
+def is_wrong_question(row):
+    return _kind(row) == 'wrong_question'
+
+
 def _child(app, c, child_id):
     prof = next((p for p in app.profiles(c) if p['id'] == child_id), None)
     if prof is None: raise DiagnosisError('请选择孩子')
@@ -179,9 +183,9 @@ def diagnose(app, child_id, subject='', now=None, *, data_path=None, timeout=90)
     diagnosis = _validate(result, refs)
     # ⑤ schedule an interval re-check for each supported weakness; verification is a later re-diagnosis
     # on a fresh attempt (reuses ③), so nothing here claims mastery — it only says when to look again.
-    review_on = (now.date() + dt.timedelta(days=REVIEW_DAYS)).isoformat()
+    prev = next(iter(latest(app, child_id, subject or '')), None)
     for comp in diagnosis['knowledge_components']:
-        comp['review_on'] = review_on if comp['status'] == '有支持' else ''
+        comp['review_on'] = _review_on(comp, prev, ev, now) if comp['status'] == '有支持' else ''
     ev_hash = hashlib.sha256(json.dumps([e['ref'] for e in ev], ensure_ascii=False).encode()).hexdigest()
     payload = json.dumps(dict(diagnosis=diagnosis, evidence=ev), ensure_ascii=False)
     with app.connect() as c:
@@ -192,6 +196,48 @@ def diagnose(app, child_id, subject='', now=None, *, data_path=None, timeout=90)
         c.execute("INSERT INTO diagnoses(child_id,subject,created,evidence_hash,payload,superseded) VALUES(?,?,?,?,?,NULL)",
                   (child_id, subject or '', now.isoformat(), ev_hash, payload))
     return dict(ok=True, diagnosis=diagnosis, evidence=ev, created=now.isoformat())
+
+
+def _review_on(comp, prev, ev, now):
+    """⑤ Re-check date for a supported weakness: 7 days after it was diagnosed. A re-run keeps the earlier
+    date for the same weakness (overlapping cited records) unless it cites something newer than that
+    diagnosis: a new mistake or a failed re-check restarts the interval, an unrelated record does not."""
+    fresh = (now.date() + dt.timedelta(days=REVIEW_DAYS)).isoformat()
+    if not prev: return fresh
+    since, refs = prev['created'][:10], set(comp['evidence'])
+    if any((e.get('day') or '') > since for e in ev if e['ref'] in refs): return fresh
+    for old in prev.get('diagnosis', {}).get('knowledge_components', []):
+        if old.get('status') == '有支持' and old.get('review_on') and refs & set(old.get('evidence') or []):
+            return old['review_on']
+    return fresh
+
+
+def _core(window):
+    """What a diagnosis is about: 错题, exams and 订正/复测 follow-ups. Other same-subject records are context
+    the model sees whenever it runs; on their own they neither trigger a re-run nor mark it out of date."""
+    return [e for e in window if e.get('kind') != 'progress' or e.get('followup')]
+
+
+def _outdated(stored, window):
+    return _core(stored) != _core(window)
+
+
+def stale_subjects(app, child_id):
+    """Subjects whose 错题 have no current diagnosis, or whose evidence window changed since it ran.
+
+    The deterministic gate for the Agent's background diagnosis (no model call here); each item carries
+    the window the model would see, so the caller can fingerprint it and cap retries per version."""
+    with app.connect() as c:
+        rows = _records(c, _child(app, c, child_id)['name'])
+        current = {}
+        for d in _current(c, child_id):
+            current.setdefault(d['subject'], d)
+    out = []
+    for subject in sorted({(r['subject'] or '').strip() for r in rows if _kind(r) == 'wrong_question'} - {''}):
+        window = _pick(rows, subject)
+        if subject not in current or _outdated(current[subject].get('evidence', []), window):
+            out.append(dict(subject=subject, evidence=window))
+    return out
 
 
 def _current(c, child_id, subject=None):
@@ -255,7 +301,7 @@ def overview(app, child_id, now=None):
 
     Lists subjects with 错题 or a current diagnosis. Cited refs are re-checked against the child's current
     records (a record corrected away to another child shows as unavailable, never a stale title), and a
-    diagnosis whose evidence changed since it ran (new 错题/复测, a correction) is flagged for re-running.
+    diagnosis whose core evidence changed since it ran (new 错题/exam/复测, a correction) is flagged for re-running.
     """
     today = (now or dt.datetime.now()).date().isoformat()
     with app.connect() as c:
@@ -299,8 +345,8 @@ def overview(app, child_id, now=None):
             diagnosis = d.get('diagnosis', {})
             entry['diagnosis'] = dict(created=d['created'], summary=diagnosis.get('summary', ''),
                                       uncertainties=diagnosis.get('uncertainties', []), knowledge_components=comps)
-            # The stored window is what the model saw; any difference now means the conclusion is out of date.
-            entry['evidence_changed'] = d.get('evidence', []) != _pick(rows, subject)
+            # New or corrected 错题/exams/re-checks since it ran mean the conclusion is out of date.
+            entry['evidence_changed'] = _outdated(d.get('evidence', []), _pick(rows, subject))
         entry['due_count'] = sum(1 for k in (entry['diagnosis'] or {}).get('knowledge_components', []) if k['due'])
         entry['active_on'] = max(entry['latest_wrong_day'], d['created'][:10] if d else '')
         subjects.append(entry)

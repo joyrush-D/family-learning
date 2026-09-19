@@ -182,6 +182,56 @@ class DiagnosisTest(unittest.TestCase):
         self.assertIn('错题原记录仍在', broken['diagnosis_error'])
         self.assertIn('goals', broken)  # the rest of the goals page still loads
 
+    def test_recheck_date_survives_unrelated_rediagnosis_but_restarts_on_new_mistake(self):
+        import datetime as dt
+        first, second = self._math_ids()
+        def run(when, name, refs):
+            draft = dict(knowledge_components=[dict(name=name, error_type='进位漏加', misconception='个位满十未进1',
+                         status='有支持', evidence=refs, suggestion='')], summary='', uncertainties=[])
+            with patch.object(family_llm, '_chat_json', return_value=draft):
+                return diag.diagnose(_app(), 'child-1', '数学', now=when)['diagnosis']['knowledge_components'][0]['review_on']
+        cited = ['record:%d' % first, 'record:%d' % second]
+        self.assertEqual(run(dt.datetime(2026, 9, 20, 9), '两位数进位加法', cited), '2026-09-27')
+        # An unrelated record re-triggers diagnosis; the same weakness (renamed, same cited records) keeps its date.
+        app.save_record(dict(child='小明', day='2026-09-22', category='学习进展', subject='数学', title='口算练习',
+                             note='今天口算状态不错', source='家长观察'))
+        self.assertEqual(run(dt.datetime(2026, 9, 22, 9), '两位数加一位数的进位加法', cited), '2026-09-27')
+        # A new mistake on that point restarts the interval from the day it is diagnosed.
+        new = app.save_record(dict(child='小明', day='2026-09-24', category='学习进展', subject='数学', title='数学错题：第7题',
+                                   note='题面：38+5=？ 学生原答：313', source=diag.WRONG_SOURCE))['record_id']
+        self.assertEqual(run(dt.datetime(2026, 9, 24, 9), '两位数进位加法', cited + ['record:%d' % new]), '2026-10-01')
+
+    def test_stale_subjects_gate_background_diagnosis(self):
+        self.assertEqual([s['subject'] for s in diag.stale_subjects(_app(), 'child-1')], ['数学', '语文'])
+        draft = dict(knowledge_components=[], summary='', uncertainties=['证据不足'])
+        with patch.object(family_llm, '_chat_json', return_value=draft):
+            diag.diagnose(_app(), 'child-1', '数学')
+        self.assertEqual([s['subject'] for s in diag.stale_subjects(_app(), 'child-1')], ['语文'])
+        # Same-subject context alone (a daily note) is not a reason to re-run; a re-check of a 错题 is.
+        app.save_record(dict(child='小明', day='2026-09-14', category='学习进展', subject='数学', title='口算练习', note='口算都对',
+                             source='家长观察'))
+        self.assertEqual([s['subject'] for s in diag.stale_subjects(_app(), 'child-1')], ['语文'])
+        self.assertFalse(next(s for s in diag.overview(_app(), 'child-1')['subjects'] if s['subject'] == '数学')['evidence_changed'])
+        first = self._math_ids()[0]
+        app.save_record(dict(child='小明', day='2026-09-15', category='学习进展', subject='数学', title='复测', note='新题做对',
+                             source='家长观察', related_record_id=first, followup_kind='复测'))
+        stale = diag.stale_subjects(_app(), 'child-1')
+        self.assertEqual([s['subject'] for s in stale], ['数学', '语文'])
+        self.assertEqual(stale[0]['evidence'], diag.evidence(_app(), 'child-1', '数学'))  # the window the model would see
+        self.assertEqual(diag.stale_subjects(_app(), 'child-2'), [])
+
+    def test_correcting_a_wrong_question_outdates_its_diagnosis(self):
+        with patch.object(family_llm, '_chat_json', return_value=dict(knowledge_components=[], summary='', uncertainties=['x'])):
+            diag.diagnose(_app(), 'child-1', '数学')
+        self.assertNotIn('数学', [s['subject'] for s in diag.stale_subjects(_app(), 'child-1')])
+        first = self._math_ids()[0]
+        with app.connect() as c:
+            row = dict(c.execute('SELECT * FROM records WHERE id=?', (first,)).fetchone())
+        app.save_record(dict({k: row[k] or '' for k in ('child', 'day', 'category', 'subject', 'title', 'source')},
+                             id=first, note='题面：27+8=？ 学生原答：25（家长更正转写）'))
+        self.assertIn('数学', [s['subject'] for s in diag.stale_subjects(_app(), 'child-1')])
+        self.assertTrue(next(s for s in diag.overview(_app(), 'child-1')['subjects'] if s['subject'] == '数学')['evidence_changed'])
+
 
 if __name__ == '__main__':
     unittest.main()

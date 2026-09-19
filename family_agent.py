@@ -1180,6 +1180,30 @@ def _diagnosis_reviews(store, now):
     return out
 
 
+def _refresh_diagnosis(app, store, now):
+    """③ Prepare a child's wrong-question diagnosis in the background when that subject's evidence changed,
+    so the profile opens on a current judgment instead of waiting for a click. At most one model call per
+    tick; each evidence version is tried at most MAX_ATTEMPTS times with the usual backoff."""
+    import family_diagnosis
+    with store._db() as c:
+        child_ids = [p['id'] for p in app.profiles(c)]
+    for child_id in child_ids:
+        try: stale = family_diagnosis.stale_subjects(app, child_id)
+        except (ValueError, TypeError, KeyError, sqlite3.Error): continue
+        for item in stale:
+            key = 'diagnosis:' + child_id + ':' + item['subject']
+            fp = store._job(key, {'child_id': child_id, **item}, now, model=True)
+            if not fp: continue
+            try:
+                family_diagnosis.diagnose(app, child_id, item['subject'], now=now, data_path=store.data)
+                store._save(key, fp, [], now)
+                return dict(used=1, failed=0)
+            except (family_llm.LLMDraftError, ValueError, sqlite3.Error) as error:
+                store._fail(key, now, fingerprint=fp, reason=error)
+                return dict(used=1, failed=1)
+    return dict(used=0, failed=0)
+
+
 def run_once(app, now=None):
     now = _now(now); store = Store(app.connect, app.profiles, app.DATA, app=app)
     config = store._config()
@@ -1326,8 +1350,15 @@ def run_once(app, now=None):
             created += goals.route_school()
             progress = goals.run(now, budget)
             budget -= progress['used']; created += progress['created']; processed += progress['used']; failed += progress['failed']
+            if budget > 0:
+                diagnosed = _refresh_diagnosis(app, store, now)
+                budget -= diagnosed['used']; processed += diagnosed['used']; failed += diagnosed['failed']
             managed = goals.managed_ids()
             managed.update(r['id'] for r in records if r['category']=='课程进度')
+            # 错题 and their 订正/复测 follow-ups are understood per subject by the diagnosis layer, not one suggestion each.
+            import family_diagnosis
+            wrong = {r['id'] for r in records if family_diagnosis.is_wrong_question(r)}
+            managed.update(wrong | {r['id'] for r in records if r.get('related_record_id') in wrong})
             # A linked record belongs to its continuous goal, not a parallel one-record plan.
             with store._db() as c:
                 for ident in managed:

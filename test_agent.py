@@ -71,6 +71,52 @@ class AgentTests(unittest.TestCase):
             family_diagnosis.diagnose(self.app, 'child-1', '数学', now=dt.datetime(2026, 2, 10))
         self.assertEqual([r['state'] for r in reminders()], ['superseded'])
 
+    def test_background_diagnosis_runs_once_per_tick_only_when_evidence_changed(self):
+        import family_diagnosis, family_llm
+        ids = [self.app.save_record(dict(child='示例甲', day='2026-02-0%d' % n, category='学习进展', subject=subject,
+            title=subject + '错题：第%d题' % n, note='题面：虚构 学生原答：虚构', source=family_diagnosis.WRONG_SOURCE))['record_id']
+            for n, subject in [(1, '数学'), (2, '数学'), (3, '语文')]]
+        calls = []
+        def model(messages, schema, name, *args, **kwargs):
+            calls.append((name, json.loads(messages[-1]['content']).get('subject')))
+            return dict(knowledge_components=[], summary='', uncertainties=['虚构：证据不足'])
+        def tick():
+            before = len(calls)
+            with patch.object(agent, '_plan_learning', side_effect=AssertionError('错题 are not planned one by one')), \
+                 patch.object(family_llm, '_chat_json', side_effect=model):
+                agent.run_once(self.app, self.now)
+            self.now += dt.timedelta(minutes=10)
+            return calls[before:]
+        self.assertEqual(tick(), [('family_diagnosis', '数学')])  # one per tick, after school and goal work
+        self.assertEqual(tick(), [('family_diagnosis', '语文')])
+        self.assertEqual(tick(), [])                                 # nothing changed: no model call
+        self.app.save_record(dict(child='示例甲', day='2026-02-09', category='学习进展', subject='数学', title='复测：进位',
+            note='新题独立做对', source='家长观察', related_record_id=ids[0], followup_kind='复测',
+            assistance='独立尝试', practice_relation='相近的新题或新片段'))
+        self.assertEqual(tick(), [('family_diagnosis', '数学')])  # the re-check refreshes that subject only
+        self.assertEqual(tick(), [])
+
+    def test_background_diagnosis_backs_off_then_pauses_and_says_why(self):
+        import family_diagnosis, family_llm
+        self.app.save_record(dict(child='示例甲', day='2026-02-01', category='学习进展', subject='数学', title='数学错题：第1题',
+            note='题面：虚构', source=family_diagnosis.WRONG_SOURCE))
+        calls = []
+        def failing(*args, **kwargs):
+            calls.append(1); raise family_llm.LLMDraftError('虚构模型超时')
+        def tick(minutes):
+            with patch.object(agent, '_plan_learning', return_value=None), patch.object(family_llm, '_chat_json', side_effect=failing):
+                agent.run_once(self.app, self.now)
+            self.now += dt.timedelta(minutes=minutes)
+        tick(1); tick(1)
+        self.assertEqual(len(calls), 1)  # retried only after the backoff, not on every tick
+        for _ in range(4): tick(60)
+        self.assertEqual(len(calls), 3)  # capped at three attempts per evidence version
+        subject = self.app.goals_snapshot()['diagnosis']['child-1']['subjects'][0]
+        self.assertIn('虚构模型超时', subject['auto_paused'])
+        with patch.object(family_llm, '_chat_json', return_value=dict(knowledge_components=[], summary='', uncertainties=['x'])):
+            family_diagnosis.diagnose(self.app, 'child-1', '数学')  # the parent's button still works
+        self.assertNotIn('auto_paused', self.app.goals_snapshot()['diagnosis']['child-1']['subjects'][0])
+
     def test_exam_result_loop_uses_real_task_flow_and_retires_closed_or_rescheduled_reminders(self):
         exam = self.app.new_task(dict(child='示例甲', title='英语 Unit1-3 单元测验', due='2026-02-05'))
         for title, due in [('数学练习', '2026-02-05'), ('语文单元测验', '2026-02-20'),
