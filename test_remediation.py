@@ -52,6 +52,18 @@ class RemediationTest(unittest.TestCase):
         self.assertEqual(s['subject'], '数学')
         self.assertTrue(s['title'].startswith('订正 · '))
 
+    def test_parent_kept_tags_stay_out_of_the_childs_redo_draft(self):
+        # ② 家长核对后保留的候选标签（知识点/错误类型）是给诊断的核对起点；孩子重做时不该先看到“错在哪”。
+        tagged = NOTE.replace('\n由照片', '\n知识点（家长核对）：两位数进位加法\n错误类型（家长核对）：进位漏加\n由照片')
+        self.assertEqual(rem.parse_wrong_note(tagged), ('27 + 8 = ?', '35'))
+        rid = app.save_record(dict(child='小明', day='2026-09-17', category='学习进展', subject='数学',
+                                   title='数学错题：第4题', note=tagged, source=rem.WRONG_SOURCE))['record_id']
+        sid = rem.from_wrong_question(_ns(), dict(child_id='child-1', record_id=rid, request_key='synthetic-remediate-0020'))['session_id']
+        with app.connect() as c:
+            s = dict(c.execute('SELECT * FROM guided_sessions WHERE id=?', (sid,)).fetchone())
+        self.assertEqual((s['question_text'], s['reference_text']), ('27 + 8 = ?', '35'))
+        self.assertFalse([k for k, v in s.items() if isinstance(v, str) and ('进位漏加' in v or '家长核对' in v)])
+
     def test_idempotent_request(self):
         body = dict(child_id='child-1', record_id=self.rid, request_key='synthetic-remediate-0009')
         a = rem.from_wrong_question(_ns(), body)['session_id']

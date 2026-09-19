@@ -15,6 +15,9 @@
 
 原则：只据本次提供的记录，不猜答案、不判定永久掌握、不输出其他孩子信息；看不清写入
 uncertainties；家长核对后才作为理解依据。模型不可用时不影响其它流程。
+
+家长核对错题照片时保留的知识点/错误类型候选（note 中固定前缀的两行）是诊断的核对起点：随所属错题
+一起交给模型对照题面与作答，不单独成为证据；没有真实记录引用的判断一律记为待验证，后来的反证照常覆盖。
 """
 import datetime as dt
 import hashlib
@@ -31,6 +34,10 @@ _LIMITS = dict(name=60, error_type=40, misconception=300, suggestion=400, summar
 
 # 错题来自 Hermes 的网页核对流程（来源标记）；成绩为考试证据；其余为同科目学习进展。
 WRONG_SOURCE = '错题照片核对'
+# ② 家长核对后保留的候选标签：note 中这两个精确前缀的行（接口见 交接-错题VL-第二开发.md，2026-09-19 定稿）。
+# 只表示家长保存了该候选，是诊断的核对起点；不是证据，也不是错因或掌握结论。旧记录没有这两行，照原路径诊断。
+_HINT_PREFIX = dict(topic_hint='知识点（家长核对）：', error_hint='错误类型（家长核对）：')
+_HINT_LIMIT = dict(topic_hint=_LIMITS['name'], error_hint=_LIMITS['error_type'])
 
 PROMPT = '''你是一起成长Agent的诊断层，面向家长，像一位资深全科老师看错题本：不是记一笔对错，而是判断
 「孩子在哪个知识点没通、犯的是哪一类错、背后可能是什么误解」。只依据本次提供的 records（学习记录，
@@ -49,6 +56,12 @@ PROMPT = '''你是一起成长Agent的诊断层，面向家长，像一位资深
 followup 为「订正」「复测」的记录是对 related 原记录的后续尝试：订正不等于学会；只有 assistance 为「独立尝试」、
 practice_relation 为「相近的新题或新片段」的复测做对，才是该知识点改善的证据（可记为有反证或待验证）；
 看过讲解或逐步帮助后做对、同一道题重做，只说明订正过；帮助或材料关系未写明时按待核对处理；复测仍错则维持有支持。
+错题记录可能带 topic_hint（知识点候选）、error_hint（错误类型候选），即 text 里「知识点（家长核对）：」「错误类型（家长核对）：」
+两行：家长核对错题照片时保留的候选，只表示家长保存了这个候选，不证明错因成立，也不是掌握结论。把它当核对的起点：
+先对照该记录的题面、学生原答、订正，以及同科目考试和复测，看候选是否说得通；说得通时 name、error_type 尽量沿用家长的
+用词，并引用这些记录。候选本身不是证据：只有候选、没有题面或原答可对照时记为待验证；实际作答与候选不符时以实际记录为准
+另行命名，并在 uncertainties 写明哪条记录的候选与作答不符、请家长核对；之后若有「独立尝试」完成「相近的新题或新片段」
+并做对的复测，照样是该知识点改善的证据，不因为家长保留过候选就维持有支持。没有候选的记录照常判断，不要求补候选。
 无法从证据归纳出明确知识点时 knowledge_components 返回空数组，并把原因写进 uncertainties。
 summary 用一到两句概述当前最该先解决的一两个点；overall 只是给家长的方向，不是结论。'''
 
@@ -106,6 +119,18 @@ def _records(c, name):
         "assistance,practice_relation FROM records WHERE child=?", (name,)).fetchall()]
 
 
+def reviewed_hints(row):
+    """Candidate tags the parent kept when reviewing a 错题 photo, read from the whole saved note (not the
+    1000-char excerpt). Only the ones present, so an untagged record yields the same evidence item as before."""
+    found = {}
+    if _kind(row) != 'wrong_question': return found
+    for line in (row['note'] or '').split('\n'):
+        line = line.strip()
+        for key, prefix in _HINT_PREFIX.items():
+            if line.startswith(prefix): found[key] = _clean(line[len(prefix):], _HINT_LIMIT[key])
+    return {key: value for key, value in found.items() if value}
+
+
 def _pick(rows, subject='', limit=MAX_EVIDENCE):
     subject = (subject or '').strip()
     picked = []
@@ -126,6 +151,7 @@ def _pick(rows, subject='', limit=MAX_EVIDENCE):
         if r.get('followup_kind') and r.get('related_record_id'): item['related'] = 'record:%d' % r['related_record_id']
         for key in ('assistance', 'practice_relation'):
             if r.get(key): item[key] = r[key]
+        item.update(reviewed_hints(r))  # a starting point to check, never evidence by itself
         out.append(item)
     return out
 
@@ -160,7 +186,9 @@ def _validate(result, refs):
             name=_clean(comp.get('name'), _LIMITS['name']),
             error_type=_clean(comp.get('error_type'), _LIMITS['error_type']),
             misconception=_clean(comp.get('misconception'), _LIMITS['misconception']),
-            status=comp['status'], evidence=cited,
+            # 有支持/有反证 are claims about this child's records. With no real cited record behind it (a
+            # parent-kept candidate tag or an invented ref is not one) the point stays a hypothesis to check.
+            status=comp['status'] if cited else '待验证', evidence=cited,
             suggestion=_clean(comp.get('suggestion'), _LIMITS['suggestion'])))
     unc = result['uncertainties']
     if not isinstance(unc, list) or len(unc) > 8: raise family_llm.LLMDraftError('诊断待核对项无法核对')
@@ -319,6 +347,8 @@ def overview(app, child_id, now=None):
     for subject in list(diagnosed) + [s for s in wrong if s and s not in diagnosed]:
         d, items = diagnosed.get(subject), wrong.get(subject, [])
         entry = dict(subject=subject, wrong_count=len(items),
+                     # 错题 carrying a parent-kept candidate tag: where the diagnosis starts checking, not a finding.
+                     tagged_count=sum(1 for r in items if reviewed_hints(r)),
                      latest_wrong_day=max((r['day'] or '' for r in items), default=''),
                      diagnosis=None, evidence_changed=False)
         if d:
@@ -330,7 +360,9 @@ def overview(app, child_id, now=None):
                     cited.append(dict(ref=ref, id=_ref_id(ref), available=r is not None,
                                       kind=_kind(r) if r else '', day=(r['day'] or '') if r else '',
                                       title=(r['title'] or '') if r else '',
-                                      remediable=bool(r and WRONG_SOURCE in (r['source'] or ''))))
+                                      remediable=bool(r and WRONG_SOURCE in (r['source'] or '')),
+                                      # The candidate as the record says it now, so the parent sees what was checked.
+                                      **(reviewed_hints(r) if r else {})))
                 usable = [e for e in cited if e['available']]
                 kc = dict(name=comp.get('name', ''), error_type=comp.get('error_type', ''),
                           misconception=comp.get('misconception', ''), status=comp.get('status', ''),

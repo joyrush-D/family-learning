@@ -232,6 +232,172 @@ class DiagnosisTest(unittest.TestCase):
         self.assertIn('数学', [s['subject'] for s in diag.stale_subjects(_app(), 'child-1')])
         self.assertTrue(next(s for s in diag.overview(_app(), 'child-1')['subjects'] if s['subject'] == '数学')['evidence_changed'])
 
+    # ② → ③ 家长核对后保留的候选标签：note 中两个精确前缀的行（交接-错题VL-第二开发.md，2026-09-19 定稿）。
+    TOPIC, ERROR = '知识点（家长核对）：', '错误类型（家长核对）：'
+    BODY = '题面：38+5=？\n学生原答：313\n可见订正/正确答案：43'
+    TAIL = '由照片标注生成，家长已核对；这不是掌握程度结论。'
+
+    def _note(self, topic='两位数进位加法', error='进位漏加', body=None):
+        lines = [body or self.BODY] + ([self.TOPIC + topic] if topic is not None else []) + ([self.ERROR + error] if error is not None else [])
+        return '\n'.join(lines + [self.TAIL])
+
+    def _tagged(self, child='小明', subject='数学', day='2026-09-14', title='数学错题：第7题', **note):
+        return app.save_record(dict(child=child, day=day, category='学习进展', subject=subject, title=title,
+                                    note=self._note(**note), source=diag.WRONG_SOURCE))['record_id']
+
+    def _item(self, record_id, child_id='child-1', subject='数学'):
+        return next(e for e in diag.evidence(_app(), child_id, subject) if e['ref'] == 'record:%d' % record_id)
+
+    def _math(self, child_id='child-1', now=None):
+        return next(s for s in diag.overview(_app(), child_id, now=now)['subjects'] if s['subject'] == '数学')
+
+    def test_parent_kept_tags_reach_the_model_as_a_starting_point_and_old_records_are_unchanged(self):
+        legacy = diag.evidence(_app(), 'child-1', '数学')
+        keys = {'ref', 'kind', 'day', 'subject', 'title', 'text', 'score', 'total', 'followup'}
+        self.assertTrue(all(set(e) == keys for e in legacy))  # untagged records: exactly the earlier evidence item
+        tagged = self._tagged()
+        window = diag.evidence(_app(), 'child-1', '数学')
+        self.assertEqual([e for e in window if e['ref'] != 'record:%d' % tagged], legacy)  # same window, same fingerprint
+        item = self._item(tagged)
+        self.assertEqual((item['topic_hint'], item['error_hint']), ('两位数进位加法', '进位漏加'))
+        self.assertIn(self.TOPIC + '两位数进位加法', item['text'])  # the parent's record stays verbatim
+        sent = []
+        draft = dict(knowledge_components=[dict(name='两位数进位加法', error_type='进位漏加', misconception='个位满十未进1',
+                     status='有支持', evidence=['record:%d' % tagged], suggestion='摆小棒')], summary='', uncertainties=[])
+        with patch.object(family_llm, '_chat_json', side_effect=lambda messages, *a, **k: sent.append(messages) or draft):
+            out = diag.diagnose(_app(), 'child-1', '数学')
+        system, user = sent[0][0]['content'], sent[0][1]['content']
+        for phrase in ('topic_hint', 'error_hint', '核对的起点', '候选本身不是证据', '以实际记录为准', '不因为家长保留过候选就维持有支持', '没有候选的记录照常判断'):
+            self.assertIn(phrase, system)
+        import json
+        given = next(r for r in json.loads(user)['records'] if r['ref'] == 'record:%d' % tagged)
+        self.assertEqual((given['topic_hint'], given['error_hint']), ('两位数进位加法', '进位漏加'))
+        self.assertEqual(out['diagnosis']['knowledge_components'][0]['evidence'], ['record:%d' % tagged])  # still cites the record
+        view = self._math()
+        self.assertEqual((view['wrong_count'], view['tagged_count']), (3, 1))
+        cited = view['diagnosis']['knowledge_components'][0]['evidence'][0]
+        self.assertEqual((cited['id'], cited['topic_hint'], cited['error_hint']), (tagged, '两位数进位加法', '进位漏加'))
+        chinese = next(s for s in diag.overview(_app(), 'child-1')['subjects'] if s['subject'] == '语文')
+        self.assertEqual(chinese['tagged_count'], 0)
+
+    def test_tag_lines_are_read_strictly_bounded_and_only_on_wrong_questions(self):
+        long_body = '题面：' + '虚构长题面' * 260  # the tags sit beyond the 1000-char excerpt the model reads
+        far = self._tagged(title='数学错题：长题', body=long_body)
+        item = self._item(far)
+        self.assertNotIn(self.TOPIC, item['text'])
+        self.assertEqual((item['topic_hint'], item['error_hint']), ('两位数进位加法', '进位漏加'))
+        bounded = self._item(self._tagged(title='数学错题：超长标签', topic='知' * 90, error='错' * 70))
+        self.assertEqual((len(bounded['topic_hint']), len(bounded['error_hint'])), (60, 40))
+        only_error = self._item(self._tagged(title='数学错题：清空知识点', topic='', error='进位漏加'))  # a cleared tag is no tag
+        self.assertNotIn('topic_hint', only_error); self.assertEqual(only_error['error_hint'], '进位漏加')
+        remark = self._item(self._tagged(title='数学错题：备注里提到', topic=None, error=None,
+                                         body=self.BODY + '\n家长备注：老师说' + self.TOPIC + '进位'))
+        self.assertFalse({'topic_hint', 'error_hint'} & set(remark))  # only a line that starts with the exact prefix
+        superseded = self._item(self._tagged(title='数学错题：旧交接格式', topic=None, error=None,
+                                             body=self.BODY + '\n知识点：进位加法\n错误类型：进位漏加（候选，家长已核对）'))
+        self.assertFalse({'topic_hint', 'error_hint'} & set(superseded))  # no second line format
+        note = self._note()
+        exam = app.save_record(dict(child='小明', day='2026-09-15', category='成绩', subject='数学', title='虚构小测',
+                                    score='80', total='100', note=note))['record_id']
+        recheck = app.save_record(dict(child='小明', day='2026-09-16', category='学习进展', subject='数学', title='复测',
+                                       note=note, source='家长观察', related_record_id=far, followup_kind='复测'))['record_id']
+        for other in (exam, recheck):
+            self.assertFalse({'topic_hint', 'error_hint'} & set(self._item(other)))
+
+    def test_a_kept_tag_alone_never_becomes_a_conclusion(self):
+        import datetime as dt
+        tagged = self._tagged()
+        base = dt.datetime(2026, 9, 20, 10, 0, 0)
+        def run(*comps):
+            draft = dict(knowledge_components=[dict(name=name, error_type='进位漏加', misconception='个位满十未进1', status=status,
+                         evidence=refs, suggestion='') for name, status, refs in comps], summary='', uncertainties=[])
+            with patch.object(family_llm, '_chat_json', return_value=draft):
+                return diag.diagnose(_app(), 'child-1', '数学', now=base)['diagnosis']['knowledge_components']
+        # The model repeats the parent's tag as a finding without citing any real record (or only an invented one).
+        parroted = run(('两位数进位加法', '有支持', []), ('两位数进位加法（已改善）', '有反证', ['record:99999']))
+        self.assertEqual([(c['status'], c['evidence'], c['review_on']) for c in parroted], [('待验证', [], ''), ('待验证', [], '')])
+        self.assertEqual(diag.due_reviews(_app(), 'child-1', now=base + dt.timedelta(days=30)), [])  # no re-check, no reminder
+        self.assertEqual([k['status'] for k in self._math()['diagnosis']['knowledge_components']], ['待验证', '待验证'])
+        # Citing this child's real record keeps the model's status; the parent checks it by opening that record.
+        cited = run(('两位数进位加法', '有支持', ['record:%d' % tagged]))[0]
+        self.assertEqual((cited['status'], cited['evidence'], cited['review_on']), ('有支持', ['record:%d' % tagged], '2026-09-27'))
+
+    def test_counter_evidence_overrides_a_parent_kept_tag(self):
+        import datetime as dt
+        tagged = self._tagged()
+        ref = 'record:%d' % tagged
+        def run(when, status, refs):
+            draft = dict(knowledge_components=[dict(name='两位数进位加法', error_type='进位漏加', misconception='个位满十未进1',
+                         status=status, evidence=refs, suggestion='')], summary='', uncertainties=[])
+            with patch.object(family_llm, '_chat_json', return_value=draft):
+                return diag.diagnose(_app(), 'child-1', '数学', now=when)['diagnosis']['knowledge_components'][0]
+        base = dt.datetime(2026, 9, 20, 10, 0, 0)
+        self.assertEqual(run(base, '有支持', [ref])['review_on'], '2026-09-27')
+        self.assertEqual([d['record_id'] for d in diag.due_reviews(_app(), 'child-1', now=base + dt.timedelta(days=7))], [tagged])
+        recheck = app.save_record(dict(child='小明', day='2026-09-27', category='学习进展', subject='数学', title='复测：进位加法',
+                                       note='新题 47+6=53，自己做对', source='家长观察', related_record_id=tagged, followup_kind='复测',
+                                       assistance='独立尝试', practice_relation='相近的新题或新片段'))['record_id']
+        self.assertTrue(self._math(now=base)['evidence_changed'])
+        # The model gets the kept tag and the later independent re-check side by side, so the evidence can win.
+        self.assertEqual(self._item(tagged)['topic_hint'], '两位数进位加法')
+        later = self._item(recheck)
+        self.assertEqual((later['related'], later['assistance'], later['practice_relation']), (ref, '独立尝试', '相近的新题或新片段'))
+        self.assertFalse({'topic_hint', 'error_hint'} & set(later))
+        cleared = run(base + dt.timedelta(days=7), '有反证', [ref, 'record:%d' % recheck])
+        self.assertEqual((cleared['status'], cleared['review_on']), ('有反证', ''))
+        after = base + dt.timedelta(days=30)
+        self.assertEqual(diag.due_reviews(_app(), 'child-1', now=after), [])
+        view = self._math(now=after)
+        self.assertEqual((view['due_count'], view['evidence_changed']), (0, False))
+        kc = view['diagnosis']['knowledge_components'][0]
+        self.assertEqual(kc['status'], '有反证')
+        # The tag stays what the parent saved (a starting point on the record); it is not rewritten as a finding.
+        self.assertEqual(next(e for e in kc['evidence'] if e['id'] == tagged)['topic_hint'], '两位数进位加法')
+        with app.connect() as c:
+            self.assertEqual(c.execute('SELECT note FROM records WHERE id=?', (tagged,)).fetchone()[0], self._note())
+
+    def test_correcting_or_clearing_a_tag_outdates_only_that_subject(self):
+        tagged = self._tagged()
+        draft = dict(knowledge_components=[dict(name='两位数进位加法', error_type='进位漏加', misconception='待核对', status='待验证',
+                     evidence=['record:%d' % tagged], suggestion='')], summary='', uncertainties=[])
+        with patch.object(family_llm, '_chat_json', return_value=draft):
+            diag.diagnose(_app(), 'child-1', '数学'); diag.diagnose(_app(), 'child-1', '语文')
+        self.assertEqual(diag.stale_subjects(_app(), 'child-1'), [])
+        def rewrite(**note):
+            app.save_record(dict(id=tagged, child='小明', day='2026-09-14', category='学习进展', subject='数学', title='数学错题：第7题',
+                                 note=self._note(**note), source=diag.WRONG_SOURCE))
+        rewrite(topic='两位数进位加法', error='数位对齐错误')  # the parent corrects the candidate in the original record
+        self.assertEqual([s['subject'] for s in diag.stale_subjects(_app(), 'child-1')], ['数学'])
+        view = self._math()
+        self.assertTrue(view['evidence_changed'])
+        self.assertEqual(view['diagnosis']['knowledge_components'][0]['evidence'][0]['error_hint'], '数位对齐错误')  # as the record says now
+        self.assertFalse(next(s for s in diag.overview(_app(), 'child-1')['subjects'] if s['subject'] == '语文')['evidence_changed'])
+        rewrite(topic=None, error=None)  # cleared tags write no line: the record diagnoses like an untagged one
+        self.assertFalse({'topic_hint', 'error_hint'} & set(self._item(tagged)))
+        self.assertEqual(self._math()['tagged_count'], 0)
+
+    def test_tags_never_cross_children(self):
+        mine = self._tagged()
+        hers = self._tagged(child='小红', title='数学错题：第2题', topic='退位减法', error='借位漏减')
+        text = str(diag.evidence(_app(), 'child-1', '数学')) + str(diag.overview(_app(), 'child-1'))
+        self.assertNotIn('退位减法', text); self.assertNotIn('借位漏减', text)
+        self.assertEqual((self._math()['tagged_count'], self._math('child-2')['tagged_count']), (1, 1))
+        self.assertEqual(self._item(hers, 'child-2')['topic_hint'], '退位减法')
+        # 小明's diagnosis cannot cite 小红's tagged record, even if the model names it.
+        draft = dict(knowledge_components=[dict(name='退位减法', error_type='借位漏减', misconception='待核对', status='有支持',
+                     evidence=['record:%d' % hers], suggestion='')], summary='', uncertainties=[])
+        with patch.object(family_llm, '_chat_json', return_value=draft):
+            comp = diag.diagnose(_app(), 'child-1', '数学')['diagnosis']['knowledge_components'][0]
+        self.assertEqual((comp['status'], comp['evidence'], comp['review_on']), ('待验证', [], ''))
+        # A cited tagged record later corrected to the other child shows as unavailable, without its tag.
+        draft['knowledge_components'][0].update(name='两位数进位加法', evidence=['record:%d' % mine])
+        with patch.object(family_llm, '_chat_json', return_value=draft):
+            diag.diagnose(_app(), 'child-1', '数学')
+        app.save_record(dict(id=mine, child='小红', day='2026-09-14', category='学习进展', subject='数学', title='数学错题：第7题',
+                             note=self._note(), source=diag.WRONG_SOURCE))
+        kc = self._math()['diagnosis']['knowledge_components'][0]
+        self.assertEqual(kc['evidence'], [dict(ref='record:%d' % mine, id=mine, available=False, kind='', day='', title='', remediable=False)])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -30,10 +30,11 @@ class AgentTests(unittest.TestCase):
     def test_diagnosis_review_reminder_lists_due_weak_knowledge_points(self):
         import family_diagnosis, family_llm
         from unittest.mock import patch
-        self.app.save_record(dict(child='示例甲', day='2026-02-01', category='学习进展', subject='数学',
-            title='错题：进位', note='题面：27+8=? 学生原答：315', source=family_diagnosis.WRONG_SOURCE))
+        saved = self.app.save_record(dict(child='示例甲', day='2026-02-01', category='学习进展', subject='数学',
+            title='错题：进位', note='题面：27+8=? 学生原答：315', source=family_diagnosis.WRONG_SOURCE))['record_id']
+        # A supported weakness cites a real record; one that cites nothing is kept as 待验证 and sets no reminder.
         draft = dict(knowledge_components=[dict(name='两位数进位加法', error_type='进位漏加',
-            misconception='个位满十未进1', status='有支持', evidence=[], suggestion='摆小棒进位')],
+            misconception='个位满十未进1', status='有支持', evidence=['record:%d' % saved], suggestion='摆小棒进位')],
             summary='', uncertainties=[])
         with patch.object(family_llm, '_chat_json', return_value=draft):
             family_diagnosis.diagnose(self.app, 'child-1', '数学', now=dt.datetime(2026, 2, 1))
@@ -116,6 +117,38 @@ class AgentTests(unittest.TestCase):
         with patch.object(family_llm, '_chat_json', return_value=dict(knowledge_components=[], summary='', uncertainties=['x'])):
             family_diagnosis.diagnose(self.app, 'child-1', '数学')  # the parent's button still works
         self.assertNotIn('auto_paused', self.app.goals_snapshot()['diagnosis']['child-1']['subjects'][0])
+
+    def test_background_diagnosis_reads_a_parent_kept_tag_once_per_version_within_the_retry_cap(self):
+        import family_diagnosis, family_llm
+        record = dict(child='示例甲', day='2026-02-01', category='学习进展', subject='数学', title='数学错题：第1题',
+                      source=family_diagnosis.WRONG_SOURCE)
+        body = '题面：38+5=？\n学生原答：313'
+        rid = self.app.save_record(dict(record, note=body))['record_id']
+        seen = []
+        def model(messages, schema, name, *args, **kwargs):
+            seen.append([(r.get('topic_hint'), r.get('error_hint')) for r in json.loads(messages[-1]['content'])['records']])
+            return dict(knowledge_components=[], summary='', uncertainties=['虚构：证据不足'])
+        def tick(side_effect, minutes=10):
+            before = len(seen)
+            with patch.object(agent, '_plan_learning', side_effect=AssertionError('错题 are not planned one by one')), \
+                 patch.object(family_llm, '_chat_json', side_effect=side_effect):
+                agent.run_once(self.app, self.now)
+            self.now += dt.timedelta(minutes=minutes)
+            return seen[before:]
+        self.assertEqual(tick(model), [[(None, None)]])  # an untagged 错题 is diagnosed exactly as before
+        self.assertEqual(tick(model), [])
+        # The parent keeps a candidate on that record: one new evidence version, read by the model once.
+        self.app.save_record(dict(record, id=rid, note=body + '\n知识点（家长核对）：两位数进位加法\n错误类型（家长核对）：进位漏加'))
+        self.assertEqual(tick(model), [[('两位数进位加法', '进位漏加')]])
+        self.assertEqual(tick(model), [])
+        # A corrected candidate is a new version too, and a failing model is still tried at most three times for it.
+        self.app.save_record(dict(record, id=rid, note=body + '\n知识点（家长核对）：两位数进位加法\n错误类型（家长核对）：数位对齐错误'))
+        failures = []
+        def failing(*args, **kwargs):
+            failures.append(1); raise family_llm.LLMDraftError('虚构模型超时')
+        for _ in range(6): tick(failing, 60)
+        self.assertEqual(len(failures), 3)
+        self.assertIn('虚构模型超时', self.app.goals_snapshot()['diagnosis']['child-1']['subjects'][0]['auto_paused'])
 
     def test_exam_result_loop_uses_real_task_flow_and_retires_closed_or_rescheduled_reminders(self):
         exam = self.app.new_task(dict(child='示例甲', title='英语 Unit1-3 单元测验', due='2026-02-05'))

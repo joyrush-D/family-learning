@@ -108,16 +108,21 @@ ${esc(d.values.action)}</p><button type="button" data-goal-clear-draft="${esc(d.
  // ③⑤ Wrong-question diagnosis: read-only view of the stored judgment; every cited record opens for checking.
  const kcTone={有支持:'down',待验证:'flat',有反证:'up'};
  function diagnosisRef(e){return e.available?`<button type="button" data-goal-record="${esc(e.id)}">${esc(e.day||'日期待核对')} · ${esc(e.title||'原记录 '+e.id)}</button>`:'<span class="small muted">原记录暂不可核对</span>'}
+ // ② Candidate tags the parent kept when reviewing the photo: shown as where the check started, never as the finding.
+ function kcHints(k){
+  const kept=key=>[...new Set(k.evidence.map(e=>e[key]).filter(Boolean))].map(esc).join('、'),topic=kept('topic_hint'),error=kept('error_hint');
+  return topic||error?`<p class="small" data-kc-hints>核对起点 · 家长保留的候选（不是结论）：${[topic&&'知识点 '+topic,error&&'错误类型 '+error].filter(Boolean).join('；')}</p>`:'';
+ }
  function kcHTML(k){
   const redo=k.practice_record_id&&k.status!=='有反证'?(remediated[k.practice_record_id]?`<button type="button" data-child="${esc(state.children.find(c=>c.id===child)?.name||'')}" data-guided-refresh>已准备重做草稿 · 去“一起学习”核对并分享</button>`:`<button type="button" data-diagnosis-remediate="${esc(k.practice_record_id)}">让孩子重做这道错题</button>`):'';
-  return `<li data-diagnosis-kc="${esc(k.name)}"><strong>${esc(k.name||'知识点待核对')}</strong>${k.error_type?' · '+esc(k.error_type):''} <span class="progress-tag ${kcTone[k.status]||'none'}" data-kc-status="${esc(k.status)}">${esc(k.status||'待核对')}</span>${k.misconception?`<p>可能的误解：${esc(k.misconception)}</p>`:''}${k.suggestion?`<p class="source">可以这样核对：${esc(k.suggestion)}</p>`:''}<p class="small">依据：${k.evidence.map(diagnosisRef).join(' ')||'尚无可核对的原记录'}</p>${k.due?`<p class="small" data-kc-due>已到复测日 ${esc(k.review_on)}，见上方“到期复测”。</p>`:k.review_on?`<p class="small">复测日 ${esc(k.review_on)} · 到期再用同类新题看能否独立做对</p>`:''}${redo?`<div class="toolbar">${redo}</div>`:''}</li>`;
+  return `<li data-diagnosis-kc="${esc(k.name)}"><strong>${esc(k.name||'知识点待核对')}</strong>${k.error_type?' · '+esc(k.error_type):''} <span class="progress-tag ${kcTone[k.status]||'none'}" data-kc-status="${esc(k.status)}">${esc(k.status||'待核对')}</span>${k.misconception?`<p>可能的误解：${esc(k.misconception)}</p>`:''}${k.suggestion?`<p class="source">可以这样核对：${esc(k.suggestion)}</p>`:''}<p class="small">依据：${k.evidence.map(diagnosisRef).join(' ')||'尚无可核对的原记录'}</p>${kcHints(k)}${k.due?`<p class="small" data-kc-due>已到复测日 ${esc(k.review_on)}，见上方“到期复测”。</p>`:k.review_on?`<p class="small">复测日 ${esc(k.review_on)} · 到期再用同类新题看能否独立做对</p>`:''}${redo?`<div class="toolbar">${redo}</div>`:''}</li>`;
  }
  // The Agent prepares a stale or missing diagnosis in the background; the button stays for "now" and for retries.
  function autoNote(s){return s.auto_paused?`<p class="error" data-diagnosis-paused>后台诊断暂停：${esc(s.auto_paused)} 可以点下面的按钮重试。</p>`:options.agentEnabled?'<p class="small" data-diagnosis-auto>助手会在后台检查时更新诊断；也可以现在点按钮。</p>':''}
  function subjectHTML(s){
   const d=s.diagnosis,label=s.subject||'未指定科目',run=`<button type="button" data-diagnosis-run="${esc(s.subject)}">${diagnosing===s.subject?'正在诊断…':d?'结合最新记录重新诊断':'诊断这科错题'}</button>`;
-  const head=`<h5>${esc(label)} <span class="small muted">· 错题 ${esc(s.wrong_count)} 条${d?' · 诊断于 '+esc(d.created.slice(0,10)):''}</span></h5>`;
-  if(!d)return `<article class="note" data-diagnosis-subject="${esc(s.subject)}">${head}<p>已有 ${esc(s.wrong_count)} 条错题，尚未诊断。诊断会据这些原记录和同科目考试、复测，判断卡在哪个知识点、哪类错。</p>${autoNote(s)}<div class="toolbar">${run}</div></article>`;
+  const head=`<h5>${esc(label)} <span class="small muted">· 错题 ${esc(s.wrong_count)} 条${d?' · 诊断于 '+esc(d.created.slice(0,10)):''}${d&&s.tagged_count?' · '+esc(s.tagged_count)+' 条带家长保留的候选':''}</span></h5>`;
+  if(!d)return `<article class="note" data-diagnosis-subject="${esc(s.subject)}">${head}<p>已有 ${esc(s.wrong_count)} 条错题，尚未诊断。诊断会据这些原记录和同科目考试、复测，判断卡在哪个知识点、哪类错。${s.tagged_count?`<span data-diagnosis-tagged>其中 ${esc(s.tagged_count)} 条带家长核对时保留的候选标签：诊断从这些候选起步，再对照原题和作答核实，候选不是结论。</span>`:''}</p>${autoNote(s)}<div class="toolbar">${run}</div></article>`;
   const comps=d.knowledge_components||[];
   return `<article class="note" data-diagnosis-subject="${esc(s.subject)}">${head}${s.evidence_changed?`<p class="note" data-diagnosis-stale>诊断之后有新的错题、考试、复测或更正，下面的结论待重新诊断。</p>${autoNote(s)}`:''}${d.summary?`<p class="source">${esc(d.summary)}</p>`:''}${comps.length?`<ul class="word-status">${comps.map(kcHTML).join('')}</ul>`:'<p>这次没能归纳出明确的知识点，原记录保留。</p>'}${(d.uncertainties||[]).length?`<p class="small">待核对：${d.uncertainties.map(esc).join('；')}</p>`:''}<div class="toolbar">${run}</div></article>`;
  }
