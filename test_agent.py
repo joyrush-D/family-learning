@@ -502,6 +502,68 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(agent._school_brief(ready,evidence=[dict(text=t) for t in texts])['state'],'ready')
         self.assertEqual(agent._school_brief(ready,incomplete=True,evidence=[dict(text=text,unread=True)])['state'],'review')
 
+    def test_school_links_keep_purpose_unknowns_and_the_homework_submission_relation(self):
+        ref='message:synthetic-group:11'
+        base=dict(focus='school',due='',learning_subject='',learning_goal_id='',task_title='',task_goal='',task_advice='',task_state='review',
+            task_reason='',task_change='new',task_target_id='',task_purpose='unknown',task_submission='',evidence=[dict(ref=ref)])
+        def select(text,*models,incomplete=False):
+            with patch.object(agent.family_llm,'_chat_json',return_value={'proposals':[dict(base,title_quote=text[:20],**m) for m in models]}):
+                return agent._select('school',[dict(ref=ref,text=text,content_incomplete=incomplete)],school_goals=[],as_of='2026-02-10')
+        # Pure sign-in and mandatory receipt: at most a school to-do, never a learning goal even if the model names a subject.
+        for text,title in [('请各位家长点击链接完成今日到校签到 https://example.invalid/sign','完成到校签到'),('请全体家长今晚前填写防溺水回执并提交 https://example.invalid/receipt','填写防溺水回执')]:
+            item=select(text,dict(task_title=title,task_goal=title+'。',task_state='ready',task_reason='全班明确要求。',task_purpose='admin',learning_subject='语文'))[0]
+            brief=item['plan']['school_task'];self.assertEqual((brief['state'],brief['purpose'],brief['link_read']),('ready','admin',False))
+            self.assertNotIn('school_learning',item['plan']);self.assertIn('链接页面未读取',brief['reason']);self.assertIn(brief['links'][0],item['evidence'][0]['text'])
+        # Optional publicity stays material: never an automatic must-do or a goal.
+        text='自愿参加：周末科普讲座，感兴趣的家庭可以了解 https://example.invalid/talk'
+        item=select(text,dict(task_title='参加科普讲座',task_goal='周末参加科普讲座。',task_state='ready',task_purpose='optional',learning_subject='科学'))[0]
+        self.assertEqual(item['plan']['school_task']['state'],'review');self.assertIn('不自动加入必做',item['plan']['school_task']['reason']);self.assertNotIn('school_learning',item['plan'])
+        self.assertEqual(select(text,dict(task_title='科普讲座宣传',task_goal='自愿了解。',task_state='reference',task_purpose='optional'))[0]['plan']['school_task']['state'],'reference')
+        # Homework written in the message text is extracted; the page behind the link is never claimed as read.
+        text='语文：请阅读《示例寓言》第一章，明天课堂分享一个情节。材料见 https://example.invalid/read'
+        item=select(text,dict(task_title='语文：阅读《示例寓言》第一章',task_goal='阅读第一章，明天课堂分享一个情节。',task_state='ready',task_reason='正文写明要求。',task_purpose='learning',learning_subject='语文'))[0]
+        brief=item['plan']['school_task'];self.assertEqual((brief['state'],brief['links'],brief['link_read']),('ready',['https://example.invalid/read'],False))
+        self.assertEqual(item['plan']['school_learning'],dict(subject='语文',goal_id=''));self.assertIn('只依据消息正文',brief['reason'])
+        # An exercise known only by its address, bare short links and login links stay unknown whatever the model guesses.
+        guess=dict(task_title='英语：完成打卡',task_goal='打开链接完成今日英语打卡。',task_state='ready',task_reason='老师发布。',task_purpose='learning',task_submission='打卡',learning_subject='英语')
+        item=select('数学在线练习 https://example.invalid/quiz',dict(guess,task_purpose='unknown'))[0]
+        self.assertEqual((item['plan']['school_task']['state'],item['plan']['school_task']['goal']),('review',''));self.assertNotIn('school_learning',item['plan'])
+        for text in ['https://t.example/AbC12','t.example/AbC12','请登录后查看 https://example.invalid/login?next=hw','各位家长请点击链接：www.example.invalid/x']:
+            item=select(text,guess)[0];brief=item['plan']['school_task']
+            self.assertEqual((brief['state'],brief['purpose'],brief['title'],brief['goal']),('review','unknown','',''),text)
+            self.assertNotIn('school_learning',item['plan']);self.assertNotIn('submission',brief);self.assertIn('用途和内容待核对',brief['reason'])
+            self.assertTrue(item['title'].startswith('待核对：'));self.assertIn(text,item['evidence'][0]['text'])
+        # Read aloud then check in: one item keeps the activity and its submission; a split check-in is not auto-added twice.
+        text='今晚语文作业：朗读第5课课文三遍，录音后上传到班级小程序打卡 https://example.invalid/clock'
+        learning=dict(task_title='语文：朗读第5课课文',task_goal='朗读第5课课文三遍。',task_state='ready',task_reason='正文写明作业。',task_purpose='learning',task_submission='录音后上传到班级小程序打卡。',learning_subject='语文')
+        split=dict(task_title='班级小程序打卡',task_goal='在班级小程序打卡。',task_state='ready',task_reason='要求打卡。',task_purpose='admin')
+        items=select(text,learning,split);brief=items[0]['plan']['school_task']
+        self.assertEqual((brief['state'],brief['submission']),('ready','录音后上传到班级小程序打卡。'));self.assertIn('school_learning',items[0]['plan'])
+        self.assertEqual(items[0]['body'],'朗读第5课课文三遍。\n提交要求：录音后上传到班级小程序打卡。')
+        self.assertEqual(items[1]['plan']['school_task']['state'],'review');self.assertIn('避免重复',items[1]['plan']['school_task']['reason']);self.assertNotIn('school_learning',items[1]['plan'])
+        item=select(text,dict(split,task_title='语文：朗读打卡',task_goal='朗读第5课课文三遍并打卡。'))[0]
+        self.assertEqual(item['plan']['school_task']['state'],'review');self.assertIn('请核对是否含作业',item['plan']['school_task']['reason']);self.assertIn('朗读',item['body'])
+        # Mixed attachment: the unread original keeps the existing gap; nothing is guessed from the link.
+        item=select('[图片]\n今日作业见图，完成后打卡 https://example.invalid/clock',learning,incomplete=True)[0]
+        self.assertEqual((item['plan']['school_task']['state'],item['plan']['school_task']['title']),('review',''));self.assertNotIn('school_learning',item['plan'])
+        # Through the product entry: an unknown link waits for the parent with its original message; homework becomes one open task.
+        payload=self.payload();payload['messages'][0]['text']='https://t.example/AbC12';self.store.ingest(payload)
+        def model(messages,schema,name,**kwargs):
+            entry=json.loads(messages[-1]['content'])['evidence'][0]
+            return {'proposals':[dict(base,title_quote=entry['text'][:20],**dict(learning if '朗读' in entry['text'] else guess,learning_subject=''),evidence=[dict(ref=entry['ref'])])]}
+        with patch.object(agent.family_llm,'_chat_json',side_effect=model) as mocked:
+            agent.run_once(self.app,self.now);agent.run_once(self.app,self.now+dt.timedelta(minutes=1));self.assertEqual(mocked.call_count,1)
+            with self.app.connect() as c:
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],0)
+                row=c.execute("SELECT state,plan FROM agent_items WHERE kind='school'").fetchone()
+                self.assertEqual((row['state'],json.loads(row['plan'])['school_task']['purpose']),('pending','unknown'))
+                self.assertEqual(json.loads(c.execute('SELECT payload FROM agent_messages').fetchone()[0])['text'],'https://t.example/AbC12')
+            later=self.payload(expected='11',cursor='12',message='12',offset=2);later['messages'][0]['text']=text;self.store.ingest(later)
+            agent.run_once(self.app,self.now+dt.timedelta(minutes=3));agent.run_once(self.app,self.now+dt.timedelta(minutes=4));self.assertEqual(mocked.call_count,2)
+        with self.app.connect() as c:
+            tasks=c.execute('SELECT * FROM manual_tasks').fetchall();self.assertEqual(len(tasks),1)
+            self.assertIn('提交要求：',tasks[0]['action']);self.assertIn('https://example.invalid/clock',tasks[0]['source']);self.assertEqual(tasks[0]['original_status'],'待跟进')
+
     def test_school_backfill_does_not_overwrite_parent_and_failed_retries_stop(self):
         self.store.ingest(self.payload());key='synthetic-race';fp=self.store._job(key,{},self.now)
         self.store._save(key,fp,[dict(child_id='child-1',kind='school',title='带材料',body='旧说明',evidence=[dict(ref='message:synthetic-group:11',text='带材料')])],self.now)

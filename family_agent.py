@@ -76,7 +76,37 @@ _school_fields['required'] += ['task_change','task_target_id']
 _school_fields['properties'].update(task_change=TASK_BRIEF_SCHEMA['properties']['change'],task_target_id=TASK_BRIEF_SCHEMA['properties']['target_id'])
 _school_fields['required'] += ['task_state','task_reason']
 _school_fields['properties'].update(task_state=TASK_BRIEF_SCHEMA['properties']['state'],task_reason=TASK_BRIEF_SCHEMA['properties']['reason'])
-SCHOOL_PROMPT += '\n还返回task_state和task_reason，按以下状态规则整理。\n'+SCHOOL_TASK_PROMPT+'\n本次为学校批处理，按proposals结构返回；上述title/goal/advice/state/reason/change/target_id均使用task_前缀，其余既有字段照常返回。'
+# A URL is an address, not read content: purpose is judged from read text only and nothing is fetched (PRD FR03).
+PURPOSES = ('learning','admin','optional','unknown')
+TASK_BRIEF_SCHEMA['required'] += ['purpose','submission']
+TASK_BRIEF_SCHEMA['properties'].update(purpose={'type':'string','enum':list(PURPOSES)},submission={'type':'string','maxLength':600})
+_school_fields['required'] += ['task_purpose','task_submission']
+_school_fields['properties'].update(task_purpose=TASK_BRIEF_SCHEMA['properties']['purpose'],task_submission=TASK_BRIEF_SCHEMA['properties']['submission'])
+SCHOOL_TASK_PROMPT += '\n还返回purpose和submission，只按已读文字判定用途，不因出现网址就新增学习任务。learning：教学材料、课程、练习或作业，包括做完后再上传/打卡的作业；admin：纯签到、打卡、回执、报名或信息填报，原文明确要求全班或本孩子办理才可ready，不是学习证据；optional：自愿参加、宣传或参考资料，不写成必做，state不能是ready；unknown：只有链接/短链、需登录后才能看到或文字不足以判断，title/goal/advice留空且state=review，不按“多数链接是打卡”猜测。链接页面从未读取：只依据消息正文，不描述页面内容，不写“已查看链接”；正文已写明的作业照常整理。“朗读后打卡/上传”只返回一项：学习活动写goal，提交或打卡动作写submission，不为提交动作另起一项，也不能只留打卡而丢掉作业；没有提交动作时submission为空。点击、浏览、下载、打卡回执都不代表完成或掌握。'
+SCHOOL_PROMPT += '\n还返回task_state和task_reason，按以下状态规则整理。\n'+SCHOOL_TASK_PROMPT+'\n本次为学校批处理，按proposals结构返回；上述title/goal/advice/state/reason/change/target_id/purpose/submission均使用task_前缀，其余既有字段照常返回。task_purpose不是learning时learning_subject和learning_goal_id留空。'
+_URL = re.compile(r'(?:https?://|www\.)[^\s一-鿿，。；！？、（）【】《》]+|(?<![a-z0-9.@-])(?:[a-z0-9-]+\.)+[a-z]{2,}/[^\s一-鿿，。；！？、（）【】《》]*', re.IGNORECASE)
+_LINK_POINTER = re.compile(r'各位|大家|家长们?|同学们?|老师|[您你]好|登录|登陆|点击|点开|打开|查看|复制|浏览器|链接|网址|地址|详情|详见|如下|下方|下面|这个|看一?下|看看|[请戳此见后到在的]')
+_LEARNING_ACTIVITY = re.compile(r'朗读|背诵|抄写|默写|听写|跟读|练习|作业|订正|预习|复习|阅读|口算|习作|作文|单词|课文')
+
+
+def _links(evidence):
+    """Original addresses stay reviewable with the draft; keeping one never means its page was read."""
+    found=[]
+    for entry in evidence:
+        for url in _URL.findall(entry.get('text','')):
+            url=url.rstrip('.,;:!?\'"')[:500]
+            if url and url not in found: found.append(url)
+    return found[:5]
+
+
+def _link_only(text):
+    """Only an address and pointer words were read, so purpose and content stay unknown."""
+    return bool(_URL.search(text)) and not re.sub(r'[\W_]+','',_LINK_POINTER.sub('',_URL.sub('',text)))
+
+
+def _keeps_learning(brief):
+    """Only a read teaching requirement may feed a learning goal; sign-ins, optional material and unknown links never do."""
+    return brief['state']!='reference' and brief.get('change','new')=='new' and brief.get('purpose','') not in ('admin','optional','unknown')
 
 
 def _reference_brief(evidence):
@@ -100,6 +130,8 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=()):
     brief={key:_text(value,key,limit).strip() for key,limit in [('title',80),('goal',2000),('advice',1200),('reason',400)]}
     state=value.get('state','review')
     if state not in ('ready','review','reference'): raise AgentError('学校事项状态无法核对')
+    purpose=value.get('purpose','');submission=_text(value,'submission',600).strip()
+    if purpose not in ('',)+PURPOSES: raise AgentError('学校事项用途无法核对')
     reference=_reference_brief(evidence)
     if reference: return reference
     if incomplete:
@@ -107,8 +139,23 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=()):
         fragments = evidence and all(e.get('kind') == 'qq_window_fragment' and e.get('text', '').strip() for e in evidence)
         if not fragments: brief.update(title='',goal='',advice='')
         state='review';brief['reason']='仅截图可见内容，文字识别可能有误；请核对原图、发布日期和附件。' if fragments else '原件或具体要求尚未读全，请先核对。'
+    links=_links(evidence);bare=bool(evidence) and all(_link_only(e.get('text','')) for e in evidence)
+    if bare or purpose=='unknown':
+        # An address alone says nothing about purpose; a model guess must not become a task or a goal.
+        brief.update(title='',goal='',advice='');purpose='unknown';state='review'
+        if bare: brief['reason']='只有链接或短链，页面未读取，用途和内容待核对；请打开原链接核对后再填写具体要求。'
+        elif not incomplete: brief['reason']=brief['reason'] or '用途或内容无法从已读文字判断，请核对原消息。'
     if state=='ready' and (not brief['title'] or not brief['goal']):
         state='review';brief['reason']='原件或具体要求尚未读全，请先核对。'
+    if purpose=='optional' and state=='ready':
+        state='review';brief['reason']='自愿参加或参考资料，不自动加入必做事项；是否参加由家长决定。'
+    if purpose=='admin' and state!='reference' and _LEARNING_ACTIVITY.search(_URL.sub('',' '.join(e.get('text','') for e in evidence))):
+        # A check-in label must not swallow homework: the parent sees the whole notice instead.
+        state='review';brief['reason']='原文同时提到学习活动和打卡/提交，请核对是否含作业；暂未关联学习目标。'
+    if purpose!='learning' or not brief['goal']: submission=''
+    if submission and submission not in brief['goal']:
+        if len(brief['goal'])+len(submission)+6<=2000: brief['goal']+='\n提交要求：'+submission
+        else: state='review';brief['reason']='要求较长，提交要求未并入正文，请核对：'+submission[:200]
     change=value.get('change','new');target=_text(value,'target_id',80)
     if change not in ('new','update','cancel'): raise AgentError('学校通知变更类型无法核对')
     if target and not any(t['id']==target for t in school_tasks): raise AgentError('原事项不在本次可核对范围')
@@ -116,7 +163,13 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=()):
         target='';state='review';brief['reason']='模型同时给出新增事项和原事项，请家长核对是新要求还是学校变更。'
     if change!='new':
         state='review';brief['reason']='学校要求有变更，请核对原事项及新要求后确认；原状态和反馈保留。'
-    return dict(brief,state=state,policy=SCHOOL_TASK_POLICY,change=change,target_id=target)
+    if links and not bare and state!='reference':
+        brief['reason']=brief['reason'][:240]+' 链接页面未读取，以上只依据消息正文；打开、点击或打卡回执不代表完成。'
+    brief=dict(brief,state=state,policy=SCHOOL_TASK_POLICY,change=change,target_id=target)
+    if purpose: brief['purpose']=purpose
+    if submission: brief['submission']=submission
+    if links: brief.update(links=links,link_read=False)
+    return brief
 
 
 PLAN_SCHEMA = {'type': 'object', 'additionalProperties': False, 'required': ['proposal'], 'properties': {
@@ -915,7 +968,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     for proposal in result['proposals']:
         fields = {'title_quote', 'focus', 'due', 'evidence'} | ({'learning_subject', 'learning_goal_id'} if routing else set())
         extra={'task_title','task_goal','task_advice'} if routing else set(); triage={'task_state','task_reason'} if routing else set()
-        if not isinstance(proposal, dict) or set(proposal) not in (fields,fields|extra,fields|extra|triage,fields|extra|triage|{'task_change','task_target_id'}): raise AgentError('模型筛选字段不正确')
+        if not isinstance(proposal, dict) or set(proposal) not in (fields,fields|extra,fields|extra|triage,fields|extra|triage|{'task_change','task_target_id'},fields|extra|triage|{'task_change','task_target_id','task_purpose','task_submission'}): raise AgentError('模型筛选字段不正确')
         title = _text(proposal, 'title_quote', 120, True); due = _text(proposal, 'due', 10)
         allowed = {'school'} if mode == 'school' else set(FOCUS) - {'school'}
         if not isinstance(proposal['focus'], str) or proposal['focus'] not in allowed: raise AgentError('模型建议类别不正确')
@@ -957,7 +1010,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                                and not _needs_task_details(e['text']) for e in evidence):
                 item['plan'] = {'school_learning': {'subject': subject, 'goal_id': goal_id}}
             raw_change=proposal.get('task_change','new');raw_target=proposal.get('task_target_id','')
-            brief=_school_brief({key:proposal.get('task_'+key,'review' if key=='state' else 'new' if key=='change' else '') for key in ['title','goal','advice','state','reason','change','target_id']},
+            brief=_school_brief({key:proposal.get('task_'+key,'review' if key=='state' else 'new' if key=='change' else '') for key in ['title','goal','advice','state','reason','change','target_id','purpose','submission']},
                                 incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence if e['ref'] in {q['ref'] for q in cited}),evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}],school_tasks=school_tasks)
             target=next((t for t in school_tasks if t['id']==raw_target),None)
             status_reply=cited and all(e['text'].strip('。！! ') in {'已签署','已完成','已处理','已确认','已提交','已报名','已打卡','已阅读','已知悉'} for e in cited)
@@ -970,10 +1023,17 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             elif ambiguous_due and brief['state']=='ready':
                 brief.update(state='review',reason=brief['reason'][:300]+' 原通知含多个日期，已按原文取'+due+'；请核对这一天是否属于本事项。')
             if brief['title'] and brief['goal']: item.update(title=brief['title'],body=brief['goal'])
-            if brief['state']=='reference' or brief.get('change','new')!='new': item.get('plan',{}).pop('school_learning',None)
+            if not _keeps_learning(brief): item.get('plan',{}).pop('school_learning',None)
             item.setdefault('plan',{})['school_task']=brief
 
         if item not in output: output.append(item)
+    if routing:
+        # A check-in split from its own activity must not be auto-added as a second, unrelated task.
+        for item in output:
+            brief=item['plan']['school_task'];cited={e['ref'] for e in item['evidence']}
+            owner=next((o for o in output if o is not item and o['plan']['school_task'].get('submission') and cited&{e['ref'] for e in o['evidence']}),None)
+            if owner and brief.get('purpose')=='admin' and brief['state']!='reference':
+                brief.update(state='review',reason='同一通知的“'+owner['title'][:40]+'”已含提交要求；若是同一件事请忽略，另有要求再加入，避免重复。')
     return output
 
 
@@ -1009,9 +1069,9 @@ def _refresh_school(app, store, now, budget):
                     schema=copy.deepcopy(TASK_BRIEF_SCHEMA);schema['properties']['target_id']['enum']=['']+[t['id'] for t in targets]
                     result=family_llm._chat_json([{'role':'system','content':SCHOOL_TASK_PROMPT},{'role':'user','content':_json(context)}],
                         schema,'family_school_task',timeout=45,data_path=store.data)
-                    if not isinstance(result,dict) or set(result) not in (set(TASK_BRIEF_SCHEMA['required']),{'title','goal','advice','state','reason'}): raise AgentError('学校事项结构无法核对')
+                    if not isinstance(result,dict) or set(result) not in (set(TASK_BRIEF_SCHEMA['required']),set(TASK_BRIEF_SCHEMA['required'])-{'purpose','submission'},{'title','goal','advice','state','reason'}): raise AgentError('学校事项结构无法核对')
                     brief=_school_brief(result,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in evidence),evidence=evidence,school_tasks=targets)
-                if brief['state']=='reference' or brief.get('change','new')!='new': plan.pop('school_learning',None)
+                if not _keeps_learning(brief): plan.pop('school_learning',None)
                 plan['school_task']=brief
                 with store._db() as c:
                     c.execute('BEGIN IMMEDIATE')
