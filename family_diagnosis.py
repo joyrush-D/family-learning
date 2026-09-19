@@ -46,6 +46,9 @@ PROMPT = '''你是一起成长Agent的诊断层，面向家长，像一位资深
 
 规则：一次错误只支持本次范围的暂时判断，不能由一次错就断定长期没掌握；证据不足就把 status 记为待验证、
 在 misconception 写「待核对」。不要编造知识点或误解、不要引用未提供的 ref、不要输出分数排名或其他孩子。
+followup 为「订正」「复测」的记录是对 related 原记录的后续尝试：订正不等于学会；只有 assistance 为「独立尝试」、
+practice_relation 为「相近的新题或新片段」的复测做对，才是该知识点改善的证据（可记为有反证或待验证）；
+看过讲解或逐步帮助后做对、同一道题重做，只说明订正过；帮助或材料关系未写明时按待核对处理；复测仍错则维持有支持。
 无法从证据归纳出明确知识点时 knowledge_components 返回空数组，并把原因写进 uncertainties。
 summary 用一到两句概述当前最该先解决的一两个点；overall 只是给家长的方向，不是结论。'''
 
@@ -87,14 +90,19 @@ def _kind(row):
     return 'progress'
 
 
-def evidence(app, child_id, subject='', limit=MAX_EVIDENCE):
-    """Deterministically gather this child's error evidence (错题/exam/progress), recent first."""
-    with app.connect() as c:
-        prof = next((p for p in app.profiles(c) if p['id'] == child_id), None)
-        if prof is None: raise DiagnosisError('请选择孩子')
-        rows = [dict(r) for r in c.execute(
-            "SELECT id,child,day,category,subject,title,note,source,score,total,followup_kind FROM records WHERE child=?",
-            (prof['name'],)).fetchall()]
+def _child(app, c, child_id):
+    prof = next((p for p in app.profiles(c) if p['id'] == child_id), None)
+    if prof is None: raise DiagnosisError('请选择孩子')
+    return prof
+
+
+def _records(c, name):
+    return [dict(r) for r in c.execute(
+        "SELECT id,child,day,category,subject,title,note,source,score,total,followup_kind,related_record_id,"
+        "assistance,practice_relation FROM records WHERE child=?", (name,)).fetchall()]
+
+
+def _pick(rows, subject='', limit=MAX_EVIDENCE):
     subject = (subject or '').strip()
     picked = []
     for r in rows:
@@ -104,14 +112,25 @@ def evidence(app, child_id, subject='', limit=MAX_EVIDENCE):
         if k == 'progress' and not subject:
             continue  # 无科目时只看错题/考试，避免把泛泛进展当错误证据
         picked.append(r)
-    picked.sort(key=lambda r: (r['day'], r['id']), reverse=True)
-    picked = picked[:limit]
+    picked.sort(key=lambda r: (r['day'] or '', r['id']), reverse=True)
     out = []
-    for r in picked:
-        out.append(dict(ref='record:%d' % r['id'], kind=_kind(r), day=r['day'], subject=r['subject'] or '',
-                        title=r['title'] or '', text=(r['note'] or '')[:1000],
-                        score=r['score'], total=r['total'], followup=r['followup_kind'] or ''))
+    for r in picked[:limit]:
+        item = dict(ref='record:%d' % r['id'], kind=_kind(r), day=r['day'], subject=r['subject'] or '',
+                    title=r['title'] or '', text=(r['note'] or '')[:1000],
+                    score=r['score'], total=r['total'], followup=r['followup_kind'] or '')
+        # ⑤ A 订正/复测 only shows independent learning together with its help level and material relation.
+        if r.get('followup_kind') and r.get('related_record_id'): item['related'] = 'record:%d' % r['related_record_id']
+        for key in ('assistance', 'practice_relation'):
+            if r.get(key): item[key] = r[key]
+        out.append(item)
     return out
+
+
+def evidence(app, child_id, subject='', limit=MAX_EVIDENCE):
+    """Deterministically gather this child's error evidence (错题/exam/progress), recent first."""
+    with app.connect() as c:
+        rows = _records(c, _child(app, c, child_id)['name'])
+    return _pick(rows, subject, limit)
 
 
 def _clean(value, limit):
@@ -175,33 +194,117 @@ def diagnose(app, child_id, subject='', now=None, *, data_path=None, timeout=90)
     return dict(ok=True, diagnosis=diagnosis, evidence=ev, created=now.isoformat())
 
 
+def _current(c, child_id, subject=None):
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='diagnoses'").fetchone() is None:
+        return []
+    q = "SELECT * FROM diagnoses WHERE child_id=? AND superseded IS NULL"
+    args = [child_id]
+    if subject is not None:
+        q += " AND subject=?"; args.append(subject)
+    return [dict(subject=r['subject'], created=r['created'], **json.loads(r['payload']))
+            for r in c.execute(q + " ORDER BY created DESC, id DESC", args).fetchall()]
+
+
 def latest(app, child_id, subject=None):
     """Most recent valid diagnosis per subject for a child (read-only), newest first."""
     with app.connect() as c:
-        if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='diagnoses'").fetchone() is None:
-            return []
-        q = "SELECT * FROM diagnoses WHERE child_id=? AND superseded IS NULL"
-        args = [child_id]
-        if subject is not None:
-            q += " AND subject=?"; args.append(subject)
-        rows = c.execute(q + " ORDER BY created DESC", args).fetchall()
-    out = []
-    for r in rows:
-        payload = json.loads(r['payload'])
-        out.append(dict(subject=r['subject'], created=r['created'], **payload))
-    return out
+        return _current(c, child_id, subject)
+
+
+def _ref_id(ref):
+    ref = str(ref or '')
+    return int(ref[7:]) if ref.startswith('record:') and ref[7:].isdigit() else None
+
+
+def _follow_record(items, prefer):
+    """Which cited record a parent follows up for a knowledge point: the latest preferred one, else the latest."""
+    ranked = sorted((e for e in items if _ref_id(e.get('ref')) is not None),
+                    key=lambda e: (prefer(e), e.get('day') or '', _ref_id(e['ref'])), reverse=True)
+    return _ref_id(ranked[0]['ref']) if ranked else None
+
+
+def _is_due(comp, today):
+    return comp.get('status') == '有支持' and bool(comp.get('review_on')) and comp['review_on'] <= today
 
 
 def due_reviews(app, child_id, now=None):
     """⑤ Weak knowledge points whose interval re-check is due — a reminder to try a fresh similar
-    item and re-diagnose, not a mastery claim. Deterministic: only reads stored review_on."""
+    item and re-diagnose, not a mastery claim. Deterministic: only reads stored review_on.
+
+    Each item names the evidence as it stood when diagnosed and the record to attach the re-check to
+    (the latest cited 错题), so the parent can log it as a 复测 of that original."""
     today = (now or dt.datetime.now()).date().isoformat()
     due = []
     for d in latest(app, child_id):
+        stored = d.get('evidence', [])
         for comp in d.get('diagnosis', {}).get('knowledge_components', []):
-            if comp.get('status') == '有支持' and comp.get('review_on') and comp['review_on'] <= today:
-                due.append(dict(subject=d['subject'], name=comp['name'], error_type=comp['error_type'],
-                                review_on=comp['review_on'], suggestion=comp.get('suggestion', ''),
-                                diagnosed_on=d['created'][:10]))
+            if not _is_due(comp, today): continue
+            refs = set(comp.get('evidence') or [])
+            cited = [e for e in stored if e.get('ref') in refs]
+            due.append(dict(subject=d['subject'], name=comp['name'], error_type=comp['error_type'],
+                            review_on=comp['review_on'], suggestion=comp.get('suggestion', ''),
+                            diagnosed_on=d['created'][:10],
+                            evidence=[dict(ref=e['ref'], day=e.get('day') or '', title=e.get('title') or '') for e in cited],
+                            record_id=_follow_record(cited, lambda e: e.get('kind') == 'wrong_question')))
     due.sort(key=lambda x: x['review_on'])
     return due
+
+
+def overview(app, child_id, now=None):
+    """Read-only per-subject view for the parent's child profile; deterministic, never calls the model.
+
+    Lists subjects with 错题 or a current diagnosis. Cited refs are re-checked against the child's current
+    records (a record corrected away to another child shows as unavailable, never a stale title), and a
+    diagnosis whose evidence changed since it ran (new 错题/复测, a correction) is flagged for re-running.
+    """
+    today = (now or dt.datetime.now()).date().isoformat()
+    with app.connect() as c:
+        rows = _records(c, _child(app, c, child_id)['name'])
+        current = _current(c, child_id)
+    by_ref = {'record:%d' % r['id']: r for r in rows}
+    wrong = {}
+    for r in rows:
+        if _kind(r) == 'wrong_question':
+            wrong.setdefault((r['subject'] or '').strip(), []).append(r)
+    diagnosed = {}
+    for d in current:
+        diagnosed.setdefault(d['subject'], d)
+    subjects, due = [], []
+    for subject in list(diagnosed) + [s for s in wrong if s and s not in diagnosed]:
+        d, items = diagnosed.get(subject), wrong.get(subject, [])
+        entry = dict(subject=subject, wrong_count=len(items),
+                     latest_wrong_day=max((r['day'] or '' for r in items), default=''),
+                     diagnosis=None, evidence_changed=False)
+        if d:
+            comps = []
+            for comp in d.get('diagnosis', {}).get('knowledge_components', []):
+                cited = []
+                for ref in dict.fromkeys(comp.get('evidence') or []):
+                    r = by_ref.get(ref)
+                    cited.append(dict(ref=ref, id=_ref_id(ref), available=r is not None,
+                                      kind=_kind(r) if r else '', day=(r['day'] or '') if r else '',
+                                      title=(r['title'] or '') if r else '',
+                                      remediable=bool(r and WRONG_SOURCE in (r['source'] or ''))))
+                usable = [e for e in cited if e['available']]
+                kc = dict(name=comp.get('name', ''), error_type=comp.get('error_type', ''),
+                          misconception=comp.get('misconception', ''), status=comp.get('status', ''),
+                          suggestion=comp.get('suggestion', ''), review_on=comp.get('review_on', ''),
+                          due=_is_due(comp, today), evidence=cited,
+                          record_id=_follow_record(usable, lambda e: e['kind'] == 'wrong_question'),
+                          practice_record_id=_follow_record([e for e in usable if e['remediable']], lambda e: True))
+                comps.append(kc)
+                if kc['due']:
+                    due.append(dict(subject=subject, name=kc['name'], error_type=kc['error_type'],
+                                    review_on=kc['review_on'], suggestion=kc['suggestion'], record_id=kc['record_id']))
+            diagnosis = d.get('diagnosis', {})
+            entry['diagnosis'] = dict(created=d['created'], summary=diagnosis.get('summary', ''),
+                                      uncertainties=diagnosis.get('uncertainties', []), knowledge_components=comps)
+            # The stored window is what the model saw; any difference now means the conclusion is out of date.
+            entry['evidence_changed'] = d.get('evidence', []) != _pick(rows, subject)
+        entry['due_count'] = sum(1 for k in (entry['diagnosis'] or {}).get('knowledge_components', []) if k['due'])
+        entry['active_on'] = max(entry['latest_wrong_day'], d['created'][:10] if d else '')
+        subjects.append(entry)
+    subjects.sort(key=lambda e: (e['due_count'] > 0, e['active_on']), reverse=True)
+    due.sort(key=lambda x: x['review_on'])
+    return dict(subjects=subjects, due=due, today=today,
+                unassigned_wrong=0 if '' in diagnosed else len(wrong.get('', [])))

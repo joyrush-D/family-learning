@@ -59,6 +59,12 @@ def from_wrong_question(app, obj):
             raise RemediationError('错题记录不存在或不属于该孩子', 404, 'not_found')
         if WRONG_SOURCE not in (row['source'] or ''):
             raise RemediationError('只能对错题记录发起引导')
+        # One unshared draft per 错题: a second tap (or a reload) reopens it instead of piling up copies.
+        if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='guided_sessions'").fetchone():
+            draft = c.execute("""SELECT id FROM guided_sessions WHERE child_id=? AND related_record_id=? AND state='draft'
+                                 AND shared=0 AND ever_shared=0 ORDER BY updated DESC,id LIMIT 1""", (child_id, record_id)).fetchone()
+            if draft:
+                return dict(ok=True, session_id=draft['id'], reused=True)
         note = row['note'] or ''
         attachments = json.loads(row['attachments']) if row['attachments'] else []
         subject = row['subject'] or ''

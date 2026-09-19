@@ -415,6 +415,15 @@ def diagnosis_run(obj):
 def goal_store():
     return family_goals.Store(SimpleNamespace(**globals()))
 
+def goals_snapshot():
+    snap=goal_store().snapshot()
+    # ③⑤ read-only: current wrong-question diagnoses and due re-checks per child; never calls the model.
+    now=dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
+    try: snap['diagnosis']={p['id']:family_diagnosis.overview(SimpleNamespace(**globals()),p['id'],now) for p in snap['children']}
+    except (OSError,sqlite3.Error,ValueError,TypeError,KeyError):
+        snap['diagnosis']={};snap['diagnosis_error']='错题诊断暂时无法读取；错题原记录仍在，可稍后更新显示。'
+    return snap
+
 def calendar_store():
     return family_calendar.Store(connect,profiles,DATA)
 
@@ -1475,7 +1484,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/teachers': return self.reply(200,teacher_store().snapshot())
             if path=='/api/settings': return self.reply(200,settings_store().snapshot())
             if path=='/api/agent': return self.reply(200,agent_store().snapshot())
-            if path=='/api/goals': return self.reply(200,goal_store().snapshot())
+            if path=='/api/goals': return self.reply(200,goals_snapshot())
             if path=='/api/agent/message':
                 query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
                 if any(len(values)!=1 for values in query.values()):

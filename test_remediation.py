@@ -54,6 +54,17 @@ class RemediationTest(unittest.TestCase):
         with app.connect() as c:
             self.assertEqual(c.execute('SELECT count(*) FROM guided_sessions').fetchone()[0], 1)
 
+    def test_reopens_the_unshared_draft_instead_of_duplicating(self):
+        a = rem.from_wrong_question(_ns(), dict(child_id='child-1', record_id=self.rid, request_key='synthetic-remediate-0010'))['session_id']
+        again = rem.from_wrong_question(_ns(), dict(child_id='child-1', record_id=self.rid, request_key='synthetic-remediate-0011'))
+        self.assertEqual(again['session_id'], a); self.assertTrue(again['reused'])  # a fresh key (e.g. after reload) reopens it
+        with app.connect() as c:
+            self.assertEqual(c.execute('SELECT count(*) FROM guided_sessions').fetchone()[0], 1)
+            c.execute('UPDATE guided_sessions SET state=?,shared=1,ever_shared=1 WHERE id=?', ('active', a))
+        # Once shared with the child, a later re-work of the same mistake is a new draft, never an edit of the shared one.
+        b = rem.from_wrong_question(_ns(), dict(child_id='child-1', record_id=self.rid, request_key='synthetic-remediate-0012'))['session_id']
+        self.assertNotEqual(a, b)
+
     def test_rejects_non_wrong_or_foreign_records(self):
         plain = app.save_record(dict(child='小明', day='2026-09-16', category='学习进展', subject='数学',
                                      title='普通观察', note='今天状态不错', source='家长观察'))['record_id']

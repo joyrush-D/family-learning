@@ -43,6 +43,34 @@ class AgentTests(unittest.TestCase):
         # Not yet due if we look before the interval elapses.
         self.assertEqual(agent._diagnosis_reviews(self.store, dt.datetime(2026, 2, 3, tzinfo=agent.TZ)), [])
 
+    def test_due_recheck_reminder_links_the_original_wrong_question(self):
+        import family_diagnosis, family_llm
+        saved = self.app.save_record(dict(child='示例甲', day='2026-02-01', category='学习进展', subject='数学',
+            title='数学错题：第3题', note='题面：27+8=? 学生原答：315', source=family_diagnosis.WRONG_SOURCE))['record_id']
+        draft = dict(knowledge_components=[dict(name='两位数进位加法', error_type='进位漏加', misconception='个位满十未进1',
+            status='有支持', evidence=['record:%d' % saved], suggestion='摆小棒进位')], summary='', uncertainties=[])
+        with patch.object(family_llm, '_chat_json', return_value=draft):
+            family_diagnosis.diagnose(self.app, 'child-1', '数学', now=dt.datetime(2026, 2, 1))
+        def reminders():
+            with patch.object(agent, '_plan_learning', return_value=None), patch.object(agent.family_llm, '_chat_json') as model:
+                agent.run_once(self.app, self.now); model.assert_not_called()  # deterministic, no model call
+            self.now += dt.timedelta(minutes=1)
+            with self.app.connect() as c:
+                return [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='review' AND title LIKE '到期复测%'")]
+        item, = reminders()
+        self.assertEqual((item['child_id'], item['record_id'], item['state'], item['due']), ('child-1', saved, 'pending', '2026-02-08'))
+        self.assertEqual(json.loads(item['evidence']), [{'ref': 'record:%d' % saved, 'text': '2026-02-01 · 数学错题：第3题'}])
+        self.assertIn('复测', item['body']); self.assertIn('不代表已经掌握', item['body'])
+        self.assertEqual(len(reminders()), 1)  # the next tick neither duplicates nor re-nags
+        # An independent re-check on a fresh item, then re-diagnosis: the weakness is no longer supported, so the reminder retires.
+        self.app.save_record(dict(child='示例甲', day='2026-02-09', category='学习进展', subject='数学', title='复测：进位加法',
+            note='新题 38+5=43，独立做对', source='家长观察', related_record_id=saved, followup_kind='复测',
+            assistance='独立尝试', practice_relation='相近的新题或新片段'))
+        cleared = dict(draft, knowledge_components=[dict(draft['knowledge_components'][0], status='有反证')])
+        with patch.object(family_llm, '_chat_json', return_value=cleared):
+            family_diagnosis.diagnose(self.app, 'child-1', '数学', now=dt.datetime(2026, 2, 10))
+        self.assertEqual([r['state'] for r in reminders()], ['superseded'])
+
     def test_exam_result_loop_uses_real_task_flow_and_retires_closed_or_rescheduled_reminders(self):
         exam = self.app.new_task(dict(child='示例甲', title='英语 Unit1-3 单元测验', due='2026-02-05'))
         for title, due in [('数学练习', '2026-02-05'), ('语文单元测验', '2026-02-20'),

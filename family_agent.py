@@ -1234,8 +1234,11 @@ def run_once(app, now=None):
                     item = dict(child_id=rev['child_id'], kind='review', title='到期复测：' + label,
                         body='这个知识点（' + rev['name'] + ('，' + rev['error_type'] if rev.get('error_type') else '') + '）到了复测时间。'
                              '找一道同类的新题，看孩子能不能独立做对；' + (rev.get('suggestion') or '') +
-                             ' 做完把结果记下来，再重新诊断，就能看出是否真的学会。这是提醒，不代表已经掌握。',
-                        evidence=[], due=rev['review_on'],
+                             ' 做完把结果记成原错题的“复测”，写明是否独立、是不是相近的新题，再重新诊断，就能看出是否真的学会。这是提醒，不代表已经掌握。',
+                        # Evidence as it stood when diagnosed; the re-check attaches to the latest cited 错题.
+                        evidence=[{'ref': e['ref'], 'text': ((e.get('day') or '') + ' · ' if e.get('day') else '') + (e.get('title') or '')}
+                                  for e in rev.get('evidence', [])[:6]],
+                        due=rev['review_on'], record_id=rev.get('record_id'),
                         plan={'diagnosis_review_pending': True, 'subject': rev.get('subject', ''), 'kc': rev['name']})
                     store._save(key, fp, [item], now); created += 1
             except (AgentError, ValueError, sqlite3.Error):
