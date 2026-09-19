@@ -14,8 +14,9 @@ import family_study
 
 
 def synthetic_plan(value):
-    e=value['evidence'][-1]
-    return {'proposal':dict(title='先核对一个判断过程',goal='能解释判断所用的线索',action='家长请孩子选一道已有题，说说看到的时间线索；不愿继续就停止。',why_now='根据已保存的家长反馈先核对。',estimated_minutes=10,review_on=value['as_of'],evidence=[dict(ref=e['ref'],quote=e['text'][:30])],assessment='现有反馈不足以确定知识缺口。',hypotheses=[dict(reason='句子中时间线索理解可能不牢',support=[],against=[],test='使用现有一道题，请孩子说出选项理由；不提示答案。',status='待验证')],resource='已有课本；具体页码待家长核对。',mastery_check='相近新题中独立解释，记录帮助。',choice='核实')}
+    e=value['evidence'][-1];school=[s for s in value['evidence'] if s['ref'].startswith('school:')]
+    cited=[e] if not school or e['ref'].startswith('school:') else [school[-1],e]
+    return {'proposal':dict(title='先核对一个判断过程',goal='能解释判断所用的线索',action='家长请孩子选一道已有题，说说看到的时间线索；不愿继续就停止。',why_now='根据已保存的家长反馈先核对。',estimated_minutes=10,review_on=value['as_of'],evidence=[dict(ref=x['ref'],quote=x['text'][:30]) for x in cited],assessment='现有反馈不足以确定知识缺口。',hypotheses=[dict(reason='句子中时间线索理解可能不牢',support=[],against=[],test='使用现有一道题，请孩子说出选项理由；不提示答案。',status='待验证')],resource='已有课本；具体页码待家长核对。',mastery_check='相近新题中独立解释，记录帮助。',choice='核实')}
 
 
 class GoalTests(unittest.TestCase):
@@ -850,6 +851,67 @@ class GoalTests(unittest.TestCase):
         other=self.action('create',child_id='child-2',title='另一位孩子的目标',subject='语文')['id']
         with self.store.agent._db() as c:other_context=self.store._context(c,self.store._get(c,other))
         self.assertFalse(any(e.get('kind')=='school_requirement' for e in other_context['evidence']))
+
+    def test_plan_keeps_the_teachers_words_a_check_and_an_unknown_baseline_until_the_parent_confirms(self):
+        source=dict(id='synthetic-school-writing',platform='wechat',child_id='child-2',name='虚构语文班级',cursor='0',enabled=True)
+        (self.data/'agent.json').write_text(json.dumps(dict(enabled=True,sources=[source])))
+        original='语文习作：介绍一处你喜欢的地方。写2-3个理由，每段有中心句，结合看到、听到、闻到的感官体验；篇幅与截止未说明。'
+        quote='写2-3个理由，每段有中心句';inputs=[];changes={}
+        def plan(value):
+            school=[e for e in value['evidence'] if e['ref'].startswith('school:message:')]
+            result=synthetic_plan(value)
+            if not school:return result
+            result['proposal'].update(title='习作：介绍一处喜欢的地方',goal='按老师要求写出2-3个理由，每段有中心句',
+                action='第一步：先口述想介绍的地方和两个理由。\n第二步：给每个理由说一句中心句。\n第三步：补上当时看到、听到或闻到的。\n第四步：对照老师要求自查。',
+                mastery_check='本次要求自查：理由有2-3个、每段有中心句、用了自己的感官体验。学习表现记录：孩子原话、实际帮助、卡住的步骤。',
+                evidence=[dict(ref=school[-1]['ref'],quote=quote)])
+            result['proposal'].update(changes);return result
+        def model(messages,schema,name,timeout,**kwargs):
+            value=json.loads(messages[-1]['content'])
+            if name=='family_agent_selection':
+                return dict(proposals=[dict(title_quote=e['text'][:30],focus='school',due='',learning_subject='语文',learning_goal_id='',
+                    evidence=[dict(ref=e['ref'])]) for e in value['evidence']])
+            inputs.append(value);return plan(value)
+        self.model.side_effect=model
+        self.store.agent.ingest(dict(source_id=source['id'],expected_cursor='0',cursor='1',checked_at=self.now.isoformat(),last_message_time=self.now.isoformat(),error='',
+            messages=[dict(id='1',time=self.now.isoformat(),kind='text',sender='虚构老师',text=original,unread=False)]))
+        goal=lambda:next(g for g in self.store.snapshot()['goals'] if g['child_id']=='child-2')
+        # A generic plan that drops the teacher's words never reaches the parent.
+        changes.update(evidence=[dict(ref='',quote='尚无作答证据')])
+        def generic(value):
+            result=plan(value);result['proposal']['evidence'][0]['ref']=value['evidence'][0]['ref'];return result
+        self.model.side_effect=lambda messages,schema,name,timeout,**k:(model(messages,schema,name,timeout,**k) if name=='family_agent_selection'
+            else generic(json.loads(messages[-1]['content'])))
+        agent.run_once(self.app,self.now);g=goal()
+        self.assertEqual(g['baseline'],goals.SCHOOL_BASELINE);self.assertEqual(g['school_messages'][0]['text'],original)
+        self.assertIsNone(g['pending']);self.assertEqual(g['processing'],'error');self.assertIsNone(g['current_plan'])
+        changes.clear();self.model.side_effect=model;self.now+=dt.timedelta(hours=1);agent.run_once(self.app,self.now);g=goal()
+        self.assertEqual(g['pending']['evidence'],[dict(ref=g['school_messages'][0]['ref'],quote=quote)])
+        self.assertEqual([h['status'] for h in g['pending']['hypotheses']],['待验证'])
+        with self.store.agent._db() as c:ctx=self.store._context(c,self.store._get(c,g['id']))
+        value=inputs[-1];background=value['evidence'][0]['ref'];self.assertIn('尚无作答证据',value['evidence'][0]['text'])
+        invalid=plan(value);invalid['proposal']['hypotheses'][0].update(support=[background],status='有支持')
+        with self.assertRaisesRegex(agent.AgentError,'尚无作答证据'):self.store._proposal(invalid,ctx,self.now)
+        invalid=plan(value);invalid['proposal']['mastery_check']=''
+        with self.assertRaises(agent.AgentError):self.store._proposal(invalid,ctx,self.now)
+        pause=plan(value);pause['proposal'].update(choice='暂停',estimated_minutes=None,mastery_check='',evidence=[dict(ref=background,quote='尚无作答证据')])
+        self.assertEqual(self.store._proposal(pause,ctx,self.now)['choice'],'暂停')
+        self.action('approve',id=g['id'],expected_version=g['version'],proposal_id=g['pending']['id'],context_hash=g['context_hash'])
+        g=goal();confirmed=g['current_plan'];self.assertIn('本次要求自查',confirmed['mastery_check']);self.assertTrue(confirmed['review_on'])
+        self.assertEqual([(e['quote'],e['available'],e['quote_changed']) for e in g['reviewed_evidence']],[(quote,True,False)])
+        card=lambda:json.dumps([dict(r) for r in self.app.connect().execute('SELECT * FROM manual_tasks WHERE id=?',(g['task_id'],))],ensure_ascii=False)
+        shown=card();self.assertIn('第一步',shown)
+        for private in ('本次要求自查',g['assessment'],g['hypotheses_detail'][0]['reason']):self.assertNotIn(private,shown)
+        # Feedback proposes an adjustment; the formal plan and the child's task card wait for the parent.
+        self.action('feedback',id=g['id'],day=self.now.date().isoformat(),source='家长转述孩子',note='孩子原话：我喜欢外婆家的院子，因为有桂花香；第二个理由想不出来。')
+        def adjusted(value):
+            said=next(e for e in value['evidence'] if '想不出来' in e['text'])
+            return dict(choice='调整',why_now='第二个理由想不出来，先只补一个理由。',evidence=[dict(ref=value['evidence'][-1]['ref'],quote=quote),dict(ref=said['ref'],quote='第二个理由想不出来')])
+        self.model.side_effect=lambda messages,schema,name,timeout,**k:(changes.update(adjusted(json.loads(messages[-1]['content']))) or model(messages,schema,name,timeout,**k))
+        self.now+=dt.timedelta(minutes=1);agent.run_once(self.app,self.now);after=goal()
+        self.assertIn(original,[e['text'] for e in inputs[-1]['evidence']]);self.assertEqual(inputs[-1]['current_plan'],confirmed)
+        self.assertEqual(after['pending']['choice'],'调整');self.assertEqual(after['pending']['evidence'][0]['quote'],quote)
+        self.assertEqual(after['current_plan'],confirmed);self.assertEqual(card(),shown);self.assertNotIn('桂花香',shown)
 
     def test_independent_message_to_goal_plan_feedback_and_teacher_correction(self):
         source=dict(id='synthetic-school',platform='wechat',child_id='child-1',name='虚构班级',cursor='100',enabled=True)

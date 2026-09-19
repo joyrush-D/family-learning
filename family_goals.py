@@ -190,17 +190,17 @@ kind为task_feedback的资料是家长在关联任务上保存的反馈，time�
 evidence在既定数量内优先回取已确认方案的依据、支持/反证及同孩关联后续，再补近期反馈；它不是全部历史。omitted_reviewed_refs是本轮预算未纳入的旧依据或后续，unavailable_reviewed_refs是当前归属/内容无法核对的旧依据；不能用previous_assessment或旧假设代替这些未提供的原文，也不能把本轮未见反证当成没有反证。若当前证据不足以验证旧判断，说明缺口并维持待核对，不重复早期已被更正的表述。历史方法接受程度只描述对应时间和情境，不当成永久偏好。prior_confirmations是本目标此前已确认、现已被更新取代的判断历史（带confirmed_on，最近在前）：仅用于看清已经试过或调整过哪些方向、避免重复提出早被更正的判断或方法；它不是当前证据，也不自动成立，现判断仍以本轮evidence、current_plan与previous_assessment为准。previous_hypotheses与prior_confirmations中带corrected的判断，其引用的原记录在那次确认之后被更正或已不属于该孩子：它已失去原依据，按evidence中更正后的记录重新判断，不要沿用其结论，也不要把它当作已试过或已验证的方向。
 本轮围绕一个持续学习目标，家长是主要用户；汇合提供的全部反馈再判断，不把每条反馈当成新的任务。
 家长不知道卡在哪里是正常的，不要求家长诊断原因、设计测验或先给出解决办法。家长负责提供原始情况、转述孩子回答和审核执行。
-learning_goal中的要求、猜测和待核对事项是规划输入，不是实际作答证据；之前的建议、假设和预期结果也不是已执行记录。不得据此声称某个原因已有支持。
+learning_goal中的要求、猜测和待核对事项是规划输入，不是实际作答证据；之前的建议、假设和预期结果也不是已执行记录。不得据此声称某个原因已有支持。goal:开头的资料标明尚无作答证据时，不能放入support/against。
 学校目标、教材、家长观察与孩子转述各有来源；教材未核实不引用页码，不以年级或一次分数认定基础缺失。
 category为课程进度的record是课堂背景，不是孩子表现。本次自动补充同孩同科目的至多6条课程记录，优先保留原判断引用，其余按日期选近的；同科目不代表教材、版本、年级或目标一定适用，先结合明确材料核对。区分已讲、计划讲和日期待核对；不能把记录日当授课日，不能据课堂讲过推断孩子已学会或未学会。课程变化可提出调整，但不自动加练或改正式计划。
-kind为school_requirement的资料是学校要求与范围，可引用为安排依据，不能放入原因假设的support/against。source_kind为group_message时是后台从已保存的群消息自动关联，按source、sender、time及原文说明出处；发布者称呼不是已确认的教师身份，不把转发者冒称老师。学校要求可能包含后续更正或撤销，按各原发送时间核对最新适用要求；冲突无法消解时明确待核对，不再布置已明确取消的任务。是否原文、转发者、老师、日期、截止和适用范围只按所提供信息说明，未知保留未知；一次习作要求不概括成老师长期偏好。区分必须、可选、示例与条件要求，不能把“三选一”“可以”变成全做，也不能漏掉明确要求。
+kind为school_requirement的资料是学校要求与范围，可引用为安排依据，不能放入原因假设的support/against。source_kind为group_message时是后台从已保存的群消息自动关联，按source、sender、time及原文说明出处；发布者称呼不是已确认的教师身份，不把转发者冒称老师。学校要求可能包含后续更正或撤销，按各原发送时间核对最新适用要求；冲突无法消解时明确待核对，不再布置已明确取消的任务。是否原文、转发者、老师、日期、截止和适用范围只按所提供信息说明，未知保留未知；一次习作要求不概括成老师长期偏好。区分必须、可选、示例与条件要求，不能把“三选一”“可以”变成全做，也不能漏掉明确要求。本轮evidence含ref以school:开头的学校明确要求且choice不是暂停时，evidence至少逐字引用其中一条当前适用要求的原文，其余名额留给孩子的实际反馈。
 assessment说明已知与未知；hypotheses列至多四项可验证的候选原因，support/against仅填输入中的ref。
 每项test要能区分原因；没有支持证据时只能待验证，不作性格或临床诊断。不将家长转述称为孩子直接回答。
 没有具体学校任务时，action每次只安排一个最有辨别价值的小核对或学习步骤，不把所有假设的test同时布置。给出具体材料选择、可直接照读的问题、先不提示再按需帮助的顺序；不能只说“找出薄弱点”“观察后调整”。材料未知时可用本周现有作业中一道不确定的题，让孩子读题并说出当时怎么想；不要等待家长先判断困难类型。首次核对建议5至10分钟，提前结束也可；不要给同一孩子所有科目叠加每日练习。
 已有明确学校任务时，action先把老师要求转成孩子听得懂的3至6个小步骤（每步另起一行，用短句），标出先做哪一步、家长能照读的提示；不因缺少能力评估而推迟任务或另加测验。步骤须覆盖任务起步到完成自查的完整路线；可以先只做第一小步并分次完成，但不能只给选材或核对片段而省略后续正文、结尾和自查。作文可先口述选材、选理由，再拟题、选一种开头、写主体与结尾，最后对照老师要求自查。沿用孩子真实经历与原话，不编造去过哪里、看到或吃过什么，不代写成稿；没有素材时先问孩子和家长，不强迫凑齐所有类别或感官。老师说“可以从”时只作为素材提示，自查也不能将它改成必须限定在这些类别。
 resource优先使用输入中的现有材料和设备；未知时明确待核对，不编造App入口、题号或已下发任务。
 照读问题必须与选用材料一致：未提供新题原文时用“你怎么答、为什么”这类通用提问，不把原题的固定选项套到任意新题，也不让家长自己改题或编题。
-mastery_check说明如何观察独立解释或相近材料中的表现；把平台完成率、投入、孩子感受与掌握证据分开。
+choice不是暂停时mastery_check不能为空，说明如何观察独立解释或相近材料中的表现；把平台完成率、投入、孩子感受与掌握证据分开。
 source_kind为teacher_record的是家长已保存的老师明确要求，按teacher_name、day、target与原文核对；recorded_by为parent，不表示系统已核实老师身份或直接听到老师原话。记录日期不证明要求持续生效，区分当天作业、长期要求与已过时要求，当前适用性不明先核对；teacher_reason是家长记录的老师说明，不能从它推断孩子能力。群消息与老师档案指向同一条原消息时只算一项要求，不重复布置。
 
 有学校任务时，mastery_check分别写“本次要求自查”和“学习表现记录”：自查对应老师具体要求，保留任选、条件和示例；记录孩子原话、作品、实际帮助及卡住的步骤。完成作文或套用词语不代表独立掌握；教师没给字数、截止或评分标准时不擅自添加。
@@ -485,7 +485,8 @@ class Store:
         teacher_requirements = select_evidence(teacher_all, reviewed_refs, 6)
         course_refs = {e['ref'] for e in selected_courses}
         school = school_all[-6:]
-        evidence = [{'ref': 'goal:' + row['id'], 'text': ('系统建立的跟进背景（尚无作答证据）：\n' if plan.get('school_origin') and fields['baseline'] == SCHOOL_BASELINE else '家长提供的情况（尚需结合实际作答核对）：\n') + (fields['baseline'] or '尚未提供具体表现记录。')}]
+        unknown_baseline = bool(plan.get('school_origin') and fields['baseline'] == SCHOOL_BASELINE)
+        evidence = [{'ref': 'goal:' + row['id'], 'text': ('系统建立的跟进背景（尚无作答证据）：\n' if unknown_baseline else '家长提供的情况（尚需结合实际作答核对）：\n') + (fields['baseline'] or '尚未提供具体表现记录。')}]
         if fields['school_target']:
             evidence.append({'ref': 'school:' + row['id'], 'kind': 'school_requirement', 'text': fields['school_target']})
         background = list(evidence)
@@ -504,7 +505,7 @@ class Store:
         return dict(plan=plan, meta=meta, fields=fields, profile=profile, records=records, ids=ids, day_context=day_context,
                     course_records=[r for r in courses if 'record:'+str(r['id']) in course_refs], course_omitted=len(courses)-len(selected_courses),
                     teacher_requirements=teacher_requirements, teacher_requirements_omitted=len(teacher_all)-len(teacher_requirements),
-                    missing=missing, evidence_hash=evidence_hash, evidence=evidence,
+                    missing=missing, evidence_hash=evidence_hash, evidence=evidence, unknown_baseline=unknown_baseline,
                     reviewed_evidence=reviewed, omitted_reviewed_refs=omitted_refs, unavailable_reviewed_refs=unavailable_refs,
                     task_feedback=selected_feedback, task_feedback_omitted=len(feedback)-len(selected_feedback), task_missing=len(task_missing),
                     school_messages=school, school_omitted=len(school_all)-len(school), school_missing=school_missing,
@@ -807,6 +808,12 @@ class Store:
         for e in p['evidence']:
             if not isinstance(e,dict) or set(e)!={'ref','quote'}:raise agent.AgentError('引用无法核对')
             e['quote'] = agent._source_quote(refs, e['ref'], e['quote'])
+        # The prompt alone cannot keep the teacher's words with the plan a parent approves; a pause only stops this attempt.
+        if p['choice']!='暂停':
+            agent._text(p,'mastery_check',1000,True)
+            if any(ref.startswith('school:') for ref in refs) and not any(e['ref'].startswith('school:') for e in p['evidence']):
+                raise agent.AgentError('建议须引用本轮学校要求的原文')
+        background=ctx['evidence'][0]['ref'] if ctx['unknown_baseline'] else None
         if not isinstance(p['hypotheses'],list) or len(p['hypotheses'])>4:raise agent.AgentError('原因假设格式不正确')
         for h in p['hypotheses']:
             if not isinstance(h,dict) or set(h)!={'reason','support','against','test','status'}:raise agent.AgentError('原因假设字段不正确')
@@ -815,6 +822,7 @@ class Store:
             for k in ('support','against'):
                 if not isinstance(h[k],list) or len(h[k])>4 or any(not isinstance(ref,str) or ref not in refs for ref in h[k]):raise agent.AgentError('原因依据无法核对')
                 if any(ref.startswith('school:') or ref in requirements for ref in h[k]):raise agent.AgentError('学校要求不是孩子学习表现的证据')
+                if background in h[k]:raise agent.AgentError('尚无作答证据的跟进背景不能支持或反驳原因')
             if h['status']=='有支持' and not h['support'] or h['status']=='有反证' and not h['against']:raise agent.AgentError('判断缺少对应依据')
         return p
 
