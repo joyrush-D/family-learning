@@ -127,6 +127,20 @@ async function reloadPage(p){
    await p.locator('[data-school-original-close]').click();await reloadPage(p);await sources(p);
   }
   checks.push('QQ fragment opens from source on mobile/desktop, preserves failed/disabled sync, retries and reopens with escaped evidence and explicit capture/publication distinction');
+  for(const width of [360,1440]){
+   await p.setViewportSize({width,height:1000});
+   current={...current,agent:{...current.agent,enabled:true,sources:[{...qqSource,enabled:true,error:'旧接口失败',inbox:{pending:1,state:'error',error:'截图保留，请核对群标题'}}]}};
+   await reloadPage(p);await sources(p);
+   assert.match(await p.locator('[data-current-source-status]').innerText(),/截图待重试/);
+   assert.match(await p.locator('[data-source-inbox]').innerText(),/待整理 1 张/);
+   assert.doesNotMatch(await p.locator('[data-current-sources]').innerText(),/旧接口失败/);
+   await p.locator('nav [data-page="home"]').click();
+   assert.match(await p.locator('[data-source-coverage]').innerText(),/截图整理失败，原图保留待重试/);
+   await sources(p);
+   await checkWidth(p,'screenshot inbox '+width);
+  }
+  checks.push('QQ inbox mobile/desktop shows pending captures and retry without presenting old native failure as current status');
+
   const home=async(sources,changes={})=>{
    const stamp=new Date().toISOString();current={...current,sync:{},sync_error:'',agent:{...current.agent,enabled:true,state:'ready',last_error:'',last_run:stamp,sources,...changes}};
    await p.locator('nav [data-page="home"]').click();await reloadPage(p);

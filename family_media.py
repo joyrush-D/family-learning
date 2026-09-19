@@ -261,6 +261,10 @@ def run_one(app, store, now):
 
 # Drafts are derived from linked originals; they never overwrite messages or learning facts.
 def draft_input(store, c, source, message):
+    from family_qq_capture import KIND, NOTICE
+    if message.get('kind') == KIND and message.get('text', '').startswith(NOTICE+'\n截图本机文字识别（'):
+        # Already routed to school task drafts; don't turn the same notification into a study record.
+        return None
     links = [r['upload_id'] for r in c.execute(
         'SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=? ORDER BY upload_id',
         (source['id'], message['id']))]

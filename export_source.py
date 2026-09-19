@@ -34,7 +34,7 @@ def public_files(root):
             raise ValueError('Private data and hidden files cannot be exported')
         if name.endswith('/'):
             continue
-        if name not in ('LICENSE', '.gitignore', 'deploy/family-agent.service', 'deploy/family-agent.timer', 'deploy/local.family-learning.collector.plist') and PurePosixPath(name).suffix not in ('.py', '.js', '.cjs', '.html', '.css', '.md', '.txt'):
+        if name not in ('LICENSE', '.gitignore', 'qq_screenshot_text.swift', 'QQ截图收集.command', 'deploy/family-agent.service', 'deploy/family-agent.timer', 'deploy/local.family-learning.collector.plist') and PurePosixPath(name).suffix not in ('.py', '.js', '.cjs', '.html', '.css', '.md', '.txt'):
             raise ValueError('Only reviewed source and documentation file types can be exported')
         path = no_links(root / name)
         if not path.is_file():

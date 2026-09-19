@@ -88,6 +88,10 @@
 
 !/family_agent.py
 !/family_qq_capture.py
+!/family_qq_inbox.py
+!/qq_screenshot_text.swift
+!/test_qq_inbox.py
+!/QQ截图收集.command
 !/test_qq_capture.py
 !/family_goals.py
 !/goals.js

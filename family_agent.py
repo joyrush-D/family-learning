@@ -103,7 +103,10 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=()):
     reference=_reference_brief(evidence)
     if reference: return reference
     if incomplete:
-        brief.update(title='',goal='',advice='');state='review';brief['reason']='原件或具体要求尚未读全，请先核对。'
+        # A legible screenshot can supply a draft, but never establishes complete history or a deadline.
+        fragments = evidence and all(e.get('kind') == 'qq_window_fragment' and e.get('text', '').strip() for e in evidence)
+        if not fragments: brief.update(title='',goal='',advice='')
+        state='review';brief['reason']='仅截图可见内容，文字识别可能有误；请核对原图、发布日期和附件。' if fragments else '原件或具体要求尚未读全，请先核对。'
     if state=='ready' and (not brief['title'] or not brief['goal']):
         state='review';brief['reason']='原件或具体要求尚未读全，请先核对。'
     change=value.get('change','new');target=_text(value,'target_id',80)
@@ -356,10 +359,17 @@ class Store:
 
     def collector_plan(self, now=None, *, fragment=False):
         config = self._config(); sources = []; now = _now(now)
+        from family_qq_inbox import settings as inbox_settings
+        from family_collect import CollectError
+        inbox_invalid = False
+        try: inbox = inbox_settings(self.data)
+        except (OSError, ValueError, TypeError, CollectError): inbox = None; inbox_invalid = True
         with self._db() as c:
             for source in config['sources']:
                 if not source['enabled']: continue
                 if fragment and source['platform'] != 'qq': continue
+                if not fragment and inbox_invalid and source['platform'] == 'qq': continue
+                if not fragment and inbox and inbox['enabled'] and source['id'] == inbox['source_id']: continue
                 row = c.execute('SELECT * FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
                 self._binding(source, row)
                 if not fragment and config['enabled'] and row and row['last_attempt'] and now < next_collection_at(row['last_attempt']):
@@ -525,6 +535,11 @@ class Store:
         try: config = self._config()
         except AgentError as error:
             return dict(enabled=False, state='error', last_run='', last_error=str(error), pending_count=0, items=[], sources=[], linked_upload_ids=[])
+        try:
+            from family_qq_inbox import status as inbox_status
+            from family_collect import CollectError
+            inbox = inbox_status(self.data)
+        except (OSError, ValueError, TypeError, CollectError): inbox = None
         with self._db() as c:
             runtime = c.execute('SELECT * FROM agent_runtime WHERE id=1').fetchone()
             items = [dict(row) for row in c.execute("SELECT * FROM agent_items WHERE state IN ('pending','accepted') ORDER BY state='pending' DESC,updated DESC,id LIMIT 100")]
@@ -546,6 +561,7 @@ class Store:
                     'unread_count': saved['unread_count'] if saved else 0,
                     'next_collection_at': due,
                     'cursor': saved['cursor'] if saved else source['cursor']})
+                if inbox and inbox['source_id'] == source['id']: sources[-1]['inbox'] = inbox
                 if saved and not binding_error:
                     fragment = c.execute("""SELECT id,json_extract(payload,'$.captured_at') AS captured_at
                         FROM agent_messages WHERE source_id=? AND json_extract(payload,'$.kind')='qq_window_fragment'
@@ -1321,7 +1337,7 @@ def run_once(app, now=None):
                     fp = store._job(key, {'school_learning_policy': 7, 'messages': values}, now, model=True)
                     if not fp: continue
                     evidence = [dict(ref='message:' + source['id'] + ':' + row['id'], text=row['text'],
-                        source=source['name'], time=row['time'], sender=row['sender'], content_incomplete=row['unread']) for row in values]
+                        source=source['name'], time=row['time'], sender=row['sender'], kind=row['kind'], content_incomplete=row['unread']) for row in values]
                     budget -= 1
                     try:
                         proposals = _select('school', evidence, profiles[source['child_id']], as_of=now.date().isoformat(), data_path=store.data,

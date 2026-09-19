@@ -119,6 +119,10 @@ def run_one(app, store, now):
     from family_settings import atomic_json
     from family_qq_cua import HOST_ID, screen_locked
     try:
+        import family_qq_inbox
+        inbox = family_qq_inbox.settings(store.data)
+        if inbox and inbox['enabled']:
+            return family_qq_inbox.run_one(app, store, now)
         local = settings(store.data)
         if not local or not local['enabled']: return dict(state='disabled')
         if not local.get('host_app'): return dict(state='manual_only')
