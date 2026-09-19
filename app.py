@@ -1437,7 +1437,10 @@ class Handler(BaseHTTPRequestHandler):
             if child_request and path!='/child' and not path.startswith('/child/'):
                 return deny(403,'孩子凭据不能用于家长入口，请从孩子页面操作')
             return True
-        try: config=family_access.read_config(DATA)
+        try:
+            config=family_access.read_config(DATA)
+            lan=family_access.lan_config(config)
+            if lan and parsed.netloc.lower()==urlsplit(lan['base_url']).netloc.lower(): config=lan
         except family_access.AccessError as error:
             return deny(503,str(error))
         if config is None:
@@ -1705,6 +1708,9 @@ if __name__=='__main__':
     port=int(os.environ.get('PORT','8765'))
     access_config=family_access.read_config(DATA)
     entry=access_config['base_url'] if access_config else ''
+    lan=family_access.lan_config(access_config)
+    if lan and (urlsplit(lan['base_url']).port or 80)!=port:
+        raise SystemExit('局域网入口端口必须与应用端口相同')
     secure=None
     if entry and family_access.tls_entry(entry):
         tls_port=urlsplit(entry).port or 443
@@ -1715,6 +1721,6 @@ if __name__=='__main__':
             print('注意：家庭证书未包含 '+urlsplit(entry).hostname+'，手机会提示证书不匹配；请重新签发',flush=True)
         secure=TLSServer(('0.0.0.0',tls_port),Handler,context)
         threading.Thread(target=secure.serve_forever,daemon=True).start()
-    bind='0.0.0.0' if entry and family_access.lan_entry(entry) and not secure else '127.0.0.1'
-    print('家庭学习助手 http://127.0.0.1:'+str(port)+('；家庭局域网 HTTPS '+entry if secure else ''),flush=True)
+    bind='0.0.0.0' if lan or entry and family_access.lan_entry(entry) and not secure else '127.0.0.1'
+    print('家庭学习助手 http://127.0.0.1:'+str(port)+('；家庭局域网 HTTPS '+entry if secure else '')+('；家庭局域网 '+lan['base_url'] if lan else ''),flush=True)
     ThreadingHTTPServer((bind,port),Handler).serve_forever()

@@ -147,6 +147,17 @@ def read_config(data_path):
     return _validate_config(config)
 
 
+def lan_config(config):
+    """Optional direct parent entry; reuse credentials, keep each origin's sessions separate."""
+    entry = os.environ.get('FAMILY_LAN_URL', '')
+    if not entry:
+        return None
+    validate_base_url(entry)
+    if not config or not lan_entry(entry) or urlsplit(entry).scheme != 'http' or lan_entry(config['base_url']):
+        raise AccessError('双入口需保留公网HTTPS配置，并填写局域网HTTP地址')
+    return dict(config, base_url=entry)
+
+
 def _header_values(headers, name):
     try:
         if hasattr(headers, 'get_all'):
@@ -318,7 +329,8 @@ def dispatch(handler, config, connect, root):
             reply(401, {'error': '账号或密码不正确'}); return True
         secret = secrets.token_urlsafe(32)
         with _sessions(connect) as c:
-            c.execute('DELETE FROM parent_sessions WHERE expires<=? OR config_hash<>?', (now, _fingerprint(config)))
+            # Other configured entry sessions remain valid; config fingerprints still reject changed credentials.
+            c.execute('DELETE FROM parent_sessions WHERE expires<=?', (now,))
             c.execute('DELETE FROM parent_sessions WHERE hash=?', (_digest(_secret(handler.headers)),))
             c.execute('INSERT INTO parent_sessions VALUES (?,?,?)', (_digest(secret), now + SESSION_AGE, _fingerprint(config)))
             c.execute('DELETE FROM parent_sessions WHERE hash NOT IN (SELECT hash FROM parent_sessions ORDER BY expires DESC, rowid DESC LIMIT 32)')

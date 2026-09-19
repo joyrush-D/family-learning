@@ -54,6 +54,15 @@ class AccessTests(unittest.TestCase):
                               ('http://192.168.50.2:8765', True, False), ('https://family.example.ts.net/family', False, False)):
             self.assertEqual((access.lan_entry(url), access.tls_entry(url)), (lan, tls), url)
 
+    def test_dual_entry_reuses_credentials_and_rejects_invalid_lan_configuration(self):
+        with patch.dict(os.environ, FAMILY_LAN_URL='http://192.168.50.2:8765'):
+            local = access.lan_config(self.config)
+            self.assertEqual(local, dict(self.config, base_url='http://192.168.50.2:8765'))
+            with self.assertRaises(access.AccessError): access.lan_config(None)
+        for url in ('https://public.example.net', 'http://8.8.8.8', 'https://192.168.50.2:8443'):
+            with patch.dict(os.environ, FAMILY_LAN_URL=url):
+                with self.assertRaises(access.AccessError): access.lan_config(self.config)
+
     def test_bad_config_is_safe_and_permissions_or_symlink_are_rejected(self):
         bad = dict(self.config, password_hash='not-a-secret-hash')
         self.path.write_text(json.dumps(bad), encoding='utf-8')
@@ -269,6 +278,25 @@ class AccessTests(unittest.TestCase):
                     attrs = {part.strip().lower() for part in cookie.split(';')[1:]}
                     self.assertTrue({'secure', 'httponly', 'samesite=lax', 'path=/family/', 'max-age=15552000'} <= attrs)
                     parent_cookie = cookie.split(';', 1)[0]
+                    # Public and LAN logins share data/credentials, but never evict each other's sessions.
+                    lan_host = '192.168.50.2:' + str(server.server_port)
+                    with patch.dict(os.environ, FAMILY_LAN_URL='http://' + lan_host):
+                        self.assertEqual(get(host=lan_host)[0], 401)
+                        status, _, local_info = parent_login(host=lan_host, headers={'Origin': 'http://' + lan_host})
+                        self.assertEqual(status, 200)
+                        local_cookie = local_info['Set-Cookie'].split(';', 1)[0]
+                        self.assertNotIn('; Secure', local_info['Set-Cookie'])
+                        self.assertIn('Path=/;', local_info['Set-Cookie'])
+                        self.assertIn('Max-Age=15552000', local_info['Set-Cookie'])
+                        self.assertEqual(get(host=lan_host, headers={'Cookie': local_cookie})[0], 200)
+                        self.assertEqual(get(host='family.example.ts.net', headers={'Cookie': parent_cookie})[0], 200)
+                        self.assertEqual(get(host=lan_host, headers={'Cookie': parent_cookie})[0], 401)
+                        self.assertEqual(get(host=lan_host, headers={'Cookie': local_cookie, 'X-Forwarded-Proto':'https'})[0], 403)
+                        self.assertEqual(get(host='192.168.50.2:1', headers={'Cookie': local_cookie})[0], 403)
+                        self.assertEqual(parent_login(host=lan_host)[0], 403)  # public Origin cannot log into LAN
+                        self.assertEqual(parent_login()[0], 200)
+                        self.assertEqual(get(host=lan_host, headers={'Cookie': local_cookie})[0], 200)
+
                     with app.connect() as db:
                         session = db.execute('SELECT * FROM parent_sessions WHERE hash=?',
                                              (access._digest(cookie_value),)).fetchone()
