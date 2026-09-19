@@ -187,7 +187,7 @@ review_on为本次日期起30天内的回看日，estimated_minutes为一次尝�
 evidence的ref必须逐字使用本次输入的编号；schema列出选项时，只选这些编号，不改写或拼接。quote只摘取该ref的text中一段连续的短句，优先单行，不必引用整段；不能拼接不同字段、改写、补标点、加入标签或把JSON转义字符当作原文。引用一条完整反馈即可。使用‘孩子’称呼，不猜测性别。保护休息；反馈困倦或想停止时先结束当次练习，不增加加练。''' + '''
 day_context来自同孩当天已登记的放学后时间账，是安排约束，不是原因或掌握证据。other_registered_work不含当前目标自己的执行项，避免重复计算；未登记功课、活动和未知预计用时都不能算作空闲。calendar_events复用当天日历，已经展开循环和逐次改期；仅confirmed是已确认的时间约束，tentative待确认，cancelled或completed不再占用计划时间，但completed不代表学习掌握。window_minutes_after_known_appointments仅是原学习时段扣除已知、已确认活动重叠后的上限，尚未扣除功课、休息间隙和已经流逝的时间，绝不是可以继续加练的空闲时间。known_windows逐段给出这些钟点，不能把不连续的时段合并说成活动后的剩余时间；按as_of_time忽略已过去的时段，不能把活动前的分钟挪到活动后。category为study且task_id与已登记功课相同的是同一份功课，只计一次；学校或活动类别关联的待办可能只是报名等手续，不能因此抹去活动时段。calendar_incomplete、unavailable_calendar_events、confirmed_events_without_clock、timetables_without_clock以及省略条数大于零时，明确安排存在缺口，不宣称已经检查全部冲突。节次没有钟点的课表不猜时间；不自动取消活动、改变家长确认的安排或提前结束已在进行的活动。planned_minutes是整项预计，不是精确剩余时间；已完成、不参加或不适用的事项不再算待做负担，result_actor为child的结果只是孩子自述，不能当成家长已确认完成。部分完成及计时运行状态也不能推算完整实际或剩余用时。停止学习与preparing_for_bed_at是家长的安排；preparing_for_bed_at只能说开始洗漱等睡前准备，不得说成就寝、上床或入睡；closed_at表示当天时间账已收尾，after_stop_time表示已到停止学习的钟点。先考虑学校功课和休息；已登记功课明显排不下、已经收尾或到停止学习时间时，今天不另加练习，先结束、减量或将核对留待家长另日安排，不能自动推迟休息、取消功课或反过来要求家长腾出时间。尚无时间账时说明未知，仍可给一项待家长安排的短核对，不承诺今天一定排得下。
 kind为task_feedback的资料是家长在关联任务上保存的反馈，time是保存时间，未说明发生时间时保持未知；按先后保留更正与反证，不能把历史说法都当成当前事实。content_incomplete表示只提供了原反馈的前1200字，未提供部分保持未知；同一作息记录在任务状态与学习记录中出现时是同一尝试，不计为多次表现；status仅是任务状态，不等于知识掌握；勾选完成、恢复跟进或计划调整本身不是学习表现证据。text可能含家长转述，不冒称孩子直接访谈。task_title是当前任务标题，不是反馈当时的题目。
-evidence在既定数量内优先回取已确认方案的依据、支持/反证及同孩关联后续，再补近期反馈；它不是全部历史。omitted_reviewed_refs是本轮预算未纳入的旧依据或后续，unavailable_reviewed_refs是当前归属/内容无法核对的旧依据；不能用previous_assessment或旧假设代替这些未提供的原文，也不能把本轮未见反证当成没有反证。若当前证据不足以验证旧判断，说明缺口并维持待核对，不重复早期已被更正的表述。历史方法接受程度只描述对应时间和情境，不当成永久偏好。prior_confirmations是本目标此前已确认、现已被更新取代的判断历史（带confirmed_on，最近在前）：仅用于看清已经试过或调整过哪些方向、避免重复提出早被更正的判断或方法；它不是当前证据，也不自动成立，现判断仍以本轮evidence、current_plan与previous_assessment为准。
+evidence在既定数量内优先回取已确认方案的依据、支持/反证及同孩关联后续，再补近期反馈；它不是全部历史。omitted_reviewed_refs是本轮预算未纳入的旧依据或后续，unavailable_reviewed_refs是当前归属/内容无法核对的旧依据；不能用previous_assessment或旧假设代替这些未提供的原文，也不能把本轮未见反证当成没有反证。若当前证据不足以验证旧判断，说明缺口并维持待核对，不重复早期已被更正的表述。历史方法接受程度只描述对应时间和情境，不当成永久偏好。prior_confirmations是本目标此前已确认、现已被更新取代的判断历史（带confirmed_on，最近在前）：仅用于看清已经试过或调整过哪些方向、避免重复提出早被更正的判断或方法；它不是当前证据，也不自动成立，现判断仍以本轮evidence、current_plan与previous_assessment为准。previous_hypotheses与prior_confirmations中带corrected的判断，其引用的原记录在那次确认之后被更正或已不属于该孩子：它已失去原依据，按evidence中更正后的记录重新判断，不要沿用其结论，也不要把它当作已试过或已验证的方向。
 本轮围绕一个持续学习目标，家长是主要用户；汇合提供的全部反馈再判断，不把每条反馈当成新的任务。
 家长不知道卡在哪里是正常的，不要求家长诊断原因、设计测验或先给出解决办法。家长负责提供原始情况、转述孩子回答和审核执行。
 learning_goal中的要求、猜测和待核对事项是规划输入，不是实际作答证据；之前的建议、假设和预期结果也不是已执行记录。不得据此声称某个原因已有支持。
@@ -511,6 +511,20 @@ class Store:
                     awaiting_school=bool(plan.get('school_origin') and not school and not teacher_all and not records and not feedback and not fields['school_target'] and fields['baseline']==SCHOOL_BASELINE),
                     version=plan.get('goal_version', 1), input_records=chosen, omitted_count=max(0, len(records)-len(chosen)))
 
+    def _owned(self, c, child_id):
+        """Whether a record's stored child name (current name or alias) is this child."""
+        owners = {p['name']: p['id'] for p in self.app.profiles(c)} | {r['alias']: r['child_id'] for r in c.execute('SELECT * FROM profile_aliases')}
+        return lambda name: owners.get(name) == child_id
+
+    def _checked_hypotheses(self, c, child_id, plan):
+        """R26: the confirmed hypotheses, each listing cited records corrected or reassigned since confirmation."""
+        since, owned = plan.get('approved_changed_at') or '', self._owned(c, child_id)
+        out = []
+        for h in plan.get('hypotheses', []):
+            refs = family_learner_memory.corrected_refs(c, (h.get('support') or []) + (h.get('against') or []), since, owned) if isinstance(h, dict) else []
+            out.append(dict(h, corrected=refs) if refs else h)
+        return out
+
     def roots(self, c):
         children={p['id'] for p in self.app.profiles(c)}
         return [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='care' AND state IN ('draft','accepted') ORDER BY updated DESC") if r['child_id'] in children and _root(r) and json.loads(r['plan'])]
@@ -532,7 +546,7 @@ class Store:
                 reviewed = plan.get('approved_evidence_hash')
                 goals.append(dict(id=row['id'], child_id=row['child_id'], **ctx['fields'], version=ctx['version'],
                     lifecycle=plan.get('lifecycle', 'active'), task_id=row['task_id'],
-                    current_plan=plan.get('approved'), assessment=plan.get('assessment'), hypotheses_detail=plan.get('hypotheses', []),
+                    current_plan=plan.get('approved'), assessment=plan.get('assessment'), hypotheses_detail=self._checked_hypotheses(c, row['child_id'], plan),
                     current_plan_confirmed_at=plan.get('approved_changed_at', ''),
                     reviewed_evidence=ctx['reviewed_evidence'], omitted_reviewed_refs=ctx['omitted_reviewed_refs'], unavailable_reviewed_refs=ctx['unavailable_reviewed_refs'],
                     evidence_changed=bool(plan.get('approved') and reviewed != ctx['evidence_hash']),
@@ -544,7 +558,7 @@ class Store:
                     task_feedback=ctx['task_feedback'], task_feedback_omitted=ctx['task_feedback_omitted'], task_missing=ctx['task_missing'],
                     school_messages=ctx['school_messages'], school_omitted=ctx['school_omitted'], school_missing=ctx['school_missing'],
                     history=plan.get('goal_history', [])[-10:], history_count=len(plan.get('goal_history', [])),
-                    prior_confirmations=family_learner_memory.prior_confirmations(c, row['child_id'], row['id']),
+                    prior_confirmations=family_learner_memory.prior_confirmations(c, row['child_id'], row['id'], owned=self._owned(c, row['child_id'])),
                     pending=({**proposal, 'id': pending['id']} if current else None),
                     pending_stale=bool(pending and not current), context_hash=ctx['evidence_hash'],
                     processing=('error' if job and job['error'] else 'ready' if current else
@@ -740,14 +754,15 @@ class Store:
         confirmed_on=(ctx['plan'].get('approved_changed_at') or '')[:10]
         # Correctable long-term memory (R26): this goal's prior confirmed judgments, so the model
         # sees what was already tried/refined beyond the 24-record window instead of cold-starting.
-        prior_confirmations=[]
+        prior_confirmations=[];previous_hypotheses=[]
         if prior_available:
             with self.agent._db() as c:
-                prior_confirmations=family_learner_memory.prior_confirmations(c, ctx['profile']['id'], ident)
+                prior_confirmations=family_learner_memory.prior_confirmations(c, ctx['profile']['id'], ident, owned=self._owned(c, ctx['profile']['id']))
+                previous_hypotheses=self._checked_hypotheses(c, ctx['profile']['id'], ctx['plan'])
         content=dict(as_of=now.date().isoformat(),as_of_time=now.strftime('%H:%M'),day_context=ctx['day_context'],profile=ctx['profile'],evidence=ctx['evidence'],current_plan=previous,
                      progress=progress,progress_scope='仅本轮已选的至多24条记录；首末对照不代表计划确认后的趋势，省略数见omitted_records',current_plan_confirmed_on=confirmed_on if previous else '',
                      learning_goal={k:v for k,v in ctx['fields'].items() if k!='baseline'},
-                     previous_assessment=ctx['plan'].get('assessment') if prior_available else None,previous_hypotheses=ctx['plan'].get('hypotheses',[]) if prior_available else [],previous_assessment_stale=ctx['plan'].get('approved_evidence_hash')!=ctx['evidence_hash'],
+                     previous_assessment=ctx['plan'].get('assessment') if prior_available else None,previous_hypotheses=previous_hypotheses if prior_available else [],previous_assessment_stale=ctx['plan'].get('approved_evidence_hash')!=ctx['evidence_hash'],
                      previous_context_unavailable=not prior_available, prior_confirmations=prior_confirmations,
                      omitted_records=ctx['omitted_count'],missing_records=len(ctx['missing']),
                      omitted_course_records=ctx['course_omitted'],

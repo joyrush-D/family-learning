@@ -1,5 +1,6 @@
 """Correctable bi-temporal learner memory: append on confirm, supersede, read (R26)."""
 import datetime as dt
+import json
 import sqlite3
 import unittest
 
@@ -131,6 +132,52 @@ class LearnerMemoryTest(unittest.TestCase):
         n = confirm(c, NOW1, evidence='m1', assessment='家长制定的计划，尚无本轮助手评估。', hypotheses=[])
         self.assertEqual(n, 1)
         self.assertEqual(lm.learner_card(c, 'child-1')[0]['hypotheses'], [])
+
+    # --- R26: a cited record corrected after a confirmation leaves that judgment without its basis ---
+    def _records(self):
+        c = conn()
+        c.execute("CREATE TABLE records (id INTEGER PRIMARY KEY, child TEXT, day TEXT, category TEXT, subject TEXT, title TEXT, "
+                  "note TEXT, score REAL, total REAL, related_record_id INTEGER, followup_kind TEXT DEFAULT '', "
+                  "assistance TEXT DEFAULT '', practice_relation TEXT DEFAULT '', comparison_note TEXT DEFAULT '', attachments TEXT DEFAULT '[]')")
+        c.execute('CREATE TABLE revisions (id INTEGER PRIMARY KEY, record_id INTEGER, previous TEXT, changed TEXT)')
+        for n in range(1, 5):
+            c.execute("INSERT INTO records(id,child,day,category,subject,title,note) VALUES(?,?,?,?,?,?,?)",
+                      (n, '小明', '2026-09-0%d' % n, '学习进展', '英语', '记录%d' % n, '原文%d' % n))
+        return c
+
+    def _edit(self, c, rid, when, **changes):  # the app logs the previous row, then updates it
+        prev = dict(c.execute('SELECT * FROM records WHERE id=?', (rid,)).fetchone())
+        c.execute('INSERT INTO revisions(record_id,previous,changed) VALUES(?,?,?)', (rid, json.dumps(prev, ensure_ascii=False), when.isoformat()))
+        if changes:
+            c.execute('UPDATE records SET ' + ','.join(k + '=?' for k in changes) + ' WHERE id=?', (*changes.values(), rid))
+
+    def test_corrected_refs_counts_only_material_edits_after_the_confirmation(self):
+        c = self._records(); own = lambda name: name == '小明'
+        self._edit(c, 1, NOW1 - dt.timedelta(hours=1), note='确认前已更正')  # the judgment already saw this
+        self._edit(c, 2, NOW1_LATER)                                            # re-saved unchanged
+        self._edit(c, 2, NOW1_LATER, attachments='["photo"]')                  # an original added, text unchanged
+        self._edit(c, 3, NOW1_LATER, note='确认后更正：原来记错了')
+        self._edit(c, 4, NOW1_LATER, child='小红')                              # corrected to the other child
+        refs = ['record:4', 'record:1', 'task-feedback:x', 'record:2', 'record:3', 'record:99', 'record:3']
+        self.assertEqual(lm.corrected_refs(c, refs, NOW1.isoformat(), own), ['record:4', 'record:3', 'record:99'])
+        self.assertEqual(lm.corrected_refs(c, refs, '', own), [])  # no confirmation time, nothing to compare
+
+    def test_corrected_refs_compares_aware_confirmation_times_on_the_local_clock(self):
+        c = self._records(); own = lambda name: name == '小明'
+        confirmed = NOW1.astimezone()  # goals store aware times; record edits are naive local times
+        self._edit(c, 1, NOW1 - dt.timedelta(minutes=5), note='之前改的')
+        self._edit(c, 2, NOW1 + dt.timedelta(minutes=5), note='之后改的')
+        self.assertEqual(lm.corrected_refs(c, ['record:1', 'record:2'], confirmed.isoformat(), own), ['record:2'])
+
+    def test_history_lists_the_judgments_whose_cited_records_were_corrected(self):
+        c = self._records(); own = lambda name: name == '小明'
+        confirm(c, NOW1, evidence='h1', assessment='A', hypotheses=HYP)  # cites record:1 (support), record:2 (against)
+        confirm(c, NOW2, evidence='h2', assessment='B', hypotheses=HYP[:1])
+        self._edit(c, 1, NOW1_LATER, note='确认后更正')
+        prior = lm.prior_confirmations(c, 'child-1', 'goal-1', owned=own)
+        self.assertEqual(prior[0]['corrected'], ['record:1'])
+        self.assertEqual([h.get('corrected') for h in prior[0]['hypotheses']], [['record:1'], None])
+        self.assertNotIn('corrected', lm.prior_confirmations(c, 'child-1', 'goal-1')[0])  # opt-in; old callers unchanged
 
 
 if __name__ == '__main__':

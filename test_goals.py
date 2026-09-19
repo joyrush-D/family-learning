@@ -61,6 +61,34 @@ class GoalTests(unittest.TestCase):
         self.assertEqual(prior[0]['assessment'],'现有反馈不足以确定知识缺口。')
         self.assertEqual(prior[0]['confirmed_on'],self.now.date().isoformat())
 
+    def test_correcting_a_cited_record_flags_that_judgment_its_history_and_the_next_analysis(self):
+        rid=self.feedback(note='家长转述孩子：ea 和 ee 常混，拼写 3/10。')['record_id'];ref='record:%d'%rid
+        def cites(messages,schema,name,timeout,**kwargs):
+            value=json.loads(messages[-1]['content']);self.last_input=value
+            plan=synthetic_plan(value);plan['proposal']['hypotheses'][0].update(support=[ref],status='有支持');return plan
+        self.model.side_effect=cites
+        self.approve(self.evaluate())
+        def resave(**changes):
+            with self.app.connect() as c:row=dict(c.execute('SELECT * FROM records WHERE id=?',(rid,)).fetchone())
+            self.app.save_record(dict({k:row[k] or '' for k in ('child','day','category','subject','title','note','source')},id=rid,**changes))
+        resave()                                                      # an unchanged re-save is not a correction
+        self.assertNotIn('corrected',self.goal()['hypotheses_detail'][0])
+        resave(note='家长更正：之前记错了，拼写其实是 7/10。')
+        self.assertEqual(self.goal()['hypotheses_detail'][0]['corrected'],[ref])
+        plan_before=self.goal()['current_plan']
+        self.evaluate()                                               # the next analysis is told not to reuse it
+        self.assertEqual(self.last_input['previous_hypotheses'][0]['corrected'],[ref])
+        self.assertIn('带corrected的判断',goals.PROMPT)
+        self.assertEqual(self.goal()['current_plan'],plan_before)    # the formal plan changes only on approval
+        self.approve()                                                # re-confirmed on the corrected record
+        g=self.goal()
+        self.assertNotIn('corrected',g['hypotheses_detail'][0])      # the new judgment already saw the correction
+        self.assertEqual(g['prior_confirmations'][0]['corrected'],[ref])  # the superseded one keeps the flag
+        self.feedback(note='家长观察：又核对了一次。');self.evaluate()
+        self.assertEqual(self.last_input['prior_confirmations'][0]['corrected'],[ref])
+        resave(child='示例乙')                                         # moved to the other child: no longer its basis
+        self.assertEqual(self.goal()['hypotheses_detail'][0]['corrected'],[ref])
+
     def test_teacher_requirements_reach_goals_and_withdrawal_invalidates_only_suggestions(self):
         teachers=self.app.teacher_store()
         profile=dict(display_name='虚构英语教师',subject='英语',child_ids=['child-1'],version=0,request_key='synthetic-goal-teacher')

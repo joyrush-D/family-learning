@@ -16,7 +16,12 @@ validity end and replacement link, and stays readable as history. This module ow
 so it adds no new service and minimal coupling; writes run inside the caller's
 existing transaction cursor.
 """
+import datetime as dt
 import json
+
+# What a cited record says; a save that leaves these unchanged (or only adds an original) is not a correction.
+MATERIAL = ('day', 'category', 'subject', 'title', 'note', 'score', 'total', 'related_record_id',
+            'followup_kind', 'assistance', 'practice_relation', 'comparison_note')
 
 
 def _ensure(c):
@@ -139,12 +144,49 @@ def learner_card(c, child_id, *, limit_goals=12):
     return ordered[:limit_goals]
 
 
-def prior_confirmations(c, child_id, goal_id, *, limit=5):
+def _local(stamp):
+    """Compare decision and edit times on one clock: aware stamps move to local time, naive ones already are."""
+    return dt.datetime.fromisoformat(stamp).astimezone().replace(tzinfo=None)
+
+
+def corrected_refs(c, refs, since, owned):
+    """Cited records that no longer say what they said at `since` (a confirmation time).
+
+    A `record:<id>` counts when it was materially edited afterwards — the revision log keeps the content
+    as of then, so a save that changed nothing does not count — or when it is gone or no longer belongs
+    to this child (`owned(stored child name)`). Other refs (task feedback, school messages, goal
+    background) are checked by their own flows. Deterministic; returns refs in citation order.
+    """
+    if not since or c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='records'").fetchone() is None:
+        return []
+    since = _local(since)
+    has_log = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revisions'").fetchone() is not None
+    out = []
+    for ref in dict.fromkeys(r for r in refs if isinstance(r, str) and r.startswith('record:') and r[7:].isdigit()):
+        row = c.execute('SELECT * FROM records WHERE id=?', (int(ref[7:]),)).fetchone()
+        if row is None or not owned(row['child']):
+            out.append(ref); continue
+        then = None
+        for rev in (c.execute('SELECT previous,changed FROM revisions WHERE record_id=? ORDER BY id', (row['id'],)) if has_log else []):
+            try:
+                if _local(rev['changed']) > since:
+                    then = json.loads(rev['previous']); break
+            except (TypeError, ValueError):
+                continue
+        # Older revisions predate some columns; only fields recorded then can show a change.
+        if then is not None and any(k in then and then[k] != row[k] for k in MATERIAL if k in row.keys()):
+            out.append(ref)
+    return out
+
+
+def prior_confirmations(c, child_id, goal_id, *, limit=5, owned=None):
     """Past (already superseded) confirmed judgments for one goal, newest first, as events.
 
     The current confirmation (invalid_from IS NULL) is excluded; this shows how the belief
     evolved before now so a re-evaluation can see what was already tried and refined instead
     of cold-starting. Each event groups the rows written in one confirmation (shared valid_from).
+    With `owned`, each event and hypothesis also lists `corrected`: cited records edited or
+    reassigned after that confirmation, so neither the parent nor a re-evaluation leans on it.
     """
     if not _has_table(c):
         return []
@@ -157,8 +199,14 @@ def prior_confirmations(c, child_id, goal_id, *, limit=5):
         if r['kind'] == 'assessment' and not e['assessment']:
             e['assessment'] = r['text']
         elif r['kind'] == 'hypothesis':
-            e['hypotheses'].append(dict(reason=r['text'], status=r['status']))
+            h = dict(reason=r['text'], status=r['status'])
+            if owned is not None and (refs := corrected_refs(c, json.loads(r['support']) + json.loads(r['against']), r['valid_from'], owned)):
+                h['corrected'] = refs
+            e['hypotheses'].append(h)
     ordered = sorted(events.items(), key=lambda item: (item[1]['confirmed_on'], item[0]), reverse=True)
+    if owned is not None:
+        for _, e in ordered:
+            e['corrected'] = list(dict.fromkeys(ref for h in e['hypotheses'] for ref in h.get('corrected', [])))
     return [event for _,event in ordered[:limit]]
 
 
