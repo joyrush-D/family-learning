@@ -80,6 +80,8 @@ MAX_UPLOAD = 20 * 1024 * 1024
 ASSISTANCE = ('', '独立尝试', '少量提示', '逐步帮助', '看过讲解或答案')
 PRACTICE_RELATIONS = ('', '同一道题或同一片段', '相近的新题或新片段', '范围或难度不同')
 CARE_CHOICES = ('', '愿意试试', '暂不考虑', '改天回看')
+TRANSCRIPT_STATES = ('', '待核对', '已核对')
+TASK_CHECK_NOTE = '家长通过清单勾选确认此事项已完成。'
 TASK_DISMISSED = ('不参加', '不适用')
 TASK_CLOSED = ('已完成', *TASK_DISMISSED, '已归档')
 TASK_STATUSES = ('待跟进', '进行中', '已完成', *TASK_DISMISSED)
@@ -141,7 +143,7 @@ def connect():
     c = sqlite3.connect(DB)
     c.row_factory = sqlite3.Row
     c.execute("CREATE TABLE IF NOT EXISTS records (id INTEGER PRIMARY KEY, child TEXT, day TEXT, category TEXT, subject TEXT, title TEXT, note TEXT, source TEXT, score REAL, total REAL, created TEXT, attachments TEXT NOT NULL DEFAULT '[]', related_record_id INTEGER, followup_kind TEXT NOT NULL DEFAULT '')")
-    for name, declaration in [('attachments', "TEXT NOT NULL DEFAULT '[]'"), ('related_record_id', 'INTEGER'), ('followup_kind', "TEXT NOT NULL DEFAULT ''"), ('assistance', "TEXT NOT NULL DEFAULT ''"), ('practice_relation', "TEXT NOT NULL DEFAULT ''"), ('comparison_note', "TEXT NOT NULL DEFAULT ''"), ('care_choice', "TEXT NOT NULL DEFAULT ''"), ('care_review_on', "TEXT NOT NULL DEFAULT ''"), ('request_key', "TEXT NOT NULL DEFAULT ''"), ('request_hash', "TEXT NOT NULL DEFAULT ''")]:
+    for name, declaration in [('attachments', "TEXT NOT NULL DEFAULT '[]'"), ('related_record_id', 'INTEGER'), ('followup_kind', "TEXT NOT NULL DEFAULT ''"), ('assistance', "TEXT NOT NULL DEFAULT ''"), ('practice_relation', "TEXT NOT NULL DEFAULT ''"), ('comparison_note', "TEXT NOT NULL DEFAULT ''"), ('care_choice', "TEXT NOT NULL DEFAULT ''"), ('care_review_on', "TEXT NOT NULL DEFAULT ''"), ('request_key', "TEXT NOT NULL DEFAULT ''"), ('request_hash', "TEXT NOT NULL DEFAULT ''"), ('transcript', "TEXT NOT NULL DEFAULT ''"), ('transcript_state', "TEXT NOT NULL DEFAULT ''")]:
         if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
             try: c.execute('ALTER TABLE records ADD COLUMN '+name+' '+declaration)
             except sqlite3.OperationalError:
@@ -523,9 +525,9 @@ def record_result(connection,ident,replayed=False):
         result['care_error']=notes['error'] or ('' if item is not None else '建议当前无法读取，保存回执不表示当前安排已核对。')
     return result
 
-def save_record(obj,care_only=False):
+def save_record(obj,care_only=False,connection=None):
     receipt={}
-    try: return _save_record(obj,care_only,receipt)
+    try: return _save_record(obj,care_only,receipt,connection)
     except (ValueError,TypeError) as error:
         if not care_only: raise
         failure=error if isinstance(error,RecordError) else RecordError(str(error))
@@ -533,7 +535,7 @@ def save_record(obj,care_only=False):
         failure.not_saved=receipt.get('checked',False) and not failure.request_known
         raise failure
 
-def _save_record(obj,care_only,receipt):
+def _save_record(obj,care_only,receipt,connection=None):
     child=clean(obj,'child',100)
     day=clean(obj,'day',10); dt.date.fromisoformat(day)
     category=clean(obj,'category',20)
@@ -553,8 +555,9 @@ def _save_record(obj,care_only,receipt):
         score=float(obj.get('score',''));total=float(obj.get('total',''))
         if not all(math.isfinite(v) for v in [score,total]) or not 0<=score<=total or total<=0: raise ValueError('成绩须在0到满分之间')
         if not subject: raise ValueError('请填写成绩科目')
-    with connect() as c:
-        c.execute('BEGIN IMMEDIATE')
+    # A caller that must save the record together with other changes passes its own open writer transaction.
+    with connect() if connection is None else nullcontext(connection) as c:
+        if connection is None: c.execute('BEGIN IMMEDIATE')
         names=child_names(c)
         if child not in names: raise ValueError('请选择孩子')
         child=names[child]
@@ -620,6 +623,11 @@ def _save_record(obj,care_only,receipt):
             value=clean(obj,key,limit) if key in obj else previous[key] if previous else ''
             if '\x00' in value or choices is not None and value not in choices: raise ValueError('学习条件字段不正确')
             context[key]=value
+        # Text derived from an attached original stays apart from the parent's own note and says whether it was checked.
+        transcript=clean(obj,'transcript') if 'transcript' in obj else previous['transcript'] if previous else ''
+        transcript_state=clean(obj,'transcript_state',10) if 'transcript_state' in obj else previous['transcript_state'] if previous else ''
+        if '\x00' in transcript or transcript_state not in TRANSCRIPT_STATES or bool(transcript)!=bool(transcript_state):
+            raise RecordError('转写须标明待核对或已核对；没有转写时两项都留空')
         seen={int(ident)} if ident else set()
         ancestor=related
         while ancestor is not None:
@@ -635,17 +643,18 @@ def _save_record(obj,care_only,receipt):
         if not isinstance(attachments,list) or len(attachments)>20 or any(not isinstance(i,str) or not re.fullmatch(r'[a-f0-9]{32}',i) for i in attachments):
             raise ValueError('附件格式不正确')
         attachments=list(dict.fromkeys(attachments))
+        if transcript and not attachments: raise RecordError('转写须保留对应原件；没有原件的文字请写在说明里')
         if care_only and not choice and not note and not attachments: raise RecordError('请填写反馈或保留至少一份原件')
         if any(not c.execute('SELECT 1 FROM uploads WHERE id=?',(i,)).fetchone() for i in attachments):
             raise ValueError('附件不存在，请重新上传')
         family_reading.validate_record_attachments(c,next(p['id'] for p in profiles(c) if p['name']==child),attachments)
         now=dt.datetime.now().isoformat()
-        values=(child,day,category,subject,title,note,source or '家长网页记录',score,total,now,json.dumps(attachments),related,kind,context['assistance'],context['practice_relation'],context['comparison_note'],choice,review_on)
+        values=(child,day,category,subject,title,note,source or '家长网页记录',score,total,now,json.dumps(attachments),related,kind,context['assistance'],context['practice_relation'],context['comparison_note'],choice,review_on,transcript,transcript_state)
         if ident:
             c.execute('INSERT INTO revisions (record_id,previous,changed) VALUES (?,?,?)',(int(ident),json.dumps(dict(previous),ensure_ascii=False),now))
-            c.execute('UPDATE records SET child=?,day=?,category=?,subject=?,title=?,note=?,source=?,score=?,total=?,created=?,attachments=?,related_record_id=?,followup_kind=?,assistance=?,practice_relation=?,comparison_note=?,care_choice=?,care_review_on=? WHERE id=?',values+(int(ident),))
+            c.execute('UPDATE records SET child=?,day=?,category=?,subject=?,title=?,note=?,source=?,score=?,total=?,created=?,attachments=?,related_record_id=?,followup_kind=?,assistance=?,practice_relation=?,comparison_note=?,care_choice=?,care_review_on=?,transcript=?,transcript_state=? WHERE id=?',values+(int(ident),))
         else:
-            cursor=c.execute('INSERT INTO records (child,day,category,subject,title,note,source,score,total,created,attachments,related_record_id,followup_kind,assistance,practice_relation,comparison_note,care_choice,care_review_on,request_key,request_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',values+(request_key,request_hash))
+            cursor=c.execute('INSERT INTO records (child,day,category,subject,title,note,source,score,total,created,attachments,related_record_id,followup_kind,assistance,practice_relation,comparison_note,care_choice,care_review_on,transcript,transcript_state,request_key,request_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',values+(request_key,request_hash))
             ident=cursor.lastrowid
         return record_result(c,int(ident))
 
@@ -836,6 +845,71 @@ def save_task(obj, connection=None):
         task['update']=dict(c.execute('SELECT * FROM task_updates WHERE id=?',(ident,)).fetchone())
         task['history']=[dict(r) for r in c.execute('SELECT * FROM task_history WHERE task_id=? ORDER BY id DESC',(ident,))]
     return task
+
+def save_task_feedback(obj):
+    """Feedback on an existing task is one ordinary record (source='事项:<id>'); completion changes only when asked."""
+    task_id=clean(obj,'task_id',30);child=clean(obj,'child',100)
+    complete=obj.get('complete',False)
+    if type(complete) is not bool: raise RecordError('请明确选择是否确认本次任务完成')
+    ident=obj.get('record_id')
+    if ident is not None and (type(ident) is not int or not 0<ident<=9223372036854775807): raise RecordError('反馈记录编号不正确')
+    request_key=clean(obj,'request_key',128)
+    if ident is None and not request_key: raise RecordError('请保留本次反馈的提交标识后重试')
+    completion_note=clean(obj,'completion_note')
+    with connect() as c:
+        c.execute('BEGIN IMMEDIATE')
+        task=next((t for t in tasks(c) if t['id']==task_id),None)
+        if task is None: raise TaskError('事项不存在，请刷新',404,'task_missing')
+        names=child_names(c);source='事项:'+task_id
+        if names.get(child)!=task['child']:
+            raise RecordError('关联事项不存在或孩子归属不一致，请从原事项重新打开',409,'record_task_mismatch')
+        previous=c.execute('SELECT * FROM records WHERE id=?',(ident,)).fetchone() if ident is not None else None
+        if ident is not None and (previous is None or previous['source']!=source or names.get(previous['child'])!=task['child']):
+            raise RecordError('这条反馈不属于当前事项，请从原事项重新打开',409,'feedback_task_mismatch')
+        # A retry keeps the title saved the first time, so a task retitled in between is not a different submission.
+        titled=previous or (c.execute('SELECT title FROM records WHERE request_key=?',(request_key,)).fetchone() if request_key else None)
+        record=dict(child=child,source=source,title=titled['title'] if titled else ('反馈：'+task['title'])[:200])
+        for key,limit in [('day',10),('category',20),('subject',80),('note',4000),('transcript',4000),('transcript_state',10),('assistance',30)]:
+            record[key]=clean(obj,key,limit) if key in obj or previous is None else previous[key]
+        record['category']=record['category'] or '学习进展'
+        if record['category'] not in ('学习进展','家长观察'): raise RecordError('任务反馈只能保存为学习进展或家长观察')
+        saved=json.loads(previous['attachments']) if previous else []
+        attachments=obj.get('attachments',saved)
+        if not isinstance(attachments,list) or any(not isinstance(i,str) for i in attachments): raise RecordError('附件格式不正确')
+        if set(saved)-set(attachments):
+            raise RecordError('更正不能移除已保存的原件；确需移除请到记录中更正',400,'feedback_original_required')
+        record['attachments']=attachments=list(dict.fromkeys(attachments))
+        if not (record['note'] or record['transcript'] or attachments):
+            raise RecordError('请录音、拍照或写一句说明后再保存',400,'feedback_empty')
+        for row in c.execute("SELECT child,attachments FROM records WHERE attachments<>'[]'"):
+            if names.get(row['child'],row['child'])!=task['child'] and set(json.loads(row['attachments']))&set(attachments):
+                raise RecordError('该原件已关联另一位孩子的记录，请为这个孩子重新上传',409,'feedback_media_other_child')
+        if previous is not None and all(record[k]==(saved if k=='attachments' else previous[k]) for k in record if k not in ('child','source','title')):
+            # The same correction again (for example after a lost reply) changes nothing and is not a conflict.
+            if request_key: raise RecordError('更正已有文字记录不能复用新增反馈的提交标识')
+            result=record_result(c,ident,True);key_replay=False
+        else:
+            if previous is not None and clean(obj,'expected_created',40)!=previous['created']:
+                raise RecordError('这条反馈已在别处更正，请刷新核对；本次更正尚未保存',409,'feedback_conflict')
+            if previous is not None: record['id']=ident
+            # The explicit completion choice is part of the submission, so one key cannot later carry a different choice.
+            else: record.update(request_key=request_key,completion=dict(complete=complete,note=completion_note))
+            result=_save_record(record,False,{},c);key_replay=result['replayed']
+        changed=False
+        if complete and not key_replay:
+            update=c.execute('SELECT status FROM task_updates WHERE id=?',(task_id,)).fetchone()
+            if task_status(task,update['status'] if update else None)!='已完成':
+                if 'expected_updated' not in obj: raise TaskError('请刷新事项后再确认完成；本次反馈尚未保存',409,'task_conflict')
+                save_task(dict(id=task_id,status='已完成',note=completion_note or TASK_CHECK_NOTE,expected_updated=obj['expected_updated']),connection=c)
+                changed=True
+        row=c.execute('SELECT * FROM records WHERE id=?',(result['record_id'],)).fetchone()
+        feedback={k:row[k] for k in ['day','category','subject','note','transcript','transcript_state','assistance','created']}
+        feedback.update(record_id=row['id'],task_id=task_id,child=task['child'],attachments=[upload_info(c.execute('SELECT * FROM uploads WHERE id=?',(i,)).fetchone()) for i in json.loads(row['attachments'])])
+        update=c.execute('SELECT * FROM task_updates WHERE id=?',(task_id,)).fetchone()
+        task['update']=dict(update) if update else None
+        task['history']=[dict(r) for r in c.execute('SELECT * FROM task_history WHERE task_id=? ORDER BY id DESC',(task_id,))]
+        task['feedback_ids']=[r['id'] for r in c.execute('SELECT id,child FROM records WHERE source=? ORDER BY id DESC',(source,)) if names.get(r['child'])==task['child']]
+    return result|dict(feedback=feedback,task=task,completion_changed=changed)
 
 def material_images(ids):
     if not isinstance(ids,list) or len(ids)>3 or any(not isinstance(i,str) or not re.fullmatch('[a-f0-9]{32}',i) for i in ids):
@@ -1566,7 +1640,7 @@ class Handler(BaseHTTPRequestHandler):
                 try: attachment=save_upload(self.rfile,n,self.headers.get('X-File-Name',''))
                 except ValueError: return self.reply(400,{'error':'文件为空、文件名不正确或内容与支持的类型不符'})
                 return self.reply(200,dict(ok=True,attachment=attachment))
-            max_json=2*1024*1024 if path in ('/api/agent/ingest','/api/agent/fragment') else 65536 if path in ('/api/guided/material','/api/goals/action') else 20000
+            max_json=2*1024*1024 if path in ('/api/agent/ingest','/api/agent/fragment') else 65536 if path in ('/api/guided/material','/api/goals/action','/api/task/feedback') else 20000
             if not 0<n<=max_json: raise ValueError('请求过大或为空')
             if path in ('/api/agent/ingest','/api/agent/fragment'):
                 self.close_connection=True
@@ -1656,6 +1730,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200,dict(job=print_store().enqueue(obj)))
             if path=='/api/print/cancel': return self.reply(200,dict(job=print_store().cancel(obj.get('job_id'))))
             if path=='/api/print/received': return self.reply(200,dict(job=print_store().confirm_received(obj.get('job_id'),obj.get('note'))))
+            if self.path=='/api/task/feedback': return self.reply(200,save_task_feedback(obj))
             if self.path=='/api/task/new':
                 try: return self.reply(200,dict(ok=True,task=new_task(obj)))
                 except ValueError as e: return self.reply(400,dict(error=str(e)))
