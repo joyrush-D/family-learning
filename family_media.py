@@ -6,12 +6,15 @@ drafts by the existing model budget; message payloads and family facts stay inta
 """
 import datetime as dt
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import re
 import stat
 import tempfile
+from xml.etree import ElementTree
+import zipfile
 
 from family_collect import source_chat, wechat_env
 from family_wechat_media import (MediaError, MAX_BYTES, bounded_process,
@@ -269,7 +272,105 @@ def _material_kind(message):
     return SCHOOL_MATERIAL if ocr else ''
 
 
+# Linked DOCX originals are read in memory as plain body text. A file that cannot be read
+# completely is refused, so a draft never claims more than the text it was given.
+DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+DOCX_LIMITS = dict(entries=200, total=8 * 1024 * 1024, member=4 * 1024 * 1024, chars=10000)
+_W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+_DOCX_SKIP = frozenset(_W + n for n in ('pPr', 'rPr', 'tblPr', 'tblPrEx', 'tblGrid', 'trPr', 'tcPr', 'sectPr',
+                                        'bookmarkStart', 'bookmarkEnd', 'proofErr', 'lastRenderedPageBreak'))
+_DOCX_MARKS = {_W + 'tab': '\t', _W + 'br': '\n', _W + 'cr': '\n', _W + 'noBreakHyphen': '-', _W + 'softHyphen': ''}
+# Text kept outside the body, or text whose meaning plain characters would misstate.
+_DOCX_UNREAD = frozenset(_W + n for n in ('headerReference', 'footerReference'))
+_DOCX_TOGGLES = frozenset(_W + n for n in ('vanish', 'webHidden', 'specVanish', 'strike', 'dstrike'))
+
+
+def _docx_xml(data):
+    # Word writes UTF-8 without a DTD; declarations and entities are refused before parsing.
+    require(b'\x00' not in data and b'<!DOCTYPE' not in data and b'<!ENTITY' not in data, 'draft_docx_rejected')
+    try:
+        data.decode('utf-8')
+        return ElementTree.fromstring(data)
+    except (ElementTree.ParseError, ValueError, LookupError):
+        raise MediaError('draft_docx_rejected') from None
+
+
+def _docx_inline(paragraph):
+    parts, stack = [], list(reversed(paragraph))
+    while stack:
+        node = stack.pop()
+        if node.tag == _W + 't':
+            parts.append(node.text or '')
+        elif node.tag in _DOCX_MARKS:
+            parts.append(_DOCX_MARKS[node.tag])
+        elif node.tag in (_W + 'r', _W + 'hyperlink'):
+            stack.extend(reversed(node))
+        else:  # Pictures, formulas, fields, notes, revisions and anything else that is not plain text.
+            require(node.tag in _DOCX_SKIP, 'draft_docx_unsupported')
+    return ''.join(parts)
+
+
+def _docx_children(node, tag):
+    for child in node:
+        if child.tag not in _DOCX_SKIP:
+            require(child.tag == tag, 'draft_docx_unsupported')
+            yield child
+
+
+def docx_text(body):
+    """Body paragraphs and table rows of one DOCX; never unpacked to disk, executed or fetched."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(body)) as z:
+            infos = z.infolist(); names = [i.filename for i in infos]; low = [n.lower() for n in names]
+            require(len(infos) <= DOCX_LIMITS['entries'] and len(set(low)) == len(low)
+                    and sum(i.file_size for i in infos) <= DOCX_LIMITS['total']
+                    and all(i.file_size <= DOCX_LIMITS['member'] and not i.flag_bits & 0x41
+                            and i.compress_type in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED) for i in infos)
+                    and not any(n.startswith('/') or '\\' in n or '..' in n.split('/') or 'vba' in n for n in low)
+                    and '[Content_Types].xml' in names and 'word/document.xml' in names, 'draft_docx_rejected')
+            parts = {}
+            for info in infos:
+                if info.filename in ('[Content_Types].xml', 'word/document.xml') or info.filename.endswith('.rels'):
+                    with z.open(info) as f:  # A bounded read: the declared size alone never stops a bomb.
+                        parts[info.filename] = f.read(DOCX_LIMITS['member'] + 1)
+                    require(len(parts[info.filename]) == info.file_size, 'draft_docx_rejected')
+    except MediaError:
+        raise
+    except Exception:  # Damaged, truncated or password-protected archives all fail closed.
+        raise MediaError('draft_docx_rejected') from None
+    types = _docx_xml(parts['[Content_Types].xml'])
+    main = [e.get('ContentType') for e in types.iter() if e.get('PartName') == '/word/document.xml']
+    require(main == [DOCX_MIME + '.main+xml'] and not any(word in e.get('ContentType', '').lower()
+            for e in types.iter() for word in ('macro', 'vba')), 'draft_docx_rejected')
+    for name, data in parts.items():  # Nothing is fetched; a file that points outside itself is not read at all.
+        require(not name.endswith('.rels') or not any(e.get('TargetMode', '').lower() == 'external'
+                                                       for e in _docx_xml(data).iter()), 'draft_docx_rejected')
+    # Embedded pictures, objects and fonts are not text; charts and diagrams also need a drawing in the body.
+    require(all(n.endswith(('.xml', '.rels', '/')) for n in low if n.startswith('word/')), 'draft_docx_unsupported')
+    root = _docx_xml(parts['word/document.xml'])
+    require(root.tag == _W + 'document' and [e.tag for e in root] == [_W + 'body'], 'draft_docx_unsupported')
+    for e in root.iter():
+        on = e.get(_W + 'val', 'true').lower() not in ('0', 'false', 'off')
+        require(e.tag not in _DOCX_UNREAD and not (e.tag in _DOCX_TOGGLES and on), 'draft_docx_unsupported')
+    lines = []
+    for block in root[0]:
+        if block.tag == _W + 'p':
+            lines.append(_docx_inline(block))
+        elif block.tag == _W + 'tbl':  # One line per row; nested tables are not flattened.
+            for row in _docx_children(block, _W + 'tr'):
+                cells = [[' '.join(_docx_inline(p).split()) for p in _docx_children(cell, _W + 'p')]
+                         for cell in _docx_children(row, _W + 'tc')]
+                lines.append(' | '.join(' / '.join(p for p in cell if p) for cell in cells))
+        else:
+            require(block.tag in _DOCX_SKIP, 'draft_docx_unsupported')
+    text = '\n'.join(line for line in lines if line.strip())
+    require(text, 'draft_docx_unsupported')
+    require(len(text) <= DOCX_LIMITS['chars'], 'draft_text_too_long')
+    return text
+
+
 def draft_input(store, c, source, message):
+    import family_llm
     from family_agent import _json
     from family_qq_capture import KIND, NOTICE
     links = [r['upload_id'] for r in c.execute(
@@ -288,27 +389,33 @@ def draft_input(store, c, source, message):
     _authorized(store, c, source, message)
     require(len(links) <= 3, 'draft_too_many_originals')
     child = next(p for p in store.profiles(c) if p['id'] == source['child_id'])
-    images, originals = [], []
+    images, documents, originals = [], [], []
     for ident in links:
         row = store._message_upload(c, source['child_id'], ident)
-        require(row['mime'] in ('image/jpeg', 'image/png', 'image/webp'), 'draft_image_required')
+        docx = bool(kind) and row['mime'] == DOCX_MIME  # Only school material may have text originals.
+        require(docx or row['mime'] in ('image/jpeg', 'image/png', 'image/webp'), 'draft_image_required')
         body = read_file(store.data / 'uploads' / ident)
         require(len(body) == row['size'], 'media_file_changed')
         digest = hashlib.sha256(body).hexdigest()
         if screenshot and hashlib.sha256(_json([KIND, source['id'], source['child_id'], message['text'][len(NOTICE) + 1:],
                                                 digest]).encode()).hexdigest()[:40] == screenshot.group(1):
             continue  # The same capture uploaded again under another ID is still not an original.
-        images.append(dict(mime=row['mime'], data=body))
+        if docx:  # Every selected original must be readable in full, or nothing is sent.
+            documents.append(dict(name=str(row['name'] or ''), text=docx_text(body)))
+        else:
+            images.append(dict(mime=row['mime'], data=body))
         originals.append([ident, row['mime'], digest])
-    if not images:
+    if not originals:
         return None
     text = json.dumps(dict(source_message=message, source_name=source['name']), ensure_ascii=False)
-    require(sum(len(i['data']) for i in images) + len(text.encode()) <= 20 * 1024 * 1024, 'draft_originals_too_large')
+    words = text + ''.join(d['name'] + d['text'] for d in documents)
+    require(not documents or len(words) <= family_llm.MAX_TEXT, 'draft_text_too_long')  # Never cut to fit.
+    require(sum(len(i['data']) for i in images) + len(words.encode()) <= 20 * 1024 * 1024, 'draft_originals_too_large')
     # The legacy fingerprint is unchanged; a typed draft can never match a saved draft of another type.
     fingerprint = hashlib.sha256(json.dumps(([2, kind] if kind else [1]) + [source, child, message, originals],
         ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     return dict(fingerprint=fingerprint, images=images, text=text, child=child['name'],
-                upload_ids=[o[0] for o in originals], kind=kind)
+                upload_ids=[o[0] for o in originals], kind=kind, documents=documents)
 
 
 def draft_key(source, message):
@@ -337,9 +444,12 @@ def draft_view(store, c, source, message):
         if value is None:
             return None
     except Exception as error:
-        explanation = {'draft_image_required':'补充原件中有PDF、DOCX等非图片文件，目前尚不支持自动整理，本次未读取任何原件；原件保留，可手动核对。' if kind
+        explanation = {'draft_image_required':'补充原件中有PDF等目前尚不支持自动整理的文件，本次未读取任何原件；原件保留，可手动核对。' if kind
                            else '目前自动整理支持JPG、PNG、WebP图片；其他文件可保留并手动记录。',
                        'draft_too_many_originals':'一次最多整理3张原件，请分次关联或手动记录。',
+                       'draft_docx_rejected':'DOCX原件已加密、损坏、超出读取限额或含宏、外部链接，本次未读取任何原件；原件保留，请打开原件核对。',
+                       'draft_docx_unsupported':'DOCX原件含图片、公式、页眉页脚、批注、修订等暂不能完整读取的内容，为避免遗漏，本次未读取任何原件；原件保留，请打开原件核对。',
+                       'draft_text_too_long':'DOCX正文与通知文字合计超过12000字，为避免截断，本次未读取任何原件；可拆分后关联或打开原件核对。',
                        'draft_originals_too_large':'本次原件与文字超过20MiB，可分次关联或手动记录。'}.get(
                            error.code if isinstance(error, MediaError) else '', '当前原件或授权无法完整核对，可保留原件并手动记录。')
         return dict(state='unavailable', explanation=explanation, **typed)
@@ -396,7 +506,7 @@ def prepare_draft(store, now):
         return dict(used=0, failed=0)
     source, message, value, key, fp = selected
     try:
-        typed = dict(school_material=True) if value['kind'] else {}
+        typed = dict(school_material=True, documents=value['documents']) if value['kind'] else {}
         result = family_llm.extract_draft(value['text'], value['images'], target_child=value['child'], timeout=45,
                                           data_path=store.data, **typed)
         if value['kind']:  # Re-checked here: no score, mastery or record field is ever persisted for school material.
