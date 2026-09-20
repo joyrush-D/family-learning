@@ -807,7 +807,10 @@ def save_upload(stream, size, encoded_name):
     finally:
         if temporary: temporary.unlink(missing_ok=True)
 
-def new_task(obj):
+def manual_task_id(key):
+    return 'MANUAL-'+hashlib.sha256(key.encode()).hexdigest()[:20]
+
+def new_task(obj, connection=None):
     child=clean(obj,'child',100)
     title=clean(obj,'title',200)
     if not title: raise ValueError('请填写待办标题')
@@ -815,11 +818,11 @@ def new_task(obj):
     if key and not re.fullmatch(r'[A-Za-z0-9_-]{16,64}',key): raise ValueError('请保留本次提交标识后重试')
     box=clean(obj,'box',10) or 'inbox'; category=clean(obj,'category',20);advice=clean(obj,'advice',2000)
     if box not in ('inbox','wish'): raise ValueError('请选择收集箱或心愿')
-    task=dict(id='MANUAL-'+(hashlib.sha256(key.encode()).hexdigest()[:20] if key else secrets.token_hex(10)),child=child,title=title,
+    task=dict(id=manual_task_id(key) if key else 'MANUAL-'+secrets.token_hex(10),child=child,title=title,
               due=clean(obj,'due',200) or '无明确截止',original_status='待跟进',
               source=clean(obj,'source',200) or '家长录入',action=clean(obj,'action'))
-    with connect() as c:
-        c.execute('BEGIN IMMEDIATE')
+    with connect() if connection is None else nullcontext(connection) as c:
+        if connection is None: c.execute('BEGIN IMMEDIATE')
         names=child_names(c)
         if child not in names: raise ValueError('请选择孩子')
         task['child']=names[child]
@@ -936,7 +939,7 @@ def task_feedback_projection(c,task,names):
     task['linked_record_ids']=[r['id'] for r in c.execute('SELECT id,child FROM records WHERE linked_task_id=? ORDER BY id DESC',(task_id,)) if names.get(r['child'])==task['child']]
     return task
 
-def link_record_task(obj):
+def link_record_task(obj, connection=None):
     """The parent attaches an already saved record to an existing task of the same child; the record itself is not rewritten."""
     if not isinstance(obj,dict) or set(obj)-{'record_id','child','task_id','expected_linked_at'}: raise RecordError('关联字段不正确')
     ident=obj.get('record_id')
@@ -944,8 +947,8 @@ def link_record_task(obj):
     # An empty task removes the link, so a missing one must not be read as that choice.
     if not isinstance(obj.get('task_id'),str) or not isinstance(obj.get('expected_linked_at',''),str): raise RecordError('请选择要关联的事项')
     task_id=clean(obj,'task_id',30);child=clean(obj,'child',100)
-    with connect() as c:
-        c.execute('BEGIN IMMEDIATE')
+    with connect() if connection is None else nullcontext(connection) as c:
+        if connection is None: c.execute('BEGIN IMMEDIATE')
         row=c.execute('SELECT * FROM records WHERE id=?',(ident,)).fetchone()
         if row is None: raise RecordError('记录不存在，请刷新',404,'record_missing')
         names=child_names(c);owner=names.get(row['child'])
@@ -967,6 +970,39 @@ def link_record_task(obj):
         link=dict(record_id=ident,task_id=task_id,child=owner,linked_at=linked_at,
                   previous_task_id=previous['task_id'] if changed else '',previous_linked_at=previous['linked_at'] if changed else '')
         return record_result(c,ident,not changed)|dict(changed=changed,link=link,task=task_feedback_projection(c,task,names) if task else None)
+
+def create_record_task(obj):
+    """The parent writes a new task for a saved record that hangs on no task; the task and the link are saved together or not at all."""
+    if not isinstance(obj,dict) or set(obj)-{'record_id','child','expected_linked_at','task'}: raise RecordError('关联字段不正确')
+    ident=obj.get('record_id');draft=obj.get('task')
+    if type(ident) is not int or not 0<ident<=9223372036854775807: raise RecordError('记录编号不正确')
+    # Only what the parent wrote becomes the task: the child, dates and wording are never read from the record.
+    if not isinstance(draft,dict) or set(draft)-{'request_key','title','category','due','action','advice'} or any(not isinstance(v,str) for v in draft.values()):
+        raise RecordError('新事项字段不正确')
+    key=draft.get('request_key','')
+    if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}',key): raise RecordError('请保留本次提交标识后重试')
+    child=clean(obj,'child',100);task_id=manual_task_id(key)
+    with connect() as c:
+        c.execute('BEGIN IMMEDIATE')
+        row=c.execute('SELECT * FROM records WHERE id=?',(ident,)).fetchone()
+        if row is None: raise RecordError('记录不存在，请刷新',404,'record_missing')
+        names=child_names(c);owner=names.get(row['child'])
+        if owner is None or names.get(child)!=owner: raise RecordError(RECORD_TASK_MISMATCH,409,'record_task_mismatch')
+        if row['source'].startswith('事项:'):
+            raise RecordError('这条记录本来就是事项反馈，所属事项以它的来源为准',409,'record_task_link_source')
+        replayed=c.execute('SELECT 1 FROM manual_tasks WHERE id=?',(task_id,)).fetchone() is not None
+        if not replayed and row['linked_task_id']:
+            raise RecordError('这条记录已关联事项；确需另建事项，请先解除原关联',409,'record_task_create_linked')
+        try: new_task(dict(draft,child=child),connection=c)
+        except (TaskError,family_task_focus.FocusError): raise
+        except ValueError as e: raise RecordError(str(e)) from None
+        # A repeated request only reports the task it made. Once the parent has taken the record off or moved it, the old
+        # request must not hang it back, and the same key cannot attach another record to a task that already exists.
+        if replayed and row['linked_task_id']!=task_id:
+            raise RecordError('这次新建已保存过；这条记录的事项关联随后已在别处更改，现有状态保留不变，请刷新核对',409,'record_task_link_conflict')
+        link=dict(record_id=ident,child=child,task_id=task_id)|({'expected_linked_at':obj['expected_linked_at']} if 'expected_linked_at' in obj else {})
+        # A refusal or failure here also undoes the task inserted above.
+        return link_record_task(link,connection=c)|dict(created=not replayed)
 
 def material_images(ids):
     if not isinstance(ids,list) or len(ids)>3 or any(not isinstance(i,str) or not re.fullmatch('[a-f0-9]{32}',i) for i in ids):
@@ -1789,6 +1825,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/print/received': return self.reply(200,dict(job=print_store().confirm_received(obj.get('job_id'),obj.get('note'))))
             if self.path=='/api/task/feedback': return self.reply(200,save_task_feedback(obj))
             if self.path=='/api/record/task-link': return self.reply(200,link_record_task(obj))
+            if self.path=='/api/record/task-create': return self.reply(200,create_record_task(obj))
             if self.path=='/api/task/new':
                 try: return self.reply(200,dict(ok=True,task=new_task(obj)))
                 except ValueError as e: return self.reply(400,dict(error=str(e)))

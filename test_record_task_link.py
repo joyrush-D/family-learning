@@ -1,10 +1,13 @@
 """Run python3 test_record_task_link.py. Synthetic household in temporary files; no household services or paid models."""
 import datetime as dt
+import hashlib
 import http.client
 import io
 import json
+import sqlite3
 import threading
 import unittest
+from unittest import mock
 
 import test_goals
 from test_goals import goals
@@ -177,6 +180,145 @@ class RecordTaskLinkTests(unittest.TestCase):
                                          headers|{'X-Family-Token':token})
                 self.assertEqual(status,403);self.assertEqual(self.dump(),before)
             self.assertEqual(child_request('/child/upload/'+json.loads(record['attachments'])[0],headers=headers)[0],403)
+        finally:server.shutdown();server.server_close();worker.join()
+
+
+class RecordTaskCreateTests(unittest.TestCase):
+    """#20: the parent writes a new task for a saved record that hangs on no task; both are saved together or not at all."""
+    TASK=RecordTaskLinkTests.TASK;OTHER=RecordTaskLinkTests.OTHER;KEY='synthetic-record-create-0001'
+    action=RecordTaskLinkTests.action;goal=RecordTaskLinkTests.goal;reply=RecordTaskLinkTests.reply;evaluate=RecordTaskLinkTests.evaluate;approve=RecordTaskLinkTests.approve;on=RecordTaskLinkTests.on
+    setUp=RecordTaskLinkTests.setUp;media=RecordTaskLinkTests.media;dump=RecordTaskLinkTests.dump;row=RecordTaskLinkTests.row
+    revisions=RecordTaskLinkTests.revisions;saved=RecordTaskLinkTests.saved;link=RecordTaskLinkTests.link;refused=RecordTaskLinkTests.refused
+
+    def draft(self,key=None,**task):
+        return dict(request_key=key or self.KEY,title='虚构：订正后再听写一次',category='homework',due=self.now.date().isoformat(),
+                    action='虚构要求：订正两处后重写',advice='虚构下一步：先读再写')|task
+
+    def create(self,ident,key=None,expected=None,child='示例甲',**task):
+        return self.app.create_record_task(dict(record_id=ident,child=child,task=self.draft(key,**task))|({} if expected is None else dict(expected_linked_at=expected)))
+
+    def counts(self):
+        with self.app.connect() as c:
+            return {r['name']:c.execute('SELECT COUNT(*) FROM "%s"'%r['name']).fetchone()[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name<>'sqlite_sequence'").fetchall()}
+
+    def made(self,key=None):
+        ident=self.app.manual_task_id(key or self.KEY)
+        with self.app.connect() as c:return [dict(r) for r in c.execute('SELECT * FROM manual_tasks WHERE id=?',(ident,))]
+
+    def test_creation_adds_only_the_written_task_and_the_link_and_keeps_the_record_and_the_task_pending(self):
+        # The existing capture still works on its own and has created the focus tables before the comparison below.
+        plain=dict(child='示例甲',title='虚构已有待办',request_key='synthetic-plain-create-01',category='todo')
+        self.assertEqual(self.app.new_task(plain)['id'],self.app.new_task(plain)['id'])
+        ident,upload=self.saved();self.app.snapshot();before=self.row(ident);counts=self.counts();dump=self.dump();since=dt.datetime.now().isoformat()
+        done=self.create(ident);after=self.row(ident);task_id='MANUAL-'+hashlib.sha256(self.KEY.encode()).hexdigest()[:20]
+        self.assertTrue(done['ok'] and done['created'] and done['changed'] and not done['replayed'])
+        self.assertEqual({k for k in after if after[k]!=before[k]},{'linked_task_id','linked_task_at'})
+        self.assertEqual((after['id'],after['source'],json.loads(after['attachments']),after['transcript'],after['transcript_state'],after['linked_task_id']),
+                         (ident,'试卷 / 作业核对',[upload],'虚构转写：订正两处','已核对',task_id))
+        self.assertEqual(done['link'],dict(record_id=ident,task_id=task_id,child='示例甲',linked_at=after['linked_task_at'],previous_task_id='',previous_linked_at=''))
+        self.assertEqual(done['record'],dict(id=ident,child=before['child'],source='试卷 / 作业核对',care_choice='',care_review_on=''))
+        # The task is exactly what the parent wrote, waits like any new task, and carries no copy of the record.
+        draft=self.draft()
+        self.assertEqual(self.made(),[dict(id=task_id,child='示例甲',title=draft['title'],due=draft['due'],original_status='待跟进',source='家长录入',action=draft['action'])])
+        task=done['task'];self.assertEqual((task['linked_record_ids'],task['feedback_ids'],task['update'],task['history']),([ident],[],None,[]))
+        self.assertEqual((task['focus']['category'],task['focus']['next_action'],task['focus']['box']),('homework',draft['advice'],'inbox'))
+        listed=next(t for t in self.app.snapshot()['tasks'] if t['id']==task_id);self.assertEqual(self.app.task_status(listed,None),'待跟进')
+        now=self.counts();self.assertEqual({k:now[k]-counts.get(k,0) for k in now if now[k]!=counts.get(k,0)},dict(manual_tasks=1,task_focus=1,task_focus_history=1,revisions=1))
+        for line in set(dump.splitlines())^set(self.dump().splitlines()):
+            self.assertTrue(any(name in line for name in ('"manual_tasks"','"task_focus"','"task_focus_history"','"revisions"','"records"','sqlite_sequence')),line)
+        self.assertEqual(self.app.record_history(ident)['history'][0]['previous']['source'],before['source'])
+        # Goal freshness follows the explicit link: a judgment that cited the record before is flagged for another look.
+        with self.app.connect() as c:
+            self.assertEqual(goals.family_learner_memory.corrected_refs(c,['record:%d'%ident],since,self.store._owned(c,'child-1')),['record:%d'%ident])
+
+    def test_lost_response_retry_returns_the_same_task_and_never_relinks_after_a_later_change(self):
+        ident,_=self.saved();other,_=self.saved(title='虚构另一份订正');first=self.create(ident);task_id=first['link']['task_id'];dump=self.dump()
+        again=self.create(ident)
+        self.assertTrue(again['replayed'] and not again['created'] and not again['changed'])
+        self.assertEqual((again['link']['task_id'],again['link']['linked_at'],again['task']['linked_record_ids']),(task_id,first['link']['linked_at'],[ident]))
+        self.assertEqual(self.dump(),dump);self.assertEqual((len(self.made()),self.revisions(ident)),(1,1))
+        # Same key with other words, or for another record, is not the same request.
+        self.refused('task_create_conflict',409,lambda:self.create(ident,title='虚构：换了标题'))
+        self.refused('task_create_conflict',409,lambda:self.create(ident,advice='虚构：换了下一步'))
+        self.refused('record_task_link_conflict',409,lambda:self.create(other))
+        # Another parent's later edit of the task is reported as it is, not undone.
+        self.app.save_task(dict(id=task_id,status='已完成',note=self.app.TASK_CHECK_NOTE));dump=self.dump()
+        late=self.create(ident);self.assertTrue(late['replayed']);self.assertEqual(late['task']['update']['status'],'已完成');self.assertEqual(self.dump(),dump)
+        # After the parent takes the record off, the old request cannot hang it back, whatever version it carries.
+        gone=self.link(ident,'',first['link']['linked_at'])['link']['linked_at']
+        self.refused('record_task_link_conflict',409,lambda:self.create(ident))
+        self.refused('record_task_link_conflict',409,lambda:self.create(ident,expected=gone))
+        self.assertEqual((self.row(ident)['linked_task_id'],len(self.made()),self.revisions(ident)),('',1,2))
+        # Moved to another task by the parent: the old request is refused as well.
+        self.link(ident,self.OTHER,gone);self.refused('record_task_link_conflict',409,lambda:self.create(ident))
+        self.assertEqual(self.row(ident)['linked_task_id'],self.OTHER)
+
+    def test_a_linked_or_stale_record_refuses_a_new_key_and_leaves_no_orphan_task(self):
+        ident,_=self.saved();version=self.link(ident,self.TASK)['link']['linked_at']
+        self.refused('record_task_create_linked',409,lambda:self.create(ident))
+        self.refused('record_task_create_linked',409,lambda:self.create(ident,expected=version))
+        gone=self.link(ident,'',version)['link']['linked_at']
+        # The version is compared after the task insert, so these refusals prove the insert is undone with them.
+        self.refused('record_task_link_conflict',409,lambda:self.create(ident))
+        self.refused('record_task_link_conflict',409,lambda:self.create(ident,expected=version))
+        self.assertEqual(self.made(),[])
+        done=self.create(ident,expected=gone);self.assertTrue(done['created']);self.assertEqual(done['link']['previous_linked_at'],gone)
+        self.assertEqual((len(self.made()),self.revisions(ident),self.row(ident)['linked_task_id']),(1,3,done['link']['task_id']))
+
+    def test_a_failure_after_both_writes_rolls_back_the_task_the_receipt_and_the_link(self):
+        ident,_=self.saved();before=self.dump()
+        with mock.patch.object(self.app,'task_feedback_projection',side_effect=sqlite3.OperationalError('synthetic failure')):
+            with self.assertRaises(sqlite3.OperationalError):self.create(ident)
+        self.assertEqual(self.dump(),before);self.assertEqual((self.made(),self.revisions(ident)),([],0))
+        with self.assertRaises(self.app.family_task_focus.FocusError):self.create(ident,category='bad')
+        self.assertEqual(self.dump(),before)
+        done=self.create(ident);self.assertTrue(done['created'] and not done['replayed']);self.assertEqual((len(self.made()),self.revisions(ident)),(1,1))
+
+    def test_other_children_missing_records_task_feedback_and_malformed_requests_write_nothing(self):
+        ident,_=self.saved();feedback=self.media()['record_id'];records=self.counts()['records']
+        self.refused('record_task_mismatch',409,lambda:self.create(ident,child='示例乙'))
+        self.refused('record_task_mismatch',409,lambda:self.create(ident,child='不存在的孩子'))
+        self.refused('record_missing',404,lambda:self.create(987654))
+        self.refused('record_task_link_source',409,lambda:self.create(feedback))
+        body=dict(record_id=ident,child='示例甲',task=self.draft())
+        for bad in (dict(body,record_id=str(ident)),dict(body,record_id=True),dict(body,task_id=self.TASK),dict(body,expected_linked_at=None),dict(body,task=None),
+                    {k:v for k,v in body.items() if k!='task'},*(dict(body,task=self.draft()|{k:'示例乙'}) for k in ('child','id','source','box')),
+                    dict(body,task={k:v for k,v in self.draft().items() if k!='request_key'}),dict(body,task=self.draft('short-key')),
+                    dict(body,task=self.draft('k'*65)),dict(body,task=self.draft(title='  ')),dict(body,task=self.draft(due=20260101))):
+            self.refused('invalid_record',400,lambda:self.app.create_record_task(bad))
+        self.assertEqual((self.counts()['records'],self.counts()['manual_tasks'],self.row(ident)['linked_task_id']),(records,3,''))
+
+    def test_http_route_needs_the_parent_token_and_refuses_a_child_session(self):
+        ident,_=self.saved();server=self.app.ThreadingHTTPServer(('127.0.0.1',0),self.app.Handler)
+        worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
+        def request(path,body=None,headers=None):
+            client=http.client.HTTPConnection('127.0.0.1',server.server_port,timeout=5)
+            try:
+                client.request('POST' if body is not None else 'GET',path,json.dumps(body) if body is not None else None,{'Content-Type':'application/json',**(headers or {})})
+                response=client.getresponse();raw=response.read();return response.status,json.loads(raw),dict(response.getheaders())
+            finally:client.close()
+        try:
+            body=dict(record_id=ident,child='示例甲',expected_linked_at='',task=self.draft());token={'X-Family-Token':self.app.snapshot()['token']};before=self.dump()
+            for headers in ({},{'X-Family-Token':'invalid-token'}):
+                self.assertEqual(request('/api/record/task-create',body,headers)[0],403);self.assertEqual(self.dump(),before)
+            status,done,_=request('/api/record/task-create',body,token)
+            self.assertEqual((status,done['created'],done['replayed'],done['task']['linked_record_ids']),(200,True,False,[ident]))
+            status,again,_=request('/api/record/task-create',body,token)
+            self.assertEqual((status,again['created'],again['replayed'],again['link']),(200,False,True,done['link']));self.assertEqual(len(self.made()),1)
+            status,result,_=request('/api/record/task-create',dict(body,task=self.draft(title='虚构：换了标题')),token);self.assertEqual((status,result.get('code')),(409,'task_create_conflict'))
+            status,result,_=request('/api/record/task-create',dict(body,task=self.draft('synthetic-record-create-0002')),token);self.assertEqual((status,result.get('code')),(409,'record_task_create_linked'))
+            status,result,_=request('/api/record/task-create',dict(body,task=self.draft(title='')),token);self.assertEqual((status,result.get('code')),(400,'invalid_record'))
+            record=self.row(ident);serialized=json.dumps([done,again],ensure_ascii=False)
+            for hidden in (record['note'],record['transcript'],*json.loads(record['attachments'])):self.assertNotIn(hidden,serialized)
+            child=self.app.family_child;child.parent_action(self.app,'study',dict(child_id='child-1',enabled=True))
+            status,state,headers=request('/child/api/login',dict(invite=child.parent_action(self.app,'invite',dict(child_id='child-1'))['invite']));self.assertEqual(status,200)
+            headers={'Cookie':headers['Set-Cookie'].split(';',1)[0],'X-Child-CSRF':state['csrf']}
+            status,state,_=request('/child/api/state',headers=headers);self.assertEqual(status,200);serialized=json.dumps(state,ensure_ascii=False)
+            for hidden in (record['note'],record['transcript'],*json.loads(record['attachments'])):self.assertNotIn(hidden,serialized)
+            other,_=self.saved(title='虚构另一份订正');before=self.dump()
+            for value in ('',self.app.TOKEN):
+                status,_,_=request('/api/record/task-create',dict(body,record_id=other,task=self.draft('synthetic-record-create-0003')),headers|{'X-Family-Token':value})
+                self.assertEqual(status,403);self.assertEqual(self.dump(),before)
         finally:server.shutdown();server.server_close();worker.join()
 
 
