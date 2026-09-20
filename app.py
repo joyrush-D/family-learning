@@ -595,8 +595,10 @@ def _save_record(obj,care_only,receipt,connection=None):
         previous=c.execute('SELECT * FROM records WHERE id=?',(int(ident),)).fetchone() if ident else None
         if ident and previous is None: raise ValueError('记录不存在')
         # The parent's explicit task link stays on the record, so a correction cannot carry it to a child the task is not for.
-        if previous is not None and previous['linked_task_id'] and child!=names.get(previous['child']):
-            record_task(c,previous['linked_task_id'],child)
+        if previous is not None and previous['linked_task_id']:
+            if child!=names.get(previous['child']): record_task(c,previous['linked_task_id'],child)
+            if source.startswith('事项:') and source!='事项:'+previous['linked_task_id']:
+                raise RecordError(RECORD_TASK_MISMATCH,409,'record_task_mismatch')
         family_guided.guard_record_write(c,previous,source)
         if source.startswith('作息记录:') or previous is not None and previous['source'].startswith('作息记录:'):
             owned=dict(child=child,day=day,category=category,subject=subject,title=title,note=note,source=source,
@@ -959,9 +961,8 @@ def link_record_task(obj):
             if previous['linked_at'] and clean(obj,'expected_linked_at',40)!=previous['linked_at']:
                 raise RecordError('这条记录的事项关联已在别处更改，现有状态保留不变；确需更正请刷新核对后重试',409,'record_task_link_conflict')
             now=dt.datetime.now().isoformat();linked_at=now
-            # Only a correction replaces information, so only then is the prior row, with its prior link decision, kept as a revision.
-            if previous['linked_at']:
-                c.execute('INSERT INTO revisions (record_id,previous,changed) VALUES (?,?,?)',(ident,json.dumps(dict(row),ensure_ascii=False),now))
+            # Keep the pre-link basis too: the record may already support a confirmed judgment.
+            c.execute('INSERT INTO revisions (record_id,previous,changed) VALUES (?,?,?)',(ident,json.dumps(dict(row),ensure_ascii=False),now))
             c.execute('UPDATE records SET linked_task_id=?,linked_task_at=? WHERE id=?',(task_id,linked_at,ident))
         link=dict(record_id=ident,task_id=task_id,child=owner,linked_at=linked_at,
                   previous_task_id=previous['task_id'] if changed else '',previous_linked_at=previous['linked_at'] if changed else '')

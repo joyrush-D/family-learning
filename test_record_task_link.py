@@ -1,4 +1,5 @@
 """Run python3 test_record_task_link.py. Synthetic household in temporary files; no household services or paid models."""
+import datetime as dt
 import http.client
 import io
 import json
@@ -6,16 +7,16 @@ import threading
 import unittest
 
 import test_goals
-from test_goals import GoalTests, goals
+from test_goals import goals
 
-Media = test_goals.MediaFeedbackEvidenceTests
+
 
 
 class RecordTaskLinkTests(unittest.TestCase):
     """#20: the parent attaches an already saved record to an existing task of the same child."""
-    action=GoalTests.action;goal=GoalTests.goal;reply=GoalTests.reply;evaluate=GoalTests.evaluate;approve=GoalTests.approve;on=GoalTests.on
-    TASK=Media.TASK;OTHER='M-synthetic-2';SIBLING='M-synthetic-3'
-    setUp=Media.setUp;media=Media.media;ctx=Media.ctx
+    action=test_goals.GoalTests.action;goal=test_goals.GoalTests.goal;reply=test_goals.GoalTests.reply;evaluate=test_goals.GoalTests.evaluate;approve=test_goals.GoalTests.approve;on=test_goals.GoalTests.on
+    TASK=test_goals.MediaFeedbackEvidenceTests.TASK;OTHER='M-synthetic-2';SIBLING='M-synthetic-3'
+    setUp=test_goals.MediaFeedbackEvidenceTests.setUp;media=test_goals.MediaFeedbackEvidenceTests.media;ctx=test_goals.MediaFeedbackEvidenceTests.ctx
 
     def dump(self):
         with self.app.connect() as c:return '\n'.join(c.iterdump())
@@ -49,7 +50,7 @@ class RecordTaskLinkTests(unittest.TestCase):
         self.assertEqual((after['id'],after['source'],json.loads(after['attachments']),after['transcript'],after['transcript_state']),(ident,'试卷 / 作业核对',[upload],'虚构转写：订正两处','已核对'))
         self.assertEqual(done['link'],dict(record_id=ident,task_id=self.TASK,child='示例甲',linked_at=after['linked_task_at'],previous_task_id='',previous_linked_at=''))
         self.assertEqual((done['task']['linked_record_ids'],done['task']['feedback_ids'],done['task']['update'],done['task']['history']),([ident],[],task['update'],task['history']))
-        self.assertEqual(done['task']['update']['status'],'已完成');self.assertEqual(self.revisions(ident),0)
+        self.assertEqual(done['task']['update']['status'],'已完成');self.assertEqual(self.revisions(ident),1)
         state=next(r for r in self.app.snapshot()['records'] if r['id']==ident);self.assertEqual((state['linked_task_id'],state['linked_task_at']),(self.TASK,after['linked_task_at']))
         dump=self.dump();again=self.link(ident,self.TASK)
         self.assertTrue(again['replayed'] and not again['changed']);self.assertEqual(again['link']['linked_at'],after['linked_task_at']);self.assertEqual(self.dump(),dump)
@@ -65,15 +66,15 @@ class RecordTaskLinkTests(unittest.TestCase):
         gone=self.link(ident,'',first);row=self.row(ident)
         self.assertTrue(gone['changed'] and gone['task'] is None);self.assertEqual(gone['link']['previous_task_id'],self.TASK)
         self.assertEqual(row['linked_task_id'],'');self.assertTrue(row['linked_task_at'] and row['linked_task_at']!=first,'removal keeps a new version, not an empty one')
-        self.assertEqual(self.revisions(ident),1)
+        self.assertEqual(self.revisions(ident),2)
         # The old first-link request, replayed after the removal, must not hang the record back.
         self.refused('record_task_link_conflict',409,lambda:self.link(ident,self.TASK))
         self.refused('record_task_link_conflict',409,lambda:self.link(ident,self.TASK,first))
         dump=self.dump();self.assertTrue(self.link(ident,'')['replayed']);self.assertEqual(self.dump(),dump)
-        back=self.link(ident,self.TASK,row['linked_task_at']);self.assertTrue(back['changed']);self.assertEqual(self.revisions(ident),2)
+        back=self.link(ident,self.TASK,row['linked_task_at']);self.assertTrue(back['changed']);self.assertEqual(self.revisions(ident),3)
         self.refused('record_task_link_conflict',409,lambda:self.link(ident,'',first))
         history=self.app.record_history(ident);self.assertEqual(history['current']['linked_task_id'],self.TASK)
-        self.assertEqual([p.get('linked_task_id','') for p in history['previous']].count(self.TASK),1)
+        self.assertEqual([p['previous'].get('linked_task_id','') for p in history['history']].count(self.TASK),1)
         # Two corrections from the same version: exactly one wins, the other changes nothing.
         version=back['link']['linked_at'];results=[];gate=threading.Barrier(2)
         def attempt(task):
@@ -83,7 +84,7 @@ class RecordTaskLinkTests(unittest.TestCase):
         workers=[threading.Thread(target=attempt,args=(task,)) for task in (self.OTHER,'')]
         [w.start() for w in workers];[w.join() for w in workers]
         self.assertEqual(results.count('record_task_link_conflict'),1,results)
-        winner=next(r for r in results if r!='record_task_link_conflict');self.assertEqual(self.row(ident)['linked_task_id'],winner);self.assertEqual(self.revisions(ident),3)
+        winner=next(r for r in results if r!='record_task_link_conflict');self.assertEqual(self.row(ident)['linked_task_id'],winner);self.assertEqual(self.revisions(ident),4)
 
     def test_missing_or_other_child_tasks_are_refused_and_a_correction_cannot_move_a_linked_record_to_another_child(self):
         ident,_=self.saved()
@@ -110,7 +111,7 @@ class RecordTaskLinkTests(unittest.TestCase):
         version=self.link(ident,self.TASK)['link']['linked_at'];ctx=self.ctx();record=next(r for r in ctx['records'] if r['id']==ident)
         self.assertEqual((record['linked_task_id'],record['source']),(self.TASK,'试卷 / 作业核对'));self.assertNotEqual(empty['evidence_hash'],ctx['evidence_hash'])
         self.assertNotIn('linked_task_id',next(r for r in ctx['records'] if r['id']==kept['record_id']))
-        with self.on(3):self.approve(self.evaluate())
+        self.approve(self.evaluate())
         goal=self.goal();self.assertFalse(goal['evidence_changed']);plan=goal['current_plan']
         def corrected():
             with self.app.connect() as c:
@@ -124,6 +125,17 @@ class RecordTaskLinkTests(unittest.TestCase):
         gone=self.link(ident,'',moved)['link']['linked_at'];self.assertEqual(corrected(),[ref]);self.assertTrue(self.goal()['evidence_changed'])
         # Attached again to the confirmed task, the record says what it said then.
         self.link(ident,self.TASK,gone);self.assertEqual(corrected(),[])
+
+    def test_first_link_preserves_the_pre_link_basis_and_cannot_gain_a_second_task_source(self):
+        ident,_=self.saved();before=self.row(ident);since=dt.datetime.now().isoformat()
+        self.link(ident,self.TASK)
+        with self.app.connect() as c:
+            corrected=goals.family_learner_memory.corrected_refs(c,['record:%d'%ident],since,self.store._owned(c,'child-1'))
+        self.assertEqual(corrected,['record:%d'%ident])
+        history=self.app.record_history(ident)
+        self.assertEqual(history['history'][0]['previous']['source'],before['source'])
+        body={k:before[k] for k in ('child','day','category','subject','title','note')}
+        self.refused('record_task_mismatch',409,lambda:self.app.save_record(dict(body,id=ident,source='事项:'+self.OTHER)))
 
     def test_http_route_needs_the_parent_token(self):
         ident,_=self.saved();server=self.app.ThreadingHTTPServer(('127.0.0.1',0),self.app.Handler)
@@ -141,6 +153,30 @@ class RecordTaskLinkTests(unittest.TestCase):
             self.assertEqual((status,result['changed'],result['link']['task_id'],result['task']['linked_record_ids']),(200,True,self.TASK,[ident]))
             status,result=post(self.app.snapshot()['token'],body|dict(task_id=self.OTHER))
             self.assertEqual((status,result.get('code')),(409,'record_task_link_conflict'))
+            child=self.app.family_child
+            child.parent_action(self.app,'study',dict(child_id='child-1',enabled=True))
+            invitation=child.parent_action(self.app,'invite',dict(child_id='child-1'))
+            def child_request(path,body=None,headers=None):
+                client=http.client.HTTPConnection('127.0.0.1',server.server_port,timeout=5)
+                try:
+                    client.request('POST' if body is not None else 'GET',path,json.dumps(body) if body is not None else None,
+                                   {'Content-Type':'application/json',**(headers or {})})
+                    response=client.getresponse();raw=response.read()
+                    return response.status,json.loads(raw),dict(response.getheaders())
+                finally:client.close()
+            status,state,headers=child_request('/child/api/login',dict(invite=invitation['invite']))
+            self.assertEqual(status,200);cookie=headers['Set-Cookie'].split(';',1)[0]
+            headers={'Cookie':cookie,'X-Child-CSRF':state['csrf']}
+            status,state,_=child_request('/child/api/state',headers=headers);self.assertEqual(status,200)
+            serialized=json.dumps(state,ensure_ascii=False);record=self.row(ident)
+            for hidden in (record['note'],record['transcript'],*json.loads(record['attachments'])):
+                self.assertNotIn(hidden,serialized)
+            before=self.dump()
+            for token in ('',self.app.TOKEN):
+                status,_,_=child_request('/api/record/task-link',body|dict(task_id=self.OTHER,expected_linked_at=record['linked_task_at']),
+                                         headers|{'X-Family-Token':token})
+                self.assertEqual(status,403);self.assertEqual(self.dump(),before)
+            self.assertEqual(child_request('/child/upload/'+json.loads(record['attachments'])[0],headers=headers)[0],403)
         finally:server.shutdown();server.server_close();worker.join()
 
 
