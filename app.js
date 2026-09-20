@@ -362,6 +362,7 @@ async function submit(e,path,dialog,error){
  e.preventDefault();const f=e.target,b=f.querySelector('[type=submit]'),care=f===$('#recordForm')&&careFeedbackContext,school=f===$('#recordForm')&&schoolRecordContext;
  if(f.dataset.saving)return;
  if(f===$('#recordForm')&&(recordTaskLinkPending||recordTaskLinkBusy)){$(error).textContent='任务关联保存结果尚未核对，请先重试关联。';return;}
+ if(f===$('#recordForm')&&recordTaskCreateDirty()){$(error).textContent='新事项草稿尚未保存，请先新建并关联，或清空新事项草稿。';return;}
  if(f===$('#recordForm')&&recordTaskLinkContext&&!recordTaskLinkContext.inherited&&$('#recordTaskSelect').value!==recordTaskLinkContext.task_id){$(error).textContent='任务选择尚未保存，请先点“保存任务关联”。';return;}
  if((f===$('#recordForm')||f===$('#taskForm'))&&(captureBusy()||taskFeedbackPending)){toast('请等待录音、上传或整理结束');return}
  if(f===$('#taskForm')&&(pendingIDs.length||$('#taskTranscript').value.trim())){$(error).textContent='请先点“保存反馈”保留本次原件，再更新事项状态。';return}
@@ -384,7 +385,18 @@ async function submit(e,path,dialog,error){
 $('#recordForm').onsubmit=e=>submit(e,'/api/record','#recordDialog','#recordError');$('#taskForm').onsubmit=e=>submit(e,'/api/task','#taskDialog','#taskError');$('#refresh').onclick=()=>load().then(()=>toast('已读取最新保存结果')).catch(e=>{if($('#content').dataset.ready!=='true')showStartupError(e);else toast(e.message)});window.addEventListener('DOMContentLoaded',()=>load().catch(showStartupError),{once:true});
 
 let recordTaskLinkContext=null,recordTaskLinkPending=null,recordTaskLinkBusy=false;
-function prepareRecordTaskLink(record){
+function recordTaskCreateDirty(){return !$('#recordTaskLink').classList.contains('hide')&&[...$('#recordTaskCreateFields').querySelectorAll('input,select,textarea')].some(el=>el.value.trim())}
+function clearRecordTaskDraft(){for(const el of $('#recordTaskCreateFields').querySelectorAll('input,select,textarea'))el.value='';$('#recordTaskCreate').open=false}
+function recordTaskControls(){
+ const ctx=recordTaskLinkContext,locked=recordTaskLinkBusy||!!recordTaskLinkPending;
+ $('#recordTaskSelect').disabled=locked||!!ctx?.inherited;
+ $('#saveRecordTaskLink').disabled=recordTaskLinkBusy||!!ctx?.inherited||!!recordTaskLinkPending?.task;
+ $('#createRecordTask').disabled=recordTaskLinkBusy||!!ctx?.inherited||!!ctx?.task_id||!!(recordTaskLinkPending&&!recordTaskLinkPending.task);
+ $('#recordTaskCreateFields').disabled=locked;$('#discardRecordTaskDraft').disabled=locked;
+ $('#refreshRecordTaskLink').disabled=locked;
+}
+function prepareRecordTaskLink(record,preserveDraft=false){
+ if(!preserveDraft)clearRecordTaskDraft();
  const section=$('#recordTaskLink');recordTaskLinkContext=null;section.classList.toggle('hide',!record);if(!record)return;
  const owner=data.children.find(c=>c.name===record.child||c.aliases?.includes(record.child));
  const inherited=String(record.source||'').startsWith('事项:')?record.source.slice(3):'',current=inherited||record.linked_task_id||'';
@@ -394,28 +406,41 @@ function prepareRecordTaskLink(record){
  if(current&&!choices.some(t=>t.id===current))select.add(new Option('原关联任务当前不可用',current));select.value=current;
  select.disabled=!!inherited;$('#saveRecordTaskLink').disabled=!!inherited;$('#saveRecordTaskLink').textContent='保存任务关联';$('#refreshRecordTaskLink').classList.add('hide');
  $('#recordTaskCurrent').textContent=inherited?'这条反馈来自原事项，归属随原事项保留。':'当前：'+(choices.find(t=>t.id===current)?.title||(current?'原任务当前不可用':'未关联'))+'。这里只保存归属，不改记录内容或完成状态。';
- $('#recordTaskLinkStatus').textContent='';
+ $('#recordTaskLinkStatus').textContent='';$('#recordTaskCreate').classList.toggle('hide',!!inherited);recordTaskControls();
 }
-$('#saveRecordTaskLink').onclick=async()=>{
- const ctx=recordTaskLinkContext,f=$('#recordForm'),button=$('#saveRecordTaskLink');if(!ctx||ctx.inherited||recordTaskLinkBusy||captureBusy()||f.dataset.saving)return;
+async function saveRecordTaskAssociation(create=false){
+ const ctx=recordTaskLinkContext,f=$('#recordForm'),button=$(create?'#createRecordTask':'#saveRecordTaskLink');if(!ctx||ctx.inherited||recordTaskLinkBusy||captureBusy()||f.dataset.saving)return;
+ if(recordTaskLinkPending&&!!recordTaskLinkPending.task!==create)return;
  if(!recordTaskLinkPending){
   if(f.elements.child.value!==ctx.child){$('#recordTaskLinkStatus').textContent='孩子尚未保存，请先保存记录、重新打开后再关联任务。';return}
-  recordTaskLinkPending={record_id:ctx.record_id,child:ctx.child,task_id:$('#recordTaskSelect').value,expected_linked_at:ctx.expected_linked_at};
+  if(create){
+   if(ctx.task_id){$('#recordTaskLinkStatus').textContent='请先解除已有任务关联。';return}
+   if($('#recordTaskSelect').value!==ctx.task_id){$('#recordTaskLinkStatus').textContent='已有任务选择尚未保存，请先核对或清空选择。';return}
+   const title=$('#recordTaskTitle').value.trim();if(!title){$('#recordTaskLinkStatus').textContent='请填写新事项标题。';$('#recordTaskTitle').focus();return}
+   recordTaskLinkPending={record_id:ctx.record_id,child:ctx.child,expected_linked_at:ctx.expected_linked_at,task:{request_key:crypto.randomUUID(),title,category:$('#recordTaskCategory').value,due:$('#recordTaskDue').value,action:$('#recordTaskAction').value,advice:$('#recordTaskAdvice').value}};
+  }else{
+   if(recordTaskCreateDirty()&&$('#recordTaskSelect').value){$('#recordTaskLinkStatus').textContent='新事项草稿尚未保存，请先新建或清空草稿。';return}
+   recordTaskLinkPending={record_id:ctx.record_id,child:ctx.child,task_id:$('#recordTaskSelect').value,expected_linked_at:ctx.expected_linked_at};
+  }
  }
- const body=recordTaskLinkPending;recordTaskLinkBusy=true;button.disabled=true;$('#recordTaskSelect').disabled=true;$('#refreshRecordTaskLink').disabled=true;button.textContent='正在保存关联…';
+ const body=recordTaskLinkPending;recordTaskLinkBusy=true;recordTaskControls();button.textContent=create?'正在新建并关联…':'正在保存关联…';
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
  try{
-  const response=await apiFetch('/api/record/task-link',{method:'POST',signal:controller.signal,headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify(body)}),out=await response.json();
+  const response=await apiFetch(create?'/api/record/task-create':'/api/record/task-link',{method:'POST',signal:controller.signal,headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify(body)}),out=await response.json();
   if(!response.ok){if(response.status===409||response.status===400||response.status===404){recordTaskLinkPending=null;$('#refreshRecordTaskLink').classList.remove('hide')}throw Error(out.error||'关联未保存')}
-  if(!out.ok||out.record_id!==body.record_id||out.link?.task_id!==body.task_id||out.link?.child!==body.child)throw Error('关联回执不一致');
+  if(!out.ok||out.record_id!==body.record_id||out.link?.child!==body.child||(create?(!out.task?.id||out.link.task_id!==out.task.id||typeof out.created!=='boolean'):out.link?.task_id!==body.task_id))throw Error('关联回执不一致');
   const record=data.records.find(r=>r.id===body.record_id);recordTaskLinkPending=null;Object.assign(record,{linked_task_id:out.link.task_id,linked_task_at:out.link.linked_at});
-  prepareRecordTaskLink(record);$('#recordTaskLinkStatus').textContent=body.task_id?'任务关联已保存；原件与完成状态未改变。':'关联已解除；原记录和原件保留。';
- }catch(error){$('#recordTaskLinkStatus').textContent=(error.name==='AbortError'?'连接超时':error.message)+(recordTaskLinkPending?'。结果尚未核对，请用原选择重试。':'。选择与记录内容保留，请读取最新关联再核对。')}
- finally{clearTimeout(timer);recordTaskLinkBusy=false;button.disabled=false;$('#recordTaskSelect').disabled=!!recordTaskLinkPending;$('#refreshRecordTaskLink').disabled=false;button.textContent=recordTaskLinkPending?'核对并重试关联':'保存任务关联'}
-};
+  if(out.task){const i=data.tasks.findIndex(t=>t.id===out.task.id);if(i<0)data.tasks.push(out.task);else data.tasks[i]=out.task}
+  prepareRecordTaskLink(record,!create);$('#recordTaskLinkStatus').textContent=create?'新事项与关联已保存；原记录内容尚未保存，完成状态未改变。':body.task_id?'任务关联已保存；原件与完成状态未改变。':'关联已解除；原记录和原件保留。';
+ }catch(error){$('#recordTaskLinkStatus').textContent=(error.name==='AbortError'?'连接超时':error instanceof TypeError?'连接中断，请核对网络':error.message)+(recordTaskLinkPending?'。结果尚未核对，请用原选择重试。':'。选择与记录内容保留，请读取最新关联再核对。')}
+ finally{clearTimeout(timer);recordTaskLinkBusy=false;recordTaskControls();$('#saveRecordTaskLink').textContent=recordTaskLinkPending&&!recordTaskLinkPending.task?'核对并重试关联':'保存任务关联';$('#createRecordTask').textContent=recordTaskLinkPending?.task?'核对并重试新建':'新建并关联'}
+}
+$('#saveRecordTaskLink').onclick=()=>saveRecordTaskAssociation();
+$('#createRecordTask').onclick=()=>saveRecordTaskAssociation(true);
+$('#discardRecordTaskDraft').onclick=()=>{if(!recordTaskLinkPending&&!recordTaskLinkBusy)clearRecordTaskDraft()};
 $('#refreshRecordTaskLink').onclick=async()=>{
  if(recordTaskLinkBusy||recordTaskLinkPending||!recordTaskLinkContext)return;const button=$('#refreshRecordTaskLink'),id=recordTaskLinkContext.record_id,wanted=$('#recordTaskSelect').value;button.disabled=true;recordTaskLinkBusy=true;$('#saveRecordTaskLink').disabled=true;$('#recordTaskSelect').disabled=true;
- try{await load(false);const record=data.records.find(r=>r.id===id);if(!record)throw Error('记录当前不可用');prepareRecordTaskLink(record);if(!recordTaskLinkContext.inherited&&[...$('#recordTaskSelect').options].some(o=>o.value===wanted))$('#recordTaskSelect').value=wanted;$('#recordTaskLinkStatus').textContent='已读取当前关联；请核对后再保存你的选择。'}catch(error){$('#recordTaskLinkStatus').textContent=error.message+'；原选择保留。'}finally{recordTaskLinkBusy=false;button.disabled=false;$('#saveRecordTaskLink').disabled=!!recordTaskLinkContext?.inherited;$('#recordTaskSelect').disabled=!!recordTaskLinkContext?.inherited}
+ try{await load(false);const record=data.records.find(r=>r.id===id);if(!record)throw Error('记录当前不可用');prepareRecordTaskLink(record,true);if(!recordTaskLinkContext.inherited&&[...$('#recordTaskSelect').options].some(o=>o.value===wanted))$('#recordTaskSelect').value=wanted;$('#recordTaskLinkStatus').textContent='已读取当前关联；请核对后再保存你的选择。'}catch(error){$('#recordTaskLinkStatus').textContent=error.message+'；原选择保留。'}finally{recordTaskLinkBusy=false;recordTaskControls()}
 };
 
 let taskFeedbackContext=null,taskFeedbackPending=null;
@@ -483,7 +508,7 @@ $('#recordAudio').onclick=async()=>{if(micPending||readingBusy||taskFeedbackPend
 $('#recordDialog').addEventListener('cancel',e=>{if(recorder||uploading||micPending||drafting||readingBusy||careFeedbackPending||recordTaskLinkPending||recordTaskLinkBusy)e.preventDefault()});
 
 $('#retryUpload').onclick=()=>uploadFiles([...failedFiles]);
-window.addEventListener('beforeunload',e=>{if(uploading||recorder||micPending||drafting||failedFiles.length||careFeedbackPending||taskFeedbackPending||recordTaskLinkPending||recordTaskLinkBusy||timetableBusy||timetablePending){e.preventDefault();e.returnValue='';}});
+window.addEventListener('beforeunload',e=>{if(uploading||recorder||micPending||drafting||failedFiles.length||careFeedbackPending||taskFeedbackPending||recordTaskLinkPending||recordTaskLinkBusy||recordTaskCreateDirty()||timetableBusy||timetablePending){e.preventDefault();e.returnValue='';}});
 
 $('#discardFailed').onclick=()=>{if(uploading)return;failedFiles=[];$('#retryUpload').classList.add('hide');$('#discardFailed').classList.add('hide');$('#uploadStatus').textContent='已放弃待重试的资料，成功上传的原件仍保留。';};
 

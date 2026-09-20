@@ -49,7 +49,32 @@ const fs=require('node:fs/promises'),path=require('node:path');(async()=>{let br
   await history.locator('[data-record="'+id+'"]').click();assert(await p.locator('#recordDialog').evaluate(x=>x.open));assert.equal(await select.inputValue(),a.id);
   assert.equal(await p.locator('#recordDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   if(process.env.RECORD_LINK_UI_PROOF_DIR){await fs.mkdir(process.env.RECORD_LINK_UI_PROOF_DIR,{recursive:true});await p.locator('#recordTaskLink').scrollIntoViewIfNeeded();await p.screenshot({path:path.join(process.env.RECORD_LINK_UI_PROOF_DIR,'record-link-'+width+'.png')})}
-  state=await read();assert.equal(state.records.filter(r=>r.id===id).length,1);assert.deepEqual(state.tasks.find(t=>t.id===a.id).update,taskBefore);assert.deepEqual(errors,[]);await context.close();checks.push(width+': same-child link, lost-reply retry, conflict refresh/unlink, login expiry, draft preservation, original task readback and layout');
+  // New task stays inside the same record; no inference from its title, date or note.
+  await select.selectOption('');await save.click();await eventually(async()=>/关联已解除/.test(await status.innerText()),'unlink before explicit new task');
+  await p.locator('#recordTaskCreate > summary').click();
+  const title=p.locator('#recordTaskTitle'),due=p.locator('#recordTaskDue'),create=p.locator('#createRecordTask');
+  assert.equal(await title.inputValue(),'');assert.equal(await due.inputValue(),'');assert.equal(await p.locator('#recordTaskCategory').inputValue(),'');
+  await create.click();assert.match(await status.innerText(),/请填写新事项标题/);
+  const wantedTitle='虚构：两处听写再核对 '+width;await title.fill(wantedTitle);await p.locator('#recordTaskCategory').selectOption('homework');await p.locator('#recordTaskAction').fill('家长明确：先读再写两处');
+  await p.locator('#recordForm [name=note]').fill('虚构：这段原记录补充仍未保存');
+  await p.locator('#recordForm [type=submit]').click();assert.match(await p.locator('#recordError').innerText(),/新事项草稿尚未保存/);
+  // The other parent links first: rejection leaves both drafts, then explicit refresh and unlink allow a new choice.
+  record=(await read()).records.find(r=>r.id===id);await post('api/record/task-link',{record_id:id,child:kid,task_id:b.id,expected_linked_at:record.linked_task_at});
+  await create.click();await eventually(async()=>/已关联事项/.test(await status.innerText()),'create conflict');assert.equal(await title.inputValue(),wantedTitle);
+  await p.locator('#refreshRecordTaskLink').click();await eventually(async()=>/已读取当前关联/.test(await status.innerText()),'create conflict refresh');assert(await create.isDisabled());assert.equal(await title.inputValue(),wantedTitle);
+  await select.selectOption('');await save.click();await eventually(async()=>/关联已解除/.test(await status.innerText()),'explicit unlink keeps new draft');assert.equal(await title.inputValue(),wantedTitle);
+  // Expired login preserves the exact creation request; a subsequent real write loses its reply, then replays once.
+  let createAttempt=0;const requests=[];await p.route('**/api/record/task-create',async r=>{requests.push(r.request().postDataJSON());createAttempt++;if(createAttempt===1)return r.fulfill({status:401,json:{error:'虚构登录过期'}});if(createAttempt===2){await r.fetch();return r.abort('failed')}return r.continue()});
+  const beforeCreate=await read();await create.click();await p.locator('#parentLoginDialog[open]').waitFor();await p.keyboard.press('Escape');assert(await title.isDisabled());assert(await save.isDisabled());
+  await create.click();await eventually(async()=>/结果尚未核对/.test(await status.innerText()),'create lost reply');await p.keyboard.press('Escape');assert(await p.locator('#recordDialog').evaluate(x=>x.open));
+  if(process.env.RECORD_LINK_UI_PROOF_DIR){await p.locator('#recordTaskCreate').scrollIntoViewIfNeeded();await p.screenshot({path:path.join(process.env.RECORD_LINK_UI_PROOF_DIR,'record-create-pending-'+width+'.png')})}
+  await create.click();await eventually(async()=>/新事项与关联已保存/.test(await status.innerText()),'create replay success');await p.unroute('**/api/record/task-create');assert.deepEqual(requests[0],requests[1]);assert.deepEqual(requests[1],requests[2]);
+  state=await read();const made=state.tasks.find(t=>t.title===wantedTitle);assert(made);assert.equal(state.tasks.length,beforeCreate.tasks.length+1);assert.equal(state.records.length,beforeCreate.records.length);assert.equal(made.child,kid);assert.equal(made.due,'无明确截止');assert(!made.update);assert.equal(made.original_status,'待跟进');
+  record=state.records.find(r=>r.id===id);assert.equal(record.linked_task_id,made.id);assert.equal(record.source,before.source);assert.deepEqual(record.attachments,before.attachments);assert.equal(record.transcript,before.transcript);assert.equal(record.note,'未保存的家长补充');assert.equal(await p.locator('#recordForm [name=note]').inputValue(),'虚构：这段原记录补充仍未保存');
+  assert.equal(await title.inputValue(),'');assert.equal(await select.inputValue(),made.id);assert.equal(await p.locator('#recordDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);
+  await p.locator('#recordForm [type=submit]').click();await eventually(()=>p.locator('#recordDialog').evaluate(x=>!x.open),'save original after create');await p.reload();await p.waitForFunction(()=>document.querySelector('#content')?.dataset.ready==='true');await openRecord();assert.equal(await select.inputValue(),made.id);assert.equal(await p.locator('#recordForm [name=note]').inputValue(),'虚构：这段原记录补充仍未保存');await p.keyboard.press('Escape');
+  await p.locator('nav [data-page=home]').click();await p.locator('[data-task="'+made.id+'"]').first().click();assert.equal(await p.locator('#taskFeedbackHistory [data-record="'+id+'"]').count(),1);assert.equal(await p.locator('#taskFeedbackHistory img').count(),1);await p.keyboard.press('Escape');
+  state=await read();assert.equal(state.records.filter(r=>r.id===id).length,1);assert.deepEqual(state.tasks.find(t=>t.id===a.id).update,taskBefore);assert.deepEqual(errors,[]);await context.close();checks.push(width+': same-child link, lost-reply retry, conflict refresh/unlink, login expiry, draft preservation, original task readback, explicit new task, conflict refresh, login/lost-reply retries, preserved drafts and layout');
  }
  console.log(JSON.stringify({passed:true,checks,syntheticOnly:true,realPhoneTested:false}));
 }finally{await browser?.close();await server?.stop()}})().catch(e=>{console.error(e.stack||e);process.exitCode=1});
