@@ -223,9 +223,9 @@ class RecordTaskCreateTests(unittest.TestCase):
         task=done['task'];self.assertEqual((task['linked_record_ids'],task['feedback_ids'],task['update'],task['history']),([ident],[],None,[]))
         self.assertEqual((task['focus']['category'],task['focus']['next_action'],task['focus']['box']),('homework',draft['advice'],'inbox'))
         listed=next(t for t in self.app.snapshot()['tasks'] if t['id']==task_id);self.assertEqual(self.app.task_status(listed,None),'待跟进')
-        now=self.counts();self.assertEqual({k:now[k]-counts.get(k,0) for k in now if now[k]!=counts.get(k,0)},dict(manual_tasks=1,task_focus=1,task_focus_history=1,revisions=1))
+        now=self.counts();self.assertEqual({k:now[k]-counts.get(k,0) for k in now if now[k]!=counts.get(k,0)},dict(manual_tasks=1,task_focus=1,task_focus_history=1,revisions=1,record_task_creations=1))
         for line in set(dump.splitlines())^set(self.dump().splitlines()):
-            self.assertTrue(any(name in line for name in ('"manual_tasks"','"task_focus"','"task_focus_history"','"revisions"','"records"','sqlite_sequence')),line)
+            self.assertTrue(any(name in line for name in ('"manual_tasks"','"task_focus"','"task_focus_history"','"revisions"','"records"','"record_task_creations"','sqlite_sequence')),line)
         self.assertEqual(self.app.record_history(ident)['history'][0]['previous']['source'],before['source'])
         # Goal freshness follows the explicit link: a judgment that cited the record before is flagged for another look.
         with self.app.connect() as c:
@@ -252,6 +252,33 @@ class RecordTaskCreateTests(unittest.TestCase):
         # Moved to another task by the parent: the old request is refused as well.
         self.link(ident,self.OTHER,gone);self.refused('record_task_link_conflict',409,lambda:self.create(ident))
         self.assertEqual(self.row(ident)['linked_task_id'],self.OTHER)
+
+    def test_creation_receipt_binds_record_payload_and_original_link_version(self):
+        ident,_=self.saved();other,_=self.saved();first=self.create(ident);task_id=first['link']['task_id']
+        # A different record may legitimately be linked to that same task, but it did not make this creation request.
+        self.link(other,task_id)
+        self.refused('record_task_link_conflict',409,lambda:self.create(other))
+        self.refused('record_task_link_conflict',409,lambda:self.create(ident,expected='changed-request-version'))
+        gone=self.link(ident,'',first['link']['linked_at'])['link']['linked_at'];self.link(ident,task_id,gone)
+        self.refused('record_task_link_conflict',409,lambda:self.create(ident))
+        self.assertEqual(len(self.made()),1)
+        # An ordinary independently-created task has no atomic record-creation receipt.
+        third,_=self.saved();key='synthetic-ordinary-task-key';task=self.app.new_task(dict(self.draft(key),child='示例甲'))
+        self.link(third,task['id'])
+        self.refused('record_task_link_conflict',409,lambda:self.create(third,key=key))
+
+    def test_two_new_requests_for_one_record_create_one_task_and_no_orphan(self):
+        ident,_=self.saved();before=self.counts();results=[];gate=threading.Barrier(2)
+        def attempt(key):
+            gate.wait()
+            try:results.append(self.create(ident,key=key)['created'])
+            except self.app.RecordError as error:results.append(error.code)
+        workers=[threading.Thread(target=attempt,args=('synthetic-create-concurrent-'+str(i),)) for i in range(2)]
+        [w.start() for w in workers];[w.join() for w in workers]
+        self.assertCountEqual(results,[True,'record_task_create_linked'])
+        after=self.counts();self.assertEqual(after['manual_tasks']-before['manual_tasks'],1)
+        self.assertEqual(after['record_task_creations']-before['record_task_creations'],1)
+        self.assertEqual(self.revisions(ident),1)
 
     def test_a_linked_or_stale_record_refuses_a_new_key_and_leaves_no_orphan_task(self):
         ident,_=self.saved();version=self.link(ident,self.TASK)['link']['linked_at']

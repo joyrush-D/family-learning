@@ -155,6 +155,7 @@ def connect():
     c.execute('CREATE TABLE IF NOT EXISTS task_updates (id TEXT PRIMARY KEY, status TEXT, note TEXT, updated TEXT)')
     c.execute('CREATE TABLE IF NOT EXISTS task_history (id INTEGER PRIMARY KEY, task_id TEXT, status TEXT, note TEXT, updated TEXT)')
     c.execute('CREATE TABLE IF NOT EXISTS manual_tasks (id TEXT PRIMARY KEY, child TEXT NOT NULL, title TEXT NOT NULL, due TEXT NOT NULL, original_status TEXT NOT NULL, source TEXT NOT NULL, action TEXT NOT NULL)')
+    c.execute('CREATE TABLE IF NOT EXISTS record_task_creations (task_id TEXT PRIMARY KEY, record_id INTEGER NOT NULL, request_hash TEXT NOT NULL, linked_at TEXT NOT NULL)')
     c.execute('CREATE TABLE IF NOT EXISTS profile_overrides (child_id TEXT PRIMARY KEY, name TEXT NOT NULL, grade TEXT NOT NULL, classroom TEXT NOT NULL, version INTEGER NOT NULL)')
     c.execute('CREATE TABLE IF NOT EXISTS profile_aliases (alias TEXT PRIMARY KEY, child_id TEXT NOT NULL)')
     c.execute('CREATE TABLE IF NOT EXISTS profile_history (child_id TEXT NOT NULL, version INTEGER NOT NULL, previous TEXT NOT NULL, current TEXT NOT NULL, reason TEXT NOT NULL, changed TEXT NOT NULL, PRIMARY KEY(child_id,version))')
@@ -982,6 +983,7 @@ def create_record_task(obj):
     key=draft.get('request_key','')
     if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}',key): raise RecordError('请保留本次提交标识后重试')
     child=clean(obj,'child',100);task_id=manual_task_id(key)
+    request_hash=hashlib.sha256(json.dumps(obj,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
     with connect() as c:
         c.execute('BEGIN IMMEDIATE')
         row=c.execute('SELECT * FROM records WHERE id=?',(ident,)).fetchone()
@@ -998,11 +1000,16 @@ def create_record_task(obj):
         except ValueError as e: raise RecordError(str(e)) from None
         # A repeated request only reports the task it made. Once the parent has taken the record off or moved it, the old
         # request must not hang it back, and the same key cannot attach another record to a task that already exists.
-        if replayed and row['linked_task_id']!=task_id:
+        receipt=c.execute('SELECT * FROM record_task_creations WHERE task_id=?',(task_id,)).fetchone()
+        if replayed and (not receipt or receipt['record_id']!=ident or receipt['request_hash']!=request_hash or
+                         row['linked_task_id']!=task_id or row['linked_task_at']!=receipt['linked_at']):
             raise RecordError('这次新建已保存过；这条记录的事项关联随后已在别处更改，现有状态保留不变，请刷新核对',409,'record_task_link_conflict')
         link=dict(record_id=ident,child=child,task_id=task_id)|({'expected_linked_at':obj['expected_linked_at']} if 'expected_linked_at' in obj else {})
         # A refusal or failure here also undoes the task inserted above.
-        return link_record_task(link,connection=c)|dict(created=not replayed)
+        result=link_record_task(link,connection=c)|dict(created=not replayed)
+        if not replayed:
+            c.execute('INSERT INTO record_task_creations VALUES (?,?,?,?)',(task_id,ident,request_hash,result['link']['linked_at']))
+        return result
 
 def material_images(ids):
     if not isinstance(ids,list) or len(ids)>3 or any(not isinstance(i,str) or not re.fullmatch('[a-f0-9]{32}',i) for i in ids):
