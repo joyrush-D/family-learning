@@ -1125,6 +1125,37 @@ class MediaFeedbackEvidenceTests(unittest.TestCase):
             self.assertTrue(next(e for e in ctx['evidence'] if e['ref']=='record:%d'%saved['record_id'])['media_unread'])
         self.assertEqual(by[pending['record_id']]['transcript_state'],'待核对');self.assertNotIn('虚构未核对内容',agent._json(ctx['evidence']))
 
+    def test_unread_media_is_rejected_for_both_cause_directions_and_checked_text_reaches_a_proposal(self):
+        # Fresh goals isolate the guard from the normal retry backoff after a rejected model reply.
+        for kind, fields, allowed in (
+            ('pending', dict(transcript='SECRET_UNCHECKED_WORDS',transcript_state='待核对'), False),
+            ('bare', {}, False),
+            ('checked', dict(transcript='虚构核对：听写漏写了一个词',transcript_state='已核对'), True),
+            ('parent-note', dict(note='家长观察：第一次漏写一个词',transcript='SECRET_UNCHECKED_WORDS',transcript_state='待核对'), True),
+        ):
+            saved=self.media(**fields);ref='record:%d'%saved['record_id']
+            for side in ('support','against'):
+                with self.subTest(kind=kind,side=side):
+                    self.ident=self.action('create',child_id='child-1',title='虚构独立核对 '+kind+side,subject='英语',record_ids=[saved['record_id']])['id']
+                    ctx=self.ctx()
+                    def reply(messages,schema,name,timeout,**kwargs):
+                        value=json.loads(messages[-1]['content']);self.assertNotIn('SECRET_UNCHECKED_WORDS',agent._json(value))
+                        result=synthetic_plan(value)
+                        result['proposal']['hypotheses']=[dict(reason='虚构原因',support=[ref] if side=='support' else [],against=[ref] if side=='against' else [],test='请核对本次帮助条件',status='有支持' if side=='support' else '有反证')]
+                        return result
+                    self.model.side_effect=reply
+                    model_result=reply([{'content':agent._json(dict(evidence=ctx['evidence'],as_of=self.now.date().isoformat()))}],None,None,None)
+                    if not allowed:
+                        with self.assertRaisesRegex(agent.AgentError,'未核对的原件或转写'):
+                            self.store._proposal(model_result,ctx,self.now)
+                    else:self.store._proposal(model_result,ctx,self.now)
+                    calls=self.model.call_count;result=self.store.process(self.ident,self.now,explicit=True)
+                    self.assertEqual(self.model.call_count,calls+1)
+                    self.assertEqual(result['state'],'ready' if allowed else 'error')
+                    goal=self.goal();self.assertIsNone(goal['current_plan'])
+                    if allowed:self.assertEqual(goal['pending']['hypotheses'][0][side],[ref])
+                    else:self.assertIsNone(goal['pending'])
+
     def test_note_with_transcript_is_one_ref_and_a_retry_adds_nothing(self):
         saved=self.media(note='虚构家长说明：第二遍才听出来。',transcript='虚构转写内容',transcript_state='已核对');again=self.app.save_task_feedback(dict(self.last_body))
         self.assertTrue(again['replayed']);self.assertEqual(again['record_id'],saved['record_id'])

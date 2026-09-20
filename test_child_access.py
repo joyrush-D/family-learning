@@ -50,7 +50,8 @@ def check():
         private_file = app.save_upload(io.BytesIO(b'private fictional original'), 26, 'private.txt')
         task = reading('submit', task, work_text='家长先保存的虚构作品', attachments=[shared_file['id']])
         app.save_record(dict(child='示例星星', day='2026-09-08', category='家长观察', title='PARENT_RECORD_PRIVATE_CANARY',
-                             note='PRIVATE_NOTE_CANARY', attachments=[private_file['id']]))
+                             note='PRIVATE_NOTE_CANARY', attachments=[private_file['id']],
+                             transcript='PARENT_TRANSCRIPT_PRIVATE_CANARY',transcript_state='已核对'))
         server = app.ThreadingHTTPServer(('127.0.0.1', 0), app.Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()

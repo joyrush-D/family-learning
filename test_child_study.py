@@ -39,6 +39,8 @@ with tempfile.TemporaryDirectory(prefix='synthetic-child-study-') as folder, pat
             return store.action(dict(req(id=ident,version=row['version'],action=action,**fields),child_id=row['child_id'],day=row['day']))
         parent_action(assigned['id'],'finish',result='需要帮助',note='PARENT_NOTE_PRIVATE_CANARY')
         original_record=parent_row(assigned['id'])['record_id']
+        with app.connect() as c:
+            c.execute('UPDATE records SET transcript=?,transcript_state=? WHERE id=?',('PARENT_TRANSCRIPT_PRIVATE_CANARY','已核对',original_record))
         server=app.ThreadingHTTPServer(('127.0.0.1',0),app.Handler)
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
         def http(path,obj=None,session=None,csrf=True,parent=False,headers=None):
