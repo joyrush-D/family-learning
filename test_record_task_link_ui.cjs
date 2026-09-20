@@ -1,5 +1,5 @@
 // Disposable synthetic demo only. Optional PLAYWRIGHT_MODULE, PLAYWRIGHT_CHANNEL,
-// FAMILY_TEST_PYTHON and TASK_MEDIA_UI_PROOF_DIR. No family account or model calls.
+// FAMILY_TEST_PYTHON and RECORD_LINK_UI_PROOF_DIR. No family account or model calls.
 const assert=require('node:assert/strict'),net=require('node:net');
 const {spawn}=require('node:child_process'),{once}=require('node:events');
 const {setTimeout:delay}=require('node:timers/promises'),{randomUUID}=require('node:crypto');
