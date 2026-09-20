@@ -271,5 +271,37 @@ class CliTests(unittest.TestCase):
         self.assertEqual(rendered.size, (200, 120))
 
 
+    @unittest.skipUnless(importlib.util.find_spec('PIL'), 'Pillow 仅用于画框预览')
+    def test_preview_orientation_keeps_display_coordinates_and_original(self):
+        from PIL import Image, ImageDraw
+        import io
+        colors = [(240, 230, 20), (20, 180, 220), (210, 30, 190), (30, 170, 50)]
+        original = Image.new('RGB', (2400, 1600)); draw = ImageDraw.Draw(original)
+        for bounds, color in zip([(0,0,1199,799), (1200,0,2399,799), (0,800,1199,1599), (1200,800,2399,1599)], colors):
+            draw.rectangle(bounds, fill=color)
+        orders = ['ABCD','BADC','DCBA','CDAB','ACBD','CADB','DBCA','BDAC']
+        for fmt, orientation in [('JPEG', n) for n in range(1,9)] + [('JPEG', None), ('PNG', None)]:
+            with self.subTest(format=fmt, orientation=orientation):
+                stream = io.BytesIO(); metadata = Image.Exif()
+                if orientation: metadata[274] = orientation
+                original.save(stream, format=fmt, exif=metadata)
+                raw = stream.getvalue(); image = dict(data=raw, mime='image/'+fmt.lower())
+                out = self.root / 'oriented.jpg'
+                fwq.render_preview(image, [region(x=500,y=500,w=400,h=400,label='box')], str(out))
+                with Image.open(out) as rendered:
+                    width,height = rendered.size
+                    self.assertEqual(rendered.size, (1600,2400) if orientation and orientation>=5 else (2400,1600))
+                    self.assertIn(rendered.getexif().get(274), (None,1))
+                    order = orders[(orientation or 1)-1]
+                    for (x,y), letter in zip([(0.25,0.25),(0.75,0.25),(0.25,0.75),(0.75,0.75)],order):
+                        actual = rendered.getpixel((round(width*x),round(height*y)))
+                        self.assertLess(max(abs(a-b) for a,b in zip(actual,colors[ord(letter)-65])),25)
+                    # Right edge is at 90% of the displayed width regardless of stored orientation.
+                    red = rendered.getpixel((round(width*.9)-2,round(height*.75)))
+                    self.assertGreater(red[0], red[1]+70)
+                    self.assertGreater(red[0], red[2]+70)
+                self.assertEqual(image['data'], raw)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

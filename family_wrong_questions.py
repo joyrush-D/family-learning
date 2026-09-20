@@ -238,12 +238,12 @@ def load_image(path):
 def render_preview(image, regions, out_path):
     """把标注框画到照片副本上，供人工核对；仅在安装 Pillow 时可用。"""
     try:
-        from PIL import Image, ImageDraw, ImageFont
+        from PIL import Image, ImageDraw, ImageFont, ImageOps
     except ImportError:
         raise RuntimeError('画框预览需要Pillow（pip install Pillow）；结构化JSON不受影响')
     import io
     mime = image['mime']
-    source = Image.open(io.BytesIO(image['data'])).convert('RGB')
+    source = ImageOps.exif_transpose(Image.open(io.BytesIO(image['data']))).convert('RGB')
     width, height = source.size
     canvas = source.copy()
     draw = ImageDraw.Draw(canvas)
