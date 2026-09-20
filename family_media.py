@@ -260,14 +260,29 @@ def run_one(app, store, now):
 
 
 # Drafts are derived from linked originals; they never overwrite messages or learning facts.
-def draft_input(store, c, source, message):
+SCHOOL_MATERIAL = 'school_material'
+
+
+def _material_kind(message):
     from family_qq_capture import KIND, NOTICE
-    if message.get('kind') == KIND and message.get('text', '').startswith(NOTICE+'\n截图本机文字识别（'):
-        # Already routed to school task drafts; don't turn the same notification into a study record.
-        return None
+    ocr = message.get('kind') == KIND and message.get('text', '').startswith(NOTICE+'\n截图本机文字识别（')
+    return SCHOOL_MATERIAL if ocr else ''
+
+
+def draft_input(store, c, source, message):
+    from family_agent import _json
+    from family_qq_capture import KIND, NOTICE
     links = [r['upload_id'] for r in c.execute(
         'SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=? ORDER BY upload_id',
         (source['id'], message['id']))]
+    kind = _material_kind(message); screenshot = None
+    if kind:
+        # Already routed to school task drafts; the screenshot alone never becomes a study record.
+        # Only explicitly linked extra originals are read, as school material for parent review.
+        screenshot = re.fullmatch(r'fragment-([a-f0-9]{40})', message.get('id', ''))
+        if screenshot is None:
+            return None
+        links = [i for i in links if i != screenshot.group(1)[:32]]  # The capture's own upload ID, not its name.
     if not links:
         return None
     _authorized(store, c, source, message)
@@ -275,45 +290,75 @@ def draft_input(store, c, source, message):
     child = next(p for p in store.profiles(c) if p['id'] == source['child_id'])
     images, originals = [], []
     for ident in links:
+        saved = c.execute('SELECT mime FROM uploads WHERE id=?', (ident,)).fetchone()
+        # Say "unsupported type" before any other check, so a PDF/DOCX is never reported as a generic failure.
+        require(saved is None or saved['mime'] in ('image/jpeg', 'image/png', 'image/webp'), 'draft_image_required')
         row = store._message_upload(c, source['child_id'], ident)
         require(row['mime'] in ('image/jpeg', 'image/png', 'image/webp'), 'draft_image_required')
         body = read_file(store.data / 'uploads' / ident)
         require(len(body) == row['size'], 'media_file_changed')
+        digest = hashlib.sha256(body).hexdigest()
+        if screenshot and hashlib.sha256(_json([KIND, source['id'], source['child_id'], message['text'][len(NOTICE) + 1:],
+                                                digest]).encode()).hexdigest()[:40] == screenshot.group(1):
+            continue  # The same capture uploaded again under another ID is still not an original.
         images.append(dict(mime=row['mime'], data=body))
-        originals.append([ident, row['mime'], hashlib.sha256(body).hexdigest()])
+        originals.append([ident, row['mime'], digest])
+    if not images:
+        return None
     text = json.dumps(dict(source_message=message, source_name=source['name']), ensure_ascii=False)
     require(sum(len(i['data']) for i in images) + len(text.encode()) <= 20 * 1024 * 1024, 'draft_originals_too_large')
-    fingerprint = hashlib.sha256(json.dumps([1, source, child, message, originals],
+    # The legacy fingerprint is unchanged; a typed draft can never match a saved draft of another type.
+    fingerprint = hashlib.sha256(json.dumps(([2, kind] if kind else [1]) + [source, child, message, originals],
         ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-    return dict(fingerprint=fingerprint, images=images, text=text, child=child['name'], upload_ids=links)
+    return dict(fingerprint=fingerprint, images=images, text=text, child=child['name'],
+                upload_ids=[o[0] for o in originals], kind=kind)
 
 
 def draft_key(source, message):
     return 'message-draft:' + hashlib.sha256(json.dumps([source['id'], message['id']]).encode()).hexdigest()[:40]
 
 
+def _saved_draft(row, value):
+    """Show a saved draft only for the same fingerprint and, when typed, the same checked shape."""
+    import family_llm
+    if row is None or row['fingerprint'] != value['fingerprint']:
+        return None
+    draft = json.loads(row['payload'])
+    if not value['kind']:
+        return draft
+    try:
+        require(isinstance(draft, dict) and draft.pop('kind', None) == value['kind'], 'draft_kind_mismatch')
+        return family_llm.validate_school_material(draft)
+    except (MediaError, family_llm.LLMDraftError):
+        return None
+
+
 def draft_view(store, c, source, message):
+    kind = _material_kind(message); typed = dict(kind=kind) if kind else {}
     try:
         value = draft_input(store, c, source, message)
         if value is None:
             return None
     except Exception as error:
-        explanation = {'draft_image_required':'目前自动整理支持JPG、PNG、WebP图片；其他文件可保留并手动记录。',
+        explanation = {'draft_image_required':'补充原件中有PDF、DOCX等非图片文件，目前尚不支持自动整理，本次未读取任何原件；原件保留，可手动核对。' if kind
+                           else '目前自动整理支持JPG、PNG、WebP图片；其他文件可保留并手动记录。',
                        'draft_too_many_originals':'一次最多整理3张原件，请分次关联或手动记录。',
                        'draft_originals_too_large':'本次原件与文字超过20MiB，可分次关联或手动记录。'}.get(
                            error.code if isinstance(error, MediaError) else '', '当前原件或授权无法完整核对，可保留原件并手动记录。')
-        return dict(state='unavailable', explanation=explanation)
+        return dict(state='unavailable', explanation=explanation, **typed)
     row = c.execute('SELECT * FROM agent_message_drafts WHERE source_id=? AND message_id=?',
                     (source['id'], message['id'])).fetchone()
-    if row and row['fingerprint'] == value['fingerprint']:
-        return dict(state='ready', draft=json.loads(row['payload']), updated=row['updated'], upload_ids=value['upload_ids'])
+    draft = _saved_draft(row, value)
+    if draft is not None:
+        return dict(state='ready', draft=draft, updated=row['updated'], upload_ids=value['upload_ids'], **typed)
     key = draft_key(source, message)
     job = c.execute('SELECT * FROM agent_jobs WHERE id=?', (key,)).fetchone()
     current = hashlib.sha256(json.dumps({'material': value['fingerprint']}, ensure_ascii=False,
         separators=(',', ':'), sort_keys=True).encode()).hexdigest()
     failed = job and job['fingerprint'] == current and job['error']
-    return dict(state='error' if failed else 'pending', job_id=key,
-                explanation='原件整理暂未成功；原图保留，可稍后重试或手动记录。' if failed else 'Agent将在后台整理已关联的图片，结果仍需家长核对。')
+    waiting = 'Agent将在后台整理已关联的补充原件；结果只供家长核对，不会改动任务或学习记录。' if kind else 'Agent将在后台整理已关联的图片，结果仍需家长核对。'
+    return dict(state='error' if failed else 'pending', job_id=key, **typed,
+                explanation='原件整理暂未成功；原图保留，可稍后重试或手动记录。' if failed else waiting)
 
 
 def prepare_draft(store, now):
@@ -354,7 +399,11 @@ def prepare_draft(store, now):
         return dict(used=0, failed=0)
     source, message, value, key, fp = selected
     try:
-        result = family_llm.extract_draft(value['text'], value['images'], target_child=value['child'], timeout=45, data_path=store.data)
+        typed = dict(school_material=True) if value['kind'] else {}
+        result = family_llm.extract_draft(value['text'], value['images'], target_child=value['child'], timeout=45,
+                                          data_path=store.data, **typed)
+        if value['kind']:  # Re-checked here: no score, mastery or record field is ever persisted for school material.
+            result = dict(kind=value['kind'], **family_llm.validate_school_material(result))
         with store._db() as c:
             c.execute('BEGIN IMMEDIATE')
             current = draft_input(store, c, source, message)

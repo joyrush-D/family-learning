@@ -80,6 +80,26 @@ try:
         messages=state['calls'][-1][1]['messages']
         assert json.loads(messages[1]['content'][1]['text'])==dict(target_child='示例乙')
         assert '不输出其他学生' in messages[0]['content'] and '没有匹配行' in messages[0]['content']
+        material=dict(title='虚构仿写资料',note='范文为参考材料，未见孩子作答。',uncertainties=['发送日期未知'])
+        image=dict(data=b'synthetic-original',mime='image/png');state['mode']=material
+        assert llm.extract_draft('{"source_message":{"time":""}}',[image],target_child='示例甲',school_material=True)==material
+        body=state['calls'][-1][1];schema=body['response_format']['json_schema']
+        assert schema['name']=='family_school_material_draft' and set(schema['schema']['properties'])=={'title','note','uncertainties'}
+        assert schema['schema']['additionalProperties'] is False and 'score' not in json.dumps(schema['schema'])
+        assert '不是附件原件' in body['messages'][0]['content'] and '发送日期未知' in body['messages'][0]['content']
+        assert len(body['messages'][1]['content'])==3 and json.loads(body['messages'][1]['content'][1]['text'])==dict(target_child='示例甲')
+        before=len(state['calls'])
+        for args,kwargs in [(('虚构通知',[image]),{}),(('虚构通知',[]),dict(target_child='示例甲')),(('',[image]),dict(target_child='示例甲'))]:
+            try: llm.extract_draft(*args,school_material=True,**kwargs)
+            except ValueError: pass
+            else: raise AssertionError('school material accepted without notice, original or target child')
+        assert len(state['calls'])==before
+        for bad in [DRAFT,material|dict(score=90),material|dict(title=' '),dict(title='虚构',note='虚构')]:
+            state['mode']=bad
+            try: llm.extract_draft('虚构通知',[image],target_child='示例甲',school_material=True)
+            except llm.LLMDraftError: pass
+            else: raise AssertionError('school material accepted record fields or an incomplete draft')
+        state['mode']='ok'
         before=len(state['calls'])
         for name in [None, 'x'*81, '无效\n称呼']:
             try: llm.extract_draft('虚构资料',target_child=name)

@@ -408,6 +408,86 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(self.store.message(dict(child_id='child-1',source_id=self.source['id'],message_id='1'),dict)['material_draft']['state'],'unavailable')
         with self.assertRaises(agent.AgentError):self.store.message(dict(child_id='child-2',source_id=self.source['id'],message_id='1'),dict)
 
+    def school_fragment(self, text):
+        import base64, family_qq_capture as qq
+        self.source=dict(id='qq:123456',platform='qq',child_id='child-1',name='虚构QQ班级',cursor='100',enabled=True);self.write_config()
+        reply=qq.save_fragment(self.store,dict(source_id=self.source['id'],child_id='child-1',captured_at='2026-02-10T08:06:00+08:00',
+            text='截图本机文字识别（可能有误，请对照原图）：\n'+text,png=base64.b64encode(png()).decode()))
+        return dict(child_id='child-1',source_id=self.source['id'],message_id=reply['message_id'])
+
+    def link(self, keys, ident, action='attach'):
+        self.store.message_attachment(keys|dict(attachment_id=ident,action=action),dict)
+
+    def facts(self):
+        with self.store._db() as c:
+            tables=[r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('agent_message_drafts','agent_jobs') ORDER BY name")]
+            return {t:[tuple(r) for r in c.execute('SELECT * FROM "'+t+'"')] for t in tables}
+
+    def test_school_material_reads_only_linked_extra_originals_once_and_leaves_facts(self):
+        import family_llm
+        keys=self.school_fragment('英语：按所附范文完成仿写。');view=lambda:self.store.message(keys,dict)['material_draft']
+        with self.store._db() as c:
+            c.execute("INSERT INTO manual_tasks(id,child,title,due,original_status,source,action) VALUES('task-1','child-1','虚构学校任务','2026-02-11','待完成','Agent建议:agent-x','家长已确认完成')")
+        result=dict(title='虚构仿写资料',note='范文与题目为参考材料；未见孩子作答。',uncertainties=['发送日期未知'])
+        with patch.object(family_llm,'extract_draft',return_value=result) as model:
+            self.assertIsNone(view());self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=0,failed=0))
+            self.link(keys,self.seed_upload('d'*32,png()))  # The same capture uploaded again is not an original.
+            self.assertIsNone(view());self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=0,failed=0));model.assert_not_called()
+            extra=self.seed_upload('b'*32,png(64,96));self.link(keys,extra)
+            self.assertEqual((view()['state'],view()['kind']),('pending','school_material'))
+            facts=self.facts();saved=self.db_rows('SELECT payload FROM agent_messages')
+            self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=1,failed=0))
+            text,images=model.call_args.args[:2];context=json.loads(text)
+            self.assertEqual(context['source_message'],json.loads(saved[0]['payload']))
+            self.assertEqual(context['source_message']['time'],'');self.assertIn('captured_at',context['source_message'])
+            self.assertEqual([i['data'] for i in images],[png(64,96)])  # Neither copy of the capture is sent as an original.
+            self.assertIs(model.call_args.kwargs['school_material'],True);self.assertEqual(model.call_args.kwargs['target_child'],'示例甲')
+            ready=view();self.assertEqual((ready['state'],ready['kind'],ready['draft'],ready['upload_ids']),('ready','school_material',result,[extra]))
+            self.assertEqual(json.loads(self.db_rows('SELECT payload FROM agent_message_drafts')[0]['payload'])['kind'],'school_material')
+            self.assertEqual(media.prepare_draft(self.store,self.now+dt.timedelta(minutes=1)),dict(used=0,failed=0));self.assertEqual(model.call_count,1)
+            self.assertEqual(self.facts(),facts);self.assertEqual(self.db_rows('SELECT payload FROM agent_messages'),saved)
+            with self.assertRaises(agent.AgentError):self.store.message(keys|dict(child_id='child-2'),dict)
+            self.write_config(enabled=False);self.assertEqual(view()['state'],'unavailable')
+            self.write_config();self.assertEqual(view()['state'],'ready')
+            legacy=dict(title='虚构旧草稿',subject='英语',score=95,total=100,note='旧结构',uncertainties=[])
+            with self.store._db() as c:c.execute('UPDATE agent_message_drafts SET payload=?',(json.dumps(legacy),))
+            self.assertEqual(view()['state'],'pending')  # A saved draft of another type is never shown.
+            second=self.seed_upload('c'*32,png(32,48));self.link(keys,second);self.assertEqual(view()['state'],'pending')
+            self.assertEqual(media.prepare_draft(self.store,self.now+dt.timedelta(minutes=2)),dict(used=1,failed=0))
+            self.assertEqual(len(model.call_args.args[1]),2);self.assertEqual(view()['upload_ids'],[extra,second])
+            self.link(keys,second,'detach');self.assertEqual(view()['state'],'pending')
+            file=self.data/'uploads'/('e'*32);file.write_bytes(b'%PDF-synthetic')
+            with self.store._db() as c:
+                c.execute('INSERT INTO uploads(id,name,size,mime,created) VALUES(?,?,?,?,?)',('e'*32,'synthetic.pdf',14,'application/pdf',self.now.isoformat()))
+            self.link(keys,'e'*32);calls=model.call_count
+            self.assertEqual((view()['state'],view()['kind']),('unavailable','school_material'));self.assertIn('PDF',view()['explanation'])
+            self.assertEqual(media.prepare_draft(self.store,self.now+dt.timedelta(minutes=3)),dict(used=0,failed=0));self.assertEqual(model.call_count,calls)
+            self.link(keys,'e'*32,'detach');self.link(keys,extra,'detach');self.assertIsNone(view())  # Capture only: nothing is shown again.
+        self.assertEqual(self.db_rows('SELECT * FROM records'),[]);self.assertEqual(len(self.db_rows('SELECT * FROM manual_tasks')),1)
+
+    def test_school_material_rejects_fact_fields_and_changes_during_inference(self):
+        import family_llm
+        result=dict(title='虚构成绩表资料',note='成绩表属于参考材料。',uncertainties=[])
+        keys=self.school_fragment('数学：订正所附试卷。');self.link(keys,self.seed_upload('b'*32,png(64,96)));facts=self.facts()
+        for minute,bad in [(0,result|dict(score=95,total=100)),(6,dict(title='虚构',subject='数学',score=95,total=100,note='旧结构',uncertainties=[]))]:
+            with patch.object(family_llm,'extract_draft',return_value=bad):
+                self.assertEqual(media.prepare_draft(self.store,self.now+dt.timedelta(minutes=minute)),dict(used=1,failed=1))
+        view=self.store.message(keys,dict)['material_draft'];self.assertEqual((view['state'],view['kind']),('error','school_material'))
+        self.link(keys,'b'*32,'detach')
+        changes=dict(detach=lambda k,i:self.link(k,i,'detach'),disable=lambda k,i:self.write_config(enabled=False),
+                     rebind=lambda k,i:self.write_config(child_id='child-2'))
+        for index,(name,change) in enumerate(changes.items()):
+            self.write_config();keys=self.school_fragment('虚构通知：'+name);ident=self.seed_upload(str(index)*32,png(40+index,50));self.link(keys,ident)
+            def during(*args,change=change,keys=keys,ident=ident,**kwargs):
+                change(keys,ident);return result
+            with patch.object(family_llm,'extract_draft',side_effect=during) as model:
+                self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=1,failed=1),name);model.assert_called_once()
+            try:self.assertNotEqual((self.store.message(keys,dict)['material_draft'] or {}).get('state'),'ready',name)
+            except agent.AgentError:pass
+        self.assertEqual(self.db_rows('SELECT * FROM agent_message_drafts'),[]);self.write_config()
+        setup=('uploads','agent_messages','agent_message_attachments','agent_sources','agent_media')  # Changed by this test's own links.
+        self.assertEqual({k:v for k,v in self.facts().items() if k not in setup},{k:v for k,v in facts.items() if k not in setup})
+
 
 if __name__ == '__main__':
     unittest.main()
