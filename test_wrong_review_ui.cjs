@@ -181,6 +181,13 @@ async function proof(p, name) {
         }, 'two review records persisted');
         await fit(p);
         await proof(p, 'wrong-saved-' + width);
+        assert.equal(await p.locator('.wrong-saved [data-record]').count(),2);
+        await p.locator('.wrong-saved [data-record]').first().click();
+        await p.locator('#recordDialog[open]').waitFor();
+        assert.equal(await p.locator('#recordTaskLink').isVisible(),true);
+        assert.equal(await p.locator('#recordForm [name=source]').inputValue(),'错题照片核对');
+        await p.keyboard.press('Escape');
+
         const persisted = (await (await fetch(host.url+'api/state')).json()).records.filter(r=>r.source==='错题照片核对');
         const tagged = persisted.find(r=>r.title.includes('第4题'));
         assert(tagged.note.includes('知识点（家长核对）：除法口诀'));

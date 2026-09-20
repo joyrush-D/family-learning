@@ -203,9 +203,9 @@ async function save() {
     if (!r.ok) throw new Error(out.error || '保存失败');
     state.draft = null; state.review = []; state.ids = [];
     paint();
+    let refreshed=true;try{await ctx.reload?.()}catch{refreshed=false}
     root.querySelector('[data-wrong-result]').innerHTML =
-      `<div class="note wrong-saved">已保存 ${out.count} 条错题学习记录，并关联照片原件。<br>可以在“学习任务与进展”里继续记订正和复测；记录不代表掌握结论。</div>`;
-    await ctx.reload?.();
+      `<div class="note wrong-saved">已保存 ${out.count} 条错题学习记录，并关联照片原件。<br>可打开原记录关联任务，继续记订正和复测；记录不代表掌握结论。${refreshed?(out.saved||[]).map(r=>`<button type="button" data-record="${esc(r.id)}">关联任务 / 查看原记录</button>`).join(''):'<p>记录已保存，列表暂未更新；请刷新后查看原记录。</p>'}</div>`;
   } catch (e) { setError(e.message || '保存未完成，草稿仍在，请重试。'); }
   finally { busy = false; }
 }
