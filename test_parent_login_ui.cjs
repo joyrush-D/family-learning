@@ -11,7 +11,8 @@ async function service(){
  const code=`import json, app, family_access
 app.read=lambda name: '| child-1 | 示例孩子 | 未填写 | 10岁 | 四年级 |\\n' if name=='家庭运行规则.md' else '# 虚构测试资料\\n'
 config=family_access.make_config('https://family.example.test/family','parent','synthetic-parent-password-123')
-p=app.DATA/'access.json';p.write_text(json.dumps(config));p.chmod(0o600)
+p=app.DATA/'access.json'
+if not p.exists():p.write_text(json.dumps(config));p.chmod(0o600)
 app.connect().close();app.prepare_assets()
 class TestHandler(app.Handler):
  def do_GET(self):
@@ -29,10 +30,15 @@ try:s.serve_forever()
 except KeyboardInterrupt:pass
 finally:s.server_close()
 `;
- const proc=spawn(process.env.FAMILY_TEST_PYTHON||'python3',['-c',code],{cwd:__dirname,env,stdio:['ignore','pipe','pipe']});let output='',failure='';
- proc.stdout.on('data',x=>output+=String(x));proc.stderr.on('data',x=>failure+=String(x));proc.on('error',e=>failure=e.message);
- const stop=async()=>{if(proc.exitCode===null&&proc.signalCode===null){const exit=once(proc,'exit');proc.kill('SIGINT');await Promise.race([exit,delay(2500)]);if(proc.exitCode===null&&proc.signalCode===null){proc.kill('SIGKILL');await exit}}await fs.rm(tmp,{recursive:true,force:true})};
- try{await eventually(()=>{if(proc.exitCode!==null||failure&&!proc.pid)throw Error(failure||'Synthetic server exited');return /^\d+\n/.test(output)},'synthetic server');return{port:Number(output.trim()),stop}}catch(e){await stop();throw e}
+ let proc,output='',failure='';
+ const boot=async()=>{output='';failure='';proc=spawn(process.env.FAMILY_TEST_PYTHON||'python3',['-c',code],{cwd:__dirname,env,stdio:['ignore','pipe','pipe']});
+  proc.stdout.on('data',x=>output+=String(x));proc.stderr.on('data',x=>failure+=String(x));proc.on('error',e=>failure=e.message);
+  await eventually(()=>{if(proc.exitCode!==null||failure&&!proc.pid)throw Error(failure||'Synthetic server exited');return /^\d+\n/.test(output)},'synthetic server');
+ };
+ const halt=async()=>{if(proc&&proc.exitCode===null&&proc.signalCode===null){const exit=once(proc,'exit');proc.kill('SIGINT');await Promise.race([exit,delay(2500)]);if(proc.exitCode===null&&proc.signalCode===null){proc.kill('SIGKILL');await exit}}};
+ const stop=async()=>{await halt();await fs.rm(tmp,{recursive:true,force:true})};
+ try{await boot();return{get port(){return Number(output.trim())},stop,restart:async()=>{await halt();await boot()}}}catch(e){await stop();throw e}
+
 }
 function forward(port,request){return new Promise((resolve,reject)=>{
  const url=new URL(request.url()),headers={...request.headers(),'host':'family.example.test','x-forwarded-proto':'https','x-forwarded-for':'127.0.0.1','accept-encoding':'identity'};
@@ -128,8 +134,8 @@ async function apiFetchChecks(){
     const csrfTitle='虚构连接恢复的作业 '+width,studyForm=p.locator('[data-study-form="new"]');
     await studyForm.locator('[name="title"]').fill(csrfTitle);await studyForm.locator('[name="planned_minutes"]').fill('9');await studyForm.evaluate(el=>el.dataset.syntheticIdentity='keep-this-form');
     const cookieBefore=(await context.cookies(home)).find(c=>c.name==='family_parent_session').value;
-    assert.equal((await fetch('http://127.0.0.1:'+server.port+'/__synthetic_rotate_token')).ok,true);
-    assert.equal(await p.evaluate(async()=>{const response=await fetch('./api/state');return response.status}),200,'parent session stays valid after token-only rotation');
+    await server.restart(); // A real process restart with the original DB/config and browser cookie.
+    assert.equal(await p.evaluate(async()=>{const response=await fetch('./api/state');return response.status}),200,'parent session stays valid after a real server restart');
     const readsBefore=stateReads,postsBefore=studyWrites,requestsBefore=studyRequests.length;
     await studyForm.locator('[type="submit"]').click();await eventually(async()=>studyRequests.length===requestsBefore+1&&await p.locator('[data-study-retry]').isEnabled(),'explicit CSRF retry is offered');
     assert.equal(await p.locator('#studyStatus').evaluate(el=>[...el.childNodes].filter(node=>node.nodeType===Node.TEXT_NODE).map(node=>node.textContent).join('')),'尚未保存，填写已保留。请重试保存。','CSRF rejection is a confirmed non-write');
@@ -159,7 +165,7 @@ async function apiFetchChecks(){
     assert.equal(denied.status,401,'logged out cannot read family records');
     assert.equal(loginRequests,4);holdLogin=true;await p.clock.install();await login(p);await eventually(()=>!!heldLogin,'synthetic held login');await p.clock.runFor(15001);
     await eventually(async()=>/超时/.test(await p.locator('#loginStatus').innerText()),'login timeout is readable');assert.equal(await p.locator('#loginSubmit').isEnabled(),true);await heldLogin.abort().catch(()=>{});heldLogin=null;
-    assert.deepEqual(errors,[]);results.push({width,realAPI:true,mountPrefix:true,secureCookie:true,wrongPassword:true,draftPreserved:true,inlineLogin:true,stateFailureRetry:true,noAutomaticReplay:true,explicitRetrySaved:true,mountedTokenRefreshed:true,cookieValidTokenRotation:true,sameRequestKeyAndBody:true,noRecoveryRender:true,retryVisibleAndFocused:true,singlePersistedItem:true,logout:true,timeout:true,pageErrors:0});
+    assert.deepEqual(errors,[]);results.push({width,realAPI:true,mountPrefix:true,secureCookie:true,wrongPassword:true,draftPreserved:true,inlineLogin:true,stateFailureRetry:true,noAutomaticReplay:true,explicitRetrySaved:true,mountedTokenRefreshed:true,cookieValidTokenRotation:true,realProcessRestart:true,sameRequestKeyAndBody:true,noRecoveryRender:true,retryVisibleAndFocused:true,singlePersistedItem:true,logout:true,timeout:true,pageErrors:0});
    }catch(error){await proof(p,'failure-'+width).catch(()=>{});throw error}finally{await context.close()}
   }
   const local=await browser.newPage();await local.goto('http://127.0.0.1:'+server.port+'/');await eventually(()=>local.locator('body[data-page="home"] [data-task-all="todo"]').isVisible(),'loopback home');await local.locator('nav [data-page="more"]').click();assert.equal(await local.locator('[data-parent-logout]').count(),0);await local.close();

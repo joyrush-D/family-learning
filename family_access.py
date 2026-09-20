@@ -333,7 +333,8 @@ def dispatch(handler, config, connect, root):
             c.execute('DELETE FROM parent_sessions WHERE expires<=?', (now,))
             c.execute('DELETE FROM parent_sessions WHERE hash=?', (_digest(_secret(handler.headers)),))
             c.execute('INSERT INTO parent_sessions VALUES (?,?,?)', (_digest(secret), now + SESSION_AGE, _fingerprint(config)))
-            c.execute('DELETE FROM parent_sessions WHERE hash NOT IN (SELECT hash FROM parent_sessions ORDER BY expires DESC, rowid DESC LIMIT 32)')
+            # Keep every unexpired device login. Release checks/new browsers must
+            # not evict a parent's six-month session; expired rows are pruned above.
         reply(200, {'ok': True}, headers={'Set-Cookie': _cookie(config, secret)})
     except (OSError, sqlite3.Error):
         reply(503, {'error': '登录暂未完成，请稍后重试'})

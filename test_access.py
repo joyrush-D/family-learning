@@ -294,8 +294,25 @@ class AccessTests(unittest.TestCase):
                         self.assertEqual(get(host=lan_host, headers={'Cookie': local_cookie, 'X-Forwarded-Proto':'https'})[0], 403)
                         self.assertEqual(get(host='192.168.50.2:1', headers={'Cookie': local_cookie})[0], 403)
                         self.assertEqual(parent_login(host=lan_host)[0], 403)  # public Origin cannot log into LAN
+                        # Several releases used fresh browsers and evicted real parents
+                        # at 32 sessions. Simulate those newer logins, then exercise HTTP.
+                        with app.connect() as db:
+                            before_sessions = [tuple(r) for r in db.execute('SELECT * FROM parent_sessions')]
+                            db.executemany('INSERT INTO parent_sessions VALUES (?,?,?)', [
+                                (access._digest('release-check-' + str(i)),
+                                 login_started + access.SESSION_AGE + 60,
+                                 access._fingerprint(configured)) for i in range(35)])
+                            db.execute('INSERT INTO parent_sessions VALUES (?,?,?)',
+                                       ('expired-release-check', 0, access._fingerprint(configured)))
                         self.assertEqual(parent_login()[0], 200)
                         self.assertEqual(get(host=lan_host, headers={'Cookie': local_cookie})[0], 200)
+                        self.assertEqual(get(host='family.example.ts.net', headers={'Cookie': parent_cookie})[0], 200)
+                        # New connections/read config reuse persisted sessions, not process cache.
+                        with app.connect() as db:
+                            after_sessions = [tuple(r) for r in db.execute('SELECT * FROM parent_sessions')]
+                        self.assertTrue(set(before_sessions) <= set(after_sessions))
+                        self.assertGreater(len(after_sessions), 32)
+                        self.assertFalse(any(r[0] == 'expired-release-check' for r in after_sessions))
 
                     with app.connect() as db:
                         session = db.execute('SELECT * FROM parent_sessions WHERE hash=?',
