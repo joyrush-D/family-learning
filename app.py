@@ -749,6 +749,25 @@ def record_history(ident):
                 complete=True,unreadable_count=unreadable,
                 note='按更正顺序倒序列出这条记录的全部已留存旧版本，损坏项另行标明；旧称呼和时间按当时记录保留，不作为新进展。旧版本缺失的学习条件返回空值，不能由旧的独立复测标签推定实际独立完成。未记录附件字段的旧版本不能据此认定从未有原图；原件可用性仅核对现存元数据、文件和长度，不代表内容已读。')
 
+def container_mime(path, ext):
+    """Probe ambiguous containers locally; never follow embedded file/network references."""
+    demux='matroska' if ext=='.webm' else 'ogg' if ext=='.ogg' else 'mov'
+    try:
+        result=subprocess.run(['ffprobe','-v','error','-protocol_whitelist','pipe',
+            '-f',demux,'-i','pipe:0','-show_entries','stream=codec_type',
+            '-of','json'],input=path.read_bytes(),capture_output=True,check=True,timeout=15)
+        streams=json.loads(result.stdout).get('streams',[])
+    except FileNotFoundError:
+        raise ValueError('此电脑尚未安装ffprobe，暂不能核验音视频；请安装FFmpeg后重试') from None
+    except (subprocess.SubprocessError,ValueError,TypeError,AttributeError):
+        raise ValueError('音视频文件无法核验，请重新选择完整文件；已保存的资料仍保留') from None
+    if not streams or len(streams)>32 or not all(isinstance(s,dict) for s in streams) or not any(s.get('codec_type') in ('audio','video') for s in streams):
+        raise ValueError('文件没有可用音视频轨道，或含暂不支持的轨道')
+    video=any(s.get('codec_type')=='video' for s in streams)
+    if video and ext in ('.m4a','.ogg'):
+        raise ValueError('此文件含视频，不能作为纯录音；请使用原视频扩展名')
+    return ('video/' if video else 'audio/')+('webm' if ext=='.webm' else 'ogg' if ext=='.ogg' else 'quicktime' if ext=='.mov' and video else 'mp4')
+
 def upload_mime(path, name):
     """Check the extension and signature; never trust the browser's MIME header."""
     ext=Path(name).suffix.lower()
@@ -770,9 +789,9 @@ def upload_mime(path, name):
         except (zipfile.BadZipFile,OSError): pass
     elif ext=='.wav' and head[:4]==b'RIFF' and head[8:12]==b'WAVE': mime='audio/wav'
     elif ext=='.mp3' and (head.startswith(b'ID3') or len(head)>3 and head[0]==255 and head[1]&224==224 and head[1]&6 and head[2]&12!=12): mime='audio/mpeg'
-    elif ext=='.m4a' and head[4:8]==b'ftyp' and any(b in head[8:64] for b in [b'M4A ',b'M4B ',b'mp42',b'isom']): mime='audio/mp4'
-    elif ext=='.webm' and head.startswith(b'\x1a\x45\xdf\xa3') and b'webm' in head[:4096]: mime='audio/webm'
-    elif ext=='.ogg' and head.startswith(b'OggS'): mime='audio/ogg'
+    elif ext in ('.m4a','.mp4','.mov') and head[4:8]==b'ftyp': mime=container_mime(path,ext)
+    elif ext=='.webm' and head.startswith(b'\x1a\x45\xdf\xa3') and b'webm' in head[:4096]: mime=container_mime(path,ext)
+    elif ext=='.ogg' and head.startswith(b'OggS'): mime=container_mime(path,ext)
     elif ext=='.txt':
         try:
             text=path.read_text(encoding='utf-8-sig')
@@ -1538,6 +1557,10 @@ def transcribe_material(obj):
     with path.open('rb') as f: raw=f.read(MAX_UPLOAD+1)
     if not raw or len(raw)>MAX_UPLOAD: raise ValueError('语音原件为空或超过20MB')
     mime=row['mime']
+    if mime in ('audio/mp4','audio/webm','audio/ogg'):
+        # Old uploads used extension-only MIME labels; recheck before sending any bytes to ASR.
+        actual=container_mime(path,{'audio/mp4':'.mp4','audio/webm':'.webm','audio/ogg':'.ogg'}[mime])
+        if not actual.startswith('audio/'): raise ValueError('此原件含视频，仅支持保存回放，尚未支持视频转写')
     if mime=='audio/webm':
         # WhisperKit cannot decode browser WebM; pipe-only decoding cannot fetch URLs.
         try:
@@ -1712,8 +1735,24 @@ class Handler(BaseHTTPRequestHandler):
                 with connect() as c: row=c.execute('SELECT * FROM uploads WHERE id=?',(ident,)).fetchone()
                 p=DATA/'uploads'/ident
                 if row is None or p.is_symlink() or not p.is_file(): return self.reply(404,{'error':'附件不存在'})
-                mode='inline' if row['mime'].startswith(('image/','audio/')) else 'attachment'
-                return self.reply(200,p.read_bytes(),row['mime'],mode+"; filename*=UTF-8''"+quote(row['name'],safe=''))
+                media=row['mime'].startswith(('audio/','video/'))
+                mode='inline' if media or row['mime'].startswith('image/') else 'attachment'
+                # ponytail: uploads are capped at 20MB; stream ranges if that cap grows.
+                body=p.read_bytes();status=200;headers={'Accept-Ranges':'bytes'} if media else {}
+                if media and self.headers.get('Range'):
+                    total=len(body);match=re.fullmatch(r'bytes=(\d*)-(\d*)',self.headers['Range'])
+                    start,end=0,total-1
+                    if match and any(match.groups()):
+                        left,right=match.groups()
+                        try:
+                            start=int(left) if left else max(0,total-int(right))
+                            end=min(int(right),total-1) if left and right else total-1
+                        except ValueError: match=None
+                    else: match=None
+                    if not match or start>end or start>=total:
+                        return self.reply(416,b'',row['mime'],headers={'Content-Range':f'bytes */{total}','Accept-Ranges':'bytes'})
+                    body=body[start:end+1];status=206;headers['Content-Range']=f'bytes {start}-{end}/{total}'
+                return self.reply(status,body,row['mime'],mode+"; filename*=UTF-8''"+quote(row['name'],safe=''),headers=headers)
             if path.startswith('/attachment/'):
                 name=unquote(path[len('/attachment/'):]);base=(DATA/'attachments').resolve();p=(base/name).resolve()
                 if p.parent!=base or not p.is_file(): return self.reply(404,{'error':'附件不存在'})

@@ -174,34 +174,36 @@ with tempfile.TemporaryDirectory() as tmp:
             assert b'SYNTHETIC_PRIVATE_KEY' not in body and b'/sensitive/raw-response' not in body
 
         webm=b'\x1a\x45\xdf\xa3webm synthetic mocked bytes http://untrusted.invalid/media'
-        browser_audio=upload('虚构浏览器录音.webm',webm)
-        browser_body=json.dumps(dict(attachment=browser_audio['id'])).encode()
-        converted=subprocess.CompletedProcess([],0,stdout=pcm,stderr=b'')
-        with patch.object(app.subprocess,'run',return_value=converted) as convert,patch.object(app.family_llm,'transcribe_audio',return_value=transcript) as transcribe:
-            status,_,body=request('POST','/api/transcribe',browser_body,headers)
-            assert status==200 and json.loads(body)==dict(text=transcript)
-            argv=convert.call_args.args[0];options=convert.call_args.kwargs
-            assert argv[0]=='ffmpeg' and argv[argv.index('-protocol_whitelist')+1]=='pipe'
-            assert argv[argv.index('-i')+1]=='pipe:0' and argv[-1]=='pipe:1'
-            assert all('://' not in arg for arg in argv)
-            assert options['input']==webm and options['check'] is True and options['timeout']==45
-            transformed,mime=transcribe.call_args.args
-            assert mime=='audio/wav'
-            with wave.open(io.BytesIO(transformed),'rb') as w:
-                assert (w.getnchannels(),w.getsampwidth(),w.getframerate())==(1,2,16000)
-                assert w.readframes(w.getnframes())==pcm
-        failure=subprocess.CalledProcessError(1,['ffmpeg'],stderr=b'SYNTHETIC_PRIVATE_KEY /sensitive/raw-response')
-        with patch.object(app.subprocess,'run',side_effect=failure),patch.object(app.family_llm,'transcribe_audio') as transcribe:
-            status,_,body=request('POST','/api/transcribe',browser_body,headers)
-            assert status==503 and '原件仍保留' in json.loads(body)['error']
-            assert b'SYNTHETIC_PRIVATE_KEY' not in body and b'/sensitive/raw-response' not in body
-            transcribe.assert_not_called()
-        for invalid_pcm in [b'',b'\x00\x00'*(180*16000+1)]:
-            with patch.object(app.subprocess,'run',return_value=subprocess.CompletedProcess([],0,stdout=invalid_pcm)),patch.object(app.family_llm,'transcribe_audio') as transcribe:
-                assert request('POST','/api/transcribe',browser_body,headers)[0]==400
+        with patch.object(app.subprocess,'run',return_value=subprocess.CompletedProcess([],0,stdout=b'{"streams":[{"codec_type":"audio"}]}')):
+            browser_audio=upload('虚构浏览器录音.webm',webm)
+        with patch.object(app,'container_mime',return_value='audio/webm'):
+            browser_body=json.dumps(dict(attachment=browser_audio['id'])).encode()
+            converted=subprocess.CompletedProcess([],0,stdout=pcm,stderr=b'')
+            with patch.object(app.subprocess,'run',return_value=converted) as convert,patch.object(app.family_llm,'transcribe_audio',return_value=transcript) as transcribe:
+                status,_,body=request('POST','/api/transcribe',browser_body,headers)
+                assert status==200 and json.loads(body)==dict(text=transcript)
+                argv=convert.call_args.args[0];options=convert.call_args.kwargs
+                assert argv[0]=='ffmpeg' and argv[argv.index('-protocol_whitelist')+1]=='pipe'
+                assert argv[argv.index('-i')+1]=='pipe:0' and argv[-1]=='pipe:1'
+                assert all('://' not in arg for arg in argv)
+                assert options['input']==webm and options['check'] is True and options['timeout']==45
+                transformed,mime=transcribe.call_args.args
+                assert mime=='audio/wav'
+                with wave.open(io.BytesIO(transformed),'rb') as w:
+                    assert (w.getnchannels(),w.getsampwidth(),w.getframerate())==(1,2,16000)
+                    assert w.readframes(w.getnframes())==pcm
+            failure=subprocess.CalledProcessError(1,['ffmpeg'],stderr=b'SYNTHETIC_PRIVATE_KEY /sensitive/raw-response')
+            with patch.object(app.subprocess,'run',side_effect=failure),patch.object(app.family_llm,'transcribe_audio') as transcribe:
+                status,_,body=request('POST','/api/transcribe',browser_body,headers)
+                assert status==503 and '原件仍保留' in json.loads(body)['error']
+                assert b'SYNTHETIC_PRIVATE_KEY' not in body and b'/sensitive/raw-response' not in body
                 transcribe.assert_not_called()
-        assert request('GET',browser_audio['url'])[2]==webm and request('GET',audio['url'])[2]==wav
-        assert app.snapshot()['records']==records_before
+            for invalid_pcm in [b'',b'\x00\x00'*(180*16000+1)]:
+                with patch.object(app.subprocess,'run',return_value=subprocess.CompletedProcess([],0,stdout=invalid_pcm)),patch.object(app.family_llm,'transcribe_audio') as transcribe:
+                    assert request('POST','/api/transcribe',browser_body,headers)[0]==400
+                    transcribe.assert_not_called()
+            assert request('GET',browser_audio['url'])[2]==webm and request('GET',audio['url'])[2]==wav
+            assert app.snapshot()['records']==records_before
     finally:
         server.shutdown();server.server_close()
 

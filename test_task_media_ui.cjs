@@ -1,7 +1,7 @@
 // Disposable synthetic demo only. Optional PLAYWRIGHT_MODULE, PLAYWRIGHT_CHANNEL,
 // FAMILY_TEST_PYTHON and TASK_MEDIA_UI_PROOF_DIR. No family account or model calls.
 const assert=require('node:assert/strict'),net=require('node:net');
-const {spawn}=require('node:child_process'),{once}=require('node:events');
+const {spawn,execFileSync}=require('node:child_process'),{once}=require('node:events');
 const {setTimeout:delay}=require('node:timers/promises'),{randomUUID}=require('node:crypto');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 async function eventually(check,label,timeout=12000){const end=Date.now()+timeout;while(Date.now()<end){if(await check())return;await delay(40)}throw Error('Timed out: '+label)}
@@ -14,6 +14,7 @@ async function demoServer(){
 }
 const fs=require('node:fs/promises'),path=require('node:path');
 (async()=>{let browser,server;const checks=[];try{
+ const videoBytes=execFileSync('ffmpeg',['-nostdin','-v','error','-f','lavfi','-i','color=c=blue:s=160x90:r=10','-t','1','-c:v','libx264','-movflags','frag_keyframe+empty_moov','-f','mp4','pipe:1'],{timeout:15000});
  server=await demoServer();const url=server.url;
  browser=await chromium.launch({headless:true,channel:process.env.PLAYWRIGHT_CHANNEL||'chrome',args:['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream']});
  for(const width of [360,1440]){
@@ -61,9 +62,28 @@ const fs=require('node:fs/promises'),path=require('node:path');
   await save.click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'completed feedback saved');
   state=await read();assert.equal(state.tasks.find(t=>t.id===id).update.status,'已完成');feedback=state.records.filter(r=>r.source==='事项:'+id);assert.equal(feedback.length,2);assert(feedback.some(r=>r.note===''&&r.transcript===''&&r.attachments.length===2));
   assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);
+  // A video-only observation stays on the completed task, without ASR or a mastery claim.
+  const asrBeforeVideo=asrAttempts;let videoUploads=0;
+  await p.route('**/api/upload',r=>++videoUploads===1?r.fulfill({status:503,json:{error:'虚构视频上传失败'}}):r.continue());
+  await p.locator('#videoInput').setInputFiles({name:'synthetic-video.mp4',mimeType:'audio/mpeg',buffer:videoBytes});
+  await p.locator('#retryUpload:visible').waitFor();await save.click();assert.match(await p.locator('#taskError').innerText(),/未上传成功/);
+  await p.locator('#retryUpload').click();await p.locator('#pendingUploads video').waitFor();await eventually(()=>save.isEnabled(),'video uploaded');await p.unroute('**/api/upload');
+  assert.equal(await p.locator('#pendingUploads audio').count(),0);assert.equal(await p.locator('#transcribeButton').isDisabled(),true);
+  const play=async locator=>{await eventually(()=>locator.evaluate(v=>v.readyState>=1),'video metadata');await locator.evaluate(async v=>{v.muted=true;await v.play()});await eventually(()=>locator.evaluate(v=>v.currentTime>0.1),'video decoded');await locator.evaluate(v=>{v.pause();v.currentTime=0.5});await eventually(()=>locator.evaluate(v=>!v.seeking&&v.currentTime>=0.5),'video seek')};
+  await play(p.locator('#pendingUploads video'));let videoSaves=0;const videoBodies=[];
+  await p.route('**/api/task/feedback',async r=>{videoBodies.push(r.request().postDataJSON());if(++videoSaves===1){await r.fetch();return r.abort('failed')}return r.continue()});
+  await save.click();await eventually(async()=>/保存结果尚未核对/.test(await p.locator('#taskError').innerText()),'video lost reply');
+  assert.equal(await p.locator('#videoInput').isDisabled(),true);assert.equal(await p.locator('#pendingUploads video').count(),1);
+  await save.click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'video feedback saved');await p.unroute('**/api/task/feedback');assert.deepEqual(videoBodies[0],videoBodies[1]);
+  await p.keyboard.press('Escape');await open();await p.locator('#taskFeedbackHistory video').waitFor();await play(p.locator('#taskFeedbackHistory video'));
+  state=await read();feedback=state.records.filter(r=>r.source==='事项:'+id);assert.equal(feedback.length,3);const videoRecord=feedback.find(r=>r.attachments.some(a=>state.uploads.find(u=>u.id===a)?.mime==='video/mp4'));
+  assert(videoRecord);assert.equal(videoRecord.note,'');assert.equal(videoRecord.transcript,'');assert.equal(state.tasks.find(t=>t.id===id).update.status,'已完成');assert.equal(asrAttempts,asrBeforeVideo);
+  assert.match(await p.locator('#taskFeedbackHistory').innerText(),/内容尚未分析/);
+  assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);
+  if(process.env.TASK_MEDIA_UI_PROOF_DIR){await fs.mkdir(process.env.TASK_MEDIA_UI_PROOF_DIR,{recursive:true});await p.locator('#taskFeedbackHistory video').scrollIntoViewIfNeeded();await p.screenshot({path:path.join(process.env.TASK_MEDIA_UI_PROOF_DIR,'task-video-'+width+'.png')})}
   if(process.env.TASK_MEDIA_UI_PROOF_DIR){await fs.mkdir(process.env.TASK_MEDIA_UI_PROOF_DIR,{recursive:true});await p.locator('#taskDialog').evaluate(x=>x.scrollTop=0);await p.screenshot({path:path.join(process.env.TASK_MEDIA_UI_PROOF_DIR,'task-feedback-'+width+'.png')})}
   await p.keyboard.press('Escape');await p.locator('nav [data-page="more"]').click();await p.locator('[data-capture]').first().click();assert.equal(await p.locator('#recordForm #recordAudio').count(),1);assert.equal(await p.locator('#pendingUploads audio').count(),0);assert.equal(await p.locator('#draftButton').isVisible(),true);await p.keyboard.press('Escape');assert.deepEqual(errors,[]);
-  checks.push(width+': real recorder/upload/playback, separate transcript and ASR failure, Today/Calendar/Inbox entry, lost-reply and expired-CSRF retry, correction, state-only completion, completed-task media-only feedback, failed upload retry, microphone fallback and photo, login-expiry input retention, shared normal-record capture and layout');await context.close();
+  checks.push(width+': real recorder/upload/playback, separate transcript and ASR failure, Today/Calendar/Inbox entry, lost-reply and expired-CSRF retry, correction, state-only completion, completed-task media-only feedback, failed upload retry, microphone fallback and photo, login-expiry input retention, shared normal-record capture and layout; video-only upload retry, actual playback/seek, lost-reply retry and reopen without completion or ASR');await context.close();
  }
  console.log(JSON.stringify({passed:true,checks,syntheticOnly:true,realPhoneTested:false}));
 }finally{await browser?.close();await server?.stop()}})().catch(e=>{console.error(e.stack||e);process.exitCode=1});
