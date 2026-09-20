@@ -224,7 +224,10 @@ SCHEMA['properties']['proposal'] = PROPOSAL
 
 def _record(row):
     """One record is one evidence item; its media adds only what family_learner_memory.media_evidence allows."""
-    return {**{k: row[k] for k in RECORD_FIELDS}, **family_learner_memory.media_evidence(row)}
+    # The parent's explicit task link is named only when present, so records without one read exactly as before.
+    linked = row['linked_task_id'] if 'linked_task_id' in row.keys() else ''
+    return {**{k: row[k] for k in RECORD_FIELDS}, **({'linked_task_id': linked} if linked else {}),
+            **family_learner_memory.media_evidence(row)}
 
 
 def _root(row):
@@ -433,7 +436,8 @@ class Store:
                 ids.update(r['record_id'] for r in c.execute('SELECT record_id FROM study_items WHERE task_id=? AND child_id=? AND record_id IS NOT NULL', (task_id, row['child_id'])))
         rows = {r['id']: dict(r) for r in c.execute('SELECT * FROM records')}
         task_sources = {'事项:' + task_id for task_id in tasks}
-        ids.update(r['id'] for r in rows.values() if r['source'] in task_sources
+        # A record the parent attached to a linked task counts like that task's own feedback; subject or title never selects one.
+        ids.update(r['id'] for r in rows.values() if (r['source'] in task_sources or r.get('linked_task_id') in tasks)
                    and r['category'] in ('学习进展','课程进度','成绩') and owners.get(r['child']) == row['child_id'])
         # ponytail: explicit ancestry over household records; index case links if this becomes a measured bottleneck.
         while True:

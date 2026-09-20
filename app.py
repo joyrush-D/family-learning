@@ -143,7 +143,7 @@ def connect():
     c = sqlite3.connect(DB)
     c.row_factory = sqlite3.Row
     c.execute("CREATE TABLE IF NOT EXISTS records (id INTEGER PRIMARY KEY, child TEXT, day TEXT, category TEXT, subject TEXT, title TEXT, note TEXT, source TEXT, score REAL, total REAL, created TEXT, attachments TEXT NOT NULL DEFAULT '[]', related_record_id INTEGER, followup_kind TEXT NOT NULL DEFAULT '')")
-    for name, declaration in [('attachments', "TEXT NOT NULL DEFAULT '[]'"), ('related_record_id', 'INTEGER'), ('followup_kind', "TEXT NOT NULL DEFAULT ''"), ('assistance', "TEXT NOT NULL DEFAULT ''"), ('practice_relation', "TEXT NOT NULL DEFAULT ''"), ('comparison_note', "TEXT NOT NULL DEFAULT ''"), ('care_choice', "TEXT NOT NULL DEFAULT ''"), ('care_review_on', "TEXT NOT NULL DEFAULT ''"), ('request_key', "TEXT NOT NULL DEFAULT ''"), ('request_hash', "TEXT NOT NULL DEFAULT ''"), ('transcript', "TEXT NOT NULL DEFAULT ''"), ('transcript_state', "TEXT NOT NULL DEFAULT ''")]:
+    for name, declaration in [('attachments', "TEXT NOT NULL DEFAULT '[]'"), ('related_record_id', 'INTEGER'), ('followup_kind', "TEXT NOT NULL DEFAULT ''"), ('assistance', "TEXT NOT NULL DEFAULT ''"), ('practice_relation', "TEXT NOT NULL DEFAULT ''"), ('comparison_note', "TEXT NOT NULL DEFAULT ''"), ('care_choice', "TEXT NOT NULL DEFAULT ''"), ('care_review_on', "TEXT NOT NULL DEFAULT ''"), ('request_key', "TEXT NOT NULL DEFAULT ''"), ('request_hash', "TEXT NOT NULL DEFAULT ''"), ('transcript', "TEXT NOT NULL DEFAULT ''"), ('transcript_state', "TEXT NOT NULL DEFAULT ''"), ('linked_task_id', "TEXT NOT NULL DEFAULT ''"), ('linked_task_at', "TEXT NOT NULL DEFAULT ''")]:
         if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
             try: c.execute('ALTER TABLE records ADD COLUMN '+name+' '+declaration)
             except sqlite3.OperationalError:
@@ -525,6 +525,15 @@ def record_result(connection,ident,replayed=False):
         result['care_error']=notes['error'] or ('' if item is not None else '建议当前无法读取，保存回执不表示当前安排已核对。')
     return result
 
+RECORD_TASK_MISMATCH='关联事项不存在或孩子归属不一致，请从原事项重新打开'
+
+def record_task(c,task_id,child,missing=None):
+    """The one rule for hanging a record on a task, by feedback source or by the parent's explicit link: an existing task of the same child."""
+    task=next((task for task in tasks(c) if task['id']==task_id),None)
+    if task is None and missing is not None: raise missing
+    if task is None or task['child']!=child: raise RecordError(RECORD_TASK_MISMATCH,409,'record_task_mismatch')
+    return task
+
 def save_record(obj,care_only=False,connection=None):
     receipt={}
     try: return _save_record(obj,care_only,receipt,connection)
@@ -575,11 +584,7 @@ def _save_record(obj,care_only,receipt,connection=None):
                 if names.get(prior['child'])!=child or prior['source']!=source:
                     raise RecordError('这条已保存反馈的归属或来源后来已更正，请先核对原记录',409,'request_context_changed')
                 return record_result(c,prior['id'],True)
-        if source.startswith('事项:'):
-            task_id=source[len('事项:'):]
-            task=next((task for task in tasks(c) if task['id']==task_id),None)
-            if task is None or task['child']!=child:
-                raise RecordError('关联事项不存在或孩子归属不一致，请从原事项重新打开',409,'record_task_mismatch')
+        if source.startswith('事项:'): record_task(c,source[len('事项:'):],child)
         if source.startswith('陪伴建议:'):
             notes=care_notes(c)
             if notes['error']: raise RecordError('陪伴建议或提醒状态暂时无法核对，请刷新后重试',409,'care_unverified')
@@ -589,6 +594,9 @@ def _save_record(obj,care_only,receipt,connection=None):
         ident=obj.get('id')
         previous=c.execute('SELECT * FROM records WHERE id=?',(int(ident),)).fetchone() if ident else None
         if ident and previous is None: raise ValueError('记录不存在')
+        # The parent's explicit task link stays on the record, so a correction cannot carry it to a child the task is not for.
+        if previous is not None and previous['linked_task_id'] and child!=names.get(previous['child']):
+            record_task(c,previous['linked_task_id'],child)
         family_guided.guard_record_write(c,previous,source)
         if source.startswith('作息记录:') or previous is not None and previous['source'].startswith('作息记录:'):
             owned=dict(child=child,day=day,category=category,subject=subject,title=title,note=note,source=source,
@@ -699,6 +707,10 @@ def record_history(ident):
         if not isinstance(transcript,str) or len(transcript)>4000 or '\x00' in transcript or transcript_state not in TRANSCRIPT_STATES or bool(transcript)!=bool(transcript_state):
             raise ValueError('invalid transcript')
         result.update(transcript=transcript,transcript_state=transcript_state)
+        # Shown only for versions that carried an explicit task link, so a correction of the link stays traceable.
+        for key,limit in [('linked_task_id',30),('linked_task_at',40)]:
+            if not isinstance(value.get(key,''),str) or len(value.get(key,''))>limit: raise ValueError('invalid task link')
+            if value.get(key): result[key]=value[key]
         result.update({key:value.get(key) for key in ['care_choice','care_review_on']})
         result.update(attachments=attachments,attachments_recorded='attachments' in value)
         for upload in attachments:
@@ -909,11 +921,51 @@ def save_task_feedback(obj):
         row=c.execute('SELECT * FROM records WHERE id=?',(result['record_id'],)).fetchone()
         feedback={k:row[k] for k in ['day','category','subject','note','transcript','transcript_state','assistance','created']}
         feedback.update(record_id=row['id'],task_id=task_id,child=task['child'],attachments=[upload_info(c.execute('SELECT * FROM uploads WHERE id=?',(i,)).fetchone()) for i in json.loads(row['attachments'])])
-        update=c.execute('SELECT * FROM task_updates WHERE id=?',(task_id,)).fetchone()
-        task['update']=dict(update) if update else None
-        task['history']=[dict(r) for r in c.execute('SELECT * FROM task_history WHERE task_id=? ORDER BY id DESC',(task_id,))]
-        task['feedback_ids']=[r['id'] for r in c.execute('SELECT id,child FROM records WHERE source=? ORDER BY id DESC',(source,)) if names.get(r['child'])==task['child']]
+        task_feedback_projection(c,task,names)
     return result|dict(feedback=feedback,task=task,completion_changed=changed)
+
+def task_feedback_projection(c,task,names):
+    """The task as returned after feedback or an explicit record link: its status history and both kinds of attached records."""
+    task_id=task['id'];update=c.execute('SELECT * FROM task_updates WHERE id=?',(task_id,)).fetchone()
+    task['update']=dict(update) if update else None
+    task['history']=[dict(r) for r in c.execute('SELECT * FROM task_history WHERE task_id=? ORDER BY id DESC',(task_id,))]
+    task['feedback_ids']=[r['id'] for r in c.execute('SELECT id,child FROM records WHERE source=? ORDER BY id DESC',('事项:'+task_id,)) if names.get(r['child'])==task['child']]
+    # Records saved elsewhere and attached by the parent keep their own source, so they are listed apart from the task's own feedback.
+    task['linked_record_ids']=[r['id'] for r in c.execute('SELECT id,child FROM records WHERE linked_task_id=? ORDER BY id DESC',(task_id,)) if names.get(r['child'])==task['child']]
+    return task
+
+def link_record_task(obj):
+    """The parent attaches an already saved record to an existing task of the same child; the record itself is not rewritten."""
+    if not isinstance(obj,dict) or set(obj)-{'record_id','child','task_id','expected_linked_at'}: raise RecordError('关联字段不正确')
+    ident=obj.get('record_id')
+    if type(ident) is not int or not 0<ident<=9223372036854775807: raise RecordError('记录编号不正确')
+    # An empty task removes the link, so a missing one must not be read as that choice.
+    if not isinstance(obj.get('task_id'),str) or not isinstance(obj.get('expected_linked_at',''),str): raise RecordError('请选择要关联的事项')
+    task_id=clean(obj,'task_id',30);child=clean(obj,'child',100)
+    with connect() as c:
+        c.execute('BEGIN IMMEDIATE')
+        row=c.execute('SELECT * FROM records WHERE id=?',(ident,)).fetchone()
+        if row is None: raise RecordError('记录不存在，请刷新',404,'record_missing')
+        names=child_names(c);owner=names.get(row['child'])
+        task=record_task(c,task_id,owner,TaskError('事项不存在，请刷新',404,'task_missing')) if task_id else None
+        if owner is None or names.get(child)!=owner: raise RecordError(RECORD_TASK_MISMATCH,409,'record_task_mismatch')
+        if row['source'].startswith('事项:'):
+            raise RecordError('这条记录本来就是事项反馈，所属事项以它的来源为准',409,'record_task_link_source')
+        previous=dict(task_id=row['linked_task_id'],linked_at=row['linked_task_at'])
+        changed=previous['task_id']!=task_id;linked_at=previous['linked_at']
+        if changed:
+            # linked_task_at is the version of the parent's link decision and is kept when the link is removed, so an old
+            # request cannot pass as a first link and hang the record back on a task the parent took it off.
+            if previous['linked_at'] and clean(obj,'expected_linked_at',40)!=previous['linked_at']:
+                raise RecordError('这条记录的事项关联已在别处更改，现有状态保留不变；确需更正请刷新核对后重试',409,'record_task_link_conflict')
+            now=dt.datetime.now().isoformat();linked_at=now
+            # Only a correction replaces information, so only then is the prior row, with its prior link decision, kept as a revision.
+            if previous['linked_at']:
+                c.execute('INSERT INTO revisions (record_id,previous,changed) VALUES (?,?,?)',(ident,json.dumps(dict(row),ensure_ascii=False),now))
+            c.execute('UPDATE records SET linked_task_id=?,linked_task_at=? WHERE id=?',(task_id,linked_at,ident))
+        link=dict(record_id=ident,task_id=task_id,child=owner,linked_at=linked_at,
+                  previous_task_id=previous['task_id'] if changed else '',previous_linked_at=previous['linked_at'] if changed else '')
+        return record_result(c,ident,not changed)|dict(changed=changed,link=link,task=task_feedback_projection(c,task,names) if task else None)
 
 def material_images(ids):
     if not isinstance(ids,list) or len(ids)>3 or any(not isinstance(i,str) or not re.fullmatch('[a-f0-9]{32}',i) for i in ids):
@@ -1735,6 +1787,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/print/cancel': return self.reply(200,dict(job=print_store().cancel(obj.get('job_id'))))
             if path=='/api/print/received': return self.reply(200,dict(job=print_store().confirm_received(obj.get('job_id'),obj.get('note'))))
             if self.path=='/api/task/feedback': return self.reply(200,save_task_feedback(obj))
+            if self.path=='/api/record/task-link': return self.reply(200,link_record_task(obj))
             if self.path=='/api/task/new':
                 try: return self.reply(200,dict(ok=True,task=new_task(obj)))
                 except ValueError as e: return self.reply(400,dict(error=str(e)))

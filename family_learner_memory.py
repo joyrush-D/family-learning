@@ -19,9 +19,11 @@ existing transaction cursor.
 import datetime as dt
 import json
 
-# What a cited record says; a save that leaves these unchanged (or only adds an original) is not a correction.
+# What a cited record says, and which task the parent attached it to; a save that leaves these unchanged
+# (or only adds an original) is not a correction.
 MATERIAL = ('day', 'category', 'subject', 'title', 'note', 'score', 'total', 'related_record_id',
-            'followup_kind', 'assistance', 'practice_relation', 'comparison_note', 'transcript', 'transcript_state')
+            'followup_kind', 'assistance', 'practice_relation', 'comparison_note', 'transcript', 'transcript_state',
+            'linked_task_id')
 
 
 def _ensure(c):
