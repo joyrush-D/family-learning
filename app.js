@@ -884,7 +884,7 @@ function resetSchoolRecord(){
 function schoolRecordEvidence(origin){
  if(origin.material){
   const view=origin.material,owner=data.children.find(c=>c.id===view.child_id),d=view.material_draft;
-  if(!owner||d?.state!=='ready'||!d.upload_ids?.length||d.upload_ids.some(id=>!view.attachments.some(a=>a.id===id)))return null;
+  if(!owner||d?.kind||d?.state!=='ready'||!d.upload_ids?.length||d.upload_ids.some(id=>!view.attachments.some(a=>a.id===id)))return null;
   const source='message:'+view.source_id+':'+view.message_id;if(source.length>200)return null;
   const draft=d.draft,note=('图片识别草稿，待家长核对；不能据此认定完成或掌握。\n'+draft.note+(draft.uncertainties?.length?'\n待核对：'+draft.uncertainties.join('；'):'')).slice(0,4000);
   return {child:owner.name,child_id:owner.id,title:draft.title,source,aliases:[source],note,draft,attachments:d.upload_ids};
@@ -988,7 +988,8 @@ function paintSchoolOriginal(){
  const s=schoolOriginal,dialog=$('#schoolOriginalDialog');if(!s||!dialog)return;
  const teacherForm=dialog.querySelector('[data-school-teacher-form]');if(teacherForm&&s.teacher)for(const el of teacherForm.elements)if(el.name)s.teacher.fields[el.name]=el.value;
  const view=s.view,attachments=view?.attachments||[],unavailable=view?.unavailable_attachment_ids||[],linked=new Set(attachments.map(a=>a.id));
- const d=view?.material_draft,draftHTML=d?d.state==='ready'?`<section class="note" data-school-material-draft><strong>Agent已整理 · 待家长核对</strong><p>${esc(d.draft.title)}</p><p>${esc(d.draft.subject)}${d.draft.score!==null?' · '+esc(d.draft.score)+' / '+esc(d.draft.total??'满分待核对'):''}</p><p class="source">${esc(d.draft.note)}</p>${d.draft.uncertainties?.length?`<p>待核对：${d.draft.uncertainties.map(esc).join('；')}</p>`:''}<button data-school-material-record>核对并填入学习记录</button><p class="small muted">只整理所附图片；保存前请核对原图、孩子归属和实际日期。</p></section>`:`<p data-school-material-status>${esc(d.explanation)}${d.state==='error'?'<button data-school-material-retry>重试这份原件</button>':''}</p>`:'';
+ const d=view?.material_draft,schoolMaterial=d?.kind==='school_material',recordDraft=d&&!d.kind;
+ const draftHTML=d?d.state==='ready'?`<section class="note" data-school-material-draft><strong>${schoolMaterial?'学校资料 · 待家长核对':'Agent已整理 · 待家长核对'}</strong><p>${esc(d.draft.title)}</p>${recordDraft?`<p>${esc(d.draft.subject)}${d.draft.score!==null?' · '+esc(d.draft.score)+' / '+esc(d.draft.total??'满分待核对'):''}</p>`:''}<p class="source">${esc(d.draft.note)}</p>${d.draft.uncertainties?.length?`<p>待核对：${d.draft.uncertainties.map(esc).join('；')}</p>`:''}${recordDraft?'<button data-school-material-record>核对并填入学习记录</button><p class="small muted">只整理所附图片；保存前请核对原图、孩子归属和实际日期。</p>':'<p class="small muted">仅整理本通知补充的图片原件，未改动任务或学习记录。题目、答案和范文不代表孩子的作答或掌握；请对照原件核对要求。</p>'}</section>`:`<p data-school-material-status>${esc(d.explanation)}${d.state==='error'?'<button data-school-material-retry>重试这份原件</button>':''}</p>`:'';
 
  const available=(data.uploads||[]).filter(a=>!linked.has(a.id)),owner=data.children.find(c=>c.id===s.identity.child_id);
  const mediaNote=view?.media?.explanation||'';
