@@ -138,8 +138,9 @@ async function proof(p, name) {
         assert.equal(await p.locator('.wrong-thumb span').filter({hasText: 'retry.png'}).count(), 0,
           'failed upload absent from pool');
         await p.locator('#parentLoginDialog[open]').waitFor();
-        await p.keyboard.press('Escape');
+        await p.locator('[data-close="parentLoginDialog"]').click();
         await p.unroute('**/api/upload');
+        if(await p.locator('#parentLoginDialog').isVisible()) await p.locator('[data-close="parentLoginDialog"]').click();
 
         // 失败后重新选择同一照片：上传成功并自动勾选，汇总为成功。
         await p.locator('[data-wrong-pick]').setInputFiles(
@@ -151,7 +152,7 @@ async function proof(p, name) {
 
         // 混合批次：一张成功、一张 401，成功照片保留，汇总准确区分保存与失败。
         await p.route('**/api/upload', r => {
-          if ((r.headers()['x-file-name'] || '').includes('bad')) {
+          if ((r.request().headers()['x-file-name'] || '').includes('bad')) {
             return r.fulfill({status: 401, contentType: 'application/json',
               body: JSON.stringify({error: '虚构未授权'})});
           }
@@ -170,6 +171,9 @@ async function proof(p, name) {
         assert.equal(await p.locator('.wrong-thumb span').filter({hasText: 'bad.png'}).count(), 0,
           'failed file absent and selectable again');
         await p.unroute('**/api/upload');
+        if(await p.locator('#parentLoginDialog').isVisible()) await p.locator('[data-close="parentLoginDialog"]').click();
+
+        await p.locator('.wrong-thumb').filter({hasText:'retry.png'}).locator('input').uncheck();
 
         // 模型失败时提示且不丢选择
         await p.route('**/api/wrong/annotate', r => r.fulfill({status: 503,
@@ -213,6 +217,24 @@ async function proof(p, name) {
         assert.equal(await p.locator('[data-wrong-pool] input:checked').count(), beforeUpload.checked,
           'prior selection unchanged');
         await fit(p);
+
+        // A pending upload must not allow edits which its final repaint would erase.
+        let releaseUpload;
+        const heldUpload = new Promise(resolve => { releaseUpload = resolve; });
+        await p.route('**/api/upload', async r => { await heldUpload; await r.abort('failed'); });
+        await p.locator('.wrong-item').first().locator('[data-wrong-field="note"]').fill('上传前保留的虚构备注');
+        await p.locator('[data-wrong-pick]').setInputFiles([{name:'network.png',mimeType:'image/png',buffer:png}]);
+        await eventually(async()=>await p.locator('[data-wrong-pick]').isDisabled(), 'pending upload controls locked');
+        for (const selector of ['[data-wrong-child]','[data-wrong-day]','[data-wrong-subject]','[data-wrong-annotate]','[data-wrong-save]','[data-wrong-discard]','[data-wrong-field="note"]']) {
+          assert(await p.locator(selector).first().isDisabled(), selector+' locked during upload');
+        }
+        releaseUpload();
+        await eventually(async()=>!(await p.locator('[data-wrong-pick]').isDisabled()), 'failed upload unlocks');
+        assert.match(await p.locator('[data-wrong-upload-status]').innerText(), /network\.png/);
+        assert.equal(await p.locator('.wrong-item').first().locator('[data-wrong-field="note"]').inputValue(),'上传前保留的虚构备注');
+        await p.unroute('**/api/upload');
+        if(await p.locator('#parentLoginDialog').isVisible()) await p.locator('[data-close="parentLoginDialog"]').click();
+        await proof(p, 'wrong-upload-failure-'+width);
 
         // 编辑题面、取消一条勾选
         const first = p.locator('.wrong-item').first();

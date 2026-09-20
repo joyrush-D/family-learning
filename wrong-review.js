@@ -248,6 +248,7 @@ function paint() {
   root.innerHTML = html();
   root.querySelector('[data-wrong-pool]').innerHTML = poolHTML();
   if (state.draft) rerenderResult();
+  if (busy) root.querySelectorAll('input,select,textarea,button').forEach(el => { el.disabled = true; });
 }
 
 function onClick(e) {
