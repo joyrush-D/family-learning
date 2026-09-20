@@ -290,9 +290,6 @@ def draft_input(store, c, source, message):
     child = next(p for p in store.profiles(c) if p['id'] == source['child_id'])
     images, originals = [], []
     for ident in links:
-        saved = c.execute('SELECT mime FROM uploads WHERE id=?', (ident,)).fetchone()
-        # Say "unsupported type" before any other check, so a PDF/DOCX is never reported as a generic failure.
-        require(saved is None or saved['mime'] in ('image/jpeg', 'image/png', 'image/webp'), 'draft_image_required')
         row = store._message_upload(c, source['child_id'], ident)
         require(row['mime'] in ('image/jpeg', 'image/png', 'image/webp'), 'draft_image_required')
         body = read_file(store.data / 'uploads' / ident)

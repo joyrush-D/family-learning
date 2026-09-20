@@ -428,6 +428,7 @@ class MediaTests(unittest.TestCase):
         keys=self.school_fragment('英语：按所附范文完成仿写。');view=lambda:self.store.message(keys,dict)['material_draft']
         with self.store._db() as c:
             c.execute("INSERT INTO manual_tasks(id,child,title,due,original_status,source,action) VALUES('task-1','child-1','虚构学校任务','2026-02-11','待完成','Agent建议:agent-x','家长已确认完成')")
+            c.execute("INSERT INTO task_updates VALUES('task-1','已完成','家长确认',?)",(self.now.isoformat(),))
         result=dict(title='虚构仿写资料',note='范文与题目为参考材料；未见孩子作答。',uncertainties=['发送日期未知'])
         with patch.object(family_llm,'extract_draft',return_value=result) as model:
             self.assertIsNone(view());self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=0,failed=0))

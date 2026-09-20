@@ -35,7 +35,9 @@ _CODES = frozenset(('invalid_process', 'process_unavailable', 'process_failed', 
     'media_file_conflict', 'media_file_rejected', 'media_helper_block_unavailable',
     'media_image_invalid', 'media_job_missing', 'media_message_invalid',
     'media_message_mismatch', 'media_original_unavailable', 'media_path_rejected',
-    'media_source_changed', 'media_unavailable'))
+    'media_source_changed', 'media_unavailable', 'draft_image_required',
+    'draft_too_many_originals', 'draft_originals_too_large',
+    'draft_kind_mismatch', 'draft_material_changed'))
 
 
 class MediaError(ValueError):

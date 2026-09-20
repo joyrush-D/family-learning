@@ -110,6 +110,8 @@ class MediaTests(unittest.TestCase):
     def test_error_codes_remain_explicit(self):
         for code in ('media_existing_key_required', 'media_path_rejected', 'media_message_mismatch', 'media_unavailable'):
             self.assertEqual(str(media.MediaError(code)), code)
+        for code in ('draft_image_required', 'draft_too_many_originals', 'draft_originals_too_large'):
+            self.assertEqual(str(media.MediaError(code)), code)
         self.assertEqual(str(media.MediaError('synthetic-secret-not-a-code')), 'media_failed')
 
     def test_conversion_arguments_and_environment(self):
