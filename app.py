@@ -695,6 +695,10 @@ def record_history(ident):
             if not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}',date): raise ValueError('invalid care date')
             dt.date.fromisoformat(date)
         elif value.get('care_review_on'): raise ValueError('invalid care date')
+        transcript=value.get('transcript',''); transcript_state=value.get('transcript_state','')
+        if not isinstance(transcript,str) or len(transcript)>4000 or '\x00' in transcript or transcript_state not in TRANSCRIPT_STATES or bool(transcript)!=bool(transcript_state):
+            raise ValueError('invalid transcript')
+        result.update(transcript=transcript,transcript_state=transcript_state)
         result.update({key:value.get(key) for key in ['care_choice','care_review_on']})
         result.update(attachments=attachments,attachments_recorded='attachments' in value)
         for upload in attachments:
@@ -887,7 +891,7 @@ def save_task_feedback(obj):
         if previous is not None and all(record[k]==(saved if k=='attachments' else previous[k]) for k in record if k not in ('child','source','title')):
             # The same correction again (for example after a lost reply) changes nothing and is not a conflict.
             if request_key: raise RecordError('更正已有文字记录不能复用新增反馈的提交标识')
-            result=record_result(c,ident,True);key_replay=False
+            result=record_result(c,ident,True);key_replay=True
         else:
             if previous is not None and clean(obj,'expected_created',40)!=previous['created']:
                 raise RecordError('这条反馈已在别处更正，请刷新核对；本次更正尚未保存',409,'feedback_conflict')

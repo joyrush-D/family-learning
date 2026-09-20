@@ -82,6 +82,10 @@ with tempfile.TemporaryDirectory(prefix='synthetic-task-feedback-') as folder:
         with app.connect() as c:
             history=[json.loads(r['previous']) for r in c.execute('SELECT previous FROM revisions WHERE record_id=? ORDER BY id',(first['record_id'],))]
         assert [h['transcript'] for h in history]==['','虚构转写：这个词听不出'] and all(audio in h['attachments'] for h in history)
+        visible=app.record_history(first['record_id'])
+        assert visible['current']['transcript']=='虚构转写：这个词听不出来'
+        assert visible['history'][0]['previous']['transcript']=='虚构转写：这个词听不出'
+        assert visible['history'][0]['previous']['transcript_state']=='待核对'
         # The ordinary record dialog leaves a saved transcript alone.
         app.save_record(dict(id=first['record_id'],child='示例甲',day='2026-09-20',category='学习进展',title='反馈：虚构听写',note='虚构普通更正',source='事项:T01'))
         assert next(r for r in app.snapshot()['records'] if r['id']==first['record_id'])['transcript']=='虚构转写：这个词听不出来'
@@ -114,6 +118,32 @@ with tempfile.TemporaryDirectory(prefix='synthetic-task-feedback-') as folder:
         assert not more['completion_changed'] and after_task['update']==before_task['update'] and after_task['history']==before_task['history']
         noop=app.save_task_feedback(body|dict(request_key='synthetic-feedback-0022',attachments=[],note='虚构：已完成再确认',complete=True))
         assert not noop['completion_changed'] and noop['task']['update']==before_task['update']
+
+        # Retrying an identical correction cannot reapply completion after a separate reopening.
+        correction=dict(task_id='T01',child='示例甲',record_id=more['record_id'],
+                        expected_created=more['feedback']['created'],note='虚构更正',complete=True)
+        corrected=app.save_task_feedback(correction)
+        app.save_task(dict(id='T01',status='待跟进',note='虚构更正后撤销完成'))
+        before=dump(app); replay=app.save_task_feedback(correction)
+        assert replay['replayed'] and not replay['completion_changed'] and dump(app)==before
+
+        # Exercise the HTTP dispatch and CSRF boundary, using only a temporary loopback server.
+        import http.client
+        import threading
+        server=app.ThreadingHTTPServer(('127.0.0.1',0),app.Handler)
+        worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
+        try:
+            def post(token):
+                client=http.client.HTTPConnection('127.0.0.1',server.server_port,timeout=5)
+                try:
+                    client.request('POST','/api/task/feedback',json.dumps(body),
+                                   {'Content-Type':'application/json','X-Family-Token':token})
+                    response=client.getresponse(); return response.status,json.loads(response.read())
+                finally: client.close()
+            assert post('invalid-token')[0]==403
+            status,result=post(app.snapshot()['token'])
+            assert status==200 and result['replayed'] and result['record_id']==first['record_id']
+        finally: server.shutdown();server.server_close();worker.join()
 
         # Ordinary task and record paths keep working.
         app.save_task(dict(id='T02',status='已完成',note=app.TASK_CHECK_NOTE))
