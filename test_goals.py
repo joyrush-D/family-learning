@@ -1,4 +1,5 @@
 """Synthetic goal lifecycle checks; no household data or external services."""
+import contextlib
 import datetime as dt
 import json
 from pathlib import Path
@@ -37,6 +38,61 @@ class GoalTests(unittest.TestCase):
 
     def feedback(self,note='家长转述孩子：会认单词，但说不出为什么。',**obj):
         return self.action('feedback',id=self.ident,day=self.now.date().isoformat(),source='家长转述孩子',note=note,**obj)
+
+    @contextlib.contextmanager
+    def on(self,days_ago):
+        """Run a step as if on that day: confirmation times come from agent._now, feedback days from self.now."""
+        real=self.now;self.now=real-dt.timedelta(days=days_ago)
+        try:
+            with patch.object(agent,'_now',return_value=self.now):yield self.now.date().isoformat()
+        finally:self.now=real
+
+    def resave(self,rid,**changes):
+        with self.app.connect() as c:row=dict(c.execute('SELECT * FROM records WHERE id=?',(rid,)).fetchone())
+        self.app.save_record(dict({k:row[k] or '' for k in ('child','day','category','subject','title','note','source','assistance','practice_relation')},id=rid,**changes))
+
+    def test_method_history_keeps_each_confirmed_method_with_its_feedback_conditions_and_reason(self):
+        def adjusts(messages,schema,name,timeout,**kwargs):
+            value=json.loads(messages[-1]['content']);self.last_input=value;plan=synthetic_plan(value)
+            if value['current_plan']:plan['proposal'].update(action='改为家长先示范圈出一个时间词，再请孩子独立圈下一句。',why_now='不提示时说不出线索，先换成示范后独立圈词。',choice='调整')
+            return plan
+        self.model.side_effect=adjusts
+        with self.on(14) as d14:self.approve(self.evaluate())
+        first=self.goal()['current_plan']['action']
+        with self.on(10) as d10:hinted=self.feedback('家长转述孩子：这样找线索挺好玩，提示后说对了。',assistance='少量提示')['record_id']
+        with self.on(7) as d7:alone=self.feedback('家长观察：不提示时说不出线索，孩子说不想做了。',assistance='独立尝试',practice_relation='相近的新题或新片段')['record_id']
+        with self.on(6) as d6:
+            self.approve(self.evaluate());sameday=self.feedback('家长观察：当天又试了一次。')['record_id']
+        with self.on(3):later=self.feedback('家长观察：示范后能独立圈出两个时间词。',assistance='独立尝试')['record_id']
+        self.evaluate();old,new=self.last_input['method_history']        # the next round reads it
+        self.assertIn('method_history',goals.PROMPT)
+        self.assertEqual([(e['version'],e['confirmed_on'],e['replaced_on'],e['current']) for e in (old,new)],[(1,d14,d6,False),(2,d6,'',True)])
+        self.assertEqual(old['method']['action'],first)                  # the method as confirmed then, not today's
+        self.assertNotEqual(new['method']['action'],first)
+        self.assertEqual(new['adopted_reason'],dict(choice='调整',why_now='不提示时说不出线索，先换成示范后独立圈词。'))
+        # Opposite feedback on one method stays side by side, each with its own day and help condition; no verdict is derived.
+        self.assertEqual([(f['ref'],f['day'],f['assistance'],f['practice_relation'],f['same_day']) for f in old['feedback']],
+                         [('record:%d'%hinted,d10,'少量提示','',False),('record:%d'%alone,d7,'独立尝试','相近的新题或新片段',False)])
+        self.assertEqual([(f['ref'],f['same_day']) for f in new['feedback']],[('record:%d'%sameday,True),('record:%d'%later,False)])
+        self.assertTrue(all(f['in_evidence'] and f['source'].startswith('家长转述孩子') for e in (old,new) for f in e['feedback']))
+        self.assertEqual(set(old),{'version','confirmed_on','replaced_on','current','method','adopted_reason','feedback','feedback_omitted'})
+        # A parent's correction shows in the old episode and the next analysis; neither confirmed version is rewritten.
+        plan_before=self.goal()['current_plan']
+        self.resave(hinted,note='家长更正：那次是看过答案后才说对的。',assistance='看过讲解或答案')
+        g=self.goal();seen=g['method_history'][0]['feedback'][0]
+        self.assertEqual((seen['assistance'],seen.get('corrected')),('看过讲解或答案',True))
+        self.assertNotIn('corrected',g['method_history'][0]['feedback'][1])
+        self.assertEqual(g['method_history'][0]['method']['action'],first);self.assertEqual(g['current_plan'],plan_before)
+        self.assertTrue(g['evidence_changed'])
+        self.evaluate();self.assertTrue(self.last_input['method_history'][0]['feedback'][0]['corrected'])
+        self.assertEqual(self.goal()['current_plan'],plan_before)       # still a suggestion until the parent confirms
+        # Another child's goal never sees these versions; a record moved to the other child leaves this history,
+        # and the analysis withholds earlier methods while a reviewed basis cannot be checked.
+        other=self.action('create',child_id='child-2',title='虚构另一目标',subject='英语',baseline='家长观察：虚构情况。')['id']
+        self.assertEqual(next(g for g in self.store.snapshot()['goals'] if g['id']==other)['method_history'],[])
+        self.resave(alone,child='示例乙')
+        self.assertNotIn('record:%d'%alone,[f['ref'] for e in self.goal()['method_history'] for f in e['feedback']])
+        self.evaluate();self.assertTrue(self.last_input['previous_context_unavailable']);self.assertEqual(self.last_input['method_history'],[])
 
     def test_confirming_a_plan_persists_the_judgment_to_learner_memory(self):
         import family_learner_memory as lm

@@ -215,6 +215,7 @@ why_now明确说明哪条实际反馈使哪一步需要改变、保持或暂缓�
 核对原因时先提出可区分不同原因的小尝试；一次测验表现只支持本次范围的暂时判断，不能说一次达标就代表长期掌握。首次核对的review_on建议在本次日期后7天内，属于待审核回看日。Agent新拟的数字标准为试行建议，老师原文的数字和条件保持原意。只输出schema允许字段；形成建议不修改正式计划，所有执行与变化由家长确认。证据不足时提出具体核对建议，不能返回null或把找原因的工作退给家长。
 progress是本轮已选记录中同词、同目标义、同方向的首末对照，不是连续趋势或方法效果判定；未作答、日期/条件不清不能作为升降依据。reached_independent仅表示最近记录满足“间隔后复测且距前次核对满7天的独立答对”；两次都独立答对的表现记持平，间隔证据另行保留，不代表长期掌握。
 current_plan_confirmed_on是现计划确认日，不是已经执行的证明。先核对反馈是否明确执行了该方法、发生日期是否在确认后，再结合可比作答评估；同日先后不明、只有确认前资料、未复测或未提供执行反馈时保持效果未知，不据全历史trend断言现方法有效或无效。已有执行和可比反馈仍困难时提出换方法/材料/测法供家长审核；已有间隔独立表现可减少重复、关注未覆盖方向，但不保证永久掌握或强制提高难度。不到间隔或reached_independent为false本身不表示方法失败。建议依据引用本轮evidence，资料不足就给一个可执行的小核对，不编造因果；考试和老师评测也须依据实际结果，正式计划仍由家长确认。
+method_history是本目标历次家长确认的计划版本（最早在前；version不从1开始表示更早版本未列出），由已确认版本与关联记录按规则整理，不是孩子或家长的原话，也不含任何效果结论：method是当时确认的方法原文；adopted_reason是助手当时提出该版本的理由，不是事实；feedback按家长填写的发生日期归入该版本生效期间，列出来源、帮助条件与是否同题，原文见evidence中同ref的记录，in_evidence为false表示本轮未提供原文、保持未知；same_day为true表示与该版本确认同日、先后不明，可能仍是上一方法下的表现；corrected为true表示该记录在换掉该方法的决定之后被更正，当时的调整理由可能已失去依据，按更正后的记录重新判断。孩子是否愿意做、任务是否做完、在什么帮助下的表现、方法是否有效是四件事，分别说明依据：同一方法在不同日期或帮助条件下反馈相反时并列保留，不取其一；一两次愿意或抗拒只描述当时情境，不写成孩子的长期偏好；反馈条数、完成次数与首末对照都不能证明方法有效，只有该版本确认之后、条件可比的独立表现才可作为效果线索，且不作因果断言。被换掉的方法不等于无效；出现反证或更正时可以提出恢复或改动，仍由家长确认。
 
 '''
 SCHEMA['properties']['proposal'] = PROPOSAL
@@ -526,6 +527,38 @@ class Store:
             out.append(dict(h, corrected=refs) if refs else h)
         return out
 
+    def _method_history(self, c, row, ctx, limit=4, feedback_limit=8):
+        """R19/R26: each parent-confirmed plan version with the goal's own feedback dated while it was in force.
+
+        Derived on read from goal_history, this child's linked records and the accepted suggestions; nothing is
+        stored or rewritten and no verdict is computed — willingness, completion, performance under a help
+        condition and method effect stay separate for the reader. A record dated on a confirmation day has an
+        unknown order relative to it; `corrected` marks feedback edited after the decision that replaced the method.
+        """
+        plan = ctx['plan']; confirmed = [h for h in plan.get('goal_history', []) if h.get('kind') == '计划确认' and isinstance(h.get('at'), str)]
+        if not plan.get('approved') or not confirmed: return []
+        reasons = {}
+        for item in c.execute("SELECT plan FROM agent_items WHERE job_id=? AND child_id=? AND state='accepted'", ('goal:'+row['id'], row['child_id'])):
+            p = json.loads(item['plan']); reasons[p.get('base_version')] = dict(choice=p.get('choice', ''), why_now=p.get('why_now', ''))
+        shown = {e['ref'] for e in ctx['evidence']}; owned = self._owned(c, row['child_id'])
+        feedback = [r for r in ctx['records'] if r['category'] != '课程进度' and isinstance(r['day'], str)]
+        episodes = []
+        for i, h in enumerate(confirmed):
+            nxt = confirmed[i+1] if i+1 < len(confirmed) else None
+            method = ((nxt.get('previous') or {}).get('approved') if nxt else plan['approved']) or {}
+            start, end = h['at'][:10], nxt['at'][:10] if nxt else ''
+            rows = [r for r in feedback if start <= r['day'] and (not nxt or r['day'] < end)]
+            listed = rows[-feedback_limit:]
+            corrected = set(family_learner_memory.corrected_refs(c, ['record:%d' % r['id'] for r in listed], nxt['at'], owned)) if nxt else set()
+            episodes.append(dict(version=i+1, confirmed_on=start, replaced_on=end, current=nxt is None,
+                method={k: method.get(k) for k in ('title', 'goal', 'action', 'resource', 'mastery_check', 'estimated_minutes')},
+                adopted_reason=reasons.get((h.get('previous') or {}).get('goal_version')),
+                feedback=[dict(ref='record:%d' % r['id'], day=r['day'], source=r['source'], assistance=r['assistance'],
+                               practice_relation=r['practice_relation'], same_day=r['day'] == start, in_evidence='record:%d' % r['id'] in shown,
+                               **({'corrected': True} if 'record:%d' % r['id'] in corrected else {})) for r in listed],
+                feedback_omitted=len(rows)-len(listed)))
+        return episodes[-limit:]
+
     def roots(self, c):
         children={p['id'] for p in self.app.profiles(c)}
         return [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='care' AND state IN ('draft','accepted') ORDER BY updated DESC") if r['child_id'] in children and _root(r) and json.loads(r['plan'])]
@@ -560,6 +593,7 @@ class Store:
                     school_messages=ctx['school_messages'], school_omitted=ctx['school_omitted'], school_missing=ctx['school_missing'],
                     history=plan.get('goal_history', [])[-10:], history_count=len(plan.get('goal_history', [])),
                     prior_confirmations=family_learner_memory.prior_confirmations(c, row['child_id'], row['id'], owned=self._owned(c, row['child_id'])),
+                    method_history=self._method_history(c, row, ctx),
                     pending=({**proposal, 'id': pending['id']} if current else None),
                     pending_stale=bool(pending and not current), context_hash=ctx['evidence_hash'],
                     processing=('error' if job and job['error'] else 'ready' if current else
@@ -755,16 +789,17 @@ class Store:
         confirmed_on=(ctx['plan'].get('approved_changed_at') or '')[:10]
         # Correctable long-term memory (R26): this goal's prior confirmed judgments, so the model
         # sees what was already tried/refined beyond the 24-record window instead of cold-starting.
-        prior_confirmations=[];previous_hypotheses=[]
+        prior_confirmations=[];previous_hypotheses=[];method_history=[]
         if prior_available:
             with self.agent._db() as c:
                 prior_confirmations=family_learner_memory.prior_confirmations(c, ctx['profile']['id'], ident, owned=self._owned(c, ctx['profile']['id']))
+                method_history=self._method_history(c, row, ctx)
                 previous_hypotheses=self._checked_hypotheses(c, ctx['profile']['id'], ctx['plan'])
         content=dict(as_of=now.date().isoformat(),as_of_time=now.strftime('%H:%M'),day_context=ctx['day_context'],profile=ctx['profile'],evidence=ctx['evidence'],current_plan=previous,
                      progress=progress,progress_scope='仅本轮已选的至多24条记录；首末对照不代表计划确认后的趋势，省略数见omitted_records',current_plan_confirmed_on=confirmed_on if previous else '',
                      learning_goal={k:v for k,v in ctx['fields'].items() if k!='baseline'},
                      previous_assessment=ctx['plan'].get('assessment') if prior_available else None,previous_hypotheses=previous_hypotheses if prior_available else [],previous_assessment_stale=ctx['plan'].get('approved_evidence_hash')!=ctx['evidence_hash'],
-                     previous_context_unavailable=not prior_available, prior_confirmations=prior_confirmations,
+                     previous_context_unavailable=not prior_available, prior_confirmations=prior_confirmations, method_history=method_history,
                      omitted_records=ctx['omitted_count'],missing_records=len(ctx['missing']),
                      omitted_course_records=ctx['course_omitted'],
                      omitted_teacher_requirements=ctx['teacher_requirements_omitted'],
