@@ -94,6 +94,27 @@ try:
             except ValueError: pass
             else: raise AssertionError('school material accepted without notice, original or target child')
         assert len(state['calls'])==before
+        notice='{"source_message":{"time":""}}';document=dict(name='虚构仿写要求.docx',text='第一步：阅读范文\n项目 | 要求')
+        assert llm.extract_draft(notice,[],target_child='示例甲',school_material=True,documents=[document])==material
+        body=state['calls'][-1][1];parts=body['messages'][1]['content']  # DOCX only: no image part, and the notice is sent as it was.
+        assert [p['type'] for p in parts]==['text','text','text'] and parts[0]['text']==notice and '阅读范文' not in parts[0]['text']
+        assert json.loads(parts[1]['text'])==dict(target_child='示例甲') and json.loads(parts[2]['text'])==dict(original_document=document)
+        assert 'original_document' in body['messages'][0]['content'] and '不得当成通知原话' in body['messages'][0]['content']
+        assert body['response_format']['json_schema']['name']=='family_school_material_draft'
+        llm.extract_draft(notice,[image],target_child='示例甲',school_material=True,documents=[document,document])
+        assert [p['type'] for p in state['calls'][-1][1]['messages'][1]['content']]==['text','text','text','text','image_url']
+        before=len(state['calls']);school=dict(target_child='示例甲',school_material=True)
+        for args,kwargs in [(('虚构资料',),dict(documents=[document])),(('虚构资料',[image]),dict(target_child='示例甲',documents=[document])),
+                            (('虚构作业',[image]),dict(homework=True,documents=[document])),(('虚构课表',[image]),dict(timetable=True,documents=[document])),
+                            ((notice,),school|dict(documents=[dict(name='虚构.docx',text=' \n')])),((notice,),school|dict(documents=[document|dict(data=b'x')])),
+                            ((notice,),school|dict(documents=[dict(name=None,text='正文')])),((notice,),school|dict(documents=[('虚构.docx','正文')])),
+                            ((notice,),school|dict(documents='正文')),((notice,),school|dict(documents=[document]*4)),
+                            ((notice,[image,image]),school|dict(documents=[document]*2)),
+                            (('虚'*6000,),school|dict(documents=[dict(name='虚构.docx',text='字'*6001)]))]:
+            try: llm.extract_draft(*args,**kwargs)
+            except ValueError: pass
+            else: raise AssertionError('documents accepted outside school material, malformed, too many or too long')
+        assert len(state['calls'])==before
         for bad in [DRAFT,material|dict(score=90),material|dict(title=' '),dict(title='虚构',note='虚构')]:
             state['mode']=bad
             try: llm.extract_draft('虚构通知',[image],target_child='示例甲',school_material=True)

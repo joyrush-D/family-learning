@@ -9,6 +9,9 @@ import unittest
 from unittest.mock import Mock, patch
 import zlib
 import struct
+import io
+import warnings
+import zipfile
 
 import family_agent as agent
 import family_media as media
@@ -20,6 +23,87 @@ def png(width=96, height=64):
     def chunk(kind, body):
         return struct.pack('>I', len(body)) + kind + body + struct.pack('>I', zlib.crc32(kind + body) & 0xffffffff)
     return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b'')
+
+
+_W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+_TYPES = ('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+          '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+          '<Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" '
+          'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+_RELS = '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">%s</Relationships>'
+_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/'
+
+
+def docx(body, extra=(), document=None, method=zipfile.ZIP_DEFLATED):
+    """A synthetic DOCX built in memory; extra members follow the three required parts."""
+    xml = document if document is not None else (
+        '<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="%s" '
+        'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:body>%s<w:sectPr/></w:body></w:document>' % (_W_NS, body))
+    out = io.BytesIO()
+    with warnings.catch_warnings(), zipfile.ZipFile(out, 'w', method) as z:
+        warnings.simplefilter('ignore')  # A duplicate member is written on purpose.
+        for name, text in [('[Content_Types].xml', _TYPES), ('word/document.xml', xml),
+                           ('_rels/.rels', _RELS % ('<Relationship Id="rId1" Type="%sofficeDocument" Target="word/document.xml"/>' % _REL_TYPE)), *extra]:
+            z.writestr(name, text)
+    return out.getvalue()
+
+
+def para(text, run=''):
+    return '<w:p><w:r>%s<w:t xml:space="preserve">%s</w:t></w:r></w:p>' % (run, text)
+
+
+def styles(inner, target='styles.xml'):
+    return [('word/' + target, '<?xml version="1.0" encoding="UTF-8"?><w:styles xmlns:w="%s">%s</w:styles>' % (_W_NS, inner)),
+            ('word/_rels/document.xml.rels', _RELS % ('<Relationship Id="rId2" Type="%sstyles" Target="%s"/>' % (_REL_TYPE, target)))]
+
+
+DOCX_BODY = ('<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:strike w:val="0"/></w:rPr><w:t>虚构学校·英语仿写要求</w:t></w:r></w:p>'
+             '<w:p><w:r><w:t xml:space="preserve">第一步：</w:t></w:r><w:r><w:tab/><w:t>阅读范文</w:t><w:br/><w:t>第二步：仿写五句</w:t></w:r></w:p><w:p/>'
+             '<w:tbl><w:tblPr/><w:tblGrid><w:gridCol/></w:tblGrid><w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>项目</w:t></w:r></w:p></w:tc>'
+             '<w:tc><w:p><w:r><w:t>要求</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>字数</w:t></w:r></w:p></w:tc>'
+             '<w:tc><w:p><w:r><w:t>不少于</w:t></w:r></w:p><w:p><w:r><w:t>50词</w:t></w:r></w:p></w:tc></w:tr></w:tbl>'
+             '<w:p><w:hyperlink w:anchor="end"><w:r><w:t>café ✓ 完成后交给老师</w:t></w:r></w:hyperlink></w:p>')
+DOCX_TEXT = '虚构学校·英语仿写要求\n第一步：\t阅读范文\n第二步：仿写五句\n项目 | 要求\n字数 | 不少于 / 50词\ncafé ✓ 完成后交给老师'
+_HIDDEN = '<w:style w:type="character" w:styleId="Quiet"><w:rPr><w:vanish/></w:rPr></w:style>'
+
+
+def unreadable_docx():
+    """name -> (bytes, expected code): every one must fail before any model call."""
+    entity = ('<?xml version="1.0"?><!DOCTYPE d [<!ENTITY a "虚构实体">]><w:document xmlns:w="%s"><w:body>'
+              '<w:p><w:r><w:t>&a;</w:t></w:r></w:p></w:body></w:document>' % _W_NS)
+    plain, stored = docx(para('虚构正文')), docx(para('虚构正文'), method=zipfile.ZIP_STORED)
+    no, bad = 'draft_docx_unsupported', 'draft_docx_rejected'
+    return dict(
+        picture=(docx(para('见图') + '<w:p><w:r><w:drawing/></w:r></w:p>'), no),
+        picture_file=(docx(para('见图'), [('word/media/image1.png', 'synthetic')]), no),
+        formula=(docx('<w:p><m:oMath><m:r><m:t>x+1</m:t></m:r></m:oMath></w:p>' + para('解方程')), no),
+        hidden=(docx(para('隐藏', '<w:rPr><w:vanish/></w:rPr>') + para('可见')), no),
+        struck=(docx(para('已取消的要求', '<w:rPr><w:strike/></w:rPr>') + para('可见')), no),
+        revision=(docx('<w:p><w:ins><w:r><w:t>修订</w:t></w:r></w:ins></w:p>'), no),
+        field=(docx('<w:p><w:fldSimple w:instr="DATE"><w:r><w:t>日期</w:t></w:r></w:fldSimple></w:p>'), no),
+        comment=(docx('<w:p><w:r><w:t>正文</w:t><w:commentReference w:id="0"/></w:r></w:p>'), no),
+        nested_table=(docx('<w:tbl><w:tr><w:tc><w:tbl><w:tr><w:tc>%s</w:tc></w:tr></w:tbl></w:tc></w:tr></w:tbl>' % para('内层')), no),
+        header=(docx(para('正文') + '<w:sectPr><w:headerReference w:type="default"/></w:sectPr>'), no),
+        empty=(docx('<w:p/>'), no),
+        style_hidden=(docx(para('答案：B', '<w:rPr><w:rStyle w:val="Quiet"/></w:rPr>') + para('可见'), styles(_HIDDEN)), no),
+        style_based_on=(docx('<w:p><w:pPr><w:pStyle w:val="Child"/></w:pPr><w:r><w:t>已取消</w:t></w:r></w:p>', styles(
+            '<w:style w:type="paragraph" w:styleId="Base"><w:rPr><w:dstrike/></w:rPr></w:style>'
+            '<w:style w:type="paragraph" w:styleId="Child"><w:basedOn w:val="Base"/></w:style>')), no),
+        style_default=(docx(para('正文'), styles('<w:docDefaults><w:rPrDefault><w:rPr><w:vanish/></w:rPr></w:rPrDefault></w:docDefaults>')), no),
+        style_default_paragraph=(docx(para('正文'), styles('<w:style w:type="paragraph" w:default="1" w:styleId="a"><w:rPr><w:strike/></w:rPr></w:style>')), no),
+        style_other_part=(docx(para('答案：B', '<w:rPr><w:rStyle w:val="Quiet"/></w:rPr>'), styles(_HIDDEN, 'custom.xml')), no),
+        style_part_missing=(docx(para('正文'), styles(_HIDDEN)[1:]), no),
+        not_zip=(b'synthetic bytes, not an archive', bad), truncated=(plain[:-40], bad),
+        bad_crc=(stored.replace('虚构正文'.encode(), '虚构改动'.encode()), bad),
+        external=(docx(para('正文'), [('word/_rels/document.xml.rels', _RELS % (
+            '<Relationship Id="rId9" Type="%shyperlink" Target="https://example.invalid/x" TargetMode="External"/>' % _REL_TYPE))]), bad),
+        duplicate=(docx(para('第一份'), [('word/document.xml', '<w:document xmlns:w="%s"><w:body>%s</w:body></w:document>' % (_W_NS, para('第二份')))]), bad),
+        duplicate_case=(docx(para('第一份'), [('WORD/DOCUMENT.XML', 'x')]), bad),
+        entity=(docx('', document=entity), bad), utf16=(docx('', document=('<w:document xmlns:w="%s"/>' % _W_NS).encode('utf-16')), bad),
+        invalid_utf8=(docx('', document=b'<w:document xmlns:w="' + _W_NS.encode() + b'"><w:body><w:p><w:r><w:t>\xff\xfe</w:t></w:r></w:p></w:body></w:document>'), bad),
+        macro=(docx(para('正文'), [('word/vbaProject.bin', 'x')]), bad),
+        oversize_member=(docx(para('正文'), [('word/big.xml', '0' * (media.DOCX_LIMITS['member'] + 1))]), bad),
+        oversize_text=(docx(para('字' * (media.DOCX_LIMITS['chars'] + 1))), 'draft_text_too_long'))
 
 
 class MediaTests(unittest.TestCase):
@@ -488,6 +572,67 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(self.db_rows('SELECT * FROM agent_message_drafts'),[]);self.write_config()
         setup=('uploads','agent_messages','agent_message_attachments','agent_sources','agent_media')  # Changed by this test's own links.
         self.assertEqual({k:v for k,v in self.facts().items() if k not in setup},{k:v for k,v in facts.items() if k not in setup})
+
+    def seed_docx(self, ident, body, name='虚构仿写要求.docx'):
+        self.seed_upload(ident, body)
+        with self.store._db() as c:
+            c.execute('UPDATE uploads SET name=?,mime=? WHERE id=?', (name, media.DOCX_MIME, ident))
+        return ident
+
+    def test_docx_text_reads_utf8_paragraphs_and_table_rows_or_fails_closed(self):
+        self.assertEqual(media.docx_text(docx(DOCX_BODY)), DOCX_TEXT)
+        self.assertEqual(media.docx_text(docx(para('字' * media.DOCX_LIMITS['chars']))), '字' * media.DOCX_LIMITS['chars'])
+        # A style that hides text but is not in effect for the body does not block reading; an explicit "off" is plain text.
+        self.assertEqual(media.docx_text(docx(para('可见', '<w:rPr><w:rStyle w:val="Plain"/></w:rPr>'), styles(
+            _HIDDEN + '<w:style w:type="character" w:styleId="Plain"><w:rPr><w:strike w:val="0"/></w:rPr></w:style>'))), '可见')
+        for name, (body, code) in unreadable_docx().items():
+            with self.subTest(name):
+                with self.assertRaises(media.MediaError) as caught: media.docx_text(body)
+                self.assertEqual(caught.exception.code, code)
+
+    def test_school_material_docx_only_reaches_model_apart_from_notice(self):
+        import family_llm
+        keys=self.school_fragment('英语：按所附文档完成仿写。');view=lambda:self.store.message(keys,dict)['material_draft']
+        result=dict(title='虚构仿写要求',note='文档列出仿写步骤与字数要求；未见孩子作答。',uncertainties=['发送日期未知'])
+        with patch.object(family_llm,'extract_draft',return_value=result) as model:
+            self.assertIsNone(view());self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=0,failed=0));model.assert_not_called()  # Screenshot alone.
+            ident=self.seed_docx('f'*32,docx(DOCX_BODY));self.link(keys,ident)
+            self.assertEqual((view()['state'],view()['kind']),('pending','school_material'));facts=self.facts()
+            self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=1,failed=0));model.assert_called_once()
+            text,images=model.call_args.args[:2];context=json.loads(text)
+            self.assertEqual(images,[]);self.assertEqual(set(context),{'source_message','source_name'})
+            self.assertNotIn('仿写五句',text);self.assertNotIn('docx',text)  # The notice stays apart from the original's name and text.
+            self.assertEqual(model.call_args.kwargs['documents'],[dict(name='虚构仿写要求.docx',text=DOCX_TEXT)])
+            self.assertIs(model.call_args.kwargs['school_material'],True);self.assertEqual(model.call_args.kwargs['target_child'],'示例甲')
+            ready=view();self.assertEqual((ready['state'],ready['kind'],ready['draft'],ready['upload_ids']),('ready','school_material',result,[ident]))
+            self.assertEqual(media.prepare_draft(self.store,self.now+dt.timedelta(minutes=1)),dict(used=0,failed=0));self.assertEqual(model.call_count,1)
+            self.assertEqual(self.facts(),facts)
+            extra=self.seed_upload('b'*32,png(64,96));self.link(keys,extra);self.assertEqual(view()['state'],'pending')  # A new original is a new draft.
+            self.assertEqual(media.prepare_draft(self.store,self.now+dt.timedelta(minutes=2)),dict(used=1,failed=0))
+            self.assertEqual([i['data'] for i in model.call_args.args[1]],[png(64,96)]);self.assertEqual(len(model.call_args.kwargs['documents']),1)
+        self.assertEqual(self.db_rows('SELECT * FROM records'),[])
+
+    def test_unreadable_or_misplaced_docx_never_reaches_model(self):
+        import family_llm
+        with patch.object(family_llm,'extract_draft') as model:
+            for index,(name,(body,code)) in enumerate(unreadable_docx().items()):
+                keys=self.school_fragment('虚构通知：'+name);ident=self.seed_docx(format(index,'032x'),body);self.link(keys,ident)
+                good=self.seed_upload(format(index+256,'032x'),png(40+index,50));self.link(keys,good)  # A readable image is not sent alone either.
+                view=self.store.message(keys,dict)['material_draft']
+                self.assertEqual((view['state'],view['kind'],'draft' in view),('unavailable','school_material',False),name)
+                self.assertIn('12000字' if code=='draft_text_too_long' else '本次未读取任何原件',view['explanation'],name)
+                self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=0,failed=0),name)
+                self.link(keys,ident,'detach');self.link(keys,good,'detach')
+            keys=self.school_fragment('虚构通知：两份文档合计过长')  # Each readable, together beyond the text limit: never cut to fit.
+            for ident in ('e'*32,'d'*32):self.link(keys,self.seed_docx(ident,docx(para('字'*6000+ident[0]))))
+            view=self.store.message(keys,dict)['material_draft'];self.assertEqual(view['state'],'unavailable');self.assertIn('12000字',view['explanation'])
+            self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=0,failed=0))
+            self.source=dict(id='wechat:12345@chatroom',platform='wechat',child_id='child-1',name='虚构班级',cursor='10',enabled=True);self.write_config()
+            self.ingest(self.message());keys=dict(child_id='child-1',source_id=self.source['id'],message_id='1')
+            self.link(keys,self.seed_docx('c'*32,docx(DOCX_BODY)))  # Ordinary learning material accepts images only.
+            view=self.store.message(keys,dict)['material_draft'];self.assertEqual(view['state'],'unavailable');self.assertIn('JPG、PNG、WebP',view['explanation'])
+            self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=0,failed=0));model.assert_not_called()
+        self.assertEqual(self.db_rows('SELECT * FROM agent_message_drafts'),[]);self.assertEqual(self.db_rows('SELECT * FROM records'),[])
 
 
 if __name__ == '__main__':

@@ -317,6 +317,25 @@ def _docx_children(node, tag):
             yield child
 
 
+def _docx_style_toggles(root, styles):
+    """True when document defaults, a default style or a style the body names (with its parents) hides or strikes text."""
+    table = {s.get(_W + 'styleId'): s for s in styles.iter(_W + 'style')}
+    used = {e.get(_W + 'val') for e in root.iter() if e.tag in (_W + 'pStyle', _W + 'rStyle', _W + 'tblStyle')}
+    pending = [e for e in styles if e.tag != _W + 'style' or e.get(_W + 'styleId') in used
+               or e.get(_W + 'default', '0').lower() in ('1', 'true', 'on')]
+    seen = set()
+    while pending:
+        node = pending.pop()
+        if id(node) not in seen:
+            seen.add(id(node))
+            for e in node.iter():
+                if e.tag in _DOCX_TOGGLES and e.get(_W + 'val', 'true').lower() not in ('0', 'false', 'off'):
+                    return True
+                if e.tag in (_W + 'basedOn', _W + 'link') and e.get(_W + 'val') in table:
+                    pending.append(table[e.get(_W + 'val')])
+    return False
+
+
 def docx_text(body):
     """Body paragraphs and table rows of one DOCX; never unpacked to disk, executed or fetched."""
     try:
@@ -330,7 +349,8 @@ def docx_text(body):
                     and '[Content_Types].xml' in names and 'word/document.xml' in names, 'draft_docx_rejected')
             parts = {}
             for info in infos:
-                if info.filename in ('[Content_Types].xml', 'word/document.xml') or info.filename.endswith('.rels'):
+                if (info.filename in ('[Content_Types].xml', 'word/document.xml') or info.filename.endswith('.rels')
+                        or info.filename.lower().startswith('word/') and info.filename.lower().endswith('.xml')):
                     with z.open(info) as f:  # A bounded read: the declared size alone never stops a bomb.
                         parts[info.filename] = f.read(DOCX_LIMITS['member'] + 1)
                     require(len(parts[info.filename]) == info.file_size, 'draft_docx_rejected')
@@ -352,6 +372,14 @@ def docx_text(body):
     for e in root.iter():
         on = e.get(_W + 'val', 'true').lower() not in ('0', 'false', 'off')
         require(e.tag not in _DOCX_UNREAD and not (e.tag in _DOCX_TOGGLES and on), 'draft_docx_unsupported')
+    # Hidden or struck text can also come from a style; one in effect for the body would be read as plain text.
+    named = {'word/styles.xml'} & set(parts)
+    for e in _docx_xml(parts.get('word/_rels/document.xml.rels') or b'<r/>').iter():
+        if e.get('Type', '').lower().endswith(('/styles', '/styleswitheffects')):
+            target = e.get('Target', '')
+            named.add(target[1:] if target.startswith('/') else 'word/' + target)
+    for name in named:
+        require(name in parts and not _docx_style_toggles(root, _docx_xml(parts[name])), 'draft_docx_unsupported')
     lines = []
     for block in root[0]:
         if block.tag == _W + 'p':
