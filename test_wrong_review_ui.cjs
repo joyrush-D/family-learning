@@ -115,6 +115,62 @@ async function proof(p, name) {
         await fit(p);
         await proof(p, 'wrong-upload-' + width);
 
+        // 上传失败（401）不得显示成功；失败照片不进勾选池，可重新选择重试。
+        const failOnce = {done: false};
+        await p.route('**/api/upload', async r => {
+          if (!failOnce.done) {
+            failOnce.done = true;
+            return r.fulfill({status: 401, contentType: 'application/json',
+              body: JSON.stringify({error: '虚构未授权'})});
+          }
+          return r.continue();
+        });
+        await p.locator('[data-wrong-pick]').setInputFiles(
+          [{name: 'retry.png', mimeType: 'image/png', buffer: png}]);
+        await eventually(async () => {
+          const t = await p.locator('[data-wrong-upload-status]').innerText();
+          return /本批 1 张照片上传失败\/跳过：retry\.png（虚构未授权）/.test(t);
+        }, 'upload 401 failure shown with server reason');
+        let upStatus = await p.locator('[data-wrong-upload-status]').innerText();
+        assert(!/照片已保存为私有原件/.test(upStatus), 'no false all-success after 401');
+        assert.equal(await p.locator('[data-wrong-pool] input:checked').count(), 2,
+          'failed upload not auto-selected');
+        assert.equal(await p.locator('.wrong-thumb span').filter({hasText: 'retry.png'}).count(), 0,
+          'failed upload absent from pool');
+        await p.locator('#parentLoginDialog[open]').waitFor();
+        await p.keyboard.press('Escape');
+        await p.unroute('**/api/upload');
+
+        // 失败后重新选择同一照片：上传成功并自动勾选，汇总为成功。
+        await p.locator('[data-wrong-pick]').setInputFiles(
+          [{name: 'retry.png', mimeType: 'image/png', buffer: png}]);
+        await eventually(async () => await p.locator('[data-wrong-pool] input:checked').count() === 3,
+          'retried upload succeeds and auto-selects');
+        upStatus = await p.locator('[data-wrong-upload-status]').innerText();
+        assert(/照片已保存为私有原件（本批 1 张）/.test(upStatus), 'retry shows real success');
+
+        // 混合批次：一张成功、一张 401，成功照片保留，汇总准确区分保存与失败。
+        await p.route('**/api/upload', r => {
+          if ((r.headers()['x-file-name'] || '').includes('bad')) {
+            return r.fulfill({status: 401, contentType: 'application/json',
+              body: JSON.stringify({error: '虚构未授权'})});
+          }
+          return r.continue();
+        });
+        await p.locator('[data-wrong-pick]').setInputFiles([
+          {name: 'mixed-good.png', mimeType: 'image/png', buffer: png},
+          {name: 'bad.png', mimeType: 'image/png', buffer: png},
+        ]);
+        await eventually(async () => {
+          const t = await p.locator('[data-wrong-upload-status]').innerText();
+          return /本批 1 张已保存为私有原件，1 张失败\/跳过/.test(t) && /bad\.png/.test(t);
+        }, 'mixed batch reports saved vs failed');
+        assert.equal(await p.locator('.wrong-thumb span').filter({hasText: 'mixed-good.png'}).count(), 1,
+          'successful file retained in pool');
+        assert.equal(await p.locator('.wrong-thumb span').filter({hasText: 'bad.png'}).count(), 0,
+          'failed file absent and selectable again');
+        await p.unroute('**/api/upload');
+
         // 模型失败时提示且不丢选择
         await p.route('**/api/wrong/annotate', r => r.fulfill({status: 503,
           contentType: 'application/json', body: JSON.stringify({error: '虚构标注暂不可用'})}));
@@ -131,6 +187,32 @@ async function proof(p, name) {
         assert.equal(await p.locator('[data-wrong-keep]:checked').count(), 3, 'all kept by default');
         await fit(p);
         await proof(p, 'wrong-annotated-' + width);
+
+        // 空文件与超大文件：跳过并如实汇总，不能伪装成功；已有草稿与孩子/日期/科目保持不变。
+        const beforeUpload = {
+          child: await p.locator('[data-wrong-child]').inputValue(),
+          day: await p.locator('[data-wrong-day]').inputValue(),
+          subject: await p.locator('[data-wrong-subject]').inputValue(),
+          cards: await p.locator('.wrong-item').count(),
+          checked: await p.locator('[data-wrong-pool] input:checked').count(),
+        };
+        await p.locator('[data-wrong-pick]').setInputFiles([
+          {name: 'empty.png', mimeType: 'image/png', buffer: Buffer.alloc(0)},
+          {name: 'huge.png', mimeType: 'image/png', buffer: Buffer.alloc(21 * 1024 * 1024)},
+        ]);
+        await eventually(async () => {
+          const t = await p.locator('[data-wrong-upload-status]').innerText();
+          return /本批 2 张照片上传失败\/跳过/.test(t) && /empty\.png/.test(t) && /huge\.png/.test(t);
+        }, 'empty and oversized files reported as failures');
+        upStatus = await p.locator('[data-wrong-upload-status]').innerText();
+        assert(!/照片已保存为私有原件/.test(upStatus), 'no false all-success on skip-only batch');
+        assert.equal(await p.locator('.wrong-item').count(), beforeUpload.cards, 'draft retained');
+        assert.equal(await p.locator('[data-wrong-child]').inputValue(), beforeUpload.child, 'child unchanged');
+        assert.equal(await p.locator('[data-wrong-day]').inputValue(), beforeUpload.day, 'day unchanged');
+        assert.equal(await p.locator('[data-wrong-subject]').inputValue(), beforeUpload.subject, 'subject unchanged');
+        assert.equal(await p.locator('[data-wrong-pool] input:checked').count(), beforeUpload.checked,
+          'prior selection unchanged');
+        await fit(p);
 
         // 编辑题面、取消一条勾选
         const first = p.locator('.wrong-item').first();

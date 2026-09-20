@@ -11,7 +11,8 @@ let state;
 
 function freshState() {
   return {child: '', day: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10),
-          subject: '', ids: [], draft: null, review: [], error: '', generation: 0};
+          subject: '', ids: [], draft: null, review: [], error: '', generation: 0,
+          uploadStatus: {type: '', text: ''}};
 }
 
 function imageUploads() {
@@ -29,14 +30,14 @@ function html() {
         <label>科目（可选）<input data-wrong-subject maxlength="80" value="${esc(state.subject)}" placeholder="数学、语文…"></label>
       </div>
       <div class="wrong-capture">
-        <label class="filebutton">拍试卷<input type="file" accept="image/*" capture="environment" data-wrong-camera></label>
-        <label class="filebutton">从手机相册/电脑选图<input type="file" accept="image/jpeg,image/png,image/webp" multiple data-wrong-pick></label>
+        <label class="filebutton">拍试卷<input type="file" accept="image/*" capture="environment" data-wrong-camera ${busy ? 'disabled' : ''}></label>
+        <label class="filebutton">从手机相册/电脑选图<input type="file" accept="image/jpeg,image/png,image/webp" multiple data-wrong-pick ${busy ? 'disabled' : ''}></label>
         <p class="small muted">每张最多20MB、本批合计不超过20MB；照片先存为家庭私有原件。</p>
-        <p class="small" data-wrong-upload-status role="status"></p>
+        <p class="small ${state.uploadStatus.type === 'ok' ? 'muted' : (state.uploadStatus.text ? 'error' : 'muted')}" data-wrong-upload-status role="status">${esc(state.uploadStatus.text)}</p>
       </div>
       <div data-wrong-pool></div>
       <div class="wrong-actions">
-        <button type="button" class="primary" data-wrong-annotate>框出疑似错题</button>
+        <button type="button" class="primary" data-wrong-annotate ${busy ? 'disabled' : ''}>框出疑似错题</button>
       </div>
       <p class="error" data-wrong-error role="alert"></p>
     </section>
@@ -132,26 +133,59 @@ function rerenderResult() {
 }
 
 async function uploadFiles(files) {
+  if (!files || !files.length) return;
   remember();
-  const status = root.querySelector('[data-wrong-upload-status]');
-  for (const file of files) {
-    if (file.size > 20 * 1024 * 1024 || !file.size) { status.textContent = '跳过（为空或超过20MB）：' + file.name; continue; }
-    status.textContent = '正在上传：' + file.name;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 120000);
-    try {
-      const r = await ctx.apiFetch('/api/upload', {signal: controller.signal, method: 'POST',
-        headers: {'X-Family-Token': ctx.token, 'X-File-Name': encodeURIComponent(file.name), 'Content-Type': 'application/octet-stream'}, body: file});
-      const out = await r.json();
-      if (!r.ok) throw new Error(out.error || '上传失败');
-      if (!state.ids.includes(out.attachment.id) && state.ids.length < 3) state.ids.push(out.attachment.id);
-      ctx.uploads = ctx.uploads || [];
-      if (!ctx.uploads.some(a => a.id === out.attachment.id)) ctx.uploads.unshift(out.attachment);
-    } catch (e) { status.textContent = (e.name === 'AbortError' ? '上传超时：' : '上传失败：') + file.name; }
-    finally { clearTimeout(timer); }
-  }
-  status.textContent = '照片已保存为私有原件，请勾选后标注。';
+  busy = true;
+  state.uploadStatus = {type: '', text: files.length > 1 ? `正在上传 0/${files.length}…` : '正在上传…'};
   paint();
+  const status = root.querySelector('[data-wrong-upload-status]');
+  let saved = 0, failed = 0;
+  const failedNames = [];
+  try {
+    for (const file of files) {
+      if (file.size > 20 * 1024 * 1024 || !file.size) {
+        failed++;
+        failedNames.push(file.name + '（为空或超过20MB）');
+        state.uploadStatus = {type: 'error', text: '跳过（为空或超过20MB）：' + file.name};
+        status.textContent = state.uploadStatus.text;
+        status.classList.remove('muted'); status.classList.add('error');
+        continue;
+      }
+      status.textContent = '正在上传：' + file.name;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 120000);
+      try {
+        const r = await ctx.apiFetch('/api/upload', {signal: controller.signal, method: 'POST',
+          headers: {'X-Family-Token': ctx.token, 'X-File-Name': encodeURIComponent(file.name), 'Content-Type': 'application/octet-stream'}, body: file});
+        const out = await r.json();
+        if (!r.ok) throw new Error(out.error || ('上传失败（' + r.status + '）'));
+        if (!state.ids.includes(out.attachment.id) && state.ids.length < 3) state.ids.push(out.attachment.id);
+        ctx.uploads = ctx.uploads || [];
+        if (!ctx.uploads.some(a => a.id === out.attachment.id)) ctx.uploads.unshift(out.attachment);
+        saved++;
+      } catch (e) {
+        failed++;
+        const reason = e.name === 'AbortError' ? '上传超时'
+          : (e.message || ('上传失败（HTTP）'));
+        failedNames.push(file.name + '（' + reason + '）');
+        const msg = '上传失败：' + file.name + '（' + reason + '）';
+        state.uploadStatus = {type: 'error', text: msg};
+        status.textContent = msg;
+        status.classList.remove('muted'); status.classList.add('error');
+      }
+      finally { clearTimeout(timer); }
+    }
+    if (saved && !failed) {
+      state.uploadStatus = {type: 'ok', text: `照片已保存为私有原件（本批 ${saved} 张），请勾选后标注。`};
+    } else if (saved) {
+      state.uploadStatus = {type: 'error', text: `本批 ${saved} 张已保存为私有原件，${failed} 张失败/跳过：${failedNames.join('，')}；成功的照片已保留，可重新选择失败的照片。`};
+    } else {
+      state.uploadStatus = {type: 'error', text: `本批 ${failed} 张照片上传失败/跳过：${failedNames.join('，')}；未成功保存的照片不会进入标注，可重新选择后重试。`};
+    }
+  } finally {
+    busy = false;
+    paint();
+  }
 }
 
 async function annotate() {
