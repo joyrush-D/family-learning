@@ -24,6 +24,7 @@ import datetime as dt
 import hashlib
 import json
 
+import family_learner_memory
 import family_llm
 
 MAX_EVIDENCE = 24
@@ -100,6 +101,9 @@ def _ensure(c):
     c.execute("CREATE INDEX IF NOT EXISTS diagnoses_child ON diagnoses(child_id, subject, superseded)")
 
 
+CHECKED_TRANSCRIPT = '家长已核对的原件转写（转述的媒体内容，不等于系统听到孩子作答）：'
+
+
 def _kind(row):
     src = (row['source'] or '')
     if WRONG_SOURCE in src: return 'wrong_question'
@@ -119,9 +123,12 @@ def _child(app, c, child_id):
 
 
 def _records(c, name):
+    # Media columns arrived with task feedback; an older table simply has none to read.
+    have = {r[1] for r in c.execute('PRAGMA table_info(records)')}
+    media = ''.join(',' + k for k in ('attachments', 'transcript', 'transcript_state') if k in have)
     return [dict(r) for r in c.execute(
         "SELECT id,child,day,category,subject,title,note,source,score,total,followup_kind,related_record_id,"
-        "assistance,practice_relation FROM records WHERE child=?", (name,)).fetchall()]
+        "assistance,practice_relation" + media + " FROM records WHERE child=?", (name,)).fetchall()]
 
 
 def reviewed_hints(row):
@@ -149,13 +156,18 @@ def _pick(rows, subject='', limit=MAX_EVIDENCE):
     picked.sort(key=lambda r: (r['day'] or '', r['id']), reverse=True)
     out = []
     for r in picked[:limit]:
+        # A parent-checked transcript belongs to the same record and is labelled as such; unchecked media adds no words.
+        checked = family_learner_memory.media_evidence(r).get('transcript')
+        text = (r['note'] or '')[:1000]
+        if checked: text = (text + '\n' if text else '') + CHECKED_TRANSCRIPT + checked[:1000]
         item = dict(ref='record:%d' % r['id'], kind=_kind(r), day=r['day'], subject=r['subject'] or '',
-                    title=r['title'] or '', text=(r['note'] or '')[:1000],
+                    title=r['title'] or '', text=text,
                     score=r['score'], total=r['total'], followup=r['followup_kind'] or '')
         # ⑤ A 订正/复测 only shows independent learning together with its help level and material relation.
         if r.get('followup_kind') and r.get('related_record_id'): item['related'] = 'record:%d' % r['related_record_id']
         for key in ('assistance', 'practice_relation'):
             if r.get(key): item[key] = r[key]
+        if family_learner_memory.media_unreadable(r): item['media_unread'] = True  # unknown content carries no status
         item.update(reviewed_hints(r))  # a starting point to check, never evidence by itself
         out.append(item)
     return out
@@ -186,7 +198,7 @@ def _candidate_only(item):
 
 def _validate(result, ev):
     refs = {e['ref'] for e in ev}
-    checkable = {e['ref'] for e in ev if not _candidate_only(e)}
+    checkable = {e['ref'] for e in ev if not _candidate_only(e) and not e.get('media_unread')}
     if not isinstance(result, dict) or set(result) != {'knowledge_components', 'summary', 'uncertainties'}:
         raise family_llm.LLMDraftError('诊断结果结构无法核对')
     comps = result['knowledge_components']

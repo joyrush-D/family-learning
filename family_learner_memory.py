@@ -21,7 +21,7 @@ import json
 
 # What a cited record says; a save that leaves these unchanged (or only adds an original) is not a correction.
 MATERIAL = ('day', 'category', 'subject', 'title', 'note', 'score', 'total', 'related_record_id',
-            'followup_kind', 'assistance', 'practice_relation', 'comparison_note')
+            'followup_kind', 'assistance', 'practice_relation', 'comparison_note', 'transcript', 'transcript_state')
 
 
 def _ensure(c):
@@ -220,3 +220,26 @@ def timeline(c, child_id, goal_id=None):
     else:
         rows = c.execute("SELECT * FROM learner_memory WHERE child_id=? ORDER BY id DESC", (child_id,)).fetchall()
     return [_row(r) for r in rows]
+
+
+TRANSCRIPT_CHECKED = '已核对'
+
+
+def media_evidence(row):
+    """Keys a record's media may add to its one evidence item ({} for a plain text record, which stays as it was).
+
+    A transcript the parent checked is their checked wording of the original media: not something the system
+    heard the child do, and on its own no proof of mastery or of a cause. An unchecked transcript or a bare
+    original is unknown content, so its words are withheld and the record only says that it is unread.
+    """
+    state = row.get('transcript_state') or ''
+    if state == TRANSCRIPT_CHECKED and row.get('transcript'):
+        return dict(transcript=row['transcript'], transcript_state=state)
+    if state: return dict(transcript_state=state, media_unread=True)
+    bare = not (row.get('note') or '').strip() and row.get('score') is None and (row.get('attachments') or '[]') != '[]'
+    return dict(media_unread=True) if bare else {}
+
+
+def media_unreadable(row):
+    """A record with nothing to read but unchecked media: it can be listed, never support or contradict a cause."""
+    return bool(media_evidence(row).get('media_unread')) and not (row.get('note') or '').strip() and row.get('score') is None

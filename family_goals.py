@@ -201,6 +201,7 @@ assessment说明已知与未知；hypotheses列至多四项可验证的候选原
 resource优先使用输入中的现有材料和设备；未知时明确待核对，不编造App入口、题号或已下发任务。
 照读问题必须与选用材料一致：未提供新题原文时用“你怎么答、为什么”这类通用提问，不把原题的固定选项套到任意新题，也不让家长自己改题或编题。
 choice不是暂停时mastery_check不能为空，说明如何观察独立解释或相近材料中的表现；把平台完成率、投入、孩子感受与掌握证据分开。
+记录里的transcript只在transcript_state为已核对时出现，是家长核对过的原件（录音等）转写：可引用其原话，但它是转述的媒体内容，不等于系统听到孩子作答，不能单凭它认定掌握或确认原因，帮助条件未知时先核对。media_unread为true表示原件或转写尚未经家长核对、内容未知：不得推测其中内容，不得放入原因假设的support/against；需要时建议家长先核对转写。
 source_kind为teacher_record的是家长已保存的老师明确要求，按teacher_name、day、target与原文核对；recorded_by为parent，不表示系统已核实老师身份或直接听到老师原话。记录日期不证明要求持续生效，区分当天作业、长期要求与已过时要求，当前适用性不明先核对；teacher_reason是家长记录的老师说明，不能从它推断孩子能力。群消息与老师档案指向同一条原消息时只算一项要求，不重复布置。
 
 有学校任务时，mastery_check分别写“本次要求自查”和“学习表现记录”：自查对应老师具体要求，保留任选、条件和示例；记录孩子原话、作品、实际帮助及卡住的步骤。完成作文或套用词语不代表独立掌握；教师没给字数、截止或评分标准时不擅自添加。
@@ -219,6 +220,11 @@ method_history是本目标历次家长确认的计划版本（最早在前；ver
 
 '''
 SCHEMA['properties']['proposal'] = PROPOSAL
+
+
+def _record(row):
+    """One record is one evidence item; its media adds only what family_learner_memory.media_evidence allows."""
+    return {**{k: row[k] for k in RECORD_FIELDS}, **family_learner_memory.media_evidence(row)}
 
 
 def _root(row):
@@ -436,12 +442,12 @@ class Store:
             ids |= extra
         valid = [r for ident in ids if (r := rows.get(ident)) and owners.get(r['child']) == row['child_id']]
         valid.sort(key=lambda r: (r['day'], r['id']))
-        records = [{k: r[k] for k in RECORD_FIELDS} for r in valid]
+        records = [_record(r) for r in valid]
         fields = {k: meta.get(k, '') for k in FIELDS}
         fields['title'] = fields['title'] or plan.get('goal', row['title'])
         fields['subject'] = fields['subject'] or (records[0]['subject'] if records else '')
         # ponytail: exact subject match only; textbook/edition applicability remains explicit background, not inferred.
-        courses = [{k:r[k] for k in RECORD_FIELDS} for r in rows.values()
+        courses = [_record(r) for r in rows.values()
                    if r['category']=='课程进度' and r['id'] not in ids and fields['subject'].strip()
                    and r['subject'].strip()==fields['subject'].strip() and owners.get(r['child'])==row['child_id']]
         courses.sort(key=lambda r:(r['day'],r['id']))
@@ -453,7 +459,7 @@ class Store:
             followups|=extra
         # Reuse explicit course-to-observation links; subject alone never selects personal observations.
         ids|=followups-course_ids
-        records=[{k:rows[ident][k] for k in RECORD_FIELDS} for ident in ids if ident in rows and owners.get(rows[ident]['child'])==row['child_id']]
+        records=[_record(rows[ident]) for ident in ids if ident in rows and owners.get(rows[ident]['child'])==row['child_id']]
         records.sort(key=lambda r:(r['day'],r['id']))
         missing = sorted(ids - {r['id'] for r in records})
         school_all, school_missing = self._school_context(c, row)
@@ -477,7 +483,8 @@ class Store:
             if extra <= related_refs: break
             related_refs |= extra
         record_evidence = [dict(ref='record:'+str(r['id']),text=agent._json(r),
-                               **({'kind':'school_requirement'} if r['category']=='课程进度' else {})) for r in records]
+                               **({'kind':'school_requirement'} if r['category']=='课程进度' else {}),
+                               **({'media_unread':True} if family_learner_memory.media_unreadable(r) else {})) for r in records]
         selected_records = select_evidence(record_evidence, related_refs | ({record_evidence[0]['ref']} if record_evidence else set()), 24)
         chosen_refs = {e['ref'] for e in selected_records}
         chosen = [r for r in records if 'record:'+str(r['id']) in chosen_refs]
@@ -839,6 +846,7 @@ class Store:
         if p['choice']=='暂停' and p['estimated_minutes'] is not None:raise agent.AgentError('暂停建议不能安排练习分钟数')
         refs={e['ref']:e['text'] for e in ctx['evidence']}
         requirements={e['ref'] for e in ctx['evidence'] if e.get('kind')=='school_requirement'}
+        unread={e['ref'] for e in ctx['evidence'] if e.get('media_unread')}
         if not isinstance(p['evidence'],list) or not 1<=len(p['evidence'])<=3:raise agent.AgentError('建议缺少证据')
         for e in p['evidence']:
             if not isinstance(e,dict) or set(e)!={'ref','quote'}:raise agent.AgentError('引用无法核对')
@@ -858,6 +866,7 @@ class Store:
                 if not isinstance(h[k],list) or len(h[k])>4 or any(not isinstance(ref,str) or ref not in refs for ref in h[k]):raise agent.AgentError('原因依据无法核对')
                 if any(ref.startswith('school:') or ref in requirements for ref in h[k]):raise agent.AgentError('学校要求不是孩子学习表现的证据')
                 if background in h[k]:raise agent.AgentError('尚无作答证据的跟进背景不能支持或反驳原因')
+                if any(ref in unread for ref in h[k]):raise agent.AgentError('未核对的原件或转写内容未知，不能支持或反驳原因')
             if h['status']=='有支持' and not h['support'] or h['status']=='有反证' and not h['against']:raise agent.AgentError('判断缺少对应依据')
         return p
 

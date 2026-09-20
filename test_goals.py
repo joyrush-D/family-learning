@@ -1,5 +1,6 @@
 """Synthetic goal lifecycle checks; no household data or external services."""
 import contextlib
+import io
 import datetime as dt
 import json
 from pathlib import Path
@@ -1079,6 +1080,91 @@ class GoalTests(unittest.TestCase):
         generated=next(g for g in self.store.snapshot()['goals'] if g['id']!=self.ident)
         self.assertEqual(generated['subject'],'英语');self.assertEqual(len(generated['school_messages']),1)
         self.assertEqual(self.store.route_school(),0)
+
+
+
+class MediaFeedbackEvidenceTests(unittest.TestCase):
+    """#23: task feedback media reaches the linked goal as one record; only a parent-checked transcript adds words."""
+    action=GoalTests.action;goal=GoalTests.goal;reply=GoalTests.reply;evaluate=GoalTests.evaluate;approve=GoalTests.approve;on=GoalTests.on
+    TASK='M-synthetic-1'
+
+    def setUp(self):
+        GoalTests.setUp(self)
+        with self.app.connect() as c:
+            for ident,child in ((self.TASK,'示例甲'),('M-synthetic-2','示例甲'),('M-synthetic-3','示例乙')):
+                c.execute('INSERT INTO manual_tasks(id,child,title,due,original_status,source,action) VALUES(?,?,?,?,?,?,?)',(ident,child,'虚构听写','','待跟进','虚构来源','虚构要求'))
+            c.execute('UPDATE agent_items SET task_id=? WHERE id=?',(self.TASK,self.ident))
+
+    def media(self,**obj):
+        self.count+=1;content=('synthetic original %d'%self.count).encode()
+        upload=self.app.save_upload(io.BytesIO(content),len(content),'synthetic-voice-%d.txt'%self.count)['id']
+        body=dict(task_id=self.TASK,child='示例甲',day=self.now.date().isoformat(),subject='英语',request_key='synthetic-media-'+str(self.count).zfill(8),attachments=[upload])
+        body.update(obj);self.last_body=body
+        return self.app.save_task_feedback(dict(body))
+
+    def ctx(self):
+        with self.store.agent._db() as c:return self.store._context(c,self.store._get(c,self.ident))
+
+    def test_checked_audio_only_feedback_is_one_parent_checked_item_and_a_correction_changes_freshness(self):
+        empty=self.ctx();saved=self.media(transcript='虚构转写：听写时把 yesterday 写成 yestoday。',transcript_state='已核对');ref='record:%d'%saved['record_id']
+        ctx=self.ctx();record=next(r for r in ctx['records'] if r['id']==saved['record_id'])
+        self.assertEqual((record['note'],record['transcript_state'],record['source'],record['day']),('','已核对','事项:'+self.TASK,self.last_body['day']))
+        self.assertIn('yestoday',record['transcript']);self.assertNotIn('media_unread',record)
+        items=[e for e in ctx['evidence'] if e['ref']==ref];self.assertEqual(len(items),1);self.assertNotIn('media_unread',items[0])
+        self.assertIn('yestoday',items[0]['text']);self.assertNotEqual(empty['evidence_hash'],ctx['evidence_hash'])
+        self.assertFalse([e for e in ctx['evidence'] if e['ref'].startswith('task-feedback:')])
+        self.app.save_task_feedback(dict(task_id=self.TASK,child='示例甲',record_id=saved['record_id'],expected_created=saved['feedback']['created'],transcript='虚构转写：更正后是 yesterdy。'))
+        fixed=self.ctx();self.assertNotEqual(ctx['evidence_hash'],fixed['evidence_hash'])
+        self.assertIn('yesterdy',agent._json(fixed['evidence']));self.assertNotIn('yestoday',agent._json(fixed['evidence']))
+
+    def test_unchecked_transcript_and_bare_media_stay_unknown_with_their_words_withheld(self):
+        checked=self.media(transcript='虚构已核对转写',transcript_state='已核对');pending=self.media(transcript='虚构未核对内容',transcript_state='待核对');bare=self.media()
+        ctx=self.ctx();by={r['id']:r for r in ctx['records']}
+        for saved in (pending,bare):
+            self.assertTrue(by[saved['record_id']]['media_unread']);self.assertNotIn('transcript',by[saved['record_id']])
+            self.assertTrue(next(e for e in ctx['evidence'] if e['ref']=='record:%d'%saved['record_id'])['media_unread'])
+        self.assertEqual(by[pending['record_id']]['transcript_state'],'待核对');self.assertNotIn('虚构未核对内容',agent._json(ctx['evidence']))
+
+    def test_note_with_transcript_is_one_ref_and_a_retry_adds_nothing(self):
+        saved=self.media(note='虚构家长说明：第二遍才听出来。',transcript='虚构转写内容',transcript_state='已核对');again=self.app.save_task_feedback(dict(self.last_body))
+        self.assertTrue(again['replayed']);self.assertEqual(again['record_id'],saved['record_id'])
+        ctx=self.ctx();refs=[e['ref'] for e in ctx['evidence'] if e['ref'].startswith(('record:','task-feedback:'))]
+        self.assertEqual(refs,['record:%d'%saved['record_id']]);record=ctx['records'][0]
+        self.assertEqual((record['note'],record['transcript']),('虚构家长说明：第二遍才听出来。','虚构转写内容'))
+        self.assertEqual(agent._json(ctx['evidence']).count('虚构转写内容'),1)
+
+    def test_other_task_and_other_child_feedback_is_not_this_goals_evidence(self):
+        mine=self.media(transcript='虚构本事项转写',transcript_state='已核对')
+        self.media(task_id='M-synthetic-2',transcript='虚构同孩其他事项',transcript_state='已核对');self.media(task_id='M-synthetic-3',child='示例乙',transcript='虚构另一孩子',transcript_state='已核对')
+        ctx=self.ctx();self.assertEqual([r['id'] for r in ctx['records']],[mine['record_id']])
+        text=agent._json(ctx['evidence']);self.assertNotIn('虚构同孩其他事项',text);self.assertNotIn('虚构另一孩子',text)
+
+    def test_text_only_records_keep_their_previous_shape(self):
+        rid=GoalTests.feedback(self)['record_id'];ctx=self.ctx();record=next(r for r in ctx['records'] if r['id']==rid)
+        with self.app.connect() as c:row=dict(c.execute('SELECT * FROM records WHERE id=?',(rid,)).fetchone())
+        self.assertEqual(record,{k:row[k] for k in goals.RECORD_FIELDS})
+        self.assertEqual(next(e for e in ctx['evidence'] if e['ref']=='record:%d'%rid),dict(ref='record:%d'%rid,text=agent._json(record)))
+
+    def test_downgrading_a_checked_transcript_makes_the_confirmed_judgment_stale_without_changing_the_plan(self):
+        saved=self.media(day=(self.now-dt.timedelta(days=5)).date().isoformat(),transcript='虚构转写：把 yesterday 听成 today。',transcript_state='已核对');ref='record:%d'%saved['record_id']
+        with self.on(3):self.approve(self.evaluate())
+        goal=self.goal();self.assertFalse(goal['evidence_changed']);plan=goal['current_plan']
+        self.app.save_task_feedback(dict(task_id=self.TASK,child='示例甲',record_id=saved['record_id'],expected_created=saved['feedback']['created'],transcript_state='待核对'))
+        goal=self.goal();self.assertTrue(goal['evidence_changed']);self.assertEqual(goal['current_plan'],plan)
+        self.assertNotIn('yesterday',agent._json(self.ctx()['evidence']))
+        with self.app.connect() as c:
+            self.assertEqual(goals.family_learner_memory.corrected_refs(c,[ref],goal['current_plan_confirmed_at'],self.store._owned(c,'child-1')),[ref])
+
+    def test_diagnosis_reads_the_checked_transcript_and_gives_unread_media_no_status(self):
+        import family_diagnosis
+        checked=self.media(transcript='虚构已核对转写',transcript_state='已核对');pending=self.media(transcript='虚构未核对内容',transcript_state='待核对')
+        ev={e['ref']:e for e in family_diagnosis.evidence(self.app,'child-1','英语')};good,unread='record:%d'%checked['record_id'],'record:%d'%pending['record_id']
+        self.assertEqual(ev[good]['text'],family_diagnosis.CHECKED_TRANSCRIPT+'虚构已核对转写');self.assertNotIn('media_unread',ev[good])
+        self.assertTrue(ev[unread]['media_unread']);self.assertNotIn('虚构未核对内容',json.dumps(list(ev.values()),ensure_ascii=False))
+        def status(ref):
+            result=dict(knowledge_components=[dict(name='虚构知识点',error_type='',misconception='',status='有支持',evidence=[ref],suggestion='')],summary='',uncertainties=[])
+            return family_diagnosis._validate(result,list(ev.values()))['knowledge_components'][0]['status']
+        self.assertEqual((status(good),status(unread)),('有支持','待验证'))
 
 
 if __name__=='__main__':unittest.main()
