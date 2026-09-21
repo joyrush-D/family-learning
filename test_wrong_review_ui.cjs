@@ -271,10 +271,47 @@ async function proof(p, name) {
         await last.locator('[data-wrong-field="answer"]').fill('窗处');
         await last.locator('[data-wrong-field="correction"]').fill('窗外');
 
-        // 保存勾选的 2 条
+        // 不确定写入重放：第一次 POST 已到达服务器（route.fetch，200，2 条落库）
+        // 但 route.abort 让页面收不到响应；重试必须复用同一 request_key，由后端
+        // save_record 幂等回放，而不是再建记录。
+        const saveKeys = [];
+        let saveAttempts = 0;
+        await p.route('**/api/wrong/save', async r => {
+          saveKeys.push(JSON.parse(r.request().postData()).request_key);
+          if (saveAttempts++ === 0) {
+            const res = await r.fetch();
+            await res.body();
+            return r.abort();
+          }
+          return r.continue();
+        });
         p.once('dialog', d => d.dismiss());
         await p.locator('[data-wrong-save]').click();
-        await eventually(async () => await p.locator('.wrong-saved').count() === 1, 'saved notice');
+        await eventually(async () => {
+          const st = await (await fetch(host.url + 'api/state')).json();
+          return st.records.filter(r => r.source === '错题照片核对').length === 2;
+        }, 'first aborted save still wrote two records server-side');
+        const written = (await (await fetch(host.url + 'api/state')).json()).records
+          .filter(r => r.source === '错题照片核对').map(r => r.id).sort();
+        assert.equal(written.length, 2, 'exactly two records after lost response');
+
+        // 不确定写入后家长又改了内容：后端必须拒绝不兼容的键复用，保留编辑文本。
+        await kept.locator('[data-wrong-field="note"]').fill('不确定写入后家长又改的虚构备注');
+        await p.locator('[data-wrong-save]').click();
+        await eventually(async () => /同一提交标识的内容不同/.test(
+          await p.locator('[data-wrong-save-error]').innerText()), 'changed content rejected with existing conflict error');
+        assert.equal(await kept.locator('[data-wrong-field="note"]').inputValue(),
+          '不确定写入后家长又改的虚构备注', 'edited text preserved after rejected reuse');
+        const afterConflict = (await (await fetch(host.url + 'api/state')).json()).records
+          .filter(r => r.source === '错题照片核对').map(r => r.id).sort();
+        assert.deepEqual(afterConflict, written, 'conflict retry created no duplicates');
+
+        // 内容改回后原样重试：仍是同一批 2 条、同样 ID、同样 request_key。
+        await kept.locator('[data-wrong-field="note"]').fill('先让孩子讲错在哪');
+        await p.locator('[data-wrong-save]').click();
+        await eventually(async () => await p.locator('.wrong-saved').count() === 1, 'saved notice on unchanged retry');
+        assert.equal(saveKeys.length, 3, 'three POST attempts observed');
+        assert.ok(saveKeys.every(k => k && k === saveKeys[0]), 'request_key retained across failure, conflict and retry');
         await eventually(async () => {
           const state = await (await fetch(host.url + 'api/state')).json();
           const recs = state.records.filter(r => r.source === '错题照片核对');
@@ -283,6 +320,9 @@ async function proof(p, name) {
                  recs.some(r => /家长已核对/.test(r.note)) &&
                  recs.some(r => /先让孩子讲错在哪/.test(r.note));
         }, 'two review records persisted');
+        const replayed = (await p.locator('.wrong-saved [data-record]').evaluateAll(
+          els => els.map(el => el.getAttribute('data-record')).sort()));
+        assert.deepEqual(replayed, written.map(String), 'replay returned the same record IDs');
         await fit(p);
         await proof(p, 'wrong-saved-' + width);
         assert.equal(await p.locator('.wrong-saved [data-record]').count(),2);

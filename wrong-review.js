@@ -12,7 +12,7 @@ let state;
 function freshState() {
   return {child: '', day: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10),
           subject: '', ids: [], draft: null, review: [], error: '', generation: 0,
-          uploadStatus: {type: '', text: ''}};
+          saveKey: '', uploadStatus: {type: '', text: ''}};
 }
 
 function imageUploads() {
@@ -204,6 +204,9 @@ async function annotate() {
     const out = await r.json();
     if (!r.ok) throw new Error(out.error || '标注失败');
     if (gen !== state.generation) return;
+    // A new annotation draft starts a new idempotency key; an uncertain write of
+    // an earlier draft must never be replayed against different model output.
+    state.saveKey = '';
     state.draft = out;
     state.review = out.pages.flatMap(p => p.regions.filter(r => r.kind === 'wrong_item')
       .map(r => ({uid: uid(), page: p.page, attachment: p.attachment.id, uncertain: !!r.uncertain, keep: true,
@@ -228,13 +231,18 @@ async function save() {
     .filter(r => r.label || r.text || r.answer || r.correction);
   if (!items.length) return setError('没有勾选要保存的错题；可放弃草稿或重新勾选。');
   busy = true; setError('');
+  // One key per review draft: failed/aborted POSTs (possibly already written
+  // server-side) are retried with the same key so save_record replays instead
+  // of duplicating. Cleared only on success, discard or a new annotation.
+  if (!state.saveKey) state.saveKey = uid().slice(0, 32);
   try {
     const r = await ctx.apiFetch('/api/wrong/save', {method: 'POST',
       headers: {'Content-Type': 'application/json', 'X-Family-Token': ctx.token},
       body: JSON.stringify({child: state.child, day: state.day, subject: state.subject,
-                            request_key: uid().slice(0, 32), items})});
+                            request_key: state.saveKey, items})});
     const out = await r.json();
     if (!r.ok) throw new Error(out.error || '保存失败');
+    state.saveKey = '';
     state.draft = null; state.review = []; state.ids = [];
     paint();
     let refreshed=true;try{await ctx.reload?.()}catch{refreshed=false}
@@ -257,7 +265,7 @@ function onClick(e) {
   if (!t) return;
   if (t.hasAttribute('data-wrong-annotate')) return annotate();
   if (t.hasAttribute('data-wrong-save')) return save();
-  if (t.hasAttribute('data-wrong-discard')) { state.draft = null; state.review = []; state.generation++; paint(); }
+  if (t.hasAttribute('data-wrong-discard')) { state.saveKey = ''; state.draft = null; state.review = []; state.generation++; paint(); }
 }
 
 function onChange(e) {
