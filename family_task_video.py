@@ -1,8 +1,11 @@
 """R14 task video observation draft: one task-attributed video per Agent tick, for the parent to check, read-only.
 
 Reuses the Agent's enabled switch, the tick's model budget, agent_jobs (three attempts, backoff, retry) and
-family_llm.video_feedback_draft. Nothing here writes a record, task, plan, goal, result or completion, and no
-child entry or learning evidence reads the draft table."""
+family_llm.video_feedback_draft. This repository has no separate model consent or daily quota, and none is added
+here: what actually bounds the calls is enabled, the tick's three model calls shared with all other work, and one
+job per (record, original, fingerprint) with three attempts, 5/10 minute backoff and then the parent's retry.
+Nothing here writes a record, task, plan, goal, result or completion, and no child entry or learning evidence
+reads the draft table."""
 import hashlib
 import json
 import math
@@ -10,6 +13,7 @@ import sqlite3
 import subprocess
 
 import family_llm
+import family_media
 from family_agent import AgentError, _hash
 
 SCAN_LIMIT = 50
@@ -31,6 +35,7 @@ EXPLANATIONS = {
     'probe_failed': '视频无法在本机核验（文件损坏或没有时长信息）；未发送给模型。',
     'no_video_track': '文件中没有可用的视频轨道；未发送给模型。',
     'duration_invalid': '视频时长无法确定或超过10分钟，不会截取片段后分析；未发送给模型。',
+    'webm_duration_unsupported': '这份WebM没有时长信息（浏览器直接录制的WebM常见），当前版本尚未支持，不会猜测时长；未发送给模型，请由家长查看原视频。',
     'changed': '记录、事项关联、任务要求、授权或原视频在整理期间发生变化，本次结果已丢弃。',
     'saved_invalid': '已保存的草稿未通过时间位置复核，不予显示；请查看原视频。',
 }
@@ -77,8 +82,14 @@ def _attribution(app, store, c, record_id):
         attachments = None
     _require(isinstance(attachments, list) and all(isinstance(i, str) for i in attachments), 'attachments_invalid')
     basis = 'feedback' if source.startswith('事项:') else 'link'
+    # The record as the parent last corrected it: save_record renews `created` and logs a revision on every correction
+    # and a link change renews linked_task_at, so the whole row and its revision log are the version. The child's
+    # spelling is left to child_id, which an alias rename of the same child does not change.
+    revisions = c.execute('SELECT COUNT(*),COALESCE(MAX(id),0) FROM revisions WHERE record_id=?', (record_id,)).fetchone()
+    version = dict(row={k: row[k] for k in row.keys() if k != 'child'}, revisions=list(revisions))
     return dict(record_id=record_id, child_id=profile['id'], owner=owner, names=names, task_id=task_id, basis=basis,
-                linked_at=row['linked_task_at'] if basis == 'link' else '', task=context, attachments=attachments)
+                linked_at=row['linked_task_at'] if basis == 'link' else '', version=version, task=context,
+                attachments=attachments)
 
 
 def _videos(c, base):
@@ -106,12 +117,15 @@ def _original(store, c, base, upload_id):
     for link in c.execute('SELECT source_id FROM agent_message_attachments WHERE upload_id=?', (upload_id,)):
         _require(sources.get(link['source_id']) == base['child_id'], 'original_other_child')
     _require(row['size'] <= family_llm.MAX_INPUT, 'original_too_large')
-    try:
-        body = (store.data / 'uploads' / upload_id).read_bytes()
+    try:  # Bounded, regular file only, no symlink anywhere in the path; never more than the limit is read.
+        body = family_media.read_file(store.data / 'uploads' / upload_id, family_llm.MAX_INPUT)
+    except family_media.MediaError as error:
+        raise VideoDraftError('original_changed' if str(error) == 'media_file_changed' else 'original_unavailable') from None
     except OSError:
         raise VideoDraftError('original_unavailable') from None
     _require(len(body) == row['size'], 'original_changed')
-    fingerprint = _hash([1, record_id := base['record_id'], base['child_id'], base['basis'], base['task_id'], base['linked_at'],
+    record_id = base['record_id']
+    fingerprint = _hash([2, record_id, base['child_id'], base['basis'], base['task_id'], base['linked_at'], base['version'],
                          base['task'], upload_id, row['mime'], row['size'], hashlib.sha256(body).hexdigest()])
     return dict(record_id=record_id, upload_id=upload_id, task_id=base['task_id'], task=base['task'], mime=row['mime'],
                 body=body, fingerprint=fingerprint)
@@ -146,6 +160,9 @@ def probe(body, mime):
         duration = float(raw) if type(raw) in (str, int, float) else math.nan
     except ValueError:
         duration = math.nan
+    # A WebM recorded in the browser usually has no duration header. Measuring it needs the container decoded, which is
+    # not supported yet: refuse and say so, never guess.
+    _require(mime != 'video/webm' or math.isfinite(duration), 'webm_duration_unsupported')
     _require(math.isfinite(duration) and 0 < duration <= family_llm.MAX_VIDEO_SECONDS, 'duration_invalid')
     return duration
 
