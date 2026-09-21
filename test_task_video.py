@@ -21,9 +21,9 @@ class TaskVideoTests(unittest.TestCase):
 
     def setUp(self):
         test_goals.MediaFeedbackEvidenceTests.setUp(self)
-        self.app.DATA=self.app.DATA.resolve()  # read_file refuses a symlink anywhere in the path; macOS temp dirs sit behind one.
+        self.app.DATA=self.app.DATA.resolve();self.data=self.app.DATA  # read_file refuses a symlink anywhere in the path; macOS temp dirs sit behind one.
         self.agent=agent.Store(self.app.connect,self.app.profiles,self.app.DATA,app=self.app)
-        self.duration='12.5';self.probes=[];self.sent=[];self.during_probe=self.during_call=None;self.fail=False;self.uploads={}
+        self.duration='12.5';self.probes=[];self.sent=[];self.during_probe=self.during_call=None;self.fail=False;self.uploads={};self.changes=[]
         mock.patch.object(subprocess,'run',side_effect=self.ffprobe).start();mock.patch.object(family_llm,'configuration').start()
         self.model.side_effect=self.chat;self.enable(True)
 
@@ -33,13 +33,13 @@ class TaskVideoTests(unittest.TestCase):
         assert args[0]=='ffprobe' and args[args.index('-protocol_whitelist')+1]=='pipe' and args[args.index('-i')+1]=='pipe:0',args
         if 'stream=codec_type:format=duration' in args:  # The job's probe; an upload asks for the streams only.
             self.probes.append(kwargs['input'])
-            if self.during_probe:self.during_probe()
+            if self.during_probe:self.during_probe();self.changes.append('probe')
         return subprocess.CompletedProcess(args,0,stdout=json.dumps(dict(streams=[dict(codec_type='video')],format=dict(duration=self.duration))).encode())
 
     def chat(self,messages,schema,name,timeout,**kwargs):
         if name!='family_video_feedback_draft':return self.reply(messages,schema,name,timeout,**kwargs)
         self.sent.append(json.loads(messages[-1]['content'][0]['text']))
-        if self.during_call:self.during_call()
+        if self.during_call:self.during_call();self.changes.append('call')
         if self.fail:raise family_llm.LLMDraftError('虚构模型失败')
         return json.loads(json.dumps(DRAFT))
 
@@ -53,7 +53,7 @@ class TaskVideoTests(unittest.TestCase):
             request_key='synthetic-video-'+str(self.count).zfill(8),attachments=[upload or self.clip()]))['record_id']
 
     def record(self,**obj):
-        return dict(child='示例甲',day=self.now.date().isoformat(),category='学习进展',subject='英语',title='虚构练习视频',note='虚构说明',source='家长网页记录',**obj)
+        return dict(child='示例甲',day=self.now.date().isoformat(),category='学习进展',subject='英语',title='虚构练习视频',note='虚构说明',source='家长网页记录')|obj
 
     def linked(self,task=None):
         upload=self.clip();ident=self.app.save_record(self.record(attachments=[upload]))['record_id'];self.uploads[ident]=upload
@@ -115,10 +115,10 @@ class TaskVideoTests(unittest.TestCase):
         for when in ('during_probe','during_call'):
             for name,change in (('relink',self.relink),('correct',self.correct),('disable',lambda ident:lambda:self.enable(False))):
                 with self.subTest(when=when,change=name):
-                    self.enable(True);ident=self.linked(self.TASK);sent=len(self.sent);setattr(self,when,change(ident))
+                    self.enable(True);ident=self.linked(self.TASK);sent=len(self.sent);changes=len(self.changes);setattr(self,when,change(ident))
                     try:result=self.tick()
                     finally:setattr(self,when,None)
-                    called=int(when=='during_call');self.assertEqual((result,len(self.sent)-sent),(dict(used=called,failed=1),called))
+                    self.assertEqual(len(self.changes),changes+1,'the injected change must succeed, not merely raise inside the job');called=int(when=='during_call');self.assertEqual((result,len(self.sent)-sent),(dict(used=called,failed=1),called))
                     self.assertEqual(self.rows('record_video_drafts'),0);self.assertNotIn('ready',self.state(ident))
 
     def test_a_note_only_correction_hides_the_ready_draft_and_without_the_last_recheck_a_stale_result_is_stored(self):
@@ -139,6 +139,19 @@ class TaskVideoTests(unittest.TestCase):
         self.assertIn('虚构模型失败',video['explanation']);self.assertEqual(self.rows('record_video_drafts'),0)
         self.fail=False;self.agent.act(dict(action='retry',id=video['job_id']))
         self.assertEqual((self.tick(999),self.tick(999)),(SENT,NONE));self.assertEqual((self.state(ident),len(self.sent)),(['ready'],4))
+
+    def test_independent_agent_uses_only_remaining_budget_and_does_not_repeat(self):
+        ident=self.feedback()
+        with mock.patch.object(test_goals.goals.Store,'run',return_value=dict(used=3,created=0,failed=0,children=[])),mock.patch.object(tv,'prepare',wraps=tv.prepare) as prepare:
+            agent.run_once(self.app,self.now)
+            prepare.assert_not_called()
+        self.assertEqual((self.sent,self.state(ident)),([],['pending']))
+        self.model.reset_mock()
+        result=agent.run_once(self.app,self.now)
+        self.assertEqual((result['failed'],len(self.sent),self.state(ident)),(0,1,['ready']))
+        self.assertLessEqual(self.model.call_count,3)
+        agent.run_once(self.app,self.now)
+        self.assertEqual(len(self.sent),1)
 
     def test_a_webm_without_a_duration_is_refused_as_unsupported_and_is_not_sent(self):
         self.duration='N/A'
