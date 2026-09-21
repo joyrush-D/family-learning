@@ -563,8 +563,29 @@ with patch.object(family_llm, 'build_opener', return_value=Crash()):
         first=len(state['calls'])
         draft=llm.video_feedback_draft(*good,data_path=video_path)
         assert draft==dict(observations=[dict(start_seconds=0,end_seconds=4.5,text='画面中孩子双手持绳起跳。')],
-                           uncertainties=['第5秒后画面被遮挡，无法看清'],audio_consumed=False,limits=list(llm.VIDEO_LIMITS))
-        assert '音轨未转写' in draft['limits'][0] and '不含分数' in draft['limits'][1]
+                           uncertainties=['第5秒后画面被遮挡，无法看清'],audio_assessed=False,limits=list(llm.VIDEO_LIMITS))
+        assert '本次不提供声音评估，朗读发音尚未核对' in draft['limits'][0] and '不含分数' in draft['limits'][1]
+        # 容器原样发出、可能带音轨：不声称声音未发送或未被使用，只说明本次不提供声音评估。
+        assert 'audio_consumed' not in draft and not any(word in limit for limit in draft['limits'] for word in ('音轨未','未作为依据','只依据'))
+        # 保存后重读复核：函数返回值及其JSON往返可完整再校验；固定元数据、时间位置被改或多出业务字段一律拒绝。
+        stored=json.loads(json.dumps(draft,ensure_ascii=False));kept=draft['observations'][0]
+        assert llm.validate_video_feedback(draft,12.5)==draft and llm.validate_video_feedback(stored,12.5)==draft
+        assert llm.validate_video_feedback(dict(observations=draft['observations'],uncertainties=draft['uncertainties']),12.5)
+        tampered=[draft|dict(audio_assessed=value) for value in (True,0,None,'false')]
+        tampered+=[draft|dict(limits=value) for value in ([],draft['limits'][:1],draft['limits']+['已掌握'],[draft['limits'][0],'孩子已完成任务'],
+                                                         draft['limits'][::-1],draft['limits'][0],None)]
+        tampered+=[{k:v for k,v in draft.items() if k!=gone} for gone in ('audio_assessed','limits','uncertainties')]
+        tampered+=[draft|extra for extra in (dict(audio_consumed=False),dict(score=90),dict(completed=True),dict(mastery='已掌握'),
+                                             dict(task_id=1),dict(source='家长已确认'))]
+        tampered+=[draft|dict(observations=[kept|change]) for change in (
+            dict(end_seconds=12.6),dict(start_seconds=-1),dict(start_seconds=5),dict(start_seconds='0'),dict(end_seconds=float('nan')),dict(mastery='已掌握'))]
+        for bad in tampered:
+            try: llm.validate_video_feedback(bad,12.5)
+            except llm.LLMDraftError: pass
+            else: raise AssertionError('tampered video draft re-validated')
+        try: llm.validate_video_feedback(stored,4)  # 同一草稿对照更短的视频：时间位置越界
+        except llm.LLMDraftError: pass
+        else: raise AssertionError('video draft re-validated against a shorter video')
         summary=llm.usage_summary(video_path)
         assert summary['calls']==summary['returned']==1 and summary['input_tokens']==900 and summary['total_tokens']==940
         assert len(state['calls'])==first+1
@@ -649,7 +670,7 @@ with patch.object(family_llm, 'build_opener', return_value=Crash()):
     transport=Transport(ark_result)
     with patch.dict(os.environ,ark_env,clear=True),patch.object(llm,'build_opener',return_value=transport) as build:
         draft=llm.video_feedback_draft(clip,'video/webm',12.5,task,timeout=90,data_path=video_path)
-        assert draft['observations'][0]['end_seconds']==4.5 and draft['audio_consumed'] is False
+        assert draft['observations'][0]['end_seconds']==4.5 and draft['audio_assessed'] is False and llm.validate_video_feedback(draft,12.5)==draft
         handlers=build.call_args[0]  # 复用原有传输：无环境代理、不跟随重定向
         assert isinstance(handlers[0],ProxyHandler) and handlers[0].proxies=={} and isinstance(handlers[1],llm.NoRedirect)
         (url,body,headers,wait),=transport.requests
