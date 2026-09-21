@@ -345,6 +345,10 @@ class Store:
                     source_id TEXT NOT NULL, message_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
                     payload TEXT NOT NULL, updated TEXT NOT NULL,
                     PRIMARY KEY(source_id,message_id));
+                CREATE TABLE IF NOT EXISTS record_video_drafts (
+                    record_id INTEGER NOT NULL, upload_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
+                    payload TEXT NOT NULL, updated TEXT NOT NULL,
+                    PRIMARY KEY(record_id,upload_id));
                 CREATE TABLE IF NOT EXISTS agent_media (
                     source_id TEXT NOT NULL, message_id TEXT NOT NULL,
                     state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
@@ -1483,6 +1487,11 @@ def run_once(app, now=None):
                             {'ref': quote['ref'], 'text': quote['quote']} for quote in proposal['evidence']], plan=proposal)]
                     store._save(key, fp, items, now); created += len(items); processed += 1
                 except (family_llm.LLMDraftError, AgentError, ValueError) as error: store._fail(key, now, fingerprint=fp, reason=error); failed += 1
+            # A task video uses only what is left of the tick's three calls; school messages and plans come first.
+            if budget > 0:
+                import family_task_video
+                video = family_task_video.prepare(app, store, now)
+                budget -= video['used']; processed += video['used']; failed += video['failed']
             with store._db() as c:
                 unresolved = c.execute('SELECT COUNT(*) FROM agent_jobs WHERE done=0 AND attempts>0').fetchone()[0]
                 exhausted = c.execute('SELECT COUNT(*) FROM agent_jobs WHERE done=0 AND attempts>=?', (MAX_ATTEMPTS,)).fetchone()[0]

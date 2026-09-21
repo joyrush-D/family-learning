@@ -199,5 +199,7 @@
 !/test_record_task_link_ui.cjs
 
 !/test_video.py
+!/family_task_video.py
+!/test_task_video.py
 
 !/test_lan_open_ui.cjs
