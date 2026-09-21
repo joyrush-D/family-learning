@@ -1652,6 +1652,18 @@ class Handler(BaseHTTPRequestHandler):
         if path==CA_ROUTE and family_access.tls_entry(config['base_url']): return True  # Public CA certificate for phone trust.
         if path=='/child' or path.startswith('/child/'):
             return True  # The child router requires its own invite/session; no parent identity is inherited.
+        # Explicit home-network trust: exact configured origin, direct private peer,
+        # and no proxy headers were checked above. Public/child entry stays separate.
+        if (os.environ.get('FAMILY_LAN_NO_LOGIN') == '1'
+                and family_access.lan_entry(config['base_url'])
+                and parsed.netloc.lower() == urlsplit(config['base_url']).netloc.lower()):
+            if child_request:
+                return deny(403,'孩子凭据不能用于家长入口，请从孩子页面操作')
+            if path == '/login':
+                self.reply(303,b'',headers={'Location':'/'})
+                return False
+            if path not in ('/api/parent/login','/api/parent/logout','/login.js'):
+                return True
         try:
             if family_access.dispatch(self,config,connect,ROOT): return False
             if family_access.session_authorized(self.headers,config,connect): return True

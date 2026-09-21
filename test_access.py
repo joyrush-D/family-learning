@@ -294,6 +294,27 @@ class AccessTests(unittest.TestCase):
                         self.assertEqual(get(host=lan_host, headers={'Cookie': local_cookie, 'X-Forwarded-Proto':'https'})[0], 403)
                         self.assertEqual(get(host='192.168.50.2:1', headers={'Cookie': local_cookie})[0], 403)
                         self.assertEqual(parent_login(host=lan_host)[0], 403)  # public Origin cannot log into LAN
+                        # Opt-in no-login applies only to the configured direct LAN entry.
+                        with patch.dict(os.environ, FAMILY_LAN_NO_LOGIN='1'):
+                            self.assertEqual(get(host=lan_host)[0], 200)
+                            self.assertEqual(get('/login', host=lan_host)[0], 303)
+                            self.assertEqual(get(host='family.example.ts.net')[0], 401)
+                            self.assertEqual(get(host='192.168.50.2:1')[0], 403)
+                            for header in ('Forwarded','X-Forwarded-For','X-Forwarded-Host','X-Forwarded-Proto','X-Real-IP','Tailscale-User-Login'):
+                                self.assertEqual(get(host=lan_host, headers={header:'synthetic'})[0],403)
+                            self.assertEqual(get(host=lan_host, headers={'X-Child-CSRF':'synthetic'})[0],403)
+                            self.assertEqual(get(host=lan_host, headers={'Cookie':'family_child_session=synthetic'})[0],403)
+                            with patch.object(server, 'finish_request', side_effect=lambda req, addr: app.Handler(req, ('203.0.113.10', addr[1]), server)):
+                                self.assertEqual(get(host=lan_host)[0],403)
+                            with patch.object(server, 'finish_request', side_effect=lambda req, addr: app.Handler(req, ('192.168.50.3', addr[1]), server)):
+                                status, body, _ = get(host=lan_host)
+                                self.assertEqual(status,200)
+                                token=json.loads(body)['token']
+                                event=dict(calendar,id='e'*32,title='虚构免登录安排')
+                                self.assertEqual(post('/api/calendar/save',event,host=lan_host)[0],403)
+                                self.assertEqual(post('/api/calendar/save',event,host=lan_host,headers={'X-Family-Token':token})[0],200)
+                            self.assertEqual(get(host='family.example.ts.net',headers={'Cookie':parent_cookie})[0],200)
+                        self.assertEqual(get(host=lan_host)[0],401)  # Opt-out restores authentication.
                         # Several releases used fresh browsers and evicted real parents
                         # at 32 sessions. Simulate those newer logins, then exercise HTTP.
                         with app.connect() as db:
