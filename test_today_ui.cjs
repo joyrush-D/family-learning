@@ -211,6 +211,17 @@ function fixtures(base){
    try{
     const state=await read(),date=new Date(state.today+'T12:00:00Z');date.setUTCDate(date.getUTCDate()-((date.getUTCDay()+6)%7));const monday=date.toISOString().slice(0,10);date.setUTCDate(date.getUTCDate()+5);const saturday=date.toISOString().slice(0,10),title='虚构周末观察 '+width;date.setUTCDate(date.getUTCDate()+1);const sunday=date.toISOString().slice(0,10);
     await w.goto(server.url);await ready(w);await w.locator('nav [data-page="calendar"]').click();await eventually(async()=>await w.locator('[data-calendar-column]').count()===7,'seven populated day columns');await fit(w);
+    // Weekly timetable uses the same collapsed, ordered list as day details.
+    const lessons=[{slot:'第一节',title:'虚构语文'},{slot:'第二节',title:'虚构数学'},{slot:'第三节',title:'虚构英语'}];
+    await w.route('**/api/calendar?*',async route=>{const response=await route.fetch(),body=await response.json();body.timetables.push({id:'synthetic-week-table',day:state.today,child_id:state.children[0].id,title:'虚构课表',sessions:lessons});await route.fulfill({response,json:body})});
+    await w.reload();await ready(w);await w.locator('nav [data-page="calendar"]').click();
+    const table=w.locator('[data-calendar-column="'+state.today+'"] .calendar-timetable');await table.waitFor();
+    assert.equal(await table.evaluate(e=>e.open),false,'week timetable starts collapsed');
+    await table.locator('summary').click();assert.deepEqual(await table.locator('li strong').allTextContents(),lessons.map(x=>x.title));
+    const boxes=await table.locator('li').evaluateAll(xs=>xs.map(x=>({top:x.getBoundingClientRect().top,bottom:x.getBoundingClientRect().bottom})));
+    assert.ok(boxes.every((x,i)=>!i||x.top>=boxes[i-1].bottom),'one lesson per row in original order');await table.locator('li').last().scrollIntoViewIfNeeded();await fit(w);await proof(w,'week-timetable-open-'+width);
+    await table.locator('summary').click();assert.equal(await table.evaluate(e=>e.open),false);await proof(w,'week-timetable-closed-'+width);
+    await w.unroute('**/api/calendar?*');await w.reload();await ready(w);await w.locator('nav [data-page="calendar"]').click();await eventually(async()=>await w.locator('[data-calendar-column]').count()===7,'real week reloaded');
     await w.locator('[data-calendar-new]').click();const form=w.locator('#calendarForm');await form.locator('[name="title"]').fill(title);await form.locator('[name="day"]').fill(saturday);await form.locator('[name="start_time"]').fill('16:30');await form.locator('[name="status"]').selectOption('confirmed');
     const children=form.locator('input[name="child_ids"]');for(const c of await children.all())await c.uncheck();await form.locator('input[name="child_ids"][value="'+state.children[0].id+'"]').check();
     await w.route('**/api/calendar/save',r=>r.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'虚构保存失败'})}));await form.locator('[type="submit"]').click();await eventually(()=>form.locator('[type="submit"]').isEnabled(),'failed plan preserves form');assert.equal(await form.locator('[name="title"]').inputValue(),title);assert.match(await w.locator('#calendarFormError').innerText(),/失败/);await w.unroute('**/api/calendar/save');await form.locator('[type="submit"]').click();await eventually(async()=>!await w.locator('#calendarDialog').isVisible(),'plan saved');
