@@ -468,7 +468,7 @@ function drawTaskFeedback(task){
 let videoDraftSerial=0;const videoDraftViews=new Map();
 function videoDraftPanelHTML(r){
  if(!(r.attachments||[]).some(id=>String((data.uploads||[]).find(a=>a.id===id)?.mime||'').startsWith('video/')))return '';
- return `<section class="video-draft" data-video-draft="${r.id}"><p class="small muted">后台画面观察只供家长对照原视频核对：不评估声音，不代表完成或掌握，也不会改动任务或记录。</p><button type="button" data-video-draft-load="${r.id}">查看画面观察</button></section>`;
+ return `<section class="video-draft" data-video-draft="${r.id}"><p class="small muted">画面观察待家长核对；声音未评估。</p><button type="button" data-video-draft-load="${r.id}">查看画面观察</button></section>`;
 }
 function clockText(s){s=Math.max(0,Math.round(Number(s)||0));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
 function videoDraftHTML(recordId,view,error){
@@ -482,7 +482,7 @@ function videoDraftHTML(recordId,view,error){
   const head=`<p class="small muted">${esc(name)} · ${labels[state]}</p>`,note=`<p class="source" data-video-draft-status>${esc(v?.explanation||'')}</p>`;
   if(state==='ready'){
    const d=v.draft&&typeof v.draft==='object'?v.draft:{},obs=Array.isArray(d.observations)?d.observations:[],unknown=Array.isArray(d.uncertainties)?d.uncertainties:[];
-   return `<div data-video-state="ready">${head}${obs.length?`<ul class="video-observations">${obs.map(o=>`<li><span class="small muted">${clockText(o?.start_seconds)}–${clockText(o?.end_seconds)}</span> ${esc(String(o?.text??''))}</li>`).join('')}</ul>`:'<p class="source">这次没有整理出可核对的画面观察。</p>'}<p class="source">未知或看不清：${unknown.length?esc(unknown.map(String).join('；')):'无'}</p><p class="source">${d.audio_assessed===true?'声音已评估，发音是否正确仍以家长核对为准':'声音未评估，不能据此判断发音或朗读'}；以上是待核对草稿，不代表完成或掌握，不会自动写入家长记录。</p>${note}${v.updated?`<p class="small muted">整理于 ${esc(String(v.updated))}</p>`:''}${refresh}</div>`;
+   return `<div data-video-state="ready">${head}${obs.length?`<ul class="video-observations">${obs.map(o=>`<li><span class="small muted">${clockText(o?.start_seconds)}–${clockText(o?.end_seconds)}</span> ${esc(String(o?.text??''))}</li>`).join('')}</ul>`:'<p class="source">这次没有整理出可核对的画面观察。</p>'}<p class="source">未知或看不清：${unknown.length?esc(unknown.map(String).join('；')):'无'}</p><p class="source">声音未评估；这是待核对草稿，不代表完成或掌握。</p>${v.updated?`<p class="small muted">整理于 ${esc(String(v.updated))}</p>`:''}${refresh}</div>`;
   }
   if(state==='error')return `<div data-video-state="error">${head}<p class="source" data-video-draft-status>${esc(v?.explanation||'后台整理失败')}${v?.attempts?` · 已尝试${Number(v.attempts)||0}次`:''}${v?.exhausted?' · 自动重试已停止':''}</p><button type="button" data-video-draft-retry="${recordId}" data-video-index="${i}">重试整理</button> ${refresh}</div>`;
   return `<div data-video-state="${state}">${head}${note}${refresh}</div>`;

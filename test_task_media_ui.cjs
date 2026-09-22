@@ -88,6 +88,9 @@ const fs=require('node:fs/promises'),path=require('node:path');
   await panel.locator('[data-video-draft-load]').click();await eventually(async()=>/画面观察（待家长核对）/.test(await panel.innerText()),'ready draft');
   let text=await panel.innerText();assert.match(text,/0:00–0:01/);assert.match(text,/<b>虚构<\/b>孩子在纸上写字/);assert.match(text,/看不清第二行/);assert.match(text,/声音未评估/);assert.match(text,/不代表完成或掌握/);assert.match(text,/2026-09-22 08:00/);
   assert.equal(await panel.locator('b, img').count(),0);assert.equal(await p.evaluate(()=>window.__xss),undefined);assert.equal(await p.locator('#taskFeedbackHistory video').count(),1);assert.equal(await panel.locator('[data-video-draft-retry]').count(),0);
+  if(process.env.TASK_MEDIA_UI_PROOF_DIR){await fs.mkdir(process.env.TASK_MEDIA_UI_PROOF_DIR,{recursive:true});await panel.scrollIntoViewIfNeeded();await p.screenshot({path:path.join(process.env.TASK_MEDIA_UI_PROOF_DIR,'task-video-ready-'+width+'.png')})}
+  views.push({json:video({state:'ready',draft:{observations:[],uncertainties:[],audio_assessed:true}})});
+  await panel.locator('[data-video-draft-load]').click();await eventually(async()=>/这次没有整理出/.test(await panel.innerText()),'unexpected audio flag does not invent support');assert.match(await panel.innerText(),/声音未评估/);assert.equal(/声音已评估/.test(await panel.innerText()),false);
   views.push({json:video({state:'pending',explanation:'Agent将在后台整理这份任务视频的画面观察；结果只供家长核对，不会改动任务或学习记录。'})});
   await panel.locator('[data-video-draft-load]').click();await eventually(async()=>/后台尚未整理完成/.test(await panel.innerText()),'pending draft');assert.equal(await panel.locator('[data-video-draft-retry]').count(),0);assert.equal(await panel.locator('[data-video-state="pending"]').count(),1);
   views.push({json:video({state:'error',explanation:'虚构后台整理失败',attempts:2,exhausted:true})});
