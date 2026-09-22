@@ -69,11 +69,6 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                 return pdfm.complete_evidence(self.store, c, source, message)
         except agent.AgentError: return None
 
-    def readable(self):
-        """A change confirmation needs a read text notice, not a screenshot fragment; done before any PDF round so the binding stays."""
-        with self.store._db() as c:
-            c.execute("UPDATE agent_messages SET kind='text',unread=0 WHERE source_id=? AND id=?", (self.keys['source_id'], self.keys['message_id']))
-
     def refresh(self, reply, budget=1, minutes=0):
         calls = []
 
@@ -189,7 +184,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         with self.app.connect() as c:
             target = next(t for t in self.app.tasks(c) if t['id'] == accepted['task_id'])
             original = dict(c.execute('SELECT * FROM manual_tasks WHERE id=?', (target['id'],)).fetchone())
-        self.readable(); self.seed_groups(); ident = self.candidate()
+        self.seed_groups(); ident = self.candidate()
         result, calls = self.refresh(draft(change='update', target_id=target['id'], state='review', reason='原件更正范围。'))
         self.assertEqual((result['used'], len(calls), self.brief(ident)['change'], self.brief(ident)['target_id'], self.count('manual_tasks')), (1, 1, 'update', target['id'], 1))
         obj = dict(action='school_change', id=ident, target_id=target['id'], change='update', title='更正要求', body='新要求', due='',
@@ -237,6 +232,42 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
 
     def test_group_label_never_implies_pages_between_noncontiguous_pages(self):
         self.assertEqual([agent._span(p) for p in ([3], [1, 2, 3], [1, 2, 5, 7, 8], [4, 2])], ['第3页', '第1–3页', '第1–2、5、7–8页', '第2、4页'])
+
+    def test_source_message_and_authorization_changes_before_and_after_model(self):
+        self.seed_groups(); ident = self.candidate(); before = self.item(ident)
+        config = self.data / 'agent.json'; original_config = config.read_text()
+        sql = 'SELECT payload FROM agent_messages WHERE source_id=? AND id=?'
+        args = (self.keys['source_id'], self.keys['message_id'])
+        with self.store._db() as c: original_message = c.execute(sql, args).fetchone()[0]
+        real = self.store._job
+        for phase in ('claim', 'model'):
+            for what in ('message', 'source', 'authorization'):
+                with self.subTest(phase=phase, what=what):
+                    changed = []
+                    def mutate():
+                        if what == 'message':
+                            payload = dict(json.loads(original_message), text=json.loads(original_message)['text'] + '（实际更正）')
+                            with self.store._db() as c:
+                                c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?', (json.dumps(payload, ensure_ascii=False),) + args)
+                                changed.append(c.execute(sql, args).fetchone()[0] != original_message)
+                        else:
+                            value = json.loads(original_config)
+                            source = next(s for s in value['sources'] if s['id'] == self.keys['source_id'])
+                            source['name' if what == 'source' else 'enabled'] = '实际更名' if what == 'source' else False
+                            config.write_text(json.dumps(value, ensure_ascii=False))
+                            changed.append(config.read_text() != original_config)
+                    def claimed(*a, **kw):
+                        fp = real(*a, **kw); mutate(); return fp
+                    def model(messages):
+                        mutate(); return draft()
+                    if phase == 'claim':
+                        with patch.object(self.store, '_job', side_effect=claimed): result, calls = self.refresh(draft())
+                    else: result, calls = self.refresh(model)
+                    self.assertEqual((changed, result['used'], result['failed'], len(calls), self.item(ident)),
+                                     ([True], int(phase == 'model'), 0, int(phase == 'model'), before))
+                    config.write_text(original_config)
+                    with self.store._db() as c:
+                        c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?', (original_message,) + args)
 
 
 if __name__ == '__main__':

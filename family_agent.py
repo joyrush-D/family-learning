@@ -1141,8 +1141,10 @@ def apply_school_change(app, store, obj):
             parts=entry['ref'][8:].rsplit(':',1)
             if len(parts)!=2: raise AgentError('变更的原通知无法核对')
             source,message_id=parts
-            _,message=store._message_context(c,dict(child_id=row['child_id'],source_id=source,message_id=message_id))
-            if message['unread'] or message['kind']!='text' or not message['text'].strip(): raise AgentError('请先读清变更原件，不能据占位内容修改原事项')
+            origin,message=store._message_context(c,dict(child_id=row['child_id'],source_id=source,message_id=message_id))
+            # The PDF fingerprint was checked above in this same acceptance transaction.
+            pdf_read=bool(plan.get('school_task',{}).get('pdf_evidence')) and family_pdf_material.complete_evidence(store,c,origin,message) is not None
+            if not pdf_read and (message['unread'] or message['kind']!='text' or not message['text'].strip()): raise AgentError('请先读清变更原件，不能据占位内容修改原事项')
             links.append(dict(source_id=source,message_id=message_id))
         status=app.task_status(task,update['status'] if update else None)
         if change=='update':
