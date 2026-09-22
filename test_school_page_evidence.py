@@ -255,5 +255,60 @@ class SchoolPageEvidenceTests(unittest.TestCase):
         self.assertEqual((self.item(ident)['state'], self.count('manual_tasks'), self.count('agent_items')), ('pending', 0, 1))
 
 
+    def test_same_page_after_message_or_source_change_needs_new_review(self):
+        ident = self.candidate('1'); self.save_page(); self.refresh(draft())
+        previous = self.brief(ident)['page_evidence']['fingerprint']
+        with self.store._db() as c:
+            payload = json.loads(c.execute('SELECT payload FROM agent_messages WHERE id=?', ('1',)).fetchone()[0])
+            payload['text'] += '（老师更正）'
+            c.execute('UPDATE agent_messages SET payload=? WHERE id=?', (json.dumps(payload), '1'))
+        self.save_page()  # exact same page bytes and fetched_at, but a different original message
+        with self.assertRaises(agent.AgentError) as stale:
+            self.store.act(dict(id=ident, action='accept'))
+        self.assertEqual(stale.exception.status, 409)
+        result, calls = self.refresh(draft(), minutes=1)
+        self.assertEqual((result['failed'], len(calls), self.count('manual_tasks')), (0, 1, 0))
+        self.assertNotEqual(self.brief(ident)['page_evidence']['fingerprint'], previous)
+        previous = self.brief(ident)['page_evidence']['fingerprint']
+        self.source['name'] = '更正后的虚构班级'; self.config(); self.save_page()
+        with self.assertRaises(agent.AgentError): self.store.act(dict(id=ident, action='accept'))
+        result, calls = self.refresh(draft(), minutes=2)
+        self.assertEqual((result['failed'], len(calls)), (0, 1))
+        self.assertNotEqual(self.brief(ident)['page_evidence']['fingerprint'], previous)
+        self.source['child_id'] = 'child-2'; self.config()
+        result, calls = self.refresh(draft(), minutes=3)
+        self.assertEqual((calls, self.brief(ident)['state'], self.count('manual_tasks')), ([], 'review', 0))
+        with self.assertRaises(agent.AgentError): self.store.act(dict(id=ident, action='accept'))
+
+    def test_long_urls_with_same_display_prefix_are_not_both_read(self):
+        first = LINK + '?x=' + 'a' * 600
+        other = first + 'different'
+        more = [LINK + '/' + str(i) for i in range(6)]
+        evidence = [dict(ref='message:x:1', text=' '.join([first, other] + more))]
+        seen = agent._page_evidence(evidence, [dict(ref='message:x:1', **page(url=first))])
+        self.assertEqual(seen['unread'], [other] + more)
+        self.assertEqual(agent._school_brief(draft(), evidence=evidence, pages=seen)['state'], 'review')
+
+    def test_page_change_confirmation_rechecks_before_editing_original_task(self):
+        old = self.candidate('old', text=PLAIN)
+        accepted = self.store.act(dict(id=old, action='accept', title='原作业', body='原要求'))
+        ident = self.candidate('1'); self.save_page(); self.refresh(draft())
+        with self.app.connect() as c:
+            target = next(t for t in self.app.tasks(c) if t['id'] == accepted['task_id'])
+            original = dict(c.execute('SELECT * FROM manual_tasks WHERE id=?', (target['id'],)).fetchone())
+        obj = dict(action='school_change', id=ident, target_id=target['id'], change='update', title='更正要求', body='新要求', due='',
+                   expected_updated=self.item(ident)['updated'], target_version=target['focus']['version'], target_updated='')
+        self.config(source_enabled=False)
+        with self.assertRaises(agent.AgentError) as stale: agent.apply_school_change(self.app, self.store, obj)
+        self.assertEqual((stale.exception.status, stale.exception.code), (409, 'page_evidence_stale'))
+        with self.app.connect() as c:
+            self.assertEqual(dict(c.execute('SELECT * FROM manual_tasks WHERE id=?', (target['id'],)).fetchone()), original)
+        self.assertEqual(self.item(ident)['state'], 'pending')
+        self.config()
+        result = agent.apply_school_change(self.app, self.store, obj)
+        self.assertTrue(result['school_changed'])
+        self.assertEqual((self.item(ident)['state'], self.count('manual_tasks')), ('accepted', 1))
+
+
 if __name__ == '__main__':
     unittest.main()
