@@ -19,6 +19,7 @@ import family_reading
 import family_review
 import family_task_focus
 import family_media
+import family_pdf_material
 import family_teacher_public
 
 TZ = family_review.TIMEZONE
@@ -428,6 +429,11 @@ class Store:
                     state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
                     updated TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', upload_id TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY(source_id,message_id));
+                CREATE TABLE IF NOT EXISTS agent_pdf_material (
+                    source_id TEXT NOT NULL, message_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
+                    first_page INTEGER NOT NULL, pages TEXT NOT NULL, page_count INTEGER NOT NULL,
+                    payload TEXT NOT NULL, updated TEXT NOT NULL,
+                    PRIMARY KEY(source_id,message_id,fingerprint,first_page));
                 CREATE TABLE IF NOT EXISTS agent_jobs (
                     id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
                     next_try TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', done INTEGER NOT NULL DEFAULT 0);
@@ -630,6 +636,7 @@ class Store:
                     unavailable_attachment_ids=unavailable,
                     media=family_media.collection_view(self,c,source,message,attachments),
                     material_draft=family_media.draft_view(self,c,source,message),
+                    pdf_material=family_pdf_material.view(self,c,source,message),
                     pages=self._message_pages(c, source, message))
 
     def message(self, obj, upload_info):
@@ -1688,6 +1695,10 @@ def run_once(app, now=None):
                             {'ref': quote['ref'], 'text': quote['quote']} for quote in proposal['evidence']], plan=proposal)]
                     store._save(key, fp, items, now); created += len(items); processed += 1
                 except (family_llm.LLMDraftError, AgentError, ValueError) as error: store._fail(key, now, fingerprint=fp, reason=error); failed += 1
+            # One linked-PDF page group per tick, only from what is left; school messages and plans come first.
+            if budget > 0:
+                pdf = family_pdf_material.prepare(store, now, min(budget, family_pdf_material.ROUND_CALLS))
+                budget -= pdf['used']; processed += pdf['used']; failed += pdf['failed']
             # A task video uses only what is left of the tick's three calls; school messages and plans come first.
             if budget > 0:
                 import family_task_video

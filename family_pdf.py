@@ -132,12 +132,7 @@ def _validate_page_numbers(page_numbers):
     return normalized
 
 
-def render_pages(body, page_numbers, deadline=DEADLINE_SECONDS):
-    """渲染指定页为 PNG。
-
-    返回 {"page_count": int, "pages": [...], "omitted_pages": [...],
-    "complete": bool}。complete 仅当返回页覆盖整份文档。
-    """
+def _validate_input(body, deadline):
     if not isinstance(body, bytes) or not body:
         raise PDFError("body must be non-empty bytes")
     if len(body) > MAX_BODY_BYTES:
@@ -150,6 +145,21 @@ def render_pages(body, page_numbers, deadline=DEADLINE_SECONDS):
         or deadline > DEADLINE_SECONDS
     ):
         raise PDFError("invalid deadline")
+
+
+def page_count(body, deadline=DEADLINE_SECONDS):
+    """只读取总页数，不渲染任何页；输入校验与 render_pages 相同。"""
+    _validate_input(body, deadline)
+    return _read_page_count(_tool("pdfinfo"), body, deadline)
+
+
+def render_pages(body, page_numbers, deadline=DEADLINE_SECONDS):
+    """渲染指定页为 PNG。
+
+    返回 {"page_count": int, "pages": [...], "omitted_pages": [...],
+    "complete": bool}。complete 仅当返回页覆盖整份文档。
+    """
+    _validate_input(body, deadline)
 
     requested = _validate_page_numbers(page_numbers)
 

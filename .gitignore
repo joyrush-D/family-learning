@@ -209,3 +209,6 @@
 !/test_message_page_ui.cjs
 !/family_pdf.py
 !/test_pdf.py
+!/family_pdf_material.py
+!/test_pdf_material.py
+!/contract.md
