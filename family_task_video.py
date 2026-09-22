@@ -5,7 +5,9 @@ family_llm.video_feedback_draft. This repository has no separate model consent o
 here: what actually bounds the calls is enabled, the tick's three model calls shared with all other work, and one
 job per (record, original, fingerprint) with three attempts, 5/10 minute backoff and then the parent's retry.
 Nothing here writes a record, task, plan, goal, result or completion, and no child entry or learning evidence
-reads the draft table."""
+reads the draft table. The parent's explicit review (review below) appends to record_video_reviews which observations
+of one exact draft version were confirmed or revoked; it is shown back only for that version and nothing consumes it yet."""
+import datetime as dt
 import hashlib
 import json
 import math
@@ -44,7 +46,15 @@ EXPLANATIONS = {
     'webm_duration_unsupported': '这份WebM缺少可核验的时长信息，且本机无法确定完整时间轴（文件损坏、不完整或处理超时）；不会猜测时长；未发送给模型，请由家长查看原视频。',
     'changed': '记录、事项关联、任务要求、授权或原视频在整理期间发生变化，本次结果已丢弃。',
     'saved_invalid': '已保存的草稿未通过时间位置复核，不予显示；请查看原视频。',
+    'draft_missing': '当前没有可核对的有效视频观察草稿（记录、原件、授权或草稿已变化）；请刷新后再核对。',
+    'token_stale': '页面上的视频观察已不是当前版本；请刷新后重新核对。',
+    'review_not_confirmed': '这份视频观察当前没有有效的家长核对，没有可撤回的内容。',
 }
+REVIEW_LABEL = '家长已核对的视频观察'
+REVIEW_NOTE = '家长选定了这些画面观察作为自己核对过的内容；未评估声音，不代表完成或掌握，不会自动改动任务、学习记录或计划。'
+UNCONFIRMED = '家长尚未核对这份视频观察，或已撤回核对；只有家长明确选择后才算核对。'
+MAX_OBSERVATIONS = 8  # family_llm.validate_video_feedback allows at most eight observations per draft.
+REVIEW_KEYS = ('record_id', 'upload_id', 'expected_token', 'action', 'selected')
 
 
 class VideoDraftError(ValueError):
@@ -265,7 +275,9 @@ def _saved(c, value):
                 or [payload[k] for k in ('version', 'record_id', 'upload_id', 'task_id')] != [1, value['record_id'], value['upload_id'], value['task_id']]):
             return None
         draft = family_llm.validate_video_feedback(payload['draft'], payload['duration_seconds'])
-        return dict(updated=row['updated'], duration_seconds=payload['duration_seconds'], draft=draft)
+        # The version the parent reviews: the record/original fingerprint and the saved draft itself, not its time.
+        return dict(updated=row['updated'], duration_seconds=payload['duration_seconds'], draft=draft,
+                    token=_hash([1, value['fingerprint'], payload]))
     except (sqlite3.OperationalError, ValueError, TypeError, family_llm.LLMDraftError):
         return None
 
@@ -293,7 +305,8 @@ def view(app, store, record_id):
             job = c.execute('SELECT * FROM agent_jobs WHERE id=?', (key,)).fetchone()
             same = job is not None and job['fingerprint'] == _hash({'video': value['fingerprint']})
             if saved is not None:
-                item.update(state='ready', explanation='仅供家长对照原视频核对；未评估声音，不代表完成或掌握。', **saved)
+                item.update(state='ready', explanation='仅供家长对照原视频核对；未评估声音，不代表完成或掌握。', **saved,
+                            review=_effective(_latest(c, value, saved['token']), base, value, saved))
             elif same and job['done']:
                 item.update(state='unavailable', explanation=EXPLANATIONS['saved_invalid'])
             elif same and job['error']:
@@ -362,3 +375,121 @@ def prepare(app, store, now):
         store._fail(key, now, fingerprint=fp,
                     reason=str(error) if isinstance(error, (VideoDraftError, family_llm.LLMDraftError)) else '')
         return dict(used=int(called), failed=1)
+
+
+def _now():
+    return dt.datetime.now().isoformat(timespec='seconds')
+
+
+def _latest(c, value, token):
+    """The newest review event recorded for exactly this draft version; a database without the table has none."""
+    try:
+        return c.execute('SELECT * FROM record_video_reviews WHERE record_id=? AND upload_id=? AND token=? ORDER BY id DESC LIMIT 1',
+                         (value['record_id'], value['upload_id'], token)).fetchone()
+    except sqlite3.OperationalError:
+        return None
+
+
+def _snapshot(row, base, value, saved):
+    """A confirmation row counts only if its snapshot is exactly the current draft's observations at its indices."""
+    try:
+        payload = json.loads(row['payload']); selected = payload['selected']; observations = saved['draft']['observations']
+        if (row['action'] != 'confirm' or set(payload) != {'version', 'label', 'action', 'record_id', 'upload_id', 'child_id', 'task_id',
+                'token', 'selected', 'observations', 'uncertainties', 'duration_seconds', 'audio_assessed', 'reviewed_at'}
+                or [payload[k] for k in ('version', 'action', 'record_id', 'upload_id', 'child_id', 'task_id', 'token', 'audio_assessed')]
+                != [1, 'confirm', value['record_id'], value['upload_id'], base['child_id'], value['task_id'], saved['token'], False]
+                or not isinstance(selected, list) or not selected or len(set(selected)) != len(selected)
+                or any(type(i) is not int or not 0 <= i < len(observations) for i in selected)
+                or payload['observations'] != [observations[i] for i in selected]
+                or payload['uncertainties'] != saved['draft']['uncertainties'] or payload['duration_seconds'] != saved['duration_seconds']):
+            return None
+        return payload
+    except (ValueError, TypeError, KeyError):
+        return None
+
+
+def _effective(row, base, value, saved):
+    """What the parent has confirmed for this exact version now: nothing, a revocation, or the listed observations."""
+    review = dict(state='unconfirmed', label=REVIEW_LABEL, explanation=UNCONFIRMED, audio_assessed=False)
+    if row is None:
+        return review
+    if row['action'] != 'confirm':
+        return dict(review, revoked_at=row['created'])
+    payload = _snapshot(row, base, value, saved)
+    if payload is None:
+        return review
+    return dict(state='confirmed', id=row['id'], reviewed_at=row['created'], label=REVIEW_LABEL, explanation=REVIEW_NOTE,
+                audio_assessed=False, selected=payload['selected'], observations=payload['observations'],
+                uncertainties=payload['uncertainties'], duration_seconds=payload['duration_seconds'])
+
+
+def _request(body):
+    """Exactly the parent's choice: which listed observations, of which version. No text, times or sound claims."""
+    if not isinstance(body, dict) or not set(body) <= set(REVIEW_KEYS):
+        raise AgentError('核对请求格式不正确')
+    record_id = body.get('record_id'); upload_id = body.get('upload_id'); token = body.get('expected_token')
+    action = body.get('action'); selected = body.get('selected', [])
+    if type(record_id) is not int or not 0 < record_id <= 9223372036854775807:
+        raise AgentError('记录编号不正确')
+    if not isinstance(upload_id, str) or not 0 < len(upload_id) <= 200 or any(ord(ch) < 33 for ch in upload_id):
+        raise AgentError('原件编号不正确')
+    if not isinstance(token, str) or len(token) != 64 or any(ch not in '0123456789abcdef' for ch in token):
+        raise AgentError('核对版本标识不正确')
+    if action not in ('confirm', 'revoke'):
+        raise AgentError('核对动作不正确')
+    if (not isinstance(selected, list) or len(selected) > MAX_OBSERVATIONS or len(set(selected)) != len(selected)
+            or any(type(i) is not int or not 0 <= i < MAX_OBSERVATIONS for i in selected)):
+        raise AgentError('所选观察编号不正确')
+    if action == 'confirm' and not selected:
+        raise AgentError('请至少选择一条画面观察')
+    if action == 'revoke' and selected:
+        raise AgentError('撤回不能附带所选观察')
+    return dict(record_id=record_id, upload_id=upload_id, expected_token=token, action=action, selected=sorted(selected))
+
+
+def _result(row, base, value, saved, repeated):
+    return dict(record_id=value['record_id'], upload_id=value['upload_id'], task_id=value['task_id'], token=saved['token'],
+                id=row['id'], action=row['action'], reviewed_at=row['created'], repeated=repeated,
+                review=_effective(row, base, value, saved))
+
+
+def review(app, store, body):
+    """The parent's explicit confirmation or revocation of listed current observations; appended, never rewritten.
+
+    No model and no probe: inside one BEGIN IMMEDIATE the switch, child, task, record revision, link, original bytes,
+    saved draft and the caller's expected token are re-read, and a row is written only if they still describe the
+    version the parent looked at (otherwise 409). An identical retry of the latest event returns that event's id
+    without a new row; a different request appends. A confirmation is the parent's reading of the picture with
+    sound unassessed; it is not completion, mastery or a learning record, and nothing consumes it yet."""
+    request = _request(body); now = _now()
+    with store._db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        try:
+            _require(store._config(c)['enabled'], 'agent_disabled')
+            base = _attribution(app, store, c, request['record_id'])
+            value = _original(store, c, base, request['upload_id'])
+            saved = _saved(c, value)
+            _require(saved is not None, 'draft_missing')
+            _require(saved['token'] == request['expected_token'], 'token_stale')
+        except (AgentError, VideoDraftError) as error:
+            raise AgentError(str(error), 409, error.code) from None
+        observations = saved['draft']['observations']
+        if any(i >= len(observations) for i in request['selected']):
+            raise AgentError('所选观察编号不存在')
+        latest = _latest(c, value, saved['token']); digest = _hash([1, request])
+        if latest is not None and latest['request'] == digest:
+            return _result(latest, base, value, saved, True)
+        if request['action'] == 'revoke' and (latest is None or _snapshot(latest, base, value, saved) is None):
+            raise AgentError(EXPLANATIONS['review_not_confirmed'], 409, 'review_not_confirmed')
+        payload = dict(version=1, label=REVIEW_LABEL, action=request['action'], record_id=value['record_id'],
+                       upload_id=value['upload_id'], child_id=base['child_id'], task_id=value['task_id'], token=saved['token'],
+                       selected=request['selected'], observations=[observations[i] for i in request['selected']],
+                       uncertainties=saved['draft']['uncertainties'], duration_seconds=saved['duration_seconds'],
+                       audio_assessed=False, reviewed_at=now)
+        if request['action'] == 'revoke':
+            payload.update(revokes=latest['id'])
+        cursor = c.execute('INSERT INTO record_video_reviews(record_id,upload_id,token,action,request,payload,created) VALUES(?,?,?,?,?,?,?)',
+                           (value['record_id'], value['upload_id'], saved['token'], request['action'], digest,
+                            json.dumps(payload, ensure_ascii=False, allow_nan=False), now))
+        row = c.execute('SELECT * FROM record_video_reviews WHERE id=?', (cursor.lastrowid,)).fetchone()
+        return _result(row, base, value, saved, False)

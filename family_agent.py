@@ -476,6 +476,9 @@ class Store:
                     record_id INTEGER NOT NULL, upload_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
                     payload TEXT NOT NULL, updated TEXT NOT NULL,
                     PRIMARY KEY(record_id,upload_id));
+                CREATE TABLE IF NOT EXISTS record_video_reviews (
+                    id INTEGER PRIMARY KEY, record_id INTEGER NOT NULL, upload_id TEXT NOT NULL, token TEXT NOT NULL,
+                    action TEXT NOT NULL, request TEXT NOT NULL, payload TEXT NOT NULL, created TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS agent_media (
                     source_id TEXT NOT NULL, message_id TEXT NOT NULL,
                     state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
