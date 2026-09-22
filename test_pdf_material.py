@@ -54,6 +54,27 @@ class PdfMaterialTests(Base):
     def view(self, keys):
         return self.store.message(keys, dict)['pdf_material']
 
+    def facts(self):
+        facts = super().facts(); del facts['agent_pdf_material']  # The one table this line may write; everything else must not move.
+        return facts
+
+    def progress(self):
+        return self.rows('SELECT first_page,pages,page_count FROM agent_pdf_material ORDER BY fingerprint,first_page')
+
+    def claim_for_other_child(self, ident):
+        """child-2's reading work already owns the upload: the same binding `_message_upload` enforces for child-1."""
+        with self.store._db() as c:
+            columns = [tuple(r) for r in c.execute('PRAGMA table_info(reading_uploads)')]
+            self.assertTrue(columns)
+            values = {n: (ident if n == 'upload_id' else 'child-2' if n == 'child_id' else 0 if 'INT' in t.upper() else '')
+                      for _, n, t, notnull, default, _ in columns if n in ('upload_id', 'child_id') or (notnull and default is None)}
+            c.execute('INSERT INTO reading_uploads(%s) VALUES(%s)' % (','.join(values), ','.join('?' * len(values))), list(values.values()))
+        with self.store._db() as c:
+            self.assertEqual(self.store._message_upload(c, 'child-2', ident)['id'], ident)
+            with self.assertRaises(agent.AgentError) as raised:
+                self.store._message_upload(c, 'child-1', ident)
+            self.assertIn('另一位孩子', str(raised.exception))
+
     def rows(self, sql, *params):
         with self.store._db() as c:
             return [tuple(r) for r in c.execute(sql, params).fetchall()]
@@ -103,6 +124,7 @@ class PdfMaterialTests(Base):
         self.assertEqual([b['draft']['title'] for b in shown['batches']], ['第%s页' % b for b in BATCHES])
         self.assertEqual(shown['explanation'], '')
         self.assertEqual((self.facts(), self.consumers()), (facts, consumers))
+        self.assertEqual([(r[0], r[2]) for r in self.progress()], [(1, 11), (4, 11), (7, 11), (10, 11)])
 
     def test_failed_group_keeps_saved_groups_and_retries_only_pending_pages(self):
         keys = self.school_fragment('英语：阅读所附材料。'); self.link(keys, self.seed_pdf('b' * 32))
@@ -147,8 +169,7 @@ class PdfMaterialTests(Base):
                 self.assertEqual(self.view(keys)['processed_pages'], [1, 2, 3])  # Saved groups survive re-authorization.
             self.assertEqual(m.call_count, 1)
             other = self.seed_pdf('e' * 32, name='别人的.pdf')
-            with self.store._db() as c:
-                self.store._message_upload(c, 'child-2', other)  # Claimed by the other child first.
+            self.claim_for_other_child(other)
             self.link(keys, pdf, 'detach'); self.link(keys, other)
             self.assertEqual(self.view(keys)['state'], 'unavailable')
             with no_render():
@@ -168,7 +189,7 @@ class PdfMaterialTests(Base):
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
         self.assertEqual(m.call_count, 1)
         self.assertEqual(self.rows('SELECT COUNT(*) FROM agent_pdf_material'), [(0,)])
-        self.assertEqual(self.rows("SELECT done,error FROM agent_jobs WHERE id LIKE 'pdf-material:%'"), [(1, '')])
+        self.assertEqual(self.rows("SELECT * FROM agent_jobs WHERE id LIKE 'pdf-material:%'"), [])  # Withdrawn, not completed.
         self.assertIsNone(self.view(keys))
         self.link(keys, pdf)
 
@@ -185,6 +206,11 @@ class PdfMaterialTests(Base):
         self.assertEqual(self.rows('SELECT COUNT(*) FROM agent_pdf_material'), [(0,)])
         shown = self.view(keys)
         self.assertEqual((shown['state'], shown['batches'], shown['processed_pages']), ('pending', [], []))
+        with renderer(), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:  # Recovery: the corrected notice continues.
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=2)), dict(used=1, failed=0))
+            with no_render():
+                self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=3)), dict(used=0, failed=0))
+        self.assertEqual((m.call_count, self.view(keys)['processed_pages'], [r[0] for r in self.progress()]), (1, [1, 2, 3], [1]))
 
     def test_changed_original_hides_old_groups_and_restarts_from_page_one(self):
         keys = self.school_fragment('数学：见附件。'); pdf = self.seed_pdf('1' * 32); self.link(keys, pdf); seen = []
@@ -238,6 +264,64 @@ class PdfMaterialTests(Base):
         saved = json.loads(self.rows('SELECT payload FROM agent_pdf_material')[0][0])
         self.assertEqual(set(saved), {'kind', 'title', 'note', 'uncertainties'})
         self.assertEqual((self.facts(), self.consumers()), (facts, consumers))
+        self.assertEqual([r[0] for r in self.progress()], [1])
+
+    def test_change_after_render_sends_nothing_and_progress_resumes_after_restore(self):
+        keys = self.school_fragment('数学：见附件。'); pdf = self.seed_pdf('7' * 32); self.link(keys, pdf)
+
+        def correct():
+            with self.store._db() as c:
+                c.execute('BEGIN IMMEDIATE')
+                payload = json.loads(c.execute('SELECT payload FROM agent_messages WHERE id=?', (keys['message_id'],)).fetchone()['payload'])
+                payload['text'] += '（家长更正）'
+                c.execute('UPDATE agent_messages SET payload=? WHERE id=?', (json.dumps(payload, ensure_ascii=False), keys['message_id']))
+        cases = [(lambda: self.write_config(enabled=False), lambda: self.assertFalse(self.store._config()['enabled']), self.write_config),
+                 (lambda: self.link(keys, pdf, 'detach'),
+                  lambda: self.assertEqual(self.rows('SELECT * FROM agent_message_attachments WHERE upload_id=?', pdf), []),
+                  lambda: self.link(keys, pdf)),
+                 (correct, lambda: self.assertIn('家长更正', self.store.message(keys, dict)['message']['text']), lambda: None)]
+        real = family_pdf.render_pages
+        for index, (change, applied, restore) in enumerate(cases):
+            def rendered_then_changed(body, pages, deadline=family_pdf.DEADLINE_SECONDS, change=change):
+                result = real(body, pages, deadline); change(); return result
+            with renderer(), patch.object(family_pdf, 'render_pages', side_effect=rendered_then_changed) as r, \
+                    patch.object(family_llm, 'extract_draft', side_effect=AssertionError('model after a change')) as m:
+                self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=index)), dict(used=0, failed=0))
+            self.assertEqual((r.call_count, m.call_count), (1, 0)); applied()  # The change really took effect; nothing went out.
+            self.assertEqual(self.rows('SELECT COUNT(*) FROM agent_pdf_material'), [(0,)])
+            self.assertEqual(self.rows("SELECT * FROM agent_jobs WHERE id LIKE 'pdf-material:%'"), [])
+            restore()
+        with renderer(), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:  # Restored: continues with one call.
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=5)), dict(used=1, failed=0))
+        self.assertEqual((m.call_count, self.view(keys)['processed_pages']), (1, [1, 2, 3]))
+
+    def test_corrupted_progress_rows_never_fake_coverage_or_block_real_groups(self):
+        keys = self.school_fragment('数学：见附件。'); pdf = self.seed_pdf('8' * 32); self.link(keys, pdf); seen = []
+        with self.store._db() as c:
+            source, message = self.store._message_context(c, keys)
+            fp = pdfm.pdf_input(self.store, c, source, message)['fingerprint']
+            payload = json.dumps(dict(kind='school_material', **DRAFT), ensure_ascii=False)
+            for first, pages, count in [(1, list(range(1, 12)), 11), (2, [2, 2, 3], 11), (3, [3, 4, 5], 500), (5, [4, 5, 6], 11),
+                                        (6, [6, 30], 11), (7, [7, 8, 9], 11)]:  # Only the last row is a real page group.
+                c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?)',
+                          (source['id'], message['id'], fp, first, json.dumps(pages), count, payload, self.now.isoformat()))
+        shown = self.view(keys)
+        self.assertEqual((shown['page_count'], shown['processed_pages'], shown['complete'], shown['state']), (11, [7, 8, 9], False, 'pending'))
+        with renderer(), patch.object(family_llm, 'extract_draft',
+                                      side_effect=lambda text, images, **kw: seen.append(json.loads(text)['original_pdf']['pages']) or DRAFT):
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
+        self.assertEqual((seen, self.view(keys)['processed_pages']), ([[1, 2, 3]], [1, 2, 3, 7, 8, 9]))
+
+    def test_run_once_hands_the_pdf_one_call_of_the_tick_budget(self):
+        keys = self.school_fragment('数学：见附件。'); self.link(keys, self.seed_pdf('9' * 32)); budgets = []; real = pdfm.prepare
+
+        def spy(store, now, budget=pdfm.ROUND_CALLS):
+            budgets.append(budget); return real(store, now, budget)
+        with renderer(), patch.object(pdfm, 'prepare', side_effect=spy), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:
+            agent.run_once(self.app, self.now)
+        self.assertEqual(budgets, [1])
+        self.assertEqual([c.kwargs.get('school_material') for c in m.call_args_list if 'original_pdf' in c.args[0]], [True])
+        self.assertEqual(self.view(keys)['processed_pages'], [1, 2, 3])
 
     def test_tick_hook_uses_leftover_budget_with_one_call_cap(self):
         source = inspect.getsource(agent.run_once)
