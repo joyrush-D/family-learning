@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest.mock import patch
 with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
  os.environ['FAMILY_DATA']=tmp
+ os.environ['FAMILY_HOST']='family.test';os.environ['FAMILY_USER']='synthetic-parent'
  import app,family_agent,family_llm,family_pdf,family_pdf_material,family_qq_capture,test_pdf
  app.DATA=Path(tmp).resolve();app.DB=app.DATA/'family.sqlite3'
  docs={'家庭运行规则.md':'| child-1 | 示例星星 | — | 9岁 | 三年级 |\n| child-2 | 示例小宇 | — | 12岁 | 六年级 |\n'}
