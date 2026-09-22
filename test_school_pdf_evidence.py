@@ -62,6 +62,18 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
     def count(self, table):
         return self.rows('SELECT COUNT(*) FROM ' + table)[0][0]
 
+    def material(self):
+        try:
+            with self.store._db() as c:
+                source, message = self.store._message_context(c, self.keys)
+                return pdfm.complete_evidence(self.store, c, source, message)
+        except agent.AgentError: return None
+
+    def readable(self):
+        """A change confirmation needs a read text notice, not a screenshot fragment; done before any PDF round so the binding stays."""
+        with self.store._db() as c:
+            c.execute("UPDATE agent_messages SET kind='text',unread=0 WHERE source_id=? AND id=?", (self.keys['source_id'], self.keys['message_id']))
+
     def refresh(self, reply, budget=1, minutes=0):
         calls = []
 
@@ -176,7 +188,8 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         accepted = self.store.act(dict(id=target_item, action='accept'))  # a notice without PDF keeps the ordinary path
         with self.app.connect() as c:
             target = next(t for t in self.app.tasks(c) if t['id'] == accepted['task_id'])
-        self.seed_groups(); ident = self.candidate()
+            original = dict(c.execute('SELECT * FROM manual_tasks WHERE id=?', (target['id'],)).fetchone())
+        self.readable(); self.seed_groups(); ident = self.candidate()
         result, calls = self.refresh(draft(change='update', target_id=target['id'], state='review', reason='原件更正范围。'))
         self.assertEqual((result['used'], len(calls), self.brief(ident)['change'], self.brief(ident)['target_id'], self.count('manual_tasks')), (1, 1, 'update', target['id'], 1))
         obj = dict(action='school_change', id=ident, target_id=target['id'], change='update', title='更正要求', body='新要求', due='',
@@ -186,10 +199,44 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertEqual((stale.exception.status, stale.exception.code, self.item(ident)['state']), (409, 'pdf_evidence_stale', 'pending'))
         with self.assertRaises(agent.AgentError) as stale: self.store.act(dict(id=ident, action='accept', school_new=True))
         self.assertEqual((stale.exception.status, stale.exception.code, self.count('manual_tasks')), (409, 'pdf_evidence_stale', 1))
+        with self.app.connect() as c:
+            self.assertEqual(dict(c.execute('SELECT * FROM manual_tasks WHERE id=?', (target['id'],)).fetchone()), original)
         self.link(self.keys, self.pdf)
-        try: outcome = agent.apply_school_change(self.app, self.store, dict(obj, expected_updated=self.item(ident)['updated']))
-        except agent.AgentError as error: outcome = (error.status, error.code)
-        self.assertNotEqual(outcome, (409, 'pdf_evidence_stale')); print('restored change outcome:', outcome)
+        outcome = agent.apply_school_change(self.app, self.store, dict(obj, expected_updated=self.item(ident)['updated']))
+        self.assertEqual((outcome['school_changed'], outcome['task_id'], self.item(ident)['state'], self.count('manual_tasks')), (True, target['id'], 'accepted', 1))
+        with self.app.connect() as c:
+            changed = dict(c.execute('SELECT * FROM manual_tasks WHERE id=?', (target['id'],)).fetchone())
+        self.assertNotEqual(changed, original); self.assertIn(TEXT, changed['source'])
+
+    def test_change_during_job_claim_causes_no_model_call_and_same_evidence_recovers_once(self):
+        self.seed_groups(); ident = self.candidate(); before = self.item(ident); real = self.store._job; job = 'school-task:' + ident
+
+        def claim(mutate):
+            def claimed(*args, **kwargs):
+                fp = real(*args, **kwargs); mutate(); return fp
+            return claimed
+        with patch.object(self.store, '_job', side_effect=claim(lambda: self.set_sources(False))):  # authorization revoked after the claim
+            result, calls = self.refresh(draft())
+        self.assertIsNone(self.material())
+        self.assertEqual((result['used'], result['failed'], calls, self.item(ident), self.rows('SELECT done,error FROM agent_jobs WHERE id=?', job)), (0, 0, [], before, [(1, '')]))
+        self.assertEqual((self.refresh(draft(), minutes=1)[1], self.item(ident)), ([], before))  # still revoked: nothing repeats
+        self.set_sources(True)
+        with patch.object(self.store, '_job', side_effect=claim(lambda: self.link(self.keys, self.pdf, action=DETACH))):  # original detached after the claim
+            result, calls = self.refresh(draft(), minutes=2)
+        self.assertEqual(self.rows('SELECT COUNT(*) FROM agent_message_attachments WHERE upload_id=?', self.pdf), [(0,)])
+        self.assertEqual((result['used'], calls, self.item(ident)), (0, [], before))
+        self.link(self.keys, self.pdf)
+        with patch.object(self.store, '_job', side_effect=claim(lambda: self.store.act(dict(id=ident, action='dismiss')))):  # candidate dismissed after the claim
+            result, calls = self.refresh(draft(), minutes=3)
+        self.assertEqual((result['used'], calls, self.item(ident)['state'], self.brief(ident).get('pdf_evidence')), (0, [], 'dismissed', None))
+        other = self.candidate(ident='pdf-2')
+        result, calls = self.refresh(draft(), minutes=4)  # the same evidence, unchanged this time: exactly one round
+        self.assertEqual((result['used'], len(calls), self.count('manual_tasks')), (1, 1, 0)); self.assertTrue(self.brief(other)['pdf_evidence']['fingerprint'])
+        saved = self.item(other)
+        self.assertEqual((self.refresh(draft(), minutes=5)[1], self.item(other)), ([], saved))
+
+    def test_group_label_never_implies_pages_between_noncontiguous_pages(self):
+        self.assertEqual([agent._span(p) for p in ([3], [1, 2, 3], [1, 2, 5, 7, 8], [4, 2])], ['第3页', '第1–3页', '第1–2、5、7–8页', '第2、4页'])
 
 
 if __name__ == '__main__':
