@@ -330,7 +330,8 @@ class PageHTTPTests(unittest.TestCase):
             self.assertEqual(self.request('GET', self.query(), headers=who | public)[0], 401, who)
         self.assertEqual(self.fetch.calls, []); self.assertEqual(self.count(), 0); self.assertEqual(self.snapshot(), before)
         # The real parent login sets the parent session cookie.
-        status, ok, headers = self.request('POST', '/api/parent/login', {'username': 'parent', 'password': self.PASSWORD}, public)
+        status, ok, headers = self.request('POST', '/api/parent/login', {'username': 'parent', 'password': self.PASSWORD},
+            public | {'Origin': 'https://' + self.PUBLIC, 'X-Family-Login': '1'})
         self.assertEqual(status, 200, ok)
         cookie = headers['Set-Cookie'].split(';', 1)[0]; self.assertTrue(cookie.startswith(self.app.family_access.COOKIE + '='))
         session = {'Cookie': cookie} | public
