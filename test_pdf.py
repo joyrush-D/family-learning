@@ -229,5 +229,192 @@ class MockedToolTests(unittest.TestCase):
                 self.fail("PDFError not raised")
 
 
+class PngValidationTests(unittest.TestCase):
+    def test_valid_synthetic_png_accepted(self):
+        width, height = family_pdf._validate_png(png_rgba(12, 8))
+        self.assertEqual((width, height), (12, 8))
+
+    def test_signature_only_rejected(self):
+        with self.assertRaises(PDFError):
+            family_pdf._validate_png(family_pdf._PNG_SIGNATURE)
+
+    def test_24_byte_signature_plus_ihdr_header_rejected(self):
+        # Codex 复现样本：签名 + 长度 8 的 IHDR 头 + 宽高，无数据/IEND。
+        bogus = (
+            family_pdf._PNG_SIGNATURE
+            + struct.pack(">I", 8)
+            + b"IHDR"
+            + struct.pack(">II", 100, 100)
+        )
+        self.assertEqual(len(bogus), 24)
+        with self.assertRaises(PDFError):
+            family_pdf._validate_png(bogus)
+
+    def test_truncated_png_rejected(self):
+        good = png_rgba(10, 10)
+        for cut in (len(good) - 1, 33, 40, len(good) - 8):
+            with self.subTest(cut=cut):
+                with self.assertRaises(PDFError):
+                    family_pdf._validate_png(good[:cut])
+
+    def test_bad_crc_rejected(self):
+        good = bytearray(png_rgba(10, 10))
+        good[-5] ^= 0xFF  # 破坏 IEND CRC
+        with self.assertRaises(PDFError):
+            family_pdf._validate_png(bytes(good))
+        good = bytearray(png_rgba(10, 10))
+        good[29] ^= 0x01  # 破坏 IHDR 数据（CRC 不再匹配）
+        with self.assertRaises(PDFError):
+            family_pdf._validate_png(bytes(good))
+
+    def test_missing_iend_rejected(self):
+        good = png_rgba(10, 10)
+        # IEND chunk: 长度4 + IEND4 + CRC4 = 12 字节
+        with self.assertRaises(PDFError):
+            family_pdf._validate_png(good[:-12])
+
+    def test_missing_idat_rejected(self):
+        no_idat = (
+            family_pdf._PNG_SIGNATURE
+            + png_rgba(1, 1)[
+                len(family_pdf._PNG_SIGNATURE):
+            ].split(b"IDAT")[0]
+        )
+        # 手工构造 IHDR + IEND（无 IDAT）
+        import zlib
+
+        def chunk(tag, data):
+            return (
+                struct.pack(">I", len(data))
+                + tag
+                + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+            )
+
+        ihdr = struct.pack(">IIBBBBB", 4, 4, 8, 2, 0, 0, 0)
+        no_idat = (
+            family_pdf._PNG_SIGNATURE
+            + chunk(b"IHDR", ihdr)
+            + chunk(b"IEND", b"")
+        )
+        with self.assertRaises(PDFError):
+            family_pdf._validate_png(no_idat)
+
+    def test_ihdr_wrong_length_rejected(self):
+        import zlib
+
+        bad_ihdr = struct.pack(">II", 10, 10)  # 仅 8 字节，应为 13
+
+        def chunk(tag, data):
+            return (
+                struct.pack(">I", len(data))
+                + tag
+                + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+            )
+
+        bad = (
+            family_pdf._PNG_SIGNATURE
+            + chunk(b"IHDR", bad_ihdr)
+            + chunk(b"IDAT", b"x")
+            + chunk(b"IEND", b"")
+        )
+        with self.assertRaises(PDFError):
+            family_pdf._validate_png(bad)
+
+    def test_trailing_bytes_after_iend_rejected(self):
+        with self.assertRaises(PDFError):
+            family_pdf._validate_png(png_rgba(10, 10) + b"\x00")
+
+
+class DeadlineTests(unittest.TestCase):
+    def test_nan_inf_rejected(self):
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(bad=bad):
+                with self.assertRaises(PDFError):
+                    render_pages(b"%PDF-x", [1], deadline=bad)
+
+    def test_over_20_rejected(self):
+        for bad in (20.0001, 21, 100):
+            with self.subTest(bad=bad):
+                with self.assertRaises(PDFError):
+                    render_pages(b"%PDF-x", [1], deadline=bad)
+
+    def test_non_positive_and_non_numeric_rejected(self):
+        for bad in (0, -1, -0.5, "20", None, True):
+            with self.subTest(bad=bad):
+                with self.assertRaises(PDFError):
+                    render_pages(b"%PDF-x", [1], deadline=bad)
+
+    def test_exact_20_accepted_at_validation(self):
+        # 20 本身合法；用 mock 让 pdfinfo 后即超时与本测试无关，只确认不报 invalid deadline
+        seen = []
+
+        def fake_run(argv, payload, timeout):
+            seen.append(timeout)
+            raise subprocess.TimeoutExpired(argv, timeout)
+
+        with mock.patch.object(family_pdf, "_run", fake_run):
+            with self.assertRaises(PDFError) as ctx:
+                render_pages(b"%PDF-x", [1], deadline=20)
+        self.assertNotIn("invalid deadline", str(ctx.exception))
+        self.assertTrue(seen)
+
+    def test_remaining_deadline_checked_throughout(self):
+        # 每次 _run 收到的 timeout 必须为有限正数且不超过剩余预算；
+        # pdfinfo 消耗掉全部预算后，后续渲染必须被总截止拒绝。
+        timeouts = []
+
+        def fake_run(argv, payload, timeout):
+            timeouts.append(timeout)
+            self.assertTrue(timeout > 0)
+            self.assertLessEqual(timeout, 20.0)
+            if argv[0].endswith("pdfinfo"):
+                family_pdf.time.sleep(0.05)
+                return b"Pages: 3\n"
+            family_pdf.time.sleep(0.05)
+            return png_rgba(10, 10)
+
+        with mock.patch.object(family_pdf, "_run", fake_run):
+            with self.assertRaises(PDFError):
+                render_pages(
+                    b"%PDF-x", [1, 2, 3], deadline=0.07
+                )
+        self.assertGreaterEqual(len(timeouts), 2)
+        for value in timeouts:
+            self.assertTrue(value > 0)
+
+    def test_timeout_shrinks_between_calls(self):
+        timeouts = []
+
+        def fake_run(argv, payload, timeout):
+            timeouts.append(timeout)
+            family_pdf.time.sleep(0.01)
+            if argv[0].endswith("pdfinfo"):
+                return b"Pages: 2\n"
+            return png_rgba(10, 10)
+
+        with mock.patch.object(family_pdf, "_run", fake_run):
+            render_pages(b"%PDF-x", [1, 2], deadline=5)
+        self.assertEqual(len(timeouts), 3)
+        self.assertGreater(timeouts[0], timeouts[1])
+        self.assertGreater(timeouts[1], timeouts[2])
+        # 末次验证后仍在总截止内
+        self.assertGreater(timeouts[2], 0)
+
+    def test_expiry_after_last_process_before_return(self):
+        # pdfinfo 正常，但渲染耗时超过预算：末次进程结束后核对必须触发。
+        def fake_run(argv, payload, timeout):
+            family_pdf.time.sleep(0.06)
+            if argv[0].endswith("pdfinfo"):
+                return b"Pages: 1\n"
+            return png_rgba(10, 10)
+
+        with mock.patch.object(family_pdf, "_run", fake_run):
+            with self.assertRaises(PDFError) as ctx:
+                render_pages(b"%PDF-x", [1], deadline=0.03)
+        self.assertIn("timed out", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

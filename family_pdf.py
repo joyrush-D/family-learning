@@ -5,10 +5,12 @@
 全份理解。
 """
 
+import math
 import shutil
 import struct
 import subprocess
 import time
+import zlib
 
 MAX_BODY_BYTES = 20 * 1024 * 1024
 MAX_DOCUMENT_PAGES = 200
@@ -69,17 +71,47 @@ def _read_page_count(pdfinfo, body, timeout):
 
 
 def _validate_png(data):
-    if not data.startswith(_PNG_SIGNATURE) or len(data) < 24:
-        raise PDFError("renderer returned invalid png")
-    # IHDR 紧跟签名：长度(4) 'IHDR'(4) 宽(4) 高(4)
-    chunk_length = struct.unpack(">I", data[8:12])[0]
-    chunk_type = data[12:16]
-    if chunk_length < 8 or chunk_type != b"IHDR":
-        raise PDFError("renderer returned invalid png")
-    width, height = struct.unpack(">II", data[16:24])
-    if width <= 0 or height <= 0 or max(width, height) > SCALE_LONG_EDGE:
-        raise PDFError("renderer returned invalid png dimensions")
-    return width, height
+    # 逐 chunk 走边界：签名 + IHDR(13) + 至少一个 IDAT + IEND 收尾，CRC 全核对。
+    invalid = PDFError("renderer returned invalid png")
+    if not data.startswith(_PNG_SIGNATURE):
+        raise invalid
+    pos = len(_PNG_SIGNATURE)
+    saw_ihdr = False
+    saw_idat = False
+    width = height = None
+    while True:
+        if pos + 8 > len(data):
+            raise invalid
+        length = struct.unpack(">I", data[pos:pos + 4])[0]
+        chunk_type = data[pos + 4:pos + 8]
+        body_end = pos + 8 + length
+        crc_end = body_end + 4
+        if crc_end > len(data):
+            raise invalid
+        chunk_body = data[pos + 8:body_end]
+        crc_stored = struct.unpack(">I", data[body_end:crc_end])[0]
+        if zlib.crc32(chunk_type + chunk_body) & 0xFFFFFFFF != crc_stored:
+            raise invalid
+        if not saw_ihdr:
+            if chunk_type != b"IHDR" or length != 13:
+                raise invalid
+            saw_ihdr = True
+            width, height = struct.unpack(">II", chunk_body[:8])
+            if width <= 0 or height <= 0 or max(width, height) > SCALE_LONG_EDGE:
+                raise PDFError("renderer returned invalid png dimensions")
+        elif chunk_type == b"IHDR":
+            raise invalid
+        elif chunk_type == b"IDAT":
+            if not length:
+                raise invalid
+            saw_idat = True
+        elif chunk_type == b"IEND":
+            if length != 0 or crc_end != len(data):
+                raise invalid
+            if not saw_idat:
+                raise invalid
+            return width, height
+        pos = crc_end
 
 
 def _validate_page_numbers(page_numbers):
@@ -113,7 +145,9 @@ def render_pages(body, page_numbers, deadline=DEADLINE_SECONDS):
     if (
         not isinstance(deadline, (int, float))
         or isinstance(deadline, bool)
+        or not math.isfinite(deadline)
         or deadline <= 0
+        or deadline > DEADLINE_SECONDS
     ):
         raise PDFError("invalid deadline")
 
@@ -131,6 +165,7 @@ def render_pages(body, page_numbers, deadline=DEADLINE_SECONDS):
         return left
 
     page_count = _read_page_count(pdfinfo, body, remaining())
+    remaining()
 
     for number in requested:
         if number > page_count:
@@ -149,11 +184,13 @@ def render_pages(body, page_numbers, deadline=DEADLINE_SECONDS):
             "-",
         ]
         data = _run(argv, body, remaining())
+        remaining()
         if not data:
             raise PDFError("renderer produced empty output")
         if len(data) > MAX_PAGE_BYTES:
             raise PDFError("rendered page exceeds size limit")
         _validate_png(data)
+        remaining()
         total += len(data)
         if total > MAX_TOTAL_BYTES:
             raise PDFError("rendered pages exceed total size limit")
@@ -161,6 +198,7 @@ def render_pages(body, page_numbers, deadline=DEADLINE_SECONDS):
 
     requested_set = set(requested)
     omitted = [p for p in range(1, page_count + 1) if p not in requested_set]
+    remaining()
     return {
         "page_count": page_count,
         "pages": pages,
