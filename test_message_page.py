@@ -77,10 +77,25 @@ class PageStoreTests(unittest.TestCase):
     def get(self, store=None):
         return (store or self.store).message({k: v for k, v in self.keys().items() if k != 'url'}, lambda row: dict(row))
 
+    def payloads(self):
+        return self.rows('SELECT payload FROM agent_messages ORDER BY rowid')
+
+    def snapshot(self, connect=None):
+        """Every business table's rows; equal before and after proves no write, not merely an unchanged count."""
+        with (connect or self.store._db)() as c:
+            names = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE 'agent_%' "
+                                             "OR name IN ('records','uploads','teacher_public_pages')) ORDER BY name")]
+            return {name: [tuple(r) for r in c.execute('SELECT * FROM "%s"' % name)] for name in names}
+
     def correct_message(self):
+        """Each call saves a message that really differs from the one saved before it; returns (before, after)."""
+        self.corrections = getattr(self, 'corrections', 0) + 1
+        before = self.payloads()
         with self.store._db() as c:
             c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
-                      (json.dumps(self.message(text=TEXT + '（更正）'), ensure_ascii=False), self.source['id'], '1'))
+                      (json.dumps(self.message(text=TEXT + '（更正%d）' % self.corrections), ensure_ascii=False), self.source['id'], '1'))
+        after = self.payloads(); assert after != before, 'fixture did not change the message'
+        return before, after
 
     def test_read_save_reopen_truncation_flag_and_duplicate_zero_outbound(self):
         messages = self.rows('SELECT * FROM agent_messages')
@@ -146,9 +161,35 @@ class PageStoreTests(unittest.TestCase):
         self.assertEqual(json.loads(rows[0]['payload'])['text'], '先提交的内容')
         self.assertEqual(self.get()['pages'], [result['page']])
 
+    def test_two_threads_in_fetch_at_once_first_commit_is_kept_and_the_later_one_does_not_overwrite(self):
+        """Real threads, no lock in the reader: both are inside the fake fetch together, then commit one after the other."""
+        barrier = threading.Barrier(2, timeout=5); first_committed = threading.Event(); results = {}; errors = {}
+        def during(name):
+            def wait():
+                barrier.wait()  # both readers are past the pre-read checks and hold no connection
+                if name == 'second': self.assertTrue(first_committed.wait(5))  # commits only after the first has returned
+            return wait
+        def worker(name, text):
+            try: results[name] = self.post(Fetch(page(LINK, text), during=during(name)))
+            except BaseException as error: errors[name] = repr(error)
+            finally:
+                if name == 'first': first_committed.set()
+        threads = [threading.Thread(target=worker, args=('first', '先提交的内容')), threading.Thread(target=worker, args=('second', '后提交的内容'))]
+        for thread in threads: thread.start()
+        for thread in threads: thread.join(15)
+        self.assertEqual(errors, {}); self.assertFalse(any(t.is_alive() for t in threads))
+        self.assertFalse(results['first']['cached']); self.assertEqual(results['first']['page']['text'], '先提交的内容')
+        self.assertTrue(results['second']['cached']); self.assertEqual(results['second']['page'], results['first']['page'])
+        rows = self.rows(); self.assertEqual(len(rows), 1)
+        self.assertEqual(json.loads(rows[0]['payload'])['text'], '先提交的内容')
+        self.assertNotIn('后提交的内容', json.dumps(rows, ensure_ascii=False))
+        self.assertEqual(self.get()['pages'], [results['first']['page']])
+
     def test_change_during_fetch_rejects_and_stale_fragment_stays_hidden(self):
+        original = self.payloads()
         with self.assertRaises(agent.AgentError) as caught: self.post(Fetch(during=self.correct_message))
         self.assertEqual((caught.exception.status, caught.exception.code), (409, 'page_context_changed'))
+        self.assertNotEqual(self.payloads(), original)  # the correction during the read really changed the saved message
         self.assertEqual(self.rows(), []); self.assertEqual(self.get()['pages'], [])
         with self.assertRaises(agent.AgentError) as caught: self.post(Fetch(during=lambda: self.write_config(enabled=False)))
         self.assertEqual(caught.exception.code, 'source_not_enabled'); self.assertEqual(self.rows(), [])
@@ -158,8 +199,10 @@ class PageStoreTests(unittest.TestCase):
         self.write_config()
         saved = self.post(Fetch(page(LINK, '原内容')))
         self.assertEqual(self.get()['pages'], [saved['page']])
-        self.correct_message(); before = self.rows()
+        before_message, after_message = self.correct_message(); self.assertNotEqual(before_message, after_message)
+        before = self.rows(); tables = self.snapshot()
         self.assertEqual(self.get()['pages'], []); self.assertEqual(self.rows(), before)  # hidden, not deleted, no write
+        self.assertEqual(self.snapshot(), tables)  # the hidden read changed no table
         fetch = Fetch(page(LINK, '更正后内容'))
         renewed = self.post(fetch)
         self.assertFalse(renewed['cached']); self.assertEqual(fetch.calls, [LINK])
@@ -225,9 +268,23 @@ class PageHTTPTests(unittest.TestCase):
     def keys(self, **changes):
         return dict(child_id='child-1', source_id=self.source['id'], message_id='101', url=LINK) | changes
 
+    PUBLIC = 'family.example.ts.net'; PASSWORD = 'synthetic-http-parent-password-123'
+
     def count(self):
         with self.app.connect() as db:
             return db.execute('SELECT count(*) FROM agent_message_pages').fetchone()[0]
+
+    def snapshot(self):
+        return PageStoreTests.snapshot(self, self.app.connect)
+
+    def child(self):
+        invitation = self.app.family_child.parent_action(self.app, 'invite', {'child_id': 'child-1'})
+        status, child, headers = self.request('POST', '/child/api/login', {'invite': invitation['invite']}, {})
+        self.assertEqual(status, 200, child)
+        return {'Cookie': headers['Set-Cookie'].split(';', 1)[0], 'X-Child-CSRF': child['csrf']}
+
+    def query(self):
+        return '/api/agent/message?' + urlencode({k: v for k, v in self.keys().items() if k != 'url'})
 
     def test_parent_reads_once_then_cached_and_get_lists_pages(self):
         status, result, _ = self.request('POST', '/api/agent/message/page', self.keys(), self.parent)
@@ -236,31 +293,63 @@ class PageHTTPTests(unittest.TestCase):
         self.assertEqual(self.fetch.calls, [LINK])
         status, again, _ = self.request('POST', '/api/agent/message/page', self.keys(), self.parent)
         self.assertEqual(status, 200); self.assertTrue(again['cached']); self.assertEqual(self.fetch.calls, [LINK])
-        query = urlencode({k: v for k, v in self.keys().items() if k != 'url'})
+        saved = self.snapshot()
         for _ in range(2):
-            status, view, _ = self.request('GET', '/api/agent/message?' + query, headers=self.parent)
+            status, view, _ = self.request('GET', self.query(), headers=self.parent)
             self.assertEqual(status, 200); self.assertEqual(view['pages'], [result['page']])
         self.assertEqual(self.fetch.calls, [LINK]); self.assertEqual(self.count(), 1)
+        self.assertEqual(self.snapshot(), saved)  # repeated reopening wrote to no table
         status, denied, _ = self.request('POST', '/api/agent/message/page', self.keys(url=LONG[:500]), self.parent)
         self.assertEqual((status, denied['code']), (400, 'page_link_not_in_message'))
         self.assertEqual(self.request('POST', '/api/agent/message/page', self.keys(child_id='child-2'), self.parent)[0], 403)
         self.assertEqual(self.fetch.calls, [LINK]); self.assertEqual(self.count(), 1)
 
     def test_child_cookie_anonymous_and_csrf_are_refused_without_reading(self):
-        invitation = self.app.family_child.parent_action(self.app, 'invite', {'child_id': 'child-1'})
-        status, child, headers = self.request('POST', '/child/api/login', {'invite': invitation['invite']}, {})
-        self.assertEqual(status, 200, child)
-        child_headers = {'Cookie': headers['Set-Cookie'].split(';', 1)[0], 'X-Child-CSRF': child['csrf']}
+        child_headers = self.child()
         self.assertEqual(self.request('POST', '/api/agent/message/page', self.keys(), child_headers)[0], 403)
         self.assertEqual(self.request('POST', '/api/agent/message/page', self.keys(), child_headers | {'Host': 'family.example.invalid'})[0], 403)
         self.assertEqual(self.request('POST', '/child/api/agent/message/page', self.keys(), child_headers | self.parent)[0], 404)
-        self.assertIn(self.request('POST', '/api/agent/message/page', self.keys(), {'Host': 'family.example.invalid'})[0], (401, 403))
+        # Legacy trusted host without any identity is 403; the public password entry's 401 is its own test below.
+        self.assertEqual(self.request('POST', '/api/agent/message/page', self.keys(), {'Host': 'family.example.invalid'})[0], 403)
         for headers in ({}, {'X-Family-Token': 'wrong'}, self.parent | {'Host': 'untrusted.invalid'}):
             self.assertEqual(self.request('POST', '/api/agent/message/page', self.keys(), headers)[0], 403)
         self.assertEqual(self.fetch.calls, []); self.assertEqual(self.count(), 0)
         trusted = {'Host': 'family.example.invalid', 'Tailscale-User-Login': 'parent@example.invalid', **self.parent}
         status, result, _ = self.request('POST', '/api/agent/message/page', self.keys(), trusted)
         self.assertEqual(status, 200, result); self.assertEqual(self.fetch.calls, [LINK]); self.assertEqual(self.count(), 1)
+
+    def test_public_password_entry_anonymous_401_parent_session_reads_and_reopens(self):
+        """The deployed entry: access.json with a hashed parent password on the public HTTPS host (as test_task_video)."""
+        path = self.app.DATA / 'access.json'
+        path.write_text(json.dumps(self.app.family_access.make_config('https://' + self.PUBLIC + '/family', 'parent', self.PASSWORD)),
+                        encoding='utf-8'); path.chmod(0o600); self.addCleanup(path.unlink)
+        public = {'Host': self.PUBLIC}; child_headers = self.child(); before = self.snapshot()
+        # No parent session on the public host is exactly 401: anonymous, token-only, child session, child with token; POST and GET.
+        for who in ({}, self.parent, child_headers, child_headers | self.parent):
+            self.assertEqual(self.request('POST', '/api/agent/message/page', self.keys(), who | public)[0], 401, who)
+            self.assertEqual(self.request('GET', self.query(), headers=who | public)[0], 401, who)
+        self.assertEqual(self.fetch.calls, []); self.assertEqual(self.count(), 0); self.assertEqual(self.snapshot(), before)
+        # The real parent login sets the parent session cookie.
+        status, ok, headers = self.request('POST', '/api/parent/login', {'username': 'parent', 'password': self.PASSWORD}, public)
+        self.assertEqual(status, 200, ok)
+        cookie = headers['Set-Cookie'].split(';', 1)[0]; self.assertTrue(cookie.startswith(self.app.family_access.COOKIE + '='))
+        session = {'Cookie': cookie} | public
+        # A session without the CSRF token, or with a wrong one, still does not read; a child session stays out.
+        self.assertEqual(self.request('POST', '/api/agent/message/page', self.keys(), session)[0], 403)
+        self.assertEqual(self.request('POST', '/api/agent/message/page', self.keys(), session | {'X-Family-Token': 'wrong'})[0], 403)
+        self.assertEqual(self.request('POST', '/api/agent/message/page', self.keys(), child_headers | public)[0], 401)
+        self.assertEqual(self.fetch.calls, []); self.assertEqual(self.count(), 0)
+        status, result, _ = self.request('POST', '/api/agent/message/page', self.keys(), session | self.parent)
+        self.assertEqual(status, 200, result); self.assertFalse(result['cached']); self.assertEqual(self.fetch.calls, [LINK])
+        self.assertEqual(result['page']['text'], '虚构公开页面正文'); self.assertEqual(self.count(), 1)
+        saved = self.snapshot()
+        for _ in range(2):
+            status, view, _ = self.request('GET', self.query(), headers=session | self.parent)
+            self.assertEqual(status, 200, view); self.assertEqual(view['pages'], [result['page']])
+        status, again, _ = self.request('POST', '/api/agent/message/page', self.keys(), session | self.parent)
+        self.assertEqual(status, 200); self.assertTrue(again['cached']); self.assertEqual(again['page'], result['page'])
+        self.assertEqual(self.request('GET', self.query(), headers=child_headers | public)[0], 401)
+        self.assertEqual(self.fetch.calls, [LINK]); self.assertEqual(self.snapshot(), saved)  # reopening and the cached read wrote nothing
 
 
 if __name__ == '__main__':
