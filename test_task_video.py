@@ -348,4 +348,129 @@ class TaskVideoHttpTests(unittest.TestCase):
         self.assertEqual(([v['state'] for v in self.video(ident)[1]['videos']],len(self.sent)),(['ready'],4))
 
 
+TWO=dict(observations=[DRAFT['observations'][0],dict(start_seconds=4,end_seconds=6,text='虚构：翻页后继续书写')],uncertainties=DRAFT['uncertainties'])
+
+
+class VideoReviewTests(unittest.TestCase):
+    """Explicit parent review of listed observations: versioned by token, append-only, shown back only for that version; nothing consumes it."""
+    setUp=TaskVideoTests.setUp;enable=TaskVideoTests.enable;ffprobe=TaskVideoTests.ffprobe;chat=TaskVideoTests.chat;clip=TaskVideoTests.clip
+    feedback=TaskVideoTests.feedback;record=TaskVideoTests.record;linked=TaskVideoTests.linked;relink=TaskVideoTests.relink;correct=TaskVideoTests.correct
+    tick=TaskVideoTests.tick;lines=TaskVideoTests.lines;files=TaskVideoTests.files;rows=TaskVideoTests.rows;view=TaskVideoTests.view;state=TaskVideoTests.state
+    action=TaskVideoTests.action;reply=TaskVideoTests.reply;TASK=TaskVideoTests.TASK;OTHER=TaskVideoTests.OTHER;SIBLING=TaskVideoTests.SIBLING
+
+    def ready(self):
+        """A synthetic two-observation draft made by the background job; the draft, the job and the reads confirm nothing."""
+        ident=self.linked(self.TASK)
+        with mock.patch.dict(DRAFT,TWO,clear=True):self.assertEqual(self.tick(),SENT)
+        video=self.view(ident)['videos'][0]
+        self.assertEqual((video['state'],video['review']['state'],len(video['token']),video['draft']['observations']),('ready','unconfirmed',64,TWO['observations']))
+        return ident,video
+
+    def body(self,ident,video,**obj):
+        return dict(record_id=ident,upload_id=video['upload_id'],expected_token=video['token'],action='confirm',selected=[0])|obj
+
+    def other(self):return {l for l in self.lines() if 'record_video_reviews' not in l}
+
+    def review(self,body):
+        """Every review call also proves that it runs no probe, no model and changes no other table or file."""
+        before=(self.other(),self.files(),subprocess.run.call_count,self.model.call_count,len(self.probes),len(self.sent))
+        try:return tv.review(self.app,self.agent,body)
+        finally:self.assertEqual((self.other(),self.files(),subprocess.run.call_count,self.model.call_count,len(self.probes),len(self.sent)),before)
+
+    def refused(self,body,status,code=None):
+        rows=self.rows('record_video_reviews')
+        with self.assertRaises(agent.AgentError) as caught:self.review(body)
+        self.assertEqual((caught.exception.status,self.rows('record_video_reviews')),(status,rows),body)
+        if code:self.assertEqual(caught.exception.code,code)
+        return str(caught.exception)
+
+    def test_confirm_retry_view_revoke_and_history_and_nothing_is_confirmed_without_the_parents_action(self):
+        ident,video=self.ready();self.assertEqual(self.rows('record_video_reviews'),0)
+        statements=[];connect=self.agent.connect
+        def traced():
+            c=connect();c.set_trace_callback(statements.append);return c
+        with mock.patch.object(self.agent,'connect',traced):self.view(ident);self.view(ident)
+        self.assertTrue(statements);self.assertEqual([s for s in statements if s.split()[0].upper() in ('INSERT','UPDATE','DELETE','CREATE','DROP','ALTER','REPLACE')],[])
+        first=self.review(self.body(ident,video,selected=[1,0]));again=self.review(self.body(ident,video,selected=[0,1]))
+        self.assertEqual((first['repeated'],again['repeated'],again['id'],self.rows('record_video_reviews')),(False,True,first['id'],1))
+        self.assertEqual({k:v for k,v in again.items() if k!='repeated'},{k:v for k,v in first.items() if k!='repeated'})
+        shown=first['review'];self.assertEqual((shown['state'],shown['label'],shown['selected'],shown['observations'],shown['uncertainties'],shown['duration_seconds'],shown['audio_assessed']),
+                         ('confirmed',tv.REVIEW_LABEL,[0,1],TWO['observations'],TWO['uncertainties'],12.5,False))
+        self.assertIn('未评估声音',shown['explanation']);self.assertIn('不代表完成或掌握',shown['explanation'])
+        self.assertEqual((first['token'],first['task_id'],self.view(ident)['videos'][0]['review']),(video['token'],self.TASK,shown))
+        revoked=self.review(self.body(ident,video,action='revoke',selected=[]))
+        self.assertEqual((revoked['id'],revoked['action'],revoked['review']['state'],revoked['review']['revoked_at'],self.rows('record_video_reviews')),(first['id']+1,'revoke','unconfirmed',revoked['reviewed_at'],2))
+        self.assertEqual(self.view(ident)['videos'][0]['review']['state'],'unconfirmed')
+        self.assertEqual((self.review(self.body(ident,video,action='revoke',selected=[]))['id'],self.rows('record_video_reviews')),(revoked['id'],2))
+        second=self.review(self.body(ident,video,selected=[1]))
+        self.assertEqual((second['id'],second['repeated'],second['review']['observations'],self.rows('record_video_reviews')),(first['id']+2,False,[TWO['observations'][1]],3))
+        with self.app.connect() as c:history=[(r[0],r[1],json.loads(r[2])['selected'],json.loads(r[2])['observations']) for r in c.execute('SELECT id,action,payload FROM record_video_reviews ORDER BY id')]
+        self.assertEqual(history,[(first['id'],'confirm',[0,1],TWO['observations']),(first['id']+1,'revoke',[],[]),(first['id']+2,'confirm',[1],[TWO['observations'][1]])])
+        self.assertEqual(self.rows('record_video_drafts'),1)
+
+    def test_malformed_stale_missing_and_unconfirmed_requests_are_refused_without_a_row(self):
+        ident,video=self.ready();good=self.body(ident,video)
+        for bad in (dict(good,record_id=True),dict(good,record_id=str(ident)),dict(good,record_id=0),dict(good,record_id=-ident),dict(good,record_id=float(ident)),
+                    dict(good,upload_id=5),dict(good,upload_id=''),dict(good,expected_token=video['token'][:-1]),dict(good,expected_token=video['token'].upper()),
+                    dict(good,action='approve'),dict(good,action='confirm '),dict(good,selected=[]),dict(good,selected=[0,0]),dict(good,selected=['0']),dict(good,selected=[True]),
+                    dict(good,selected=[-1]),dict(good,selected=[8]),dict(good,selected=0),dict(good,selected=[2]),dict(good,selected=None),
+                    dict(good,text='虚构：家长自己写的观察'),dict(good,observations=TWO['observations']),dict(good,start_seconds=1),dict(good,audio_assessed=True),
+                    dict(good,action='revoke',selected=[0]),[good],None):
+            self.refused(bad,400)
+        other=self.linked(self.TASK)  # a valid token belongs to one record's one draft only
+        self.refused(dict(good,record_id=other),409,'original_missing');self.refused(dict(good,expected_token='0'*64),409,'token_stale')
+        self.refused(dict(good,action='revoke',selected=[]),409,'review_not_confirmed')
+        self.refused(dict(good,upload_id=self.clip()),409,'original_missing');self.refused(dict(good,record_id=ident+1000),409)
+        self.assertEqual(self.view(ident)['videos'][0]['review']['state'],'unconfirmed')
+
+    def test_every_source_change_hides_the_confirmation_and_refuses_the_old_token(self):
+        def hash_change(ident):
+            path=self.data/'uploads'/self.uploads[ident];return lambda:path.write_bytes(b'Y'+path.read_bytes()[1:])  # same size, other bytes
+        def draft_replacement(ident):
+            def replace():
+                with self.app.connect() as c:
+                    payload=json.loads(c.execute('SELECT payload FROM record_video_drafts WHERE record_id=?',(ident,)).fetchone()[0])
+                    payload['draft']['observations'][0]['text']='虚构：后台重新整理后的观察'
+                    c.execute('UPDATE record_video_drafts SET payload=? WHERE record_id=?',(json.dumps(payload,ensure_ascii=False),ident))
+            return replace
+        def cross_child(ident):
+            def share():
+                with self.app.connect() as c:
+                    c.execute("INSERT INTO records(child,day,category,subject,title,note,source,created,attachments) VALUES('示例乙',?,'学习进展','英语','虚构','虚构','家长网页记录',?,?)",
+                              (self.now.date().isoformat(),self.now.isoformat(),json.dumps([self.uploads[ident]])))
+            return share
+        cases=(('correct',self.correct,('pending',)),('relink',self.relink,('pending','unavailable')),('disable',lambda ident:lambda:self.enable(False),('unavailable',)),
+               ('hash',hash_change,('pending',)),('draft',draft_replacement,('ready',)),('cross_child',cross_child,('unavailable',)))
+        for name,change,expected in cases:
+            with self.subTest(change=name):
+                self.enable(True);ident,video=self.ready();first=self.review(self.body(ident,video));self.assertEqual(first['review']['state'],'confirmed')
+                rows=self.rows('record_video_reviews');change(ident)();shown=self.view(ident)['videos'][0]
+                self.assertIn(shown['state'],expected);self.assertNotEqual(shown.get('review',{}).get('state'),'confirmed')
+                if shown['state']=='ready':self.assertNotEqual(shown['token'],video['token']);self.assertEqual(shown['review']['state'],'unconfirmed')
+                self.refused(self.body(ident,video),409);self.refused(self.body(ident,video,action='revoke',selected=[]),409)
+                self.assertEqual(self.rows('record_video_reviews'),rows)  # the old confirmation stays on disk, hidden, never erased
+                if shown['state']=='ready':self.assertEqual(self.review(self.body(ident,shown))['review']['state'],'confirmed')
+
+    def test_a_change_after_the_write_lock_is_taken_is_still_caught_before_the_row_is_written(self):
+        ident,video=self.ready();connect=self.agent.connect;injected=[];test=self
+        class Injecting:
+            def __init__(s,c):object.__setattr__(s,'c',c)
+            def __getattr__(s,name):return getattr(s.c,name)
+            def __setattr__(s,name,value):setattr(s.c,name,value)
+            def execute(s,sql,*args):
+                result=s.c.execute(sql,*args)
+                if sql=='BEGIN IMMEDIATE':s.c.execute('UPDATE records SET linked_task_id=? WHERE id=?',(test.OTHER,ident));injected.append(1)
+                return result
+        with mock.patch.object(self.agent,'connect',lambda:Injecting(connect())):self.refused(self.body(ident,video),409)
+        self.assertEqual(injected,[1]);self.assertEqual(self.review(self.body(ident,video))['review']['state'],'confirmed')  # the same request passes once nothing moves
+
+    def test_a_database_without_the_review_table_reads_safely_and_only_store_setup_creates_it(self):
+        ident,video=self.ready()
+        with self.app.connect() as c:c.execute('DROP TABLE record_video_reviews')
+        shown=self.view(ident)['videos'][0];self.assertEqual((shown['state'],shown['review']['state'],shown['token']),('ready','unconfirmed',video['token']))
+        with self.app.connect() as c:self.assertEqual(c.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='record_video_reviews'").fetchone()[0],0)
+        agent.Store(self.app.connect,self.app.profiles,self.app.DATA,app=self.app)
+        self.assertEqual(self.review(self.body(ident,video))['review']['state'],'confirmed')
+
+
 if __name__=='__main__':unittest.main()
