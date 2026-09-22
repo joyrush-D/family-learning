@@ -17,6 +17,7 @@ import tempfile,os,json,datetime,io,struct,zlib
 from pathlib import Path
 with tempfile.TemporaryDirectory(prefix='synthetic-page-ui-') as tmp:
  os.environ['FAMILY_DATA']=tmp
+ os.environ['FAMILY_HOST']='family.test';os.environ['FAMILY_USER']='synthetic-parent'
  import app,family_agent,family_teacher_public
  app.DATA=Path(tmp).resolve();app.DB=app.DATA/'family.sqlite3'
  docs={'家庭运行规则.md':'| child-1 | 示例星星 | — | 9岁 | 三年级 |\n| child-2 | 示例小宇 | — | 12岁 | 六年级 |\n'}
@@ -61,11 +62,11 @@ with tempfile.TemporaryDirectory(prefix='synthetic-page-ui-') as tmp:
  proc=spawn(process.env.FAMILY_TEST_PYTHON||'python3',['-c',fixture],{cwd:__dirname,env,stdio:['ignore','ignore','pipe']});let errors='';proc.stderr.on('data',b=>{errors+=b});proc.on('error',e=>errors+=e.message);
  await until(async()=>{if(proc.exitCode!==null)throw Error(errors);try{return(await fetch(url)).ok}catch{return false}},'server startup');
  const state=async()=>await(await fetch(url+'api/state')).json();
- browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
+ browser=await chromium.launch({headless:true,args:['--host-resolver-rules=MAP family.test 127.0.0.1'],...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
  for(const width of [360,1440]){
-  const page=await browser.newPage({viewport:{width,height:820}}),pageErrors=[];page.on('pageerror',e=>pageErrors.push(e.message));
+  const page=await browser.newPage({viewport:{width,height:820},extraHTTPHeaders:{'Tailscale-User-Login':'synthetic-parent'}}),pageErrors=[];page.on('pageerror',e=>pageErrors.push(e.message));
   const posts=[];page.on('request',r=>{if(r.url().includes('/api/agent/message/page')&&r.method()==='POST')posts.push(r.postDataJSON())});
-  await page.goto(url);await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();
+  await page.goto('http://family.test:'+port+'/');await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();
   const st=await state(),items=Object.fromEntries(['link','other','flaky','iso'].map(k=>[k,st.agent.items.find(x=>x.title==='虚构'+k+'通知 '+width)]));
   for(const k of Object.keys(items))assert(items[k],'fixture item '+k);
   const attached=st.uploads.find(x=>x.name==='synthetic-attached.png'),spare=st.uploads.find(x=>x.name==='synthetic-spare.png');assert(attached&&spare,'fixture uploads');
@@ -115,14 +116,30 @@ with tempfile.TemporaryDirectory(prefix='synthetic-page-ui-') as tmp:
   assert.equal(await readButton(OTHER).count(),1,'trailing period dropped from the address');assert.equal(await row(OTHER+'.').count(),0,'address with its trailing period is never offered');
   assert.equal(await dialog.locator('[data-school-original-detach="'+attached.id+'"]').count(),1,'attached original present');
   await dialog.locator('[name="attachment_id"]').selectOption(spare.id);
+  await page.route('**/api/teachers',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({teachers:[{id:'synthetic-teacher',display_name:'虚构老师',subject:'语文',child_ids:['child-1'],source_ids:['synthetic'],archived:false}]})}));
+  await dialog.locator('[data-school-teacher-open]').click();
+  const teacherForm=dialog.locator('[data-school-teacher-form]');await teacherForm.waitFor();
+  await teacherForm.locator('[name="teacher_id"]').selectOption('synthetic-teacher');
+  await teacherForm.locator('[name="target"]').selectOption('class');
+  await teacherForm.locator('[name="quote"]').fill('家长尚未保存的老师要求草稿');
+  const teacherFields=await teacherForm.evaluate(f=>Object.fromEntries(new FormData(f)));
+
   await page.route('**/api/agent/message/page',route=>route.fulfill({status:401,contentType:'application/json',body:JSON.stringify({error:'请先登录家长账号'})}),{times:1});
   await readButton(OTHER).click();await page.locator('#parentLoginDialog[open]').waitFor();
   await until(async()=>(await readButton(OTHER).count())===1&&/重试读取这个网址/.test(await readButton(OTHER).innerText()),'retry for the same address after 401');
   assert.match(await row(OTHER).innerText(),/请先登录家长账号.*保留/);
   assert.equal(await dialog.locator('[data-school-original-detach="'+attached.id+'"]').count(),1,'attached original stays after 401');
   assert.equal(await dialog.locator('[name="attachment_id"]').inputValue(),spare.id,'unsaved selection stays after 401');
-  await page.evaluate(()=>document.querySelector('#parentLoginDialog').close());
-  await page.route('**/api/agent/message/page',async route=>{await route.fetch();await route.abort('connectionreset')},{times:1});
+  await page.route('**/api/parent/login',async route=>{
+   assert.deepEqual(route.request().postDataJSON(),{username:'synthetic-parent',password:'synthetic-password'});
+   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({ok:true})});
+  },{times:1});
+  await page.locator('#parentLoginForm [name=username]').fill('synthetic-parent');
+  await page.locator('#parentLoginForm [name=password]').fill('synthetic-password');
+  await page.locator('#parentLoginSubmit').click();
+  await page.locator('#parentLoginDialog').waitFor({state:'hidden'});
+  assert.deepEqual(await teacherForm.evaluate(f=>Object.fromEntries(new FormData(f))),teacherFields,'login form recovery preserves teacher draft');
+  await page.route('**/api/agent/message/page',async route=>{await route.fetch({url:route.request().url().replace('family.test','127.0.0.1'),headers:{...route.request().headers(),host:'family.test:'+port}});await route.abort('connectionreset')},{times:1});
   await readButton(OTHER).click();
   await until(async()=>/重试读取这个网址/.test(await row(OTHER).innerText()),'retry after a lost reply');
   assert.equal(await dialog.locator('[data-school-page-text]').count(),0,'a lost reply shows nothing as read');
@@ -132,6 +149,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-page-ui-') as tmp:
   assert.equal(posts.filter(p=>p.url===OTHER).length,3);assert.equal(posts.some(p=>/[.;"]$/.test(p.url)),false,'no request ever carries trailing punctuation');
   assert.equal(await dialog.locator('[data-school-original-detach="'+attached.id+'"]').count(),1,'attached original stays after reading');
   assert.equal(await dialog.locator('[name="attachment_id"]').inputValue(),spare.id,'unsaved selection stays after reading');
+  assert.deepEqual(await teacherForm.evaluate(f=>Object.fromEntries(new FormData(f))),teacherFields,'teacher draft survives 401, lost receipt and successful page retry');
   await fits(page);await proof(page,'page-other-'+width);await close();
   // 6. A server-side fetch failure keeps the notice and allows a retry of the same address.
   await open('flaky');

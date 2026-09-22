@@ -1021,7 +1021,7 @@ function schoolPagesHTML(s){
  const m=s.view?.message;if(!m?.text)return '';
  const links=schoolPageLinks(m.text);if(!links.length)return '';
  const pages=Array.isArray(s.view.pages)?s.view.pages:[],p=s.page||{};
- return `<section class="note" data-school-pages><h3>通知里的网址</h3><p class="small">点击后只读取该完整 https 地址的静态文字一次（最多6000字）并保存供核对；不读取整站、不刷新，也不改动任务、学习目标或学校用途。其他链接保持原文。</p>${links.map(l=>{
+ return `<section class="note" data-school-pages><h3>通知里的网址</h3><p class="small">点击读取并保存此页的文字片段（最多6000字），供你对照原通知核对。</p>${links.map(l=>{
   const page=l.https?pages.find(x=>x&&(x.original_url===l.url||x.url===l.url)):null,mine=p.url===l.url,status=mine&&p.notice?`<p role="status" data-school-page-status>${esc(p.notice)}</p>`:'';
   return `<div data-school-page="${esc(l.url)}"><p class="source" style="overflow-wrap:anywhere;word-break:break-all">${esc(l.url)}</p>${status}${page?`<p class="small muted" data-school-page-meta>读取于 ${agentTime(page.fetched_at)} · 仅静态文字${page.text_truncated?'，超过6000字的部分未保存':''}${page.url&&page.url!==page.original_url?' · 实际打开：'+esc(page.url):''}</p><details open><summary>核对网页片段</summary><blockquote class="source" data-school-page-text style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:40vh;overflow:auto">${esc(page.text)}</blockquote></details><p class="small muted">网页文字只供对照原通知核对，不代表学校要求已确认；图片、附件、动态或登录后的内容未读取。</p>`:l.https?`<button data-school-page-read="${esc(l.url)}">${mine&&p.request?'重试读取这个网址':'读取网页片段'}</button>`:'<p class="small muted">未读取，保持原文：只支持完整的 https 地址。</p>'}</div>`}).join('')}</section>`;
 }
