@@ -35,6 +35,7 @@ import family_remediation
 import family_agenda
 import family_guided
 import family_goals
+import family_task_video
 from types import SimpleNamespace
 from contextlib import nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer as _ThreadingHTTPServer
@@ -1730,6 +1731,12 @@ class Handler(BaseHTTPRequestHandler):
                 try: result=record_history(int(ident))
                 except (ValueError,TypeError,OverflowError): return self.reply(500,dict(error='当前记录格式无法读取，资料未更改'))
                 return self.reply(200,result) if result is not None else self.reply(404,dict(error='当前记录不存在，无法读取其更正历史'))
+            if path=='/api/record/video':
+                # Parent-only read of the task-video drafts: no model, no probe, no write. A retry reuses /api/agent/action with the returned job_id.
+                query=parse_qs(urlparse(self.path).query,keep_blank_values=True);ident=query.get('record_id',[''])[0]
+                if set(query)!={'record_id'} or len(query['record_id'])!=1 or not re.fullmatch(r'[1-9][0-9]{0,18}',ident) or int(ident)>9223372036854775807:
+                    return self.reply(400,dict(error='请提供唯一的记录编号，且须为有效正整数'))
+                return self.reply(200,family_task_video.view(SimpleNamespace(**globals()),agent_store(),int(ident)))
             if path=='/api/print/jobs': return self.reply(200,dict(jobs=print_store().list_jobs()))
             if path.startswith('/api/print/preview/'):
                 body,name=print_store().preview(path[len('/api/print/preview/'):])
