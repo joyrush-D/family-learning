@@ -132,6 +132,24 @@ def view(store, c, source, message):
                 batches=batches, explanation='' if complete else FAILED if failed else WAITING)
 
 
+def complete_evidence(store, c, source, message):
+    """Read-only whole-document evidence for the school candidate step: the single linked PDF's fingerprint, name and
+    every saved page group, only when the validated saved groups cover all pages.
+
+    None for no PDF, a refused or unreadable set, revoked authorization, another child's file, or any pending/failed/
+    partial/unknown coverage. Reads the file only to hash it; never runs pdfinfo/pdftoppm, a model or a write."""
+    try:
+        value = pdf_input(store, c, source, message)
+    except Exception:
+        return None
+    if value is None:
+        return None
+    batches, done, page_count = _batches(_rows(c, source, message, value['fingerprint']))
+    if page_count is None or _pending(done, page_count):
+        return None
+    return dict(fingerprint=value['fingerprint'], upload_id=value['upload_id'], name=value['name'], page_count=page_count, batches=batches)
+
+
 def _claim_intact(store, c, source, message, value, key, fp):
     """True only while the same authorization, source, child, full message, original bytes and job claim are current."""
     try:

@@ -212,4 +212,5 @@
 !/family_pdf_material.py
 !/test_pdf_material.py
 !/test_pdf_material_ui.cjs
+!/test_school_pdf_evidence.py
 !/contract.md
