@@ -13,7 +13,7 @@ from urllib.parse import urlsplit, urlunsplit
 TZ = dt.timezone(dt.timedelta(hours=8))
 INTERVAL = dt.timedelta(days=7)
 MAX_BYTES = 512 * 1024
-TEXT_LIMIT = 6000  # characters kept from the extracted text; longer pages are flagged, not read further
+TEXT_LIMIT = 6000  # characters kept from the extracted text; clipping is explicit
 
 
 def validate_url(value):
