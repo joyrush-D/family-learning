@@ -174,7 +174,12 @@ def _page_evidence(evidence, pages):
 
 
 def _span(pages):
-    return '第%s页' % pages[0] if len(pages)==1 else '第%s–%s页' % (pages[0],pages[-1])
+    """Label exactly the pages of one saved group: consecutive runs joined with 、, so a gap is never read as covered."""
+    runs=[]
+    for p in sorted(pages):
+        if runs and p==runs[-1][1]+1: runs[-1][1]=p
+        else: runs.append([p,p])
+    return '第'+'、'.join(str(a) if a==b else '%s–%s' % (a,b) for a,b in runs)+'页'
 
 
 def _pdf_evidence(material):
@@ -278,7 +283,8 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
         note=' 已参考PDF原件整理：'+'；'.join((d['name'] or d['ref'])[:80]+'（共'+str(d['page_count'])+'页已逐组整理，送核'+str(d['sent'])+'/'+str(d['groups'])+'组）' for d in pdf['documents'])
         note+=('；未送核或已截断页组：'+'；'.join(gaps) if gaps else '')+'。页组摘要是Agent整理的参考，不是老师原文，也不说明孩子完成情况；动态、音频、手写内容未读取。'
         brief['reason']=(brief['reason'] if read else brief['reason'][:240])+note
-        if state=='ready' and gaps:
+        if gaps:
+            # Declared whatever the state: the original is fully covered, the summary the model saw is not.
             state='review';brief['reason']+=' PDF整理摘要未全部送核，证据不足，请核对原件后再确认。'
     brief=dict(brief,state=state,policy=SCHOOL_TASK_POLICY,change=change,target_id=target)
     if purpose: brief['purpose']=purpose
@@ -1293,6 +1299,24 @@ def _school_pdf(store, c, row):
     return found
 
 
+def _school_current(store, c, row, evidence, page_key, pdf_key):
+    """True while this pending candidate, its messages, saved page fragments and PDF page groups still read exactly as
+    prepared (database and file hash only: no render, model or network). Checked right after the job claim, before any
+    model call, and again inside the saving transaction after the model."""
+    saved=c.execute('SELECT state,updated,plan FROM agent_items WHERE id=?',(row['id'],)).fetchone()
+    if saved is None or saved['state']!='pending' or saved['updated']!=row['updated'] or saved['plan']!=row['plan']: return False
+    try:
+        again,again_pages=_school_material(store,c,row);again_pdf=_pdf_evidence(_school_pdf(store,c,row))
+        return again==evidence and (_page_evidence(again,again_pages)['fingerprint'] if again_pages else '')==page_key and (again_pdf['fingerprint'] if again_pdf else '')==pdf_key
+    except (AgentError,ValueError,KeyError,TypeError): return False
+
+
+def _discard_job(c, key, fp):
+    """Drop a claimed round without an error: done, but no longer matching its evidence, so the same evidence returning
+    later (relinked original, restored authorization) is prepared once more instead of being deduplicated forever."""
+    c.execute("UPDATE agent_jobs SET done=1,error='',next_try='',fingerprint=? WHERE id=? AND fingerprint=?",('discarded:'+fp,key,fp))
+
+
 def _refresh_school(app, store, now, budget):
     """Upgrade only pending notices; keep IDs/decisions and the existing call budget.
 
@@ -1347,6 +1371,12 @@ def _refresh_school(app, store, now, budget):
             key='school-task:'+row['id'];fp=store._job(key,value,now,model=reference is None)
             if not fp: continue
             paged+=page_changed or pdf_changed
+            if not source_error:
+                # Revoked, detached, corrected or dismissed between the claim and the call: no model round at all.
+                with store._db() as c:
+                    intact=_school_current(store,c,row,evidence,page_key,pdf_key)
+                    if not intact: _discard_job(c,key,fp)
+                if not intact: continue
             try:
                 if source_error: raise AgentError('学校消息原文暂不可读取') from source_error
                 if reference: brief=dict(reference)
@@ -1363,14 +1393,9 @@ def _refresh_school(app, store, now, budget):
                 plan['school_task']=brief
                 with store._db() as c:
                     c.execute('BEGIN IMMEDIATE')
-                    saved=c.execute('SELECT state,updated,plan FROM agent_items WHERE id=?',(row['id'],)).fetchone()
-                    try:
-                        again,again_pages=_school_material(store,c,row);again_pdf=_pdf_evidence(_school_pdf(store,c,row))
-                        same=again==evidence and (_page_evidence(again,again_pages)['fingerprint'] if again_pages else '')==page_key and (again_pdf['fingerprint'] if again_pdf else '')==pdf_key
-                    except (AgentError,ValueError,KeyError,TypeError): same=False
-                    if saved is None or saved['state']!='pending' or saved['updated']!=row['updated'] or saved['plan']!=row['plan'] or not same:
-                        # Candidate, message, binding/authorization or fragments changed while the model ran: drop the result.
-                        c.execute("UPDATE agent_jobs SET done=1,error='' WHERE id=? AND fingerprint=?",(key,fp));continue
+                    if not _school_current(store,c,row,evidence,page_key,pdf_key):
+                        # Candidate, message, binding/authorization, fragments or PDF groups changed while the model ran: drop the result.
+                        _discard_job(c,key,fp);continue
                     updated=now.isoformat()
                     c.execute('UPDATE agent_items SET title=?,body=?,plan=?,updated=? WHERE id=?',
                         (brief['title'] or row['title'],brief['goal'] or row['body'],_json(plan),updated,row['id']))
