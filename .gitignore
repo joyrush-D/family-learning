@@ -207,3 +207,5 @@
 !/test_message_page.py
 !/test_school_page_evidence.py
 !/test_message_page_ui.cjs
+!/family_pdf.py
+!/test_pdf.py
