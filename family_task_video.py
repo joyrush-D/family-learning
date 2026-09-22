@@ -437,8 +437,9 @@ def _request(body):
         raise AgentError('核对版本标识不正确')
     if action not in ('confirm', 'revoke'):
         raise AgentError('核对动作不正确')
-    if (not isinstance(selected, list) or len(selected) > MAX_OBSERVATIONS or len(set(selected)) != len(selected)
-            or any(type(i) is not int or not 0 <= i < MAX_OBSERVATIONS for i in selected)):
+    if (not isinstance(selected, list) or len(selected) > MAX_OBSERVATIONS
+            or any(type(i) is not int or not 0 <= i < MAX_OBSERVATIONS for i in selected)
+            or len(set(selected)) != len(selected)):
         raise AgentError('所选观察编号不正确')
     if action == 'confirm' and not selected:
         raise AgentError('请至少选择一条画面观察')

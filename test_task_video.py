@@ -413,7 +413,7 @@ class VideoReviewTests(unittest.TestCase):
         for bad in (dict(good,record_id=True),dict(good,record_id=str(ident)),dict(good,record_id=0),dict(good,record_id=-ident),dict(good,record_id=float(ident)),
                     dict(good,upload_id=5),dict(good,upload_id=''),dict(good,expected_token=video['token'][:-1]),dict(good,expected_token=video['token'].upper()),
                     dict(good,action='approve'),dict(good,action='confirm '),dict(good,selected=[]),dict(good,selected=[0,0]),dict(good,selected=['0']),dict(good,selected=[True]),
-                    dict(good,selected=[-1]),dict(good,selected=[8]),dict(good,selected=0),dict(good,selected=[2]),dict(good,selected=None),
+                    dict(good,selected=[{}]),dict(good,selected=[[0]]),dict(good,selected=[-1]),dict(good,selected=[8]),dict(good,selected=0),dict(good,selected=[2]),dict(good,selected=None),
                     dict(good,text='虚构：家长自己写的观察'),dict(good,observations=TWO['observations']),dict(good,start_seconds=1),dict(good,audio_assessed=True),
                     dict(good,action='revoke',selected=[0]),[good],None):
             self.refused(bad,400)
