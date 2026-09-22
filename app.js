@@ -1058,13 +1058,48 @@ function paintSchoolOriginal(){
  const s=schoolOriginal,dialog=$('#schoolOriginalDialog');if(!s||!dialog)return;
  const teacherForm=dialog.querySelector('[data-school-teacher-form]');if(teacherForm&&s.teacher)for(const el of teacherForm.elements)if(el.name)s.teacher.fields[el.name]=el.value;
  const view=s.view,attachments=view?.attachments||[],unavailable=view?.unavailable_attachment_ids||[],linked=new Set(attachments.map(a=>a.id));
- const d=view?.material_draft,schoolMaterial=d?.kind==='school_material',recordDraft=d&&!d.kind;
- const draftHTML=d?d.state==='ready'?`<section class="note" data-school-material-draft><strong>${schoolMaterial?'学校资料 · 待家长核对':'Agent已整理 · 待家长核对'}</strong><p>${esc(d.draft.title)}</p>${recordDraft?`<p>${esc(d.draft.subject)}${d.draft.score!==null?' · '+esc(d.draft.score)+' / '+esc(d.draft.total??'满分待核对'):''}</p>`:''}<p class="source">${esc(d.draft.note)}</p>${d.draft.uncertainties?.length?`<p>待核对：${d.draft.uncertainties.map(esc).join('；')}</p>`:''}${recordDraft?'<button data-school-material-record>核对并填入学习记录</button><p class="small muted">只整理所附图片；保存前请核对原图、孩子归属和实际日期。</p>':'<p class="small muted">仅整理本通知补充的图片原件，未改动任务或学习记录。题目、答案和范文不代表孩子的作答或掌握；请对照原件核对要求。</p>'}</section>`:`<p data-school-material-status>${esc(d.explanation)}${d.state==='error'?'<button data-school-material-retry>重试这份原件</button>':''}</p>`:'';
+ const d=view?.material_draft,schoolMaterial=d?.kind==='school_material',recordDraft=d&&!d.kind,pdf=view?.pdf_material||null;
+ // A linked PDF is reported by pdf_material; the older picture/DOCX explanation is hidden then unless it already finished.
+ const draftHTML=d&&(!pdf||d.state==='ready')?d.state==='ready'?`<section class="note" data-school-material-draft><strong>${schoolMaterial?'学校资料 · 待家长核对':'Agent已整理 · 待家长核对'}</strong><p>${esc(d.draft.title)}</p>${recordDraft?`<p>${esc(d.draft.subject)}${d.draft.score!==null?' · '+esc(d.draft.score)+' / '+esc(d.draft.total??'满分待核对'):''}</p>`:''}<p class="source">${esc(d.draft.note)}</p>${d.draft.uncertainties?.length?`<p>待核对：${d.draft.uncertainties.map(esc).join('；')}</p>`:''}${recordDraft?'<button data-school-material-record>核对并填入学习记录</button><p class="small muted">只整理所附图片；保存前请核对原图、孩子归属和实际日期。</p>':'<p class="small muted">仅整理本通知补充的图片原件，未改动任务或学习记录。题目、答案和范文不代表孩子的作答或掌握；请对照原件核对要求。</p>'}</section>`:`<p data-school-material-status>${esc(d.explanation)}${d.state==='error'?'<button data-school-material-retry>重试这份原件</button>':''}</p>`:'';
 
  const available=(data.uploads||[]).filter(a=>!linked.has(a.id)),owner=data.children.find(c=>c.id===s.identity.child_id);
  const mediaNote=view?.media?.explanation||'';
- dialog.innerHTML=`<h2>${view?.message.kind==='qq_window_fragment'?'QQ群窗口片段':'通知原件'}</h2>${view?.message.kind==='qq_window_fragment'?`<p class="note" data-fragment-note>采集于 ${agentTime(view.message.captured_at)}。仅本次可见内容，不是老师附件原件；发布时间与发言人仍需核对。</p>`:''}<p class="small">${esc(owner?.name||'孩子归属待核对')} · ${esc(view?.source_name||currentSources().find(x=>x.id===s.identity.source_id)?.name||'来源待核对')}</p>${view?`<p class="small muted">${esc(view.message.sender||'发送者未记录')} · ${agentTime(view.message.time)}</p><blockquote class="source" style="overflow-wrap:anywhere">${esc(view.message.text)}</blockquote>${schoolPagesHTML(s)}${schoolTeacherHTML(s)}${mediaNote?`<p class="small muted" data-school-media-note>${esc(mediaNote)}</p>`:''}${draftHTML}<div data-school-original-files>${attachments.map(a=>`${uploadHTML(a)}<button data-school-original-detach="${esc(a.id)}">移除关联</button>`).join('')}${unavailable.map(id=>`<p class="error">一份关联原件暂不可读取，请核对文件或重新上传。</p><button data-school-original-detach="${esc(id)}">移除失效关联</button>`).join('')}${!attachments.length&&!unavailable.length&&!mediaNote?'<p>这条通知还没有关联原件，可以在下面补充。</p>':''}</div><p class="small muted">原件用于核对通知，作者、具体要求和完成情况仍需确认。</p><label>拍照或上传原件<input type="file" data-school-original-upload accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.txt,.mp3,.m4a,.wav,.webm"></label><label>选择已保存的原件<select name="attachment_id"><option value="">请选择</option>${available.map(a=>`<option value="${esc(a.id)}"${s.selected===a.id?' selected':''}>${esc(a.name)}</option>`).join('')}</select></label><button data-school-original-attach>关联所选原件</button>`:''}<p role="status" aria-live="polite" data-school-original-status>${esc(s.error||(s.busy?'正在读取…':''))}</p>${s.pending||!view?'<button data-school-original-retry>重试</button>':''}<div class="toolbar"><button data-school-original-close>关闭</button></div>`;
+ dialog.innerHTML=`<h2>${view?.message.kind==='qq_window_fragment'?'QQ群窗口片段':'通知原件'}</h2>${view?.message.kind==='qq_window_fragment'?`<p class="note" data-fragment-note>采集于 ${agentTime(view.message.captured_at)}。仅本次可见内容，不是老师附件原件；发布时间与发言人仍需核对。</p>`:''}<p class="small">${esc(owner?.name||'孩子归属待核对')} · ${esc(view?.source_name||currentSources().find(x=>x.id===s.identity.source_id)?.name||'来源待核对')}</p>${view?`<p class="small muted">${esc(view.message.sender||'发送者未记录')} · ${agentTime(view.message.time)}</p><blockquote class="source" style="overflow-wrap:anywhere">${esc(view.message.text)}</blockquote>${schoolPagesHTML(s)}${schoolTeacherHTML(s)}${mediaNote?`<p class="small muted" data-school-media-note>${esc(mediaNote)}</p>`:''}${schoolPdfHTML(s)}${draftHTML}<div data-school-original-files>${attachments.map(a=>`${uploadHTML(a)}<button data-school-original-detach="${esc(a.id)}">移除关联</button>`).join('')}${unavailable.map(id=>`<p class="error">一份关联原件暂不可读取，请核对文件或重新上传。</p><button data-school-original-detach="${esc(id)}">移除失效关联</button>`).join('')}${!attachments.length&&!unavailable.length&&!mediaNote?'<p>这条通知还没有关联原件，可以在下面补充。</p>':''}</div><p class="small muted">原件用于核对通知，作者、具体要求和完成情况仍需确认。</p><label>拍照或上传原件<input type="file" data-school-original-upload accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.txt,.mp3,.m4a,.wav,.webm"></label><label>选择已保存的原件<select name="attachment_id"><option value="">请选择</option>${available.map(a=>`<option value="${esc(a.id)}"${s.selected===a.id?' selected':''}>${esc(a.name)}</option>`).join('')}</select></label><button data-school-original-attach>关联所选原件</button>`:''}<p role="status" aria-live="polite" data-school-original-status>${esc(s.error||(s.busy?'正在读取…':''))}</p>${s.pending||!view?'<button data-school-original-retry>重试</button>':''}<div class="toolbar"><button data-school-original-close>关闭</button></div>`;
  for(const control of dialog.querySelectorAll('button,input,select,textarea'))control.disabled=s.busy||!!schoolOriginalPending(s)&&!control.hasAttribute('data-school-original-retry')&&!control.hasAttribute('data-school-teacher-retry')&&!control.hasAttribute('data-school-original-close');
+}
+// PDF page groups come only from the server view: totals, processed/unread pages and completeness are the backend's; nothing here renders, calls a model or writes.
+function schoolPdfHTML(s){
+ const p=s.view?.pdf_material;if(!p)return '';
+ const pages=list=>(Array.isArray(list)?list:[]).map(n=>esc(String(n))).join('、'),notice=`<p role="status" aria-live="polite" data-school-pdf-notice>${esc(s.pdfNotice||'')}</p>`;
+ if(p.state==='unavailable')return `<section class="note" data-school-pdf-material data-school-pdf-state="unavailable"><strong>PDF资料 · 本次未整理</strong><p data-school-pdf-status>${esc(p.explanation||'当前原件或授权无法完整核对，可保留原件并手动记录。')}</p><p class="small muted">原件仍保留在下方，可打开核对或手动记录；未改动任务或学习记录。</p>${notice}<div class="tasktools"><button data-school-pdf-refresh>刷新读取最新</button></div></section>`;
+ const done=Array.isArray(p.processed_pages)?p.processed_pages:[],left=Array.isArray(p.pending_pages)?p.pending_pages:[],batches=Array.isArray(p.batches)?p.batches:[],total=Number.isInteger(p.page_count)?p.page_count:null;
+ const progress=total===null?`总页数尚未核对；已整理 ${done.length} 页，其余页数未知。`:p.complete===true?`全部 ${total} 页已整理，待家长核对。`:`已整理 ${done.length} / ${total} 页${left.length?`；未读页：${pages(left)}（共 ${left.length} 页）`:'；剩余页尚未确认完整。'}`;
+ return `<section class="note" data-school-pdf-material data-school-pdf-state="${esc(String(p.state||''))}"><strong>学校资料 · PDF逐页整理 · 待家长核对</strong><p>${esc(p.name||'PDF原件')}</p><p data-school-pdf-progress>${progress}</p>${p.explanation?`<p data-school-pdf-status>${esc(p.explanation)}</p>`:''}${batches.map(b=>{const dr=b?.draft||{};return `<div class="task-goal" data-school-pdf-batch="${esc((Array.isArray(b?.pages)?b.pages:[]).join(','))}"><span class="small muted">第 ${pages(b?.pages)} 页</span><p>${esc(dr.title||'标题待核对')}</p><p class="source">${esc(dr.note||'')}</p>${Array.isArray(dr.uncertainties)&&dr.uncertainties.length?`<p>待核对：${dr.uncertainties.map(u=>esc(String(u))).join('；')}</p>`:''}</div>`}).join('')}${!batches.length?'<p class="small muted">还没有整理完成的页组。</p>':''}${notice}<div class="tasktools"><button data-school-pdf-refresh>刷新读取最新</button>${p.state==='error'?'<button data-school-pdf-retry>重试整理</button>':''}</div><p class="small muted">仅按页组整理本通知关联的PDF原件，未改动任务或学习记录；题目、答案和范文不代表孩子的作答或掌握，请对照原件核对要求。</p></section>`;
+}
+// Refresh re-reads the same message view (GET only). A failed read keeps the progress already shown; a reply for a closed or replaced dialog is dropped.
+async function refreshSchoolPdf(){
+ const s=schoolOriginal;if(!s||s.busy||schoolOriginalPending(s)||!s.view)return;
+ s.busy=true;s.error='';s.pdfNotice='正在读取最新进度…';paintSchoolOriginal();
+ try{
+  const r=await apiFetch('/api/agent/message?'+new URLSearchParams(s.identity),{signal:AbortSignal.timeout(12000)}),view=await r.json().catch(()=>null);
+  if(schoolOriginal!==s)return;
+  if(!r.ok)throw Error(r.status===401?'请先重新登录，再刷新读取':view?.error||'这条通知暂时无法读取');
+  s.view=verifySchoolOriginal(view,s);
+  if(s.view.pdf_material)s.pdfNotice='已读取最新进度。';else{s.pdfNotice='';s.error='这条通知当前没有可整理的PDF原件，之前显示的PDF草稿已收起。'}
+ }catch(error){if(schoolOriginal!==s)return;s.pdfNotice=(error.name==='TimeoutError'?'读取超时':error.message||'连接暂时中断')+'；已显示的进度和填写内容保留，可再次刷新。'}
+ finally{if(schoolOriginal===s){s.busy=false;paintSchoolOriginal()}}
+}
+// Retry only queues the existing background job; progress is read back with refresh, never rendered or modelled here.
+async function retrySchoolPdf(){
+ const s=schoolOriginal,p=s?.view?.pdf_material;if(!s||s.busy||schoolOriginalPending(s)||s.pdfRetry||typeof p?.job_id!=='string')return;
+ s.busy=true;s.pdfRetry=true;s.error='';s.pdfNotice='正在安排重试…';paintSchoolOriginal();
+ try{
+  const r=await apiFetch('/api/agent/action',{method:'POST',signal:AbortSignal.timeout(15000),headers:{'Content-Type':'application/json','X-Family-Token':s.token},body:JSON.stringify({action:'retry',id:p.job_id})}),result=await r.json().catch(()=>null);
+  if(schoolOriginal!==s)return;
+  if(!r.ok||!result?.ok)throw Error(r.status===401?'请先重新登录，再安排重试':result?.error||'重试未能安排，请稍后再试');
+  s.pdfNotice='已安排后台重试；独立Agent稍后继续整理未读页，可点“刷新读取最新”查看。已整理页组保留。';
+ }catch(error){if(schoolOriginal!==s)return;s.pdfNotice=(error.name==='TimeoutError'?'等待回执超时':error.message||'连接暂时中断')+'；已整理页组保留，可再次重试。'}
+ finally{if(schoolOriginal===s){s.busy=false;s.pdfRetry=false;paintSchoolOriginal()}}
 }
 function verifySchoolOriginal(view,s){
  if(!view||Object.entries(s.identity).some(([k,v])=>view[k]!==v)||!view.message||!Array.isArray(view.attachments))throw Error('原件归属暂时无法核对，请重试。');
@@ -1140,6 +1175,8 @@ function openSchoolOriginal(ref,childID){
    if(b.hasAttribute('data-school-original-retry')){s.pending?saveSchoolOriginal():readSchoolOriginal();return}
    if(b.hasAttribute('data-school-teacher-retry')){saveSchoolTeacher();return}
    if(schoolOriginalPending(s))return;
+   if(b.hasAttribute('data-school-pdf-refresh')){refreshSchoolPdf();return}
+   if(b.hasAttribute('data-school-pdf-retry')){retrySchoolPdf();return}
    if(b.hasAttribute('data-school-page-read')){readSchoolPage(b.dataset.schoolPageRead);return}
    if(b.hasAttribute('data-school-teacher-open')){openSchoolTeacher();return}
    if(b.hasAttribute('data-school-teacher-profile')){const id=b.dataset.schoolTeacherProfile;dialog.close();teacherSelectedID=id;page='teachers';render();window.scrollTo(0,0);return}
@@ -1154,7 +1191,7 @@ function openSchoolOriginal(ref,childID){
    if(detach||attach){const id=detach||s.selected;if(!id){s.error='请先选择一份已保存的原件。';paintSchoolOriginal();return}s.pending={...s.identity,attachment_id:id,action:detach?'detach':'attach'};saveSchoolOriginal()}
   });
  }
- if(!schoolOriginalPending(schoolOriginal))schoolOriginal={identity,token:data.token,view:null,busy:false,pending:null,selected:'',error:'',page:null};
+ if(!schoolOriginalPending(schoolOriginal))schoolOriginal={identity,token:data.token,view:null,busy:false,pending:null,selected:'',error:'',page:null,pdfNotice:''};
  else schoolOriginal.error='请先核对上次未确认的保存；这里仍是上次选择的孩子和通知。';
  paintSchoolOriginal();dialog.showModal();if(!schoolOriginalPending(schoolOriginal))readSchoolOriginal();
 }
