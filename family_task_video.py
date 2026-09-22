@@ -11,12 +11,14 @@ import json
 import math
 import sqlite3
 import subprocess
+import time
 
 import family_llm
 import family_media
 from family_agent import AgentError, _hash
 
 SCAN_LIMIT = 50
+PROBE_DEADLINE = 15  # Shared by the header probe and, for headerless WebM, the full-timeline fallback.
 EXPLANATIONS = {
     'agent_disabled': '后台Agent未启用或授权已撤回；视频不会被读取，已有草稿不再显示，原视频保留。',
     'child_unknown': '这条记录的孩子归属无法核对；视频不会被读取。',
@@ -35,7 +37,7 @@ EXPLANATIONS = {
     'probe_failed': '视频无法在本机核验（文件损坏或没有时长信息）；未发送给模型。',
     'no_video_track': '文件中没有可用的视频轨道；未发送给模型。',
     'duration_invalid': '视频时长无法确定或超过10分钟，不会截取片段后分析；未发送给模型。',
-    'webm_duration_unsupported': '这份WebM没有时长信息（浏览器直接录制的WebM常见），当前版本尚未支持，不会猜测时长；未发送给模型，请由家长查看原视频。',
+    'webm_duration_unsupported': '这份WebM缺少可核验的时长信息，且本机无法确定完整时间轴（文件损坏、不完整或处理超时）；不会猜测时长；未发送给模型，请由家长查看原视频。',
     'changed': '记录、事项关联、任务要求、授权或原视频在整理期间发生变化，本次结果已丢弃。',
     'saved_invalid': '已保存的草稿未通过时间位置复核，不予显示；请查看原视频。',
 }
@@ -142,13 +144,40 @@ def _current(app, store, c, value):
     return current
 
 
+def _run_ffprobe(args, body, timeout):
+    return subprocess.run(args, input=body, capture_output=True, check=True, timeout=timeout)
+
+
+def _webm_full_timeline(body, remaining):
+    """Establish the WHOLE video timeline, never a prefix: demux every packet to EOF; ffprobe exits nonzero on a
+    truncated/incomplete container. The end is the largest packet pts+duration seen, so all packets are covered."""
+    _require(remaining > 0, 'webm_duration_unsupported')
+    try:
+        result = _run_ffprobe(['ffprobe', '-v', 'error', '-protocol_whitelist', 'pipe', '-f', 'matroska', '-i', 'pipe:0',
+                               '-select_streams', 'v:0', '-show_entries', 'packet=pts_time,duration_time', '-of', 'csv=p=0'],
+                              body, remaining)
+        lines = result.stdout.decode('utf-8', 'strict').strip().split('\n')
+        end = 0.0
+        for line in lines:
+            fields = line.split(',')
+            values = [float(v) for v in fields]  # 'N/A', '', inf all fail here.
+            _require(len(fields) == 2 and all(math.isfinite(v) and v >= 0 for v in values), 'webm_duration_unsupported')
+            end = max(end, values[0] + values[1])
+    except FileNotFoundError:
+        raise VideoDraftError('probe_missing') from None
+    except (subprocess.SubprocessError, UnicodeError, ValueError, OverflowError):
+        raise VideoDraftError('webm_duration_unsupported') from None
+    return end
+
+
 def probe(body, mime):
     """Local ffprobe over a pipe only, no file or network protocol: a video track and a finite duration of the whole file."""
     demux = 'matroska' if mime == 'video/webm' else 'mov'
+    deadline = time.monotonic() + PROBE_DEADLINE
     try:
-        result = subprocess.run(['ffprobe', '-v', 'error', '-protocol_whitelist', 'pipe', '-f', demux, '-i', 'pipe:0',
-                                 '-show_entries', 'stream=codec_type:format=duration', '-of', 'json'],
-                                input=body, capture_output=True, check=True, timeout=15)
+        result = _run_ffprobe(['ffprobe', '-v', 'error', '-protocol_whitelist', 'pipe', '-f', demux, '-i', 'pipe:0',
+                               '-show_entries', 'stream=codec_type:format=duration', '-of', 'json'],
+                              body, PROBE_DEADLINE)
         info = json.loads(result.stdout); streams = info.get('streams'); raw = info.get('format', {}).get('duration')
     except FileNotFoundError:
         raise VideoDraftError('probe_missing') from None
@@ -160,9 +189,10 @@ def probe(body, mime):
         duration = float(raw) if type(raw) in (str, int, float) else math.nan
     except ValueError:
         duration = math.nan
-    # A WebM recorded in the browser usually has no duration header. Measuring it needs the container decoded, which is
-    # not supported yet: refuse and say so, never guess.
-    _require(mime != 'video/webm' or math.isfinite(duration), 'webm_duration_unsupported')
+    # A WebM recorded in the browser usually has no duration header. Establish the full timeline by demuxing every
+    # packet to EOF under the remaining shared deadline; if completeness cannot be proved, refuse, never guess.
+    if mime == 'video/webm' and not math.isfinite(duration):
+        duration = _webm_full_timeline(body, deadline - time.monotonic())
     _require(math.isfinite(duration) and 0 < duration <= family_llm.MAX_VIDEO_SECONDS, 'duration_invalid')
     return duration
 

@@ -5,7 +5,9 @@ import http.client
 import io
 import json
 import os
+import shutil
 import subprocess
+import tempfile
 import threading
 import unittest
 from unittest import mock
