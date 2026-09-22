@@ -205,3 +205,4 @@
 !/test_lan_open_ui.cjs
 
 !/test_message_page.py
+!/test_message_page_ui.cjs

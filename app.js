@@ -1002,6 +1002,29 @@ function schoolOriginalButtons(refs,childID){
  const entries=[...new Set(refs)].filter(ref=>schoolMessageIdentity(ref,childID));
  return entries.length?`<div class="toolbar">${entries.map((ref,i)=>`<button data-school-original-ref="${esc(ref)}" data-school-original-child="${esc(childID)}">${entries.length===1?'原通知与原件':'第 '+(i+1)+' 条原通知与原件'}</button>`).join('')}</div>`:'';
 }
+// Same link boundary as family_agent._URL (without lookbehind so older engines still parse this file) and the same trailing
+// ASCII punctuation trim as the server's _page_link, so a sentence-ending . , ; : ! ? or quote is never sent as part of the
+// address while dots and query marks inside it stay untouched. Only complete https addresses that appear in the message can be
+// read, and the server checks the address, authorization and message again (QQ window fragments included).
+const SCHOOL_URL=/(?:https?:\/\/|www\.)[^\s一-鿿，。；！？、（）【】《》]+|(?:[a-z0-9-]+\.)+[a-z]{2,}\/[^\s一-鿿，。；！？、（）【】《》]*/gi,SCHOOL_URL_TAIL=/[.,;:!?'"]+$/;
+function schoolPageLinks(text){
+ const source=String(text||''),seen=new Set(),links=[];
+ for(const m of source.matchAll(SCHOOL_URL)){
+  const raw=m[0],before=source[m.index-1]||'';
+  if(!/^(?:https?:\/\/|www\.)/i.test(raw)&&/[a-z0-9.@-]/i.test(before))continue;
+  const url=raw.replace(SCHOOL_URL_TAIL,'');
+  if(!url||seen.has(url))continue;seen.add(url);links.push({url,https:/^https:\/\/./i.test(url)});
+ }
+ return links;
+}
+function schoolPagesHTML(s){
+ const m=s.view?.message;if(!m?.text)return '';
+ const links=schoolPageLinks(m.text);if(!links.length)return '';
+ const pages=Array.isArray(s.view.pages)?s.view.pages:[],p=s.page||{};
+ return `<section class="note" data-school-pages><h3>通知里的网址</h3><p class="small">点击后只读取该完整 https 地址的静态文字一次（最多6000字）并保存供核对；不读取整站、不刷新，也不改动任务、学习目标或学校用途。其他链接保持原文。</p>${links.map(l=>{
+  const page=l.https?pages.find(x=>x&&(x.original_url===l.url||x.url===l.url)):null,mine=p.url===l.url,status=mine&&p.notice?`<p role="status" data-school-page-status>${esc(p.notice)}</p>`:'';
+  return `<div data-school-page="${esc(l.url)}"><p class="source" style="overflow-wrap:anywhere;word-break:break-all">${esc(l.url)}</p>${status}${page?`<p class="small muted" data-school-page-meta>读取于 ${agentTime(page.fetched_at)} · 仅静态文字${page.text_truncated?'，超过6000字的部分未保存':''}${page.url&&page.url!==page.original_url?' · 实际打开：'+esc(page.url):''}</p><details open><summary>核对网页片段</summary><blockquote class="source" data-school-page-text style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:40vh;overflow:auto">${esc(page.text)}</blockquote></details><p class="small muted">网页文字只供对照原通知核对，不代表学校要求已确认；图片、附件、动态或登录后的内容未读取。</p>`:l.https?`<button data-school-page-read="${esc(l.url)}">${mine&&p.request?'重试读取这个网址':'读取网页片段'}</button>`:'<p class="small muted">未读取，保持原文：只支持完整的 https 地址。</p>'}</div>`}).join('')}</section>`;
+}
 // One unresolved association keeps its exact message and upload ID until retried.
 let schoolOriginal=null;
 function schoolOriginalPending(s){return s?.pending||s?.teacher?.pending}
@@ -1040,7 +1063,7 @@ function paintSchoolOriginal(){
 
  const available=(data.uploads||[]).filter(a=>!linked.has(a.id)),owner=data.children.find(c=>c.id===s.identity.child_id);
  const mediaNote=view?.media?.explanation||'';
- dialog.innerHTML=`<h2>${view?.message.kind==='qq_window_fragment'?'QQ群窗口片段':'通知原件'}</h2>${view?.message.kind==='qq_window_fragment'?`<p class="note" data-fragment-note>采集于 ${agentTime(view.message.captured_at)}。仅本次可见内容，不是老师附件原件；发布时间与发言人仍需核对。</p>`:''}<p class="small">${esc(owner?.name||'孩子归属待核对')} · ${esc(view?.source_name||currentSources().find(x=>x.id===s.identity.source_id)?.name||'来源待核对')}</p>${view?`<p class="small muted">${esc(view.message.sender||'发送者未记录')} · ${agentTime(view.message.time)}</p><blockquote class="source">${esc(view.message.text)}</blockquote>${schoolTeacherHTML(s)}${mediaNote?`<p class="small muted" data-school-media-note>${esc(mediaNote)}</p>`:''}${draftHTML}<div data-school-original-files>${attachments.map(a=>`${uploadHTML(a)}<button data-school-original-detach="${esc(a.id)}">移除关联</button>`).join('')}${unavailable.map(id=>`<p class="error">一份关联原件暂不可读取，请核对文件或重新上传。</p><button data-school-original-detach="${esc(id)}">移除失效关联</button>`).join('')}${!attachments.length&&!unavailable.length&&!mediaNote?'<p>这条通知还没有关联原件，可以在下面补充。</p>':''}</div><p class="small muted">原件用于核对通知，作者、具体要求和完成情况仍需确认。</p><label>拍照或上传原件<input type="file" data-school-original-upload accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.txt,.mp3,.m4a,.wav,.webm"></label><label>选择已保存的原件<select name="attachment_id"><option value="">请选择</option>${available.map(a=>`<option value="${esc(a.id)}"${s.selected===a.id?' selected':''}>${esc(a.name)}</option>`).join('')}</select></label><button data-school-original-attach>关联所选原件</button>`:''}<p role="status" aria-live="polite" data-school-original-status>${esc(s.error||(s.busy?'正在读取…':''))}</p>${s.pending||!view?'<button data-school-original-retry>重试</button>':''}<div class="toolbar"><button data-school-original-close>关闭</button></div>`;
+ dialog.innerHTML=`<h2>${view?.message.kind==='qq_window_fragment'?'QQ群窗口片段':'通知原件'}</h2>${view?.message.kind==='qq_window_fragment'?`<p class="note" data-fragment-note>采集于 ${agentTime(view.message.captured_at)}。仅本次可见内容，不是老师附件原件；发布时间与发言人仍需核对。</p>`:''}<p class="small">${esc(owner?.name||'孩子归属待核对')} · ${esc(view?.source_name||currentSources().find(x=>x.id===s.identity.source_id)?.name||'来源待核对')}</p>${view?`<p class="small muted">${esc(view.message.sender||'发送者未记录')} · ${agentTime(view.message.time)}</p><blockquote class="source" style="overflow-wrap:anywhere">${esc(view.message.text)}</blockquote>${schoolPagesHTML(s)}${schoolTeacherHTML(s)}${mediaNote?`<p class="small muted" data-school-media-note>${esc(mediaNote)}</p>`:''}${draftHTML}<div data-school-original-files>${attachments.map(a=>`${uploadHTML(a)}<button data-school-original-detach="${esc(a.id)}">移除关联</button>`).join('')}${unavailable.map(id=>`<p class="error">一份关联原件暂不可读取，请核对文件或重新上传。</p><button data-school-original-detach="${esc(id)}">移除失效关联</button>`).join('')}${!attachments.length&&!unavailable.length&&!mediaNote?'<p>这条通知还没有关联原件，可以在下面补充。</p>':''}</div><p class="small muted">原件用于核对通知，作者、具体要求和完成情况仍需确认。</p><label>拍照或上传原件<input type="file" data-school-original-upload accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.txt,.mp3,.m4a,.wav,.webm"></label><label>选择已保存的原件<select name="attachment_id"><option value="">请选择</option>${available.map(a=>`<option value="${esc(a.id)}"${s.selected===a.id?' selected':''}>${esc(a.name)}</option>`).join('')}</select></label><button data-school-original-attach>关联所选原件</button>`:''}<p role="status" aria-live="polite" data-school-original-status>${esc(s.error||(s.busy?'正在读取…':''))}</p>${s.pending||!view?'<button data-school-original-retry>重试</button>':''}<div class="toolbar"><button data-school-original-close>关闭</button></div>`;
  for(const control of dialog.querySelectorAll('button,input,select,textarea'))control.disabled=s.busy||!!schoolOriginalPending(s)&&!control.hasAttribute('data-school-original-retry')&&!control.hasAttribute('data-school-teacher-retry')&&!control.hasAttribute('data-school-original-close');
 }
 function verifySchoolOriginal(view,s){
@@ -1052,6 +1075,24 @@ async function readSchoolOriginal(){
  try{const r=await apiFetch('/api/agent/message?'+new URLSearchParams(s.identity),{signal:AbortSignal.timeout(12000)}),view=await r.json();if(!r.ok)throw Error(view.error||'这条通知暂时无法读取');s.view=verifySchoolOriginal(view,s)}
  catch(error){s.error=error.name==='TimeoutError'?'读取超时，请重试。':error.message||'暂时无法读取，请重试。'}
  finally{s.busy=false;paintSchoolOriginal()}
+}
+// One click reads one address from the message itself; a lost reply is retried with the same request and served from the server cache.
+async function readSchoolPage(url){
+ const s=schoolOriginal;if(!s||s.busy||schoolOriginalPending(s)||!s.view)return;
+ if(!schoolPageLinks(s.view.message.text).some(l=>l.https&&l.url===url)){s.error='只读取原通知里完整的 https 地址。';paintSchoolOriginal();return}
+ const request={...s.identity,url};s.page={request,url,notice:''};s.busy=true;s.error='';paintSchoolOriginal();
+ let keep=true;
+ try{
+  const r=await apiFetch('/api/agent/message/page',{method:'POST',signal:AbortSignal.timeout(20000),headers:{'Content-Type':'application/json','X-Family-Token':s.token},body:JSON.stringify(request)}),view=await r.json();
+  if(schoolOriginal!==s)return;
+  if(!r.ok){keep=!([400,404,422].includes(r.status)||r.status===403&&view.code!=='csrf_expired');throw Error(view.error||(r.status===401?'请先登录家长账号':'网页片段暂未读取'))}
+  verifySchoolOriginal(view,s);const p=view.page;
+  if(!p||typeof p.text!=='string'||p.original_url!==url&&p.url!==url||!Array.isArray(view.pages)||!view.pages.some(x=>x&&x.original_url===p.original_url))throw Error('读取回执暂时无法核对，请重试同一网址。');
+  s.view=view;s.page={request:null,url,notice:view.cached?'已使用之前保存的网页片段，没有再次访问网页。':'已读取网页片段，请对照原通知核对。'};
+ }catch(error){
+  if(schoolOriginal!==s)return;
+  s.page={request:keep?request:null,url,notice:(error.name==='TimeoutError'?'读取网页超时':error.message||'连接暂时中断')+(keep?'；原通知、原件和已填写内容都保留，可重试读取同一网址。':'。')};
+ }finally{if(schoolOriginal===s){s.busy=false;paintSchoolOriginal()}}
 }
 async function saveSchoolOriginal(){
  const s=schoolOriginal;if(!s||s.busy||!s.pending)return;s.busy=true;s.error='正在保存关联…';paintSchoolOriginal();
@@ -1099,6 +1140,7 @@ function openSchoolOriginal(ref,childID){
    if(b.hasAttribute('data-school-original-retry')){s.pending?saveSchoolOriginal():readSchoolOriginal();return}
    if(b.hasAttribute('data-school-teacher-retry')){saveSchoolTeacher();return}
    if(schoolOriginalPending(s))return;
+   if(b.hasAttribute('data-school-page-read')){readSchoolPage(b.dataset.schoolPageRead);return}
    if(b.hasAttribute('data-school-teacher-open')){openSchoolTeacher();return}
    if(b.hasAttribute('data-school-teacher-profile')){const id=b.dataset.schoolTeacherProfile;dialog.close();teacherSelectedID=id;page='teachers';render();window.scrollTo(0,0);return}
    if(b.hasAttribute('data-school-material-record')){const identity={...s.identity};dialog.close();openSchoolRecord({message:identity},b);return}
@@ -1112,7 +1154,7 @@ function openSchoolOriginal(ref,childID){
    if(detach||attach){const id=detach||s.selected;if(!id){s.error='请先选择一份已保存的原件。';paintSchoolOriginal();return}s.pending={...s.identity,attachment_id:id,action:detach?'detach':'attach'};saveSchoolOriginal()}
   });
  }
- if(!schoolOriginalPending(schoolOriginal))schoolOriginal={identity,token:data.token,view:null,busy:false,pending:null,selected:'',error:''};
+ if(!schoolOriginalPending(schoolOriginal))schoolOriginal={identity,token:data.token,view:null,busy:false,pending:null,selected:'',error:'',page:null};
  else schoolOriginal.error='请先核对上次未确认的保存；这里仍是上次选择的孩子和通知。';
  paintSchoolOriginal();dialog.showModal();if(!schoolOriginalPending(schoolOriginal))readSchoolOriginal();
 }
