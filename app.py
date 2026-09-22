@@ -1825,6 +1825,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/agent/action': return self.reply(200,family_agent.apply_school_change(SimpleNamespace(**globals()),agent_store(),obj) if obj.get('action')=='school_change' else agent_store().act(obj))
             if path=='/api/goals/action': return self.reply(200,goal_store().action(obj))
             if path=='/api/agent/message/attachment': return self.reply(200,agent_store().message_attachment(obj,upload_info))
+            if path=='/api/agent/message/page': return self.reply(200,agent_store().message_page(obj,upload_info))
             if path=='/api/teachers/profile': return self.reply(200,teacher_store().save_teacher(obj))
             if path=='/api/teachers/observation': return self.reply(200,teacher_store().save_observation(obj))
             if path=='/api/teachers/message': return self.reply(200,teacher_store().save_message_requirement(obj))

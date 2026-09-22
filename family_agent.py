@@ -8,6 +8,7 @@ import copy
 from contextlib import contextmanager
 import datetime as dt
 import hashlib
+import http.client
 import json
 from pathlib import Path
 import re
@@ -102,6 +103,30 @@ def _links(evidence):
 def _link_only(text):
     """Only an address and pointer words were read, so purpose and content stay unknown."""
     return bool(_URL.search(text)) and not re.sub(r'[\W_]+','',_LINK_POINTER.sub('',_URL.sub('',text)))
+
+
+def _page_link(message, requested):
+    """The parent names one complete HTTPS address exactly as saved in this message's text.
+
+    _links() clips addresses to 500 characters for display; a clipped prefix, a spliced address or any
+    address that is not in the text is refused. Only the same _URL match rule is reused, without the clip.
+    Returns (normalized address, address as written).
+    """
+    text = message.get('text', '')
+    for found in _URL.findall(text if isinstance(text, str) else ''):
+        found = found.rstrip('.,;:!?\'"')
+        if not found: continue
+        try: normalized = family_teacher_public.validate_url(found)
+        except ValueError: normalized = ''
+        if requested not in (found, normalized): continue
+        if not normalized: raise AgentError('这条消息里的链接不是可读取的公开 HTTPS 网页', 400, 'page_link_unsupported')
+        return normalized, found
+    raise AgentError('链接须完整出现在这条学校消息中，未读取网页', 400, 'page_link_not_in_message')
+
+
+def _page_fingerprint(source, message, url):
+    """The whole current source binding and saved message guard a fragment; any change hides it."""
+    return _hash([1, source, message, url])
 
 
 def _keeps_learning(brief):
@@ -345,6 +370,10 @@ class Store:
                     source_id TEXT NOT NULL, message_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
                     payload TEXT NOT NULL, updated TEXT NOT NULL,
                     PRIMARY KEY(source_id,message_id));
+                CREATE TABLE IF NOT EXISTS agent_message_pages (
+                    source_id TEXT NOT NULL, message_id TEXT NOT NULL, url TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL, payload TEXT NOT NULL,
+                    PRIMARY KEY(source_id,message_id,url));
                 CREATE TABLE IF NOT EXISTS record_video_drafts (
                     record_id INTEGER NOT NULL, upload_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
                     payload TEXT NOT NULL, updated TEXT NOT NULL,
@@ -555,7 +584,8 @@ class Store:
                     source_name=source['name'], message=message, attachments=attachments,
                     unavailable_attachment_ids=unavailable,
                     media=family_media.collection_view(self,c,source,message,attachments),
-                    material_draft=family_media.draft_view(self,c,source,message))
+                    material_draft=family_media.draft_view(self,c,source,message),
+                    pages=self._message_pages(c, source, message))
 
     def message(self, obj, upload_info):
         if not isinstance(obj, dict) or set(obj) != {'child_id', 'source_id', 'message_id'}:
@@ -587,6 +617,78 @@ class Store:
                 c.execute("""INSERT INTO agent_media(source_id,message_id,state) VALUES (?,?,'dismissed')
                     ON CONFLICT(source_id,message_id) DO UPDATE SET state='dismissed',error=''""", args[:2])
             return self._message_view(c, source, message, upload_info)
+
+    def _page_context(self, c, obj):
+        source, message = self._message_context(c, obj)
+        if not self._config(c)['enabled'] or not source['enabled']:
+            raise AgentError('Agent或此来源已停用，未读取网页', 403, 'source_not_enabled')
+        return source, message
+
+    def _page_row(self, c, source, message, url, fingerprint):
+        row = c.execute('SELECT fingerprint,payload FROM agent_message_pages WHERE source_id=? AND message_id=? AND url=?',
+                        (source['id'], message['id'], url)).fetchone()
+        if row is None or row['fingerprint'] != fingerprint: return None
+        page = json.loads(row['payload'])
+        return page if isinstance(page, dict) and page.get('url') == url else None
+
+    def _message_pages(self, c, source, message):
+        """Saved fragments still matching the current source, binding and message; no network, probe or write."""
+        try:
+            if not self._config(c)['enabled'] or not source['enabled']: return []
+        except AgentError:
+            return []
+        pages = []
+        for row in c.execute('SELECT url FROM agent_message_pages WHERE source_id=? AND message_id=? ORDER BY url',
+                             (source['id'], message['id'])):
+            page = self._page_row(c, source, message, row['url'], _page_fingerprint(source, message, row['url']))
+            if page is not None: pages.append(page)
+        return pages
+
+    def message_page(self, obj, upload_info, fetch=None):
+        """Read one complete HTTPS address from a saved school message once for the parent; keep a private text fragment.
+
+        The network read holds no database connection. Authorization, child binding, the full message and the
+        address are checked before and after it; a fragment is only a bounded quote, never a fact or a task.
+        The same source/message fingerprint and address return the saved fragment without going out again.
+        """
+        if not isinstance(obj, dict) or set(obj) != {'child_id', 'source_id', 'message_id', 'url'}:
+            raise AgentError('请提供唯一的孩子、来源、消息编号和链接')
+        requested = _text(obj, 'url', 2048, True)
+        keys = {key: obj[key] for key in ('child_id', 'source_id', 'message_id')}
+        with self._db() as c:
+            c.execute('BEGIN')
+            source, message = self._page_context(c, keys)
+            url, original = _page_link(message, requested)
+            fingerprint = _page_fingerprint(source, message, url)
+            cached = self._page_row(c, source, message, url, fingerprint)
+            if cached is not None:
+                return dict(cached=True, page=cached, **self._message_view(c, source, message, upload_info))
+        try:
+            page = (fetch or family_teacher_public.fetch_page)(url)
+            if not (isinstance(page, dict) and page.get('url') == url and isinstance(page.get('text'), str)
+                    and 0 < len(page['text']) <= family_teacher_public.TEXT_LIMIT
+                    and type(page.get('text_truncated')) is bool and page.get('content_type') in ('text/html', 'text/plain')
+                    and isinstance(page.get('fetched_at'), str) and page['fetched_at']):
+                raise ValueError('page shape')
+        except (OSError, ValueError, http.client.HTTPException, UnicodeError, LookupError):
+            # Transport errors may name peers or private paths; the parent sees a retryable, non-successful state.
+            raise AgentError('网页暂未读取成功，原消息未改动，可稍后重试', 502, 'page_fetch_failed') from None
+        stored = dict(child_id=source['child_id'], source_id=source['id'], message_id=message['id'], url=url,
+                      original_url=original, fetched_at=page['fetched_at'], content_type=page['content_type'],
+                      text=page['text'], text_truncated=page['text_truncated'])
+        with self._db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            source, message = self._page_context(c, keys)
+            if _page_link(message, requested) != (url, original) or _page_fingerprint(source, message, url) != fingerprint:
+                raise AgentError('读取期间消息或授权已变化，网页内容未保存', 409, 'page_context_changed')
+            # First commit wins; a stale row of a corrected message is replaced, never shown.
+            c.execute("""INSERT INTO agent_message_pages(source_id,message_id,url,fingerprint,payload) VALUES (?,?,?,?,?)
+                ON CONFLICT(source_id,message_id,url) DO UPDATE SET fingerprint=excluded.fingerprint,payload=excluded.payload
+                WHERE agent_message_pages.fingerprint!=excluded.fingerprint""",
+                      (source['id'], message['id'], url, fingerprint, _json(stored)))
+            saved = self._page_row(c, source, message, url, fingerprint)
+            if saved is None: raise AgentError('网页内容未能保存，请重试', 500, 'page_not_saved')
+            return dict(cached=saved != stored, page=saved, **self._message_view(c, source, message, upload_info))
 
     def snapshot(self):
         try: config = self._config()

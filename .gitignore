@@ -203,3 +203,5 @@
 !/test_task_video.py
 
 !/test_lan_open_ui.cjs
+
+!/test_message_page.py
