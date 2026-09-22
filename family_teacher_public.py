@@ -1,4 +1,4 @@
-"""Weekly checks of explicitly configured public teaching pages; no model calls."""
+"""Weekly checks of explicitly configured public teaching pages and bounded reads of one public page; no model calls."""
 import datetime as dt
 import json
 import http.client
@@ -13,6 +13,7 @@ from urllib.parse import urlsplit, urlunsplit
 TZ = dt.timezone(dt.timedelta(hours=8))
 INTERVAL = dt.timedelta(days=7)
 MAX_BYTES = 512 * 1024
+TEXT_LIMIT = 6000  # characters kept from the extracted text; longer pages are flagged, not read further
 
 
 def validate_url(value):
@@ -60,8 +61,20 @@ class PageText(HTMLParser):
             self.parts.append(data.strip())
 
 
-def fetch_text(value):
-    url = urlsplit(validate_url(value))
+def fetch_page(value):
+    """Read one explicitly given public page once and return a bounded static text fragment.
+
+    Returns dict(url=normalized request address, text=at most TEXT_LIMIT characters,
+    text_truncated=whether the extracted text was longer than TEXT_LIMIT, content_type,
+    fetched_at=ISO time with zone when the body finished reading). This only proves a static
+    body fragment was returned: it does not judge what the link is for, read other pages,
+    run scripts, detect CSS-hidden text or read images/attachments. Bodies over MAX_BYTES
+    are refused rather than truncated.
+    """
+    normalized = validate_url(value)
+    if not normalized:
+        raise ValueError('请填写无账号信息的公开 HTTPS 网页链接')
+    url = urlsplit(normalized)
     deadline = time.monotonic() + 10
     addresses = socket.getaddrinfo(url.hostname, 443, type=socket.SOCK_STREAM)
     ips = [item[4][0] for item in addresses]
@@ -111,11 +124,17 @@ def fetch_text(value):
         text = re.sub(r'[ \t]+', ' ', text).strip()
         if not text:
             raise ValueError('公开页面没有可读取文字')
-        # ponytail: compare the first 6000 readable characters; full-page diffs need a real use case.
-        return text[:6000]
+        return dict(url=normalized, text=text[:TEXT_LIMIT], text_truncated=len(text) > TEXT_LIMIT,
+                    content_type=content_type, fetched_at=dt.datetime.now(TZ).isoformat())
     finally:
         connection.close()
         raw_socket.close()
+
+
+def fetch_text(value):
+    """Teacher-page comparison keeps its string contract: the first TEXT_LIMIT readable characters."""
+    # ponytail: compare the first 6000 readable characters; full-page diffs need a real use case.
+    return fetch_page(value)['text']
 
 
 def init(c):
@@ -159,7 +178,7 @@ def run_one(app, now=None, fetch=fetch_text):
     error = ''
     try:
         text = fetch(target['public_url'])
-        if not isinstance(text, str) or not text.strip() or len(text) > 6000:
+        if not isinstance(text, str) or not text.strip() or len(text) > TEXT_LIMIT:
             raise ValueError()
     except (OSError, ValueError, http.client.HTTPException, UnicodeError, LookupError):
         text = ''; error = '公开页面暂未读取成功，保留上次资料；七天后再检查。'
