@@ -350,11 +350,11 @@ class DeadlineTests(unittest.TestCase):
         # 20 本身合法；用 mock 让 pdfinfo 后即超时与本测试无关，只确认不报 invalid deadline
         seen = []
 
-        def fake_run(argv, payload, timeout):
-            seen.append(timeout)
-            raise subprocess.TimeoutExpired(argv, timeout)
+        def fake_run(argv, **kwargs):
+            seen.append(kwargs["timeout"])
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
 
-        with mock.patch.object(family_pdf, "_run", fake_run):
+        with mock.patch.object(family_pdf.subprocess, "run", fake_run):
             with self.assertRaises(PDFError) as ctx:
                 render_pages(b"%PDF-x", [1], deadline=20)
         self.assertNotIn("invalid deadline", str(ctx.exception))
