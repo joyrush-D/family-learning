@@ -25,7 +25,7 @@ def page(url=LINK, text=PAGE, truncated=False):
 
 def draft(**changes):
     return dict(dict(title='英语：朗读第3课课文三遍', goal='朗读第3课课文三遍。', advice='', state='ready', reason='页面写明朗读要求。',
-                     purpose='learning', submission='录音上传到班级群打卡'), **changes)
+                     purpose='learning', submission='录音上传到班级群打卡', change='new', target_id=''), **changes)
 
 
 class SchoolPageEvidenceTests(unittest.TestCase):
@@ -93,7 +93,7 @@ class SchoolPageEvidenceTests(unittest.TestCase):
         self.assertEqual((result['used'], calls, self.brief(ident)), (0, [], before))  # no fragment: the unread draft is untouched
         self.save_page()
         result, calls = self.refresh(draft())
-        self.assertEqual((result['used'], result['created'], len(calls)), (1, 0, 1))
+        self.assertEqual((result['used'], result['created'], result['failed'], len(calls)), (1, 0, 0, 1))  # the full reply contract is accepted, nothing failed
         system, user = calls[0][0]['content'], json.loads(calls[0][1]['content'])
         self.assertNotIn('链接页面从未读取', system); self.assertIn(agent.SCHOOL_PAGE_PROMPT, system); self.assertNotIn(PAGE, system)
         self.assertEqual([(p['url'], p['text'], p['text_truncated'], p['fetched_at']) for p in user['pages']], [(LINK, PAGE, False, FETCHED)])
@@ -112,13 +112,14 @@ class SchoolPageEvidenceTests(unittest.TestCase):
             self.store.act(dict(id=ident, action='accept', expected_updated=self.item(ident)['updated']), school_auto=True)
         accepted = self.store.act(dict(id=ident, action='accept'))  # the parent accepts once through the ordinary path
         self.assertEqual((accepted['state'], self.count('manual_tasks')), ('accepted', 1))
-        result, calls = self.refresh(draft(), minutes=2)
+        accepted_row = self.item(ident); result, calls = self.refresh(draft(), minutes=2)
         self.assertEqual((result['used'], calls, self.count('manual_tasks'), self.item(ident)['state']), (0, [], 1, 'accepted'))
+        self.assertEqual(self.item(ident), accepted_row)  # the accepted row is never rewritten by a later round
 
     def test_one_page_candidate_per_round_budget_and_backoff(self):
         first = self.candidate('1'); second = self.candidate('2'); self.save_page('1'); self.save_page('2')
-        result, calls = self.refresh(draft(), budget=0)
-        self.assertEqual((result['used'], calls, self.brief(first)['reason'][:12]), (0, [], '只有链接或短链，页面未读取'))
+        before = self.brief(first); result, calls = self.refresh(draft(), budget=0)
+        self.assertEqual((result['used'], calls, self.brief(first)), (0, [], before))  # no budget: the whole unread draft is untouched
         result, calls = self.refresh(draft(), budget=3); self.assertEqual((result['used'], len(calls)), (1, 1))
         result, calls = self.refresh(draft(), budget=3, minutes=1); self.assertEqual((result['used'], len(calls)), (1, 1))
         self.assertTrue(self.brief(first).get('page_evidence') and self.brief(second).get('page_evidence'))
@@ -182,6 +183,9 @@ class SchoolPageEvidenceTests(unittest.TestCase):
             return draft()
         result, calls = self.refresh(correct)
         self.assertEqual((result['used'], len(calls), self.brief(ident), self.item(ident)['state']), (1, 1, before, 'pending'))  # in-flight correction: dropped
+        with self.store._db() as c:
+            corrected = json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?', (self.source['id'], '1')).fetchone()['payload'])['text']
+        self.assertEqual((result['failed'], corrected), (0, TEXT + '（更正）'))  # the correction really landed; the round was dropped, not failed
         result, calls = self.refresh(draft(), minutes=1)
         self.assertEqual((result['used'], calls), (0, []))  # the corrected message hides the fragment; nothing goes out again
         second = self.candidate('2'); self.save_page('2')
@@ -195,10 +199,60 @@ class SchoolPageEvidenceTests(unittest.TestCase):
 
     def test_plain_notice_without_fragment_keeps_automatic_collection(self):
         ident = self.candidate('1', text=PLAIN, brief=dict(title='旧', goal='旧', advice='', state='review', reason='旧策略', policy=1))
-        result, calls = self.refresh(dict(title='语文：完成虚构习作', goal='完成虚构习作一篇。', advice='', state='ready', reason='明确要求。', purpose='learning', submission=''))
+        result, calls = self.refresh(dict(title='语文：完成虚构习作', goal='完成虚构习作一篇。', advice='', state='ready', reason='明确要求。', purpose='learning', submission='', change='new', target_id=''))
         self.assertIn(agent._PAGE_UNREAD, calls[0][0]['content']); self.assertNotIn('pages', json.loads(calls[0][1]['content']))
         self.assertEqual((result['used'], result['created'], self.item(ident)['state'], self.count('manual_tasks')), (1, 1, 'accepted', 1))
         self.assertNotIn('page_evidence', self.brief(ident))
+
+    def test_reference_fragment_is_recorded_once_without_model(self):
+        text = '请问有哪位家长有语文课本第3页的照片，发我一下 ' + LINK
+        ident = self.candidate('1', text=text, brief=dict(title='旧', goal='旧', advice='', state='review', reason='旧策略', policy=1)); self.save_page()
+        result, calls = self.refresh(draft()); brief = self.brief(ident)
+        self.assertEqual((result['used'], result['failed'], calls, brief['state'], bool(brief['page_evidence']['fingerprint'])), (0, 0, [], 'reference', True))
+        row = self.item(ident)
+        for minutes in (1, 2):  # the same reference page is never prepared or written again
+            result, calls = self.refresh(draft(), minutes=minutes)
+            self.assertEqual((result['used'], calls, self.item(ident), self.count('manual_tasks')), (0, [], row, 0))
+
+    def test_inflight_revocation_or_dismissal_discards_the_model_result(self):
+        ident = self.candidate('1'); self.save_page(); before = self.brief(ident)
+        def revoke(messages): self.config(source_enabled=False); return draft()
+        result, calls = self.refresh(revoke)
+        self.assertFalse(json.loads((self.data / 'agent.json').read_text())['sources'][0]['enabled'])  # the revocation really happened
+        self.assertEqual((result['used'], result['failed'], len(calls), self.brief(ident), self.item(ident)['state']), (1, 0, 1, before, 'pending'))
+        self.store.act(dict(id=ident, action='dismiss')); self.config(); second = self.candidate('2'); self.save_page('2')
+        def dismiss(messages): self.store.act(dict(id=second, action='dismiss')); return draft()
+        result, calls = self.refresh(dismiss, minutes=1)
+        self.assertEqual((result['used'], result['failed'], len(calls), self.item(second)['state'], self.count('manual_tasks')), (1, 0, 1, 'dismissed', 0))
+        self.assertNotIn('page_evidence', self.brief(second))  # the dismissed row keeps its pre-model draft
+        rows = (self.item(ident), self.item(second)); result, calls = self.refresh(draft(), minutes=2)
+        self.assertEqual((result['used'], calls, (self.item(ident), self.item(second))), (0, [], rows))  # dismissed rows stay exactly as they were
+
+    def test_page_draft_after_correction_or_revocation_is_stale_and_refused(self):
+        ident = self.candidate('1'); self.save_page(); original = self.item(ident)['title']
+        self.refresh(draft()); self.assertEqual(self.brief(ident)['state'], 'ready')
+        self.config(source_enabled=False)  # revoked after the draft was made
+        result, calls = self.refresh(draft(), minutes=1); brief = self.brief(ident)
+        self.assertEqual((result['used'], calls, brief['state'], brief['page_evidence']['fingerprint'], brief['reason']), (0, [], 'review', '', agent._PAGE_STALE))
+        with self.assertRaises(agent.AgentError) as refused: self.store.act(dict(id=ident, action='accept'))
+        self.assertEqual((refused.exception.status, self.item(ident)['state'], self.count('manual_tasks')), (409, 'pending', 0))
+        row = self.item(ident); result, calls = self.refresh(draft(), minutes=2)
+        self.assertEqual((result['used'], calls, self.item(ident)), (0, [], row))  # marked stale once, never rewritten
+        self.config()  # re-authorized: the same fragment is prepared again from the original notice, not from the old draft
+        result, calls = self.refresh(draft(), minutes=3); user = json.loads(calls[0][1]['content'])
+        self.assertEqual((result['used'], result['failed'], len(calls), user['candidate'], self.brief(ident)['state']), (1, 0, 1, original, 'ready'))
+        self.assertNotIn(draft()['title'], json.dumps(user, ensure_ascii=False))
+        payload = json.dumps(dict(id='1', time=self.now.isoformat(), kind='text', sender='虚构老师', text='（更正）' + TEXT, unread=False), ensure_ascii=False)
+        with self.store._db() as c:
+            c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?', (payload, self.source['id'], '1'))
+        result, calls = self.refresh(draft(), minutes=4)  # corrected after the draft: the fragment is hidden the same way
+        self.assertEqual((result['used'], calls, self.brief(ident)['state']), (0, [], 'review'))
+        with self.assertRaises(agent.AgentError) as refused: self.store.act(dict(id=ident, action='accept', title='手填', body='手填'))
+        self.assertEqual((refused.exception.status, self.count('manual_tasks')), (409, 0))
+        self.save_page()  # the parent re-reads the corrected message's page: a fresh fragment, the original notice as candidate
+        result, calls = self.refresh(draft(), minutes=5)
+        self.assertEqual((result['used'], len(calls), json.loads(calls[0][1]['content'])['candidate']), (1, 1, original))
+        self.assertEqual((self.item(ident)['state'], self.count('manual_tasks'), self.count('agent_items')), ('pending', 0, 1))
 
 
 if __name__ == '__main__':
