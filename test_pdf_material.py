@@ -63,12 +63,10 @@ class PdfMaterialTests(Base):
 
     def claim_for_other_child(self, ident):
         """child-2's reading work already owns the upload: the same binding `_message_upload` enforces for child-1."""
+        import family_reading
+        family_reading.Store(self.app.connect, self.app.profiles, lambda c: [])
         with self.store._db() as c:
-            columns = [tuple(r) for r in c.execute('PRAGMA table_info(reading_uploads)')]
-            self.assertTrue(columns)
-            values = {n: (ident if n == 'upload_id' else 'child-2' if n == 'child_id' else 0 if 'INT' in t.upper() else '')
-                      for _, n, t, notnull, default, _ in columns if n in ('upload_id', 'child_id') or (notnull and default is None)}
-            c.execute('INSERT INTO reading_uploads(%s) VALUES(%s)' % (','.join(values), ','.join('?' * len(values))), list(values.values()))
+            c.execute('INSERT INTO reading_uploads(upload_id,child_id) VALUES(?,?)', (ident, 'child-2'))
         with self.store._db() as c:
             self.assertEqual(self.store._message_upload(c, 'child-2', ident)['id'], ident)
             with self.assertRaises(agent.AgentError) as raised:
@@ -170,7 +168,11 @@ class PdfMaterialTests(Base):
             self.assertEqual(m.call_count, 1)
             other = self.seed_pdf('e' * 32, name='别人的.pdf')
             self.claim_for_other_child(other)
-            self.link(keys, pdf, 'detach'); self.link(keys, other)
+            self.link(keys, pdf, 'detach')
+            with self.assertRaises(agent.AgentError):
+                self.link(keys, other)  # The real API must reject first; then simulate a stale legacy association.
+            with self.store._db() as c:
+                c.execute('INSERT INTO agent_message_attachments VALUES(?,?,?)', (keys['source_id'], keys['message_id'], other))
             self.assertEqual(self.view(keys)['state'], 'unavailable')
             with no_render():
                 self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=2)), dict(used=0, failed=0))
@@ -208,9 +210,9 @@ class PdfMaterialTests(Base):
         self.assertEqual((shown['state'], shown['batches'], shown['processed_pages']), ('pending', [], []))
         with renderer(), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:  # Recovery: the corrected notice continues.
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=2)), dict(used=1, failed=0))
-            with no_render():
-                self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=3)), dict(used=0, failed=0))
-        self.assertEqual((m.call_count, self.view(keys)['processed_pages'], [r[0] for r in self.progress()]), (1, [1, 2, 3], [1]))
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=3)), dict(used=1, failed=0))
+        self.assertEqual((m.call_count, self.view(keys)['processed_pages'], [r[0] for r in self.progress()]), (2, [1, 2, 3, 4, 5, 6], [1, 4]))
+        self.assertEqual([json.loads(c.args[0])['original_pdf']['pages'] for c in m.call_args_list], [[1, 2, 3], [4, 5, 6]])
 
     def test_changed_original_hides_old_groups_and_restarts_from_page_one(self):
         keys = self.school_fragment('数学：见附件。'); pdf = self.seed_pdf('1' * 32); self.link(keys, pdf); seen = []
@@ -229,11 +231,29 @@ class PdfMaterialTests(Base):
         self.assertEqual(self.rows('SELECT COUNT(DISTINCT fingerprint) FROM agent_pdf_material'), [(2,)])
         self.assertEqual([b['pages'] for b in self.view(keys)['batches']], [[1, 2, 3]])
 
+    def test_render_count_and_pages_share_one_twenty_second_deadline(self):
+        from types import SimpleNamespace
+        keys = self.school_fragment('数学：见附件。'); self.link(keys, self.seed_pdf('0' * 32))
+        clock = iter([0, 1, 21])
+        with patch.object(pdfm, 'time', SimpleNamespace(monotonic=lambda: next(clock))), \
+                patch.object(family_pdf, 'page_count', return_value=11) as count, \
+                patch.object(family_pdf, 'render_pages') as render, patch.object(family_llm, 'extract_draft') as model:
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=1))
+        self.assertEqual(count.call_args.args[1], 19)
+        self.assertEqual((render.call_count, model.call_count), (0, 0))
+        self.assertEqual(self.view(keys)['processed_pages'], [])
+
     def test_view_is_read_only_without_render_model_or_new_tables(self):
         keys = self.school_fragment('数学：见附件。'); self.link(keys, self.seed_pdf('2' * 32))
         self.view(keys); before = self.snapshot()
-        with no_render(), patch.object(family_llm, 'extract_draft', side_effect=AssertionError('model in GET')):
+        sql = []; original = self.store._db
+        @contextlib.contextmanager
+        def traced():
+            with original() as c:
+                c.set_trace_callback(sql.append); yield c
+        with patch.object(self.store, '_db', traced), no_render(), patch.object(family_llm, 'extract_draft', side_effect=AssertionError('model in GET')):
             shown = self.view(keys)
+        self.assertFalse(any(q.lstrip().upper().startswith(('INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER', 'REPLACE')) for q in sql), sql)
         self.assertEqual((shown['state'], shown['page_count'], shown['pending_pages'], shown['complete']), ('pending', None, [], False))
         self.assertEqual(self.snapshot(), before)
         self.assertNotIn('pdf_material', inspect.getsource(__import__('family_child')))
@@ -244,7 +264,7 @@ class PdfMaterialTests(Base):
         with no_render(), patch.object(family_llm, 'extract_draft', side_effect=AssertionError('model')):
             shown = self.view(keys); self.assertEqual(shown['state'], 'unavailable'); self.assertIn('多个PDF', shown['explanation'])
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=0, failed=0))
-            self.link(keys, b, 'detach'); image = self.seed_upload('5' * 32, test_media.png()); self.link(keys, image)
+            self.link(keys, b, 'detach'); image = self.seed_upload('5' * 32, test_media.png(width=97)); self.link(keys, image)
             shown = self.view(keys); self.assertEqual(shown['state'], 'unavailable'); self.assertIn('单独关联', shown['explanation'])
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=0, failed=0))
             self.link(keys, image, 'detach'); self.assertEqual(self.view(keys)['state'], 'pending')

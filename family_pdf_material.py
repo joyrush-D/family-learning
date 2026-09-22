@@ -217,7 +217,9 @@ def prepare(store, now, budget=ROUND_CALLS):
                 return dict(used=1, failed=0)
             _, done_now, count_now = _batches(_rows(c, source, message, value['fingerprint']))
             require(count_now in (None, page_count) and not (done_now & set(pages)), 'pdf_material_changed')
-            c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?)',
+            c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?) '
+                      'ON CONFLICT(source_id,message_id,fingerprint,first_page) DO UPDATE SET '
+                      'pages=excluded.pages,page_count=excluded.page_count,payload=excluded.payload,updated=excluded.updated',
                       (source['id'], message['id'], value['fingerprint'], pages[0], json.dumps(pages), page_count,
                        json.dumps(dict(kind=SCHOOL_MATERIAL, **result), ensure_ascii=False), now.isoformat()))
             c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=? AND fingerprint=?", (key, fp))
