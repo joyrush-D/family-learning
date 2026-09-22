@@ -11,6 +11,8 @@ import json
 import math
 import sqlite3
 import subprocess
+import tempfile
+import threading
 import time
 
 import family_llm
@@ -19,6 +21,9 @@ from family_agent import AgentError, _hash
 
 SCAN_LIMIT = 50
 PROBE_DEADLINE = 15  # Shared by the header probe and, for headerless WebM, the full-timeline fallback.
+# The packet dump is streamed and never retained past this cap: rows are folded into one end value as they arrive.
+MAX_PROBE_OUTPUT = 1 << 20
+MAX_PROBE_STDERR = 1 << 16
 EXPLANATIONS = {
     'agent_disabled': '后台Agent未启用或授权已撤回；视频不会被读取，已有草稿不再显示，原视频保留。',
     'child_unknown': '这条记录的孩子归属无法核对；视频不会被读取。',
@@ -148,24 +153,73 @@ def _run_ffprobe(args, body, timeout):
     return subprocess.run(args, input=body, capture_output=True, check=True, timeout=timeout)
 
 
-def _webm_full_timeline(body, remaining):
-    """Establish the WHOLE video timeline, never a prefix: demux every packet to EOF; ffprobe exits nonzero on a
-    truncated/incomplete container. The end is the largest packet pts+duration seen, so all packets are covered."""
+def _webm_packet_end(body, remaining):
+    """End time of every packet ffprobe can parse from the supplied bytes.
+
+    The dump is streamed into a bounded buffer and folded into one pts+duration maximum as it arrives. A truncated
+    container can exit 0 while printing e.g. "File ended prematurely" on stderr, so ANY non-empty -v error stderr
+    (or a nonzero exit, timeout, oversize output or unparseable/nonfinite row) is refused: never a shorter partial
+    success. Clean stderr and exit 0 prove only that the supplied bytes parse completely to their own end; a stream
+    deliberately finished on a valid boundary cannot prove what unseen bytes the original recording may have had, so
+    the value is the duration of the supplied complete parseable bytes, never a claim of source completeness."""
     _require(remaining > 0, 'webm_duration_unsupported')
+    args = ['ffprobe', '-v', 'error', '-protocol_whitelist', 'pipe', '-f', 'matroska', '-i', 'pipe:0',
+            '-select_streams', 'v:0', '-show_entries', 'packet=pts_time,duration_time', '-of', 'csv=p=0']
     try:
-        result = _run_ffprobe(['ffprobe', '-v', 'error', '-protocol_whitelist', 'pipe', '-f', 'matroska', '-i', 'pipe:0',
-                               '-select_streams', 'v:0', '-show_entries', 'packet=pts_time,duration_time', '-of', 'csv=p=0'],
-                              body, remaining)
-        lines = result.stdout.decode('utf-8', 'strict').strip().split('\n')
-        end = 0.0
-        for line in lines:
+        with tempfile.TemporaryFile() as errfile:
+            try:
+                process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errfile)
+            except FileNotFoundError:
+                raise VideoDraftError('probe_missing') from None
+            except OSError:
+                raise VideoDraftError('webm_duration_unsupported') from None
+
+            def feed():  # Body is already in memory (<=20MiB); a dead ffprobe breaks the pipe and ends this thread.
+                try:
+                    process.stdin.write(body); process.stdin.close()
+                except (OSError, ValueError, BrokenPipeError):
+                    pass
+
+            writer = threading.Thread(target=feed, daemon=True); writer.start()
+            chunks = []; size = 0
+            try:
+                while True:
+                    chunk = process.stdout.read(1 << 16)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > MAX_PROBE_OUTPUT:
+                        process.kill()
+                        raise VideoDraftError('webm_duration_unsupported')
+                    chunks.append(chunk)
+                process.wait(timeout=remaining)
+            except VideoDraftError:
+                raise
+            except subprocess.TimeoutExpired:
+                process.kill()
+                raise VideoDraftError('webm_duration_unsupported') from None
+            except (OSError, ValueError):
+                process.kill()
+                raise VideoDraftError('webm_duration_unsupported') from None
+            finally:
+                writer.join(timeout=1)
+            returncode = process.returncode
+            errfile.seek(0); errors = errfile.read(MAX_PROBE_STDERR)
+            stdout = b''.join(chunks)
+    finally:
+        pass
+    try:
+        if returncode != 0 or errors.strip():
+            raise VideoDraftError('webm_duration_unsupported')
+        text = stdout.decode('utf-8', 'strict')
+        end = 0.0; rows = 0
+        for line in text.splitlines():
             fields = line.split(',')
             values = [float(v) for v in fields]  # 'N/A', '', inf all fail here.
             _require(len(fields) == 2 and all(math.isfinite(v) and v >= 0 for v in values), 'webm_duration_unsupported')
-            end = max(end, values[0] + values[1])
-    except FileNotFoundError:
-        raise VideoDraftError('probe_missing') from None
-    except (subprocess.SubprocessError, UnicodeError, ValueError, OverflowError):
+            end = max(end, values[0] + values[1]); rows += 1
+        _require(rows > 0 and end > 0, 'webm_duration_unsupported')
+    except (UnicodeError, ValueError, OverflowError):
         raise VideoDraftError('webm_duration_unsupported') from None
     return end
 
