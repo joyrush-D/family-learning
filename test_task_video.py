@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import sys
+import time
 import unittest
 from unittest import mock
 
@@ -18,6 +20,7 @@ import family_task_video as tv
 import test_goals
 
 DRAFT=dict(observations=[dict(start_seconds=1,end_seconds=3.5,text='虚构：画面中逐行书写听写词')],uncertainties=['虚构：第二行被手遮挡'])
+REAL_RUN=subprocess.run
 NONE=dict(used=0,failed=0);SENT=dict(used=1,failed=0);FAILED=dict(used=1,failed=1)
 
 
@@ -165,7 +168,84 @@ class TaskVideoTests(unittest.TestCase):
             with self.assertRaises(tv.VideoDraftError) as caught:tv.probe(b'synthetic',mime)
             self.assertEqual(caught.exception.code,code)
         ident=self.feedback(self.clip('synthetic-clip.webm'));self.assertEqual(self.tick(),dict(used=0,failed=1));self.assertEqual(self.sent,[])
-        video=self.view(ident)['videos'][0];self.assertEqual(video['state'],'error');self.assertIn('尚未支持',video['explanation'])
+        video=self.view(ident)['videos'][0];self.assertEqual(video['state'],'error');self.assertIn('无法确定完整时间轴',video['explanation'])
+
+    def test_real_stream_webm_reaches_background_draft_once_and_bad_tail_never_calls_model(self):
+        body=REAL_RUN(['ffmpeg','-v','error','-f','lavfi','-i','color=c=blue:s=160x120:r=10:d=4','-c:v','libvpx','-f','webm','pipe:1'],capture_output=True,check=True,timeout=15).stdout
+        with mock.patch.object(subprocess,'run',side_effect=REAL_RUN):
+            upload=self.app.save_upload(io.BytesIO(body),len(body),'synthetic.webm')['id']
+            ident=self.feedback(upload);before=self.lines();files=self.files()
+            self.assertEqual([self.tick(),self.tick()],[SENT,NONE])
+            self.assertEqual(self.state(ident),['ready']);self.assertEqual(len(self.sent),1)
+            self.assertFalse(self.view(ident)['videos'][0]['draft']['audio_assessed'])
+            self.assertTrue(all('record_video_drafts' in row or 'agent_jobs' in row for row in before^self.lines()))
+            self.assertEqual(self.files(),files)
+            for cut in (1,40):
+                # Model selection uses exact original bytes/hash; its probe is the shared rejection gate.
+                with self.assertRaises(tv.VideoDraftError):tv.probe(body[:-cut],'video/webm')
+            self.assertEqual(len(self.sent),1)
+
+
+class WebMProbeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
+            raise unittest.SkipTest('optional local ffmpeg/ffprobe tools unavailable')
+        args=['ffmpeg','-v','error','-f','lavfi','-i','color=c=blue:s=160x120:r=10:d=2','-c:v','libvpx']
+        cls.pipe=REAL_RUN(args+['-f','webm','pipe:1'],capture_output=True,check=True,timeout=15).stdout
+        with tempfile.TemporaryDirectory() as directory:
+            path=os.path.join(directory,'synthetic.webm')
+            REAL_RUN(args+[path],capture_output=True,check=True,timeout=15)
+            with open(path,'rb') as stream:cls.seekable=stream.read()
+        cls.audio=REAL_RUN(['ffmpeg','-v','error','-f','lavfi','-i','sine=duration=1','-c:a','libopus','-f','webm','pipe:1'],capture_output=True,check=True,timeout=15).stdout
+
+    def test_real_pipe_seekable_truncated_and_audio_only(self):
+        for body in (self.pipe,self.seekable):
+            self.assertAlmostEqual(tv.probe(body,'video/webm'),2.0,places=2)
+            for cut in (1,40):
+                with self.subTest(size=len(body),cut=cut),self.assertRaises(tv.VideoDraftError):
+                    tv.probe(body[:-cut],'video/webm')
+        with self.assertRaises(tv.VideoDraftError) as caught:tv.probe(self.audio,'video/webm')
+        self.assertEqual(caught.exception.code,'no_video_track')
+
+    def run_fake(self,code,limit=.3):
+        real=subprocess.Popen;children=[]
+        def child(args,**kwargs):
+            self.assertEqual(args[args.index('-protocol_whitelist')+1],'pipe')
+            p=real([sys.executable,'-c',code],**kwargs);children.append(p);return p
+        started=time.monotonic()
+        try:
+            with mock.patch.object(tv.subprocess,'Popen',side_effect=child):
+                return tv._webm_packet_end(b'synthetic',limit)
+        finally:
+            self.assertTrue(children and all(p.poll() is not None for p in children),'no orphan process')
+            self.assertLess(time.monotonic()-started,2)
+
+    def test_exit_zero_errors_hangs_and_excess_output_are_refused(self):
+        for code in ("import time;time.sleep(10)",
+                     "import sys;sys.stderr.write('File ended prematurely');print('0,2')",
+                     r"import sys;sys.stdout.write('0,1\n'*400000)",
+                     "import sys;sys.stderr.write('error'*400000)"):
+            with self.subTest(code=code),self.assertRaises(tv.VideoDraftError):self.run_fake(code)
+        with mock.patch.object(tv,'MAX_PROBE_OUTPUT',3),self.assertRaises(tv.VideoDraftError):
+            self.run_fake("print('0,2')")
+        self.assertEqual(self.run_fake("print('0,1');print('1,1')"),2)
+
+    def test_invalid_rows_missing_tool_and_shared_deadline(self):
+        for row in ('nan,1','0,inf','-1,2','0,N/A','0,0','1,0','0,1,2',''):
+            with self.subTest(row=row),self.assertRaises(tv.VideoDraftError):self.run_fake('print('+repr(row)+')')
+        with mock.patch.object(tv.subprocess,'Popen',side_effect=FileNotFoundError),self.assertRaises(tv.VideoDraftError) as caught:
+            tv._webm_packet_end(b'x',1)
+        self.assertEqual(caught.exception.code,'probe_missing')
+        header=subprocess.CompletedProcess([],0,stdout=b'{"streams":[{"codec_type":"video"}],"format":{}}',stderr=b'')
+        with mock.patch.object(tv,'_run_ffprobe',return_value=header),mock.patch.object(tv.time,'monotonic',side_effect=[0,16]),mock.patch.object(tv,'_webm_packet_end') as fallback:
+            # The fallback must reject a nonpositive remainder, rather than get a fresh 15 seconds.
+            fallback.side_effect=lambda body,remaining:tv._require(remaining>0,'webm_duration_unsupported')
+            with self.assertRaises(tv.VideoDraftError):tv.probe(b'x','video/webm')
+            self.assertLess(fallback.call_args.args[1],0)
+        for duration in (float('inf'),601,0):
+            with mock.patch.object(tv,'_run_ffprobe',return_value=header),mock.patch.object(tv,'_webm_packet_end',return_value=duration),self.assertRaises(tv.VideoDraftError):
+                tv.probe(b'x','video/webm')
 
 
 class TaskVideoHttpTests(unittest.TestCase):
