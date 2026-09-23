@@ -635,5 +635,84 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(self.db_rows('SELECT * FROM agent_message_drafts'),[]);self.assertEqual(self.db_rows('SELECT * FROM records'),[])
 
 
+import sys
+import family_print
+
+FAKE = """#!%s
+import json, os, sys, time
+mode, log, pdf = %r, %r, %r
+args = sys.argv[1:]; outdir = args[args.index('--outdir') + 1]
+xcu = os.path.join(args[0].split('file://', 1)[1], 'user', 'registrymodifications.xcu')
+json.dump(dict(argv=args, outdir=outdir, xcu=open(xcu).read() if os.path.exists(xcu) else '', source=open(args[-1], 'rb').read(2).decode('latin-1')), open(log, 'w'))
+if mode == 'sleep': time.sleep(10)
+elif mode == 'fail': sys.exit(3)
+elif mode == 'text': open(os.path.join(outdir, 'source.pdf'), 'wb').write(b'not a pdf')
+elif mode == 'big': open(os.path.join(outdir, 'source.pdf'), 'wb').write(b'%%PDF-1.4\\n' + b'0' * 9000)
+elif mode == 'ok': open(os.path.join(outdir, 'source.pdf'), 'wb').write(open(pdf, 'rb').read())
+"""
+
+
+def rezip(body,name,data):
+    out=io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(body)) as src,zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as dst:
+        for info in src.infolist():dst.writestr(info.filename,data if info.filename==name else src.read(info))
+    return out.getvalue()
+
+
+class DocxPdfTests(unittest.TestCase):
+    """docx_pdf renders one real DOCX through a synthetic soffice script; nothing is stored, queued or fetched."""
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory(prefix='synthetic-docx-pdf-');self.addCleanup(self.tmp.cleanup);self.data=Path(self.tmp.name).resolve()
+        self.pdf=family_print.image_pdf(png());(self.data/'expected.pdf').write_bytes(self.pdf)
+        rels=_RELS%('<Relationship Id="rId5" Type="%simage" Target="media/image1.png"/>'%_REL_TYPE)
+        self.body=docx(DOCX_BODY+'<w:p><w:r><w:drawing/></w:r></w:p><w:p><m:oMath><m:r><m:t>x+1</m:t></m:r></m:oMath></w:p>',
+                       [('word/media/image1.png',png()),('word/media/photo.JPG',b'\xff\xd8\xff\xe0synthetic'),('word/_rels/document.xml.rels',rels)])
+
+    def fake(self,mode):
+        path=self.data/('fake-%s.py'%mode);path.write_text(FAKE%(sys.executable,mode,str(self.data/(mode+'.json')),str(self.data/'expected.pdf')));path.chmod(0o755);return str(path)
+
+    def test_docx_pdf_renders_pictures_tables_and_formulas_in_a_throwaway_profile(self):
+        with self.assertRaises(media.MediaError) as caught:media.docx_text(self.body)  # The text reader still refuses pictures.
+        self.assertEqual(caught.exception.code,'draft_docx_unsupported')
+        self.assertEqual(media.docx_pdf(self.body,soffice=self.fake('ok')),self.pdf)
+        log=json.loads((self.data/'ok.json').read_text())
+        self.assertFalse(Path(log['outdir']).exists());self.assertEqual((Path(log['argv'][-1]).name,log['source']),('source.docx','PK'))
+        self.assertEqual(log['argv'][1:5],['--headless','--convert-to','pdf','--outdir']);self.assertIn('<value>3</value>',log['xcu'])
+        self.assertTrue(log['argv'][0].startswith('-env:UserInstallation=file:///'+log['outdir'].lstrip('/')))
+        self.assertEqual(media.docx_text(docx(DOCX_BODY)),DOCX_TEXT)  # Plain text reading is unchanged.
+        with patch('shutil.which',return_value=None),self.assertRaises(media.MediaError) as caught:media.docx_pdf(self.body)
+        self.assertEqual(caught.exception.code,'process_unavailable')
+        for mode,code in (('fail','process_failed'),('none','process_failed'),('text','process_failed')):
+            with self.assertRaises(media.MediaError) as caught:media.docx_pdf(self.body,soffice=self.fake(mode))
+            self.assertEqual(caught.exception.code,code,mode)
+        with patch.object(media,'MAX_BYTES',8000),self.assertRaises(media.MediaError) as caught:media.docx_pdf(self.body,soffice=self.fake('big'))
+        self.assertEqual(caught.exception.code,'process_output_limit')
+        with patch.object(media,'DOCX_PDF_TIMEOUT',1),self.assertRaises(media.MediaError) as caught:media.docx_pdf(self.body,soffice=self.fake('sleep'))
+        self.assertEqual(caught.exception.code,'process_timeout')
+
+    def test_docx_pdf_refuses_binary_macro_object_external_and_damaged_inputs_without_a_process(self):
+        cases={name:(body,code) for name,(body,code) in unreadable_docx().items() if code=='draft_docx_rejected' and name!='oversize_member'}
+        bad,no='draft_docx_rejected','draft_docx_unsupported'
+        cases.update(empty=(b'',bad),too_large=(b'PK'+b'\0'*media.MAX_BYTES,'media_too_large'),
+                     ole_binary=(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'+b'\0'*64,bad),
+                     embedding=(docx(para('正文'),[('word/embeddings/oleObject1.bin',b'\xd0\xcf\x11\xe0')]),bad),
+                     activex=(docx(para('正文'),[('word/activeX/activeX1.xml','<x/>')]),bad),
+                     executable=(docx(para('正文'),[('word/media/run.exe',b'MZ')]),bad),
+                     fake_png=(docx(para('正文'),[('word/media/image1.png',b'\xd7\xcd\xc6\x9a wmf')]),bad),
+                     object_element=(docx('<w:p><w:r><w:object><o:OLEObject xmlns:o="urn:schemas-microsoft-com:office:office" ProgID="Package"/></w:object></w:r></w:p>'+para('正文')),bad),
+                     macro_type=(rezip(docx(para('正文')),'[Content_Types].xml',_TYPES.replace('document.main+xml','document.macroEnabled.main+xml')),bad),
+                     oversize_member=(docx(para('正文'),[('word/big.xml','0'*(media.DOCX_PDF_LIMITS['member']+1))]),bad),
+                     too_many=(docx(para('正文'),[('word/p%d.xml'%i,'<a/>') for i in range(media.DOCX_PDF_LIMITS['entries'])]),bad),
+                     wmf=(docx(para('图'),[('word/media/image2.wmf',b'\xd7\xcd\xc6\x9a')]),no),
+                     font=(docx(para('正文'),[('word/fonts/font1.odttf',b'x')]),no))
+        with patch('subprocess.Popen') as popen:
+            for name,(body,code) in cases.items():
+                with self.subTest(name):
+                    with self.assertRaises(media.MediaError) as caught:media.docx_pdf(body,soffice=self.fake('ok'))
+                    self.assertEqual(caught.exception.code,code)
+            popen.assert_not_called()
+        self.assertFalse((self.data/'ok.json').exists())
+
+
 if __name__ == '__main__':
     unittest.main()

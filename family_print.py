@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 import datetime as dt
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,8 @@ import tempfile
 import zipfile
 import zlib
 import xml.etree.ElementTree as ET
+
+from family_wechat_media import MediaError, bounded_process
 
 MAX_SOURCE = 20 * 1024 * 1024
 MAX_PDF = 50 * 1024 * 1024
@@ -202,6 +205,86 @@ def image_pdf(data):
     return bytes(result)
 
 
+class OfficeError(ValueError):
+    """Why a bounded Office->PDF conversion stopped; each caller maps the reason to its own error type."""
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
+OFFICE_LIMITS = dict(entries=10000, total=100 * 1024 * 1024, member=100 * 1024 * 1024)  # The print path's existing bounds.
+OFFICE_TIMEOUT = 60
+_OFFICE_PROFILE = ('<?xml version="1.0"?><oor:items xmlns:oor="http://openoffice.org/2001/registry">'
+                   '<item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="MacroSecurityLevel" oor:op="fuse">'
+                   '<value>3</value></prop></item></oor:items>')
+_OFFICE_ERRORS = dict(too_large=('Office文件展开后过大',), unsupported=('此Office文件暂不能转换，请下载原件',),
+                      external=('含外部资源的Office文件暂不能转换，请下载原件',), unreadable=('Office内容无法读取',),
+                      failed=('Office转换失败，请下载原件或上传PDF', 'preview_unavailable', 503),
+                      timeout=('Office转换失败，请下载原件或上传PDF', 'preview_unavailable', 503),
+                      no_output=('Office转换未生成PDF，请下载原件', 'preview_unavailable', 503),
+                      output_invalid=('预览PDF内容不正确或过大',))
+
+
+def office_check(data, limits, inspect=None):
+    """Validate one Office ZIP in memory; return (member names, {name: bytes} of the members inspect selects).
+
+    inspect(name) -> True reads a whole member, bounded by limits['member'] and compared with the declared size;
+    an int reads that many leading bytes. Relationship parts are always read and refused when any relationship
+    has TargetMode=External; macro projects, path traversal, duplicate, encrypted or oddly compressed entries stop too."""
+    parts, names = {}, []
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            entries = archive.infolist(); low = [e.filename.lower() for e in entries]
+            if len(entries) > limits['entries'] or sum(e.file_size for e in entries) > limits['total']:
+                raise OfficeError('too_large')
+            if len(set(low)) != len(low) or any(e.file_size > limits['member'] or e.flag_bits & 0x41
+                                                 or e.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED) for e in entries):
+                raise OfficeError('unreadable')
+            for entry in entries:
+                name = entry.filename; names.append(name)
+                if 'vbaproject' in name.lower() or name.startswith(('/', '\\')) or '\\' in name or '..' in name.split('/'):
+                    raise OfficeError('unsupported')
+                want = name.lower().endswith('.rels') or (inspect(name) if inspect else False)
+                if want:
+                    with archive.open(entry) as f:  # A bounded read: the declared size alone never stops a bomb.
+                        parts[name] = f.read(limits['member'] + 1 if want is True else want)
+                    if want is True and len(parts[name]) != entry.file_size: raise OfficeError('unreadable')
+    except OfficeError:
+        raise
+    except Exception:  # Not a ZIP, truncated, bad CRC, password-protected or otherwise unreadable.
+        raise OfficeError('unreadable') from None
+    for name, part in parts.items():
+        if name.lower().endswith('.rels'):
+            if b'<!DOCTYPE' in part or b'<!ENTITY' in part: raise OfficeError('unreadable')
+            try: relationships = ET.fromstring(part)
+            except ET.ParseError: raise OfficeError('unreadable') from None
+            if any(r.attrib.get('TargetMode', '').lower() == 'external' for r in relationships.iter()):
+                raise OfficeError('external')
+    return names, parts
+
+
+def office_convert(data, suffix, directory, soffice, *, timeout, limit, read):
+    """Convert one checked Office body inside `directory` with a throwaway, macro-locked LibreOffice profile.
+
+    argv only, no shell, stdin closed and the process group killed on timeout or failure; the PDF comes back
+    through the caller's bounded read(path, limit) and must carry a PDF header."""
+    directory = Path(directory)
+    source = directory / ('source' + suffix); source.write_bytes(data)
+    profile = directory / 'profile'; (profile / 'user').mkdir(parents=True)
+    (profile / 'user' / 'registrymodifications.xcu').write_text(_OFFICE_PROFILE)
+    try:
+        bounded_process([str(soffice), '-env:UserInstallation=' + profile.as_uri(), '--headless', '--convert-to', 'pdf',
+                         '--outdir', str(directory), str(source)], dict(os.environ), float(timeout), 64 * 1024)
+    except MediaError as error:
+        raise OfficeError({'process_timeout': 'timeout', 'process_unavailable': 'failed', 'invalid_process': 'failed'}
+                          .get(error.code, 'no_output')) from None
+    output = directory / 'source.pdf'
+    if output.is_symlink() or not output.is_file(): raise OfficeError('no_output')
+    pdf = read(output, limit)
+    if not pdf.startswith(b'%PDF-'): raise OfficeError('output_invalid')
+    return pdf
+
+
 class PrintStore:
     def __init__(self, data, connect, *, pdfinfo=None, soffice=None):
         self.data, self.connect = Path(data).resolve(), connect
@@ -265,30 +348,10 @@ class PrintStore:
         if not self.soffice:
             raise PrintError('Office转换尚未配置，请下载原件或上传PDF', 'preview_unavailable', 503)
         try:
-            import io
-            with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                entries = archive.infolist()
-                if len(entries) > 10000 or sum(x.file_size for x in entries) > 100*1024*1024:
-                    raise PrintError('Office文件展开后过大')
-                for entry in entries:
-                    if 'vbaproject' in entry.filename.lower() or entry.filename.startswith(('/', '\\')) or '..' in entry.filename.split('/'):
-                        raise PrintError('此Office文件暂不能转换，请下载原件')
-                    if entry.filename.endswith('.rels'):
-                        relationships = ET.fromstring(archive.read(entry))
-                        if any(r.attrib.get('TargetMode','').lower()=='external' for r in relationships.iter()):
-                            raise PrintError('含外部资源的Office文件暂不能转换，请下载原件')
-        except (zipfile.BadZipFile, OSError, ET.ParseError): raise PrintError('Office内容无法读取') from None
-        source = directory / ('source' + suffix); source.write_bytes(data)
-        profile = directory/'profile'; profile.mkdir()
-        (profile/'user').mkdir()
-        (profile/'user'/'registrymodifications.xcu').write_text('<?xml version="1.0"?><oor:items xmlns:oor="http://openoffice.org/2001/registry"><item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="MacroSecurityLevel" oor:op="fuse"><value>3</value></prop></item></oor:items>')
-        try:
-            p = subprocess.run([self.soffice, '-env:UserInstallation='+profile.as_uri(), '--headless', '--convert-to', 'pdf', '--outdir', str(directory), str(source)], capture_output=True, timeout=60)
-        except (OSError, subprocess.TimeoutExpired):
-            raise PrintError('Office转换失败，请下载原件或上传PDF', 'preview_unavailable', 503) from None
-        if p.returncode or not (directory/'source.pdf').is_file():
-            raise PrintError('Office转换未生成PDF，请下载原件', 'preview_unavailable', 503)
-        return _read_file(directory/'source.pdf', MAX_PDF)
+            office_check(data, OFFICE_LIMITS)
+            return office_convert(data, suffix, directory, self.soffice, timeout=OFFICE_TIMEOUT, limit=MAX_PDF, read=_read_file)
+        except OfficeError as error:
+            raise PrintError(*_OFFICE_ERRORS[error.reason]) from None
 
     def prepare(self, source, idempotency_key):
         key = _key(idempotency_key)

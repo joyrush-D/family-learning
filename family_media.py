@@ -11,12 +11,15 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import tempfile
+import time
 from xml.etree import ElementTree
 import zipfile
 
 from family_collect import source_chat, wechat_env
+import family_print
 from family_wechat_media import (MediaError, MAX_BYTES, bounded_process,
                                  decrypt_v2, validate_png, wxgf_first_frame)
 
@@ -395,6 +398,72 @@ def docx_text(body):
     require(text, 'draft_docx_unsupported')
     require(len(text) <= DOCX_LIMITS['chars'], 'draft_text_too_long')
     return text
+
+
+# Bounded local DOCX->PDF for later page-by-page reading; shares the print module's Office conversion.
+DOCX_PDF_LIMITS = dict(entries=200, total=100 * 1024 * 1024, member=20 * 1024 * 1024)
+DOCX_PDF_TIMEOUT = 60  # Seconds for checks, conversion, reading and return together.
+_DOCX_PDF_MEDIA = {'.png': b'\x89PNG\r\n\x1a\n', '.jpg': b'\xff\xd8\xff', '.jpeg': b'\xff\xd8\xff'}
+_DOCX_PDF_UNSUPPORTED = ('.gif', '.bmp', '.tif', '.tiff', '.emf', '.wmf', '.svg', '.odttf', '.fntdata', '.ttf')
+_DOCX_PDF_BLOCKED = ('vba', 'macro', 'oleobject', 'activex', 'embedding')
+_DOCX_PDF_OBJECTS = frozenset(('OLEObject', 'control', 'objectEmbed', 'objectLink'))
+_DOCX_PDF_CODES = dict(timeout='process_timeout', failed='process_failed', no_output='process_failed', output_invalid='process_failed')
+
+
+def _docx_pdf_output(path, limit):
+    try:
+        return read_file(path, limit)
+    except MediaError:
+        raise MediaError('process_output_limit' if path.stat().st_size > limit else 'process_failed') from None
+
+
+def docx_pdf(body, *, soffice=None):
+    """PDF bytes of one real DOCX rendered locally by LibreOffice in a throwaway profile with macros locked.
+
+    A pure function: nothing is stored, queued, fetched or written to the database. Word/WPS-exported DOCX with
+    embedded PNG/JPEG pictures, tables, formulas and ordinary layout is accepted; binary .doc/.wps, macros,
+    OLE/ActiveX objects, external relationships (hyperlinks included), other media, fonts and damaged archives
+    are refused. The result is LibreOffice's rendering, not Word-exact pagination, sound or animation."""
+    started = time.monotonic()
+    require(isinstance(body, (bytes, bytearray)) and len(body) > 0, 'draft_docx_rejected')
+    require(len(body) <= MAX_BYTES, 'media_too_large')
+    soffice = soffice or shutil.which('soffice')
+    require(isinstance(soffice, str) and soffice, 'process_unavailable')
+    def inspect(name):
+        name = name.lower()
+        return True if name.endswith(('.xml', '.rels')) else 8 if name.endswith(tuple(_DOCX_PDF_MEDIA)) else None
+    try:
+        names, parts = family_print.office_check(bytes(body), DOCX_PDF_LIMITS, inspect)
+    except family_print.OfficeError:
+        raise MediaError('draft_docx_rejected') from None
+    for name in (n.lower() for n in names):
+        require(not any(word in name for word in _DOCX_PDF_BLOCKED), 'draft_docx_rejected')
+        require(name.endswith(('.xml', '.rels', '/') + tuple(_DOCX_PDF_MEDIA)),
+                'draft_docx_unsupported' if name.endswith(_DOCX_PDF_UNSUPPORTED) else 'draft_docx_rejected')
+    for name, data in parts.items():
+        if name.lower().endswith(('.xml', '.rels')):  # Word writes UTF-8 without a DTD; LibreOffice never sees entities.
+            require(b'\x00' not in data and b'<!DOCTYPE' not in data and b'<!ENTITY' not in data, 'draft_docx_rejected')
+            try: data.decode('utf-8')
+            except UnicodeDecodeError: raise MediaError('draft_docx_rejected') from None
+        else:  # A picture is what its name says, so no other image filter is reached.
+            require(data.startswith(_DOCX_PDF_MEDIA[Path(name.lower()).suffix]), 'draft_docx_rejected')
+    types = _docx_xml(parts.get('[Content_Types].xml', b''))
+    main = [e.get('ContentType') for e in types.iter() if e.get('PartName') == '/word/document.xml']
+    require(main == [DOCX_MIME + '.main+xml'] and not any(word in e.get('ContentType', '').lower()
+            for e in types.iter() for word in _DOCX_PDF_BLOCKED), 'draft_docx_rejected')
+    root = _docx_xml(parts.get('word/document.xml', b''))
+    require(root.tag == _W + 'document' and not any(e.tag.rsplit('}', 1)[-1] in _DOCX_PDF_OBJECTS for e in root.iter()),
+            'draft_docx_rejected')
+    remaining = DOCX_PDF_TIMEOUT - (time.monotonic() - started)
+    require(remaining > 0, 'process_timeout')
+    with tempfile.TemporaryDirectory(prefix='docx-pdf-') as temporary:
+        try:
+            pdf = family_print.office_convert(bytes(body), '.docx', Path(temporary).resolve(), soffice,
+                                              timeout=remaining, limit=MAX_BYTES, read=_docx_pdf_output)
+        except family_print.OfficeError as error:
+            raise MediaError(_DOCX_PDF_CODES.get(error.reason, 'process_failed')) from None
+    require(time.monotonic() - started <= DOCX_PDF_TIMEOUT, 'process_timeout')
+    return pdf
 
 
 def draft_input(store, c, source, message):

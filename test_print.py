@@ -240,4 +240,81 @@ class BridgeTests(unittest.TestCase):
                 self.assertIn(b'ipp://localhost/jobs/12',request[2])
 
 
-if __name__=='__main__':unittest.main()
+import io
+import sys
+import warnings
+import zipfile
+
+FAKE = """#!%s
+import json, os, sys, time
+mode, log, pdf = %r, %r, %r
+args = sys.argv[1:]; outdir = args[args.index('--outdir') + 1]
+xcu = os.path.join(args[0].split('file://', 1)[1], 'user', 'registrymodifications.xcu')
+json.dump(dict(argv=args, outdir=outdir, xcu=open(xcu).read() if os.path.exists(xcu) else '', source=open(args[-1], 'rb').read(2).decode('latin-1')), open(log, 'w'))
+if mode == 'sleep': time.sleep(10)
+elif mode == 'fail': sys.exit(3)
+elif mode == 'text': open(os.path.join(outdir, 'source.pdf'), 'wb').write(b'not a pdf')
+elif mode == 'big': open(os.path.join(outdir, 'source.pdf'), 'wb').write(b'%%PDF-1.4\\n' + b'0' * 9000)
+elif mode == 'ok': open(os.path.join(outdir, 'source.pdf'), 'wb').write(open(pdf, 'rb').read())
+"""
+
+
+def office_zip(extra=()):
+    out=io.BytesIO()
+    with warnings.catch_warnings(),zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:
+        warnings.simplefilter('ignore')  # A duplicate member is written on purpose.
+        for name,text in [('[Content_Types].xml','<Types/>'),('word/document.xml','<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>'),('_rels/.rels','<Relationships/>'),*extra]:z.writestr(name,text)
+    return out.getvalue()
+
+
+class OfficeConversionTests(unittest.TestCase):
+    """The shared Office->PDF path keeps the print contract; soffice is a synthetic script, never LibreOffice."""
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.data=Path(self.tmp.name).resolve()
+        (self.data/'attachments').mkdir();(self.data/'uploads').mkdir()
+        self.pdf=printing.image_pdf(png());(self.data/'expected.pdf').write_bytes(self.pdf)
+        (self.data/'attachments'/'office.docx').write_bytes(office_zip())
+        def connect():
+            c=sqlite3.connect(self.data/'test.sqlite3');c.execute('CREATE TABLE IF NOT EXISTS uploads (id TEXT PRIMARY KEY,name TEXT)');return c
+        self.store=printing.PrintStore(self.data,connect,soffice=str(self.fake('ok')))
+        patch.object(self.store,'_page_count',return_value=1).start();self.addCleanup(patch.stopall)
+
+    def fake(self,mode):
+        path=self.data/('fake-%s.py'%mode);path.write_text(FAKE%(sys.executable,mode,str(self.data/(mode+'.json')),str(self.data/'expected.pdf')));path.chmod(0o755);return path
+
+    def prepare(self,key):
+        return self.store.prepare({'type':'attachment','name':'office.docx'},key)
+
+    def test_shared_conversion_keeps_print_contract(self):
+        body=self.prepare('office_ok');self.assertEqual(body['pdf_sha256'],hashlib.sha256(self.pdf).hexdigest())
+        log=json.loads((self.data/'ok.json').read_text())
+        self.assertEqual(log['argv'][1:5],['--headless','--convert-to','pdf','--outdir']);self.assertTrue(log['argv'][0].startswith('-env:UserInstallation=file:///'))
+        self.assertEqual((Path(log['argv'][-1]).name,log['source']),('source.docx','PK'));self.assertIn('MacroSecurityLevel',log['xcu']);self.assertIn('<value>3</value>',log['xcu'])
+        self.assertFalse(list(self.data.glob('print/.prepare-*')))
+        for mode,message in (('fail','Office转换未生成PDF'),('none','Office转换未生成PDF'),('text','预览PDF内容不正确')):
+            with patch.object(self.store,'soffice',str(self.fake(mode))),self.assertRaises(printing.PrintError) as error:self.prepare('office_'+mode)
+            self.assertIn(message,str(error.exception),mode)
+        with patch.object(self.store,'soffice',str(self.fake('sleep'))),patch.object(printing,'OFFICE_TIMEOUT',1),self.assertRaises(printing.PrintError) as error:self.prepare('office_sleep')
+        self.assertEqual((error.exception.code,error.exception.status),('preview_unavailable',503));self.assertIn('Office转换失败',str(error.exception))
+        self.assertFalse(list(self.data.glob('print/.prepare-*')))
+
+    def test_office_check_refuses_external_macro_and_traversal_for_every_caller(self):
+        cases=(('external',[('word/_rels/document.xml.rels','<Relationships><Relationship Id="r1" Type="t" Target="https://example.invalid" TargetMode="External"/></Relationships>')],'external'),
+               ('macro',[('word/vbaProject.bin','x')],'unsupported'),('traversal',[('../x.xml','<a/>')],'unsupported'),
+               ('duplicate',[('word/document.xml','<b/>')],'unreadable'),('entity',[('word/_rels/x.rels','<!DOCTYPE d [<!ENTITY a "x">]><r/>')],'unreadable'),
+               ('entries',[('p%d.xml'%i,'<a/>') for i in range(3)],'too_large'))
+        for name,members,reason in cases:
+            with self.subTest(name),self.assertRaises(printing.OfficeError) as error:
+                printing.office_check(office_zip(members),dict(printing.OFFICE_LIMITS,entries=4) if name=='entries' else printing.OFFICE_LIMITS)
+            self.assertEqual(error.exception.reason,reason,name)
+        with self.assertRaises(printing.OfficeError) as error:printing.office_check(b'\xd0\xcf\x11\xe0 not a zip',printing.OFFICE_LIMITS)
+        self.assertEqual(error.exception.reason,'unreadable')
+        names,parts=printing.office_check(office_zip(),printing.OFFICE_LIMITS);self.assertEqual((len(names),list(parts)),(3,['_rels/.rels']))
+        (self.data/'attachments'/'office.docx').write_bytes(office_zip(cases[0][1]))
+        with self.assertRaises(printing.PrintError) as error:self.prepare('office_external')
+        self.assertIn('含外部资源',str(error.exception));self.assertFalse((self.data/'ok.json').exists())
+
+
+if __name__ == '__main__':
+    unittest.main()
+
