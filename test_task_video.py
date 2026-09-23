@@ -737,10 +737,13 @@ class VideoEvidenceTests(unittest.TestCase):
         self.assertEqual(self.store._proposal(cite(checked),checked,self.now)['hypotheses'][0]['support'],[ref])
 
     def test_a_revocation_during_the_call_drops_the_result_and_acceptance_still_needs_the_parent_with_the_current_evidence(self):
-        ident,video=self.ready();self.review(self.body(ident,video))
+        ident,video=self.ready();self.review(self.body(ident,video));ref='record:%d'%ident
+        # An explicitly linked goal: its approval creates its own task and leaves the record's task, hence the draft's context, as it is.
+        self.ident=self.action('create',child_id='child-1',title='虚构明确关联记录',subject='英语',baseline='虚构背景',record_ids=[ident])['id']
+        self.assertFalse(self.goal()['task_id']);self.assertIn(self.obs(0),self.text(self.ctx()))
         self.plan(during=lambda:self.review(self.body(ident,video,action='revoke',selected=[])))
         calls=self.model.call_count;result=self.store.process(self.ident,self.now,explicit=True)
-        self.assertEqual((self.model.call_count,result['state'],result['created']),(calls+1,'stale',0))
+        self.assertEqual((self.model.call_count,len(self.replies),result),(calls+1,1,dict(state='stale',created=0,used=1)))  # a legal reply, dropped for the evidence
         sent=agent._json(self.inputs[-1]);self.assertIn(self.obs(0),sent);self.assertNotIn(self.obs(1),sent);self.assertIn(video['token'],sent)
         goal=self.goal();self.assertEqual((goal['pending'],goal['current_plan']),(None,None))
         with self.app.connect() as c:self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_items WHERE job_id=? AND state='pending'",('goal:'+self.ident,)).fetchone()[0],0)
@@ -750,10 +753,11 @@ class VideoEvidenceTests(unittest.TestCase):
         self.review(self.body(ident,video,selected=[1]));goal=self.goal();self.assertEqual((goal['pending_stale'],goal['pending']),(True,None))
         with self.assertRaises(agent.AgentError) as caught:self.action('approve',id=self.ident,expected_version=old[2],proposal_id=old[0],context_hash=old[1])
         self.assertEqual((caught.exception.status,caught.exception.code,self.goal()['current_plan']),(409,'goal_evidence_changed',None))
-        calls=self.model.call_count;self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'ready');goal=self.goal()
+        self.plan(cite=(ref,self.obs(1)));calls=self.model.call_count;self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'ready');goal=self.goal()
         self.assertEqual((self.model.call_count,goal['pending']['context_hash'],goal['current_plan']),(calls+1,goal['context_hash'],None));self.assertIn(self.obs(1),agent._json(self.inputs[-1]))
         self.action('approve',id=self.ident,expected_version=goal['version'],proposal_id=goal['pending']['id'],context_hash=goal['context_hash']);goal=self.goal()
         self.assertEqual((goal['current_plan']['title'],goal['evidence_changed'],goal['pending']),('先核对一个判断过程',False,None))
+        self.assertTrue(goal['task_id'].startswith('AGENT-'))  # the goal's own new task; the record's task and the confirmation are untouched
         calls=self.model.call_count;self.assertEqual(self.store.process(self.ident,self.now)['state'],'current');self.assertEqual(self.model.call_count,calls)  # same confirmation: no second call
         with self.app.connect() as c:plan=c.execute('SELECT plan FROM agent_items WHERE id=?',(self.ident,)).fetchone()[0]
         self.review(self.body(ident,video,action='revoke',selected=[]));goal=self.goal()
@@ -761,3 +765,44 @@ class VideoEvidenceTests(unittest.TestCase):
         with self.app.connect() as c:
             self.assertEqual(c.execute('SELECT plan FROM agent_items WHERE id=?',(self.ident,)).fetchone()[0],plan)
             self.assertEqual(tuple(c.execute('SELECT note,score,linked_task_id FROM records WHERE id=?',(ident,)).fetchone()),('虚构说明',None,self.TASK))
+        # Long-term path: the re-evaluation after the revocation gets the accepted judgment marked stale, never the revoked picture text.
+        self.plan();self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'ready');sent=self.inputs[-1]
+        self.assertEqual((sent['previous_assessment_stale'],sent['current_plan']['title']),(True,'先核对一个判断过程'))
+        self.assertNotIn(self.obs(1),agent._json(sent));self.assertNotIn(video['token'],agent._json(sent))
+
+    def test_approving_a_plan_that_rewrites_the_records_own_task_is_a_real_context_change_that_retires_the_confirmation(self):
+        ident,video=self.ready();self.review(self.body(ident,video));confirmed=self.ctx();reviews=self.rows('record_video_reviews')
+        self.assertEqual(self.goal()['task_id'],self.TASK)  # the goal of setUp owns the record's task, and approval rewrites that task
+        def task():
+            with self.app.connect() as c:return tuple(c.execute('SELECT title,action FROM manual_tasks WHERE id=?',(self.TASK,)).fetchone())
+        def context():
+            with self.agent._db() as c:return tv._attribution(self.app,self.agent,c,ident)['task']
+        before_task,before=task(),context();self.assertEqual((before['title'],before['requirement']),before_task)
+        self.plan();self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'ready');goal=self.goal()
+        self.action('approve',id=self.ident,expected_version=goal['version'],proposal_id=goal['pending']['id'],context_hash=goal['context_hash']);goal=self.goal()
+        after_task,after=task(),context()
+        self.assertEqual((after_task[0],after['title'],after['requirement']),('先核对一个判断过程',after_task[0],after_task[1]));self.assertNotEqual(after_task,before_task)
+        self.assertEqual({k:v for k,v in after.items() if k not in ('title','requirement')},{k:v for k,v in before.items() if k not in ('title','requirement')})
+        changed=self.ctx();self.assertTrue(goal['evidence_changed']);self.assertNotEqual(changed['evidence_hash'],confirmed['evidence_hash'])
+        self.assertFalse([r for r in changed['records'] if r['id']==ident and r.get('video_observations')])
+        self.assertNotIn(self.obs(0),self.text(changed));self.assertNotIn(video['token'],self.text(changed))
+        with self.agent._db() as c:self.assertEqual(tv.confirmed(self.app,self.agent,c,ident),[])
+        with self.app.connect() as c:self.assertEqual(tuple(c.execute('SELECT note,score,linked_task_id FROM records WHERE id=?',(ident,)).fetchone()),('虚构说明',None,self.TASK))
+        with mock.patch.dict(DRAFT,TWO,clear=True):self.tick()  # a draft for the rewritten task is a new version the parent has not reviewed
+        fresh=self.view(ident)['videos'][0];self.assertEqual((fresh['state'],fresh['review']['state']),('ready','unconfirmed'));self.assertNotEqual(fresh['token'],video['token'])
+        self.assertEqual(self.rows('record_video_reviews'),reviews);self.assertNotIn(self.obs(0),self.text(self.ctx()))
+
+    def test_a_correction_relink_new_draft_or_withdrawn_switch_during_the_call_also_drops_the_legal_reply(self):
+        for name,change in (('correct',self.correct),('relink',self.relink),('draft',self.replace_draft),('disable',lambda ident:lambda:self.enable(False))):
+            with self.subTest(change=name):
+                self.enable(True);ident,video=self.ready();self.review(self.body(ident,video));effect=change(ident);fired=[]
+                self.plan(during=lambda:(effect(),fired.append(name)));calls=self.model.call_count;replies=len(self.replies)
+                result=self.store.process(self.ident,self.now,explicit=True)
+                self.assertEqual((fired,self.model.call_count,len(self.replies),result),([name],calls+1,replies+1,dict(state='stale',created=0,used=1)))
+                self.assertIn(self.obs(0),agent._json(self.inputs[-1]))  # the call itself carried the then-current confirmation
+                goal=self.goal();self.assertEqual((goal['pending'],goal['current_plan']),(None,None))
+                with self.app.connect() as c:
+                    self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_items WHERE job_id=? AND state='pending'",('goal:'+self.ident,)).fetchone()[0],0)
+                    self.assertEqual(c.execute('SELECT error FROM agent_jobs WHERE id=?',('goal:'+self.ident,)).fetchone()[0],'')  # dropped, not failed
+                self.plan();calls=self.model.call_count;self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'ready')
+                self.assertEqual(self.model.call_count,calls+1);self.assertNotIn(self.obs(0),agent._json(self.inputs[-1]))
