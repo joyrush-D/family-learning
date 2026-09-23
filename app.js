@@ -540,13 +540,13 @@ async function submitVideoReview(recordId,index,action){
   let result=null;try{result=await r.json()}catch{result=null}
   if(!r.ok){known=r.status>=400&&r.status<500;const error=Error(r.status===401?'请先重新登录，再重试核对；你的勾选仍保留。':r.status===409?(result?.error||'页面上的视频观察已不是当前版本')+' 本次核对未保存，请点“刷新”后重新勾选确认。':(result?.error||'核对未保存')+'，请重试。');error.status=r.status;throw error}
   if(!result||result.record_id!==body.record_id||result.upload_id!==body.upload_id||result.token!==body.expected_token||result.action!==body.action||!result.review||typeof result.review!=='object'||Array.isArray(result.review))throw Error('核对回执与本次请求不一致');
-  videoReviewPending.delete(key);
+  if(videoReviewPending.get(key)===pending)videoReviewPending.delete(key);
   if(serial!==videoDraftSerial||videoDraftViews.get(recordId)!==view)return;
   view.videos[index]={...v,review:result.review};paintVideoDraft(recordId,videoDraftHTML(recordId,view));
   const fresh=videoDraftPanel(recordId)?.querySelector(`[data-video-item="${index}"] [data-video-review-status]`);
   if(fresh)fresh.textContent=result.review.state==='confirmed'?'已按服务端回执显示你核对的画面观察；未评估声音，不代表完成或掌握。':'已撤回核对；后台保留历史，当前版本按未核对显示。';
  }catch(error){
-  if(known)videoReviewPending.delete(key);
+  if(known&&videoReviewPending.get(key)===pending)videoReviewPending.delete(key);
   if(serial!==videoDraftSerial||videoDraftViews.get(recordId)!==view)return;
   say((error.name==='AbortError'?'连接超时':error instanceof TypeError?'网络中断':error.message)+(videoReviewPending.get(key)===pending?'；核对结果尚未收到回执，请用原勾选重试。':''));
  }finally{
