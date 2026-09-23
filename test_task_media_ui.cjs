@@ -8,6 +8,7 @@ async function eventually(check,label,timeout=12000){const end=Date.now()+timeou
 async function demoServer(){
  const socket=net.createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');const port=socket.address().port;await new Promise(r=>socket.close(r));
  const env={...process.env};for(const k of Object.keys(env))if(k.startsWith('FAMILY_'))delete env[k];
+ env.FAMILY_HOST='family.localhost';env.FAMILY_USER='synthetic-parent';
  const proc=spawn(process.env.FAMILY_TEST_PYTHON||'python3',['demo.py','--port',String(port)],{cwd:__dirname,env,stdio:['ignore','pipe','pipe']});let error='';proc.stdout.resume();proc.stderr.on('data',b=>error+=String(b));proc.on('error',e=>error=e.message);
  const url='http://127.0.0.1:'+port+'/',stop=async()=>{if(proc.exitCode!==null||proc.signalCode!==null)return;const done=once(proc,'exit');proc.kill('SIGINT');await Promise.race([done,delay(2500)]);if(proc.exitCode===null&&proc.signalCode===null){proc.kill('SIGKILL');await done}};
  try{await eventually(async()=>{if(proc.exitCode!==null)throw Error(error||'Demo exited');try{return(await fetch(url,{signal:AbortSignal.timeout(400)})).ok}catch{return false}},'isolated demo');return{url,stop}}catch(e){await stop();throw e}
@@ -15,16 +16,17 @@ async function demoServer(){
 const fs=require('node:fs/promises'),path=require('node:path');
 (async()=>{let browser,server;const checks=[];try{
  const videoBytes=execFileSync('ffmpeg',['-nostdin','-v','error','-f','lavfi','-i','color=c=blue:s=160x90:r=10','-t','1','-c:v','libx264','-movflags','frag_keyframe+empty_moov','-f','mp4','pipe:1'],{timeout:15000});
- server=await demoServer();const url=server.url;
+ server=await demoServer();const url=server.url,origin=url.replace('127.0.0.1','family.localhost');
+ const real=route=>route.fetch({url:route.request().url().replace('family.localhost','127.0.0.1'),headers:{...route.request().headers(),host:new URL(origin).host}});
  browser=await chromium.launch({headless:true,channel:process.env.PLAYWRIGHT_CHANNEL||'chrome',args:['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream']});
  for(const width of [360,1440]){
-  const context=await browser.newContext({viewport:{width,height:900},permissions:['microphone']}),p=await context.newPage(),errors=[];p.on('pageerror',e=>errors.push(e.message));
+  const context=await browser.newContext({viewport:{width,height:900},permissions:['microphone'],extraHTTPHeaders:{'Tailscale-User-Login':'synthetic-parent'}}),p=await context.newPage(),errors=[];p.on('pageerror',e=>errors.push(e.message));
   const read=async()=>fetch(url+'api/state').then(r=>r.json());let state=await read();
   const post=async(route,body)=>{const r=await fetch(url+route,{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify(body)});const j=await r.json();assert(r.ok,JSON.stringify(j));return j};
   const made=await post('api/task/new',{request_key:randomUUID(),child:state.children[0].name,title:'虚构听写 '+width,box:'inbox',category:'homework',due:state.today,action:'核对一个听写词'}),id=made.task.id;
-  await p.route('**/api/state',async r=>{const response=await r.fetch();const d=await response.json();d.asr={...d.asr,configured:true};await r.fulfill({response,json:d})});
+  await p.route('**/api/state',async r=>{const response=await real(r);const d=await response.json();d.asr={...d.asr,configured:true};await r.fulfill({response,json:d})});
   let asrAttempts=0;await p.route('**/api/transcribe',r=>++asrAttempts===1?r.fulfill({status:503,json:{error:'虚构转写失败'}}):r.fulfill({json:{text:'虚构：第三个词听不出来'}}));
-  await p.goto(url);await p.locator('[data-task="'+id+'"]').first().waitFor();
+  await p.goto(origin);await p.locator('[data-task="'+id+'"]').first().waitFor();
   const open=async()=>{await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskDialog[open]').waitFor()};
   const save=p.locator('#saveTaskFeedback');await open();
   assert.equal(await p.locator('#taskForm #recordAudio').count(),1);assert.equal(await p.locator('#recordForm #recordAudio').count(),0);
@@ -34,7 +36,7 @@ const fs=require('node:fs/promises'),path=require('node:path');
   await p.locator('#transcribeButton').click();await p.locator('#taskTranscriptFields:visible').waitFor();
   assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'');
   await p.locator('#taskTranscript').fill('虚构核对：第三个词听不清');await p.locator('#taskTranscriptState').selectOption('已核对');
-  let attempts=0,bodies=[];await p.route('**/api/task/feedback',async r=>{bodies.push(r.request().postDataJSON());attempts++;if(attempts===1){await r.fetch();return r.abort('failed')}if(attempts===2)return r.fulfill({status:403,json:{code:'csrf_expired',token:state.token,error:'虚构会话校验更新'}});return r.continue()});
+  let attempts=0,bodies=[];await p.route('**/api/task/feedback',async r=>{bodies.push(r.request().postDataJSON());attempts++;if(attempts===1){await real(r);return r.abort('failed')}if(attempts===2)return r.fulfill({status:403,json:{code:'csrf_expired',token:state.token,error:'虚构会话校验更新'}});return r.continue()});
   await save.click();await eventually(async()=>/保存结果尚未核对/.test(await p.locator('#taskError').innerText()),'lost reply');
   assert.equal(await p.locator('#taskTranscript').isDisabled(),true);await p.keyboard.press('Escape');assert(await p.locator('#taskDialog').evaluate(x=>x.open));
   state=await read();let feedback=state.records.filter(r=>r.source==='事项:'+id);assert.equal(feedback.length,1);assert.equal(state.tasks.find(t=>t.id===id).update,null);
@@ -71,7 +73,7 @@ const fs=require('node:fs/promises'),path=require('node:path');
   assert.equal(await p.locator('#pendingUploads audio').count(),0);assert.equal(await p.locator('#transcribeButton').isDisabled(),true);
   const play=async locator=>{await eventually(()=>locator.evaluate(v=>v.readyState>=1),'video metadata');await locator.evaluate(async v=>{v.muted=true;await v.play()});await eventually(()=>locator.evaluate(v=>v.currentTime>0.1),'video decoded');await locator.evaluate(v=>{v.pause();v.currentTime=0.5});await eventually(()=>locator.evaluate(v=>!v.seeking&&v.currentTime>=0.5),'video seek')};
   await play(p.locator('#pendingUploads video'));let videoSaves=0;const videoBodies=[];
-  await p.route('**/api/task/feedback',async r=>{videoBodies.push(r.request().postDataJSON());if(++videoSaves===1){await r.fetch();return r.abort('failed')}return r.continue()});
+  await p.route('**/api/task/feedback',async r=>{videoBodies.push(r.request().postDataJSON());if(++videoSaves===1){await real(r);return r.abort('failed')}return r.continue()});
   await save.click();await eventually(async()=>/保存结果尚未核对/.test(await p.locator('#taskError').innerText()),'video lost reply');
   assert.equal(await p.locator('#videoInput').isDisabled(),true);assert.equal(await p.locator('#pendingUploads video').count(),1);
   await save.click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'video feedback saved');await p.unroute('**/api/task/feedback');assert.deepEqual(videoBodies[0],videoBodies[1]);
@@ -131,13 +133,12 @@ const fs=require('node:fs/promises'),path=require('node:path');
   assert.equal(await boxes.nth(1).isChecked(),true);assert.equal(await boxes.nth(1).isDisabled(),true);assert.match(await confirm.innerText(),/重试/);assert.equal(await panel.locator('[data-video-review="confirmed"]').count(),0);
   reviewPlan.push({status:401,json:{error:'虚构登录已过期'}});await confirm.click();await p.locator('#parentLoginDialog[open]').waitFor();await p.keyboard.press('Escape');assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true);
   await eventually(async()=>/重新登录/.test(await panel.innerText()),'review 401 kept');assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'虚构核对期间未保存的反馈');assert.equal(await boxes.nth(1).isChecked(),true);assert.equal(await boxes.nth(1).isEnabled(),true);assert.equal(await confirm.isEnabled(),true);
-  // 401 again, recovered through the real login form with a synthetic /api/parent/login reply: no automatic resubmit, unsaved note, pending photo and selection kept, then an explicit retry. On a loopback demo origin the app refuses form login by design (parentLogoutAvailable) and keeps the filled password; that branch is asserted as-is and the synthetic reply is never sent.
+  // 401 again, recovered through the real login form with a synthetic /api/parent/login reply: no automatic resubmit, unsaved note, pending photo and selection kept, then an explicit retry. A synthetic family.localhost origin exercises the actual login branch while all API traffic remains local.
   await p.locator('#cameraInput').setInputFiles({name:'synthetic-review-photo.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWF8AAAAASUVORK5CYII=','base64')});await p.locator('#pendingUploads img').waitFor();
   const loginBodies=[];await p.route('**/api/parent/login',r=>{loginBodies.push(r.request().postDataJSON());return r.fulfill({json:{ok:true}})});
   reviewPlan.push({status:401,json:{error:'虚构登录已过期'}});await confirm.click();await p.locator('#parentLoginDialog[open]').waitFor();await eventually(async()=>/重新登录/.test(await panel.innerText()),'second review 401 kept');const beforeLogin=reviewBodies.length;
   await p.locator('#parentLoginForm [name=username]').fill('虚构家长');await p.locator('#parentLoginForm [name=password]').fill('虚构口令');await p.locator('#parentLoginSubmit').click();
-  if(await p.evaluate(()=>['localhost','127.0.0.1','[::1]'].includes(location.hostname))){await eventually(async()=>/配置的家庭入口/.test(await p.locator('#parentLoginStatus').innerText()),'loopback form login refused by design');assert.equal(loginBodies.length,0);assert.equal(await p.locator('#parentLoginForm [name=password]').inputValue(),'虚构口令');await p.keyboard.press('Escape')}
-  else{await eventually(async()=>!(await p.locator('#parentLoginDialog').evaluate(x=>x.open)),'login restored from the real form');assert.deepEqual(loginBodies,[{username:'虚构家长',password:'虚构口令'}])}
+  await eventually(async()=>!(await p.locator('#parentLoginDialog').evaluate(x=>x.open)),'login restored from the real form');assert.deepEqual(loginBodies,[{username:'虚构家长',password:'虚构口令'}]);
   await p.unroute('**/api/parent/login');assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true);assert.equal(reviewBodies.length,beforeLogin);assert.equal(await panel.locator('[data-video-review="confirmed"]').count(),0);
   assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'虚构核对期间未保存的反馈');assert.equal(await p.locator('#pendingUploads img').count(),1);assert.equal(await boxes.nth(1).isChecked(),true);assert.equal(await boxes.nth(1).isEnabled(),true);assert.equal(await confirm.isEnabled(),true);
   reviewPlan.push({json:echo(tokenA,'confirm',confirmedReview([1]))});await confirm.click();await eventually(async()=>/已核对1条/.test(await panel.innerText()),'confirm echoed');
@@ -165,8 +166,8 @@ const fs=require('node:fs/promises'),path=require('node:path');
   views.push({json:ready(tokenB,unconfirmed,{updated:'2026-09-23 09:30'})});await load();await eventually(async()=>/尚未核对/.test(await panel.innerText()),'reopened unconfirmed');assert.equal(reviewBodies.length,8);assert.equal(await revoke.count(),0);
   await p.locator('#taskForm [name=note]').fill('虚构重开后未保存的反馈');reviewPlan.push(r=>r.abort('failed'));await boxes.nth(1).check();await confirm.click();await eventually(async()=>/尚未收到回执/.test(await panel.innerText()),'newer confirm lost reply');
   const lostConfirm={record_id:videoRecord.id,upload_id:uploadID,expected_token:tokenB,action:'confirm',selected:[1]};assert.equal(reviewBodies.length,9);assert.deepEqual(reviewBodies[8],lostConfirm);
-  releaseOld();await delay(400);
-  assert.equal(await panel.locator('[data-video-review="confirmed"]').count(),0);assert.equal(/已撤回核对/.test(await panel.innerText()),false);assert.match(await panel.innerText(),/尚未收到回执/);assert.equal(reviewBodies.length,9);
+  const newerStatus=await panel.locator('[data-video-review-status]').innerText();releaseOld();await delay(400);
+  assert.equal(await panel.locator('[data-video-review="confirmed"]').count(),0);assert.equal(await panel.locator('[data-video-review-status]').innerText(),newerStatus);assert.match(await panel.innerText(),/尚未收到回执/);assert.equal(reviewBodies.length,9);
   assert.equal(await boxes.nth(1).isChecked(),true);assert.equal(await boxes.nth(1).isDisabled(),true);assert.equal(await boxes.nth(0).isDisabled(),true);assert.match(await confirm.innerText(),/重试/);assert.equal(await revoke.count(),0);
   await drift(0,1);reviewPlan.push({json:echo(tokenB,'confirm',confirmedReview([1]))});await confirm.click();await eventually(async()=>/已核对1条/.test(await panel.innerText()),'newer request retried verbatim after the old success');
   assert.equal(reviewBodies.length,10);assert.deepEqual(reviewBodies[9],lostConfirm);assert.match(await panel.innerText(),/第二条：孩子翻页/);assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'虚构重开后未保存的反馈');assert.equal(await revoke.count(),1);assert.equal(await panel.locator('[data-video-obs]:checked').count(),0);
