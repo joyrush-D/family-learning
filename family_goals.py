@@ -487,6 +487,14 @@ class Store:
                                     **({'task_feedback': [{k:v for k,v in h.items() if k != 'task_title'} for h in feedback],
                                         'task_missing':task_missing} if feedback or task_missing else {}),
                                     'profile': {k: profile.get(k, '') for k in ('id', 'name', 'grade', 'classroom')}})
+        # Keep only fingerprints in existing plan JSON, so revoked pictures cannot return through old prose.
+        video_versions = {'record:'+str(r['id']): agent._hash(r['video_observations'])
+                          for r in records if r.get('video_observations')}
+        def invalid_video(previous):
+            return [ref for ref, version in (previous.get('approved_video_evidence') or {}).items()
+                    if video_versions.get(ref) != version]
+        invalid_videos = invalid_video(plan)
+        video_history_unavailable = any(invalid_video(h.get('previous') or {}) for h in plan.get('goal_history', []))
         approved_evidence = self._approved_evidence(c, row, plan)
         reviewed_refs = {e['ref'] for e in approved_evidence}
         reviewed_refs.update(ref for h in plan.get('hypotheses', []) for key in ('support','against') for ref in h[key])
@@ -527,6 +535,7 @@ class Store:
                     course_records=[r for r in courses if 'record:'+str(r['id']) in course_refs], course_omitted=len(courses)-len(selected_courses),
                     teacher_requirements=teacher_requirements, teacher_requirements_omitted=len(teacher_all)-len(teacher_requirements),
                     missing=missing, evidence_hash=evidence_hash, evidence=evidence, unknown_baseline=unknown_baseline,
+                    video_versions=video_versions, invalid_videos=invalid_videos, video_history_unavailable=video_history_unavailable,
                     reviewed_evidence=reviewed, omitted_reviewed_refs=omitted_refs, unavailable_reviewed_refs=unavailable_refs,
                     task_feedback=selected_feedback, task_feedback_omitted=len(feedback)-len(selected_feedback), task_missing=len(task_missing),
                     school_messages=school, school_omitted=len(school_all)-len(school), school_missing=school_missing,
@@ -538,12 +547,13 @@ class Store:
         owners = {p['name']: p['id'] for p in self.app.profiles(c)} | {r['alias']: r['child_id'] for r in c.execute('SELECT * FROM profile_aliases')}
         return lambda name: owners.get(name) == child_id
 
-    def _checked_hypotheses(self, c, child_id, plan):
+    def _checked_hypotheses(self, c, child_id, plan, invalid_videos=()):
         """R26: the confirmed hypotheses, each listing cited records corrected or reassigned since confirmation."""
         since, owned = plan.get('approved_changed_at') or '', self._owned(c, child_id)
         out = []
         for h in plan.get('hypotheses', []):
             refs = family_learner_memory.corrected_refs(c, (h.get('support') or []) + (h.get('against') or []), since, owned) if isinstance(h, dict) else []
+            refs = list(dict.fromkeys(refs + [r for r in invalid_videos if r in (h.get('support') or []) + (h.get('against') or [])]))
             out.append(dict(h, corrected=refs) if refs else h)
         return out
 
@@ -600,10 +610,11 @@ class Store:
                 reviewed = plan.get('approved_evidence_hash')
                 goals.append(dict(id=row['id'], child_id=row['child_id'], **ctx['fields'], version=ctx['version'],
                     lifecycle=plan.get('lifecycle', 'active'), task_id=row['task_id'],
-                    current_plan=plan.get('approved'), assessment=plan.get('assessment'), hypotheses_detail=self._checked_hypotheses(c, row['child_id'], plan),
+                    current_plan=plan.get('approved'), assessment=plan.get('assessment'), hypotheses_detail=self._checked_hypotheses(c, row['child_id'], plan, ctx['invalid_videos']),
                     current_plan_confirmed_at=plan.get('approved_changed_at', ''),
                     reviewed_evidence=ctx['reviewed_evidence'], omitted_reviewed_refs=ctx['omitted_reviewed_refs'], unavailable_reviewed_refs=ctx['unavailable_reviewed_refs'],
                     evidence_changed=bool(plan.get('approved') and reviewed != ctx['evidence_hash']),
+                    video_evidence_changed=bool(ctx['invalid_videos']), video_history_unavailable=ctx['video_history_unavailable'],
                     records=[{**r, 'attachments': json.loads(r['attachments'])} for r in ctx['input_records']],
                     course_records=[{**r,'attachments':json.loads(r['attachments'])} for r in ctx['course_records']], course_omitted=ctx['course_omitted'],
                     teacher_requirements=ctx['teacher_requirements'], teacher_requirements_omitted=ctx['teacher_requirements_omitted'],
@@ -687,7 +698,7 @@ class Store:
                     raise agent.AgentError('依据已变化，请先更新建议；原计划保持不变', 409, 'goal_evidence_changed')
                 if action in ('approve','manual'):
                     approved = self._approved(obj.get('plan', proposal), now)
-                    old = {k:plan.get(k) for k in ('approved','assessment','hypotheses','approved_evidence_hash','goal_version')}
+                    old = {k:plan.get(k) for k in ('approved','assessment','hypotheses','approved_evidence_hash','approved_video_evidence','goal_version')}
                     old['approved_evidence'] = self._approved_evidence(c, row, plan)
                     plan.setdefault('goal_history', []).append(dict(kind='计划确认', at=now.isoformat(), previous=old))
                     task_id = row['task_id'] or 'AGENT-' + agent._hash(ident)[:24]
@@ -717,7 +728,8 @@ class Store:
                     c.execute("UPDATE agent_items SET state='accepted',task_id=? WHERE id=?", (task_id, ident))
                     plan.update(approved=approved, assessment=proposal.get('assessment',''), hypotheses=proposal.get('hypotheses',[]),
                                 approved_evidence=proposal.get('evidence',[]),
-                                approved_evidence_hash=ctx['evidence_hash'], approved_changed_at=now.isoformat())
+                                approved_evidence_hash=ctx['evidence_hash'], approved_video_evidence=ctx['video_versions'],
+                                approved_changed_at=now.isoformat())
                     # Persist the confirmed judgment to correctable long-term memory (R26), so a later
                     # re-evaluation reads what we already believed instead of cold-starting from 24 records.
                     family_learner_memory.record_confirmation(
@@ -801,7 +813,7 @@ class Store:
                 c.execute("UPDATE agent_jobs SET attempts=0,next_try='',error='' WHERE id=? AND done=0 AND attempts>=?",(key,agent.MAX_ATTEMPTS))
         fp=self.agent._job(key,value,now,model=True)
         if not fp:return dict(state='current',created=0)
-        prior_available=not ctx['unavailable_reviewed_refs']
+        prior_available=not (ctx['unavailable_reviewed_refs'] or ctx['invalid_videos'])
         previous=ctx['plan'].get('approved') if prior_available else None
         # Effect loop: deterministic per-direction progress + when the current method was confirmed.
         progress=[dict(word=w['word'],meaning=w['meaning'],direction=WORD_MODES[m][0],**{k:pr[k] for k in ('first_day','first_status','latest_day','latest_status','reached_independent','trend')})
@@ -812,14 +824,16 @@ class Store:
         prior_confirmations=[];previous_hypotheses=[];method_history=[]
         if prior_available:
             with self.agent._db() as c:
-                prior_confirmations=family_learner_memory.prior_confirmations(c, ctx['profile']['id'], ident, owned=self._owned(c, ctx['profile']['id']))
-                method_history=self._method_history(c, row, ctx)
+                if not ctx['video_history_unavailable']:
+                    prior_confirmations=family_learner_memory.prior_confirmations(c, ctx['profile']['id'], ident, owned=self._owned(c, ctx['profile']['id']))
+                    method_history=self._method_history(c, row, ctx)
                 previous_hypotheses=self._checked_hypotheses(c, ctx['profile']['id'], ctx['plan'])
         content=dict(as_of=now.date().isoformat(),as_of_time=now.strftime('%H:%M'),day_context=ctx['day_context'],profile=ctx['profile'],evidence=ctx['evidence'],current_plan=previous,
                      progress=progress,progress_scope='仅本轮已选的至多24条记录；首末对照不代表计划确认后的趋势，省略数见omitted_records',current_plan_confirmed_on=confirmed_on if previous else '',
                      learning_goal={k:v for k,v in ctx['fields'].items() if k!='baseline'},
                      previous_assessment=ctx['plan'].get('assessment') if prior_available else None,previous_hypotheses=previous_hypotheses if prior_available else [],previous_assessment_stale=ctx['plan'].get('approved_evidence_hash')!=ctx['evidence_hash'],
                      previous_context_unavailable=not prior_available, prior_confirmations=prior_confirmations, method_history=method_history,
+                     video_history_unavailable=ctx['video_history_unavailable'],
                      omitted_records=ctx['omitted_count'],missing_records=len(ctx['missing']),
                      omitted_course_records=ctx['course_omitted'],
                      omitted_teacher_requirements=ctx['teacher_requirements_omitted'],

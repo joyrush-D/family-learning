@@ -765,9 +765,9 @@ class VideoEvidenceTests(unittest.TestCase):
         with self.app.connect() as c:
             self.assertEqual(c.execute('SELECT plan FROM agent_items WHERE id=?',(self.ident,)).fetchone()[0],plan)
             self.assertEqual(tuple(c.execute('SELECT note,score,linked_task_id FROM records WHERE id=?',(ident,)).fetchone()),('虚构说明',None,self.TASK))
-        # Long-term path: the re-evaluation after the revocation gets the accepted judgment marked stale, never the revoked picture text.
+        # Invalid video evidence withholds the old judgment/method from the model; the saved parent plan remains intact.
         self.plan();self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'ready');sent=self.inputs[-1]
-        self.assertEqual((sent['previous_assessment_stale'],sent['current_plan']['title']),(True,'先核对一个判断过程'))
+        self.assertEqual((sent['previous_assessment_stale'],sent['previous_context_unavailable'],sent['current_plan']),(True,True,None))
         self.assertNotIn(self.obs(1),agent._json(sent));self.assertNotIn(video['token'],agent._json(sent))
 
     def test_approving_a_plan_that_rewrites_the_records_own_task_is_a_real_context_change_that_retires_the_confirmation(self):
@@ -796,6 +796,7 @@ class VideoEvidenceTests(unittest.TestCase):
         for name,change in (('correct',self.correct),('relink',self.relink),('draft',self.replace_draft),('disable',lambda ident:lambda:self.enable(False))):
             with self.subTest(change=name):
                 self.enable(True);ident,video=self.ready();self.review(self.body(ident,video));effect=change(ident);fired=[]
+                self.ident=self.action('create',child_id='child-1',title='虚构独立变更检查',subject='英语',baseline='虚构背景',record_ids=[ident])['id']
                 self.plan(during=lambda:(effect(),fired.append(name)));calls=self.model.call_count;replies=len(self.replies)
                 result=self.store.process(self.ident,self.now,explicit=True)
                 self.assertEqual((fired,self.model.call_count,len(self.replies),result),([name],calls+1,replies+1,dict(state='stale',created=0,used=1)))
@@ -806,3 +807,24 @@ class VideoEvidenceTests(unittest.TestCase):
                     self.assertEqual(c.execute('SELECT error FROM agent_jobs WHERE id=?',('goal:'+self.ident,)).fetchone()[0],'')  # dropped, not failed
                 self.plan();calls=self.model.call_count;self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'ready')
                 self.assertEqual(self.model.call_count,calls+1);self.assertNotIn(self.obs(0),agent._json(self.inputs[-1]))
+
+    def test_revoked_picture_cannot_return_through_an_accepted_judgment_or_method_history(self):
+        ident,video=self.ready();self.review(self.body(ident,video));ref='record:%d'%ident
+        self.ident=self.action('create',child_id='child-1',title='虚构明确关联目标',subject='英语',baseline='虚构背景',record_ids=[ident])['id']
+        marker=self.obs(0)
+        self.plan(cite=(ref,marker));reply=self.model.side_effect
+        def copied(*args,**kwargs):
+            result=reply(*args,**kwargs);result['proposal'].update(assessment=marker,action=marker)
+            result['proposal']['hypotheses'][0].update(reason=marker,support=[ref],status='有支持')
+            return result
+        self.model.side_effect=copied
+        self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'ready');goal=self.goal()
+        self.action('approve',id=self.ident,expected_version=goal['version'],proposal_id=goal['pending']['id'],context_hash=goal['context_hash'])
+        self.review(self.body(ident,video,action='revoke',selected=[]));self.plan()
+        self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'ready')
+        self.assertNotIn(marker,agent._json(self.inputs[-1]))
+        goal=self.goal();self.action('approve',id=self.ident,expected_version=goal['version'],proposal_id=goal['pending']['id'],context_hash=goal['context_hash'])
+        self.review(self.body(ident,video,selected=[1]));self.plan()
+        self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'ready')
+        self.assertNotIn(marker,agent._json(self.inputs[-1]))
+        self.assertIn(self.obs(1),agent._json(self.inputs[-1]))
