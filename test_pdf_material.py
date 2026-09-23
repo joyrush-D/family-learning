@@ -569,6 +569,108 @@ class DocxMaterialTests(PdfMaterialTests):
         self.assertEqual(self.rows("SELECT * FROM agent_jobs WHERE id LIKE 'pdf-material:%'"), [])
 
 
+    def correct_message(self, keys):
+        with self.store._db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            payload = json.loads(c.execute('SELECT payload FROM agent_messages WHERE id=?', (keys['message_id'],)).fetchone()['payload'])
+            payload['text'] += '（家长更正）'
+            c.execute('UPDATE agent_messages SET payload=? WHERE id=?', (json.dumps(payload, ensure_ascii=False), keys['message_id']))
+
+    def test_change_between_claim_and_conversion_converts_probes_and_sends_nothing(self):
+        keys = self.school_fragment('数学：见附件。'); docx = self.seed_docx('g' * 32); self.link(keys, docx)
+        other_bytes = layout_docx('题目见上图'); real_job = self.store._job; claimed = []
+
+        def lose_claim():
+            with self.store._db() as c:
+                c.execute("DELETE FROM agent_jobs WHERE id LIKE 'pdf-material:%'")
+        cases = [(lambda: self.write_config(enabled=False), self.write_config),
+                 (lambda: self.link(keys, docx, 'detach'), lambda: self.link(keys, docx)),
+                 (lambda: (self.data / 'uploads' / docx).write_bytes(other_bytes), lambda: (self.data / 'uploads' / docx).write_bytes(DOCX_LAYOUT)),
+                 (lose_claim, lambda: None),
+                 (lambda: self.correct_message(keys), lambda: None)]
+        for index, (change, restore) in enumerate(cases):
+            def claim_then_change(key, value, now, **kw):  # The real claim is taken; the parent acts before LibreOffice would start.
+                fp = real_job(key, value, now, **kw)
+                self.assertTrue(fp); claimed.append(fp); change()
+                return fp
+            with patch.object(self.store, '_job', side_effect=claim_then_change), no_convert(), no_render(), no_pages(), \
+                    patch.object(family_llm, 'extract_draft', side_effect=AssertionError('model')):
+                self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=index)), dict(used=0, failed=0))
+            self.assertEqual(len(claimed), index + 1)  # The change callback really ran after a real claim: 0 conversion, 0 probe, 0 model.
+            self.assertEqual((self.converted, self.rows('SELECT COUNT(*) FROM agent_pdf_material'),
+                              self.rows("SELECT * FROM agent_jobs WHERE id LIKE 'pdf-material:%'")), ([], [(0,)], []))
+            restore()
+        with renderer(), self.converter(), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:  # Restored: one conversion, one call.
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=9)), dict(used=1, failed=0))
+        self.assertEqual((m.call_count, len(self.converted), self.view(keys)['processed_pages']), (1, 1, [1, 2, 3]))
+
+    def test_change_while_docx_model_runs_discards_result_and_reattachment_resumes(self):
+        keys = self.school_fragment('数学：见附件。'); docx = self.seed_docx('h' * 32); self.link(keys, docx)
+        replacement = self.seed_docx('i' * 32, layout_docx('题目见上图'), '替换件.docx'); entered = []
+        with renderer(), self.converter(), patch.object(family_llm, 'extract_draft', return_value=DRAFT):
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
+        before = self.rows('SELECT * FROM agent_pdf_material'); self.assertEqual(len(before), 1)
+
+        def relink():
+            self.link(keys, docx, 'detach'); self.link(keys, replacement)
+
+        def relink_back():
+            self.link(keys, replacement, 'detach'); self.link(keys, docx)
+        cases = [(lambda: self.write_config(enabled=False), self.write_config), (relink, relink_back),
+                 (lambda: self.correct_message(keys), lambda: None)]
+        for index, (change, restore) in enumerate(cases):
+            def model(text, images, **kw):  # The model really runs and returns a draft while the parent acts.
+                entered.append(json.loads(text)['original_pdf']['pages']); change(); return DRAFT
+            with renderer(), self.converter(), patch.object(family_llm, 'extract_draft', side_effect=model) as m:
+                self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=index + 1)), dict(used=1, failed=0))
+            self.assertEqual((m.call_count, entered[-1], len(self.converted)), (1, [4, 5, 6], index + 2))
+            self.assertEqual(self.rows('SELECT * FROM agent_pdf_material'), before)  # The returned draft is discarded; nothing else moves.
+            self.assertEqual(self.rows("SELECT * FROM agent_jobs WHERE id LIKE 'pdf-material:%'"), [])
+            if index == 1:  # Re-linked to another original: no group of the old one is shown for it.
+                self.assertEqual((self.view(keys)['upload_id'], self.view(keys)['processed_pages']), (replacement, []))
+            restore()
+            if index < 2:
+                self.assertEqual((self.view(keys)['upload_id'], self.view(keys)['processed_pages']), (docx, [1, 2, 3]))  # Restored: saved group is back.
+        self.assertEqual(self.view(keys)['processed_pages'], [])  # Corrected message: old groups hidden; restart from page one.
+        with renderer(), self.converter(), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=9)), dict(used=1, failed=0))
+        self.assertEqual((m.call_count, self.view(keys)['processed_pages'], len(self.converted)), (1, [1, 2, 3], 5))
+
+    def test_full_coverage_get_is_sql_read_only_and_converted_metadata_never_enters_fingerprint(self):
+        keys = self.school_fragment('数学：见附件。'); docx = self.seed_docx('j' * 32); self.link(keys, docx); outputs = []
+        head, tail = PDF.rsplit(b'%%EOF', 1)
+
+        def convert(body, *, soffice=None):  # Every LibreOffice run yields different bytes (CreationDate/ID); the DOCX stays the original.
+            self.assertTrue(body.startswith(b'PK\x03\x04'))
+            outputs.append(head + b'%% CreationDate D:2026092300000%d\n%%EOF' % len(outputs) + tail)
+            return outputs[-1]
+        with renderer(), patch.object(family_media, 'docx_pdf', side_effect=convert), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:
+            for index in range(4):
+                self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=index)), dict(used=1, failed=0))
+        fingerprints = self.rows('SELECT DISTINCT fingerprint FROM agent_pdf_material')
+        self.assertEqual((m.call_count, len(set(outputs)), len(fingerprints)), (4, 4, 1))  # Four different PDFs, one original fingerprint.
+        self.assertEqual([(r[0], r[2]) for r in self.progress()], [(1, 11), (4, 11), (7, 11), (10, 11)])
+        before = self.snapshot(); sql = []; original = self.store._db
+
+        @contextlib.contextmanager
+        def traced():
+            with original() as c:
+                c.set_trace_callback(sql.append); yield c
+        with patch.object(self.store, '_db', traced), no_convert(), no_render(), no_pages(), \
+                patch.object(family_llm, 'extract_draft', side_effect=AssertionError('model in GET')):
+            shown = self.view(keys)
+            with traced() as c:
+                evidence = pdfm.complete_evidence(self.store, c, *self.store._message_context(c, keys))
+        self.assertTrue(sql)
+        self.assertFalse(any(q.lstrip().upper().startswith(('INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER', 'REPLACE')) for q in sql), sql)
+        self.assertEqual((shown['complete'], shown['state'], shown['processed_pages'], shown['original'], shown['mime'], shown['explanation']),
+                         (True, 'ready', list(range(1, 12)), 'docx', DOCX_MIME, ''))
+        self.assertEqual((evidence['fingerprint'], evidence['page_count'], [b['pages'] for b in evidence['batches']], evidence['original'],
+                          evidence['mime'], evidence['conversion'], evidence['upload_id']),
+                         (fingerprints[0][0], 11, BATCHES, 'docx', DOCX_MIME, pdfm.CONVERSION, docx))
+        self.assertEqual((self.snapshot(), len(outputs)), (before, 4))  # GET: no write, no conversion, no probe, no render, no model.
+
+
 for _name in [n for n in dir(PdfMaterialTests) if n.startswith('test_')]:
     setattr(DocxMaterialTests, _name, None)
 

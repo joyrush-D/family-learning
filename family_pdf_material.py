@@ -8,7 +8,7 @@
   转换 PDF 总页数与已保存页组不一致时拒绝并记为可重试失败，不把部分/未知当完整。
 - 每轮最多渲染 3 页、最多 1 次 family_llm.extract_draft(school_material=True)；每个页组草稿单独持久保存。
 - 总页数、已处理页、未处理页与 complete 全由代码按已保存且校验通过的页组计算，不采信模型声称或损坏行。
-- 转换、渲染与模型期间不持数据库锁；转换后、渲染后、模型返回后各重核来源/孩子/消息/授权/原件哈希与本次领取，
+- 转换、渲染与模型期间不持数据库锁；转换前、转换后、渲染后、模型返回后各重核来源/孩子/消息/授权/原件哈希与本次领取，
   变化即撤销本次领取并丢弃结果（模型 0 调用），旧页组按指纹隐藏，恢复后从已保存页组继续。
 - pdfinfo 与页渲染共用一个 20 秒渲染截止（转换之后起算）。view 只读：0 模型、0 LibreOffice、0 pdfinfo/pdftoppm、0 写入；
   草稿不进入任务、学习记录、成绩或计划。
@@ -246,6 +246,10 @@ def prepare(store, now, budget=ROUND_CALLS):
         return dict(used=0, failed=0)
     source, message, value, done, page_count, key, fp = selected
     try:  # No database connection is held from here until each re-check.
+        with store._db() as c:  # Re-checked before any conversion or probe: a claim taken a moment ago may already be stale.
+            if not _claim_intact(store, c, source, message, value, key, fp):
+                _void(c, key, fp)  # Revoked, corrected, unlinked, replaced or lost claim: nothing is converted, probed or sent.
+                return dict(used=0, failed=0)
         body = value['body']
         if value['original'] == 'docx':
             # Converted again every round within docx_pdf's own 60-second bound (the accepted cost of keeping no cache or
