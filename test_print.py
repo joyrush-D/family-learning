@@ -315,7 +315,26 @@ class OfficeConversionTests(unittest.TestCase):
         with self.assertRaises(printing.PrintError) as error:self.prepare('office_external')
         self.assertIn('含外部资源',str(error.exception));self.assertFalse((self.data/'ok.json').exists())
 
+    def test_office_check_streams_every_member_so_a_bad_crc_never_reaches_soffice(self):
+        body=office_zip([('word/media/image1.png',b'\x89PNG\r\n\x1a\n'+b'X'*10000)],zipfile.ZIP_STORED)
+        self.assertEqual(printing.office_check(body,printing.OFFICE_LIMITS)[0][-1],'word/media/image1.png')
+        with zipfile.ZipFile(io.BytesIO(body)) as z:info=z.getinfo('word/media/image1.png')
+        n,x=struct.unpack('<HH',body[info.header_offset+26:info.header_offset+30]);corrupt=bytearray(body);corrupt[info.header_offset+30+n+x+9000]^=1;corrupt=bytes(corrupt)
+        with self.assertRaises(printing.OfficeError) as error:printing.office_check(corrupt,printing.OFFICE_LIMITS)
+        self.assertEqual(error.exception.reason,'unreadable')
+        (self.data/'attachments'/'office.docx').write_bytes(corrupt)
+        with self.assertRaises(printing.PrintError) as error:self.prepare('office_crc')
+        self.assertIn('Office内容无法读取',str(error.exception));self.assertFalse((self.data/'ok.json').exists())
+
+    def test_office_convert_keeps_preparation_and_output_reading_inside_one_timeout(self):
+        with tempfile.TemporaryDirectory() as d,self.assertRaises(printing.OfficeError) as error:
+            printing.office_convert(office_zip(),'.docx',Path(d).resolve(),str(self.fake('ok')),timeout=0,limit=printing.MAX_PDF,read=printing._read_file)
+        self.assertEqual(error.exception.reason,'timeout');self.assertFalse((self.data/'ok.json').exists())  # No process starts on a spent budget.
+        def slow_read(path,limit):time.sleep(1.5);return printing._read_file(path,limit)
+        with tempfile.TemporaryDirectory() as d,self.assertRaises(printing.OfficeError) as error:
+            printing.office_convert(office_zip(),'.docx',Path(d).resolve(),str(self.fake('ok')),timeout=1,limit=printing.MAX_PDF,read=slow_read)
+        self.assertEqual(error.exception.reason,'timeout');self.assertTrue((self.data/'ok.json').exists())
+
 
 if __name__ == '__main__':
     unittest.main()
-
