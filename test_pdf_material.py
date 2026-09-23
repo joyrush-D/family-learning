@@ -1,13 +1,15 @@
-"""独立 PDF 页组整理：合成 11 页 PDF 与虚构 QQ 截图通知，模型全部替身；缺 poppler 时按 test_pdf 同法只替换子进程。"""
+"""独立 PDF/DOCX 页组整理：合成 11 页 PDF、含图片的合成 DOCX（docx_pdf 替身返回真实合成 PDF）与虚构 QQ 截图通知，模型全部替身；缺 poppler 时按 test_pdf 同法只替换子进程。"""
 import contextlib
 import datetime as dt
 import inspect
 import json
 import unittest
+import zipfile
 from unittest.mock import patch
 
 import family_agent as agent
 import family_llm
+import family_media
 import family_pdf
 import family_pdf_material as pdfm
 import test_media
@@ -20,13 +22,13 @@ TABLES = ('sqlite_master', 'agent_pdf_material', 'agent_jobs', 'agent_message_dr
           'agent_items', 'records', 'manual_tasks', 'uploads')
 
 
-def renderer():
+def renderer(page_count=11):
     """Real poppler when present; otherwise test_pdf's subprocess stand-in, so render_pages/page_count still run."""
     if test_pdf.TOOLS_AVAILABLE:
         return contextlib.nullcontext()
     stack = contextlib.ExitStack()
     stack.enter_context(patch.object(family_pdf.shutil, 'which', lambda name: '/synthetic/' + name))
-    stack.enter_context(patch.object(family_pdf, '_run', test_pdf.fake_run_factory(page_count=11)))
+    stack.enter_context(patch.object(family_pdf, '_run', test_pdf.fake_run_factory(page_count=page_count)))
     return stack
 
 
@@ -349,6 +351,226 @@ class PdfMaterialTests(Base):
         self.assertEqual(pdfm.ROUND_CALLS, 1); self.assertEqual(pdfm.BATCH_PAGES, 3)
         self.assertEqual(pdfm.prepare(self.store, self.now, 0), dict(used=0, failed=0))
 
+
+
+DOCX_MIME = family_media.DOCX_MIME
+DOCX_RELS = test_media._RELS % ('<Relationship Id="rId5" Type="%simage" Target="media/image1.png"/>' % test_media._REL_TYPE)
+
+
+def layout_docx(caption='题目见下图'):
+    """A synthetic DOCX with an embedded picture: docx_text refuses it as layout, docx_pdf would accept it. Stored, so
+    two captions of equal byte length give same-size files with different bytes."""
+    return test_media.docx(test_media.para('虚构练习卷，' + caption) + '<w:p><w:r><w:drawing/></w:r></w:p>',
+                           [('word/media/image1.png', test_media.png()), ('word/_rels/document.xml.rels', DOCX_RELS)], method=zipfile.ZIP_STORED)
+
+
+DOCX_LAYOUT = layout_docx()
+DOCX_PLAIN = test_media.docx(test_media.para('虚构纯文字通知：完成练习卷。'))
+DOCX_MACRO = test_media.docx(test_media.para('虚构正文'), [('word/vbaProject.bin', 'x')])
+
+
+def no_convert():
+    return patch.object(family_media, 'docx_pdf', side_effect=AssertionError('LibreOffice conversion must not run here'))
+
+
+def no_pages():
+    stack = contextlib.ExitStack()
+    stack.enter_context(patch.object(family_pdf, 'page_count', side_effect=AssertionError('pdfinfo must not run here')))
+    stack.enter_context(patch.object(family_pdf, 'render_pages', side_effect=AssertionError('render must not run here')))
+    return stack
+
+
+class DocxMaterialTests(PdfMaterialTests):
+    """One layout DOCX enters the same page-group path; docx_pdf is a stand-in that receives the original DOCX bytes and
+    returns a real synthetic PDF (a real LibreOffice run is Codex's on-site check). The inherited PDF tests are hidden below."""
+
+    def setUp(self):
+        super().setUp(); self.converted = []
+
+    def seed_docx(self, ident, body=DOCX_LAYOUT, name='虚构练习卷.docx'):
+        (self.data / 'uploads').mkdir(exist_ok=True)
+        (self.data / 'uploads' / ident).write_bytes(body)
+        with self.store._db() as c:
+            c.execute('INSERT INTO uploads(id,name,size,mime,created) VALUES(?,?,?,?,?)', (ident, name, len(body), DOCX_MIME, self.now.isoformat()))
+        return ident
+
+    def converter(self, result=PDF, during=None):
+        def convert(body, *, soffice=None):
+            self.assertTrue(body.startswith(b'PK\x03\x04'), 'the original DOCX bytes are converted, never a kept PDF')
+            self.converted.append(len(body))
+            if during:
+                during()  # The parent acts while LibreOffice runs: no database lock may be held.
+            return result
+        return patch.object(family_media, 'docx_pdf', side_effect=convert)
+
+    def draft_state(self, keys):
+        return self.store.message(keys, dict)['material_draft']
+
+    def test_layout_docx_is_reconverted_each_round_and_covered_in_four_batches(self):
+        keys = self.school_fragment('数学：完成所附练习卷。'); self.assertIsNone(self.view(keys))
+        docx = self.seed_docx('a' * 32); self.link(keys, docx); tables = self.rows('SELECT name FROM sqlite_master')
+        first = self.view(keys)
+        self.assertEqual((first['state'], first['kind'], first['page_count'], first['batches'], first['complete'], first['upload_id']),
+                         ('pending', 'school_material', None, [], False, docx))
+        self.assertEqual((first['mime'], first['original'], first['name'], first['explanation'], first['conversion']),
+                         (DOCX_MIME, 'docx', '虚构练习卷.docx', pdfm.WAITING_DOCX, pdfm.CONVERSION))
+        self.assertEqual(self.draft_state(keys)['state'], 'unavailable')  # The text draft path still refuses pictures, unchanged.
+        with no_convert(), no_pages(), patch.object(family_llm, 'extract_draft', side_effect=AssertionError('model')):
+            self.assertEqual(pdfm.prepare(self.store, self.now, 0), dict(used=0, failed=0))
+        facts = self.facts(); consumers = self.consumers(); calls = []
+
+        def model(text, images, **kw):
+            context = json.loads(text)
+            self.assertEqual(context['source_message']['id'], keys['message_id'])
+            original = context['original_pdf']
+            self.assertEqual((original['mime'], original['name'], original['page_count'], original['conversion']),
+                             (DOCX_MIME, '虚构练习卷.docx', 11, pdfm.CONVERSION))
+            calls.append((original['pages'], original['unprocessed_pages'], [i['mime'] for i in images], kw))
+            return dict(DRAFT, title='第%s页' % original['pages'])
+        with renderer(), self.converter(), patch.object(family_llm, 'extract_draft', side_effect=model) as m:
+            for index, expected in enumerate(BATCHES):
+                self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=index)), dict(used=1, failed=0))
+                pages, left, mimes, kw = calls[-1]
+                self.assertEqual((pages, left, mimes), (expected, list(range(expected[-1] + 1, 12)), ['image/png'] * len(expected)))
+                self.assertIs(kw['school_material'], True); self.assertEqual(kw['target_child'], '示例甲'); self.assertNotIn('documents', kw)
+                self.assertEqual(len(self.converted), index + 1)  # One conversion per round; no converted copy is kept anywhere.
+                shown = self.view(keys)
+                self.assertEqual((shown['page_count'], [b['pages'] for b in shown['batches']]), (11, BATCHES[:index + 1]))
+                self.assertEqual((shown['processed_pages'], shown['pending_pages']), (list(range(1, expected[-1] + 1)), list(range(expected[-1] + 1, 12))))
+                self.assertEqual((shown['complete'], shown['state'], shown['original']), (index == 3, 'ready' if index == 3 else 'pending', 'docx'))
+            with no_convert(), no_pages():  # Complete: no conversion, no pdfinfo, no render, no model, no job attempt.
+                self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=9)), dict(used=0, failed=0))
+            self.assertEqual(m.call_count, 4)
+        shown = self.view(keys)
+        self.assertEqual(([b['draft']['title'] for b in shown['batches']], shown['explanation']), (['第%s页' % b for b in BATCHES], ''))
+        self.assertEqual((self.facts(), self.consumers(), self.rows('SELECT name FROM sqlite_master')), (facts, consumers, tables))
+        self.assertEqual([(r[0], r[2]) for r in self.progress()], [(1, 11), (4, 11), (7, 11), (10, 11)])
+        with self.store._db() as c, no_convert(), no_pages():
+            evidence = pdfm.complete_evidence(self.store, c, *self.store._message_context(c, keys))
+        self.assertEqual((evidence['mime'], evidence['original'], evidence['conversion'], evidence['name'], evidence['page_count'],
+                          [b['pages'] for b in evidence['batches']]), (DOCX_MIME, 'docx', pdfm.CONVERSION, '虚构练习卷.docx', 11, BATCHES))
+
+    def test_conversion_failure_and_missing_soffice_save_retryable_failures_keeping_groups(self):
+        keys = self.school_fragment('英语：阅读所附材料。'); self.link(keys, self.seed_docx('b' * 32)); seen = []
+        model = lambda text, images, **kw: seen.append(json.loads(text)['original_pdf']['pages']) or DRAFT
+        with renderer(), self.converter(), patch.object(family_llm, 'extract_draft', side_effect=model):
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
+        with patch.object(family_media, 'docx_pdf', side_effect=family_media.MediaError('process_failed')), no_pages(), \
+                patch.object(family_llm, 'extract_draft', side_effect=AssertionError('model')):
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=1)), dict(used=1, failed=1))
+        shown = self.view(keys)
+        self.assertEqual((shown['state'], shown['processed_pages'], shown['pending_pages'], shown['explanation']),
+                         ('error', [1, 2, 3], list(range(4, 12)), pdfm.FAILED_DOCX))
+        self.assertIn('process_failed', self.rows("SELECT error FROM agent_jobs WHERE id LIKE 'pdf-material:%'")[0][0])
+        with no_convert(), no_pages():  # Back-off of the same job: nothing converted, rendered or called.
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=2)), dict(used=0, failed=0))
+        with patch.object(family_media.shutil, 'which', return_value=None), no_pages(), \
+                patch.object(family_llm, 'extract_draft', side_effect=AssertionError('model')):  # The real docx_pdf without soffice.
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=7)), dict(used=1, failed=1))
+        self.assertIn('process_unavailable', self.rows("SELECT error FROM agent_jobs WHERE id LIKE 'pdf-material:%'")[0][0])
+        self.assertEqual((self.view(keys)['state'], self.view(keys)['processed_pages']), ('error', [1, 2, 3]))
+        with renderer(), self.converter(), patch.object(family_llm, 'extract_draft', side_effect=model):
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=20)), dict(used=1, failed=0))
+        self.assertEqual((seen, [b['pages'] for b in self.view(keys)['batches']]), ([[1, 2, 3], [4, 5, 6]], [[1, 2, 3], [4, 5, 6]]))
+
+    def test_page_count_change_between_conversions_is_refused_before_any_model_call(self):
+        keys = self.school_fragment('数学：见附件。'); self.link(keys, self.seed_docx('c' * 32))
+        with renderer(), self.converter(), patch.object(family_llm, 'extract_draft', return_value=DRAFT):
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
+        with renderer(12), self.converter(test_pdf.build_pdf(12)), patch.object(family_llm, 'extract_draft', side_effect=AssertionError('model')):
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=1)), dict(used=1, failed=1))
+        shown = self.view(keys)
+        self.assertEqual((shown['state'], shown['processed_pages'], shown['page_count'], shown['complete']), ('error', [1, 2, 3], 11, False))
+        self.assertIn('pdf_page_count_changed', self.rows("SELECT error FROM agent_jobs WHERE id LIKE 'pdf-material:%'")[0][0])
+        self.assertEqual(self.rows('SELECT COUNT(*) FROM agent_pdf_material'), [(1,)])
+
+    def test_change_during_conversion_or_after_render_sends_nothing_and_progress_resumes(self):
+        keys = self.school_fragment('数学：见附件。'); docx = self.seed_docx('d' * 32); self.link(keys, docx)
+        other_bytes = layout_docx('题目见上图'); self.assertEqual(len(other_bytes), len(DOCX_LAYOUT)); self.assertNotEqual(other_bytes, DOCX_LAYOUT)
+
+        def correct():
+            with self.store._db() as c:
+                c.execute('BEGIN IMMEDIATE')
+                payload = json.loads(c.execute('SELECT payload FROM agent_messages WHERE id=?', (keys['message_id'],)).fetchone()['payload'])
+                payload['text'] += '（家长更正）'
+                c.execute('UPDATE agent_messages SET payload=? WHERE id=?', (json.dumps(payload, ensure_ascii=False), keys['message_id']))
+        cases = [(lambda: self.write_config(enabled=False), lambda: self.assertFalse(self.store._config()['enabled']), self.write_config),
+                 (lambda: self.link(keys, docx, 'detach'),
+                  lambda: self.assertEqual(self.rows('SELECT * FROM agent_message_attachments WHERE upload_id=?', docx), []),
+                  lambda: self.link(keys, docx)),
+                 (correct, lambda: self.assertIn('家长更正', self.store.message(keys, dict)['message']['text']), lambda: None),
+                 (lambda: (self.data / 'uploads' / docx).write_bytes(other_bytes),  # Same size and name, different bytes.
+                  lambda: self.assertEqual((self.data / 'uploads' / docx).read_bytes(), other_bytes),
+                  lambda: (self.data / 'uploads' / docx).write_bytes(DOCX_LAYOUT))]
+        for index, (change, applied, restore) in enumerate(cases):  # Changed while LibreOffice runs: nothing is probed, rendered or sent.
+            with self.converter(during=change), no_pages(), patch.object(family_llm, 'extract_draft', side_effect=AssertionError('model')):
+                self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=index)), dict(used=0, failed=0))
+            applied(); self.assertEqual(len(self.converted), index + 1)
+            self.assertEqual(self.rows('SELECT COUNT(*) FROM agent_pdf_material'), [(0,)])
+            self.assertEqual(self.rows("SELECT * FROM agent_jobs WHERE id LIKE 'pdf-material:%'"), [])
+            restore()
+        real = family_pdf.render_pages
+
+        def rendered_then_detached(body, pages, deadline=family_pdf.DEADLINE_SECONDS):
+            result = real(body, pages, deadline); self.link(keys, docx, 'detach'); return result
+        with renderer(), self.converter(), patch.object(family_pdf, 'render_pages', side_effect=rendered_then_detached) as r, \
+                patch.object(family_llm, 'extract_draft', side_effect=AssertionError('model after a change')) as m:
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=4)), dict(used=0, failed=0))
+        self.assertEqual((r.call_count, m.call_count, len(self.converted)), (1, 0, 5))
+        self.assertEqual(self.rows('SELECT * FROM agent_message_attachments WHERE upload_id=?', docx), [])
+        self.assertIsNone(self.view(keys)); self.link(keys, docx)
+        other = self.seed_docx('e' * 32, name='别人的.docx'); self.claim_for_other_child(other)
+        with self.assertRaises(agent.AgentError):
+            self.link(keys, other)  # The real API rejects another child's DOCX first; then simulate a stale legacy association.
+        with self.store._db() as c:
+            c.execute('INSERT INTO agent_message_attachments VALUES(?,?,?)', (keys['source_id'], keys['message_id'], other))
+        self.assertEqual(self.view(keys)['state'], 'unavailable')
+        with no_convert(), no_pages(), patch.object(family_llm, 'extract_draft', side_effect=AssertionError('model')):
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=5)), dict(used=0, failed=0))
+        with self.store._db() as c:
+            c.execute('DELETE FROM agent_message_attachments WHERE upload_id=?', (other,))
+        with renderer(), self.converter(), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:  # Restored: continues with one call.
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=6)), dict(used=1, failed=0))
+        self.assertEqual((m.call_count, self.view(keys)['processed_pages']), (1, [1, 2, 3]))
+
+    def test_get_is_read_only_and_plain_rejected_multiple_or_mixed_docx_never_convert(self):
+        keys = self.school_fragment('数学：见附件。'); docx = self.seed_docx('f' * 32); self.link(keys, docx)
+        self.view(keys); before = self.snapshot(); sql = []; original = self.store._db
+
+        @contextlib.contextmanager
+        def traced():
+            with original() as c:
+                c.set_trace_callback(sql.append); yield c
+        with patch.object(self.store, '_db', traced), no_convert(), no_render(), no_pages(), \
+                patch.object(family_llm, 'extract_draft', side_effect=AssertionError('model in GET')):
+            shown = self.view(keys)
+            with original() as c:
+                self.assertIsNone(pdfm.complete_evidence(self.store, c, *self.store._message_context(c, keys)))
+        self.assertFalse(any(q.lstrip().upper().startswith(('INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER', 'REPLACE')) for q in sql), sql)
+        self.assertEqual((shown['state'], shown['original'], shown['page_count'], shown['complete']), ('pending', 'docx', None, False))
+        self.assertEqual(self.snapshot(), before)
+        with no_convert(), no_pages(), patch.object(family_llm, 'extract_draft', side_effect=AssertionError('model')):
+            plain = self.school_fragment('语文：见附件文字通知。'); self.link(plain, self.seed_docx('1' * 32, DOCX_PLAIN, '文字通知.docx'))
+            self.assertIsNone(self.view(plain)); self.assertEqual(self.draft_state(plain)['state'], 'pending')  # Plain text: the existing path, untouched.
+            macro = self.school_fragment('英语：见附件。'); self.link(macro, self.seed_docx('2' * 32, DOCX_MACRO, '含宏.docx'))
+            self.assertIsNone(self.view(macro)); self.assertIn('含宏', self.draft_state(macro)['explanation'])  # Refused there; never converted here.
+            self.link(keys, docx, 'detach')
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=0, failed=0))
+            self.link(keys, docx); second = self.seed_docx('3' * 32, DOCX_PLAIN, '第二份.docx'); self.link(keys, second)
+            shown = self.view(keys); self.assertEqual(shown['state'], 'unavailable'); self.assertIn('多个DOCX', shown['explanation'])
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=0, failed=0))
+            self.link(keys, second, 'detach'); image = self.seed_upload('4' * 32, test_media.png(width=97)); self.link(keys, image)
+            shown = self.view(keys); self.assertEqual(shown['state'], 'unavailable'); self.assertIn('单独关联', shown['explanation'])
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=0, failed=0))
+            self.link(keys, image, 'detach'); pdf = self.seed_pdf('5' * 32); self.link(keys, pdf)
+            shown = self.view(keys); self.assertEqual(shown['state'], 'unavailable'); self.assertIn('混在', shown['explanation'])
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=0, failed=0))
+            self.link(keys, pdf, 'detach'); self.assertEqual(self.view(keys)['state'], 'pending')
+        self.assertEqual(self.rows("SELECT * FROM agent_jobs WHERE id LIKE 'pdf-material:%'"), [])
+
+
+for _name in [n for n in dir(PdfMaterialTests) if n.startswith('test_')]:
+    setattr(DocxMaterialTests, _name, None)
 
 if __name__ == '__main__':
     unittest.main()
