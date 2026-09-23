@@ -330,9 +330,10 @@ class OfficeConversionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d,self.assertRaises(printing.OfficeError) as error:
             printing.office_convert(office_zip(),'.docx',Path(d).resolve(),str(self.fake('ok')),timeout=0,limit=printing.MAX_PDF,read=printing._read_file)
         self.assertEqual(error.exception.reason,'timeout');self.assertFalse((self.data/'ok.json').exists())  # No process starts on a spent budget.
-        def slow_read(path,limit):time.sleep(1.5);return printing._read_file(path,limit)
-        with tempfile.TemporaryDirectory() as d,self.assertRaises(printing.OfficeError) as error:
-            printing.office_convert(office_zip(),'.docx',Path(d).resolve(),str(self.fake('ok')),timeout=1,limit=printing.MAX_PDF,read=slow_read)
+        clock=time.monotonic;offset=[0]
+        def slow_read(path,limit):offset[0]=61;return printing._read_file(path,limit)
+        with tempfile.TemporaryDirectory() as d,patch.object(printing.time,'monotonic',side_effect=lambda:clock()+offset[0]),self.assertRaises(printing.OfficeError) as error:
+            printing.office_convert(office_zip(),'.docx',Path(d).resolve(),str(self.fake('ok')),timeout=60,limit=printing.MAX_PDF,read=slow_read)
         self.assertEqual(error.exception.reason,'timeout');self.assertTrue((self.data/'ok.json').exists())
 
 

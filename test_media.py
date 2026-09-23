@@ -715,7 +715,7 @@ class DocxPdfTests(unittest.TestCase):
         self.assertFalse((self.data/'ok.json').exists())
 
     def test_docx_pdf_checks_the_crc_of_every_member_the_converter_would_open(self):
-        image=png()+b'X'*10000  # Far past the 8-byte picture header the checker keeps and past one streaming chunk.
+        image=png()+b'X'*10000  # Far past the 8-byte picture header the checker keeps and past the ZIP reader buffer.
         body=docx(para('Synthetic CRC validation'),[('word/media/image1.png',image)],method=zipfile.ZIP_STORED)
         self.assertEqual(media.docx_pdf(body,soffice=self.fake('ok')),self.pdf);(self.data/'ok.json').unlink()
         with zipfile.ZipFile(io.BytesIO(body)) as z:info=z.getinfo('word/media/image1.png')
@@ -729,9 +729,31 @@ class DocxPdfTests(unittest.TestCase):
     def test_docx_pdf_shares_one_deadline_across_checks_conversion_and_output_reading(self):
         with patch('subprocess.Popen') as popen,patch.object(media,'DOCX_PDF_TIMEOUT',0),self.assertRaises(media.MediaError) as caught:media.docx_pdf(self.body,soffice=self.fake('ok'))
         self.assertEqual(caught.exception.code,'process_timeout');popen.assert_not_called();self.assertFalse((self.data/'ok.json').exists())
-        def slow_read(path,limit):time.sleep(1.5);return media.read_file(path,limit)
-        with patch.object(media,'DOCX_PDF_TIMEOUT',1),patch.object(media,'_docx_pdf_output',slow_read),self.assertRaises(media.MediaError) as caught:media.docx_pdf(self.body,soffice=self.fake('ok'))
+        clock=time.monotonic;offset=[0]
+        def slow_read(path,limit):offset[0]=61;return media.read_file(path,limit)
+        with patch.object(media.time,'monotonic',side_effect=lambda:clock()+offset[0]),patch.object(media,'_docx_pdf_output',slow_read),self.assertRaises(media.MediaError) as caught:media.docx_pdf(self.body,soffice=self.fake('ok'))
         self.assertEqual(caught.exception.code,'process_timeout');self.assertTrue((self.data/'ok.json').exists())  # Conversion finished; reading the PDF overran the same budget.
+
+
+    def test_docx_pdf_rejects_active_fields_and_unmarked_external_targets_before_conversion(self):
+        for body in (docx('<w:p><w:fldSimple w:instr="INCLUDETEXT &quot;file:///private/synthetic.txt&quot;"/></w:p>'),
+                     docx('<w:p><w:r><w:instrText>DDEAUTO synthetic</w:instrText></w:r></w:p>'),
+                     docx(para('Synthetic'), [('word/_rels/document.xml.rels', _RELS %
+                          ('<Relationship Id="rId5" Type="'+_REL_TYPE+'image" Target="https://example.invalid/private"/>'))])):
+            with self.subTest(body=body[:8]), patch('subprocess.Popen', wraps=family_print.subprocess.Popen) as popen, self.assertRaises(media.MediaError):
+                media.docx_pdf(body,soffice=self.fake('ok'))
+            self.assertFalse(popen.called)
+
+    def test_docx_pdf_stops_during_archive_read_when_deadline_expires(self):
+        read=zipfile.ZipExtFile.read
+        def expire(stream,*args,**kwargs):
+            result=read(stream,*args,**kwargs)
+            clock[0]=61.0
+            return result
+        clock=[0.0]
+        with patch.object(family_print.time,'monotonic',side_effect=lambda:clock[0]), patch.object(zipfile.ZipExtFile,'read',expire), patch('subprocess.Popen') as popen, self.assertRaises(media.MediaError) as error:
+            media.docx_pdf(self.body,soffice=self.fake('ok'))
+        self.assertEqual(error.exception.code,'process_timeout');popen.assert_not_called()
 
 
 if __name__ == '__main__':

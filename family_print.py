@@ -227,7 +227,7 @@ _OFFICE_ERRORS = dict(too_large=('Office文件展开后过大',), unsupported=('
                       output_invalid=('预览PDF内容不正确或过大',))
 
 
-def office_check(data, limits, inspect=None):
+def office_check(data, limits, inspect=None, *, deadline=None):
     """Validate one Office ZIP in memory; return (member names, {name: bytes} of the members inspect selects).
 
     Every member is streamed to its end in bounded chunks, so a bad CRC, a size that differs from the declared one or an
@@ -235,6 +235,9 @@ def office_check(data, limits, inspect=None):
     an int keeps that many leading bytes; anything else is verified and dropped. Relationship parts are always kept
     and refused when any relationship has TargetMode=External; macro projects, path traversal, duplicate, encrypted or
     oddly compressed entries stop too."""
+    def check_time():
+        if deadline is not None and time.monotonic() >= deadline: raise OfficeError('timeout')
+    check_time()
     parts, names = {}, []
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
@@ -253,6 +256,7 @@ def office_check(data, limits, inspect=None):
                 kept, size = io.BytesIO(), 0
                 with archive.open(entry) as f:  # Read to the end: zipfile verifies the CRC only once EOF is reached.
                     while True:
+                        check_time()
                         chunk = f.read(min(_OFFICE_CHUNK, limits['member'] + 1 - size))
                         if not chunk: break
                         size += len(chunk); total += len(chunk)
@@ -266,12 +270,16 @@ def office_check(data, limits, inspect=None):
     except Exception:  # Not a ZIP, truncated, bad CRC, password-protected or otherwise unreadable.
         raise OfficeError('unreadable') from None
     for name, part in parts.items():
+        check_time()
         if name.lower().endswith('.rels'):
             if b'<!DOCTYPE' in part or b'<!ENTITY' in part: raise OfficeError('unreadable')
             try: relationships = ET.fromstring(part)
             except ET.ParseError: raise OfficeError('unreadable') from None
-            if any(r.attrib.get('TargetMode', '').lower() == 'external' for r in relationships.iter()):
+            if any(r.attrib.get('TargetMode', '').lower() == 'external' or
+                   re.match(r'^(?:[A-Za-z][A-Za-z0-9+.-]*:|//|\\)', r.attrib.get('Target', '').strip())
+                   for r in relationships.iter()):
                 raise OfficeError('external')
+    check_time()
     return names, parts
 
 

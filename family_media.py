@@ -406,7 +406,7 @@ DOCX_PDF_TIMEOUT = 60  # Seconds for checks, conversion, reading and return toge
 _DOCX_PDF_MEDIA = {'.png': b'\x89PNG\r\n\x1a\n', '.jpg': b'\xff\xd8\xff', '.jpeg': b'\xff\xd8\xff'}
 _DOCX_PDF_UNSUPPORTED = ('.gif', '.bmp', '.tif', '.tiff', '.emf', '.wmf', '.svg', '.odttf', '.fntdata', '.ttf')
 _DOCX_PDF_BLOCKED = ('vba', 'macro', 'oleobject', 'activex', 'embedding')
-_DOCX_PDF_OBJECTS = frozenset(('OLEObject', 'control', 'objectEmbed', 'objectLink'))
+_DOCX_PDF_OBJECTS = frozenset(('OLEObject', 'control', 'objectEmbed', 'objectLink', 'fldSimple', 'instrText', 'altChunk', 'subDoc'))
 _DOCX_PDF_CODES = dict(timeout='process_timeout', failed='process_failed', no_output='process_failed', output_invalid='process_failed')
 
 
@@ -422,7 +422,7 @@ def docx_pdf(body, *, soffice=None):
 
     A pure function: nothing is stored, queued, fetched or written to the database. Word/WPS-exported DOCX with
     embedded PNG/JPEG pictures, tables, formulas and ordinary layout is accepted; binary .doc/.wps, macros,
-    OLE/ActiveX objects, external relationships (hyperlinks included), other media, fonts and damaged archives
+    OLE/ActiveX objects, active fields/subdocuments, external relationships (hyperlinks included), other media, fonts and damaged archives
     are refused. The result is LibreOffice's rendering, not Word-exact pagination, sound or animation."""
     started = time.monotonic()
     require(isinstance(body, (bytes, bytearray)) and len(body) > 0, 'draft_docx_rejected')
@@ -433,9 +433,10 @@ def docx_pdf(body, *, soffice=None):
         name = name.lower()
         return True if name.endswith(('.xml', '.rels')) else 8 if name.endswith(tuple(_DOCX_PDF_MEDIA)) else None
     try:
-        names, parts = family_print.office_check(bytes(body), DOCX_PDF_LIMITS, inspect)
-    except family_print.OfficeError:
-        raise MediaError('draft_docx_rejected') from None
+        names, parts = family_print.office_check(bytes(body), DOCX_PDF_LIMITS, inspect,
+                                                  deadline=started + DOCX_PDF_TIMEOUT)
+    except family_print.OfficeError as error:
+        raise MediaError('process_timeout' if error.reason == 'timeout' else 'draft_docx_rejected') from None
     for name in (n.lower() for n in names):
         require(not any(word in name for word in _DOCX_PDF_BLOCKED), 'draft_docx_rejected')
         require(name.endswith(('.xml', '.rels', '/') + tuple(_DOCX_PDF_MEDIA)),
@@ -443,8 +444,10 @@ def docx_pdf(body, *, soffice=None):
     for name, data in parts.items():
         if name.lower().endswith(('.xml', '.rels')):  # Word writes UTF-8 without a DTD; LibreOffice never sees entities.
             require(b'\x00' not in data and b'<!DOCTYPE' not in data and b'<!ENTITY' not in data, 'draft_docx_rejected')
-            try: data.decode('utf-8')
-            except UnicodeDecodeError: raise MediaError('draft_docx_rejected') from None
+            root = _docx_xml(data)
+            # Active Word fields can request local/network content without an external relationship.
+            require(not any(e.tag.rsplit('}', 1)[-1] in _DOCX_PDF_OBJECTS for e in root.iter()),
+                    'draft_docx_rejected')
         else:  # A picture is what its name says, so no other image filter is reached.
             require(data.startswith(_DOCX_PDF_MEDIA[Path(name.lower()).suffix]), 'draft_docx_rejected')
     types = _docx_xml(parts.get('[Content_Types].xml', b''))
