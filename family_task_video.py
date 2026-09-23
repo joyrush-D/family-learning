@@ -6,7 +6,8 @@ here: what actually bounds the calls is enabled, the tick's three model calls sh
 job per (record, original, fingerprint) with three attempts, 5/10 minute backoff and then the parent's retry.
 Nothing here writes a record, task, plan, goal, result or completion, and no child entry or learning evidence
 reads the draft table. The parent's explicit review (review below) appends to record_video_reviews which observations
-of one exact draft version were confirmed or revoked; it is shown back only for that version and nothing consumes it yet."""
+of one exact draft version were confirmed or revoked; it is shown back only for that version. `confirmed` below is the one
+read-only path by which the linked learning goal's evidence (family_goals._context) reads the parent's current choice."""
 import datetime as dt
 import hashlib
 import json
@@ -421,6 +422,41 @@ def _effective(row, base, value, saved):
     return dict(state='confirmed', id=row['id'], reviewed_at=row['created'], label=REVIEW_LABEL, explanation=REVIEW_NOTE,
                 audio_assessed=False, selected=payload['selected'], observations=payload['observations'],
                 uncertainties=payload['uncertainties'], duration_seconds=payload['duration_seconds'])
+
+
+def confirmed(app, store, c, record_id):
+    """The parent's currently effective confirmations of this record's task videos, read on the caller's connection.
+
+    family_goals calls this only for a record the goal already lists through its own explicit links; nothing here picks
+    records. It repeats exactly the checks of view and review: the Agent switch, the record's one task and child, the
+    original's bytes and sharing, the saved draft's fingerprint and the newest review row for that draft version. No
+    model, no probe, no write and no table is created; a database without the draft or review tables, a corrected,
+    relinked, foreign or unreadable record, a changed original, a withdrawn switch, a stale token or a revocation all
+    read as no confirmation. Only the parent's selected observations leave: never unselected ones, the draft's other
+    text or the video bytes. A confirmation is the parent's reading of the picture with sound unassessed; it changes no
+    record, task, plan or completion."""
+    try:
+        _require(store._config(c)['enabled'], 'agent_disabled')
+        base = _attribution(app, store, c, record_id)
+    except (AgentError, VideoDraftError, sqlite3.OperationalError):
+        return []
+    out = []
+    for upload_id in _videos(c, base):
+        try:
+            value = _original(store, c, base, upload_id)
+            saved = _saved(c, value)
+            if saved is None:
+                continue
+            review = _effective(_latest(c, value, saved['token']), base, value, saved)
+        except (AgentError, VideoDraftError, sqlite3.OperationalError):
+            continue
+        if review['state'] != 'confirmed':
+            continue
+        out.append(dict(kind='parent_checked_video', label=REVIEW_LABEL, upload_id=upload_id, review_id=review['id'],
+                        token=saved['token'], reviewed_at=review['reviewed_at'], selected=review['selected'],
+                        observations=review['observations'], uncertainties=review['uncertainties'],
+                        duration_seconds=review['duration_seconds'], audio_assessed=False))
+    return out
 
 
 def _request(body):

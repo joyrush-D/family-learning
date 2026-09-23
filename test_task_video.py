@@ -16,6 +16,7 @@ import unittest
 from unittest import mock
 
 import family_agent as agent
+import family_goals as goals
 import family_llm
 import family_task_video as tv
 import test_goals
@@ -608,3 +609,143 @@ class VideoReviewHttpTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class VideoEvidenceTests(unittest.TestCase):
+    """#23: the parent's effective confirmation of listed observations joins the linked goal's one record item; nothing else of the video does."""
+    enable=TaskVideoTests.enable;ffprobe=TaskVideoTests.ffprobe;chat=TaskVideoTests.chat;clip=TaskVideoTests.clip
+    feedback=TaskVideoTests.feedback;record=TaskVideoTests.record;linked=TaskVideoTests.linked;relink=TaskVideoTests.relink;correct=TaskVideoTests.correct
+    tick=TaskVideoTests.tick;lines=TaskVideoTests.lines;files=TaskVideoTests.files;rows=TaskVideoTests.rows;view=TaskVideoTests.view;state=TaskVideoTests.state
+    action=TaskVideoTests.action;reply=TaskVideoTests.reply;TASK=TaskVideoTests.TASK;OTHER=TaskVideoTests.OTHER;SIBLING=TaskVideoTests.SIBLING
+    ready=VideoReviewTests.ready;body=VideoReviewTests.body;other=VideoReviewTests.other;review=VideoReviewTests.review;goal=test_goals.GoalTests.goal
+
+    def setUp(self):
+        TaskVideoTests.setUp(self);self.store=goals.Store(self.app,self.agent);self.inputs=[]  # the goal store reads the resolved data path
+
+    def ctx(self):
+        """Every goal read also proves that it writes nothing, probes nothing and calls no model."""
+        before=(self.lines(),self.files(),subprocess.run.call_count,self.model.call_count,len(self.probes),len(self.sent))
+        with self.agent._db() as c:result=self.store._context(c,self.store._get(c,self.ident))
+        self.assertEqual((self.lines(),self.files(),subprocess.run.call_count,self.model.call_count,len(self.probes),len(self.sent)),before);return result
+
+    def text(self,ctx):return agent._json(ctx['evidence'])
+    def rec(self,ctx,ident):return next(r for r in ctx['records'] if r['id']==ident)
+    def obs(self,i):return TWO['observations'][i]['text']
+
+    def item(self,ctx,ident):
+        items=[e for e in ctx['evidence'] if e['ref']=='record:%d'%ident];self.assertEqual(len(items),1);return items[0]
+
+    def plan(self,during=None):
+        def reply(messages,schema,name,timeout,**kwargs):
+            if name=='family_video_feedback_draft':return self.chat(messages,schema,name,timeout,**kwargs)
+            value=json.loads(messages[-1]['content']);self.inputs.append(value)
+            if during:during()
+            return test_goals.synthetic_plan(value)
+        self.model.side_effect=reply
+
+    def stored(self,ident):
+        with self.app.connect() as c:
+            return tuple(tuple(c.execute(sql,arg).fetchone()) for sql,arg in (('SELECT * FROM records WHERE id=?',(ident,)),
+                ('SELECT * FROM manual_tasks WHERE id=?',(self.TASK,)),('SELECT plan,state,task_id FROM agent_items WHERE id=?',(self.ident,))))
+
+    def test_only_the_parents_selected_observations_join_the_records_one_item_and_leave_with_a_revocation(self):
+        ident,video=self.ready();empty=self.ctx();plain=self.rec(empty,ident);before=self.stored(ident)
+        self.assertNotIn('video_observations',plain);self.assertNotIn('media_unread',self.item(empty,ident))
+        for i in (0,1):self.assertNotIn(self.obs(i),self.text(empty))
+        first=self.review(self.body(ident,video,selected=[1]));ctx=self.ctx();shown=self.rec(ctx,ident)
+        self.assertEqual((len(ctx['records']),[e['ref'] for e in ctx['evidence']]),(len(empty['records']),[e['ref'] for e in empty['evidence']]))
+        self.assertEqual(shown['video_observations'],[dict(kind='parent_checked_video',label=tv.REVIEW_LABEL,upload_id=video['upload_id'],review_id=first['id'],token=video['token'],
+            reviewed_at=first['reviewed_at'],selected=[1],observations=[TWO['observations'][1]],uncertainties=TWO['uncertainties'],duration_seconds=12.5,audio_assessed=False)])
+        self.assertEqual((shown['video_observations_label'],shown['audio_assessed']),(goals.family_learner_memory.VIDEO_CHECKED,False))
+        self.assertEqual({k:v for k,v in shown.items() if k in plain},plain)  # the record's own fields read exactly as before
+        for key in ('media_unread','other_media_unread'):self.assertNotIn(key,shown);self.assertNotIn(key,self.item(ctx,ident))
+        self.assertIn(self.obs(1),self.text(ctx));self.assertNotIn(self.obs(0),self.text(ctx));self.assertNotIn('ftypisom',self.text(ctx))
+        self.assertEqual(self.stored(ident),before)  # confirmation changes no record, task or goal plan
+        self.assertNotEqual(empty['evidence_hash'],ctx['evidence_hash']);self.assertEqual(self.ctx()['evidence_hash'],ctx['evidence_hash'])
+        self.review(self.body(ident,video,action='revoke',selected=[]));revoked=self.ctx()
+        self.assertEqual(revoked['evidence_hash'],empty['evidence_hash']);self.assertNotIn(self.obs(1),self.text(revoked));self.assertNotIn('video_observations',self.rec(revoked,ident))
+        second=self.review(self.body(ident,video,selected=[0]));again=self.ctx()
+        self.assertIn(self.obs(0),self.text(again));self.assertNotIn(self.obs(1),self.text(again));self.assertNotEqual(again['evidence_hash'],ctx['evidence_hash'])
+        self.assertEqual(self.rec(again,ident)['video_observations'][0]['review_id'],second['id']);self.assertEqual(self.stored(ident),before)
+
+    def test_the_goal_read_runs_no_write_no_probe_and_no_model_even_with_a_confirmation(self):
+        ident,video=self.ready();self.review(self.body(ident,video));statements=[];connect=self.agent.connect
+        def traced():
+            c=connect();c.set_trace_callback(statements.append);return c
+        with mock.patch.object(self.agent,'connect',traced):ctx=self.ctx();self.ctx()
+        self.assertIn(self.obs(0),self.text(ctx));self.assertTrue(statements)
+        self.assertEqual([s for s in statements if s.split()[0].upper() in ('INSERT','UPDATE','DELETE','CREATE','DROP','ALTER','REPLACE')],[])
+        with self.app.connect() as c:c.execute('DROP TABLE record_video_reviews')
+        self.assertNotIn(self.obs(0),self.text(self.ctx()))  # an older database without the table reads as unconfirmed
+
+    def test_a_correction_relink_changed_bytes_new_draft_shared_original_or_withdrawn_switch_removes_it_and_moves_the_hash(self):
+        def hash_change(ident):
+            path=self.data/'uploads'/self.uploads[ident];return lambda:path.write_bytes(b'Y'+path.read_bytes()[1:])
+        def draft_replacement(ident):
+            def replace():
+                with self.app.connect() as c:
+                    payload=json.loads(c.execute('SELECT payload FROM record_video_drafts WHERE record_id=?',(ident,)).fetchone()[0])
+                    payload['draft']['observations'][0]['text']='虚构：后台重新整理后的观察'
+                    c.execute('UPDATE record_video_drafts SET payload=? WHERE record_id=?',(json.dumps(payload,ensure_ascii=False),ident))
+            return replace
+        def cross_child(ident):
+            def share():
+                with self.app.connect() as c:
+                    c.execute("INSERT INTO records(child,day,category,subject,title,note,source,created,attachments) VALUES('示例乙',?,'学习进展','英语','虚构','虚构','家长网页记录',?,?)",
+                              (self.now.date().isoformat(),self.now.isoformat(),json.dumps([self.uploads[ident]])))
+            return share
+        for name,change in (('correct',self.correct),('relink',self.relink),('hash',hash_change),('draft',draft_replacement),('cross_child',cross_child),('disable',lambda ident:lambda:self.enable(False))):
+            with self.subTest(change=name):
+                ident,video=self.ready();self.review(self.body(ident,video));confirmed=self.ctx()
+                self.assertEqual(self.rec(confirmed,ident)['video_observations'][0]['token'],video['token']);rows=self.rows('record_video_reviews')
+                change(ident)();changed=self.ctx();self.assertNotEqual(changed['evidence_hash'],confirmed['evidence_hash'])
+                items=[e for e in changed['evidence'] if e['ref']=='record:%d'%ident];self.assertLessEqual(len(items),1)
+                for e in items:self.assertNotIn(self.obs(0),e['text']);self.assertNotIn(video['token'],e['text'])
+                self.assertFalse([r for r in changed['records'] if r['id']==ident and r.get('video_observations')])
+                self.assertNotIn('后台重新整理',self.text(changed));self.assertEqual(self.rows('record_video_reviews'),rows)
+
+    def test_an_unrelated_goal_of_the_same_subject_gets_nothing_while_an_explicitly_linked_record_does(self):
+        ident,video=self.ready();self.review(self.body(ident,video))
+        self.ident=self.action('create',child_id='child-1',title='虚构同科无关目标',subject='英语',baseline='虚构背景')['id'];unrelated=self.ctx()
+        self.assertFalse([e for e in unrelated['evidence'] if e['ref'].startswith('record:')]);self.assertNotIn(self.obs(0),self.text(unrelated))
+        self.ident=self.action('create',child_id='child-1',title='虚构明确关联记录',subject='数学',baseline='虚构背景',record_ids=[ident])['id'];explicit=self.ctx()
+        self.assertEqual(self.rec(explicit,ident)['video_observations'][0]['token'],video['token']);self.assertIn(self.obs(0),self.text(explicit))
+
+    def test_a_bare_video_feedback_becomes_readable_only_through_the_parents_confirmation(self):
+        rid=self.feedback();ref='record:%d'%rid
+        with mock.patch.dict(DRAFT,TWO,clear=True):self.assertEqual(self.tick(),SENT)
+        video=self.view(rid)['videos'][0]
+        def cite(ctx):
+            result=test_goals.synthetic_plan(dict(evidence=ctx['evidence'],as_of=self.now.date().isoformat()))
+            result['proposal']['hypotheses']=[dict(reason='虚构原因',support=[ref],against=[],test='请核对本次帮助条件',status='有支持')];return result
+        unread=self.ctx();self.assertTrue(self.rec(unread,rid)['media_unread']);self.assertTrue(self.item(unread,rid)['media_unread'])
+        with self.assertRaisesRegex(agent.AgentError,'未核对的原件或转写'):self.store._proposal(cite(unread),unread,self.now)
+        self.review(self.body(rid,video));checked=self.ctx();shown=self.rec(checked,rid)
+        for key in ('media_unread','other_media_unread'):self.assertNotIn(key,shown);self.assertNotIn(key,self.item(checked,rid))
+        self.assertEqual(self.store._proposal(cite(checked),checked,self.now)['hypotheses'][0]['support'],[ref])
+
+    def test_a_revocation_during_the_call_drops_the_result_and_acceptance_still_needs_the_parent_with_the_current_evidence(self):
+        ident,video=self.ready();self.review(self.body(ident,video))
+        self.plan(during=lambda:self.review(self.body(ident,video,action='revoke',selected=[])))
+        calls=self.model.call_count;result=self.store.process(self.ident,self.now,explicit=True)
+        self.assertEqual((self.model.call_count,result['state'],result['created']),(calls+1,'stale',0))
+        sent=agent._json(self.inputs[-1]);self.assertIn(self.obs(0),sent);self.assertNotIn(self.obs(1),sent);self.assertIn(video['token'],sent)
+        goal=self.goal();self.assertEqual((goal['pending'],goal['current_plan']),(None,None))
+        with self.app.connect() as c:self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_items WHERE job_id=? AND state='pending'",('goal:'+self.ident,)).fetchone()[0],0)
+        self.plan();self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'ready');goal=self.goal()
+        self.assertEqual((goal['pending']['context_hash'],goal['current_plan']),(self.ctx()['evidence_hash'],None));self.assertNotIn(self.obs(0),agent._json(self.inputs[-1]))
+        old=(goal['pending']['id'],goal['context_hash'],goal['version'])
+        self.review(self.body(ident,video,selected=[1]));goal=self.goal();self.assertEqual((goal['pending_stale'],goal['pending']),(True,None))
+        with self.assertRaises(agent.AgentError) as caught:self.action('approve',id=self.ident,expected_version=old[2],proposal_id=old[0],context_hash=old[1])
+        self.assertEqual((caught.exception.status,caught.exception.code,self.goal()['current_plan']),(409,'goal_evidence_changed',None))
+        calls=self.model.call_count;self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'ready');goal=self.goal()
+        self.assertEqual((self.model.call_count,goal['pending']['context_hash'],goal['current_plan']),(calls+1,goal['context_hash'],None));self.assertIn(self.obs(1),agent._json(self.inputs[-1]))
+        self.action('approve',id=self.ident,expected_version=goal['version'],proposal_id=goal['pending']['id'],context_hash=goal['context_hash']);goal=self.goal()
+        self.assertEqual((goal['current_plan']['title'],goal['evidence_changed'],goal['pending']),('先核对一个判断过程',False,None))
+        calls=self.model.call_count;self.assertEqual(self.store.process(self.ident,self.now)['state'],'current');self.assertEqual(self.model.call_count,calls)  # same confirmation: no second call
+        with self.app.connect() as c:plan=c.execute('SELECT plan FROM agent_items WHERE id=?',(self.ident,)).fetchone()[0]
+        self.review(self.body(ident,video,action='revoke',selected=[]));goal=self.goal()
+        self.assertEqual((goal['evidence_changed'],goal['current_plan']['title']),(True,'先核对一个判断过程'))
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT plan FROM agent_items WHERE id=?',(self.ident,)).fetchone()[0],plan)
+            self.assertEqual(tuple(c.execute('SELECT note,score,linked_task_id FROM records WHERE id=?',(ident,)).fetchone()),('虚构说明',None,self.TASK))

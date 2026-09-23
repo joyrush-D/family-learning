@@ -242,6 +242,40 @@ def media_evidence(row):
     return dict(media_unread=True) if bare else {}
 
 
+VIDEO_CHECKED = '家长核对的画面观察'
+
+
+def video_evidence(row, confirmed):
+    """Keys the parent's confirmed picture observations add to the record's one evidence item ({} when there are none).
+
+    `confirmed` is what family_task_video.confirmed read for the record's originals: per video the confirmation id,
+    token, original id and time, the parent's selected observations with their time positions and the draft's listed
+    unknowns, sound unassessed. It is the parent's checked reading of the picture: not something the system saw or
+    heard the child do, no proof of completion, mastery or a cause, and it leaves the record's own text, score, task
+    and plan untouched. Unselected observations never arrive here. An original the parent did not confirm, or an
+    unchecked transcript, stays unknown and is named as `other_media_unread` instead of the whole record being unread.
+    """
+    if not confirmed:
+        return {}
+    covered = {v['upload_id'] for v in confirmed}
+    try:
+        attachments = json.loads(row.get('attachments') or '[]')
+    except (TypeError, ValueError):
+        attachments = None
+    state = row.get('transcript_state') or ''
+    checked_words = state == TRANSCRIPT_CHECKED and bool(row.get('transcript'))
+    remaining = (attachments is None or (not checked_words and any(a not in covered for a in attachments))
+                 or bool(state and not checked_words))
+    out = dict(video_observations=confirmed, video_observations_label=VIDEO_CHECKED, audio_assessed=False)
+    if remaining:
+        out['other_media_unread'] = True
+    return out
+
+
 def media_unreadable(row):
-    """A record with nothing to read but unchecked media: it can be listed, never support or contradict a cause."""
-    return bool(media_evidence(row).get('media_unread')) and not (row.get('note') or '').strip() and row.get('score') is None
+    """A record with nothing to read but unchecked media: it can be listed, never support or contradict a cause.
+
+    The parent's confirmed video observations are readable content, so a record carrying them is not unread even if
+    its other media still is."""
+    return (bool(media_evidence(row).get('media_unread')) and not row.get('video_observations')
+            and not (row.get('note') or '').strip() and row.get('score') is None)

@@ -182,3 +182,18 @@ class LearnerMemoryTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class VideoEvidenceShapeTest(unittest.TestCase):
+    def test_video_evidence_adds_only_the_confirmed_observations_and_names_the_remaining_media_as_unknown(self):
+        from family_learner_memory import video_evidence, media_unreadable, VIDEO_CHECKED
+        confirmed=[dict(upload_id='v1',review_id=3,token='t'*64,reviewed_at='2026-09-23T10:00:00',selected=[0],
+                        observations=[dict(text='虚构画面',start_seconds=1,end_seconds=2)],uncertainties=[],duration_seconds=4.0,audio_assessed=False)]
+        self.assertEqual(video_evidence(dict(attachments='["v1"]'),[]),{})
+        one=video_evidence(dict(attachments='["v1"]',note='',score=None),confirmed)
+        self.assertEqual(one,dict(video_observations=confirmed,video_observations_label=VIDEO_CHECKED,audio_assessed=False))
+        self.assertTrue(video_evidence(dict(attachments='["v1","a2"]'),confirmed)['other_media_unread'])
+        self.assertTrue(video_evidence(dict(attachments='["v1"]',transcript='x',transcript_state='待核对'),confirmed)['other_media_unread'])
+        self.assertNotIn('other_media_unread',video_evidence(dict(attachments='["v1","a2"]',transcript='已核对文字',transcript_state='已核对'),confirmed))
+        self.assertTrue(media_unreadable(dict(attachments='["v1"]',note='',score=None)))
+        self.assertFalse(media_unreadable(dict(attachments='["v1"]',note='',score=None,**one)))
