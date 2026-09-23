@@ -460,12 +460,22 @@ function prepareTaskCapture(task,record=null){
  $('#saveTaskFeedback').textContent=record?'保存反馈更正':'保存反馈（不改状态）';drawPending();drawTaskFeedback(task);
 }
 function drawTaskFeedback(task){
- videoDraftSerial++;videoDraftViews.clear();
+ videoDraftSerial++;videoDraftViews.clear();videoReviewPending.clear();
  const records=data.records.filter(r=>(r.source==='事项:'+task.id||r.linked_task_id===task.id)&&r.child===task.child);
  $('#taskFeedbackHistory').innerHTML=records.length?'<h3>这项任务的反馈</h3>'+records.map(r=>`<article class="note"><p>${esc(r.day)} · ${esc(r.note||(r.transcript?'已保存语音转写':'已保存原件，内容待核对'))}</p>${r.transcript?`<p class="source">转写（${esc(r.transcript_state)}）：${esc(r.transcript)}</p>`:''}${(r.attachments||[]).map(id=>data.uploads.find(a=>a.id===id)).filter(Boolean).map(uploadHTML).join('')}${videoDraftPanelHTML(r)}${r.source==='事项:'+task.id?`<button type="button" data-task-feedback-edit="${r.id}">更正这条反馈</button>`:`<p class="small muted">关联记录 · ${esc(r.title)} · ${esc(r.source)}</p><button type="button" data-record="${r.id}">查看 / 更正原记录</button>`}</article>`).join(''):'';
 }
 // Same-page read of the background task-video observation draft (#22/#23): GET only, no model, parent check only.
 let videoDraftSerial=0;const videoDraftViews=new Map();
+// #23 Parent review of the listed observations: only the parent's explicit click sends POST /api/record/video/review, nothing is pre-selected, the server's echoed review is what gets shown, and a reply for a closed, reopened or refreshed panel is dropped. Not a learning record; nothing consumes it.
+const videoReviewPending=new Map();
+const videoToken=v=>typeof v?.token==='string'&&/^[0-9a-f]{64}$/.test(v.token)?v.token:'';
+const videoReviewable=v=>!!(videoToken(v)&&typeof v?.upload_id==='string'&&v.review&&typeof v.review==='object'&&!Array.isArray(v.review));
+function videoObservationHTML(o){return `<span class="small muted">${clockText(o?.start_seconds)}–${clockText(o?.end_seconds)}</span> ${esc(String(o?.text??''))}`}
+function videoReviewHTML(recordId,v,i,obs){
+ const review=v.review&&typeof v.review==='object'&&!Array.isArray(v.review)?v.review:null;if(!review)return '';
+ const confirmed=review.state==='confirmed',shown=confirmed&&Array.isArray(review.observations)?review.observations:[],can=videoReviewable(v)&&obs.length>0;
+ return `<div class="video-review" data-video-review="${confirmed?'confirmed':'unconfirmed'}"><p class="source">${esc(review.label||'家长核对')}：${confirmed?`已核对${shown.length}条${review.reviewed_at?'（'+esc(String(review.reviewed_at))+'）':''}`:'尚未核对'}</p>${shown.length?`<ul class="video-observations">${shown.map(o=>`<li>${videoObservationHTML(o)}</li>`).join('')}</ul>`:''}<p class="source">${esc(review.explanation||'')}${review.revoked_at?` 已于 ${esc(String(review.revoked_at))} 撤回。`:''}</p>${can?`<p class="source" data-video-review-status>勾选你核对过的画面观察后再确认；不会自动勾选，也不代表完成或掌握。</p><button type="button" data-video-review-confirm="${recordId}" data-video-index="${i}" disabled>确认所选画面观察</button>${confirmed?` <button type="button" data-video-review-revoke="${recordId}" data-video-index="${i}">撤回核对</button>`:''}`:''}</div>`;
+}
 function videoDraftPanelHTML(r){
  if(!(r.attachments||[]).some(id=>String((data.uploads||[]).find(a=>a.id===id)?.mime||'').startsWith('video/')))return '';
  return `<section class="video-draft" data-video-draft="${r.id}"><p class="small muted">画面观察待家长核对；声音未评估。</p><button type="button" data-video-draft-load="${r.id}">查看画面观察</button></section>`;
@@ -482,7 +492,8 @@ function videoDraftHTML(recordId,view,error){
   const head=`<p class="small muted">${esc(name)} · ${labels[state]}</p>`,note=`<p class="source" data-video-draft-status>${esc(v?.explanation||'')}</p>`;
   if(state==='ready'){
    const d=v.draft&&typeof v.draft==='object'?v.draft:{},obs=Array.isArray(d.observations)?d.observations:[],unknown=Array.isArray(d.uncertainties)?d.uncertainties:[];
-   return `<div data-video-state="ready">${head}${obs.length?`<ul class="video-observations">${obs.map(o=>`<li><span class="small muted">${clockText(o?.start_seconds)}–${clockText(o?.end_seconds)}</span> ${esc(String(o?.text??''))}</li>`).join('')}</ul>`:'<p class="source">这次没有整理出可核对的画面观察。</p>'}<p class="source">未知或看不清：${unknown.length?esc(unknown.map(String).join('；')):'无'}</p><p class="source">声音未评估；这是待核对草稿，不代表完成或掌握。</p>${v.updated?`<p class="small muted">整理于 ${esc(String(v.updated))}</p>`:''}${refresh}</div>`;
+   const review=videoReviewHTML(recordId,v,i,obs),boxes=!!review&&videoReviewable(v),chosen=boxes&&v.review.state==='confirmed'&&Array.isArray(v.review.selected)?v.review.selected:[];
+   return `<div data-video-state="ready" data-video-item="${i}">${head}${obs.length?`<ul class="video-observations">${obs.map((o,n)=>`<li>${boxes?`<label><input type="checkbox" data-video-obs="${n}"> `:''}${videoObservationHTML(o)}${chosen.includes(n)?' <span class="small muted">（家长已核对）</span>':''}${boxes?'</label>':''}</li>`).join('')}</ul>`:'<p class="source">这次没有整理出可核对的画面观察。</p>'}<p class="source">未知或看不清：${unknown.length?esc(unknown.map(String).join('；')):'无'}</p><p class="source">声音未评估；这是待核对草稿，不代表完成或掌握。</p>${review}${v.updated?`<p class="small muted">整理于 ${esc(String(v.updated))}</p>`:''}${refresh}</div>`;
   }
   if(state==='error')return `<div data-video-state="error">${head}<p class="source" data-video-draft-status>${esc(v?.explanation||'后台整理失败')}${v?.attempts?` · 已尝试${Number(v.attempts)||0}次`:''}${v?.exhausted?' · 自动重试已停止':''}</p><button type="button" data-video-draft-retry="${recordId}" data-video-index="${i}">重试整理</button> ${refresh}</div>`;
   return `<div data-video-state="${state}">${head}${note}${refresh}</div>`;
@@ -492,6 +503,7 @@ function videoDraftPanel(recordId){return $('#taskFeedbackHistory').querySelecto
 function paintVideoDraft(recordId,html){const panel=videoDraftPanel(recordId);if(panel)panel.innerHTML=html}
 async function loadVideoDraft(recordId){
  const serial=videoDraftSerial;if(!videoDraftPanel(recordId))return;
+ videoDraftViews.delete(recordId);for(const key of [...videoReviewPending.keys()])if(key.startsWith(recordId+':'))videoReviewPending.delete(key);
  paintVideoDraft(recordId,'<p class="source" data-video-draft-status>正在读取画面观察…</p>');
  try{
   const r=await apiFetch('/api/record/video?record_id='+encodeURIComponent(recordId));let view=null;try{view=await r.json()}catch{view=null}
@@ -508,6 +520,44 @@ async function retryVideoDraft(recordId,index){
  try{await agentAction({action:'retry',id:jobId});if(serial!==videoDraftSerial)return;if(status)status.textContent='已安排后台重试，稍后点“刷新”核对结果。'}
  catch(e){if(serial!==videoDraftSerial)return;if(status)status.textContent=e instanceof TypeError?'网络中断，重试尚未安排，请再试一次。':e.status===401?'请先重新登录，再安排重试。':e.message}
  finally{if(serial===videoDraftSerial)buttons.forEach(b=>b.disabled=false)}
+}
+async function submitVideoReview(recordId,index,action){
+ const serial=videoDraftSerial,panel=videoDraftPanel(recordId),view=videoDraftViews.get(recordId),v=view?.videos?.[index],box=panel?.querySelector(`[data-video-item="${index}"]`);
+ if(!panel||!box||v?.state!=='ready'||!videoReviewable(v))return;
+ const key=recordId+':'+v.upload_id,status=box.querySelector('[data-video-review-status]'),say=s=>{if(status)status.textContent=s};
+ let pending=videoReviewPending.get(key);if(pending?.busy)return;
+ if(!pending){
+  const selected=[...new Set([...box.querySelectorAll('[data-video-obs]:checked')].map(el=>Number(el.dataset.videoObs)).filter(n=>Number.isInteger(n)&&n>=0))].sort((a,b)=>a-b);
+  if(action==='confirm'&&!selected.length){say('请先勾选至少一条你核对过的画面观察。');return}
+  if(action==='revoke'&&v.review.state!=='confirmed'){say('当前版本没有已核对的内容，无需撤回。');return}
+  pending={body:{record_id:recordId,upload_id:v.upload_id,expected_token:videoToken(v),action,selected:action==='confirm'?selected:[]},busy:false};videoReviewPending.set(key,pending);
+ }
+ const body=pending.body,controls=[...box.querySelectorAll('input,button')];pending.busy=true;controls.forEach(el=>el.disabled=true);
+ say(body.action==='revoke'?'正在撤回核对…':'正在保存你的核对…');
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);let known=false;
+ try{
+  const r=await apiFetch('/api/record/video/review',{signal:controller.signal,method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify(body)});
+  let result=null;try{result=await r.json()}catch{result=null}
+  if(!r.ok){known=r.status>=400&&r.status<500;const error=Error(r.status===401?'请先重新登录，再重试核对；你的勾选仍保留。':r.status===409?(result?.error||'页面上的视频观察已不是当前版本')+' 本次核对未保存，请点“刷新”后重新勾选确认。':(result?.error||'核对未保存')+'，请重试。');error.status=r.status;throw error}
+  if(!result||result.record_id!==body.record_id||result.upload_id!==body.upload_id||result.token!==body.expected_token||result.action!==body.action||!result.review||typeof result.review!=='object'||Array.isArray(result.review))throw Error('核对回执与本次请求不一致');
+  videoReviewPending.delete(key);
+  if(serial!==videoDraftSerial||videoDraftViews.get(recordId)!==view)return;
+  view.videos[index]={...v,review:result.review};paintVideoDraft(recordId,videoDraftHTML(recordId,view));
+  const fresh=videoDraftPanel(recordId)?.querySelector(`[data-video-item="${index}"] [data-video-review-status]`);
+  if(fresh)fresh.textContent=result.review.state==='confirmed'?'已按服务端回执显示你核对的画面观察；未评估声音，不代表完成或掌握。':'已撤回核对；后台保留历史，当前版本按未核对显示。';
+ }catch(error){
+  if(known)videoReviewPending.delete(key);
+  if(serial!==videoDraftSerial||videoDraftViews.get(recordId)!==view)return;
+  say((error.name==='AbortError'?'连接超时':error instanceof TypeError?'网络中断':error.message)+(videoReviewPending.get(key)===pending?'；核对结果尚未收到回执，请用原勾选重试。':''));
+ }finally{
+  clearTimeout(timer);pending.busy=false;
+  if(serial===videoDraftSerial&&videoDraftViews.get(recordId)===view&&box.isConnected){
+   const kept=videoReviewPending.get(key)===pending,confirm=box.querySelector('[data-video-review-confirm]'),revoke=box.querySelector('[data-video-review-revoke]');
+   controls.forEach(el=>{el.disabled=kept&&el.matches('[data-video-obs]')});
+   if(confirm){confirm.disabled=kept?body.action!=='confirm':!box.querySelector('[data-video-obs]:checked');confirm.textContent=kept&&body.action==='confirm'?'核对并重试确认':'确认所选画面观察'}
+   if(revoke){revoke.disabled=kept&&body.action!=='revoke';revoke.textContent=kept&&body.action==='revoke'?'核对并重试撤回':'撤回核对'}
+  }
+ }
 }
 function lockTaskFeedback(locked){
  for(const el of $('#taskForm').querySelectorAll('input,select,textarea,button'))el.disabled=locked;
@@ -540,7 +590,8 @@ $('#saveTaskFeedback').onclick=async()=>{
 };
 $('#taskDialog').addEventListener('cancel',e=>{if(captureBusy()||taskFeedbackPending)e.preventDefault()});
 $('#taskFeedbackHistory').addEventListener('click',e=>{const b=e.target.closest('[data-task-feedback-edit]');if(!b||captureBusy()||taskFeedbackPending)return;const record=data.records.find(r=>r.id===Number(b.dataset.taskFeedbackEdit)),task=data.tasks.find(t=>t.id===taskFeedbackContext?.task_id);if(record&&task)prepareTaskCapture(task,record)});
-$('#taskFeedbackHistory').addEventListener('click',e=>{const b=e.target.closest('[data-video-draft-load],[data-video-draft-retry]');if(!b||b.disabled)return;if(b.hasAttribute('data-video-draft-load'))loadVideoDraft(Number(b.dataset.videoDraftLoad));else retryVideoDraft(Number(b.dataset.videoDraftRetry),Number(b.dataset.videoIndex))});
+$('#taskFeedbackHistory').addEventListener('click',e=>{const b=e.target.closest('[data-video-draft-load],[data-video-draft-retry],[data-video-review-confirm],[data-video-review-revoke]');if(!b||b.disabled)return;if(b.hasAttribute('data-video-draft-load'))loadVideoDraft(Number(b.dataset.videoDraftLoad));else if(b.hasAttribute('data-video-draft-retry'))retryVideoDraft(Number(b.dataset.videoDraftRetry),Number(b.dataset.videoIndex));else submitVideoReview(Number(b.dataset.videoReviewConfirm??b.dataset.videoReviewRevoke),Number(b.dataset.videoIndex),b.hasAttribute('data-video-review-revoke')?'revoke':'confirm')});
+$('#taskFeedbackHistory').addEventListener('change',e=>{const el=e.target.closest('[data-video-obs]');if(!el)return;const box=el.closest('[data-video-item]'),button=box?.querySelector('[data-video-review-confirm]');if(button&&!box.querySelector('[data-video-obs]:disabled'))button.disabled=!box.querySelector('[data-video-obs]:checked')});
 
 let transcriptChildExplicit=false;
 let pendingIDs=[],uploading=false,formVersion=0,recorder=null,recordTimer,micPending=false,failedFiles=[];
