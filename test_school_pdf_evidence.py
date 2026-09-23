@@ -10,7 +10,7 @@ import family_llm
 import family_pdf_material as pdfm
 import test_pdf
 import test_pdf_material
-from test_pdf_material import BATCHES, DRAFT, no_render
+from test_pdf_material import BATCHES, DOCX_LAYOUT, DOCX_MIME, DRAFT, layout_docx, no_convert, no_pages, no_render
 
 TEXT = '数学：完成所附练习卷第1至11页。'
 DETACH = 'detach'
@@ -25,14 +25,15 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
     seed_pdf = test_pdf_material.PdfMaterialTests.seed_pdf
     rows = test_pdf_material.PdfMaterialTests.rows
     set_sources = test_pdf_material.PdfMaterialTests.set_sources
+    seed_docx = test_pdf_material.DocxMaterialTests.seed_docx
 
     def setUp(self):
         super().setUp()
         self.keys = self.school_fragment(TEXT); self.pdf = self.seed_pdf('a' * 32); self.link(self.keys, self.pdf)
 
-    def seed_groups(self, batches=BATCHES, note=DRAFT['note']):
+    def seed_groups(self, batches=BATCHES, note=DRAFT['note'], keys=None):
         with self.store._db() as c:
-            source, message = self.store._message_context(c, self.keys)
+            source, message = self.store._message_context(c, keys or self.keys)
             fp = pdfm.pdf_input(self.store, c, source, message)['fingerprint']
             for pages in batches:
                 payload = json.dumps(dict(DRAFT, note=note, title='第%s-%s页组' % (pages[0], pages[-1]), kind='school_material'), ensure_ascii=False)
@@ -62,10 +63,10 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
     def count(self, table):
         return self.rows('SELECT COUNT(*) FROM ' + table)[0][0]
 
-    def material(self):
+    def material(self, keys=None):
         try:
             with self.store._db() as c:
-                source, message = self.store._message_context(c, self.keys)
+                source, message = self.store._message_context(c, keys or self.keys)
                 return pdfm.complete_evidence(self.store, c, source, message)
         except agent.AgentError: return None
 
@@ -272,3 +273,89 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
 
 if __name__ == '__main__':
     unittest.main()
+
+    def test_complete_word_original_is_named_as_word_with_converted_pages_and_parent_confirms(self):
+        """A layout Word original: same page-group path, but the model and the parent are told it is Word, by its original name,
+        with converted-PDF page numbers; the 6000-char summary limit still stays a separate claim from whole-original coverage."""
+        keys = self.school_fragment('英语：完成所附Word练习。'); docx = self.seed_docx('d' * 32); self.link(keys, docx)
+        ident = self.candidate(keys=keys, ident='docx-1'); before = self.item(ident)
+        with no_convert(), no_pages():  # zero LibreOffice, pdfinfo or render anywhere in the candidate path
+            self.assertEqual(self.refresh(draft()), (dict(used=0, failed=0, created=0), []))  # no saved group: nothing goes out
+            self.seed_groups(BATCHES[:3], keys=keys)
+            self.assertEqual((self.refresh(draft())[0]['used'], self.item(ident)), (0, before))  # partial coverage: no derived call
+            with self.store._db() as c:
+                c.execute('DELETE FROM agent_pdf_material')
+            self.seed_groups(keys=keys); evidence = self.material(keys)
+            self.assertEqual((evidence['original'], evidence['mime'], evidence['conversion']), ('docx', DOCX_MIME, pdfm.CONVERSION))
+            self.assertEqual(self.refresh(draft(), budget=0), (dict(used=0, failed=0, created=0), []))
+            result, calls = self.refresh(draft())
+            self.assertEqual((result['used'], result['failed'], result['created'], len(calls)), (1, 0, 0, 1))
+            system, user = calls[0][0]['content'], json.loads(calls[0][1]['content'])
+            self.assertIn(agent.SCHOOL_PDF_PROMPT, system); self.assertIn('可能与Word中显示的分页不同', system); self.assertIn('不是老师原文', system)
+            doc = user['pdf_material'][0]
+            self.assertEqual((doc['original'], doc['mime'], doc['conversion'], doc['name'], doc['page_count'], doc['processed_pages'], doc['complete'],
+                              [g['pages'] for g in doc['groups']], doc['omitted_groups'], doc['truncated_groups']),
+                             ('docx', DOCX_MIME, pdfm.CONVERSION, '虚构练习卷.docx', 11, list(range(1, 12)), True, BATCHES, [], []))
+            brief = self.brief(ident); record = brief['pdf_evidence']['documents'][0]; row = self.item(ident)
+            self.assertEqual((row['state'], row['task_id'] or '', self.count('manual_tasks'), brief['state']), ('pending', '', 0, 'ready'))
+            self.assertEqual((record['original'], record['mime'], record['conversion'], record['name'], record['sent'], record['groups'], record['page_count']),
+                             ('docx', DOCX_MIME, pdfm.CONVERSION, '虚构练习卷.docx', 4, 4, 11))
+            for text in ('已参考Word原件整理', '可能与Word中显示的分页不同', '虚构练习卷.docx（转换后共11页已逐组整理，送核4/4组）', '不是老师原文', '不说明孩子完成情况'):
+                self.assertIn(text, brief['reason'])
+            self.assertNotIn('PDF原件', brief['reason'])
+            with self.assertRaises(agent.AgentError) as auto:
+                self.store.act(dict(id=ident, action='accept', expected_updated=row['updated']), school_auto=True)
+            self.assertEqual(auto.exception.status, 409); self.assertIn('依据Word原件整理的草稿须家长核对后加入', str(auto.exception))
+            saved = self.item(ident)
+            self.assertEqual((self.refresh(draft(), minutes=1), self.item(ident)), ((dict(used=0, failed=0, created=0), []), saved))  # same evidence: no call
+
+            def detach(messages):
+                self.link(keys, docx, action=DETACH); return draft()
+            self.assertEqual((self.refresh(detach, minutes=2)[0]['used'], self.item(ident)), (1, saved))  # detached in flight: result discarded
+            self.link(keys, docx)
+            self.assertEqual(self.refresh(draft(), minutes=3)[0]['used'], 1); self.assertTrue(self.brief(ident)['pdf_evidence']['fingerprint'])
+            accepted = self.store.act(dict(id=ident, action='accept'))  # the parent explicitly adds it through the ordinary path
+            self.assertEqual((accepted['state'], self.count('manual_tasks')), ('accepted', 1))
+            with self.app.connect() as c:
+                task = dict(c.execute('SELECT * FROM manual_tasks WHERE id=?', (accepted['task_id'],)).fetchone())
+            self.assertEqual((task['child'], task['title'], self.item(ident)['state'], self.item(ident)['task_id']), ('child-1', draft()['title'], 'accepted', accepted['task_id']))
+            again = self.store.act(dict(id=ident, action='accept'))
+            self.assertEqual((again['state'], again['task_id'], self.count('manual_tasks')), ('accepted', accepted['task_id'], 1))
+            self.assertEqual(self.refresh(draft(), minutes=4)[1], [])
+
+    def test_word_original_change_confirmation_rechecks_and_names_word_when_stale(self):
+        other = self.school_fragment('语文：完成虚构习作一篇。')
+        target_item = self.candidate(keys=other, ident='target', brief=dict(draft(), policy=agent.SCHOOL_TASK_POLICY), title='语文：完成虚构习作一篇')
+        accepted = self.store.act(dict(id=target_item, action='accept'))
+        with self.app.connect() as c:
+            target = next(t for t in self.app.tasks(c) if t['id'] == accepted['task_id'])
+            original = dict(c.execute('SELECT * FROM manual_tasks WHERE id=?', (target['id'],)).fetchone())
+        keys = self.school_fragment('语文：习作要求见所附Word。'); docx = self.seed_docx('e' * 32); self.link(keys, docx)
+        self.seed_groups(keys=keys); ident = self.candidate(keys=keys, ident='docx-2')
+        update = draft(change='update', target_id=target['id'], state='review', reason='原件更正范围。')
+        with no_convert(), no_pages():
+            result, calls = self.refresh(update); brief = self.brief(ident)
+            self.assertEqual((result['used'], len(calls), brief['change'], brief['target_id'], brief['pdf_evidence']['documents'][0]['original'], self.count('manual_tasks')),
+                             (1, 1, 'update', target['id'], 'docx', 1))
+            self.assertIn('已参考Word原件整理', brief['reason'])
+            obj = dict(action='school_change', id=ident, target_id=target['id'], change='update', title='更正要求', body='新要求', due='',
+                       expected_updated=self.item(ident)['updated'], target_version=target['focus']['version'], target_updated='')
+            (self.data / 'uploads' / docx).write_bytes(layout_docx('题目见上图'))  # same size, other bytes: another Word original
+            with self.assertRaises(agent.AgentError) as stale: agent.apply_school_change(self.app, self.store, obj)
+            self.assertEqual((stale.exception.status, stale.exception.code, self.item(ident)['state']), (409, 'pdf_evidence_stale', 'pending'))
+            self.assertIn('Word原件整理已失效', str(stale.exception))
+            with self.assertRaises(agent.AgentError) as stale: self.store.act(dict(id=ident, action='accept', school_new=True))
+            self.assertEqual((stale.exception.status, stale.exception.code, self.count('manual_tasks')), (409, 'pdf_evidence_stale', 1))
+            result, calls = self.refresh(update, minutes=1); brief = self.brief(ident)
+            self.assertEqual((result['used'], calls, brief['state'], brief['reason'], brief['pdf_evidence']['fingerprint']),
+                             (0, [], 'review', agent._ORIGINAL_STALE.format('Word'), ''))
+            self.assertNotEqual(brief['reason'], agent._PDF_STALE)
+            with self.app.connect() as c:
+                self.assertEqual(dict(c.execute('SELECT * FROM manual_tasks WHERE id=?', (target['id'],)).fetchone()), original)
+            (self.data / 'uploads' / docx).write_bytes(DOCX_LAYOUT)  # the original back: one round from the saved groups, no conversion
+            self.assertEqual(self.refresh(update, minutes=2)[0]['used'], 1)
+            outcome = agent.apply_school_change(self.app, self.store, dict(obj, expected_updated=self.item(ident)['updated']))
+            self.assertEqual((outcome['school_changed'], outcome['task_id'], self.item(ident)['state'], self.count('manual_tasks')), (True, target['id'], 'accepted', 1))
+            with self.app.connect() as c:
+                changed = dict(c.execute('SELECT * FROM manual_tasks WHERE id=?', (target['id'],)).fetchone())
+            self.assertNotEqual(changed, original); self.assertIn('语文：习作要求见所附Word。', changed['source'])
