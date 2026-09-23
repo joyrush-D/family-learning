@@ -41,13 +41,16 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                           (source['id'], message['id'], fp, pages[0], json.dumps(pages), 11, payload, self.now.isoformat()))
         return fp
 
-    def candidate(self, keys=None, ident='pdf-1', brief=None, title='待核对：' + TEXT):
+    def candidate(self, keys=None, ident='pdf-1', brief=None, title=None):
         keys = keys or self.keys
+        with self.store._db() as c:  # quotes its own fragment's recognized text (still a screenshot), never another notice's
+            text = json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?', (keys['source_id'], keys['message_id'])).fetchone()[0])['text']
+        title = title or '待核对：' + text.splitlines()[-1]
         if brief is None:
             brief = dict(title='', goal='', advice='', state='review', reason='仅截图可见内容，请核对原图和附件。',
                          policy=agent.SCHOOL_TASK_POLICY, change='new', target_id='')
         item = dict(child_id='child-1', kind='school', title=title, body='学校', due='',
-                    evidence=[dict(ref='message:%s:%s' % (keys['source_id'], keys['message_id']), text=TEXT)],
+                    evidence=[dict(ref='message:%s:%s' % (keys['source_id'], keys['message_id']), text=text)],
                     plan=dict(school_task=brief, school_messages=[dict(source_id=keys['source_id'], message_id=keys['message_id'])]))
         key = 'synthetic-pdf:' + ident; self.store._save(key, self.store._job(key, ident, self.now), [item], self.now)
         with self.store._db() as c:
