@@ -71,6 +71,8 @@ EXPLANATIONS = {
     'asr_unconfigured': '尚未配置语音转写；原视频和手动记录仍可保存。',
     'asr_config_changed': '语音转写配置在本次处理期间发生变化，本次文字已丢弃；请重试。',
     'asr_failed': '语音服务未能完成转写；原视频未改动，可稍后重试或手动记录。',
+    'asr_empty': '语音服务未返回可用文字；原视频未改动，可稍后重试或手动记录。',
+    'transcript_too_long': '转写文字超过记录转写上限4000字，本次文字未返回、未截断、未保存；请缩短或分段录制后再转写，或由家长手动记录，原视频保留。',
 }
 REVIEW_LABEL = '家长已核对的视频观察'
 REVIEW_NOTE = '家长选定了这些画面观察作为自己核对过的内容；未评估声音，不代表完成或掌握，不会自动改动任务、学习记录或计划。'
@@ -83,7 +85,6 @@ TRANSCRIPT_LIMIT = 4000  # app.save_record keeps a record's transcript to 4000 c
 ASR_ENV = ('FAMILY_ASR_URL', 'FAMILY_ASR_MODEL', 'FAMILY_ASR_API_KEY')  # exactly what family_llm.transcribe_audio reads.
 TRANSCRIPTION_NOTE = ('机器转写待家长核对：未分辨说话人，未评估声音或发音，不代表孩子的答案、完成或掌握；尚未保存到任何记录。'
                       '文件在合法包边界结束，不能证明未提供原录像的尾部。')
-TRANSCRIPT_TOO_LONG = '转写文字超过记录转写上限4000字，需家长缩短或分段后人工处理；原视频保留，文字未截断。'
 
 
 class VideoDraftError(ValueError):
@@ -686,17 +687,22 @@ def transcribe(app, store, body):
 
     Not a background job and not reached from prepare: only an explicit request calls this. No row, file, job, record,
     transcript, result, task or plan is written; the text is returned once for the parent to read and, in a later step,
-    shorten and save through the existing record flow. Sequence: the request is validated; on one short connection the
-    switch, child, one task, record revision, link, original bytes and expected version are checked; that connection is
-    left before the bounded local decode (audio_track) runs; the same checks repeat on a fresh connection before the one
-    ASR request; the ASR configuration digest must be unchanged before and after it; and the checks repeat once more
-    before the text leaves. So a correction, relink, withdrawn switch or replaced original during extraction refuses
-    before any byte reaches the service, and one during the request discards the text (409). No database connection or
-    lock is held while ffprobe, ffmpeg or the network run. At most one ASR request per call and no retry here; the
-    pure-audio upload contract of family_llm.transcribe_audio is used unchanged, and no endpoint or key is returned.
-    The text is a machine transcription: speakers are not told apart, no sound or pronunciation is assessed and it is not
-    the child's answer, completion or mastery. Text over the record limit is returned whole and flagged for the parent to
-    shorten or split by hand, never cut. Every failure names a fixed reason without the underlying exception."""
+    save through the existing record flow. `store` is the read-only store, app.agent_store(read_only=True), that is
+    Store(initialize=False) over app.connect_read_only, exactly as view is served over HTTP and as the later HTTP entry
+    for this function must be: the initialized store's connect runs the schema statements on every connection, which a
+    zero-write SQL trace of this call would show as writes. Sequence: the request is validated; on one short connection
+    the switch, child, one task, record revision, link, original bytes and expected version are checked; that connection
+    is left before the bounded local decode (audio_track) runs; the same checks repeat on a fresh connection before the
+    one ASR request; the ASR configuration digest (URL, model, key) must be unchanged before and after it; and the checks
+    repeat once more before the text leaves. So a correction, relink, withdrawn switch or replaced original during
+    extraction refuses before any byte reaches the service, and one during the request discards the text (409). No
+    database connection or lock is held while ffprobe, ffmpeg or the network run. At most one ASR request per call and
+    no retry here; the pure-audio upload contract of family_llm.transcribe_audio is used unchanged, and no endpoint or
+    key is returned. Every failure names a fixed reason of this module: the adapter's own exception text, which may name
+    the endpoint or quote the reply, is never passed on, and a non-text or empty reply is a failure, not a crash. The
+    text is a machine transcription: speakers are not told apart, no sound or pronunciation is assessed and it is not
+    the child's answer, completion or mastery. Text over the record limit is refused (422 transcript_too_long) without
+    the text: it is neither cut, returned in part nor saved; the parent shortens the recording or records by hand."""
     request = _transcribe_request(body)
     if not os.environ.get('FAMILY_ASR_URL', '').strip():
         raise _refusal('asr_unconfigured', 503)
@@ -715,21 +721,23 @@ def transcribe(app, store, body):
         raise _refusal('asr_config_changed', 409)
     try:  # Exactly one request to the configured endpoint, the pure-audio contract unchanged, and no retry here.
         text = family_llm.transcribe_audio(track['wav'], 'audio/wav')
-    except family_llm.LLMUnavailable as error:
-        raise AgentError(str(error), 503, 'asr_unconfigured') from None
-    except family_llm.LLMDraftError as error:  # Its text is the service adapter's user-facing reason, never credentials or the reply.
-        raise AgentError(str(error), 502, 'asr_failed') from None
+    except family_llm.LLMUnavailable:  # Fixed reasons only: the adapter's text may name the endpoint or quote the reply.
+        raise _refusal('asr_unconfigured', 503) from None
     except Exception:
         raise _refusal('asr_failed', 502) from None
     if _asr_digest() != config:
         raise _refusal('asr_config_changed', 409)
+    if not isinstance(text, str):  # The adapter promises text; anything else is a failure, never a TypeError or a guess.
+        raise _refusal('asr_failed', 502)
+    if not text.strip():
+        raise _refusal('asr_empty', 502)
+    if len(text) > TRANSCRIPT_LIMIT:  # Neither cut nor returned in part; the parent shortens the recording or records by hand.
+        raise _refusal('transcript_too_long', 422)
     with store._db() as c:  # A change during the request drops the text; nothing of it is kept.
         current = _transcribable(app, store, c, request)
-    long = len(text) > TRANSCRIPT_LIMIT
     return dict(record_id=request['record_id'], upload_id=request['upload_id'], task_id=current['task_id'],
                 transcription_fingerprint=request['expected_fingerprint'], audience='parent', state='pending_review',
-                saved=False, text=text, characters=len(text), record_limit=TRANSCRIPT_LIMIT, fits_record=not long,
+                saved=False, text=text, characters=len(text), record_limit=TRANSCRIPT_LIMIT,
                 audio=dict(mime=track['mime'], audio_start_seconds=track['audio_start_seconds'], pcm_seconds=track['pcm_seconds'],
                            provided_seconds=track['video_seconds'], tail_verified=False),
-                speakers_distinguished=False, audio_assessed=False, note=TRANSCRIPTION_NOTE,
-                explanation=TRANSCRIPT_TOO_LONG if long else '')
+                speakers_distinguished=False, audio_assessed=False, note=TRANSCRIPTION_NOTE)

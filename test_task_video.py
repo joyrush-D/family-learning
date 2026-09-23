@@ -820,6 +820,7 @@ class VideoTranscribeTests(TaskVideoTests):
         mock.patch.object(family_llm,'transcribe_audio',side_effect=self.recognize).start()
         mock.patch.dict(os.environ,{'FAMILY_ASR_URL':self.URL,'FAMILY_ASR_MODEL':'synthetic','FAMILY_ASR_API_KEY':self.KEY}).start()
         self.popen=mock.patch.object(tv.subprocess,'Popen').start();self.addCleanup(mock.patch.stopall)
+        self.reader=self.app.agent_store(read_only=True);self.expected=None  # the store the HTTP entries use: initialize=False over the read-only connection
 
     def extract(self,body,mime,timeout=tv.AUDIO_TIMEOUT):
         self.extracted.append((body,mime,timeout))
@@ -840,11 +841,12 @@ class VideoTranscribeTests(TaskVideoTests):
         counts=(len(self.extracted),len(self.asr));video=self.view(ident)['videos'][0];self.assertEqual((len(self.extracted),len(self.asr)),counts)
         return dict(record_id=ident,upload_id=video['upload_id'],expected_fingerprint=video['transcription_fingerprint'])|obj
 
-    def transcribe(self,body):
-        """Every call also proves that it writes no row or file, launches no tool itself and calls no vision model."""
-        before=self.snapshot()
-        try:return tv.transcribe(self.app,self.agent,body)
-        finally:self.assertEqual(self.snapshot(),before)
+    def transcribe(self,body,store=None):
+        """Every call also proves that it writes no row or file, launches no tool itself and calls no vision model. A change injected
+        while the call is in flight sets self.expected to the data as the injection left it, so the call's own silence is still checked."""
+        before=self.snapshot();self.expected=None
+        try:return tv.transcribe(self.app,store or self.reader,body)
+        finally:self.assertEqual(self.snapshot(),before if self.expected is None else self.expected)
 
     def refused(self,body,status,code=None,extractions=0,calls=0):
         counts=(len(self.extracted),len(self.asr))
@@ -859,8 +861,9 @@ class VideoTranscribeTests(TaskVideoTests):
         self.assertEqual((video['state'],len(video['transcription_fingerprint'])),('pending',64))  # no picture draft is needed
         result=self.transcribe(self.body(ident))
         self.assertEqual((self.extracted,self.asr),([(original,'video/mp4',tv.AUDIO_TIMEOUT)],[(b'RIFF-synthetic-wav:'+original,'audio/wav')]))
-        self.assertEqual([result[k] for k in ('record_id','upload_id','task_id','transcription_fingerprint','state','saved','text','characters','fits_record','record_limit','speakers_distinguished','audio_assessed','explanation','audience')],
-                         [ident,video['upload_id'],self.TASK,video['transcription_fingerprint'],'pending_review',False,self.TEXT,len(self.TEXT),True,4000,False,False,'','parent'])
+        self.assertEqual([result[k] for k in ('record_id','upload_id','task_id','transcription_fingerprint','state','saved','text','characters','record_limit','speakers_distinguished','audio_assessed','audience')],
+                         [ident,video['upload_id'],self.TASK,video['transcription_fingerprint'],'pending_review',False,self.TEXT,len(self.TEXT),4000,False,False,'parent'])
+        self.assertNotIn('fits_record',result)
         self.assertEqual(result['audio'],dict(mime='audio/wav',audio_start_seconds=-0.02,pcm_seconds=12.48,provided_seconds=12.5,tail_verified=False))
         self.assertEqual(result['note'],tv.TRANSCRIPTION_NOTE);self.assertIn('待家长核对',result['note'])
         dumped=json.dumps(result,ensure_ascii=False)
@@ -868,21 +871,31 @@ class VideoTranscribeTests(TaskVideoTests):
         with self.app.connect() as c:self.assertEqual(tuple(c.execute('SELECT transcript,transcript_state FROM records WHERE id=?',(ident,)).fetchone()),('',''))
         self.assertEqual((self.state(ident),self.rows('record_video_drafts'),self.rows('agent_jobs')),(['pending'],0,0))
         self.transcribe(self.body(ident));self.assertEqual((len(self.extracted),len(self.asr)),(2,2))  # each explicit request is one call: no cache, no retry
-        self.asr_text='虚'*4001;result=self.transcribe(self.body(ident))
-        self.assertEqual((result['text'],result['characters'],result['fits_record'],result['explanation']),('虚'*4001,4001,False,tv.TRANSCRIPT_TOO_LONG))
+        self.asr_text='虚'*4000;self.assertEqual((self.transcribe(self.body(ident))['text'],len(self.asr)),('虚'*4000,3))  # exactly the record limit returns whole
+        self.asr_text='虚'*4001;error=self.refused(self.body(ident),422,'transcript_too_long',extractions=1,calls=1)  # one over: refused, not cut
+        self.assertEqual(str(error),tv.EXPLANATIONS['transcript_too_long']);self.assertNotIn('虚',str(error))
+        with self.app.connect() as c:self.assertEqual(tuple(c.execute('SELECT transcript,transcript_state FROM records WHERE id=?',(ident,)).fetchone()),('',''))
         self.assertEqual((self.tick(),self.tick()),(SENT,SENT));self.assertEqual(self.state(ident),['ready'])  # the picture draft path is unchanged
-        self.assertEqual((len(self.extracted),len(self.asr),self.rows('record_video_drafts')),(3,3,2))
-        self.assertEqual(self.transcribe(self.body(ident))['text'],'虚'*4001)  # a ready draft changes nothing for the request
+        self.assertEqual((len(self.extracted),len(self.asr),self.rows('record_video_drafts')),(4,4,2))
+        self.refused(self.body(ident),422,'transcript_too_long',extractions=1,calls=1)  # a ready draft changes nothing for the request
+        self.asr_text=self.TEXT;self.assertEqual(self.transcribe(self.body(ident))['text'],self.TEXT)
         self.assertNotIn('transcribe',tv.prepare.__code__.co_names)
 
     def test_a_successful_request_and_the_read_run_no_writing_sql_and_the_fingerprint_follows_the_version(self):
-        ident=self.linked(self.TASK);body=self.body(ident);statements=[];connect=sqlite3.connect;before=self.snapshot()
-        def traced(*args,**kwargs):
-            c=connect(*args,**kwargs);c.set_trace_callback(statements.append);return c
-        with mock.patch.object(sqlite3,'connect',traced):result=tv.transcribe(self.app,self.agent,body);read=tv.view(self.app,self.agent,ident)
-        self.assertEqual(self.snapshot(),before);self.assertTrue(statements)
-        self.assertEqual([s for s in statements if s.split()[0].upper() in ('INSERT','UPDATE','DELETE','CREATE','DROP','ALTER','REPLACE')],[])
+        """Traced at sqlite3.connect itself, so every statement of a connection's own setup is seen too: the ordinary initialized
+        store's connect runs its schema statements on each connection, and only the read-only factory the HTTP entries use is zero-write."""
+        ident=self.linked(self.TASK);body=self.body(ident);connect=sqlite3.connect;before=self.snapshot()
+        def traced(store):
+            statements=[]
+            def opened(*args,**kwargs):
+                c=connect(*args,**kwargs);c.set_trace_callback(statements.append);return c
+            with mock.patch.object(sqlite3,'connect',opened):result=tv.transcribe(self.app,store,body);read=tv.view(self.app,store,ident)
+            self.assertEqual(self.snapshot(),before);self.assertTrue(statements)
+            return result,read,[s for s in statements if s.split()[0].upper() in ('INSERT','UPDATE','DELETE','CREATE','DROP','ALTER','REPLACE')]
+        result,read,writes=traced(self.app.agent_store(read_only=True));self.assertEqual(writes,[])
         self.assertEqual((result['text'],read['videos'][0]['transcription_fingerprint'],len(self.asr)),(self.TEXT,body['expected_fingerprint'],1))
+        result,_,writes=traced(self.agent);self.assertEqual(result['text'],self.TEXT)  # the same trace on the initialized store sees its setup: the caller's contract, not a masked write
+        self.assertTrue(any(s.split()[0].upper()=='CREATE' for s in writes),writes[:3])
         self.correct(ident)();self.assertNotEqual(self.body(ident)['expected_fingerprint'],body['expected_fingerprint'])
         self.refused(body,409,'fingerprint_stale');self.assertEqual(self.transcribe(self.body(ident))['text'],self.TEXT)
         self.enable(False);video=self.view(ident)['videos'][0];self.assertEqual((video['state'],'transcription_fingerprint' in video),('unavailable',False))
@@ -910,33 +923,44 @@ class VideoTranscribeTests(TaskVideoTests):
         for code in ('audio_track_missing','audio_track_ambiguous','ffmpeg_missing','probe_missing','audio_timeout','audio_decode_failed','audio_too_large','duration_invalid','original_too_large','no_video_track'):
             with self.subTest(code=code),mock.patch.object(tv,'audio_track',side_effect=tv.VideoDraftError(code)):
                 self.assertEqual(str(self.refused(body,422,code)),tv.EXPLANATIONS[code])
-        for failure,status,code,shown in ((family_llm.LLMUnavailable('虚构：尚未配置语音转写'),503,'asr_unconfigured',True),(family_llm.LLMDraftError('虚构：语音服务连接失败'),502,'asr_failed',True),
-                                          (RuntimeError('secret '+self.URL+' '+self.KEY),502,'asr_failed',False),(ValueError('音频不能为空'),502,'asr_failed',False)):
-            with self.subTest(code=code):
-                self.asr_fails=failure;error=self.refused(body,status,code,extractions=1,calls=1)
-                self.assertEqual(str(error),str(failure) if shown else tv.EXPLANATIONS['asr_failed'])
-        self.asr_fails=None;self.assertEqual(self.transcribe(body)['text'],self.TEXT)  # nothing above changed the version
+        for failure,status,code in ((family_llm.LLMUnavailable('虚构：未配置 '+self.URL),503,'asr_unconfigured'),(family_llm.LLMDraftError('虚构：连接失败 '+self.URL+' key='+self.KEY),502,'asr_failed'),
+                                    (family_llm.LLMDraftError('虚构：服务回复 '+self.TEXT),502,'asr_failed'),(RuntimeError('secret '+self.URL+' '+self.KEY),502,'asr_failed'),
+                                    (ValueError('音频不能为空'),502,'asr_failed'),(TypeError('虚构：类型错误'),502,'asr_failed')):
+            with self.subTest(failure=type(failure).__name__):  # the adapter's own text, which may name the endpoint, key or reply, never leaves
+                self.asr_fails=failure;error=self.refused(body,status,code,extractions=1,calls=1);self.assertEqual(str(error),tv.EXPLANATIONS[code])
+        self.asr_fails=None
+        for returned,code in ((None,'asr_failed'),(b'virtual',"asr_failed"),(123,'asr_failed'),(['虚构'],'asr_failed'),({'text':'虚构'},'asr_failed'),('','asr_empty'),(' \n\t','asr_empty')):
+            with self.subTest(returned=repr(returned)):  # a non-text or empty reply is a fixed failure, never a TypeError or a returned blank
+                self.asr_text=returned;error=self.refused(body,502,code,extractions=1,calls=1);self.assertEqual(str(error),tv.EXPLANATIONS[code])
+        self.asr_text=self.TEXT;self.assertEqual(self.transcribe(body)['text'],self.TEXT)  # nothing above changed the version
 
     def test_a_correction_relink_withdrawal_replaced_original_or_changed_asr_configuration_at_each_stage_refuses_or_drops_the_text(self):
+        """Each change is injected while the call is in flight through the ordinary write paths, so the call holds no connection or lock
+        during extraction or the request; a witness proves the injection happened, and the call is compared against the data as it left it."""
         def replace(ident):
             path=self.data/'uploads'/self.uploads[ident];return lambda:path.write_bytes(path.read_bytes()[:-1]+b'!')  # same size, other bytes
         def shorten(ident):
             path=self.data/'uploads'/self.uploads[ident];return lambda:path.write_bytes(path.read_bytes()[:-1])
+        def witness():return (self.lines(),self.files(),(self.data/'agent.json').read_text(),[os.environ.get(n) for n in tv.ASR_ENV])
+        def injected(hook):
+            def run():
+                seen=witness();hook();self.assertNotEqual(witness(),seen,'the injected change really happened');self.expected=self.snapshot()
+            return run
+        def reset():self.enable(True);os.environ.update(FAMILY_ASR_URL=self.URL,FAMILY_ASR_MODEL='synthetic',FAMILY_ASR_API_KEY=self.KEY)
         codes={'correct':{'fingerprint_stale'},'relink':{'fingerprint_stale'},'revoke':{'agent_disabled'},'replace':{'fingerprint_stale'},
-               'shorten':{'original_changed','fingerprint_stale'},'asr_url':{'asr_config_changed'},'asr_key':{'asr_config_changed'}}
+               'shorten':{'original_changed','fingerprint_stale'},'asr_url':{'asr_config_changed'},'asr_model':{'asr_config_changed'},'asr_key':{'asr_config_changed'}}
         for stage in ('extract','asr'):
             for name,change in (('correct',self.correct),('relink',self.relink),('revoke',lambda ident:lambda:self.enable(False)),('replace',replace),('shorten',shorten),
                                 ('asr_url',lambda ident:lambda:os.environ.__setitem__('FAMILY_ASR_URL','http://127.0.0.1:9/other')),
+                                ('asr_model',lambda ident:lambda:os.environ.__setitem__('FAMILY_ASR_MODEL','other-model')),
                                 ('asr_key',lambda ident:lambda:os.environ.__setitem__('FAMILY_ASR_API_KEY','other-key'))):
                 with self.subTest(stage=stage,change=name):
-                    self.enable(True);os.environ['FAMILY_ASR_URL']=self.URL;os.environ['FAMILY_ASR_API_KEY']=self.KEY
-                    ident=self.linked(self.TASK);body=self.body(ident);hook=change(ident)
+                    reset();ident=self.linked(self.TASK);body=self.body(ident);hook=injected(change(ident));changes=len(self.changes)
                     self.during_extract,self.during_asr=(hook,None) if stage=='extract' else (None,hook)
                     try:error=self.refused(body,409,extractions=1,calls=int(stage=='asr'))
                     finally:self.during_extract=self.during_asr=None
-                    self.assertIn(error.code,codes[name]);self.assertEqual(self.changes[-1],stage)
-        self.enable(True);os.environ['FAMILY_ASR_URL']=self.URL;os.environ['FAMILY_ASR_API_KEY']=self.KEY
-        self.assertEqual(self.transcribe(self.body(ident))['text'],self.TEXT)  # a fresh version after the change works again
+                    self.assertIn(error.code,codes[name]);self.assertEqual(self.changes[changes:],[stage]);self.assertIsNotNone(self.expected,'the injection ran inside the call')
+        reset();self.assertEqual(self.transcribe(self.body(ident))['text'],self.TEXT)  # a fresh version after the change works again
 
 if __name__=='__main__':unittest.main()
 
