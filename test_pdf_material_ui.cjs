@@ -1,5 +1,5 @@
-// Synthetic browser + real local API checks for the PDF page-group panel in the school original dialog; no real family, CLI or model calls.
-// The backend fixture links real synthetic 11-page PDFs and runs family_pdf_material.prepare with a stand-in model (and poppler stand-in when absent).
+// Synthetic browser + real local API checks for the PDF/Word page-group panel in the school original dialog; no real family, CLI or model calls.
+// The backend fixture links real synthetic 11-page PDFs and picture-bearing synthetic DOCX files, then runs family_pdf_material.prepare with stand-ins for the model, the Word conversion (returns the synthetic PDF) and poppler when absent.
 const assert=require('node:assert/strict'),{spawn}=require('node:child_process'),{once}=require('node:events'),net=require('node:net'),{setTimeout:delay}=require('node:timers/promises');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 async function until(check,label){for(let i=0;i<200;i++){if(await check())return;await delay(50)}throw Error(label)}
@@ -16,7 +16,7 @@ from unittest.mock import patch
 with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
  os.environ['FAMILY_DATA']=tmp
  os.environ['FAMILY_HOST']='family.test';os.environ['FAMILY_USER']='synthetic-parent'
- import app,family_agent,family_llm,family_pdf,family_pdf_material,family_qq_capture,test_pdf
+ import app,family_agent,family_llm,family_media,family_pdf,family_pdf_material,family_qq_capture,test_media,test_pdf
  app.DATA=Path(tmp).resolve();app.DB=app.DATA/'family.sqlite3'
  docs={'家庭运行规则.md':'| child-1 | 示例星星 | — | 9岁 | 三年级 |\n| child-2 | 示例小宇 | — | 12岁 | 六年级 |\n'}
  app.read=lambda name:docs.get(name,'')
@@ -28,6 +28,8 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
  png=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',96,64,8,6,0,0,0))+chunk(b'IDAT',zlib.compress(pixels))+chunk(b'IEND',b'')
  app.save_upload(io.BytesIO(png),len(png),'synthetic-existing.png')
  PDF=test_pdf.build_pdf(11);(app.DATA/'uploads').mkdir(exist_ok=True)
+ DOCX_LAYOUT=test_media.docx(test_media.para('虚构练习卷，题目见下图')+'<w:p><w:r><w:drawing/></w:r></w:p>');DOCX_PLAIN=test_media.docx(test_media.para('虚构纯文字通知：完成练习卷。'))
+ app.save_upload(io.BytesIO(DOCX_LAYOUT),len(DOCX_LAYOUT),'synthetic-extra.docx');app.save_upload(io.BytesIO(DOCX_PLAIN),len(DOCX_PLAIN),'synthetic-plain.docx')
  def renderer():
   if test_pdf.TOOLS_AVAILABLE: return contextlib.nullcontext()
   stack=contextlib.ExitStack();stack.enter_context(patch.object(family_pdf.shutil,'which',lambda name:'/synthetic/'+name));stack.enter_context(patch.object(family_pdf,'_run',test_pdf.fake_run_factory(page_count=11)));return stack
@@ -38,16 +40,17 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
  def rounds(n,fail=False):
   for _ in range(n):
    step[0]+=1
-   with renderer(),patch.object(family_llm,'extract_draft',**({'side_effect':family_llm.LLMDraftError('合成模型超时')} if fail else {'side_effect':model})):
+   with renderer(),patch.object(family_media,'docx_pdf',side_effect=lambda body,**kw:PDF),patch.object(family_llm,'extract_draft',**({'side_effect':family_llm.LLMDraftError('合成模型超时')} if fail else {'side_effect':model})):
     assert family_pdf_material.prepare(store,now+datetime.timedelta(minutes=step[0]))==dict(used=1,failed=int(fail)),'pdf round'
  for width in (360,1440):
-  for kind,done,failed in (('ready',4,False),('error',1,True),('unknown',0,False)):
-   text='截图本机文字识别（可能有误，请对照原图）：\n虚构学校PDF资料 '+kind+' '+str(width)+'：附练习卷。'
+  for kind,done,failed in (('ready',4,False),('error',1,True),('unknown',0,False),('docx-ready',4,False),('docx-error',1,True),('docx-unknown',0,False)):
+   docx=kind.startswith('docx');label='Word' if docx else 'PDF';body=DOCX_LAYOUT if docx else PDF;mime=family_media.DOCX_MIME if docx else 'application/pdf'
+   text='截图本机文字识别（可能有误，请对照原图）：\n虚构学校'+label+'资料 '+kind+' '+str(width)+'：附练习卷。'
    reply=family_qq_capture.save_fragment(store,dict(source_id='qq:123456',child_id='child-1',captured_at=now.isoformat(),text=text,png=base64.b64encode(png).decode()))
    ident=reply['message_id'];ref='message:qq:123456:'+ident
-   store._save('pdf:'+kind+':'+str(width),'fixture',[dict(child_id='child-1',kind='school',title='虚构PDF资料 '+kind+' '+str(width),body='核对原要求',evidence=[dict(ref=ref,text=text)])],now)
-   upload_id=hashlib.md5((kind+str(width)).encode()).hexdigest();(app.DATA/'uploads'/upload_id).write_bytes(PDF)
-   with store._db() as c: c.execute('INSERT INTO uploads(id,name,size,mime,created) VALUES(?,?,?,?,?)',(upload_id,'虚构练习卷-'+kind+'-'+str(width)+'.pdf',len(PDF),'application/pdf',now.isoformat()))
+   store._save('pdf:'+kind+':'+str(width),'fixture',[dict(child_id='child-1',kind='school',title='虚构'+label+'资料 '+kind+' '+str(width),body='核对原要求',evidence=[dict(ref=ref,text=text)])],now)
+   upload_id=hashlib.md5((kind+str(width)).encode()).hexdigest();(app.DATA/'uploads'/upload_id).write_bytes(body)
+   with store._db() as c: c.execute('INSERT INTO uploads(id,name,size,mime,created) VALUES(?,?,?,?,?)',(upload_id,'虚构练习卷-'+kind+'-'+str(width)+('.docx' if docx else '.pdf'),len(body),mime,now.isoformat()))
    store.message_attachment(dict(child_id='child-1',source_id='qq:123456',message_id=ident,attachment_id=upload_id,action='attach'),dict)
    rounds(done)
    if failed: rounds(1,True)
@@ -70,7 +73,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   const page=await browser.newPage({viewport:{width,height:820},extraHTTPHeaders:{'Tailscale-User-Login':'synthetic-parent'}}),pageErrors=[],alerts=[];page.on('pageerror',e=>pageErrors.push(e.message));page.on('dialog',async d=>{alerts.push(d.message());await d.dismiss()});
   await page.goto(origin);await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();
   const before=await state(),facts=s=>JSON.stringify([s.tasks,s.records,s.agent.items.map(x=>[x.id,x.state])]),factsBefore=facts(before);
-  const item=kind=>before.agent.items.find(x=>x.title==='虚构PDF资料 '+kind+' '+width),ref=kind=>item(kind).evidence[0].ref,identity=kind=>({child_id:'child-1',source_id:'qq:123456',message_id:ref(kind).slice('message:qq:123456:'.length)});
+  const item=kind=>before.agent.items.find(x=>x.title==='虚构'+(kind.startsWith('docx')?'Word':'PDF')+'资料 '+kind+' '+width),ref=kind=>item(kind).evidence[0].ref,identity=kind=>({child_id:'child-1',source_id:'qq:123456',message_id:ref(kind).slice('message:qq:123456:'.length)});
   const existing=before.uploads.find(x=>x.name==='synthetic-existing.png');
   const dialog=page.locator('#schoolOriginalDialog'),panel=dialog.locator('[data-school-pdf-material]'),batches=dialog.locator('[data-school-pdf-batch]'),refresh=dialog.locator('[data-school-pdf-refresh]'),retry=dialog.locator('[data-school-pdf-retry]');
   const open=async ref=>{await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();await page.locator('[data-agent-item] [data-school-original-ref="'+ref+'"]').first().click();await dialog.locator('[data-school-original-files]').waitFor()};
@@ -145,8 +148,47 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   await dialog.locator('[data-school-original-detach="'+readyUpload+'"]').click();await until(async()=>await panel.count()===0,'detached PDF removes the panel');
   assert.equal((await readView(identity('ready'))).pdf_material,null);assert.deepEqual(await detachIDs(),[readyLinks.screenshot],'the fragment screenshot stays linked after the PDF is detached');assert.deepEqual((await readView(identity('ready'))).attachments.map(a=>a.id),[readyLinks.screenshot]);assert.doesNotMatch(await dialog.innerText(),/还没有关联原件/,'one original remains, so the empty note is not shown');
   await dialog.locator('[name="attachment_id"]').selectOption(readyUpload);await dialog.locator('[data-school-original-attach]').click();await until(async()=>await batches.count()===4,'re-linked PDF continues from saved groups');assert.deepEqual(await detachIDs(),readyLinks.ids,'both originals are linked again');await close();
+  // 5. Word originals (backend original='docx'): the panel names Word, lists the converted copy's page numbers with a hint, keeps the fragment screenshot and the Word download, and never claims a native PDF. Nothing converts, renders or calls a model from the browser.
+  await open(ref('docx-unknown'));await panel.waitFor();text=await panel.innerText();
+  assert.equal(await panel.getAttribute('data-school-pdf-original'),'docx');assert.match(text,/Word逐页整理/);assert.doesNotMatch(text,/PDF逐页整理|PDF原件|全部 \d+ 页已整理|未读页/);assert.match(text,/虚构练习卷-docx-unknown-\d+\.docx/);assert.match(text,/总页数尚未核对/);assert.match(text,/页码可能与Word里显示的分页不同/);
+  assert.equal(await batches.count(),0);assert.equal(await retry.count(),0);assert.equal(await dialog.locator('[data-school-material-record],[data-school-material-draft],[data-school-material-status]').count(),0,'no old draft or learning-record entry beside a Word page path');
+  const docxUnknown=await linked('docx-unknown');assert.equal(typeof docxUnknown.pdf,'string');assert.equal(typeof docxUnknown.screenshot,'string','the fragment screenshot stays linked beside the Word original');assert.deepEqual(await detachIDs(),docxUnknown.ids);
+  assert.equal(await dialog.locator('[data-school-original-files] a[href*="'+docxUnknown.pdf+'"]').count(),1,'the original Word file keeps its download link');
+  await fits(page);await proof(page,'school-docx-unknown-'+width);await close();
+  // Word with pages 1-3 saved and a failed later round: converted page numbers are explicit, drafts are escaped, retry only queues the existing job and every refresh is a GET.
+  await open(ref('docx-error'));await panel.waitFor();text=await panel.innerText();
+  assert.equal(await panel.getAttribute('data-school-pdf-state'),'error');assert.equal(await panel.getAttribute('data-school-pdf-original'),'docx');assert.match(text,/Word逐页整理/);assert.match(text,/虚构练习卷-docx-error-\d+\.docx/);assert.match(text,/已整理 3 \/ 11 页/);assert.match(text,/未读页：4、5、6、7、8、9、10、11（共 8 页）/);assert.match(text,/Word原件转换或页组整理暂未成功/);assert.match(text,/页码可能与Word里显示的分页不同/);assert.doesNotMatch(text,/PDF逐页整理/);
+  assert.equal(await batches.count(),1);assert.match(await batches.first().innerText(),/第 1、2、3 页[\s\S]*虚构页组 1-2-3[\s\S]*未见孩子作答。<img src=x onerror=alert\(1\)>[\s\S]*待核对：发送日期未知 <b>/);assert.equal(await panel.locator('img,b').count(),0,'Word drafts are escaped');
+  assert.equal(await dialog.locator('[data-school-material-record],[data-school-material-draft],[data-school-material-status]').count(),0);await fits(page);await proof(page,'school-docx-error-'+width);
+  const docxActions=[];await page.route('**/api/agent/action',async route=>{docxActions.push(route.request().postDataJSON());if(docxActions.length===1)return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'虚构Word重试暂时失败'})});await delay(300);await route.continue()});
+  await retry.click();await until(async()=>/虚构Word重试暂时失败/.test(await panel.innerText()),'failed Word retry reported');assert.equal(await batches.count(),1);assert.equal(await retry.isEnabled(),true);
+  await retry.dispatchEvent('click');await retry.dispatchEvent('click');await until(async()=>/已安排后台重试/.test(await panel.innerText()),'Word retry queued');assert.equal(docxActions.length,2,'double click queues one Word retry');
+  assert.deepEqual(docxActions[1],{action:'retry',id:(await readView(identity('docx-error'))).pdf_material.job_id});
+  await refresh.click();await until(async()=>/独立Agent将把该Word原件/.test(await panel.innerText()),'refresh reads the queued Word state');
+  assert.equal(await panel.getAttribute('data-school-pdf-state'),'pending');assert.equal(await retry.count(),0);assert.equal(await batches.count(),1);assert.match(await panel.innerText(),/已整理 3 \/ 11 页/);
+  const docxView=(await readView(identity('docx-error'))).pdf_material;assert.equal(docxView.original,'docx');assert.equal(docxView.processed_pages.join(','),'1,2,3','queueing a Word retry converts or processes nothing');
+  await page.route(isMessage,dropped);await refresh.click();await until(async()=>/已显示的进度和填写内容保留/.test(await panel.innerText()),'Word network failure reported');assert.equal(await batches.count(),1);assert.match(await panel.innerText(),/Word逐页整理[\s\S]*已整理 3 \/ 11 页/);await page.unroute(isMessage,dropped);
+  await page.route(isMessage,denied);await refresh.click();await until(async()=>/请先重新登录/.test(await panel.innerText()),'Word 401 reported');assert.equal(await batches.count(),1,'401 keeps the shown Word progress');await page.unroute(isMessage,denied);await login();
+  await refresh.click();await until(async()=>/已读取最新进度/.test(await panel.innerText()),'Word refresh recovers');assert.equal(await batches.count(),1);assert.equal(docxActions.length,2,'refreshes, the failed read and the login recovery sent no action');await page.unroute('**/api/agent/action');
+  // Closing and opening another notice carries no receipt from this one; reopening starts clean as well.
+  await close();await open(ref('docx-unknown'));await panel.waitFor();assert.doesNotMatch(await panel.innerText(),/已读取最新进度|已安排后台重试|虚构Word重试暂时失败/,'the Word unknown notice carries no receipt from the error notice');assert.equal(await batches.count(),0);
+  await close();await open(ref('docx-error'));await panel.waitFor();assert.doesNotMatch(await panel.innerText(),/已读取最新进度|已安排后台重试/,'reopened Word notice carries no old receipt');assert.equal(await batches.count(),1);await close();
+  // Complete Word: four groups by converted page numbers, still there after reload. A second Word file makes the backend refuse the set without naming a kind: the panel names neither PDF nor Word, both files stay listed, removing the extra one restores the groups.
+  await open(ref('docx-ready'));await panel.waitFor();text=await panel.innerText();
+  assert.equal(await panel.getAttribute('data-school-pdf-state'),'ready');assert.match(text,/Word逐页整理/);assert.match(text,/虚构练习卷-docx-ready-\d+\.docx/);assert.match(text,/全部 11 页已整理/);assert.match(text,/页码可能与Word里显示的分页不同/);assert.doesNotMatch(text,/未读页|暂未成功|PDF逐页整理/);assert.equal(await batches.count(),4);assert.equal(await retry.count(),0);
+  assert.match(await batches.nth(3).innerText(),/第 10、11 页[\s\S]*虚构页组 10-11/);await fits(page);await proof(page,'school-docx-ready-'+width);await close();
+  await page.reload();await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();await open(ref('docx-ready'));await panel.waitFor();assert.equal(await batches.count(),4);assert.match(await panel.innerText(),/Word逐页整理[\s\S]*全部 11 页已整理/);
+  const extraDocx=before.uploads.find(x=>x.name==='synthetic-extra.docx'),readyDocx=await linked('docx-ready');
+  await dialog.locator('[name="attachment_id"]').selectOption(extraDocx.id);await dialog.locator('[data-school-original-attach]').click();await until(async()=>(await panel.getAttribute('data-school-pdf-state'))==='unavailable','a second Word original is refused');text=await panel.innerText();
+  assert.match(text,/关联了多个DOCX原件/);assert.match(text,/学校资料 · 本次未整理/);assert.doesNotMatch(text,/PDF资料|Word资料|逐页整理|已整理|全部 \d+ 页/,'a refusal without a kind claims neither a native PDF nor a finished conversion');assert.equal(await batches.count(),0);assert.equal(await retry.count(),0);
+  assert.deepEqual(await detachIDs(),[...readyDocx.ids,extraDocx.id].sort(),'both Word files and the screenshot stay listed');assert.equal(await dialog.locator('[data-school-original-files] a[href*="'+readyDocx.pdf+'"]').count(),1,'the first Word file keeps its download link while refused');
+  await dialog.locator('[data-school-original-detach="'+extraDocx.id+'"]').click();await until(async()=>await batches.count()===4,'removing the extra Word original restores the saved groups');assert.match(await panel.innerText(),/Word逐页整理[\s\S]*全部 11 页已整理/);assert.deepEqual(await detachIDs(),readyDocx.ids);await close();
   // 4. Text notice without a PDF: a real open shows no panel. A fictional reply installed before the next open carries a pending PDF plus a stale ready untyped draft: the PDF panel shows escaped name/title and the old draft (with its learning-record entry) is suppressed entirely. The teacher draft survives refresh, 401, login recovery and the real null reply that hides the panel.
-  const notice=before.agent.items.find(x=>x.title==='虚构文字通知 '+width);await open(notice.evidence[0].ref);assert.equal(await panel.count(),0);await close();
+  const notice=before.agent.items.find(x=>x.title==='虚构文字通知 '+width),noticeIdentity={child_id:'child-1',source_id:'synthetic',message_id:'notice-'+width},plainDocx=before.uploads.find(x=>x.name==='synthetic-plain.docx');await open(notice.evidence[0].ref);assert.equal(await panel.count(),0);
+  // A plain-text Word file keeps the old draft path: no page panel, the file stays listed and downloadable.
+  await dialog.locator('[name="attachment_id"]').selectOption(plainDocx.id);await dialog.locator('[data-school-original-attach]').click();await dialog.locator('[data-school-original-detach="'+plainDocx.id+'"]').waitFor();
+  assert.equal((await readView(noticeIdentity)).pdf_material,null,'a plain-text Word file never enters the page-group path');assert.equal(await panel.count(),0);assert.equal(await dialog.locator('[data-school-original-files] a[href*="'+plainDocx.id+'"]').count(),1);
+  await dialog.locator('[data-school-original-detach="'+plainDocx.id+'"]').click();await until(async()=>await dialog.locator('[data-school-original-detach]').count()===0,'plain Word file detached again');await close();
   const staleDraft={state:'ready',draft:{title:'虚构旧图片草稿 <b>',subject:'语文',score:null,total:null,note:'虚构旧说明',uncertainties:[]},explanation:''};
   const fictionalPDF={state:'pending',kind:'school_material',upload_id:'x',name:'虚构<练习卷>.pdf',job_id:'pdf:fictional',page_count:11,processed_pages:[1,2,3],pending_pages:[4,5,6,7,8,9,10,11],complete:false,batches:[{pages:[1,2,3],draft:{title:'虚构<标题>',note:'虚构说明',uncertainties:[]},updated:'2026-01-01T00:00:00+08:00'}],explanation:'虚构等待说明'};
   const fictional=async route=>{const body=await(await real(route)).json();body.material_draft=staleDraft;body.pdf_material=fictionalPDF;await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)})};
@@ -168,6 +210,18 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   await page.route(isMessage,generic);await open(notice.evidence[0].ref);assert.equal(await panel.count(),0);
   await until(async()=>await dialog.locator('[data-school-material-draft]').count()===1,'generic draft shows without a PDF');assert.equal(await dialog.locator('[data-school-material-record]').count(),1);assert.equal(await dialog.locator('[data-school-material-draft] b').count(),0,'generic draft is escaped');assert.match(await dialog.innerText(),/虚构旧图片草稿 <b>/);
   await page.unroute(isMessage,generic);await close();
+  // A fictional Word reply on the same text notice: the kind comes from original='docx', not from the name, and the raw conversion note is not shown; the teacher draft typed beside it survives refresh, 401, login recovery and the real null reply.
+  const fictionalDocx={...fictionalPDF,original:'docx',mime:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',name:'虚构<讲义>',conversion:'虚构转换说明',explanation:'虚构Word等待说明'};
+  const fictionalWord=async route=>{const body=await(await real(route)).json();body.material_draft=staleDraft;body.pdf_material=fictionalDocx;await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)})};
+  await page.route(isMessage,fictionalWord);await open(notice.evidence[0].ref);await panel.waitFor();text=await panel.innerText();
+  assert.equal(await panel.getAttribute('data-school-pdf-original'),'docx');assert.match(text,/Word逐页整理/);assert.match(text,/虚构<讲义>[\s\S]*已整理 3 \/ 11 页[\s\S]*虚构Word等待说明[\s\S]*虚构<标题>/);assert.match(text,/页码可能与Word里显示的分页不同/);assert.doesNotMatch(text,/PDF逐页整理|PDF原件|虚构转换说明/);assert.equal(await panel.locator('img,b').count(),0);
+  assert.equal(await dialog.locator('[data-school-material-draft],[data-school-material-record],[data-school-material-status]').count(),0,'the stale untyped draft stays hidden beside a Word page path');
+  await dialog.locator('[data-school-teacher-open]').click();await teacherForm.waitFor();await teacherForm.locator('[name="teacher_id"]').selectOption('synthetic-teacher');await teacherForm.locator('[name="target"]').selectOption('class');await teacherForm.locator('[name="quote"]').fill('Word通知下尚未保存的老师要求');
+  const wordFields=await teacherNow();assert.equal(wordFields.quote,'Word通知下尚未保存的老师要求');
+  await refresh.click();await until(async()=>/已读取最新进度/.test(await panel.innerText()),'fictional Word refresh');assert.deepEqual(await teacherNow(),wordFields,'teacher draft survives a Word refresh');
+  await page.unroute(isMessage,fictionalWord);await page.route(isMessage,denied);await refresh.click();await until(async()=>/请先重新登录/.test(await panel.innerText()),'401 on the Word notice');assert.equal(await panel.count(),1);assert.match(await panel.innerText(),/Word逐页整理/);assert.deepEqual(await teacherNow(),wordFields,'teacher draft survives 401 beside a Word panel');
+  await page.unroute(isMessage,denied);await login();assert.deepEqual(await teacherNow(),wordFields,'teacher draft survives the login recovery beside a Word panel');
+  await refresh.click();await until(async()=>await panel.count()===0,'real null reply hides the Word panel');assert.match(await dialog.locator('[data-school-original-status]').innerText(),/没有可整理的Word原件/);assert.equal(await dialog.locator('[data-school-material-draft],[data-school-material-record]').count(),0);assert.deepEqual(await teacherNow(),wordFields,'teacher draft survives the real null refresh');await close();
   assert.equal(facts(await state()),factsBefore,'no task, record or item changed');assert.deepEqual(pageErrors,[]);assert.deepEqual(alerts,[]);
   await page.close();
  }
