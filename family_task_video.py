@@ -10,6 +10,7 @@ of one exact draft version were confirmed or revoked; it is shown back only for 
 read-only path by which the linked learning goal's evidence (family_goals._context) reads the parent's current choice."""
 import datetime as dt
 import hashlib
+import io
 import json
 import math
 import sqlite3
@@ -17,6 +18,7 @@ import subprocess
 import os
 import selectors
 import time
+import wave
 
 import family_llm
 import family_media
@@ -26,6 +28,11 @@ SCAN_LIMIT = 50
 PROBE_DEADLINE = 15  # Shared by the header probe and, for headerless WebM, the full-timeline fallback.
 # The full packet dump is bounded; oversized streams are refused instead of silently reading a prefix.
 MAX_PROBE_OUTPUT = 1 << 20
+# audio_track: probe, WebM timeline scan, decode, WAV assembly and return all inside one caller-given (0, 30] second
+# deadline; the WAV (44-byte stdlib header + PCM16 mono 16kHz) is bounded by the same 20MiB as the original.
+AUDIO_TIMEOUT = 30
+AUDIO_RATE = 16000; AUDIO_WIDTH = 2; WAV_HEADER = 44
+MAX_PCM = family_llm.MAX_INPUT - WAV_HEADER
 EXPLANATIONS = {
     'agent_disabled': '后台Agent未启用或授权已撤回；视频不会被读取，已有草稿不再显示，原视频保留。',
     'child_unknown': '这条记录的孩子归属无法核对；视频不会被读取。',
@@ -45,6 +52,15 @@ EXPLANATIONS = {
     'no_video_track': '文件中没有可用的视频轨道；未发送给模型。',
     'duration_invalid': '视频时长无法确定或超过10分钟，不会截取片段后分析；未发送给模型。',
     'webm_duration_unsupported': '这份WebM缺少可核验的时长信息，且本机无法确定完整时间轴（文件损坏、不完整或处理超时）；不会猜测时长；未发送给模型，请由家长查看原视频。',
+    'timeout_invalid': '提取声音的时限必须是0到30秒之间的有限数值；本次未处理。',
+    'audio_mime_unsupported': '仅支持从已核验的MP4、MOV或WebM视频中提取声音。',
+    'ffmpeg_missing': '此电脑尚未安装ffmpeg，无法提取视频声音；未发送给模型。',
+    'audio_track_missing': '这份视频没有声音轨道；不会补充或猜测声音。',
+    'audio_track_ambiguous': '这份视频含多条声音轨道，无法确定应取哪一条；不会自行挑选。',
+    'audio_start_invalid': '这份视频声音轨道的起点无法确定或不在视频时间轴内；不会猜测对齐位置。',
+    'audio_decode_failed': '视频声音无法在本机完整解码（文件损坏、不完整或处理出错）；不会截取前段冒充成功。',
+    'audio_too_large': '提取的声音超过20MiB上限，不会截断后返回。',
+    'audio_timeout': '提取视频声音超过时限，本次结果已丢弃；不会截取前段冒充成功。',
     'changed': '记录、事项关联、任务要求、授权或原视频在整理期间发生变化，本次结果已丢弃。',
     'saved_invalid': '已保存的草稿未通过时间位置复核，不予显示；请查看原视频。',
     'draft_missing': '当前没有可核对的有效视频观察草稿（记录、原件、授权或草稿已变化）；请刷新后再核对。',
@@ -54,6 +70,7 @@ EXPLANATIONS = {
 REVIEW_LABEL = '家长已核对的视频观察'
 REVIEW_NOTE = '家长选定了这些画面观察作为自己核对过的内容；未评估声音，不代表完成或掌握，不会自动改动任务、学习记录或计划。'
 UNCONFIRMED = '家长尚未核对这份视频观察，或已撤回核对；只有家长明确选择后才算核对。'
+AUDIO_NOTE = '仅在本机从原视频中提取了声音轨道；未转写、未评估发音，不代表完成或掌握。文件在合法包边界结束，不能证明未提供原录像的尾部。'
 MAX_OBSERVATIONS = 8  # family_llm.validate_video_feedback allows at most eight observations per draft.
 REVIEW_KEYS = ('record_id', 'upload_id', 'expected_token', 'action', 'selected')
 
@@ -163,19 +180,19 @@ def _run_ffprobe(args, body, timeout):
     return subprocess.run(args, input=body, capture_output=True, check=True, timeout=timeout)
 
 
-def _webm_packet_end(body, remaining):
-    """End time of every packet ffprobe can parse from the supplied bytes.
+def _number(value):
+    try:
+        return float(value) if type(value) in (str, int, float) else math.nan
+    except (ValueError, OverflowError):
+        return math.nan
 
-    The dump is streamed into a bounded buffer and folded into one pts+duration maximum after EOF. A truncated
-    container can exit 0 while printing e.g. "File ended prematurely" on stderr, so ANY non-empty -v error stderr
-    (or a nonzero exit, timeout, oversize output or unparseable/nonfinite row) is refused: never a shorter partial
-    success. Clean stderr and exit 0 prove only that the supplied bytes parse completely to their own end; a stream
-    deliberately finished on a valid boundary cannot prove what unseen bytes the original recording may have had, so
-    the value is the duration of the supplied complete parseable bytes, never a claim of source completeness."""
-    _require(remaining > 0, 'webm_duration_unsupported')
-    args = ['ffprobe', '-v', 'error', '-protocol_whitelist', 'pipe', '-f', 'matroska', '-i', 'pipe:0',
-            '-select_streams', 'v:0', '-show_entries', 'packet=pts_time,duration_time', '-of', 'csv=p=0']
-    deadline = time.monotonic() + remaining
+
+def _piped(args, body, deadline, limit, code, missing='probe_missing', oversize=None, late=None):
+    """One local tool over pipes only: body to stdin, stdout kept up to `limit` bytes, killed and reaped by `deadline`.
+
+    Any stderr byte (the tools run with -v error) refuses even an exit 0, as do a nonzero exit, an oversize stdout,
+    the deadline and any OS error: never a shorter partial success. Returns the complete stdout bytes."""
+    oversize = oversize or code; late = late or code
     try:
         with subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
             with selectors.DefaultSelector() as selector:
@@ -187,7 +204,7 @@ def _webm_packet_end(body, remaining):
                 try:
                     while selector.get_map():
                         left = deadline - time.monotonic()
-                        _require(left > 0, 'webm_duration_unsupported')
+                        _require(left > 0, late)
                         for key, _ in selector.select(left):
                             pipe = key.fileobj
                             if pipe is process.stdin:
@@ -202,25 +219,42 @@ def _webm_packet_end(body, remaining):
                                 if not chunk:
                                     selector.unregister(pipe); pipe.close()
                                 elif pipe is process.stdout:
-                                    _require(len(output) + len(chunk) <= MAX_PROBE_OUTPUT, 'webm_duration_unsupported')
+                                    _require(len(output) + len(chunk) <= limit, oversize)
                                     output.extend(chunk)
                                 else:
-                                    # -v error output means the supplied container was not completely parsed,
-                                    # even if ffprobe later exits zero. Do not retain an unbounded error stream.
-                                    raise VideoDraftError('webm_duration_unsupported')
+                                    # -v error output means the supplied bytes were not completely processed,
+                                    # even if the tool later exits zero. Do not retain an unbounded error stream.
+                                    raise VideoDraftError(code)
                     process.wait(timeout=max(0, deadline - time.monotonic()))
                 finally:
                     if process.poll() is None:
                         process.kill()
                     process.wait()
-                returncode = process.returncode; stdout = bytes(output)
     except FileNotFoundError:
-        raise VideoDraftError('probe_missing') from None
+        raise VideoDraftError(missing) from None
+    except subprocess.TimeoutExpired:
+        raise VideoDraftError(late) from None
     except (OSError, subprocess.SubprocessError):
-        raise VideoDraftError('webm_duration_unsupported') from None
+        raise VideoDraftError(code) from None
+    _require(process.returncode == 0, code)
+    return bytes(output)
+
+
+def _webm_packet_end(body, remaining):
+    """End time of every packet ffprobe can parse from the supplied bytes.
+
+    The dump is streamed into a bounded buffer and folded into one pts+duration maximum after EOF. A truncated
+    container can exit 0 while printing e.g. "File ended prematurely" on stderr, so ANY non-empty -v error stderr
+    (or a nonzero exit, timeout, oversize output or unparseable/nonfinite row) is refused: never a shorter partial
+    success. Clean stderr and exit 0 prove only that the supplied bytes parse completely to their own end; a stream
+    deliberately finished on a valid boundary cannot prove what unseen bytes the original recording may have had, so
+    the value is the duration of the supplied complete parseable bytes, never a claim of source completeness."""
+    _require(remaining > 0, 'webm_duration_unsupported')
+    args = ['ffprobe', '-v', 'error', '-protocol_whitelist', 'pipe', '-f', 'matroska', '-i', 'pipe:0',
+            '-select_streams', 'v:0', '-show_entries', 'packet=pts_time,duration_time', '-of', 'csv=p=0']
+    deadline = time.monotonic() + remaining
+    stdout = _piped(args, body, deadline, MAX_PROBE_OUTPUT, 'webm_duration_unsupported')
     try:
-        if returncode != 0:
-            raise VideoDraftError('webm_duration_unsupported')
         text = stdout.decode('utf-8', 'strict')
         end = 0.0; rows = 0
         for line in text.splitlines():
@@ -250,10 +284,7 @@ def probe(body, mime):
         raise VideoDraftError('probe_failed') from None
     _require(isinstance(streams, list) and 0 < len(streams) <= 32 and all(isinstance(s, dict) for s in streams)
              and any(s.get('codec_type') == 'video' for s in streams), 'no_video_track')
-    try:
-        duration = float(raw) if type(raw) in (str, int, float) else math.nan
-    except ValueError:
-        duration = math.nan
+    duration = _number(raw)
     # Browser WebM often has no duration header. Scan every packet, including for seekable WebM,
     # so a valid header cannot conceal a truncated tail. This covers supplied bytes, not unseen source data.
     if mime == 'video/webm':
@@ -262,6 +293,60 @@ def probe(body, mime):
     _require(math.isfinite(duration) and 0 < duration <= family_llm.MAX_VIDEO_SECONDS, 'duration_invalid')
     _require(time.monotonic() < deadline, 'probe_failed')
     return duration
+
+
+def audio_track(body, mime, timeout=AUDIO_TIMEOUT):
+    """The one audio track of a checked MP4/MOV/WebM as WAV PCM16 mono 16kHz, decoded locally over pipes only.
+
+    Pure: original bytes in, one dict out; no database, HTTP, UI, job, ASR or model, and nothing calls this yet.
+    Same bounds as the video path: at most 20MiB in, video duration at most family_llm.MAX_VIDEO_SECONDS, at least
+    one video track and exactly one audio track (none or several are refused by name, never picked silently).
+    Probe, the WebM timeline scan, decode, WAV assembly and the return all fit in `timeout` (finite, 0 < t <= 30);
+    both tools' stdout is bounded, any stderr byte refuses even an exit 0, a child is always killed and reaped, and
+    the PCM is the complete decoded track or nothing: no leading prefix is ever passed off as success.
+    video_seconds is the duration of the supplied container; a valid packet boundary cannot prove the source
+    recording had no further tail, so tail_verified stays False. audio_start_seconds is where the track begins on
+    that timeline (AAC priming may make it slightly negative), pcm_seconds the decoded length. audio_assessed is
+    False: a decode is neither a transcription, a pronunciation check nor mastery, and nothing here claims one.
+    Pipe input needs the index ahead of the media (WebM, faststart or fragmented MP4/MOV); a file whose moov trails
+    the data cannot be seeked over a pipe and is refused as a decode failure rather than read from a temp file."""
+    _require(type(timeout) in (int, float) and math.isfinite(timeout) and 0 < timeout <= AUDIO_TIMEOUT, 'timeout_invalid')
+    _require(isinstance(mime, str) and mime in family_llm.VIDEO_TYPES, 'audio_mime_unsupported')
+    _require(isinstance(body, bytes) and len(body) > 0, 'original_unavailable')
+    _require(len(body) <= family_llm.MAX_INPUT, 'original_too_large')
+    deadline = time.monotonic() + timeout
+    demux = 'matroska' if mime == 'video/webm' else 'mov'
+    stdout = _piped(['ffprobe', '-v', 'error', '-protocol_whitelist', 'pipe', '-f', demux, '-i', 'pipe:0',
+                     '-show_entries', 'stream=codec_type,start_time:format=duration', '-of', 'json'],
+                    body, deadline, MAX_PROBE_OUTPUT, 'probe_failed', late='audio_timeout')
+    try:
+        info = json.loads(stdout); streams = info.get('streams'); raw = info.get('format', {}).get('duration')
+    except (ValueError, TypeError, AttributeError):
+        raise VideoDraftError('probe_failed') from None
+    _require(isinstance(streams, list) and 0 < len(streams) <= 32 and all(isinstance(s, dict) for s in streams), 'probe_failed')
+    _require(any(s.get('codec_type') == 'video' for s in streams), 'no_video_track')
+    audio = [s for s in streams if s.get('codec_type') == 'audio']
+    _require(audio, 'audio_track_missing'); _require(len(audio) == 1, 'audio_track_ambiguous')
+    duration = _number(raw); start = _number(audio[0].get('start_time'))
+    if mime == 'video/webm':
+        # Same rule as probe(): the header cannot be trusted for WebM, every video packet is scanned to its end.
+        duration = _webm_packet_end(body, deadline - time.monotonic())
+    _require(math.isfinite(duration) and 0 < duration <= family_llm.MAX_VIDEO_SECONDS, 'duration_invalid')
+    _require(math.isfinite(start) and -1 <= start <= duration, 'audio_start_invalid')
+    pcm = _piped(['ffmpeg', '-nostdin', '-v', 'error', '-protocol_whitelist', 'pipe', '-f', demux, '-i', 'pipe:0',
+                  '-map', '0:a:0', '-ac', '1', '-ar', str(AUDIO_RATE), '-c:a', 'pcm_s16le', '-f', 's16le', 'pipe:1'],
+                 body, deadline, MAX_PCM, 'audio_decode_failed', missing='ffmpeg_missing', oversize='audio_too_large',
+                 late='audio_timeout')
+    _require(len(pcm) > 0 and len(pcm) % AUDIO_WIDTH == 0, 'audio_decode_failed')
+    out = io.BytesIO()
+    with wave.open(out, 'wb') as w:
+        w.setnchannels(1); w.setsampwidth(AUDIO_WIDTH); w.setframerate(AUDIO_RATE); w.writeframes(pcm)
+    wav = out.getvalue()
+    _require(len(wav) == len(pcm) + WAV_HEADER and len(wav) <= family_llm.MAX_INPUT, 'audio_too_large')
+    _require(time.monotonic() < deadline, 'audio_timeout')
+    return dict(wav=wav, mime='audio/wav', sample_rate=AUDIO_RATE, channels=1, sample_width=AUDIO_WIDTH,
+                video_seconds=duration, audio_start_seconds=start, pcm_seconds=len(pcm) / (AUDIO_RATE * AUDIO_WIDTH),
+                audio_assessed=False, tail_verified=False, note=AUDIO_NOTE)
 
 
 def _saved(c, value):

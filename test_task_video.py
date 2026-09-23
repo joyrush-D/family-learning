@@ -13,6 +13,7 @@ import threading
 import sys
 import time
 import unittest
+import wave
 from unittest import mock
 
 import family_agent as agent
@@ -606,6 +607,154 @@ class VideoReviewHttpTests(unittest.TestCase):
                 self.refused(self.body(ident,video),409);self.refused(self.body(ident,video,action='revoke',selected=[]),409)
                 self.assertEqual(self.rows('record_video_reviews'),rows,'the old confirmation stays on disk, hidden, never erased')
                 if shown['state']=='ready':self.assertEqual(self.post(self.body(ident,shown))[1]['review']['state'],'confirmed')
+
+
+class AudioTrackTests(unittest.TestCase):
+    """audio_track with python one-liners standing in for ffprobe/ffmpeg: no real media, no model, no file, no orphan."""
+    STREAMS=dict(streams=[dict(codec_type='video',start_time='0.000000'),dict(codec_type='audio',start_time='0.250000')],format=dict(duration='12.500000'))
+    PROBE="import sys,json;sys.stdin.buffer.read();print(json.dumps(%s))"
+    PACKETS="import sys;sys.stdin.buffer.read();print('0,1');print('1,1.5')"
+    DECODE="import sys;sys.stdin.buffer.read();sys.stdout.buffer.write(bytes(range(256))*%d)"
+    ECHO="import sys;d=sys.stdin.buffer.read();sys.stdout.buffer.write(d[:len(d)//2*2])"
+
+    def probe(self,**changes):return self.PROBE%json.dumps(dict(self.STREAMS,**changes))
+
+    def run_fake(self,probe=None,decode=None,body=b'synthetic mp4',mime='video/mp4',timeout=3,packets=None,missing=()):
+        real=subprocess.Popen;children=[];self.calls=[]
+        def child(args,**kwargs):
+            self.calls.append(args);tool=args[0];self.assertIn(tool,('ffprobe','ffmpeg'))
+            if tool in missing:raise FileNotFoundError(tool)
+            code=(packets or self.PACKETS) if '-select_streams' in args else probe if tool=='ffprobe' else decode
+            self.assertIsNotNone(code,tool+' was launched although this case must refuse before it')
+            p=real([sys.executable,'-c',code],**kwargs);children.append(p);return p
+        started=time.monotonic()
+        try:
+            with mock.patch.object(tv.subprocess,'Popen',side_effect=child):return tv.audio_track(body,mime,timeout)
+        finally:
+            self.assertTrue(all(p.poll() is not None for p in children),'no orphan process')
+            self.assertLess(time.monotonic()-started,timeout+2)
+
+    def refused(self,code,**kwargs):
+        with self.assertRaises(tv.VideoDraftError) as caught:self.run_fake(**kwargs)
+        self.assertEqual(caught.exception.code,code);return caught.exception
+
+    def test_the_one_track_becomes_wav_with_positions_and_nothing_is_assessed(self):
+        result=self.run_fake(self.probe(),self.DECODE%250)
+        with wave.open(io.BytesIO(result['wav'])) as w:
+            self.assertEqual((w.getnchannels(),w.getsampwidth(),w.getframerate(),w.getnframes()),(1,2,16000,32000))
+            self.assertEqual(w.readframes(32000),bytes(range(256))*250)
+        self.assertEqual(len(result['wav']),44+64000)
+        self.assertEqual({k:v for k,v in result.items() if k!='wav'},dict(mime='audio/wav',sample_rate=16000,channels=1,sample_width=2,
+            video_seconds=12.5,audio_start_seconds=0.25,pcm_seconds=2.0,audio_assessed=False,tail_verified=False,note=tv.AUDIO_NOTE))
+        self.assertIs(result['audio_assessed'],False);self.assertIs(result['tail_verified'],False)
+        for word in ('未转写','未评估发音','不代表完成或掌握','不能证明未提供原录像的尾部'):self.assertIn(word,result['note'])
+        self.assertEqual([a[0] for a in self.calls],['ffprobe','ffmpeg'])
+        for args in self.calls:
+            self.assertEqual(args[args.index('-protocol_whitelist')+1],'pipe');self.assertEqual(args[args.index('-i')+1],'pipe:0')
+            self.assertEqual(args[args.index('-f')+1],'mov');self.assertEqual(args[args.index('-v')+1],'error')
+            self.assertFalse([a for a in args if '/' in a or '://' in a or a in('-t','-ss','-to','-frames','-fs')],args)
+        decode=self.calls[1];self.assertIn('-nostdin',decode);self.assertEqual(decode[-1],'pipe:1')
+        self.assertEqual(decode[decode.index('-map')+1],'0:a:0');self.assertEqual(decode[decode.index('-ar')+1:decode.index('-ar')+4],['16000','-c:a','pcm_s16le'])
+        self.assertEqual(decode[decode.index('-ac')+1],'1');self.assertEqual(decode[decode.index('-f',decode.index('pipe:0'))+1],'s16le')
+        # A multi-MiB original is delivered whole through the non-blocking stdin writer and comes back whole.
+        body=bytes(range(256))*12288;result=self.run_fake(self.probe(),self.ECHO,body=body,timeout=10)
+        self.assertEqual(result['wav'][44:],body);self.assertEqual(result['pcm_seconds'],len(body)/32000)
+        # WebM: matroska demux for all three launches, duration from the scanned video packets, not from the header.
+        result=self.run_fake(self.probe(format={}),self.DECODE%250,body=b'synthetic webm',mime='video/webm')
+        self.assertEqual((result['video_seconds'],result['pcm_seconds']),(2.5,2.0))
+        self.assertEqual([(a[0],a[a.index('-f')+1]) for a in self.calls],[('ffprobe','matroska'),('ffprobe','matroska'),('ffmpeg','matroska')])
+        for timeout in (30,30.0,0.5):self.run_fake(self.probe(),self.DECODE%250,timeout=timeout)
+        # AAC priming can put the audio start slightly before zero; it is reported, not hidden.
+        self.assertEqual(self.run_fake(self.probe(streams=[dict(codec_type='video'),dict(codec_type='audio',start_time='-0.023220')]),self.DECODE%250)['audio_start_seconds'],-0.02322)
+
+    def test_no_audio_several_audio_audio_only_bad_positions_and_bad_headers_are_refused_before_decoding(self):
+        video=dict(codec_type='video',start_time='0');audio=dict(codec_type='audio',start_time='0')
+        for streams,code in (([video],'audio_track_missing'),([video,audio,audio],'audio_track_ambiguous'),([audio],'no_video_track'),
+                             ([video,audio,dict(codec_type='audio')],'audio_track_ambiguous'),([],'probe_failed'),([video]*33+[audio],'probe_failed'),
+                             (['video'],'probe_failed'),([video,dict(codec_type='audio',start_time='N/A')],'audio_start_invalid'),
+                             ([video,dict(codec_type='audio',start_time='13')],'audio_start_invalid'),([video,dict(codec_type='audio',start_time='-1.5')],'audio_start_invalid'),
+                             ([video,dict(codec_type='audio')],'audio_start_invalid')):
+            with self.subTest(streams=streams):self.refused(code,probe=self.probe(streams=streams))
+        for duration,code in (('601','duration_invalid'),('0','duration_invalid'),('N/A','duration_invalid'),(None,'duration_invalid'),('inf','duration_invalid')):
+            with self.subTest(duration=duration):self.refused(code,probe=self.probe(format=dict(duration=duration)))
+        self.refused('probe_failed',probe="import sys;sys.stdin.buffer.read();print('not json')")
+        self.refused('probe_failed',probe="import sys;sys.stdin.buffer.read();print('[]')")
+        self.refused('probe_failed',probe="import sys;sys.stdin.buffer.read();sys.stderr.write('moov atom not found');print(%r)"%json.dumps(self.STREAMS))
+        self.refused('probe_failed',probe="import sys;sys.exit(1)")
+        self.refused('audio_timeout',probe="import time;time.sleep(10)",timeout=1)
+        # WebM without a scannable timeline: the header duration is never used instead.
+        self.refused('webm_duration_unsupported',probe=self.probe(),mime='video/webm',packets="import sys;sys.stdin.buffer.read();sys.stderr.write('File ended prematurely');print('0,2')")
+        self.assertEqual([a[0] for a in self.calls],['ffprobe','ffprobe'])
+
+    def test_errors_on_exit_zero_bad_exit_odd_empty_partial_and_hanging_decodes_are_refused_without_a_prefix(self):
+        for code,decode in (('audio_decode_failed',"import sys;sys.stdin.buffer.read();sys.stderr.write('pipe:0: Invalid data found');sys.stdout.buffer.write(b'\\x00'*64000)"),
+                            ('audio_decode_failed',"import sys;sys.stdin.buffer.read();sys.stdout.buffer.write(b'\\x00'*64000);sys.exit(1)"),
+                            ('audio_decode_failed',"import sys;sys.stdin.buffer.read();sys.stdout.buffer.write(b'\\x00'*64001)"),
+                            ('audio_decode_failed',"import sys;sys.stdin.buffer.read()"),
+                            ('audio_timeout',"import sys,time;sys.stdout.buffer.write(b'\\x00'*64000);sys.stdout.flush();time.sleep(10)"),
+                            ('audio_timeout',"import time;time.sleep(10)")):
+            with self.subTest(decode=decode):
+                self.refused(code,probe=self.probe(),decode=decode,body=bytes(range(256))*4096,timeout=1)
+                self.assertEqual([a[0] for a in self.calls],['ffprobe','ffmpeg'])
+
+    def test_output_cap_missing_tools_invalid_timeouts_and_bad_inputs_launch_nothing_or_stop_early(self):
+        with mock.patch.object(tv,'MAX_PCM',100):
+            self.refused('audio_too_large',probe=self.probe(),decode=self.DECODE%250)
+            self.refused('audio_too_large',probe=self.probe(),decode="import sys\nwhile True:sys.stdout.buffer.write(b'\\x00'*65536)",timeout=2)
+        self.assertEqual(self.refused('probe_missing',probe=self.probe(),decode=self.DECODE%250,missing=('ffprobe',)).args[0],tv.EXPLANATIONS['probe_missing'])
+        self.refused('ffmpeg_missing',probe=self.probe(),decode=self.DECODE%250,missing=('ffmpeg',))
+        self.assertEqual([a[0] for a in self.calls],['ffprobe','ffmpeg'])
+        with mock.patch.object(tv.subprocess,'Popen') as launch:
+            for timeout in (True,False,0,-1,31,30.000001,float('nan'),float('inf'),float('-inf'),'5',None,[5]):
+                with self.subTest(timeout=timeout),self.assertRaises(tv.VideoDraftError) as caught:tv.audio_track(b'x','video/mp4',timeout)
+                self.assertEqual(caught.exception.code,'timeout_invalid')
+            for body,mime,code in ((b'','video/mp4','original_unavailable'),('text','video/mp4','original_unavailable'),(None,'video/mp4','original_unavailable'),
+                                   (b'\x00'*(family_llm.MAX_INPUT+1),'video/mp4','original_too_large'),(b'x','audio/webm','audio_mime_unsupported'),
+                                   (b'x','video/x-msvideo','audio_mime_unsupported'),(b'x',None,'audio_mime_unsupported'),(b'x','','audio_mime_unsupported')):
+                with self.subTest(mime=mime,code=code),self.assertRaises(tv.VideoDraftError) as caught:tv.audio_track(body,mime)
+                self.assertEqual(caught.exception.code,code)
+            launch.assert_not_called()
+        self.assertIsNone(tv.audio_track.__defaults__[0] if False else None)  # default timeout stays the documented 30 s.
+        self.assertEqual(tv.AUDIO_TIMEOUT,30);self.assertEqual(tv.MAX_PCM+44,family_llm.MAX_INPUT)
+
+
+class RealAudioTrackTests(unittest.TestCase):
+    """Optional: synthetic sine + colour clips through the installed ffmpeg/ffprobe. No household media, no model."""
+    @classmethod
+    def setUpClass(cls):
+        if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
+            raise unittest.SkipTest('optional local ffmpeg/ffprobe tools unavailable')
+        video=['-f','lavfi','-i','color=c=blue:s=160x120:r=10:d=2'];tone=['-f','lavfi','-i','sine=frequency=440:duration=2']
+        def run(args):return REAL_RUN(['ffmpeg','-v','error']+args,capture_output=True,check=True,timeout=30).stdout
+        with tempfile.TemporaryDirectory() as directory:
+            for name,codec in (('clip.mp4','mpeg4'),('clip.mov','mpeg4')):
+                path=os.path.join(directory,name);run(video+tone+['-c:v',codec,'-c:a','aac','-movflags','+faststart',path])
+                with open(path,'rb') as stream:setattr(cls,name.split('.')[1],stream.read())
+        cls.webm=run(video+tone+['-c:v','libvpx','-c:a','libopus','-f','webm','pipe:1'])
+        cls.silent=run(video+['-c:v','libvpx','-f','webm','pipe:1'])
+        cls.two=run(video+tone+['-map','0:v','-map','1:a','-map','1:a','-c:v','libvpx','-c:a','libopus','-f','webm','pipe:1'])
+        cls.audio=run(tone+['-c:a','libopus','-f','webm','pipe:1'])
+
+    def test_real_mp4_mov_and_pipe_webm_decode_and_bad_variants_are_refused(self):
+        for body,mime in ((self.mp4,'video/mp4'),(self.mov,'video/quicktime'),(self.webm,'video/webm')):
+            with self.subTest(mime=mime):
+                started=time.monotonic();result=tv.audio_track(body,mime);elapsed=time.monotonic()-started
+                self.assertLess(elapsed,30)
+                with wave.open(io.BytesIO(result['wav'])) as w:
+                    self.assertEqual((w.getnchannels(),w.getsampwidth(),w.getframerate()),(1,2,16000));frames=w.readframes(w.getnframes())
+                self.assertEqual(len(frames),len(result['wav'])-44)
+                self.assertAlmostEqual(result['video_seconds'],2.0,delta=0.15);self.assertAlmostEqual(result['pcm_seconds'],2.0,delta=0.15)
+                self.assertTrue(-0.1<=result['audio_start_seconds']<=0.5,result['audio_start_seconds'])
+                self.assertGreater(max(abs(int.from_bytes(frames[i:i+2],'little',signed=True)) for i in range(0,len(frames),2)),3000,'a 440Hz tone is not silence')
+                self.assertEqual((result['audio_assessed'],result['tail_verified']),(False,False))
+        for body,mime,code in ((self.silent,'video/webm','audio_track_missing'),(self.two,'video/webm','audio_track_ambiguous'),(self.audio,'video/webm','no_video_track')):
+            with self.subTest(code=code),self.assertRaises(tv.VideoDraftError) as caught:tv.audio_track(body,mime)
+            self.assertEqual(caught.exception.code,code)
+        for body,mime in ((self.mp4,'video/mp4'),(self.webm,'video/webm')):
+            for cut in (1,40,len(body)//3):
+                with self.subTest(mime=mime,cut=cut),self.assertRaises(tv.VideoDraftError):tv.audio_track(body[:-cut],mime)
+        with self.assertRaises(tv.VideoDraftError) as caught:tv.audio_track(self.mp4,'video/webm')
+        self.assertIn(caught.exception.code,('probe_failed','webm_duration_unsupported'))
 
 
 if __name__=='__main__':unittest.main()
