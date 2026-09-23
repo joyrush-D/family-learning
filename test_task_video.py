@@ -948,7 +948,7 @@ class VideoTranscribeTests(TaskVideoTests):
             return run
         def reset():self.enable(True);os.environ.update(FAMILY_ASR_URL=self.URL,FAMILY_ASR_MODEL='synthetic',FAMILY_ASR_API_KEY=self.KEY)
         codes={'correct':{'fingerprint_stale'},'relink':{'fingerprint_stale'},'revoke':{'agent_disabled'},'replace':{'fingerprint_stale'},
-               'shorten':{'original_changed','fingerprint_stale'},'asr_url':{'asr_config_changed'},'asr_model':{'asr_config_changed'},'asr_key':{'asr_config_changed'}}
+               'shorten':{'original_unavailable'},'asr_url':{'asr_config_changed'},'asr_model':{'asr_config_changed'},'asr_key':{'asr_config_changed'}}
         for stage in ('extract','asr'):
             for name,change in (('correct',self.correct),('relink',self.relink),('revoke',lambda ident:lambda:self.enable(False)),('replace',replace),('shorten',shorten),
                                 ('asr_url',lambda ident:lambda:os.environ.__setitem__('FAMILY_ASR_URL','http://127.0.0.1:9/other')),
