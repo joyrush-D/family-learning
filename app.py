@@ -394,7 +394,13 @@ def snapshot():
                 growth=read('学习与成长.md'), sources=read('消息来源.md'), token=TOKEN, record_categories=CATEGORIES,
                 rewards=family_growth.summarize(children,records,ts,today),reading=family_reading.Store(connect,lambda:children,lambda:ts).snapshot(),printing=printing,today=today,today_calendar=today_calendar,agent=agent)
 
-def agent_store():
+def connect_read_only():
+    """The database file as it is, opened read-only: no table is created or migrated; an absent file or table is the caller's error, never a new file."""
+    c=sqlite3.connect(Path(DB).absolute().as_uri()+'?mode=ro',uri=True);c.row_factory=sqlite3.Row;return c
+
+def agent_store(read_only=False):
+    # A pure read reuses the store's existing initialize=False over the read-only connection; every write path keeps the initialized store.
+    if read_only: return family_agent.Store(connect_read_only,profiles,DATA,initialize=False,app=SimpleNamespace(**globals()))
     return family_agent.Store(connect,profiles,DATA,app=SimpleNamespace(**globals()))
 
 def settings_store():
@@ -1736,7 +1742,9 @@ class Handler(BaseHTTPRequestHandler):
                 query=parse_qs(urlparse(self.path).query,keep_blank_values=True);ident=query.get('record_id',[''])[0]
                 if set(query)!={'record_id'} or len(query['record_id'])!=1 or not re.fullmatch(r'[1-9][0-9]{0,18}',ident) or int(ident)>9223372036854775807:
                     return self.reply(400,dict(error='请提供唯一的记录编号，且须为有效正整数'))
-                return self.reply(200,family_task_video.view(SimpleNamespace(**globals()),agent_store(),int(ident)))
+                try: return self.reply(200,family_task_video.view(SimpleNamespace(**globals()),agent_store(read_only=True),int(ident)))
+                except sqlite3.OperationalError:  # An absent or old database without the tables: an explicit refusal, no table created, none of the error's text shown.
+                    return self.reply(503,dict(error='家庭资料库尚未建立或暂时无法读取，视频草稿暂不可用；本次读取未更改任何资料',code='storage_unavailable'))
             if path=='/api/print/jobs': return self.reply(200,dict(jobs=print_store().list_jobs()))
             if path.startswith('/api/print/preview/'):
                 body,name=print_store().preview(path[len('/api/print/preview/'):])

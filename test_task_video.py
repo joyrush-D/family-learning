@@ -33,7 +33,7 @@ class TaskVideoTests(unittest.TestCase):
         test_goals.MediaFeedbackEvidenceTests.setUp(self)
         self.app.DATA=self.app.DATA.resolve();self.data=self.app.DATA  # read_file refuses a symlink anywhere in the path; macOS temp dirs sit behind one.
         self.agent=agent.Store(self.app.connect,self.app.profiles,self.app.DATA,app=self.app)
-        self.duration='12.5';self.probes=[];self.sent=[];self.during_probe=self.during_call=None;self.fail=False;self.uploads={};self.changes=[]
+        self.duration='12.5';self.probes=[];self.sent=[];self.during_probe=self.during_call=None;self.model_fails=False;self.uploads={};self.changes=[]
         mock.patch.object(subprocess,'run',side_effect=self.ffprobe).start();mock.patch.object(family_llm,'configuration').start()
         self.model.side_effect=self.chat;self.enable(True)
 
@@ -50,7 +50,7 @@ class TaskVideoTests(unittest.TestCase):
         if name!='family_video_feedback_draft':return self.reply(messages,schema,name,timeout,**kwargs)
         self.sent.append(json.loads(messages[-1]['content'][0]['text']))
         if self.during_call:self.during_call();self.changes.append('call')
-        if self.fail:raise family_llm.LLMDraftError('虚构模型失败')
+        if self.model_fails:raise family_llm.LLMDraftError('虚构模型失败')
         return json.loads(json.dumps(DRAFT))
 
     def clip(self,name='synthetic-clip.mp4'):
@@ -143,11 +143,11 @@ class TaskVideoTests(unittest.TestCase):
         self.during_call=None;self.assertEqual(self.rows('record_video_drafts'),2);self.assertEqual(self.state(ident),['pending'],'the read still compares the fingerprint')
 
     def test_three_failures_back_off_and_then_wait_for_the_parents_retry(self):
-        ident=self.feedback();self.fail=True
+        ident=self.feedback();self.model_fails=True
         self.assertEqual([self.tick(m) for m in (0,1,5,6,15,16,999)],[FAILED,NONE,FAILED,NONE,FAILED,NONE,NONE])
         video=self.view(ident)['videos'][0];self.assertEqual((video['state'],video['attempts'],video['exhausted'],len(self.sent)),('error',3,True,3))
         self.assertIn('虚构模型失败',video['explanation']);self.assertEqual(self.rows('record_video_drafts'),0)
-        self.fail=False;self.agent.act(dict(action='retry',id=video['job_id']))
+        self.model_fails=False;self.agent.act(dict(action='retry',id=video['job_id']))
         self.assertEqual((self.tick(999),self.tick(999)),(SENT,NONE));self.assertEqual((self.state(ident),len(self.sent)),(['ready'],4))
 
     def test_independent_agent_uses_only_remaining_budget_and_does_not_repeat(self):
@@ -332,7 +332,7 @@ class TaskVideoHttpTests(unittest.TestCase):
             self.assertNotIn('draft',stale['videos'][0]);self.assertNotIn(text,json.dumps(stale,ensure_ascii=False))
 
     def test_the_existing_retry_keeps_its_csrf_check_and_only_queues_the_job(self):
-        ident=self.feedback();self.fail=True;self.assertEqual([self.tick(m) for m in (0,5,15)],[FAILED]*3)
+        ident=self.feedback();self.model_fails=True;self.assertEqual([self.tick(m) for m in (0,5,15)],[FAILED]*3)
         status,result=self.video(ident);video,=result['videos']
         self.assertEqual((status,video['state'],video['attempts'],video['exhausted']),(200,'error',3,True));self.assertNotIn('draft',video)
         retry=dict(action='retry',id=video['job_id'])
@@ -345,7 +345,7 @@ class TaskVideoHttpTests(unittest.TestCase):
         self.assertEqual(after[1:],before[1:],'the retry calls no model or ffprobe and touches no original')
         changed=before[0]^after[0];self.assertTrue(changed and all('agent_jobs' in line for line in changed),changed)
         self.assertEqual([v['state'] for v in self.video(ident)[1]['videos']],['pending'])
-        self.fail=False;self.assertEqual((self.tick(999),self.tick(999)),(SENT,NONE))
+        self.model_fails=False;self.assertEqual((self.tick(999),self.tick(999)),(SENT,NONE))
         self.assertEqual(([v['state'] for v in self.video(ident)[1]['videos']],len(self.sent)),(['ready'],4))
 
 
@@ -499,12 +499,45 @@ class VideoReviewHttpTests(unittest.TestCase):
         if code:self.assertEqual(result.get('code'),code)
         return result
 
-    def test_the_parent_confirms_retries_revokes_and_reconfirms_and_the_read_shows_only_the_current_version(self):
-        ident,video=self.ready();self.assertEqual(self.rows('record_video_reviews'),0);statements=[];connect=sqlite3.connect
+    def traced_reads(self,ident,count=2):
+        """The SQL of the real HTTP reads alone, no snapshot helper inside the trace: a read runs no writing or schema statement,
+        and the file, line, model and probe counts taken before and after still match."""
+        statements=[];connect=sqlite3.connect
         def traced(*args,**kwargs):
             c=connect(*args,**kwargs);c.set_trace_callback(statements.append);return c
-        with mock.patch.object(sqlite3,'connect',traced):self.assertEqual([self.video(ident)[0] for _ in (1,2)],[200,200])
-        self.assertTrue(statements);self.assertEqual([s for s in statements if s.split()[0].upper() in ('INSERT','UPDATE','DELETE','CREATE','DROP','ALTER','REPLACE')],[],'a repeated read writes no SQL')
+        before=self.calls()
+        with mock.patch.object(sqlite3,'connect',traced):reads=[self.request('/api/record/video?record_id=%d'%ident)[:2] for _ in range(count)]
+        self.assertEqual(self.calls(),before);self.assertTrue(statements,'the read went to the database')
+        self.assertEqual([s for s in statements if s.split()[0].upper() in ('INSERT','UPDATE','DELETE','CREATE','DROP','ALTER','REPLACE')],[],'a read runs no writing or schema SQL')
+        return reads,statements
+
+    def tables(self):
+        """The table names as the file has them, read without the app's connect() that would create the missing ones."""
+        c=sqlite3.connect(self.app.Path(self.app.DB).absolute().as_uri()+'?mode=ro',uri=True)
+        try:return sorted(r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'"))
+        finally:c.close()
+
+    def test_a_read_creates_no_table_and_an_old_or_empty_database_answers_without_a_write(self):
+        """The GET opens the file read-only: without the review table it reads as unconfirmed, without any table or file it refuses as
+        unavailable without the error's text, and no read creates a table or a file."""
+        ident,video=self.ready();status,first=self.post(self.body(ident,video));self.assertEqual((status,first['review']['state']),(200,'confirmed'))
+        with self.app.connect() as c:c.execute('DROP TABLE record_video_reviews')
+        remaining=self.tables();self.assertNotIn('record_video_reviews',remaining);self.assertIn('record_video_drafts',remaining)
+        reads,statements=self.traced_reads(ident)
+        self.assertEqual([(status,result['videos'][0]['state'],result['videos'][0]['review']['state'],'selected' in result['videos'][0]['review']) for status,result in reads],[(200,'ready','unconfirmed',False)]*2)
+        self.assertEqual(self.tables(),remaining,'the read created no table')
+        for name,prepare in (('absent',lambda path:None),('empty',lambda path:path.write_bytes(b''))):
+            path=self.app.DATA/('synthetic-%s.sqlite3'%name);prepare(path);before=self.calls()
+            with self.subTest(database=name),mock.patch.object(self.app,'DB',path):
+                status,refused,_=self.request('/api/record/video?record_id=%d'%ident)
+            self.assertEqual((status,refused.get('code'),set(refused),self.calls()),(503,'storage_unavailable',{'error','code'},before))
+            for leak in ('sqlite','no such table','OperationalError',str(path)):self.assertNotIn(leak,json.dumps(refused,ensure_ascii=False))
+            self.assertEqual((path.exists(),path.stat().st_size if path.exists() else None),(name=='empty',0 if name=='empty' else None),'the read created no database file or table')
+
+    def test_the_parent_confirms_retries_revokes_and_reconfirms_and_the_read_shows_only_the_current_version(self):
+        ident,video=self.ready();self.assertEqual(self.rows('record_video_reviews'),0)
+        reads,statements=self.traced_reads(ident);self.assertEqual([status for status,_ in reads],[200,200]);self.assertEqual(reads[0],reads[1],'a repeated read is the same read')
+        self.assertTrue(any('record_video_reviews' in s for s in statements),'the read consults the review table without creating it')
         status,first=self.post(self.body(ident,video,selected=[1,0]));again=self.post(self.body(ident,video,selected=[0,1]))[1]
         self.assertEqual((status,first['repeated'],again['repeated'],again['id'],self.rows('record_video_reviews')),(200,False,True,first['id'],1))
         self.assertEqual({k:v for k,v in again.items() if k!='repeated'},{k:v for k,v in first.items() if k!='repeated'})
