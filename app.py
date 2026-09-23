@@ -1823,6 +1823,9 @@ class Handler(BaseHTTPRequestHandler):
                 from family_qq_capture import save_fragment
                 return self.reply(200,save_fragment(agent_store(),obj))
             if path=='/api/agent/action': return self.reply(200,family_agent.apply_school_change(SimpleNamespace(**globals()),agent_store(),obj) if obj.get('action')=='school_change' else agent_store().act(obj))
+            if path=='/api/record/video/review':
+                # Parent-only explicit confirmation or revocation of the listed current observations: no model, no probe, append-only, and it changes no record, task, score or plan. Reading stays GET /api/record/video.
+                return self.reply(200,family_task_video.review(SimpleNamespace(**globals()),agent_store(),obj))
             if path=='/api/goals/action': return self.reply(200,goal_store().action(obj))
             if path=='/api/agent/message/attachment': return self.reply(200,agent_store().message_attachment(obj,upload_info))
             if path=='/api/agent/message/page': return self.reply(200,agent_store().message_page(obj,upload_info))
