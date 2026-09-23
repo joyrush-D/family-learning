@@ -242,6 +242,7 @@ class BridgeTests(unittest.TestCase):
 
 import io
 import sys
+import time
 import warnings
 import zipfile
 
@@ -259,9 +260,9 @@ elif mode == 'ok': open(os.path.join(outdir, 'source.pdf'), 'wb').write(open(pdf
 """
 
 
-def office_zip(extra=()):
+def office_zip(extra=(),method=zipfile.ZIP_DEFLATED):
     out=io.BytesIO()
-    with warnings.catch_warnings(),zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:
+    with warnings.catch_warnings(),zipfile.ZipFile(out,'w',method) as z:
         warnings.simplefilter('ignore')  # A duplicate member is written on purpose.
         for name,text in [('[Content_Types].xml','<Types/>'),('word/document.xml','<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>'),('_rels/.rels','<Relationships/>'),*extra]:z.writestr(name,text)
     return out.getvalue()

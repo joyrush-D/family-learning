@@ -13,6 +13,7 @@ import sqlite3
 import struct
 import subprocess
 import tempfile
+import time
 import zipfile
 import zlib
 import xml.etree.ElementTree as ET
@@ -214,6 +215,7 @@ class OfficeError(ValueError):
 
 OFFICE_LIMITS = dict(entries=10000, total=100 * 1024 * 1024, member=100 * 1024 * 1024)  # The print path's existing bounds.
 OFFICE_TIMEOUT = 60
+_OFFICE_CHUNK = 64 * 1024  # Members stream through in bounded pieces; only what inspect asks for is kept.
 _OFFICE_PROFILE = ('<?xml version="1.0"?><oor:items xmlns:oor="http://openoffice.org/2001/registry">'
                    '<item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="MacroSecurityLevel" oor:op="fuse">'
                    '<value>3</value></prop></item></oor:items>')
@@ -228,9 +230,11 @@ _OFFICE_ERRORS = dict(too_large=('Office文件展开后过大',), unsupported=('
 def office_check(data, limits, inspect=None):
     """Validate one Office ZIP in memory; return (member names, {name: bytes} of the members inspect selects).
 
-    inspect(name) -> True reads a whole member, bounded by limits['member'] and compared with the declared size;
-    an int reads that many leading bytes. Relationship parts are always read and refused when any relationship
-    has TargetMode=External; macro projects, path traversal, duplicate, encrypted or oddly compressed entries stop too."""
+    Every member is streamed to its end in bounded chunks, so a bad CRC, a size that differs from the declared one or an
+    expansion past the limits stops before any converter opens the file. inspect(name) -> True keeps a whole member;
+    an int keeps that many leading bytes; anything else is verified and dropped. Relationship parts are always kept
+    and refused when any relationship has TargetMode=External; macro projects, path traversal, duplicate, encrypted or
+    oddly compressed entries stop too."""
     parts, names = {}, []
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
@@ -240,15 +244,23 @@ def office_check(data, limits, inspect=None):
             if len(set(low)) != len(low) or any(e.file_size > limits['member'] or e.flag_bits & 0x41
                                                  or e.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED) for e in entries):
                 raise OfficeError('unreadable')
+            total = 0
             for entry in entries:
                 name = entry.filename; names.append(name)
                 if 'vbaproject' in name.lower() or name.startswith(('/', '\\')) or '\\' in name or '..' in name.split('/'):
                     raise OfficeError('unsupported')
                 want = name.lower().endswith('.rels') or (inspect(name) if inspect else False)
-                if want:
-                    with archive.open(entry) as f:  # A bounded read: the declared size alone never stops a bomb.
-                        parts[name] = f.read(limits['member'] + 1 if want is True else want)
-                    if want is True and len(parts[name]) != entry.file_size: raise OfficeError('unreadable')
+                kept, size = io.BytesIO(), 0
+                with archive.open(entry) as f:  # Read to the end: zipfile verifies the CRC only once EOF is reached.
+                    while True:
+                        chunk = f.read(min(_OFFICE_CHUNK, limits['member'] + 1 - size))
+                        if not chunk: break
+                        size += len(chunk); total += len(chunk)
+                        if size > limits['member'] or total > limits['total']: raise OfficeError('too_large')
+                        if want is True: kept.write(chunk)
+                        elif want and kept.tell() < want: kept.write(chunk[:want - kept.tell()])
+                if size != entry.file_size: raise OfficeError('unreadable')
+                if want: parts[name] = kept.getvalue()
     except OfficeError:
         raise
     except Exception:  # Not a ZIP, truncated, bad CRC, password-protected or otherwise unreadable.
@@ -267,20 +279,26 @@ def office_convert(data, suffix, directory, soffice, *, timeout, limit, read):
     """Convert one checked Office body inside `directory` with a throwaway, macro-locked LibreOffice profile.
 
     argv only, no shell, stdin closed and the process group killed on timeout or failure; the PDF comes back
-    through the caller's bounded read(path, limit) and must carry a PDF header."""
+    through the caller's bounded read(path, limit) and must carry a PDF header. `timeout` is one budget shared by
+    preparing the source and profile, the process and reading the output, never a fresh allowance per step."""
+    started = time.monotonic()
+    def left():
+        remaining = float(timeout) - (time.monotonic() - started)
+        if remaining <= 0: raise OfficeError('timeout')
+        return remaining
     directory = Path(directory)
     source = directory / ('source' + suffix); source.write_bytes(data)
     profile = directory / 'profile'; (profile / 'user').mkdir(parents=True)
     (profile / 'user' / 'registrymodifications.xcu').write_text(_OFFICE_PROFILE)
     try:
         bounded_process([str(soffice), '-env:UserInstallation=' + profile.as_uri(), '--headless', '--convert-to', 'pdf',
-                         '--outdir', str(directory), str(source)], dict(os.environ), float(timeout), 64 * 1024)
+                         '--outdir', str(directory), str(source)], dict(os.environ), left(), 64 * 1024)
     except MediaError as error:
         raise OfficeError({'process_timeout': 'timeout', 'process_unavailable': 'failed', 'invalid_process': 'failed'}
                           .get(error.code, 'no_output')) from None
     output = directory / 'source.pdf'
     if output.is_symlink() or not output.is_file(): raise OfficeError('no_output')
-    pdf = read(output, limit)
+    left(); pdf = read(output, limit); left()
     if not pdf.startswith(b'%PDF-'): raise OfficeError('output_invalid')
     return pdf
 

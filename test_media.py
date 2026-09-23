@@ -636,6 +636,7 @@ class MediaTests(unittest.TestCase):
 
 
 import sys
+import time
 import family_print
 
 FAKE = """#!%s
@@ -712,6 +713,25 @@ class DocxPdfTests(unittest.TestCase):
                     self.assertEqual(caught.exception.code,code)
             popen.assert_not_called()
         self.assertFalse((self.data/'ok.json').exists())
+
+    def test_docx_pdf_checks_the_crc_of_every_member_the_converter_would_open(self):
+        image=png()+b'X'*10000  # Far past the 8-byte picture header the checker keeps and past one streaming chunk.
+        body=docx(para('Synthetic CRC validation'),[('word/media/image1.png',image)],method=zipfile.ZIP_STORED)
+        self.assertEqual(media.docx_pdf(body,soffice=self.fake('ok')),self.pdf);(self.data/'ok.json').unlink()
+        with zipfile.ZipFile(io.BytesIO(body)) as z:info=z.getinfo('word/media/image1.png')
+        n,x=struct.unpack('<HH',body[info.header_offset+26:info.header_offset+30]);start=info.header_offset+30+n+x
+        self.assertEqual(body[start:start+8],image[:8]);corrupt=bytearray(body);corrupt[start+9000]^=1;corrupt=bytes(corrupt)
+        with patch('subprocess.Popen') as popen,self.assertRaises(media.MediaError) as caught:media.docx_pdf(corrupt,soffice=self.fake('ok'))
+        self.assertEqual(caught.exception.code,'draft_docx_rejected');popen.assert_not_called();self.assertFalse((self.data/'ok.json').exists())
+        with self.assertRaises(family_print.OfficeError) as error:family_print.office_check(corrupt,family_print.OFFICE_LIMITS)  # Print never inspects pictures and must refuse too.
+        self.assertEqual(error.exception.reason,'unreadable')
+
+    def test_docx_pdf_shares_one_deadline_across_checks_conversion_and_output_reading(self):
+        with patch('subprocess.Popen') as popen,patch.object(media,'DOCX_PDF_TIMEOUT',0),self.assertRaises(media.MediaError) as caught:media.docx_pdf(self.body,soffice=self.fake('ok'))
+        self.assertEqual(caught.exception.code,'process_timeout');popen.assert_not_called();self.assertFalse((self.data/'ok.json').exists())
+        def slow_read(path,limit):time.sleep(1.5);return media.read_file(path,limit)
+        with patch.object(media,'DOCX_PDF_TIMEOUT',1),patch.object(media,'_docx_pdf_output',slow_read),self.assertRaises(media.MediaError) as caught:media.docx_pdf(self.body,soffice=self.fake('ok'))
+        self.assertEqual(caught.exception.code,'process_timeout');self.assertTrue((self.data/'ok.json').exists())  # Conversion finished; reading the PDF overran the same budget.
 
 
 if __name__ == '__main__':
