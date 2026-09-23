@@ -124,6 +124,7 @@ const fs=require('node:fs/promises'),path=require('node:path');
   assert.equal(await boxes.count(),0);assert.equal(await confirm.count(),0);assert.equal(await panel.locator('i').count(),0);
   views.push({json:ready(tokenA,unconfirmed)});await load();await eventually(async()=>/尚未核对/.test(await panel.innerText()),'unconfirmed shown');
   assert.equal(await boxes.count(),2);assert.equal(await panel.locator('[data-video-obs]:checked').count(),0);assert.equal(await confirm.isDisabled(),true);assert.equal(await revoke.count(),0);assert.equal(await panel.locator('i').count(),0);
+  assert(await boxes.evaluateAll(xs=>xs.every(x=>x.getBoundingClientRect().width<=24&&x.getBoundingClientRect().height<=24&&x.closest('label').getBoundingClientRect().height>=44)),'compact checkbox and tappable label');
   await boxes.nth(1).check();assert.equal(await confirm.isEnabled(),true);await boxes.nth(1).uncheck();assert.equal(await confirm.isDisabled(),true);await boxes.nth(0).check();await boxes.nth(1).check();await boxes.nth(0).uncheck();
   await p.locator('#taskForm [name=note]').fill('虚构核对期间未保存的反馈');
   reviewPlan.push(r=>r.abort('failed'));await confirm.click();await eventually(async()=>/尚未收到回执/.test(await panel.innerText()),'review lost reply');
