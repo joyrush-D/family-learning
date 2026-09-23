@@ -620,7 +620,7 @@ class VideoEvidenceTests(unittest.TestCase):
     ready=VideoReviewTests.ready;body=VideoReviewTests.body;other=VideoReviewTests.other;review=VideoReviewTests.review;goal=test_goals.GoalTests.goal
 
     def setUp(self):
-        TaskVideoTests.setUp(self);self.store=goals.Store(self.app,self.agent);self.inputs=[]  # the goal store reads the resolved data path
+        TaskVideoTests.setUp(self);self.store=goals.Store(self.app,self.agent);self.inputs=[];self.replies=[]  # the goal store reads the resolved data path
 
     def ctx(self):
         """Every goal read also proves that it writes nothing, probes nothing and calls no model."""
@@ -635,13 +635,25 @@ class VideoEvidenceTests(unittest.TestCase):
     def item(self,ctx,ident):
         items=[e for e in ctx['evidence'] if e['ref']=='record:%d'%ident];self.assertEqual(len(items),1);return items[0]
 
-    def plan(self,during=None):
+    def plan(self,during=None,cite=None):
+        """The goal's model: records its input, runs `during` while in flight and answers a legal plan, quoting `cite` (ref, quote) if given."""
         def reply(messages,schema,name,timeout,**kwargs):
             if name=='family_video_feedback_draft':return self.chat(messages,schema,name,timeout,**kwargs)
             value=json.loads(messages[-1]['content']);self.inputs.append(value)
             if during:during()
-            return test_goals.synthetic_plan(value)
+            result=test_goals.synthetic_plan(value)
+            if cite:result['proposal']['evidence']=[dict(ref=cite[0],quote=cite[1])]
+            self.replies.append(result);return result
         self.model.side_effect=reply
+
+    def replace_draft(self,ident):
+        """The background job re-saving a different draft for the same fingerprint: a new token the parent never reviewed."""
+        def replace():
+            with self.app.connect() as c:
+                payload=json.loads(c.execute('SELECT payload FROM record_video_drafts WHERE record_id=?',(ident,)).fetchone()[0])
+                payload['draft']['observations'][0]['text']='虚构：后台重新整理后的观察'
+                c.execute('UPDATE record_video_drafts SET payload=? WHERE record_id=?',(json.dumps(payload,ensure_ascii=False),ident))
+        return replace
 
     def stored(self,ident):
         with self.app.connect() as c:

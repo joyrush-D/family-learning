@@ -252,8 +252,8 @@ def video_evidence(row, confirmed):
     token, original id and time, the parent's selected observations with their time positions and the draft's listed
     unknowns, sound unassessed. It is the parent's checked reading of the picture: not something the system saw or
     heard the child do, no proof of completion, mastery or a cause, and it leaves the record's own text, score, task
-    and plan untouched. Unselected observations never arrive here. An original the parent did not confirm, or an
-    unchecked transcript, stays unknown and is named as `other_media_unread` instead of the whole record being unread.
+    and plan untouched. Unselected observations never arrive here. An original the parent did not confirm (a checked transcript proves
+    only its own words, never another original's picture), or an unchecked transcript, stays unknown and is named as `other_media_unread` instead of the whole record being unread.
     """
     if not confirmed:
         return {}
@@ -264,8 +264,8 @@ def video_evidence(row, confirmed):
         attachments = None
     state = row.get('transcript_state') or ''
     checked_words = state == TRANSCRIPT_CHECKED and bool(row.get('transcript'))
-    remaining = (attachments is None or (not checked_words and any(a not in covered for a in attachments))
-                 or bool(state and not checked_words))
+    # A checked transcript proves only its own words; an original the parent did not confirm stays unknown beside it.
+    remaining = attachments is None or any(a not in covered for a in attachments) or bool(state and not checked_words)
     out = dict(video_observations=confirmed, video_observations_label=VIDEO_CHECKED, audio_assessed=False)
     if remaining:
         out['other_media_unread'] = True

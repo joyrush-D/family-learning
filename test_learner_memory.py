@@ -194,6 +194,7 @@ class VideoEvidenceShapeTest(unittest.TestCase):
         self.assertEqual(one,dict(video_observations=confirmed,video_observations_label=VIDEO_CHECKED,audio_assessed=False))
         self.assertTrue(video_evidence(dict(attachments='["v1","a2"]'),confirmed)['other_media_unread'])
         self.assertTrue(video_evidence(dict(attachments='["v1"]',transcript='x',transcript_state='待核对'),confirmed)['other_media_unread'])
-        self.assertNotIn('other_media_unread',video_evidence(dict(attachments='["v1","a2"]',transcript='已核对文字',transcript_state='已核对'),confirmed))
+        self.assertTrue(video_evidence(dict(attachments='["v1","a2"]',transcript='已核对文字',transcript_state='已核对'),confirmed)['other_media_unread'])  # checked words do not read a2
+        self.assertNotIn('other_media_unread',video_evidence(dict(attachments='["v1"]',transcript='已核对文字',transcript_state='已核对'),confirmed))
         self.assertTrue(media_unreadable(dict(attachments='["v1"]',note='',score=None)))
         self.assertFalse(media_unreadable(dict(attachments='["v1"]',note='',score=None,**one)))
