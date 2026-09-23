@@ -193,6 +193,7 @@ def _piped(args, body, deadline, limit, code, missing='probe_missing', oversize=
     Any stderr byte (the tools run with -v error) refuses even an exit 0, as do a nonzero exit, an oversize stdout,
     the deadline and any OS error: never a shorter partial success. Returns the complete stdout bytes."""
     oversize = oversize or code; late = late or code
+    _require(time.monotonic() < deadline, late)
     try:
         with subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
             with selectors.DefaultSelector() as selector:
@@ -237,10 +238,12 @@ def _piped(args, body, deadline, limit, code, missing='probe_missing', oversize=
     except (OSError, subprocess.SubprocessError):
         raise VideoDraftError(code) from None
     _require(process.returncode == 0, code)
-    return bytes(output)
+    result = bytes(output)
+    _require(time.monotonic() < deadline, late)
+    return result
 
 
-def _webm_packet_end(body, remaining):
+def _webm_packet_end(body, remaining, *, whole=False):
     """End time of every packet ffprobe can parse from the supplied bytes.
 
     The dump is streamed into a bounded buffer and folded into one pts+duration maximum after EOF. A truncated
@@ -251,16 +254,21 @@ def _webm_packet_end(body, remaining):
     the value is the duration of the supplied complete parseable bytes, never a claim of source completeness."""
     _require(remaining > 0, 'webm_duration_unsupported')
     args = ['ffprobe', '-v', 'error', '-protocol_whitelist', 'pipe', '-f', 'matroska', '-i', 'pipe:0',
-            '-select_streams', 'v:0', '-show_entries', 'packet=pts_time,duration_time', '-of', 'csv=p=0']
+            *([] if whole else ['-select_streams', 'v:0']), '-show_entries',
+            'packet=pts_time,duration_time:packet_side_data=' if whole else 'packet=pts_time,duration_time',
+            '-of', 'csv=p=0']
     deadline = time.monotonic() + remaining
     stdout = _piped(args, body, deadline, MAX_PROBE_OUTPUT, 'webm_duration_unsupported')
     try:
         text = stdout.decode('utf-8', 'strict')
         end = 0.0; rows = 0
         for line in text.splitlines():
-            fields = line.split(',')
+            if whole and not line.strip():
+                continue  # ffprobe separates optional packet side-data with an empty row.
+            fields = (line.rstrip(',') if whole else line).split(',')
             values = [float(v) for v in fields]  # 'N/A', '', inf all fail here.
-            _require(len(fields) == 2 and all(math.isfinite(v) and v >= 0 for v in values) and values[1] > 0, 'webm_duration_unsupported')
+            _require(len(fields) == 2 and all(math.isfinite(v) for v in values)
+                     and values[0] >= (-1 if whole else 0) and values[1] > 0, 'webm_duration_unsupported')
             end = max(end, values[0] + values[1]); rows += 1
         _require(rows > 0 and end > 0, 'webm_duration_unsupported')
     except (UnicodeError, ValueError, OverflowError):
@@ -310,7 +318,7 @@ def audio_track(body, mime, timeout=AUDIO_TIMEOUT):
     False: a decode is neither a transcription, a pronunciation check nor mastery, and nothing here claims one.
     Pipe input needs the index ahead of the media (WebM, faststart or fragmented MP4/MOV); a file whose moov trails
     the data cannot be seeked over a pipe and is refused as a decode failure rather than read from a temp file."""
-    _require(type(timeout) in (int, float) and math.isfinite(timeout) and 0 < timeout <= AUDIO_TIMEOUT, 'timeout_invalid')
+    _require(type(timeout) in (int, float) and 0 < timeout <= AUDIO_TIMEOUT and math.isfinite(timeout), 'timeout_invalid')
     _require(isinstance(mime, str) and mime in family_llm.VIDEO_TYPES, 'audio_mime_unsupported')
     _require(isinstance(body, bytes) and len(body) > 0, 'original_unavailable')
     _require(len(body) <= family_llm.MAX_INPUT, 'original_too_large')
@@ -329,8 +337,9 @@ def audio_track(body, mime, timeout=AUDIO_TIMEOUT):
     _require(audio, 'audio_track_missing'); _require(len(audio) == 1, 'audio_track_ambiguous')
     duration = _number(raw); start = _number(audio[0].get('start_time'))
     if mime == 'video/webm':
-        # Same rule as probe(): the header cannot be trusted for WebM, every video packet is scanned to its end.
-        duration = _webm_packet_end(body, deadline - time.monotonic())
+        # The audio may outlast the pictures or contain timestamp gaps. Scan all packets,
+        # including audio, without changing the existing picture-only probe() contract.
+        duration = _webm_packet_end(body, deadline - time.monotonic(), whole=True)
     _require(math.isfinite(duration) and 0 < duration <= family_llm.MAX_VIDEO_SECONDS, 'duration_invalid')
     _require(math.isfinite(start) and -1 <= start <= duration, 'audio_start_invalid')
     pcm = _piped(['ffmpeg', '-nostdin', '-v', 'error', '-protocol_whitelist', 'pipe', '-f', demux, '-i', 'pipe:0',
@@ -338,6 +347,10 @@ def audio_track(body, mime, timeout=AUDIO_TIMEOUT):
                  body, deadline, MAX_PCM, 'audio_decode_failed', missing='ffmpeg_missing', oversize='audio_too_large',
                  late='audio_timeout')
     _require(len(pcm) > 0 and len(pcm) % AUDIO_WIDTH == 0, 'audio_decode_failed')
+    pcm_seconds = len(pcm) / (AUDIO_RATE * AUDIO_WIDTH)
+    duration = max(duration, start + pcm_seconds, pcm_seconds)
+    # Conservative at 600 seconds: codec padding is not silently trimmed or granted a tolerance.
+    _require(duration <= family_llm.MAX_VIDEO_SECONDS, 'duration_invalid')
     out = io.BytesIO()
     with wave.open(out, 'wb') as w:
         w.setnchannels(1); w.setsampwidth(AUDIO_WIDTH); w.setframerate(AUDIO_RATE); w.writeframes(pcm)
@@ -345,7 +358,7 @@ def audio_track(body, mime, timeout=AUDIO_TIMEOUT):
     _require(len(wav) == len(pcm) + WAV_HEADER and len(wav) <= family_llm.MAX_INPUT, 'audio_too_large')
     _require(time.monotonic() < deadline, 'audio_timeout')
     return dict(wav=wav, mime='audio/wav', sample_rate=AUDIO_RATE, channels=1, sample_width=AUDIO_WIDTH,
-                video_seconds=duration, audio_start_seconds=start, pcm_seconds=len(pcm) / (AUDIO_RATE * AUDIO_WIDTH),
+                video_seconds=duration, audio_start_seconds=start, pcm_seconds=pcm_seconds,
                 audio_assessed=False, tail_verified=False, note=AUDIO_NOTE)
 
 

@@ -617,14 +617,14 @@ class AudioTrackTests(unittest.TestCase):
     DECODE="import sys;sys.stdin.buffer.read();sys.stdout.buffer.write(bytes(range(256))*%d)"
     ECHO="import sys;d=sys.stdin.buffer.read();sys.stdout.buffer.write(d[:len(d)//2*2])"
 
-    def probe(self,**changes):return self.PROBE%json.dumps(dict(self.STREAMS,**changes))
+    def probe(self,**changes):return self.PROBE%repr(dict(self.STREAMS,**changes))
 
     def run_fake(self,probe=None,decode=None,body=b'synthetic mp4',mime='video/mp4',timeout=3,packets=None,missing=()):
         real=subprocess.Popen;children=[];self.calls=[]
         def child(args,**kwargs):
             self.calls.append(args);tool=args[0];self.assertIn(tool,('ffprobe','ffmpeg'))
             if tool in missing:raise FileNotFoundError(tool)
-            code=(packets or self.PACKETS) if '-select_streams' in args else probe if tool=='ffprobe' else decode
+            code=(packets or self.PACKETS) if any(a.startswith('packet=') for a in args) else probe if tool=='ffprobe' else decode
             self.assertIsNotNone(code,tool+' was launched although this case must refuse before it')
             p=real([sys.executable,'-c',code],**kwargs);children.append(p);return p
         started=time.monotonic()
@@ -705,7 +705,7 @@ class AudioTrackTests(unittest.TestCase):
         self.refused('ffmpeg_missing',probe=self.probe(),decode=self.DECODE%250,missing=('ffmpeg',))
         self.assertEqual([a[0] for a in self.calls],['ffprobe','ffmpeg'])
         with mock.patch.object(tv.subprocess,'Popen') as launch:
-            for timeout in (True,False,0,-1,31,30.000001,float('nan'),float('inf'),float('-inf'),'5',None,[5]):
+            for timeout in (True,False,0,-1,31,10**1000,30.000001,float('nan'),float('inf'),float('-inf'),'5',None,[5]):
                 with self.subTest(timeout=timeout),self.assertRaises(tv.VideoDraftError) as caught:tv.audio_track(b'x','video/mp4',timeout)
                 self.assertEqual(caught.exception.code,'timeout_invalid')
             for body,mime,code in ((b'','video/mp4','original_unavailable'),('text','video/mp4','original_unavailable'),(None,'video/mp4','original_unavailable'),
@@ -714,8 +714,39 @@ class AudioTrackTests(unittest.TestCase):
                 with self.subTest(mime=mime,code=code),self.assertRaises(tv.VideoDraftError) as caught:tv.audio_track(body,mime)
                 self.assertEqual(caught.exception.code,code)
             launch.assert_not_called()
-        self.assertIsNone(tv.audio_track.__defaults__[0] if False else None)  # default timeout stays the documented 30 s.
+        self.assertEqual(tv.audio_track.__defaults__, (30,))
         self.assertEqual(tv.AUDIO_TIMEOUT,30);self.assertEqual(tv.MAX_PCM+44,family_llm.MAX_INPUT)
+
+    def test_expired_deadline_starts_nothing_and_late_parse_or_wav_is_discarded(self):
+        with mock.patch.object(tv.subprocess,'Popen') as launch:
+            with self.assertRaises(tv.VideoDraftError) as caught:
+                tv._piped(['ffprobe'], b'x', time.monotonic()-1, 100, 'probe_failed', late='audio_timeout')
+            self.assertEqual(caught.exception.code,'audio_timeout');launch.assert_not_called()
+        # Time spent parsing the probe counts too: it must not start the decoder afterwards.
+        clock=[0.0];loads=json.loads
+        def late_json(*args,**kwargs):
+            result=loads(*args,**kwargs);clock[0]=31.0;return result
+        with mock.patch.object(tv.time,'monotonic',side_effect=lambda:clock[0]),mock.patch.object(tv.json,'loads',side_effect=late_json):
+            self.refused('audio_timeout',probe=self.probe(),timeout=30)
+            self.assertEqual([a[0] for a in self.calls],['ffprobe'])
+        clock[0]=0.0;write=wave.Wave_write.writeframes
+        def late_wav(w,data):
+            result=write(w,data);clock[0]=31.0;return result
+        with mock.patch.object(tv.time,'monotonic',side_effect=lambda:clock[0]),mock.patch.object(wave.Wave_write,'writeframes',late_wav):
+            self.refused('audio_timeout',probe=self.probe(),decode=self.DECODE%250,timeout=30)
+            self.assertEqual([a[0] for a in self.calls],['ffprobe','ffmpeg'])
+
+    def test_pcm_and_offset_have_a_strict_600_second_bound_without_trimming(self):
+        for frames,start,valid in ((600*16000,0,True),(600*16000+1,0,False),(600*16000,1,False)):
+            header=dict(streams=[dict(codec_type='video'),dict(codec_type='audio',start_time=start)],format=dict(duration=600))
+            pcm=b'\0\0'*frames
+            with mock.patch.object(tv,'_piped',side_effect=[json.dumps(header).encode(),pcm]):
+                if valid:
+                    result=tv.audio_track(b'synthetic','video/mp4')
+                    self.assertEqual((result['video_seconds'],result['pcm_seconds'],len(result['wav'])),(600,600,len(pcm)+44))
+                else:
+                    with self.assertRaises(tv.VideoDraftError) as caught:tv.audio_track(b'synthetic','video/mp4')
+                    self.assertEqual(caught.exception.code,'duration_invalid')
 
 
 class RealAudioTrackTests(unittest.TestCase):
@@ -755,6 +786,26 @@ class RealAudioTrackTests(unittest.TestCase):
                 with self.subTest(mime=mime,cut=cut),self.assertRaises(tv.VideoDraftError):tv.audio_track(body[:-cut],mime)
         with self.assertRaises(tv.VideoDraftError) as caught:tv.audio_track(self.mp4,'video/webm')
         self.assertIn(caught.exception.code,('probe_failed','webm_duration_unsupported'))
+
+    def test_audio_tail_and_offset_count_towards_the_whole_media_bound(self):
+        def clip(seconds,offset=0):
+            return REAL_RUN(['ffmpeg','-v','error','-f','lavfi','-i','color=c=blue:s=16x16:r=1:d=2',
+                '-itsoffset',str(offset),'-f','lavfi','-i',f'anullsrc=r=16000:cl=mono:d={seconds}',
+                '-c:v','libvpx','-c:a','libopus','-f','webm','pipe:1'],capture_output=True,check=True,timeout=30).stdout
+        for seconds,offset in ((4,0),(1,5)):
+            result=tv.audio_track(clip(seconds,offset),'video/webm')
+            self.assertAlmostEqual(result['pcm_seconds'],seconds,delta=0.05)
+            self.assertAlmostEqual(result['audio_start_seconds'],offset,delta=0.05)
+            self.assertAlmostEqual(result['video_seconds'],offset+seconds,delta=0.05)
+        for seconds,offset in ((601,0),(2,599)):
+            with self.subTest(seconds=seconds,offset=offset):
+                body=clip(seconds,offset);piped=tv._piped;calls=[]
+                def track(args,*a,**kw):
+                    calls.append(args[0]);return piped(args,*a,**kw)
+                with mock.patch.object(tv,'_piped',side_effect=track),self.assertRaises(tv.VideoDraftError) as caught:
+                    tv.audio_track(body,'video/webm')
+                self.assertEqual(caught.exception.code,'duration_invalid')
+                self.assertNotIn('ffmpeg',calls,'refuse before decoding an overlong supplied timeline')
 
 
 if __name__=='__main__':unittest.main()
