@@ -270,10 +270,6 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                     with self.store._db() as c:
                         c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?', (original_message,) + args)
 
-
-if __name__ == '__main__':
-    unittest.main()
-
     def test_complete_word_original_is_named_as_word_with_converted_pages_and_parent_confirms(self):
         """A layout Word original: same page-group path, but the model and the parent are told it is Word, by its original name,
         with converted-PDF page numbers; the 6000-char summary limit still stays a separate claim from whole-original coverage."""
@@ -359,3 +355,7 @@ if __name__ == '__main__':
             with self.app.connect() as c:
                 changed = dict(c.execute('SELECT * FROM manual_tasks WHERE id=?', (target['id'],)).fetchone())
             self.assertNotEqual(changed, original); self.assertIn('语文：习作要求见所附Word。', changed['source'])
+
+
+if __name__ == '__main__':
+    unittest.main()
