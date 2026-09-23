@@ -296,7 +296,8 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                               [g['pages'] for g in doc['groups']], doc['omitted_groups'], doc['truncated_groups']),
                              ('docx', DOCX_MIME, pdfm.CONVERSION, '虚构练习卷.docx', 11, list(range(1, 12)), True, BATCHES, [], []))
             brief = self.brief(ident); record = brief['pdf_evidence']['documents'][0]; row = self.item(ident)
-            self.assertEqual((row['state'], row['task_id'] or '', self.count('manual_tasks'), brief['state']), ('pending', '', 0, 'ready'))
+            self.assertEqual((row['state'], row['task_id'] or '', self.count('manual_tasks'), brief['state']), ('pending', '', 0, 'review'))  # the source is an OCR screenshot, not a verified teacher message
+            self.assertIn('仅截图可见内容', brief['reason'])
             self.assertEqual((record['original'], record['mime'], record['conversion'], record['name'], record['sent'], record['groups'], record['page_count']),
                              ('docx', DOCX_MIME, pdfm.CONVERSION, '虚构练习卷.docx', 4, 4, 11))
             for text in ('已参考Word原件整理', '可能与Word中显示的分页不同', '虚构练习卷.docx（转换后共11页已逐组整理，送核4/4组）', '不是老师原文', '不说明孩子完成情况'):
@@ -304,10 +305,13 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             self.assertNotIn('PDF原件', brief['reason'])
             with self.assertRaises(agent.AgentError) as auto:
                 self.store.act(dict(id=ident, action='accept', expected_updated=row['updated']), school_auto=True)
-            self.assertEqual(auto.exception.status, 409); self.assertIn('依据Word原件整理的草稿须家长核对后加入', str(auto.exception))
+            self.assertEqual(auto.exception.status, 409); self.assertEqual(self.count('manual_tasks'), 0)
             saved = self.item(ident)
             self.assertEqual((self.refresh(draft(), minutes=1), self.item(ident)), ((dict(used=0, failed=0, created=0), []), saved))  # same evidence: no call
 
+            # Change a saved group so this is an actual new model round, not a deduplicated no-op.
+            with self.store._db() as c:
+                c.execute('UPDATE agent_pdf_material SET payload=? WHERE fingerprint=? AND first_page=1', (json.dumps(dict(DRAFT, note='新核对摘要', kind='school_material')), evidence['fingerprint']))
             def detach(messages):
                 self.link(keys, docx, action=DETACH); return draft()
             self.assertEqual((self.refresh(detach, minutes=2)[0]['used'], self.item(ident)), (1, saved))  # detached in flight: result discarded
@@ -317,7 +321,8 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             self.assertEqual((accepted['state'], self.count('manual_tasks')), ('accepted', 1))
             with self.app.connect() as c:
                 task = dict(c.execute('SELECT * FROM manual_tasks WHERE id=?', (accepted['task_id'],)).fetchone())
-            self.assertEqual((task['child'], task['title'], self.item(ident)['state'], self.item(ident)['task_id']), ('child-1', draft()['title'], 'accepted', accepted['task_id']))
+            self.assertEqual((task['child'], task['title'], self.item(ident)['state'], self.item(ident)['task_id']), ('示例甲', draft()['title'], 'accepted', accepted['task_id']))
+            self.assertEqual(self.item(ident)['child_id'], 'child-1')
             again = self.store.act(dict(id=ident, action='accept'))
             self.assertEqual((again['state'], again['task_id'], self.count('manual_tasks')), ('accepted', accepted['task_id'], 1))
             self.assertEqual(self.refresh(draft(), minutes=4)[1], [])
@@ -358,6 +363,36 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             with self.app.connect() as c:
                 changed = dict(c.execute('SELECT * FROM manual_tasks WHERE id=?', (target['id'],)).fetchone())
             self.assertNotEqual(changed, original); self.assertIn('语文：习作要求见所附Word。', changed['source'])
+
+
+    def test_word_changes_before_and_during_model_use_the_shared_guard(self):
+        self.link(self.keys, self.pdf, action=DETACH)
+        self.pdf = self.seed_docx('f' * 32); self.link(self.keys, self.pdf)
+        with no_convert(), no_pages():
+            self.test_source_message_and_authorization_changes_before_and_after_model()
+
+    def test_word_claim_detach_and_recovery_do_not_convert_or_call_early(self):
+        self.link(self.keys, self.pdf, action=DETACH)
+        self.pdf = self.seed_docx('f' * 32); self.link(self.keys, self.pdf)
+        with no_convert(), no_pages():
+            self.test_change_during_job_claim_causes_no_model_call_and_same_evidence_recovers_once()
+
+    def test_word_full_coverage_does_not_hide_summary_omissions(self):
+        self.link(self.keys, self.pdf, action=DETACH)
+        self.pdf = self.seed_docx('f' * 32); self.link(self.keys, self.pdf)
+        batches = [[1, 4, 7], [2, 5, 8], [3, 6, 9], [10, 11]]
+        self.seed_groups(batches, note='摘' * 3000); ident = self.candidate()
+        with no_convert(), no_pages():
+            result, calls = self.refresh(draft())
+        doc = json.loads(calls[0][1]['content'])['pdf_material'][0]
+        self.assertEqual((result['used'], doc['original'], doc['complete'], doc['processed_pages']), (1, 'docx', True, list(range(1,12))))
+        self.assertEqual((doc['truncated_groups'], doc['omitted_groups']), (['第2、5、8页'], ['第3、6、9页', '第10–11页']))
+        self.assertEqual(sum(len(g['text']) for g in doc['groups']), 6000)
+        brief = self.brief(ident)
+        self.assertEqual(brief['state'], 'review')
+        self.assertIn('Word整理摘要未全部送核', brief['reason'])
+        self.assertIn('转换后共11页', brief['reason'])
+        self.assertIn('第3、6、9页', brief['reason'])
 
 
 if __name__ == '__main__':
