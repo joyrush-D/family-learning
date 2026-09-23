@@ -962,6 +962,166 @@ class VideoTranscribeTests(TaskVideoTests):
                     self.assertIn(error.code,codes[name]);self.assertEqual(self.changes[changes:],[stage]);self.assertIsNotNone(self.expected,'the injection ran inside the call')
         reset();self.assertEqual(self.transcribe(self.body(ident))['text'],self.TEXT)  # a fresh version after the change works again
 
+class VideoTranscribeHttpTests(VideoTranscribeTests):
+    """#23 over real HTTP: POST /api/record/video/transcribe is the parent's explicit request only. Anonymous, child-only and token-less
+    requests, malformed bodies, stale versions, an unconfigured service and an absent database extract nothing, call no service and write
+    nothing; a served request decodes the selected original once, sends it once and returns text for review only, with no receipt kept;
+    GET /api/record/video still extracts nothing, calls nothing and writes nothing while naming the version a request must send."""
+    locals().update({name:None for name in dir(VideoTranscribeTests) if name.startswith('test')})  # helpers only; the direct tests run once, above
+    request=TaskVideoHttpTests.request;entry=TaskVideoHttpTests.entry;tables=VideoReviewHttpTests.tables
+    PUBLIC=TaskVideoHttpTests.PUBLIC;LAN=TaskVideoHttpTests.LAN;PASSWORD=TaskVideoHttpTests.PASSWORD;PATH='/api/record/video/transcribe'
+
+    def setUp(self):
+        VideoTranscribeTests.setUp(self);self.server=self.app.ThreadingHTTPServer(('127.0.0.1',0),self.app.Handler)
+        worker=threading.Thread(target=self.server.serve_forever,daemon=True);worker.start()
+        self.addCleanup(lambda:(self.server.shutdown(),self.server.server_close(),worker.join()))
+
+    def counts(self):return (self.snapshot(),len(self.extracted),len(self.asr))
+
+    def video(self,ident,headers=None,host=None):
+        """Every HTTP read also proves that reading extracts nothing, calls no service or model and writes nothing."""
+        before=self.counts();status,result,_=self.request('/api/record/video?record_id=%d'%ident,headers=headers,host=host)
+        self.assertEqual(self.counts(),before);return status,result
+
+    def body(self,ident,**obj):
+        """The request as the parent's page would build it from the HTTP read."""
+        status,read=self.video(ident);self.assertEqual(status,200);video=read['videos'][0]
+        return dict(record_id=ident,upload_id=video['upload_id'],expected_fingerprint=video['transcription_fingerprint'])|obj
+
+    def post(self,body,headers=None,host=None,token=True):
+        """Every HTTP request also proves that it writes no row or file, launches no tool itself and calls no vision model; a change injected
+        while the request is in flight sets self.expected to the data as the injection left it. The page token is sent unless the test
+        omits it (False) or replaces it."""
+        sent=({'X-Family-Token':self.app.TOKEN} if token is True else {'X-Family-Token':token} if token else {})|(headers or {})
+        before=self.snapshot();self.expected=None;status,result,_=self.request(self.PATH,body,sent,host=host)
+        self.assertEqual(self.snapshot(),before if self.expected is None else self.expected);return status,result
+
+    def refused(self,body,status,code=None,extractions=0,calls=0,**how):
+        """A refusal returns no text and never quotes the service, its key or its reply."""
+        counts=(len(self.extracted),len(self.asr));got,result=self.post(body,**how);dumped=json.dumps(result,ensure_ascii=False)
+        self.assertEqual((got,len(self.extracted)-counts[0],len(self.asr)-counts[1],'text' in (result or {})),(status,extractions,calls,False),(str(body)[:120],how,dumped[:200]))
+        if code:self.assertEqual(result.get('code'),code,dumped[:200])
+        for secret in (self.TEXT,self.KEY,self.URL,'synthetic-asr','FAMILY_ASR'):self.assertNotIn(secret,dumped)
+        return result
+
+    def unchanged(self,ident):
+        """No transcript, draft, job or review row: the text was returned for review only."""
+        with self.app.connect() as c:self.assertEqual(tuple(c.execute('SELECT transcript,transcript_state FROM records WHERE id=?',(ident,)).fetchone()),('',''))
+        self.assertEqual((self.rows('record_video_drafts'),self.rows('agent_jobs'),self.rows('record_video_reviews')),(0,0,0))
+
+    def test_a_served_request_decodes_and_sends_the_selected_original_once_and_neither_it_nor_the_read_runs_writing_sql(self):
+        """Traced at sqlite3.connect itself, before the handler builds its store, so every statement of a connection's own setup is seen;
+        the contrast on the initialized store shows the same trace does see schema statements."""
+        ident=self.linked(self.TASK);self.linked(self.TASK);original=self.files()[self.uploads[ident]];statements=[];connect=sqlite3.connect;before=self.snapshot()
+        def opened(*args,**kwargs):
+            c=connect(*args,**kwargs);c.set_trace_callback(statements.append);return c
+        with mock.patch.object(sqlite3,'connect',opened):
+            status,read,_=self.request('/api/record/video?record_id=%d'%ident);video=read['videos'][0];self.assertEqual((status,video['state']),(200,'pending'))
+            body=dict(record_id=ident,upload_id=video['upload_id'],expected_fingerprint=video['transcription_fingerprint'])
+            self.assertEqual((self.extracted,self.asr),([],[]),'the read extracts and sends nothing')
+            status,result,_=self.request(self.PATH,body,{'X-Family-Token':self.app.TOKEN});served=list(statements)
+            with self.agent._db() as c:pass
+        writes=lambda rows:[s for s in rows if s.split()[0].upper() in ('INSERT','UPDATE','DELETE','CREATE','DROP','ALTER','REPLACE')]
+        self.assertEqual((self.snapshot(),writes(served)),(before,[]));self.assertTrue(served,'the read and the request went to the database')
+        self.assertTrue(any(s.split()[0].upper()=='CREATE' for s in writes(statements[len(served):])),"the same trace sees the initialized store's schema statements")
+        self.assertEqual((status,self.extracted,self.asr),(200,[(original,'video/mp4',tv.AUDIO_TIMEOUT)],[(b'RIFF-synthetic-wav:'+original,'audio/wav')]))
+        self.assertEqual([result[k] for k in ('record_id','upload_id','task_id','transcription_fingerprint','state','saved','text','characters','record_limit','speakers_distinguished','audio_assessed','audience')],
+                         [ident,body['upload_id'],self.TASK,body['expected_fingerprint'],'pending_review',False,self.TEXT,len(self.TEXT),4000,False,False,'parent'])
+        self.assertEqual((result['audio'],result['note']),(dict(mime='audio/wav',audio_start_seconds=-0.02,pcm_seconds=12.48,provided_seconds=12.5,tail_verified=False),tv.TRANSCRIPTION_NOTE))
+        dumped=json.dumps(result,ensure_ascii=False)
+        for secret in (self.URL,self.KEY,'synthetic-asr','FAMILY_ASR'):self.assertNotIn(secret,dumped)
+        self.unchanged(ident);self.assertEqual(self.state(ident),['pending'])
+        self.assertEqual((self.post(body)[0],len(self.extracted),len(self.asr)),(200,2,2))  # each explicit request is one call: no cache, no retry, no receipt
+        self.asr_text='虚'*4000;status,whole=self.post(body);self.assertEqual((status,whole['text'],whole['characters'],len(self.asr)),(200,'虚'*4000,4000,3))  # exactly the record limit returns whole
+        self.asr_text='虚'*4001;over=self.refused(body,422,'transcript_too_long',extractions=1,calls=1)  # one over: refused, not cut
+        self.assertEqual((set(over),over['error']),({'error','code'},tv.EXPLANATIONS['transcript_too_long']));self.assertNotIn('虚',json.dumps(over,ensure_ascii=False))
+        self.unchanged(ident);self.assertEqual(self.video(ident)[1]['videos'][0]['transcription_fingerprint'],body['expected_fingerprint'],'the read still names the same version')
+
+    def test_anonymous_child_and_token_less_requests_never_reach_the_service_and_the_signed_in_parent_is_served(self):
+        ident=self.linked(self.TASK);good=self.body(ident)
+        for token in (False,'invalid-token'):self.refused(good,403,'csrf_expired',token=token)
+        child=self.app.family_child;child.parent_action(self.app,'study',dict(child_id='child-1',enabled=True))
+        status,state,headers=self.request('/child/api/login',dict(invite=child.parent_action(self.app,'invite',dict(child_id='child-1'))['invite']));self.assertEqual(status,200)
+        cookie={'Cookie':headers['Set-Cookie'].split(';',1)[0]};kid=cookie|{'X-Child-CSRF':state['csrf']}
+        for who in (cookie,kid):self.refused(good,403,headers=who)  # a child's own session is not a parent, even with the page token
+        self.entry('https://'+self.PUBLIC+'/family');self.addCleanup((self.app.DATA/'access.json').unlink)
+        for who in ({},cookie,kid):
+            for token in (True,False):self.refused(good,401,headers=who,host=self.PUBLIC,token=token)
+        basic={'Authorization':'Basic '+base64.b64encode(('parent:'+self.PASSWORD).encode()).decode('ascii')}
+        self.refused(good,403,'csrf_expired',headers=basic,host=self.PUBLIC,token=False)
+        self.assertEqual(self.video(ident,headers=basic,host=self.PUBLIC)[1]['videos'][0]['transcription_fingerprint'],good['expected_fingerprint'])
+        status,served=self.post(good,headers=basic,host=self.PUBLIC);self.assertEqual((status,served['text'],len(self.asr)),(200,self.TEXT,1))
+        self.entry('http://'+self.LAN)
+        with mock.patch.dict(os.environ,FAMILY_LAN_NO_LOGIN='1'):
+            for who in (cookie,kid):self.refused(good,403,headers=who,host=self.LAN)
+            self.refused(good,403,'csrf_expired',host=self.LAN,token=False)
+            status,served=self.post(good,host=self.LAN);self.assertEqual((status,served['text'],len(self.asr)),(200,self.TEXT,2))
+        self.unchanged(ident)
+
+    def test_malformed_bodies_get_400_stale_missing_or_withdrawn_versions_409_and_an_unconfigured_or_failed_service_a_fixed_reason(self):
+        ident=self.linked(self.TASK);body=self.body(ident);upload=body['upload_id'];fp=body['expected_fingerprint']
+        bad=['null',[],'x',[body],{},dict(body,extra=1),{k:v for k,v in body.items() if k!='expected_fingerprint'},dict(body,record_id=True),dict(body,record_id=0),
+             dict(body,record_id=-1),dict(body,record_id=1.0),dict(body,record_id=str(ident)),dict(body,record_id=[ident]),dict(body,record_id=2**63),
+             dict(body,upload_id=upload.upper()),dict(body,upload_id=upload[:31]),dict(body,upload_id=upload+'0'),dict(body,upload_id=[upload]),dict(body,upload_id=None),
+             dict(body,expected_fingerprint=fp[:63]),dict(body,expected_fingerprint=fp.upper()),dict(body,expected_fingerprint=dict(value=fp)),dict(body,expected_fingerprint=None),
+             dict(body,expected_fingerprint=1),dict(body,text='虚构：家长自己写的文字'),dict(body,save=True),dict(body,padding='x'*20000)]
+        for value in bad:
+            with self.subTest(body=str(value)[:100]):self.refused(value,400)
+        self.refused(dict(body,expected_fingerprint='0'*64),409,'fingerprint_stale');self.refused(dict(body,record_id=ident+1000),409,'record_missing')
+        self.refused(dict(body,upload_id='0'*32),409,'original_missing');self.refused(dict(body,upload_id=self.clip()),409,'original_missing')
+        unlinked=self.linked();self.refused(dict(record_id=unlinked,upload_id=self.uploads[unlinked],expected_fingerprint='0'*64),409,'task_unlinked')
+        self.enable(False);self.refused(body,409,'agent_disabled');self.enable(True)
+        with mock.patch.dict(os.environ,{'FAMILY_ASR_URL':' '}):self.refused(body,503,'asr_unconfigured')
+        for code in ('audio_track_missing','ffmpeg_missing','audio_timeout','audio_too_large','no_video_track'):
+            with self.subTest(code=code),mock.patch.object(tv,'audio_track',side_effect=tv.VideoDraftError(code)):
+                self.assertEqual(self.refused(body,422,code)['error'],tv.EXPLANATIONS[code])
+        for failure,status,code in ((family_llm.LLMUnavailable('虚构：未配置 '+self.URL),503,'asr_unconfigured'),(family_llm.LLMDraftError('虚构：连接失败 '+self.URL+' key='+self.KEY),502,'asr_failed'),
+                                    (RuntimeError('secret '+self.URL+' '+self.KEY),502,'asr_failed'),(ValueError('音频不能为空'),502,'asr_failed')):
+            with self.subTest(failure=type(failure).__name__):  # the adapter's own text, which may name the endpoint, key or reply, never leaves
+                self.asr_fails=failure;self.assertEqual(self.refused(body,status,code,extractions=1,calls=1)['error'],tv.EXPLANATIONS[code])
+        self.asr_fails=None
+        for returned,code in ((None,'asr_failed'),(123,'asr_failed'),({'text':'虚构'},'asr_failed'),('','asr_empty'),(' \n\t','asr_empty')):
+            with self.subTest(returned=repr(returned)):self.asr_text=returned;self.assertEqual(self.refused(body,502,code,extractions=1,calls=1)['error'],tv.EXPLANATIONS[code])
+        self.asr_text=self.TEXT;self.unchanged(ident);self.assertEqual(self.post(body)[1]['text'],self.TEXT)  # nothing above changed the version
+        self.correct(ident)();self.refused(body,409,'fingerprint_stale');fresh=self.body(ident);self.assertNotEqual(fresh['expected_fingerprint'],fp)
+        self.assertEqual(self.post(fresh)[1]['text'],self.TEXT,'after a 409 the page re-reads and the parent asks again explicitly')
+
+    def test_a_correction_relink_withdrawal_replaced_original_or_changed_asr_configuration_in_flight_drops_the_text_and_a_fresh_request_works(self):
+        """Each change is injected in the server thread while the request is in flight through the ordinary write paths, so the handler holds
+        no connection or lock during extraction or the service request; a witness proves the injection happened."""
+        def replace(ident):
+            path=self.data/'uploads'/self.uploads[ident];return lambda:path.write_bytes(path.read_bytes()[:-1]+b'!')  # same size, other bytes
+        def witness():return (self.lines(),self.files(),(self.data/'agent.json').read_text(),[os.environ.get(n) for n in tv.ASR_ENV])
+        def injected(hook):
+            def run():
+                seen=witness();hook();self.assertNotEqual(witness(),seen,'the injected change really happened');self.expected=self.snapshot()
+            return run
+        def reset():self.enable(True);os.environ.update(FAMILY_ASR_URL=self.URL,FAMILY_ASR_MODEL='synthetic',FAMILY_ASR_API_KEY=self.KEY)
+        codes={'correct':{'fingerprint_stale'},'relink':{'fingerprint_stale'},'revoke':{'agent_disabled'},'replace':{'fingerprint_stale'},'asr_url':{'asr_config_changed'},'asr_key':{'asr_config_changed'}}
+        for stage in ('extract','asr'):
+            for name,change in (('correct',self.correct),('relink',self.relink),('revoke',lambda ident:lambda:self.enable(False)),('replace',replace),
+                                ('asr_url',lambda ident:lambda:os.environ.__setitem__('FAMILY_ASR_URL','http://127.0.0.1:9/other')),
+                                ('asr_key',lambda ident:lambda:os.environ.__setitem__('FAMILY_ASR_API_KEY','other-key'))):
+                with self.subTest(stage=stage,change=name):
+                    reset();ident=self.linked(self.TASK);body=self.body(ident);hook=injected(change(ident));changes=len(self.changes)
+                    self.during_extract,self.during_asr=(hook,None) if stage=='extract' else (None,hook)
+                    try:result=self.refused(body,409,extractions=1,calls=int(stage=='asr'))
+                    finally:self.during_extract=self.during_asr=None
+                    self.assertIn(result['code'],codes[name]);self.assertEqual(self.changes[changes:],[stage]);self.assertIsNotNone(self.expected,'the injection ran inside the request')
+                    if name!='relink':reset();self.assertEqual(self.post(self.body(ident))[1]['text'],self.TEXT,'a fresh version after the change works again on an explicit new request')
+        self.unchanged(ident)
+
+    def test_an_absent_or_empty_database_refuses_with_503_and_creates_no_file_or_table(self):
+        ident=self.linked(self.TASK);body=self.body(ident)
+        for name,prepare in (('absent',lambda path:None),('empty',lambda path:path.write_bytes(b''))):
+            with self.subTest(database=name):
+                path=self.app.DATA/('synthetic-%s.sqlite3'%name);prepare(path);before=self.counts()
+                with mock.patch.object(self.app,'DB',path):status,refused,_=self.request(self.PATH,body,{'X-Family-Token':self.app.TOKEN})
+                self.assertEqual((status,refused.get('code'),set(refused),self.counts()),(503,'storage_unavailable',{'error','code'},before))
+                for leak in ('sqlite','no such table','OperationalError',str(path)):self.assertNotIn(leak,json.dumps(refused,ensure_ascii=False))
+                self.assertEqual((path.exists(),path.stat().st_size if path.exists() else None),(name=='empty',0 if name=='empty' else None),'the request created no database file or table')
+        self.assertEqual(self.post(body)[1]['text'],self.TEXT)
+
 if __name__=='__main__':unittest.main()
 
 

@@ -1834,6 +1834,13 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/record/video/review':
                 # Parent-only explicit confirmation or revocation of the listed current observations: no model, no probe, append-only, and it changes no record, task, score or plan. Reading stays GET /api/record/video.
                 return self.reply(200,family_task_video.review(SimpleNamespace(**globals()),agent_store(),obj))
+            if path=='/api/record/video/transcribe':
+                # Parent-only explicit request for one machine transcription of one original of one saved record, returned for review only. The read-only store: no
+                # connection or lock is held while ffmpeg or the service runs; at most one ASR request and no retry; no row, file, job, record or receipt is written,
+                # so a lost reply is asked for again explicitly. Reading, which extracts and calls nothing, stays GET /api/record/video.
+                try: return self.reply(200,family_task_video.transcribe(SimpleNamespace(**globals()),agent_store(read_only=True),obj))
+                except sqlite3.OperationalError:  # An absent or old database without the tables: an explicit refusal, no table created, none of the error's text shown.
+                    return self.reply(503,dict(error='家庭资料库尚未建立或暂时无法读取，视频转写暂不可用；本次请求未更改任何资料',code='storage_unavailable'))
             if path=='/api/goals/action': return self.reply(200,goal_store().action(obj))
             if path=='/api/agent/message/attachment': return self.reply(200,agent_store().message_attachment(obj,upload_info))
             if path=='/api/agent/message/page': return self.reply(200,agent_store().message_page(obj,upload_info))
