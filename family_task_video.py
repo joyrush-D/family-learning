@@ -16,6 +16,7 @@ import math
 import sqlite3
 import subprocess
 import os
+import re
 import selectors
 import time
 import wave
@@ -66,6 +67,10 @@ EXPLANATIONS = {
     'draft_missing': '当前没有可核对的有效视频观察草稿（记录、原件、授权或草稿已变化）；请刷新后再核对。',
     'token_stale': '页面上的视频观察已不是当前版本；请刷新后重新核对。',
     'review_not_confirmed': '这份视频观察当前没有有效的家长核对，没有可撤回的内容。',
+    'fingerprint_stale': '页面上的视频已不是当前版本；请刷新后重新选择要转写的视频。',
+    'asr_unconfigured': '尚未配置语音转写；原视频和手动记录仍可保存。',
+    'asr_config_changed': '语音转写配置在本次处理期间发生变化，本次文字已丢弃；请重试。',
+    'asr_failed': '语音服务未能完成转写；原视频未改动，可稍后重试或手动记录。',
 }
 REVIEW_LABEL = '家长已核对的视频观察'
 REVIEW_NOTE = '家长选定了这些画面观察作为自己核对过的内容；未评估声音，不代表完成或掌握，不会自动改动任务、学习记录或计划。'
@@ -73,6 +78,12 @@ UNCONFIRMED = '家长尚未核对这份视频观察，或已撤回核对；只�
 AUDIO_NOTE = '仅在本机从原视频中提取了声音轨道；未转写、未评估发音，不代表完成或掌握。文件在合法包边界结束，不能证明未提供原录像的尾部。'
 MAX_OBSERVATIONS = 8  # family_llm.validate_video_feedback allows at most eight observations per draft.
 REVIEW_KEYS = ('record_id', 'upload_id', 'expected_token', 'action', 'selected')
+TRANSCRIBE_KEYS = ('record_id', 'upload_id', 'expected_fingerprint')
+TRANSCRIPT_LIMIT = 4000  # app.save_record keeps a record's transcript to 4000 characters; longer text is the parent's to shorten or split.
+ASR_ENV = ('FAMILY_ASR_URL', 'FAMILY_ASR_MODEL', 'FAMILY_ASR_API_KEY')  # exactly what family_llm.transcribe_audio reads.
+TRANSCRIPTION_NOTE = ('机器转写待家长核对：未分辨说话人，未评估声音或发音，不代表孩子的答案、完成或掌握；尚未保存到任何记录。'
+                      '文件在合法包边界结束，不能证明未提供原录像的尾部。')
+TRANSCRIPT_TOO_LONG = '转写文字超过记录转写上限4000字，需家长缩短或分段后人工处理；原视频保留，文字未截断。'
 
 
 class VideoDraftError(ValueError):
@@ -401,6 +412,7 @@ def view(app, store, record_id):
             except VideoDraftError as error:
                 result['videos'].append(dict(item, state='unavailable', explanation=str(error))); continue
             saved = _saved(c, value)
+            item.update(transcription_fingerprint=transcription_fingerprint(value))  # The version an explicit transcription request names.
             job = c.execute('SELECT * FROM agent_jobs WHERE id=?', (key,)).fetchone()
             same = job is not None and job['fingerprint'] == _hash({'video': value['fingerprint']})
             if saved is not None:
@@ -628,3 +640,96 @@ def review(app, store, body):
                             json.dumps(payload, ensure_ascii=False, allow_nan=False), now))
         row = c.execute('SELECT * FROM record_video_reviews WHERE id=?', (cursor.lastrowid,)).fetchone()
         return _result(row, base, value, saved, False)
+
+
+def transcription_fingerprint(value):
+    """The version the parent asks to transcribe: the record/original fingerprint in its own namespace, never the draft token."""
+    return _hash([1, 'transcription', value['fingerprint']])
+
+
+def _asr_digest():
+    """A private digest of the ASR configuration the process sees now; compared only, never returned, logged or stored."""
+    return _hash([1, [os.environ.get(name, '') for name in ASR_ENV]])
+
+
+def _refusal(code, status):
+    return AgentError(EXPLANATIONS[code], status, code)
+
+
+def _transcribe_request(body):
+    """Exactly the parent's choice: which original of which record, at which version; nothing else is accepted."""
+    if not isinstance(body, dict) or set(body) != set(TRANSCRIBE_KEYS):
+        raise AgentError('转写请求格式不正确')
+    record_id = body['record_id']; upload_id = body['upload_id']; fingerprint = body['expected_fingerprint']
+    if type(record_id) is not int or not 0 < record_id <= 9223372036854775807:
+        raise AgentError('记录编号不正确')
+    if not isinstance(upload_id, str) or not re.fullmatch('[0-9a-f]{32}', upload_id):
+        raise AgentError('原件编号不正确')
+    if not isinstance(fingerprint, str) or not re.fullmatch('[0-9a-f]{64}', fingerprint):
+        raise AgentError('转写版本标识不正确')
+    return dict(record_id=record_id, upload_id=upload_id, expected_fingerprint=fingerprint)
+
+
+def _transcribable(app, store, c, request):
+    """Switch, child, one task, record revision, link, original bytes and the caller's version re-read now; any difference is 409."""
+    try:
+        _require(store._config(c)['enabled'], 'agent_disabled')
+        value = _original(store, c, _attribution(app, store, c, request['record_id']), request['upload_id'])
+        _require(transcription_fingerprint(value) == request['expected_fingerprint'], 'fingerprint_stale')
+    except (AgentError, VideoDraftError) as error:
+        raise AgentError(str(error), 409, error.code) from None
+    return value
+
+
+def transcribe(app, store, body):
+    """The parent's explicit request for a machine transcription of one video of one saved record, returned for review only.
+
+    Not a background job and not reached from prepare: only an explicit request calls this. No row, file, job, record,
+    transcript, result, task or plan is written; the text is returned once for the parent to read and, in a later step,
+    shorten and save through the existing record flow. Sequence: the request is validated; on one short connection the
+    switch, child, one task, record revision, link, original bytes and expected version are checked; that connection is
+    left before the bounded local decode (audio_track) runs; the same checks repeat on a fresh connection before the one
+    ASR request; the ASR configuration digest must be unchanged before and after it; and the checks repeat once more
+    before the text leaves. So a correction, relink, withdrawn switch or replaced original during extraction refuses
+    before any byte reaches the service, and one during the request discards the text (409). No database connection or
+    lock is held while ffprobe, ffmpeg or the network run. At most one ASR request per call and no retry here; the
+    pure-audio upload contract of family_llm.transcribe_audio is used unchanged, and no endpoint or key is returned.
+    The text is a machine transcription: speakers are not told apart, no sound or pronunciation is assessed and it is not
+    the child's answer, completion or mastery. Text over the record limit is returned whole and flagged for the parent to
+    shorten or split by hand, never cut. Every failure names a fixed reason without the underlying exception."""
+    request = _transcribe_request(body)
+    if not os.environ.get('FAMILY_ASR_URL', '').strip():
+        raise _refusal('asr_unconfigured', 503)
+    config = _asr_digest()
+    with store._db() as c:
+        current = _transcribable(app, store, c, request)
+    original = current.pop('body')
+    try:  # That connection is left: the bounded local tools run while no database connection or lock is held.
+        track = audio_track(original, current['mime'])
+    except VideoDraftError as error:
+        raise AgentError(str(error), 422, error.code) from None
+    del original
+    with store._db() as c:  # A change during extraction is refused before any byte reaches the ASR service.
+        _transcribable(app, store, c, request)
+    if _asr_digest() != config:
+        raise _refusal('asr_config_changed', 409)
+    try:  # Exactly one request to the configured endpoint, the pure-audio contract unchanged, and no retry here.
+        text = family_llm.transcribe_audio(track['wav'], 'audio/wav')
+    except family_llm.LLMUnavailable as error:
+        raise AgentError(str(error), 503, 'asr_unconfigured') from None
+    except family_llm.LLMDraftError as error:  # Its text is the service adapter's user-facing reason, never credentials or the reply.
+        raise AgentError(str(error), 502, 'asr_failed') from None
+    except Exception:
+        raise _refusal('asr_failed', 502) from None
+    if _asr_digest() != config:
+        raise _refusal('asr_config_changed', 409)
+    with store._db() as c:  # A change during the request drops the text; nothing of it is kept.
+        current = _transcribable(app, store, c, request)
+    long = len(text) > TRANSCRIPT_LIMIT
+    return dict(record_id=request['record_id'], upload_id=request['upload_id'], task_id=current['task_id'],
+                transcription_fingerprint=request['expected_fingerprint'], audience='parent', state='pending_review',
+                saved=False, text=text, characters=len(text), record_limit=TRANSCRIPT_LIMIT, fits_record=not long,
+                audio=dict(mime=track['mime'], audio_start_seconds=track['audio_start_seconds'], pcm_seconds=track['pcm_seconds'],
+                           provided_seconds=track['video_seconds'], tail_verified=False),
+                speakers_distinguished=False, audio_assessed=False, note=TRANSCRIPTION_NOTE,
+                explanation=TRANSCRIPT_TOO_LONG if long else '')
