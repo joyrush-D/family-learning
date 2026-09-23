@@ -577,7 +577,7 @@ class DocxMaterialTests(PdfMaterialTests):
             c.execute('UPDATE agent_messages SET payload=? WHERE id=?', (json.dumps(payload, ensure_ascii=False), keys['message_id']))
 
     def test_change_between_claim_and_conversion_converts_probes_and_sends_nothing(self):
-        keys = self.school_fragment('数学：见附件。'); docx = self.seed_docx('g' * 32); self.link(keys, docx)
+        keys = self.school_fragment('数学：见附件。'); docx = self.seed_docx('6' * 32); self.link(keys, docx)
         other_bytes = layout_docx('题目见上图'); real_job = self.store._job; claimed = []
 
         def lose_claim():
@@ -605,8 +605,8 @@ class DocxMaterialTests(PdfMaterialTests):
         self.assertEqual((m.call_count, len(self.converted), self.view(keys)['processed_pages']), (1, 1, [1, 2, 3]))
 
     def test_change_while_docx_model_runs_discards_result_and_reattachment_resumes(self):
-        keys = self.school_fragment('数学：见附件。'); docx = self.seed_docx('h' * 32); self.link(keys, docx)
-        replacement = self.seed_docx('i' * 32, layout_docx('题目见上图'), '替换件.docx'); entered = []
+        keys = self.school_fragment('数学：见附件。'); docx = self.seed_docx('7' * 32); self.link(keys, docx)
+        replacement = self.seed_docx('8' * 32, layout_docx('题目见上图'), '替换件.docx'); entered = []
         with renderer(), self.converter(), patch.object(family_llm, 'extract_draft', return_value=DRAFT):
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
         before = self.rows('SELECT * FROM agent_pdf_material'); self.assertEqual(len(before), 1)
@@ -637,7 +637,7 @@ class DocxMaterialTests(PdfMaterialTests):
         self.assertEqual((m.call_count, self.view(keys)['processed_pages'], len(self.converted)), (1, [1, 2, 3], 5))
 
     def test_full_coverage_get_is_sql_read_only_and_converted_metadata_never_enters_fingerprint(self):
-        keys = self.school_fragment('数学：见附件。'); docx = self.seed_docx('j' * 32); self.link(keys, docx); outputs = []
+        keys = self.school_fragment('数学：见附件。'); docx = self.seed_docx('9' * 32); self.link(keys, docx); outputs = []
         head, tail = PDF.rsplit(b'%%EOF', 1)
 
         def convert(body, *, soffice=None):  # Every LibreOffice run yields different bytes (CreationDate/ID); the DOCX stays the original.
