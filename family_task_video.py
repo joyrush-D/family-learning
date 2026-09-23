@@ -4,8 +4,8 @@ Reuses the Agent's enabled switch, the tick's model budget, agent_jobs (three at
 family_llm.video_feedback_draft. This repository has no separate model consent or daily quota, and none is added
 here: what actually bounds the calls is enabled, the tick's three model calls shared with all other work, and one
 job per (record, original, fingerprint) with three attempts, 5/10 minute backoff and then the parent's retry.
-Nothing here writes a record, task, plan, goal, result or completion, and no child entry or learning evidence
-reads the draft table. The parent's explicit review (review below) appends to record_video_reviews which observations
+Nothing here writes a record, task, plan, goal, result or completion. No child entry reads the draft table;
+learning evidence uses only the parent's currently effective selection. The parent's explicit review (review below) appends to record_video_reviews which observations
 of one exact draft version were confirmed or revoked; it is shown back only for that version. `confirmed` below is the one
 read-only path by which the linked learning goal's evidence (family_goals._context) reads the parent's current choice."""
 import datetime as dt
