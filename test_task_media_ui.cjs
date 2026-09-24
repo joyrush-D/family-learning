@@ -9,7 +9,15 @@ async function demoServer(){
  const socket=net.createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');const port=socket.address().port;await new Promise(r=>socket.close(r));
  const env={...process.env};for(const k of Object.keys(env))if(k.startsWith('FAMILY_'))delete env[k];
  env.FAMILY_HOST='family.localhost';env.FAMILY_USER='synthetic-parent';
- const proc=spawn(process.env.FAMILY_TEST_PYTHON||'python3',['demo.py','--port',String(port)],{cwd:__dirname,env,stdio:['ignore','pipe','pipe']});let error='';proc.stdout.resume();proc.stderr.on('data',b=>error+=String(b));proc.on('error',e=>error=e.message);
+ const proc=spawn(process.env.FAMILY_TEST_PYTHON||'python3',['-c',`import app, json, runpy
+base=app.ThreadingHTTPServer
+class Server(base):
+ def __init__(self,*args,**kwargs):
+  app.DATA=app.DATA.resolve();app.DB=app.DATA/'family.sqlite3'
+  (app.DATA/'agent.json').write_text(json.dumps(dict(enabled=True,sources=[])))
+  super().__init__(*args,**kwargs)
+app.ThreadingHTTPServer=Server
+runpy.run_path('demo.py',run_name='__main__')`,'--port',String(port)],{cwd:__dirname,env,stdio:['ignore','pipe','pipe']});let error='';proc.stdout.resume();proc.stderr.on('data',b=>error+=String(b));proc.on('error',e=>error=e.message);
  const url='http://127.0.0.1:'+port+'/',stop=async()=>{if(proc.exitCode!==null||proc.signalCode!==null)return;const done=once(proc,'exit');proc.kill('SIGINT');await Promise.race([done,delay(2500)]);if(proc.exitCode===null&&proc.signalCode===null){proc.kill('SIGKILL');await done}};
  try{await eventually(async()=>{if(proc.exitCode!==null)throw Error(error||'Demo exited');try{return(await fetch(url,{signal:AbortSignal.timeout(400)})).ok}catch{return false}},'isolated demo');return{url,stop}}catch(e){await stop();throw e}
 }
@@ -237,7 +245,7 @@ const fs=require('node:fs/promises'),path=require('node:path');
   const oupload=await fetch(url+'api/upload',{method:'POST',headers:{'X-Family-Token':state.token,'X-File-Name':'synthetic-unlinked.mp4'},body:videoBytes}).then(r=>r.json());assert(oupload.attachment,JSON.stringify(oupload));
   const ur=(await post('api/record',{child:otherKid,day:state.today,category:'学习进展',subject:'英语',title:'虚构未关联视频 '+width,note:'未关联说明',source:'家长观察',attachments:[oupload.attachment.id]})).record_id;
   state=await read();const linkedBefore=JSON.stringify(state.records.find(r=>r.id===lr)),recordCount=state.records.length,tasksBefore=JSON.stringify(state.tasks.map(t=>[t.id,t.update]));
-  const lfp='e'.repeat(64),lfp2='f'.repeat(64),lv=(fp,taskId=ltask.id)=>({json:{record_id:lr,task_id:taskId,basis:'record',audience:'parent',read_only:true,explanation:'',videos:[{upload_id:lup,job_id:'video:'+lr,state:'pending',transcription_fingerprint:fp}]}});
+  const lfp=(await fetch(url+'api/record/video?record_id='+lr).then(r=>r.json())).videos[0].transcription_fingerprint,lfp2=lfp,lv=(fp,taskId=ltask.id)=>({json:{record_id:lr,task_id:taskId,basis:'record',audience:'parent',read_only:true,explanation:'',videos:[{upload_id:lup,job_id:'video:'+lr,state:'pending',transcription_fingerprint:fp}]}});
   const lreply=(fp,text,taskId=ltask.id)=>({record_id:lr,upload_id:lup,task_id:taskId,transcription_fingerprint:fp,state:'pending_review',saved:false,text,audio:{audio_start_seconds:0,pcm_seconds:1,provided_seconds:1},speakers_distinguished:false,audio_assessed:false});
   const lf=p.locator('#recordForm'),lpanel=p.locator('#recordVideoPanel'),ltranscribe=lpanel.locator('[data-video-transcribe]'),lload=lpanel.locator('[data-video-draft-load]'),ltext=lpanel.locator('[data-video-transcript-text]'),lapply=lpanel.locator('[data-video-transcript-apply]');
   const openRecordAgain=async id=>{await p.locator('[data-record="'+id+'"]').first().click();await p.locator('#recordDialog[open]').waitFor()};
@@ -271,7 +279,12 @@ const fs=require('node:fs/promises'),path=require('node:path');
   assert.equal(await lf.locator('[name=note]').inputValue(),'未保存的说明草稿');assert.equal(await ltext.count(),0);assert.equal(linkedBodies.length,4);assert.equal(JSON.stringify((await read()).records.find(r=>r.id===lr)).includes('虚构关联视频文字'),false);
   // Same-record save: failure keeps input and original, retry succeeds, reopen reads back the same record; note, media, source, child and the current link are preserved; no task status changes.
   await p.locator('#recordTaskSelect').selectOption(task2.id);await lf.locator('[name=transcript_state]').selectOption('已核对');
-  let recordSaves=0;const recordRoute=u=>u.pathname==='/api/record';await p.route(recordRoute,r=>r.request().method()==='POST'&&++recordSaves===1?r.fulfill({status:503,json:{error:'虚构保存失败'}}):r.continue());
+  await lf.locator('[type=submit]').click();await eventually(async()=>/转写草稿保留/.test(await p.locator('#recordError').innerText()),'stale guard prevents saved reviewed text on new link');assert.equal((await read()).records.find(r=>r.id===lr).transcript,'旧转写');
+  const lfp3=(await fetch(url+'api/record/video?record_id='+lr).then(r=>r.json())).videos[0].transcription_fingerprint;
+  views.push(lv(lfp3,task2.id));await lload.click();linkedPlan.push({json:lreply(lfp3,'<b>虚构关联视频文字</b>',task2.id)});await ltranscribe.click();await ltext.waitFor();await lpanel.locator('[data-video-transcript-replace]').check();views.push(lv(lfp3,task2.id));await lapply.click();await eventually(async()=>/已填入本条记录/.test(await lpanel.locator('[data-video-transcript-status]').innerText()),'new link explicitly reviewed');assert.equal(await lf.locator('[name=transcript_state]').inputValue(),'已核对');assert.equal(await lpanel.locator('[data-video-transcript-stale]').count(),0);
+  if(process.env.TASK_MEDIA_UI_PROOF_DIR){await lpanel.scrollIntoViewIfNeeded();await p.screenshot({path:path.join(process.env.TASK_MEDIA_UI_PROOF_DIR,'linked-transcript-review-'+width+'.png')})}
+
+  let recordSaves=0;const recordRoute=u=>u.pathname==='/api/record';await p.route(recordRoute,r=>{const body=r.request().postDataJSON();assert.equal(body.id,lr);assert.deepEqual(body.video_transcript_guard,{upload_id:lup,expected_fingerprint:lfp3});return ++recordSaves===1?r.fulfill({status:503,json:{error:'虚构保存失败'}}):r.continue()});
   await lf.locator('[type=submit]').click();await eventually(async()=>/虚构保存失败/.test(await p.locator('#recordError').innerText()),'linked save failure retained');
   assert.equal(await lf.locator('[name=transcript]').inputValue(),'<b>虚构关联视频文字</b>');assert.equal(await lf.locator('[name=note]').inputValue(),'未保存的说明草稿');assert.equal(await p.locator('#pendingUploads video').count(),1);
   await lf.locator('[type=submit]').click();await eventually(()=>p.locator('#recordDialog').evaluate(x=>!x.open),'linked save retry');await p.unroute(recordRoute);assert.equal(recordSaves,2);
@@ -284,8 +297,11 @@ const fs=require('node:fs/promises'),path=require('node:path');
   views.push(lv(lfp2,task2.id));await lload.click();await ltranscribe.waitFor();
   let releaseLinked=null;linkedPlan.push(r=>new Promise(res=>{releaseLinked=()=>res(r.fulfill({json:lreply(lfp2,'过期关联回执',task2.id)}))}));await ltranscribe.click();await eventually(()=>!!releaseLinked,'linked reply in flight');
   await closeRecord();await openRecordAgain(lr);views.push(lv(lfp2,task2.id));await lload.click();await ltranscribe.waitFor();releaseLinked();await delay(300);
-  assert.equal(await ltext.count(),0);assert.equal(await lf.locator('[name=transcript]').inputValue(),'<b>虚构关联视频文字</b>');assert.equal(linkedBodies.length,5);
-  const detach=p.locator('#pendingUploads [data-detach]');if(await detach.count()){await detach.first().click();await eventually(async()=>await p.locator('#pendingUploads video').count()===0,'video removed locally');await ltranscribe.click();await eventually(async()=>/已从本条记录移除/.test(await lpanel.innerText()),'removed video not transcribed');assert.equal(linkedBodies.length,5);checks.push(width+': removed-video transcription refused')}else checks.push(width+': detach control absent, removed-video refusal not exercised');
+  assert.equal(await ltext.count(),0);assert.equal(await lf.locator('[name=transcript]').inputValue(),'<b>虚构关联视频文字</b>');assert.equal(linkedBodies.length,6);
+  // Changing the local child while ASR is in flight makes the old reply unusable, even though the server's saved record did not change.
+  await lf.locator('[name=child]').selectOption(otherKid);await ltranscribe.click();assert.equal(linkedBodies.length,6);await lf.locator('[name=child]').selectOption(kid);
+  let releaseChild=null;linkedPlan.push(r=>new Promise(res=>{releaseChild=()=>res(r.fulfill({json:lreply(lfp2,'过期孩子回执',task2.id)}))}));await ltranscribe.click();await eventually(()=>!!releaseChild,'child-change reply in flight');await lf.locator('[name=child]').selectOption(otherKid);releaseChild();await eventually(async()=>/孩子、关联或原件选择已变化/.test(await lpanel.innerText()),'changed-child reply discarded');assert.equal(await ltext.count(),0);assert.equal(await lf.locator('[name=transcript]').inputValue(),'<b>虚构关联视频文字</b>');await lf.locator('[name=child]').selectOption(kid);
+  const detach=p.locator('#pendingUploads [data-detach]');assert.equal(await detach.count(),1);{await detach.first().click();await eventually(async()=>await p.locator('#pendingUploads video').count()===0,'video removed locally');await ltranscribe.click();await eventually(async()=>/已从本条记录移除/.test(await lpanel.innerText()),'removed video not transcribed');assert.equal(linkedBodies.length,7);checks.push(width+': removed-video transcription refused')}
   await closeRecord();state=await read();assert.deepEqual(state.records.find(r=>r.id===lr).attachments,originalLinked.attachments);assert.equal(state.records.find(r=>r.id===lr).transcript,'<b>虚构关联视频文字</b>');assert.equal(asrAttempts,asrBeforeLinked);assert.equal(state.records.length,recordCount);
   await p.unroute(transcriptRoute);
   checks.push(width+': linked independent record: unlinked/other-child same-subject record has no entry and zero GET/POST; explicit link GET without ASR; unsaved link change blocks the request; exact single POST; lost reply and real login form 401 not replayed with note and video kept; 409 needs fresh GET; escaped text with audio boundaries; explicit replacement consent; apply rereads fingerprint; relink by another parent + local 409 + read current link keeps unsaved reviewed text marked 待核对 with stale notice, nothing saved; save failure keeps input, retry saves same record with note/media/source/child/link preserved, reopen reads back; stale in-flight reply isolated after close/reopen; removed video refused; close without saving changes nothing');
