@@ -1122,6 +1122,95 @@ class VideoTranscribeHttpTests(VideoTranscribeTests):
                 self.assertEqual((path.exists(),path.stat().st_size if path.exists() else None),(name=='empty',0 if name=='empty' else None),'the request created no database file or table')
         self.assertEqual(self.post(body)[1]['text'],self.TEXT)
 
+class VideoTranscriptSaveGuardTests(VideoTranscribeTests):
+    """The correction's optional video_transcript_guard: the page repeats which original and which version GET /api/record/video named,
+    and save_record re-checks that inside its own write transaction before any row is written. No decode, ASR or model anywhere."""
+    locals().update({name:None for name in dir(VideoTranscribeTests) if name.startswith('test')})  # helpers only; those tests run once, above
+    NEW='虚构：家长已核对的视频转写'
+
+    def guarded(self,ident,**obj):
+        body=self.body(ident)  # the read-only view names the version; that read extracts and recognizes nothing
+        guard=dict(upload_id=body['upload_id'],expected_fingerprint=body['expected_fingerprint'])
+        return self.record(id=ident,attachments=[body['upload_id']],transcript=self.NEW,transcript_state='已核对',video_transcript_guard=guard)|obj
+
+    def row(self,ident):
+        with self.app.connect() as c:return dict(c.execute('SELECT * FROM records WHERE id=?',(ident,)).fetchone())
+
+    def rejected(self,body,status,code,ident=None):
+        """Every refusal also proves that no record, revision, draft, file, tool or model call came of it and that its reason names no text, path, key or original."""
+        ident=body['id'] if ident is None else ident
+        before=(self.row(ident),self.rows('revisions'),self.rows('records'),self.snapshot(),len(self.extracted),len(self.asr))
+        with self.assertRaises(self.app.RecordError) as caught:self.app.save_record(body)
+        self.assertEqual((caught.exception.status,caught.exception.code),(status,code),str(caught.exception))
+        self.assertEqual((self.row(ident),self.rows('revisions'),self.rows('records'),self.snapshot(),len(self.extracted),len(self.asr)),before)
+        guard=body.get('video_transcript_guard') if isinstance(body.get('video_transcript_guard'),dict) else {}
+        for secret in (self.NEW,self.KEY,self.URL,str(self.data),'uploads',str(guard.get('upload_id')),str(guard.get('expected_fingerprint'))):
+            if len(secret)>=6:self.assertNotIn(secret,str(caught.exception))
+        return caught.exception
+
+    def test_a_current_guard_saves_the_reviewed_text_once_and_corrections_without_it_keep_every_earlier_contract(self):
+        ident=self.linked(self.TASK);body=self.guarded(ident);revisions=self.rows('revisions');counts=(len(self.extracted),len(self.asr),self.popen.call_count,self.model.call_count)
+        result=self.app.save_record(body)
+        self.assertEqual((result['ok'],result['record_id'],result['replayed']),(True,ident,False))
+        row=self.row(ident);self.assertEqual((row['transcript'],row['transcript_state'],row['note'],row['linked_task_id'],json.loads(row['attachments'])),(self.NEW,'已核对','虚构说明',self.TASK,[self.uploads[ident]]))
+        self.assertEqual((self.rows('revisions'),(len(self.extracted),len(self.asr),self.popen.call_count,self.model.call_count),self.rows('record_video_drafts')),(revisions+1,counts,0))
+        self.assertNotIn('video_transcript_guard',json.dumps(result,ensure_ascii=False)+json.dumps(row,ensure_ascii=False))  # nothing of the proof is stored or echoed
+        stale=self.rejected(body,409,'fingerprint_stale');self.assertEqual(str(stale),tv.EXPLANATIONS['fingerprint_stale'])  # the save renewed the version: no replay
+        self.app.save_record(self.record(id=ident,note='虚构：只改说明',attachments=[self.uploads[ident]]))  # no guard and no transcript field: the reviewed text stays
+        row=self.row(ident);self.assertEqual((row['transcript'],row['transcript_state'],row['note']),(self.NEW,'已核对','虚构：只改说明'))
+        self.app.save_record(self.record(id=ident,attachments=[self.uploads[ident]],transcript='虚构：手填转写',transcript_state='待核对'))  # a plain correction still edits the text by hand
+        row=self.row(ident);self.assertEqual((row['transcript'],row['transcript_state']),('虚构：手填转写','待核对'))
+        self.app.save_record(self.guarded(ident,note='虚构：连同说明一起更正',title='虚构：新标题'))  # a fresh proof of the renewed version saves again, hand-filled fields included
+        row=self.row(ident);self.assertEqual((row['transcript'],row['transcript_state'],row['note'],row['title']),(self.NEW,'已核对','虚构：连同说明一起更正','虚构：新标题'))
+        self.assertEqual((self.transcribe(self.body(ident))['text'],self.state(ident)),(self.TEXT,['pending']))  # the explicit transcription and picture paths are unchanged
+
+    def test_a_malformed_guard_or_one_on_a_new_record_or_without_a_transcript_field_is_refused_before_any_connection(self):
+        ident=self.linked(self.TASK);body=self.guarded(ident);guard=body['video_transcript_guard'];upload=guard['upload_id'];fp=guard['expected_fingerprint']
+        bad=[None,[],'x',1,True,{},dict(guard,record_id=ident),dict(guard,extra=1),dict(upload_id=upload),dict(expected_fingerprint=fp),dict(guard,upload_id=[upload]),dict(guard,upload_id=upload.upper()),
+             dict(guard,upload_id=upload[:31]),dict(guard,upload_id=None),dict(guard,expected_fingerprint=fp[:63]),dict(guard,expected_fingerprint=fp.upper()),dict(guard,expected_fingerprint=dict(value=fp)),
+             dict(guard,expected_fingerprint=None),dict(guard,expected_fingerprint=1),[guard],dict(video_transcript_guard=guard)]
+        for value in bad:
+            with self.subTest(guard=str(value)[:100]):self.rejected(dict(body,video_transcript_guard=value),400,'video_transcript_guard_invalid')
+        for value in (True,0,-1,1.0,str(ident),[ident],2**63,None,''):
+            with self.subTest(id=repr(value)):self.rejected(dict(body,id=value),400,'video_transcript_guard_invalid',ident=ident)
+        self.rejected({k:v for k,v in body.items() if k!='id'},400,'video_transcript_guard_invalid',ident=ident)  # a new record carries no proof
+        self.rejected({k:v for k,v in body.items() if k!='transcript'},400,'video_transcript_guard_invalid',ident=ident)  # the proof is only for an explicit transcript
+        self.assertEqual(self.app.save_record(body)['record_id'],ident)  # nothing above touched the version
+
+    def test_a_guard_read_before_a_correction_relink_revocation_or_original_change_is_refused_and_nothing_is_written(self):
+        ident=self.linked(self.TASK);sibling=self.linked(self.TASK)
+        for name,change,code in (('note correction',self.correct(ident),'fingerprint_stale'),('relink',self.relink(ident),'fingerprint_stale'),('switch off',lambda:self.enable(False),'agent_disabled')):
+            with self.subTest(change=name):
+                body=self.guarded(ident);change();self.rejected(body,409,code);self.enable(True);self.assertEqual(self.row(ident)['transcript'],'')
+        # The reproduced race: text reviewed while the record hung on one task, the record rehung elsewhere, the old form saved. The text must not land on the other task.
+        body=self.guarded(ident);self.assertEqual(self.row(ident)['linked_task_id'],self.OTHER)
+        self.app.link_record_task(dict(record_id=ident,child='示例甲',task_id=self.TASK,expected_linked_at=self.row(ident)['linked_task_at']))
+        self.rejected(body,409,'fingerprint_stale');self.assertEqual((self.row(ident)['transcript'],self.row(ident)['linked_task_id']),('',self.TASK))
+        body=self.guarded(ident);path=self.data/'uploads'/self.uploads[ident];original=path.read_bytes()
+        path.write_bytes(original+b'!');self.rejected(body,409,'original_changed');path.write_bytes(original[:-1]);self.rejected(body,409,'original_changed')
+        path.write_bytes(original[:-1]+b'?');self.rejected(body,409,'fingerprint_stale');path.unlink();self.rejected(body,409,'original_unavailable')
+        path.write_bytes(original);self.assertEqual(self.app.save_record(body)['record_id'],ident)  # the same bytes and version again: the proof still holds
+        self.assertEqual((self.row(ident)['transcript'],self.row(sibling)['transcript']),(self.NEW,''))
+
+    def test_a_guard_does_not_let_the_correction_itself_move_the_record_change_its_source_or_drop_the_original(self):
+        ident=self.linked(self.TASK);other=self.clip();body=self.guarded(ident);upload=body['video_transcript_guard']['upload_id']
+        self.rejected(dict(body,child='示例乙'),409,'record_task_mismatch')  # the existing link rule refuses a change of child first, unchanged
+        for name,change in (('feedback source',dict(source='事项:'+self.TASK)),('other source',dict(source='虚构其他来源')),('original dropped',dict(attachments=[other]))):
+            with self.subTest(change=name):self.rejected(dict(body,**change),409,'video_transcript_guard_mismatch')
+        self.app.save_record(dict(body,attachments=[upload,other],note='虚构：再加一份原件'))  # keeping the reviewed original, the correction may add another and change hand-filled fields
+        self.assertEqual((self.row(ident)['transcript'],self.row(ident)['note'],json.loads(self.row(ident)['attachments'])),(self.NEW,'虚构：再加一份原件',[upload,other]))
+
+    def test_a_guard_read_before_a_relink_committed_on_another_connection_is_refused_once_the_lock_frees(self):
+        ident=self.linked(self.TASK);body=self.guarded(ident);at=self.row(ident)['linked_task_at'];outcome=[]
+        holder=self.app.connect();holder.execute('BEGIN IMMEDIATE')  # the other end takes the write lock first
+        def save():
+            try:outcome.append(self.app.save_record(body))
+            except self.app.RecordError as error:outcome.append(error)
+        thread=threading.Thread(target=save);thread.start();thread.join(0.3);self.assertTrue(thread.is_alive())  # the save waits behind BEGIN IMMEDIATE
+        self.app.link_record_task(dict(record_id=ident,child='示例甲',task_id=self.OTHER,expected_linked_at=at),connection=holder);holder.commit();holder.close()
+        thread.join(10);self.assertFalse(thread.is_alive());self.assertIsInstance(outcome[0],self.app.RecordError)
+        self.assertEqual((outcome[0].status,outcome[0].code,self.row(ident)['transcript'],self.row(ident)['linked_task_id']),(409,'fingerprint_stale','',self.OTHER))
+
 if __name__=='__main__':unittest.main()
 
 

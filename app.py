@@ -534,6 +534,18 @@ def record_result(connection,ident,replayed=False):
     return result
 
 RECORD_TASK_MISMATCH='关联事项不存在或孩子归属不一致，请从原事项重新打开'
+VIDEO_TRANSCRIPT_GUARD='video_transcript_guard'
+
+def video_transcript_guard(obj):
+    """The optional proof a correction carries that its transcript was reviewed against one original of this same saved record
+    at the version GET /api/record/video named: exactly upload_id and expected_fingerprint, the record being the correction's own
+    id, and only together with an explicit transcript field. Structure is checked here before any connection; the facts are
+    re-read inside the save transaction by family_task_video.guard. It is never stored or echoed and proves no machine origin:
+    without it every earlier contract (hand-typed, voice or task-feedback transcripts, an omitted transcript keeping the old text) is unchanged."""
+    if VIDEO_TRANSCRIPT_GUARD not in obj: return None
+    if 'transcript' not in obj: raise RecordError('转写核对依据只随明确填写的转写一起提交',400,'video_transcript_guard_invalid')
+    try: return family_task_video.guard_request(obj[VIDEO_TRANSCRIPT_GUARD],obj.get('id'))
+    except family_agent.AgentError: raise RecordError('转写核对依据格式不正确，或不是对已保存记录的更正',400,'video_transcript_guard_invalid') from None
 
 def record_task(c,task_id,child,missing=None):
     """The one rule for hanging a record on a task, by feedback source or by the parent's explicit link: an existing task of the same child."""
@@ -567,6 +579,7 @@ def _save_record(obj,care_only,receipt,connection=None):
     if care_only and (obj.get('id') not in (None,'') or not source.startswith('陪伴建议:') or not request_key):
         raise RecordError('请用新的反馈提交明确选择，并保留本次提交标识')
     if care_only and category!='家长观察': raise RecordError('建议反馈须保存为家长观察')
+    guard=video_transcript_guard(obj)
     score=total=None
     if category=='成绩':
         score=float(obj.get('score',''));total=float(obj.get('total',''))
@@ -666,6 +679,15 @@ def _save_record(obj,care_only,receipt,connection=None):
         if any(not c.execute('SELECT 1 FROM uploads WHERE id=?',(i,)).fetchone() for i in attachments):
             raise ValueError('附件不存在，请重新上传')
         family_reading.validate_record_attachments(c,next(p['id'] for p in profiles(c) if p['name']==child),attachments)
+        if guard is not None:
+            # The proof names the record as GET /api/record/video attributed it, so the correction itself must keep that child, source
+            # and original; otherwise reviewed text would be saved under an attribution nobody checked. The facts are then re-read on this
+            # writer connection, before any revision or record row is written, with the read-only store's helpers and no second connection.
+            if child!=names.get(previous['child']) or (source or '家长网页记录')!=previous['source'] or guard['upload_id'] not in attachments:
+                raise RecordError('转写核对依据对应的孩子、来源或原件与本次更正不一致，请刷新后重新核对',409,'video_transcript_guard_mismatch')
+            try: family_task_video.guard(SimpleNamespace(**globals()),agent_store(read_only=True),c,guard)
+            except family_agent.AgentError as error: raise RecordError(str(error),409,error.code) from None
+            except sqlite3.OperationalError: raise RecordError('转写核对依据暂时无法核对，本次更正未保存，请稍后重试',503,'video_transcript_guard_unavailable') from None
         now=dt.datetime.now().isoformat()
         values=(child,day,category,subject,title,note,source or '家长网页记录',score,total,now,json.dumps(attachments),related,kind,context['assistance'],context['practice_relation'],context['comparison_note'],choice,review_on,transcript,transcript_state)
         if ident:

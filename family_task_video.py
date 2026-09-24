@@ -741,3 +741,25 @@ def transcribe(app, store, body):
                 audio=dict(mime=track['mime'], audio_start_seconds=track['audio_start_seconds'], pcm_seconds=track['pcm_seconds'],
                            provided_seconds=track['video_seconds'], tail_verified=False),
                 speakers_distinguished=False, audio_assessed=False, note=TRANSCRIPTION_NOTE)
+
+
+GUARD_KEYS = ('upload_id', 'expected_fingerprint')  # app.save_record's optional video_transcript_guard; record_id is the correction's own id.
+
+
+def guard_request(body, record_id):
+    """The proof a record correction may carry: exactly which original and which version GET /api/record/video named for the
+    record the correction itself edits. Structure only, nothing read: the same rules as a transcription request, the record
+    being the correction's own id (a positive integer, never a bool or text). It is the parent's page repeating what it
+    read, not a machine-signed receipt; it is never stored or echoed."""
+    if not isinstance(body, dict) or set(body) != set(GUARD_KEYS):
+        raise AgentError('转写核对依据格式不正确')
+    return _transcribe_request(dict(body, record_id=record_id))
+
+
+def guard(app, store, c, request):
+    """Inside the caller's open write transaction and before it writes a row: the switch, child, one task, link, revision
+    log, original bytes (bounded regular-file read, hashed now) and the expected version re-read on that same connection,
+    exactly as transcribe checks them. No decode, probe, model, job, second connection, table or write. Any difference is
+    409 with a fixed reason; the bytes are not returned."""
+    _transcribable(app, store, c, request)
+
