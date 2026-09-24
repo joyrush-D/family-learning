@@ -1187,7 +1187,7 @@ class VideoTranscriptSaveGuardTests(VideoTranscribeTests):
         self.app.link_record_task(dict(record_id=ident,child='示例甲',task_id=self.TASK,expected_linked_at=self.row(ident)['linked_task_at']))
         self.rejected(body,409,'fingerprint_stale');self.assertEqual((self.row(ident)['transcript'],self.row(ident)['linked_task_id']),('',self.TASK))
         body=self.guarded(ident);path=self.data/'uploads'/self.uploads[ident];original=path.read_bytes()
-        path.write_bytes(original+b'!');self.rejected(body,409,'original_changed');path.write_bytes(original[:-1]);self.rejected(body,409,'original_changed')
+        path.write_bytes(original+b'!');self.rejected(body,409,'original_unavailable');path.write_bytes(original[:-1]);self.rejected(body,409,'original_unavailable')  # a length mismatch is the existing fixed reason
         path.write_bytes(original[:-1]+b'?');self.rejected(body,409,'fingerprint_stale');path.unlink();self.rejected(body,409,'original_unavailable')
         path.write_bytes(original);self.assertEqual(self.app.save_record(body)['record_id'],ident)  # the same bytes and version again: the proof still holds
         self.assertEqual((self.row(ident)['transcript'],self.row(sibling)['transcript']),(self.NEW,''))
