@@ -460,7 +460,7 @@ function prepareTaskCapture(task,record=null){
  $('#saveTaskFeedback').textContent=record?'保存反馈更正':'保存反馈（不改状态）';drawPending();drawTaskFeedback(task);
 }
 function drawTaskFeedback(task){
- videoDraftSerial++;videoDraftViews.clear();videoReviewPending.clear();
+ videoDraftSerial++;videoDraftViews.clear();videoReviewPending.clear();videoTranscripts.clear();
  const records=data.records.filter(r=>(r.source==='事项:'+task.id||r.linked_task_id===task.id)&&r.child===task.child);
  $('#taskFeedbackHistory').innerHTML=records.length?'<h3>这项任务的反馈</h3>'+records.map(r=>`<article class="note"><p>${esc(r.day)} · ${esc(r.note||(r.transcript?'已保存语音转写':'已保存原件，内容待核对'))}</p>${r.transcript?`<p class="source">转写（${esc(r.transcript_state)}）：${esc(r.transcript)}</p>`:''}${(r.attachments||[]).map(id=>data.uploads.find(a=>a.id===id)).filter(Boolean).map(uploadHTML).join('')}${videoDraftPanelHTML(r)}${r.source==='事项:'+task.id?`<button type="button" data-task-feedback-edit="${r.id}">更正这条反馈</button>`:`<p class="small muted">关联记录 · ${esc(r.title)} · ${esc(r.source)}</p><button type="button" data-record="${r.id}">查看 / 更正原记录</button>`}</article>`).join(''):'';
 }
@@ -478,7 +478,7 @@ function videoReviewHTML(recordId,v,i,obs){
 }
 function videoDraftPanelHTML(r){
  if(!(r.attachments||[]).some(id=>String((data.uploads||[]).find(a=>a.id===id)?.mime||'').startsWith('video/')))return '';
- return `<section class="video-draft" data-video-draft="${r.id}"><p class="small muted">画面观察待家长核对；声音未评估。</p><button type="button" data-video-draft-load="${r.id}">查看画面观察</button></section>`;
+ return `<section class="video-draft" data-video-draft="${r.id}"><p class="small muted">画面观察待家长核对；声音未评估。</p><button type="button" data-video-draft-load="${r.id}">查看画面观察 / 视频转写</button></section>`;
 }
 function clockText(s){s=Math.max(0,Math.round(Number(s)||0));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
 function videoDraftHTML(recordId,view,error){
@@ -493,16 +493,17 @@ function videoDraftHTML(recordId,view,error){
   if(state==='ready'){
    const d=v.draft&&typeof v.draft==='object'?v.draft:{},obs=Array.isArray(d.observations)?d.observations:[],unknown=Array.isArray(d.uncertainties)?d.uncertainties:[];
    const review=videoReviewHTML(recordId,v,i,obs),boxes=!!review&&videoReviewable(v),chosen=boxes&&v.review.state==='confirmed'&&Array.isArray(v.review.selected)?v.review.selected:[];
-   return `<div data-video-state="ready" data-video-item="${i}">${head}${obs.length?`<ul class="video-observations">${obs.map((o,n)=>`<li>${boxes?`<label class="print-file-check"><input type="checkbox" data-video-obs="${n}"><span>`:''}${videoObservationHTML(o)}${chosen.includes(n)?' <span class="small muted">（家长已核对）</span>':''}${boxes?'</span></label>':''}</li>`).join('')}</ul>`:'<p class="source">这次没有整理出可核对的画面观察。</p>'}<p class="source">未知或看不清：${unknown.length?esc(unknown.map(String).join('；')):'无'}</p><p class="source">声音未评估；这是待核对草稿，不代表完成或掌握。</p>${review}${v.updated?`<p class="small muted">整理于 ${esc(String(v.updated))}</p>`:''}${refresh}</div>`;
+   return `<div data-video-state="ready" data-video-item="${i}">${head}${obs.length?`<ul class="video-observations">${obs.map((o,n)=>`<li>${boxes?`<label class="print-file-check"><input type="checkbox" data-video-obs="${n}"><span>`:''}${videoObservationHTML(o)}${chosen.includes(n)?' <span class="small muted">（家长已核对）</span>':''}${boxes?'</span></label>':''}</li>`).join('')}</ul>`:'<p class="source">这次没有整理出可核对的画面观察。</p>'}<p class="source">未知或看不清：${unknown.length?esc(unknown.map(String).join('；')):'无'}</p><p class="source">声音未评估；这是待核对草稿，不代表完成或掌握。</p>${review}${v.updated?`<p class="small muted">整理于 ${esc(String(v.updated))}</p>`:''}${videoTranscriptHTML(recordId,v,i)}${refresh}</div>`;
   }
-  if(state==='error')return `<div data-video-state="error">${head}<p class="source" data-video-draft-status>${esc(v?.explanation||'后台整理失败')}${v?.attempts?` · 已尝试${Number(v.attempts)||0}次`:''}${v?.exhausted?' · 自动重试已停止':''}</p><button type="button" data-video-draft-retry="${recordId}" data-video-index="${i}">重试整理</button> ${refresh}</div>`;
-  return `<div data-video-state="${state}">${head}${note}${refresh}</div>`;
+  if(state==='error')return `<div data-video-state="error">${head}<p class="source" data-video-draft-status>${esc(v?.explanation||'后台整理失败')}${v?.attempts?` · 已尝试${Number(v.attempts)||0}次`:''}${v?.exhausted?' · 自动重试已停止':''}</p><button type="button" data-video-draft-retry="${recordId}" data-video-index="${i}">重试整理</button> ${videoTranscriptHTML(recordId,v,i)}${refresh}</div>`;
+  return `<div data-video-state="${state}">${head}${note}${videoTranscriptHTML(recordId,v,i)}${refresh}</div>`;
  }).join('');
 }
 function videoDraftPanel(recordId){return $('#taskFeedbackHistory').querySelector(`[data-video-draft="${recordId}"]`)}
 function paintVideoDraft(recordId,html){const panel=videoDraftPanel(recordId);if(panel)panel.innerHTML=html}
 async function loadVideoDraft(recordId){
- const serial=videoDraftSerial;if(!videoDraftPanel(recordId))return;
+ const serial=videoDraftSerial;if(!videoDraftPanel(recordId)||[...videoTranscripts.values()].some(x=>x.recordId===recordId&&x.busy))return;
+ for(const [key,x] of videoTranscripts)if(x.recordId===recordId)videoTranscripts.delete(key);
  videoDraftViews.delete(recordId);for(const key of [...videoReviewPending.keys()])if(key.startsWith(recordId+':'))videoReviewPending.delete(key);
  paintVideoDraft(recordId,'<p class="source" data-video-draft-status>正在读取画面观察…</p>');
  try{
@@ -559,6 +560,68 @@ async function submitVideoReview(recordId,index,action){
   }
  }
 }
+
+// A transcription has no durable receipt: each explicit click is a new request, never replayed after login or a lost reply.
+const videoTranscripts=new Map();
+function videoTranscriptHTML(recordId,v,index){
+ if(!/^[0-9a-f]{64}$/.test(v?.transcription_fingerprint||''))return '';
+ const record=data.records.find(r=>r.id===recordId);
+ if(record?.source!=='事项:'+taskFeedbackContext?.task_id)return '<p class="source">关联记录的转写请在原记录核对；本处不覆盖其他记录。</p>';
+ return `<section data-video-transcript="${index}"><button type="button" data-video-transcribe="${recordId}" data-video-index="${index}" ${data.asr?.configured?'':'disabled'}>转写这份视频的声音</button><p class="source" data-video-transcript-status role="status">${data.asr?.configured?'仅在点击后转写；每次点击可能再次转写，结果待核对，不自动保存。':'转写服务尚未配置，仍可手动记录。'} 未分说话人，未评估声音或发音，不代表孩子答案或掌握。</p><div data-video-transcript-result></div></section>`;
+}
+async function requestVideoTranscript(recordId,index){
+ const panel=videoDraftPanel(recordId),view=videoDraftViews.get(recordId),v=view?.videos?.[index],box=panel?.querySelector(`[data-video-transcript="${index}"]`),serial=videoDraftSerial;
+ if(!box||!data.asr?.configured||!/^[0-9a-f]{64}$/.test(v?.transcription_fingerprint||''))return;
+ if([...videoTranscripts.values()].some(x=>x.recordId===recordId&&x.busy))return;
+ const key=recordId+':'+v.upload_id,entry={recordId,busy:true,view,serial};videoTranscripts.set(key,entry);
+ const current=()=>$('#taskDialog').open&&box.isConnected&&serial===videoDraftSerial&&videoDraftViews.get(recordId)===view&&videoTranscripts.get(key)===entry;
+ const status=box.querySelector('[data-video-transcript-status]'),button=box.querySelector('[data-video-transcribe]'),resultBox=box.querySelector('[data-video-transcript-result]');
+ const controls=[...panel.querySelectorAll('button')].map(x=>[x,x.disabled]);controls.forEach(([x])=>x.disabled=true);resultBox.innerHTML='';status.textContent='正在转写，原记录未改动…';
+ const body={record_id:recordId,upload_id:v.upload_id,expected_fingerprint:v.transcription_fingerprint},controller=new AbortController(),timer=setTimeout(()=>controller.abort(),120000);
+ try{
+  const response=await apiFetch('/api/record/video/transcribe',{method:'POST',signal:controller.signal,headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify(body)});
+  let out=null;try{out=await response.json()}catch{}
+  if(!current())return;
+  if(!response.ok){
+   if(response.status===409){entry.stale=true;throw Error('原记录、原件或权限已变化，请点“刷新”重新读取后再明确转写。')}
+   if(response.status===401)throw Error('请恢复登录后再明确点击转写；不会自动重发。');
+   throw Error(out?.error||'转写未成功，原记录与输入保留。');
+  }
+  if(out?.record_id!==recordId||out.upload_id!==v.upload_id||out.task_id!==taskFeedbackContext?.task_id||out.transcription_fingerprint!==body.expected_fingerprint||out.state!=='pending_review'||out.saved!==false||typeof out.text!=='string'||!out.text.trim()||[...out.text].length>4000)throw Error('转写回执与本次请求不一致，未填入记录。');
+  entry.result=out;
+  status.textContent='机器转写待核对；尚未写入记录。未分说话人，未评估声音或发音，不代表孩子答案或掌握。';
+  resultBox.innerHTML=`<p class="source">音轨起点 ${esc(out.audio?.audio_start_seconds)} 秒 · 实际声音 ${esc(out.audio?.pcm_seconds)} 秒 · 本次提供时间范围 ${esc(out.audio?.provided_seconds)} 秒。无法证明未提供的录像尾部。</p><label>待核对文字<textarea data-video-transcript-text maxlength="4000" rows="4">${esc(out.text)}</textarea></label><label class="print-file-check"><input type="checkbox" data-video-transcript-replace><span>如原记录已有转写，我已核对并同意替换原转写（保存后仍保留更正历史）</span></label><button type="button" data-video-transcript-apply="${recordId}" data-video-index="${index}">使用已核对文字</button>`;
+ }catch(error){if(current())status.textContent=(error.name==='AbortError'?'转写连接超时':error instanceof TypeError?'转写回执未收到':error.message)+' 原件和反馈输入保留；再次点击可能再次转写，不会自动请求或保存。'}
+ finally{clearTimeout(timer);entry.busy=false;if(current()){controls.forEach(([x,disabled])=>x.disabled=disabled);button.disabled=!!entry.stale;button.textContent=entry.result?'重新转写（会再次请求）':'再次明确转写（可能再次请求）'}}
+}
+async function applyVideoTranscript(recordId,index){
+ const view=videoDraftViews.get(recordId),v=view?.videos?.[index],entry=videoTranscripts.get(recordId+':'+v?.upload_id),box=videoDraftPanel(recordId)?.querySelector(`[data-video-transcript="${index}"]`);
+ if(!entry?.result||!box||entry.busy||captureBusy()||taskFeedbackPending)return;
+ const status=box.querySelector('[data-video-transcript-status]'),input=box.querySelector('[data-video-transcript-text]'),text=input?.value.trim(),ctx=taskFeedbackContext,f=$('#taskForm');
+ const snapshot=()=>JSON.stringify([taskFeedbackContext,pendingIDs,failedFiles.map(x=>x.name),f.elements.note.value,$('#taskTranscript').value,$('#taskTranscriptState').value,$('#taskFeedbackDay').value]);
+ const initial=snapshot(),serial=videoDraftSerial,replace=box.querySelector('[data-video-transcript-replace]');
+ if(!text||[...text].length>4000){status.textContent='请核对1至4000字的文字。';return}
+ if(ctx?.record_id!==recordId&&(ctx?.record_id||pendingIDs.length||failedFiles.length||f.elements.note.value||$('#taskTranscript').value)){status.textContent='请先保存或处理当前反馈草稿，再重新读取这条原记录；现有输入未覆盖。';return}
+ const old=data.records.find(r=>r.id===recordId);
+ if((old?.transcript||$('#taskTranscript').value)&&!box.querySelector('[data-video-transcript-replace]').checked){status.textContent='原记录已有转写，请明确勾选替换后再使用；原转写未覆盖。';return}
+ entry.busy=true;box.querySelector('[data-video-transcript-apply]').disabled=true;
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
+ try{
+  const stateResponse=await apiFetch('/api/state',{signal:controller.signal});if(!stateResponse.ok)throw Error('请恢复登录或连接，再明确点击使用；文字仍留在本页。');
+  const fresh=await stateResponse.json(),response=await apiFetch('/api/record/video?record_id='+recordId,{signal:controller.signal});
+  const latest=await response.json();if(!response.ok||latest.videos?.find(x=>x.upload_id===v.upload_id)?.transcription_fingerprint!==v.transcription_fingerprint)throw Error('原记录或视频版本已变化，请刷新后重新转写；未填入记录。');
+  if(!$('#taskDialog').open||!box.isConnected||serial!==videoDraftSerial||videoTranscripts.get(recordId+':'+v.upload_id)!==entry)return;
+  if(initial!==snapshot()||input.value.trim()!==text||((old?.transcript||$('#taskTranscript').value)&&!replace.checked)||captureBusy()||taskFeedbackPending)throw Error('反馈输入已变化，请重新核对后明确使用；未覆盖输入。');
+  const record=fresh.records.find(r=>r.id===recordId),task=fresh.tasks.find(t=>t.id===ctx.task_id);
+  if(!record||record.source!=='事项:'+ctx.task_id||record.child!==ctx.child||!task||!record.attachments?.includes(v.upload_id))throw Error('原记录归属已变化，请刷新重新核对。');
+  if(ctx.record_id!==recordId){data=fresh;prepareTaskCapture(task,record)}
+  $('#taskTranscript').value=text;$('#taskTranscriptState').value='已核对';$('#taskTranscriptFields').hidden=false;
+  $('#taskFeedbackStatus').textContent='已填入同一原记录的更正栏，尚未保存；请核对后点“保存反馈更正”。';$('#taskTranscript').focus();
+ }catch(error){if(box.isConnected&&serial===videoDraftSerial)status.textContent=error.name==='AbortError'?'读取超时，文字保留，请再核对后使用。':error instanceof TypeError?'连接中断，文字保留，请再核对后使用。':error.message}
+ finally{clearTimeout(timer);entry.busy=false;if(box.isConnected)box.querySelector('[data-video-transcript-apply]').disabled=false}
+}
+$('#taskFeedbackHistory').addEventListener('click',e=>{const b=e.target.closest('[data-video-transcribe],[data-video-transcript-apply]');if(!b||b.disabled)return;const apply=b.hasAttribute('data-video-transcript-apply');(apply?applyVideoTranscript:requestVideoTranscript)(Number(apply?b.dataset.videoTranscriptApply:b.dataset.videoTranscribe),Number(b.dataset.videoIndex))});
+
 function lockTaskFeedback(locked){
  for(const el of $('#taskForm').querySelectorAll('input,select,textarea,button'))el.disabled=locked;
  if(!locked)captureLock(false);
