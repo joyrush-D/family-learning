@@ -762,4 +762,3 @@ def guard(app, store, c, request):
     exactly as transcribe checks them. No decode, probe, model, job, second connection, table or write. Any difference is
     409 with a fixed reason; the bytes are not returned."""
     _transcribable(app, store, c, request)
-

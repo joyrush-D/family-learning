@@ -1122,6 +1122,27 @@ class VideoTranscribeHttpTests(VideoTranscribeTests):
                 self.assertEqual((path.exists(),path.stat().st_size if path.exists() else None),(name=='empty',0 if name=='empty' else None),'the request created no database file or table')
         self.assertEqual(self.post(body)[1]['text'],self.TEXT)
 
+    def test_guarded_record_save_rejects_a_real_relink_over_http_without_partial_writes(self):
+        ident=self.linked(self.TASK);request=self.body(ident)
+        body=self.record(id=ident,attachments=[request['upload_id']],transcript='虚构已核对文字',transcript_state='已核对',
+                         video_transcript_guard={k:request[k] for k in ('upload_id','expected_fingerprint')})
+        token={'X-Family-Token':self.app.TOKEN};before=self.counts();calls=(self.popen.call_count,self.model.call_count)
+        status,result,_=self.request('/api/record',body)
+        self.assertEqual(status,403);self.assertEqual(self.counts(),before)
+        self.relink(ident)();changed=self.counts()
+        status,result,_=self.request('/api/record',body,token)
+        self.assertEqual((status,result.get('code')),(409,'fingerprint_stale'));self.assertEqual(self.counts(),changed)
+        self.assertNotIn(body['transcript'],json.dumps(result,ensure_ascii=False))
+        current=self.body(ident);body['video_transcript_guard']={k:current[k] for k in ('upload_id','expected_fingerprint')}
+        before_revisions=self.rows('revisions');status,result,_=self.request('/api/record',body,token)
+        self.assertEqual((status,result['record_id'],self.rows('revisions')),(200,ident,before_revisions+1))
+        with self.app.connect() as c:
+            row=c.execute('SELECT transcript,linked_task_id FROM records WHERE id=?',(ident,)).fetchone()
+        self.assertEqual(tuple(row),(body['transcript'],self.OTHER))
+        after=self.counts();status,result,_=self.request('/api/record',body,token)
+        self.assertEqual((status,result.get('code')),(409,'fingerprint_stale'));self.assertEqual(self.counts(),after)
+        self.assertEqual((self.popen.call_count,self.model.call_count),calls);self.assertEqual((self.extracted,self.asr),([],[]))
+
 class VideoTranscriptSaveGuardTests(VideoTranscribeTests):
     """The correction's optional video_transcript_guard: the page repeats which original and which version GET /api/record/video named,
     and save_record re-checks that inside its own write transaction before any row is written. No decode, ASR or model anywhere."""
