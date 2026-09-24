@@ -564,14 +564,21 @@ async function submitVideoReview(recordId,index,action){
 // #23 A saved independent record explicitly linked to a same-child task may transcribe one of its own videos from its edit panel through the same GET/POST/review path. Unlinked, other-child or unsaved records get no entry and no call, and nothing is guessed from the subject. The record form's transcript fields stay disabled, so they are never serialized and an absent field keeps the saved transcript, until a reviewed text is explicitly applied to this same record.
 let recordVideoContext=null;
 function prepareRecordVideo(record){
- videoDraftSerial++;videoDraftViews.clear();videoReviewPending.clear();videoTranscripts.clear();recordVideoContext=null;
- const f=$('#recordForm'),fields=$('#recordTranscriptFields'),host=$('#recordVideoPanel');host.innerHTML='';
- for(const el of fields.querySelectorAll('textarea,select'))el.disabled=true;
- f.elements.transcript.value=record?.transcript||'';f.elements.transcript_state.value=record?.transcript_state||'待核对';fields.hidden=!record?.transcript;
- if(!record||!(record.attachments||[]).some(id=>String((data.uploads||[]).find(a=>a.id===id)?.mime||'').startsWith('video/')))return;
- const ctx=recordTaskLinkContext,task=ctx&&ctx.record_id===record.id&&!ctx.inherited&&ctx.task_id?data.tasks.find(t=>t.id===ctx.task_id&&t.child===ctx.child):null;
- if(!task){host.innerHTML='<p class="small muted">视频转写仅在这条记录明确关联同一孩子的事项后可用；不按科目猜测关联。</p>';return}
- recordVideoContext={record_id:record.id,task_id:task.id,child:ctx.child};host.innerHTML=videoDraftPanelHTML(record);
+ const f=$('#recordForm'),fields=$('#recordTranscriptFields'),host=$('#recordVideoPanel');
+ // An explicitly applied, still unsaved transcript draft of the same open record survives link or upload refreshes: it stays the parent's input, is never rebuilt from an older reply, and is marked stale (待核对) when the link or original changed. Nothing is saved automatically.
+ const same=!!record&&f.elements.id.value===String(record.id)&&!f.elements.transcript.disabled,draft=same&&(f.elements.transcript.value!==(record.transcript||'')||f.elements.transcript_state.value!==(record.transcript_state||'待核对'))?{text:f.elements.transcript.value,state:f.elements.transcript_state.value,task_id:f.elements.transcript.dataset.videoTask||''}:null;
+ videoDraftSerial++;videoDraftViews.clear();videoReviewPending.clear();videoTranscripts.clear();recordVideoContext=null;host.innerHTML='';
+ for(const el of fields.querySelectorAll('textarea,select'))el.disabled=!draft;
+ if(!draft)delete f.elements.transcript.dataset.videoTask;
+ f.elements.transcript.value=draft?draft.text:record?.transcript||'';f.elements.transcript_state.value=draft?draft.state:record?.transcript_state||'待核对';fields.hidden=!(draft||record?.transcript);
+ if(!record)return;
+ const hasVideo=(record.attachments||[]).some(id=>String((data.uploads||[]).find(a=>a.id===id)?.mime||'').startsWith('video/'));
+ const ctx=recordTaskLinkContext,task=hasVideo&&ctx&&ctx.record_id===record.id&&!ctx.inherited&&ctx.task_id?data.tasks.find(t=>t.id===ctx.task_id&&t.child===ctx.child):null;
+ let notice='';
+ if(draft&&(!task||String(task.id)!==String(draft.task_id))){f.elements.transcript_state.value='待核对';notice='<p class="note" data-video-transcript-stale>原关联或原件已变化：已填入但未保存的转写文字仍留在更正栏，并改为待核对。这段文字来自变化前的关联，请对照当前关联重新核对后再保存，或清空该栏；未自动保存。</p>'}
+ if(!hasVideo){host.innerHTML=notice;return}
+ if(!task){host.innerHTML=notice+'<p class="small muted">视频转写仅在这条记录明确关联同一孩子的事项后可用；不按科目猜测关联。</p>';return}
+ recordVideoContext={record_id:record.id,task_id:task.id,child:ctx.child};host.innerHTML=notice+videoDraftPanelHTML(record);
 }
 async function applyRecordVideoTranscript(recordId,index){
  const view=videoDraftViews.get(recordId),v=view?.videos?.[index],entry=videoTranscripts.get(recordId+':'+v?.upload_id),box=videoDraftPanel(recordId)?.querySelector(`[data-video-transcript="${index}"]`),ctx=recordVideoContext,f=$('#recordForm');
@@ -594,7 +601,7 @@ async function applyRecordVideoTranscript(recordId,index){
   const record=fresh.records.find(r=>r.id===recordId),task=fresh.tasks.find(t=>t.id===ctx.task_id),owner=fresh.children.find(c=>c.name===record?.child||c.aliases?.includes(record?.child));
   if(!record||record.linked_task_id!==ctx.task_id||String(record.source||'').startsWith('事项:')||(owner?.name||record.child)!==ctx.child||!task||task.child!==ctx.child||!record.attachments?.includes(v.upload_id))throw Error('原记录归属或关联已变化，请刷新重新核对；未填入记录。');
   for(const el of fields.querySelectorAll('textarea,select'))el.disabled=false;
-  f.elements.transcript.value=text;f.elements.transcript_state.value='已核对';fields.hidden=false;
+  f.elements.transcript.value=text;f.elements.transcript_state.value='已核对';fields.hidden=false;f.elements.transcript.dataset.videoTask=ctx.task_id;
   status.textContent='已填入本条记录的转写更正栏，尚未保存；请核对后点“保存”。原说明、原件与关联保留。';f.elements.transcript.focus();
  }catch(error){if(box.isConnected&&serial===videoDraftSerial)status.textContent=error.name==='AbortError'?'读取超时，文字保留，请再核对后使用。':error instanceof TypeError?'连接中断，文字保留，请再核对后使用。':error.message}
  finally{clearTimeout(timer);entry.busy=false;if(box.isConnected)box.querySelector('[data-video-transcript-apply]').disabled=false}
@@ -612,7 +619,8 @@ async function requestVideoTranscript(recordId,index){
  if(!box||!data.asr?.configured||!/^[0-9a-f]{64}$/.test(v?.transcription_fingerprint||''))return;
  if([...videoTranscripts.values()].some(x=>x.recordId===recordId&&x.busy))return;
  const recordMode=$('#recordDialog').open,dialog=box.closest('dialog'),taskId=recordMode?recordVideoContext?.task_id:taskFeedbackContext?.task_id;
- if(recordMode&&(recordVideoContext?.record_id!==recordId||$('#recordForm').elements.child.value!==recordVideoContext.child||$('#recordForm').dataset.saving||recordTaskLinkPending||recordTaskLinkBusy)){box.querySelector('[data-video-transcript-status]').textContent='孩子或关联正在更改，请先保存记录并重新打开后再转写；未请求。';return}
+ if(recordMode&&!pendingIDs.includes(v.upload_id)){box.querySelector('[data-video-transcript-status]').textContent='这份视频已从本条记录移除，未请求转写；请先恢复原件或另行保存。';return}
+ if(recordMode&&(recordVideoContext?.record_id!==recordId||$('#recordForm').elements.child.value!==recordVideoContext.child||$('#recordForm').dataset.saving||recordTaskLinkPending||recordTaskLinkBusy||(recordTaskLinkContext&&!recordTaskLinkContext.inherited&&$('#recordTaskSelect').value!==recordTaskLinkContext.task_id))){box.querySelector('[data-video-transcript-status]').textContent='孩子或关联正在更改，请先保存记录并重新打开后再转写；未请求。';return}
  const key=recordId+':'+v.upload_id,entry={recordId,busy:true,view,serial};videoTranscripts.set(key,entry);
  const current=()=>dialog?.open&&box.isConnected&&serial===videoDraftSerial&&videoDraftViews.get(recordId)===view&&videoTranscripts.get(key)===entry;
  const status=box.querySelector('[data-video-transcript-status]'),button=box.querySelector('[data-video-transcribe]'),resultBox=box.querySelector('[data-video-transcript-result]');
