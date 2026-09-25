@@ -73,6 +73,40 @@ class AgentHTTPTests(unittest.TestCase):
                     checked_at='2026-02-10T08:05:00+08:00', last_message_time='2026-02-10T08:00:00+08:00',
                     messages=messages, error='')
 
+    def test_collector_control_text_preserves_batch_and_strict_ingest(self):
+        import family_collect as collect
+        from test_collect import qq_event, qq_envelope, QQ_SOURCE
+        batch = self.batch(2)
+        raw = '虚构通知\n\t保留正文\x14\x08'
+        batch['messages'][0]['text'] = raw
+        self.assertEqual(self.post('/api/agent/ingest', batch)[0], 400)
+        with app.connect() as c:
+            self.assertEqual(c.execute('SELECT count(*) FROM agent_messages').fetchone()[0], 0)
+        row = collect.wechat_message(dict(id=dict(local_id=101, talker=self.source['id']),
+            time_iso=batch['messages'][0]['time'], kind='text', sender='虚构老师', text=raw), self.source['id'])
+        self.assertEqual(row['text'], '虚构通知\n\t保留正文[控制字符 U+0014][控制字符 U+0008]')
+        self.assertTrue(row['unread'])
+        batch['messages'][0] = row
+        status, result, _ = self.post('/api/agent/ingest', batch)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result['inserted'], 2)
+        self.assertEqual(result['cursor'], '102')
+        with app.connect() as c:
+            saved = [json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY id')]
+        self.assertEqual(saved, batch['messages'])
+        status, replay, _ = self.post('/api/agent/ingest', batch)
+        self.assertEqual(status, 200)
+        self.assertTrue(replay['replayed'])
+        self.assertEqual(replay['inserted'], 0)
+        qq = collect.qq_native_page(qq_envelope([qq_event(101, text=raw)]), QQ_SOURCE)
+        self.assertEqual(qq[0][2]['text'], row['text'])
+        self.assertTrue(qq[0][2]['unread'])
+        self.assertEqual(collect.bounded('原文\n\t不变'), ('原文\n\t不变', False))
+        text, incomplete = collect.bounded('\x00' * 8000)
+        self.assertEqual(len(text), 8000)
+        self.assertTrue(incomplete)
+        self.assertTrue(text.endswith('[正文过长，后续内容未读取]'))
+
     def message_keys(self, **changes):
         return dict(child_id='child-1', source_id=self.source['id'], message_id='101') | changes
 

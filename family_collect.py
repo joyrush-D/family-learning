@@ -111,8 +111,12 @@ def iso_time(value, local=False):
 
 def bounded(text):
     checked(isinstance(text, str), 'invalid_message_text')
+    # Preserve otherwise rejected characters visibly; never silently drop source content.
+    visible = re.sub(r'[\x00-\x08\x0b-\x1f]', lambda m: '[控制字符 U+%04X]' % ord(m[0]), text)
+    changed = visible != text
+    text = visible
     if len(text) <= MAX_TEXT:
-        return text, False
+        return text, changed
     marker = '\n[正文过长，后续内容未读取]'
     return text[:MAX_TEXT - len(marker)] + marker, True
 
