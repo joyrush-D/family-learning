@@ -158,6 +158,27 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(rows[0]['error'],'wechat_cli_not_configured')
         self.assertEqual(client.sources[0]['cursor'],'10')
 
+    def test_explicit_unparsed_quote_preserves_batch_as_unread(self):
+        broken = event(12, 'quote', '虚构回复正文')
+        broken['warnings'] = ['message_parse_error']
+        client = FakeClient()
+        rows = collect.run_once(CONFIG, client, lambda args, env=None: page([event(), broken, event(13)]))
+        self.assertEqual(rows[0]['status'], 'ingested')
+        body = client.posts[0]
+        self.assertEqual(body['cursor'], '13')
+        self.assertEqual([r['id'] for r in body['messages']], ['11', '12', '13'])
+        self.assertEqual([r['unread'] for r in body['messages']], [False, True, False])
+        self.assertIn('引用内容未读取', body['messages'][1]['text'])
+        self.assertIn('虚构回复正文', body['messages'][1]['text'])
+        for warnings in [None, [], 'message_parse_error', ['unknown'], ['message_parse_error', 'unknown']]:
+            broken['warnings'] = warnings
+            with self.subTest(warnings=warnings), self.assertRaises(collect.CollectError):
+                collect.wechat_page(page([broken]), SOURCE)
+        broken['warnings'] = ['message_parse_error']
+        broken['quote'] = []
+        with self.assertRaises(collect.CollectError):
+            collect.wechat_page(page([broken]), SOURCE)
+
     def test_real_wechat_shape_quote_media_and_zero_page(self):
         quote = event(12, 'quote', '收到')
         quote['quote'] = dict(kind='text', text='虚构家长转述', sender='示例家长',

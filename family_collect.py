@@ -160,7 +160,10 @@ def wechat_message(message, chat):
     text = message.get('text', '')
     checked(isinstance(text, str))
     unread = kind not in ('text', 'quote')
-    if kind == 'quote':
+    if kind == 'quote' and message.get('quote') is None and message.get('warnings') == ['message_parse_error']:
+        text = '[引用消息解析失败：引用内容未读取，需核对原消息]\n' + text
+        unread = True
+    elif kind == 'quote':
         quote = message.get('quote')
         checked(isinstance(quote, dict), 'quote_missing')
         reference = quote.get('source_id', {})
