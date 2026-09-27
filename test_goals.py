@@ -52,6 +52,19 @@ class GoalTests(unittest.TestCase):
         with self.app.connect() as c:row=dict(c.execute('SELECT * FROM records WHERE id=?',(rid,)).fetchone())
         self.app.save_record(dict({k:row[k] or '' for k in ('child','day','category','subject','title','note','source','assistance','practice_relation')},id=rid,**changes))
 
+    def test_missing_context_wording_does_not_claim_absence(self):
+        def answer(messages,*args,**kwargs):
+            p=synthetic_plan(json.loads(messages[-1]['content']))
+            p['proposal'].update(assessment='当前没有学校任务、时间账或已确认教学计划。孩子没有独立答对。',
+                                 why_now='本轮没有当天时间账。',action='本轮没有已确认计划，先核对。')
+            return p
+        self.model.side_effect=answer
+        result=self.evaluate()['pending']
+        self.assertEqual(result['assessment'],'本轮未提供学校任务、时间账或已确认教学计划。孩子没有独立答对。')
+        self.assertEqual(result['why_now'],'本轮未提供当天时间账。')
+        self.assertEqual(result['action'],'本轮未提供已确认计划，先核对。')
+        self.assertEqual(result['evidence'][0]['quote'],'家长提供的情况（尚需结合实际作答核对）：\n家长观察：孩子有时猜选项。'[:30])
+
     def test_method_history_keeps_each_confirmed_method_with_its_feedback_conditions_and_reason(self):
         def adjusts(messages,schema,name,timeout,**kwargs):
             value=json.loads(messages[-1]['content']);self.last_input=value;plan=synthetic_plan(value)
