@@ -67,6 +67,7 @@ class PdfMaterialTests(Base):
         with renderer(page_count=1), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as model:
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
             model.assert_called_once()
+            self.assertEqual(model.call_args.kwargs['timeout'], 90)
         self.assertEqual((self.view(keys)['state'], self.view(keys)['processed_pages']), ('ready', [1]))
         self.assertEqual(self.facts(), facts)
         self.assertEqual(self.rows('SELECT * FROM manual_tasks'), [])

@@ -333,7 +333,7 @@ def prepare(store, now, budget=ROUND_CALLS):
                                original_pdf=dict(name=value['name'], mime=value['mime'], pages=pages, page_count=page_count,
                                                  unprocessed_pages=left, conversion=value['conversion'])), ensure_ascii=False)
         images = [dict(mime='image/png', data=p['data']) for p in rendered['pages']]
-        result = family_llm.extract_draft(text, images, target_child=value['child'], timeout=45, data_path=store.data,
+        result = family_llm.extract_draft(text, images, target_child=value['child'], timeout=90, data_path=store.data,
                                           school_material=True)
         result = family_llm.validate_school_material(result)  # Re-checked: no score, mastery or record field is ever saved.
         with store._db() as c:
