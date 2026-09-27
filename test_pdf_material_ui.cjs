@@ -29,6 +29,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
  app.save_upload(io.BytesIO(png),len(png),'synthetic-existing.png')
  PDF=test_pdf.build_pdf(11);(app.DATA/'uploads').mkdir(exist_ok=True)
  DOCX_LAYOUT=test_media.docx(test_media.para('虚构练习卷，题目见下图')+'<w:p><w:r><w:drawing/></w:r></w:p>');DOCX_PLAIN=test_media.docx(test_media.para('虚构纯文字通知：完成练习卷。'))
+ DOCX_FIELD=test_media.docx(test_media.para('虚构正文')+'<w:p><w:r><w:instrText>DATE</w:instrText></w:r></w:p>')
  app.save_upload(io.BytesIO(DOCX_LAYOUT),len(DOCX_LAYOUT),'synthetic-extra.docx');app.save_upload(io.BytesIO(DOCX_PLAIN),len(DOCX_PLAIN),'synthetic-plain.docx')
  def renderer():
   if test_pdf.TOOLS_AVAILABLE: return contextlib.nullcontext()
@@ -55,6 +56,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
    rounds(done)
    if failed: rounds(1,True)
  native=[dict(id='native-'+str(w),time=now.isoformat(),kind='text',sender='虚构来源',text='请核对所附虚构PDF原件',unread=True) for w in (360,1440)]
+ native += [dict(id='native-field-'+str(w),time=now.isoformat(),kind='text',sender='虚构来源',text='请核对所附虚构Word原件',unread=True) for w in (360,1440)]
  store.ingest(dict(source_id='qq:123456',expected_cursor='',cursor='native-1',checked_at=now.isoformat(),last_message_time=now.isoformat(),error='',messages=native))
  for w in (360,1440):
   message=native[0 if w==360 else 1];ref='message:qq:123456:'+message['id']
@@ -65,6 +67,12 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   with store._db() as c:
    source=next(s for s in store._config(c)['sources'] if s['id']=='qq:123456');value=family_pdf_material.pdf_input(store,c,source,message)
    c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?)',('qq:123456',message['id'],value['fingerprint'],1,json.dumps([1,2,3]),11,json.dumps(dict(kind='school_material',title='虚构已读页组',note='原件前3页待核对',uncertainties=[]),ensure_ascii=False),now.isoformat()))
+ for w in (360,1440):
+  message=next(m for m in native if m['id']=='native-field-'+str(w));ref='message:qq:123456:'+message['id']
+  store._save('native-field:'+str(w),'fixture',[dict(child_id='child-1',kind='school',title='虚构不安全Word资料 '+str(w),body='待核对原件',evidence=[dict(ref=ref,text=message['text'])])],now)
+  upload_id=hashlib.md5(('native-field-'+str(w)).encode()).hexdigest();(app.DATA/'uploads'/upload_id).write_bytes(DOCX_FIELD)
+  with store._db() as c:c.execute('INSERT INTO uploads(id,name,size,mime,created) VALUES(?,?,?,?,?)',(upload_id,'虚构含动态字段Word-'+str(w)+'.docx',len(DOCX_FIELD),family_media.DOCX_MIME,now.isoformat()))
+  store.message_attachment(dict(child_id='child-1',source_id='qq:123456',message_id=message['id'],attachment_id=upload_id,action='attach'),dict)
  store.ingest(dict(source_id='synthetic',expected_cursor='',cursor='cursor-1',checked_at=now.isoformat(),last_message_time=now.isoformat(),error='',messages=[dict(id='notice-'+str(w),time=now.isoformat(),kind='text',sender='虚构老师',text='虚构老师通知 '+str(w)+'：请核对所附练习卷。',unread=True) for w in (360,1440)]))
  for w in (360,1440): store._save('notice-'+str(w),'fixture',[dict(child_id='child-1',kind='school',title='虚构文字通知 '+str(w),body='核对原要求',evidence=[dict(ref='message:synthetic:notice-'+str(w),text='虚构老师通知 '+str(w)+'：请核对所附练习卷。')])],now)
  store._runtime('ready',now)
@@ -94,6 +102,11 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   assert.match(await fileList.innerText(),/虚构原生PDF-360\.pdf/);assert.match(await fileList.innerText(),/虚构原生PDF-1440\.pdf/);
   await fileList.locator('[data-school-original-ref="message:qq:123456:native-'+width+'"]').click();await panel.waitFor();
   assert.match(await panel.innerText(),/虚构原生PDF-[\s\S]*已整理 3 \/ 11 页/);await fits(page);await close();
+  await open('message:qq:123456:native-field-'+width);await panel.waitFor();
+  assert.equal(await panel.getAttribute('data-school-pdf-state'),'unavailable');
+  assert.match(await panel.innerText(),/不能安全转换[\s\S]*另存为PDF/);assert.equal(await retry.count(),0);
+  assert.equal(await dialog.locator('[data-school-original-files] a[href*="'+before.uploads.find(x=>x.name==='虚构含动态字段Word-'+width+'.docx').id+'"]').count(),1);
+  await fits(page);await proof(page,'school-docx-refused-'+width);await close();
   const isMessage=u=>u.pathname==='/api/agent/message';
   // Routed replies that still need the real server go through node, so the family.test host is rewritten the way test_message_page_ui.cjs does.
   const real=route=>route.fetch({url:route.request().url().replace('family.test','127.0.0.1'),headers:{...route.request().headers(),host:'family.test:'+port}});

@@ -419,18 +419,11 @@ def _docx_pdf_output(path, limit):
         raise MediaError('process_output_limit' if path.stat().st_size > limit else 'process_failed') from None
 
 
-def docx_pdf(body, *, soffice=None):
-    """PDF bytes of one real DOCX rendered locally by LibreOffice in a throwaway profile with macros locked.
-
-    A pure function: nothing is stored, queued, fetched or written to the database. Word/WPS-exported DOCX with
-    embedded PNG/JPEG pictures, tables, formulas and ordinary layout is accepted; binary .doc/.wps, macros,
-    OLE/ActiveX objects, active fields/subdocuments, external relationships (hyperlinks included), other media, fonts and damaged archives
-    are refused. The result is LibreOffice's rendering, not Word-exact pagination, sound or animation."""
-    started = time.monotonic()
+def docx_pdf_preflight(body, *, started=None):
+    """Check whether a DOCX is safe for the existing local page conversion, without converting it."""
+    started = time.monotonic() if started is None else started
     require(isinstance(body, (bytes, bytearray)) and len(body) > 0, 'draft_docx_rejected')
     require(len(body) <= MAX_BYTES, 'media_too_large')
-    soffice = soffice or shutil.which('soffice')
-    require(isinstance(soffice, str) and soffice, 'process_unavailable')
     def inspect(name):
         name = name.lower()
         return True if name.endswith(('.xml', '.rels')) else 8 if name.endswith(tuple(_DOCX_PDF_MEDIA)) else None
@@ -459,6 +452,20 @@ def docx_pdf(body, *, soffice=None):
     root = _docx_xml(parts.get('word/document.xml', b''))
     require(root.tag == _W + 'document' and not any(e.tag.rsplit('}', 1)[-1] in _DOCX_PDF_OBJECTS for e in root.iter()),
             'draft_docx_rejected')
+    require(time.monotonic() - started <= DOCX_PDF_TIMEOUT, 'process_timeout')
+
+
+def docx_pdf(body, *, soffice=None):
+    """PDF bytes of one checked DOCX rendered locally by LibreOffice in a throwaway profile with macros locked.
+
+    A pure function: nothing is stored, queued, fetched or written to the database. Word/WPS-exported DOCX with
+    embedded PNG/JPEG pictures, tables, formulas and ordinary layout is accepted; binary .doc/.wps, macros,
+    OLE/ActiveX objects, active fields/subdocuments, external relationships (hyperlinks included), other media, fonts and damaged archives
+    are refused. The result is LibreOffice's rendering, not Word-exact pagination, sound or animation."""
+    started = time.monotonic()
+    docx_pdf_preflight(body, started=started)
+    soffice = soffice or shutil.which('soffice')
+    require(isinstance(soffice, str) and soffice, 'process_unavailable')
     remaining = DOCX_PDF_TIMEOUT - (time.monotonic() - started)
     require(remaining > 0, 'process_timeout')
     with tempfile.TemporaryDirectory(prefix='docx-pdf-') as temporary:

@@ -20,7 +20,7 @@ import time
 
 import family_media
 import family_pdf
-from family_media import DOCX_MIME, SCHOOL_MATERIAL, MediaError, _authorized, _material_kind, docx_text, read_file, require
+from family_media import DOCX_MIME, SCHOOL_MATERIAL, MediaError, _authorized, _material_kind, docx_text, docx_pdf_preflight, read_file, require
 
 PDF_MIME = 'application/pdf'
 BATCH_PAGES = family_pdf.MAX_REQUESTED_PAGES
@@ -34,6 +34,7 @@ EXPLANATIONS = {
     'pdf_mixed_originals': 'PDF原件与图片、DOCX原件混在同一条通知，本次未读取任何原件；请把PDF单独关联，图片和DOCX仍按原方式整理。',
     'docx_multiple': '这条通知关联了多个DOCX原件，含图片或版式的DOCX一次只整理一个明确原件；请只保留本次要整理的DOCX，其余分次关联或手动记录。本次未读取任何原件。',
     'docx_mixed_originals': '含图片或版式的DOCX原件与图片等其他原件混在同一条通知，本次未读取任何原件；请把该DOCX单独关联，图片仍按原方式整理。',
+    'draft_docx_rejected': '这个Word原件含有当前不能安全转换的内容；原件仍保留。可核对原件，或从可信文档另存为PDF后重新关联。',
     'media_file_rejected': '原件超过20MiB或无法读取，本次未读取；原件保留，可手动核对。',
     'pdf_invalid': '该文件不是可读取的PDF，本次未读取；原件保留，可手动核对。',
     '': '当前原件或授权无法完整核对，可保留原件并手动记录。',
@@ -57,7 +58,7 @@ def pdf_input(store, c, source, message):
     """None when the notice has no page-path original; MediaError when the linked set is not exactly one same-child PDF,
     or exactly one DOCX that docx_text refuses for pictures/layout alone.
 
-    Reads files only to hash them and for docx_text's plain-text decision. Never runs LibreOffice, pdfinfo/pdftoppm or a model."""
+    Reads files only to hash them and check DOCX structure. Never runs LibreOffice, pdfinfo/pdftoppm or a model."""
     from family_agent import _json
     from family_qq_capture import KIND, NOTICE
     screenshot_kind = _material_kind(message)
@@ -112,6 +113,7 @@ def pdf_input(store, c, source, message):
         require(len(docxs) == 1, 'docx_multiple')
         require(all(row['mime'] == DOCX_MIME or same_capture(ident, row) for ident, row in rows), 'docx_mixed_originals')
         ident, row, body = layout[0]
+        docx_pdf_preflight(body)  # A permanently refused DOCX must not enter the retrying conversion job.
     child = next(p for p in store.profiles(c) if p['id'] == source['child_id'])
     original = ORIGINALS[row['mime']]  # The original stays the uploaded file: its own mime and bytes, never a converted copy.
     fingerprint = hashlib.sha256(json.dumps([FINGERPRINT_VERSION, SCHOOL_MATERIAL, original, source, child, message,

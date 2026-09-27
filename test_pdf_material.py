@@ -389,6 +389,7 @@ def layout_docx(caption='题目见下图'):
 DOCX_LAYOUT = layout_docx()
 DOCX_PLAIN = test_media.docx(test_media.para('虚构纯文字通知：完成练习卷。'))
 DOCX_MACRO = test_media.docx(test_media.para('虚构正文'), [('word/vbaProject.bin', 'x')])
+DOCX_FIELD = test_media.docx(test_media.para('虚构正文') + '<w:p><w:r><w:instrText>DATE</w:instrText></w:r></w:p>')
 
 
 def no_convert():
@@ -427,6 +428,19 @@ class DocxMaterialTests(PdfMaterialTests):
 
     def draft_state(self, keys):
         return self.store.message(keys, dict)['material_draft']
+
+    def test_active_field_is_refused_before_a_retrying_job(self):
+        keys = self.school_fragment('请核对所附虚构资料。')
+        ident = self.seed_docx('e' * 32, DOCX_FIELD)
+        self.link(keys, ident)
+        with no_convert(), no_pages(), patch.object(family_llm, 'extract_draft', side_effect=AssertionError('model')):
+            shown = self.view(keys)
+            self.assertEqual((shown['state'], shown['explanation']),
+                             ('unavailable', pdfm.EXPLANATIONS['draft_docx_rejected']))
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=0, failed=0))
+        self.assertEqual(self.rows("SELECT * FROM agent_jobs WHERE id LIKE 'pdf-material:%'"), [])
+        self.assertEqual(self.rows('SELECT * FROM agent_pdf_material'), [])
+        self.assertEqual((self.data / 'uploads' / ident).read_bytes(), DOCX_FIELD)
 
     def test_layout_docx_is_reconverted_each_round_and_covered_in_four_batches(self):
         keys = self.school_fragment('数学：完成所附练习卷。'); self.assertIsNone(self.view(keys))
