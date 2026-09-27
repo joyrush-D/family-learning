@@ -20,12 +20,14 @@ import time
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from http.client import HTTPException
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 
 MAX_INPUT=20*1024*1024
+MAX_MODEL_PNG=8*1024*1024
 MAX_TEXT=12000
 MAX_RESPONSE=64*1024
 AUDIO_TYPES={'audio/wav':'wav','audio/mpeg':'mp3','audio/mp4':'m4a',
@@ -63,6 +65,29 @@ class LLMDraftError(Exception):
 
 class LLMUnavailable(LLMDraftError):
     pass
+
+
+def _model_image(image):
+    """Keep the original elsewhere; send a same-size JPEG preview for oversized RGB PNGs."""
+    data=image['data']
+    if image['mime']!='image/png' or len(data)<=MAX_MODEL_PNG:
+        return image
+    from family_wechat_media import MediaError, bounded_process, validate_png
+    try:
+        validate_png(data)
+        if data[24]!=8 or data[25]!=2:  # No alpha, palette or 16-bit pixels may be flattened silently.
+            raise ValueError()
+        with TemporaryDirectory(prefix='family-model-image-') as directory:
+            source=Path(directory)/'source.png'; preview=Path(directory)/'preview.jpg'
+            source.write_bytes(data)
+            bounded_process(['/usr/bin/sips','-s','format','jpeg','-s','formatOptions','95',
+                             '--out',str(preview),str(source)],{'PATH':'/usr/bin:/bin'},20,2048)
+            converted=preview.read_bytes()
+        if len(converted)>MAX_MODEL_PNG or not converted.startswith(b'\xff\xd8') or not converted.endswith(b'\xff\xd9'):
+            raise ValueError()
+        return dict(mime='image/jpeg',data=converted)
+    except (OSError, ValueError, MediaError):
+        raise LLMDraftError('原图较大且无法生成完整预览；原件保留，请打开核对后手动记录') from None
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -373,7 +398,8 @@ def extract_draft(text='',images=(),timeout=60,*,target_child='',data_path=None,
     for document in documents:  # Kept apart from the notice: one JSON part per original, file name included.
         content.append(dict(type='text',text=json.dumps(dict(original_document=document),ensure_ascii=False)))
     for image in images:
-        content.append(dict(type='image_url',image_url=dict(url='data:'+image['mime']+';base64,'+base64.b64encode(image['data']).decode('ascii'))))
+        preview=_model_image(image)
+        content.append(dict(type='image_url',image_url=dict(url='data:'+preview['mime']+';base64,'+base64.b64encode(preview['data']).decode('ascii'))))
     if school_material:
         schema=dict(type='object',additionalProperties=False,required=['title','note','uncertainties'],properties=dict(
             title=dict(type='string',maxLength=200),note=dict(type='string',maxLength=4000),

@@ -330,6 +330,23 @@ try:
 finally:
     server.shutdown();server.server_close()
 
+if sys.platform=='darwin' and Path('/usr/bin/sips').is_file():
+    import struct,zlib
+    def png_chunk(kind,data):
+        return struct.pack('>I',len(data))+kind+data+struct.pack('>I',zlib.crc32(kind+data)&0xffffffff)
+    width,height=2400,2000;compressor=zlib.compressobj(1);rows=[]
+    for _ in range(height):
+        rows.append(compressor.compress(b'\0'+bytes((byte&15)+120 for byte in os.urandom(width*3))))
+    rows.append(compressor.flush())
+    original=b'\x89PNG\r\n\x1a\n'+png_chunk(b'IHDR',struct.pack('>IIBBBBB',width,height,8,2,0,0,0))+png_chunk(b'IDAT',b''.join(rows))+png_chunk(b'IEND',b'')
+    assert len(original)>llm.MAX_MODEL_PNG
+    preview=llm._model_image(dict(mime='image/png',data=original))
+    assert preview['mime']=='image/jpeg' and preview['data'].startswith(b'\xff\xd8') and len(preview['data'])<llm.MAX_MODEL_PNG
+    assert llm._model_image(dict(mime='image/png',data=original[:100]))['data']==original[:100]
+    try: llm._model_image(dict(mime='image/png',data=b'x'*(llm.MAX_MODEL_PNG+1)))
+    except llm.LLMDraftError: pass
+    else: raise AssertionError('invalid oversized original accepted')
+
 material=dict(title='虚构分数题',subject='数学',question_text='1/2加1/3，先考虑什么？',
               reference_text='先通分为六分之三加六分之二，结果六分之五。',reference_checked=True)
 attempts=[dict(kind='first',text='我把分子分母各自相加了。',assistance='')]
