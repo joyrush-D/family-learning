@@ -121,9 +121,9 @@ def run_one(app, store, now):
     try:
         import family_qq_inbox
         inbox = family_qq_inbox.settings(store.data)
-        if inbox and inbox['enabled']:
-            return family_qq_inbox.run_one(app, store, now)
         local = settings(store.data)
+        if inbox and inbox['enabled'] and not (local and local['enabled'] and local.get('host_app')):
+            return family_qq_inbox.run_one(app, store, now)
         if not local or not local['enabled']: return dict(state='disabled')
         if not local.get('host_app'): return dict(state='manual_only')
         checked(sys.platform == 'darwin', 'qq_capture_platform')
