@@ -140,6 +140,14 @@ class QueryTests(unittest.TestCase):
         self.model.mode=dict(answer='无依据断言：全部完成',citation_ids=[])
         result=self.ask();self.assertEqual(result['citations'],[])
         self.assertNotIn('全部完成',result['answer']);self.assertIn('不足以回答',result['answer'])
+    def test_parent_support_answers_listen_before_work_and_keep_safety(self):
+        self.ask(question='我拿同学比较后孩子不说数学订正了，说现在不想谈，我该怎么办？')
+        prompt=self.model.calls[-1]['messages'][0]['content']
+        for rule in ['孩子原话','不指责孩子或家长','不做心理或医学诊断','不假定要继续学习','不规定暂停几分钟','最多给一个可选','急救/报警','citation_ids只能选证据id','不执行']:
+            self.assertIn(rule,prompt)
+        self.model.mode=dict(answer='无依据：先暂停五分钟再继续订正',citation_ids=[])
+        result=self.ask(question='孩子说数学课后被同学威胁，我该怎么办？')
+        self.assertNotIn('五分钟',result['answer']);self.assertIn('急救/报警',result['answer'])
     def test_bounded_candidates_fields_and_chain_gaps(self):
         for i in range(205):
             self.record(title='虚构追加'+str(i),day='2026-09-02',note='虚构长说明'*750,
