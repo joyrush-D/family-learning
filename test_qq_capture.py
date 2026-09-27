@@ -145,11 +145,12 @@ def check_worker():
         driver=SimpleNamespace(
             list_apps=AsyncMock(return_value=SimpleNamespace(apps=[SimpleNamespace(running=True,bundle_id='com.tencent.qq',launch_path='/Applications/QQ.app',pid=1)])),
             list_windows=AsyncMock(return_value=SimpleNamespace(windows=[SimpleNamespace(pid=1,window_id=2,layer=0,bounds=SimpleNamespace(width=800,height=600))])),
-            get_window_state=AsyncMock(side_effect=[SimpleNamespace(**s) for s in (first,fixture(),fixture())]),click=AsyncMock())
-        with patch.dict(sys.modules,cua_driver=sdk),patch.object(host,'screen_locked',return_value=False),patch.object(qq,'crop_window',return_value=png()) as crop:
+            get_window_state=AsyncMock(side_effect=[SimpleNamespace(**s) for s in (first,first,fixture(),fixture())]),click=AsyncMock())
+        with patch.dict(sys.modules,cua_driver=sdk),patch.object(host,'screen_locked',return_value=False),patch.object(qq,'crop_window',return_value=png()) as crop,patch.object(qq.subprocess,'run') as activate:
             text,body=asyncio.run(qq.capture(driver,SOURCE,Path('/synthetic')))
         assert text=='英语：完成课本练习' and body==png()
         assert driver.click.await_count==(0 if panel else 2)
+        assert activate.call_count==(0 if panel else 1)
         assert all(c.args[0].delivery_mode=='background' and c.args[0].position=='s1:3' for c in driver.click.await_args_list)
         assert crop.call_args.args[1]==[300,85,262,365]
         driver.list_apps.reset_mock()

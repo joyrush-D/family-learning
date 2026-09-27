@@ -1,5 +1,6 @@
 """QQ window observations: incomplete evidence, separate from native message cursors."""
 import base64
+import asyncio
 import datetime as dt
 import hashlib
 import json
@@ -288,9 +289,17 @@ async def capture(driver, source, directory):
     try:
         try: _, viewport, text = layout(state, source)
         except CollectError:
-            await click(more); opened = True
+            # The QQ details button ignores background AX clicks while another app is frontmost.
+            subprocess.run(['/usr/bin/open', '-a', '/Applications/QQ.app'],
+                           capture_output=True, check=True, timeout=5)
+            await asyncio.sleep(.2)
+            state = await read()
+            more, _, _ = layout(state, source, identity=False)
+            await click(more)
+            await asyncio.sleep(.4)
             state = await read()
             _, viewport, text = layout(state, source)
+            opened = True
         body = crop_window(state, viewport, directory/'fragment.png')
         checked(not screen_locked(), 'screen_locked_during_capture')
         return text, body
