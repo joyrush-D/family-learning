@@ -678,6 +678,41 @@ def rezip(body,name,data):
     return out.getvalue()
 
 
+def pptx(slides=1, extras=()):
+    """One fictional static slide deck; no family material or external package dependency."""
+    out=io.BytesIO()
+    types=('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+           '<Override PartName="/ppt/presentation.xml" ContentType="'
+           'application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/></Types>')
+    ids=''.join('<p:sldId id="%d"/>'%(256+i) for i in range(slides))
+    presentation='<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldIdLst>%s</p:sldIdLst></p:presentation>'%ids
+    with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:
+        z.writestr('[Content_Types].xml',types)
+        z.writestr('ppt/presentation.xml',presentation)
+        for i in range(1,slides+1):
+            z.writestr('ppt/slides/slide%d.xml'%i,'<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld/></p:sld>')
+        for name,data in extras:z.writestr(name,data)
+    return out.getvalue()
+
+
+class PptxPdfTests(unittest.TestCase):
+    def test_static_deck_converts_and_refuses_external_or_active_material(self):
+        body=pptx(2,[('ppt/media/picture.png',png())])
+        self.assertEqual(media.pptx_pdf_preflight(body),2)
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); expected=family_print.image_pdf(png());(root/'expected.pdf').write_bytes(expected)
+            fake=root/'fake.py';fake.write_text(FAKE%(sys.executable,'ok',str(root/'ok.json'),str(root/'expected.pdf')));fake.chmod(0o755)
+            self.assertEqual(media.pptx_pdf(body,soffice=str(fake)),expected)
+            self.assertFalse(Path(json.loads((root/'ok.json').read_text())['outdir']).exists())
+        bad=[pptx(2,[('ppt/_rels/presentation.xml.rels','<Relationships><Relationship Target="https://example.com" TargetMode="External"/></Relationships>')]),
+             pptx(2,[('ppt/media/animation.mp4',b'video')]),
+             pptx(2,[('ppt/slides/slide3.xml','<p:sld/>')]),
+             pptx(2,[('ppt/media/picture.png',b'not png')])]
+        for value in bad:
+            with self.assertRaises(media.MediaError) as error:media.pptx_pdf_preflight(value)
+            self.assertEqual(error.exception.code,'draft_pptx_rejected')
+
+
 class DocxPdfTests(unittest.TestCase):
     """docx_pdf renders one real DOCX through a synthetic soffice script; nothing is stored, queued or fetched."""
     def setUp(self):

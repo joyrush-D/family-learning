@@ -273,13 +273,14 @@ def _material_kind(message, source=None, mimes=()):
     from family_qq_capture import KIND, NOTICE
     ocr = message.get('kind') == KIND and message.get('text', '').startswith(NOTICE+'\n截图本机文字识别（')
     native_file = source and source.get('platform') == 'qq' and message.get('kind') == 'text' and any(
-        mime in (DOCX_MIME, 'application/pdf') for mime in mimes)
+        mime in (DOCX_MIME, PPTX_MIME, 'application/pdf') for mime in mimes)
     return SCHOOL_MATERIAL if ocr or native_file else ''
 
 
 # Linked DOCX originals are read in memory as plain body text. A file that cannot be read
 # completely is refused, so a draft never claims more than the text it was given.
 DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 DOCX_LIMITS = dict(entries=200, total=8 * 1024 * 1024, member=4 * 1024 * 1024, chars=10000)
 _W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
 _DOCX_SKIP = frozenset(_W + n for n in ('pPr', 'rPr', 'tblPr', 'tblPrEx', 'tblGrid', 'trPr', 'tcPr', 'sectPr',
@@ -478,6 +479,73 @@ def docx_pdf(body, *, soffice=None):
     return pdf
 
 
+PPTX_PDF_LIMITS = dict(entries=500, total=100 * 1024 * 1024, member=20 * 1024 * 1024)
+PPTX_PDF_TIMEOUT = 60
+_PPTX_MAIN = PPTX_MIME + '.main+xml'
+_PPTX_BLOCKED = ('vba', 'macro', 'ole', 'activex', 'embedding', 'noteslide', 'comment', 'chart')
+
+
+def pptx_pdf_preflight(body, *, started=None):
+    """Check one static picture/slide PPTX before local conversion; return its declared slide count."""
+    started = time.monotonic() if started is None else started
+    require(isinstance(body, (bytes, bytearray)) and 0 < len(body) <= MAX_BYTES, 'media_too_large')
+    def inspect(name):
+        low = name.lower()
+        return True if low.endswith(('.xml', '.rels')) else 8 if low.endswith(tuple(_DOCX_PDF_MEDIA)) else None
+    try:
+        names, parts = family_print.office_check(bytes(body), PPTX_PDF_LIMITS, inspect,
+                                                  deadline=started + PPTX_PDF_TIMEOUT)
+    except family_print.OfficeError as error:
+        raise MediaError('process_timeout' if error.reason == 'timeout' else 'draft_pptx_rejected') from None
+    low = [name.lower() for name in names]
+    slides = [name for name in names if re.fullmatch(r'ppt/slides/slide[1-9][0-9]*\.xml', name)]
+    require('ppt/presentation.xml' in names and '[Content_Types].xml' in names and 0 < len(slides) <= 200,
+            'draft_pptx_rejected')
+    for name in low:
+        require(not any(block in name for block in _PPTX_BLOCKED) and
+                name.endswith(('.xml', '.rels', '/', '.png', '.jpg', '.jpeg')),
+                'draft_pptx_rejected')
+    for name, data in parts.items():
+        if name.lower().endswith(('.xml', '.rels')):
+            require(b'\x00' not in data and b'<!DOCTYPE' not in data and b'<!ENTITY' not in data,
+                    'draft_pptx_rejected')
+            try: root = ElementTree.fromstring(data)
+            except ElementTree.ParseError: raise MediaError('draft_pptx_rejected') from None
+            require(not any(e.tag.rsplit('}', 1)[-1].lower() in ('oleobj', 'control', 'audio', 'video', 'custdata')
+                            or e.tag.rsplit('}', 1)[-1] == 'fld' and e.get('type') != 'slidenum' for e in root.iter()),
+                    'draft_pptx_rejected')
+        else:
+            require(data.startswith(_DOCX_PDF_MEDIA[Path(name.lower()).suffix]), 'draft_pptx_rejected')
+    types = ElementTree.fromstring(parts['[Content_Types].xml'])
+    require([e.get('ContentType') for e in types.iter() if e.get('PartName') == '/ppt/presentation.xml'] == [_PPTX_MAIN],
+            'draft_pptx_rejected')
+    require(not any(block in e.get('ContentType', '').lower() for e in types.iter() for block in _PPTX_BLOCKED),
+            'draft_pptx_rejected')
+    presentation = ElementTree.fromstring(parts['ppt/presentation.xml'])
+    require(sum(e.tag.rsplit('}', 1)[-1] == 'sldId' for e in presentation.iter()) == len(slides),
+            'draft_pptx_rejected')
+    require(time.monotonic() - started <= PPTX_PDF_TIMEOUT, 'process_timeout')
+    return len(slides)
+
+
+def pptx_pdf(body, *, soffice=None):
+    """Convert one preflighted static PPTX to bounded PDF in a throwaway, macro-locked local profile."""
+    started = time.monotonic()
+    pptx_pdf_preflight(body, started=started)
+    soffice = soffice or shutil.which('soffice')
+    require(isinstance(soffice, str) and soffice, 'process_unavailable')
+    remaining = PPTX_PDF_TIMEOUT - (time.monotonic() - started)
+    require(remaining > 0, 'process_timeout')
+    with tempfile.TemporaryDirectory(prefix='pptx-pdf-') as temporary:
+        try:
+            pdf = family_print.office_convert(bytes(body), '.pptx', Path(temporary).resolve(), soffice,
+                                              timeout=remaining, limit=MAX_BYTES, read=_docx_pdf_output)
+        except family_print.OfficeError as error:
+            raise MediaError(_DOCX_PDF_CODES.get(error.reason, 'process_failed')) from None
+    require(time.monotonic() - started <= PPTX_PDF_TIMEOUT, 'process_timeout')
+    return pdf
+
+
 def draft_input(store, c, source, message):
     import family_llm
     from family_agent import _json
@@ -499,7 +567,8 @@ def draft_input(store, c, source, message):
     require(len(links) <= 3, 'draft_too_many_originals')
     rows = [(ident, store._message_upload(c, source['child_id'], ident)) for ident in links]
     kind = _material_kind(message, source, (row['mime'] for _, row in rows))
-    if kind and not screenshot_kind and any(row['mime'] == 'application/pdf' for _, row in rows):
+    if kind and any(row['mime'] == PPTX_MIME or
+                    (not screenshot_kind and row['mime'] == 'application/pdf') for _, row in rows):
         return None  # The existing bounded PDF page path owns this original.
     child = next(p for p in store.profiles(c) if p['id'] == source['child_id'])
     images, documents, originals = [], [], []

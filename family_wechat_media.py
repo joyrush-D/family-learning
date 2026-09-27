@@ -38,8 +38,9 @@ _CODES = frozenset(('invalid_process', 'process_unavailable', 'process_failed', 
     'media_source_changed', 'media_unavailable', 'draft_image_required',
     'draft_too_many_originals', 'draft_originals_too_large',
     'draft_kind_mismatch', 'draft_material_changed', 'draft_docx_rejected',
-    'draft_docx_unsupported', 'draft_text_too_long',
-    'pdf_multiple', 'pdf_mixed_originals', 'docx_multiple', 'docx_mixed_originals', 'pdf_invalid', 'pdf_row_invalid', 'pdf_material_changed',
+    'draft_docx_unsupported', 'draft_pptx_rejected', 'draft_text_too_long',
+    'pdf_multiple', 'pdf_mixed_originals', 'docx_multiple', 'docx_mixed_originals',
+    'pptx_multiple', 'pptx_mixed_originals', 'pptx_page_count_changed', 'pdf_invalid', 'pdf_row_invalid', 'pdf_material_changed',
     'pdf_page_count_changed', 'pdf_render_timeout'))
 
 

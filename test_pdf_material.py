@@ -75,6 +75,38 @@ class PdfMaterialTests(Base):
         self.write_config(child_id='child-2')
         self.assertEqual(self.store.snapshot()['file_messages'], [])
 
+    def test_native_qq_static_presentation_is_reviewed_without_replacing_original(self):
+        self.source = dict(id='qq:123456', platform='qq', child_id='child-1', name='虚构QQ班级', cursor='100', enabled=True)
+        self.write_config()
+        message=self.message(kind='text');message['text']='请核对虚构演示文稿';self.ingest(message)
+        keys=dict(child_id='child-1',source_id=self.source['id'],message_id=message['id'])
+        ident='a'*32;body=test_media.pptx(1,[('ppt/media/picture.png',test_media.png())])
+        (self.data/'uploads').mkdir(exist_ok=True);(self.data/'uploads'/ident).write_bytes(body)
+        with self.store._db() as c:
+            c.execute('INSERT INTO uploads(id,name,size,mime,created) VALUES(?,?,?,?,?)',
+                      (ident,'虚构演示文稿.pptx',len(body),family_media.PPTX_MIME,self.now.isoformat()))
+        self.link(keys,ident)
+        self.assertIsNone(self.store.message(keys,dict)['material_draft'])
+        self.assertEqual(self.view(keys)['state'],'pending')
+        before=(self.data/'uploads'/ident).read_bytes()
+        with renderer(page_count=1),patch.object(family_media,'pptx_pdf',return_value=test_pdf.build_pdf(1)) as convert, \
+                patch.object(family_llm,'extract_draft',return_value=DRAFT) as model:
+            self.assertEqual(pdfm.prepare(self.store,self.now),dict(used=1,failed=0))
+            convert.assert_called_once_with(body);model.assert_called_once()
+        self.assertEqual(self.view(keys)['state'],'ready')
+        self.assertEqual(self.view(keys)['processed_pages'],[1])
+        self.assertEqual((self.data/'uploads'/ident).read_bytes(),before)
+        self.assertEqual(self.rows('SELECT * FROM manual_tasks'),[])
+        with self.store._db() as c:
+            c.execute('DELETE FROM agent_pdf_material')
+            c.execute('DELETE FROM agent_jobs')
+        (self.data/'uploads'/ident).write_bytes(test_media.pptx(1,[('ppt/media/video.mp4',b'video')]))
+        self.assertEqual(self.view(keys)['state'],'unavailable')
+        with patch.object(family_media,'pptx_pdf',side_effect=AssertionError('no conversion')), \
+                patch.object(family_llm,'extract_draft',side_effect=AssertionError('no model')):
+            self.assertEqual(pdfm.prepare(self.store,self.now),dict(used=0,failed=0))
+        self.assertEqual(self.rows('SELECT * FROM agent_jobs'),[])
+
     def view(self, keys):
         return self.store.message(keys, dict)['pdf_material']
 
