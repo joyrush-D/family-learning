@@ -218,7 +218,7 @@ ${esc(d.values.action)}</p><button type="button" data-goal-clear-draft="${esc(d.
  lock();
  }
  function status(text){notice=text;const el=root?.querySelector('[data-goal-status]');if(el)el.textContent=text}
- function lock(){if(!root)return;const slot=root.querySelector('[data-goal-retry-slot]');if(slot){slot.innerHTML=retry?'<p class="note">上次提交结果未确认。<button type="button" data-goal-retry>核对上次提交</button></p>':'';const button=slot.querySelector('button');if(button)button.onclick=()=>submit(retry.action,retry.goal,null,retry.draft)}root.querySelectorAll('button,input,select,textarea').forEach(e=>{const f=e.closest('[data-goal-form]');e.disabled=busy||!!(retry&&!e.matches('[data-goal-retry]')&&!(e.matches('button[type="submit"]')&&f?.dataset.draftKey===retry.draft.key))})}
+ function lock(){if(!root)return;const slot=root.querySelector('[data-goal-retry-slot]');if(slot){slot.innerHTML=retry?`<p class="note">${retry.changed?'原反馈已更正或改归。':'上次提交结果未确认。'}<button type="button" data-goal-retry>核对上次提交</button>${retry.changed?`${retry.record_id?` <button type="button" data-goal-conflict-record data-goal-record="${esc(retry.record_id)}">查看已更正原记录</button>`:''} <button type="button" data-goal-conflict-resolve>结束旧重试，保留填写</button>`:''}</p>`:'';slot.querySelector('[data-goal-retry]')?.addEventListener('click',()=>submit(retry.action,retry.goal,null,retry.draft));slot.querySelector('[data-goal-conflict-resolve]')?.addEventListener('click',()=>{if(!confirm('旧反馈已保存或归属已变化。结束旧重试后若再次保存，会新建一条反馈；请先核对原记录。'))return;const d=retry.draft;d.request=null;d.uncertain=false;d.dirty=true;d.conflict_changed=false;d.conflict_record_id=null;retry=null;status('旧请求已结束，填写仍保留；请先核对原记录再决定是否新增反馈。');draw();refresh()})}root.querySelectorAll('button,input,select,textarea').forEach(e=>{const f=e.closest('[data-goal-form]');e.disabled=busy||!!(retry&&!e.matches('[data-goal-retry],[data-goal-conflict-record],[data-goal-conflict-resolve]')&&!(e.matches('button[type="submit"]')&&f?.dataset.draftKey===retry.draft.key))})}
 
  async function refresh(){try{const r=await options.apiFetch('/api/goals');const v=await r.json();if(!r.ok)throw Error(v.error);state=v;draw();if(focus==='diagnosis')showDiagnosis()}catch(e){status(e.message||'读取未成功，请重试')}}
  // Opened from a due re-check reminder: open the profile at the diagnosis section.
@@ -258,11 +258,21 @@ ${esc(d.values.action)}</p><button type="button" data-goal-clear-draft="${esc(d.
    if(action==='approve'||action==='keep')payload.proposal_id=g.pending.id;
    d.request=payload;
   }
+  if(action==='feedback'&&d.uncertain){
+   const query=new URLSearchParams({id:d.request.id,request_key:d.request.request_key,source:d.request.source});
+   const check=await options.apiFetch('/api/goals/feedback-receipt?'+query);const receipt=await check.json();
+   if(!check.ok)throw Error(receipt.error||'原提交暂时无法核对');
+   if(receipt.state==='changed'){d.conflict_changed=true;d.conflict_record_id=receipt.record_id||null;throw Error('原反馈已更正或改归，旧请求不会重发；请先核对原记录')}
+   if(receipt.state==='linked'){
+    d.uncertain=false;retry=null;delete drafts[d.key];status('已核对原提交，反馈已保存。');await refresh();return;
+   }
+   if(!['missing','unlinked'].includes(receipt.state))throw Error('原提交状态暂时无法核对');
+  }
   const r=await options.apiFetch('/api/goals/action',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':options.token},body:JSON.stringify(d.request)});const v=await r.json();
-  if(!r.ok){if(r.status<500&&v.not_saved!==false){d.request=null;d.uncertain=false;if(retry?.draft===d)retry=null}if(r.status===409){d.conflict=true;await refresh()}throw Error(v.error||'保存未成功')}
+  if(!r.ok){const changed=['request_record_changed','request_context_changed','goal_feedback_changed'].includes(v.code);if(r.status<500&&v.not_saved!==false&&!changed){d.request=null;d.uncertain=false;if(retry?.draft===d)retry=null}if(r.status===409){d.conflict=true;if(changed)d.conflict_changed=true;await refresh()}throw Error(v.error||'保存未成功')}
   d.uncertain=false;d.conflict=false;if(retry?.draft===d)retry=null;delete drafts[d.key];if(v.id){selected=v.id;options.onGoalSelected?.(selected)}
   status(({error:'分析未成功，资料仍已保存，可稍后重试。',stale:'分析期间有新反馈，请重新分析。',already_running:'已有分析正在进行，稍后更新显示即可。',paused:'目标已暂缓；恢复跟进后可以分析。',current:'本次没有新增结果，请查看现有评估与状态。',no_proposal:'已核对现有资料，目前没有新的建议。'}[v.state])||(action==='evaluate'?'分析已结束；请核对结果。':'已保存'));await Promise.all([refresh(),['approve','manual'].includes(action)&&v.task_id?options.onTaskChanged?.():null]);
- }catch(e){if(d.request){d.uncertain=true;retry={action,goal:g,draft:d}}status((e.message||'连接中断')+(d.uncertain?'；结果未确认，请点原按钮重试。':''))}finally{busy=false;lock()}}
+ }catch(e){if(d.request){d.uncertain=true;retry={action,goal:g,draft:d,changed:!!d.conflict_changed,record_id:d.conflict_record_id}}status((e.message||'连接中断')+(d.conflict_changed?'；也可结束旧重试并保留填写。':d.uncertain?'；结果未确认，请点原按钮重试。':''))}finally{busy=false;lock()}}
  window.addEventListener('beforeunload',e=>{if(Object.values(drafts).some(d=>d?.dirty||d?.request)){e.preventDefault();e.returnValue=''}});
  return {mount(o){const previous=root;root=o.root;options=o;if(o.child_id&&o.child_id!==child){child=o.child_id;selected=''}if(o.goal_id)selected=o.goal_id;if(o.focus)focus=o.focus;if(!state)root.innerHTML='<p>正在读取学习目标…</p>';else draw(previous);refresh()}};
 })();

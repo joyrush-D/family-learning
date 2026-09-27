@@ -401,8 +401,15 @@ class AgentHTTPTests(unittest.TestCase):
         first=self.post('/api/goals/action',payload);self.assertEqual(first[0],200)
         self.assertTrue(self.post('/api/goals/action',payload)[1]['replayed'])
         status,value,_=self.request('GET','/api/goals');self.assertEqual(status,200);self.assertEqual(len(value['goals']),1)
+        feedback=dict(action='feedback',id=first[1]['id'],request_key='synthetic-http-feedback-stable',day='2026-09-10',source='家长观察',note='虚构原话：转折还需核对。')
+        receipt='/api/goals/feedback-receipt?'+urlencode(dict(id=feedback['id'],request_key=feedback['request_key'],source=feedback['source']))
+        self.assertEqual(self.request('GET',receipt,headers=self.parent)[1],dict(state='missing'))
+        saved=self.post('/api/goals/action',feedback);self.assertEqual(saved[0],200)
+        self.assertEqual(self.request('GET',receipt,headers=self.parent)[1],dict(state='linked',record_id=saved[1]['record_id']))
+        self.assertEqual(self.request('GET',receipt+'&id=another',headers=self.parent)[0],400)
         child={'Cookie':app.family_child.COOKIE+'=synthetic-invalid','X-Child-CSRF':'synthetic'}
         self.assertEqual(self.request('GET','/api/goals',headers=child)[0],403)
+        self.assertEqual(self.request('GET',receipt,headers=child)[0],403)
         self.assertEqual(self.post('/api/goals/action',payload,headers=child)[0],403)
 
     def test_child_session_cannot_read_or_modify_agent(self):

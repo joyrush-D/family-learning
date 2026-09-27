@@ -602,6 +602,8 @@ def _save_record(obj,care_only,receipt,connection=None):
             receipt.update(checked=True,known=prior is not None)
             if prior is not None:
                 if prior['request_hash']!=request_hash: raise RecordError('同一提交标识的内容不同，请先核对原提交',409,'request_conflict')
+                if c.execute('SELECT 1 FROM revisions WHERE record_id=? LIMIT 1',(prior['id'],)).fetchone():
+                    raise RecordError('这条已保存记录后来已更正，请先核对原记录',409,'request_record_changed')
                 if names.get(prior['child'])!=child or prior['source']!=source:
                     raise RecordError('这条已保存反馈的归属或来源后来已更正，请先核对原记录',409,'request_context_changed')
                 return record_result(c,prior['id'],True)
@@ -1734,6 +1736,12 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/settings': return self.reply(200,settings_store().snapshot())
             if path=='/api/agent': return self.reply(200,agent_store().snapshot())
             if path=='/api/goals': return self.reply(200,goals_snapshot())
+            if path=='/api/goals/feedback-receipt':
+                query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+                if set(query)!={'id','request_key','source'} or any(len(values)!=1 for values in query.values()):
+                    raise family_agent.AgentError('请提供唯一的目标、来源和提交标识')
+                store=family_goals.Store(SimpleNamespace(**globals()),agent_store(read_only=True))
+                return self.reply(200,store.feedback_receipt(query['id'][0],query['request_key'][0],query['source'][0]))
             if path=='/api/agent/message':
                 query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
                 if any(len(values)!=1 for values in query.values()):

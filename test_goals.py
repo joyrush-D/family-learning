@@ -883,10 +883,15 @@ class GoalTests(unittest.TestCase):
         original=bytes.fromhex('89504e470d0a1a0a0000000d4948445200000001000000010804000000b51c0c020000000b4944415478da63fcff1f0003030200ef9a590d0000000049454e44ae426082')
         upload=self.app.save_upload(io.BytesIO(original),len(original),'synthetic-evidence.png')['id']
         payload=dict(action='feedback',id=self.ident,request_key='synthetic-feedback-stable',day=self.now.date().isoformat(),source='家长观察',note='独立解释仍需要核对。',attachments=[upload])
+        read_store=goals.Store(self.app,self.app.agent_store(read_only=True))
+        self.assertEqual(read_store.feedback_receipt(self.ident,payload['request_key'],payload['source'])['state'],'missing')
         first=self.store.action(payload);g=self.goal();plan=g['current_plan']
+        self.assertEqual(read_store.feedback_receipt(self.ident,payload['request_key'],payload['source']),dict(state='linked',record_id=first['record_id']))
         self.action('edit',id=self.ident,expected_version=g['version'],title='修改后的阶段名称',subject='综合')
         replay=self.store.action(payload)
         self.assertEqual(replay['record_id'],first['record_id']);self.assertTrue(replay['replayed'])
+        self.app.save_profile(dict(child_id='child-1',name='示例甲新称呼',grade='四年级',classroom='',reason='虚构档案称呼更正',version=0))
+        self.assertEqual(read_store.feedback_receipt(self.ident,payload['request_key'],payload['source'])['state'],'linked')
         with self.app.connect() as c:
             rows=c.execute('SELECT note,attachments,request_key FROM records WHERE source=?',('家长观察 · 学习目标:'+self.ident,)).fetchall()
         self.assertEqual(len(rows),1);self.assertEqual(rows[0]['note'],payload['note'])
@@ -896,6 +901,42 @@ class GoalTests(unittest.TestCase):
         second=self.app.save_record(dict(child='示例乙',day=self.now.date().isoformat(),category='家长观察',title='另一位孩子的记录',note='不能串用',source='家长观察'))
         with self.assertRaises(agent.AgentError):self.action('link',id=self.ident,expected_version=self.goal()['version'],record_ids=[second['record_id']])
         self.assertEqual(len(self.goal()['records']),1)
+        self.assertEqual(read_store.feedback_receipt(self.ident,payload['request_key'],'老师反馈')['state'],'changed')
+        self.resave(first['record_id'],note='更正后的原话')
+        self.assertEqual(read_store.feedback_receipt(self.ident,payload['request_key'],payload['source'])['state'],'changed')
+        with self.assertRaises(self.app.RecordError) as changed:self.store.action(payload)
+        self.assertEqual((changed.exception.status,changed.exception.code),(409,'request_record_changed'))
+        self.resave(first['record_id'],source='老师反馈 · 学习目标:'+self.ident)
+        self.assertEqual(read_store.feedback_receipt(self.ident,payload['request_key'],payload['source'])['state'],'changed')
+
+    def test_feedback_receipt_repairs_saved_but_unlinked_record(self):
+        key='synthetic-unlinked-feedback'
+        payload=dict(action='feedback',id=self.ident,request_key=key,day=self.now.date().isoformat(),source='家长观察',note='孩子说了大意，转折待核对。')
+        saved=self.app.save_record(dict(child='示例甲',day=payload['day'],category='家长观察',subject='',title='学习目标反馈',note=payload['note'],source='家长观察 · 学习目标:'+self.ident,assistance='',practice_relation='',attachments=[],request_key='goal-feedback-'+agent._hash([self.ident,key])[:64]))
+        read_store=goals.Store(self.app,self.app.agent_store(read_only=True))
+        self.assertEqual(read_store.feedback_receipt(self.ident,key,payload['source']),dict(state='unlinked',record_id=saved['record_id']))
+        self.assertEqual(self.store.action(payload)['record_id'],saved['record_id'])
+        self.assertEqual(read_store.feedback_receipt(self.ident,key,payload['source'])['state'],'linked')
+        self.assertEqual(len(self.goal()['records']),1)
+
+    def test_feedback_changed_between_record_save_and_goal_link_is_not_linked(self):
+        before=self.goal()['current_plan'];save=self.app.save_record
+        for kind,changes in [('source',{'source':'老师反馈 · 学习目标:'+self.ident}),('child',{'child':'示例乙'})]:
+            with self.subTest(kind=kind):
+                key='synthetic-feedback-link-race-'+kind
+                payload=dict(action='feedback',id=self.ident,request_key=key,day=self.now.date().isoformat(),source='家长观察',note='虚构原话待核对。')
+                def change_before_link(obj):
+                    saved=save(obj)
+                    with self.app.connect() as c: row=dict(c.execute('SELECT * FROM records WHERE id=?',(saved['record_id'],)).fetchone())
+                    save(dict({name:row[name] or '' for name in ('child','day','category','subject','title','note','source','assistance','practice_relation')},id=saved['record_id'],**changes))
+                    return saved
+                with patch.object(self.app,'save_record',side_effect=change_before_link):
+                    with self.assertRaises(agent.AgentError) as changed:self.store.action(payload)
+                self.assertEqual((changed.exception.status,changed.exception.code),(409,'goal_feedback_changed'))
+                self.assertEqual(self.store.feedback_receipt(self.ident,key,payload['source'])['state'],'changed')
+                self.assertEqual(self.goal()['records'],[])
+                self.assertEqual(self.goal()['current_plan'],before)
+        with self.store.agent._db() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],2)
 
     def test_feedback_survives_model_failure_without_a_fake_plan(self):
         saved=self.feedback('孩子独立说出大意，但漏了转折。')

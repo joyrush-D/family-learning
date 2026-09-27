@@ -783,11 +783,35 @@ class Store:
         # The existing record receipt makes retry recover the same saved record even if linking was interrupted.
         with self.agent._db() as c:
             c.execute('BEGIN IMMEDIATE'); row=self._get(c,ident); plan=json.loads(row['plan'])
-            self._validate_ids(c,row['child_id'],[saved['record_id']])
+            try: self._validate_ids(c,row['child_id'],[saved['record_id']])
+            except agent.AgentError: raise agent.AgentError('原反馈归属已变化，请核对后再决定是否新增',409,'goal_feedback_changed') from None
+            original=c.execute('SELECT source FROM records WHERE id=?',(saved['record_id'],)).fetchone()
+            if (original['source'] != source+' · 学习目标:'+ident
+                    or c.execute('SELECT 1 FROM revisions WHERE record_id=? LIMIT 1',(saved['record_id'],)).fetchone()):
+                raise agent.AgentError('原反馈已更正，请核对后再决定是否新增',409,'goal_feedback_changed')
             meta=plan.setdefault('learning',{}); ids=meta.setdefault('record_ids',[])
             if saved['record_id'] not in ids:
                 ids.append(saved['record_id']); self._supersede(c,ident,agent._now()); self._store(c,row,plan,agent._now())
         return dict(ok=True,id=ident,record_id=saved['record_id'],replayed=saved['replayed'])
+
+    def feedback_receipt(self, ident, key, source):
+        ident = agent._text({'id':ident}, 'id', 80, True)
+        key = agent._text({'request_key':key}, 'request_key', 128, True)
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,128}', key): raise agent.AgentError('提交标识不正确')
+        source = agent._text({'source':source}, 'source', 30, True)
+        if source not in ('家长观察','家长转述孩子','老师反馈','平台报告'): raise agent.AgentError('请选择反馈来源')
+        with self.agent._db() as c:
+            goal = self._get(c, ident)
+            owner = next(p['name'] for p in self.app.profiles(c) if p['id'] == goal['child_id'])
+            row = c.execute('SELECT id,child,source FROM records WHERE request_key=?',
+                            ('goal-feedback-'+agent._hash([ident,key])[:64],)).fetchone()
+            if row is None: return dict(state='missing')
+            if self.app.child_names(c).get(row['child']) != owner: return dict(state='changed')
+            if (row['source'] != source+' · 学习目标:'+ident
+                    or c.execute('SELECT 1 FROM revisions WHERE record_id=? LIMIT 1',(row['id'],)).fetchone()):
+                return dict(state='changed',record_id=row['id'])
+            linked = row['id'] in json.loads(goal['plan']).get('learning',{}).get('record_ids',[])
+            return dict(state='linked' if linked else 'unlinked',record_id=row['id'])
 
     @staticmethod
     def _approved(obj, now):
