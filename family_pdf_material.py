@@ -60,21 +60,24 @@ def pdf_input(store, c, source, message):
     Reads files only to hash them and for docx_text's plain-text decision. Never runs LibreOffice, pdfinfo/pdftoppm or a model."""
     from family_agent import _json
     from family_qq_capture import KIND, NOTICE
-    if _material_kind(message) != SCHOOL_MATERIAL:
+    screenshot_kind = _material_kind(message)
+    if not screenshot_kind and not (source.get('platform') == 'qq' and message.get('kind') == 'text'):
         return None
-    screenshot = re.fullmatch(r'fragment-([a-f0-9]{40})', message.get('id', ''))
-    if screenshot is None:
+    screenshot = re.fullmatch(r'fragment-([a-f0-9]{40})', message.get('id', '')) if screenshot_kind else None
+    if screenshot_kind and screenshot is None:
         return None
     links = [r['upload_id'] for r in c.execute(
         'SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=? ORDER BY upload_id',
-        (source['id'], message['id'])) if r['upload_id'] != screenshot.group(1)[:32]]
+        (source['id'], message['id'])) if screenshot is None or r['upload_id'] != screenshot.group(1)[:32]]
     if not links:
         return None
     _authorized(store, c, source, message)
     rows = [(ident, store._message_upload(c, source['child_id'], ident)) for ident in links]  # Another child's file raises.
+    if _material_kind(message, source, (row['mime'] for _, row in rows)) != SCHOOL_MATERIAL:
+        return None
 
     def same_capture(ident, row):  # The capture uploaded again under another ID is still not an original.
-        if row['mime'] not in IMAGE_MIMES:
+        if screenshot is None or row['mime'] not in IMAGE_MIMES:
             return False
         digest = hashlib.sha256(read_file(store.data / 'uploads' / ident)).hexdigest()
         return hashlib.sha256(_json([KIND, source['id'], source['child_id'], message['text'][len(NOTICE) + 1:],
@@ -218,10 +221,10 @@ def prepare(store, now, budget=ROUND_CALLS):
         if not config['enabled']:
             return dict(used=0, failed=0)
         sources = {s['id']: s for s in config['sources'] if s['enabled']}
-        # ponytail: inspect at most 200 linked messages, same bound as the picture drafts.
+        # ponytail: 500 linked messages cover the current backfill; add an indexed queue if it grows beyond this.
         rows = c.execute("""SELECT m.source_id,m.payload FROM agent_messages m WHERE EXISTS
             (SELECT 1 FROM agent_message_attachments a WHERE a.source_id=m.source_id AND a.message_id=m.id)
-            ORDER BY m.rowid DESC LIMIT 200""").fetchall()
+            ORDER BY m.rowid DESC LIMIT 500""").fetchall()
     for row in rows:
         source = sources.get(row['source_id'])
         if source is None:

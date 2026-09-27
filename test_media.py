@@ -579,6 +579,24 @@ class MediaTests(unittest.TestCase):
             c.execute('UPDATE uploads SET name=?,mime=? WHERE id=?', (name, media.DOCX_MIME, ident))
         return ident
 
+    def test_native_qq_docx_uses_school_material_review_without_creating_facts(self):
+        import family_llm
+        self.source = dict(id='qq:123456', platform='qq', child_id='child-1', name='虚构QQ班级', cursor='100', enabled=True)
+        self.write_config()
+        message = self.message(kind='text'); message['text'] = '请核对所附虚构文档'; self.ingest(message)
+        keys = dict(child_id='child-1', source_id=self.source['id'], message_id=message['id'])
+        ident = self.seed_docx('f' * 32, docx(DOCX_BODY)); self.link(keys, ident)
+        facts = self.facts()
+        with patch.object(family_llm, 'extract_draft', return_value=dict(title='虚构资料', note='待家长核对', uncertainties=[])) as model:
+            self.assertEqual(self.store.message(keys, dict)['material_draft']['kind'], 'school_material')
+            self.assertEqual(media.prepare_draft(self.store, self.now), dict(used=1, failed=0))
+            self.assertEqual(model.call_args.kwargs['documents'][0]['text'], DOCX_TEXT)
+        self.assertEqual(self.store.message(keys, dict)['material_draft']['state'], 'ready')
+        self.assertEqual(self.facts(), facts)
+        self.assertEqual(self.db_rows('SELECT * FROM manual_tasks'), [])
+        self.write_config(enabled=False)
+        self.assertEqual(self.store.message(keys, dict)['material_draft']['state'], 'unavailable')
+
     def test_docx_text_reads_utf8_paragraphs_and_table_rows_or_fails_closed(self):
         self.assertEqual(media.docx_text(docx(DOCX_BODY)), DOCX_TEXT)
         self.assertEqual(media.docx_text(docx(para('字' * media.DOCX_LIMITS['chars']))), '字' * media.DOCX_LIMITS['chars'])

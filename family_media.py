@@ -269,10 +269,12 @@ def run_one(app, store, now):
 SCHOOL_MATERIAL = 'school_material'
 
 
-def _material_kind(message):
+def _material_kind(message, source=None, mimes=()):
     from family_qq_capture import KIND, NOTICE
     ocr = message.get('kind') == KIND and message.get('text', '').startswith(NOTICE+'\n截图本机文字识别（')
-    return SCHOOL_MATERIAL if ocr else ''
+    native_file = source and source.get('platform') == 'qq' and message.get('kind') == 'text' and any(
+        mime in (DOCX_MIME, 'application/pdf') for mime in mimes)
+    return SCHOOL_MATERIAL if ocr or native_file else ''
 
 
 # Linked DOCX originals are read in memory as plain body text. A file that cannot be read
@@ -476,8 +478,8 @@ def draft_input(store, c, source, message):
     links = [r['upload_id'] for r in c.execute(
         'SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=? ORDER BY upload_id',
         (source['id'], message['id']))]
-    kind = _material_kind(message); screenshot = None
-    if kind:
+    screenshot_kind = _material_kind(message); screenshot = None
+    if screenshot_kind:
         # Already routed to school task drafts; the screenshot alone never becomes a study record.
         # Only explicitly linked extra originals are read, as school material for parent review.
         screenshot = re.fullmatch(r'fragment-([a-f0-9]{40})', message.get('id', ''))
@@ -488,10 +490,13 @@ def draft_input(store, c, source, message):
         return None
     _authorized(store, c, source, message)
     require(len(links) <= 3, 'draft_too_many_originals')
+    rows = [(ident, store._message_upload(c, source['child_id'], ident)) for ident in links]
+    kind = _material_kind(message, source, (row['mime'] for _, row in rows))
+    if kind and not screenshot_kind and any(row['mime'] == 'application/pdf' for _, row in rows):
+        return None  # The existing bounded PDF page path owns this original.
     child = next(p for p in store.profiles(c) if p['id'] == source['child_id'])
     images, documents, originals = [], [], []
-    for ident in links:
-        row = store._message_upload(c, source['child_id'], ident)
+    for ident, row in rows:
         docx = bool(kind) and row['mime'] == DOCX_MIME  # Only school material may have text originals.
         require(docx or row['mime'] in ('image/jpeg', 'image/png', 'image/webp'), 'draft_image_required')
         body = read_file(store.data / 'uploads' / ident)
@@ -538,7 +543,10 @@ def _saved_draft(row, value):
 
 
 def draft_view(store, c, source, message):
-    kind = _material_kind(message); typed = dict(kind=kind) if kind else {}
+    mimes = [r['mime'] for r in c.execute('SELECT u.mime FROM agent_message_attachments a JOIN uploads u ON u.id=a.upload_id '
+                                      'WHERE a.source_id=? AND a.message_id=?', (source['id'], message['id']))] \
+        if source.get('platform') == 'qq' and message.get('kind') == 'text' else []
+    kind = _material_kind(message, source, mimes); typed = dict(kind=kind) if kind else {}
     try:
         value = draft_input(store, c, source, message)
         if value is None:
@@ -577,10 +585,10 @@ def prepare_draft(store, now):
         if not config['enabled']:
             return dict(used=0, failed=0)
         sources = {s['id']: s for s in config['sources'] if s['enabled']}
-        # ponytail: inspect at most 200 linked messages; add an indexed queue if this family backlog grows.
+        # ponytail: 500 linked messages cover the current backfill; add an indexed queue if it grows beyond this.
         rows = c.execute("""SELECT m.source_id,m.payload FROM agent_messages m WHERE EXISTS
             (SELECT 1 FROM agent_message_attachments a WHERE a.source_id=m.source_id AND a.message_id=m.id)
-            ORDER BY m.rowid DESC LIMIT 200""").fetchall()
+            ORDER BY m.rowid DESC LIMIT 500""").fetchall()
     for row in rows:
         source = sources.get(row['source_id'])
         if source is None:

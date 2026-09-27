@@ -53,6 +53,28 @@ class PdfMaterialTests(Base):
                       (ident, name, len(body), 'application/pdf', self.now.isoformat()))
         return ident
 
+    def test_native_qq_pdf_is_bounded_and_keeps_original_as_review(self):
+        self.source = dict(id='qq:123456', platform='qq', child_id='child-1', name='虚构QQ班级', cursor='100', enabled=True)
+        self.write_config()
+        message = self.message(kind='text'); message['text'] = '请核对所附虚构练习卷'; self.ingest(message)
+        keys = dict(child_id='child-1', source_id=self.source['id'], message_id=message['id'])
+        ident = self.seed_pdf('a' * 32, test_pdf.build_pdf(1)); self.link(keys, ident)
+        self.assertEqual([(f['message_id'], f['child_id']) for f in self.store.snapshot()['file_messages']],
+                         [(message['id'], 'child-1')])
+        self.assertIsNone(self.store.message(keys, dict)['material_draft'])
+        self.assertEqual(self.view(keys)['state'], 'pending')
+        facts = self.facts()
+        with renderer(page_count=1), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as model:
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
+            model.assert_called_once()
+        self.assertEqual((self.view(keys)['state'], self.view(keys)['processed_pages']), ('ready', [1]))
+        self.assertEqual(self.facts(), facts)
+        self.assertEqual(self.rows('SELECT * FROM manual_tasks'), [])
+        self.set_sources(False)
+        self.assertEqual(self.view(keys)['state'], 'unavailable')
+        self.write_config(child_id='child-2')
+        self.assertEqual(self.store.snapshot()['file_messages'], [])
+
     def view(self, keys):
         return self.store.message(keys, dict)['pdf_material']
 

@@ -54,6 +54,17 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
    store.message_attachment(dict(child_id='child-1',source_id='qq:123456',message_id=ident,attachment_id=upload_id,action='attach'),dict)
    rounds(done)
    if failed: rounds(1,True)
+ native=[dict(id='native-'+str(w),time=now.isoformat(),kind='text',sender='虚构来源',text='请核对所附虚构PDF原件',unread=True) for w in (360,1440)]
+ store.ingest(dict(source_id='qq:123456',expected_cursor='',cursor='native-1',checked_at=now.isoformat(),last_message_time=now.isoformat(),error='',messages=native))
+ for w in (360,1440):
+  message=native[0 if w==360 else 1];ref='message:qq:123456:'+message['id']
+  store._save('native:'+str(w),'fixture',[dict(child_id='child-1',kind='school',title='虚构QQ原生PDF资料 '+str(w),body='待核对原件',evidence=[dict(ref=ref,text=message['text'])])],now)
+  upload_id=hashlib.md5(('native-pdf-'+str(w)).encode()).hexdigest();(app.DATA/'uploads'/upload_id).write_bytes(PDF)
+  with store._db() as c:c.execute('INSERT INTO uploads(id,name,size,mime,created) VALUES(?,?,?,?,?)',(upload_id,'虚构原生PDF-'+str(w)+'.pdf',len(PDF),'application/pdf',now.isoformat()))
+  store.message_attachment(dict(child_id='child-1',source_id='qq:123456',message_id=message['id'],attachment_id=upload_id,action='attach'),dict)
+  with store._db() as c:
+   source=next(s for s in store._config(c)['sources'] if s['id']=='qq:123456');value=family_pdf_material.pdf_input(store,c,source,message)
+   c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?)',('qq:123456',message['id'],value['fingerprint'],1,json.dumps([1,2,3]),11,json.dumps(dict(kind='school_material',title='虚构已读页组',note='原件前3页待核对',uncertainties=[]),ensure_ascii=False),now.isoformat()))
  store.ingest(dict(source_id='synthetic',expected_cursor='',cursor='cursor-1',checked_at=now.isoformat(),last_message_time=now.isoformat(),error='',messages=[dict(id='notice-'+str(w),time=now.isoformat(),kind='text',sender='虚构老师',text='虚构老师通知 '+str(w)+'：请核对所附练习卷。',unread=True) for w in (360,1440)]))
  for w in (360,1440): store._save('notice-'+str(w),'fixture',[dict(child_id='child-1',kind='school',title='虚构文字通知 '+str(w),body='核对原要求',evidence=[dict(ref='message:synthetic:notice-'+str(w),text='虚构老师通知 '+str(w)+'：请核对所附练习卷。')])],now)
  store._runtime('ready',now)
@@ -78,6 +89,11 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   const dialog=page.locator('#schoolOriginalDialog'),panel=dialog.locator('[data-school-pdf-material]'),batches=dialog.locator('[data-school-pdf-batch]'),refresh=dialog.locator('[data-school-pdf-refresh]'),retry=dialog.locator('[data-school-pdf-retry]');
   const open=async ref=>{await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();await page.locator('[data-agent-item] [data-school-original-ref="'+ref+'"]').first().click();await dialog.locator('[data-school-original-files]').waitFor({state:'attached'});await dialog.locator('[data-school-original-upload]').waitFor()};
   const close=async()=>{await dialog.locator('[data-school-original-close]').click();await until(async()=>!(await dialog.isVisible()),'dialog closed')};
+  await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();
+  const fileList=page.locator('[data-qq-files]');await fileList.locator('summary').click();
+  assert.match(await fileList.innerText(),/虚构原生PDF-360\.pdf/);assert.match(await fileList.innerText(),/虚构原生PDF-1440\.pdf/);
+  await fileList.locator('[data-school-original-ref="message:qq:123456:native-'+width+'"]').click();await panel.waitFor();
+  assert.match(await panel.innerText(),/虚构原生PDF-[\s\S]*已整理 3 \/ 11 页/);await fits(page);await close();
   const isMessage=u=>u.pathname==='/api/agent/message';
   // Routed replies that still need the real server go through node, so the family.test host is rewritten the way test_message_page_ui.cjs does.
   const real=route=>route.fetch({url:route.request().url().replace('family.test','127.0.0.1'),headers:{...route.request().headers(),host:'family.test:'+port}});
@@ -222,6 +238,11 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   await page.unroute(isMessage,fictionalWord);await page.route(isMessage,denied);await refresh.click();await until(async()=>/请先重新登录/.test(await panel.innerText()),'401 on the Word notice');assert.equal(await panel.count(),1);assert.match(await panel.innerText(),/Word逐页整理/);assert.deepEqual(await teacherNow(),wordFields,'teacher draft survives 401 beside a Word panel');
   await page.unroute(isMessage,denied);await login();assert.deepEqual(await teacherNow(),wordFields,'teacher draft survives the login recovery beside a Word panel');
   await refresh.click();await until(async()=>await panel.count()===0,'real null reply hides the Word panel');assert.match(await dialog.locator('[data-school-original-status]').innerText(),/没有可整理的Word原件/);assert.equal(await dialog.locator('[data-school-material-draft],[data-school-material-record]').count(),0);assert.deepEqual(await teacherNow(),wordFields,'teacher draft survives the real null refresh');await close();
+  const native=before.agent.items.find(x=>x.title==='虚构QQ原生PDF资料 '+width),nativeIdentity={child_id:'child-1',source_id:'qq:123456',message_id:'native-'+width};
+  await open(native.evidence[0].ref);await panel.waitFor();assert.match(await panel.innerText(),/已整理 3 \/ 11 页[\s\S]*虚构已读页组/);
+  assert.equal((await readView(nativeIdentity)).attachments.length,1,'the native QQ file needs no screenshot');
+  await fits(page);await close();await page.reload();await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();
+  await open(native.evidence[0].ref);await panel.waitFor();assert.match(await panel.innerText(),/虚构原生PDF-[\s\S]*已整理 3 \/ 11 页/);await close();
   assert.equal(facts(await state()),factsBefore,'no task, record or item changed');assert.deepEqual(pageErrors,[]);assert.deepEqual(alerts,[]);
   await page.close();
  }

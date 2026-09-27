@@ -827,7 +827,7 @@ class Store:
                 row['needs_task_details'] = row['kind'] == 'school' and _needs_task_details(row['title'])
                 row['goal_id'] = row['plan'].get('parent_goal_id') or row['plan'].get('school_goal_id') or (row['id'] if row['kind']=='care' and row['state']=='accepted' else '')
             items = [r for r in items if not (r['state']=='accepted' and r['plan'].get('parent_goal_id'))]
-            sources = []; linked_upload_ids = set()
+            sources = []; linked_upload_ids = set(); file_messages = []
             for source in config['sources']:
                 saved = c.execute('SELECT * FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
                 try: self._binding(source, saved); binding_error = ''
@@ -851,6 +851,19 @@ class Store:
                         try: self._message_upload(c, source['child_id'], link['upload_id'])
                         except AgentError: continue
                         linked_upload_ids.add(link['upload_id'])
+                    if source['platform'] == 'qq':
+                        for row in c.execute('''SELECT m.id AS message_id,m.payload,a.upload_id,u.name,u.mime
+                            FROM agent_messages m JOIN agent_message_attachments a
+                              ON a.source_id=m.source_id AND a.message_id=m.id
+                            JOIN uploads u ON u.id=a.upload_id
+                            WHERE m.source_id=? AND json_extract(m.payload,'$.kind')='text'
+                              AND u.mime NOT IN ('image/png','image/jpeg','image/webp','image/gif')
+                            ORDER BY m.rowid DESC LIMIT 100''', (source['id'],)):
+                            try: self._message_upload(c, source['child_id'], row['upload_id'])
+                            except AgentError: continue
+                            file_messages.append(dict(source_id=source['id'], message_id=row['message_id'],
+                                child_id=source['child_id'], source=source['name'], name=row['name'], mime=row['mime'],
+                                time=json.loads(row['payload'])['time']))
             failed = c.execute('SELECT COUNT(*) FROM agent_jobs WHERE done=0 AND attempts>=?', (MAX_ATTEMPTS,)).fetchone()[0]
             pending = c.execute("SELECT COUNT(*) FROM agent_items WHERE state='pending'").fetchone()[0]
         state = runtime['state'] if runtime else 'waiting'
@@ -858,6 +871,7 @@ class Store:
         return dict(enabled=config['enabled'], state=state if config['enabled'] else 'disabled',
                     last_run=runtime['last_run'] if runtime else '', last_error=runtime['last_error'] if runtime else '',
                     failed_jobs=failed, pending_count=pending, items=items, sources=sources,
+                    file_messages=file_messages,
                     collection_interval_minutes=collection_interval_minutes(),
                     linked_upload_ids=sorted(linked_upload_ids))
 
