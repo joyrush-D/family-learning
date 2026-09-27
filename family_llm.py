@@ -599,7 +599,7 @@ citation_ids只能选证据id，不生成引用对象、URL或捏造编号。
     if not isinstance(cited,list) or len(cited)>20 or any(not isinstance(i,str) or i not in ids for i in cited) or len(set(cited))!=len(cited):
         raise LLMDraftError('查询引用无法核验，已停止展示回答；请重试或查看原记录')
     if not cited:
-        answer='本次检索到的资料不足以回答这个问题。请补充相关日期、科目或记录；没有引用证据时，不对实际情况作结论。如担心孩子眼前安全，请先陪在孩子身边，并联系学校、医生或拨打急救/报警电话。'
+        answer='本次检索到的资料不足以回答这个问题。请补充相关日期、科目或记录；没有引用证据时，不对实际情况作结论。'
     return dict(answer=answer.strip(),citation_ids=cited)
 
 
