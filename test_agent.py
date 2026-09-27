@@ -376,6 +376,18 @@ class AgentTests(unittest.TestCase):
             kept=agent._select('school',dated,school_goals=[],school_tasks=[task],as_of=self.now.date().isoformat())
         self.assertEqual(len(kept),1);self.assertEqual(kept[0]['due'],'2026-02-12')
 
+    def test_school_title_quote_falls_back_only_to_verified_source(self):
+        ref = 'message:synthetic-group:11'
+        source = '请带一本阅读材料，明天课堂使用。'
+        proposal = dict(title_quote='虚构' * 61, focus='school', due='', evidence=[dict(ref=ref)],
+                        learning_subject='', learning_goal_id='')
+        with patch.object(agent.family_llm, '_chat_json', return_value={'proposals': [proposal]}):
+            items = agent._select('school', [dict(ref=ref, text=source)], school_goals=[], as_of='2026-02-10')
+        self.assertEqual(items[0]['title'], '待核对：' + source)
+        with patch.object(agent.family_llm, '_chat_json', return_value={'proposals': [dict(proposal, evidence=[dict(ref='message:other:11')])]}):
+            with self.assertRaises(agent.AgentError):
+                agent._select('school', [dict(ref=ref, text=source)], school_goals=[], as_of='2026-02-10')
+
     def payload(self, expected='10', cursor='11', message='11', offset=0):
         stamp = (self.now + dt.timedelta(minutes=offset)).isoformat()
         return dict(source_id=self.source['id'], expected_cursor=expected, cursor=cursor,

@@ -1201,7 +1201,9 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         fields = {'title_quote', 'focus', 'due', 'evidence'} | ({'learning_subject', 'learning_goal_id'} if routing else set())
         extra={'task_title','task_goal','task_advice'} if routing else set(); triage={'task_state','task_reason'} if routing else set()
         if not isinstance(proposal, dict) or set(proposal) not in (fields,fields|extra,fields|extra|triage,fields|extra|triage|{'task_change','task_target_id'},fields|extra|triage|{'task_change','task_target_id','task_purpose','task_submission'}): raise AgentError('模型筛选字段不正确')
-        title = _text(proposal, 'title_quote', 120, True); due = _text(proposal, 'due', 10)
+        raw_title = proposal['title_quote']
+        title = raw_title.strip() if isinstance(raw_title, str) and len(raw_title) <= 120 and not any(ord(c) < 32 and c not in '\n\t' for c in raw_title) else ''
+        due = _text(proposal, 'due', 10)
         allowed = {'school'} if mode == 'school' else set(FOCUS) - {'school'}
         if not isinstance(proposal['focus'], str) or proposal['focus'] not in allowed: raise AgentError('模型建议类别不正确')
         quotes = proposal['evidence']
@@ -1214,7 +1216,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             # School selection chooses message identities; copying source text is the application's job.
             text = refs[ref][:600] if routing else _source_quote(refs, ref, _text(quote, 'quote', 600, True))
             cited.append({'ref': ref, 'text': text})
-        if not any(title in refs[entry['ref']] for entry in cited):
+        if not title or not any(title in refs[entry['ref']] for entry in cited):
             title = cited[0]['text'].strip()[:120]
         if mode == 'school' and all(_needs_task_details(refs[entry['ref']]) for entry in cited):
             # A model may quote only a word inside a marker; preserve the gap.
