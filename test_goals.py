@@ -880,18 +880,29 @@ class GoalTests(unittest.TestCase):
         self.assertEqual(result,dict(state='stale',created=0,used=1));self.assertIsNone(self.goal()['pending'])
 
     def test_feedback_retry_after_rename_and_child_isolation(self):
-        original=b'synthetic parent draft original'
-        upload=self.app.save_upload(io.BytesIO(original),len(original),'synthetic-draft.txt')['id']
-        payload=dict(action='feedback',id=self.ident,request_key='fictional-fixed-request-11',day=self.now.date().isoformat(),source='家长观察',note='孩子独立说出大意，但漏了转折。附件为虚构本地草稿引用。',attachments=[upload])
-        first=self.store.action(payload);g=self.goal()
+        original=bytes.fromhex('89504e470d0a1a0a0000000d4948445200000001000000010804000000b51c0c020000000b4944415478da63fcff1f0003030200ef9a590d0000000049454e44ae426082')
+        upload=self.app.save_upload(io.BytesIO(original),len(original),'synthetic-evidence.png')['id']
+        payload=dict(action='feedback',id=self.ident,request_key='synthetic-feedback-stable',day=self.now.date().isoformat(),source='家长观察',note='独立解释仍需要核对。',attachments=[upload])
+        first=self.store.action(payload);g=self.goal();plan=g['current_plan']
         self.action('edit',id=self.ident,expected_version=g['version'],title='修改后的阶段名称',subject='综合')
         replay=self.store.action(payload)
         self.assertEqual(replay['record_id'],first['record_id']);self.assertTrue(replay['replayed'])
-        self.assertEqual(self.goal()['records'][0]['attachments'],[upload])
-        self.assertIsNone(self.goal()['current_plan'])
+        with self.app.connect() as c:
+            rows=c.execute('SELECT note,attachments,request_key FROM records WHERE source=?',('家长观察 · 学习目标:'+self.ident,)).fetchall()
+        self.assertEqual(len(rows),1);self.assertEqual(rows[0]['note'],payload['note'])
+        self.assertEqual(json.loads(rows[0]['attachments']),[upload]);self.assertEqual((self.data/'uploads'/upload).read_bytes(),original)
+        self.assertEqual(self.goal()['current_plan'],plan)
+        with self.assertRaises(self.app.RecordError):self.store.action(dict(payload,note='另一份文字不能复用原提交标识'))
         second=self.app.save_record(dict(child='示例乙',day=self.now.date().isoformat(),category='家长观察',title='另一位孩子的记录',note='不能串用',source='家长观察'))
         with self.assertRaises(agent.AgentError):self.action('link',id=self.ident,expected_version=self.goal()['version'],record_ids=[second['record_id']])
         self.assertEqual(len(self.goal()['records']),1)
+
+    def test_feedback_survives_model_failure_without_a_fake_plan(self):
+        saved=self.feedback('孩子独立说出大意，但漏了转折。')
+        self.model.side_effect=goals.family_llm.LLMDraftError('synthetic offline')
+        self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'error')
+        g=self.goal();self.assertEqual([r['id'] for r in g['records']],[saved['record_id']])
+        self.assertIsNone(g['pending']);self.assertIsNone(g['current_plan'])
 
     def test_manual_plan_offline_pause_and_study_result_link(self):
         self.model.side_effect=goals.family_llm.LLMDraftError('offline')
