@@ -880,10 +880,15 @@ class GoalTests(unittest.TestCase):
         self.assertEqual(result,dict(state='stale',created=0,used=1));self.assertIsNone(self.goal()['pending'])
 
     def test_feedback_retry_after_rename_and_child_isolation(self):
-        payload=dict(action='feedback',id=self.ident,request_key='synthetic-feedback-stable',day=self.now.date().isoformat(),source='家长观察',note='独立解释仍需要核对。')
+        original=b'synthetic parent draft original'
+        upload=self.app.save_upload(io.BytesIO(original),len(original),'synthetic-draft.txt')['id']
+        payload=dict(action='feedback',id=self.ident,request_key='fictional-fixed-request-11',day=self.now.date().isoformat(),source='家长观察',note='孩子独立说出大意，但漏了转折。附件为虚构本地草稿引用。',attachments=[upload])
         first=self.store.action(payload);g=self.goal()
         self.action('edit',id=self.ident,expected_version=g['version'],title='修改后的阶段名称',subject='综合')
-        self.assertEqual(self.store.action(payload)['record_id'],first['record_id'])
+        replay=self.store.action(payload)
+        self.assertEqual(replay['record_id'],first['record_id']);self.assertTrue(replay['replayed'])
+        self.assertEqual(self.goal()['records'][0]['attachments'],[upload])
+        self.assertIsNone(self.goal()['current_plan'])
         second=self.app.save_record(dict(child='示例乙',day=self.now.date().isoformat(),category='家长观察',title='另一位孩子的记录',note='不能串用',source='家长观察'))
         with self.assertRaises(agent.AgentError):self.action('link',id=self.ident,expected_version=self.goal()['version'],record_ids=[second['record_id']])
         self.assertEqual(len(self.goal()['records']),1)
