@@ -107,6 +107,37 @@ class PdfMaterialTests(Base):
             self.assertEqual(pdfm.prepare(self.store,self.now),dict(used=0,failed=0))
         self.assertEqual(self.rows('SELECT * FROM agent_jobs'),[])
 
+    def test_native_qq_simple_sheet_is_reviewed_and_unsafe_sheet_is_refused(self):
+        self.source = dict(id='qq:123456', platform='qq', child_id='child-1', name='虚构QQ班级', cursor='100', enabled=True)
+        self.write_config()
+        message=self.message(kind='text');message['text']='请核对所附虚构表格';self.ingest(message)
+        keys=dict(child_id='child-1',source_id=self.source['id'],message_id=message['id'])
+        ident='a'*32;body=test_media.xlsx()
+        (self.data/'uploads').mkdir(exist_ok=True);(self.data/'uploads'/ident).write_bytes(body)
+        with self.store._db() as c:
+            c.execute('INSERT INTO uploads(id,name,size,mime,created) VALUES(?,?,?,?,?)',
+                      (ident,'虚构任务.xlsx',len(body),family_media.XLSX_MIME,self.now.isoformat()))
+        self.link(keys,ident)
+        self.assertIsNone(self.store.message(keys,dict)['material_draft'])
+        self.assertEqual(self.view(keys)['state'],'pending')
+        before=self.facts()
+        with renderer(page_count=1),patch.object(family_media,'xlsx_pdf',return_value=test_pdf.build_pdf(1)) as convert, \
+                patch.object(family_llm,'extract_draft',return_value=DRAFT) as model:
+            self.assertEqual(pdfm.prepare(self.store,self.now),dict(used=1,failed=0))
+            convert.assert_called_once_with(body);model.assert_called_once()
+        self.assertEqual(self.view(keys)['state'],'ready')
+        self.assertEqual((self.data/'uploads'/ident).read_bytes(),body)
+        self.assertEqual(self.facts(),before)
+        with self.store._db() as c:
+            c.execute('DELETE FROM agent_pdf_material');c.execute('DELETE FROM agent_jobs')
+        unsafe=test_media.xlsx([('xl/worksheets/sheet1.xml', '<worksheet><sheetData><f>1+1</f></sheetData></worksheet>')])
+        (self.data/'uploads'/ident).write_bytes(unsafe)
+        self.assertEqual(self.view(keys)['state'],'unavailable')
+        with patch.object(family_media,'xlsx_pdf',side_effect=AssertionError('no conversion')), \
+                patch.object(family_llm,'extract_draft',side_effect=AssertionError('no model')):
+            self.assertEqual(pdfm.prepare(self.store,self.now),dict(used=0,failed=0))
+        self.assertEqual(self.rows('SELECT * FROM agent_jobs'),[])
+
     def view(self, keys):
         return self.store.message(keys, dict)['pdf_material']
 

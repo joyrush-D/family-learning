@@ -1,4 +1,4 @@
-"""独立 Agent：逐批理解明确挂回 QQ 截图通知的单个 PDF 原件，或单个含图片/版式的 DOCX 原件（后端进度，无 UI）。
+"""独立 Agent：逐批整理同孩学校通知明确关联的单个 PDF、复杂 DOCX、静态 PPTX 或简单 XLSX 原件。
 
 - 只处理 QQ 窗口片段通知上、排除截图本身后恰好一个同孩原件；多个 PDF/DOCX 或与图片、其他原件混合时明确拒绝。
 - DOCX 只在 docx_text 明确报 draft_docx_unsupported（图片、公式、版式等）时进入本路径：纯文字 DOCX 仍走原草稿路径；
@@ -20,16 +20,17 @@ import time
 
 import family_media
 import family_pdf
-from family_media import DOCX_MIME, PPTX_MIME, SCHOOL_MATERIAL, MediaError, _authorized, _material_kind, docx_text, docx_pdf_preflight, pptx_pdf_preflight, read_file, require
+from family_media import DOCX_MIME, PPTX_MIME, XLSX_MIME, SCHOOL_MATERIAL, MediaError, _authorized, _material_kind, docx_text, docx_pdf_preflight, pptx_pdf_preflight, xlsx_pdf_preflight, read_file, require
 
 PDF_MIME = 'application/pdf'
 BATCH_PAGES = family_pdf.MAX_REQUESTED_PAGES
 ROUND_CALLS = 1
 FINGERPRINT_VERSION = 3
 IMAGE_MIMES = ('image/jpeg', 'image/png', 'image/webp')
-ORIGINALS = {PDF_MIME: 'pdf', DOCX_MIME: 'docx', PPTX_MIME: 'pptx'}
+ORIGINALS = {PDF_MIME: 'pdf', DOCX_MIME: 'docx', PPTX_MIME: 'pptx', XLSX_MIME: 'xlsx'}
 CONVERSION = 'Word原件每轮由本机LibreOffice转换为PDF后逐页整理，转换结果不保存；页码为转换后PDF的页码，可能与Word中显示的分页不同。'
 PPTX_CONVERSION = '演示文稿每轮由本机LibreOffice转换为PDF后逐页整理；原件及页序保留，动画、声音和备注不作为已读内容。'
+XLSX_CONVERSION = '仅结构简单且一个工作表含可见单元格的表格，由本机转换并核对文字与数值是否出现在PDF；原件保留，家长仍须核对版式和含义。'
 EXPLANATIONS = {
     'pdf_multiple': '这条通知关联了多个PDF原件，一次只整理一个明确的PDF；请只保留本次要整理的PDF，其余分次关联或手动记录。本次未读取任何原件。',
     'pdf_mixed_originals': 'PDF原件与图片、DOCX原件混在同一条通知，本次未读取任何原件；请把PDF单独关联，图片和DOCX仍按原方式整理。',
@@ -37,8 +38,11 @@ EXPLANATIONS = {
     'docx_mixed_originals': '含图片或版式的DOCX原件与图片等其他原件混在同一条通知，本次未读取任何原件；请把该DOCX单独关联，图片仍按原方式整理。',
     'draft_docx_rejected': '这个Word原件含有当前不能安全转换的内容；原件仍保留。可核对原件，或从可信文档另存为PDF后重新关联。',
     'draft_pptx_rejected': '这个演示文稿含有当前不能安全完整转换的内容；原件仍保留。可核对原件，或从可信文档另存为PDF后重新关联。',
+    'draft_xlsx_rejected': '这个表格当前不能完整安全转换为可核对页；原件仍保留，请下载原件核对或从可信表格另存为PDF后重新关联。',
     'pptx_multiple': '这条通知关联了多个演示文稿，一次只整理一个明确原件；本次未读取任何原件。',
     'pptx_mixed_originals': '演示文稿和其他原件混在同一条通知，本次未读取任何原件；请分次关联或手动记录。',
+    'xlsx_multiple': '这条通知关联了多个表格，一次只整理一个明确原件；本次未读取任何原件。',
+    'xlsx_mixed_originals': '表格和其他原件混在同一条通知，本次未读取任何原件；请分次关联或手动记录。',
     'media_file_rejected': '原件超过20MiB或无法读取，本次未读取；原件保留，可手动核对。',
     'pdf_invalid': '该文件不是可读取的PDF，本次未读取；原件保留，可手动核对。',
     '': '当前原件或授权无法完整核对，可保留原件并手动记录。',
@@ -50,6 +54,8 @@ WAITING_DOCX = ('独立Agent将把该Word原件由本机LibreOffice转换为PDF�
 FAILED_DOCX = 'Word原件转换或页组整理暂未成功；已整理页组保留，未处理页明确列出，可稍后重试或手动记录。'
 WAITING_PPTX = '独立Agent将逐页整理演示文稿；原件保留，只有全部页组核对后才算完整。动画、声音和备注尚未读取。'
 FAILED_PPTX = '演示文稿转换或页组整理暂未成功；原件和已整理页组保留，可稍后重试或手动记录。'
+WAITING_XLSX = '独立Agent将逐页整理这个表格的可见内容；原件保留，家长须核对表格含义与要求，未整理页不算已读。'
+FAILED_XLSX = '表格转换或页组整理暂未成功；原件和已整理页组保留，可稍后重试或手动记录。'
 
 
 def job_key(source, message):
@@ -112,24 +118,33 @@ def pdf_input(store, c, source, message):
             body = body_of(ident, row)
             expected_pages = pptx_pdf_preflight(body)
         else:
-        # A DOCX enters only when docx_text refuses it for pictures/layout alone: plain text keeps the existing draft path,
-        # and a damaged, encrypted, macro or externally linked file stays refused there and is never converted.
-            docxs = [(ident, row) for ident, row in rows if row['mime'] == DOCX_MIME]
-            layout = []
-            for ident, row in docxs:
+            workbooks = [(ident, row) for ident, row in rows if row['mime'] == XLSX_MIME]
+            if workbooks:
+                require(len(workbooks) == 1, 'xlsx_multiple')
+                require(all(row['mime'] == XLSX_MIME or same_capture(ident, row) for ident, row in rows),
+                        'xlsx_mixed_originals')
+                ident, row = workbooks[0]
                 body = body_of(ident, row)
-                try:
-                    docx_text(body)
-                except MediaError as error:
-                    if error.code == 'draft_docx_unsupported':
-                        layout.append((ident, row, body))
-            if not layout:
-                return None  # Pictures and plain-text DOCX stay with the existing school-material draft.
-            require(len(docxs) == 1, 'docx_multiple')
-            require(all(row['mime'] == DOCX_MIME or same_capture(ident, row) for ident, row in rows), 'docx_mixed_originals')
-            ident, row, body = layout[0]
-            docx_pdf_preflight(body)  # A permanently refused DOCX must not enter the retrying conversion job.
-            expected_pages = None
+                xlsx_pdf_preflight(body)
+                expected_pages = None
+            else:
+                # Plain text DOCX keeps the existing draft path; unsafe files are refused before conversion.
+                docxs = [(ident, row) for ident, row in rows if row['mime'] == DOCX_MIME]
+                layout = []
+                for ident, row in docxs:
+                    body = body_of(ident, row)
+                    try:
+                        docx_text(body)
+                    except MediaError as error:
+                        if error.code == 'draft_docx_unsupported':
+                            layout.append((ident, row, body))
+                if not layout:
+                    return None  # Pictures and plain-text DOCX stay with the existing school-material draft.
+                require(len(docxs) == 1, 'docx_multiple')
+                require(all(row['mime'] == DOCX_MIME or same_capture(ident, row) for ident, row in rows), 'docx_mixed_originals')
+                ident, row, body = layout[0]
+                docx_pdf_preflight(body)  # A permanently refused DOCX must not enter the retrying conversion job.
+                expected_pages = None
     child = next(p for p in store.profiles(c) if p['id'] == source['child_id'])
     original = ORIGINALS[row['mime']]  # The original stays the uploaded file: its own mime and bytes, never a converted copy.
     fingerprint = hashlib.sha256(json.dumps([FINGERPRINT_VERSION, SCHOOL_MATERIAL, original, source, child, message,
@@ -137,7 +152,7 @@ def pdf_input(store, c, source, message):
                                             ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     return dict(fingerprint=fingerprint, body=body, upload_id=ident, name=str(row['name'] or ''), child=child['name'],
                 mime=row['mime'], original=original, expected_pages=expected_pages if original != 'pdf' else None,
-                conversion=CONVERSION if original == 'docx' else PPTX_CONVERSION if original == 'pptx' else '')
+                conversion=CONVERSION if original == 'docx' else PPTX_CONVERSION if original == 'pptx' else XLSX_CONVERSION if original == 'xlsx' else '')
 
 
 def _rows(c, source, message, fingerprint):
@@ -187,12 +202,12 @@ def view(store, c, source, message):
     job = c.execute('SELECT * FROM agent_jobs WHERE id=?', (key,)).fetchone()
     failed = bool(job and not job['done'] and job['error'] and job['fingerprint'] == _hash(_job_value(value['fingerprint'], done)))
     state = 'ready' if complete else 'error' if failed else 'pending'
-    docx = value['original'] == 'docx'; pptx = value['original'] == 'pptx'
+    docx = value['original'] == 'docx'; pptx = value['original'] == 'pptx'; xlsx = value['original'] == 'xlsx'
     return dict(state=state, kind=SCHOOL_MATERIAL, upload_id=value['upload_id'], name=value['name'], mime=value['mime'],
                 original=value['original'], conversion=value['conversion'], job_id=key,
                 page_count=page_count, processed_pages=sorted(done), pending_pages=pending, complete=complete, batches=batches,
-                explanation='' if complete else (FAILED_DOCX if docx else FAILED_PPTX if pptx else FAILED) if failed else
-                (WAITING_DOCX if docx else WAITING_PPTX if pptx else WAITING))
+                explanation='' if complete else (FAILED_DOCX if docx else FAILED_PPTX if pptx else FAILED_XLSX if xlsx else FAILED) if failed else
+                (WAITING_DOCX if docx else WAITING_PPTX if pptx else WAITING_XLSX if xlsx else WAITING))
 
 
 def complete_evidence(store, c, source, message):
@@ -284,6 +299,12 @@ def prepare(store, now, budget=ROUND_CALLS):
                     return dict(used=0, failed=0)
         elif value['original'] == 'pptx':
             body = family_media.pptx_pdf(value['body'])
+            with store._db() as c:
+                if not _claim_intact(store, c, source, message, value, key, fp):
+                    _void(c, key, fp)
+                    return dict(used=0, failed=0)
+        elif value['original'] == 'xlsx':
+            body = family_media.xlsx_pdf(value['body'])
             with store._db() as c:
                 if not _claim_intact(store, c, source, message, value, key, fp):
                     _void(c, key, fp)

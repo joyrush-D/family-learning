@@ -808,13 +808,13 @@ def upload_mime(path, name):
     elif ext in ['.heic','.heif'] and head[4:8]==b'ftyp' and any(b in head[8:64] for b in [b'heic',b'heix',b'hevc',b'hevx',b'mif1',b'msf1']): mime='image/heif' if ext=='.heif' else 'image/heic'
     elif ext=='.pdf' and head.startswith(b'%PDF-'): mime='application/pdf'
     elif ext=='.doc' and head.startswith(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'): mime='application/msword'
-    elif ext in ['.docx','.pptx'] and head.startswith(b'PK\x03\x04'):
+    elif ext in ['.docx','.pptx','.xlsx'] and head.startswith(b'PK\x03\x04'):
         try:
             with zipfile.ZipFile(path) as z:
                 names=z.namelist()
-                expected='word/document.xml' if ext=='.docx' else 'ppt/presentation.xml'
+                expected={'docx':'word/document.xml','pptx':'ppt/presentation.xml','xlsx':'xl/workbook.xml'}[ext[1:]]
                 if '[Content_Types].xml' in names and expected in names and not any(n.startswith(('/','\\')) or '..' in n.split('/') or 'vbaproject' in n.lower() for n in names):
-                    mime='application/vnd.openxmlformats-officedocument.'+('wordprocessingml.document' if ext=='.docx' else 'presentationml.presentation')
+                    mime='application/vnd.openxmlformats-officedocument.'+{'docx':'wordprocessingml.document','pptx':'presentationml.presentation','xlsx':'spreadsheetml.sheet'}[ext[1:]]
         except (zipfile.BadZipFile,OSError): pass
     elif ext=='.wav' and head[:4]==b'RIFF' and head[8:12]==b'WAVE': mime='audio/wav'
     elif ext=='.mp3' and (head.startswith(b'ID3') or len(head)>3 and head[0]==255 and head[1]&224==224 and head[1]&6 and head[2]&12!=12): mime='audio/mpeg'

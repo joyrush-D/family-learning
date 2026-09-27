@@ -72,6 +72,13 @@ with tempfile.TemporaryDirectory() as tmp:
         try: upload('fake.pptx',blob.getvalue())
         except ValueError: pass
         else: raise AssertionError('office format mismatch accepted')
+        try: upload('fake.xlsx',blob.getvalue())
+        except ValueError: pass
+        else: raise AssertionError('spreadsheet format mismatch accepted')
+    with io.BytesIO() as blob:
+        with zipfile.ZipFile(blob,'w') as z:
+            z.writestr('[Content_Types].xml','<Types/>');z.writestr('xl/workbook.xml','<workbook/>')
+        assert upload('虚构任务.xlsx',blob.getvalue())['mime'].endswith('spreadsheetml.sheet')
 
     record=dict(child='示例甲',day='2026-09-07',category='学习进展',title='附件记录',attachments=[first['id']])
     app.save_record(record)

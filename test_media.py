@@ -695,6 +695,34 @@ def pptx(slides=1, extras=()):
     return out.getvalue()
 
 
+def xlsx(extras=()):
+    """One fictional visible sheet with a word and a number, using only standard OOXML parts."""
+    parts={
+        '[Content_Types].xml':'<Types><Override PartName="/xl/workbook.xml" ContentType="'+media.XLSX_MIME+'.main+xml"/></Types>',
+        '_rels/.rels':_RELS % ('<Relationship Id="rId1" Type="'+_REL_TYPE+'officeDocument" Target="xl/workbook.xml"/>'),
+        'xl/_rels/workbook.xml.rels':_RELS % ('<Relationship Id="rId1" Type="'+_REL_TYPE+'worksheet" Target="worksheets/sheet1.xml"/>'),
+        'xl/workbook.xml':'<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="'+_REL_TYPE[:-1]+'"><sheets><sheet name="虚构任务" sheetId="1" r:id="rId1"/></sheets></workbook>',
+        'xl/styles.xml':'<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cellXfs count="1"><xf numFmtId="0"/></cellXfs></styleSheet>',
+        'xl/sharedStrings.xml':'<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>虚构作业</t></si></sst>',
+        'xl/worksheets/sheet1.xml':'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1"><v>12</v></c></row></sheetData></worksheet>',
+    }
+    parts.update(extras)
+    out=io.BytesIO()
+    with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:
+        for name,data in parts.items(): z.writestr(name,data)
+    return out.getvalue()
+
+
+class XlsxPdfTests(unittest.TestCase):
+    def test_simple_sheet_and_unsafe_content(self):
+        body=xlsx();self.assertEqual(media.xlsx_pdf_preflight(body),['虚构作业','12'])
+        for fragment in ('<f>1+1</f>', '<row r="1" hidden="1">', '<hyperlink ref="A1"/>'):
+            bad=xlsx([('xl/worksheets/sheet1.xml',
+                      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'+fragment+'</sheetData></worksheet>')])
+            with self.assertRaises(media.MediaError) as error:media.xlsx_pdf_preflight(bad)
+            self.assertEqual(error.exception.code,'draft_xlsx_rejected')
+
+
 class PptxPdfTests(unittest.TestCase):
     def test_static_deck_converts_and_refuses_external_or_active_material(self):
         body=pptx(2,[('ppt/media/picture.png',png())])

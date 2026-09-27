@@ -273,7 +273,7 @@ def _material_kind(message, source=None, mimes=()):
     from family_qq_capture import KIND, NOTICE
     ocr = message.get('kind') == KIND and message.get('text', '').startswith(NOTICE+'\n截图本机文字识别（')
     native_file = source and source.get('platform') == 'qq' and message.get('kind') == 'text' and any(
-        mime in (DOCX_MIME, PPTX_MIME, 'application/pdf') for mime in mimes)
+        mime in (DOCX_MIME, PPTX_MIME, XLSX_MIME, 'application/pdf') for mime in mimes)
     return SCHOOL_MATERIAL if ocr or native_file else ''
 
 
@@ -281,6 +281,7 @@ def _material_kind(message, source=None, mimes=()):
 # completely is refused, so a draft never claims more than the text it was given.
 DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 DOCX_LIMITS = dict(entries=200, total=8 * 1024 * 1024, member=4 * 1024 * 1024, chars=10000)
 _W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
 _DOCX_SKIP = frozenset(_W + n for n in ('pPr', 'rPr', 'tblPr', 'tblPrEx', 'tblGrid', 'trPr', 'tcPr', 'sectPr',
@@ -546,6 +547,104 @@ def pptx_pdf(body, *, soffice=None):
     return pdf
 
 
+XLSX_PDF_TIMEOUT = 60
+_XLSX_LIMITS = dict(entries=200, total=20 * 1024 * 1024, member=4 * 1024 * 1024)
+
+
+def xlsx_pdf_preflight(body, *, started=None):
+    """Accept only one visible populated sheet of plain text/numbers; return cells to verify after rendering."""
+    started = time.monotonic() if started is None else started
+    require(isinstance(body, (bytes, bytearray)) and 0 < len(body) <= MAX_BYTES, 'draft_xlsx_rejected')
+    try:
+        names, parts = family_print.office_check(bytes(body), _XLSX_LIMITS,
+            lambda name: name.lower().endswith(('.xml', '.rels')), deadline=started + XLSX_PDF_TIMEOUT)
+    except family_print.OfficeError as error:
+        raise MediaError('process_timeout' if error.reason == 'timeout' else 'draft_xlsx_rejected') from None
+    allowed = {'[Content_Types].xml', '_rels/.rels', 'xl/_rels/workbook.xml.rels',
+               'xl/workbook.xml', 'xl/styles.xml', 'xl/sharedStrings.xml', 'xl/theme/theme1.xml',
+               'docProps/app.xml', 'docProps/core.xml', 'docProps/custom.xml'}
+    require(all(name.endswith('/') or name in allowed or
+                re.fullmatch(r'xl/worksheets/sheet[1-9][0-9]*\.xml', name) for name in names), 'draft_xlsx_rejected')
+    require({'[Content_Types].xml', 'xl/workbook.xml', 'xl/styles.xml', 'xl/sharedStrings.xml',
+             'xl/_rels/workbook.xml.rels'} <= set(names), 'draft_xlsx_rejected')
+    xml = {}
+    for name, data in parts.items():
+        require(b'\x00' not in data and b'<!DOCTYPE' not in data and b'<!ENTITY' not in data, 'draft_xlsx_rejected')
+        try: xml[name] = ElementTree.fromstring(data)
+        except ElementTree.ParseError: raise MediaError('draft_xlsx_rejected') from None
+    local = lambda element: element.tag.rsplit('}', 1)[-1]
+    types = xml['[Content_Types].xml']
+    require([e.get('ContentType') for e in types if e.get('PartName') == '/xl/workbook.xml'] ==
+            [XLSX_MIME + '.main+xml'], 'draft_xlsx_rejected')
+    workbook = xml['xl/workbook.xml']
+    require(not any(local(e) == 'definedName' for e in workbook.iter()), 'draft_xlsx_rejected')
+    sheets = [e for e in workbook.iter() if local(e) == 'sheet']
+    relations = {e.get('Id'): e.get('Target') for e in xml['xl/_rels/workbook.xml.rels']
+                 if e.get('Type', '').endswith('/worksheet')}
+    require(0 < len(sheets) <= 20 and len(relations) == len(sheets)
+            and all(e.get('state', 'visible') == 'visible' for e in sheets), 'draft_xlsx_rejected')
+    strings = []
+    for item in xml['xl/sharedStrings.xml']:
+        require(local(item) == 'si' and len(item) == 1 and local(item[0]) == 't', 'draft_xlsx_rejected')
+        strings.append(item[0].text or '')
+    cell_xfs = next((e for e in xml['xl/styles.xml'].iter() if local(e) == 'cellXfs'), None)
+    require(cell_xfs is not None and all(e.get('numFmtId', '0') == '0' for e in cell_xfs), 'draft_xlsx_rejected')
+    values, populated, seen = [], 0, set()
+    for sheet in sheets:
+        rid = next((v for k, v in sheet.attrib.items() if k.endswith('}id')), None)
+        target = relations.get(rid, '')
+        require(re.fullmatch(r'worksheets/sheet[1-9][0-9]*\.xml', target) is not None
+                and target not in seen and 'xl/' + target in xml, 'draft_xlsx_rejected')
+        seen.add(target); root = xml['xl/' + target]; cells = []
+        for e in root.iter():
+            tag = local(e)
+            require(tag not in {'f', 'hyperlink', 'drawing', 'legacyDrawing', 'mergeCell', 'tablePart',
+                                'conditionalFormatting', 'dataValidation', 'autoFilter', 'sheetProtection',
+                                'pivotTable', 'oleObjects'} and not (tag in {'row', 'col'} and
+                                e.get('hidden', 'false').lower() in ('1', 'true', 'on'))
+                    and not (tag == 'headerFooter' and ''.join(e.itertext()).strip()), 'draft_xlsx_rejected')
+            if tag == 'c':
+                style = e.get('s', '0')
+                require(e.get('t', 'n') in ('s', 'n') and style.isdigit() and int(style) < len(cell_xfs),
+                        'draft_xlsx_rejected')
+                raw = next((v.text for v in e if local(v) == 'v'), None)
+                if raw is not None:
+                    if e.get('t') == 's':
+                        require(raw.isdigit() and int(raw) < len(strings), 'draft_xlsx_rejected')
+                        raw = strings[int(raw)]
+                    cells.append(raw)
+        if cells: populated += 1; values.extend(cells)
+    require({'xl/' + target for target in seen} ==
+            {name for name in names if name.startswith('xl/worksheets/') and name.endswith('.xml')},
+            'draft_xlsx_rejected')
+    require(populated == 1 and 0 < len(values) <= 1000 and sum(len(v) for v in values) <= 10000,
+            'draft_xlsx_rejected')
+    require(time.monotonic() - started < XLSX_PDF_TIMEOUT, 'process_timeout')
+    return values
+
+
+def xlsx_pdf(body, *, soffice=None, pdftotext=None):
+    """Convert a checked simple workbook, then refuse if any source cell is absent from the visible PDF text."""
+    started = time.monotonic(); values = xlsx_pdf_preflight(body, started=started)
+    soffice, pdftotext = soffice or shutil.which('soffice'), pdftotext or shutil.which('pdftotext')
+    require(soffice and pdftotext, 'process_unavailable')
+    with tempfile.TemporaryDirectory(prefix='xlsx-pdf-') as temporary:
+        try:
+            pdf = family_print.office_convert(bytes(body), '.xlsx', Path(temporary).resolve(), soffice,
+                timeout=XLSX_PDF_TIMEOUT - (time.monotonic() - started), limit=MAX_BYTES, read=_docx_pdf_output)
+        except family_print.OfficeError as error:
+            raise MediaError(_DOCX_PDF_CODES.get(error.reason, 'process_failed')) from None
+        remaining = XLSX_PDF_TIMEOUT - (time.monotonic() - started)
+        require(remaining > 0, 'process_timeout')
+        visible = bounded_process([pdftotext, '-layout', str(Path(temporary) / 'source.pdf'), '-'],
+                                  dict(os.environ), remaining, MAX_BYTES).decode('utf-8', 'replace')
+    visible = re.sub(r'\s+', '', visible).lower()
+    require(all(re.sub(r'\s+', '', value).lower() in visible for value in values if value.strip()),
+            'draft_xlsx_rejected')
+    require(time.monotonic() - started < XLSX_PDF_TIMEOUT, 'process_timeout')
+    return pdf
+
+
 def draft_input(store, c, source, message):
     import family_llm
     from family_agent import _json
@@ -567,7 +666,7 @@ def draft_input(store, c, source, message):
     require(len(links) <= 3, 'draft_too_many_originals')
     rows = [(ident, store._message_upload(c, source['child_id'], ident)) for ident in links]
     kind = _material_kind(message, source, (row['mime'] for _, row in rows))
-    if kind and any(row['mime'] == PPTX_MIME or
+    if kind and any(row['mime'] in (PPTX_MIME, XLSX_MIME) or
                     (not screenshot_kind and row['mime'] == 'application/pdf') for _, row in rows):
         return None  # The existing bounded PDF page path owns this original.
     child = next(p for p in store.profiles(c) if p['id'] == source['child_id'])
