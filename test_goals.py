@@ -758,6 +758,68 @@ class GoalTests(unittest.TestCase):
     def approve(self,g=None,**overrides):
         g=g or self.goal();return self.action('approve',id=self.ident,expected_version=g['version'],proposal_id=g['pending']['id'],context_hash=g['context_hash'],**overrides)
 
+    def test_linked_teaching_task_attempts_reach_only_that_goal_and_memory_waits_for_approval(self):
+        import family_guided, family_learner_memory as lm
+        self.ident=self.action('create',child_id='child-1',title='虚构学校要求：说清时间线索',subject='英语',
+                               school_target='学校要求：朗读后说出句子里的时间线索。')['id']
+        self.assertEqual(self.goal()['records'],[])
+        self.approve(self.evaluate())
+        def remembered():
+            with self.store.agent._db() as c:return len(lm.timeline(c,'child-1',self.ident))
+        memory=remembered()
+        parent,child=family_guided.Store(self.app),family_guided.Store(self.app,authorize=lambda c,child_id:None)
+        def material(title,**extra):
+            self.count+=1
+            body=dict(request_key='synthetic-guided-'+str(self.count).zfill(8),child_id='child-1',version=0,title=title,subject='英语',
+                      question_text='虚构句子：He reads after dinner. 时间线索是什么？',question_attachments=[],reference_text='after dinner',
+                      reference_checked=True,shared=True,**extra)
+            return body,parent.save_material(body)
+        body,saved=material('虚构关联任务',goal_id=self.ident)
+        self.assertEqual(parent.save_material(body)['session_id'],saved['session_id'])
+        linked,unlinked=saved['session_id'],material('虚构同科未关联任务')[1]['session_id']
+        def act(ident,**fields):
+            self.count+=1;version=next(s for s in parent.snapshot()['sessions'] if s['id']==ident)['version']
+            child.action(dict(request_key='synthetic-attempt-'+str(self.count).zfill(8),child_id='child-1',id=ident,version=version,**fields))
+        with patch.object(family_guided.family_llm,'guided_hint',return_value=dict(hint='先找表示时间的词。',question='哪几个词说明什么时候？',uncertainties=[])):
+            act(linked,action='attempt',kind='first',text='我觉得是 reads。',assistance='')
+            act(linked,action='hint')
+            act(linked,action='attempt',kind='explain_again',text='是 after dinner。',assistance='少量提示')
+            act(unlinked,action='attempt',kind='first',text='未关联任务的回答。',assistance='')
+        sessions={s['id']:s for s in parent.snapshot()['sessions']}
+        first,second=[e['record_id'] for e in sessions[linked]['events'] if e['kind']=='attempt']
+        other=next(e['record_id'] for e in sessions[unlinked]['events'] if e['kind']=='attempt')
+        g=self.goal();seen={r['id']:r for r in g['records']}
+        self.assertEqual(set(seen),{first,second})                          # the same-subject unlinked task stays out
+        self.assertEqual((seen[first]['assistance'],seen[second]['assistance'],seen[second]['related_record_id']),('','少量提示',first))
+        self.assertIn('已提供 0 条系统提示',seen[first]['comparison_note']);self.assertIn('已提供 1 条系统提示',seen[second]['comparison_note'])
+        self.assertIn('不据此认定独立完成或掌握',seen[second]['comparison_note'])
+        self.assertTrue(all(r['source']==family_guided.SOURCE+linked for r in seen.values()))
+        plan_before=g['current_plan'];self.assertTrue(g['evidence_changed'])        # the earlier analysis awaits update
+        self.assertEqual(remembered(),memory)
+        refs=['record:%d'%first,'record:%d'%second]
+        def cites(messages,schema,name,timeout,**kwargs):
+            value=json.loads(messages[-1]['content']);self.last_input=value;plan=synthetic_plan(value)
+            plan['proposal']['hypotheses'][0].update(support=[refs[1]],against=[refs[0]],status='有支持');return plan
+        self.model.side_effect=cites
+        pending=self.evaluate()
+        self.assertLessEqual(set(refs),{e['ref'] for e in self.last_input['evidence']})
+        self.assertNotIn('record:%d'%other,json.dumps(self.last_input))
+        self.assertEqual(pending['current_plan'],plan_before);self.assertEqual(remembered(),memory)   # a suggestion is not memory
+        self.approve(pending)
+        self.assertGreater(remembered(),memory)
+        with self.store.agent._db() as c:card=next(x for x in lm.learner_card(c,'child-1') if x['goal_id']==self.ident)
+        self.assertIn(refs[1],json.dumps(card))
+        # The attempt itself stays immutable; a parent's linked correction and an out-of-band move both mark the analysis stale.
+        note=self.app.save_record(dict(child='示例甲',day=self.now.date().isoformat(),category='学习进展',title='家长补充观察',
+            note='家长更正：再次表达前孩子看过参考。',related_record_id=second,followup_kind='补充观察',assistance='看过讲解或答案'))['record']['id']
+        g=self.goal();self.assertIn(note,{r['id'] for r in g['records']});self.assertTrue(g['evidence_changed'])
+        plan_now=g['current_plan']
+        with self.app.connect() as c:c.execute("UPDATE records SET child='示例乙' WHERE id=?",(second,));c.commit()
+        g=self.goal();self.assertEqual(g['hypotheses_detail'][0]['corrected'],[refs[1]])
+        self.assertNotIn(second,{r['id'] for r in g['records']});self.assertEqual(g['current_plan'],plan_now)
+        mate=self.action('create',child_id='child-2',title='虚构另一孩子目标',subject='英语',baseline='家长观察：虚构。')['id']
+        self.assertEqual(next(x for x in self.store.snapshot()['goals'] if x['id']==mate)['records'],[])
+
     def test_lifecycle_coalesces_same_day_and_updates_same_task(self):
         self.assertEqual(self.goal()['records'],[])
         one=self.feedback();two=self.feedback('家长观察：晚些时候不用提示，能说出一条线索。')
