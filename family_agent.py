@@ -1725,7 +1725,7 @@ def run_once(app, now=None):
                 if not messages: continue
                 batches = [[]]; size = 0
                 for message in messages:
-                    if batches[-1] and (len(batches[-1]) >= 12 or size + len(message['payload']) > 14000):
+                    if batches[-1] and (len(batches[-1]) >= 6 or size + len(message['payload']) > 14000):
                         if len(batches) == 6: break
                         batches.append([]); size = 0
                     batches[-1].append(json.loads(message['payload'])); size += len(message['payload'])

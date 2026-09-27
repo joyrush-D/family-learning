@@ -673,6 +673,32 @@ class AgentTests(unittest.TestCase):
         self.store.ingest(self.payload(expected='11', cursor='12', message='12', offset=20))
         self.assertEqual(self.store.snapshot()['sources'][0]['error'], '')
 
+    def test_incomplete_twelve_message_batch_recovers_in_smaller_batches(self):
+        payload = self.payload(cursor='22')
+        payload['messages'] = [dict(id=str(i), time=self.now.isoformat(), kind='text', sender='虚构老师',
+                                    text='待核对原文：明天带阅读材料。', unread=False) for i in range(11, 23)]
+        self.store.ingest(payload)
+        old_key = 'messages:' + agent._hash([self.source['id'], [str(i) for i in range(11, 23)]])[:40]
+        old_value = {'school_learning_policy': 7, 'messages': payload['messages']}
+        for minutes in (0, 6, 17):
+            now = self.now + dt.timedelta(minutes=minutes)
+            fingerprint = self.store._job(old_key, old_value, now, model=True)
+            self.assertTrue(fingerprint)
+            self.store._fail(old_key, now, fingerprint=fingerprint, reason='虚构模型输出未完成')
+        seen = []
+        def select(mode, evidence, *args, **kwargs):
+            self.assertEqual(mode, 'school')
+            self.assertLessEqual(len(evidence), 6)
+            seen.append(len(evidence))
+            return []
+        with patch.object(agent, '_select', side_effect=select):
+            agent.run_once(self.app, self.now + dt.timedelta(minutes=18))
+            agent.run_once(self.app, self.now + dt.timedelta(minutes=19))
+        self.assertEqual(seen, [6, 6])
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_messages WHERE processed=1').fetchone()[0], 12)
+            self.assertEqual(c.execute('SELECT attempts FROM agent_jobs WHERE id=?', (old_key,)).fetchone()[0], 3)
+
     def test_worker_model_failure_backoff_dedup_corrected_input_and_idempotent_accept(self):
         self.store.ingest(self.payload()); ident = self.record()
         with patch.object(agent.family_llm, '_chat_json', side_effect=agent.family_llm.LLMUnavailable('offline')) as model:
@@ -895,9 +921,10 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
             agent.run_once(self.app, self.now)
         with patch.object(agent.family_llm, '_chat_json', side_effect=self.model):
             result = agent.run_once(self.app, self.now + dt.timedelta(minutes=1))
-        self.assertEqual(result['processed'], 1)
+            final = agent.run_once(self.app, self.now + dt.timedelta(minutes=2))
+        self.assertEqual((result['processed'], final['processed']), (6, 1))
         with self.app.connect() as c:
-            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_messages WHERE processed=0').fetchone()[0], 12)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_messages WHERE processed=0').fetchone()[0], 6)
         excerpt = '学校通知\n请带“阅读材料”'
         output = {'proposals': [dict(title_quote='请带“阅读材料”', focus='school', due='', evidence=[{'ref': 'message:synthetic:1', 'quote': excerpt}])]}
         with patch.object(agent.family_llm, '_chat_json', return_value=output):
