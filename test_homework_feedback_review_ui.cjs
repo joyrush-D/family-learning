@@ -54,7 +54,15 @@ async function server(){
   await otherReview.locator('[data-homework-review-result] textarea').fill('另一份尚未保存的批改意见');
   p.once('dialog',d=>d.dismiss());await p.locator('#taskDialog [data-close="taskDialog"]').click();
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'every feedback review draft requires discard confirmation');
-  await p.locator('[data-task-feedback-edit]').first().click();
+  p.once('dialog',d=>d.dismiss());await p.locator('[data-task-feedback-edit]').first().click();
+  assert.equal(await otherReview.locator('[data-homework-review-result] textarea').inputValue(),'另一份尚未保存的批改意见','switch dismissal keeps the other review draft');
+  p.once('dialog',d=>d.accept());await p.locator('[data-task-feedback-edit]').first().click();
+  await p.locator('#taskForm [name=note]').fill('另一条尚未保存的反馈更正');
+  p.once('dialog',d=>d.dismiss());await p.locator('[data-task-feedback-edit]').last().click();
+  assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'另一条尚未保存的反馈更正','switch dismissal keeps edited feedback');
+  const switchedId=Number(await p.locator('[data-task-feedback-edit]').last().getAttribute('data-task-feedback-edit'));
+  p.once('dialog',d=>d.accept());await p.locator('[data-task-feedback-edit]').last().click();
+  assert.equal(await p.locator('#taskForm [name=note]').inputValue(),records.find(r=>r.id===switchedId).note,'explicit discard switches to another saved feedback');
   await p.locator('#taskDialog [data-close="taskDialog"]').click();
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),false,'unchanged feedback closes without warning');
   await p.locator('[data-task="'+id+'"]').first().click();await p.locator('[data-task-feedback-edit]').first().click();
