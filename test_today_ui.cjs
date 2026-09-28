@@ -60,6 +60,10 @@ function fixtures(base){
     assert.deepEqual(await homework.locator('[data-today-task]').evaluateAll(xs=>xs.map(x=>x.dataset.todayTask).sort()),['SIBLING','TODAY']);
     assert.deepEqual(await todos.locator('[data-today-task]').evaluateAll(xs=>xs.map(x=>x.dataset.todayTask)),[]);
     assert.match(await p.locator('.today-source-gap').innerText(),/不是完整作业清单/);
+    await p.locator('.today-source-gap [data-page="study"]').click();
+    await eventually(()=>p.locator('[data-study-ready]').isVisible(),'source gap opens the existing homework entry');
+    assert.match(await p.locator('#content').innerText(),/用登记本|语音报功课/);
+    await p.locator('nav [data-page="home"]').click();await ready(p);
     assert.match(await p.locator('.today-backlog > summary').innerText(),/其他未完成及日期待核对 · 7/);
     await p.locator('.today-backlog > summary').click();
     for(const id of ['DONE','NA','DECLINED','ARCHIVE','WISH','PLANNED'])assert.equal(await card(id).count(),0,'closed items, wishes and future plans omitted: '+id);
