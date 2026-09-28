@@ -545,15 +545,17 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
  const panel=button.closest('[data-homework-review]'),recordId=Number(panel?.dataset.homeworkReview),record=data.records.find(r=>r.id===recordId),task=data.tasks.find(t=>t.id===taskFeedbackContext?.task_id);
  if(!panel||!record||!task||task.agenda?.category!=='homework'||record.child!==task.child||!(record.source==='事项:'+task.id||record.linked_task_id===task.id))return;
  const status=panel.querySelector('[data-homework-review-status]'),result=panel.querySelector('[data-homework-review-result]');
+ const selectedIds=()=>[...panel.querySelectorAll('[data-homework-review-photo]:checked')].map(x=>x.value);
  if(button.hasAttribute('data-homework-review-run')){
-  const ids=[...panel.querySelectorAll('[data-homework-review-photo]:checked')].map(x=>x.value);
+  const ids=selectedIds();
   if(!ids.length||ids.length>4){status.textContent='请按页序勾选1–4张题目与作答照片。';return}
   if(ids.some(id=>!record.attachments.includes(id))){status.textContent='照片归属已变化，请重新打开这项作业。';return}
+  if(result.querySelector('textarea:not(:disabled)')?.value.trim()&&!confirm('重新生成会放弃当前未保存的批改草稿，确定继续？'))return;
   const serial=++homeworkReviewSerial;homeworkReviewBusy=true;button.disabled=true;result.replaceChildren();status.textContent='正在整理所选照片；不会自动保存、打印或改动完成状态…';
   try{
    const out=await printPost('homework/draft',{question_sources:ids.map(id=>({type:'upload',id}))},150000);
    if(serial!==homeworkReviewSerial||!$('#taskDialog').open)return;
-   if(JSON.stringify(ids)!==JSON.stringify([...panel.querySelectorAll('[data-homework-review-photo]:checked')].map(x=>x.value))){status.textContent='所选照片已变化，请重新生成批改。';return}
+   if(JSON.stringify(ids)!==JSON.stringify(selectedIds())){status.textContent='所选照片已变化，请重新生成批改。';return}
    if(typeof out.draft?.text!=='string'||!out.draft.text||out.draft.text.length>12000)throw Error('批改草稿回执不完整');
    const label=document.createElement('label');label.textContent='逐题核对并修改批改意见';const area=document.createElement('textarea');area.maxLength=12000;area.rows=12;area.value=out.draft.text;label.append(area);result.append(label);
    const confirm=document.createElement('label');confirm.className='print-file-check';confirm.innerHTML='<input type="checkbox" data-homework-review-confirm><span>已对照原题和孩子最终作答核对；不确定项仍标为未判定</span>';result.append(confirm);
@@ -566,8 +568,10 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
  const area=result.querySelector('textarea'),confirmed=result.querySelector('[data-homework-review-confirm]');let ids;
  try{ids=JSON.parse(result.dataset.photoIds||'[]')}catch{ids=[]}
  if(!confirmed?.checked||!area?.value.trim()||area.value.length>12000||!ids.length||ids.some(id=>!record.attachments.includes(id))){status.textContent='请对照原题核对、保留不确定项后再填入。';return}
+ if(JSON.stringify(ids)!==JSON.stringify(selectedIds())){status.textContent='所选照片已变化，请重新生成批改；原草稿保留。';return}
  const f=$('#taskForm');if(f.elements.note.value.trim()||pendingIDs.length||$('#taskTranscript').value.trim()){status.textContent='当前还有未保存的反馈，请先保存或清空，再填入批改意见。';return}
- homeworkReviewBusy=true;button.disabled=true;status.textContent='正在保存核对文字原件…';
+ const editing=[area,confirmed,...panel.querySelectorAll('[data-homework-review-photo]')];
+ homeworkReviewBusy=true;button.disabled=true;editing.forEach(x=>x.disabled=true);status.textContent='正在保存核对文字原件…';
  try{
   const file=new File([area.value.trim()+'\n'],'作业批改参考-'+recordId+'.txt',{type:'text/plain'}),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),120000);let upload;
   try{const response=await apiFetch('/api/upload',{signal:controller.signal,method:'POST',headers:{'X-Family-Token':data.token,'X-File-Name':encodeURIComponent(file.name),'Content-Type':'application/octet-stream'},body:file});upload=await response.json();if(!response.ok)throw Error(upload.error||'核对文字未保存')}finally{clearTimeout(timer)}
@@ -576,7 +580,7 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
   data.uploads.unshift(upload.attachment);pendingIDs=[...ids,upload.attachment.id];drawPending();
   f.elements.note.value='家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #'+recordId+'。';
   status.textContent='已填入待保存反馈；请点下方“保存反馈”。作业完成状态不会改变。';button.disabled=true;area.disabled=true;
- }catch(error){status.textContent=(error.name==='AbortError'?'文字原件上传超时':error.message||'文字原件未保存')+'；草稿仍在，可重试。';button.disabled=false}
+ }catch(error){status.textContent=(error.name==='AbortError'?'文字原件上传超时':error.message||'文字原件未保存')+'；草稿仍在，可重试。';editing.forEach(x=>x.disabled=false);button.disabled=false}
  finally{homeworkReviewBusy=false}
 });
 // Same-page read of the background task-video observation draft (#22/#23): GET only, no model, parent check only.
