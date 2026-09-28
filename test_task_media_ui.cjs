@@ -29,7 +29,6 @@ const fs=require('node:fs/promises'),path=require('node:path');
  browser=await chromium.launch({headless:true,channel:process.env.PLAYWRIGHT_CHANNEL||'chrome',args:['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream']});
  for(const width of [360,1440]){
   const context=await browser.newContext({viewport:{width,height:900},permissions:['microphone'],extraHTTPHeaders:{'Tailscale-User-Login':'synthetic-parent'}}),p=await context.newPage(),errors=[];p.on('pageerror',e=>errors.push(e.message));
-  p.on('dialog',d=>d.type()==='beforeunload'||/反馈或状态尚未保存/.test(d.message())?d.accept():d.dismiss());
   const read=async()=>fetch(url+'api/state').then(r=>r.json());let state=await read();
   const post=async(route,body)=>{const r=await fetch(url+route,{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify(body)});const j=await r.json();assert(r.ok,JSON.stringify(j));return j};
   const made=await post('api/task/new',{request_key:randomUUID(),child:state.children[0].name,title:'虚构听写 '+width,box:'inbox',category:'homework',due:state.today,action:'核对一个听写词'}),id=made.task.id;
@@ -56,7 +55,7 @@ const fs=require('node:fs/promises'),path=require('node:path');
   leaveAction='accept';await p.keyboard.press('Escape');assert.equal(leavePrompts,4);assert(!await warnsOnUnload());
   await open();assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'');assert(!await warnsOnUnload());
   checks.push({width,flow:'unsaved note close/cancel and navigation warning; known failure retains input; explicit discard'});
-  await p.locator('#taskForm [name=status]').selectOption('进行中');leaveAction='dismiss';let prompts=leavePrompts;
+  await p.locator('#taskStatusDetails summary').click();await p.locator('#taskForm [name=status]').selectOption('进行中');leaveAction='dismiss';let prompts=leavePrompts;
   await p.keyboard.press('Escape');assert.equal(leavePrompts,prompts+1);assert(await p.locator('#taskDialog').evaluate(x=>x.open));
   await p.locator('#taskForm [name=status]').selectOption('待跟进');assert(!await warnsOnUnload());leaveAction='accept';
   assert(await p.locator('#taskAssistanceLabel').isVisible());await p.locator('#taskAssistance').selectOption('少量提示');
@@ -86,7 +85,7 @@ const fs=require('node:fs/promises'),path=require('node:path');
   await p.locator('[data-task-feedback-edit]').first().click();await p.locator('#taskForm [name=note]').fill('虚构：这是家长补充的原话');assert.equal(await p.locator('#pendingUploads [data-detach]').count(),0);
   leaveAction='dismiss';prompts=leavePrompts;await p.locator('[data-task-feedback-edit]').first().click();assert.equal(leavePrompts,prompts+1);
   assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'虚构：这是家长补充的原话');leaveAction='accept';
-  await p.locator('#taskForm [name=status]').selectOption('进行中');
+  await p.locator('#taskStatusDetails summary').click();await p.locator('#taskForm [name=status]').selectOption('进行中');
   await save.click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'correction saved');
   state=await read();feedback=state.records.filter(r=>r.source==='事项:'+id);assert.equal(feedback.length,1);assert.equal(feedback[0].transcript,'虚构核对：第三个词听不清');assert.equal(feedback[0].note,'虚构：这是家长补充的原话');assert.equal(feedback[0].assistance,'少量提示');
   assert(await warnsOnUnload(),'saving feedback must not erase the unsaved status warning');
@@ -94,7 +93,7 @@ const fs=require('node:fs/promises'),path=require('node:path');
   checks.push({width,flow:'attachment/transcript retention; unchanged correction clean; switching correction protected; save feedback keeps unsaved status warning'});
   const history=await fetch(url+'api/record/history/'+feedback[0].id).then(r=>r.json());assert(history.history.length>=1);
   // The existing state-only path is still explicit and functional.
-  await p.locator('#taskStatusDetails summary').click();await p.locator('#taskForm [name=status]').selectOption('已完成');await p.locator('#taskForm [name=note]').fill('虚构：本次作业已核对');await p.locator('#taskForm [type=submit]').click();await eventually(()=>p.locator('#taskDialog').evaluate(x=>!x.open),'status saved');
+  if(!await p.locator('#taskStatusDetails').evaluate(x=>x.open))await p.locator('#taskStatusDetails summary').click();await p.locator('#taskForm [name=status]').selectOption('已完成');await p.locator('#taskForm [name=note]').fill('虚构：本次作业已核对');await p.locator('#taskForm [type=submit]').click();await eventually(()=>p.locator('#taskDialog').evaluate(x=>!x.open),'status saved');
   state=await read();assert.equal(state.tasks.find(t=>t.id===id).update.status,'已完成');
   // Reopen from completed items, append an original-only feedback without reopening the assignment.
   await p.locator('nav [data-page="home"]').click();await p.locator('[data-task-all="homework"]').click();await p.locator('[data-task-box="已完成"]').click();await open();
