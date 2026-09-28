@@ -29,6 +29,7 @@ const fs=require('node:fs/promises'),path=require('node:path');
  browser=await chromium.launch({headless:true,channel:process.env.PLAYWRIGHT_CHANNEL||'chrome',args:['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream']});
  for(const width of [360,1440]){
   const context=await browser.newContext({viewport:{width,height:900},permissions:['microphone'],extraHTTPHeaders:{'Tailscale-User-Login':'synthetic-parent'}}),p=await context.newPage(),errors=[];p.on('pageerror',e=>errors.push(e.message));
+  p.on('dialog',d=>d.type()==='beforeunload'||/反馈或状态尚未保存/.test(d.message())?d.accept():d.dismiss());
   const read=async()=>fetch(url+'api/state').then(r=>r.json());let state=await read();
   const post=async(route,body)=>{const r=await fetch(url+route,{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify(body)});const j=await r.json();assert(r.ok,JSON.stringify(j));return j};
   const made=await post('api/task/new',{request_key:randomUUID(),child:state.children[0].name,title:'虚构听写 '+width,box:'inbox',category:'homework',due:state.today,action:'核对一个听写词'}),id=made.task.id;

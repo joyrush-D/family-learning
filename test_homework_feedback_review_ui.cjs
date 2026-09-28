@@ -24,7 +24,15 @@ async function server(){
   state=await(await fetch(host.url+'api/state')).json();const id=state.tasks.find(t=>t.title===title)?.id;assert(id,'homework entry creates the task');await p.locator('[data-query-target="task:'+id+'"]').waitFor();
   await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskDialog[open]').waitFor();
   assert.equal(await p.locator('#taskStatusDetails').evaluate(x=>x.open),false,'status update stays secondary');
+  await p.locator('#taskForm [name=note]').fill('虚构未保存反馈');
+  p.once('dialog',d=>d.dismiss());await p.locator('#taskDialog [data-close="taskDialog"]').click();
+  assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'close dismissal keeps unsaved feedback');
+  assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'虚构未保存反馈');
+  await p.locator('#taskForm [name=note]').fill('');
   await p.locator('#cameraInput').setInputFiles({name:'synthetic-answer.png',mimeType:'image/png',buffer:png});await p.locator('#pendingUploads img').waitFor();
+  p.once('dialog',d=>d.dismiss());await p.locator('#taskDialog [data-close="taskDialog"]').click();
+  assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'close dismissal keeps unsaved photo');
+  assert.equal(await p.locator('#pendingUploads img').count(),1);
   await p.locator('#saveTaskFeedback').click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'photo feedback saved');
   const panel=p.locator('#taskFeedbackHistory [data-homework-review]').first();assert.equal(await panel.locator('details').evaluate(x=>x.open),true,'saved photo exposes review');assert.equal(await panel.locator('[data-homework-review-photo]').count(),1);
   let calls=0;await p.route('**/api/print/homework/draft',r=>{calls++;const body=r.request().postDataJSON();assert.equal(body.question_sources.length,1);return calls===1?r.fulfill({status:503,json:{error:'虚构模型暂不可用'}}):r.fulfill({json:{draft:{text:'虚构第1题：卷面C，参考B；先找原文依据。',items:1,wrong_items:1,unknown_items:0,coverage:'仅此一页'},question_sha256:'a'.repeat(64)}})});
@@ -34,10 +42,21 @@ async function server(){
   await panel.locator('[data-homework-review-apply]').click();assert.match(await panel.innerText(),/请对照原题核对/);
   await panel.locator('[data-homework-review-confirm]').check();await panel.locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await panel.innerText()),'review staged');
   assert.match(await p.locator('#taskForm [name=note]').inputValue(),/家长核对的作业批改参考/);
+  p.once('dialog',d=>d.dismiss());await p.locator('#taskDialog [data-close="taskDialog"]').click();
+  assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'review draft stays after declining discard');
   await p.locator('#saveTaskFeedback').click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'review feedback saved');
   state=await(await fetch(host.url+'api/state')).json();const records=state.records.filter(r=>r.source==='事项:'+id);assert.equal(records.length,2);assert.equal(state.tasks.find(t=>t.id===id).update,null,'grading must not complete homework');
   const photo=records[0].attachments[0],review=records.find(r=>r.note.includes('批改参考'));assert(review.attachments.includes(photo));const report=review.attachments.find(a=>a!==photo);assert.equal(state.uploads.find(a=>a.id===report).mime,'text/plain; charset=utf-8');
   await p.keyboard.press('Escape');await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskFeedbackHistory').getByText('作业批改参考', {exact:false}).first().waitFor();
+  await p.locator('[data-task-feedback-edit]').first().click();
+  await p.locator('#taskDialog [data-close="taskDialog"]').click();
+  assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),false,'unchanged feedback closes without warning');
+  await p.locator('[data-task="'+id+'"]').first().click();await p.locator('[data-task-feedback-edit]').first().click();
+  await p.locator('#taskForm [name=note]').fill('虚构更正但未保存');
+  p.once('dialog',d=>d.dismiss());await p.keyboard.press('Escape');
+  assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'Escape dismissal keeps edited feedback');
+  p.once('dialog',d=>d.accept());await p.keyboard.press('Escape');
+  assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),false,'explicit discard closes');
   assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);assert.deepEqual(errors,[]);await p.close();
  }
  console.log('Homework feedback AI review: 360/1440 save, retry, reopen, task status and source preserved');
