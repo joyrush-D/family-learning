@@ -61,6 +61,8 @@ const fs=require('node:fs/promises'),path=require('node:path');
   assert.equal(await p.locator('#taskForm #recordAudio').count(),1);assert.equal(await p.locator('#recordForm #recordAudio').count(),0);
   await p.locator('#recordAudio').click();await eventually(async()=>/结束/.test(await p.locator('#recordAudio').innerText()),'recording');await delay(450);await p.locator('#recordAudio').click();
   await p.locator('#pendingUploads audio').waitFor();await eventually(()=>save.isEnabled(),'audio uploaded');
+  await p.locator('#pendingUploads [data-media-speed]').selectOption('0.5');assert.equal(await p.locator('#pendingUploads audio').evaluate(v=>v.playbackRate),0.5);
+  await p.locator('#pendingUploads [data-media-back]').click();assert(await p.locator('#pendingUploads audio').evaluate(v=>v.currentTime<0.3));
   leaveAction='dismiss';prompts=leavePrompts;await p.locator('[data-close="taskDialog"]').click();
   assert.equal(leavePrompts,prompts+1);assert.equal(await p.locator('#pendingUploads audio').count(),1);leaveAction='accept';
   await p.locator('#transcribeButton').click();await eventually(async()=>/虚构转写失败/.test(await p.locator('#draftStatus').innerText()),'ASR failure retained');assert.equal(await p.locator('#pendingUploads audio').count(),1);
@@ -119,6 +121,7 @@ const fs=require('node:fs/promises'),path=require('node:path');
   assert.equal(await p.locator('#videoInput').isDisabled(),true);assert.equal(await p.locator('#pendingUploads video').count(),1);
   await save.click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'video feedback saved');await p.unroute('**/api/task/feedback');assert.deepEqual(videoBodies[0],videoBodies[1]);
   await p.keyboard.press('Escape');await open();await p.locator('#taskFeedbackHistory video').waitFor();await play(p.locator('#taskFeedbackHistory video'));
+  const videoBox=p.locator('#taskFeedbackHistory .upload-item').filter({has:p.locator('video')});await videoBox.locator('[data-media-speed]').selectOption('1.25');assert.equal(await videoBox.locator('video').evaluate(v=>v.playbackRate),1.25);
   state=await read();feedback=state.records.filter(r=>r.source==='事项:'+id);assert.equal(feedback.length,3);const videoRecord=feedback.find(r=>r.attachments.some(a=>state.uploads.find(u=>u.id===a)?.mime==='video/mp4'));
   assert(videoRecord);assert.equal(videoRecord.note,'');assert.equal(videoRecord.transcript,'');assert.equal(state.tasks.find(t=>t.id===id).update.status,'已完成');assert.equal(asrAttempts,asrBeforeVideo);
   // Same-page read of the background video observation draft: synthetic GET states, no model call, no task or record change.

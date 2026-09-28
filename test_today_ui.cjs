@@ -50,11 +50,13 @@ function fixtures(base){
    try{
     const state=fixtures(await read()),homework=p.locator('#task-group-homework'),todos=p.locator('#task-group-todo');
     state.attachments=['虚构题目.png','虚构答案.pdf'];state.printing={printers:[{name:'Synthetic_Printer',label:'虚构打印机',color:false,duplex:false}],jobs:[]};
+    state.agent.sources.push({id:'synthetic-audio',child_id:state.children[0].id,name:'虚构学校群',enabled:true});state.tasks.find(t=>t.id==='TODAY').source='message:synthetic-audio:dictation';
     state.agent.items.find(i=>i.id==='synthetic-school').title='待核对：⚠️重要通知⚠️\n\n请准备虚构活动材料。';
     state.agent.items.push({id:'synthetic-reference',kind:'school',child_id:state.children[0].id,state:'pending',title:'虚构成绩表说明',body:'第一列表示课堂默写记录。',evidence:[],plan:{school_task:{state:'reference',reason:'这段内容解释列标题，没有新作业。'}}});
     const card=id=>p.locator('[data-query-target="task:'+id+'"]');
     await p.route('**/api/state',r=>r.fulfill({contentType:'application/json',body:JSON.stringify(state)}));
     await p.goto(server.url,{waitUntil:'load'});await ready(p);await fit(p);
+    const original=card('TODAY').locator(':scope > .checkrow .taskbody > .toolbar [data-school-original-ref]');assert(await original.isVisible(),'homework source is visible before expanding details');assert.match(await original.innerText(),/查看作业原件/);
     assert.deepEqual(await homework.locator('[data-today-task]').evaluateAll(xs=>xs.map(x=>x.dataset.todayTask).sort()),['CANCEL-LINK','FUTURE','INVALID','LINK','PAST','SIBLING','TODAY','UNKNOWN']);
     assert.deepEqual(await todos.locator('[data-today-task]').evaluateAll(xs=>xs.map(x=>x.dataset.todayTask)),['ADMIN']);
     for(const id of ['DONE','NA','DECLINED','ARCHIVE','WISH','PLANNED'])assert.equal(await card(id).count(),0,'closed items, wishes and future plans omitted: '+id);
