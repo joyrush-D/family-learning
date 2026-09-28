@@ -133,6 +133,12 @@ class AgendaTest(unittest.TestCase):
             separate=agenda.metadata(app,c,'child-1','英语作业','',['message:synthetic-class:1'])
         self.assertEqual(separate['due_on'],'')
 
+    def test_pending_school_inbox_keeps_newer_review_first(self):
+        for day,label in [('2026-09-06','较早待核对'),('2026-09-07','较新待核对')]:
+            self.store._save('synthetic-'+day,'fingerprint-'+day,[dict(child_id='child-1',kind='school',title=label,body='虚构学校消息',evidence=[])],dt.datetime.fromisoformat(day+'T12:00:00+08:00'))
+        rows=[x for x in app.calendar_snapshot('2026-09-08','2026-09-08')['inbox'] if x['kind']=='school']
+        self.assertEqual([x['title'] for x in rows],['较新待核对','较早待核对'])
+
     def test_rewritten_exam_title_borrows_the_exam_clause_deadline(self):
         # The interpreter usually rewrites an exam title (subject prefix, weekday suffix), so it is no
         # longer a literal substring of the notice clause. The dated test must still ground its date so

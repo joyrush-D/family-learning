@@ -163,14 +163,20 @@ function fixtures(base){
     await orderPage.goto(server.url,{waitUntil:'load'});await ready(orderPage);
     const taskOrder=()=>orderPage.locator('#task-group-homework [data-today-task]').evaluateAll(xs=>xs.map(x=>x.dataset.todayTask));
     const earlierTasks=()=>orderPage.locator('.today-backlog [data-today-task]').evaluateAll(xs=>xs.map(x=>x.dataset.todayTask));
-    const noticeOrder=()=>orderPage.locator('.today-backlog [data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem));
+    const recentNoticeOrder=()=>orderPage.locator('.today-new-notices [data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem));
+    const olderNoticeOrder=()=>orderPage.locator('.today-backlog [data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem));
     assert.deepEqual(await taskOrder(),['DUE-TODAY']);
     assert.deepEqual(await earlierTasks(),['DUE-RECENT','DUE-OLD','DUE-NEXT','OLD']);
-    assert.deepEqual(await noticeOrder(),['notice-3','notice-2','notice-1','notice-0']);
+    assert.match(await orderPage.locator('#task-group-homework h2').innerText(),/今日作业 · 1/,'pending notices do not become confirmed homework');
+    assert.deepEqual(await recentNoticeOrder(),['notice-3','notice-2','notice-1']);
+    assert.deepEqual(await olderNoticeOrder(),['notice-0']);
+    await orderPage.locator('.today-new-notices').scrollIntoViewIfNeeded();
+    await proof(orderPage,'recent-school-review-'+width);
     await fit(orderPage);await orderPage.reload({waitUntil:'load'});await ready(orderPage);
     assert.deepEqual(await taskOrder(),['DUE-TODAY'],'current-day count persists after reload');
     assert.deepEqual(await earlierTasks(),['DUE-RECENT','DUE-OLD','DUE-NEXT','OLD'],'old dates persist after reload');
-    assert.deepEqual(await noticeOrder(),['notice-3','notice-2','notice-1','notice-0'],'source order persists after reload');
+    assert.deepEqual(await recentNoticeOrder(),['notice-3','notice-2','notice-1'],'recent source order persists after reload');
+    assert.deepEqual(await olderNoticeOrder(),['notice-0'],'older source remains available after reload');
     checks.push({width,kind:'today-business-sort',confirmedDates:true,backfilledNoticeDates:true,reload:true,noOverflow:true});
    }finally{await orderPage.close()}
 
