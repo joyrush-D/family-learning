@@ -106,7 +106,7 @@ function taskActionHTML(t){const f=taskFocus(t),advice=f.next_action||t.advice||
 function taskHTML(t,options={}){
  const compact=options.compact===true,done=status(t)==='已完成',dismissed=taskClosed(t)&&!done,pending=pendingTask?.id===t.id,open=!taskClosed(t);
  const primary=open&&t.focus?.box!=='wish'&&t.agenda?.category==='homework'?`<button class="primary" data-study-task-add="${esc(t.id)}">${t.homework_report?.needs_review?'核对报来的功课':'作业计时'}</button>`:open&&t.title.includes('打印')?'<button class="primary" data-page="print">准备打印</button>':'';
- return `<article class="task ${done?'done':''}" data-query-target="task:${esc(t.id)}" aria-busy="${pending}" ${compact?`data-today-task="${esc(t.id)}"`:''} tabindex="-1"><div class="checkrow">${dismissed?'<span class="task-dismiss-icon" aria-hidden="true">−</span>':`<label class="checkhit"><input type="checkbox" data-check="${esc(t.id)}" ${(pending?pendingTask.checked:done)?'checked':''} ${pendingTask?'aria-disabled="true"':''} aria-label="${done?'撤销完成':'确认完成'}：${esc(t.title)}"><span class="sr-only">${done?'撤销完成':'确认完成'}</span></label>`}<div class="taskbody"><h3>${esc(t.title)}</h3><div class="task-meta"><span>${esc(t.child)}</span>${status(t)!=='待跟进'||pending?`<span class="chip">${pending?'<span role="status">正在保存…</span>':esc(taskStatusLabel(status(t)))}</span>`:''}${options.when?`<span>${esc(options.when)}</span>`:''}</div>${agendaDateHTML(t.agenda||{})}${!t.agenda?.due_on&&t.due?`<p class="small muted">原日期要求：${esc(t.due)}</p>`:''}${taskActionHTML(t)}${t.school_completion_needs_review?'<p class="note" data-school-completion-review>原要求已完成；更正后是否需补做、是否已完成，待家长核对。</p>':''}${t.update?.note?`<p class="feedback">${esc(t.update.note)}</p>`:''}<div class="tasktools">${primary}<button data-task="${esc(t.id)}">反馈进展</button>${dismissed?`<button data-task-restore="${esc(t.id)}">恢复跟进</button>`:!done?`<button data-task-decisions="${esc(t.id)}">不参加 / 不用做</button>`:''}</div><details class="task-reference task-more"><summary>更多操作与原通知</summary><div class="tasktools">${open?`<button data-task-plan="${esc(t.id)}">${t.agenda?.scheduled_on?'改计划日期':'转成计划'}</button><button data-task-focus="${esc(t.id)}">修改标题 / 日期</button>`:''}<button data-school-record-task="${esc(t.id)}">留作学习记录</button>${/阅读|读书|篇目|读后感/.test(t.title+t.action)?`<button data-reading-source="${esc(t.id)}">约定阅读任务</button>`:''}</div>${schoolOriginalButtons(String(t.source||'').split('\n').filter(r=>r.startsWith('message:')),data.children.find(c=>c.name===t.child)?.id)}<div class="source">${t.original_title?esc('原标题：'+t.original_title)+'<br>':''}${t.original_action?esc('原要求：'+t.original_action)+'<br>':''}${esc(t.source)}<br>整理状态：${esc(t.original_status)}</div>${(t.history||[]).map(h=>`<p class="history"><time>${esc(h.updated.slice(0,16).replace('T',' '))}</time> · ${esc(taskStatusLabel(h.status))}<br>${esc(h.note||'已更新状态')}</p>`).join('')}</details></div></div></article>`;
+ return `<article class="task ${done?'done':''}" data-query-target="task:${esc(t.id)}" aria-busy="${pending}" ${compact?`data-today-task="${esc(t.id)}"`:''} tabindex="-1"><div class="checkrow">${dismissed?'<span class="task-dismiss-icon" aria-hidden="true">−</span>':`<label class="checkhit"><input type="checkbox" data-check="${esc(t.id)}" ${(pending?pendingTask.checked:done)?'checked':''} ${pendingTask?'aria-disabled="true"':''} aria-label="${done?'撤销完成':'确认完成'}：${esc(t.title)}"><span class="sr-only">${done?'撤销完成':'确认完成'}</span></label>`}<div class="taskbody"><h3>${esc(t.title)}</h3><div class="task-meta"><span>${esc(t.child)}</span>${status(t)!=='待跟进'||pending?`<span class="chip">${pending?'<span role="status">正在保存…</span>':esc(taskStatusLabel(status(t)))}</span>`:''}${options.when?`<span>${esc(options.when)}</span>`:''}</div>${agendaDateHTML(t.agenda||{})}${!t.agenda?.due_on&&t.due?`<p class="small muted">原日期要求：${esc(t.due)}</p>`:''}${taskActionHTML(t)}${t.school_completion_needs_review?'<p class="note" data-school-completion-review>原要求已完成；更正后是否需补做、是否已完成，待家长核对。</p>':''}${t.update?.note?`<p class="feedback">${esc(t.update.note)}</p>`:''}<div class="tasktools">${primary}<button data-task="${esc(t.id)}">反馈进展</button>${open&&t.agenda?.category==='homework'?`<button data-homework-print="${esc(t.id)}">提前打印题目和家长参考</button>`:''}${dismissed?`<button data-task-restore="${esc(t.id)}">恢复跟进</button>`:!done?`<button data-task-decisions="${esc(t.id)}">不参加 / 不用做</button>`:''}</div><details class="task-reference task-more"><summary>更多操作与原通知</summary><div class="tasktools">${open?`<button data-task-plan="${esc(t.id)}">${t.agenda?.scheduled_on?'改计划日期':'转成计划'}</button><button data-task-focus="${esc(t.id)}">修改标题 / 日期</button>`:''}<button data-school-record-task="${esc(t.id)}">留作学习记录</button>${/阅读|读书|篇目|读后感/.test(t.title+t.action)?`<button data-reading-source="${esc(t.id)}">约定阅读任务</button>`:''}</div>${schoolOriginalButtons(String(t.source||'').split('\n').filter(r=>r.startsWith('message:')),data.children.find(c=>c.name===t.child)?.id)}<div class="source">${t.original_title?esc('原标题：'+t.original_title)+'<br>':''}${t.original_action?esc('原要求：'+t.original_action)+'<br>':''}${esc(t.source)}<br>整理状态：${esc(t.original_status)}</div>${(t.history||[]).map(h=>`<p class="history"><time>${esc(h.updated.slice(0,16).replace('T',' '))}</time> · ${esc(taskStatusLabel(h.status))}<br>${esc(h.note||'已更新状态')}</p>`).join('')}</details></div></div></article>`;
 }
 async function postTask(obj){
  const r=await apiFetch('/api/task',{method:'POST',signal:AbortSignal.timeout(15000),headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify({...obj,expected_updated:obj.expected_updated??data.tasks.find(t=>t.id===obj.id)?.update?.updated??''})});
@@ -889,8 +889,8 @@ function printHTML(){
     return `<article class="print-choice ${chosen?'is-selected':''}"><label class="print-file-check"><input type="checkbox" data-print-select="${i}" ${chosen?'checked':''} ${printBusy?'disabled':''}><span><strong>${esc(file.name)}</strong><small>${esc(state||(file.source.type==='upload'?'你上传的资料':'已保存的附件'))}</small></span></label><div class="print-file-tools"><a href="${file.url}" download="${esc(file.name)}">下载原件</a>${d?.preparation?`<a href="${endpoint(d.preparation.preview_url)}" target="_blank" rel="noopener">查看 PDF</a>`:''}</div>${chosen?`<label class="print-page-input">页码（选填）<input data-print-pages="${i}" value="${esc(d.settings.pages)}" maxlength="1000" placeholder="全部；例如 1-3,5" ${printBusy||d.pending||d.submitted?'disabled':''}></label>${d.pending?`<p class="small muted print-file-note">此文件沿用原设置：${d.pending.copies} 份 · ${d.pending.sides==='one-sided'?'单面':'双面'} · ${d.pending.color==='color'?'彩色':'黑白'}。重试不会新建第二个任务。</p>`:''}${d.error?`<p class="error print-file-note" role="status">${esc(d.error)}</p>`:''}`:''}</article>`;
   }).join('')||empty('上传作业、图片或保存通知附件后，可在这里勾选打印。')}</div><div class="print-settings"><label class="print-sides">单双面<select name="sides" ${locked?'disabled':''}><option value="one-sided" ${printDefaults.sides==='one-sided'?'selected':''}>单面</option><option value="two-sided-long-edge" ${printDefaults.sides==='two-sided-long-edge'?'selected':''} ${!printer?.duplex?'disabled':''}>双面 · 长边翻页</option><option value="two-sided-short-edge" ${printDefaults.sides==='two-sided-short-edge'?'selected':''} ${!printer?.duplex?'disabled':''}>双面 · 短边翻页</option></select></label><details class="print-advanced"><summary>更多设置 · ${esc(printDefaults.copies)} 份 · ${printDefaults.color==='color'?'彩色':'黑白'}</summary><div class="formrow"><label>份数<input name="copies" type="number" min="1" max="10" value="${esc(printDefaults.copies)}" ${locked?'disabled':''}></label><label>颜色<select name="color" ${locked?'disabled':''}><option value="monochrome" ${printDefaults.color==='monochrome'?'selected':''}>黑白</option><option value="color" ${printDefaults.color==='color'?'selected':''} ${!printer?.color?'disabled':''}>彩色</option></select></label></div><label>打印机<select name="printer" ${locked?'disabled':''}><option value="">${printers.length?'请选择打印机':'等待配置打印机'}</option>${printers.map(p=>`<option value="${esc(p.name)}" ${p.name===printDefaults.printer?'selected':''}>${esc(p.label||p.name)}</option>`).join('')}</select></label></details></div><div class="print-submit-area"><p id="printTotal" class="print-summary" aria-live="polite">${esc(printSummary())}</p><p id="printError" class="error" role="status">${esc(printNotice)}</p><button id="submitPrint" type="submit" class="primary" ${printBusy||!printers.length||data.printing?.error||!remaining.length?'disabled':''}>${printBusy?esc(printPhase||'正在处理…'):remaining.some(d=>d.pending)?'继续 / 核对本次提交':remaining.length?`提交打印 · ${remaining.length} 个文件`:'提交打印'}</button><p class="small muted">按 PDF 页序选页，留空打印全部。点击提交即发送所选文件；转换失败会先停下，已提交的文件不会重复提交。</p></div></form></section><section class="card print-progress"><div class="section-head"><h2>打印进展</h2><button type="button" data-refresh-print="yes" ${printBusy?'disabled':''}>刷新</button></div><p class="print-status">${printers.length?'家中电脑在线时处理已提交文件':'等待连接打印机'}</p>${(data.printing?.jobs||[]).map(j=>`<article class="print-job"><span class="chip ${j.status==='received'?'':'amber'}">${esc(printLabels[j.status]||j.status)}</span><h3>${esc(j.name)}</h3><p class="muted small">PDF ${esc(j.pages)} 页 · ${j.copies} 份 · ${j.sides==='one-sided'?'单面':'双面'} · ${j.color==='color'?'彩色':'黑白'}</p><p class="small">${esc(j.note)}</p>${j.cups_job_id?`<p class="small muted">队列编号：${esc(j.cups_job_id)}</p>`:''}${j.status==='queued'?`<button type="button" data-cancel-print="${esc(j.id)}" ${printBusy?'disabled':''}>取消未领取任务</button>`:''}${['submitted','spooler_completed'].includes(j.status)?`<form data-received-print="${esc(j.id)}"><label>纸张是否齐全<input name="note" required maxlength="1000" placeholder="例如：已拿到，页码和内容齐全" ${printBusy?'disabled':''}></label><button ${printBusy?'disabled':''}>确认拿到纸张</button></form>`:''}</article>`).join('')||empty('还没有打印任务。勾选文件后即可提交。')}</section></div>`;
 }
-async function printPost(path,body){
-  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),90000);
+async function printPost(path,body,timeout=90000){
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout);
   try{
     const r=await apiFetch('/api/print/'+path,{signal:controller.signal,method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify(body)});
     let result;try{result=await r.json()}catch{throw Error('打印服务返回了无法读取的结果')}
@@ -899,6 +899,91 @@ async function printPost(path,body){
   }catch(error){if(error.name==='AbortError')throw Error('打印请求超时');throw error}
   finally{clearTimeout(timer)}
 }
+let homeworkPrintBusy=false;
+const homeworkPrintKey='family-homework-print:v1:'+basePath;
+function saveHomeworkPrintDraft(f){
+  try{sessionStorage.setItem(homeworkPrintKey+':'+f.elements.task_id.value,JSON.stringify({task_id:f.elements.task_id.value,
+    request_key:f.dataset.requestKey,question_source:f.elements.question_source.value,
+    guide_source:f.elements.guide_source.value,guide_text:f.elements.guide_text.value,
+    expected_question_sha256:f.dataset.questionSha||'',
+    question_confirmed:f.elements.question_confirmed.checked,guide_confirmed:f.elements.guide_confirmed.checked}));return true}
+  catch{return false}
+}
+function openHomeworkPrint(id){
+  const task=data.tasks.find(t=>t.id===id),files=printSources().filter(f=>/\.(pdf|jpe?g|png|docx|pptx)$/i.test(f.name));
+  if(!task||!files.length){toast('请先上传要打印的题目原件');return}
+  const f=$('#homeworkPrintForm');f.reset();f.elements.task_id.value=id;
+  const choices=files.map(file=>`<option value="${esc(JSON.stringify(file.source))}">${esc(file.name)}</option>`).join('');
+  f.elements.question_source.innerHTML='<option value="">请选择题目原件</option>'+choices;
+  f.elements.guide_source.innerHTML='<option value="">填写下方参考文字</option>'+choices;
+  let saved;try{saved=JSON.parse(sessionStorage.getItem(homeworkPrintKey+':'+id)||'null')}catch{}
+  if(saved?.task_id===id&&/^[A-Za-z0-9_-]{8,128}$/.test(saved.request_key||'')){
+    for(const key of ['question_source','guide_source','guide_text'])if(typeof saved[key]==='string')f.elements[key].value=saved[key];
+    f.elements.question_confirmed.checked=!!saved.question_confirmed;f.elements.guide_confirmed.checked=!!saved.guide_confirmed;
+  }
+  f.dataset.questionSha=saved?.task_id===id&&typeof saved.expected_question_sha256==='string'?saved.expected_question_sha256:'';
+  f.dataset.requestKey=saved?.task_id===id&&/^[A-Za-z0-9_-]{8,128}$/.test(saved.request_key||'')?saved.request_key:crypto.randomUUID();
+  $('#homeworkPrintTask').textContent=task.child+' · '+task.title+(task.agenda?.due_on?' · 截止 '+task.agenda.due_on:'');
+  $('#homeworkPrintError').textContent='';
+  const printers=data.printing?.printers||[];normalizePrintDefaults();
+  let printer=f.elements.printer;
+  if(!printer){printer=document.createElement('select');printer.name='printer';printer.required=true;
+    const label=document.createElement('label');label.textContent='家庭打印机';label.append(printer);f.elements.guide_confirmed.closest('label').after(label)}
+  printer.innerHTML='<option value="">请选择打印机</option>'+printers.map(p=>`<option value="${esc(p.name)}">${esc(p.label||p.name)}</option>`).join('');
+  printer.value=printDefaults.printer;
+  if(!saveHomeworkPrintDraft(f)){toast('无法保留本次打印编号，请启用站点存储后再打印');return}
+  $('#homeworkPrintDialog').showModal();
+}
+document.addEventListener('click',e=>{const b=e.target.closest('[data-homework-print]');if(b)openHomeworkPrint(b.dataset.homeworkPrint)});
+$('#homeworkPrintForm')?.addEventListener('input',e=>{if(!homeworkPrintBusy)saveHomeworkPrintDraft(e.currentTarget)});
+$('#homeworkPrintForm')?.addEventListener('change',e=>{
+  if(homeworkPrintBusy)return;
+  if(e.target.name==='question_source'){
+    e.currentTarget.dataset.questionSha='';
+    $('#homeworkDraftStatus').textContent='题目文件已更换；原参考草稿可能不适用，请重新逐题核对。';
+    e.currentTarget.elements.question_confirmed.checked=false;
+    e.currentTarget.elements.guide_confirmed.checked=false;
+  }
+  saveHomeworkPrintDraft(e.currentTarget)
+});
+$('#homeworkDraftButton')?.addEventListener('click',async()=>{
+  if(homeworkPrintBusy)return;const f=$('#homeworkPrintForm'),status=$('#homeworkDraftStatus');
+  if(!f.elements.question_source.value){status.textContent='请先选择一张题目图片。';return}
+  const selected=f.elements.question_source.value,button=$('#homeworkDraftButton');button.disabled=true;
+  status.textContent='正在整理一张图片的待核对草稿；不会自动保存或打印…';
+  try{
+    const out=await printPost('homework/draft',{question_source:JSON.parse(selected)},120000);
+    if(!$('#homeworkPrintDialog').open||f.elements.question_source.value!==selected)return;
+    if(typeof out.draft?.text!=='string'||!/^[a-f0-9]{64}$/.test(out.question_sha256))throw Error('参考草稿回执不完整');
+    f.elements.guide_source.value='';f.elements.guide_text.value=out.draft.text;
+    f.dataset.questionSha=out.question_sha256;
+    f.elements.guide_confirmed.checked=false;
+    saveHomeworkPrintDraft(f);
+    status.textContent='仅整理了所选一张图片。请对照原题逐题核对、改正不确定处，再勾选家长确认。';
+  }catch(err){status.textContent=(err.message||'参考草稿暂不可用')+'；题目与已填内容仍保留。超时后不会自动再次调用模型。'}
+  finally{button.disabled=false}
+});
+$('#homeworkPrintForm')?.addEventListener('submit',async e=>{
+  e.preventDefault();if(homeworkPrintBusy)return;const f=e.currentTarget,error=$('#homeworkPrintError');
+  if(!f.reportValidity())return;
+  if(!!f.elements.guide_source.value===!!f.elements.guide_text.value.trim()){
+    error.textContent='参考文件和参考文字只能选一种，且不能都留空。';return}
+  if(!saveHomeworkPrintDraft(f)){error.textContent='无法保留本次请求编号，尚未提交打印。';return}
+  const controls=[...f.querySelectorAll('button,input,select,textarea')];homeworkPrintBusy=true;controls.forEach(c=>c.disabled=true);error.textContent='正在分别准备两份 PDF，再提交打印…';
+  try{
+    const body={task_id:f.elements.task_id.value,request_key:f.dataset.requestKey,
+      question_source:JSON.parse(f.elements.question_source.value),
+      guide_source:f.elements.guide_source.value?JSON.parse(f.elements.guide_source.value):null,
+      guide_text:f.elements.guide_text.value.trim(),printer:f.elements.printer.value,
+      expected_question_sha256:f.dataset.questionSha||'',question_confirmed:true,guide_confirmed:true};
+    const result=await printPost('homework',body,180000);
+    if(!result.jobs?.question?.id||!result.jobs?.guide?.id)throw Error('打印回执不完整，请用原请求编号重试，避免重复打印');
+    sessionStorage.removeItem(homeworkPrintKey+':'+f.elements.task_id.value);$('#homeworkPrintDialog').close();
+    await refreshPrintJobs();page='print';render();toast('题目和家长参考已作为两份独立任务提交');
+  }catch(err){error.textContent=(err.message||'打印未完成')+'。已提交的部分不会因原编号重试而重复提交；请核对打印进展。'}
+  finally{homeworkPrintBusy=false;controls.forEach(c=>c.disabled=false)}
+});
+$('#homeworkPrintDialog')?.addEventListener('cancel',e=>{if(homeworkPrintBusy)e.preventDefault()});
 function countPrintPages(value,total){
   if(!Number.isInteger(total)||total<1||total>200||typeof value!=='string'||value.length>1000)throw Error('PDF页数或页码不正确');
   if(!value||value==='all')return total;

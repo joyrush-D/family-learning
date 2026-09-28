@@ -1924,9 +1924,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200,reading_store().mutate(path.removeprefix('/api/reading/'),obj))
             if path=='/api/print/prepare':
                 return self.reply(200,dict(preparation=print_store().prepare(obj.get('source'),obj.get('idempotency_key'))))
+            if path=='/api/print/homework/draft':
+                self.connection.settimeout(120)
+                image=print_store().image_for_draft(obj.get('question_source'))
+                try: draft=family_llm.homework_reference_draft(dict(mime=image['mime'],data=image['data']),data_path=DATA)
+                except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
+                return self.reply(200,dict(draft=draft,question_sha256=image['sha256']))
             if path=='/api/print/enqueue':
                 authorized_printer(obj.get('printer'),color=obj.get('color','monochrome'),sides=obj.get('sides','one-sided'))
                 return self.reply(200,dict(job=print_store().enqueue(obj)))
+            if path=='/api/print/homework':
+                authorized_printer(obj.get('printer'),color=obj.get('color','monochrome'),sides=obj.get('sides','one-sided'))
+                with connect() as c:
+                    task=next((t for t in tasks(c) if t['id']==obj.get('task_id')),None)
+                if task is None: raise family_print.PrintError('作业事项不存在，请刷新后核对','task_missing',404)
+                return self.reply(200,dict(jobs=print_store().homework_pair(obj,task)))
             if path=='/api/print/cancel': return self.reply(200,dict(job=print_store().cancel(obj.get('job_id'))))
             if path=='/api/print/received': return self.reply(200,dict(job=print_store().confirm_received(obj.get('job_id'),obj.get('note'))))
             if self.path=='/api/task/feedback': return self.reply(200,save_task_feedback(obj))

@@ -116,6 +116,30 @@ class PrintHTTPTests(unittest.TestCase):
         (app.DATA/'print'/(prep['id']+'.pdf')).write_bytes(b'%PDF-synthetic-tampering')
         self.assertEqual(self.request('GET',prep['preview_url'])[0],409)
 
+    def test_homework_pair_requires_parent_review_and_two_separate_jobs(self):
+        self.config()
+        task=app.new_task(dict(child='示例甲',title='虚构英语练习',due='2000-01-02',
+                               category='homework',request_key='synthetic_task_print_123'))
+        (app.DATA/'attachments'/'answer.png').write_bytes(PNG)
+        body=dict(task_id=task['id'],request_key='synthetic_pair_print_123',
+                  question_source=self.source,guide_source=dict(type='attachment',name='answer.png'),
+                  guide_text='',question_confirmed=True,guide_confirmed=True,printer=PRINTER['name'])
+        self.assertEqual(self.post('/api/print/homework',body,{})[0],403)
+        self.assertEqual(self.post('/api/print/homework',body|{'guide_confirmed':False})[0],400)
+        self.assertEqual(self.post('/api/print/homework',body|{'task_id':'missing'})[0],404)
+        status,_,result=self.post('/api/print/homework',body);self.assertEqual(status,200,result)
+        jobs=json.loads(result)['jobs'];self.assertNotEqual(jobs['question']['id'],jobs['guide']['id'])
+        self.assertEqual(json.loads(self.post('/api/print/homework',body)[2])['jobs'],jobs)
+        self.assertEqual(len(app.print_store().list_jobs()),2)
+
+    def test_reference_draft_reads_only_selected_image(self):
+        with patch.object(app.family_llm,'homework_reference_draft',return_value=dict(text='待核对草稿',items=1,coverage='一页')) as model:
+            status,_,body=self.post('/api/print/homework/draft',dict(question_source=self.source))
+        self.assertEqual(status,200,body);self.assertEqual(json.loads(body)['draft']['text'],'待核对草稿')
+        self.assertEqual(json.loads(body)['question_sha256'],hashlib.sha256(PNG).hexdigest())
+        self.assertEqual(model.call_count,1)
+        self.assertEqual(self.post('/api/print/homework/draft',dict(question_source=dict(type='url',url='https://example.invalid')))[0],400)
+
     def test_confirmed_hash_authorized_capabilities_and_repeat_clicks(self):
         options=self.options()
         self.assertEqual(self.post('/api/print/enqueue',options)[0],403)

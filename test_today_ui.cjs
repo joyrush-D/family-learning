@@ -49,6 +49,7 @@ function fixtures(base){
    p.on('pageerror',e=>errors.push(e.message));p.on('request',r=>resources.push(new URL(r.url()).pathname));
    try{
     const state=fixtures(await read()),homework=p.locator('#task-group-homework'),todos=p.locator('#task-group-todo');
+    state.attachments=['虚构题目.png','虚构答案.pdf'];state.printing={printers:[{name:'Synthetic_Printer',label:'虚构打印机',color:false,duplex:false}],jobs:[]};
     state.agent.items.find(i=>i.id==='synthetic-school').title='待核对：⚠️重要通知⚠️\n\n请准备虚构活动材料。';
     state.agent.items.push({id:'synthetic-reference',kind:'school',child_id:state.children[0].id,state:'pending',title:'虚构成绩表说明',body:'第一列表示课堂默写记录。',evidence:[],plan:{school_task:{state:'reference',reason:'这段内容解释列标题，没有新作业。'}}});
     const card=id=>p.locator('[data-query-target="task:'+id+'"]');
@@ -97,7 +98,25 @@ function fixtures(base){
      assert.equal(await p.locator('#content h1').innerText(),title,'more opens '+page);assert.equal(await p.locator('nav [data-page="more"]').getAttribute('class'),'active');if(['learning','growth','reading'].includes(page)){assert.equal(await p.locator('.child-filters button').count(),state.children.length+1);await p.locator('[data-child-filter="'+state.children[1].id+'"]').click();assert.equal(await p.locator('[data-child-filter="'+state.children[1].id+'"]').getAttribute('aria-pressed'),'true');await p.locator('[data-child-filter=""]').click()}await fit(p);
     }
     assert.deepEqual(errors,[]);
-    checks.push({width,kind:'classification',homeworkAndTodo:true,deadlinesCarryForward:true,wishesAndFuturePlansExcluded:true,pendingSeparate:true,childIsolation:true,sharedCalendar:true,fourNavigationItems:true,moreEntriesReachable:true,noThree:true,taskTop:position.y,noOverflow:true});
+    let printAttempts=0,draftCalls=0;const printBodies=[];
+    await p.route('**/api/print/homework/draft',r=>{draftCalls++;return r.fulfill({status:200,contentType:'application/json',body:JSON.stringify({draft:{text:'虚构第1题：B。\n先找原文依据，再让孩子独立回答。',items:1,coverage:'一页'},question_sha256:'a'.repeat(64)})})});
+    await p.route('**/api/print/homework',async route=>{printBodies.push(route.request().postDataJSON());printAttempts++;
+      await route.fulfill({status:printAttempts===1?503:200,contentType:'application/json',body:JSON.stringify(printAttempts===1?{error:'虚构打印失败'}:{jobs:{question:{id:'1'.repeat(32)},guide:{id:'2'.repeat(32)}}})})});
+    await p.locator('nav [data-page="home"]').click();
+    await p.locator('[data-child-filter=""]').click();
+    await p.locator('[data-query-target="task:TODAY"] [data-homework-print]').click();
+    const printForm=p.locator('#homeworkPrintForm');await printForm.locator('[name="question_source"]').selectOption({label:'虚构题目.png'});
+    await p.locator('#homeworkDraftButton').click();await eventually(async()=>await printForm.locator('[name="guide_text"]').inputValue()==='虚构第1题：B。\n先找原文依据，再让孩子独立回答。','draft filled');
+    await p.reload();await ready(p);await p.locator('[data-query-target="task:TODAY"] [data-homework-print]').click();
+    assert.equal(await printForm.locator('[name="guide_text"]').inputValue(),'虚构第1题：B。\n先找原文依据，再让孩子独立回答。');assert.equal(draftCalls,1,'reopen never calls the model again');
+    await printForm.locator('[name="question_confirmed"]').check();await printForm.locator('[name="guide_confirmed"]').check();await fit(p);
+    await proof(p,'homework-print-dialog-'+width);
+    await printForm.locator('[type="submit"]').click();await eventually(async()=>await printForm.locator('[type="submit"]').isEnabled(),'failed pair remains editable');
+    assert.match(await p.locator('#homeworkPrintError').innerText(),/虚构打印失败/);
+    await printForm.locator('[type="submit"]').click();await eventually(async()=>!await p.locator('#homeworkPrintDialog').isVisible(),'pair retried');
+    assert.equal(printAttempts,2);assert.equal(printBodies[0].request_key,printBodies[1].request_key);
+    assert.equal(printBodies[0].guide_source,null);assert.equal(printBodies[0].expected_question_sha256,'a'.repeat(64));assert.equal(await p.locator('body').getAttribute('data-page'),'print');
+    checks.push({width,kind:'classification',homeworkAndTodo:true,deadlinesCarryForward:true,wishesAndFuturePlansExcluded:true,pendingSeparate:true,childIsolation:true,sharedCalendar:true,fourNavigationItems:true,moreEntriesReachable:true,noThree:true,taskTop:position.y,noOverflow:true,pairRetry:true});
    }finally{await p.close()}
 
    // A backfilled school notice keeps its original publication day; processing order must not bury recent notices.

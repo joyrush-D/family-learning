@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 import zlib
 import family_print as printing
+import family_llm
 import print_bridge
 
 
@@ -58,6 +59,38 @@ class PrintTests(unittest.TestCase):
         (self.data/'attachments'/'sample.png').write_bytes(png(3))
         with self.assertRaises(printing.PrintError):self.prepared()
         self.assertNotEqual(self.prepared('prepare_key_2')['id'],first['id'])
+
+    def test_homework_pair_is_two_jobs_and_retry_does_not_reprint(self):
+        (self.data/'attachments'/'guide.png').write_bytes(png(3))
+        task=dict(id='TASK-1',title='虚构练习')
+        request=dict(task_id='TASK-1',request_key='homework_pair_123',question_source=self.source,
+                     guide_source=dict(type='attachment',name='guide.png'),guide_text='',
+                     question_confirmed=True,guide_confirmed=True,printer='Synthetic_Printer')
+        first=self.store.homework_pair(request,task)
+        self.assertNotEqual(first['question']['id'],first['guide']['id'])
+        self.assertEqual(first,self.store.homework_pair(request,task))
+        self.assertEqual(len(self.store.list_jobs()),2)
+        with self.assertRaises(printing.PrintError):
+            self.store.homework_pair({**request,'guide_source':self.source},task)
+        with self.assertRaises(printing.PrintError):
+            self.store.homework_pair({**request,'request_key':'homework_pair_other','expected_question_sha256':'0'*64},task)
+        self.assertEqual(len(self.store.list_jobs()),2)
+
+    def test_homework_pair_refuses_unreviewed_reference(self):
+        request=dict(task_id='TASK-1',request_key='homework_pair_456',question_source=self.source,
+                     guide_source=None,guide_text='',question_confirmed=True,guide_confirmed=False,
+                     printer='Synthetic_Printer')
+        with self.assertRaises(printing.PrintError):
+            self.store.homework_pair(request,dict(id='TASK-1',title='虚构练习'))
+        self.assertEqual(self.store.list_jobs(),[])
+
+    def test_homework_reference_draft_stays_reviewable(self):
+        result=dict(items=[dict(label='第1题',question='虚构题面',answer='B',steps='先找原文依据。',uncertainty='')],coverage='仅此一页')
+        with patch.object(family_llm,'_chat_json',return_value=result):
+            draft=family_llm.homework_reference_draft(dict(mime='image/png',data=png()))
+        self.assertIn('待核对',draft['text']);self.assertIn('第1题',draft['text']);self.assertIn('先找原文依据',draft['text'])
+        with patch.object(family_llm,'_chat_json',return_value={'items':[dict(result['items'][0],answer='错\n误')],'coverage':'仅此一页'}),self.assertRaises(family_llm.LLMDraftError):
+            family_llm.homework_reference_draft(dict(mime='image/png',data=png()))
 
     def test_pdf_tampering_prevents_confirmation(self):
         prep=self.prepared();(self.data/'print'/(prep['id']+'.pdf')).write_bytes(b'%PDF-replaced')

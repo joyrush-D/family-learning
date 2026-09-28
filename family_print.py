@@ -17,6 +17,7 @@ import time
 import zipfile
 import zlib
 import xml.etree.ElementTree as ET
+from xml.sax.saxutils import escape
 
 from family_wechat_media import MediaError, bounded_process
 
@@ -349,6 +350,13 @@ class PrintStore:
             raise PrintError('附件路径不正确')
         return name, _read_file(path, MAX_SOURCE)
 
+    def image_for_draft(self, source):
+        name, data = self._source(source)
+        mime = 'image/jpeg' if name.lower().endswith(('.jpg','.jpeg')) and data.startswith(b'\xff\xd8') else 'image/png' if name.lower().endswith('.png') and data.startswith(b'\x89PNG') else ''
+        if not mime: raise PrintError('参考草稿目前只支持一张JPG或PNG题目；PDF、Word可先打印并手动填写核对过的参考')
+        (_jpeg if mime=='image/jpeg' else _png)(data)
+        return dict(mime=mime,data=data,sha256=_hash(data))
+
     def _page_count(self, path):
         if not self.pdfinfo:
             raise PrintError('未配置PDF页数工具，请下载原件；暂不能确认打印', 'preview_unavailable', 503)
@@ -382,6 +390,44 @@ class PrintStore:
     def prepare(self, source, idempotency_key):
         key = _key(idempotency_key)
         name, data = self._source(source)
+        return self._prepare_bytes(name, data, source, key)
+
+    def prepare_guide(self, title, text, idempotency_key):
+        """Prepare a separate parent-only answer sheet after the parent has checked its text."""
+        key = _key(idempotency_key)
+        def invalid_xml(value):
+            return any(ord(ch) < 32 and ch not in '\n\t' or ord(ch) == 127 or 0xd800 <= ord(ch) <= 0xdfff or ord(ch) in (0xfffe,0xffff) for ch in value)
+        if not isinstance(title, str) or not title.strip() or len(title) > 200 or invalid_xml(title):
+            raise PrintError('作业标题不正确')
+        if not isinstance(text, str) or not text.strip() or len(text) > 12000 or invalid_xml(text):
+            raise PrintError('参考答案与指南须由家长核对，且不超过12000字')
+        paragraphs = ['家长参考答案与辅导指南', title.strip(),
+                      '仅供家长核对使用；答案与原题有冲突时以原题和老师要求为准。', *text.strip().splitlines()]
+        document = ''.join('<w:p><w:r><w:rPr><w:rFonts w:eastAsia="PingFang SC"/></w:rPr>'
+                           '<w:t xml:space="preserve">'+escape(line or ' ')+'</w:t></w:r></w:p>'
+                           for line in paragraphs)
+        docx = io.BytesIO()
+        with zipfile.ZipFile(docx, 'w', zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8"?>'
+                '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                '<Default Extension="xml" ContentType="application/xml"/>'
+                '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+                '</Types>')
+            archive.writestr('_rels/.rels', '<?xml version="1.0" encoding="UTF-8"?>'
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+                '</Relationships>')
+            archive.writestr('word/document.xml', '<?xml version="1.0" encoding="UTF-8"?>'
+                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                '<w:body>'+document+'<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
+                '<w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr>'
+                '</w:body></w:document>')
+        name='家长参考-'+re.sub(r'[\\/\x00-\x1f\x7f]', '_', title.strip())[:60]+'.docx'
+        return self._prepare_bytes(name, docx.getvalue(),
+                                   dict(type='parent_guide', title=title.strip()), key)
+
+    def _prepare_bytes(self, name, data, source, key):
         fingerprint = _hash(_json([source, _hash(data)]).encode())
         with self._db() as c:
             old = c.execute('SELECT * FROM print_preparations WHERE idem=?', (key,)).fetchone()
@@ -404,10 +450,42 @@ class PrintStore:
             return body
         except sqlite3.IntegrityError:
             target.unlink(missing_ok=True)
-            return self.prepare(source, key)
+            with self._db() as c:
+                old = c.execute('SELECT * FROM print_preparations WHERE idem=?', (key,)).fetchone()
+            if not old or old['fingerprint'] != fingerprint:
+                raise PrintError('同一请求的附件已变化，请重新预览', 'conflict', 409)
+            self.preview(old['id'])
+            return json.loads(old['body'])
         except Exception:
             target.unlink(missing_ok=True)
             raise
+
+    def homework_pair(self, obj, task):
+        """One reviewed action queues two independent jobs; retries keep each original request key."""
+        if not isinstance(obj, dict) or obj.get('question_confirmed') is not True or obj.get('guide_confirmed') is not True:
+            raise PrintError('请分别核对作业题目和家长参考')
+        if not isinstance(task, dict) or obj.get('task_id') != task.get('id'):
+            raise PrintError('作业事项已变化，请刷新后核对', 'conflict', 409)
+        key = _key(obj.get('request_key'))
+        question = obj.get('question_source')
+        guide = obj.get('guide_source')
+        guide_text = obj.get('guide_text', '')
+        if (guide is None) == (not bool(guide_text)):
+            raise PrintError('请选择参考文件，或填写已核对的参考答案与指南')
+        if guide is not None and guide == question:
+            raise PrintError('题目与家长参考须选两份不同的资料')
+        settings = {k: obj.get(k, v) for k, v in dict(printer='', copies=1, sides='one-sided', color='monochrome').items()}
+        subkey = lambda role: _hash((key+':'+role).encode())[:32]
+        first = self.prepare(question, subkey('question_prepare'))
+        expected = obj.get('expected_question_sha256', '')
+        if expected and (not isinstance(expected,str) or not re.fullmatch(r'[a-f0-9]{64}',expected) or expected!=first['source_sha256']):
+            raise PrintError('题目原件与参考草稿生成时不同，请重新核对答案','conflict',409)
+        second = (self.prepare(guide, subkey('guide_prepare')) if guide is not None else
+                  self.prepare_guide(task['title'], guide_text, subkey('guide_prepare')))
+        def queue(prep, role):
+            return self.enqueue(dict(settings, confirmed=True, preparation_id=prep['id'],
+                                     pdf_sha256=prep['pdf_sha256'], idempotency_key=subkey(role+'_enqueue')))
+        return dict(question=queue(first, 'question'), guide=queue(second, 'guide'))
 
     def preparation(self, ident):
         with self._db() as c: row = c.execute('SELECT body FROM print_preparations WHERE id=?', (_id(ident),)).fetchone()
