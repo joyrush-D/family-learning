@@ -932,6 +932,14 @@ def save_task(obj, connection=None):
 def save_task_feedback(obj):
     """Feedback on an existing task is one ordinary record (source='事项:<id>'); completion changes only when asked."""
     task_id=clean(obj,'task_id',30);child=clean(obj,'child',100)
+    basis=obj.get('review_basis')
+    if basis is not None and (not isinstance(basis,dict) or set(basis)!={'record_id','created','photo_ids'}
+        or type(basis['record_id']) is not int or not 0<basis['record_id']<=9223372036854775807 or not isinstance(basis['created'],str)
+        or not basis['created'] or len(basis['created'])>40 or not isinstance(basis['photo_ids'],list)
+        or not 1<=len(basis['photo_ids'])<=4
+        or any(not isinstance(i,str) or not re.fullmatch(r'[a-f0-9]{32}',i) for i in basis['photo_ids'])
+        or len(set(basis['photo_ids']))!=len(basis['photo_ids'])):
+        raise RecordError('批改所依据的原作答格式不正确，请重新核对',400,'review_basis_invalid')
     complete=obj.get('complete',False)
     if type(complete) is not bool: raise RecordError('请明确选择是否确认本次任务完成')
     ident=obj.get('record_id')
@@ -952,6 +960,7 @@ def save_task_feedback(obj):
         # A retry keeps the title saved the first time, so a task retitled in between is not a different submission.
         titled=previous or (c.execute('SELECT title FROM records WHERE request_key=?',(request_key,)).fetchone() if request_key else None)
         record=dict(child=child,source=source,title=titled['title'] if titled else ('反馈：'+task['title'])[:200])
+        if basis is not None: record['review_basis']=basis  # Include the basis in the retry fingerprint.
         for key,limit in [('day',10),('category',20),('subject',80),('note',4000),('transcript',4000),('transcript_state',10),('assistance',30)]:
             record[key]=clean(obj,key,limit) if key in obj or previous is None else previous[key]
         record['category']=record['category'] or '学习进展'
@@ -978,6 +987,14 @@ def save_task_feedback(obj):
             # The explicit completion choice is part of the submission, so one key cannot later carry a different choice.
             else: record.update(request_key=request_key,completion=dict(complete=complete,note=completion_note))
             result=_save_record(record,False,{},c);key_replay=result['replayed']
+        if basis is not None and not key_replay:
+            original=c.execute('SELECT child,source,linked_task_id,created,attachments FROM records WHERE id=?',(basis['record_id'],)).fetchone()
+            if (original is None or names.get(original['child'])!=task['child']
+                or original['source']!=source and original['linked_task_id']!=task_id
+                or original['created']!=basis['created']
+                or not set(basis['photo_ids']).issubset(json.loads(original['attachments']))
+                or not set(basis['photo_ids']).issubset(attachments)):
+                raise RecordError('原作答已在别处更正；批改依据需要重新核对，本次反馈未保存',409,'review_basis_changed')
         changed=False
         if complete and not key_replay:
             update=c.execute('SELECT status FROM task_updates WHERE id=?',(task_id,)).fetchone()

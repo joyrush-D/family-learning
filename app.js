@@ -555,7 +555,7 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
    const label=document.createElement('label');label.textContent='逐题核对并修改批改意见';const area=document.createElement('textarea');area.maxLength=12000;area.rows=12;area.value=out.draft.text;label.append(area);result.append(label);
    const confirm=document.createElement('label');confirm.className='print-file-check';confirm.innerHTML='<input type="checkbox" data-homework-review-confirm><span>已对照原题和孩子最终作答核对；不确定项仍标为未判定</span>';result.append(confirm);
    const apply=document.createElement('button');apply.type='button';apply.dataset.homeworkReviewApply=String(recordId);apply.textContent='填入待保存反馈';result.append(apply);
-   result.dataset.photoIds=JSON.stringify(ids);status.textContent=`草稿共${out.draft.items}题，其中${out.draft.wrong_items}题疑似错误、${out.draft.unknown_items}题未判定；请逐题核对。`;
+   result.dataset.photoIds=JSON.stringify(ids);result.dataset.recordCreated=record.created;status.textContent=`草稿共${out.draft.items}题，其中${out.draft.wrong_items}题疑似错误、${out.draft.unknown_items}题未判定；请逐题核对。`;
   }catch(error){if(serial===homeworkReviewSerial)status.textContent=(error.message||'批改暂不可用')+'；原反馈和照片已保存。结果不明时再次点击可能再次调用模型。'}
   finally{homeworkReviewBusy=false;if(serial===homeworkReviewSerial)button.disabled=false}
   return;
@@ -576,6 +576,7 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
   data.uploads.unshift(upload.attachment);
   if(taskFeedbackDraftState()!==inputState)throw Error('反馈输入在上传期间已变化；核对文字已保存为原件，当前填写未覆盖');
   pendingIDs=[...ids,upload.attachment.id];drawPending();
+  taskFeedbackContext.review_basis={record_id:recordId,created:result.dataset.recordCreated,photo_ids:ids};
   f.elements.note.value='家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #'+recordId+'。';
   status.textContent='已填入待保存反馈；请点下方“保存反馈”。作业完成状态不会改变。';button.disabled=true;area.disabled=true;
  }catch(error){status.textContent=(error.name==='AbortError'?'文字原件上传超时':error.message||'文字原件未保存')+'；草稿仍在，可重试。';editing.forEach(x=>x.disabled=false);button.disabled=false}
@@ -803,7 +804,8 @@ $('#saveTaskFeedback').onclick=async()=>{
   if(!f.elements.note.value.trim()&&!pendingIDs.length&&!text){$('#taskError').textContent='请录音、选择原件或写一句反馈。';return}
   if(unappliedHomeworkReviewDraft()&&!confirm('还有未保存的 AI 批改草稿。保存本次反馈会放弃它，确定继续？'))return;
   taskFeedbackPending={task_id:ctx.task_id,child:ctx.child,day:$('#taskFeedbackDay').value,category:ctx.category,note:f.elements.note.value,attachments:[...pendingIDs],transcript:text,transcript_state:text?$('#taskTranscriptState').value:'',...(!$('#taskAssistanceLabel').hidden?{assistance:$('#taskAssistance').value}:{}),
-   ...(ctx.record_id?{record_id:ctx.record_id,expected_created:ctx.expected_created}:{request_key:ctx.request_key})};
+   ...(ctx.record_id?{record_id:ctx.record_id,expected_created:ctx.expected_created}:{request_key:ctx.request_key}),
+   ...(ctx.review_basis?{review_basis:ctx.review_basis}:{})};
  }
  const body=taskFeedbackPending;f.dataset.saving='yes';lockTaskFeedback(true);$('#saveTaskFeedback').textContent='正在保存反馈…';$('#taskError').textContent='';$('#taskFeedbackStatus').textContent='';
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);let knownFailure=false;
