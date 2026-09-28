@@ -128,6 +128,7 @@ body[data-page=home] .top,body[data-page=calendar] .top,body[data-page=tasks] .t
 
 .upload-item video{display:block;width:100%;max-height:320px;margin-top:8px;background:#000;border-radius:10px}.video-draft{margin-top:8px}.video-draft button{margin:4px 8px 4px 0}.video-observations{padding-left:20px;margin:6px 0}.video-observations li{margin:4px 0;overflow-wrap:anywhere}
 .media-tools{display:flex;align-items:end;gap:8px;flex-wrap:wrap;margin-top:8px}.media-tools label{margin:0;min-width:130px}.media-tools select{margin-top:3px}.media-tools button{min-height:44px}
+#taskAssistanceLabel[hidden]{display:none}
 [data-qq-files] .task-goal p{overflow-wrap:anywhere}
 #homeworkPrintForm label:has(input[type=checkbox]){display:flex;align-items:center;gap:10px;min-height:44px}
 #homeworkPrintForm input[type=checkbox]{width:20px;height:20px;min-height:20px;flex:none;margin:0;accent-color:var(--green)}
