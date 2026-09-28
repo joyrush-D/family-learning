@@ -882,7 +882,8 @@ def homework_reference_draft(image, *, data_path=None, timeout=90):
 逐题保留可见题号及足以核对的题干；看不清、缺页、图表不全或题意不明时，answer和steps留空，在uncertainty写明，不猜题也不从选项反推缺失条件。
 能独立核算的题写简短答案及推理；阅读题要给原文依据，接受合理同义表达。steps说明先让孩子独立尝试、再给一个轻提示，必要时讲一处相似步骤，最后让孩子自己完成；不要代写主观作文或声称孩子已经掌握。
 coverage说明这张图片覆盖到哪部分及明显未读内容；不得声称已读取其他页、老师标准答案或孩子作答。所有结果仅是草稿，必须由家长对照原题核对后才可打印为家长参考。不要输出其他学生信息、心理或能力诊断。'''
-    result=_chat_json([dict(role='system',content=prompt),dict(role='user',content=[dict(type='text',text='请整理这张作业图片。'),dict(type='image_url',image_url=dict(url='data:'+image['mime']+';base64,'+base64.b64encode(image['data']).decode('ascii')))])],
+    preview=_model_image(image)
+    result=_chat_json([dict(role='system',content=prompt),dict(role='user',content=[dict(type='text',text='请整理这张作业图片。'),dict(type='image_url',image_url=dict(url='data:'+preview['mime']+';base64,'+base64.b64encode(preview['data']).decode('ascii')))])],
                       schema,'family_homework_reference',timeout,data_path=data_path)
     if not isinstance(result,dict) or set(result)!={'items','coverage'} or not isinstance(result['items'],list) or not 1<=len(result['items'])<=25:
         raise LLMDraftError('参考草稿结构不完整，请手动核对原题')

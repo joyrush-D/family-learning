@@ -89,6 +89,10 @@ class PrintTests(unittest.TestCase):
         with patch.object(family_llm,'_chat_json',return_value=result):
             draft=family_llm.homework_reference_draft(dict(mime='image/png',data=png()))
         self.assertIn('待核对',draft['text']);self.assertIn('第1题',draft['text']);self.assertIn('先找原文依据',draft['text'])
+        with patch.object(family_llm,'_model_image',return_value=dict(mime='image/jpeg',data=b'preview')) as preview, patch.object(family_llm,'_chat_json',return_value=result) as chat:
+            family_llm.homework_reference_draft(dict(mime='image/png',data=png()))
+        preview.assert_called_once()
+        self.assertIn('data:image/jpeg;base64,',chat.call_args.args[0][1]['content'][1]['image_url']['url'])
         with patch.object(family_llm,'_chat_json',return_value={'items':[dict(result['items'][0],answer='错\n误')],'coverage':'仅此一页'}),self.assertRaises(family_llm.LLMDraftError):
             family_llm.homework_reference_draft(dict(mime='image/png',data=png()))
 
