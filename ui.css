@@ -114,6 +114,7 @@ nav button .nav-symbol{display:inline-block;margin-right:10px}
 body[data-page=home] .top,body[data-page=calendar] .top,body[data-page=tasks] .top,body[data-page=more] .top{display:none}
 .tasktools>button:not(.primary){border-color:#3c5269;background:#1c2c41;color:var(--ink)}.tasktools>button:not(.primary):hover{background:#283d53;border-color:#547d85}.task-more .tasktools>button{margin-bottom:4px}
 .agenda-group>h2 .review-badge{display:inline-block;margin-left:8px;font-weight:400}.school-review{margin-top:12px}.task-goal>.small,.task-reference>summary{color:#b8c8dc}
+.today-backlog>summary{min-height:44px;padding:10px 0;cursor:pointer}
 @media(max-width:850px){.today-controls{position:sticky;top:0;z-index:2;background:var(--paper);padding:6px 0}.today-task-groups .agenda-group{scroll-margin-top:118px}.today-controls .today-sections{gap:5px}}
 
 /* The week remains visible; full task actions are shared in the day details. */
