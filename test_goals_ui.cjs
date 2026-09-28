@@ -147,6 +147,17 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'candidate list fits the viewport');
   assert.equal(await history.locator('button,select').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'candidate buttons remain touchable');
   if(process.env.GOALS_UI_PROOF_DIR)await history.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'word-retest-'+width+'.png')});
+  await retestForm.locator('[name="word_result_read_meaning"]').selectOption('本次独立答对');
+  await retestForm.locator('[name="note"]').fill('虚构九天后新题：没有提示，独立选出书。');
+  await retestForm.getByRole('button',{name:'保存本词核对',exact:true}).click();
+  await reopenWordHistory();
+  const afterRetest=(await(await p.request.get(url+'api/goals')).json()).goals.find(g=>g.id===wordSnapshot.id);
+  const bookChecks=afterRetest.word_history.checks.filter(c=>c.word==='book'&&c.meaning==='书');
+  assert.equal(bookChecks.length,2,'the older answer and new interval attempt remain separate');
+  assert.deepEqual(bookChecks.map(c=>c.phase).sort(),['首次核对','间隔后复测'].sort());
+  assert.equal(bookChecks.find(c=>c.phase==='间隔后复测').results.read_meaning,'本次独立答对');
+  assert.deepEqual(afterRetest.current_plan,wordSnapshot.current_plan,'the retest does not change the confirmed plan');
+  assert.equal((await(await p.request.get(url+'api/state')).json()).tasks.length,tasksBefore,'the retest does not create a task');
   await draftWord.fill('');checks++;
   // Read-only child profile: aggregates the child's reached-independence directions (and any judgments) with links to the original record.
   const profSeed=(day,check,suf)=>p.request.post(url+'api/goals/action',{headers:{'X-Family-Token':historyAuth},data:{action:'feedback',id:wordSnapshot.id,request_key:'synthetic-profile-'+width+'-'+suf,day,source:'家长观察',note:'',word_check:check}});
