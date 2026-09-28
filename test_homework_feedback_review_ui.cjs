@@ -48,6 +48,12 @@ async function server(){
   state=await(await fetch(host.url+'api/state')).json();const records=state.records.filter(r=>r.source==='事项:'+id);assert.equal(records.length,2);assert.equal(state.tasks.find(t=>t.id===id).update,null,'grading must not complete homework');
   const photo=records[0].attachments[0],review=records.find(r=>r.note.includes('批改参考'));assert(review.attachments.includes(photo));const report=review.attachments.find(a=>a!==photo);assert.equal(state.uploads.find(a=>a.id===report).mime,'text/plain; charset=utf-8');
   await p.keyboard.press('Escape');await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskFeedbackHistory').getByText('作业批改参考', {exact:false}).first().waitFor();
+  const firstReview=p.locator('#taskFeedbackHistory [data-homework-review]').nth(0),otherReview=p.locator('#taskFeedbackHistory [data-homework-review]').nth(1);assert.equal(await p.locator('#taskFeedbackHistory [data-homework-review]').count(),2);
+  await firstReview.locator('details').evaluate(x=>x.open=true);await firstReview.locator('[data-homework-review-photo]').first().check();await firstReview.locator('[data-homework-review-run]').click();await firstReview.locator('[data-homework-review-result] textarea').waitFor();await firstReview.locator('[data-homework-review-result] textarea').fill('');
+  await otherReview.locator('details').evaluate(x=>x.open=true);await otherReview.locator('[data-homework-review-photo]').first().check();await otherReview.locator('[data-homework-review-run]').click();await otherReview.locator('[data-homework-review-result] textarea').waitFor();
+  await otherReview.locator('[data-homework-review-result] textarea').fill('另一份尚未保存的批改意见');
+  p.once('dialog',d=>d.dismiss());await p.locator('#taskDialog [data-close="taskDialog"]').click();
+  assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'every feedback review draft requires discard confirmation');
   await p.locator('[data-task-feedback-edit]').first().click();
   await p.locator('#taskDialog [data-close="taskDialog"]').click();
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),false,'unchanged feedback closes without warning');

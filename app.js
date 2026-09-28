@@ -506,7 +506,7 @@ function taskFeedbackDraftState(){
  const f=$('#taskForm');
  return JSON.stringify([f.elements.note.value,$('#taskTranscript').value,$('#taskTranscriptState').value,$('#taskFeedbackDay').value,$('#taskAssistance').value,f.elements.status.value,pendingIDs,failedFiles.map(file=>[file.name,file.size])]);
 }
-function taskFeedbackDraftChanged(){return !!taskFeedbackContext&&(taskFeedbackDraftState()!==taskFeedbackContext.initial||!!$('#taskFeedbackHistory [data-homework-review-result] textarea')?.value.trim())}
+function taskFeedbackDraftChanged(){return !!taskFeedbackContext&&(taskFeedbackDraftState()!==taskFeedbackContext.initial||[...document.querySelectorAll('#taskFeedbackHistory [data-homework-review-result] textarea')].some(x=>x.value.trim()))}
 function taskCloseAllowed(){
  if(captureBusy()||taskFeedbackPending){toast('请先完成当前保存或录音');return false}
  return !taskFeedbackDraftChanged()||confirm('这次反馈或状态尚未保存，确定放弃？已上传原件仍保存在资料库。');
