@@ -170,6 +170,33 @@ class MediaTests(unittest.TestCase):
                       (ident, 'synthetic.png', len(body), 'image/png', self.now.isoformat()))
         return ident
 
+    def test_answer_post_exposes_only_adjacent_originals_for_review(self):
+        upload = self.seed_upload()
+        original = dict(self.message('file', offset=0), text='[包含未读取的非文字内容]')
+        answer = dict(self.message('answer', kind='text', unread=False, offset=1),
+                      text='以上是今天要订正的语文作业答案')
+        self.ingest(original); self.ingest(answer)
+        with self.store._db() as c:
+            c.execute('INSERT INTO agent_message_attachments VALUES(?,?,?)',
+                      (self.source['id'], 'file', upload))
+            c.execute('INSERT INTO agent_messages(source_id,id,payload) VALUES(?,?,?)',
+                      (self.source['id'], 'legacy', json.dumps(dict(id='legacy',time=''))))
+        identity = dict(child_id='child-1', source_id=self.source['id'], message_id='answer')
+        view = self.store.message(identity, lambda row: dict(row))
+        self.assertEqual(view['attachments'], [])
+        self.assertEqual(view['nearby_materials'][0]['message_id'], 'file')
+        self.assertEqual(view['nearby_materials'][0]['names'], ['synthetic.png'])
+        self.assertEqual(self.db_rows('SELECT * FROM manual_tasks'), [])  # Finding a reference creates no homework.
+        unrelated = dict(self.message('unrelated', kind='text', unread=False, offset=2),
+                         text='今天语文作业答案')
+        self.ingest(unrelated)
+        self.assertEqual(self.store.message(dict(identity, message_id='unrelated'), lambda row: dict(row))['nearby_materials'], [])
+        other = dict(self.message('other', kind='text', unread=False, offset=3),
+                     sender='另一位发言人', text='插入的群消息')
+        later = dict(answer, id='later', time=(self.now + dt.timedelta(minutes=4)).isoformat())
+        self.ingest(other); self.ingest(later)
+        self.assertEqual(self.store.message(dict(identity, message_id='later'), lambda row: dict(row))['nearby_materials'], [])
+
     def test_image_saved_once_replay_detach_and_payload_unchanged(self):
         message = self.message(); self.ingest(message)
         before = self.db_rows('SELECT child,day,title,note,source FROM records') + self.db_rows('SELECT * FROM manual_tasks')

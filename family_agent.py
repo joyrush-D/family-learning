@@ -760,10 +760,43 @@ class Store:
         return dict(child_id=source['child_id'], source_id=source['id'], message_id=message['id'],
                     source_name=source['name'], message=message, attachments=attachments,
                     unavailable_attachment_ids=unavailable,
+                    nearby_materials=self._nearby_materials(c, source, message),
                     media=family_media.collection_view(self,c,source,message,attachments),
                     material_draft=family_media.draft_view(self,c,source,message),
                     pdf_material=family_pdf_material.view(self,c,source,message),
                     pages=self._message_pages(c, source, message))
+
+    def _nearby_materials(self, c, source, message):
+        """Show preceding file-only posts when a sender explicitly says 'above'. No task/source rewrite."""
+        if not re.match(r'^以上.{0,24}(?:答案|资料)', message['text'].strip()) or not message['sender']:
+            return []
+        try:
+            current = dt.datetime.fromisoformat(message['time'])
+            if current.tzinfo is None: return []
+        except (KeyError, TypeError, ValueError):
+            return []
+        preceding = []
+        for row in c.execute('SELECT id,payload FROM agent_messages WHERE source_id=?', (source['id'],)):
+            try:
+                prior = json.loads(row['payload'])
+                sent = dt.datetime.fromisoformat(prior['time'])
+                if sent.tzinfo is None: continue
+                gap = (current - sent).total_seconds()
+                if 0 < gap <= 120: preceding.append((sent, row['id'], prior))
+            except (KeyError, TypeError, ValueError):
+                continue
+        result = []
+        for _, ident, prior in sorted(preceding, reverse=True):
+            if prior.get('sender') != message['sender'] or _COLLECTOR_PLACEHOLDER.sub('', prior.get('text') or '').strip(): break
+            names = []
+            for row in c.execute('SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=?',
+                                 (source['id'], ident)):
+                try: names.append(self._message_upload(c, source['child_id'], row['upload_id'])['name'])
+                except AgentError: continue
+            if not names: break
+            result.append(dict(message_id=ident, time=prior['time'], names=names))
+            if len(result) == 3: break  # ponytail: three adjacent files cover the current flow; widen if real groups need more.
+        return result
 
     def message(self, obj, upload_info):
         if not isinstance(obj, dict) or set(obj) != {'child_id', 'source_id', 'message_id'}:

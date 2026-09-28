@@ -45,9 +45,15 @@ with tempfile.TemporaryDirectory(prefix='synthetic-page-ui-') as tmp:
    'flaky':'虚构重试通知 '+str(width)+'：'+base+'flaky/'+str(width)+';',
    'iso':'虚构隔离通知 '+str(width)+'："'+base+'iso/'+str(width)+'"'}
   for key,text in texts.items(): messages.append(dict(id=key+':'+str(width),time=now.isoformat(),kind='text',sender='虚构老师',text=text,unread=True))
+  offset=-110 if width==360 else -50
+  messages.append(dict(id='material:'+str(width),time=(now+datetime.timedelta(seconds=offset)).isoformat(),kind='text',sender='虚构老师',text='[包含未读取的非文字内容]',unread=True))
+  messages.append(dict(id='answer:'+str(width),time=(now+datetime.timedelta(seconds=offset+11)).isoformat(),kind='text',sender='虚构老师',text='以上是今天要订正的虚构作业答案',unread=False))
  store.ingest(dict(source_id='synthetic',expected_cursor='',cursor='cursor-1',checked_at=now.isoformat(),last_message_time=now.isoformat(),messages=messages,error=''))
  for m in messages:
   key,width=m['id'].split(':')
+  if key=='material':
+   store.message_attachment(dict(child_id='child-1',source_id='synthetic',message_id=m['id'],attachment_id=attached['id'],action='attach'),dict)
+   continue
   store._save('school:'+m['id'],'fixture',[dict(child_id='child-1',kind='school',title='虚构'+key+'通知 '+width,body='请核对通知里的网址。',due=today,evidence=[{'ref':'message:synthetic:'+m['id'],'text':m['text']}])],now)
   if key=='other': store.message_attachment(dict(child_id='child-1',source_id='synthetic',message_id=m['id'],attachment_id=attached['id'],action='attach'),dict)
  store._runtime('ready',now)
@@ -67,7 +73,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-page-ui-') as tmp:
   const page=await browser.newPage({viewport:{width,height:820},extraHTTPHeaders:{'Tailscale-User-Login':'synthetic-parent'}}),pageErrors=[];page.on('pageerror',e=>pageErrors.push(e.message));
   const posts=[];page.on('request',r=>{if(r.url().includes('/api/agent/message/page')&&r.method()==='POST')posts.push(r.postDataJSON())});
   await page.goto('http://family.test:'+port+'/');await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();
-  const st=await state(),items=Object.fromEntries(['link','other','flaky','iso'].map(k=>[k,st.agent.items.find(x=>x.title==='虚构'+k+'通知 '+width)]));
+  const st=await state(),items=Object.fromEntries(['link','other','flaky','iso','answer'].map(k=>[k,st.agent.items.find(x=>x.title==='虚构'+k+'通知 '+width)]));
   for(const k of Object.keys(items))assert(items[k],'fixture item '+k);
   const attached=st.uploads.find(x=>x.name==='synthetic-attached.png'),spare=st.uploads.find(x=>x.name==='synthetic-spare.png');assert(attached&&spare,'fixture uploads');
   const base='https://school.example.invalid/',LINK=base+'notice/'+width+'.html',LONG=base+'n/'+width+'/'+LONG_TAIL,OTHER=base+'other/'+width,FLAKY=base+'flaky/'+width,ISO=base+'iso/'+width,HTTP='http://plain.example.invalid/x/'+width;
@@ -172,6 +178,15 @@ with tempfile.TemporaryDirectory(prefix='synthetic-page-ui-') as tmp:
   assert.equal(await dialog.innerText(),linkText,'current panel unchanged by the late reply');
   await close();await open('iso');
   assert.match(await rowText(ISO),/第1次抓取/);assert.equal(posts.filter(p=>p.url===ISO).length,1);
+  await fits(page);await close();
+  // An explicit "above are the answers" post offers its adjacent original for review, without creating another task.
+  await open('answer');
+  const nearby=dialog.locator('[data-school-nearby-materials]');
+  assert.match(await nearby.innerText(),/synthetic-attached.png/);
+  assert.match(await nearby.innerText(),/不代表新增作业/);
+  await nearby.locator('[data-school-nearby-message]').click();
+  await dialog.locator('[data-school-original-detach="'+attached.id+'"]').waitFor();
+  assert.match(await dialog.innerText(),/包含未读取的非文字内容/);
   await fits(page);await close();
   assert.deepEqual(pageErrors,[],'no page errors');await page.close();
  }
