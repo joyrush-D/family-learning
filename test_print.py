@@ -85,16 +85,29 @@ class PrintTests(unittest.TestCase):
         self.assertEqual(self.store.list_jobs(),[])
 
     def test_homework_reference_draft_stays_reviewable(self):
-        result=dict(items=[dict(label='第1题',question='虚构题面',answer='B',steps='先找原文依据。',uncertainty='')],coverage='仅此一页')
+        item=dict(label='第1题',question='虚构题面',student_answer='C',answer='B',judgment='incorrect',
+                  error_reason='题干问未提及，C在原文中出现。',possible_cause='可能漏看否定词，需请孩子说明。',
+                  steps='先圈出否定词，再逐项找原文依据。',uncertainty='')
+        result=dict(items=[item,dict(item,label='第2题',student_answer='',judgment='unknown',
+                                     error_reason='',possible_cause='',uncertainty='卷面未见作答')],coverage='仅此一页')
         with patch.object(family_llm,'_chat_json',return_value=result):
             draft=family_llm.homework_reference_draft(dict(mime='image/png',data=png()))
-        self.assertIn('待核对',draft['text']);self.assertIn('第1题',draft['text']);self.assertIn('先找原文依据',draft['text'])
+        self.assertIn('待核对',draft['text']);self.assertIn('第1题',draft['text']);self.assertIn('可能漏看否定词',draft['text'])
+        self.assertIn('第2题',draft['text']);self.assertIn('未判定',draft['text'])
+        self.assertEqual((draft['wrong_items'],draft['unknown_items']),(1,1))
         with patch.object(family_llm,'_model_image',return_value=dict(mime='image/jpeg',data=b'preview')) as preview, patch.object(family_llm,'_chat_json',return_value=result) as chat:
             family_llm.homework_reference_draft(dict(mime='image/png',data=png()))
         preview.assert_called_once()
         self.assertIn('data:image/jpeg;base64,',chat.call_args.args[0][1]['content'][1]['image_url']['url'])
         with patch.object(family_llm,'_chat_json',return_value={'items':[dict(result['items'][0],answer='错\n误')],'coverage':'仅此一页'}),self.assertRaises(family_llm.LLMDraftError):
             family_llm.homework_reference_draft(dict(mime='image/png',data=png()))
+        for conflict in (dict(item,student_answer=''),dict(item,judgment='unknown'),dict(item,uncertainty='下一页选项缺失')):
+            with patch.object(family_llm,'_chat_json',return_value={'items':[conflict],'coverage':'仅此一页'}):
+                draft=family_llm.homework_reference_draft(dict(mime='image/png',data=png()))
+            self.assertEqual((draft['wrong_items'],draft['unknown_items']),(0,1))
+            self.assertIn('未判定',draft['text'])
+            self.assertNotIn('错误依据：',draft['text'])
+            if conflict['uncertainty']=='下一页选项缺失':self.assertIn('参考答案：待核对',draft['text'])
 
     def test_pdf_tampering_prevents_confirmation(self):
         prep=self.prepared();(self.data/'print'/(prep['id']+'.pdf')).write_bytes(b'%PDF-replaced')

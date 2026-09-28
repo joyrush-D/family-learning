@@ -403,9 +403,15 @@ class PrintStore:
             raise PrintError('参考答案与指南须由家长核对，且不超过12000字')
         paragraphs = ['家长参考答案与辅导指南', title.strip(),
                       '仅供家长核对使用；答案与原题有冲突时以原题和老师要求为准。', *text.strip().splitlines()]
-        document = ''.join('<w:p><w:r><w:rPr><w:rFonts w:eastAsia="PingFang SC"/></w:rPr>'
+        keep=set();start=0
+        for end in range(len(paragraphs)+1):
+            if end==len(paragraphs) or not paragraphs[end].strip():
+                if end-start<=10: keep.update(range(start,end-1))
+                start=end+1
+        document = ''.join('<w:p><w:pPr><w:keepLines/>'+('<w:keepNext/>' if n in keep else '')+'</w:pPr>'
+                           +'<w:r><w:rPr><w:rFonts w:eastAsia="PingFang SC"/></w:rPr>'
                            '<w:t xml:space="preserve">'+escape(line or ' ')+'</w:t></w:r></w:p>'
-                           for line in paragraphs)
+                           for n,line in enumerate(paragraphs))
         docx = io.BytesIO()
         with zipfile.ZipFile(docx, 'w', zipfile.ZIP_DEFLATED) as archive:
             archive.writestr('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8"?>'

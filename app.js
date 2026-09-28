@@ -957,17 +957,21 @@ $('#homeworkPrintForm')?.addEventListener('change',e=>{
 $('#homeworkDraftButton')?.addEventListener('click',async()=>{
   if(homeworkPrintBusy)return;const f=$('#homeworkPrintForm'),status=$('#homeworkDraftStatus');
   if(!f.elements.question_source.value){status.textContent='请先选择一张题目图片。';return}
-  const selected=f.elements.question_source.value,button=$('#homeworkDraftButton');button.disabled=true;
-  status.textContent='正在整理一张图片的待核对草稿；不会自动保存或打印…';
+  if(f.elements.guide_text.value.trim()||f.elements.guide_source.value){status.textContent='已有参考文字或文件；请先核对、保存或自行清空，再重新整理，避免覆盖已填写的内容。';return}
+  const selected=f.elements.question_source.value,taskId=f.elements.task_id.value,button=$('#homeworkDraftButton');button.disabled=true;
+  status.textContent='正在核对本页可辨作答并整理待核对草稿；不会自动保存或打印…';
   try{
     const out=await printPost('homework/draft',{question_source:JSON.parse(selected)},120000);
-    if(!$('#homeworkPrintDialog').open||f.elements.question_source.value!==selected)return;
+    if(!$('#homeworkPrintDialog').open||f.elements.question_source.value!==selected||f.elements.task_id.value!==taskId)return;
+    if(f.elements.guide_text.value.trim()||f.elements.guide_source.value){status.textContent='整理期间已填写参考内容，原填写已保留；本次草稿未覆盖。';return}
     if(typeof out.draft?.text!=='string'||!/^[a-f0-9]{64}$/.test(out.question_sha256))throw Error('参考草稿回执不完整');
     f.elements.guide_source.value='';f.elements.guide_text.value=out.draft.text;
     f.dataset.questionSha=out.question_sha256;
     f.elements.guide_confirmed.checked=false;
     saveHomeworkPrintDraft(f);
-    status.textContent='仅整理了所选一张图片。请对照原题逐题核对、改正不确定处，再勾选家长确认。';
+    const count=Number.isInteger(out.draft.wrong_items)&&Number.isInteger(out.draft.unknown_items)?
+      ` 草稿标出${out.draft.wrong_items}道可能错题、${out.draft.unknown_items}道未判定；`:'';
+    status.textContent='仅核对所选一张图片。'+count+'请对照原题和孩子卷面逐题改正，再勾选家长确认。';
   }catch(err){status.textContent=(err.message||'参考草稿暂不可用')+'；题目与已填内容仍保留。超时后不会自动再次调用模型。'}
   finally{button.disabled=false}
 });
