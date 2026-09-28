@@ -52,6 +52,13 @@ async function server(){
   await firstReview.locator('details').evaluate(x=>x.open=true);await firstReview.locator('[data-homework-review-photo]').first().check();await firstReview.locator('[data-homework-review-run]').click();await firstReview.locator('[data-homework-review-result] textarea').waitFor();await firstReview.locator('[data-homework-review-result] textarea').fill('');
   await otherReview.locator('details').evaluate(x=>x.open=true);await otherReview.locator('[data-homework-review-photo]').first().check();await otherReview.locator('[data-homework-review-run]').click();await otherReview.locator('[data-homework-review-result] textarea').waitFor();
   await otherReview.locator('[data-homework-review-result] textarea').fill('另一份尚未保存的批改意见');
+  await p.locator('#taskForm [name=note]').fill('另一条独立反馈');
+  let savePrompted=false;const dismissSave=d=>{savePrompted=true;d.dismiss()};p.on('dialog',dismissSave);
+  await p.locator('#saveTaskFeedback').click();p.off('dialog',dismissSave);
+  assert.equal(savePrompted,true,'saving another feedback asks before discarding a separate AI draft');
+  assert.equal(await otherReview.locator('[data-homework-review-result] textarea').inputValue(),'另一份尚未保存的批改意见');
+  state=await(await fetch(host.url+'api/state')).json();assert.equal(state.records.filter(r=>r.source==='事项:'+id).length,2,'declined save changes no record');
+  await p.locator('#taskForm [name=note]').fill('');
   p.once('dialog',d=>d.dismiss());await p.locator('#taskDialog [data-close="taskDialog"]').click();
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'every feedback review draft requires discard confirmation');
   p.once('dialog',d=>d.dismiss());await p.locator('[data-task-feedback-edit]').first().click();
@@ -71,6 +78,17 @@ async function server(){
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'Escape dismissal keeps edited feedback');
   p.once('dialog',d=>d.accept());await p.keyboard.press('Escape');
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),false,'explicit discard closes');
+  await p.locator('[data-task="'+id+'"]').first().click();
+  const finalReview=p.locator('#taskFeedbackHistory [data-homework-review]').first();await finalReview.locator('details').evaluate(x=>x.open=true);
+  await finalReview.locator('[data-homework-review-photo]').first().check();await finalReview.locator('[data-homework-review-run]').click();
+  await finalReview.locator('[data-homework-review-result] textarea').waitFor();
+  await finalReview.locator('[data-homework-review-result] textarea').fill('家长尚未采纳的独立批改草稿');
+  await p.locator('#taskForm [name=note]').fill('虚构另一条实际反馈');
+  let acceptedPrompt=false;p.once('dialog',d=>{acceptedPrompt=true;d.accept()});await p.locator('#saveTaskFeedback').click();
+  assert.equal(acceptedPrompt,true,'explicit approval allows saving separate feedback');
+  await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'separate feedback saved');
+  state=await(await fetch(host.url+'api/state')).json();assert.equal(state.records.filter(r=>r.source==='事项:'+id).length,3);
+  assert.equal(state.records.find(r=>r.note==='虚构另一条实际反馈')?.child,child);assert.equal(state.tasks.find(t=>t.id===id).update,null);
   assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);assert.deepEqual(errors,[]);await p.close();
  }
  console.log('Homework feedback AI review: 360/1440 save, retry, reopen, task status and source preserved');

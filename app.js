@@ -506,7 +506,8 @@ function taskFeedbackDraftState(){
  const f=$('#taskForm');
  return JSON.stringify([f.elements.note.value,$('#taskTranscript').value,$('#taskTranscriptState').value,$('#taskFeedbackDay').value,$('#taskAssistance').value,f.elements.status.value,pendingIDs,failedFiles.map(file=>[file.name,file.size])]);
 }
-function taskFeedbackDraftChanged(){return !!taskFeedbackContext&&(taskFeedbackDraftState()!==taskFeedbackContext.initial||[...document.querySelectorAll('#taskFeedbackHistory [data-homework-review-result] textarea')].some(x=>x.value.trim()))}
+function unappliedHomeworkReviewDraft(){return [...document.querySelectorAll('#taskFeedbackHistory [data-homework-review-result] textarea')].some(x=>!x.disabled&&x.value.trim())}
+function taskFeedbackDraftChanged(){return !!taskFeedbackContext&&(taskFeedbackDraftState()!==taskFeedbackContext.initial||unappliedHomeworkReviewDraft())}
 function taskCloseAllowed(){
  if(captureBusy()||taskFeedbackPending){toast('请先完成当前保存或录音');return false}
  return !taskFeedbackDraftChanged()||confirm('这次反馈或状态尚未保存，确定放弃？已上传原件仍保存在资料库。');
@@ -574,7 +575,7 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
   if(!/^[a-f0-9]{32}$/.test(upload.attachment?.id))throw Error('文字原件回执无法核对');
   data.uploads.unshift(upload.attachment);pendingIDs=[...ids,upload.attachment.id];drawPending();
   f.elements.note.value='家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #'+recordId+'。';
-  status.textContent='已填入待保存反馈；请点下方“保存反馈”。作业完成状态不会改变。';button.disabled=true;
+  status.textContent='已填入待保存反馈；请点下方“保存反馈”。作业完成状态不会改变。';button.disabled=true;area.disabled=true;
  }catch(error){status.textContent=(error.name==='AbortError'?'文字原件上传超时':error.message||'文字原件未保存')+'；草稿仍在，可重试。';button.disabled=false}
  finally{homeworkReviewBusy=false}
 });
@@ -798,6 +799,7 @@ $('#saveTaskFeedback').onclick=async()=>{
  if(!taskFeedbackPending){
   const text=$('#taskTranscript').value.trim();
   if(!f.elements.note.value.trim()&&!pendingIDs.length&&!text){$('#taskError').textContent='请录音、选择原件或写一句反馈。';return}
+  if(unappliedHomeworkReviewDraft()&&!confirm('还有未保存的 AI 批改草稿。保存本次反馈会放弃它，确定继续？'))return;
   taskFeedbackPending={task_id:ctx.task_id,child:ctx.child,day:$('#taskFeedbackDay').value,category:ctx.category,note:f.elements.note.value,attachments:[...pendingIDs],transcript:text,transcript_state:text?$('#taskTranscriptState').value:'',...(!$('#taskAssistanceLabel').hidden?{assistance:$('#taskAssistance').value}:{}),
    ...(ctx.record_id?{record_id:ctx.record_id,expected_created:ctx.expected_created}:{request_key:ctx.request_key})};
  }
