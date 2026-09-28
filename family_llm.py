@@ -895,7 +895,7 @@ student_answer只抄本图清晰可辨的最终作答；没有作答、多处修
 judgment只有在题目、孩子最终作答和参考答案都能独立核实时才写correct或incorrect；否则写unknown并说明缺口。主观题允许有依据的同义表达，不因措辞不同判错。
 incorrect时，error_reason说明作答与题目依据的具体差异；possible_cause只能是待孩子解释的假设，不凭一个错选项断定心理、能力或习惯。correct和unknown时这两项留空。
 逐题只摘足以核对的短题干、作答和答案，不重复整篇文章。答对的题steps留空；只给错题写错误依据、待孩子核实的可能原因，以及“独立尝试→一个轻提示→自己完成”的简短步骤。未判定题只写需要补看什么，不能补猜。阅读题的错题要指出原文依据，接受合理同义表达；不要代写主观作文或声称孩子已经掌握。
-coverage说明这些图片覆盖到哪部分及明显未读内容；不得声称已读取其他页、老师标准答案或孩子作答。所有结果仅是草稿，必须由家长对照原题核对后才可打印为家长参考。不要输出其他学生信息、心理或能力诊断。'''
+coverage说明这些图片覆盖到哪部分及明显未读内容；不得声称已读取其他页、老师标准答案或孩子作答。所有结果仅是草稿，必须由家长对照原题核对后才可保存为反馈或打印为家长参考。不要输出其他学生信息、心理或能力诊断。'''
     content=[dict(type='text',text='请按顺序整理这%d页作业图片。'%len(images))]
     for n,image in enumerate(images,1):
         preview=_model_image(image)
@@ -922,7 +922,7 @@ coverage说明这些图片覆盖到哪部分及明显未读内容；不得声称
         if item['judgment']=='unknown' and not item['uncertainty'].strip(): item['uncertainty']='题目或卷面作答未能核实'
     if not isinstance(result['coverage'],str) or len(result['coverage'])>600 or any(ord(c)<32 or ord(c)==127 for c in result['coverage']):
         raise LLMDraftError('参考草稿的覆盖范围无法核对')
-    text=['这是%d页图片的待核对草稿；请对照原题和孩子卷面逐项改正后再打印。'%len(images),
+    text=['这是%d页图片的待核对草稿；请对照原题和孩子卷面逐项改正后再保存或打印。'%len(images),
           '覆盖范围：'+(result['coverage'] or '未说明'),'', '错题订正（仅列可辨且与参考明确不同的作答）：']
     wrong=[item for item in result['items'] if item['judgment']=='incorrect']
     if not wrong: text.append('本页没有可确认的错题；这不代表孩子全部答对或已经掌握。')

@@ -89,7 +89,7 @@ function fixtures(base){
     const firstTask=card('TODAY'),position=await firstTask.locator('h3').boundingBox(),viewportHeight=await p.evaluate(()=>innerHeight);
     assert.ok(position&&position.y>=0&&position.y+position.height<viewportHeight-60,'first confirmed task stays on the first screen');
     assert.equal(await firstTask.locator('.task-requirement').isVisible(),true);assert.equal(await firstTask.locator('details .task-requirement').count(),0,'goal is not hidden');
-    assert.equal(await firstTask.locator('[data-study-task-add]').innerText(),'作业计时');assert.equal(await firstTask.locator('[data-task-decisions]').isVisible(),true);
+    assert.equal(await firstTask.locator('.tasktools [data-task]').first().innerText(),'提交作业反馈');assert.equal(await firstTask.locator('[data-study-task-add]').textContent(),'作业计时');assert.equal(await firstTask.locator('[data-task-decisions]').isVisible(),true);
     assert.equal(await firstTask.locator('.checkhit,button:visible,summary:visible').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'44px actions');
     await p.locator('[data-child-filter="'+state.children[1].id+'"]').click();assert.equal(await card('SIBLING').isVisible(),true);assert.equal(await card('TODAY').count(),0);assert.equal(await p.locator('[data-agent-item]').count(),0);assert.equal(await shared.count(),1);
     await p.locator('[data-child-filter=""]').click();
@@ -113,12 +113,12 @@ function fixtures(base){
       await route.fulfill({status:printAttempts===1?503:200,contentType:'application/json',body:JSON.stringify(printAttempts===1?{error:'虚构打印失败'}:{jobs:{question:{id:'1'.repeat(32)},questions:printBodies.at(-1).question_sources.map((_,n)=>({id:String(n+1).repeat(32)})),guide:{id:'2'.repeat(32)}}})})});
     await p.locator('nav [data-page="home"]').click();
     await p.locator('[data-child-filter=""]').click();
-    await p.locator('[data-query-target="task:TODAY"] [data-homework-print]').click();
+    await p.locator('[data-query-target="task:TODAY"] details.task-more').evaluate(x=>x.open=true);await p.locator('[data-query-target="task:TODAY"] [data-homework-print]').click();
     const printForm=p.locator('#homeworkPrintForm');await printForm.locator('[name="question_source"]').selectOption({label:'虚构题目.png'});
     await printForm.locator('details summary').click();await printForm.locator('[name="question_source_2"]').selectOption({label:'虚构题目续页.png'});
     await p.locator('#homeworkDraftButton').click();await eventually(async()=>await printForm.locator('[name="guide_text"]').inputValue()==='虚构第1题：卷面C，参考B；先找原文依据。','draft filled');
     assert.match(await p.locator('#homeworkDraftStatus').innerText(),/1道可能错题、0道未判定/);
-    await p.reload();await ready(p);await p.locator('[data-query-target="task:TODAY"] [data-homework-print]').click();
+    await p.reload();await ready(p);await p.locator('[data-query-target="task:TODAY"] details.task-more').evaluate(x=>x.open=true);await p.locator('[data-query-target="task:TODAY"] [data-homework-print]').click();
     assert.equal(await printForm.locator('[name="guide_text"]').inputValue(),'虚构第1题：卷面C，参考B；先找原文依据。');assert.equal(draftCalls,1,'reopen never calls the model again');
     assert.equal(await printForm.locator('[name="question_source_2"]').inputValue().then(Boolean),true,'ordered second page survives reopen');
     await p.locator('#homeworkDraftButton').click();assert.equal(draftCalls,1,'existing parent draft is not overwritten or recharged');
@@ -136,7 +136,7 @@ function fixtures(base){
     let releaseDraft;
     await p.unroute('**/api/print/homework/draft');
     await p.route('**/api/print/homework/draft',async route=>{await new Promise(resolve=>releaseDraft=resolve);await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({draft:{text:'迟到的模型草稿',items:1,wrong_items:0,unknown_items:1},question_sha256:'b'.repeat(64)})})});
-    await p.locator('nav [data-page="home"]').click();await p.locator('[data-query-target="task:TODAY"] [data-homework-print]').click();
+    await p.locator('nav [data-page="home"]').click();await p.locator('[data-query-target="task:TODAY"] details.task-more').evaluate(x=>x.open=true);await p.locator('[data-query-target="task:TODAY"] [data-homework-print]').click();
     await printForm.locator('[name="question_source"]').selectOption({label:'虚构题目.png'});
     await p.locator('#homeworkDraftButton').click();await eventually(async()=>!!releaseDraft,'delayed draft request');
     await printForm.locator('[name="guide_text"]').fill('家长在等待期间填写的参考');releaseDraft();
@@ -179,7 +179,7 @@ function fixtures(base){
    try{
     await formPage.goto(server.url,{waitUntil:'load'});await ready(formPage);await fit(formPage);
     // Preserve the school task -> timer -> result -> original task journey.
-    await formPage.locator('[data-study-task-add="'+task.id+'"]').click();await eventually(()=>formPage.locator('[data-study-ready]').isVisible(),'task opens timer');assert.equal(await formPage.locator('nav [data-page="more"]').getAttribute('class'),'active');
+    await formPage.locator('[data-query-target="task:'+task.id+'"] details.task-more').evaluate(x=>x.open=true);await formPage.locator('[data-study-task-add="'+task.id+'"]').click();await eventually(()=>formPage.locator('[data-study-ready]').isVisible(),'task opens timer');assert.equal(await formPage.locator('nav [data-page="more"]').getAttribute('class'),'active');
     const add=formPage.locator('[data-study-form="new"]');await eventually(async()=>await add.locator('[name="task_id"]').inputValue()===task.id,'source selected');assert.equal(await add.locator('[name="title"]').inputValue(),title);await add.locator('[name="planned_minutes"]').fill('10');await add.locator('[type="submit"]').click();
     const studyRead=async()=>await(await fetch(server.url+'api/study?child_id='+who.id+'&day='+current.today)).json();await eventually(async()=>(await studyRead()).items.some(x=>x.task_id===task.id),'study item saved');const studyID=(await studyRead()).items.find(x=>x.task_id===task.id).id,study=formPage.locator('[data-study-item="'+studyID+'"]');
     await study.locator('[data-study-action="start"]').click();await eventually(async()=>(await studyRead()).items.find(x=>x.id===studyID).status==='running','timer started');await study.locator('[data-study-action="pause"]').click();await eventually(async()=>(await studyRead()).items.find(x=>x.id===studyID).status==='paused','timer paused');

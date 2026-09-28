@@ -109,6 +109,11 @@
   finally{clearTimeout(timeout);busy=false;lock();if(pending===current&&ctx===active){const retry=root()?.querySelector('[data-study-retry]');retry?.scrollIntoView({block:'nearest'});retry?.focus({preventScroll:true})}if(!pending&&message==='已保存')await read()}
  }
  function setSource(form){const source=snapshot.available_tasks.find(t=>String(t.id)===form.elements.task_id.value),title=form.elements.title;title.readOnly=!!form.elements.task_id.value;title.required=!title.readOnly;if(source)title.value=source.title}
+ function openHomework(active){
+  if(!active||!active.children.some(c=>c.id===active.child_id))return false;
+  const request=async(path,body,options={})=>{const response=await active.apiFetch(path,{method:'POST',signal:AbortSignal.timeout(120000),headers:{'X-Family-Token':active.token,...(options.raw?{'Content-Type':'application/octet-stream','X-File-Name':encodeURIComponent(body.name)}:{'Content-Type':'application/json'})},body:options.raw?body:JSON.stringify(body)});const result=await response.json();if(!response.ok){const e=Error(result.error||'操作未完成');e.status=response.status;throw e}return result};
+  return window.FamilyHomework.open({key:'parent:'+active.child_id+':'+active.day,child_id:active.child_id,day:active.day,child_name:active.children.find(c=>c.id===active.child_id)?.name||'',child:false,request:(action,body)=>request('/api/study/'+action,{...body,child_id:active.child_id,day:active.day}),upload:file=>request('/api/upload',file,{raw:true}),transcribe:id=>request('/api/transcribe',{attachment:id}),fileURL:id=>new URL('upload/'+id,location.href).href,onSaved:async()=>{await active.onSaved?.();if(ctx===active)await read()}});
+ }
  function change(e){
   if(busy||pending)return;
   if(e.target.matches('[data-study-child],[data-study-date]')){const value=e.target.value;if(!value)return;remember();ctx={...ctx,child_id:e.target.matches('[data-study-child]')?value:ctx.child_id,day:e.target.matches('[data-study-date]')?value:ctx.day};if(e.target.matches('[data-study-child]'))ctx.onChildChanged?.(ctx.child_id);else ctx.onDayChanged?.(ctx.day);snapshot=null;editor=draftView().editor;message='';paint();read()}
@@ -120,10 +125,7 @@
   if(button.hasAttribute('data-study-refresh')){message='';read(true)}
   if(button.hasAttribute('data-study-cancel')){remember();if(editor){const key=editor.type+':'+editor.id;draftView().forms.delete(key);resetForm(key)}editor=null;paint()}
   if(button.hasAttribute('data-study-discard-new')){remember();draftView().forms.delete('new');resetForm('new');paint();consumeTask()}
-  if(button.hasAttribute('data-homework-capture')){
-   const active=ctx,request=async(path,body,options={})=>{const response=await active.apiFetch(path,{method:'POST',signal:AbortSignal.timeout(120000),headers:{'X-Family-Token':active.token,...(options.raw?{'Content-Type':'application/octet-stream','X-File-Name':encodeURIComponent(body.name)}:{'Content-Type':'application/json'})},body:options.raw?body:JSON.stringify(body)});const result=await response.json();if(!response.ok){const e=Error(result.error||'操作未完成');e.status=response.status;throw e}return result};
-   window.FamilyHomework.open({key:'parent:'+active.child_id+':'+active.day,child_id:active.child_id,day:active.day,child_name:active.children.find(c=>c.id===active.child_id)?.name||'',child:false,request:(action,body)=>request('/api/study/'+action,{...body,child_id:active.child_id,day:active.day}),upload:file=>request('/api/upload',file,{raw:true}),transcribe:id=>request('/api/transcribe',{attachment:id}),fileURL:id=>new URL('upload/'+id,location.href).href,onSaved:async()=>{await active.onSaved?.();if(ctx===active)await read()}});return;
-  }
+  if(button.hasAttribute('data-homework-capture')){openHomework(ctx);return}
   if(button.dataset.studyEditor){const item=find(button.dataset.id);if(!item)return;remember();editor={type:button.dataset.studyEditor,id:item.id};paint();root()?.querySelector('.study-editor')?.scrollIntoView({block:'nearest'});root()?.querySelector('.study-editor input:not([readonly])')?.focus()}
   if(button.dataset.studyAction){const item=find(button.dataset.id);if(item)newRequest('/api/study/action',{id:item.id,version:item.version,action:button.dataset.studyAction})}
   if(button.dataset.studyRecord)ctx.onRecord?.(Number(button.dataset.studyRecord));
@@ -146,5 +148,5 @@
   ctx.root.addEventListener('click',click);ctx.root.addEventListener('submit',submit);ctx.root.addEventListener('change',change);paint();read();clock=setInterval(tick,1000);
  }
  window.addEventListener('beforeunload',e=>{remember();if(pending||[...drafts.values()].some(view=>view.forms.size)){e.preventDefault();e.returnValue=''}});
- window.FamilyStudy={mount,leave};
+ window.FamilyStudy={mount,leave,openHomework};
 })();
