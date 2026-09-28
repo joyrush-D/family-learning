@@ -601,6 +601,7 @@ def daily_backup_check():
         assert archive.name == 'family-2026-01-02.zip' and archive.stat().st_mode & 0o777 == 0o600
         with zipfile.ZipFile(archive) as zipped:
             assert 'private/model.json' not in zipped.namelist()
+            assert all(item.compress_type == zipfile.ZIP_STORED for item in zipped.infolist())
         with sqlite3.connect(root / backup.DATABASE) as db:
             db.execute("UPDATE records SET note='After daily backup'")
             db.commit()

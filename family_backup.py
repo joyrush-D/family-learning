@@ -132,7 +132,7 @@ def create(root, output, deadline=None):
                 raise ValueError('Source SQLite snapshot failed validation')
         manifest = {'format': 1, 'created': dt.datetime.now(dt.timezone.utc).isoformat(), 'files': {}}
         archive = tmp / 'backup.zip'
-        with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as zipped:
+        with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_STORED) as zipped:
             total = 0
             for name, path in [(DATABASE, snapshot), *sources(root, deadline)]:
                 check_deadline(deadline)
