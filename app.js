@@ -565,6 +565,7 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
  if(!confirmed?.checked||!area?.value.trim()||area.value.length>12000||!ids.length||ids.some(id=>!record.attachments.includes(id))){status.textContent='请对照原题核对、保留不确定项后再填入。';return}
  if(JSON.stringify(ids)!==JSON.stringify(selectedIds())){status.textContent='所选照片已变化，请重新生成批改；原草稿保留。';return}
  const f=$('#taskForm');if(f.elements.note.value.trim()||pendingIDs.length||$('#taskTranscript').value.trim()){status.textContent='当前还有未保存的反馈，请先保存或清空，再填入批改意见。';return}
+ const inputState=taskFeedbackDraftState();
  const editing=[area,confirmed,...panel.querySelectorAll('[data-homework-review-photo]')];
  homeworkReviewBusy=true;button.disabled=true;editing.forEach(x=>x.disabled=true);status.textContent='正在保存核对文字原件…';
  try{
@@ -572,7 +573,9 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
   try{const response=await apiFetch('/api/upload',{signal:controller.signal,method:'POST',headers:{'X-Family-Token':data.token,'X-File-Name':encodeURIComponent(file.name),'Content-Type':'application/octet-stream'},body:file});upload=await response.json();if(!response.ok)throw Error(upload.error||'核对文字未保存')}finally{clearTimeout(timer)}
   if(!$('#taskDialog').open||!taskFeedbackContext||taskFeedbackContext.task_id!==task.id)return;
   if(!/^[a-f0-9]{32}$/.test(upload.attachment?.id))throw Error('文字原件回执无法核对');
-  data.uploads.unshift(upload.attachment);pendingIDs=[...ids,upload.attachment.id];drawPending();
+  data.uploads.unshift(upload.attachment);
+  if(taskFeedbackDraftState()!==inputState)throw Error('反馈输入在上传期间已变化；核对文字已保存为原件，当前填写未覆盖');
+  pendingIDs=[...ids,upload.attachment.id];drawPending();
   f.elements.note.value='家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #'+recordId+'。';
   status.textContent='已填入待保存反馈；请点下方“保存反馈”。作业完成状态不会改变。';button.disabled=true;area.disabled=true;
  }catch(error){status.textContent=(error.name==='AbortError'?'文字原件上传超时':error.message||'文字原件未保存')+'；草稿仍在，可重试。';editing.forEach(x=>x.disabled=false);button.disabled=false}

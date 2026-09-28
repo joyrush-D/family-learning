@@ -59,7 +59,13 @@ async function server(){
   const applying=panel.locator('[data-homework-review-apply]').click();await eventually(async()=>!!releaseUpload,'review text upload pending');
   assert.equal(await panel.locator('[data-homework-review-result] textarea').isDisabled(),true,'review text cannot change during upload');
   assert.equal(await panel.locator('[data-homework-review-photo]').isDisabled(),true,'review photo selection cannot change during upload');
-  releaseUpload();await applying;await p.unroute('**/api/upload');await eventually(async()=>/请点下方/.test(await panel.innerText()),'review staged');
+  await p.locator('#taskForm [name=note]').fill('虚构：上传期间补写的观察');
+  releaseUpload();await applying;await p.unroute('**/api/upload');
+  await eventually(async()=>/请点下方|反馈输入.*变化/.test(await panel.innerText()),'concurrent review upload settled');
+  assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'虚构：上传期间补写的观察','upload completion keeps concurrent parent input');
+  assert.match(await panel.innerText(),/反馈输入.*变化/);
+  await p.locator('#taskForm [name=note]').fill('');
+  await panel.locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await panel.innerText()),'review staged after explicit retry');
   assert.match(await p.locator('#taskForm [name=note]').inputValue(),/家长核对的作业批改参考/);
   p.once('dialog',d=>d.dismiss());await p.locator('#taskDialog [data-close="taskDialog"]').click();
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'review draft stays after declining discard');
