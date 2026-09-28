@@ -85,6 +85,18 @@ def _json(obj):
     return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
+def question_sources(sources):
+    if not isinstance(sources,list) or not 1<=len(sources)<=4 or any(not isinstance(source,dict) for source in sources):
+        raise PrintError('每次请选择1至4页题目原件')
+    if len({_json(source) for source in sources})!=len(sources):
+        raise PrintError('题目原件不能重复选择')
+    return sources
+
+
+def packet_sha(hashes):
+    return hashes[0] if len(hashes)==1 else _hash(_json(hashes).encode())
+
+
 def _now():
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')
 
@@ -357,6 +369,13 @@ class PrintStore:
         (_jpeg if mime=='image/jpeg' else _png)(data)
         return dict(mime=mime,data=data,sha256=_hash(data))
 
+    def images_for_draft(self, sources):
+        sources=question_sources(sources)
+        images=[self.image_for_draft(source) for source in sources]
+        if sum(len(image['data']) for image in images)>MAX_SOURCE:
+            raise PrintError('题目图片合计不能超过20MB')
+        return images,packet_sha([image['sha256'] for image in images])
+
     def _page_count(self, path):
         if not self.pdfinfo:
             raise PrintError('未配置PDF页数工具，请下载原件；暂不能确认打印', 'preview_unavailable', 503)
@@ -387,10 +406,10 @@ class PrintStore:
         except OfficeError as error:
             raise PrintError(*_OFFICE_ERRORS[error.reason]) from None
 
-    def prepare(self, source, idempotency_key):
+    def prepare(self, source, idempotency_key, *, packet=None):
         key = _key(idempotency_key)
         name, data = self._source(source)
-        return self._prepare_bytes(name, data, source, key)
+        return self._prepare_bytes(name, data, source, key,packet=packet)
 
     def prepare_guide(self, title, text, idempotency_key):
         """Prepare a separate parent-only answer sheet after the parent has checked its text."""
@@ -433,8 +452,8 @@ class PrintStore:
         return self._prepare_bytes(name, docx.getvalue(),
                                    dict(type='parent_guide', title=title.strip()), key)
 
-    def _prepare_bytes(self, name, data, source, key):
-        fingerprint = _hash(_json([source, _hash(data)]).encode())
+    def _prepare_bytes(self, name, data, source, key, *, packet=None):
+        fingerprint = _hash(_json([source, _hash(data)]+([packet] if packet is not None else [])).encode())
         with self._db() as c:
             old = c.execute('SELECT * FROM print_preparations WHERE idem=?', (key,)).fetchone()
         if old:
@@ -473,25 +492,28 @@ class PrintStore:
         if not isinstance(task, dict) or obj.get('task_id') != task.get('id'):
             raise PrintError('作业事项已变化，请刷新后核对', 'conflict', 409)
         key = _key(obj.get('request_key'))
-        question = obj.get('question_source')
+        questions = question_sources(obj.get('question_sources') if 'question_sources' in obj else [obj.get('question_source')])
         guide = obj.get('guide_source')
         guide_text = obj.get('guide_text', '')
         if (guide is None) == (not bool(guide_text)):
             raise PrintError('请选择参考文件，或填写已核对的参考答案与指南')
-        if guide is not None and guide == question:
+        if guide is not None and guide in questions:
             raise PrintError('题目与家长参考须选两份不同的资料')
         settings = {k: obj.get(k, v) for k, v in dict(printer='', copies=1, sides='one-sided', color='monochrome').items()}
         subkey = lambda role: _hash((key+':'+role).encode())[:32]
-        first = self.prepare(question, subkey('question_prepare'))
+        prepared=[self.prepare(source,subkey('question_prepare'+(str(n+1) if n else '')),
+                               packet=questions if len(questions)>1 else None)
+                  for n,source in enumerate(questions)]
         expected = obj.get('expected_question_sha256', '')
-        if expected and (not isinstance(expected,str) or not re.fullmatch(r'[a-f0-9]{64}',expected) or expected!=first['source_sha256']):
+        if expected and (not isinstance(expected,str) or not re.fullmatch(r'[a-f0-9]{64}',expected) or expected!=packet_sha([p['source_sha256'] for p in prepared])):
             raise PrintError('题目原件与参考草稿生成时不同，请重新核对答案','conflict',409)
         second = (self.prepare(guide, subkey('guide_prepare')) if guide is not None else
                   self.prepare_guide(task['title'], guide_text, subkey('guide_prepare')))
         def queue(prep, role):
             return self.enqueue(dict(settings, confirmed=True, preparation_id=prep['id'],
                                      pdf_sha256=prep['pdf_sha256'], idempotency_key=subkey(role+'_enqueue')))
-        return dict(question=queue(first, 'question'), guide=queue(second, 'guide'))
+        jobs=[queue(prep,'question'+(str(n+1) if n else '')) for n,prep in enumerate(prepared)]
+        return dict(question=jobs[0],questions=jobs,guide=queue(second, 'guide'))
 
     def preparation(self, ident):
         with self._db() as c: row = c.execute('SELECT body FROM print_preparations WHERE id=?', (_id(ident),)).fetchone()

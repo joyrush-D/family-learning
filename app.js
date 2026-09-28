@@ -909,9 +909,11 @@ async function printPost(path,body,timeout=90000){
 }
 let homeworkPrintBusy=false;
 const homeworkPrintKey='family-homework-print:v1:'+basePath;
+const homeworkQuestionValues=f=>['question_source','question_source_2','question_source_3','question_source_4'].map(name=>f.elements[name].value).filter(Boolean);
 function saveHomeworkPrintDraft(f){
   try{sessionStorage.setItem(homeworkPrintKey+':'+f.elements.task_id.value,JSON.stringify({task_id:f.elements.task_id.value,
     request_key:f.dataset.requestKey,question_source:f.elements.question_source.value,
+    question_source_2:f.elements.question_source_2.value,question_source_3:f.elements.question_source_3.value,question_source_4:f.elements.question_source_4.value,
     guide_source:f.elements.guide_source.value,guide_text:f.elements.guide_text.value,
     expected_question_sha256:f.dataset.questionSha||'',
     question_confirmed:f.elements.question_confirmed.checked,guide_confirmed:f.elements.guide_confirmed.checked}));return true}
@@ -923,12 +925,14 @@ function openHomeworkPrint(id){
   const f=$('#homeworkPrintForm');f.reset();f.elements.task_id.value=id;
   const choices=files.map(file=>`<option value="${esc(JSON.stringify(file.source))}">${esc(file.name)}</option>`).join('');
   f.elements.question_source.innerHTML='<option value="">请选择题目原件</option>'+choices;
+  for(const n of [2,3,4])f.elements['question_source_'+n].innerHTML='<option value="">不添加</option>'+choices;
   f.elements.guide_source.innerHTML='<option value="">填写下方参考文字</option>'+choices;
   let saved;try{saved=JSON.parse(sessionStorage.getItem(homeworkPrintKey+':'+id)||'null')}catch{}
   if(saved?.task_id===id&&/^[A-Za-z0-9_-]{8,128}$/.test(saved.request_key||'')){
-    for(const key of ['question_source','guide_source','guide_text'])if(typeof saved[key]==='string')f.elements[key].value=saved[key];
+    for(const key of ['question_source','question_source_2','question_source_3','question_source_4','guide_source','guide_text'])if(typeof saved[key]==='string')f.elements[key].value=saved[key];
     f.elements.question_confirmed.checked=!!saved.question_confirmed;f.elements.guide_confirmed.checked=!!saved.guide_confirmed;
   }
+  f.querySelector('details').open=[2,3,4].some(n=>f.elements['question_source_'+n].value);
   f.dataset.questionSha=saved?.task_id===id&&typeof saved.expected_question_sha256==='string'?saved.expected_question_sha256:'';
   f.dataset.requestKey=saved?.task_id===id&&/^[A-Za-z0-9_-]{8,128}$/.test(saved.request_key||'')?saved.request_key:crypto.randomUUID();
   $('#homeworkPrintTask').textContent=task.child+' · '+task.title+(task.agenda?.due_on?' · 截止 '+task.agenda.due_on:'');
@@ -943,12 +947,11 @@ function openHomeworkPrint(id){
   $('#homeworkPrintDialog').showModal();
 }
 document.addEventListener('click',e=>{const b=e.target.closest('[data-homework-print]');if(b)openHomeworkPrint(b.dataset.homeworkPrint)});
-$('#homeworkPrintForm')?.addEventListener('input',e=>{if(!homeworkPrintBusy)saveHomeworkPrintDraft(e.currentTarget)});
+$('#homeworkPrintForm')?.addEventListener('input',e=>{if(homeworkPrintBusy)return;if(e.target.name==='guide_text'&&!e.target.value.trim())e.currentTarget.dataset.questionSha='';saveHomeworkPrintDraft(e.currentTarget)});
 $('#homeworkPrintForm')?.addEventListener('change',e=>{
   if(homeworkPrintBusy)return;
-  if(e.target.name==='question_source'){
-    e.currentTarget.dataset.questionSha='';
-    $('#homeworkDraftStatus').textContent='题目文件已更换；原参考草稿可能不适用，请重新逐题核对。';
+  if(e.target.name?.startsWith('question_source')){
+    $('#homeworkDraftStatus').textContent='题目页已更换；旧参考草稿不能用于新题目。请清空后重新整理或手动填写，并逐题核对。';
     e.currentTarget.elements.question_confirmed.checked=false;
     e.currentTarget.elements.guide_confirmed.checked=false;
   }
@@ -956,13 +959,13 @@ $('#homeworkPrintForm')?.addEventListener('change',e=>{
 });
 $('#homeworkDraftButton')?.addEventListener('click',async()=>{
   if(homeworkPrintBusy)return;const f=$('#homeworkPrintForm'),status=$('#homeworkDraftStatus');
-  if(!f.elements.question_source.value){status.textContent='请先选择一张题目图片。';return}
+  if(!f.elements.question_source.value){status.textContent='请先选择题目第1页。';return}
   if(f.elements.guide_text.value.trim()||f.elements.guide_source.value){status.textContent='已有参考文字或文件；请先核对、保存或自行清空，再重新整理，避免覆盖已填写的内容。';return}
-  const selected=f.elements.question_source.value,taskId=f.elements.task_id.value,button=$('#homeworkDraftButton');button.disabled=true;
-  status.textContent='正在核对本页可辨作答并整理待核对草稿；不会自动保存或打印…';
+  const selected=homeworkQuestionValues(f),taskId=f.elements.task_id.value,button=$('#homeworkDraftButton');button.disabled=true;
+  status.textContent='正在核对所选页可辨作答并整理待核对草稿；不会自动保存或打印…';
   try{
-    const out=await printPost('homework/draft',{question_source:JSON.parse(selected)},120000);
-    if(!$('#homeworkPrintDialog').open||f.elements.question_source.value!==selected||f.elements.task_id.value!==taskId)return;
+    const out=await printPost('homework/draft',{question_sources:selected.map(value=>JSON.parse(value))},150000);
+    if(!$('#homeworkPrintDialog').open||JSON.stringify(homeworkQuestionValues(f))!==JSON.stringify(selected)||f.elements.task_id.value!==taskId)return;
     if(f.elements.guide_text.value.trim()||f.elements.guide_source.value){status.textContent='整理期间已填写参考内容，原填写已保留；本次草稿未覆盖。';return}
     if(typeof out.draft?.text!=='string'||!/^[a-f0-9]{64}$/.test(out.question_sha256))throw Error('参考草稿回执不完整');
     f.elements.guide_source.value='';f.elements.guide_text.value=out.draft.text;
@@ -971,7 +974,7 @@ $('#homeworkDraftButton')?.addEventListener('click',async()=>{
     saveHomeworkPrintDraft(f);
     const count=Number.isInteger(out.draft.wrong_items)&&Number.isInteger(out.draft.unknown_items)?
       ` 草稿标出${out.draft.wrong_items}道可能错题、${out.draft.unknown_items}道未判定；`:'';
-    status.textContent='仅核对所选一张图片。'+count+'请对照原题和孩子卷面逐题改正，再勾选家长确认。';
+    status.textContent='仅核对所选'+selected.length+'页图片。'+count+'请对照原题和孩子卷面逐题改正，再勾选家长确认。';
   }catch(err){status.textContent=(err.message||'参考草稿暂不可用')+'；题目与已填内容仍保留。超时后不会自动再次调用模型。'}
   finally{button.disabled=false}
 });
@@ -981,17 +984,18 @@ $('#homeworkPrintForm')?.addEventListener('submit',async e=>{
   if(!!f.elements.guide_source.value===!!f.elements.guide_text.value.trim()){
     error.textContent='参考文件和参考文字只能选一种，且不能都留空。';return}
   if(!saveHomeworkPrintDraft(f)){error.textContent='无法保留本次请求编号，尚未提交打印。';return}
-  const controls=[...f.querySelectorAll('button,input,select,textarea')];homeworkPrintBusy=true;controls.forEach(c=>c.disabled=true);error.textContent='正在分别准备两份 PDF，再提交打印…';
+  const controls=[...f.querySelectorAll('button,input,select,textarea')];homeworkPrintBusy=true;controls.forEach(c=>c.disabled=true);error.textContent='正在分别准备题目和家长参考 PDF，再提交打印…';
   try{
+    const sources=homeworkQuestionValues(f).map(value=>JSON.parse(value));
     const body={task_id:f.elements.task_id.value,request_key:f.dataset.requestKey,
-      question_source:JSON.parse(f.elements.question_source.value),
+      question_sources:sources,
       guide_source:f.elements.guide_source.value?JSON.parse(f.elements.guide_source.value):null,
       guide_text:f.elements.guide_text.value.trim(),printer:f.elements.printer.value,
       expected_question_sha256:f.dataset.questionSha||'',question_confirmed:true,guide_confirmed:true};
     const result=await printPost('homework',body,180000);
-    if(!result.jobs?.question?.id||!result.jobs?.guide?.id)throw Error('打印回执不完整，请用原请求编号重试，避免重复打印');
+    if(result.jobs?.questions?.length!==sources.length||result.jobs.questions.some(job=>!job.id)||!result.jobs?.guide?.id)throw Error('打印回执不完整，请用原请求编号重试，避免重复打印');
     sessionStorage.removeItem(homeworkPrintKey+':'+f.elements.task_id.value);$('#homeworkPrintDialog').close();
-    await refreshPrintJobs();page='print';render();toast('题目和家长参考已作为两份独立任务提交');
+    await refreshPrintJobs();page='print';render();toast('所选题目页和家长参考已分别提交打印');
   }catch(err){error.textContent=(err.message||'打印未完成')+'。已提交的部分不会因原编号重试而重复提交；请核对打印进展。'}
   finally{homeworkPrintBusy=false;controls.forEach(c=>c.disabled=false)}
 });

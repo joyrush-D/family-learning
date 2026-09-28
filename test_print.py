@@ -76,6 +76,27 @@ class PrintTests(unittest.TestCase):
             self.store.homework_pair({**request,'request_key':'homework_pair_other','expected_question_sha256':'0'*64},task)
         self.assertEqual(len(self.store.list_jobs()),2)
 
+    def test_ordered_pages_keep_one_request_and_detect_changed_packet(self):
+        (self.data/'attachments'/'page2.png').write_bytes(png(3))
+        (self.data/'attachments'/'guide.png').write_bytes(png(4))
+        pages=[self.source,dict(type='attachment',name='page2.png')]
+        images,digest=self.store.images_for_draft(pages)
+        self.assertEqual(digest,printing.packet_sha([image['sha256'] for image in images]))
+        request=dict(task_id='TASK-1',request_key='homework_packet_123',question_sources=pages,
+                     guide_source=dict(type='attachment',name='guide.png'),guide_text='',
+                     expected_question_sha256=digest,question_confirmed=True,guide_confirmed=True,
+                     printer='Synthetic_Printer')
+        first=self.store.homework_pair(request,dict(id='TASK-1',title='虚构双页练习'))
+        self.assertEqual(len(first['questions']),2)
+        self.assertEqual(first,self.store.homework_pair(request,dict(id='TASK-1',title='虚构双页练习')))
+        self.assertEqual(len(self.store.list_jobs()),3)
+        with self.assertRaises(printing.PrintError):
+            self.store.homework_pair(request|{'question_sources':list(reversed(pages))},dict(id='TASK-1',title='虚构双页练习'))
+        with self.assertRaises(printing.PrintError):
+            self.store.homework_pair(request|{'request_key':'homework_packet_changed','question_sources':list(reversed(pages))},dict(id='TASK-1',title='虚构双页练习'))
+        self.assertEqual(len(self.store.list_jobs()),3)
+        with self.assertRaises(printing.PrintError):self.store.images_for_draft([pages[0],pages[0]])
+
     def test_homework_pair_refuses_unreviewed_reference(self):
         request=dict(task_id='TASK-1',request_key='homework_pair_456',question_source=self.source,
                      guide_source=None,guide_text='',question_confirmed=True,guide_confirmed=False,
@@ -98,7 +119,10 @@ class PrintTests(unittest.TestCase):
         with patch.object(family_llm,'_model_image',return_value=dict(mime='image/jpeg',data=b'preview')) as preview, patch.object(family_llm,'_chat_json',return_value=result) as chat:
             family_llm.homework_reference_draft(dict(mime='image/png',data=png()))
         preview.assert_called_once()
-        self.assertIn('data:image/jpeg;base64,',chat.call_args.args[0][1]['content'][1]['image_url']['url'])
+        self.assertIn('data:image/jpeg;base64,',chat.call_args.args[0][1]['content'][2]['image_url']['url'])
+        with patch.object(family_llm,'_model_image',return_value=dict(mime='image/jpeg',data=b'preview')), patch.object(family_llm,'_chat_json',return_value=result) as chat:
+            family_llm.homework_reference_draft([dict(mime='image/png',data=png()),dict(mime='image/png',data=png(3))])
+        self.assertEqual(sum(part['type']=='image_url' for part in chat.call_args.args[0][1]['content']),2)
         with patch.object(family_llm,'_chat_json',return_value={'items':[dict(result['items'][0],answer='错\n误')],'coverage':'仅此一页'}),self.assertRaises(family_llm.LLMDraftError):
             family_llm.homework_reference_draft(dict(mime='image/png',data=png()))
         for conflict in (dict(item,student_answer=''),dict(item,judgment='unknown'),dict(item,uncertainty='下一页选项缺失')):

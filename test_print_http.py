@@ -138,6 +138,12 @@ class PrintHTTPTests(unittest.TestCase):
         self.assertEqual(status,200,body);self.assertEqual(json.loads(body)['draft']['text'],'待核对草稿')
         self.assertEqual(json.loads(body)['question_sha256'],hashlib.sha256(PNG).hexdigest())
         self.assertEqual(model.call_count,1)
+        (app.DATA/'attachments'/'page2.png').write_bytes(PNG)
+        with patch.object(app.family_llm,'homework_reference_draft',return_value=dict(text='双页草稿',items=1,coverage='两页')) as model:
+            status,_,body=self.post('/api/print/homework/draft',dict(question_sources=[self.source,dict(type='attachment',name='page2.png')]))
+        self.assertEqual(status,200,body)
+        self.assertEqual(len(model.call_args.args[0]),2)
+        self.assertEqual(json.loads(body)['question_sha256'],app.family_print.packet_sha([hashlib.sha256(PNG).hexdigest()]*2))
         self.assertEqual(self.post('/api/print/homework/draft',dict(question_source=dict(type='url',url='https://example.invalid')))[0],400)
 
     def test_confirmed_hash_authorized_capabilities_and_repeat_clicks(self):

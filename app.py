@@ -1933,11 +1933,12 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/print/prepare':
                 return self.reply(200,dict(preparation=print_store().prepare(obj.get('source'),obj.get('idempotency_key'))))
             if path=='/api/print/homework/draft':
-                self.connection.settimeout(120)
-                image=print_store().image_for_draft(obj.get('question_source'))
-                try: draft=family_llm.homework_reference_draft(dict(mime=image['mime'],data=image['data']),data_path=DATA)
+                self.connection.settimeout(160)
+                sources=obj.get('question_sources') if 'question_sources' in obj else [obj.get('question_source')]
+                images,fingerprint=print_store().images_for_draft(sources)
+                try: draft=family_llm.homework_reference_draft([dict(mime=image['mime'],data=image['data']) for image in images],data_path=DATA,timeout=120)
                 except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
-                return self.reply(200,dict(draft=draft,question_sha256=image['sha256']))
+                return self.reply(200,dict(draft=draft,question_sha256=fingerprint))
             if path=='/api/print/enqueue':
                 authorized_printer(obj.get('printer'),color=obj.get('color','monochrome'),sides=obj.get('sides','one-sided'))
                 return self.reply(200,dict(job=print_store().enqueue(obj)))
