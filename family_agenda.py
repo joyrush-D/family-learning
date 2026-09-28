@@ -51,7 +51,7 @@ def deadlines(text,published):
     text=_relative_weekday(text,anchor)
     candidates=set()
     # A date alone is not a deadline; it must be tied to handing in, bringing or a dated test the child sits.
-    pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:[^。；;，,\n]{0,8}?)(?:前|截止|完成|提交|上交|交齐|带到|带来|交作业|带|穿|交(?!流|通|换|谈)|测验|考试|听写|默写|检测)'
+    pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:[^。；;，,\n]{0,8}?)(?:前|截止|完成|订正|提交|上交|交齐|带到|带来|交作业|带|穿|交(?!流|通|换|谈)|测验|考试|听写|默写|检测)'
     for match in re.finditer(pattern,text or ''):
         token=match[1];value=date(token)
         if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):

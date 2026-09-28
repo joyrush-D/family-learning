@@ -398,6 +398,24 @@ class AgentTests(unittest.TestCase):
             with self.assertRaises(agent.AgentError):
                 agent._select('school', [dict(ref=ref, text=source)], school_goals=[], as_of='2026-02-10')
 
+    def test_school_feedback_and_old_today_do_not_become_new_homework(self):
+        report='中秋假期作业反馈：\n左列：《秋天的怀念》学案。\n右列：阅读单。'
+        waiting='试卷在孩子们自己手里，答题卡还没取回，下午拿到后发'
+        claimed=dict(title='语文：完成学案',goal='完成学案',advice='',state='ready',reason='模型猜测')
+        completed='上图是今日语文作业完成情况。\n第二列：《济南的冬天》读读写写抄写。'
+        answer='今日阅读单答案：\n七、《父亲的病》\n答案：装腔作势。'
+        for text in (report,waiting,completed,answer,'语文订正作业答案\n三、《二十四孝图》'):
+            self.assertEqual(agent._school_brief(claimed,evidence=[dict(text=text)])['state'],'reference')
+        self.assertEqual(agent._school_brief(claimed,evidence=[dict(text=report+'\n请今天订正。')])['state'],'ready')
+        ref='message:synthetic-group:old'
+        source='今天家庭作业就是完成数学资料33和34页。'
+        proposal=dict(title_quote=source,focus='school',due='',evidence=[dict(ref=ref)],learning_subject='',learning_goal_id='',
+                      task_title='数学：完成资料33和34页',task_goal='完成资料33和34页',task_advice='',task_state='ready',task_reason='明确作业')
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):
+            item=agent._select('school',[dict(ref=ref,text=source,time='2026-09-23T18:19:39+08:00')],school_goals=[],as_of='2026-09-28')[0]
+        self.assertEqual(item['due'],'2026-09-23')
+        self.assertEqual(item['plan']['school_task']['state'],'review')
+
     def payload(self, expected='10', cursor='11', message='11', offset=0):
         stamp = (self.now + dt.timedelta(minutes=offset)).isoformat()
         return dict(source_id=self.source['id'], expected_cursor=expected, cursor=cursor,
@@ -1166,7 +1184,8 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
         with patch.object(agent.family_llm,'_chat_json',side_effect=model):
             self.assertEqual(agent.run_once(self.app,self.now)['failed'],0)
         with self.app.connect() as c:rows={r['title']:dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")}
-        self.assertEqual(rows['英语：抄写Unit 3单词']['state'],'accepted');self.assertEqual(rows['英语：抄写Unit 3单词']['due'],'')
+        self.assertEqual(rows['英语：抄写Unit 3单词']['state'],'pending');self.assertEqual(rows['英语：抄写Unit 3单词']['due'],'')
+        self.assertIn('原消息早于今天',json.loads(rows['英语：抄写Unit 3单词']['plan'])['school_task']['reason'])
         for title,due in (('英语：Unit1–3单元测验（周五）','2026-02-13'),('美术：下周一带一盒水彩笔','2026-02-16')):
             self.assertEqual((rows[title]['state'],rows[title]['due']),('pending',due),title)
             brief=json.loads(rows[title]['plan'])['school_task'];self.assertEqual(brief['state'],'review');self.assertIn('含多个日期',brief['reason']);self.assertIn(due,brief['reason'])

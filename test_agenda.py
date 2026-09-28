@@ -41,6 +41,7 @@ class AgendaTest(unittest.TestCase):
     def test_date_evidence_not_collection_time_and_read_is_pure(self):
         self.assertEqual(agenda.sent_day('2026-09-11T18:00:00Z'),'2026-09-12')
         self.assertEqual(agenda.deadline('今晚完成作业','2026-09-12'),'2026-09-12')
+        self.assertEqual(agenda.deadline('今天要订正的语文作业答案','2026-09-23'),'2026-09-23')
         self.assertEqual(agenda.deadline('明天提交回执','2026-09-30'),'2026-10-01')
         for text in ['今天学习了第二课','2026-02-30前完成','今晚完成作业，明天提交回执']:
             self.assertEqual(agenda.deadline(text,'2026-09-12'),'')
