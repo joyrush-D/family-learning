@@ -197,6 +197,7 @@
 !/test_record_task_link.py
 
 !/test_task_media_ui.cjs
+!/test_task_feedback_reconcile_ui.cjs
 !/test_record_task_link_ui.cjs
 
 !/test_video.py

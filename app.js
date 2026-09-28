@@ -807,7 +807,21 @@ $('#saveTaskFeedback').onclick=async()=>{
  try{
   const response=await apiFetch('/api/task/feedback',{signal:controller.signal,method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify(body)});
   const result=await response.json();
-  if(!response.ok){knownFailure=response.status>=400&&response.status<500;throw Error(result.error||'保存失败')}
+  if(!response.ok){
+   // This conflict proves the request key was saved; other conflicts still need the original retry body.
+   if(response.status===409&&result.code==='request_record_changed'&&body.request_key){
+    await load(false);
+    const saved=data.records.find(r=>r.request_key===body.request_key),task=data.tasks.find(t=>t.id===body.task_id);
+    if(saved&&task&&saved.source==='事项:'+body.task_id&&saved.child===body.child){
+     taskFeedbackPending=null;ctx.request_key=crypto.randomUUID();delete f.dataset.saving;lockTaskFeedback(false);
+     prepareTaskCapture(task,saved);render();
+     $('#taskFeedbackStatus').textContent='这次反馈已保存，后来又被更正；已打开最新记录，请核对历史后再修改。';
+     return;
+    }
+    throw Error('原反馈已保存但归属或事项已变化；当前输入保留，请刷新后从原记录核对。');
+   }
+   knownFailure=response.status>=400&&response.status<500;throw Error(result.error||'保存失败');
+  }
   if(!result.ok||!Number.isInteger(result.record_id)||result.feedback?.task_id!==body.task_id||result.feedback?.child!==body.child||result.record?.source!=='事项:'+body.task_id)throw Error('保存回执与本次反馈不一致');
   taskFeedbackPending=null;ctx.request_key=crypto.randomUUID();ctx.record_id=null;ctx.expected_created=null;ctx.originals=[];delete f.dataset.saving;lockTaskFeedback(false);
   const selectedStatus=f.elements.status.value;
