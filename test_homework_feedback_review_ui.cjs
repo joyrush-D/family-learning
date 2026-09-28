@@ -22,6 +22,7 @@ async function server(){
   await p.locator('[data-homework-new]').first().click();const entry=p.locator('#homeworkInputDialog');await entry.waitFor();assert.match(await entry.innerText(),/记作业/);
   await entry.locator('[name=text]').fill('虚构作业原话：今天核对一页阅读题');await entry.locator('[data-homework-manual]').click();const item=entry.locator('[data-homework-item="0"]');await item.locator('[name=title]').fill(title);await item.locator('[name=goal]').fill('先作答再核对');await item.locator('[name=reviewed]').check();await item.locator('[type=submit]').click();await entry.locator('.homework-saved').waitFor();await entry.locator('[data-homework-close]').click();
   state=await(await fetch(host.url+'api/state')).json();const id=state.tasks.find(t=>t.title===title)?.id;assert(id,'homework entry creates the task');await p.locator('[data-query-target="task:'+id+'"]').waitFor();
+  assert.match(await p.locator('[data-query-target="task:'+id+'"] [data-task="'+id+'"]:visible').first().innerText(),/提交作业反馈/);
   await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskDialog[open]').waitFor();
   assert.equal(await p.locator('#taskStatusDetails').evaluate(x=>x.open),false,'status update stays secondary');
   await p.locator('#taskForm [name=note]').fill('虚构未保存反馈');
@@ -34,6 +35,7 @@ async function server(){
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'close dismissal keeps unsaved photo');
   assert.equal(await p.locator('#pendingUploads img').count(),1);
   await p.locator('#saveTaskFeedback').click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'photo feedback saved');
+  assert.match(await p.locator('[data-query-target="task:'+id+'"] [data-task="'+id+'"]:visible').first().innerText(),/查看\/补充反馈/,'today confirms saved feedback in the same task');
   const panel=p.locator('#taskFeedbackHistory [data-homework-review]').first();assert.equal(await panel.locator('details').evaluate(x=>x.open),true,'saved photo exposes review');assert.equal(await panel.locator('[data-homework-review-photo]').count(),1);
   let calls=0;await p.route('**/api/print/homework/draft',r=>{calls++;const body=r.request().postDataJSON();assert.equal(body.question_sources.length,1);return calls===1?r.fulfill({status:503,json:{error:'虚构模型暂不可用'}}):r.fulfill({json:{draft:{text:'虚构第1题：卷面C，参考B；先找原文依据。',items:1,wrong_items:1,unknown_items:0,coverage:'仅此一页'},question_sha256:'a'.repeat(64)}})});
   assert.equal(calls,0,'opening saved feedback must not call model');await panel.locator('[data-homework-review-photo]').check();await panel.locator('[data-homework-review-run]').click();await eventually(async()=>/虚构模型暂不可用/.test(await panel.innerText()),'model failure retained');
@@ -106,7 +108,8 @@ async function server(){
   await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'separate feedback saved');
   state=await(await fetch(host.url+'api/state')).json();assert.equal(state.records.filter(r=>r.source==='事项:'+id).length,3);
   assert.equal(state.records.find(r=>r.note==='虚构另一条实际反馈')?.child,child);assert.equal(state.tasks.find(t=>t.id===id).update,null);
-  assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);assert.deepEqual(errors,[]);await p.close();
+  assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);await p.reload();
+  assert.match(await p.locator('[data-query-target="task:'+id+'"] [data-task="'+id+'"]:visible').first().innerText(),/查看\/补充反馈/,'reopened today retains saved-feedback state');assert.deepEqual(errors,[]);await p.close();
  }
  console.log('Homework feedback AI review: 360/1440 save, retry, reopen, task status and source preserved');
 }finally{await browser?.close();await host?.stop()}})().catch(e=>{console.error(e);process.exitCode=1});
