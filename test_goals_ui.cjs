@@ -215,6 +215,7 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   await p.locator('nav [data-page="home"]').click();await p.locator('[data-task-all="todo"]').click();
   await p.locator(`[data-query-target="task:${original}"] [data-task]`).click();
   const taskForm=p.locator('#taskForm'),taskNote='虚构作业反馈：孩子说困了，今天先停；看过讲解才说出第一点。';
+  await taskForm.locator('#taskStatusDetails').evaluate(e=>e.open=true);
   await taskForm.locator('[name="status"]').selectOption('进行中');await taskForm.locator('[name="note"]').fill(taskNote);
   let taskFailed=false;await p.route('**/api/task',async route=>{if(!taskFailed){taskFailed=true;await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic task save failure'})})}else await route.continue()});
   await taskForm.getByRole('button',{name:'保存状态'}).click();await p.locator('#taskError').getByText('Synthetic task save failure',{exact:true}).waitFor();assert.equal(await taskForm.locator('[name="note"]').inputValue(),taskNote);
@@ -327,6 +328,18 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   const layerSaved=(await(await p.request.get(url+'api/state')).json()).records.filter(r=>String(r.id)===layerRecord);assert.equal(layerSaved.length,1);assert.equal(layerSaved[0].note,'虚构更正：尚未核对原件 '+width);
   assert.equal((await(await p.request.get(url+'api/goals')).json()).goals.find(g=>g.id===autoGoal.id).current_plan,null);
   if(process.env.GOALS_UI_PROOF_DIR)await layerProfile.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'profile-layers-corrected-'+width+'.png')});checks++;
+  // A parent observation saved from the original task must return to its goal after a failed save and reopen.
+  const beforeObservation=(await(await p.request.get(url+'api/goals')).json()).goals.find(g=>g.id===savedGoal.id),observation='虚构家长观察：独立说出大意，转折仍需核对 '+width;
+  await p.locator('nav [data-page="home"]').click();await p.locator('[data-task-all="todo"]').click();await p.locator(`[data-query-target="task:${original}"] [data-task]`).click();
+  await p.locator('#taskForm [name="note"]').fill(observation);
+  let observationFailed=false;await p.route('**/api/task/feedback',async route=>{if(!observationFailed){observationFailed=true;await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic observation save failure'})})}else await route.continue()});
+  await p.locator('#saveTaskFeedback').click();await p.locator('#taskError').getByText(/Synthetic observation save failure/).waitFor();assert.equal(await p.locator('#taskForm [name="note"]').inputValue(),observation);
+  await p.locator('#saveTaskFeedback').click();await p.locator('#taskFeedbackStatus').getByText(/反馈已保存/).waitFor();await p.unroute('**/api/task/feedback');
+  await p.locator('#taskDialog [data-close="taskDialog"]').click();await p.reload();await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="goals"]').click();await p.locator('[data-goal-child-select="child-1"]').click();
+  const observationGoal=(await(await p.request.get(url+'api/goals')).json()).goals.find(g=>g.id===savedGoal.id),observationRecord=observationGoal.records.find(r=>r.note===observation);
+  assert(observationRecord);assert.equal(observationRecord.category,'家长观察');assert.equal(observationRecord.source,'事项:'+original);assert.deepEqual(observationGoal.current_plan,beforeObservation.current_plan);assert(observationGoal.evidence_changed);
+  assert.equal((await(await p.request.get(url+'api/goals')).json()).goals.find(g=>g.id===secondProfile).records.some(r=>r.note===observation),false);
+  await p.locator(`[data-goal-select="${savedGoal.id}"]`).last().click();await p.locator(`#goal-record-${observationRecord.id}`).getByText(observation,{exact:true}).waitFor();assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);checks++;
   await p.close();
  }
  console.log(JSON.stringify({passed:true,checks,viewports:[360,1440],synthetic_only:true}));

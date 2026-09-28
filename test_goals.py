@@ -475,6 +475,18 @@ class GoalTests(unittest.TestCase):
         self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'stale')
         with self.assertRaises(agent.AgentError):self.approve(g)
 
+    def test_parent_observation_on_goal_task_reaches_original_goal(self):
+        self.approve(self.evaluate());before=self.goal();task=before['task_id']
+        saved=self.app.save_task_feedback(dict(task_id=task,child='示例甲',day=self.now.date().isoformat(),
+            category='家长观察',note='家长观察：孩子独立说出大意，转折仍需核对。',
+            request_key='synthetic-goal-task-observation'))
+        goal=self.goal()
+        self.assertEqual([r['id'] for r in goal['records']],[saved['record_id']])
+        self.assertTrue(goal['evidence_changed'])
+        self.assertEqual(goal['current_plan'],before['current_plan'])
+        self.evaluate()
+        self.assertIn('record:'+str(saved['record_id']),[r['ref'] for r in self.last_input['evidence']])
+
     def test_school_task_feedback_and_results_follow_explicit_links_and_child(self):
         def school_task(child, goal):
             task=self.app.new_task(dict(child=child,title='英语：介绍一种文具',category='homework'))['id']

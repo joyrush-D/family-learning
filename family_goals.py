@@ -455,7 +455,7 @@ class Store:
         task_sources = {'事项:' + task_id for task_id in tasks}
         # A record the parent attached to a linked task counts like that task's own feedback; subject or title never selects one.
         ids.update(r['id'] for r in rows.values() if (r['source'] in task_sources or r.get('linked_task_id') in tasks)
-                   and r['category'] in ('学习进展','课程进度','成绩') and owners.get(r['child']) == row['child_id'])
+                   and r['category'] in ('学习进展','家长观察','课程进度','成绩') and owners.get(r['child']) == row['child_id'])
         # R19/R26: a teaching task the parent explicitly linked to this goal adds its attempts' own records (help,
         # originals and later linked observations included); a title or subject never links one.
         if 'goal_id' in {col[1] for col in c.execute('PRAGMA table_info(guided_sessions)')}:
