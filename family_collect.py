@@ -434,7 +434,7 @@ def run_once(config, client=None, read_cli=cli_json, bootstrap_qq=False):
             continue
         deadline = time.monotonic() + QQ_ROUND_SECONDS if source['platform'] == 'qq' else None
         body = dict(source_id=source['id'], expected_cursor=source['cursor'], cursor=source['cursor'],
-                    checked_at='', last_message_time='', messages=[], error='')
+                    checked_at='', last_message_time='', messages=[], error='', check_id=source.get('check_id', ''))
         try:
             if source['platform'] == 'wechat':
                 checked(bool(config.get('wechat_cli')), 'wechat_cli_not_configured')

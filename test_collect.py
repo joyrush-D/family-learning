@@ -105,6 +105,13 @@ class FakeClient:
 
 
 class CollectorTests(unittest.TestCase):
+    def test_background_receipt_keeps_parent_check_identity(self):
+        client = FakeClient(sources=[dict(SOURCE, check_id='a'*24)])
+        rows = collect.run_once(CONFIG, client, lambda args, env=None: page([]))
+        self.assertEqual(rows[0]['status'], 'ingested')
+        self.assertEqual(client.posts[0]['check_id'], 'a'*24)
+        self.assertEqual(client.posts[0]['cursor'], SOURCE['cursor'])
+
     def test_no_due_sources_does_not_call_a_cli_or_ingest(self):
         client = FakeClient(sources=[])
         with patch.object(collect, 'cli_json', side_effect=AssertionError('No source is due')) as cli:

@@ -1857,6 +1857,9 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith('/api/child-access/'):
                 return self.reply(200,family_child.parent_action(SimpleNamespace(**globals()),path.removeprefix('/api/child-access/'),obj))
             if path=='/api/agent/ingest': return self.reply(200,agent_store().ingest(obj))
+            if path=='/api/agent/collector/check':
+                if obj: raise ValueError('检查请求不需要额外参数')
+                return self.reply(200,agent_store().request_collection_check())
             if path=='/api/agent/fragment':
                 from family_qq_capture import save_fragment
                 return self.reply(200,save_fragment(agent_store(),obj))

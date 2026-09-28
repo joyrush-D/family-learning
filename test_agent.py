@@ -675,6 +675,36 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(agent.next_collection_at('2026-02-10T23:40:00+08:00').isoformat(), '2026-02-11T00:40:00+08:00')
         self.assertEqual(agent.next_collection_at('2026-02-10T07:10:00+00:00').isoformat(), '2026-02-10T16:00:00+08:00')
 
+    def test_parent_check_waits_for_matching_background_receipt_without_moving_cursor(self):
+        self.store.ingest(self.payload())
+        request_at = self.now + dt.timedelta(minutes=1)
+        queued = self.store.request_collection_check(request_at)
+        before = self.store.snapshot()['sources'][0]
+        self.assertEqual((before['cursor'], before['last_attempt'], before['collection_check']['status']),
+                         ('11', self.now.isoformat(), 'pending'))
+        check_id = self.store.collector_plan(request_at)['sources'][0]['check_id']
+        self.assertTrue(check_id)
+        self.assertEqual(self.store.request_collection_check(request_at+dt.timedelta(minutes=1)), queued)
+        # A read started before the click cannot acknowledge this request.
+        old_read = self.payload(expected='11', cursor='11', offset=2); old_read['messages'] = []
+        self.store.ingest(old_read)
+        self.assertEqual(self.store.snapshot()['sources'][0]['collection_check']['status'], 'pending')
+        failure = self.payload(expected='11', cursor='11', offset=3)
+        failure.update(messages=[], error='cli_read_failed', check_id=check_id)
+        self.store.ingest(failure)
+        saved = self.store.snapshot()['sources'][0]
+        self.assertEqual((saved['cursor'], saved['last_success'], saved['collection_check']['status']),
+                         ('11', old_read['checked_at'], 'read_error'))
+        retried = self.store.request_collection_check(request_at+dt.timedelta(minutes=5))
+        self.assertNotEqual(retried['sources'][0]['requested_at'], queued['sources'][0]['requested_at'])
+        next_id = self.store.collector_plan(request_at+dt.timedelta(minutes=5))['sources'][0]['check_id']
+        self.assertNotEqual(next_id, check_id)
+        fresh = self.payload(expected='11', cursor='11', offset=7)
+        fresh.update(messages=[], check_id=next_id)
+        self.store.ingest(fresh)
+        self.assertEqual(self.store.snapshot()['sources'][0]['collection_check']['status'], 'success')
+        self.assertEqual(self.store.collector_plan(request_at+dt.timedelta(minutes=8))['sources'], [])
+
     def test_collection_failures_are_throttled_without_rewriting_source_state(self):
         self.store.ingest(self.payload())
         failed = self.payload(expected='11', offset=20)

@@ -12,6 +12,7 @@ import http.client
 import json
 from pathlib import Path
 import re
+import secrets
 import sqlite3
 
 import family_llm
@@ -451,6 +452,14 @@ def next_collection_at(last_attempt):
     return due
 
 
+def _collection_check(row):
+    try:
+        value = json.loads(row['check_request']) if row else {}
+        return value if isinstance(value, dict) else {}
+    except (KeyError, ValueError, TypeError):
+        return {}
+
+
 def _review_date(value, today, *, future=False):
     try:
         if not isinstance(value, str) or not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', value): raise ValueError()
@@ -535,6 +544,8 @@ class Store:
                     c.executemany('UPDATE agent_sources SET unread_count=? WHERE id=?', [(n, ident) for ident, n in counts.items()])
                 if 'plan' not in {row['name'] for row in c.execute('PRAGMA table_info(agent_items)')}:
                     c.execute("ALTER TABLE agent_items ADD COLUMN plan TEXT NOT NULL DEFAULT '{}'")
+            if 'check_request' not in columns:
+                c.execute("ALTER TABLE agent_sources ADD COLUMN check_request TEXT NOT NULL DEFAULT '{}'")
 
     @contextmanager
     def _db(self):
@@ -585,11 +596,43 @@ class Store:
                 if not fragment and inbox and inbox['enabled'] and source['id'] == inbox['source_id']: continue
                 row = c.execute('SELECT * FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
                 self._binding(source, row)
-                if not fragment and config['enabled'] and row and row['last_attempt'] and now < next_collection_at(row['last_attempt']):
+                check = _collection_check(row)
+                check_id = check.get('id', '') if not check.get('completed_at') else ''
+                if not fragment and config['enabled'] and row and row['last_attempt'] and not check_id and now < next_collection_at(row['last_attempt']):
                     continue
                 sources.append({**{key: source[key] for key in ['id', 'platform', 'child_id', 'name']},
-                                'cursor': row['cursor'] if row else source['cursor']})
+                                'cursor': row['cursor'] if row else source['cursor'], 'check_id': check_id})
         return {'enabled': config['enabled'], 'sources': sources}
+
+    def request_collection_check(self, now=None):
+        """Queue one parent-requested read for the existing collector processes."""
+        now = _now(now)
+        with self._db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            config = self._config(c)
+            if not config['enabled']:
+                raise AgentError('消息采集已暂停，不能检查最新消息', 409, 'collector_disabled')
+            result = []
+            for source in config['sources']:
+                if not source['enabled']: continue
+                row = c.execute('SELECT * FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
+                binding = self._binding(source, row)
+                if row is None:
+                    c.execute('INSERT INTO agent_sources(id,binding,cursor) VALUES(?,?,?)',
+                              (source['id'], binding, source['cursor']))
+                check = _collection_check(row)
+                try:
+                    age = now - dt.datetime.fromisoformat(check['requested_at'])
+                    recent = dt.timedelta(0) <= age < dt.timedelta(minutes=5 if check.get('completed_at') else 10)
+                except (KeyError, ValueError, TypeError): recent = False
+                if not recent:
+                    check = dict(id=secrets.token_hex(12), requested_at=now.isoformat(), completed_at='', status='pending')
+                    c.execute('UPDATE agent_sources SET check_request=? WHERE id=?', (_json(check), source['id']))
+                result.append(dict(source_id=source['id'], requested_at=check['requested_at'],
+                                   status=check['status']))
+            if not result:
+                raise AgentError('没有已启用的消息来源', 409, 'no_enabled_sources')
+        return dict(ok=True, sources=result)
 
     def _binding(self, source, row):
         binding = _json([source['platform'], source['child_id']])
@@ -599,7 +642,10 @@ class Store:
 
     def ingest(self, obj):
         keys = {'source_id', 'expected_cursor', 'cursor', 'checked_at', 'last_message_time', 'messages', 'error'}
-        if not isinstance(obj, dict) or set(obj) != keys: raise AgentError('采集提交结构不正确')
+        if not isinstance(obj, dict) or set(obj) not in (keys, keys | {'check_id'}): raise AgentError('采集提交结构不正确')
+        check_id = obj.get('check_id', '')
+        if not isinstance(check_id, str) or (check_id and not re.fullmatch(r'[0-9a-f]{24}', check_id)):
+            raise AgentError('检查请求编号不正确')
         expected = _text(obj, 'expected_cursor', 200); cursor = _text(obj, 'cursor', 200)
         checked = _time(obj['checked_at']); latest = _time(obj['last_message_time'], True)
         error = _text(obj, 'error', 400); messages = obj['messages']
@@ -625,7 +671,7 @@ class Store:
             config = self._config(c)
             source = next((s for s in config['sources'] if s['id'] == obj['source_id'] and s['enabled']), None)
             if not config['enabled'] or source is None: raise AgentError('来源未获授权或Agent已停用', 403, 'source_disabled')
-            receipt = _hash([source['id'], expected, cursor, checked, latest, clean, bool(error)])
+            receipt = _hash([source['id'], expected, cursor, checked, latest, clean, bool(error), check_id])
             previous = c.execute('SELECT * FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
             binding = self._binding(source, previous)
             current = previous['cursor'] if previous else source['cursor']
@@ -660,6 +706,10 @@ class Store:
             else:
                 c.execute('UPDATE agent_sources SET cursor=?,last_attempt=?,last_success=?,last_message_time=?,error=?,receipt=? WHERE id=?',
                           (cursor, checked, checked, latest or (previous['last_message_time'] if previous else ''), '', receipt, source['id']))
+            check = _collection_check(previous)
+            if check_id and check.get('id') == check_id and not check.get('completed_at'):
+                check.update(completed_at=checked, status='read_error' if error else 'success')
+                c.execute('UPDATE agent_sources SET check_request=? WHERE id=?', (_json(check), source['id']))
         return {'ok': True, 'replayed': False, 'inserted': inserted, 'cursor': current if error else cursor}
 
     def _message_context(self, c, obj):
@@ -849,6 +899,8 @@ class Store:
                     'unread_count': saved['unread_count'] if saved else 0,
                     'next_collection_at': due,
                     'cursor': saved['cursor'] if saved else source['cursor']})
+                check = _collection_check(saved)
+                sources[-1]['collection_check'] = {key: check.get(key, '') for key in ('requested_at', 'completed_at', 'status')}
                 if inbox and inbox['source_id'] == source['id']: sources[-1]['inbox'] = inbox
                 if saved and not binding_error:
                     fragment = c.execute("""SELECT id,json_extract(payload,'$.captured_at') AS captured_at
