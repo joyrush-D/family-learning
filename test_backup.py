@@ -400,6 +400,8 @@ def care_choice_restore_check():
                          note='这段虚构观察仍需核对。',source='陪伴建议:synthetic-care',attachments=[upload['id']],
                          care_choice='改天回看',care_review_on=next_day,request_key='synthetic_backup_care_request')
             first=app.save_record(request,care_only=True)
+            replay=app.save_record(request,care_only=True)
+            assert replay['replayed'] and replay['record_id']==first['record_id']
             edit={key:value for key,value in request.items() if key not in ['care_choice','care_review_on','request_key']}
             app.save_record(edit | dict(id=first['record_id'],title='虚构文字更正'))
             with app.connect() as connection:
@@ -408,11 +410,17 @@ def care_choice_restore_check():
             archive=backup.create(root,'private/backups/care.zip')
             restored=backup.restore(archive,root.parent/'restored')
             app.ROOT,app.DATA,app.DB=restored,restored/'private',restored/'private/family.sqlite3'
-            replay=app.save_record(request,care_only=True)
-            assert replay['replayed'] and replay['record_id']==first['record_id']
-            assert replay['care']['review_status']=='deferred' and replay['care']['review_on']==next_day
+            try:
+                app.save_record(request,care_only=True)
+            except app.RecordError as error:
+                assert (error.status,error.code,error.request_known,error.not_saved)==(409,'request_record_changed',True,False)
+            else:
+                raise AssertionError('A corrected record accepted its old request key')
             assert (app.DATA/'uploads'/upload['id']).read_bytes()==original
             with app.connect() as connection:
+                care=app.care_notes(connection)
+                assert not care['error'] and care['items'][0]['review_status']=='deferred'
+                assert care['items'][0]['review_on']==next_day
                 assert [dict(row) for row in connection.execute('SELECT * FROM records ORDER BY id')]==expected_records
                 assert [dict(row) for row in connection.execute('SELECT * FROM revisions ORDER BY id')]==expected_revisions
                 assert connection.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='record_request_key'").fetchone()
