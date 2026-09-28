@@ -13,6 +13,7 @@ import app
 import family_child
 import family_llm
 import family_study
+import family_task_focus
 
 
 class HomeworkReportTests(unittest.TestCase):
@@ -114,6 +115,26 @@ class HomeworkReportTests(unittest.TestCase):
         for bad in [report|dict(actor='parent'),report|dict(confirmed_at='pretend'),report|dict(text='x'*6001),report|dict(attachments=[photo,photo]),report|dict(attachments=['../../private'])]:
             with self.assertRaises(family_study.StudyError):self.store.save_item(self.request(title='不应保存',report=bad))
         self.assertEqual(self.counts(),before)
+
+    def test_recorded_homework_stays_homework_without_an_invented_deadline(self):
+        for actor,title in [('parent','读三段并回答'),('child','读第二页并回答')]:
+            body=self.request(title=title,report=self.report())
+            result=self.store.save_item(body) if actor=='parent' else self.child('item',body)
+            ident=result['saved_item_id']
+            task=next(t for t in app.snapshot()['tasks'] if t['id']==ident)
+            self.assertEqual(task['agenda']['category'],'homework')
+            self.assertEqual(task['agenda']['scheduled_on'],self.day)
+            self.assertEqual(task['agenda']['due_on'],'')
+            self.assertEqual(task['due'],'')
+            self.assertEqual(task['homework_report']['needs_review'],actor=='child')
+            agenda=app.snapshot()['today_calendar']['inbox']
+            self.assertEqual(next(x for x in agenda if x['task_id']==ident)['agenda']['category'],'homework')
+        family_task_focus.save(app,dict(id=ident,version=0,request_key=uuid.uuid4().hex,
+                                        mode='next',next_action='',waiting_for='',review_on='',
+                                        category='todo',scheduled_on=''))
+        changed=next(t for t in app.snapshot()['tasks'] if t['id']==ident)
+        self.assertEqual(changed['agenda']['category'],'todo')
+        self.assertEqual(changed['agenda']['scheduled_on'],'')
 
 
 if __name__=='__main__':unittest.main()
