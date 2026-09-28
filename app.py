@@ -885,6 +885,17 @@ def new_task(obj, connection=None):
             if dict(existing)!=task or (initial.get('box'),initial.get('category'),initial.get('next_action'))!=(box,category,advice):
                 raise TaskError('这次收集已保存，内容已变化，请先到收集箱核对原事项',409,'task_create_conflict')
             return next(t for t in tasks(c) if t['id']==task['id'])
+        if task['source'].startswith('message:'):
+            store=agent_store(read_only=True)
+            matches=[s for s in store._config(c)['sources'] if task['source'].startswith('message:'+s['id']+':')]
+            if not matches: raise TaskError('原消息出处无法核对，请刷新原件后再记作业')
+            source=max(matches,key=lambda s:len(s['id']))
+            owner=next(p for p in profiles(c) if p['name']==task['child'])
+            try:
+                store._message_context(c,dict(child_id=owner['id'],source_id=source['id'],
+                                              message_id=task['source'][len('message:'+source['id']+':'):]))
+            except family_agent.AgentError as error:
+                raise TaskError(str(error),error.status,error.code) from None
         c.execute('INSERT INTO manual_tasks (id,child,title,due,original_status,source,action) VALUES (?,?,?,?,?,?,?)',tuple(task.values()))
         if key or any(k in obj for k in ('box','category','advice')):
             family_task_focus.save(SimpleNamespace(**globals()),dict(id=task['id'],version=0,request_key='new-task-'+(key or secrets.token_hex(16)),mode='next',next_action=advice,waiting_for='',review_on='',box=box,category=category,due_on=family_agenda.date(task['due'])),connection=c)

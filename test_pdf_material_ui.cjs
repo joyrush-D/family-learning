@@ -106,6 +106,10 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
  store.ingest(dict(source_id='synthetic',expected_cursor='',cursor='cursor-1',checked_at=now.isoformat(),last_message_time=now.isoformat(),error='',messages=[dict(id='notice-'+str(w),time=now.isoformat(),kind='text',sender='虚构老师',text='虚构老师通知 '+str(w)+'：请核对所附练习卷。',unread=True) for w in (360,1440)]))
  for w in (360,1440): store._save('notice-'+str(w),'fixture',[dict(child_id='child-1',kind='school',title='虚构文字通知 '+str(w),body='核对原要求',evidence=[dict(ref='message:synthetic:notice-'+str(w),text='虚构老师通知 '+str(w)+'：请核对所附练习卷。')])],now)
  store._runtime('ready',now)
+ for child,source in [('示例小宇','message:qq:123456:native-360'),('示例星星','message:qq:123456:missing')]:
+  try: app.new_task(dict(child=child,title='不应写入的虚构作业',source=source,request_key='synthetic-ref-guard-'+('other' if child=='示例小宇' else 'missing')))
+  except app.TaskError: pass
+  else: raise AssertionError('invalid source ref accepted')
  app.prepare_assets()
  server=app.ThreadingHTTPServer(('127.0.0.1',int(os.environ['TEST_AGENT_PORT'])),app.Handler)
  try:server.serve_forever()
@@ -121,7 +125,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
  for(const width of [360,1440]){
   const page=await browser.newPage({viewport:{width,height:820},extraHTTPHeaders:{'Tailscale-User-Login':'synthetic-parent'}}),pageErrors=[],alerts=[];page.on('pageerror',e=>pageErrors.push(e.message));page.on('dialog',async d=>{alerts.push(d.message());await d.dismiss()});
   await page.goto(origin);await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();
-  const before=await state(),facts=s=>JSON.stringify([s.tasks,s.records,s.agent.items.map(x=>[x.id,x.state])]),factsBefore=facts(before);
+  const before=await state(),facts=s=>JSON.stringify([s.tasks,s.records,s.agent.items.map(x=>[x.id,x.state])]);let factsBefore=facts(before);
   const item=kind=>before.agent.items.find(x=>x.title==='虚构'+(kind.startsWith('docx')?'Word':'PDF')+'资料 '+kind+' '+width),ref=kind=>item(kind).evidence[0].ref,identity=kind=>({child_id:'child-1',source_id:'qq:123456',message_id:ref(kind).slice('message:qq:123456:'.length)});
   const existing=before.uploads.find(x=>x.name==='synthetic-existing.png');
   const dialog=page.locator('#schoolOriginalDialog'),panel=dialog.locator('[data-school-pdf-material]'),batches=dialog.locator('[data-school-pdf-batch]'),refresh=dialog.locator('[data-school-pdf-refresh]'),retry=dialog.locator('[data-school-pdf-retry]');
@@ -131,7 +135,9 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   const fileList=page.locator('[data-qq-files]');await fileList.locator('summary').click();
   assert.match(await fileList.innerText(),/虚构原生PDF-360\.pdf/);assert.match(await fileList.innerText(),/虚构原生PDF-1440\.pdf/);
   await fileList.locator('[data-school-original-ref="message:qq:123456:native-'+width+'"]').click();await panel.waitFor();
-  assert.match(await panel.innerText(),/虚构原生PDF-[\s\S]*已整理 3 \/ 11 页/);await fits(page);await close();
+  assert.match(await panel.innerText(),/虚构原生PDF-[\s\S]*已整理 3 \/ 11 页/);
+  assert.equal(await dialog.locator('[data-school-homework-new]').count(),0,'a pending school item should be reviewed first');await fits(page);
+  await close();
   await open('message:qq:123456:native-field-'+width);await panel.waitFor();
   assert.equal(await panel.getAttribute('data-school-pdf-state'),'unavailable');
   assert.match(await panel.innerText(),/不能安全转换[\s\S]*另存为PDF/);assert.equal(await retry.count(),0);
@@ -145,7 +151,35 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   assert.equal(await dialog.locator('[data-school-original-files] a[href*="'+before.uploads.find(x=>x.name==='虚构演示文稿-native-pptx-'+width+'.pptx').id+'"]').count(),1);
   await refresh.click();await panel.waitFor();await until(async()=>!(await dialog.locator('[data-school-pdf-notice]').innerText()).includes('正在读取'),'PPTX refresh settled');
   assert.equal(await panel.getAttribute('data-school-pdf-original'),'pptx');
-  await fits(page);await proof(page,'school-pptx-ready-'+width);await close();
+  await fits(page);await proof(page,'school-pptx-ready-'+width);
+  const sourceRef='message:qq:123456:native-pptx-'+width,taskCount=before.tasks.length;
+  await dialog.locator('[data-school-homework-new]').click();
+  const taskForm=page.locator('#newTaskForm'),taskDialog=page.locator('#newTaskDialog');await taskDialog.waitFor({state:'visible'});
+  assert.equal(await taskForm.locator('[name="source"]').inputValue(),sourceRef);
+  assert.equal(await taskForm.locator('[name="source"]').getAttribute('readonly'),'');
+  assert.equal(await taskForm.locator('[name="child"] option').count(),1);
+  assert.equal(await taskForm.locator('[name="due"]').inputValue(),'','an old file must not become today by default');
+  assert.equal(await taskForm.locator('[name="due"]').getAttribute('required'),'');
+  await taskForm.locator('[name="title"]').fill('虚构原件核对后作业 '+width);
+  await taskForm.locator('[name="action"]').fill('家长核对后完成虚构练习');
+  await taskForm.locator('[name="due"]').fill(before.today);
+  const requestKey=await taskForm.locator('[name="request_key"]').inputValue();
+  await page.route('**/api/task/new',route=>route.fulfill({status:503,json:{error:'虚构暂不可保存'}}));
+  await taskForm.locator('[type="submit"]').click();await page.locator('#newTaskError').getByText('虚构暂不可保存').waitFor();
+  assert.equal(await taskForm.locator('[name="request_key"]').inputValue(),requestKey);
+  assert.equal(await taskForm.locator('[name="title"]').inputValue(),'虚构原件核对后作业 '+width);
+  await page.unroute('**/api/task/new');await taskForm.locator('[type="submit"]').click();
+  await taskDialog.waitFor({state:'hidden'});
+  const saved=(await state()).tasks.find(t=>t.title==='虚构原件核对后作业 '+width);
+  assert.ok(saved);assert.equal(saved.source,sourceRef);assert.equal(saved.child,'示例星星');
+  assert.equal((await state()).tasks.length,taskCount+1);
+  factsBefore=facts(await state());
+  await page.locator('nav [data-page="home"]').click();
+  const taskCard=page.locator('[data-query-target="task:'+saved.id+'"]');await taskCard.waitFor();
+  await taskCard.locator('[data-school-original-ref="'+sourceRef+'"]').click();await panel.waitFor();
+  assert.equal(await dialog.locator('[data-school-homework-new]').count(),0,'the same source is not offered as a new task again');
+  await fits(page);await close();
+  await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();
   if(!(await fileList.evaluate(e=>e.open)))await fileList.locator('summary').click();
   await fileList.locator('[data-school-original-ref="message:qq:123456:native-pptx-refused-'+width+'"]').click();await panel.waitFor();
   assert.equal(await panel.getAttribute('data-school-pdf-state'),'unavailable');
