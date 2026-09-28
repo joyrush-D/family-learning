@@ -79,12 +79,24 @@ function taskInboxHTML(){
  const views=taskBoxes();if(!(taskView in views))taskView='Inbox';
  return `<header class="today-heading"><h1>${taskView==='Wish'?'心愿清单':taskView==='全部'?'所有作业与待办':'收集箱'}</h1><button class="primary" data-new-task="${taskView==='Wish'?'wish':'yes'}">${taskView==='Wish'?'＋ 记心愿':'＋ 记一件事'}</button></header>${filters()}${taskBoxesHTML()}<p class="small muted">${({'Inbox':'所有未完成事务，包含已安排和已逾期的事项。','Wish':'想做的事先留在这里，选定日期再转成计划。','计划':'已安排日期、尚未完成的事项。','已完成':'已确认完成的事项，可撤销完成。','已逾期':'截止日已过；未填截止日时按计划日判断。重复安排不计入。','已搁置':'不参加、无需处理、已取消等事项，保留原决定。','全部':'所有日期的作业与待办，包含未完成、已完成及已搁置；心愿单独标注。'})[taskView]}</p>${taskView==='Wish'?`<section class="card checklist">${views[taskView].map(agendaItemHTML).join('')||'<p>这里暂时没有心愿。</p>'}</section>`:`<div class="today-task-groups">${taskGroupsHTML(views[taskView])}</div>`}`;
 }
+function todayTaskOrder(a,b){
+ const key=x=>{
+  const due=exactTaskDay(x.agenda?.due_on),planned=exactTaskDay(x.agenda?.scheduled_on),published=exactTaskDay(x.agenda?.published_on);
+  if(due===data.today||planned===data.today)return [0,data.today];
+  if(due&&due<data.today)return [1,due];
+  if(due)return [2,due];
+  if(planned&&planned<data.today)return [3,planned];
+  return published?[4,published]:[5,''];
+ };
+ const [ar,ad]=key(a),[br,bd]=key(b);
+ return ar-br||(ar===2?ad.localeCompare(bd):bd.localeCompare(ad));
+}
 function todayTasksHTML(){
  const r=data.today_calendar;if(!Array.isArray(r?.inbox))return taskInboxHTML();
  const matches=x=>!child||(x.child_ids||[x.child_id]).includes(data.children.find(c=>c.name===child)?.id);
- const items=taskInboxItems().filter(x=>!x.closed&&x.kind!=='event'&&x.agenda.box!=='wish'&&(!x.agenda.published_on||x.agenda.published_on<=data.today)&&(!x.agenda.scheduled_on||x.agenda.scheduled_on<=data.today||x.agenda.due_on));
+ const items=taskInboxItems().filter(x=>!x.closed&&x.kind!=='event'&&x.agenda.box!=='wish'&&(!x.agenda.published_on||x.agenda.published_on<=data.today)&&(!x.agenda.scheduled_on||x.agenda.scheduled_on<=data.today||x.agenda.due_on)).sort(todayTaskOrder);
  const plans=(r.timetables||[]).filter(matches).map(calendarTimetableHTML).join('')+(r.events||[]).filter(x=>matches(x)&&!['cancelled','completed'].includes(x.status)).map(calendarEventHTML).join('');
- return `<header class="today-heading"><div><h1>今天</h1><p>${esc(data.today)}</p></div><button class="primary" data-new-task="yes">＋ 记一件事</button></header>${sourceCoverageHTML()}${r.source_error?`<p class="error" role="status">${esc(r.source_error)}</p>`:''}<div class="today-controls">${filters()}<div class="today-sections" aria-label="跳到事务分类"><a href="#task-group-homework">作业 ${items.filter(x=>x.agenda.category==='homework'&&x.kind!=='school').length}</a><a href="#task-group-todo">待办 ${items.filter(x=>x.agenda.category!=='homework'&&x.kind!=='school').length}</a></div></div><div class="today-task-groups">${taskGroupsHTML(items,'今日作业')}</div>${plans?`<section class="card agenda-group"><h2>课表与计划</h2>${plans}</section>`:''}<p class="small muted">未完成事项继续保留；待核对通知需确认后才成为任务。</p>`;
+ return `<header class="today-heading"><div><h1>今天</h1><p>${esc(data.today)}</p></div><button class="primary" data-new-task="yes">＋ 记一件事</button></header>${sourceCoverageHTML()}${r.source_error?`<p class="error" role="status">${esc(r.source_error)}</p>`:''}<div class="today-controls">${filters()}<div class="today-sections" aria-label="跳到事务分类"><a href="#task-group-homework">作业 ${items.filter(x=>x.agenda.category==='homework'&&x.kind!=='school').length}</a><a href="#task-group-todo">待办 ${items.filter(x=>x.agenda.category!=='homework'&&x.kind!=='school').length}</a></div></div><div class="today-task-groups">${taskGroupsHTML(items,'今日作业')}</div>${plans?`<section class="card agenda-group"><h2>课表与计划</h2>${plans}</section>`:''}<p class="small muted">各类先列已确认事项：今天到期或计划在前，逾期按较近日期，未来截止按临近日期；待核对通知按原发布时间由近到远，确认后才成为任务。</p>`;
 }
 async function calendarRead(){
  const start=calendarState.week,end=calendarAdd(start,6),range=start+'/'+end;

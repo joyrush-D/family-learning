@@ -100,6 +100,28 @@ function fixtures(base){
     checks.push({width,kind:'classification',homeworkAndTodo:true,deadlinesCarryForward:true,wishesAndFuturePlansExcluded:true,pendingSeparate:true,childIsolation:true,sharedCalendar:true,fourNavigationItems:true,moreEntriesReachable:true,noThree:true,taskTop:position.y,noOverflow:true});
    }finally{await p.close()}
 
+   // A backfilled school notice keeps its original publication day; processing order must not bury recent notices.
+   const orderState=fixtures(await read()),owner=orderState.children[0],baseTask=orderState.tasks.find(t=>t.id==='TODAY'),school=orderState.agent.items.find(x=>x.kind==='school');
+   orderState.today='2026-09-28';
+   const orderTask=(id,published,due='')=>({...baseTask,id,title:'虚构事项 '+id,due,agenda:{...baseTask.agenda,published_on:published,due_on:due}});
+   orderState.tasks=[orderTask('OLD','2026-09-02'),orderTask('DUE-OLD','2026-09-20','2026-09-20'),orderTask('DUE-RECENT','2026-09-22','2026-09-27'),orderTask('DUE-TODAY','2026-09-27','2026-09-28'),orderTask('DUE-NEXT','2026-09-27','2026-09-29')];
+   const published=['2026-09-02','2026-09-20','2026-09-22','2026-09-27'];
+   orderState.agent.items=published.map((day,n)=>({...school,id:'notice-'+n,title:'虚构学校消息 '+n,child_id:owner.id}));
+   orderState.today_calendar={inbox:[...orderState.tasks.map(t=>({id:t.id,task_id:t.id,kind:'task',child_ids:[owner.id],title:t.title,agenda:t.agenda,status:'待跟进',closed:false})),...published.map((day,n)=>({id:'notice-'+n,task_id:'',kind:'school',child_ids:[owner.id],title:'虚构学校消息 '+n,agenda:{category:'homework',published_on:day,due_on:'',scheduled_on:'',box:'inbox'},status:'待核对',closed:false}))],agenda:[],events:[],timetables:[],source_error:''};
+   const orderPage=await browser.newPage({viewport:{width,height:820}});
+   try{
+    await orderPage.route('**/api/state',route=>route.fulfill({contentType:'application/json',body:JSON.stringify(orderState)}));
+    await orderPage.goto(server.url,{waitUntil:'load'});await ready(orderPage);
+    const taskOrder=()=>orderPage.locator('#task-group-homework [data-today-task]').evaluateAll(xs=>xs.map(x=>x.dataset.todayTask));
+    const noticeOrder=()=>orderPage.locator('#task-group-homework [data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem));
+    assert.deepEqual(await taskOrder(),['DUE-TODAY','DUE-RECENT','DUE-OLD','DUE-NEXT','OLD']);
+    assert.deepEqual(await noticeOrder(),['notice-3','notice-2','notice-1','notice-0']);
+    await fit(orderPage);await orderPage.reload({waitUntil:'load'});await ready(orderPage);
+    assert.deepEqual(await taskOrder(),['DUE-TODAY','DUE-RECENT','DUE-OLD','DUE-NEXT','OLD'],'date order persists after reload');
+    assert.deepEqual(await noticeOrder(),['notice-3','notice-2','notice-1','notice-0'],'source order persists after reload');
+    checks.push({width,kind:'today-business-sort',confirmedDates:true,backfilledNoticeDates:true,reload:true,noOverflow:true});
+   }finally{await orderPage.close()}
+
    // These writes go to the disposable demo's real API. No response fixture is active.
    const current=await read(),who=current.children[0],other=current.children[1],title='虚构数学作业 '+width;
    const response=await fetch(server.url+'api/task/new',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':current.token},body:JSON.stringify({child:who.name,title,due:current.today,source:'虚构测试通知',action:'虚构要求'})});
