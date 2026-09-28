@@ -105,6 +105,14 @@ with tempfile.TemporaryDirectory(prefix='synthetic-task-feedback-') as folder:
         changed=dump(app)
         assert app.save_task_feedback(reviewed|dict(review_basis=current_basis))['replayed']
         assert dump(app)==changed and changed!=before
+        correction=dict(task_id='T01',child='示例甲',record_id=accepted['record_id'],
+                        expected_created=accepted['feedback']['created'],note='虚构家长更正批改依据',
+                        review_basis=current_basis)
+        refused(app,correction,'review_basis_changed',409)
+        correction['review_basis']=current_basis|dict(created=next(r for r in app.snapshot()['records'] if r['id']==first['record_id'])['created'])
+        corrected=app.save_task_feedback(correction)
+        assert corrected['feedback']['note']=='虚构家长更正批改依据'
+        assert app.save_task_feedback(correction)['replayed']
 
         # Explicit completion and feedback are saved together or not at all.
         done=body|dict(request_key='synthetic-feedback-0020',attachments=[photo],complete=True)

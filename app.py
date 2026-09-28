@@ -976,7 +976,7 @@ def save_task_feedback(obj):
         for row in c.execute("SELECT child,attachments FROM records WHERE attachments<>'[]'"):
             if names.get(row['child'],row['child'])!=task['child'] and set(json.loads(row['attachments']))&set(attachments):
                 raise RecordError('该原件已关联另一位孩子的记录，请为这个孩子重新上传',409,'feedback_media_other_child')
-        if previous is not None and all(record[k]==(saved if k=='attachments' else previous[k]) for k in record if k not in ('child','source','title')):
+        if previous is not None and all(record[k]==(saved if k=='attachments' else previous[k]) for k in record if k not in ('child','source','title','review_basis')):
             # The same correction again (for example after a lost reply) changes nothing and is not a conflict.
             if request_key: raise RecordError('更正已有文字记录不能复用新增反馈的提交标识')
             result=record_result(c,ident,True);key_replay=True
