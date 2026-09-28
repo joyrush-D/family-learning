@@ -22,6 +22,33 @@ def synthetic_plan(value):
 
 
 class GoalTests(unittest.TestCase):
+    def test_interval_new_attempt_cannot_be_described_as_absent(self):
+        first = dict(day='2026-09-08', subject='数学', assistance='独立尝试', practice_relation='')
+        later = dict(day='2026-09-16', subject='数学', assistance='独立尝试', practice_relation='相近的新题或新片段')
+        self.assertEqual(goals._interval_new_attempt([first, later]),('2026-09-08','2026-09-16',8))
+        self.assertIsNone(goals._interval_new_attempt([first, later | {'day':'2026-09-10'}]))
+        self.assertIsNone(goals._interval_new_attempt([first, later | {'assistance':'提示后答对'}]))
+        self.assertIsNone(goals._interval_new_attempt([first, later | {'subject':'语文'}]))
+        claim = '9月16日答对，但目前也没有间隔后复测证据。'
+        corrected = goals._FALSE_INTERVAL_ABSENCE.sub('已记录一次间隔后的独立新题表现，仍需更多证据', claim)
+        self.assertIn('已记录一次间隔后的独立新题表现', corrected)
+        self.assertNotIn('没有间隔后复测', corrected)
+
+    def test_interval_retest_rejects_old_answer_before_independent_new_question(self):
+        self.evaluate()
+        with self.store.agent._db() as c:
+            ctx=self.store._context(c,self.store._get(c,self.ident))
+        ctx['input_records']=[
+            dict(day='2026-09-08',subject='英语',assistance='独立尝试',practice_relation=''),
+            dict(day='2026-09-16',subject='英语',assistance='独立尝试',practice_relation='相近的新题或新片段')]
+        plan=synthetic_plan(self.last_input)
+        plan['proposal']['action']='先告诉孩子上次答案是B，再给一题未做过的新题请他独立答。'
+        with self.assertRaisesRegex(agent.AgentError,'独立新题前'):
+            self.store._proposal(plan,ctx,self.now)
+        plan['proposal']['action']='先给一题未做过的新题请孩子独立答，再讨论上次答案。'
+        result=self.store._proposal(plan,ctx,self.now)
+        self.assertIn('相隔8天',result['assessment'])
+
     def setUp(self):
         tmp=tempfile.TemporaryDirectory(prefix='synthetic-goals-');self.addCleanup(tmp.cleanup)
         self.root=Path(tmp.name);self.data=self.root/'private';self.data.mkdir()

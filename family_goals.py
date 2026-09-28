@@ -30,6 +30,19 @@ WORD_RETEST_DAYS = 7  # PRD 2.8: independent performance counts as spaced only a
 WORD_RETEST_LIMIT = 20
 # ponytail: Normalize observed source-absence wording; use structured coverage if more source types need this guard.
 _UNPROVEN_ABSENCE = re.compile(r'(?:当前|本轮|今天|目前)(?:还|并)?没有(?=(?:当天)?(?:放学后)?(?:学校任务|学校作业|时间账|已确认(?:教学)?计划|更多学习记录|作答证据))')
+# ponytail: correct observed false-absence phrases; use a structured timeline field if model wording escapes this guard.
+_FALSE_INTERVAL_ABSENCE = re.compile(r'(?:(?:目前|本轮)\s*)?(?:也)?(?:没有|无|缺少|未见)(?:更多)?[^，。；]{0,20}间隔(?:后)?(?:复测|独立(?:作答|表现))(?:证据|记录)?')
+
+
+def _interval_new_attempt(records):
+    independent = [r for r in records if r.get('assistance') == '独立尝试' and r.get('day')]
+    for r in reversed(independent):
+        if r.get('practice_relation') != '相近的新题或新片段': continue
+        for p in reversed(independent):
+            if p['day'] >= r['day'] or p.get('subject') != r.get('subject'): continue
+            days = (dt.date.fromisoformat(r['day']) - dt.date.fromisoformat(p['day'])).days
+            if days >= 7: return p['day'], r['day'], days
+    return None
 
 
 def word_check_note(value):
@@ -199,7 +212,7 @@ category为课程进度的record是课堂背景，不是孩子表现。本次自
 kind为school_requirement的资料是学校要求与范围，可引用为安排依据，不能放入原因假设的support/against。source_kind为group_message时是后台从已保存的群消息自动关联，按source、sender、time及原文说明出处；发布者称呼不是已确认的教师身份，不把转发者冒称老师。学校要求可能包含后续更正或撤销，按各原发送时间核对最新适用要求；冲突无法消解时明确待核对，不再布置已明确取消的任务。是否原文、转发者、老师、日期、截止和适用范围只按所提供信息说明，未知保留未知；一次习作要求不概括成老师长期偏好。区分必须、可选、示例与条件要求，不能把“三选一”“可以”变成全做，也不能漏掉明确要求。本轮evidence含ref以school:开头的学校明确要求且choice不是暂停时，evidence至少逐字引用其中一条当前适用要求的原文，其余名额留给孩子的实际反馈。
 assessment说明已知与未知；hypotheses列至多四项可验证的候选原因，support/against仅填输入中的ref。
 每项test要能区分原因；没有支持证据时只能待验证，不作性格或临床诊断。不将家长转述称为孩子直接回答。
-没有具体学校任务时，action每次只安排一个最有辨别价值的小核对或学习步骤，不把所有假设的test同时布置。给出具体材料选择、可直接照读的问题、先不提示再按需帮助的顺序；不能只说“找出薄弱点”“观察后调整”。材料未知时可用本周现有作业中一道不确定的题，让孩子读题并说出当时怎么想；不要等待家长先判断困难类型。首次核对建议5至10分钟，提前结束也可；不要给同一孩子所有科目叠加每日练习。
+没有具体学校任务时，action每次只安排一个最有辨别价值的小核对或学习步骤，不把所有假设的test同时布置。给出具体材料选择、可直接照读的问题、先不提示再按需帮助的顺序；不能只说“找出薄弱点”“观察后调整”。若本次要记录独立新题表现，第一步先出未做过的相近新题并记录孩子原答；在答完前不得复述旧题正确答案、展示进率或示范，已给提示的结果只能记为提示后表现。材料未知时可用本周现有作业中一道不确定的题，让孩子读题并说出当时怎么想；不要等待家长先判断困难类型。首次核对建议5至10分钟，提前结束也可；不要给同一孩子所有科目叠加每日练习。
 已有明确学校任务时，action先把老师要求转成孩子听得懂的3至6个小步骤（每步另起一行，用短句），标出先做哪一步、家长能照读的提示；不因缺少能力评估而推迟任务或另加测验。步骤须覆盖任务起步到完成自查的完整路线；可以先只做第一小步并分次完成，但不能只给选材或核对片段而省略后续正文、结尾和自查。作文可先口述选材、选理由，再拟题、选一种开头、写主体与结尾，最后对照老师要求自查。沿用孩子真实经历与原话，不编造去过哪里、看到或吃过什么，不代写成稿；没有素材时先问孩子和家长，不强迫凑齐所有类别或感官。老师说“可以从”时只作为素材提示，自查也不能将它改成必须限定在这些类别。
 resource优先使用输入中的现有材料和设备；未知时明确待核对，不编造App入口、题号或已下发任务。
 照读问题必须与选用材料一致：未提供新题原文时用“你怎么答、为什么”这类通用提问，不把原题的固定选项套到任意新题，也不让家长自己改题或编题。
@@ -217,7 +230,7 @@ mastery_check同时给出家长可直接记录的原始反馈：题目或材料�
 选择暂停时estimated_minutes为null，action只说明本次停止和收到什么新反馈后再评估，不安排补做或限期完成；也不在“休息后”“愿意后”等条件句里预先布置下次测验或分钟数。先等实际恢复情况，再生成新的待审核建议。review_on只是回看日期，不是练习截止；没有明确安排记录，不能声称原定今天执行。
 对照反馈和当前方案选择核实、尝试、维持、调整或暂停。旧判断标为依据已变化时只能作为历史，不能当成当前事实。
 why_now明确说明哪条实际反馈使哪一步需要改变、保持或暂缓；尚无反馈时说明先核对什么，不编造进步。已有计划时action给出本轮完整可执行方案，保留仍适用的部分，并明确本轮调整。
-核对原因时先提出可区分不同原因的小尝试；一道错题只证明该题答错，若没有孩子解释或不同条件下的表现，不能把“没记住进率”“方向混淆”“抄错数字”等互斥原因标为“有支持”，它们均待验证。一次测验表现只支持本次范围的暂时判断，不能说一次达标就代表长期掌握。首次核对的review_on建议在本次日期后7天内，属于待审核回看日。Agent新拟的数字标准为试行建议，老师原文的数字和条件保持原意。只输出schema允许字段；形成建议不修改正式计划，所有执行与变化由家长确认。证据不足时提出具体核对建议，不能返回null或把找原因的工作退给家长。
+核对原因时先提出可区分不同原因的小尝试；一道错题只证明该题答错，若没有孩子解释或不同条件下的表现，不能把“没记住进率”“方向混淆”“抄错数字”等互斥原因标为“有支持”，它们均待验证。已有带日期的相近新题独立作答时，assessment列明两次日期、题目、答案、帮助条件和相隔天数，并说清较原基线是改善还是仍困难；达到间隔就如实称为一次间隔后复测，不能说没有复测。只有正确答案而无孩子解释时，只能说该题正确，不能断言已理解所用原理；后来的答对也不能反证早先那次错误的当时原因，只能核对困难是否还在。一次测验表现只支持本次范围的暂时判断，不能说一次达标就代表长期掌握。首次核对的review_on建议在本次日期后7天内，属于待审核回看日。Agent新拟的数字标准为试行建议，老师原文的数字和条件保持原意。只输出schema允许字段；形成建议不修改正式计划，所有执行与变化由家长确认。证据不足时提出具体核对建议，不能返回null或把找原因的工作退给家长。
 progress是本轮已选记录中同词、同目标义、同方向的首末对照，不是连续趋势或方法效果判定；未作答、日期/条件不清不能作为升降依据。reached_independent仅表示最近记录满足“间隔后复测且距前次核对满7天的独立答对”；两次都独立答对的表现记持平，间隔证据另行保留，不代表长期掌握。
 current_plan_confirmed_on是现计划确认日，不是已经执行的证明。先核对反馈是否明确执行了该方法、发生日期是否在确认后，再结合可比作答评估；同日先后不明、只有确认前资料、未复测或未提供执行反馈时保持效果未知，不据全历史trend断言现方法有效或无效。已有执行和可比反馈仍困难时提出换方法/材料/测法供家长审核；已有间隔独立表现可减少重复、关注未覆盖方向，但不保证永久掌握或强制提高难度。不到间隔或reached_independent为false本身不表示方法失败。建议依据引用本轮evidence，资料不足就给一个可执行的小核对，不编造因果；考试和老师评测也须依据实际结果，正式计划仍由家长确认。
 method_history是本目标历次家长确认的计划版本（最早在前；version不从1开始表示更早版本未列出），由已确认版本与关联记录按规则整理，不是孩子或家长的原话，也不含任何效果结论：method是当时确认的方法原文；adopted_reason是助手当时提出该版本的理由，不是事实；feedback按家长填写的发生日期归入该版本生效期间，列出来源、帮助条件与是否同题，原文见evidence中同ref的记录，in_evidence为false表示本轮未提供原文、保持未知；same_day为true表示与该版本确认同日、先后不明，可能仍是上一方法下的表现；corrected为true表示该记录在换掉该方法的决定之后被更正，当时的调整理由可能已失去依据，按更正后的记录重新判断。孩子是否愿意做、任务是否做完、在什么帮助下的表现、方法是否有效是四件事，分别说明依据：同一方法在不同日期或帮助条件下反馈相反时并列保留，不取其一；一两次愿意或抗拒只描述当时情境，不写成孩子的长期偏好；反馈条数、完成次数与首末对照都不能证明方法有效，只有该版本确认之后、条件可比的独立表现才可作为效果线索，且不作因果断言。被换掉的方法不等于无效；出现反证或更正时可以提出恢复或改动，仍由家长确认。
@@ -901,10 +914,21 @@ class Store:
         if (p['choice']=='暂停' and (ctx['day_context'] or {}).get('other_registered_work')
                 and not any(e.get('kind')=='school_requirement' for e in ctx['evidence']) and '截止' not in p['assessment']):
             p['assessment'] += ' 已登记事项的截止时间本轮未提供；请家长核对原要求，回看日不是截止。'
-        for field,limit in [('assessment',2000),('why_now',400)]:agent._text(p,field,limit,True)
         # A selected evidence window cannot establish that school work or plans do not exist.
+        interval_retest = _interval_new_attempt(ctx['input_records'])
         for field in ('assessment','why_now','action','goal','mastery_check','resource'):
             p[field] = _UNPROVEN_ABSENCE.sub('本轮未提供', p[field])
+            if interval_retest:
+                p[field] = _FALSE_INTERVAL_ABSENCE.sub('已记录一次间隔后的独立新题表现，仍需更多证据', p[field])
+        if interval_retest and f'相隔{interval_retest[2]}天' not in p['assessment'] and f'间隔{interval_retest[2]}天' not in p['assessment']:
+            p['assessment'] = f'所选原记录中，{interval_retest[0]}与{interval_retest[1]}相隔{interval_retest[2]}天，后者标为相近新题独立作答；单次结果不代表稳定掌握。' + p['assessment']
+        # ponytail: fail closed on observed old-answer-first wording; a structured first-question field is needed if it recurs.
+        old_answer = re.search(r'(?:上次|已答过|旧题).{0,80}(?:等于|答案(?:是|为|[:：]))', p['action'], re.S)
+        new_question = re.search(r'新题|未做过', p['action'])
+        if interval_retest and old_answer and new_question and old_answer.start() < new_question.start() and '独立' in p['mastery_check']:
+            raise agent.AgentError('独立新题前不能复述旧题答案')
+        for field,limit in [('assessment',2000),('why_now',400),('goal',600),('action',4000),('resource',800),('mastery_check',1000)]:
+            agent._text(p,field,limit,field in ('assessment','why_now','goal','action'))
         if p['choice'] not in ('核实','尝试','维持','调整','暂停'):raise agent.AgentError('建议类型不正确')
         if p['choice']=='暂停' and p['estimated_minutes'] is not None:raise agent.AgentError('暂停建议不能安排练习分钟数')
         refs={e['ref']:e['text'] for e in ctx['evidence']}
@@ -924,7 +948,10 @@ class Store:
         for h in p['hypotheses']:
             if not isinstance(h,dict) or set(h)!={'reason','support','against','test','status'}:raise agent.AgentError('原因假设字段不正确')
             agent._text(h,'reason',300,True);agent._text(h,'test',600,True)
-            for field in ('reason','test'): h[field] = _UNPROVEN_ABSENCE.sub('本轮未提供', h[field])
+            for field in ('reason','test'):
+                h[field] = _UNPROVEN_ABSENCE.sub('本轮未提供', h[field])
+                if interval_retest:
+                    h[field] = _FALSE_INTERVAL_ABSENCE.sub('已记录一次间隔后的独立新题表现，仍需更多证据', h[field])
             if h['status'] not in ('待验证','有支持','有反证'):raise agent.AgentError('原因状态不正确')
             for k in ('support','against'):
                 if not isinstance(h[k],list) or len(h[k])>4 or any(not isinstance(ref,str) or ref not in refs for ref in h[k]):raise agent.AgentError('原因依据无法核对')
