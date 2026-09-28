@@ -133,16 +133,19 @@ with tempfile.TemporaryDirectory(prefix='synthetic-task-feedback-') as folder:
         server=app.ThreadingHTTPServer(('127.0.0.1',0),app.Handler)
         worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
         try:
-            def post(token):
+            def post(token,payload=body):
                 client=http.client.HTTPConnection('127.0.0.1',server.server_port,timeout=5)
                 try:
-                    client.request('POST','/api/task/feedback',json.dumps(body),
+                    client.request('POST','/api/task/feedback',json.dumps(payload),
                                    {'Content-Type':'application/json','X-Family-Token':token})
                     response=client.getresponse(); return response.status,json.loads(response.read())
                 finally: client.close()
             assert post('invalid-token')[0]==403
+            before=dump(app)
             status,result=post(app.snapshot()['token'])
-            assert status==200 and result['replayed'] and result['record_id']==first['record_id']
+            assert status==409 and result['code']=='request_record_changed' and dump(app)==before
+            status,result=post(app.snapshot()['token'],body|dict(request_key='synthetic-feedback-0022',attachments=[],note='虚构：已完成再确认',complete=True))
+            assert status==200 and result['replayed'] and result['record_id']==noop['record_id'] and dump(app)==before
         finally: server.shutdown();server.server_close();worker.join()
 
         # Ordinary task and record paths keep working.
