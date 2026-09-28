@@ -12,11 +12,14 @@ def date(value):
         return dt.date.fromisoformat(value).isoformat()
     except (ValueError,TypeError): return ''
 
-def sent_day(value):
+def sent_at(value):
     try:
         stamp=dt.datetime.fromisoformat(value.replace('Z','+00:00'))
-        return stamp.replace(tzinfo=stamp.tzinfo or family_agent.TZ).astimezone(family_agent.TZ).date().isoformat()
+        return stamp.replace(tzinfo=stamp.tzinfo or family_agent.TZ).astimezone(family_agent.TZ).isoformat()
     except (ValueError,TypeError,AttributeError):return ''
+
+def sent_day(value):
+    return sent_at(value)[:10]
 
 
 _WEEKDAYS={'一':0,'二':1,'三':2,'四':3,'五':4,'六':5,'日':6,'天':6}
@@ -134,7 +137,8 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None):
             _,msg=store._message_context(c,dict(child_id=child_id,source_id=parts[0],message_id=parts[1]))
             messages.append(msg)
         except family_agent.AgentError:continue
-    days=sorted({sent_day(m.get('time','')) for m in messages}-{''})
+    times=sorted({sent_at(m.get('time','')) for m in messages}-{''})
+    days=sorted({value[:10] for value in times})
     organized=focus.get('category') in ('unknown','homework','todo')
     published=focus.get('published_on','') if organized else (days[0] if len(days)==1 else '')
     subject=re.sub(r'^待核对[：:]?\s*','',title).rstrip('。')
@@ -155,7 +159,8 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None):
     due_on=focus.get('due_on','') if organized else deadline(due,published) or deadline(title,published) or source_due
     category=focus.get('category','')
     if category not in ('homework','todo'):category='todo' if category=='unknown' else task_category(title)
-    return dict(category=category,published_on=published,due_on=due_on,scheduled_on=focus.get('scheduled_on',''),
+    published_at=max((value for value in times if value[:10]==published),default='')
+    return dict(category=category,published_on=published,published_at=published_at,due_on=due_on,scheduled_on=focus.get('scheduled_on',''),
                 category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox')
 
 

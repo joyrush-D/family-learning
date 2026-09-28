@@ -19,7 +19,7 @@ function calendarEventHTML(e){
  return `<article tabindex="-1" data-query-target="calendar:${esc(e.id)}:${esc(e.day)}" class="calendar-event ${e.status==='cancelled'?'calendar-cancelled':''}"><div class="calendar-event-meta"><span>${esc(calendarKinds[e.category]||'安排')}</span><span class="calendar-status calendar-${esc(e.status)}">${esc(calendarStatuses[e.status]||'状态待核对')}</span></div><h3>${esc(e.title)}</h3><p class="calendar-time">${esc(e.day)} · ${e.start_time?esc(e.start_time)+(e.end_time?'–'+esc(e.end_time):''):'时间未填写'}</p><p class="calendar-who">${esc(calendarNames(e.child_ids))}${calendarRepeatLabel(e)?' · '+esc(calendarRepeatLabel(e)):''}</p>${e.location?`<p class="calendar-location">⌖ ${esc(e.location)}</p>`:''}${e.note?`<p class="source calendar-requirements">${esc(e.note)}</p>`:''}${e.source||e.repeat!=='none'?`<details><summary>出处与重复规则</summary>${e.source?`<p class="source">出处：${esc(e.source)}</p>`:''}${e.repeat!=='none'?`<p>起点 ${esc(e.series_day)}${e.until?' · 截至 '+esc(e.until):' · 未设截止'}</p>`:''}</details>`:''}${t?`<p class="calendar-task-status ${taskDismissed(t)?'calendar-family-decision':''}">${taskDismissed(t)?esc(t.child)+'：':'清单：'}${esc(taskStatusLabel(status(t)))}</p>`:''}${e.task_id?`<button class="calendar-card-action" data-calendar-task="${esc(e.task_id)}">核对原事项 →</button>`:''}${e.editable&&!e.occurrence?.series_id&&e.repeat==='none'&&!['cancelled','completed'].includes(e.status)?`<button data-calendar-complete="${esc(e.id)}">确认完成</button>`:''}${e.occurrence?.series_id?`<p class="small muted">${e.occurrence.day!==e.day?'从 '+esc(e.occurrence.day)+' 改期 · ':''}本次记录独立保留</p><button data-calendar-once="${esc(e.id)}" data-occurrence-day="${esc(e.day)}">处理本次</button>`:''}${e.editable&&(!e.occurrence?.series_id||e.repeat!=='none')?`<button class="calendar-card-action" data-calendar-edit="${esc(e.id)}">${e.repeat!=='none'?'编辑重复规则':'编辑安排'}</button>`:''}</article>`;
 }
 function calendarTimetableHTML(t){return `<details tabindex="-1" data-query-target="timetable:${esc(t.id)}:${esc(t.day)}" class="calendar-timetable"><summary><span>课表 · ${esc(calendarNames([t.child_id]))}</span><small>${t.sessions.length} 个节次</small></summary><p class="small">${esc(t.title)}</p><ol>${t.sessions.map(s=>`<li><span>${esc(s.slot)}</span><strong>${esc(s.title)}</strong></li>`).join('')}</ol>${t.note?`<p class="source small">${esc(t.note)}</p>`:''}${t.source?`<p class="source small">出处：${esc(t.source)}</p>`:''}${(t.uploads||[]).map(id=>`<a href="${endpoint('/upload/')}${encodeURIComponent(id)}" target="_blank" rel="noopener">查看课表原件</a>`).join(' ')}${t.import_id?`<button data-timetable-edit="${esc(t.import_id)}">更正课表</button>`:''}${t.attachment?`<a href="${endpoint('/attachment/')}${encodeURIComponent(t.attachment)}" target="_blank" rel="noopener">查看课表原件 ↗</a>`:''}<p class="small muted">按已提供节次展示，未填写的钟点和单双周仍待核对。</p></details>`}
-function agendaDateHTML(m,day=data.today){return `<p class="agenda-dates"><span>发布：${esc(m.published_on||'待核对')}</span><span>${m.due_on?`${m.due_on<day?'逾期 · ':''}截止：${esc(m.due_on)}`:'截止待核对'}</span>${m.scheduled_on?`<span>计划：${esc(m.scheduled_on)}</span>`:''}</p>`}
+function agendaDateHTML(m,day=data.today){return `<p class="agenda-dates"><span>发布：${esc(m.published_at?m.published_at.slice(0,16).replace('T',' '):m.published_on||'待核对')}</span><span>${m.due_on?`${m.due_on<day?'逾期 · ':''}截止：${esc(m.due_on)}`:'截止待核对'}</span>${m.scheduled_on?`<span>计划：${esc(m.scheduled_on)}</span>`:''}</p>`}
 function agendaItemHTML(item){
  if(item.kind==='event')return calendarEventHTML(item.event);
  if(item.kind==='study')return agendaStudyHTML(item);
@@ -86,7 +86,7 @@ function todayTaskOrder(a,b){
   if(due&&due<data.today)return [1,due];
   if(due)return [2,due];
   if(planned&&planned<data.today)return [3,planned];
-  return published?[4,published]:[5,''];
+  return published?[4,x.agenda.published_at||published]:[5,''];
  };
  const [ar,ad]=key(a),[br,bd]=key(b);
  return ar-br||(ar===2?ad.localeCompare(bd):bd.localeCompare(ad));
@@ -98,7 +98,7 @@ function todayTasksHTML(){
  const items=taskInboxItems().filter(x=>!x.closed&&x.kind!=='event'&&x.agenda.box!=='wish'&&(!x.agenda.published_on||x.agenda.published_on<=data.today)&&(!x.agenda.scheduled_on||x.agenda.scheduled_on<=data.today||x.agenda.due_on||reviewDue(x))).sort(todayTaskOrder);
  const today=items.filter(x=>[x.agenda.due_on,x.agenda.scheduled_on].some(day=>exactTaskDay(day)===data.today));
  const pendingNotices=items.filter(x=>x.kind==='school'&&!today.includes(x)&&exactTaskDay(x.agenda.published_on))
-  .sort((a,b)=>b.agenda.published_on.localeCompare(a.agenda.published_on));
+  .sort((a,b)=>(b.agenda.published_at||b.agenda.published_on).localeCompare(a.agenda.published_at||a.agenda.published_on));
  const recentNotices=pendingNotices.slice(0,3);
  const reviews=items.filter(x=>!today.includes(x)&&reviewDue(x));
  const earlier=items.filter(x=>!today.includes(x)&&!recentNotices.includes(x)&&!reviews.includes(x));

@@ -154,9 +154,9 @@ function fixtures(base){
    orderState.today='2026-09-28';
    const orderTask=(id,published,due='')=>({...baseTask,id,title:'虚构事项 '+id,due,agenda:{...baseTask.agenda,published_on:published,due_on:due}});
    orderState.tasks=[orderTask('OLD','2026-09-02'),orderTask('DUE-OLD','2026-09-20','2026-09-20'),orderTask('DUE-RECENT','2026-09-22','2026-09-27'),orderTask('DUE-TODAY','2026-09-27','2026-09-28'),orderTask('DUE-NEXT','2026-09-27','2026-09-29')];
-   const published=['2026-09-02','2026-09-20','2026-09-22','2026-09-27'];
+   const published=['2026-09-02','2026-09-20','2026-09-22','2026-09-27','2026-09-27'];
    orderState.agent.items=published.map((day,n)=>({...school,id:'notice-'+n,title:'虚构学校消息 '+n,child_id:owner.id}));
-   orderState.today_calendar={inbox:[...orderState.tasks.map(t=>({id:t.id,task_id:t.id,kind:'task',child_ids:[owner.id],title:t.title,agenda:t.agenda,status:'待跟进',closed:false})),...published.map((day,n)=>({id:'notice-'+n,task_id:'',kind:'school',child_ids:[owner.id],title:'虚构学校消息 '+n,agenda:{category:'homework',published_on:day,due_on:'',scheduled_on:'',box:'inbox'},status:'待核对',closed:false}))],agenda:[],events:[],timetables:[],source_error:''};
+   orderState.today_calendar={inbox:[...orderState.tasks.map(t=>({id:t.id,task_id:t.id,kind:'task',child_ids:[owner.id],title:t.title,agenda:t.agenda,status:'待跟进',closed:false})),...published.map((day,n)=>({id:'notice-'+n,task_id:'',kind:'school',child_ids:[owner.id],title:'虚构学校消息 '+n,agenda:{category:'homework',published_on:day,published_at:n===3?'2026-09-27T08:00:00+08:00':n===4?'2026-09-27T18:00:00+08:00':'',due_on:'',scheduled_on:'',box:'inbox'},status:'待核对',closed:false}))],agenda:[],events:[],timetables:[],source_error:''};
    const orderPage=await browser.newPage({viewport:{width,height:820}});
    try{
     await orderPage.route('**/api/state',route=>route.fulfill({contentType:'application/json',body:JSON.stringify(orderState)}));
@@ -168,15 +168,16 @@ function fixtures(base){
     assert.deepEqual(await taskOrder(),['DUE-TODAY']);
     assert.deepEqual(await earlierTasks(),['DUE-RECENT','DUE-OLD','DUE-NEXT','OLD']);
     assert.match(await orderPage.locator('#task-group-homework h2').innerText(),/今日作业 · 1/,'pending notices do not become confirmed homework');
-    assert.deepEqual(await recentNoticeOrder(),['notice-3','notice-2','notice-1']);
-    assert.deepEqual(await olderNoticeOrder(),['notice-0']);
+    assert.deepEqual(await recentNoticeOrder(),['notice-4','notice-3','notice-2']);
+    assert.deepEqual(await olderNoticeOrder(),['notice-1','notice-0']);
+    assert.match(await orderPage.locator('.today-new-notices').innerText(),/2026-09-27 18:00/);
     await orderPage.locator('.today-new-notices').scrollIntoViewIfNeeded();
     await proof(orderPage,'recent-school-review-'+width);
     await fit(orderPage);await orderPage.reload({waitUntil:'load'});await ready(orderPage);
     assert.deepEqual(await taskOrder(),['DUE-TODAY'],'current-day count persists after reload');
     assert.deepEqual(await earlierTasks(),['DUE-RECENT','DUE-OLD','DUE-NEXT','OLD'],'old dates persist after reload');
-    assert.deepEqual(await recentNoticeOrder(),['notice-3','notice-2','notice-1'],'recent source order persists after reload');
-    assert.deepEqual(await olderNoticeOrder(),['notice-0'],'older source remains available after reload');
+    assert.deepEqual(await recentNoticeOrder(),['notice-4','notice-3','notice-2'],'recent source order persists after reload');
+    assert.deepEqual(await olderNoticeOrder(),['notice-1','notice-0'],'older source remains available after reload');
     checks.push({width,kind:'today-business-sort',confirmedDates:true,backfilledNoticeDates:true,reload:true,noOverflow:true});
    }finally{await orderPage.close()}
 

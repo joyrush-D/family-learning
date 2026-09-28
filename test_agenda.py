@@ -117,6 +117,7 @@ class AgendaTest(unittest.TestCase):
         self.store._save('synthetic-job','synthetic-fingerprint',[dict(child_id='child-1',kind='school',title='待核对：英语作业',body='核对今晚练习',evidence=[dict(ref='message:synthetic-class:1',text='英语作业：今晚完成练习。')])],now)
         s=app.calendar_snapshot('2026-09-12','2026-09-13');row=next(x for x in s['inbox'] if x['kind']=='school')
         self.assertEqual(row['agenda']['published_on'],'2026-09-12');self.assertEqual(row['agenda']['due_on'],'2026-09-12')
+        self.assertEqual(row['agenda']['published_at'],'2026-09-12T02:00:00+08:00')
         self.assertEqual(row['child_ids'],['child-1'])
         result=self.store.act(dict(id=row['id'],action='accept'))
         s=app.calendar_snapshot('2026-09-12','2026-09-13')
