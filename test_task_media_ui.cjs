@@ -93,7 +93,7 @@ const fs=require('node:fs/promises'),path=require('node:path');
   checks.push({width,flow:'attachment/transcript retention; unchanged correction clean; switching correction protected; save feedback keeps unsaved status warning'});
   const history=await fetch(url+'api/record/history/'+feedback[0].id).then(r=>r.json());assert(history.history.length>=1);
   // The existing state-only path is still explicit and functional.
-  await p.locator('#taskForm [name=status]').selectOption('已完成');await p.locator('#taskForm [name=note]').fill('虚构：本次作业已核对');await p.locator('#taskForm [type=submit]').click();await eventually(()=>p.locator('#taskDialog').evaluate(x=>!x.open),'status saved');
+  await p.locator('#taskStatusDetails summary').click();await p.locator('#taskForm [name=status]').selectOption('已完成');await p.locator('#taskForm [name=note]').fill('虚构：本次作业已核对');await p.locator('#taskForm [type=submit]').click();await eventually(()=>p.locator('#taskDialog').evaluate(x=>!x.open),'status saved');
   state=await read();assert.equal(state.tasks.find(t=>t.id===id).update.status,'已完成');
   // Reopen from completed items, append an original-only feedback without reopening the assignment.
   await p.locator('nav [data-page="home"]').click();await p.locator('[data-task-all="homework"]').click();await p.locator('[data-task-box="已完成"]').click();await open();

@@ -133,3 +133,9 @@ body[data-page=home] .top,body[data-page=calendar] .top,body[data-page=tasks] .t
 [data-qq-files] .task-goal p{overflow-wrap:anywhere}
 #homeworkPrintForm label:has(input[type=checkbox]){display:flex;align-items:center;gap:10px;min-height:44px}
 #homeworkPrintForm input[type=checkbox]{width:20px;height:20px;min-height:20px;flex:none;margin:0;accent-color:var(--green)}
+body[data-page=home] .today-task-groups{grid-template-columns:minmax(0,1fr)}
+body[data-page=home] .today-heading .toolbar{margin:0}
+.today-plans>summary,.today-extra>summary,#taskStatusDetails>summary{min-height:44px;padding:10px 0}
+.today-extra{margin:12px 0 0}.today-extra button{margin-top:8px}
+#taskStatusDetails{border-top:1px solid var(--line);padding-top:8px;margin-top:20px}
+#saveTaskFeedback{min-height:44px;margin:8px 0 16px}

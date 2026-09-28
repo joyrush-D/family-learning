@@ -4,7 +4,6 @@ const {spawn}=require('node:child_process');
 const {once}=require('node:events');
 const net=require('node:net');
 const {setTimeout:delay}=require('node:timers/promises');
-const {randomUUID}=require('node:crypto');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 async function eventually(fn,label){for(let n=0;n<250;n++){if(await fn())return;await delay(40)}throw Error('Timed out: '+label)}
 async function server(){
@@ -18,14 +17,16 @@ async function server(){
  host=await server();browser=await chromium.launch({headless:true,channel:process.env.PLAYWRIGHT_CHANNEL||'chrome'});
  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWF8AAAAASUVORK5CYII=','base64');
  for(const width of [360,1440]){
-  let state=await(await fetch(host.url+'api/state')).json();const child=state.children[0].name;
-  const created=await fetch(host.url+'api/task/new',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify({request_key:randomUUID(),child,title:'虚构作业核对 '+width,box:'inbox',category:'homework',due:state.today,action:'先作答再核对'})}).then(r=>r.json());assert(created.task?.id,JSON.stringify(created));const id=created.task.id;
+  let state=await(await fetch(host.url+'api/state')).json();const child=state.children[0].name,title='虚构作业核对 '+width;
   const p=await browser.newPage({viewport:{width,height:850}}),errors=[];p.on('pageerror',e=>errors.push(e.message));await p.goto(host.url);
-  await p.locator('[data-homework-new]').first().click();await p.locator('#homeworkInputDialog[open]').waitFor();assert.match(await p.locator('#homeworkInputDialog').innerText(),/报功课/);await p.locator('[data-homework-close]').click();
+  await p.locator('[data-homework-new]').first().click();const entry=p.locator('#homeworkInputDialog');await entry.waitFor();assert.match(await entry.innerText(),/记作业/);
+  await entry.locator('[name=text]').fill('虚构作业原话：今天核对一页阅读题');await entry.locator('[data-homework-manual]').click();const item=entry.locator('[data-homework-item="0"]');await item.locator('[name=title]').fill(title);await item.locator('[name=goal]').fill('先作答再核对');await item.locator('[name=reviewed]').check();await item.locator('[type=submit]').click();await entry.locator('.homework-saved').waitFor();await entry.locator('[data-homework-close]').click();
+  state=await(await fetch(host.url+'api/state')).json();const id=state.tasks.find(t=>t.title===title)?.id;assert(id,'homework entry creates the task');await p.locator('[data-query-target="task:'+id+'"]').waitFor();
   await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskDialog[open]').waitFor();
+  assert.equal(await p.locator('#taskStatusDetails').evaluate(x=>x.open),false,'status update stays secondary');
   await p.locator('#cameraInput').setInputFiles({name:'synthetic-answer.png',mimeType:'image/png',buffer:png});await p.locator('#pendingUploads img').waitFor();
   await p.locator('#saveTaskFeedback').click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'photo feedback saved');
-  const panel=p.locator('#taskFeedbackHistory [data-homework-review]').first();await panel.locator('summary').click();assert.equal(await panel.locator('[data-homework-review-photo]').count(),1);
+  const panel=p.locator('#taskFeedbackHistory [data-homework-review]').first();assert.equal(await panel.locator('details').evaluate(x=>x.open),true,'saved photo exposes review');assert.equal(await panel.locator('[data-homework-review-photo]').count(),1);
   let calls=0;await p.route('**/api/print/homework/draft',r=>{calls++;const body=r.request().postDataJSON();assert.equal(body.question_sources.length,1);return calls===1?r.fulfill({status:503,json:{error:'虚构模型暂不可用'}}):r.fulfill({json:{draft:{text:'虚构第1题：卷面C，参考B；先找原文依据。',items:1,wrong_items:1,unknown_items:0,coverage:'仅此一页'},question_sha256:'a'.repeat(64)}})});
   assert.equal(calls,0,'opening saved feedback must not call model');await panel.locator('[data-homework-review-photo]').check();await panel.locator('[data-homework-review-run]').click();await eventually(async()=>/虚构模型暂不可用/.test(await panel.innerText()),'model failure retained');
   await panel.locator('[data-homework-review-run]').click();await panel.locator('[data-homework-review-result] textarea').waitFor();assert.equal(calls,2);

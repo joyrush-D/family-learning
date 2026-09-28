@@ -270,7 +270,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-agent-ui-') as tmp:
   const accept=await fetch(url+'api/agent/action',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':token},body:JSON.stringify({id:pendingSchool.id,action:'accept',title:'虚构已反馈事项 '+width,body:'核对原通知，和孩子商量观察材料。'})});assert.equal(accept.status,200);const secondTaskID=(await accept.json()).task_id,secondRef=pendingSchool.evidence[0].ref;
   await page.reload();await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();await page.locator('[data-page="tasks"]').first().click();
   for(const [status,note] of [['待跟进','虚构第一条反馈：还要核对当天安排。'],['进行中','虚构第二条反馈：孩子想先画图，请听他解释。']]){
-   await page.locator('[data-task="'+secondTaskID+'"]').click();await page.locator('#taskDialog').waitFor();await page.locator('#taskForm [name="status"]').selectOption(status);await page.locator('#taskForm [name="note"]').fill(note);await page.locator('#taskForm [type="submit"]').click();await until(async()=>!(await page.locator('#taskDialog').isVisible()),'task feedback saved');
+   await page.locator('[data-task="'+secondTaskID+'"]').click();await page.locator('#taskDialog').waitFor();await page.locator('#taskStatusDetails summary').click();await page.locator('#taskForm [name="status"]').selectOption(status);await page.locator('#taskForm [name="note"]').fill(note);await page.locator('#taskForm [type="submit"]').click();await until(async()=>!(await page.locator('#taskDialog').isVisible()),'task feedback saved');
   }
   const taskBeforeRecord=(await state()).tasks.find(t=>t.id===secondTaskID);
   await openTaskRecordFromCard(page,secondTaskID);await page.locator('#recordDialog').waitFor();
@@ -310,7 +310,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-agent-ui-') as tmp:
   await examForm.locator('[type="submit"]').click();await page.locator('#recordDialog').waitFor({state:'hidden'});
   const examSaved=await state(),examRecords=examSaved.records.filter(r=>r.source==='事项:'+exam.id);assert.equal(examRecords.length,1);assert.equal(examRecords[0].score,60);assert.notEqual(examSaved.tasks.find(t=>t.id===exam.id).update?.status,'已完成');
   await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();await examCard.locator('[data-task]').click();await page.locator('#taskDialog').waitFor();
-  await page.locator('#taskForm [name="status"]').selectOption('已完成');await page.locator('#taskForm [name="note"]').fill('虚构家长确认：已核对结果。');await page.locator('#taskForm [type="submit"]').click();await page.locator('#taskDialog').waitFor({state:'hidden'});assert.equal(await examCard.count(),0,'closed exam disappears immediately');
+  await page.locator('#taskStatusDetails summary').click();await page.locator('#taskForm [name="status"]').selectOption('已完成');await page.locator('#taskForm [name="note"]').fill('虚构家长确认：已核对结果。');await page.locator('#taskForm [type="submit"]').click();await page.locator('#taskDialog').waitFor({state:'hidden'});assert.equal(await examCard.count(),0,'closed exam disappears immediately');
   await page.reload();await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();assert.equal(await examCard.count(),0,'closed exam stays hidden after reload');await fits(page);await proof(page,'exam-result-closed-'+width);
   assert.deepEqual(pageErrors,[]);await page.close();
  }

@@ -60,9 +60,8 @@ function fixtures(base){
     assert.deepEqual(await homework.locator('[data-today-task]').evaluateAll(xs=>xs.map(x=>x.dataset.todayTask).sort()),['SIBLING','TODAY']);
     assert.deepEqual(await todos.locator('[data-today-task]').evaluateAll(xs=>xs.map(x=>x.dataset.todayTask)),[]);
     assert.match(await p.locator('.today-source-gap').innerText(),/不是完整作业清单/);
-    await p.locator('.today-source-gap [data-page="study"]').click();
-    await eventually(()=>p.locator('[data-study-ready]').isVisible(),'source gap opens the existing homework entry');
-    assert.match(await p.locator('#content').innerText(),/用登记本|语音报功课/);
+    await p.locator('.today-source-gap [data-page="sources"]').click();
+    assert.match(await p.locator('#content h1').innerText(),/来源与附件/,'source gap opens the original source details');
     await p.locator('nav [data-page="home"]').click();await ready(p);
     assert.match(await p.locator('.today-backlog > summary').innerText(),/其他未完成及日期待核对 · 7/);
     await p.locator('.today-backlog > summary').click();
@@ -78,7 +77,7 @@ function fixtures(base){
     assert.match(await p.locator('[data-agent-item="synthetic-school"]').innerText(),/需要核对是否参加这次活动。/);
     assert.equal(await p.locator('[data-agent-item="synthetic-school"] h3').innerText(),'请准备虚构活动材料。');
     assert.match(await p.locator('[data-agent-item="synthetic-school"] details').textContent(),/⚠️重要通知⚠️/,'original heading is retained');
-    const shared=p.locator('[data-query-target="calendar:shared:'+state.today+'"]');assert.equal(await shared.count(),1);assert.match(await shared.innerText(),new RegExp(state.children[0].name+'、'+state.children[1].name));
+    await p.locator('.today-plans > summary').click();const shared=p.locator('[data-query-target="calendar:shared:'+state.today+'"]');assert.equal(await shared.count(),1);assert.match(await shared.innerText(),new RegExp(state.children[0].name+'、'+state.children[1].name));
     assert.equal(await p.locator('.calendar-cancelled').count(),0);assert.equal(await p.locator('.calendar-event [data-check]').count(),0,'calendar-only events do not invent task completion');
     await p.locator('.calendar-timetable summary').click();assert.match(await p.locator('.calendar-timetable').innerText(),/虚构数学[\s\S]*虚构语文/);
     assert.deepEqual(await p.locator('nav [data-page]').evaluateAll(xs=>xs.map(x=>x.dataset.page)),['home','calendar','tasks','more']);
