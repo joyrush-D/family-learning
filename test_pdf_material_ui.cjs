@@ -158,6 +158,10 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   assert.equal(await taskForm.locator('[name="source"]').inputValue(),sourceRef);
   assert.equal(await taskForm.locator('[name="source"]').getAttribute('readonly'),'');
   assert.equal(await taskForm.locator('[name="child"] option').count(),1);
+  for(const name of ['box','child','category','source'])assert.equal(await taskForm.locator(`[name="${name}"]`).locator('xpath=..').isVisible(),false,`${name} is fixed by the original`);
+  assert.match(await taskDialog.innerText(),/为示例星星记作业/);
+  assert.match(await taskForm.locator('#newTaskDetailsSummary').innerText(),/完成日期/);
+  await fits(page);await proof(page,'linked-homework-form-'+width);
   assert.equal(await taskForm.locator('[name="due"]').inputValue(),'','an old file must not become today by default');
   assert.equal(await taskForm.locator('[name="due"]').getAttribute('required'),'');
   await taskForm.locator('[name="title"]').fill('虚构原件核对后作业 '+width);
@@ -174,6 +178,13 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   assert.ok(saved);assert.equal(saved.source,sourceRef);assert.equal(saved.child,'示例星星');
   assert.equal((await state()).tasks.length,taskCount+1);
   factsBefore=facts(await state());
+  await page.locator('nav [data-page="home"]').click();
+  await page.locator('nav [data-page="tasks"]').click();
+  await page.locator('#content [data-new-task="yes"]').first().click();await taskDialog.waitFor({state:'visible'});
+  for(const name of ['box','child','category'])assert.equal(await taskForm.locator(`[name="${name}"]`).locator('xpath=..').isVisible(),true,`${name} returns for manual entry`);
+  assert.equal(await taskForm.locator('[name="source"]').locator('xpath=..').evaluate(e=>e.classList.contains('hide')),false,'manual source remains available under details');
+  assert.equal(await taskForm.locator('[name="due"]').getAttribute('required'),null);
+  await taskDialog.locator('[data-close="newTaskDialog"]').click();
   await page.locator('nav [data-page="home"]').click();
   const taskCard=page.locator('[data-query-target="task:'+saved.id+'"]');await taskCard.waitFor();
   await taskCard.locator('[data-school-original-ref="'+sourceRef+'"]').click();await panel.waitFor();
