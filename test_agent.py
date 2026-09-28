@@ -27,6 +27,16 @@ class AgentTests(unittest.TestCase):
         self.source = dict(id='synthetic-group', platform='wechat', child_id='child-1', name='虚构班级', cursor='10', enabled=True)
         self.config()
 
+    def test_all_pending_notices_remain_actionable_after_backfill(self):
+        with self.app.connect() as c:
+            rows=[(f'notice-{n}',f'job-{n}',f'child-{n%2+1}','school',f'虚构通知 {n}','请家长核对','[]','','pending',
+                   f'2026-02-10T08:{n%60:02d}:00+08:00',f'2026-02-10T08:{n%60:02d}:00+08:00','{}') for n in range(110)]
+            c.executemany("INSERT INTO agent_items(id,job_id,child_id,kind,title,body,evidence,due,state,created,updated,plan) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",rows)
+        visible=self.store.snapshot()['items']
+        self.assertEqual(len(visible),110)
+        self.assertEqual({r['child_id'] for r in visible},{'child-1','child-2'})
+        self.assertIn('notice-0',{r['id'] for r in visible})
+
     def test_diagnosis_review_reminder_lists_due_weak_knowledge_points(self):
         import family_diagnosis, family_llm
         from unittest.mock import patch

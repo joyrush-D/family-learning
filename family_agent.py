@@ -821,7 +821,8 @@ class Store:
         except (OSError, ValueError, TypeError, CollectError): inbox = None
         with self._db() as c:
             runtime = c.execute('SELECT * FROM agent_runtime WHERE id=1').fetchone()
-            items = [dict(row) for row in c.execute("SELECT * FROM agent_items WHERE state IN ('pending','accepted') ORDER BY state='pending' DESC,updated DESC,id LIMIT 100")]
+            items = [dict(row) for row in c.execute("SELECT * FROM agent_items WHERE state='pending' ORDER BY updated DESC,id")]
+            items += [dict(row) for row in c.execute("SELECT * FROM agent_items WHERE state='accepted' ORDER BY updated DESC,id LIMIT 100")]
             for row in items:
                 row['evidence'] = json.loads(row['evidence']); row['plan'] = json.loads(row['plan']); row.pop('job_id')
                 row['needs_task_details'] = row['kind'] == 'school' and _needs_task_details(row['title'])
