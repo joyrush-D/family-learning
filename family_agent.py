@@ -1209,6 +1209,10 @@ def apply_school_change(app, store, obj):
 
 
 def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None, school_tasks=()):
+    if mode == 'school':
+        # Acknowledgements remain in the original message, but cannot invent new school work.
+        evidence = [e for e in evidence if not re.fullmatch(r'(?:是的|好的|收到|已上传|已提交|明白了|谢谢)[。！!，,\s]*', e['text'].strip())]
+        if not evidence: return []
     as_of = dt.date.fromisoformat(as_of).isoformat() if as_of is not None else _now().date().isoformat()
     routing = mode == 'school' and school_goals is not None
     content = {'mode': mode, 'as_of': as_of, 'child': profile or {}, 'evidence': evidence}

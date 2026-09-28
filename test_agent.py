@@ -416,6 +416,17 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(item['due'],'2026-09-23')
         self.assertEqual(item['plan']['school_task']['state'],'review')
 
+    def test_short_group_acknowledgements_never_become_school_tasks(self):
+        receipts=[dict(ref='message:synthetic-group:'+str(i),text=text,time='2026-09-28T17:00:00+08:00')
+                  for i,text in enumerate(('已上传','是的','收到。'))]
+        with patch.object(agent.family_llm,'_chat_json',side_effect=AssertionError('acknowledgements need no model')):
+            self.assertEqual(agent._select('school',receipts,school_goals=[],as_of='2026-09-28'),[])
+        action=dict(ref='message:synthetic-group:action',text='请明天带练习本。',time='2026-09-28T17:01:00+08:00')
+        proposal=dict(title_quote=action['text'],focus='school',due='',evidence=[dict(ref=action['ref'])],learning_subject='',learning_goal_id='')
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])) as model:
+            self.assertEqual(len(agent._select('school',receipts+[action],school_goals=[],as_of='2026-09-28')),1)
+        self.assertEqual(len(json.loads(model.call_args.args[0][1]['content'])['evidence']),1)
+
     def payload(self, expected='10', cursor='11', message='11', offset=0):
         stamp = (self.now + dt.timedelta(minutes=offset)).isoformat()
         return dict(source_id=self.source['id'], expected_cursor=expected, cursor=cursor,
