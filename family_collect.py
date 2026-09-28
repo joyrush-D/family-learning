@@ -9,6 +9,7 @@ import datetime as dt
 import ipaddress
 import json
 import os
+import pwd
 from pathlib import Path
 import re
 import signal
@@ -125,6 +126,8 @@ def wechat_env(config_path=None):
     """Return the closed environment used by the read-only WeChat CLI."""
     checked(Path(WECHAT_KEY_BIN).is_file(), 'wechat_env_unavailable')
     env = {key: os.environ[key] for key in _WECHAT_BASE_ENV if key in os.environ}
+    if not env.get('HOME'):
+        env['HOME'] = pwd.getpwuid(os.getuid()).pw_dir
     if config_path is None:
         env.update({key: os.environ[key] for key in _WECHAT_CONFIG_ENV if key in os.environ})
     else:

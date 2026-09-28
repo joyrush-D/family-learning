@@ -399,6 +399,9 @@ class CollectorTests(unittest.TestCase):
         self.assertNotIn('IMAGE_KEY', env)
         self.assertNotIn('WX_MCP_IMAGE_KEY', env)
 
+        with patch.dict(collect.os.environ, {}, clear=True):
+            self.assertEqual(collect.wechat_env()['HOME'], collect.pwd.getpwuid(collect.os.getuid()).pw_dir)
+
         with patch.object(collect.Path, 'is_file', return_value=False):
             with self.assertRaisesRegex(collect.CollectError, 'wechat_env_unavailable'):
                 collect.wechat_env()
