@@ -112,7 +112,7 @@
  function openHomework(active){
   if(!active||!active.children.some(c=>c.id===active.child_id))return false;
   const request=async(path,body,options={})=>{const response=await active.apiFetch(path,{method:'POST',signal:AbortSignal.timeout(120000),headers:{'X-Family-Token':active.token,...(options.raw?{'Content-Type':'application/octet-stream','X-File-Name':encodeURIComponent(body.name)}:{'Content-Type':'application/json'})},body:options.raw?body:JSON.stringify(body)});const result=await response.json();if(!response.ok){const e=Error(result.error||'操作未完成');e.status=response.status;throw e}return result};
-  return window.FamilyHomework.open({key:'parent:'+active.child_id+':'+active.day,child_id:active.child_id,day:active.day,child_name:active.children.find(c=>c.id===active.child_id)?.name||'',child:false,request:(action,body)=>request('/api/study/'+action,{...body,child_id:active.child_id,day:active.day}),upload:file=>request('/api/upload',file,{raw:true}),transcribe:id=>request('/api/transcribe',{attachment:id}),fileURL:id=>new URL('upload/'+id,location.href).href,onSaved:async()=>{await active.onSaved?.();if(ctx===active)await read()}});
+  return window.FamilyHomework.open({key:'parent:'+active.child_id+':'+active.day,child_id:active.child_id,day:active.day,child_name:active.children.find(c=>c.id===active.child_id)?.name||'',child:false,request:(action,body)=>request('/api/study/'+action,{...body,child_id:active.child_id,day:active.day}),upload:file=>request('/api/upload',file,{raw:true}),transcribe:id=>request('/api/transcribe',{attachment:id}),fileURL:id=>new URL('upload/'+id,location.href).href,onSaved:async()=>{try{await active.onSaved?.()}finally{if(ctx===active)await read()}}});
  }
  function change(e){
   if(busy||pending)return;

@@ -1667,7 +1667,7 @@ setInterval(async()=>{if(!data?.agent?.enabled||document.hidden||document.queryS
 function mountStudy(){
  const root=$('#studyRoot');if(!window.FamilyStudy){root.innerHTML=empty('放学后安排暂未加载，请刷新后重试。');return}
  window.FamilyStudy.mount({root,child_id:studyChildID||data.children[0]?.id,onChildChanged:id=>studyChildID=id,onDayChanged:day=>studyDay=day,task_id:studyTaskID,onTaskSelected:()=>studyTaskID='',day:studyDay||data.today,children:data.children,apiFetch,token:data.token,
-  onSaved:async()=>{try{const response=await apiFetch('/api/state',{signal:AbortSignal.timeout(12000)});if(response.ok)data=await response.json()}catch{}},
+  onSaved:()=>load(false),
   onTask:async id=>{const origin=$('#studyRoot');try{const response=await apiFetch('/api/state',{signal:AbortSignal.timeout(12000)});if(!response.ok)throw Error();const latest=await response.json();if(!origin?.isConnected)return;const task=latest.tasks.find(t=>t.id===id);if(!task)throw Error();data=latest;child=task.child;taskView=taskDismissed(task)?'已搁置':'全部';page='tasks';render();const target=document.querySelector('[data-query-target="task:'+id+'"]');target?.scrollIntoView({block:'center'});target?.focus({preventScroll:true})}catch{toast('最新决定暂时无法读取，请重试。')}},
   onRecord:id=>{const record=data.records.find(r=>r.id===Number(id));if(!record){toast('记录已保存，请刷新后查看。');return}child=record.child;page='learning';render();const target=document.querySelector('[data-query-target="record:'+Number(id)+'"]');revealLearningTarget(target)}
  });

@@ -86,6 +86,15 @@ async function openParent(p,url){await p.goto(url);await p.locator('nav [data-pa
     await p.locator('#task-group-homework [data-query-target^="task:"]').filter({hasText:refreshTitle}).waitFor();
     await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="settings"]').click();await p.locator('[data-child-access]').first().waitFor();await fit(p);await proof(p,'settings-entry-'+width);
     await openParent(p,host.url);await p.locator('[data-homework-capture]').click();const d=p.locator('#homeworkInputDialog');
+    const studyRefreshTitle='虚构放学后入口刷新失败 '+width;
+    await d.locator('[data-homework-item="0"] [name="title"]').fill(studyRefreshTitle);
+    await d.locator('[data-homework-item="0"] [name="reviewed"]').check();
+    await p.route('**/api/state',route=>route.abort('failed'));
+    await d.locator('[data-homework-item="0"] [type="submit"]').click();
+    await eventually(async()=>await d.locator('.homework-saved').count()===1,'study entry save committed before home refresh failure');
+    assert.match(await d.locator(':scope > .homework-status').innerText(),/已保存.*页面暂未刷新.*不要重复提交/,'study entry must report stale home state');
+    await p.unroute('**/api/state');assert.equal((await read()).tasks.filter(t=>t.title===studyRefreshTitle).length,1);
+    await d.locator('[data-homework-close]').click();await p.locator('[data-study-item]').filter({hasText:studyRefreshTitle}).waitFor();await p.locator('[data-homework-capture]').click();
     if(width===360)await p.evaluate(()=>Object.defineProperty(crypto,'randomUUID',{value:undefined,configurable:true}));assert.equal(await d.locator('[data-homework-item="0"] [name="title"]').isVisible(),true,'parent quick entry is ready');await d.locator('[data-homework-original] > summary').click();await d.locator('[name="text"]').fill('虚构登记 '+width+'：数小练3；语读第二段');
     await p.route('**/api/upload',r=>r.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'虚构上传失败'})}));
     await d.locator('[data-homework-files]').first().setInputFiles({name:'synthetic-notebook.png',mimeType:'image/png',buffer:png});await d.locator('[data-homework-retry-file]').waitFor();assert.match(await d.innerText(),/虚构上传失败/);await p.unroute('**/api/upload');await d.locator('[data-homework-retry-file]').click();await eventually(async()=>!await d.locator('[data-homework-retry-file]').count(),'upload retry');
