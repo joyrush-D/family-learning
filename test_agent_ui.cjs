@@ -279,7 +279,8 @@ with tempfile.TemporaryDirectory(prefix='synthetic-agent-ui-') as tmp:
   await record.locator('[name="day"]').fill(current.today);await fits(page);await proof(page,'school-task-material-'+width);
   await page.route('**/api/record',async route=>{const response=await route.fetch();assert.equal(response.status(),200);await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'虚构关闭前回执未知'})})},{times:1});
   await record.locator('[type="submit"]').click();await until(async()=>/虚构关闭前回执未知/.test(await page.locator('#recordError').innerText()),'task-source receipt unknown');
-  await page.locator('[data-close="recordDialog"]').click();await openTaskRecordFromCard(page,secondTaskID);
+  let discardPrompted=false;page.once('dialog',dialog=>{discardPrompted=true;dialog.accept()});
+  await page.locator('[data-close="recordDialog"]').click();assert(discardPrompted,'closing an uncertain record asks before discarding the draft');await openTaskRecordFromCard(page,secondTaskID);
   const afterUnknown=await state(),taskRecord=afterUnknown.records.find(r=>r.child==='示例星星'&&r.source===secondRef);assert.ok(taskRecord);await until(()=>page.locator('[data-learning-case="'+taskRecord.id+'"]').isVisible(),'fresh state recovers an unknown saved receipt into existing case');
   assert.equal(await page.locator('#recordDialog').isVisible(),false);assert.equal(afterUnknown.records.filter(r=>r.child==='示例星星'&&r.source===secondRef).length,1);assert.deepEqual(afterUnknown.tasks.find(t=>t.id===secondTaskID),taskBeforeRecord);
   await page.locator('[data-page="home"]').first().click();await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();await page.locator('#content h1').waitFor();
