@@ -209,9 +209,13 @@ def snapshot(app,start,end):
                 closed_on=date(u.get('updated','')[:10]),body=task['action']))
         if 'agent_items' in tables:
             for row in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='pending' ORDER BY created DESC,id DESC"):
-                if row['child_id'] not in ids or json.loads(row['plan']).get('school_task',{}).get('state')=='reference':continue
+                brief=json.loads(row['plan']).get('school_task',{})
+                if row['child_id'] not in ids or brief.get('state')=='reference':continue
                 refs=[e['ref'] for e in json.loads(row['evidence'])]
+                purpose=brief.get('purpose')
+                category=('homework' if purpose=='learning' and not is_exam(brief.get('title') or row['title']) else 'todo') if purpose in ('learning','admin','optional','unknown') else task_category(row['title'])
                 m=metadata(app,c,row['child_id'],row['title'],row['due'],refs)
+                m['category']=category
                 items.append(dict(id=row['id'],task_id='',kind='school',child_ids=[row['child_id']],title=row['title'],
                     agenda=m,status='待核对',closed=False,closed_on='',body=row['body']))
         study=[]

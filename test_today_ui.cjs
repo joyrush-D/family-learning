@@ -85,8 +85,8 @@ function fixtures(base){
     assert.equal(await card('LINK').count(),1,'one task is not duplicated');
     assert.match(await card('PAST').innerText(),/逾期/);assert.match(await card('ADMIN').innerText(),/发布：待核对/);
     assert.match(await homework.locator('h2').innerText(),/今日作业 · 2/);assert.equal(await p.locator('[data-agent-item] [data-check]').count(),0,'unconfirmed notifications cannot be completed');
-    const notices=p.locator('.today-new-notices'),review=notices.locator('#school-review-synthetic-school'),reviewLink=notices.locator('.review-link');
-    assert.ok((await card('TODAY').boundingBox()).y<(await review.boundingBox()).y,'confirmed homework stays before pending school notices');
+    const review=homework.locator('#school-review-synthetic-school'),reviewLink=homework.locator('.review-link');
+    assert.ok((await card('TODAY').boundingBox()).y<(await review.boundingBox()).y,'confirmed homework stays before pending school work');
     assert.ok((await reviewLink.boundingBox()).height>=44,'pending review link is touch sized');await reviewLink.click();assert.equal(await review.evaluate(x=>document.activeElement===x),true,'pending review link focuses the notice');assert.notEqual(await review.evaluate(x=>getComputedStyle(x).outlineStyle),'none','focused notice remains visible to keyboard users');
     assert.deepEqual(await p.locator('[data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem)),['synthetic-school']);
     assert.match(await p.locator('[data-agent-item="synthetic-school"]').innerText(),/需要核对是否参加这次活动。/);
@@ -169,7 +169,7 @@ function fixtures(base){
    orderState.tasks=[orderTask('OLD','2026-09-02'),orderTask('DUE-OLD','2026-09-20','2026-09-20'),orderTask('DUE-RECENT','2026-09-22','2026-09-27'),orderTask('DUE-TODAY','2026-09-27','2026-09-28'),orderTask('DUE-NEXT','2026-09-27','2026-09-29')];
    const published=['2026-09-02','2026-09-20','2026-09-22','2026-09-27','2026-09-27'];
    orderState.agent.items=published.map((day,n)=>({...school,id:'notice-'+n,title:'虚构学校消息 '+n,child_id:owner.id}));
-   orderState.today_calendar={inbox:[...orderState.tasks.map(t=>({id:t.id,task_id:t.id,kind:'task',child_ids:[owner.id],title:t.title,agenda:t.agenda,status:'待跟进',closed:false})),...published.map((day,n)=>({id:'notice-'+n,task_id:'',kind:'school',child_ids:[owner.id],title:'虚构学校消息 '+n,agenda:{category:'homework',published_on:day,published_at:n===3?'2026-09-27T08:00:00+08:00':n===4?'2026-09-27T18:00:00+08:00':'',due_on:'',scheduled_on:'',box:'inbox'},status:'待核对',closed:false}))],agenda:[],events:[],timetables:[],source_error:''};
+   orderState.today_calendar={inbox:[...orderState.tasks.map(t=>({id:t.id,task_id:t.id,kind:'task',child_ids:[owner.id],title:t.title,agenda:t.agenda,status:'待跟进',closed:false})),...published.map((day,n)=>({id:'notice-'+n,task_id:'',kind:'school',child_ids:[owner.id],title:'虚构学校消息 '+n,agenda:{category:'todo',published_on:day,published_at:n===3?'2026-09-27T08:00:00+08:00':n===4?'2026-09-27T18:00:00+08:00':'',due_on:'',scheduled_on:'',box:'inbox'},status:'待核对',closed:false}))],agenda:[],events:[],timetables:[],source_error:''};
    const orderPage=await browser.newPage({viewport:{width,height:820}});
    try{
     await orderPage.route('**/api/state',route=>route.fulfill({contentType:'application/json',body:JSON.stringify(orderState)}));

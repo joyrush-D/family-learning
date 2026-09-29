@@ -140,6 +140,25 @@ class AgendaTest(unittest.TestCase):
         rows=[x for x in app.calendar_snapshot('2026-09-08','2026-09-08')['inbox'] if x['kind']=='school']
         self.assertEqual([x['title'] for x in rows],['较新待核对','较早待核对'])
 
+    def test_pending_school_uses_agent_purpose_before_title_keywords(self):
+        stamp='2026-09-08T16:00:00+08:00'
+        cases=[('learning','待核对：学校安排','homework'),('admin','英语作业报名通知','todo'),
+               ('unknown','英语作业图片未读','todo'),('learning','英语：单元测验','todo')]
+        self.store.ingest(dict(source_id='synthetic-class',expected_cursor='0',cursor='1',checked_at=stamp,
+                               last_message_time=stamp,error='',messages=[dict(id='1',time=stamp,kind='text',sender='示例老师',text='虚构学校要求',unread=False)]))
+        for index,(purpose,title,_) in enumerate(cases):
+            self.store._save('synthetic-category-'+str(index),'fingerprint-'+str(index),[dict(
+                child_id='child-1',kind='school',title=title,body='原要求待补全',due='',
+                evidence=[dict(ref='message:synthetic-class:1',text='虚构学校要求')],
+                plan={'school_task':{'state':'review','purpose':purpose,'title':title}})],dt.datetime.fromisoformat(stamp))
+        app.calendar_snapshot('2026-09-08','2026-09-08')
+        with app.connect() as c:before='\n'.join(c.iterdump())
+        rows=[x for x in app.calendar_snapshot('2026-09-08','2026-09-08')['inbox'] if x['kind']=='school']
+        self.assertEqual({x['title']:x['agenda']['category'] for x in rows},{title:category for _,title,category in cases})
+        self.assertTrue(all(x['agenda']['published_on']=='2026-09-08' and not x['agenda']['due_on'] for x in rows))
+        self.assertTrue(all(not x['agenda']['category_confirmed'] for x in rows))
+        with app.connect() as c:self.assertEqual(before,'\n'.join(c.iterdump()))
+
     def test_rewritten_exam_title_borrows_the_exam_clause_deadline(self):
         # The interpreter usually rewrites an exam title (subject prefix, weekday suffix), so it is no
         # longer a literal substring of the notice clause. The dated test must still ground its date so
