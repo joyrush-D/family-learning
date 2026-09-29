@@ -34,7 +34,7 @@ function fixtures(base){
  const events=[event('shared',{child_ids:[first.id,second.id],category:'family'}),event('unlinked'),event('cancelled',{status:'cancelled'})];
  const reading=(id,state,planned_on=today)=>({id,child_id:first.id,child:first.name,book:'虚构阅读 '+id,state,planned_on,attachments:[]});
  const inbox=tasks.map(t=>({id:t.id,task_id:t.id,kind:'task',status:t.update?.status||t.original_status,child_ids:[t.child===first.name?first.id:second.id],closed:['已完成','不适用','不参加','已归档'].includes(t.update?.status||t.original_status),agenda:t.agenda}));
- inbox.push({id:'synthetic-school',kind:'school',child_ids:[first.id],closed:false,agenda:{category:'homework',published_on:today,due_on:'',scheduled_on:'',box:'inbox'}});
+ inbox.push({id:'synthetic-school',kind:'school',child_ids:[first.id],closed:false,agenda:{category:'homework',published_on:today,due_on:'2026-09-09',scheduled_on:'',box:'inbox'}});
  return {...base,today,tasks,agent:{...base.agent,items:['school','care','review'].map(kind=>({id:'synthetic-'+kind,kind,child_id:first.id,state:'pending',title:'虚构提醒 '+kind,body:'虚构待核对内容',plan:kind==='school'?{school_task:{state:'review',reason:'需要核对是否参加这次活动。'}}:{},evidence:[]}))},today_calendar:{inbox,agenda:[],events,timetables:[{id:'synthetic-table',child_id:first.id,day:today,title:'虚构课表',source:'虚构课表原件',sessions:[{slot:'第一节',title:'虚构数学'},{slot:'第二节',title:'虚构语文'}]}],source_error:''},
   reading:{...base.reading,tasks:[reading('draft','草案'),reading('paused','暂停'),reading('finished','已完成'),reading('today-reading','进行中'),reading('more','需补充'),reading('past-reading','进行中','2026-09-07'),reading('parent-review','待确认',''),reading('future-reading','进行中','2026-09-09'),reading('undated-reading','进行中','')]}};
 }
@@ -52,6 +52,7 @@ function fixtures(base){
     state.attachments=['虚构题目.png','虚构题目续页.png','虚构答案.pdf'];state.printing={printers:[{name:'Synthetic_Printer',label:'虚构打印机',color:false,duplex:false}],jobs:[]};
     state.agent.sources.push({id:'synthetic-audio',child_id:state.children[0].id,name:'虚构学校群',enabled:true});state.tasks.find(t=>t.id==='TODAY').source='message:synthetic-audio:dictation';
     state.agent.items.find(i=>i.id==='synthetic-school').title='待核对：⚠️重要通知⚠️\n\n请准备虚构活动材料。';
+    state.agent.items.find(i=>i.id==='synthetic-school').evidence=[{ref:'message:synthetic-audio:dictation',quote:'虚构老师原话'}];
     state.agent.items.push({id:'synthetic-reference',kind:'school',child_id:state.children[0].id,state:'pending',title:'虚构成绩表说明',body:'第一列表示课堂默写记录。',evidence:[],plan:{school_task:{state:'reference',reason:'这段内容解释列标题，没有新作业。'}}});
     const card=id=>p.locator('[data-query-target="task:'+id+'"]');
     await p.route('**/api/state',r=>r.fulfill({contentType:'application/json',body:JSON.stringify(state)}));
@@ -90,6 +91,9 @@ function fixtures(base){
     assert.deepEqual(await p.locator('[data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem)),['synthetic-school']);
     assert.match(await p.locator('[data-agent-item="synthetic-school"]').innerText(),/需要核对是否参加这次活动。/);
     assert.equal(await p.locator('[data-agent-item="synthetic-school"] h3').innerText(),'请准备虚构活动材料。');
+    assert.match(await review.locator('.review-badge').innerText(),/待核对作业/,'newly posted homework remains visibly unconfirmed even when due later');
+    assert.equal(await review.locator('[data-school-original-ref]').isVisible(),true,'parent can open the saved original without expanding secondary operations');
+    await review.locator('[data-school-original-ref]').click();assert.equal(await p.locator('#schoolOriginalDialog').isVisible(),true);await p.locator('#schoolOriginalDialog [data-school-original-close]').click();
     assert.match(await p.locator('[data-agent-item="synthetic-school"] details').textContent(),/⚠️重要通知⚠️/,'original heading is retained');
     await p.locator('.today-plans > summary').click();const shared=p.locator('[data-query-target="calendar:shared:'+state.today+'"]');assert.equal(await shared.count(),1);assert.match(await shared.innerText(),new RegExp(state.children[0].name+'、'+state.children[1].name));
     assert.equal(await p.locator('.calendar-cancelled').count(),0);assert.equal(await p.locator('.calendar-event [data-check]').count(),0,'calendar-only events do not invent task completion');
