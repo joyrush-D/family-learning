@@ -2,9 +2,10 @@
 
 ``annotate`` 只在家长点击时把**已上传**的图片发给已配置模型，返回待核对草稿，
 不预计算、不落库、不因为打开页面调用模型。``save`` 把家长逐题核对后的错题保存为
-普通学习记录（category=学习进展、来源“错题照片核对”），关联照片原件；
+普通学习记录（category=学习进展、来源“错题照片核对”）；原作业反馈可手填并复用照片，
 不判知识点、错因或掌握程度，后续订正/复测沿用既有学习记录链。
 """
+import json
 import re
 import sqlite3
 
@@ -110,6 +111,14 @@ class Store:
         items = obj.get('items')
         if not isinstance(items, list) or not 1 <= len(items) <= MAX_SAVE_ITEMS:
             raise WrongReviewError('每次保存1到%d条错题' % MAX_SAVE_ITEMS)
+        task_id = _text(obj, 'task_id', 30)
+        feedback_id = obj.get('feedback_record_id')
+        feedback_created = _text(obj, 'feedback_created', 50)
+        if bool(task_id) != (feedback_id is not None) or (feedback_id is not None and
+                (type(feedback_id) is not int or feedback_id <= 0)):
+            raise WrongReviewError('请从同一份作业反馈进入错题核对')
+        if task_id and not feedback_created:
+            raise WrongReviewError('原作答版本无法核对，请重新打开作业反馈')
 
         parsed = []
         with self.app.connect() as c:
@@ -121,7 +130,11 @@ class Store:
                 if not isinstance(item, dict):
                     raise WrongReviewError('第%d条错题格式不正确' % index)
                 attachment = item.get('attachment')
-                row, _ = self._image_row(c, attachment)
+                if attachment in (None, '') and task_id:
+                    attachment = ''
+                else:
+                    row, _ = self._image_row(c, attachment)
+                    attachment = row['id']
                 label = _text(item, 'label', fwq.LIMITS['label'], name='题号')
                 text = _text(item, 'text', fwq.LIMITS['text'], name='题面')
                 answer = _text(item, 'answer', fwq.LIMITS['answer'], name='原答案')
@@ -131,7 +144,7 @@ class Store:
                 error_hint = _text(item, 'error_hint', fwq.LIMITS['error_hint'], name='错误类型候选')
                 if not (label or text or answer or correction):
                     raise WrongReviewError('第%d条错题没有可保存的内容' % index)
-                parsed.append(dict(attachment=row['id'], label=label, text=text,
+                parsed.append(dict(attachment=attachment, label=label, text=text,
                                    answer=answer, correction=correction, note=note_extra,
                                    topic_hint=topic_hint, error_hint=error_hint))
 
@@ -153,20 +166,34 @@ class Store:
                 lines.append('知识点（家长核对）：' + item['topic_hint'])
             if item['error_hint']:
                 lines.append('错误类型（家长核对）：' + item['error_hint'])
-            lines.append('由照片标注生成，家长已核对；这不是掌握程度结论。')
+            lines.append(('家长对照原作答记录；' if task_id else '由照片标注生成，家长已核对；') + '这不是掌握程度结论。')
             record = dict(
                 child=child, day=day, category='学习进展', subject=subject,
                 title=heading[:200], note='\n'.join(lines), source=SOURCE,
-                attachments=[item['attachment']], followup_kind='',
+                attachments=[item['attachment']] if item['attachment'] else [], followup_kind='',
                 request_key=('%s-%02d' % (batch, index))[:128],
             )
+            if feedback_id is not None:
+                record['related_record_id'] = feedback_id
+                record['linked_task_id'] = task_id
             if len(record['note']) > 4000:
                 raise WrongReviewError('第%d条错题总内容超过4000字，本批尚未保存；请精简题面、原答、订正或备注后重试，草稿仍保留。' % index)
             records.append(record)
 
         saved = []
-        for record in records:
-            result = self.app.save_record(record)
-            saved.append(dict(id=result.get('record_id'),
-                              existing=bool(result.get('replayed')), title=record['title']))
+        with self.app.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            if task_id:
+                task = next((t for t in self.app.tasks(c) if t['id'] == task_id), None)
+                feedback = c.execute('SELECT child,source,attachments,created FROM records WHERE id=?',
+                                     (feedback_id,)).fetchone()
+                if (task is None or task['child'] != child or feedback is None or
+                        self.app.child_names(c).get(feedback['child'], feedback['child']) != child or
+                        feedback['source'] != '事项:' + task_id or feedback['created'] != feedback_created or
+                        any(item['attachment'] and item['attachment'] not in json.loads(feedback['attachments']) for item in parsed)):
+                    raise WrongReviewError('原作业反馈、孩子或照片已变化，请从原作业重新核对', 409, 'wrong_feedback_changed')
+            for record in records:
+                result = self.app.save_record(record, connection=c)
+                saved.append(dict(id=result.get('record_id'),
+                                  existing=bool(result.get('replayed')), title=record['title']))
         return dict(ok=True, saved=saved, count=len(saved))

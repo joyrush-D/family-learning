@@ -427,6 +427,7 @@ class DiagnosisTest(unittest.TestCase):
         # What the product wrote for the 题号-only item is exactly the heading and the fixed line this guard sets aside,
         # and its field labels are the ones the guard treats as empty when nothing follows them.
         self.assertEqual((rows[bare]['title'], rows[bare]['note']), ('数学错题：第8题', diag._SAVED_LINE))
+        self.assertTrue(diag._candidate_only(dict(topic_hint='待核', text=diag._SAVED_LINES[1])))
         self.assertEqual(rows[full]['title'], '数学错题（第2处）')
         self.assertEqual(rows[full]['note'].split('\n'), [label + value for label, value in zip(
             diag._SAVED_FIELDS, ('57+6=？', '513', '63', '虚构备注'))] + [diag._SAVED_LINE])

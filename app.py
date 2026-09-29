@@ -622,6 +622,11 @@ def _save_record(obj,care_only,receipt,connection=None):
             if child!=names.get(previous['child']): record_task(c,previous['linked_task_id'],child)
             if source.startswith('事项:') and source!='事项:'+previous['linked_task_id']:
                 raise RecordError(RECORD_TASK_MISMATCH,409,'record_task_mismatch')
+        initial_link=clean(obj,'linked_task_id',30) if 'linked_task_id' in obj else ''
+        if initial_link:
+            if previous is not None or source.startswith('事项:'):
+                raise RecordError('已有记录的事项关联请从原记录更正',409,'record_task_link_source')
+            record_task(c,initial_link,child)
         family_guided.guard_record_write(c,previous,source)
         if source.startswith('作息记录:') or previous is not None and previous['source'].startswith('作息记录:'):
             owned=dict(child=child,day=day,category=category,subject=subject,title=title,note=note,source=source,
@@ -696,7 +701,7 @@ def _save_record(obj,care_only,receipt,connection=None):
             c.execute('INSERT INTO revisions (record_id,previous,changed) VALUES (?,?,?)',(int(ident),json.dumps(dict(previous),ensure_ascii=False),now))
             c.execute('UPDATE records SET child=?,day=?,category=?,subject=?,title=?,note=?,source=?,score=?,total=?,created=?,attachments=?,related_record_id=?,followup_kind=?,assistance=?,practice_relation=?,comparison_note=?,care_choice=?,care_review_on=?,transcript=?,transcript_state=? WHERE id=?',values+(int(ident),))
         else:
-            cursor=c.execute('INSERT INTO records (child,day,category,subject,title,note,source,score,total,created,attachments,related_record_id,followup_kind,assistance,practice_relation,comparison_note,care_choice,care_review_on,transcript,transcript_state,request_key,request_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',values+(request_key,request_hash))
+            cursor=c.execute('INSERT INTO records (child,day,category,subject,title,note,source,score,total,created,attachments,related_record_id,followup_kind,assistance,practice_relation,comparison_note,care_choice,care_review_on,transcript,transcript_state,request_key,request_hash,linked_task_id,linked_task_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',values+(request_key,request_hash,initial_link,now if initial_link else ''))
             ident=cursor.lastrowid
         return record_result(c,int(ident))
 

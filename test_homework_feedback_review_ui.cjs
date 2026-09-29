@@ -39,7 +39,21 @@ async function server(){
   assert.equal(await p.locator('#pendingUploads img').count(),1);
   await p.locator('#saveTaskFeedback').click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'photo feedback saved');
   assert.match(await p.locator('[data-query-target="task:'+id+'"] [data-task="'+id+'"]:visible').first().innerText(),/查看\/补充反馈/,'today confirms saved feedback in the same task');
-  const panel=p.locator('#taskFeedbackHistory [data-homework-review]').first();assert.equal(await panel.locator('details').evaluate(x=>x.open),true,'saved photo exposes review');assert.equal(await panel.locator('[data-homework-review-photo]').count(),1);
+  const wrong=p.locator('#taskFeedbackHistory [data-task-wrong-form]').first();await wrong.locator('summary').click();
+  await wrong.locator('[data-wrong-field="label"]').fill('第2题');await wrong.locator('[data-wrong-field="answer"]').fill('C');await wrong.locator('[data-wrong-field="correction"]').fill('B');
+  p.once('dialog',d=>d.dismiss());await p.locator('#taskDialog [data-close="taskDialog"]').click();
+  assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'unsaved wrong answer stays with homework');
+  let wrongCalls=0;await p.route('**/api/wrong/save',r=>{wrongCalls++;return wrongCalls===1?r.fulfill({status:503,json:{error:'虚构保存失败'}}):r.continue()});
+  await wrong.locator('[data-task-wrong-save]').click();await eventually(async()=>/结果尚未核对/.test(await wrong.innerText()),'unknown wrong-item result retained');
+  assert.equal(await wrong.locator('[data-wrong-field="answer"]').inputValue(),'C');
+  await wrong.locator('[data-task-wrong-save]').click();await eventually(async()=>/错题已保存在这份作业下/.test(await p.locator('#taskFeedbackStatus').innerText()),'wrong-item retry saved');await p.unroute('**/api/wrong/save');
+  state=await(await fetch(host.url+'api/state')).json();const wrongRecords=state.records.filter(r=>r.source==='错题照片核对'&&r.linked_task_id===id);assert.equal(wrongRecords.length,1,'retry creates one wrong item');
+  assert.equal(wrongRecords[0].related_record_id,state.records.find(r=>r.source==='事项:'+id).id,'wrong item points to the original answer');
+  assert.equal(wrongRecords[0].attachments[0],state.records.find(r=>r.source==='事项:'+id).attachments[0],'saved photo is reused');
+  assert.equal(state.tasks.find(t=>t.id===id).update,null,'recording a wrong answer does not complete homework');
+  assert.equal(await p.locator('#taskFeedbackHistory [data-homework-review]').count(),1,'wrong-item record does not start a second AI review');
+  await p.keyboard.press('Escape');await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskFeedbackHistory').getByText('作业错题', {exact:false}).first().waitFor();
+  const panel=p.locator('#taskFeedbackHistory [data-homework-review]').first();await panel.locator('summary').click();assert.equal(await panel.locator('details').evaluate(x=>x.open),true,'saved photo exposes review');assert.equal(await panel.locator('[data-homework-review-photo]').count(),1);
   let calls=0;await p.route('**/api/print/homework/draft',r=>{calls++;const body=r.request().postDataJSON();assert.equal(body.question_sources.length,1);return calls===1?r.fulfill({status:503,json:{error:'虚构模型暂不可用'}}):r.fulfill({json:{draft:{text:'虚构第1题：卷面C，参考B；先找原文依据。',items:1,wrong_items:1,unknown_items:0,coverage:'仅此一页'},question_sha256:'a'.repeat(64)}})});
   assert.equal(calls,0,'opening saved feedback must not call model');await panel.locator('[data-homework-review-photo]').check();await panel.locator('[data-homework-review-run]').click();await eventually(async()=>/虚构模型暂不可用/.test(await panel.innerText()),'model failure retained');
   await panel.locator('[data-homework-review-run]').click();await panel.locator('[data-homework-review-result] textarea').waitFor();assert.equal(calls,2);
@@ -125,6 +139,14 @@ async function server(){
   p.once('dialog',d=>d.accept());await p.locator('#taskDialog [data-close="taskDialog"]').click();await p.reload();await p.locator('[data-task="'+id+'"]').first().click();
   const fresh=p.locator('#taskFeedbackHistory [data-homework-review="'+source.id+'"]');await fresh.locator('details').evaluate(x=>x.open=true);await fresh.locator('[data-homework-review-photo]').first().check();await fresh.locator('[data-homework-review-run]').click();await fresh.locator('[data-homework-review-result] textarea').waitFor();await fresh.locator('[data-homework-review-confirm]').check();await fresh.locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await fresh.innerText()),'fresh review staged');await p.locator('#saveTaskFeedback').click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'fresh review saved');
   state=await(await fetch(host.url+'api/state')).json();assert.equal(state.records.filter(r=>r.source==='事项:'+id).length,4,'fresh review links to corrected answer');
+  const textOnly=state.records.find(r=>r.note==='虚构另一条实际反馈'),textWrong=p.locator('#taskFeedbackHistory [data-task-wrong-form="'+textOnly.id+'"]');
+  await textWrong.locator('summary').click();assert.equal(await textWrong.locator('[data-task-wrong-photo]').count(),0,'written feedback does not require a photo');
+  await textWrong.locator('[data-wrong-field="label"]').fill('第3个词');await textWrong.locator('[data-wrong-field="answer"]').fill('窗处');await textWrong.locator('[data-wrong-field="correction"]').fill('窗外');
+  const otherWrong=p.locator('#taskFeedbackHistory [data-task-wrong-form="'+source.id+'"]');await otherWrong.locator('summary').click();await otherWrong.locator('[data-wrong-field="label"]').fill('另一份未保存草稿');
+  await textWrong.locator('[data-task-wrong-save]').click();assert.match(await textWrong.innerText(),/另一份作答还有未保存的错题/);
+  await otherWrong.locator('[data-wrong-field="label"]').fill('');
+  await textWrong.locator('[data-task-wrong-save]').click();await eventually(async()=>/错题已保存在这份作业下/.test(await p.locator('#taskFeedbackStatus').innerText()),'manual text-only wrong item saved');
+  state=await(await fetch(host.url+'api/state')).json();assert.equal(state.records.filter(r=>r.source==='错题照片核对'&&r.linked_task_id===id).length,2);
   assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);await p.reload();
   assert.match(await p.locator('[data-query-target="task:'+id+'"] [data-task="'+id+'"]:visible').first().innerText(),/查看\/补充反馈/,'reopened today retains saved-feedback state');assert.deepEqual(errors,[]);await p.close();
  }

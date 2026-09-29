@@ -174,6 +174,62 @@ class WrongReviewHTTPTest(unittest.TestCase):
                                         request_key=uuid.uuid4().hex, items=over_error))
         self.assertEqual(status, 400, out)
 
+    def test_manual_wrong_item_stays_with_original_homework(self):
+        photo = self.upload('虚构作答.png', PNG)
+        another = self.upload('另一张照片.png', PNG)
+        task = app.new_task(dict(child='示例甲', title='虚构数学作业', category='homework'))
+        feedback = app.save_task_feedback(dict(task_id=task['id'], child='示例甲', day='2026-09-18',
+                                               request_key=uuid.uuid4().hex, attachments=[photo]))
+        feedback_created = next(r['created'] for r in self.request('/api/state')[1]['records'] if r['id'] == feedback['record_id'])
+        item = dict(attachment=photo, label='第2题', text='42 - 17 =', answer='35', correction='25')
+        body = dict(child='示例甲', day='2026-09-18', subject='数学', request_key=uuid.uuid4().hex,
+                    task_id=task['id'], feedback_record_id=feedback['record_id'], feedback_created=feedback_created, items=[item])
+        status, saved = self.request('/api/wrong/save', body)
+        self.assertEqual(status, 200, saved)
+        self.assertEqual(saved['count'], 1)
+        status, state = self.request('/api/state')
+        wrong = next(r for r in state['records'] if r['source'] == '错题照片核对')
+        self.assertEqual(wrong['related_record_id'], feedback['record_id'])
+        self.assertEqual(wrong['linked_task_id'], task['id'])
+        self.assertEqual(wrong['attachments'], [photo])
+        status, replay = self.request('/api/wrong/save', body)
+        self.assertEqual(status, 200, replay)
+        self.assertTrue(replay['saved'][0]['existing'])
+        for changed in (body | dict(child='示例乙', request_key=uuid.uuid4().hex),
+                        body | dict(feedback_record_id=wrong['id'], request_key=uuid.uuid4().hex),
+                        body | dict(items=[item | dict(attachment=another)], request_key=uuid.uuid4().hex)):
+            status, _ = self.request('/api/wrong/save', changed)
+            self.assertEqual(status, 409)
+        self.assertEqual(len([r for r in self.request('/api/state')[1]['records']
+                              if r['source'] == '错题照片核对']), 1)
+        app.save_task_feedback(dict(task_id=task['id'], child='示例甲', record_id=feedback['record_id'],
+                                    expected_created=feedback_created, day='2026-09-18',
+                                    note='原作答后来更正', attachments=[photo]))
+        status, out = self.request('/api/wrong/save', body | dict(request_key=uuid.uuid4().hex))
+        self.assertEqual(status, 409, out)
+        self.assertEqual(out['code'], 'wrong_feedback_changed')
+        self.assertEqual(self.request('/api/wrong/save', body)[0], 409)
+        self.assertEqual(len([r for r in self.request('/api/state')[1]['records']
+                              if r['source'] == '错题照片核对']), 1)
+
+    def test_manual_wrong_item_without_photo(self):
+        task = app.new_task(dict(child='示例甲', title='虚构听写作业', category='homework'))
+        feedback = app.save_task_feedback(dict(task_id=task['id'], child='示例甲', day='2026-09-18',
+                                               request_key=uuid.uuid4().hex, note='孩子听写后口头核对'))
+        feedback_created = next(r['created'] for r in self.request('/api/state')[1]['records'] if r['id'] == feedback['record_id'])
+        body = dict(child='示例甲', day='2026-09-18', subject='语文', request_key=uuid.uuid4().hex,
+                    task_id=task['id'], feedback_record_id=feedback['record_id'], feedback_created=feedback_created,
+                    items=[dict(attachment='', label='第1个词', answer='窗处', correction='窗外')])
+        status, saved = self.request('/api/wrong/save', body)
+        self.assertEqual(status, 200, saved)
+        wrong = next(r for r in self.request('/api/state')[1]['records'] if r['source'] == '错题照片核对')
+        self.assertEqual((wrong['attachments'], wrong['linked_task_id'], wrong['related_record_id']),
+                         ([], task['id'], feedback['record_id']))
+        self.assertEqual(self.request('/api/wrong/save', body)[1]['saved'][0]['existing'], True)
+        standalone = body | dict(request_key=uuid.uuid4().hex)
+        standalone.pop('task_id'); standalone.pop('feedback_record_id')
+        self.assertEqual(self.request('/api/wrong/save', standalone)[0], 400)
+
     def test_overlong_second_item_rejects_whole_batch_and_can_retry(self):
         img = self.upload('synthetic-long.png', PNG)
         first = dict(attachment=img, label='第1题', text='28+14=', answer='32', correction='42',
