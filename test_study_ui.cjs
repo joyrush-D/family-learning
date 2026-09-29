@@ -72,8 +72,11 @@ async function proof(p,name){if(process.env.STUDY_UI_PROOF_DIR){const fs=require
      await p.locator('[data-study-date]').fill(state.today);await p.locator('[data-study-date]').dispatchEvent('change');await eventually(async()=>await p.locator('.study-active-gap').count()===0&&await p.locator('.study-item').count()===0,'today unblocked after correction');
     }
     const settings=p.locator('.study-settings');await settings.locator('summary').click();
-    const time=settings.locator('form');await time.locator('[name="start_time"]').fill('16:30');await time.locator('[name="stop_time"]').fill('21:00');await time.locator('[name="bed_time"]').fill('21:30');await time.locator('button').click();
+    const time=settings.locator('form');await time.locator('[name="start_time"]').fill('16:30');await time.locator('[name="stop_time"]').fill('21:00');await time.locator('[name="bed_time"]').fill('21:30');
+    const staleHome=route=>route.abort('failed');await p.route('**/api/state',staleHome);await time.locator('button').click();
     await eventually(async()=>(await read()).day.stop_time==='21:00','night boundary saves');
+    await eventually(async()=>/已保存；首页暂未刷新/.test(await p.locator('#studyStatus').innerText()),'saved schedule must show stale home state');
+    await p.unroute('**/api/state',staleHome);await p.locator('[data-study-refresh]').click();
     const add=p.locator('[data-study-form="new"]');if(!await add.isVisible())await p.locator('.study-add>summary').click();
     const title='数学：完成虚构课后作业 '+width,requirement='虚构要求：读完第 3 页，再写两句自己的解释。\n保留自己的草稿。';
     const sourceTask=(await post('api/task/new',{child:child.name,title,due:'虚构下次课前',action:requirement})).task;

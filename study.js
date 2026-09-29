@@ -104,7 +104,7 @@
    const view=drafts.get(current.context);if(current.form){view?.forms.delete(current.form);if(view?.editor&&current.form===view.editor.type+':'+view.editor.id)view.editor=null}
    pending=null;message='已保存';
    if(ctx&&contextKey(ctx)===current.context){if(current.form)resetForm(current.form);editor=view?.editor||null;snapshot=result;readAt=Date.now();paint()}
-   try{await active.onSaved?.()}catch{message='已保存；首页暂未刷新。'}
+   try{await active.onSaved?.()}catch{status('已保存；首页暂未刷新。')}
   }catch(e){status((e.name==='AbortError'?'保存等待超时':e.message||'连接暂时中断')+(pending?'。结果尚未核对，内容已保留，请重试原请求。':''))}
   finally{clearTimeout(timeout);busy=false;lock();if(pending===current&&ctx===active){const retry=root()?.querySelector('[data-study-retry]');retry?.scrollIntoView({block:'nearest'});retry?.focus({preventScroll:true})}if(!pending&&message==='已保存')await read()}
  }
