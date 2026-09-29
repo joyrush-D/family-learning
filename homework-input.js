@@ -7,7 +7,8 @@
  const uuid=()=>crypto.randomUUID?crypto.randomUUID():Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');
  const field=(name,label,value='',limit=200)=>`<label>${label}<input name="${name}" maxlength="${limit}" value="${esc(value)}" ${name==='title'?'required':''}></label>`;
  const sourceState=v=>JSON.stringify([v.text,v.explanation,v.files.map(f=>f.id||f.name)]);
- const dirty=()=>[...views.values()].some(v=>v.transcript||sourceState(v)!==v.saved_source||v.items.some(i=>!i.saved&&(i.pending||i.title||i.goal||i.subject||i.excerpt||i.planned_minutes||i.reviewed)));
+ const unsaved=i=>!i.saved&&(i.pending||i.title||i.goal||i.subject||i.excerpt||i.planned_minutes||i.reviewed);
+ const dirty=()=>[...views.values()].some(v=>v.transcript||sourceState(v)!==v.saved_source||v.items.some(unsaved));
  function remember(){
   if(!dialog||!current)return;
   const source=dialog.querySelector('[data-homework-source]');if(source){current.text=source.elements.text.value;current.explanation=source.elements.explanation.value}
@@ -79,7 +80,7 @@
  function open(options){
   if(busy||recorder||micPending)return false;
   if(!dialog){dialog=document.createElement('dialog');dialog.id='homeworkInputDialog';dialog.setAttribute('aria-labelledby','homeworkInputTitle');document.body.append(dialog);dialog.addEventListener('click',click);dialog.addEventListener('input',remember);dialog.addEventListener('change',e=>{if(e.target.matches('[data-homework-files]'))addFiles([...e.target.files])});dialog.addEventListener('submit',e=>{e.preventDefault();if(!busy&&e.target.matches('[data-homework-item]'))save(e.target)});dialog.addEventListener('cancel',e=>{if(busy||recorder||micPending)e.preventDefault();else remember()})}
-  ctx=options;const previous=views.get(ctx.key);if(!previous||(previous.items.length&&previous.items.every(i=>i.saved)&&!previous.transcript&&sourceState(previous)===previous.saved_source))views.set(ctx.key,{text:'',explanation:'',files:[],items:ctx.child?[]:[candidate()],uncertainties:[],transcript:null,message:'',source_open:false,saved_source:'["","",[]]'});current=views.get(ctx.key);paint();dialog.showModal();if(!ctx.child)dialog.querySelector('[data-homework-item] [name=title]')?.focus();return true;
+  ctx=options;const previous=views.get(ctx.key);if(!previous||(previous.items.some(i=>i.saved)&&!previous.items.some(unsaved)&&!previous.transcript&&sourceState(previous)===previous.saved_source))views.set(ctx.key,{text:'',explanation:'',files:[],items:ctx.child?[]:[candidate()],uncertainties:[],transcript:null,message:'',source_open:false,saved_source:'["","",[]]'});current=views.get(ctx.key);paint();dialog.showModal();if(!ctx.child)dialog.querySelector('[data-homework-item] [name=title]')?.focus();return true;
  }
  function clear(){generation++;clearTimeout(timer);stream?.getTracks().forEach(t=>t.stop());stream=null;recorder=null;micPending=false;busy=false;views.clear();current=null;ctx=null;dialog?.close();dialog?.replaceChildren()}
  window.addEventListener('beforeunload',e=>{remember();if(dirty()||busy||recorder||micPending){e.preventDefault();e.returnValue=''}});
