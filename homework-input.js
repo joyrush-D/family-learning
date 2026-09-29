@@ -52,7 +52,7 @@
   remember();const row=current.items[Number(form.dataset.homeworkItem)];if(!row||row.saved||!form.reportValidity())return;if(current.files.some(f=>!f.id)){status('请先完成或移除未成功的上传。');return}
   row.pending ||= {title:row.title,subject:row.subject,planned_minutes:row.planned_minutes===''?null:Number(row.planned_minutes),version:0,request_key:row.request_key,report:{...source(),excerpt:row.excerpt,goal:row.goal}};
   busy=true;row.error='正在保存…';paint();const gen=generation;
-  try{const r=await ctx.request('item',row.pending);if(gen!==generation)return;if(!r?.ok||!r.saved_item_id||!r.items?.some(i=>i.id===r.saved_item_id))throw Error('保存回执尚未核对');row.saved=true;row.pending=null;row.error='';current.saved_source=sourceState(current);current.message='已保存这项功课。';await ctx.onSaved?.()}
+  try{const r=await ctx.request('item',row.pending);if(gen!==generation)return;if(!r?.ok||!r.saved_item_id||!r.items?.some(i=>i.id===r.saved_item_id))throw Error('保存回执尚未核对');row.saved=true;row.pending=null;row.error='';current.saved_source=sourceState(current);current.message='已保存这项功课。';try{await ctx.onSaved?.()}catch{current.message='这项已保存；页面暂未刷新，请关闭后刷新已保存状态，不要重复提交。'}}
   catch(e){if(gen!==generation)return;if([400,403,404,422].includes(e.status))row.pending=null;row.error=(e.message||'保存未完成')+'；内容保留，请核对后重试。'}finally{if(gen===generation){busy=false;paint()}}
  }
  async function record(){

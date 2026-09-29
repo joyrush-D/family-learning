@@ -50,14 +50,41 @@ async function openParent(p,url){await p.goto(url);await p.locator('nav [data-pa
     const prior=recorders[0];FamilyHomework.clear();FamilyHomework.open(options());document.querySelector('[data-homework-record]').click();const next=makeStream();waiters[2](next);await tick();await prior.onstop();
     if(next.track.stopped||document.querySelector('[data-homework-record]').textContent!=='结束录音')throw Error('Old stop cleared current recorder');
    }finally{FamilyHomework.clear();window.MediaRecorder=old;navigator.mediaDevices.getUserMedia=original}
-  });await race.close();checks.push({captureIdentity:true,lateMicrophonePermission:true,lateRecorderStop:true,syntheticDevice:true});
+  });
+  const refreshFailure=await race.evaluate(async()=>{
+   let writes=0;
+   FamilyHomework.open({key:'synthetic-refresh-failure',child:false,child_name:'示例',day:'2026-09-13',fileURL:()=>'',
+    request:async()=>{writes++;return {ok:true,saved_item_id:'saved-1',items:[{id:'saved-1'}]}},
+    onSaved:async()=>{throw Error('synthetic refresh failure')}});
+   const form=document.querySelector('[data-homework-item]');form.elements.title.value='虚构已保存作业';form.elements.reviewed.checked=true;
+   form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
+   await new Promise(resolve=>setTimeout(resolve,0));
+   const result={writes,saved:document.querySelectorAll('.homework-saved').length,status:document.querySelector('.homework-status').textContent};
+   FamilyHomework.clear();return result;
+  });
+  assert.equal(refreshFailure.writes,1);assert.equal(refreshFailure.saved,1);
+  assert.match(refreshFailure.status,/已保存.*页面暂未刷新.*不要重复提交/,'save and refresh are separate outcomes');
+  await race.close();checks.push({captureIdentity:true,lateMicrophonePermission:true,lateRecorderStop:true,syntheticDevice:true,savedRefreshFailure:true});
   const initial=await(await fetch(host.url+'api/state')).json(),who=initial.children[0],other=initial.children[1],day=initial.today;
   const read=async()=>await(await fetch(host.url+'api/state')).json();
   const post=async(route,body)=>{const r=await fetch(host.url+'api/'+route,{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':initial.token},body:JSON.stringify(body)});const result=await r.json();assert.ok(r.ok,JSON.stringify(result));return result};
   for(const width of [360,1440]){
    const p=await browser.newPage({viewport:{width,height:900}}),errors=[];p.on('pageerror',e=>errors.push(e.message));p.on('dialog',d=>d.accept());
    try{
-    await p.goto(host.url);await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="settings"]').click();await p.locator('[data-child-access]').first().waitFor();await fit(p);await proof(p,'settings-entry-'+width);
+    await p.goto(host.url);
+    const refreshTitle='虚构刷新失败后已保存 '+width;
+    await p.locator('[data-homework-new="'+who.id+'"]').click();const quick=p.locator('#homeworkInputDialog');
+    await quick.locator('[data-homework-item="0"] [name="title"]').fill(refreshTitle);
+    await quick.locator('[data-homework-item="0"] [name="reviewed"]').check();
+    await p.route('**/api/state',route=>route.abort('failed'));
+    await quick.locator('[data-homework-item="0"] [type="submit"]').click();
+    await eventually(async()=>await quick.locator('.homework-saved').count()===1,'save committed before page refresh failure');
+    assert.match(await quick.locator(':scope > .homework-status').innerText(),/已保存.*页面暂未刷新.*不要重复提交/);
+    await p.unroute('**/api/state');assert.equal((await read()).tasks.filter(t=>t.title===refreshTitle).length,1);
+    await quick.locator('[data-homework-close]').click();await p.locator('nav [data-page="more"]').click();await p.locator('[data-refresh-records]').click();
+    await p.locator('nav [data-page="home"]').click();
+    await p.locator('#task-group-homework [data-query-target^="task:"]').filter({hasText:refreshTitle}).waitFor();
+    await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="settings"]').click();await p.locator('[data-child-access]').first().waitFor();await fit(p);await proof(p,'settings-entry-'+width);
     await openParent(p,host.url);await p.locator('[data-homework-capture]').click();const d=p.locator('#homeworkInputDialog');
     if(width===360)await p.evaluate(()=>Object.defineProperty(crypto,'randomUUID',{value:undefined,configurable:true}));assert.equal(await d.locator('[data-homework-item="0"] [name="title"]').isVisible(),true,'parent quick entry is ready');await d.locator('[data-homework-original] > summary').click();await d.locator('[name="text"]').fill('虚构登记 '+width+'：数小练3；语读第二段');
     await p.route('**/api/upload',r=>r.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'虚构上传失败'})}));
