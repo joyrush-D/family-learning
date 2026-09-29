@@ -160,8 +160,9 @@ test('today counts only current dated work and marks source gaps without changin
  const rows=[row('today',{due_on:d.today}),row('old'),row('future',{due_on:'2026-09-22'})];
  d.tasks=rows.map(x=>({id:x.id,title:x.id,child:'小溪'}));d.today_calendar={inbox:rows,events:[],timetables:[]};
  h.ctx.currentSources=()=>[{child_id:'child-a',unread_count:2,enabled:true}];h.ctx.currentSourceStatus=()=> '最近读取成功';
- const html=h.ctx.todayTasksHTML();assert.match(html,/今日作业 · 1/);assert.match(html,/其他未完成及日期待核对 · 2/);assert.match(html,/不是完整作业清单/);assert.equal(h.ctx.taskBoxes().Inbox.length,3);
- h.ctx.child='小岚';assert.doesNotMatch(h.ctx.todayTasksHTML(),/不是完整作业清单/);
+ const html=h.ctx.todayTasksHTML();assert.match(html,/今日作业 · 1/);assert.match(html,/其他未完成及日期待核对 · 2/);assert.match(html,/最近读取成功；部分已保存消息需核对原件/);assert.doesNotMatch(html,/data-collection-check/);assert.equal(h.ctx.taskBoxes().Inbox.length,3);
+ h.ctx.currentSourceStatus=()=> '最近读取未成功';assert.match(h.ctx.todayTasksHTML(),/学校消息来源读取未成功或待核对，今天作业可能缺项/);assert.match(h.ctx.todayTasksHTML(),/data-collection-check/);
+ h.ctx.child='小岚';assert.doesNotMatch(h.ctx.todayTasksHTML(),/今天作业可能缺项|需核对原件/);
 });
 test('recent undated school messages remain visible without becoming today homework',()=>{
  const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';
