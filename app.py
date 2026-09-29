@@ -668,13 +668,19 @@ def _save_record(obj,care_only,receipt,connection=None):
             raise RecordError('转写须标明待核对或已核对；没有转写时两项都留空')
         seen={int(ident)} if ident else set()
         ancestor=related
+        parent_task=''
         while ancestor is not None:
             if ancestor in seen: raise ValueError('关联记录不能指向自身或形成循环')
             seen.add(ancestor)
-            linked=c.execute('SELECT child,related_record_id FROM records WHERE id=?',(ancestor,)).fetchone()
+            linked=c.execute('SELECT child,source,linked_task_id,related_record_id FROM records WHERE id=?',(ancestor,)).fetchone()
             if linked is None: raise ValueError('关联记录不存在')
             if linked['child']!=child: raise ValueError('只能关联同一个孩子的记录')
+            if ancestor==related:
+                parent_task=linked['source'][len('事项:'):] if linked['source'].startswith('事项:') else linked['linked_task_id']
             ancestor=linked['related_record_id']
+        if previous is None and kind and parent_task and not initial_link:
+            record_task(c,parent_task,child)
+            initial_link=parent_task
         if ident and c.execute('SELECT 1 FROM records WHERE related_record_id=? AND child<>?',(int(ident),child)).fetchone():
             raise ValueError('已有该孩子的后续记录，不能更换孩子')
         attachments=obj.get('attachments',json.loads(previous['attachments']) if previous else [])
