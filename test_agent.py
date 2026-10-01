@@ -45,6 +45,7 @@ class AgentTests(unittest.TestCase):
         before=snapshot()
         view=self.store.school_messages(dict(child_id='child-1'),dict)
         self.assertEqual(view['total'],41);self.assertEqual(view['next_offset'],'36')
+        self.assertEqual(sorted(p['count'] for p in view['publishers']),[1,2,38])
         bundle=view['groups'][0];self.assertEqual([v['message_id'] for v in bundle['messages']],['1','2','3'])
         import copy
         different=copy.deepcopy(bundle['messages']);different[2]['message']['text']='数学：完成第3页。'

@@ -889,7 +889,12 @@ class Store:
                     rows.append((when, source, message, raw['rowid']))
             dates = sorted(days - {'unknown'}, reverse=True) + (['unknown'] if 'unknown' in days else [])
             day = day or (dates[0] if dates else '')
-            rows = [r for r in rows if r[0] == day]
+            rows = [r for r in rows if r[0] == day]; publishers = {}
+            for _, source, message, _ in rows:
+                key = _publisher(source['id'], message) or _hash([source['id'],message.get('sender','')])
+                publisher = publishers.setdefault(key, dict(sender=message.get('sender',''),source=source['name'],
+                    identity_known=bool(message.get('sender_id')),count=0))
+                publisher['count'] += 1
             rows.sort(key=lambda r: (dt.datetime.fromisoformat(r[2]['time']).timestamp() if r[2].get('time') else 0, r[3]))
             selected = rows[int(offset):int(offset) + 36]; views = []; by_ref = {}
             for raw in c.execute("SELECT id,title,state,plan,evidence FROM agent_items WHERE kind='school' AND child_id=? AND state!='superseded'", (child,)):
@@ -906,7 +911,7 @@ class Store:
             groups = _publication_groups(views)
             return dict(child_id=child, day=day, days=dates, total=len(rows), offset=int(offset),
                         next_offset=str(int(offset) + len(selected)) if int(offset) + len(selected) < len(rows) else '',
-                        groups=groups)
+                        groups=groups, publishers=list(publishers.values()))
 
     def message_attachment(self, obj, upload_info):
         if not isinstance(obj, dict) or set(obj) != {'child_id', 'source_id', 'message_id', 'attachment_id', 'action'}:
