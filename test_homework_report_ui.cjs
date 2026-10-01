@@ -56,7 +56,7 @@ async function openParent(p,url){await p.goto(url);await p.locator('nav [data-pa
    FamilyHomework.open({key:'synthetic-refresh-failure',child:false,child_name:'示例',day:'2026-09-13',fileURL:()=>'',
     request:async()=>{writes++;return {ok:true,saved_item_id:'saved-1',items:[{id:'saved-1'}]}},
     onSaved:async()=>{throw Error('synthetic refresh failure')}});
-   const form=document.querySelector('[data-homework-item]');form.elements.title.value='虚构已保存作业';form.elements.reviewed.checked=true;
+   const form=document.querySelector('[data-homework-item]');form.elements.title.value='虚构已保存作业';if(form.elements.reviewed)throw Error('Parent save must not require a repeated review checkbox');
    form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
    await new Promise(resolve=>setTimeout(resolve,0));
    const result={writes,saved:document.querySelectorAll('.homework-saved').length,status:document.querySelector('.homework-status').textContent};
@@ -75,7 +75,7 @@ async function openParent(p,url){await p.goto(url);await p.locator('nav [data-pa
     const refreshTitle='虚构刷新失败后已保存 '+width;
     await p.locator('[data-homework-new="'+who.id+'"]').click();const quick=p.locator('#homeworkInputDialog');
     await quick.locator('[data-homework-item="0"] [name="title"]').fill(refreshTitle);
-    await quick.locator('[data-homework-item="0"] [name="reviewed"]').check();
+    assert.equal(await quick.locator('[name="reviewed"]').count(),0,'parent entry has no repeated review confirmation');
     await p.route('**/api/state',route=>route.abort('failed'));
     await quick.locator('[data-homework-item="0"] [type="submit"]').click();
     await eventually(async()=>await quick.locator('.homework-saved').count()===1,'save committed before page refresh failure');
@@ -88,7 +88,7 @@ async function openParent(p,url){await p.goto(url);await p.locator('nav [data-pa
     await openParent(p,host.url);await p.locator('[data-homework-capture]').click();const d=p.locator('#homeworkInputDialog');
     const studyRefreshTitle='虚构放学后入口刷新失败 '+width;
     await d.locator('[data-homework-item="0"] [name="title"]').fill(studyRefreshTitle);
-    await d.locator('[data-homework-item="0"] [name="reviewed"]').check();
+    assert.equal(await d.locator('[name="reviewed"]').count(),0,'parent study entry has no repeated review confirmation');
     await p.route('**/api/state',route=>route.abort('failed'));
     await d.locator('[data-homework-item="0"] [type="submit"]').click();
     await eventually(async()=>await d.locator('.homework-saved').count()===1,'study entry save committed before home refresh failure');
@@ -102,7 +102,7 @@ async function openParent(p,url){await p.goto(url);await p.locator('nav [data-pa
     const quickTitle=d.locator('[data-homework-item="0"] [name="title"]');await quickTitle.fill('尚未保存的虚构手填项');let draftCalls=0;await p.route('**/api/study/draft',r=>{draftCalls++;return r.continue()});p.removeAllListeners('dialog');p.once('dialog',q=>q.dismiss());await d.locator('[data-homework-draft]').click();assert.equal(draftCalls,0,'declining replacement makes no model request');assert.equal(await quickTitle.inputValue(),'尚未保存的虚构手填项','manual draft survives declined replacement');await p.unroute('**/api/study/draft');p.on('dialog',q=>q.accept());await quickTitle.fill('');
     await d.locator('[data-homework-source] details > summary').click();await d.locator('[name="explanation"]').fill('小练3是小练习册第3页，不是三遍。');
     await p.route('**/api/study/draft',r=>r.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'虚构整理暂不可用'})}));await d.locator('[data-homework-draft]').click();await eventually(async()=>/虚构整理暂不可用/.test(await d.innerText()),'model error is visible');assert.match(await d.locator('[name="text"]').inputValue(),/数小练3/);await p.unroute('**/api/study/draft');await d.locator('[data-homework-draft]').click();await eventually(async()=>await d.locator('[data-homework-item]').count()===2,'two draft assignments');
-    const form=d.locator('[data-homework-item="0"]'),title='虚构三段问答 '+width;await form.locator('[name="title"]').fill(title);await form.locator('[name="goal"]').fill('完成第3页，家长核对题号');await form.locator('[name="reviewed"]').check();await form.locator('[name="reviewed"]').uncheck();await d.locator('[data-homework-close]').click();await p.locator('[data-homework-capture]').click();assert.equal(await form.locator('[name="reviewed"]').isChecked(),false,'unchecked review survives repaint');p.removeAllListeners('dialog');p.once('dialog',q=>q.dismiss());await d.locator('[data-homework-edit-source]').click();assert.equal(await form.locator('[name="title"]').inputValue(),title,'cancel discard preserves edited candidates');p.on('dialog',q=>q.accept());await form.locator('[name="reviewed"]').check();await fit(p);await proof(p,'parent-draft-'+width);
+    const form=d.locator('[data-homework-item="0"]'),title='虚构三段问答 '+width;await form.locator('[name="title"]').fill(title);await form.locator('[name="goal"]').fill('完成第3页，家长核对题号');assert.equal(await form.locator('[name="reviewed"]').count(),0);await d.locator('[data-homework-close]').click();await p.locator('[data-homework-capture]').click();assert.equal(await form.locator('[name="title"]').inputValue(),title,'parent title survives repaint');assert.equal(await form.locator('[name="goal"]').inputValue(),'完成第3页，家长核对题号','parent requirements survive repaint');p.removeAllListeners('dialog');p.once('dialog',q=>q.dismiss());await d.locator('[data-homework-edit-source]').click();assert.equal(await form.locator('[name="title"]').inputValue(),title,'cancel discard preserves edited candidates');p.on('dialog',q=>q.accept());await fit(p);await proof(p,'parent-draft-'+width);
     let lost=false;await p.route('**/api/study/item',async route=>{if(!lost){lost=true;await route.fetch();await route.abort('failed')}else await route.continue()});await form.locator('[type="submit"]').click();await eventually(async()=>lost&&await form.locator('[type="submit"]').isEnabled(),'uncertain save can retry');assert.equal(await form.locator('[name="title"]').isDisabled(),true);await p.unroute('**/api/study/item');await form.locator('[type="submit"]').click();await eventually(async()=>await d.locator('.homework-saved').count()===1,'one saved report');assert.equal((await read()).tasks.filter(t=>t.title===title).length,1);await d.locator('[data-homework-close]').click();await p.locator('[data-homework-capture]').click();assert.equal(await d.locator('.homework-saved').count(),1,'first item stays saved in this capture');assert.equal(await d.locator('[data-homework-item]').count(),1,'unfinished second item survives reopen');assert.match(await d.locator('[name=text]').inputValue(),/数小练3/,'shared original remains for the unfinished item');
     await d.locator('[data-homework-close]').click();await p.locator('nav [data-page="home"]').click();await p.locator('#task-group-homework [data-query-target^="task:"]').filter({hasText:title}).waitFor();
     await p.reload();await p.locator('#task-group-homework [data-query-target^="task:"]').filter({hasText:title}).waitFor();

@@ -150,7 +150,7 @@ test('today and inbox group legacy undated tasks without reopening closed items 
  const row=(id,category,extra={})=>({id,task_id:id,kind:'task',child_ids:['child-a'],closed:false,agenda:{category,box:'inbox',scheduled_on:'',published_on:'',...extra}});
  const rows=[row('assignment','homework'),row('undated-admin','todo'),row('legacy-admin',''),{...row('closed','homework'),closed:true},row('future-plan','todo',{scheduled_on:'2026-09-15'}),row('future-notice','homework',{published_on:'2026-09-15'}),{...row('other-child','todo'),child_ids:['child-b']}];
  d.tasks=rows.map(x=>({id:x.id,title:x.id,child:x.child_ids[0]==='child-a'?'小溪':'小岚',focus:{box:'inbox'}}));d.today_calendar={inbox:rows,agenda:[],events:[],timetables:[]};h.ctx.child='小溪';
- const today=h.ctx.todayTasksHTML();assert.match(today,/今日作业 · 0/);assert.match(today,/待办事项 · 0/);assert.match(today,/其他未完成及日期待核对 · 3/);assert.match(today,/undated-admin|legacy-admin/);assert.doesNotMatch(today,/<article>(?:closed|future-plan|future-notice|other-child)<\/article>|待分类/);
+ const today=h.ctx.todayTasksHTML();assert.match(today,/今日作业 · 0/);assert.match(today,/要办的事 · 2/);assert.match(today,/其他未完成及日期待核对 · 1/);for(const id of ['undated-admin','legacy-admin']){assert.match(today,new RegExp('<article>'+id+'</article>'));assert.ok(today.indexOf('<article>'+id+'</article>')<today.indexOf('today-backlog'),'undated administration is visible before the backlog')};assert.doesNotMatch(today,/<article>(?:closed|future-plan|future-notice|other-child)<\/article>|待分类/);
  const inbox=h.ctx.taskInboxHTML();assert.match(inbox,/课内作业 · 2/);assert.match(inbox,/待办事项 · 3/);assert.match(inbox,/<article>future-plan<\/article>/);assert.doesNotMatch(inbox,/<article>closed<\/article>|待分类/);
  rows[0].closed=true;assert.match(h.ctx.todayTasksHTML(),/今日作业 · 0/);
 });
@@ -160,9 +160,9 @@ test('today counts only current dated work and marks source gaps without changin
  const rows=[row('today',{due_on:d.today}),row('old'),row('future',{due_on:'2026-09-22'})];
  d.tasks=rows.map(x=>({id:x.id,title:x.id,child:'小溪'}));d.today_calendar={inbox:rows,events:[],timetables:[]};
  h.ctx.currentSources=()=>[{child_id:'child-a',unread_count:2,enabled:true}];h.ctx.currentSourceStatus=()=> '最近读取成功';
- const html=h.ctx.todayTasksHTML();assert.match(html,/今日作业 · 1/);assert.match(html,/其他未完成及日期待核对 · 2/);assert.match(html,/最近读取成功；部分已保存消息需核对原件/);assert.doesNotMatch(html,/data-collection-check/);assert.equal(h.ctx.taskBoxes().Inbox.length,3);
- h.ctx.currentSourceStatus=()=> '最近读取未成功';assert.match(h.ctx.todayTasksHTML(),/学校消息来源读取未成功或待核对，今天作业可能缺项/);assert.match(h.ctx.todayTasksHTML(),/data-collection-check/);
- h.ctx.child='小岚';assert.doesNotMatch(h.ctx.todayTasksHTML(),/今天作业可能缺项|需核对原件/);
+ const html=h.ctx.todayTasksHTML();assert.match(html,/今日作业 · 1/);assert.match(html,/其他未完成及日期待核对 · 2/);assert.match(html,/部分消息原件尚未读全。/);assert.doesNotMatch(html,/data-collection-check/);assert.equal(h.ctx.taskBoxes().Inbox.length,3);
+ h.ctx.currentSourceStatus=()=> '最近读取未成功';assert.match(h.ctx.todayTasksHTML(),/消息读取有缺口，作业可能缺项。/);assert.match(h.ctx.todayTasksHTML(),/data-collection-check/);
+ h.ctx.child='小岚';assert.doesNotMatch(h.ctx.todayTasksHTML(),/作业可能缺项|原件尚未读全/);
 });
 test('agent-classified homework appears with homework while notices stay separate',()=>{
  const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';
@@ -170,7 +170,7 @@ test('agent-classified homework appears with homework while notices stay separat
  const school=(id,published,category='homework')=>({id,kind:'school',child_ids:['child-a'],title:id,closed:false,agenda:{category,box:'inbox',published_on:published,due_on:'',scheduled_on:''}});
  const rows=[school('older','2026-09-02'),school('yesterday-a','2026-09-07'),school('yesterday-b','2026-09-07'),school('today-notice',d.today,'todo'),school('unknown','')];
  d.today_calendar={inbox:rows,events:[],timetables:[]};h.ctx.child='小溪';
- const html=h.ctx.todayTasksHTML(),recent=html.split('today-new-notices">')[1]?.split('</section>')[0],homework=html.split('today-recent-homework">')[1]?.split('</section>')[0],backlog=html.split('today-backlog">')[1]?.split('</details>')[0];
+ const html=h.ctx.todayTasksHTML(),recent=html.split('id="task-group-todo"')[1]?.split('</section>')[0],homework=html.split('today-recent-homework">')[1]?.split('</section>')[0],backlog=html.split('today-backlog">')[1]?.split('</details>')[0];
  assert.match(html,/今日作业 · 0/);assert.match(homework,/待核对 2/);assert.match(recent,/待核对 1/);
  for(const id of ['yesterday-b','yesterday-a'])assert.match(homework,new RegExp('data-notice="'+id+'"'));
  assert.match(recent,/data-notice="today-notice"/);assert.doesNotMatch(recent,/yesterday-a|yesterday-b|older|unknown/);
