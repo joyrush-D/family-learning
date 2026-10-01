@@ -190,6 +190,18 @@ test('all homework from each child latest publication day stays visible, includi
  h.ctx.child='小溪';assert.doesNotMatch(h.ctx.todayTasksHTML(),/data-notice="sibling"/);
 });
 
+test('recent homework keeps both children confirmed work before missing details without duplicating or losing filtered work',()=>{
+ const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.agendaItemHTML=x=>`<article data-notice="${x.id}">${x.title}</article>`;
+ const row=(id,kind,owner,hour)=>({id,task_id:kind==='task'?id:'',kind,child_ids:[owner],title:id,closed:false,agenda:{category:'homework',box:'inbox',published_on:'2026-09-07',published_at:`2026-09-07T${hour}:00:00+08:00`,due_on:'',scheduled_on:''}});
+ const confirmed=['confirmed-a','confirmed-b'],pending=['pending-a-18','pending-a-17'];
+ const rows=[row(confirmed[0],'task','child-a','20'),row(confirmed[1],'task','child-b','19'),row(pending[0],'school','child-a','18'),row(pending[1],'school','child-a','17')];
+ d.tasks=rows.filter(x=>x.kind==='task').map(x=>({id:x.id,title:x.title,source:'Agent建议:synthetic-school',child:x.child_ids[0]==='child-a'?'小溪':'小岚'}));d.today_calendar={inbox:rows,events:[],timetables:[]};
+ const html=h.ctx.todayTasksHTML();assert.match(html,/today-recent-homework/);assert.match(html,/今日作业 · 0/);
+ for(const id of [...confirmed,...pending])assert.equal((html.match(new RegExp('data-notice="'+id+'"','g'))||[]).length,1,'each recent homework appears once: '+id);
+ for(const id of confirmed)for(const missing of pending)assert.ok(html.indexOf('data-notice="'+id+'"')<html.indexOf('data-notice="'+missing+'"'),'both children confirmed work stays ahead of missing details');
+ h.ctx.child='小岚';const filtered=h.ctx.todayTasksHTML();assert.equal((filtered.match(/data-notice="confirmed-b"/g)||[]).length,1,'filtering the second child retains their recent homework');assert.doesNotMatch(filtered,/data-notice="confirmed-a"|data-notice="pending-a-18"|data-notice="pending-a-17"/);
+});
+
 test('a due review stays visible today even when the task is planned for a later day',()=>{
  const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.taskHTML=t=>`<article>${t.title}</article>`;
  d.tasks=[{id:'review',title:'虚构今日回看',focus:{mode:'later',review_on:d.today}},{id:'future',title:'虚构未来回看',focus:{mode:'later',review_on:'2026-09-12'}}];
