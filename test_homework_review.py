@@ -116,6 +116,11 @@ def run():
             record=app.save_task_feedback(dict(task_id=report_task,child='示例甲',day='2026-10-01',request_key='synthetic-report-answer',attachments=[answer]))
             with app.connect() as c: ctx=app.homework_review_context(c,report_task,record['record_id'])
             assert ctx['allowed'][paper]['origin']=='reported_homework'
+            # A later reference-only feedback belongs to the same task and remains available for the original answer.
+            later=upload('synthetic-later-reference.txt',b'1. B\n')
+            app.save_task_feedback(dict(task_id=report_task,child='示例甲',day='2026-10-01',request_key='synthetic-later-reference',attachments=[later]))
+            with app.connect() as c: ctx=app.homework_review_context(c,report_task,record['record_id'])
+            assert ctx['allowed'][later]['origin']=='same_task'
             # Byte-preserving guard rechecks role/order/page fingerprints without probing PDF tools.
             with patch.object(family_pdf,'page_count') as probe,patch.object(family_pdf,'render_pages') as renderer:
                 with app.connect() as c: app.guard_homework_review(c,task['id'],selected['review_basis'],[answer,teacher_pdf])
