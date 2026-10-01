@@ -35,7 +35,7 @@ class AgentTests(unittest.TestCase):
         png=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII=')
         upload=self.app.save_upload(io.BytesIO(png),len(png),'synthetic-school.png')
         keys=dict(child_id='child-1',source_id=self.source['id'],message_id='11',attachment_id=upload['id'],action='attach')
-        self.store.message_link(keys,dict)
+        self.store.message_attachment(keys,dict)
         with self.store._db() as c:
             source,message=self.store._message_context(c,keys)
             value=family_media.draft_input(self.store,c,source,message)
