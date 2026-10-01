@@ -268,7 +268,8 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
     if incomplete and not covered:
         # A legible screenshot can supply a draft, but never establishes complete history or a deadline.
         fragments = evidence and all(e.get('kind') == 'qq_window_fragment' and e.get('text', '').strip() for e in evidence)
-        read_text = any(e.get('kind') in ('text','quote') and _COLLECTOR_PLACEHOLDER.sub('',e.get('text','')).strip() for e in evidence)
+        read_text = any(e.get('kind') in ('text','quote') and not (e.get('unread') or e.get('content_incomplete'))
+                        and _COLLECTOR_PLACEHOLDER.sub('',e.get('text','')).strip() for e in evidence)
         if not fragments and not material and not read_text: brief.update(title='',goal='',advice='')
         state='review';brief['reason']='仅截图可见内容，文字识别可能有误；请核对原图、发布日期和附件。' if fragments else '原消息还有未核明的附件；已读要求保留，缺失部分待补充。' if material else '原件或具体要求尚未读全，请先核对。'
         if read_text and not material:
@@ -1439,6 +1440,19 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             # School selection chooses message identities; copying source text is the application's job.
             text = refs[ref][:600] if routing else _source_quote(refs, ref, _text(quote, 'quote', 600, True))
             cited.append({'ref': ref, 'text': text})
+        if routing:
+            # Keep a verified publication's attached originals even when the model cites only its prose.
+            selected = {q['ref'] for q in cited}; anchors = {e['ref']:e for e in evidence}
+            for entry in evidence:
+                group = entry.get('related_messages', [])
+                if (entry['ref'] in selected and entry.get('publisher') and 1 <= len(group) <= 6
+                    and all(ref in anchors and anchors[ref].get('publisher') == entry['publisher']
+                            and anchors[ref].get('source') == entry.get('source')
+                            and set(anchors[ref].get('related_messages', [])) == set(group) for ref in group)
+                    and any(anchors[ref].get('attachments') for ref in group)):
+                    selected.update(group)
+            if len(selected) <= 6:
+                cited = [dict(ref=e['ref'],text=e['text'][:600]) for e in evidence if e['ref'] in selected]
         if not title or not any(title in refs[entry['ref']] for entry in cited):
             title = cited[0]['text'].strip()[:120]
         if mode == 'school' and all(_needs_task_details(refs[entry['ref']]) for entry in cited):

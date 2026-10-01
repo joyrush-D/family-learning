@@ -33,6 +33,18 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(pending[0]['plan']['school_task']['goal'],'朗读并保留补充要求。')
         self.assertEqual(pending[0]['plan']['school_task']['state'],'review')
         self.assertIn('已读正文要求已保留',pending[0]['plan']['school_task']['reason'])
+        for e in evidence:
+            e.update(source='虚构学校群',publisher='publisher:synthetic',related_messages=[x['ref'] for x in evidence],attachments=[])
+        evidence[1]['attachments']=[dict(name='synthetic-reading.png',mime='image/png')]
+        proposal['evidence']=[dict(ref=evidence[0]['ref']),dict(ref=evidence[2]['ref'])]
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):
+            linked=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+        self.assertEqual([e['ref'] for e in linked[0]['evidence']],[e['ref'] for e in evidence])
+        self.assertEqual(linked[0]['plan']['school_task']['state'],'review')
+        evidence[-1]['publisher']='publisher:other'
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):
+            separate=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+        self.assertEqual([e['ref'] for e in separate[0]['evidence']], [evidence[0]['ref'],evidence[2]['ref']])
 
     def test_saved_publications_keep_publishers_originals_attachments_and_paging_without_writes(self):
         import family_media
