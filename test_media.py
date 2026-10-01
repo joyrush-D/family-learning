@@ -675,7 +675,7 @@ class MediaTests(unittest.TestCase):
             self.source=dict(id='wechat:12345@chatroom',platform='wechat',child_id='child-1',name='虚构班级',cursor='10',enabled=True);self.write_config()
             self.ingest(self.message());keys=dict(child_id='child-1',source_id=self.source['id'],message_id='1')
             self.link(keys,self.seed_docx('c'*32,docx(DOCX_BODY)))  # Ordinary learning material accepts images only.
-            view=self.store.message(keys,dict)['material_draft'];self.assertEqual(view['state'],'unavailable');self.assertIn('JPG、PNG、WebP',view['explanation'])
+            view=self.store.message(keys,dict)['material_draft'];self.assertEqual(view['state'],'unavailable');self.assertIn('本次未读取任何原件',view['explanation'])
             self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=0,failed=0));model.assert_not_called()
         self.assertEqual(self.db_rows('SELECT * FROM agent_message_drafts'),[]);self.assertEqual(self.db_rows('SELECT * FROM records'),[])
 
