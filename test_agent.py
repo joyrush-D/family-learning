@@ -26,6 +26,13 @@ class AgentTests(unittest.TestCase):
             items=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
         self.assertEqual([e['ref'] for e in items[0]['evidence']],[e['ref'] for e in evidence])
         self.assertEqual(items[0]['plan']['school_task']['state'],'ready')
+        evidence[1].update(kind='text',text='[图片原件：1份，内容未读]',content_incomplete=True)
+        evidence[0]['kind']='text'
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):
+            pending=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+        self.assertEqual(pending[0]['plan']['school_task']['goal'],'朗读并保留补充要求。')
+        self.assertEqual(pending[0]['plan']['school_task']['state'],'review')
+        self.assertIn('已读正文要求已保留',pending[0]['plan']['school_task']['reason'])
 
     def test_saved_publications_keep_publishers_originals_attachments_and_paging_without_writes(self):
         import family_media
