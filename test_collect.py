@@ -125,6 +125,17 @@ class CollectorTests(unittest.TestCase):
         with self.assertRaises(collect.CollectError):collect.qq_native_page(qq_envelope([raw]),QQ_SOURCE)
         raw['sender'].pop('user_id')
         self.assertNotIn('sender_id',collect.qq_native_page(qq_envelope([raw]),QQ_SOURCE)[0][2])
+        with tempfile.TemporaryDirectory() as folder, patch.dict(collect.os.environ,{'FAMILY_DATA':folder}), \
+             patch.object(collect,'QQ_MAX_PAGES',collect.QQ_MAX_PAGES), patch.object(collect,'Client') as client, \
+             patch.object(collect,'qq_history',return_value=([actual],'101',actual['time'])):
+            client.return_value.request.return_value=dict(enabled=True,sources=[dict(QQ_SOURCE,check_id='a'*24)])
+            client.return_value.ingest.return_value=dict(inserted=1)
+            result=napcat.collect_once(dict(cfg,source_id=QQ_SOURCE['id'],app_url=CONFIG['app_url']))
+            body=client.return_value.ingest.call_args.args[0]
+            self.assertEqual(result['inserted'],1)
+            self.assertEqual((body['expected_cursor'],body['cursor'],body['check_id']),('100','101','a'*24))
+            self.assertEqual(body['messages'][0]['sender_id'],'20001')
+            self.assertTrue((Path(folder)/'.qq-napcat.lock').is_file())
 
     def test_background_receipt_keeps_parent_check_identity(self):
         client = FakeClient(sources=[dict(SOURCE, check_id='a'*24)])
