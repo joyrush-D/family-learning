@@ -19,7 +19,7 @@ class AgentTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory(prefix='synthetic-agent-')
         self.addCleanup(directory.cleanup)
-        self.root = Path(directory.name); self.data = self.root / 'private'; self.data.mkdir()
+        self.root = Path(directory.name).resolve(); self.data = self.root / 'private'; self.data.mkdir()
         (self.root / '家庭运行规则.md').write_text('| child-1 | 示例甲 | 男 | 10岁 | 四年级 |\n| child-2 | 示例乙 | 男 | 13岁 | 初一 |\n')
         self.app = family_review.load_app(self.root, self.data)
         self.store = agent.Store(self.app.connect, self.app.profiles, self.data, app=self.app)
