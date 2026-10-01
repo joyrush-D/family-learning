@@ -196,7 +196,7 @@ async function server(){
   const original=await fetch(host.url+'api/task/feedback',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify({task_id:id,child,day:state.today,request_key:'synthetic-complete-review-'+width,attachments:[...photos,reference],note:'虚构完整题目与独立作答'})});assert.equal(original.status,200);const originalRecord=(await original.json()).record_id;
   await p.reload();await p.locator('[data-task="'+id+'"]').first().click();
   const whole=p.locator('#taskFeedbackHistory [data-homework-review="'+originalRecord+'"]');await whole.locator('summary').click();
-  assert.equal(await whole.locator('[data-homework-review-photo]').count(),5);assert.match(await whole.innerText(),/PDF等其它文件不参与/);
+  assert.equal(await whole.locator('[data-homework-review-photo]').count(),5);assert.match(await whole.innerText(),/PDF参考暂不参与检查/);
   for(const photo of photos)await whole.locator('[data-homework-review-photo][value="'+photo+'"]').check();
   let completeCalls=0;await p.route('**/api/print/homework/draft',r=>{const body=r.request().postDataJSON();assert.equal(body.purpose,'review');assert.deepEqual(body.question_sources.map(x=>x.id),photos);completeCalls++;return completeCalls===1?r.fulfill({status:503,json:{error:'虚构完整批改暂不可用'}}):r.fulfill({json:{draft:{text:'虚构：第1题表达不完整，缺少题目要求的具体特点；参考PDF未参与。',items:1,wrong_items:1,unknown_items:0,coverage:'五张所选照片；参考PDF未参与'},question_sha256:'b'.repeat(64)}})});
   await whole.locator('[data-homework-review-run]').click();await eventually(async()=>/虚构完整批改暂不可用/.test(await whole.innerText()),'five-image review failure keeps originals');
