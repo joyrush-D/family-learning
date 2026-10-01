@@ -123,7 +123,7 @@ class PrintTests(unittest.TestCase):
         with patch.object(family_llm,'_model_image',return_value=dict(mime='image/jpeg',data=b'preview')), patch.object(family_llm,'_chat_json',return_value=result) as chat:
             family_llm.homework_reference_draft([dict(mime='image/png',data=png()),dict(mime='image/png',data=png(3))])
         self.assertEqual(sum(part['type']=='image_url' for part in chat.call_args.args[0][1]['content']),2)
-        with patch.object(family_llm,'_chat_json',return_value={'items':[dict(result['items'][0],answer='错\n误')],'coverage':'仅此一页'}),self.assertRaises(family_llm.LLMDraftError):
+        with patch.object(family_llm,'_chat_json',return_value={'items':[dict(result['items'][0],answer='错\x00误')],'coverage':'仅此一页'}),self.assertRaises(family_llm.LLMDraftError):
             family_llm.homework_reference_draft(dict(mime='image/png',data=png()))
         for conflict in (dict(item,student_answer=''),dict(item,judgment='unknown'),dict(item,uncertainty='下一页选项缺失')):
             with patch.object(family_llm,'_chat_json',return_value={'items':[conflict],'coverage':'仅此一页'}):
