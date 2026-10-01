@@ -225,6 +225,25 @@ class PageStoreTests(unittest.TestCase):
 
 
 class PageHTTPTests(unittest.TestCase):
+    def test_publication_inbox_parent_only_read_only_reopen_and_failure_recovery(self):
+        path='/api/agent/messages?child_id=child-1'
+        saved=self.snapshot()
+        for _ in range(2):
+            status,view,_=self.request('GET',path,headers=self.parent)
+            self.assertEqual(status,200,view);self.assertEqual(view['total'],1)
+            self.assertEqual(view['groups'][0]['messages'][0]['message']['sender'],'虚构老师')
+        self.assertEqual(self.snapshot(),saved);self.assertEqual(self.fetch.calls,[])
+        self.assertEqual(self.request('GET','/api/agent/messages?child_id=child-2',headers=self.parent)[1]['total'],0)
+        self.assertEqual(self.request('GET',path+'&child_id=child-2',headers=self.parent)[0],400)
+        self.assertEqual(self.request('GET',path,headers=self.child())[0],403)
+        self.assertIn(self.request('GET',path,headers={'Host':'untrusted.invalid'})[0],(401,403))
+        with patch.object(self.app,'DB',self.app.DATA/'absent.sqlite3'):
+            status,result,_=self.request('GET',path,headers=self.parent)
+            self.assertEqual((status,result['code']),(503,'messages_unavailable'))
+            self.assertFalse(self.app.DB.exists(),'a read cannot initialize another business database')
+        self.assertEqual(self.request('GET',path,headers=self.parent)[0],200)
+        self.assertEqual(self.fetch.calls,[])
+
     def setUp(self):
         import app
         self.app = app

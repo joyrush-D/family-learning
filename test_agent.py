@@ -16,6 +16,17 @@ import family_review
 
 
 class AgentTests(unittest.TestCase):
+    def test_one_school_requirement_can_keep_six_original_messages(self):
+        evidence=[dict(ref='message:synthetic:'+str(i),text='语文作业：朗读。' if i==0 else '本次朗读要求的补充说明 '+str(i),
+            time=self.now.isoformat(),sender='示例语文老师',publisher='publisher:synthetic',content_incomplete=False) for i in range(6)]
+        proposal=dict(title_quote='语文作业',focus='school',due='',evidence=[dict(ref=e['ref']) for e in evidence],
+            learning_subject='语文',learning_goal_id='',task_title='语文：朗读',task_goal='朗读并保留补充要求。',task_advice='',
+            task_state='ready',task_reason='同一次要求的补充说明。',task_change='new',task_target_id='',task_purpose='learning',task_submission='')
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):
+            items=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+        self.assertEqual([e['ref'] for e in items[0]['evidence']],[e['ref'] for e in evidence])
+        self.assertEqual(items[0]['plan']['school_task']['state'],'ready')
+
     def test_saved_publications_keep_publishers_originals_attachments_and_paging_without_writes(self):
         import family_media
         self.source['platform']='qq'; self.config()

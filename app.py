@@ -1785,7 +1785,9 @@ class Handler(BaseHTTPRequestHandler):
                 query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
                 if any(len(values)!=1 for values in query.values()):
                     raise family_agent.AgentError('请选择唯一的孩子和消息日期')
-                return self.reply(200,agent_store(read_only=True).school_messages({key:values[0] for key,values in query.items()},upload_info))
+                try: return self.reply(200,agent_store(read_only=True).school_messages({key:values[0] for key,values in query.items()},upload_info))
+                except (OSError,sqlite3.Error):
+                    raise family_agent.AgentError('已保存消息暂不可读取，原记录保留，请稍后重试',503,'messages_unavailable') from None
             if path=='/api/agent/message':
                 query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
                 if any(len(values)!=1 for values in query.values()):
