@@ -274,7 +274,8 @@ def _material_kind(message, source=None, mimes=()):
     ocr = message.get('kind') == KIND and message.get('text', '').startswith(NOTICE+'\n截图本机文字识别（')
     native_file = source and source.get('platform') == 'qq' and message.get('kind') == 'text' and any(
         mime in (DOCX_MIME, PPTX_MIME, XLSX_MIME, 'application/pdf') for mime in mimes)
-    return SCHOOL_MATERIAL if ocr or native_file else ''
+    school_image = source and source.get('platform') in ('qq', 'wechat') and message.get('kind') == 'image'
+    return SCHOOL_MATERIAL if ocr or native_file or school_image else ''
 
 
 # Linked DOCX originals are read in memory as plain body text. A file that cannot be read
@@ -715,6 +716,20 @@ def _saved_draft(row, value):
         return family_llm.validate_school_material(draft)
     except (MediaError, family_llm.LLMDraftError):
         return None
+
+
+def school_evidence(store, c, source, message):
+    """This message's current linked school-original interpretation; no model call or write."""
+    row = c.execute('SELECT * FROM agent_message_drafts WHERE source_id=? AND message_id=?',
+                    (source['id'], message['id'])).fetchone()
+    if row is None: return None
+    try:
+        value = draft_input(store, c, source, message)
+        if value is None or value['kind'] != SCHOOL_MATERIAL: return None
+        draft = _saved_draft(row, value)
+    except (MediaError, OSError, ValueError): return None
+    if draft is None: return None
+    return dict(fingerprint=value['fingerprint'], draft=draft, updated=row['updated'])
 
 
 def draft_view(store, c, source, message):
