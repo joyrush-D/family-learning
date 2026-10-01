@@ -116,8 +116,11 @@ class AgentTests(unittest.TestCase):
             with self.assertRaises(agent.AgentError):self.store.school_messages(dict(child_id='child-1')|changes,dict)
         self.store.message_attachment(dict(keys,attachment_id=upload['id'],action='detach'),dict)
         fresh=self.store.school_messages(dict(child_id='child-1'),dict)
-        self.assertEqual(fresh['groups'][1]['messages'][0]['message_id'],'2')
-        self.assertNotEqual((fresh['groups'][1]['messages'][0]['material_draft'] or {}).get('state'),'ready')
+        self.assertEqual([v['message_id'] for v in fresh['groups'][0]['messages']],['1','2','3'],
+                         'native pending-original markers keep verified publications together before bytes arrive')
+        pending=fresh['groups'][0]['messages'][1]
+        self.assertEqual(pending['attachments'],[])
+        self.assertNotEqual((pending['material_draft'] or {}).get('state'),'ready')
         self.source['child_id']='child-2'; self.config()
         self.assertEqual(self.store.school_messages(dict(child_id='child-1'),dict)['total'],0)
 
