@@ -173,7 +173,7 @@ async function server(){
   await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'separate feedback saved');
   state=await(await fetch(host.url+'api/state')).json();assert.equal(state.records.filter(r=>r.source==='事项:'+id).length,3);
   assert.equal(state.records.find(r=>r.note==='虚构另一条实际反馈')?.child,child);assert.equal(state.tasks.find(t=>t.id===id).update,null);
-  const source=state.records.find(r=>r.id===records[0].id);await p.locator('#taskFeedbackHistory [data-homework-review="'+source.id+'"] details').evaluate(x=>x.open=true);
+  const source=state.records.find(r=>r.id===records[0].id);await p.locator('#taskFeedbackHistory [data-homework-review="'+source.id+'"] > details').evaluate(x=>x.open=true);
   const stale=p.locator('#taskFeedbackHistory [data-homework-review="'+source.id+'"]');await stale.locator(' :scope > details > .homework-review-material [data-homework-review-photo]').first().check();await stale.locator('[data-homework-review-run]').click();await stale.locator('[data-homework-review-result] textarea').waitFor();await stale.locator('[data-homework-review-confirm]').check();await stale.locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await stale.innerText()),'review staged before concurrent correction');
   const correction=await fetch(host.url+'api/task/feedback',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify({task_id:id,child,record_id:source.id,expected_created:source.created,note:'虚构最终作答后来更正'})});assert.equal(correction.status,200);
   await p.locator('#saveTaskFeedback').click();await eventually(async()=>/原作答已在别处更正/.test(await p.locator('#taskError').innerText()),'stale review rejected');
