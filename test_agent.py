@@ -16,6 +16,53 @@ import family_review
 
 
 class AgentTests(unittest.TestCase):
+    def test_saved_publications_keep_publishers_originals_attachments_and_paging_without_writes(self):
+        import family_media
+        self.source['platform']='qq'; self.config()
+        messages=[]
+        for i in range(1,42):
+            messages.append(dict(id=str(i),time=(self.now+dt.timedelta(seconds=i)).isoformat(),kind='text',
+                sender='示例英语老师',sender_id='20001',message_order=str(i),text='英语：独立要求 '+str(i),unread=False))
+        messages[0]['text']='英语：朗读课文两遍，练习题见附件。'
+        messages[1].update(text='[图片原件：1份，内容未读]',unread=True)
+        messages[2]['text']='以上是朗读练习的题目。'
+        messages[3]['sender_id']='20002'  # Same card, different account; never merge.
+        messages[5]['message_order']='8'  # Unseen stream positions cannot be called consecutive.
+        for m in messages[6:8]:m.pop('sender_id')
+        self.store.ingest(dict(self.payload(),messages=messages,cursor='41'))
+        png=__import__('base64').b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII=')
+        upload=self.app.save_upload(io.BytesIO(png),len(png),'synthetic-reading.png')
+        keys=dict(child_id='child-1',source_id=self.source['id'],message_id='2')
+        self.store.message_attachment(dict(keys,attachment_id=upload['id'],action='attach'),dict)
+        with self.store._db() as c:
+            source,message=self.store._message_context(c,keys); value=family_media.draft_input(self.store,c,source,message)
+            c.execute('INSERT INTO agent_message_drafts VALUES(?,?,?,?,?)',(source['id'],'2',value['fingerprint'],
+                json.dumps(dict(kind='school_material',title='示例朗读练习',note='朗读 Unit 2 两遍；选做题任选。',uncertainties=[])),self.now.isoformat()))
+        def snapshot():
+            with self.store._db() as c:
+                names=[r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+                return {name:list(map(tuple,c.execute('SELECT * FROM "'+name+'"'))) for name in names}
+        before=snapshot()
+        view=self.store.school_messages(dict(child_id='child-1'),dict)
+        self.assertEqual(view['total'],41);self.assertEqual(view['next_offset'],'36')
+        bundle=view['groups'][0];self.assertEqual([v['message_id'] for v in bundle['messages']],['1','2','3'])
+        self.assertEqual(bundle['messages'][1]['attachments'][0]['name'],'synthetic-reading.png')
+        self.assertEqual(bundle['messages'][1]['material_draft']['draft']['note'],'朗读 Unit 2 两遍；选做题任选。')
+        self.assertEqual(view['groups'][1]['messages'][0]['message_id'],'4')
+        self.assertTrue(all(len(g['messages'])==1 for g in view['groups'][1:]))
+        page2=self.store.school_messages(dict(child_id='child-1',day=view['day'],offset='36'),dict)
+        self.assertEqual([v['message_id'] for g in page2['groups'] for v in g['messages']],['37','38','39','40','41'])
+        self.assertEqual(snapshot(),before,'browse never collects, calls a model or writes business state')
+        self.assertEqual(self.store.school_messages(dict(child_id='child-2'),dict)['total'],0)
+        for changes in ({'offset':'-1'},{'day':'bad-day'},{'child_id':'missing'},{'extra':'20001'}):
+            with self.assertRaises(agent.AgentError):self.store.school_messages(dict(child_id='child-1')|changes,dict)
+        self.store.message_attachment(dict(keys,attachment_id=upload['id'],action='detach'),dict)
+        fresh=self.store.school_messages(dict(child_id='child-1'),dict)
+        self.assertEqual(fresh['groups'][1]['messages'][0]['message_id'],'2')
+        self.assertNotEqual(fresh['groups'][1]['messages'][0]['material_draft'].get('state'),'ready')
+        self.source['child_id']='child-2'; self.config()
+        self.assertEqual(self.store.school_messages(dict(child_id='child-1'),dict)['total'],0)
+
     def setUp(self):
         directory = tempfile.TemporaryDirectory(prefix='synthetic-agent-')
         self.addCleanup(directory.cleanup)

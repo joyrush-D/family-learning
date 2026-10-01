@@ -107,6 +107,18 @@ with tempfile.TemporaryDirectory(prefix='synthetic-agent-ui-') as tmp:
  for width in (360,1440):
   exam=app.new_task(dict(child='示例星星',title='虚构英语单元测验 '+str(width),due=today,source='message:copy-a:before'+str(width)))
   store._save('exam-review:'+exam['id']+':'+today,'fixture',[dict(child_id='child-1',kind='review',title='记录考试结果：'+exam['title'],body='保存结果后请在事项确认完成；没参加可选择不参加。',task_id=exam['id'],due=today,evidence=[dict(ref='task:'+exam['id'],text=exam['title'])],plan=dict(exam_result_pending=True))],now)
+ # A saved publication is visible independently of whether task selection has completed.
+ publication_day=(now-datetime.timedelta(days=2)).date().isoformat()
+ publication_time=datetime.datetime.fromisoformat(publication_day+'T18:00:00+08:00')
+ publisher_source=dict(id='publication-group',platform='qq',child_id='child-1',name='示例英语班级',cursor='',enabled=True)
+ cfg=json.loads((app.DATA/'agent.json').read_text());cfg['sources'].append(publisher_source);(app.DATA/'agent.json').write_text(json.dumps(cfg))
+ publication_messages=[dict(id='publication-'+str(i),time=(publication_time+datetime.timedelta(seconds=i)).isoformat(),kind='text',sender='示例英语老师',sender_id='20001' if i<4 else '20002',message_order=str(i),text='英语：朗读 Unit 2 两遍；题目见附件。' if i==1 else '[图片原件：1份，内容未读]' if i==2 else '以上是朗读练习；选做题任选。' if i==3 else '同名发言人的另一条消息。',unread=i==2) for i in range(1,5)]
+ store.ingest(dict(source_id=publisher_source['id'],expected_cursor='',cursor='4',checked_at=now.isoformat(),last_message_time=publication_messages[-1]['time'],messages=publication_messages,error=''))
+ keys=dict(child_id='child-1',source_id=publisher_source['id'],message_id='publication-2')
+ store.message_attachment(dict(keys,attachment_id=existing_upload['id'],action='attach'),dict)
+ with store._db() as c:
+  source,message=store._message_context(c,keys);value=family_media.draft_input(store,c,source,message)
+  c.execute('INSERT INTO agent_message_drafts VALUES(?,?,?,?,?)',(source['id'],message['id'],value['fingerprint'],json.dumps(dict(kind='school_material',title='英语：朗读与选做练习',note='朗读 Unit 2 两遍。\n选做题任选。',uncertainties=[])),now.isoformat()))
  store._runtime('ready',now)
  app.prepare_assets()
  server=app.ThreadingHTTPServer(('127.0.0.1',int(os.environ['TEST_AGENT_PORT'])),app.Handler)
@@ -123,6 +135,20 @@ with tempfile.TemporaryDirectory(prefix='synthetic-agent-ui-') as tmp:
   const page=await browser.newPage({viewport:{width,height:820}}),pageErrors=[];page.on('pageerror',e=>pageErrors.push(e.message));await page.goto(url);try{await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor()}catch(error){await proof(page,'startup-failed-'+width);throw Error('Synthetic startup: '+(await page.locator('body').innerText()).slice(-1600)+'; '+pageErrors.join('; '))}
   assert.equal(await page.locator('[data-today-child="child-2"] [data-agent-item]').count(),0,'care reminders stay off the school summary');assert.equal(await page.locator('[data-today-child="child-1"] [data-followup="1"]').count(),0);
   await fits(page);
+  await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();
+  const inbox=page.locator('[data-school-inbox]');await until(async()=>await inbox.locator('[data-school-inbox-day]').count()>0,'publication day controls loaded');
+  const daily=await(await fetch(url+'api/agent/messages?child_id=child-1')).json(),publicationDay=daily.days.find(d=>d!==new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())&&d!=='unknown');
+  await inbox.locator('[data-school-inbox-day]').selectOption(publicationDay);await inbox.locator('[data-school-message="publication-2"]').waitFor();
+  const publication=inbox.locator('.school-publication').filter({has:page.locator('[data-school-message="publication-2"]')});
+  assert.equal(await publication.locator('[data-school-message]').count(),3,'teacher text, original and caption remain together');
+  assert.match(await publication.innerText(),/示例英语老师 · 3 条/);assert.match(await publication.innerText(),/朗读 Unit 2 两遍/);assert.match(await publication.innerText(),/选做题任选/);assert.match(await publication.innerText(),/synthetic-existing.png/);
+  assert.equal(await inbox.locator('.school-publication').count(),2,'same displayed card with another account stays separate');
+  let publicationFail=true;await page.route('**/api/agent/messages?*',async route=>{if(publicationFail){publicationFail=false;return route.abort('connectionreset')}await route.continue()});
+  await inbox.locator('[data-school-inbox-read]').click();await until(async()=>/已显示的消息保留/.test(await inbox.innerText()),'read failure keeps publications');assert.equal(await publication.locator('[data-school-message]').count(),3);
+  await inbox.locator('[data-school-inbox-read]').click();await until(async()=>!/已显示的消息保留/.test(await inbox.innerText()),'saved inbox retry succeeds');await page.unroute('**/api/agent/messages?*');
+  await publication.locator('[data-school-message="publication-2"] [data-school-original-ref]').click();await page.locator('#schoolOriginalDialog [data-school-material-draft]').waitFor();assert.match(await page.locator('#schoolOriginalDialog').innerText(),/朗读 Unit 2 两遍/);await page.locator('#schoolOriginalDialog [data-school-original-close]').click();
+  await fits(page);await inbox.scrollIntoViewIfNeeded();await proof(page,'school-publications-'+width);
+  await page.reload();await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();await until(async()=>await page.locator('[data-school-inbox-day]').count()>0,'reopened saved messages');await page.locator('[data-school-inbox-day]').selectOption(publicationDay);await page.locator('[data-school-message="publication-2"]').waitFor();assert.equal(await page.locator('[data-school-inbox] .school-publication').count(),2);
   // School material stays in the source dialog, including retry, detach, reload and stale-button protection.
   const materialBefore=await state(),materialItem=materialBefore.agent.items.find(x=>x.title==='虚构学校资料 ready '+width),materialRef=materialItem.evidence[0].ref,extra=materialBefore.uploads.find(x=>x.name==='material-ready-'+width+'.png');
   const openMaterial=async ref=>{await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();await page.locator('[data-agent-item] [data-school-original-ref="'+ref+'"]').first().click();await page.locator('#schoolOriginalDialog [data-school-original-files]').waitFor()};

@@ -1781,6 +1781,11 @@ class Handler(BaseHTTPRequestHandler):
                     raise family_agent.AgentError('请提供唯一的目标、来源和提交标识')
                 store=family_goals.Store(SimpleNamespace(**globals()),agent_store(read_only=True))
                 return self.reply(200,store.feedback_receipt(query['id'][0],query['request_key'][0],query['source'][0]))
+            if path=='/api/agent/messages':
+                query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+                if any(len(values)!=1 for values in query.values()):
+                    raise family_agent.AgentError('请选择唯一的孩子和消息日期')
+                return self.reply(200,agent_store(read_only=True).school_messages({key:values[0] for key,values in query.items()},upload_info))
             if path=='/api/agent/message':
                 query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
                 if any(len(values)!=1 for values in query.values()):

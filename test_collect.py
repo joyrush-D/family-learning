@@ -105,6 +105,15 @@ class FakeClient:
 
 
 class CollectorTests(unittest.TestCase):
+    def test_qq_publication_keeps_account_identity_and_verified_group_order(self):
+        raw=qq_event(17);raw['sender'].update(user_id=20001,card='示例英语老师')
+        row=collect.qq_native_page(qq_envelope([raw]),QQ_SOURCE)[0][2]
+        self.assertEqual((row['sender'],row['sender_id'],row['message_order']),('示例英语老师','20001','17'))
+        raw['sender']['user_id']='not-a-native-id'
+        with self.assertRaises(collect.CollectError):collect.qq_native_page(qq_envelope([raw]),QQ_SOURCE)
+        raw['sender'].pop('user_id')
+        self.assertNotIn('sender_id',collect.qq_native_page(qq_envelope([raw]),QQ_SOURCE)[0][2])
+
     def test_background_receipt_keeps_parent_check_identity(self):
         client = FakeClient(sources=[dict(SOURCE, check_id='a'*24)])
         rows = collect.run_once(CONFIG, client, lambda args, env=None: page([]))

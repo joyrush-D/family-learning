@@ -141,3 +141,4 @@ body[data-page=home] .today-heading .toolbar{margin:0}
 #saveTaskFeedback{min-height:44px;margin:8px 0 16px}
 
 .school-requirements{white-space:pre-line}
+.school-publication{border-top:1px solid var(--line);padding:16px 0;overflow-wrap:anywhere}.school-publication h3{margin:8px 0}.school-publication-message{padding:12px 0 12px 14px;border-left:2px solid var(--line);margin:14px 0}.school-attachment-list{padding-left:20px}.school-material-summary,.school-task-summary{background:var(--panel);padding:12px;border-radius:10px;margin:10px 0}.school-publication button,[data-school-inbox] select,[data-school-inbox] summary{min-height:44px}.school-publication p{line-height:1.65}[data-school-inbox] select{max-width:100%}

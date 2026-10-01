@@ -297,6 +297,10 @@ def qq_native_page(envelope, source):
         message = dict(id=row['message_id'], time=dt.datetime.fromtimestamp(row['time'], TIMEZONE).isoformat(),
             kind='recalled' if row['recalled'] else 'text', sender=sender_name[:200], text=text,
             unread=not row['content_complete'] or truncated)
+        sender_id = sender.get('user_id', sender.get('id', ''))
+        checked(sender_id == '' or numeric(str(sender_id), False), 'invalid_sender')
+        if sender_id != '': message['sender_id'] = str(sender_id)
+        message['message_order'] = row['message_seq']
         entries.append((int(row['message_seq']), row['time'], message, row))
     ids = [entry[2]['id'] for entry in entries]
     checked(len(set(ids)) == len(ids), 'duplicate_message_id')
