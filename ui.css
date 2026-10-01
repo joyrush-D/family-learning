@@ -63,7 +63,7 @@ nav button .nav-symbol{display:inline-block;margin-right:10px}
 .task .task-original-due{color:var(--muted);font-size:12px;margin:4px 0}
 .task .task-requirement{font-size:14px;color:var(--ink);line-height:1.75;margin:8px 0 12px}
 .tasktools{gap:6px 10px}.tasktools>button:not(.primary){background:transparent;border-color:transparent;color:var(--muted)}
-.tasktools>button[data-task]{color:var(--ink)}.tasktools>button:hover{border-color:#547d85}
+.tasktools>button[data-task]:not(.primary){color:var(--ink)}.tasktools>button:hover{border-color:#547d85}
 .task-reference{display:block;margin:0;max-width:100%}.task-reference>summary{min-height:44px;align-content:center}
 .task-reference[open]{display:block}.today-child .task{padding:18px 0;border-top:0}
 .today-child .task h3{font-size:19px;margin:7px 0}.today-child .tasktools{gap:4px 8px}
