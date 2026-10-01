@@ -408,7 +408,7 @@ class PrintStore:
                     raise PrintError('PDF页码须为不重复的1至200整数，一次最多8页')
                 canonical=dict(type='upload',id=ident)
                 if pages is not None: canonical['pages']=list(pages)
-                items.append(dict(role=role,source=canonical,name=name,mime=mime,body=body,sha256=_hash(body)))
+                items.append(dict(role=role,source=canonical,name=name,mime=mime,body=body,sha256=_hash(body),binding=row.get('review_binding')))
         # All PDF probes and batches share the existing total deadline, even with multiple files.
         started=time.monotonic()
         def left():
@@ -468,7 +468,7 @@ class PrintStore:
                         raise PrintError('本次图片/PDF页及参考文字合计不能超过20MB，请分批核对')
                     if item['role']=='reference': reference_images.append(image);reference_labels.append(label)
                     else: images.append(image);image_labels.append(label)
-        packet=[dict(role=i['role'],source=i['source'],name=i['name'],mime=i['mime'],sha256=i['sha256']) for i in items]
+        packet=[dict(role=i['role'],source=i['source'],name=i['name'],mime=i['mime'],sha256=i['sha256'],binding=i['binding']) for i in items]
         return dict(images=images,reference_images=reference_images,documents=documents,image_labels=image_labels,
                     reference_labels=reference_labels,coverage=coverage,fingerprint=_hash(_json(packet).encode()),
                     question_sources=[i['source'] for i in items if i['role']=='question'],

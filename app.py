@@ -930,8 +930,8 @@ def homework_review_context(c,task_id,record_id,expected_created=None):
     if expected_created is not None and (not isinstance(expected_created,str) or expected_created!=row['created']):
         raise family_print.PrintError('原作答已更正，请重新打开后检查','review_source_changed',409)
     child=next(p for p in profiles(c) if p['name']==task['child'])
-    allowed={};bindings=[];record_ids=json.loads(row['attachments']);report={};school_error='';related=[]
-    def add(ident,origin):
+    allowed={};bindings=[];record_ids=json.loads(row['attachments']);report={};school_error=''
+    def add(ident,origin,binding=None):
         upload=c.execute('SELECT * FROM uploads WHERE id=?',(ident,)).fetchone()
         if upload is None: return
         try: family_reading.validate_record_attachments(c,child['id'],[ident])
@@ -939,12 +939,11 @@ def homework_review_context(c,task_id,record_id,expected_created=None):
         for other in c.execute("SELECT child,attachments FROM records WHERE attachments<>'[]'"):
             if names.get(other['child'],other['child'])!=task['child'] and ident in json.loads(other['attachments']):
                 raise family_print.PrintError('原件已归属另一位孩子','review_source_not_allowed',403)
-        allowed.setdefault(ident,dict(upload)|dict(origin=origin))
+        allowed.setdefault(ident,dict(upload)|dict(origin=origin,review_binding=binding))
     for ident in record_ids: add(ident,'saved_answer')
     for other in c.execute("SELECT id,child,source,linked_task_id,created,attachments FROM records WHERE source=? OR linked_task_id=? ORDER BY id",('事项:'+task_id,task_id)):
         if other['id']==record_id or names.get(other['child'],other['child'])!=task['child']: continue
-        related.append(dict(other))
-        for ident in json.loads(other['attachments']): add(ident,'same_task')
+        for ident in json.loads(other['attachments']): add(ident,'same_task',[other['id'],other['created']])
     if 'report' in {r[1] for r in c.execute('PRAGMA table_info(study_items)')}:
         reported=c.execute('SELECT report FROM study_items WHERE task_id=? AND child_id=?',(task_id,child['id'])).fetchone()
         if reported:
@@ -981,7 +980,7 @@ def homework_review_context(c,task_id,record_id,expected_created=None):
             allowed={ident:value for ident,value in allowed.items() if value['origin']!='school'}
             bindings=[];school_error='学校原件出处当前无法核对；已保存作答仍可检查，可回原消息核对后重试。'
     context=dict(task=dict(id=task['id'],child=task['child'],source=task['source'],action=task['action']),
-                 child_id=child['id'],record_id=record_id,created=row['created'],record_ids=record_ids,report=report,related=related,school=bindings)
+                 child_id=child['id'],record_id=record_id,created=row['created'],record_ids=record_ids,report=report,school=bindings)
     fingerprint=hashlib.sha256(json.dumps(context,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
     return dict(task=task,record=dict(row),allowed=allowed,context_sha256=fingerprint,school_error=school_error)
 

@@ -108,7 +108,7 @@ async function server(){
   await panel.locator('[data-homework-review-result] textarea').fill('家长核对：第1题卷面C，依据原文应选B。先自己定位关键词，再独立重答。');
   await panel.locator('[data-homework-review-apply]').click();assert.match(await panel.innerText(),/请对照原题核对/);
   await panel.locator('[data-homework-review-confirm]').check();await panel.locator('[data-homework-review-photo]').uncheck();
-  await panel.locator('[data-homework-review-apply]').click();assert.match(await panel.innerText(),/所选照片已变化/);
+  await panel.locator('[data-homework-review-apply]').click();assert.match(await panel.innerText(),/所选资料、用途或页码已变化/);
   assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'','changed photo selection cannot stage an old review');
   await panel.locator('[data-homework-review-photo]').check();
   let releaseUpload,uploadCalls=0;await p.route('**/api/upload',async route=>{if(++uploadCalls===1)return route.fulfill({status:503,json:{error:'虚构上传失败'}});await new Promise(resolve=>releaseUpload=resolve);await route.continue()});
