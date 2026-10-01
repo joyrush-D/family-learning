@@ -18,7 +18,9 @@ async function server(){
  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWF8AAAAASUVORK5CYII=','base64');
  for(const width of [360,1440]){
   let state=await(await fetch(host.url+'api/state')).json();const child=state.children[0].name,title='虚构作业核对 '+width;
-  const p=await browser.newPage({viewport:{width,height:850}}),errors=[];p.on('pageerror',e=>errors.push(e.message));await p.goto(host.url);
+  const p=await browser.newPage({viewport:{width,height:850}}),errors=[];p.on('pageerror',e=>errors.push(e.message));
+  await p.route('**/api/state',async route=>{const response=await route.fetch(),value=await response.json();value.printing={...value.printing,printers:[{name:'Synthetic_Printer',label:'虚构打印机',color:false,duplex:false}]};await route.fulfill({response,json:value})});
+  await p.goto(host.url);
   await p.locator('[data-homework-new]').first().click();const entry=p.locator('#homeworkInputDialog');await entry.waitFor();assert.match(await entry.innerText(),/记作业/);
   const item=entry.locator('[data-homework-item="0"]');assert.equal(await item.locator('[name=title]').isVisible(),true,'parent can enter one homework directly');assert.equal(await entry.locator('[data-homework-original]').evaluate(x=>x.open),false,'source capture stays optional');await entry.locator('[data-homework-original] > summary').click();await entry.locator('[name=text]').fill('虚构老师原话：核对一页阅读题');
   if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.mkdir(process.env.HOMEWORK_QUICK_PROOF_DIR,{recursive:true});await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'quick-entry-'+width+'.png')})}
@@ -39,6 +41,18 @@ async function server(){
   assert.equal(await p.locator('#pendingUploads img').count(),1);
   await p.locator('#saveTaskFeedback').click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'photo feedback saved');
   assert.match(await p.locator('[data-query-target="task:'+id+'"] [data-task="'+id+'"]:visible').first().innerText(),/查看\/补充反馈/,'today confirms saved feedback in the same task');
+  assert(await p.locator('[data-query-target="task:'+id+'"] [data-homework-print]').isVisible(),'separate question/reference printing is directly visible');
+  const preparation={id:'b'.repeat(32),pdf_sha256:'c'.repeat(64),page_count:1,preview_url:'/api/print/preview/'+'b'.repeat(32)},keysPrint=[];
+  await p.route('**/api/print/prepare',r=>r.fulfill({json:{preparation}}));
+  await p.route('**/api/print/enqueue',r=>{keysPrint.push(r.request().postDataJSON().idempotency_key);return keysPrint.length===1?r.fulfill({status:503,json:{error:'虚构打印回执丢失'}}):r.fulfill({json:{job:{id:'d'.repeat(32),status:'queued'}}})});
+  const printButton=p.locator('#taskFeedbackHistory [data-print-upload]').first();
+  await p.locator('#taskForm [name=note]').fill('打印时保留的未保存反馈');
+  await printButton.click();await eventually(async()=>await printButton.isEnabled(),'print failure releases button');assert.equal(keysPrint.length,1);
+  await printButton.click();await eventually(async()=>/已提交打印/.test(await printButton.innerText()),'one original print retry acknowledged');
+  assert.equal(keysPrint[0],keysPrint[1],'print retry keeps its request number');assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'打印时保留的未保存反馈');
+  await printButton.click();assert.equal(keysPrint.length,2,'repeated click does not enqueue twice');
+  await p.unroute('**/api/print/prepare');await p.unroute('**/api/print/enqueue');await p.locator('#taskForm [name=note]').fill('');
+
   const wrong=p.locator('#taskFeedbackHistory [data-task-wrong-form]').first();await wrong.locator('summary').click();
   await wrong.locator('[data-wrong-field="label"]').fill('第2题');await wrong.locator('[data-wrong-field="answer"]').fill('C');await wrong.locator('[data-wrong-field="correction"]').fill('B');
   p.once('dialog',d=>d.dismiss());await p.locator('#taskDialog [data-close="taskDialog"]').click();

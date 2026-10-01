@@ -71,3 +71,15 @@ test('legacy v1 single-file pending draft migrates without changing its payload'
   storage.set('family-print-drafts:v1:/family/',JSON.stringify({selected:JSON.stringify(src),drafts:[[JSON.stringify(src),{source:src,preparation:p,prepareKey:'synthetic-old-prepare',enqueueKey:pending.idempotency_key,submitted:false,pending,settings}]]}));
   const h=harness(storage);assert.equal(h.ctx.selectedPrintDrafts().length,1);await h.submit();assert.equal(h.calls.length,1);assert.deepEqual(h.calls[0].body,pending);
 });
+
+test('original file prints in one action without enqueuing other selected files; lost receipt reuses key',async()=>{
+  const h=harness();h.ctx.data.uploads=[{id:'synthetic-original',name:'question.pdf'}];h.select(0);
+  const normal=h.fetch;let lost,fail=true;
+  h.fetch=async(path,options)=>{if(path.endsWith('/enqueue')&&fail){lost=JSON.parse(options.body);fail=false;throw Error('synthetic lost reply')}return normal(path,options)};
+  assert.equal(await h.ctx.printUpload('synthetic-original'),false);
+  assert.equal(h.calls.filter(c=>c.path.endsWith('/enqueue')).length,1);
+  assert.equal(await h.ctx.printUpload('synthetic-original'),true);
+  assert.deepEqual(h.calls.filter(c=>c.path.endsWith('/enqueue'))[1].body,lost);
+  assert.equal(h.draft(0).submitted,false,'unrelated selected file was not printed');
+  const n=h.calls.length;await h.ctx.printUpload('synthetic-original');assert.equal(h.calls.length,n,'repeat click cannot duplicate printing');
+});
