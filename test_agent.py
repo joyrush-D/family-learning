@@ -56,6 +56,7 @@ class AgentTests(unittest.TestCase):
     def test_teacher_image_is_school_material_and_prepared_content_reaches_task_understanding(self):
         ident,keys,value=self._prepared_school_image(native=True)
         self.assertEqual(value['kind'],'school_material','teacher originals must not become child performance drafts')
+        self.assertTrue(agent._needs_task_details('[图片原件：1份，内容未读]'))
         def model(messages,*args,**kwargs):
             context=json.loads(messages[-1]['content'])
             self.assertEqual(context['school_material'][0]['draft']['note'],'英语：朗读Unit 2课文两遍，完成练习册第8页。')
@@ -127,6 +128,7 @@ class AgentTests(unittest.TestCase):
             brief=json.loads(c.execute('SELECT plan FROM agent_items WHERE id=?',(ident,)).fetchone()[0])['school_task']
             self.assertIn('日期不同',brief['reason']);self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
         # A complete interpretation cannot establish when an undated original was published.
+        with self.store._db() as c: c.execute("UPDATE agent_items SET due='' WHERE id=?",(ident,))
         evidence=[dict(ref='message:s:1',kind='text',time='',unread=True,text='[图片原件：1份，内容未读]')]
         with patch.object(agent,'_school_material',return_value=(evidence,[])),patch.object(agent,'_school_current',return_value=True),patch.object(agent,'_school_drafts',return_value=dict(fingerprint='new',refs=['message:s:1'],complete_refs=['message:s:1'],uncertainties=[],model=[dict(ref='message:s:1',draft=dict(title='英语',note='2026-02-10前提交朗读',uncertainties=[]))])),patch.object(agent.family_llm,'_chat_json',return_value=ready):
             self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1)['created'],0)

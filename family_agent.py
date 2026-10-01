@@ -33,7 +33,7 @@ FOCUS = {
     'clarify': '这份记录还有哪些不清楚的地方？可以补充当时情境、原件或孩子自己的说法。',
 }
 
-_COLLECTOR_PLACEHOLDER = re.compile(r'\[(?:[a-z_]{1,40}\s*[:：]\s*内容未读取[^\]]*|图片|语音|视频|文件|资料|包含未读取的非文字内容|已撤回[，,]\s*正文未读取)\]', re.IGNORECASE)
+_COLLECTOR_PLACEHOLDER = re.compile(r'\[(?:[a-z_]{1,40}\s*[:：]\s*内容未读取[^\]]*|图片|图片原件：\d+份，内容未读|语音|视频|文件|资料|包含未读取的非文字内容|已撤回[，,]\s*正文未读取)\]', re.IGNORECASE)
 
 def _needs_task_details(title):
     """Return whether a collector placeholder is being mistaken for a task."""

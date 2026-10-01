@@ -91,7 +91,7 @@ function fixtures(base){
     assert.deepEqual(await p.locator('[data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem)),['synthetic-school']);
     assert.match(await p.locator('[data-agent-item="synthetic-school"]').innerText(),/需要核对是否参加这次活动。/);
     assert.equal(await p.locator('[data-agent-item="synthetic-school"] h3').innerText(),'请准备虚构活动材料。');
-    assert.match(await review.locator('.review-badge').innerText(),/待核对作业/,'newly posted homework remains visibly unconfirmed even when due later');
+    assert.match(await review.locator('.review-badge').innerText(),/作业 · 有信息待补充/,'newly posted homework remains visibly unconfirmed even when due later');
     assert.equal(await review.locator('[data-school-original-ref]').isVisible(),true,'parent can open the saved original without expanding secondary operations');
     await review.locator('[data-school-original-ref]').click();assert.equal(await p.locator('#schoolOriginalDialog').isVisible(),true);await p.locator('#schoolOriginalDialog [data-school-original-close]').click();
     assert.match(await p.locator('[data-agent-item="synthetic-school"] details').textContent(),/⚠️重要通知⚠️/,'original heading is retained');
