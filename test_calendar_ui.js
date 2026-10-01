@@ -178,6 +178,18 @@ test('agent-classified homework appears with homework while notices stay separat
  assert.equal((html.match(/data-notice="yesterday-a"/g)||[]).length,1);
 });
 
+test('all homework from each child latest publication day stays visible, including collected work without a deadline',()=>{
+ const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.agendaItemHTML=x=>`<article data-notice="${x.id}">${x.title}</article>`;
+ const row=(id,day,kind='school',owner='child-a',due='')=>({id,task_id:kind==='task'?id:'',kind,child_ids:[owner],title:id,closed:false,agenda:{category:'homework',box:'inbox',published_on:day,due_on:due,scheduled_on:''}});
+ const rows=[row('due-today','2026-09-02','task','child-a',d.today),row('collected-undated','2026-09-07','task'),...Array.from({length:5},(_,n)=>row('same-day-'+n,'2026-09-07')),row('older','2026-09-02'),row('sibling','2026-09-06','task','child-b')];
+ d.tasks=rows.filter(x=>x.kind==='task').map(x=>({id:x.id,title:x.title,child:x.child_ids[0]==='child-a'?'小溪':'小岚'}));d.today_calendar={inbox:rows,events:[],timetables:[]};
+ const html=h.ctx.todayTasksHTML(),recent=html.split('today-recent-homework">')[1]?.split('</section>')[0]||'',backlog=html.split('today-backlog">')[1]?.split('</details>')[0]||'';
+ assert.match(html,/今日作业 · 1/);
+ for(const id of ['collected-undated','same-day-0','same-day-1','same-day-2','same-day-3','same-day-4','sibling']){assert.match(recent,new RegExp('data-notice="'+id+'"'));assert.equal((html.match(new RegExp('data-notice="'+id+'"','g'))||[]).length,1)}
+ assert.match(backlog,/data-notice="older"/);assert.doesNotMatch(recent,/data-notice="due-today"|data-notice="older"/);
+ h.ctx.child='小溪';assert.doesNotMatch(h.ctx.todayTasksHTML(),/data-notice="sibling"/);
+});
+
 test('a due review stays visible today even when the task is planned for a later day',()=>{
  const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.taskHTML=t=>`<article>${t.title}</article>`;
  d.tasks=[{id:'review',title:'虚构今日回看',focus:{mode:'later',review_on:d.today}},{id:'future',title:'虚构未来回看',focus:{mode:'later',review_on:'2026-09-12'}}];
