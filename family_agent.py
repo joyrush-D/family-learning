@@ -391,7 +391,7 @@ def _publication_groups(views):
             elif (message.get('message_order') and prior.get('message_order') and message.get('time') and prior.get('time')
                   and int(message['message_order']) == int(prior['message_order']) + 1 and prior['kind'] not in ('recalled','quote','qq_window_fragment')):
                 gap = (dt.datetime.fromisoformat(message['time']) - dt.datetime.fromisoformat(prior['time'])).total_seconds()
-                bare = lambda v: bool(v.get('attachments')) and not _COLLECTOR_PLACEHOLDER.sub('', v['message'].get('text', '')).strip()
+                bare = lambda v: (bool(v.get('attachments')) or _needs_task_details(v['message'].get('text', ''))) and not _COLLECTOR_PLACEHOLDER.sub('', v['message'].get('text', '')).strip()
                 pointer = re.match(r'^(?:以上|上述|上面|这些|这份|附件|以下|下面)', message.get('text', '').strip())
                 if 0 <= gap <= 120 and (bare(view) or bare(previous) and pointer):
                     combined = True; reason = '同一发言人连续发送的正文与附件'
@@ -401,6 +401,25 @@ def _publication_groups(views):
             groups.append(dict(publisher=publisher, sender=message.get('sender', ''), source=view.get('source_name', ''),
                 time=message.get('time', ''), reason='', messages=[view]))
     return groups
+
+
+def _school_batches(source_id, messages):
+    """Keep small verified publications together before applying the existing call/input bounds."""
+    batches = [[]]; size = 0
+    views = [dict(source_id=source_id,message=json.loads(row['payload'])) for row in messages]
+    for group in _publication_groups(views):
+        values = [v['message'] for v in group['messages']]
+        lengths = [len(_json(value)) for value in values]
+        if sum(lengths) <= 14000 and batches[-1] and (len(batches[-1]) + len(values) > 6 or size + sum(lengths) > 14000):
+            if len(batches) == 6: break
+            batches.append([]); size = 0
+        # ponytail: a publication larger than the existing 14k input limit still needs separate bounded batches.
+        for value, length in zip(values,lengths):
+            if batches[-1] and (len(batches[-1]) >= 6 or size + length > 14000):
+                if len(batches) == 6: return batches
+                batches.append([]); size = 0
+            batches[-1].append(value); size += length
+    return batches
 
 
 class AgentError(ValueError):
@@ -1449,7 +1468,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                     and all(ref in anchors and anchors[ref].get('publisher') == entry['publisher']
                             and anchors[ref].get('source') == entry.get('source')
                             and set(anchors[ref].get('related_messages', [])) == set(group) for ref in group)
-                    and any(anchors[ref].get('attachments') for ref in group)):
+                    and any(anchors[ref].get('attachments') or _needs_task_details(anchors[ref]['text']) for ref in group)):
                     selected.update(group)
             if len(selected) <= 6:
                 cited = [dict(ref=e['ref'],text=e['text'][:600]) for e in evidence if e['ref'] in selected]
@@ -2023,12 +2042,7 @@ def run_once(app, now=None):
                     store._binding(source, saved)
                     messages = c.execute('SELECT id,payload FROM agent_messages WHERE source_id=? AND processed=0 ORDER BY rowid LIMIT 72', (source['id'],)).fetchall()
                 if not messages: continue
-                batches = [[]]; size = 0
-                for message in messages:
-                    if batches[-1] and (len(batches[-1]) >= 6 or size + len(message['payload']) > 14000):
-                        if len(batches) == 6: break
-                        batches.append([]); size = 0
-                    batches[-1].append(json.loads(message['payload'])); size += len(message['payload'])
+                batches = _school_batches(source['id'], messages)
                 for values in batches:
                     key = 'messages:' + _hash([source['id'], [row['id'] for row in values]])[:40]
                     fp = store._job(key, {'school_learning_policy': 7, 'messages': values}, now, model=True)

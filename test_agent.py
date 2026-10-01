@@ -41,10 +41,30 @@ class AgentTests(unittest.TestCase):
             linked=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
         self.assertEqual([e['ref'] for e in linked[0]['evidence']],[e['ref'] for e in evidence])
         self.assertEqual(linked[0]['plan']['school_task']['state'],'review')
+        evidence[1]['attachments']=[]  # Bytes can arrive after the original publication's text.
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):
+            waiting=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+        self.assertEqual([e['ref'] for e in waiting[0]['evidence']],[e['ref'] for e in evidence])
+        self.assertEqual(waiting[0]['plan']['school_task']['state'],'review')
         evidence[-1]['publisher']='publisher:other'
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):
             separate=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
         self.assertEqual([e['ref'] for e in separate[0]['evidence']], [evidence[0]['ref'],evidence[2]['ref']])
+
+    def test_school_batch_does_not_split_body_and_pending_attachment_before_bytes_arrive(self):
+        messages=[dict(id=str(i),time=(self.now+dt.timedelta(seconds=i)).isoformat(),kind='text',sender='示例老师',
+            sender_id='20001',message_order=str(i),text='独立的虚构通知 '+str(i),unread=False) for i in range(1,73)]
+        messages[5]['text']='英语：朗读课文，题目见附件。'
+        messages[6].update(text='[图片原件：1份，内容未读]',unread=True)
+        messages[7]['text']='以上是朗读练习的题目。'
+        raw=[dict(payload=json.dumps(m)) for m in messages]
+        batches=agent._school_batches('synthetic-group',raw)
+        self.assertEqual([[m['id'] for m in b] for b in batches[:2]],[list(map(str,range(1,6))),list(map(str,range(6,12)))])
+        self.assertEqual(len(batches),6);self.assertTrue(all(len(b)<=6 and sum(len(agent._json(m)) for m in b)<=14000 for b in batches))
+        views=[dict(source_id='synthetic-group',message=m) for m in messages[5:8]]
+        self.assertEqual(len(agent._publication_groups(views)),1)
+        views[1]['message']=dict(views[1]['message'],sender_id='20002')
+        self.assertEqual(len(agent._publication_groups(views)),3)
 
     def test_saved_publications_keep_publishers_originals_attachments_and_paging_without_writes(self):
         import family_media
