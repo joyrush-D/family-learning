@@ -551,6 +551,7 @@ function homeworkReviewSelection(panel){
   return {role:panel.querySelector('[data-homework-review-role="'+x.value+'"]')?.value||'question',source};
  });
 }
+function finishHomeworkReview(){homeworkReviewBusy=false;for(const control of $('#taskFeedbackHistory').querySelectorAll('[data-review-source] input,[data-review-source] select'))control.disabled=false}
 async function loadHomeworkReviewSources(panel,record,task){
  const host=panel.querySelector('[data-homework-review-sources]');
  try{
@@ -599,7 +600,7 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
    const apply=document.createElement('button');apply.type='button';apply.dataset.homeworkReviewApply=String(recordId);apply.textContent='填入待保存反馈';result.append(apply);
    result.dataset.photoIds=JSON.stringify(ids);result.dataset.selection=JSON.stringify(selection);result.dataset.recordCreated=record.created;result.dataset.reviewBasis=JSON.stringify(out.review_basis||{record_id:recordId,created:record.created,photo_ids:ids});status.textContent=`${out.draft.items}题 · ${out.draft.wrong_items}题需订正 · ${out.draft.unknown_items}题未判定。`;if(!document.activeElement.matches('input,textarea,select')){result.tabIndex=-1;result.scrollIntoView({block:'start'});result.focus({preventScroll:true})}
   }catch(error){if(serial===homeworkReviewSerial)status.textContent=(error.message||'批改暂不可用')+'；原反馈和照片已保存。结果不明时再次点击可能再次调用模型。'}
-  finally{homeworkReviewBusy=false;if(serial===homeworkReviewSerial)button.disabled=false}
+  finally{finishHomeworkReview();if(serial===homeworkReviewSerial)button.disabled=false}
   return;
  }
  const area=result.querySelector('textarea'),confirmed=result.querySelector('[data-homework-review-confirm]');let ids;
@@ -622,7 +623,7 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
   f.elements.note.value='家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #'+recordId+'。';
   status.textContent='已填入待保存反馈；请点下方“保存反馈”。作业完成状态不会改变。';button.disabled=true;area.disabled=true;
  }catch(error){status.textContent=(error.name==='AbortError'?'文字原件上传超时':error.message||'文字原件未保存')+'；草稿仍在，可重试。';editing.forEach(x=>x.disabled=false);button.disabled=false}
- finally{homeworkReviewBusy=false;for(const control of panel.querySelectorAll('[data-homework-review-photo],[data-homework-review-role],[data-homework-review-pages]'))control.disabled=false}
+ finally{finishHomeworkReview()}
 });
 $('#taskFeedbackHistory').addEventListener('click',async e=>{
  const button=e.target.closest('[data-task-wrong-save]');if(!button||captureBusy()||taskFeedbackPending||homeworkReviewBusy)return;
