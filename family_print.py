@@ -85,9 +85,9 @@ def _json(obj):
     return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
-def question_sources(sources):
-    if not isinstance(sources,list) or not 1<=len(sources)<=4 or any(not isinstance(source,dict) for source in sources):
-        raise PrintError('每次请选择1至4页题目原件')
+def question_sources(sources, limit=4):
+    if not isinstance(sources,list) or not 1<=len(sources)<=limit or any(not isinstance(source,dict) for source in sources):
+        raise PrintError('每次请选择1至%d张题目与作答原件'%limit)
     if len({_json(source) for source in sources})!=len(sources):
         raise PrintError('题目原件不能重复选择')
     return sources
@@ -369,8 +369,8 @@ class PrintStore:
         (_jpeg if mime=='image/jpeg' else _png)(data)
         return dict(mime=mime,data=data,sha256=_hash(data))
 
-    def images_for_draft(self, sources):
-        sources=question_sources(sources)
+    def images_for_draft(self, sources, *, limit=4):
+        sources=question_sources(sources,limit)
         images=[self.image_for_draft(source) for source in sources]
         if sum(len(image['data']) for image in images)>MAX_SOURCE:
             raise PrintError('题目图片合计不能超过20MB')

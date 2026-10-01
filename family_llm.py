@@ -29,6 +29,7 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHand
 MAX_INPUT=20*1024*1024
 MAX_MODEL_PNG=8*1024*1024
 MAX_TEXT=12000
+MAX_HOMEWORK_REVIEW_IMAGES=8
 MAX_RESPONSE=64*1024
 AUDIO_TYPES={'audio/wav':'wav','audio/mpeg':'mp3','audio/mp4':'m4a',
              'audio/webm':'webm','audio/ogg':'ogg'}
@@ -873,13 +874,15 @@ retry提出经家庭商量后隔一段时间不看讲解再试、或试一道相
     return dict(plan=plan,uncertainties=[v.strip() for v in result['uncertainties']])
 
 
-def homework_reference_draft(images, *, data_path=None, timeout=90):
-    """Up to four ordered worksheet images to a parent-review draft; no saving or printing."""
+def homework_reference_draft(images, *, data_path=None, timeout=90, review=False):
+    """Ordered worksheet/answer images; printing stays at four, answer review at eight."""
+    if type(review) is not bool: raise ValueError('作业整理用途不正确')
+    limit=MAX_HOMEWORK_REVIEW_IMAGES if review else 4
     images=[images] if isinstance(images,dict) else images
-    if (not isinstance(images,list) or not 1<=len(images)<=4 or
+    if (not isinstance(images,list) or not 1<=len(images)<=limit or
             any(not isinstance(image,dict) or set(image)!={'mime','data'} or image['mime'] not in ('image/jpeg','image/png','image/webp') or not isinstance(image['data'],bytes) or not image['data'] for image in images) or
             sum(len(image['data']) for image in images)>MAX_INPUT):
-        raise ValueError('每次只能按页序整理1至4张已保存的作业图片，合计不超过20MB')
+        raise ValueError('每次只能按页序整理1至%d张已保存的作业图片，合计不超过20MB'%limit)
     field = lambda limit: dict(type='string',maxLength=limit)
     schema=dict(type='object',additionalProperties=False,required=['items','coverage'],properties=dict(
         items=dict(type='array',minItems=1,maxItems=25,items=dict(type='object',additionalProperties=False,
@@ -893,9 +896,11 @@ def homework_reference_draft(images, *, data_path=None, timeout=90):
 相邻页可以补足跨页的题干、选项和文章；label注明题号及所用页码。选择题的完整选项或所需原文在这些图片中缺失时，不能从常识猜答案，judgment写unknown，并在uncertainty说明缺口。
 student_answer只抄本图清晰可辨的最终作答；没有作答、多处修改无法辨认或字迹不清时留空。不能从参考答案、选项位置或其他页推测孩子作答。
 judgment只有在题目、孩子最终作答和参考答案都能独立核实时才写correct或incorrect；否则写unknown并说明缺口。主观题允许有依据的同义表达，不因措辞不同判错。
+判主观题前逐项检查题目要求、作答限制、表达完整性、关键要点与原文依据。必须依据孩子实际写出的内容，不能替孩子补出意思后判对；只答到部分要点、漏写理由或表达不完整时，在error_reason明确缺少什么，不把必需订正写成可选完善。合理同义表达仍可判对，不额外添加题目没有要求的格式或术语。
+先对应题目与独立答题纸上的题号，再核对每一小题；空白或划掉不等于老师免做，是否免做不明时留未判定。题号无法对应时不猜配。
 incorrect时，error_reason说明作答与题目依据的具体差异；possible_cause只能是待孩子解释的假设，不凭一个错选项断定心理、能力或习惯。correct和unknown时这两项留空。
 逐题只摘足以核对的短题干、作答和答案，不重复整篇文章。答对的题steps留空；只给错题写错误依据、待孩子核实的可能原因，以及“独立尝试→一个轻提示→自己完成”的简短步骤。未判定题只写需要补看什么，不能补猜。阅读题的错题要指出原文依据，接受合理同义表达；不要代写主观作文或声称孩子已经掌握。
-coverage说明这些图片覆盖到哪部分及明显未读内容；不得声称已读取其他页、老师标准答案或孩子作答。所有结果仅是草稿，必须由家长对照原题核对后才可保存为反馈或打印为家长参考。不要输出其他学生信息、心理或能力诊断。'''
+coverage逐张说明已核对的题号或范围及明显未读内容；缺页、不清、划掉、未提供的作文或超过本次25项上限的题目单列，不能把只抽查几题称为全卷已核对。图片中若有可辨的老师参考资料，只用于它实际覆盖的题号和内容，标明与自行推导的答案区别；未提供的PDF等文件不在本次图片输入中，不得声称已读取。所有结果仅是草稿，必须由家长对照原题核对后才可保存为反馈或打印为家长参考。不要输出其他学生信息、心理或能力诊断。'''
     content=[dict(type='text',text='请按顺序整理这%d页作业图片。'%len(images))]
     for n,image in enumerate(images,1):
         preview=_model_image(image)
@@ -925,7 +930,7 @@ coverage说明这些图片覆盖到哪部分及明显未读内容；不得声称
     text=['这是%d页图片的待核对草稿；请对照原题和孩子卷面逐项改正后再保存或打印。'%len(images),
           '覆盖范围：'+(result['coverage'] or '未说明'),'', '错题订正（仅列可辨且与参考明确不同的作答）：']
     wrong=[item for item in result['items'] if item['judgment']=='incorrect']
-    if not wrong: text.append('本页没有可确认的错题；这不代表孩子全部答对或已经掌握。')
+    if not wrong: text.append('所选图片中没有可确认的错题；这不代表整份作业已检查完、孩子全部答对或已经掌握。')
     for item in wrong:
         text.extend([item['label'] or '未标号题','题面：'+item['question'],
                      '卷面作答：'+item['student_answer'],'核对后参考：'+item['answer'],

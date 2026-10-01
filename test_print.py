@@ -133,6 +133,30 @@ class PrintTests(unittest.TestCase):
             self.assertNotIn('错误依据：',draft['text'])
             if conflict['uncertainty']=='下一页选项缺失':self.assertIn('参考答案：待核对',draft['text'])
 
+    def test_answer_review_keeps_five_images_together_without_expanding_print_packets(self):
+        sources=[]
+        for n in range(8):
+            name='synthetic-page-%d.png'%n
+            (self.data/'attachments'/name).write_bytes(png(n+2))
+            sources.append(dict(type='attachment',name=name))
+        with self.assertRaises(printing.PrintError): self.store.images_for_draft(sources[:5])
+        images,fingerprint=self.store.images_for_draft(sources,limit=family_llm.MAX_HOMEWORK_REVIEW_IMAGES)
+        self.assertEqual(len(images),8)
+        self.assertEqual(fingerprint,printing.packet_sha([image['sha256'] for image in images]))
+        with self.assertRaises(printing.PrintError):self.store.images_for_draft(sources+[sources[0]],limit=8)
+        with self.assertRaises(printing.PrintError):self.store.images_for_draft([sources[0],sources[0]],limit=8)
+        item=dict(label='第1题',question='虚构题面',student_answer='B',answer='B',judgment='correct',
+                  error_reason='',possible_cause='',steps='',uncertainty='')
+        with patch.object(family_llm,'_chat_json',return_value=dict(items=[item],coverage='仅第1题，其余未核对')) as chat:
+            draft=family_llm.homework_reference_draft([dict(mime=i['mime'],data=i['data']) for i in images],review=True)
+        self.assertEqual(sum(p['type']=='image_url' for p in chat.call_args.args[0][1]['content']),8)
+        self.assertIn('其余未核对',draft['coverage'])
+        with patch.object(family_llm,'_chat_json',side_effect=AssertionError('invalid input must not call a model')):
+            for args in (dict(images=images),dict(images=images+[images[0]],review=True)):
+                # Only mime/data are part of the model input, not the internal file fingerprint.
+                args['images']=[dict(mime=i['mime'],data=i['data']) for i in args['images']]
+                with self.assertRaises(ValueError):family_llm.homework_reference_draft(**args)
+
     def test_pdf_tampering_prevents_confirmation(self):
         prep=self.prepared();(self.data/'print'/(prep['id']+'.pdf')).write_bytes(b'%PDF-replaced')
         with self.assertRaises(printing.PrintError):self.job()

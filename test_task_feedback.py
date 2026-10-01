@@ -170,6 +170,33 @@ with tempfile.TemporaryDirectory(prefix='synthetic-task-feedback-') as folder:
             assert status==409 and result['code']=='request_record_changed' and dump(app)==before
             status,result=post(app.snapshot()['token'],body|dict(request_key='synthetic-feedback-0022',attachments=[],note='虚构：已完成再确认',complete=True))
             assert status==200 and result['replayed'] and result['record_id']==noop['record_id'] and dump(app)==before
+            # Grading may include four question images and a separate answer sheet; printing remains four.
+            from test_print import png
+            photos=[upload('synthetic-review-%d.png'%n,png(n+2)) for n in range(5)]
+            def review_post(payload,token):
+                client=http.client.HTTPConnection('127.0.0.1',server.server_port,timeout=5)
+                try:
+                    client.request('POST','/api/print/homework/draft',json.dumps(payload),
+                                   {'Content-Type':'application/json','X-Family-Token':token})
+                    response=client.getresponse();return response.status,json.loads(response.read())
+                finally:client.close()
+            selected=dict(question_sources=[dict(type='upload',id=i) for i in photos])
+            before=dump(app)
+            with patch.object(app.family_llm,'homework_reference_draft',return_value=dict(text='虚构核对结果',items=1,wrong_items=0,unknown_items=1,coverage='仅这些照片')) as model:
+                assert review_post(selected|dict(purpose='review'),'invalid-token')[0]==403
+                assert review_post(selected,app.TOKEN)[0]==400
+                assert review_post(selected|dict(purpose='other'),app.TOKEN)[0]==400
+                assert model.call_count==0
+                status,result=review_post(selected|dict(purpose='review'),app.TOKEN)
+                assert status==200 and len(model.call_args.args[0])==5 and model.call_args.kwargs['review'] is True
+                assert dump(app)==before,'draft request must not write records or print jobs'
+            original=app.save_task_feedback(dict(task_id='T01',child='示例甲',day='2026-09-20',request_key='synthetic-five-image-original',attachments=photos))
+            basis=dict(record_id=original['record_id'],created=original['feedback']['created'],photo_ids=photos)
+            full=dict(task_id='T01',child='示例甲',day='2026-09-20',request_key='synthetic-five-image-review',attachments=photos,note='虚构已核对批改',review_basis=basis)
+            saved=app.save_task_feedback(full);before=dump(app)
+            assert app.save_task_feedback(full)['replayed'] and dump(app)==before
+            refused(app,full|dict(request_key='synthetic-five-image-other',review_basis=basis|dict(photo_ids=photos+[photos[0]])),'review_basis_invalid',400)
+            assert len(saved['feedback']['attachments'])==5
         finally: server.shutdown();server.server_close();worker.join()
 
         # Ordinary task and record paths keep working.

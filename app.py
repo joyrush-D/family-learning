@@ -947,7 +947,7 @@ def save_task_feedback(obj):
     if basis is not None and (not isinstance(basis,dict) or set(basis)!={'record_id','created','photo_ids'}
         or type(basis['record_id']) is not int or not 0<basis['record_id']<=9223372036854775807 or not isinstance(basis['created'],str)
         or not basis['created'] or len(basis['created'])>40 or not isinstance(basis['photo_ids'],list)
-        or not 1<=len(basis['photo_ids'])<=4
+        or not 1<=len(basis['photo_ids'])<=family_llm.MAX_HOMEWORK_REVIEW_IMAGES
         or any(not isinstance(i,str) or not re.fullmatch(r'[a-f0-9]{32}',i) for i in basis['photo_ids'])
         or len(set(basis['photo_ids']))!=len(basis['photo_ids'])):
         raise RecordError('批改所依据的原作答格式不正确，请重新核对',400,'review_basis_invalid')
@@ -1983,9 +1983,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200,dict(preparation=print_store().prepare(obj.get('source'),obj.get('idempotency_key'))))
             if path=='/api/print/homework/draft':
                 self.connection.settimeout(160)
+                purpose=obj.get('purpose','reference')
+                if purpose not in ('reference','review'): raise family_print.PrintError('作业整理用途不正确')
                 sources=obj.get('question_sources') if 'question_sources' in obj else [obj.get('question_source')]
-                images,fingerprint=print_store().images_for_draft(sources)
-                try: draft=family_llm.homework_reference_draft([dict(mime=image['mime'],data=image['data']) for image in images],data_path=DATA,timeout=120)
+                images,fingerprint=print_store().images_for_draft(sources,limit=family_llm.MAX_HOMEWORK_REVIEW_IMAGES if purpose=='review' else 4)
+                try: draft=family_llm.homework_reference_draft([dict(mime=image['mime'],data=image['data']) for image in images],data_path=DATA,timeout=120,review=purpose=='review')
                 except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
                 return self.reply(200,dict(draft=draft,question_sha256=fingerprint))
             if path=='/api/print/enqueue':

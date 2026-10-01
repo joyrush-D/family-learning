@@ -174,7 +174,24 @@ async function server(){
   await textWrong.locator('[data-task-wrong-save]').click();await eventually(async()=>/错题已保存在这份作业下/.test(await p.locator('#taskFeedbackStatus').innerText()),'manual text-only wrong item saved');
   state=await(await fetch(host.url+'api/state')).json();assert.equal(state.records.filter(r=>r.source==='错题照片核对'&&r.linked_task_id===id).length,2);
   assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);await p.reload();
-  assert.match(await p.locator('[data-query-target="task:'+id+'"] [data-task="'+id+'"]:visible').first().innerText(),/查看\/补充反馈/,'reopened today retains saved-feedback state');assert.deepEqual(errors,[]);await p.close();
+  assert.match(await p.locator('[data-query-target="task:'+id+'"] [data-task="'+id+'"]:visible').first().innerText(),/查看\/补充反馈/,'reopened today retains saved-feedback state');assert.deepEqual(errors,[]);
+  await p.unroute('**/api/print/homework/draft');
+  const photos=[];for(let n=0;n<5;n++){const r=await fetch(host.url+'api/upload',{method:'POST',headers:{'X-Family-Token':state.token,'X-File-Name':'synthetic-complete-'+n+'.png','Content-Type':'application/octet-stream'},body:png});assert.equal(r.status,200);photos.push((await r.json()).attachment.id)}
+  const pdf=Buffer.from(await(await fetch(host.url+'attachment/'+encodeURIComponent('演示练习.pdf'))).arrayBuffer());
+  const pdfUpload=await fetch(host.url+'api/upload',{method:'POST',headers:{'X-Family-Token':state.token,'X-File-Name':'synthetic-teacher-reference.pdf','Content-Type':'application/octet-stream'},body:pdf});assert.equal(pdfUpload.status,200);const reference=(await pdfUpload.json()).attachment.id;
+  const original=await fetch(host.url+'api/task/feedback',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify({task_id:id,child,day:state.today,request_key:'synthetic-complete-review-'+width,attachments:[...photos,reference],note:'虚构完整题目与独立作答'})});assert.equal(original.status,200);const originalRecord=(await original.json()).record_id;
+  await p.reload();await p.locator('[data-task="'+id+'"]').first().click();
+  const whole=p.locator('#taskFeedbackHistory [data-homework-review="'+originalRecord+'"]');await whole.locator('summary').click();
+  assert.equal(await whole.locator('[data-homework-review-photo]').count(),5);assert.match(await whole.innerText(),/PDF等其它文件不参与/);
+  for(const photo of photos)await whole.locator('[data-homework-review-photo][value="'+photo+'"]').check();
+  let completeCalls=0;await p.route('**/api/print/homework/draft',r=>{const body=r.request().postDataJSON();assert.equal(body.purpose,'review');assert.deepEqual(body.question_sources.map(x=>x.id),photos);completeCalls++;return completeCalls===1?r.fulfill({status:503,json:{error:'虚构完整批改暂不可用'}}):r.fulfill({json:{draft:{text:'虚构：第1题表达不完整，缺少题目要求的具体特点；参考PDF未参与。',items:1,wrong_items:1,unknown_items:0,coverage:'五张所选照片；参考PDF未参与'},question_sha256:'b'.repeat(64)}})});
+  await whole.locator('[data-homework-review-run]').click();await eventually(async()=>/虚构完整批改暂不可用/.test(await whole.innerText()),'five-image review failure keeps originals');
+  assert.equal(await whole.locator('[data-homework-review-photo]:checked').count(),5);
+  await whole.locator('[data-homework-review-run]').click();await whole.locator('[data-homework-review-result] textarea').waitFor();assert.equal(completeCalls,2);
+  if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await whole.locator('[data-homework-review-result]').scrollIntoViewIfNeeded();await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'complete-review-'+width+'.png')})}
+  await whole.locator('[data-homework-review-confirm]').check();await whole.locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await whole.innerText()),'five-image review staged');await p.locator('#saveTaskFeedback').click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'five-image basis feedback saved');
+  state=await(await fetch(host.url+'api/state')).json();const full=state.records.find(r=>r.note.includes('原作答反馈 #'+originalRecord+'。'));assert(full&&photos.every(x=>full.attachments.includes(x)));assert(!full.attachments.includes(reference),'unused teacher PDF is not claimed as grading basis');assert.equal(state.printing.jobs.length,0,'checking homework never prints');
+  await p.reload();await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskFeedbackHistory').getByText('原作答反馈 #'+originalRecord+'。',{exact:false}).waitFor();assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);assert.deepEqual(errors,[]);await p.close();
  }
  console.log('Homework feedback AI review: 360/1440 save, retry, reopen, task status and source preserved');
 }finally{await browser?.close();await host?.stop()}})().catch(e=>{console.error(e);process.exitCode=1});
