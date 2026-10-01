@@ -46,6 +46,10 @@ class AgentTests(unittest.TestCase):
         view=self.store.school_messages(dict(child_id='child-1'),dict)
         self.assertEqual(view['total'],41);self.assertEqual(view['next_offset'],'36')
         bundle=view['groups'][0];self.assertEqual([v['message_id'] for v in bundle['messages']],['1','2','3'])
+        import copy
+        different=copy.deepcopy(bundle['messages']);different[2]['message']['text']='数学：完成第3页。'
+        self.assertEqual([len(g['messages']) for g in agent._publication_groups(different)],[2,1],
+                         'a later independent requirement is not an attachment caption')
         self.assertEqual(bundle['messages'][1]['attachments'][0]['name'],'synthetic-reading.png')
         self.assertEqual(bundle['messages'][1]['material_draft']['draft']['note'],'朗读 Unit 2 两遍；选做题任选。')
         self.assertEqual(view['groups'][1]['messages'][0]['message_id'],'4')
@@ -53,6 +57,9 @@ class AgentTests(unittest.TestCase):
         page2=self.store.school_messages(dict(child_id='child-1',day=view['day'],offset='36'),dict)
         self.assertEqual([v['message_id'] for g in page2['groups'] for v in g['messages']],['37','38','39','40','41'])
         self.assertEqual(snapshot(),before,'browse never collects, calls a model or writes business state')
+        with self.assertRaises(agent.AgentError) as conflict:
+            self.store.ingest(dict(self.payload(expected='41',cursor='42'),messages=[dict(messages[0],sender_id='other')]))
+        self.assertEqual(conflict.exception.code,'message_conflict');self.assertEqual(snapshot(),before)
         self.assertEqual(self.store.school_messages(dict(child_id='child-2'),dict)['total'],0)
         for changes in ({'offset':'-1'},{'day':'bad-day'},{'child_id':'missing'},{'extra':'20001'}):
             with self.assertRaises(agent.AgentError):self.store.school_messages(dict(child_id='child-1')|changes,dict)

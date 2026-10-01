@@ -259,6 +259,15 @@ def qq_status(envelope, chat):
     return cursor_kind
 
 
+def qq_native_sender(sender):
+    checked(isinstance(sender, dict), 'invalid_sender')
+    name = sender.get('card') or sender.get('nickname') or ''
+    checked(isinstance(name, str), 'invalid_sender')
+    ident = sender.get('user_id', sender.get('id', ''))
+    checked(ident == '' or numeric(str(ident), False), 'invalid_sender')
+    return dict(card=name[:200], nickname='', **({'user_id': str(ident)} if ident != '' else {}))
+
+
 def qq_native_page(envelope, source):
     """Validate one native page; message IDs identify rows, not their chronology."""
     chat = source_chat(source)
@@ -284,10 +293,8 @@ def qq_native_page(envelope, source):
         checked(row.get('raw_message') == ''.join(part['data']['text'] for part in parts)
                 and row['content_complete'] == (not row['recalled'] and not gaps)
                 and (not row['recalled'] or not parts and not gaps))
-        sender = row.get('sender', {})
-        checked(isinstance(sender, dict))
-        sender_name = sender.get('card') or sender.get('nickname') or ''
-        checked(isinstance(sender_name, str))
+        sender = qq_native_sender(row.get('sender', {}))
+        sender_name = sender['card']
         text = row['raw_message']
         if row['recalled']:
             text = '[已撤回，正文未读取]'
@@ -297,9 +304,7 @@ def qq_native_page(envelope, source):
         message = dict(id=row['message_id'], time=dt.datetime.fromtimestamp(row['time'], TIMEZONE).isoformat(),
             kind='recalled' if row['recalled'] else 'text', sender=sender_name[:200], text=text,
             unread=not row['content_complete'] or truncated)
-        sender_id = sender.get('user_id', sender.get('id', ''))
-        checked(sender_id == '' or numeric(str(sender_id), False), 'invalid_sender')
-        if sender_id != '': message['sender_id'] = str(sender_id)
+        if 'user_id' in sender: message['sender_id'] = sender['user_id']
         message['message_order'] = row['message_seq']
         entries.append((int(row['message_seq']), row['time'], message, row))
     ids = [entry[2]['id'] for entry in entries]

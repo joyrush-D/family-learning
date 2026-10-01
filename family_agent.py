@@ -385,10 +385,11 @@ def _publication_groups(views):
             if shared and prior['kind'] not in ('recalled', 'quote', 'qq_window_fragment'):
                 combined = True; reason = '同一事项引用的原消息'
             elif (message.get('message_order') and prior.get('message_order') and message.get('time') and prior.get('time')
-                  and int(message['message_order']) == int(prior['message_order']) + 1 and prior['kind'] != 'recalled'):
+                  and int(message['message_order']) == int(prior['message_order']) + 1 and prior['kind'] not in ('recalled','quote','qq_window_fragment')):
                 gap = (dt.datetime.fromisoformat(message['time']) - dt.datetime.fromisoformat(prior['time'])).total_seconds()
                 bare = lambda v: bool(v.get('attachments')) and not _COLLECTOR_PLACEHOLDER.sub('', v['message'].get('text', '')).strip()
-                if 0 <= gap <= 120 and (bare(view) or bare(previous)):
+                pointer = re.match(r'^(?:以上|上述|上面|这些|这份|附件|以下|下面)', message.get('text', '').strip())
+                if 0 <= gap <= 120 and (bare(view) or bare(previous) and pointer):
                     combined = True; reason = '同一发言人连续发送的正文与附件'
         if combined:
             groups[-1]['messages'].append(view); groups[-1]['reason'] = reason
@@ -864,7 +865,8 @@ class Store:
         if not isinstance(offset, str) or not re.fullmatch(r'0|[1-9][0-9]{0,7}', offset):
             raise AgentError('消息分页位置不正确')
         if day and day != 'unknown':
-            try: dt.date.fromisoformat(day)
+            try:
+                if dt.date.fromisoformat(day).isoformat() != day: raise ValueError()
             except ValueError: raise AgentError('消息日期不正确') from None
         from family_agenda import sent_day
         with self._db() as c:
@@ -889,17 +891,17 @@ class Store:
             day = day or (dates[0] if dates else '')
             rows = [r for r in rows if r[0] == day]
             rows.sort(key=lambda r: (dt.datetime.fromisoformat(r[2]['time']).timestamp() if r[2].get('time') else 0, r[3]))
-            selected = rows[int(offset):int(offset) + 36]; views = []
+            selected = rows[int(offset):int(offset) + 36]; views = []; by_ref = {}
+            for raw in c.execute("SELECT id,title,state,plan,evidence FROM agent_items WHERE kind='school' AND child_id=? AND state!='superseded'", (child,)):
+                brief = json.loads(raw['plan']).get('school_task', {})
+                refs = [e['ref'] for e in json.loads(raw['evidence'])]
+                item = dict(id=raw['id'], title=brief.get('title') or raw['title'], goal=brief.get('goal', ''),
+                    state=raw['state'], purpose=brief.get('purpose', ''), reason=brief.get('reason', ''), refs=refs)
+                for ref in refs: by_ref.setdefault(ref, []).append(item)
             for _, source, message, _ in selected:
                 view = self._message_view(c, source, message, upload_info)
                 ref = 'message:' + source['id'] + ':' + message['id']
-                view['items'] = []
-                for raw in c.execute("SELECT id,title,state,plan,evidence FROM agent_items WHERE kind='school' AND child_id=?", (child,)):
-                    if ref not in {e['ref'] for e in json.loads(raw['evidence'])}: continue
-                    brief = json.loads(raw['plan']).get('school_task', {})
-                    view['items'].append(dict(id=raw['id'], title=brief.get('title') or raw['title'],
-                        goal=brief.get('goal', ''), state=raw['state'], purpose=brief.get('purpose', ''),
-                        reason=brief.get('reason', ''), refs=[e['ref'] for e in json.loads(raw['evidence'])]))
+                view['items'] = by_ref.get(ref, [])
                 views.append(view)
             groups = _publication_groups(views)
             return dict(child_id=child, day=day, days=dates, total=len(rows), offset=int(offset),
