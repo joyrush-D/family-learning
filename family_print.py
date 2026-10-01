@@ -376,6 +376,104 @@ class PrintStore:
             raise PrintError('题目图片合计不能超过20MB')
         return images,packet_sha([image['sha256'] for image in images])
 
+    @staticmethod
+    def review_sources(data, questions, references, allowed, *, render=True):
+        """Explicit same-task originals; PDF subsets are reported, never silently selected."""
+        import family_pdf
+        import family_media
+        if (not isinstance(questions,list) or not questions or not isinstance(references,list)
+                or len(questions)+len(references)>8):
+            raise PrintError('请选题目或孩子作答，最多8份原件；教师参考可另选')
+        items=[];seen=set();raw_total=0
+        for role,sources in [('question',questions),('reference',references)]:
+            for source in sources:
+                if (not isinstance(source,dict) or set(source) not in ({'type','id'},{'type','id','pages'})
+                        or source.get('type')!='upload'):
+                    raise PrintError('批改只能使用这项作业已保存的原件')
+                ident=_id(source['id'])
+                if ident not in allowed: raise PrintError('原件不属于这份作答或原作业，请重新打开核对','review_source_not_allowed',403)
+                if ident in seen: raise PrintError('同一原件不能重复选作题目、作答或教师参考')
+                seen.add(ident);row=allowed[ident]
+                base=Path(data).resolve()/'uploads';path=base/ident
+                if base.is_symlink() or path.is_symlink() or path.resolve().parent!=base:
+                    raise PrintError('原件路径不正确')
+                name,body=row['name'],_read_file(path,MAX_SOURCE)
+                if len(body)!=row['size']: raise PrintError('原件大小已变化，请重新上传','review_source_changed',409)
+                raw_total+=len(body)
+                if raw_total>MAX_SOURCE: raise PrintError('本次原件合计不能超过20MB，请分批核对')
+                mime=row['mime'];pages=source.get('pages')
+                if pages is not None and (mime!='application/pdf' or not isinstance(pages,list) or not pages
+                        or len(pages)>8 or any(type(p) is not int or not 1<=p<=family_pdf.MAX_DOCUMENT_PAGES for p in pages)
+                        or len(set(pages))!=len(pages)):
+                    raise PrintError('PDF页码须为不重复的1至200整数，一次最多8页')
+                canonical=dict(type='upload',id=ident)
+                if pages is not None: canonical['pages']=list(pages)
+                items.append(dict(role=role,source=canonical,name=name,mime=mime,body=body,sha256=_hash(body)))
+        # All PDF probes and batches share the existing total deadline, even with multiple files.
+        started=time.monotonic()
+        def left():
+            remaining=family_pdf.DEADLINE_SECONDS-(time.monotonic()-started)
+            if remaining<=0: raise family_pdf.PDFError('render timed out')
+            return remaining
+        image_count=0;documents=[];coverage=[]
+        for item in items:
+            mime=item['mime'];body=item['body'];pages=item['source'].get('pages')
+            if mime=='application/pdf':
+                if not body.startswith(b'%PDF-'): raise PrintError('PDF内容不正确')
+                if render:
+                    try: count=family_pdf.page_count(body,left())
+                    except family_pdf.PDFError: raise PrintError('PDF无法安全读取，请核对原件或重新上传','review_pdf_unavailable',503) from None
+                    pages=pages or list(range(1,count+1))
+                    if any(page>count for page in pages): raise PrintError('所选页码超出PDF范围')
+                    item['source']['pages']=pages;item['page_count']=count
+                    omitted=[page for page in range(1,count+1) if page not in pages]
+                    selected=page_selection(','.join(map(str,pages)),count)[0]
+                    missing=page_selection(','.join(map(str,omitted)),count)[0] if omitted else '无'
+                    coverage.append('%s《%s》：共%d页，本次第%s页；未读取页：%s。'%('教师参考' if item['role']=='reference' else '题目/孩子作答',item['name'],count,selected,missing))
+                elif pages is None: raise PrintError('批改依据缺少已核对的PDF页码')
+                image_count+=len(pages)
+            elif mime in ('image/jpeg','image/png','image/webp'):
+                if mime=='image/jpeg': _jpeg(body)
+                elif mime=='image/png': _png(body)
+                elif not (body[:4]==b'RIFF' and body[8:12]==b'WEBP'): raise PrintError('WebP内容不正确')
+                image_count+=1
+                coverage.append('%s《%s》：本次读取整张照片。'%('教师参考' if item['role']=='reference' else '题目/孩子作答',item['name']))
+            elif item['role']=='reference' and (mime.startswith('text/plain') or mime==family_media.DOCX_MIME):
+                if render:
+                    try: text=family_media.docx_text(body) if mime==family_media.DOCX_MIME else body.decode('utf-8-sig')
+                    except (UnicodeError,MediaError): raise PrintError('教师参考文字无法安全完整读取，请改为PDF或照片') from None
+                    if (not text.strip() or len(text)>12000 or any(ord(ch)<32 and ch not in '\n\r\t' or ord(ch)==127 for ch in text)):
+                        raise PrintError('教师参考文字须清晰完整且最多12000字，请分批核对')
+                    documents.append(dict(name=item['name'],text=text))
+                coverage.append('教师参考《%s》：本次读取完整文字。'%item['name'])
+            else: raise PrintError('批改支持JPG、PNG、WebP或PDF；教师参考另支持纯文字TXT/Word')
+        if not 1<=image_count<=8: raise PrintError('题目、作答及参考合计最多8张照片/PDF页，请明确分批或选择PDF页码；本次未调用模型')
+        if sum(len(d['text']) for d in documents)>12000: raise PrintError('教师参考文字合计最多12000字，请分批核对')
+        images=[];reference_images=[];image_labels=[];reference_labels=[];total=0
+        if render:
+            for item in items:
+                group=[]
+                if item['mime']=='application/pdf':
+                    pages=item['source']['pages']
+                    for start in range(0,len(pages),family_pdf.MAX_REQUESTED_PAGES):
+                        try: rendered=family_pdf.render_pages(item['body'],pages[start:start+family_pdf.MAX_REQUESTED_PAGES],left())
+                        except family_pdf.PDFError: raise PrintError('PDF页暂时无法安全读取，已保存原件保留','review_pdf_unavailable',503) from None
+                        if rendered['page_count']!=item['page_count']: raise PrintError('PDF页数已变化，请重新核对','review_source_changed',409)
+                        group.extend((dict(mime=page['mime_type'],data=page['data']),item['name']+' 第%d页'%page['page']) for page in rendered['pages'])
+                elif item['mime'].startswith('image/'):
+                    group=[(dict(mime=item['mime'],data=item['body']),item['name'])]
+                for image,label in group:
+                    total+=len(image['data'])
+                    if total+sum(len(d['text'].encode()) for d in documents)>MAX_SOURCE:
+                        raise PrintError('本次图片/PDF页及参考文字合计不能超过20MB，请分批核对')
+                    if item['role']=='reference': reference_images.append(image);reference_labels.append(label)
+                    else: images.append(image);image_labels.append(label)
+        packet=[dict(role=i['role'],source=i['source'],name=i['name'],mime=i['mime'],sha256=i['sha256']) for i in items]
+        return dict(images=images,reference_images=reference_images,documents=documents,image_labels=image_labels,
+                    reference_labels=reference_labels,coverage=coverage,fingerprint=_hash(_json(packet).encode()),
+                    question_sources=[i['source'] for i in items if i['role']=='question'],
+                    reference_sources=[i['source'] for i in items if i['role']=='reference'])
+
     def _page_count(self, path):
         if not self.pdfinfo:
             raise PrintError('未配置PDF页数工具，请下载原件；暂不能确认打印', 'preview_unavailable', 503)

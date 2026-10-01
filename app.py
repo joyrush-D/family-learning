@@ -916,6 +916,129 @@ def task_status(task, update=None):
     original=task['original_status']
     return update or (original if original in (*TASK_STATUSES,'已归档') else '已归档' if '已归档' in original else '待跟进')
 
+def homework_review_context(c,task_id,record_id,expected_created=None):
+    """Only this saved answer, reported homework and explicitly bound school originals."""
+    if not isinstance(task_id,str) or not task_id or len(task_id)>30 or type(record_id) is not int or not 0<record_id<=9223372036854775807:
+        raise family_print.PrintError('请从原作业打开已保存的作答')
+    task=next((t for t in tasks(c) if t['id']==task_id),None)
+    row=c.execute('SELECT * FROM records WHERE id=?',(record_id,)).fetchone()
+    names=child_names(c)
+    if (task is None or task.get('agenda',{}).get('category')!='homework' or row is None
+            or names.get(row['child'],row['child'])!=task['child']
+            or row['source']!='事项:'+task_id and row['linked_task_id']!=task_id):
+        raise family_print.PrintError('这份作答不属于当前孩子的作业','review_source_not_allowed',403)
+    if expected_created is not None and (not isinstance(expected_created,str) or expected_created!=row['created']):
+        raise family_print.PrintError('原作答已更正，请重新打开后检查','review_source_changed',409)
+    child=next(p for p in profiles(c) if p['name']==task['child'])
+    allowed={};bindings=[];record_ids=json.loads(row['attachments']);report={};school_error=''
+    def add(ident,origin):
+        upload=c.execute('SELECT * FROM uploads WHERE id=?',(ident,)).fetchone()
+        if upload is None: return
+        try: family_reading.validate_record_attachments(c,child['id'],[ident])
+        except family_reading.ReadingError: raise family_print.PrintError('原件已归属另一位孩子','review_source_not_allowed',403) from None
+        for other in c.execute("SELECT child,attachments FROM records WHERE attachments<>'[]'"):
+            if names.get(other['child'],other['child'])!=task['child'] and ident in json.loads(other['attachments']):
+                raise family_print.PrintError('原件已归属另一位孩子','review_source_not_allowed',403)
+        allowed.setdefault(ident,dict(upload)|dict(origin=origin))
+    for ident in record_ids: add(ident,'saved_answer')
+    if 'report' in {r[1] for r in c.execute('PRAGMA table_info(study_items)')}:
+        reported=c.execute('SELECT report FROM study_items WHERE task_id=? AND child_id=?',(task_id,child['id'])).fetchone()
+        if reported:
+            report=json.loads(reported['report'])
+            for ident in report.get('attachments',[]): add(ident,'reported_homework')
+    if task['source'].startswith(('Agent建议:','message:')):
+        try:
+            import family_media
+            store=agent_store(read_only=True)
+            if task['source'].startswith('Agent建议:'):
+                original=family_agent._school_origin(store,c,task,child['id'])
+                plan=json.loads(original['plan'])
+                refs=[dict(zip(('source_id','message_id'),entry['ref'][8:].rsplit(':',1))) for entry in json.loads(original['evidence'])]
+                refs.extend(plan.get('school_messages',[]))
+            else:
+                configured=[s for s in store._config(c)['sources'] if task['source'].startswith('message:'+s['id']+':')]
+                if not configured: raise family_agent.AgentError('学校来源无法核对')
+                source=max(configured,key=lambda s:len(s['id']))
+                refs=[dict(source_id=source['id'],message_id=task['source'][len('message:'+source['id']+':'):])]
+            linked=set()
+            for ref in refs:
+                if not isinstance(ref,dict) or not {'source_id','message_id'}<=set(ref): raise family_agent.AgentError('学校来源不完整')
+                key=(ref['source_id'],ref['message_id'])
+                if key in linked: continue
+                linked.add(key)
+                source,message=store._message_context(c,dict(child_id=child['id'],source_id=key[0],message_id=key[1]))
+                family_media._authorized(store,c,source,message)
+                ids=[r['upload_id'] for r in c.execute('SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=? ORDER BY upload_id',key)]
+                bindings.append([source,message,ids])
+                for ident in ids:
+                    store._message_upload(c,child['id'],ident);add(ident,'school')
+        except (family_agent.AgentError,family_print.MediaError,family_reading.ReadingError,ValueError,TypeError,KeyError):
+            # Saved answer/report still work when their independent school binding is unavailable.
+            allowed={ident:value for ident,value in allowed.items() if value['origin']!='school'}
+            bindings=[];school_error='学校原件出处当前无法核对；已保存作答仍可检查，可回原消息核对后重试。'
+    context=dict(task=dict(id=task['id'],child=task['child'],source=task['source'],action=task['action']),
+                 child_id=child['id'],record_id=record_id,created=row['created'],record_ids=record_ids,report=report,school=bindings)
+    fingerprint=hashlib.sha256(json.dumps(context,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+    return dict(task=task,record=dict(row),allowed=allowed,context_sha256=fingerprint,school_error=school_error)
+
+def homework_review_basis(obj):
+    """Structural validation is separate from the save transaction's live source checks."""
+    if not isinstance(obj,dict) or set(obj)!={'record_id','created','photo_ids','question_sources','reference_sources','material_sha256','context_sha256'}:
+        raise RecordError('批改所依据的原件格式不正确，请重新核对',400,'review_basis_invalid')
+    if (type(obj['record_id']) is not int or not 0<obj['record_id']<=9223372036854775807
+            or not isinstance(obj['created'],str) or not obj['created'] or len(obj['created'])>40
+            or any(not isinstance(obj[key],str) or not re.fullmatch('[a-f0-9]{64}',obj[key]) for key in ('material_sha256','context_sha256'))
+            or not isinstance(obj['photo_ids'],list) or len(obj['photo_ids'])>8
+            or any(not isinstance(i,str) or not re.fullmatch('[a-f0-9]{32}',i) for i in obj['photo_ids'])
+            or len(set(obj['photo_ids']))!=len(obj['photo_ids'])):
+        raise RecordError('批改所依据的原件格式不正确，请重新核对',400,'review_basis_invalid')
+    questions=obj['question_sources'];references=obj['reference_sources']
+    if not isinstance(questions,list) or not questions or not isinstance(references,list) or len(questions)+len(references)>8:
+        raise RecordError('批改所依据的原件格式不正确，请重新核对',400,'review_basis_invalid')
+    ids=[]
+    for source in questions+references:
+        if (not isinstance(source,dict) or set(source) not in ({'type','id'},{'type','id','pages'}) or source.get('type')!='upload'
+                or not isinstance(source.get('id'),str) or not re.fullmatch('[a-f0-9]{32}',source['id'])):
+            raise RecordError('批改所依据的原件格式不正确，请重新核对',400,'review_basis_invalid')
+        if 'pages' in source and (not isinstance(source['pages'],list) or not 1<=len(source['pages'])<=8
+                or any(type(p) is not int or not 1<=p<=200 for p in source['pages']) or len(set(source['pages']))!=len(source['pages'])):
+            raise RecordError('批改所依据的原件页码不正确，请重新核对',400,'review_basis_invalid')
+        ids.append(source['id'])
+    if len(set(ids))!=len(ids) or not set(obj['photo_ids'])<=set(ids):
+        raise RecordError('批改所依据的原件重复或归属不正确',400,'review_basis_invalid')
+    return obj
+
+def guard_homework_review(c,task_id,basis,attachments):
+    try:
+        context=homework_review_context(c,task_id,basis['record_id'],basis['created'])
+        ids=[s['id'] for s in basis['question_sources']+basis['reference_sources']]
+        record_ids=json.loads(context['record']['attachments'])
+        if set(basis['photo_ids'])!={ident for ident in ids if ident in record_ids} or not set(ids)<=set(attachments): raise ValueError()
+        # No second database connection, PDF probe, conversion or model inside the save transaction.
+        materials=family_print.PrintStore.review_sources(DATA,basis['question_sources'],basis['reference_sources'],context['allowed'],render=False)
+        if materials['fingerprint']!=basis['material_sha256'] or context['context_sha256']!=basis['context_sha256']: raise ValueError()
+    except (ValueError,KeyError,TypeError,OSError,family_reading.ReadingError):
+        raise RecordError('原作答、题目或参考已变化；批改依据需要重新核对，本次反馈未保存',409,'review_basis_changed') from None
+
+def homework_review_draft(obj):
+    if not isinstance(obj,dict) or set(obj)-{'purpose','task_id','record_id','expected_created','question_sources','reference_sources'}:
+        raise family_print.PrintError('请只提供这次作答的题目与教师参考')
+    if 'expected_created' not in obj: raise family_print.PrintError('请保留原作答版本后重试')
+    with connect() as c:
+        context=homework_review_context(c,obj.get('task_id'),obj.get('record_id'),obj['expected_created'])
+    materials=family_print.PrintStore.review_sources(DATA,obj.get('question_sources'),obj.get('reference_sources',[]),context['allowed'])
+    ids=[source['id'] for source in materials['question_sources']+materials['reference_sources']]
+    basis=dict(record_id=obj['record_id'],created=context['record']['created'],
+               photo_ids=[ident for ident in ids if ident in json.loads(context['record']['attachments'])],
+               question_sources=materials['question_sources'],reference_sources=materials['reference_sources'],
+               material_sha256=materials['fingerprint'],context_sha256=context['context_sha256'])
+    with connect() as c: guard_homework_review(c,obj['task_id'],basis,ids)
+    draft=family_llm.homework_reference_draft(materials['images'],data_path=DATA,timeout=120,review=True,
+        reference_images=materials['reference_images'],reference_documents=materials['documents'],
+        image_labels=materials['image_labels'],reference_labels=materials['reference_labels'],program_coverage=materials['coverage'])
+    with connect() as c: guard_homework_review(c,obj['task_id'],basis,ids)
+    return dict(draft=draft,question_sha256=materials['fingerprint'],review_basis=basis)
+
 def save_task(obj, connection=None):
     ident=clean(obj,'id',30);status=clean(obj,'status',30);note=clean(obj,'note')
     if status not in TASK_STATUSES: raise TaskError('状态不正确')
@@ -944,7 +1067,9 @@ def save_task_feedback(obj):
     """Feedback on an existing task is one ordinary record (source='事项:<id>'); completion changes only when asked."""
     task_id=clean(obj,'task_id',30);child=clean(obj,'child',100)
     basis=obj.get('review_basis')
-    if basis is not None and (not isinstance(basis,dict) or set(basis)!={'record_id','created','photo_ids'}
+    material_basis=isinstance(basis,dict) and 'material_sha256' in basis
+    if material_basis: homework_review_basis(basis)
+    if basis is not None and not material_basis and (not isinstance(basis,dict) or set(basis)!={'record_id','created','photo_ids'}
         or type(basis['record_id']) is not int or not 0<basis['record_id']<=9223372036854775807 or not isinstance(basis['created'],str)
         or not basis['created'] or len(basis['created'])>40 or not isinstance(basis['photo_ids'],list)
         or not 1<=len(basis['photo_ids'])<=family_llm.MAX_HOMEWORK_REVIEW_IMAGES
@@ -999,6 +1124,7 @@ def save_task_feedback(obj):
             else: record.update(request_key=request_key,completion=dict(complete=complete,note=completion_note))
             result=_save_record(record,False,{},c);key_replay=result['replayed']
         if basis is not None and not key_replay:
+            if material_basis: guard_homework_review(c,task_id,basis,attachments)
             original=c.execute('SELECT child,source,linked_task_id,created,attachments FROM records WHERE id=?',(basis['record_id'],)).fetchone()
             if (original is None or names.get(original['child'])!=task['child']
                 or original['source']!=source and original['linked_task_id']!=task_id
@@ -1821,6 +1947,15 @@ class Handler(BaseHTTPRequestHandler):
                 try: return self.reply(200,family_task_video.view(SimpleNamespace(**globals()),agent_store(read_only=True),int(ident)))
                 except sqlite3.OperationalError:  # An absent or old database without the tables: an explicit refusal, no table created, none of the error's text shown.
                     return self.reply(503,dict(error='家庭资料库尚未建立或暂时无法读取，视频草稿暂不可用；本次读取未更改任何资料',code='storage_unavailable'))
+            if path=='/api/print/homework/sources':
+                query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+                if (set(query)!={'task_id','record_id'} or any(len(v)!=1 for v in query.values())
+                        or not re.fullmatch(r'[1-9][0-9]{0,18}',query['record_id'][0])):
+                    raise family_print.PrintError('请提供唯一的作业和已保存作答编号')
+                with connect() as c: context=homework_review_context(c,query['task_id'][0],int(query['record_id'][0]))
+                sources=[dict(type='upload',id=ident,name=value['name'],mime=value['mime'],size=value['size'],origin=value['origin'])
+                         for ident,value in context['allowed'].items()]
+                return self.reply(200,dict(sources=sources,created=context['record']['created'],school_error=context['school_error']))
             if path=='/api/print/jobs': return self.reply(200,dict(jobs=print_store().list_jobs()))
             if path.startswith('/api/print/preview/'):
                 body,name=print_store().preview(path[len('/api/print/preview/'):])
@@ -1985,6 +2120,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.connection.settimeout(160)
                 purpose=obj.get('purpose','reference')
                 if purpose not in ('reference','review'): raise family_print.PrintError('作业整理用途不正确')
+                if purpose=='review' and any(key in obj for key in ('task_id','record_id','expected_created','reference_sources')):
+                    try: return self.reply(200,homework_review_draft(obj))
+                    except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
                 sources=obj.get('question_sources') if 'question_sources' in obj else [obj.get('question_source')]
                 images,fingerprint=print_store().images_for_draft(sources,limit=family_llm.MAX_HOMEWORK_REVIEW_IMAGES if purpose=='review' else 4)
                 try: draft=family_llm.homework_reference_draft([dict(mime=image['mime'],data=image['data']) for image in images],data_path=DATA,timeout=120,review=purpose=='review')
