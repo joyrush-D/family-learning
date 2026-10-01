@@ -59,7 +59,7 @@ class AgentTests(unittest.TestCase):
         self.store.message_attachment(dict(keys,attachment_id=upload['id'],action='detach'),dict)
         fresh=self.store.school_messages(dict(child_id='child-1'),dict)
         self.assertEqual(fresh['groups'][1]['messages'][0]['message_id'],'2')
-        self.assertNotEqual(fresh['groups'][1]['messages'][0]['material_draft'].get('state'),'ready')
+        self.assertNotEqual((fresh['groups'][1]['messages'][0]['material_draft'] or {}).get('state'),'ready')
         self.source['child_id']='child-2'; self.config()
         self.assertEqual(self.store.school_messages(dict(child_id='child-1'),dict)['total'],0)
 
