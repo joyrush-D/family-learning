@@ -14,6 +14,7 @@ import base64
 import json
 import math
 import os
+import re
 import secrets
 import sqlite3
 import time
@@ -925,6 +926,9 @@ coverage逐张说明已核对的题号或范围及明显未读内容；缺页、
 没有老师参考覆盖而题目条件齐全时，可以自行推导，并让answer以“AI自行推导：”开头，明确区别。未提供完整试卷不必一律拒绝：题号及作答能和教师参考明确对应时，可比较答案是否一致；question留空，不能虚构题干，coverage说明仅按教师参考比较、题目要求及完整性未核。
 没有题面时，简明选择/填空答案能明确对应才比较；主观题表达是否完整、理由充分或答题限制无法从参考核明时，judgment=unknown。题号/卷别/小题对应不明或教师参考与可见题面冲突时，一律unknown，在uncertainty写清冲突及待老师/家长核对；保留“教师参考：”的实际答案，不擅自改写老师答案。
 空白、未提供作答或字迹不清仍未判定。答案比较不证明已完成、已经掌握或已核对全卷。程序提供的覆盖范围是实际读入的页，不得声称读取未选页。'''
+    if teacher_reference:
+        prompt=prompt.replace('judgment只有在题目、孩子最终作答和参考答案都能独立核实时才写correct或incorrect；否则写unknown并说明缺口。','有教师参考时，判定按下方教师参考规则执行；没有教师参考时，只有题目与最终作答能独立核实才判正确或错误。')
+        prompt+='\n仅缺题干、但卷别/题号/选择或填空答案与教师参考能明确对应时，应给出答案比较的correct或incorrect；题目完整性未核仅写入coverage，不写入uncertainty。uncertainty只记录会阻止本次答案比较的歧义或冲突。'
     content=[dict(type='text',text='请按顺序整理这%d页作业图片。'%len(images))]
     for n,image in enumerate(images,1):
         preview=_model_image(image)
@@ -942,6 +946,9 @@ coverage逐张说明已核对的题号或范围及明显未读内容；缺页、
     limits=dict(label=80,question=800,student_answer=300,answer=1000,error_reason=600,
                 possible_cause=600,steps=1200,uncertainty=300)
     for item in result['items']:
+        if isinstance(item,dict):
+            for key in limits:
+                if isinstance(item.get(key),str): item[key]=re.sub(r'[\r\n\t]+',' ',item[key])
         if (not isinstance(item,dict) or set(item)!=set(limits)|{'judgment'}
                 or item['judgment'] not in ('correct','incorrect','unknown')
                 or any(not isinstance(item[k],str) or len(item[k])>limit or any(ord(c)<32 or ord(c)==127 for c in item[k]) for k,limit in limits.items())

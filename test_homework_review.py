@@ -75,7 +75,7 @@ def run():
                 calls.append((list(pages),deadline))
                 return dict(page_count=11,pages=[dict(page=p,mime_type='image/png',data=png()) for p in pages],
                             omitted_pages=[p for p in range(1,12) if p not in pages],complete=False)
-            with patch.object(family_pdf,'page_count',return_value=11),patch.object(family_pdf,'render_pages',side_effect=render),patch.object(family_llm,'_chat_json',return_value=dict(items=[item(question='选择正确答案')],coverage='第1题')):
+            with patch.object(family_pdf,'page_count',return_value=11),patch.object(family_pdf,'render_pages',side_effect=render),patch.object(family_llm,'_chat_json',return_value=dict(items=[item(question='选择正确答案\n保留条件')],coverage='第1题')):
                 selected=app.homework_review_draft(request|dict(reference_sources=[source(teacher_pdf,pages=list(range(1,8)))]))
             assert [pages for pages,_ in calls]==[[1,2,3],[4,5,6],[7]]
             assert all(0<deadline<=20 for _,deadline in calls) and calls[-1][1]<=calls[0][1]
