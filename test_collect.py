@@ -106,6 +106,18 @@ class FakeClient:
 
 class CollectorTests(unittest.TestCase):
     def test_qq_publication_keeps_account_identity_and_verified_group_order(self):
+        import family_qq_napcat as napcat
+        cfg=dict(group_id='10002',bridge=dict(native_id='99',legacy_id='98'))
+        native=dict(group_id=10002,message_id=101,real_seq=17,time=1700000017,
+            sender=dict(user_id=20001,card='示例英语老师',nickname='示例昵称'),
+            message=[dict(type='text',data=dict(text='英语：朗读课文。'))])
+        with patch.object(napcat,'request',return_value=dict(messages=[native])) as transport:
+            envelope=napcat.history(cfg)
+            transport.assert_called_once_with(cfg,'get_group_msg_history',dict(group_id=10002,count=20))
+        self.assertEqual(envelope['data']['messages'][0]['sender']['user_id'],'20001',
+                         'the product adapter must retain identity before collector normalization')
+        actual=collect.qq_native_page(envelope,QQ_SOURCE)[0][2]
+        self.assertEqual((actual['sender_id'],actual['message_order']),('20001','17'))
         raw=qq_event(17);raw['sender'].update(user_id=20001,card='示例英语老师')
         row=collect.qq_native_page(qq_envelope([raw]),QQ_SOURCE)[0][2]
         self.assertEqual((row['sender'],row['sender_id'],row['message_order']),('示例英语老师','20001','17'))
