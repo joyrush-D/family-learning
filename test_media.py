@@ -469,11 +469,11 @@ class MediaTests(unittest.TestCase):
         message=self.message();self.ingest(message);ident=self.seed_upload()
         self.store.message_attachment(dict(child_id='child-1',source_id=self.source['id'],message_id='1',
             attachment_id=ident,action='attach'),lambda row:dict(row))
-        result=dict(title='虚构听写结果',subject='英语',score=None,total=None,note='表中目标行标记F；数值未知。',uncertainties=['具体错词尚未提供'])
+        result=dict(title='虚构听写结果',note='表中目标行标记F；数值未知。',uncertainties=['具体错词尚未提供'])
         original=self.db_rows('SELECT payload FROM agent_messages');before=self.db_rows('SELECT * FROM records')
         with patch.object(family_llm,'extract_draft',return_value=result) as model, patch.object(family_llm,'_chat_json',return_value={'proposals':[]}):
             agent.run_once(self.app,self.now)
-            model.assert_called_once();self.assertEqual(model.call_args.kwargs['target_child'],'示例甲')
+            model.assert_called_once();self.assertTrue(model.call_args.kwargs['school_material']);self.assertEqual(model.call_args.kwargs['target_child'],'示例甲')
             self.assertEqual(model.call_args.kwargs['data_path'],self.data)
             view=self.store.message(dict(child_id='child-1',source_id=self.source['id'],message_id='1'),dict)['material_draft']
             self.assertEqual(view['state'],'ready');self.assertEqual(view['draft'],result);self.assertEqual(view['upload_ids'],[ident])

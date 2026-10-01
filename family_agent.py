@@ -55,13 +55,13 @@ _school_fields['properties'].update(learning_subject={'type': 'string', 'maxLeng
                                    learning_goal_id={'type': 'string', 'maxLength': 80})
 _school_fields['properties']['evidence']['items'] = {'type': 'object', 'additionalProperties': False,
     'required': ['ref'], 'properties': {'ref': {'type': 'string'}}}
-SCHOOL_PROMPT = '''\n学校消息额外返回task_title、task_goal、task_advice、learning_subject和learning_goal_id。task_title是简短可执行的待办标题（建议40字以内，科目+完成什么），不要使用待核对、辅导建议或整段通知当标题。task_goal仅写本次完成后应得到的成果、老师明确的完成标准，保留必须/任选/示例/条件，不能编造字数、截止或额外要求；task_advice最后给可选操作建议，不可将建议混入学校要求。未读原件时三项留空，不能猜内容。允许学校模式基于原文整理上述待家长核对的事项，不宣称已完成或已掌握；title_quote仍须逐字引用。\n学校消息额外返回learning_subject和learning_goal_id。只有已读文字中有具体教学、习作、练习或订正要求时，learning_subject填写规范科目（如语文、英语）；普通行政通知、报名、用品、闲聊、仅有成绩或未读图片均留空。不要因为尚无孩子作答而漏掉具体教学要求。
+SCHOOL_PROMPT = '''\n学校消息额外返回task_title、task_goal、task_advice、learning_subject和learning_goal_id。task_title是简短可执行的待办标题（建议30字以内，科目+完成什么），不要使用待核对、辅导建议或整段通知当标题。task_goal用分行短句写清动作、范围/页码/数量和老师明确的完成标准，保留必须/任选/示例/条件，不能编造字数、截止或额外要求；task_advice最后给可选操作建议，不可将建议混入学校要求。只留下确实已读清的要求，不能猜未读内容。学校模式基于原文直接理解和分类，不宣称已完成或已掌握；title_quote仍须逐字引用。\n学校消息额外返回learning_subject和learning_goal_id。只有已读文字中有具体教学、习作、练习或订正要求时，learning_subject填写规范科目（如语文、英语）；普通行政通知、报名、用品、闲聊、仅有成绩或未读图片均留空。不要因为尚无孩子作答而漏掉具体教学要求。
 学校消息的evidence每项只返回ref，不返回quote或复述原文；程序按消息编号提取原文，后续教学分析读取完整消息。
 learning_goal_id只从输入learning_goals选择同一科目且适合本要求的目标；已有合适目标优先沿用，科目相同但训练点不相关时也留空，系统建立或沿用学校学习目标。不生成目标编号，不改变暂停状态；明确匹配到暂停目标时只关联资料，不恢复分析或另建目标绕过暂停。非教学要求两个字段均为空。
 老师宣布的考试、测验、听写、默写、比赛、家长会或需要带物品/穿着的日期安排，即使不是作业，也必须各自单独返回一项：task_title写科目+事件+原文的日期或星期（如“英语：Unit1–3单元测验（周五）”），task_goal写范围与要求；不要因为它没有“完成/提交”字样就省略。due只在原文写明日期或“本周五/下周一/明天”这类可按发送日换算的表述时填写YYYY-MM-DD，按该消息的发送日期换算；同一条消息里不同事项分别填各自日期，换算不了留空。
 任务要求与老师的后续更正、撤销一起保留原消息作为规划依据；不把它们当成孩子表现。发布者称呼不等于教师身份已确认，不凭群名推断任课老师，不将家长转发说成老师直接发布。保持必须、任选、示例和条件要求，不能读出未提供的图片或链接内容。'''
 # One saved interpretation feeds the task list; it never records child performance.
-SCHOOL_TASK_POLICY = 6
+SCHOOL_TASK_POLICY = 7
 TASK_BRIEF_SCHEMA = {'type':'object','additionalProperties':False,'required':['title','goal','advice','state','reason'],
     'properties':{**{key:{'type':'string','maxLength':limit} for key,limit in [('title',80),('goal',2000),('advice',1200),('reason',400)]},
                   'state':{'type':'string','enum':['ready','review','reference']}}}

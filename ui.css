@@ -139,3 +139,5 @@ body[data-page=home] .today-heading .toolbar{margin:0}
 .today-extra{margin:12px 0 0}.today-extra button{margin-top:8px}
 #taskStatusDetails{border-top:1px solid var(--line);padding-top:8px;margin-top:20px}
 #saveTaskFeedback{min-height:44px;margin:8px 0 16px}
+
+.school-requirements{white-space:pre-line}

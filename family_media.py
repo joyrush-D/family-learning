@@ -673,7 +673,7 @@ def draft_input(store, c, source, message):
     child = next(p for p in store.profiles(c) if p['id'] == source['child_id'])
     images, documents, originals = [], [], []
     for ident, row in rows:
-        docx = bool(kind) and row['mime'] == DOCX_MIME  # Only school material may have text originals.
+        docx = bool(kind) and row['mime'] == DOCX_MIME and (screenshot_kind or source.get('platform')=='qq' and message['kind']=='text')  # Only school material may have text originals.
         require(docx or row['mime'] in ('image/jpeg', 'image/png', 'image/webp'), 'draft_image_required')
         body = read_file(store.data / 'uploads' / ident)
         require(len(body) == row['size'], 'media_file_changed')
