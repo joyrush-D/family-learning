@@ -160,7 +160,7 @@ test('today counts only current dated work and marks source gaps without changin
  const rows=[row('today',{due_on:d.today}),row('old'),row('future',{due_on:'2026-09-22'})];
  d.tasks=rows.map(x=>({id:x.id,title:x.id,child:'小溪'}));d.today_calendar={inbox:rows,events:[],timetables:[]};
  h.ctx.currentSources=()=>[{child_id:'child-a',unread_count:2,enabled:true}];h.ctx.currentSourceStatus=()=> '最近读取成功';
- const html=h.ctx.todayTasksHTML();assert.match(html,/今日作业 · 1/);assert.match(html,/最近收到的作业 · 2/);assert.match(html,/最近读取成功；部分已保存消息需核对原件/);assert.doesNotMatch(html,/data-collection-check/);assert.equal(h.ctx.taskBoxes().Inbox.length,3);
+ const html=h.ctx.todayTasksHTML();assert.match(html,/今日作业 · 1/);assert.match(html,/其他未完成及日期待核对 · 2/);assert.match(html,/最近读取成功；部分已保存消息需核对原件/);assert.doesNotMatch(html,/data-collection-check/);assert.equal(h.ctx.taskBoxes().Inbox.length,3);
  h.ctx.currentSourceStatus=()=> '最近读取未成功';assert.match(h.ctx.todayTasksHTML(),/学校消息来源读取未成功或待核对，今天作业可能缺项/);assert.match(h.ctx.todayTasksHTML(),/data-collection-check/);
  h.ctx.child='小岚';assert.doesNotMatch(h.ctx.todayTasksHTML(),/今天作业可能缺项|需核对原件/);
 });
@@ -182,7 +182,7 @@ test('all homework from each child latest publication day stays visible, includi
  const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.agendaItemHTML=x=>`<article data-notice="${x.id}">${x.title}</article>`;
  const row=(id,day,kind='school',owner='child-a',due='')=>({id,task_id:kind==='task'?id:'',kind,child_ids:[owner],title:id,closed:false,agenda:{category:'homework',box:'inbox',published_on:day,due_on:due,scheduled_on:''}});
  const rows=[row('due-today','2026-09-02','task','child-a',d.today),row('collected-undated','2026-09-07','task'),...Array.from({length:5},(_,n)=>row('same-day-'+n,'2026-09-07')),row('older','2026-09-02'),row('sibling','2026-09-06','task','child-b')];
- d.tasks=rows.filter(x=>x.kind==='task').map(x=>({id:x.id,title:x.title,child:x.child_ids[0]==='child-a'?'小溪':'小岚'}));d.today_calendar={inbox:rows,events:[],timetables:[]};
+ d.tasks=rows.filter(x=>x.kind==='task').map(x=>({id:x.id,title:x.title,source:'Agent建议:synthetic-school',child:x.child_ids[0]==='child-a'?'小溪':'小岚'}));d.today_calendar={inbox:rows,events:[],timetables:[]};
  const html=h.ctx.todayTasksHTML(),recent=html.split('today-recent-homework">')[1]?.split('</section>')[0]||'',backlog=html.split('today-backlog">')[1]?.split('</details>')[0]||'';
  assert.match(html,/今日作业 · 1/);
  for(const id of ['collected-undated','same-day-0','same-day-1','same-day-2','same-day-3','same-day-4','sibling']){assert.match(recent,new RegExp('data-notice="'+id+'"'));assert.equal((html.match(new RegExp('data-notice="'+id+'"','g'))||[]).length,1)}

@@ -99,7 +99,8 @@ function todayTasksHTML(){
  const today=items.filter(x=>[x.agenda.due_on,x.agenda.scheduled_on].some(day=>exactTaskDay(day)===data.today));
  const pendingNotices=items.filter(x=>x.kind==='school'&&!today.includes(x)&&exactTaskDay(x.agenda.published_on))
   .sort((a,b)=>(b.agenda.published_at||b.agenda.published_on).localeCompare(a.agenda.published_at||a.agenda.published_on));
- const receivedHomework=items.filter(x=>x.agenda.category==='homework'&&exactTaskDay(x.agenda.published_on)),latestHomework=new Map();
+ const receivedHomework=items.filter(x=>x.agenda.category==='homework'&&exactTaskDay(x.agenda.published_on)&&
+  (x.kind==='school'||/^Agent建议:|(?:^|\n)message:/.test(data.tasks.find(t=>t.id===x.task_id)?.source||''))),latestHomework=new Map();
  for(const x of receivedHomework)for(const id of x.child_ids||[])if(x.agenda.published_on>(latestHomework.get(id)||''))latestHomework.set(id,x.agenda.published_on);
  const recentHomework=receivedHomework.filter(x=>!today.includes(x)&&(x.child_ids||[]).some(id=>x.agenda.published_on===latestHomework.get(id)))
   .sort((a,b)=>(b.agenda.published_at||b.agenda.published_on).localeCompare(a.agenda.published_at||a.agenda.published_on));

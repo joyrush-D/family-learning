@@ -165,7 +165,7 @@ function fixtures(base){
    // A backfilled school notice keeps its original publication day; processing order must not bury recent notices.
    const orderState=fixtures(await read()),owner=orderState.children[0],baseTask=orderState.tasks.find(t=>t.id==='TODAY'),school=orderState.agent.items.find(x=>x.kind==='school');
    orderState.today='2026-09-28';
-   const orderTask=(id,published,due='')=>({...baseTask,id,title:'虚构事项 '+id,due,agenda:{...baseTask.agenda,published_on:published,due_on:due}});
+   const orderTask=(id,published,due='')=>({...baseTask,id,title:'虚构事项 '+id,source:'Agent建议:synthetic-school',due,agenda:{...baseTask.agenda,published_on:published,due_on:due}});
    orderState.tasks=[orderTask('OLD','2026-09-02'),orderTask('DUE-OLD','2026-09-20','2026-09-20'),orderTask('DUE-RECENT','2026-09-22','2026-09-27'),orderTask('DUE-TODAY','2026-09-27','2026-09-28'),orderTask('DUE-NEXT','2026-09-27','2026-09-29')];
    const published=['2026-09-02','2026-09-20','2026-09-22','2026-09-27','2026-09-27'];
    orderState.agent.items=published.map((day,n)=>({...school,id:'notice-'+n,title:'虚构学校消息 '+n,child_id:owner.id}));
