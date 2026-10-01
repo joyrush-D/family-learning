@@ -616,13 +616,13 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
   if(!$('#taskDialog').open||!taskFeedbackContext||taskFeedbackContext.task_id!==task.id)return;
   if(!/^[a-f0-9]{32}$/.test(upload.attachment?.id))throw Error('文字原件回执无法核对');
   data.uploads.unshift(upload.attachment);
-  if(taskFeedbackDraftState()!==inputState)throw Error('反馈输入在上传期间已变化；核对文字已保存为原件，当前填写未覆盖');
+  if(taskFeedbackDraftState()!==inputState||JSON.stringify(selected())!==result.dataset.selection)throw Error('反馈输入或所选资料在上传期间已变化；核对文字已保存为原件，当前填写未覆盖');
   pendingIDs=[...ids,upload.attachment.id];drawPending();
   taskFeedbackContext.review_basis=JSON.parse(result.dataset.reviewBasis);
   f.elements.note.value='家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #'+recordId+'。';
   status.textContent='已填入待保存反馈；请点下方“保存反馈”。作业完成状态不会改变。';button.disabled=true;area.disabled=true;
  }catch(error){status.textContent=(error.name==='AbortError'?'文字原件上传超时':error.message||'文字原件未保存')+'；草稿仍在，可重试。';editing.forEach(x=>x.disabled=false);button.disabled=false}
- finally{homeworkReviewBusy=false}
+ finally{homeworkReviewBusy=false;for(const control of panel.querySelectorAll('[data-homework-review-photo],[data-homework-review-role],[data-homework-review-pages]'))control.disabled=false}
 });
 $('#taskFeedbackHistory').addEventListener('click',async e=>{
  const button=e.target.closest('[data-task-wrong-save]');if(!button||captureBusy()||taskFeedbackPending||homeworkReviewBusy)return;
