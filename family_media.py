@@ -693,7 +693,7 @@ def draft_input(store, c, source, message):
     require(not documents or len(words) <= family_llm.MAX_TEXT, 'draft_text_too_long')  # Never cut to fit.
     require(sum(len(i['data']) for i in images) + len(words.encode()) <= 20 * 1024 * 1024, 'draft_originals_too_large')
     # The legacy fingerprint is unchanged; a typed draft can never match a saved draft of another type.
-    fingerprint = hashlib.sha256(json.dumps(([2, kind] if kind else [1]) + [source, child, message, originals],
+    fingerprint = hashlib.sha256(json.dumps(([3, kind] if kind else [1]) + [source, child, message, originals],
         ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     return dict(fingerprint=fingerprint, images=images, text=text, child=child['name'],
                 upload_ids=[o[0] for o in originals], kind=kind, documents=documents)
