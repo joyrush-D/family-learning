@@ -271,6 +271,7 @@ SCHOOL_MATERIAL = 'school_material'
 
 def _material_kind(message, source=None, mimes=()):
     from family_qq_capture import KIND, NOTICE
+    mimes=tuple(mimes)
     ocr = message.get('kind') == KIND and message.get('text', '').startswith(NOTICE+'\n截图本机文字识别（')
     native_file = source and source.get('platform') == 'qq' and message.get('kind') == 'text' and any(
         mime in (DOCX_MIME, PPTX_MIME, XLSX_MIME, 'application/pdf') for mime in mimes)
