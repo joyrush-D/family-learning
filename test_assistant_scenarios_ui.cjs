@@ -3,7 +3,7 @@
 const assert=require('node:assert/strict'),{spawn}=require('node:child_process'),{once}=require('node:events'),net=require('node:net');
 const {setTimeout:delay}=require('node:timers/promises'),{chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const fs=require('node:fs/promises'),path=require('node:path');
-const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=','base64');
+const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGOQs4n6D8IMMAYAN7wGzYgpkEMAAAAASUVORK5CYII=','base64');
 async function eventually(check,label){const until=Date.now()+12000;while(Date.now()<until){if(await check())return;await delay(40)}throw Error('Timed out: '+label)}
 async function server(){
  const socket=net.createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');const port=socket.address().port;await new Promise(r=>socket.close(r));
