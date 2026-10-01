@@ -292,7 +292,7 @@ def qq_native_page(envelope, source):
         if row['recalled']:
             text = '[已撤回，正文未读取]'
         elif gaps:
-            text += '\n[包含未读取的非文字内容]'
+            text += ('\n[图片原件：'+str(len(gaps))+'份，内容未读]' if all(gap.get('element_type')==2 for gap in gaps) else '\n[包含未读取的非文字内容]')
         text, truncated = bounded(text)
         message = dict(id=row['message_id'], time=dt.datetime.fromtimestamp(row['time'], TIMEZONE).isoformat(),
             kind='recalled' if row['recalled'] else 'text', sender=sender_name[:200], text=text,

@@ -259,14 +259,15 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
         # A reference page is recorded once so the same fragment is not prepared again every round.
         if pages and pages['read']: reference['page_evidence']=dict(fingerprint=pages['fingerprint'],read=pages['read'],unread=pages['unread'],omitted=pages['omitted'])
         if pdf: reference['pdf_evidence']=dict(fingerprint=pdf['fingerprint'],documents=pdf['documents'])
+        if material: reference['material_evidence']=dict(fingerprint=material['fingerprint'])
         return reference
-    covered=material and all(e.get('ref') in material['refs'] for e in evidence
+    covered=material and not any(e.get('kind')=='qq_window_fragment' for e in evidence) and all(e.get('ref') in material['complete_refs'] for e in evidence
                             if e.get('unread') or e.get('content_incomplete') or _needs_task_details(e.get('text')))
     if incomplete and not covered:
         # A legible screenshot can supply a draft, but never establishes complete history or a deadline.
         fragments = evidence and all(e.get('kind') == 'qq_window_fragment' and e.get('text', '').strip() for e in evidence)
-        if not fragments: brief.update(title='',goal='',advice='')
-        state='review';brief['reason']='仅截图可见内容，文字识别可能有误；请核对原图、发布日期和附件。' if fragments else '原件或具体要求尚未读全，请先核对。'
+        if not fragments and not material: brief.update(title='',goal='',advice='')
+        state='review';brief['reason']='仅截图可见内容，文字识别可能有误；请核对原图、发布日期和附件。' if fragments else '原消息还有未核明的附件；已读要求保留，缺失部分待补充。' if material else '原件或具体要求尚未读全，请先核对。'
     links=_links(evidence);bare=bool(evidence) and all(_link_only(e.get('text','')) for e in evidence);read=pages['read'] if pages else []
     if (bare and not read) or purpose=='unknown':
         # An address alone says nothing about purpose; a model guess must not become a task or a goal.
@@ -314,7 +315,7 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
             state='review';brief['reason']+=' '+label+'整理摘要未全部送核，证据不足，请核对原件后再确认。'
     if material:
         brief['material_evidence']=dict(fingerprint=material['fingerprint'])
-        if state!='reference' and material['uncertainties']:
+        if state!='reference' and material['uncertainties'] and not any(e.get('kind')=='qq_window_fragment' for e in evidence):
             state='review';brief['reason']='待补充：'+'；'.join(material['uncertainties'])[:350]
     brief=dict(brief,state=state,policy=SCHOOL_TASK_POLICY,change=change,target_id=target)
     if purpose: brief['purpose']=purpose
@@ -1276,7 +1277,8 @@ def apply_school_change(app, store, obj):
             origin,message=store._message_context(c,dict(child_id=row['child_id'],source_id=source,message_id=message_id))
             # The PDF fingerprint was checked above in this same acceptance transaction.
             pdf_read=bool(plan.get('school_task',{}).get('pdf_evidence')) and family_pdf_material.complete_evidence(store,c,origin,message) is not None
-            if not pdf_read and (message['unread'] or message['kind']!='text' or not message['text'].strip()): raise AgentError('请先读清变更原件，不能据占位内容修改原事项')
+            material_read=bool(plan.get('school_task',{}).get('material_evidence')) and family_media.school_evidence(store,c,origin,message) is not None
+            if not (pdf_read or material_read) and (message['unread'] or message['kind']!='text' or not message['text'].strip()): raise AgentError('请先读清变更原件，不能据占位内容修改原事项')
             links.append(dict(source_id=source,message_id=message_id))
         status=app.task_status(task,update['status'] if update else None)
         if change=='update':
@@ -1454,17 +1456,25 @@ def _school_pdf(store, c, row):
 
 def _school_drafts(store, c, row):
     """Reuse saved school-original interpretations under existing byte and binding checks."""
-    entries=[];remaining=PAGE_TEXT_LIMIT;missing=[]
+    entries=[];model=[];remaining=PAGE_TEXT_LIMIT;missing=[];complete=[]
     for quote in json.loads(row['evidence']):
+        if not quote['ref'].startswith('message:'): raise AgentError('学校消息引用无法核对')
         source_id,message_id=quote['ref'][8:].rsplit(':',1)
         source,message=store._message_context(c,dict(child_id=row['child_id'],source_id=source_id,message_id=message_id))
         value=family_media.school_evidence(store,c,source,message)
         if value:
-            draft=value['draft'];note=draft['note'][:remaining];remaining-=len(note)
-            if note!=draft['note']: missing.append('原件整理文字未全部读入')
-            entries.append(dict(ref=quote['ref'],draft=dict(draft,note=note),fingerprint=value['fingerprint'],updated=value['updated']))
+            entries.append(dict(ref=quote['ref'],**value))
+            if value['complete']: complete.append(quote['ref'])
+            draft=value['draft'];bounded={}
+            for key in ('title','note','uncertainties'):
+                parts=draft[key] if key=='uncertainties' else [draft[key]];sent=[]
+                for part in parts:
+                    sent.append(part[:remaining]);remaining-=len(sent[-1])
+                    if sent[-1]!=part: missing.append('原件整理文字未全部读入')
+                bounded[key]=[p for p in sent if p] if key=='uncertainties' else sent[0]
+            model.append(dict(ref=quote['ref'],draft=bounded))
     if not entries: return None
-    return dict(fingerprint=_hash(entries),refs=[e['ref'] for e in entries],model=entries,
+    return dict(fingerprint=_hash(entries),refs=[e['ref'] for e in entries],complete_refs=complete,model=model,
                 uncertainties=list(dict.fromkeys(missing+[u for e in entries for u in e['draft']['uncertainties']])))
 
 
@@ -1564,6 +1574,14 @@ def _refresh_school(app, store, now, budget):
                     brief=_school_brief(result,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in evidence),evidence=evidence,school_tasks=targets,pages=page_evidence,pdf=pdf_evidence,material=material)
                 if page_evidence: brief.setdefault('page_evidence',dict(fingerprint=page_key,read=page_evidence['read'],unread=page_evidence['unread'],omitted=page_evidence['omitted']))['candidate']=candidate
                 if pdf_evidence: brief.setdefault('pdf_evidence',dict(fingerprint=pdf_key,documents=pdf_evidence['documents']))['candidate']=candidate
+                if material: brief.setdefault('material_evidence',dict(fingerprint=material_key))
+                due=row['due']
+                if material and brief['state']=='ready' and not due:
+                    import family_agenda
+                    stamps={e['ref']:family_agenda.sent_day(e.get('time')) for e in evidence}
+                    dates=set().union(*(family_agenda.deadlines(e['draft']['note'],stamps.get(e['ref'],'')) for e in material['model']))
+                    if len(dates)==1: due=next(iter(dates))
+                    elif len(dates)>1: brief.update(state='review',reason='原件包含不同完成日期，各项日期对应关系待补充；已读要求保留。')
                 if not _keeps_learning(brief): plan.pop('school_learning',None)
                 plan['school_task']=brief
                 with store._db() as c:
@@ -1572,12 +1590,19 @@ def _refresh_school(app, store, now, budget):
                         # Candidate, message, binding/authorization, fragments or PDF groups changed while the model ran: drop the result.
                         _discard_job(c,key,fp);continue
                     updated=now.isoformat()
-                    c.execute('UPDATE agent_items SET title=?,body=?,plan=?,updated=? WHERE id=?',
-                        (brief['title'] or row['title'],brief['goal'] or row['body'],_json(plan),updated,row['id']))
+                    c.execute('UPDATE agent_items SET title=?,body=?,plan=?,updated=?,due=? WHERE id=?',
+                        (brief['title'] or row['title'],brief['goal'] or row['body'],_json(plan),updated,due,row['id']))
                     c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=? AND fingerprint=?",(key,fp))
-                    row['updated']=updated
+                    row['updated']=updated;row['due']=due
             except (family_llm.LLMDraftError,AgentError,ValueError) as error:
                 store._fail(key,now,fingerprint=fp,reason=error);failed+=1;continue
+        if material and brief.get('state')=='ready' and not row['due']:
+            import family_agenda
+            published=[family_agenda.sent_day(e.get('time')) for e in evidence]
+            if any(not day or day<now.date().isoformat() for day in published):
+                brief.update(state='review',reason='原消息的发布日期不明或早于今天，是否仍需完成待补充；已读要求保留。');plan['school_task']=brief
+                with store._db() as c:
+                    c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=?",(_json(plan),row['id'],row['updated']))
         if brief.get('state')=='ready' and re.fullmatch(r'\d{4}-\d{2}-\d{2}',row['due'] or '') and row['due']<now.date().isoformat():
             brief.update(state='review',reason='原截止日期已过，请核对是否仍需补做；不推定已完成。');plan['school_task']=brief
             with store._db() as c:

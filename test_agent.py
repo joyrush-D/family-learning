@@ -27,10 +27,16 @@ class AgentTests(unittest.TestCase):
         self.source = dict(id='synthetic-group', platform='wechat', child_id='child-1', name='虚构班级', cursor='10', enabled=True)
         self.config()
 
-    def _prepared_school_image(self, uncertain=False):
+    def _prepared_school_image(self, uncertain=False, native=False):
         import base64, family_media
         self.source['platform']='qq';self.config()
         payload=self.payload();payload['messages'][0].update(kind='image',text='[图片]',unread=True)
+        if native:
+            import family_collect
+            from test_collect import qq_event,qq_envelope
+            self.source['id']='qq:10002';self.config()
+            raw=qq_event(11,ident='11',text='');raw.update(time=int(self.now.timestamp()),unread_elements=[dict(element_type=2,content_read=False)],content_complete=False)
+            payload.update(source_id=self.source['id'],messages=[family_collect.qq_native_page(qq_envelope([raw]),self.source)[0][2]])
         self.store.ingest(payload)
         png=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII=')
         upload=self.app.save_upload(io.BytesIO(png),len(png),'synthetic-school.png')
@@ -42,13 +48,13 @@ class AgentTests(unittest.TestCase):
             draft=dict(kind='school_material',title='虚构英语作业',note='英语：朗读Unit 2课文两遍，完成练习册第8页。',uncertainties=['图片右下角的提交方式看不清'] if uncertain else [])
             c.execute('INSERT INTO agent_message_drafts VALUES(?,?,?,?,?)',(source['id'],message['id'],value['fingerprint'],json.dumps(draft,ensure_ascii=False),self.now.isoformat()))
         brief=dict(title='',goal='',advice='',state='review',reason='原件或具体要求尚未读全，请先核对。',policy=agent.SCHOOL_TASK_POLICY)
-        item=dict(child_id='child-1',kind='school',title='待核对：[图片]',body=agent.FOCUS['school'],due='',evidence=[dict(ref='message:synthetic-group:11',text='[图片]')],plan=dict(school_task=brief))
+        item=dict(child_id='child-1',kind='school',title='待核对：[图片]',body=agent.FOCUS['school'],due='',evidence=[dict(ref='message:'+self.source['id']+':11',text='[图片]')],plan=dict(school_task=brief))
         self.store._save('synthetic-image-task','fixture',[item],self.now)
         with self.store._db() as c: ident=c.execute("SELECT id FROM agent_items WHERE job_id='synthetic-image-task'").fetchone()[0]
         return ident,keys,value
 
     def test_teacher_image_is_school_material_and_prepared_content_reaches_task_understanding(self):
-        ident,keys,value=self._prepared_school_image()
+        ident,keys,value=self._prepared_school_image(native=True)
         self.assertEqual(value['kind'],'school_material','teacher originals must not become child performance drafts')
         def model(messages,*args,**kwargs):
             context=json.loads(messages[-1]['content'])
@@ -77,6 +83,36 @@ class AgentTests(unittest.TestCase):
         with self.assertRaises(agent.AgentError) as caught:self.store.act(dict(id=ident,action='accept',expected_updated=row['updated']))
         self.assertEqual(caught.exception.status,409)
         with self.store._db() as c:self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
+
+    def test_material_keeps_screenshot_and_missing_originals_for_specific_followup(self):
+        ready=dict(title='英语：朗读',goal='朗读Unit 2两遍',advice='',state='ready',reason='',purpose='learning')
+        material=dict(fingerprint='synthetic',refs=['message:s:1'],complete_refs=['message:s:1'],uncertainties=[])
+        for kind in ('qq_window_fragment','text'):
+            with self.subTest(kind=kind):
+                m=material if kind=='qq_window_fragment' else dict(material,complete_refs=[])
+                brief=agent._school_brief(ready,incomplete=True,evidence=[dict(ref='message:s:1',text='可见英语要求',kind=kind,unread=True)],material=m)
+                self.assertEqual(brief['state'],'review');self.assertEqual(brief['goal'],ready['goal'])
+                self.assertIn('截图' if kind=='qq_window_fragment' else '附件',brief['reason'])
+
+    def test_school_original_date_comes_from_original_not_reading_day(self):
+        ident,keys,_=self._prepared_school_image(native=True)
+        with self.store._db() as c:
+            draft=json.loads(c.execute('SELECT payload FROM agent_message_drafts').fetchone()[0]);draft['note']='英语：朗读Unit 2两遍，明天提交。'
+            c.execute('UPDATE agent_message_drafts SET payload=?',(json.dumps(draft),))
+        ready=dict(title='英语：朗读',goal=draft['note'],advice='',state='ready',reason='',purpose='learning',submission='',change='new',target_id='')
+        with patch.object(agent.family_llm,'_chat_json',return_value=ready):
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now+dt.timedelta(days=1),1)['created'],1)
+        with self.store._db() as c:self.assertEqual(c.execute('SELECT due FROM agent_items WHERE id=?',(ident,)).fetchone()[0],'2026-02-11')
+
+    def test_historical_undated_school_original_retains_requirements_without_today_task(self):
+        ident,keys,_=self._prepared_school_image(native=True)
+        ready=dict(title='英语：朗读',goal='朗读Unit 2两遍',advice='',state='ready',reason='',purpose='learning',submission='',change='new',target_id='')
+        with patch.object(agent.family_llm,'_chat_json',return_value=ready):
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now+dt.timedelta(days=1),1)['created'],0)
+        with self.store._db() as c:
+            row=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone())
+            self.assertEqual(row['body'],ready['goal']);self.assertIn('早于今天',json.loads(row['plan'])['school_task']['reason'])
+            self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
 
     def test_all_pending_notices_remain_actionable_after_backfill(self):
         with self.app.connect() as c:

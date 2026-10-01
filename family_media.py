@@ -274,7 +274,7 @@ def _material_kind(message, source=None, mimes=()):
     ocr = message.get('kind') == KIND and message.get('text', '').startswith(NOTICE+'\n截图本机文字识别（')
     native_file = source and source.get('platform') == 'qq' and message.get('kind') == 'text' and any(
         mime in (DOCX_MIME, PPTX_MIME, XLSX_MIME, 'application/pdf') for mime in mimes)
-    school_image = source and source.get('platform') in ('qq', 'wechat') and message.get('kind') == 'image'
+    school_image = source and source.get('platform') in ('qq', 'wechat') and (message.get('kind') == 'image' or message.get('kind') == 'text' and any(mime in ('image/jpeg','image/png','image/webp') for mime in mimes))
     return SCHOOL_MATERIAL if ocr or native_file or school_image else ''
 
 
@@ -666,7 +666,7 @@ def draft_input(store, c, source, message):
     _authorized(store, c, source, message)
     require(len(links) <= 3, 'draft_too_many_originals')
     rows = [(ident, store._message_upload(c, source['child_id'], ident)) for ident in links]
-    kind = _material_kind(message, source, (row['mime'] for _, row in rows))
+    kind = _material_kind(message, source, [row['mime'] for _, row in rows])
     if kind and any(row['mime'] in (PPTX_MIME, XLSX_MIME) or
                     (not screenshot_kind and row['mime'] == 'application/pdf') for _, row in rows):
         return None  # The existing bounded PDF page path owns this original.
@@ -729,7 +729,9 @@ def school_evidence(store, c, source, message):
         draft = _saved_draft(row, value)
     except (MediaError, OSError, ValueError): return None
     if draft is None: return None
-    return dict(fingerprint=value['fingerprint'], draft=draft, updated=row['updated'])
+    count=re.search(r'\n\[图片原件：(\d+)份，内容未读\]$',message.get('text',''))
+    complete=message['kind']=='image' or not message['unread'] or bool(count and int(count[1])==len(value['images'])==len(value['upload_ids']))
+    return dict(fingerprint=value['fingerprint'], draft=draft, updated=row['updated'], complete=complete)
 
 
 def draft_view(store, c, source, message):
