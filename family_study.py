@@ -33,7 +33,7 @@ def report_fields(value):
     report={k:_text(value,k,limit) for k,limit in [('text',6000),('explanation',3000),('excerpt',2000),('goal',2000)]}
     ids=value.get('attachments',[])
     if not isinstance(ids,list) or len(ids)>3 or any(not isinstance(i,str) or not re.fullmatch('[a-f0-9]{32}',i) for i in ids) or len(set(ids))!=len(ids):
-        raise StudyError('每次最多关联三份已上传的作业照片或录音')
+        raise StudyError('每次最多关联三份已上传的作业材料')
     report['attachments']=ids
     return report
 
@@ -206,8 +206,8 @@ class Store:
         family_reading.validate_record_attachments(c,child_id,ids)
         for ident in ids:
             row=c.execute('SELECT size,mime FROM uploads WHERE id=?',(ident,)).fetchone();p=self.app.DATA/'uploads'/ident
-            if row is None or row['mime'] not in {'image/jpeg','image/png','image/webp','audio/wav','audio/mpeg','audio/mp4','audio/webm','audio/ogg'}:
-                raise StudyError('请选择已上传的作业照片或录音')
+            if row is None or row['mime'] not in ({'image/jpeg','image/png','image/webp','audio/wav','audio/mpeg','audio/mp4','audio/webm','audio/ogg'} | ({'application/pdf','text/plain'} if self.actor!='child' else set())):
+                raise StudyError('请选择已上传的作业照片、录音或PDF材料')
             if self.actor=='child' and not c.execute('SELECT 1 FROM child_uploads WHERE upload_id=? AND child_id=?',(ident,child_id)).fetchone():
                 raise StudyError('只能使用自己上传的作业原件',403,'report_not_owned')
             if p.parent.is_symlink() or p.is_symlink() or not p.is_file() or p.stat().st_size!=row['size']:

@@ -110,7 +110,7 @@ function taskHTML(t,options={}){
  // ponytail: scan the family-sized record list here; index by task if rendering ever becomes measurably slow.
  const hasFeedback=data.records.some(r=>r.child===t.child&&(r.source==='事项:'+t.id||r.linked_task_id===t.id));
  const primary=reportPending?`<button class="primary" data-study-task-add="${esc(t.id)}">核对报来的功课</button>`:open&&t.focus?.box!=='wish'&&t.agenda?.category==='homework'?`<button class="primary" data-task="${esc(t.id)}">${hasFeedback?'查看/补充反馈':'提交作业反馈'}</button>`:open&&t.title.includes('打印')?'<button class="primary" data-page="print">准备打印</button>':'';
- return `<article class="task ${done?'done':''}" data-query-target="task:${esc(t.id)}" aria-busy="${pending}" ${compact?`data-today-task="${esc(t.id)}"`:''} tabindex="-1"><div class="checkrow">${dismissed?'<span class="task-dismiss-icon" aria-hidden="true">−</span>':reportPending?'<span class="task-dismiss-icon" aria-label="作业要求待核对，暂不能确认完成">?</span>':`<label class="checkhit"><input type="checkbox" data-check="${esc(t.id)}" ${(pending?pendingTask.checked:done)?'checked':''} ${pendingTask?'aria-disabled="true"':''} aria-label="${done?'撤销完成':'确认完成'}：${esc(t.title)}"><span class="sr-only">${done?'撤销完成':'确认完成'}</span></label>`}<div class="taskbody"><div class="task-meta"><strong class="task-owner">${esc(t.child)}</strong>${status(t)!=='待跟进'||pending?`<span class="chip">${pending?'<span role="status">正在保存…</span>':esc(taskStatusLabel(status(t)))}</span>`:''}${options.when?`<span>${esc(options.when)}</span>`:''}</div><h3>${esc(t.title)}</h3>${taskActionHTML(t,compact)}${agendaDateHTML(t.agenda||{})}${!t.agenda?.due_on&&t.due?`<p class="small muted">原日期要求：${esc(t.due)}</p>`:''}${t.school_completion_needs_review?'<p class="note" data-school-completion-review>原要求已完成；更正后是否需补做、是否已完成，待家长核对。</p>':''}${t.update?.note?`<p class="feedback">${esc(t.update.note)}</p>`:''}<div class="tasktools">${primary}${open&&t.agenda?.category==='homework'?`<button data-homework-print="${esc(t.id)}">题目与参考分开打印</button>`:''}${reportPending?`<button data-task="${esc(t.id)}">${hasFeedback?'查看/补充反馈':'提交作业反馈'}</button>`:''}${!primary?`<button data-task="${esc(t.id)}">${hasFeedback?'查看/补充反馈':'反馈进展'}</button>`:''}${dismissed?`<button data-task-restore="${esc(t.id)}">恢复跟进</button>`:''}</div>${open&&t.agenda?.category==='homework'?originals:''}<details class="task-reference task-more"><summary>更多操作与原通知</summary>${compact&&(taskFocus(t).next_action||t.advice)?`<div class="task-next"><span>操作建议</span><p>${esc(taskFocus(t).next_action||t.advice)}</p></div>`:''}<div class="tasktools">${open?`<button data-task-decisions="${esc(t.id)}">不参加 / 不用做</button>`:''}${open?`<button data-task-plan="${esc(t.id)}">${t.agenda?.scheduled_on?'改计划日期':'转成计划'}</button><button data-task-focus="${esc(t.id)}">修改标题 / 日期</button>`:''}${open&&t.agenda?.category==='homework'?`<button data-study-task-add="${esc(t.id)}">作业计时</button>`:''}<button data-school-record-task="${esc(t.id)}">留作学习记录</button>${/阅读|读书|篇目|读后感/.test(t.title+t.action)?`<button data-reading-source="${esc(t.id)}">约定阅读任务</button>`:''}</div>${open&&t.agenda?.category==='homework'?'':originals}<div class="source">${t.original_title?esc('原标题：'+t.original_title)+'<br>':''}${t.original_action?esc('原要求：'+t.original_action)+'<br>':''}${esc(t.source)}<br>整理状态：${esc(t.original_status)}</div>${(t.history||[]).map(h=>`<p class="history"><time>${esc(h.updated.slice(0,16).replace('T',' '))}</time> · ${esc(taskStatusLabel(h.status))}<br>${esc(h.note||'已更新状态')}</p>`).join('')}</details></div></div></article>`;
+ return `<article class="task ${done?'done':''}" data-query-target="task:${esc(t.id)}" aria-busy="${pending}" ${compact?`data-today-task="${esc(t.id)}"`:''} tabindex="-1"><div class="checkrow">${dismissed?'<span class="task-dismiss-icon" aria-hidden="true">−</span>':reportPending?'<span class="task-dismiss-icon" aria-label="作业要求待核对，暂不能确认完成">?</span>':`<label class="checkhit"><input type="checkbox" data-check="${esc(t.id)}" ${(pending?pendingTask.checked:done)?'checked':''} ${pendingTask?'aria-disabled="true"':''} aria-label="${done?'撤销完成':'确认完成'}：${esc(t.title)}"><span class="sr-only">${done?'撤销完成':'确认完成'}</span></label>`}<div class="taskbody"><div class="task-meta"><strong class="task-owner">${esc(t.child)}</strong>${status(t)!=='待跟进'||pending?`<span class="chip">${pending?'<span role="status">正在保存…</span>':esc(taskStatusLabel(status(t)))}</span>`:''}${options.when?`<span>${esc(options.when)}</span>`:''}</div><h3>${esc(t.title)}</h3>${taskActionHTML(t,compact)}${agendaDateHTML(t.agenda||{})}${!t.agenda?.due_on&&t.due?`<p class="small muted">原日期要求：${esc(t.due)}</p>`:''}${t.school_completion_needs_review?'<p class="note" data-school-completion-review>原要求已完成；更正后是否需补做、是否已完成，待家长核对。</p>':''}${t.update?.note?`<p class="feedback">${esc(t.update.note)}</p>`:''}<div class="tasktools">${primary}${open&&t.agenda?.category==='homework'?`<button data-homework-print="${esc(t.id)}">题目与参考分开打印</button>`:''}${reportPending?`<button data-task="${esc(t.id)}">${hasFeedback?'查看/补充反馈':'提交作业反馈'}</button>`:''}${!primary?`<button data-task="${esc(t.id)}">${hasFeedback?'查看/补充反馈':'反馈进展'}</button>`:''}${dismissed?`<button data-task-restore="${esc(t.id)}">恢复跟进</button>`:''}</div>${open?originals:''}<details class="task-reference task-more"><summary>更多操作与原通知</summary>${compact&&(taskFocus(t).next_action||t.advice)?`<div class="task-next"><span>操作建议</span><p>${esc(taskFocus(t).next_action||t.advice)}</p></div>`:''}<div class="tasktools">${open?`<button data-task-decisions="${esc(t.id)}">不参加 / 不用做</button>`:''}${open?`<button data-task-plan="${esc(t.id)}">${t.agenda?.scheduled_on?'改计划日期':'转成计划'}</button><button data-task-focus="${esc(t.id)}">修改标题 / 日期</button>`:''}${open&&t.agenda?.category==='homework'?`<button data-study-task-add="${esc(t.id)}">作业计时</button>`:''}<button data-school-record-task="${esc(t.id)}">留作学习记录</button>${/阅读|读书|篇目|读后感/.test(t.title+t.action)?`<button data-reading-source="${esc(t.id)}">约定阅读任务</button>`:''}</div>${open?'':originals}<div class="source">${t.original_title?esc('原标题：'+t.original_title)+'<br>':''}${t.original_action?esc('原要求：'+t.original_action)+'<br>':''}${esc(t.source)}<br>整理状态：${esc(t.original_status)}</div>${(t.history||[]).map(h=>`<p class="history"><time>${esc(h.updated.slice(0,16).replace('T',' '))}</time> · ${esc(taskStatusLabel(h.status))}<br>${esc(h.note||'已更新状态')}</p>`).join('')}</details></div></div></article>`;
 }
 async function postTask(obj){
  const r=await apiFetch('/api/task',{method:'POST',signal:AbortSignal.timeout(15000),headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify({...obj,expected_updated:obj.expected_updated??data.tasks.find(t=>t.id===obj.id)?.update?.updated??''})});
@@ -530,24 +530,49 @@ function prepareTaskCapture(task,record=null,recentId=null){
  taskWrongPending=null;
  taskFeedbackContext={task_id:task.id,child:task.child,day:record?.day||data.today,category:record?.category||(task.agenda?.category==='todo'?'家长观察':'学习进展'),request_key:crypto.randomUUID(),record_id:record?.id,expected_created:record?.created,originals:record?.attachments||[]};
  $('#taskFeedbackDay').value=record?.day||data.today;$('#taskForm').elements.status.value=status(task)==='已归档'?'待跟进':status(task);formVersion++;pendingIDs=[...(record?.attachments||[])];failedFiles=[];draft=null;draftVersion++;resetCareFeedback();
- $('#taskCaptureHome').append(sharedCapture);captureHint.textContent='每份最多20MB。照片、录音或视频随这项任务保存；语音可转写核对；图片内容尚未分析，视频保存后可在这项任务的反馈里查看待核对的画面观察，不评估声音。';$('#draftButton').classList.add('hide');$('#draftResult').innerHTML='';$('#draftStatus').textContent='';$('#uploadStatus').textContent='';
+ $('#taskCaptureHome').append(sharedCapture);captureHint.textContent='提交作答照片或PDF，可同时补充老师参考答案。每份最多20MB。';$('#draftButton').classList.add('hide');$('#draftResult').innerHTML='';$('#draftStatus').textContent='';$('#uploadStatus').textContent='';
  $('#retryUpload').classList.add('hide');$('#discardFailed').classList.add('hide');$('#taskTranscript').value=record?.transcript||'';
  $('#taskTranscriptState').value=record?.transcript_state||'待核对';$('#taskTranscriptFields').hidden=!record?.transcript;
  $('#taskForm').elements.note.value=record?.note||'';$('#taskFeedbackStatus').textContent=record?'正在更正这条反馈，原件保留。':'';
  $('#taskAssistanceLabel').hidden=task.agenda?.category!=='homework';$('#taskAssistance').value=record?.assistance||'';
- $('#taskForm').elements.note.placeholder=task.agenda?.category==='homework'?'写下实际完成了什么、哪些题或词不确定、是独立完成还是有人提示，以及下次要核对什么。不要把播放次数当作掌握。':'例如：已打印，孩子还差最后两题订正。';
- $('#saveTaskFeedback').textContent=record?'保存反馈更正':'保存这次反馈';$('#taskFeedbackIntro').textContent=task.agenda?.category==='homework'?'拍下作答或写一句实际完成情况。保存后可核对 AI 批改；是否完成由你另行确认。':'记录这次实际进展，是否完成由你另行确认。';drawPending();drawTaskFeedback(task,recentId);taskFeedbackContext.initial=taskFeedbackDraftState();
+ $('#taskForm').elements.note.placeholder=task.agenda?.category==='homework'?'可写一句情况，也可以只上传孩子作答。':'例如：已打印，孩子还差最后两题订正。';
+ $('#saveTaskFeedback').textContent=record?'保存反馈更正':'保存这次反馈';$('#taskFeedbackIntro').textContent=task.agenda?.category==='homework'?'上传孩子作答，保存后检查答案。老师参考可一起上传。':'记录这次实际进展，是否完成由你另行确认。';drawPending();drawTaskFeedback(task,recentId);taskFeedbackContext.initial=taskFeedbackDraftState();
  if(recentId)requestAnimationFrame(()=>{if($('#taskDialog').open)$('#taskFeedbackHistory [data-homework-review="'+recentId+'"] summary')?.focus()});
+}
+function homeworkReviewSourceHTML(a,checked=false){
+ const pdf=a.mime==='application/pdf',text=a.mime==='text/plain';
+ return `<div class="homework-review-material" data-review-source="${esc(a.id)}"><label class="print-file-check"><input type="checkbox" data-homework-review-photo value="${esc(a.id)}" ${checked?'checked':''}><span>${esc(a.name)}</span></label><details class="homework-material-options"><summary>用途 / PDF页码</summary><label class="small">用途<select data-homework-review-role="${esc(a.id)}">${text?'':'<option value="question">试卷 / 孩子作答</option>'}<option value="reference">老师参考答案</option></select></label>${pdf?`<label class="small">检查页码 · 留空为全部<input data-homework-review-pages="${esc(a.id)}" placeholder="例如 1,2,3；每批合计最多8页" maxlength="80"></label>`:''}</details></div>`;
+}
+function homeworkReviewSelection(panel){
+ return [...panel.querySelectorAll('[data-homework-review-photo]:checked')].map(x=>{
+  const source={type:'upload',id:x.value},pages=panel.querySelector('[data-homework-review-pages="'+x.value+'"]')?.value.trim();
+  if(pages){if(!/^[1-9]\d*(?:\s*[,，]\s*[1-9]\d*)*$/.test(pages))throw Error('PDF页码请写成1,2,3，不能猜漏页');source.pages=pages.split(/[,，]/).map(Number)}
+  return {role:panel.querySelector('[data-homework-review-role="'+x.value+'"]')?.value||'question',source};
+ });
+}
+async function loadHomeworkReviewSources(panel,record,task){
+ const host=panel.querySelector('[data-homework-review-sources]');
+ try{
+  const response=await apiFetch('/api/print/homework/sources?task_id='+encodeURIComponent(task.id)+'&record_id='+record.id,{signal:AbortSignal.timeout(15000)}),out=await response.json();
+  if(!response.ok)throw Error(out.error||'老师资料暂时无法读取');if(!panel.isConnected)return;
+  if(out.created!==record.created)throw Error('原作答已更正，请重新打开');
+  if(!Array.isArray(out.sources))throw Error('资料回执无法核对');
+  const existing=new Set([...panel.querySelectorAll('[data-homework-review-photo]')].map(x=>x.value));
+  const extras=out.sources.filter(a=>/^[a-f0-9]{32}$/.test(a.id)&&!existing.has(a.id));
+  host.innerHTML=extras.map(a=>homeworkReviewSourceHTML(a)).join('')||'<p class="small muted">尚无其他已关联资料。可在下方上传老师参考并保存，再检查。</p>';
+ }catch(error){if(panel.isConnected)host.textContent=error.message+'；已保存的作答仍保留，可重开后重试。'}
 }
 function drawTaskFeedback(task,recentId=null){
  videoDraftSerial++;videoDraftViews.clear();videoReviewPending.clear();videoTranscripts.clear();
  const records=data.records.filter(r=>(r.source==='事项:'+task.id||r.linked_task_id===task.id)&&r.child===task.child);
  $('#taskFeedbackHistory').innerHTML=records.length?'<h3>已保存的作答与反馈</h3>'+records.map(r=>{
   const photos=(r.attachments||[]).map(id=>data.uploads.find(a=>a.id===id)).filter(a=>a&&['image/jpeg','image/png'].includes(a.mime));
-  const review=task.agenda?.category==='homework'&&r.source==='事项:'+task.id&&photos.length?`<section class="homework-feedback-review" data-homework-review="${r.id}"><details ${r.id===recentId?'open':''}><summary>检查这次作答 · AI 批改</summary><p class="small muted">选齐题目和最终作答：1–8张照片，共20MB以内。PDF参考暂不参与检查；看不清的题标为未判定。核对后保存，不自动标完成。</p>${photos.map(a=>`<label class="print-file-check"><input type="checkbox" data-homework-review-photo value="${esc(a.id)}" ${r.id===recentId&&photos.length===1?'checked':''}><span>${esc(a.name)}</span></label>`).join('')}<button type="button" data-homework-review-run="${r.id}">生成待核对批改</button><p class="small" role="status" data-homework-review-status></p><div data-homework-review-result></div></details></section>`:'';
+  const reviewFiles=(r.attachments||[]).map(id=>data.uploads.find(a=>a.id===id)).filter(a=>a&&['image/jpeg','image/png','application/pdf','text/plain'].includes(a.mime));
+  const review=task.agenda?.category==='homework'&&r.source==='事项:'+task.id&&reviewFiles.some(a=>a.mime!=='text/plain')?`<section class="homework-feedback-review" data-homework-review="${r.id}"><details ${r.id===recentId?'open':''}><summary>检查这次作答 · AI 批改</summary><p class="small muted">选孩子作答；有老师参考就选为“老师参考答案”。每批最多8页，缺题目仍可按清晰题号核对答案。</p>${reviewFiles.map(a=>homeworkReviewSourceHTML(a,r.id===recentId&&reviewFiles.length===1&&a.mime!=='text/plain')).join('')}<details><summary>已关联的老师试卷 / 参考答案</summary><div data-homework-review-sources></div></details><button type="button" data-homework-review-run="${r.id}">检查作答</button><p class="small" role="status" data-homework-review-status></p><div data-homework-review-result></div></details></section>`:'';
   const wrong=task.agenda?.category==='homework'&&r.source==='事项:'+task.id?`<details data-task-wrong-form="${r.id}"><summary>记这份作答的错题</summary><p class="small muted">可自己对照原题填写；不必再上传照片或调用 AI。记录会留在这份作业下，未判定的题先不要记为错题。</p>${photos.length?`<label>对应照片<select data-task-wrong-photo>${photos.map(a=>`<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('')}<option value="">不关联照片</option></select></label>`:''}<label>题号或位置<input data-wrong-field="label" maxlength="80"></label><label>题面（可选）<textarea data-wrong-field="text" maxlength="2000"></textarea></label><label>孩子原答<input data-wrong-field="answer" maxlength="1000"></label><label>核对后的答案或订正<input data-wrong-field="correction" maxlength="1000"></label><label>家长备注（可选）<textarea data-wrong-field="note" maxlength="1000"></textarea></label><button type="button" data-task-wrong-save="${r.id}">保存这条错题</button><p role="status" data-task-wrong-status></p></details>`:'';
   return `<article class="note"><p>${esc(r.day)} · ${esc(r.note||(r.transcript?'已保存语音转写':'已保存原件，内容待核对'))}</p>${r.assistance?`<p class="small muted">本次帮助：${esc(r.assistance)}</p>`:''}${r.transcript?`<p class="source">转写（${esc(r.transcript_state)}）：${esc(r.transcript)}</p>`:''}${review}${wrong}${photos.map(a=>uploadHTML(a,{collapsed:true})).join('')}${(r.attachments||[]).map(id=>data.uploads.find(a=>a.id===id)).filter(a=>a&&!photos.includes(a)).map(uploadHTML).join('')}${videoDraftPanelHTML(r)}${r.source==='事项:'+task.id?`<button type="button" data-task-feedback-edit="${r.id}">更正这条反馈</button>`:`<p class="small muted">关联记录 · ${esc(r.title)} · ${esc(r.source==='错题照片核对'?'作业错题':r.source)}</p><button type="button" data-record="${r.id}">查看 / 更正原记录</button>${r.source==='错题照片核对'?`<button type="button" data-followup="${r.id}" data-followup-kind="订正">记订正 / 复测</button>`:''}`}</article>`;
  }).join(''):'';
+ for(const panel of $('#taskFeedbackHistory').querySelectorAll('[data-homework-review]')){const record=records.find(r=>r.id===Number(panel.dataset.homeworkReview));loadHomeworkReviewSources(panel,record,task)}
 }
 $('#taskDialog').addEventListener('close',()=>{homeworkReviewSerial++});
 $('#taskFeedbackHistory').addEventListener('click',async e=>{
@@ -555,33 +580,33 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
  const panel=button.closest('[data-homework-review]'),recordId=Number(panel?.dataset.homeworkReview),record=data.records.find(r=>r.id===recordId),task=data.tasks.find(t=>t.id===taskFeedbackContext?.task_id);
  if(!panel||!record||!task||task.agenda?.category!=='homework'||record.child!==task.child||!(record.source==='事项:'+task.id||record.linked_task_id===task.id))return;
  const status=panel.querySelector('[data-homework-review-status]'),result=panel.querySelector('[data-homework-review-result]');
- const selectedIds=()=>[...panel.querySelectorAll('[data-homework-review-photo]:checked')].map(x=>x.value);
+ const selected=()=>homeworkReviewSelection(panel),selectedIds=()=>selected().map(x=>x.source.id);
  if(button.hasAttribute('data-homework-review-run')){
-  const ids=selectedIds();
-  if(!ids.length||ids.length>8){status.textContent='请按页序勾选1–8张题目与作答照片。';return}
-  if(ids.some(id=>!record.attachments.includes(id))){status.textContent='照片归属已变化，请重新打开这项作业。';return}
+  let selection;try{selection=selected()}catch(error){status.textContent=error.message;return}const ids=selection.map(x=>x.source.id);
+  if(!selection.some(x=>x.role==='question')||ids.length>8){status.textContent='请选择孩子作答或试卷；每批合计最多8页。';return}
   if(result.querySelector('textarea:not(:disabled)')?.value.trim()&&!confirm('重新生成会放弃当前未保存的批改草稿，确定继续？'))return;
   const serial=++homeworkReviewSerial;homeworkReviewBusy=true;button.disabled=true;result.replaceChildren();status.textContent='正在整理所选照片；不会自动保存、打印或改动完成状态…';
   try{
-   const out=await printPost('homework/draft',{purpose:'review',question_sources:ids.map(id=>({type:'upload',id}))},150000);
+   const out=await printPost('homework/draft',{purpose:'review',task_id:task.id,record_id:recordId,expected_created:record.created,question_sources:selection.filter(x=>x.role==='question').map(x=>x.source),reference_sources:selection.filter(x=>x.role==='reference').map(x=>x.source)},150000);
    if(serial!==homeworkReviewSerial||!$('#taskDialog').open)return;
-   if(JSON.stringify(ids)!==JSON.stringify(selectedIds())){status.textContent='所选照片已变化，请重新生成批改。';return}
+   if(JSON.stringify(selection)!==JSON.stringify(selected())){status.textContent='所选资料、用途或页码已变化，请重新检查。';return}
    if(typeof out.draft?.text!=='string'||!out.draft.text||out.draft.text.length>12000)throw Error('批改草稿回执不完整');
-   const label=document.createElement('label');label.textContent='逐题核对并修改批改意见';const area=document.createElement('textarea');area.maxLength=12000;area.rows=12;area.value=out.draft.text;label.append(area);result.append(label);
+   if(Array.isArray(out.draft.questions)){const summary=document.createElement('div');summary.className='homework-review-questions';summary.innerHTML=out.draft.questions.map(q=>`<details ${q.judgment!=='correct'?'open':''}><summary>${esc(q.label||'题号待核对')} · ${{correct:'与答案一致',incorrect:'需要订正',unknown:'未判定'}[q.judgment]||'未判定'}</summary><p>孩子作答：${esc(q.student_answer||'未能辨认')}</p><p>参考答案：${esc(q.answer||'需补充资料')}</p>${q.error_reason?`<p>${esc(q.error_reason)}</p>`:''}${q.uncertainty?`<p>${esc(q.uncertainty)}</p>`:''}${q.steps?`<details><summary>订正怎么做</summary><p>${esc(q.steps)}</p></details>`:''}</details>`).join('');result.append(summary)}
+   const edit=document.createElement('details'),label=document.createElement('label');edit.open=!Array.isArray(out.draft.questions);edit.innerHTML='<summary>查看 / 修改完整检查结果</summary>';label.textContent='检查意见';const area=document.createElement('textarea');area.maxLength=12000;area.rows=8;area.value=out.draft.text;label.append(area);edit.append(label);result.append(edit);
    const confirm=document.createElement('label');confirm.className='print-file-check';confirm.innerHTML='<input type="checkbox" data-homework-review-confirm><span>已对照原题和孩子最终作答核对；不确定项仍标为未判定</span>';result.append(confirm);
    const apply=document.createElement('button');apply.type='button';apply.dataset.homeworkReviewApply=String(recordId);apply.textContent='填入待保存反馈';result.append(apply);
-   result.dataset.photoIds=JSON.stringify(ids);result.dataset.recordCreated=record.created;status.textContent=`草稿共${out.draft.items}题，其中${out.draft.wrong_items}题疑似错误、${out.draft.unknown_items}题未判定；请逐题核对。`;
+   result.dataset.photoIds=JSON.stringify(ids);result.dataset.selection=JSON.stringify(selection);result.dataset.recordCreated=record.created;result.dataset.reviewBasis=JSON.stringify(out.review_basis||{record_id:recordId,created:record.created,photo_ids:ids});status.textContent=`${out.draft.items}题 · ${out.draft.wrong_items}题需订正 · ${out.draft.unknown_items}题未判定。`;
   }catch(error){if(serial===homeworkReviewSerial)status.textContent=(error.message||'批改暂不可用')+'；原反馈和照片已保存。结果不明时再次点击可能再次调用模型。'}
   finally{homeworkReviewBusy=false;if(serial===homeworkReviewSerial)button.disabled=false}
   return;
  }
  const area=result.querySelector('textarea'),confirmed=result.querySelector('[data-homework-review-confirm]');let ids;
  try{ids=JSON.parse(result.dataset.photoIds||'[]')}catch{ids=[]}
- if(!confirmed?.checked||!area?.value.trim()||area.value.length>12000||!ids.length||ids.some(id=>!record.attachments.includes(id))){status.textContent='请对照原题核对、保留不确定项后再填入。';return}
- if(JSON.stringify(ids)!==JSON.stringify(selectedIds())){status.textContent='所选照片已变化，请重新生成批改；原草稿保留。';return}
+ if(!confirmed?.checked||!area?.value.trim()||area.value.length>12000||!ids.length){status.textContent='请对照原题核对、保留不确定项后再填入。';return}
+ try{if(JSON.stringify(ids)!==JSON.stringify(selectedIds())||result.dataset.selection!==JSON.stringify(selected())){status.textContent='所选资料、用途或页码已变化，请重新检查；原草稿保留。';return}}catch(error){status.textContent=error.message;return}
  const f=$('#taskForm');if(f.elements.note.value.trim()||pendingIDs.length||$('#taskTranscript').value.trim()){status.textContent='当前还有未保存的反馈，请先保存或清空，再填入批改意见。';return}
  const inputState=taskFeedbackDraftState();
- const editing=[area,confirmed,...panel.querySelectorAll('[data-homework-review-photo]')];
+ const editing=[area,confirmed,...panel.querySelectorAll('[data-homework-review-photo],[data-homework-review-role],[data-homework-review-pages]')];
  homeworkReviewBusy=true;button.disabled=true;editing.forEach(x=>x.disabled=true);status.textContent='正在保存核对文字原件…';
  try{
   const file=new File([area.value.trim()+'\n'],'作业批改参考-'+recordId+'.txt',{type:'text/plain'}),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),120000);let upload;
@@ -591,7 +616,7 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
   data.uploads.unshift(upload.attachment);
   if(taskFeedbackDraftState()!==inputState)throw Error('反馈输入在上传期间已变化；核对文字已保存为原件，当前填写未覆盖');
   pendingIDs=[...ids,upload.attachment.id];drawPending();
-  taskFeedbackContext.review_basis={record_id:recordId,created:result.dataset.recordCreated,photo_ids:ids};
+  taskFeedbackContext.review_basis=JSON.parse(result.dataset.reviewBasis);
   f.elements.note.value='家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #'+recordId+'。';
   status.textContent='已填入待保存反馈；请点下方“保存反馈”。作业完成状态不会改变。';button.disabled=true;area.disabled=true;
  }catch(error){status.textContent=(error.name==='AbortError'?'文字原件上传超时':error.message||'文字原件未保存')+'；草稿仍在，可重试。';editing.forEach(x=>x.disabled=false);button.disabled=false}

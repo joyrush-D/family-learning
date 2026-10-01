@@ -149,3 +149,5 @@ body[data-page=home] .today-heading .toolbar{margin:0}
 @media(max-width:850px){.homework-children{grid-template-columns:1fr;gap:6px}.homework-child-heading{margin-top:14px}.task .tasktools>button{font-size:13px}.task .task-requirement,.school-review .school-requirements{font-size:15px}.task .checkrow{gap:0}.task .checkhit{width:44px;min-width:44px}.task .checkrow{grid-template-columns:44px minmax(0,1fr)}.today-heading>.toolbar{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:8px 0}.today-heading>.toolbar>button{padding:8px 5px;font-size:13px}}
 
 .homework-pending-heading{margin-top:20px;padding-top:16px;border-top:1px solid var(--line);color:var(--gold);font-size:14px}
+
+.homework-review-material{padding:.6rem 0;border-bottom:1px solid var(--line)}.homework-material-options{margin-left:2rem}.homework-review-questions>details{padding:.7rem 0;border-bottom:1px solid var(--line)}.homework-review-questions p{margin:.4rem 0}.today-plans>.calendar-timetable{margin-top:.6rem}

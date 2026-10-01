@@ -116,6 +116,22 @@ class HomeworkReportTests(unittest.TestCase):
             with self.assertRaises(family_study.StudyError):self.store.save_item(self.request(title='不应保存',report=bad))
         self.assertEqual(self.counts(),before)
 
+    def test_parent_pdf_material_is_saved_without_model_and_child_pdf_is_refused(self):
+        raw=b'%PDF-synthetic-parent-worksheet'
+        sheet=app.save_upload(io.BytesIO(raw),len(raw),'synthetic-sheet.pdf')['id']
+        body=self.request(title='虚构纸卷练习',report=dict(text='',explanation='',goal='完成第1题',attachments=[sheet]))
+        with patch.object(family_llm,'extract_draft',side_effect=AssertionError('manual PDF capture must not call a model')):
+            saved=self.store.save_item(body)
+            self.assertEqual(self.store.save_item(body)['saved_item_id'],saved['saved_item_id'])
+        self.assertEqual(saved['items'][0]['report']['attachments'],[sheet])
+        with app.connect() as c:
+            c.execute('INSERT INTO child_uploads VALUES (?,?)',(sheet,'child-1'))
+            c.execute('INSERT INTO reading_uploads VALUES (?,?)',(sheet,'child-1'))
+        before=self.counts()
+        with self.assertRaises((family_study.StudyError,family_child.ChildError)):
+            self.child('item',self.request(title='虚构孩子PDF',report=body['report']))
+        self.assertEqual(self.counts(),before)
+
     def test_recorded_homework_stays_homework_without_an_invented_deadline(self):
         for actor,title in [('parent','读三段并回答'),('child','读第二页并回答')]:
             body=self.request(title=title,report=self.report())
