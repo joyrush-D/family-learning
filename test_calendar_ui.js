@@ -142,7 +142,7 @@ test('today lists undated homework, excludes wishes, and inbox boxes retain the 
 test('task card puts completion goal before optional advice',()=>{
  const core=readFileSync(__dirname+'/app.js','utf8'),start=core.indexOf('function taskActionHTML'),end=core.indexOf('function taskHTML',start),ctx=vm.createContext({esc:escape,taskFocus:t=>t.focus,taskReviewDue:()=>false});
  vm.runInContext(core.slice(start,end),ctx);const html=ctx.taskActionHTML({action:'虚构成果目标',focus:{mode:'next',next_action:'虚构可选做法'}});
- assert.ok(html.indexOf('完成目标')<html.indexOf('操作建议'));assert.ok(html.indexOf('虚构成果目标')<html.indexOf('虚构可选做法'));
+ assert.ok(html.indexOf('要做什么')<html.indexOf('操作建议'));assert.ok(html.indexOf('虚构成果目标')<html.indexOf('虚构可选做法'));
 });
 
 test('today and inbox group legacy undated tasks without reopening closed items or showing future plans',()=>{
@@ -217,7 +217,7 @@ test('daily UI keeps collection navigation in inbox and pending notifications di
  const ctx=vm.createContext({data:{children:[{id:'child-a',name:'虚构孩子'}],tasks:[]},esc:escape,agendaDateHTML:h.ctx.agendaDateHTML,schoolOriginalButtons:()=>''});vm.runInContext(core.slice(start,end),ctx);
  const title='待核对：阅读要求\n'+('很长的虚构原通知。'.repeat(40)),item={id:'synthetic-school',kind:'school',child_id:'child-a',state:'pending',title,body:'请核对这条通知是否适用',evidence:[{text:'<script>unsafe</script>',ref:'synthetic:notice'}]};
  const html=ctx.agentItemHTML(item,{compact:true,agenda:{published_on:'2026-09-08'}});
- assert.match(html,/待核对通知/);assert.match(html,/<h3>阅读要求<\/h3>/);assert.match(html,/发布：2026-09-08/);assert.match(html,/data-agent-accept="synthetic-school"/);assert.doesNotMatch(html,/type="checkbox"|<script>/);assert.match(html,/&lt;script/);assert.ok(html.includes(escape(title)),'full source title is preserved in the original notification');
+ assert.match(html,/通知 · 有信息待补充/);assert.match(html,/<h3>阅读要求<\/h3>/);assert.match(html,/发布：2026-09-08/);assert.match(html,/data-agent-accept="synthetic-school"/);assert.doesNotMatch(html,/type="checkbox"|<script>/);assert.match(html,/&lt;script/);assert.ok(html.includes(escape(title)),'full source title is preserved in the original notification');
 });
 
 test('week overview includes every day, preserves child/status boundaries and deduplicates linked study',()=>{

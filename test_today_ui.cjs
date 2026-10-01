@@ -61,6 +61,8 @@ function fixtures(base){
     await p.goto(server.url,{waitUntil:'load'});await ready(p);await fit(p);
     const original=card('TODAY').locator(':scope > .checkrow .taskbody > .toolbar [data-school-original-ref]');assert(await original.isVisible(),'homework source is visible before expanding details');assert.match(await original.innerText(),/查看作业原件/);
     assert.deepEqual(await homework.locator('[data-today-task]').evaluateAll(xs=>xs.map(x=>x.dataset.todayTask).sort()),['SIBLING','TODAY']);
+    assert.equal(await homework.locator('[data-homework-child]').count(),2,'homework has a separate named group for each child');
+    for(const id of ['TODAY','SIBLING']){const task=state.tasks.find(t=>t.id===id);assert.equal(await card(id).locator('.task-owner').innerText(),task.child);assert.match(await card(id).locator('xpath=ancestor::*[@data-homework-child][1]').innerText(),new RegExp(task.child));assert.equal(await card(id).locator('.task-next').isVisible(),false,'optional advice stays secondary while full requirement is visible');assert.equal(await card(id).locator('.task-requirement').innerText(),task.action)}
     assert.deepEqual(await todos.locator('[data-today-task]').evaluateAll(xs=>xs.map(x=>x.dataset.todayTask)),[]);
     assert.match(await p.locator('.today-source-gap').innerText(),/学校消息来源读取未成功或待核对，今天作业可能缺项/);
     await p.locator('.today-source-gap [data-collection-check]').click();
@@ -106,7 +108,7 @@ function fixtures(base){
     const firstTask=card('TODAY'),position=await firstTask.locator('h3').boundingBox(),viewportHeight=await p.evaluate(()=>innerHeight);
     assert.ok(position&&position.y>=0&&position.y+position.height<viewportHeight-60,'first confirmed task stays on the first screen');
     assert.equal(await firstTask.locator('.task-requirement').isVisible(),true);assert.equal(await firstTask.locator('details .task-requirement').count(),0,'goal is not hidden');
-    assert.equal(await firstTask.locator('.tasktools [data-task]').first().innerText(),'提交作业反馈');assert.equal(await firstTask.locator('[data-study-task-add]').textContent(),'作业计时');assert.equal(await firstTask.locator('[data-task-decisions]').isVisible(),true);
+    assert.equal(await firstTask.locator('.tasktools [data-task]').first().innerText(),'提交作业反馈');assert.equal(await firstTask.locator('[data-study-task-add]').textContent(),'作业计时');assert.equal(await firstTask.locator('[data-task-decisions]').isVisible(),false);await firstTask.locator('.task-more > summary').click();assert.equal(await firstTask.locator('[data-task-decisions]').isVisible(),true);await firstTask.locator('.task-more > summary').click();
     assert.equal(await firstTask.locator('.checkhit,button:visible,summary:visible').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'44px actions');
     await p.locator('[data-child-filter="'+state.children[1].id+'"]').click();assert.equal(await card('SIBLING').isVisible(),true);assert.equal(await card('TODAY').count(),0);assert.equal(await p.locator('[data-agent-item]').count(),0);assert.equal(await shared.count(),1);
     await p.locator('[data-child-filter=""]').click();
@@ -268,7 +270,7 @@ function fixtures(base){
    const baseline=await read(),otherBefore=baseline.tasks.filter(t=>t.child===other.name),d=await browser.newPage({viewport:{width,height:820}}),dismissErrors=[],writes=[];
    d.on('pageerror',e=>dismissErrors.push(e.message));d.on('request',r=>{if(r.method()==='POST'&&new URL(r.url()).pathname==='/api/task')writes.push(r.postDataJSON())});
    const card=id=>d.locator('[data-query-target="task:'+id+'"]'),open=async id=>{
-    await d.locator('[data-task-decisions="'+id+'"]').click();await eventually(()=>d.locator('#taskDecisionDialog').isVisible(),'explicit task decision');
+    await d.locator('[data-query-target="task:'+id+'"] .task-more > summary').click();await d.locator('[data-task-decisions="'+id+'"]').click();await eventually(()=>d.locator('#taskDecisionDialog').isVisible(),'explicit task decision');
    },choose=async(status,note='')=>{
     await d.locator('#taskDecisionForm [name="status"][value="'+status+'"]').check();await d.locator('#taskDecisionForm [name="note"]').fill(note);
    },save=()=>d.locator('#taskDecisionForm [type="submit"]').click(),goTasks=async()=>{
