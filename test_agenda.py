@@ -103,7 +103,7 @@ class AgendaTest(unittest.TestCase):
         self.assertEqual(agenda.deadline('本周一交','2026-09-16'),'','a weekday already gone this week stays for review')
         notice='今天英语作业：抄写单词。本周五（09月18日）英语单元测验。另外下周一美术课请带一盒水彩笔。'
         self.assertEqual(agenda.deadline(notice,monday),'','several dated requirements need per-item dates')
-        self.assertEqual(agenda.deadlines(notice,monday),{'2026-09-18','2026-09-21'})
+        self.assertEqual(agenda.deadlines(notice,monday),{'2026-09-14','2026-09-18','2026-09-21'})
 
     def test_correction_and_legacy_focus_migration_preserve_deadline_original(self):
         self.organize()
