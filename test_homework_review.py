@@ -38,10 +38,10 @@ def run():
             paper=upload('synthetic-paper.pdf',b'%PDF-synthetic-paper')
             teacher_pdf=upload('synthetic-teacher.pdf',b'%PDF-synthetic-teacher')
             other=upload('synthetic-other.png',png(3))
-            task=app.new_task(dict(child='child-1',title='虚构试卷核对',category='homework',action='按题号核对',request_key='synthetic-homework-task-1'))
-            another=app.new_task(dict(child='child-2',title='虚构另一孩子作业',category='homework',request_key='synthetic-homework-task-2'))
-            app.save_task_feedback(dict(task_id=another['id'],child='child-2',day='2026-10-01',request_key='synthetic-other-feedback',attachments=[other]))
-            saved=app.save_task_feedback(dict(task_id=task['id'],child='child-1',day='2026-10-01',request_key='synthetic-answer-feedback',attachments=[answer,reference,teacher_pdf]))
+            task=app.new_task(dict(child='示例甲',title='虚构试卷核对',category='homework',action='按题号核对',request_key='synthetic-homework-task-1'))
+            another=app.new_task(dict(child='示例乙',title='虚构另一孩子作业',category='homework',request_key='synthetic-homework-task-2'))
+            app.save_task_feedback(dict(task_id=another['id'],child='示例乙',day='2026-10-01',request_key='synthetic-other-feedback',attachments=[other]))
+            saved=app.save_task_feedback(dict(task_id=task['id'],child='示例甲',day='2026-10-01',request_key='synthetic-answer-feedback',attachments=[answer,reference,teacher_pdf]))
             rid=saved['record_id'];created=saved['feedback']['created']
             source=lambda ident,**extra:dict(type='upload',id=ident,**extra)
             request=dict(purpose='review',task_id=task['id'],record_id=rid,expected_created=created,
@@ -93,7 +93,7 @@ def run():
             assert draft['questions'][0]['answer']=='教师参考：B'
             assert draft['unknown_items']==2 and draft['wrong_items']==0
             # Every material participates in the save guard, not just the answer photo.
-            feedback=dict(task_id=task['id'],child='child-1',day='2026-10-01',request_key='synthetic-reviewed-feedback',
+            feedback=dict(task_id=task['id'],child='示例甲',day='2026-10-01',request_key='synthetic-reviewed-feedback',
                           note='虚构已核对参考比较，原题要求待补',attachments=[answer,reference],review_basis=basis)
             with app.connect() as c: before='\n'.join(c.iterdump())
             (data/'uploads'/reference).write_bytes(b'1. C\n')
@@ -113,7 +113,7 @@ def run():
             reported=store.save_item(dict(child_id='child-1',day='2026-10-01',request_key='synthetic-reported-paper',version=0,
                 title='虚构电子试卷',subject='语文',planned_minutes=None,report=dict(text='',explanation='',goal='完成这份试卷',attachments=[paper])))
             report_task=reported['saved_item_id']
-            record=app.save_task_feedback(dict(task_id=report_task,child='child-1',day='2026-10-01',request_key='synthetic-report-answer',attachments=[answer]))
+            record=app.save_task_feedback(dict(task_id=report_task,child='示例甲',day='2026-10-01',request_key='synthetic-report-answer',attachments=[answer]))
             with app.connect() as c: ctx=app.homework_review_context(c,report_task,record['record_id'])
             assert ctx['allowed'][paper]['origin']=='reported_homework'
             # Byte-preserving guard rechecks role/order/page fingerprints without probing PDF tools.
@@ -130,8 +130,8 @@ def run():
                 c.execute('INSERT INTO agent_messages (source_id,id,payload) VALUES (?,?,?)',(school['id'],message['id'],json.dumps(message)))
                 c.execute('INSERT INTO agent_message_attachments VALUES (?,?,?)',(school['id'],message['id'],school_file))
             with patch.object(app.family_agent.Store,'_config',return_value=dict(enabled=True,sources=[school])):
-                school_task=app.new_task(dict(child='child-1',title='虚构学校原件复用',category='homework',source='message:synthetic-school:synthetic-message',request_key='synthetic-school-task'))
-                school_saved=app.save_task_feedback(dict(task_id=school_task['id'],child='child-1',day='2026-10-01',request_key='synthetic-school-answer',attachments=[answer]))
+                school_task=app.new_task(dict(child='示例甲',title='虚构学校原件复用',category='homework',source='message:synthetic-school:synthetic-message',request_key='synthetic-school-task'))
+                school_saved=app.save_task_feedback(dict(task_id=school_task['id'],child='示例甲',day='2026-10-01',request_key='synthetic-school-answer',attachments=[answer]))
                 with app.connect() as c: ctx=app.homework_review_context(c,school_task['id'],school_saved['record_id'])
                 assert ctx['allowed'][school_file]['origin']=='school' and not ctx['school_error']
                 school_request=dict(purpose='review',task_id=school_task['id'],record_id=school_saved['record_id'],expected_created=school_saved['feedback']['created'],
