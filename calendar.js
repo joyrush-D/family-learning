@@ -113,7 +113,7 @@ function todayTasksHTML(){
  const pendingAdmin=pendingNotices.filter(x=>x.agenda.category!=='homework'),latestNotice=new Map();
  for(const x of pendingAdmin)for(const id of x.child_ids||[])if(x.agenda.published_on>(latestNotice.get(id)||''))latestNotice.set(id,x.agenda.published_on);
  const recentNotices=pendingAdmin.filter(x=>(x.child_ids||[]).some(id=>x.agenda.published_on===latestNotice.get(id)));
- const actionItems=items.filter(x=>x.agenda.category!=='homework'&&(x.kind!=='school'||today.includes(x)||recentNotices.includes(x)));
+ const actionItems=items.filter(x=>x.agenda.category!=='homework'&&(!reviewDue(x)||today.includes(x))&&(x.kind!=='school'||today.includes(x)||recentNotices.includes(x)));
  const reviews=items.filter(x=>!today.includes(x)&&!actionItems.includes(x)&&reviewDue(x));
  const earlier=items.filter(x=>!today.includes(x)&&!recentHomework.includes(x)&&!actionItems.includes(x)&&!reviews.includes(x));
  const sources=currentSources().filter(s=>matches({child_ids:[s.child_id]}));

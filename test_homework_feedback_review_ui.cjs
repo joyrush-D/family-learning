@@ -53,7 +53,7 @@ async function server(){
   await printButton.click();assert.equal(keysPrint.length,2,'repeated click does not enqueue twice');
   await p.unroute('**/api/print/prepare');await p.unroute('**/api/print/enqueue');await p.locator('#taskForm [name=note]').fill('');
 
-  const wrong=p.locator('#taskFeedbackHistory [data-task-wrong-form]').first();await wrong.locator('summary').click();
+  const wrong=p.locator('#taskFeedbackHistory [data-task-wrong-form]').first();await wrong.locator(':scope > details > summary').click();
   await wrong.locator('[data-wrong-field="label"]').fill('第2题');await wrong.locator('[data-wrong-field="answer"]').fill('C');await wrong.locator('[data-wrong-field="correction"]').fill('B');
   p.once('dialog',d=>d.dismiss());await p.locator('#taskDialog [data-close="taskDialog"]').click();
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'unsaved wrong answer stays with homework');
@@ -93,7 +93,7 @@ async function server(){
   assert.equal(corrected.length,1,'lost receipt does not duplicate correction');assert.equal(corrected[0].linked_task_id,id,'correction stays on original homework');
   assert.equal(state.tasks.find(t=>t.id===id).update,null,'correction does not complete homework');
   await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskFeedbackHistory').getByText('孩子独立订正后仍需换题核对').waitFor();
-  const panel=p.locator('#taskFeedbackHistory [data-homework-review]').first();await panel.locator('summary').click();assert.equal(await panel.locator('details').evaluate(x=>x.open),true,'saved photo exposes review');assert.equal(await panel.locator('[data-homework-review-photo]').count(),1);
+  const panel=p.locator('#taskFeedbackHistory [data-homework-review]').first();await panel.locator(':scope > details > summary').click();assert.equal(await panel.locator('details').evaluate(x=>x.open),true,'saved photo exposes review');assert.equal(await panel.locator('[data-homework-review-photo]').count(),1);
   let calls=0;await p.route('**/api/print/homework/draft',r=>{calls++;const body=r.request().postDataJSON();assert.equal(body.question_sources.length,1);return calls===1?r.fulfill({status:503,json:{error:'虚构模型暂不可用'}}):r.fulfill({json:{draft:{text:'虚构第1题：卷面C，参考B；先找原文依据。',items:1,wrong_items:1,unknown_items:0,coverage:'仅此一页'},question_sha256:'a'.repeat(64)}})});
   assert.match(await p.locator('#taskTitle').innerText(),new RegExp(state.tasks.find(t=>t.id===id).child),'feedback keeps child context');assert.equal(await p.locator('#taskRequirement').innerText(),state.tasks.find(t=>t.id===id).action||'具体要求尚未填写');
   assert.ok((await p.locator('#taskFeedbackHistory h3').boundingBox()).y<(await p.locator('#taskFeedbackFormHeading').boundingBox()).y,'saved work appears before a new blank feedback');assert.equal(await p.locator('.task-saved-originals details').count(),0);assert.equal(await p.locator('.task-saved-originals').first().evaluate(x=>x.open),false,'large originals are available without burying check controls');
@@ -133,8 +133,8 @@ async function server(){
   const photo=records[0].attachments[0],review=records.find(r=>r.note.includes('批改参考'));assert(review.attachments.includes(photo));const report=review.attachments.find(a=>a!==photo);assert.equal(state.uploads.find(a=>a.id===report).mime,'text/plain; charset=utf-8');
   await p.keyboard.press('Escape');await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskFeedbackHistory').getByText('作业批改参考', {exact:false}).first().waitFor();
   const firstReview=p.locator('#taskFeedbackHistory [data-homework-review]').nth(0),otherReview=p.locator('#taskFeedbackHistory [data-homework-review]').nth(1);assert.equal(await p.locator('#taskFeedbackHistory [data-homework-review]').count(),2);
-  await firstReview.locator('details').evaluate(x=>x.open=true);await firstReview.locator('[data-homework-review-photo]').first().check();await firstReview.locator('[data-homework-review-run]').click();await firstReview.locator('[data-homework-review-result] textarea').waitFor();await firstReview.locator('[data-homework-review-result] textarea').fill('');
-  await otherReview.locator('details').evaluate(x=>x.open=true);await otherReview.locator('[data-homework-review-photo]').first().check();await otherReview.locator('[data-homework-review-run]').click();await otherReview.locator('[data-homework-review-result] textarea').waitFor();
+  await firstReview.locator(':scope > details').evaluate(x=>x.open=true);await firstReview.locator('[data-homework-review-photo]').first().check();await firstReview.locator('[data-homework-review-run]').click();await firstReview.locator('[data-homework-review-result] textarea').waitFor();await firstReview.locator('[data-homework-review-result] textarea').fill('');
+  await otherReview.locator(':scope > details').evaluate(x=>x.open=true);await otherReview.locator('[data-homework-review-photo]').first().check();await otherReview.locator('[data-homework-review-run]').click();await otherReview.locator('[data-homework-review-result] textarea').waitFor();
   await otherReview.locator('[data-homework-review-result] textarea').fill('另一份尚未保存的批改意见');
   await p.locator('#taskForm [name=note]').fill('另一条独立反馈');
   let savePrompted=false;const dismissSave=d=>{savePrompted=true;d.dismiss()};p.on('dialog',dismissSave);
@@ -163,7 +163,7 @@ async function server(){
   p.once('dialog',d=>d.accept());await p.keyboard.press('Escape');
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),false,'explicit discard closes');
   await p.locator('[data-task="'+id+'"]').first().click();
-  const finalReview=p.locator('#taskFeedbackHistory [data-homework-review]').first();await finalReview.locator('details').evaluate(x=>x.open=true);
+  const finalReview=p.locator('#taskFeedbackHistory [data-homework-review]').first();await finalReview.locator(':scope > details').evaluate(x=>x.open=true);
   await finalReview.locator('[data-homework-review-photo]').first().check();await finalReview.locator('[data-homework-review-run]').click();
   await finalReview.locator('[data-homework-review-result] textarea').waitFor();
   await finalReview.locator('[data-homework-review-result] textarea').fill('家长尚未采纳的独立批改草稿');
@@ -179,12 +179,12 @@ async function server(){
   await p.locator('#saveTaskFeedback').click();await eventually(async()=>/原作答已在别处更正/.test(await p.locator('#taskError').innerText()),'stale review rejected');
   state=await(await fetch(host.url+'api/state')).json();assert.equal(state.records.filter(r=>r.source==='事项:'+id).length,3,'rejected review leaves no new record');
   p.once('dialog',d=>d.accept());await p.locator('#taskDialog [data-close="taskDialog"]').click();await p.reload();await p.locator('[data-task="'+id+'"]').first().click();
-  const fresh=p.locator('#taskFeedbackHistory [data-homework-review="'+source.id+'"]');await fresh.locator('details').evaluate(x=>x.open=true);await fresh.locator('[data-homework-review-photo]').first().check();await fresh.locator('[data-homework-review-run]').click();await fresh.locator('[data-homework-review-result] textarea').waitFor();await fresh.locator('[data-homework-review-confirm]').check();await fresh.locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await fresh.innerText()),'fresh review staged');await p.locator('#saveTaskFeedback').click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'fresh review saved');
+  const fresh=p.locator('#taskFeedbackHistory [data-homework-review="'+source.id+'"]');await fresh.locator(':scope > details').evaluate(x=>x.open=true);await fresh.locator('[data-homework-review-photo]').first().check();await fresh.locator('[data-homework-review-run]').click();await fresh.locator('[data-homework-review-result] textarea').waitFor();await fresh.locator('[data-homework-review-confirm]').check();await fresh.locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await fresh.innerText()),'fresh review staged');await p.locator('#saveTaskFeedback').click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'fresh review saved');
   state=await(await fetch(host.url+'api/state')).json();assert.equal(state.records.filter(r=>r.source==='事项:'+id).length,4,'fresh review links to corrected answer');
   const textOnly=state.records.find(r=>r.note==='虚构另一条实际反馈'),textWrong=p.locator('#taskFeedbackHistory [data-task-wrong-form="'+textOnly.id+'"]');
-  await textWrong.locator('summary').click();assert.equal(await textWrong.locator('[data-task-wrong-photo]').count(),0,'written feedback does not require a photo');
+  await textWrong.locator(':scope > details > summary').click();assert.equal(await textWrong.locator('[data-task-wrong-photo]').count(),0,'written feedback does not require a photo');
   await textWrong.locator('[data-wrong-field="label"]').fill('第3个词');await textWrong.locator('[data-wrong-field="answer"]').fill('窗处');await textWrong.locator('[data-wrong-field="correction"]').fill('窗外');
-  const otherWrong=p.locator('#taskFeedbackHistory [data-task-wrong-form="'+source.id+'"]');await otherWrong.locator('summary').click();await otherWrong.locator('[data-wrong-field="label"]').fill('另一份未保存草稿');
+  const otherWrong=p.locator('#taskFeedbackHistory [data-task-wrong-form="'+source.id+'"]');await otherWrong.locator(':scope > details > summary').click();await otherWrong.locator('[data-wrong-field="label"]').fill('另一份未保存草稿');
   await textWrong.locator('[data-task-wrong-save]').click();assert.match(await textWrong.innerText(),/另一份作答还有未保存的错题/);
   await otherWrong.locator('[data-wrong-field="label"]').fill('');
   await textWrong.locator('[data-task-wrong-save]').click();await eventually(async()=>/错题已保存在这份作业下/.test(await p.locator('#taskFeedbackStatus').innerText()),'manual text-only wrong item saved');
@@ -197,7 +197,7 @@ async function server(){
   const pdfUpload=await fetch(host.url+'api/upload',{method:'POST',headers:{'X-Family-Token':state.token,'X-File-Name':'synthetic-teacher-reference.pdf','Content-Type':'application/octet-stream'},body:pdf});assert.equal(pdfUpload.status,200);const reference=(await pdfUpload.json()).attachment.id;
   const original=await fetch(host.url+'api/task/feedback',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify({task_id:id,child,day:state.today,request_key:'synthetic-complete-review-'+width,attachments:[...photos,reference],note:'虚构完整题目与独立作答'})});assert.equal(original.status,200);const originalRecord=(await original.json()).record_id;
   await p.reload();await p.locator('[data-task="'+id+'"]').first().click();
-  const whole=p.locator('#taskFeedbackHistory [data-homework-review="'+originalRecord+'"]');await whole.locator('summary').click();
+  const whole=p.locator('#taskFeedbackHistory [data-homework-review="'+originalRecord+'"]');await whole.locator(':scope > details > summary').click();
   assert.equal(await whole.locator('[data-homework-review-photo]').count(),5);assert.match(await whole.innerText(),/PDF参考暂不参与检查/);
   for(const photo of photos)await whole.locator('[data-homework-review-photo][value="'+photo+'"]').check();
   let completeCalls=0;await p.route('**/api/print/homework/draft',r=>{const body=r.request().postDataJSON();assert.equal(body.purpose,'review');assert.deepEqual(body.question_sources.map(x=>x.id),photos);completeCalls++;return completeCalls===1?r.fulfill({status:503,json:{error:'虚构完整批改暂不可用'}}):r.fulfill({json:{draft:{text:'虚构：第1题表达不完整，缺少题目要求的具体特点；参考PDF未参与。',items:1,wrong_items:1,unknown_items:0,coverage:'五张所选照片；参考PDF未参与'},question_sha256:'b'.repeat(64)}})});
