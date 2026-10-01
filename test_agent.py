@@ -114,6 +114,23 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(row['body'],ready['goal']);self.assertIn('早于今天',json.loads(row['plan'])['school_task']['reason'])
             self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
 
+    def test_unknown_send_date_or_changed_deadline_never_auto_adopts_school_material(self):
+        ident,keys,_=self._prepared_school_image(native=True)
+        ready=dict(title='英语：朗读',goal='朗读Unit 2两遍',advice='',state='ready',reason='',purpose='learning',submission='',change='new',target_id='')
+        with self.store._db() as c:
+            c.execute("UPDATE agent_items SET due='2026-02-11' WHERE id=?",(ident,))
+            draft=json.loads(c.execute('SELECT payload FROM agent_message_drafts').fetchone()[0]);draft['note']='英语：今天提交朗读。'
+            c.execute('UPDATE agent_message_drafts SET payload=?',(json.dumps(draft),))
+        with patch.object(agent.family_llm,'_chat_json',return_value=ready):
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1)['created'],0)
+        with self.store._db() as c:
+            brief=json.loads(c.execute('SELECT plan FROM agent_items WHERE id=?',(ident,)).fetchone()[0])['school_task']
+            self.assertIn('日期不同',brief['reason']);self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
+        # A complete interpretation cannot establish when an undated original was published.
+        evidence=[dict(ref='message:s:1',kind='text',time='',unread=True,text='[图片原件：1份，内容未读]')]
+        with patch.object(agent,'_school_material',return_value=(evidence,[])),patch.object(agent,'_school_current',return_value=True),patch.object(agent,'_school_drafts',return_value=dict(fingerprint='new',refs=['message:s:1'],complete_refs=['message:s:1'],uncertainties=[],model=[dict(ref='message:s:1',draft=dict(title='英语',note='2026-02-10前提交朗读',uncertainties=[]))])),patch.object(agent.family_llm,'_chat_json',return_value=ready):
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1)['created'],0)
+
     def test_all_pending_notices_remain_actionable_after_backfill(self):
         with self.app.connect() as c:
             rows=[(f'notice-{n}',f'job-{n}',f'child-{n%2+1}','school',f'虚构通知 {n}','请家长核对','[]','','pending',

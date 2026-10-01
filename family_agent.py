@@ -1576,11 +1576,14 @@ def _refresh_school(app, store, now, budget):
                 if pdf_evidence: brief.setdefault('pdf_evidence',dict(fingerprint=pdf_key,documents=pdf_evidence['documents']))['candidate']=candidate
                 if material: brief.setdefault('material_evidence',dict(fingerprint=material_key))
                 due=row['due']
-                if material and brief['state']=='ready' and not due:
+                if material and brief['state']=='ready':
                     import family_agenda
                     stamps={e['ref']:family_agenda.sent_day(e.get('time')) for e in evidence}
                     dates=set().union(*(family_agenda.deadlines(e['draft']['note'],stamps.get(e['ref'],'')) for e in material['model']))
-                    if len(dates)==1: due=next(iter(dates))
+                    if len(dates)==1:
+                        resolved=next(iter(dates))
+                        if due and due!=resolved: brief.update(state='review',reason='原件完成日期与已有事项日期不同，日期对应关系待补充；已读要求保留。')
+                        else: due=resolved
                     elif len(dates)>1: brief.update(state='review',reason='原件包含不同完成日期，各项日期对应关系待补充；已读要求保留。')
                 if not _keeps_learning(brief): plan.pop('school_learning',None)
                 plan['school_task']=brief
@@ -1596,10 +1599,10 @@ def _refresh_school(app, store, now, budget):
                     row['updated']=updated;row['due']=due
             except (family_llm.LLMDraftError,AgentError,ValueError) as error:
                 store._fail(key,now,fingerprint=fp,reason=error);failed+=1;continue
-        if material and brief.get('state')=='ready' and not row['due']:
+        if material and brief.get('state')=='ready':
             import family_agenda
             published=[family_agenda.sent_day(e.get('time')) for e in evidence]
-            if any(not day or day<now.date().isoformat() for day in published):
+            if any(not day for day in published) or not row['due'] and any(day<now.date().isoformat() for day in published):
                 brief.update(state='review',reason='原消息的发布日期不明或早于今天，是否仍需完成待补充；已读要求保留。');plan['school_task']=brief
                 with store._db() as c:
                     c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=?",(_json(plan),row['id'],row['updated']))
