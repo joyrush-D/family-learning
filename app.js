@@ -559,8 +559,8 @@ async function loadHomeworkReviewSources(panel,record,task){
   if(out.created!==record.created)throw Error('原作答已更正，请重新打开');
   if(!Array.isArray(out.sources))throw Error('资料回执无法核对');
   const existing=new Set([...panel.querySelectorAll('[data-homework-review-photo]')].map(x=>x.value));
-  const extras=out.sources.filter(a=>/^[a-f0-9]{32}$/.test(a.id)&&!existing.has(a.id));
-  host.innerHTML=extras.map(a=>homeworkReviewSourceHTML(a)).join('')||'<p class="small muted">尚无其他已关联资料。可在下方上传老师参考并保存，再检查。</p>';
+  const extras=out.sources.filter(a=>/^[a-f0-9]{32}$/.test(a.id)&&(['image/jpeg','image/png','image/webp','application/pdf'].includes(a.mime)||homeworkReviewReferenceFile(a))&&!existing.has(a.id));
+  host.innerHTML=(out.school_error?'<p class="small">'+esc(out.school_error)+'</p>':'')+(extras.map(a=>homeworkReviewSourceHTML(a)).join('')||'<p class="small muted">尚无其他已关联资料。可在下方上传老师参考并保存，再检查。</p>');
  if(homeworkReviewBusy)for(const control of host.querySelectorAll('input,select'))control.disabled=true;
  }catch(error){if(panel.isConnected)host.textContent=error.message+'；已保存的作答仍保留，可重开后重试。'}
 }
