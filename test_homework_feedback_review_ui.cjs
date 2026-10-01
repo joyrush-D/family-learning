@@ -207,7 +207,59 @@ async function server(){
   if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await whole.locator('[data-homework-review-result]').scrollIntoViewIfNeeded();await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'complete-review-'+width+'.png')})}
   await whole.locator('[data-homework-review-confirm]').check();await whole.locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await whole.innerText()),'five-image review staged');await p.locator('#saveTaskFeedback').click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'five-image basis feedback saved');
   state=await(await fetch(host.url+'api/state')).json();const full=state.records.find(r=>r.note.includes('原作答反馈 #'+originalRecord+'。'));assert(full&&photos.every(x=>full.attachments.includes(x)));assert(!full.attachments.includes(reference),'unused teacher PDF is not claimed as grading basis');assert.equal(state.printing.jobs.length,0,'checking homework never prints');
-  await p.reload();await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskFeedbackHistory').getByText('原作答反馈 #'+originalRecord+'。',{exact:false}).waitFor();assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);assert.deepEqual(errors,[]);await p.close();
+  await p.reload();await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskFeedbackHistory').getByText('原作答反馈 #'+originalRecord+'。',{exact:false}).waitFor();assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);assert.deepEqual(errors,[]);
+  await p.unroute('**/api/print/homework/draft');
+  // Reuse saved synthetic answers and their sibling PDF; no extra records affect the checks above.
+  const delayedRecords=[source.id,full.id],sourcesPattern='**/api/print/homework/sources?**';
+  for(const outcome of ['failure','success']){
+   const sourceGates=new Map();let releaseDraft,releaseUpload,lateCalls=0,uploadPending=false;
+   const draftGate=new Promise(resolve=>releaseDraft=resolve),uploadGate=new Promise(resolve=>releaseUpload=resolve);
+   await p.route(sourcesPattern,async route=>{
+    const recordId=Number(new URL(route.request().url()).searchParams.get('record_id'));
+    if(!delayedRecords.includes(recordId))return route.continue();
+    const response=await route.fetch(),value=await response.json();
+    assert(value.sources.some(a=>a.id===reference),'both saved answers can reuse the sibling teacher PDF');
+    await new Promise(resolve=>sourceGates.set(recordId,resolve));await route.fulfill({response,json:value});
+   });
+   await p.route('**/api/print/homework/draft',async route=>{
+    const body=route.request().postDataJSON();assert.equal(body.record_id,source.id);assert.equal(body.question_sources.length,1);assert.deepEqual(body.reference_sources,[]);lateCalls++;
+    await draftGate;
+    return outcome==='failure'?route.fulfill({status:503,json:{error:'虚构迟到资料检查失败'}}):route.fulfill({json:{draft:{text:'虚构迟到资料检查成功；本次仅核对原作答。',items:1,wrong_items:0,unknown_items:1,coverage:'仅此一页'},question_sha256:'e'.repeat(64)}});
+   });
+   if(outcome==='success')await p.route('**/api/upload',async route=>{uploadPending=true;await uploadGate;await route.continue()});
+   try{
+    await p.reload();await p.locator('[data-task="'+id+'"]').first().click();
+    const latePanels=delayedRecords.map(recordId=>p.locator('#taskFeedbackHistory [data-homework-review="'+recordId+'"]'));
+    for(const latePanel of latePanels){await latePanel.locator(':scope > details').evaluate(x=>x.open=true);await latePanel.locator('[data-homework-review-sources]').evaluate(x=>x.parentElement.open=true)}
+    await eventually(async()=>sourceGates.size===2,'both source responses held before generation');
+    const originalChoice=latePanels[0].locator(' :scope > details > .homework-review-material [data-homework-review-photo]').first();
+    await originalChoice.check();await latePanels[0].locator('[data-homework-review-run]').click();await eventually(async()=>lateCalls===1,'generation started before sources return');
+    sourceGates.get(source.id)();if(outcome==='failure')sourceGates.get(full.id)();
+    const returnedPanels=outcome==='failure'?latePanels:[latePanels[0]];
+    for(const latePanel of returnedPanels)await latePanel.locator('[data-homework-review-sources] [data-review-source="'+reference+'"]').waitFor();
+    assert.equal(await latePanels[0].locator('[data-homework-review-run]').isDisabled(),true,'source responses arrive while generation is still pending');
+    releaseDraft();await eventually(async()=>await latePanels[0].locator('[data-homework-review-run]').isEnabled(),'generation releases busy controls after '+outcome);
+    const reviewText=latePanels[0].locator('[data-homework-review-result] textarea');
+    if(outcome==='failure'){assert.match(await latePanels[0].innerText(),/虚构迟到资料检查失败/);assert.equal(await reviewText.count(),0)}else{await reviewText.waitFor();await reviewText.fill('虚构：迟到资料恢复后仍保留已编辑批改草稿')}
+    const checkEditable=async latePanel=>{
+     const material=latePanel.locator('[data-homework-review-sources] [data-review-source="'+reference+'"]'),choice=material.locator('[data-homework-review-photo]'),role=material.locator('[data-homework-review-role]'),pages=material.locator('[data-homework-review-pages]');
+     for(const control of [choice,role,pages])assert.equal(await control.isEnabled(),true,'late source controls restored after '+outcome);
+     await choice.check();await material.locator('details').evaluate(x=>x.open=true);await role.selectOption('reference');await pages.fill('1');
+     assert.equal(await choice.isChecked(),true);assert.equal(await role.inputValue(),'reference');assert.equal(await pages.inputValue(),'1');await choice.uncheck();
+    };
+    for(const latePanel of returnedPanels)await checkEditable(latePanel);
+    if(outcome==='success'){
+     await latePanels[0].locator('[data-homework-review-confirm]').check();await latePanels[0].locator('[data-homework-review-apply]').click();await eventually(async()=>uploadPending,'review text upload started before sibling sources return');
+     sourceGates.get(full.id)();const siblingMaterial=latePanels[1].locator('[data-homework-review-sources] [data-review-source="'+reference+'"]');await siblingMaterial.waitFor();
+     assert.equal(await siblingMaterial.locator('[data-homework-review-photo]').isDisabled(),true,'sibling source freezes during review text upload');
+     releaseUpload();await eventually(async()=>/请点下方/.test(await latePanels[0].innerText()),'review text upload completed');await checkEditable(latePanels[1]);
+    }
+    assert.equal(await originalChoice.isChecked(),true,'late sources keep the selected original answer');
+    if(outcome==='success'){assert.equal(await reviewText.inputValue(),'虚构：迟到资料恢复后仍保留已编辑批改草稿');p.once('dialog',d=>d.accept())}
+    await p.locator('#taskDialog [data-close="taskDialog"]').click();assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),false);
+   }finally{releaseDraft();releaseUpload();for(const release of sourceGates.values())release();await p.unroute(sourcesPattern);await p.unroute('**/api/print/homework/draft');if(outcome==='success')await p.unroute('**/api/upload')}
+  }
+  assert.deepEqual(errors,[]);await p.close();
  }
  console.log('Homework feedback AI review: 360/1440 save, retry, reopen, task status and source preserved');
 }finally{await browser?.close();await host?.stop()}})().catch(e=>{console.error(e);process.exitCode=1});
