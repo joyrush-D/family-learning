@@ -191,3 +191,5 @@ body[data-page=sources] .source-cards{grid-template-columns:1fr}
 
 /* Daily resources and the latest saved check are readable without disclosure layers. */
 .task-material-summary h4,.task-web-material h4,.task-record-files h4{margin:12px 0 6px;font-size:14px}.task-material-text{max-height:22rem;overflow:auto;white-space:pre-wrap}.task-record-files{margin:10px 0;font-size:12px}.task-record-files .upload-item{margin:4px 0;padding:4px 0;border:0}.task-record-files .upload-item img{max-height:140px;width:auto;max-width:100%}.task-file-link{margin:4px 0}.task-record-files a{overflow-wrap:anywhere}.task-feedback-record>section[data-saved-homework-review]{margin:8px 0}
+
+.task-feedback-record>summary{font-size:13px;padding:8px 0}.homework-question{padding:10px 0;border-bottom:1px solid var(--line)}.homework-question h4,.homework-other-material h4{margin:8px 0;font-size:14px}
