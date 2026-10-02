@@ -180,3 +180,5 @@ body[data-page=home] main,body[data-page=tasks] main{max-width:1120px}
 .task-list>.small{margin:10px 0}.today-source-gap{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;font-size:12px}
 .task-list .task-goal{border-left:0;padding-left:0}.task-list .task-goal>.small{display:none}
 body[data-page=sources] .source-cards{grid-template-columns:1fr}
+
+[data-saved-review-text]{max-height:26rem;overflow:auto;color:var(--ink);font-size:14px;line-height:1.7}

@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from email.message import Message
 from unittest.mock import patch
 
 import family_llm
@@ -361,6 +362,81 @@ def run():
                     refused(lambda:app.homework_review_draft(framed_request|dict(previous_sources=[source(ident)])))
                     assert dump()==before,'invalid framed history must not write a result'
                 assert model.call_count==0,'invalid lengths are rejected before any model call'
+            # Reopening is a bounded read of the parent's saved text, never a reconstruction of AI judgments.
+            def preview_record(text,key,extra=(),**changes):
+                ident=upload(review_name,text.encode('utf-8'))
+                saved=app._save_record(dict(child='示例甲',day='2026-10-02',category='学习进展',title='虚构保存检查回看',
+                    source='事项:'+recheck_task['id'],note='虚构家长核对后的文字',attachments=[ident,*extra],
+                    related_record_id=original_id,followup_kind='作业检查',request_key=key)|changes,False,{})
+                return saved['record_id'],ident
+            def preview(ident,task_id=recheck_task['id']):
+                with patch.object(app,'connect',side_effect=AssertionError('preview must use the read-only connection')):
+                    return app.homework_saved_review(task_id,ident)
+            def preview_get(query,child=False):
+                handler=object.__new__(app.Handler);handler.command='GET';handler.path='/api/print/homework/saved-review?'+query
+                handler.client_address=('127.0.0.1',0);handler.headers=Message();handler.headers['Host']='127.0.0.1'
+                if child: handler.headers['X-Child-CSRF']='synthetic-child-token'
+                replies=[];handler.reply=lambda status,body,*args,**kwargs:replies.append((status,body))
+                with patch.object(app,'connect',side_effect=AssertionError('preview route must remain read-only')):
+                    handler.do_GET()
+                assert len(replies)==1
+                return replies[0]
+            edited='家长更正：第1题仍未判定，不能按旧AI卡片判对。🙂 e\u0301\n此前检查草稿（仅供对照，不是教师参考）：\n这句也是家长本轮原文。'
+            archived='旧AI意见：第1题与答案一致。'
+            framed_edited='作业检查保存格式 v1\n最新检查字数：'+str(len(edited))+'\n'+edited+'\n\n此前检查草稿（仅供对照，不是教师参考）：\n'+archived+'\n'
+            preview_id,preview_txt=preview_record(framed_edited,'synthetic-saved-preview')
+            with patch.object(family_llm,'_chat_json') as model:
+                before=dump();view=preview(preview_id)
+                assert view==dict(task_id=recheck_task['id'],record_id=preview_id,created=view['created'],original_record_id=original_id,text=edited,has_archived=True)
+                assert archived not in view['text'] and 'judgment' not in view and dump()==before
+                query='task_id='+recheck_task['id']+'&record_id='+str(preview_id)
+                before=dump();assert preview_get(query)==(200,view);assert preview_get(query,child=True)[0]==403;assert dump()==before
+                for invalid_query in ('record_id='+str(preview_id),query+'&record_id='+str(preview_id),query+'&extra=1','task_id='+recheck_task['id']+'&record_id=-1'):
+                    before=dump();assert preview_get(invalid_query)[0]==400;assert dump()==before
+                plain_id,_=preview_record(edited,'synthetic-saved-plain-preview')
+                before=dump();assert preview(plain_id)['text']==edited and not preview(plain_id)['has_archived'];assert dump()==before
+                empty_archive='作业检查保存格式 v1\n最新检查字数：'+str(len(edited))+'\n'+edited+'\n'
+                empty_id,_=preview_record(empty_archive,'synthetic-saved-empty-archive')
+                before=dump();assert preview(empty_id)['text']==edited and not preview(empty_id)['has_archived'];assert dump()==before
+                before=dump();legacy_view=preview(r155_saved['record_id'],task['id'])
+                assert legacy_view['text']==legacy_text and legacy_view['original_record_id']==rid and not legacy_view['has_archived'];assert dump()==before
+                for ident,task_id in ((preview_id,task['id']),(preview_id,another['id']),(original_id,recheck_task['id'])):
+                    rejected_unchanged(lambda ident=ident,task_id=task_id:preview(ident,task_id),'review_source_not_allowed',403)
+                rejected_unchanged(lambda:preview(9223372036854775807),'not_found',404)
+                name_only,_=preview_record('虚构只有文件名不能认作检查','synthetic-preview-name-only',followup_kind='',related_record_id=None)
+                rejected_unchanged(lambda:preview(name_only),'review_source_not_allowed',403)
+                note_only=app._save_record(dict(child='示例甲',day='2026-10-02',category='学习进展',title='虚构只有旧模板',
+                    source='事项:'+recheck_task['id'],note=review_note,attachments=[],request_key='synthetic-preview-note-only'),False,{})['record_id']
+                rejected_unchanged(lambda:preview(note_only),'review_source_not_allowed',403)
+                reused=app._save_record(dict(child='示例甲',day='2026-10-02',category='学习进展',title='虚构仅携带上一轮',
+                    source='事项:'+recheck_task['id'],note='虚构检查记录',attachments=[preview_txt],related_record_id=original_id,
+                    followup_kind='作业检查',request_key='synthetic-preview-reused-txt'),False,{})['record_id']
+                rejected_unchanged(lambda:preview(reused),status=None)
+                duplicate=upload(review_name,b'Synthetic second result')
+                ambiguous,_=preview_record('虚构两份本轮文字','synthetic-preview-ambiguous',[duplicate])
+                rejected_unchanged(lambda:preview(ambiguous),status=None)
+                for n,text in enumerate(invalid_frames+['字'*12001]):
+                    invalid,_=preview_record(text,'synthetic-preview-invalid-'+str(n))
+                    rejected_unchanged(lambda invalid=invalid:preview(invalid),status=None)
+                path=data/'uploads'/preview_txt;body=path.read_bytes()
+                for changed in (b'\xff'+body[1:],b'\x00'+body[1:],body+b'changed'):
+                    path.write_bytes(changed);rejected_unchanged(lambda:preview(preview_id),status=None)
+                path.write_bytes(body)
+                backup=path.with_suffix('.saved');path.rename(backup)
+                rejected_unchanged(lambda:preview(preview_id),'file_unavailable',404)
+                path.symlink_to(backup);rejected_unchanged(lambda:preview(preview_id),status=None);path.unlink();backup.rename(path)
+                uploads=data/'uploads';moved=data/'moved-uploads';uploads.rename(moved);uploads.symlink_to(moved,target_is_directory=True)
+                rejected_unchanged(lambda:preview(preview_id),status=None);uploads.unlink();moved.rename(uploads)
+                with app.connect() as c: c.execute('UPDATE records SET child=? WHERE id=?',('示例乙',preview_id))
+                rejected_unchanged(lambda:preview(preview_id),'review_source_not_allowed',403)
+                with app.connect() as c: c.execute('UPDATE records SET child=? WHERE id=?',('示例甲',preview_id))
+                missing_db=data/'missing-preview.sqlite3'
+                with patch.object(app,'DB',missing_db):
+                    try: preview(preview_id)
+                    except app.sqlite3.OperationalError: pass
+                    else: raise AssertionError('an absent database must not be initialized by a preview')
+                assert not missing_db.exists()
+                assert model.call_count==0,'saved text preview must never call a model'
     print('homework review synthetic checks passed')
 
 

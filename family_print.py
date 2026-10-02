@@ -115,6 +115,25 @@ def _read_file(path, limit):
     return data
 
 
+def review_text(value, *, saved=False):
+    """Saved parent text stays text; only the product's length frame is interpreted."""
+    try: text=value.decode('utf-8-sig') if isinstance(value,bytes) else value
+    except UnicodeError: raise PrintError('参考或先前检查文字无法安全完整读取') from None
+    if not isinstance(text,str) or any(ord(ch)<32 and ch not in '\n\r\t' or ord(ch)==127 for ch in text):
+        raise PrintError('参考或先前检查文字无法安全完整读取')
+    archived=False
+    if saved and text.startswith('作业检查保存格式 v1'):
+        header=re.match(r'\A作业检查保存格式 v1\n最新检查字数：([1-9][0-9]{0,4})\n',text)
+        if header is None: raise PrintError('保存检查的最新文字范围无法核对')
+        size=int(header.group(1));content=text[header.end():]
+        if size>12000 or len(content)<size+1 or content[size]!='\n':
+            raise PrintError('保存检查的最新文字范围无法核对')
+        text=content[:size];archived=bool(content[size+1:].strip())
+    if not text.strip() or len(text)>12000:
+        raise PrintError('参考或先前检查文字须清晰完整且最多12000字，请分批核对')
+    return dict(text=text,has_archived=archived)
+
+
 def _jpeg(data):
     if not data.startswith(b'\xff\xd8') or not data.endswith(b'\xff\xd9'):
         raise PrintError('JPEG内容不完整')
@@ -448,20 +467,12 @@ class PrintStore:
                 image_count+=1
                 coverage.append('%s《%s》：本次读取整张照片。'%('教师参考' if item['role']=='reference' else '题目/孩子作答',item['name']))
             elif item['role'] in ('reference','previous') and (mime.startswith('text/plain') or item['role']=='reference' and mime==family_media.DOCX_MIME):
-                try: text=family_media.docx_text(body) if mime==family_media.DOCX_MIME and render else body.decode('utf-8-sig') if mime.startswith('text/plain') else None
+                try: text=family_media.docx_text(body) if mime==family_media.DOCX_MIME and render else body if mime.startswith('text/plain') else None
                 except (UnicodeError,MediaError): raise PrintError('参考或先前检查文字无法安全完整读取') from None
                 archived=False
                 if text is not None:
-                    if any(ord(ch)<32 and ch not in '\n\r\t' or ord(ch)==127 for ch in text):
-                        raise PrintError('参考或先前检查文字无法安全完整读取')
-                    if item['role']=='previous' and allowed[item['source']['id']].get('origin')=='review_result' and text.startswith('作业检查保存格式 v1'):
-                        header=re.match(r'\A作业检查保存格式 v1\n最新检查字数：([1-9][0-9]{0,4})\n',text)
-                        if header is None: raise PrintError('保存检查的最新文字范围无法核对')
-                        size=int(header.group(1));content=text[header.end():]
-                        if size>12000 or len(content)<size+1 or content[size]!='\n': raise PrintError('保存检查的最新文字范围无法核对')
-                        text=content[:size];archived=True
-                    if not text.strip() or len(text)>12000:
-                        raise PrintError('参考或先前检查文字须清晰完整且最多12000字，请分批核对')
+                    parsed=review_text(text,saved=item['role']=='previous' and allowed[item['source']['id']].get('origin')=='review_result')
+                    text=parsed['text'];archived=parsed['has_archived']
                     (previous_documents if item['role']=='previous' else documents).append(dict(name=item['name'],text=text))
                 coverage.append('%s《%s》：%s。'%('上一轮待复核意见' if item['role']=='previous' else '教师参考',item['name'],
                     '本次读取最新检查；较早草稿保留在原件，未作为本次复核输入' if archived else '本次读取完整文字'))

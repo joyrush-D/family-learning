@@ -918,6 +918,15 @@ def task_status(task, update=None):
     original=task['original_status']
     return update or (original if original in (*TASK_STATUSES,'已归档') else '已归档' if '已归档' in original else '待跟进')
 
+def legacy_homework_review_files(c,record):
+    if record['followup_kind']=='作业检查': return set()
+    match=re.fullmatch(r'家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #([1-9][0-9]*)。',record['note'])
+    if match is None: return set()
+    # r155 saved no result role; require both product-written markers, never infer it from a filename alone.
+    attachments=set(json.loads(record['attachments']))
+    return {r['id'] for r in c.execute("SELECT id FROM uploads WHERE name=? AND mime LIKE 'text/plain%'",('作业批改参考-'+match[1]+'.txt',)) if r['id'] in attachments}
+
+
 def homework_review_context(c,task_id,record_id,expected_created=None):
     """Only this saved answer, reported homework and explicitly bound school originals."""
     if not isinstance(task_id,str) or not task_id or len(task_id)>30 or type(record_id) is not int or not 0<record_id<=9223372036854775807:
@@ -925,20 +934,13 @@ def homework_review_context(c,task_id,record_id,expected_created=None):
     task=next((t for t in tasks(c) if t['id']==task_id),None)
     row=c.execute('SELECT * FROM records WHERE id=?',(record_id,)).fetchone()
     names=child_names(c)
-    def legacy_review_files(record):
-        if record['followup_kind']=='作业检查': return set()
-        match=re.fullmatch(r'家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #([1-9][0-9]*)。',record['note'])
-        if match is None: return set()
-        # r155 saved no result role; require both product-written markers, never infer it from a filename alone.
-        attachments=set(json.loads(record['attachments']))
-        return {r['id'] for r in c.execute("SELECT id FROM uploads WHERE name=? AND mime LIKE 'text/plain%'",('作业批改参考-'+match[1]+'.txt',)) if r['id'] in attachments}
     if (task is None or task.get('agenda',{}).get('category')!='homework' or row is None
             or names.get(row['child'],row['child'])!=task['child']
             or row['source']!='事项:'+task_id and row['linked_task_id']!=task_id):
         raise family_print.PrintError('这份作答不属于当前孩子的作业','review_source_not_allowed',403)
     if expected_created is not None and (not isinstance(expected_created,str) or expected_created!=row['created']):
         raise family_print.PrintError('原作答已更正，请重新打开后检查','review_source_changed',409)
-    if row['followup_kind']=='作业检查' or legacy_review_files(row):
+    if row['followup_kind']=='作业检查' or legacy_homework_review_files(c,row):
         raise family_print.PrintError('检查意见不是孩子作答，请回原作答追加复核','review_source_not_allowed',403)
     child=next(p for p in profiles(c) if p['name']==task['child'])
     allowed={};bindings=[];record_ids=json.loads(row['attachments']);report={};school_error=''
@@ -989,7 +991,7 @@ def homework_review_context(c,task_id,record_id,expected_created=None):
             bindings=[];school_error='学校原件出处当前无法核对；已保存作答仍可检查，可回原消息核对后重试。'
     for other in c.execute("SELECT id,child,source,linked_task_id,created,attachments,followup_kind,note FROM records WHERE source=? OR linked_task_id=? ORDER BY id",('事项:'+task_id,task_id)):
         if other['id']==record_id or names.get(other['child'],other['child'])!=task['child']: continue
-        legacy=legacy_review_files(other)
+        legacy=legacy_homework_review_files(c,other)
         for ident in json.loads(other['attachments']):
             upload=c.execute('SELECT mime FROM uploads WHERE id=?',(ident,)).fetchone()
             origin='review_result' if (other['followup_kind']=='作业检查' or ident in legacy) and upload is not None and upload['mime'].startswith('text/plain') else 'same_task'
@@ -999,6 +1001,34 @@ def homework_review_context(c,task_id,record_id,expected_created=None):
                  child_id=child['id'],record_id=record_id,created=row['created'],record_ids=record_ids,answer_note=row['note'],report=report,school=bindings)
     fingerprint=hashlib.sha256(json.dumps(context,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
     return dict(task=task,record=dict(row),allowed=allowed,context_sha256=fingerprint,school_error=school_error)
+
+def homework_saved_review(task_id,record_id):
+    """Parent-only preview of this saved result; no migration, model or record write."""
+    if not isinstance(task_id,str) or not task_id or len(task_id)>30 or type(record_id) is not int or not 0<record_id<=9223372036854775807:
+        raise family_print.PrintError('请从原作业打开已保存的检查')
+    with connect_read_only() as c:
+        c.execute('BEGIN')
+        row=c.execute('SELECT * FROM records WHERE id=?',(record_id,)).fetchone()
+        if row is None: raise family_print.PrintError('已保存检查不存在','not_found',404)
+        legacy=legacy_homework_review_files(c,row)
+        original=row['related_record_id'] if row['followup_kind']=='作业检查' else int(re.search(r'#([1-9][0-9]*)。$',row['note'])[1]) if legacy else None
+        if original is None: raise family_print.PrintError('这条记录不是已保存的检查','review_source_not_allowed',403)
+        context=homework_review_context(c,task_id,original)
+        names=child_names(c)
+        if names.get(row['child'],row['child'])!=context['task']['child'] or row['source']!='事项:'+task_id and row['linked_task_id']!=task_id:
+            raise family_print.PrintError('这份检查不属于当前孩子的作业','review_source_not_allowed',403)
+        attachments=set(json.loads(row['attachments']))
+        results=[(ident,value) for ident,value in context['allowed'].items() if ident in attachments
+                 and value['name']=='作业批改参考-'+str(original)+'.txt' and value['mime'].startswith('text/plain')
+                 and value['origin']=='review_result' and value['review_binding']==[record_id,row['created']]]
+        if len(results)!=1: raise family_print.PrintError('本次检查文字原件无法唯一核对，请下载原件查看')
+        ident,value=results[0];base=Path(DATA).resolve()/'uploads';path=base/family_print._id(ident)
+        if base.is_symlink() or path.is_symlink() or path.resolve().parent!=base:
+            raise family_print.PrintError('原件路径不正确')
+        body=family_print._read_file(path,family_print.MAX_SOURCE)
+        if len(body)!=value['size']: raise family_print.PrintError('原件大小已变化，请核对原件','review_source_changed',409)
+        parsed=family_print.review_text(body,saved=True)
+        return dict(task_id=task_id,record_id=record_id,created=row['created'],original_record_id=original,**parsed)
 
 def homework_review_basis(obj):
     """Structural validation is separate from the save transaction's live source checks."""
@@ -1993,6 +2023,12 @@ class Handler(BaseHTTPRequestHandler):
                 sources=[dict(type='upload',id=ident,name=value['name'],mime=value['mime'],size=value['size'],origin=value['origin'])
                          for ident,value in context['allowed'].items()]
                 return self.reply(200,dict(sources=sources,created=context['record']['created'],school_error=context['school_error']))
+            if path=='/api/print/homework/saved-review':
+                query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+                if (set(query)!={'task_id','record_id'} or any(len(v)!=1 for v in query.values())
+                        or not re.fullmatch(r'[1-9][0-9]{0,18}',query['record_id'][0])):
+                    raise family_print.PrintError('请提供唯一的作业和已保存检查编号')
+                return self.reply(200,homework_saved_review(query['task_id'][0],int(query['record_id'][0])))
             if path=='/api/print/jobs': return self.reply(200,dict(jobs=print_store().list_jobs()))
             if path.startswith('/api/print/preview/'):
                 body,name=print_store().preview(path[len('/api/print/preview/'):])
