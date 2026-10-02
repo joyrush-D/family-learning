@@ -339,7 +339,10 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   if(process.env.GOALS_UI_PROOF_DIR)await layerProfile.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'profile-layers-corrected-'+width+'.png')});checks++;
   // A parent observation saved from the original task must return to its goal after a failed save and reopen.
   const beforeObservation=(await(await p.request.get(url+'api/goals')).json()).goals.find(g=>g.id===savedGoal.id),observation='虚构家长观察：独立说出大意，转折仍需核对 '+width;
-  await p.locator('nav [data-page="home"]').click();await p.locator('[data-task-all="todo"]').click();await p.locator(`[data-query-target="task:${original}"] [data-task]`).click();
+  await p.locator('nav [data-page="home"]').click();assert.equal(await p.locator('[data-child-filter="child-2"]').getAttribute('aria-pressed'),'true');
+  assert.equal(await p.locator(`[data-query-target="task:${original}"]`).count(),0,'the other child task is hidden');
+  await p.locator(`[data-child-filter="${beforeObservation.child_id}"]`).click();assert.equal(await p.locator(`[data-child-filter="${beforeObservation.child_id}"]`).getAttribute('aria-pressed'),'true');
+  await p.locator('[data-task-all="todo"]').click();await p.locator(`[data-query-target="task:${original}"] [data-task]`).click();
   await p.locator('#taskForm [name="note"]').fill(observation);
   let observationFailed=false;await p.route('**/api/task/feedback',async route=>{if(!observationFailed){observationFailed=true;await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic observation save failure'})})}else await route.continue()});
   await p.locator('#saveTaskFeedback').click();await p.locator('#taskError').getByText(/Synthetic observation save failure/).waitFor();assert.equal(await p.locator('#taskForm [name="note"]').inputValue(),observation);
