@@ -102,13 +102,13 @@ async function server(){
   await panel.locator('[data-homework-review-result] textarea').fill('家长核对：第1题卷面C，依据原文应选B。先自己定位关键词，再独立重答。');
   let rerunPrompted=false;const dismissRerun=d=>{rerunPrompted=true;d.dismiss()};p.on('dialog',dismissRerun);
   await panel.locator('[data-homework-review-run]').click();p.off('dialog',dismissRerun);
-  assert.equal(rerunPrompted,true,'regeneration asks before replacing edited review');assert.equal(calls,2,'declined regeneration does not call model');
+  assert.equal(rerunPrompted,true,'recheck asks before keeping an edited previous opinion');assert.equal(calls,2,'declined regeneration does not call model');
   assert.match(await panel.locator('[data-homework-review-result] textarea').inputValue(),/家长核对：第1题/);
-  p.once('dialog',d=>d.accept());await panel.locator('[data-homework-review-run]').click();await eventually(async()=>calls===3,'explicit regeneration');
+  p.once('dialog',d=>d.accept());await panel.locator('[data-homework-review-run]').click();await eventually(async()=>calls===3&&await panel.locator('[data-homework-review-previous] textarea').count()===1,'explicit regeneration retains the previous opinion');
   await panel.locator('[data-homework-review-result] textarea').fill('家长核对：第1题卷面C，依据原文应选B。先自己定位关键词，再独立重答。');
   await panel.locator('[data-homework-review-apply]').click();assert.match(await panel.innerText(),/请对照原题核对/);
   await panel.locator('[data-homework-review-confirm]').check();await panel.locator(' :scope > details > .homework-review-material [data-homework-review-photo]').uncheck();
-  await panel.locator('[data-homework-review-apply]').click();assert.match(await panel.innerText(),/所选资料、用途或页码已变化/);
+  await panel.locator('[data-homework-review-apply]').click();assert.match(await panel.innerText(),/所选资料、用途、页码或补充已变化/);
   assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'','changed photo selection cannot stage an old review');
   await panel.locator(' :scope > details > .homework-review-material [data-homework-review-photo]').check();
   let releaseUpload,uploadCalls=0;await p.route('**/api/upload',async route=>{if(++uploadCalls===1)return route.fulfill({status:503,json:{error:'虚构上传失败'}});await new Promise(resolve=>releaseUpload=resolve);await route.continue()});
