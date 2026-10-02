@@ -2052,7 +2052,7 @@ class Handler(BaseHTTPRequestHandler):
                 try: attachment=save_upload(self.rfile,n,self.headers.get('X-File-Name',''))
                 except ValueError: return self.reply(400,{'error':'文件为空、文件名不正确或内容与支持的类型不符'})
                 return self.reply(200,dict(ok=True,attachment=attachment))
-            max_json=2*1024*1024 if path in ('/api/agent/ingest','/api/agent/fragment') else 65536 if path in ('/api/guided/material','/api/goals/action','/api/task/feedback') else 20000
+            max_json=2*1024*1024 if path in ('/api/agent/ingest','/api/agent/fragment') else 65536 if path in ('/api/guided/material','/api/goals/action','/api/task/feedback','/api/print/homework/draft') else 20000
             if not 0<n<=max_json: raise ValueError('请求过大或为空')
             if path in ('/api/agent/ingest','/api/agent/fragment'):
                 self.close_connection=True
