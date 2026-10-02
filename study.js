@@ -116,7 +116,7 @@
  }
  function change(e){
   if(busy||pending)return;
-  if(e.target.matches('[data-study-child],[data-study-date]')){const value=e.target.value;if(!value)return;remember();ctx={...ctx,child_id:e.target.matches('[data-study-child]')?value:ctx.child_id,day:e.target.matches('[data-study-date]')?value:ctx.day};if(e.target.matches('[data-study-child]'))ctx.onChildChanged?.(ctx.child_id);else ctx.onDayChanged?.(ctx.day);snapshot=null;editor=draftView().editor;message='';paint();read()}
+  if(e.target.matches('[data-study-child],[data-study-date]')){const value=e.target.value;if(!value)return;if(e.target.matches('[data-study-child]')&&ctx.onChildChanged?.(value)===false){e.target.value=ctx.child_id;return}remember();ctx={...ctx,child_id:e.target.matches('[data-study-child]')?value:ctx.child_id,day:e.target.matches('[data-study-date]')?value:ctx.day};if(e.target.matches('[data-study-date]'))ctx.onDayChanged?.(ctx.day);snapshot=null;editor=draftView().editor;message='';paint();read()}
   if(e.target.name==='task_id')setSource(e.target.form);
  }
  function click(e){

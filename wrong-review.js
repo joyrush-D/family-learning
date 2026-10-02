@@ -7,7 +7,8 @@ const uid = () => crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : Ar
 const KIND_LABEL = {wrong_item: '错题', handwriting: '手写区域', layout: '版面'};
 const KIND_COLOR = {wrong_item: '#dc2626', handwriting: '#2563eb', layout: '#16a34a'};
 let ctx, root, busy = false;
-let state;
+let state, childID = '';
+const drafts = new Map();
 
 function freshState() {
   return {child: '', day: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10),
@@ -25,7 +26,7 @@ function html() {
     <p class="muted">拍照或选择已上传的作业/试卷照片（每次1–3张），模型先框出疑似错题，你在原图上逐题核对、修改后才保存为学习记录。</p></div></div>
     <section class="card wrong-setup">
       <div class="formrow">
-        <label>孩子<select data-wrong-child required>${['<option value="">请选择</option>', ...(ctx.children || []).map(c => `<option value="${esc(c.name)}" ${state.child === c.name ? 'selected' : ''}>${esc(c.name)}</option>`)].join('')}</select></label>
+        <label>孩子<select data-wrong-child required>${(ctx.children || []).map(c => `<option value="${esc(c.name)}" ${state.child === c.name ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
         <label>发生日期<input data-wrong-day type="date" value="${esc(state.day)}" required></label>
         <label>科目（可选）<input data-wrong-subject maxlength="80" value="${esc(state.subject)}" placeholder="数学、语文…"></label>
       </div>
@@ -39,7 +40,7 @@ function html() {
       <div class="wrong-actions">
         <button type="button" class="primary" data-wrong-annotate ${busy ? 'disabled' : ''}>框出疑似错题</button>
       </div>
-      <p class="error" data-wrong-error role="alert"></p>
+      <p class="error" data-wrong-error role="alert">${esc(state.error)}</p>
     </section>
     <div data-wrong-result></div>
     <p class="small muted">模型只整理本次所选照片，不读其他原件；框选与转写都可能有误，保存的只是你核对过的错题记录，候选标签不是错因或掌握结论。打开本页不调用模型。</p>
@@ -189,11 +190,13 @@ async function uploadFiles(files) {
 }
 
 async function annotate() {
+  if (state.saveKey) return setError('上次保存结果尚未核对，请先用原内容重试保存。');
   remember();
   if (!state.child) return setError('请先选择孩子。');
   if (!state.day) return setError('请填写发生日期。');
   if (!state.ids.length || state.ids.length > 3) return setError('请选择1到3张照片。');
   busy = true; setError('');
+  lock();
   const gen = ++state.generation;
   root.querySelector('[data-wrong-annotate]').disabled = true;
   root.querySelector('[data-wrong-result]').innerHTML = '<p class="note">模型正在框选并转写，通常需要半分钟左右，本页会保留…</p>';
@@ -218,7 +221,7 @@ async function annotate() {
     setError(e.message || '标注暂不可用，可先用记录反馈手动记。');
   } finally {
     busy = false;
-    const b = root.querySelector('[data-wrong-annotate]'); if (b) b.disabled = false;
+    paint();
   }
 }
 
@@ -235,13 +238,17 @@ async function save() {
   // server-side) are retried with the same key so save_record replays instead
   // of duplicating. Cleared only on success, discard or a new annotation.
   if (!state.saveKey) state.saveKey = uid().slice(0, 32);
+  lock();
   try {
     const r = await ctx.apiFetch('/api/wrong/save', {method: 'POST',
       headers: {'Content-Type': 'application/json', 'X-Family-Token': ctx.token},
       body: JSON.stringify({child: state.child, day: state.day, subject: state.subject,
                             request_key: state.saveKey, items})});
     const out = await r.json();
-    if (!r.ok) throw new Error(out.error || '保存失败');
+    if (!r.ok) {
+      if (r.status >= 400 && r.status < 500 && ![401, 403, 408, 409, 429].includes(r.status)) state.saveKey = '';
+      throw new Error(out.error || '保存失败');
+    }
     state.saveKey = '';
     state.draft = null; state.review = []; state.ids = [];
     paint();
@@ -249,14 +256,20 @@ async function save() {
     root.querySelector('[data-wrong-result]').innerHTML =
       `<div class="note wrong-saved">已保存 ${out.count} 条错题学习记录，并关联照片原件。<br>可打开原记录关联任务，继续记订正和复测；记录不代表掌握结论。${refreshed?(out.saved||[]).map(r=>`<button type="button" data-record="${esc(r.id)}">关联任务 / 查看原记录</button>`).join(''):'<p>记录已保存，列表暂未更新；请刷新后查看原记录。</p>'}</div>`;
   } catch (e) { setError(e.message || '保存未完成，草稿仍在，请重试。'); }
-  finally { busy = false; }
+  finally { busy = false; lock(); }
+}
+
+function lock() {
+  root.querySelectorAll('input,select,textarea,button').forEach(el => {
+    el.disabled = busy || !!state.saveKey && el.matches('[data-wrong-child],[data-wrong-pick],[data-wrong-camera],[data-wrong-annotate],[data-wrong-discard]') || el.hasAttribute('data-wrong-save') && !state.review.length;
+  });
 }
 
 function paint() {
   root.innerHTML = html();
   root.querySelector('[data-wrong-pool]').innerHTML = poolHTML();
   if (state.draft) rerenderResult();
-  if (busy) root.querySelectorAll('input,select,textarea,button').forEach(el => { el.disabled = true; });
+  lock();
 }
 
 function onClick(e) {
@@ -270,6 +283,17 @@ function onClick(e) {
 
 function onChange(e) {
   if (busy) return;
+  if (e.target.matches('[data-wrong-child]')) {
+    const owner = ctx.children.find(c => c.name === e.target.value);
+    e.target.value = state.child;
+    if (!owner || !canSwitch() || ctx.onChildChanged?.(owner.id) === false) return;
+    childID = owner.id;
+    state = drafts.get(childID) || freshState();
+    drafts.set(childID, state);
+    state.child = owner.name;
+    paint();
+    return;
+  }
   if (e.target.matches('[data-wrong-camera], [data-wrong-pick]')) {
     const files = [...(e.target.files || [])];
     e.target.value = '';
@@ -284,14 +308,31 @@ function onChange(e) {
     });
     return;
   }
-  if (e.target.matches('[data-wrong-child],[data-wrong-day],[data-wrong-subject]')) remember();
+  if (e.target.matches('[data-wrong-day],[data-wrong-subject]')) remember();
+}
+
+function canSwitch() {
+  if (busy || state?.saveKey) {
+    if (root?.isConnected) setError('请先完成上传、标注或核对上次保存，再切换孩子。');
+    return false;
+  }
+  if (root?.isConnected) remember();
+  return true;
 }
 
 function mount(options) {
+  if (root?.isConnected && !busy) remember();
+  let owner = options.children?.find(c => c.id === options.child_id) || options.children?.[0];
+  if ((busy || state?.saveKey) && childID && owner?.id !== childID) {
+    owner = options.children?.find(c => c.id === childID);
+    options.onChildChanged?.(childID);
+  }
   ctx = options;
   root = options.root;
-  state = freshState();
-  if (options.children?.length === 1 && !state.child) state.child = options.children[0].name;
+  childID = owner?.id || childID;
+  state = drafts.get(childID) || freshState();
+  drafts.set(childID, state);
+  state.child = owner?.name || state.child;
   paint();
   root.addEventListener('click', onClick);
   root.addEventListener('change', onChange);
@@ -301,5 +342,5 @@ function mount(options) {
   });
 }
 
-window.FamilyWrongReview = {mount};
+window.FamilyWrongReview = {mount, canSwitch};
 })();

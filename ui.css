@@ -151,3 +151,31 @@ body[data-page=home] .today-heading .toolbar{margin:0}
 .homework-pending-heading{margin-top:20px;padding-top:16px;border-top:1px solid var(--line);color:var(--gold);font-size:14px}
 
 .homework-review-material{padding:.6rem 0;border-bottom:1px solid var(--line)}.homework-material-options{margin-left:2rem}.homework-review-questions>details{padding:.7rem 0;border-bottom:1px solid var(--line)}.homework-review-questions p{margin:.4rem 0}.today-plans>.calendar-timetable{margin-top:.6rem}
+/* One child, one reading order: requirements first; original detail stays expandable. */
+body[data-page=home] main,body[data-page=tasks] main{max-width:1120px}
+.today-task-groups,.agenda-groups,.homework-children{grid-template-columns:minmax(0,1fr)}
+.child-filters{display:flex;gap:8px;margin:12px 0 18px;align-items:center}
+.child-filters button[aria-pressed=true]{background:var(--green);color:#0d2b2c;border-color:var(--green);font-weight:700}
+.task-list{min-width:0}.task-list .task,.task-list .agenda-school{border-bottom:1px solid var(--line);margin:0;padding:16px 0}
+.task-list .task:last-child,.task-list .agenda-school:last-child{border-bottom:0}
+.task-list .taskbody{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:22px;align-items:start}
+.task-list .task-meta,.task-list h3,.task-list .task-goal{grid-column:1}
+.task-list .agenda-dates{grid-column:2;grid-row:1/3;flex-direction:column;align-items:flex-end;font-size:12px;padding-top:4px}
+.task-list .tasktools,.task-list .taskbody>.toolbar{grid-column:1/-1;margin:8px 0 0}
+.task-list .taskbody>.task-more,.task-list .taskbody>.task-feedback-summary,.task-list .taskbody>.note,.task-list .taskbody>.small{grid-column:1/-1}
+.task-list h3{font-size:18px;font-weight:650;margin:5px 0;overflow-wrap:anywhere}.task-list .task-goal{margin:3px 0}
+.task-list .task-requirement,.task-list .school-requirements{font-size:15px;line-height:1.6;margin:4px 0;white-space:pre-wrap}
+.task-list ul.task-requirement,.task-list ul.school-requirements{padding-left:20px}.task-list li{padding:2px 0}
+.requirement-full>summary,.task-feedback-summary>summary{font-size:12px;color:var(--muted);min-height:44px;padding:12px 0;cursor:pointer}
+.requirement-full .source{white-space:pre-wrap}.task-list .task-more>summary{color:var(--muted)}
+.task-list .task-meta .task-owner{font-size:12px}.today-plans .calendar-timetable{border-radius:0;border-width:0 0 1px;margin:0;padding:14px 0}
+.today-plans .calendar-timetable ol{display:flex;flex-wrap:wrap;gap:6px 22px;padding-left:20px;margin:10px 0}
+.today-plans .calendar-timetable li{display:flex;gap:8px;padding:6px 0}.today-plans .calendar-timetable li>span{font-size:12px;color:var(--muted)}
+@media(max-width:760px){
+ .task-list .taskbody{grid-template-columns:minmax(0,1fr);gap:0}.task-list .agenda-dates{grid-column:1;grid-row:auto;flex-direction:row;align-items:center;padding:0;margin:4px 0 8px}
+ .task-list h3{font-size:17px}.today-heading>.toolbar{display:block}.today-heading>.toolbar>button{padding:10px 14px}.today-plans .calendar-timetable ol{display:block}
+}
+.today-task-groups>.task-list.card,.today-recent-homework.card,.today-reviews.card,.today-plans.card{background:transparent;border:0;border-radius:0;padding:0;margin:12px 0}
+.task-list>.small{margin:10px 0}.today-source-gap{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;font-size:12px}
+.task-list .task-goal{border-left:0;padding-left:0}.task-list .task-goal>.small{display:none}
+body[data-page=sources] .source-cards{grid-template-columns:1fr}

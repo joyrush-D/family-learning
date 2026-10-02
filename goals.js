@@ -209,7 +209,7 @@ ${esc(d.values.action)}</p><button type="button" data-goal-clear-draft="${esc(d.
  root.querySelectorAll('a[href="#goal-school-requirement"]').forEach(a=>a.onclick=()=>{root.querySelector('#goal-school-requirement').open=true});
  root.querySelectorAll('[data-goal-action]').forEach(b=>b.onclick=()=>submit(b.dataset.goalAction,g,null,draft(b.dataset.goalAction,g)));
  root.querySelectorAll('[data-goal-select]').forEach(b=>b.onclick=()=>{if(!busy&&!retry){selected=b.dataset.goalSelect;options.onGoalSelected?.(selected);draw()}});
- root.querySelectorAll('[data-goal-child-select]').forEach(b=>b.onclick=()=>{if(!busy&&!retry){child=b.dataset.goalChildSelect;selected='';options.onChildChanged?.(child);draw()}});
+ root.querySelectorAll('[data-goal-child-select]').forEach(b=>b.onclick=()=>{if(!busy&&!retry){if(options.onChildChanged?.(b.dataset.goalChildSelect)===false)return;child=b.dataset.goalChildSelect;selected='';draw()}});
  root.querySelector('[data-goal-refresh]').onclick=()=>{if(!busy&&!retry&&(!Object.keys(drafts).length||confirm('重新读取会清空本页尚未保存的填写，继续吗？'))){drafts={};refresh()}};
  root.querySelectorAll('[data-goal-clear-draft]').forEach(b=>b.onclick=()=>{if(!busy&&!retry){delete drafts[b.dataset.goalClearDraft];draw()}});
  root.querySelectorAll('[data-goal-rebase]').forEach(b=>b.onclick=()=>{const d=drafts[b.dataset.goalRebase];if(!busy&&!retry&&d){const latest=d.key.endsWith(':edit')?g:g.current_plan||{};for(const k of Object.keys(d.values))if(!d.changed.has(k)&&k in latest)d.values[k]=latest[k]??'';d.version=g.version;d.hash=g.context_hash;d.conflict=false;d.request=null;status('已按最新版本保留填写，请核对后再次保存。');draw()}});
