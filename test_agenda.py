@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import app
+import family_agent as agent
 import family_agenda as agenda
 import family_task_focus as focus
 
@@ -182,6 +183,70 @@ class AgendaTest(unittest.TestCase):
         self.assertEqual({x['title']:x['agenda']['category'] for x in rows},{title:category for _,title,category in cases})
         self.assertTrue(all(x['agenda']['published_on']=='2026-09-08' and not x['agenda']['due_on'] for x in rows))
         self.assertTrue(all(not x['agenda']['category_confirmed'] for x in rows))
+        with app.connect() as c:self.assertEqual(before,'\n'.join(c.iterdump()))
+
+    def test_collected_school_keeps_purpose_dates_and_parent_category_override(self):
+        stamp='2026-09-12T16:00:00+08:00';now=dt.datetime.fromisoformat(stamp)
+        cases=[('learning','看图讲述故事','homework'),('admin','作业平台签到','todo'),
+               ('learning','数学：单元测验','todo'),('unknown','英语作业资料','todo')]
+        self.store.ingest(dict(source_id='synthetic-class',expected_cursor='0',cursor='4',checked_at=stamp,
+            last_message_time=stamp,error='',messages=[dict(id=str(i+1),time=stamp,kind='text',sender='示例老师',
+                text=title+'，2026-09-13前完成。',unread=False) for i,(_,title,_) in enumerate(cases)]))
+        saved=[]
+        for index,(purpose,title,category) in enumerate(cases):
+            brief=dict(title=title,goal=title+'。',advice='',state='review' if purpose=='unknown' else 'ready',
+                       policy=agent.SCHOOL_TASK_POLICY,purpose=purpose,change='new',target_id='')
+            key='synthetic-collected-purpose-'+str(index)
+            self.store._save(key,'fingerprint-'+str(index),[dict(child_id='child-1',kind='school',title=title,
+                body=brief['goal'],due='2026-09-13',evidence=[dict(ref='message:synthetic-class:'+str(index+1),text=title)],
+                plan=dict(school_task=brief))],now)
+            pending=next(x for x in app.calendar_snapshot('2026-09-12','2026-09-13')['inbox'] if x['kind']=='school' and x['title']==title)
+            self.assertEqual(pending['agenda']['category'],category)
+            result=self.store.act(dict(id=pending['id'],action='accept',expected_updated=stamp),school_auto=purpose!='unknown')
+            collected=next(x for x in app.calendar_snapshot('2026-09-12','2026-09-13')['inbox'] if x['task_id']==result['task_id'])
+            self.assertEqual(collected['agenda'],pending['agenda'])
+            self.assertEqual(collected['child_ids'],['child-1'])
+            self.assertFalse(collected['agenda']['category_confirmed'])
+            with app.connect() as c:source=c.execute('SELECT source FROM manual_tasks WHERE id=?',(result['task_id'],)).fetchone()[0]
+            self.assertIn('message:synthetic-class:'+str(index+1),source)
+            saved.append((result['task_id'],source,pending['agenda']))
+        ident,source,original=saved[0]
+        for version,category in enumerate(('todo','unknown','homework')):
+            focus.save(app,dict(id=ident,version=version,request_key='synthetic-purpose-override-'+str(version),
+                mode='next',next_action='',waiting_for='',review_on='',category=category,
+                published_on=original['published_on'],due_on=original['due_on'],scheduled_on=''))
+            row=next(x for x in app.tasks() if x['id']==ident)
+            self.assertEqual(row['agenda']['category'],'todo' if category=='unknown' else category)
+            self.assertEqual(row['agenda']['category_confirmed'],category!='unknown')
+            self.assertEqual(row['source'],source)
+            for field in ('published_on','published_at','due_on','publications'):
+                self.assertEqual(row['agenda'][field],original[field])
+        with app.connect() as c:before='\n'.join(c.iterdump())
+        app.tasks();app.calendar_snapshot('2026-09-12','2026-09-13')
+        with app.connect() as c:self.assertEqual(before,'\n'.join(c.iterdump()))
+
+    def test_collected_purpose_requires_exact_task_child_and_school_origin(self):
+        stamp='2026-09-12T16:00:00+08:00';now=dt.datetime.fromisoformat(stamp)
+        self.store.ingest(dict(source_id='synthetic-class',expected_cursor='0',cursor='1',checked_at=stamp,
+            last_message_time=stamp,error='',messages=[dict(id='1',time=stamp,kind='text',sender='示例老师',text='看图讲述一个故事。',unread=False)]))
+        for case,child,kind,state,target in [('wrong-task','child-1','school','accepted','different-task'),
+                ('wrong-child','child-2','school','accepted',''),('wrong-kind','child-1','care','accepted',''),
+                ('not-accepted','child-1','school','dismissed','')]:
+            key='synthetic-invalid-purpose-'+case;ident='synthetic-task-'+case
+            self.store._save(key,'fingerprint',[dict(child_id=child,kind=kind,title='看图讲述故事',body='看图讲述一个故事。',
+                evidence=[dict(ref='message:synthetic-class:1',text='看图讲述一个故事。')],
+                plan=dict(school_task=dict(purpose='learning')))],now)
+            with app.connect() as c:
+                origin=c.execute('SELECT id FROM agent_items WHERE job_id=?',(key,)).fetchone()[0]
+                c.execute('UPDATE agent_items SET state=?,task_id=? WHERE id=?',(state,target or ident,origin))
+                c.execute('INSERT INTO manual_tasks VALUES(?,?,?,?,?,?,?)',(ident,'示例甲','看图讲述故事','无明确截止','待跟进',
+                    'Agent建议:'+origin+'\nmessage:synthetic-class:1','看图讲述一个故事。'))
+        app.calendar_snapshot('2026-09-12','2026-09-13')
+        with app.connect() as c:before='\n'.join(c.iterdump())
+        rows=[x for x in app.calendar_snapshot('2026-09-12','2026-09-13')['inbox'] if x['id'].startswith('synthetic-task-')]
+        self.assertEqual(len(rows),4)
+        self.assertTrue(all(x['agenda']['category']=='todo' and not x['agenda']['category_confirmed'] for x in rows))
+        self.assertTrue(all(x['child_ids']==['child-1'] for x in rows))
         with app.connect() as c:self.assertEqual(before,'\n'.join(c.iterdump()))
 
     def test_rewritten_exam_title_borrows_the_exam_clause_deadline(self):

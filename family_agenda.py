@@ -115,8 +115,10 @@ def is_exam(text):
     return bool(_EXAM_RE.search(text))
 
 
-def task_category(title):
+def task_category(title,purpose=None):
     """Classify the requested work, not a school subject mentioned by an admin task."""
+    if purpose in family_agent.PURPOSES:
+        return 'homework' if purpose=='learning' and not is_exam(title) else 'todo'
     title=re.sub(r'^待核对[：:]?\s*','',title)
     if re.search(r'打印|报名|缴费|回执|签字|署名|登记|确认书|请假|接送|招新|选拔|提交渠道|(?:作业|学习)入口|^核(?:对|查)|(?:听写|考试|测验)(?:情况|结果|成绩)|等级',title):
         return 'todo'
@@ -126,7 +128,7 @@ def task_category(title):
     return 'todo'
 
 
-def metadata(app,c,child_id,title,due,refs=(),focus=None):
+def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None):
     focus=focus or {};messages=[];publications=[]
     store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
     for ref in refs:
@@ -160,7 +162,7 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None):
     source_due=next(iter(dates)) if len(dates)==1 and not source_unknown else ''
     due_on=focus.get('due_on','') if organized else deadline(due,published) or deadline(title,published) or source_due
     category=focus.get('category','')
-    if category not in ('homework','todo'):category='todo' if category=='unknown' else task_category(title)
+    if category not in ('homework','todo'):category='todo' if category=='unknown' else task_category(title,purpose)
     published_at=max((value for value in times if value[:10]==published),default='')
     return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,scheduled_on=focus.get('scheduled_on',''),
                 category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox')
@@ -172,6 +174,12 @@ def enrich(app,c,tasks):
     for task in tasks:
         refs=[x.strip() for x in task['source'].splitlines() if x.strip().startswith('message:')]
         focus=task.get('focus') or {}
+        purpose=None
+        if task.get('school_origin'):
+            origin=task['source'].splitlines()[0].removeprefix('Agent建议:')
+            proposal=c.execute("SELECT plan FROM agent_items WHERE id=? AND task_id=? AND child_id=? AND kind='school' AND state='accepted'",
+                               (origin,task['id'],owners.get(task['child'],''))).fetchone()
+            if proposal:purpose=json.loads(proposal['plan']).get('school_task',{}).get('purpose')
         due=task['due']
         if task['id'] in reported and task['source'] in ('家庭放学后录入','孩子自述功课，待家长核对'):
             # The capture day is a plan date, not a teacher deadline; preserve explicit later edits.
@@ -179,7 +187,7 @@ def enrich(app,c,tasks):
             if not focus.get('category'):focus['category']='homework'
             if not focus.get('scheduled_on') and not focus.get('version'):focus['scheduled_on']=reported[task['id']]
             due=task['due']=''
-        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus)
+        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose)
     return tasks
 
 
@@ -215,7 +223,7 @@ def snapshot(app,start,end):
                 if row['child_id'] not in ids or brief.get('state')=='reference':continue
                 refs=[e['ref'] for e in json.loads(row['evidence'])]
                 purpose=brief.get('purpose')
-                category=('homework' if purpose=='learning' and not is_exam(brief.get('title') or row['title']) else 'todo') if purpose in ('learning','admin','optional','unknown') else task_category(row['title'])
+                category=task_category((brief.get('title') or row['title']) if purpose in family_agent.PURPOSES else row['title'],purpose)
                 m=metadata(app,c,row['child_id'],row['title'],row['due'],refs)
                 m['category']=category
                 items.append(dict(id=row['id'],task_id='',kind='school',child_ids=[row['child_id']],title=row['title'],
