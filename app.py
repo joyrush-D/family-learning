@@ -996,7 +996,7 @@ def homework_review_context(c,task_id,record_id,expected_created=None):
             add(ident,origin,[other['id'],other['created']])
             if ident in legacy: allowed[ident].update(origin='review_result',review_binding=[other['id'],other['created']])
     context=dict(task=dict(id=task['id'],child=task['child'],source=task['source'],action=task['action']),
-                 child_id=child['id'],record_id=record_id,created=row['created'],record_ids=record_ids,report=report,school=bindings)
+                 child_id=child['id'],record_id=record_id,created=row['created'],record_ids=record_ids,answer_note=row['note'],report=report,school=bindings)
     fingerprint=hashlib.sha256(json.dumps(context,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
     return dict(task=task,record=dict(row),allowed=allowed,context_sha256=fingerprint,school_error=school_error)
 
@@ -1036,6 +1036,7 @@ def guard_homework_review(c,task_id,basis,attachments):
         context=homework_review_context(c,task_id,basis['record_id'],basis['created'])
         ids=[s['id'] for s in basis['question_sources']+basis['reference_sources']+basis.get('previous_sources',[])]
         record_ids=json.loads(context['record']['attachments'])
+        if not {s['id'] for s in basis['question_sources']}&set(record_ids): raise ValueError()
         if set(basis['photo_ids'])!={ident for ident in ids if ident in record_ids} or not set(ids)<=set(attachments): raise ValueError()
         # No second database connection, PDF probe, conversion or model inside the save transaction.
         materials=family_print.PrintStore.review_sources(DATA,basis['question_sources'],basis['reference_sources'],context['allowed'],previous_sources=basis.get('previous_sources',[]),render=False)
@@ -1061,7 +1062,8 @@ def homework_review_draft(obj):
     draft=family_llm.homework_reference_draft(materials['images'],data_path=DATA,timeout=120,review=True,
         reference_images=materials['reference_images'],reference_documents=materials['documents'],
         image_labels=materials['image_labels'],reference_labels=materials['reference_labels'],program_coverage=materials['coverage'],
-        previous_documents=materials['previous_documents'],previous_text=previous_text,review_instruction=instruction,task_action=context['task']['action'])
+        previous_documents=materials['previous_documents'],previous_text=previous_text,review_instruction=instruction,
+        task_action=context['task']['action'],answer_note=context['record']['note'])
     with connect() as c: guard_homework_review(c,obj['task_id'],basis,ids)
     return dict(draft=draft,question_sha256=materials['fingerprint'],review_basis=basis)
 

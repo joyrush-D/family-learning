@@ -42,7 +42,8 @@ def run():
             task=app.new_task(dict(child='示例甲',title='虚构试卷核对',category='homework',action='按题号核对',request_key='synthetic-homework-task-1'))
             another=app.new_task(dict(child='示例乙',title='虚构另一孩子作业',category='homework',request_key='synthetic-homework-task-2'))
             app.save_task_feedback(dict(task_id=another['id'],child='示例乙',day='2026-10-01',request_key='synthetic-other-feedback',attachments=[other]))
-            saved=app.save_task_feedback(dict(task_id=task['id'],child='示例甲',day='2026-10-01',request_key='synthetic-answer-feedback',attachments=[answer,reference,teacher_pdf]))
+            answer_note='虚构甲卷；本次第1题，余题未检查'
+            saved=app.save_task_feedback(dict(task_id=task['id'],child='示例甲',day='2026-10-01',request_key='synthetic-answer-feedback',note=answer_note,attachments=[answer,reference,teacher_pdf]))
             rid=saved['record_id'];created=saved['feedback']['created']
             source=lambda ident,**extra:dict(type='upload',id=ident,**extra)
             request=dict(purpose='review',task_id=task['id'],record_id=rid,expected_created=created,
@@ -51,6 +52,8 @@ def run():
                 serialized=json.dumps(messages,ensure_ascii=False)
                 assert '教师参考原文' in serialized and '1. B' in serialized
                 assert '不执行' in serialized and '不擅自改写老师答案' in serialized
+                assert answer_note in serialized and '原作答家长说明' in serialized
+                assert '不同卷即使题号相同也不能合并或猜配' in serialized
                 return dict(items=[item()],coverage='仅按明确题号比较教师参考；原题未提供')
             with patch.object(family_llm,'_chat_json',side_effect=fake_model) as model:
                 result=app.homework_review_draft(request)
@@ -70,6 +73,31 @@ def run():
                 refused(lambda:app.homework_review_draft(request|dict(task_id=another['id'])),'review_source_not_allowed')
                 refused(lambda:app.homework_review_draft(request|dict(expected_created='stale')),'review_source_changed')
                 assert model.call_count==0
+            # Two original answers under one task keep their own paper/range; another paper cannot replace this answer.
+            second_answer=upload('synthetic-second-paper.png',png(5))
+            second_note='虚构乙卷；同名第1题，本次只查乙卷'
+            second=app.save_task_feedback(dict(task_id=task['id'],child='示例甲',day='2026-10-01',
+                request_key='synthetic-second-paper-answer',note=second_note,attachments=[second_answer]))
+            second_request=request|dict(record_id=second['record_id'],expected_created=second['feedback']['created'],
+                question_sources=[source(second_answer)])
+            def second_model(messages,*args,**kwargs):
+                serialized=json.dumps(messages,ensure_ascii=False)
+                assert second_note in serialized and answer_note not in serialized
+                return dict(items=[item()],coverage='虚构只核乙卷第1题')
+            with patch.object(family_llm,'_chat_json',side_effect=second_model):
+                second_result=app.homework_review_draft(second_request)
+            assert second_result['review_basis']['record_id']==second['record_id']
+            assert second_result['review_basis']['photo_ids']==[second_answer]
+            with patch.object(family_llm,'_chat_json') as model:
+                refused(lambda:app.homework_review_draft(request|dict(question_sources=[source(second_answer)])),'review_basis_changed',409)
+                refused(lambda:family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=True,answer_note='字'*4001))
+                assert model.call_count==0
+            # The description itself is guarded even if an external writer forgot to change its version timestamp.
+            with app.connect() as c: c.execute('UPDATE records SET note=? WHERE id=?',('虚构说明更正为乙卷',rid))
+            try:
+                with app.connect() as c: refused(lambda:app.guard_homework_review(c,task['id'],basis,[answer,reference]),'review_basis_changed',409)
+            finally:
+                with app.connect() as c: c.execute('UPDATE records SET note=? WHERE id=?',(answer_note,rid))
             # Program-written partial-page coverage; 3/3/1 groups share one decreasing deadline.
             calls=[]
             def render(body,pages,deadline):
@@ -153,9 +181,14 @@ def run():
             assert ctx['allowed'][paper]['origin']=='reported_homework'
             # A later reference-only feedback belongs to the same task and remains available for the original answer.
             later=upload('synthetic-later-reference.txt',b'1. B\n')
-            app.save_task_feedback(dict(task_id=report_task,child='示例甲',day='2026-10-01',request_key='synthetic-later-reference',attachments=[later]))
+            later_record=app.save_task_feedback(dict(task_id=report_task,child='示例甲',day='2026-10-01',request_key='synthetic-later-reference',attachments=[later]))
             with app.connect() as c: ctx=app.homework_review_context(c,report_task,record['record_id'])
             assert ctx['allowed'][later]['origin']=='same_task'
+            with patch.object(family_llm,'_chat_json') as model:
+                refused(lambda:app.homework_review_draft(dict(purpose='review',task_id=report_task,
+                    record_id=later_record['record_id'],expected_created=later_record['feedback']['created'],
+                    question_sources=[source(answer)],reference_sources=[source(later)])),'review_basis_changed',409)
+                assert model.call_count==0,'a reference-only feedback is not the original child answer'
             # Byte-preserving guard rechecks role/order/page fingerprints without probing PDF tools.
             with patch.object(family_pdf,'page_count') as probe,patch.object(family_pdf,'render_pages') as renderer:
                 with app.connect() as c: app.guard_homework_review(c,task['id'],selected['review_basis'],[answer,teacher_pdf])
