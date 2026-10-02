@@ -212,7 +212,7 @@ async function server(){
   await p.reload();await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskFeedbackHistory').getByText('原作答反馈 #'+originalRecord+'。',{exact:false}).waitFor();assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);assert.deepEqual(errors,[]);
   await p.unroute('**/api/print/homework/draft');
   // Reuse saved synthetic answers and their sibling PDF; no extra records affect the checks above.
-  const delayedRecords=[source.id,full.id],sourcesPattern='**/api/print/homework/sources?**';
+  const delayedRecords=[source.id,secondAnswerId],sourcesPattern='**/api/print/homework/sources?**';
   for(const outcome of ['failure','success']){
    const sourceGates=new Map();let releaseDraft,releaseUpload,lateCalls=0,uploadPending=false;
    const draftGate=new Promise(resolve=>releaseDraft=resolve),uploadGate=new Promise(resolve=>releaseUpload=resolve);
@@ -236,7 +236,7 @@ async function server(){
     await eventually(async()=>sourceGates.size===2,'both source responses held before generation');
     const originalChoice=latePanels[0].locator(' :scope > details > .homework-review-material [data-homework-review-photo]').first();
     await originalChoice.check();await latePanels[0].locator('[data-homework-review-run]').click();await eventually(async()=>lateCalls===1,'generation started before sources return');
-    sourceGates.get(source.id)();if(outcome==='failure')sourceGates.get(full.id)();
+    sourceGates.get(source.id)();if(outcome==='failure')sourceGates.get(secondAnswerId)();
     const returnedPanels=outcome==='failure'?latePanels:[latePanels[0]];
     for(const latePanel of returnedPanels)await latePanel.locator('[data-homework-review-sources] [data-review-source="'+reference+'"]').waitFor();
     assert.equal(await latePanels[0].locator('[data-homework-review-run]').isDisabled(),true,'source responses arrive while generation is still pending');
@@ -252,7 +252,7 @@ async function server(){
     for(const latePanel of returnedPanels)await checkEditable(latePanel);
     if(outcome==='success'){
      await latePanels[0].locator('[data-homework-review-confirm]').check();await latePanels[0].locator('[data-homework-review-apply]').click();await eventually(async()=>uploadPending,'review text upload started before sibling sources return');
-     sourceGates.get(full.id)();const siblingMaterial=latePanels[1].locator('[data-homework-review-sources] [data-review-source="'+reference+'"]');await siblingMaterial.waitFor();
+     sourceGates.get(secondAnswerId)();const siblingMaterial=latePanels[1].locator('[data-homework-review-sources] [data-review-source="'+reference+'"]');await siblingMaterial.waitFor();
      assert.equal(await siblingMaterial.locator('[data-homework-review-photo]').isDisabled(),true,'sibling source freezes during review text upload');
      releaseUpload();await eventually(async()=>/请点下方/.test(await latePanels[0].innerText()),'review text upload completed');await checkEditable(latePanels[1]);
     }
