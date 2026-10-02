@@ -199,7 +199,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   assert.equal(resourceReads,1,'failed resource read is not automatically repeated');
   await feedback.locator('#taskForm [name=note]').fill('这次草稿仍保留');
   await page.unroute('**/api/agent/message?*');await resources.getByRole('button',{name:'重试读取资料'}).click();
-  await resources.locator('[data-task-material-state]').waitFor();assert.match(await resources.innerText(),/AI 已整理[\s\S]*1 \/ 1 页[\s\S]*仅供家长核对/);
+  await resources.locator('[data-task-material-state]').waitFor();assert.match(await resources.innerText(),/AI 已整理[\s\S]*1 \/ 1 页/);assert.match(await resources.innerText(),/不是孩子作答或已完成/);
   assert.equal(await feedback.locator('#taskForm [name=note]').inputValue(),'这次草稿仍保留');
   assert.equal(await resources.locator('[data-school-pdf-retry],[data-school-page-read],[data-school-material-retry]').count(),0,'reading does not expose a processing action');
   assert.equal(await resources.locator('img[onerror]').count(),0);await fits(page);await proof(page,'task-prepared-resource-'+width);
@@ -210,6 +210,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   await resources.locator('[data-task-material-unread]').waitFor();assert.match(await resources.innerText(),/AI 已整理[\s\S]*3 \/ 11 页[\s\S]*未读页：4、5、6、7、8、9、10、11[\s\S]*原件前3页待核对/);
   assert.equal(await resources.locator('[data-task-material-state]').count(),1);
   assert.equal(await resources.locator('details').count(),0,'prepared text and teacher originals need no nested disclosure');
+  assert.doesNotMatch(await resources.innerText(),/独立Agent.*每轮/,'task resources omit backend scheduling boilerplate');
   assert.equal(await resources.getByText('原件前3页待核对',{exact:true}).isVisible(),true);
   await fits(page);await proof(page,'task-partial-resource-'+width);
   await feedback.locator('[data-close=taskDialog]').click();
