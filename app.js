@@ -925,7 +925,7 @@ $('#saveTaskFeedback').onclick=async()=>{
    knownFailure=response.status>=400&&response.status<500;throw Error(result.error||'保存失败');
   }
   if(!result.ok||!Number.isInteger(result.record_id)||result.feedback?.task_id!==body.task_id||result.feedback?.child!==body.child||result.record?.source!=='事项:'+body.task_id)throw Error('保存回执与本次反馈不一致');
-  taskFeedbackPending=null;ctx.request_key=crypto.randomUUID();ctx.record_id=null;ctx.expected_created=null;ctx.originals=[];delete ctx.review_basis;delete ctx.comparison_note;delete f.dataset.saving;lockTaskFeedback(false);
+  taskFeedbackPending=null;ctx.request_key=crypto.randomUUID();ctx.record_id=null;ctx.expected_created=null;ctx.originals=[];delete ctx.review_basis;delete ctx.comparison_note;
   const selectedStatus=f.elements.status.value;
   try{await load();const task=data.tasks.find(t=>t.id===body.task_id);if(task){prepareTaskCapture(task,null,result.record_id);
   for(const view of reviewViews){const record=data.records.find(r=>r.id===Number(view.dataset.homeworkReview)),fresh=$('#taskFeedbackHistory [data-homework-review="'+view.dataset.homeworkReview+'"]');if(record&&fresh&&record.child===task.child){fresh.replaceWith(view);loadHomeworkReviewSources(view,record,task)}}f.elements.status.value=selectedStatus}pendingIDs=retained;taskFeedbackExcluded.clear();drawPending();$('#taskFeedbackStatus').textContent='反馈已保存；事项状态未改变。'+(retained.length?'其余'+retained.length+'份材料仍在下方，请写下一份卷的名称并保存。':task?.agenda?.category==='homework'&&body.attachments.some(id=>['image/jpeg','image/png'].includes(data.uploads.find(a=>a.id===id)?.mime))?'可在上方检查这次作答。':'')}
