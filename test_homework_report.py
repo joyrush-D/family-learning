@@ -132,6 +132,27 @@ class HomeworkReportTests(unittest.TestCase):
             self.child('item',self.request(title='虚构孩子PDF',report=body['report']))
         self.assertEqual(self.counts(),before)
 
+    def test_parent_manual_many_originals_keep_child_model_and_ownership_limits(self):
+        ids=[self.photo('child-1') for _ in range(20)]
+        for count in (12,20):
+            report=self.report();report['attachments']=ids[:count]
+            body=self.request(title='虚构%d页原卷'%count,report=report)
+            saved=self.store.save_item(body)
+            item=next(i for i in saved['items'] if i['id']==saved['saved_item_id'])
+            self.assertEqual(item['report']['attachments'],ids[:count])
+            self.assertEqual(self.store.save_item(body)['saved_item_id'],saved['saved_item_id'])
+        before=self.counts()
+        with self.assertRaises(family_study.StudyError):
+            self.store.save_item(self.request(title='超过20份',report=self.report()|dict(attachments=ids+[self.photo()])))
+        with self.assertRaises(family_study.StudyError):
+            self.child('item',self.request(title='孩子超过3份',report=self.report()|dict(attachments=ids[:4])))
+        with self.assertRaises(family_study.StudyError):
+            self.store.draft_report(dict(child_id='child-1',day=self.day,text='虚构原话',attachments=ids[:4]))
+        import family_reading
+        with self.assertRaises(family_reading.ReadingError):
+            self.store.save_item(self.request(title='第12份属于另一孩子',report=self.report()|dict(attachments=ids[:11]+[self.photo('child-2')])))
+        self.assertEqual(self.counts(),before);self.assertEqual(self.calls,[])
+
     def test_recorded_homework_stays_homework_without_an_invented_deadline(self):
         for actor,title in [('parent','读三段并回答'),('child','读第二页并回答')]:
             body=self.request(title=title,report=self.report())

@@ -43,7 +43,7 @@
   catch(e){entry.error=e.message||'上传未完成'}
  }
  async function addFiles(files){
-  if(busy)return;remember();if(current.files.length+files.length>3){status('每次最多三份作业材料，请分次添加。');return}
+  if(busy)return;remember();const limit=ctx.child?3:20;if(current.files.length+files.length>limit){status(`这次最多${limit}份作业材料，请移除后再添加。`);return}
   busy=true;paint();const gen=generation;
   for(const file of files){const entry={file,name:file.name,id:'',error:''};current.files.push(entry);await upload(entry);if(gen!==generation)return}
   busy=false;status('成功上传的原件已保留，尚未加入功课；未成功的文件可重试。');
@@ -51,7 +51,7 @@
  function candidate(values={}){return {title:'',goal:'',subject:'',excerpt:'',planned_minutes:'',...values,request_key:uuid(),pending:null,saved:false}}
  function source(){return {text:current.text,explanation:current.explanation,attachments:current.files.map(f=>f.id)}}
  async function draft(){
-  remember();if(current.items.some(i=>!i.saved&&(i.title||i.goal||i.subject||i.planned_minutes||i.reviewed))&&!confirm('重新整理会放弃未保存的手填作业，确定继续？'))return;
+  remember();if(current.files.length>3){status('自动整理最多三份原件；这些材料已保留，可直接手填并保存作业。');return}if(current.items.some(i=>!i.saved&&(i.title||i.goal||i.subject||i.planned_minutes||i.reviewed))&&!confirm('重新整理会放弃未保存的手填作业，确定继续？'))return;
   if(current.files.some(f=>!f.id)){status('请先完成或移除未成功的上传。');return}busy=true;status('正在按这次材料整理，完成后请核对。');const gen=generation;
   try{const r=await ctx.request('draft',source());if(gen!==generation)return;if(!Array.isArray(r?.draft?.items)||!Array.isArray(r.draft.uncertainties))throw Error('整理回执无法核对');current.items=r.draft.items.length?r.draft.items.map(candidate):ctx.child?[]:[candidate()];current.uncertainties=r.draft.uncertainties;current.message=r.draft.items.length?'下面是草稿，标题和目标都可以修改。':'没有读到明确的可执行功课，请补充解释或直接填写。'}catch(e){if(gen!==generation)return;current.message=e.message||'整理暂不可用，仍可直接填写。'}finally{if(gen===generation){busy=false;paint()}}
  }
@@ -63,7 +63,7 @@
   catch(e){if(gen!==generation)return;if([400,403,404,422].includes(e.status))row.pending=null;row.error=(e.message||'保存未完成')+'；内容保留，请核对后重试。'}finally{if(gen===generation){busy=false;paint()}}
  }
  async function record(){
-  if(recorder){recorder.stop();return}remember();if(current.files.length>=3){status('这次已有三份原件，请分次记录。');return}
+  if(recorder){recorder.stop();return}remember();const limit=ctx.child?3:20;if(current.files.length>=limit){status(`这次已有${limit}份原件，请移除后再录音。`);return}
   if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder){status('此浏览器不能录音，可用键盘语音输入或上传录音。');return}
   const gen=generation;micPending=true;paint();
   try{const activeStream=await navigator.mediaDevices.getUserMedia({audio:true});if(gen!==generation){activeStream.getTracks().forEach(t=>t.stop());return}stream=activeStream;const mime=['audio/webm','audio/mp4','audio/ogg'].find(m=>MediaRecorder.isTypeSupported(m));const currentRecorder=new MediaRecorder(activeStream,mime?{mimeType:mime}:undefined),chunks=[];recorder=currentRecorder;micPending=false;
