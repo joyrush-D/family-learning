@@ -141,12 +141,13 @@
   if(type==='finish'||type==='manual'){const body={id:item.id,version,action:type};if(type==='finish'){body.result=v.result;body.assistance=v.assistance;body.note=v.note}if(v.actual_minutes!=='')body.actual_minutes=Number(v.actual_minutes);newRequest('/api/study/action',body,form.dataset.studyKey)}
  }
  function leave(){remember();clearInterval(clock);clock=null;controller?.abort();sequence++;if(ctx?.root){ctx.root.removeEventListener('click',click);ctx.root.removeEventListener('submit',submit);ctx.root.removeEventListener('change',change)}ctx=null}
+ function canSwitch(){if(busy||pending)return false;remember();return true}
  function mount(options){
   leave();ctx={...options,day:options.day||today()};snapshot=null;editor=null;message=pending?'上次保存结果尚未核对，请先重试。':'';
-  if(pending){ctx.child_id=pending.body.child_id;ctx.day=pending.body.day;ctx.onChildChanged?.(ctx.child_id);ctx.onDayChanged?.(ctx.day)}
+  if(pending){if(ctx.onChildChanged?.(pending.body.child_id)===false){ctx.root.innerHTML='<p role="alert">上次保存结果尚未核对，请回到原孩子重试。</p>';return}ctx.child_id=pending.body.child_id;ctx.day=pending.body.day;ctx.onDayChanged?.(ctx.day)}
   editor=draftView().editor;
   ctx.root.addEventListener('click',click);ctx.root.addEventListener('submit',submit);ctx.root.addEventListener('change',change);paint();read();clock=setInterval(tick,1000);
  }
  window.addEventListener('beforeunload',e=>{remember();if(pending||[...drafts.values()].some(view=>view.forms.size)){e.preventDefault();e.returnValue=''}});
- window.FamilyStudy={mount,leave,openHomework};
+ window.FamilyStudy={mount,leave,openHomework,canSwitch};
 })();

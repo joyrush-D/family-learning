@@ -30,7 +30,7 @@ function currentChild(){return data?.children.find(c=>c.name===child)}
 function rememberChild(){try{const id=currentChild()?.id;if(id)localStorage.setItem(childStorageKey,id);else localStorage.removeItem(childStorageKey)}catch{}}
 function selectChild(id){
  const owner=data.children.find(c=>c.id===id);if(!owner)return false;if(owner.name===child){rememberChild();return true}
- if(owner.name!==child&&(askState.busy||window.FamilyWrongReview?.canSwitch?.()===false||window.FamilyTeachers?.canSwitch?.()===false)){toast('请先核对当前保存或处理结果，再切换孩子。');return false}
+ if(owner.name!==child&&(askState.busy||window.FamilyStudy?.canSwitch?.()===false||window.FamilyGoals?.canSwitch?.()===false||window.FamilyWrongReview?.canSwitch?.()===false||window.FamilyTeachers?.canSwitch?.()===false)){toast('请先核对当前保存或处理结果，再切换孩子。');return false}
  child=owner.name;subject='';studyChildID=id;goalChildID=id;goalSelectedID='';calendarState.childID=id;
  if(schoolInbox.child_id!==id){schoolInbox.child_id=id;schoolInbox.view=null;schoolInbox.day='';schoolInbox.offset='0';schoolInbox.error='';schoolInbox.scope=null}
  if(!askState.busy&&askState.child!==child){askState.child=child;askState.result=null;askState.error=''}
