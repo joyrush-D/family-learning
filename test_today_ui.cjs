@@ -64,7 +64,7 @@ function fixtures(base){
     let sourceChecks=0;
     await p.route('**/api/agent/collector/check',r=>{sourceChecks++;assert.deepEqual(r.request().postDataJSON(),{});return r.fulfill({status:width===360?503:200,json:width===360?{error:'虚构后台暂不可用'}:{ok:true}})});
     await p.goto(server.url,{waitUntil:'load'});await ready(p);await fit(p);await selectedChild(p,state.children,state.children[0]);
-    const original=card('TODAY').locator(':scope > .checkrow .taskbody > .toolbar [data-school-original-ref]');assert(await original.isVisible(),'homework source is visible before expanding details');assert.match(await original.innerText(),/查看作业原件/);
+    const original=card('TODAY').locator(':scope > .checkrow .taskbody > .task-actions > .toolbar [data-school-original-ref]');assert(await original.isVisible(),'homework source is visible before expanding details');assert.match(await original.innerText(),/查看作业原件/);
     assert.equal(await original.locator('.school-publication-context').innerText(),'发言人：示例周老师 · 虚构学校群 <甲班>');assert.equal(await original.locator('甲班').count(),0,'source names are text, not HTML');
     state.tasks.find(t=>t.id==='TODAY').agenda.publications=[{...publication,sender:'   '}];await p.reload({waitUntil:'load'});await ready(p);
     assert.equal(await original.locator('.school-publication-context').innerText(),'发言人：未记录 · 虚构学校群 <甲班>','whitespace names do not imply a recorded publisher');
