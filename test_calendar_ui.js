@@ -261,6 +261,7 @@ test('refresh after a save preserves the loaded week while explicitly fetching f
 
 test('source health and goal citations keep the same child while a save is unresolved',()=>{
  const h=harness();h.ctx.data.agent={sources:[{child_id:'child-a',name:'虚构甲群',platform:'qq',enabled:true,error:'synthetic'},{child_id:'child-b',name:'虚构乙群',platform:'qq',enabled:true,error:'synthetic'}]};
+ const core=readFileSync(__dirname+'/app.js','utf8');h.ctx.currentSources=()=>h.ctx.data.agent.sources;vm.runInContext(core.slice(core.indexOf('function currentSourceStatus('),core.indexOf('function currentSourceCardsHTML(')),h.ctx);
  assert.match(h.ctx.sourceCoverageHTML(),/虚构甲群/);assert.doesNotMatch(h.ctx.sourceCoverageHTML(),/虚构乙群/);h.ctx.selectChild('child-b');assert.match(h.ctx.sourceCoverageHTML(),/虚构乙群/);assert.doesNotMatch(h.ctx.sourceCoverageHTML(),/虚构甲群/);
  const app=readFileSync(__dirname+'/app.js','utf8'),handlers=[],ctx=vm.createContext({document:{addEventListener:(_,f)=>handlers.push(f)},data:{children:[{id:'child-a'},{id:'child-b'}]},page:'study',render(){throw Error('A rejected child switch must not repaint a different goal')},window:{scrollTo(){}},selectChild:()=>false});
  vm.runInContext(app.slice(app.indexOf("let goalChildID=''"),app.indexOf("document.addEventListener('click',e=>{const b=e.target.closest('[data-goal-teacher]')")),ctx);
