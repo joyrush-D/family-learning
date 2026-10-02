@@ -31,6 +31,7 @@ async function run(browser,width){
  });server.listen(0,'127.0.0.1');await once(server,'listening');
  const page=await browser.newPage({viewport:{width,height:950}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
  const profile=()=>page.locator('[data-teacher-form="profile"]'),form=()=>page.locator('[data-teacher-form="observation"]'),status=()=>page.locator('#teachersStatus');
+ const openPanel=async selector=>{const panel=page.locator(selector);if(!await panel.evaluate(el=>el.open))await panel.locator(':scope > summary').click()};
  const settled=()=>page.waitForFunction(()=>!document.querySelector('[data-teacher-retry]')&&document.querySelector('#teachersStatus').textContent.includes('已保存'));
  try{
   await page.goto('http://127.0.0.1:'+server.address().port+'/');await page.locator('[data-teacher-observation]').first().waitFor();
@@ -44,28 +45,34 @@ async function run(browser,width){
   assert.equal(await page.locator('[data-teacher-observation="TEACHOBS-HOME-0"]').count(),1);
   assert.equal(await page.locator('[data-teacher-observation="TEACHOBS-HOME-1"]').count(),0,'shared teacher does not expose sibling household observations');
   assert.deepEqual(await profile().locator('[name="child_ids"]:checked').evaluateAll(xs=>xs.map(x=>x.value).sort()),['child-a','child-b'],'shared teacher profile retains the complete mapping');
-  await page.locator('.teacher-profile summary').click();await profile().locator('[name="display_name"]').fill('虚构未保存称呼');
+  await openPanel('.teacher-profile');await profile().locator('[name="display_name"]').fill('虚构未保存称呼');
   await page.locator('[data-child="child-b"]').click();await page.locator('[data-teacher-observation="TEACHOBS-HOME-1"]').waitFor();assert.equal(await page.locator('[data-teacher-observation="TEACHOBS-HOME-0"]').count(),0);
   await page.locator('[data-teacher-select="TEACH-B"]').click();await page.locator('[data-child="child-a"]').click();assert.equal(await profile().locator('[name="display_name"]').inputValue(),'虚构未保存称呼');
-  await page.locator('.teacher-write summary').click();await form().locator('[name="kind"]').selectOption('praise');await form().locator('[name="target"]').selectOption('other_students');
+  await openPanel('.teacher-write');await form().locator('[name="kind"]').selectOption('praise');await form().locator('[name="target"]').selectOption('other_students');
   await form().locator('[name="behavior"]').fill('虚构记录：独立订正并说明原因');await form().locator('[name="teacher_reason"]').fill('老师原话：解释清楚');await form().locator('[name="parent_note"]').fill('家长待核对想法');
   assert.equal(await form().locator('[data-teacher-own]').isVisible(),false);assert.equal(await form().locator('[name="other_student_name"]').count(),0);
   await page.locator('[data-child="child-b"]').click();assert.equal(await form().locator('[name="behavior"]').inputValue(),'','new observations do not inherit another child draft');
-  await page.locator('.teacher-write').evaluate(el=>el.open=true);
+  await openPanel('.teacher-write');
   await form().locator('[name="behavior"]').fill('虚构孩子乙未保存草稿');await page.locator('[data-child="child-a"]').click();assert.equal(await form().locator('[name="behavior"]').inputValue(),'虚构记录：独立订正并说明原因','returning to the original child restores its draft');
   await page.evaluate(()=>{FamilyTeachers.leave();document.querySelector('#root').innerHTML='另一页';mount()});await form().waitFor();assert.equal(await form().locator('[name="behavior"]').inputValue(),'虚构记录：独立订正并说明原因');
   failure='auth';await form().locator('[type="submit"]').click();await page.locator('[data-teacher-retry]:not([disabled])').waitFor();const originalKey=lastBody.request_key;assert.equal(await form().locator('[name="behavior"]').inputValue(),'虚构记录：独立订正并说明原因');
   await page.locator('[data-child="child-b"]').click();assert.equal(await page.locator('[data-child="child-a"]').getAttribute('aria-pressed'),'true','pending save rejects global child switches');
   await page.locator('[data-teacher-retry]').click();await settled();assert.equal(lastBody.request_key,originalKey);assert.equal(lastBody.child_id,'');assert.equal(writes,1);assert.equal(await profile().locator('[name="display_name"]').inputValue(),'虚构未保存称呼');
-  await page.locator('.teacher-write summary').click();await form().locator('[name="behavior"]').fill('虚构丢失答复检查');failure='lost';await form().locator('[type="submit"]').click();await page.locator('[data-teacher-retry]:not([disabled])').waitFor();const lostKey=lastBody.request_key;
+  await openPanel('.teacher-write');await form().locator('[name="behavior"]').fill('虚构丢失答复检查');failure='lost';await form().locator('[type="submit"]').click();await page.locator('[data-teacher-retry]:not([disabled])').waitFor();const lostKey=lastBody.request_key;
   await page.locator('[data-teacher-retry]').click();await settled();assert.equal(lastBody.request_key,lostKey);assert.equal(writes,2);assert.equal(state.observations.filter(x=>x.behavior==='虚构丢失答复检查').length,1);
   await page.locator('[data-teacher-edit="TEACHOBS-A"]').click();await form().locator('[name="behavior"]').fill('虚构本机更正草稿');failure='conflict';await form().locator('[type="submit"]').click();await page.locator('[data-teacher-conflict]').waitFor();
   await page.locator('[data-teacher-conflict]').click();await page.locator('[data-teacher-accept-version]').waitFor();assert.equal(await form().locator('[name="behavior"]').inputValue(),'虚构本机更正草稿');assert.match(await page.locator('.teacher-records').innerText(),/另一位家长已补充/);
   await page.locator('[data-teacher-accept-version]').click();assert.equal(await form().getAttribute('data-version'),'2');await form().locator('[name="status"]').selectOption('withdrawn');await form().locator('[type="submit"]').click();await settled();assert.equal(lastBody.status,'withdrawn');assert.equal(lastBody.version,2);
   await page.evaluate(()=>{FamilyTeachers.leave();mount('TEACH-B','child-b')});await page.waitForFunction(()=>document.querySelector('[data-teacher-select="TEACH-B"]')?.getAttribute('aria-pressed')==='true');assert.equal(await page.locator('[data-teacher-observation]').count(),0);
-  await page.locator('[data-child="child-a"]').click();await page.locator('.teacher-profile').evaluate(el=>el.open=true);await profile().locator('[data-teacher-discard]').click();assert.equal(await profile().locator('[name="display_name"]').inputValue(),'虚构甲老师');
-  await page.locator('.teacher-profile').evaluate(el=>el.open=true);await profile().locator('[type="submit"]').click();await settled();assert.deepEqual(lastBody.child_ids.sort(),['child-a','child-b'],'saving the scoped profile does not remove the other child');assert.deepEqual(lastBody.source_ids,['source-a']);
+  await page.locator('[data-child="child-a"]').click();await openPanel('.teacher-profile');await profile().locator('[data-teacher-discard]').click();assert.equal(await profile().locator('[name="display_name"]').inputValue(),'虚构甲老师');
+  assert(await page.locator('.teacher-profile').evaluate(el=>el.open),'discarding input retains the expanded profile');
+  const freshProfile=state.teachers.find(t=>t.id==='TEACH-A');freshProfile.subject='虚构服务端更正科目';freshProfile.version++;
+  const unchangedProfile=await page.locator('.teacher-profile').elementHandle();await page.locator('[data-teacher-refresh]').click();await page.waitForFunction(el=>!el.isConnected,unchangedProfile);
+  assert(await page.locator('.teacher-profile').evaluate(el=>el.open),'refreshing unchanged content retains the expanded profile');
+  assert.equal(await profile().locator('[name="subject"]').inputValue(),freshProfile.subject,'expanded state does not restore stale field values');assert.equal(await profile().getAttribute('data-version'),String(freshProfile.version));
+  await profile().locator('[type="submit"]').click();await settled();assert.deepEqual(lastBody.child_ids.sort(),['child-a','child-b'],'saving the scoped profile does not remove the other child');assert.deepEqual(lastBody.source_ids,['source-a']);
   await profile().locator('[type="submit"]:not([disabled])').waitFor();
+  assert(await page.locator('.teacher-profile').evaluate(el=>el.open),'saving input retains the expanded profile');
   // A source citation can point to a teacher created after this page cached its list.
   state.teachers.push({id:'TEACH-CITATION-NEW',version:1,display_name:'虚构新通知老师',subject:'语文',child_ids:['child-a'],source_ids:['source-a'],public_url:'',archived:false,public_info:{status:'unconfigured'}});
   state.observations.push({id:'TEACHOBS-CITATION-NEW',version:1,teacher_id:'TEACH-CITATION-NEW',day:'2026-09-01',kind:'requirement',target:'class',child_id:'',scope_child_id:'child-a',behavior:'虚构通知：按顺序说出物品用途。',teacher_reason:'',parent_note:'',source_id:'source-a',message_id:'synthetic-new-message',source_url:'',status:'active'});
@@ -84,7 +91,7 @@ async function run(browser,width){
   assert.equal(await page.locator('.teachers-view button:visible,.teachers-view summary:visible').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'touch targets');
   assert.deepEqual(errors,[]);
   if(process.env.TEACHERS_UI_PROOF_DIR){fs.mkdirSync(process.env.TEACHERS_UI_PROOF_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.TEACHERS_UI_PROOF_DIR,'teachers-'+width+'.png'),fullPage:true})}
-  return {width,singleChildScope:true,childDraftIsolation:true,pendingChildGuard:true,completeProfileMapping:true,draftsAcrossTeachersAndPages:true,authRetry:true,lostReplyDeduplicated:true,conflictChecked:true,correctionAndWithdrawal:true,teacherCitationSelection:true,newTeacherCitationAfterCache:true,citationReadFailureRetry:true,otherStudentNameAbsent:true,escapedEvidence:true,noOverflow:true};
+  return {width,singleChildScope:true,childDraftIsolation:true,pendingChildGuard:true,completeProfileMapping:true,panelExpansionRetained:true,draftsAcrossTeachersAndPages:true,authRetry:true,lostReplyDeduplicated:true,conflictChecked:true,correctionAndWithdrawal:true,teacherCitationSelection:true,newTeacherCitationAfterCache:true,citationReadFailureRetry:true,otherStudentNameAbsent:true,escapedEvidence:true,noOverflow:true};
  }finally{await page.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve))}
 }
 (async()=>{const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});try{const result=[];for(const width of [360,1440])result.push(await run(browser,width));console.log(JSON.stringify({passed:true,synthetic:true,checks:result},null,2))}finally{await browser.close()}})().catch(e=>{console.error(e);process.exitCode=1});

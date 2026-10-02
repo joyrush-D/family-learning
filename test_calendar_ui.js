@@ -181,6 +181,13 @@ test('agent-classified homework appears with homework while notices stay separat
  assert.equal((html.match(/data-notice="yesterday-a"/g)||[]).length,1);
 });
 
+test('agent accepted details contain only the current child after switching',()=>{
+ const h=harness(),core=readFileSync(__dirname+'/app.js','utf8');h.ctx.data.agent={items:[{id:'accepted-a',state:'accepted',child_id:'child-a'},{id:'accepted-b',state:'accepted',child_id:'child-b'}]};
+ Object.assign(h.ctx,{schoolInboxHTML:()=>'',agentStatusHTML:()=>'',agentPending:()=>[],agentItemHTML:x=>`<article data-test-accepted="${x.id}"></article>`,empty:()=>''});vm.runInContext(core.slice(core.indexOf('function agentPageHTML()'),core.indexOf('async function agentAction(')),h.ctx);
+ let html=h.ctx.agentPageHTML();assert.match(html,/最近加入的待办与依据/);assert.match(html,/data-test-accepted="accepted-a"/);assert.doesNotMatch(html,/data-test-accepted="accepted-b"/);
+ h.ctx.selectChild('child-b');html=h.ctx.agentPageHTML();assert.match(html,/data-test-accepted="accepted-b"/);assert.doesNotMatch(html,/data-test-accepted="accepted-a"/);
+});
+
 test('each selected child latest homework stays visible, including collected work without a deadline',()=>{
  const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.agendaItemHTML=x=>`<article data-notice="${x.id}">${x.title}</article>`;
  const row=(id,day,kind='school',owner='child-a',due='')=>({id,task_id:kind==='task'?id:'',kind,child_ids:[owner],title:id,closed:false,agenda:{category:'homework',box:'inbox',published_on:day,due_on:due,scheduled_on:''}});
@@ -249,4 +256,14 @@ test('week overview includes every day, preserves child/status boundaries and de
 
 test('refresh after a save preserves the loaded week while explicitly fetching fresh data',async()=>{
  const h=harness();await h.ctx.calendarRead();const cached=h.state().result;h.ctx.calendarInvalidate(true);assert.equal(h.state().result,cached);assert.equal(h.state().dirty,true);const calls=h.calls.length;await h.ctx.calendarRead();assert.equal(h.calls.length,calls+1);assert.equal(h.state().dirty,false);h.ctx.calendarInvalidate();assert.equal(h.state().result,null);
+});
+
+
+test('source health and goal citations keep the same child while a save is unresolved',()=>{
+ const h=harness();h.ctx.data.agent={sources:[{child_id:'child-a',name:'虚构甲群',platform:'qq',enabled:true,error:'synthetic'},{child_id:'child-b',name:'虚构乙群',platform:'qq',enabled:true,error:'synthetic'}]};
+ assert.match(h.ctx.sourceCoverageHTML(),/虚构甲群/);assert.doesNotMatch(h.ctx.sourceCoverageHTML(),/虚构乙群/);h.ctx.selectChild('child-b');assert.match(h.ctx.sourceCoverageHTML(),/虚构乙群/);assert.doesNotMatch(h.ctx.sourceCoverageHTML(),/虚构甲群/);
+ const app=readFileSync(__dirname+'/app.js','utf8'),handlers=[],ctx=vm.createContext({document:{addEventListener:(_,f)=>handlers.push(f)},data:{children:[{id:'child-a'},{id:'child-b'}]},page:'study',render(){throw Error('A rejected child switch must not repaint a different goal')},window:{scrollTo(){}},selectChild:()=>false});
+ vm.runInContext(app.slice(app.indexOf("let goalChildID=''"),app.indexOf("document.addEventListener('click',e=>{const b=e.target.closest('[data-goal-teacher]')")),ctx);
+ for(const handler of handlers)handler({target:{closest:selector=>({dataset:selector==='[data-goal-id]'?{goalId:'synthetic-goal-b',goalChild:'child-b'}:{diagnosisChild:'child-b'}})}});
+ assert.equal(vm.runInContext('page',ctx),'study');assert.equal(vm.runInContext('goalSelectedID',ctx),'');assert.equal(vm.runInContext('goalFocus',ctx),'');
 });

@@ -174,7 +174,7 @@ function currentSourceStatus(s){
  return !Number.isFinite(time)||time>Date.now()+60000||overdue?'读取待核对':'最近读取成功';
 }
 function sourceCoverageHTML(){
- const sources=currentSources(),lines=sources.flatMap(s=>{
+ const sources=currentSources().filter(s=>s.child_id===currentChild()?.id),lines=sources.flatMap(s=>{
   const status=currentSourceStatus(s),unread=Number.isSafeInteger(s.unread_count)&&s.unread_count>0?s.unread_count:0;
   if(status==='最近读取成功'&&!unread)return [];
   const owner=data.children.find(c=>c.id===s.child_id),platform=s.platform==='qq'?'QQ':s.platform==='wechat'?'微信':'消息来源';
@@ -1382,7 +1382,7 @@ function askOpenCalendarDraft(){
 function wireAsk(){
   const f=$('#askForm');
   f.elements.question.oninput=()=>{askState.question=f.elements.question.value;askState.error='';$('#askError').textContent=''};
-  f.elements.child.onchange=()=>{selectChild(data.children.find(c=>c.name===f.elements.child.value)?.id);askState.child=f.elements.child.value;askState.result=null;askState.error='';render()};
+  f.elements.child.onchange=()=>{if(!selectChild(data.children.find(c=>c.name===f.elements.child.value)?.id)){render();return}askState.child=f.elements.child.value;askState.result=null;askState.error='';render()};
   for(const name of ['start','end'])f.elements[name].onchange=()=>{askState[name]=f.elements[name].value;askState.error='';$('#askError').textContent='';if(name==='start')f.elements.end.min=askState.start};
   f.onsubmit=e=>{e.preventDefault();askRun('query')};
   $('#askCalendarDraft').onclick=()=>askRun('draft');
@@ -1783,7 +1783,7 @@ async function readSchoolInbox(changes={}){
 }
 document.addEventListener('click',e=>{const b=e.target.closest('[data-school-inbox-read],[data-school-inbox-offset]');if(b)readSchoolInbox(b.hasAttribute('data-school-inbox-offset')?{offset:b.dataset.schoolInboxOffset}:{})});
 document.addEventListener('change',e=>{if(schoolInbox.busy)return;if(e.target.matches('[data-school-inbox-child]')){if(!selectChild(e.target.value)){render();return}render();readSchoolInbox({child_id:e.target.value,day:'',offset:'0'})}if(e.target.matches('[data-school-inbox-day]')){schoolInbox.view=null;readSchoolInbox({day:e.target.value,offset:'0'})}});
-function agentPageHTML(){const files=(data.agent?.file_messages||[]).filter(f=>f.child_id===currentChild()?.id);return `<h1>成长助手</h1><div class="toolbar"><button data-page="home">返回今天</button><button data-agent-refresh>更新显示</button></div>${schoolInboxHTML()}${agentStatusHTML(true)}<section class="card">${agentPending(currentChild()?.id).map(i=>agentItemHTML(i,{compact:i.kind==='school'&&i.plan?.school_task?.state!=='reference',agenda:data.today_calendar?.inbox?.find(x=>x.kind==='school'&&x.id===i.id)?.agenda})).join('')||empty('目前没有待看的提醒；读取情况见上方。')}</section>${files.length?`<details class="card" data-qq-files><summary>QQ群文件原件（${files.length}）</summary><p class="small muted">原件已保存不等于内容已读或形成作业；打开原消息核对整理进度和缺口。</p>${files.map(f=>`<div class="task-goal"><p>${esc(f.name||'未命名原件')} · ${esc(agentTime(f.time))}</p><p class="small muted">${esc(f.source)}</p><button data-school-original-ref="${esc(`message:${f.source_id}:${f.message_id}`)}" data-school-original-child="${esc(f.child_id)}">查看原消息与原件</button></div>`).join('')}</details>`:''}${(data.agent?.items||[]).some(x=>x.state==='accepted'&&x.child_id===currentChild()?.id)?`<details class="card"><summary>最近加入的待办与依据</summary>${data.agent.items.filter(x=>x.state==='accepted').map(agentItemHTML).join('')}</details>`:''}`}
+function agentPageHTML(){const files=(data.agent?.file_messages||[]).filter(f=>f.child_id===currentChild()?.id);return `<h1>成长助手</h1><div class="toolbar"><button data-page="home">返回今天</button><button data-agent-refresh>更新显示</button></div>${schoolInboxHTML()}${agentStatusHTML(true)}<section class="card">${agentPending(currentChild()?.id).map(i=>agentItemHTML(i,{compact:i.kind==='school'&&i.plan?.school_task?.state!=='reference',agenda:data.today_calendar?.inbox?.find(x=>x.kind==='school'&&x.id===i.id)?.agenda})).join('')||empty('目前没有待看的提醒；读取情况见上方。')}</section>${files.length?`<details class="card" data-qq-files><summary>QQ群文件原件（${files.length}）</summary><p class="small muted">原件已保存不等于内容已读或形成作业；打开原消息核对整理进度和缺口。</p>${files.map(f=>`<div class="task-goal"><p>${esc(f.name||'未命名原件')} · ${esc(agentTime(f.time))}</p><p class="small muted">${esc(f.source)}</p><button data-school-original-ref="${esc(`message:${f.source_id}:${f.message_id}`)}" data-school-original-child="${esc(f.child_id)}">查看原消息与原件</button></div>`).join('')}</details>`:''}${(data.agent?.items||[]).some(x=>x.state==='accepted'&&x.child_id===currentChild()?.id)?`<details class="card"><summary>最近加入的待办与依据</summary>${data.agent.items.filter(x=>x.state==='accepted'&&x.child_id===currentChild()?.id).map(agentItemHTML).join('')}</details>`:''}`}
 async function agentAction(obj){const r=await apiFetch('/api/agent/action',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify(obj)});const result=await r.json();if(!r.ok){const error=Error(result.error||'处理失败，请重试');error.status=r.status;throw error}return result}
 function schoolChangeForm(f,item){
  const brief=item.plan?.school_task||{},panel=document.createElement('div');let expected=item.updated,targetVersion=0,targetUpdated='',dateEdited=false;
@@ -1896,9 +1896,9 @@ $('#taskFocusReload').onclick=async()=>{
 $('#taskFocusDialog').addEventListener('cancel',e=>{if(busy)e.preventDefault()});
 
 let goalChildID='',goalSelectedID='',goalFocus='';
-document.addEventListener('click',e=>{const b=e.target.closest('[data-goal-id]');if(b){goalSelectedID=b.dataset.goalId;selectChild(b.dataset.goalChild);goalSelectedID=b.dataset.goalId;page='goals';render();window.scrollTo(0,0)}});
+document.addEventListener('click',e=>{const b=e.target.closest('[data-goal-id]');if(b){if(!selectChild(b.dataset.goalChild))return;goalSelectedID=b.dataset.goalId;page='goals';render();window.scrollTo(0,0)}});
 // A due re-check reminder opens that child's profile at the wrong-question diagnosis.
-document.addEventListener('click',e=>{const b=e.target.closest('[data-diagnosis-child]');if(b&&data.children.some(c=>c.id===b.dataset.diagnosisChild)){goalSelectedID='';selectChild(b.dataset.diagnosisChild);goalFocus='diagnosis';page='goals';render();goalFocus='';window.scrollTo(0,0)}});
+document.addEventListener('click',e=>{const b=e.target.closest('[data-diagnosis-child]');if(b&&data.children.some(c=>c.id===b.dataset.diagnosisChild)){if(!selectChild(b.dataset.diagnosisChild))return;goalSelectedID='';goalFocus='diagnosis';page='goals';render();goalFocus='';window.scrollTo(0,0)}});
 
 document.addEventListener('click',e=>{const b=e.target.closest('[data-goal-teacher]');if(!b||b.disabled)return;teacherSelectedID=b.dataset.goalTeacher;page='teachers';render();window.scrollTo(0,0)});
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-goal-record],[data-goal-task],[data-goal-followup]');if(!b)return;const followup=b.dataset.goalFollowup,record=b.dataset.goalRecord||followup,task=b.dataset.goalTask;b.disabled=true;try{await load(false);const exists=record?data.records.some(r=>r.id===Number(record)):data.tasks.some(t=>t.id===task);if(!exists)throw Error('记录已变化，请更新显示');const open=document.createElement('button');if(followup){open.dataset.followup=followup;open.dataset.followupKind=b.dataset.followupKind||''}else if(record)open.dataset.record=record;else open.dataset.task=task;open.hidden=true;document.body.append(open);open.click();open.remove()}catch(error){const label=document.querySelector('[data-goal-status]');if(label)label.textContent=error.message||'读取失败，请重试'}finally{b.disabled=false}});

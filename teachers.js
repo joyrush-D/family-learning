@@ -1,7 +1,7 @@
 // Parent-only teaching observations. Drafts stay in this open page, never browser storage.
 (() => {
  let ctx=null,state=null,selected='',editing='',busy=false,pending=null,conflict=null,message='',sequence=0,requestedTeacher='';
- const drafts=new Map();
+ const drafts=new Map(),panels=new Map();
  const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const root=()=>ctx?.root?.isConnected?ctx.root:null;
  const teachers=()=>state?.teachers.filter(t=>!ctx?.child_id||t.child_ids.includes(ctx.child_id))||[];
@@ -15,19 +15,21 @@
  const options=(items,value)=>items.map(([id,label])=>`<option value="${esc(id)}"${id===value?' selected':''}>${esc(label)}</option>`).join('');
  const values=f=>[...new FormData(f)];
  function remember(){
-  if(busy||pending)return;
   for(const f of root()?.querySelectorAll('[data-teacher-form]')||[]){
+   const panel=f.closest('details');if(panel)panels.set(f.dataset.key,panel.open);
+   if(busy||pending)continue;
    const input=values(f);
    if(JSON.stringify(input)===f.dataset.initial)drafts.delete(f.dataset.key);
-   else drafts.set(f.dataset.key,{values:input,version:Number(f.dataset.version),open:f.closest('details')?.open});
+   else drafts.set(f.dataset.key,{values:input,version:Number(f.dataset.version)});
   }
  }
  function restore(){
   for(const f of root()?.querySelectorAll('[data-teacher-form]')||[]){
    f.dataset.initial=JSON.stringify(values(f));
+   const panel=f.closest('details');if(panel&&panels.has(f.dataset.key))panel.open=panels.get(f.dataset.key);
    const d=drafts.get(f.dataset.key);if(!d)continue;
    for(const el of f.elements){if(!el.name)continue;const matches=d.values.filter(([key])=>key===el.name).map(([,value])=>value);if(el.type==='checkbox')el.checked=matches.includes(el.value);else if(matches.length)el.value=matches[0]}
-   f.dataset.version=String(d.version);if(d.open&&f.closest('details'))f.closest('details').open=true;
+   f.dataset.version=String(d.version);
   }
   targetFields();lock();
  }

@@ -295,16 +295,25 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   await p.getByRole('button',{name:'查看原消息与原件',exact:true}).click();await originalDialog.locator('[data-school-teacher-open]').click();await messageForm.waitFor();await messageForm.locator('[name="teacher_id"]').selectOption(messageTeacher.id);await messageForm.locator('[name="target"]').selectOption('class');await messageForm.locator('[type="submit"]').click();await originalDialog.getByText('这条消息已有记录，保留现有更正与撤回状态。',{exact:true}).waitFor();assert.equal((await(await p.request.get(url+'api/teachers')).json()).observations.filter(o=>o.teacher_id===messageTeacher.id).length,1);
   await p.locator('[data-school-original-close]').click();checks++;
 
-  const schoolItem=autoGoal.school_messages[0].item_id;await p.locator('nav [data-page="more"]').click();await p.locator('[data-page="agent"]').click();for(const attr of ['data-agent-accept','data-school-record-agent','data-agent-dismiss'])assert(await p.locator(`[${attr}="${schoolItem}"]`).isVisible());await p.locator(`[data-agent-accept="${schoolItem}"]`).click();await p.locator('#agentDialog[open]').waitFor();await p.locator('[data-close="agentDialog"]').click();
+  const schoolItem=autoGoal.school_messages[0].item_id;
+  const openSchoolAgent=async()=>{
+   await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="agent"]').click();
+   const item=p.locator(`[data-agent-item="${schoolItem}"]`);await item.locator(`[data-agent-accept="${schoolItem}"]`).waitFor();
+   assert.equal(await p.locator('[data-child-filter="child-2"]').getAttribute('aria-pressed'),'true','school goal and Agent keep the shared child');
+   const details=item.locator('details.task-more');assert.equal(await details.evaluate(d=>d.open),false);
+   for(const attr of ['data-school-record-agent','data-agent-dismiss']){assert.equal(await item.locator(`[${attr}="${schoolItem}"]`).count(),1);assert.equal(await item.locator(`[${attr}="${schoolItem}"]`).isVisible(),false)}
+   await details.locator(':scope > summary').click();for(const attr of ['data-agent-accept','data-school-record-agent','data-agent-dismiss'])assert(await item.locator(`[${attr}="${schoolItem}"]`).isVisible());
+  };
+  await openSchoolAgent();await p.locator(`[data-agent-accept="${schoolItem}"]`).click();await p.locator('#agentDialog[open]').waitFor();await p.locator('[data-close="agentDialog"]').click();
   if(width===360){
    await p.locator(`[data-school-record-agent="${schoolItem}"]`).click();await p.locator('#recordDialog[open]').waitFor();
    await p.locator('#recordForm [name="category"]').selectOption('课程进度');await p.locator('#recordForm [name="subject"]').fill('语文');
    await p.locator('#recordForm [name="day"]').fill('2026-09-01');await p.locator('#recordForm [name="title"]').fill('虚构学校通知转课程进度');
    assert(await p.locator('#recordForm [name="source"]').isDisabled());await p.locator('#recordForm [type="submit"]').click();await p.locator('#recordDialog').waitFor({state:'hidden'});await p.locator('body[data-page="learning"]').waitFor();
    const saved=(await(await p.request.get(url+'api/state')).json()).records.filter(r=>r.title==='虚构学校通知转课程进度');assert.equal(saved.length,1);assert.equal(saved[0].category,'课程进度');assert.match(saved[0].source,/^message:/);
-   await p.locator('nav [data-page="more"]').click();await p.locator('[data-page="agent"]').click();await p.locator(`[data-school-record-agent="${schoolItem}"]`).click();await p.locator('body[data-page="learning"]').waitFor();assert.equal(await p.locator('#recordDialog[open]').count(),0);
+   await openSchoolAgent();await p.locator(`[data-school-record-agent="${schoolItem}"]`).click();await p.locator('body[data-page="learning"]').waitFor();assert.equal(await p.locator('#recordDialog[open]').count(),0);
    assert.equal((await(await p.request.get(url+'api/state')).json()).records.filter(r=>r.source===saved[0].source).length,1);
-   await p.locator('nav [data-page="more"]').click();await p.locator('[data-page="agent"]').click();checks++;
+   await openSchoolAgent();checks++;
   }
   await p.locator(`[data-goal-id="${autoGoal.id}"]`).first().click();await p.getByRole('heading',{name:autoGoal.title,exact:true}).waitFor();checks++;
   if(process.env.GOALS_UI_PROOF_DIR){await fs.mkdir(process.env.GOALS_UI_PROOF_DIR,{recursive:true});await p.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'goals-'+width+'.png'),fullPage:true})}
