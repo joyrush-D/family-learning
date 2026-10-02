@@ -127,15 +127,17 @@ def task_category(title):
 
 
 def metadata(app,c,child_id,title,due,refs=(),focus=None):
-    focus=focus or {};messages=[]
+    focus=focus or {};messages=[];publications=[]
     store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
     for ref in refs:
         if not isinstance(ref,str) or not ref.startswith('message:'):continue
         parts=ref[8:].rsplit(':',1)
         if len(parts)!=2:continue
         try:
-            _,msg=store._message_context(c,dict(child_id=child_id,source_id=parts[0],message_id=parts[1]))
+            source,msg=store._message_context(c,dict(child_id=child_id,source_id=parts[0],message_id=parts[1]))
             messages.append(msg)
+            if not any(p['ref']==ref for p in publications):
+                publications.append(dict(ref=ref,source_name=source['name'],sender=msg.get('sender','')))
         except family_agent.AgentError:continue
     times=sorted({sent_at(m.get('time','')) for m in messages}-{''})
     days=sorted({value[:10] for value in times})
@@ -160,7 +162,7 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None):
     category=focus.get('category','')
     if category not in ('homework','todo'):category='todo' if category=='unknown' else task_category(title)
     published_at=max((value for value in times if value[:10]==published),default='')
-    return dict(category=category,published_on=published,published_at=published_at,due_on=due_on,scheduled_on=focus.get('scheduled_on',''),
+    return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,scheduled_on=focus.get('scheduled_on',''),
                 category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox')
 
 

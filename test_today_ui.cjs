@@ -52,6 +52,10 @@ function fixtures(base){
     const state=fixtures(await read()),homework=p.locator('#task-group-homework'),todos=p.locator('#task-group-todo');
     state.attachments=['虚构题目.png','虚构题目续页.png','虚构答案.pdf'];state.printing={printers:[{name:'Synthetic_Printer',label:'虚构打印机',color:false,duplex:false}],jobs:[]};
     state.agent.sources.push({id:'synthetic-audio',child_id:state.children[0].id,name:'虚构学校群',enabled:true});state.tasks.find(t=>t.id==='TODAY').source='message:synthetic-audio:dictation';
+    const publication={ref:'message:synthetic-audio:dictation',sender:'示例周老师',source_name:'虚构学校群 <甲班>'};
+    state.tasks.find(t=>t.id==='TODAY').agenda.publications=[publication];
+    state.today_calendar.inbox.find(i=>i.id==='synthetic-school').agenda.publications=[publication];
+    state.tasks.find(t=>t.id==='SIBLING').agenda.publications=[publication];state.tasks.find(t=>t.id==='SIBLING').source=publication.ref;
     state.agent.items.find(i=>i.id==='synthetic-school').title='待核对：⚠️重要通知⚠️\n\n请准备虚构活动材料。';
     state.agent.items.find(i=>i.id==='synthetic-school').evidence=[{ref:'message:synthetic-audio:dictation',quote:'虚构老师原话'}];
     state.agent.items.push({id:'synthetic-reference',kind:'school',child_id:state.children[0].id,state:'pending',title:'虚构成绩表说明',body:'第一列表示课堂默写记录。',evidence:[],plan:{school_task:{state:'reference',reason:'这段内容解释列标题，没有新作业。'}}});
@@ -61,6 +65,8 @@ function fixtures(base){
     await p.route('**/api/agent/collector/check',r=>{sourceChecks++;assert.deepEqual(r.request().postDataJSON(),{});return r.fulfill({status:width===360?503:200,json:width===360?{error:'虚构后台暂不可用'}:{ok:true}})});
     await p.goto(server.url,{waitUntil:'load'});await ready(p);await fit(p);await selectedChild(p,state.children,state.children[0]);
     const original=card('TODAY').locator(':scope > .checkrow .taskbody > .toolbar [data-school-original-ref]');assert(await original.isVisible(),'homework source is visible before expanding details');assert.match(await original.innerText(),/查看作业原件/);
+    assert.equal(await original.locator('.school-publication-context').innerText(),'发言人：示例周老师 · 虚构学校群 <甲班>');assert.equal(await original.locator('甲班').count(),0,'source names are text, not HTML');
+    await p.reload({waitUntil:'load'});await ready(p);assert.equal(await original.locator('.school-publication-context').isVisible(),true,'reopened daily task retains its saved publication context');
     assert.deepEqual(await homework.locator('[data-today-task]').evaluateAll(xs=>xs.map(x=>x.dataset.todayTask)),['TODAY']);
     assert.equal(await card('SIBLING').count(),0,'the first screen only shows the default child');
     for(const id of ['TODAY','SIBLING']){const task=state.tasks.find(t=>t.id===id),owner=state.children.find(c=>c.name===task.child);await p.locator('[data-child-filter="'+owner.id+'"]').click();await selectedChild(p,state.children,owner);assert.equal(await homework.locator('[data-homework-child]').count(),1,'only the selected child has a homework group');assert.equal(await card(id).locator('.task-owner').innerText(),task.child);assert.match(await card(id).locator('xpath=ancestor::*[@data-homework-child][1]').innerText(),new RegExp(task.child));assert.equal(await card(id).evaluate(x=>!!x.closest('.task-list')),true,'homework stays in the task list');assert.equal(await card(id).locator('.task-next').isVisible(),false,'optional advice stays secondary while full requirement is visible');assert.equal(await card(id).locator('.task-requirement').innerText(),task.action);assert.equal(await card(id).locator('.primary').evaluate(x=>getComputedStyle(x).color),'rgb(13, 43, 44)','primary homework action has dark text on light background')}
@@ -98,6 +104,7 @@ function fixtures(base){
     assert.equal(await p.locator('[data-agent-item="synthetic-school"] h3').innerText(),'请准备虚构活动材料。');
     assert.match(await review.locator('.review-badge').innerText(),/作业 · 有信息待补充/,'newly posted homework remains visibly unconfirmed even when due later');
     assert.equal(await review.locator('[data-school-original-ref]').isVisible(),true,'parent can open the saved original without expanding secondary operations');
+    assert.equal(await review.locator('.school-publication-context').innerText(),'发言人：示例周老师 · 虚构学校群 <甲班>','pending and collected school tasks share publication context');
     await review.locator('[data-school-original-ref]').click();assert.equal(await p.locator('#schoolOriginalDialog').isVisible(),true);await p.locator('#schoolOriginalDialog [data-school-original-close]').click();
     assert.match(await p.locator('[data-agent-item="synthetic-school"] details').textContent(),/⚠️重要通知⚠️/,'original heading is retained');
     assert.equal(await p.locator('#today-courses h2').innerText(),'今日课程与安排');const shared=p.locator('[data-query-target="calendar:shared:'+state.today+'"]');assert.equal(await shared.count(),1);assert.match(await shared.innerText(),new RegExp(state.children[0].name+'、'+state.children[1].name));
@@ -115,6 +122,7 @@ function fixtures(base){
     assert.equal(await firstTask.locator('.tasktools [data-task]').first().innerText(),'提交作业反馈');assert.equal(await firstTask.locator('[data-study-task-add]').textContent(),'作业计时');assert.equal(await firstTask.locator('[data-task-decisions]').isVisible(),false);await firstTask.locator('.task-more > summary').click();assert.equal(await firstTask.locator('[data-task-decisions]').isVisible(),true);await firstTask.locator('.task-more > summary').click();
     assert.equal(await firstTask.locator('.checkhit,button:visible,summary:visible').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'44px actions');
     await p.locator('[data-child-filter="'+state.children[1].id+'"]').click();await selectedChild(p,state.children,state.children[1]);assert.equal(await card('SIBLING').isVisible(),true);assert.equal(await card('TODAY').count(),0);assert.equal(await p.locator('[data-agent-item]').count(),0);assert.equal(await shared.count(),1);
+    assert.equal(await card('SIBLING').locator('.school-publication-context,[data-school-original-ref]').count(),0,'a publication for another child is not rendered');
     await p.locator('nav [data-page="tasks"]').click();await p.locator('nav [data-page="home"]').click();await ready(p);await selectedChild(p,state.children,state.children[1]);assert.equal(await card('TODAY').count(),0,'returning to today keeps the child selection');assert.equal(await card('SIBLING').isVisible(),true);
     await p.reload({waitUntil:'load'});await ready(p);await selectedChild(p,state.children,state.children[1]);assert.equal(await card('SIBLING').isVisible(),true);assert.equal(await card('TODAY').count(),0,'reload does not return to all children');
     await p.locator('[data-child-filter="'+state.children[0].id+'"]').click();

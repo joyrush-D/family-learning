@@ -121,21 +121,43 @@ class AgendaTest(unittest.TestCase):
         s=app.calendar_snapshot('2026-09-12','2026-09-13');row=next(x for x in s['inbox'] if x['kind']=='school')
         self.assertEqual(row['agenda']['published_on'],'2026-09-12');self.assertEqual(row['agenda']['due_on'],'2026-09-12')
         self.assertEqual(row['agenda']['published_at'],'2026-09-12T02:00:00+08:00')
+        publication=dict(ref='message:synthetic-class:1',source_name='虚构班级',sender='示例老师')
+        self.assertEqual(row['agenda']['publications'],[publication])
         self.assertEqual(row['child_ids'],['child-1'])
         result=self.store.act(dict(id=row['id'],action='accept'))
         s=app.calendar_snapshot('2026-09-12','2026-09-13')
         self.assertFalse(any(x['id']==row['id'] for x in s['inbox']))
         self.assertEqual(len([x for x in s['inbox'] if x['task_id']==result['task_id']]),1)
         accepted=next(x for x in s['inbox'] if x['task_id']==result['task_id']);self.assertEqual(accepted['agenda']['published_on'],'2026-09-12')
+        self.assertEqual(accepted['agenda']['publications'],[publication])
         with app.connect() as c:
             other=agenda.metadata(app,c,'child-2','英语作业','',['message:synthetic-class:1'])
         self.assertEqual(other['published_on'],'');self.assertEqual(other['due_on'],'')
+        self.assertEqual(other['publications'],[])
         with app.connect() as c:
             payload=json.loads(c.execute("SELECT payload FROM agent_messages WHERE source_id=? AND id=?",('synthetic-class','1')).fetchone()[0])
             payload['text']='英语作业按课本要求，明天提交报名回执。'
             c.execute("UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?",(json.dumps(payload),'synthetic-class','1'))
             separate=agenda.metadata(app,c,'child-1','英语作业','',['message:synthetic-class:1'])
         self.assertEqual(separate['due_on'],'')
+
+    def test_publication_context_keeps_distinct_messages_and_checks_current_binding(self):
+        stamp='2026-10-02T08:10:00+08:00'
+        self.store.ingest(dict(source_id='synthetic-class',expected_cursor='0',cursor='1',checked_at=stamp,
+                              last_message_time=stamp,error='',messages=[dict(id=str(n),time=stamp,kind='text',
+                              sender='同名发言人' if n<3 else '',sender_id='synthetic-'+str(n),text='虚构要求',unread=False) for n in (1,2,3)]))
+        refs=['message:synthetic-class:'+str(n) for n in (1,2,1,3,404)]
+        with app.connect() as c:
+            before='\n'.join(c.iterdump())
+            result=agenda.metadata(app,c,'child-1','虚构要求','',refs)
+            self.assertEqual(result['publications'],[dict(ref='message:synthetic-class:'+str(n),source_name='虚构班级',
+                                                        sender='同名发言人' if n<3 else '') for n in (1,2,3)])
+            self.assertEqual(before,'\n'.join(c.iterdump()))
+        config=json.loads((app.DATA/'agent.json').read_text());config['sources'][0]['child_id']='child-2'
+        (app.DATA/'agent.json').write_text(json.dumps(config))
+        with app.connect() as c:
+            for child in ('child-1','child-2'):
+                self.assertEqual(agenda.metadata(app,c,child,'虚构要求','',refs)['publications'],[])
 
     def test_pending_school_inbox_keeps_newer_review_first(self):
         for day,label in [('2026-09-06','较早待核对'),('2026-09-07','较新待核对')]:
