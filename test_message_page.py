@@ -225,6 +225,38 @@ class PageStoreTests(unittest.TestCase):
 
 
 class PageHTTPTests(unittest.TestCase):
+    def test_single_message_get_is_sql_read_only_and_never_initializes_missing_database(self):
+        status, result, _ = self.request('POST', '/api/agent/message/page', self.keys(), self.parent)
+        self.assertEqual(status, 200, result)
+        saved = self.snapshot(); sql = []; connect = self.app.sqlite3.connect
+        def traced_connect(*args, **kwargs):
+            connection = connect(*args, **kwargs); connection.set_trace_callback(sql.append)
+            return connection
+        with patch.object(self.app.sqlite3, 'connect', traced_connect):
+            for _ in range(2):
+                status, view, _ = self.request('GET', self.query(), headers=self.parent)
+                self.assertEqual(status, 200, view)
+                self.assertEqual(view['pages'], [result['page']])
+                self.assertEqual((view['child_id'], view['source_id'], view['message_id']),
+                                 ('child-1', self.source['id'], '101'))
+        self.assertFalse(any(q.lstrip().upper().startswith(('INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER', 'REPLACE'))
+                             for q in sql), sql)
+        self.assertEqual(self.snapshot(), saved); self.assertEqual(self.fetch.calls, [LINK])
+        for name, existing in [('absent.sqlite3', False), ('empty.sqlite3', True)]:
+            database = self.app.DATA / name
+            if existing: connect(database).close()
+            with patch.object(self.app, 'DB', database):
+                status, unavailable, _ = self.request('GET', self.query(), headers=self.parent)
+                self.assertEqual((status, unavailable['code']), (503, 'message_unavailable'))
+            self.assertEqual(database.exists(), existing, 'a read cannot create a business database')
+            if existing:
+                with connect(database) as connection:
+                    self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall(), [],
+                                     'a read cannot initialize or migrate tables')
+        status, view, _ = self.request('GET', self.query(), headers=self.parent)
+        self.assertEqual(status, 200, view); self.assertEqual(view['pages'], [result['page']])
+        self.assertEqual(self.snapshot(), saved); self.assertEqual(self.fetch.calls, [LINK])
+
     def test_publication_inbox_parent_only_read_only_reopen_and_failure_recovery(self):
         path='/api/agent/messages?child_id=child-1'
         saved=self.snapshot()

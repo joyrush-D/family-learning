@@ -76,6 +76,8 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
    source=next(s for s in store._config(c)['sources'] if s['id']=='qq:123456');value=family_pdf_material.pdf_input(store,c,source,message)
    c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?)',('qq:123456',message['id'],value['fingerprint'],1,json.dumps([1,2,3]),11,json.dumps(dict(kind='school_material',title='虚构已读页组',note='原件前3页待核对',uncertainties=[]),ensure_ascii=False),now.isoformat()))
  for w in (360,1440):
+  app.new_task(dict(child='示例星星',title='虚构已有部分整理的作业 '+str(w),category='homework',source='message:qq:123456:native-'+str(w),due=now.date().isoformat(),action='核对所附练习卷，保留未读页。',request_key='synthetic-prepared-task-'+str(w)))
+ for w in (360,1440):
   for refused in (False,True):
    kind='native-pptx-refused' if refused else 'native-pptx';message=next(m for m in native if m['id']==kind+'-'+str(w))
    body=PPTX_UNSAFE if refused else PPTX;upload_id=hashlib.md5((kind+str(w)).encode()).hexdigest()
@@ -190,6 +192,28 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   await taskCard.locator('[data-school-original-ref="'+sourceRef+'"]').click();await panel.waitFor();
   assert.equal(await dialog.locator('[data-school-homework-new]').count(),0,'the same source is not offered as a new task again');
   await fits(page);await close();
+  // The task itself reads existing preparation; no re-upload, model, collection or record write.
+  const feedback=page.locator('#taskDialog'),resources=feedback.locator('#taskSchoolResources');let resourceReads=0;
+  await page.route('**/api/agent/message?*',route=>{resourceReads++;return route.fulfill({status:503,json:{error:'虚构资料读取失败'}})});
+  await taskCard.locator('[data-task]').click();await resources.getByText(/虚构资料读取失败/).waitFor();
+  assert.equal(resourceReads,1,'failed resource read is not automatically repeated');
+  await feedback.locator('#taskForm [name=note]').fill('这次草稿仍保留');
+  await page.unroute('**/api/agent/message?*');await resources.getByRole('button',{name:'重试读取资料'}).click();
+  await resources.locator('[data-task-material-state]').waitFor();assert.match(await resources.innerText(),/AI 已整理[\s\S]*1 \/ 1 页[\s\S]*仅供家长核对/);
+  assert.equal(await feedback.locator('#taskForm [name=note]').inputValue(),'这次草稿仍保留');
+  assert.equal(await resources.locator('[data-school-pdf-retry],[data-school-page-read],[data-school-material-retry]').count(),0,'reading does not expose a processing action');
+  assert.equal(await resources.locator('img[onerror]').count(),0);await fits(page);await proof(page,'task-prepared-resource-'+width);
+  await feedback.locator('#taskForm [name=note]').fill('');await feedback.locator('[data-close=taskDialog]').click();
+  await page.reload();await page.locator('body[data-page=home]').waitFor();
+  const partial=before.tasks.find(t=>t.title==='虚构已有部分整理的作业 '+width);
+  await page.locator('[data-query-target="task:'+partial.id+'"] [data-task]').click();
+  await resources.locator('[data-task-material-unread]').waitFor();assert.match(await resources.innerText(),/AI 已整理[\s\S]*3 \/ 11 页[\s\S]*未读页：4、5、6、7、8、9、10、11[\s\S]*原件前3页待核对/);
+  assert.equal(await resources.locator('[data-task-material-state]').count(),1);await fits(page);await proof(page,'task-partial-resource-'+width);
+  await feedback.locator('[data-close=taskDialog]').click();
+  await page.route('**/api/agent/message?*',async route=>{const out=await(await route.fetch()).json();return route.fulfill({json:{...out,child_id:'child-2'}})});
+  await page.locator('[data-query-target="task:'+partial.id+'"] [data-task]').click();await resources.getByText(/归属暂时无法核对/).waitFor();assert.equal(await resources.locator('[data-task-material-state]').count(),0,'wrong child response reveals no material');
+  await feedback.locator('[data-close=taskDialog]').click();await page.unroute('**/api/agent/message?*');
+  assert.equal(facts(await state()),factsBefore,'task resource preview and failed retry are read-only');
   await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();
   if(!(await fileList.evaluate(e=>e.open)))await fileList.locator('summary').click();
   await fileList.locator('[data-school-original-ref="message:qq:123456:native-pptx-refused-'+width+'"]').click();await panel.waitFor();
