@@ -264,4 +264,4 @@ async function server(){
   assert.deepEqual(errors,[]);await p.close();
  }
  console.log('Homework feedback AI review: 360/1440 save, retry, reopen, task status and source preserved');
-}finally{await browser?.close();await host?.stop()}})().catch(e=>{console.error(e);process.exitCode=1});
+}finally{try{if(browser){let closed=false;await Promise.race([browser.close().then(()=>closed=true),delay(5000)]);if(!closed)console.error('Synthetic browser cleanup timed out; server cleanup still runs')}}finally{await host?.stop()}}})().catch(e=>{console.error(e);process.exitCode=1});
