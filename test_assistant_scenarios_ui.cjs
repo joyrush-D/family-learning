@@ -13,8 +13,15 @@ review_count=0
 def model(messages,*args,**kwargs):
     global review_count
     review_count+=1
-    teacher=any('synthetic-teacher.txt' in str(m.get('content','')) for m in messages)
+    teacher=any('synthetic-teacher' in str(m.get('content','')) for m in messages)
     item=dict(label='第1题',question='虚构第1题：选择A、B或C',student_answer='C',answer='教师参考：B' if teacher else 'AI推导：C',judgment='incorrect' if teacher else 'correct',error_reason='与教师参考不同' if teacher else '',possible_cause='原因待孩子解释' if teacher else '',steps='先独立重答，再核对参考' if teacher else '',uncertainty='')
+    note=next((x.get('text','') for m in messages if isinstance(m.get('content'),list) for x in m['content'] if x.get('type')=='text' and x.get('text','').startswith('原作答家长说明')), '')
+    if '虚构甲卷' in note or '虚构乙卷' in note:
+        paper='甲' if '虚构甲卷' in note else '乙'
+        assert ('synthetic-teacher-'+paper+'.txt') in str(messages), 'matching teacher required'
+        assert ('synthetic-teacher-'+('乙' if paper=='甲' else '甲')+'.txt') not in str(messages), 'other teacher must not mix'
+        assert sum(x.get('type')=='image_url' for m in messages if isinstance(m.get('content'),list) for x in m['content'])==6, 'six selected answer pages'
+        return dict(items=[item],coverage=paper+'卷第1题；第2、3题未检查，不能称整卷已核对',comparison='仅此卷教师参考，不影响另一卷')
     return dict(items=[item],coverage='虚构检查第%d轮；仅按明确题号比较，原题要求仍待核对'%review_count,comparison='补充老师参考后，第1题需订正；初检缺少老师依据。' if teacher else '初检尚无教师依据。')
 app.family_llm._chat_json=model
 sys.argv=['demo.py','--port',sys.argv[1]]
