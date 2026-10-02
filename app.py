@@ -925,13 +925,19 @@ def homework_review_context(c,task_id,record_id,expected_created=None):
     task=next((t for t in tasks(c) if t['id']==task_id),None)
     row=c.execute('SELECT * FROM records WHERE id=?',(record_id,)).fetchone()
     names=child_names(c)
+    def legacy_review_files(record):
+        match=re.fullmatch(r'家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #([1-9][0-9]*)。',record['note'])
+        if match is None: return set()
+        # r155 saved no result role; require both product-written markers, never infer it from a filename alone.
+        attachments=set(json.loads(record['attachments']))
+        return {r['id'] for r in c.execute("SELECT id FROM uploads WHERE name=? AND mime LIKE 'text/plain%'",('作业批改参考-'+match[1]+'.txt',)) if r['id'] in attachments}
     if (task is None or task.get('agenda',{}).get('category')!='homework' or row is None
             or names.get(row['child'],row['child'])!=task['child']
             or row['source']!='事项:'+task_id and row['linked_task_id']!=task_id):
         raise family_print.PrintError('这份作答不属于当前孩子的作业','review_source_not_allowed',403)
     if expected_created is not None and (not isinstance(expected_created,str) or expected_created!=row['created']):
         raise family_print.PrintError('原作答已更正，请重新打开后检查','review_source_changed',409)
-    if row['followup_kind']=='作业检查':
+    if row['followup_kind']=='作业检查' or legacy_review_files(row):
         raise family_print.PrintError('检查意见不是孩子作答，请回原作答追加复核','review_source_not_allowed',403)
     child=next(p for p in profiles(c) if p['name']==task['child'])
     allowed={};bindings=[];record_ids=json.loads(row['attachments']);report={};school_error=''
@@ -980,12 +986,14 @@ def homework_review_context(c,task_id,record_id,expected_created=None):
             # Saved answer/report still work when their independent school binding is unavailable.
             allowed={ident:value for ident,value in allowed.items() if value['origin']!='school'}
             bindings=[];school_error='学校原件出处当前无法核对；已保存作答仍可检查，可回原消息核对后重试。'
-    for other in c.execute("SELECT id,child,source,linked_task_id,created,attachments,followup_kind FROM records WHERE source=? OR linked_task_id=? ORDER BY id",('事项:'+task_id,task_id)):
+    for other in c.execute("SELECT id,child,source,linked_task_id,created,attachments,followup_kind,note FROM records WHERE source=? OR linked_task_id=? ORDER BY id",('事项:'+task_id,task_id)):
         if other['id']==record_id or names.get(other['child'],other['child'])!=task['child']: continue
+        legacy=legacy_review_files(other)
         for ident in json.loads(other['attachments']):
             upload=c.execute('SELECT mime FROM uploads WHERE id=?',(ident,)).fetchone()
-            origin='review_result' if other['followup_kind']=='作业检查' and upload is not None and upload['mime'].startswith('text/plain') else 'same_task'
+            origin='review_result' if (other['followup_kind']=='作业检查' or ident in legacy) and upload is not None and upload['mime'].startswith('text/plain') else 'same_task'
             add(ident,origin,[other['id'],other['created']])
+            if ident in legacy: allowed[ident].update(origin='review_result',review_binding=[other['id'],other['created']])
     context=dict(task=dict(id=task['id'],child=task['child'],source=task['source'],action=task['action']),
                  child_id=child['id'],record_id=record_id,created=row['created'],record_ids=record_ids,report=report,school=bindings)
     fingerprint=hashlib.sha256(json.dumps(context,ensure_ascii=False,sort_keys=True).encode()).hexdigest()

@@ -450,11 +450,21 @@ class PrintStore:
             elif item['role'] in ('reference','previous') and (mime.startswith('text/plain') or item['role']=='reference' and mime==family_media.DOCX_MIME):
                 try: text=family_media.docx_text(body) if mime==family_media.DOCX_MIME and render else body.decode('utf-8-sig') if mime.startswith('text/plain') else None
                 except (UnicodeError,MediaError): raise PrintError('参考或先前检查文字无法安全完整读取') from None
+                archived=False
                 if text is not None:
-                    if (not text.strip() or len(text)>12000 or any(ord(ch)<32 and ch not in '\n\r\t' or ord(ch)==127 for ch in text)):
+                    if any(ord(ch)<32 and ch not in '\n\r\t' or ord(ch)==127 for ch in text):
+                        raise PrintError('参考或先前检查文字无法安全完整读取')
+                    if item['role']=='previous' and allowed[item['source']['id']].get('origin')=='review_result' and text.startswith('作业检查保存格式 v1'):
+                        header=re.match(r'\A作业检查保存格式 v1\n最新检查字数：([1-9][0-9]{0,4})\n',text)
+                        if header is None: raise PrintError('保存检查的最新文字范围无法核对')
+                        size=int(header.group(1));content=text[header.end():]
+                        if size>12000 or len(content)<size+1 or content[size]!='\n': raise PrintError('保存检查的最新文字范围无法核对')
+                        text=content[:size];archived=True
+                    if not text.strip() or len(text)>12000:
                         raise PrintError('参考或先前检查文字须清晰完整且最多12000字，请分批核对')
                     (previous_documents if item['role']=='previous' else documents).append(dict(name=item['name'],text=text))
-                coverage.append(('%s《%s》：本次读取完整文字。'%('上一轮待复核意见' if item['role']=='previous' else '教师参考',item['name'])))
+                coverage.append('%s《%s》：%s。'%('上一轮待复核意见' if item['role']=='previous' else '教师参考',item['name'],
+                    '本次读取最新检查；较早草稿保留在原件，未作为本次复核输入' if archived else '本次读取完整文字'))
             else: raise PrintError('批改支持JPG、PNG、WebP或PDF；教师参考另支持纯文字TXT/Word')
         if not 1<=image_count<=8: raise PrintError('题目、作答及参考合计最多8张照片/PDF页，请明确分批或选择PDF页码；本次未调用模型')
         if sum(len(d['text']) for d in documents)>12000: raise PrintError('教师参考文字合计最多12000字，请分批核对')

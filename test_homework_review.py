@@ -107,7 +107,11 @@ def run():
             (data/'uploads'/reference).write_bytes(b'1. C\n')
             assert app.save_task_feedback(feedback)['replayed'],'known same-key retry keeps its original saved receipt'
             # Recreate r155's ordinary-feedback payload/hash, then replay it through the upgraded endpoint.
-            r155_feedback=feedback|dict(request_key='synthetic-r155-review-retry',note='虚构r155已保存检查',
+            legacy_text='虚构r155初检：第1题尚缺老师依据。'
+            legacy_opinion=upload('作业批改参考-'+str(rid)+'.txt',legacy_text.encode())
+            r155_feedback=feedback|dict(request_key='synthetic-r155-review-retry',
+                note='家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #'+str(rid)+'。',
+                attachments=feedback['attachments']+[legacy_opinion],
                 review_basis={k:v for k,v in basis.items() if k!='previous_sources'})
             r155_record=dict(child='示例甲',source='事项:'+task['id'],title=('反馈：'+task['title'])[:200],
                 day=r155_feedback['day'],category='学习进展',subject='',note=r155_feedback['note'],transcript='',transcript_state='',assistance='',
@@ -123,6 +127,19 @@ def run():
                 assert '\n'.join(c.iterdump())==before,'r155 retry preserves the old hash and writes nothing'
                 row=c.execute('SELECT followup_kind,related_record_id FROM records WHERE id=?',(r155_saved['record_id'],)).fetchone()
                 assert row['followup_kind']=='' and row['related_record_id'] is None,'r155 ordinary feedback is not relabelled on replay'
+                context=app.homework_review_context(c,task['id'],rid)
+                assert context['allowed'][legacy_opinion]['origin']=='review_result','known r155 output is previous opinion without migrating its record'
+                assert context['allowed'][reference]['origin']!='review_result','the actual teacher input keeps its original identity'
+                assert '\n'.join(c.iterdump())==before,'legacy role listing writes no rows or request hashes'
+            with patch.object(family_llm,'_chat_json') as model:
+                refused(lambda:app.homework_review_draft(request|dict(reference_sources=[source(legacy_opinion)])),'review_source_not_allowed')
+                refused(lambda:app.homework_review_draft(request|dict(question_sources=[source(legacy_opinion)])),'review_source_not_allowed')
+                refused(lambda:app.homework_review_draft(request|dict(record_id=r155_saved['record_id'],expected_created=replayed['feedback']['created'])),'review_source_not_allowed')
+                assert model.call_count==0,'old AI text cannot enter teacher or answer roles'
+            (data/'uploads'/reference).write_bytes(b'1. B\n')
+            with patch.object(family_llm,'homework_reference_draft',wraps=family_llm.homework_reference_draft) as generate,patch.object(family_llm,'_chat_json',return_value=dict(items=[item()],coverage='虚构旧意见复核')):
+                app.homework_review_draft(request|dict(previous_sources=[source(legacy_opinion)]))
+                assert generate.call_args.kwargs['previous_documents']==[dict(name='作业批改参考-'+str(rid)+'.txt',text=legacy_text)]
             # A same-child original report can provide the electronic worksheet without re-uploading it.
             store=app.study_store()
             with store._db() as c:
@@ -270,6 +287,43 @@ def run():
             with app.connect() as c:
                 row=c.execute('SELECT related_record_id,followup_kind FROM records WHERE id=?',(original_id,)).fetchone()
                 assert row['related_record_id'] is None and row['followup_kind']=='','ordinary answer type and relationship survive a basis-bearing correction'
+                current_created=c.execute('SELECT created FROM records WHERE id=?',(original_id,)).fetchone()['created']
+            # A saved history may be larger than the bounded latest opinion sent for the next recheck.
+            latest='最新核查'*2000;archive='历史不入模'*3200
+            assert len(latest)==8000 and len(archive)==16000
+            def saved_opinion(name,text,key):
+                ident=upload(name,text.encode())
+                app._save_record(dict(child='示例甲',day='2026-10-02',category='学习进展',title='虚构已保存检查',
+                    source='事项:'+recheck_task['id'],note='虚构检查格式原件',attachments=[ident],
+                    related_record_id=original_id,followup_kind='作业检查',request_key=key),False,{})
+                return ident
+            framed='作业检查保存格式 v1\n最新检查字数：8000\n'+latest+'\n此前检查草稿（仅供对照，不是教师参考）：\n'+archive
+            framed_id=saved_opinion('synthetic-framed-opinion.txt',framed,'synthetic-framed-opinion')
+            framed_request=initial_request|dict(expected_created=current_created,previous_sources=[source(framed_id)])
+            def framed_model(messages,schema,name,timeout,**kwargs):
+                serialized=json.dumps(messages,ensure_ascii=False)
+                assert latest in serialized and '历史不入模' not in serialized,'archive stays saved but never enters the current model input'
+                return recheck_model_result
+            before=dump()
+            with patch.object(family_llm,'homework_reference_draft',wraps=family_llm.homework_reference_draft) as generate,patch.object(family_llm,'_chat_json',side_effect=framed_model) as model:
+                app.homework_review_draft(framed_request)
+                assert model.call_count==1
+                assert generate.call_args.kwargs['previous_documents']==[dict(name='synthetic-framed-opinion.txt',text=latest)]
+            assert dump()==before,'reading a framed history writes no records'
+            invalid_frames=[
+                '作业检查保存格式 v1\n最新检查字数：错误\n甲',
+                '作业检查保存格式 v1\n最新检查字数：0\n甲',
+                '作业检查保存格式 v1\n最新检查字数：12001\n'+'甲'*12001,
+                '作业检查保存格式 v1\n最新检查字数：20\n短',
+                '作业检查保存格式 v1\n最新检查字数：2\nabc',
+            ]
+            with patch.object(family_llm,'_chat_json') as model:
+                for n,text in enumerate(invalid_frames):
+                    ident=saved_opinion('synthetic-invalid-framed-'+str(n)+'.txt',text,'synthetic-invalid-framed-'+str(n))
+                    before=dump()
+                    refused(lambda:app.homework_review_draft(framed_request|dict(previous_sources=[source(ident)])))
+                    assert dump()==before,'invalid framed history must not write a result'
+                assert model.call_count==0,'invalid lengths are rejected before any model call'
     print('homework review synthetic checks passed')
 
 
