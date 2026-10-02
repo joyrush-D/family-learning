@@ -6,7 +6,7 @@
  const root=()=>ctx?.root?.isConnected?ctx.root:null;
  const teachers=()=>state?.teachers.filter(t=>!ctx?.child_id||t.child_ids.includes(ctx.child_id))||[];
  const teacher=()=>teachers().find(t=>t.id===selected);
- const observations=t=>state.observations.filter(o=>o.teacher_id===t.id&&(!ctx?.child_id||o.target!=='household'||o.child_id===ctx.child_id));
+ const observations=t=>state.observations.filter(o=>o.teacher_id===t.id&&(!ctx?.child_id||(!o.scope_child_id||o.scope_child_id===ctx.child_id)&&(o.target!=='household'||o.child_id===ctx.child_id)));
  const kinds={requirement:'明确要求',praise:'表扬的行为',preference:'老师明说的偏好'};
  const targets={household:'自己家孩子',other_students:'其他学生的行为',class:'全班'};
  const today=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());

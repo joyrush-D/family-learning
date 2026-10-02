@@ -6,7 +6,8 @@ const fixture=()=>({children:[{id:'child-a',name:'虚构孩子甲'},{id:'child-b
  {id:'TEACH-A',version:1,display_name:'虚构甲老师',subject:'语文',child_ids:['child-a','child-b'],source_ids:['source-a'],public_url:'https://school.example/teaching',archived:false,public_info:{url:'https://school.example/teaching',status:'changed',text:'公开教学摘录：先解释自己的思路。<img src=x onerror="window.injected=true">',last_attempt:'2026-09-01T12:00:00+08:00',last_success:'2026-09-01T12:00:00+08:00',changed_at:'2026-09-01T12:00:00+08:00'}},
  {id:'TEACH-B',version:1,display_name:'虚构乙老师',subject:'数学',child_ids:['child-b'],source_ids:[],public_url:'',archived:false,public_info:{status:'unconfigured'}}],observations:[
  {id:'TEACHOBS-A',version:1,teacher_id:'TEACH-A',day:'2026-09-01',kind:'praise',target:'other_students',child_id:'',behavior:'表扬先说明思路再回答的行为 <img src=x onerror="window.injected=true">',teacher_reason:'有依据地表达',parent_note:'可以和孩子商量练习口述思路',source_id:'source-a',message_id:'',source_url:'',status:'active'},
- ...['child-a','child-b'].map((child_id,i)=>({id:'TEACHOBS-HOME-'+i,version:1,teacher_id:'TEACH-A',day:'2026-09-01',kind:'requirement',target:'household',child_id,behavior:'虚构单孩要求 '+child_id,teacher_reason:'',parent_note:'',source_id:'',message_id:'',source_url:'',status:'active'}))]});
+ ...['child-a','child-b'].map((child_id,i)=>({id:'TEACHOBS-HOME-'+i,version:1,teacher_id:'TEACH-A',day:'2026-09-01',kind:'requirement',target:'household',child_id,behavior:'虚构单孩要求 '+child_id,teacher_reason:'',parent_note:'',source_id:'',message_id:'',source_url:'',status:'active'})),
+ ...['child-a','child-b'].map((scope_child_id,i)=>({id:'TEACHOBS-CLASS-'+i,version:1,teacher_id:'TEACH-A',day:'2026-09-01',kind:'requirement',target:'class',child_id:'',scope_child_id,behavior:'虚构班级要求 '+scope_child_id,teacher_reason:'',parent_note:'',source_id:'',message_id:'',source_url:'',status:'active'}))]});
 async function run(browser,width){
  let state=fixture(),failure='',writes=0,lastBody=null;const keys=new Map();
  const server=http.createServer(async(req,res)=>{
@@ -44,10 +45,18 @@ async function run(browser,width){
   assert.equal(await page.locator('[data-teacher-select="TEACH-B"]').count(),0,'another child teacher stays hidden');
   assert.equal(await page.locator('[data-teacher-observation="TEACHOBS-HOME-0"]').count(),1);
   assert.equal(await page.locator('[data-teacher-observation="TEACHOBS-HOME-1"]').count(),0,'shared teacher does not expose sibling household observations');
+  assert.equal(await page.locator('[data-teacher-observation="TEACHOBS-CLASS-0"]').count(),1);
+  assert.equal(await page.locator('[data-teacher-observation="TEACHOBS-CLASS-1"]').count(),0,'saved class scope does not expose the other child requirements');
+  assert.equal(await page.locator('[data-teacher-observation="TEACHOBS-A"]').count(),1,'legacy observations without a saved scope remain shared');
   assert.deepEqual(await profile().locator('[name="child_ids"]:checked').evaluateAll(xs=>xs.map(x=>x.value).sort()),['child-a','child-b'],'shared teacher profile retains the complete mapping');
   await openPanel('.teacher-profile');await profile().locator('[name="display_name"]').fill('虚构未保存称呼');
   await page.locator('[data-child="child-b"]').click();await page.locator('[data-teacher-observation="TEACHOBS-HOME-1"]').waitFor();assert.equal(await page.locator('[data-teacher-observation="TEACHOBS-HOME-0"]').count(),0);
+  assert.equal(await page.locator('[data-teacher-observation="TEACHOBS-CLASS-1"]').count(),1);
+  assert.equal(await page.locator('[data-teacher-observation="TEACHOBS-CLASS-0"]').count(),0,'switching children follows the saved class scope');
+  assert.equal(await page.locator('[data-teacher-observation="TEACHOBS-A"]').count(),1,'unscoped public observations stay visible after switching');
   await page.locator('[data-teacher-select="TEACH-B"]').click();await page.locator('[data-child="child-a"]').click();assert.equal(await profile().locator('[name="display_name"]').inputValue(),'虚构未保存称呼');
+  assert.equal(await page.locator('[data-teacher-observation="TEACHOBS-CLASS-0"]').count(),1);
+  assert.equal(await page.locator('[data-teacher-observation="TEACHOBS-CLASS-1"]').count(),0,'returning to the first child keeps its class scope');
   await openPanel('.teacher-write');await form().locator('[name="kind"]').selectOption('praise');await form().locator('[name="target"]').selectOption('other_students');
   await form().locator('[name="behavior"]').fill('虚构记录：独立订正并说明原因');await form().locator('[name="teacher_reason"]').fill('老师原话：解释清楚');await form().locator('[name="parent_note"]').fill('家长待核对想法');
   assert.equal(await form().locator('[data-teacher-own]').isVisible(),false);assert.equal(await form().locator('[name="other_student_name"]').count(),0);
@@ -91,7 +100,7 @@ async function run(browser,width){
   assert.equal(await page.locator('.teachers-view button:visible,.teachers-view summary:visible').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'touch targets');
   assert.deepEqual(errors,[]);
   if(process.env.TEACHERS_UI_PROOF_DIR){fs.mkdirSync(process.env.TEACHERS_UI_PROOF_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.TEACHERS_UI_PROOF_DIR,'teachers-'+width+'.png'),fullPage:true})}
-  return {width,singleChildScope:true,childDraftIsolation:true,pendingChildGuard:true,completeProfileMapping:true,panelExpansionRetained:true,draftsAcrossTeachersAndPages:true,authRetry:true,lostReplyDeduplicated:true,conflictChecked:true,correctionAndWithdrawal:true,teacherCitationSelection:true,newTeacherCitationAfterCache:true,citationReadFailureRetry:true,otherStudentNameAbsent:true,escapedEvidence:true,noOverflow:true};
+  return {width,singleChildScope:true,savedClassScopeIsolation:true,legacyUnscopedObservationsShared:true,childDraftIsolation:true,pendingChildGuard:true,completeProfileMapping:true,panelExpansionRetained:true,draftsAcrossTeachersAndPages:true,authRetry:true,lostReplyDeduplicated:true,conflictChecked:true,correctionAndWithdrawal:true,teacherCitationSelection:true,newTeacherCitationAfterCache:true,citationReadFailureRetry:true,otherStudentNameAbsent:true,escapedEvidence:true,noOverflow:true};
  }finally{await page.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve))}
 }
 (async()=>{const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});try{const result=[];for(const width of [360,1440])result.push(await run(browser,width));console.log(JSON.stringify({passed:true,synthetic:true,checks:result},null,2))}finally{await browser.close()}})().catch(e=>{console.error(e);process.exitCode=1});
