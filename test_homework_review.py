@@ -209,9 +209,11 @@ def run():
             legacy_basis={k:v for k,v in initial['review_basis'].items() if k!='previous_sources'}
             assert app.homework_review_basis(legacy_basis)==legacy_basis
             prior_text='虚构初检：第1题一致，第2题尚未检查。'
-            prior=upload('synthetic-recheck-first-opinion.txt',prior_text.encode())
+            review_name='作业批改参考-'+str(original_id)+'.txt'
+            review_note='家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #'+str(original_id)+'。'
+            prior=upload(review_name,prior_text.encode())
             first_feedback=dict(task_id=recheck_task['id'],child='示例甲',day='2026-10-02',request_key='synthetic-recheck-first',
-                note=prior_text,attachments=[recheck_answer,old_teacher,prior],review_basis=legacy_basis)
+                note=review_note,attachments=[recheck_answer,old_teacher,prior],review_basis=legacy_basis)
             first=app.save_task_feedback(first_feedback)
             later_teacher=upload('synthetic-recheck-later-teacher.txt','虚构教师参考：第1题B，第2题必须写理由。'.encode())
             app.save_task_feedback(dict(task_id=recheck_task['id'],child='示例甲',day='2026-10-02',request_key='synthetic-recheck-later-teacher',attachments=[later_teacher]))
@@ -233,7 +235,7 @@ def run():
                 rechecked=app.homework_review_draft(recheck_request)
                 args=generate.call_args.kwargs
                 assert args['task_action']==action and args['review_instruction']==instruction and args['previous_text']==previous_text
-                assert args['previous_documents']==[dict(name='synthetic-recheck-first-opinion.txt',text=prior_text)]
+                assert args['previous_documents']==[dict(name=review_name,text=prior_text)]
                 assert args['reference_documents']==[dict(name='synthetic-recheck-later-teacher.txt',text='虚构教师参考：第1题B，第2题必须写理由。')]
             assert rechecked['draft']['comparison']==comparison
             assert comparison in rechecked['draft']['text'],'comparison must be included in the persisted review text'
@@ -259,9 +261,9 @@ def run():
                 refused(lambda:app.homework_review_draft(recheck_request),'review_basis_changed',409)
             assert dump()==changed['dump'],'generation with a changed previous record writes no result'
             version(first['record_id'],prior_created)
-            final_text=upload('synthetic-recheck-final-opinion.txt',rechecked['draft']['text'].encode())
+            final_text=upload(review_name,rechecked['draft']['text'].encode())
             final_feedback=dict(task_id=recheck_task['id'],child='示例甲',day='2026-10-02',request_key='synthetic-recheck-final',
-                note='虚构复核已核对',attachments=[recheck_answer,later_teacher,prior,final_text],review_basis=rechecked['review_basis'],
+                note=review_note,attachments=[recheck_answer,later_teacher,prior,final_text],review_basis=rechecked['review_basis'],
                 comparison_note=comparison,related_record_id=first['record_id'],followup_kind='订正')
             version(first['record_id'],'2026-10-02T01:02:03.000002')
             rejected_unchanged(lambda:app.save_task_feedback(final_feedback),'review_basis_changed')
@@ -272,9 +274,11 @@ def run():
                 assert len(rows)==4 and first['record_id']!=final['record_id']
                 for ident in (first['record_id'],final['record_id']):
                     assert rows[ident]['related_record_id']==original_id and rows[ident]['followup_kind']=='作业检查'
-                assert rows[first['record_id']]['note']==prior_text and rows[final['record_id']]['comparison_note']==comparison
+                assert rows[first['record_id']]['note']==review_note and rows[final['record_id']]['comparison_note']==comparison
                 assert prior in json.loads(rows[first['record_id']]['attachments']) and final_text in json.loads(rows[final['record_id']]['attachments'])
                 assert (data/'uploads'/final_text).read_text()==rechecked['draft']['text']
+                ctx=app.homework_review_context(c,recheck_task['id'],original_id)
+                assert ctx['allowed'][prior]['review_binding']==[first['record_id'],prior_created],'appending a result preserves the prior opinion binding checked by the save transaction'
             rejected_unchanged(lambda:app.save_task_feedback(dict(task_id=recheck_task['id'],child='示例甲',day='2026-10-02',
                 record_id=first['record_id'],expected_created=prior_created,note='虚构试图覆盖初检')),status=None)
             (data/'uploads'/old_teacher).write_bytes(b'1. C\n')

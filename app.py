@@ -926,6 +926,7 @@ def homework_review_context(c,task_id,record_id,expected_created=None):
     row=c.execute('SELECT * FROM records WHERE id=?',(record_id,)).fetchone()
     names=child_names(c)
     def legacy_review_files(record):
+        if record['followup_kind']=='作业检查': return set()
         match=re.fullmatch(r'家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #([1-9][0-9]*)。',record['note'])
         if match is None: return set()
         # r155 saved no result role; require both product-written markers, never infer it from a filename alone.
