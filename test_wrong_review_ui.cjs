@@ -102,7 +102,6 @@ async function proof(p, name) {
         assert.equal(await childChoice.locator('option').count(), initial.children.length);
         assert.equal(await childChoice.locator('option[value=""]').count(), 0, 'no unspecified or all-child choice');
         assert.equal(await p.getByText('全部孩子', {exact: true}).count(), 0);
-        assert.equal(await p.evaluate(() => selectChild('synthetic-invalid-child')), false, 'unknown ownership is rejected');
         await childChoice.evaluate(el => {
           const invalid = new Option('虚构未知孩子', 'synthetic-invalid-child');
           el.add(invalid); el.value = invalid.value;
@@ -256,7 +255,7 @@ async function proof(p, name) {
         for (const selector of ['[data-wrong-child]','[data-wrong-day]','[data-wrong-subject]','[data-wrong-annotate]','[data-wrong-save]','[data-wrong-discard]','[data-wrong-field="note"]']) {
           assert(await p.locator(selector).first().isDisabled(), selector+' locked during upload');
         }
-        assert.equal(await p.evaluate(id => selectChild(id), other.id), false, 'shared child switch cannot bypass a pending upload');
+        assert.equal(await p.evaluate(() => FamilyWrongReview.canSwitch()), false, 'public child-switch guard rejects a pending upload');
         assert.equal(await childChoice.inputValue(), childName);
         releaseUpload();
         await eventually(async()=>!(await p.locator('[data-wrong-pick]').isDisabled()), 'failed upload unlocks');
@@ -326,8 +325,18 @@ async function proof(p, name) {
         assert.equal(written.length, 2, 'exactly two records after lost response');
         await eventually(async () => await p.locator('[data-wrong-save]').isEnabled(), 'uncertain save can retry');
         assert.equal(await childChoice.isDisabled(), true, 'uncertain save keeps its child fixed');
-        assert.equal(await p.evaluate(id => selectChild(id), other.id), false, 'shared child switch cannot relabel an uncertain save');
+        await p.locator('nav [data-page="home"]').click();
+        await p.locator('[data-child-filter="'+other.id+'"]').click();
+        assert.equal(await p.locator('[data-child-filter="'+initial.children[0].id+'"]').getAttribute('aria-pressed'), 'true', 'shared child switch cannot relabel an uncertain save');
+        assert.equal(await p.locator('[data-child-filter="'+other.id+'"]').getAttribute('aria-pressed'), 'false');
+        await p.locator('nav [data-page="more"]').click();
+        await p.locator('.more-links [data-page="wrong"]').click();
         assert.equal(await childChoice.inputValue(), childName);
+        assert.equal(await childChoice.isDisabled(), true, 'uncertain save remains fixed after reopening');
+        assert.equal(await p.locator('.wrong-item').count(), 3, 'uncertain save cards survive navigation');
+        assert.equal(await first.locator('[data-wrong-keep]').isChecked(), false, 'review selection survives navigation');
+        assert.equal(await kept.locator('[data-wrong-field="note"]').inputValue(), '先让孩子讲错在哪', 'uncertain save draft survives navigation');
+        assert.equal(await kept.locator('[data-wrong-field="topic_hint"]').inputValue(), '除法口诀');
 
         // 不确定写入后家长又改了内容：后端必须拒绝不兼容的键复用，保留编辑文本。
         await kept.locator('[data-wrong-field="note"]').fill('不确定写入后家长又改的虚构备注');

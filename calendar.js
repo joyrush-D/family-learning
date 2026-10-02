@@ -184,12 +184,12 @@ function calendarOpenAssistant(context){
 }
 async function calendarOpenCitation(c,childID){
  if(!/^\d{4}-\d{2}-\d{2}$/.test(c.day||'')||!data.children.some(x=>x.id===childID)){toast('原安排的日期或孩子待核对，请重新查询。');return}
- calendarJump++;calendarInvalidate();calendarState.week=calendarMonday(c.day);calendarState.day=c.day;calendarState.childID=childID;calendarState.visible=true;page='calendar';render();
+ if(!selectChild(childID))return;calendarJump++;calendarInvalidate();calendarState.week=calendarMonday(c.day);calendarState.day=c.day;calendarState.childID=childID;calendarState.visible=true;page='calendar';render();
  const seq=calendarState.sequence;
  // render starts the existing read; await that same request instead of a second one.
  if(calendarState.reading)await calendarState.reading;
  if(page!=='calendar'||calendarState.sequence!==seq)return;
- const target=[...document.querySelectorAll('[data-query-target]')].find(el=>el.dataset.queryTarget===c.kind+':'+c.target_id+':'+c.day);
+ const targets=[...document.querySelectorAll('[data-query-target]')].filter(el=>el.dataset.queryTarget===c.kind+':'+c.target_id+':'+c.day),target=targets.find(el=>el.closest?.('.agenda-groups'))||targets[0];
  if(target){if(c.kind==='timetable')target.open=true;target.scrollIntoView({block:'center'});target.focus({preventScroll:true})}else toast('原安排已变化或暂时无法读取，请重新查询。');
 }
 function calendarExtraHTML(slot={id:calendarUUID().slice(0,16),start_time:'',end_time:''},index=0,active=false){return `<div class="formrow calendar-extra-time ${active?'is-selected-slot':''}" data-calendar-slot="${esc(slot.id)}" tabindex="-1"><strong data-slot-label>时段 ${index+2}${active?' · 正在修改的时段':''}</strong><button type="button" data-calendar-remove-slot aria-label="移除时段 ${index+2}">移除</button><label>开始<input type="time" data-slot-start required value="${esc(slot.start_time)}"></label><label>结束 · 可选<input type="time" data-slot-end value="${esc(slot.end_time)}"></label></div>`}
@@ -233,7 +233,7 @@ document.addEventListener('click',async e=>{
  if(['homework','todo'].includes(b.dataset.taskAll)){taskView='全部';page='tasks';render();const target=$('#task-group-'+b.dataset.taskAll);target?.scrollIntoView({block:'start'});target?.focus({preventScroll:true});return}
  if(b.dataset.taskBox){taskView=b.dataset.taskBox;page='tasks';render();return}
  if(b.dataset.taskPlan){openTaskFocus(b.dataset.taskPlan);const f=$('#taskFocusForm');f.elements.box.value='inbox';f.elements.scheduled_on.required=true;if(f.elements.category.value==='unknown')f.elements.category.value='todo';$('#taskFocusScheduleLabel').textContent='计划在哪天做 · 必填';$('#taskFocusTitle').textContent='选定日期，转成计划';return}
- if(b.dataset.agendaStudy){studyChildID=b.dataset.agendaStudy;studyDay=b.dataset.agendaDay;studyTaskID='';page='study';render();return}
+ if(b.dataset.agendaStudy){if(!selectChild(b.dataset.agendaStudy))return;studyChildID=b.dataset.agendaStudy;studyDay=b.dataset.agendaDay;studyTaskID='';page='study';render();return}
  if(b.hasAttribute('data-calendar-sync'))calendarSyncOpen();
  if(b.hasAttribute('data-calendar-child')){calendarJump++;if(!selectChild(b.dataset.calendarChild))return;render()}
  if(b.dataset.calendarShift)calendarNavigate(calendarAdd(calendarState.day,Number(b.dataset.calendarShift)));
@@ -249,7 +249,7 @@ document.addEventListener('click',async e=>{
  if(b.dataset.calendarDraft){const kind=b.dataset.calendarDraft;calendarOpen(null,{day:$('#calendarWeekendDay').value,title:{'运动':'一起留一段运动时间','自由探索':'一段自由探索时间','共读':'一起读一会儿'}[kind],category:kind==='共读'?'family':'activity',status:'tentative',note:'先和孩子商量想做什么、何时开始，以及需要准备什么。'})}
  if(b.dataset.calendarTask){
   const seq=++calendarJump,id=b.dataset.calendarTask;b.disabled=true;
-  try{await load();if(seq!==calendarJump||page!=='calendar')return;const t=data.tasks.find(x=>x.id===id);if(!t){toast('原事项当前未找到，请在来源与附件核对。');return}child=t.child;taskView='全部';page='tasks';render();const target=[...document.querySelectorAll('[data-query-target]')].find(x=>x.dataset.queryTarget==='task:'+id);target?.scrollIntoView({block:'center'});target?.focus({preventScroll:true})}catch{toast('读取原事项失败，请重试。')}finally{if(b.isConnected)b.disabled=false}
+  try{await load();if(seq!==calendarJump||page!=='calendar')return;const t=data.tasks.find(x=>x.id===id);if(!t){toast('原事项当前未找到，请在来源与附件核对。');return}if(!selectChild(data.children.find(c=>c.name===t.child)?.id))return;taskView='全部';page='tasks';render();const target=[...document.querySelectorAll('[data-query-target]')].find(x=>x.dataset.queryTarget==='task:'+id);target?.scrollIntoView({block:'center'});target?.focus({preventScroll:true})}catch{toast('读取原事项失败，请重试。')}finally{if(b.isConnected)b.disabled=false}
  }
 });
 
