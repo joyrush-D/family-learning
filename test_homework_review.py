@@ -17,10 +17,11 @@ def item(**changes):
                 error_reason='',possible_cause='',steps='',uncertainty='')|changes
 
 
-def refused(fn,code=None):
+def refused(fn,code=None,status=None):
     try: fn()
     except ValueError as error:
         if code is not None: assert error.code==code,(error.code,code)
+        if status is not None: assert error.status==status,(error.status,status)
     else: raise AssertionError('expected refusal')
 
 
@@ -105,6 +106,23 @@ def run():
             reviewed=app.save_task_feedback(feedback);assert not reviewed['completion_changed']
             (data/'uploads'/reference).write_bytes(b'1. C\n')
             assert app.save_task_feedback(feedback)['replayed'],'known same-key retry keeps its original saved receipt'
+            # Recreate r155's ordinary-feedback payload/hash, then replay it through the upgraded endpoint.
+            r155_feedback=feedback|dict(request_key='synthetic-r155-review-retry',note='虚构r155已保存检查',
+                review_basis={k:v for k,v in basis.items() if k!='previous_sources'})
+            r155_record=dict(child='示例甲',source='事项:'+task['id'],title=('反馈：'+task['title'])[:200],
+                day=r155_feedback['day'],category='学习进展',subject='',note=r155_feedback['note'],transcript='',transcript_state='',assistance='',
+                attachments=r155_feedback['attachments'],review_basis=r155_feedback['review_basis'],request_key=r155_feedback['request_key'],
+                completion=dict(complete=False,note=''))
+            (data/'uploads'/reference).write_bytes(b'1. B\n')
+            r155_saved=app._save_record(r155_record,False,{})
+            (data/'uploads'/reference).write_bytes(b'1. C\n')
+            with app.connect() as c: before='\n'.join(c.iterdump())
+            replayed=app.save_task_feedback(r155_feedback)
+            assert replayed['replayed'] and replayed['record_id']==r155_saved['record_id']
+            with app.connect() as c:
+                assert '\n'.join(c.iterdump())==before,'r155 retry preserves the old hash and writes nothing'
+                row=c.execute('SELECT followup_kind,related_record_id FROM records WHERE id=?',(r155_saved['record_id'],)).fetchone()
+                assert row['followup_kind']=='' and row['related_record_id'] is None,'r155 ordinary feedback is not relabelled on replay'
             # A same-child original report can provide the electronic worksheet without re-uploading it.
             store=app.study_store()
             with store._db() as c:
@@ -150,6 +168,108 @@ def run():
                 school['enabled']=True;school['child_id']='child-2'
                 with app.connect() as c:
                     refused(lambda:app.guard_homework_review(c,school_task['id'],school_result['review_basis'],[answer,school_file]),'review_basis_changed')
+            # One recheck flow: parent clarification, previous opinion, later teacher reference and append-only results.
+            def dump():
+                with app.connect() as c: return '\n'.join(c.iterdump())
+            def version(ident,value):
+                with app.connect() as c: c.execute('UPDATE records SET created=? WHERE id=?',(value,ident))
+            def rejected_unchanged(fn,code=None,status=409):
+                before=dump()
+                refused(fn,code,status)
+                assert dump()==before,'rejected review must leave all records and revisions unchanged'
+            action='虚构作业要求：每题写出判断理由，不省略第2题'
+            recheck_task=app.new_task(dict(child='示例甲',title='虚构初检后补参考',category='homework',action=action,request_key='synthetic-recheck-task'))
+            recheck_answer=upload('synthetic-recheck-answer.png',png(4))
+            old_teacher=upload('synthetic-recheck-old-teacher.txt',b'1. B\n')
+            original=app.save_task_feedback(dict(task_id=recheck_task['id'],child='示例甲',day='2026-10-02',
+                request_key='synthetic-recheck-original',attachments=[recheck_answer,old_teacher]))
+            original_id=original['record_id']
+            initial_request=dict(purpose='review',task_id=recheck_task['id'],record_id=original_id,expected_created=original['feedback']['created'],
+                question_sources=[source(recheck_answer)],reference_sources=[source(old_teacher)])
+            model_result=dict(items=[item()],coverage='虚构仅核第1题')
+            with patch.object(family_llm,'_chat_json',return_value=model_result): initial=app.homework_review_draft(initial_request)
+            assert not initial['draft'].get('comparison'),'old model output without comparison remains readable'
+            legacy_basis={k:v for k,v in initial['review_basis'].items() if k!='previous_sources'}
+            assert app.homework_review_basis(legacy_basis)==legacy_basis
+            prior_text='虚构初检：第1题一致，第2题尚未检查。'
+            prior=upload('synthetic-recheck-first-opinion.txt',prior_text.encode())
+            first_feedback=dict(task_id=recheck_task['id'],child='示例甲',day='2026-10-02',request_key='synthetic-recheck-first',
+                note=prior_text,attachments=[recheck_answer,old_teacher,prior],review_basis=legacy_basis)
+            first=app.save_task_feedback(first_feedback)
+            later_teacher=upload('synthetic-recheck-later-teacher.txt','虚构教师参考：第1题B，第2题必须写理由。'.encode())
+            app.save_task_feedback(dict(task_id=recheck_task['id'],child='示例甲',day='2026-10-02',request_key='synthetic-recheck-later-teacher',attachments=[later_teacher]))
+            with app.connect() as c:
+                ctx=app.homework_review_context(c,recheck_task['id'],original_id)
+                assert ctx['allowed'][prior]['origin']=='review_result'
+                assert ctx['allowed'][old_teacher]['origin']!='review_result','a reused teacher original keeps its identity'
+            instruction='虚构补充：第2题被漏查，请按新教师参考复核。'
+            previous_text='虚构未保存初检补充：第2题曾被跳过。'
+            recheck_request=initial_request|dict(reference_sources=[source(later_teacher)],previous_sources=[source(prior)],
+                review_instruction=instruction,previous_text=previous_text)
+            comparison='虚构复核差异：第1题不变，新增第2题理由缺漏；只核对所选范围。'
+            recheck_model_result=model_result|dict(comparison=comparison)
+            def recheck_model(messages,schema,name,timeout,**kwargs):
+                serialized=json.dumps(messages,ensure_ascii=False)
+                assert all(text in serialized for text in (action,instruction,prior_text,previous_text,'第2题必须写理由'))
+                return recheck_model_result
+            with patch.object(family_llm,'homework_reference_draft',wraps=family_llm.homework_reference_draft) as generate,patch.object(family_llm,'_chat_json',side_effect=recheck_model):
+                rechecked=app.homework_review_draft(recheck_request)
+                args=generate.call_args.kwargs
+                assert args['task_action']==action and args['review_instruction']==instruction and args['previous_text']==previous_text
+                assert args['previous_documents']==[dict(name='synthetic-recheck-first-opinion.txt',text=prior_text)]
+                assert args['reference_documents']==[dict(name='synthetic-recheck-later-teacher.txt',text='虚构教师参考：第1题B，第2题必须写理由。')]
+            assert rechecked['draft']['comparison']==comparison
+            assert comparison in rechecked['draft']['text'],'comparison must be included in the persisted review text'
+            foreign_previous=upload('synthetic-recheck-other-child.txt',b'Synthetic other-child opinion')
+            app.save_task_feedback(dict(task_id=another['id'],child='示例乙',day='2026-10-02',request_key='synthetic-recheck-other-child',attachments=[foreign_previous]))
+            unrelated_previous=upload('synthetic-recheck-other-task.txt',b'Synthetic unrelated-task opinion')
+            app.save_task_feedback(dict(task_id=task['id'],child='示例甲',day='2026-10-02',request_key='synthetic-recheck-other-task',attachments=[unrelated_previous]))
+            with patch.object(family_llm,'_chat_json') as model:
+                for ident in (foreign_previous,unrelated_previous):
+                    refused(lambda:app.homework_review_draft(recheck_request|dict(previous_sources=[source(ident)])),'review_source_not_allowed')
+                refused(lambda:app.homework_review_draft(recheck_request|dict(reference_sources=[source(prior)])),'review_source_not_allowed')
+                refused(lambda:app.homework_review_draft(recheck_request|dict(question_sources=[source(prior)])),'review_source_not_allowed')
+                refused(lambda:app.homework_review_draft(recheck_request|dict(record_id=first['record_id'],expected_created=first['feedback']['created'])),'review_source_not_allowed')
+                refused(lambda:app.homework_review_draft(recheck_request|dict(review_instruction='字'*1001)))
+                refused(lambda:app.homework_review_draft(recheck_request|dict(previous_text='字'*12001)))
+                refused(lambda:app.homework_review_draft(recheck_request|dict(previous_sources=[source(prior)]*3)))
+                assert model.call_count==0
+            changed={};prior_created=first['feedback']['created']
+            def changed_during_generation(*args,**kwargs):
+                version(first['record_id'],'2026-10-02T01:02:03.000001');changed['dump']=dump()
+                return recheck_model_result
+            with patch.object(family_llm,'_chat_json',side_effect=changed_during_generation):
+                refused(lambda:app.homework_review_draft(recheck_request),'review_basis_changed',409)
+            assert dump()==changed['dump'],'generation with a changed previous record writes no result'
+            version(first['record_id'],prior_created)
+            final_text=upload('synthetic-recheck-final-opinion.txt',rechecked['draft']['text'].encode())
+            final_feedback=dict(task_id=recheck_task['id'],child='示例甲',day='2026-10-02',request_key='synthetic-recheck-final',
+                note='虚构复核已核对',attachments=[recheck_answer,later_teacher,prior,final_text],review_basis=rechecked['review_basis'],
+                comparison_note=comparison,related_record_id=first['record_id'],followup_kind='订正')
+            version(first['record_id'],'2026-10-02T01:02:03.000002')
+            rejected_unchanged(lambda:app.save_task_feedback(final_feedback),'review_basis_changed')
+            version(first['record_id'],prior_created)
+            final=app.save_task_feedback(final_feedback);assert not final['completion_changed']
+            with app.connect() as c:
+                rows={r['id']:dict(r) for r in c.execute('SELECT * FROM records WHERE source=?',('事项:'+recheck_task['id'],))}
+                assert len(rows)==4 and first['record_id']!=final['record_id']
+                for ident in (first['record_id'],final['record_id']):
+                    assert rows[ident]['related_record_id']==original_id and rows[ident]['followup_kind']=='作业检查'
+                assert rows[first['record_id']]['note']==prior_text and rows[final['record_id']]['comparison_note']==comparison
+                assert prior in json.loads(rows[first['record_id']]['attachments']) and final_text in json.loads(rows[final['record_id']]['attachments'])
+                assert (data/'uploads'/final_text).read_text()==rechecked['draft']['text']
+            rejected_unchanged(lambda:app.save_task_feedback(dict(task_id=recheck_task['id'],child='示例甲',day='2026-10-02',
+                record_id=first['record_id'],expected_created=prior_created,note='虚构试图覆盖初检')),status=None)
+            (data/'uploads'/old_teacher).write_bytes(b'1. C\n')
+            assert app.save_task_feedback(first_feedback)['replayed'],'old-basis retry returns the saved initial check after its original material changes'
+            (data/'uploads'/old_teacher).write_bytes(b'1. B\n')
+            # Correcting the ordinary answer itself never relabels it as a generated check.
+            with patch.object(family_llm,'_chat_json',return_value=model_result): correction_basis=app.homework_review_draft(initial_request)['review_basis']
+            app.save_task_feedback(dict(task_id=recheck_task['id'],child='示例甲',record_id=original_id,expected_created=original['feedback']['created'],
+                note='虚构更正原作答说明',review_basis=correction_basis))
+            with app.connect() as c:
+                row=c.execute('SELECT related_record_id,followup_kind FROM records WHERE id=?',(original_id,)).fetchone()
+                assert row['related_record_id'] is None and row['followup_kind']=='','ordinary answer type and relationship survive a basis-bearing correction'
     print('homework review synthetic checks passed')
 
 

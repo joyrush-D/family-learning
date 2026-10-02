@@ -377,23 +377,32 @@ class PrintStore:
         return images,packet_sha([image['sha256'] for image in images])
 
     @staticmethod
-    def review_sources(data, questions, references, allowed, *, render=True):
+    def review_sources(data, questions, references, allowed, *, previous_sources=(), previous_text='', render=True):
         """Explicit same-task originals; PDF subsets are reported, never silently selected."""
         import family_pdf
         import family_media
+        previous_sources=list(previous_sources) if isinstance(previous_sources,tuple) else previous_sources
         if (not isinstance(questions,list) or not questions or not isinstance(references,list)
-                or len(questions)+len(references)>8):
-            raise PrintError('请选题目或孩子作答，最多8份原件；教师参考可另选')
-        items=[];seen=set();raw_total=0
-        for role,sources in [('question',questions),('reference',references)]:
+                or len(questions)+len(references)>8 or not isinstance(previous_sources,list) or len(previous_sources)>2
+                or len(questions)+len(references)+len(previous_sources)>10):
+            raise PrintError('题目、作答及教师参考最多8份；上一轮检查最多2份，合计最多10份原件')
+        if (not isinstance(previous_text,str) or len(previous_text)>12000
+                or any(ord(ch)<32 and ch not in '\n\r\t' or ord(ch)==127 for ch in previous_text)):
+            raise PrintError('上一轮检查文字须完整清晰且最多12000字')
+        items=[];seen=set();raw_total=len(previous_text.encode('utf-8'))
+        for role,sources in [('question',questions),('reference',references),('previous',previous_sources)]:
             for source in sources:
                 if (not isinstance(source,dict) or set(source) not in ({'type','id'},{'type','id','pages'})
                         or source.get('type')!='upload'):
                     raise PrintError('批改只能使用这项作业已保存的原件')
                 ident=_id(source['id'])
                 if ident not in allowed: raise PrintError('原件不属于这份作答或原作业，请重新打开核对','review_source_not_allowed',403)
-                if ident in seen: raise PrintError('同一原件不能重复选作题目、作答或教师参考')
+                if ident in seen: raise PrintError('同一原件不能重复选作题目、作答、教师参考或上一轮检查')
                 seen.add(ident);row=allowed[ident]
+                if role!='previous' and row.get('origin')=='review_result':
+                    raise PrintError('已保存的检查意见只能作为上一轮待复核内容，不能作为作答或教师参考','review_source_not_allowed',403)
+                if role=='previous' and not row['mime'].startswith('text/plain'):
+                    raise PrintError('上一轮检查只接受同一作业已保存的纯文字TXT')
                 base=Path(data).resolve()/'uploads';path=base/ident
                 if base.is_symlink() or path.is_symlink() or path.resolve().parent!=base:
                     raise PrintError('原件路径不正确')
@@ -415,7 +424,7 @@ class PrintStore:
             remaining=family_pdf.DEADLINE_SECONDS-(time.monotonic()-started)
             if remaining<=0: raise family_pdf.PDFError('render timed out')
             return remaining
-        image_count=0;documents=[];coverage=[]
+        image_count=0;documents=[];previous_documents=[];coverage=[]
         for item in items:
             mime=item['mime'];body=item['body'];pages=item['source'].get('pages')
             if mime=='application/pdf':
@@ -438,17 +447,19 @@ class PrintStore:
                 elif not (body[:4]==b'RIFF' and body[8:12]==b'WEBP'): raise PrintError('WebP内容不正确')
                 image_count+=1
                 coverage.append('%s《%s》：本次读取整张照片。'%('教师参考' if item['role']=='reference' else '题目/孩子作答',item['name']))
-            elif item['role']=='reference' and (mime.startswith('text/plain') or mime==family_media.DOCX_MIME):
-                if render:
-                    try: text=family_media.docx_text(body) if mime==family_media.DOCX_MIME else body.decode('utf-8-sig')
-                    except (UnicodeError,MediaError): raise PrintError('教师参考文字无法安全完整读取，请改为PDF或照片') from None
+            elif item['role'] in ('reference','previous') and (mime.startswith('text/plain') or item['role']=='reference' and mime==family_media.DOCX_MIME):
+                try: text=family_media.docx_text(body) if mime==family_media.DOCX_MIME and render else body.decode('utf-8-sig') if mime.startswith('text/plain') else None
+                except (UnicodeError,MediaError): raise PrintError('参考或先前检查文字无法安全完整读取') from None
+                if text is not None:
                     if (not text.strip() or len(text)>12000 or any(ord(ch)<32 and ch not in '\n\r\t' or ord(ch)==127 for ch in text)):
-                        raise PrintError('教师参考文字须清晰完整且最多12000字，请分批核对')
-                    documents.append(dict(name=item['name'],text=text))
-                coverage.append('教师参考《%s》：本次读取完整文字。'%item['name'])
+                        raise PrintError('参考或先前检查文字须清晰完整且最多12000字，请分批核对')
+                    (previous_documents if item['role']=='previous' else documents).append(dict(name=item['name'],text=text))
+                coverage.append(('%s《%s》：本次读取完整文字。'%('上一轮待复核意见' if item['role']=='previous' else '教师参考',item['name'])))
             else: raise PrintError('批改支持JPG、PNG、WebP或PDF；教师参考另支持纯文字TXT/Word')
         if not 1<=image_count<=8: raise PrintError('题目、作答及参考合计最多8张照片/PDF页，请明确分批或选择PDF页码；本次未调用模型')
         if sum(len(d['text']) for d in documents)>12000: raise PrintError('教师参考文字合计最多12000字，请分批核对')
+        if sum(len(d['text']) for d in previous_documents)+len(previous_text)>12000:
+            raise PrintError('上一轮检查文件与文字合计最多12000字，请分批核对')
         images=[];reference_images=[];image_labels=[];reference_labels=[];total=0
         if render:
             for item in items:
@@ -464,15 +475,16 @@ class PrintStore:
                     group=[(dict(mime=item['mime'],data=item['body']),item['name'])]
                 for image,label in group:
                     total+=len(image['data'])
-                    if total+sum(len(d['text'].encode()) for d in documents)>MAX_SOURCE:
-                        raise PrintError('本次图片/PDF页及参考文字合计不能超过20MB，请分批核对')
+                    if total+sum(len(d['text'].encode()) for d in documents+previous_documents)+len(previous_text.encode('utf-8'))>MAX_SOURCE:
+                        raise PrintError('本次图片/PDF页、参考及先前检查文字合计不能超过20MB，请分批核对')
                     if item['role']=='reference': reference_images.append(image);reference_labels.append(label)
                     else: images.append(image);image_labels.append(label)
         packet=[dict(role=i['role'],source=i['source'],name=i['name'],mime=i['mime'],sha256=i['sha256'],binding=i['binding']) for i in items]
-        return dict(images=images,reference_images=reference_images,documents=documents,image_labels=image_labels,
+        return dict(images=images,reference_images=reference_images,documents=documents,previous_documents=previous_documents,image_labels=image_labels,
                     reference_labels=reference_labels,coverage=coverage,fingerprint=_hash(_json(packet).encode()),
                     question_sources=[i['source'] for i in items if i['role']=='question'],
-                    reference_sources=[i['source'] for i in items if i['role']=='reference'])
+                    reference_sources=[i['source'] for i in items if i['role']=='reference'],
+                    previous_sources=[i['source'] for i in items if i['role']=='previous'])
 
     def _page_count(self, path):
         if not self.pdfinfo:

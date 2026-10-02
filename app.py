@@ -617,6 +617,8 @@ def _save_record(obj,care_only,receipt,connection=None):
         ident=obj.get('id')
         previous=c.execute('SELECT * FROM records WHERE id=?',(int(ident),)).fetchone() if ident else None
         if ident and previous is None: raise ValueError('记录不存在')
+        if previous is not None and previous['followup_kind']=='作业检查':
+            raise RecordError('已保存的检查意见保留原记录；请从原作答追加一次复核',409,'review_result_immutable')
         # The parent's explicit task link stays on the record, so a correction cannot carry it to a child the task is not for.
         if previous is not None and previous['linked_task_id']:
             if child!=names.get(previous['child']): record_task(c,previous['linked_task_id'],child)
@@ -655,7 +657,7 @@ def _save_record(obj,care_only,receipt,connection=None):
         if related is not None and (type(related) is not int or not 0<related<=9223372036854775807):
             raise ValueError('关联记录编号不正确')
         kind=clean(obj,'followup_kind',20) if 'followup_kind' in obj else previous['followup_kind'] if previous else ''
-        if kind not in ['', '订正', '复测', '独立复测', '补充观察']: raise ValueError('跟进类型不正确')
+        if kind not in ['', '订正', '复测', '独立复测', '补充观察', '作业检查']: raise ValueError('跟进类型不正确')
         context={}
         for key, choices, limit in [('assistance',ASSISTANCE,20),('practice_relation',PRACTICE_RELATIONS,30),('comparison_note',None,1000)]:
             value=clean(obj,key,limit) if key in obj else previous[key] if previous else ''
@@ -929,6 +931,8 @@ def homework_review_context(c,task_id,record_id,expected_created=None):
         raise family_print.PrintError('这份作答不属于当前孩子的作业','review_source_not_allowed',403)
     if expected_created is not None and (not isinstance(expected_created,str) or expected_created!=row['created']):
         raise family_print.PrintError('原作答已更正，请重新打开后检查','review_source_changed',409)
+    if row['followup_kind']=='作业检查':
+        raise family_print.PrintError('检查意见不是孩子作答，请回原作答追加复核','review_source_not_allowed',403)
     child=next(p for p in profiles(c) if p['name']==task['child'])
     allowed={};bindings=[];record_ids=json.loads(row['attachments']);report={};school_error=''
     def add(ident,origin,binding=None):
@@ -976,9 +980,12 @@ def homework_review_context(c,task_id,record_id,expected_created=None):
             # Saved answer/report still work when their independent school binding is unavailable.
             allowed={ident:value for ident,value in allowed.items() if value['origin']!='school'}
             bindings=[];school_error='学校原件出处当前无法核对；已保存作答仍可检查，可回原消息核对后重试。'
-    for other in c.execute("SELECT id,child,source,linked_task_id,created,attachments FROM records WHERE source=? OR linked_task_id=? ORDER BY id",('事项:'+task_id,task_id)):
+    for other in c.execute("SELECT id,child,source,linked_task_id,created,attachments,followup_kind FROM records WHERE source=? OR linked_task_id=? ORDER BY id",('事项:'+task_id,task_id)):
         if other['id']==record_id or names.get(other['child'],other['child'])!=task['child']: continue
-        for ident in json.loads(other['attachments']): add(ident,'same_task',[other['id'],other['created']])
+        for ident in json.loads(other['attachments']):
+            upload=c.execute('SELECT mime FROM uploads WHERE id=?',(ident,)).fetchone()
+            origin='review_result' if other['followup_kind']=='作业检查' and upload is not None and upload['mime'].startswith('text/plain') else 'same_task'
+            add(ident,origin,[other['id'],other['created']])
     context=dict(task=dict(id=task['id'],child=task['child'],source=task['source'],action=task['action']),
                  child_id=child['id'],record_id=record_id,created=row['created'],record_ids=record_ids,report=report,school=bindings)
     fingerprint=hashlib.sha256(json.dumps(context,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
@@ -986,26 +993,30 @@ def homework_review_context(c,task_id,record_id,expected_created=None):
 
 def homework_review_basis(obj):
     """Structural validation is separate from the save transaction's live source checks."""
-    if not isinstance(obj,dict) or set(obj)!={'record_id','created','photo_ids','question_sources','reference_sources','material_sha256','context_sha256'}:
+    required={'record_id','created','photo_ids','question_sources','reference_sources','material_sha256','context_sha256'}
+    if not isinstance(obj,dict) or not required<=set(obj) or set(obj)-required-{'previous_sources'}:
         raise RecordError('批改所依据的原件格式不正确，请重新核对',400,'review_basis_invalid')
     if (type(obj['record_id']) is not int or not 0<obj['record_id']<=9223372036854775807
             or not isinstance(obj['created'],str) or not obj['created'] or len(obj['created'])>40
             or any(not isinstance(obj[key],str) or not re.fullmatch('[a-f0-9]{64}',obj[key]) for key in ('material_sha256','context_sha256'))
-            or not isinstance(obj['photo_ids'],list) or len(obj['photo_ids'])>8
+            or not isinstance(obj['photo_ids'],list) or len(obj['photo_ids'])>10
             or any(not isinstance(i,str) or not re.fullmatch('[a-f0-9]{32}',i) for i in obj['photo_ids'])
             or len(set(obj['photo_ids']))!=len(obj['photo_ids'])):
         raise RecordError('批改所依据的原件格式不正确，请重新核对',400,'review_basis_invalid')
-    questions=obj['question_sources'];references=obj['reference_sources']
-    if not isinstance(questions,list) or not questions or not isinstance(references,list) or len(questions)+len(references)>8:
+    questions=obj['question_sources'];references=obj['reference_sources'];previous=obj.get('previous_sources',[])
+    if (not isinstance(questions,list) or not questions or not isinstance(references,list) or len(questions)+len(references)>8
+            or not isinstance(previous,list) or len(previous)>2 or len(questions)+len(references)+len(previous)>10):
         raise RecordError('批改所依据的原件格式不正确，请重新核对',400,'review_basis_invalid')
     ids=[]
-    for source in questions+references:
+    for source in questions+references+previous:
         if (not isinstance(source,dict) or set(source) not in ({'type','id'},{'type','id','pages'}) or source.get('type')!='upload'
                 or not isinstance(source.get('id'),str) or not re.fullmatch('[a-f0-9]{32}',source['id'])):
             raise RecordError('批改所依据的原件格式不正确，请重新核对',400,'review_basis_invalid')
         if 'pages' in source and (not isinstance(source['pages'],list) or not 1<=len(source['pages'])<=8
                 or any(type(p) is not int or not 1<=p<=200 for p in source['pages']) or len(set(source['pages']))!=len(source['pages'])):
             raise RecordError('批改所依据的原件页码不正确，请重新核对',400,'review_basis_invalid')
+        if source in previous and 'pages' in source:
+            raise RecordError('上一轮检查只能引用完整TXT文字',400,'review_basis_invalid')
         ids.append(source['id'])
     if len(set(ids))!=len(ids) or not set(obj['photo_ids'])<=set(ids):
         raise RecordError('批改所依据的原件重复或归属不正确',400,'review_basis_invalid')
@@ -1014,31 +1025,34 @@ def homework_review_basis(obj):
 def guard_homework_review(c,task_id,basis,attachments):
     try:
         context=homework_review_context(c,task_id,basis['record_id'],basis['created'])
-        ids=[s['id'] for s in basis['question_sources']+basis['reference_sources']]
+        ids=[s['id'] for s in basis['question_sources']+basis['reference_sources']+basis.get('previous_sources',[])]
         record_ids=json.loads(context['record']['attachments'])
         if set(basis['photo_ids'])!={ident for ident in ids if ident in record_ids} or not set(ids)<=set(attachments): raise ValueError()
         # No second database connection, PDF probe, conversion or model inside the save transaction.
-        materials=family_print.PrintStore.review_sources(DATA,basis['question_sources'],basis['reference_sources'],context['allowed'],render=False)
+        materials=family_print.PrintStore.review_sources(DATA,basis['question_sources'],basis['reference_sources'],context['allowed'],previous_sources=basis.get('previous_sources',[]),render=False)
         if materials['fingerprint']!=basis['material_sha256'] or context['context_sha256']!=basis['context_sha256']: raise ValueError()
     except (ValueError,KeyError,TypeError,OSError,family_reading.ReadingError):
         raise RecordError('原作答、题目或参考已变化；批改依据需要重新核对，本次反馈未保存',409,'review_basis_changed') from None
 
 def homework_review_draft(obj):
-    if not isinstance(obj,dict) or set(obj)-{'purpose','task_id','record_id','expected_created','question_sources','reference_sources'}:
+    if not isinstance(obj,dict) or set(obj)-{'purpose','task_id','record_id','expected_created','question_sources','reference_sources','previous_sources','review_instruction','previous_text'}:
         raise family_print.PrintError('请只提供这次作答的题目与教师参考')
     if 'expected_created' not in obj: raise family_print.PrintError('请保留原作答版本后重试')
+    instruction=clean(obj,'review_instruction',1000);previous_text=clean(obj,'previous_text',12000)
     with connect() as c:
         context=homework_review_context(c,obj.get('task_id'),obj.get('record_id'),obj['expected_created'])
-    materials=family_print.PrintStore.review_sources(DATA,obj.get('question_sources'),obj.get('reference_sources',[]),context['allowed'])
-    ids=[source['id'] for source in materials['question_sources']+materials['reference_sources']]
+    materials=family_print.PrintStore.review_sources(DATA,obj.get('question_sources'),obj.get('reference_sources',[]),context['allowed'],previous_sources=obj.get('previous_sources',[]),previous_text=previous_text)
+    ids=[source['id'] for source in materials['question_sources']+materials['reference_sources']+materials['previous_sources']]
     basis=dict(record_id=obj['record_id'],created=context['record']['created'],
                photo_ids=[ident for ident in ids if ident in json.loads(context['record']['attachments'])],
                question_sources=materials['question_sources'],reference_sources=materials['reference_sources'],
                material_sha256=materials['fingerprint'],context_sha256=context['context_sha256'])
+    if materials['previous_sources']: basis['previous_sources']=materials['previous_sources']
     with connect() as c: guard_homework_review(c,obj['task_id'],basis,ids)
     draft=family_llm.homework_reference_draft(materials['images'],data_path=DATA,timeout=120,review=True,
         reference_images=materials['reference_images'],reference_documents=materials['documents'],
-        image_labels=materials['image_labels'],reference_labels=materials['reference_labels'],program_coverage=materials['coverage'])
+        image_labels=materials['image_labels'],reference_labels=materials['reference_labels'],program_coverage=materials['coverage'],
+        previous_documents=materials['previous_documents'],previous_text=previous_text,review_instruction=instruction,task_action=context['task']['action'])
     with connect() as c: guard_homework_review(c,obj['task_id'],basis,ids)
     return dict(draft=draft,question_sha256=materials['fingerprint'],review_basis=basis)
 
@@ -1096,10 +1110,15 @@ def save_task_feedback(obj):
         previous=c.execute('SELECT * FROM records WHERE id=?',(ident,)).fetchone() if ident is not None else None
         if ident is not None and (previous is None or previous['source']!=source or names.get(previous['child'])!=task['child']):
             raise RecordError('这条反馈不属于当前事项，请从原事项重新打开',409,'feedback_task_mismatch')
+        if previous is not None and previous['followup_kind']=='作业检查':
+            raise RecordError('已保存的检查意见保留原记录；请从原作答追加一次复核',409,'review_result_immutable')
         # A retry keeps the title saved the first time, so a task retitled in between is not a different submission.
-        titled=previous or (c.execute('SELECT title FROM records WHERE request_key=?',(request_key,)).fetchone() if request_key else None)
+        titled=previous or (c.execute('SELECT title,followup_kind FROM records WHERE request_key=?',(request_key,)).fetchone() if request_key else None)
         record=dict(child=child,source=source,title=titled['title'] if titled else ('反馈：'+task['title'])[:200])
         if basis is not None: record['review_basis']=basis  # Include the basis in the retry fingerprint.
+        # A receipt from an older version retains its original payload hash and ordinary record role.
+        if material_basis and previous is None and (titled is None or titled['followup_kind']=='作业检查'):
+            record.update(related_record_id=basis['record_id'],followup_kind='作业检查',comparison_note=clean(obj,'comparison_note',1000))
         for key,limit in [('day',10),('category',20),('subject',80),('note',4000),('transcript',4000),('transcript_state',10),('assistance',30)]:
             record[key]=clean(obj,key,limit) if key in obj or previous is None else previous[key]
         record['category']=record['category'] or '学习进展'
@@ -1115,18 +1134,7 @@ def save_task_feedback(obj):
         for row in c.execute("SELECT child,attachments FROM records WHERE attachments<>'[]'"):
             if names.get(row['child'],row['child'])!=task['child'] and set(json.loads(row['attachments']))&set(attachments):
                 raise RecordError('该原件已关联另一位孩子的记录，请为这个孩子重新上传',409,'feedback_media_other_child')
-        if previous is not None and all(record[k]==(saved if k=='attachments' else previous[k]) for k in record if k not in ('child','source','title','review_basis')):
-            # The same correction again (for example after a lost reply) changes nothing and is not a conflict.
-            if request_key: raise RecordError('更正已有文字记录不能复用新增反馈的提交标识')
-            result=record_result(c,ident,True);key_replay=True
-        else:
-            if previous is not None and clean(obj,'expected_created',40)!=previous['created']:
-                raise RecordError('这条反馈已在别处更正，请刷新核对；本次更正尚未保存',409,'feedback_conflict')
-            if previous is not None: record['id']=ident
-            # The explicit completion choice is part of the submission, so one key cannot later carry a different choice.
-            else: record.update(request_key=request_key,completion=dict(complete=complete,note=completion_note))
-            result=_save_record(record,False,{},c);key_replay=result['replayed']
-        if basis is not None and not key_replay:
+        def check_review_basis():
             if material_basis: guard_homework_review(c,task_id,basis,attachments)
             original=c.execute('SELECT child,source,linked_task_id,created,attachments FROM records WHERE id=?',(basis['record_id'],)).fetchone()
             if (original is None or names.get(original['child'])!=task['child']
@@ -1135,6 +1143,21 @@ def save_task_feedback(obj):
                 or not set(basis['photo_ids']).issubset(json.loads(original['attachments']))
                 or not set(basis['photo_ids']).issubset(attachments)):
                 raise RecordError('原作答已在别处更正；批改依据需要重新核对，本次反馈未保存',409,'review_basis_changed')
+        if previous is not None and all(record[k]==(saved if k=='attachments' else previous[k]) for k in record if k not in ('child','source','title','review_basis')):
+            # The same correction again (for example after a lost reply) changes nothing and is not a conflict.
+            if request_key: raise RecordError('更正已有文字记录不能复用新增反馈的提交标识')
+            result=record_result(c,ident,True);key_replay=True
+        else:
+            if previous is not None and clean(obj,'expected_created',40)!=previous['created']:
+                raise RecordError('这条反馈已在别处更正，请刷新核对；本次更正尚未保存',409,'feedback_conflict')
+            if previous is not None:
+                # Validate the old answer before this ordinary correction changes its own version.
+                if basis is not None: check_review_basis()
+                record['id']=ident
+            # The explicit completion choice is part of the submission, so one key cannot later carry a different choice.
+            else: record.update(request_key=request_key,completion=dict(complete=complete,note=completion_note))
+            result=_save_record(record,False,{},c);key_replay=result['replayed']
+        if basis is not None and previous is None and not key_replay: check_review_basis()
         changed=False
         if complete and not key_replay:
             update=c.execute('SELECT status FROM task_updates WHERE id=?',(task_id,)).fetchone()
@@ -1143,7 +1166,7 @@ def save_task_feedback(obj):
                 save_task(dict(id=task_id,status='已完成',note=completion_note or TASK_CHECK_NOTE,expected_updated=obj['expected_updated']),connection=c)
                 changed=True
         row=c.execute('SELECT * FROM records WHERE id=?',(result['record_id'],)).fetchone()
-        feedback={k:row[k] for k in ['day','category','subject','note','transcript','transcript_state','assistance','created']}
+        feedback={k:row[k] for k in ['day','category','subject','note','transcript','transcript_state','assistance','created','related_record_id','followup_kind','comparison_note']}
         feedback.update(record_id=row['id'],task_id=task_id,child=task['child'],attachments=[upload_info(c.execute('SELECT * FROM uploads WHERE id=?',(i,)).fetchone()) for i in json.loads(row['attachments'])])
         task_feedback_projection(c,task,names)
     return result|dict(feedback=feedback,task=task,completion_changed=changed)
@@ -2123,7 +2146,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.connection.settimeout(160)
                 purpose=obj.get('purpose','reference')
                 if purpose not in ('reference','review'): raise family_print.PrintError('作业整理用途不正确')
-                if purpose=='review' and any(key in obj for key in ('task_id','record_id','expected_created','reference_sources')):
+                if purpose=='review' and any(key in obj for key in ('task_id','record_id','expected_created','reference_sources','previous_sources','review_instruction','previous_text')):
                     try: return self.reply(200,homework_review_draft(obj))
                     except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
                 sources=obj.get('question_sources') if 'question_sources' in obj else [obj.get('question_source')]
