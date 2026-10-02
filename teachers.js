@@ -1,6 +1,6 @@
 // Parent-only teaching observations. Drafts stay in this open page, never browser storage.
 (() => {
- let ctx=null,state=null,selected='',editing='',busy=false,pending=null,conflict=null,message='',sequence=0;
+ let ctx=null,state=null,selected='',editing='',busy=false,pending=null,conflict=null,message='',sequence=0,requestedTeacher='';
  const drafts=new Map();
  const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const root=()=>ctx?.root?.isConnected?ctx.root:null;
@@ -60,8 +60,8 @@
  function status(text){message=text;const el=root()?.querySelector('#teachersStatus');if(el)el.innerHTML=`${esc(text)}${pending?'<button type="button" data-teacher-retry>核对并重试这次保存</button>':conflict?`<button type="button" ${conflict.refreshed?'data-teacher-accept-version':'data-teacher-conflict'}>${conflict.refreshed?'已核对，继续编辑':'读取最新记录，保留填写'}</button>`:'<button type="button" data-teacher-refresh>刷新已保存记录</button>'}`;lock()}
  async function request(path,body){const active=ctx;if(!active)throw Error('请回到老师页面重试');const response=await active.apiFetch(path,{signal:AbortSignal.timeout(15000),...(body?{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':active.token},body:JSON.stringify(body)}:{})});let result;try{result=await response.json()}catch{throw Error('未能核对服务器答复')}if(!response.ok){const e=Error(result.error||'保存未成功');e.status=response.status;throw e}return result}
  async function read(){
-  const seq=++sequence;
-  try{const next=await request('/api/teachers');if(seq!==sequence||!root())return false;if(!['teachers','observations','children','sources'].every(k=>Array.isArray(next[k])))throw Error('老师记录格式暂时无法核对');remember();state=next;paint(false);return true}
+  const seq=++sequence,target=requestedTeacher;
+  try{const next=await request('/api/teachers');if(seq!==sequence||!root())return false;if(!['teachers','observations','children','sources'].every(k=>Array.isArray(next[k])))throw Error('老师记录格式暂时无法核对');remember();state=next;if(target&&target===requestedTeacher){if(teachers().some(t=>t.id===target)){selected=target;editing=''}requestedTeacher=''}paint(false);return true}
   catch(e){if(seq===sequence)status(e.message+'；填写保留，可重试。');return false}
  }
  async function save(){
@@ -96,7 +96,7 @@
   if(b.hasAttribute('data-teacher-conflict')){if(await read()){conflict.refreshed=true;status('已显示最新保存内容；你的填写保留。对照记录后继续编辑。')}return}
   if(b.hasAttribute('data-teacher-accept-version')){const d=drafts.get(conflict.key),[kind,id]=conflict.key.split(':');if(d)d.version=(kind==='profile'?state.teachers:state.observations).find(x=>x.id===id)?.version??d.version;conflict=null;message='可以继续编辑；再次保存才会提交更正。';paint(false);return}
   remember();
-  if(b.hasAttribute('data-teacher-select')){selected=b.dataset.teacherSelect;editing='';paint(false)}
+  if(b.hasAttribute('data-teacher-select')){requestedTeacher='';selected=b.dataset.teacherSelect;editing='';paint(false)}
   if(b.dataset.teacherEdit){editing=b.dataset.teacherEdit;paint(false);root()?.querySelector('.teacher-write')?.scrollIntoView({block:'nearest'})}
   if(b.hasAttribute('data-teacher-new-observation')){editing='';paint(false)}
   if(b.hasAttribute('data-teacher-discard')){const key=b.closest('form').dataset.key;drafts.delete(key);if(conflict?.key===key)conflict=null;paint(false)}
@@ -104,6 +104,6 @@
  function input(){targetFields();remember()}
  function canSwitch(){if(busy||pending){status('请先核对这次保存，再切换孩子。');return false}remember();return true}
  function leave(){remember();if(ctx?.root){ctx.root.removeEventListener('submit',submit);ctx.root.removeEventListener('click',click);ctx.root.removeEventListener('input',input);ctx.root.removeEventListener('change',input)}ctx=null;sequence++}
- function mount(options){leave();ctx=options;if(options.teacherId&&!busy&&!pending){selected=options.teacherId;editing=''}for(const [event,handler] of [['submit',submit],['click',click],['input',input],['change',input]])ctx.root.addEventListener(event,handler);paint(false);if(!busy&&!pending)read()}
+ function mount(options){leave();ctx=options;if(!busy&&!pending){requestedTeacher=options.teacherId||'';if(requestedTeacher){selected=requestedTeacher;editing=''}}for(const [event,handler] of [['submit',submit],['click',click],['input',input],['change',input]])ctx.root.addEventListener(event,handler);paint(false);if(!busy&&!pending)read()}
  window.FamilyTeachers={mount,leave,canSwitch};
 })();

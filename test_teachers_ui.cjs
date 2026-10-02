@@ -11,7 +11,7 @@ async function run(browser,width){
  let state=fixture(),failure='',writes=0,lastBody=null;const keys=new Map();
  const server=http.createServer(async(req,res)=>{
   const send=(code,body)=>{res.writeHead(code,{'Content-Type':'application/json'});res.end(JSON.stringify(body))};
-  if(req.url==='/api/teachers'){send(200,state);return}
+  if(req.url==='/api/teachers'){if(failure==='read'){failure='';send(503,{error:'虚构新老师读取失败'});return}send(200,state);return}
   if(req.url.startsWith('/api/teachers/')){
    let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);lastBody=body;
    if(failure==='auth'){failure='';send(401,{error:'请重新登录'});return}
@@ -65,11 +65,26 @@ async function run(browser,width){
   await page.evaluate(()=>{FamilyTeachers.leave();mount('TEACH-B','child-b')});await page.waitForFunction(()=>document.querySelector('[data-teacher-select="TEACH-B"]')?.getAttribute('aria-pressed')==='true');assert.equal(await page.locator('[data-teacher-observation]').count(),0);
   await page.locator('[data-child="child-a"]').click();await page.locator('.teacher-profile').evaluate(el=>el.open=true);await profile().locator('[data-teacher-discard]').click();assert.equal(await profile().locator('[name="display_name"]').inputValue(),'虚构甲老师');
   await page.locator('.teacher-profile').evaluate(el=>el.open=true);await profile().locator('[type="submit"]').click();await settled();assert.deepEqual(lastBody.child_ids.sort(),['child-a','child-b'],'saving the scoped profile does not remove the other child');assert.deepEqual(lastBody.source_ids,['source-a']);
+  await profile().locator('[type="submit"]:not([disabled])').waitFor();
+  // A source citation can point to a teacher created after this page cached its list.
+  state.teachers.push({id:'TEACH-CITATION-NEW',version:1,display_name:'虚构新通知老师',subject:'语文',child_ids:['child-a'],source_ids:['source-a'],public_url:'',archived:false,public_info:{status:'unconfigured'}});
+  state.observations.push({id:'TEACHOBS-CITATION-NEW',version:1,teacher_id:'TEACH-CITATION-NEW',day:'2026-09-01',kind:'requirement',target:'class',child_id:'',scope_child_id:'child-a',behavior:'虚构通知：按顺序说出物品用途。',teacher_reason:'',parent_note:'',source_id:'source-a',message_id:'synthetic-new-message',source_url:'',status:'active'});
+  assert.equal(await page.locator('[data-teacher-select="TEACH-CITATION-NEW"]').count(),0,'new server teacher is absent from the cached page');
+  failure='read';
+  await page.evaluate(()=>mount('TEACH-CITATION-NEW'));
+  await status().filter({hasText:'虚构新老师读取失败'}).waitFor();
+  assert.equal(await page.locator('[data-teacher-observation="TEACHOBS-CITATION-NEW"]').count(),0,'failed refresh does not fabricate the new record');
+  await page.locator('[data-teacher-refresh]').click();
+  await page.locator('[data-teacher-observation="TEACHOBS-CITATION-NEW"]').waitFor();
+  assert.equal(await page.locator('[data-teacher-select="TEACH-CITATION-NEW"]').getAttribute('aria-pressed'),'true','fresh records preserve the cited teacher selection');
+  assert.equal(await page.locator('[data-child="child-a"]').getAttribute('aria-pressed'),'true');
+  assert.match(await page.locator('[data-teacher-observation="TEACHOBS-CITATION-NEW"]').innerText(),/虚构通知：按顺序说出物品用途/);
+  assert.equal(await page.locator('[data-teacher-select="TEACH-B"]').count(),0,'citation reload still respects the current child');
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'viewport fits');
   assert.equal(await page.locator('.teachers-view button:visible,.teachers-view summary:visible').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'touch targets');
   assert.deepEqual(errors,[]);
   if(process.env.TEACHERS_UI_PROOF_DIR){fs.mkdirSync(process.env.TEACHERS_UI_PROOF_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.TEACHERS_UI_PROOF_DIR,'teachers-'+width+'.png'),fullPage:true})}
-  return {width,singleChildScope:true,childDraftIsolation:true,pendingChildGuard:true,completeProfileMapping:true,draftsAcrossTeachersAndPages:true,authRetry:true,lostReplyDeduplicated:true,conflictChecked:true,correctionAndWithdrawal:true,teacherCitationSelection:true,otherStudentNameAbsent:true,escapedEvidence:true,noOverflow:true};
+  return {width,singleChildScope:true,childDraftIsolation:true,pendingChildGuard:true,completeProfileMapping:true,draftsAcrossTeachersAndPages:true,authRetry:true,lostReplyDeduplicated:true,conflictChecked:true,correctionAndWithdrawal:true,teacherCitationSelection:true,newTeacherCitationAfterCache:true,citationReadFailureRetry:true,otherStudentNameAbsent:true,escapedEvidence:true,noOverflow:true};
  }finally{await page.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve))}
 }
 (async()=>{const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});try{const result=[];for(const width of [360,1440])result.push(await run(browser,width));console.log(JSON.stringify({passed:true,synthetic:true,checks:result},null,2))}finally{await browser.close()}})().catch(e=>{console.error(e);process.exitCode=1});

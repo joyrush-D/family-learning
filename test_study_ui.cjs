@@ -45,7 +45,7 @@ async function proof(p,name){if(process.env.STUDY_UI_PROOF_DIR){const fs=require
   for(const width of [360,1440]){
    const p=await browser.newPage({viewport:{width,height:900}}),errors=[];let beforeUnloadDialogs=0;p.on('pageerror',e=>errors.push(e.message));p.on('dialog',async dialog=>{if(dialog.type()==='beforeunload')beforeUnloadDialogs++;await dialog.accept()});
    try{
-    await p.goto(app.url);await p.locator('[data-homework-new]').waitFor();await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="study"]').click();await p.locator('select[data-study-child]').selectOption(child.id);await p.locator('[data-study-ready]').waitFor();await fit(p);
+    await p.goto(app.url);await p.locator('#content[data-ready="true"]').waitFor();await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="study"]').click();await p.locator('select[data-study-child]').selectOption(child.id);await p.locator('[data-study-ready]').waitFor();await fit(p);
     if(width===360){
      await p.locator('select[data-study-child]').selectOption(other.id);await eventually(async()=>await p.locator('select[data-study-child]').inputValue()===other.id,'switch study child');
      await p.locator('nav [data-page="calendar"]').click();await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="study"]').click();await p.locator('[data-study-ready]').waitFor();
