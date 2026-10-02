@@ -614,7 +614,8 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
  const editing=[area,confirmed,panel.querySelector('[data-homework-review-instruction]'),...panel.querySelectorAll('[data-homework-review-photo],[data-homework-review-role],[data-homework-review-pages]')];
  homeworkReviewBusy=true;button.disabled=true;editing.forEach(x=>x.disabled=true);status.textContent='正在保存核对文字原件…';
  try{
-  const file=new File([area.value.trim()+'\n'],'作业批改参考-'+recordId+'.txt',{type:'text/plain'}),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),120000);let upload;
+  const previous=[...panel.querySelectorAll('[data-homework-review-previous] textarea')].map((x,i)=>'此前第'+(i+1)+'轮检查草稿：\n'+x.value.trim());
+  const file=new File([area.value.trim()+'\n'+(previous.length?'\n此前检查草稿（仅供对照，不是教师参考）：\n'+previous.join('\n\n')+'\n':'')],'作业批改参考-'+recordId+'.txt',{type:'text/plain'}),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),120000);let upload;
   try{const response=await apiFetch('/api/upload',{signal:controller.signal,method:'POST',headers:{'X-Family-Token':data.token,'X-File-Name':encodeURIComponent(file.name),'Content-Type':'application/octet-stream'},body:file});upload=await response.json();if(!response.ok)throw Error(upload.error||'核对文字未保存')}finally{clearTimeout(timer)}
   if(!$('#taskDialog').open||!taskFeedbackContext||taskFeedbackContext.task_id!==task.id)return;
   if(!/^[a-f0-9]{32}$/.test(upload.attachment?.id))throw Error('文字原件回执无法核对');
