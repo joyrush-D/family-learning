@@ -210,7 +210,8 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   await resources.locator('[data-task-material-unread]').waitFor();assert.match(await resources.innerText(),/AI 已整理[\s\S]*3 \/ 11 页[\s\S]*未读页：4、5、6、7、8、9、10、11[\s\S]*原件前3页待核对/);
   assert.equal(await resources.locator('[data-task-material-state]').count(),1);await fits(page);await proof(page,'task-partial-resource-'+width);
   await feedback.locator('[data-close=taskDialog]').click();
-  await page.route('**/api/agent/message?*',async route=>{const out=await(await route.fetch()).json();return route.fulfill({json:{...out,child_id:'child-2'}})});
+  const wrongView=await readView({child_id:'child-1',source_id:'qq:123456',message_id:'native-'+width});
+  await page.route('**/api/agent/message?*',route=>route.fulfill({json:{...wrongView,child_id:'child-2'}}));
   await page.locator('[data-query-target="task:'+partial.id+'"] [data-task]').click();await resources.getByText(/归属暂时无法核对/).waitFor();assert.equal(await resources.locator('[data-task-material-state]').count(),0,'wrong child response reveals no material');
   await feedback.locator('[data-close=taskDialog]').click();await page.unroute('**/api/agent/message?*');
   assert.equal(facts(await state()),factsBefore,'task resource preview and failed retry are read-only');

@@ -67,7 +67,7 @@ async function server(){
   assert.equal(state.tasks.find(t=>t.id===id).update,null,'recording a wrong answer does not complete homework');
   assert.equal(await p.locator('#taskFeedbackHistory [data-homework-review]').count(),1,'wrong-item record does not start a second AI review');
   await p.keyboard.press('Escape');await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskFeedbackHistory').getByText('作业错题', {exact:false}).first().waitFor();
-  const wrongCard=p.locator('#taskFeedbackHistory .note').filter({has:p.locator('[data-record="'+wrongRecords[0].id+'"]')});
+  const wrongCard=p.locator('#taskFeedbackHistory .task-feedback-record').filter({has:p.locator('[data-record="'+wrongRecords[0].id+'"]')});
   await p.locator('#taskForm [name=note]').fill('虚构未保存的新反馈');p.once('dialog',d=>d.dismiss());
   await wrongCard.locator('[data-followup]').click();assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'correction does not discard unsaved feedback');
   assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'虚构未保存的新反馈');await p.locator('#taskForm [name=note]').fill('');
