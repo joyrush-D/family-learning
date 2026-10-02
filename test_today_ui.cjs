@@ -66,6 +66,7 @@ function fixtures(base){
     await p.goto(server.url,{waitUntil:'load'});await ready(p);await fit(p);await selectedChild(p,state.children,state.children[0]);
     const original=card('TODAY').locator(':scope > .checkrow .taskbody > .toolbar [data-school-original-ref]');assert(await original.isVisible(),'homework source is visible before expanding details');assert.match(await original.innerText(),/查看作业原件/);
     assert.equal(await original.locator('.school-publication-context').innerText(),'发言人：示例周老师 · 虚构学校群 <甲班>');assert.equal(await original.locator('甲班').count(),0,'source names are text, not HTML');
+    assert.match(await p.evaluate(({ref,child})=>schoolOriginalButtons([ref],child,'原通知',[{ref,sender:'   ',source_name:'虚构学校群'}]),{ref:publication.ref,child:state.children[0].id}),/发言人：未记录/,'whitespace names do not imply a recorded publisher');
     await p.reload({waitUntil:'load'});await ready(p);assert.equal(await original.locator('.school-publication-context').isVisible(),true,'reopened daily task retains its saved publication context');
     assert.deepEqual(await homework.locator('[data-today-task]').evaluateAll(xs=>xs.map(x=>x.dataset.todayTask)),['TODAY']);
     assert.equal(await card('SIBLING').count(),0,'the first screen only shows the default child');

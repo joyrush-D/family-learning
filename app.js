@@ -1523,7 +1523,7 @@ function schoolMessageIdentity(ref,childID){
 }
 function schoolOriginalButtons(refs,childID,label='原通知与原件',publications=[]){
  const entries=[...new Set(refs)].filter(ref=>schoolMessageIdentity(ref,childID));
- return entries.length?`<div class="toolbar">${entries.map((ref,i)=>{const p=publications.find(p=>p.ref===ref);return `<button data-school-original-ref="${esc(ref)}" data-school-original-child="${esc(childID)}">${p?`<span class="school-publication-context">发言人：${esc(p.sender||'未记录')} · ${esc(p.source_name)}</span>`:''}${entries.length===1?label:'第 '+(i+1)+' 条'+label}</button>`}).join('')}</div>`:'';
+ return entries.length?`<div class="toolbar">${entries.map((ref,i)=>{const p=publications.find(p=>p.ref===ref);return `<button data-school-original-ref="${esc(ref)}" data-school-original-child="${esc(childID)}">${p?`<span class="school-publication-context">发言人：${esc(String(p.sender||'').trim()||'未记录')} · ${esc(p.source_name)}</span>`:''}${entries.length===1?label:'第 '+(i+1)+' 条'+label}</button>`}).join('')}</div>`:'';
 }
 // Same link boundary as family_agent._URL (without lookbehind so older engines still parse this file) and the same trailing
 // ASCII punctuation trim as the server's _page_link, so a sentence-ending . , ; : ! ? or quote is never sent as part of the
