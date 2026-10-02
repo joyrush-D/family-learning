@@ -900,7 +900,7 @@ $('#saveTaskFeedback').onclick=async()=>{
    ...(ctx.record_id?{record_id:ctx.record_id,expected_created:ctx.expected_created}:{request_key:ctx.request_key}),
    ...(ctx.review_basis?{review_basis:ctx.review_basis,comparison_note:ctx.comparison_note||''}:{})};
  }
- const body=taskFeedbackPending,reviewViews=body.review_basis?[]:[...$('#taskFeedbackHistory').querySelectorAll('[data-homework-review]')];f.dataset.saving='yes';lockTaskFeedback(true);$('#saveTaskFeedback').textContent='正在保存反馈…';$('#taskError').textContent='';$('#taskFeedbackStatus').textContent='';
+ const body=taskFeedbackPending,reviewViews=[...$('#taskFeedbackHistory').querySelectorAll('[data-homework-review]')].filter(x=>Number(x.dataset.homeworkReview)!==body.review_basis?.record_id);f.dataset.saving='yes';lockTaskFeedback(true);$('#saveTaskFeedback').textContent='正在保存反馈…';$('#taskError').textContent='';$('#taskFeedbackStatus').textContent='';
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);let knownFailure=false;
  try{
   const response=await apiFetch('/api/task/feedback',{signal:controller.signal,method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify(body)});
