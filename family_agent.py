@@ -67,6 +67,7 @@ learning_goal_id只从输入learning_goals选择同一科目且适合本要求�
 任务要求与老师的后续更正、撤销一起保留原消息作为规划依据；不把它们当成孩子表现。发布者称呼不等于教师身份已确认，不凭群名推断任课老师，不将家长转发说成老师直接发布。保持必须、任选、示例和条件要求，不能读出未提供的图片或链接内容。'''
 # One saved interpretation feeds the task list; it never records child performance.
 SCHOOL_TASK_POLICY = 9
+SCHOOL_SELECTION_REVISION = 1
 _SCHOOL_DATE_MENTION=re.compile(r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}\s*[日号]|今天|今日|今晚|明天|明日|后天|(?:本|这|下)(?:个)?(?:周|星期|礼拜)|(?:周|星期|礼拜)[一二三四五六日天]|截止|期限|日期|完成时间')
 TASK_BRIEF_SCHEMA = {'type':'object','additionalProperties':False,'required':['title','goal','advice','state','reason'],
     'properties':{**{key:{'type':'string','maxLength':limit} for key,limit in [('title',80),('goal',2000),('advice',1200),('reason',400)]},
@@ -1351,6 +1352,8 @@ class Store:
                 profiles = {p['id']: p['name'] for p in self.profiles(c)}
                 if row['child_id'] not in profiles: raise AgentError('孩子档案无法核对', 409)
                 if row['kind'] == 'school':
+                    history_reused=_history_reuse(self,c,row,allow_uncertain=not school_auto)
+                    if history_reused is not None: return history_reused
                     reused = self._reuse_school(c, row)
                     if reused is not None: return reused
                 task_id = 'AGENT-' + _hash(ident)[:24]
@@ -1405,7 +1408,7 @@ class Store:
             c.execute('INSERT OR REPLACE INTO agent_jobs(id,fingerprint,attempts) VALUES(?,?,?)', (key, fingerprint, int(model)))
         return fingerprint
 
-    def _school_selection_current(self, c, key, fingerprint, source, messages):
+    def _school_selection_current(self, c, key, fingerprint, source, messages, *, processed=0):
         """Recheck only the original school batch, under the settings/save transaction; no model or collection."""
         try:
             config=self._config(c)
@@ -1420,15 +1423,19 @@ class Store:
             for message in messages:
                 row=c.execute('SELECT payload,processed FROM agent_messages WHERE source_id=? AND id=?',
                               (source['id'],message['id'])).fetchone()
-                if row is None or row['processed'] or row['payload']!=_json(message): return False
+                if row is None or row['processed']!=processed or row['payload']!=_json(message): return False
             return bool(messages)
         except (AgentError,KeyError,TypeError,ValueError): return False
 
-    def _save(self, key, fingerprint, items, now, message_ids=(), *, school_context=None):
+    def _save(self, key, fingerprint, items, now, message_ids=(), *, school_context=None, history_context=None):
         with self._db() as c:
             c.execute('BEGIN IMMEDIATE')
             if school_context and not self._school_selection_current(c,key,fingerprint,*school_context):
                 raise AgentError('学校消息或来源已变化，本轮结果未保存；原消息保留等待按当前来源重新整理。',409,'school_selection_stale')
+            if history_context:
+                source,values,basis=history_context
+                if not self._school_selection_current(c,key,fingerprint,source,values,processed=1) or _history_context(self,c,source,values,key)[0]!=basis:
+                    raise AgentError('原学校记录或家长决定已变化，补漏结果未保存；原记录保留。',409,'school_history_stale')
             c.execute("UPDATE agent_items SET state='superseded',updated=? WHERE job_id=? AND state='pending'", (now.isoformat(), key))
             for index, item in enumerate(items):
                 ident = 'agent-' + _hash([key, fingerprint, index])[:32]
@@ -1776,7 +1783,174 @@ def _school_dated_quote(quote, evidence, due, brief):
     return bool(matches) and all(values=={due} for values in matches)
 
 
-def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None, school_tasks=()):
+def _history_anchor(row, originals):
+    """Only a unique literal clause can identify an old action; never a title similarity."""
+    plan=json.loads(row['plan']);saved=plan.get('school_action_anchor',{})
+    quotes=json.loads(row['evidence'])
+    for e in quotes:
+        ref=e['ref'];text=originals.get(ref,'');quote=saved.get(ref) or row['body'].strip()
+        if not text or not quote or len(quote)>600 or text.count(quote)!=1: continue
+        # A legacy whole multi-clause notice does not establish which independent action was saved.
+        if not saved.get(ref) and quote==text.strip() and len([v for v in re.split(r'[。；\n]',quote) if v.strip()])>1: continue
+        return {ref:quote}
+    return {}
+
+
+def _history_context(store,c,source,values,key,*,exclude_id=''):
+    refs={'message:'+source['id']+':'+v['id']:v['text'] for v in values};rows=[];tasks=[];state=[];known=[]
+    tables={r['name'] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    effective={t['id']:t for t in store.app.tasks(c)} if store.app else {}
+    column='id' if exclude_id else 'job_id'
+    for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND child_id=? AND state!='superseded' AND "+column+"!=? ORDER BY id",(source['child_id'],exclude_id or key)):
+        row=dict(r);cited={e['ref'] for e in json.loads(row['evidence'])}
+        if not cited & refs.keys(): continue
+        rows.append(row);anchor=_history_anchor(row,refs)
+        task=c.execute('SELECT * FROM manual_tasks WHERE id=?',(row['task_id'],)).fetchone() if row['task_id'] else None
+        if task:
+            tasks.append(dict(task));ident=task['id']
+            for table,column in [('task_focus','task_id'),('task_updates','id'),('task_history','task_id'),('study_items','task_id')]:
+                state.append([table,table in tables,[dict(v) for v in c.execute('SELECT * FROM '+table+' WHERE '+column+'=? ORDER BY rowid',(ident,))] if table in tables else []])
+            state.append(['records',[dict(v) for v in c.execute("SELECT * FROM records WHERE linked_task_id=? OR source=? ORDER BY id",(ident,'事项:'+ident))]])
+        known.append(dict(id=row['id'],state=row['state'],title=row['title'],goal=row['body'],due=row['due'],
+                          refs=sorted(cited & refs.keys()),action_anchor=anchor,
+                          current_task={k:effective.get(task['id'],task)[k] for k in ('title','action','due','original_status')} if task else {}))
+    materials=[]
+    for v in values:
+        for table in ('agent_message_attachments','agent_message_drafts','agent_message_pages','agent_pdf_material'):
+            materials.append([table,v['id'],[dict(r) for r in c.execute('SELECT * FROM '+table+' WHERE source_id=? AND message_id=? ORDER BY rowid',(source['id'],v['id']))]])
+        for link in c.execute('SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=?',(source['id'],v['id'])):
+            upload=store._message_upload(c,source['child_id'],link['upload_id']);digest=hashlib.sha256()
+            with (store.data/'uploads'/upload['id']).open('rb') as original:
+                for block in iter(lambda:original.read(1024*1024),b''): digest.update(block)
+            materials.append(['original',dict(upload),digest.hexdigest()])
+    return _hash([rows,tasks,state,materials]),known
+
+
+def _history_scopes(store,config):
+    """Reconstruct only referenced, bounded legacy groups; no messages/cursors are reset."""
+    sources={s['id']:s for s in config['sources'] if s['enabled']};groups={}
+    with store._db() as c:
+        for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state!='superseded' AND job_id LIKE 'messages:%' ORDER BY created DESC,id"):
+            groups.setdefault(r['job_id'],[]).append(dict(r))
+        result=[]
+        for old_key,rows in groups.items():
+            if all(json.loads(r['plan']).get('school_selection_revision')==SCHOOL_SELECTION_REVISION for r in rows): continue
+            original=c.execute('SELECT done FROM agent_jobs WHERE id=?',(old_key,)).fetchone()
+            if original is None or not original['done']: continue
+            refs={e['ref'] for r in rows for e in json.loads(r['evidence'])}
+            if not refs or any(not ref.startswith('message:') for ref in refs): continue
+            ids=[ref[8:].rsplit(':',1) for ref in sorted(refs)];source_ids={v[0] for v in ids}
+            if len(source_ids)!=1: continue
+            source=sources.get(next(iter(source_ids)))
+            if source is None or any(r['child_id']!=source['child_id'] for r in rows): continue
+            key='school-history:'+_hash([SCHOOL_SELECTION_REVISION,old_key,source['child_id'],sorted(refs)])[:40]
+            done=c.execute('SELECT done,attempts,next_try FROM agent_jobs WHERE id=?',(key,)).fetchone()
+            if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS): continue
+            values=[]
+            for _,ident in ids:
+                m=c.execute('SELECT payload,processed FROM agent_messages WHERE source_id=? AND id=?',(source['id'],ident)).fetchone()
+                if m is None or m['processed']!=1: break
+                values.append(json.loads(m['payload']))
+            if len(values)!=len(ids): continue
+            # An oversized legacy scope remains open rather than being silently clipped and marked audited.
+            if len(values)>6 or sum(len(_json(v)) for v in values)>14000: continue
+            result.append((source,values,key))
+    return result
+
+
+def _history_proposal(proposal,known,evidence):
+    quote=_text(proposal,'action_quote',600,True);existing=_text(proposal,'existing_item_id',80)
+    cited=proposal.get('evidence')
+    if not isinstance(cited,list) or not 1<=len(cited)<=6 or any(not isinstance(q,dict) or set(q)!={'ref'} or not isinstance(q['ref'],str) or not 1<=len(q['ref'])<=400 for q in cited):
+        raise AgentError('历史补漏引用字段不正确',code='school_history_anchor')
+    refs={q['ref'] for q in cited}
+    texts={e['ref']:e['text'] for e in evidence if e['ref'] in refs}
+    if len(refs)!=1: raise AgentError('本轮历史补漏只核单条原消息中的独立动作；多消息关系未改写',code='school_history_bounds')
+    matches=[(ref,text.index(quote)) for ref,text in texts.items() if text.count(quote)==1]
+    if len(matches)!=1: raise AgentError('历史补漏动作原句无法唯一核对',code='school_history_anchor')
+    ref,start=matches[0];end=start+len(quote);overlap=[];uncertain=[]
+    for row in known:
+        if ref not in row['refs']: continue
+        anchor=row['action_anchor'].get(ref)
+        if not anchor: uncertain.append(row);continue
+        old_start=texts[ref].index(anchor);old_end=old_start+len(anchor)
+        if max(start,old_start)<min(end,old_end): overlap.append((row,old_start,old_end))
+    if existing:
+        matched=next((v for v in overlap if v[0]['id']==existing and v[1]<=start and end<=v[2]),None)
+        if matched is None: raise AgentError('历史动作与原决定不是同一项，未采用模型对应关系',code='school_history_identity')
+    covered=any(left<=start and end<=right for _,left,right in overlap)
+    if overlap and not covered: raise AgentError('历史补漏把已处理要求与独立行动合在同一原句，整组保留待重试',code='school_history_overlap')
+    if not covered:
+        clauses=[v.strip() for v in re.split(r'[。；\n]+|(?=(?:另项|另外|此外)\s*[：:])',texts[ref]) if v.strip()]
+        normalized=quote.strip().rstrip('。；').strip()
+        if not any(normalized in {v,re.sub(r'^(?:另项|另外|此外)\s*[：:]\s*','',v)} for v in clauses):
+            raise AgentError('历史补漏须对应单一完整动作句，未采用半句或合并要求',code='school_history_anchor')
+    value={k:v for k,v in proposal.items() if k not in {'action_quote','existing_item_id'}}
+    return value,{ref:quote},covered,bool(uncertain)
+
+
+def _history_reuse(store,c,row,*,allow_uncertain=False):
+    plan=json.loads(row['plan']);key=plan.get('school_history_job')
+    if not key: return None
+    config=store._config(c);source=None;values=[];evidence=[]
+    for e in json.loads(row['evidence']):
+        source_id,message_id=e['ref'][8:].rsplit(':',1)
+        source=next((s for s in config['sources'] if s['id']==source_id and s['child_id']==row['child_id']),None)
+        m=c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',(source_id,message_id)).fetchone()
+        if source is None or m is None: raise AgentError('历史补漏原消息不存在或归属已变',409,'school_history_stale')
+        value=json.loads(m['payload']);values.append(value);evidence.append(dict(ref=e['ref'],text=value['text']))
+    _,known=_history_context(store,c,source,values,key,exclude_id=row['id'])
+    proposal=dict(action_quote=next(iter(plan['school_action_anchor'].values())),existing_item_id='',evidence=[dict(ref=e['ref']) for e in evidence])
+    _,anchor,covered,uncertain=_history_proposal(proposal,known,evidence)
+    if covered:
+        ref,quote=next(iter(anchor.items()))
+        previous=next(k for k in known if quote in k['action_anchor'].get(ref,''))
+        old=c.execute('SELECT * FROM agent_items WHERE id=?',(previous['id'],)).fetchone()
+        if old['state'] not in ('accepted','dismissed'): raise AgentError('同一原要求已有待处理记录，请沿原记录核对',409,'school_history_duplicate')
+        plan['school_duplicate_of']=old['id']
+        for field in ('school_learning','school_goal_id'): plan.pop(field,None)
+        c.execute('UPDATE agent_items SET state=?,task_id=?,plan=? WHERE id=?',(old['state'],old['task_id'],_json(plan),row['id']))
+        return dict(ok=True,state=old['state'],task_id=old['task_id'],deduplicated=True)
+    if uncertain and not allow_uncertain: raise AgentError('原决定动作无法定位，不能自动确认独立补漏；原要求保留',409,'school_history_identity')
+    return None
+
+
+def _recheck_school_history(app,store,now,budget,scopes):
+    used=failed=created=0
+    if budget<1: return dict(used=0,failed=0,created=0)
+    from family_goals import Store as Goals
+    goals=Goals(app,store)
+    for source,values,key in scopes:
+        fp=store._job(key,dict(revision=SCHOOL_SELECTION_REVISION,source=source,messages=values),now,model=True)
+        if not fp: continue
+        try:
+            with store._db() as c:
+                if not store._school_selection_current(c,key,fp,source,values,processed=1):
+                    raise AgentError('原消息或来源已变化',409,'school_history_stale')
+                basis,known=_history_context(store,c,source,values,key)
+            if len(known)>36 or len(_json(known))>14000: raise AgentError('既有决定超过本轮历史核对范围，未截断',code='school_history_bounds')
+            evidence=[dict(ref='message:'+source['id']+':'+v['id'],text=v['text'],source=source['name'],
+                time=v['time'],sender=v['sender'],publisher=_publisher(source['id'],v),kind=v['kind'],content_incomplete=v['unread']) for v in values]
+            profile=next(p for p in app.profiles() if p['id']==source['child_id'])
+            used=1
+            proposals=_select('school',evidence,profile,as_of=now.date().isoformat(),data_path=store.data,
+                school_goals=goals.school_candidates(source['child_id']),school_tasks=school_targets(app,store,source['child_id']),school_existing=known)
+            for item in proposals:
+                item.update(child_id=source['child_id'],kind='school')
+                item['plan']['school_history_job']=key
+                if item['plan'].get('school_learning'):
+                    item['plan']['school_messages']=[dict(zip(('source_id','message_id'),e['ref'][8:].rsplit(':',1))) for e in item['evidence']]
+                for e in item['evidence']:
+                    original=next(v for v in values if e['ref']=='message:'+source['id']+':'+v['id'])
+                    e['text']=source['name']+' · '+original['time']+'\n'+e['text']
+            store._save(key,fp,proposals,now,history_context=(source,values,basis));created=len(proposals)
+        except (family_llm.LLMDraftError,AgentError,ValueError,KeyError,TypeError,StopIteration,OSError,sqlite3.Error) as error:
+            store._fail(key,now,fingerprint=fp,reason=error);failed=1
+        break
+    return dict(used=used,failed=failed,created=created)
+
+
+def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None, school_tasks=(),school_existing=None):
     if mode == 'school':
         # Acknowledgements remain in the original message, but cannot invent new school work.
         acknowledgement=r'(?:是的|好的|收到|已上传|已提交|明白了|谢谢(?:老师)?)'
@@ -1787,16 +1961,39 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     content = {'mode': mode, 'as_of': as_of, 'child': profile or {}, 'evidence': evidence}
     if routing: content.update(learning_goals=school_goals,school_tasks=school_tasks)
     schema=_evidence_schema(SCHOOL_SCHEMA if routing else SCHEMA,evidence)
+    historical=routing and school_existing is not None
+    if historical:
+        content['existing_actions']=school_existing
+        fields=schema['properties']['proposals']['items']
+        fields['required']+=['action_quote','existing_item_id']
+        fields['properties'].update(action_quote={'type':'string','maxLength':600},existing_item_id={'type':'string','enum':['']+[r['id'] for r in school_existing]})
     if routing: schema['properties']['proposals']['items']['properties']['task_target_id']['enum']=['']+[t['id'] for t in school_tasks]
-    result = family_llm._chat_json([{'role': 'system', 'content': SCHOOL_PROMPT if routing else PROMPT},
+    prompt=SCHOOL_PROMPT if routing else PROMPT
+    if historical: prompt+='\n这是已处理消息的独立行动补漏。逐项对照existing_actions，保留家长当前修改与accepted/dismissed/pending决定，不恢复原任务。action_quote逐字引用包含本项动作和对象的完整原句，不将多个独立事项合并；existing_item_id只有同一具体行动才填旧编号，新漏项填空。已归纳/已忽略事项也返回以覆盖输入，但不会另建。不能按标题相似合并；同消息另项仍单独返回。due只从本项action_quote按原发送日换算，不能借用同通知另一项或旧任务日期。适用性/原件仍未读保留具体缺口。'
+    result = family_llm._chat_json([{'role': 'system', 'content': prompt},
         {'role': 'user', 'content': _json(content)}], schema, 'family_agent_selection', timeout=45, data_path=data_path)
     limit = SCHOOL_PROPOSAL_LIMIT if routing else SCHEMA['properties']['proposals']['maxItems']
     if not isinstance(result, dict) or set(result) != {'proposals'} or not isinstance(result['proposals'], list) or len(result['proposals']) > limit:
         raise AgentError('模型筛选结构不正确')
-    if routing and any(not isinstance(p,dict) or set(p)!=set(_school_fields['required']) for p in result['proposals']):
+    required=set(_school_fields['required']) | ({'action_quote','existing_item_id'} if historical else set())
+    if routing and any(not isinstance(p,dict) or set(p)!=required for p in result['proposals']):
         raise AgentError('模型筛选字段不正确')
-    refs = {entry['ref']: entry['text'] for entry in evidence}; output = []; accounted = set()
+    refs = {entry['ref']: entry['text'] for entry in evidence}; output = []; accounted = set();history_actions=[]
     for proposal in result['proposals']:
+        action_anchor={};history_uncertain=False
+        if historical:
+            for name,field in _school_fields['properties'].items():
+                if field.get('type')=='string' and (not isinstance(proposal[name],str) or len(proposal[name])>field.get('maxLength',4000) or ('enum' in field and proposal[name] not in field['enum'])):
+                    raise AgentError('历史补漏字段不正确')
+            if proposal['focus']!='school' or proposal['task_target_id'] not in ['']+[t['id'] for t in school_tasks]:
+                raise AgentError('历史补漏类别或原任务编号不正确')
+            proposal,action_anchor,covered,history_uncertain=_history_proposal(proposal,school_existing,evidence)
+            accounted.update(q['ref'] for q in proposal['evidence'])
+            if covered: continue
+            ref,quote=next(iter(action_anchor.items()));start=refs[ref].index(quote);end=start+len(quote)
+            if any(ref==old_ref and max(start,left)<min(end,right) for old_ref,left,right in history_actions):
+                raise AgentError('历史补漏重复或合并了同一动作，整组保留重试',code='school_history_duplicate')
+            history_actions.append((ref,start,end))
         fields = {'title_quote', 'focus', 'due', 'evidence'} | ({'learning_subject', 'learning_goal_id'} if routing else set())
         expected = set(_school_fields['required']) if routing else fields
         if not isinstance(proposal, dict) or set(proposal) != expected: raise AgentError('模型筛选字段不正确')
@@ -1827,7 +2024,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         uncertain_due=ambiguous_due=False
         from family_agenda import date, deadlines, sent_day
         cited_evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}]
-        relative=set().union(*(deadlines(e['text'],sent_day(e.get('time',''))) for e in cited_evidence)) if mode=='school' else set()
+        relative=set().union(*(deadlines(action_anchor.get(e['ref'],'') if historical else e['text'],sent_day(e.get('time',''))) for e in cited_evidence)) if mode=='school' else set()
         if routing and not due and len(result['proposals'])==1 and len(cited_evidence)==1 and len(relative)==1:
             # The model may omit a date that the single original notice states explicitly.
             due=next(iter(relative))
@@ -1878,6 +2075,12 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             if brief['title'] and brief['goal']: item.update(title=brief['title'],body=brief['goal'])
             if not _keeps_learning(brief): item.get('plan',{}).pop('school_learning',None)
             item.setdefault('plan',{})['school_task']=brief
+            item['plan']['school_selection_revision']=SCHOOL_SELECTION_REVISION
+            if historical:
+                item['plan']['school_action_anchor']=action_anchor
+                item['plan']['school_history_uncertain']=history_uncertain
+                if history_uncertain or brief.get('change')!='new':
+                    brief.update(state='review',reason='本条已有决定的动作原句无法核对或涉及原事项变更，不能确认是否为独立漏项；已有作业与家长决定保留。')
 
         if item not in output: output.append(item)
     if routing:
@@ -2042,6 +2245,13 @@ def _refresh_school(app, store, now, budget):
         pdf_changed=current and pdf_key!=recorded_pdf.get('fingerprint','')
         recorded_material=brief.get('material_evidence') or {}
         material_changed=current and material_key!=recorded_material.get('fingerprint','')
+        if plan.get('school_history_job') and (not current or page_changed or pdf_changed or material_changed):
+            # This audit proves a literal message action only. A generic whole-notice refresh cannot change its identity.
+            brief.update(state='review',reason='补漏依据限于这项原消息动作；新资料或规则变化尚未核其对应关系，原事项与要求保留。')
+            plan['school_task']=brief
+            with store._db() as c:
+                c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=?",(_json(plan),row['id'],row['updated']))
+            continue
         candidate=recorded.get('candidate') or recorded_pdf.get('candidate') or row['title']  # the notice as it read before any page text shaped the title
         page_gone=page_changed and not page_evidence;pdf_gone=pdf_changed and not pdf_evidence;material_gone=material_changed and not material
         if page_gone or pdf_gone or material_gone:
@@ -2149,6 +2359,10 @@ def _refresh_school(app, store, now, budget):
                     c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=?",(_json(plan),row['id'],row['updated']))
         if brief.get('state')=='ready' and re.fullmatch(r'\d{4}-\d{2}-\d{2}',row['due'] or '') and row['due']<now.date().isoformat():
             brief.update(state='review',reason='原截止日期已过，请核对是否仍需补做；不推定已完成。');plan['school_task']=brief
+            with store._db() as c:
+                c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=?",(_json(plan),row['id'],row['updated']))
+        if plan.get('school_history_uncertain'):
+            brief.update(state='review',reason='本条已有决定的动作原句无法定位，独立性尚未核明；原要求与决定保留。');plan['school_task']=brief
             with store._db() as c:
                 c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=?",(_json(plan),row['id'],row['updated']))
         if brief.get('state')=='ready':
@@ -2439,13 +2653,16 @@ def run_once(app, now=None):
             budget = 3
             material = family_media.prepare_draft(store, now)
             budget -= material['used']; processed += material['used']; failed += material['failed']
+            history_scopes=_history_scopes(store,config)
+            # Share the original three-call budget; alternate five-minute windows under the one-minute Agent service.
+            history_reserve=int(bool(history_scopes) and now.minute//5%2==0 and budget>0)
             from family_goals import Store as Goals
             goals = Goals(app, store)
             profiles = {p['id']: {key: p.get(key, '') for key in ['id', 'name', 'age', 'grade', 'classroom']} for p in app.profiles()}
             with store._db() as c:
                 oldest = dict(c.execute('SELECT source_id,MIN(rowid) FROM agent_messages WHERE processed=0 GROUP BY source_id'))
             for source in sorted(config['sources'], key=lambda s: oldest.get(s['id'], float('inf'))):
-                if not source['enabled'] or budget <= 1: continue
+                if not source['enabled'] or budget <= 1+history_reserve: continue
                 with store._db() as c:
                     saved = c.execute('SELECT * FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
                     store._binding(source, saved)
@@ -2497,6 +2714,7 @@ def run_once(app, now=None):
                 # ponytail: scan local records for older corrections; index revisions only if measured scale requires it.
                 records = [dict(row) for row in c.execute('SELECT * FROM records ORDER BY id DESC')]
                 by_id = {row['id']: row for row in records}
+            history=_recheck_school_history(app,store,now,history_reserve,history_scopes);budget-=history['used'];processed+=history['used'];failed+=history['failed'];created+=history['created']
             school=_refresh_school(app,store,now,min(1,max(0,budget-1)));budget-=school['used'];processed+=school['used'];failed+=school['failed'];created+=school['created']
             created += goals.route_school()
             progress = goals.run(now, budget)
