@@ -325,6 +325,20 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
    assert.equal(await feedback.locator('#taskForm [name=note]').inputValue(),'查看原消息时保留这份虚构反馈草稿');
    await dialog.locator('[data-school-original-close]').click();await page.unroute('**/api/agent/message?*');
   }
+  // State saving may close the parent task: do not open a child preview during that save.
+  let finishStateSave,stateSaveEntered=false,previewReads=0;
+  await page.route('**/api/task',async route=>{stateSaveEntered=true;await new Promise(resolve=>finishStateSave=resolve);await route.fulfill({status:503,json:{error:'虚构状态保存失败'}})});
+  await page.route('**/api/agent/message?*',route=>{previewReads++;return route.fulfill({json:textView})});
+  await feedback.locator('#taskStatusDetails summary').click();
+  await feedback.locator('#taskForm [type=submit]').click();await until(async()=>stateSaveEntered,'task status save began');
+  await resources.getByRole('button',{name:'查看老师原消息'}).click();
+  assert.equal(await dialog.evaluate(e=>e.open),false,'saving the parent cannot open a source preview that outlives it');
+  assert.equal(previewReads,0,'busy source click makes no GET');
+  finishStateSave();await feedback.locator('#taskError').getByText(/虚构状态保存失败/).waitFor();
+  assert.equal(await feedback.locator('#taskForm [name=note]').inputValue(),'查看原消息时保留这份虚构反馈草稿');
+  await resources.getByRole('button',{name:'查看老师原消息'}).click();await dialog.getByText(textView.message.text,{exact:true}).waitFor();
+  assert.equal(previewReads,1,'after a failed save the original preview is usable again');
+  await dialog.locator('[data-school-original-close]').click();await page.unroute('**/api/task');await page.unroute('**/api/agent/message?*');
   await feedback.locator('#taskForm [name=note]').fill('');
   await feedback.locator('[data-close=taskDialog]').click();
   await page.locator('[data-query-target="task:'+textTask.id+'"] [data-task]').click();

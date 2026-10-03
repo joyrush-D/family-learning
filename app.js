@@ -1812,6 +1812,7 @@ function openSchoolOriginal(ref,childID){
  const task=ctx&&data.tasks.find(t=>t.id===ctx.task_id&&t.child===ctx.child),owner=data.children.find(c=>c.id===childID);
  const taskPreview=open.length===1&&open[0].id==='taskDialog'&&task&&owner?.name===ctx.child&&String(task.source||'').split('\n').includes(ref);
  if(open.length&&!taskPreview)return;
+ if(taskPreview&&(captureBusy()||taskFeedbackPending||taskWrongPending)){toast('请先核对当前保存或等待上传结束，再查看原消息。');return}
  if(taskPreview&&schoolOriginalPending(schoolOriginal)){toast('请先核对上次原件关联的保存结果。');return}
  let dialog=$('#schoolOriginalDialog');
  if(!dialog){
