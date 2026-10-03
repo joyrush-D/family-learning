@@ -144,13 +144,13 @@ class SchoolHistoryTests(unittest.TestCase):
             proposal(group['missing'], group['refs'][0], due=due, task_title='携带《材料B' + group['suffix'] + '》1份',
                      task_goal=group['missing'], task_state='ready', task_reason='本项已读、独立且明确。', task_purpose='admin')])
 
-    def _partial_legacy(self):
+    def _partial_legacy(self, *, middle_text=None):
         """Frozen old three-message batch whose output cited only the first and last."""
         group = self._legacy(ids=('11', '13'), missing='', feedback=True)
         with self.app.connect() as c:
             first = json.loads(c.execute('SELECT payload FROM agent_messages WHERE id=?', ('11',)).fetchone()[0])
             last = json.loads(c.execute('SELECT payload FROM agent_messages WHERE id=?', ('13',)).fetchone()[0])
-            middle = dict(first, id='12', text='2月12日前带《材料B》1份到校。')
+            middle = dict(first, id='12', text='2月12日前带《材料B》1份到校。' if middle_text is None else middle_text)
             values = [first, middle, last]
             key = 'messages:' + agent._hash([self.fixture.source['id'], [v['id'] for v in values]])[:40]
             fingerprint = agent._hash(dict(school_learning_policy=8, messages=values))
@@ -193,6 +193,95 @@ class SchoolHistoryTests(unittest.TestCase):
         self.store = agent.Store(self.app.connect, self.app.profiles, self.fixture.data, app=self.app)
         self.assertEqual(self._tick(20)['created'], 0)
         self.assertEqual(len(self.calls), seen)
+
+    def _close_complete_scope(self, *, done):
+        scopes = agent._history_scopes(self.store, dict(enabled=True, sources=self.sources))
+        self.assertEqual(len(scopes), 1)
+        source, values, key = scopes[0][:3]
+        self.assertEqual([v['id'] for v in values], ['11', '12', '13'])
+        fp = self.store._job(key, dict(revision=agent.SCHOOL_SELECTION_REVISION, source=source,
+            messages=values), self.clock, model=True)
+        if done:
+            self.store._save(key, fp, [], self.clock)
+        else:
+            with self.app.connect() as c:
+                c.execute('UPDATE agent_jobs SET attempts=3,next_try=? WHERE id=?', ('', key))
+        return key
+
+    def _later_processed_messages(self):
+        # Fixture only: later successful collection/processing moves the old batch
+        # outside the discovery window. Rechecking must not shrink its proven scope.
+        for index, start in enumerate(range(101, 602, 200), 1):
+            with self.app.connect() as c:
+                cursor = c.execute('SELECT cursor FROM agent_sources WHERE id=?', (self.fixture.source['id'],)).fetchone()[0]
+            payload = self.fixture.payload(expected=cursor, cursor=str(min(start + 199, 601)), offset=index)
+            payload['messages'] = [dict(id=str(n), time=payload['checked_at'], kind='text', sender='示例老师',
+                sender_id='synthetic-teacher-later', text='虚构后续已读消息 ' + str(n), unread=False)
+                for n in range(start, min(start + 200, 602))]
+            self.store.ingest(payload)
+        with self.app.connect() as c:
+            c.execute('UPDATE agent_messages SET processed=1 WHERE source_id=?', (self.fixture.source['id'],))
+
+    def _assert_complete_scope_not_shrunk(self, *, done, retry=False):
+        group = self._partial_legacy()
+        key = self._close_complete_scope(done=done)
+        if retry:
+            self.store.act(dict(action='retry', id=key))
+        self._later_processed_messages()
+        before = self._protected()
+        jobs = self._history_jobs()
+        self.history_response = lambda context: self._partial_response(group, context)
+        calls = len(self.calls)
+        self.assertEqual(self._tick(10)['created'], 0)
+        self.assertEqual(len(self.calls), calls)
+        self.assertEqual(self._history_jobs(), jobs)
+        self.assertEqual(self._protected(), before)
+
+    def test_complete_done_scope_leaving_window_does_not_reopen_cited_subset(self):
+        self._assert_complete_scope_not_shrunk(done=True)
+
+    def test_complete_exhausted_scope_leaving_window_does_not_reopen_cited_subset(self):
+        self._assert_complete_scope_not_shrunk(done=False)
+
+    def test_complete_manual_retry_leaving_window_does_not_reopen_cited_subset(self):
+        self._assert_complete_scope_not_shrunk(done=False, retry=True)
+
+    def test_legacy_original_receipt_changes_after_discovery_make_no_model_call(self):
+        self._partial_legacy()
+        scopes = agent._history_scopes(self.store, dict(enabled=True, sources=self.sources))
+        self.assertEqual([v['id'] for v in scopes[0][1]], ['11', '12', '13'])
+        with self.app.connect() as c:
+            c.execute('UPDATE agent_jobs SET done=0 WHERE id=?', (self.groups[0]['job'],))
+        calls = len(self.calls)
+        result = agent._recheck_school_history(self.app, self.store, self.clock, 1, scopes)
+        self.assertEqual((result['used'], result['failed']), (0, 1))
+        self.assertEqual(len(self.calls), calls)
+        self.assertEqual(self._history_rows(), [])
+
+    def test_current_revision_group_does_not_reopen_as_legacy(self):
+        group = self._partial_legacy()
+        with self.app.connect() as c:
+            for ident in (group['a_id'], group['c_id']):
+                plan = json.loads(c.execute('SELECT plan FROM agent_items WHERE id=?', (ident,)).fetchone()[0])
+                plan['school_selection_revision'] = agent.SCHOOL_SELECTION_REVISION
+                c.execute('UPDATE agent_items SET plan=? WHERE id=?', (agent._json(plan), ident))
+        before = self._protected()
+        calls = len(self.calls)
+        self.assertEqual(self._tick(10)['created'], 0)
+        self.assertEqual(len(self.calls), calls)
+        self.assertEqual(self._protected(), before)
+
+    def test_unproven_full_batch_retains_limited_cited_fallback_without_missing_message(self):
+        group = self._partial_legacy()
+        with self.app.connect() as c:
+            c.execute('UPDATE agent_jobs SET fingerprint=? WHERE id=?', ('unproven-fingerprint', group['job']))
+        before = self._protected()
+        scopes = agent._history_scopes(self.store, dict(enabled=True, sources=self.sources))
+        self.assertEqual([v['id'] for v in scopes[0][1]], ['11', '13'])
+        self.history_response = lambda context: self._partial_response(group, context)
+        self.assertEqual(self._tick(10)['created'], 0)
+        self.assertEqual(self._history_rows(), [])
+        self.assertEqual(self._protected(), before)
 
     def _empty_legacy(self, *, policy=7, texts=None, ids=None):
         """Reproduce a saved old successful empty output, without resetting any real cursor."""
