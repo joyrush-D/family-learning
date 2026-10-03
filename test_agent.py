@@ -16,6 +16,44 @@ import family_review
 
 
 class AgentTests(unittest.TestCase):
+    def test_separate_school_conclusions_do_not_borrow_related_attachments(self):
+        sent='2026-10-05T16:00:00+08:00'
+        refs=['message:synthetic-minutes:'+str(i) for i in range(1,6)]
+        texts=['明天完成两项：Unit 2课文读两遍；练习卷第1–4题。朗读录音上传班级作业区。',
+               '练习卷第4题选做，前3题必做。',
+               '这是刚才练习卷的题目附件。',
+               '这是刚才练习卷的家长参考答案附件。',
+               '10月7日前请家长打印活动回执，签字后让孩子交回。不用盖章。']
+        evidence=[dict(ref=ref,text=text,time=sent,kind='text',source='虚构班级群',
+            sender='示例英语发布者' if i<4 else '示例班主任',
+            publisher='publisher:synthetic-english' if i<4 else 'publisher:synthetic-admin',
+            related_messages=refs[:4] if i<4 else refs[4:],content_incomplete=False,attachments=[])
+            for i,(ref,text) in enumerate(zip(refs,texts))]
+        evidence[2]['attachments']=[dict(name='synthetic-questions.pdf',mime='application/pdf')]
+        evidence[3]['attachments']=[dict(name='synthetic-parent-reference.pdf',mime='application/pdf')]
+        proposals=[]
+        for title,goal,due,selected,purpose,submission in [
+            ('英语：朗读Unit 2','课文读两遍，将朗读录音上传到班级作业区。','2026-10-06',refs[:1],'learning','朗读录音上传到班级作业区'),
+            ('英语：完成练习卷','第1–3题必做，第4题选做。','2026-10-06',refs[:4],'learning',''),
+            ('家长事务：活动回执','家长打印回执并签字，再让孩子交回；无需盖章。','2026-10-07',refs[4:],'admin',''),
+        ]:
+            proposals.append(dict(title_quote=texts[0] if purpose=='learning' else texts[4],focus='school',due=due,
+                evidence=[dict(ref=ref) for ref in selected],learning_subject='英语' if purpose=='learning' else '',
+                learning_goal_id='',task_title=title,task_goal=goal,task_advice='',task_state='ready',
+                task_reason='原文要求明确。',task_change='new',task_target_id='',task_purpose=purpose,task_submission=submission))
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
+            items=agent._select('school',evidence,school_goals=[],as_of='2026-10-05')
+        self.assertEqual(len(items),3)
+        # A publication can contain two tasks; its worksheet is not an attachment to the reading task.
+        self.assertEqual([q['ref'] for q in items[0]['evidence']],refs[:1])
+        self.assertEqual([q['ref'] for q in items[1]['evidence']],refs[:4])
+        self.assertEqual([q['ref'] for q in items[2]['evidence']],refs[4:])
+        self.assertEqual([x['due'] for x in items],['2026-10-06','2026-10-06','2026-10-07'])
+        self.assertIn('两遍',items[0]['body'])
+        self.assertIn('班级作业区',items[0]['body'])
+        self.assertEqual(items[1]['body'],'第1–3题必做，第4题选做。')
+        self.assertEqual(items[2]['body'],'家长打印回执并签字，再让孩子交回；无需盖章。')
+
     def test_school_routing_requires_organized_fields_before_success(self):
         evidence=[dict(ref='message:synthetic:1',text='英语：朗读Unit 2两遍。',time=self.now.isoformat(),content_incomplete=False)]
         legacy=dict(title_quote='英语',focus='school',due='',evidence=[dict(ref=evidence[0]['ref'])],
