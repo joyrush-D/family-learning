@@ -1252,6 +1252,39 @@ class GoalTests(unittest.TestCase):
         self.assertEqual(self.store._proposal(observed,ctx,self.now)['mastery_check'],observed['proposal']['mastery_check'])
         self.assertEqual(before['school_tasks'][0]['goal'],next(t for t in self.app.tasks() if t['id']==fixture['reading'])['action'])
 
+    def test_school_execution_plan_cannot_transfer_reading_count_or_shorten_deadline(self):
+        fixture=self.school_scope_fixture();self.evaluate()
+        with self.store.agent._db() as c:ctx=self.store._context(c,self.store._get(c,self.ident),self.now)
+        before=self.goal()
+        for field,text,error in (('action','按老师要求录制两遍朗读。','录音数量'),
+                ('why_now','请在'+fixture['first']+'前完成朗读。','完成日期'),
+                ('action','录制三次朗读后提交。','录音数量')):
+            wrong=synthetic_plan(self.last_input);wrong['proposal'][field]=text
+            with self.assertRaisesRegex(agent.AgentError,error):self.store._proposal(wrong,ctx,self.now)
+            self.assertEqual(self.goal(),before)
+        proper=synthetic_plan(self.last_input)
+        proper['proposal']['action']='按原要求读两遍，第二遍同时录音；学习观察建议：记录两次朗读的表现。'
+        self.assertEqual(self.store._proposal(proper,ctx,self.now)['action'],proper['proposal']['action'])
+        optional=synthetic_plan(self.last_input);optional['proposal']['action']='可选建议：另录两遍，仅在孩子愿意且家长同意时尝试，不属于学校必做。'
+        self.assertEqual(self.store._proposal(optional,ctx,self.now)['action'],optional['proposal']['action'])
+
+    def test_school_execution_count_and_before_date_need_the_same_effective_task(self):
+        fixture=self.school_scope_fixture();self.evaluate()
+        with self.store.agent._db() as c:ctx=self.store._context(c,self.store._get(c,self.ident),self.now)
+        task=ctx['school_tasks'][0]
+        task['goal']='Unit 3录音2遍，'+fixture['first']+'前交回。'
+        proper=synthetic_plan(self.last_input)
+        proper['proposal']['action']='Unit 3录制二遍。';proper['proposal']['why_now']='原要求是'+fixture['first']+'前交回。'
+        self.assertEqual(self.store._proposal(proper,ctx,self.now)['action'],proper['proposal']['action'])
+        other=dict(task,id='synthetic-other-reading',title='英语：Unit 4',goal='Unit 4录音2遍。')
+        task['goal']='Unit 3课文读两遍，朗读录音上传。';ctx['school_tasks'].append(other)
+        borrowed=synthetic_plan(self.last_input);borrowed['proposal']['action']='Unit 3录制两遍。'
+        with self.assertRaisesRegex(agent.AgentError,'录音数量'):self.store._proposal(borrowed,ctx,self.now)
+        # Another task's earlier-deadline wording cannot justify shortening this one.
+        other['goal']='Unit 4录音2遍，'+fixture['second']+'前完成。';other['due_on']=fixture['second']
+        borrowed=synthetic_plan(self.last_input);borrowed['proposal']['why_now']='需在'+fixture['first']+'前完成Unit 3。'
+        with self.assertRaisesRegex(agent.AgentError,'完成日期'):self.store._proposal(borrowed,ctx,self.now)
+
     def test_effective_school_requirement_changes_expire_old_plan_and_reject_late_receipt(self):
         fixture=self.school_scope_fixture();self.approve(self.evaluate());approved=self.goal()['current_plan']
         self.feedback('虚构家长反馈：本次还未尝试，学校要求保持。')

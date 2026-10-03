@@ -15,6 +15,45 @@ import family_task_video
 PLAN_ADJUSTMENT_NOTE = '家长确认学习计划调整，原版本保留在学习目标。'
 TASK_STATUS_NOTES = (agent.SCHOOL_CANCEL_NOTE, PLAN_ADJUSTMENT_NOTE, '家长通过清单勾选确认此事项已完成。', '家长撤销完成，继续跟进。')
 SCHOOL_BASELINE = '由学校学习要求启动，尚无孩子实际作答或掌握证据。'
+
+
+def _school_execution_facts(proposal, tasks):
+    """Finite guards for observed action/count and deadline-boundary changes.
+
+    The full semantic review remains necessary: these checks do not parse all
+    teaching prose. Current task requirements stay read-only, not repaired by
+    rewriting a generated plan after the model returns.
+    """
+    if not tasks: return
+    recording=re.compile(r'(?<![记转收抄])(?:录制|录音|录)(?:朗读|课文|音频|录音)?\s*([一二两三四五六七八九十0-9]+)\s*(遍|次|份|段)')
+    def counts(text):
+        def number(value):
+            if value.isdigit(): return str(int(value))
+            return str({'一':1,'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}.get(value,value))
+        return {(number(n),unit) for n,unit in recording.findall(text)}
+    date_before=re.compile(r'((?:\d{4}-\d{2}-\d{2})|(?:\d{1,2}月\d{1,2}[日号]))(?:之)?前')
+    def day(value, due):
+        if '-' in value: return value
+        month,date=re.match(r'(\d{1,2})月(\d{1,2})[日号]',value).groups()
+        return due[:4]+'-'+month.zfill(2)+'-'+date.zfill(2)
+    for field in ('action','why_now'):
+        for sentence in re.split(r'[。；;\n]',proposal[field]):
+            # Additional method experiments are explicitly optional, never a
+            # restatement of school obligations or an automatic task change.
+            if re.match(r'^\s*可选(?:建议)?\s*[:：]',sentence): continue
+            wanted=counts(sentence)
+            if wanted:
+                peers=[t for t in tasks if re.search(r'录音|录制',t['goal'])]
+                objects=set(re.findall(r'unit\s*\d+|第[一二三四五六七八九十0-9]+课|《[^》]{1,40}》',sentence.lower()))
+                if objects: peers=[t for t in peers if all(obj in (t['title']+' '+t['goal']).lower() for obj in objects)]
+                if len(peers)!=1 or not wanted<=counts(peers[0]['goal']):
+                    raise agent.AgentError('朗读次数不能改成录音次数，录音数量须沿同一原事项核对')
+            for mention in date_before.findall(sentence):
+                matched=[t for t in tasks if t['due_on'] and day(mention,t['due_on'])==t['due_on']]
+                if matched and any(not any(day(v,t['due_on'])==t['due_on'] for v in date_before.findall(t['goal'])) for t in matched):
+                    raise agent.AgentError('学校完成日期不能另改成此前完成，请沿原事项日期核对')
+
+
 WORD_MODES = {
     'hear_meaning': ('听英文 → 选中文', '不显示英文词形；只听后选意思'),
     'hear_spelling': ('听英文 → 拼英文', '不显示英文词形；记录实际拼写'),
@@ -980,6 +1019,7 @@ class Store:
         # Current requirements are read-only task projections, not generated assessment criteria.
         if ctx['school_tasks'] and re.search(r'(?:^|[\n\r。；;：:])\s*(?:本次(?:要求)?自查|(?:学校|老师|教师)(?:要求)?完成标准|(?:老师|教师)(?:明确)?要求)\s*[:：]',p['mastery_check']):
             raise agent.AgentError('学习表现记录不能另列学校完成标准，请沿原事项核对')
+        _school_execution_facts(p,ctx['school_tasks'])
         background=ctx['evidence'][0]['ref'] if ctx['unknown_baseline'] else None
         if not isinstance(p['hypotheses'],list) or len(p['hypotheses'])>4:raise agent.AgentError('原因假设格式不正确')
         for h in p['hypotheses']:
