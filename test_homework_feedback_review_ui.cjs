@@ -59,8 +59,7 @@ async function server(){
   const otherTasks=[];
   for(const [owner,label] of [[state.children[0].name,'同孩其他作业'],[state.children[1].name,'另一孩子作业']]){
    const t=(await post('api/task/new',{child:owner,title:'虚构'+label+' '+width,category:'homework',action:'独立核对这份卷',due:state.today})).task;
-   const form=new FormData();form.append('file',new Blob([png],{type:'image/png'}),'虚构'+label+'原件.png');
-   const response=await fetch(host.url+'api/upload',{method:'POST',headers:{'X-Family-Token':state.token},body:form});assert.equal(response.status,200);const upload=await response.json();
+   const response=await fetch(host.url+'api/upload',{method:'POST',headers:{'X-Family-Token':state.token,'Content-Type':'image/png','X-File-Name':encodeURIComponent('虚构'+label+'原件.png')},body:png});assert.equal(response.status,200);const upload=await response.json();
    await post('api/task/feedback',{task_id:t.id,child:owner,day:state.today,attachments:[upload.id],request_key:'synthetic-print-other-'+width+'-'+otherTasks.length});
    otherTasks.push({task:t,upload});
   }

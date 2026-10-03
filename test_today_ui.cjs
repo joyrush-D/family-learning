@@ -151,12 +151,12 @@ function fixtures(base){
     await p.locator('nav [data-page="home"]').click();
     await p.locator('[data-child-filter="'+state.children[0].id+'"]').click();
     await p.locator('[data-query-target="task:TODAY"] details.task-more').evaluate(x=>x.open=true);await p.locator('[data-query-target="task:TODAY"] [data-homework-print]').click();
-    const printForm=p.locator('#homeworkPrintForm');await printForm.locator('[name="question_source"]').selectOption({label:'虚构题目.png'});
+    const printForm=p.locator('#homeworkPrintForm');await p.locator('#homeworkPrintDialog[open]').waitFor();await printForm.locator('[name="question_source"]').selectOption({label:'虚构题目.png'});
     await printForm.locator('details summary').click();await printForm.locator('[name="question_source_2"]').selectOption({label:'虚构题目续页.png'});
     await p.locator('#homeworkDraftButton').click();await eventually(async()=>await printForm.locator('[name="guide_text"]').inputValue()==='虚构第1题：卷面C，参考B；先找原文依据。','draft filled');
     assert.match(await p.locator('#homeworkDraftStatus').innerText(),/1道可能错题、0道未判定/);
     await p.reload();await ready(p);await p.locator('[data-query-target="task:TODAY"] details.task-more').evaluate(x=>x.open=true);await p.locator('[data-query-target="task:TODAY"] [data-homework-print]').click();
-    assert.equal(await printForm.locator('[name="guide_text"]').inputValue(),'虚构第1题：卷面C，参考B；先找原文依据。');assert.equal(draftCalls,1,'reopen never calls the model again');
+    await p.locator('#homeworkPrintDialog[open]').waitFor();assert.equal(await printForm.locator('[name="guide_text"]').inputValue(),'虚构第1题：卷面C，参考B；先找原文依据。');assert.equal(draftCalls,1,'reopen never calls the model again');
     assert.equal(await printForm.locator('[name="question_source_2"]').inputValue().then(Boolean),true,'ordered second page survives reopen');
     await p.locator('#homeworkDraftButton').click();assert.equal(draftCalls,1,'existing parent draft is not overwritten or recharged');
     assert.match(await p.locator('#homeworkDraftStatus').innerText(),/已有参考文字/);
