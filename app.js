@@ -1601,7 +1601,7 @@ function taskSchoolMaterialHTML(view){
   else if(view.message.kind==='text'&&String(view.message.text||'').trim())preparation='<p class="small muted" data-task-material-state="text">文字通知 · 作业要求见上方。</p>';
   else preparation='<p class="small muted" data-task-material-state="unknown">本条消息没有可展示的资料整理，请查看原消息。</p>';
  }
- const unreadLinks=schoolPageLinks(view.message.text).filter(url=>!pages.some(page=>[page.url,page.original_url].includes(url)));
+ const unreadLinks=schoolPageLinks(view.message.text).map(link=>link.url).filter(url=>!pages.some(page=>[page.url,page.original_url].includes(url)));
  const sourceGaps=(pages.length&&view.message.kind==='qq_window_fragment'?'<p class="small" data-task-source-gap="fragment">当前只有截图识别文字，完整原消息与附件仍待补充。</p>':'')+
   (pages.length&&!p&&!d&&view.message.unread?'<p class="small" data-task-source-gap="unread">原消息另有未读资料，已保存网页片段不能补全这些内容。</p>':'')+
   (pages.length&&unreadLinks.length?`<p class="small" data-task-source-gap="links">未读网页：${unreadLinks.map(esc).join('；')}</p>`:'');
