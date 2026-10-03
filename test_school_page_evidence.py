@@ -208,7 +208,7 @@ class SchoolPageEvidenceTests(unittest.TestCase):
 
     def test_plain_notice_without_fragment_keeps_automatic_collection(self):
         ident = self.candidate('1', text=PLAIN, brief=dict(title='旧', goal='旧', advice='', state='review', reason='旧策略', policy=1))
-        result, calls = self.refresh(dict(title='语文：完成虚构习作', goal='完成虚构习作一篇。', advice='', state='ready', reason='明确要求。', purpose='learning', submission='', change='new', target_id=''))
+        result, calls = self.refresh(draft(title='语文：完成虚构习作', goal='完成虚构习作一篇。', reason='明确要求。', submission='', learning_subject='语文'))
         self.assertIn(agent._PAGE_UNREAD, calls[0][0]['content']); self.assertNotIn('pages', json.loads(calls[0][1]['content']))
         self.assertEqual((result['used'], result['created'], self.item(ident)['state'], self.count('manual_tasks')), (1, 1, 'accepted', 1))
         self.assertNotIn('page_evidence', self.brief(ident))
