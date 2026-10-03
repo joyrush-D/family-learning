@@ -16,6 +16,30 @@ import family_review
 
 
 class AgentTests(unittest.TestCase):
+    def test_school_routing_requires_organized_fields_before_success(self):
+        evidence=[dict(ref='message:synthetic:1',text='英语：朗读Unit 2两遍。',time=self.now.isoformat(),content_incomplete=False)]
+        legacy=dict(title_quote='英语',focus='school',due='',evidence=[dict(ref=evidence[0]['ref'])],
+                    learning_subject='英语',learning_goal_id='')
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[legacy])):
+            with self.assertRaises(agent.AgentError):
+                agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+
+    def test_school_routing_can_preserve_six_independent_requirements(self):
+        evidence=[];proposals=[]
+        for i,subject in enumerate(['语文','数学','英语','历史','科学','家长签字'],1):
+            due=(self.now.date()+dt.timedelta(days=i)).isoformat()
+            text=subject+'：请在'+due+'前完成虚构要求'+str(i)+'。'
+            ref='message:synthetic:'+str(i)
+            evidence.append(dict(ref=ref,text=text,time=self.now.isoformat(),content_incomplete=False))
+            proposals.append(dict(title_quote=subject,focus='school',due=due,evidence=[dict(ref=ref)],
+                learning_subject=subject if i<6 else '',learning_goal_id='',task_title=subject+'：虚构要求'+str(i),
+                task_goal='完成虚构要求'+str(i),task_advice='',task_state='ready',task_reason='原文要求明确。',
+                task_change='new',task_target_id='',task_purpose='learning' if i<6 else 'admin',task_submission=''))
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
+            items=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+        self.assertEqual(len(items),6)
+        self.assertEqual({q['ref'] for item in items for q in item['evidence']},{e['ref'] for e in evidence})
+
     def test_one_school_requirement_can_keep_six_original_messages(self):
         evidence=[dict(ref='message:synthetic:'+str(i),text='语文作业：朗读。' if i==0 else '本次朗读要求的补充说明 '+str(i),
             time=self.now.isoformat(),sender='示例语文老师',publisher='publisher:synthetic',content_incomplete=False) for i in range(6)]
