@@ -31,16 +31,102 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         super().setUp()
         self.keys = self.school_fragment(TEXT); self.pdf = self.seed_pdf('a' * 32); self.link(self.keys, self.pdf)
 
-    def seed_groups(self, batches=BATCHES, note=DRAFT['note'], keys=None, uncertainties=None):
+    def seed_groups(self, batches=BATCHES, note=DRAFT['note'], keys=None, uncertainties=None, upload_id=None):
         with self.store._db() as c:
             source, message = self.store._message_context(c, keys or self.keys)
-            fp = pdfm.pdf_input(self.store, c, source, message)['fingerprint']
+            fp = pdfm.pdf_input(self.store, c, source, message, upload_id=upload_id)['fingerprint']
             for pages in batches:
                 payload = json.dumps(dict(DRAFT, note=note, uncertainties=DRAFT['uncertainties'] if uncertainties is None else uncertainties,
                                           title='第%s-%s页组' % (pages[0], pages[-1]), kind='school_material'), ensure_ascii=False)
                 c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?)',
                           (source['id'], message['id'], fp, pages[0], json.dumps(pages), 11, payload, self.now.isoformat()))
         return fp
+
+    def multi_originals(self):
+        keys=self.native_notice('multi')
+        reference=self.seed_pdf('b'*32,name='虚构家长参考.pdf')
+        self.link(keys,reference)
+        return keys,reference
+
+    def test_two_originals_require_both_complete_before_one_school_round(self):
+        keys,reference=self.multi_originals()
+        ident=self.candidate(keys=keys,ident='multi')
+        before=self.item(ident)
+        note='数学：2026-02-12前完成练习卷第1至11页，做完检查。'
+        self.seed_groups(keys=keys,note=note,uncertainties=[],upload_id=self.pdf)
+        self.assertIsNone(self.material(keys))
+        self.assertEqual(self.refresh(draft()),(dict(used=0,failed=0,created=0),[]))
+        self.assertEqual(self.item(ident),before)
+        self.seed_groups(keys=keys,note='本附件为上述练习卷的家长核对参考，不是孩子作答。',uncertainties=[],upload_id=reference)
+        material=self.material(keys)
+        self.assertEqual([d['upload_id'] for d in material['documents']],[self.pdf,reference])
+        result,calls=self.refresh(draft(goal=note))
+        self.assertEqual((result['used'],len(calls),result['created']),(1,1,1))
+        documents=json.loads(calls[0][1]['content'])['pdf_material']
+        self.assertEqual([d['upload_id'] for d in documents],[self.pdf,reference])
+        self.assertEqual([d['name'] for d in documents],['虚构练习卷.pdf','虚构家长参考.pdf'])
+        self.assertTrue(all(d['complete'] and d['processed_pages']==list(range(1,12)) for d in documents))
+        self.assertEqual([d['processed_pages'] for d in documents],[list(range(1,12))]*2)
+        row=self.item(ident)
+        self.assertEqual((row['state'],row['due'],self.count('manual_tasks'),self.count('records')),('accepted','2026-02-12',1,0))
+        self.assertEqual(len(self.brief(ident)['pdf_evidence']['documents']),2)
+        self.assertEqual(self.refresh(draft(),minutes=1),(dict(used=0,failed=0,created=0),[]))
+        self.assertEqual(self.item(ident),row)
+
+    def test_reference_reading_gap_does_not_become_a_complete_school_requirement(self):
+        keys,reference=self.multi_originals()
+        self.seed_groups(keys=keys,note=TEXT,uncertainties=[],upload_id=self.pdf)
+        self.seed_groups(keys=keys,note='家长参考。',uncertainties=['参考最后一页看不清'],upload_id=reference)
+        ident=self.candidate(keys=keys,ident='uncertain-multi')
+        result,calls=self.refresh(draft())
+        self.assertEqual((result['used'],len(calls),self.item(ident)['state'],self.count('manual_tasks')),(1,1,'pending',0))
+        self.assertEqual(self.brief(ident)['state'],'review')
+        self.assertIn('参考最后一页看不清',self.brief(ident)['reason'])
+        self.assertEqual(len(self.brief(ident)['pdf_evidence']['documents']),2)
+
+    def test_same_named_originals_keep_distinct_ids_and_group_content_in_school_context(self):
+        keys,reference=self.multi_originals()
+        with self.store._db() as c:
+            c.execute('UPDATE uploads SET name=? WHERE id IN (?,?)',('虚构资料.pdf',self.pdf,reference))
+        self.seed_groups(keys=keys,note='题目原件：完成练习卷第1至11页。',uncertainties=[],upload_id=self.pdf)
+        self.seed_groups(keys=keys,note='家长参考：第1题答案为3，不是孩子作答。',uncertainties=[],upload_id=reference)
+        ident=self.candidate(keys=keys,ident='same-name-multi')
+        result,calls=self.refresh(draft(state='review',reason='请对照两份原件。'))
+        documents=json.loads(calls[0][1]['content'])['pdf_material']
+        self.assertEqual((result['used'],len(calls),self.item(ident)['state']),(1,1,'pending'))
+        self.assertEqual([d['name'] for d in documents],['虚构资料.pdf']*2)
+        self.assertEqual([d['upload_id'] for d in documents],[self.pdf,reference])
+        self.assertIn('题目原件',documents[0]['groups'][0]['text'])
+        self.assertNotIn('家长参考',documents[0]['groups'][0]['text'])
+        self.assertIn('家长参考',documents[1]['groups'][0]['text'])
+        self.assertEqual(self.count('manual_tasks'),0)
+
+    def test_multi_original_association_changes_discard_inflight_school_result(self):
+        keys,reference=self.multi_originals()
+        for upload in (self.pdf,reference):
+            self.seed_groups(keys=keys,note=TEXT,uncertainties=[],upload_id=upload)
+        ident=self.candidate(keys=keys,ident='detach-multi');before=self.item(ident)
+        def detach(messages):
+            self.link(keys,reference,action=DETACH)
+            return draft()
+        result,calls=self.refresh(detach)
+        self.assertEqual((result['used'],len(calls),self.item(ident),self.count('manual_tasks')),(1,1,before,0))
+        self.assertEqual(self.rows('SELECT COUNT(*) FROM agent_pdf_material'),[(8,)])
+
+    def test_multi_original_bytes_change_refuses_parent_acceptance_without_overwriting_draft(self):
+        keys,reference=self.multi_originals()
+        for upload in (self.pdf,reference):
+            self.seed_groups(keys=keys,note=TEXT,uncertainties=[],upload_id=upload)
+        ident=self.candidate(keys=keys,ident='changed-multi')
+        self.refresh(draft(state='review',reason='家长核对原件。'))
+        before=self.item(ident)
+        original=(self.data/'uploads'/reference).read_bytes()
+        changed=test_pdf.build_pdf(11,width=2001)
+        self.assertEqual(len(original),len(changed))
+        (self.data/'uploads'/reference).write_bytes(changed)
+        with self.assertRaises(agent.AgentError) as refused:
+            self.store.act(dict(id=ident,action='accept',expected_updated=before['updated']))
+        self.assertEqual((refused.exception.status,refused.exception.code,self.item(ident),self.count('manual_tasks')),(409,'pdf_evidence_stale',before,0))
 
     def native_notice(self, ident='native', upload=None, published=None):
         message=dict(self.message(ident,kind='text'),text=TEXT)

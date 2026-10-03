@@ -1304,6 +1304,184 @@ class AgentTests(unittest.TestCase):
         self.assertEqual((ambiguous['state'],ambiguous['change'],ambiguous['target_id']),('review','new',''))
         self.assertIn('新要求还是学校变更',ambiguous['reason'])
 
+    def _school_append_candidate(self, index, text, *, change='new', target='', title='英语：Unit 3朗读', goal=None,
+                                 due='', publisher='synthetic-teacher-a', child='child-1', unread=False, during_model=None):
+        """A separately ingested batch; no reply_ref and no copied target provenance."""
+        source=self.source if child=='child-1' else dict(self.source,id='synthetic-append-sibling',child_id=child)
+        config=json.loads((self.data/'agent.json').read_text())
+        if not any(s['id']==source['id'] for s in config['sources']):
+            config['sources'].append(source);(self.data/'agent.json').write_text(json.dumps(config))
+        with self.app.connect() as c:
+            previous=c.execute('SELECT cursor FROM agent_sources WHERE id=?',(source['id'],)).fetchone()
+        message=dict(id=str(index),time=self.now.isoformat(),sender='同一个虚构显示名',text=text,unread=unread,kind='text')
+        if publisher: message['sender_id']=publisher
+        self.store.ingest(dict(source_id=source['id'],expected_cursor=previous['cursor'] if previous else '10',cursor=str(index),
+            checked_at=self.now.isoformat(),last_message_time=self.now.isoformat(),error='',messages=[message]))
+        ref='message:'+source['id']+':'+str(index)
+        evidence=[dict(message,ref=ref,publisher=agent._publisher(source['id'],message),content_incomplete=unread)]
+        targets=agent.school_targets(self.app,self.store,child)
+        raw=dict(proposals=[school_proposal(title_quote=text,focus='school',due=due,evidence=[dict(ref=ref)],
+            learning_subject='数学' if publisher=='synthetic-math-b' else '英语',task_title=title,task_goal=goal or text,task_state='ready',task_reason='虚构原文明确。',
+            task_change=change,task_target_id=target,task_purpose='learning')])
+        def returned(*args,**kwargs):
+            if during_model: during_model()
+            return raw
+        with patch.object(agent.family_llm,'_chat_json',side_effect=returned):
+            items=agent._select('school',evidence,school_goals=[],school_tasks=targets,as_of=self.now.date().isoformat())
+        self.assertEqual(len(items),1)
+        item=items[0];item.update(child_id=child,kind='school')
+        if item['plan'].get('school_learning'): item['plan']['school_messages']=[dict(source_id=source['id'],message_id=str(index))]
+        self.store._save('synthetic-append:'+str(index),'synthetic-fixed',[item],self.now)
+        with self.app.connect() as c:
+            return dict(c.execute('SELECT * FROM agent_items WHERE job_id=?',('synthetic-append:'+str(index),)).fetchone())
+
+    def _school_append_original(self, index=11, *, extra='', title='英语：Unit 3朗读', publisher='synthetic-teacher-a', child='child-1'):
+        text='Unit 3课文读两遍，朗读录音上传班级作业区，明天完成。'+extra
+        row=self._school_append_candidate(index,text,title=title,due='2026-02-11',publisher=publisher,child=child)
+        return row,self.store.act(dict(id=row['id'],action='accept'))['task_id']
+
+    def _school_append_auto(self, row):
+        brief=json.loads(row['plan'])['school_task']
+        with patch.object(agent,'_now',return_value=self.now):
+            return agent.apply_school_change(self.app,self.store,agent._school_append_request(row,brief),school_auto=True)
+
+    def test_school_cross_batch_append_keeps_task_arrangements_sources_and_original_replay(self):
+        from family_goals import Store as Goals
+        original,task_id=self._school_append_original()
+        goals=Goals(self.app,self.store);self.assertEqual(goals.route_school(),1)
+        with self.app.connect() as c: focus=next(t for t in self.app.tasks(c) if t['id']==task_id)['focus']
+        agent.family_task_focus.save(self.app,dict(id=task_id,version=focus['version'],request_key='synthetic-append-arranged',
+            mode='waiting',next_action='保留家长安排：晚饭后录音',waiting_for='等虚构家长回家',review_on='2026-02-11',scheduled_on='2026-02-11',box='inbox'))
+        added=self._school_append_candidate(12,'只补朗读：录音上传后确认上传成功，不要求背诵。',change='append',target=task_id)
+        with patch.object(agent.family_llm,'_chat_json') as model,patch.object(agent,'_now',return_value=self.now):
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,0)['created'],0);model.assert_not_called()
+        payload=agent._school_append_request(added,json.loads(added['plan'])['school_task'])
+        self.assertTrue(agent.apply_school_change(self.app,self.store,payload,school_auto=True)['replayed'])
+        with self.app.connect() as c:
+            task=next(t for t in self.app.tasks(c) if t['id']==task_id)
+            self.assertIn(original['body'],task['action']);self.assertIn('确认上传成功，不要求背诵',task['action'])
+            self.assertEqual(task['agenda']['due_on'],'2026-02-11')
+            self.assertEqual((task['focus']['mode'],task['focus']['next_action'],task['focus']['waiting_for'],task['focus']['scheduled_on']),
+                ('waiting','保留家长安排：晚饭后录音','等虚构家长回家','2026-02-11'))
+            canonical=c.execute('SELECT * FROM agent_items WHERE id=?',(original['id'],)).fetchone()
+            self.assertEqual((canonical['evidence'],canonical['body']),(original['evidence'],original['body']))
+            self.assertIn('message:synthetic-group:12',task['source'])
+            self.assertEqual(c.execute('SELECT task_id FROM agent_items WHERE id=?',(added['id'],)).fetchone()[0],task_id)
+            self.assertEqual(len(goals._school_context(c,goals.roots(c)[0])[0]),2)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
+        self.assertEqual(goals.route_school(),0)
+        repeated,repeat_id=self._school_append_original(13)
+        self.assertEqual(repeat_id,task_id)
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+            self.assertIn('确认上传成功',next(t for t in self.app.tasks(c) if t['id']==task_id)['action'])
+
+    def test_school_cross_batch_textbook_append_and_duplicate_keep_one_requirement(self):
+        text='教材第38页第2、3题必做，明天交数学本。'
+        original=self._school_append_candidate(11,text,title='数学：教材第38页第2、3题',due='2026-02-11',publisher='synthetic-math-b')
+        task_id=self.store.act(dict(id=original['id'],action='accept'))['task_id']
+        delta='仅补教材作业：先独立做，再按书中示例检查；不会的题先标记，不要照抄示例答案。'
+        first=self._school_append_candidate(12,delta,change='append',target=task_id,title='教材作业补充',publisher='synthetic-math-b')
+        self._school_append_auto(first)
+        repeated=self._school_append_candidate(13,delta,change='append',target=task_id,title='教材作业补充',publisher='synthetic-math-b')
+        self.assertTrue(self._school_append_auto(repeated)['deduplicated'])
+        with self.app.connect() as c:
+            task=next(t for t in self.app.tasks(c) if t['id']==task_id)
+            self.assertEqual(task['action'].count(delta),1);self.assertIn('第2、3题必做',task['action'])
+            self.assertIn('message:synthetic-group:12',task['source']);self.assertIn('message:synthetic-group:13',task['source'])
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_focus_history').fetchone()[0],1)
+
+    def test_school_append_rejects_unknown_publisher_other_child_and_competing_activity(self):
+        original,task_id=self._school_append_original()
+        delta='只补朗读：录音上传后确认上传成功。'
+        for index,publisher in ((12,'synthetic-other-teacher'),(13,'')):
+            row=self._school_append_candidate(index,delta,change='append',target=task_id,publisher=publisher)
+            self.assertEqual(json.loads(row['plan'])['school_task']['state'],'review')
+        with self.assertRaises(agent.AgentError):
+            self._school_append_candidate(14,delta,change='append',target=task_id,child='child-2')
+        self._school_append_original(15,title='英语：另一份朗读')
+        row=self._school_append_candidate(16,delta,change='append',target=task_id)
+        self.assertEqual(json.loads(row['plan'])['school_task']['state'],'review')
+        with patch.object(agent.family_llm,'_chat_json') as model:
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,0)['created'],0);model.assert_not_called()
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],2)
+            self.assertEqual(c.execute('SELECT body FROM agent_items WHERE id=?',(original['id'],)).fetchone()[0],original['body'])
+
+    def test_school_append_late_model_receipt_does_not_overwrite_parent_requirements(self):
+        original,task_id=self._school_append_original()
+        def parent_change():
+            agent.family_task_focus.save(self.app,dict(id=task_id,version=0,request_key='synthetic-parent-late-change',mode='later',
+                next_action='等家长核对',waiting_for='',review_on='2026-02-12',goal='家长另行核对后的原要求。'))
+        row=self._school_append_candidate(12,'只补朗读：录音上传后确认上传成功。',change='append',target=task_id,during_model=parent_change)
+        with self.assertRaises(agent.AgentError): self._school_append_auto(row)
+        with self.app.connect() as c:
+            task=next(t for t in self.app.tasks(c) if t['id']==task_id)
+            self.assertEqual(task['action'],'家长另行核对后的原要求。')
+            self.assertEqual(c.execute('SELECT state FROM agent_items WHERE id=?',(row['id'],)).fetchone()[0],'pending')
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+        later=self._school_append_candidate(13,'只补朗读：增加自查步骤。',change='append',target=task_id)
+        self.assertEqual(json.loads(later['plan'])['school_task']['state'],'review')
+
+    def test_school_append_late_feedback_completed_and_explicit_parent_append_preserve_records(self):
+        original,task_id=self._school_append_original()
+        row=self._school_append_candidate(12,'只补朗读：录音上传后确认上传成功。',change='append',target=task_id)
+        feedback=self.app.save_task_feedback(dict(task_id=task_id,child='child-1',day='2026-02-10',note='虚构原作答：正在核对。',request_key='synthetic-append-feedback'))
+        with self.assertRaises(agent.AgentError): self._school_append_auto(row)
+        self.app.save_task(dict(id=task_id,status='已完成',note='虚构家长此前已核对完成。'))
+        reviewed=self._school_append_candidate(13,'只补朗读：新增上传成功确认步骤。',change='append',target=task_id)
+        self.assertEqual(json.loads(reviewed['plan'])['school_task']['state'],'review')
+        with self.app.connect() as c:
+            task=next(t for t in self.app.tasks(c) if t['id']==task_id)
+            update=dict(c.execute('SELECT * FROM task_updates WHERE id=?',(task_id,)).fetchone())
+            saved=dict(c.execute('SELECT * FROM records WHERE id=?',(feedback['record_id'],)).fetchone())
+        payload=dict(action='school_change',id=reviewed['id'],target_id=task_id,change='append',title=task['title'],body=reviewed['body'],
+            due=task['agenda']['due_on'],expected_updated=reviewed['updated'],target_version=task['focus']['version'],target_updated=update['updated'])
+        result=agent.apply_school_change(self.app,self.store,payload)
+        self.assertTrue(result['completion_needs_review']);self.assertTrue(agent.apply_school_change(self.app,self.store,payload)['replayed'])
+        with self.app.connect() as c:
+            after=next(t for t in self.app.tasks(c) if t['id']==task_id)
+            self.assertTrue(after['school_completion_needs_review']);self.assertIn(original['body'],after['action']);self.assertIn(reviewed['body'],after['action'])
+            self.assertEqual(dict(c.execute('SELECT * FROM task_updates WHERE id=?',(task_id,)).fetchone()),update)
+            self.assertEqual(dict(c.execute('SELECT * FROM records WHERE id=?',(feedback['record_id'],)).fetchone()),saved)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+
+    def test_school_append_cannot_remove_prior_recitation_optional_or_deadline(self):
+        original,task_id=self._school_append_original(extra='另须背诵课文。')
+        for index,text,change,due in ((12,'只补朗读：不要求背诵。','append',''),
+            (13,'只补朗读：本次改为选做。','append',''),(14,'更正朗读：取消录音上传。','update',''),
+            (15,'只补朗读：后天确认录音上传成功。','append','2026-02-12')):
+            row=self._school_append_candidate(index,text,change=change,target=task_id,due=due)
+            brief=json.loads(row['plan'])['school_task']
+            if index==15:
+                with self.assertRaises(agent.AgentError): self._school_append_auto(row)
+            else: self.assertEqual(brief['state'],'review')
+        with self.app.connect() as c:
+            task=next(t for t in self.app.tasks(c) if t['id']==task_id)
+            self.assertEqual(task['action'],original['body']);self.assertEqual(task['agenda']['due_on'],'2026-02-11')
+            self.assertFalse(c.execute("SELECT 1 FROM sqlite_master WHERE name='task_focus_history'").fetchone())
+
+    def test_school_append_rejects_original_corrected_or_recalled_after_collection(self):
+        original,task_id=self._school_append_original()
+        pending=self._school_append_candidate(12,'只补朗读：录音上传后确认上传成功。',change='append',target=task_id)
+        with self.app.connect() as c:
+            payload=json.loads(c.execute("SELECT payload FROM agent_messages WHERE source_id='synthetic-group' AND id='11'").fetchone()[0])
+        for index,changes in ((13,dict(text='更正：Unit 3课文只读一遍，不上传。')),
+                              (14,dict(text='[已撤回，正文未读取]',kind='recalled',unread=True))):
+            with self.app.connect() as c:
+                c.execute("UPDATE agent_messages SET payload=? WHERE source_id='synthetic-group' AND id='11'",(json.dumps(dict(payload,**changes)),))
+            with self.assertRaises(agent.AgentError): self._school_append_auto(pending)
+            after=self._school_append_candidate(index,'只补朗读：确认上传成功。',change='append',target=task_id)
+            self.assertEqual(json.loads(after['plan'])['school_task']['state'],'review')
+        with self.app.connect() as c:
+            task=next(t for t in self.app.tasks(c) if t['id']==task_id)
+            self.assertEqual(task['action'],original['body'])
+            canonical=c.execute('SELECT body,evidence FROM agent_items WHERE id=?',(original['id'],)).fetchone()
+            self.assertEqual((canonical['body'],canonical['evidence']),(original['body'],original['evidence']))
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+
     def test_school_selection_discards_model_copy_of_existing_task(self):
         evidence=[dict(ref='message:synthetic-group:11',text='已签署',time=self.now.isoformat(),content_incomplete=False)]
         task=dict(id='task-1',title='语文：完成观察记录',goal='完成一份自己的观察记录。',due='',status='待跟进')

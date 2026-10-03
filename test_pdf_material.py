@@ -1,6 +1,7 @@
 """独立 PDF/DOCX 页组整理：合成 11 页 PDF、含图片的合成 DOCX（docx_pdf 替身返回真实合成 PDF）与虚构 QQ 截图通知，模型全部替身；缺 poppler 时按 test_pdf 同法只替换子进程。"""
 import contextlib
 import datetime as dt
+import hashlib
 import inspect
 import json
 import unittest
@@ -350,8 +351,8 @@ class PdfMaterialTests(Base):
         keys = self.school_fragment('数学：见附件。'); a = self.seed_pdf('3' * 32); b = self.seed_pdf('4' * 32, name='第二份.pdf')
         self.link(keys, a); self.link(keys, b)
         with no_render(), patch.object(family_llm, 'extract_draft', side_effect=AssertionError('model')):
-            shown = self.view(keys); self.assertEqual(shown['state'], 'unavailable'); self.assertIn('多个PDF', shown['explanation'])
-            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=0, failed=0))
+            shown = self.view(keys); self.assertEqual(shown['state'], 'pending'); self.assertFalse(shown['complete'])
+            self.assertEqual([document['upload_id'] for document in shown['documents']], [a, b])
             self.link(keys, b, 'detach'); image = self.seed_upload('5' * 32, test_media.png(width=97)); self.link(keys, image)
             shown = self.view(keys); self.assertEqual(shown['state'], 'unavailable'); self.assertIn('单独关联', shown['explanation'])
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=0, failed=0))
@@ -436,6 +437,239 @@ class PdfMaterialTests(Base):
         self.assertIn('family_pdf_material.prepare(store, now, min(budget, family_pdf_material.ROUND_CALLS))', source)
         self.assertEqual(pdfm.ROUND_CALLS, 1); self.assertEqual(pdfm.BATCH_PAGES, 3)
         self.assertEqual(pdfm.prepare(self.store, self.now, 0), dict(used=0, failed=0))
+
+
+class MultiPdfMaterialTests(Base):
+    """Synthetic independent originals; real bounded page groups with a model stand-in, never combined file bytes."""
+    seed_pdf = PdfMaterialTests.seed_pdf
+    view = PdfMaterialTests.view
+    rows = PdfMaterialTests.rows
+    snapshot = PdfMaterialTests.snapshot
+    consumers = PdfMaterialTests.consumers
+    claim_for_other_child = PdfMaterialTests.claim_for_other_child
+
+    def pair(self, pages=11):
+        keys = self.school_fragment('英语：题目PDF做必做1–3题，第4题选做；家长参考PDF只供参考，不交孩子。')
+        a = self.seed_pdf('a' * 32, test_pdf.build_pdf(pages), name='虚构题目.pdf')
+        b = self.seed_pdf('b' * 32, test_pdf.build_pdf(pages, width=2001), name='虚构家长参考.pdf')
+        self.link(keys, a); self.link(keys, b)
+        return keys, a, b
+
+    def inputs(self, keys):
+        with self.store._db() as c:
+            return pdfm.pdf_inputs(self.store, c, *self.store._message_context(c, keys))
+
+    def evidence(self, keys):
+        with self.store._db() as c:
+            return pdfm.complete_evidence(self.store, c, *self.store._message_context(c, keys))
+
+    def test_two_pdfs_take_separate_fair_page_groups_and_reopen_without_repeating(self):
+        keys, a, b = self.pair(); before = self.consumers(); seen = []
+        originals = {value['upload_id']: value['body'] for value in self.inputs(keys)}
+        real_render = family_pdf.render_pages
+
+        def model(text, images, **kw):
+            context = json.loads(text)['original_pdf']
+            seen.append((context['upload_id'], context['name'], context['pages']))
+            self.assertEqual(len(images), len(context['pages'])); self.assertLessEqual(len(images), 3)
+            self.assertEqual(kw['target_child'], '示例甲'); self.assertIs(kw['school_material'], True)
+            return dict(DRAFT, title=context['name'] + '第%s页' % context['pages'])
+        with renderer(), patch.object(family_pdf, 'render_pages', wraps=real_render) as render, \
+                patch.object(family_llm, 'extract_draft', side_effect=model) as m:
+            for index in range(8):
+                self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=index), budget=10), dict(used=1, failed=0))
+                self.assertEqual(m.call_count, index + 1)
+                shown = self.view(keys)
+                self.assertEqual(shown['complete'], index == 7)
+                self.assertEqual(shown['state'], 'ready' if index == 7 else 'partial')
+                self.assertEqual(self.evidence(keys) is not None, index == 7)
+                self.assertEqual(render.call_args.args[0], originals[seen[-1][0]])
+                if index == 1:
+                    self.store = agent.Store(self.app.connect, self.app.profiles, self.data)
+                    self.assertEqual([doc['processed_pages'] for doc in self.view(keys)['documents']], [[1, 2, 3], [1, 2, 3]])
+            with no_render():
+                self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=20)), dict(used=0, failed=0))
+            self.assertEqual(m.call_count, 8)
+        self.assertEqual([(ident, pages) for ident, _, pages in seen], [(ident, pages) for pages in BATCHES for ident in (a, b)])
+        self.assertEqual([doc['name'] for doc in self.view(keys)['documents']], ['虚构题目.pdf', '虚构家长参考.pdf'])
+        evidence = self.evidence(keys)
+        self.assertEqual(evidence['fingerprint'], self.view(keys)['fingerprint'])
+        self.assertEqual([(doc['upload_id'], doc['page_count'], [group['pages'] for group in doc['batches']])
+                          for doc in evidence['documents']], [(a, 11, BATCHES), (b, 11, BATCHES)])
+        self.assertEqual(len({doc['job_id'] for doc in self.view(keys)['documents']}), 2)
+        self.assertEqual(self.consumers(), before)
+        self.assertEqual([(self.data / 'uploads' / ident).read_bytes() for ident in (a, b)], [originals[a], originals[b]])
+
+    def test_one_failed_pdf_backs_off_while_the_other_finishes_then_recovers_once(self):
+        keys, a, b = self.pair(pages=1); seen = []; outcomes = [family_llm.LLMDraftError('虚构失败'), DRAFT, DRAFT]
+
+        def model(text, images, **kw):
+            original = json.loads(text)['original_pdf']; seen.append((original['upload_id'], original['pages']))
+            result = outcomes.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+        with renderer(page_count=1), patch.object(family_llm, 'extract_draft', side_effect=model) as m:
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=1))
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=1)), dict(used=1, failed=0))
+            shown = self.view(keys)
+            self.assertEqual((shown['state'], shown['complete']), ('error', False)); self.assertIsNone(self.evidence(keys))
+            self.assertEqual([(doc['upload_id'], doc['state'], doc['processed_pages']) for doc in shown['documents']],
+                             [(a, 'error', []), (b, 'ready', [1])])
+            self.store = agent.Store(self.app.connect, self.app.profiles, self.data)
+            with no_render():
+                self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=2)), dict(used=0, failed=0))
+            self.assertEqual(m.call_count, 2)
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=6)), dict(used=1, failed=0))
+            with no_render():
+                self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=7)), dict(used=0, failed=0))
+            self.assertEqual(m.call_count, 3)
+        self.assertEqual(seen, [(a, [1]), (b, [1]), (a, [1])])
+        self.assertEqual((self.view(keys)['state'], self.view(keys)['complete']), ('ready', True))
+        self.assertEqual([doc['upload_id'] for doc in self.evidence(keys)['documents']], [a, b])
+
+    def test_association_add_remove_and_same_size_sibling_change_hide_all_old_groups(self):
+        keys, a, b = self.pair()
+        with renderer(), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=1)), dict(used=1, failed=0))
+            original = self.inputs(keys); fingerprints = [value['fingerprint'] for value in original]
+            c = self.seed_pdf('c' * 32, name='虚构第三份.pdf'); self.link(keys, c)
+            self.assertEqual([doc['processed_pages'] for doc in self.view(keys)['documents']], [[], [], []])
+            self.assertTrue(set(fingerprints).isdisjoint(value['fingerprint'] for value in self.inputs(keys)))
+            self.assertIsNone(self.evidence(keys))
+            self.link(keys, c, 'detach')
+            self.assertEqual([value['fingerprint'] for value in self.inputs(keys)], fingerprints)
+            self.assertEqual([doc['processed_pages'] for doc in self.view(keys)['documents']], [[1, 2, 3], [1, 2, 3]])
+            self.link(keys, b, 'detach')
+            self.assertNotIn('documents', self.view(keys)); self.assertEqual(self.view(keys)['processed_pages'], [])
+            self.link(keys, b)
+            sibling = original[1]['body']; replacement = test_pdf.build_pdf(11, width=2002)
+            self.assertEqual(len(sibling), len(replacement)); (self.data / 'uploads' / b).write_bytes(replacement)
+            self.assertEqual([doc['processed_pages'] for doc in self.view(keys)['documents']], [[], []])
+            self.assertTrue(set(fingerprints).isdisjoint(value['fingerprint'] for value in self.inputs(keys)))
+            self.assertIsNone(self.evidence(keys))
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=2)), dict(used=1, failed=0))
+            (self.data / 'uploads' / b).write_bytes(sibling)
+            self.assertEqual([doc['processed_pages'] for doc in self.view(keys)['documents']], [[1, 2, 3], [1, 2, 3]])
+            self.link(keys, b, 'detach'); self.link(keys, c)
+            self.assertEqual([doc['processed_pages'] for doc in self.view(keys)['documents']], [[], []])
+            self.assertIsNone(self.evidence(keys)); self.assertEqual(m.call_count, 3)
+
+    def test_sibling_changes_during_render_or_model_discard_the_claim_and_result(self):
+        keys, a, b = self.pair(pages=1); original = (self.data / 'uploads' / b).read_bytes()
+        real_render = family_pdf.render_pages
+
+        def unlink_during_render(*args, **kwargs):
+            result = real_render(*args, **kwargs); self.link(keys, b, 'detach'); return result
+        with renderer(page_count=1), patch.object(family_pdf, 'render_pages', side_effect=unlink_during_render), \
+                patch.object(family_llm, 'extract_draft', side_effect=AssertionError('no model after sibling unlink')) as m:
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=0, failed=0)); m.assert_not_called()
+        self.assertEqual(self.rows('SELECT * FROM agent_pdf_material'), [])
+        self.assertEqual(self.rows("SELECT * FROM agent_jobs WHERE id LIKE 'pdf-material:%'"), [])
+        self.link(keys, b)
+
+        def replace_during_model(text, images, **kwargs):
+            replacement = test_pdf.build_pdf(1, width=2002); self.assertEqual(len(replacement), len(original))
+            (self.data / 'uploads' / b).write_bytes(replacement); return DRAFT
+        with renderer(page_count=1), patch.object(family_llm, 'extract_draft', side_effect=replace_during_model) as m:
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=1)), dict(used=1, failed=0))
+            m.assert_called_once()
+        self.assertEqual(self.rows('SELECT * FROM agent_pdf_material'), [])
+        self.assertEqual(self.rows("SELECT * FROM agent_jobs WHERE id LIKE 'pdf-material:%'"), [])
+        self.assertFalse(self.view(keys)['complete']); self.assertIsNone(self.evidence(keys))
+        (self.data / 'uploads' / b).write_bytes(original)
+        with renderer(page_count=1), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=2)), dict(used=1, failed=0))
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=3)), dict(used=1, failed=0))
+            self.assertEqual(m.call_count, 2)
+        self.assertTrue(self.view(keys)['complete'])
+
+    def test_multi_pdf_view_and_full_evidence_are_read_only_and_reject_corrupt_sibling_coverage(self):
+        keys, a, b = self.pair(pages=1)
+        with renderer(page_count=1), patch.object(family_llm, 'extract_draft', return_value=DRAFT):
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
+            self.assertIsNone(self.evidence(keys))  # A complete first document cannot stand for an unknown second document.
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=1)), dict(used=1, failed=0))
+        before = self.snapshot(); sql = []; original = self.store._db
+
+        @contextlib.contextmanager
+        def traced():
+            with original() as c:
+                c.set_trace_callback(sql.append); yield c
+        with patch.object(self.store, '_db', traced), no_render(), \
+                patch.object(family_llm, 'extract_draft', side_effect=AssertionError('no model in GET')):
+            self.assertTrue(self.view(keys)['complete']); self.assertEqual(len(self.evidence(keys)['documents']), 2)
+        self.assertFalse(any(q.lstrip().upper().startswith(('INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER', 'REPLACE')) for q in sql), sql)
+        self.assertEqual(self.snapshot(), before)
+        fingerprint = self.inputs(keys)[1]['fingerprint']
+        with self.store._db() as c:
+            c.execute('UPDATE agent_pdf_material SET payload=? WHERE fingerprint=?',
+                      (json.dumps(dict(kind='school_material', title='损坏草稿', note='不应采信', score=100)), fingerprint))
+        shown = self.view(keys)
+        self.assertEqual((shown['state'], shown['complete']), ('partial', False)); self.assertIsNone(self.evidence(keys))
+        self.assertEqual([(doc['upload_id'], doc['processed_pages']) for doc in shown['documents']], [(a, [1]), (b, [])])
+
+    def test_single_pdf_fingerprint_progress_and_shape_survive_temporary_multi_pdf_set(self):
+        keys = self.school_fragment('英语：见题目原件。'); a = self.seed_pdf('a' * 32, test_pdf.build_pdf(1)); self.link(keys, a)
+        with self.store._db() as c:
+            source, message = self.store._message_context(c, keys); child = next(p for p in self.store.profiles(c) if p['id'] == 'child-1')
+            old = [3, 'school_material', 'pdf', source, child, message, [a, 'application/pdf', hashlib.sha256(test_pdf.build_pdf(1)).hexdigest()]]
+            legacy = hashlib.sha256(json.dumps(old, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+            self.assertEqual(pdfm.pdf_input(self.store, c, source, message)['fingerprint'], legacy)
+        with renderer(page_count=1), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
+        single = self.view(keys); evidence = self.evidence(keys); self.assertNotIn('documents', single)
+        self.assertEqual((single['job_id'], evidence['fingerprint']), (pdfm.job_key(source, message), legacy))
+        b = self.seed_pdf('b' * 32, test_pdf.build_pdf(1), name='虚构参考.pdf'); self.link(keys, b)
+        self.assertEqual([doc['processed_pages'] for doc in self.view(keys)['documents']], [[], []]); self.assertIsNone(self.evidence(keys))
+        with self.store._db() as c:
+            source, message = self.store._message_context(c, keys)
+            with self.assertRaises(family_media.MediaError) as rejected:
+                pdfm.pdf_input(self.store, c, source, message)
+            self.assertEqual(rejected.exception.code, 'pdf_multiple')
+            self.assertEqual(pdfm.pdf_input(self.store, c, source, message, upload_id=b)['upload_id'], b)
+            self.assertIsNone(pdfm.pdf_input(self.store, c, source, message, upload_id='f' * 32))
+        self.link(keys, b, 'detach')
+        self.assertEqual((self.view(keys), self.evidence(keys)), (single, evidence))
+        with no_render(), patch.object(family_llm, 'extract_draft', side_effect=AssertionError('no repeat model')):
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=2)), dict(used=0, failed=0))
+        self.assertEqual(m.call_count, 1)
+
+    def test_multi_pdf_count_total_bytes_mixed_formats_and_foreign_child_are_refused(self):
+        keys, a, b = self.pair(pages=1); c = self.seed_pdf('c' * 32, test_pdf.build_pdf(1)); self.link(keys, c)
+        self.assertEqual(len(self.view(keys)['documents']), 3)
+        fourth = self.seed_pdf('d' * 32, test_pdf.build_pdf(1)); self.link(keys, fourth)
+        with no_render(), patch.object(family_llm, 'extract_draft', side_effect=AssertionError('no unsafe model')):
+            self.assertEqual(self.view(keys)['state'], 'unavailable'); self.assertIn('超过3份', self.view(keys)['explanation'])
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=0, failed=0)); self.assertIsNone(self.evidence(keys))
+            self.link(keys, fourth, 'detach'); self.link(keys, c, 'detach')
+            with self.store._db() as connection:
+                connection.execute('UPDATE uploads SET size=? WHERE id=?', (family_pdf.MAX_BODY_BYTES, a))
+            with patch.object(pdfm, 'read_file', side_effect=AssertionError('reject declared total before file reads')):
+                self.assertEqual(self.view(keys)['state'], 'unavailable'); self.assertIn('合计超过20MiB', self.view(keys)['explanation'])
+                self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=0, failed=0))
+            with self.store._db() as connection:
+                connection.execute('UPDATE uploads SET size=? WHERE id=?', (len(test_pdf.build_pdf(1)), a))
+            image = self.seed_upload('e' * 32, test_media.png(width=97)); self.link(keys, image)
+            self.assertEqual(self.view(keys)['state'], 'unavailable'); self.assertIn('单独关联', self.view(keys)['explanation'])
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=0, failed=0)); self.assertIsNone(self.evidence(keys))
+            self.link(keys, image, 'detach')
+            word = 'f' * 32; body = test_media.docx(test_media.para('虚构纯文字参考'))
+            (self.data / 'uploads' / word).write_bytes(body)
+            with self.store._db() as connection:
+                connection.execute('INSERT INTO uploads(id,name,size,mime,created) VALUES(?,?,?,?,?)',
+                                   (word, '虚构参考.docx', len(body), family_media.DOCX_MIME, self.now.isoformat()))
+            self.link(keys, word); self.assertEqual(self.view(keys)['state'], 'unavailable')
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=0, failed=0)); self.link(keys, word, 'detach')
+            self.claim_for_other_child(fourth)
+            with self.assertRaises(agent.AgentError):
+                self.link(keys, fourth)
+            with self.store._db() as connection:
+                connection.execute('INSERT INTO agent_message_attachments VALUES(?,?,?)', (keys['source_id'], keys['message_id'], fourth))
+            self.assertEqual(self.view(keys)['state'], 'unavailable'); self.assertIsNone(self.evidence(keys))
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=0, failed=0))
+        self.assertEqual(self.rows("SELECT * FROM agent_jobs WHERE id LIKE 'pdf-material:%'"), [])
 
 
 

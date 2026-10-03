@@ -274,7 +274,7 @@ def tasks(connection=None):
                     task['advice']=json.loads(proposal['plan']).get('school_task',{}).get('advice','')
                     task['school_origin']=proposal['kind']=='school' and proposal['state']=='accepted' and proposal['task_id']==task['id']
                     changes=json.loads(proposal['plan']).get('school_changes',[]);last=changes[-1] if changes else {};update=updates.get(task['id'],{})
-                    task['school_completion_needs_review']=bool(task['school_origin'] and last.get('change')=='update' and update.get('status')=='已完成' and update.get('updated','')<last.get('confirmed_at',''))
+                    task['school_completion_needs_review']=bool(task['school_origin'] and last.get('change') in ('update','append') and update.get('status')=='已完成' and update.get('updated','')<last.get('confirmed_at',''))
         if task['focus']['title']: task['original_title']=task['title'];task['title']=task['focus']['title']
         if task['focus']['goal']: task['original_action']=task['action'];task['action']=task['focus']['goal']
     return family_agenda.enrich(SimpleNamespace(**globals()),connection,manual+result)

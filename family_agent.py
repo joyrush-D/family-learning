@@ -5,7 +5,7 @@ Collectors only ingest configured sources; model selections never write growth f
 """
 import argparse
 import copy
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import datetime as dt
 import hashlib
 import http.client
@@ -78,8 +78,9 @@ reference：表格列标题/成绩符号说明、已完成汇报、一般教学�
 向群友索要课本页、照片、文件等资料的个人求助，不等于全班或本孩子的学校要求；仅提到科目、页码或活动主题也不能自动创建核对待办、学习目标或加练。批处理可跳过，已有候选归reference。若同批另有明确作业要求，应引用那条要求并保留转述身份，不能只引用求助句。
 as_of为当前日期，原发送日期不能改成今天；当前孩子/来源绑定已由家庭指定，但不代表消息每项条件均适用。只处理candidate所指这一件事，不能扩大到其他列或其他孩子。reason说明分类依据；缺具体内容时title/goal/advice可留空。"""
 TASK_BRIEF_SCHEMA['required'] += ['change','target_id']
-TASK_BRIEF_SCHEMA['properties'].update(change={'type':'string','enum':['new','update','cancel']},target_id={'type':'string','maxLength':80})
+TASK_BRIEF_SCHEMA['properties'].update(change={'type':'string','enum':['new','append','update','cancel']},target_id={'type':'string','maxLength':80})
 SCHOOL_TASK_PROMPT += '\n若通知是在更正、改期或取消已有要求，change选update或cancel，state必须review，不能新增一个执行任务。target_id仅从school_tasks选择明确对应的原事项；不确定或列表省略时留空让家长选择，不按同科目强行匹配。title/goal写更正后的完整要求，未明确保留的旧要求不擅自补齐；取消时goal写原文的取消内容。普通新要求change=new且target_id为空。既有事项的完成/不参加与家长反馈不能覆盖或恢复。'
+SCHOOL_TASK_PROMPT += '\nchange描述与已保存school_tasks的关系。本批首次出现的要求及本批的补充、更正须合成一项完整new，不把尚未保存的本批任务写成target_id为空的update。仅对已保存的同源同publisher明确唯一原事项，纯增加步骤/标准的补充可选append：target_id选原事项，goal只写本条新增要求，不复制旧内容或借旧截止日。只补朗读/仅补教材作业在同publisher对应活动仅一项时可明确匹配；两项竞争或publisher未知则review。替换、撤销、改期、必做/选做变化用update/cancel并review，不用append。归纳的每项提交、签字、数量、截止要求都必须由当前原消息或已读完整原件支持，不能从打印、签字或参考说明补造提交动作。'
 _school_fields['required'] += ['task_change','task_target_id']
 _school_fields['properties'].update(task_change=TASK_BRIEF_SCHEMA['properties']['change'],task_target_id=TASK_BRIEF_SCHEMA['properties']['target_id'])
 _school_fields['required'] += ['task_state','task_reason']
@@ -221,7 +222,10 @@ def _pdf_evidence(material):
     or truncated group is listed with its page span, so source coverage and the clipped summary stay separate claims.
     """
     if not material: return None
-    fingerprint=_hash([1,[[m['ref'],m['fingerprint'],m['upload_id'],m['page_count'],[[b['pages'],b['draft'],b['updated']] for b in m['batches']]] for m in material]])
+    identity=[1,[[m['ref'],m['fingerprint'],m['upload_id'],m['page_count'],[[b['pages'],b['draft'],b['updated']] for b in m['batches']]] for m in material]]
+    collections=sorted({(m['ref'],m['collection_fingerprint']) for m in material if m.get('collection_fingerprint')})
+    if collections: identity.append(collections)
+    fingerprint=_hash(identity)
     model=[];documents=[];uncertainties=[];total=0
     for m in material:
         groups=[];omitted=[];truncated=[];processed=[]
@@ -235,7 +239,7 @@ def _pdf_evidence(material):
             if clipped: truncated.append(span)
             groups.append(dict(pages=b['pages'],text=text,text_truncated=clipped))
         kind=dict(original=m.get('original') or 'pdf',mime=m.get('mime',''),conversion=m.get('conversion',''))
-        model.append(dict(ref=m['ref'],name=m['name'],**kind,page_count=m['page_count'],processed_pages=sorted(processed),complete=True,
+        model.append(dict(ref=m['ref'],name=m['name'],upload_id=m['upload_id'],**kind,page_count=m['page_count'],processed_pages=sorted(processed),complete=True,
                           groups=groups,omitted_groups=omitted,truncated_groups=truncated))
         documents.append(dict(ref=m['ref'],name=m['name'],upload_id=m['upload_id'],**kind,page_count=m['page_count'],groups=len(m['batches']),sent=len(groups),omitted=omitted,truncated=truncated))
     return dict(fingerprint=fingerprint,documents=documents,model=model,uncertainties=uncertainties)
@@ -320,11 +324,11 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
         if len(brief['goal'])+len(submission)+6<=2000: brief['goal']+='\n提交要求：'+submission
         else: state='review';brief['reason']='要求较长，提交要求未并入正文，请核对：'+submission[:200]
     change=value.get('change','new');target=_text(value,'target_id',80)
-    if change not in ('new','update','cancel'): raise AgentError('学校通知变更类型无法核对')
+    if change not in ('new','append','update','cancel'): raise AgentError('学校通知变更类型无法核对')
     if target and not any(t['id']==target for t in school_tasks): raise AgentError('原事项不在本次可核对范围')
     if change=='new' and target:
         target='';state='review';brief['reason']='模型同时给出新增事项和原事项，请家长核对是新要求还是学校变更。'
-    if change!='new':
+    if change in ('update','cancel'):
         state='review';brief['reason']='学校要求有变更，请核对原事项及新要求后确认；原状态和反馈保留。'
     if read and state!='reference':
         # Only the saved static text of these addresses was read; every other address and any non-text content stays unknown.
@@ -359,6 +363,8 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
     if links: brief.update(links=links,link_read=bool(read) and not pages['unread'] and not pages['omitted'])
     if read: brief['page_evidence']=dict(fingerprint=pages['fingerprint'],read=read,unread=pages['unread'],omitted=pages['omitted'])
     if pdf: brief['pdf_evidence']=dict(fingerprint=pdf['fingerprint'],documents=pdf['documents'])
+    brief['origin_basis']=_school_message_basis(evidence)
+    if change=='append': _school_append_brief(brief,evidence,school_tasks)
     return brief
 
 
@@ -403,6 +409,12 @@ evidence中的ref必须来自输入，quote必须逐字摘自对应资料且非�
 
 def _publisher(source_id, message):
     return 'publisher:' + _hash([source_id, message['sender_id']])[:20] if message.get('sender_id') else ''
+
+
+def _school_message_basis(evidence):
+    """Server snapshot of the full read messages; display quotes may be clipped."""
+    return {e.get('ref',''):_hash([e.get('text',''),e.get('time',''),e.get('publisher') or
+        _publisher(e.get('ref','')[8:].rsplit(':',1)[0],e),e.get('kind','text'),bool(e.get('unread') or e.get('content_incomplete'))]) for e in evidence}
 
 
 def _publication_groups(views):
@@ -1400,30 +1412,108 @@ def _school_origin(store, c, task, child_id):
     return row
 
 
-def school_targets(app, store, child_id):
+def school_targets(app, store, child_id, connection=None):
     """Bounded saved tasks for the existing school model call, no new collector."""
-    with store._db() as c:
+    with store._db() if connection is None else nullcontext(connection) as c:
         name=next((p['name'] for p in app.profiles(c) if p['id']==child_id),None)
-        updates={r['id']:r['status'] for r in c.execute('SELECT id,status FROM task_updates')};result=[]
+        updates={r['id']:dict(r) for r in c.execute('SELECT * FROM task_updates')};result=[]
         # ponytail: latest 24 collected school tasks; unlisted or ambiguous targets need parent selection.
         for task in app.tasks(c):
             if task['child']!=name: continue
-            try: _school_origin(store,c,task,child_id)
+            try:
+                canonical=_school_origin(store,c,task,child_id)
+                originals=[];publishers=set();originals_read=True;original_evidence=[]
+                for quote in json.loads(canonical['evidence']):
+                    source_id,message_id=quote['ref'][8:].rsplit(':',1)
+                    source,message=store._message_context(c,dict(child_id=child_id,source_id=source_id,message_id=message_id))
+                    publishers.add((source_id,_publisher(source_id,message)))
+                    originals.append([quote['ref'],_hash(message)])
+                    original_evidence.append(dict(message,ref=quote['ref']))
+                    originals_read=originals_read and message['kind']=='text' and not message['unread'] and bool(message['text'].strip()) and not _needs_task_details(message['text'])
+                recorded=json.loads(canonical['plan']).get('school_task',{}).get('origin_basis',{})
+                if not isinstance(recorded,dict): recorded={}
+                current_basis=_school_message_basis(original_evidence)
+                originals_read=originals_read and bool(recorded) and all(current_basis.get(ref)==value for ref,value in recorded.items())
             except (AgentError,ValueError,KeyError,TypeError): continue
-            result.append(dict(id=task['id'],title=task['title'][:200],goal=task['action'][:400],due=task['agenda']['due_on'],status=app.task_status(task,updates.get(task['id']))))
-            if len(result)==24: break
+            update=updates.get(task['id']);focus=task['focus']
+            feedback=[dict(r) for r in c.execute('SELECT * FROM records WHERE source=? OR linked_task_id=?',('事项:'+task['id'],task['id']))]
+            study=[dict(r) for r in c.execute('SELECT * FROM study_items WHERE task_id=?',(task['id'],))] if c.execute("SELECT 1 FROM sqlite_master WHERE name='study_items'").fetchone() else []
+            source,publisher=next(iter(publishers)) if len(publishers)==1 else ('','')
+            basis=dict(canonical_id=canonical['id'],canonical_updated=canonical['updated'],
+                fingerprint=_hash([dict(canonical),originals,task['title'],task['action'],task['agenda'],focus,update,feedback,study]),
+                version=focus['version'],updated=update['updated'] if update else '',title=task['title'],due=task['agenda']['due_on'])
+            changes=json.loads(canonical['plan']).get('school_changes',[]);last=changes[-1] if changes else {}
+            own_append=(last.get('change')=='append' and focus['title']==last.get('applied_title') and focus['goal']==last.get('applied_goal'))
+            result.append(dict(id=task['id'],title=task['title'][:200],goal=task['action'][:400],goal_truncated=len(task['action'])>400,
+                due=task['agenda']['due_on'],status=app.task_status(task,update['status'] if update else None),source_id=source,publisher=publisher,
+                append_basis=basis,append_eligible=bool(publisher) and originals_read and _school_active(store,c,canonical) and not update and not feedback and not study
+                    and (not focus['title'] and not focus['goal'] or own_append)))
+        complete=len(result)<=24
+        result=result[:24]
+        for task in result: task['targets_complete']=complete
         return result
 
 
-def apply_school_change(app, store, obj):
-    """Parent confirmation atomically links original messages and edits the same task."""
+def _school_append_brief(brief, evidence, targets):
+    """A narrow additive relation, never a guess from a date, nickname or model target alone."""
+    if brief.get('change')!='append': return
+    def uncertain():
+        brief.update(state='review',reason='补充与原事项的同发布者、唯一归属或当前要求尚不能核对；原要求、安排和反馈保留。')
+        brief.pop('target_basis',None)
+        brief.pop('input_basis',None)
+    if brief.get('state')!='ready': brief.pop('target_basis',None);brief.pop('input_basis',None);return
+    selected=next((t for t in targets if t['id']==brief.get('target_id')),None)
+    if not selected or not selected.get('append_basis') or not selected.get('targets_complete') or selected.get('goal_truncated') or not selected.get('append_eligible'):
+        uncertain();return
+    texts=[];publishers=set()
+    for entry in evidence:
+        ref=entry.get('ref','')
+        if not ref.startswith('message:') or entry.get('kind','text')!='text' or entry.get('unread') or entry.get('content_incomplete') or not entry.get('text','').strip():
+            uncertain();return
+        source=ref[8:].rsplit(':',1)[0]
+        publishers.add((source,entry.get('publisher') or _publisher(source,entry)));texts.append(entry['text'])
+    if publishers!={(selected.get('source_id'),selected.get('publisher'))}:
+        uncertain();return
+    text='\n'.join(texts)
+    # "Only supplement reading/textbook homework" identifies an activity only
+    # if exactly one saved task by this source/publisher has that activity.
+    reading=bool(re.search(r'(?:只|仅)?补(?:充)?(?:[^。：:\n]{0,30})朗读',text))
+    textbook=bool(re.search(r'(?:只|仅)?补(?:充)?(?:[^。：:\n]{0,30})教材(?:作业)?',text))
+    if reading==textbook: uncertain();return
+    specific=set(re.findall(r'unit\s*\d+|第[一二三四五六七八九十0-9]+课|《[^》]{1,40}》',text.lower()))
+    def matches(task):
+        content=(task['title']+' '+task['goal']).lower()
+        activity=bool(re.search(r'朗读|跟读|读[一二两三四五六七八九十0-9]+(?:遍|次)',content)) if reading else '教材' in content
+        return activity and all(obj in content for obj in specific)
+    peers=[t for t in targets if (t.get('source_id'),t.get('publisher')) in publishers and matches(t)]
+    if len(peers)!=1 or peers[0]['id']!=selected['id']:
+        uncertain();return
+    old=re.sub(r'不(?:要求|需要|用|必|要|再)?[^。；;，,\n]*','',selected['goal'])
+    # Negative limits on an otherwise new step are retained (e.g. no recitation,
+    # no copying example answers); removal of an existing activity is a change.
+    removed=re.findall(r'不(?:要求|需要|用|必|要|再)?[^。；;，,\n]{0,12}?(背诵|朗读|读|做|写|抄|提交|上传|交|打印)',text)
+    if (re.search(r'更正|取消|撤回|改为|改成|改期|延期|改做|选做|任选|自愿|必做',text)
+            or any(word in old for word in removed) or brief.get('purpose') not in ('learning','admin')):
+        uncertain();return
+    brief['target_basis']=copy.deepcopy(selected['append_basis'])
+    brief['input_basis']=_school_message_basis(evidence)
+
+
+def _school_append_request(row, brief):
+    basis=brief['target_basis']
+    return dict(action='school_change',id=row['id'],target_id=brief['target_id'],change='append',title=basis['title'],
+        body=brief['goal'],due=basis['due'],expected_updated=row['updated'],target_version=basis['version'],target_updated=basis['updated'])
+
+
+def apply_school_change(app, store, obj, *, school_auto=False):
+    """Append or parent-confirmed replacement atomically links the same canonical task."""
     fields={'action','id','target_id','change','title','body','due','expected_updated','target_version','target_updated'}
     if set(obj)!=fields or obj.get('action')!='school_change': raise AgentError('学校变更请求格式不正确')
     ident=_text(obj,'id',80,True);target_id=_text(obj,'target_id',80,True);change=_text(obj,'change',10,True)
     title=_text(obj,'title',200,True);body=_text(obj,'body',4000,True);due=_text(obj,'due',10)
     expected=_text(obj,'expected_updated',100,True);target_updated=_text(obj,'target_updated',100)
     from family_agenda import date
-    if change not in ('update','cancel') or (due and not date(due)): raise AgentError('请选择变更方式并核对日期')
+    if change not in ('append','update','cancel') or (due and not date(due)): raise AgentError('请选择变更方式并核对日期')
     if type(obj['target_version']) is not int or obj['target_version']<0: raise AgentError('事项版本无法核对')
     digest=_hash(obj)
     with store._db() as c:
@@ -1433,7 +1523,9 @@ def apply_school_change(app, store, obj):
         plan=json.loads(row['plan']);receipt=plan.get('school_change_receipt')
         if receipt:
             if receipt['hash']!=digest: raise AgentError('这条变更已处理，请读取最新记录',409)
-            return dict(ok=True,state='accepted',task_id=receipt['task_id'],school_changed=True,replayed=True,completion_needs_review=receipt.get('completion_needs_review',False))
+            result=dict(ok=True,state='accepted',task_id=receipt['task_id'],school_changed=True,replayed=True,completion_needs_review=receipt.get('completion_needs_review',False))
+            if receipt.get('change')=='append': result['deduplicated']=receipt.get('deduplicated',False)
+            return result
         if row['state']!='pending' or row['updated']!=expected: raise AgentError('通知已在别处处理，请读取最新记录',409)
         _check_school_page(store,c,row)
         owner=next((p['name'] for p in app.profiles(c) if p['id']==row['child_id']),None)
@@ -1442,6 +1534,22 @@ def apply_school_change(app, store, obj):
         update=c.execute('SELECT * FROM task_updates WHERE id=?',(target_id,)).fetchone()
         if task['focus']['version']!=obj['target_version'] or (update['updated'] if update else '')!=target_updated:
             raise AgentError('原事项已有新的安排或反馈，请读取最新记录后核对',409)
+        if school_auto:
+            brief=plan.get('school_task',{});basis=brief.get('target_basis')
+            if change!='append' or brief.get('change')!='append' or brief.get('state')!='ready' or brief.get('policy')!=SCHOOL_TASK_POLICY or not basis or _school_append_request(row,brief)!=obj:
+                raise AgentError('补充要求或原事项已变化，原要求保留待核对',409)
+            if not _school_active(store,c,row): raise AgentError('Agent或原消息来源已停用，补充未自动保存',409,'school_source_paused')
+            current=next((t for t in school_targets(app,store,row['child_id'],connection=c) if t['id']==target_id),None)
+            if current is None or current['append_basis']!=basis or not current['append_eligible']:
+                raise AgentError('原事项已有安排、反馈或来源变化，补充未自动保存',409)
+            original,_=_school_material(store,c,row);checked=copy.deepcopy(brief)
+            _school_append_brief(checked,original,school_targets(app,store,row['child_id'],connection=c))
+            from family_agenda import sent_day
+            if (checked.get('state')!='ready' or checked.get('target_basis')!=basis or checked.get('input_basis')!=brief.get('input_basis') or update
+                    or app.task_status(task,None) in app.TASK_CLOSED
+                    or any(sent_day(e.get('time'))!=_now().date().isoformat() for e in original)
+                    or row['due'] and row['due']!=task['agenda']['due_on']):
+                raise AgentError('补充的当前原文、日期或唯一归属无法核对，原要求保留',409)
         evidence=json.loads(row['evidence']);links=[]
         if not evidence: raise AgentError('变更缺少原通知')
         for entry in evidence:
@@ -1456,26 +1564,38 @@ def apply_school_change(app, store, obj):
             if not (pdf_read or material_read) and (message['unread'] or message['kind']!='text' or not message['text'].strip()): raise AgentError('请先读清变更原件，不能据占位内容修改原事项')
             links.append(dict(source_id=source,message_id=message_id))
         status=app.task_status(task,update['status'] if update else None)
-        if change=='update':
+        original_plan=json.loads(canonical['plan'])
+        duplicate=change=='append' and any(x.get('change')=='append' and x.get('goal')==body for x in original_plan.get('school_changes',[]))
+        if change in ('update','append'):
             focus=task['focus'];agenda=task['agenda']
-            family_task_focus.save(app,dict(id=target_id,version=focus['version'],request_key='school-change-'+_hash(ident)[:32],
-                **{k:focus[k] for k in ('mode','next_action','waiting_for','review_on','scheduled_on','box')},
-                category=agenda['category'],published_on=agenda['published_on'],due_on=due,title=title,goal=body),connection=c,allow_closed=True)
+            if change=='append':
+                title=task['title'];due=agenda['due_on']
+                merged=task['action']+'\n补充要求：'+body
+                if len(merged)>4000: raise AgentError('原要求与补充过长，未截断或覆盖原要求，请家长核对',409)
+            else: merged=body
+            if not duplicate:
+                family_task_focus.save(app,dict(id=target_id,version=focus['version'],request_key='school-change-'+_hash(ident)[:32],
+                    **{k:focus[k] for k in ('mode','next_action','waiting_for','review_on','scheduled_on','box')},
+                    category=agenda['category'],published_on=agenda['published_on'],due_on=due,title=title,goal=merged),connection=c,allow_closed=True)
+            else: merged=task['action']
         elif status not in app.TASK_CLOSED:
             app.save_task(dict(id=target_id,status='不适用',note=SCHOOL_CANCEL_NOTE,expected_updated=target_updated),connection=c)
-        original_plan=json.loads(canonical['plan'])
         if original_plan.get('school_learning'):
             known=original_plan.setdefault('school_messages',[])
             known.extend(x for x in links if x not in known)
         now=_now().isoformat()
-        original_plan.setdefault('school_changes',[]).append(dict(item_id=ident,change=change,confirmed_at=now,title=title,goal=body,due=due))
+        event=dict(item_id=ident,change=change,confirmed_at=now,title=title,goal=body,due=due)
+        if change=='append': event.update(applied_title=title,applied_goal=merged)
+        original_plan.setdefault('school_changes',[]).append(event)
         c.execute('UPDATE agent_items SET plan=?,updated=? WHERE id=?',(_json(original_plan),now,canonical['id']))
         source=task['source']+'\n\n'+'\n\n'.join(e['ref']+'\n'+e['text'] for e in evidence)
         c.execute('UPDATE manual_tasks SET source=? WHERE id=?',(source,target_id))
-        plan.update(school_change_of=canonical['id'],school_change_receipt=dict(hash=digest,task_id=target_id,change=change,completion_needs_review=status=='已完成' and change=='update'))
+        plan.update(school_change_of=canonical['id'],school_change_receipt=dict(hash=digest,task_id=target_id,change=change,deduplicated=duplicate,completion_needs_review=status=='已完成' and change in ('update','append')))
         for key in ('school_learning','school_goal_id'): plan.pop(key,None)
         c.execute("UPDATE agent_items SET state='accepted',task_id=?,plan=?,updated=? WHERE id=?",(target_id,_json(plan),now,ident))
-    return dict(ok=True,state='accepted',task_id=target_id,school_changed=True,replayed=False,completion_needs_review=status=='已完成' and change=='update')
+    result=dict(ok=True,state='accepted',task_id=target_id,school_changed=True,replayed=False,completion_needs_review=status=='已完成' and change in ('update','append'))
+    if change=='append': result['deduplicated']=duplicate
+    return result
 
 
 def _school_submission_step(brief, activity):
@@ -1720,7 +1840,10 @@ def _school_pdf(store, c, row):
         source_id,message_id=quote['ref'][8:].rsplit(':',1)
         source,message=store._message_context(c,dict(child_id=row['child_id'],source_id=source_id,message_id=message_id))
         material=family_pdf_material.complete_evidence(store,c,source,message)
-        if material: found.append(dict(material,ref=quote['ref']))
+        if material:
+            documents=material.get('documents')
+            if documents is None: found.append(dict(material,ref=quote['ref']))
+            else: found.extend(dict(doc,ref=quote['ref'],collection_fingerprint=material['fingerprint']) for doc in documents)
     return found
 
 
@@ -1889,11 +2012,14 @@ def _refresh_school(app, store, now, budget):
                 c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=?",(_json(plan),row['id'],row['updated']))
         if brief.get('state')=='ready':
             try:
-                result=store.act(dict(id=row['id'],action='accept',expected_updated=row['updated']),school_auto=True)
-                created+=not result.get('deduplicated',False)
+                if brief.get('change')=='append':
+                    apply_school_change(app,store,_school_append_request(row,brief),school_auto=True)
+                else:
+                    result=store.act(dict(id=row['id'],action='accept',expected_updated=row['updated']),school_auto=True)
+                    created+=not result.get('deduplicated',False)
             except (AgentError,sqlite3.IntegrityError) as error:
-                if isinstance(error,AgentError) and error.status==409: continue
-                expected=_json(plan);brief.update(state='review',reason='自动收集未成功，请核对事项后再加入。');plan['school_task']=brief
+                if isinstance(error,AgentError) and error.status==409 and (brief.get('change')!='append' or error.code=='school_source_paused'): continue
+                expected=_json(plan);brief.update(state='review',reason=str(error) if brief.get('change')=='append' else '自动收集未成功，请核对事项后再加入。');plan['school_task']=brief
                 with store._db() as c:
                     changed=c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=? AND plan=?",(_json(plan),row['id'],row['updated'],expected)).rowcount
                 failed+=changed
