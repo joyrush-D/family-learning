@@ -8,7 +8,7 @@ async function fits(page){
  assert.equal(await page.locator('[data-school-record-agent]:visible,[data-school-record-task]:visible,#recordForm button:visible').evaluateAll(items=>items.some(b=>b.getBoundingClientRect().height<40)),false,'school learning actions are usable touch targets');
 }
 async function clickRecordFromCard(page,button){
- const details=page.locator('.task-more').filter({has:button});
+ const details=button.locator('xpath=ancestor::details[1]');
  if(await details.count()&&await details.getAttribute('open')===null)await details.locator(':scope > summary').click();
  await button.click();
 }
