@@ -1767,6 +1767,8 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             if (uncertain_due and brief.get('change')=='append' and brief['state']=='ready'
                     and brief.get('target_basis') and not relative
                     and date(proposed_due) and proposed_due==brief['target_basis']['due']
+                    and not any(re.search(r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}\s*日|今天|今日|今晚|明天|明日|后天|(?:本|这|下)(?:个)?(?:周|星期|礼拜)',text)
+                                for text in [e['text'] for e in cited_evidence]+[brief['goal'],brief.get('submission','')])
                     and not any(deadlines(text,sent_day(e.get('time',''))) for e in cited_evidence
                                 for text in (brief['goal'],brief.get('submission','')))):
                 # The model repeated the verified target's date, not a new
