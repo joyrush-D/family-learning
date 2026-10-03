@@ -1571,6 +1571,8 @@ def _school_append_brief(brief, evidence, targets):
     if publishers!={(selected.get('source_id'),selected.get('publisher'))}:
         uncertain();return
     text='\n'.join(texts)
+    if re.search(r'(?:^|[。；;\n])\s*(?:另(?:一)?项|第二项|另(?:一)?份(?:作业|试卷)|另外(?:一项)?(?:作业|任务))\s*[:：]?',text):
+        uncertain('补充原文还包含另一项独立要求，尚不能只追加到原事项；完整原文保留待整理。');return
     # A date expression that the deadline parser cannot resolve is still a
     # possible timing change. Shared routing/refining/save guards cover both
     # an empty model date and one copied from the target.

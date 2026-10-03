@@ -1418,6 +1418,20 @@ class AgentTests(unittest.TestCase):
         unread=agent._school_brief(value,incomplete=True,evidence=[dict(ref='message:synthetic-group:31',text='交数学本。',kind='text',unread=True)])
         self.assertEqual(unread['state'],'review');self.assertIn('交至数学本',unread.get('submission',''))
 
+    def test_mixed_supplement_does_not_swallow_a_separate_assignment(self):
+        original,task_id=self._school_append_original()
+        text='只补朗读：录音上传后确认上传成功。另项：完成练习卷第1题。'
+        for index,change,target in ((12,'new',''),(13,'append',task_id)):
+            row=self._school_append_candidate(index,text,change=change,target=target)
+            brief=json.loads(row['plan'])['school_task']
+            self.assertEqual(brief['state'],'review');self.assertNotIn('target_basis',brief)
+            self.assertIn('完成练习卷第1题',row['body'])
+        with patch.object(agent.family_llm,'_chat_json') as model:
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,0)['created'],0);model.assert_not_called()
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+            self.assertEqual(next(t for t in self.app.tasks(c) if t['id']==task_id)['action'],original['body'])
+
     def test_school_cross_batch_append_keeps_task_arrangements_sources_and_original_replay(self):
         from family_goals import Store as Goals
         original,task_id=self._school_append_original()
