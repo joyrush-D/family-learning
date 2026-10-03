@@ -99,10 +99,20 @@ class SettingsTests(unittest.TestCase):
                 class Opener:
                     def open(self,request,timeout):
                         captured.append((request.full_url,request.get_header('Authorization'),json.loads(request.data)))
-                        return io.BytesIO(json.dumps({'choices':[{'finish_reason':'stop','message':{'content':'{"proposals":[]}'}}]}).encode())
+                        context=json.loads(captured[-1][2]['messages'][-1]['content'])
+                        proposal=dict(title_quote='虚构阅读通知',focus='school',due='',
+                            evidence=[dict(ref=context['evidence'][0]['ref'])],learning_subject='',learning_goal_id='',
+                            task_title='虚构阅读通知',task_goal='阅读通知，没有具体完成要求。',task_advice='',
+                            task_state='reference',task_reason='仅供阅读的通知，没有具体动作。',
+                            task_change='new',task_target_id='',task_purpose='unknown',task_submission='')
+                        return io.BytesIO(json.dumps({'choices':[{'finish_reason':'stop','message':{'content':json.dumps(dict(proposals=[proposal]))}}]}).encode())
                 loaded=family_review.load_app(root,data)
                 with patch.object(family_llm,'build_opener',return_value=Opener()):
                     self.assertEqual(family_agent.run_once(loaded)['processed'],1)
+                with loaded.connect() as c:
+                    self.assertEqual(c.execute('SELECT processed FROM agent_messages').fetchone()[0],1)
+                    self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],0)
+                    self.assertEqual(json.loads(c.execute('SELECT plan FROM agent_items').fetchone()[0])['school_task']['state'],'reference')
                 usage=store.snapshot()['usage']
                 self.assertEqual((usage['calls'],usage['returned'],usage['unknown_usage']),(1,1,1))
                 self.assertIsNone(usage['total_tokens'])
