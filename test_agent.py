@@ -1428,7 +1428,7 @@ class AgentTests(unittest.TestCase):
     def test_school_append_late_feedback_completed_and_explicit_parent_append_preserve_records(self):
         original,task_id=self._school_append_original()
         row=self._school_append_candidate(12,'只补朗读：录音上传后确认上传成功。',change='append',target=task_id)
-        feedback=self.app.save_task_feedback(dict(task_id=task_id,child='child-1',day='2026-02-10',note='虚构原作答：正在核对。',request_key='synthetic-append-feedback'))
+        feedback=self.app.save_task_feedback(dict(task_id=task_id,child='示例甲',day='2026-02-10',note='虚构原作答：正在核对。',request_key='synthetic-append-feedback'))
         with self.assertRaises(agent.AgentError): self._school_append_auto(row)
         self.app.save_task(dict(id=task_id,status='已完成',note='虚构家长此前已核对完成。'))
         reviewed=self._school_append_candidate(13,'只补朗读：新增上传成功确认步骤。',change='append',target=task_id)
@@ -1481,6 +1481,67 @@ class AgentTests(unittest.TestCase):
             canonical=c.execute('SELECT body,evidence FROM agent_items WHERE id=?',(original['id'],)).fetchone()
             self.assertEqual((canonical['body'],canonical['evidence']),(original['body'],original['evidence']))
             self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+
+    def test_school_append_first_parent_approval_edits_requirements_stays_review_without_writes(self):
+        original=self._school_append_candidate(11,'Unit 3课文朗读两遍，明天完成。',due='2026-02-11')
+        approved='Unit 3课文朗读两遍，不录音、不上传。'
+        task_id=self.store.act(dict(id=original['id'],action='accept',body=approved))['task_id']
+        with self.app.connect() as c:
+            before=next(t for t in self.app.tasks(c) if t['id']==task_id)
+            self.assertEqual((before['focus']['version'],before['focus']['goal']),(0,''))
+            self.assertEqual(before['action'],approved)
+            canonical=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(original['id'],)).fetchone())
+        added=self._school_append_candidate(12,'只补朗读：录音上传后确认上传成功。',change='append',target=task_id)
+        with patch.object(agent.family_llm,'_chat_json') as model,patch.object(agent,'_now',return_value=self.now):
+            result=agent._refresh_school(self.app,self.store,self.now,0);model.assert_not_called()
+        self.assertEqual(result['created'],0)
+        with self.app.connect() as c:
+            after=next(t for t in self.app.tasks(c) if t['id']==task_id)
+            self.assertEqual(after['action'],approved,'首次批准的手改要求不能因focus仍为0而被自动追加反向要求')
+            row=c.execute('SELECT state,task_id,plan FROM agent_items WHERE id=?',(added['id'],)).fetchone()
+            self.assertEqual((row['state'],row['task_id']),('pending',''))
+            self.assertEqual(json.loads(row['plan'])['school_task']['state'],'review')
+            self.assertEqual(dict(c.execute('SELECT * FROM agent_items WHERE id=?',(original['id'],)).fetchone()),canonical)
+            self.assertEqual(after['source'],before['source'])
+            self.assertEqual(after['focus'],before['focus'])
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
+
+    def test_school_append_rechecks_accepted_supplement_corrected_or_recalled_before_next_append(self):
+        for index,kind,changes in ((11,'corrected',dict(text='更正朗读补充：不再要求录音上传成功确认。')),
+                                    (21,'recalled',dict(text='[已撤回，正文未读取]',kind='recalled',unread=True))):
+            with self.subTest(kind=kind):
+                publisher='synthetic-history-'+kind
+                original,task_id=self._school_append_original(index,title='英语：虚构'+kind+'场景朗读',publisher=publisher)
+                accepted=self._school_append_candidate(index+1,'只补朗读：录音上传后确认上传成功。',change='append',target=task_id,publisher=publisher)
+                self._school_append_auto(accepted)
+                with self.app.connect() as c:
+                    before=next(t for t in self.app.tasks(c) if t['id']==task_id)
+                    canonical=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(original['id'],)).fetchone())
+                    receipt=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(accepted['id'],)).fetchone())
+                    self.assertEqual((receipt['state'],receipt['task_id']),('accepted',task_id))
+                    self.assertEqual(json.loads(receipt['plan'])['school_change_of'],original['id'])
+                    message_id=str(index+1)
+                    message=json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',(self.source['id'],message_id)).fetchone()[0])
+                    c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',(json.dumps(dict(message,**changes)),self.source['id'],message_id))
+                    task_count=c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0]
+                pending=self._school_append_candidate(index+2,'只补朗读：确认上传后再检查音量清楚。',change='append',target=task_id,publisher=publisher)
+                with patch.object(agent.family_llm,'_chat_json') as model,patch.object(agent,'_now',return_value=self.now):
+                    result=agent._refresh_school(self.app,self.store,self.now,0);model.assert_not_called()
+                self.assertEqual(result['created'],0)
+                with self.app.connect() as c:
+                    after=next(t for t in self.app.tasks(c) if t['id']==task_id)
+                    self.assertEqual(after['action'],before['action'],'已接受的补充原消息失效后不能再向其要求追加')
+                    row=c.execute('SELECT state,task_id,plan FROM agent_items WHERE id=?',(pending['id'],)).fetchone()
+                    self.assertEqual((row['state'],row['task_id']),('pending',''))
+                    self.assertEqual(json.loads(row['plan'])['school_task']['state'],'review')
+                    self.assertEqual(dict(c.execute('SELECT * FROM agent_items WHERE id=?',(original['id'],)).fetchone()),canonical)
+                    self.assertEqual(dict(c.execute('SELECT * FROM agent_items WHERE id=?',(accepted['id'],)).fetchone()),receipt)
+                    self.assertEqual(after['source'],before['source']);self.assertEqual(after['focus'],before['focus'])
+                    self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],task_count)
+                    self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+                    self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
 
     def test_school_selection_discards_model_copy_of_existing_task(self):
         evidence=[dict(ref='message:synthetic-group:11',text='已签署',time=self.now.isoformat(),content_incomplete=False)]

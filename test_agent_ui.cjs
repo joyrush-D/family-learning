@@ -121,7 +121,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-agent-ui-') as tmp:
    if kind=='append-before':
     with store._db() as c:ident=c.execute('SELECT id FROM agent_items WHERE job_id=?',(key,)).fetchone()[0]
     target=store.act(dict(id=ident,action='accept'))['task_id']
-    app.save_task_feedback(dict(task_id=target,child='child-1',day=today,note='虚构原朗读反馈：已读两遍并上传录音。',request_key='synthetic-append-ui-feedback-'+str(width)))
+    app.save_task_feedback(dict(task_id=target,child='示例星星',day=today,note='虚构原朗读反馈：已读两遍并上传录音。',request_key='synthetic-append-ui-feedback-'+str(width)))
     app.save_task(dict(id=target,status='已完成',note='虚构家长此前已核对原朗读完成。'))
  for width in (360,1440):
   exam=app.new_task(dict(child='示例星星',title='虚构英语单元测验 '+str(width),due=today,source='message:copy-a:before'+str(width)))
