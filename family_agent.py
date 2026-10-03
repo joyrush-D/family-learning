@@ -119,6 +119,7 @@ def _task_prompt(pages, pdf=None, material=None):
 _URL = re.compile(r'(?:https?://|www\.)[^\s一-鿿，。；！？、（）【】《》]+|(?<![a-z0-9.@-])(?:[a-z0-9-]+\.)+[a-z]{2,}/[^\s一-鿿，。；！？、（）【】《》]*', re.IGNORECASE)
 _LINK_POINTER = re.compile(r'各位|大家|家长们?|同学们?|老师|[您你]好|登录|登陆|点击|点开|打开|查看|复制|浏览器|链接|网址|地址|详情|详见|如下|下方|下面|这个|看一?下|看看|[请戳此见后到在的]')
 _LEARNING_ACTIVITY = re.compile(r'朗读|背诵|抄写|默写|听写|跟读|练习|作业|订正|预习|复习|阅读|口算|习作|作文|单词|课文')
+_LEARNING_MATERIAL = re.compile(r'(?:带(?:来|上|好)?|携带|准备|打印|领取)(?:[一二两三四五六七八九十\d]+)?(?:份|本|张|套)?(?:语文|数学|英语|科学|历史|地理|物理|化学|生物)?(?:阅读材料|复习资料|练习本|作业本|作业单|练习册|听写本|单词卡|练习卷)')
 
 
 def _links(evidence):
@@ -293,8 +294,9 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
         state='review';brief['reason']='原件或具体要求尚未读全，请先核对。'
     if purpose=='optional' and state=='ready':
         state='review';brief['reason']='自愿参加或参考资料，不自动加入必做事项；是否参加由家长决定。'
-    if purpose=='admin' and state!='reference' and _LEARNING_ACTIVITY.search(_URL.sub('',' '.join([e.get('text','') for e in evidence]+[p['text'] for p in (pages or {}).get('model_pages',[])]))):
+    if purpose=='admin' and state!='reference' and _LEARNING_ACTIVITY.search(_LEARNING_MATERIAL.sub('',_URL.sub('',' '.join([e.get('text','') for e in evidence]+[p['text'] for p in (pages or {}).get('model_pages',[])])))):
         # A check-in label must not swallow homework: the parent sees the whole notice instead.
+        # Carrying or printing a named material is not itself the learning action.
         state='review';brief['reason']='原文同时提到学习活动和打卡/提交，请核对是否含作业；暂未关联学习目标。'
     if purpose!='learning' or not brief['goal']: submission=''
     if submission and submission not in brief['goal']:
@@ -1456,6 +1458,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         fields = {'title_quote', 'focus', 'due', 'evidence'} | ({'learning_subject', 'learning_goal_id'} if routing else set())
         expected = set(_school_fields['required']) if routing else fields
         if not isinstance(proposal, dict) or set(proposal) != expected: raise AgentError('模型筛选字段不正确')
+        if routing and proposal['task_purpose'] not in PURPOSES: raise AgentError('学校事项用途无法核对')
         raw_title = proposal['title_quote']
         title = raw_title.strip() if isinstance(raw_title, str) and len(raw_title) <= 120 and not any(ord(c) < 32 and c not in '\n\t' for c in raw_title) else ''
         due = _text(proposal, 'due', 10)
@@ -1709,6 +1712,7 @@ def _refresh_school(app, store, now, budget):
                     result=family_llm._chat_json([{'role':'system','content':_task_prompt(page_evidence,pdf_evidence,material)},{'role':'user','content':_json(context)}],
                         schema,'family_school_task',timeout=45,data_path=store.data)
                     if not isinstance(result,dict) or set(result) != set(TASK_BRIEF_SCHEMA['required']): raise AgentError('学校事项结构无法核对')
+                    if result['purpose'] not in PURPOSES: raise AgentError('学校事项用途无法核对')
                     brief=_school_brief(result,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in evidence),evidence=evidence,school_tasks=targets,pages=page_evidence,pdf=pdf_evidence,material=material)
                 if page_evidence: brief.setdefault('page_evidence',dict(fingerprint=page_key,read=page_evidence['read'],unread=page_evidence['unread'],omitted=page_evidence['omitted']))['candidate']=candidate
                 if pdf_evidence: brief.setdefault('pdf_evidence',dict(fingerprint=pdf_key,documents=pdf_evidence['documents']))['candidate']=candidate
