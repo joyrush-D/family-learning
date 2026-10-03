@@ -1434,7 +1434,7 @@ class Store:
                 raise AgentError('学校消息或来源已变化，本轮结果未保存；原消息保留等待按当前来源重新整理。',409,'school_selection_stale')
             if history_context:
                 source,values,basis,*origin=history_context
-                if (origin and origin[0] and not _empty_history_current(c,origin[0]) or
+                if (origin and origin[0] and not _history_origin_current(c,origin[0],source['child_id']) or
                     not self._school_selection_current(c,key,fingerprint,source,values,processed=1) or
                     _history_context(self,c,source,values,key)[0]!=basis):
                     raise AgentError('原学校记录或家长决定已变化，补漏结果未保存；原记录保留。',409,'school_history_stale')
@@ -1834,71 +1834,90 @@ def _history_context(store,c,source,values,key,*,exclude_id=''):
     return _hash([rows,tasks,state,materials,origin]),known
 
 
+def _history_batch_matches(store,c,sources,eligible):
+    """Recover exact old ordered batches, never approximate today's batching."""
+    matches={}
+    for source in sources.values():
+        saved=c.execute('SELECT * FROM agent_sources WHERE id=?',(source['id'],)).fetchone()
+        if saved is None: continue
+        try: store._binding(source,saved)
+        except AgentError: continue
+        messages=list(reversed(c.execute('SELECT id,payload,processed FROM agent_messages WHERE source_id=? ORDER BY rowid DESC LIMIT 500',(source['id'],)).fetchall()))
+        for start in range(len(messages)):
+            values=[];size=0
+            for row in messages[start:start+6]:
+                value=json.loads(row['payload'])
+                if row['processed']!=1 or value['kind']!='text' or value['unread']: break
+                values.append(value);size+=len(_json(value))
+                if size>14000: break
+                old_key='messages:'+_hash([source['id'],[v['id'] for v in values]])[:40]
+                if old_key not in eligible: continue
+                fingerprint,policies=eligible[old_key]
+                if any(fingerprint==_hash(dict(school_learning_policy=policy,messages=values)) for policy in policies):
+                    matches[old_key]=(source,list(values))
+    return matches
+
+
 def _history_scopes(store,config):
-    """Reconstruct only referenced, bounded legacy groups; no messages/cursors are reset."""
+    """Prefer exact original batches; retain explicitly limited cited-only fallback."""
     sources={s['id']:s for s in config['sources'] if s['enabled']};groups={}
     with store._db() as c:
         for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state!='superseded' AND job_id LIKE 'messages:%' ORDER BY created DESC,id"):
             groups.setdefault(r['job_id'],[]).append(dict(r))
+        jobs={r['id']:dict(r) for r in c.execute("SELECT * FROM agent_jobs WHERE id LIKE 'messages:%' AND done=1")}
+        legacy={key:rows for key,rows in groups.items() if key in jobs and
+                not all(json.loads(r['plan']).get('school_selection_revision')==SCHOOL_SELECTION_REVISION for r in rows)}
+        # An empty policy8 receipt cannot be dated to a release. Policy7 predates
+        # input coverage; legacy items carry their own immutable revision proof.
+        empty={key for key in jobs if not c.execute('SELECT 1 FROM agent_items WHERE job_id=? LIMIT 1',(key,)).fetchone()}
+        eligible={key:(jobs[key]['fingerprint'],(7,8)) for key in legacy}
+        eligible.update({key:(jobs[key]['fingerprint'],(7,)) for key in empty})
+        matches=_history_batch_matches(store,c,sources,eligible) if eligible else {}
         result=[]
-        for old_key,rows in groups.items():
-            if all(json.loads(r['plan']).get('school_selection_revision')==SCHOOL_SELECTION_REVISION for r in rows): continue
-            original=c.execute('SELECT done FROM agent_jobs WHERE id=?',(old_key,)).fetchone()
-            if original is None or not original['done']: continue
+        for old_key,rows in legacy.items():
             refs={e['ref'] for r in rows for e in json.loads(r['evidence'])}
             if not refs or any(not ref.startswith('message:') for ref in refs): continue
             ids=[ref[8:].rsplit(':',1) for ref in sorted(refs)];source_ids={v[0] for v in ids}
             if len(source_ids)!=1: continue
             source=sources.get(next(iter(source_ids)))
             if source is None or any(r['child_id']!=source['child_id'] for r in rows): continue
-            key='school-history:'+_hash([SCHOOL_SELECTION_REVISION,old_key,source['child_id'],sorted(refs)])[:40]
-            done=c.execute('SELECT done,attempts,next_try FROM agent_jobs WHERE id=?',(key,)).fetchone()
-            if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS): continue
-            values=[]
-            for _,ident in ids:
-                m=c.execute('SELECT payload,processed FROM agent_messages WHERE source_id=? AND id=?',(source['id'],ident)).fetchone()
-                if m is None or m['processed']!=1: break
-                values.append(json.loads(m['payload']))
-            if len(values)!=len(ids): continue
-            # v1 compares complete literal text actions. An image/file placeholder or unread
-            # message cannot be reinterpreted without its material contract; keep that scope open.
+            if old_key in matches and matches[old_key][0]['id']==source['id']:
+                _,values=matches[old_key]
+                refs={'message:'+source['id']+':'+v['id'] for v in values}
+            else:
+                values=[]
+                for _,ident in ids:
+                    m=c.execute('SELECT payload,processed FROM agent_messages WHERE source_id=? AND id=?',(source['id'],ident)).fetchone()
+                    if m is None or m['processed']!=1: break
+                    values.append(json.loads(m['payload']))
+                if len(values)!=len(ids): continue
             if any(v['kind']!='text' or v['unread'] for v in values): continue
-            # An oversized legacy scope remains open rather than being silently clipped and marked audited.
             if len(values)>6 or sum(len(_json(v)) for v in values)>14000: continue
-            result.append((source,values,key))
-        # Policy 7 predates required input coverage. An empty success has no
-        # citations; only an exact ordered-ID key AND full payload fingerprint
-        # can recover its original batch. Policy 8 empty results are ambiguous
-        # across releases, so they remain outside this compatibility path.
-        empty={r['id']:r['fingerprint'] for r in c.execute("SELECT j.id,j.fingerprint FROM agent_jobs j WHERE j.id LIKE 'messages:%' AND j.done=1 AND NOT EXISTS (SELECT 1 FROM agent_items i WHERE i.job_id=j.id)")}
-        if not empty: return result
-        for source in sources.values():
-            saved=c.execute('SELECT * FROM agent_sources WHERE id=?',(source['id'],)).fetchone()
-            if saved is None: continue
-            try: store._binding(source,saved)
-            except AgentError: continue
-            messages=list(reversed(c.execute('SELECT id,payload,processed FROM agent_messages WHERE source_id=? ORDER BY rowid DESC LIMIT 500',(source['id'],)).fetchall()))
-            for start in range(len(messages)):
-                values=[];refs=[]
-                for row in messages[start:start+6]:
-                    value=json.loads(row['payload'])
-                    if row['processed']!=1 or value['kind']!='text' or value['unread']: break
-                    values.append(value);refs.append('message:'+source['id']+':'+row['id'])
-                    if sum(len(_json(v)) for v in values)>14000: break
-                    old_key='messages:'+_hash([source['id'],[v['id'] for v in values]])[:40]
-                    if old_key not in empty or empty[old_key]!=_hash(dict(school_learning_policy=7,messages=values)): continue
-                    key='school-history:'+_hash([SCHOOL_SELECTION_REVISION,old_key,source['child_id'],sorted(refs)])[:40]
-                    done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone()
-                    if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS): continue
-                    result.append((source,list(values),key,(old_key,empty[old_key])))
+            # Check the full scope's receipt only after reconstructing it. Never
+            # fall back to a smaller scope to bypass full-scope done/retry limits.
+            key='school-history:'+_hash([SCHOOL_SELECTION_REVISION,old_key,source['child_id'],sorted(refs)])[:40]
+            done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone()
+            if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS): continue
+            result.append((source,values,key,(old_key,jobs[old_key]['fingerprint'],'legacy')))
+        for old_key in empty:
+            if old_key not in matches: continue
+            source,values=matches[old_key]
+            refs=['message:'+source['id']+':'+v['id'] for v in values]
+            key='school-history:'+_hash([SCHOOL_SELECTION_REVISION,old_key,source['child_id'],sorted(refs)])[:40]
+            done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone()
+            if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS): continue
+            result.append((source,values,key,(old_key,jobs[old_key]['fingerprint'],'empty')))
     return result
 
 
-def _empty_history_current(c,origin):
-    old_key,fingerprint=origin
+def _history_origin_current(c,origin,child_id):
+    old_key,fingerprint,mode=origin
     receipt=c.execute('SELECT done,fingerprint FROM agent_jobs WHERE id=?',(old_key,)).fetchone()
-    return bool(receipt and receipt['done'] and receipt['fingerprint']==fingerprint and
-                not c.execute('SELECT 1 FROM agent_items WHERE job_id=? LIMIT 1',(old_key,)).fetchone())
+    if not receipt or not receipt['done'] or receipt['fingerprint']!=fingerprint: return False
+    if mode=='empty':return not c.execute('SELECT 1 FROM agent_items WHERE job_id=? LIMIT 1',(old_key,)).fetchone()
+    rows=c.execute("SELECT child_id,plan FROM agent_items WHERE job_id=? AND kind='school' AND state!='superseded'",(old_key,)).fetchall()
+    return bool(rows and all(r['child_id']==child_id for r in rows) and
+                any(json.loads(r['plan']).get('school_selection_revision')!=SCHOOL_SELECTION_REVISION for r in rows))
 
 
 def _history_proposal(proposal,known,evidence):
@@ -1969,8 +1988,8 @@ def _recheck_school_history(app,store,now,budget,scopes):
         if not fp: continue
         try:
             with store._db() as c:
-                if origin and not _empty_history_current(c,origin):
-                    raise AgentError('旧空批次回执或原条目已变化，未调用补漏模型',409,'school_history_stale')
+                if origin and not _history_origin_current(c,origin,source['child_id']):
+                    raise AgentError('旧批次回执或原条目归属已变化，未调用补漏模型',409,'school_history_stale')
                 if not store._school_selection_current(c,key,fp,source,values,processed=1):
                     raise AgentError('原消息或来源已变化',409,'school_history_stale')
                 basis,known=_history_context(store,c,source,values,key)
