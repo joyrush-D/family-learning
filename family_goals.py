@@ -17,7 +17,7 @@ TASK_STATUS_NOTES = (agent.SCHOOL_CANCEL_NOTE, PLAN_ADJUSTMENT_NOTE, '家长通�
 SCHOOL_BASELINE = '由学校学习要求启动，尚无孩子实际作答或掌握证据。'
 
 
-def _school_execution_facts(proposal, tasks):
+def _school_execution_facts(proposal, tasks, originals=()):
     """Finite guards for observed action/count and deadline-boundary changes.
 
     The full semantic review remains necessary: these checks do not parse all
@@ -36,6 +36,16 @@ def _school_execution_facts(proposal, tasks):
         if '-' in value: return value
         month,date=re.match(r'(\d{1,2})月(\d{1,2})[日号]',value).groups()
         return due[:4]+'-'+month.zfill(2)+'-'+date.zfill(2)
+    def before_supported(task):
+        if any(day(v,task['due_on'])==task['due_on'] for v in date_before.findall(task['goal'])): return True
+        # An explicit current date without "before" wins over an older source.
+        if any(day(v,task['due_on'])==task['due_on'] for v in re.findall(r'\d{4}-\d{2}-\d{2}|\d{1,2}月\d{1,2}[日号]',task['goal'])): return False
+        own=[e for e in originals if e['ref'] in task.get('source_refs',[]) and not e.get('content_incomplete')]
+        for entry in own:
+            for clause in re.split(r'[。；;\n]',entry['text']):
+                if (any(day(v,task['due_on'])==task['due_on'] for v in date_before.findall(clause))
+                        and agent._school_dated_quote(clause,own,task['due_on'],dict(goal=task['goal']))): return True
+        return False
     for field in ('action','why_now'):
         for sentence in re.split(r'[。；;\n]',proposal[field]):
             # Additional method experiments are explicitly optional, never a
@@ -50,7 +60,7 @@ def _school_execution_facts(proposal, tasks):
                     raise agent.AgentError('朗读次数不能改成录音次数，录音数量须沿同一原事项核对')
             for mention in date_before.findall(sentence):
                 matched=[t for t in tasks if t['due_on'] and day(mention,t['due_on'])==t['due_on']]
-                if matched and any(not any(day(v,t['due_on'])==t['due_on'] for v in date_before.findall(t['goal'])) for t in matched):
+                if matched and any(not before_supported(t) for t in matched):
                     raise agent.AgentError('学校完成日期不能另改成此前完成，请沿原事项日期核对')
 
 
@@ -1019,7 +1029,7 @@ class Store:
         # Current requirements are read-only task projections, not generated assessment criteria.
         if ctx['school_tasks'] and re.search(r'(?:^|[\n\r。；;：:])\s*(?:本次(?:要求)?自查|(?:学校|老师|教师)(?:要求)?完成标准|(?:老师|教师)(?:明确)?要求)\s*[:：]',p['mastery_check']):
             raise agent.AgentError('学习表现记录不能另列学校完成标准，请沿原事项核对')
-        _school_execution_facts(p,ctx['school_tasks'])
+        _school_execution_facts(p,ctx['school_tasks'],ctx['school_messages'])
         background=ctx['evidence'][0]['ref'] if ctx['unknown_baseline'] else None
         if not isinstance(p['hypotheses'],list) or len(p['hypotheses'])>4:raise agent.AgentError('原因假设格式不正确')
         for h in p['hypotheses']:

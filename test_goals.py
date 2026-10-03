@@ -1157,13 +1157,13 @@ class GoalTests(unittest.TestCase):
         self.assertEqual(after['pending']['choice'],'调整');self.assertEqual(after['pending']['evidence'][0]['quote'],quote)
         self.assertEqual(after['current_plan'],confirmed);self.assertEqual(card(),shown);self.assertNotIn('桂花香',shown)
 
-    def school_scope_fixture(self):
+    def school_scope_fixture(self, *, before_dates=True):
         """Saved, entirely fictional tasks; this tests projection, not model extraction quality."""
         source=dict(id='synthetic-plan-scope',platform='wechat',child_id='child-1',name='虚构来源',cursor='0',enabled=True)
         (self.data/'agent.json').write_text(json.dumps(dict(enabled=True,sources=[source])))
         first=(self.now.date()+dt.timedelta(days=1)).isoformat();second=(self.now.date()+dt.timedelta(days=2)).isoformat()
         texts={
-            'M1':f'请分别完成两项：{first}前 Unit 3课文读两遍，朗读录音上传班级作业区；{second}前完成练习卷第1–4题，做完检查。',
+            'M1':f'请分别完成两项：{first}'+('前' if before_dates else '当日')+f' Unit 3课文读两遍，朗读录音上传班级作业区；{second}前完成练习卷第1–4题，做完检查。',
             'M4':'补充练习卷：第4题选做，第1–3题必做。',
             'M5':'练习卷题目和家长参考分别打印；家长参考仅供家长核对，不给孩子照抄。',
             'M8':'补充 Unit 3朗读：录音要读完整篇，不用背诵。'}
@@ -1253,7 +1253,7 @@ class GoalTests(unittest.TestCase):
         self.assertEqual(before['school_tasks'][0]['goal'],next(t for t in self.app.tasks() if t['id']==fixture['reading'])['action'])
 
     def test_school_execution_plan_cannot_transfer_reading_count_or_shorten_deadline(self):
-        fixture=self.school_scope_fixture();self.evaluate()
+        fixture=self.school_scope_fixture(before_dates=False);self.evaluate()
         with self.store.agent._db() as c:ctx=self.store._context(c,self.store._get(c,self.ident),self.now)
         before=self.goal()
         for field,text,error in (('action','按老师要求录制两遍朗读。','录音数量'),
@@ -1276,11 +1276,17 @@ class GoalTests(unittest.TestCase):
         proper=synthetic_plan(self.last_input)
         proper['proposal']['action']='Unit 3录制二遍。';proper['proposal']['why_now']='原要求是'+fixture['first']+'前交回。'
         self.assertEqual(self.store._proposal(proper,ctx,self.now)['action'],proper['proposal']['action'])
+        # The complete, uniquely scoped source clause still proves "before"
+        # when the collected task body did not repeat the date phrase.
+        task['goal']='Unit 3课文读两遍，朗读录音上传。'
+        proper=synthetic_plan(self.last_input);proper['proposal']['why_now']='原要求是'+fixture['first']+'前完成朗读。'
+        self.assertEqual(self.store._proposal(proper,ctx,self.now)['why_now'],proper['proposal']['why_now'])
         other=dict(task,id='synthetic-other-reading',title='英语：Unit 4',goal='Unit 4录音2遍。')
         task['goal']='Unit 3课文读两遍，朗读录音上传。';ctx['school_tasks'].append(other)
         borrowed=synthetic_plan(self.last_input);borrowed['proposal']['action']='Unit 3录制两遍。'
         with self.assertRaisesRegex(agent.AgentError,'录音数量'):self.store._proposal(borrowed,ctx,self.now)
         # Another task's earlier-deadline wording cannot justify shortening this one.
+        task['goal']+='在'+fixture['first']+'当日完成。'
         other['goal']='Unit 4录音2遍，'+fixture['second']+'前完成。';other['due_on']=fixture['second']
         borrowed=synthetic_plan(self.last_input);borrowed['proposal']['why_now']='需在'+fixture['first']+'前完成Unit 3。'
         with self.assertRaisesRegex(agent.AgentError,'完成日期'):self.store._proposal(borrowed,ctx,self.now)
