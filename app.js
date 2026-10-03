@@ -1742,14 +1742,21 @@ async function retrySchoolPdf(){
  finally{if(schoolOriginal===s){s.busy=false;s.pdfRetry=false;paintSchoolOriginal()}}
 }
 function verifySchoolOriginal(view,s){
- if(!view||Object.entries(s.identity).some(([k,v])=>view[k]!==v)||!view.message||!Array.isArray(view.attachments))throw Error('原件归属暂时无法核对，请重试。');
+ if(!view||Object.entries(s.identity).some(([k,v])=>view[k]!==v)||!view.message||String(view.message.id)!==s.identity.message_id||!Array.isArray(view.attachments))throw Error('原件归属暂时无法核对，请重试。');
  return view;
+}
+function schoolOriginalCurrent(s){
+ if(schoolOriginal!==s)return false;
+ if(!s.taskPreview)return true;
+ const ctx=taskFeedbackContext,owner=data.children.find(c=>c.id===s.identity.child_id);
+ const task=ctx&&data.tasks.find(t=>t.id===s.parentTaskID&&t.id===ctx.task_id&&t.child===ctx.child);
+ return Boolean($('#schoolOriginalDialog')?.open&&$('#taskDialog').open&&task&&owner?.name===ctx.child&&String(task.source||'').split('\n').includes(`message:${s.identity.source_id}:${s.identity.message_id}`));
 }
 async function readSchoolOriginal(){
  const s=schoolOriginal;if(!s||s.busy||schoolOriginalPending(s))return;s.busy=true;s.error='';paintSchoolOriginal();
- try{const r=await apiFetch('/api/agent/message?'+new URLSearchParams(s.identity),{signal:AbortSignal.timeout(12000)}),view=await r.json();if(schoolOriginal!==s)return;if(!r.ok)throw Error(view.error||'这条通知暂时无法读取');s.view=verifySchoolOriginal(view,s)}
- catch(error){if(schoolOriginal===s)s.error=error.name==='TimeoutError'?'读取超时，请重试。':error.message||'暂时无法读取，请重试。'}
- finally{if(schoolOriginal===s){s.busy=false;paintSchoolOriginal()}}
+ try{const r=await apiFetch('/api/agent/message?'+new URLSearchParams(s.identity),{signal:AbortSignal.timeout(12000)}),view=await r.json();if(!schoolOriginalCurrent(s))return;if(!r.ok)throw Error(view.error||'这条通知暂时无法读取');s.view=verifySchoolOriginal(view,s)}
+ catch(error){if(schoolOriginalCurrent(s))s.error=error.name==='TimeoutError'?'读取超时，请重试。':error.message||'暂时无法读取，请重试。'}
+ finally{if(schoolOriginalCurrent(s)){s.busy=false;paintSchoolOriginal()}}
 }
 // One click reads one address from the message itself; a lost reply is retried with the same request and served from the server cache.
 async function readSchoolPage(url){
@@ -1845,7 +1852,7 @@ function openSchoolOriginal(ref,childID){
    if(detach||attach){const id=detach||s.selected;if(!id){s.error='请先选择一份已保存的原件。';paintSchoolOriginal();return}s.pending={...s.identity,attachment_id:id,action:detach?'detach':'attach'};saveSchoolOriginal()}
   });
  }
- if(!schoolOriginalPending(schoolOriginal))schoolOriginal={identity,taskPreview:Boolean(taskPreview),token:data.token,view:null,busy:false,pending:null,selected:'',error:'',page:null,pdfNotice:''};
+ if(!schoolOriginalPending(schoolOriginal))schoolOriginal={identity,taskPreview:Boolean(taskPreview),parentTaskID:taskPreview?task.id:null,token:data.token,view:null,busy:false,pending:null,selected:'',error:'',page:null,pdfNotice:''};
  else schoolOriginal.error='请先核对上次未确认的保存；这里仍是上次选择的孩子和通知。';
  paintSchoolOriginal();dialog.showModal();if(!schoolOriginalPending(schoolOriginal))readSchoolOriginal();
 }

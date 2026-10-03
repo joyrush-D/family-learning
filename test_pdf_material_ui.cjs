@@ -263,6 +263,12 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   await page.unroute('**/api/agent/message?*');await resources.getByRole('button',{name:'重试读取资料'}).click();
   await resources.locator('[data-task-material-state]').waitFor();assert.match(await resources.innerText(),/AI 已整理[\s\S]*1 \/ 1 页/);assert.match(await resources.innerText(),/不是孩子作答或已完成/);
   assert.equal(await feedback.locator('#taskForm [name=note]').inputValue(),'这次草稿仍保留');
+  await resources.getByRole('button',{name:'查看老师原消息'}).click();await dialog.waitFor({state:'visible'});
+  await dialog.getByText(/AI 已整理/).waitFor();
+  assert.equal(await dialog.locator('[data-print-upload],[data-school-original-ref],[data-school-original-upload],[data-school-original-attach]').count(),0,'original preview cannot print or edit while feedback is open');
+  assert.equal(await dialog.locator('[data-task-material-state="ready"]').count(),1);
+  await dialog.locator('[data-school-original-close]').click();
+  assert.equal(await feedback.locator('#taskForm [name=note]').inputValue(),'这次草稿仍保留');
   assert.equal(await resources.locator('[data-school-pdf-retry],[data-school-page-read],[data-school-material-retry]').count(),0,'reading does not expose a processing action');
   assert.equal(await resources.locator('img[onerror]').count(),0);await fits(page);await proof(page,'task-prepared-resource-'+width);
   await feedback.locator('#taskForm [name=note]').fill('');await feedback.locator('[data-close=taskDialog]').click();
@@ -301,6 +307,24 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
   assert.equal(await feedback.locator('#taskForm [name=note]').inputValue(),'查看原消息时保留这份虚构反馈草稿');
   assert.equal(await feedback.evaluate(e=>e.open),true,'Escape closes only the original preview');
+  for(const bad of [{child_id:'child-2'},{message_id:'native-'+width}]){
+   const button=resources.getByRole('button',{name:'查看老师原消息'});
+   await button.evaluate((element,bad)=>{if(bad.child_id)element.dataset.schoolOriginalChild=bad.child_id;else element.dataset.schoolOriginalRef='message:qq:123456:'+bad.message_id},bad);
+   await button.click();assert.equal(await dialog.evaluate(e=>e.open),false,'unrelated child or ref cannot open over this task');
+   await button.evaluate((element,width)=>{element.dataset.schoolOriginalChild='child-1';element.dataset.schoolOriginalRef='message:qq:123456:native-text-'+width},width);
+  }
+  for(const failure of [false,true]){
+   let release,entered=false,calls=0;
+   await page.route('**/api/agent/message?*',async route=>{calls++;if(calls===1){entered=true;await new Promise(resolve=>release=resolve);await route.fulfill(failure?{status:503,json:{error:'过期虚构失败'}}:{json:{...textView,child_id:'child-2'}})}else await route.fulfill({json:textView})});
+   await resources.getByRole('button',{name:'查看老师原消息'}).click();await until(async()=>entered,'delayed original GET began');
+   await dialog.evaluate(e=>e.close());
+   await resources.getByRole('button',{name:'查看老师原消息'}).click();
+   await dialog.getByText(textView.message.text,{exact:true}).waitFor();
+   release();await delay(100);
+   assert.doesNotMatch(await dialog.innerText(),/过期虚构失败|归属暂时无法核对/,'old success or failure cannot change reopened source');
+   assert.equal(await feedback.locator('#taskForm [name=note]').inputValue(),'查看原消息时保留这份虚构反馈草稿');
+   await dialog.locator('[data-school-original-close]').click();await page.unroute('**/api/agent/message?*');
+  }
   await feedback.locator('#taskForm [name=note]').fill('');
   await feedback.locator('[data-close=taskDialog]').click();
   await page.locator('[data-query-target="task:'+textTask.id+'"] [data-task]').click();
