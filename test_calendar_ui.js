@@ -174,10 +174,10 @@ test('agent-classified homework appears with homework while notices stay separat
  const rows=[school('older','2026-09-02'),school('yesterday-a','2026-09-07'),school('yesterday-b','2026-09-07'),school('today-notice',d.today,'todo'),school('unknown','')];
  d.today_calendar={inbox:rows,events:[],timetables:[]};h.ctx.child='小溪';
  const html=h.ctx.todayTasksHTML(),recent=html.split('id="task-group-todo"')[1]?.split('</section>')[0],homework=html.split('today-recent-homework">')[1]?.split('</section>')[0],backlog=html.split('today-backlog">')[1]?.split('</details>')[0];
- assert.match(html,/今日作业 · 0/);assert.match(homework,/待核对 2/);assert.match(recent,/待核对 1/);
- for(const id of ['yesterday-b','yesterday-a'])assert.match(homework,new RegExp('data-notice="'+id+'"'));
+ assert.match(html,/今日作业 · 0/);assert.match(homework,/待核对 3/);assert.match(recent,/待核对 1/);
+ for(const id of ['older','yesterday-b','yesterday-a'])assert.match(homework,new RegExp('data-notice="'+id+'"'));
  assert.match(recent,/data-notice="today-notice"/);assert.doesNotMatch(recent,/yesterday-a|yesterday-b|older|unknown/);
- assert.match(backlog,/data-notice="unknown"/);assert.match(backlog,/data-notice="older"/);
+ assert.match(backlog,/data-notice="unknown"/);assert.doesNotMatch(backlog,/data-notice="older"/);
  assert.equal((html.match(/data-notice="yesterday-a"/g)||[]).length,1);
 });
 
@@ -188,15 +188,15 @@ test('agent accepted details contain only the current child after switching',()=
  h.ctx.selectChild('child-b');html=h.ctx.agentPageHTML();assert.match(html,/data-test-accepted="accepted-b"/);assert.doesNotMatch(html,/data-test-accepted="accepted-a"/);
 });
 
-test('each selected child latest homework stays visible, including collected work without a deadline',()=>{
+test('each selected child unfinished school homework stays visible across days',()=>{
  const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.agendaItemHTML=x=>`<article data-notice="${x.id}">${x.title}</article>`;
  const row=(id,day,kind='school',owner='child-a',due='')=>({id,task_id:kind==='task'?id:'',kind,child_ids:[owner],title:id,closed:false,agenda:{category:'homework',box:'inbox',published_on:day,due_on:due,scheduled_on:''}});
  const rows=[row('due-today','2026-09-02','task','child-a',d.today),row('collected-undated','2026-09-07','task'),...Array.from({length:5},(_,n)=>row('same-day-'+n,'2026-09-07')),row('older','2026-09-02'),row('sibling','2026-09-06','task','child-b')];
  d.tasks=rows.filter(x=>x.kind==='task').map(x=>({id:x.id,title:x.title,source:'Agent建议:synthetic-school',child:x.child_ids[0]==='child-a'?'小溪':'小岚'}));d.today_calendar={inbox:rows,events:[],timetables:[]};
  const html=h.ctx.todayTasksHTML(),recent=html.split('today-recent-homework">')[1]?.split('</section>')[0]||'',backlog=html.split('today-backlog">')[1]?.split('</details>')[0]||'';
  assert.match(html,/今日作业 · 1/);
- for(const id of ['collected-undated','same-day-0','same-day-1','same-day-2','same-day-3','same-day-4']){assert.match(recent,new RegExp('data-notice="'+id+'"'));assert.equal((html.match(new RegExp('data-notice="'+id+'"','g'))||[]).length,1)}
- assert.match(backlog,/data-notice="older"/);assert.doesNotMatch(recent,/data-notice="due-today"|data-notice="older"/);
+ for(const id of ['older','collected-undated','same-day-0','same-day-1','same-day-2','same-day-3','same-day-4']){assert.match(recent,new RegExp('data-notice="'+id+'"'));assert.equal((html.match(new RegExp('data-notice="'+id+'"','g'))||[]).length,1)}
+ assert.doesNotMatch(backlog,/data-notice="older"/);assert.doesNotMatch(recent,/data-notice="due-today"/);
  assert.doesNotMatch(html,/data-notice="sibling"/);h.ctx.child='小岚';const sibling=h.ctx.todayTasksHTML();assert.equal((sibling.match(/data-notice="sibling"/g)||[]).length,1);assert.doesNotMatch(sibling,/data-notice="collected-undated"|data-notice="same-day-\d"|data-notice="due-today"|data-notice="older"/);
 });
 

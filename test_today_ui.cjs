@@ -199,7 +199,8 @@ function fixtures(base){
     const recentNoticeOrder=()=>orderPage.locator('#task-group-todo [data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem));
     const olderNoticeOrder=()=>orderPage.locator('.today-backlog [data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem));
     assert.deepEqual(await taskOrder(),['DUE-TODAY']);
-    assert.deepEqual(await earlierTasks(),['DUE-RECENT','DUE-OLD','OLD']);
+    assert.deepEqual(await earlierTasks(),[]);
+    for(const id of ['DUE-RECENT','DUE-OLD','OLD'])assert.equal(await orderPage.locator('.today-recent-homework [data-today-task="'+id+'"]').isVisible(),true,'unfinished school homework from older days is exposed');
     assert.match(await orderPage.locator('#task-group-homework h2').innerText(),/今日作业 · 1/,'pending notices do not become confirmed homework');
     assert.deepEqual(await recentNoticeOrder(),['notice-4','notice-3']);
     assert.deepEqual(await olderNoticeOrder(),['notice-2','notice-1','notice-0']);
@@ -208,7 +209,8 @@ function fixtures(base){
     await proof(orderPage,'recent-school-review-'+width);
     await fit(orderPage);await orderPage.reload({waitUntil:'load'});await ready(orderPage);
     assert.deepEqual(await taskOrder(),['DUE-TODAY'],'current-day count persists after reload');
-    assert.deepEqual(await earlierTasks(),['DUE-RECENT','DUE-OLD','OLD'],'old dates persist after reload');
+    assert.deepEqual(await earlierTasks(),[],'unfinished school homework remains outside the folded backlog');
+    for(const id of ['DUE-RECENT','DUE-OLD','OLD'])assert.equal(await orderPage.locator('.today-recent-homework [data-today-task="'+id+'"]').isVisible(),true,'older unfinished homework survives reload');
     assert.deepEqual(await recentNoticeOrder(),['notice-4','notice-3'],'recent source order persists after reload');
     assert.deepEqual(await olderNoticeOrder(),['notice-2','notice-1','notice-0'],'older source remains available after reload');
     assert.equal(await orderPage.locator('.today-recent-homework [data-today-task="DUE-NEXT"]').isVisible(),true,'received work is visible separately from work due today');
@@ -220,7 +222,7 @@ function fixtures(base){
     }
     await orderPage.reload({waitUntil:'load'});await ready(orderPage);
     assert.deepEqual(await taskOrder(),['DUE-TODAY']);assert.match(await orderPage.locator('#task-group-homework h2').innerText(),/今日作业 · 1/);
-    const received=orderPage.locator('.today-recent-homework');assert.match(await received.locator('h2').innerText(),/最近收到的作业 · 7/);
+    const received=orderPage.locator('.today-recent-homework');assert.match(await received.locator('h2').innerText(),/其他未完成作业 · 10/);
     assert.equal(await received.locator('[data-today-task="COLLECTED-UNDATED"]').isVisible(),true);
     for(let n=0;n<5;n++){const candidate=received.locator('[data-agent-item="same-day-homework-'+n+'"]');assert.equal(await candidate.isVisible(),true,'all work from the same sending day is exposed');assert.equal(await candidate.locator('[data-check]').count(),0,'unresolved work cannot be marked complete')}
     assert.equal(await orderPage.locator('[data-today-task="COLLECTED-UNDATED"]').count(),1);
