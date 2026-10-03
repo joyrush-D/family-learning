@@ -1246,11 +1246,9 @@ class Store:
                 brief=json.loads(row['plan']).get('school_task',{})
                 if row['kind']!='school' or brief.get('state')!='ready' or brief.get('policy')!=SCHOOL_TASK_POLICY or brief.get('change','new')!='new' or brief.get('target_id') or obj.get('expected_updated')!=row['updated']:
                     raise AgentError('学校事项已变化，请重新核对',409)
-                config=self._config(c)
-                enabled={s['id'] for s in config['sources'] if s['enabled'] and s['child_id']==row['child_id']}
-                evidence,_=_school_material(self,c,row)
-                if not config['enabled'] or any(e['ref'][8:].rsplit(':',1)[0] not in enabled for e in evidence):
+                if not _school_active(self,c,row):
                     raise AgentError('Agent或原消息来源已停用，保留原草稿；恢复后再自动整理。',409,'school_source_paused')
+                evidence,_=_school_material(self,c,row)
                 if any(e.get('kind')=='qq_window_fragment' for e in evidence):
                     raise AgentError('截图来源须核对原图、发布日期和附件后加入',409)
 
@@ -1601,6 +1599,15 @@ def _check_school_page(store, c, row):
             raise AgentError('原件整理已失效，请重新读取后再处理；原事项未更改',409,'material_evidence_stale')
 
 
+def _school_active(store, c, row):
+    """Current authorization for automatic school work only; saved originals remain readable when paused."""
+    config=store._config(c)
+    enabled={s['id'] for s in config['sources'] if s['enabled'] and s['child_id']==row['child_id']}
+    quotes=json.loads(row['evidence'])
+    return config['enabled'] and bool(quotes) and all(
+        q['ref'].startswith('message:') and q['ref'][8:].rsplit(':',1)[0] in enabled for q in quotes)
+
+
 def _school_material(store, c, row):
     """This candidate's original messages under the current child binding plus the fragments still valid for them; database only."""
     evidence=[];pages=[]
@@ -1661,6 +1668,7 @@ def _school_current(store, c, row, evidence, page_key, pdf_key, material_key='')
     saved=c.execute('SELECT state,updated,plan FROM agent_items WHERE id=?',(row['id'],)).fetchone()
     if saved is None or saved['state']!='pending' or saved['updated']!=row['updated'] or saved['plan']!=row['plan']: return False
     try:
+        if not _school_active(store,c,row): return False
         again,again_pages=_school_material(store,c,row);again_pdf=_pdf_evidence(_school_pdf(store,c,row));again_material=_school_drafts(store,c,row)
         return again==evidence and (_page_evidence(again,again_pages)['fingerprint'] if again_pages else '')==page_key and (again_pdf['fingerprint'] if again_pdf else '')==pdf_key and (again_material['fingerprint'] if again_material else '')==material_key
     except (AgentError,ValueError,KeyError,TypeError): return False
