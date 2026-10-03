@@ -1858,6 +1858,28 @@ def _history_batch_matches(store,c,sources,eligible):
     return matches
 
 
+def _history_scope_mark(store,origin,source,values,cited_key,receipt,scope_key):
+    """Remember a proven preexisting scope, without creating a model attempt."""
+    with store._db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        current=store._config(c)
+        bound=next((v for v in current['sources'] if v['id']==source['id'] and v['enabled']),None)
+        if not current['enabled'] or bound is None or any(bound[k]!=source[k] for k in ('id','platform','child_id','name')):return False
+        saved=c.execute('SELECT * FROM agent_sources WHERE id=?',(source['id'],)).fetchone()
+        if saved is None:return False
+        try:store._binding(bound,saved)
+        except AgentError:return False
+        if not _history_origin_current(c,origin,source['child_id']):return False
+        old=c.execute('SELECT fingerprint,done,attempts,next_try FROM agent_jobs WHERE id=?',(cited_key,)).fetchone()
+        if old is None or dict(old)!=dict(receipt):return False
+        for value in values:
+            message=c.execute('SELECT payload,processed FROM agent_messages WHERE source_id=? AND id=?',(source['id'],value['id'])).fetchone()
+            if message is None or message['processed']!=1 or message['payload']!=_json(value):return False
+        c.execute('INSERT OR IGNORE INTO agent_jobs(id,fingerprint,done) VALUES(?,?,1)',
+            (scope_key,_hash([origin,cited_key,dict(old)])))
+        return True
+
+
 def _history_scopes(store,config):
     """Prefer exact original batches; retain explicitly limited cited-only fallback."""
     sources={s['id']:s for s in config['sources'] if s['enabled']};groups={}
@@ -1902,19 +1924,13 @@ def _history_scopes(store,config):
             # Check the full scope's receipt only after reconstructing it. Never
             # fall back to a smaller scope to bypass full-scope done/retry limits.
             cited_key='school-history:'+_hash([SCHOOL_SELECTION_REVISION,old_key,source['child_id'],sorted(refs)])[:40]
-            done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(cited_key,)).fetchone()
-            if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS):
-                if complete and _history_origin_current(c,(old_key,jobs[old_key]['fingerprint'],'legacy'),source['child_id']):
-                    # This is a range-proof receipt, not a new model attempt. Keep
-                    # old full receipts unchanged while retaining their scope if
-                    # subsequent messages move the original batch out of view.
-                    proof=_hash([old_key,jobs[old_key]['fingerprint'],cited_key,dict(done)])
-                    c.execute('INSERT OR IGNORE INTO agent_jobs(id,fingerprint,done) SELECT ?,?,1 '
-                        'WHERE EXISTS(SELECT 1 FROM agent_jobs WHERE id=? AND done=1 AND fingerprint=?) '
-                        'AND EXISTS(SELECT 1 FROM agent_jobs WHERE id=? AND (done=1 OR attempts>=?))',
-                        (scope_key,proof,old_key,jobs[old_key]['fingerprint'],cited_key,MAX_ATTEMPTS))
-                continue
-            key=complete_key if complete else cited_key
+            done=c.execute('SELECT fingerprint,done,attempts,next_try FROM agent_jobs WHERE id=?',(cited_key,)).fetchone()
+            if complete and done and not _history_scope_mark(store,(old_key,jobs[old_key]['fingerprint'],'legacy'),
+                    source,values,cited_key,done,scope_key):continue
+            if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS):continue
+            # Pending old full receipts keep their budget/backoff and manual
+            # retry identity; a new key must not reset their model attempts.
+            key=complete_key if complete and done is None else cited_key
             done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone()
             if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS): continue
             result.append((source,values,key,(old_key,jobs[old_key]['fingerprint'],'legacy')))
