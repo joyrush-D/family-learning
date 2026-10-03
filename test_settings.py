@@ -104,7 +104,7 @@ class SettingsTests(unittest.TestCase):
                             evidence=[dict(ref=context['evidence'][0]['ref'])],learning_subject='',learning_goal_id='',
                             task_title='虚构阅读通知',task_goal='阅读通知，没有具体完成要求。',task_advice='',
                             task_state='reference',task_reason='仅供阅读的通知，没有具体动作。',
-                            task_change='new',task_target_id='',task_purpose='unknown',task_submission='')
+                            task_change='new',task_target_id='',task_purpose='optional',task_submission='')
                         return io.BytesIO(json.dumps({'choices':[{'finish_reason':'stop','message':{'content':json.dumps(dict(proposals=[proposal]))}}]}).encode())
                 loaded=family_review.load_app(root,data)
                 with patch.object(family_llm,'build_opener',return_value=Opener()):
