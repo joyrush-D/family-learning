@@ -537,12 +537,12 @@ class PrintStore:
         except OfficeError as error:
             raise PrintError(*_OFFICE_ERRORS[error.reason]) from None
 
-    def prepare(self, source, idempotency_key, *, packet=None):
+    def prepare(self, source, idempotency_key, *, packet=None, revision=False):
         key = _key(idempotency_key)
         name, data = self._source(source)
-        return self._prepare_bytes(name, data, source, key,packet=packet)
+        return self._prepare_bytes(name, data, source, key,packet=packet,revision=revision)
 
-    def prepare_guide(self, title, text, idempotency_key):
+    def prepare_guide(self, title, text, idempotency_key, *, revision=False):
         """Prepare a separate parent-only answer sheet after the parent has checked its text."""
         key = _key(idempotency_key)
         def invalid_xml(value):
@@ -564,29 +564,36 @@ class PrintStore:
                            for n,line in enumerate(paragraphs))
         docx = io.BytesIO()
         with zipfile.ZipFile(docx, 'w', zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8"?>'
+            def write(name, content):
+                # Generated text is identical across retries; ZIP timestamps must not change its hash.
+                archive.writestr(zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0)), content, compress_type=zipfile.ZIP_DEFLATED)
+            write('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8"?>'
                 '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
                 '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
                 '<Default Extension="xml" ContentType="application/xml"/>'
                 '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
                 '</Types>')
-            archive.writestr('_rels/.rels', '<?xml version="1.0" encoding="UTF-8"?>'
+            write('_rels/.rels', '<?xml version="1.0" encoding="UTF-8"?>'
                 '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
                 '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
                 '</Relationships>')
-            archive.writestr('word/document.xml', '<?xml version="1.0" encoding="UTF-8"?>'
+            write('word/document.xml', '<?xml version="1.0" encoding="UTF-8"?>'
                 '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
                 '<w:body>'+document+'<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
                 '<w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr>'
                 '</w:body></w:document>')
         name='家长参考-'+re.sub(r'[\\/\x00-\x1f\x7f]', '_', title.strip())[:60]+'.docx'
         return self._prepare_bytes(name, docx.getvalue(),
-                                   dict(type='parent_guide', title=title.strip()), key)
+                                   dict(type='parent_guide', title=title.strip()), key, revision=revision)
 
-    def _prepare_bytes(self, name, data, source, key, *, packet=None):
+    def _prepare_bytes(self, name, data, source, key, *, packet=None, revision=False):
         fingerprint = _hash(_json([source, _hash(data)]+([packet] if packet is not None else [])).encode())
         with self._db() as c:
             old = c.execute('SELECT * FROM print_preparations WHERE idem=?', (key,)).fetchone()
+            if revision and (old is None or old['fingerprint'] != fingerprint):
+                # Keep every preparation immutable and reuse matching legacy IDs; enqueue keys stay unchanged.
+                key = _hash((key+':'+fingerprint).encode())[:32]
+                old = c.execute('SELECT * FROM print_preparations WHERE idem=?', (key,)).fetchone()
         if old:
             if old['fingerprint'] != fingerprint: raise PrintError('同一请求的附件已变化，请重新预览', 'conflict', 409)
             self.preview(old['id'])
@@ -633,13 +640,13 @@ class PrintStore:
         settings = {k: obj.get(k, v) for k, v in dict(printer='', copies=1, sides='one-sided', color='monochrome').items()}
         subkey = lambda role: _hash((key+':'+role).encode())[:32]
         prepared=[self.prepare(source,subkey('question_prepare'+(str(n+1) if n else '')),
-                               packet=questions if len(questions)>1 else None)
+                               packet=questions if len(questions)>1 else None,revision=True)
                   for n,source in enumerate(questions)]
         expected = obj.get('expected_question_sha256', '')
         if expected and (not isinstance(expected,str) or not re.fullmatch(r'[a-f0-9]{64}',expected) or expected!=packet_sha([p['source_sha256'] for p in prepared])):
             raise PrintError('题目原件与参考草稿生成时不同，请重新核对答案','conflict',409)
-        second = (self.prepare(guide, subkey('guide_prepare')) if guide is not None else
-                  self.prepare_guide(task['title'], guide_text, subkey('guide_prepare')))
+        second = (self.prepare(guide, subkey('guide_prepare'),revision=True) if guide is not None else
+                  self.prepare_guide(task['title'], guide_text, subkey('guide_prepare'),revision=True))
         def queue(prep, role):
             if before_queue is not None: before_queue()
             return self.enqueue(dict(settings, confirmed=True, preparation_id=prep['id'],

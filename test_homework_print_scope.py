@@ -180,6 +180,36 @@ class HomeworkPrintScopeTests(unittest.TestCase):
         status,retry=self.request('POST','/api/print/homework',body);self.assertEqual(status,200,retry)
         self.assertEqual(value['jobs'],retry['jobs']);self.assertEqual(len(app.print_store().list_jobs()),2)
 
+    def test_prepared_unlinked_question_can_be_replaced_without_changing_old_preparations(self):
+        original=app.family_print.PrintStore.prepare
+        def unlink_after_prepare(store,source,*args,**kwargs):
+            prepared=original(store,source,*args,**kwargs)
+            if source==self.source(self.question):
+                with app.connect_read_only() as c:
+                    row=dict(c.execute('SELECT * FROM records WHERE id=?',(self.answer['record_id'],)).fetchone())
+                app.save_record(dict(id=row['id'],child=row['child'],day=row['day'],category=row['category'],
+                    title=row['title'],source=row['source'],note='虚构原件已解除',attachments=[]))
+            return prepared
+        with patch.object(app.family_print.PrintStore,'prepare',unlink_after_prepare):
+            status,value=self.request('POST','/api/print/homework',self.pair())
+        self.assertEqual(status,403,value);self.assertEqual(app.print_store().list_jobs(),[])
+        with app.connect_read_only() as c:
+            old={r['id']:dict(r) for r in c.execute('SELECT * FROM print_preparations')}
+        self.assertEqual(len(old),2)
+        old_pdfs={ident:(app.DATA/'print'/(ident+'.pdf')).read_bytes() for ident in old}
+        replacement=self.upload('synthetic-replacement-question.png')
+        self.feedback(self.task,[replacement,self.teacher],'synthetic-replacement-materials')
+        body=self.pair(question_sources=[self.source(replacement)])
+        status,value=self.request('POST','/api/print/homework',body);self.assertEqual(status,200,value)
+        status,retry=self.request('POST','/api/print/homework',body);self.assertEqual(status,200,retry)
+        self.assertEqual(value['jobs'],retry['jobs']);self.assertEqual(len(app.print_store().list_jobs()),2)
+        self.assertNotIn(value['jobs']['question']['preparation_id'],old)
+        self.assertIn(value['jobs']['guide']['preparation_id'],old)
+        with app.connect_read_only() as c:
+            for ident,row in old.items():
+                self.assertEqual(dict(c.execute('SELECT * FROM print_preparations WHERE id=?',(ident,)).fetchone()),row)
+                self.assertEqual((app.DATA/'print'/(ident+'.pdf')).read_bytes(),old_pdfs[ident])
+
     def test_reference_model_failure_and_legacy_independent_draft_remain_retryable(self):
         body=dict(purpose='reference',task_id=self.task['id'],question_sources=[self.source(self.question)])
         with patch.object(app.family_llm,'homework_reference_draft',side_effect=app.family_llm.LLMDraftError('Synthetic model unavailable')):

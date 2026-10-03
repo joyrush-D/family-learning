@@ -97,6 +97,88 @@ class PrintTests(unittest.TestCase):
         self.assertEqual(len(self.store.list_jobs()),3)
         with self.assertRaises(printing.PrintError):self.store.images_for_draft([pages[0],pages[0]])
 
+    def test_prepared_only_reference_and_ordered_packet_can_change_without_rewriting_pdf(self):
+        for name,width in [('guide.png',3),('replacement.png',4),('page2.png',5)]:
+            (self.data/'attachments'/name).write_bytes(png(width))
+        task=dict(id='TASK-1',title='虚构准备恢复')
+        guide=dict(type='attachment',name='guide.png');replacement=dict(type='attachment',name='replacement.png')
+        page2=dict(type='attachment',name='page2.png')
+        for kind in ('guide','packet'):
+            with self.subTest(kind=kind):
+                request=dict(task_id=task['id'],request_key='synthetic_prepared_only_'+kind,
+                    question_sources=[self.source] if kind=='guide' else [self.source,page2],
+                    guide_source=guide,guide_text='',question_confirmed=True,guide_confirmed=True,printer='Synthetic_Printer')
+                count=len(self.store.list_jobs())
+                with self.assertRaises(printing.PrintError) as error:
+                    self.store.homework_pair(request,task,before_queue=lambda: (_ for _ in ()).throw(printing.PrintError('Synthetic unlinked','review_source_not_allowed',403)))
+                self.assertEqual(error.exception.status,403);self.assertEqual(len(self.store.list_jobs()),count)
+                with self.connect() as c: old={r['id']:dict(r) for r in c.execute('SELECT * FROM print_preparations')}
+                old_pdf={ident:self.store.preview(ident)[0] for ident in old}
+                revised=request|({'guide_source':replacement} if kind=='guide' else {'question_sources':[page2,replacement]})
+                jobs=self.store.homework_pair(revised,task)
+                self.assertEqual(jobs,self.store.homework_pair(revised,task))
+                self.assertEqual(len(self.store.list_jobs()),count+len(revised['question_sources'])+1)
+                with self.connect() as c:
+                    for ident,row in old.items():
+                        self.assertEqual(dict(c.execute('SELECT * FROM print_preparations WHERE id=?',(ident,)).fetchone()),row)
+                        self.assertEqual(self.store.preview(ident)[0],old_pdf[ident])
+
+    def test_lost_partial_receipt_keeps_enqueue_roles_when_materials_change(self):
+        (self.data/'attachments'/'guide.png').write_bytes(png(3))
+        (self.data/'attachments'/'replacement.png').write_bytes(png(4))
+        task=dict(id='TASK-1',title='虚构丢回执')
+        request=dict(task_id=task['id'],request_key='synthetic_lost_partial',question_sources=[self.source],
+            guide_source=dict(type='attachment',name='guide.png'),guide_text='',question_confirmed=True,
+            guide_confirmed=True,printer='Synthetic_Printer')
+        original=self.store.enqueue
+        def lose_receipt(body):
+            original(body)
+            raise printing.PrintError('Synthetic lost receipt','synthetic_receipt_lost',503)
+        with patch.object(self.store,'enqueue',side_effect=lose_receipt),self.assertRaises(printing.PrintError):
+            self.store.homework_pair(request,task)
+        first=self.store.list_jobs();self.assertEqual(len(first),1)
+        replacement=dict(type='attachment',name='replacement.png')
+        with self.assertRaises(printing.PrintError) as error:
+            self.store.homework_pair(request|dict(question_sources=[replacement]),task)
+        self.assertEqual(error.exception.status,409);self.assertEqual(self.store.list_jobs(),first)
+        recovered=self.store.homework_pair(request,task)
+        self.assertEqual(recovered['question']['id'],first[0]['id']);self.assertEqual(len(self.store.list_jobs()),2)
+        with self.assertRaises(printing.PrintError) as error:
+            self.store.homework_pair(request|dict(guide_source=replacement),task)
+        self.assertEqual(error.exception.status,409);self.assertEqual(len(self.store.list_jobs()),2)
+        self.assertEqual(recovered,self.store.homework_pair(request,task))
+
+    def test_matching_legacy_preparations_keep_original_ids_and_enqueue_keys(self):
+        (self.data/'attachments'/'guide.png').write_bytes(png(3))
+        task=dict(id='TASK-1',title='虚构旧请求')
+        request=dict(task_id=task['id'],request_key='synthetic_legacy_pair',question_sources=[self.source],
+            guide_source=dict(type='attachment',name='guide.png'),guide_text='',question_confirmed=True,
+            guide_confirmed=True,printer='Synthetic_Printer')
+        subkey=lambda role:printing._hash((request['request_key']+':'+role).encode())[:32]
+        question=self.store.prepare(self.source,subkey('question_prepare'))
+        guide=self.store.prepare(request['guide_source'],subkey('guide_prepare'))
+        with patch.object(self.store,'_convert',side_effect=AssertionError('legacy preparation must not be reconverted')):
+            jobs=self.store.homework_pair(request,task)
+            self.assertEqual(jobs['question']['preparation_id'],question['id'])
+            self.assertEqual(jobs['guide']['preparation_id'],guide['id'])
+            self.assertEqual(jobs,self.store.homework_pair(request,task))
+        with self.connect() as c:
+            self.assertEqual({r['idem'] for r in c.execute('SELECT idem FROM print_jobs')},
+                {subkey('question_enqueue'),subkey('guide_enqueue')})
+            self.assertEqual({r['id'] for r in c.execute('SELECT id FROM print_preparations')},{question['id'],guide['id']})
+
+    def test_new_text_reference_retry_is_stable_across_zip_clock_changes(self):
+        captured=[]
+        def convert(body,name,directory):captured.append(body);return printing.image_pdf(png())
+        with patch.object(self.store,'_convert',side_effect=convert):
+            with patch.object(printing.zipfile.time,'localtime',return_value=(2026,10,3,1,2,4,5,276,0)):
+                first=self.store.prepare_guide('虚构题目','第1题：B','synthetic_stable_text')
+            with patch.object(printing.zipfile.time,'localtime',return_value=(2027,10,3,1,2,8,6,276,0)):
+                second=self.store.prepare_guide('虚构题目','第1题：B','synthetic_stable_text')
+        self.assertEqual(first,second);self.assertEqual(len(captured),1)
+        with zipfile.ZipFile(io.BytesIO(captured[0])) as archive:
+            self.assertTrue(all(info.date_time==(1980,1,1,0,0,0) for info in archive.infolist()))
+
     def test_homework_pair_refuses_unreviewed_reference(self):
         request=dict(task_id='TASK-1',request_key='homework_pair_456',question_source=self.source,
                      guide_source=None,guide_text='',question_confirmed=True,guide_confirmed=False,
