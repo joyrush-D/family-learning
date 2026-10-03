@@ -66,7 +66,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
  native += [dict(id='native-xlsx-'+str(w),time=now.isoformat(),kind='text',sender='虚构来源',text='请核对所附虚构表格',unread=True) for w in (360,1440)]
  native += [dict(id='native-xlsx-refused-'+str(w),time=now.isoformat(),kind='text',sender='虚构来源',text='请核对所附虚构不安全表格',unread=True) for w in (360,1440)]
  native += [dict(id='native-auto-'+str(w),time=now.isoformat(),kind='text',sender='虚构语文老师',text='请完成所附虚构语文练习全部11页，'+now.date().isoformat()+'前提交。',unread=True) for w in (360,1440)]
- native += [dict(id='native-text-'+str(w),time=now.isoformat(),kind='text',sender='虚构数学老师',text='明天完成练习第1至3题，第4题选做；拍照提交。',unread=False) for w in (360,1440)]
+ native += [dict(id='native-text-'+str(w),time=now.isoformat(),kind='text',sender='虚构数学老师',text='今天完成练习第1至3题，第4题选做；拍照提交。',unread=False) for w in (360,1440)]
  store.ingest(dict(source_id='qq:123456',expected_cursor='',cursor='native-1',checked_at=now.isoformat(),last_message_time=now.isoformat(),error='',messages=native))
  for w in (360,1440):
   message=native[0 if w==360 else 1];ref='message:qq:123456:'+message['id']
@@ -79,7 +79,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
    c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?)',('qq:123456',message['id'],value['fingerprint'],1,json.dumps([1,2,3]),11,json.dumps(dict(kind='school_material',title='虚构已读页组',note='原件前3页待核对',uncertainties=[]),ensure_ascii=False),now.isoformat()))
  for w in (360,1440):
   app.new_task(dict(child='示例星星',title='虚构已有部分整理的作业 '+str(w),category='homework',source='message:qq:123456:native-'+str(w),due=now.date().isoformat(),action='核对所附练习卷，保留未读页。',request_key='synthetic-prepared-task-'+str(w)))
-  app.new_task(dict(child='示例星星',title='虚构已归纳文字作业 '+str(w),category='homework',source='message:qq:123456:native-text-'+str(w),due=(now.date()+datetime.timedelta(days=1)).isoformat(),action='必做第1至3题，第4题选做；拍照提交。',request_key='synthetic-text-task-'+str(w)))
+  app.new_task(dict(child='示例星星',title='虚构已归纳文字作业 '+str(w),category='homework',source='message:qq:123456:native-text-'+str(w),due=now.date().isoformat(),action='必做第1至3题，第4题选做；拍照提交。',request_key='synthetic-text-task-'+str(w)))
  for w in (360,1440):
   for refused in (False,True):
    kind='native-pptx-refused' if refused else 'native-pptx';message=next(m for m in native if m['id']==kind+'-'+str(w))
@@ -298,6 +298,11 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   assert.doesNotMatch(await resources.innerText(),/原件已保存不代表内容已理解|AI 已整理/,'saved static text does not claim AI or complete reading');
   assert.equal(await resources.locator('img[onerror]').count(),0);
   await fits(page);await proof(page,'task-static-material-'+width);
+  await feedback.locator('[data-close=taskDialog]').click();await page.unroute('**/api/agent/message?*');
+  await page.route('**/api/agent/message?*',route=>route.fulfill({json:{...textView,message:{...textView.message,text:'虚构网页 https://example.test/not-saved'}}}));
+  await page.locator('[data-query-target="task:'+textTask.id+'"] [data-task]').click();
+  await resources.getByText(/网页内容尚未在此保存/).waitFor();
+  assert.equal(await resources.locator('[data-task-material-state="text"]').count(),0,'an unread link never becomes complete text');
   await feedback.locator('[data-close=taskDialog]').click();await page.unroute('**/api/agent/message?*');
   for(const kind of ['unread','fragment']){
    const gapView={...textView,message:{...textView.message,kind:kind==='fragment'?'qq_window_fragment':'text',unread:kind==='unread'},unavailable_attachment_ids:kind==='unread'?['synthetic-unavailable']:[]};
