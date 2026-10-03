@@ -9,7 +9,25 @@ async function eventually(fn,label){for(let n=0;n<250;n++){if(await fn())return;
 async function server(){
  const socket=net.createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');const port=socket.address().port;await new Promise(r=>socket.close(r));
  const env={...process.env};for(const k of Object.keys(env))if(k.startsWith('FAMILY_'))delete env[k];
- const proc=spawn(process.env.FAMILY_TEST_PYTHON||'python3',['demo.py','--port',String(port)],{cwd:__dirname,env,stdio:'ignore'}),url='http://127.0.0.1:'+port+'/';
+ // The fault stays in this disposable demo process; no worker or household printer is started.
+ const setup=`import runpy,sys,json
+import app
+original=app.family_print.PrintStore._convert
+app.printer_config=lambda:dict(printers=[dict(name='Synthetic_Printer',label='虚构打印机',color=False,duplex=False)],error='')
+def unlink_after_conversion(store,data,name,directory):
+    result=original(store,data,name,directory)
+    if name.startswith('synthetic-recovery-original-A-'):
+        assert app.DATA.name.startswith('family-demo-')
+        with app.connect_read_only() as c:
+            ids={r['id'] for r in c.execute('SELECT id FROM uploads WHERE name=?',(name,))}
+            records=[dict(r) for r in c.execute('SELECT * FROM records') if ids.intersection(json.loads(r['attachments']))]
+        for r in records:
+            app.save_record(dict(id=r['id'],child=r['child'],day=r['day'],category=r['category'],title=r['title'],source=r['source'],note='Synthetic material unlinked while preparing',attachments=[]))
+    return result
+app.family_print.PrintStore._convert=unlink_after_conversion
+sys.argv=['demo.py','--port',sys.argv[1]]
+runpy.run_path('demo.py',run_name='__main__')`;
+ const proc=spawn(process.env.FAMILY_TEST_PYTHON||'python3',['-c',setup,String(port)],{cwd:__dirname,env,stdio:'ignore'}),url='http://127.0.0.1:'+port+'/';
  await eventually(async()=>{try{return(await fetch(url,{signal:AbortSignal.timeout(400)})).ok}catch{return false}},'demo startup');
  return {url,stop:async()=>{if(proc.exitCode!==null)return;const done=once(proc,'exit');proc.kill('SIGINT');await Promise.race([done,delay(2000)]);if(proc.exitCode===null){proc.kill('SIGKILL');await done}}};
 }
@@ -103,6 +121,32 @@ async function server(){
   assert.equal(await printForm.evaluate(f=>f.dataset.requestKey),originalPrintKey,'unknown print receipt survives reopening');
   await printForm.locator('[type=submit]').click();await eventually(async()=>!await p.locator('#homeworkPrintDialog').evaluate(x=>x.open),'pair retry saved');assert.deepEqual(pairBodies[1],pairBodies[0]);assert.equal(pairBodies[0].task_id,id);
   await p.unroute('**/api/print/homework');await p.unroute('**/api/print/homework/draft');await p.locator('nav [data-page=home]').click();await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskDialog[open]').waitFor();
+
+   // Exercise real preparation + HTTP ownership failure + changed file + lost queue receipt.
+   const recoveryTask=(await post('api/task/new',{child,title:'虚构打印恢复 '+width,category:'homework',action:'核对同一作业的资料',due:state.today})).task;
+   const validPng=require('node:child_process').spawnSync(process.env.FAMILY_TEST_PYTHON||'python3',['-c','from test_print import png; import sys; sys.stdout.buffer.write(png())'],{cwd:__dirname,env:{...process.env},encoding:null});
+   assert.equal(validPng.status,0,'synthetic original is created without a model');
+   async function recoveryUpload(name){const response=await fetch(host.url+'api/upload',{method:'POST',headers:{'X-Family-Token':state.token,'Content-Type':'image/png','X-File-Name':encodeURIComponent(name)},body:validPng.stdout});assert.equal(response.status,200);return (await response.json()).attachment}
+   const originalA=await recoveryUpload('synthetic-recovery-original-A-'+width+'.png'),originalB=await recoveryUpload('synthetic-recovery-original-B-'+width+'.png'),reference=await recoveryUpload('synthetic-recovery-reference-'+width+'.png');
+   const recordBody={child,day:state.today,category:'学习进展',title:'虚构待打印原件',source:'事项:'+recoveryTask.id,note:'原件由家长核对',attachments:[originalA.id,reference.id]};
+   const ordinary=(await post('api/record',recordBody)).record_id;
+   await p.keyboard.press('Escape');await p.reload();await p.locator('[data-query-target="task:'+recoveryTask.id+'"] [data-homework-print]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
+   await printForm.locator('[name=question_source]').selectOption(JSON.stringify({type:'upload',id:originalA.id}));await printForm.locator('[name=guide_source]').selectOption(JSON.stringify({type:'upload',id:reference.id}));await printForm.locator('[name=question_confirmed]').check();await printForm.locator('[name=guide_confirmed]').check();
+   const recoveryKey=await printForm.evaluate(f=>f.dataset.requestKey),recoveryBodies=[],recoveryStatuses=[];
+   let loseQueueReceipt=false;
+   await p.route('**/api/print/homework',async route=>{recoveryBodies.push(route.request().postDataJSON());const response=await route.fetch();recoveryStatuses.push(response.status());if(loseQueueReceipt&&response.ok()){loseQueueReceipt=false;return route.fulfill({status:503,json:{error:'虚构真实入队后的回执丢失'}})}return route.fulfill({response})});
+   await printForm.locator('[type=submit]').click();await eventually(async()=>/归属|原作业|核对|关联/.test(await p.locator('#homeworkPrintError').innerText())&&await printForm.locator('[type=submit]').isEnabled(),'ownership rejected after preparation');
+   assert.deepEqual(recoveryStatuses,[403],'the real current-source guard rejected printing');assert.equal((await (await fetch(host.url+'api/print/jobs')).json()).jobs.length,0,'prepared A never entered the print queue');
+   await post('api/record',{...recordBody,id:ordinary,note:'家长换成新原件B',attachments:[originalB.id,reference.id]});
+   await p.locator('#homeworkPrintDialog [data-close]').click();await p.reload();await p.locator('[data-query-target="task:'+recoveryTask.id+'"] [data-homework-print]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
+   assert.equal(await printForm.evaluate(f=>f.dataset.requestKey),recoveryKey,'failed prepared-only request survives reopening');
+   assert.match(await p.locator('#homeworkPrintError').innerText(),/原选择有资料现在无法核对/);await printForm.locator('[name=question_source]').selectOption(JSON.stringify({type:'upload',id:originalB.id}));await printForm.locator('[name=guide_source]').selectOption(JSON.stringify({type:'upload',id:reference.id}));await printForm.locator('[name=question_confirmed]').check();await printForm.locator('[name=guide_confirmed]').check();
+   loseQueueReceipt=true;await printForm.locator('[type=submit]').click();await eventually(async()=>/虚构真实入队后的回执丢失/.test(await p.locator('#homeworkPrintError').innerText()),'new original B prepared and queued by the real backend');
+   assert.deepEqual(recoveryStatuses,[403,200]);const realQueued=(await (await fetch(host.url+'api/print/jobs')).json()).jobs;assert.equal(realQueued.length,2,'B and reference are separate jobs');
+   await p.locator('#homeworkPrintDialog [data-close]').click();await p.reload();await p.locator('[data-query-target="task:'+recoveryTask.id+'"] [data-homework-print]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
+   assert.equal(await printForm.evaluate(f=>f.dataset.requestKey),recoveryKey);await printForm.locator('[type=submit]').click();await eventually(async()=>!await p.locator('#homeworkPrintDialog').evaluate(x=>x.open),'original queue keys recover a lost receipt');
+   const retriedJobs=(await (await fetch(host.url+'api/print/jobs')).json()).jobs;assert.deepEqual(retriedJobs.map(j=>j.id).sort(),realQueued.map(j=>j.id).sort(),'retry never duplicates a submitted part');assert.deepEqual(recoveryBodies[2],recoveryBodies[1]);assert.equal(recoveryBodies[0].request_key,recoveryBodies[1].request_key);
+   await p.unroute('**/api/print/homework');await p.locator('nav [data-page=home]').click();await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskDialog[open]').waitFor();
 
   const wrong=p.locator('#taskFeedbackHistory [data-task-wrong-form]').first();await wrong.locator(':scope > summary').click();
   await wrong.locator('[data-wrong-field="label"]').fill('第2题');await wrong.locator('[data-wrong-field="answer"]').fill('C');await wrong.locator('[data-wrong-field="correction"]').fill('B');
