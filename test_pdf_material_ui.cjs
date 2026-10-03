@@ -66,6 +66,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
  native += [dict(id='native-xlsx-'+str(w),time=now.isoformat(),kind='text',sender='虚构来源',text='请核对所附虚构表格',unread=True) for w in (360,1440)]
  native += [dict(id='native-xlsx-refused-'+str(w),time=now.isoformat(),kind='text',sender='虚构来源',text='请核对所附虚构不安全表格',unread=True) for w in (360,1440)]
  native += [dict(id='native-auto-'+str(w),time=now.isoformat(),kind='text',sender='虚构语文老师',text='请完成所附虚构语文练习全部11页，'+now.date().isoformat()+'前提交。',unread=True) for w in (360,1440)]
+ native += [dict(id='native-text-'+str(w),time=now.isoformat(),kind='text',sender='虚构数学老师',text='明天完成练习第1至3题，第4题选做；拍照提交。',unread=False) for w in (360,1440)]
  store.ingest(dict(source_id='qq:123456',expected_cursor='',cursor='native-1',checked_at=now.isoformat(),last_message_time=now.isoformat(),error='',messages=native))
  for w in (360,1440):
   message=native[0 if w==360 else 1];ref='message:qq:123456:'+message['id']
@@ -78,6 +79,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
    c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?)',('qq:123456',message['id'],value['fingerprint'],1,json.dumps([1,2,3]),11,json.dumps(dict(kind='school_material',title='虚构已读页组',note='原件前3页待核对',uncertainties=[]),ensure_ascii=False),now.isoformat()))
  for w in (360,1440):
   app.new_task(dict(child='示例星星',title='虚构已有部分整理的作业 '+str(w),category='homework',source='message:qq:123456:native-'+str(w),due=now.date().isoformat(),action='核对所附练习卷，保留未读页。',request_key='synthetic-prepared-task-'+str(w)))
+  app.new_task(dict(child='示例星星',title='虚构已归纳文字作业 '+str(w),category='homework',source='message:qq:123456:native-text-'+str(w),due=(now.date()+datetime.timedelta(days=1)).isoformat(),action='必做第1至3题，第4题选做；拍照提交。',request_key='synthetic-text-task-'+str(w)))
  for w in (360,1440):
   for refused in (False,True):
    kind='native-pptx-refused' if refused else 'native-pptx';message=next(m for m in native if m['id']==kind+'-'+str(w))
@@ -275,6 +277,38 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   await fits(page);await proof(page,'task-partial-resource-'+width);
   await feedback.locator('[data-close=taskDialog]').click();
   const wrongView=await readView({child_id:'child-1',source_id:'qq:123456',message_id:'native-'+width});
+  const textTask=before.tasks.find(t=>t.title==='虚构已归纳文字作业 '+width);
+  const textView=await readView({child_id:'child-1',source_id:'qq:123456',message_id:'native-text-'+width});
+  assert.deepEqual(textView.attachments,[]);assert.equal(textView.pdf_material,null);assert.equal(textView.material_draft,null);
+  await page.locator('[data-query-target="task:'+textTask.id+'"] [data-task]').click();
+  await resources.getByRole('button',{name:'查看老师原消息'}).waitFor();
+  assert.equal(await resources.locator('[data-task-material-state="text"]').count(),1,'a text-only task has no unread-original claim');
+  assert.doesNotMatch(await resources.innerText(),/原件已保存不代表内容已理解|尚未整理完成|本次未读取/);
+  assert.equal(await feedback.locator('#taskForm [name=note]').inputValue(),'');
+  await fits(page);await proof(page,'task-text-material-'+width);
+  await feedback.locator('[data-close=taskDialog]').click();
+  await page.locator('[data-query-target="task:'+textTask.id+'"] [data-task]').click();
+  await resources.locator('[data-task-material-state="text"]').waitFor();
+  await feedback.locator('[data-close=taskDialog]').click();
+  const pageOnly={...textView,pages:[{original_url:'https://example.test/text-only',url:'https://example.test/text-only',fetched_at:textView.message.time,text:'虚构网页内容 <img src=x onerror=alert(1)>',text_truncated:true}]};
+  await page.route('**/api/agent/message?*',route=>route.fulfill({json:pageOnly}));
+  await page.locator('[data-query-target="task:'+textTask.id+'"] [data-task]').click();
+  await resources.getByText(/超过6000字的部分未保存/).waitFor();
+  assert.equal(await resources.locator('[data-task-material-state="pages"]').count(),1);
+  assert.doesNotMatch(await resources.innerText(),/原件已保存不代表内容已理解|AI 已整理/,'saved static text does not claim AI or complete reading');
+  assert.equal(await resources.locator('img[onerror]').count(),0);
+  await fits(page);await proof(page,'task-static-material-'+width);
+  await feedback.locator('[data-close=taskDialog]').click();await page.unroute('**/api/agent/message?*');
+  for(const kind of ['unread','fragment']){
+   const gapView={...textView,message:{...textView.message,kind:kind==='fragment'?'qq_window_fragment':'text',unread:kind==='unread'},unavailable_attachment_ids:kind==='unread'?['synthetic-unavailable']:[]};
+   await page.route('**/api/agent/message?*',route=>route.fulfill({json:gapView}));
+   await page.locator('[data-query-target="task:'+textTask.id+'"] [data-task]').click();
+   await resources.getByRole('button',{name:'查看老师原消息'}).waitFor();
+   assert.equal(await resources.locator('[data-task-material-state="text"]').count(),0,'reading gaps never become complete text');
+   assert.equal(await resources.locator('[data-task-material-state="'+kind+'"]').count(),1);
+   assert.match(await resources.innerText(),kind==='fragment'?/截图识别文字/:/原件暂不可读取/);
+   await feedback.locator('[data-close=taskDialog]').click();await page.unroute('**/api/agent/message?*');
+  }
   const pageView={...wrongView,pages:[{original_url:'https://example.test/worksheet',url:'https://example.test/worksheet',fetched_at:wrongView.message.time,text:'虚构题目见下图 <img src=x onerror=alert(1)>',text_truncated:false}]};
   await page.route('**/api/agent/message?*',route=>route.fulfill({json:pageView}));
   await page.locator('[data-query-target="task:'+partial.id+'"] [data-task]').click();
