@@ -1153,6 +1153,162 @@ class GoalTests(unittest.TestCase):
         self.assertEqual(after['pending']['choice'],'调整');self.assertEqual(after['pending']['evidence'][0]['quote'],quote)
         self.assertEqual(after['current_plan'],confirmed);self.assertEqual(card(),shown);self.assertNotIn('桂花香',shown)
 
+    def school_scope_fixture(self):
+        """Saved, entirely fictional tasks; this tests projection, not model extraction quality."""
+        source=dict(id='synthetic-plan-scope',platform='wechat',child_id='child-1',name='虚构来源',cursor='0',enabled=True)
+        (self.data/'agent.json').write_text(json.dumps(dict(enabled=True,sources=[source])))
+        first=(self.now.date()+dt.timedelta(days=1)).isoformat();second=(self.now.date()+dt.timedelta(days=2)).isoformat()
+        texts={
+            'M1':f'请分别完成两项：{first}前 Unit 3课文读两遍，朗读录音上传班级作业区；{second}前完成练习卷第1–4题，做完检查。',
+            'M4':'补充练习卷：第4题选做，第1–3题必做。',
+            'M5':'练习卷题目和家长参考分别打印；家长参考仅供家长核对，不给孩子照抄。',
+            'M8':'补充 Unit 3朗读：录音要读完整篇，不用背诵。'}
+        self.store.agent.ingest(dict(source_id=source['id'],expected_cursor='0',cursor='4',checked_at=self.now.isoformat(),
+            last_message_time=self.now.isoformat(),error='',messages=[dict(id=ident,time=(self.now+dt.timedelta(minutes=n)).isoformat(),
+                kind='text',sender='虚构英语发布者',text=text,unread=False) for n,(ident,text) in enumerate(texts.items())]))
+        def save(title,body,due,refs,*,accept=True,change='new'):
+            self.count+=1;key='synthetic-school-scope-'+str(self.count)
+            item=dict(child_id='child-1',kind='school',title=title,body=body,due=due,
+                evidence=[dict(ref='message:'+source['id']+':'+ref,text=texts[ref]) for ref in refs],
+                plan=dict(school_learning=dict(subject='英语',goal_id=self.ident),school_goal_id=self.ident,
+                    school_messages=[dict(source_id=source['id'],message_id=ref) for ref in refs],
+                    school_task=dict(title=title,goal=body,advice='',state='ready',change=change,target_id='',purpose='learning',policy=agent.SCHOOL_TASK_POLICY)))
+            fp=self.store.agent._job(key,dict(sequence=self.count),self.now)
+            self.store.agent._save(key,fp,[item],self.now)
+            with self.app.connect() as c:ident=c.execute('SELECT id FROM agent_items WHERE job_id=?',(key,)).fetchone()['id']
+            if accept:return self.store.agent.act(dict(id=ident,action='accept'))['task_id']
+            return ident
+        reading=save('英语：Unit 3朗读','Unit 3课文读两遍，朗读录音上传班级作业区。',first,['M1'])
+        supplement=save('英语：Unit 3朗读补充',texts['M8'],'',['M8'],accept=False,change='append')
+        task=next(t for t in self.app.tasks() if t['id']==reading)
+        with self.app.connect() as c:updated=c.execute('SELECT updated FROM agent_items WHERE id=?',(supplement,)).fetchone()['updated']
+        agent.apply_school_change(self.app,self.store.agent,dict(action='school_change',id=supplement,target_id=reading,change='append',
+            title=task['title'],body=texts['M8'],due='',expected_updated=updated,target_version=task['focus']['version'],target_updated=''))
+        return dict(source=source,texts=texts,first=first,second=second,reading=reading,save=save)
+
+    def test_school_plan_scope_keeps_only_linked_reading_and_complete_shared_original(self):
+        fixture=self.school_scope_fixture();self.evaluate()
+        task,=self.last_input['school_tasks']
+        current=next(t for t in self.app.tasks() if t['id']==fixture['reading'])
+        self.assertEqual((task['id'],task['title'],task['goal'],task['due_on'],task['category']),
+            (current['id'],current['title'],current['action'],fixture['first'],current['agenda']['category']))
+        self.assertIn('读两遍',task['goal']);self.assertIn('上传班级作业区',task['goal']);self.assertIn('不用背诵',task['goal'])
+        self.assertNotIn('练习卷',task['goal'])
+        refs={'school:message:'+fixture['source']['id']+':'+m for m in ('M1','M8')}
+        self.assertEqual(set(task['source_refs']),refs)
+        originals={e['ref']:e for e in self.last_input['evidence'] if e.get('source_kind')=='group_message'}
+        self.assertEqual(set(originals),refs)
+        self.assertEqual(originals['school:message:'+fixture['source']['id']+':M1']['text'],fixture['texts']['M1'])
+        self.assertTrue(all(e['sender']=='虚构英语发布者' and e['time'] for e in originals.values()))
+        effective=next(e for e in self.last_input['evidence'] if e['ref']=='school:task:'+fixture['reading'])
+        self.assertEqual(effective['text'],current['action']);self.assertEqual(set(effective['source_refs']),refs)
+        self.assertIn('未列入school_tasks的其他事项不能扩为本轮要求',goals.PROMPT)
+        # Legacy link lists can omit an already applied append; the current task's publication chain still retains its source.
+        with self.app.connect() as c:
+            row=c.execute('SELECT id,plan FROM agent_items WHERE id=?',(task['item_id'],)).fetchone();plan=json.loads(row['plan'])
+            plan['school_messages']=[dict(source_id=fixture['source']['id'],message_id='M1')]
+            c.execute('UPDATE agent_items SET plan=? WHERE id=?',(json.dumps(plan),row['id']))
+        with self.store.agent._db() as c:ctx=self.store._context(c,self.store._get(c,self.ident),self.now)
+        self.assertEqual(set(ctx['school_tasks'][0]['source_refs']),refs)
+        self.assertEqual({e['ref'] for e in ctx['school_messages']},refs)
+
+    def test_school_plan_scope_keeps_two_linked_tasks_dates_and_optional_reference_limits_separate(self):
+        fixture=self.school_scope_fixture()
+        worksheet=fixture['save']('英语：练习卷','练习卷第1–3题必做，第4题选做，做完检查。'+
+            '保留每题自己的作答，不抄参考。'*30+'题目和家长参考分别打印；家长参考仅供家长核对，不给孩子照抄。',
+            fixture['second'],['M1','M4','M5'])
+        self.evaluate();tasks={t['id']:t for t in self.last_input['school_tasks']}
+        self.assertEqual(set(tasks),{fixture['reading'],worksheet})
+        self.assertEqual(tasks[fixture['reading']]['due_on'],fixture['first']);self.assertEqual(tasks[worksheet]['due_on'],fixture['second'])
+        self.assertNotIn('练习卷',tasks[fixture['reading']]['goal']);self.assertNotIn('朗读',tasks[worksheet]['goal'])
+        self.assertGreater(len(tasks[worksheet]['goal']),400)
+        for condition in ('第1–3题必做','第4题选做','做完检查','分别打印','仅供家长核对','不给孩子照抄'):
+            self.assertIn(condition,tasks[worksheet]['goal'])
+        self.assertEqual(tasks[worksheet]['goal'],next(t for t in self.app.tasks() if t['id']==worksheet)['action'])
+        shared='school:message:'+fixture['source']['id']+':M1'
+        self.assertTrue(all(shared in t['source_refs'] for t in tasks.values()))
+        self.assertEqual(sum(e['ref']==shared for e in self.last_input['evidence']),1)
+        self.assertEqual(set(tasks[fixture['reading']]['source_refs']),{shared,'school:message:'+fixture['source']['id']+':M8'})
+
+    def test_effective_school_requirement_changes_expire_old_plan_and_reject_late_receipt(self):
+        fixture=self.school_scope_fixture();self.approve(self.evaluate());approved=self.goal()['current_plan']
+        self.feedback('虚构家长反馈：本次还未尝试，学校要求保持。')
+        pending=self.evaluate();old_hash=pending['context_hash'];old_messages=pending['school_messages']
+        def edit(goal,due=None):
+            task=next(t for t in self.app.tasks() if t['id']==fixture['reading']);self.count+=1
+            return agent.family_task_focus.save(self.app,dict(id=task['id'],version=task['focus']['version'],
+                request_key='synthetic-effective-requirement-'+str(self.count),mode='next',next_action='',waiting_for='',review_on='',
+                title=task['title'],goal=goal,category=task['agenda']['category'],published_on=task['agenda']['published_on'],
+                due_on=due or task['agenda']['due_on']))
+        # This is an effective parent correction, not an edit of the immutable school notice.
+        edit('家长核对后的有效要求：Unit 3只读一遍，录音上传班级作业区。',fixture['second'])
+        changed=self.goal();self.assertNotEqual(changed['context_hash'],old_hash);self.assertTrue(changed['pending_stale'])
+        self.assertIsNone(changed['pending']);self.assertEqual(changed['current_plan'],approved);self.assertEqual(changed['school_messages'],old_messages)
+        with self.assertRaises(agent.AgentError):self.approve(pending)
+        self.evaluate();self.assertEqual(self.last_input['school_tasks'][0]['due_on'],fixture['second'])
+        self.assertIn('只读一遍',self.last_input['school_tasks'][0]['goal'])
+        before=self.goal()['pending'];count=self.model.call_count
+        self.feedback('虚构家长补充：尚未开始，准备核对当前要求。')
+        def late(messages,*args,**kwargs):
+            value=json.loads(messages[-1]['content']);edit('家长再次核对：Unit 3只读第一段，录音上传班级作业区。')
+            return synthetic_plan(value)
+        self.model.side_effect=late
+        result=self.store.process(self.ident,self.now,explicit=True)
+        self.assertEqual(result['state'],'stale');self.assertEqual(result['created'],0);self.assertEqual(self.model.call_count,count+1)
+        after=self.goal();self.assertIsNone(after['pending']);self.assertTrue(after['pending_stale']);self.assertEqual(after['current_plan'],approved)
+        with self.app.connect() as c:self.assertEqual(c.execute('SELECT state FROM agent_items WHERE id=?',(before['id'],)).fetchone()['state'],'pending')
+
+    def test_school_plan_scope_does_not_borrow_other_goals_or_children(self):
+        fixture=self.school_scope_fixture()
+        other_goal=self.action('create',child_id='child-1',title='虚构另一英语目标',subject='英语')['id']
+        other=fixture['save']('英语：另一目标练习','虚构另一目标要求：练习卷第4题选做。',fixture['second'],['M4'])
+        with self.app.connect() as c:
+            row=c.execute('SELECT id,plan FROM agent_items WHERE task_id=?',(other,)).fetchone();plan=json.loads(row['plan']);plan['school_goal_id']=other_goal
+            c.execute('UPDATE agent_items SET plan=? WHERE id=?',(json.dumps(plan),row['id']))
+        # A dangling task ownership/link is not permission to use another child's current requirements.
+        foreign=fixture['save']('英语：虚构异孩任务','另一孩子的虚构要求。',fixture['second'],['M5'])
+        with self.app.connect() as c:c.execute("UPDATE manual_tasks SET child='示例乙' WHERE id=?",(foreign,))
+        with self.store.agent._db() as c:ctx=self.store._context(c,self.store._get(c,self.ident),self.now)
+        self.assertEqual([t['id'] for t in ctx['school_tasks']],[fixture['reading']])
+        self.assertNotIn('另一孩子的虚构要求',json.dumps(ctx['evidence'],ensure_ascii=False))
+        self.assertNotIn('school:task:'+other,{e['ref'] for e in ctx['evidence']})
+        with self.app.connect() as c:
+            row=c.execute('SELECT id,plan FROM agent_items WHERE task_id=?',(foreign,)).fetchone()
+            c.execute("UPDATE agent_items SET child_id='child-2' WHERE id=?",(row['id'],))
+        self.evaluate();self.assertEqual([t['id'] for t in self.last_input['school_tasks']],[fixture['reading']])
+        source=fixture['source'];source['child_id']='child-2'
+        (self.data/'agent.json').write_text(json.dumps(dict(enabled=True,sources=[source])))
+        with self.store.agent._db() as c:ctx=self.store._context(c,self.store._get(c,self.ident),self.now)
+        self.assertEqual(ctx['school_messages'],[]);self.assertTrue(ctx['school_missing'])
+        self.assertEqual(ctx['school_tasks'],[])
+
+    def test_school_plan_scope_budget_marks_omissions_and_hashes_unselected_requirements(self):
+        fixture=self.school_scope_fixture()
+        def reviewed(messages,*args,**kwargs):
+            value=json.loads(messages[-1]['content']);self.last_input=value;result=synthetic_plan(value)
+            effective=next(e for e in value['evidence'] if e['ref']=='school:task:'+fixture['reading'])
+            result['proposal']['evidence']=[dict(ref=effective['ref'],quote=effective['text'][:30])]
+            return result
+        self.model.side_effect=reviewed;self.approve(self.evaluate())
+        all_ids={fixture['reading']}
+        for n in range(6):
+            self.now+=dt.timedelta(seconds=1)
+            all_ids.add(fixture['save']('英语：虚构独立练习'+str(n),'虚构练习'+str(n)+'：只做当前练习，条件保持完整。'+ '保留该练习的要求。'*50,
+                fixture['second'],['M1']))
+        self.model.side_effect=self.reply;self.evaluate()
+        selected={t['id'] for t in self.last_input['school_tasks']}
+        self.assertEqual(len(selected),6);self.assertEqual(self.last_input['omitted_school_tasks'],1)
+        self.assertIn(fixture['reading'],selected)  # Previously approved task evidence is retrieved within the budget.
+        effective=[e for e in self.last_input['evidence'] if e.get('source_kind')=='effective_school_task']
+        self.assertEqual({e['task_id'] for e in effective},selected)
+        current={t['id']:t for t in self.app.tasks()}
+        self.assertTrue(all(t['goal']==current[t['id']]['action'] for t in self.last_input['school_tasks']))
+        self.assertIn('omitted_school_tasks大于零',goals.PROMPT);self.assertIn('不能声称全部学校要求已核完',goals.PROMPT)
+        omitted,=all_ids-selected;old_hash=self.goal()['context_hash'];task=current[omitted]
+        agent.family_task_focus.save(self.app,dict(id=omitted,version=task['focus']['version'],request_key='synthetic-omitted-requirement',
+            mode='next',next_action='',waiting_for='',review_on='',goal=task['action']+'\n家长核对补充：本题无需抄参考。'))
+        changed=self.goal();self.assertNotEqual(changed['context_hash'],old_hash);self.assertTrue(changed['pending_stale'])
+
     def test_independent_message_to_goal_plan_feedback_and_teacher_correction(self):
         source=dict(id='synthetic-school',platform='wechat',child_id='child-1',name='虚构班级',cursor='100',enabled=True)
         (self.data/'agent.json').write_text(json.dumps(dict(enabled=True,sources=[source])))

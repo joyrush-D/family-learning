@@ -207,6 +207,7 @@ evidence在既定数量内优先回取已确认方案的依据、支持/反证�
 本轮围绕一个持续学习目标，家长是主要用户；汇合提供的全部反馈再判断，不把每条反馈当成新的任务。学校任务、时间账、已确认计划或作答证据未出现在本轮资料中时，只能说“本轮未提供或未检索到”，不能说“没有”或“不存在”（包括“今天没有”）；资料缺席不证明实际生活中不存在。
 家长不知道卡在哪里是正常的，不要求家长诊断原因、设计测验或先给出解决办法。家长负责提供原始情况、转述孩子回答和审核执行。
 learning_goal中的要求、猜测和待核对事项是规划输入，不是实际作答证据；之前的建议、假设和预期结果也不是已执行记录。不得据此声称某个原因已有支持。goal:开头的资料标明尚无作答证据时，不能放入support/against。
+school_tasks仅列出本目标、同一孩子已关联的至多6项正式学校事项，title、goal、due_on与category复用当前清单中已生效的完整要求（包括已确认或自动关联的补充），按每项分别安排与自查，保留各自的数量、必做/选做、提交、检查、参考使用限制及截止。omitted_school_tasks大于零时仍有本轮未提供的关联事项，不能声称全部学校要求已核完。source_refs指向完整原消息；同一原消息可含多个事项，但未列入school_tasks的其他事项不能扩为本轮要求，不能因同科目或共享原消息而合并标准或借用日期。source_kind为effective_school_task的evidence是上述有效goal的系统投影，不冒称教师逐字原话；原话仍见group_message。待核对的更正尚未生效，不能覆盖当前事项；要求本身不证明已经执行或掌握，实际表现仍按反馈核对。
 学校目标、教材、家长观察与孩子转述各有来源；教材未核实不引用页码，不以年级或一次分数认定基础缺失。
 category为课程进度的record是课堂背景，不是孩子表现。本次自动补充同孩同科目的至多6条课程记录，优先保留原判断引用，其余按日期选近的；同科目不代表教材、版本、年级或目标一定适用，先结合明确材料核对。区分已讲、计划讲和日期待核对；不能把记录日当授课日，不能据课堂讲过推断孩子已学会或未学会。课程变化可提出调整，但不自动加练或改正式计划。
 kind为school_requirement的资料是学校要求与范围，可引用为安排依据，不能放入原因假设的support/against。source_kind为group_message时是后台从已保存的群消息自动关联，按source、sender、time及原文说明出处；发布者称呼不是已确认的教师身份，不把转发者冒称老师。学校要求可能包含后续更正或撤销，按各原发送时间核对最新适用要求；冲突无法消解时明确待核对，不再布置已明确取消的任务。是否原文、转发者、老师、日期、截止和适用范围只按所提供信息说明，未知保留未知；一次习作要求不概括成老师长期偏好。区分必须、可选、示例与条件要求，不能把“三选一”“可以”变成全做，也不能漏掉明确要求。本轮evidence含ref以school:开头的学校明确要求且choice不是暂停时，evidence至少逐字引用其中一条当前适用要求的原文，其余名额留给孩子的实际反馈。
@@ -307,20 +308,42 @@ class Store:
         return created
 
     def _school_context(self, c, row):
-        messages = {}; missing = 0
+        messages = {}; missing = 0; school_tasks = []
+        owners = {p['name']:p['id'] for p in self.app.profiles(c)} | {r['alias']:r['child_id'] for r in c.execute('SELECT * FROM profile_aliases')}
+        tasks = None
         # ponytail: reuse school items and immutable messages; index links if household volume warrants it.
         for item in c.execute("SELECT * FROM agent_items WHERE kind='school' AND child_id=? AND state IN ('pending','accepted') ORDER BY created,id", (row['child_id'],)).fetchall():
             plan = json.loads(item['plan'])
             if plan.get('school_goal_id') != row['id']: continue
-            for identity in plan['school_messages']:
+            task = None
+            if item['state'] == 'accepted' and item['task_id']:
+                # Reuse the same effective focus/agenda projection as the task list, in this transaction.
+                if tasks is None: tasks = {t['id']:t for t in self.app.tasks(c)}
+                candidate = tasks.get(item['task_id'])
+                if (candidate and owners.get(candidate['child']) == row['child_id'] and candidate.get('school_origin')
+                        and candidate['source'].splitlines()[0] == 'Agent建议:' + item['id']): task = candidate
+            identities = list(plan['school_messages'])
+            if task:
+                for publication in task['agenda']['publications']:
+                    source_id, message_id = publication['ref'][8:].rsplit(':', 1)
+                    identity = dict(source_id=source_id,message_id=message_id)
+                    if identity not in identities: identities.append(identity)
+            source_refs = []
+            for identity in identities:
                 try: source, message = self.agent._message_context(c, dict(child_id=row['child_id'], **identity))
                 except agent.AgentError: missing += 1; continue
                 ref = 'school:message:' + source['id'] + ':' + message['id']
+                if ref not in source_refs: source_refs.append(ref)
                 messages[ref] = dict(ref=ref, kind='school_requirement', source_kind='group_message',
                     text=message['text'], source=source['name'], sender=message['sender'], time=message['time'],
                     content_incomplete=message['unread'], item_id=item['id'], state=item['state'])
+            if not task or not source_refs: continue
+            agenda = task['agenda']
+            school_tasks.append(dict(id=task['id'],item_id=item['id'],title=task['title'],goal=task['action'],
+                due_on=agenda['due_on'],category=agenda['category'],purpose=plan.get('school_task',{}).get('purpose','unknown'),
+                published_on=agenda['published_on'],published_at=agenda['published_at'],publications=agenda['publications'],source_refs=source_refs))
         ordered = sorted(messages.values(), key=lambda m: (m['time'], m['ref']))
-        return ordered, missing
+        return ordered, missing, school_tasks
 
     def _approved_evidence(self, c, row, plan):
         if 'approved_evidence' in plan: return plan['approved_evidence']
@@ -494,7 +517,7 @@ class Store:
                 if checked:
                     r.pop('media_unread', None); r.update(family_learner_memory.video_evidence(r, checked))
         missing = sorted(ids - {r['id'] for r in records})
-        school_all, school_missing = self._school_context(c, row)
+        school_all, school_missing, school_tasks = self._school_context(c, row)
         teacher_all = self._teacher_requirements(c, row['child_id'], fields['subject'])
         day_context = self._day_context(c, row, owners, now or agent._now())
         evidence_hash = agent._hash({'assessment_policy': 5, 'fields': fields, 'records': records, 'missing': missing,
@@ -503,6 +526,7 @@ class Store:
                                     **({'day_context':day_context} if day_context else {}),
                                     **({'school_messages': [{k:v for k,v in m.items() if k != 'state'} for m in school_all],
                                         'school_missing':school_missing} if school_all or school_missing else {}),
+                                    **({'school_tasks':school_tasks} if school_tasks else {}),
                                     **({'task_feedback': [{k:v for k,v in h.items() if k != 'task_title'} for h in feedback],
                                         'task_missing':task_missing} if feedback or task_missing else {}),
                                     'profile': {k: profile.get(k, '') for k in ('id', 'name', 'grade', 'classroom')}})
@@ -538,13 +562,19 @@ class Store:
         if fields['school_target']:
             evidence.append({'ref': 'school:' + row['id'], 'kind': 'school_requirement', 'text': fields['school_target']})
         background = list(evidence)
+        task_evidence = [dict(ref='school:task:'+t['id'],kind='school_requirement',source_kind='effective_school_task',
+                              text=t['goal'],task_id=t['id'],title=t['title'],source_refs=t['source_refs']) for t in school_tasks]
+        selected_tasks = select_evidence(task_evidence, reviewed_refs, 6)
+        task_refs = {e['ref'] for e in selected_tasks}
+        selected_school_tasks = [t for t in school_tasks if 'school:task:'+t['id'] in task_refs]
         evidence += selected_records
         evidence += selected_courses
+        evidence += selected_tasks
         evidence += school
         evidence += teacher_requirements
         selected_feedback = select_evidence(feedback, reviewed_refs, 24)
         evidence += [{**h, 'text':h['text'][:1200], 'content_incomplete':len(h['text'])>1200} for h in selected_feedback]
-        available = {e['ref']:e['text'] for e in [*background,*record_evidence,*course_evidence,*school_all,*teacher_all,*feedback]}
+        available = {e['ref']:e['text'] for e in [*background,*record_evidence,*course_evidence,*task_evidence,*school_all,*teacher_all,*feedback]}
         omitted_refs = sorted((related_refs & available.keys()) - {e['ref'] for e in evidence})
         unavailable_refs = sorted(reviewed_refs - available.keys())
         reviewed = [dict(ref=e['ref'],quote=e['quote'] if e['ref'] in available else '',
@@ -558,6 +588,7 @@ class Store:
                     reviewed_evidence=reviewed, omitted_reviewed_refs=omitted_refs, unavailable_reviewed_refs=unavailable_refs,
                     task_feedback=selected_feedback, task_feedback_omitted=len(feedback)-len(selected_feedback), task_missing=len(task_missing),
                     school_messages=school, school_omitted=len(school_all)-len(school), school_missing=school_missing,
+                    school_tasks=selected_school_tasks, school_tasks_omitted=len(school_tasks)-len(selected_school_tasks),
                     awaiting_school=bool(plan.get('school_origin') and not school and not teacher_all and not records and not feedback and not fields['school_target'] and fields['baseline']==SCHOOL_BASELINE),
                     version=plan.get('goal_version', 1), input_records=chosen, omitted_count=max(0, len(records)-len(chosen)))
 
@@ -883,6 +914,7 @@ class Store:
                      omitted_reviewed_refs=ctx['omitted_reviewed_refs'], unavailable_reviewed_refs=ctx['unavailable_reviewed_refs'],
                      omitted_task_feedback=ctx['task_feedback_omitted'], missing_tasks=ctx['task_missing'],
                      omitted_school_messages=ctx['school_omitted'],missing_school_messages=ctx['school_missing'],
+                     school_tasks=ctx['school_tasks'],omitted_school_tasks=ctx['school_tasks_omitted'],
                      attachments='原件仅已保存；本次仅使用核对后的文字，未读图像、录音或外部App。')
         try:
             result=family_llm._chat_json([{'role':'system','content':PROMPT},{'role':'user','content':agent._json(content)}],agent._evidence_schema(SCHEMA,ctx['evidence']),'family_learning_plan',timeout=90,data_path=self.app.DATA)
