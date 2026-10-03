@@ -302,9 +302,9 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
         state='review';brief['reason']='原件或具体要求尚未读全，请先核对。'
     if purpose=='optional' and state=='ready':
         state='review';brief['reason']='自愿参加或参考资料，不自动加入必做事项；是否参加由家长决定。'
-    # Another validated action can carry this notice's learning requirement. Then
-    # inspect this administrative action itself, rather than inheriting every
-    # learning word from its shared original. Single/legacy drafts keep the guard.
+    # The batch checks peers only after their own reading/date guards. This first
+    # pass can inspect an administrative action without inheriting unrelated
+    # learning words from its shared original. Single/legacy drafts keep the guard.
     learning_parts=[brief['title'],brief['goal']] if separate_learning else [e.get('text','') for e in evidence]+[p['text'] for p in (pages or {}).get('model_pages',[])]
     learning_text=_LEARNING_MATERIAL.sub('',_URL.sub('',' '.join(learning_parts)))
     if purpose=='admin' and state!='reference' and (_LEARNING_ACTIVITY.search(learning_text) or _LEARNING_ACTION.search(learning_text)):
@@ -1474,11 +1474,15 @@ def apply_school_change(app, store, obj):
     return dict(ok=True,state='accepted',task_id=target_id,school_changed=True,replayed=False,completion_needs_review=status=='已完成' and change=='update')
 
 
-def _school_submission_step(goal, submission):
-    """Sharing a message is insufficient: only a contained submission action is a duplicate."""
+def _school_submission_step(brief, activity):
+    """A shared channel is insufficient: the title's object must belong to this activity too."""
     clean=lambda text:re.sub(r'[\W_]+','',text)
-    step=re.sub(r'^(?:请|在|到|于)+','',clean(goal));whole=clean(submission)
-    return bool(step and whole and (step==whole or len(step)>=4 and step in whole))
+    step=re.sub(r'^(?:请|在|到|于)+','',clean(brief['goal']));whole=clean(activity.get('submission',''))
+    if not (step and whole and (step==whole or len(step)>=4 and step in whole)): return False
+    topic=re.sub(r'^(?:家长事务|家长|行政事项|语文|数学|英语)[：:]\s*','',brief['title'])
+    topic=clean(re.sub(r'提交|上传|交回|签到|打卡|朗读|背诵|跟读|听写', '', topic))
+    context=clean(activity['title']+activity['goal']+activity.get('submission',''))
+    return not topic or topic in context
 
 
 def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None, school_tasks=()):
@@ -1553,13 +1557,8 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                                and not _needs_task_details(e['text']) for e in evidence):
                 item['plan'] = {'school_learning': {'subject': subject, 'goal_id': goal_id}}
             raw_change=proposal.get('task_change','new');raw_target=proposal.get('task_target_id','')
-            separate_learning=any(p is not proposal and p['task_purpose']=='learning' and p['task_state']=='ready'
-                and p['task_change']=='new' and isinstance(p['task_title'],str) and p['task_title'].strip()
-                and isinstance(p['task_goal'],str) and p['task_goal'].strip() and isinstance(p['evidence'],list)
-                and {q['ref'] for q in cited}&{q.get('ref') for q in p['evidence'] if isinstance(q,dict)}
-                for p in result['proposals'])
             brief=_school_brief({key:proposal.get('task_'+key,'review' if key=='state' else 'new' if key=='change' else '') for key in ['title','goal','advice','state','reason','change','target_id','purpose','submission']},
-                                incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence if e['ref'] in {q['ref'] for q in cited}),evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}],school_tasks=school_tasks,separate_learning=separate_learning)
+                                incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence if e['ref'] in {q['ref'] for q in cited}),evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}],school_tasks=school_tasks,separate_learning=True)
             target=next((t for t in school_tasks if t['id']==raw_target),None)
             accounted.update(e['ref'] for e in cited)
             status_reply=cited and all(e['text'].strip('。！! ') in {'已签署','已完成','已处理','已确认','已提交','已报名','已打卡','已阅读','已知悉'} for e in cited)
@@ -1581,13 +1580,21 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     if routing:
         if set(refs) != accounted:
             raise AgentError('学校消息归纳有遗漏，整批保留未处理，待原后台重试', code='school_coverage_incomplete')
-        # A check-in split from its own activity must not be auto-added as a second, unrelated task.
+        # Only final, guarded learning results can carry a mixed notice's activity.
+        # Missing reading/date evidence, optional resources and changes never qualify.
+        activities=[o for o in output if o['plan']['school_task'].get('purpose')=='learning'
+                    and o['plan']['school_task']['state']=='ready' and o['plan']['school_task']['change']=='new']
         for item in output:
             brief=item['plan']['school_task'];cited={e['ref'] for e in item['evidence']}
-            owner=next((o for o in output if o is not item and o['plan']['school_task'].get('submission')
+            if brief.get('purpose')!='admin' or brief['state']=='reference': continue
+            if brief['state']=='ready' and not any(cited&{e['ref'] for e in o['evidence']} for o in activities):
+                brief.update(_school_brief(brief,evidence=[e for e in evidence if e['ref'] in cited],school_tasks=school_tasks))
+            # Only the same activity's submission is a duplicate, not another form
+            # cited from that notice or sent through the same classroom channel.
+            owner=next((o for o in activities if o['plan']['school_task'].get('submission')
                 and cited&{e['ref'] for e in o['evidence']}
-                and _school_submission_step(brief['goal'],o['plan']['school_task']['submission'])),None)
-            if owner and brief.get('purpose')=='admin' and brief['state']!='reference':
+                and _school_submission_step(brief,o['plan']['school_task'])),None)
+            if owner:
                 brief.update(state='review',reason='同一通知的“'+owner['title'][:40]+'”已含提交要求；若是同一件事请忽略，另有要求再加入，避免重复。')
     return output
 
