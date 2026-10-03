@@ -325,8 +325,10 @@ def _school_handback(brief, submission, evidence):
     for entry in evidence:
         if entry.get('kind','text')!='text' or entry.get('unread') or entry.get('content_incomplete'): continue
         for match in re.finditer(r'交(?:回|上)?\s*((?!至|到|给)[\u4e00-\u9fffA-Za-z0-9]{0,8}(?:本|原卷|试卷|卷子|回执|答题卡))(?=[。；;，,\s]|$)',entry.get('text','')):
+            prefix=re.split(r'[。；;，,：:\n]',entry['text'][:match.start()])[-1]
+            if re.search(r'不(?:用|要|必|需)?|无需|无须|免',prefix): continue
             obj=match.group(1)
-            mistaken=r'(?:提交|上交|交回|交)\s*(?:至|到)\s*'+re.escape(obj)
+            mistaken=r'(?:提交|上交|交回|交)\s*(?:至|到)\s*'+re.escape(obj)+r'(?![\w./·-])'
             brief['goal']=re.sub(mistaken,lambda _:match.group(0),brief['goal'])
             submission=re.sub(mistaken,lambda _:match.group(0),submission)
     return submission

@@ -32,6 +32,15 @@ def _school_execution_facts(proposal, tasks, originals=()):
             return str({'一':1,'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}.get(value,value))
         return {(number(n),unit) for n,unit in recording.findall(text)}
     date_before=re.compile(r'((?:\d{4}-\d{2}-\d{2})|(?:\d{1,2}月\d{1,2}[日号]))(?:之)?前')
+    def objects(text):
+        compact=re.sub(r'\s+','',text).lower()
+        return set(re.findall(r'unit\d+|第[一二三四五六七八九十0-9]+课|《[^》]{1,40}》',compact))
+    def peers_for(sentence):
+        named=objects(sentence)
+        if named: return [t for t in tasks if named<=objects(t['title']+' '+t['goal'])]
+        activities=[r'朗读|跟读|读[一二两三四五六七八九十0-9]+(?:遍|次)',r'教材',r'练习卷',r'试卷',r'回执']
+        kinds={i for i,pattern in enumerate(activities) if re.search(pattern,sentence)}
+        return [t for t in tasks if kinds<={i for i,pattern in enumerate(activities) if re.search(pattern,t['title']+' '+t['goal'])}]
     def day(value, due):
         if '-' in value: return value
         month,date=re.match(r'(\d{1,2})月(\d{1,2})[日号]',value).groups()
@@ -53,14 +62,14 @@ def _school_execution_facts(proposal, tasks, originals=()):
             if re.match(r'^\s*可选(?:建议)?\s*[:：]',sentence): continue
             wanted=counts(sentence)
             if wanted:
-                peers=[t for t in tasks if re.search(r'录音|录制',t['goal'])]
-                objects=set(re.findall(r'unit\s*\d+|第[一二三四五六七八九十0-9]+课|《[^》]{1,40}》',sentence.lower()))
-                if objects: peers=[t for t in peers if all(obj in (t['title']+' '+t['goal']).lower() for obj in objects)]
+                peers=[t for t in peers_for(sentence) if re.search(r'录音|录制',t['goal'])]
                 if len(peers)!=1 or not wanted<=counts(peers[0]['goal']):
                     raise agent.AgentError('朗读次数不能改成录音次数，录音数量须沿同一原事项核对')
             for mention in date_before.findall(sentence):
-                matched=[t for t in tasks if t['due_on'] and day(mention,t['due_on'])==t['due_on']]
-                if matched and any(not before_supported(t) for t in matched):
+                matched=peers_for(sentence)
+                if not objects(sentence): matched=[t for t in matched if t['due_on'] and day(mention,t['due_on'])==t['due_on']]
+                if (len(matched)!=1 or not matched[0]['due_on'] or day(mention,matched[0]['due_on'])!=matched[0]['due_on']
+                        or not before_supported(matched[0])):
                     raise agent.AgentError('学校完成日期不能另改成此前完成，请沿原事项日期核对')
 
 

@@ -1291,6 +1291,18 @@ class GoalTests(unittest.TestCase):
         borrowed=synthetic_plan(self.last_input);borrowed['proposal']['why_now']='需在'+fixture['first']+'前完成Unit 3。'
         with self.assertRaisesRegex(agent.AgentError,'完成日期'):self.store._proposal(borrowed,ctx,self.now)
 
+    def test_school_execution_object_tokens_do_not_borrow_counts_or_date_edges(self):
+        tasks=[dict(id='synthetic-u3',title='英语：Unit 3',goal='Unit 3课文读两遍，2026-10-06当日完成。',due_on='2026-10-06'),
+               dict(id='synthetic-u30',title='英语：Unit 30',goal='Unit 30录音2遍，2026-10-07前完成。',due_on='2026-10-07')]
+        for text in ('Unit3录制两遍。','Unit3须10月7日前完成。','Unit3须10月8日前完成。'):
+            with self.assertRaises(agent.AgentError):goals._school_execution_facts(dict(action=text,why_now='沿原要求。'),tasks)
+        good=dict(action='Unit30录制二遍。',why_now='Unit30在10月7日前完成。')
+        goals._school_execution_facts(good,tasks)
+        tasks[1].update(goal='Unit 30录音2遍，2026-10-06前完成。',due_on='2026-10-06')
+        goals._school_execution_facts(dict(action='Unit30录制二遍。',why_now='Unit30在10月6日前完成。'),tasks)
+        with self.assertRaises(agent.AgentError):
+            goals._school_execution_facts(dict(action='沿原要求。',why_now='在10月6日前完成。'),tasks)
+
     def test_effective_school_requirement_changes_expire_old_plan_and_reject_late_receipt(self):
         fixture=self.school_scope_fixture();self.approve(self.evaluate());approved=self.goal()['current_plan']
         self.feedback('虚构家长反馈：本次还未尝试，学校要求保持。')
