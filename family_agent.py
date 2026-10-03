@@ -66,7 +66,7 @@ learning_goal_id只从输入learning_goals选择同一科目且适合本要求�
 老师宣布的考试、测验、听写、默写、比赛、家长会或需要带物品/穿着的日期安排，即使不是作业，也必须各自单独返回一项：task_title写科目+事件+原文的日期或星期（如“英语：Unit1–3单元测验（周五）”），task_goal写范围与要求；不要因为它没有“完成/提交”字样就省略。due只在原文写明日期或“本周五/下周一/明天”这类可按发送日换算的表述时填写YYYY-MM-DD，按该消息的发送日期换算；同一条消息里不同事项分别填各自日期，换算不了留空。
 任务要求与老师的后续更正、撤销一起保留原消息作为规划依据；不把它们当成孩子表现。发布者称呼不等于教师身份已确认，不凭群名推断任课老师，不将家长转发说成老师直接发布。保持必须、任选、示例和条件要求，不能读出未提供的图片或链接内容。'''
 # One saved interpretation feeds the task list; it never records child performance.
-SCHOOL_TASK_POLICY = 8
+SCHOOL_TASK_POLICY = 9
 _SCHOOL_DATE_MENTION=re.compile(r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}\s*[日号]|今天|今日|今晚|明天|明日|后天|(?:本|这|下)(?:个)?(?:周|星期|礼拜)|(?:周|星期|礼拜)[一二三四五六日天]|截止|期限|日期|完成时间')
 TASK_BRIEF_SCHEMA = {'type':'object','additionalProperties':False,'required':['title','goal','advice','state','reason'],
     'properties':{**{key:{'type':'string','maxLength':limit} for key,limit in [('title',80),('goal',2000),('advice',1200),('reason',400)]},
@@ -406,7 +406,7 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
     if read: brief['page_evidence']=dict(fingerprint=pages['fingerprint'],read=read,unread=pages['unread'],omitted=pages['omitted'])
     if pdf: brief['pdf_evidence']=dict(fingerprint=pdf['fingerprint'],documents=pdf['documents'])
     brief['origin_basis']=_school_message_basis(evidence)
-    if change=='append': _school_append_brief(brief,evidence,school_tasks)
+    _school_append_brief(brief,evidence,school_tasks)
     return brief
 
 
@@ -1512,6 +1512,33 @@ def school_targets(app, store, child_id, connection=None):
 
 def _school_append_brief(brief, evidence, targets):
     """A narrow additive relation, never a guess from a date, nickname or model target alone."""
+    if brief.get('change')=='new' and brief.get('state')=='ready':
+        # Relation validation cannot depend on the model choosing "append".
+        # Only an explicit, wholly-read supplement can use the existing unique
+        # source/publisher/activity and transaction guards; ordinary new work
+        # (including a new reading assignment) remains independent.
+        headers=[re.match(r'^\s*(?:只|仅)补(?:充)?[^。：:\n]{0,30}(?:朗读|教材(?:作业)?)\s*[：:]\s*(.+)$',
+                          e.get('text',''),re.S) for e in evidence]
+        if not headers or not all(headers): return
+        trials=[]
+        for target in targets:
+            trial=copy.deepcopy(brief)
+            trial.update(change='append',target_id=target['id'])
+            _school_append_brief(trial,evidence,targets)
+            if trial.get('state')=='ready' and trial.get('target_basis'): trials.append(trial)
+        if len(trials)!=1:
+            brief.update(state='review',reason='本条明确是补充，但原事项的唯一归属或当前要求无法核对；不另建作业，原记录保留。')
+            return
+        # The model called this new work and may have copied old submission
+        # steps into it. Keep the complete additive source clauses, without
+        # importing a deadline, channel or quantity from its invented new task.
+        delta='\n'.join(m.group(1).strip() for m in headers)
+        if len(delta)>2000:
+            brief.update(state='review',reason='补充要求较长，未截断或另建作业；请核对完整原消息。')
+            return
+        brief.update(trials[0],goal=delta)
+        brief.pop('submission',None)
+        return
     if brief.get('change')!='append': return
     def uncertain(reason='补充与原事项的同发布者、唯一归属或当前要求尚不能核对；原要求、安排和反馈保留。'):
         brief.update(state='review',reason=reason)

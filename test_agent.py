@@ -1345,6 +1345,62 @@ class AgentTests(unittest.TestCase):
         with patch.object(agent,'_now',return_value=self.now):
             return agent.apply_school_change(self.app,self.store,agent._school_append_request(row,brief),school_auto=True)
 
+    def test_explicit_supplement_mislabeled_new_uses_original_task_and_deadline(self):
+        original,task_id=self._school_append_original()
+        row=self._school_append_candidate(12,'只补朗读：录音上传后确认上传成功，不要求背诵。',
+            title='英语：补朗读并上传录音',goal='补朗读，确认上传成功，不要求背诵')
+        brief=json.loads(row['plan'])['school_task']
+        self.assertEqual((brief['state'],brief['change'],brief['target_id']),('ready','append',task_id))
+        self.assertEqual(brief['goal'],'录音上传后确认上传成功，不要求背诵。')
+        self.assertNotIn('submission',brief)
+        with patch.object(agent.family_llm,'_chat_json') as model,patch.object(agent,'_now',return_value=self.now):
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,0)['created'],0)
+            model.assert_not_called()
+        with self.app.connect() as c:
+            task=next(t for t in self.app.tasks(c) if t['id']==task_id)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+            self.assertEqual(task['agenda']['due_on'],'2026-02-11')
+            self.assertIn(original['body'],task['action'])
+            self.assertIn(brief['goal'],task['action'])
+            self.assertIn('message:synthetic-group:12',task['source'])
+            self.assertEqual(c.execute('SELECT task_id FROM agent_items WHERE id=?',(row['id'],)).fetchone()[0],task_id)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+        # A genuinely new reading requirement is not merged by subject/activity.
+        new=self._school_append_candidate(13,'Unit 4课文读一遍，明天完成。',title='英语：Unit 4朗读',due='2026-02-11')
+        self.assertEqual(json.loads(new['plan'])['school_task']['change'],'new')
+        self.assertNotEqual(self.store.act(dict(id=new['id'],action='accept'))['task_id'],task_id)
+
+    def test_explicit_supplement_new_cannot_bypass_ambiguous_or_changed_origin(self):
+        original,task_id=self._school_append_original()
+        delta='只补朗读：录音上传后确认上传成功。'
+        for index,publisher,child,text in ((12,'synthetic-other-teacher','child-1',delta),
+                (13,'','child-1',delta),(14,'synthetic-teacher-a','child-2',delta),
+                (15,'synthetic-teacher-a','child-1','只补朗读：明天确认上传成功。'),
+                (16,'synthetic-teacher-a','child-1','只补朗读：取消朗读，改为背诵。')):
+            row=self._school_append_candidate(index,text,publisher=publisher,child=child)
+            self.assertEqual(json.loads(row['plan'])['school_task']['state'],'review')
+        def parent_change():
+            agent.family_task_focus.save(self.app,dict(id=task_id,version=0,request_key='synthetic-new-supplement-edit',
+                mode='later',next_action='等家长核对',waiting_for='',review_on='2026-02-12',goal='家长核对后的要求保留。'))
+        stale=self._school_append_candidate(17,delta,during_model=parent_change)
+        with self.assertRaises(agent.AgentError): self._school_append_auto(stale)
+        later=self._school_append_candidate(18,delta)
+        self.assertEqual(json.loads(later['plan'])['school_task']['state'],'review')
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+            self.assertEqual(next(t for t in self.app.tasks(c) if t['id']==task_id)['action'],'家长核对后的要求保留。')
+            self.assertEqual(c.execute('SELECT body FROM agent_items WHERE id=?',(original['id'],)).fetchone()[0],original['body'])
+
+    def test_explicit_supplement_new_with_two_readings_does_not_guess_a_target(self):
+        self._school_append_original()
+        self._school_append_original(12,title='英语：另一份朗读')
+        row=self._school_append_candidate(13,'只补朗读：录音上传后确认上传成功。')
+        self.assertEqual(json.loads(row['plan'])['school_task']['state'],'review')
+        with patch.object(agent.family_llm,'_chat_json') as model:
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,0)['created'],0)
+            model.assert_not_called()
+        with self.app.connect() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],2)
+
     def test_school_cross_batch_append_keeps_task_arrangements_sources_and_original_replay(self):
         from family_goals import Store as Goals
         original,task_id=self._school_append_original()
