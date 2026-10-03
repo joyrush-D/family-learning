@@ -289,3 +289,25 @@ test('unfinished school homework due for review appears once in the direct revie
  assert.equal((html.match(/<article>虚构作业订正回看<\/article>/g)||[]).length,1,'one original homework must not appear twice');
  assert.match(html,/今日作业 · 0/);assert.equal(d.tasks[0].focus.review_on,d.today);
 });
+
+// Shared task-list contract: known completion steps stay visible; group names stay in the original-message view.
+function taskListTextHarness(){
+ const app=readFileSync(__dirname+'/app.js','utf8'),ctx=vm.createContext({esc:escape,schoolMessageIdentity:(ref,child)=>ref==='message:synthetic:one'&&child==='child-a'});
+ vm.runInContext(app.slice(app.indexOf('function requirementHTML('),app.indexOf('function taskFocus(')),ctx);
+ vm.runInContext(app.slice(app.indexOf('function schoolOriginalButtons('),app.indexOf('// Show the saved preparation beside its task.')),ctx);
+ return ctx;
+}
+test('complete requirements keep signing and checking visible without truncation',()=>{
+ const h=taskListTextHarness(),long='请读完整要求。'.repeat(24)+'最后请家长签字。',text='完成第1–3题。\n第4题选做。\n对照老师答案检查。\n'+long,html=h.requirementHTML(text);
+ for(const line of text.split('\n'))assert.ok(html.includes('<li>'+escape(line)+'</li>'),'each saved requirement is directly visible');
+ assert.doesNotMatch(html,/<details|展开完整要求|…/);
+ assert.ok(h.requirementHTML('<script>虚构文本</script>').includes('&lt;script&gt;虚构文本&lt;/script&gt;'));
+});
+test('publisher context omits class and group names but preserves original reference',()=>{
+ const h=taskListTextHarness(),publication={ref:'message:synthetic:one',sender:'示例周老师 <昵称>',source_name:'虚构学校群 <甲班>'},html=h.schoolOriginalButtons([publication.ref],'child-a','查看作业原件',[publication]);
+ assert.ok(html.includes('示例周老师 &lt;昵称&gt;'));assert.doesNotMatch(html,/发言人：|虚构学校群|甲班/);
+ assert.ok(html.includes('data-school-original-ref="message:synthetic:one"'));
+ assert.equal(publication.source_name,'虚构学校群 <甲班>','saved source metadata is unchanged');
+ assert.ok(h.schoolOriginalButtons([publication.ref],'child-a','查看作业原件',[{...publication,sender:'   '}]).includes('发布者未记录'));
+ assert.equal(h.schoolOriginalButtons([publication.ref],'child-b','查看作业原件',[publication]),'','other child source is not exposed');
+});
