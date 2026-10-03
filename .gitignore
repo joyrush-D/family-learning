@@ -222,3 +222,6 @@
 !/family_qq_napcat.py
 
 !/test_assistant_scenarios_ui.cjs
+
+# Reviewed public requirements only; editable document exports remain private.
+!/PRD同行评审版.md
