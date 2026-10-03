@@ -272,6 +272,60 @@ class SchoolHistoryTests(unittest.TestCase):
     def test_old_complete_exhausted_receipt_seen_before_window_moves_does_not_reopen_subset(self):
         self._assert_old_complete_scope_not_shrunk(done=False)
 
+    def _assert_no_stale_scope_marker(self, change):
+        self._partial_legacy()
+        key = self._close_complete_scope(done=False, old_cited_key=True)
+        original = agent._history_scope_mark
+        def race(store, origin, source, values, cited_key, receipt, scope_key):
+            change(key)
+            return original(store, origin, source, values, cited_key, receipt, scope_key)
+        with patch.object(agent, '_history_scope_mark', side_effect=race):
+            self.assertEqual(agent._history_scopes(self.store, dict(enabled=True, sources=self.sources)), [])
+        with self.app.connect() as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_jobs WHERE id LIKE 'school-history-scope:%'").fetchone()[0], 0)
+
+    def test_scanned_old_scope_retried_before_marker_saves_no_marker(self):
+        self._assert_no_stale_scope_marker(lambda key: self.store.act(dict(action='retry', id=key)))
+
+    def test_source_paused_after_scan_saves_no_scope_marker(self):
+        def pause(key):
+            self.fixture.source['enabled'] = False
+            self._config()
+        self._assert_no_stale_scope_marker(pause)
+
+    def test_source_rebound_after_scan_saves_no_scope_marker(self):
+        def rebind(key):
+            self.fixture.source['child_id'] = 'child-2'
+            self._config()
+        self._assert_no_stale_scope_marker(rebind)
+
+    def test_message_changed_after_scan_saves_no_scope_marker(self):
+        def changed(key):
+            with self.app.connect() as c:
+                row = c.execute('SELECT payload FROM agent_messages WHERE id=?', ('12',)).fetchone()
+                value = json.loads(row['payload'])
+                value['text'] += '虚构竞争修改'
+                c.execute('UPDATE agent_messages SET payload=? WHERE id=?', (agent._json(value), '12'))
+        self._assert_no_stale_scope_marker(changed)
+
+    def test_pending_old_full_scope_keeps_same_job_attempts_and_backoff(self):
+        group = self._partial_legacy()
+        key = self._close_complete_scope(done=False, old_cited_key=True)
+        with self.app.connect() as c:
+            c.execute('UPDATE agent_jobs SET attempts=1,next_try=? WHERE id=?',
+                ((self.fixture.now + dt.timedelta(minutes=30)).isoformat(), key))
+        scopes = agent._history_scopes(self.store, dict(enabled=True, sources=self.sources))
+        self.assertEqual(scopes[0][2], key)
+        self.history_response = lambda context: self._partial_response(group, context)
+        calls = sum('existing_actions' in call['context'] for call in self.calls)
+        self.assertEqual(self._tick(10)['created'], 0)
+        self.assertEqual(sum('existing_actions' in call['context'] for call in self.calls), calls)
+        self.assertEqual(self._tick(30)['created'], 2)
+        with self.app.connect() as c:
+            row = c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?', (key,)).fetchone()
+            self.assertEqual((row['done'], row['attempts']), (1, 2))
+        self.assertEqual(len(self._history_rows()), 1)
+
     def test_legacy_original_receipt_changes_after_discovery_make_no_model_call(self):
         self._partial_legacy()
         scopes = agent._history_scopes(self.store, dict(enabled=True, sources=self.sources))
