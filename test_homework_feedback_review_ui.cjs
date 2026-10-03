@@ -85,7 +85,10 @@ async function server(){
   assert.match(await p.locator('#homeworkPrintError').innerText(),/原选择有资料现在无法核对/);assert.equal(await printForm.locator('[name=guide_text]').inputValue(),'虚构家长参考：题目和答案分别打印。');
   let paired=0,generated=0;const pairBodies=[];
   await p.route('**/api/print/homework/draft',r=>{generated++;return r.fulfill({status:503,json:{error:'不应调用'}})});
-  await p.route('**/api/print/homework',r=>{paired++;pairBodies.push(r.request().postDataJSON());return paired===1?r.fulfill({status:503,json:{error:'虚构配对回执丢失'}}):r.fulfill({json:{jobs:{questions:[{id:'e'.repeat(32)}],guide:{id:'f'.repeat(32)}}})});
+  await p.route('**/api/print/homework',r=>{
+    paired++;pairBodies.push(r.request().postDataJSON());
+    return paired===1?r.fulfill({status:503,json:{error:'虚构配对回执丢失'}}):r.fulfill({json:{jobs:{questions:[{id:'e'.repeat(32)}],guide:{id:'f'.repeat(32)}}}});
+  });
   await p.locator('#homeworkDraftButton').click();await printForm.locator('[type=submit]').evaluate(x=>x.click());assert.equal(generated,0);assert.equal(paired,0,'unavailable saved source cannot be sent to printing');
   await printForm.locator('[name=question_source]').selectOption({label:'synthetic-answer.png'});await printForm.locator('[name=question_confirmed]').check();await printForm.locator('[name=guide_confirmed]').check();
   if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'scoped-print-'+width+'.png')})}
