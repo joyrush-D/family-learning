@@ -1229,6 +1229,24 @@ class GoalTests(unittest.TestCase):
         self.assertTrue(all(shared in t['source_refs'] for t in tasks.values()))
         self.assertEqual(sum(e['ref']==shared for e in self.last_input['evidence']),1)
         self.assertEqual(set(tasks[fixture['reading']]['source_refs']),{shared,'school:message:'+fixture['source']['id']+':M8'})
+        shown={t['id']:t for t in self.goal()['school_tasks']}
+        self.assertEqual(shown,tasks)
+        self.assertEqual(self.goal()['school_tasks_omitted'],0)
+
+    def test_school_completion_checks_cannot_be_regenerated_as_learning_observations(self):
+        fixture=self.school_scope_fixture();self.evaluate()
+        with self.store.agent._db() as c:
+            ctx=self.store._context(c,self.store._get(c,self.ident),self.now)
+        before=self.goal()
+        wrong=synthetic_plan(self.last_input)
+        wrong['proposal']['mastery_check']='本次要求自查：朗读要背诵。学习表现记录：记录实际帮助。'
+        with self.assertRaisesRegex(agent.AgentError,'不能另列学校完成标准'):
+            self.store._proposal(wrong,ctx,self.now)
+        self.assertEqual(self.goal(),before)
+        observed=synthetic_plan(self.last_input)
+        observed['proposal']['mastery_check']='学习表现记录：保留孩子实际读的片段、需要的帮助；是否能独立读尚未知。'
+        self.assertEqual(self.store._proposal(observed,ctx,self.now)['mastery_check'],observed['proposal']['mastery_check'])
+        self.assertEqual(before['school_tasks'][0]['goal'],next(t for t in self.app.tasks() if t['id']==fixture['reading'])['action'])
 
     def test_effective_school_requirement_changes_expire_old_plan_and_reject_late_receipt(self):
         fixture=self.school_scope_fixture();self.approve(self.evaluate());approved=self.goal()['current_plan']
@@ -1306,6 +1324,8 @@ class GoalTests(unittest.TestCase):
         self.assertEqual({e['task_id'] for e in effective},selected)
         current={t['id']:t for t in self.app.tasks()}
         self.assertTrue(all(t['goal']==current[t['id']]['action'] for t in self.last_input['school_tasks']))
+        self.assertEqual(self.goal()['school_tasks_omitted'],1)
+        self.assertEqual({t['id'] for t in self.goal()['school_tasks']},selected)
         self.assertIn('omitted_school_tasks大于零',goals.PROMPT);self.assertIn('不能声称全部学校要求已核完',goals.PROMPT)
         omitted,=all_ids-selected;old_hash=self.goal()['context_hash'];task=current[omitted]
         agent.family_task_focus.save(self.app,dict(id=omitted,version=task['focus']['version'],request_key='synthetic-omitted-requirement',

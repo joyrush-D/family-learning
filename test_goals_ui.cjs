@@ -352,6 +352,19 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   assert(observationRecord);assert.equal(observationRecord.category,'家长观察');assert.equal(observationRecord.source,'事项:'+original);assert.deepEqual(observationGoal.current_plan,beforeObservation.current_plan);assert(observationGoal.evidence_changed);
   assert.equal((await(await p.request.get(url+'api/goals')).json()).goals.find(g=>g.id===secondProfile).records.some(r=>r.note===observation),false);
   await p.locator(`[data-goal-select="${savedGoal.id}"]`).last().click();await p.locator(`#goal-record-${observationRecord.id}`).getByText(observation,{exact:true}).waitFor();assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);checks++;
+  // Read-only display contract only; real task scope and projection are checked by test_goals.py.
+  const checksFixture=[
+   {id:'synthetic-textbook-check',title:'数学：教材第2、3题',due_on:'2026-10-08',goal:'先独立完成教材第2、3题，写在数学本；按示例检查，标记不会的题，不照抄。'},
+   {id:'synthetic-correction-check',title:'数学：测验第5题订正',due_on:'2026-10-09',goal:'订正测验第5题，写完整过程；写在原卷上。<img src=x onerror="window.schoolCheckInjected=true">'}
+  ];
+  await p.route('**/api/goals',async route=>{const response=await route.fetch(),data=await response.json();const goal=data.goals.find(g=>g.id===savedGoal.id);goal.school_tasks=checksFixture;goal.school_tasks_omitted=1;await route.fulfill({response,json:data})});
+  await p.reload();await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="goals"]').click();await p.locator('[data-goal-child-select="child-1"]').click();await p.locator(`[data-goal-select="${savedGoal.id}"]`).last().click();
+  const liveChecks=p.locator('[data-goal-school-checks]');await liveChecks.waitFor();assert(await liveChecks.isVisible());
+  for(const item of checksFixture){const shown=liveChecks.locator(`[data-goal-school-task="${item.id}"]`);assert.equal(await shown.locator('strong').innerText(),item.title);assert.equal(await shown.locator('.source').innerText(),item.goal);assert.match(await shown.innerText(),new RegExp(item.due_on))}
+  assert.equal(await liveChecks.locator('[data-goal-school-task="synthetic-textbook-check"]').innerText().then(s=>s.includes('完整过程')),false);
+  assert.match(await liveChecks.innerText(),/另有 1 项本轮未纳入/);assert.equal(await liveChecks.locator('textarea,input,select,img').count(),0);assert.equal(await p.evaluate(()=>window.schoolCheckInjected),undefined);assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  if(process.env.GOALS_UI_PROOF_DIR)await liveChecks.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'current-school-checks-'+width+'.png')});
+  await p.unroute('**/api/goals');checks++;
   await p.close();
  }
  console.log(JSON.stringify({passed:true,checks,viewports:[360,1440],synthetic_only:true}));

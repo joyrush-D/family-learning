@@ -194,7 +194,8 @@ PROPOSAL['properties'].update({
             'status': {'type': 'string', 'enum': ['待验证', '有支持', '有反证']},
             'support': {'type': 'array', 'maxItems': 4, 'items': {'type': 'string'}},
             'against': {'type': 'array', 'maxItems': 4, 'items': {'type': 'string'}}}}},
-    'resource': {'type': 'string', 'maxLength': 800}, 'mastery_check': {'type': 'string', 'maxLength': 1000},
+    'resource': {'type': 'string', 'maxLength': 800}, 'mastery_check': {'type': 'string', 'maxLength': 1000,
+        'description': '学习表现的观察建议。有school_tasks时只写观察什么、怎样记录帮助及未知，不重写学校完成要求或本次要求自查。'},
     'choice': {'type': 'string', 'enum': ['核实', '尝试', '维持', '调整', '暂停']}})
 PROPOSAL['required'] += ['assessment', 'hypotheses', 'resource', 'mastery_check', 'choice']
 PROMPT = '''你是一起成长Agent，负责根据实际证据定位学习困难、设计核对步骤和调整同一个孩子的持续学习计划。
@@ -222,7 +223,7 @@ choice不是暂停时mastery_check不能为空，说明如何观察独立解释�
 记录里的video_observations只在家长明确核对了该原件的画面观察时出现（video_observations_label为“家长核对的画面观察”）：每项列出确认编号、token、原件编号、核对时间、家长选中的观察及各自时间位置，uncertainties是当时列出的未知项，audio_assessed为false表示未评估声音。它是家长核对过的画面描述，不等于系统看到或听到孩子作答，不能单凭它认定完成、掌握或确认原因，帮助条件未知时先核对；未选中的观察不提供。同条other_media_unread为true表示其余原件或未核对转写内容仍未知，不得推测。
 source_kind为teacher_record的是家长已保存的老师明确要求，按teacher_name、day、target与原文核对；recorded_by为parent，不表示系统已核实老师身份或直接听到老师原话。记录日期不证明要求持续生效，区分当天作业、长期要求与已过时要求，当前适用性不明先核对；teacher_reason是家长记录的老师说明，不能从它推断孩子能力。群消息与老师档案指向同一条原消息时只算一项要求，不重复布置。
 
-有学校任务时，mastery_check分别写“本次要求自查”和“学习表现记录”：自查对应老师具体要求，保留任选、条件和示例；记录孩子原话、作品、实际帮助及卡住的步骤。完成作文或套用词语不代表独立掌握；教师没给字数、截止或评分标准时不擅自添加。
+school_tasks非空时，学校完成自查已由产品按原任务分别直接展示，不由你重新生成。mastery_check只写“学习表现记录”：针对各项观察什么、怎样记录孩子原话、作品、实际帮助及卡住的步骤；这些是Agent的观察建议，不是老师的额外完成要求。不要在mastery_check另列“本次要求自查”、学校完成标准或老师要求；不能把某项的要求移到另一项。教学时建议解释思路、记录步骤或尝试检查可以放在action中并注明建议，但老师未明确要求时不能作为必做、交回、达标或掌握条件。没有school_tasks但有其他学校原文时，自查对应所引用的具体要求，保留任选、条件和示例。完成作文或套用词语不代表独立掌握；教师没给字数、截止或评分标准时不擅自添加。
 mastery_check同时给出家长可直接记录的原始反馈：题目或材料、孩子原话/作答、实际帮助、用时、感受；不要求家长判定是否掌握或选择原因。只有提示后答对、看过答案或同题重复时不能据此提高难度；有独立迁移证据才考虑逐步推进。若疲倦、负担过大或方法被拒绝，先减量、换方式或暂停；没反馈不等于退步或不配合。
 英语单词按词条、目标义/语境、测试方向和提示条件分别核对，不用一个掌握率合并。方向包括听英文选中文、听英文拼写、听中文拼英文、看英文选中文、看英文读出、看中文说英文、看中文拼英文；未测、提示后答对、答错和独立答对分开。具体需要覆盖的方向按家长要求，分次补齐，不要求每天把全部词的所有方向重测。
 纯听题不同时展示英文词形；看英文认义时不播放发音；带文字或读音提示后答对不能作为无提示听辨、读出或提取证据。切换方向会泄露答案，应先做需要隐藏词形的核对，刚展示答案后的同词测试保留提示/练习条件，隔开后再核对独立表现。
@@ -672,6 +673,7 @@ class Store:
                     omitted_count=ctx['omitted_count'], missing_count=len(ctx['missing']),
                     task_feedback=ctx['task_feedback'], task_feedback_omitted=ctx['task_feedback_omitted'], task_missing=ctx['task_missing'],
                     school_messages=ctx['school_messages'], school_omitted=ctx['school_omitted'], school_missing=ctx['school_missing'],
+                    school_tasks=ctx['school_tasks'], school_tasks_omitted=ctx['school_tasks_omitted'],
                     history=plan.get('goal_history', [])[-10:], history_count=len(plan.get('goal_history', [])),
                     prior_confirmations=family_learner_memory.prior_confirmations(c, row['child_id'], row['id'], owned=self._owned(c, row['child_id'])),
                     method_history=self._method_history(c, row, ctx),
@@ -975,6 +977,9 @@ class Store:
             agent._text(p,'mastery_check',1000,True)
             if any(ref.startswith('school:') for ref in refs) and not any(e['ref'].startswith('school:') for e in p['evidence']):
                 raise agent.AgentError('建议须引用本轮学校要求的原文')
+        # Current requirements are read-only task projections, not generated assessment criteria.
+        if ctx['school_tasks'] and re.search(r'(?:本次|学校|老师|教师)(?:要求)?(?:自查|完成标准)|(?:老师|教师)(?:明确)?要求[:：]',p['mastery_check']):
+            raise agent.AgentError('学习表现记录不能另列学校完成标准，请沿原事项核对')
         background=ctx['evidence'][0]['ref'] if ctx['unknown_baseline'] else None
         if not isinstance(p['hypotheses'],list) or len(p['hypotheses'])>4:raise agent.AgentError('原因假设格式不正确')
         for h in p['hypotheses']:
