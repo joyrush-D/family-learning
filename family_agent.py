@@ -1881,10 +1881,15 @@ def _history_scopes(store,config):
             if len(source_ids)!=1: continue
             source=sources.get(next(iter(source_ids)))
             if source is None or any(r['child_id']!=source['child_id'] for r in rows): continue
-            if old_key in matches and matches[old_key][0]['id']==source['id']:
+            complete_key='school-history:'+_hash([SCHOOL_SELECTION_REVISION,old_key,source['child_id'],'complete-batch'])[:40]
+            complete=old_key in matches and matches[old_key][0]['id']==source['id']
+            if complete:
                 _,values=matches[old_key]
                 refs={'message:'+source['id']+':'+v['id'] for v in values}
             else:
+                # Once an exact full scope has been claimed, loss of its discovery
+                # window must not reopen a smaller scope, even after manual retry.
+                if c.execute('SELECT 1 FROM agent_jobs WHERE id=?',(complete_key,)).fetchone(): continue
                 values=[]
                 for _,ident in ids:
                     m=c.execute('SELECT payload,processed FROM agent_messages WHERE source_id=? AND id=?',(source['id'],ident)).fetchone()
@@ -1895,7 +1900,10 @@ def _history_scopes(store,config):
             if len(values)>6 or sum(len(_json(v)) for v in values)>14000: continue
             # Check the full scope's receipt only after reconstructing it. Never
             # fall back to a smaller scope to bypass full-scope done/retry limits.
-            key='school-history:'+_hash([SCHOOL_SELECTION_REVISION,old_key,source['child_id'],sorted(refs)])[:40]
+            cited_key='school-history:'+_hash([SCHOOL_SELECTION_REVISION,old_key,source['child_id'],sorted(refs)])[:40]
+            done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(cited_key,)).fetchone()
+            if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS): continue
+            key=complete_key if complete else cited_key
             done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone()
             if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS): continue
             result.append((source,values,key,(old_key,jobs[old_key]['fingerprint'],'legacy')))
