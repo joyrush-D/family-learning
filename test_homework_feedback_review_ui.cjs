@@ -13,12 +13,12 @@ async function server(){
  await eventually(async()=>{try{return(await fetch(url,{signal:AbortSignal.timeout(400)})).ok}catch{return false}},'demo startup');
  return {url,stop:async()=>{if(proc.exitCode!==null)return;const done=once(proc,'exit');proc.kill('SIGINT');await Promise.race([done,delay(2000)]);if(proc.exitCode===null){proc.kill('SIGKILL');await done}}};
 }
-(async()=>{let host,browser;try{
+(async()=>{let host,browser,lastPage;try{
  host=await server();browser=await chromium.launch({headless:true,channel:process.env.PLAYWRIGHT_CHANNEL||'chrome'});
  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWF8AAAAASUVORK5CYII=','base64');
  for(const width of [360,1440]){
   let state=await(await fetch(host.url+'api/state')).json();const child=state.children[0].name,title='虚构作业核对 '+width;
-  const p=await browser.newPage({viewport:{width,height:850}}),errors=[];p.on('pageerror',e=>errors.push(e.message));
+  const p=await browser.newPage({viewport:{width,height:850}}),errors=[];lastPage=p;p.on('pageerror',e=>errors.push(e.message));
   if(process.env.PRINT_SCOPE_BASELINE_APP_JS)await p.route('**/app.js',async r=>r.fulfill({contentType:'text/javascript',body:await require('node:fs/promises').readFile(process.env.PRINT_SCOPE_BASELINE_APP_JS,'utf8')}));
   await p.route('**/api/state',async route=>{const response=await route.fetch(),value=await response.json();value.printing={...value.printing,printers:[{name:'Synthetic_Printer',label:'虚构打印机',color:false,duplex:false}]};await route.fulfill({response,json:value})});
   await p.goto(host.url);
@@ -315,4 +315,11 @@ async function server(){
   assert.deepEqual(errors,[]);await p.close();
  }
  console.log('Homework feedback AI review: 360/1440 save, retry, reopen, task status and source preserved');
+}catch(error){
+ if(process.env.HOMEWORK_QUICK_PROOF_DIR&&lastPage&&!lastPage.isClosed()){
+  const fs=require('node:fs/promises'),path=require('node:path');await fs.mkdir(process.env.HOMEWORK_QUICK_PROOF_DIR,{recursive:true});
+  await lastPage.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'failure.png')});
+  await fs.writeFile(path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'failure-state.json'),JSON.stringify(await lastPage.evaluate(()=>({page:document.body.dataset.page,ready:document.querySelector('#content')?.dataset.ready,selected:[...document.querySelectorAll('[data-child-filter][aria-pressed=true]')].map(x=>x.dataset.childFilter),tasks:[...document.querySelectorAll('[data-task]')].map(x=>x.dataset.task),text:document.body.innerText})),null,2));
+ }
+ throw error;
 }finally{try{if(browser){let closed=false;await Promise.race([browser.close().then(()=>closed=true),delay(5000)]);if(!closed)console.error('Synthetic browser cleanup timed out; server cleanup still runs')}}finally{await host?.stop()}}})().catch(e=>{console.error(e);process.exitCode=1});
