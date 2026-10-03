@@ -2523,7 +2523,9 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
         self.assertEqual(output.getvalue(), '')
 
     def test_learning_plan_accept_feedback_due_deferral_dismiss_and_restart(self):
-        self.now = dt.datetime.now(agent.TZ).replace(microsecond=0)
+        # The correction tick is D+1 08:01, before the D+2 review; a 23:59
+        # wall-clock start would make +1 minute legitimately create that review too.
+        self.now = dt.datetime.now(agent.TZ).replace(hour=8,minute=0,second=0,microsecond=0)
         first = self.record(note='孩子自述：分数题想再说一遍。')
         calls = []
 
