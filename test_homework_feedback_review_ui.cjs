@@ -19,9 +19,15 @@ async function server(){
  for(const width of [360,1440]){
   let state=await(await fetch(host.url+'api/state')).json();const child=state.children[0].name,title='虚构作业核对 '+width;
   const p=await browser.newPage({viewport:{width,height:850}}),errors=[];lastPage=p;p.on('pageerror',e=>errors.push(e.message));
-  if(process.env.PRINT_SCOPE_BASELINE_APP_JS)await p.route('**/app.js',async r=>r.fulfill({contentType:'text/javascript',body:await require('node:fs/promises').readFile(process.env.PRINT_SCOPE_BASELINE_APP_JS,'utf8')}));
+  let baselineLoads=0;
+  if(process.env.PRINT_SCOPE_BASELINE_APP_JS)await p.route('**/app.bundle.js',async r=>{
+   const fs=require('node:fs/promises'),path=require('node:path'),response=await r.fetch(),bundle=await response.text(),current=await fs.readFile(path.join(__dirname,'app.js'),'utf8'),baseline=await fs.readFile(process.env.PRINT_SCOPE_BASELINE_APP_JS,'utf8');
+   assert(bundle.startsWith('(()=>{\n'+current),'the baseline replaces the application actually loaded by the page');baselineLoads++;
+   return r.fulfill({contentType:'text/javascript',body:'(()=>{\n'+baseline+bundle.slice('(()=>{\n'.length+current.length)});
+  });
   await p.route('**/api/state',async route=>{const response=await route.fetch(),value=await response.json();value.printing={...value.printing,printers:[{name:'Synthetic_Printer',label:'虚构打印机',color:false,duplex:false}]};await route.fulfill({response,json:value})});
   await p.goto(host.url);
+  if(process.env.PRINT_SCOPE_BASELINE_APP_JS)assert.equal(baselineLoads,1,'old application was actually loaded');
   await p.locator('[data-homework-new]').first().click();const entry=p.locator('#homeworkInputDialog');await entry.waitFor();assert.match(await entry.innerText(),/记作业/);
   const item=entry.locator('[data-homework-item="0"]');assert.equal(await item.locator('[name=title]').isVisible(),true,'parent can enter one homework directly');assert.equal(await entry.locator('[data-homework-original]').evaluate(x=>x.open),false,'source capture stays optional');await entry.locator('[data-homework-original] > summary').click();await entry.locator('[name=text]').fill('虚构老师原话：核对一页阅读题');
   if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.mkdir(process.env.HOMEWORK_QUICK_PROOF_DIR,{recursive:true});await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'quick-entry-'+width+'.png')})}
