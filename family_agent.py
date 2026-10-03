@@ -1433,8 +1433,10 @@ class Store:
             if school_context and not self._school_selection_current(c,key,fingerprint,*school_context):
                 raise AgentError('学校消息或来源已变化，本轮结果未保存；原消息保留等待按当前来源重新整理。',409,'school_selection_stale')
             if history_context:
-                source,values,basis=history_context
-                if not self._school_selection_current(c,key,fingerprint,source,values,processed=1) or _history_context(self,c,source,values,key)[0]!=basis:
+                source,values,basis,*origin=history_context
+                if (origin and origin[0] and not _empty_history_current(c,origin[0]) or
+                    not self._school_selection_current(c,key,fingerprint,source,values,processed=1) or
+                    _history_context(self,c,source,values,key)[0]!=basis):
                     raise AgentError('原学校记录或家长决定已变化，补漏结果未保存；原记录保留。',409,'school_history_stale')
             c.execute("UPDATE agent_items SET state='superseded',updated=? WHERE job_id=? AND state='pending'", (now.isoformat(), key))
             for index, item in enumerate(items):
@@ -1888,8 +1890,15 @@ def _history_scopes(store,config):
                     key='school-history:'+_hash([SCHOOL_SELECTION_REVISION,old_key,source['child_id'],sorted(refs)])[:40]
                     done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone()
                     if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS): continue
-                    result.append((source,list(values),key))
+                    result.append((source,list(values),key,(old_key,empty[old_key])))
     return result
+
+
+def _empty_history_current(c,origin):
+    old_key,fingerprint=origin
+    receipt=c.execute('SELECT done,fingerprint FROM agent_jobs WHERE id=?',(old_key,)).fetchone()
+    return bool(receipt and receipt['done'] and receipt['fingerprint']==fingerprint and
+                not c.execute('SELECT 1 FROM agent_items WHERE job_id=? LIMIT 1',(old_key,)).fetchone())
 
 
 def _history_proposal(proposal,known,evidence):
@@ -1954,11 +1963,14 @@ def _recheck_school_history(app,store,now,budget,scopes):
     if budget<1: return dict(used=0,failed=0,created=0)
     from family_goals import Store as Goals
     goals=Goals(app,store)
-    for source,values,key in scopes:
+    for scope in scopes:
+        source,values,key=scope[:3];origin=scope[3] if len(scope)>3 else None
         fp=store._job(key,dict(revision=SCHOOL_SELECTION_REVISION,source=source,messages=values),now,model=True)
         if not fp: continue
         try:
             with store._db() as c:
+                if origin and not _empty_history_current(c,origin):
+                    raise AgentError('旧空批次回执或原条目已变化，未调用补漏模型',409,'school_history_stale')
                 if not store._school_selection_current(c,key,fp,source,values,processed=1):
                     raise AgentError('原消息或来源已变化',409,'school_history_stale')
                 basis,known=_history_context(store,c,source,values,key)
@@ -1977,7 +1989,7 @@ def _recheck_school_history(app,store,now,budget,scopes):
                 for e in item['evidence']:
                     original=next(v for v in values if e['ref']=='message:'+source['id']+':'+v['id'])
                     e['text']=source['name']+' · '+original['time']+'\n'+e['text']
-            store._save(key,fp,proposals,now,history_context=(source,values,basis));created=len(proposals)
+            store._save(key,fp,proposals,now,history_context=(source,values,basis,origin));created=len(proposals)
         except (family_llm.LLMDraftError,AgentError,ValueError,KeyError,TypeError,StopIteration,OSError,sqlite3.Error) as error:
             store._fail(key,now,fingerprint=fp,reason=error);failed=1
         break
