@@ -167,6 +167,8 @@ def pdf_inputs(store, c, source, message):
     # single originals retain exactly the legacy fingerprint so their saved page groups are still usable.
     manifest = [associated, [[ident, row['mime'], row['size'], str(row['name'] or ''), hashlib.sha256(body).hexdigest()]
                              for ident, row, body in originals]]
+    linked_originals = [dict(upload_id=ident, name=str(row['name'] or ''), mime=row['mime'])
+                        for ident, row, _ in originals]
     values = []
     for ident, row, body in originals:
         original = ORIGINALS[row['mime']]
@@ -177,7 +179,7 @@ def pdf_inputs(store, c, source, message):
         fingerprint = hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         values.append(dict(fingerprint=fingerprint, body=body, upload_id=ident, name=str(row['name'] or ''), child=child['name'],
                            mime=row['mime'], original=original, expected_pages=expected_pages if original != 'pdf' else None,
-                           document_count=len(originals),
+                           document_count=len(originals), linked_originals=linked_originals,
                            conversion=CONVERSION if original == 'docx' else PPTX_CONVERSION if original == 'pptx' else XLSX_CONVERSION if original == 'xlsx' else ''))
     return values
 
@@ -395,6 +397,8 @@ def prepare(store, now, budget=ROUND_CALLS):
                 return dict(used=0, failed=0)
         left = [p for p in _pending(done, page_count) if p not in pages]
         text = json.dumps(dict(source_message=message, source_name=source['name'],
+                               material_scope=dict(current_upload_id=value['upload_id'], linked_originals=value['linked_originals'],
+                                                   sent_pages=pages, unprocessed_pages=left, other_originals_sent=False),
                                original_pdf=dict(upload_id=value['upload_id'], name=value['name'], mime=value['mime'], pages=pages, page_count=page_count,
                                                  unprocessed_pages=left, conversion=value['conversion'])), ensure_ascii=False)
         images = [dict(mime='image/png', data=p['data']) for p in rendered['pages']]

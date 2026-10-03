@@ -463,6 +463,89 @@ class MultiPdfMaterialTests(Base):
         with self.store._db() as c:
             return pdfm.complete_evidence(self.store, c, *self.store._message_context(c, keys))
 
+    def scoped_reply(self, calls, reply):
+        """Exercise the real material prompt/validation; only the transport is a fictional stand-in."""
+        def model(messages, schema, name, timeout=60, *, data_path=None):
+            self.assertEqual(name, 'family_school_material_draft')
+            self.assertEqual(data_path, self.data)
+            parts = messages[1]['content']
+            context = json.loads(parts[0]['text'])
+            calls.append(dict(context=context, prompt=messages[0]['content'],
+                              images=sum(p['type'] == 'image_url' for p in parts)))
+            return reply(context) if callable(reply) else reply
+        return model
+
+    def test_page_group_scope_keeps_same_named_originals_separate_without_claiming_sibling_read(self):
+        keys, a, b = self.pair(pages=1); calls = []; consumers = self.consumers()
+        with self.store._db() as c:
+            c.execute('UPDATE uploads SET name=? WHERE id IN (?,?)', ('同名虚构资料.pdf', a, b))
+        linked = [dict(upload_id=ident, name='同名虚构资料.pdf', mime='application/pdf') for ident in (a, b)]
+        clear = dict(title='当前原件页组', note='只整理本轮当前原件第1页，其他已关联原件另轮处理。', uncertainties=[])
+        with renderer(page_count=1), patch.object(family_llm, 'configuration', return_value=('http://synthetic.invalid', 'synthetic')), \
+                patch.object(family_llm, '_model_image', side_effect=lambda image: image), \
+                patch.object(family_llm, '_chat_json', side_effect=self.scoped_reply(calls, clear)) as model:
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
+            self.assertIsNone(self.evidence(keys))
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=1)), dict(used=1, failed=0))
+            self.assertEqual(model.call_count, 2)
+        self.assertEqual([call['context']['material_scope']['current_upload_id'] for call in calls], [a, b])
+        for call in calls:
+            scope = call['context']['material_scope']; original = call['context']['original_pdf']
+            self.assertEqual(scope, dict(current_upload_id=original['upload_id'], linked_originals=linked,
+                                         sent_pages=[1], unprocessed_pages=[], other_originals_sent=False))
+            self.assertEqual(call['images'], 1)  # The manifest never sends sibling bytes or pages.
+            self.assertTrue(all(set(doc) == {'upload_id', 'name', 'mime'} for doc in scope['linked_originals']))
+            self.assertIn('不证明其他原件已读或已理解', call['prompt'])
+            self.assertIn('同名但不同upload_id仍是不同原件', call['prompt'])
+            self.assertIn('不凭文件名猜题目、答案或家长参考角色', call['prompt'])
+        evidence = self.evidence(keys)
+        self.assertEqual([doc['upload_id'] for doc in evidence['documents']], [a, b])
+        self.assertTrue(all(doc['batches'][0]['draft']['uncertainties'] == [] for doc in evidence['documents']))
+        self.assertEqual(self.consumers(), consumers)
+
+    def test_single_original_scope_preserves_actual_missing_material_page_doubts_and_saved_groups(self):
+        keys = self.school_fragment('英语：A1是题目，A2是家长参考，两份分别打印。')
+        a = self.seed_pdf('a' * 32, test_pdf.build_pdf(4), name='虚构A1.pdf'); self.link(keys, a)
+        calls = []; doubts = ['通知明确引用的A2参考原件未关联。', '当前页第2题字迹读不清。', '题面与参考答案存在冲突。']
+        response = dict(title='虚构题目页组', note='本轮题目可见部分，真正缺少A2参考且题面仍有疑点。', uncertainties=doubts)
+        with renderer(page_count=4), patch.object(family_llm, 'configuration', return_value=('http://synthetic.invalid', 'synthetic')), \
+                patch.object(family_llm, '_model_image', side_effect=lambda image: image), \
+                patch.object(family_llm, '_chat_json', side_effect=self.scoped_reply(calls, response)) as model:
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=1)), dict(used=1, failed=0))
+            self.assertEqual(model.call_count, 2)
+        for call, pages, left in zip(calls, ([1, 2, 3], [4]), ([4], [])):
+            scope = call['context']['material_scope']
+            self.assertEqual(scope['linked_originals'], [dict(upload_id=a, name='虚构A1.pdf', mime='application/pdf')])
+            self.assertEqual((scope['current_upload_id'], scope['sent_pages'], scope['unprocessed_pages'], call['images']),
+                             (a, pages, left, len(pages)))
+            self.assertIn('关联清单确实没有的材料', call['prompt'])
+            self.assertIn('真实缺页', call['prompt']); self.assertIn('影响当前页理解的未知上下文', call['prompt'])
+        evidence = self.evidence(keys); before = self.snapshot()
+        self.assertNotIn('documents', evidence)  # Single-original evidence keeps its existing shape.
+        self.assertEqual([batch['draft']['uncertainties'] for batch in evidence['batches']], [doubts, doubts])
+        with no_render(), patch.object(family_llm, 'extract_draft', side_effect=AssertionError('no reinterpreting saved groups')):
+            self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=2)), dict(used=0, failed=0))
+        self.assertEqual((self.snapshot(), self.evidence(keys)), (before, evidence))
+
+    def test_scope_manifest_change_during_model_discards_result_without_saving_any_group(self):
+        keys, a, b = self.pair(pages=1); calls = []
+        third = self.seed_pdf('c' * 32, test_pdf.build_pdf(1), name='虚构后关联原件.pdf')
+        def changed(context):
+            self.assertEqual([doc['upload_id'] for doc in context['material_scope']['linked_originals']], [a, b])
+            self.link(keys, third)
+            return dict(title='迟到页组', note='关联变化后不得保存。', uncertainties=[])
+        with renderer(page_count=1), patch.object(family_llm, 'configuration', return_value=('http://synthetic.invalid', 'synthetic')), \
+                patch.object(family_llm, '_model_image', side_effect=lambda image: image), \
+                patch.object(family_llm, '_chat_json', side_effect=self.scoped_reply(calls, changed)) as model:
+            self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
+            model.assert_called_once()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.rows('SELECT * FROM agent_pdf_material'), [])
+        self.assertEqual(self.rows("SELECT * FROM agent_jobs WHERE id LIKE 'pdf-material:%'"), [])
+        self.assertEqual([doc['upload_id'] for doc in self.inputs(keys)], [a, b, third])
+        self.assertIsNone(self.evidence(keys))
+
     def test_two_pdfs_take_separate_fair_page_groups_and_reopen_without_repeating(self):
         keys, a, b = self.pair(); before = self.consumers(); seen = []
         originals = {value['upload_id']: value['body'] for value in self.inputs(keys)}
