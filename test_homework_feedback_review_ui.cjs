@@ -123,6 +123,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
   await p.unroute('**/api/print/homework');await p.unroute('**/api/print/homework/draft');await p.locator('nav [data-page=home]').click();await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskDialog[open]').waitFor();
 
    { // Exercise real preparation + HTTP ownership failure + changed file + lost queue receipt.
+   const priorPrintIds=(await (await fetch(host.url+'api/print/jobs')).json()).jobs.map(j=>j.id).sort();
    const recoveryTask=(await post('api/task/new',{child,title:'虚构打印恢复 '+width,category:'homework',action:'核对同一作业的资料',due:state.today})).task;
    const validPng=require('node:child_process').spawnSync(process.env.FAMILY_TEST_PYTHON||'python3',['-c','from test_print import png; import sys; sys.stdout.buffer.write(png())'],{cwd:__dirname,env:{...process.env},encoding:null});
    assert.equal(validPng.status,0,'synthetic original is created without a model');
@@ -136,18 +137,19 @@ runpy.run_path('demo.py',run_name='__main__')`;
    let loseQueueReceipt=false;
    await p.route('**/api/print/homework',async route=>{recoveryBodies.push(route.request().postDataJSON());const response=await route.fetch();recoveryStatuses.push(response.status());if(loseQueueReceipt&&response.ok()){loseQueueReceipt=false;return route.fulfill({status:503,json:{error:'虚构真实入队后的回执丢失'}})}return route.fulfill({response})});
    await printForm.locator('[type=submit]').click();await eventually(async()=>/归属|原作业|核对|关联/.test(await p.locator('#homeworkPrintError').innerText())&&await printForm.locator('[type=submit]').isEnabled(),'ownership rejected after preparation');
-   assert.deepEqual(recoveryStatuses,[403],'the real current-source guard rejected printing');assert.equal((await (await fetch(host.url+'api/print/jobs')).json()).jobs.length,0,'prepared A never entered the print queue');
+   assert.deepEqual(recoveryStatuses,[403],'the real current-source guard rejected printing');assert.deepEqual((await (await fetch(host.url+'api/print/jobs')).json()).jobs.map(j=>j.id).sort(),priorPrintIds,'prepared A never entered the print queue');
    await post('api/record',{...recordBody,id:ordinary,note:'家长换成新原件B',attachments:[originalB.id,reference.id]});
    await p.locator('#homeworkPrintDialog [data-close]').click();await p.reload();await p.locator('[data-query-target="task:'+recoveryTask.id+'"] [data-homework-print]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
    assert.equal(await printForm.evaluate(f=>f.dataset.requestKey),recoveryKey,'failed prepared-only request survives reopening');
    assert.match(await p.locator('#homeworkPrintError').innerText(),/原选择有资料现在无法核对/);await printForm.locator('[name=question_source]').selectOption(JSON.stringify({type:'upload',id:originalB.id}));await printForm.locator('[name=guide_source]').selectOption(JSON.stringify({type:'upload',id:reference.id}));await printForm.locator('[name=question_confirmed]').check();await printForm.locator('[name=guide_confirmed]').check();
    loseQueueReceipt=true;await printForm.locator('[type=submit]').click();await eventually(async()=>/虚构真实入队后的回执丢失/.test(await p.locator('#homeworkPrintError').innerText()),'new original B prepared and queued by the real backend');
-   assert.deepEqual(recoveryStatuses,[403,200]);const realQueued=(await (await fetch(host.url+'api/print/jobs')).json()).jobs;assert.equal(realQueued.length,2,'B and reference are separate jobs');
+   assert.deepEqual(recoveryStatuses,[403,200]);const realQueued=(await (await fetch(host.url+'api/print/jobs')).json()).jobs;assert.equal(realQueued.filter(j=>!priorPrintIds.includes(j.id)).length,2,'B and reference are separate jobs');
    await p.locator('#homeworkPrintDialog [data-close]').click();await p.reload();await p.locator('[data-query-target="task:'+recoveryTask.id+'"] [data-homework-print]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
    assert.equal(await printForm.evaluate(f=>f.dataset.requestKey),recoveryKey);await printForm.locator('[type=submit]').click();await eventually(async()=>!await p.locator('#homeworkPrintDialog').evaluate(x=>x.open),'original queue keys recover a lost receipt');
    const retriedJobs=(await (await fetch(host.url+'api/print/jobs')).json()).jobs;assert.deepEqual(retriedJobs.map(j=>j.id).sort(),realQueued.map(j=>j.id).sort(),'retry never duplicates a submitted part');assert.deepEqual(recoveryBodies[2],recoveryBodies[1]);assert.equal(recoveryBodies[0].request_key,recoveryBodies[1].request_key);
    await p.unroute('**/api/print/homework');await p.locator('nav [data-page=home]').click();await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskDialog[open]').waitFor();
    }
+   const printIdsBeforeChecks=(await (await fetch(host.url+'api/print/jobs')).json()).jobs.map(j=>j.id).sort();
 
   const wrong=p.locator('#taskFeedbackHistory [data-task-wrong-form]').first();await wrong.locator(':scope > summary').click();
   await wrong.locator('[data-wrong-field="label"]').fill('第2题');await wrong.locator('[data-wrong-field="answer"]').fill('C');await wrong.locator('[data-wrong-field="correction"]').fill('B');
@@ -311,7 +313,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
   assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);
   if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await whole.locator('[data-homework-review-result]').scrollIntoViewIfNeeded();await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'complete-review-'+width+'.png')})}
   await whole.locator('[data-homework-review-confirm]').check();await whole.locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await whole.innerText()),'five-image review staged');await p.locator('#saveTaskFeedback').click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'five-image basis feedback saved');
-  state=await(await fetch(host.url+'api/state')).json();const full=state.records.find(r=>r.note.includes('原作答反馈 #'+originalRecord+'。'));assert(full&&photos.every(x=>full.attachments.includes(x)));assert(!full.attachments.includes(reference),'unused teacher PDF is not claimed as grading basis');assert.equal(state.printing.jobs.length,0,'checking homework never prints');
+  state=await(await fetch(host.url+'api/state')).json();const full=state.records.find(r=>r.note.includes('原作答反馈 #'+originalRecord+'。'));assert(full&&photos.every(x=>full.attachments.includes(x)));assert(!full.attachments.includes(reference),'unused teacher PDF is not claimed as grading basis');assert.deepEqual(state.printing.jobs.map(j=>j.id).sort(),printIdsBeforeChecks,'checking homework never prints');
   await p.reload();await p.locator('[data-task="'+id+'"]').first().click();await eventually(async()=>await p.locator('[data-saved-homework-review="'+full.id+'"] [data-saved-review-text]').innerText()===completeReviewText,'saved five-image opinion and partial range reopen as visible text');assert.equal(await p.locator('[data-saved-homework-review="'+full.id+'"] [data-saved-review-text]').isVisible(),true);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);assert.deepEqual(errors,[]);
   await p.unroute('**/api/print/homework/draft');
   // Reuse saved synthetic answers and their sibling PDF; no extra records affect the checks above.
