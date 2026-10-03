@@ -96,7 +96,9 @@ class AgentTests(unittest.TestCase):
         with self.app.connect() as c:
             self.assertEqual(c.execute('SELECT processed FROM agent_messages').fetchone()[0],0)
             self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items').fetchone()[0],0)
-            self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_jobs WHERE id LIKE 'messages:%'").fetchone()[0],0)
+            job,=c.execute("SELECT done,error,next_try,fingerprint FROM agent_jobs WHERE id LIKE 'messages:%'").fetchall()
+            self.assertEqual((job['done'],job['error'],job['next_try']),(1,'',''))
+            self.assertTrue(job['fingerprint'].startswith('discarded:'))
 
     def test_new_message_during_selection_does_not_revoke_the_original_batch(self):
         self.store.ingest(self.payload())
@@ -146,7 +148,7 @@ class AgentTests(unittest.TestCase):
             task_title='带阅读材料',task_goal='明天带阅读材料。',
             task_state='ready',task_reason='要求明确。',task_purpose='admin')
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):
-            items=agent._select('school',[dict(ref='message:'+self.source['id']+':11',text=self.payload()['messages'][0]['text'],time=self.now.isoformat())],as_of=self.now.date().isoformat())
+            items=agent._select('school',[dict(ref='message:'+self.source['id']+':11',text=self.payload()['messages'][0]['text'],time=self.now.isoformat())],as_of=self.now.date().isoformat(),school_goals=[])
         items=[dict(i,kind='school',child_id='child-1') for i in items]
         self.store._save('synthetic-auto-source-race','fixture',items,self.now,[(self.source['id'],'11')])
         self.source['enabled']=disable_agent;self.config(enabled=not disable_agent)
