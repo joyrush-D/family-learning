@@ -1260,7 +1260,8 @@ class GoalTests(unittest.TestCase):
         agent.run_once(self.app,self.now);self.assertEqual(self.model.call_count,before+1)
         self.assertEqual(self.model.call_args.args[2],'family_learning_plan')
         g=next(g for g in self.store.snapshot()['goals'] if g['child_id']=='child-2')
-        self.assertEqual([m['ref'] for m in g['school_messages']],accepted_refs);self.assertEqual(g['processing'],'current')
+        self.assertEqual([m['ref'] for m in g['school_messages']],accepted_refs);self.assertEqual(g['processing'],'ready')
+        self.assertIsNotNone(g['pending'])  # Resuming produces a fresh proposal, not an already-approved plan.
         with self.app.connect() as c:
             self.assertEqual([dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')],accepted_tasks)
         agent.run_once(self.app,self.now);self.assertEqual(self.model.call_count,before+1)
