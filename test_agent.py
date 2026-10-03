@@ -403,6 +403,151 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
             self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
 
+    def test_independent_receipt_is_not_the_homework_submission_when_the_channel_matches(self):
+        ref='message:'+self.source['id']+':11';due='2026-02-11'
+        text=('明天分别完成两件独立的事：\n'
+              '1. 朗读第5课课文两遍，录音在班级小程序提交。\n'
+              '2. 家长在班级小程序提交防溺水回执，与朗读录音分开提交。')
+        payload=self.payload();payload['messages'][0]['text']=text;self.store.ingest(payload)
+        learning_title='英语：朗读第5课'
+        learning_goal='朗读第5课课文两遍，在班级小程序提交朗读录音。'
+        admin_title='家长事务：提交防溺水回执';admin_goal='在班级小程序提交。'
+        proposals=[school_proposal(title_quote='朗读第5课',due=due,evidence=[dict(ref=ref)],
+            task_title=learning_title,task_goal=learning_goal,task_state='ready',
+            task_reason='第一项是朗读及其录音提交。',task_purpose='learning',
+            task_submission='在班级小程序提交朗读录音。'),
+            school_proposal(title_quote='防溺水回执',due=due,evidence=[dict(ref=ref)],
+                task_title=admin_title,task_goal=admin_goal,task_state='ready',
+                task_reason='标题指定另一份回执，原文明说与朗读录音分开提交。',task_purpose='admin')]
+        # The title identifies the independent document; its action can share the
+        # homework's channel without becoming a second copy of the recording.
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
+            items=agent._select('school',[dict(ref=ref,text=text,time=self.now.isoformat(),content_incomplete=False)],
+                                school_goals=[],as_of=self.now.date().isoformat())
+        self.assertEqual([(item['title'],item['body'],item['due']) for item in items],
+                         [(learning_title,learning_goal,due),(admin_title,admin_goal,due)])
+        self.assertEqual([item['plan']['school_task']['state'] for item in items],['ready','ready'],
+                         'distinct documents must remain separate even when both use the same submission channel')
+        self.assertEqual([item['plan']['school_task']['purpose'] for item in items],['learning','admin'])
+        self.assertTrue(all(item['evidence']==[dict(ref=ref,text=text)] for item in items))
+        key='synthetic-independent-receipt-shared-channel';fp=self.store._job(key,dict(text=text),self.now)
+        self.store._save(key,fp,[dict(item,child_id='child-1',kind='school') for item in items],self.now,
+                         [(self.source['id'],'11')],school_context=(self.source,payload['messages']))
+        with patch.object(agent.family_llm,'_chat_json',side_effect=AssertionError('saved actions need no model')):
+            collected=agent._refresh_school(self.app,self.store,self.now,0)
+            repeated=agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=1),0)
+        self.assertEqual((collected['created'],repeated['created']),(2,0))
+        with self.app.connect() as c:
+            tasks={row['title']:dict(row) for row in c.execute('SELECT * FROM manual_tasks')}
+            self.assertEqual(set(tasks),{learning_title,admin_title})
+            for title,goal in [(learning_title,learning_goal),(admin_title,admin_goal)]:
+                task=tasks[title]
+                self.assertEqual((task['child'],task['action'],task['due'],task['original_status']),
+                                 ('示例甲',goal,due,'待跟进'))
+                self.assertIn(ref,task['source'])
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items WHERE state="accepted"').fetchone()[0],2)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
+
+    def test_recording_submission_title_remains_a_step_of_the_same_homework(self):
+        ref='message:'+self.source['id']+':11';due='2026-02-11'
+        submission='在班级小程序提交录音'
+        goal='朗读第5课课文两遍，'+submission+'。'
+        text='明天完成'+goal
+        payload=self.payload();payload['messages'][0]['text']=text;self.store.ingest(payload)
+        proposals=[school_proposal(title_quote='朗读第5课',due=due,evidence=[dict(ref=ref)],
+            task_title='英语：朗读第5课',task_goal=goal,task_state='ready',
+            task_reason='同一朗读作业及其录音提交。',task_purpose='learning',task_submission=submission),
+            school_proposal(title_quote='提交录音',due=due,evidence=[dict(ref=ref)],
+                task_title='录音提交',task_goal=submission,task_state='ready',
+                task_reason='这一录音属于第一项朗读作业，并非独立成果。',task_purpose='admin')]
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
+            items=agent._select('school',[dict(ref=ref,text=text,time=self.now.isoformat(),content_incomplete=False)],
+                                school_goals=[],as_of=self.now.date().isoformat())
+        self.assertEqual([item['plan']['school_task']['state'] for item in items],['ready','review'])
+        self.assertIn('避免重复',items[1]['plan']['school_task']['reason'])
+        self.assertEqual((items[1]['title'],items[1]['body']),('录音提交',submission))
+        self.assertEqual(items[0]['plan']['school_task']['submission'],submission)
+        self.assertTrue(all(item['evidence']==[dict(ref=ref,text=text)] for item in items))
+        key='synthetic-recording-title-is-submission';fp=self.store._job(key,dict(text=text),self.now)
+        self.store._save(key,fp,[dict(item,child_id='child-1',kind='school') for item in items],self.now,
+                         [(self.source['id'],'11')],school_context=(self.source,payload['messages']))
+        with patch.object(agent.family_llm,'_chat_json',side_effect=AssertionError('saved submission needs no model')):
+            collected=agent._refresh_school(self.app,self.store,self.now,0)
+            repeated=agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=1),0)
+        self.assertEqual((collected['created'],repeated['created']),(1,0))
+        with self.app.connect() as c:
+            task,=c.execute('SELECT child,title,action,due,original_status,source FROM manual_tasks').fetchall()
+            self.assertEqual(tuple(task)[:5],('示例甲','英语：朗读第5课',goal,due,'待跟进'))
+            self.assertIn(ref,task['source'])
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items WHERE state="accepted"').fetchone()[0],1)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items WHERE state="pending"').fetchone()[0],1)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
+
+    def _school_admin_requires_a_ready_learning_peer(self, peer_kind):
+        ref='message:'+self.source['id']+':11';due='2026-02-11'
+        admin_title='家长事务：独立活动回执';admin_goal='家长签字交回活动回执。'
+        first=('朗读第5课仅供参考。' if peer_kind=='reference' else
+               '自愿选做：朗读第5课两遍。' if peer_kind=='optional' else
+               '朗读第5课课文两遍。'+('其他学习要求见另发图片。' if peer_kind=='unread' else ''))
+        text='英语：'+first+'\n家长明天完成另一件独立事务：'+admin_goal
+        payload=self.payload();payload['messages'][0]['text']=text
+        learning_refs=[dict(ref=ref)]
+        if peer_kind=='unread':
+            payload['messages'].append(dict(id='12',time=self.now.isoformat(),kind='image',sender='示例老师',
+                text='[图片原件：1份，内容未读]',unread=True))
+            payload['cursor']='12';learning_refs.append(dict(ref='message:'+self.source['id']+':12'))
+        self.store.ingest(payload)
+        proposals=[school_proposal(title_quote='朗读第5课',due='2026-02-12' if peer_kind=='date' else '',
+            evidence=learning_refs,task_title='英语：朗读第5课',task_goal=first,
+            task_state='reference' if peer_kind=='reference' else 'ready',
+            task_reason='固定原始模型状态，程序还须核用途、附件和日期。',
+            task_purpose='optional' if peer_kind=='optional' else 'learning'),
+            school_proposal(title_quote='活动回执',due=due,evidence=[dict(ref=ref)],
+                task_title=admin_title,task_goal=admin_goal,task_state='ready',task_reason='已读行政正文明确。',
+                task_purpose='admin')]
+        evidence=[dict(ref='message:'+self.source['id']+':'+m['id'],text=m['text'],time=m['time'],
+                       kind=m['kind'],unread=m['unread'],content_incomplete=m['unread']) for m in payload['messages']]
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
+            items=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+        self.assertEqual(items[0]['plan']['school_task']['state'],'reference' if peer_kind=='reference' else 'review')
+        self.assertEqual(items[1]['plan']['school_task']['state'],'review',
+                         'a reference, optional or guarded peer cannot remove the mixed-notice protection')
+        self.assertEqual((items[1]['title'],items[1]['body'],items[1]['due']),
+                         (admin_title,admin_goal,due))
+        self.assertEqual([q['ref'] for q in items[0]['evidence']],[q['ref'] for q in learning_refs])
+        self.assertEqual(items[1]['evidence'],[dict(ref=ref,text=text)])
+        if peer_kind=='unread':self.assertIn('未读',items[0]['plan']['school_task']['reason'])
+        if peer_kind=='date':
+            self.assertEqual(items[0]['due'],'')
+            self.assertIn('未采用模型日期',items[0]['plan']['school_task']['reason'])
+        key='synthetic-nonready-learning-peer-'+peer_kind;fp=self.store._job(key,dict(text=text),self.now)
+        self.store._save(key,fp,[dict(item,child_id='child-1',kind='school') for item in items],self.now,
+                         [(self.source['id'],m['id']) for m in payload['messages']],
+                         school_context=(self.source,payload['messages']))
+        with patch.object(agent.family_llm,'_chat_json',side_effect=AssertionError('guarded actions need no model')):
+            collected=agent._refresh_school(self.app,self.store,self.now,0)
+            repeated=agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=1),0)
+        self.assertEqual((collected['created'],repeated['created']),(0,0))
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items WHERE state="accepted"').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
+
+    def test_reference_learning_peer_does_not_unlock_mixed_admin_protection(self):
+        self._school_admin_requires_a_ready_learning_peer('reference')
+
+    def test_optional_learning_peer_does_not_unlock_mixed_admin_protection(self):
+        self._school_admin_requires_a_ready_learning_peer('optional')
+
+    def test_unread_learning_peer_does_not_unlock_mixed_admin_protection(self):
+        self._school_admin_requires_a_ready_learning_peer('unread')
+
+    def test_unguarded_model_date_does_not_make_a_learning_peer_unlock_admin_protection(self):
+        self._school_admin_requires_a_ready_learning_peer('date')
+
     def test_school_output_bound_is_shared_and_overflow_never_truncates(self):
         ref='message:synthetic-many:1'
         evidence=[dict(ref=ref,text='原文包含36条独立学校说明。',time=self.now.isoformat(),content_incomplete=False)]
