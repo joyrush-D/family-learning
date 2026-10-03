@@ -1248,10 +1248,20 @@ class GoalTests(unittest.TestCase):
         agent.run_once(self.app,self.now);self.assertEqual(self.model.call_count,before)
         g=next(g for g in self.store.snapshot()['goals'] if g['child_id']=='child-2')
         self.action('resume',id=g['id'],expected_version=g['version'])
-        for message in g['school_messages']:self.store.agent.act(dict(action='dismiss',id=message['item_id']))
+        accepted_refs=[m['ref'] for m in g['school_messages']]
+        # Clear original requirements are now auto-collected; dismissing a pending
+        # suggestion must not delete their accepted tasks or learning evidence.
+        with self.app.connect() as c:
+            accepted_tasks=[dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+        for message in g['school_messages']:
+            with self.assertRaises(agent.AgentError) as rejected:
+                self.store.agent.act(dict(action='dismiss',id=message['item_id']))
+            self.assertEqual(rejected.exception.status,409)
         agent.run_once(self.app,self.now);self.assertEqual(self.model.call_count,before)
         g=next(g for g in self.store.snapshot()['goals'] if g['child_id']=='child-2')
-        self.assertEqual(g['school_messages'],[]);self.assertEqual(g['processing'],'current')
+        self.assertEqual([m['ref'] for m in g['school_messages']],accepted_refs);self.assertEqual(g['processing'],'current')
+        with self.app.connect() as c:
+            self.assertEqual([dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')],accepted_tasks)
 
     def test_school_selector_rejects_foreign_goal_and_unread_requirements(self):
         evidence=[dict(ref='message:synthetic:1',text='[图片]',content_incomplete=True)]
