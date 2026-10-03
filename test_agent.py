@@ -316,6 +316,93 @@ class AgentTests(unittest.TestCase):
         self.assertEqual([i['plan']['school_task']['state'] for i in items],['ready']*4+['review','review'])
         self.assertTrue(all(i['evidence']==[dict(ref=ref,text=text[:600])] for i in items))
 
+    def _independent_school_actions_with_parent_receipt(self, with_submission):
+        ref='message:'+self.source['id']+':11';due='2026-02-11'
+        learning_title='英语：朗读第5课' if with_submission else '数学：完成练习卷'
+        learning_goal=('朗读第5课课文两遍，录音上传班级作业区。' if with_submission else
+                       '完成练习卷第1–3题（必做），第4题选做。')
+        submission='录音上传班级作业区' if with_submission else ''
+        admin_title='家长事务：独立活动回执'
+        admin_goal='家长在独立活动回执上签字，再让孩子交回。无需盖章。'
+        text='明天完成两件独立的事：\n1. '+learning_goal+'\n2. '+admin_goal
+        payload=self.payload();payload['messages'][0]['text']=text;self.store.ingest(payload)
+        proposals=[school_proposal(title_quote='朗读第5课' if with_submission else '练习卷',due=due,
+            evidence=[dict(ref=ref)],task_title=learning_title,task_goal=learning_goal,
+            task_state='ready',task_reason='第一项是孩子的独立学习要求。',task_purpose='learning',task_submission=submission),
+            school_proposal(title_quote='独立活动回执',due=due,evidence=[dict(ref=ref)],
+                task_title=admin_title,task_goal=admin_goal,task_state='ready',
+                task_reason='第二项是另一份家长回执，属于独立事务。',task_purpose='admin')]
+        evidence=[dict(ref=ref,text=text,time=self.now.isoformat(),content_incomplete=False)]
+        # A correct saved-model response has already separated the two actions. Sharing its
+        # original notice must not turn the independent receipt into the homework submission.
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)) as response:
+            items=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+        self.assertEqual(response.call_count,1)
+        self.assertEqual([(item['title'],item['body'],item['due']) for item in items],
+                         [(learning_title,learning_goal,due),(admin_title,admin_goal,due)])
+        self.assertEqual([item['plan']['school_task']['purpose'] for item in items],['learning','admin'])
+        self.assertEqual([item['plan']['school_task']['state'] for item in items],['ready','ready'],
+                         'an independent parent receipt must remain actionable in a mixed notice')
+        self.assertEqual(items[0]['plan']['school_task'].get('submission',''),submission)
+        self.assertNotIn('submission',items[1]['plan']['school_task'])
+        self.assertTrue(all(item['evidence']==[dict(ref=ref,text=text)] for item in items))
+        key='synthetic-independent-school-actions';fp=self.store._job(key,dict(text=text),self.now)
+        self.store._save(key,fp,[dict(item,child_id='child-1',kind='school') for item in items],self.now,
+                         [(self.source['id'],'11')],school_context=(self.source,payload['messages']))
+        with patch.object(agent.family_llm,'_chat_json',side_effect=AssertionError('saved actions need no model')):
+            collected=agent._refresh_school(self.app,self.store,self.now,0)
+            repeated=agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=1),0)
+        self.assertEqual((collected['created'],repeated['created']),(2,0))
+        with self.app.connect() as c:
+            tasks={row['title']:dict(row) for row in c.execute('SELECT * FROM manual_tasks')}
+            self.assertEqual(set(tasks),{learning_title,admin_title})
+            for title,goal in [(learning_title,learning_goal),(admin_title,admin_goal)]:
+                task=tasks[title]
+                self.assertEqual((task['child'],task['action'],task['due'],task['original_status']),
+                                 ('示例甲',goal,due,'待跟进'))
+                self.assertIn(ref,task['source'])
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items WHERE state="accepted"').fetchone()[0],2)
+            self.assertEqual(c.execute('SELECT processed FROM agent_messages').fetchone()[0],1)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
+
+    def test_one_notice_keeps_independent_parent_receipt_beside_homework_submission(self):
+        self._independent_school_actions_with_parent_receipt(True)
+
+    def test_one_notice_keeps_independent_parent_receipt_beside_exercises_without_submission(self):
+        self._independent_school_actions_with_parent_receipt(False)
+
+    def test_same_homework_checkin_does_not_become_an_independent_admin_task(self):
+        ref='message:'+self.source['id']+':11';due='2026-02-11'
+        goal='朗读第5课课文两遍，录音上传班级作业区。'
+        text='明天完成朗读第5课课文两遍，录音上传班级作业区。'
+        payload=self.payload();payload['messages'][0]['text']=text;self.store.ingest(payload)
+        proposals=[school_proposal(title_quote='朗读第5课',due=due,evidence=[dict(ref=ref)],
+            task_title='英语：朗读第5课',task_goal=goal,task_state='ready',task_reason='明确朗读及其提交。',
+            task_purpose='learning',task_submission='录音上传班级作业区'),
+            school_proposal(title_quote='录音上传',due=due,evidence=[dict(ref=ref)],task_title='朗读录音提交',
+                task_goal='录音上传班级作业区。',task_state='ready',task_reason='同一朗读作业的提交步骤。',task_purpose='admin')]
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
+            items=agent._select('school',[dict(ref=ref,text=text,time=self.now.isoformat(),content_incomplete=False)],
+                                school_goals=[],as_of=self.now.date().isoformat())
+        self.assertEqual([item['plan']['school_task']['state'] for item in items],['ready','review'])
+        self.assertEqual(items[0]['body'],goal)
+        self.assertEqual(items[0]['plan']['school_task']['submission'],'录音上传班级作业区')
+        self.assertTrue(all(item['evidence']==[dict(ref=ref,text=text)] for item in items))
+        key='synthetic-same-homework-submission';fp=self.store._job(key,dict(text=text),self.now)
+        self.store._save(key,fp,[dict(item,child_id='child-1',kind='school') for item in items],self.now,
+                         [(self.source['id'],'11')],school_context=(self.source,payload['messages']))
+        with patch.object(agent.family_llm,'_chat_json',side_effect=AssertionError('saved submission needs no model')):
+            collected=agent._refresh_school(self.app,self.store,self.now,0)
+            repeated=agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=1),0)
+        self.assertEqual((collected['created'],repeated['created']),(1,0))
+        with self.app.connect() as c:
+            task,=c.execute('SELECT child,title,action,due,original_status FROM manual_tasks').fetchall()
+            self.assertEqual(tuple(task),('示例甲','英语：朗读第5课',goal,due,'待跟进'))
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items WHERE state="pending"').fetchone()[0],1)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
+
     def test_school_output_bound_is_shared_and_overflow_never_truncates(self):
         ref='message:synthetic-many:1'
         evidence=[dict(ref=ref,text='原文包含36条独立学校说明。',time=self.now.isoformat(),content_incomplete=False)]
