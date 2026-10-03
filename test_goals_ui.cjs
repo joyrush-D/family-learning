@@ -7,12 +7,12 @@ const wait=ms=>new Promise(r=>setTimeout(r,ms));
  const env={...process.env};for(const k of Object.keys(env))if(k.startsWith('FAMILY_'))delete env[k];
  server=spawn(process.env.FAMILY_TEST_PYTHON||'python3',['-c',`import sys,json,runpy,family_llm,app,family_agent,tempfile
 from pathlib import Path
-from test_goals import synthetic_plan
+from test_goals import synthetic_plan,synthetic_school_proposal
 def model(messages,schema,name,*args,**kwargs):
  value=json.loads(messages[-1]['content'])
  if name=='family_agent_selection':
   e=value['evidence'][0]
-  return dict(proposals=[dict(title_quote=e['text'],focus='school',due='',learning_subject='语文',learning_goal_id='',evidence=[dict(ref=e['ref'])])])
+  return dict(proposals=[synthetic_school_proposal(e,'语文','语文：任选一种顺序介绍文具','任选一种顺序介绍文具，说出用途和真实细节。',state='review',reason='虚构课堂观察未明确是否要求本孩子办理，适用性待家长核对。')])
  if name=='family_agent_plan':return dict(proposal=None)
  result=synthetic_plan(value)
  if value.get('learning_goal',{}).get('title','').startswith('虚构画像范围'):
