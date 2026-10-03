@@ -169,6 +169,19 @@ class SchoolHistoryTests(unittest.TestCase):
         with self.app.connect() as c:
             return [dict(r) for r in c.execute("SELECT * FROM agent_jobs WHERE id LIKE 'school-history:%' ORDER BY id")]
 
+    def _school_task_counts(self):
+        with self.app.connect() as c:
+            return dict(
+                school=c.execute("SELECT COUNT(*) FROM agent_items WHERE kind='school'").fetchone()[0],
+                child_school=c.execute("SELECT COUNT(*) FROM agent_items WHERE kind='school' AND child_id='child-1'").fetchone()[0],
+                tasks=c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],
+                child_tasks=c.execute("SELECT COUNT(*) FROM manual_tasks WHERE child='示例甲'").fetchone()[0])
+
+    def _assert_one_school_task_added(self, before):
+        # created counts the candidate and its automatic acceptance separately;
+        # persisted identities must still be exactly one new item and one same-child task.
+        self.assertEqual(self._school_task_counts(), {key: value + 1 for key, value in before.items()})
+
     def _assert_zero_new(self, before):
         self.assertEqual(self._protected(), before)
         self.assertEqual(self._history_rows(), [])
@@ -179,6 +192,7 @@ class SchoolHistoryTests(unittest.TestCase):
     def test_processed_omission_recovers_once_without_rewriting_parent_decisions_or_sources(self):
         group = self._legacy(feedback=True)
         before = self._protected()
+        before_counts = self._school_task_counts()
         self.history_response = self._response(group)
         def inspect(context):
             known = {row['id']: row for row in context['existing_actions']}
@@ -189,7 +203,8 @@ class SchoolHistoryTests(unittest.TestCase):
             return self._response(group)
         self.history_response = inspect
         result = self._tick(10)
-        self.assertEqual((result['failed'], result['created']), (0, 1))
+        self.assertEqual((result['failed'], result['created']), (0, 2))
+        self._assert_one_school_task_added(before_counts)
         rows = self._history_rows()
         self.assertEqual(len(rows), 1)
         row = rows[0]
@@ -214,9 +229,11 @@ class SchoolHistoryTests(unittest.TestCase):
     def test_short_old_quotes_do_not_revive_accepted_or_dismissed_actions(self):
         group = self._legacy()
         before = self._protected()
+        before_counts = self._school_task_counts()
         self.history_response = self._response(group, short_old=True)
         result = self._tick(10)
-        self.assertEqual((result['failed'], result['created']), (0, 1))
+        self.assertEqual((result['failed'], result['created']), (0, 2))
+        self._assert_one_school_task_added(before_counts)
         self.assertEqual(len(self._history_rows()), 1)
         self.assertIn('材料B', self._history_rows()[0]['title'])
         self.assertEqual(self._protected(), before)
@@ -313,6 +330,7 @@ class SchoolHistoryTests(unittest.TestCase):
     def test_source_pause_during_model_saves_nothing_and_resumes_without_cursor_reset(self):
         group = self._legacy()
         before = self._protected()
+        before_counts = self._school_task_counts()
         def pause(context):
             self.fixture.source['enabled'] = False
             self._config()
@@ -327,13 +345,15 @@ class SchoolHistoryTests(unittest.TestCase):
         self._config()
         self.history_response = self._response(group)
         result = self._tick(30)
-        self.assertEqual((result['failed'], result['created']), (0, 1))
+        self.assertEqual((result['failed'], result['created']), (0, 2))
+        self._assert_one_school_task_added(before_counts)
         self.assertEqual(self._protected(), before)
 
     def test_history_backoff_three_attempts_allow_later_scope_and_manual_retry_recovers_once(self):
         good = self._legacy()
         bad = self._legacy(suffix='2', ids=('21', '22'), tick=5)
         before = self._protected()
+        before_counts = self._school_task_counts()
         bad_calls = []
         failing = [True]
         def response(context):
@@ -349,7 +369,8 @@ class SchoolHistoryTests(unittest.TestCase):
         self.assertEqual((job['attempts'], job['done']), (1, 0))
         self.assertEqual(job['next_try'], (self.fixture.now + dt.timedelta(minutes=15)).isoformat())
         result = self._tick(12)
-        self.assertEqual((result['failed'], result['created']), (0, 1), 'A waiting failed scope must not block the next group')
+        self.assertEqual((result['failed'], result['created']), (0, 2), 'A waiting failed scope must not block the next group')
+        self._assert_one_school_task_added(before_counts)
         self.assertEqual(len(bad_calls), 1)
         self.assertEqual(self._tick(20)['failed'], 1)
         bad_job = next(row for row in self._history_jobs() if not row['done'])
@@ -365,7 +386,9 @@ class SchoolHistoryTests(unittest.TestCase):
         self.assertEqual(len(self.calls), count)
         failing[0] = False
         self.store.act(dict(action='retry', id=bad_job['id']))
-        self.assertEqual(self._tick(50)['created'], 1)
+        before_counts = self._school_task_counts()
+        self.assertEqual(self._tick(50)['created'], 2)
+        self._assert_one_school_task_added(before_counts)
         self.assertEqual(len(self._history_rows()), 2)
         self.store = agent.Store(self.app.connect, self.app.profiles, self.fixture.data, app=self.app)
         count = len(self.calls)
