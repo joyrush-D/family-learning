@@ -103,7 +103,7 @@ function todayTasksHTML(){
   .sort((a,b)=>(b.agenda.published_at||b.agenda.published_on).localeCompare(a.agenda.published_at||a.agenda.published_on));
  const receivedHomework=items.filter(x=>x.agenda.category==='homework'&&exactTaskDay(x.agenda.published_on)&&
   (x.kind==='school'||/^Agent建议:|(?:^|\n)message:/.test(data.tasks.find(t=>t.id===x.task_id)?.source||'')));
- const recentHomework=receivedHomework.filter(x=>!today.includes(x))
+ const recentHomework=receivedHomework.filter(x=>!today.includes(x)&&!reviewDue(x))
   .sort((a,b)=>(b.agenda.published_at||b.agenda.published_on).localeCompare(a.agenda.published_at||a.agenda.published_on));
  const recentPending=recentHomework.filter(x=>x.kind==='school');
  const pendingAdmin=pendingNotices.filter(x=>x.agenda.category!=='homework'),latestNotice=new Map();

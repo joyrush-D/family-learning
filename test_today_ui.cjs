@@ -187,6 +187,7 @@ function fixtures(base){
    orderState.today='2026-09-28';
    const orderTask=(id,published,due='')=>({...baseTask,id,title:'虚构事项 '+id,source:'Agent建议:synthetic-school',due,agenda:{...baseTask.agenda,published_on:published,due_on:due}});
    orderState.tasks=[orderTask('OLD','2026-09-02'),orderTask('DUE-OLD','2026-09-20','2026-09-20'),orderTask('DUE-RECENT','2026-09-22','2026-09-27'),orderTask('DUE-TODAY','2026-09-27','2026-09-28'),orderTask('DUE-NEXT','2026-09-27','2026-09-29')];
+   orderState.tasks.push({...orderTask('REVIEW-HOMEWORK','2026-09-02'),focus:{mode:'later',review_on:orderState.today,box:'inbox'}});
    const published=['2026-09-02','2026-09-20','2026-09-22','2026-09-27','2026-09-27'];
    orderState.agent.items=published.map((day,n)=>({...school,id:'notice-'+n,title:'虚构学校消息 '+n,child_id:owner.id}));
    orderState.today_calendar={inbox:[...orderState.tasks.map(t=>({id:t.id,task_id:t.id,kind:'task',child_ids:[owner.id],title:t.title,agenda:t.agenda,status:'待跟进',closed:false})),...published.map((day,n)=>({id:'notice-'+n,task_id:'',kind:'school',child_ids:[owner.id],title:'虚构学校消息 '+n,agenda:{category:'todo',published_on:day,published_at:n===3?'2026-09-27T08:00:00+08:00':n===4?'2026-09-27T18:00:00+08:00':'',due_on:'',scheduled_on:'',box:'inbox'},status:'待核对',closed:false}))],agenda:[],events:[],timetables:[],source_error:''};
@@ -199,6 +200,7 @@ function fixtures(base){
     const recentNoticeOrder=()=>orderPage.locator('#task-group-todo [data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem));
     const olderNoticeOrder=()=>orderPage.locator('.today-backlog [data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem));
     assert.deepEqual(await taskOrder(),['DUE-TODAY']);
+    assert.equal(await orderPage.locator('.today-reviews [data-today-task="REVIEW-HOMEWORK"]').isVisible(),true);assert.equal(await orderPage.locator('[data-today-task="REVIEW-HOMEWORK"]').count(),1,'one original homework appears once when its review is due');
     assert.deepEqual(await earlierTasks(),[]);
     for(const id of ['DUE-RECENT','DUE-OLD','OLD'])assert.equal(await orderPage.locator('.today-recent-homework [data-today-task="'+id+'"]').isVisible(),true,'unfinished school homework from older days is exposed');
     assert.match(await orderPage.locator('#task-group-homework h2').innerText(),/今日作业 · 1/,'pending notices do not become confirmed homework');
@@ -209,6 +211,7 @@ function fixtures(base){
     await proof(orderPage,'recent-school-review-'+width);
     await fit(orderPage);await orderPage.reload({waitUntil:'load'});await ready(orderPage);
     assert.deepEqual(await taskOrder(),['DUE-TODAY'],'current-day count persists after reload');
+    assert.equal(await orderPage.locator('.today-reviews [data-today-task="REVIEW-HOMEWORK"]').isVisible(),true);assert.equal(await orderPage.locator('[data-today-task="REVIEW-HOMEWORK"]').count(),1,'direct review stays single after reopening');
     assert.deepEqual(await earlierTasks(),[],'unfinished school homework remains outside the folded backlog');
     for(const id of ['DUE-RECENT','DUE-OLD','OLD'])assert.equal(await orderPage.locator('.today-recent-homework [data-today-task="'+id+'"]').isVisible(),true,'older unfinished homework survives reload');
     assert.deepEqual(await recentNoticeOrder(),['notice-4','notice-3'],'recent source order persists after reload');

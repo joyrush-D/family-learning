@@ -285,6 +285,7 @@ test('unfinished school homework due for review appears once in the direct revie
  d.tasks=[{id:'review-homework',title:'虚构作业订正回看',source:'Agent建议:synthetic-school',focus:{mode:'later',review_on:d.today},child:'小溪'}];
  d.today_calendar={inbox:[{id:'review-homework',task_id:'review-homework',kind:'task',child_ids:['child-a'],closed:false,agenda:{category:'homework',box:'inbox',published_on:'2026-09-02',due_on:'',scheduled_on:''}}],events:[],timetables:[]};
  const html=h.ctx.todayTasksHTML();assert.match(html,/今天回看 · 1/);assert.match(html,/<article>虚构作业订正回看<\/article>/);
+ assert.doesNotMatch(html.split('today-recent-homework">')[1]?.split('</section>')[0]||'',/虚构作业订正回看/);
  assert.equal((html.match(/<article>虚构作业订正回看<\/article>/g)||[]).length,1,'one original homework must not appear twice');
  assert.match(html,/今日作业 · 0/);assert.equal(d.tasks[0].focus.review_on,d.today);
 });
