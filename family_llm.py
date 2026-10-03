@@ -972,6 +972,8 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
     if (not isinstance(result,dict) or not {'items','coverage'}<=set(result) or set(result)-{'items','coverage'}-({'comparison'} if review else set())
             or not isinstance(result['items'],list) or not 1<=len(result['items'])<=25):
         raise LLMDraftError('参考草稿结构不完整，请手动核对原题')
+    # Keep the transport result intact; a later review must not lose its kind evidence.
+    result={**result,'items':[dict(item) if isinstance(item,dict) else item for item in result['items']]}
     limits=dict(label=80,question=800,student_answer=300,answer=1000,error_reason=600,
                 possible_cause=600,steps=1200,uncertainty=300)
     missing_requirements=[]
