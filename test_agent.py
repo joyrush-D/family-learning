@@ -26,6 +26,57 @@ def school_proposal(**values):
 
 
 class AgentTests(unittest.TestCase):
+    def _school_selection_authorization_change(self, change):
+        from family_settings import Store as Settings
+        self.source['id']='54321@chatroom';self.config()
+        payload=self.payload();payload['messages'][0]['text']='明天交回活动回执。'
+        self.store.ingest(payload)
+        proposal=school_proposal(title_quote='活动回执',due='2026-02-11',
+            evidence=[dict(ref='message:'+self.source['id']+':11')],
+            task_title='交回活动回执',task_goal='明天交回活动回执。',
+            task_state='ready',task_reason='要求明确。',task_purpose='admin')
+        settings=Settings(self.app,self.store)
+        def configure(enabled=True, source_enabled=True):
+            state=settings.snapshot()
+            rows=[{k:r[k] for k in ('id','platform','child_id','name','enabled')} for r in state['sources']]
+            rows[0]['enabled']=source_enabled
+            settings.save_sources(dict(revision=state['revision'],enabled=enabled,sources=rows))
+        def model(*args,**kwargs):
+            if change=='agent':configure(enabled=False)
+            elif change=='source':configure(source_enabled=False)
+            return dict(proposals=[proposal])
+        with patch.object(agent.family_llm,'_chat_json',side_effect=model) as called:
+            first=agent.run_once(self.app,self.now)
+        self.assertEqual(called.call_count,1)
+        if change:
+            self.assertEqual(first['processed'],0,'revoked input must not be marked processed')
+            with self.app.connect() as c:
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items').fetchone()[0],0)
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],0)
+                self.assertEqual(c.execute('SELECT processed FROM agent_messages').fetchone()[0],0)
+                self.assertEqual(c.execute('SELECT cursor FROM agent_sources').fetchone()[0],'11')
+            configure()
+            with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])) as retry:
+                recovered=agent.run_once(self.app,self.now+dt.timedelta(minutes=6))
+                self.assertEqual(recovered['processed'],1)
+                agent.run_once(self.app,self.now+dt.timedelta(minutes=7))
+            self.assertEqual(retry.call_count,1)
+        else:self.assertEqual(first['processed'],1)
+        with self.app.connect() as c:
+            task,=c.execute('SELECT child,title,due,action,original_status FROM manual_tasks').fetchall()
+            self.assertEqual(tuple(task),('示例甲','交回活动回执','2026-02-11','明天交回活动回执。','待跟进'))
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+            self.assertEqual(json.loads(c.execute('SELECT payload FROM agent_messages').fetchone()[0])['text'],payload['messages'][0]['text'])
+
+    def test_school_selection_drops_result_when_agent_stopped_during_model(self):
+        self._school_selection_authorization_change('agent')
+
+    def test_school_selection_drops_result_when_source_stopped_during_model(self):
+        self._school_selection_authorization_change('source')
+
+    def test_school_selection_current_source_still_auto_collects_once(self):
+        self._school_selection_authorization_change('')
+
     def test_separate_school_conclusions_do_not_borrow_related_attachments(self):
         sent='2026-10-05T16:00:00+08:00'
         refs=['message:synthetic-minutes:'+str(i) for i in range(1,6)]
