@@ -121,18 +121,22 @@ class SchoolPageEvidenceTests(unittest.TestCase):
         self.assertEqual(self.item(ident), accepted_row)  # the accepted row is never rewritten by a later round
 
     def test_one_page_candidate_per_round_budget_and_backoff(self):
-        first = self.candidate('1'); second = self.candidate('2'); self.save_page('1'); self.save_page('2')
+        first = self.candidate('1',text=TEXT+' 第1课'); second = self.candidate('2',text=TEXT+' 第2课')
+        self.save_page('1',text=PAGE.replace('第3课','第1课')); self.save_page('2',text=PAGE.replace('第3课','第2课'))
+        def reply(messages):
+            text=json.loads(messages[1]['content'])['pages'][0]['text']
+            return draft(title=text.split('：',1)[-1],goal=text)
         before = self.brief(first); result, calls = self.refresh(draft(), budget=0)
         self.assertEqual((result['used'], calls, self.brief(first)), (0, [], before))  # no budget: the whole unread draft is untouched
-        result, calls = self.refresh(draft(), budget=3); self.assertEqual((result['used'], len(calls)), (1, 1))
-        result, calls = self.refresh(draft(), budget=3, minutes=1); self.assertEqual((result['used'], len(calls)), (1, 1))
+        result, calls = self.refresh(reply, budget=3); self.assertEqual((result['used'], len(calls)), (1, 1))
+        result, calls = self.refresh(reply, budget=3, minutes=1); self.assertEqual((result['used'], len(calls)), (1, 1))
         self.assertTrue(self.brief(first).get('page_evidence') and self.brief(second).get('page_evidence'))
         result, calls = self.refresh(draft(), budget=3, minutes=2); self.assertEqual((result['used'], calls), (0, []))
-        third = self.candidate('3'); self.save_page('3'); before = self.brief(third)
+        third = self.candidate('3',text=TEXT+' 第3课'); self.save_page('3'); before = self.brief(third)
         result, calls = self.refresh(agent.AgentError('synthetic failure'), minutes=3)
         self.assertEqual((result['used'], result['failed'], len(calls), self.brief(third)), (1, 1, 1, before))  # the old draft stays
         result, calls = self.refresh(draft(), minutes=4); self.assertEqual((result['used'], calls), (0, []))  # inside the backoff window
-        result, calls = self.refresh(draft(), minutes=10); self.assertEqual((result['used'], len(calls)), (1, 1))
+        result, calls = self.refresh(reply, minutes=10); self.assertEqual((result['used'], len(calls)), (1, 1))
         self.assertTrue(self.brief(third).get('page_evidence'))
         self.assertEqual((self.count('manual_tasks'), self.count('agent_items')), (3, 3))
 
@@ -226,11 +230,17 @@ class SchoolPageEvidenceTests(unittest.TestCase):
                     c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',(json.dumps(message),self.source['id'],key))
                     c.execute('UPDATE agent_items SET due=? WHERE id=?',(due,ident))
                 self.save_page(key,text=text)
-                result,calls=self.refresh(draft())
+                result,calls=self.refresh(draft(goal=text))
                 row=self.item(ident)
                 self.assertEqual((result['used'],len(calls),row['state'],row['due']),(1,1,state,resolved))
                 if reason:self.assertIn(reason,self.brief(ident)['reason'])
                 self.assertEqual(self.brief(ident)['state'],'ready' if state=='accepted' else 'review')
+
+    def test_other_notice_date_cannot_become_this_homework_deadline(self):
+        ident=self.candidate('example');self.save_page('example',text='请完成《我的公园》习作。示例通知：2026-02-12前提交报名表。')
+        result,calls=self.refresh(draft(title='语文：完成《我的公园》习作',goal='完成《我的公园》习作。',submission=''))
+        self.assertEqual((result['used'],len(calls),self.item(ident)['due'],self.item(ident)['state'],self.count('manual_tasks')),(1,1,'','pending',0))
+        self.assertIn('日期未能对应本项',self.brief(ident)['reason'])
 
     def test_optional_unknown_and_school_changes_never_collect_automatically(self):
         for key,reply in [('optional',draft(purpose='optional')),('unknown',draft(purpose='unknown')),

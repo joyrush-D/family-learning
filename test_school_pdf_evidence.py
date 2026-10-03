@@ -174,7 +174,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             with self.subTest(case=key):
                 keys=self.native_notice(key,published=published);self.seed_groups(keys=keys,note=note,uncertainties=[])
                 ident=self.candidate(keys=keys,ident=key)
-                result,calls=self.refresh(draft())
+                result,calls=self.refresh(draft(goal=note))
                 row=self.item(ident)
                 self.assertEqual((result['used'],len(calls),row['state'],row['due']),(1,1,state,due))
                 if reason:self.assertIn(reason,self.brief(ident)['reason'])
@@ -182,9 +182,9 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
 
     def test_native_pdf_partial_summary_and_uncovered_message_remain_review(self):
         keys=self.native_notice();ident=self.candidate(keys=keys)
-        self.seed_groups(BATCHES[:3],keys=keys,note=TEXT,uncertainties=[])
+        self.seed_groups(BATCHES[:3],keys=keys,note=TEXT+'摘'*2000,uncertainties=[])
         self.assertEqual(self.refresh(draft()),(dict(used=0,failed=0,created=0),[]))
-        self.seed_groups(BATCHES[3:],keys=keys,note='2026-02-12前提交。'+'摘'*7000,uncertainties=[])
+        self.seed_groups(BATCHES[3:],keys=keys,note='2026-02-12前提交。'+'摘'*2000,uncertainties=[])
         result,calls=self.refresh(draft())
         self.assertEqual((result['used'],result['created'],self.brief(ident)['state'],self.count('manual_tasks')),(1,0,'review',0))
         self.assertIn('未全部送核',self.brief(ident)['reason'])
@@ -195,6 +195,23 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         evidence=[dict(ref='message:'+source['id']+':'+message['id'],**message),dict(ref='message:qq:other:missing',text='[文件]',kind='text',unread=True)]
         brief=agent._school_brief(draft(),incomplete=True,evidence=evidence,pdf=pdf)
         self.assertEqual(brief['state'],'review')
+
+    def test_complete_native_pdf_known_reading_gap_is_not_erased_by_ready_model(self):
+        keys=self.native_notice();self.seed_groups(keys=keys,note=TEXT,uncertainties=['最后一页要求看不清'])
+        ident=self.candidate(keys=keys)
+        self.assertIsNotNone(self.material(keys))  # All pages have a group; this is not proof of readable requirements.
+        result,calls=self.refresh(draft())
+        self.assertEqual((result['used'],len(calls),self.brief(ident)['state'],self.item(ident)['state'],self.count('manual_tasks')),(1,1,'review','pending',0))
+        self.assertIn('最后一页要求看不清',self.brief(ident)['reason'])
+        with self.assertRaises(agent.AgentError):
+            self.store.act(dict(id=ident,action='accept',expected_updated=self.item(ident)['updated']),school_auto=True)
+
+    def test_other_pdf_notice_date_cannot_become_this_homework_deadline(self):
+        keys=self.native_notice();self.seed_groups(keys=keys,note=TEXT+'示例通知：2026-02-12前提交报名表。',uncertainties=[])
+        ident=self.candidate(keys=keys)
+        result,calls=self.refresh(draft())
+        self.assertEqual((result['used'],len(calls),self.item(ident)['due'],self.item(ident)['state'],self.count('manual_tasks')),(1,1,'','pending',0))
+        self.assertIn('日期未能对应本项',self.brief(ident)['reason'])
 
     def test_auto_acceptance_rechecks_pdf_link_and_rejects_forged_ready_screenshot(self):
         keys=self.native_notice();self.seed_groups(keys=keys,note=TEXT,uncertainties=[]);ident=self.candidate(keys=keys)

@@ -65,6 +65,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
  native += [dict(id='native-pptx-refused-'+str(w),time=now.isoformat(),kind='text',sender='虚构来源',text='请核对所附虚构不安全演示文稿',unread=True) for w in (360,1440)]
  native += [dict(id='native-xlsx-'+str(w),time=now.isoformat(),kind='text',sender='虚构来源',text='请核对所附虚构表格',unread=True) for w in (360,1440)]
  native += [dict(id='native-xlsx-refused-'+str(w),time=now.isoformat(),kind='text',sender='虚构来源',text='请核对所附虚构不安全表格',unread=True) for w in (360,1440)]
+ native += [dict(id='native-auto-'+str(w),time=now.isoformat(),kind='text',sender='虚构语文老师',text='请完成所附虚构语文练习全部11页，'+now.date().isoformat()+'前提交。',unread=True) for w in (360,1440)]
  store.ingest(dict(source_id='qq:123456',expected_cursor='',cursor='native-1',checked_at=now.isoformat(),last_message_time=now.isoformat(),error='',messages=native))
  for w in (360,1440):
   message=native[0 if w==360 else 1];ref='message:qq:123456:'+message['id']
@@ -107,6 +108,34 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   store.message_attachment(dict(child_id='child-1',source_id='qq:123456',message_id=message['id'],attachment_id=upload_id,action='attach'),dict)
  store.ingest(dict(source_id='synthetic',expected_cursor='',cursor='cursor-1',checked_at=now.isoformat(),last_message_time=now.isoformat(),error='',messages=[dict(id='notice-'+str(w),time=now.isoformat(),kind='text',sender='虚构老师',text='虚构老师通知 '+str(w)+'：请核对所附练习卷。',unread=True) for w in (360,1440)]))
  for w in (360,1440): store._save('notice-'+str(w),'fixture',[dict(child_id='child-1',kind='school',title='虚构文字通知 '+str(w),body='核对原要求',evidence=[dict(ref='message:synthetic:notice-'+str(w),text='虚构老师通知 '+str(w)+'：请核对所附练习卷。')])],now)
+ # A current native original with every page already prepared is upgraded by the
+ # real bounded Agent path, rather than being inserted as a parent-confirmed task.
+ for index,w in enumerate((360,1440)):
+  message=next(m for m in native if m['id']=='native-auto-'+str(w));ref='message:qq:123456:'+message['id']
+  upload_id=hashlib.md5(('native-auto-pdf-'+str(w)).encode()).hexdigest();(app.DATA/'uploads'/upload_id).write_bytes(PDF)
+  with store._db() as c:c.execute('INSERT INTO uploads(id,name,size,mime,created) VALUES(?,?,?,?,?)',(upload_id,'虚构自动收录语文-'+str(w)+'.pdf',len(PDF),'application/pdf',now.isoformat()))
+  store.message_attachment(dict(child_id='child-1',source_id='qq:123456',message_id=message['id'],attachment_id=upload_id,action='attach'),dict)
+  title='语文：完成虚构练习第1至11页 '+str(w);goal=message['text'];prepared_at=now+datetime.timedelta(seconds=10+index)
+  with store._db() as c:
+   source=next(s for s in store._config(c)['sources'] if s['id']=='qq:123456');value=family_pdf_material.pdf_input(store,c,source,message)
+   for pages in ([1,2,3],[4,5,6],[7,8,9],[10,11]):
+    payload=dict(kind='school_material',title='虚构语文第'+str(pages[0])+'至'+str(pages[-1])+'页',note=goal,uncertainties=[])
+    c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?)',('qq:123456',message['id'],value['fingerprint'],pages[0],json.dumps(pages),11,json.dumps(payload,ensure_ascii=False),now.isoformat()))
+  store._save('native-auto:'+str(w),'fixture',[dict(child_id='child-1',kind='school',title='待理解虚构语文原件 '+str(w),body=goal,due=now.date().isoformat(),evidence=[dict(ref=ref,text=message['text'])],plan=dict(school_messages=[dict(source_id='qq:123456',message_id=message['id'])]))],prepared_at)
+  brief=dict(title=title,goal=goal,advice='',state='ready',reason='当前原消息明确要求与完成日期，全部11页已整理。',purpose='learning',submission='',change='new',target_id='')
+  def ready_original(messages,*args,**kwargs):
+   context=json.loads(messages[-1]['content']);assert context['evidence'][0]['ref']==ref,'only this current original is processed'
+   assert context['pdf_material'][0]['complete'] and len(context['pdf_material'][0]['groups'])==4,'all original groups reach the Agent'
+   return brief
+  with patch.object(family_llm,'_chat_json',side_effect=ready_original) as calls:
+   assert family_agent._refresh_school(app,store,prepared_at,1)==dict(used=1,failed=0,created=1),'complete current original auto-collected'
+   assert calls.call_count==1,'one bounded understanding call'
+  with store._db() as c:
+   row=c.execute('SELECT * FROM agent_items WHERE job_id=?',('native-auto:'+str(w),)).fetchone();plan=json.loads(row['plan'])
+   assert row['state']=='accepted' and plan['school_task']['auto_added'] is True,'the Agent collected without a parent accept action'
+   task=c.execute('SELECT * FROM manual_tasks WHERE id=?',(row['task_id'],)).fetchone()
+   assert task['title']==title and task['child']=='示例星星' and task['due']==now.date().isoformat(),'original child and explicit deadline are retained'
+   assert task['original_status']=='待跟进' and ref in task['source'],'collection preserves source and does not mark completion'
  store._runtime('ready',now)
  for child,source in [('示例小宇','message:qq:123456:native-360'),('示例星星','message:qq:123456:missing')]:
   try: app.new_task(dict(child=child,title='不应写入的虚构作业',source=source,request_key='synthetic-ref-guard-'+('other' if child=='示例小宇' else 'missing')))
@@ -133,6 +162,35 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   const dialog=page.locator('#schoolOriginalDialog'),panel=dialog.locator('[data-school-pdf-material]'),batches=dialog.locator('[data-school-pdf-batch]'),refresh=dialog.locator('[data-school-pdf-refresh]'),retry=dialog.locator('[data-school-pdf-retry]');
   const open=async ref=>{await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();await page.locator('[data-agent-item] [data-school-original-ref="'+ref+'"]').first().click();await dialog.locator('[data-school-original-files]').waitFor({state:'attached'});await dialog.locator('[data-school-original-upload]').waitFor()};
   const close=async()=>{await dialog.locator('[data-school-original-close]').click();await until(async()=>!(await dialog.isVisible()),'dialog closed')};
+  const automatic=before.tasks.find(t=>t.title==='语文：完成虚构练习第1至11页 '+width),autoRef='message:qq:123456:native-auto-'+width;
+  assert.ok(automatic,'the bounded Agent produced the native-original task');assert.equal(automatic.child,'示例星星');assert.equal(automatic.due,before.today);
+  const autoCard=page.locator('[data-query-target="task:'+automatic.id+'"]');await autoCard.waitFor();
+  assert.match(await autoCard.innerText(),/语文：完成虚构练习第1至11页/);
+  await autoCard.locator('[data-school-original-ref="'+autoRef+'"]').click();await panel.waitFor();
+  assert.match(await dialog.innerText(),/虚构语文老师/);assert.match(await panel.innerText(),/全部 11 页已整理/);assert.equal(await batches.count(),4);
+  assert.equal(await dialog.locator('[data-school-original-files] a[href*="'+before.uploads.find(x=>x.name==='虚构自动收录语文-'+width+'.pdf').id+'"]').count(),1,'the automatically collected task retains its actual original');
+  assert.equal(await dialog.locator('[data-school-homework-new]').count(),0,'one original is already linked to the collected task');
+  await fits(page);await proof(page,'auto-original-collected-'+width);await close();
+  const autoFeedback=page.locator('#taskDialog'),autoResources=autoFeedback.locator('#taskSchoolResources'),autoNote='虚构自动收录作业反馈 '+width+'：练习已尝试，第6题待订正。';
+  await autoCard.locator('[data-task="'+automatic.id+'"]').first().click();await autoResources.locator('[data-task-material-state]').waitFor();
+  assert.match(await autoResources.innerText(),/AI 已整理[\s\S]*11 \/ 11 页/);assert.match(await autoResources.innerText(),/虚构语文第10至11页/);
+  assert.equal(await autoResources.locator('details').count(),0,'prepared requirements are visible in the task without another disclosure');
+  await autoFeedback.locator('#taskForm [name=note]').fill(autoNote);
+  const feedbackCalls=[];await page.route('**/api/task/feedback',async route=>{feedbackCalls.push(route.request().postDataJSON());if(feedbackCalls.length===1)return route.fulfill({status:503,json:{error:'虚构自动收录反馈暂不可保存'}});return route.continue()});
+  await autoFeedback.locator('#saveTaskFeedback').click();await autoFeedback.locator('#taskError').getByText(/虚构自动收录反馈暂不可保存/).waitFor();
+  assert.equal((await state()).records.length,before.records.length,'failed feedback save is zero-write');
+  assert.equal(await autoFeedback.locator('#taskForm [name=note]').inputValue(),autoNote,'failure keeps feedback under the same original task');
+  await autoFeedback.locator('#saveTaskFeedback').click();await until(async()=>/反馈已保存/.test(await autoFeedback.locator('#taskFeedbackStatus').innerText()),'automatic original feedback retry saved');
+  assert.equal(feedbackCalls.length,2);assert.deepEqual(feedbackCalls[1],feedbackCalls[0],'feedback retry preserves the original submission number and body');await page.unroute('**/api/task/feedback');
+  let autoSaved=await state(),autoRecords=autoSaved.records.filter(r=>r.source==='事项:'+automatic.id);
+  assert.equal(autoRecords.length,1);assert.equal(autoRecords[0].note,autoNote);assert.equal(autoRecords[0].child,'示例星星');assert.equal(autoSaved.tasks.length,before.tasks.length,'feedback does not create another task');
+  assert.deepEqual(autoSaved.tasks.find(t=>t.id===automatic.id).update,automatic.update,'saving feedback does not imply completion');
+  await fits(page);await proof(page,'auto-original-feedback-'+width);await autoFeedback.locator('[data-close=taskDialog]').click();
+  await page.reload();await page.locator('body[data-page="home"]').waitFor();await autoCard.locator('[data-task="'+automatic.id+'"]').first().click();
+  await autoFeedback.locator('#taskFeedbackHistory').getByText(autoNote,{exact:true}).waitFor();await autoResources.locator('[data-task-material-state]').waitFor();
+  assert.match(await autoResources.innerText(),/11 \/ 11 页/);assert.match(await autoFeedback.locator('#taskTitle').innerText(),/示例星星.*语文：完成虚构练习第1至11页/);
+  autoSaved=await state();autoRecords=autoSaved.records.filter(r=>r.source==='事项:'+automatic.id);assert.equal(autoRecords.length,1);assert.equal(autoSaved.tasks.filter(t=>t.id===automatic.id).length,1,'reopening preserves one task and one feedback');
+  await fits(page);await proof(page,'auto-original-feedback-reopened-'+width);await autoFeedback.locator('[data-close=taskDialog]').click();factsBefore=facts(await state());
   await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();
   const fileList=page.locator('[data-qq-files]');await fileList.locator('summary').click();
   assert.match(await fileList.innerText(),/虚构原生PDF-360\.pdf/);assert.match(await fileList.innerText(),/虚构原生PDF-1440\.pdf/);
