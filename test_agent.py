@@ -35,7 +35,7 @@ class AgentTests(unittest.TestCase):
             evidence=[dict(ref='message:'+self.source['id']+':11')],
             task_title='交回活动回执',task_goal='明天交回活动回执。',
             task_state='ready',task_reason='要求明确。',task_purpose='admin')
-        settings=Settings(self.app,self.store)
+        settings=Settings(self.app)
         def configure(enabled=True, source_enabled=True):
             state=settings.snapshot()
             rows=[{k:r[k] for k in ('id','platform','child_id','name','enabled')} for r in state['sources']]
