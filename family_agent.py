@@ -127,6 +127,9 @@ _URL = re.compile(r'(?:https?://|www\.)[^\s一-鿿，。；！？、（）【】
 _LINK_POINTER = re.compile(r'各位|大家|家长们?|同学们?|老师|[您你]好|登录|登陆|点击|点开|打开|查看|复制|浏览器|链接|网址|地址|详情|详见|如下|下方|下面|这个|看一?下|看看|[请戳此见后到在的]')
 _LEARNING_ACTIVITY = re.compile(r'朗读|背诵|抄写|默写|听写|跟读|练习|作业|订正|预习|复习|阅读|口算|习作|作文|单词|课文')
 _LEARNING_MATERIAL = re.compile(r'(?:带(?:来|上|好)?|携带|准备|打印|领取)(?:[一二两三四五六七八九十\d]+)?(?:份|本|张|套)?(?:语文|数学|英语|科学|历史|地理|物理|化学|生物)?(?:阅读材料|复习资料|练习本|作业本|作业单|练习册|听写本|单词卡|练习卷)')
+# A named administrative form is an object, not an instruction to study it.
+# Keep an actual reading/exercise clause outside the name intact.
+_LEARNING_FORM = re.compile(r'(?:朗读|背诵|抄写|默写|听写|跟读|练习|作业|订正|预习|复习|阅读|口算|习作|作文|单词|课文)(?:活动|课程|比赛)?(?:回执|登记表|报名表|同意书|确认单|通知书)')
 _LEARNING_ACTION = re.compile(r'(?:完成|做|写|订正)(?:好|完)?\s*(?:第)?[一二两三四五六七八九十\d]+(?:\s*(?:[–—~\-]|至|到)\s*(?:第)?[一二两三四五六七八九十\d]+)?\s*题|做(?:好|完)?(?=后|再|并)|读')
 
 
@@ -306,7 +309,7 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
     # pass can inspect an administrative action without inheriting unrelated
     # learning words from its shared original. Single/legacy drafts keep the guard.
     learning_parts=[brief['title'],brief['goal']] if separate_learning else [e.get('text','') for e in evidence]+[p['text'] for p in (pages or {}).get('model_pages',[])]
-    learning_text=_LEARNING_MATERIAL.sub('',_URL.sub('',' '.join(learning_parts)))
+    learning_text=_LEARNING_FORM.sub('',_LEARNING_MATERIAL.sub('',_URL.sub('',' '.join(learning_parts))))
     if purpose=='admin' and state!='reference' and (_LEARNING_ACTIVITY.search(learning_text) or _LEARNING_ACTION.search(learning_text)):
         # A check-in label must not swallow homework: the parent sees the whole notice instead.
         # Carrying or printing a named material is not itself the learning action.
@@ -1478,11 +1481,23 @@ def _school_submission_step(brief, activity):
     """A shared channel is insufficient: the title's object must belong to this activity too."""
     clean=lambda text:re.sub(r'[\W_]+','',text)
     step=re.sub(r'^(?:请|在|到|于)+','',clean(brief['goal']));whole=clean(activity.get('submission',''))
-    if not (step and whole and (step==whole or len(step)>=4 and step in whole)): return False
+    if not step or not whole: return False
     topic=re.sub(r'^(?:家长事务|家长|行政事项|语文|数学|英语)[：:]\s*','',brief['title'])
     topic=clean(re.sub(r'提交|上传|交回|签到|打卡|朗读|背诵|跟读|听写', '', topic))
     context=clean(activity['title']+activity['goal']+activity.get('submission',''))
-    return not topic or topic in context
+    if topic and topic not in context: return False
+    if step==whole or len(step)>=4 and step in whole: return True
+    # An explicit object plus the same channel can be phrased in either order:
+    # "在班级小程序提交录音" / "上传录音到班级小程序". Extra quantities,
+    # conditions or different objects/channels remain unmatched.
+    if not topic or topic not in step or topic not in whole: return False
+    verbs=r'提交|上传|交回|签到|打卡'
+    if not re.search(verbs,step) or not re.search(verbs,whole): return False
+    def channel(text):
+        text=text.replace(topic,'',1)
+        text=re.sub(r'^(?:请|在|到|于|将|把|'+verbs+r')+','',text)
+        return re.sub(r'(?:'+verbs+r')$','',text)
+    return channel(step)==channel(whole)
 
 
 def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None, school_tasks=()):
