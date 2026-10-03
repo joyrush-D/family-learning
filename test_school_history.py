@@ -249,6 +249,65 @@ class SchoolHistoryTests(unittest.TestCase):
         self.assertEqual(self._protected(), before)
         self.assertTrue(all(not row['done'] for row in self._history_jobs()))
 
+    def test_empty_legacy_exact_source_order_survives_another_source_row_between_messages(self):
+        group = self._empty_legacy(texts=['2月12日前带《材料D》1份到校。', '2月12日前带《材料E》2份到校。'])
+        with self.app.connect() as c:
+            c.execute('UPDATE agent_messages SET rowid=4 WHERE id=?', ('52',))
+            c.execute('UPDATE agent_messages SET rowid=2 WHERE id=?', ('51',))
+            c.execute('INSERT INTO agent_messages(rowid,source_id,id,payload,processed) VALUES(?,?,?,?,?)',
+                (3, 'synthetic-other-source', '51', agent._json(group['values'][0]), 1))
+        before = self._protected()
+        self.history_response = self._empty_response(group)
+        self.assertEqual((self._tick(10)['failed'], len(self._history_rows())), (0, 2))
+        self.assertEqual(self._protected(), before)
+        with self.app.connect() as c:
+            tasks = [dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+        self.assertEqual(len(tasks), 2)
+        self.assertTrue(all(t['child'] == '示例甲' for t in tasks))
+        self.assertEqual({t['action'] for t in tasks}, {v['text'] for v in group['values']})
+
+    def test_empty_legacy_nontext_unread_large_or_over_six_messages_are_not_reinterpreted(self):
+        for mode in ('nontext', 'unread', 'large', 'seven'):
+            with self.subTest(mode=mode):
+                self.fixture.setUp(); self.app, self.store = self.fixture.app, self.fixture.store
+                group = self._empty_legacy(texts=['带《材料D》到校。'] * (7 if mode == 'seven' else 2))
+                if mode != 'seven':
+                    values = copy.deepcopy(group['values'])
+                    if mode == 'nontext': values[0]['kind'] = 'image'
+                    elif mode == 'unread': values[0]['unread'] = True
+                    else:
+                        for value in values: value['text'] = '带《材料D》到校。' + '虚构说明' * 1800
+                    with self.app.connect() as c:
+                        for value in values:
+                            c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
+                                (agent._json(value), self.fixture.source['id'], value['id']))
+                        c.execute('UPDATE agent_jobs SET fingerprint=? WHERE id=?',
+                            (agent._hash(dict(school_learning_policy=7, messages=values)), group['job']))
+                self.assertEqual(agent._history_scopes(self.store, self.store._config()), [])
+
+    def test_empty_legacy_superseded_origin_item_does_not_bypass_existing_decision(self):
+        group = self._empty_legacy()
+        with self.app.connect() as c:
+            c.execute('INSERT INTO agent_items(id,job_id,child_id,kind,title,body,evidence,due,state,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                ('synthetic-superseded-origin', group['job'], 'child-1', 'school', '旧归纳', '旧原句', '[]', '',
+                 'superseded', self.clock.isoformat(), self.clock.isoformat()))
+        self.assertEqual(agent._history_scopes(self.store, self.store._config()), [])
+
+    def test_empty_legacy_old_item_inserted_during_model_rejects_new_result(self):
+        group = self._empty_legacy()
+        def mutate(context):
+            with self.app.connect() as c:
+                c.execute('INSERT INTO agent_items(id,job_id,child_id,kind,title,body,evidence,due,state,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                    ('synthetic-raced-origin', group['job'], 'child-1', 'school', '新到的旧决定', '原要求保留', '[]', '',
+                     'dismissed', self.clock.isoformat(), self.clock.isoformat()))
+            return self._empty_response(group)
+        self.history_response = mutate
+        self.assertEqual(self._tick(10)['failed'], 1)
+        self.assertEqual(self._history_rows(), [])
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT state FROM agent_items WHERE id=?', ('synthetic-raced-origin',)).fetchone()[0], 'dismissed')
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0], 0)
+
     def _protected(self):
         item_ids = {g[key] for g in self.groups for key in ('a_id', 'c_id')}
         task_ids = {g['task_id'] for g in self.groups}
