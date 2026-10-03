@@ -112,9 +112,8 @@ async function load(paint=true){
 function showStartupError(error){$('#content').innerHTML=`<section class="card" data-startup-error role="alert"><h1>家庭记录暂未加载成功</h1><p>${esc(error.message||'请检查连接后重试。')}</p><button class="primary" type="button" data-startup-retry>重试读取</button></section>`;const retry=$('[data-startup-retry]');retry.onclick=()=>{retry.disabled=true;$('#content [data-startup-error] p').textContent='正在重新读取家庭记录…';load().catch(showStartupError)}}
 function filters(){return `<div class="calendar-kids child-filters" role="group" aria-label="切换孩子，只看一位"><span class="small muted">当前孩子</span>${data.children.map(c=>`<button type="button" data-child-filter="${esc(c.id)}" aria-pressed="${child===c.name}">${esc(c.name)}</button>`).join('')}</div>`}
 function requirementHTML(text,className='task-requirement'){
- const lines=String(text||'').split(/\r?\n/).map(x=>x.trim()).filter(Boolean),brief=lines.slice(0,3).map(x=>x.length>140?x.slice(0,140)+'…':x);
- const shortened=lines.length>3||lines.some(x=>x.length>140);
- return `<div class="task-goal"><span class="small muted">要做什么</span><${brief.length>1?'ul':'p'} class="${className}">${brief.length>1?brief.map(x=>`<li>${esc(x)}</li>`).join(''):esc(brief[0]||'具体要求尚未明确')}</${brief.length>1?'ul':'p'}>${shortened?`<details class="requirement-full"><summary>展开完整要求 · ${lines.length}条</summary><p class="source">${esc(text)}</p></details>`:''}</div>`;
+ const lines=String(text||'').split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+ return `<div class="task-goal"><span class="small muted">要做什么</span><${lines.length>1?'ul':'p'} class="${className}">${lines.length>1?lines.map(x=>`<li>${esc(x)}</li>`).join(''):esc(lines[0]||'具体要求尚未明确')}</${lines.length>1?'ul':'p'}></div>`;
 }
 function taskFocus(t){return t.focus||{mode:'next',next_action:'',waiting_for:'',review_on:'',version:0}}
 function taskReviewDue(t){if(taskClosed(t))return false;const f=taskFocus(t);return f.mode!=='next'&&exactTaskDay(f.review_on)&&f.review_on<=data.today}
@@ -1575,7 +1574,7 @@ function schoolMessageIdentity(ref,childID){
 }
 function schoolOriginalButtons(refs,childID,label='原通知与原件',publications=[]){
  const entries=[...new Set(refs)].filter(ref=>schoolMessageIdentity(ref,childID));
- return entries.length?`<div class="toolbar">${entries.map((ref,i)=>{const p=publications.find(p=>p.ref===ref);return `<button data-school-original-ref="${esc(ref)}" data-school-original-child="${esc(childID)}">${p?`<span class="school-publication-context">发言人：${esc(String(p.sender||'').trim()||'未记录')} · ${esc(p.source_name)}</span>`:''}${entries.length===1?label:'第 '+(i+1)+' 条'+label}</button>`}).join('')}</div>`:'';
+ return entries.length?`<div class="toolbar">${entries.map((ref,i)=>{const p=publications.find(p=>p.ref===ref);return `<button data-school-original-ref="${esc(ref)}" data-school-original-child="${esc(childID)}">${p?`<span class="school-publication-context">${esc(String(p.sender||'').trim()||'发布者未记录')}</span>`:''}${entries.length===1?label:'第 '+(i+1)+' 条'+label}</button>`}).join('')}</div>`:'';
 }
 // Show the saved preparation beside its task. Reading never schedules a model, collection or record write.
 function taskSchoolMaterialHTML(view){
