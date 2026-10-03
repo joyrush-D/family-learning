@@ -194,11 +194,15 @@ class SchoolHistoryTests(unittest.TestCase):
         self.assertEqual(self._tick(20)['created'], 0)
         self.assertEqual(len(self.calls), seen)
 
-    def _close_complete_scope(self, *, done):
+    def _close_complete_scope(self, *, done, old_cited_key=False):
         scopes = agent._history_scopes(self.store, dict(enabled=True, sources=self.sources))
         self.assertEqual(len(scopes), 1)
         source, values, key = scopes[0][:3]
         self.assertEqual([v['id'] for v in values], ['11', '12', '13'])
+        if old_cited_key:
+            refs = ['message:' + source['id'] + ':' + v['id'] for v in values]
+            key = 'school-history:' + agent._hash([agent.SCHOOL_SELECTION_REVISION,
+                self.groups[0]['job'], source['child_id'], sorted(refs)])[:40]
         fp = self.store._job(key, dict(revision=agent.SCHOOL_SELECTION_REVISION, source=source,
             messages=values), self.clock, model=True)
         if done:
@@ -231,9 +235,10 @@ class SchoolHistoryTests(unittest.TestCase):
         before = self._protected()
         jobs = self._history_jobs()
         self.history_response = lambda context: self._partial_response(group, context)
-        calls = len(self.calls)
+        calls = sum('existing_actions' in call['context'] for call in self.calls)
+        self.assertEqual(agent._history_scopes(self.store, dict(enabled=True, sources=self.sources)), [])
         self.assertEqual(self._tick(10)['created'], 0)
-        self.assertEqual(len(self.calls), calls)
+        self.assertEqual(sum('existing_actions' in call['context'] for call in self.calls), calls)
         self.assertEqual(self._history_jobs(), jobs)
         self.assertEqual(self._protected(), before)
 
@@ -245,6 +250,27 @@ class SchoolHistoryTests(unittest.TestCase):
 
     def test_complete_manual_retry_leaving_window_does_not_reopen_cited_subset(self):
         self._assert_complete_scope_not_shrunk(done=False, retry=True)
+
+    def _assert_old_complete_scope_not_shrunk(self, *, done):
+        self._partial_legacy()
+        key = self._close_complete_scope(done=done, old_cited_key=True)
+        old_jobs = self._history_jobs()
+        self.assertEqual(agent._history_scopes(self.store, dict(enabled=True, sources=self.sources)), [])
+        self.assertEqual(self._history_jobs(), old_jobs)
+        self._later_processed_messages()
+        before = self._protected()
+        self.assertEqual(agent._history_scopes(self.store, dict(enabled=True, sources=self.sources)), [])
+        calls = sum('existing_actions' in call['context'] for call in self.calls)
+        self.assertEqual(self._tick(10)['created'], 0)
+        self.assertEqual(sum('existing_actions' in call['context'] for call in self.calls), calls)
+        self.assertEqual(self._history_jobs(), old_jobs)
+        self.assertEqual(self._protected(), before)
+
+    def test_old_complete_done_receipt_seen_before_window_moves_does_not_reopen_subset(self):
+        self._assert_old_complete_scope_not_shrunk(done=True)
+
+    def test_old_complete_exhausted_receipt_seen_before_window_moves_does_not_reopen_subset(self):
+        self._assert_old_complete_scope_not_shrunk(done=False)
 
     def test_legacy_original_receipt_changes_after_discovery_make_no_model_call(self):
         self._partial_legacy()
@@ -266,9 +292,9 @@ class SchoolHistoryTests(unittest.TestCase):
                 plan['school_selection_revision'] = agent.SCHOOL_SELECTION_REVISION
                 c.execute('UPDATE agent_items SET plan=? WHERE id=?', (agent._json(plan), ident))
         before = self._protected()
-        calls = len(self.calls)
+        calls = sum('existing_actions' in call['context'] for call in self.calls)
         self.assertEqual(self._tick(10)['created'], 0)
-        self.assertEqual(len(self.calls), calls)
+        self.assertEqual(sum('existing_actions' in call['context'] for call in self.calls), calls)
         self.assertEqual(self._protected(), before)
 
     def test_unproven_full_batch_retains_limited_cited_fallback_without_missing_message(self):
