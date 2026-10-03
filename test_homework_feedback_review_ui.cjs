@@ -122,7 +122,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
   await printForm.locator('[type=submit]').click();await eventually(async()=>!await p.locator('#homeworkPrintDialog').evaluate(x=>x.open),'pair retry saved');assert.deepEqual(pairBodies[1],pairBodies[0]);assert.equal(pairBodies[0].task_id,id);
   await p.unroute('**/api/print/homework');await p.unroute('**/api/print/homework/draft');await p.locator('nav [data-page=home]').click();await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskDialog[open]').waitFor();
 
-   // Exercise real preparation + HTTP ownership failure + changed file + lost queue receipt.
+   { // Exercise real preparation + HTTP ownership failure + changed file + lost queue receipt.
    const recoveryTask=(await post('api/task/new',{child,title:'虚构打印恢复 '+width,category:'homework',action:'核对同一作业的资料',due:state.today})).task;
    const validPng=require('node:child_process').spawnSync(process.env.FAMILY_TEST_PYTHON||'python3',['-c','from test_print import png; import sys; sys.stdout.buffer.write(png())'],{cwd:__dirname,env:{...process.env},encoding:null});
    assert.equal(validPng.status,0,'synthetic original is created without a model');
@@ -147,6 +147,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
    assert.equal(await printForm.evaluate(f=>f.dataset.requestKey),recoveryKey);await printForm.locator('[type=submit]').click();await eventually(async()=>!await p.locator('#homeworkPrintDialog').evaluate(x=>x.open),'original queue keys recover a lost receipt');
    const retriedJobs=(await (await fetch(host.url+'api/print/jobs')).json()).jobs;assert.deepEqual(retriedJobs.map(j=>j.id).sort(),realQueued.map(j=>j.id).sort(),'retry never duplicates a submitted part');assert.deepEqual(recoveryBodies[2],recoveryBodies[1]);assert.equal(recoveryBodies[0].request_key,recoveryBodies[1].request_key);
    await p.unroute('**/api/print/homework');await p.locator('nav [data-page=home]').click();await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskDialog[open]').waitFor();
+   }
 
   const wrong=p.locator('#taskFeedbackHistory [data-task-wrong-form]').first();await wrong.locator(':scope > summary').click();
   await wrong.locator('[data-wrong-field="label"]').fill('第2题');await wrong.locator('[data-wrong-field="answer"]').fill('C');await wrong.locator('[data-wrong-field="correction"]').fill('B');
