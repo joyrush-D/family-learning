@@ -90,6 +90,9 @@ _school_fields['properties'].update(task_state=TASK_BRIEF_SCHEMA['properties']['
 PURPOSES = ('learning','admin','optional','unknown')
 TASK_BRIEF_SCHEMA['required'] += ['purpose','submission']
 TASK_BRIEF_SCHEMA['properties'].update(purpose={'type':'string','enum':list(PURPOSES)},submission={'type':'string','maxLength':600})
+TASK_BRIEF_SCHEMA['required'] += ['learning_subject','learning_goal_id']
+for key in ('learning_subject','learning_goal_id'):
+    TASK_BRIEF_SCHEMA['properties'][key]=copy.deepcopy(_school_fields['properties'][key])
 _school_fields['required'] += ['task_purpose','task_submission']
 _school_fields['properties'].update(task_purpose=TASK_BRIEF_SCHEMA['properties']['purpose'],task_submission=TASK_BRIEF_SCHEMA['properties']['submission'])
 _PAGE_UNREAD='链接页面从未读取：只依据消息正文，不描述页面内容，不写“已查看链接”；'
@@ -97,6 +100,8 @@ _PAGE_STALE='已读取的网页片段已失效（消息已更正或来源授权�
 SCHOOL_TASK_PROMPT += '\n还返回purpose和submission，只按已读文字判定用途，不因出现网址就新增学习任务。learning：教学材料、课程、练习或作业，包括做完后再上传/打卡的作业；admin：纯签到、打卡、回执、报名或信息填报，原文明确要求全班或本孩子办理才可ready，不是学习证据；optional：自愿参加、宣传或参考资料，不写成必做，state不能是ready；unknown：只有链接/短链、需登录后才能看到或文字不足以判断，title/goal/advice留空且state=review，不按“多数链接是打卡”猜测。'+_PAGE_UNREAD+'正文已写明的作业照常整理。“朗读后打卡/上传”只返回一项：学习活动写goal，提交或打卡动作写submission，不为提交动作另起一项，也不能只留打卡而丢掉作业；没有提交动作时submission为空。点击、浏览、下载、打卡回执都不代表完成或掌握。'
 SCHOOL_TASK_PROMPT += '\n本项明确的完成日期或相对日期须连同对应动作写入goal，按原消息发送日理解；资料中例题、示例通知、其他事项的日期不属于本项，不能借用。'
 SCHOOL_TASK_PROMPT += '\n不是只摘取标题或写一句泛化作业：goal须归纳本项全部当前适用的完成要求，包括准备、做/读的范围与数量、必做/选做、自查、家长签字、打印方式、提交及参考使用限制。多条相关消息共同说明同一项时合并完整结论，不把补充要求只放advice或reason。正文已明确的题目/家长参考对应、分别打印和参考仅供家长核对等限制须写goal；附件尚未读取只表示附件内容未知，不抹掉已读正文的这些要求，也不把参考当孩子作答。后续明确更正优先，原话冲突仍review；没有写出的要求不补造。'
+SCHOOL_TASK_PROMPT += '\n标题与goal的必做/选做边界一致。若标题列出题号，须同时保留其中选做部分，不能写成全部须完成的题号范围；标题过长可只写具体作业名称，将完整题号与必做/选做要求放goal。'
+SCHOOL_TASK_PROMPT += '\n还返回learning_subject和learning_goal_id：仅本项确有已读清的教学、作业或订正要求时填写规范科目；行政事务、自愿参加、纯参考和用途未知均留空。learning_goal_id只选learning_goals中同科目且适合本要求的既有目标，不编造编号；没有合适目标留空。原候选的旧change或用途只是待理解状态，原件读清后须重新按当前要求判断；不因旧候选暂未关联学习目标而漏掉本项。暂停目标只关联要求，不恢复分析。'
 SCHOOL_PROMPT += '\n还返回task_state和task_reason，按以下状态规则整理。\n'+SCHOOL_TASK_PROMPT.replace('整理一条已有学校候选，仅返回title、goal、advice、state、reason。','').replace('只处理candidate所指这一件事，不能扩大到其他列或其他孩子。','逐项归纳本批evidence里的全部消息，不扩大到其他孩子。').replace('批处理可跳过，已有候选归reference。','本批按reference保留该消息的引用和不生成任务的理由。')+'\n本次为学校批处理，按proposals结构返回；上述title/goal/advice/state/reason/change/target_id/purpose/submission均使用task_前缀，其余既有字段照常返回。task_purpose不是learning时learning_subject和learning_goal_id留空。'
 SCHOOL_PROMPT += '\n每个新事项只能依据它引用的原消息中的明确行动要求；school_tasks只用来识别更正或重复，不能把旧事项的标题、科目或页码复制成新通知。作业反馈、完成情况、答案和待发资料本身是参考，除非同条原文明说要做、订正、提交或准备什么。原消息的发送日不是孩子作业截止日。'
 SCHOOL_PROMPT += '\n每条消息的publisher是本群内稳定发言人编号的匿名标识，sender是原群名片/昵称，均不证明教师身份；publisher为空时不能仅凭同名认定同一人。attachments只给出本条明确关联原件的名称和类型，文件名不代表已读内容。related_messages表示同一事项已有引用或同一发言人连续发送正文和附件的线索，不是合并作业的结论。理解一件要求及其补充消息时须保留相关原消息ref（最多6条）；不同作业、不同发言人和更正/取消不能因同名、同科或时间接近而合并，不把附件文件名猜成要求。'
@@ -123,6 +128,7 @@ def _task_prompt(pages, pdf=None, material=None):
     Complete PDF page groups add their own clause: Agent-made reference notes, never original instructions or child performance."""
     prompt=SCHOOL_TASK_PROMPT.replace(_PAGE_UNREAD,'')+'\n'+SCHOOL_PAGE_PROMPT if pages else SCHOOL_TASK_PROMPT
     prompt+='\ncandidate仅定位当前这一项，不是完整要求或原文。结合本项全部evidence正文和有效原件，整理完整结论；共享原消息中的其他独立事项不混入本项。'
+    prompt+='\nevidence的collection_content_incomplete记录收集时尚未读全的原始状态，content_incomplete说明当前仍有未读内容；当前已完整读取的原件范围另列在pdf_material或school_material。二者不是家长是否看过、同意或执行的状态，不能把收集时的缺口当成当前适用条件未知。原件摘要的疑点、截断和遗漏仍分别保留，只依据已读清内容。'
     if pdf: prompt+='\n'+SCHOOL_PDF_PROMPT
     if material: prompt+='\nschool_material是本条消息已关联原件的有效整理，ref对应原消息，draft含title、note和uncertainties。这是Agent从原件整理的参考，不是老师逐字原文或孩子作答；只依据其中明确要求理解作业或通知，不复制成绩、完成或掌握结论。明确的科目、动作、范围和数量写title/goal；uncertainties中的缺失只写reason，不清空已读清的要求。仅不清楚截止日不要求家长确认作业类别；原件有缺失或疑问时state=review，reason具体写待补充的那一部分。'
     return prompt
@@ -180,6 +186,42 @@ def _page_fingerprint(source, message, url):
 def _keeps_learning(brief):
     """Only a read teaching requirement may feed a learning goal; sign-ins, optional material and unknown links never do."""
     return brief['state']!='reference' and brief.get('change','new')=='new' and brief.get('purpose','') not in ('admin','optional','unknown')
+
+
+def _school_learning(value, school_goals):
+    """Use the same bounded, same-child goal choice in initial and original-backed interpretations."""
+    subject=_text(value,'learning_subject',40).strip();goal_id=_text(value,'learning_goal_id',80).strip()
+    if goal_id and (not subject or not any(g['id']==goal_id and g['subject']==subject for g in school_goals)):
+        raise AgentError('学校要求的目标归属无法核对')
+    return dict(subject=subject,goal_id=goal_id) if subject else None
+
+
+def _school_original_coverage(evidence, pdf=None, material=None):
+    """Complete linked originals cover their own collection-time gap, never a screenshot or another message."""
+    complete_refs=set((material or {}).get('complete_refs',[]))|{d['ref'] for d in (pdf or {}).get('documents',[])}
+    fragments=any(e.get('kind')=='qq_window_fragment' for e in evidence)
+    covered=bool(complete_refs) and not fragments and all(e.get('ref') in complete_refs for e in evidence
+                if e.get('unread') or e.get('content_incomplete') or _needs_task_details(e.get('text')))
+    return complete_refs,fragments,covered
+
+
+def _school_model_evidence(evidence, pdf=None, material=None):
+    """Describe current reading coverage separately from immutable collection metadata; no family-read state."""
+    complete_refs,_,_=_school_original_coverage(evidence,pdf,material)
+    unresolved=set()
+    if pdf and (pdf.get('uncertainties') or any(d['omitted'] or d['truncated'] for d in pdf['documents'])):
+        unresolved|={d['ref'] for d in pdf['documents']}
+    if material and material['uncertainties']: unresolved|=set(material['refs'])
+    complete_refs-=unresolved
+    result=[]
+    for entry in evidence:
+        original_gap=bool(entry.get('unread') or entry.get('content_incomplete') or _needs_task_details(entry.get('text'))
+                          or entry.get('kind')=='qq_window_fragment')
+        complete_original=entry.get('ref') in complete_refs and entry.get('kind')!='qq_window_fragment'
+        result.append(dict({key:value for key,value in entry.items() if key not in ('unread','content_incomplete')},
+                           collection_content_incomplete=original_gap,
+                           content_incomplete=bool(original_gap and not complete_original or entry.get('ref') in unresolved)))
+    return result
 
 
 def _page_evidence(evidence, pages):
@@ -291,10 +333,7 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
         if pdf: reference['pdf_evidence']=dict(fingerprint=pdf['fingerprint'],documents=pdf['documents'])
         if material: reference['material_evidence']=dict(fingerprint=material['fingerprint'])
         return reference
-    complete_refs=set((material or {}).get('complete_refs',[]))|{d['ref'] for d in (pdf or {}).get('documents',[])}
-    fragments=any(e.get('kind')=='qq_window_fragment' for e in evidence)
-    covered=bool(complete_refs) and not fragments and all(e.get('ref') in complete_refs for e in evidence
-                            if e.get('unread') or e.get('content_incomplete') or _needs_task_details(e.get('text')))
+    _,fragments,covered=_school_original_coverage(evidence,pdf,material)
     if fragments or incomplete and not covered:
         # A legible screenshot can supply a draft, but never establishes complete history or a deadline.
         read_text = any(e.get('kind') in ('text','quote') and not (e.get('unread') or e.get('content_incomplete'))
@@ -1755,13 +1794,11 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 ambiguous_due=True
         item = dict(title='待核对：' + title, body=FOCUS[proposal['focus']], due=due, evidence=cited)
         if routing:
-            subject = _text(proposal, 'learning_subject', 40).strip(); goal_id = _text(proposal, 'learning_goal_id', 80).strip()
-            if goal_id and (not subject or not any(g['id'] == goal_id and g['subject'] == subject for g in school_goals)):
-                raise AgentError('学校要求的目标归属无法核对')
+            learning=_school_learning(proposal,school_goals)
             # Known content gaps keep their ordinary notice, without failing other messages in the batch.
-            if subject and any(e['ref'] in {q['ref'] for q in cited} and not e.get('content_incomplete')
+            if learning and any(e['ref'] in {q['ref'] for q in cited} and not e.get('content_incomplete')
                                and not _needs_task_details(e['text']) for e in evidence):
-                item['plan'] = {'school_learning': {'subject': subject, 'goal_id': goal_id}}
+                item['plan'] = {'school_learning': learning}
             raw_change=proposal.get('task_change','new');raw_target=proposal.get('task_target_id','')
             brief=_school_brief({key:proposal.get('task_'+key,'review' if key=='state' else 'new' if key=='change' else '') for key in ['title','goal','advice','state','reason','change','target_id','purpose','submission']},
                                 incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence if e['ref'] in {q['ref'] for q in cited}),evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}],school_tasks=school_tasks,separate_learning=True)
@@ -1975,7 +2012,11 @@ def _refresh_school(app, store, now, budget):
             reference=_reference_brief(evidence) if not source_error else None
             if not reference and used>=budget: continue
             targets=school_targets(app,store,row['child_id'])
-            context=dict(as_of=now.date().isoformat(),candidate=candidate,child_id=row['child_id'],evidence=evidence,school_tasks=targets)
+            from family_goals import Store as Goals
+            school_goals=Goals(app,store).school_candidates(row['child_id'])
+            context=dict(as_of=now.date().isoformat(),candidate=candidate,child_id=row['child_id'],
+                         evidence=_school_model_evidence(evidence,pdf_evidence,material),
+                         school_tasks=targets,learning_goals=school_goals)
             value=dict(policy=SCHOOL_TASK_POLICY,candidate=candidate,child_id=row['child_id'],evidence=evidence,plan=row['plan'],updated=row['updated'])
             if page_evidence:
                 value['pages']=page_key
@@ -2000,10 +2041,12 @@ def _refresh_school(app, store, now, budget):
                 else:
                     used+=1
                     schema=copy.deepcopy(TASK_BRIEF_SCHEMA);schema['properties']['target_id']['enum']=['']+[t['id'] for t in targets]
+                    schema['properties']['learning_goal_id']['enum']=['']+[g['id'] for g in school_goals]
                     result=family_llm._chat_json([{'role':'system','content':_task_prompt(page_evidence,pdf_evidence,material)},{'role':'user','content':_json(context)}],
                         schema,'family_school_task',timeout=45,data_path=store.data)
                     if not isinstance(result,dict) or set(result) != set(TASK_BRIEF_SCHEMA['required']): raise AgentError('学校事项结构无法核对')
                     if result['purpose'] not in PURPOSES: raise AgentError('学校事项用途无法核对')
+                    learning=_school_learning(result,school_goals)
                     brief=_school_brief(result,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in evidence),evidence=evidence,school_tasks=targets,pages=page_evidence,pdf=pdf_evidence,material=material)
                 if page_evidence: brief.setdefault('page_evidence',dict(fingerprint=page_key,read=page_evidence['read'],unread=page_evidence['unread'],omitted=page_evidence['omitted']))['candidate']=candidate
                 if pdf_evidence: brief.setdefault('pdf_evidence',dict(fingerprint=pdf_key,documents=pdf_evidence['documents']))['candidate']=candidate
@@ -2023,7 +2066,14 @@ def _refresh_school(app, store, now, budget):
                         elif resolved not in current_dates: brief.update(state='review',reason='资料中的日期未能对应本项要求，完成日期待补充；已读要求保留。')
                         else: due=resolved
                     elif len(dates)>1: brief.update(state='review',reason='原件包含不同完成日期，各项日期对应关系待补充；已读要求保留。')
-                if not _keeps_learning(brief): plan.pop('school_learning',None)
+                if not reference and _keeps_learning(brief) and learning:
+                    existing=next((g for g in school_goals if g['id']==plan.get('school_goal_id')),None)
+                    if (existing is None or existing['subject']!=learning['subject']
+                            or learning['goal_id'] and existing['id']!=learning['goal_id']): plan.pop('school_goal_id',None)
+                    plan['school_learning']=learning
+                    plan['school_messages']=[dict(zip(('source_id','message_id'),e['ref'][8:].rsplit(':',1))) for e in evidence]
+                else:
+                    for field in ('school_learning','school_goal_id'): plan.pop(field,None)
                 plan['school_task']=brief
                 with store._db() as c:
                     c.execute('BEGIN IMMEDIATE')

@@ -25,7 +25,8 @@ def page(url=LINK, text=PAGE, truncated=False):
 
 def draft(**changes):
     return dict(dict(title='英语：朗读第3课课文三遍', goal='朗读第3课课文三遍。', advice='', state='ready', reason='页面写明朗读要求。',
-                     purpose='learning', submission='录音上传到班级群打卡', change='new', target_id=''), **changes)
+                     purpose='learning', submission='录音上传到班级群打卡', change='new', target_id='',
+                     learning_subject='英语' if changes.get('purpose','learning')=='learning' else '',learning_goal_id=''), **changes)
 
 
 class SchoolPageEvidenceTests(unittest.TestCase):

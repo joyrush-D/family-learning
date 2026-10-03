@@ -18,7 +18,8 @@ DETACH = 'detach'
 
 def draft(**changes):
     return dict(dict(title='数学：完成练习卷第1至11页', goal='完成练习卷第1至11页。', advice='', state='ready', reason='原件写明练习范围。',
-                     purpose='learning', submission='', change='new', target_id=''), **changes)
+                     purpose='learning', submission='', change='new', target_id='',
+                     learning_subject='数学' if changes.get('purpose','learning')=='learning' else '',learning_goal_id=''), **changes)
 
 
 class SchoolPdfEvidenceTests(test_pdf_material.Base):
@@ -83,6 +84,93 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertEqual(self.brief(ident)['state'],'review')
         self.assertIn('参考最后一页看不清',self.brief(ident)['reason'])
         self.assertEqual(len(self.brief(ident)['pdf_evidence']['documents']),2)
+        self.assertTrue(json.loads(calls[0][1]['content'])['evidence'][0]['content_incomplete'])
+
+    def test_complete_original_reading_scope_does_not_become_parent_read_approval(self):
+        keys=self.native_notice('receipt-scope')
+        text='家长事务：2月12日前打印阅读活动回执一份，家长签字后由孩子交回，无需盖章。'
+        with self.store._db() as c:
+            raw=json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
+                                   (keys['source_id'],keys['message_id'])).fetchone()[0])
+            c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
+                      (json.dumps(dict(raw,text=text,unread=True)),keys['source_id'],keys['message_id']))
+            before=c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
+                             (keys['source_id'],keys['message_id'])).fetchone()[0]
+        self.seed_groups(keys=keys,note=text,uncertainties=[])
+        ident=self.candidate(keys=keys,ident='receipt-scope')
+        def read_scope(messages):
+            context=json.loads(messages[-1]['content']);e=context['evidence'][0]
+            self.assertNotIn('unread',e)
+            self.assertEqual((e['collection_content_incomplete'],e['content_incomplete']),(True,False))
+            self.assertTrue(context['pdf_material'][0]['complete'])
+            return draft(title='家长事务：打印签字交回阅读活动回执',goal=text,purpose='admin')
+        result,calls=self.refresh(read_scope)
+        self.assertEqual((result['created'],len(calls),self.item(ident)['state']),(1,1,'accepted'))
+        self.assertEqual(self.count('manual_tasks'),1);self.assertEqual(self.count('records'),0)
+        with self.store._db() as c:
+            self.assertEqual(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
+                                      (keys['source_id'],keys['message_id'])).fetchone()[0],before)
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_items WHERE kind='goal'").fetchone()[0],0)
+        self.assertNotIn('school_learning',json.loads(self.item(ident)['plan']))
+
+    def test_original_refinement_new_learning_restores_exact_goal_and_message_association(self):
+        import family_goals
+        keys=self.native_notice('restored-learning')
+        self.seed_groups(keys=keys,note='数学：2月12日前完成练习卷第1至11页。',uncertainties=[])
+        preliminary=dict(title='',goal='',advice='',state='review',reason='原件尚未整理。',
+                         policy=agent.SCHOOL_TASK_POLICY,purpose='learning',change='append',target_id='')
+        ident=self.candidate(keys=keys,ident='restored-learning',brief=preliminary)
+        with self.store._db() as c:
+            plan=json.loads(self.item(ident)['plan']);plan.pop('school_messages')
+            c.execute('UPDATE agent_items SET plan=? WHERE id=?',(json.dumps(plan),ident))
+        result,calls=self.refresh(draft(goal='2月12日前完成练习卷第1至11页。'))
+        self.assertEqual((result['created'],len(calls),self.item(ident)['state']),(1,1,'accepted'))
+        plan=json.loads(self.item(ident)['plan'])
+        self.assertEqual(plan['school_learning'],dict(subject='数学',goal_id=''))
+        self.assertEqual(plan['school_messages'],[dict(source_id=keys['source_id'],message_id=keys['message_id'])])
+        goals=family_goals.Store(self.app,self.store)
+        self.assertEqual((goals.route_school(),goals.route_school()),(1,0))
+        plan=json.loads(self.item(ident)['plan'])
+        with self.store._db() as c:
+            root=c.execute('SELECT * FROM agent_items WHERE id=?',(plan['school_goal_id'],)).fetchone()
+            messages,missing,tasks=goals._school_context(c,root)
+            self.assertEqual((missing,len(messages),len(tasks)),(0,1,1))
+            self.assertEqual(tasks[0]['id'],self.item(ident)['task_id'])
+            self.assertEqual(tasks[0]['source_refs'],['school:message:'+keys['source_id']+':'+keys['message_id']])
+        self.assertEqual(self.refresh(draft(),minutes=1),(dict(used=0,failed=0,created=0),[]))
+        self.assertEqual((self.count('manual_tasks'),self.count('records')),(1,0))
+
+    def test_original_refinement_rejects_goal_from_another_child_without_writes(self):
+        import family_goals
+        goals=family_goals.Store(self.app,self.store)
+        other=goals.action(dict(action='create',request_key='synthetic-other-child-goal',
+                               child_id='child-2',title='虚构另一孩子数学',subject='数学'))['id']
+        keys=self.native_notice('foreign-learning')
+        self.seed_groups(keys=keys,note=TEXT,uncertainties=[])
+        ident=self.candidate(keys=keys,ident='foreign-learning');before=self.item(ident)
+        result,calls=self.refresh(draft(learning_goal_id=other))
+        self.assertEqual((result['failed'],result['created'],len(calls)),(1,0,1))
+        self.assertEqual(self.item(ident),before)
+        self.assertNotIn(other,[g['id'] for g in json.loads(calls[0][1]['content'])['learning_goals']])
+        self.assertEqual((self.count('manual_tasks'),self.count('records')),(0,0))
+
+    def test_original_refinement_links_a_paused_goal_without_resuming_or_creating_another(self):
+        import family_goals
+        goals=family_goals.Store(self.app,self.store)
+        ident=goals.action(dict(action='create',request_key='synthetic-paused-school-goal',
+                               child_id='child-1',title='虚构数学要求',subject='数学'))['id']
+        version=next(g['version'] for g in goals.snapshot()['goals'] if g['id']==ident)
+        goals.action(dict(action='pause',request_key='synthetic-pause-school-goal',id=ident,expected_version=version))
+        keys=self.native_notice('paused-learning')
+        self.seed_groups(keys=keys,note=TEXT,uncertainties=[])
+        item=self.candidate(keys=keys,ident='paused-learning')
+        result,calls=self.refresh(draft(learning_goal_id=ident))
+        self.assertEqual((result['created'],len(calls),self.item(item)['state']),(1,1,'accepted'))
+        self.assertEqual(goals.route_school(),0)
+        self.assertEqual(json.loads(self.item(item)['plan'])['school_goal_id'],ident)
+        roots=goals.snapshot()['goals']
+        self.assertEqual((len(roots),roots[0]['lifecycle']),(1,'paused'))
+        self.assertEqual(self.count('records'),0)
 
     def test_same_named_originals_keep_distinct_ids_and_group_content_in_school_context(self):
         keys,reference=self.multi_originals()
