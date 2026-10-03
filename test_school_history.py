@@ -144,6 +144,85 @@ class SchoolHistoryTests(unittest.TestCase):
             proposal(group['missing'], group['refs'][0], due=due, task_title='携带《材料B' + group['suffix'] + '》1份',
                      task_goal=group['missing'], task_state='ready', task_reason='本项已读、独立且明确。', task_purpose='admin')])
 
+    def _empty_legacy(self, *, policy=7, texts=None, ids=None):
+        """Reproduce a saved old successful empty output, without resetting any real cursor."""
+        texts = texts or ['2月12日前带《英语练习册》1份到校。']
+        ids = ids or [str(51 + n) for n in range(len(texts))]
+        source = self.fixture.source
+        payload = self.fixture.payload(cursor=ids[-1])
+        payload['messages'] = [dict(id=ident, time=payload['checked_at'], kind='text', sender='示例英语老师',
+            sender_id='synthetic-teacher-empty', text=text, unread=False) for ident, text in zip(ids, texts)]
+        self.store.ingest(payload)
+        with self.app.connect() as c:
+            values = [json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
+                (source['id'], ident)).fetchone()[0]) for ident in ids]
+        key = 'messages:' + agent._hash([source['id'], ids])[:40]
+        fingerprint = self.store._job(key, dict(school_learning_policy=policy, messages=values), self.clock, model=True)
+        self.store._save(key, fingerprint, [], self.clock, [(source['id'], ident) for ident in ids])
+        return dict(job=key, values=values, refs=['message:' + source['id'] + ':' + ident for ident in ids])
+
+    def _empty_response(self, group):
+        return dict(proposals=[fixtures.school_proposal(title_quote=v['text'], action_quote=v['text'],
+            existing_item_id='', evidence=[dict(ref=ref)], due='2026-02-12', task_title='带英语练习册到校',
+            task_goal=v['text'], task_state='ready', task_purpose='admin', task_reason='完整原文中的独立携带要求。')
+            for v, ref in zip(group['values'], group['refs'])])
+
+    def test_legacy_empty_batch_recovers_once_with_original_job_and_messages_unchanged(self):
+        group = self._empty_legacy()
+        before = self._protected()
+        with self.app.connect() as c:
+            old_job = dict(c.execute('SELECT * FROM agent_jobs WHERE id=?', (group['job'],)).fetchone())
+        self.history_response = self._empty_response(group)
+        result = self._tick(10)
+        self.assertEqual((result['failed'], result['created']), (0, 2))
+        self.assertEqual(len(self._history_rows()), 1)
+        with self.app.connect() as c:
+            task = dict(c.execute('SELECT * FROM manual_tasks').fetchone())
+            self.assertEqual(task['child'], '示例甲')
+            self.assertEqual(task['due'], '2026-02-12')
+            self.assertIn('英语练习册', task['action'])
+            self.assertIn(group['refs'][0], task['source'])
+            self.assertEqual(dict(c.execute('SELECT * FROM agent_jobs WHERE id=?', (group['job'],)).fetchone()), old_job)
+        self.assertEqual(self._protected(), before)
+        self.store = agent.Store(self.app.connect, self.app.profiles, self.fixture.data, app=self.app)
+        count = len(self.calls)
+        self.assertEqual(self._tick(20)['created'], 0)
+        self.assertEqual(len(self.calls), count)
+        self.assertEqual(len(self._history_rows()), 1)
+
+    def test_policy8_empty_batch_is_ambiguous_and_not_rechecked(self):
+        self._empty_legacy(policy=8)
+        before = self._protected()
+        self.assertEqual(agent._history_scopes(self.store, self.store._config()), [])
+        self.assertEqual(self._tick(10)['created'], 0)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self._protected(), before)
+
+    def test_empty_legacy_fingerprint_mismatch_or_unfinished_job_is_not_rechecked(self):
+        for change in ('fingerprint', 'done'):
+            with self.subTest(change=change):
+                self.fixture.setUp()
+                self.app, self.store = self.fixture.app, self.fixture.store
+                group = self._empty_legacy()
+                with self.app.connect() as c:
+                    c.execute('UPDATE agent_jobs SET ' + change + '=? WHERE id=?',
+                        ('different' if change == 'fingerprint' else 0, group['job']))
+                self.assertEqual(agent._history_scopes(self.store, self.store._config()), [])
+
+    def test_empty_legacy_job_changed_during_model_rejects_result_and_preserves_messages(self):
+        group = self._empty_legacy()
+        before = self._protected()
+        def mutate(context):
+            self.assertEqual(context['existing_actions'], [])
+            with self.app.connect() as c:
+                c.execute('UPDATE agent_jobs SET fingerprint=? WHERE id=?', ('changed-legacy-receipt', group['job']))
+            return self._empty_response(group)
+        self.history_response = mutate
+        self.assertEqual(self._tick(10)['failed'], 1)
+        self.assertEqual(self._history_rows(), [])
+        self.assertEqual(self._protected(), before)
+        self.assertTrue(all(not row['done'] for row in self._history_jobs()))
+
     def _protected(self):
         item_ids = {g[key] for g in self.groups for key in ('a_id', 'c_id')}
         task_ids = {g['task_id'] for g in self.groups}
