@@ -1246,7 +1246,12 @@ class Store:
                 brief=json.loads(row['plan']).get('school_task',{})
                 if row['kind']!='school' or brief.get('state')!='ready' or brief.get('policy')!=SCHOOL_TASK_POLICY or brief.get('change','new')!='new' or brief.get('target_id') or obj.get('expected_updated')!=row['updated']:
                     raise AgentError('学校事项已变化，请重新核对',409)
-                if any(e.get('kind')=='qq_window_fragment' for e in _school_material(self,c,row)[0]):
+                config=self._config(c)
+                enabled={s['id'] for s in config['sources'] if s['enabled'] and s['child_id']==row['child_id']}
+                evidence,_=_school_material(self,c,row)
+                if not config['enabled'] or any(e['ref'][8:].rsplit(':',1)[0] not in enabled for e in evidence):
+                    raise AgentError('Agent或原消息来源已停用，保留原草稿；恢复后再自动整理。',409,'school_source_paused')
+                if any(e.get('kind')=='qq_window_fragment' for e in evidence):
                     raise AgentError('截图来源须核对原图、发布日期和附件后加入',409)
 
             task_id = ''
