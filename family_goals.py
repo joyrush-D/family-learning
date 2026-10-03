@@ -978,7 +978,7 @@ class Store:
             if any(ref.startswith('school:') for ref in refs) and not any(e['ref'].startswith('school:') for e in p['evidence']):
                 raise agent.AgentError('建议须引用本轮学校要求的原文')
         # Current requirements are read-only task projections, not generated assessment criteria.
-        if ctx['school_tasks'] and re.search(r'(?:本次|学校|老师|教师)(?:要求)?(?:自查|完成标准)|(?:老师|教师)(?:明确)?要求[:：]',p['mastery_check']):
+        if ctx['school_tasks'] and re.search(r'(?:^|[\n\r。；;：:])\s*(?:本次(?:要求)?自查|(?:学校|老师|教师)(?:要求)?完成标准|(?:老师|教师)(?:明确)?要求)\s*[:：]',p['mastery_check']):
             raise agent.AgentError('学习表现记录不能另列学校完成标准，请沿原事项核对')
         background=ctx['evidence'][0]['ref'] if ctx['unknown_baseline'] else None
         if not isinstance(p['hypotheses'],list) or len(p['hypotheses'])>4:raise agent.AgentError('原因假设格式不正确')

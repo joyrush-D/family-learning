@@ -1248,7 +1248,7 @@ class GoalTests(unittest.TestCase):
             self.store._proposal(wrong,ctx,self.now)
         self.assertEqual(self.goal(),before)
         observed=synthetic_plan(self.last_input)
-        observed['proposal']['mastery_check']='学习表现记录：保留孩子实际读的片段、需要的帮助；是否能独立读尚未知。'
+        observed['proposal']['mastery_check']='学习表现记录：记录孩子本次自查时的原话、实际帮助和卡住的步骤；是否能独立读尚未知。'
         self.assertEqual(self.store._proposal(observed,ctx,self.now)['mastery_check'],observed['proposal']['mastery_check'])
         self.assertEqual(before['school_tasks'][0]['goal'],next(t for t in self.app.tasks() if t['id']==fixture['reading'])['action'])
 
