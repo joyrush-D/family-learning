@@ -127,7 +127,8 @@ def run():
                 answer='教师参考：Plants get energy from sunlight.'),
                 item(label='Q3',judgment='unknown',student_answer='2',answer='教师参考：2 m',
                      steps='如果要单位，就补写2 m。',uncertainty='原题单位格式未提供')]
-            with patch.object(family_llm,'_chat_json',return_value=dict(items=answer_only,coverage='仅答题纸',comparison='上一轮三题均正确')):
+            answer_only_raw=dict(items=answer_only,coverage='Q1—Q3均正确，整卷已检查完',comparison='上一轮三题均正确')
+            with patch.object(family_llm,'_chat_json',return_value=answer_only_raw):
                 limited=family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=True,
                     reference_documents=[dict(name='synthetic-answer-only.txt',text='Q1 B; Q2 Plants get energy from sunlight.; Q3 2 m')])
             assert [q['judgment'] for q in limited['questions']]==['correct','unknown','unknown']
@@ -137,6 +138,10 @@ def run():
             assert all(not q['steps'] and not q['error_reason'] and not q['possible_cause'] for q in limited['questions'][1:])
             assert 'Q2' in limited['comparison'] and 'Q3' in limited['comparison'] and '不能沿用' in limited['comparison']
             assert '上一轮三题均正确' not in limited['comparison']
+            assert 'Q1—Q3均正确，整卷已检查完' not in limited['text']+limited['coverage']
+            assert all(label in limited['coverage'] for label in ('Q2','Q3')) and '仍未判定' in limited['coverage']
+            assert answer_only_raw['coverage']=='Q1—Q3均正确，整卷已检查完'
+            assert answer_only_raw['items'][1]['question_kind']=='subjective' and answer_only_raw['items'][1]['judgment']=='correct'
             for kind in ('unknown','subjective'):
                 with patch.object(family_llm,'_chat_json',return_value=dict(items=[item(question_kind=kind)],coverage='仅答题纸')):
                     uncertain=family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=True,

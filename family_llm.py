@@ -1024,6 +1024,9 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
         comparison=('本次仅核对所选材料。'+unknown_labels+'因原题、作答要求或具体核对依据不完整，保持未判定；'
                     '不能沿用上一轮对这些题目的确定判定。教师参考和实际作答分别保留；其他明确客观答案仅作有限比较，'
                     '旧AI意见不作教师依据，也不能沿用“全卷已检查完”结论。')
+        result['coverage']=('仅按所选作答与教师参考作有限比较，共%d项；'%len(result['items'])+
+                            unknown_labels[:300]+'仍未判定。未提供的题面、作答要求及评分条件未核实，'
+                            '不能据此称全部答对或全卷检查完成。')
     text=['这是%d页图片的待核对草稿；请对照原题和孩子卷面逐项改正后再保存或打印。'%(len(images)+len(reference_images)),
           '覆盖范围：'+(result['coverage'] or '未说明'),'', '错题订正（仅列可辨且与参考明确不同的作答）：']
     wrong=[item for item in result['items'] if item['judgment']=='incorrect']
