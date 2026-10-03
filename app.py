@@ -1034,7 +1034,7 @@ def homework_print_sources(obj,*,pair=False):
                         or context['allowed'][source['id']]['origin']=='review_result'):
                     raise family_print.PrintError('请选择当前作业已关联的原件；检查意见不能当题目或教师参考','review_source_not_allowed',403)
     except sqlite3.OperationalError:
-        raise family_print.PrintError('作业资料暂时无法读取；本次未准备或提交打印','storage_unavailable',503) from None
+        raise family_print.PrintError('作业资料暂时无法读取；请用原编号核对打印进展后重试','storage_unavailable',503) from None
     return context['task']
 
 def homework_saved_review(task_id,record_id):
@@ -2259,7 +2259,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/print/homework':
                 authorized_printer(obj.get('printer'),color=obj.get('color','monochrome'),sides=obj.get('sides','one-sided'))
                 task=homework_print_sources(obj,pair=True)
-                return self.reply(200,dict(jobs=print_store().homework_pair(obj,task)))
+                return self.reply(200,dict(jobs=print_store().homework_pair(obj,task,before_queue=lambda:homework_print_sources(obj,pair=True))))
             if path=='/api/print/cancel': return self.reply(200,dict(job=print_store().cancel(obj.get('job_id'))))
             if path=='/api/print/received': return self.reply(200,dict(job=print_store().confirm_received(obj.get('job_id'),obj.get('note'))))
             if self.path=='/api/task/feedback': return self.reply(200,save_task_feedback(obj))

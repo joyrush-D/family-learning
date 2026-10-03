@@ -160,6 +160,25 @@ class HomeworkPrintScopeTests(unittest.TestCase):
         self.assertEqual({j['id'] for j in queued},{value['jobs']['question']['id'],value['jobs']['guide']['id']})
         self.assertEqual(len(app.print_store().list_jobs()),2)
 
+    def test_material_unlinked_during_conversion_does_not_enqueue_and_retries_original_key(self):
+        original=app.family_print.PrintStore.prepare_guide
+        def unlink_during_conversion(store,*args,**kwargs):
+            prepared=original(store,*args,**kwargs)
+            with app.connect_read_only() as c:
+                row=dict(c.execute('SELECT * FROM records WHERE id=?',(self.answer['record_id'],)).fetchone())
+            app.save_record(dict(id=row['id'],child=row['child'],day=row['day'],category=row['category'],
+                                 title=row['title'],source=row['source'],note='虚构资料已解除，待重新核对',attachments=[]))
+            return prepared
+        body=self.pair(guide_source=None,guide_text='Synthetic parent reference')
+        with patch.object(app.family_print.PrintStore,'prepare_guide',unlink_during_conversion):
+            status,value=self.request('POST','/api/print/homework',body)
+            self.assertEqual(status,403,value)
+        self.assertEqual(app.print_store().list_jobs(),[])
+        self.feedback(self.task,[self.question,self.teacher],'synthetic-reattach-current')
+        status,value=self.request('POST','/api/print/homework',body);self.assertEqual(status,200,value)
+        status,retry=self.request('POST','/api/print/homework',body);self.assertEqual(status,200,retry)
+        self.assertEqual(value['jobs'],retry['jobs']);self.assertEqual(len(app.print_store().list_jobs()),2)
+
     def test_reference_model_failure_and_legacy_independent_draft_remain_retryable(self):
         body=dict(purpose='reference',task_id=self.task['id'],question_sources=[self.source(self.question)])
         with patch.object(app.family_llm,'homework_reference_draft',side_effect=app.family_llm.LLMDraftError('Synthetic model unavailable')):

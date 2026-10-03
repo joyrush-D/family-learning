@@ -616,7 +616,7 @@ class PrintStore:
             target.unlink(missing_ok=True)
             raise
 
-    def homework_pair(self, obj, task):
+    def homework_pair(self, obj, task, *, before_queue=None):
         """One reviewed action queues two independent jobs; retries keep each original request key."""
         if not isinstance(obj, dict) or obj.get('question_confirmed') is not True or obj.get('guide_confirmed') is not True:
             raise PrintError('请分别核对作业题目和家长参考')
@@ -641,6 +641,7 @@ class PrintStore:
         second = (self.prepare(guide, subkey('guide_prepare')) if guide is not None else
                   self.prepare_guide(task['title'], guide_text, subkey('guide_prepare')))
         def queue(prep, role):
+            if before_queue is not None: before_queue()
             return self.enqueue(dict(settings, confirmed=True, preparation_id=prep['id'],
                                      pdf_sha256=prep['pdf_sha256'], idempotency_key=subkey(role+'_enqueue')))
         jobs=[queue(prep,'question'+(str(n+1) if n else '')) for n,prep in enumerate(prepared)]
