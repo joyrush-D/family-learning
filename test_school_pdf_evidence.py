@@ -154,6 +154,22 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertNotIn(other,[g['id'] for g in json.loads(calls[0][1]['content'])['learning_goals']])
         self.assertEqual((self.count('manual_tasks'),self.count('records')),(0,0))
 
+    def test_unread_original_without_requirements_cannot_create_a_learning_goal(self):
+        from family_goals import Store as Goals
+        keys=self.native_notice('unread-learning')
+        with self.store._db() as c:
+            raw=json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
+                                    (keys['source_id'],keys['message_id'])).fetchone()[0])
+            raw.update(text='[文件] 虚构资料.pdf',unread=True)
+            c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
+                      (json.dumps(raw),keys['source_id'],keys['message_id']))
+        ident=self.candidate(keys=keys,ident='unread-learning',brief=dict(policy=7,state='review',title='',goal=''))
+        result,calls=self.refresh(draft())
+        self.assertEqual((result['used'],result['created'],self.brief(ident)['goal'],self.item(ident)['state']),(1,0,'','pending'))
+        self.assertNotIn('school_learning',json.loads(self.item(ident)['plan']))
+        goals=Goals(self.app,self.store)
+        self.assertEqual((goals.route_school(),goals.snapshot()['goals'],self.count('manual_tasks'),self.count('records')),(0,[],0,0))
+
     def test_original_refinement_links_a_paused_goal_without_resuming_or_creating_another(self):
         import family_goals
         goals=family_goals.Store(self.app,self.store)
@@ -291,6 +307,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertTrue(all(DRAFT['note'] in g['text'] and not g['text_truncated'] for g in doc['groups']))
         brief = self.brief(ident); row = self.item(ident)
         self.assertEqual((row['state'], row['task_id'] or '', self.count('manual_tasks'), row['title']), ('pending', '', 0, draft()['title']))
+        self.assertNotIn('school_learning',json.loads(row['plan']))  # a complete attached PDF does not validate a screenshot's scope
         self.assertTrue(brief['pdf_evidence']['fingerprint']); self.assertEqual(brief['pdf_evidence']['documents'][0]['sent'], 4)
         self.assertEqual(brief['state'],'review');self.assertIn('截图',brief['reason'])
         self.assertIn('已参考PDF原件整理', brief['reason']); self.assertIn('不是老师原文', brief['reason'])

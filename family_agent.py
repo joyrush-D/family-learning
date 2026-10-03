@@ -2066,7 +2066,12 @@ def _refresh_school(app, store, now, budget):
                         elif resolved not in current_dates: brief.update(state='review',reason='资料中的日期未能对应本项要求，完成日期待补充；已读要求保留。')
                         else: due=resolved
                     elif len(dates)>1: brief.update(state='review',reason='原件包含不同完成日期，各项日期对应关系待补充；已读要求保留。')
-                if not reference and _keeps_learning(brief) and learning:
+                complete_refs,fragments,_=_school_original_coverage(evidence,pdf_evidence,material)
+                read_requirements=any(not e['content_incomplete'] and (e['ref'] in complete_refs
+                                      or e.get('text','').strip() and not _link_only(e['text'])) for e in context['evidence'])
+                if page_evidence and page_evidence['read'] and not (page_evidence['unread'] or page_evidence['omitted']
+                        or any(p['text_truncated'] for p in page_evidence['read'])): read_requirements=True
+                if not reference and _keeps_learning(brief) and brief['goal'] and learning and read_requirements and not fragments:
                     existing=next((g for g in school_goals if g['id']==plan.get('school_goal_id')),None)
                     if (existing is None or existing['subject']!=learning['subject']
                             or learning['goal_id'] and existing['id']!=learning['goal_id']): plan.pop('school_goal_id',None)
