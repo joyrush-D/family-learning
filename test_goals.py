@@ -1248,9 +1248,12 @@ class GoalTests(unittest.TestCase):
         self.evaluate();self.assertEqual(self.last_input['school_tasks'][0]['due_on'],fixture['second'])
         self.assertIn('只读一遍',self.last_input['school_tasks'][0]['goal'])
         before=self.goal()['pending'];count=self.model.call_count
-        self.feedback('虚构家长补充：尚未开始，准备核对当前要求。')
+        # A feedback save intentionally supersedes pending suggestions. Change the
+        # effective requirement instead, so this round tests the late-return guard
+        # while the previous pending row is still present.
+        edit('家长本轮核对：Unit 3只读第一段，录音上传班级作业区。')
         def late(messages,*args,**kwargs):
-            value=json.loads(messages[-1]['content']);edit('家长再次核对：Unit 3只读第一段，录音上传班级作业区。')
+            value=json.loads(messages[-1]['content']);edit('家长再次核对：Unit 3只读第一句，录音上传班级作业区。')
             return synthetic_plan(value)
         self.model.side_effect=late
         result=self.store.process(self.ident,self.now,explicit=True)

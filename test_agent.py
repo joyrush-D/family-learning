@@ -1207,7 +1207,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(goals.route_school(),0)
         with self.app.connect() as c:
             roots=goals.roots(c);self.assertEqual(len(roots),1)
-            context,missing=goals._school_context(c,roots[0])
+            context,missing,_=goals._school_context(c,roots[0])
             self.assertEqual(len(context),2);self.assertEqual(missing,0)
         # Same wording on another day, changed full text, sibling, another split task and unread media are distinct.
         variants=[(sources[0],dict(stamp=(self.now+dt.timedelta(days=1)).isoformat())),
@@ -1269,7 +1269,7 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(c.execute('SELECT status FROM task_updates WHERE id=?',(task_id,)).fetchone()[0],'已完成')
             self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
             self.assertEqual(c.execute('SELECT COUNT(*) FROM task_focus_history').fetchone()[0],1)
-            context,missing=goals._school_context(c,goals.roots(c)[0]);self.assertEqual(len(context),2);self.assertEqual(missing,0)
+            context,missing,_=goals._school_context(c,goals.roots(c)[0]);self.assertEqual(len(context),2);self.assertEqual(missing,0)
         self.assertEqual(goals.route_school(),0)
         # Same original notice after the correction preserves both correction sources and the closed decision.
         repeat=add(13,'请写三点观察并画一幅图。');self.assertEqual(self.store.act(dict(id=repeat,action='accept'))['task_id'],task_id)
