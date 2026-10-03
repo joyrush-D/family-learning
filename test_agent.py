@@ -316,20 +316,21 @@ class AgentTests(unittest.TestCase):
         self.assertEqual([i['plan']['school_task']['state'] for i in items],['ready']*4+['review','review'])
         self.assertTrue(all(i['evidence']==[dict(ref=ref,text=text[:600])] for i in items))
 
-    def _independent_school_actions_with_parent_receipt(self, with_submission):
+    def _independent_school_actions_with_parent_receipt(self, with_submission, *, receipt_name='独立活动回执', own_learning=False):
         ref='message:'+self.source['id']+':11';due='2026-02-11'
         learning_title='英语：朗读第5课' if with_submission else '数学：完成练习卷'
         learning_goal=('朗读第5课课文两遍，录音上传班级作业区。' if with_submission else
                        '完成练习卷第1–3题（必做），第4题选做。')
         submission='录音上传班级作业区' if with_submission else ''
-        admin_title='家长事务：独立活动回执'
-        admin_goal='家长在独立活动回执上签字，再让孩子交回。无需盖章。'
+        admin_title='家长事务：'+receipt_name
+        admin_goal=('家长先阅读课文，再签字交回'+receipt_name+'。无需盖章。' if own_learning else
+                    '家长在'+receipt_name+'上签字，再让孩子交回。无需盖章。')
         text='明天完成两件独立的事：\n1. '+learning_goal+'\n2. '+admin_goal
         payload=self.payload();payload['messages'][0]['text']=text;self.store.ingest(payload)
         proposals=[school_proposal(title_quote='朗读第5课' if with_submission else '练习卷',due=due,
             evidence=[dict(ref=ref)],task_title=learning_title,task_goal=learning_goal,
             task_state='ready',task_reason='第一项是孩子的独立学习要求。',task_purpose='learning',task_submission=submission),
-            school_proposal(title_quote='独立活动回执',due=due,evidence=[dict(ref=ref)],
+            school_proposal(title_quote=receipt_name,due=due,evidence=[dict(ref=ref)],
                 task_title=admin_title,task_goal=admin_goal,task_state='ready',
                 task_reason='第二项是另一份家长回执，属于独立事务。',task_purpose='admin')]
         evidence=[dict(ref=ref,text=text,time=self.now.isoformat(),content_incomplete=False)]
@@ -341,8 +342,10 @@ class AgentTests(unittest.TestCase):
         self.assertEqual([(item['title'],item['body'],item['due']) for item in items],
                          [(learning_title,learning_goal,due),(admin_title,admin_goal,due)])
         self.assertEqual([item['plan']['school_task']['purpose'] for item in items],['learning','admin'])
-        self.assertEqual([item['plan']['school_task']['state'] for item in items],['ready','ready'],
-                         'an independent parent receipt must remain actionable in a mixed notice')
+        self.assertEqual([item['plan']['school_task']['state'] for item in items],
+                         ['ready','review' if own_learning else 'ready'],
+                         'a receipt name is not a learning action, but its own reading requirement still needs review')
+        if own_learning:self.assertIn('学习活动',items[1]['plan']['school_task']['reason'])
         self.assertEqual(items[0]['plan']['school_task'].get('submission',''),submission)
         self.assertNotIn('submission',items[1]['plan']['school_task'])
         self.assertTrue(all(item['evidence']==[dict(ref=ref,text=text)] for item in items))
@@ -352,16 +355,19 @@ class AgentTests(unittest.TestCase):
         with patch.object(agent.family_llm,'_chat_json',side_effect=AssertionError('saved actions need no model')):
             collected=agent._refresh_school(self.app,self.store,self.now,0)
             repeated=agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=1),0)
-        self.assertEqual((collected['created'],repeated['created']),(2,0))
+        expected_created=1 if own_learning else 2
+        self.assertEqual((collected['created'],repeated['created']),(expected_created,0))
         with self.app.connect() as c:
             tasks={row['title']:dict(row) for row in c.execute('SELECT * FROM manual_tasks')}
-            self.assertEqual(set(tasks),{learning_title,admin_title})
-            for title,goal in [(learning_title,learning_goal),(admin_title,admin_goal)]:
+            expected_tasks=[(learning_title,learning_goal)]+([] if own_learning else [(admin_title,admin_goal)])
+            self.assertEqual(set(tasks),{title for title,_ in expected_tasks})
+            for title,goal in expected_tasks:
                 task=tasks[title]
                 self.assertEqual((task['child'],task['action'],task['due'],task['original_status']),
                                  ('示例甲',goal,due,'待跟进'))
                 self.assertIn(ref,task['source'])
-            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items WHERE state="accepted"').fetchone()[0],2)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items WHERE state="accepted"').fetchone()[0],expected_created)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items WHERE state="pending"').fetchone()[0],2-expected_created)
             self.assertEqual(c.execute('SELECT processed FROM agent_messages').fetchone()[0],1)
             self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
             self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
@@ -371,6 +377,12 @@ class AgentTests(unittest.TestCase):
 
     def test_one_notice_keeps_independent_parent_receipt_beside_exercises_without_submission(self):
         self._independent_school_actions_with_parent_receipt(False)
+
+    def test_reading_activity_receipt_name_does_not_hide_the_independent_parent_action(self):
+        self._independent_school_actions_with_parent_receipt(True,receipt_name='阅读活动回执')
+
+    def test_parent_receipt_with_its_own_reading_requirement_stays_review(self):
+        self._independent_school_actions_with_parent_receipt(True,receipt_name='阅读活动回执',own_learning=True)
 
     def test_same_homework_checkin_does_not_become_an_independent_admin_task(self):
         ref='message:'+self.source['id']+':11';due='2026-02-11'
@@ -449,7 +461,7 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
             self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
 
-    def test_recording_submission_title_remains_a_step_of_the_same_homework(self):
+    def _same_recording_submission_stays_one_homework(self, admin_goal):
         ref='message:'+self.source['id']+':11';due='2026-02-11'
         submission='在班级小程序提交录音'
         goal='朗读第5课课文两遍，'+submission+'。'
@@ -459,14 +471,14 @@ class AgentTests(unittest.TestCase):
             task_title='英语：朗读第5课',task_goal=goal,task_state='ready',
             task_reason='同一朗读作业及其录音提交。',task_purpose='learning',task_submission=submission),
             school_proposal(title_quote='提交录音',due=due,evidence=[dict(ref=ref)],
-                task_title='录音提交',task_goal=submission,task_state='ready',
+                task_title='录音提交',task_goal=admin_goal,task_state='ready',
                 task_reason='这一录音属于第一项朗读作业，并非独立成果。',task_purpose='admin')]
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
             items=agent._select('school',[dict(ref=ref,text=text,time=self.now.isoformat(),content_incomplete=False)],
                                 school_goals=[],as_of=self.now.date().isoformat())
         self.assertEqual([item['plan']['school_task']['state'] for item in items],['ready','review'])
         self.assertIn('避免重复',items[1]['plan']['school_task']['reason'])
-        self.assertEqual((items[1]['title'],items[1]['body']),('录音提交',submission))
+        self.assertEqual((items[1]['title'],items[1]['body']),('录音提交',admin_goal))
         self.assertEqual(items[0]['plan']['school_task']['submission'],submission)
         self.assertTrue(all(item['evidence']==[dict(ref=ref,text=text)] for item in items))
         key='synthetic-recording-title-is-submission';fp=self.store._job(key,dict(text=text),self.now)
@@ -484,6 +496,12 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items WHERE state="pending"').fetchone()[0],1)
             self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
             self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
+
+    def test_recording_submission_title_remains_a_step_of_the_same_homework(self):
+        self._same_recording_submission_stays_one_homework('在班级小程序提交录音')
+
+    def test_same_recording_submission_with_reordered_upload_words_is_not_a_second_task(self):
+        self._same_recording_submission_stays_one_homework('上传录音到班级小程序。')
 
     def _school_admin_requires_a_ready_learning_peer(self, peer_kind):
         ref='message:'+self.source['id']+':11';due='2026-02-11'
