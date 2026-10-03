@@ -1882,6 +1882,7 @@ def _history_scopes(store,config):
             source=sources.get(next(iter(source_ids)))
             if source is None or any(r['child_id']!=source['child_id'] for r in rows): continue
             complete_key='school-history:'+_hash([SCHOOL_SELECTION_REVISION,old_key,source['child_id'],'complete-batch'])[:40]
+            scope_key=complete_key.replace('school-history:','school-history-scope:',1)
             complete=old_key in matches and matches[old_key][0]['id']==source['id']
             if complete:
                 _,values=matches[old_key]
@@ -1889,7 +1890,7 @@ def _history_scopes(store,config):
             else:
                 # Once an exact full scope has been claimed, loss of its discovery
                 # window must not reopen a smaller scope, even after manual retry.
-                if c.execute('SELECT 1 FROM agent_jobs WHERE id=?',(complete_key,)).fetchone(): continue
+                if c.execute('SELECT 1 FROM agent_jobs WHERE id IN (?,?)',(complete_key,scope_key)).fetchone(): continue
                 values=[]
                 for _,ident in ids:
                     m=c.execute('SELECT payload,processed FROM agent_messages WHERE source_id=? AND id=?',(source['id'],ident)).fetchone()
@@ -1902,7 +1903,17 @@ def _history_scopes(store,config):
             # fall back to a smaller scope to bypass full-scope done/retry limits.
             cited_key='school-history:'+_hash([SCHOOL_SELECTION_REVISION,old_key,source['child_id'],sorted(refs)])[:40]
             done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(cited_key,)).fetchone()
-            if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS): continue
+            if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS):
+                if complete and _history_origin_current(c,(old_key,jobs[old_key]['fingerprint'],'legacy'),source['child_id']):
+                    # This is a range-proof receipt, not a new model attempt. Keep
+                    # old full receipts unchanged while retaining their scope if
+                    # subsequent messages move the original batch out of view.
+                    proof=_hash([old_key,jobs[old_key]['fingerprint'],cited_key,dict(done)])
+                    c.execute('INSERT OR IGNORE INTO agent_jobs(id,fingerprint,done) SELECT ?,?,1 '
+                        'WHERE EXISTS(SELECT 1 FROM agent_jobs WHERE id=? AND done=1 AND fingerprint=?) '
+                        'AND EXISTS(SELECT 1 FROM agent_jobs WHERE id=? AND (done=1 OR attempts>=?))',
+                        (scope_key,proof,old_key,jobs[old_key]['fingerprint'],cited_key,MAX_ATTEMPTS))
+                continue
             key=complete_key if complete else cited_key
             done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone()
             if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS): continue
