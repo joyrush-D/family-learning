@@ -87,19 +87,25 @@ class SchoolPageEvidenceTests(unittest.TestCase):
             result = agent._refresh_school(self.app, self.store, self.now + dt.timedelta(minutes=minutes), budget)
         return result, calls
 
-    def test_saved_fragment_reprepares_once_and_stays_for_the_parent(self):
+    def test_saved_fragment_reprepares_once_and_collects_the_original_task(self):
         ident = self.candidate('1'); before = self.brief(ident)
         result, calls = self.refresh(draft())
         self.assertEqual((result['used'], calls, self.brief(ident)), (0, [], before))  # no fragment: the unread draft is untouched
         self.save_page()
         result, calls = self.refresh(draft())
-        self.assertEqual((result['used'], result['created'], result['failed'], len(calls)), (1, 0, 0, 1))  # the full reply contract is accepted, nothing failed
+        self.assertEqual((result['used'], result['created'], result['failed'], len(calls)), (1, 1, 0, 1))
         system, user = calls[0][0]['content'], json.loads(calls[0][1]['content'])
         self.assertNotIn('链接页面从未读取', system); self.assertIn(agent.SCHOOL_PAGE_PROMPT, system); self.assertNotIn(PAGE, system)
         self.assertEqual([(p['url'], p['text'], p['text_truncated'], p['fetched_at']) for p in user['pages']], [(LINK, PAGE, False, FETCHED)])
         self.assertEqual((user['evidence'][0]['text'], user['unread_links']), (TEXT, []))  # message text and page text stay separate
         brief = self.brief(ident); row = self.item(ident)
-        self.assertEqual((row['state'], row['task_id'] or '', self.count('manual_tasks'), row['title']), ('pending', '', 0, '英语：朗读第3课课文三遍'))
+        self.assertEqual((row['state'], self.count('manual_tasks'), row['title']), ('accepted', 1, '英语：朗读第3课课文三遍'))
+        self.assertTrue(row['task_id']); self.assertTrue(brief['auto_added'])
+        with self.app.connect() as c:
+            task=c.execute('SELECT * FROM manual_tasks WHERE id=?',(row['task_id'],)).fetchone()
+            self.assertEqual((task['child'],task['original_status']),('示例甲','待跟进'))
+            self.assertIn('message:'+self.source['id']+':1',task['source'])
+        self.assertEqual(self.count('records'),0)
         self.assertEqual((brief['state'], brief['purpose'], brief['link_read']), ('ready', 'learning', True))
         self.assertEqual([(r['url'], r['fetched_at'], r['text_truncated']) for r in brief['page_evidence']['read']], [(LINK, FETCHED, False)])
         self.assertIn(LINK, brief['reason']); self.assertIn('静态文字完整', brief['reason']); self.assertIn('未知', brief['reason'])
@@ -107,11 +113,9 @@ class SchoolPageEvidenceTests(unittest.TestCase):
         self.assertTrue(agent._keeps_learning(brief))
         self.save_page()  # cached re-read: same fragment, nothing changes
         result, calls = self.refresh(draft(), minutes=1)
-        self.assertEqual((result['used'], calls, self.count('agent_items'), self.count('manual_tasks'), self.item(ident)['state']), (0, [], 1, 0, 'pending'))
-        with self.assertRaises(agent.AgentError):
-            self.store.act(dict(id=ident, action='accept', expected_updated=self.item(ident)['updated']), school_auto=True)
-        accepted = self.store.act(dict(id=ident, action='accept'))  # the parent accepts once through the ordinary path
-        self.assertEqual((accepted['state'], self.count('manual_tasks')), ('accepted', 1))
+        self.assertEqual((result['used'], calls, self.count('agent_items'), self.count('manual_tasks'), self.item(ident)['state']), (0, [], 1, 1, 'accepted'))
+        accepted = self.store.act(dict(id=ident, action='accept', expected_updated=row['updated']), school_auto=True)
+        self.assertEqual((accepted['state'],accepted['task_id'],self.count('manual_tasks')),('accepted',row['task_id'],1))
         accepted_row = self.item(ident); result, calls = self.refresh(draft(), minutes=2)
         self.assertEqual((result['used'], calls, self.count('manual_tasks'), self.item(ident)['state']), (0, [], 1, 'accepted'))
         self.assertEqual(self.item(ident), accepted_row)  # the accepted row is never rewritten by a later round
@@ -130,7 +134,7 @@ class SchoolPageEvidenceTests(unittest.TestCase):
         result, calls = self.refresh(draft(), minutes=4); self.assertEqual((result['used'], calls), (0, []))  # inside the backoff window
         result, calls = self.refresh(draft(), minutes=10); self.assertEqual((result['used'], len(calls)), (1, 1))
         self.assertTrue(self.brief(third).get('page_evidence'))
-        self.assertEqual((self.count('manual_tasks'), self.count('agent_items')), (0, 3))
+        self.assertEqual((self.count('manual_tasks'), self.count('agent_items')), (3, 3))
 
     def test_truncated_fragment_and_unread_addresses_keep_review(self):
         ident = self.candidate('1', text=TEXT + ' 另见 ' + OTHER); self.save_page(truncated=True)
@@ -189,7 +193,7 @@ class SchoolPageEvidenceTests(unittest.TestCase):
         result, calls = self.refresh(draft(), minutes=1)
         self.assertEqual((result['used'], calls), (0, []))  # the corrected message hides the fragment; nothing goes out again
         second = self.candidate('2'); self.save_page('2')
-        result, calls = self.refresh(draft(), minutes=2); self.assertTrue(self.brief(second).get('page_evidence'))
+        result, calls = self.refresh(draft(state='review',reason='是否适用于本孩子尚未明确。'), minutes=2); self.assertTrue(self.brief(second).get('page_evidence'))
         self.config(source_enabled=False)
         result, calls = self.refresh(draft(), minutes=3)
         for messages in calls:
@@ -203,6 +207,41 @@ class SchoolPageEvidenceTests(unittest.TestCase):
         self.assertIn(agent._PAGE_UNREAD, calls[0][0]['content']); self.assertNotIn('pages', json.loads(calls[0][1]['content']))
         self.assertEqual((result['used'], result['created'], self.item(ident)['state'], self.count('manual_tasks')), (1, 1, 'accepted', 1))
         self.assertNotIn('page_evidence', self.brief(ident))
+
+    def test_page_deadlines_use_sending_day_and_history_stays_for_review(self):
+        cases=[
+            ('relative','2026-02-09T08:00:00+08:00','英语：明天提交朗读录音。','','accepted','2026-02-10',''),
+            ('old','2026-02-09T08:00:00+08:00',PAGE,'','pending','','早于今天'),
+            ('unknown','',PAGE,'','pending','','发布日期不明'),
+            ('expired',self.now.isoformat(),'英语：2026-02-09前提交朗读录音。','','pending','2026-02-09','已过'),
+            ('multiple',self.now.isoformat(),'英语：明天提交录音；后天上交练习。','','pending','','不同完成日期'),
+            ('conflict',self.now.isoformat(),'英语：明天提交朗读录音。','2026-02-12','pending','2026-02-12','日期不同'),
+        ]
+        for key,published,text,due,state,resolved,reason in cases:
+            with self.subTest(case=key):
+                ident=self.candidate(key)
+                with self.app.connect() as c:
+                    message=json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',(self.source['id'],key)).fetchone()[0])
+                    message['time']=published
+                    c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',(json.dumps(message),self.source['id'],key))
+                    c.execute('UPDATE agent_items SET due=? WHERE id=?',(due,ident))
+                self.save_page(key,text=text)
+                result,calls=self.refresh(draft())
+                row=self.item(ident)
+                self.assertEqual((result['used'],len(calls),row['state'],row['due']),(1,1,state,resolved))
+                if reason:self.assertIn(reason,self.brief(ident)['reason'])
+                self.assertEqual(self.brief(ident)['state'],'ready' if state=='accepted' else 'review')
+
+    def test_optional_unknown_and_school_changes_never_collect_automatically(self):
+        for key,reply in [('optional',draft(purpose='optional')),('unknown',draft(purpose='unknown')),
+                          ('update',draft(change='update')),('cancel',draft(change='cancel'))]:
+            with self.subTest(case=key):
+                ident=self.candidate(key);self.save_page(key)
+                result,calls=self.refresh(reply)
+                self.assertEqual((result['used'],len(calls),result['created'],self.item(ident)['state'],self.brief(ident)['state']),(1,1,0,'pending','review'))
+                with self.assertRaises(agent.AgentError):
+                    self.store.act(dict(id=ident,action='accept',expected_updated=self.item(ident)['updated']),school_auto=True)
+        self.assertEqual((self.count('manual_tasks'),self.count('records')),(0,0))
 
     def test_reference_fragment_is_recorded_once_without_model(self):
         text = '请问有哪位家长有语文课本第3页的照片，发我一下 ' + LINK
@@ -230,7 +269,8 @@ class SchoolPageEvidenceTests(unittest.TestCase):
 
     def test_page_draft_after_correction_or_revocation_is_stale_and_refused(self):
         ident = self.candidate('1'); self.save_page(); original = self.item(ident)['title']
-        self.refresh(draft()); self.assertEqual(self.brief(ident)['state'], 'ready')
+        reply=draft(state='review',reason='是否适用于本孩子尚未明确。')
+        self.refresh(reply); self.assertEqual(self.brief(ident)['state'], 'review')
         self.config(source_enabled=False)  # revoked after the draft was made
         result, calls = self.refresh(draft(), minutes=1); brief = self.brief(ident)
         self.assertEqual((result['used'], calls, brief['state'], brief['page_evidence']['fingerprint'], brief['reason']), (0, [], 'review', '', agent._PAGE_STALE))
@@ -239,8 +279,8 @@ class SchoolPageEvidenceTests(unittest.TestCase):
         row = self.item(ident); result, calls = self.refresh(draft(), minutes=2)
         self.assertEqual((result['used'], calls, self.item(ident)), (0, [], row))  # marked stale once, never rewritten
         self.config()  # re-authorized: the same fragment is prepared again from the original notice, not from the old draft
-        result, calls = self.refresh(draft(), minutes=3); user = json.loads(calls[0][1]['content'])
-        self.assertEqual((result['used'], result['failed'], len(calls), user['candidate'], self.brief(ident)['state']), (1, 0, 1, original, 'ready'))
+        result, calls = self.refresh(reply, minutes=3); user = json.loads(calls[0][1]['content'])
+        self.assertEqual((result['used'], result['failed'], len(calls), user['candidate'], self.brief(ident)['state']), (1, 0, 1, original, 'review'))
         self.assertNotIn(draft()['title'], json.dumps(user, ensure_ascii=False))
         payload = json.dumps(dict(id='1', time=self.now.isoformat(), kind='text', sender='虚构老师', text='（更正）' + TEXT, unread=False), ensure_ascii=False)
         with self.store._db() as c:
@@ -250,13 +290,14 @@ class SchoolPageEvidenceTests(unittest.TestCase):
         with self.assertRaises(agent.AgentError) as refused: self.store.act(dict(id=ident, action='accept', title='手填', body='手填'))
         self.assertEqual((refused.exception.status, self.count('manual_tasks')), (409, 0))
         self.save_page()  # the parent re-reads the corrected message's page: a fresh fragment, the original notice as candidate
-        result, calls = self.refresh(draft(), minutes=5)
+        result, calls = self.refresh(reply, minutes=5)
         self.assertEqual((result['used'], len(calls), json.loads(calls[0][1]['content'])['candidate']), (1, 1, original))
         self.assertEqual((self.item(ident)['state'], self.count('manual_tasks'), self.count('agent_items')), ('pending', 0, 1))
 
 
     def test_same_page_after_message_or_source_change_needs_new_review(self):
-        ident = self.candidate('1'); self.save_page(); self.refresh(draft())
+        reply=draft(state='review',reason='是否适用于本孩子尚未明确。')
+        ident = self.candidate('1'); self.save_page(); self.refresh(reply)
         previous = self.brief(ident)['page_evidence']['fingerprint']
         with self.store._db() as c:
             payload = json.loads(c.execute('SELECT payload FROM agent_messages WHERE id=?', ('1',)).fetchone()[0])
@@ -266,13 +307,13 @@ class SchoolPageEvidenceTests(unittest.TestCase):
         with self.assertRaises(agent.AgentError) as stale:
             self.store.act(dict(id=ident, action='accept'))
         self.assertEqual(stale.exception.status, 409)
-        result, calls = self.refresh(draft(), minutes=1)
+        result, calls = self.refresh(reply, minutes=1)
         self.assertEqual((result['failed'], len(calls), self.count('manual_tasks')), (0, 1, 0))
         self.assertNotEqual(self.brief(ident)['page_evidence']['fingerprint'], previous)
         previous = self.brief(ident)['page_evidence']['fingerprint']
         self.source['name'] = '更正后的虚构班级'; self.config(); self.save_page()
         with self.assertRaises(agent.AgentError): self.store.act(dict(id=ident, action='accept'))
-        result, calls = self.refresh(draft(), minutes=2)
+        result, calls = self.refresh(reply, minutes=2)
         self.assertEqual((result['failed'], len(calls)), (0, 1))
         self.assertNotEqual(self.brief(ident)['page_evidence']['fingerprint'], previous)
         self.source['child_id'] = 'child-2'; self.config()
@@ -292,7 +333,7 @@ class SchoolPageEvidenceTests(unittest.TestCase):
     def test_page_change_confirmation_rechecks_before_editing_original_task(self):
         old = self.candidate('old', text=PLAIN)
         accepted = self.store.act(dict(id=old, action='accept', title='原作业', body='原要求'))
-        ident = self.candidate('1'); self.save_page(); self.refresh(draft())
+        ident = self.candidate('1'); self.save_page(); self.refresh(draft(change='update',target_id=accepted['task_id']))
         with self.app.connect() as c:
             target = next(t for t in self.app.tasks(c) if t['id'] == accepted['task_id'])
             original = dict(c.execute('SELECT * FROM manual_tasks WHERE id=?', (target['id'],)).fetchone())

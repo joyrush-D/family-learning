@@ -62,7 +62,7 @@ learning_goal_id只从输入learning_goals选择同一科目且适合本要求�
 老师宣布的考试、测验、听写、默写、比赛、家长会或需要带物品/穿着的日期安排，即使不是作业，也必须各自单独返回一项：task_title写科目+事件+原文的日期或星期（如“英语：Unit1–3单元测验（周五）”），task_goal写范围与要求；不要因为它没有“完成/提交”字样就省略。due只在原文写明日期或“本周五/下周一/明天”这类可按发送日换算的表述时填写YYYY-MM-DD，按该消息的发送日期换算；同一条消息里不同事项分别填各自日期，换算不了留空。
 任务要求与老师的后续更正、撤销一起保留原消息作为规划依据；不把它们当成孩子表现。发布者称呼不等于教师身份已确认，不凭群名推断任课老师，不将家长转发说成老师直接发布。保持必须、任选、示例和条件要求，不能读出未提供的图片或链接内容。'''
 # One saved interpretation feeds the task list; it never records child performance.
-SCHOOL_TASK_POLICY = 7
+SCHOOL_TASK_POLICY = 8
 TASK_BRIEF_SCHEMA = {'type':'object','additionalProperties':False,'required':['title','goal','advice','state','reason'],
     'properties':{**{key:{'type':'string','maxLength':limit} for key,limit in [('title',80),('goal',2000),('advice',1200),('reason',400)]},
                   'state':{'type':'string','enum':['ready','review','reference']}}}
@@ -263,11 +263,12 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
         if pdf: reference['pdf_evidence']=dict(fingerprint=pdf['fingerprint'],documents=pdf['documents'])
         if material: reference['material_evidence']=dict(fingerprint=material['fingerprint'])
         return reference
-    covered=material and not any(e.get('kind')=='qq_window_fragment' for e in evidence) and all(e.get('ref') in material['complete_refs'] for e in evidence
+    complete_refs=set((material or {}).get('complete_refs',[]))|{d['ref'] for d in (pdf or {}).get('documents',[])}
+    fragments=any(e.get('kind')=='qq_window_fragment' for e in evidence)
+    covered=bool(complete_refs) and not fragments and all(e.get('ref') in complete_refs for e in evidence
                             if e.get('unread') or e.get('content_incomplete') or _needs_task_details(e.get('text')))
-    if incomplete and not covered:
+    if fragments or incomplete and not covered:
         # A legible screenshot can supply a draft, but never establishes complete history or a deadline.
-        fragments = evidence and all(e.get('kind') == 'qq_window_fragment' and e.get('text', '').strip() for e in evidence)
         read_text = any(e.get('kind') in ('text','quote') and not (e.get('unread') or e.get('content_incomplete'))
                         and _COLLECTOR_PLACEHOLDER.sub('',e.get('text','')).strip() for e in evidence)
         if not fragments and not material and not read_text: brief.update(title='',goal='',advice='')
@@ -1222,10 +1223,10 @@ class Store:
             if action == 'accept' and row['kind'] == 'school': _check_school_page(self,c,row)
             if school_auto:
                 brief=json.loads(row['plan']).get('school_task',{})
-                if row['kind']!='school' or brief.get('state')!='ready' or brief.get('policy')!=SCHOOL_TASK_POLICY or obj.get('expected_updated')!=row['updated']:
+                if row['kind']!='school' or brief.get('state')!='ready' or brief.get('policy')!=SCHOOL_TASK_POLICY or brief.get('change','new')!='new' or brief.get('target_id') or obj.get('expected_updated')!=row['updated']:
                     raise AgentError('学校事项已变化，请重新核对',409)
-                if brief.get('page_evidence'): raise AgentError('依据网页片段整理的草稿须家长核对后加入',409)
-                if brief.get('pdf_evidence'): raise AgentError('依据'+_original_label(brief['pdf_evidence'].get('documents'))+'原件整理的草稿须家长核对后加入',409)
+                if any(e.get('kind')=='qq_window_fragment' for e in _school_material(self,c,row)[0]):
+                    raise AgentError('截图来源须核对原图、发布日期和附件后加入',409)
 
             task_id = ''
             if action == 'accept' and row['kind']=='school' and json.loads(row['plan']).get('school_task',{}).get('change','new')!='new':
@@ -1635,7 +1636,7 @@ def _refresh_school(app, store, now, budget):
 
     A candidate already at the current policy is prepared again only when the parent-saved page fragments of its own
     messages differ from what its draft recorded (at most one such candidate per round, same job budget/backoff).
-    A page-driven draft stays pending for the parent and is never collected automatically.
+    Complete current originals use the same ready/new acceptance path as an ordinary notice.
     """
     used=failed=created=paged=0
     with store._db() as c:
@@ -1710,10 +1711,13 @@ def _refresh_school(app, store, now, budget):
                 if pdf_evidence: brief.setdefault('pdf_evidence',dict(fingerprint=pdf_key,documents=pdf_evidence['documents']))['candidate']=candidate
                 if material: brief.setdefault('material_evidence',dict(fingerprint=material_key))
                 due=row['due']
-                if material and brief['state']=='ready':
+                if (material or page_evidence or pdf_evidence) and brief['state']=='ready':
                     import family_agenda
                     stamps={e['ref']:family_agenda.sent_day(e.get('time')) for e in evidence}
-                    dates=set().union(*(family_agenda.deadlines(e['draft']['note'],stamps.get(e['ref'],'')) for e in material['model']))
+                    texts=[(e['ref'],e['draft']['note']) for e in (material or {}).get('model',[])]
+                    texts += [(p['ref'],p['text']) for p in (page_evidence or {}).get('model_pages',[])]
+                    texts += [(d['ref'],g['text']) for d in (pdf_evidence or {}).get('model',[]) for g in d['groups']]
+                    dates=set().union(*(family_agenda.deadlines(text,stamps.get(ref,'')) for ref,text in texts))
                     if len(dates)==1:
                         resolved=next(iter(dates))
                         if due and due!=resolved: brief.update(state='review',reason='原件完成日期与已有事项日期不同，日期对应关系待补充；已读要求保留。')
@@ -1733,7 +1737,7 @@ def _refresh_school(app, store, now, budget):
                     row['updated']=updated;row['due']=due
             except (family_llm.LLMDraftError,AgentError,ValueError) as error:
                 store._fail(key,now,fingerprint=fp,reason=error);failed+=1;continue
-        if material and brief.get('state')=='ready':
+        if (material or page_evidence or pdf_evidence) and brief.get('state')=='ready':
             import family_agenda
             published=[family_agenda.sent_day(e.get('time')) for e in evidence]
             if any(not day for day in published) or not row['due'] and any(day<now.date().isoformat() for day in published):
@@ -1744,8 +1748,7 @@ def _refresh_school(app, store, now, budget):
             brief.update(state='review',reason='原截止日期已过，请核对是否仍需补做；不推定已完成。');plan['school_task']=brief
             with store._db() as c:
                 c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=?",(_json(plan),row['id'],row['updated']))
-        if brief.get('state')=='ready' and not brief.get('page_evidence') and not brief.get('pdf_evidence'):
-            # A draft that leaned on page text is left for the parent; only the ordinary notice path collects automatically.
+        if brief.get('state')=='ready':
             try:
                 result=store.act(dict(id=row['id'],action='accept',expected_updated=row['updated']),school_auto=True)
                 created+=not result.get('deduplicated',False)

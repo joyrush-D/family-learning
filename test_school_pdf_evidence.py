@@ -31,15 +31,27 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         super().setUp()
         self.keys = self.school_fragment(TEXT); self.pdf = self.seed_pdf('a' * 32); self.link(self.keys, self.pdf)
 
-    def seed_groups(self, batches=BATCHES, note=DRAFT['note'], keys=None):
+    def seed_groups(self, batches=BATCHES, note=DRAFT['note'], keys=None, uncertainties=None):
         with self.store._db() as c:
             source, message = self.store._message_context(c, keys or self.keys)
             fp = pdfm.pdf_input(self.store, c, source, message)['fingerprint']
             for pages in batches:
-                payload = json.dumps(dict(DRAFT, note=note, title='第%s-%s页组' % (pages[0], pages[-1]), kind='school_material'), ensure_ascii=False)
+                payload = json.dumps(dict(DRAFT, note=note, uncertainties=DRAFT['uncertainties'] if uncertainties is None else uncertainties,
+                                          title='第%s-%s页组' % (pages[0], pages[-1]), kind='school_material'), ensure_ascii=False)
                 c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?)',
                           (source['id'], message['id'], fp, pages[0], json.dumps(pages), 11, payload, self.now.isoformat()))
         return fp
+
+    def native_notice(self, ident='native', upload=None, published=None):
+        message=dict(self.message(ident,kind='text'),text=TEXT)
+        self.ingest(message)
+        keys=dict(child_id='child-1',source_id=self.source['id'],message_id=ident)
+        if published is not None:
+            with self.store._db() as c:
+                c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
+                          (json.dumps(dict(message,time=published)),self.source['id'],ident))
+        self.link(keys,upload or self.pdf)
+        return keys
 
     def candidate(self, keys=None, ident='pdf-1', brief=None, title=None):
         keys = keys or self.keys
@@ -106,6 +118,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         brief = self.brief(ident); row = self.item(ident)
         self.assertEqual((row['state'], row['task_id'] or '', self.count('manual_tasks'), row['title']), ('pending', '', 0, draft()['title']))
         self.assertTrue(brief['pdf_evidence']['fingerprint']); self.assertEqual(brief['pdf_evidence']['documents'][0]['sent'], 4)
+        self.assertEqual(brief['state'],'review');self.assertIn('截图',brief['reason'])
         self.assertIn('已参考PDF原件整理', brief['reason']); self.assertIn('不是老师原文', brief['reason'])
         with self.assertRaises(agent.AgentError) as auto:
             self.store.act(dict(id=ident, action='accept', expected_updated=row['updated']), school_auto=True)
@@ -118,6 +131,86 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertEqual((again['state'], again['task_id'], self.count('manual_tasks')), ('accepted', accepted['task_id'], 1))
         accepted_row = self.item(ident); result, calls = self.refresh(draft(), minutes=2)
         self.assertEqual((result['used'], calls, self.item(ident)), (0, [], accepted_row))
+
+    def test_complete_native_pdf_and_word_collect_once_under_the_original_source(self):
+        for original,upload in [('pdf',self.pdf),('docx',self.seed_docx('b'*32))]:
+            with self.subTest(original=original),no_convert(),no_pages():
+                keys=self.native_notice(original,upload)
+                self.seed_groups(keys=keys,note=TEXT,uncertainties=[])
+                material=self.material(keys)
+                evidence=agent._pdf_evidence([dict(material,ref='message:'+keys['source_id']+':'+keys['message_id'])])
+                # The complete original and its summary have not changed since policy 7 marked the file unread.
+                old=dict(draft(state='review',reason='原件或具体要求尚未读全。'),policy=7,
+                         pdf_evidence=dict(fingerprint=evidence['fingerprint'],documents=evidence['documents']))
+                ident=self.candidate(keys=keys,ident=original,brief=old);before=self.item(ident)
+                self.assertEqual(self.refresh(draft(),budget=0),(dict(used=0,failed=0,created=0),[]))
+                self.assertEqual(self.item(ident),before)
+                result,calls=self.refresh(draft())
+                row=self.item(ident);brief=self.brief(ident)
+                self.assertEqual((result['used'],result['created'],len(calls),row['state'],brief['state']),(1,1,1,'accepted','ready'))
+                self.assertEqual((brief['policy'],brief['pdf_evidence']['fingerprint'],brief['pdf_evidence']['documents'][0]['original']),
+                                 (agent.SCHOOL_TASK_POLICY,evidence['fingerprint'],original))
+                self.assertTrue(brief['auto_added'])
+                doc=json.loads(calls[0][1]['content'])['pdf_material'][0]
+                self.assertEqual((doc['complete'],doc['processed_pages'],doc['omitted_groups'],doc['truncated_groups']),(True,list(range(1,12)),[],[]))
+                with self.app.connect() as c:
+                    task=c.execute('SELECT * FROM manual_tasks WHERE id=?',(row['task_id'],)).fetchone()
+                    self.assertEqual((task['child'],task['original_status']),('示例甲','待跟进'))
+                    self.assertIn('message:'+keys['source_id']+':'+keys['message_id'],task['source'])
+                again=self.store.act(dict(id=ident,action='accept',expected_updated=row['updated']),school_auto=True)
+                self.assertEqual((again['state'],again['task_id']),('accepted',row['task_id']))
+                self.assertEqual((self.refresh(draft())[1],self.item(ident)),([],row))
+        self.assertEqual((self.count('manual_tasks'),self.count('agent_items'),self.count('records')),(2,2,0))
+
+    def test_native_pdf_deadline_and_history_use_actual_sent_group_text(self):
+        cases=[
+            ('relative','2026-02-09T08:00:00+08:00','数学：明天提交练习卷。','accepted','2026-02-10',''),
+            ('old','2026-02-09T08:00:00+08:00',TEXT,'pending','','早于今天'),
+            ('unknown','',TEXT,'pending','','发布日期不明'),
+            ('expired',self.now.isoformat(),'数学：2026-02-09前提交练习卷。','pending','2026-02-09','已过'),
+            ('multiple',self.now.isoformat(),'数学：明天提交练习卷；后天上交订正。','pending','','不同完成日期'),
+        ]
+        for key,published,note,state,due,reason in cases:
+            with self.subTest(case=key):
+                keys=self.native_notice(key,published=published);self.seed_groups(keys=keys,note=note,uncertainties=[])
+                ident=self.candidate(keys=keys,ident=key)
+                result,calls=self.refresh(draft())
+                row=self.item(ident)
+                self.assertEqual((result['used'],len(calls),row['state'],row['due']),(1,1,state,due))
+                if reason:self.assertIn(reason,self.brief(ident)['reason'])
+                self.assertEqual(self.brief(ident)['state'],'ready' if state=='accepted' else 'review')
+
+    def test_native_pdf_partial_summary_and_uncovered_message_remain_review(self):
+        keys=self.native_notice();ident=self.candidate(keys=keys)
+        self.seed_groups(BATCHES[:3],keys=keys,note=TEXT,uncertainties=[])
+        self.assertEqual(self.refresh(draft()),(dict(used=0,failed=0,created=0),[]))
+        self.seed_groups(BATCHES[3:],keys=keys,note='2026-02-12前提交。'+'摘'*7000,uncertainties=[])
+        result,calls=self.refresh(draft())
+        self.assertEqual((result['used'],result['created'],self.brief(ident)['state'],self.count('manual_tasks')),(1,0,'review',0))
+        self.assertIn('未全部送核',self.brief(ident)['reason'])
+        self.assertEqual(self.item(ident)['due'],'')  # a date in an incompletely sent group does not become a deadline
+        with self.store._db() as c:
+            source,message=self.store._message_context(c,keys)
+            pdf=agent._pdf_evidence([dict(self.material(keys),ref='message:'+source['id']+':'+message['id'])])
+        evidence=[dict(ref='message:'+source['id']+':'+message['id'],**message),dict(ref='message:qq:other:missing',text='[文件]',kind='text',unread=True)]
+        brief=agent._school_brief(draft(),incomplete=True,evidence=evidence,pdf=pdf)
+        self.assertEqual(brief['state'],'review')
+
+    def test_auto_acceptance_rechecks_pdf_link_and_rejects_forged_ready_screenshot(self):
+        keys=self.native_notice();self.seed_groups(keys=keys,note=TEXT,uncertainties=[]);ident=self.candidate(keys=keys)
+        real=self.store.act
+        def detach(obj,**kwargs):
+            self.link(keys,self.pdf,action=DETACH)
+            return real(obj,**kwargs)
+        with patch.object(self.store,'act',side_effect=detach):result,calls=self.refresh(draft())
+        self.assertEqual((result['used'],len(calls),self.item(ident)['state'],self.count('manual_tasks')),(1,1,'pending',0))
+        self.refresh(draft());self.assertEqual(self.brief(ident)['state'],'review')
+        self.seed_groups();screenshot=self.candidate(ident='screenshot');self.refresh(draft())
+        row=self.item(screenshot);plan=json.loads(row['plan']);plan['school_task']['state']='ready'
+        with self.store._db() as c:c.execute('UPDATE agent_items SET plan=? WHERE id=?',(json.dumps(plan),screenshot))
+        with self.assertRaises(agent.AgentError) as refused:
+            real(dict(id=screenshot,action='accept',expected_updated=row['updated']),school_auto=True)
+        self.assertIn('截图',str(refused.exception));self.assertEqual(self.count('manual_tasks'),0)
 
     def test_revoked_detached_or_changed_original_hides_draft_and_refuses_acceptance(self):
         self.seed_groups(); ident = self.candidate()
