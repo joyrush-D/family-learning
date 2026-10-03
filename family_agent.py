@@ -1852,6 +1852,9 @@ def _history_scopes(store,config):
                 if m is None or m['processed']!=1: break
                 values.append(json.loads(m['payload']))
             if len(values)!=len(ids): continue
+            # v1 compares complete literal text actions. An image/file placeholder or unread
+            # message cannot be reinterpreted without its material contract; keep that scope open.
+            if any(v['kind']!='text' or v['unread'] for v in values): continue
             # An oversized legacy scope remains open rather than being silently clipped and marked audited.
             if len(values)>6 or sum(len(_json(v)) for v in values)>14000: continue
             result.append((source,values,key))

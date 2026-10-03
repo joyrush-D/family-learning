@@ -82,14 +82,14 @@ class SchoolHistoryTests(unittest.TestCase):
     def _legacy(self, *, suffix='', ids=('11', '12'), missing=None, tick=0, feedback=False):
         source = self.fixture.source
         first = '2月12日前交《回执A' + suffix + '》。'
-        missing = missing or '2月12日前带《材料B' + suffix + '》1份到校。'
+        missing = missing or '另项：2月12日前带《材料B' + suffix + '》1份到校。'
         optional = '自愿报名《活动C' + suffix + '》，不参加也无需回复。'
         refs = ['message:' + source['id'] + ':' + ident for ident in ids]
         with self.app.connect() as c:
             saved = c.execute('SELECT cursor FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
         payload = self.fixture.payload(expected=saved['cursor'] if saved else source['cursor'], cursor=ids[-1], offset=tick)
         payload['messages'] = [dict(id=ident, time=payload['checked_at'], kind='text', sender='示例老师',
-                                    sender_id='synthetic-teacher', text=text, unread=False)
+                                    sender_id='synthetic-teacher-a', text=text, unread=False)
                                for ident, text in zip(ids, (first + missing, optional))]
         self.store.ingest(payload)
         old = dict(proposals=[
@@ -443,6 +443,32 @@ class SchoolHistoryTests(unittest.TestCase):
         self.assertEqual(json.loads(refreshed['plan'])['school_task']['state'], 'review')
         self.assertEqual(refreshed['state'], 'pending')
         self.assertEqual(self._protected(), protected)
+
+    def test_non_text_or_unread_processed_scope_is_left_untouched_without_history_call_or_job(self):
+        self._legacy()
+        with self.app.connect() as c:
+            original = json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
+                (self.fixture.source['id'], '11')).fetchone()['payload'])
+        for index, (kind, unread) in enumerate((('image', False), ('text', True))):
+            with self.subTest(kind=kind, unread=unread):
+                # Only the isolated saved fixture changes; processed and cursor are never reset.
+                value = dict(original, kind=kind, unread=unread)
+                with self.app.connect() as c:
+                    c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
+                        (agent._json(value), self.fixture.source['id'], '11'))
+                    jobs = [dict(row) for row in c.execute('SELECT * FROM agent_jobs ORDER BY id')]
+                before = self._protected()
+                counts = self._school_task_counts()
+                call_count = len(self.calls)
+                result = self._tick(10 + index * 10)
+                self.assertEqual((result['failed'], result['created'], result['processed']), (0, 0, 0))
+                self.assertEqual(len(self.calls), call_count)
+                self.assertEqual(self._history_jobs(), [])
+                self.assertEqual(self._history_rows(), [])
+                self.assertEqual(self._school_task_counts(), counts)
+                self.assertEqual(self._protected(), before)
+                with self.app.connect() as c:
+                    self.assertEqual([dict(row) for row in c.execute('SELECT * FROM agent_jobs ORDER BY id')], jobs)
 
 
 if __name__ == '__main__':
