@@ -139,6 +139,40 @@ class AgentTests(unittest.TestCase):
             payload,processed=c.execute('SELECT payload,processed FROM agent_messages').fetchone()
             self.assertEqual((json.loads(payload)['text'],processed),('后天交回活动回执。',0))
 
+    def _school_auto_accept_after_pause(self, disable_agent):
+        self.store.ingest(self.payload())
+        proposal=school_proposal(title_quote='明天带阅读材料',due='2026-02-11',
+            evidence=[dict(ref='message:'+self.source['id']+':11')],
+            task_title='带阅读材料',task_goal='明天带阅读材料。',
+            task_state='ready',task_reason='要求明确。',task_purpose='admin')
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):
+            items=agent._select('school',[dict(ref='message:'+self.source['id']+':11',text=self.payload()['messages'][0]['text'],time=self.now.isoformat())],as_of=self.now.date().isoformat())
+        items=[dict(i,kind='school',child_id='child-1') for i in items]
+        self.store._save('synthetic-auto-source-race','fixture',items,self.now,[(self.source['id'],'11')])
+        self.source['enabled']=disable_agent;self.config(enabled=not disable_agent)
+        with patch.object(agent.family_llm,'_chat_json') as model:
+            rejected=agent._refresh_school(self.app,self.store,self.now,0)
+        self.assertEqual(model.call_count,0);self.assertEqual(rejected['created'],0)
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT state FROM agent_items').fetchone()[0],'pending')
+            self.assertEqual(c.execute('SELECT processed FROM agent_messages').fetchone()[0],1)
+        self.source['enabled']=True;self.config()
+        with patch.object(agent.family_llm,'_chat_json') as model:
+            recovered=agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=1),0)
+            repeated=agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=2),0)
+        self.assertEqual(model.call_count,0)
+        self.assertEqual((recovered['created'],repeated['created']),(1,0))
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT original_status FROM manual_tasks').fetchone()[0],'待跟进')
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+
+    def test_saved_school_draft_does_not_auto_accept_after_agent_pause(self):
+        self._school_auto_accept_after_pause(True)
+
+    def test_saved_school_draft_does_not_auto_accept_after_source_pause(self):
+        self._school_auto_accept_after_pause(False)
+
     def test_separate_school_conclusions_do_not_borrow_related_attachments(self):
         sent='2026-10-05T16:00:00+08:00'
         refs=['message:synthetic-minutes:'+str(i) for i in range(1,6)]
