@@ -67,6 +67,7 @@ learning_goal_id只从输入learning_goals选择同一科目且适合本要求�
 任务要求与老师的后续更正、撤销一起保留原消息作为规划依据；不把它们当成孩子表现。发布者称呼不等于教师身份已确认，不凭群名推断任课老师，不将家长转发说成老师直接发布。保持必须、任选、示例和条件要求，不能读出未提供的图片或链接内容。'''
 # One saved interpretation feeds the task list; it never records child performance.
 SCHOOL_TASK_POLICY = 8
+_SCHOOL_DATE_MENTION=re.compile(r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}\s*[日号]|今天|今日|今晚|明天|明日|后天|(?:本|这|下)(?:个)?(?:周|星期|礼拜)|(?:周|星期|礼拜)[一二三四五六日天]|截止|期限|日期|完成时间')
 TASK_BRIEF_SCHEMA = {'type':'object','additionalProperties':False,'required':['title','goal','advice','state','reason'],
     'properties':{**{key:{'type':'string','maxLength':limit} for key,limit in [('title',80),('goal',2000),('advice',1200),('reason',400)]},
                   'state':{'type':'string','enum':['ready','review','reference']}}}
@@ -1473,8 +1474,8 @@ def school_targets(app, store, child_id, connection=None):
 def _school_append_brief(brief, evidence, targets):
     """A narrow additive relation, never a guess from a date, nickname or model target alone."""
     if brief.get('change')!='append': return
-    def uncertain():
-        brief.update(state='review',reason='补充与原事项的同发布者、唯一归属或当前要求尚不能核对；原要求、安排和反馈保留。')
+    def uncertain(reason='补充与原事项的同发布者、唯一归属或当前要求尚不能核对；原要求、安排和反馈保留。'):
+        brief.update(state='review',reason=reason)
         brief.pop('target_basis',None)
         brief.pop('input_basis',None)
     if brief.get('state')!='ready': brief.pop('target_basis',None);brief.pop('input_basis',None);return
@@ -1491,11 +1492,11 @@ def _school_append_brief(brief, evidence, targets):
     if publishers!={(selected.get('source_id'),selected.get('publisher'))}:
         uncertain();return
     text='\n'.join(texts)
-    from family_agenda import deadlines,sent_day
-    source_dates=set().union(*(deadlines(e['text'],sent_day(e.get('time',''))) for e in evidence))
-    claimed_dates=set().union(*(deadlines(brief['goal'],sent_day(e.get('time',''))) for e in evidence))
-    if claimed_dates-source_dates:
-        uncertain();return
+    # A date expression that the deadline parser cannot resolve is still a
+    # possible timing change. Shared routing/refining/save guards cover both
+    # an empty model date and one copied from the target.
+    if any(_SCHOOL_DATE_MENTION.search(value) for value in (text,brief['goal'],brief.get('submission',''))):
+        uncertain('补充含日期或期限表述，是否改变原截止待核对；原要求、安排和反馈保留。');return
     # "Only supplement reading/textbook homework" identifies an activity only
     # if exactly one saved task by this source/publisher has that activity.
     reading=bool(re.search(r'(?:只|仅)?补(?:充)?(?:[^。：:\n]{0,30})朗读',text))
@@ -1768,8 +1769,6 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             if (uncertain_due and brief.get('change')=='append' and brief['state']=='ready'
                     and brief.get('target_basis') and not relative
                     and date(proposed_due) and proposed_due==brief['target_basis']['due']
-                    and not any(re.search(r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}\s*日|今天|今日|今晚|明天|明日|后天|(?:本|这|下)(?:个)?(?:周|星期|礼拜)',text)
-                                for text in [e['text'] for e in cited_evidence]+[brief['goal'],brief.get('submission','')])
                     and not any(deadlines(text,sent_day(e.get('time',''))) for e in cited_evidence
                                 for text in (brief['goal'],brief.get('submission','')))):
                 # The model repeated the verified target's date, not a new

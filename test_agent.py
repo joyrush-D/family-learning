@@ -1456,7 +1456,11 @@ class AgentTests(unittest.TestCase):
             row=self._school_append_candidate(index,text,change=change,target=task_id,due=due)
             brief=json.loads(row['plan'])['school_task']
             if index==15:
-                with self.assertRaises(agent.AgentError): self._school_append_auto(row)
+                self.assertEqual(brief['state'],'review')
+                basis=next(t for t in agent.school_targets(self.app,self.store,'child-1') if t['id']==task_id)['append_basis']
+                obj=dict(action='school_change',id=row['id'],target_id=task_id,change='append',title=basis['title'],
+                    body=brief['goal'],due=due,expected_updated=row['updated'],target_version=basis['version'],target_updated=basis['updated'])
+                with self.assertRaises(agent.AgentError):agent.apply_school_change(self.app,self.store,obj,school_auto=True)
             else: self.assertEqual(brief['state'],'review')
         with self.app.connect() as c:
             task=next(t for t in self.app.tasks(c) if t['id']==task_id)
@@ -1532,6 +1536,20 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(self.app.tasks(c)[0]['action'],original['body'])
             self.assertEqual(self.app.tasks(c)[0]['agenda']['due_on'],'2026-02-11')
             self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+
+    def test_school_append_unparsed_date_guard_covers_empty_and_copied_model_due(self):
+        original,task_id=self._school_append_original()
+        for index,(due,text,goal) in enumerate(((due,text,goal) for due in ('','2026-02-11')
+                for text,goal in (('只补朗读：后天确认上传成功。',None),
+                    ('只补朗读：确认上传成功。','2月12日确认上传成功。'))),12):
+            with self.subTest(due=due,text=text,goal=goal):
+                row=self._school_append_candidate(index,text,change='append',target=task_id,due=due,goal=goal)
+                brief=json.loads(row['plan'])['school_task']
+                self.assertEqual(brief['state'],'review');self.assertNotIn('target_basis',brief)
+        with self.app.connect() as c:
+            self.assertEqual(len(self.app.tasks(c)),1)
+            self.assertEqual(self.app.tasks(c)[0]['action'],original['body'])
+            self.assertEqual(self.app.tasks(c)[0]['agenda']['due_on'],'2026-02-11')
 
     def test_school_append_rejects_original_corrected_or_recalled_after_collection(self):
         original,task_id=self._school_append_original()
