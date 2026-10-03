@@ -21,6 +21,13 @@ def synthetic_plan(value):
     return {'proposal':dict(title='先核对一个判断过程',goal='能解释判断所用的线索',action='家长请孩子选一道已有题，说说看到的时间线索；不愿继续就停止。',why_now='根据已保存的家长反馈先核对。',estimated_minutes=10,review_on=value['as_of'],evidence=[dict(ref=x['ref'],quote=x['text'][:30]) for x in cited],assessment='现有反馈不足以确定知识缺口。',hypotheses=[dict(reason='句子中时间线索理解可能不牢',support=[],against=[],test='使用现有一道题，请孩子说出选项理由；不提示答案。',status='待验证')],resource='已有课本；具体页码待家长核对。',mastery_check='相近新题中独立解释，记录帮助。',choice='核实')}
 
 
+def synthetic_school_proposal(evidence, subject, title, goal, *, goal_id='', state='ready', reason='已读学校要求明确。', purpose='learning'):
+    """Complete school-model contract with explicit task content, separate from a proposed learning plan."""
+    return dict(title_quote=evidence['text'][:120],focus='school',due='',evidence=[dict(ref=evidence['ref'])],
+        learning_subject=subject,learning_goal_id=goal_id,task_title=title,task_goal=goal,task_advice='',
+        task_state=state,task_reason=reason,task_change='new',task_target_id='',task_purpose=purpose,task_submission='')
+
+
 class GoalTests(unittest.TestCase):
     def test_interval_new_attempt_cannot_be_described_as_absent(self):
         first = dict(day='2026-09-08', subject='数学', assistance='独立尝试', practice_relation='')
@@ -1102,8 +1109,8 @@ class GoalTests(unittest.TestCase):
         def model(messages,schema,name,timeout,**kwargs):
             value=json.loads(messages[-1]['content'])
             if name=='family_agent_selection':
-                return dict(proposals=[dict(title_quote=e['text'][:30],focus='school',due='',learning_subject='语文',learning_goal_id='',
-                    evidence=[dict(ref=e['ref'])]) for e in value['evidence']])
+                return dict(proposals=[synthetic_school_proposal(e,'语文','语文：介绍喜欢的地方',
+                    '介绍一处喜欢的地方，写2–3个理由；每段有中心句，结合看到、听到、闻到的感官体验。篇幅与截止未说明。') for e in value['evidence']])
             inputs.append(value);return plan(value)
         self.model.side_effect=model
         self.store.agent.ingest(dict(source_id=source['id'],expected_cursor='0',cursor='1',checked_at=self.now.isoformat(),last_message_time=self.now.isoformat(),error='',
@@ -1160,8 +1167,13 @@ class GoalTests(unittest.TestCase):
             if name=='family_agent_selection':
                 self.assertEqual([g['id'] for g in value['learning_goals']],[self.ident])
                 e=value['evidence'][0]
-                return dict(proposals=[dict(title_quote=e['text'][:30],focus='school',due='',learning_subject='英语',
-                    learning_goal_id=self.ident,evidence=[dict(ref=e['ref'])])])
+                proposal=synthetic_school_proposal(e,'英语','英语：口头介绍一种文具',
+                    '观察家里一件文具，说出两点用途；开头任选提问或直接介绍，用自己的真实观察。',goal_id=self.ident)
+                if e['text'].startswith('更正'):
+                    target=next(t for t in value['school_tasks'] if t['title']=='英语：口头介绍一种文具')
+                    proposal.update(task_goal='本次只说一点用途，开头仍可任选。',task_state='review',
+                        task_reason='更正须核对原学校事项后确认。',task_change='update',task_target_id=target['id'])
+                return dict(proposals=[proposal])
             result=synthetic_plan(value)
             for e in result['proposal']['evidence']: e['quote']=e['quote'].replace('\u00a0',' ')
             return result
@@ -1177,19 +1189,38 @@ class GoalTests(unittest.TestCase):
         with self.assertRaisesRegex(agent.AgentError,'学校要求不是'):self.store._proposal(invalid,ctx,self.now)
         with self.app.connect() as c:
             self.assertEqual(c.execute('SELECT count(*) FROM records').fetchone()[0],0)
-            self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks WHERE source=?',('学习目标:'+self.ident,)).fetchone()[0],0)
+            school_tasks=[dict(t) for t in c.execute('SELECT * FROM manual_tasks')]
+            self.assertEqual(len(school_tasks),1)
+            school_task=school_tasks[0]
+            self.assertEqual((school_task['title'],school_task['action']),('英语：口头介绍一种文具',
+                '观察家里一件文具，说出两点用途；开头任选提问或直接介绍，用自己的真实观察。'))
+            self.assertIn('message:'+source['id']+':101',school_task['source'])
+        self.assertEqual(g['task_id'],'')  # The original school task exists; the proposed extra plan still waits for approval.
         self.assertEqual(agent.run_once(self.app,self.now)['created'],0);self.assertEqual(len(requests),2)
         self.approve(g);task=self.goal()['task_id'];old_plan=self.goal()['current_plan']
         self.feedback('孩子原话：它可以写字；第二点用途需要家长提示。')
         self.now+=dt.timedelta(minutes=1);agent.run_once(self.app,self.now)
         self.assertIn('第二点用途需要家长提示',agent._json(requests[-1][1]['evidence']))
         self.assertEqual(self.goal()['current_plan'],old_plan)
+        feedback_pending=self.goal()['pending'];self.assertIsNotNone(feedback_pending)
+        plan_calls=sum(name=='family_learning_plan' for name,_ in requests)
         self.now+=dt.timedelta(minutes=1);correction='更正英语口头介绍：本次只说一点用途，开头仍可任选。'
         ingest(102,correction);agent.run_once(self.app,self.now)
-        g=self.goal();self.assertEqual([m['text'] for m in g['school_messages']],[original,correction])
-        self.assertEqual(g['task_id'],task);self.assertEqual(g['current_plan'],old_plan);self.assertIsNotNone(g['pending'])
-        self.store.agent.act(dict(action='dismiss',id=g['school_messages'][-1]['item_id']))
-        g=self.goal();self.assertTrue(g['pending_stale']);self.assertIsNone(g['pending'])
+        g=self.goal();self.assertEqual([m['text'] for m in g['school_messages']],[original])
+        self.assertEqual(g['task_id'],task);self.assertEqual(g['current_plan'],old_plan);self.assertEqual(g['pending'],feedback_pending)
+        self.assertEqual(sum(name=='family_learning_plan' for name,_ in requests),plan_calls)
+        with self.app.connect() as c:
+            changes=[dict(row) for row in c.execute("SELECT * FROM agent_items WHERE kind='school'")
+                if any(e['ref']=='message:'+source['id']+':102' for e in json.loads(row['evidence']))]
+            change,=changes;brief=json.loads(change['plan'])['school_task']
+            self.assertEqual((change['state'],brief['state'],brief['change'],brief['target_id']),('pending','review','update',school_task['id']))
+            self.assertEqual(change['body'],'本次只说一点用途，开头仍可任选。')
+            self.assertIn(correction,json.loads(change['evidence'])[0]['text'])
+            self.assertNotIn('school_learning',json.loads(change['plan']))
+            self.assertEqual(dict(c.execute('SELECT * FROM manual_tasks WHERE id=?',(school_task['id'],)).fetchone()),school_task)
+        self.store.agent.act(dict(action='dismiss',id=change['id']))
+        g=self.goal();self.assertFalse(g['pending_stale']);self.assertEqual(g['pending'],feedback_pending)
         self.assertEqual([m['text'] for m in g['school_messages']],[original]);self.assertEqual(g['current_plan'],old_plan)
         source['child_id']='child-2';(self.data/'agent.json').write_text(json.dumps(dict(enabled=True,sources=[source])))
         self.assertEqual(self.goal()['school_messages'],[]);self.assertEqual(self.goal()['school_missing'],1)
@@ -1201,8 +1232,9 @@ class GoalTests(unittest.TestCase):
             value=json.loads(messages[-1]['content'])
             if name=='family_agent_selection':
                 self.assertFalse(any(g['id']==self.ident for g in value['learning_goals']))
-                return dict(proposals=[dict(title_quote=e['text'],focus='school',due='',learning_subject='语文',learning_goal_id='',
-                    evidence=[dict(ref=e['ref'])]) for e in value['evidence']])
+                return dict(proposals=[synthetic_school_proposal(e,'语文',
+                    '语文：介绍一种文具' if '介绍一种文具' in e['text'] else '语文：按使用顺序说',
+                    '介绍一种文具。' if '介绍一种文具' in e['text'] else '补充要求：按使用顺序说。') for e in value['evidence']])
             return synthetic_plan(value)
         self.model.side_effect=model
         self.store.agent.ingest(dict(source_id=source['id'],expected_cursor='0',cursor='2',checked_at=self.now.isoformat(),last_message_time=self.now.isoformat(),error='',
@@ -1223,17 +1255,17 @@ class GoalTests(unittest.TestCase):
 
     def test_school_selector_rejects_foreign_goal_and_unread_requirements(self):
         evidence=[dict(ref='message:synthetic:1',text='[图片]',content_incomplete=True)]
-        result=dict(proposals=[dict(title_quote='[图片]',focus='school',due='',learning_subject='英语',learning_goal_id='foreign-goal',
-                                   evidence=[dict(ref=evidence[0]['ref'])])])
+        result=dict(proposals=[synthetic_school_proposal(evidence[0],'英语','','',goal_id='foreign-goal',
+            state='review',reason='图片内容尚未读取，具体学校要求待补充。',purpose='unknown')])
         self.model.side_effect=lambda *a,**k:result
         with self.assertRaisesRegex(agent.AgentError,'归属'):
             agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
         result['proposals'][0]['learning_goal_id']=''
         selected=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
         self.assertEqual(len(selected),1);self.assertNotIn('school_learning',selected[0]['plan']);self.assertEqual(selected[0]['plan']['school_task']['state'],'review');self.assertEqual(selected[0]['plan']['school_task']['title'],'')
+        self.assertIn('未读全',selected[0]['plan']['school_task']['reason'])
         evidence.append(dict(ref='message:synthetic:2',text='英语口述：介绍一种文具。',content_incomplete=False))
-        result['proposals'].append(dict(title_quote=evidence[1]['text'],focus='school',due='',learning_subject='英语',learning_goal_id='',
-                                       evidence=[dict(ref=evidence[1]['ref'])]))
+        result['proposals'].append(synthetic_school_proposal(evidence[1],'英语','英语：口述介绍一种文具','口述介绍一种文具。'))
         selected=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
         self.assertEqual(len(selected),2);self.assertIn('plan',selected[1])
         self.assertEqual(selected[1]['evidence'][0]['text'],evidence[1]['text'])

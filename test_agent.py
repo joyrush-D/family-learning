@@ -158,6 +158,11 @@ class AgentTests(unittest.TestCase):
             ('请携带英语练习卷，完成练习卷第1–3题后签到。','review'),
             ('请打印语文作业单，完成作业单第2题后上传。','review'),
             ('请明天带阅读材料，阅读第5课后在班级小程序打卡。','review'),
+            ('请打印英语练习卷，完成第1–3题后上传。','review'),
+            ('请家长打印语文作业单，孩子做第2题后交回。','review'),
+            ('请带阅读材料，读第5课后在班级小程序打卡。','review'),
+            ('请打印英语练习卷，做完后拍照上传。','review'),
+            ('请带阅读材料，把第2页读两遍后打卡。','review'),
         ]
         for i,(text,state) in enumerate(cases):
             ref='message:synthetic-material-action:'+str(i)

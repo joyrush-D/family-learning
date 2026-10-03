@@ -318,7 +318,7 @@ class AgendaTest(unittest.TestCase):
     def test_school_task_goal_and_advice_are_separate(self):
         agent=app.family_agent;text='语文习作：介绍一个熟悉的地方，写出两个特点。开头方式任选。不规定字数。'
         evidence=[dict(ref='message:synthetic-class:1',text=text,time='2026-09-12T12:00:00+08:00')]
-        result=dict(proposals=[dict(title_quote='语文习作',focus='school',due='',learning_subject='语文',learning_goal_id='',evidence=[dict(ref=evidence[0]['ref'])],task_title='语文：完成地方介绍习作',task_goal='介绍一个熟悉地方，写出两个特点；开头任选，未规定字数。',task_advice='可以先说说最想介绍的两个特点。')])
+        result=dict(proposals=[dict(title_quote='语文习作',focus='school',due='',learning_subject='语文',learning_goal_id='',evidence=[dict(ref=evidence[0]['ref'])],task_title='语文：完成地方介绍习作',task_goal='介绍一个熟悉地方，写出两个特点；开头任选，未规定字数。',task_advice='可以先说说最想介绍的两个特点。',task_state='ready',task_reason='已读学校习作要求明确。',task_change='new',task_target_id='',task_purpose='learning',task_submission='')])
         with patch.object(agent.family_llm,'_chat_json',return_value=result):
             selected=agent._select('school',evidence,dict(id='child-1'),as_of='2026-09-12',data_path=self.tmp.name,school_goals=[])[0]
         self.assertEqual(selected['title'],'语文：完成地方介绍习作')
