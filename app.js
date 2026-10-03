@@ -1681,6 +1681,14 @@ async function saveSchoolTeacher(){
 }
 function paintSchoolOriginal(){
  const s=schoolOriginal,dialog=$('#schoolOriginalDialog');if(!s||!dialog)return;
+ if(s.taskPreview){
+  // Looking back at the same task's source must not replace or submit its draft.
+  // Reuse the saved-material display; source management stays at its own entry.
+  dialog.innerHTML=`<h2>老师原消息</h2>${s.view?`<blockquote class="source" style="overflow-wrap:anywhere">${esc(s.view.message.text)}</blockquote>${taskSchoolMaterialHTML(s.view)}`:''}<p role="status" aria-live="polite">${esc(s.error||(s.busy?'正在读取…':''))}</p>${s.error||!s.view?'<button data-school-original-retry>重试读取原消息</button>':''}<div class="toolbar"><button data-school-original-close>返回作业</button></div>`;
+  for(const button of dialog.querySelectorAll('[data-school-original-ref]'))button.remove();
+  for(const button of dialog.querySelectorAll('button'))button.disabled=s.busy;
+  return;
+ }
  const teacherForm=dialog.querySelector('[data-school-teacher-form]');if(teacherForm&&s.teacher)for(const el of teacherForm.elements)if(el.name)s.teacher.fields[el.name]=el.value;
  const view=s.view,attachments=view?.attachments||[],unavailable=view?.unavailable_attachment_ids||[],linked=new Set(attachments.map(a=>a.id));
  const d=view?.material_draft,schoolMaterial=d?.kind==='school_material',recordDraft=d&&!d.kind,pdf=view?.pdf_material||null;
@@ -1739,9 +1747,9 @@ function verifySchoolOriginal(view,s){
 }
 async function readSchoolOriginal(){
  const s=schoolOriginal;if(!s||s.busy||schoolOriginalPending(s))return;s.busy=true;s.error='';paintSchoolOriginal();
- try{const r=await apiFetch('/api/agent/message?'+new URLSearchParams(s.identity),{signal:AbortSignal.timeout(12000)}),view=await r.json();if(!r.ok)throw Error(view.error||'这条通知暂时无法读取');s.view=verifySchoolOriginal(view,s)}
- catch(error){s.error=error.name==='TimeoutError'?'读取超时，请重试。':error.message||'暂时无法读取，请重试。'}
- finally{s.busy=false;paintSchoolOriginal()}
+ try{const r=await apiFetch('/api/agent/message?'+new URLSearchParams(s.identity),{signal:AbortSignal.timeout(12000)}),view=await r.json();if(schoolOriginal!==s)return;if(!r.ok)throw Error(view.error||'这条通知暂时无法读取');s.view=verifySchoolOriginal(view,s)}
+ catch(error){if(schoolOriginal===s)s.error=error.name==='TimeoutError'?'读取超时，请重试。':error.message||'暂时无法读取，请重试。'}
+ finally{if(schoolOriginal===s){s.busy=false;paintSchoolOriginal()}}
 }
 // One click reads one address from the message itself; a lost reply is retried with the same request and served from the server cache.
 async function readSchoolPage(url){
@@ -1792,8 +1800,12 @@ async function uploadSchoolOriginal(file){
  if(s.pending)await saveSchoolOriginal();
 }
 function openSchoolOriginal(ref,childID){
- if(document.querySelector('dialog[open]'))return;
  const identity=schoolMessageIdentity(ref,childID);if(!identity){toast('消息或孩子归属暂时无法核对，请刷新。');return}
+ const open=[...document.querySelectorAll('dialog[open]')],ctx=taskFeedbackContext;
+ const task=ctx&&data.tasks.find(t=>t.id===ctx.task_id&&t.child===ctx.child),owner=data.children.find(c=>c.id===childID);
+ const taskPreview=open.length===1&&open[0].id==='taskDialog'&&task&&owner?.name===ctx.child&&String(task.source||'').split('\n').includes(ref);
+ if(open.length&&!taskPreview)return;
+ if(taskPreview&&schoolOriginalPending(schoolOriginal)){toast('请先核对上次原件关联的保存结果。');return}
  let dialog=$('#schoolOriginalDialog');
  if(!dialog){
   dialog=document.createElement('dialog');dialog.id='schoolOriginalDialog';document.body.append(dialog);
@@ -1833,7 +1845,7 @@ function openSchoolOriginal(ref,childID){
    if(detach||attach){const id=detach||s.selected;if(!id){s.error='请先选择一份已保存的原件。';paintSchoolOriginal();return}s.pending={...s.identity,attachment_id:id,action:detach?'detach':'attach'};saveSchoolOriginal()}
   });
  }
- if(!schoolOriginalPending(schoolOriginal))schoolOriginal={identity,token:data.token,view:null,busy:false,pending:null,selected:'',error:'',page:null,pdfNotice:''};
+ if(!schoolOriginalPending(schoolOriginal))schoolOriginal={identity,taskPreview:Boolean(taskPreview),token:data.token,view:null,busy:false,pending:null,selected:'',error:'',page:null,pdfNotice:''};
  else schoolOriginal.error='请先核对上次未确认的保存；这里仍是上次选择的孩子和通知。';
  paintSchoolOriginal();dialog.showModal();if(!schoolOriginalPending(schoolOriginal))readSchoolOriginal();
 }
