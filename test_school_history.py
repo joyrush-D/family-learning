@@ -82,7 +82,7 @@ class SchoolHistoryTests(unittest.TestCase):
     def _legacy(self, *, suffix='', ids=('11', '12'), missing=None, tick=0, feedback=False):
         source = self.fixture.source
         first = '2月12日前交《回执A' + suffix + '》。'
-        missing = missing or '另项：2月12日前带《材料B' + suffix + '》1份到校。'
+        missing = '另项：2月12日前带《材料B' + suffix + '》1份到校。' if missing is None else missing
         optional = '自愿报名《活动C' + suffix + '》，不参加也无需回复。'
         refs = ['message:' + source['id'] + ':' + ident for ident in ids]
         with self.app.connect() as c:
@@ -143,6 +143,56 @@ class SchoolHistoryTests(unittest.TestCase):
                      task_state='ready', task_purpose='admin'),
             proposal(group['missing'], group['refs'][0], due=due, task_title='携带《材料B' + group['suffix'] + '》1份',
                      task_goal=group['missing'], task_state='ready', task_reason='本项已读、独立且明确。', task_purpose='admin')])
+
+    def _partial_legacy(self):
+        """Frozen old three-message batch whose output cited only the first and last."""
+        group = self._legacy(ids=('11', '13'), missing='', feedback=True)
+        with self.app.connect() as c:
+            first = json.loads(c.execute('SELECT payload FROM agent_messages WHERE id=?', ('11',)).fetchone()[0])
+            last = json.loads(c.execute('SELECT payload FROM agent_messages WHERE id=?', ('13',)).fetchone()[0])
+            middle = dict(first, id='12', text='2月12日前带《材料B》1份到校。')
+            values = [first, middle, last]
+            key = 'messages:' + agent._hash([self.fixture.source['id'], [v['id'] for v in values]])[:40]
+            fingerprint = agent._hash(dict(school_learning_policy=8, messages=values))
+            c.execute('UPDATE agent_jobs SET id=?,fingerprint=? WHERE id=?', (key, fingerprint, group['job']))
+            c.execute('UPDATE agent_items SET job_id=? WHERE job_id=?', (key, group['job']))
+            c.execute('UPDATE agent_messages SET rowid=3 WHERE id=?', ('13',))
+            c.execute('INSERT INTO agent_messages(rowid,source_id,id,payload,processed) VALUES(?,?,?,?,?)',
+                (2, self.fixture.source['id'], middle['id'], agent._json(middle), 1))
+            receipt = agent._hash([self.fixture.source['id'], '10', '13', first['time'], last['time'], values, False, ''])
+            c.execute('UPDATE agent_sources SET receipt=? WHERE id=?', (receipt, self.fixture.source['id']))
+        group.update(job=key, values=values, refs=['message:' + self.fixture.source['id'] + ':' + v['id'] for v in values], missing=middle['text'])
+        return group
+
+    def _partial_response(self, group, context):
+        old = self._response(group)
+        old['proposals'][1]['evidence'] = [dict(ref=group['refs'][2])]
+        old['proposals'][2]['evidence'] = [dict(ref=group['refs'][1])]
+        supplied = {e['ref'] for e in context['evidence']}
+        return dict(proposals=[p for p in old['proposals'] if p['evidence'][0]['ref'] in supplied])
+
+    def test_original_batch_restores_entirely_unreferenced_message_after_partial_history_done(self):
+        group = self._partial_legacy()
+        before = self._protected()
+        # Simulate the previous cited-only audit having completed without M12.
+        source = self.fixture.source
+        refs = [group['refs'][0], group['refs'][2]]
+        key = 'school-history:' + agent._hash([agent.SCHOOL_SELECTION_REVISION, group['job'], source['child_id'], sorted(refs)])[:40]
+        fp = self.store._job(key, dict(revision=agent.SCHOOL_SELECTION_REVISION, source=source,
+            messages=[group['values'][0], group['values'][2]]), self.clock, model=True)
+        self.store._save(key, fp, [], self.clock)
+        self.history_response = lambda context: self._partial_response(group, context)
+        counts = self._school_task_counts()
+        self.assertEqual((self._tick(10)['failed'], len(self._history_rows())), (0, 1))
+        self._assert_one_school_task_added(counts)
+        row = self._history_rows()[0]
+        self.assertEqual({e['ref'] for e in json.loads(row['evidence'])}, {group['refs'][1]})
+        self.assertEqual(row['body'], group['missing'])
+        self.assertEqual(self._protected(), before)
+        seen = len(self.calls)
+        self.store = agent.Store(self.app.connect, self.app.profiles, self.fixture.data, app=self.app)
+        self.assertEqual(self._tick(20)['created'], 0)
+        self.assertEqual(len(self.calls), seen)
 
     def _empty_legacy(self, *, policy=7, texts=None, ids=None):
         """Reproduce a saved old successful empty output, without resetting any real cursor."""
