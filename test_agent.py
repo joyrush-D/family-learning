@@ -77,6 +77,68 @@ class AgentTests(unittest.TestCase):
     def test_school_selection_current_source_still_auto_collects_once(self):
         self._school_selection_authorization_change('')
 
+    def test_school_source_paused_after_claim_makes_no_model_call(self):
+        from family_settings import Store as Settings
+        self.source['id']='54321@chatroom';self.config();self.store.ingest(self.payload())
+        original=agent.Store._job
+        def claim(store,key,*args,**kwargs):
+            value=original(store,key,*args,**kwargs)
+            if key.startswith('messages:') and value:
+                settings=Settings(self.app);state=settings.snapshot()
+                sources=[{k:r[k] for k in ('id','platform','child_id','name','enabled')} for r in state['sources']]
+                sources[0]['enabled']=False
+                settings.save_sources(dict(revision=state['revision'],enabled=True,sources=sources))
+            return value
+        with patch.object(agent.Store,'_job',claim),patch.object(agent.family_llm,'_chat_json') as model:
+            result=agent.run_once(self.app,self.now)
+        self.assertEqual(model.call_count,0)
+        self.assertEqual((result['processed'],result['created']),(0,0))
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT processed FROM agent_messages').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items').fetchone()[0],0)
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_jobs WHERE id LIKE 'messages:%'").fetchone()[0],0)
+
+    def test_new_message_during_selection_does_not_revoke_the_original_batch(self):
+        self.store.ingest(self.payload())
+        proposal=school_proposal(title_quote='明天带阅读材料',due='2026-02-11',
+            evidence=[dict(ref='message:'+self.source['id']+':11')],
+            task_title='带阅读材料',task_goal='明天带阅读材料。',
+            task_state='ready',task_reason='要求明确。',task_purpose='admin')
+        def model(*args,**kwargs):
+            incoming=self.payload(expected='11',cursor='12',message='12',offset=1)
+            incoming['messages'][0]['text']='后天交回活动回执。';self.store.ingest(incoming)
+            return dict(proposals=[proposal])
+        with patch.object(agent.family_llm,'_chat_json',side_effect=model) as called:
+            result=agent.run_once(self.app,self.now)
+        self.assertEqual(called.call_count,1);self.assertEqual(result['processed'],1)
+        with self.app.connect() as c:
+            self.assertEqual(dict(c.execute('SELECT id,processed FROM agent_messages')),{ '11':1,'12':0})
+            self.assertEqual(c.execute('SELECT cursor FROM agent_sources').fetchone()[0],'12')
+            task,=c.execute('SELECT child,title,due,action,original_status FROM manual_tasks').fetchall()
+            self.assertEqual(tuple(task),('示例甲','带阅读材料','2026-02-11','明天带阅读材料。','待跟进'))
+
+    def test_school_saved_message_change_during_selection_keeps_the_changed_message_unprocessed(self):
+        self.store.ingest(self.payload())
+        proposal=school_proposal(title_quote='明天带阅读材料',due='2026-02-11',
+            evidence=[dict(ref='message:'+self.source['id']+':11')],
+            task_title='带阅读材料',task_goal='明天带阅读材料。',
+            task_state='ready',task_reason='要求明确。',task_purpose='admin')
+        def model(*args,**kwargs):
+            # Fault injection into the synthetic saved bytes, never a production repair route.
+            with self.app.connect() as c:
+                message=json.loads(c.execute('SELECT payload FROM agent_messages').fetchone()[0])
+                message['text']='后天交回活动回执。'
+                c.execute('UPDATE agent_messages SET payload=?',(agent._json(message),))
+            return dict(proposals=[proposal])
+        with patch.object(agent.family_llm,'_chat_json',side_effect=model) as called:
+            result=agent.run_once(self.app,self.now)
+        self.assertEqual(called.call_count,1);self.assertEqual(result['processed'],0)
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],0)
+            payload,processed=c.execute('SELECT payload,processed FROM agent_messages').fetchone()
+            self.assertEqual((json.loads(payload)['text'],processed),('后天交回活动回执。',0))
+
     def test_separate_school_conclusions_do_not_borrow_related_attachments(self):
         sent='2026-10-05T16:00:00+08:00'
         refs=['message:synthetic-minutes:'+str(i) for i in range(1,6)]
