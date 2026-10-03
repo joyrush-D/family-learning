@@ -2510,6 +2510,16 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
             self.assertFalse(agent._school_dated_quote(quote,evidence,due,brief))
         self.assertTrue(agent._school_dated_quote(quote,evidence[:1],'2026-10-06',brief))
 
+    def test_paper_class_name_cannot_choose_between_two_papers_with_different_dates(self):
+        first='10月6日前完成练习卷A第1–3题';second='10月7日前完成练习卷B第1–3题'
+        evidence=[dict(text=first+'；'+second+'。',time='2026-10-05T16:00:00+08:00')]
+        brief=dict(goal='完成练习卷B第1–3题')
+        self.assertFalse(agent._school_dated_quote(first,evidence,'2026-10-06',brief))
+        self.assertFalse(agent._school_dated_quote(second,evidence,'2026-10-07',brief),'coarse paper names cannot establish an exact identity')
+        reference='10月6日前练习卷答案公布'
+        self.assertFalse(agent._school_dated_quote(reference,[dict(text=reference,time=evidence[0]['time'])],
+                                                  '2026-10-06',brief),'a dated material announcement is not an instruction to do the paper')
+
 
 if __name__ == '__main__':
     unittest.main()

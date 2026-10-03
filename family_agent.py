@@ -1513,7 +1513,7 @@ def _school_dated_quote(quote, evidence, due, brief):
     # Shared completion/checking words cannot connect a paper date to reading.
     clean=lambda text:re.sub(r'\s+','',text).lower()
     actions=[r'朗读|跟读|读[一二两三四五六七八九十百0-9]+(?:遍|次)',
-             r'练习卷|练习册|教材|作业本|试卷']
+             r'(?:完成|订正|做)[^。；;，,\n]{0,24}(?:练习卷|练习册|教材|作业本|试卷)']
     def identity(text):
         text=clean(text)
         kinds={i for i,pattern in enumerate(actions) if re.search(pattern,text)}
@@ -1524,6 +1524,12 @@ def _school_dated_quote(quote, evidence, due, brief):
     matches=[]
     for entry in evidence:
         text=entry['text'];start=0
+        # A class noun (e.g. 练习卷) is not a paper identity. If several dated
+        # clauses match this coarse object, it cannot identify which is ours.
+        for clause in re.split(r'[。；;\n]',text):
+            if identity(clause)==(kinds,objects):
+                values=deadlines(clause,sent_day(entry.get('time','')))
+                if values and values!={due}:return False
         while (start:=text.find(quote,start))!=-1:
             end=start+len(quote)
             left=text[:start].rstrip(' \t\r');right=text[end:].lstrip(' \t\r')
