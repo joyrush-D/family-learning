@@ -90,6 +90,7 @@ async function server(){
   });
   await p.locator('#homeworkDraftButton').click();await printForm.locator('[type=submit]').evaluate(x=>x.click());assert.equal(generated,0);assert.equal(paired,0,'unavailable saved source cannot be sent to printing');
   await printForm.locator('[name=question_source]').selectOption({label:'synthetic-answer.png'});await printForm.locator('[name=question_confirmed]').check();await printForm.locator('[name=guide_confirmed]').check();
+  assert.equal(await p.locator('#homeworkPrintError').innerText(),'','explicitly reselecting an owned source clears the stale unavailable-source warning');
   if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'scoped-print-'+width+'.png')})}
   await printForm.locator('[type=submit]').click();await eventually(async()=>/虚构配对回执丢失/.test(await p.locator('#homeworkPrintError').innerText()),'pair failure retained');
   await p.locator('#homeworkPrintDialog [data-close]').click();await p.reload();await p.locator('[data-query-target="task:'+id+'"] [data-homework-print]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();

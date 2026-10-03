@@ -1239,7 +1239,9 @@ $('#homeworkPrintForm')?.addEventListener('change',e=>{
     e.currentTarget.elements.question_confirmed.checked=false;
     e.currentTarget.elements.guide_confirmed.checked=false;
   }
-  saveHomeworkPrintDraft(e.currentTarget)
+  saveHomeworkPrintDraft(e.currentTarget);
+  const error=$('#homeworkPrintError');
+  if(homeworkPrintSelectionCurrent(e.currentTarget)&&/^原选择有资料现在无法核对|^原已选资料当前无法核对/.test(error.textContent))error.textContent='';
 });
 $('#homeworkDraftButton')?.addEventListener('click',async()=>{
   if(homeworkPrintBusy)return;const f=$('#homeworkPrintForm'),status=$('#homeworkDraftStatus');
