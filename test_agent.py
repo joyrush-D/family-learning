@@ -1416,11 +1416,15 @@ class AgentTests(unittest.TestCase):
         value.update(goal='交数学本；照片提交至数学本照片区。',submission='照片提交至数学本照片区')
         brief=agent._school_brief(value,evidence=[dict(ref='message:synthetic-group:32',text='完成教材练习，明天交数学本；照片提交至数学本照片区。',kind='text')])
         self.assertEqual(brief['submission'],'照片提交至数学本照片区');self.assertIn('提交至数学本照片区',brief['goal'])
-        for negative in ('不交数学本。','无需交数学本。'):
+        for negative in ('不交数学本。','无需交数学本。','别交数学本。'):
             original=dict(ref='message:synthetic-group:33',text=negative,kind='text')
             body=dict(goal='交至数学本。')
-            self.assertEqual(agent._school_handback(body,'交至数学本',[original]),'交至数学本')
+            with self.assertRaisesRegex(agent.AgentError,'否定或范围疑点'):
+                agent._school_handback(body,'交至数学本',[original])
             self.assertEqual(body['goal'],'交至数学本。')
+        value.update(goal='交至数学本。',submission='交至数学本')
+        reminder=agent._school_brief(value,evidence=[dict(ref='message:synthetic-group:34',text='10月8日请不要忘记交数学本。',kind='text')])
+        self.assertEqual(reminder['submission'],'交数学本');self.assertEqual(reminder['state'],'ready')
         # Unread content cannot justify rewriting either field.
         value.update(goal='交至数学本。',submission='交至数学本')
         original=dict(ref='message:synthetic-group:31',text='交数学本。',kind='text',unread=True)
