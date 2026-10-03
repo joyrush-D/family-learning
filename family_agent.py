@@ -1823,7 +1823,13 @@ def _history_context(store,c,source,values,key,*,exclude_id=''):
             with (store.data/'uploads'/upload['id']).open('rb') as original:
                 for block in iter(lambda:original.read(1024*1024),b''): digest.update(block)
             materials.append(['original',dict(upload),digest.hexdigest()])
-    return _hash([rows,tasks,state,materials]),known
+    # Empty legacy batches have no item to carry their origin. Keep the exact
+    # original receipt (and any subsequently saved items) in the same save basis.
+    old_key='messages:'+_hash([source['id'],[v['id'] for v in values]])[:40]
+    receipt=c.execute('SELECT * FROM agent_jobs WHERE id=?',(old_key,)).fetchone()
+    origin=[dict(receipt) if receipt else None,
+            [dict(r) for r in c.execute('SELECT * FROM agent_items WHERE job_id=? ORDER BY id',(old_key,))]]
+    return _hash([rows,tasks,state,materials,origin]),known
 
 
 def _history_scopes(store,config):
@@ -1858,6 +1864,31 @@ def _history_scopes(store,config):
             # An oversized legacy scope remains open rather than being silently clipped and marked audited.
             if len(values)>6 or sum(len(_json(v)) for v in values)>14000: continue
             result.append((source,values,key))
+        # Policy 7 predates required input coverage. An empty success has no
+        # citations; only an exact ordered-ID key AND full payload fingerprint
+        # can recover its original batch. Policy 8 empty results are ambiguous
+        # across releases, so they remain outside this compatibility path.
+        empty={r['id']:r['fingerprint'] for r in c.execute("SELECT j.id,j.fingerprint FROM agent_jobs j WHERE j.id LIKE 'messages:%' AND j.done=1 AND NOT EXISTS (SELECT 1 FROM agent_items i WHERE i.job_id=j.id)")}
+        if not empty: return result
+        for source in sources.values():
+            saved=c.execute('SELECT * FROM agent_sources WHERE id=?',(source['id'],)).fetchone()
+            if saved is None: continue
+            try: store._binding(source,saved)
+            except AgentError: continue
+            messages=list(reversed(c.execute('SELECT id,payload,processed FROM agent_messages WHERE source_id=? ORDER BY rowid DESC LIMIT 500',(source['id'],)).fetchall()))
+            for start in range(len(messages)):
+                values=[];refs=[]
+                for row in messages[start:start+6]:
+                    value=json.loads(row['payload'])
+                    if row['processed']!=1 or value['kind']!='text' or value['unread']: break
+                    values.append(value);refs.append('message:'+source['id']+':'+row['id'])
+                    if sum(len(_json(v)) for v in values)>14000: break
+                    old_key='messages:'+_hash([source['id'],[v['id'] for v in values]])[:40]
+                    if old_key not in empty or empty[old_key]!=_hash(dict(school_learning_policy=7,messages=values)): continue
+                    key='school-history:'+_hash([SCHOOL_SELECTION_REVISION,old_key,source['child_id'],sorted(refs)])[:40]
+                    done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone()
+                    if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS): continue
+                    result.append((source,list(values),key))
     return result
 
 
