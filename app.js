@@ -1685,7 +1685,7 @@ function paintSchoolOriginal(){
   // Looking back at the same task's source must not replace or submit its draft.
   // Reuse the saved-material display; source management stays at its own entry.
   dialog.innerHTML=`<h2>老师原消息</h2>${s.view?`<blockquote class="source" style="overflow-wrap:anywhere">${esc(s.view.message.text)}</blockquote>${taskSchoolMaterialHTML(s.view)}`:''}<p role="status" aria-live="polite">${esc(s.error||(s.busy?'正在读取…':''))}</p>${s.error||!s.view?'<button data-school-original-retry>重试读取原消息</button>':''}<div class="toolbar"><button data-school-original-close>返回作业</button></div>`;
-  for(const button of dialog.querySelectorAll('[data-school-original-ref]'))button.remove();
+  for(const button of dialog.querySelectorAll('[data-school-original-ref],[data-print-upload]'))button.remove();
   for(const button of dialog.querySelectorAll('button'))button.disabled=s.busy;
   return;
  }
