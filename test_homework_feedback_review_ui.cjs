@@ -19,6 +19,7 @@ async function server(){
  for(const width of [360,1440]){
   let state=await(await fetch(host.url+'api/state')).json();const child=state.children[0].name,title='虚构作业核对 '+width;
   const p=await browser.newPage({viewport:{width,height:850}}),errors=[];p.on('pageerror',e=>errors.push(e.message));
+  if(process.env.PRINT_SCOPE_BASELINE_APP_JS)await p.route('**/app.js',async r=>r.fulfill({contentType:'text/javascript',body:await require('node:fs/promises').readFile(process.env.PRINT_SCOPE_BASELINE_APP_JS,'utf8')}));
   await p.route('**/api/state',async route=>{const response=await route.fetch(),value=await response.json();value.printing={...value.printing,printers:[{name:'Synthetic_Printer',label:'虚构打印机',color:false,duplex:false}]};await route.fulfill({response,json:value})});
   await p.goto(host.url);
   await p.locator('[data-homework-new]').first().click();const entry=p.locator('#homeworkInputDialog');await entry.waitFor();assert.match(await entry.innerText(),/记作业/);
@@ -52,6 +53,47 @@ async function server(){
   assert.equal(keysPrint[0],keysPrint[1],'print retry keeps its request number');assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'打印时保留的未保存反馈');
   await printButton.click();assert.equal(keysPrint.length,2,'repeated click does not enqueue twice');
   await p.unroute('**/api/print/prepare');await p.unroute('**/api/print/enqueue');await p.locator('#taskForm [name=note]').fill('');
+
+  // Printing must follow this exact homework, not the family's global file list.
+  const post=async(path,body)=>{const r=await fetch(host.url+path,{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify(body)});assert.equal(r.status,200);return r.json()};
+  const otherTasks=[];
+  for(const [owner,label] of [[state.children[0].name,'同孩其他作业'],[state.children[1].name,'另一孩子作业']]){
+   const t=(await post('api/task/new',{child:owner,title:'虚构'+label+' '+width,category:'homework',action:'独立核对这份卷',due:state.today})).task;
+   const form=new FormData();form.append('file',new Blob([png],{type:'image/png'}),'虚构'+label+'原件.png');
+   const response=await fetch(host.url+'api/upload',{method:'POST',headers:{'X-Family-Token':state.token},body:form});assert.equal(response.status,200);const upload=await response.json();
+   await post('api/task/feedback',{task_id:t.id,child:owner,day:state.today,attachments:[upload.id],request_key:'synthetic-print-other-'+width+'-'+otherTasks.length});
+   otherTasks.push({task:t,upload});
+  }
+  await p.keyboard.press('Escape');await p.reload();await p.locator('[data-query-target="task:'+id+'"] [data-homework-print]').click();
+  const printForm=p.locator('#homeworkPrintForm');await p.locator('#homeworkPrintDialog[open]').waitFor();
+  const options=await printForm.locator('[name=question_source] option').allTextContents();
+  assert(options.includes('synthetic-answer.png'),'the original saved answer remains selectable');
+  assert(options.every(x=>!x.includes('另一孩子')&&!x.includes('同孩其他作业')),'printing candidates contain no other child or task');
+  assert.equal(await printForm.locator('[name=guide_source] option').allTextContents().then(xs=>xs.some(x=>/另一孩子|同孩其他作业/.test(x))),false,'reference candidates follow the same original task');
+  await printForm.locator('[name=question_source]').selectOption({label:'synthetic-answer.png'});await printForm.locator('[name=guide_text]').fill('虚构家长参考：题目和答案分别打印。');
+  await printForm.locator('[name=question_confirmed]').check();await printForm.locator('[name=guide_confirmed]').check();
+  const originalPrintKey=await printForm.evaluate(f=>f.dataset.requestKey);
+  await p.locator('#homeworkPrintDialog [data-close]').click();
+  let reads=0;await p.route('**/api/print/homework/materials?*',r=>++reads===1?r.fulfill({status:503,json:{error:'虚构资料读取失败'}}):r.continue());
+  await p.locator('[data-query-target="task:'+id+'"] [data-homework-print]').click();await eventually(async()=>/虚构资料读取失败/.test(await p.locator('#toast').innerText()),'read failure stays retryable');
+  assert.equal(await p.locator('#homeworkPrintDialog').evaluate(x=>x.open),false,'failed scoped read never falls back to global files');
+  await p.locator('[data-query-target="task:'+id+'"] [data-homework-print]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();await p.unroute('**/api/print/homework/materials?*');
+  assert.equal(await printForm.locator('[name=guide_text]').inputValue(),'虚构家长参考：题目和答案分别打印。');assert.equal(await printForm.evaluate(f=>f.dataset.requestKey),originalPrintKey,'read failure preserves the draft and request number');
+  await p.locator('#homeworkPrintDialog [data-close]').click();
+  await p.evaluate(({task,other})=>{const key='family-homework-print:v1:'+new URL('.',location.href).pathname+':'+task,saved=JSON.parse(sessionStorage.getItem(key));saved.question_source=JSON.stringify({type:'upload',id:other});sessionStorage.setItem(key,JSON.stringify(saved))},{task:id,other:otherTasks[1].upload.id});
+  await p.locator('[data-query-target="task:'+id+'"] [data-homework-print]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
+  assert.match(await p.locator('#homeworkPrintError').innerText(),/原选择有资料现在无法核对/);assert.equal(await printForm.locator('[name=guide_text]').inputValue(),'虚构家长参考：题目和答案分别打印。');
+  let paired=0,generated=0;const pairBodies=[];
+  await p.route('**/api/print/homework/draft',r=>{generated++;return r.fulfill({status:503,json:{error:'不应调用'}})});
+  await p.route('**/api/print/homework',r=>{paired++;pairBodies.push(r.request().postDataJSON());return paired===1?r.fulfill({status:503,json:{error:'虚构配对回执丢失'}}):r.fulfill({json:{jobs:{questions:[{id:'e'.repeat(32)}],guide:{id:'f'.repeat(32)}}})});
+  await p.locator('#homeworkDraftButton').click();await printForm.locator('[type=submit]').evaluate(x=>x.click());assert.equal(generated,0);assert.equal(paired,0,'unavailable saved source cannot be sent to printing');
+  await printForm.locator('[name=question_source]').selectOption({label:'synthetic-answer.png'});await printForm.locator('[name=question_confirmed]').check();await printForm.locator('[name=guide_confirmed]').check();
+  if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'scoped-print-'+width+'.png')})}
+  await printForm.locator('[type=submit]').click();await eventually(async()=>/虚构配对回执丢失/.test(await p.locator('#homeworkPrintError').innerText()),'pair failure retained');
+  await p.locator('#homeworkPrintDialog [data-close]').click();await p.reload();await p.locator('[data-query-target="task:'+id+'"] [data-homework-print]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
+  assert.equal(await printForm.evaluate(f=>f.dataset.requestKey),originalPrintKey,'unknown print receipt survives reopening');
+  await printForm.locator('[type=submit]').click();await eventually(async()=>!await p.locator('#homeworkPrintDialog').evaluate(x=>x.open),'pair retry saved');assert.deepEqual(pairBodies[1],pairBodies[0]);assert.equal(pairBodies[0].task_id,id);
+  await p.unroute('**/api/print/homework');await p.unroute('**/api/print/homework/draft');await p.locator('nav [data-page=home]').click();await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskDialog[open]').waitFor();
 
   const wrong=p.locator('#taskFeedbackHistory [data-task-wrong-form]').first();await wrong.locator(':scope > summary').click();
   await wrong.locator('[data-wrong-field="label"]').fill('第2题');await wrong.locator('[data-wrong-field="answer"]').fill('C');await wrong.locator('[data-wrong-field="correction"]').fill('B');

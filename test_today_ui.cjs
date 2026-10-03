@@ -144,7 +144,8 @@ function fixtures(base){
     }
     assert.deepEqual(errors,[]);
     let printAttempts=0,draftCalls=0;const printBodies=[];
-    await p.route('**/api/print/homework/draft',r=>{draftCalls++;return r.fulfill({status:200,contentType:'application/json',body:JSON.stringify({draft:{text:'虚构第1题：卷面C，参考B；先找原文依据。',items:1,wrong_items:1,unknown_items:0,coverage:'一页'},question_sha256:'a'.repeat(64)})})});
+    await p.route('**/api/print/homework/materials?task_id=TODAY',r=>r.fulfill({json:{task:{id:'TODAY',child:state.children[0].name},files:['虚构题目.png','虚构题目续页.png'].map(name=>({name,source:{type:'attachment',name}})),school_error:''}}));
+    await p.route('**/api/print/homework/draft',r=>{assert.equal(r.request().postDataJSON().task_id,'TODAY');draftCalls++;return r.fulfill({status:200,contentType:'application/json',body:JSON.stringify({draft:{text:'虚构第1题：卷面C，参考B；先找原文依据。',items:1,wrong_items:1,unknown_items:0,coverage:'一页'},question_sha256:'a'.repeat(64)})})});
     await p.route('**/api/print/homework',async route=>{printBodies.push(route.request().postDataJSON());printAttempts++;
       await route.fulfill({status:printAttempts===1?503:200,contentType:'application/json',body:JSON.stringify(printAttempts===1?{error:'虚构打印失败'}:{jobs:{question:{id:'1'.repeat(32)},questions:printBodies.at(-1).question_sources.map((_,n)=>({id:String(n+1).repeat(32)})),guide:{id:'2'.repeat(32)}}})})});
     await p.locator('nav [data-page="home"]').click();

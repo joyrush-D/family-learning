@@ -927,23 +927,21 @@ def legacy_homework_review_files(c,record):
     return {r['id'] for r in c.execute("SELECT id FROM uploads WHERE name=? AND mime LIKE 'text/plain%'",('作业批改参考-'+match[1]+'.txt',)) if r['id'] in attachments}
 
 
-def homework_review_context(c,task_id,record_id,expected_created=None):
-    """Only this saved answer, reported homework and explicitly bound school originals."""
-    if not isinstance(task_id,str) or not task_id or len(task_id)>30 or type(record_id) is not int or not 0<record_id<=9223372036854775807:
-        raise family_print.PrintError('请从原作业打开已保存的作答')
+def homework_material_context(c,task_id,*,answer=None):
+    """Current homework's explicit bindings; caller supplies an existing read transaction."""
+    if not isinstance(task_id,str) or not task_id or len(task_id)>30:
+        raise family_print.PrintError('请从原作业打开资料')
     task=next((t for t in tasks(c) if t['id']==task_id),None)
-    row=c.execute('SELECT * FROM records WHERE id=?',(record_id,)).fetchone()
+    if task is None:
+        raise family_print.PrintError('作业事项不存在，请刷新后核对','task_missing',404)
+    if task.get('agenda',{}).get('category')!='homework':
+        raise family_print.PrintError('请从当前孩子的原作业打开资料','review_source_not_allowed',403)
     names=child_names(c)
-    if (task is None or task.get('agenda',{}).get('category')!='homework' or row is None
-            or names.get(row['child'],row['child'])!=task['child']
-            or row['source']!='事项:'+task_id and row['linked_task_id']!=task_id):
+    if answer is not None and (names.get(answer['child'],answer['child'])!=task['child']
+            or answer['source']!='事项:'+task_id and answer['linked_task_id']!=task_id):
         raise family_print.PrintError('这份作答不属于当前孩子的作业','review_source_not_allowed',403)
-    if expected_created is not None and (not isinstance(expected_created,str) or expected_created!=row['created']):
-        raise family_print.PrintError('原作答已更正，请重新打开后检查','review_source_changed',409)
-    if row['followup_kind']=='作业检查' or legacy_homework_review_files(c,row):
-        raise family_print.PrintError('检查意见不是孩子作答，请回原作答追加复核','review_source_not_allowed',403)
     child=next(p for p in profiles(c) if p['name']==task['child'])
-    allowed={};bindings=[];record_ids=json.loads(row['attachments']);report={};school_error=''
+    allowed={};bindings=[];record_ids=json.loads(answer['attachments']) if answer is not None else [];report={};school_error=''
     def add(ident,origin,binding=None):
         upload=c.execute('SELECT * FROM uploads WHERE id=?',(ident,)).fetchone()
         if upload is None: return
@@ -988,19 +986,56 @@ def homework_review_context(c,task_id,record_id,expected_created=None):
         except (family_agent.AgentError,family_print.MediaError,family_reading.ReadingError,ValueError,TypeError,KeyError):
             # Saved answer/report still work when their independent school binding is unavailable.
             allowed={ident:value for ident,value in allowed.items() if value['origin']!='school'}
-            bindings=[];school_error='学校原件出处当前无法核对；已保存作答仍可检查，可回原消息核对后重试。'
-    for other in c.execute("SELECT id,child,source,linked_task_id,created,attachments,followup_kind,note FROM records WHERE source=? OR linked_task_id=? ORDER BY id",('事项:'+task_id,task_id)):
-        if other['id']==record_id or names.get(other['child'],other['child'])!=task['child']: continue
+            bindings=[];school_error='学校原件出处当前无法核对；已关联的作答或手工资料仍可使用，可回原消息核对后重试。'
+    related=list(c.execute("SELECT id,child,source,linked_task_id,created,attachments,followup_kind,note FROM records WHERE source=? OR linked_task_id=? ORDER BY id",('事项:'+task_id,task_id)))
+    if answer is None:
+        # A check also retains its real teacher inputs: ordinary records establish their identity first.
+        related.sort(key=lambda r:bool(r['followup_kind']=='作业检查' or legacy_homework_review_files(c,r)))
+    for other in related:
+        if answer is not None and other['id']==answer['id'] or names.get(other['child'],other['child'])!=task['child']: continue
         legacy=legacy_homework_review_files(c,other)
         for ident in json.loads(other['attachments']):
             upload=c.execute('SELECT mime FROM uploads WHERE id=?',(ident,)).fetchone()
             origin='review_result' if (other['followup_kind']=='作业检查' or ident in legacy) and upload is not None and upload['mime'].startswith('text/plain') else 'same_task'
             add(ident,origin,[other['id'],other['created']])
             if ident in legacy: allowed[ident].update(origin='review_result',review_binding=[other['id'],other['created']])
+    return dict(task=task,child_id=child['id'],allowed=allowed,report=report,school=bindings,school_error=school_error)
+
+def homework_review_context(c,task_id,record_id,expected_created=None):
+    """Only this saved answer, reported homework and explicitly bound school originals."""
+    if type(record_id) is not int or not 0<record_id<=9223372036854775807:
+        raise family_print.PrintError('请从原作业打开已保存的作答')
+    row=c.execute('SELECT * FROM records WHERE id=?',(record_id,)).fetchone()
+    if row is None:
+        raise family_print.PrintError('这份作答不属于当前孩子的作业','review_source_not_allowed',403)
+    if expected_created is not None and (not isinstance(expected_created,str) or expected_created!=row['created']):
+        raise family_print.PrintError('原作答已更正，请重新打开后检查','review_source_changed',409)
+    if row['followup_kind']=='作业检查' or legacy_homework_review_files(c,row):
+        raise family_print.PrintError('检查意见不是孩子作答，请回原作答追加复核','review_source_not_allowed',403)
+    material=homework_material_context(c,task_id,answer=row)
+    task=material['task']
     context=dict(task=dict(id=task['id'],child=task['child'],source=task['source'],action=task['action']),
-                 child_id=child['id'],record_id=record_id,created=row['created'],record_ids=record_ids,answer_note=row['note'],report=report,school=bindings)
+                 child_id=material['child_id'],record_id=record_id,created=row['created'],record_ids=json.loads(row['attachments']),answer_note=row['note'],report=material['report'],school=material['school'])
     fingerprint=hashlib.sha256(json.dumps(context,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
-    return dict(task=task,record=dict(row),allowed=allowed,context_sha256=fingerprint,school_error=school_error)
+    return dict(task=task,record=dict(row),allowed=material['allowed'],context_sha256=fingerprint,school_error=material['school_error'])
+
+def homework_print_sources(obj,*,pair=False):
+    """Reject foreign/unbound/result files before creating preparations or calling a model."""
+    sources=family_print.question_sources(obj.get('question_sources') if 'question_sources' in obj else [obj.get('question_source')])
+    guide=obj.get('guide_source') if pair else None
+    if guide is not None: sources=sources+[guide]
+    try:
+        with connect_read_only() as c:
+            c.execute('BEGIN')
+            context=homework_material_context(c,obj.get('task_id'))
+            for source in sources:
+                if (not isinstance(source,dict) or set(source)!={'type','id'} or source.get('type')!='upload'
+                        or not isinstance(source.get('id'),str) or source['id'] not in context['allowed']
+                        or context['allowed'][source['id']]['origin']=='review_result'):
+                    raise family_print.PrintError('请选择当前作业已关联的原件；检查意见不能当题目或教师参考','review_source_not_allowed',403)
+    except sqlite3.OperationalError:
+        raise family_print.PrintError('作业资料暂时无法读取；本次未准备或提交打印','storage_unavailable',503) from None
+    return context['task']
 
 def homework_saved_review(task_id,record_id):
     """Parent-only preview of this saved result; no migration, model or record write."""
@@ -2016,6 +2051,19 @@ class Handler(BaseHTTPRequestHandler):
                 try: return self.reply(200,family_task_video.view(SimpleNamespace(**globals()),agent_store(read_only=True),int(ident)))
                 except sqlite3.OperationalError:  # An absent or old database without the tables: an explicit refusal, no table created, none of the error's text shown.
                     return self.reply(503,dict(error='家庭资料库尚未建立或暂时无法读取，视频草稿暂不可用；本次读取未更改任何资料',code='storage_unavailable'))
+            if path=='/api/print/homework/materials':
+                query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+                if set(query)!={'task_id'} or len(query['task_id'])!=1:
+                    raise family_print.PrintError('请提供唯一的原作业编号')
+                try:
+                    with connect_read_only() as c:
+                        c.execute('BEGIN')
+                        context=homework_material_context(c,query['task_id'][0])
+                except sqlite3.OperationalError:
+                    return self.reply(503,dict(error='作业资料暂时无法读取；本次读取未更改任何资料',code='storage_unavailable'))
+                files=[dict(source=dict(type='upload',id=ident),name=value['name'],origin=value['origin'])
+                       for ident,value in context['allowed'].items() if value['origin']!='review_result']
+                return self.reply(200,dict(task={key:context['task'][key] for key in ('id','child')},files=files,school_error=context['school_error']))
             if path=='/api/print/homework/sources':
                 query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
                 if (set(query)!={'task_id','record_id'} or any(len(v)!=1 for v in query.values())
@@ -2199,18 +2247,18 @@ class Handler(BaseHTTPRequestHandler):
                     try: return self.reply(200,homework_review_draft(obj))
                     except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
                 sources=obj.get('question_sources') if 'question_sources' in obj else [obj.get('question_source')]
+                if purpose=='reference' and 'task_id' in obj: homework_print_sources(obj)
                 images,fingerprint=print_store().images_for_draft(sources,limit=family_llm.MAX_HOMEWORK_REVIEW_IMAGES if purpose=='review' else 4)
                 try: draft=family_llm.homework_reference_draft([dict(mime=image['mime'],data=image['data']) for image in images],data_path=DATA,timeout=120,review=purpose=='review')
                 except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
+                if purpose=='reference' and 'task_id' in obj: homework_print_sources(obj)
                 return self.reply(200,dict(draft=draft,question_sha256=fingerprint))
             if path=='/api/print/enqueue':
                 authorized_printer(obj.get('printer'),color=obj.get('color','monochrome'),sides=obj.get('sides','one-sided'))
                 return self.reply(200,dict(job=print_store().enqueue(obj)))
             if path=='/api/print/homework':
                 authorized_printer(obj.get('printer'),color=obj.get('color','monochrome'),sides=obj.get('sides','one-sided'))
-                with connect() as c:
-                    task=next((t for t in tasks(c) if t['id']==obj.get('task_id')),None)
-                if task is None: raise family_print.PrintError('作业事项不存在，请刷新后核对','task_missing',404)
+                task=homework_print_sources(obj,pair=True)
                 return self.reply(200,dict(jobs=print_store().homework_pair(obj,task)))
             if path=='/api/print/cancel': return self.reply(200,dict(job=print_store().cancel(obj.get('job_id'))))
             if path=='/api/print/received': return self.reply(200,dict(job=print_store().confirm_received(obj.get('job_id'),obj.get('note'))))

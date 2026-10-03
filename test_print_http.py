@@ -1,6 +1,7 @@
 """Isolated HTTP checks with fictional data; never invokes a real printer."""
 import base64
 import hashlib
+import io
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 import json
@@ -120,9 +121,12 @@ class PrintHTTPTests(unittest.TestCase):
         self.config()
         task=app.new_task(dict(child='示例甲',title='虚构英语练习',due='2000-01-02',
                                category='homework',request_key='synthetic_task_print_123'))
-        (app.DATA/'attachments'/'answer.png').write_bytes(PNG)
+        question=app.save_upload(io.BytesIO(PNG),len(PNG),'synthetic-question.png')['id']
+        answer=app.save_upload(io.BytesIO(PNG),len(PNG),'synthetic-reference.png')['id']
+        app.save_task_feedback(dict(task_id=task['id'],child='示例甲',day='2000-01-01',
+                                    request_key='synthetic_pair_materials',attachments=[question,answer]))
         body=dict(task_id=task['id'],request_key='synthetic_pair_print_123',
-                  question_source=self.source,guide_source=dict(type='attachment',name='answer.png'),
+                  question_source=dict(type='upload',id=question),guide_source=dict(type='upload',id=answer),
                   guide_text='',question_confirmed=True,guide_confirmed=True,printer=PRINTER['name'])
         self.assertEqual(self.post('/api/print/homework',body,{})[0],403)
         self.assertEqual(self.post('/api/print/homework',body|{'guide_confirmed':False})[0],400)

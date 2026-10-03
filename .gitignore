@@ -87,6 +87,7 @@
 !/test_today_ui.cjs
 !/test_homework_feedback_review_ui.cjs
 !/test_homework_review.py
+!/test_homework_print_scope.py
 
 !/family_agent.py
 !/family_qq_capture.py
