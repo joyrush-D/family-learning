@@ -1321,9 +1321,30 @@ class Store:
             c.execute('INSERT OR REPLACE INTO agent_jobs(id,fingerprint,attempts) VALUES(?,?,?)', (key, fingerprint, int(model)))
         return fingerprint
 
-    def _save(self, key, fingerprint, items, now, message_ids=()):
+    def _school_selection_current(self, c, key, fingerprint, source, messages):
+        """Recheck only the original school batch, under the settings/save transaction; no model or collection."""
+        try:
+            config=self._config(c)
+            current=next((v for v in config['sources'] if v['id']==source['id'] and v['enabled']),None)
+            if not config['enabled'] or current is None: return False
+            if any(current[k]!=source[k] for k in ('id','platform','child_id','name')): return False
+            saved=c.execute('SELECT * FROM agent_sources WHERE id=?',(source['id'],)).fetchone()
+            if saved is None: return False
+            self._binding(current,saved)
+            job=c.execute('SELECT fingerprint,done FROM agent_jobs WHERE id=?',(key,)).fetchone()
+            if job is None or job['fingerprint']!=fingerprint or job['done']: return False
+            for message in messages:
+                row=c.execute('SELECT payload,processed FROM agent_messages WHERE source_id=? AND id=?',
+                              (source['id'],message['id'])).fetchone()
+                if row is None or row['processed'] or row['payload']!=_json(message): return False
+            return bool(messages)
+        except (AgentError,KeyError,TypeError,ValueError): return False
+
+    def _save(self, key, fingerprint, items, now, message_ids=(), *, school_context=None):
         with self._db() as c:
             c.execute('BEGIN IMMEDIATE')
+            if school_context and not self._school_selection_current(c,key,fingerprint,*school_context):
+                raise AgentError('学校消息或来源已变化，本轮结果未保存；原消息保留等待按当前来源重新整理。',409,'school_selection_stale')
             c.execute("UPDATE agent_items SET state='superseded',updated=? WHERE job_id=? AND state='pending'", (now.isoformat(), key))
             for index, item in enumerate(items):
                 ident = 'agent-' + _hash([key, fingerprint, index])[:32]
@@ -2069,7 +2090,8 @@ def run_once(app, now=None):
                     fp = store._job(key, {'school_learning_policy': 8, 'messages': values}, now, model=True)
                     if not fp: continue
                     with store._db() as c:
-                        store._binding(source, c.execute('SELECT * FROM agent_sources WHERE id=?', (source['id'],)).fetchone())
+                        if not store._school_selection_current(c,key,fp,source,values):
+                            _discard_job(c,key,fp); continue
                         views = []
                         for row in values:
                             attachments = []
@@ -2098,7 +2120,7 @@ def run_once(app, now=None):
                             if item.get('plan', {}).get('school_learning'):
                                 item['plan']['school_messages'] = [dict(source_id=source['id'], message_id=row['id']) for row in values
                                     if 'message:' + source['id'] + ':' + row['id'] in {e['ref'] for e in item['evidence']}]
-                        store._save(key, fp, items, now, [(source['id'], row['id']) for row in values])
+                        store._save(key, fp, items, now, [(source['id'], row['id']) for row in values], school_context=(source,values))
                         created += len(items); processed += len(values)
                     except (family_llm.LLMDraftError, AgentError, ValueError) as error: store._fail(key, now, fingerprint=fp, reason=error); failed += 1
                     break  # One eligible batch per source leaves other sources a turn.
