@@ -644,13 +644,20 @@ class MultiPdfMaterialTests(Base):
             self.assertEqual(self.view(keys)['state'], 'unavailable'); self.assertIn('超过3份', self.view(keys)['explanation'])
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=0, failed=0)); self.assertIsNone(self.evidence(keys))
             self.link(keys, fourth, 'detach'); self.link(keys, c, 'detach')
+            path = self.data / 'uploads' / a; original = path.read_bytes()
+            # Whitespace after the xref/trailer leaves its offsets and the final startxref/EOF intact.
+            padded = original.replace(b'startxref\n', b' ' * (family_pdf.MAX_BODY_BYTES - len(original)) + b'startxref\n', 1)
+            self.assertEqual(len(padded), family_pdf.MAX_BODY_BYTES); path.write_bytes(padded)
             with self.store._db() as connection:
-                connection.execute('UPDATE uploads SET size=? WHERE id=?', (family_pdf.MAX_BODY_BYTES, a))
-            with patch.object(pdfm, 'read_file', side_effect=AssertionError('reject declared total before file reads')):
-                self.assertEqual(self.view(keys)['state'], 'unavailable'); self.assertIn('合计超过20MiB', self.view(keys)['explanation'])
-                self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=0, failed=0))
-            with self.store._db() as connection:
-                connection.execute('UPDATE uploads SET size=? WHERE id=?', (len(test_pdf.build_pdf(1)), a))
+                connection.execute('UPDATE uploads SET size=? WHERE id=?', (len(padded), a))
+            try:
+                with patch.object(pdfm, 'read_file', side_effect=AssertionError('reject actual total before file reads')):
+                    self.assertEqual(self.view(keys)['state'], 'unavailable'); self.assertIn('合计超过20MiB', self.view(keys)['explanation'])
+                    self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=0, failed=0))
+            finally:
+                path.write_bytes(original)
+                with self.store._db() as connection:
+                    connection.execute('UPDATE uploads SET size=? WHERE id=?', (len(original), a))
             image = self.seed_upload('e' * 32, test_media.png(width=97)); self.link(keys, image)
             self.assertEqual(self.view(keys)['state'], 'unavailable'); self.assertIn('单独关联', self.view(keys)['explanation'])
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=0, failed=0)); self.assertIsNone(self.evidence(keys))

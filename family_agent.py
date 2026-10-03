@@ -1422,18 +1422,32 @@ def school_targets(app, store, child_id, connection=None):
             if task['child']!=name: continue
             try:
                 canonical=_school_origin(store,c,task,child_id)
-                originals=[];publishers=set();originals_read=True;original_evidence=[]
-                for quote in json.loads(canonical['evidence']):
-                    source_id,message_id=quote['ref'][8:].rsplit(':',1)
-                    source,message=store._message_context(c,dict(child_id=child_id,source_id=source_id,message_id=message_id))
-                    publishers.add((source_id,_publisher(source_id,message)))
-                    originals.append([quote['ref'],_hash(message)])
-                    original_evidence.append(dict(message,ref=quote['ref']))
-                    originals_read=originals_read and message['kind']=='text' and not message['unread'] and bool(message['text'].strip()) and not _needs_task_details(message['text'])
-                recorded=json.loads(canonical['plan']).get('school_task',{}).get('origin_basis',{})
-                if not isinstance(recorded,dict): recorded={}
-                current_basis=_school_message_basis(original_evidence)
-                originals_read=originals_read and bool(recorded) and all(current_basis.get(ref)==value for ref,value in recorded.items())
+                originals=[];publishers=set();originals_read=True
+                canonical_plan=json.loads(canonical['plan']);changes=canonical_plan.get('school_changes',[])
+                source_rows=[canonical]
+                for change in changes:
+                    if change.get('change')!='append': continue
+                    saved=c.execute("SELECT * FROM agent_items WHERE id=? AND task_id=? AND child_id=? AND kind='school' AND state='accepted'",
+                        (change.get('item_id',''),task['id'],child_id)).fetchone()
+                    if saved is None or json.loads(saved['plan']).get('school_change_of')!=canonical['id']:
+                        originals_read=False;originals.append(['supplement',change.get('item_id',''),None]);continue
+                    source_rows.append(saved)
+                for source_row in source_rows:
+                    original_evidence=[];originals.append(['item',source_row['id'],_hash(dict(source_row))])
+                    for quote in json.loads(source_row['evidence']):
+                        source_id,message_id=quote['ref'][8:].rsplit(':',1)
+                        source,message=store._message_context(c,dict(child_id=child_id,source_id=source_id,message_id=message_id))
+                        publishers.add((source_id,_publisher(source_id,message)))
+                        originals.append([quote['ref'],_hash(message)])
+                        original_evidence.append(dict(message,ref=quote['ref']))
+                        originals_read=originals_read and message['kind']=='text' and not message['unread'] and bool(message['text'].strip()) and not _needs_task_details(message['text'])
+                    recorded=json.loads(source_row['plan']).get('school_task',{}).get('origin_basis',{})
+                    current_basis=_school_message_basis(original_evidence)
+                    originals_read=originals_read and isinstance(recorded,dict) and bool(recorded) and current_basis==recorded
+                approved=canonical_plan.get('school_task',{})
+                requirements_kept=approved.get('title')==canonical['title'] and approved.get('goal')==canonical['body']
+                original_task=c.execute('SELECT due FROM manual_tasks WHERE id=?',(task['id'],)).fetchone()
+                requirements_kept=requirements_kept and original_task is not None and original_task['due']==(canonical['due'] or '无明确截止')
             except (AgentError,ValueError,KeyError,TypeError): continue
             update=updates.get(task['id']);focus=task['focus']
             feedback=[dict(r) for r in c.execute('SELECT * FROM records WHERE source=? OR linked_task_id=?',('事项:'+task['id'],task['id']))]
@@ -1442,11 +1456,11 @@ def school_targets(app, store, child_id, connection=None):
             basis=dict(canonical_id=canonical['id'],canonical_updated=canonical['updated'],
                 fingerprint=_hash([dict(canonical),originals,task['title'],task['action'],task['agenda'],focus,update,feedback,study]),
                 version=focus['version'],updated=update['updated'] if update else '',title=task['title'],due=task['agenda']['due_on'])
-            changes=json.loads(canonical['plan']).get('school_changes',[]);last=changes[-1] if changes else {}
-            own_append=(last.get('change')=='append' and focus['title']==last.get('applied_title') and focus['goal']==last.get('applied_goal'))
+            last=changes[-1] if changes else {}
+            own_append=(last.get('change')=='append' and last.get('auto_added') is True and focus['title']==last.get('applied_title') and focus['goal']==last.get('applied_goal'))
             result.append(dict(id=task['id'],title=task['title'][:200],goal=task['action'][:400],goal_truncated=len(task['action'])>400,
                 due=task['agenda']['due_on'],status=app.task_status(task,update['status'] if update else None),source_id=source,publisher=publisher,
-                append_basis=basis,append_eligible=bool(publisher) and originals_read and _school_active(store,c,canonical) and not update and not feedback and not study
+                append_basis=basis,append_eligible=bool(publisher) and originals_read and requirements_kept and _school_active(store,c,canonical) and not update and not feedback and not study
                     and (not focus['title'] and not focus['goal'] or own_append)))
         complete=len(result)<=24
         result=result[:24]
@@ -1585,7 +1599,7 @@ def apply_school_change(app, store, obj, *, school_auto=False):
             known.extend(x for x in links if x not in known)
         now=_now().isoformat()
         event=dict(item_id=ident,change=change,confirmed_at=now,title=title,goal=body,due=due)
-        if change=='append': event.update(applied_title=title,applied_goal=merged)
+        if change=='append': event.update(applied_title=title,applied_goal=merged,auto_added=school_auto)
         original_plan.setdefault('school_changes',[]).append(event)
         c.execute('UPDATE agent_items SET plan=?,updated=? WHERE id=?',(_json(original_plan),now,canonical['id']))
         source=task['source']+'\n\n'+'\n\n'.join(e['ref']+'\n'+e['text'] for e in evidence)

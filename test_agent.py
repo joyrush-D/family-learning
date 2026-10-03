@@ -1508,6 +1508,37 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
             self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
 
+    def test_school_append_keeps_two_current_supplements_on_one_original(self):
+        original,task_id=self._school_append_original()
+        first=self._school_append_candidate(12,'只补朗读：录音上传后确认上传成功。',change='append',target=task_id)
+        self._school_append_auto(first)
+        second=self._school_append_candidate(13,'只补朗读：确认上传后再检查音量清楚。',change='append',target=task_id)
+        self.assertEqual(json.loads(second['plan'])['school_task']['state'],'ready')
+        self._school_append_auto(second)
+        with self.app.connect() as c:
+            task=next(t for t in self.app.tasks(c) if t['id']==task_id)
+            self.assertEqual(task['action'].count('补充要求：'),2)
+            self.assertIn('确认上传成功',task['action']);self.assertIn('检查音量清楚',task['action'])
+            self.assertEqual(task['agenda']['due_on'],'2026-02-11')
+            self.assertTrue(all('message:synthetic-group:'+str(i) in task['source'] for i in (11,12,13)))
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT body FROM agent_items WHERE id=?',(original['id'],)).fetchone()[0],original['body'])
+
+    def test_school_append_after_explicit_parent_append_stays_review(self):
+        original,task_id=self._school_append_original()
+        first=self._school_append_candidate(12,'只补朗读：录音上传后确认上传成功。',change='append',target=task_id)
+        with patch.object(agent,'_now',return_value=self.now):
+            agent.apply_school_change(self.app,self.store,agent._school_append_request(first,json.loads(first['plan'])['school_task']))
+        with self.app.connect() as c: before=next(t for t in self.app.tasks(c) if t['id']==task_id)
+        next_row=self._school_append_candidate(13,'只补朗读：确认上传后再检查音量清楚。',change='append',target=task_id)
+        self.assertEqual(json.loads(next_row['plan'])['school_task']['state'],'review')
+        with patch.object(agent.family_llm,'_chat_json') as model,patch.object(agent,'_now',return_value=self.now):
+            agent._refresh_school(self.app,self.store,self.now,0);model.assert_not_called()
+        with self.app.connect() as c:
+            self.assertEqual(next(t for t in self.app.tasks(c) if t['id']==task_id),before)
+            self.assertEqual(c.execute('SELECT state FROM agent_items WHERE id=?',(next_row['id'],)).fetchone()[0],'pending')
+
     def test_school_append_rechecks_accepted_supplement_corrected_or_recalled_before_next_append(self):
         for index,kind,changes in ((11,'corrected',dict(text='更正朗读补充：不再要求录音上传成功确认。')),
                                     (21,'recalled',dict(text='[已撤回，正文未读取]',kind='recalled',unread=True))):
