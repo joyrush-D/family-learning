@@ -299,6 +299,16 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   assert.equal(await resources.locator('img[onerror]').count(),0);
   await fits(page);await proof(page,'task-static-material-'+width);
   await feedback.locator('[data-close=taskDialog]').click();await page.unroute('**/api/agent/message?*');
+  const combinedView={...pageOnly,message:{...pageOnly.message,kind:'qq_window_fragment',unread:true,text:'截图文字 https://example.test/text-only https://example.test/not-saved'}};
+  await page.route('**/api/agent/message?*',route=>route.fulfill({json:combinedView}));
+  await page.locator('[data-query-target="task:'+textTask.id+'"] [data-task]').click();
+  await resources.locator('[data-task-material-state="pages"]').waitFor();
+  assert.match(await resources.locator('[data-task-source-gap="fragment"]').innerText(),/完整原消息与附件仍待补充/);
+  assert.match(await resources.locator('[data-task-source-gap="unread"]').innerText(),/另有未读资料/);
+  assert.equal(await resources.locator('[data-task-source-gap="links"]').innerText(),'未读网页：https://example.test/not-saved','only the missing linked page is named');
+  assert.equal(await resources.locator('[data-task-material-state="text"]').count(),0);
+  await fits(page);await proof(page,'task-combined-material-gaps-'+width);
+  await feedback.locator('[data-close=taskDialog]').click();await page.unroute('**/api/agent/message?*');
   await page.route('**/api/agent/message?*',route=>route.fulfill({json:{...textView,message:{...textView.message,text:'虚构网页 https://example.test/not-saved'}}}));
   await page.locator('[data-query-target="task:'+textTask.id+'"] [data-task]').click();
   await resources.getByText(/网页内容尚未在此保存/).waitFor();

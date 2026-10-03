@@ -1582,7 +1582,7 @@ function schoolOriginalButtons(refs,childID,label='原通知与原件',publicati
 }
 // Show the saved preparation beside its task. Reading never schedules a model, collection or record write.
 function taskSchoolMaterialHTML(view){
- const p=view.pdf_material,d=view.material_draft;
+ const p=view.pdf_material,d=view.material_draft,pages=Array.isArray(view.pages)?view.pages:[];
  let preparation='';
  if(p){
   const done=Array.isArray(p.processed_pages)?p.processed_pages:[],left=Array.isArray(p.pending_pages)?p.pending_pages:[],batches=Array.isArray(p.batches)?p.batches:[],total=Number.isInteger(p.page_count)?p.page_count:null;
@@ -1593,7 +1593,7 @@ function taskSchoolMaterialHTML(view){
  // Task requirements and original-file preparation are different states. A saved
  // text notice needs no attachment extraction, and static web text is not an AI draft.
  if(!preparation){
-  const pages=Array.isArray(view.pages)?view.pages:[],hasFiles=view.attachments.length||view.unavailable_attachment_ids?.length;
+  const hasFiles=view.attachments.length||view.unavailable_attachment_ids?.length;
   if(pages.length)preparation=`<p class="small muted" data-task-material-state="pages">已保存 ${pages.length} 个网页文字片段，读取范围见下方。</p>`;
   else if(view.message.kind==='qq_window_fragment')preparation='<p class="small" data-task-material-state="fragment">当前只有截图识别文字，完整原消息与附件仍待补充。</p>';
   else if(hasFiles||view.message.unread||view.media?.explanation)preparation='<p class="small" data-task-material-state="unread">本条原件尚无可展示的整理结果；作业要求见上方。</p>';
@@ -1601,8 +1601,12 @@ function taskSchoolMaterialHTML(view){
   else if(view.message.kind==='text'&&String(view.message.text||'').trim())preparation='<p class="small muted" data-task-material-state="text">文字通知 · 作业要求见上方。</p>';
   else preparation='<p class="small muted" data-task-material-state="unknown">本条消息没有可展示的资料整理，请查看原消息。</p>';
  }
+ const unreadLinks=schoolPageLinks(view.message.text).filter(url=>!pages.some(page=>[page.url,page.original_url].includes(url)));
+ const sourceGaps=(pages.length&&view.message.kind==='qq_window_fragment'?'<p class="small" data-task-source-gap="fragment">当前只有截图识别文字，完整原消息与附件仍待补充。</p>':'')+
+  (pages.length&&!p&&!d&&view.message.unread?'<p class="small" data-task-source-gap="unread">原消息另有未读资料，已保存网页片段不能补全这些内容。</p>':'')+
+  (pages.length&&unreadLinks.length?`<p class="small" data-task-source-gap="links">未读网页：${unreadLinks.map(esc).join('；')}</p>`:'');
  const files=view.attachments.map(uploadHTML).join('');
- return `<header class="task-record-heading"><strong>${esc(view.message.sender||'发言人未记录')}</strong><span>${esc(view.source_name)} · ${agentTime(view.message.time)}</span></header>${preparation}${view.pages?.map(p=>`<section class="task-web-material"><h4>已提取网页文字${p.text_truncated?' · 仅部分':''}</h4><p class="source small">${esc(p.original_url||p.url||'网址未记录')}</p><p class="small muted">读取于 ${agentTime(p.fetched_at)} · 仅静态文字${p.text_truncated?'，超过6000字的部分未保存':''}；图片、附件、动态或登录后的内容未读取。</p><p class="source task-material-text">${esc(p.text)}</p></section>`).join('')||''}${view.media?.explanation?`<p class="small muted">${esc(view.media.explanation)}</p>`:''}${view.unavailable_attachment_ids?.length?'<p class="error">有原件暂不可读取，已整理内容不能据此补全。</p>':''}${files?`<div class="task-record-files"><h4>老师原件 · ${view.attachments.length} 份</h4>${files}</div>`:''}<button type="button" data-school-original-ref="${esc('message:'+view.source_id+':'+view.message.id)}" data-school-original-child="${esc(view.child_id)}">查看老师原消息</button>`;
+ return `<header class="task-record-heading"><strong>${esc(view.message.sender||'发言人未记录')}</strong><span>${esc(view.source_name)} · ${agentTime(view.message.time)}</span></header>${preparation}${sourceGaps}${pages.map(p=>`<section class="task-web-material"><h4>已提取网页文字${p.text_truncated?' · 仅部分':''}</h4><p class="source small">${esc(p.original_url||p.url||'网址未记录')}</p><p class="small muted">读取于 ${agentTime(p.fetched_at)} · 仅静态文字${p.text_truncated?'，超过6000字的部分未保存':''}；图片、附件、动态或登录后的内容未读取。</p><p class="source task-material-text">${esc(p.text)}</p></section>`).join('')}${view.media?.explanation?`<p class="small muted">${esc(view.media.explanation)}</p>`:''}${view.unavailable_attachment_ids?.length?'<p class="error">有原件暂不可读取，已整理内容不能据此补全。</p>':''}${files?`<div class="task-record-files"><h4>老师原件 · ${view.attachments.length} 份</h4>${files}</div>`:''}<button type="button" data-school-original-ref="${esc('message:'+view.source_id+':'+view.message.id)}" data-school-original-child="${esc(view.child_id)}">查看老师原消息</button>`;
 }
 function drawTaskSchoolResources(task){
  const root=$('#taskSchoolResources'),childID=data.children.find(c=>c.name===task.child)?.id;
