@@ -163,7 +163,7 @@ class SchoolHistoryTests(unittest.TestCase):
 
     def _empty_response(self, group):
         return dict(proposals=[fixtures.school_proposal(title_quote=v['text'], action_quote=v['text'],
-            existing_item_id='', evidence=[dict(ref=ref)], due='2026-02-12', task_title='携带'+v['text'].split('带',1)[1].split('到校',1)[0]+'到校',
+            existing_item_id='', evidence=[dict(ref=ref)], due='2026-02-12', task_title=v['text'][:120],
             task_goal=v['text'], task_state='ready', task_purpose='admin', task_reason='完整原文中的独立携带要求。')
             for v, ref in zip(group['values'], group['refs'])])
 
