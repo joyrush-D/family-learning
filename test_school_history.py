@@ -146,7 +146,7 @@ class SchoolHistoryTests(unittest.TestCase):
 
     def _empty_legacy(self, *, policy=7, texts=None, ids=None):
         """Reproduce a saved old successful empty output, without resetting any real cursor."""
-        texts = texts or ['2月12日前带《英语练习册》1份到校。']
+        texts = texts or ['2月12日前带《材料D》1份到校。']
         ids = ids or [str(51 + n) for n in range(len(texts))]
         source = self.fixture.source
         payload = self.fixture.payload(cursor=ids[-1])
@@ -163,7 +163,7 @@ class SchoolHistoryTests(unittest.TestCase):
 
     def _empty_response(self, group):
         return dict(proposals=[fixtures.school_proposal(title_quote=v['text'], action_quote=v['text'],
-            existing_item_id='', evidence=[dict(ref=ref)], due='2026-02-12', task_title='带英语练习册到校',
+            existing_item_id='', evidence=[dict(ref=ref)], due='2026-02-12', task_title='携带'+v['text'].split('带',1)[1].split('到校',1)[0]+'到校',
             task_goal=v['text'], task_state='ready', task_purpose='admin', task_reason='完整原文中的独立携带要求。')
             for v, ref in zip(group['values'], group['refs'])])
 
@@ -180,7 +180,7 @@ class SchoolHistoryTests(unittest.TestCase):
             task = dict(c.execute('SELECT * FROM manual_tasks').fetchone())
             self.assertEqual(task['child'], '示例甲')
             self.assertEqual(task['due'], '2026-02-12')
-            self.assertIn('英语练习册', task['action'])
+            self.assertIn('材料D', task['action'])
             self.assertIn(group['refs'][0], task['source'])
             self.assertEqual(dict(c.execute('SELECT * FROM agent_jobs WHERE id=?', (group['job'],)).fetchone()), old_job)
         self.assertEqual(self._protected(), before)
@@ -189,6 +189,32 @@ class SchoolHistoryTests(unittest.TestCase):
         self.assertEqual(self._tick(20)['created'], 0)
         self.assertEqual(len(self.calls), count)
         self.assertEqual(len(self._history_rows()), 1)
+
+    def test_empty_legacy_learning_material_ambiguity_remains_review_not_automatic_task(self):
+        group = self._empty_legacy(texts=['2月12日前带《英语练习册》1份到校。'])
+        self.history_response = self._empty_response(group)
+        self.assertEqual((self._tick(10)['failed'], len(self._history_rows())), (0, 1))
+        row = self._history_rows()[0]
+        self.assertEqual(json.loads(row['plan'])['school_task']['state'], 'review')
+        self.assertEqual((row['state'], row['task_id']), ('pending', ''))
+        self.assertEqual(row['body'], group['values'][0]['text'])
+        self.assertEqual(row['due'], '2026-02-12')
+        accepted = self.store.act(dict(id=row['id'], action='accept'))
+        self.assertEqual(accepted['state'], 'accepted')
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0], 1)
+
+    def test_empty_legacy_receipt_changed_after_scope_discovery_makes_no_model_call(self):
+        group = self._empty_legacy()
+        scopes = agent._history_scopes(self.store, self.store._config())
+        self.assertEqual(len(scopes), 1)
+        with self.app.connect() as c:
+            c.execute('UPDATE agent_jobs SET done=0 WHERE id=?', (group['job'],))
+        self.history_response = self._empty_response(group)
+        result = agent._recheck_school_history(self.app, self.store, self.clock, 1, scopes)
+        self.assertEqual((result['failed'], result['created']), (1, 0))
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self._history_rows(), [])
 
     def test_policy8_empty_batch_is_ambiguous_and_not_rechecked(self):
         self._empty_legacy(policy=8)
