@@ -1590,8 +1590,19 @@ function taskSchoolMaterialHTML(view){
  }else if(d){
   preparation=d.state==='ready'&&d.draft?`<section data-task-material-state="ready"><strong>AI 已整理 · ${esc(d.draft.title||'学校资料')}</strong><p class="source task-material-text">${esc(d.draft.note||'整理文字待核对')}</p>${d.draft.uncertainties?.length?`<p class="small">待补充：${d.draft.uncertainties.map(esc).join('；')}</p>`:''}</section>`:`<p data-task-material-state="${esc(d.state||'unknown')}">${esc(d.explanation||'原件内容尚未整理完成')}</p>`;
  }
+ // Task requirements and original-file preparation are different states. A saved
+ // text notice needs no attachment extraction, and static web text is not an AI draft.
+ if(!preparation){
+  const pages=Array.isArray(view.pages)?view.pages:[],hasFiles=view.attachments.length||view.unavailable_attachment_ids?.length;
+  if(pages.length)preparation=`<p class="small muted" data-task-material-state="pages">已保存 ${pages.length} 个网页文字片段，读取范围见下方。</p>`;
+  else if(view.message.kind==='qq_window_fragment')preparation='<p class="small" data-task-material-state="fragment">当前只有截图识别文字，完整原消息与附件仍待补充。</p>';
+  else if(hasFiles||view.message.unread||view.media?.explanation)preparation='<p class="small" data-task-material-state="unread">本条原件尚无可展示的整理结果；作业要求见上方。</p>';
+  else if(schoolPageLinks(view.message.text).length)preparation='<p class="small" data-task-material-state="unread">消息中的网页内容尚未在此保存；作业要求见上方。</p>';
+  else if(view.message.kind==='text'&&String(view.message.text||'').trim())preparation='<p class="small muted" data-task-material-state="text">文字通知 · 作业要求见上方。</p>';
+  else preparation='<p class="small muted" data-task-material-state="unknown">本条消息没有可展示的资料整理，请查看原消息。</p>';
+ }
  const files=view.attachments.map(uploadHTML).join('');
- return `<header class="task-record-heading"><strong>${esc(view.message.sender||'发言人未记录')}</strong><span>${esc(view.source_name)} · ${agentTime(view.message.time)}</span></header>${preparation||'<p class="small muted">原件已保存不代表内容已理解。</p>'}${view.pages?.map(p=>`<section class="task-web-material"><h4>已提取网页文字${p.text_truncated?' · 仅部分':''}</h4><p class="source small">${esc(p.original_url||p.url||'网址未记录')}</p><p class="small muted">读取于 ${agentTime(p.fetched_at)} · 仅静态文字${p.text_truncated?'，超过6000字的部分未保存':''}；图片、附件、动态或登录后的内容未读取。</p><p class="source task-material-text">${esc(p.text)}</p></section>`).join('')||''}${view.media?.explanation?`<p class="small muted">${esc(view.media.explanation)}</p>`:''}${view.unavailable_attachment_ids?.length?'<p class="error">有原件暂不可读取，已整理内容不能据此补全。</p>':''}${files?`<div class="task-record-files"><h4>老师原件 · ${view.attachments.length} 份</h4>${files}</div>`:''}<button type="button" data-school-original-ref="${esc('message:'+view.source_id+':'+view.message.id)}" data-school-original-child="${esc(view.child_id)}">查看老师原消息</button>`;
+ return `<header class="task-record-heading"><strong>${esc(view.message.sender||'发言人未记录')}</strong><span>${esc(view.source_name)} · ${agentTime(view.message.time)}</span></header>${preparation}${view.pages?.map(p=>`<section class="task-web-material"><h4>已提取网页文字${p.text_truncated?' · 仅部分':''}</h4><p class="source small">${esc(p.original_url||p.url||'网址未记录')}</p><p class="small muted">读取于 ${agentTime(p.fetched_at)} · 仅静态文字${p.text_truncated?'，超过6000字的部分未保存':''}；图片、附件、动态或登录后的内容未读取。</p><p class="source task-material-text">${esc(p.text)}</p></section>`).join('')||''}${view.media?.explanation?`<p class="small muted">${esc(view.media.explanation)}</p>`:''}${view.unavailable_attachment_ids?.length?'<p class="error">有原件暂不可读取，已整理内容不能据此补全。</p>':''}${files?`<div class="task-record-files"><h4>老师原件 · ${view.attachments.length} 份</h4>${files}</div>`:''}<button type="button" data-school-original-ref="${esc('message:'+view.source_id+':'+view.message.id)}" data-school-original-child="${esc(view.child_id)}">查看老师原消息</button>`;
 }
 function drawTaskSchoolResources(task){
  const root=$('#taskSchoolResources'),childID=data.children.find(c=>c.name===task.child)?.id;
