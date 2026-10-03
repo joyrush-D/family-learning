@@ -241,7 +241,7 @@ test('daily UI keeps collection navigation in inbox and pending notifications di
  const html=ctx.agentItemHTML(item,{compact:true,agenda:{category:'todo',published_on:'2026-09-08'}});
  assert.match(html,/通知 · 有信息待补充/);assert.match(html,/<h3>阅读要求<\/h3>/);assert.match(html,/发布：2026-09-08/);assert.match(html,/data-agent-accept="synthetic-school"/);assert.doesNotMatch(html,/type="checkbox"|<script>/);assert.match(html,/&lt;script/);assert.ok(html.includes(escape(title)),'full source title is preserved in the original notification');
  const goal='1. 阅读虚构课文\n2. 写出三句话\n3. '+('很长的虚构具体要求'.repeat(30))+'\n4. 带回原卷核对',ready={...item,plan:{school_task:{state:'ready',title:'语文：阅读与写作',goal,reason:'虚构老师要求'}}};
- const readyHTML=ctx.agentItemHTML(ready,{compact:true,agenda:{category:'homework'}});assert.match(readyHTML,/作业 · 已整理/);assert.match(readyHTML,/加入事项/);assert.match(readyHTML,/展开完整要求 · 4条/);assert.equal((readyHTML.match(/<li>/g)||[]).length,3,'first screen shows three clear requirements');assert.ok(readyHTML.includes(escape(goal)),'all requirements remain available exactly, including the fourth');
+ const readyHTML=ctx.agentItemHTML(ready,{compact:true,agenda:{category:'homework'}});assert.match(readyHTML,/作业 · 已整理/);assert.match(readyHTML,/加入事项/);assert.doesNotMatch(readyHTML,/展开完整要求/);assert.equal((readyHTML.match(/<li>/g)||[]).length,4,'all saved requirements are directly visible');for(const line of goal.split('\n'))assert.ok(readyHTML.includes('<li>'+escape(line)+'</li>'),'long and fourth requirements remain complete without expansion');
 });
 
 test('week overview includes every day, preserves child/status boundaries and deduplicates linked study',()=>{
