@@ -15,6 +15,16 @@ import family_agent as agent
 import family_review
 
 
+def school_proposal(**values):
+    """Complete current school-model fixture; malformed-response tests use raw dictionaries."""
+    result = dict(title_quote='待核对原文', focus='school', due='', evidence=[],
+        learning_subject='', learning_goal_id='', task_title='', task_goal='', task_advice='',
+        task_state='review', task_reason='虚构资料的具体要求尚待补充。', task_change='new',
+        task_target_id='', task_purpose='unknown', task_submission='')
+    result.update(values)
+    return result
+
+
 class AgentTests(unittest.TestCase):
     def test_separate_school_conclusions_do_not_borrow_related_attachments(self):
         sent='2026-10-05T16:00:00+08:00'
@@ -61,6 +71,13 @@ class AgentTests(unittest.TestCase):
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[legacy])):
             with self.assertRaises(agent.AgentError):
                 agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+        complete=school_proposal(title_quote='英语',evidence=[dict(ref=evidence[0]['ref'])],
+            task_title='英语：朗读Unit 2',task_goal='课文读两遍。',task_state='ready',task_purpose='learning')
+        for field in agent.SCHOOL_SCHEMA['properties']['proposals']['items']['required']:
+            missing=dict(complete);missing.pop(field)
+            with self.subTest(field=field),patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[missing])):
+                with self.assertRaises(agent.AgentError):
+                    agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
 
     def test_school_routing_can_preserve_six_independent_requirements(self):
         evidence=[];proposals=[]
@@ -77,6 +94,93 @@ class AgentTests(unittest.TestCase):
             items=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
         self.assertEqual(len(items),6)
         self.assertEqual({q['ref'] for item in items for q in item['evidence']},{e['ref'] for e in evidence})
+
+    def test_one_message_keeps_six_distinct_requirements_and_their_semantics(self):
+        ref='message:synthetic-six:1';due=(self.now.date()+dt.timedelta(days=1)).isoformat()
+        requirements=[
+            ('英语：朗读Unit 2','课文读两遍，将朗读录音上传班级作业区。','朗读录音上传班级作业区','learning'),
+            ('英语：抄写Unit 2单词','抄写第8页的10个单词，每词一遍。','','learning'),
+            ('英语：默写Unit 2单词','默写第8页的10个单词。','','learning'),
+            ('英语：完成练习卷','第1–3题必做，第4题选做。','','learning'),
+            ('英语：订正练习','有错题的同学订正第5页的错题，订正后拍照上传班级作业区。','拍照上传班级作业区','learning'),
+            ('英语：选读故事','选做：阅读第9页故事，不要求提交录音。','','optional'),
+        ]
+        text='明天完成以下六项英语要求：\n'+'\n'.join(str(i)+'. '+goal for i,(_,goal,_,_) in enumerate(requirements,1))
+        evidence=[dict(ref=ref,text=text,time=self.now.isoformat(),content_incomplete=False)]
+        proposals=[school_proposal(title_quote='六项英语要求',due=due,evidence=[dict(ref=ref)],
+            learning_subject='英语' if purpose=='learning' else '',task_title=title,task_goal=goal,
+            task_state='ready' if purpose=='learning' and not goal.startswith('有错题') else 'review',task_reason='原文逐项要求。',
+            task_purpose=purpose,task_submission=submission) for title,goal,submission,purpose in requirements]
+        # This controls preservation of a correct model result; it does not measure model extraction accuracy.
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)) as model:
+            items=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+        self.assertEqual(model.call_args.args[1]['properties']['proposals']['maxItems'],36)
+        self.assertEqual([(i['title'],i['body'],i['due']) for i in items],[(t,g,due) for t,g,_,_ in requirements])
+        self.assertEqual([i['plan']['school_task']['submission'] for i in items],[s for _,_,s,_ in requirements])
+        self.assertEqual([i['plan']['school_task']['purpose'] for i in items],[p for _,_,_,p in requirements])
+        self.assertEqual([i['plan']['school_task']['state'] for i in items],['ready']*4+['review','review'])
+        self.assertTrue(all(i['evidence']==[dict(ref=ref,text=text[:600])] for i in items))
+
+    def test_school_output_bound_is_shared_and_overflow_never_truncates(self):
+        ref='message:synthetic-many:1'
+        evidence=[dict(ref=ref,text='原文包含36条独立学校说明。',time=self.now.isoformat(),content_incomplete=False)]
+        proposals=[school_proposal(title_quote='学校说明',evidence=[dict(ref=ref)],task_title='说明'+str(i),
+            task_goal='独立说明'+str(i),task_state='reference',task_reason='参考内容，不生成任务。',task_purpose='optional') for i in range(36)]
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)) as model:
+            self.assertEqual(len(agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())),36)
+        self.assertEqual(model.call_args.args[1]['properties']['proposals']['maxItems'],agent.SCHOOL_PROPOSAL_LIMIT)
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals+[dict(proposals[0])])):
+            with self.assertRaises(agent.AgentError):
+                agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+
+    def _school_batch_failure_recovers(self, failure):
+        payload=self.payload(cursor='16')
+        payload['messages']=[dict(id=str(i),time=self.now.isoformat(),kind='text',sender='示例发布者',
+            text='英语：请明天完成独立练习'+str(i)+'。',unread=False) for i in range(11,17)]
+        self.store.ingest(payload)
+        proposals=[school_proposal(title_quote='英语',evidence=[dict(ref='message:'+self.source['id']+':'+m['id'])],
+            due='2026-02-11',task_title='英语：独立练习'+m['id'],task_goal='完成独立练习'+m['id']+'。',
+            task_state='ready',task_reason='明确的新要求。',task_purpose='learning') for m in payload['messages']]
+        bad=proposals[:-1] if failure=='omitted' else [] if failure=='empty' else [dict(p) for p in proposals]
+        if failure=='missing_field':bad[0].pop('task_purpose')
+        with patch.object(agent.family_llm,'_chat_json',side_effect=[dict(proposals=bad),dict(proposals=proposals)]) as model:
+            first=agent.run_once(self.app,self.now)
+            self.assertEqual((first['failed'],first['processed'],first['created']),(1,0,0))
+            with self.app.connect() as c:
+                self.assertEqual(c.execute('SELECT SUM(processed) FROM agent_messages').fetchone()[0],0)
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items').fetchone()[0],0)
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],0)
+                job=c.execute("SELECT attempts,done,error,next_try FROM agent_jobs WHERE id LIKE 'messages:%'").fetchone()
+                self.assertEqual((job['attempts'],job['done']),(1,0));self.assertTrue(job['error'])
+                self.assertEqual(job['next_try'],(self.now+dt.timedelta(minutes=5)).isoformat())
+                self.assertEqual(c.execute('SELECT cursor FROM agent_sources').fetchone()[0],'16')
+                self.assertEqual([json.loads(r[0])['text'] for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')],
+                    [m['text'] for m in payload['messages']])
+            agent.run_once(self.app,self.now+dt.timedelta(minutes=1));self.assertEqual(model.call_count,1)
+            recovered=agent.run_once(self.app,self.now+dt.timedelta(minutes=6))
+            self.assertEqual((recovered['failed'],recovered['processed']),(0,6));self.assertEqual(model.call_count,2)
+            with self.app.connect() as c:
+                self.assertEqual(c.execute('SELECT SUM(processed) FROM agent_messages').fetchone()[0],6)
+                self.assertEqual(tuple(c.execute("SELECT attempts,done,error,next_try FROM agent_jobs WHERE id LIKE 'messages:%'").fetchone()),(2,1,'',''))
+                items=[tuple(r) for r in c.execute('SELECT * FROM agent_items ORDER BY id')]
+                tasks=[tuple(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+                self.assertEqual(len(items),6);self.assertEqual(len(tasks),6)
+                saved={r['title']:(r['body'],r['due'],r['state']) for r in c.execute('SELECT * FROM agent_items')}
+                self.assertEqual(saved,{p['task_title']:(p['task_goal'],p['due'],'accepted') for p in proposals})
+            replay=agent.run_once(self.app,self.now+dt.timedelta(minutes=7))
+            self.assertEqual((replay['processed'],replay['created']),(0,0));self.assertEqual(model.call_count,2)
+            with self.app.connect() as c:
+                self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM agent_items ORDER BY id')],items)
+                self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')],tasks)
+
+    def test_school_omitted_message_fails_whole_batch_then_recovers_idempotently(self):
+        self._school_batch_failure_recovers('omitted')
+
+    def test_school_empty_result_fails_whole_batch_then_recovers_idempotently(self):
+        self._school_batch_failure_recovers('empty')
+
+    def test_school_missing_field_fails_whole_batch_then_recovers_idempotently(self):
+        self._school_batch_failure_recovers('missing_field')
 
     def test_school_routing_rejects_silently_omitted_original_messages(self):
         evidence=[];proposals=[]
@@ -111,7 +215,7 @@ class AgentTests(unittest.TestCase):
         for e in evidence:
             e.update(source='虚构学校群',publisher='publisher:synthetic',related_messages=[x['ref'] for x in evidence],attachments=[])
         evidence[1]['attachments']=[dict(name='synthetic-reading.png',mime='image/png')]
-        proposal['evidence']=[dict(ref=evidence[0]['ref']),dict(ref=evidence[2]['ref'])]
+        proposal['evidence']=[dict(ref=e['ref']) for e in evidence]
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):
             linked=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
         self.assertEqual([e['ref'] for e in linked[0]['evidence']],[e['ref'] for e in evidence])
@@ -121,10 +225,23 @@ class AgentTests(unittest.TestCase):
             waiting=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
         self.assertEqual([e['ref'] for e in waiting[0]['evidence']],[e['ref'] for e in evidence])
         self.assertEqual(waiting[0]['plan']['school_task']['state'],'review')
+        proposal['evidence']=[dict(ref=evidence[0]['ref']),dict(ref=evidence[2]['ref'])]
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):
+            with self.assertRaises(agent.AgentError):
+                agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
         evidence[-1]['publisher']='publisher:other'
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):
+            with self.assertRaises(agent.AgentError):
+                agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+        other=school_proposal(title_quote=evidence[-1]['text'],evidence=[dict(ref=evidence[-1]['ref'])],
+            task_state='reference',task_reason='另一发布者的说明单独保留。')
+        remaining=school_proposal(title_quote=evidence[1]['text'],
+            evidence=[dict(ref=e['ref']) for e in evidence if e['ref'] not in {evidence[0]['ref'],evidence[2]['ref'],evidence[-1]['ref']}],
+            task_reason='附件和补充内容尚待整理。')
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal,remaining,other])):
             separate=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
         self.assertEqual([e['ref'] for e in separate[0]['evidence']], [evidence[0]['ref'],evidence[2]['ref']])
+        self.assertEqual([e['ref'] for e in separate[-1]['evidence']],[evidence[-1]['ref']])
 
     def test_school_batch_does_not_split_body_and_pending_attachment_before_bytes_arrive(self):
         messages=[dict(id=str(i),time=(self.now+dt.timedelta(seconds=i)).isoformat(),kind='text',sender='示例老师',
@@ -253,6 +370,35 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(row['state'],'accepted');self.assertEqual(row['title'],'英语：朗读与第8页练习')
             self.assertEqual(c.execute('SELECT count(*) FROM records').fetchone()[0],0)
             self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],1)
+
+    def test_school_original_refresh_rejects_partial_structure_before_retry(self):
+        ident,keys,_=self._prepared_school_image(native=True)
+        ready=dict(title='英语：朗读与第8页练习',goal='朗读Unit 2课文两遍；完成练习册第8页。',
+            advice='',state='ready',reason='原件要求明确。',purpose='learning',submission='',change='new',target_id='')
+        partial={k:v for k,v in ready.items() if k in {'title','goal','advice','state','reason'}}
+        with self.store._db() as c:
+            before=tuple(c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone())
+            original=tuple(c.execute('SELECT * FROM agent_message_drafts').fetchone())
+        with patch.object(agent.family_llm,'_chat_json',side_effect=[partial,ready]) as model:
+            failed=agent._refresh_school(self.app,self.store,self.now,1)
+            self.assertEqual(failed,dict(used=1,failed=1,created=0))
+            with self.store._db() as c:
+                self.assertEqual(tuple(c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone()),before)
+                self.assertEqual(tuple(c.execute('SELECT * FROM agent_message_drafts').fetchone()),original)
+                self.assertEqual(tuple(c.execute('SELECT attempts,done FROM agent_jobs WHERE id=?',('school-task:'+ident,)).fetchone()),(1,0))
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],0)
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=1),1)['used'],0)
+            self.assertEqual(model.call_count,1)
+            recovered=agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=6),1)
+            self.assertEqual(recovered,dict(used=1,failed=0,created=1))
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=7),1)['used'],0)
+            self.assertEqual(model.call_count,2)
+        with self.store._db() as c:
+            row=c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone()
+            self.assertEqual((row['state'],row['title'],row['body']),('accepted',ready['title'],ready['goal']))
+            self.assertEqual(tuple(c.execute('SELECT attempts,done FROM agent_jobs WHERE id=?',('school-task:'+ident,)).fetchone()),(2,1))
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+            self.assertEqual(tuple(c.execute('SELECT * FROM agent_message_drafts').fetchone()),original)
 
     def test_uncertain_school_original_keeps_understood_requirements_and_rejects_stale_bytes(self):
         ident,keys,value=self._prepared_school_image(uncertain=True)
@@ -587,7 +733,7 @@ class AgentTests(unittest.TestCase):
                 current=previous['cursor'] if previous else '10'
             self.store.ingest(dict(self.payload(expected=current,cursor=str(index),message=str(index)),source_id=source['id'],messages=[dict(id=str(index),time=self.now.isoformat(),sender='虚构老师',text=text,unread=unread,kind='text')]))
             tasks=agent.school_targets(self.app,self.store,cid)
-            raw=dict(proposals=[dict(title_quote=text,focus='school',due='',evidence=[dict(ref='message:'+source['id']+':'+str(index))],learning_subject='语文',learning_goal_id='',task_title='语文：观察记录',task_goal=text,task_advice='',task_state='ready',task_reason='原文要求',task_change=change,task_target_id=target)])
+            raw=dict(proposals=[school_proposal(title_quote=text,focus='school',due='',evidence=[dict(ref='message:'+source['id']+':'+str(index))],learning_subject='语文',learning_goal_id='',task_title='语文：观察记录',task_goal=text,task_advice='',task_state='ready',task_reason='原文要求',task_change=change,task_target_id=target,task_purpose='learning')])
             with patch.object(agent.family_llm,'_chat_json',return_value=raw):
                 items=agent._select('school',[dict(ref='message:'+source['id']+':'+str(index),text=text,time=self.now.isoformat(),content_incomplete=unread)],school_goals=[],school_tasks=tasks,as_of=self.now.date().isoformat())
             item=items[0];item.update(child_id=cid,kind='school')
@@ -655,8 +801,8 @@ class AgentTests(unittest.TestCase):
     def test_school_selection_discards_model_copy_of_existing_task(self):
         evidence=[dict(ref='message:synthetic-group:11',text='已签署',time=self.now.isoformat(),content_incomplete=False)]
         task=dict(id='task-1',title='语文：完成观察记录',goal='完成一份自己的观察记录。',due='',status='待跟进')
-        proposal=dict(title_quote='已处理',focus='school',due='',evidence=[dict(ref=evidence[0]['ref'])],learning_subject='',learning_goal_id='',
-            task_title=task['title'],task_goal=task['goal'],task_advice='',task_state='ready',task_reason='模型整理',task_change='new',task_target_id=task['id'])
+        proposal=school_proposal(title_quote='已处理',focus='school',due='',evidence=[dict(ref=evidence[0]['ref'])],learning_subject='',learning_goal_id='',
+            task_title=task['title'],task_goal=task['goal'],task_advice='',task_state='ready',task_reason='模型整理',task_change='new',task_target_id=task['id'],task_purpose='learning')
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):
             self.assertEqual(agent._select('school',evidence,school_goals=[],school_tasks=[task],as_of=self.now.date().isoformat()),[])
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[dict(proposal,task_goal='新增一项不同要求。')])):
@@ -678,7 +824,7 @@ class AgentTests(unittest.TestCase):
     def test_school_title_quote_falls_back_only_to_verified_source(self):
         ref = 'message:synthetic-group:11'
         source = '请带一本阅读材料，明天课堂使用。'
-        proposal = dict(title_quote='虚构' * 61, focus='school', due='', evidence=[dict(ref=ref)],
+        proposal = school_proposal(title_quote='虚构' * 61, focus='school', due='', evidence=[dict(ref=ref)],
                         learning_subject='', learning_goal_id='')
         with patch.object(agent.family_llm, '_chat_json', return_value={'proposals': [proposal]}):
             items = agent._select('school', [dict(ref=ref, text=source)], school_goals=[], as_of='2026-02-10')
@@ -698,8 +844,8 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(agent._school_brief(claimed,evidence=[dict(text=report+'\n请今天订正。')])['state'],'ready')
         ref='message:synthetic-group:old'
         source='今天家庭作业就是完成数学资料33和34页。'
-        proposal=dict(title_quote=source,focus='school',due='',evidence=[dict(ref=ref)],learning_subject='',learning_goal_id='',
-                      task_title='数学：完成资料33和34页',task_goal='完成资料33和34页',task_advice='',task_state='ready',task_reason='明确作业')
+        proposal=school_proposal(title_quote=source,focus='school',due='',evidence=[dict(ref=ref)],learning_subject='',learning_goal_id='',
+                      task_title='数学：完成资料33和34页',task_goal='完成资料33和34页',task_advice='',task_state='ready',task_reason='明确作业',task_purpose='learning')
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):
             item=agent._select('school',[dict(ref=ref,text=source,time='2026-09-23T18:19:39+08:00')],school_goals=[],as_of='2026-09-28')[0]
         self.assertEqual(item['due'],'2026-09-23')
@@ -711,7 +857,7 @@ class AgentTests(unittest.TestCase):
         with patch.object(agent.family_llm,'_chat_json',side_effect=AssertionError('acknowledgements need no model')):
             self.assertEqual(agent._select('school',receipts,school_goals=[],as_of='2026-09-28'),[])
         action=dict(ref='message:synthetic-group:action',text='请明天带练习本。',time='2026-09-28T17:01:00+08:00')
-        proposal=dict(title_quote=action['text'],focus='school',due='',evidence=[dict(ref=action['ref'])],learning_subject='',learning_goal_id='')
+        proposal=school_proposal(title_quote=action['text'],focus='school',due='',evidence=[dict(ref=action['ref'])],learning_subject='',learning_goal_id='')
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])) as model:
             self.assertEqual(len(agent._select('school',receipts+[action],school_goals=[],as_of='2026-09-28')),1)
         self.assertEqual(len(json.loads(model.call_args.args[0][1]['content'])['evidence']),1)
@@ -739,9 +885,10 @@ class AgentTests(unittest.TestCase):
             return {'proposal': dict(title='回看这次阅读', goal='能说出一次实际想法', action='一起说一说这次阅读中最想保留的一点。',
                 why_now='这条记录保留了本次实际表达。', estimated_minutes=10, review_on=value['as_of'],
                 evidence=[{'ref': value['evidence'][0]['ref'], 'quote': quote}])}
+        if 'learning_goals' in value:
+            return {'proposals': [school_proposal(evidence=[dict(ref=e['ref']) for e in value['evidence']])]}
         return {'proposals': [dict(title_quote='待核对原文', focus='school' if value['mode'] == 'school' else 'listen', due='',
-            **(dict(learning_subject='',learning_goal_id='') if 'learning_goals' in value else {}),
-            evidence=[{'ref': value['evidence'][0]['ref'], **({} if 'learning_goals' in value else {'quote': '待核对原文'})}])]}
+            evidence=[{'ref': value['evidence'][0]['ref'], 'quote': '待核对原文'}])]}
 
     def test_school_backfill_is_bounded_preserves_decisions_and_does_not_invent_work(self):
         cases=[('clear','语文：完成虚构习作。'),('legend','第一列：虚构练习订正记录。\n第二列：虚构课堂默写成绩。'),
@@ -761,7 +908,7 @@ class AgentTests(unittest.TestCase):
             with sqlite3.connect(self.app.DB,timeout=.1) as c:c.execute('BEGIN IMMEDIATE');c.rollback()
             ctx=json.loads(messages[-1]['content']);order.append(ctx['candidate']);self.assertEqual(ctx['as_of'],'2026-02-10')
             self.assertTrue(ctx['evidence'][0]['text']);self.assertEqual(ctx['child_id'],'child-1')
-            return dict(title='语文：完成虚构习作',goal='提交一篇自己的习作。',advice='可以先口述。',state='ready',reason='这是表格说明。' if ctx['candidate']=='legend' else '明确学校要求。')
+            return dict(title='语文：完成虚构习作',goal='提交一篇自己的习作。',advice='可以先口述。',state='ready',reason='这是表格说明。' if ctx['candidate']=='legend' else '明确学校要求。',change='new',target_id='',purpose='learning',submission='')
         with patch.object(agent.family_llm,'_chat_json',side_effect=model) as mocked:
             for i in range(3):self.assertEqual(agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=i+1),1)['used'],1)
             self.assertEqual(agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=6),1)['used'],0)
@@ -786,8 +933,8 @@ class AgentTests(unittest.TestCase):
         self.store.ingest(self.payload())
         def select(messages,schema,name,**kwargs):
             ctx=json.loads(messages[-1]['content']);self.assertEqual(ctx['mode'],'school')
-            return {'proposals':[dict(title_quote='待核对原文',focus='school',due='',learning_subject='',learning_goal_id='',
-                task_title='带阅读材料',task_goal='带一份阅读材料到校。',task_advice='可以提前放入书包。',task_state='ready',task_reason='全班明确要求。',evidence=[dict(ref=ctx['evidence'][0]['ref'])])]}
+            return {'proposals':[school_proposal(title_quote='待核对原文',focus='school',due='',learning_subject='',learning_goal_id='',
+                task_title='带阅读材料',task_goal='带一份阅读材料到校。',task_advice='可以提前放入书包。',task_state='ready',task_reason='全班明确要求。',task_purpose='admin',evidence=[dict(ref=ctx['evidence'][0]['ref'])])]}
         with patch.object(agent.family_llm,'_chat_json',side_effect=select) as mocked:
             agent.run_once(self.app,self.now);self.assertEqual(mocked.call_count,1)
             agent.run_once(self.app,self.now+dt.timedelta(minutes=1));self.assertEqual(mocked.call_count,1)
@@ -815,8 +962,8 @@ class AgentTests(unittest.TestCase):
         text='有没有家长能拍一下科学第8页的观察记录？谢谢'
         payload=self.payload();payload['messages'][0]['text']=text;self.store.ingest(payload)
         evidence=[dict(ref='message:synthetic-group:11',text=text,content_incomplete=False)]
-        wrong=dict(title_quote='科学第8页',focus='school',due='',learning_subject='科学',learning_goal_id='',
-            task_title='科学：核对观察记录',task_goal='找到观察记录并完成。',task_advice='',task_state='ready',task_reason='提到课程。',evidence=[dict(ref=evidence[0]['ref'])])
+        wrong=school_proposal(title_quote='科学第8页',focus='school',due='',learning_subject='科学',learning_goal_id='',
+            task_title='科学：核对观察记录',task_goal='找到观察记录并完成。',task_advice='',task_state='ready',task_reason='提到课程。',task_purpose='learning',evidence=[dict(ref=evidence[0]['ref'])])
         with patch.object(agent.family_llm,'_chat_json',return_value={'proposals':[wrong]}):
             selected=agent._select('school',evidence,school_goals=[])
         self.assertEqual(selected[0]['plan']['school_task']['state'],'reference')
@@ -910,7 +1057,7 @@ class AgentTests(unittest.TestCase):
         with self.app.connect() as c:ident=c.execute('SELECT id FROM agent_items WHERE job_id=?',(key,)).fetchone()[0]
         def racing(*args,**kwargs):
             self.store.act(dict(id=ident,action='dismiss'))
-            return dict(title='带材料',goal='准备材料',advice='',state='ready',reason='明确要求')
+            return dict(title='带材料',goal='准备材料',advice='',state='ready',reason='明确要求',change='new',target_id='',purpose='admin',submission='')
         with patch.object(agent.family_llm,'_chat_json',side_effect=racing):agent._refresh_school(self.app,self.store,self.now,1)
         with self.app.connect() as c:
             self.assertEqual(c.execute('SELECT state FROM agent_items WHERE id=?',(ident,)).fetchone()[0],'dismissed')
@@ -1056,12 +1203,14 @@ class AgentTests(unittest.TestCase):
             self.assertTrue(fingerprint)
             self.store._fail(old_key, now, fingerprint=fingerprint, reason='虚构模型输出未完成')
         seen = []
-        def select(mode, evidence, *args, **kwargs):
-            self.assertEqual(mode, 'school')
+        def select(messages, schema, name, *args, **kwargs):
+            request=json.loads(messages[-1]['content']);evidence=request['evidence']
+            self.assertEqual(request['mode'], 'school')
             self.assertLessEqual(len(evidence), 6)
             seen.append(len(evidence))
-            return []
-        with patch.object(agent, '_select', side_effect=select):
+            return dict(proposals=[school_proposal(title_quote=e['text'][:120],evidence=[dict(ref=e['ref'])],
+                task_state='review',task_reason='虚构夹具：具体材料要求待补充。') for e in evidence])
+        with patch.object(agent.family_llm, '_chat_json', side_effect=select):
             agent.run_once(self.app, self.now + dt.timedelta(minutes=18))
             agent.run_once(self.app, self.now + dt.timedelta(minutes=19))
         self.assertEqual(seen, [6, 6])
@@ -1460,7 +1609,7 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
             self.assertEqual(request['as_of'], '2026-09-09')
             self.assertEqual([row['time'] for row in request['evidence']], [row[3] for row in cases])
             self.assertIn('按各条消息的发送日期理解', messages[0]['content'])
-            return {'proposals': [dict(title_quote=text, focus='school', due=due, learning_subject='', learning_goal_id='',
+            return {'proposals': [school_proposal(title_quote=text, focus='school', due=due, learning_subject='', learning_goal_id='',
                 evidence=[dict(ref='message:' + self.source['id'] + ':' + ident)])
                 for ident, text, due, stamp in cases]}
 
@@ -1506,7 +1655,7 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
         text='今天英语作业：抄写Unit 3单词。本周五（2月13日）英语单元测验，范围Unit 1到Unit 3。另外下周一美术课请带一盒水彩笔。'
         payload=self.payload(cursor='11');payload['messages'][0].update(text=text,time=sent);self.store.ingest(payload)
         def model(*args,**kwargs):
-            base=dict(title_quote=text,focus='school',learning_subject='',learning_goal_id='',task_goal=text,task_advice='',task_reason='明确要求。',task_change='new',task_target_id='',evidence=[dict(ref='message:synthetic-group:11')])
+            base=school_proposal(title_quote=text,focus='school',learning_subject='',learning_goal_id='',task_goal=text,task_advice='',task_reason='明确要求。',task_change='new',task_target_id='',task_purpose='learning',evidence=[dict(ref='message:synthetic-group:11')])
             return {'proposals':[dict(base,due='',task_title='英语：抄写Unit 3单词',task_state='ready'),
                                  dict(base,due='2026-02-13',task_title='英语：Unit1–3单元测验（周五）',task_state='ready'),
                                  dict(base,due='2026-02-16',task_title='美术：下周一带一盒水彩笔',task_state='ready'),
@@ -1526,8 +1675,8 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
         payload['messages'].extend([dict(id='12',time=self.now.isoformat(),kind='text',sender='虚构老师',text='请填回执，截止时间：2026 年 2 月 12 日。',unread=False),
                                    dict(id='13',time=self.now.isoformat(),kind='text',sender='虚构老师',text='2026-02-11开始阅读活动，请准备阅读材料，提交日期另行通知。',unread=False)]);self.store.ingest(payload)
         def model(*args,**kwargs):
-            return {'proposals':[dict(title_quote=r['text'],focus='school',due=due,learning_subject='',learning_goal_id='',
-                task_title=title,task_goal=r['text'],task_advice='',task_state='ready',task_reason='明确要求。',evidence=[dict(ref='message:synthetic-group:'+r['id'])])
+            return {'proposals':[school_proposal(title_quote=r['text'],focus='school',due=due,learning_subject='',learning_goal_id='',
+                task_title=title,task_goal=r['text'],task_advice='',task_state='ready',task_reason='明确要求。',task_purpose='admin',evidence=[dict(ref='message:synthetic-group:'+r['id'])])
                 for r,due,title in zip(payload['messages'],['2026-02-31','2026-02-12','2026-02-11'],['准备阅读材料','填写回执','活动准备'])]}
         with patch.object(agent.family_llm,'_chat_json',side_effect=model) as called:
             result=agent.run_once(self.app,self.now);self.assertEqual(result['failed'],0);self.assertEqual(called.call_count,1)
@@ -1545,7 +1694,16 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
         payload = self.payload(); payload['messages'][0].update(kind='image', text='图片原件未读', unread=True)
         self.store.ingest(payload); self.store.ingest(payload)
         with patch.object(agent.family_llm, '_chat_json', return_value={'proposals': []}):
-            self.assertEqual(agent.run_once(self.app, self.now)['processed'], 1)
+            failed=agent.run_once(self.app,self.now)
+            self.assertEqual((failed['failed'],failed['processed']),(1,0))
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT processed FROM agent_messages').fetchone()[0],0)
+        pending=school_proposal(title_quote='图片原件未读',evidence=[dict(ref='message:'+self.source['id']+':11')],
+            task_state='review',task_reason='图片原件内容尚未读取。')
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[pending])) as model:
+            self.assertEqual(agent.run_once(self.app,self.now+dt.timedelta(minutes=6))['processed'],1)
+            self.assertEqual(agent.run_once(self.app,self.now+dt.timedelta(minutes=7))['processed'],0)
+            self.assertEqual(model.call_count,1)
         self.assertEqual(self.store.snapshot()['sources'][0]['unread_count'], 1)
         with self.app.connect() as c:
             self.assertEqual(c.execute('SELECT processed FROM agent_messages').fetchone()[0], 1)
