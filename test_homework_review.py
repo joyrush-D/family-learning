@@ -14,7 +14,7 @@ from test_print import png
 
 
 def item(**changes):
-    return dict(label='第1题',question='',student_answer='B',answer='教师参考：B',judgment='correct',
+    return dict(label='第1题',question='',student_answer='B',answer='教师参考：B',judgment='correct',question_kind='objective',
                 error_reason='',possible_cause='',steps='',uncertainty='')|changes
 
 
@@ -122,6 +122,36 @@ def run():
                     reference_documents=[dict(name='synthetic-reference.txt',text='1. B')])
             assert draft['questions'][0]['answer']=='教师参考：B'
             assert draft['unknown_items']==2 and draft['wrong_items']==0
+            # A reference-word match does not establish an unseen subjective requirement.
+            answer_only=[item(),item(label='Q2',question_kind='subjective',student_answer='Plants get energy from sunlight.',
+                answer='教师参考：Plants get energy from sunlight.'),
+                item(label='Q3',judgment='unknown',student_answer='2',answer='教师参考：2 m',
+                     steps='如果要单位，就补写2 m。',uncertainty='原题单位格式未提供')]
+            with patch.object(family_llm,'_chat_json',return_value=dict(items=answer_only,coverage='仅答题纸',comparison='上一轮三题均正确')):
+                limited=family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=True,
+                    reference_documents=[dict(name='synthetic-answer-only.txt',text='Q1 B; Q2 Plants get energy from sunlight.; Q3 2 m')])
+            assert [q['judgment'] for q in limited['questions']]==['correct','unknown','unknown']
+            assert limited['unknown_items']==2 and limited['wrong_items']==0
+            assert limited['questions'][1]['student_answer']=='Plants get energy from sunlight.'
+            assert limited['questions'][1]['answer']=='教师参考：Plants get energy from sunlight.'
+            assert all(not q['steps'] and not q['error_reason'] and not q['possible_cause'] for q in limited['questions'][1:])
+            assert 'Q2' in limited['comparison'] and 'Q3' in limited['comparison'] and '不能沿用' in limited['comparison']
+            assert '上一轮三题均正确' not in limited['comparison']
+            for kind in ('unknown','subjective'):
+                with patch.object(family_llm,'_chat_json',return_value=dict(items=[item(question_kind=kind)],coverage='仅答题纸')):
+                    uncertain=family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=True,
+                        reference_documents=[dict(name='synthetic-unknown-kind.txt',text='Q1 B')])
+                assert uncertain['unknown_items']==1 and uncertain['questions'][0]['answer']=='教师参考：B'
+            with patch.object(family_llm,'_chat_json',return_value=dict(items=[item(question_kind='subjective',question='明确题干：说明能量来源')],coverage='有题干')):
+                complete=family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=True,
+                    reference_documents=[dict(name='synthetic-complete-question.txt',text='Q1 B')])
+            assert complete['questions'][0]['judgment']=='correct','readable subjective requirements keep the existing full-question path'
+            missing_kind=item();missing_kind.pop('question_kind')
+            with patch.object(family_llm,'_chat_json',return_value=dict(items=[missing_kind],coverage='无题型')):
+                try:family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=True,
+                    reference_documents=[dict(name='synthetic-missing-kind.txt',text='Q1 B')])
+                except family_llm.LLMDraftError:pass
+                else:raise AssertionError('missing question-kind basis must not keep a definite grade')
             # Every material participates in the save guard, not just the answer photo.
             feedback=dict(task_id=task['id'],child='示例甲',day='2026-10-01',request_key='synthetic-reviewed-feedback',
                           note='虚构已核对参考比较，原题要求待补',attachments=[answer,reference],review_basis=basis)

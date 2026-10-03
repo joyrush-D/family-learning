@@ -227,7 +227,7 @@ class PrintTests(unittest.TestCase):
         self.assertEqual(fingerprint,printing.packet_sha([image['sha256'] for image in images]))
         with self.assertRaises(printing.PrintError):self.store.images_for_draft(sources+[sources[0]],limit=8)
         with self.assertRaises(printing.PrintError):self.store.images_for_draft([sources[0],sources[0]],limit=8)
-        item=dict(label='第1题',question='虚构题面',student_answer='B',answer='B',judgment='correct',
+        item=dict(label='第1题',question='虚构题面',student_answer='B',answer='B',judgment='correct',question_kind='objective',
                   error_reason='',possible_cause='',steps='',uncertainty='')
         with patch.object(family_llm,'_chat_json',return_value=dict(items=[item],coverage='仅第1题，其余未核对')) as chat:
             draft=family_llm.homework_reference_draft([dict(mime=i['mime'],data=i['data']) for i in images],review=True)
