@@ -7,11 +7,12 @@ async function fits(page){
  assert.equal(await page.locator('dialog[open]').evaluateAll(items=>items.some(d=>d.scrollWidth>d.clientWidth)),false,'no dialog overflow');
  assert.equal(await page.locator('[data-school-record-agent]:visible,[data-school-record-task]:visible,#recordForm button:visible').evaluateAll(items=>items.some(b=>b.getBoundingClientRect().height<40)),false,'school learning actions are usable touch targets');
 }
-async function openTaskRecordFromCard(page,id){
- const button=page.locator('[data-school-record-task="'+id+'"]'),details=page.locator('.task-more').filter({has:button});
+async function clickRecordFromCard(page,button){
+ const details=page.locator('.task-more').filter({has:button});
  if(await details.count()&&await details.getAttribute('open')===null)await details.locator(':scope > summary').click();
  await button.click();
 }
+async function openTaskRecordFromCard(page,id){await clickRecordFromCard(page,page.locator('[data-school-record-task="'+id+'"]'))}
 async function proof(page,name){if(process.env.AGENT_UI_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.mkdir(process.env.AGENT_UI_PROOF_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.AGENT_UI_PROOF_DIR,name+'.png')})}}
 const fixture=String.raw`
 import tempfile,os,json,datetime,io,struct,zlib
@@ -267,14 +268,14 @@ with tempfile.TemporaryDirectory(prefix='synthetic-agent-ui-') as tmp:
   const draftButton=page.locator('[data-agent-item] [data-school-original-ref="message:synthetic:draft:'+width+'"]').first();await draftButton.click();
   const draftDialog=page.locator('#schoolOriginalDialog');await draftDialog.locator('[data-school-material-draft]').waitFor();
   assert.match(await draftDialog.locator('[data-school-material-draft]').innerText(),/不能换算成0分/);assert.equal(await draftDialog.locator('[data-school-material-draft] img').count(),0);await fits(page);await proof(page,'school-material-draft-'+width);
-  const beforeDraft=await state();assert.equal(await draftDialog.locator('[data-school-material-record]').count(),0,'teacher original never pre-fills child performance');await draftDialog.locator('[data-school-original-close]').click();const draftItem=beforeDraft.agent.items.find(i=>i.evidence?.some(e=>e.ref==='message:synthetic:draft:'+width));await page.locator('[data-agent-item="'+draftItem.id+'"] [data-school-record-agent]').click();await page.locator('#recordDialog').waitFor();
+  const beforeDraft=await state();assert.equal(await draftDialog.locator('[data-school-material-record]').count(),0,'teacher original never pre-fills child performance');await draftDialog.locator('[data-school-original-close]').click();const draftItem=beforeDraft.agent.items.find(i=>i.evidence?.some(e=>e.ref==='message:synthetic:draft:'+width));await clickRecordFromCard(page,page.locator('[data-agent-item="'+draftItem.id+'"] [data-school-record-agent]'));await page.locator('#recordDialog').waitFor();
   const draftForm=page.locator('#recordForm');assert.equal(await draftForm.locator('[name="child"]').inputValue(),'示例星星');assert.equal(await draftForm.locator('[name="day"]').inputValue(),'');assert.equal(await draftForm.locator('[name="subject"]').inputValue(),'');assert.equal(await draftForm.locator('[name="score"]').inputValue(),'');assert.equal(await draftForm.locator('[name="source"]').inputValue(),'message:synthetic:draft:'+width);assert.match(await draftForm.locator('[name="note"]').inputValue(),/待核对/);assert.equal((await state()).records.length,beforeDraft.records.length);
   await draftForm.locator('[name="day"]').fill(beforeDraft.today);await draftForm.locator('[name="note"]').fill('虚构家长核对：原表只有F，具体错误还未核实。');
   let draftFailed=false;await page.route('**/api/record',async route=>{if(!draftFailed){draftFailed=true;return route.fulfill({status:503,json:{error:'虚构保存失败'}})}return route.continue()});
   await draftForm.locator('[type="submit"]').click();await until(async()=>/虚构保存失败/.test(await page.locator('#recordError').innerText()),'draft save failure preserves form');assert.match(await draftForm.locator('[name="note"]').inputValue(),/虚构家长核对/);
   await draftForm.locator('[type="submit"]').click();await page.locator('#recordDialog').waitFor({state:'hidden'});await page.unroute('**/api/record');
   let savedDraft=(await state()).records.filter(r=>r.source==='message:synthetic:draft:'+width);assert.equal(savedDraft.length,1);assert.deepEqual(savedDraft[0].attachments,[],'teacher original is not silently copied to child work');assert.equal(savedDraft[0].score,null);assert.equal(savedDraft[0].child,'示例星星');assert.deepEqual((await state()).tasks,beforeDraft.tasks,'a draft record does not complete or create tasks');
-  await page.reload();await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();await page.locator('[data-agent-item="'+draftItem.id+'"] [data-school-record-agent]').click();await until(async()=>!(await page.locator('#recordDialog').isVisible()),'existing record is reopened rather than recreated');await until(async()=>/虚构家长核对/.test(await page.locator('#content').innerText()),'saved record reopened');assert.equal((await state()).records.filter(r=>r.source==='message:synthetic:draft:'+width).length,1);await fits(page);await proof(page,'school-material-record-'+width);
+  await page.reload();await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();await clickRecordFromCard(page,page.locator('[data-agent-item="'+draftItem.id+'"] [data-school-record-agent]'));await until(async()=>!(await page.locator('#recordDialog').isVisible()),'existing record is reopened rather than recreated');await until(async()=>/虚构家长核对/.test(await page.locator('#content').innerText()),'saved record reopened');assert.equal((await state()).records.filter(r=>r.source==='message:synthetic:draft:'+width).length,1);await fits(page);await proof(page,'school-material-record-'+width);
   await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();
   const originalRecordsBefore=(await state()).records; // The preceding draft journey explicitly saved one record.
   let originalView=await readOriginal('child-1');assert.equal(originalView.status,200);assert.equal(originalView.value.child_id,'child-1');assert.equal(originalView.value.source_id,'synthetic');assert.equal(originalView.value.message_id,'original:'+width);assert.equal(originalView.value.message.unread,true);assert.deepEqual(originalView.value.attachments,[]);const wrongChild=await readOriginal('child-2');assert.notEqual(wrongChild.status,200,'another child cannot read this message');
@@ -287,11 +288,11 @@ with tempfile.TemporaryDirectory(prefix='synthetic-agent-ui-') as tmp:
   assert.ok(school&&school.kind==='school');
   // A malformed source cannot fall through to the general form's default child.
   await sourceButton.evaluate(b=>b.setAttribute('data-school-record-agent',''));
-  await page.locator('[data-school-record-agent=""]').click();await delay(150);
+  await clickRecordFromCard(page,page.locator('[data-school-record-agent=""]'));await delay(150);
   assert.equal(await page.locator('#recordDialog').isVisible(),false,'empty source ID never opens a default-child record');
   assert.equal((await state()).records.length,before.records.length);
   await page.reload();await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();await page.locator('#content h1').waitFor();
-  await page.locator('[data-school-record-agent="'+schoolID+'"]').click();await page.locator('#recordDialog').waitFor();
+  await clickRecordFromCard(page,page.locator('[data-school-record-agent="'+schoolID+'"]'));await page.locator('#recordDialog').waitFor();
   const record=page.locator('#recordForm');
   assert.equal(await record.locator('[name="child"]').inputValue(),'示例星星');
   assert.equal(await record.locator('[name="category"]').inputValue(),'学习进展');
