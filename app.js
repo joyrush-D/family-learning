@@ -1574,6 +1574,10 @@ function schoolMessageIdentity(ref,childID){
 }
 function schoolOriginalButtons(refs,childID,label='原通知与原件',publications=[]){
  const entries=[...new Set(refs)].filter(ref=>schoolMessageIdentity(ref,childID));
+ if(entries.length>1){
+  const publisher=ref=>{const p=publications.find(p=>p.ref===ref);return p?(String(p.sender||'').trim()||'发布者未记录'):''},names=[...new Set(entries.map(publisher).filter(Boolean))];
+  return `<div class="toolbar school-original-group">${names.length?`<span class="school-publication-context">${names.map(esc).join('、')}</span>`:''}${entries.map((ref,i)=>{const description=(publisher(ref)?publisher(ref)+' · ':'')+'第 '+(i+1)+' 条'+label;return `<button data-school-original-ref="${esc(ref)}" data-school-original-child="${esc(childID)}" aria-label="${esc(description)}" title="${esc(description)}">原件 ${i+1}</button>`}).join('')}</div>`;
+ }
  return entries.length?`<div class="toolbar">${entries.map((ref,i)=>{const p=publications.find(p=>p.ref===ref);return `<button data-school-original-ref="${esc(ref)}" data-school-original-child="${esc(childID)}">${p?`<span class="school-publication-context">${esc(String(p.sender||'').trim()||'发布者未记录')}</span>`:''}${entries.length===1?label:'第 '+(i+1)+' 条'+label}</button>`}).join('')}</div>`:'';
 }
 // Show the saved preparation beside its task. Reading never schedules a model, collection or record write.

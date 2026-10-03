@@ -292,7 +292,7 @@ test('unfinished school homework due for review appears once in the direct revie
 
 // Shared task-list contract: known completion steps stay visible; group names stay in the original-message view.
 function taskListTextHarness(){
- const app=readFileSync(__dirname+'/app.js','utf8'),ctx=vm.createContext({esc:escape,schoolMessageIdentity:(ref,child)=>ref==='message:synthetic:one'&&child==='child-a'});
+ const app=readFileSync(__dirname+'/app.js','utf8'),ctx=vm.createContext({esc:escape,schoolMessageIdentity:(ref,child)=>/^message:synthetic:/.test(ref)&&child==='child-a'});
  vm.runInContext(app.slice(app.indexOf('function requirementHTML('),app.indexOf('function taskFocus(')),ctx);
  vm.runInContext(app.slice(app.indexOf('function schoolOriginalButtons('),app.indexOf('// Show the saved preparation beside its task.')),ctx);
  return ctx;
@@ -310,4 +310,13 @@ test('publisher context omits class and group names but preserves original refer
  assert.equal(publication.source_name,'虚构学校群 <甲班>','saved source metadata is unchanged');
  assert.ok(h.schoolOriginalButtons([publication.ref],'child-a','查看作业原件',[{...publication,sender:'   '}]).includes('发布者未记录'));
  assert.equal(h.schoolOriginalButtons([publication.ref],'child-b','查看作业原件',[publication]),'','other child source is not exposed');
+});
+test('multiple originals show publisher once while keeping each message entry',()=>{
+ const h=taskListTextHarness(),refs=['one','two','three','four'].map(x=>'message:synthetic:'+x),publications=refs.map(ref=>({ref,sender:'示例英语发布者',source_name:'虚构班级'})),html=h.schoolOriginalButtons(refs,'child-a','查看作业原件',publications);
+ assert.equal((html.match(/class="school-publication-context"/g)||[]).length,1,'one visible publication context for the saved nicknames');
+ assert.ok(html.includes('school-original-group'));
+ for(let i=0;i<refs.length;i++){assert.ok(html.includes('data-school-original-ref="'+refs[i]+'"'));assert.ok(html.includes('>原件 '+(i+1)+'</button>'));assert.ok(html.includes('第 '+(i+1)+' 条查看作业原件'));}
+ assert.equal(h.schoolOriginalButtons(refs,'child-b','查看作业原件',publications),'','other child remains excluded');
+ assert.equal(publications.length,4,'display grouping does not change saved source relations');
+ assert.doesNotMatch(html,/虚构班级|发言人：/);
 });
