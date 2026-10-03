@@ -175,6 +175,52 @@ class AgentTests(unittest.TestCase):
     def test_saved_school_draft_does_not_auto_accept_after_source_pause(self):
         self._school_auto_accept_after_pause(False)
 
+    def _pending_school_refresh_after_pause(self, phase, disable_agent):
+        self.store.ingest(self.payload())
+        reply=dict(title='带阅读材料',goal='明天带阅读材料。',advice='',state='ready',reason='要求明确。',
+                   purpose='admin',submission='',change='new',target_id='')
+        brief=dict(reply,policy=agent.SCHOOL_TASK_POLICY-1)
+        item=dict(kind='school',child_id='child-1',title=reply['title'],body=reply['goal'],due='2026-02-11',
+                  evidence=[dict(ref='message:'+self.source['id']+':11',text=self.payload()['messages'][0]['text'])],
+                  plan=dict(school_task=brief))
+        self.store._save('synthetic-pending-source-race','fixture',[item],self.now,[(self.source['id'],'11')])
+        def pause():
+            self.source['enabled']=disable_agent;self.config(enabled=not disable_agent)
+        if phase=='before':pause()
+        def model(*args,**kwargs):
+            if phase=='during':pause()
+            return reply
+        with patch.object(agent.family_llm,'_chat_json',side_effect=model) as called:
+            rejected=agent._refresh_school(self.app,self.store,self.now,1)
+        self.assertEqual(called.call_count,0 if phase=='before' else 1)
+        self.assertEqual(rejected['created'],0)
+        with self.app.connect() as c:
+            saved,=c.execute('SELECT state,plan FROM agent_items').fetchall()
+            self.assertEqual((saved['state'],json.loads(saved['plan'])),('pending',item['plan']))
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT processed FROM agent_messages').fetchone()[0],1)
+        self.source['enabled']=True;self.config()
+        with patch.object(agent.family_llm,'_chat_json',return_value=reply) as called:
+            recovered=agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=1),1)
+            repeated=agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=2),1)
+        self.assertEqual(called.call_count,1)
+        self.assertEqual((recovered['created'],repeated['created']),(1,0))
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT cursor FROM agent_sources').fetchone()[0],'11')
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+
+    def test_pending_school_refresh_makes_no_call_after_agent_pause(self):
+        self._pending_school_refresh_after_pause('before',True)
+
+    def test_pending_school_refresh_makes_no_call_after_source_pause(self):
+        self._pending_school_refresh_after_pause('before',False)
+
+    def test_pending_school_refresh_keeps_old_draft_if_agent_paused_during_model(self):
+        self._pending_school_refresh_after_pause('during',True)
+
+    def test_pending_school_refresh_keeps_old_draft_if_source_paused_during_model(self):
+        self._pending_school_refresh_after_pause('during',False)
+
     def test_separate_school_conclusions_do_not_borrow_related_attachments(self):
         sent='2026-10-05T16:00:00+08:00'
         refs=['message:synthetic-minutes:'+str(i) for i in range(1,6)]
