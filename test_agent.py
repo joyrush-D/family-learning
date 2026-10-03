@@ -40,6 +40,19 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(len(items),6)
         self.assertEqual({q['ref'] for item in items for q in item['evidence']},{e['ref'] for e in evidence})
 
+    def test_school_routing_rejects_silently_omitted_original_messages(self):
+        evidence=[];proposals=[]
+        for i in range(1,7):
+            ref='message:synthetic:'+str(i)
+            evidence.append(dict(ref=ref,text='英语：完成虚构独立练习'+str(i)+'。',time=self.now.isoformat(),content_incomplete=False))
+            proposals.append(dict(title_quote='英语',focus='school',due='',evidence=[dict(ref=ref)],
+                learning_subject='英语',learning_goal_id='',task_title='英语：独立练习'+str(i),
+                task_goal='完成虚构独立练习'+str(i)+'。',task_advice='',task_state='ready',task_reason='原文要求明确。',
+                task_change='new',task_target_id='',task_purpose='learning',task_submission=''))
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals[:5])):
+            with self.assertRaises(agent.AgentError):
+                agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+
     def test_one_school_requirement_can_keep_six_original_messages(self):
         evidence=[dict(ref='message:synthetic:'+str(i),text='语文作业：朗读。' if i==0 else '本次朗读要求的补充说明 '+str(i),
             time=self.now.isoformat(),sender='示例语文老师',publisher='publisher:synthetic',content_incomplete=False) for i in range(6)]
