@@ -1571,6 +1571,7 @@ def apply_school_change(app, store, obj, *, school_auto=False):
             from family_agenda import sent_day
             if (checked.get('state')!='ready' or checked.get('target_basis')!=basis or checked.get('input_basis')!=brief.get('input_basis') or update
                     or app.task_status(task,None) in app.TASK_CLOSED
+                    or basis['due'] and basis['due']<_now().date().isoformat()
                     or any(sent_day(e.get('time'))!=_now().date().isoformat() for e in original)
                     or row['due'] and row['due']!=task['agenda']['due_on']):
                 raise AgentError('补充的当前原文、日期或唯一归属无法核对，原要求保留',409)
@@ -1775,6 +1776,9 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 # deadline. The supplement has no date; the immutable target
                 # basis preserves its own deadline and is rechecked on save.
                 uncertain_due=False
+            if (brief.get('change')=='append' and brief['state']=='ready' and brief.get('target_basis')
+                    and brief['target_basis']['due'] and brief['target_basis']['due']<as_of):
+                brief.update(state='review',reason='原事项截止已过，是否仍需办理补充要求待核对；原要求、安排和反馈保留。')
             accounted.update(e['ref'] for e in cited)
             status_reply=cited and all(e['text'].strip('。！! ') in {'已签署','已完成','已处理','已确认','已提交','已报名','已打卡','已阅读','已知悉'} for e in cited)
             if status_reply and raw_change=='new' and target and brief['title'].strip()==target['title'].strip() and brief['goal'].strip()==target['goal'].strip() and (not due or due==target.get('due','')):

@@ -1519,6 +1519,20 @@ class AgentTests(unittest.TestCase):
             title='数学：教材补充',due='2026-02-11',publisher='synthetic-math-b')
         self.assertEqual(json.loads(ambiguous['plan'])['school_task']['state'],'review')
 
+    def test_school_append_current_message_does_not_reactivate_expired_target(self):
+        original,task_id=self._school_append_original()
+        self.now+=dt.timedelta(days=3)
+        for index,due in ((12,''),(13,'2026-02-11')):
+            with self.subTest(model_due=due):
+                row=self._school_append_candidate(index,'只补朗读：确认上传成功。',change='append',target=task_id,due=due)
+                self.assertEqual(json.loads(row['plan'])['school_task']['state'],'review')
+                with self.assertRaises(agent.AgentError):self._school_append_auto(row)
+        with self.app.connect() as c:
+            self.assertEqual(len(self.app.tasks(c)),1)
+            self.assertEqual(self.app.tasks(c)[0]['action'],original['body'])
+            self.assertEqual(self.app.tasks(c)[0]['agenda']['due_on'],'2026-02-11')
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+
     def test_school_append_rejects_original_corrected_or_recalled_after_collection(self):
         original,task_id=self._school_append_original()
         pending=self._school_append_candidate(12,'只补朗读：录音上传后确认上传成功。',change='append',target=task_id)
