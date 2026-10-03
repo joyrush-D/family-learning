@@ -1103,7 +1103,7 @@ class GoalTests(unittest.TestCase):
             if not school:return result
             result['proposal'].update(title='习作：介绍一处喜欢的地方',goal='按老师要求写出2-3个理由，每段有中心句',
                 action='第一步：先口述想介绍的地方和两个理由。\n第二步：给每个理由说一句中心句。\n第三步：补上当时看到、听到或闻到的。\n第四步：对照老师要求自查。',
-                mastery_check='本次要求自查：理由有2-3个、每段有中心句、用了自己的感官体验。学习表现记录：孩子原话、实际帮助、卡住的步骤。',
+                mastery_check='学习表现记录：孩子原话、实际帮助、卡住的步骤；完成习作不等于独立掌握。',
                 evidence=[dict(ref=school[-1]['ref'],quote=quote)])
             result['proposal'].update(changes);return result
         def model(messages,schema,name,timeout,**kwargs):
@@ -1137,11 +1137,15 @@ class GoalTests(unittest.TestCase):
         pause=plan(value);pause['proposal'].update(choice='暂停',estimated_minutes=None,mastery_check='',evidence=[dict(ref=background,quote='尚无作答证据')])
         self.assertEqual(self.store._proposal(pause,ctx,self.now)['choice'],'暂停')
         self.action('approve',id=g['id'],expected_version=g['version'],proposal_id=g['pending']['id'],context_hash=g['context_hash'])
-        g=goal();confirmed=g['current_plan'];self.assertIn('本次要求自查',confirmed['mastery_check']);self.assertTrue(confirmed['review_on'])
+        g=goal();confirmed=g['current_plan'];self.assertIn('学习表现记录',confirmed['mastery_check']);self.assertTrue(confirmed['review_on'])
+        requirement,=g['school_tasks']
+        self.assertEqual(requirement['goal'],next(t for t in self.app.tasks() if t['id']==requirement['id'])['action'])
+        for condition in ('2–3个理由','每段有中心句','感官体验','篇幅与截止未说明'):
+            self.assertIn(condition,requirement['goal'])
         self.assertEqual([(e['quote'],e['available'],e['quote_changed']) for e in g['reviewed_evidence']],[(quote,True,False)])
         card=lambda:json.dumps([dict(r) for r in self.app.connect().execute('SELECT * FROM manual_tasks WHERE id=?',(g['task_id'],))],ensure_ascii=False)
         shown=card();self.assertIn('第一步',shown)
-        for private in ('本次要求自查',g['assessment'],g['hypotheses_detail'][0]['reason']):self.assertNotIn(private,shown)
+        for private in ('学习表现记录',g['assessment'],g['hypotheses_detail'][0]['reason']):self.assertNotIn(private,shown)
         # Feedback proposes an adjustment; the formal plan and the child's task card wait for the parent.
         self.action('feedback',id=g['id'],day=self.now.date().isoformat(),source='家长转述孩子',note='孩子原话：我喜欢外婆家的院子，因为有桂花香；第二个理由想不出来。')
         def adjusted(value):
