@@ -1415,8 +1415,12 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(brief['submission'],'提交至班级作业区')
         # Unread content cannot justify rewriting either field.
         value.update(goal='交至数学本。',submission='交至数学本')
-        unread=agent._school_brief(value,incomplete=True,evidence=[dict(ref='message:synthetic-group:31',text='交数学本。',kind='text',unread=True)])
-        self.assertEqual(unread['state'],'review');self.assertIn('交至数学本',unread.get('submission',''))
+        original=dict(ref='message:synthetic-group:31',text='交数学本。',kind='text',unread=True)
+        with patch.object(agent,'_school_handback',wraps=agent._school_handback) as rewrite:
+            unread=agent._school_brief(value,incomplete=True,evidence=[original])
+            rewrite.assert_not_called()
+        self.assertEqual(unread['state'],'review');self.assertEqual(unread['goal'],'')
+        self.assertEqual(original['text'],'交数学本。')
 
     def test_mixed_supplement_does_not_swallow_a_separate_assignment(self):
         original,task_id=self._school_append_original()
