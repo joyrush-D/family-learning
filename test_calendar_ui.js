@@ -268,3 +268,14 @@ test('source health and goal citations keep the same child while a save is unres
  for(const handler of handlers)handler({target:{closest:selector=>({dataset:selector==='[data-goal-id]'?{goalId:'synthetic-goal-b',goalChild:'child-b'}:{diagnosisChild:'child-b'}})}});
  assert.equal(vm.runInContext('page',ctx),'study');assert.equal(vm.runInContext('goalSelectedID',ctx),'');assert.equal(vm.runInContext('goalFocus',ctx),'');
 });
+
+test('unfinished school homework remains exposed across publication days without changing dates',()=>{
+ const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.agendaItemHTML=x=>'<article data-notice="'+x.id+'">'+x.title+'</article>';
+ const row=(id,day,extra={})=>({id,kind:'school',child_ids:['child-a'],title:id,closed:false,agenda:{category:'homework',box:'inbox',published_on:day,due_on:'',scheduled_on:''},...extra});
+ const rows=[row('older-undated','2026-09-02'),row('newer-undated','2026-09-07'),row('older-overdue','2026-09-03',{agenda:{category:'homework',box:'inbox',published_on:'2026-09-03',due_on:'2026-09-04',scheduled_on:''}}),row('closed','2026-09-02',{closed:true}),row('sibling','2026-09-03',{child_ids:['child-b']})];
+ d.today_calendar={inbox:rows,events:[],timetables:[]};h.ctx.child='小溪';
+ const html=h.ctx.todayTasksHTML(),received=html.split('today-recent-homework">')[1]?.split('</section>')[0]||'';
+ for(const id of ['older-undated','newer-undated','older-overdue']){assert.match(received,new RegExp('data-notice="'+id+'"'));assert.equal((html.match(new RegExp('data-notice="'+id+'"','g'))||[]).length,1)}
+ assert.doesNotMatch(html,/data-notice="closed"|data-notice="sibling"/);assert.match(html,/今日作业 · 0/);
+ assert.equal(rows[0].agenda.published_on,'2026-09-02');assert.equal(rows[0].agenda.due_on,'');assert.equal(rows[2].agenda.due_on,'2026-09-04');
+});
