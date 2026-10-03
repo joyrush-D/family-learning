@@ -58,6 +58,31 @@ class AgendaTest(unittest.TestCase):
         app.calendar_snapshot('2026-09-12','2026-09-13')
         with app.connect() as c:self.assertEqual(before,'\n'.join(c.iterdump()))
 
+    def test_counted_reading_after_a_unit_name_keeps_its_original_action_date(self):
+        cases=[('明天Unit 3课文读两遍','2026-10-06'),
+               ('明天（10月6日）Unit 3课文读两遍，朗读录音上传班级作业区','2026-10-06'),
+               ('10月7日Unit 3课文读2次','2026-10-07')]
+        for text,expected in cases:
+            with self.subTest(text=text):self.assertEqual(agenda.deadline(text,'2026-10-05'),expected)
+        notice='明天（10月6日）Unit 3课文读两遍，朗读录音上传班级作业区；10月7日前完成练习卷第1–4题，做完检查。'
+        self.assertEqual(agenda.deadlines(notice,'2026-10-05'),{'2026-10-06','2026-10-07'})
+        self.assertEqual(agenda.deadline(notice,'2026-10-05'),'','mixed dates still need an exact per-action basis')
+
+    def test_reading_dates_do_not_cross_clause_or_another_date_or_invent_an_action(self):
+        for text in ['明天Unit 3课文。读两遍','明天Unit 3课文；读两遍',
+                     '明天Unit 3课文，读两遍','10月6日Unit 3资料已发',
+                     '明天公布Unit 3复习资料','明天（10月6日）Unit 3课文资料']:
+            with self.subTest(text=text):self.assertEqual(agenda.deadline(text,'2026-10-05'),'')
+        self.assertEqual(agenda.deadlines('明天10月7日Unit 3课文读两遍','2026-10-05'),{'2026-10-07'})
+        self.assertEqual(agenda.deadline('明天Unit 3课文读两遍',''),'')
+
+    def test_relative_and_parenthetical_reading_dates_must_agree(self):
+        self.assertEqual(agenda.deadlines('明天（10月6日）Unit 3课文读两遍','2026-10-05'),{'2026-10-06'})
+        for text in ['明天（10月7日）Unit 3课文读两遍','明天（10月7日）朗读Unit 3课文']:
+            with self.subTest(text=text):
+                self.assertEqual(agenda.deadlines(text,'2026-10-05'),{'2026-10-06','2026-10-07'})
+                self.assertEqual(agenda.deadline(text,'2026-10-05'),'')
+
     def test_legacy_tasks_and_pending_school_items_use_two_categories_without_writes(self):
         homework=['英语：朗读第二课','今天抄写课文','寓言阅读单','订正练习册']
         todos=['打印英语练习纸','核对作业平台入口','阅读与练习册署名','听写成绩反馈',

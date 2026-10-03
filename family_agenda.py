@@ -74,8 +74,26 @@ def deadlines(text,published):
     # date and the exam word, past the tight window above. Allow that gap but stop before another date
     # or a clause break so separate items keep their own dates. 测试/检测 stay out here: 设备测试/核酸检测
     # are not tests the child sits, and the tight pass already covers their own phrasings.
-    exam_event=r'单元测|体育测试|小测|月考|期中|期末|测验|考试|统考|联考|水平测|质检|摸底'
     span=r'(?:(?!\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)[^。；;，,\n]){0,16}?'
+    reading_event=r'读(?=[一二两三四五六七八九十百0-9]+(?:遍|次))'
+    # Unit/title names can separate the date from the reading action. Do not
+    # cross a different date or clause, or treat a material's name as an action.
+    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)'+span+r'(?:'+reading_event+r')',text or ''):
+        token=match[1];value=date(token)
+        if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):
+            offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[token]
+            try:value=(dt.date.fromisoformat(published)+dt.timedelta(days=offset)).isoformat()
+            except OverflowError:pass
+        if value:candidates.add(value)
+    # A conflicting relative/explicit parenthetical is uncertainty, not a
+    # reason to silently prefer one date. A mere date label remains no action.
+    for match in re.finditer(r'(今天|今日|今晚|明天|明日|后天)\s*[（(]\s*(\d{4}-\d{2}-\d{2})\s*[）)]',text or ''):
+        if not published or not re.match(span+r'(?:完成|订正|提交|上交|交齐|带到|带来|交作业|朗读|背诵|抄写|预习|'+reading_event+r')',text[match.end():]):continue
+        offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[match[1]]
+        try:relative=(dt.date.fromisoformat(published)+dt.timedelta(days=offset)).isoformat()
+        except OverflowError:continue
+        if date(match[2]):candidates.update((relative,match[2]))
+    exam_event=r'单元测|体育测试|小测|月考|期中|期末|测验|考试|统考|联考|水平测|质检|摸底'
     for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)'+span+r'(?:'+exam_event+r')',text or ''):
         token=match[1];value=date(token)
         if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):

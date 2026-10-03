@@ -2364,5 +2364,152 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
         self.assertEqual(agent._planned_reviews(self.store, dt.datetime.combine(later_date, dt.time(8), tzinfo=agent.TZ))[0]['review_on'], later_date.isoformat())
 
 
+    def test_combined_pure_school_acknowledgement_is_processed_without_a_model_or_task(self):
+        payload=self.payload();payload['messages'][0]['text']='收到，谢谢老师。'
+        self.store.ingest(payload)
+        with patch.object(agent.family_llm,'_chat_json',side_effect=AssertionError('pure acknowledgement needs no model')) as model:
+            result=agent.run_once(self.app,self.now)
+            replay=agent.run_once(self.app,self.now+dt.timedelta(minutes=1))
+        model.assert_not_called()
+        self.assertEqual((result['processed'],result['created'],result['failed']),(1,0,0))
+        self.assertEqual((replay['processed'],replay['created']),(0,0))
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items').fetchone()[0],0)
+            row=c.execute('SELECT payload,processed FROM agent_messages').fetchone()
+        self.assertEqual((json.loads(row['payload'])['text'],row['processed']),('收到，谢谢老师。',1))
+
+    def test_combined_pure_school_acknowledgement_does_not_block_an_action_batch(self):
+        payload=self.payload(cursor='12');payload['messages'][0]['text']='收到，谢谢老师。'
+        payload['messages'].append(dict(id='12',time=self.now.isoformat(),kind='text',sender='示例老师',
+            text='明天交回活动回执。',unread=False))
+        self.store.ingest(payload)
+        ref='message:'+self.source['id']+':12'
+        proposal=school_proposal(title_quote='明天交回活动回执',due='2026-02-11',
+            evidence=[dict(ref=ref)],task_title='交回活动回执',task_goal='明天交回活动回执。',
+            task_state='ready',task_reason='明确的新要求。',task_purpose='admin')
+        def model(messages,*args,**kwargs):
+            seen=json.loads(messages[-1]['content'])['evidence']
+            self.assertEqual([(e['ref'],e['text']) for e in seen],[(ref,'明天交回活动回执。')])
+            return dict(proposals=[proposal])
+        with patch.object(agent.family_llm,'_chat_json',side_effect=model) as called:
+            result=agent.run_once(self.app,self.now)
+            agent.run_once(self.app,self.now+dt.timedelta(minutes=1))
+        self.assertEqual((result['processed'],result['failed'],called.call_count),(2,0,1))
+        with self.app.connect() as c:
+            task,=c.execute('SELECT child,title,due,action,original_status,source FROM manual_tasks').fetchall()
+            self.assertEqual(c.execute('SELECT SUM(processed) FROM agent_messages').fetchone()[0],2)
+            item,=c.execute("SELECT state,evidence FROM agent_items WHERE kind='school'").fetchall()
+        self.assertEqual(tuple(task)[:5],('示例甲','交回活动回执','2026-02-11','明天交回活动回执。','待跟进'))
+        self.assertIn(ref,task['source']);self.assertNotIn('message:'+self.source['id']+':11',task['source'])
+        self.assertEqual(item['state'],'accepted')
+        self.assertEqual([e['ref'] for e in json.loads(item['evidence'])],[ref])
+
+    def test_school_acknowledgement_followed_by_reading_keeps_the_action(self):
+        ref='message:'+self.source['id']+':11'
+        text='收到，明天朗读Unit 3课文两遍。'
+        evidence=[dict(ref=ref,text=text,time=self.now.isoformat(),kind='text',content_incomplete=False)]
+        proposal=school_proposal(title_quote='明天朗读Unit 3课文两遍',due='2026-02-11',
+            evidence=[dict(ref=ref)],learning_subject='英语',task_title='英语：朗读Unit 3课文',
+            task_goal='明天朗读Unit 3课文两遍。',task_state='ready',task_reason='收到之后还有明确行动。',
+            task_purpose='learning')
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])) as model:
+            item,=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+        self.assertEqual(json.loads(model.call_args.args[0][-1]['content'])['evidence'],evidence)
+        self.assertEqual((item['title'],item['body'],item['due']),
+                         ('英语：朗读Unit 3课文','明天朗读Unit 3课文两遍。','2026-02-11'))
+        self.assertEqual(item['plan']['school_task']['state'],'ready')
+        self.assertEqual(item['evidence'],[dict(ref=ref,text=text)])
+
+    def _two_dated_text_school_actions(self):
+        # Exact title_quote values from the third bounded synthetic product-model call.
+        first='message:'+self.source['id']+':M1';supplement='message:'+self.source['id']+':M4'
+        sent='2026-10-05T16:10:00+08:00'
+        text='请分别完成两项：明天（10月6日）Unit 3课文读两遍，朗读录音上传班级作业区；10月7日前完成练习卷第1–4题，做完检查。'
+        extra='补充练习卷：第1–3题必做，第4题选做。做完检查后请家长签练习卷。朗读要求不变。'
+        evidence=[dict(ref=first,text=text,time=sent,kind='text',content_incomplete=False,attachments=[]),
+                  dict(ref=supplement,text=extra,time='2026-10-05T16:13:00+08:00',kind='text',content_incomplete=False,attachments=[])]
+        proposals=[school_proposal(title_quote='明天（10月6日）Unit 3课文读两遍，朗读录音上传班级作业区',
+            due='2026-10-06',evidence=[dict(ref=first)],learning_subject='英语',
+            task_title='英语：Unit3课文读两遍并上传录音',
+            task_goal='明天（10月6日）Unit 3课文读两遍，朗读录音上传班级作业区。',
+            task_state='ready',task_reason='朗读动作与日期在同一原文片段。',task_purpose='learning',
+            task_submission='朗读录音上传班级作业区'),
+            school_proposal(title_quote='10月7日前完成练习卷第1–4题，做完检查',due='2026-10-07',
+            evidence=[dict(ref=first),dict(ref=supplement)],learning_subject='英语',
+            task_title='英语：练习卷第1-3题必做第4题选做',
+            task_goal='10月7日前完成练习卷第1–3题必做，第4题选做；做完检查后请家长签练习卷。',
+            task_state='ready',task_reason='原文明确练习截止，后续只补练习范围与签字。',task_purpose='learning')]
+        return evidence,proposals
+
+    def test_exact_action_date_quotes_keep_two_ready_text_tasks_and_exercise_supplement(self):
+        evidence,proposals=self._two_dated_text_school_actions()
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
+            items=agent._select('school',evidence,school_goals=[],as_of='2026-10-05')
+        self.assertEqual([(item['title'],item['body'],item['due']) for item in items],
+                         [(p['task_title'],p['task_goal'],p['due']) for p in proposals])
+        self.assertEqual([item['plan']['school_task']['state'] for item in items],['ready','ready'])
+        self.assertEqual([[e['ref'] for e in item['evidence']] for item in items],
+                         [[evidence[0]['ref']],[evidence[0]['ref'],evidence[1]['ref']]])
+        self.assertEqual(items[0]['plan']['school_task'].get('submission'),'朗读录音上传班级作业区')
+        self.assertIn('第1–3题必做',items[1]['body']);self.assertIn('第4题选做',items[1]['body'])
+        self.assertIn('做完检查后请家长签练习卷',items[1]['body'])
+        self.assertNotIn('签练习卷',items[0]['body'])
+        self.assertTrue(all(not e['attachments'] for e in evidence),'this control uses only complete text, not supposedly read files')
+
+    def test_ambiguous_isolated_borrowed_or_inexact_action_date_quotes_stay_review(self):
+        evidence,base=self._two_dated_text_school_actions()
+        cases=[('whole notice',evidence[0]['text'],'2026-10-06'),
+               ('isolated date','10月6日','2026-10-06'),
+               ('date borrowed from exercise',base[0]['title_quote'],'2026-10-07'),
+               ('exercise quote borrowed for reading',base[1]['title_quote'],'2026-10-07'),
+               ('not an exact quote','明天（10月6日）Unit 3课文朗读两遍，朗读录音上传班级作业区','2026-10-06'),
+               ('no quote','','2026-10-06')]
+        for label,quote,due in cases:
+            with self.subTest(case=label):
+                proposals=[dict(base[0],title_quote=quote,due=due),dict(base[1])]
+                with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
+                    items=agent._select('school',evidence,school_goals=[],as_of='2026-10-05')
+                self.assertEqual(items[0]['plan']['school_task']['state'],'review')
+                self.assertEqual(items[0]['body'],base[0]['task_goal'],'a rejected date must preserve the read action')
+                self.assertEqual(items[1]['plan']['school_task']['state'],'ready','one bad mapping must not block the other action')
+                self.assertEqual(items[1]['due'],'2026-10-07')
+
+    def test_exact_action_date_quote_does_not_clear_unread_attachment_guard(self):
+        evidence,proposals=self._two_dated_text_school_actions()
+        attachment='message:'+self.source['id']+':M5'
+        evidence.append(dict(ref=attachment,text='练习卷题目附件尚未读全。',time='2026-10-05T16:14:00+08:00',
+            kind='text',content_incomplete=True,attachments=[dict(name='synthetic-questions.pdf',mime='application/pdf')]))
+        proposals[1]['evidence'].append(dict(ref=attachment))
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
+            items=agent._select('school',evidence,school_goals=[],as_of='2026-10-05')
+        self.assertEqual(items[0]['plan']['school_task']['state'],'ready')
+        self.assertEqual(items[1]['plan']['school_task']['state'],'review')
+        self.assertEqual(items[1]['body'],proposals[1]['task_goal'])
+        self.assertEqual(items[1]['due'],'2026-10-07')
+        self.assertIn('已读正文要求已保留',items[1]['plan']['school_task']['reason'])
+        self.assertEqual([e['ref'] for e in items[1]['evidence']],
+                         [evidence[0]['ref'],evidence[1]['ref'],attachment])
+
+    def test_dated_reading_quote_requires_the_same_unit_and_original_clause(self):
+        evidence,proposals=self._two_dated_text_school_actions()
+        brief=dict(goal='完成Unit3课文朗读两遍，录制朗读录音，上传至班级作业区')
+        quote=proposals[0]['title_quote']
+        self.assertTrue(agent._school_dated_quote(quote,evidence,'2026-10-06',brief))
+        self.assertFalse(agent._school_dated_quote(quote,evidence,'2026-10-06',dict(goal=brief['goal'].replace('Unit3','Unit4'))))
+        self.assertFalse(agent._school_dated_quote(quote,evidence,'2026-10-07',brief))
+        lines=[dict(evidence[0],text='其他资料\n'+quote+'\n10月7日前完成练习卷')]
+        self.assertTrue(agent._school_dated_quote(quote,lines,'2026-10-06',brief))
+        self.assertFalse(agent._school_dated_quote(quote,[dict(evidence[0],text='请'+quote+'继续办理')],'2026-10-06',brief))
+
+    def test_identical_relative_reading_quotes_on_different_send_days_do_not_choose_one(self):
+        quote='明天Unit3课文读两遍'
+        evidence=[dict(text=quote,time=day+'T16:10:00+08:00') for day in ('2026-10-05','2026-10-06')]
+        brief=dict(goal='Unit3课文读两遍')
+        for due in ('2026-10-06','2026-10-07'):
+            self.assertFalse(agent._school_dated_quote(quote,evidence,due,brief))
+        self.assertTrue(agent._school_dated_quote(quote,evidence[:1],'2026-10-06',brief))
+
+
 if __name__ == '__main__':
     unittest.main()
