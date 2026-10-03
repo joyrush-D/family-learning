@@ -181,7 +181,8 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None):
     due_on=focus.get('due_on','') if organized else deadline(due,published) or deadline(title,published) or source_due
     category=focus.get('category','')
     if category not in ('homework','todo'):category='todo' if category=='unknown' else task_category(title,purpose)
-    published_at=max((value for value in times if value[:10]==published),default='')
+    # Later supplements retain their own source entries, not the first notice's time.
+    published_at=min((value for value in times if value[:10]==published),default='')
     return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,scheduled_on=focus.get('scheduled_on',''),
                 category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox')
 

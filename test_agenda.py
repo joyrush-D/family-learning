@@ -167,6 +167,26 @@ class AgendaTest(unittest.TestCase):
             separate=agenda.metadata(app,c,'child-1','英语作业','',['message:synthetic-class:1'])
         self.assertEqual(separate['due_on'],'')
 
+    def test_same_day_supplements_keep_first_publication_without_changing_originals(self):
+        stamps=['2026-10-05T16:10:00+08:00','2026-10-05T16:13:00+08:00','2026-10-05T16:14:00+08:00']
+        messages=[dict(id=str(i+1),time=stamp,kind='text',sender='虚构英语发布者',
+            text=text,unread=False) for i,(stamp,text) in enumerate(zip(stamps,
+                ['10月7日前完成练习卷。','补充练习卷：第4题选做。','题目与家长参考分别打印。']))]
+        self.store.ingest(dict(source_id='synthetic-class',expected_cursor='0',cursor='3',
+            checked_at=stamps[-1],last_message_time=stamps[-1],error='',messages=messages))
+        refs=['message:synthetic-class:'+str(i) for i in (1,2,3)]
+        with app.connect() as c:
+            before='\n'.join(c.iterdump())
+            value=agenda.metadata(app,c,'child-1','英语：完成练习卷','2026-10-07',refs)
+            reverse=agenda.metadata(app,c,'child-1','英语：完成练习卷','2026-10-07',list(reversed(refs)))
+            self.assertEqual(value['published_on'],'2026-10-05')
+            self.assertEqual(value['published_at'],stamps[0]);self.assertEqual(reverse['published_at'],stamps[0])
+            self.assertEqual(value['due_on'],'2026-10-07')
+            self.assertEqual([p['ref'] for p in value['publications']],refs)
+            sibling=agenda.metadata(app,c,'child-2','英语：完成练习卷','',refs)
+            self.assertEqual(sibling['publications'],[]);self.assertEqual(sibling['published_at'],'')
+            self.assertEqual(before,'\n'.join(c.iterdump()))
+
     def test_publication_context_keeps_distinct_messages_and_checks_current_binding(self):
         stamp='2026-10-02T08:10:00+08:00'
         self.store.ingest(dict(source_id='synthetic-class',expected_cursor='0',cursor='1',checked_at=stamp,

@@ -1463,6 +1463,62 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(task['action'],original['body']);self.assertEqual(task['agenda']['due_on'],'2026-02-11')
             self.assertFalse(c.execute("SELECT 1 FROM sqlite_master WHERE name='task_focus_history'").fetchone())
 
+    def test_school_append_model_repeating_verified_due_keeps_original_deadline(self):
+        original,task_id=self._school_append_original()
+        row=self._school_append_candidate(12,'只补朗读：录音上传后确认上传成功，不要求背诵。',
+            change='append',target=task_id,due='2026-02-11')
+        brief=json.loads(row['plan'])['school_task']
+        self.assertEqual(brief['state'],'ready');self.assertEqual(row['due'],'')
+        self.assertEqual(brief['target_basis']['due'],'2026-02-11')
+        self._school_append_auto(row)
+        with self.app.connect() as c:
+            tasks=self.app.tasks(c);self.assertEqual(len(tasks),1)
+            task=tasks[0];self.assertEqual(task['id'],task_id)
+            self.assertEqual(task['agenda']['due_on'],'2026-02-11')
+            self.assertIn('确认上传成功，不要求背诵',task['action'])
+            self.assertIn('录音上传班级作业区',task['action'])
+            self.assertEqual({x['ref'] for x in task['agenda']['publications']},
+                {'message:'+self.source['id']+':11','message:'+self.source['id']+':12'})
+            self.assertEqual(c.execute('SELECT body FROM agent_items WHERE id=?',(original['id'],)).fetchone()[0],original['body'])
+
+    def test_school_append_inherited_due_exception_does_not_clear_real_uncertainty(self):
+        original,task_id=self._school_append_original()
+        for index,text,due,extra in (
+            (12,'只补朗读：确认上传成功。','2026-02-12',{}),
+            (13,'只补朗读：截止时间待定，请确认上传成功。','2026-02-11',{}),
+            (14,'只补朗读：确认上传成功。','2026-02-11',dict(publisher='another-publisher')),
+            (15,'只补朗读：确认上传成功。','2026-02-11',dict(unread=True)),
+            (16,'只补朗读：明天确认上传成功。','2026-02-11',dict(goal='后天确认上传成功。'))):
+            with self.subTest(index=index):
+                row=self._school_append_candidate(index,text,change='append',target=task_id,due=due,**extra)
+                self.assertEqual(json.loads(row['plan'])['school_task']['state'],'review')
+        with self.app.connect() as c:
+            self.assertEqual(len(self.app.tasks(c)),1)
+            self.assertEqual(self.app.tasks(c)[0]['action'],original['body'])
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+
+    def test_school_append_textbook_excludes_only_explicit_nonreplacement_peer(self):
+        original=self._school_append_candidate(11,'教材第38页第2、3题必做，明天交数学本。',
+            title='数学：教材第38页第2、3题',due='2026-02-11',publisher='synthetic-math-b')
+        task_id=self.store.act(dict(id=original['id'],action='accept'))['task_id']
+        correction=self._school_append_candidate(12,'订正测验第5题，写完整过程。该任务不替代教材作业。',
+            title='数学：订正测验第5题',publisher='synthetic-math-b')
+        correction_id=self.store.act(dict(id=correction['id'],action='accept'))['task_id']
+        text='仅补教材作业：先独立做，再按书中示例检查；不会的题先标记，不要照抄示例答案。'
+        added=self._school_append_candidate(13,text,change='append',target=task_id,
+            title='数学：教材补充',due='2026-02-11',publisher='synthetic-math-b')
+        self.assertEqual(json.loads(added['plan'])['school_task']['state'],'ready')
+        self._school_append_auto(added)
+        with self.app.connect() as c:
+            tasks={t['id']:t for t in self.app.tasks(c)};self.assertEqual(len(tasks),2)
+            self.assertIn(text,tasks[task_id]['action']);self.assertEqual(tasks[task_id]['agenda']['due_on'],'2026-02-11')
+            self.assertEqual(tasks[correction_id]['action'],correction['body'])
+        peer=self._school_append_candidate(14,'完成教材第39页第1题。',title='数学：教材第39页第1题',publisher='synthetic-math-b')
+        self.store.act(dict(id=peer['id'],action='accept'))
+        ambiguous=self._school_append_candidate(15,text,change='append',target=task_id,
+            title='数学：教材补充',due='2026-02-11',publisher='synthetic-math-b')
+        self.assertEqual(json.loads(ambiguous['plan'])['school_task']['state'],'review')
+
     def test_school_append_rejects_original_corrected_or_recalled_after_collection(self):
         original,task_id=self._school_append_original()
         pending=self._school_append_candidate(12,'只补朗读：录音上传后确认上传成功。',change='append',target=task_id)
