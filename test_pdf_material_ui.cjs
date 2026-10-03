@@ -168,6 +168,8 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   assert.match(await autoCard.innerText(),/语文：完成虚构练习第1至11页/);
   await autoCard.locator('[data-school-original-ref="'+autoRef+'"]').click();await panel.waitFor();
   assert.match(await dialog.innerText(),/虚构语文老师/);assert.match(await panel.innerText(),/全部 11 页已整理/);assert.equal(await batches.count(),4);
+  assert.doesNotMatch(await panel.innerText(),/待家长核对/,'complete understood requirements do not ask the parent to repeat the Agent classification');
+  assert.match(await panel.innerText(),/以上为AI整理，要求以老师原件为准/,'summaries stay distinct from teacher originals');
   assert.equal(await dialog.locator('[data-school-original-files] a[href*="'+before.uploads.find(x=>x.name==='虚构自动收录语文-'+width+'.pdf').id+'"]').count(),1,'the automatically collected task retains its actual original');
   assert.equal(await dialog.locator('[data-school-homework-new]').count(),0,'one original is already linked to the collected task');
   await fits(page);await proof(page,'auto-original-collected-'+width);await close();
