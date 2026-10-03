@@ -320,6 +320,18 @@ def _reference_brief(evidence):
     return None
 
 
+def _school_handback(brief, submission, evidence):
+    """A named physical item to hand back must not become a submission address."""
+    for entry in evidence:
+        if entry.get('kind','text')!='text' or entry.get('unread') or entry.get('content_incomplete'): continue
+        for match in re.finditer(r'交(?:回|上)?\s*((?!至|到|给)[\u4e00-\u9fffA-Za-z0-9]{0,8}(?:本|原卷|试卷|卷子|回执|答题卡))(?=[。；;，,\s]|$)',entry.get('text','')):
+            obj=match.group(1)
+            mistaken=r'(?:提交|上交|交回|交)\s*(?:至|到)\s*'+re.escape(obj)
+            brief['goal']=re.sub(mistaken,lambda _:match.group(0),brief['goal'])
+            submission=re.sub(mistaken,lambda _:match.group(0),submission)
+    return submission
+
+
 def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=None, pdf=None, material=None, *, separate_learning=False):
     brief={key:_text(value,key,limit).strip() for key,limit in [('title',80),('goal',2000),('advice',1200),('reason',400)]}
     state=value.get('state','review')
@@ -362,6 +374,7 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
         # Carrying or printing a named material is not itself the learning action.
         state='review';brief['reason']='原文同时提到学习活动和打卡/提交，请核对是否含作业；暂未关联学习目标。'
     if purpose!='learning' or not brief['goal']: submission=''
+    if state=='ready': submission=_school_handback(brief,submission,evidence)
     if submission and submission not in brief['goal']:
         if len(brief['goal'])+len(submission)+6<=2000: brief['goal']+='\n提交要求：'+submission
         else: state='review';brief['reason']='要求较长，提交要求未并入正文，请核对：'+submission[:200]

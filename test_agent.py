@@ -1401,6 +1401,23 @@ class AgentTests(unittest.TestCase):
             model.assert_not_called()
         with self.app.connect() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],2)
 
+    def test_school_handback_preserves_physical_object_and_separate_submission_channel(self):
+        for index,obj in enumerate(('数学本','订正本','原卷','活动回执','答题卡'),21):
+            original='完成当前练习，明天交'+obj+'。'
+            value=dict(title='完成练习并交回'+obj,goal='完成当前练习；交至'+obj+'。',advice='',reason='原文明确。',
+                purpose='learning',state='ready',change='new',target_id='',submission='提交至'+obj)
+            brief=agent._school_brief(value,evidence=[dict(ref='message:synthetic-group:'+str(index),text=original,kind='text')])
+            self.assertEqual(brief['submission'],'交'+obj)
+            self.assertNotIn('至'+obj,brief['goal'])
+            self.assertIn('交'+obj,brief['goal'])
+        value.update(goal='完成练习，在班级作业区提交录音。',submission='提交至班级作业区')
+        brief=agent._school_brief(value,evidence=[dict(ref='message:synthetic-group:30',text='朗读录音提交至班级作业区。',kind='text')])
+        self.assertEqual(brief['submission'],'提交至班级作业区')
+        # Unread content cannot justify rewriting either field.
+        value.update(goal='交至数学本。',submission='交至数学本')
+        unread=agent._school_brief(value,incomplete=True,evidence=[dict(ref='message:synthetic-group:31',text='交数学本。',kind='text',unread=True)])
+        self.assertEqual(unread['state'],'review');self.assertIn('交至数学本',unread.get('submission',''))
+
     def test_school_cross_batch_append_keeps_task_arrangements_sources_and_original_replay(self):
         from family_goals import Store as Goals
         original,task_id=self._school_append_original()
