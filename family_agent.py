@@ -2374,6 +2374,7 @@ def _school_original_schema(parts,known,targets,goals):
 
 def _school_original_prompt(pages,pdf,material):
     prompt=_task_prompt(pages,pdf,material)
+    prompt=prompt.replace('整理一条已有学校候选，仅返回title、goal、advice、state、reason。','整理本轮已读原件中的独立行动，按给定actions结构返回。')
     prompt=prompt.replace('只处理candidate所指这一件事，不能扩大到其他列或其他孩子。','处理本孩子本轮原件中的全部独立学校要求。')
     prompt=prompt.replace('candidate仅定位当前这一项，不是完整要求或原文。结合本项全部evidence正文和有效原件，整理完整结论；共享原消息中的其他独立事项不混入本项。','candidate是本轮原件的原候选，不是整份行动清单。')
     return prompt+'\n本轮返回actions数组（最多36项），逐项写清科目/事务、动作、范围、完成标准和各自due；一份原件可以含多个独立要求，不能只返回其中一项。完成该作业后的打印、签字、交回仍放该作业goal/submission；另一份独立回执单列行政事项。每项basis逐字引用original_parts里含本项动作和对象的文字，part选该段id；摘要仍是Agent参考，不是老师逐字原话。日期必须由本项basis支持，不能借另一项日期。截止没写due留空，不能猜今天。existing_actions中的同一行动用existing_item_id，不新增或恢复accepted/dismissed；当前candidate_id须恰好返回一次，不默认将数组第一项当原候选。新独立行动existing_item_id留空。原件范围、学习/行政、必做/选做、疑点分别保留；页面已读齐不代表行动理解准确。'
@@ -2401,11 +2402,13 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
             if not isinstance(quote,dict) or set(quote)!={'part','text'}: raise AgentError('原件行动依据结构无法核对')
             part=lookup.get(quote['part']);text=_text(quote,'text',2000,True).strip()
             if not part or text not in part['text']: raise AgentError('行动依据不在本轮已读原件范围')
-            if value['state']!='reference' and not (_LEARNING_ACTIVITY.search(text) or _LEARNING_ACTION.search(text)
-                    or re.search(r'打印|签字|交回|盖章|提交|上传|带|携带|准备|领取|报名|缴|考试|测验|比赛|家长会',text)):
-                raise AgentError('依据没有本项动作和对象，不能仅引用日期或标题')
             anchor=dict(ref=part['ref'],upload_ids=part['upload_ids'],pages=part['pages'],quote=text)
             if anchor not in anchors: anchors.append(anchor)
+        has_action=any(_LEARNING_ACTIVITY.search(a['quote']) or _LEARNING_ACTION.search(a['quote'])
+            or re.search(r'打印|签字|交回|盖章|提交|上传|带|携带|准备|领取|报名|缴|考试|测验|比赛|家长会',a['quote']) for a in anchors)
+        reading_gap=bool((pdf or {}).get('uncertainties') or any(d['omitted'] or d['truncated'] for d in (pdf or {}).get('documents',[])) or (material or {}).get('uncertainties'))
+        if value['state']!='reference' and not has_action and not reading_gap:
+            raise AgentError('依据没有本项动作和对象，不能仅引用日期或标题')
         identity=_hash([row['child_id'],sorted((_json([a['ref'],a['upload_ids'],a['quote']]) for a in anchors))])
         if identity in identities: raise AgentError('原件清单重复引用同一行动，整组保留重试')
         identities.add(identity)
@@ -2434,7 +2437,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         cited_page=_page_evidence(cited,cited_pages) if cited_pages else None
         if cited_page and not cited_page['read']: cited_page=None
         learning=_school_learning(value,goals)
-        brief=_school_brief(value,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in evidence),
+        brief=_school_brief(value,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in cited),
             evidence=cited,school_tasks=targets,pages=cited_page,pdf=cited_pdf,material=cited_material,separate_learning=True)
         due=_text(value,'due',10)
         stamps={e['ref']:sent_day(e.get('time')) for e in cited}
@@ -2447,7 +2450,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
             due='';brief.update(state='review',reason='资料中的日期未能对应本项要求，完成日期待补充；已读要求保留。')
         elif resolved: due=resolved
         elif len(dates)>1: brief.update(state='review',reason='本项包含不同完成日期，完成与交回日期对应关系待补充；原要求保留。')
-        if old and old['due'] and due and old['due']!=due:
+        if old and old['due'] and resolved and old['due']!=resolved:
             due=old['due'];brief.update(state='review',reason='原件完成日期与已有事项日期不同，日期对应关系待补充；已读要求保留。')
         elif old and old['due'] and not due:
             due=old['due'];brief.update(state='review',reason='原事项日期仍保留，新原件尚未核明本项日期；原要求待补充。')
@@ -2480,7 +2483,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         if brief.get('purpose')!='admin' or brief['state']=='reference': continue
         owner=next((v for v in activities if v['brief'].get('submission') and _school_submission_step(brief,v['brief'])),None)
         if owner: brief.update(state='review',reason='同一作业已含提交要求，不再自动新增重复事项；独立回执仍分别保留。')
-        elif brief['state']=='ready' and not activities:
+        elif brief['state']=='ready' and not any({a['ref'] for a in item['plan']['school_original_action']['anchors']}&{a['ref'] for a in v['plan']['school_original_action']['anchors']} for v in activities):
             own=[dict(e,text='\n'.join(a['quote'] for a in item['plan']['school_original_action']['anchors'] if a['ref']==e['ref']),unread=False) for e in item['reading']]
             guarded=_school_brief(brief,evidence=own,school_tasks=targets)
             if guarded['state']=='review': brief.update(state='review',reason=guarded['reason'])
@@ -2621,7 +2624,7 @@ def _refresh_school(app, store, now, budget):
             if not source_error:
                 # Revoked, detached, corrected or dismissed between the claim and the call: no model round at all.
                 with store._db() as c:
-                    intact=_school_current(store,c,row,evidence,page_key,pdf_key,material_key)
+                    intact=_school_current(store,c,row,evidence,page_key,pdf_key,material_key) and (not original_parts or _school_original_known(store,c,row)[0]==original_key)
                     if not intact: _discard_job(c,key,fp)
                 if not intact: continue
             try:
@@ -2632,6 +2635,10 @@ def _refresh_school(app, store, now, budget):
                     if original_parts:
                         result=family_llm._chat_json([{'role':'system','content':_school_original_prompt(page_evidence,pdf_evidence,material)},{'role':'user','content':_json(context)}],
                             _school_original_schema(original_parts,known,targets,school_goals),'family_school_task',timeout=45,data_path=store.data)
+                        with store._db() as c:
+                            intact=_school_current(store,c,row,evidence,page_key,pdf_key,material_key) and _school_original_known(store,c,row)[0]==original_key
+                            if not intact: _discard_job(c,key,fp)
+                        if not intact: continue
                         items=_school_original_actions(store,row,result,original_parts,known,evidence,page_evidence,pdf_evidence,material,targets,school_goals,now)
                         with store._db() as c:
                             c.execute('BEGIN IMMEDIATE')

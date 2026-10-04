@@ -136,7 +136,9 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
 
     def test_original_subset_sibling_change_discards_the_entire_round(self):
         ident,reply=self.original_action_fixture('2026-02-13前交回活动回执。')
-        other=self.candidate(keys=self.native_notice('second-original'),ident='subset')
+        second=self.native_notice('second-original')
+        other=self.candidate(keys=second,ident='subset')
+        self.seed_groups(keys=second,note='2026-02-13前交回活动回执。',uncertainties=[])
         with self.store._db() as c:
             both=json.loads(self.item(ident)['evidence'])+json.loads(self.item(other)['evidence'])
             c.execute('UPDATE agent_items SET evidence=? WHERE id=?',(json.dumps(both),ident))
@@ -370,7 +372,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         if brief is None:
             brief = dict(title='', goal='', advice='', state='review', reason='仅截图可见内容，请核对原图和附件。',
                          policy=agent.SCHOOL_TASK_POLICY, change='new', target_id='')
-        item = dict(child_id='child-1', kind='school', title=title, body='学校', due='',
+        item = dict(child_id='child-1', kind='school', title=title, body=agent.FOCUS['school'], due='',
                     evidence=[dict(ref='message:%s:%s' % (keys['source_id'], keys['message_id']), text=text)],
                     plan=dict(school_task=brief, school_messages=[dict(source_id=keys['source_id'], message_id=keys['message_id'])]))
         key = 'synthetic-pdf:' + ident; self.store._save(key, self.store._job(key, ident, self.now), [item], self.now)
