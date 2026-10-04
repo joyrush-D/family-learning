@@ -1,5 +1,6 @@
 """Synthetic text-paper role, safety and real HTTP checks; no model or printer I/O."""
 import io
+import hashlib
 import json
 import unittest
 import zipfile
@@ -66,7 +67,8 @@ class TextQuestionContractTests(unittest.TestCase):
 
 class TextQuestionHTTPTests(HomeworkPrintScopeTests):
     def review_request(self,questions,teachers):
-        original=self.feedback(self.task,questions+teachers,'synthetic-text-original-'+questions[0])
+        key='synthetic-text-original-'+hashlib.sha256(json.dumps([questions,teachers]).encode()).hexdigest()
+        original=self.feedback(self.task,questions+teachers,key)
         return dict(purpose='review',task_id=self.task['id'],record_id=original['record_id'],expected_created=original['feedback']['created'],question_sources=[self.source(i) for i in questions],reference_sources=[self.source(i) for i in teachers])
 
     def test_txt_and_safe_word_are_question_originals_with_zero_images(self):
