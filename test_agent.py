@@ -934,10 +934,10 @@ class AgentTests(unittest.TestCase):
         parts,anchors,changes,proof=self._effective_instruction_fixture()
         parts[1]['text']+='请周五交回并签字。'
         anchors[1]['quote']=parts[1]['text']
-        parts[2]['text']+='A栏仍须用两种方法。按稍后另一份附件要求在答题卡上作答。'
+        parts[2]['text']+='A栏仍须用两种方法。按稍后另一份附件要求在答题卡上作答。按稍后附件的栏目要求在答题卡上作答。'
         proof['correction_text']=parts[2]['text'];anchors[2]['quote']=parts[2]['text']
         goal=agent._school_effective_instructions(parts,anchors,changes,proof)[0]
-        for text in ['请周五交回并签字','A栏仍须用两种方法','按稍后另一份附件要求在答题卡上作答']:
+        for text in ['请周五交回并签字','A栏仍须用两种方法','按稍后另一份附件要求在答题卡上作答','按稍后附件的栏目要求在答题卡上作答']:
             self.assertIn(text,goal)
         # An unread caption and a missing unique inherited deadline remain visible.
         goal=agent._school_effective_instructions(parts,anchors[:-1],changes,dict(proof,shared_date_text='',
@@ -956,10 +956,24 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(goal.count('两个描写桥的词语'),2)
         self.assertEqual(goal.count('三句完整的话'),2)
 
+    def test_effective_instructions_keep_equal_native_words_under_different_columns(self):
+        parts,anchors,changes,proof=self._effective_instruction_fixture()
+        extra='A栏补充要求：\n用两种方法。\nB栏补充要求：\n用两种方法。'
+        parts[0]['text']+=extra;proof['original_text']=parts[0]['text'];proof['action_text']+=extra
+        anchors[0]['quote']=proof['action_text']
+        goal=agent._school_effective_instructions(parts,anchors,changes,proof)[0]
+        self.assertEqual(goal.count('用两种方法'),2)
+        self.assertIn('A栏补充要求',goal)
+        self.assertIn('B栏补充要求',goal)
+        self.assertEqual(goal.count('C栏改为选做，不做C栏也算完成观察单'),1)
+
     def test_instruction_layout_keeps_quoted_punctuation_and_decimal_units(self):
         text='用“先测量；再记录。最后检查”的方法，结果写成1.25厘米。不得照抄。'
         self.assertEqual(agent._school_instruction_clauses(text),[
             '用“先测量；再记录。最后检查”的方法，结果写成1.25厘米。','不得照抄。'])
+        text='请抄写"先测量；再记录。"，保留1.25厘米。不得照抄参考。'
+        self.assertEqual(agent._school_instruction_clauses(text),[
+            '请抄写"先测量；再记录。"，保留1.25厘米。','不得照抄参考。'])
 
     def test_first_batch_scope_projects_only_a_complete_proven_native_action(self):
         import copy

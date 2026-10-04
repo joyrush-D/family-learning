@@ -2872,8 +2872,9 @@ def _school_effective_conditions(parts,anchors,changes,proof,*,entries=False):
 def _school_instruction_clauses(text):
     """Keep quoted standards intact when laying out literal instructions."""
     clauses=[];start=0;closing=[]
-    pairs={'“':'”','‘':'’','《':'》','（':'）','(':')','「':'」','『':'』'}
+    pairs={'“':'”','‘':'’','《':'》','（':'）','(':')','「':'」','『':'』','"':'"'}
     for i,char in enumerate(text):
+        if char=='"' and i and text[i-1]=='\\':continue
         if closing and char==closing[-1]:closing.pop()
         elif char in pairs:closing.append(pairs[char])
         if char in '。；;\n' and not closing:
@@ -2899,7 +2900,7 @@ def _school_effective_instructions(parts,anchors,changes,proof):
     wrapper=r'^更正(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})发布的'+re.escape(ordinal+obj)+r'\s*[:：]'
     from family_agenda import deadlines,sent_day
     inherited_due=deadlines(proof['action_text']+'\n'+proof['shared_date_text'],sent_day(proof['original_time']))
-    complete_requirements=any(entry['part'].get('requirement') for entry in entries)
+    complete_requirements=any(entry['part'].get('requirement') and obj in entry['text'] for entry in entries)
     result=[];seen=set()
     for entry in entries:
         text=entry['text'];part=entry['part']
@@ -2931,19 +2932,26 @@ def _school_effective_instructions(parts,anchors,changes,proof):
                 if own_read and ordinal and re.fullmatch(r'补发'+name_pattern,bare):continue
                 route=r'本条附件只对应'+re.escape(clock)+r'通知的'+re.escape(ordinal)+name_pattern+r'[，,]不属于第[一二三四五六七八九十0-9]+项[^，,；;。\n]{1,30}材料'
                 if own_read and ordinal and re.fullmatch(route,bare) and not re.search(r'打印|签字|上传|提交|完成|写|做|交回',bare):continue
-                if complete_requirements:
+                if complete_requirements and part['ref']==proof['original_ref']:
                     # Remove a read-file pointer, preserving every literal output and negative condition.
                     bare=re.sub(r'^按稍后附件的栏目要求(?=在[^，,；;。\n]{1,30}作答)','',bare)
                 count=len(re.findall(r'第[一二三四五六七八九十0-9]+项',proof['original_text']))
                 numbers={'两':2,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}
                 separate=re.fullmatch(r'([两二三四五六七八九十2-9])项分别完成',bare)
                 if part['ref']==proof['original_ref'] and separate and numbers.get(separate[1],int(separate[1]) if separate[1].isdigit() else 0)==count:continue
-            # Do not erase equal standards from different files or page groups.
-            # Only an identical native clause (or the repeated task heading) is redundant.
-            redundant=bare in seen and (native or bare=='完成'+obj)
-            if bare and not redundant:
+            # Equal words may belong to different columns or conditions. Deduplicate
+            # only the proved inserted/correction clause, never arbitrary native text.
+            keys=set()
+            if native:
+                for change in changes:
+                    if part['id'] in (change['old_part'],change['new_part']) and bare in {
+                            c.rstrip('。；;\n').strip() for c in _school_instruction_clauses(change['new_text'])}:
+                        keys.add(('condition',change['new_part'],bare))
+            if bare=='完成'+obj and (part['ref']==proof['original_ref'] or part.get('requirement')):
+                keys.add(('heading',obj))
+            if bare and not keys.intersection(seen):
                 result.append(bare+'。')
-                if native or bare=='完成'+obj:seen.add(bare)
+                seen.update(keys)
     return ['\n'.join(result)] if result else []
 
 
