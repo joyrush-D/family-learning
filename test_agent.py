@@ -941,6 +941,30 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(row,dict(c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone()))
             self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
 
+    def test_school_semantic_upgrade_rereads_old_admin_rejection_and_preserves_payload(self):
+        self.now=dt.datetime(2026,10,4,10,tzinfo=agent.TZ);self.config()
+        text='请家长后天完成学校通讯录中的紧急联系电话核对；有误就在学校通讯录中修改，无误点“已核对”。不要在班级群发布电话号码或核对截图，不用让孩子抄写。'
+        payload=self.payload();payload['messages'][0].update(time='2026-10-03T16:20:00+08:00',text=text);self.store.ingest(payload)
+        evidence=[dict(ref='message:'+self.source['id']+':11',text=text,time='2026-10-03T16:20:00+08:00',kind='text',publisher=agent._publisher(self.source['id'],payload['messages'][0]),content_incomplete=False)]
+        proposal=school_proposal(title_quote=text,task_title='家长核对学校通讯录紧急联系电话',task_goal=text,due='2026-10-05',task_state='review',task_purpose='admin',evidence=[dict(ref=evidence[0]['ref'])])
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):items=agent._select('school',evidence,school_goals=[],as_of='2026-10-04')
+        item=items[0];item.update(kind='school',child_id='child-1');item['plan'].pop('school_selection_receipt',None)
+        item['plan']['school_task'].update(policy=9,state='review',reason='旧规则将孩子抄写误当正向学习动作。')
+        key='messages:'+agent._hash([self.source['id'],['11']])[:40];fp=self.store._job(key,dict(school_learning_policy=9,messages=payload['messages']),self.now,model=True)
+        self.store._save(key,fp,items,self.now,[(self.source['id'],'11')])
+        with self.app.connect() as c:old=dict(c.execute('SELECT * FROM agent_items').fetchone())
+        result=dict(title=proposal['task_title'],goal=text,advice='',state='ready',reason='原文为独立家长核对事务，孩子抄写被明确否定。',change='new',target_id='',purpose='admin',submission='',learning_subject='',learning_goal_id='')
+        with patch.object(agent.family_llm,'_chat_json',return_value=result) as model:
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1),dict(used=1,failed=0,created=1))
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=1),1),dict(used=0,failed=0,created=0))
+        self.assertEqual(model.call_count,1)
+        with self.app.connect() as c:
+            saved=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(old['id'],)).fetchone());plan=json.loads(saved['plan'])
+            self.assertEqual((saved['state'],saved['due'],plan['school_task']['purpose']),('accepted','2026-10-05','admin'))
+            self.assertEqual(plan['school_previous_policy'],old);self.assertIn('不用让孩子抄写',saved['body'])
+            self.assertNotIn('school_learning',plan)
+            self.assertEqual(tuple(c.execute('SELECT fingerprint,done FROM agent_jobs WHERE id=?',(key,)).fetchone()),(fp,1))
+
     def test_legacy_correction_does_not_recover_an_ambiguous_initial_batch(self):
         row,key,fp,evidence=self._legacy_initial_correction(duplicate=True)
         with self.store._db() as c:self.assertIsNone(agent._school_legacy_batch_correction(self.store,c,row,evidence))

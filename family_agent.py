@@ -66,7 +66,7 @@ learning_goal_id只从输入learning_goals选择同一科目且适合本要求�
 老师宣布的考试、测验、听写、默写、比赛、家长会或需要带物品/穿着的日期安排，即使不是作业，也必须各自单独返回一项：task_title写科目+事件+原文的日期或星期（如“英语：Unit1–3单元测验（周五）”），task_goal写范围与要求；不要因为它没有“完成/提交”字样就省略。due只在原文写明日期或“本周五/下周一/明天”这类可按发送日换算的表述时填写YYYY-MM-DD，按该消息的发送日期换算；同一条消息里不同事项分别填各自日期，换算不了留空。
 任务要求与老师的后续更正、撤销一起保留原消息作为规划依据；不把它们当成孩子表现。发布者称呼不等于教师身份已确认，不凭群名推断任课老师，不将家长转发说成老师直接发布。保持必须、任选、示例和条件要求，不能读出未提供的图片或链接内容。'''
 # One saved interpretation feeds the task list; it never records child performance.
-SCHOOL_TASK_POLICY = 9
+SCHOOL_TASK_POLICY = 10
 SCHOOL_SELECTION_REVISION = 2
 _SCHOOL_DATE_MENTION=re.compile(r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}\s*[日号]|今天|今日|今晚|明天|明日|后天|(?:本|这|下)(?:个)?(?:周|星期|礼拜)|(?:周|星期|礼拜)[一二三四五六日天]|截止|期限|日期|完成时间')
 TASK_BRIEF_SCHEMA = {'type':'object','additionalProperties':False,'required':['title','goal','advice','state','reason'],
@@ -3762,6 +3762,7 @@ def _refresh_school(app, store, now, budget):
                 else:
                     for field in ('school_learning','school_goal_id'): plan.pop(field,None)
                 plan['school_task']=brief
+                if not current:plan['school_previous_policy']=copy.deepcopy(row)
                 with store._db() as c:
                     c.execute('BEGIN IMMEDIATE')
                     if not _school_current(store,c,row,evidence,page_key,pdf_key,material_key):
