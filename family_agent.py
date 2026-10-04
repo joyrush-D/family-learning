@@ -2515,7 +2515,8 @@ def _school_original_prompt(pages,pdf,material):
     prompt=prompt.replace('candidate仅定位当前这一项，不是完整要求或原文。结合本项全部evidence正文和有效原件，整理完整结论；共享原消息中的其他独立事项不混入本项。','candidate是本轮原件的原候选，不是整份行动清单。')
     return prompt+'\n本轮返回actions数组（最多36项），逐项写清科目/事务、动作、范围、完成标准和各自due；一份原件可以含多个独立要求，不能只返回其中一项。完成该作业后的打印、签字、交回仍放该作业goal/submission；另一份独立回执单列行政事项。每项basis逐字引用original_parts里含本项动作和对象的文字，part选该段id；摘要仍是Agent参考，不是老师逐字原话。日期必须由本项basis支持，不能借另一项日期。截止没写due留空，不能猜今天。existing_actions中的同一行动用existing_item_id，不新增或恢复accepted/dismissed；当前candidate_id须恰好返回一次，不默认将数组第一项当原候选。新独立行动existing_item_id留空。原件范围、学习/行政、必做/选做、疑点分别保留；页面已读齐不代表行动理解准确。'+\
         '\n每条basis.text必须是所选part的text中连续的原文子串，字词、标点和换行均保持原样，禁止跳字、改标点或把不连续句子拼成一次引用。需要引用相隔的句子时，用同一个part的多个basis，每条分别连续引用，不能删掉中间的对照说明后拼接。'+\
-        '\n表头和空白填写栏不是学校行动要求。例如原件只要求打印、家长签字并交回，仅另设“日期：____”空栏而未明确要求填写日期时，goal和submission都不得新增“填写日期”；仅保留明确要求的打印、签字、交回。'
+        '\n表头和空白填写栏不是学校行动要求。例如原件只要求打印、家长签字并交回，仅另设“日期：____”空栏而未明确要求填写日期时，goal和submission都不得新增“填写日期”；仅保留明确要求的打印、签字、交回。'+\
+        '\n每项goal/submission分别保留必做和选做部分明确的具体输出与完成标准，包括方法数量、单位、过程及签字等，并保留各自条件。标题、总范围或笼统的“完成后检查”不能代替这些逐项标准；不得因压缩描述而丢掉要求或条件。题目本身可留在原件中，明确的完成标准仍须写入对应行动。'
 
 
 def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,material,targets,goals,now):
