@@ -257,7 +257,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   assert.match(await autoFeedback.locator('#taskTitle').innerText(),/示例星星.*语文：完成虚构练习第1至11页/);
   autoSaved=await state();autoRecords=autoSaved.records.filter(r=>r.source==='事项:'+automatic.id);assert.equal(autoRecords.length,1);assert.equal(autoSaved.tasks.filter(t=>t.id===automatic.id).length,1,'reopening preserves one task and one feedback');
   await fits(page);await proof(page,'auto-original-feedback-reopened-'+width);
-  assert.match(await autoResources.locator('[data-task-material-pages]').innerText(),/归纳引用：第 1、2、3 页/);
+  assert.match(await autoResources.locator('[data-task-material-pages]').innerText(),/归纳引用：第 1、2、3、4、5、6、7、8、9、10、11 页/,'reopened feedback retains all groups supporting the deduplicated complete requirement');
   assert.doesNotMatch(await autoResources.innerText(),/本项对应第/,'cited summary pages must not shrink the assigned 1–11 page range');
   // Continue from the real saved feedback: handwritten wrong item and correction use
   // the ordinary APIs, with no model, printer enqueue or separate synthetic task.
