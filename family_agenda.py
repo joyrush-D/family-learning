@@ -64,6 +64,18 @@ def deadlines(text,published):
         if value:candidates.add(value)
     for match in re.finditer(r'截止(?:时间|日期)?\s*[：:为是]*\s*(\d{4}-\d{2}-\d{2})',text):
         if date(match[1]): candidates.add(match[1])
+    # A directly dated revision/parent action is just as explicit as 完成 or
+    # 提交. Keep this grammar narrow: do not turn 公布复习资料, 打印机指南 or
+    # 签字安排 into a deadline by searching arbitrarily past the date.
+    direct_prefix=r'[ \t：:]*(?:(?:需要|务必|由家长|同学们|家长|孩子|学生|请|需|须|要|先)[ \t]*){0,2}(?:(?:语文|数学|英语|科学|历史|地理|生物|物理|化学)[ \t：:]*)?'
+    direct_action=r'(?:复习|打印|签字|盖章)(?!资料|材料|计划|安排|通知|要求|时间|指南|方法|建议|结果|情况|方式|入口|功能|机)'
+    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)'+direct_prefix+direct_action,text):
+        token=match[1];value=date(token)
+        if not value and anchor and token in ('今天','今日','今晚','明天','明日','后天'):
+            offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[token]
+            try:value=(dt.date.fromisoformat(anchor)+dt.timedelta(days=offset)).isoformat()
+            except OverflowError:pass
+        if value:candidates.add(value)
     for match in re.finditer(r'(?:报名|填报|选课|提交|上交)时间\s*[：:为是]*\s*(\d{4}-\d{2}-\d{2})([^。；;\n]*)',text):
         day,tail=match.groups()
         clock=r'(?:[01]?\d|2[0-3])[:：][0-5]\d'
