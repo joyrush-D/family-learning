@@ -448,6 +448,209 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                           (short,short,'2026-02-'+str(12+index),json.dumps(plan,ensure_ascii=False),ident))
         return ids,requirements
 
+    def mapped_scope_fixture(self,*,unread=False,content_incomplete=False):
+        """Five fictional pages, one accepted native English action and three untouched mapped PDF actions."""
+        self.link(self.keys,self.pdf,action=DETACH)
+        upload=self.seed_pdf('b'*32,body=test_pdf.build_pdf(5))
+        keys=self.native_notice('mapped-page-scope',upload=upload)
+        english='英语：2026-02-11前背诵Unit3第2页，不需要打印。'
+        with self.store._db() as c:
+            raw=c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',(keys['source_id'],keys['message_id'])).fetchone()[0]
+            message=dict(json.loads(raw),text=english+('数学练习甲、复习安排与独立活动回执见…（正文被截断）' if content_incomplete else
+                '数学练习甲、复习安排与独立活动回执见所附PDF。'),unread=unread,content_incomplete=content_incomplete)
+            c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',(json.dumps(message,ensure_ascii=False),keys['source_id'],keys['message_id']))
+            source,message=self.store._message_context(c,keys);value=pdfm.pdf_input(self.store,c,source,message,upload_id=upload)
+            requirements=['数学：2026-02-12前完成练习甲第1至3题必做；第1题写计算过程，第2题写单位厘米，第3题写检验过程。选做题及完整完成标准见本文件第4页。',
+                '数学练习甲第4题选做，若选做，须用两种方法说明4+6=10；必做题和选做题做完后检查，无需家长签字。',
+                '数学：2026-02-13前复习错题本第1至2题，独立重写订正，无需打印，无需家长签字。',
+                '2026-02-14前打印本文件第5页活动回执，家长签字后由孩子交回；无需盖章，无需填写日期。']
+            doubts=['第1页称选做题及完整完成标准见第4页，第2页也称第4题的选做条件和解题方法要求见第4页；第4页本轮未送入，因此无法核对第4题的适用条件、解题方法和练习甲的完整完成标准。',
+                '通知称所附PDF还包含数学复习安排与独立活动回执，但本轮仅见第1至3页数学练习甲，无法核对这些后续内容的具体要求。']
+            for pages,rs,us in [([1,2,3],requirements[:1],doubts),([4,5],requirements[1:],[])]:
+                original=dict(upload_id=upload,title='虚构页组',note='题面与空白栏是背景。',requirements=rs,uncertainties=us,
+                    deferred_contexts=[dict(pages=[4,5],note='同原件后续完整标准与独立事项')] if pages[0]==1 else [])
+                c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?)',(source['id'],message['id'],value['fingerprint'],pages[0],json.dumps(pages),5,
+                    json.dumps(dict(kind='school_material',originals=[original]),ensure_ascii=False),self.now.isoformat()))
+        english_id=self.candidate(keys=keys,ident='mapped-english')
+        pdf_ids=[self.candidate(keys=keys,ident='mapped-pdf-'+str(i)) for i in range(3)]
+        ref='message:'+keys['source_id']+':'+keys['message_id']
+        with self.store._db() as c:
+            row=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(english_id,)).fetchone())
+            evidence,_=agent._school_material(self.store,c,row);origin=agent._school_message_basis(evidence)
+            pdf=agent._pdf_evidence(agent._school_pdf(self.store,c,row));parts=agent._school_original_parts(evidence,pdf,None)
+            parts=[p for p in parts if p.get('requirement')]
+            for ident,title,due,owned in [(english_id,'英语：背诵Unit3第2页','2026-02-11',[]),
+                    (pdf_ids[0],'数学：完成练习甲','2026-02-12',parts[:2]),
+                    (pdf_ids[1],'数学：复习错题本','2026-02-13',parts[2:3]),
+                    (pdf_ids[2],'活动回执：打印签字交回','2026-02-14',parts[3:])]:
+                anchors=[dict(ref=p['ref'],upload_ids=p['upload_ids'],pages=p['pages'],quote=p['text']) for p in owned]
+                if not owned:anchors=[dict(ref=ref,upload_ids=[],pages=[],quote=english)]
+                identity=agent._hash(['child-1',sorted(agent._json([a['ref'],a['upload_ids'],a['quote']]) for a in anchors)])
+                body='\n'.join(p['text'] for p in owned) if owned else english
+                brief=dict(draft(title=title,goal=body,state='review' if owned else 'ready',purpose='admin' if ident==pdf_ids[2] else 'learning'),
+                    policy=agent.SCHOOL_TASK_POLICY,origin_basis=origin,original_actions_revision=agent.SCHOOL_ORIGINAL_REVISION)
+                if owned:brief['pdf_evidence']=dict(fingerprint=pdf['fingerprint'],documents=pdf['documents'],candidate='旧通知')
+                action=dict(identity=identity,scope='synthetic-mapped-scope',root_id=pdf_ids[0],anchors=anchors)
+                if owned:action['requirements']=[{k:p[k] for k in ('id','ref','upload_ids','text')} for p in owned]
+                c.execute('UPDATE agent_items SET title=?,body=?,due=?,plan=? WHERE id=?',(title,body,due,json.dumps(dict(school_task=brief,school_original_action=action),ensure_ascii=False),ident))
+        self.store.act(dict(id=english_id,action='accept',expected_updated=self.item(english_id)['updated']))
+        return keys,upload
+
+    def mapped_upgrade_scope(self,keys,upload,*,remap=False):
+        with self.store._db() as c:
+            source,message=self.store._message_context(c,keys);value=pdfm.pdf_input(self.store,c,source,message,upload_id=upload)
+            batches,_,_=pdfm._batches(pdfm._rows(c,source,message,value['fingerprint']),upload)
+            return agent._school_pdf_upgrade_scope(self.store,c,source,message,upload,batches,remap=remap)
+
+    def test_mapped_pdf_scope_keeps_accepted_native_english_and_three_pending_ids_read_only(self):
+        keys,upload=self.mapped_scope_fixture()
+        before=self.rows('SELECT * FROM agent_items ORDER BY id');tasks=self.rows('SELECT * FROM manual_tasks ORDER BY id')
+        pending=[dict(r) for r in (self.item(ident) for ident, in self.rows("SELECT id FROM agent_items WHERE state='pending'"))]
+        self.assertEqual(len(pending),3)
+        self.assertTrue(all(not agent._school_pending_original(r) for r in pending))
+        scope,eligible=self.mapped_upgrade_scope(keys,upload)
+        self.assertTrue(eligible);self.assertEqual(self.mapped_upgrade_scope(keys,upload),(scope,True))
+        self.assertEqual(self.rows('SELECT * FROM agent_items ORDER BY id'),before)
+        self.assertEqual(self.rows('SELECT * FROM manual_tasks ORDER BY id'),tasks)
+        self.assertEqual((self.count('manual_tasks'),self.count('records')),(1,0))
+
+    def test_mapped_pdf_scope_accepts_native_quote_when_only_the_attachment_was_unread(self):
+        keys,upload=self.mapped_scope_fixture(unread=True)
+        ident=self.rows("SELECT id FROM agent_items WHERE state='accepted'")[0][0];row=self.item(ident)
+        with self.store._db() as c:
+            source,message=self.store._message_context(c,keys);evidence,_=agent._school_material(self.store,c,row)
+            material=pdfm.complete_evidence(self.store,c,source,message)
+        self.assertTrue(message['unread']);self.assertFalse(message['content_incomplete'])
+        self.assertEqual(material['page_count'],5)
+        self.assertEqual(json.loads(row['plan'])['school_task']['origin_basis'],agent._school_message_basis(evidence))
+        before=self.rows('SELECT * FROM agent_items ORDER BY id');tasks=self.rows('SELECT * FROM manual_tasks ORDER BY id')
+        self.assertTrue(self.mapped_upgrade_scope(keys,upload)[1])
+        self.assertEqual(self.rows('SELECT * FROM agent_items ORDER BY id'),before)
+        self.assertEqual(self.rows('SELECT * FROM manual_tasks ORDER BY id'),tasks)
+
+    def test_mapped_pdf_scope_keeps_a_truly_truncated_native_message_blocked(self):
+        keys,upload=self.mapped_scope_fixture(unread=True,content_incomplete=True)
+        ident=self.rows("SELECT id FROM agent_items WHERE state='accepted'")[0][0];row=self.item(ident)
+        with self.store._db() as c:evidence,_=agent._school_material(self.store,c,row)
+        self.assertTrue(evidence[0]['content_incomplete']);self.assertIn('正文被截断',evidence[0]['text'])
+        self.assertEqual(json.loads(row['plan'])['school_task']['origin_basis'],agent._school_message_basis(evidence))
+        self.assertFalse(self.mapped_upgrade_scope(keys,upload)[1])
+
+    def test_mapped_pdf_scope_rejects_decisions_edits_and_linked_candidates(self):
+        keys,upload=self.mapped_scope_fixture();scope,_=self.mapped_upgrade_scope(keys,upload)
+        ident=self.rows("SELECT id FROM agent_items WHERE state='pending' ORDER BY id LIMIT 1")[0][0]
+        original=self.item(ident)
+        cases=[('state','accepted'),('state','dismissed'),('title','家长改标题'),('body','家长改要求'),('due','2026-02-20'),
+            ('task_id','existing-task'),('record_id',123),('care_id','existing-care')]
+        for column,value in cases:
+            with self.subTest(column=column,value=value):
+                with self.store._db() as c:c.execute('UPDATE agent_items SET '+column+'=? WHERE id=?',(value,ident))
+                changed,eligible=self.mapped_upgrade_scope(keys,upload)
+                self.assertNotEqual(changed,scope);self.assertFalse(eligible)
+                with self.store._db() as c:c.execute('UPDATE agent_items SET '+column+'=? WHERE id=?',(original[column],ident))
+        for mutate in ['target','origin','requirement','anchor','edited-together']:
+            with self.subTest(mutate=mutate):
+                plan=json.loads(original['plan'])
+                if mutate=='target':plan['school_task']['target_id']='existing-task'
+                if mutate=='origin':plan['school_task']['origin_basis']=[]
+                if mutate=='requirement':plan['school_original_action']['requirements'][0]['text']+='家长补充。'
+                if mutate=='anchor':plan['school_original_action']['anchors'][0]['pages']=[1]
+                if mutate=='edited-together':plan['school_task']['goal']='家长改要求'
+                with self.store._db() as c:
+                    c.execute('UPDATE agent_items SET plan=?,body=? WHERE id=?',(json.dumps(plan),plan['school_task']['goal'] if mutate=='edited-together' else original['body'],ident))
+                self.assertFalse(self.mapped_upgrade_scope(keys,upload)[1])
+                with self.store._db() as c:c.execute('UPDATE agent_items SET plan=?,body=? WHERE id=?',(original['plan'],original['body'],ident))
+
+    def test_mapped_pdf_scope_requires_whole_scope_doubts_and_exact_requirement_ownership(self):
+        keys,upload=self.mapped_scope_fixture();scope,_=self.mapped_upgrade_scope(keys,upload)
+        old=self.rows('SELECT payload FROM agent_pdf_material WHERE message_id=? AND first_page=1',keys['message_id'])[0][0]
+        for doubt in ['第2页单位模糊，厘米与米无法区分。','本轮仅见第1至3页，且两处截止日期矛盾。',
+                      '老师未给第4页所说的另一份参考材料。','本轮仅见第1至2页，无法核对完成标准。',
+                      '第8页本轮未送入，因此无法核对完成标准。']:
+            with self.subTest(doubt=doubt):
+                payload=json.loads(old);payload['originals'][0]['uncertainties'].append(doubt)
+                with self.store._db() as c:c.execute('UPDATE agent_pdf_material SET payload=? WHERE message_id=? AND first_page=1',(json.dumps(payload),keys['message_id']))
+                changed,eligible=self.mapped_upgrade_scope(keys,upload)
+                self.assertNotEqual(changed,scope);self.assertFalse(eligible)
+        with self.store._db() as c:c.execute('UPDATE agent_pdf_material SET payload=? WHERE message_id=? AND first_page=1',(old,keys['message_id']))
+        ids=[r[0] for r in self.rows("SELECT id FROM agent_items WHERE state='pending' ORDER BY id")]
+        original=self.item(ids[1]);plan=json.loads(original['plan']);other=json.loads(self.item(ids[0])['plan'])
+        plan['school_original_action']=other['school_original_action']
+        plan['school_task']=other['school_task']
+        with self.store._db() as c:c.execute('UPDATE agent_items SET plan=?,title=?,body=?,due=? WHERE id=?',
+            (json.dumps(plan),self.item(ids[0])['title'],self.item(ids[0])['body'],self.item(ids[0])['due'],ids[1]))
+        self.assertFalse(self.mapped_upgrade_scope(keys,upload)[1])
+
+    def test_mapped_pdf_scope_snapshots_unrelated_decisions_and_orphan_task_records(self):
+        keys,upload=self.mapped_scope_fixture();scope,_=self.mapped_upgrade_scope(keys,upload)
+        accepted=self.rows("SELECT id,task_id FROM agent_items WHERE state='accepted'")[0]
+        accepted_row=self.item(accepted[0])
+        with self.store._db() as c:c.execute('UPDATE manual_tasks SET action=action||? WHERE id=?',('家长备注',accepted[1]))
+        changed,eligible=self.mapped_upgrade_scope(keys,upload)
+        self.assertTrue(eligible);self.assertNotEqual(changed,scope)
+        with self.store._db() as c:c.execute("UPDATE agent_items SET plan='{}' WHERE id=?",(accepted[0],))
+        self.assertFalse(self.mapped_upgrade_scope(keys,upload)[1])
+        with self.store._db() as c:c.execute('UPDATE agent_items SET plan=? WHERE id=?',(accepted_row['plan'],accepted[0]))
+        # An empty agent task_id cannot hide an already created deterministic task or its feedback.
+        ident=self.rows("SELECT id FROM agent_items WHERE state='pending' ORDER BY id LIMIT 1")[0][0]
+        task='AGENT-'+agent._hash(ident)[:24]
+        with self.store._db() as c:
+            c.execute('INSERT INTO manual_tasks(id,child,title,due,original_status,source,action) VALUES(?,?,?,?,?,?,?)',
+                (task,'虚构孩子','旧已关联任务','无明确截止','待跟进','虚构既存任务','原要求'))
+        orphan_scope,eligible=self.mapped_upgrade_scope(keys,upload)
+        self.assertNotEqual(orphan_scope,changed);self.assertFalse(eligible)
+        self.assertEqual(self.item(ident)['task_id'],'')
+        with self.store._db() as c:
+            c.execute('DELETE FROM manual_tasks WHERE id=?',(task,))
+            c.execute('INSERT INTO records(child,day,category,subject,title,note,source,created,linked_task_id) VALUES(?,?,?,?,?,?,?,?,?)',
+                ('虚构孩子',self.now.date().isoformat(),'学习','数学','旧事项反馈','虚构反馈','事项:'+task,self.now.isoformat(),task))
+        record_scope,eligible=self.mapped_upgrade_scope(keys,upload)
+        self.assertNotEqual(record_scope,orphan_scope);self.assertFalse(eligible)
+
+    def test_mapped_pdf_remap_requires_new_unowned_requirements_and_keeps_real_doubts(self):
+        keys,upload=self.mapped_scope_fixture()
+        normal=self.mapped_upgrade_scope(keys,upload)
+        remap=self.mapped_upgrade_scope(keys,upload,remap=True)
+        self.assertTrue(normal[1]);self.assertFalse(remap[1]);self.assertNotEqual(normal[0],remap[0])
+        before=self.rows('SELECT * FROM agent_items ORDER BY id');tasks=self.rows('SELECT * FROM manual_tasks ORDER BY id')
+        old=self.rows('SELECT payload FROM agent_pdf_material WHERE message_id=? AND first_page=1',keys['message_id'])[0][0]
+        payload=json.loads(old);original=payload['originals'][0]
+        extra='数学：2026-02-15前独立完成口算第1至2题，写出计算过程。'
+        original['requirements'].append(extra)
+        original['uncertainties']=['第2页单位模糊，厘米与米无法区分。']
+        with self.store._db() as c:c.execute('UPDATE agent_pdf_material SET payload=? WHERE message_id=? AND first_page=1',(json.dumps(payload),keys['message_id']))
+        self.assertFalse(self.mapped_upgrade_scope(keys,upload)[1])
+        self.assertTrue(self.mapped_upgrade_scope(keys,upload,remap=True)[1])
+        self.assertEqual(self.rows('SELECT * FROM agent_items ORDER BY id'),before)
+        self.assertEqual(self.rows('SELECT * FROM manual_tasks ORDER BY id'),tasks)
+        saved=json.loads(self.rows('SELECT payload FROM agent_pdf_material WHERE message_id=? AND first_page=1',keys['message_id'])[0][0])
+        self.assertEqual(saved,payload)
+        self.assertEqual(saved['originals'][0]['uncertainties'],['第2页单位模糊，厘米与米无法区分。'])
+
+    def test_mapped_pdf_remap_rejects_rewrites_deletions_progress_and_unmapped_old_actions(self):
+        keys,upload=self.mapped_scope_fixture()
+        old=self.rows('SELECT payload FROM agent_pdf_material WHERE message_id=? AND first_page=1',keys['message_id'])[0][0]
+        extra='数学：2026-02-15前完成独立口算第1至2题，写出过程。'
+        for change in ['none','rewrite','delete','progress']:
+            with self.subTest(change=change):
+                payload=json.loads(old);original=payload['originals'][0]
+                original['uncertainties']=[]
+                original['requirements'].append(extra)
+                if change=='rewrite':original['requirements'][0]=original['requirements'][0].replace('厘米','米')
+                if change=='delete':original['requirements'].pop(0)
+                if change=='progress':original['requirements'][-1]+='本轮未重送第1至3页。'
+                with self.store._db() as c:c.execute('UPDATE agent_pdf_material SET payload=? WHERE message_id=? AND first_page=1',(json.dumps(payload),keys['message_id']))
+                self.assertEqual(self.mapped_upgrade_scope(keys,upload,remap=True)[1],change=='none')
+        payload=json.loads(old);payload['originals'][0]['requirements'].append(extra);payload['originals'][0]['uncertainties']=[]
+        with self.store._db() as c:c.execute('UPDATE agent_pdf_material SET payload=? WHERE message_id=? AND first_page=1',(json.dumps(payload),keys['message_id']))
+        ident=self.rows("SELECT id FROM agent_items WHERE state='pending' ORDER BY id LIMIT 1")[0][0]
+        row=self.item(ident);plan=json.loads(row['plan'])
+        plan['school_original_action'].pop('requirements')
+        with self.store._db() as c:c.execute('UPDATE agent_items SET plan=? WHERE id=?',(json.dumps(plan),ident))
+        self.assertFalse(self.mapped_upgrade_scope(keys,upload,remap=True)[1])
+        with self.store._db() as c:c.execute('UPDATE agent_items SET plan=?,state=? WHERE id=?',(row['plan'],'dismissed',ident))
+        self.assertFalse(self.mapped_upgrade_scope(keys,upload,remap=True)[1])
+
     def test_legacy_reflow_retains_each_old_action_and_rejects_merging_two_ids(self):
         ids,requirements=self.legacy_action_candidates()
         before=self.rows('SELECT * FROM agent_items ORDER BY id')

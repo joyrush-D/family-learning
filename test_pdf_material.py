@@ -75,6 +75,156 @@ for _name in [n for n in dir(test_media.MediaTests) if n.startswith('test_')]:
 
 
 class PdfMaterialTests(Base):
+    def mapped_fixture(self):
+        from test_school_pdf_evidence import SchoolPdfEvidenceTests
+        case=SchoolPdfEvidenceTests();case.setUp();self.addCleanup(case.doCleanups)
+        case.store.app=case.app
+        keys,ident=case.mapped_scope_fixture()
+        return case,keys,ident
+
+    @staticmethod
+    def mapped_rows(case,table):
+        with case.store._db() as c:return [dict(r) for r in c.execute('SELECT * FROM '+table+' ORDER BY rowid')]
+
+    def mapped_reply(self,case):
+        old=self.mapped_rows(case,'agent_pdf_material')[0]
+        reply=json.loads(old['payload']);reply.pop('kind');reply.pop('previous_group',None)
+        for original in reply['originals']:
+            original.update(uncertainties=[],deferred_contexts=[],note='本轮实际核对第1至3页，其余有效页组未重送。')
+        return old,reply
+
+    def test_mapped_pdf_upgrade_keeps_accepted_native_and_all_pending_actions_exact(self):
+        case,keys,ident=self.mapped_fixture();old,reply=self.mapped_reply(case)
+        before={t:self.mapped_rows(case,t) for t in ('agent_items','manual_tasks','records')}
+        def read(text,images,**kwargs):
+            context=json.loads(text)
+            self.assertEqual(context['material_scope']['sent_pages'],[1,2,3])
+            self.assertEqual(context['material_scope']['processed_pages'],[4,5])
+            self.assertEqual(context['material_scope']['unprocessed_pages'],[])
+            self.assertEqual(context['original_pdf']['previous_requirements'],reply['originals'][0]['requirements'])
+            self.assertEqual((kwargs['original_ids'],kwargs['original_pages'],len(images)),([ident],[1,2,3],3))
+            return reply
+        with renderer(page_count=5),patch.object(family_llm,'extract_draft',side_effect=read) as model:
+            self.assertEqual(pdfm.prepare(case.store,case.now+dt.timedelta(minutes=5),budget=1),dict(used=1,failed=0))
+        model.assert_called_once()
+        self.assertEqual({t:self.mapped_rows(case,t) for t in before},before)
+        saved=self.mapped_rows(case,'agent_pdf_material')[0]
+        self.assertEqual(json.loads(saved['payload'])['previous_group'],dict(payload=json.loads(old['payload']),
+            updated=old['updated'],pages=[1,2,3],page_count=5))
+        with patch.object(family_llm,'extract_draft',side_effect=AssertionError('No repeated upgrade')):
+            self.assertEqual(pdfm.prepare(case.store,case.now+dt.timedelta(minutes=6),budget=1),dict(used=0,failed=0))
+
+    def test_mapped_pdf_real_or_mixed_doubt_is_not_erased_by_scope_upgrade(self):
+        for doubts in (['第2题单位模糊，无法核对。'],['本轮只读第1至3页，且第2题单位模糊，无法核对。']):
+            with self.subTest(doubts=doubts):
+                case,keys,_=self.mapped_fixture()
+                with case.store._db() as c:
+                    old=c.execute('SELECT * FROM agent_pdf_material ORDER BY first_page LIMIT 1').fetchone()
+                    payload=json.loads(old['payload']);payload['originals'][0]['uncertainties']=doubts
+                    c.execute('UPDATE agent_pdf_material SET payload=? WHERE first_page=1',(json.dumps(payload,ensure_ascii=False),))
+                before=self.mapped_rows(case,'agent_pdf_material')
+                with no_render(),patch.object(family_llm,'extract_draft',side_effect=AssertionError('No blind re-read')):
+                    self.assertEqual(pdfm.prepare(case.store,case.now+dt.timedelta(minutes=5),budget=1),dict(used=0,failed=0))
+                self.assertEqual(self.mapped_rows(case,'agent_pdf_material'),before)
+
+    def test_mapped_upgrade_cannot_replace_groups_after_concurrent_decision_or_history_change(self):
+        for change in ('decision','history'):
+            with self.subTest(change=change):
+                case,keys,_=self.mapped_fixture();old,reply=self.mapped_reply(case)
+                def read(*args,**kwargs):
+                    with case.store._db() as c:
+                        if change=='decision':
+                            c.execute("UPDATE agent_items SET state='dismissed' WHERE id=(SELECT id FROM agent_items WHERE state='pending' ORDER BY id LIMIT 1)")
+                        else:
+                            payload=json.loads(old['payload']);payload['previous_group']=dict(payload={'history':'concurrent'},updated='changed',pages=[1,2,3],page_count=5)
+                            c.execute('UPDATE agent_pdf_material SET payload=? WHERE first_page=1',(json.dumps(payload,ensure_ascii=False),))
+                    return reply
+                with renderer(page_count=5),patch.object(family_llm,'extract_draft',side_effect=read) as model:
+                    self.assertEqual(pdfm.prepare(case.store,case.now+dt.timedelta(minutes=5),budget=1),dict(used=1,failed=0))
+                model.assert_called_once()
+                saved=self.mapped_rows(case,'agent_pdf_material')[0]
+                if change=='decision':self.assertEqual(saved,old)
+                else:self.assertEqual(json.loads(saved['payload'])['previous_group']['payload'],{'history':'concurrent'})
+                self.assertEqual(len(self.mapped_rows(case,'manual_tasks')),1)
+
+    def test_reworded_requirement_stays_unmatched_instead_of_stealing_old_action_identity(self):
+        case,keys,ident=self.mapped_fixture();_,reply=self.mapped_reply(case)
+        original_text=reply['originals'][0]['requirements'][0]
+        reply['originals'][0]['requirements'][0]=original_text+'（原句已更正）'
+        before=self.mapped_rows(case,'agent_items')
+        with renderer(page_count=5),patch.object(family_llm,'extract_draft',return_value=reply):
+            self.assertEqual(pdfm.prepare(case.store,case.now+dt.timedelta(minutes=5),budget=1),dict(used=1,failed=0))
+        with case.store._db() as c:
+            source,message=case.store._message_context(c,keys)
+            doc=pdfm.complete_evidence(case.store,c,source,message)
+        evidence=agent._pdf_evidence([dict(ref='message:'+keys['source_id']+':'+keys['message_id'],**doc)])
+        parts=agent._school_original_parts([],evidence,None)
+        changed=[r for r in before if r['state']=='pending' and any(q['text']==original_text
+            for q in json.loads(r['plan'])['school_original_action']['requirements'])]
+        self.assertEqual(len(changed),1)
+        with self.assertRaises(agent.AgentError):agent._school_saved_requirements(changed[0],parts)
+        self.assertEqual(self.mapped_rows(case,'agent_items'),before)
+        self.assertEqual(len(self.mapped_rows(case,'manual_tasks')),1)
+
+    def test_mapped_upgrade_rechecks_eligibility_even_if_current_scope_hash_stays_equal(self):
+        for when in ('after-render','after-model'):
+            with self.subTest(when=when):
+                case,keys,_=self.mapped_fixture();old,reply=self.mapped_reply(case)
+                intact=agent._school_pdf_upgrade_scope;changed=False;render=family_pdf.render_pages
+                def scope(*args,**kwargs):
+                    digest,eligible=intact(*args,**kwargs)
+                    return digest,False if changed else eligible
+                def rendered(*args,**kwargs):
+                    nonlocal changed
+                    result=render(*args,**kwargs)
+                    if when=='after-render':changed=True
+                    return result
+                def model(*args,**kwargs):
+                    nonlocal changed
+                    changed=True;return reply
+                with renderer(page_count=5),patch.object(agent,'_school_pdf_upgrade_scope',side_effect=scope), \
+                        patch.object(family_pdf,'render_pages',side_effect=rendered),patch.object(family_llm,'extract_draft',side_effect=model) as called:
+                    self.assertEqual(pdfm.prepare(case.store,case.now+dt.timedelta(minutes=5),1),
+                                     dict(used=0 if when=='after-render' else 1,failed=0))
+                self.assertEqual(called.call_count,0 if when=='after-render' else 1)
+                self.assertEqual(self.mapped_rows(case,'agent_pdf_material')[0],old)
+                self.assertEqual(len(self.mapped_rows(case,'manual_tasks')),1)
+
+    def test_new_independent_requirement_is_fully_mapped_without_replacing_old_ids_or_english(self):
+        from test_school_pdf_evidence import draft
+        case,keys,_=self.mapped_fixture();_,reply=self.mapped_reply(case)
+        new_text='语文：2026-02-15前背诵第1段，不需要打印。'
+        reply['originals'][0]['requirements'].append(new_text)
+        before=self.mapped_rows(case,'agent_items');accepted=next(r for r in before if r['state']=='accepted')
+        existing={r['id']:r for r in before}
+        with renderer(page_count=5),patch.object(family_llm,'extract_draft',return_value=reply):
+            self.assertEqual(pdfm.prepare(case.store,case.now+dt.timedelta(minutes=5),1),dict(used=1,failed=0))
+        def map_all(messages,schema,name,**kwargs):
+            self.assertEqual(name,'family_school_task')
+            context=json.loads(messages[-1]['content']);parts={p['id']:p for p in context['original_parts']};assigned=set();actions=[]
+            for old in context['existing_actions']:
+                if old['state']!='pending':continue
+                saved=old['original_action']['requirements'];assigned.update(r['id'] for r in saved)
+                brief=json.loads(existing[old['id']]['plan'])['school_task']
+                actions.append(dict(draft(title=old['title'],goal=old['goal'],purpose=brief['purpose']),due=old['due'],existing_item_id=old['id'],
+                    basis=[dict(part=r['id'],text=parts[r['id']]['text']) for r in saved]))
+            remaining=[p for p in parts.values() if p.get('requirement') and p['id'] not in assigned]
+            self.assertEqual([p['text'] for p in remaining],[new_text])
+            actions.append(dict(draft(title='语文：背诵第1段',goal=new_text,learning_subject='语文'),due='2026-02-15',existing_item_id='',
+                basis=[dict(part=remaining[0]['id'],text=new_text)]))
+            return dict(actions=actions)
+        with patch.object(family_llm,'_chat_json',side_effect=map_all) as model:
+            result=agent._refresh_school(case.app,case.store,case.now+dt.timedelta(minutes=6),budget=1)
+        self.assertEqual((result,model.call_count),(dict(used=1,failed=0,created=4),1))
+        after=self.mapped_rows(case,'agent_items');self.assertEqual(next(r for r in after if r['id']==accepted['id']),accepted)
+        old_pending={r['id'] for r in before if r['state']=='pending'}
+        self.assertEqual({r['id'] for r in after if r['id'] in old_pending and r['state']=='accepted'},old_pending)
+        added=[r for r in after if r['id'] not in existing]
+        self.assertEqual([(r['body'],r['due'],r['state']) for r in added],[(new_text,'2026-02-15','accepted')])
+        self.assertEqual(len(self.mapped_rows(case,'manual_tasks')),5)
+        with patch.object(family_llm,'_chat_json',side_effect=AssertionError('No duplicate mapping')):
+            self.assertEqual(agent._refresh_school(case.app,case.store,case.now+dt.timedelta(minutes=7),1),dict(used=0,failed=0,created=0))
+
     def test_complete_legacy_pages_report_missing_standards_and_failed_upgrade(self):
         keys=self.school_fragment('虚构PDF原件，完整要求尚未整理。')
         ident=self.seed_pdf('a'*32);self.link(keys,ident)

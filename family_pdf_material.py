@@ -318,12 +318,17 @@ def complete_evidence(store, c, source, message):
     return documents[0] if len(documents) == 1 else dict(fingerprint=_aggregate_fingerprint(values), documents=documents)
 
 
-def _decision_scope(store, c, source, message):
-    """Whole-message decisions, including current plans/tasks/feedback; a timestamp alone is not a snapshot."""
-    from family_agent import _school_original_known, _school_pending_original
+def _decision_scope(store, c, source, message, value):
+    """All decisions and saved groups are snapshotted; eligibility belongs to the affected original."""
+    from family_agent import _hash, _school_original_known, _school_pending_original, _school_pdf_upgrade_scope
     ref='message:'+source['id']+':'+message['id']
-    scope,known=_school_original_known(store,c,dict(child_id=source['child_id'],evidence=json.dumps([dict(ref=ref)])))
-    return scope,bool(known) and all(_school_pending_original(row) for row in known)
+    _,known=_school_original_known(store,c,dict(child_id=source['child_id'],evidence=json.dumps([dict(ref=ref)])))
+    rows=_rows(c,source,message,value['fingerprint'])
+    batches,_,_=_batches(rows,value['upload_id'])
+    scope,mapped=_school_pdf_upgrade_scope(store,c,source,message,value['upload_id'],batches)
+    legacy=bool(known) and all(_school_pending_original(row) for row in known)
+    # Raw payloads include non-authoritative history too: a concurrent history write must not be overwritten.
+    return _hash([scope,[dict(row) for row in rows]]),legacy or mapped,mapped and not legacy
 
 
 def _claim_intact(store, c, source, message, value, key, fp):
@@ -333,8 +338,10 @@ def _claim_intact(store, c, source, message, value, key, fp):
     except Exception:
         return False  # Revoked, unreadable or now another child's: treated as changed.
     job = c.execute('SELECT fingerprint FROM agent_jobs WHERE id=?', (key,)).fetchone()
-    return (current is not None and current['fingerprint'] == value['fingerprint'] and job is not None and job['fingerprint'] == fp
-            and _decision_scope(store,c,source,message)[0] == value['decision_scope'])
+    if current is None or current['fingerprint']!=value['fingerprint'] or job is None or job['fingerprint']!=fp:return False
+    scope,undecided,mapped=_decision_scope(store,c,source,message,current)
+    return (scope==value['decision_scope'] and (not value.get('upgrade_pages') or undecided)
+            and ('previous_requirements' not in value or mapped))
 
 
 def _void(c, key, fp):
@@ -368,14 +375,19 @@ def prepare(store, now, budget=ROUND_CALLS):
                 if not values:
                     continue
                 candidates = []
-                decision_scope,undecided=_decision_scope(store,c,source,message)
                 for value in values:
+                    decision_scope,undecided,mapped=_decision_scope(store,c,source,message,value)
                     batches, done, page_count = _batches(_rows(c, source, message, value['fingerprint']),value['upload_id'])
                     legacy=[b for b in batches if _needs_requirements_upgrade(b)]
                     if legacy:
                         if undecided:
                             done={p for b in batches if not _needs_requirements_upgrade(b) for p in b['pages']}
                             value['upgrade_pages']=legacy[0]['pages']  # Preserve saved boundaries and all other groups.
+                            if mapped:
+                                # Historical wording only helps locate the same action. The newly sent images,
+                                # not this old payload, remain the authority for every returned requirement.
+                                value['previous_requirements']=[text for original in legacy[0]['draft']['originals']
+                                    for text in original['requirements']]
                         elif page_count is not None and not _pending(done,page_count):continue
                         # A shared legacy group never changes after any decision. Missing groups retain the original
                         # bounded first-read path, which does not replace the already saved legacy groups.
@@ -450,6 +462,11 @@ def prepare(store, now, budget=ROUND_CALLS):
                                                    sent_pages=pages, processed_pages=sorted(done),unprocessed_pages=left, other_originals_sent=False),
                                original_pdf=dict(upload_id=value['upload_id'], name=value['name'], mime=value['mime'], pages=pages, page_count=page_count,
                                                  unprocessed_pages=left, conversion=value['conversion'])), ensure_ascii=False)
+        if 'previous_requirements' in value:
+            context=json.loads(text)
+            context['original_pdf']['previous_requirements']=value['previous_requirements']
+            text=json.dumps(context,ensure_ascii=False)
+        require(len(text)<=family_llm.MAX_TEXT,'pdf_material_text_too_large')  # Do not shorten requirements to fit.
         images = [dict(mime='image/png', data=p['data']) for p in rendered['pages']]
         result = family_llm.extract_draft(text, images, target_child=value['child'], timeout=90, data_path=store.data,
                                           school_material=True,original_ids=[value['upload_id']],original_pages=pages,deferred_pages=left)

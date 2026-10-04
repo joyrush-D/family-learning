@@ -2597,6 +2597,112 @@ def _school_pending_original(row):
     return dates==({row['due']} if row['due'] else set())
 
 
+def _school_pdf_scope_only_uncertainty(text,pages,page_count):
+    """Recognize whole technical scope assertions, never erase a matching fragment of a real doubt."""
+    number=r'[0-9]+'
+    objects=(r'(?:第'+number+r'题|数学|语文|英语|练习[甲乙丙丁戊己庚辛壬癸A-Za-z0-9]*|'
+        r'选做题|选做条件|适用条件|解题方法|方法要求|完整完成标准|完整行动标准|完整标准|完成标准|'
+        r'复习安排|独立活动回执|活动回执|具体要求|要求|日期|归属|后续内容|这些|所附PDF|'
+        r'还包含|包含|也见|的|和|及|与|、|及其|标准)+')
+    gap=False
+    for clause in re.split(r'[，,；;。\n]',text):
+        clause=clause.strip()
+        if not clause:continue
+        pointer=re.fullmatch(r'第('+number+r')页(?:也)?(?:称|写明|说明)'+objects+r'见(?:本文件)?第('+number+r')页',clause)
+        if pointer:
+            if int(pointer[1]) not in pages or not 1<=int(pointer[2])<=page_count or int(pointer[2]) in pages:return False
+            continue
+        if re.fullmatch(r'通知称'+objects,clause):continue
+        absent=re.fullmatch(r'(?:但)?第('+number+r')页本轮未(?:重)?送入',clause)
+        if absent:
+            if not 1<=int(absent[1])<=page_count or int(absent[1]) in pages:return False
+            gap=True;continue
+        sent=re.fullmatch(r'(?:但)?本轮(?:仅见|仅读取|仅送入)第('+number+r')(?:至第?('+number+r'))?页(?:'+objects+r')?',clause)
+        if sent:
+            first=int(sent[1]);last=int(sent[2] or sent[1])
+            if list(range(first,last+1))!=pages or len(pages)>=page_count:return False
+            gap=True;continue
+        if re.fullmatch(r'(?:因此)?无法(?:核对|确认)'+objects,clause):continue
+        return False  # A remaining fact, missing material or unknown wording keeps the original review guard.
+    return gap
+
+
+def _school_pdf_upgrade_scope(store,c,source,message,upload_id,batches,*,remap=False):
+    """Read-only mapped-candidate recovery proof plus a complete decision/dependency/page-group snapshot.
+
+    The old placeholder route stays separate. A mapped action is eligible only with unchanged full literal
+    requirements; a new reading may preserve those exact words, but cannot migrate its identity by similarity.
+    Remapping admits only additional unowned full requirements; current real doubts remain mapping input.
+    """
+    ref='message:'+source['id']+':'+message['id']
+    known_key,known=_school_original_known(store,c,dict(child_id=source['child_id'],evidence=_json([dict(ref=ref)])))
+    tables={r['name'] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    snapshot=[known_key,batches,dict(remap=remap)];linked={}
+    for row in known:
+        plan=json.loads(row['plan']);brief=plan.get('school_task',{})
+        ids=sorted({v for v in (row['task_id'],'AGENT-'+_hash(row['id'])[:24],brief.get('target_id'),plan.get('task_id')) if v})
+        dependencies=[]
+        for ident in ids:
+            for table,column in [('manual_tasks','id'),('task_focus','task_id'),('task_updates','id'),('task_history','task_id'),('study_items','task_id')]:
+                dependencies.append([table,ident,[dict(v) for v in c.execute('SELECT * FROM '+table+' WHERE '+column+'=? ORDER BY rowid',(ident,))] if table in tables else []])
+            dependencies.append(['records',ident,[dict(v) for v in c.execute('SELECT * FROM records WHERE linked_task_id=? OR source=? ORDER BY id',(ident,'事项:'+ident))] if 'records' in tables else []])
+        if 'manual_tasks' in tables:
+            dependencies.append(['candidate_tasks',[dict(v) for v in c.execute('SELECT * FROM manual_tasks WHERE source LIKE ? ORDER BY id',('Agent建议:'+row['id']+'\n%',))]])
+        if 'records' in tables:
+            dependencies.append(['candidate_records',[dict(v) for v in c.execute('SELECT * FROM records WHERE id=? OR source=? ORDER BY id',(row['record_id'],'Agent建议:'+row['id']))]])
+        if row['care_id']:
+            dependencies.append(['care',[dict(v) for v in c.execute('SELECT * FROM agent_items WHERE id=?',(row['care_id'],))]])
+        linked[row['id']]=any(bool(entry[-1]) for entry in dependencies)
+        snapshot.append([row['id'],dependencies])
+    scope=_hash(snapshot)
+    try:
+        material=family_pdf_material.complete_evidence(store,c,source,message)
+        documents=(material.get('documents') or [material]) if material else []
+        doc=next((d for d in documents if d['upload_id']==upload_id),None)
+        if not doc or doc['batches']!=batches:return scope,False
+        originals=[o for b in batches for o in b['draft'].get('originals',[])]
+        if len(originals)!=len(batches) or not originals:return scope,False
+        doubts=[(u,b['pages']) for b in batches for o in b['draft']['originals'] for u in o.get('uncertainties',[])]
+        if not remap and (not doubts or any(not _school_pdf_scope_only_uncertainty(u,p,doc['page_count']) for u,p in doubts)):return scope,False
+        if any(family_llm.school_requirement_has_reading_progress(t) for o in originals for t in o.get('requirements',[])):return scope,False
+        parts=_school_original_parts([],dict(model=[dict(ref=ref,upload_id=upload_id,
+            groups=[dict(pages=b['pages'],requirements=b['draft']['originals'][0].get('requirements',[]),text=b['draft']['originals'][0]['note']) for b in batches])]),None)
+        lookup={p['id']:p for p in parts if p.get('requirement')};owned=set();affected=0
+        from family_agenda import deadlines,sent_day
+        for row in known:
+            plan=json.loads(row['plan']);brief=plan.get('school_task',{});action=plan.get('school_original_action',{})
+            anchors=action.get('anchors',[])
+            if not action.get('identity') or not isinstance(anchors,list) or not 1<=len(anchors)<=6:return scope,False
+            evidence,_=_school_material(store,c,row);messages={e['ref']:e for e in evidence}
+            if brief.get('origin_basis')!=_school_message_basis(evidence):return scope,False
+            if any(not isinstance(a,dict) or set(a)!={'ref','upload_ids','pages','quote'} or a['ref'] not in messages
+                or not isinstance(a['upload_ids'],list) or not isinstance(a['pages'],list) or not isinstance(a['quote'],str) or not a['quote'].strip() for a in anchors):return scope,False
+            identity=_hash([row['child_id'],sorted(_json([a['ref'],a['upload_ids'],a['quote']]) for a in anchors)])
+            if action['identity']!=identity:return scope,False
+            if not any(upload_id in a['upload_ids'] for a in anchors):
+                # Only a proved native action is independent of this PDF; an unknown legacy scope still blocks.
+                if action.get('requirements') or any(a['upload_ids'] or a['pages'] or messages[a['ref']].get('kind') not in ('text','quote')
+                    or messages[a['ref']].get('content_incomplete') or _needs_task_details(a['quote'])
+                    or a['quote'] not in messages[a['ref']]['text'] for a in anchors):return scope,False
+                continue
+            affected+=1
+            if row['state']!='pending' or row['task_id'] or row['record_id'] is not None or row['care_id'] or linked[row['id']] or brief.get('target_id') or brief.get('change')!='new':return scope,False
+            if any(plan.get(k) for k in ('school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id','approved')):return scope,False
+            if row['title']!=brief.get('title') or row['body']!=brief.get('goal') or not action.get('requirements'):return scope,False
+            texts=_school_saved_requirements(row,parts)
+            if _school_requirement_goal(dict(brief,title=''),texts)['goal']!=row['body']:return scope,False
+            requirements=action['requirements'];ids=[r['id'] for r in requirements]
+            if len(ids)!=len(set(ids)) or owned&set(ids):return scope,False
+            owned.update(ids)
+            expected=[dict(ref=lookup[i]['ref'],upload_ids=lookup[i]['upload_ids'],pages=lookup[i]['pages'],quote=lookup[i]['text']) for i in ids]
+            if anchors!=expected:return scope,False
+            dates=set().union(*(deadlines(a['quote'],sent_day(messages[a['ref']].get('time'))) for a in anchors))
+            if dates!=({row['due']} if row['due'] else set()):return scope,False
+        return scope,bool(affected) and (owned<set(lookup) if remap else owned==set(lookup))
+    except (AgentError,ValueError,KeyError,TypeError):
+        return scope,False
+
+
 def _school_pdf_reflow(row,pdf,known):
     action=json.loads(row['plan']).get('school_original_action',{})
     return bool(pdf and pdf.get('requirements_complete') and action and not action.get('requirements')
@@ -2941,10 +3047,19 @@ def _refresh_school(app, store, now, budget):
                 context['pdf_material']=pdf_evidence['model']
             if material:
                 value['material']=material_key;context['school_material']=material['model']
-            reflow=False
+            reflow=mapped_reflow=False
             if plan.get('school_original_action') and pdf_evidence:
                 with store._db() as c:_,reflow_known=_school_original_known(store,c,row)
                 reflow=_school_pdf_reflow(row,pdf_evidence,reflow_known)
+                if action.get('requirements') and pdf_evidence.get('requirements_complete'):
+                    # A current reading may discover a new independent requirement. Do not refine only the
+                    # old subset and silently lose it: all complete requirements must be assigned together.
+                    with store._db() as c:
+                        for document in pdf_material:
+                            source_id,message_id=document['ref'][8:].rsplit(':',1)
+                            origin,message=store._message_context(c,dict(child_id=row['child_id'],source_id=source_id,message_id=message_id))
+                            _,eligible=_school_pdf_upgrade_scope(store,c,origin,message,document['upload_id'],document['batches'],remap=True)
+                            mapped_reflow|=eligible
                 if not action.get('requirements') and any(a.get('upload_ids') and a.get('pages') for a in action.get('anchors',[])) and not reflow:
                     # A same-source family decision forbids legacy reflow. It must also forbid falling back to
                     # a free summary that replaces this pending action's original words.
@@ -2953,9 +3068,9 @@ def _refresh_school(app, store, now, budget):
                         plan['school_task']=waiting
                         with store._db() as c:c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=? AND plan=?",(_json(plan),row['id'],row['updated'],row['plan']))
                     continue
-            original_parts=_school_original_parts(evidence,pdf_evidence,material) if (pdf_evidence or material) and (not plan.get('school_original_action') or reflow) else []
+            original_parts=_school_original_parts(evidence,pdf_evidence,material) if (pdf_evidence or material) and (not plan.get('school_original_action') or reflow or mapped_reflow) else []
             compiled_requirements=None
-            if plan.get('school_original_action',{}).get('requirements'):
+            if plan.get('school_original_action',{}).get('requirements') and not mapped_reflow:
                 try:
                     compiled_requirements=_school_saved_requirements(row,_school_original_parts(evidence,pdf_evidence,material))
                     context['complete_action_requirements']=compiled_requirements
