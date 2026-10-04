@@ -1801,14 +1801,19 @@ def _school_dated_quote(quote, evidence, due, brief):
         objects=set(re.findall(r'unit\d+(?:[-–—]\d+)?|第[一二三四五六七八九十百0-9]+课|《[^》]{1,40}》|练习卷|练习册|教材|作业本|试卷',text))
         return kinds,objects
     kinds,objects=identity(quote)
-    if len(kinds)!=1 or not objects or identity(brief['goal'])!=(kinds,objects):return False
+    typed_action=len(kinds)==1 and bool(objects) and identity(brief['goal'])==(kinds,objects)
+    # An independently dated parent action may lack a reading/paper identity.
+    # Accept its date only when the full unrewritten action is uniquely quoted;
+    # this cannot lend a sibling's date to a paraphrase or a date-only fragment.
+    literal_action=(clean(quote)==clean(brief['goal']) and bool(re.search(r'签字|盖章|交回',quote)))
+    if not typed_action and not literal_action:return False
     matches=[]
     for entry in evidence:
         text=entry['text'];start=0
         # A class noun (e.g. 练习卷) is not a paper identity. If several dated
         # clauses match this coarse object, it cannot identify which is ours.
         for clause in re.split(r'[。；;\n]',text):
-            if identity(clause)==(kinds,objects):
+            if typed_action and identity(clause)==(kinds,objects):
                 values=deadlines(clause,sent_day(entry.get('time','')))
                 if values and values!={due}:return False
         while (start:=text.find(quote,start))!=-1:
@@ -1821,7 +1826,7 @@ def _school_dated_quote(quote, evidence, due, brief):
                 stated=deadlines(brief['goal'],published)
                 if stated and stated!={due}:return False
             start=end
-    return bool(matches) and all(values=={due} for values in matches)
+    return bool(matches) and all(values=={due} for values in matches) and (typed_action or len(matches)==1)
 
 
 def _history_anchor(row, originals):
