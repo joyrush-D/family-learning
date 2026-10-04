@@ -2342,6 +2342,13 @@ class AgentTests(unittest.TestCase):
                         'the same named receipt may omit the administrative and date labels')
         self.assertFalse(agent._school_dated_quote(quote,evidence,'2026-02-13',dict(goal=wrong)),
                          'a shared receipt category cannot ground a different named receipt')
+        for initial in ('和','并','将','把','请'):
+            with self.subTest(name_initial=initial):
+                named='签字交回'+initial+'美校园活动回执。'
+                original='家长事务：2026-02-13'+named
+                self.assertFalse(agent._school_dated_quote(original,[dict(text=original,time=self.now.isoformat())],
+                                 '2026-02-13',dict(goal=named.replace(initial+'美','美'))),
+                                 'a name initial is not a connector unless followed by another action')
 
     def test_dated_admin_object_mismatch_never_auto_collects_wrong_receipt(self):
         reading='语文作业：2026-02-11朗读第5课两遍。'
