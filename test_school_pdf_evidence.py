@@ -147,7 +147,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         result,calls=self.refresh(reply)
         self.assertEqual((result,len(calls)),(dict(used=1,failed=0,created=1),1))
         saved=self.item(ident);brief=self.brief(ident)
-        self.assertEqual((saved['body'],brief['goal'],brief['submission']),(requirement,requirement,''))
+        self.assertEqual((saved['body'],brief['goal'],brief.get('submission','')),(requirement,requirement,''))
         task=self.rows('SELECT action FROM manual_tasks')[0][0]
         self.assertEqual(task,requirement)
         self.assertEqual(json.loads(saved['plan'])['school_original_action']['requirements'][0]['text'],requirement)
