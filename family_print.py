@@ -343,6 +343,47 @@ def office_convert(data, suffix, directory, soffice, *, timeout, limit, read):
     return pdf
 
 
+def _invalid_xml(value):
+    return any(ord(ch) < 32 and ch not in "\n\t" or ord(ch) == 127 or 0xd800 <= ord(ch) <= 0xdfff or ord(ch) in (0xfffe,0xffff) for ch in value)
+
+
+def _text_docx(paragraphs, *, original=False):
+    """Deterministic A4 conversion input, with original text kept separate from guide headings."""
+    keep=set();start=0
+    for end in range(len(paragraphs)+1):
+        if end==len(paragraphs) or not paragraphs[end].strip():
+            if end-start<=10: keep.update(range(start,end-1))
+            start=end+1
+    def run(line):
+        if not original:
+            return '<w:t xml:space="preserve">'+escape(line or ' ')+'</w:t>'
+        return '<w:tab/>'.join('<w:t xml:space="preserve">'+escape(part)+'</w:t>' for part in line.split('\t'))
+    document = ''.join('<w:p><w:pPr><w:keepLines/>'+('<w:keepNext/>' if n in keep else '')+'</w:pPr>'
+                       +'<w:r><w:rPr><w:rFonts w:eastAsia="PingFang SC"/></w:rPr>'
+                       +run(line)+'</w:r></w:p>' for n,line in enumerate(paragraphs))
+    docx = io.BytesIO()
+    with zipfile.ZipFile(docx, 'w', zipfile.ZIP_DEFLATED) as archive:
+        def write(name, content):
+            # Generated text is identical across retries; ZIP timestamps must not change its hash.
+            archive.writestr(zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0)), content, compress_type=zipfile.ZIP_DEFLATED)
+        write('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            '</Types>')
+        write('_rels/.rels', '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+            '</Relationships>')
+        write('word/document.xml', '<?xml version="1.0" encoding="UTF-8"?>'
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:body>'+document+'<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
+            '<w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr>'
+            '</w:body></w:document>')
+    return docx.getvalue()
+
+
 class PrintStore:
     def __init__(self, data, connect, *, pdfinfo=None, soffice=None):
         self.data, self.connect = Path(data).resolve(), connect
@@ -528,8 +569,15 @@ class PrintStore:
         if suffix == '.pdf' and data.startswith(b'%PDF-'): return data
         if suffix in ('.jpg', '.jpeg') and data.startswith(b'\xff\xd8') or suffix == '.png' and data.startswith(b'\x89PNG'):
             return image_pdf(data)
+        if suffix == '.txt':
+            try: text=data.decode('utf-8-sig').replace('\r\n','\n').replace('\r','\n')
+            except UnicodeDecodeError:
+                raise PrintError('文字原件须为UTF-8编码；请保留原件并另存UTF-8或完整PDF') from None
+            if not text.strip() or len(text)>12000 or _invalid_xml(text):
+                raise PrintError('文字原件须为非空、无控制字符且不超过12000字；原件仍保留')
+            data=_text_docx(text.split('\n'),original=True);suffix='.docx'
         if suffix not in ('.docx', '.pptx'):
-            raise PrintError('暂支持PDF、JPEG、PNG；其他文件请下载原件', 'preview_unavailable', 503)
+            raise PrintError('暂支持PDF、JPEG、PNG、安全Office和UTF-8文字；其他文件请下载原件', 'preview_unavailable', 503)
         if not self.soffice:
             raise PrintError('Office转换尚未配置，请下载原件或上传PDF', 'preview_unavailable', 503)
         try:
@@ -546,45 +594,15 @@ class PrintStore:
     def prepare_guide(self, title, text, idempotency_key, *, revision=False):
         """Prepare a separate parent-only answer sheet after the parent has checked its text."""
         key = _key(idempotency_key)
-        def invalid_xml(value):
-            return any(ord(ch) < 32 and ch not in '\n\t' or ord(ch) == 127 or 0xd800 <= ord(ch) <= 0xdfff or ord(ch) in (0xfffe,0xffff) for ch in value)
-        if not isinstance(title, str) or not title.strip() or len(title) > 200 or invalid_xml(title):
+        if not isinstance(title, str) or not title.strip() or len(title) > 200 or _invalid_xml(title):
             raise PrintError('作业标题不正确')
-        if not isinstance(text, str) or not text.strip() or len(text) > 12000 or invalid_xml(text):
+        if not isinstance(text, str) or not text.strip() or len(text) > 12000 or _invalid_xml(text):
             raise PrintError('参考答案与指南须由家长核对，且不超过12000字')
         paragraphs = ['家长参考答案与辅导指南', title.strip(),
                       '仅供家长核对使用；答案与原题有冲突时以原题和老师要求为准。', *text.strip().splitlines()]
-        keep=set();start=0
-        for end in range(len(paragraphs)+1):
-            if end==len(paragraphs) or not paragraphs[end].strip():
-                if end-start<=10: keep.update(range(start,end-1))
-                start=end+1
-        document = ''.join('<w:p><w:pPr><w:keepLines/>'+('<w:keepNext/>' if n in keep else '')+'</w:pPr>'
-                           +'<w:r><w:rPr><w:rFonts w:eastAsia="PingFang SC"/></w:rPr>'
-                           '<w:t xml:space="preserve">'+escape(line or ' ')+'</w:t></w:r></w:p>'
-                           for n,line in enumerate(paragraphs))
-        docx = io.BytesIO()
-        with zipfile.ZipFile(docx, 'w', zipfile.ZIP_DEFLATED) as archive:
-            def write(name, content):
-                # Generated text is identical across retries; ZIP timestamps must not change its hash.
-                archive.writestr(zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0)), content, compress_type=zipfile.ZIP_DEFLATED)
-            write('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8"?>'
-                '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-                '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
-                '<Default Extension="xml" ContentType="application/xml"/>'
-                '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
-                '</Types>')
-            write('_rels/.rels', '<?xml version="1.0" encoding="UTF-8"?>'
-                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
-                '</Relationships>')
-            write('word/document.xml', '<?xml version="1.0" encoding="UTF-8"?>'
-                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-                '<w:body>'+document+'<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
-                '<w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr>'
-                '</w:body></w:document>')
+        document=_text_docx(paragraphs)
         name='家长参考-'+re.sub(r'[\\/\x00-\x1f\x7f]', '_', title.strip())[:60]+'.docx'
-        return self._prepare_bytes(name, docx.getvalue(),
+        return self._prepare_bytes(name, document,
                                    dict(type='parent_guide', title=title.strip()), key, revision=revision)
 
     def _prepare_bytes(self, name, data, source, key, *, packet=None, revision=False):

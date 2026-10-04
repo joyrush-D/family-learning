@@ -150,7 +150,7 @@ document.addEventListener('change',async e=>{
 function uploadHTML(a,options={}){
  const url=endpoint('/upload/')+encodeURIComponent(a.id),media=a.mime.startsWith('audio/')?'audio':a.mime.startsWith('video/')?'video':'';
  const photo=['image/jpeg','image/png','image/webp'].includes(a.mime)?`<img src="${url}" alt="${esc(a.name)}" loading="${options?.eager?'eager':'lazy'}">`:'';
- return `<div class="upload-item"><a href="${url}" target="_blank" rel="noopener">${esc(a.name)}</a> <span class="muted small">${(a.size/1024/1024).toFixed(2)} MB</span>${/\.(pdf|jpe?g|png|docx?|pptx)$/i.test(a.name)?` <button type="button" data-print-upload="${esc(a.id)}">打印</button>`:''}${photo?(options?.collapsed?`<details class="task-saved-originals"><summary>展开作答照片</summary>${photo}</details>`:photo):media?`<${media} controls ${media==='video'?'playsinline':''} preload="${media==='video'?'metadata':'none'}" src="${url}" aria-label="播放${esc(a.name)}"></${media}><div class="media-tools"><label>播放速度<select data-media-speed><option value="0.5">0.5× 慢速</option><option value="0.75">0.75× 慢速</option><option value="1" selected>1× 正常</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option></select></label><button type="button" data-media-back>重听前5秒</button></div><p class="small muted" data-media-status>${media==='video'?'视频原件仅供回放，声音与内容尚未评估。':'可暂停、拖动和调速；听过不代表已经会写。'}无法回放时点文件名打开原件。</p>`:''}</div>`;
+ return `<div class="upload-item"><a href="${url}" target="_blank" rel="noopener">${esc(a.name)}</a> <span class="muted small">${(a.size/1024/1024).toFixed(2)} MB</span>${/\.(pdf|jpe?g|png|docx?|pptx|txt)$/i.test(a.name)?` <button type="button" data-print-upload="${esc(a.id)}">打印</button>`:''}${photo?(options?.collapsed?`<details class="task-saved-originals"><summary>展开作答照片</summary>${photo}</details>`:photo):media?`<${media} controls ${media==='video'?'playsinline':''} preload="${media==='video'?'metadata':'none'}" src="${url}" aria-label="播放${esc(a.name)}"></${media}><div class="media-tools"><label>播放速度<select data-media-speed><option value="0.5">0.5× 慢速</option><option value="0.75">0.75× 慢速</option><option value="1" selected>1× 正常</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option></select></label><button type="button" data-media-back>重听前5秒</button></div><p class="small muted" data-media-status>${media==='video'?'视频原件仅供回放，声音与内容尚未评估。':'可暂停、拖动和调速；听过不代表已经会写。'}无法回放时点文件名打开原件。</p>`:''}</div>`;
 }
 document.addEventListener('change',e=>{if(!e.target.matches('[data-media-speed]'))return;const media=e.target.closest('.upload-item')?.querySelector('audio,video');if(media)media.playbackRate=Number(e.target.value)});
 document.addEventListener('click',e=>{const button=e.target.closest('[data-media-back]');if(!button)return;const box=button.closest('.upload-item'),media=box?.querySelector('audio,video');if(!media)return;media.currentTime=Math.max(0,(Number.isFinite(media.currentTime)?media.currentTime:0)-5);media.play().catch(()=>{box.querySelector('[data-media-status]').textContent='无法播放这份原件，请点文件名下载或打开核对。'})});
@@ -1134,7 +1134,7 @@ function selectPrintSource(source,checked=true){
   printNotice='';persistPrintDrafts();refreshPrintView();
 }
 const printLabels={queued:'等待家中电脑领取',claimed:'家中电脑已领取',submitted:'已进入打印机队列',spooler_completed:'队列报告完成 · 待确认取纸',received:'家长已确认拿到纸张',cancelled:'已取消',failed:'打印失败 · 需核对',uncertain:'结果不确定 · 请先核对打印机'};
-function printSources(){return [...(data.attachments||[]).map(name=>({source:{type:'attachment',name},name,url:endpoint('/attachment/')+encodeURIComponent(name)})),...(data.uploads||[]).filter(a=>/\.(pdf|jpe?g|png|docx?|pptx)$/i.test(a.name)).map(a=>({source:{type:'upload',id:a.id},name:a.name,url:endpoint('/upload/')+a.id}))]}
+function printSources(){return [...(data.attachments||[]).map(name=>({source:{type:'attachment',name},name,url:endpoint('/attachment/')+encodeURIComponent(name)})),...(data.uploads||[]).filter(a=>/\.(pdf|jpe?g|png|docx?|pptx|txt)$/i.test(a.name)).map(a=>({source:{type:'upload',id:a.id},name:a.name,url:endpoint('/upload/')+a.id}))]}
 function printSummary(){
   const selected=selectedPrintDrafts(),remaining=selected.filter(d=>!d.submitted);
   if(!selected.length)return '勾选要打印的文件，可一次选择多份资料。';
@@ -1194,7 +1194,7 @@ async function openHomeworkPrint(id){
   }catch(err){if(opening===homeworkPrintOpening&&child===owner)toast((err.message||'作业资料暂不可读取')+'；请重试，原打印草稿保留。');return}
   finally{clearTimeout(timer)}
   if(opening!==homeworkPrintOpening||child!==owner)return;
-  const files=materials.files.filter(f=>/\.(pdf|jpe?g|png|docx|pptx)$/i.test(f.name));
+  const files=materials.files.filter(f=>/\.(pdf|jpe?g|png|docx|pptx|txt)$/i.test(f.name));
   if(!files.length){toast(materials.school_error||'这项作业还没有可打印原件，请在同一作业上传资料。');return}
   const f=$('#homeworkPrintForm');f.reset();f.elements.task_id.value=id;
   f.dataset.printSources=JSON.stringify(files.map(file=>JSON.stringify(file.source)));
