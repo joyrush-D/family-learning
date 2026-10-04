@@ -168,15 +168,17 @@ class HomeworkPrintScopeTests(unittest.TestCase):
 
     def assert_prepare_race_rejected(self,change):
         """Change synthetic originals after both PDFs exist, before the HTTP handler queues either."""
-        original=app.family_print.PrintStore.prepare;snapshots=[]
+        original=app.family_print.PrintStore.prepare;snapshots=[];changes_completed=[]
         def change_after_prepare(store,source,*args,**kwargs):
             prepared=original(store,source,*args,**kwargs)
             if source==self.source(self.teacher):
                 snapshots.append(self.print_preparations())
                 change()
+                changes_completed.append(True)
             return prepared
         with patch.object(app.family_print.PrintStore,'prepare',change_after_prepare):
             status,value=self.request('POST','/api/print/homework',self.pair())
+        self.assertEqual(changes_completed,[True],value)  # A rejected correction is not a successful print guard.
         self.assertEqual(status,409,value)
         self.assertEqual(app.print_store().list_jobs(),[])
         self.assertEqual(len(snapshots),1)
@@ -186,59 +188,95 @@ class HomeworkPrintScopeTests(unittest.TestCase):
     def test_task_child_changed_during_prepare_rejects_before_queue(self):
         def change():
             with app.connect() as c:
-                c.execute('UPDATE manual_tasks SET child=? WHERE id=?',('示例乙',self.task['id']))
+                changed=c.execute('UPDATE manual_tasks SET child=? WHERE id=?',('示例乙',self.task['id']))
+                self.assertEqual(changed.rowcount,1)
+                self.assertEqual(c.execute('SELECT child FROM manual_tasks WHERE id=?',(self.task['id'],)).fetchone()['child'],'示例乙')
         self.assert_prepare_race_rejected(change)
 
     def test_task_source_changed_during_prepare_rejects_before_queue(self):
         def change():
             with app.connect() as c:
-                c.execute('UPDATE manual_tasks SET source=? WHERE id=?',('虚构来源更正',self.task['id']))
+                changed=c.execute('UPDATE manual_tasks SET source=? WHERE id=?',('虚构来源更正',self.task['id']))
+                self.assertEqual(changed.rowcount,1)
+                self.assertEqual(c.execute('SELECT source FROM manual_tasks WHERE id=?',(self.task['id'],)).fetchone()['source'],'虚构来源更正')
         self.assert_prepare_race_rejected(change)
 
     def test_feedback_version_changed_during_prepare_rejects_before_queue(self):
         def change():
-            app.save_task_feedback(dict(task_id=self.task['id'],child=self.task['child'],record_id=self.answer['record_id'],
-                note='虚构原反馈已更正，附件保持不变'))
+            with app.connect_read_only() as c:
+                initial=dict(c.execute('SELECT * FROM records WHERE id=?',(self.answer['record_id'],)).fetchone())
+            status,value=self.request('POST','/api/task/feedback',dict(task_id=self.task['id'],child=self.task['child'],
+                record_id=self.answer['record_id'],expected_created=initial['created'],note='虚构原反馈已更正，附件保持不变'))
+            self.assertEqual(status,200,value)
+            with app.connect_read_only() as c:
+                current=dict(c.execute('SELECT * FROM records WHERE id=?',(self.answer['record_id'],)).fetchone())
+            self.assertNotEqual(current['created'],initial['created'])
+            self.assertEqual(current['attachments'],initial['attachments'])
+            self.assertEqual(current['note'],'虚构原反馈已更正，附件保持不变')
         self.assert_prepare_race_rejected(change)
 
     def test_originals_rebound_to_new_feedback_during_prepare_reject_before_queue(self):
         def change():
-            app.save_task_feedback(dict(task_id=self.task['id'],child=self.task['child'],record_id=self.answer['record_id'],attachments=[]))
-            self.feedback(self.task,[self.question,self.teacher],'synthetic-rebound-current-answer')
+            # A limited SQL fixture isolates changed attachment binding; feedback corrections forbid removing originals.
+            with app.connect() as c:
+                changed=c.execute("UPDATE records SET attachments='[]' WHERE id=?",(self.answer['record_id'],))
+                self.assertEqual(changed.rowcount,1)
+            replacement=self.feedback(self.task,[self.question,self.teacher],'synthetic-rebound-current-answer')
+            self.assertNotEqual(replacement['record_id'],self.answer['record_id'])
+            with app.connect_read_only() as c:
+                self.assertEqual(c.execute('SELECT attachments FROM records WHERE id=?',(self.answer['record_id'],)).fetchone()['attachments'],'[]')
+                attachments=json.loads(c.execute('SELECT attachments FROM records WHERE id=?',(replacement['record_id'],)).fetchone()['attachments'])
+                self.assertEqual(attachments,[self.question,self.teacher])
         self.assert_prepare_race_rejected(change)
 
     def test_link_version_changed_during_prepare_rejects_before_queue(self):
         # Ordinary records use the real explicit task-link fields; a feedback's source is its own binding.
-        app.save_task_feedback(dict(task_id=self.task['id'],child=self.task['child'],record_id=self.answer['record_id'],attachments=[]))
+        # Test setup only: remove the competing feedback binding without pretending a forbidden correction succeeded.
+        with app.connect() as c:
+            changed=c.execute("UPDATE records SET attachments='[]' WHERE id=?",(self.answer['record_id'],))
+            self.assertEqual(changed.rowcount,1)
         linked=app.save_record(dict(child=self.task['child'],day='2026-10-01',category='学习进展',title='虚构关联原件',
             source='家长网页记录',attachments=[self.question,self.teacher],linked_task_id=self.task['id'],request_key='synthetic-linked-originals'))
         with app.connect_read_only() as c:
             initial=dict(c.execute('SELECT * FROM records WHERE id=?',(linked['record_id'],)).fetchone())
         def change():
-            removed=app.link_record_task(dict(record_id=linked['record_id'],child=self.task['child'],task_id='',
+            status,removed=self.request('POST','/api/record/task-link',dict(record_id=linked['record_id'],child=self.task['child'],task_id='',
                 expected_linked_at=initial['linked_task_at']))
-            app.link_record_task(dict(record_id=linked['record_id'],child=self.task['child'],task_id=self.task['id'],
+            self.assertEqual(status,200,removed)
+            status,relinked=self.request('POST','/api/record/task-link',dict(record_id=linked['record_id'],child=self.task['child'],task_id=self.task['id'],
                 expected_linked_at=removed['link']['linked_at']))
+            self.assertEqual(status,200,relinked)
+            with app.connect_read_only() as c:
+                current=dict(c.execute('SELECT * FROM records WHERE id=?',(linked['record_id'],)).fetchone())
+            self.assertNotEqual(current['linked_task_at'],initial['linked_task_at'])
+            self.assertEqual(current['linked_task_id'],self.task['id'])
+            self.assertEqual(current['created'],initial['created'])
+            self.assertEqual(current['attachments'],initial['attachments'])
         self.assert_prepare_race_rejected(change)
 
     def test_feedback_source_changed_but_still_linked_during_prepare_rejects_before_queue(self):
         def change():
             # Keep the same child, task, record version and selectable uploads while changing their origin.
             with app.connect() as c:
-                c.execute('UPDATE records SET source=?,linked_task_id=?,linked_task_at=? WHERE id=?',
+                changed=c.execute('UPDATE records SET source=?,linked_task_id=?,linked_task_at=? WHERE id=?',
                     ('虚构手工资料来源',self.task['id'],'2026-10-02T12:00:00',self.answer['record_id']))
+                self.assertEqual(changed.rowcount,1)
+                current=c.execute('SELECT source,linked_task_id FROM records WHERE id=?',(self.answer['record_id'],)).fetchone()
+                self.assertEqual((current['source'],current['linked_task_id']),('虚构手工资料来源',self.task['id']))
         self.assert_prepare_race_rejected(change)
 
     def test_question_bytes_changed_during_prepare_reject_before_queue(self):
         def change():
             path=app.DATA/'uploads'/self.question;body=path.read_bytes()
             path.write_bytes(body[:-1]+bytes([body[-1]^1]))  # Same size defeats a size-only guard.
+            self.assertEqual(len(path.read_bytes()),len(body));self.assertNotEqual(path.read_bytes(),body)
         self.assert_prepare_race_rejected(change)
 
     def test_teacher_bytes_changed_during_prepare_reject_before_queue(self):
         def change():
             path=app.DATA/'uploads'/self.teacher;body=path.read_bytes()
             path.write_bytes(body[:-1]+bytes([body[-1]^1]))
+            self.assertEqual(len(path.read_bytes()),len(body));self.assertNotEqual(path.read_bytes(),body)
         self.assert_prepare_race_rejected(change)
 
     def test_unchanged_pair_retry_reuses_jobs_preparations_and_pdfs(self):
