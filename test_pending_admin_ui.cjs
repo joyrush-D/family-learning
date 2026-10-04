@@ -168,7 +168,7 @@ const taskStatus=task=>task.update?.status||task.original_status;
    await proof(page,'newer-arrival-retains-older-'+width);
 
    await notice(a.id).locator('[data-school-original-ref]').click();
-   const original=page.locator('#schoolOriginalDialog');await original.locator('[data-school-original-retry]').waitFor();
+   const original=page.locator('#schoolOriginalDialog');await eventually(async()=>/虚构原消息读取暂时失败/.test(await original.innerText()),'original read error has arrived');await original.locator('[data-school-original-retry]').waitFor();
    assert.match(await original.innerText(),/虚构原消息读取暂时失败/);await fit(page);
    const identity={source_id:'synthetic-admin',message_id:'A',child_id:'child-1'};
    assert.deepEqual(originalReads,[identity],'first read targets the older original');
