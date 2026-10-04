@@ -3089,6 +3089,19 @@ def _school_original_prompt(pages,pdf,material):
         '\n没有条件替换时condition_changes返回[]。有上述已核首次同批关系时，仅将明确被更正的栏目必做/选做短句分别填old_part/old_text与new_part/new_text；两边均逐字连续引用，各旧句须唯一。不能替换动作、数量、输出标准、否定限制或期限，不能将整段旧要求当替换短句。所有原通知和原件中的相反旧条件都须各自列出；完整requirement仍照原文保存，选做时的具体输出标准也保留。系统只编译这些已核精确条件变化，不能用自由摘要覆盖完整标准。'
 
 
+def _school_action_read_evidence(evidence,anchors,requirements):
+    """Describe only this action's validated body/full requirements, never rewrite collection flags."""
+    result=[]
+    for entry in evidence:
+        own=[a for a in anchors if a['ref']==entry['ref']]
+        complete=lambda a:not a['upload_ids'] or any(r['ref']==a['ref'] and r['upload_ids']==a['upload_ids']
+            and r.get('pages',[])==a['pages'] and r['text']==a['quote'] for r in requirements)
+        read_action=entry.get('kind') in ('text','quote') and own and all(complete(a) for a in own)
+        result.append(dict(entry,text='\n'.join(a['quote'] for a in own),unread=False,content_incomplete=False)
+                      if read_action else copy.deepcopy(entry))
+    return result
+
+
 def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,material,targets,goals,now):
     """Validate every independent action before any write; each deadline has its own bounded basis."""
     from family_agenda import date,deadlines,sent_day
@@ -3190,11 +3203,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         if cited_page and not cited_page['read']: cited_page=None
         # A native body action has no file scope. Its literal anchor is readable
         # independently of sibling attachments; captured/OCR fragments stay unknown.
-        action_evidence=[]
-        for e in cited:
-            own=[a for a in anchors if a['ref']==e['ref']]
-            native_text=e.get('kind') in ('text','quote') and own and all(not a['upload_ids'] for a in own)
-            action_evidence.append(dict(e,text='\n'.join(a['quote'] for a in own),unread=False,content_incomplete=False) if native_text else e)
+        action_evidence=_school_action_read_evidence(cited,anchors,requirements)
         learning=_school_learning(value,goals)
         brief=_school_brief(value,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in action_evidence),
             evidence=action_evidence,school_tasks=targets,pages=cited_page,pdf=cited_pdf,material=cited_material,separate_learning=True)
