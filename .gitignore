@@ -228,3 +228,4 @@
 # Reviewed public requirements only; editable document exports remain private.
 !/PRD同行评审版.md
 !/test_pending_admin_ui.cjs
+!/test_homework_duplicate_ui.cjs
