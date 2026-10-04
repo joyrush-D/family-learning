@@ -3,6 +3,25 @@
 const assert=require('node:assert/strict'),{spawn}=require('node:child_process'),{once}=require('node:events'),net=require('node:net'),{setTimeout:delay}=require('node:timers/promises');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 async function until(check,label){for(let i=0;i<200;i++){if(await check())return;await delay(50)}throw Error(label)}
+// Same failure/lost-receipt/replay checks as test_homework_feedback_review_ui.cjs.
+async function threeAttemptSave(page,path,button,error,success,read){
+ const bodies=[],results=[],before=await read();
+ await page.route('**'+path,async route=>{
+  bodies.push(route.request().postDataJSON());
+  if(bodies.length===1)return route.fulfill({status:503,json:{error:'虚构未写入失败'}});
+  const response=await route.fetch(),value=await response.json();assert.equal(response.status(),200);results.push(value);
+  return bodies.length===2?route.fulfill({status:503,json:{error:'虚构写入成功但回执丢失'}}):route.fulfill({response,json:value});
+ });
+ try{
+  await button.click();await until(error,'no-write failure');assert.deepEqual((await read()).records,before.records);
+  await button.click();await until(error,'lost receipt retained');assert.equal((await read()).records.length,before.records.length+1);
+  await button.click();await until(success,'same numbered retry saved');
+ }finally{await page.unroute('**'+path)}
+ assert.equal(bodies.length,3);assert.deepEqual(bodies[0],bodies[1]);assert.deepEqual(bodies[1],bodies[2]);assert(bodies[0].request_key);
+ const id=value=>path==='/api/wrong/save'?value.saved?.[0]?.id:value.record_id??value.id;
+ assert(Number.isInteger(id(results[1])));assert.equal(id(results[0]),id(results[1]));assert.equal(path==='/api/wrong/save'?results[1].saved?.[0]?.existing:results[1].replayed,true);
+ assert.equal((await read()).records.length,before.records.length+1);return {record_id:id(results[1]),request_key:bodies[0].request_key};
+}
 async function fits(page){
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'no document overflow');
  assert.equal(await page.locator('dialog[open]').evaluateAll(items=>items.some(d=>d.scrollWidth>d.clientWidth)),false,'no dialog overflow');
@@ -236,7 +255,31 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   await autoFeedback.locator('#taskFeedbackHistory').getByText(autoNote,{exact:true}).waitFor();await assertAutoScope(automatic,autoExerciseFile,autoReceiptFile,autoExerciseGoal,autoReceiptGoal);
   assert.match(await autoFeedback.locator('#taskTitle').innerText(),/示例星星.*语文：完成虚构练习第1至11页/);
   autoSaved=await state();autoRecords=autoSaved.records.filter(r=>r.source==='事项:'+automatic.id);assert.equal(autoRecords.length,1);assert.equal(autoSaved.tasks.filter(t=>t.id===automatic.id).length,1,'reopening preserves one task and one feedback');
-  await fits(page);await proof(page,'auto-original-feedback-reopened-'+width);await autoFeedback.locator('[data-close=taskDialog]').click();factsBefore=facts(await state());
+  await fits(page);await proof(page,'auto-original-feedback-reopened-'+width);
+  // Continue from the real saved feedback: handwritten wrong item and correction use
+  // the ordinary APIs, with no model, printer enqueue or separate synthetic task.
+  const autoLoopBefore=await state(),autoTaskBefore=autoLoopBefore.tasks.find(t=>t.id===automatic.id),autoReceiptBefore=autoLoopBefore.tasks.find(t=>t.id===autoReceiptTask.id),autoPrintIds=autoLoopBefore.printing.jobs.map(j=>j.id).sort(),autoFeedbackId=autoRecords[0].id;
+  const assertAutoPrintSources=async()=>{
+   const response=await fetch(url+'api/print/homework/materials?task_id='+encodeURIComponent(automatic.id)),out=await response.json();assert.equal(response.status,200,JSON.stringify(out));
+   assert.deepEqual(out.task,{id:automatic.id,child:automatic.child});assert.equal(out.school_error,'');assert.deepEqual(out.files.map(f=>f.source),[{type:'upload',id:autoExerciseFile.id}]);assert.equal(out.files[0].origin,'school');assert.equal(out.files[0].name,autoExerciseFile.name);
+  };
+  await assertAutoPrintSources();assert.equal(facts(await state()),facts(autoLoopBefore),'reading print sources does not write business records');assert.deepEqual((await state()).printing.jobs.map(j=>j.id).sort(),autoPrintIds,'reading sources creates no print job');
+  const autoWrong=autoFeedback.locator('[data-task-wrong-form="'+autoFeedbackId+'"]'),autoWrongLabel='虚构语文练习第6题';await autoWrong.locator(':scope > summary').click();assert.equal(await autoWrong.locator('[data-task-wrong-photo]').count(),0);
+  await autoWrong.locator('[data-wrong-field=label]').fill(autoWrongLabel);await autoWrong.locator('[data-wrong-field=text]').fill('虚构第6题：选择与原文相符的一项。');await autoWrong.locator('[data-wrong-field=answer]').fill('A（虚构）');await autoWrong.locator('[data-wrong-field=correction]').fill('B（虚构）');
+  const autoWrongSaved=await threeAttemptSave(page,'/api/wrong/save',autoWrong.locator('[data-task-wrong-save]'),async()=>/结果尚未核对/.test(await autoWrong.innerText()),async()=>/错题已保存在这份作业下/.test(await autoFeedback.locator('#taskFeedbackStatus').innerText()),state);
+  const autoWrongCard=autoFeedback.locator('#taskFeedbackHistory .task-feedback-record').filter({has:page.locator('[data-record="'+autoWrongSaved.record_id+'"]')});await autoWrongCard.locator('[data-followup]').click();await page.locator('#recordDialog[open]').waitFor();assert.equal(await autoFeedback.evaluate(x=>x.open),false,'the original homework view closes before correction entry');
+  const autoCorrectionForm=page.locator('#recordForm'),autoCorrectionNote='虚构自动收录语文订正 '+width+'：第6题按原文线索重选，独立复测待做。';assert.equal(await autoCorrectionForm.locator('[name=followup_kind]').inputValue(),'订正');assert.equal(await autoCorrectionForm.locator('[name=related_record_id]').inputValue(),String(autoWrongSaved.record_id));await autoCorrectionForm.locator('[name=note]').fill(autoCorrectionNote);
+  const autoCorrection=await threeAttemptSave(page,'/api/record',autoCorrectionForm.locator('[type=submit]'),async()=>/虚构/.test(await page.locator('#recordError').innerText()),async()=>!await page.locator('#recordDialog').evaluate(x=>x.open),state);
+  assert.equal(await page.locator('dialog[open]').count(),0,'saved correction closes its page before reopening the original homework');
+  await page.reload();await page.locator('body[data-page="home"]').waitFor();await autoCard.locator('[data-task="'+automatic.id+'"]').first().click();await assertAutoScope(automatic,autoExerciseFile,autoReceiptFile,autoExerciseGoal,autoReceiptGoal);
+  assert.equal(await autoFeedback.locator('#taskRequirement').innerText(),autoExerciseGoal);await autoFeedback.locator('#taskFeedbackHistory').getByText(autoNote,{exact:true}).waitFor();await autoFeedback.locator('#taskFeedbackHistory').getByText(autoCorrectionNote,{exact:true}).waitFor();await until(async()=> (await autoFeedback.locator('#taskFeedbackHistory .task-feedback-record').filter({has:page.locator('[data-record="'+autoWrongSaved.record_id+'"]')}).innerText()).includes(autoWrongLabel),'the saved wrong item stays under this original homework');
+  const autoLoopAfter=await state(),autoWrongRecord=autoLoopAfter.records.find(r=>r.id===autoWrongSaved.record_id),autoCorrectionRecord=autoLoopAfter.records.find(r=>r.id===autoCorrection.record_id);
+  assert.equal(autoLoopAfter.records.length,autoLoopBefore.records.length+2,'wrong-item and correction retries create exactly two additional records');assert.equal(autoWrongRecord.related_record_id,autoFeedbackId);assert.equal(autoCorrectionRecord.related_record_id,autoWrongSaved.record_id);assert.equal(autoCorrectionRecord.followup_kind,'订正');
+  for(const record of [autoWrongRecord,autoCorrectionRecord]){assert.equal(record.child,automatic.child);assert.equal(record.linked_task_id,automatic.id)}
+  assert.deepEqual(autoLoopAfter.tasks.find(t=>t.id===automatic.id),autoTaskBefore,'the feedback chain preserves the same task, original and completion state');assert.deepEqual(autoLoopAfter.tasks.find(t=>t.id===autoReceiptTask.id),autoReceiptBefore,'the independent receipt remains unchanged');assert.equal(autoLoopAfter.records.filter(r=>r.source==='事项:'+autoReceiptTask.id||r.linked_task_id===autoReceiptTask.id).length,0,'the receipt receives no feedback, wrong item or correction');assert.equal(autoLoopAfter.records.filter(r=>r.source==='错题照片核对'&&r.linked_task_id===automatic.id&&r.related_record_id===autoFeedbackId).length,1,'lost wrong-item receipt does not duplicate the item');
+  await assertAutoPrintSources();assert.deepEqual((await state()).printing.jobs.map(j=>j.id).sort(),autoPrintIds,'the entire manual feedback chain starts no print job');
+  await autoResources.getByRole('button',{name:'查看老师原消息'}).click();await until(async()=>await dialog.locator('[data-school-pdf-document]').count()===2,'the reopened feedback chain returns to both full originals');for(const file of [autoExerciseFile,autoReceiptFile])assert.equal(await dialog.locator('.task-record-files a[href*="'+file.id+'"]').count(),1);await fits(page);await proof(page,'auto-original-closed-loop-source-'+width);await close();await assertAutoScope(automatic,autoExerciseFile,autoReceiptFile,autoExerciseGoal,autoReceiptGoal);
+  await fits(page);await proof(page,'auto-original-closed-loop-reopened-'+width);await autoFeedback.locator('[data-close=taskDialog]').click();factsBefore=facts(await state());
   await page.locator('nav [data-page="more"]').click();await page.locator('#content [data-page="agent"]').click();
   const fileList=page.locator('[data-qq-files]');await fileList.locator('summary').click();
   assert.match(await fileList.innerText(),/虚构原生PDF-360\.pdf/);assert.match(await fileList.innerText(),/虚构原生PDF-1440\.pdf/);
