@@ -187,8 +187,10 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             result=agent._school_requirement_goal(draft(title='数学：完成第1至4题'),[text+'，写出两种方法。'])
             self.assertEqual(result['title'],'数学：完成（第4题选做）')
         result=agent._school_requirement_goal(draft(title='数学：阅读任选章节'),['任选章节为选做，不改变必读第2章。'])
-        self.assertEqual(result['title'],'数学：阅读任选章节（含选做）')
-        for requirement in ('第1至4题必须完成，不是选做','第4题不能当选做，必须完成','不是选做的第4题，必须完成'):
+        self.assertEqual(result['title'],'数学：阅读任选章节')
+        for requirement in ('第1至4题必须完成，不是选做','第4题不能当选做，必须完成','不是选做的第4题，必须完成',
+                            '取消选做的第4题，改为必做','第4题不能当成选做，必须完成','第4题不再选做，改为必做',
+                            '第4题不可选做，必须完成','不能当成选做的第4题，必须完成'):
             result=agent._school_requirement_goal(draft(title='数学：完成第1至4题'),[requirement])
             self.assertEqual(result['title'],'数学：完成第1至4题')
         result=agent._school_requirement_goal(draft(title='数学：第1至4题错题订正'),['第1至3题必做，第4题选做'])

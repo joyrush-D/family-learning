@@ -2505,12 +2505,13 @@ def _school_requirement_goal(value, texts):
     # A requirement includes its completion/submission conditions. Do not add a
     # second unconstrained submission summary (for example a blank date field).
     title=value['title']
-    positive_goal=re.sub(r'(?:不是|并非|非|不属于|不能(?:当作?|作为|算作|视为)?|不要(?:当作?|作为)?|不(?:作为|算|按)?|无需|不用|不需要)\s*选做','',goal)
+    optional_negation=r'(?:不是|并非|非|取消|不属于|不能(?:当成|当作?|作为|算作|视为)?|不要(?:当成|当作?|作为)?|不(?:可|再|作为|算|按)?|无需|不用|不需要)'
+    positive_goal=re.sub(optional_negation+r'\s*选做','',goal)
     if '选做' in positive_goal:
         question=r'第[0-9一二三四五六七八九十百]+(?:\s*(?:至|到|[-–—~～])\s*第?[0-9一二三四五六七八九十百]+)?题'
         labels=[]
         for match in re.finditer('('+question+r')(?:为|是)?(必做|选做)|(必做|选做)(?:的)?('+question+')',positive_goal):
-            if re.search(r'(?:不是|并非|不属于|不要|无需|不用|取消|不按)\s*$',positive_goal[:match.start()]): continue
+            if re.search(optional_negation+r'\s*$',positive_goal[:match.start()]): continue
             label=(match[1]+match[2]) if match[1] else (match[4]+match[3])
             if label not in labels: labels.append(label)
         if labels:
@@ -2518,8 +2519,6 @@ def _school_requirement_goal(value, texts):
             # Keep its task name, but use only the read requirements for the range.
             title=re.sub(question, '', title).rstrip(' ：:，,；;')
             title=title+'（'+'；'.join(labels)+'）'
-        elif '选做' not in title:
-            title+='（含选做）'
         if len(title)>TASK_BRIEF_SCHEMA['properties']['title']['maxLength']:
             raise AgentError('本项必做选做标题超过可保存范围，原要求保留')
     return dict(value,title=title,goal=goal,submission='')
