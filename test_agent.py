@@ -1598,12 +1598,13 @@ class AgentTests(unittest.TestCase):
 
     def test_school_append_compound_units_do_not_collapse_to_a_prefix(self):
         cases=(('Unit3.1','Unit3.1A','new'),('Unit3A','Unit3A.1','append'),
-               ('Unit3','Unit3-4','new'),('Unit3','Unit3+Unit30','append'))
+               ('Unit3','Unit3-4','new'),('Unit3','Unit3+Unit30','append'),
+               ('Unit3','Unit3/4','append'),('Unit3','Unit3&4','new'))
         before={}
         for n,(unit,supplement,change) in enumerate(cases):
             index=11+2*n;publisher='synthetic-compound-negative-'+str(n)
             original=self._school_append_candidate(index,unit+'课文读两遍，朗读录音上传班级作业区，明天完成。',
-                title='英语：'+unit+'朗读',due='2026-02-11',publisher=publisher)
+                title='英语：'+unit+'朗读（虚构复合负例'+str(n)+'）',due='2026-02-11',publisher=publisher)
             task_id=self.store.act(dict(id=original['id'],action='accept'))['task_id']
             with self.app.connect() as c:before[task_id]=next(t for t in self.app.tasks(c) if t['id']==task_id)
             row=self._school_append_candidate(index+1,'只补'+supplement+'朗读：录音上传后确认上传成功。',
@@ -1621,7 +1622,7 @@ class AgentTests(unittest.TestCase):
     def test_school_append_exact_compound_units_allow_case_and_spacing(self):
         cases=(('Unit3','UNIT 3'),('Unit3A','UNIT 3a'),('Unit3.1','UNIT 3.1'),
                ('Unit3.1A','UNIT 3.1a'),('Unit3A.1','UNIT 3a.1'),('Unit3-4','UNIT 3-4'),
-               ('Unit3+Unit30','UNIT 3+UNIT 30'))
+               ('Unit3+Unit30','UNIT 3+UNIT 30'),('Unit3/4','UNIT 3 / 4'),('Unit3&4','UNIT 3 & 4'))
         for n,(unit,supplement) in enumerate(cases):
             with self.subTest(original=unit,supplement=supplement):
                 index=11+2*n;publisher='synthetic-compound-positive-'+str(n)
