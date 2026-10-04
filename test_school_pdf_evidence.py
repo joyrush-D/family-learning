@@ -150,6 +150,76 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertEqual(self.rows('SELECT * FROM agent_pdf_material ORDER BY first_page'),before)
         self.assertEqual((self.count('manual_tasks'),self.count('records')),(0,0))
 
+    def test_repeated_page_requirements_are_sent_once_with_their_full_page_scope(self):
+        keys=self.native_notice('repeated-budget')
+        requirement='数学：2026-02-12前完成练习第1至3题，写明单位并检查。'+'标准'*750
+        self.seed_groups(keys=keys,note='背景',uncertainties=[],requirements=[requirement])
+        ident=self.candidate(keys=keys,ident='repeated-budget')
+        def mapping(messages):
+            context=json.loads(messages[-1]['content'])
+            requirements=[p for p in context['original_parts'] if p.get('requirement')]
+            self.assertEqual([(p['text'],p['pages'],p['upload_ids']) for p in requirements],
+                             [(requirement,list(range(1,12)),[self.pdf])])
+            sent=sum(len(g['text'])+sum(map(len,g.get('requirements',[])))
+                     for doc in context['pdf_material'] for g in doc['groups'])
+            sent+=sum(len(p['text']) for p in requirements)
+            self.assertLessEqual(sent,agent.PDF_TEXT_LIMIT,'repeated groups must not expand the actual complete-requirement input budget')
+            return {'actions':[dict(draft(goal='短摘要'),due='2026-02-12',existing_item_id=ident,
+                basis=[dict(part=requirements[0]['id'],text=requirement)])]}
+        result,_=self.refresh(mapping)
+        self.assertEqual((result['created'],self.item(ident)['body']),(1,requirement))
+
+    def legacy_action_candidates(self):
+        keys=self.native_notice('legacy-actions')
+        requirements=['数学：2026-02-12前完成练习第1题，写明单位。',
+                      '语文：2026-02-13前完成习作第2题，写出完整过程。']
+        shorts=['数学：2026-02-12前完成练习第1题','语文：2026-02-13前完成习作第2题']
+        self.seed_groups(keys=keys,note='题面背景',uncertainties=[],requirements=requirements)
+        ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
+        ids=[]
+        for index,(text,short) in enumerate(zip(requirements,shorts)):
+            ident=self.candidate(keys=keys,ident='legacy-action-'+str(index));ids.append(ident)
+            with self.store._db() as c:
+                row=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone())
+                evidence,_=agent._school_material(self.store,c,row)
+                brief=dict(draft(title=short,goal=short,state='review'),origin_basis=agent._school_message_basis(evidence))
+                plan=dict(school_task=brief,school_original_action=dict(identity='legacy-'+str(index),scope='legacy',root_id=ids[0],
+                    anchors=[dict(ref=ref,upload_ids=[self.pdf],pages=[1,2,3],quote=short)]))
+                c.execute('UPDATE agent_items SET title=?,body=?,due=?,plan=? WHERE id=?',
+                          (short,short,'2026-02-'+str(12+index),json.dumps(plan,ensure_ascii=False),ident))
+        return ids,requirements
+
+    def test_legacy_reflow_retains_each_old_action_and_rejects_merging_two_ids(self):
+        ids,requirements=self.legacy_action_candidates()
+        before=self.rows('SELECT * FROM agent_items ORDER BY id')
+        def merged(messages):
+            context=json.loads(messages[-1]['content']);parts=[p for p in context['original_parts'] if p.get('requirement')]
+            return {'actions':[dict(draft(goal='把两项混合'),due='',existing_item_id=context['candidate_id'],
+                basis=[dict(part=p['id'],text=p['text']) for p in parts])]}
+        result,_=self.refresh(merged)
+        self.assertEqual((result['failed'],result['created'],self.count('manual_tasks')),(1,0,0))
+        self.assertEqual(self.rows('SELECT * FROM agent_items ORDER BY id'),before)
+        def separated(messages):
+            context=json.loads(messages[-1]['content']);parts=[p for p in context['original_parts'] if p.get('requirement')]
+            return {'actions':[dict(draft(title=text.split('：')[0]+'：完成练习',goal='短摘要',learning_subject=text.split('：')[0]),
+                due='2026-02-'+str(12+i),existing_item_id=ids[i],basis=[dict(part=parts[i]['id'],text=text)])
+                for i,text in enumerate(requirements)]}
+        result,_=self.refresh(separated,minutes=6)
+        self.assertEqual((result['failed'],result['created']),(0,2))
+        self.assertEqual(self.rows('SELECT id,body,state FROM agent_items ORDER BY id'),
+                         [(ident,text,'accepted') for ident,text in zip(ids,requirements)])
+        self.assertTrue(all(json.loads(self.item(ident)['plan'])['previous_pdf_action']['body'] in text
+                            for ident,text in zip(ids,requirements)))
+        self.assertEqual(self.refresh(separated,minutes=7),(dict(used=0,failed=0,created=0),[]))
+
+    def test_legacy_pdf_refinement_never_falls_back_to_a_free_summary_after_other_decision(self):
+        ids,_=self.legacy_action_candidates()
+        with self.store._db() as c:c.execute("UPDATE agent_items SET state='dismissed' WHERE id=?",(ids[1],))
+        before=self.rows('SELECT id,title,body,due,state,task_id FROM agent_items ORDER BY id')
+        result,calls=self.refresh(draft(goal='省略标准的新摘要'))
+        self.assertEqual((result,len(calls)),(dict(used=0,failed=0,created=0),0))
+        self.assertEqual(self.rows('SELECT id,title,body,due,state,task_id FROM agent_items ORDER BY id'),before)
+
     def test_docx_only_actions_keep_each_original_standard_and_unrelated_text_separate(self):
         from test_media import MediaTests,docx,para
         uploads=['b'*32,'c'*32]
@@ -1137,7 +1207,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         result,calls=self.refresh(draft())
         self.assertEqual((result['used'],len(calls),self.item(ident)['due'],self.item(ident)['state'],self.count('manual_tasks')),(1,1,'','accepted',1))
         self.assertEqual((self.item(ident)['body'],self.rows('SELECT due,original_status FROM manual_tasks')),
-                         (TEXT,[('','待跟进')]))
+                         (TEXT,[('无明确截止','待跟进')]))
 
     def test_auto_acceptance_rechecks_pdf_link_and_rejects_forged_ready_screenshot(self):
         keys=self.native_notice();self.seed_groups(keys=keys,note=TEXT,uncertainties=[]);ident=self.candidate(keys=keys)
@@ -1217,7 +1287,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertEqual([g['text_truncated'] for g in doc['groups']],[False,True,True,True])
         self.assertEqual([g['requirements'] for g in doc['groups']],[[],[],[],[]])
         self.assertEqual((result['failed'],result['created'],self.count('manual_tasks'),self.item(ident)),(1,0,0,before))
-        self.assertEqual(self.material()['processed_pages'],list(range(1,12)))
+        self.assertEqual(self.material()['documents'][0]['processed_pages'],list(range(1,12)))
 
     def test_change_confirmation_rechecks_pdf_evidence_and_plain_notice_keeps_old_flow(self):
         other = self.school_fragment('语文：完成虚构习作一篇。')
