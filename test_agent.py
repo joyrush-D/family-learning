@@ -1649,9 +1649,10 @@ class AgentTests(unittest.TestCase):
         for n,(text,title,goal) in enumerate(cases):
             index=11+2*n;publisher='synthetic-modeled-object-negative-'+str(n)
             original=self._school_append_candidate(index,'Unit30课文读两遍，朗读录音上传班级作业区，明天完成。',
-                title='英语：Unit30朗读',due='2026-02-11',publisher=publisher)
+                title='英语：Unit30朗读（虚构负例'+str(n+1)+'）',due='2026-02-11',publisher=publisher)
             task_id=self.store.act(dict(id=original['id'],action='accept'))['task_id']
             with self.app.connect() as c:
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],n+1)
                 before[task_id]=next(t for t in self.app.tasks(c) if t['id']==task_id)
                 canonical[original['id']]=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(original['id'],)).fetchone())
             row=self._school_append_candidate(index+1,text,change='append',target=task_id,title=title,goal=goal,publisher=publisher)
@@ -1673,7 +1674,7 @@ class AgentTests(unittest.TestCase):
             with self.subTest(title=title,goal=goal):
                 index=11+2*n;publisher='synthetic-modeled-object-positive-'+str(n)
                 original=self._school_append_candidate(index,'Unit30课文读两遍，朗读录音上传班级作业区，明天完成。',
-                    title='英语：Unit30朗读',due='2026-02-11',publisher=publisher)
+                    title='英语：Unit30朗读（虚构正例'+str(n+1)+'）',due='2026-02-11',publisher=publisher)
                 task_id=self.store.act(dict(id=original['id'],action='accept'))['task_id']
                 with self.app.connect() as c:before=next(t for t in self.app.tasks(c) if t['id']==task_id)
                 row=self._school_append_candidate(index+1,text,change='append',target=task_id,title=title,goal=goal,publisher=publisher)
