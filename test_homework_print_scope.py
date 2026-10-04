@@ -160,6 +160,94 @@ class HomeworkPrintScopeTests(unittest.TestCase):
         self.assertEqual({j['id'] for j in queued},{value['jobs']['question']['id'],value['jobs']['guide']['id']})
         self.assertEqual(len(app.print_store().list_jobs()),2)
 
+    def print_preparations(self):
+        with app.connect_read_only() as c:
+            rows={r['id']:dict(r) for r in c.execute('SELECT * FROM print_preparations')}
+        pdfs={ident:(app.DATA/'print'/(ident+'.pdf')).read_bytes() for ident in rows}
+        return rows,pdfs
+
+    def assert_prepare_race_rejected(self,change):
+        """Change synthetic originals after both PDFs exist, before the HTTP handler queues either."""
+        original=app.family_print.PrintStore.prepare;snapshots=[]
+        def change_after_prepare(store,source,*args,**kwargs):
+            prepared=original(store,source,*args,**kwargs)
+            if source==self.source(self.teacher):
+                snapshots.append(self.print_preparations())
+                change()
+            return prepared
+        with patch.object(app.family_print.PrintStore,'prepare',change_after_prepare):
+            status,value=self.request('POST','/api/print/homework',self.pair())
+        self.assertEqual(status,409,value)
+        self.assertEqual(app.print_store().list_jobs(),[])
+        self.assertEqual(len(snapshots),1)
+        self.assertEqual(len(snapshots[0][0]),2)
+        self.assertEqual(self.print_preparations(),snapshots[0])
+
+    def test_task_child_changed_during_prepare_rejects_before_queue(self):
+        def change():
+            with app.connect() as c:
+                c.execute('UPDATE manual_tasks SET child=? WHERE id=?',('示例乙',self.task['id']))
+        self.assert_prepare_race_rejected(change)
+
+    def test_task_source_changed_during_prepare_rejects_before_queue(self):
+        def change():
+            with app.connect() as c:
+                c.execute('UPDATE manual_tasks SET source=? WHERE id=?',('虚构来源更正',self.task['id']))
+        self.assert_prepare_race_rejected(change)
+
+    def test_feedback_version_changed_during_prepare_rejects_before_queue(self):
+        def change():
+            app.save_task_feedback(dict(task_id=self.task['id'],child=self.task['child'],record_id=self.answer['record_id'],
+                note='虚构原反馈已更正，附件保持不变'))
+        self.assert_prepare_race_rejected(change)
+
+    def test_originals_rebound_to_new_feedback_during_prepare_reject_before_queue(self):
+        def change():
+            app.save_task_feedback(dict(task_id=self.task['id'],child=self.task['child'],record_id=self.answer['record_id'],attachments=[]))
+            self.feedback(self.task,[self.question,self.teacher],'synthetic-rebound-current-answer')
+        self.assert_prepare_race_rejected(change)
+
+    def test_link_version_changed_during_prepare_rejects_before_queue(self):
+        # Ordinary records use the real explicit task-link fields; a feedback's source is its own binding.
+        app.save_task_feedback(dict(task_id=self.task['id'],child=self.task['child'],record_id=self.answer['record_id'],attachments=[]))
+        linked=app.save_record(dict(child=self.task['child'],day='2026-10-01',category='学习进展',title='虚构关联原件',
+            source='家长网页记录',attachments=[self.question,self.teacher],linked_task_id=self.task['id'],request_key='synthetic-linked-originals'))
+        with app.connect_read_only() as c:
+            initial=dict(c.execute('SELECT * FROM records WHERE id=?',(linked['record_id'],)).fetchone())
+        def change():
+            removed=app.link_record_task(dict(record_id=linked['record_id'],child=self.task['child'],task_id='',
+                expected_linked_at=initial['linked_task_at']))
+            app.link_record_task(dict(record_id=linked['record_id'],child=self.task['child'],task_id=self.task['id'],
+                expected_linked_at=removed['link']['linked_at']))
+        self.assert_prepare_race_rejected(change)
+
+    def test_feedback_source_changed_but_still_linked_during_prepare_rejects_before_queue(self):
+        def change():
+            # Keep the same child, task, record version and selectable uploads while changing their origin.
+            with app.connect() as c:
+                c.execute('UPDATE records SET source=?,linked_task_id=?,linked_task_at=? WHERE id=?',
+                    ('虚构手工资料来源',self.task['id'],'2026-10-02T12:00:00',self.answer['record_id']))
+        self.assert_prepare_race_rejected(change)
+
+    def test_question_bytes_changed_during_prepare_reject_before_queue(self):
+        def change():
+            path=app.DATA/'uploads'/self.question;body=path.read_bytes()
+            path.write_bytes(body[:-1]+bytes([body[-1]^1]))  # Same size defeats a size-only guard.
+        self.assert_prepare_race_rejected(change)
+
+    def test_teacher_bytes_changed_during_prepare_reject_before_queue(self):
+        def change():
+            path=app.DATA/'uploads'/self.teacher;body=path.read_bytes()
+            path.write_bytes(body[:-1]+bytes([body[-1]^1]))
+        self.assert_prepare_race_rejected(change)
+
+    def test_unchanged_pair_retry_reuses_jobs_preparations_and_pdfs(self):
+        status,value=self.request('POST','/api/print/homework',self.pair());self.assertEqual(status,200,value)
+        preparations=self.print_preparations()
+        status,retry=self.request('POST','/api/print/homework',self.pair());self.assertEqual(status,200,retry)
+        self.assertEqual(value['jobs'],retry['jobs']);self.assertEqual(len(app.print_store().list_jobs()),2)
+        self.assertEqual(len(preparations[0]),2);self.assertEqual(self.print_preparations(),preparations)
+
     def test_material_unlinked_during_conversion_does_not_enqueue_and_retries_original_key(self):
         original=app.family_print.PrintStore.prepare
         def unlink_during_conversion(store,source,*args,**kwargs):
