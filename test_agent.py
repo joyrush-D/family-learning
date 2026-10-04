@@ -1490,6 +1490,8 @@ class AgentTests(unittest.TestCase):
 
     def test_school_original_action_append_and_repeated_notice_keep_scoped_messages(self):
         original,task_id=self._school_append_original()
+        self.store.app=self.app
+        with self.app.connect() as c:self.app.tasks(c)  # Match the already-initialized product before read-only snapshots.
         keys=dict(child_id='child-1',source_id=self.source['id'])
         with self.store._db() as c:
             canonical=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(original['id'],)).fetchone())
