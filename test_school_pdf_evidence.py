@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 import family_agent as agent
 import family_llm
-import app
 import family_pdf_material as pdfm
 import test_pdf
 import test_pdf_material
@@ -192,6 +191,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         return keys,ident,receipt_file
 
     def test_same_message_originals_are_scoped_for_task_reading_print_and_check(self):
+        app=self.app
         keys,ident,receipt_file=self.scoped_original_tasks();homework=self.item(ident)['task_id']
         before=self.rows('SELECT * FROM records')
         view=self.store.message(dict(keys,task_id=homework),app.upload_info)
@@ -212,6 +212,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertEqual([u['id'] for u in receipt['attachments']],[receipt_file])
 
     def test_scoped_original_refuses_foreign_task_and_detached_anchor(self):
+        app=self.app
         keys,ident,receipt_file=self.scoped_original_tasks();task_id=self.item(ident)['task_id']
         foreign=app.new_task(dict(child='示例乙',title='虚构其他孩子作业',category='homework'))
         with self.assertRaises(agent.AgentError):self.store.message(dict(keys,task_id=foreign['id']),app.upload_info)

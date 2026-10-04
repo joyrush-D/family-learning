@@ -976,12 +976,36 @@ class Store:
         return result
 
     def message(self, obj, upload_info):
-        if not isinstance(obj, dict) or set(obj) != {'child_id', 'source_id', 'message_id'}:
+        if not isinstance(obj, dict) or not {'child_id','source_id','message_id'}<=set(obj) or set(obj)-{'child_id','source_id','message_id','task_id'}:
             raise AgentError('请提供唯一的孩子、来源和消息编号')
         with self._db() as c:
             c.execute('BEGIN')
-            source, message = self._message_context(c, obj)
-            return self._message_view(c, source, message, upload_info)
+            source, message = self._message_context(c, {k:obj[k] for k in ('child_id','source_id','message_id')})
+            view=self._message_view(c, source, message, upload_info)
+            if 'task_id' not in obj: return view
+            task_id=_text(obj,'task_id',30,True)
+            child=next(p for p in self.profiles(c) if p['id']==source['child_id'])
+            task=next((t for t in self.app.tasks(c) if t['id']==task_id),None) if self.app else None
+            if task is None or task['child']!=child['name']: raise AgentError('事项与当前孩子不一致',403)
+            original=_school_origin(self,c,task,child['id'])
+            ref='message:'+source['id']+':'+message['id']
+            ids=[r['upload_id'] for r in c.execute('SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=? ORDER BY upload_id',(source['id'],message['id']))]
+            scoped=school_original_upload_ids(self,c,original,ref,ids)
+            if ref not in {e['ref'] for e in json.loads(original['evidence'])}: raise AgentError('原消息不属于当前事项',403)
+            view['task_id']=task_id
+            if scoped is None: return view
+            selected=set(scoped)
+            view['attachments']=[u for u in view['attachments'] if u['id'] in selected]
+            view['unavailable_attachment_ids']=[i for i in view['unavailable_attachment_ids'] if i in selected]
+            pdf=view['pdf_material']
+            if pdf:
+                documents=pdf.get('documents',[pdf]);documents=[d for d in documents if d.get('upload_id') in selected]
+                view['pdf_material']=dict(pdf,documents=documents) if documents else None
+            view['material_draft']=None
+            view['nearby_materials']=[]
+            view['action_material']=dict(scoped=True,quotes=[dict(text=a['quote'],upload_ids=a['upload_ids'],pages=a['pages'])
+                for a in json.loads(original['plan'])['school_original_action']['anchors'] if a['ref']==ref])
+            return view
 
     def school_messages(self, obj, upload_info):
         """Browse saved publications independently of task selection. No collection, model or business write."""
@@ -2262,6 +2286,38 @@ def _school_material(store, c, row):
     return evidence,pages
 
 
+def _school_action_upload_ids(row,ref,ids):
+    """Saved action anchors, never a filename or client-provided scope; [] explicitly means text only."""
+    action=json.loads(row['plan']).get('school_original_action')
+    if action is None:return None
+    anchors=action.get('anchors') if isinstance(action,dict) else None
+    refs={e['ref'] for e in json.loads(row['evidence'])}
+    if not isinstance(anchors,list) or not 1<=len(anchors)<=6 or ref not in refs:
+        raise AgentError('本项原件范围无法核对',409,'school_original_scope_stale')
+    selected=[];matched=False
+    for a in anchors:
+        if not isinstance(a,dict) or a.get('ref') not in refs or not isinstance(a.get('upload_ids'),list) or not isinstance(a.get('quote'),str) or not a['quote'].strip():
+            raise AgentError('本项原件范围无法核对',409,'school_original_scope_stale')
+        if a['ref']!=ref:continue
+        matched=True
+        for ident in a['upload_ids']:
+            if not isinstance(ident,str) or ident not in ids:raise AgentError('本项原件关联已变化',409,'school_original_scope_stale')
+            if ident not in selected:selected.append(ident)
+    if not matched:raise AgentError('原消息不属于本项行动',403,'school_original_scope_stale')
+    return sorted(selected)
+
+
+def school_original_upload_ids(store,c,row,ref,ids):
+    """Shared current original scope for task display, printing and answer checking, read-only."""
+    selected=_school_action_upload_ids(row,ref,ids)
+    if selected is None:return None
+    evidence,_=_school_material(store,c,row)
+    if json.loads(row['plan']).get('school_task',{}).get('origin_basis')!=_school_message_basis(evidence):
+        raise AgentError('本项原消息已变化，请回原消息重新核对',409,'school_original_scope_stale')
+    _check_school_page(store,c,row)
+    return selected
+
+
 def _school_pdf(store, c, row):
     """Whole-document PDF evidence of this candidate's own messages under the current binding; database and file hash only.
 
@@ -2275,9 +2331,12 @@ def _school_pdf(store, c, row):
         source,message=store._message_context(c,dict(child_id=row['child_id'],source_id=source_id,message_id=message_id))
         material=family_pdf_material.complete_evidence(store,c,source,message)
         if material:
+            ids=[r['upload_id'] for r in c.execute('SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=? ORDER BY upload_id',(source_id,message_id))]
+            scoped=_school_action_upload_ids(row,quote['ref'],ids)
             documents=material.get('documents')
-            if documents is None: found.append(dict(material,ref=quote['ref']))
-            else: found.extend(dict(doc,ref=quote['ref'],collection_fingerprint=material['fingerprint']) for doc in documents)
+            if documents is None:
+                if scoped is None or material['upload_id'] in scoped:found.append(dict(material,ref=quote['ref']))
+            else: found.extend(dict(doc,ref=quote['ref'],collection_fingerprint=material['fingerprint']) for doc in documents if scoped is None or doc['upload_id'] in scoped)
     return found
 
 
@@ -2290,6 +2349,8 @@ def _school_drafts(store, c, row):
         source,message=store._message_context(c,dict(child_id=row['child_id'],source_id=source_id,message_id=message_id))
         value=family_media.school_evidence(store,c,source,message)
         if value:
+            ids=value['upload_ids'];scoped=_school_action_upload_ids(row,quote['ref'],ids)
+            if scoped is not None and set(scoped)!=set(ids):continue  # Aggregate notes cannot prove the contents of one file.
             entries.append(dict(ref=quote['ref'],**value))
             if value['complete']: complete.append(quote['ref'])
             draft=value['draft'];bounded={}
@@ -2430,6 +2491,9 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
             continue  # A material round never replaces an accepted/dismissed or literal-history decision.
         cited_refs={a['ref'] for a in anchors};cited=[e for e in evidence if e['ref'] in cited_refs]
         item_row=dict(row,evidence=_json([q for q in json.loads(row['evidence']) if q['ref'] in cited_refs]))
+        item_plan=copy.deepcopy(json.loads(row['plan']))
+        item_plan['school_original_action']=dict(identity=identity,scope=scope,root_id=row['id'],anchors=anchors)
+        item_row['plan']=_json(item_plan)
         with store._db() as c:
             _,cited_pages=_school_material(store,c,item_row)
             cited_pdf=_pdf_evidence(_school_pdf(store,c,item_row))
