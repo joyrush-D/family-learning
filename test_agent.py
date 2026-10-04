@@ -1284,6 +1284,19 @@ class AgentTests(unittest.TestCase):
             self.assertIn(text,goal)
         self.assertEqual(goal.count('完成《桥的观察单》。'),1)
 
+    def test_effective_instructions_resolve_shared_date_for_only_this_action(self):
+        import copy
+        parts,anchors,changes,proof=self._effective_instruction_fixture()
+        anchors.insert(0,dict(anchors[0],quote=proof['shared_date_text']))
+        before=copy.deepcopy((parts,anchors,changes,proof))
+        goal=agent._school_effective_instructions(parts,anchors,changes,proof)[0]
+        self.assertEqual((parts,anchors,changes,proof),before)
+        self.assertTrue(goal.startswith('2026-10-04完成《桥的观察单》。'))
+        self.assertNotIn('明天完成两项',goal)
+        self.assertEqual(goal.count('完成《桥的观察单》。'),1)
+        for text in ['两个描写桥的词语','三句完整的话','一句喜欢桥的理由','C栏（选做时）','不做C栏也算完成观察单']:
+            self.assertIn(text,goal)
+
     def test_effective_instructions_keep_business_residuals_and_other_file_pointers(self):
         parts,anchors,changes,proof=self._effective_instruction_fixture()
         parts[1]['text']+='请周五交回并签字。'
