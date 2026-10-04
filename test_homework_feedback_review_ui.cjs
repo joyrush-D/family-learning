@@ -605,7 +605,23 @@ runpy.run_path('demo.py',run_name='__main__')`;
   for(const text of [consistentDraft.text,consistentDraft.coverage,consistentDraft.comparison]){assert(!text.includes(staleCoverage));assert(!text.includes(staleComparison))}assert.match(consistentDraft.coverage,/虚构乙卷第1题仍未判定/);
   const consistencyTrace=await(await fetch(host.url+'__fixture/cause-validator')).json();assert(consistencyTrace.synthetic_only&&consistencyTrace.shared_validator);assert.equal(consistencyTrace.real_model_calls,0);assert.equal(consistencyTrace.calls.length,consistencyCallsBefore+1);assert.deepEqual(consistencyTrace.calls.at(-1).validated,consistentDraft);assert.deepEqual(consistencyTrace.calls.at(-1).raw,consistencyTrace.calls.at(-1).original);assert.equal(consistencyTrace.calls.at(-1).raw.coverage,staleCoverage);
   await eventually(async()=>/3题 · 1题需订正 · 1题未判定/.test(await consistencyPanel.locator('[data-homework-review-status]').innerText()),'mixed final grades visible');assert.match(await consistencyPanel.locator('.homework-review-questions').innerText(),/未判定/);
-  if(process.env.HOMEWORK_QUICK_PROOF_DIR){await consistencyPanel.locator('[data-homework-review-status]').scrollIntoViewIfNeeded();await p.screenshot({path:require('node:path').join(process.env.HOMEWORK_QUICK_PROOF_DIR,'consistency-draft-'+width+'.png')})}
+  // Check the automatic landing before any test-driven scrolling. A DOM-visible
+  // heading below the viewport is not a useful first result on a phone.
+  const consistencyResult=consistencyPanel.locator('[data-homework-review-result]');
+  const landing=await consistencyResult.evaluate(el=>{
+   const count=el.querySelector('.homework-review-counts'),first=el.querySelector('.homework-question h4'),coverage=el.querySelector('[data-homework-review-coverage]'),dialog=el.closest('dialog');
+   const box=n=>{if(!n)return null;const r=n.getBoundingClientRect();return {top:r.top,bottom:r.bottom}};
+   return {firstClass:el.firstElementChild?.className,counts:count?.textContent,count:box(count),first:box(first),coverage:box(coverage),dialog:box(dialog),height:innerHeight,width:innerWidth};
+  });
+  if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.writeFile(path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'result-landing-'+width+'.json'),JSON.stringify(landing,null,2));await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'result-landing-'+width+'.png')})}
+  assert.equal(landing.width,width);assert.equal(landing.firstClass,'homework-review-questions','question results must precede the full scope and comparison');
+  assert.equal(landing.counts,'3题 · 1题需订正 · 1题未判定。');
+  for(const r of [landing.count,landing.first]){assert(r,'counts and first question have visible geometry');assert(r.top>=Math.max(0,landing.dialog.top)&&r.bottom<=Math.min(landing.height,landing.dialog.bottom),'automatic landing shows the counts and first question without another scroll')}
+  assert(landing.first.bottom<landing.coverage.top,'complete scope stays below the structured question results');
+  assert.equal(await consistencyPanel.locator('[data-homework-review-coverage]').innerText(),'本次检查范围：'+consistentDraft.coverage+'\n仅本次所选资料，未判定和未检查部分不算已完成。');
+  assert.equal(await consistencyResult.locator(':scope > .note').innerText(),'本次复核：'+consistentDraft.comparison);
+  assert.equal(await consistencyResult.locator('textarea').inputValue(),consistentDraft.text,'layout never reconstructs or truncates the saved review');
+  if(process.env.HOMEWORK_QUICK_PROOF_DIR){await p.screenshot({path:require('node:path').join(process.env.HOMEWORK_QUICK_PROOF_DIR,'consistency-draft-'+width+'.png')})}
   await consistencyPanel.locator('[data-homework-review-confirm]').check();await consistencyPanel.locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await consistencyPanel.innerText()),'consistent result staged for explicit save');
   const consistencyReview=await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),readCause);
   state=await readCause();assert.equal(state.records.find(r=>r.id===consistencyReview.record_id).related_record_id,consistencyOriginal.record_id);assert.equal(state.records.filter(r=>r.source==='错题照片核对'&&r.linked_task_id===consistencyTask.id).length,0,'unknown and sound error remain explicit decisions, no automatic wrong item');
