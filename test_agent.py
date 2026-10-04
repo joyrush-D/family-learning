@@ -1596,6 +1596,50 @@ class AgentTests(unittest.TestCase):
         with self.assertRaises(agent.AgentError):self._school_append_auto(row)
         with self.app.connect() as c:self.assertEqual('\n'.join(c.iterdump()),before,'object mismatch must roll back every save')
 
+    def test_school_append_compound_units_do_not_collapse_to_a_prefix(self):
+        cases=(('Unit3.1','Unit3.1A','new'),('Unit3A','Unit3A.1','append'),
+               ('Unit3','Unit3-4','new'),('Unit3','Unit3+Unit30','append'))
+        before={}
+        for n,(unit,supplement,change) in enumerate(cases):
+            index=11+2*n;publisher='synthetic-compound-negative-'+str(n)
+            original=self._school_append_candidate(index,unit+'课文读两遍，朗读录音上传班级作业区，明天完成。',
+                title='英语：'+unit+'朗读',due='2026-02-11',publisher=publisher)
+            task_id=self.store.act(dict(id=original['id'],action='accept'))['task_id']
+            with self.app.connect() as c:before[task_id]=next(t for t in self.app.tasks(c) if t['id']==task_id)
+            row=self._school_append_candidate(index+1,'只补'+supplement+'朗读：录音上传后确认上传成功。',
+                change=change,target=task_id if change=='append' else '',publisher=publisher)
+            with self.subTest(original=unit,supplement=supplement):
+                brief=json.loads(row['plan'])['school_task']
+                self.assertEqual(brief['state'],'review')
+                self.assertNotIn('target_basis',brief);self.assertNotIn('input_basis',brief)
+        with patch.object(agent.family_llm,'_chat_json') as model,patch.object(agent,'_now',return_value=self.now):
+            agent._refresh_school(self.app,self.store,self.now,0);model.assert_not_called()
+        with self.app.connect() as c:
+            self.assertEqual({t['id']:t for t in self.app.tasks(c)},before,'no rejected object may auto-append or create work')
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+
+    def test_school_append_exact_compound_units_allow_case_and_spacing(self):
+        cases=(('Unit3','UNIT 3'),('Unit3A','UNIT 3a'),('Unit3.1','UNIT 3.1'),
+               ('Unit3.1A','UNIT 3.1a'),('Unit3A.1','UNIT 3a.1'),('Unit3-4','UNIT 3-4'),
+               ('Unit3+Unit30','UNIT 3+UNIT 30'))
+        for n,(unit,supplement) in enumerate(cases):
+            with self.subTest(original=unit,supplement=supplement):
+                index=11+2*n;publisher='synthetic-compound-positive-'+str(n)
+                original=self._school_append_candidate(index,unit+'课文读两遍，朗读录音上传班级作业区，明天完成。',
+                    title='英语：'+unit+'朗读',due='2026-02-11',publisher=publisher)
+                task_id=self.store.act(dict(id=original['id'],action='accept'))['task_id']
+                row=self._school_append_candidate(index+1,'只补'+supplement+'朗读：录音上传后确认上传成功。',
+                    change='append',target=task_id,publisher=publisher)
+                brief=json.loads(row['plan'])['school_task']
+                self.assertEqual((brief['state'],brief['target_id']),('ready',task_id))
+                self.assertEqual(brief['target_basis']['canonical_id'],original['id'])
+                self._school_append_auto(row)
+                with self.app.connect() as c:
+                    task=next(t for t in self.app.tasks(c) if t['id']==task_id)
+                    self.assertIn(original['body'],task['action']);self.assertIn('确认上传成功',task['action'])
+                    self.assertEqual(task['agenda']['due_on'],'2026-02-11')
+                    self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],n+1)
+
     def test_school_append_rejects_unknown_publisher_other_child_and_competing_activity(self):
         original,task_id=self._school_append_original()
         delta='只补朗读：录音上传后确认上传成功。'
