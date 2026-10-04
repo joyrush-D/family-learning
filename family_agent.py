@@ -2348,7 +2348,7 @@ def _school_original_known(store,c,row):
     tables={r['name'] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     for entry in c.execute("SELECT * FROM agent_items WHERE kind='school' AND child_id=? AND state!='superseded' ORDER BY id",(row['child_id'],)):
         entry=dict(entry)
-        if {e['ref'] for e in json.loads(entry['evidence'])}!=refs: continue
+        if not {e['ref'] for e in json.loads(entry['evidence'])}&refs: continue
         known.append(entry);state.append(entry)
         if entry['task_id']:
             task_id=entry['task_id']
@@ -2401,48 +2401,78 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
             if not isinstance(quote,dict) or set(quote)!={'part','text'}: raise AgentError('原件行动依据结构无法核对')
             part=lookup.get(quote['part']);text=_text(quote,'text',2000,True).strip()
             if not part or text not in part['text']: raise AgentError('行动依据不在本轮已读原件范围')
+            if value['state']!='reference' and not (_LEARNING_ACTIVITY.search(text) or _LEARNING_ACTION.search(text)
+                    or re.search(r'打印|签字|交回|盖章|提交|上传|带|携带|准备|领取|报名|缴|考试|测验|比赛|家长会',text)):
+                raise AgentError('依据没有本项动作和对象，不能仅引用日期或标题')
             anchor=dict(ref=part['ref'],upload_ids=part['upload_ids'],pages=part['pages'],quote=text)
             if anchor not in anchors: anchors.append(anchor)
-        identity=_hash([scope,sorted((_json([a['ref'],a['upload_ids'],a['quote']]) for a in anchors))])
+        identity=_hash([row['child_id'],sorted((_json([a['ref'],a['upload_ids'],a['quote']]) for a in anchors))])
         if identity in identities: raise AgentError('原件清单重复引用同一行动，整组保留重试')
         identities.add(identity)
         old=existing.get(chosen)
         old_anchor=json.loads(old['plan']).get('school_original_action',{}) if old else {}
         if old_anchor.get('identity') and old_anchor['identity']!=identity:
             raise AgentError('原件行动与原候选身份不同，原内容与决定保留')
-        if not chosen and any(json.loads(r['plan']).get('school_original_action',{}).get('identity')==identity for r in known):
+        if any(r['id']!=chosen and json.loads(r['plan']).get('school_original_action',{}).get('identity')==identity for r in known):
             raise AgentError('已有原件行动须保留原编号，不能重复新增')
+        if old and not old_anchor.get('identity'):
+            old_plan=json.loads(old['plan']);old_brief=old_plan.get('school_task',{})
+            pointer=(old['state']=='pending' and not old['task_id'] and old['body']==FOCUS['school']
+                     and not old_brief.get('title') and not old_brief.get('goal') and not old_plan.get('school_history_job'))
+            literal=_history_anchor(old,{e['ref']:e['text'] for e in evidence})
+            matched=bool(literal) and all(any(a['ref']==ref and quote in a['quote'] for a in anchors) for ref,quote in literal.items())
+            if not pointer and not matched:
+                raise AgentError('旧事项缺少可核对的同行动依据，不能用模型编号覆盖或跳过它')
         if old and (old['state']!='pending' or json.loads(old['plan']).get('school_history_job')):
             continue  # A material round never replaces an accepted/dismissed or literal-history decision.
+        cited_refs={a['ref'] for a in anchors};cited=[e for e in evidence if e['ref'] in cited_refs]
+        item_row=dict(row,evidence=_json([q for q in json.loads(row['evidence']) if q['ref'] in cited_refs]))
+        with store._db() as c:
+            _,cited_pages=_school_material(store,c,item_row)
+            cited_pdf=_pdf_evidence(_school_pdf(store,c,item_row))
+            cited_material=_school_drafts(store,c,item_row)
+        cited_page=_page_evidence(cited,cited_pages) if cited_pages else None
+        if cited_page and not cited_page['read']: cited_page=None
         learning=_school_learning(value,goals)
         brief=_school_brief(value,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in evidence),
-            evidence=evidence,school_tasks=targets,pages=pages,pdf=pdf,material=material,separate_learning=True)
+            evidence=cited,school_tasks=targets,pages=cited_page,pdf=cited_pdf,material=cited_material,separate_learning=True)
         due=_text(value,'due',10)
-        stamps={e['ref']:sent_day(e.get('time')) for e in evidence}
+        stamps={e['ref']:sent_day(e.get('time')) for e in cited}
         dates=set().union(*(deadlines(a['quote'],stamps.get(a['ref'],'')) for a in anchors))
         stated=set().union(*(deadlines(brief['goal'],s) for s in stamps.values()))
-        if due and (not date(due) or dates!={due} or stated and stated!={due}):
+        resolved=due or (next(iter(dates)) if len(dates)==1 else '')
+        if resolved and (not date(resolved) or dates!={resolved} or stated and stated!={resolved}):
             due='';brief.update(state='review',reason='本项日期与对应原件行动不一致，日期待补充；已读要求保留。')
-        elif not due and len(dates)==1: due=next(iter(dates))
-        elif len(dates)>1: brief.update(state='review',reason='本项有多个日期，完成与交回日期对应关系待补充；原要求保留。')
+        elif resolved and not stated:
+            due='';brief.update(state='review',reason='资料中的日期未能对应本项要求，完成日期待补充；已读要求保留。')
+        elif resolved: due=resolved
+        elif len(dates)>1: brief.update(state='review',reason='本项包含不同完成日期，完成与交回日期对应关系待补充；原要求保留。')
         if old and old['due'] and due and old['due']!=due:
             due=old['due'];brief.update(state='review',reason='原件完成日期与已有事项日期不同，日期对应关系待补充；已读要求保留。')
+        elif old and old['due'] and not due:
+            due=old['due'];brief.update(state='review',reason='原事项日期仍保留，新原件尚未核明本项日期；原要求待补充。')
         if not chosen and any(r['state'] in ('accepted','dismissed') and not json.loads(r['plan']).get('school_original_action') for r in known):
             brief.update(state='review',reason='同出处已有旧决定尚无原件行动依据，无法确认本项是否独立；旧事项与决定保留。')
         brief['original_actions_revision']=SCHOOL_ORIGINAL_REVISION
         plan=copy.deepcopy(json.loads(old['plan']) if old else json.loads(row['plan']))
         for key in ('school_learning','school_goal_id'): plan.pop(key,None)
-        complete_refs,fragments,_=_school_original_coverage(evidence,pdf,material)
-        model_evidence=_school_model_evidence(evidence,pdf,material)
+        complete_refs,fragments,_=_school_original_coverage(cited,cited_pdf,cited_material)
+        model_evidence=_school_model_evidence(cited,cited_pdf,cited_material)
         read_requirements=any(not e['content_incomplete'] and (e['ref'] in complete_refs or e.get('text','').strip() and not _link_only(e['text'])) for e in model_evidence)
         if learning and _keeps_learning(brief) and brief['goal'] and read_requirements and not fragments:
             plan['school_learning']=learning
-            plan['school_messages']=[dict(zip(('source_id','message_id'),e['ref'][8:].rsplit(':',1))) for e in evidence]
+            plan['school_messages']=[dict(zip(('source_id','message_id'),e['ref'][8:].rsplit(':',1))) for e in cited]
         plan['school_task']=brief
+        published=[sent_day(e.get('time')) for e in cited]
+        if brief['state']=='ready' and (any(not day for day in published) or not due and any(day<now.date().isoformat() for day in published)):
+            brief.update(state='review',reason='原消息的发布日期不明或早于今天，是否仍需完成待补充；已读要求保留。')
+        if brief['state']=='ready' and due and due<now.date().isoformat():
+            brief.update(state='review',reason='原截止日期已过，请核对是否仍需补做；不推定已完成。')
+        if plan.get('school_history_uncertain'): brief.update(state='review',reason='旧决定的动作归属仍待核明，原要求与决定保留。')
         plan['school_original_action']=dict(identity=identity,scope=scope,root_id=row['id'],anchors=anchors)
         output.append(dict(id=chosen or 'agent-'+identity[:32],old=old,child_id=row['child_id'],kind='school',
             title=brief['title'] or (old or row)['title'],body=brief['goal'] or (old or row)['body'],due=due,
-            evidence=json.loads(row['evidence']),plan=plan,brief=brief))
+            evidence=json.loads(item_row['evidence']),plan=plan,brief=brief,reading=cited))
     if row['id'] not in used: raise AgentError('原件清单未保留原候选，整组保留重试')
     activities=[v for v in output if v['brief'].get('purpose')=='learning' and v['brief']['state']=='ready' and v['brief']['change']=='new']
     for item in output:
@@ -2450,6 +2480,10 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         if brief.get('purpose')!='admin' or brief['state']=='reference': continue
         owner=next((v for v in activities if v['brief'].get('submission') and _school_submission_step(brief,v['brief'])),None)
         if owner: brief.update(state='review',reason='同一作业已含提交要求，不再自动新增重复事项；独立回执仍分别保留。')
+        elif brief['state']=='ready' and not activities:
+            own=[dict(e,text='\n'.join(a['quote'] for a in item['plan']['school_original_action']['anchors'] if a['ref']==e['ref']),unread=False) for e in item['reading']]
+            guarded=_school_brief(brief,evidence=own,school_tasks=targets)
+            if guarded['state']=='review': brief.update(state='review',reason=guarded['reason'])
     return output
 
 
@@ -2459,8 +2493,8 @@ def _save_school_originals(store,c,row,items,key,fp,now):
     for item in items:
         old=item['old'];updated=now.isoformat()
         if old:
-            c.execute('UPDATE agent_items SET title=?,body=?,plan=?,updated=?,due=? WHERE id=?',
-                (item['title'],item['body'],_json(item['plan']),updated,item['due'],item['id']))
+            c.execute('UPDATE agent_items SET title=?,body=?,plan=?,updated=?,due=?,evidence=? WHERE id=?',
+                (item['title'],item['body'],_json(item['plan']),updated,item['due'],_json(item['evidence']),item['id']))
         else:
             c.execute('INSERT INTO agent_items(id,job_id,child_id,kind,title,body,evidence,due,created,updated,plan) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                 (item['id'],key,item['child_id'],'school',item['title'],item['body'],_json(item['evidence']),item['due'],updated,updated,_json(item['plan'])))
@@ -2575,7 +2609,7 @@ def _refresh_school(app, store, now, budget):
                 context['pdf_material']=pdf_evidence['model']
             if material:
                 value['material']=material_key;context['school_material']=material['model']
-            original_parts=_school_original_parts(evidence,pdf_evidence,material) if pdf_evidence or material else []
+            original_parts=_school_original_parts(evidence,pdf_evidence,material) if (pdf_evidence or material) and not plan.get('school_original_action') else []
             original_key='';known=[]
             if original_parts and not reference and not source_error:
                 with store._db() as c: original_key,known=_school_original_known(store,c,row)
@@ -2605,7 +2639,8 @@ def _refresh_school(app, store, now, budget):
                                 _discard_job(c,key,fp);continue
                             saved=_save_school_originals(store,c,row,items,key,fp,now)
                         for collected_row in saved:
-                            collected,errors=_accept_school_reading(app,store,collected_row,evidence,now,original=True)
+                            collected_evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in json.loads(collected_row['evidence'])}]
+                            collected,errors=_accept_school_reading(app,store,collected_row,collected_evidence,now,original=True)
                             created+=collected;failed+=errors
                         continue
                     schema=copy.deepcopy(TASK_BRIEF_SCHEMA);schema['properties']['target_id']['enum']=['']+[t['id'] for t in targets]
@@ -2619,6 +2654,7 @@ def _refresh_school(app, store, now, budget):
                 if page_evidence: brief.setdefault('page_evidence',dict(fingerprint=page_key,read=page_evidence['read'],unread=page_evidence['unread'],omitted=page_evidence['omitted']))['candidate']=candidate
                 if pdf_evidence: brief.setdefault('pdf_evidence',dict(fingerprint=pdf_key,documents=pdf_evidence['documents']))['candidate']=candidate
                 if material: brief.setdefault('material_evidence',dict(fingerprint=material_key))
+                if plan.get('school_original_action'): brief['original_actions_revision']=SCHOOL_ORIGINAL_REVISION
                 due=row['due']
                 if (material or page_evidence or pdf_evidence) and brief['state']=='ready':
                     import family_agenda
