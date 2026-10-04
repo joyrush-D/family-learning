@@ -154,7 +154,7 @@ def summary_consistency_checks():
 
 def summary_http_checks(app,upload):
     """Real temporary HTTP dispatch, final-source guards, save/retry and original-answer reopen."""
-    import http.client
+    from http.client import HTTPConnection
     import threading
     task=app.new_task(dict(child='示例甲',title='虚构后补参考一致性',category='homework'))
     answer=upload('synthetic-summary-answer.png',png(7))
@@ -179,7 +179,7 @@ def summary_http_checks(app,upload):
     worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
     try:
         def http(method,path,payload=None,token=app.TOKEN):
-            client=http.client.HTTPConnection('127.0.0.1',server.server_port,timeout=5)
+            client=HTTPConnection('127.0.0.1',server.server_port,timeout=5)
             try:
                 client.request(method,path,json.dumps(payload) if payload is not None else None,
                     {'Content-Type':'application/json','X-Family-Token':token})
