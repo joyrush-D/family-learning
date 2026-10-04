@@ -436,7 +436,7 @@ def prepare(store, now, budget=ROUND_CALLS):
         left = [p for p in _pending(done, page_count) if p not in pages]
         text = json.dumps(dict(source_message=message, source_name=source['name'],
                                material_scope=dict(current_upload_id=value['upload_id'], linked_originals=value['linked_originals'],
-                                                   sent_pages=pages, unprocessed_pages=left, other_originals_sent=False),
+                                                   sent_pages=pages, processed_pages=sorted(done),unprocessed_pages=left, other_originals_sent=False),
                                original_pdf=dict(upload_id=value['upload_id'], name=value['name'], mime=value['mime'], pages=pages, page_count=page_count,
                                                  unprocessed_pages=left, conversion=value['conversion'])), ensure_ascii=False)
         images = [dict(mime='image/png', data=p['data']) for p in rendered['pages']]

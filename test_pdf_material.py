@@ -566,6 +566,10 @@ class MultiPdfMaterialTests(Base):
             parts = messages[1]['content']
             context = json.loads(parts[0]['text'])
             original = context['original_pdf']; labels = []; identities = []
+            self.assertEqual(context['material_scope']['processed_pages'],
+                             [p for p in range(1,original['page_count']+1) if p not in original['pages'] and p not in original['unprocessed_pages']])
+            self.assertIn('没有重送processed_pages',messages[0]['content'])
+            self.assertIn('同一份练习的必做题与选做题是同一成果',messages[0]['content'])
             for part in parts:
                 if part['type'] != 'text': continue
                 value = json.loads(part['text'])
