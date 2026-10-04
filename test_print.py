@@ -23,6 +23,75 @@ def png(width=2, height=2, color=6):
     return b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',width,height,8,color,0,0,0))+chunk(b'IDAT',zlib.compress(body))+chunk(b'IEND',b'')
 
 
+class HomeworkCauseTests(unittest.TestCase):
+    """Fixed synthetic reading receipts test validation, not image/model accuracy."""
+
+    def draft(self, *, review, **changes):
+        item=dict(label='虚构甲卷第1题',question='虚构甲卷第1题：2+3=?',student_answer='4',
+                  answer=('教师参考：' if review else 'AI自行推导：')+'5',judgment='incorrect',
+                  error_reason='卷面作答4与核对答案5不同。',possible_cause='',
+                  steps='先独立重算2+3，再对照核对答案。',uncertainty='')
+        if review:item['question_kind']='objective'
+        item.update(changes)
+        raw=dict(items=[item],coverage='仅虚构甲卷第1题，其余未检查。')
+        original=json.loads(json.dumps(raw))
+        kwargs=dict(review=review)
+        if review:
+            kwargs.update(reference_documents=[dict(name='synthetic-teacher.txt',text='虚构甲卷第1题：5')],
+                          image_labels=['虚构甲卷第1题'])
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            draft=family_llm.homework_reference_draft(dict(mime='image/png',data=png()),**kwargs)
+        self.assertEqual(model.call_count,1)
+        self.assertEqual(raw,original,'validation must not rewrite the transport receipt')
+        return draft
+
+    def test_review_preserves_wrong_answer_without_inferred_cause(self):
+        for cause in ('','可能重算时发生偏差，须请孩子说明。'):
+            with self.subTest(possible_cause=cause):
+                draft=self.draft(review=True,possible_cause=cause)
+                question=draft['questions'][0]
+                self.assertEqual((draft['wrong_items'],draft['unknown_items']),(1,0))
+                self.assertEqual(question['judgment'],'incorrect')
+                self.assertEqual(question['answer'],'教师参考：5')
+                self.assertEqual(question['student_answer'],'4')
+                self.assertEqual(question['error_reason'],'卷面作答4与核对答案5不同。')
+                self.assertEqual(question['possible_cause'],cause)
+                self.assertEqual(question['steps'],'先独立重算2+3，再对照核对答案。')
+                self.assertEqual(question['uncertainty'],'')
+                self.assertIn('错误依据：'+question['error_reason'],draft['text'])
+
+    def test_print_reference_preserves_wrong_answer_without_inferred_cause(self):
+        draft=self.draft(review=False)
+        question=draft['questions'][0]
+        self.assertEqual((draft['wrong_items'],draft['unknown_items']),(1,0))
+        self.assertEqual(question['judgment'],'incorrect')
+        self.assertEqual(question['answer'],'AI自行推导：5')
+        self.assertEqual(question['error_reason'],'卷面作答4与核对答案5不同。')
+        self.assertEqual(question['possible_cause'],'')
+        self.assertEqual(question['steps'],'先独立重算2+3，再对照核对答案。')
+        self.assertIn('错误依据：'+question['error_reason'],draft['text'])
+
+    def test_wrong_answer_still_requires_observable_evidence(self):
+        cases={'missing_answer':dict(student_answer=''),
+               'missing_reference':dict(answer=''),
+               'reference_conflict':dict(uncertainty='教师参考与可见题面冲突，待核对。'),
+               'missing_error_evidence':dict(error_reason='')}
+        for review in (False,True):
+            for name,changes in cases.items():
+                with self.subTest(review=review,missing=name):
+                    draft=self.draft(review=review,possible_cause='可能重算时发生偏差，须请孩子说明。',**changes)
+                    question=draft['questions'][0]
+                    self.assertEqual((draft['wrong_items'],draft['unknown_items']),(0,1))
+                    self.assertEqual(question['judgment'],'unknown')
+                    self.assertEqual(question['error_reason'],'')
+                    self.assertEqual(question['possible_cause'],'')
+                    self.assertEqual(question['steps'],'')
+                    self.assertTrue(question['uncertainty'])
+                    self.assertNotIn('错误依据：',draft['text'])
+                    if review and name=='reference_conflict':
+                        self.assertEqual(question['answer'],'教师参考：5')
+
+
 class PrintTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.data=Path(self.tmp.name)
