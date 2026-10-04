@@ -2687,20 +2687,24 @@ def _refresh_school(app, store, now, budget):
             original_parts=_school_original_parts(evidence,pdf_evidence,material) if (pdf_evidence or material) and not plan.get('school_original_action') else []
             original_key='';known=[]
             if original_parts and not reference and not source_error:
-                with store._db() as c: original_key,known=_school_original_known(store,c,row)
-                value.update(original_revision=SCHOOL_ORIGINAL_REVISION,original_scope=original_key)
-                context.update(candidate_id=row['id'],original_parts=original_parts,existing_actions=[dict(id=r['id'],state=r['state'],title=r['title'],goal=r['body'],due=r['due'],original_action=json.loads(r['plan']).get('school_original_action',{})) for r in known])
+                try:
+                    with store._db() as c: original_key,known=_school_original_known(store,c,row)
+                    value.update(original_revision=SCHOOL_ORIGINAL_REVISION,original_scope=original_key)
+                    context.update(candidate_id=row['id'],original_parts=original_parts,existing_actions=[dict(id=r['id'],state=r['state'],title=r['title'],goal=r['body'],due=r['due'],original_action=json.loads(r['plan']).get('school_original_action',{})) for r in known])
+                except AgentError as error:
+                    source_error=error;value['original_scope_error']=str(error)
             key='school-task:'+row['id'];fp=store._job(key,value,now,model=reference is None)
             if not fp: continue
             paged+=page_changed or pdf_changed or material_changed or original_changed
-            if not source_error:
+            try:
+                if source_error:
+                    if isinstance(source_error,AgentError):raise source_error
+                    raise AgentError('学校消息原文暂不可读取') from source_error
                 # Revoked, detached, corrected or dismissed between the claim and the call: no model round at all.
                 with store._db() as c:
                     intact=_school_current(store,c,row,evidence,page_key,pdf_key,material_key) and (not original_parts or _school_original_known(store,c,row)[0]==original_key)
                     if not intact: _discard_job(c,key,fp)
                 if not intact: continue
-            try:
-                if source_error: raise AgentError('学校消息原文暂不可读取') from source_error
                 if reference: brief=dict(reference)
                 else:
                     used+=1
