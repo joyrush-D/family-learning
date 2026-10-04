@@ -2751,6 +2751,35 @@ def _school_saved_requirements(row, parts):
     return texts
 
 
+def _school_scoped_correction_anchors(parts,anchors,proof):
+    """Project a whole native notification only onto its uniquely verified numbered action."""
+    if not proof:raise AgentError('本项缺少已核首次同批原通知，不能截取来源')
+    ordinal=re.search(r'第[一二三四五六七八九十0-9]+项',proof['action_text'])
+    scope=_school_first_batch_action_scope(proof['original_text'],ordinal[0] if ordinal else '',proof['object'])
+    if scope!={k:proof[k] for k in ('action_text','shared_date_text')}:
+        raise AgentError('原通知分项范围与已核依据不同，完整来源保留')
+    originals=[p for p in parts if p['ref']==proof['original_ref']]
+    if len(originals)!=1 or originals[0]['id']!=proof['original_ref'] or originals[0]['text']!=proof['original_text']:
+        raise AgentError('原通知不能唯一对应已核分项，完整来源保留')
+    original=originals[0];result=[];projection=[]
+    for anchor in anchors:
+        if anchor in result:raise AgentError('原通知引用重复，分项范围待核')
+        scoped=copy.deepcopy(anchor)
+        if anchor['ref']==proof['original_ref']:
+            if (anchor['upload_ids'] or anchor['pages'] or original['upload_ids'] or original['pages']
+                    or original.get('requirement') or original.get('background_only')):
+                raise AgentError('分项投影仅适用于已核完整原生文字，原件要求不能截取')
+            quote=anchor['quote']
+            if quote!=proof['shared_date_text'] and quote not in proof['action_text']:
+                if quote!=proof['original_text'] or quote.count(proof['action_text'])!=1:
+                    raise AgentError('原通知引用未完整覆盖本项，不能借用另一事项')
+                scoped['quote']=proof['action_text']
+                projection.append(dict(original=copy.deepcopy(anchor),scoped=copy.deepcopy(scoped)))
+        if scoped in result:raise AgentError('分项投影重复引用本项要求')
+        result.append(scoped)
+    return result,projection
+
+
 def _school_effective_conditions(parts,anchors,changes,proof):
     """Keep complete literal requirements; replace only proven mandatory/optional clauses."""
     if not proof or not isinstance(changes,list) or not 1<=len(changes)<=6:
@@ -2777,21 +2806,31 @@ def _school_effective_conditions(parts,anchors,changes,proof):
             raise AgentError('本轮只支持栏目必做选做条件，动作、数量及具体标准不能被替换')
         if re.search(r'(?:不用|不必|无需|不需要|不要|不要求|并非|不是|未要求)\s*$',old['text'][:old['text'].index(old_text)]):
             raise AgentError('否定或反向条件不能按原必做短句替换')
-        if not re.fullmatch(new_pattern+r'(?:[；;，,]\s*'+new_pattern+r')*[。；;，,]?',new_text):
-            raise AgentError('后发替换只保留栏目必做选做短句，其余原标准分别保留')
+        status_pattern=new_pattern+r'(?:[；;，,]\s*'+new_pattern+r')*'
+        status_text=new_text;equivalent=None
+        if not re.fullmatch(status_pattern+r'[。；;，,]?',new_text):
+            equivalent=re.fullmatch('('+status_pattern+r')[；;，,]\s*不做('+labels+r')栏也算完成(《?[^》。\n；;，,]{2,40}》?)[。；;，,]?',new_text)
+            if not equivalent:
+                raise AgentError('后发替换只保留栏目条件及同项选做完成说明，其余原标准分别保留')
+            status_text=equivalent[1]
         expected=set(re.findall(r'[A-Z]',old_text));found={}
-        for match in re.finditer(new_pattern,new_text):
+        for match in re.finditer(new_pattern,status_text):
             for label in re.findall(r'[A-Z]',match[1]):
                 if label in found and found[label]!=match[2]:raise AgentError('后发必做选做条件互相冲突')
                 found[label]=match[2]
         if expected!=found.keys() or not any(found[k]=='选做' for k in expected):
             raise AgentError('后发条件未明确覆盖被替换栏目，原完整标准保留')
+        if equivalent:
+            obj=proof['object'][1:-1];names={proof['object'],obj}
+            if '的' in obj and len(obj.rsplit('的',1)[1])>=2:names.add(obj.rsplit('的',1)[1])
+            if equivalent[3] not in names or any(found.get(k)!='选做' for k in re.findall(r'[A-Z]',equivalent[2])):
+                raise AgentError('不做也算完成只能对应本项明确选做栏目，必做和其他行动保留')
         if statuses and any(k in statuses and statuses[k]!=v for k,v in found.items()):raise AgentError('本项更正条件互相冲突')
         statuses.update(found)
         start=old['text'].index(old_text);end=start+len(old_text)
         spans=edits.setdefault(old['id'],[])
         if any(max(start,left)<min(end,right) for left,right,_ in spans):raise AgentError('更正条件重复或重叠')
-        spans.append((start,end,new_text))
+        spans.append((start,end,new_text.rstrip('。；;，,')))
     result=[];applied=set()
     if not any(v=='必做' for v in statuses.values()):raise AgentError('整项改为选做不作为新的必做行动自动收录')
     for anchor in anchors:
@@ -3068,6 +3107,9 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         chosen=_text(value,'existing_item_id',80)
         if chosen and (chosen not in existing or chosen in used): raise AgentError('原候选行动对应关系无法核对')
         used.add(chosen) if chosen else None
+        old=existing.get(chosen);batch_proof=None
+        if old and old['id']==row['id']:
+            with store._db() as c:batch_proof=_school_untouched_batch_correction(store,c,old,evidence)
         basis=value['basis'];anchors=[];action_anchors=[];requirements=[];compiled=[]
         if not isinstance(basis,list) or not 1<=len(basis)<=6: raise AgentError('原件行动缺少对应内容')
         chosen_parts={quote.get('part') for quote in basis if isinstance(quote,dict)}
@@ -3086,6 +3128,12 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
             if not part.get('background_only'):
                 compiled.append(text)
                 if anchor not in action_anchors:action_anchors.append(anchor)
+        projection=[]
+        if conditions and batch_proof and value['change']=='new' and not value['target_id']:
+            anchors,projection=_school_scoped_correction_anchors(parts,anchors,batch_proof)
+            action_anchors=[a for a in anchors if any(not p.get('background_only') and p['ref']==a['ref']
+                and p['upload_ids']==a['upload_ids'] and p['pages']==a['pages'] for p in parts)]
+            compiled=[a['quote'] for a in action_anchors]
         if requirements and not conditions:value=_school_requirement_goal(value,compiled)
         has_action=any(_LEARNING_ACTIVITY.search(a['quote']) or _LEARNING_ACTION.search(a['quote'])
             or conditions and re.search(r'(?:完成|做|写)\s*(?:第[一二三四五六七八九十0-9]+项\s*[:：]?\s*)?《[^》\n]{2,40}》',a['quote'])
@@ -3098,11 +3146,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         identity=_hash([row['child_id'],sorted((_json([a['ref'],a['upload_ids'],a['quote']]) for a in anchors))])
         if identity in identities: raise AgentError('原件清单重复引用同一行动，整组保留重试')
         identities.add(identity)
-        old=existing.get(chosen)
         old_anchor=json.loads(old['plan']).get('school_original_action',{}) if old else {}
-        batch_proof=None
-        if old and old['id']==row['id']:
-            with store._db() as c:batch_proof=_school_untouched_batch_correction(store,c,old,evidence)
         generated_match=bool(batch_proof and any(a['ref']==batch_proof['original_ref'] and batch_proof['object'] in a['quote'] for a in anchors)
             and {batch_proof['original_ref'],batch_proof['correction_ref']}<={a['ref'] for a in anchors})
         if generated_match and not conditions:
@@ -3130,6 +3174,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         item_row=dict(row,evidence=_json([q for q in json.loads(row['evidence']) if q['ref'] in cited_refs]))
         item_plan=copy.deepcopy(json.loads(row['plan']))
         action=dict(identity=identity,scope=scope,root_id=row['id'],anchors=anchors)
+        if projection:action.update(model_basis=copy.deepcopy(basis),basis_projection=projection)
         if requirements: action['requirements']=requirements
         if conditions:action.update(condition_changes=copy.deepcopy(conditions),correction_proof=batch_proof)
         item_plan['school_original_action']=action
