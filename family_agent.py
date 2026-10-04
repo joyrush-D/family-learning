@@ -3098,6 +3098,17 @@ def _school_effective_instructions(parts,anchors,changes,proof):
     from family_agenda import deadlines,sent_day
     inherited_due=deadlines(proof['action_text']+'\n'+proof['shared_date_text'],sent_day(proof['original_time']))
     complete_requirements=any(entry['part'].get('requirement') and obj in entry['text'] for entry in entries)
+    # The proven all-items deadline belongs to this action too. Its original
+    # relative words stay in the anchors; an execution instruction must not
+    # change meaning when opened on a later day or include a sibling action.
+    shared_date=proof['shared_date_text'].rstrip('。；;\n').strip()
+    dated=r'(?:今天|明天|后天|(?:\d{4}年)?\d{1,2}月\d{1,2}日?|\d{4}-\d{2}-\d{2})'
+    common=re.fullmatch(dated+r'\s*(前|之前|以前|内)?\s*完成[两二三四五六七八九十2-9]项(?:语文|数学|英语|科学|历史|地理|物理|化学|生物)?(?:要求|作业|任务|练习)?',shared_date)
+    shared_quoted=any(e['part']['ref']==proof['original_ref'] and e['text'].rstrip('。；;\n').strip()==shared_date for e in entries)
+    command=''
+    if common and shared_quoted and len(inherited_due)==1:
+        qualifier='内' if common[1]=='内' else '前' if common[1] else ''
+        command=next(iter(inherited_due))+qualifier+'完成'+obj
     result=[];seen=set()
     for entry in entries:
         text=entry['text'];part=entry['part']
@@ -3139,6 +3150,10 @@ def _school_effective_instructions(parts,anchors,changes,proof):
             # Equal words may belong to different columns or conditions. Deduplicate
             # only the proved inserted/correction clause, never arbitrary native text.
             keys=set()
+            if command and ((native and part['ref']==proof['original_ref'] and bare==shared_date)
+                            or bare=='完成'+obj and (part['ref']==proof['original_ref'] or part.get('requirement'))):
+                bare=command
+                keys.add(('heading',obj))
             if native:
                 for change in changes:
                     if part['id'] in (change['old_part'],change['new_part']) and bare in {
