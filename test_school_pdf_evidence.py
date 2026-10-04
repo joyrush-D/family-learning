@@ -649,7 +649,9 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         with self.store._db() as c:c.execute('UPDATE agent_items SET plan=? WHERE id=?',(json.dumps(plan),ident))
         self.assertFalse(self.mapped_upgrade_scope(keys,upload,remap=True)[1])
         with self.store._db() as c:c.execute('UPDATE agent_items SET plan=?,state=? WHERE id=?',(row['plan'],'dismissed',ident))
-        self.assertFalse(self.mapped_upgrade_scope(keys,upload,remap=True)[1])
+        # This is mapping already-read new content, never re-reading or overwriting the exact old decision.
+        self.assertTrue(self.mapped_upgrade_scope(keys,upload,remap=True)[1])
+        self.assertFalse(self.mapped_upgrade_scope(keys,upload)[1])
 
     def test_legacy_reflow_retains_each_old_action_and_rejects_merging_two_ids(self):
         ids,requirements=self.legacy_action_candidates()
