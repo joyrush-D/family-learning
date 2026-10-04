@@ -422,7 +422,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
   await p.locator('#taskForm [name=note]').fill('虚构甲卷第1题，完整题面2+3=?，孩子最终作答4。');
   await p.locator('#cameraInput').setInputFiles({name:'synthetic-cause-answer-'+width+'.png',mimeType:'image/png',buffer:causeImage});await p.locator('#pendingUploads img').waitFor();
   const teacherName='synthetic-cause-teacher-'+width+'.txt';
-  await p.locator('#fileInput').setInputFiles({name:teacherName,mimeType:'text/plain',buffer:Buffer.from('虚构甲卷第1题：2+3=5。\n')});await p.locator('#pendingUploads').getByText(teacherName,{exact:false}).waitFor();
+  await p.locator('#fileInput').setInputFiles({name:teacherName,mimeType:'text/plain',buffer:Buffer.from('虚构甲卷第1题：2+3=5。\n')});await p.locator('#pendingUploads').getByRole('link',{name:teacherName,exact:true}).waitFor();
   const causeOriginal=await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),readCause);
   state=await readCause();const originalCauseRecord=state.records.find(r=>r.id===causeOriginal.record_id),causeSources=originalCauseRecord.attachments.map(id=>state.uploads.find(a=>a.id===id));
   const causePhoto=causeSources.find(a=>a.mime==='image/png'),causeTeacher=causeSources.find(a=>a.name===teacherName);assert(causePhoto&&causeTeacher);
