@@ -228,13 +228,15 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
 
     def text_action_original(self,fragment=False):
         self.store.app=self.app
-        keys=self.keys if fragment else self.native_notice('text-with-receipt')
         text='数学：2026-02-12前完成口算10题，做完检查。'
-        with self.store._db() as c:
-            raw=json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
-                                    (keys['source_id'],keys['message_id'])).fetchone()[0])
-            c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
-                      (json.dumps(dict(raw,text=text,unread=True)),keys['source_id'],keys['message_id']))
+        keys=self.school_fragment(text) if fragment else self.native_notice('text-with-receipt')
+        if fragment:self.link(keys,self.pdf)
+        else:
+            with self.store._db() as c:
+                raw=json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
+                                        (keys['source_id'],keys['message_id'])).fetchone()[0])
+                c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
+                          (json.dumps(dict(raw,text=text,unread=True)),keys['source_id'],keys['message_id']))
         self.seed_groups(keys=keys,note='2026-02-13前签字交回独立活动回执。',uncertainties=[])
         ident=self.candidate(keys=keys,ident='text-action')
         ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
