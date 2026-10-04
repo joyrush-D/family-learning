@@ -114,13 +114,15 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertIn('学习',self.brief(ident)['reason'])
 
     def test_original_new_action_cannot_bind_an_unproven_old_decision(self):
-        ident,reply=self.original_action_fixture('2026-02-13前交回活动回执。')
+        ident,reply=self.original_action_fixture('2026-02-13前交回活动回执。\n领取用品。')
+        reply['actions'][0]['basis'][0]['text']='2026-02-13前交回活动回执。'
         other=self.candidate(keys=self.native_notice('other-initial'),ident='old-decision',title='旧决定')
         with self.store._db() as c:
             c.execute('UPDATE agent_items SET evidence=?,state=? WHERE id=?',
                       (self.item(ident)['evidence'],'dismissed',other))
         before=self.item(other)
         extra=dict(reply['actions'][0],existing_item_id=other,title='事务：领取用品',goal='领取用品。')
+        extra['basis']=[dict(reply['actions'][0]['basis'][0],text='领取用品。')]
         reply['actions'].append(extra)
         result,_=self.refresh(reply)
         self.assertEqual((result['failed'],self.count('manual_tasks'),self.item(other)),(1,0,before))
@@ -144,6 +146,27 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             return reply
         result,_=self.refresh(model)
         self.assertEqual((result['created'],self.item(ident),self.item(other)['state'],self.count('manual_tasks')),(0,before,'dismissed',0))
+
+    def test_original_actions_keep_their_own_messages_dates_and_files(self):
+        first=self.native_notice('dated-a',published='2026-02-10T08:00:00+08:00')
+        paper_b=self.seed_pdf('b'*32,name='虚构独立回执.pdf')
+        second=self.native_notice('dated-b',upload=paper_b,published='2026-02-11T08:00:00+08:00')
+        ident=self.candidate(keys=first,ident='dated-pair')
+        ref_a='message:%s:%s'%(first['source_id'],first['message_id']);ref_b='message:%s:%s'%(second['source_id'],second['message_id'])
+        with self.store._db() as c:
+            c.execute('UPDATE agent_items SET evidence=? WHERE id=?',
+                      (json.dumps([dict(ref=ref_a,text=TEXT),dict(ref=ref_b,text=TEXT)]),ident))
+        math='数学：明天完成练习卷第1至11页。';receipt='明天打印、签字并交回独立活动回执。'
+        self.seed_groups(keys=first,note=math,uncertainties=[],upload_id=self.pdf)
+        self.seed_groups(keys=second,note=receipt,uncertainties=[],upload_id=paper_b)
+        reply={'actions':[
+            dict(draft(goal=math),due='2026-02-11',existing_item_id=ident,basis=[dict(part='pdf:'+self.pdf+':1@'+ref_a,text=math)]),
+            dict(draft(title='事务：签字交回活动回执',goal=receipt,purpose='admin'),due='2026-02-12',existing_item_id='',basis=[dict(part='pdf:'+paper_b+':1@'+ref_b,text=receipt)])]}
+        result,_=self.refresh(reply)
+        self.assertEqual((result['failed'],result['created']),(0,2))
+        rows=self.rows('SELECT evidence,plan,due FROM agent_items ORDER BY due')
+        self.assertEqual([[e['ref'] for e in json.loads(r[0])] for r in rows],[[ref_a],[ref_b]])
+        self.assertEqual([[d['upload_id'] for d in json.loads(r[1])['school_task']['pdf_evidence']['documents']] for r in rows],[[self.pdf],[paper_b]])
 
     def test_two_originals_require_both_complete_before_one_school_round(self):
         keys,reference=self.multi_originals()
