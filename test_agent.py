@@ -1607,7 +1607,7 @@ class AgentTests(unittest.TestCase):
             task_id=self.store.act(dict(id=original['id'],action='accept'))['task_id']
             with self.app.connect() as c:before[task_id]=next(t for t in self.app.tasks(c) if t['id']==task_id)
             row=self._school_append_candidate(index+1,'只补'+supplement+'朗读：录音上传后确认上传成功。',
-                change=change,target=task_id if change=='append' else '',publisher=publisher)
+                change=change,target=task_id if change=='append' else '',publisher=publisher,title='英语：朗读补充')
             with self.subTest(original=unit,supplement=supplement):
                 brief=json.loads(row['plan'])['school_task']
                 self.assertEqual(brief['state'],'review')
@@ -1629,7 +1629,7 @@ class AgentTests(unittest.TestCase):
                     title='英语：'+unit+'朗读',due='2026-02-11',publisher=publisher)
                 task_id=self.store.act(dict(id=original['id'],action='accept'))['task_id']
                 row=self._school_append_candidate(index+1,'只补'+supplement+'朗读：录音上传后确认上传成功。',
-                    change='append',target=task_id,publisher=publisher)
+                    change='append',target=task_id,publisher=publisher,title='英语：朗读补充')
                 brief=json.loads(row['plan'])['school_task']
                 self.assertEqual((brief['state'],brief['target_id']),('ready',task_id))
                 self.assertEqual(brief['target_basis']['canonical_id'],original['id'])
@@ -1638,6 +1638,54 @@ class AgentTests(unittest.TestCase):
                     task=next(t for t in self.app.tasks(c) if t['id']==task_id)
                     self.assertIn(original['body'],task['action']);self.assertIn('确认上传成功',task['action'])
                     self.assertEqual(task['agenda']['due_on'],'2026-02-11')
+                    self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],n+1)
+
+    def test_school_append_model_objects_cannot_replace_the_source_or_target(self):
+        explicit='只补Unit30朗读：录音上传后确认上传成功。'
+        cases=((explicit,'英语：朗读补充','Unit3朗读录音上传后确认上传成功。'),
+               (explicit,'英语：Unit3朗读补充','Unit30朗读录音上传后确认上传成功。'),
+               ('只补朗读：录音上传后确认上传成功。','英语：朗读补充','Unit3朗读录音上传后确认上传成功。'))
+        before={};canonical={}
+        for n,(text,title,goal) in enumerate(cases):
+            index=11+2*n;publisher='synthetic-modeled-object-negative-'+str(n)
+            original=self._school_append_candidate(index,'Unit30课文读两遍，朗读录音上传班级作业区，明天完成。',
+                title='英语：Unit30朗读',due='2026-02-11',publisher=publisher)
+            task_id=self.store.act(dict(id=original['id'],action='accept'))['task_id']
+            with self.app.connect() as c:
+                before[task_id]=next(t for t in self.app.tasks(c) if t['id']==task_id)
+                canonical[original['id']]=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(original['id'],)).fetchone())
+            row=self._school_append_candidate(index+1,text,change='append',target=task_id,title=title,goal=goal,publisher=publisher)
+            with self.subTest(title=title,goal=goal,source=text):
+                brief=json.loads(row['plan'])['school_task']
+                self.assertEqual(brief['state'],'review')
+                self.assertNotIn('target_basis',brief);self.assertNotIn('input_basis',brief)
+        with patch.object(agent.family_llm,'_chat_json') as model,patch.object(agent,'_now',return_value=self.now):
+            agent._refresh_school(self.app,self.store,self.now,0);model.assert_not_called()
+        with self.app.connect() as c:
+            self.assertEqual({t['id']:t for t in self.app.tasks(c)},before)
+            for ident,row in canonical.items():
+                self.assertEqual(dict(c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone()),row)
+
+    def test_school_append_generic_or_correct_model_objects_keep_the_same_task(self):
+        cases=(('只补朗读：录音上传后确认上传成功。','英语：朗读补充','录音上传后确认上传成功。'),
+               ('只补Unit30朗读：录音上传后确认上传成功。','英语：Unit30朗读补充','Unit30朗读录音上传后确认上传成功。'))
+        for n,(text,title,goal) in enumerate(cases):
+            with self.subTest(title=title,goal=goal):
+                index=11+2*n;publisher='synthetic-modeled-object-positive-'+str(n)
+                original=self._school_append_candidate(index,'Unit30课文读两遍，朗读录音上传班级作业区，明天完成。',
+                    title='英语：Unit30朗读',due='2026-02-11',publisher=publisher)
+                task_id=self.store.act(dict(id=original['id'],action='accept'))['task_id']
+                with self.app.connect() as c:before=next(t for t in self.app.tasks(c) if t['id']==task_id)
+                row=self._school_append_candidate(index+1,text,change='append',target=task_id,title=title,goal=goal,publisher=publisher)
+                brief=json.loads(row['plan'])['school_task']
+                self.assertEqual((brief['state'],brief['target_id']),('ready',task_id))
+                self._school_append_auto(row)
+                with self.app.connect() as c:
+                    task=next(t for t in self.app.tasks(c) if t['id']==task_id)
+                    self.assertIn(original['body'],task['action']);self.assertIn(goal,task['action'])
+                    self.assertEqual((task['title'],task['agenda']['due_on']),(before['title'],'2026-02-11'))
+                    self.assertTrue(task['source'].startswith(before['source']))
+                    self.assertIn('message:synthetic-group:'+str(index+1),task['source'])
                     self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],n+1)
 
     def test_school_append_rejects_unknown_publisher_other_child_and_competing_activity(self):
