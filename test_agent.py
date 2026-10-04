@@ -970,6 +970,30 @@ class AgentTests(unittest.TestCase):
                         with self.assertRaises(agent.AgentError):agent._school_effective_conditions(sources,quotes,mapping,basis)
                     else:self.assertTrue(agent._school_effective_conditions(sources,quotes,mapping,basis))
 
+    def test_action_reading_uses_complete_requirements_without_changing_collection_flags(self):
+        import copy
+        ref='message:synthetic:m2';requirement='完成《桥的观察单》：A栏写两个词语。B栏写三句完整的话。'
+        raw=[dict(ref=ref,text='补发《桥的观察单》。',kind='text',unread=True,content_incomplete=True)]
+        quotes=[dict(ref=ref,quote=raw[0]['text'],upload_ids=[],pages=[]),
+                dict(ref=ref,quote=requirement,upload_ids=['a'*32],pages=[])]
+        requirements=[dict(ref=ref,text=requirement,upload_ids=['a'*32])]
+        before=copy.deepcopy((raw,quotes,requirements))
+        read=agent._school_action_read_evidence(raw,quotes,requirements)
+        self.assertEqual((read[0]['unread'],read[0]['content_incomplete']),(False,False))
+        self.assertIn(requirement,read[0]['text'])
+        self.assertEqual((raw,quotes,requirements),before)
+        for altered in [[],[dict(requirements[0],text='A栏写两个词语。')],
+                        [dict(requirements[0],ref='message:synthetic:other')],
+                        [dict(requirements[0],upload_ids=['b'*32])]]:
+            self.assertEqual(agent._school_action_read_evidence(raw,quotes,altered),raw)
+        changed=copy.deepcopy(quotes);changed[-1]['pages']=[2]
+        self.assertEqual(agent._school_action_read_evidence(raw,changed,requirements),raw)
+        fragment=[dict(raw[0],kind='qq_window_fragment')]
+        self.assertEqual(agent._school_action_read_evidence(fragment,quotes,requirements),fragment)
+        material=dict(fingerprint='synthetic',uncertainties=['B栏文字模糊'],complete_refs=[],refs=[ref])
+        value=dict(title='完成观察单',goal=requirement,state='ready',purpose='learning',change='new',target_id='')
+        self.assertEqual(agent._school_brief(value,evidence=read,material=material)['state'],'review')
+
     def test_effective_column_changes_reject_missing_ambiguous_or_standard_replacements(self):
         import copy
         parts,anchors,changes,proof=self._first_batch_condition_fixture()
