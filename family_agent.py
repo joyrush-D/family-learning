@@ -989,6 +989,7 @@ class Store:
             if task is None or task['child']!=child['name']: raise AgentError('事项与当前孩子不一致',403)
             original=_school_origin(self,c,task,child['id'])
             ref='message:'+source['id']+':'+message['id']
+            original=school_original_source_row(self,c,original,ref)
             ids=[r['upload_id'] for r in c.execute('SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=? ORDER BY upload_id',(source['id'],message['id']))]
             scoped=school_original_upload_ids(self,c,original,ref,ids)
             if ref not in {e['ref'] for e in json.loads(original['evidence'])}: raise AgentError('原消息不属于当前事项',403)
@@ -1274,7 +1275,10 @@ class Store:
                     if message not in known_messages: known_messages.append(message)
             now = _now().isoformat()
             if added:
-                c.execute('UPDATE agent_items SET evidence=?,plan=?,updated=? WHERE id=?', (_json(evidence), _json(old_plan), now, existing['id']))
+                # Scoped originals keep their immutable action basis. The accepted
+                # duplicate row owns its additional source, not the canonical file scope.
+                canonical_evidence=existing['evidence'] if old_plan.get('school_original_action') else _json(evidence)
+                c.execute('UPDATE agent_items SET evidence=?,plan=?,updated=? WHERE id=?', (canonical_evidence, _json(old_plan), now, existing['id']))
                 if task:
                     source = task['source'] + '\n\n' + '\n\n'.join(e['ref'] + '\n' + e['text'] for e in added)
                     c.execute('UPDATE manual_tasks SET source=? WHERE id=?', (source, task['id']))
@@ -2309,6 +2313,7 @@ def _school_action_upload_ids(row,ref,ids):
 
 def school_original_upload_ids(store,c,row,ref,ids):
     """Shared current original scope for task display, printing and answer checking, read-only."""
+    row=school_original_source_row(store,c,row,ref)
     selected=_school_action_upload_ids(row,ref,ids)
     if selected is None:return None
     evidence,_=_school_material(store,c,row)
@@ -2316,6 +2321,29 @@ def school_original_upload_ids(store,c,row,ref,ids):
         raise AgentError('本项原消息已变化，请回原消息重新核对',409,'school_original_scope_stale')
     _check_school_page(store,c,row)
     return selected
+
+
+def school_original_source_row(store,c,canonical,ref):
+    """Use the accepted source's own basis; supplements and repeats never expand the original file scope."""
+    if ref in {e['ref'] for e in json.loads(canonical['evidence'])}:return canonical
+    owners=[]
+    for saved in c.execute("SELECT * FROM agent_items WHERE child_id=? AND task_id=? AND kind='school' AND state='accepted' ORDER BY id",
+                           (canonical['child_id'],canonical['task_id'])):
+        plan=json.loads(saved['plan'])
+        related=plan.get('school_change_of')==canonical['id'] or plan.get('school_duplicate_of')==canonical['id']
+        if related and ref in {e['ref'] for e in json.loads(saved['evidence'])}:owners.append(dict(saved))
+    if len(owners)!=1:raise AgentError('原消息与当前事项的独立出处无法核对',409,'school_original_scope_stale')
+    row=owners[0];plan=json.loads(row['plan'])
+    if json.loads(canonical['plan']).get('school_original_action') and not plan.get('school_original_action'):
+        # Legacy append/repeat decisions prove native body text, not the set of
+        # files sharing that message. Give them an explicit empty file scope.
+        evidence,_=_school_material(store,c,row)
+        if any(e.get('kind') not in ('text','quote') or e.get('unread') or e.get('content_incomplete')
+               or _needs_task_details(e.get('text','')) for e in evidence):
+            raise AgentError('补充原件尚无独立行动依据，请核对原消息',409,'school_original_scope_stale')
+        plan['school_original_action']=dict(anchors=[dict(ref=e['ref'],upload_ids=[],pages=[],quote=e['text']) for e in evidence])
+        row['plan']=_json(plan)  # A read scope only; the original record and decision are unchanged.
+    return row
 
 
 def _school_pdf(store, c, row):
