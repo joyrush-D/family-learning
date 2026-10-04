@@ -143,7 +143,11 @@ _LEARNING_MATERIAL = re.compile(r'(?:带(?:来|上|好)?|携带|准备|打印|�
 # A named administrative form is an object, not an instruction to study it.
 # Keep an actual reading/exercise clause outside the name intact.
 _LEARNING_FORM = re.compile(r'(?:朗读|背诵|抄写|默写|听写|跟读|练习|作业|订正|预习|复习|阅读|口算|习作|作文|单词|课文)(?:活动|课程|比赛)?(?:回执|登记表|报名表|同意书|确认单|通知书)')
-_LEARNING_ACTION = re.compile(r'(?:完成|做|写|订正)(?:好|完)?\s*(?:第)?[一二两三四五六七八九十\d]+(?:\s*(?:[–—~\-]|至|到)\s*(?:第)?[一二两三四五六七八九十\d]+)?\s*题|做(?:好|完)?(?=后|再|并)|读')
+_LEARNING_QUESTIONS = r'(?:第)?[一二两三四五六七八九十\d]+(?:\s*(?:[–—~\-]|至|到)\s*(?:第)?[一二两三四五六七八九十\d]+)?\s*题'
+# Both verb-first and question-first requirements count after material-only explanations are removed.
+_LEARNING_ACTION = re.compile(r'(?:完成|做|写|订正)(?:好|完)?\s*'+_LEARNING_QUESTIONS+
+    r'|做(?:好|完)?(?=后|再|并)|读|'+_LEARNING_QUESTIONS+
+    r'\s*(?:必做|选做|(?:(?:必须|需要|需|应|要|要求)\s*)?(?:完成|做(?:好|完)?|检查|订正))')
 _LEARNING_OBJECT = r'(?:语文|数学|英语|科学|历史|地理|物理|化学|生物)?(?:作业答题页|作业(?:页|卷|纸|单|本)?|练习(?:页|卷|纸|单|本|册)?|阅读材料|复习资料)'
 _LEARNING_NEGATED_OBJECT = re.compile(r'(?:并?不是|并?非|不属于|不作为)\s*'+_LEARNING_OBJECT)
 # Remove a comparison only when its subject is explicitly an administrative material.

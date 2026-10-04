@@ -120,7 +120,9 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
     def test_explicit_admin_material_contrast_does_not_hide_a_positive_learning_requirement(self):
         cases=[('negative','家长：2026-02-13前签字交回活动回执。该回执与数学练习分开，不是作业答题页。','accepted'),
                ('positive','家长：2026-02-13前完成数学练习第1–3题，再签字交回活动回执。该回执不是作业答题页。','pending'),
-               ('submit-both','家长：2026-02-13前回执与数学作业分开提交，家长签字。','pending')]
+               ('submit-both','家长：2026-02-13前回执与数学作业分开提交，家长签字。','pending'),
+               ('question-first','2026-02-13前打印回执，家长签字后交回。回执与数学练习分开。第1至3题必做，第4题选做。','pending'),
+               ('required-after-question','2026-02-13前签字交回。这份回执不是练习卷。第1至3题必须完成并检查。','pending')]
         for label,note,state in cases:
             with self.subTest(label=label):
                 keys=self.native_notice('admin-'+label)
@@ -134,12 +136,28 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             brief=agent._school_brief(draft(title='事务：签字交回回执',goal=cases[0][1],purpose='admin'),
                 evidence=[dict(ref='message:qq:synthetic:1',text=cases[0][1],kind='text',unread=False)],separate_learning=separate)
             self.assertEqual(brief['state'],'ready')
-            mixed=agent._school_brief(draft(title='事务：签字交回回执',goal=cases[1][1],purpose='admin'),
-                evidence=[dict(ref='message:qq:synthetic:1',text=cases[1][1],kind='text',unread=False)],separate_learning=separate)
-            self.assertEqual(mixed['state'],'review')
-            both=agent._school_brief(draft(title='事务：交回回执',goal=cases[2][1],purpose='admin'),
-                evidence=[dict(ref='message:qq:synthetic:1',text=cases[2][1],kind='text',unread=False)],separate_learning=separate)
-            self.assertEqual(both['state'],'review')
+            for label,note,state in cases[1:]:
+                with self.subTest(label=label,separate=separate):
+                    mixed=agent._school_brief(draft(title='事务：签字交回回执',goal=note,purpose='admin'),
+                        evidence=[dict(ref='message:qq:synthetic:1',text=note,kind='text',unread=False)],separate_learning=separate)
+                    self.assertEqual(mixed['state'],'review')
+                    self.assertIn('同时提到学习活动',mixed['reason'])
+
+    def test_question_first_actions_keep_positive_and_negated_requirements_distinct(self):
+        for action in ('第1至3题必做，第4题选做。','第1至3题必须完成并检查。','第4题需完成。','第三至五题订正。'):
+            with self.subTest(action=action):
+                self.assertIsNotNone(agent._LEARNING_ACTION.search(action))
+                text='这份回执不是练习卷。签字交回。'+action
+                brief=agent._school_brief(draft(title='事务：签字交回回执',goal=text,purpose='admin'),
+                    evidence=[dict(ref='message:s:1',text=text,kind='text',unread=False)],separate_learning=True)
+                self.assertEqual(brief['state'],'review')
+        for action in ('第1至3题不必做。','第4题无需完成。','第1至3题不是必做。','题号：第1至3题。'):
+            with self.subTest(action=action):
+                self.assertIsNone(agent._LEARNING_ACTION.search(action))
+                text='这份回执不是练习卷。签字交回。'+action
+                brief=agent._school_brief(draft(title='事务：签字交回回执',goal=text,purpose='admin'),
+                    evidence=[dict(ref='message:s:1',text=text,kind='text',unread=False)],separate_learning=True)
+                self.assertEqual(brief['state'],'ready')
 
     def test_complete_original_keeps_independent_homework_and_receipt(self):
         keys=self.native_notice('independent-original')
