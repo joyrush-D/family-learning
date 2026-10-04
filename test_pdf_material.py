@@ -601,7 +601,7 @@ class MultiPdfMaterialTests(Base):
         for call in calls:
             scope = call['context']['material_scope']; original = call['context']['original_pdf']
             self.assertEqual(scope, dict(current_upload_id=original['upload_id'], linked_originals=linked,
-                                         sent_pages=[1], unprocessed_pages=[], other_originals_sent=False))
+                                         sent_pages=[1], processed_pages=[], unprocessed_pages=[], other_originals_sent=False))
             self.assertEqual(call['images'], 1)  # The manifest never sends sibling bytes or pages.
             self.assertEqual(call['image_labels'], [dict(upload_id=original['upload_id'], page=1)])
             self.assertTrue(all(set(doc) == {'upload_id', 'name', 'mime'} for doc in scope['linked_originals']))
