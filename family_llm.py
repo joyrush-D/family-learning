@@ -1079,7 +1079,7 @@ def homework_reference_draft(images, *, data_path=None, timeout=90, review=False
                    or not isinstance(d['text'],str) or not d['text'].strip() for d in reference_documents)
             or sum(len(d['text']) for d in question_documents+reference_documents)>MAX_TEXT
             or sum(len(image['data']) for image in images+reference_images)+sum(len(d['text'].encode()) for d in question_documents+reference_documents+previous_documents)+len(previous_text.encode('utf-8'))>MAX_INPUT):
-        raise ValueError('作答与教师参考须为有界的已保存原件，合计最多8页/20MB与12000字参考文字')
+        raise ValueError('作答与教师参考须为有界的已保存原件，合计最多8页/20MB与12000字题目和参考文字')
     for labels,count in ((image_labels,len(images)),(reference_labels,len(reference_images))):
         if not isinstance(labels,(list,tuple)) or labels and (len(labels)!=count or any(not isinstance(label,str) or len(label)>260 for label in labels)):
             raise ValueError('批改原件页码标签不正确')
@@ -1127,6 +1127,7 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
     if question_documents:
         prompt=prompt.replace('只看本次按页序提供的作业图片','只看本次明确提供的题目/孩子作答图片和文字原件')
         prompt=prompt.replace('student_answer只抄本图清晰可辨的最终作答','student_answer只抄本次题目/作答原件中明确清晰的最终作答')
+        prompt=prompt.replace('在这些图片中缺失时','在本次明确提供的题目/作答原件（图片或文字）中缺失时')
     if teacher_reference:
         prompt=prompt.replace('judgment只有在题目、孩子最终作答和参考答案都能独立核实时才写correct或incorrect；否则写unknown并说明缺口。','有教师参考时，判定按下方教师参考规则执行；没有教师参考时，只有题目与最终作答能独立核实才判正确或错误。')
         prompt+='\n仅缺题干、但卷别/题号/选择或填空答案与教师参考能明确对应时，应给出答案比较的correct或incorrect；题目完整性未核仅写入coverage，不写入uncertainty。uncertainty只记录会阻止本次答案比较的歧义或冲突。'
