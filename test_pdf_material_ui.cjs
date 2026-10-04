@@ -197,11 +197,15 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   const autoFeedback=page.locator('#taskDialog'),autoResources=autoFeedback.locator('#taskSchoolResources'),autoNote='虚构自动收录作业反馈 '+width+'：练习已尝试，第6题待订正。';
   const assertAutoScope=async(task,own,other,quote,otherQuote)=>{
    const basis=autoResources.locator('[data-task-material-scope="action"]');await basis.waitFor();
-   assert.match(await basis.innerText(),/AI 已整理 · 本项依据/);assert.deepEqual(await basis.locator('.task-material-text').allTextContents(),[quote]);
+   assert.match(await basis.innerText(),/AI 已整理 · 本项资料/);
+   assert.equal(await basis.locator('.task-material-text').count(),0,'the task conclusion is not repeated as raw source quotes');
    assert.match(await basis.locator('[data-task-material-pages]').innerText(),/第 1、2、3 页/);
    assert.equal(await autoResources.locator('[data-school-pdf-document]').count(),1,'one task keeps only its own original preparation');
    assert.match(await autoResources.innerText(),/原件整理：全部 11 页已整理/);
    assert((await autoResources.innerText()).includes(own.name));assert(!(await autoResources.innerText()).includes(other.name));assert(!(await autoResources.innerText()).includes(otherQuote));
+   assert.equal((await autoResources.innerText()).split(own.name).length,2,'one filename appears once beside its download action');
+   assert(!(await autoResources.innerText()).includes(quote),'the complete requirement remains in the task heading without a duplicate paragraph');
+   assert(!(await autoResources.innerText()).includes('虚构QQ资料群'),'a single-child task does not repeat the known class/group label');
    assert.equal(await autoResources.locator('.task-record-files a').count(),1,'this task exposes exactly one original');assert.equal(await autoResources.locator('.task-record-files a[href*="'+own.id+'"]').count(),1);assert.equal(await autoResources.locator('a[href*="'+other.id+'"]').count(),0,'the sibling original has no download link in this task');
    assert.equal(await autoResources.locator('details,[data-school-pdf-retry],[data-school-page-read],[data-school-material-retry]').count(),0,'the task shows its own prepared requirement without disclosure or processing');
    const view=await readView({...autoIdentity,task_id:task.id});assert.equal(view.task_id,task.id);assert.equal(view.action_material.scoped,true);assert.deepEqual(view.attachments.map(a=>a.id),[own.id]);assert.deepEqual(view.pdf_material.documents.map(d=>d.upload_id),[own.id]);assert.deepEqual(view.action_material.quotes.map(q=>q.text),[quote]);
