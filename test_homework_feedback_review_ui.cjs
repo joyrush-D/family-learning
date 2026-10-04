@@ -33,21 +33,32 @@ from unittest.mock import patch
 from urllib.parse import urlparse,parse_qs
 import app
 cause_raw=dict(items=[dict(label='虚构甲卷第1题',question='虚构甲卷第1题：2+3=?',student_answer='4',answer='教师参考：5',judgment='incorrect',question_kind='objective',error_reason='卷面作答4与核对答案5不同。',possible_cause='',steps='先独立重算2+3，再对照核对答案。',uncertainty='')],coverage='仅虚构甲卷第1题，其余未检查。')
+consistency_raw=dict(items=[
+    dict(label='虚构乙卷第1题',question='虚构乙卷第1题：2+3=?',student_answer='4',answer='教师参考：6',judgment='incorrect',question_kind='objective',error_reason='作答4与教师参考6不同。',possible_cause='',steps='改为6。',uncertainty='教师参考6与题面2+3冲突，须核对老师依据。'),
+    dict(label='虚构乙卷第2题',question='虚构乙卷第2题：6-2=?',student_answer='3',answer='教师参考：4',judgment='incorrect',question_kind='objective',error_reason='作答3与教师参考4不同。',possible_cause='',steps='',uncertainty=''),
+    dict(label='虚构乙卷第3题',question='虚构乙卷第3题：1+1=?',student_answer='2',answer='教师参考：2',judgment='correct',question_kind='objective',error_reason='',possible_cause='',steps='',uncertainty='')],
+    coverage='第1题已核实需订正；整卷已经检查完成。',comparison='后补老师参考后，第1题从正确改为确定错误，须订正。')
 cause_calls=[]
 validator=app.family_llm.homework_reference_draft
 def mock_chat(messages,schema,name,timeout,**kwargs):
     assert app.DATA.name.startswith('family-demo-') and name=='family_homework_reference'
     content=messages[-1]['content']
     texts=[part['text'] for part in content if part.get('type')=='text']
-    assert any('虚构错因独立校验' in text and '2+3' in text for text in texts)
-    assert any('教师参考原文' in text and '2+3=5' in text for text in texts)
-    assert any('原作答家长说明' in text and '最终作答4' in text for text in texts)
+    if any('虚构结论一致' in text for text in texts):
+        raw=consistency_raw
+        assert any('教师参考原文' in text and '2+3=6' in text and '6-2=4' in text for text in texts)
+        assert any('原作答家长说明' in text and '最终作答4、3、2' in text for text in texts)
+    else:
+        raw=cause_raw
+        assert any('虚构错因独立校验' in text and '2+3' in text for text in texts)
+        assert any('教师参考原文' in text and '2+3=5' in text for text in texts)
+        assert any('原作答家长说明' in text and '最终作答4' in text for text in texts)
     assert sum(part.get('type')=='image_url' for part in content)==1
-    cause_calls.append(dict(raw=copy.deepcopy(cause_raw)))
+    cause_calls.append(dict(raw=copy.deepcopy(raw),original=copy.deepcopy(raw)))
     return cause_calls[-1]['raw']
 def traced_validator(*args,**kwargs):
     result=validator(*args,**kwargs)
-    assert cause_calls[-1]['raw']==cause_raw
+    assert cause_calls[-1]['raw']==cause_calls[-1]['original']
     cause_calls[-1]['validated']=copy.deepcopy(result)
     return result
 app.family_llm._chat_json=mock_chat
@@ -568,6 +579,44 @@ runpy.run_path('demo.py',run_name='__main__')`;
   const unitRepeated=await fetch(host.url+'__fixture/unit-identity?width='+width);assert.equal(unitRepeated.status,200);assert.deepEqual(await unitRepeated.json(),unit,'repeated fixture reads preserve source rows, accepted decision and the same task identifier');assert.equal((await(await fetch(host.url+'__fixture/cause-validator')).json()).calls.length,validatorAfter.calls.length,'manual Unit flow adds no homework model call');
   assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);
   if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.writeFile(path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'unit-identity-'+width+'.json'),JSON.stringify({scope:'mock raw school selection through real shared guard and auto-save; not model accuracy',fixture:unit,feedback:unitFeedback,wrong:unitWrongSaved,correction:unitCorrection},null,2));await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'unit-reopened-'+width+'.png')})}
+  // Contradictory teacher material uses the same real validator and save/read path.
+  // Only the model transport is fixed; no actual OCR, model call or household write.
+  await p.locator('#taskDialog [data-close="taskDialog"]').click();state=await readCause();
+  const consistencyTask=(await post('api/task/new',{child,title:'虚构结论一致 '+width,category:'homework',action:'虚构结论一致：逐题核对乙卷三题及教师参考，冲突题不判错。',due:state.today})).task;
+  const openConsistency=async()=>{await p.locator('nav [data-page=tasks]').click();await p.locator('body[data-page=tasks] #task-group-homework').waitFor();await p.locator('[data-task-box=Inbox]').click();await p.locator('#content [data-task="'+consistencyTask.id+'"]:visible').first().click();await p.locator('#taskDialog[open]').waitFor()};
+  const consistencySheet=await browser.newPage({viewport:{width:500,height:330}});
+  await consistencySheet.setContent('<html><body style="font:22px sans-serif;background:white;color:black"><h2>SYNTHETIC PAPER B</h2><p>Q1: 2 + 3 = ? Student: 4</p><p>Q2: 6 - 2 = ? Student: 3</p><p>Q3: 1 + 1 = ? Student: 2</p></body></html>');
+  const consistencyImage=await consistencySheet.screenshot();await consistencySheet.close();await p.reload();await openConsistency();
+  await p.locator('#taskForm [name=note]').fill('虚构乙卷三题，孩子最终作答4、3、2；第1题教师参考与题面冲突。');
+  await p.locator('#cameraInput').setInputFiles({name:'synthetic-consistency-answer-'+width+'.png',mimeType:'image/png',buffer:consistencyImage});await p.locator('#pendingUploads img').waitFor();
+  const consistencyTeacherName='synthetic-consistency-teacher-'+width+'.txt';
+  await p.locator('#fileInput').setInputFiles({name:consistencyTeacherName,mimeType:'text/plain',buffer:Buffer.from('虚构乙卷 第1题：2+3=6。\n第2题：6-2=4。\n第3题：1+1=2。\n')});await p.locator('#pendingUploads').getByRole('link',{name:consistencyTeacherName,exact:true}).waitFor();
+  const consistencyOriginal=await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),readCause);
+  state=await readCause();const consistencyRecord=state.records.find(r=>r.id===consistencyOriginal.record_id),consistencySources=consistencyRecord.attachments.map(id=>state.uploads.find(a=>a.id===id));
+  const consistencyPhoto=consistencySources.find(a=>a.mime==='image/png'),consistencyTeacher=consistencySources.find(a=>a.name===consistencyTeacherName);assert(consistencyPhoto&&consistencyTeacher);
+  const consistencyPanel=p.locator('#taskFeedbackHistory [data-homework-review="'+consistencyOriginal.record_id+'"]');await consistencyPanel.locator(':scope > details > summary').click();
+  await consistencyPanel.locator('[data-review-source="'+consistencyPhoto.id+'"] [data-homework-review-photo]').check();await consistencyPanel.locator('[data-review-source="'+consistencyTeacher.id+'"] [data-homework-review-photo]').check();
+  const consistencyCallsBefore=(await(await fetch(host.url+'__fixture/cause-validator')).json()).calls.length;let consistencyReply,consistencyRequest;
+  await p.route('**/api/print/homework/draft',async route=>{consistencyRequest=route.request().postDataJSON();const response=await route.fetch();assert.equal(response.status(),200);consistencyReply=await response.json();await route.fulfill({response,json:consistencyReply})});
+  try{await consistencyPanel.locator('[data-homework-review-run]').click();await eventually(async()=>!!consistencyReply,'real consistency validator response')}finally{await p.unroute('**/api/print/homework/draft')}
+  const consistentDraft=consistencyReply.draft,staleCoverage='第1题已核实需订正；整卷已经检查完成。',staleComparison='后补老师参考后，第1题从正确改为确定错误，须订正。';
+  assert.equal(consistentDraft.items,3);assert.equal(consistentDraft.wrong_items,1);assert.equal(consistentDraft.unknown_items,1);assert.deepEqual(consistentDraft.questions.map(q=>q.judgment),['unknown','incorrect','correct']);
+  assert.equal(consistentDraft.questions[0].answer,'教师参考：6');assert.match(consistentDraft.questions[0].uncertainty,/教师参考6与题面2\+3冲突/);assert.equal(consistentDraft.questions[0].steps,'');assert.equal(consistentDraft.questions[1].steps,'');assert.equal(consistentDraft.questions[1].possible_cause,'');
+  for(const text of [consistentDraft.text,consistentDraft.coverage,consistentDraft.comparison]){assert(!text.includes(staleCoverage));assert(!text.includes(staleComparison))}assert.match(consistentDraft.coverage,/虚构乙卷第1题仍未判定/);
+  const consistencyTrace=await(await fetch(host.url+'__fixture/cause-validator')).json();assert(consistencyTrace.synthetic_only&&consistencyTrace.shared_validator);assert.equal(consistencyTrace.real_model_calls,0);assert.equal(consistencyTrace.calls.length,consistencyCallsBefore+1);assert.deepEqual(consistencyTrace.calls.at(-1).validated,consistentDraft);assert.deepEqual(consistencyTrace.calls.at(-1).raw,consistencyTrace.calls.at(-1).original);assert.equal(consistencyTrace.calls.at(-1).raw.coverage,staleCoverage);
+  await eventually(async()=>/3题 · 1题需订正 · 1题未判定/.test(await consistencyPanel.locator('[data-homework-review-status]').innerText()),'mixed final grades visible');assert.match(await consistencyPanel.locator('.homework-review-questions').innerText(),/未判定/);
+  if(process.env.HOMEWORK_QUICK_PROOF_DIR)await p.screenshot({path:require('node:path').join(process.env.HOMEWORK_QUICK_PROOF_DIR,'consistency-draft-'+width+'.png')});
+  await consistencyPanel.locator('[data-homework-review-confirm]').check();await consistencyPanel.locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await consistencyPanel.innerText()),'consistent result staged for explicit save');
+  const consistencyReview=await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),readCause);
+  state=await readCause();assert.equal(state.records.find(r=>r.id===consistencyReview.record_id).related_record_id,consistencyOriginal.record_id);assert.equal(state.records.filter(r=>r.source==='错题照片核对'&&r.linked_task_id===consistencyTask.id).length,0,'unknown and sound error remain explicit decisions, no automatic wrong item');
+  const consistencyWrong=p.locator('#taskFeedbackHistory [data-task-wrong-form="'+consistencyOriginal.record_id+'"]');await consistencyWrong.locator(':scope > summary').click();await consistencyWrong.locator('[data-wrong-field=label]').fill('虚构乙卷第2题');await consistencyWrong.locator('[data-wrong-field=text]').fill('6-2=?');await consistencyWrong.locator('[data-wrong-field=answer]').fill('3');await consistencyWrong.locator('[data-wrong-field=correction]').fill('4');
+  const consistencyWrongSaved=await threeAttemptSave(p,'/api/wrong/save',consistencyWrong.locator('[data-task-wrong-save]'),async()=>/结果尚未核对/.test(await consistencyWrong.innerText()),async()=>/错题已保存在这份作业下/.test(await p.locator('#taskFeedbackStatus').innerText()),readCause);
+  const consistencyWrongCard=p.locator('#taskFeedbackHistory .task-feedback-record').filter({has:p.locator('[data-record="'+consistencyWrongSaved.record_id+'"]')});await consistencyWrongCard.locator('[data-followup]').click();await p.locator('#recordDialog[open]').waitFor();const consistencyCorrectionNote='虚构乙卷第2题订正为4；第1题仍待核对教师依据。';await p.locator('#recordForm [name=note]').fill(consistencyCorrectionNote);
+  const consistencyCorrection=await threeAttemptSave(p,'/api/record',p.locator('#recordForm [type=submit]'),async()=>/虚构/.test(await p.locator('#recordError').innerText()),async()=>!await p.locator('#recordDialog').evaluate(x=>x.open),readCause);
+  await p.reload();await openConsistency();await p.locator('#taskFeedbackHistory').getByText(consistencyCorrectionNote,{exact:false}).waitFor();const reopenedConsistency=p.locator('[data-saved-homework-review="'+consistencyReview.record_id+'"] [data-saved-review-text]');await eventually(async()=>await reopenedConsistency.innerText()===consistentDraft.text,'consistent mixed result reopens unchanged');
+  assert.match(await reopenedConsistency.innerText(),/需订正1题，与参考一致1题，未判定1题/);assert(!(await reopenedConsistency.innerText()).includes(staleComparison));state=await readCause();const consistencyFinalWrong=state.records.find(r=>r.id===consistencyWrongSaved.record_id),consistencyFinalCorrection=state.records.find(r=>r.id===consistencyCorrection.record_id);assert.equal(consistencyFinalWrong.related_record_id,consistencyOriginal.record_id);assert.equal(consistencyFinalCorrection.related_record_id,consistencyFinalWrong.id);for(const r of [consistencyFinalWrong,consistencyFinalCorrection]){assert.equal(r.child,child);assert.equal(r.linked_task_id,consistencyTask.id)}assert.equal(state.tasks.find(t=>t.id===consistencyTask.id).update,null);assert.deepEqual(state.printing.jobs.map(j=>j.id).sort(),printIdsBeforeChecks);
+  assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);
+  if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.writeFile(path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'consistency-validator-'+width+'.json'),JSON.stringify({scope:'fixed synthetic raw through real shared validator; not model accuracy',request:consistencyRequest,validator:consistencyTrace.calls.at(-1),feedback:consistencyReview,wrong:consistencyWrongSaved,correction:consistencyCorrection},null,2));await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'consistency-reopened-'+width+'.png')})}
   assert.deepEqual(errors,[]);await p.close();
  }
  console.log('Homework feedback AI review: 360/1440 save, retry, reopen, task status and source preserved');
