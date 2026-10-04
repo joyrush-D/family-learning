@@ -49,6 +49,48 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.link(keys,reference)
         return keys,reference
 
+    def test_complete_original_keeps_independent_homework_and_receipt(self):
+        keys=self.native_notice('independent-original')
+        with self.store._db() as c:
+            raw=json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
+                                    (keys['source_id'],keys['message_id'])).fetchone()[0])
+            c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
+                      (json.dumps(dict(raw,text='要求见附件。')),keys['source_id'],keys['message_id']))
+        ident=self.candidate(keys=keys,ident='independent-original')
+        homework='数学：2026-02-12前完成练习卷第1–3题必做，第4题选做，做完检查。'
+        receipt='家长事务：2026-02-13前打印独立活动回执，家长签字后由孩子交回，无需盖章。'
+        self.seed_groups(keys=keys,note=homework+'\n'+receipt,uncertainties=[])
+        ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
+        reply={'actions':[
+            dict(draft(title='数学：完成练习卷',goal=homework),due='2026-02-12',existing_item_id=ident,
+                 basis=[dict(ref=ref,text=homework)]),
+            dict(draft(title='事务：签字交回活动回执',goal=receipt,purpose='admin'),due='2026-02-13',existing_item_id='',
+                 basis=[dict(ref=ref,text=receipt)])]}
+        result,calls=self.refresh(reply)
+        self.assertEqual((result['used'],result['failed'],result['created'],len(calls)),(1,0,2,1))
+        tasks=self.rows('SELECT title,due,action,original_status,source FROM manual_tasks ORDER BY due')
+        self.assertEqual([(r[0],r[1],r[3]) for r in tasks],
+                         [('数学：完成练习卷','2026-02-12','待跟进'),('事务：签字交回活动回执','2026-02-13','待跟进')])
+        self.assertIn('第4题选做',tasks[0][2]);self.assertIn('无需盖章',tasks[1][2])
+        self.assertTrue(all(ref in r[4] for r in tasks))
+        self.assertEqual((self.item(ident)['state'],self.count('records')),('accepted',0))
+        saved=self.rows('SELECT id,state,task_id,plan FROM agent_items ORDER BY id')
+        self.assertEqual(self.refresh(reply,minutes=1),(dict(used=0,failed=0,created=0),[]))
+        self.assertEqual(self.rows('SELECT id,state,task_id,plan FROM agent_items ORDER BY id'),saved)
+
+    def test_original_action_cannot_borrow_other_action_deadline(self):
+        keys=self.native_notice('separate-date')
+        ident=self.candidate(keys=keys,ident='separate-date')
+        math='数学：2026-02-12前完成练习卷第1至11页。'
+        receipt='家长事务：2026-02-13前打印并签字交回活动回执。'
+        self.seed_groups(keys=keys,note=math+'\n'+receipt,uncertainties=[])
+        ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
+        reply={'actions':[dict(draft(goal=math),due='2026-02-13',existing_item_id=ident,basis=[dict(ref=ref,text=math)])]}
+        result,calls=self.refresh(reply)
+        self.assertEqual((result['used'],len(calls),self.item(ident)['state'],self.count('manual_tasks')),(1,1,'pending',0))
+        self.assertEqual(self.brief(ident)['state'],'review')
+        self.assertIn('日期',self.brief(ident)['reason'])
+
     def test_two_originals_require_both_complete_before_one_school_round(self):
         keys,reference=self.multi_originals()
         ident=self.candidate(keys=keys,ident='multi')
