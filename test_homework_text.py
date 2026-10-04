@@ -89,4 +89,4 @@ class TextQuestionHTTPTests(HomeworkPrintScopeTests):
         self.assertEqual(status,403,out);model.assert_not_called();self.assertEqual(self.dump(),before)
 
 
-if __name__=='__main__':unittest.main()
+if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TextQuestionHTTPTests'])

@@ -1139,6 +1139,7 @@ def homework_review_draft(obj):
     if materials['previous_sources']: basis['previous_sources']=materials['previous_sources']
     with connect() as c: guard_homework_review(c,obj['task_id'],basis,ids)
     draft=family_llm.homework_reference_draft(materials['images'],data_path=DATA,timeout=120,review=True,
+        question_documents=materials['question_documents'],
         reference_images=materials['reference_images'],reference_documents=materials['documents'],
         image_labels=materials['image_labels'],reference_labels=materials['reference_labels'],program_coverage=materials['coverage'],
         previous_documents=materials['previous_documents'],previous_text=previous_text,review_instruction=instruction,
