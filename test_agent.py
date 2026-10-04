@@ -982,7 +982,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual((read[0]['unread'],read[0]['content_incomplete']),(False,False))
         self.assertIn(requirement,read[0]['text'])
         self.assertEqual((raw,quotes,requirements),before)
-        for altered in [[],[dict(requirements[0],text='A栏写两个词语。')],
+        for altered in [[],requirements*2,[dict(requirements[0],text='A栏写两个词语。')],
                         [dict(requirements[0],ref='message:synthetic:other')],
                         [dict(requirements[0],upload_ids=['b'*32])]]:
             self.assertEqual(agent._school_action_read_evidence(raw,quotes,altered),raw)

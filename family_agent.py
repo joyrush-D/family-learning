@@ -3094,8 +3094,8 @@ def _school_action_read_evidence(evidence,anchors,requirements):
     result=[]
     for entry in evidence:
         own=[a for a in anchors if a['ref']==entry['ref']]
-        complete=lambda a:not a['upload_ids'] or any(r['ref']==a['ref'] and r['upload_ids']==a['upload_ids']
-            and r.get('pages',[])==a['pages'] and r['text']==a['quote'] for r in requirements)
+        complete=lambda a:not a['upload_ids'] or len([r for r in requirements if r['ref']==a['ref'] and r['upload_ids']==a['upload_ids']
+            and r.get('pages',[])==a['pages'] and r['text']==a['quote']])==1
         read_action=entry.get('kind') in ('text','quote') and own and all(complete(a) for a in own)
         result.append(dict(entry,text='\n'.join(a['quote'] for a in own),unread=False,content_incomplete=False)
                       if read_action else copy.deepcopy(entry))
@@ -3138,7 +3138,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
             if part.get('requirement'):
                 if text!=part['text'] or part['id'] in assigned:
                     raise AgentError('完整行动要求被截取或重复分配，原要求保留')
-                assigned.add(part['id']);requirements.append({k:part[k] for k in ('id','ref','upload_ids','text')})
+                assigned.add(part['id']);requirements.append({k:part[k] for k in ('id','ref','upload_ids','pages','text')})
             anchor=dict(ref=part['ref'],upload_ids=part['upload_ids'],pages=part['pages'],quote=text)
             if anchor not in anchors: anchors.append(anchor)
             if not part.get('background_only'):
