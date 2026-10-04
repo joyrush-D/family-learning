@@ -714,6 +714,85 @@ class AgentTests(unittest.TestCase):
         self.assertEqual((item['plan']['school_task']['change'],item['plan']['school_task']['state']),('update','review'))
         self.assertEqual(item['due'],'')
 
+    def test_multi_action_batch_recovers_only_its_directly_dated_admin_action(self):
+        text='请家长后天完成学校通讯录中的紧急联系电话核对；有误修改，无误点已核对。不要在群里发号码，不用让孩子抄写。'
+        ref='message:synthetic-admin:m1';other='message:synthetic-admin:m2'
+        evidence=[dict(ref=ref,text=text,time='2026-10-03T16:20:00+08:00',kind='text',content_incomplete=False),
+                  dict(ref=other,text='今天朗读课文两遍。',time='2026-10-04T08:00:00+08:00',kind='text',content_incomplete=False)]
+        parent=school_proposal(title_quote=text[:120],evidence=[dict(ref=ref)],task_title='核对紧急联系电话',
+            task_goal=text.replace('后天',''),task_state='ready',task_purpose='admin')
+        reading=school_proposal(title_quote='今天朗读课文两遍。',evidence=[dict(ref=other)],due='2026-10-04',
+            task_title='朗读课文',task_goal='今天朗读课文两遍。',task_state='ready',task_purpose='learning',learning_subject='语文')
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[parent,reading])):
+            items=agent._select('school',evidence,school_goals=[],as_of='2026-10-04')
+        self.assertEqual((items[0]['due'],items[0]['plan']['school_task']['state'],items[0]['body']),
+            ('2026-10-05','ready',parent['task_goal']))
+        self.assertEqual(items[1]['due'],'2026-10-04')
+        cases=[
+            ('请家长完成学校通讯录中的紧急联系电话核对；明天交回活动回执。',parent['task_goal'],'2026-10-03T16:20:00+08:00',False),
+            (text,parent['task_goal'],'',False),
+            (text,parent['task_goal'],'2026-10-03T16:20:00+08:00',True),
+            (text,parent['task_goal']+'2026-10-06前完成。','2026-10-03T16:20:00+08:00',False),
+            (text,parent['task_goal'].replace('紧急联系电话','家庭电话'),'2026-10-03T16:20:00+08:00',False)]
+        for source,goal,time,unread in cases:
+            with self.subTest(source=source,goal=goal,time=time,unread=unread):
+                self.assertEqual(agent._school_explicit_action_due(dict(change='new',purpose='admin',goal=goal),
+                    [dict(ref=ref,text=source,time=time,kind='text',content_incomplete=unread)]),'')
+        self.assertEqual(agent._school_explicit_action_due(dict(change='update',purpose='admin',goal=parent['task_goal']),evidence[:1]),'')
+        self.assertEqual(agent._school_explicit_action_due(dict(change='new',purpose='admin',goal=parent['task_goal']),evidence[:1]*2),'')
+
+    def test_first_batch_correction_requires_a_unique_dated_original_and_same_publisher(self):
+        original='明天完成两项。第一项朗读课文。第二项：完成《桥的观察单》，A、B、C三栏都要做。'
+        change='更正10月3日16:10发布的第二项《桥的观察单》：A、B仍必做；C改为选做，原期限不变。'
+        evidence=[dict(ref='message:synthetic:m1',text=original,time='2026-10-03T16:10:00+08:00',kind='text',publisher='publisher:a',content_incomplete=False),
+                  dict(ref='message:synthetic:m2',text=change,time='2026-10-04T08:05:00+08:00',kind='text',publisher='publisher:a',content_incomplete=False)]
+        brief=dict(change='update',target_id='',title='完成《桥的观察单》',goal='A/B必做，C选做。')
+        proof=agent._school_first_batch_correction(brief,evidence)
+        self.assertEqual((proof['original_ref'],proof['correction_ref'],proof['object']),
+            ('message:synthetic:m1','message:synthetic:m2','《桥的观察单》'))
+        for values in (evidence[1:],evidence+[dict(evidence[0],ref='message:synthetic:m3')],
+                       [evidence[0],dict(evidence[1],publisher='publisher:b')],
+                       [dict(evidence[0],content_incomplete=True),evidence[1]],
+                       [evidence[0],dict(evidence[1],text=change.replace('16:10','16:11'))],
+                       [evidence[0],dict(evidence[1],text=change+'取消整个观察单。')]):
+            self.assertIsNone(agent._school_first_batch_correction(brief,values))
+        self.assertIsNone(agent._school_first_batch_correction(dict(brief,target_id='saved-task'),evidence))
+        self.assertIsNone(agent._school_first_batch_correction(dict(brief,change='cancel'),evidence))
+
+    def test_initial_school_batch_saves_immutable_generated_correction_proof(self):
+        self.now=dt.datetime(2026,10,4,10,tzinfo=agent.TZ)
+        self.config()
+        texts=['明天完成第二项：《桥的观察单》，A、B、C三栏都要做。',
+               '更正10月3日16:10发布的第二项《桥的观察单》：A、B仍必做，C改为选做，原期限不变。']
+        payload=self.payload(cursor='12')
+        payload['messages']=[dict(id=str(11+i),time=['2026-10-03T16:10:00+08:00','2026-10-04T08:05:00+08:00'][i],
+            kind='text',sender='虚构发布者',sender_id='synthetic-a',text=text,unread=False) for i,text in enumerate(texts)]
+        self.store.ingest(payload)
+        with self.app.connect() as c:values=[json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
+        evidence=[dict(ref='message:'+self.source['id']+':'+v['id'],text=v['text'],time=v['time'],kind=v['kind'],
+            publisher=agent._publisher(self.source['id'],v),content_incomplete=False) for v in values]
+        proposal=school_proposal(title_quote=texts[0],task_title='语文：完成《桥的观察单》',task_goal='完成《桥的观察单》，A、B必做，C选做。',
+            due='2026-10-04',task_state='ready',task_change='update',task_purpose='learning',learning_subject='语文',
+            evidence=[dict(ref=e['ref']) for e in evidence])
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):
+            items=agent._select('school',evidence,school_goals=[],as_of='2026-10-04')
+        self.assertEqual(items[0]['plan']['school_task']['change'],'update')
+        for item in items:item.update(child_id='child-1',kind='school')
+        key='messages:'+agent._hash([self.source['id'],[v['id'] for v in values]])[:40]
+        fp=self.store._job(key,dict(school_learning_policy=8,messages=values),self.now,model=True)
+        self.store._save(key,fp,items,self.now,[(self.source['id'],v['id']) for v in values],school_context=(self.source,values))
+        with self.app.connect() as c:row=dict(c.execute('SELECT * FROM agent_items').fetchone())
+        plan=json.loads(row['plan'])
+        self.assertEqual((plan['school_task']['change'],plan['school_task']['state']),('new','ready'))
+        self.assertEqual(plan['school_first_batch_correction']['original_text'],texts[0])
+        self.assertEqual(plan['school_generated_snapshot'],agent._school_generated_snapshot(row))
+        self.assertNotEqual(plan['school_generated_snapshot'],agent._school_generated_snapshot(dict(row,body=row['body']+'家长补充。')))
+        self.assertEqual(agent._refresh_school(self.app,self.store,self.now,0),dict(used=0,failed=0,created=1))
+        self.assertEqual(agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=1),0),dict(used=0,failed=0,created=0))
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+            self.assertEqual(c.execute('SELECT SUM(processed) FROM agent_messages').fetchone()[0],2)
+
     def _school_batch_failure_recovers(self, failure):
         payload=self.payload(cursor='16')
         payload['messages']=[dict(id=str(i),time=self.now.isoformat(),kind='text',sender='示例发布者',
