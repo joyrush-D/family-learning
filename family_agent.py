@@ -1614,6 +1614,9 @@ def _school_append_brief(brief, evidence, targets):
     peers=[t for t in targets if (t.get('source_id'),t.get('publisher')) in publishers and matches(t)]
     if len(peers)!=1 or peers[0]['id']!=selected['id']:
         uncertain();return
+    proposed=objects(brief['title']+' '+brief['goal'])
+    if not proposed.issubset(objects(selected['title']+' '+selected['goal'])) or (specific and not proposed.issubset(specific)):
+        uncertain('补充归纳中的单元或篇目与原文、原事项不一致，原要求保留待核对。');return
     old=re.sub(r'不(?:要求|需要|用|必|要|再)?[^。；;，,\n]*','',selected['goal'])
     # Negative limits on an otherwise new step are retained (e.g. no recitation,
     # no copying example answers); removal of an existing activity is a change.
