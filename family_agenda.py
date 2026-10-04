@@ -159,7 +159,7 @@ def task_category(title,purpose=None):
 
 
 def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref=''):
-    focus=focus or {};messages=[];publications=[]
+    focus=focus or {};messages=[];publications=[];original_time=''
     store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
     for ref in refs:
         if not isinstance(ref,str) or not ref.startswith('message:'):continue
@@ -168,13 +168,12 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
         try:
             source,msg=store._message_context(c,dict(child_id=child_id,source_id=parts[0],message_id=parts[1]))
             messages.append(msg)
+            if ref==publication_ref:original_time=sent_at(msg.get('time',''))
             if not any(p['ref']==ref for p in publications):
                 publications.append(dict(ref=ref,source_name=source['name'],sender=msg.get('sender','')))
         except family_agent.AgentError:continue
     times=sorted({sent_at(m.get('time','')) for m in messages}-{''})
     days=sorted({value[:10] for value in times})
-    original_time=next((sent_at(m.get('time','')) for m in messages if
-                       'message:'+m['source_id']+':'+m['id']==publication_ref),'') if publication_ref else ''
     organized=focus.get('category') in ('unknown','homework','todo')
     published=focus.get('published_on','') if organized else (original_time[:10] if original_time else days[0] if len(days)==1 else '')
     subject=re.sub(r'^待核对[：:]?\s*','',title).rstrip('。')
