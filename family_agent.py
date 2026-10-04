@@ -2020,6 +2020,10 @@ def _school_competing_correction(evidence,proof):
         if entry['ref'] in (proof['original_ref'],proof['correction_ref']):continue
         publisher=entry.get('publisher') or _publisher(entry['ref'][8:].rsplit(':',1)[0],entry)
         text=entry.get('text','')
+        if not publisher:
+            try:
+                if dt.datetime.fromisoformat(entry['time'])>=dt.datetime.fromisoformat(proof['original_time']):return True
+            except (KeyError,ValueError,TypeError):return True
         if publisher!=proof['publisher']:continue
         if entry.get('unread') or entry.get('content_incomplete'):
             try:
@@ -2149,10 +2153,13 @@ def _school_legacy_policy_scope(store,c,row,evidence):
         full=[dict(json.loads(v['payload']),ref='message:'+source['id']+':'+v['id']) for v in window]
         if not cited<={e['ref'] for e in full}:return None
         for entry in full:
-            if entry['ref'] in cited or _publisher(source['id'],entry)!=publisher:continue
+            if entry['ref'] in cited:continue
             stamp=dt.datetime.fromisoformat(entry['time'])
             if stamp.tzinfo is None:return None
             if stamp<start:continue
+            other_publisher=_publisher(source['id'],entry)
+            if not other_publisher:return None
+            if other_publisher!=publisher:continue
             # The sole unrelated-message exception proves its original time, ordinal, object and entire
             # local column-only change. A different book title alone never proves independence.
             proof=_school_first_batch_correction(dict(change='update',target_id='',title=entry['text']),batch)

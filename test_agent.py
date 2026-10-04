@@ -994,6 +994,15 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(old,dict(c.execute('SELECT * FROM agent_items WHERE id=?',(old['id'],)).fetchone()))
             self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
 
+    def test_legacy_admin_upgrade_rejects_an_unknown_later_publisher(self):
+        old,key,fp,result=self._legacy_admin_rejection()
+        payload=self.payload(expected='11',cursor='12');payload['messages']=[dict(id='12',time='2026-10-04T09:00:00+08:00',kind='text',sender='虚构发布者',text='取消学校通讯录紧急联系电话核对。',unread=False)]
+        self.store.ingest(payload)
+        with patch.object(agent.family_llm,'_chat_json',return_value=result) as model:
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1),dict(used=0,failed=0,created=0))
+        model.assert_not_called()
+        with self.app.connect() as c:self.assertEqual(old,dict(c.execute('SELECT * FROM agent_items WHERE id=?',(old['id'],)).fetchone()))
+
     def test_legacy_admin_upgrade_rechecks_after_save_before_acceptance(self):
         old,key,fp,result=self._legacy_admin_rejection();accept=agent._accept_school_reading
         def arrived(app,store,row,evidence,now,**kwargs):
