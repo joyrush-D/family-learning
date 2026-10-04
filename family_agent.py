@@ -2299,7 +2299,7 @@ def _school_drafts(store, c, row):
                     sent.append(part[:remaining]);remaining-=len(sent[-1])
                     if sent[-1]!=part: missing.append('原件整理文字未全部读入')
                 bounded[key]=[p for p in sent if p] if key=='uncertainties' else sent[0]
-            model.append(dict(ref=quote['ref'],draft=bounded))
+            model.append(dict(ref=quote['ref'],upload_ids=value['upload_ids'],draft=bounded))
     if not entries: return None
     return dict(fingerprint=_hash(entries),refs=[e['ref'] for e in entries],complete_refs=complete,model=model,
                 uncertainties=list(dict.fromkeys(missing+[u for e in entries for u in e['draft']['uncertainties']])))
@@ -2324,6 +2324,179 @@ def _discard_job(c, key, fp):
     c.execute("UPDATE agent_jobs SET done=1,error='',next_try='',fingerprint=? WHERE id=? AND fingerprint=?",('discarded:'+fp,key,fp))
 
 
+SCHOOL_ORIGINAL_REVISION=1
+
+
+def _school_original_parts(evidence, pdf, material):
+    """Only text actually sent this round can anchor an action; original notes remain reference summaries."""
+    parts=[]
+    for e in evidence:
+        if e['text'].strip() and not _needs_task_details(e['text']):
+            parts.append(dict(id=e['ref'],ref=e['ref'],upload_ids=[],pages=[],text=e['text']))
+    for doc in (pdf or {}).get('model',[]):
+        for group in doc['groups']:
+            parts.append(dict(id='pdf:'+doc['upload_id']+':'+str(group['pages'][0])+'@'+doc['ref'],
+                ref=doc['ref'],upload_ids=[doc['upload_id']],pages=group['pages'],text=group['text']))
+    for entry in (material or {}).get('model',[]):
+        parts.append(dict(id='material:'+entry['ref'],ref=entry['ref'],upload_ids=entry['upload_ids'],pages=[],text=entry['draft']['note']))
+    return parts
+
+
+def _school_original_known(store,c,row):
+    """Exact same-child message scope, including decisions and current task/feedback state."""
+    refs={e['ref'] for e in json.loads(row['evidence'])};known=[];state=[]
+    tables={r['name'] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    for entry in c.execute("SELECT * FROM agent_items WHERE kind='school' AND child_id=? AND state!='superseded' ORDER BY id",(row['child_id'],)):
+        entry=dict(entry)
+        if {e['ref'] for e in json.loads(entry['evidence'])}!=refs: continue
+        known.append(entry);state.append(entry)
+        if entry['task_id']:
+            task_id=entry['task_id']
+            for table,column in [('manual_tasks','id'),('task_focus','task_id'),('task_updates','id'),('task_history','task_id'),('study_items','task_id')]:
+                state.append([table,[dict(v) for v in c.execute('SELECT * FROM '+table+' WHERE '+column+'=? ORDER BY rowid',(task_id,))] if table in tables else []])
+            state.append(['records',[dict(v) for v in c.execute('SELECT * FROM records WHERE linked_task_id=? OR source=? ORDER BY id',(task_id,'事项:'+task_id))]])
+    if len(known)>SCHOOL_PROPOSAL_LIMIT: raise AgentError('同出处事项超过本轮完整核对范围，原要求保留')
+    return _hash(state),known
+
+
+def _school_original_schema(parts,known,targets,goals):
+    fields=copy.deepcopy(TASK_BRIEF_SCHEMA)
+    fields['required']+=['due','existing_item_id','basis']
+    fields['properties'].update(due={'type':'string','maxLength':10},
+        existing_item_id={'type':'string','enum':['']+[r['id'] for r in known]},
+        basis={'type':'array','minItems':1,'maxItems':6,'items':{'type':'object','additionalProperties':False,
+            'required':['part','text'],'properties':{'part':{'type':'string','enum':[p['id'] for p in parts]},'text':{'type':'string','minLength':1,'maxLength':2000}}}})
+    fields['properties']['target_id']['enum']=['']+[t['id'] for t in targets]
+    fields['properties']['learning_goal_id']['enum']=['']+[g['id'] for g in goals]
+    return {'type':'object','additionalProperties':False,'required':['actions'],
+        'properties':{'actions':{'type':'array','minItems':1,'maxItems':SCHOOL_PROPOSAL_LIMIT,'items':fields}}}
+
+
+def _school_original_prompt(pages,pdf,material):
+    prompt=_task_prompt(pages,pdf,material)
+    prompt=prompt.replace('只处理candidate所指这一件事，不能扩大到其他列或其他孩子。','处理本孩子本轮原件中的全部独立学校要求。')
+    prompt=prompt.replace('candidate仅定位当前这一项，不是完整要求或原文。结合本项全部evidence正文和有效原件，整理完整结论；共享原消息中的其他独立事项不混入本项。','candidate是本轮原件的原候选，不是整份行动清单。')
+    return prompt+'\n本轮返回actions数组（最多36项），逐项写清科目/事务、动作、范围、完成标准和各自due；一份原件可以含多个独立要求，不能只返回其中一项。完成该作业后的打印、签字、交回仍放该作业goal/submission；另一份独立回执单列行政事项。每项basis逐字引用original_parts里含本项动作和对象的文字，part选该段id；摘要仍是Agent参考，不是老师逐字原话。日期必须由本项basis支持，不能借另一项日期。截止没写due留空，不能猜今天。existing_actions中的同一行动用existing_item_id，不新增或恢复accepted/dismissed；当前candidate_id须恰好返回一次，不默认将数组第一项当原候选。新独立行动existing_item_id留空。原件范围、学习/行政、必做/选做、疑点分别保留；页面已读齐不代表行动理解准确。'
+
+
+def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,material,targets,goals,now):
+    """Validate every independent action before any write; each deadline has its own bounded basis."""
+    from family_agenda import date,deadlines,sent_day
+    if not isinstance(result,dict) or set(result)!={'actions'} or not isinstance(result['actions'],list) or not 1<=len(result['actions'])<=SCHOOL_PROPOSAL_LIMIT:
+        raise AgentError('原件行动清单结构无法核对')
+    lookup={p['id']:p for p in parts};existing={r['id']:r for r in known};used=set();identities=set();output=[]
+    fields=set(TASK_BRIEF_SCHEMA['required'])|{'due','existing_item_id','basis'}
+    scope=_hash([row['child_id'],sorted(e['ref'] for e in evidence),sorted({u for p in parts for u in p['upload_ids']})])
+    for value in result['actions']:
+        if not isinstance(value,dict) or set(value)!=fields: raise AgentError('原件行动字段无法核对')
+        chosen=_text(value,'existing_item_id',80)
+        if chosen and (chosen not in existing or chosen in used): raise AgentError('原候选行动对应关系无法核对')
+        used.add(chosen) if chosen else None
+        basis=value['basis'];anchors=[]
+        if not isinstance(basis,list) or not 1<=len(basis)<=6: raise AgentError('原件行动缺少对应内容')
+        for quote in basis:
+            if not isinstance(quote,dict) or set(quote)!={'part','text'}: raise AgentError('原件行动依据结构无法核对')
+            part=lookup.get(quote['part']);text=_text(quote,'text',2000,True).strip()
+            if not part or text not in part['text']: raise AgentError('行动依据不在本轮已读原件范围')
+            anchor=dict(ref=part['ref'],upload_ids=part['upload_ids'],pages=part['pages'],quote=text)
+            if anchor not in anchors: anchors.append(anchor)
+        identity=_hash([scope,sorted((_json([a['ref'],a['upload_ids'],a['quote']]) for a in anchors))])
+        if identity in identities: raise AgentError('原件清单重复引用同一行动，整组保留重试')
+        identities.add(identity)
+        old=existing.get(chosen)
+        old_anchor=json.loads(old['plan']).get('school_original_action',{}) if old else {}
+        if old_anchor.get('identity') and old_anchor['identity']!=identity:
+            raise AgentError('原件行动与原候选身份不同，原内容与决定保留')
+        if not chosen and any(json.loads(r['plan']).get('school_original_action',{}).get('identity')==identity for r in known):
+            raise AgentError('已有原件行动须保留原编号，不能重复新增')
+        if old and (old['state']!='pending' or json.loads(old['plan']).get('school_history_job')):
+            continue  # A material round never replaces an accepted/dismissed or literal-history decision.
+        learning=_school_learning(value,goals)
+        brief=_school_brief(value,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in evidence),
+            evidence=evidence,school_tasks=targets,pages=pages,pdf=pdf,material=material,separate_learning=True)
+        due=_text(value,'due',10)
+        stamps={e['ref']:sent_day(e.get('time')) for e in evidence}
+        dates=set().union(*(deadlines(a['quote'],stamps.get(a['ref'],'')) for a in anchors))
+        stated=set().union(*(deadlines(brief['goal'],s) for s in stamps.values()))
+        if due and (not date(due) or dates!={due} or stated and stated!={due}):
+            due='';brief.update(state='review',reason='本项日期与对应原件行动不一致，日期待补充；已读要求保留。')
+        elif not due and len(dates)==1: due=next(iter(dates))
+        elif len(dates)>1: brief.update(state='review',reason='本项有多个日期，完成与交回日期对应关系待补充；原要求保留。')
+        if old and old['due'] and due and old['due']!=due:
+            due=old['due'];brief.update(state='review',reason='原件完成日期与已有事项日期不同，日期对应关系待补充；已读要求保留。')
+        if not chosen and any(r['state'] in ('accepted','dismissed') and not json.loads(r['plan']).get('school_original_action') for r in known):
+            brief.update(state='review',reason='同出处已有旧决定尚无原件行动依据，无法确认本项是否独立；旧事项与决定保留。')
+        brief['original_actions_revision']=SCHOOL_ORIGINAL_REVISION
+        plan=copy.deepcopy(json.loads(old['plan']) if old else json.loads(row['plan']))
+        for key in ('school_learning','school_goal_id'): plan.pop(key,None)
+        complete_refs,fragments,_=_school_original_coverage(evidence,pdf,material)
+        if learning and _school_learning_route(brief)== 'read_requirements' and not fragments and all(e['ref'] in complete_refs or not (e.get('unread') or e.get('content_incomplete') or _needs_task_details(e.get('text'))) for e in evidence):
+            plan['school_learning']=learning
+            plan['school_messages']=[dict(zip(('source_id','message_id'),e['ref'][8:].rsplit(':',1))) for e in evidence]
+        plan['school_task']=brief
+        plan['school_original_action']=dict(identity=identity,scope=scope,root_id=row['id'],anchors=anchors)
+        output.append(dict(id=chosen or 'agent-'+identity[:32],old=old,child_id=row['child_id'],kind='school',
+            title=brief['title'] or (old or row)['title'],body=brief['goal'] or (old or row)['body'],due=due,
+            evidence=json.loads(row['evidence']),plan=plan,brief=brief))
+    if row['id'] not in used: raise AgentError('原件清单未保留原候选，整组保留重试')
+    activities=[v for v in output if v['brief'].get('purpose')=='learning' and v['brief']['state']=='ready' and v['brief']['change']=='new']
+    for item in output:
+        brief=item['brief']
+        if brief.get('purpose')!='admin' or brief['state']=='reference': continue
+        owner=next((v for v in activities if v['brief'].get('submission') and _school_submission_step(brief,v['brief'])),None)
+        if owner: brief.update(state='review',reason='同一作业已含提交要求，不再自动新增重复事项；独立回执仍分别保留。')
+    return output
+
+
+def _save_school_originals(store,c,row,items,key,fp,now):
+    """Keep candidate IDs/decisions; append only validated action identities in the same transaction."""
+    saved=[]
+    for item in items:
+        old=item['old'];updated=now.isoformat()
+        if old:
+            c.execute('UPDATE agent_items SET title=?,body=?,plan=?,updated=?,due=? WHERE id=?',
+                (item['title'],item['body'],_json(item['plan']),updated,item['due'],item['id']))
+        else:
+            c.execute('INSERT INTO agent_items(id,job_id,child_id,kind,title,body,evidence,due,created,updated,plan) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                (item['id'],key,item['child_id'],'school',item['title'],item['body'],_json(item['evidence']),item['due'],updated,updated,_json(item['plan'])))
+        saved.append(dict(c.execute('SELECT * FROM agent_items WHERE id=?',(item['id'],)).fetchone()))
+    c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=? AND fingerprint=?",(key,fp))
+    return saved
+
+
+
+def _accept_school_reading(app,store,row,evidence,now,*,original=False):
+    plan=json.loads(row['plan']);brief=plan.get('school_task',{});created=failed=0
+    if (original or any(brief.get(k) for k in ('material_evidence','page_evidence','pdf_evidence'))) and brief.get('state')=='ready':
+        import family_agenda
+        published=[family_agenda.sent_day(e.get('time')) for e in evidence]
+        if any(not day for day in published) or not row['due'] and any(day<now.date().isoformat() for day in published):
+            brief.update(state='review',reason='原消息的发布日期不明或早于今天，是否仍需完成待补充；已读要求保留。');plan['school_task']=brief
+            with store._db() as c:
+                c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=?",(_json(plan),row['id'],row['updated']))
+    if brief.get('state')=='ready' and re.fullmatch(r'\d{4}-\d{2}-\d{2}',row['due'] or '') and row['due']<now.date().isoformat():
+        brief.update(state='review',reason='原截止日期已过，请核对是否仍需补做；不推定已完成。');plan['school_task']=brief
+        with store._db() as c:
+            c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=?",(_json(plan),row['id'],row['updated']))
+    if plan.get('school_history_uncertain'):
+        brief.update(state='review',reason='本条已有决定的动作原句无法定位，独立性尚未核明；原要求与决定保留。');plan['school_task']=brief
+        with store._db() as c:
+            c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=?",(_json(plan),row['id'],row['updated']))
+    if brief.get('state')=='ready':
+        try:
+            if brief.get('change')=='append':
+                apply_school_change(app,store,_school_append_request(row,brief),school_auto=True)
+            else:
+                result=store.act(dict(id=row['id'],action='accept',expected_updated=row['updated']),school_auto=True)
+                created+=not result.get('deduplicated',False)
+        except (AgentError,sqlite3.IntegrityError) as error:
+            if isinstance(error,AgentError) and error.status==409 and (brief.get('change')!='append' or error.code=='school_source_paused'): return created,failed
+            expected=_json(plan);brief.update(state='review',reason=str(error) if brief.get('change')=='append' else '自动收集未成功，请核对事项后再加入。');plan['school_task']=brief
+            with store._db() as c:
+                changed=c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=? AND plan=?",(_json(plan),row['id'],row['updated'],expected)).rowcount
+            failed+=changed
+    return created,failed
+
 def _refresh_school(app, store, now, budget):
     """Upgrade only pending notices; keep IDs/decisions and the existing call budget.
 
@@ -2335,6 +2508,10 @@ def _refresh_school(app, store, now, budget):
     with store._db() as c:
         pending=[dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='pending' ORDER BY created DESC,id")]
     for row in pending:
+        with store._db() as c:
+            current_row=c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone()
+        if current_row is None or current_row['state']!='pending': continue
+        row=dict(current_row)
         plan=json.loads(row['plan']);brief=plan.get('school_task',{})
         evidence=[];pages=[];pdf_material=[];material=None;source_error=None
         try:
@@ -2347,6 +2524,7 @@ def _refresh_school(app, store, now, budget):
         pdf_key=pdf_evidence['fingerprint'] if pdf_evidence else ''
         material_key=material['fingerprint'] if material else ''
         current=brief.get('policy')==SCHOOL_TASK_POLICY
+        original_changed=bool(pdf_evidence or material) and brief.get('original_actions_revision')!=SCHOOL_ORIGINAL_REVISION
         recorded=brief.get('page_evidence') or {}
         page_changed=current and page_key!=recorded.get('fingerprint','')
         recorded_pdf=brief.get('pdf_evidence') or {}
@@ -2373,8 +2551,8 @@ def _refresh_school(app, store, now, budget):
             with store._db() as c:
                 c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=? AND plan=?",(_json(plan),row['id'],row['updated'],row['plan']))
             continue
-        if (page_changed or pdf_changed or material_changed) and paged: continue
-        if not current or page_changed or pdf_changed or material_changed:
+        if (page_changed or pdf_changed or material_changed or original_changed) and paged: continue
+        if not current or page_changed or pdf_changed or material_changed or original_changed:
             reference=_reference_brief(evidence) if not source_error else None
             if not reference and used>=budget: continue
             targets=school_targets(app,store,row['child_id'])
@@ -2392,9 +2570,15 @@ def _refresh_school(app, store, now, budget):
                 context['pdf_material']=pdf_evidence['model']
             if material:
                 value['material']=material_key;context['school_material']=material['model']
+            original_parts=_school_original_parts(evidence,pdf_evidence,material) if pdf_evidence or material else []
+            original_key='';known=[]
+            if original_parts and not reference and not source_error:
+                with store._db() as c: original_key,known=_school_original_known(store,c,row)
+                value.update(original_revision=SCHOOL_ORIGINAL_REVISION,original_scope=original_key)
+                context.update(candidate_id=row['id'],original_parts=original_parts,existing_actions=[dict(id=r['id'],state=r['state'],title=r['title'],goal=r['body'],due=r['due'],original_action=json.loads(r['plan']).get('school_original_action',{})) for r in known])
             key='school-task:'+row['id'];fp=store._job(key,value,now,model=reference is None)
             if not fp: continue
-            paged+=page_changed or pdf_changed or material_changed
+            paged+=page_changed or pdf_changed or material_changed or original_changed
             if not source_error:
                 # Revoked, detached, corrected or dismissed between the claim and the call: no model round at all.
                 with store._db() as c:
@@ -2406,6 +2590,19 @@ def _refresh_school(app, store, now, budget):
                 if reference: brief=dict(reference)
                 else:
                     used+=1
+                    if original_parts:
+                        result=family_llm._chat_json([{'role':'system','content':_school_original_prompt(page_evidence,pdf_evidence,material)},{'role':'user','content':_json(context)}],
+                            _school_original_schema(original_parts,known,targets,school_goals),'family_school_task',timeout=45,data_path=store.data)
+                        items=_school_original_actions(store,row,result,original_parts,known,evidence,page_evidence,pdf_evidence,material,targets,school_goals,now)
+                        with store._db() as c:
+                            c.execute('BEGIN IMMEDIATE')
+                            if not _school_current(store,c,row,evidence,page_key,pdf_key,material_key) or _school_original_known(store,c,row)[0]!=original_key:
+                                _discard_job(c,key,fp);continue
+                            saved=_save_school_originals(store,c,row,items,key,fp,now)
+                        for collected_row in saved:
+                            collected,errors=_accept_school_reading(app,store,collected_row,evidence,now,original=True)
+                            created+=collected;failed+=errors
+                        continue
                     schema=copy.deepcopy(TASK_BRIEF_SCHEMA);schema['properties']['target_id']['enum']=['']+[t['id'] for t in targets]
                     schema['properties']['learning_goal_id']['enum']=['']+[g['id'] for g in school_goals]
                     result=family_llm._chat_json([{'role':'system','content':_task_prompt(page_evidence,pdf_evidence,material)},{'role':'user','content':_json(context)}],
@@ -2458,34 +2655,8 @@ def _refresh_school(app, store, now, budget):
                     row['updated']=updated;row['due']=due
             except (family_llm.LLMDraftError,AgentError,ValueError) as error:
                 store._fail(key,now,fingerprint=fp,reason=error);failed+=1;continue
-        if (material or page_evidence or pdf_evidence) and brief.get('state')=='ready':
-            import family_agenda
-            published=[family_agenda.sent_day(e.get('time')) for e in evidence]
-            if any(not day for day in published) or not row['due'] and any(day<now.date().isoformat() for day in published):
-                brief.update(state='review',reason='原消息的发布日期不明或早于今天，是否仍需完成待补充；已读要求保留。');plan['school_task']=brief
-                with store._db() as c:
-                    c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=?",(_json(plan),row['id'],row['updated']))
-        if brief.get('state')=='ready' and re.fullmatch(r'\d{4}-\d{2}-\d{2}',row['due'] or '') and row['due']<now.date().isoformat():
-            brief.update(state='review',reason='原截止日期已过，请核对是否仍需补做；不推定已完成。');plan['school_task']=brief
-            with store._db() as c:
-                c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=?",(_json(plan),row['id'],row['updated']))
-        if plan.get('school_history_uncertain'):
-            brief.update(state='review',reason='本条已有决定的动作原句无法定位，独立性尚未核明；原要求与决定保留。');plan['school_task']=brief
-            with store._db() as c:
-                c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=?",(_json(plan),row['id'],row['updated']))
-        if brief.get('state')=='ready':
-            try:
-                if brief.get('change')=='append':
-                    apply_school_change(app,store,_school_append_request(row,brief),school_auto=True)
-                else:
-                    result=store.act(dict(id=row['id'],action='accept',expected_updated=row['updated']),school_auto=True)
-                    created+=not result.get('deduplicated',False)
-            except (AgentError,sqlite3.IntegrityError) as error:
-                if isinstance(error,AgentError) and error.status==409 and (brief.get('change')!='append' or error.code=='school_source_paused'): continue
-                expected=_json(plan);brief.update(state='review',reason=str(error) if brief.get('change')=='append' else '自动收集未成功，请核对事项后再加入。');plan['school_task']=brief
-                with store._db() as c:
-                    changed=c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=? AND plan=?",(_json(plan),row['id'],row['updated'],expected)).rowcount
-                failed+=changed
+        collected,errors=_accept_school_reading(app,store,row,evidence,now)
+        created+=collected;failed+=errors
     return dict(used=used,failed=failed,created=created)
 
 

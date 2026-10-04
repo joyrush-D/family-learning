@@ -732,7 +732,8 @@ def school_evidence(store, c, source, message):
     if draft is None: return None
     count=re.search(r'\n\[图片原件：(\d+)份，内容未读\]$',message.get('text',''))
     complete=message['kind']=='image' or not message['unread'] or bool(count and int(count[1])==len(value['images'])==len(value['upload_ids']))
-    return dict(fingerprint=value['fingerprint'], draft=draft, updated=row['updated'], complete=complete)
+    return dict(fingerprint=value['fingerprint'], draft=draft, updated=row['updated'], complete=complete,
+                upload_ids=value['upload_ids'])
 
 
 def draft_view(store, c, source, message):

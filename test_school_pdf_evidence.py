@@ -63,9 +63,9 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
         reply={'actions':[
             dict(draft(title='数学：完成练习卷',goal=homework),due='2026-02-12',existing_item_id=ident,
-                 basis=[dict(ref=ref,text=homework)]),
+                 basis=[dict(part='pdf:'+self.pdf+':1@'+ref,text=homework)]),
             dict(draft(title='事务：签字交回活动回执',goal=receipt,purpose='admin'),due='2026-02-13',existing_item_id='',
-                 basis=[dict(ref=ref,text=receipt)])]}
+                 basis=[dict(part='pdf:'+self.pdf+':1@'+ref,text=receipt)])]}
         result,calls=self.refresh(reply)
         self.assertEqual((result['used'],result['failed'],result['created'],len(calls)),(1,0,2,1))
         tasks=self.rows('SELECT title,due,action,original_status,source FROM manual_tasks ORDER BY due')
@@ -85,7 +85,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         receipt='家长事务：2026-02-13前打印并签字交回活动回执。'
         self.seed_groups(keys=keys,note=math+'\n'+receipt,uncertainties=[])
         ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
-        reply={'actions':[dict(draft(goal=math),due='2026-02-13',existing_item_id=ident,basis=[dict(ref=ref,text=math)])]}
+        reply={'actions':[dict(draft(goal=math),due='2026-02-13',existing_item_id=ident,basis=[dict(part='pdf:'+self.pdf+':1@'+ref,text=math)])]}
         result,calls=self.refresh(reply)
         self.assertEqual((result['used'],len(calls),self.item(ident)['state'],self.count('manual_tasks')),(1,1,'pending',0))
         self.assertEqual(self.brief(ident)['state'],'review')
@@ -323,7 +323,13 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         def model(messages, *args, **kwargs):
             calls.append(messages)
             if isinstance(reply, Exception): raise reply
-            return reply(messages) if callable(reply) else reply
+            result=reply(messages) if callable(reply) else reply
+            context=json.loads(messages[-1]['content'])
+            if 'original_parts' in context and isinstance(result,dict) and set(result)==set(agent.TASK_BRIEF_SCHEMA['required']):
+                # The existing one-action fixtures keep their business assertions under the new array interface.
+                parts=context['original_parts'];part=next((p for p in parts if p['upload_ids']),parts[0])
+                return {'actions':[dict(result,due='',existing_item_id=context['candidate_id'],basis=[dict(part=part['id'],text=part['text'][:2000])])]}
+            return result
         with no_render(), patch.object(family_llm, 'extract_draft', side_effect=AssertionError('no page-group model call here')), \
                 patch.object(family_llm, '_chat_json', side_effect=model):
             result = agent._refresh_school(self.app, self.store, self.now + dt.timedelta(minutes=minutes), budget)
