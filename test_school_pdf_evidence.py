@@ -50,6 +50,53 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.link(keys,reference)
         return keys,reference
 
+    def test_legacy_pdf_summary_cannot_auto_add_a_shortened_action(self):
+        keys=self.native_notice('legacy-pdf-standards')
+        ident=self.candidate(keys=keys,ident='legacy-pdf-standards')
+        short='数学：2026-02-12前完成练习第1至3题。'
+        note=short+'写明单位；第4题选做，若选做须用两种方法，做完检查，无需家长签字。\n家长事务：2026-02-13前打印独立活动回执，家长签字后交回。'
+        self.seed_groups(keys=keys,note=note,uncertainties=[])
+        ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
+        reply={'actions':[dict(draft(title='数学：完成练习',goal=short),due='2026-02-12',existing_item_id=ident,
+            basis=[dict(part='pdf:'+self.pdf+':1@'+ref,text=short)])]}
+        result,_=self.refresh(reply)
+        self.assertEqual((result['failed'],result['created'],self.count('manual_tasks')),(1,0,0))
+        self.assertEqual(self.item(ident)['state'],'pending')
+
+    def test_pdf_complete_requirements_preserve_cross_group_standards_and_receipt(self):
+        keys=self.native_notice('page-requirements')
+        ident=self.candidate(keys=keys,ident='page-requirements')
+        requirements=['数学：2026-02-12前完成练习第1至3题必做，写明单位。',
+                      '同一数学练习第4题选做，若选做须用两种方法，做完检查，无需家长签字。',
+                      '家长事务：2026-02-13前打印独立活动回执，家长签字后交回。']
+        ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
+        with self.store._db() as c:
+            source,message=self.store._message_context(c,keys)
+            fp=pdfm.pdf_input(self.store,c,source,message)['fingerprint']
+            for pages,rs in zip(BATCHES,[[requirements[0]],[requirements[1]],[],[requirements[2]]]):
+                original=dict(upload_id=self.pdf,title='虚构页组',note='题面和空白栏是背景。',uncertainties=[],requirements=rs)
+                payload=json.dumps(dict(kind='school_material',originals=[original]),ensure_ascii=False)
+                c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?)',
+                    (source['id'],message['id'],fp,pages[0],json.dumps(pages),11,payload,self.now.isoformat()))
+        with self.store._db() as c:
+            row=self.item(ident);evidence,_=agent._school_material(self.store,c,row)
+            pdf=agent._pdf_evidence(agent._school_pdf(self.store,c,row))
+        parts=agent._school_original_parts(evidence,pdf,None)
+        required=[p for p in parts if p.get('requirement')]
+        self.assertEqual([(p['text'],p['pages'],p['upload_ids']) for p in required],
+                         [(t,p,[self.pdf]) for t,p in zip(requirements,[BATCHES[0],BATCHES[1],BATCHES[3]])])
+        reply={'actions':[
+            dict(draft(title='数学：完成练习',goal='完成练习。'),due='2026-02-12',existing_item_id=ident,
+                 basis=[dict(part=p['id'],text=p['text']) for p in required[:2]]),
+            dict(draft(title='事务：签字交回回执',goal='签字交回。',purpose='admin'),due='2026-02-13',existing_item_id='',
+                 basis=[dict(part=required[2]['id'],text=required[2]['text'])])]}
+        result,_=self.refresh(reply)
+        self.assertEqual((result['failed'],result['created']),(0,2))
+        tasks=self.rows('SELECT action,due FROM manual_tasks ORDER BY due')
+        self.assertEqual(tasks,[(requirements[0]+'\n'+requirements[1],'2026-02-12'),(requirements[2],'2026-02-13')])
+        self.assertEqual(self.count('records'),0)
+        self.assertEqual(self.refresh(reply,minutes=1),(dict(used=0,failed=0,created=0),[]))
+
     def test_docx_only_actions_keep_each_original_standard_and_unrelated_text_separate(self):
         from test_media import MediaTests,docx,para
         uploads=['b'*32,'c'*32]

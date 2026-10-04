@@ -33,6 +33,30 @@ def school_images(note, ids):
 
 
 class SchoolImageProtocolTests(unittest.TestCase):
+    def test_pdf_pages_keep_one_original_identity_and_complete_requirements(self):
+        import family_llm as llm
+        ident='a'*32
+        standard='数学：2026年2月12日前完成第1至3题必做，写明单位；第4题选做，若选做须用两种方法，做完检查，无需家长签字。'
+        original=dict(upload_id=ident,title='虚构页组',note='本轮第4至6页，题面保留在原件。',uncertainties=[],requirements=[standard])
+        with patch.object(llm,'configuration',return_value=('http://127.0.0.1/mock','synthetic')), \
+                patch.object(llm,'_chat_json',return_value=dict(originals=[original])) as model:
+            result=llm.extract_draft('虚构原件第4至6页。',[dict(mime='image/png',data=png()) for _ in range(3)],
+                target_child='示例甲',school_material=True,original_ids=[ident],original_pages=[4,5,6])
+        self.assertEqual(result['originals'],[original])
+        content=model.call_args.args[0][1]['content'];labels=[]
+        for index,part in enumerate(content):
+            if part['type']=='text' and 'original_image' in part['text']:
+                labels.append(json.loads(part['text'])['original_image'])
+                self.assertEqual(content[index+1]['type'],'image_url')
+        self.assertEqual(labels,[dict(upload_id=ident,page=p) for p in [4,5,6]])
+        self.assertEqual(model.call_args.args[1]['properties']['originals']['minItems'],1)
+        for pages in [[4,4,6],[6,5,4],[0,1,2],[True,5,6],[4,5],['4',5,6]]:
+            with self.subTest(pages=pages),patch.object(llm,'configuration',return_value=('http://127.0.0.1/mock','synthetic')), \
+                    patch.object(llm,'_chat_json') as refused,self.assertRaises(ValueError):
+                llm.extract_draft('虚构',[dict(mime='image/png',data=png()) for _ in range(3)],
+                    target_child='示例甲',school_material=True,original_ids=[ident],original_pages=pages)
+            refused.assert_not_called()
+
     def test_docx_only_protocol_keeps_same_named_originals_and_complete_requirements_separate(self):
         import family_llm as llm
         ids=['a'*32,'b'*32]
