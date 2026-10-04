@@ -2288,7 +2288,10 @@ def _history_context(store,c,source,values,key,*,exclude_id=''):
     receipt=c.execute('SELECT * FROM agent_jobs WHERE id=?',(old_key,)).fetchone()
     origin=[dict(receipt) if receipt else None,
             [dict(r) for r in c.execute('SELECT * FROM agent_items WHERE job_id=? ORDER BY id',(old_key,))]]
-    return _hash([rows,tasks,state,materials,origin]),known
+    related_items=[dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND child_id=? AND job_id!=? ORDER BY id",(source['child_id'],key))
+        if refs.keys() & {e.get('ref') for e in json.loads(r['evidence'])}]
+    explicit_tasks=[t for t in store.app.tasks(c) if any(ref in t['source'] for ref in refs)] if store.app else []
+    return _hash([rows,tasks,state,materials,origin,related_items,explicit_tasks]),known
 
 
 def _history_batch_matches(store,c,sources,eligible,*,saved_originals=False,ack_originals=False):
@@ -2531,7 +2534,7 @@ def _recover_school_ack_originals(store,config,now):
         matches=_history_batch_matches(store,c,sources,eligible,ack_originals=True) if eligible else {}
     for old_key,(source,values) in matches.items():
         if not all(_school_acknowledgement(v) for v in values):continue
-        origin=(old_key,eligible[old_key][0],'empty');key='school-ack-originals:'+_hash(origin+[source['child_id']] if isinstance(origin,list) else [*origin,source['child_id']])[:40]
+        origin=(old_key,eligible[old_key][0],'empty');key='school-ack-originals:'+_hash([*origin,source['child_id']])[:40]
         try:
             with store._db() as c:
                 evidence=[]

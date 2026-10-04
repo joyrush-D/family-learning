@@ -24,6 +24,7 @@ class SchoolAckOriginalTests(unittest.TestCase):
         self.stack.enter_context(patch.object(agent.family_teacher_public,'run_one',return_value=dict(state='disabled')))
         self.stack.enter_context(patch.object(family_media,'run_one',return_value=dict(state='ready')))
         self.stack.enter_context(patch.object(family_media,'prepare_draft',return_value=dict(used=0,failed=0)))
+        self.stack.enter_context(patch('family_goals.Store.run',return_value=dict(used=0,failed=0,created=0,children=set())))
         self.model=self.stack.enter_context(patch.object(agent.family_llm,'_chat_json',side_effect=AssertionError('not a real model call')))
 
     def _input(self,**changes):
@@ -135,6 +136,44 @@ class SchoolAckOriginalTests(unittest.TestCase):
         with self.store._db() as c:
             self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items').fetchone()[0],0)
             self.assertEqual(c.execute('SELECT processed FROM agent_messages').fetchone()[0],1)
+
+    def test_old_text_caption_with_later_attachment_recovers_once_but_no_decision_is_inferred(self):
+        values=self._input();key=self._legacy(values);self._original(values)
+        before=self._protected(key)
+        result=agent._recover_school_ack_originals(self.store,self.store._config(),self.now)
+        self.assertEqual((result['created'],result['failed']),(1,0))
+        self.assertEqual(self._protected(key),before)
+        with self.store._db() as c:
+            row=c.execute('SELECT id,plan FROM agent_items').fetchone()
+            self.assertEqual(json.loads(row['plan'])['school_task']['goal'],'')
+            c.execute("UPDATE agent_items SET state='dismissed' WHERE id=?",(row['id'],))
+        self.assertEqual(agent._recover_school_ack_originals(self.store,self.store._config(),self.now)['created'],0)
+        self.model.assert_not_called()
+
+    def test_existing_same_origin_candidate_blocks_legacy_recovery_even_if_superseded(self):
+        values=self._input(kind='image',unread=True);key=self._legacy(values)
+        ref='message:'+self.source['id']+':11'
+        existing=dict(child_id='child-1',kind='school',title='已有决定',body=agent.FOCUS['school'],due='',
+            evidence=[dict(ref=ref,text=values[0]['text'])],plan={})
+        self.store._save('synthetic-existing','fixture',[existing],self.now)
+        with self.store._db() as c:c.execute("UPDATE agent_items SET state='superseded'")
+        before=self._protected(key)
+        self.assertEqual(agent._recover_school_ack_originals(self.store,self.store._config(),self.now)['created'],0)
+        self.assertEqual(self._protected(key),before)
+
+    def test_same_origin_decision_inserted_during_recovery_rejects_new_pointer(self):
+        values=self._input(kind='image',unread=True);self._legacy(values)
+        real=self.store._save
+        def changed(*a,**kw):
+            real('synthetic-competing-decision','fixture',[dict(child_id='child-1',kind='school',title='已有记录',
+                body=agent.FOCUS['school'],due='',evidence=[dict(ref='message:'+self.source['id']+':11',text=values[0]['text'])],plan={})],self.now)
+            return real(*a,**kw)
+        with patch.object(self.store,'_save',side_effect=changed):
+            result=agent._recover_school_ack_originals(self.store,self.store._config(),self.now)
+        self.assertEqual((result['created'],result['failed']),(0,1))
+        with self.store._db() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items').fetchone()[0],1)
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_items WHERE job_id LIKE 'school-ack-originals:%'").fetchone()[0],0)
 
 
 if __name__=='__main__':unittest.main()
