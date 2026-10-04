@@ -65,7 +65,7 @@ async function inputs(){
 }
 
 async function syntheticServer(input){
- const directory=await fs.mkdtemp(path.join(os.tmpdir(),'family-frozen-workflow-'));
+ const directory=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'family-frozen-workflow-')));
  let child;
  try{
   for(const relative of input.allowed){const to=path.join(directory,relative);await fs.mkdir(path.dirname(to),{recursive:true});await fs.copyFile(path.join(input.fixture,relative),to)}
