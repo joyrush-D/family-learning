@@ -29,6 +29,8 @@ async function server(){
  const env={...process.env};for(const k of Object.keys(env))if(k.startsWith('FAMILY_'))delete env[k];
  // The fault stays in this disposable demo process; no worker or household printer is started.
  const setup=`import runpy,sys,json,copy
+from unittest.mock import patch
+from urllib.parse import urlparse,parse_qs
 import app
 cause_raw=dict(items=[dict(label='虚构甲卷第1题',question='虚构甲卷第1题：2+3=?',student_answer='4',answer='教师参考：5',judgment='incorrect',question_kind='objective',error_reason='卷面作答4与核对答案5不同。',possible_cause='',steps='先独立重算2+3，再对照核对答案。',uncertainty='')],coverage='仅虚构甲卷第1题，其余未检查。')
 cause_calls=[]
@@ -50,11 +52,94 @@ def traced_validator(*args,**kwargs):
     return result
 app.family_llm._chat_json=mock_chat
 app.family_llm.homework_reference_draft=traced_validator
+unit_cases={}
+def unit_fixture(width):
+    assert app.DATA.name.startswith('family-demo-') and width in (360,1440)
+    agent=app.family_agent
+    if width in unit_cases:
+        result=unit_cases[width]
+        with app.connect_read_only() as c:
+            assert [dict(r) for r in c.execute('SELECT * FROM agent_messages WHERE source_id=? ORDER BY id',(result['source_id'],))]==result['messages']
+            assert dict(c.execute('SELECT * FROM agent_sources WHERE id=?',(result['source_id'],)).fetchone())==result['source']
+            assert dict(c.execute('SELECT * FROM agent_items WHERE id=?',(result['original_id'],)).fetchone())==result['accepted_after']
+        return result
+    from test_agent import school_proposal
+    now=app.dt.datetime.now(agent.TZ);due=(now.date()+app.dt.timedelta(days=1)).isoformat()
+    source=dict(id='synthetic-unit-'+str(width),platform='wechat',child_id='child-1',name='虚构Unit来源 '+str(width),cursor='',enabled=True)
+    path=app.DATA/'agent.json';config=json.loads(path.read_text()) if path.exists() else dict(enabled=True,sources=[])
+    config['enabled']=True;config['sources'].append(source);path.write_text(json.dumps(config))
+    store=app.agent_store();calls=[]
+    def task(ident):
+        with app.connect_read_only() as c:return copy.deepcopy(next(t for t in app.tasks(c) if t['id']==ident))
+    def classify(index,text,title,change='new',target='',deadline=''):
+        with store._db() as c:
+            prior=c.execute('SELECT cursor FROM agent_sources WHERE id=?',(source['id'],)).fetchone()
+        message=dict(id=str(index),time=now.isoformat(),kind='text',sender='虚构英语老师',sender_id='synthetic-unit-teacher-'+str(width),text=text,unread=False)
+        store.ingest(dict(source_id=source['id'],expected_cursor=prior['cursor'] if prior else '',cursor=str(index),checked_at=now.isoformat(),last_message_time=now.isoformat(),error='',messages=[message]))
+        with store._db() as c:
+            before_messages=[dict(r) for r in c.execute('SELECT * FROM agent_messages WHERE source_id=? ORDER BY id',(source['id'],))]
+            before_source=dict(c.execute('SELECT * FROM agent_sources WHERE id=?',(source['id'],)).fetchone())
+        ref='message:'+source['id']+':'+str(index)
+        evidence=[dict(message,ref=ref,publisher=agent._publisher(source['id'],message),content_incomplete=False)]
+        raw=dict(proposals=[school_proposal(title_quote=text,due=deadline,evidence=[dict(ref=ref)],learning_subject='英语',task_title=title,task_goal=text,task_state='ready',task_reason='虚构明确原文。',task_change=change,task_target_id=target,task_purpose='learning')])
+        def fixed(messages,schema,name,*args,**kwargs):
+            assert name=='family_agent_selection';calls.append(dict(index=index,name=name,raw=copy.deepcopy(raw)));return copy.deepcopy(raw)
+        with patch.object(agent.family_llm,'_chat_json',side_effect=fixed):
+            items=agent._select('school',evidence,school_goals=[],school_tasks=agent.school_targets(app,store,'child-1'),as_of=now.date().isoformat())
+        assert len(items)==1
+        items[0].update(child_id='child-1',kind='school')
+        if items[0]['plan'].get('school_learning'):items[0]['plan']['school_messages']=[dict(source_id=source['id'],message_id=str(index))]
+        key='synthetic-unit:'+str(width)+':'+str(index);store._save(key,'fixed-model-raw',items,now)
+        with store._db() as c:
+            row=dict(c.execute('SELECT * FROM agent_items WHERE job_id=?',(key,)).fetchone())
+            assert [dict(r) for r in c.execute('SELECT * FROM agent_messages WHERE source_id=? ORDER BY id',(source['id'],))]==before_messages
+            assert dict(c.execute('SELECT * FROM agent_sources WHERE id=?',(source['id'],)).fetchone())==before_source
+        return row
+    original_text='Unit30课文读两遍，朗读录音上传班级作业区，明天完成。'
+    original=classify(1,original_text,'英语：Unit30朗读 '+str(width),deadline=due)
+    task_id=store.act(dict(id=original['id'],action='accept'))['task_id'];original_task=task(task_id)
+    with store._db() as c:accepted_before=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(original['id'],)).fetchone());count_before=c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0]
+    wrong=classify(2,'只补Unit3朗读：上传录音后确认上传成功。','英语：Unit3朗读补充',change='append',target=task_id)
+    wrong_brief=json.loads(wrong['plan'])['school_task']
+    assert wrong_brief['state']=='review' and not wrong_brief.get('target_basis') and not wrong_brief.get('input_basis'),'Unit3 must not append to Unit30'
+    assert task(task_id)==original_task,'wrong Unit changed the canonical task'
+    with store._db() as c:
+        assert dict(c.execute('SELECT * FROM agent_items WHERE id=?',(original['id'],)).fetchone())==accepted_before
+        assert c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0]==count_before
+    correct_text='只补Unit 30朗读：上传录音后确认上传成功。'
+    correct=classify(3,correct_text,'英语：Unit 30朗读补充',change='append',target=task_id);brief=json.loads(correct['plan'])['school_task']
+    assert brief['state']=='ready' and brief.get('target_basis') and brief.get('input_basis'),'same Unit with spacing must stay eligible'
+    with store._db() as c:
+        final_messages=[dict(r) for r in c.execute('SELECT * FROM agent_messages WHERE source_id=? ORDER BY id',(source['id'],))];final_source=dict(c.execute('SELECT * FROM agent_sources WHERE id=?',(source['id'],)).fetchone())
+    with patch.object(agent,'_now',return_value=now):saved=agent.apply_school_change(app,store,agent._school_append_request(correct,brief),school_auto=True)
+    final_task=task(task_id);assert saved['task_id']==task_id and final_task['title']==original_task['title'] and final_task['agenda']['due_on']==due
+    assert final_task['action']==original_task['action']+chr(10)+'补充要求：'+correct_text
+    with store._db() as c:
+        accepted_after=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(original['id'],)).fetchone())
+        for key in ('id','state','task_id','child_id','title','body','evidence','due','created'):assert accepted_after[key]==accepted_before[key]
+        before_plan=json.loads(accepted_before['plan']);after_plan=json.loads(accepted_after['plan'])
+        for key,value in before_plan.items():
+            if key!='school_messages':assert after_plan[key]==value
+        old_links=before_plan.get('school_messages',[])
+        assert after_plan.get('school_messages',[])[:len(old_links)]==old_links
+        if before_plan.get('school_learning'):assert after_plan['school_messages'][len(old_links):]==[dict(source_id=source['id'],message_id='3')]
+        assert len(after_plan.get('school_changes',[]))==1 and after_plan['school_changes'][0]['item_id']==correct['id']
+        assert c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0]==count_before
+        assert dict(c.execute('SELECT * FROM agent_items WHERE id=?',(wrong['id'],)).fetchone())==wrong
+        assert [dict(r) for r in c.execute('SELECT * FROM agent_messages WHERE source_id=? ORDER BY id',(source['id'],))]==final_messages
+        assert dict(c.execute('SELECT * FROM agent_sources WHERE id=?',(source['id'],)).fetchone())==final_source
+    result=dict(synthetic_only=True,shared_guard=True,real_model_calls=0,task_id=task_id,title=final_task['title'],action=final_task['action'],due=due,source_id=source['id'],original_ref='message:'+source['id']+':1',original_text=original_text,original_id=original['id'],wrong_id=wrong['id'],correct_id=correct['id'],wrong_state=wrong_brief['state'],correct_state=brief['state'],calls=calls,messages=final_messages,source=final_source,accepted_before=accepted_before,accepted_after=accepted_after,classification_preserved_sources=True,wrong_preserved_canonical=True,accepted_original_preserved=True)
+    unit_cases[width]=result;return result
 get=app.Handler.do_GET
 def fixture_get(self):
     if self.path=='/__fixture/cause-validator':
         assert app.DATA.name.startswith('family-demo-')
         return self.reply(200,dict(synthetic_only=True,shared_validator=True,real_model_calls=0,calls=cause_calls))
+    if urlparse(self.path).path=='/__fixture/unit-identity':
+        query=parse_qs(urlparse(self.path).query)
+        if set(query)!={'width'} or query['width'] not in (['360'],['1440']):return self.reply(400,dict(error='虚构宽度不正确'))
+        try:return self.reply(200,unit_fixture(int(query['width'][0])))
+        except AssertionError as error:return self.reply(500,dict(error='Unit fixture: '+str(error),synthetic_only=True,real_model_calls=0))
     return get(self)
 app.Handler.do_GET=fixture_get
 original=app.family_print.PrintStore._convert
@@ -453,6 +538,29 @@ runpy.run_path('demo.py',run_name='__main__')`;
   state=await readCause();const finalWrong=state.records.find(r=>r.id===causeWrongSaved.record_id),finalCorrection=state.records.find(r=>r.id===causeCorrection.record_id);assert.equal(finalWrong.related_record_id,causeOriginal.record_id);assert.equal(finalCorrection.related_record_id,finalWrong.id);for(const r of [finalWrong,finalCorrection]){assert.equal(r.child,child);assert.equal(r.linked_task_id,causeTask.id)}assert.equal(finalCorrection.followup_kind,'订正');assert.equal(state.tasks.find(t=>t.id===causeTask.id).update,null);assert.deepEqual(state.printing.jobs.map(j=>j.id).sort(),printIdsBeforeChecks);
   assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);
   if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.writeFile(path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'cause-validator-'+width+'.json'),JSON.stringify({scope:'mock raw through real shared validator; not OCR/model accuracy',request:causeRequest,validator:validatorAfter.calls.at(-1),feedback:causeReview,wrong:causeWrongSaved,correction:causeCorrection},null,2));await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'cause-reopened-'+width+'.png')})}
+  // Unit identity uses mock raw selection through the real shared guard and automatic-save transaction.
+  await p.locator('#taskDialog [data-close="taskDialog"]').click();assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),false);
+  const unitResponse=await fetch(host.url+'__fixture/unit-identity?width='+width),unit=await unitResponse.json();assert.equal(unitResponse.status,200,JSON.stringify(unit));
+  assert(unit.synthetic_only&&unit.shared_guard&&unit.classification_preserved_sources&&unit.wrong_preserved_canonical&&unit.accepted_original_preserved);assert.equal(unit.real_model_calls,0);assert.equal(unit.calls.length,3);assert.equal(unit.wrong_state,'review');assert.equal(unit.correct_state,'ready');assert.match(unit.title,/Unit30/);assert.match(unit.action,/只补Unit 30朗读/);assert(!unit.action.includes('只补Unit3朗读'));
+  const readUnit=readCause,openUnit=async()=>{await p.locator('nav [data-page=tasks]').click();await p.locator('body[data-page=tasks] #task-group-homework').waitFor();await p.locator('[data-task-box=Inbox]').click();await p.locator('#content [data-task="'+unit.task_id+'"]:visible').first().click();await p.locator('#taskDialog[open]').waitFor()};
+  await p.reload();await openUnit();assert.equal(await p.locator('#taskRequirement').innerText(),unit.action);assert.match(await p.locator('#taskTitle').innerText(),/Unit30/);
+  const unitFeedbackNote='虚构Unit30反馈：保留原朗读要求，第1个词读音需订正。';await p.locator('#taskForm [name=note]').fill(unitFeedbackNote);
+  await p.locator('#taskDialog [data-school-original-ref="'+unit.original_ref+'"]:visible').first().click();await p.locator('#schoolOriginalDialog[open]').waitFor();assert((await p.locator('#schoolOriginalDialog').innerText()).includes(unit.original_text));
+  await p.locator('#schoolOriginalDialog [data-school-original-close]').click();assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true);assert.equal(await p.locator('#taskForm [name=note]').inputValue(),unitFeedbackNote,'original-message preview preserves this task feedback draft');
+  const unitBefore=await readUnit(),unitTaskBefore=unitBefore.tasks.find(t=>t.id===unit.task_id);assert.equal(unitTaskBefore.update,null);assert.equal(unitTaskBefore.agenda.due_on,unit.due);assert(unitTaskBefore.source.includes(unit.original_ref)&&unitTaskBefore.source.includes('message:'+unit.source_id+':3'));assert(!unitTaskBefore.source.includes('message:'+unit.source_id+':2'));
+  const unitFeedback=await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),readUnit);
+  const unitWrong=p.locator('#taskFeedbackHistory [data-task-wrong-form="'+unitFeedback.record_id+'"]');await unitWrong.locator(':scope > summary').click();assert.equal(await unitWrong.locator('[data-task-wrong-photo]').count(),0);
+  await unitWrong.locator('[data-wrong-field=label]').fill('Unit30第1个词读音');await unitWrong.locator('[data-wrong-field=answer]').fill('读音A（虚构）');await unitWrong.locator('[data-wrong-field=correction]').fill('读音B（虚构）');
+  const unitWrongSaved=await threeAttemptSave(p,'/api/wrong/save',unitWrong.locator('[data-task-wrong-save]'),async()=>/结果尚未核对/.test(await unitWrong.innerText()),async()=>/错题已保存在这份作业下/.test(await p.locator('#taskFeedbackStatus').innerText()),readUnit);
+  const unitWrongCard=p.locator('#taskFeedbackHistory .task-feedback-record').filter({has:p.locator('[data-record="'+unitWrongSaved.record_id+'"]')});await unitWrongCard.locator('[data-followup]').click();await p.locator('#recordDialog[open]').waitFor();
+  const unitForm=p.locator('#recordForm'),unitCorrectionNote='虚构Unit30订正：第1个词重读，后续独立复测待做。';assert.equal(await unitForm.locator('[name=followup_kind]').inputValue(),'订正');assert.equal(await unitForm.locator('[name=related_record_id]').inputValue(),String(unitWrongSaved.record_id));await unitForm.locator('[name=note]').fill(unitCorrectionNote);
+  const unitCorrection=await threeAttemptSave(p,'/api/record',unitForm.locator('[type=submit]'),async()=>/虚构/.test(await p.locator('#recordError').innerText()),async()=>!await p.locator('#recordDialog').evaluate(x=>x.open),readUnit);
+  await p.reload();await openUnit();assert.equal(await p.locator('#taskRequirement').innerText(),unit.action);await p.locator('#taskFeedbackHistory').getByText(unitFeedbackNote,{exact:false}).waitFor();await p.locator('#taskFeedbackHistory').getByText(unitCorrectionNote,{exact:false}).waitFor();await p.locator('#taskFeedbackHistory').getByText('Unit30第1个词读音',{exact:false}).waitFor();
+  const unitAfter=await readUnit();assert.deepEqual(unitAfter.tasks.find(t=>t.id===unit.task_id),unitTaskBefore,'feedback, wrong item and correction do not complete or alter the canonical school task');assert.equal(unitAfter.records.length,unitBefore.records.length+3);assert.deepEqual(unitAfter.printing.jobs.map(j=>j.id).sort(),printIdsBeforeChecks);
+  const unitWrongRecord=unitAfter.records.find(r=>r.id===unitWrongSaved.record_id),unitCorrectionRecord=unitAfter.records.find(r=>r.id===unitCorrection.record_id);assert.equal(unitWrongRecord.related_record_id,unitFeedback.record_id);assert.equal(unitCorrectionRecord.related_record_id,unitWrongSaved.record_id);for(const r of [unitWrongRecord,unitCorrectionRecord]){assert.equal(r.child,child);assert.equal(r.linked_task_id,unit.task_id)}assert.equal(unitCorrectionRecord.followup_kind,'订正');
+  const unitRepeated=await fetch(host.url+'__fixture/unit-identity?width='+width);assert.equal(unitRepeated.status,200);assert.deepEqual(await unitRepeated.json(),unit,'repeated fixture reads preserve source rows, accepted decision and the same task identifier');assert.equal((await(await fetch(host.url+'__fixture/cause-validator')).json()).calls.length,validatorAfter.calls.length,'manual Unit flow adds no homework model call');
+  assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);
+  if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.writeFile(path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'unit-identity-'+width+'.json'),JSON.stringify({scope:'mock raw school selection through real shared guard and auto-save; not model accuracy',fixture:unit,feedback:unitFeedback,wrong:unitWrongSaved,correction:unitCorrection},null,2));await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'unit-reopened-'+width+'.png')})}
   assert.deepEqual(errors,[]);await p.close();
  }
  console.log('Homework feedback AI review: 360/1440 save, retry, reopen, task status and source preserved');
