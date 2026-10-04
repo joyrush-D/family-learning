@@ -85,8 +85,141 @@ def output_contract_checks():
     return calls
 
 
+def summary_consistency_checks():
+    """A program downgrade must reach both summaries without rewriting transport evidence."""
+    calls=0
+    scope='教师参考《虚构甲卷.pdf》：共11页，本次第1、3页；未读取页：2、4-11。'
+    stale_coverage='甲卷第3题已核实需订正；整卷已经检查完成。'
+    stale_comparison='后补教师参考后，第3题从正确改为确定错误，须订正。'
+    definite=item(label='甲卷第3题',question='虚构第3题：选择正确选项。',student_answer='C',
+        judgment='incorrect',error_reason='作答C与教师参考B不同。')
+    changes=[
+        dict(uncertainty='教师参考与可见题面冲突，待老师核对。'),
+        dict(judgment='correct',error_reason='',uncertainty='所选参考的题号对应不明。'),
+        dict(student_answer=''),dict(answer=''),dict(error_reason=''),
+        dict(judgment='correct',error_reason='没有依据的错误结论。'),
+        dict(judgment='correct',error_reason='',possible_cause='没有依据的原因。'),
+        dict(question='',question_kind='subjective'),
+    ]
+    def generate(questions,coverage,comparison=None,*,review=True,program_scope=()):
+        nonlocal calls
+        raw=dict(items=questions,coverage=coverage)
+        if comparison is not None: raw['comparison']=comparison
+        original=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            draft=family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=review,
+                reference_documents=[dict(name='synthetic-teacher.txt',text='虚构甲卷 第1题B，第2题B，第3题B。')] if review else [],
+                program_coverage=program_scope)
+            assert model.call_count==1 and raw==original,'the original transport evidence must remain unchanged'
+            calls+=1
+        return draft
+    for change in changes:
+        d=generate([definite|change],stale_coverage,stale_comparison,program_scope=[scope])
+        q=d['questions'][0]
+        assert q['judgment']=='unknown' and d['wrong_items']==0 and d['unknown_items']==1
+        assert not q['error_reason'] and not q['steps'] and q['uncertainty']
+        assert stale_coverage not in d['coverage']+d['text'],'coverage must not retain a grade the program refused'
+        assert stale_comparison not in d['comparison']+d['text'],'comparison must not retain a grade the program refused'
+        assert '甲卷第3题' in d['coverage'] and '未判定' in d['coverage'] and '不能沿用' in d['comparison']
+        assert scope in d['coverage'] and scope in d['text'],'actual selected and unread pages must remain visible'
+        assert q['uncertainty'] in d['text'] and q['student_answer'] in d['text']
+        if change.get('answer')!='': assert q['answer']=='教师参考：B'
+    # A changed summary must not erase sound grades, or require invented hints or causes.
+    sound_correct=item(label='甲卷第1题')
+    sound_wrong=item(label='甲卷第2题',student_answer='C',judgment='incorrect',error_reason='第2题C与参考B不同。')
+    conflict=definite|dict(uncertainty='第3题教师参考冲突。')
+    d=generate([sound_correct,sound_wrong,conflict],stale_coverage,stale_comparison,program_scope=[scope])
+    assert [q['judgment'] for q in d['questions']]==['correct','incorrect','unknown']
+    assert d['wrong_items']==d['unknown_items']==1
+    assert d['questions'][1]['error_reason']==sound_wrong['error_reason']
+    assert not d['questions'][1]['steps'] and not d['questions'][1]['possible_cause']
+    assert '需订正1题，与参考一致1题，未判定1题' in d['text']
+    assert stale_coverage not in d['text'] and stale_comparison not in d['text']
+    assert scope in d['text'] and conflict['uncertainty'] in d['text']
+    # A missing optional comparison still needs the replacement when a grade was changed.
+    d=generate([conflict],stale_coverage)
+    assert d['comparison'] and '未判定' in d['comparison']
+    # Sound existing comparisons and reference-printing output retain their original contract.
+    normal_coverage='虚构甲卷仅核第1、2题；第3题尚未检查。'
+    normal_comparison='虚构复核：第1题一致，第2题仍需订正，第3题未检查。'
+    d=generate([sound_correct,sound_wrong],normal_coverage,normal_comparison)
+    assert d['coverage']==normal_coverage and d['comparison']==normal_comparison
+    assert normal_comparison in d['text'] and normal_coverage in d['text']
+    printed=definite|dict(uncertainty='虚构参考冲突。');printed.pop('question_kind')
+    d=generate([printed],normal_coverage,review=False)
+    assert d['questions'][0]['judgment']=='unknown' and d['coverage']==normal_coverage
+    assert 'comparison' not in d,'reference printing must not gain review comparison fields'
+    return calls
+
+
+def summary_http_checks(app,upload):
+    """Real temporary HTTP dispatch, final-source guards, save/retry and original-answer reopen."""
+    import http.client
+    import threading
+    task=app.new_task(dict(child='示例甲',title='虚构后补参考一致性',category='homework'))
+    answer=upload('synthetic-summary-answer.png',png(7))
+    teacher=upload('synthetic-summary-teacher.pdf',b'%PDF-synthetic-summary-reference')
+    original=app.save_task_feedback(dict(task_id=task['id'],child='示例甲',day='2026-10-05',
+        request_key='synthetic-summary-original',note='虚构甲卷，检查第1至3题。',attachments=[answer,teacher]))
+    source=lambda ident,**extra:dict(type='upload',id=ident,**extra)
+    request=dict(purpose='review',task_id=task['id'],record_id=original['record_id'],expected_created=original['feedback']['created'],
+        question_sources=[source(answer)],reference_sources=[source(teacher,pages=[1,3])],
+        review_instruction='虚构后补教师参考，请复核第3题。',previous_text='虚构上一轮第3题与参考一致。')
+    stale_coverage='虚构第3题已核实需订正。'
+    stale_comparison='虚构后补参考将第3题改判为确定错误。'
+    raw=dict(items=[item(label='第1题'),item(label='第2题',student_answer='C',judgment='incorrect',error_reason='第2题C与参考B不同。'),
+        item(label='第3题',question='虚构第3题：选择正确选项。',student_answer='C',judgment='incorrect',
+             error_reason='第3题C与参考B不同。',uncertainty='第3题教师参考与可见题面冲突。')],
+        coverage=stale_coverage,comparison=stale_comparison)
+    transport_original=json.loads(json.dumps(raw))
+    def render(body,pages,deadline):
+        return dict(page_count=11,pages=[dict(page=p,mime_type='image/png',data=png()) for p in pages],
+            omitted_pages=[p for p in range(1,12) if p not in pages],complete=False)
+    server=app.ThreadingHTTPServer(('127.0.0.1',0),app.Handler)
+    worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
+    try:
+        def http(method,path,payload=None,token=app.TOKEN):
+            client=http.client.HTTPConnection('127.0.0.1',server.server_port,timeout=5)
+            try:
+                client.request(method,path,json.dumps(payload) if payload is not None else None,
+                    {'Content-Type':'application/json','X-Family-Token':token})
+                response=client.getresponse();return response.status,json.loads(response.read())
+            finally: client.close()
+        with patch.object(family_pdf,'page_count',return_value=11),patch.object(family_pdf,'render_pages',side_effect=render),patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            assert http('POST','/api/print/homework/draft',request,token='invalid-synthetic-token')[0]==403
+            assert model.call_count==0
+            status,result=http('POST','/api/print/homework/draft',request)
+            assert status==200 and model.call_count==1 and raw==transport_original
+        d=result['draft'];assert [q['judgment'] for q in d['questions']]==['correct','incorrect','unknown']
+        assert stale_coverage not in d['text'] and stale_comparison not in d['text']
+        assert '未读取页：2,4-11' in d['text'] and '本次第1,3页' in d['text']
+        ident=upload('作业批改参考-'+str(original['record_id'])+'.txt',d['text'].encode())
+        feedback=dict(task_id=task['id'],child='示例甲',day='2026-10-05',request_key='synthetic-summary-saved',
+            note='虚构家长核对的复核草稿，冲突题仍需补依据。',attachments=[answer,teacher,ident],
+            review_basis=result['review_basis'],comparison_note=d['comparison'])
+        with patch.object(family_llm,'_chat_json') as model:
+            status,saved=http('POST','/api/task/feedback',feedback)
+            assert status==200 and not saved['completion_changed']
+            status,retry=http('POST','/api/task/feedback',feedback)
+            assert status==200 and retry['replayed'] and retry['record_id']==saved['record_id']
+            status,view=http('GET','/api/print/homework/saved-review?task_id='+task['id']+'&record_id='+str(saved['record_id']))
+            assert status==200 and view['original_record_id']==original['record_id'] and view['text']==d['text']
+            assert stale_coverage not in view['text'] and stale_comparison not in view['text']
+            assert '未读取页：2,4-11' in view['text'] and '第3题教师参考与可见题面冲突。' in view['text']
+            assert model.call_count==0,'save, lost-receipt retry and reopen must not call a model'
+        with app.connect() as c:
+            answer_row=c.execute('SELECT * FROM records WHERE id=?',(original['record_id'],)).fetchone()
+            check_row=c.execute('SELECT * FROM records WHERE id=?',(saved['record_id'],)).fetchone()
+            assert answer_row['created']==original['feedback']['created'] and answer_row['note']=='虚构甲卷，检查第1至3题。'
+            assert json.loads(answer_row['attachments'])==[answer,teacher]
+            assert check_row['related_record_id']==original['record_id'] and check_row['followup_kind']=='作业检查'
+            assert check_row['comparison_note']==d['comparison']
+    finally:
+        server.shutdown();server.server_close();worker.join(timeout=3)
+
+
 def run():
-    contract_cases=output_contract_checks()
+    contract_cases=output_contract_checks()+summary_consistency_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:
         root=Path(temporary);data=root/'private';data.mkdir()
         with patch.dict(os.environ,{'FAMILY_DATA':str(data)}):
@@ -568,6 +701,7 @@ def run():
                     refused(lambda:app.homework_review_draft(linked_request|dict(record_id=derived['record_id'],expected_created=None)),
                         'review_source_not_allowed',403)
                     assert model.call_count==0
+            summary_http_checks(app,upload)
     print('homework review synthetic checks passed (%d output contract cases)'%contract_cases)
 
 
