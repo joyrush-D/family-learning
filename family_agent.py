@@ -288,7 +288,10 @@ def _pdf_evidence(material):
     collections=sorted({(m['ref'],m['collection_fingerprint']) for m in material if m.get('collection_fingerprint')})
     if collections: identity.append(collections)
     fingerprint=_hash(identity)
-    model=[];documents=[];uncertainties=[];total=0;complete_requirements=True
+    requirements_size=sum(len(text) for m in material for b in m['batches']
+                          for original in b['draft'].get('originals',[]) for text in original['requirements'])
+    # Reserve the whole requirements before sending any background prose, including earlier-page background.
+    model=[];documents=[];uncertainties=[];total=min(requirements_size,PDF_TEXT_LIMIT);complete_requirements=requirements_size<=PDF_TEXT_LIMIT
     for m in material:
         groups=[];omitted=[];truncated=[];processed=[]
         for b in m['batches']:
@@ -298,12 +301,11 @@ def _pdf_evidence(material):
             draft=b['draft'];full='\n'.join([draft.get('title',''),draft.get('note','')]+['待核对：'+u for u in draft.get('uncertainties',[])]).strip()
             originals=draft.get('originals');requirements=originals[0]['requirements'] if originals else None
             if requirements is None:complete_requirements=False
-            elif sum(map(len,requirements))>PDF_TEXT_LIMIT-total:
+            elif requirements_size>PDF_TEXT_LIMIT:
                 omitted.append(span);complete_requirements=False;continue
-            if requirements is not None:total+=sum(map(len,requirements))
             if total>=PDF_TEXT_LIMIT and requirements is None:omitted.append(span);continue
             text=full[:PDF_TEXT_LIMIT-total];total+=len(text);clipped=len(text)<len(full)
-            if clipped: truncated.append(span)
+            if clipped and requirements is None: truncated.append(span)
             group=dict(pages=b['pages'],text=text,text_truncated=clipped)
             if requirements is not None:group['requirements']=requirements
             groups.append(group)
@@ -2488,6 +2490,10 @@ def _school_original_parts(evidence, pdf, material):
             requirements=group.get('requirements')
             if requirements:
                 for text in requirements:
+                    previous=next((p for p in parts if p.get('requirement') and p['ref']==doc['ref']
+                                   and p['upload_ids']==[doc['upload_id']] and p['text']==text),None)
+                    if previous:
+                        previous['pages']=sorted(set(previous['pages']+group['pages']));continue
                     parts.append(dict(id=ident+':requirement:'+_hash(text)[:16],ref=doc['ref'],upload_ids=[doc['upload_id']],
                         pages=group['pages'],text=text,requirement=True))
             else:
@@ -2561,7 +2567,7 @@ def _school_pending_original(row):
     if row['body']==FOCUS['school'] and not brief.get('title') and not brief.get('goal'):return True
     if row['title']!=brief.get('title') or row['body']!=brief.get('goal') or not brief.get('origin_basis'):return False
     if action.get('requirements'):return False
-    from family_agenda import deadlines,sent_day
+    from family_agenda import deadlines
     dates=set()
     for quote in json.loads(row['evidence']):
         stamp=''  # Absolute dates are sufficient; relative legacy dates without a saved send time are not guessed.

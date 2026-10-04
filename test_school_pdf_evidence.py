@@ -98,6 +98,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertEqual(self.refresh(reply,minutes=1),(dict(used=0,failed=0,created=0),[]))
 
     def test_pdf_legacy_upgrade_is_bounded_preserves_each_old_group_and_all_decisions(self):
+        self.link(self.keys,self.pdf,action=DETACH)
         keys=self.native_notice('upgrade-groups')
         self.candidate(keys=keys,ident='upgrade-groups')
         self.seed_groups(keys=keys,note='旧页组摘要：数学练习，完整标准尚未结构化。',uncertainties=[])
@@ -120,6 +121,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertEqual((self.count('manual_tasks'),self.count('records')),(0,0))
 
     def test_pdf_legacy_upgrade_mixed_decision_and_model_race_never_replace_groups(self):
+        self.link(self.keys,self.pdf,action=DETACH)
         keys=self.native_notice('upgrade-decisions')
         first=self.candidate(keys=keys,ident='upgrade-decisions-first')
         second=self.candidate(keys=keys,ident='upgrade-decisions-second')
