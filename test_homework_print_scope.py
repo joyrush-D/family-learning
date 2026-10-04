@@ -286,6 +286,64 @@ class HomeworkPrintScopeTests(unittest.TestCase):
         self.assertEqual(value['jobs'],retry['jobs']);self.assertEqual(len(app.print_store().list_jobs()),2)
         self.assertEqual(len(preparations[0]),2);self.assertEqual(self.print_preparations(),preparations)
 
+    def test_partial_receipt_retry_after_feedback_correction_cannot_add_new_guide(self):
+        original=app.family_print.PrintStore.enqueue;calls=[]
+        def lose_first_receipt(store,body,**kwargs):
+            job=original(store,body,**kwargs);calls.append(job)
+            if len(calls)==1: raise app.family_print.PrintError('Synthetic first receipt lost','synthetic_receipt_lost',503)
+            return job
+        with patch.object(app.family_print.PrintStore,'enqueue',lose_first_receipt):
+            status,value=self.request('POST','/api/print/homework',self.pair())
+        self.assertEqual(status,503,value)
+        queued=app.print_store().list_jobs();self.assertEqual(len(queued),1);self.assertEqual(queued[0],calls[0])
+        self.assertRegex(queued[0]['homework_context_sha256'],r'^[a-f0-9]{64}$')
+        preparations=self.print_preparations();self.assertEqual(len(preparations[0]),2)
+        with app.connect_read_only() as c:
+            initial=dict(c.execute('SELECT * FROM records WHERE id=?',(self.answer['record_id'],)).fetchone())
+        status,changed=self.request('POST','/api/task/feedback',dict(task_id=self.task['id'],child=self.task['child'],
+            record_id=self.answer['record_id'],expected_created=initial['created'],note='虚构反馈在题目入队后更正'))
+        self.assertEqual(status,200,changed);self.assertNotEqual(changed['feedback']['created'],initial['created'])
+        status,value=self.request('POST','/api/print/homework',self.pair());self.assertEqual(status,409,value)
+        self.assertEqual(app.print_store().list_jobs(),queued);self.assertEqual(self.print_preparations(),preparations)
+
+    def test_complete_legacy_pair_only_reads_matching_existing_jobs(self):
+        # The old server wrote these same role keys without a homework context digest.
+        expected=app.print_store().homework_pair(self.pair(),self.task)
+        self.assertNotIn('homework_context_sha256',expected['question']);self.assertNotIn('homework_context_sha256',expected['guide'])
+        preparations=self.print_preparations();queued=app.print_store().list_jobs()
+        with patch.object(app.family_print.PrintStore,'_convert',side_effect=AssertionError('legacy PDFs must only be read back')):
+            status,value=self.request('POST','/api/print/homework',self.pair())
+        self.assertEqual(status,200,value);self.assertEqual(value['jobs'],expected)
+        self.assertEqual(app.print_store().list_jobs(),queued);self.assertEqual(self.print_preparations(),preparations)
+
+    def test_partial_legacy_pair_does_not_guess_or_enqueue_missing_guide(self):
+        body=self.pair();store=app.print_store()
+        subkey=lambda role:app.family_print._hash((body['request_key']+':'+role).encode())[:32]
+        question=store.prepare(self.source(self.question),subkey('question_prepare'),revision=True)
+        old=store.enqueue(dict(confirmed=True,preparation_id=question['id'],pdf_sha256=question['pdf_sha256'],
+            printer=PRINTER['name'],idempotency_key=subkey('question_enqueue')))
+        self.assertNotIn('homework_context_sha256',old)
+        preparations=self.print_preparations();self.assertEqual(len(preparations[0]),1)
+        status,value=self.request('POST','/api/print/homework',body);self.assertEqual(status,409,value)
+        self.assertEqual(store.list_jobs(),[old])
+        current=self.print_preparations()
+        for ident,row in preparations[0].items():
+            self.assertEqual(current[0][ident],row);self.assertEqual(current[1][ident],preparations[1][ident])
+
+    def test_final_scope_guard_uses_enqueue_transaction_and_common_digest(self):
+        original=app.homework_print_sources;counts=[]
+        def guard(*args,**kwargs):
+            c=kwargs.get('connection')
+            if c is not None:
+                self.assertTrue(c.in_transaction)
+                counts.append(c.execute('SELECT COUNT(*) FROM print_jobs').fetchone()[0])
+            return original(*args,**kwargs)
+        with patch.object(app,'homework_print_sources',guard):
+            status,value=self.request('POST','/api/print/homework',self.pair())
+        self.assertEqual(status,200,value);self.assertEqual(counts,[0,1])
+        digest=value['jobs']['question']['homework_context_sha256'];self.assertRegex(digest,r'^[a-f0-9]{64}$')
+        self.assertEqual(value['jobs']['guide']['homework_context_sha256'],digest)
+
     def test_material_unlinked_during_conversion_does_not_enqueue_and_retries_original_key(self):
         original=app.family_print.PrintStore.prepare
         def unlink_during_conversion(store,source,*args,**kwargs):

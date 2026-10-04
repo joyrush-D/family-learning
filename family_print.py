@@ -642,7 +642,7 @@ class PrintStore:
             target.unlink(missing_ok=True)
             raise
 
-    def homework_pair(self, obj, task, *, before_queue=None):
+    def homework_pair(self, obj, task, *, before_queue=None, queue_guard=None, context_sha256='', source_sha256=None):
         """One reviewed action queues two independent jobs; retries keep each original request key."""
         if not isinstance(obj, dict) or obj.get('question_confirmed') is not True or obj.get('guide_confirmed') is not True:
             raise PrintError('请分别核对作业题目和家长参考')
@@ -666,10 +666,27 @@ class PrintStore:
             raise PrintError('题目原件与参考草稿生成时不同，请重新核对答案','conflict',409)
         second = (self.prepare(guide, subkey('guide_prepare'),revision=True) if guide is not None else
                   self.prepare_guide(task['title'], guide_text, subkey('guide_prepare'),revision=True))
+        if source_sha256 is not None:
+            for prep in prepared+([second] if guide is not None else []):
+                if prep['source_sha256']!=source_sha256.get(prep['source'].get('id')):
+                    raise PrintError('准备的PDF与冻结原件不一致，请重新打开核对','review_source_changed',409)
+        roles=['question'+(str(n+1) if n else '') for n in range(len(prepared))]+['guide']
+        def transaction_guard(c):
+            if context_sha256:
+                existing=[json.loads(row['body']) for role in roles
+                          if (row:=c.execute('SELECT body FROM print_jobs WHERE idem=?',(subkey(role+'_enqueue'),)).fetchone())]
+                known=[body.get('homework_context_sha256') for body in existing]
+                if (any(value is None for value in known) and (len(existing)!=len(roles) or any(value is not None for value in known))
+                        or any(value is not None and value!=context_sha256 for value in known)):
+                    raise PrintError('原请求已有任务但来源版本无法继续匹配，请核对打印进展；旧任务保留','conflict',409)
+            if queue_guard is not None: queue_guard(c)
         def queue(prep, role):
             if before_queue is not None: before_queue()
+            guards={}
+            if queue_guard is not None or context_sha256: guards['queue_guard']=transaction_guard
+            if context_sha256: guards['context_sha256']=context_sha256
             return self.enqueue(dict(settings, confirmed=True, preparation_id=prep['id'],
-                                     pdf_sha256=prep['pdf_sha256'], idempotency_key=subkey(role+'_enqueue')))
+                                     pdf_sha256=prep['pdf_sha256'], idempotency_key=subkey(role+'_enqueue')),**guards)
         jobs=[queue(prep,'question'+(str(n+1) if n else '')) for n,prep in enumerate(prepared)]
         return dict(question=jobs[0],questions=jobs,guide=queue(second, 'guide'))
 
@@ -691,7 +708,7 @@ class PrintStore:
         if private: body.update(claim_token=row['claim_token'], bridge_id=row['bridge_id'], pdf_url='/api/print/bridge/pdf/'+row['id'])
         return body
 
-    def enqueue(self, obj):
+    def enqueue(self, obj, *, queue_guard=None, context_sha256=''):
         if not isinstance(obj, dict) or obj.get('confirmed') is not True: raise PrintError('请先确认打印预览和设置')
         key = _key(obj.get('idempotency_key')); prep = self.preparation(obj.get('preparation_id'))
         if obj.get('pdf_sha256') != prep['pdf_sha256']: raise PrintError('确认的PDF与预览不一致', 'conflict', 409)
@@ -703,12 +720,21 @@ class PrintStore:
         pages, selected = page_selection(obj.get('pages', 'all'), prep['page_count'])
         if selected * copies > 500: raise PrintError('一次打印最多500个页面副本')
         settings = dict(preparation_id=prep['id'], pdf_sha256=prep['pdf_sha256'], printer=printer_name(obj.get('printer')), pages=pages, copies=copies, sides=sides, color=color)
+        legacy_fingerprint = _hash(_json(settings).encode())
+        if context_sha256:
+            if not isinstance(context_sha256,str) or not re.fullmatch(r'[a-f0-9]{64}',context_sha256):
+                raise PrintError('打印来源快照不正确')
+            settings['homework_context_sha256']=context_sha256
         fingerprint = _hash(_json(settings).encode())
         with self._db() as c:
             c.execute('BEGIN IMMEDIATE')
+            if queue_guard is not None: queue_guard(c)
             old = c.execute('SELECT * FROM print_jobs WHERE idem=?', (key,)).fetchone()
             if old:
-                if old['fingerprint'] != fingerprint: raise PrintError('同一打印请求的设置不同', 'conflict', 409)
+                # Old jobs have no scope proof. Matching immutable settings may only read their receipt back;
+                # homework_pair's transaction guard refuses to fill any missing role alongside such a job.
+                expected_fingerprint=(legacy_fingerprint if context_sha256 and 'homework_context_sha256' not in json.loads(old['body']) else fingerprint)
+                if old['fingerprint'] != expected_fingerprint: raise PrintError('同一打印请求的设置或来源版本不同', 'conflict', 409)
                 return self._job(old)
             ident, now = secrets.token_hex(16), _now()
             body = dict(settings, name=prep['name'], source_sha256=prep['source_sha256'], page_count=prep['page_count'], selected_pages=selected, created=now)

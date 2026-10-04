@@ -1033,22 +1033,57 @@ def homework_review_context(c,task_id,record_id,expected_created=None):
     fingerprint=hashlib.sha256(json.dumps(context,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
     return dict(task=task,record=dict(row),allowed=material['allowed'],context_sha256=fingerprint,school_error=material['school_error'])
 
-def homework_print_sources(obj,*,pair=False):
-    """Reject foreign/unbound/result files before creating preparations or calling a model."""
-    sources=family_print.question_sources(obj.get('question_sources') if 'question_sources' in obj else [obj.get('question_source')])
+def homework_print_sources(obj,*,pair=False,connection=None,expected=None,freeze=False):
+    """Scope selected originals; a server-only snapshot also guards preparation and the enqueue transaction."""
+    questions=family_print.question_sources(obj.get('question_sources') if 'question_sources' in obj else [obj.get('question_source')])
+    sources=list(questions)
     guide=obj.get('guide_source') if pair else None
     if guide is not None: sources=sources+[guide]
     try:
-        with connect_read_only() as c:
-            c.execute('BEGIN')
+        with connect_read_only() if connection is None else nullcontext(connection) as c:
+            if connection is None: c.execute('BEGIN')
+            def task_basis(task):
+                return {k:task.get(k) for k in ('id','child','source','title','action')}|dict(category=task.get('agenda',{}).get('category'))
+            if expected is not None:
+                current=next((t for t in tasks(c) if t['id']==obj.get('task_id')),None)
+                if current is None or task_basis(current)!=expected['context']['task']:
+                    raise family_print.PrintError('作业归属或来源已变化，请重新打开核对','review_source_changed',409)
             context=homework_material_context(c,obj.get('task_id'))
             for source in sources:
                 if (not isinstance(source,dict) or set(source)!={'type','id'} or source.get('type')!='upload'
                         or not isinstance(source.get('id'),str) or source['id'] not in context['allowed']
                         or context['allowed'][source['id']]['origin']=='review_result'):
                     raise family_print.PrintError('请选择当前作业已关联的原件；检查意见不能当题目或教师参考','review_source_not_allowed',403)
+            if freeze or expected is not None:
+                selected={source['id'] for source in sources};files=[];hashes={}
+                base=Path(DATA).resolve()/'uploads'
+                for source in sources:
+                    value=context['allowed'][source['id']];path=base/family_print._id(source['id'])
+                    if base.is_symlink() or path.is_symlink() or path.resolve().parent!=base:
+                        raise family_print.PrintError('原件路径不正确')
+                    body=family_print._read_file(path,family_print.MAX_SOURCE)
+                    if len(body)!=value['size']:
+                        raise family_print.PrintError('原件大小已变化，请重新上传','review_source_changed',409)
+                    hashes[source['id']]=hashlib.sha256(body).hexdigest()
+                    files.append({k:value[k] for k in ('id','name','size','mime','created','origin','review_binding')}
+                                 |dict(source_sha256=hashes[source['id']]))
+                names=child_names(c)
+                bindings=[dict(r) for r in c.execute(
+                    'SELECT id,child,source,linked_task_id,linked_task_at,created,attachments,related_record_id,followup_kind FROM records WHERE source=? OR linked_task_id=? ORDER BY id',
+                    ('事项:'+obj['task_id'],obj['task_id']))
+                    if names.get(r['child'],r['child'])==context['task']['child'] and selected.intersection(json.loads(r['attachments']))]
+                guide_text=obj.get('guide_text','') if pair and guide is None else ''
+                if not isinstance(guide_text,str): raise family_print.PrintError('参考文字不正确')
+                basis=dict(task=task_basis(context['task']),child_id=context['child_id'],question_sources=questions,
+                    guide_source=guide,guide_text_sha256=hashlib.sha256(guide_text.encode()).hexdigest(),files=files,records=bindings,
+                    report=context['report'] if any(f['origin']=='reported_homework' for f in files) else {},
+                    school=context['school'] if any(f['origin']=='school' for f in files) else [])
+                digest=hashlib.sha256(json.dumps(basis,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+                if expected is not None and digest!=expected['context_sha256']:
+                    raise family_print.PrintError('原件、来源或记录版本已变化，请重新打开核对','review_source_changed',409)
     except sqlite3.OperationalError:
         raise family_print.PrintError('作业资料暂时无法读取；请用原编号核对打印进展后重试','storage_unavailable',503) from None
+    if freeze: return dict(task=context['task'],context=basis,context_sha256=digest,source_sha256=hashes)
     return context['task']
 
 def homework_saved_review(task_id,record_id):
@@ -2273,8 +2308,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200,dict(job=print_store().enqueue(obj)))
             if path=='/api/print/homework':
                 authorized_printer(obj.get('printer'),color=obj.get('color','monochrome'),sides=obj.get('sides','one-sided'))
-                task=homework_print_sources(obj,pair=True)
-                return self.reply(200,dict(jobs=print_store().homework_pair(obj,task,before_queue=lambda:homework_print_sources(obj,pair=True))))
+                frozen=homework_print_sources(obj,pair=True,freeze=True)
+                return self.reply(200,dict(jobs=print_store().homework_pair(obj,frozen['task'],
+                    before_queue=lambda:homework_print_sources(obj,pair=True,expected=frozen),
+                    queue_guard=lambda c:homework_print_sources(obj,pair=True,connection=c,expected=frozen),
+                    context_sha256=frozen['context_sha256'],source_sha256=frozen['source_sha256'])))
             if path=='/api/print/cancel': return self.reply(200,dict(job=print_store().cancel(obj.get('job_id'))))
             if path=='/api/print/received': return self.reply(200,dict(job=print_store().confirm_received(obj.get('job_id'),obj.get('note'))))
             if self.path=='/api/task/feedback': return self.reply(200,save_task_feedback(obj))
