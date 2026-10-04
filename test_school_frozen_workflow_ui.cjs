@@ -16,7 +16,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 
 const AS_OF='2026-10-04',FIXED_TIME='2026-10-04T10:00:00+08:00';
 const replayStage=process.env.SCHOOL_FROZEN_REPLAY_STAGE||'effective-instructions-replay-v4';
-assert.match(replayStage,/^effective-instructions-replay-v[0-9]+$/);
+assert.match(replayStage,/^(?:effective-instructions-replay|legacy-recovery)-v[0-9]+$/);
 const fixtureName=replayStage+'-fixture',resultName=replayStage+'-result.json';
 function required(name){assert(process.env[name],name+' must identify the synthetic acceptance material');return path.resolve(process.env[name])}
 async function eventually(check,label){for(let n=0;n<250;n++){if(await check())return;await delay(40)}throw Error('Timed out: '+label)}
@@ -95,7 +95,7 @@ class FrozenDate(RealDate):
     @classmethod
     def today(cls):return cls(2026,10,4)
 dt.datetime,dt.date=FrozenDateTime,FrozenDate
-tables=('manual_tasks','task_updates','task_history','uploads','agent_sources','agent_messages','agent_message_attachments','agent_message_drafts','agent_message_pages','agent_media','agent_pdf_material','agent_jobs','agent_items','agent_runtime')
+tables=('manual_tasks','task_updates','task_history','uploads','agent_sources','agent_messages','agent_message_attachments','agent_message_drafts','agent_message_pages','agent_media','agent_pdf_material','agent_jobs','agent_items','agent_runtime','llm_usage_ledger')
 def rows():
     c=sqlite3.connect((root/'private/family.sqlite3').as_uri()+'?mode=ro',uri=True);c.row_factory=sqlite3.Row
     try:
@@ -161,7 +161,7 @@ function integrity(value,input){
  assert.equal(value.synthetic_only,true);assert.equal(value.as_of,AS_OF);assert.equal(value.server_time,FIXED_TIME);assert.equal(value.source_root,__dirname);
  assert(path.basename(path.dirname(value.isolated_data)).startsWith('family-frozen-workflow-'));
  assert.deepEqual(value.current,value.baseline,'all frozen source, task, attachment and accepted decision rows are unchanged');
- assert.deepEqual(value.blocked,{model:0,collection:0,printing:0,unexpected_post:0,network:0});assert.equal(value.print_jobs,0);assert.equal(value.usage_rows,0);
+ assert.deepEqual(value.blocked,{model:0,collection:0,printing:0,unexpected_post:0,network:0});assert.equal(value.print_jobs,0);assert.equal(value.usage_rows,(input.result.ledger||[]).length,'the browser makes no new model call and preserves the retained usage rows');
  const messages=value.current.agent_messages;assert.equal(messages.length,4);
  for(const expected of input.truth.messages){const row=messages.find(m=>m.id===expected.id);assert.equal(row.source_id,input.truth.source_id);const payload=JSON.parse(row.payload);assert.equal(payload.text,expected.text);assert.equal(payload.time,expected.time);assert.equal(payload.unread,expected.id==='m2')}
 }

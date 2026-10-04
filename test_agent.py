@@ -982,6 +982,31 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(old,dict(c.execute('SELECT * FROM agent_items WHERE id=?',(old['id'],)).fetchone()))
             self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
 
+    def test_legacy_admin_upgrade_discards_cancellation_during_model(self):
+        old,key,fp,result=self._legacy_admin_rejection()
+        def arrived(*args,**kwargs):
+            payload=self.payload(expected='11',cursor='12');payload['messages']=[dict(id='12',time='2026-10-04T10:01:00+08:00',kind='text',sender='虚构发布者',sender_id='synthetic-a',text='取消学校通讯录紧急联系电话核对。',unread=False)]
+            self.store.ingest(payload);return result
+        with patch.object(agent.family_llm,'_chat_json',side_effect=arrived) as model:
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1),dict(used=1,failed=0,created=0))
+        self.assertEqual(model.call_count,1)
+        with self.app.connect() as c:
+            self.assertEqual(old,dict(c.execute('SELECT * FROM agent_items WHERE id=?',(old['id'],)).fetchone()))
+            self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
+
+    def test_legacy_admin_upgrade_rechecks_after_save_before_acceptance(self):
+        old,key,fp,result=self._legacy_admin_rejection();accept=agent._accept_school_reading
+        def arrived(app,store,row,evidence,now,**kwargs):
+            payload=self.payload(expected='11',cursor='12');payload['messages']=[dict(id='12',time='2026-10-04T10:01:00+08:00',kind='text',sender='虚构发布者',sender_id='synthetic-a',text='取消学校通讯录紧急联系电话核对。',unread=False)]
+            self.store.ingest(payload);return accept(app,store,row,evidence,now,**kwargs)
+        with patch.object(agent.family_llm,'_chat_json',return_value=result),patch.object(agent,'_accept_school_reading',side_effect=arrived):
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1),dict(used=1,failed=0,created=0))
+        with self.app.connect() as c:
+            saved=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(old['id'],)).fetchone());plan=json.loads(saved['plan'])
+            self.assertEqual((saved['state'],plan['school_task']['state']),('pending','review'))
+            self.assertEqual(plan['school_previous_policy'],old);self.assertIn('后发变化',plan['school_task']['reason'])
+            self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
+
     def test_legacy_correction_does_not_ignore_an_ambiguous_number_only_supplement(self):
         row,key,fp,evidence=self._legacy_initial_correction()
         payload=self.payload(expected='12',cursor='13');payload['messages']=[dict(id='13',time='2026-10-04T09:00:00+08:00',kind='text',sender='虚构发布者',sender_id='synthetic-a',text='补发第二项：A栏填写两种方法并写单位。',unread=False)]
