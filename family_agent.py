@@ -2911,6 +2911,13 @@ def _school_effective_instructions(parts,anchors,changes,proof):
                 text=text[header.end():]
         if native and part['ref']==proof['original_ref']:
             text=re.sub(r'^'+re.escape(ordinal)+r'\s*[:：]?\s*','',text,count=1) if ordinal else text
+            # The inserted, validated condition and the original following instruction
+            # remain separate clauses even when the original separator was a comma.
+            for change in changes:
+                replacement=change['new_text'].rstrip('。；;，,')
+                if change['old_part']==part['id'] and text.count(replacement)==1:
+                    end=text.index(replacement)+len(replacement)
+                    if text[end:end+1] in ('，',','):text=text[:end]+'。'+text[end+1:]
             # Separate the verified task command from its applied column condition.
             text=re.sub(r'^(完成'+re.escape(obj)+r')[，,](?=[A-Z](?:[、,，及和][A-Z])*栏)',r'\1。',text,count=1)
         elif part.get('requirement'):
