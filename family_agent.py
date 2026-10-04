@@ -2537,6 +2537,7 @@ def _recover_school_ack_originals(store,config,now):
         origin=(old_key,eligible[old_key][0],'empty');key='school-ack-originals:'+_hash([*origin,source['child_id']])[:40]
         try:
             with store._db() as c:
+                c.execute('BEGIN')  # Eligibility, linked originals and save basis share one read snapshot.
                 evidence=[]
                 for v in values:
                     attachments=[dict(r) for r in c.execute('SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=?',(source['id'],v['id']))]
