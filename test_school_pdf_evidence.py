@@ -372,7 +372,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         if brief is None:
             brief = dict(title='', goal='', advice='', state='review', reason='仅截图可见内容，请核对原图和附件。',
                          policy=agent.SCHOOL_TASK_POLICY, change='new', target_id='')
-        item = dict(child_id='child-1', kind='school', title=title, body=agent.FOCUS['school'], due='',
+        item = dict(child_id='child-1', kind='school', title=title, body=brief.get('goal') or agent.FOCUS['school'], due='',
                     evidence=[dict(ref='message:%s:%s' % (keys['source_id'], keys['message_id']), text=text)],
                     plan=dict(school_task=brief, school_messages=[dict(source_id=keys['source_id'], message_id=keys['message_id'])]))
         key = 'synthetic-pdf:' + ident; self.store._save(key, self.store._job(key, ident, self.now), [item], self.now)
@@ -458,7 +458,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                 material=self.material(keys)
                 evidence=agent._pdf_evidence([dict(material,ref='message:'+keys['source_id']+':'+keys['message_id'])])
                 # The complete original and its summary have not changed since policy 7 marked the file unread.
-                old=dict(draft(state='review',reason='原件或具体要求尚未读全。'),policy=7,
+                old=dict(draft(goal=TEXT,state='review',reason='原件或具体要求尚未读全。'),policy=7,
                          pdf_evidence=dict(fingerprint=evidence['fingerprint'],documents=evidence['documents']))
                 ident=self.candidate(keys=keys,ident=original,brief=old);before=self.item(ident)
                 self.assertEqual(self.refresh(draft(),budget=0),(dict(used=0,failed=0,created=0),[]))
