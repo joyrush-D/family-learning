@@ -767,6 +767,7 @@ class AgentTests(unittest.TestCase):
         with self.store._db() as c:
             source,message=self.store._message_context(c,keys); value=family_media.draft_input(self.store,c,source,message)
             note=dict(title='示例朗读练习',note='朗读 Unit 2 两遍；选做题任选。',uncertainties=[])
+            note['requirements']=[note['note']]
             checked=agent.family_llm.validate_school_material(dict(originals=[dict(upload_id=upload['id'],**note)]),original_ids=value['original_ids'])
             c.execute('INSERT INTO agent_message_drafts VALUES(?,?,?,?,?)',(source['id'],'2',value['fingerprint'],
                 json.dumps(dict(kind='school_material',**checked)),self.now.isoformat()))
@@ -836,6 +837,7 @@ class AgentTests(unittest.TestCase):
             source,message=self.store._message_context(c,keys)
             value=family_media.draft_input(self.store,c,source,message)
             note=dict(title='虚构英语作业',note='英语：朗读Unit 2课文两遍，完成练习册第8页。',uncertainties=['图片右下角的提交方式看不清'] if uncertain else [])
+            note['requirements']=[note['note']]
             draft=dict(kind='school_material',**agent.family_llm.validate_school_material(dict(originals=[dict(upload_id=upload['id'],**note)]),original_ids=value['original_ids']))
             c.execute('INSERT INTO agent_message_drafts VALUES(?,?,?,?,?)',(source['id'],message['id'],value['fingerprint'],json.dumps(draft,ensure_ascii=False),self.now.isoformat()))
         brief=dict(title='',goal='',advice='',state='review',reason='原件或具体要求尚未读全，请先核对。',policy=agent.SCHOOL_TASK_POLICY)
@@ -894,7 +896,7 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(model.call_count,2)
         with self.store._db() as c:
             row=c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone()
-            self.assertEqual((row['state'],row['title'],row['body']),('accepted',ready['title'],ready['goal']))
+            self.assertEqual((row['state'],row['title'],row['body']),('accepted',ready['title'],'英语：朗读Unit 2课文两遍，完成练习册第8页。'))
             self.assertEqual(tuple(c.execute('SELECT attempts,done FROM agent_jobs WHERE id=?',('school-task:'+ident,)).fetchone()),(2,1))
             self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
             self.assertEqual(tuple(c.execute('SELECT * FROM agent_message_drafts').fetchone()),original)
@@ -924,7 +926,7 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1)['created'],0)
         with self.store._db() as c:
             row=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone());b=json.loads(row['plan'])['school_task']
-            self.assertEqual(row['title'],result['title']);self.assertEqual(row['body'],result['goal'])
+            self.assertEqual(row['title'],result['title']);self.assertEqual(row['body'],'英语：朗读Unit 2课文两遍，完成练习册第8页。')
             self.assertEqual(b['state'],'review');self.assertIn('提交方式看不清',b['reason'])
         (self.data/'uploads'/keys['attachment_id']).write_bytes(b'changed original')
         with self.assertRaises(agent.AgentError) as caught:self.store.act(dict(id=ident,action='accept',expected_updated=row['updated']))
@@ -946,6 +948,7 @@ class AgentTests(unittest.TestCase):
         with self.store._db() as c:
             draft=json.loads(c.execute('SELECT payload FROM agent_message_drafts').fetchone()[0]);draft['note']='英语：朗读Unit 2两遍，明天提交。'
             draft['originals'][0]['note']=draft['note']
+            draft['originals'][0]['requirements']=[draft['note']]
             c.execute('UPDATE agent_message_drafts SET payload=?',(json.dumps(draft),))
         ready=dict(title='英语：朗读',goal=draft['note'],advice='',state='ready',reason='',purpose='learning',submission='',change='new',target_id='',learning_subject='英语',learning_goal_id='')
         with patch.object(agent.family_llm,'_chat_json',return_value=self._original_reply(ident,ready)):
@@ -959,7 +962,7 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(agent._refresh_school(self.app,self.store,self.now+dt.timedelta(days=1),1)['created'],0)
         with self.store._db() as c:
             row=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone())
-            self.assertEqual(row['body'],ready['goal']);self.assertIn('早于今天',json.loads(row['plan'])['school_task']['reason'])
+            self.assertEqual(row['body'],'英语：朗读Unit 2课文两遍，完成练习册第8页。');self.assertIn('早于今天',json.loads(row['plan'])['school_task']['reason'])
             self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
 
     def test_unknown_send_date_or_changed_deadline_never_auto_adopts_school_material(self):
@@ -969,6 +972,7 @@ class AgentTests(unittest.TestCase):
             c.execute("UPDATE agent_items SET due='2026-02-11' WHERE id=?",(ident,))
             draft=json.loads(c.execute('SELECT payload FROM agent_message_drafts').fetchone()[0]);draft['note']='英语：今天提交朗读。'
             draft['originals'][0]['note']=draft['note']
+            draft['originals'][0]['requirements']=[draft['note']]
             c.execute('UPDATE agent_message_drafts SET payload=?',(json.dumps(draft),))
         with patch.object(agent.family_llm,'_chat_json',return_value=self._original_reply(ident,ready)):
             self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1)['created'],0)

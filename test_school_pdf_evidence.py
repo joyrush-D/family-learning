@@ -125,6 +125,11 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             c.execute('INSERT INTO uploads(id,name,size,mime,created) VALUES(?,?,?,?,?)',
                       (upload,'虚构完整要求.png',len(body),'image/png',self.now.isoformat()))
         keys=self.native_notice(ident,upload=upload)
+        with self.store._db() as c:
+            raw=json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
+                                    (keys['source_id'],keys['message_id'])).fetchone()[0])
+            c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
+                      (json.dumps(dict(raw,text='学校要求见图片。\n[图片原件：1份，内容未读]',unread=True)),keys['source_id'],keys['message_id']))
         reply=dict(originals=[dict(upload_id=upload,title='数学练习要求',note='题面和空白栏只是背景。',
                                    uncertainties=[],requirements=requirements)])
         with patch.object(family_llm,'extract_draft',return_value=reply):
