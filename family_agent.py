@@ -493,6 +493,7 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
             and re.match(r'^请(?:各位)?家长',evidence[0].get('text','').strip()) and '家长' not in brief['goal']):
         if len(brief['goal'])+3<=2000:brief['goal']='家长：'+brief['goal']
         else:state='review';brief['reason']='完整要求和原文保留，执行人尚未能并入本项正文。'
+    if purpose=='admin' and state=='ready':brief['goal']=_school_admin_native_date(brief['goal'],evidence)
     brief=dict(brief,state=state,policy=SCHOOL_TASK_POLICY,change=change,target_id=target)
     if purpose: brief['purpose']=purpose
     if submission: brief['submission']=submission
@@ -1929,6 +1930,25 @@ def _school_dated_quote(quote, evidence, due, brief):
                 if stated and stated!={due}:return False
             start=end
     return bool(matches) and all(values=={due} for values in matches) and (kinds!={2} or len(matches)==1)
+
+
+def _school_admin_native_date(goal,evidence):
+    """Keep a directly addressed native action's date qualifier, never a model-added one."""
+    if len(evidence)!=1:return goal
+    entry=evidence[0]
+    if entry.get('kind')!='text' or entry.get('unread') or entry.get('content_incomplete'):return goal
+    try:aware=dt.datetime.fromisoformat(entry.get('time','')).tzinfo is not None
+    except (ValueError,TypeError):aware=False
+    if not aware:return goal
+    dated=r'(?:今天|明天|后天|(?:\d{4}年)?\d{1,2}月\d{1,2}日?|\d{4}-\d{2}-\d{2})'
+    qualifier=r'(之前|以前|前|内)?'
+    native=re.match(r'^请(?:各位)?家长\s*('+dated+r')\s*'+qualifier+r'\s*((?:完成|核对|打印|签字|盖章|交回|提交)[^。；;\n]{3,180})(?=[。；;\n]|$)',entry.get('text','').strip())
+    if not native:return goal
+    from family_agenda import deadlines,sent_day
+    dates=deadlines(native[1],sent_day(entry['time']))
+    current=re.match(r'^(?:家长[：:]\s*)?(?P<date>'+dated+r')\s*'+qualifier+r'\s*'+re.escape(native[3])+r'(?=[。；;\n]|$)',goal)
+    if len(dates)!=1 or not current or deadlines(current['date'],sent_day(entry['time']))!=dates:return goal
+    return goal[:current.start('date')]+next(iter(dates))+(native[2] or '')+native[3]+goal[current.end():]
 
 
 def _school_explicit_action_due(brief, evidence):
