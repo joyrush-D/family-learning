@@ -204,6 +204,7 @@ async function zeroWriteRetry(page,host,route,button,error,success){
    for(const task of [observation,reading]){assert.match(task.title,/语文/);assert.equal(task.agenda.due_on,AS_OF)}
    for(const text of ['第2–4自然段','两遍','给家长听','不用录音','不用上传'])assert(reading.action.includes(text),'reading retains its exact frozen requirement: '+text);
    for(const text of ['A、B栏仍必做','C栏改为选做','不做C栏也算完成观察单','语文本','两个描写桥的词语','三句完整的话','位置','外形','用途','不得照抄参考句','不用打印或上传'])assert(observation.action.includes(text),'observation retains its full frozen completion standard: '+text);
+   if(replayStage.startsWith('legacy-recovery-')){assert.match(observation.action,/^2026-10-04完成《桥的观察单》。/);assert.doesNotMatch(observation.action,/明天完成两项/)}
    assert.doesNotMatch(observation.action,/补发|稍后附件|更正10月3日|其余要求和原期限不变/,'transport and correction provenance stays in the original source');assert.equal(observation.action.split('C栏改为选做').length-1,1,'effective C condition appears only once');
    await page.goto(host.url);await ready(page);assert.equal(await page.evaluate(()=>new Date().toISOString()),new Date(FIXED_TIME).toISOString());
    const card=id=>page.locator('[data-query-target="task:'+id+'"]'),homework=page.locator('#task-group-homework'),todos=page.locator('#task-group-todo');
@@ -221,12 +222,22 @@ async function zeroWriteRetry(page,host,route,button,error,success){
    const adminOriginal=await jsonAt(host,'api/agent/message?'+new URLSearchParams({child_id:'child-1',source_id:input.truth.source_id,message_id:'m3'}));
    assert.deepEqual(adminOriginal.attachments,[]);assert.equal(adminOriginal.message.text,input.truth.messages.find(m=>m.id==='m3').text);materialChecks.push({task_id:admin.id,message_id:'m3',attachment_count:0,inspection:'existing read-only original API'});
    for(const [task,message,attachment] of [[reading,'m1',false],[observation,'m2',true]]){
+    const savedItem=input.result.items.find(i=>i.task_id===task.id),savedPlan=JSON.parse(savedItem.plan);
+    const retainedReading=task.id===reading.id&&replayStage.startsWith('legacy-recovery-')&&input.result.accepted_reading_unchanged===true&&!savedPlan.school_original_action;
+    if(retainedReading){assert.equal(savedItem.state,'accepted');assert.equal(savedPlan.school_task.policy,9)}
     const button=card(task.id).locator('[data-school-original-ref="message:'+input.truth.source_id+':'+message+'"]:visible').first();
-    await button.click();await original.locator('[data-task-material-scope=action]').waitFor();
+    await button.click();
+    if(retainedReading){await original.getByRole('status').filter({hasText:'本项资料范围尚未核明'}).waitFor();assert.equal(await original.locator('[data-task-material-scope=action]').count(),0)}
+    else await original.locator('[data-task-material-scope=action]').waitFor();
     assert.equal(await original.locator('.task-record-files a[href="/upload/'+input.uploadID+'"]').count(),attachment?1:0,'only the observation sheet has its DOCX');
     assert.equal(await original.locator('.task-record-files a').count(),attachment?1:0,'no other-task attachment appears');
     await fit(page);materialChecks.push({task_id:task.id,message_id:message,attachment_count:attachment?1:0});
-    if(attachment){await page.screenshot({path:path.join(input.proof,'frozen-original-'+width+'.png')});await original.locator('[data-school-task-source]').click();await original.getByRole('heading',{name:'老师完整原消息',exact:true}).waitFor();await eventually(async()=>await original.locator('blockquote.source').innerText()===input.truth.messages.find(m=>m.id===message).text,'complete original notice remains verbatim');await original.locator('[data-school-task-source]').click();await original.locator('[data-task-material-scope=action]').waitFor()}
+    if(attachment||retainedReading){
+     if(attachment)await page.screenshot({path:path.join(input.proof,'frozen-original-'+width+'.png')});
+     await original.locator('[data-school-task-source]').click();await original.getByRole('heading',{name:'老师完整原消息',exact:true}).waitFor();await eventually(async()=>await original.locator('blockquote.source').innerText()===input.truth.messages.find(m=>m.id===message).text,'complete original notice remains verbatim');
+     if(retainedReading){assert.equal(await original.locator('.task-record-files a').count(),0);assert.equal(await original.locator('a[href="/upload/'+input.uploadID+'"]').count(),0)}
+     await original.locator('[data-school-task-source]').click();if(retainedReading)await original.getByRole('status').filter({hasText:'本项资料范围尚未核明'}).waitFor();else await original.locator('[data-task-material-scope=action]').waitFor();
+    }
     await original.locator('[data-school-original-close]').click();
    }
    const openObservation=async()=>{await card(observation.id).locator('[data-task="'+observation.id+'"]:visible').first().click();await page.locator('#taskDialog[open]').waitFor();assert.equal(await page.locator('#taskForm [name=id]').inputValue(),observation.id);assert.equal(await page.locator('#taskRequirement').innerText(),observation.action)};
