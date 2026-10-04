@@ -72,7 +72,7 @@ const fs=require('node:fs/promises'),path=require('node:path');(async()=>{let br
   await post('api/task',{id:a.id,status:'已完成',note:'虚构：已经核对完成'});
   const sheet=await context.newPage();await sheet.setViewportSize({width:560,height:260});
   await sheet.setContent('<html><body style="font:24px sans-serif;background:white;color:black"><h2>SYNTHETIC ANSWER</h2><p>Question 1: Spell the word meaning the day before today.</p><p>Student final answer: yestoday</p></body></html>');
-  const raw=await sheet.screenshot();await sheet.close();
+  const raw=await sheet.screenshot({fullPage:true});await sheet.close();
   const up=await fetch(url+'api/upload',{method:'POST',headers:{'X-Family-Token':state.token,'X-File-Name':'synthetic-sheet.png'},body:raw}).then(r=>r.json());
   const saved=await post('api/record',{child:kid,day:state.today,category:'学习进展',subject:'英语',title:'虚构独立错题 '+width,note:'虚构原答：yestoday',source:'试卷 / 作业核对',attachments:[up.attachment.id],transcript:'虚构核对转写',transcript_state:'已核对'}),id=saved.record_id;
   state=await read();const before=state.records.find(r=>r.id===id),taskBefore=state.tasks.find(t=>t.id===a.id).update;
@@ -104,7 +104,7 @@ const fs=require('node:fs/promises'),path=require('node:path');(async()=>{let br
   // This verifies the linked workflow, not OCR, actual model accuracy or a child's learning result.
   const linkedBefore=await read(),linkedAnswer=linkedBefore.records.find(r=>r.id===id),printIds=linkedBefore.printing.jobs.map(j=>j.id).sort();
   const panel=history.locator('[data-homework-review="'+id+'"]'),instruction='虚构关联作答检查 '+width+'：仅检查原图第1题，保留未检查范围。';
-  await panel.locator(':scope > details > summary').click();await panel.locator('[data-review-source="'+up.attachment.id+'"] [data-homework-review-photo]').check();await panel.locator('[data-homework-review-instruction]').fill(instruction);
+  if(!await panel.locator(':scope > details').evaluate(x=>x.open))await panel.locator(':scope > details > summary').click();await panel.locator('[data-review-source="'+up.attachment.id+'"] [data-homework-review-photo]').check();await panel.locator('[data-homework-review-instruction]').fill(instruction);
   const reviewRequests=[],reviewReplies=[];await p.route('**/api/print/homework/draft',async route=>{reviewRequests.push(route.request().postDataJSON());const response=await route.fetch(),out=await response.json();reviewReplies.push({status:response.status(),out});await route.fulfill({response,json:out})});
   await panel.locator('[data-homework-review-run]').click();await eventually(async()=>/虚构模型暂时失败/.test(await panel.locator('[data-homework-review-status]').innerText()),'mock model failure retained');
   assert.equal(await panel.locator('[data-homework-review-instruction]').inputValue(),instruction);assert(await panel.locator('[data-homework-review-photo]').first().isChecked());assert.equal(await panel.locator('[data-homework-review-result] textarea').count(),0);assert.deepEqual((await read()).records,linkedBefore.records);
