@@ -9,7 +9,8 @@ async function threeAttemptSave(page,path,button,error,success,read){
  await page.route('**'+path,async route=>{
   bodies.push(route.request().postDataJSON());
   if(bodies.length===1)return route.fulfill({status:503,json:{error:'虚构未写入失败'}});
-  const response=await route.fetch(),value=await response.json();assert.equal(response.status(),200);results.push(value);
+  const original=new URL(route.request().url());
+  const response=await route.fetch({url:route.request().url().replace('family.test','127.0.0.1'),headers:{...route.request().headers(),host:original.host}}),value=await response.json();assert.equal(response.status(),200);results.push(value);
   return bodies.length===2?route.fulfill({status:503,json:{error:'虚构写入成功但回执丢失'}}):route.fulfill({response,json:value});
  });
  try{
