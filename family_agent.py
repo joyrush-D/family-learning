@@ -288,23 +288,30 @@ def _pdf_evidence(material):
     collections=sorted({(m['ref'],m['collection_fingerprint']) for m in material if m.get('collection_fingerprint')})
     if collections: identity.append(collections)
     fingerprint=_hash(identity)
-    model=[];documents=[];uncertainties=[];total=0
+    model=[];documents=[];uncertainties=[];total=0;complete_requirements=True
     for m in material:
         groups=[];omitted=[];truncated=[];processed=[]
         for b in m['batches']:
             processed+=b['pages'];span=_span(b['pages'])
             for uncertainty in b['draft'].get('uncertainties',[]):
                 if uncertainty not in uncertainties and len(uncertainties)<20: uncertainties.append(uncertainty)
-            if total>=PDF_TEXT_LIMIT: omitted.append(span);continue
             draft=b['draft'];full='\n'.join([draft.get('title',''),draft.get('note','')]+['待核对：'+u for u in draft.get('uncertainties',[])]).strip()
+            originals=draft.get('originals');requirements=originals[0]['requirements'] if originals else None
+            if requirements is None:complete_requirements=False
+            elif sum(map(len,requirements))>PDF_TEXT_LIMIT-total:
+                omitted.append(span);complete_requirements=False;continue
+            if requirements is not None:total+=sum(map(len,requirements))
+            if total>=PDF_TEXT_LIMIT and requirements is None:omitted.append(span);continue
             text=full[:PDF_TEXT_LIMIT-total];total+=len(text);clipped=len(text)<len(full)
             if clipped: truncated.append(span)
-            groups.append(dict(pages=b['pages'],text=text,text_truncated=clipped))
+            group=dict(pages=b['pages'],text=text,text_truncated=clipped)
+            if requirements is not None:group['requirements']=requirements
+            groups.append(group)
         kind=dict(original=m.get('original') or 'pdf',mime=m.get('mime',''),conversion=m.get('conversion',''))
         model.append(dict(ref=m['ref'],name=m['name'],upload_id=m['upload_id'],**kind,page_count=m['page_count'],processed_pages=sorted(processed),complete=True,
                           groups=groups,omitted_groups=omitted,truncated_groups=truncated))
         documents.append(dict(ref=m['ref'],name=m['name'],upload_id=m['upload_id'],**kind,page_count=m['page_count'],groups=len(m['batches']),sent=len(groups),omitted=omitted,truncated=truncated))
-    return dict(fingerprint=fingerprint,documents=documents,model=model,uncertainties=uncertainties)
+    return dict(fingerprint=fingerprint,documents=documents,model=model,uncertainties=uncertainties,requirements_complete=complete_requirements)
 
 
 def _original_label(documents):
@@ -2477,8 +2484,15 @@ def _school_original_parts(evidence, pdf, material):
             parts.append(dict(id=e['ref'],ref=e['ref'],upload_ids=[],pages=[],text=e['text']))
     for doc in (pdf or {}).get('model',[]):
         for group in doc['groups']:
-            parts.append(dict(id='pdf:'+doc['upload_id']+':'+str(group['pages'][0])+'@'+doc['ref'],
-                ref=doc['ref'],upload_ids=[doc['upload_id']],pages=group['pages'],text=group['text']))
+            ident='pdf:'+doc['upload_id']+':'+str(group['pages'][0])+'@'+doc['ref']
+            requirements=group.get('requirements')
+            if requirements:
+                for text in requirements:
+                    parts.append(dict(id=ident+':requirement:'+_hash(text)[:16],ref=doc['ref'],upload_ids=[doc['upload_id']],
+                        pages=group['pages'],text=text,requirement=True))
+            else:
+                parts.append(dict(id=ident,ref=doc['ref'],upload_ids=[doc['upload_id']],pages=group['pages'],
+                    text=group['text'],background_only=True))
     for entry in (material or {}).get('model',[]):
         part_id='material:'+entry['original_id']+'@'+entry['ref'] if entry.get('original_id') else 'material:'+entry['ref']
         requirements=entry['draft'].get('requirements')

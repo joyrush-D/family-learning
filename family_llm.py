@@ -406,7 +406,7 @@ def transcribe_audio(audio_bytes,mime,timeout=90):
     return text.strip()
 
 
-def extract_draft(text='',images=(),timeout=60,*,target_child='',data_path=None,timetable=False,homework=False,school_material=False,documents=(),original_ids=()):
+def extract_draft(text='',images=(),timeout=60,*,target_child='',data_path=None,timetable=False,homework=False,school_material=False,documents=(),original_ids=(),original_pages=()):
     """Return six draft fields. The caller must show them for correction before saving.
 
     school_material returns title/note/uncertainties and, with original_ids, checked per-original notes and complete requirements.
@@ -423,7 +423,13 @@ def extract_draft(text='',images=(),timeout=60,*,target_child='',data_path=None,
     if not isinstance(images,(list,tuple)) or len(images)+len(documents)>3:
         raise ValueError('每次最多整理3份原件' if documents else '每次最多整理3张图片')
     ids=_school_original_ids(original_ids)
-    if ids and (not school_material or len(ids)!=len(images)+len(documents)):
+    if not isinstance(original_pages,(list,tuple)):
+        raise ValueError('原件页码格式不正确')
+    pages=list(original_pages)
+    if pages and (not school_material or documents or len(ids)!=1 or len(pages)!=len(images)
+                  or any(type(p) is not int or p<1 for p in pages) or pages!=sorted(set(pages))):
+        raise ValueError('学校页组须以同一原件身份对应本轮有序页码')
+    if ids and (not school_material or not pages and len(ids)!=len(images)+len(documents)):
         raise ValueError('学校原件身份须与本轮逐份原件一一对应')
     words=text+''.join(d['name']+d['text'] for d in documents)
     if len(words)>MAX_TEXT: raise ValueError('通知与DOCX正文合计最多12000字，不会截断后整理')
@@ -451,7 +457,9 @@ def extract_draft(text='',images=(),timeout=60,*,target_child='',data_path=None,
             **(dict(upload_id=ids[len(images)+index]) if ids else {})),ensure_ascii=False)))
     for index,image in enumerate(images):
         if ids:
-            content.append(dict(type='text',text=json.dumps(dict(original_image=dict(upload_id=ids[index])),ensure_ascii=False)))
+            label=dict(upload_id=ids[0] if pages else ids[index])
+            if pages:label['page']=pages[index]
+            content.append(dict(type='text',text=json.dumps(dict(original_image=label),ensure_ascii=False)))
         preview=_model_image(image)
         content.append(dict(type='image_url',image_url=dict(url='data:'+preview['mime']+';base64,'+base64.b64encode(preview['data']).decode('ascii'))))
     if school_material:
@@ -477,6 +485,7 @@ uncertainties只写实际读不清、相互冲突、缺页或影响理解的归�
 本次输出仅供家长核对，不会创建、修改或关闭任何任务、目标或学习记录。'''
         if ids:
             prompt+='\n本轮original_ids是程序核对的完整原件身份清单。每个original_image身份只对应紧随其后的那张图片；original_document的upload_id只对应其正文。必须逐份返回originals，各含upload_id、title、note、uncertainties、requirements；每个身份恰好一次，不能遗漏、重复或合并，不返回跨原件汇总。每份note只写该原件实际可见的背景、题面与说明，不将其他图片、文件名或通知中的要求猜成该原件内容；通知只提供日期和解释上下文。读不清的原件仍保留自己的身份并具体说明未知。'
+            if pages:prompt+='\n本轮多个original_image具有同一upload_id，各自page对应同一原件的不同页。它们是一个页组，originals只返回这一份原件；requirements完整保留本组各页中的所有独立要求和跨页追加的完成标准，不把一项作业按页拆成重复任务。页组以外未送入的页只保留读取边界；依赖未读上下文时仍保留具体疑点。'
             prompt+='\nrequirements是本份原件中的完整独立行动要求字符串数组，每项对应一个独立成果；同一作业的打印、签字、交回步骤并入该项，另一份独立回执另列。逐项写明动作、对象、范围、明确日期或期限、必做/选做、适用条件、否定要求及具体输出和完成标准，方法数量、单位、过程、数量和提交方式等不得因简写而遗漏。题目本身可在note中保留，题内明确的完成标准必须并入对应requirements；一份原件有多个行动时全部分别保留。题面、表头、空白填写栏、答案、孩子作答、参考说明和材料对照本身不生成行动；没有明确行动用空数组，读不清或条件不明仍说明具体uncertainties，不猜缺失要求。每份最多12项，每项最多2000字，本轮所有原件的requirements合计最多4000字；不能用标题、总范围或笼统检查替代具体标准。'
         return validate_school_material(_chat_json([dict(role='system',content=prompt),dict(role='user',content=content)],
                                                    schema,'family_school_material_draft',timeout,data_path=data_path),original_ids=ids,require_requirements=bool(ids))

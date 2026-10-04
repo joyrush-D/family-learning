@@ -198,7 +198,7 @@ def _rows(c, source, message, fingerprint):
                      'AND fingerprint=? ORDER BY first_page', (source['id'], message['id'], fingerprint)).fetchall()
 
 
-def _batches(rows):
+def _batches(rows, upload_id):
     """Saved page groups for the current fingerprint; coverage is computed here, never taken from the model or a damaged row."""
     import family_llm
     batches, done, page_count = [], set(), None
@@ -209,7 +209,9 @@ def _batches(rows):
                     and pages == sorted(set(pages)) and pages[0] == row['first_page'], 'pdf_row_invalid')
             require(type(count) is int and 1 <= pages[0] and pages[-1] <= count <= family_pdf.MAX_DOCUMENT_PAGES, 'pdf_row_invalid')
             require(isinstance(draft, dict) and draft.pop('kind', None) == SCHOOL_MATERIAL, 'draft_kind_mismatch')
-            draft = family_llm.validate_school_material(draft)
+            draft.pop('previous_group',None)  # Old payload and timestamp remain history, never current action evidence.
+            draft = family_llm.validate_school_material(draft,original_ids=[upload_id] if 'originals' in draft else (),
+                                                       require_requirements='originals' in draft)
         except (ValueError, TypeError, MediaError, family_llm.LLMDraftError):
             continue  # A malformed or foreign row is never shown or counted.
         if page_count is None:
@@ -226,7 +228,7 @@ def _pending(done, page_count):
 
 def _document_view(c, source, message, value):
     from family_agent import _hash
-    batches, done, page_count = _batches(_rows(c, source, message, value['fingerprint']))
+    batches, done, page_count = _batches(_rows(c, source, message, value['fingerprint']),value['upload_id'])
     pending = _pending(done, page_count); complete = page_count is not None and not pending
     key = _document_key(source, message, value)
     job = c.execute('SELECT * FROM agent_jobs WHERE id=?', (key,)).fetchone()
@@ -236,6 +238,7 @@ def _document_view(c, source, message, value):
     return dict(state=state, kind=SCHOOL_MATERIAL, upload_id=value['upload_id'], name=value['name'], mime=value['mime'],
                 original=value['original'], conversion=value['conversion'], job_id=key,
                 page_count=page_count, processed_pages=sorted(done), pending_pages=pending, complete=complete, batches=batches,
+                requirements_complete=complete and all('originals' in b['draft'] for b in batches),
                 explanation='' if complete else (FAILED_DOCX if docx else FAILED_PPTX if pptx else FAILED_XLSX if xlsx else FAILED) if failed else
                 (WAITING_DOCX if docx else WAITING_PPTX if pptx else WAITING_XLSX if xlsx else WAITING))
 
@@ -280,7 +283,7 @@ def complete_evidence(store, c, source, message):
         return None
     documents = []
     for value in values:
-        batches, done, page_count = _batches(_rows(c, source, message, value['fingerprint']))
+        batches, done, page_count = _batches(_rows(c, source, message, value['fingerprint']),value['upload_id'])
         if page_count is None or _pending(done, page_count):
             return None
         documents.append(dict(fingerprint=value['fingerprint'], upload_id=value['upload_id'], name=value['name'], mime=value['mime'],
@@ -330,7 +333,7 @@ def prepare(store, now, budget=ROUND_CALLS):
                     continue
                 candidates = []
                 for value in values:
-                    _, done, page_count = _batches(_rows(c, source, message, value['fingerprint']))
+                    _, done, page_count = _batches(_rows(c, source, message, value['fingerprint']),value['upload_id'])
                     if page_count is None or _pending(done, page_count):
                         candidates.append((value, done, page_count))
         except Exception:
@@ -403,14 +406,14 @@ def prepare(store, now, budget=ROUND_CALLS):
                                                  unprocessed_pages=left, conversion=value['conversion'])), ensure_ascii=False)
         images = [dict(mime='image/png', data=p['data']) for p in rendered['pages']]
         result = family_llm.extract_draft(text, images, target_child=value['child'], timeout=90, data_path=store.data,
-                                          school_material=True)
-        result = family_llm.validate_school_material(result)  # Re-checked: no score, mastery or record field is ever saved.
+                                          school_material=True,original_ids=[value['upload_id']],original_pages=pages)
+        result = family_llm.validate_school_material(result,original_ids=[value['upload_id']],require_requirements=True)
         with store._db() as c:
             c.execute('BEGIN IMMEDIATE')
             if not _claim_intact(store, c, source, message, value, key, fp):
                 _void(c, key, fp)  # Changed while the model ran: drop the result, keep nothing, leave no error.
                 return dict(used=1, failed=0)
-            _, done_now, count_now = _batches(_rows(c, source, message, value['fingerprint']))
+            _, done_now, count_now = _batches(_rows(c, source, message, value['fingerprint']),value['upload_id'])
             require(count_now in (None, page_count) and not (done_now & set(pages)), 'pdf_material_changed')
             c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?) '
                       'ON CONFLICT(source_id,message_id,fingerprint,first_page) DO UPDATE SET '
