@@ -1789,7 +1789,7 @@ function schoolOriginalCurrent(s){
 }
 async function readSchoolOriginal(){
  const s=schoolOriginal;if(!s||s.busy||schoolOriginalPending(s))return;s.busy=true;s.error='';paintSchoolOriginal();
- try{const request=s.taskMaterialID&&!s.fullSource?{...s.identity,task_id:s.taskMaterialID}:s.identity;const r=await apiFetch('/api/agent/message?'+new URLSearchParams(request),{signal:AbortSignal.timeout(12000)}),view=await r.json();if(!schoolOriginalCurrent(s))return;if(!r.ok)throw Error(view.error||'这条通知暂时无法读取');verifySchoolOriginal(view,s);if(s.taskMaterialID&&!s.fullSource&&(view.task_id!==s.taskMaterialID||view.action_material?.scoped!==true))throw Error('本项资料范围尚未核明，可查看老师完整原消息；不能把整条通知的附件当成本项资料。');s.view=view}
+ try{const request=s.taskMaterialID&&!s.fullSource?{...s.identity,task_id:s.taskMaterialID}:s.identity;const r=await apiFetch('/api/agent/message?'+new URLSearchParams(request),{signal:AbortSignal.timeout(12000)}),view=await r.json();if(!schoolOriginalCurrent(s))return;if(!r.ok)throw Error(view.error||'这条通知暂时无法读取');verifySchoolOriginal(view,s);if(s.taskMaterialID&&!s.fullSource&&(view.task_id!==s.taskMaterialID||view.action_material?.scoped!==true))throw Error('本项资料范围尚未核明，可查看老师完整原消息；不能把整条通知的附件当成本项资料。');if(s.taskMaterialID&&!s.fullSource)taskSchoolMaterialHTML(view);s.view=view}
  catch(error){if(schoolOriginalCurrent(s))s.error=error.name==='TimeoutError'?'读取超时，请重试。':error.message||'暂时无法读取，请重试。'}
  finally{if(schoolOriginal===s){s.busy=false;paintSchoolOriginal()}}
 }
