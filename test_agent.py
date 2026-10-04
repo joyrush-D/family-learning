@@ -869,7 +869,7 @@ class AgentTests(unittest.TestCase):
         self._school_rejects_first_batch_conversion(naive=True)
 
     def _first_batch_condition_fixture(self):
-        original='明天完成两项。第一项朗读课文。第二项：完成《桥的观察单》，A、B、C三栏都要做，不照抄示例，不打印或上传。'
+        original='明天完成两项语文要求。第一项朗读课文。第二项：完成《桥的观察单》，A、B、C三栏都要做，不照抄示例，不打印或上传。'
         change='更正10月3日16:10发布的第二项《桥的观察单》：A、B栏仍必做；C栏改为选做，不做C栏也算完成观察单。其余要求和原期限不变。'
         requirements='A栏：选出两个描写桥的词语，写在语文本上。B栏：用自己的话写三句完整的话，分别说明桥的位置、外形和用途。C栏：用自己的话补写一句喜欢桥的理由。不得照抄参考句。'
         evidence=[dict(ref='message:synthetic:m1',text=original,time='2026-10-03T16:10:00+08:00',kind='text',publisher='publisher:a',content_incomplete=False),
@@ -878,6 +878,7 @@ class AgentTests(unittest.TestCase):
         parts=[dict(id=e['ref'],ref=e['ref'],text=e['text'],upload_ids=[],pages=[]) for e in evidence]
         parts.append(dict(id='requirement:docx',ref='message:synthetic:m2',text=requirements,upload_ids=['a'*32],pages=[],requirement=True))
         anchors=[dict(ref=p['ref'],upload_ids=p['upload_ids'],pages=p['pages'],quote=p['text']) for p in parts]
+        anchors[0]['quote']=proof['action_text']
         changes=[dict(old_part=evidence[0]['ref'],old_text='A、B、C三栏都要做',new_part=evidence[1]['ref'],new_text='A、B栏仍必做；C栏改为选做')]
         return parts,anchors,changes,proof
 
@@ -903,6 +904,8 @@ class AgentTests(unittest.TestCase):
         cases=[]
         cases.append((parts,anchors,[],proof))
         cases.append((parts,anchors,changes,None))
+        mixed=copy.deepcopy(anchors);mixed[0]['quote']=parts[0]['text']
+        cases.append((parts,mixed,changes,proof))
         cases.append((parts,anchors,[dict(changes[0],old_text=parts[0]['text'])],proof))
         cases.append((parts,anchors,[dict(changes[0],new_text='A、B栏仍必做；C栏改为选做，不做C栏也算完成观察单')],proof))
         cases.append((parts,anchors,[dict(changes[0],new_text='C栏改为选做')],proof))
@@ -929,6 +932,23 @@ class AgentTests(unittest.TestCase):
                 before=copy.deepcopy((sources,quotes,mapping,basis))
                 with self.assertRaises(agent.AgentError):agent._school_effective_conditions(sources,quotes,mapping,basis)
                 self.assertEqual((sources,quotes,mapping,basis),before)
+
+    def test_first_batch_action_scope_does_not_inherit_another_action_date(self):
+        from family_agenda import deadlines
+        obj='《桥的观察单》';ordinal='第二项'
+        common='明天完成两项语文要求。第一项：朗读课文。第二项：完成'+obj+'，A、B、C三栏都要做。'
+        scope=agent._school_first_batch_action_scope(common,ordinal,obj)
+        self.assertEqual(deadlines(scope['action_text']+'\n'+scope['shared_date_text'],'2026-10-03'),{'2026-10-04'})
+        self.assertNotIn('朗读课文',scope['action_text'])
+        own='第一项：明天朗读课文。第二项：完成'+obj+'，A、B、C三栏都要做。'
+        scope=agent._school_first_batch_action_scope(own,ordinal,obj)
+        self.assertEqual(scope['shared_date_text'],'')
+        self.assertEqual(deadlines(scope['action_text'],'2026-10-03'),set())
+        direct='10月5日完成第二项：'+obj+'。第三项：10月6日交回回执。'
+        scope=agent._school_first_batch_action_scope(direct,ordinal,obj)
+        self.assertEqual(deadlines(scope['action_text'],'2026-10-03'),{'2026-10-05'})
+        self.assertNotIn('交回回执',scope['action_text'])
+        self.assertIsNone(agent._school_first_batch_action_scope(own,'第三项',obj))
 
     def _school_batch_failure_recovers(self, failure):
         payload=self.payload(cursor='16')

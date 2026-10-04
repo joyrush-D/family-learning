@@ -1550,7 +1550,7 @@ class Store:
                         fresh=_school_brief(dict(raw,change='new'),incomplete=any(e['content_incomplete'] for e in evidence),
                             evidence=evidence,separate_learning=True)
                         from family_agenda import deadlines,sent_day
-                        original_dates=deadlines(proof['original_text'],sent_day(proof['original_time']))
+                        original_dates=deadlines(proof['action_text']+'\n'+proof['shared_date_text'],sent_day(proof['original_time']))
                         all_dates=set().union(*(deadlines(e['text'],sent_day(e.get('time',''))) for e in evidence))
                         if item.get('due') and item['due']>=now.date().isoformat() and original_dates==all_dates=={item['due']}:
                             plan['school_first_batch_correction']=proof
@@ -1943,6 +1943,24 @@ def _school_explicit_action_due(brief, evidence):
     return matches[0] if len(matches)==1 else ''
 
 
+def _school_first_batch_action_scope(text,ordinal,obj):
+    """Locate one numbered action; only an explicit all-items date may apply across it."""
+    numbered=list(re.finditer(r'第[一二三四五六七八九十0-9]+项',text))
+    selected=[]
+    for index,match in enumerate(numbered):
+        end=numbered[index+1].start() if index+1<len(numbered) else len(text)
+        if match[0]==ordinal and text[match.start():end].count(obj)==1:selected.append((match.start(),end))
+    if len(selected)!=1:return None
+    start,end=selected[0];prefix=text[:numbered[0].start()]
+    dated=r'(?:今天|明天|后天|(?:\d{4}年)?\d{1,2}月\d{1,2}日?|\d{4}-\d{2}-\d{2})'
+    shared=''
+    if re.fullmatch(dated+r'\s*(?:前|之前|以前|内)?\s*完成[两二三四五六七八九十2-9]+项[^。；;\n]{0,20}[。；;\n]\s*',prefix):
+        shared=prefix.strip()
+    elif start==numbered[0].start() and re.fullmatch(dated+r'\s*(?:前|之前|以前|内)?\s*完成\s*',prefix):
+        start=0  # A date directly before this sole/first numbered action belongs to it.
+    return dict(action_text=text[start:end].strip(),shared_date_text=shared)
+
+
 def _school_first_batch_correction(brief, evidence):
     """Prove an explicit dated original and named object, never infer from an empty target."""
     if brief.get('change')!='update' or brief.get('target_id'):return None
@@ -1977,9 +1995,11 @@ def _school_first_batch_correction(brief, evidence):
             originals.append(origin)
         if len(originals)==1:
             origin=originals[0]
+            scope=_school_first_batch_action_scope(origin['text'],match[6],match[7])
+            if scope is None:continue
             proofs.append(dict(original_ref=origin['ref'],correction_ref=change['ref'],object=match[7],
                 publisher=publisher,original_time=origin['time'],correction_time=change['time'],
-                original_text=origin['text'],correction_text=change['text']))
+                original_text=origin['text'],correction_text=change['text'],**scope))
     return proofs[0] if len(proofs)==1 else None
 
 
@@ -2773,6 +2793,8 @@ def _school_effective_conditions(parts,anchors,changes,proof):
     result=[];applied=set()
     if not any(v=='必做' for v in statuses.values()):raise AgentError('整项改为选做不作为新的必做行动自动收录')
     for anchor in anchors:
+        if anchor['ref']==proof['original_ref'] and anchor['quote'] not in proof['action_text'] and anchor['quote']!=proof['shared_date_text']:
+            raise AgentError('原通知引用混入其他独立事项，须分别保留本项要求')
         matches=[p for p in parts if p['ref']==anchor['ref'] and p['upload_ids']==anchor['upload_ids'] and p['pages']==anchor['pages'] and anchor['quote'] in p['text']]
         if len(matches)!=1 or matches[0]['text'].count(anchor['quote'])!=1:
             raise AgentError('更正后的完整行动依据不能唯一对应原件')
@@ -3131,9 +3153,9 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         dates=set().union(*(deadlines(a['quote'],stamps.get(a['ref'],'')) for a in action_anchors))
         inherited_dates=set()
         if generated_match:
-            inherited_dates=deadlines(batch_proof['original_text'],sent_day(batch_proof['original_time']))
+            inherited_dates=deadlines(batch_proof['action_text']+'\n'+batch_proof['shared_date_text'],sent_day(batch_proof['original_time']))
             if len(inherited_dates)==1 and not dates:dates=inherited_dates
-        stated=set().union(*(deadlines(brief['goal'],s) for s in stamps.values()))
+        stated=dates if conditions else set().union(*(deadlines(brief['goal'],s) for s in stamps.values()))
         resolved=due or (next(iter(dates)) if len(dates)==1 else '')
         if resolved and (not date(resolved) or dates!={resolved} or stated and stated!={resolved}):
             due='';brief.update(state='review',reason='本项日期与对应原件行动不一致，日期待补充；已读要求保留。')
