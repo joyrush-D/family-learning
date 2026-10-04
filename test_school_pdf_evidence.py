@@ -57,6 +57,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         receipt='家长事务：2026-02-13前打印独立活动回执，家长签字后交回；不需要填写日期空白栏。'
         notice='英语：2026-02-14前背诵Unit3第2页，不需要打印。'
         keys=self.native_notice('docx-only')
+        self.link(keys,self.pdf,action=DETACH)  # This fixture must exercise only the two DOCX, not the PDF page route.
         for upload,text in zip(uploads,[math,receipt]):
             self.link(keys,MediaTests.seed_docx(self,upload,docx(para(text)),name='相同名称.docx'))
         with self.store._db() as c:
