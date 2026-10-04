@@ -91,6 +91,60 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertEqual(self.brief(ident)['state'],'review')
         self.assertIn('日期',self.brief(ident)['reason'])
 
+    def original_action_fixture(self,note,**changes):
+        keys=self.native_notice('action-guard')
+        ident=self.candidate(keys=keys,ident='action-guard')
+        self.seed_groups(keys=keys,note=note,uncertainties=[])
+        ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
+        value=dict(draft(title='事务：交回活动回执',goal=note,purpose='admin'),due='',existing_item_id=ident,
+                   basis=[dict(part='pdf:'+self.pdf+':1@'+ref,text=note)])
+        value.update(changes)
+        return ident,{'actions':[value]}
+
+    def test_original_inferred_date_must_agree_with_goal_date(self):
+        ident,reply=self.original_action_fixture('2026-02-13前交回活动回执。',goal='2026-02-12前交回活动回执。')
+        result,_=self.refresh(reply)
+        self.assertEqual((result['created'],self.item(ident)['state'],self.count('manual_tasks')),(0,'pending',0))
+        self.assertIn('日期',self.brief(ident)['reason'])
+
+    def test_original_admin_upload_cannot_swallow_required_learning(self):
+        ident,reply=self.original_action_fixture('英语第5课朗读两遍后上传录音。',title='提交录音',goal='录音上传班级区')
+        result,_=self.refresh(reply)
+        self.assertEqual((result['created'],self.item(ident)['state'],self.count('manual_tasks')),(0,'pending',0))
+        self.assertIn('学习',self.brief(ident)['reason'])
+
+    def test_original_new_action_cannot_bind_an_unproven_old_decision(self):
+        ident,reply=self.original_action_fixture('2026-02-13前交回活动回执。')
+        other=self.candidate(keys=self.native_notice('other-initial'),ident='old-decision',title='旧决定')
+        with self.store._db() as c:
+            c.execute('UPDATE agent_items SET evidence=?,state=? WHERE id=?',
+                      (self.item(ident)['evidence'],'dismissed',other))
+        before=self.item(other)
+        extra=dict(reply['actions'][0],existing_item_id=other,title='事务：领取用品',goal='领取用品。')
+        reply['actions'].append(extra)
+        result,_=self.refresh(reply)
+        self.assertEqual((result['failed'],self.count('manual_tasks'),self.item(other)),(1,0,before))
+        self.assertEqual(self.item(ident)['state'],'pending')
+
+    def test_original_basis_must_name_an_action_not_only_a_date(self):
+        ident,reply=self.original_action_fixture('2026-02-13前交回活动回执。')
+        reply['actions'][0]['basis'][0]['text']='2026-02-13'
+        result,_=self.refresh(reply)
+        self.assertEqual((result['failed'],self.count('manual_tasks'),self.item(ident)['state']),(1,0,'pending'))
+
+    def test_original_subset_sibling_change_discards_the_entire_round(self):
+        ident,reply=self.original_action_fixture('2026-02-13前交回活动回执。')
+        other=self.candidate(keys=self.native_notice('second-original'),ident='subset')
+        with self.store._db() as c:
+            both=json.loads(self.item(ident)['evidence'])+json.loads(self.item(other)['evidence'])
+            c.execute('UPDATE agent_items SET evidence=? WHERE id=?',(json.dumps(both),ident))
+        before=self.item(ident)
+        def model(messages):
+            with self.store._db() as c:c.execute("UPDATE agent_items SET state='dismissed' WHERE id=?",(other,))
+            return reply
+        result,_=self.refresh(model)
+        self.assertEqual((result['created'],self.item(ident),self.item(other)['state'],self.count('manual_tasks')),(0,before,'dismissed',0))
+
     def test_two_originals_require_both_complete_before_one_school_round(self):
         keys,reference=self.multi_originals()
         ident=self.candidate(keys=keys,ident='multi')
