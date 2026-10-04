@@ -81,7 +81,7 @@ async function startServer(){
  try{await eventually(async()=>{if(error)throw error;if(proc.exitCode!==null)throw Error('Demo exited: '+stderr);try{return(await fetch(url,{signal:AbortSignal.timeout(400)})).ok}catch{return false}},'isolated demo startup');return {url,stop}}
  catch(e){await stop();throw e}
 }
-const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWF8AAAAASUVORK5CYII=','base64');
+const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC','base64');
 (async()=>{
  let browser,server,page;const results=[];
  try{
