@@ -314,6 +314,7 @@ def _reference_brief(evidence):
         # Only a complete resource question can override a model proposal. A
         # request at the start says nothing about independent actions after it.
         # A resource link is not an extra assignment or read-page claim.
+        if len(text)>500:return False
         text=_URL.sub('',text).strip()
         material=r'课本|教材|页面|页|照片|资料|讲义|练习册|练习|作业|图片|观察记录|记录表|课件|文件'
         sending=r'(?:发(?:一?下|我(?:一下)?|到群(?:里)?|给我(?:一下)?)|拍(?:一?下|照|张(?:照片)?)|分享(?:一下)?|借(?:一下)?|提供(?:一下)?)'
@@ -1796,29 +1797,22 @@ def _school_dated_quote(quote, evidence, due, brief):
     # Shared completion/checking words cannot connect a paper date to reading.
     clean=lambda text:re.sub(r'\s+','',text).lower()
     actions=[r'朗读|跟读|读[一二两三四五六七八九十百0-9]+(?:遍|次)',
-             r'(?:完成|订正|做)[^。；;，,\n]{0,24}(?:练习卷|练习册|教材|作业本|试卷)']
+             r'(?:完成|订正|做)[^。；;，,\n]{0,24}(?:练习卷|练习册|教材|作业本|试卷)',
+             r'(?:签字|盖章|交回)[^。；;，,\n]{0,24}(?:回执|同意书|确认单|登记表)']
     def identity(text):
         text=clean(text)
         kinds={i for i,pattern in enumerate(actions) if re.search(pattern,text)}
-        objects=set(re.findall(r'unit\d+(?:[-–—]\d+)?|第[一二三四五六七八九十百0-9]+课|《[^》]{1,40}》|练习卷|练习册|教材|作业本|试卷',text))
+        objects=set(re.findall(r'unit\d+(?:[-–—]\d+)?|第[一二三四五六七八九十百0-9]+课|《[^》]{1,40}》|练习卷|练习册|教材|作业本|试卷|回执|同意书|确认单|登记表',text))
         return kinds,objects
     kinds,objects=identity(quote)
-    typed_action=len(kinds)==1 and bool(objects) and identity(brief['goal'])==(kinds,objects)
-    # An independently dated parent action may lack a reading/paper identity.
-    # Accept its date only when the full unrewritten action is uniquely quoted;
-    # this cannot lend a sibling's date to a paraphrase or a date-only fragment.
-    horizontal=lambda text:re.sub(r'[ \t\u3000]+','',text).lower()
-    literal_action=(horizontal(quote)==horizontal(brief['goal'])
-                    and not re.search(r'[。；;\n]',quote.rstrip('。；;\n'))
-                    and bool(re.search(r'签字|盖章|交回',quote)))
-    if not typed_action and not literal_action:return False
+    if len(kinds)!=1 or not objects or identity(brief['goal'])!=(kinds,objects):return False
     matches=[]
     for entry in evidence:
         text=entry['text'];start=0
         # A class noun (e.g. 练习卷) is not a paper identity. If several dated
         # clauses match this coarse object, it cannot identify which is ours.
         for clause in re.split(r'[。；;\n]',text):
-            if typed_action and identity(clause)==(kinds,objects):
+            if identity(clause)==(kinds,objects):
                 values=deadlines(clause,sent_day(entry.get('time','')))
                 if values and values!={due}:return False
         while (start:=text.find(quote,start))!=-1:
@@ -1831,7 +1825,7 @@ def _school_dated_quote(quote, evidence, due, brief):
                 stated=deadlines(brief['goal'],published)
                 if stated and stated!={due}:return False
             start=end
-    return bool(matches) and all(values=={due} for values in matches) and (typed_action or len(matches)==1)
+    return bool(matches) and all(values=={due} for values in matches) and (kinds!={2} or len(matches)==1)
 
 
 def _history_anchor(row, originals):
