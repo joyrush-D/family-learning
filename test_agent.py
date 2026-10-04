@@ -1007,6 +1007,24 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(plan['school_previous_policy'],old);self.assertIn('后发变化',plan['school_task']['reason'])
             self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
 
+    def test_legacy_admin_scope_rejects_a_mixed_global_instruction_in_another_named_correction(self):
+        old,key,fp,result=self._legacy_admin_rejection()
+        original='明天完成两项。第一项朗读课文。第二项：完成《桥的观察单》，A、B、C三栏都要做。'
+        for ending in ('观察单，所有学校事务无需完成','观察单所有学校事务无需完成'):
+            with self.store._db() as c:
+                c.execute('SAVEPOINT mixed_scope')
+                values=[dict(id='10',time='2026-10-03T16:10:00+08:00',kind='text',sender='虚构发布者',sender_id='synthetic-a',text=original,unread=False),
+                    json.loads(c.execute('SELECT payload FROM agent_messages WHERE id=?',('11',)).fetchone()[0]),
+                    dict(id='12',time='2026-10-04T08:05:00+08:00',kind='text',sender='虚构发布者',sender_id='synthetic-a',text='更正10月3日16:10发布的第二项《桥的观察单》：A、B栏仍必做；C栏改为选做，不做C栏也算完成'+ending+'。其余要求和原期限不变。',unread=False)]
+                c.execute('DELETE FROM agent_messages')
+                for value in values:c.execute('INSERT INTO agent_messages(source_id,id,payload,processed) VALUES(?,?,?,1)',(self.source['id'],value['id'],agent._json(value)))
+                new_key='messages:'+agent._hash([self.source['id'],[v['id'] for v in values]])[:40];new_fp=agent._hash(dict(school_learning_policy=9,messages=values))
+                c.execute('UPDATE agent_jobs SET id=?,fingerprint=? WHERE id=?',(new_key,new_fp,key))
+                changed=dict(old,id='agent-'+agent._hash([new_key,new_fp,0])[:32],job_id=new_key)
+                evidence,_=agent._school_material(self.store,c,changed)
+                self.assertIsNone(agent._school_legacy_policy_scope(self.store,c,changed,evidence))
+                c.execute('ROLLBACK TO mixed_scope');c.execute('RELEASE mixed_scope')
+
     def test_legacy_correction_does_not_ignore_an_ambiguous_number_only_supplement(self):
         row,key,fp,evidence=self._legacy_initial_correction()
         payload=self.payload(expected='12',cursor='13');payload['messages']=[dict(id='13',time='2026-10-04T09:00:00+08:00',kind='text',sender='虚构发布者',sender_id='synthetic-a',text='补发第二项：A栏填写两种方法并写单位。',unread=False)]

@@ -2141,7 +2141,7 @@ def _school_legacy_policy_scope(store,c,row,evidence):
         source,values=matches[row['job_id']]
         batch,_=_school_material(store,c,dict(row,evidence=_json([dict(ref='message:'+source['id']+':'+v['id']) for v in values])))
         cited={e['ref'] for e in evidence};publishers={_publisher(source['id'],e) for e in evidence}
-        if len(publishers)!=1 or not all(e['kind']=='text' and not e['unread'] and not _needs_task_details(e['text']) for e in evidence):return None
+        if len(publishers)!=1 or not next(iter(publishers)) or not all(e['kind']=='text' and not e['unread'] and not _needs_task_details(e['text']) for e in evidence):return None
         stamps=[dt.datetime.fromisoformat(e['time']) for e in evidence]
         if any(v.tzinfo is None for v in stamps):return None
         start=min(stamps);publisher=next(iter(publishers))
@@ -2156,8 +2156,8 @@ def _school_legacy_policy_scope(store,c,row,evidence):
             # The sole unrelated-message exception proves its original time, ordinal, object and entire
             # local column-only change. A different book title alone never proves independence.
             proof=_school_first_batch_correction(dict(change='update',target_id='',title=entry['text']),batch)
-            local=re.fullmatch(r'更正[^\n]+?发布的第[一二三四五六七八九十0-9]+项《[^》\n]{2,40}》[:：](?:[A-Z](?:、[A-Z])*栏仍必做[；;])?[A-Z]栏改为选做[，,]不做[A-Z]栏也算完成[^。；;\n]+[。；;]其余要求和原期限不变[。]?',entry['text'].strip())
-            if (not proof or not local or entry['kind']!='text' or entry['unread'] or proof['correction_ref']!=entry['ref']
+            local=re.fullmatch(r'更正[^\n]+?发布的第[一二三四五六七八九十0-9]+项《[^》\n]{2,40}》[:：](?:[A-Z](?:、[A-Z])*栏仍必做[；;])?[A-Z]栏改为选做[，,]不做[A-Z]栏也算完成([^\s，,、。；;！!？?]{2,40})[。；;]其余要求和原期限不变[。]?',entry['text'].strip())
+            if (not proof or not local or not proof['object'][1:-1].endswith(local[1]) or entry['kind']!='text' or entry['unread'] or proof['correction_ref']!=entry['ref']
                     or proof['original_ref'] in cited or any(proof['object'] in e['text'] for e in evidence)
                     or c.execute('SELECT 1 FROM agent_message_attachments WHERE source_id=? AND message_id=? LIMIT 1',(source['id'],entry['id'])).fetchone()):return None
         _,known=_school_original_known(store,c,row)
