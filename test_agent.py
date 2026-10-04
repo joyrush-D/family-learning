@@ -633,7 +633,7 @@ class AgentTests(unittest.TestCase):
 
     def test_negated_child_action_parent_notice_is_collected_once_with_original_deadline(self):
         self.now=dt.datetime(2026,10,4,10,tzinfo=agent.TZ)
-        text='请家长后天核对学校通讯录中的紧急联系电话；有误修改，无误点“已核对”。不要在群里发电话号码或核对截图，不用让孩子抄写。'
+        text='请家长后天完成学校通讯录中的紧急联系电话核对；有误修改，无误点“已核对”。不要在群里发电话号码或核对截图，不用让孩子抄写。'
         payload=self.payload();payload['messages'][0].update(text=text,time='2026-10-03T16:20:00+08:00')
         self.store.ingest(payload)
         ref='message:'+self.source['id']+':11';title='家长事务：核对紧急联系电话'
