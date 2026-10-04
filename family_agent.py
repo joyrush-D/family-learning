@@ -2822,7 +2822,10 @@ def _school_effective_conditions(parts,anchors,changes,proof):
             raise AgentError('后发条件未明确覆盖被替换栏目，原完整标准保留')
         if equivalent:
             obj=proof['object'][1:-1];names={proof['object'],obj}
-            if '的' in obj and len(obj.rsplit('的',1)[1])>=2:names.add(obj.rsplit('的',1)[1])
+            alias=obj.rsplit('的',1)[1] if '的' in obj else ''
+            others={name for p in parts for name in re.findall(r'《([^》\n]{2,40})》',p['text']) if name!=obj}
+            collision=any(alias==name or alias==name.rsplit('的',1)[-1] for name in others)
+            if len(alias)>=2 and not re.search(r'所有|全部|其他|其它|一切|各项',alias) and not collision:names.add(alias)
             if equivalent['object'] not in names or any(found.get(k)!='选做' for k in re.findall(r'[A-Z]',equivalent['labels'])):
                 raise AgentError('不做也算完成只能对应本项明确选做栏目，必做和其他行动保留')
         if statuses and any(k in statuses and statuses[k]!=v for k,v in found.items()):raise AgentError('本项更正条件互相冲突')
