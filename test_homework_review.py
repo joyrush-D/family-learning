@@ -119,6 +119,10 @@ def duplicate_question_checks():
         assert draft['items']==2 and draft['wrong_items']==1 and draft['unknown_items']==0
         assert [q['label'] for q in draft['questions']]==list(labels)
         assert [q['judgment'] for q in draft['questions']]==['correct','incorrect']
+    unknown=question|dict(label='题号未明 · 虚构照片第1页',question='',student_answer='',answer='',
+        judgment='unknown',uncertainty='卷别或题号未能辨认，请补原题。')
+    draft=generate([unknown]);assert draft['items']==1 and draft['unknown_items']==1 and draft['wrong_items']==0
+    assert draft['questions'][0]['label']==unknown['label'],'an explicit unread scope does not invent a question number'
     return calls
 
 
