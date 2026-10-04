@@ -834,6 +834,12 @@ class AgentTests(unittest.TestCase):
             kind='text',sender='虚构发布者',sender_id='synthetic-a',text=original,unread=False),
             dict(id='12',time='2026-10-04T08:05:00+08:00',kind='text',sender='虚构发布者',sender_id='synthetic-a',text=correction,unread=False)]
         if duplicate:payload['messages'].append(dict(payload['messages'][0],id='13',time='2026-10-03T16:10:30+08:00'))
+        if naive:
+            with self.assertRaises(agent.AgentError):self.store.ingest(payload)
+            with self.app.connect() as c:
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_messages').fetchone()[0],0)
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items').fetchone()[0],0)
+            return
         self.store.ingest(payload)
         with self.app.connect() as c:values=[json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
         evidence=[dict(ref='message:'+self.source['id']+':'+v['id'],text=v['text'],time=v['time'],kind=v['kind'],

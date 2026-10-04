@@ -1953,7 +1953,7 @@ def _school_first_batch_correction(brief, evidence):
         if not match or change.get('content_incomplete') or change.get('kind','text') not in ('text','quote'):continue
         if not re.search(r'[A-Z]栏(?:仍|改为|为|是)?选做',change['text']):continue
         if re.search(r'取消|不再(?:做|完成)|全部(?:改为|为)?选做|整项(?:改为|为)?选做',change['text']):continue
-        publisher=change.get('publisher','')
+        publisher=change.get('publisher') or _publisher(change.get('ref','')[8:].rsplit(':',1)[0],change)
         if not publisher:continue
         try:
             changed=dt.datetime.fromisoformat(change['time'])
@@ -1962,7 +1962,8 @@ def _school_first_batch_correction(brief, evidence):
         except (KeyError,ValueError,TypeError):continue
         originals=[]
         for origin in evidence:
-            if origin is change or origin.get('publisher')!=publisher or origin.get('content_incomplete') or origin.get('kind','text') not in ('text','quote'):continue
+            origin_publisher=origin.get('publisher') or _publisher(origin.get('ref','')[8:].rsplit(':',1)[0],origin)
+            if origin is change or origin_publisher!=publisher or origin.get('content_incomplete') or origin.get('kind','text') not in ('text','quote'):continue
             try:
                 stamp=dt.datetime.fromisoformat(origin['time'])
                 if stamp.tzinfo is None:continue
