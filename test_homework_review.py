@@ -85,6 +85,41 @@ def output_contract_checks():
     return calls
 
 
+def duplicate_question_checks():
+    """One visible question identity cannot carry two counts or opposite grades."""
+    calls=0
+    question=item(label='虚构甲卷第1题',question='虚构第1题：2+3=?',student_answer='5',answer='教师参考：5')
+    def generate(questions):
+        nonlocal calls
+        raw=dict(items=questions,coverage='仅核本次明确的卷别与题号。')
+        original=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            try:
+                return family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=True,
+                    reference_documents=[dict(name='synthetic-two-papers.txt',text='虚构甲卷与乙卷第1题均为5。')])
+            finally:
+                assert model.call_count==1 and raw==original,'rejected replies must keep the original transport intact'
+                calls+=1
+    duplicates=[
+        [question,question.copy()],
+        [question,question|dict(judgment='incorrect',error_reason='本题需要订正。')],
+        [question,question|dict(label='  虚构甲卷第1题\n\t  ')],
+        [question,question|dict(question='另一道题却用了相同卷别题号。',student_answer='6',answer='教师参考：6')],
+    ]
+    for questions in duplicates:
+        try: generate(questions)
+        except family_llm.LLMDraftError as error:
+            assert '重复' in str(error) and '题' in str(error)
+        else: raise AssertionError('a repeated question identity must not become two visible judgments')
+    for labels in (('虚构甲卷第1题','虚构乙卷第1题'),('虚构甲卷第1题（1）','虚构甲卷第1题（2）')):
+        questions=[question|dict(label=labels[0]),question|dict(label=labels[1],student_answer='4',judgment='incorrect',error_reason='作答4与教师参考5不同。')]
+        draft=generate(questions)
+        assert draft['items']==2 and draft['wrong_items']==1 and draft['unknown_items']==0
+        assert [q['label'] for q in draft['questions']]==list(labels)
+        assert [q['judgment'] for q in draft['questions']]==['correct','incorrect']
+    return calls
+
+
 def summary_consistency_checks():
     """A program downgrade must reach both summaries without rewriting transport evidence."""
     calls=0
@@ -219,7 +254,7 @@ def summary_http_checks(app,upload):
 
 
 def run():
-    contract_cases=output_contract_checks()+summary_consistency_checks()
+    contract_cases=output_contract_checks()+duplicate_question_checks()+summary_consistency_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:
         root=Path(temporary);data=root/'private';data.mkdir()
         with patch.dict(os.environ,{'FAMILY_DATA':str(data)}):
