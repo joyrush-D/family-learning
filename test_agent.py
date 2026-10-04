@@ -687,6 +687,33 @@ class AgentTests(unittest.TestCase):
             self.assertNotIn('school_learning',item['plan'])
             if state=='review':self.assertIn('学习活动',brief['reason'])
 
+    def test_first_batch_correction_and_unknown_prior_task_keep_distinct_change_guards(self):
+        original='明天完成《桥的观察单》，A、B、C栏必做。'
+        correction='更正第二项《桥的观察单》：A、B必做，C选做，不做C也算完成；原期限不变。'
+        ref1='message:synthetic-correction:m1';ref2='message:synthetic-correction:m2'
+        evidence=[dict(ref=ref1,text=original,time='2026-10-03T16:10:00+08:00',publisher='publisher:synthetic-a',content_incomplete=False),
+                  dict(ref=ref2,text=correction,time='2026-10-04T08:05:00+08:00',publisher='publisher:synthetic-a',content_incomplete=False)]
+        base=school_proposal(title_quote=original,task_title='语文：完成《桥的观察单》',
+            task_goal='完成《桥的观察单》：A、B必做，C选做，不做C也算完成。',task_state='ready',
+            task_purpose='learning',learning_subject='语文',due='2026-10-04',evidence=[dict(ref=ref1),dict(ref=ref2)])
+        for label,change,target,tasks,state in (
+                ('first-batch','new','',[],'ready'),
+                ('unresolved-old','update','',[],'review'),
+                ('saved-task','update','saved-task',[dict(id='saved-task')],'review'),
+                ('cancel','cancel','',[],'review')):
+            value=dict(base,task_change=change,task_target_id=target)
+            with self.subTest(label=label),patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[value])):
+                item,=agent._select('school',evidence,school_goals=[],school_tasks=tasks,as_of='2026-10-04')
+                brief=item['plan']['school_task']
+                self.assertEqual((brief['change'],brief['target_id'],brief['state']),(change,target,state))
+                self.assertEqual(item['body'],base['task_goal'])
+                self.assertEqual([q['text'] for q in item['evidence']],[original,correction])
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[dict(base,
+                title_quote=correction,due='',task_change='update',evidence=[dict(ref=ref2)])])):
+            item,=agent._select('school',evidence[1:],school_goals=[],school_tasks=[],as_of='2026-10-04')
+        self.assertEqual((item['plan']['school_task']['change'],item['plan']['school_task']['state']),('update','review'))
+        self.assertEqual(item['due'],'')
+
     def _school_batch_failure_recovers(self, failure):
         payload=self.payload(cursor='16')
         payload['messages']=[dict(id=str(i),time=self.now.isoformat(),kind='text',sender='示例发布者',
