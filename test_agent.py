@@ -2333,6 +2333,42 @@ class AgentTests(unittest.TestCase):
         other=[dict(text=quote,time=self.now.isoformat()),dict(text=quote,time=self.now.isoformat())]
         self.assertFalse(agent._school_dated_quote(quote,other,'2026-02-13',dict(goal=quote)))
 
+    def test_dated_admin_quote_distinguishes_named_receipts(self):
+        quote='家长事务：2026-02-13签字交回防溺水回执，无需盖章。'
+        evidence=[dict(text='2026-02-11朗读第5课两遍。\n'+quote,time=self.now.isoformat())]
+        correct='签字交回防溺水回执，无需盖章。'
+        wrong='签字交回外出活动回执，无需盖章。'
+        self.assertTrue(agent._school_dated_quote(quote,evidence,'2026-02-13',dict(goal=correct)),
+                        'the same named receipt may omit the administrative and date labels')
+        self.assertFalse(agent._school_dated_quote(quote,evidence,'2026-02-13',dict(goal=wrong)),
+                         'a shared receipt category cannot ground a different named receipt')
+
+    def test_dated_admin_object_mismatch_never_auto_collects_wrong_receipt(self):
+        reading='语文作业：2026-02-11朗读第5课两遍。'
+        quote='家长事务：2026-02-13签字交回防溺水回执，无需盖章。'
+        text='谁有活动回执文件，发一下。\n'+reading+'\n'+quote
+        cases=[('事务：防溺水回执','签字交回防溺水回执，无需盖章。','ready'),
+               ('事务：外出活动回执','签字交回外出活动回执，无需盖章。','review')]
+        for title,goal,state in cases:
+            with self.subTest(goal=goal):
+                items=self._resource_request_selection(text,[
+                    dict(title_quote=reading,due='2026-02-11',learning_subject='语文',task_title='语文：朗读第5课',
+                         task_goal=reading,task_state='ready',task_reason='固定正确的独立朗读。',task_purpose='learning'),
+                    dict(title_quote=quote,due='2026-02-13',task_title=title,task_goal=goal,task_state='ready',
+                         task_reason='固定行政回执，用实际对象核对日期身份。',task_purpose='admin')])
+                self.assertEqual([i['plan']['school_task']['state'] for i in items],['ready',state])
+                self.assertEqual((items[0]['body'],items[0]['due']),(reading,'2026-02-11'))
+                self.assertEqual((items[1]['title'],items[1]['body'],items[1]['due']),(title,goal,'2026-02-13'))
+        self.assertNotIn('外出活动回执',text,'the teacher never stated the incorrectly substituted receipt')
+        tasks=self._collect_resource_request_items(text,items)
+        self.assertEqual([(t['title'],t['action'],t['due']) for t in tasks],
+                         [('语文：朗读第5课',reading,'2026-02-11')])
+        with self.app.connect() as c:
+            pending=c.execute("SELECT state,task_id,body,plan FROM agent_items WHERE title='事务：外出活动回执'").fetchone()
+            self.assertEqual((pending['state'],pending['task_id'],pending['body']),('pending','',cases[1][1]))
+            self.assertEqual(json.loads(pending['plan'])['school_task']['state'],'review')
+            self.assertIn('原通知含多个日期',json.loads(pending['plan'])['school_task']['reason'])
+
     def test_resource_request_unread_or_unknown_material_keeps_review(self):
         cases=[('谁有语文课本照片，发一下。',True,True,'learning'),
                ('谁有数学作业照片，发一下。其他要求见未读图片。',False,True,'learning'),
