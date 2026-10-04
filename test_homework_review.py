@@ -26,7 +26,66 @@ def refused(fn,code=None,status=None):
     else: raise AssertionError('expected refusal')
 
 
+def output_contract_checks():
+    """Only supplied synthetic transport replies; no configuration or model access."""
+    calls=0
+    def draft_for(question,coverage='仅按甲卷第1题的教师参考比较；原题要求未核。',*,teacher=True):
+        nonlocal calls
+        raw=dict(items=[question],coverage=coverage)
+        original=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            try:
+                return family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=True,
+                    reference_documents=[dict(name='synthetic-paper-a-teacher.txt',text='甲卷 第1题 B')] if teacher else [])
+            finally:
+                assert model.call_count==1
+                assert raw==original,'normalizing a draft must preserve its supplied transport reply'
+                calls+=1
+    def rejected(question,coverage,*,teacher=True):
+        try: draft_for(question,coverage,teacher=teacher)
+        except family_llm.LLMDraftError: pass
+        else: raise AssertionError('an unsupported draft or coverage must still be rejected')
+
+    correct=item(label='甲卷第1题')
+    known_wrong=item(label='甲卷第1题',student_answer='C',judgment='incorrect',
+        error_reason='本卷第1题作答C与教师参考B不同。')
+    d=draft_for(correct)
+    assert d['questions'][0]['judgment']=='correct' and d['wrong_items']==d['unknown_items']==0
+    for steps in ('','先独立尝试；补齐原题后再核对解题过程。'):
+        d=draft_for(known_wrong|dict(steps=steps))
+        q=d['questions'][0]
+        assert q['judgment']=='incorrect' and d['wrong_items']==1 and d['unknown_items']==0
+        assert q['error_reason']==known_wrong['error_reason'] and q['steps']==steps
+        assert q['question']==q['possible_cause']==q['uncertainty']=='','do not invent a question, cause or prompt'
+        assert '需订正1题' in d['text'] and known_wrong['error_reason'] in d['text']
+    for changes in (dict(uncertainty='教师参考与可见题面冲突，待核对'),dict(error_reason=''),
+                    dict(student_answer=''),dict(answer=''),dict(question_kind='subjective'),
+                    dict(question_kind='unknown'),dict(judgment='unknown',error_reason='',steps='无依据的提示')):
+        d=draft_for(known_wrong|changes)
+        assert d['questions'][0]['judgment']=='unknown' and d['wrong_items']==0 and d['unknown_items']==1
+        assert not d['questions'][0]['error_reason'] and not d['questions'][0]['steps']
+    rejected(known_wrong,'原题未提供；也没有本题教师参考。',teacher=False)
+
+    for coverage,expected in (('甲卷第1题；第2页未读','甲卷第1题；第2页未读'),
+                              ('甲卷第1题\n第2页未读','甲卷第1题\n第2页未读'),
+                              ('甲卷第1题\r\n第2页未读','甲卷第1题\n第2页未读'),
+                              ('甲卷第1题\r第2页未读','甲卷第1题\n第2页未读'),
+                              ('甲卷第1题\t第2页未读','甲卷第1题 第2页未读'),
+                              ('甲卷第1题\r\n\t第2页未读','甲卷第1题\n 第2页未读')):
+        d=draft_for(correct,coverage)
+        assert d['coverage']==expected and expected in d['text']
+        assert d['questions'][0]['judgment']=='correct' and d['unknown_items']==0
+    assert len(draft_for(correct,'范'*599+'\t')['coverage'])==600
+    # A 601-character raw reply cannot evade the schema's 600 limit by CRLF normalization.
+    for coverage in (None,7,[],dict(text='不能替代字符串'),'范'*601,'范'*599+'\r\n'):
+        rejected(correct,coverage)
+    for code in (*[n for n in range(32) if n not in (9,10,13)],127):
+        rejected(correct,'甲卷第1题'+chr(code)+'第2页未读')
+    return calls
+
+
 def run():
+    contract_cases=output_contract_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:
         root=Path(temporary);data=root/'private';data.mkdir()
         with patch.dict(os.environ,{'FAMILY_DATA':str(data)}):
@@ -508,7 +567,7 @@ def run():
                     refused(lambda:app.homework_review_draft(linked_request|dict(record_id=derived['record_id'],expected_created=None)),
                         'review_source_not_allowed',403)
                     assert model.call_count==0
-    print('homework review synthetic checks passed')
+    print('homework review synthetic checks passed (%d output contract cases)'%contract_cases)
 
 
 if __name__=='__main__': run()
