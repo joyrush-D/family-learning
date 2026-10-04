@@ -1588,9 +1588,13 @@ function schoolPdfProgress(p){
 }
 // Show the saved preparation beside its task. Reading never schedules a model, collection or record write.
 function taskSchoolMaterialHTML(view){
- const p=view.pdf_material,d=view.material_draft,pages=Array.isArray(view.pages)?view.pages:[];
+ const p=view.pdf_material,d=view.material_draft,action=view.action_material,scoped=action?.scoped===true,pages=!scoped&&Array.isArray(view.pages)?view.pages:[];
  let preparation='';
- if(p){
+ if(scoped){
+  if(!Array.isArray(action.quotes)||!action.quotes.length||action.quotes.some(q=>!q||typeof q.text!=='string'||!q.text.trim()||!Array.isArray(q.upload_ids)||!Array.isArray(q.pages)||q.pages.some(n=>!Number.isInteger(n)||n<1)))throw Error('本项资料依据暂时无法核对，请重试。');
+  preparation=`<section data-task-material-state="ready" data-task-material-scope="action"><strong>AI 已整理 · 本项依据</strong>${action.quotes.map(q=>{const names=q.upload_ids.map(id=>view.attachments.find(a=>a.id===id)?.name).filter(Boolean);return `<section class="task-material-summary">${names.length?`<p class="small muted">${names.map(esc).join('、')}</p>`:''}${q.pages.length?`<p class="small" data-task-material-pages>第 ${q.pages.map(n=>esc(String(n))).join('、')} 页</p>`:''}<p class="source task-material-text">${esc(q.text)}</p></section>`}).join('')}</section>`;
+  preparation+=schoolPdfDocuments(p).map(doc=>`<section data-task-material-state="${esc(doc.state||'unknown')}" data-school-pdf-document="${esc(doc.job_id||doc.upload_id||'')}">${doc.name?`<h4>${esc(doc.name)}</h4>`:''}<p class="small muted">原件整理：${esc(schoolPdfProgress(doc))}</p>${doc.conversion?`<p class="small muted">${esc(doc.conversion)}</p>`:doc.original&&doc.original!=='pdf'?'<p class="small muted">页码为本机转换后页码，请对照原文件；动画、声音、备注或表格公式等未完整读取。</p>':''}${doc.state==='error'&&doc.explanation?`<p class="small muted">${esc(doc.explanation)}</p>`:''}</section>`).join('');
+ }else if(p){
   preparation=schoolPdfDocuments(p).map(doc=>{
    const done=Array.isArray(doc.processed_pages)?doc.processed_pages:[],left=Array.isArray(doc.pending_pages)?doc.pending_pages:[],batches=Array.isArray(doc.batches)?doc.batches:[],total=Number.isInteger(doc.page_count)?doc.page_count:null;
    return `<section data-task-material-state="${esc(doc.state||'unknown')}" data-school-pdf-document="${esc(doc.job_id||doc.upload_id||'')}">${doc.name?`<h4>${esc(doc.name)}</h4>`:''}<strong>${batches.length?'AI 已整理':'尚未整理完成'}${total===null?' · 总页数待核对':` · ${done.length} / ${total} 页`}</strong>${left.length?`<p class="small" data-task-material-unread>未读页：${left.map(n=>esc(String(n))).join('、')}</p>`:''}${doc.explanation&&(!batches.length||doc.state==='error')?`<p class="small muted">${esc(doc.explanation)}</p>`:''}${doc.conversion?`<p class="small muted">${esc(doc.conversion)}</p>`:doc.original&&doc.original!=='pdf'?'<p class="small muted">页码为本机转换后页码，请对照原文件；动画、声音、备注或表格公式等未完整读取。</p>':''}${batches.map(b=>`<section class="task-material-summary"><h4>第 ${(b.pages||[]).map(n=>esc(String(n))).join('、')} 页 · ${esc(b.draft?.title||'已保存整理')}</h4><p class="source task-material-text">${esc(b.draft?.note||'整理文字待核对')}</p>${b.draft?.uncertainties?.length?`<p class="small">待补充：${b.draft.uncertainties.map(esc).join('；')}</p>`:''}</section>`).join('')}</section>`;
@@ -1625,9 +1629,11 @@ function drawTaskSchoolResources(task){
   const read=async()=>{
    if(row.dataset.loading)return;row.dataset.loading='true';row.innerHTML='<p role="status">正在读取已保存的资料整理…</p>';
    try{
-    const response=await apiFetch('/api/agent/message?'+new URLSearchParams(identity),{signal:AbortSignal.timeout(12000)}),out=await response.json();
+    const request=task.school_origin===true?{...identity,task_id:task.id}:identity;
+    const response=await apiFetch('/api/agent/message?'+new URLSearchParams(request),{signal:AbortSignal.timeout(12000)}),out=await response.json();
     if(!response.ok)throw Error(out.error||'资料整理暂不可读取');
     const view=verifySchoolOriginal(out,{identity});
+    if(task.school_origin===true&&view.task_id!==task.id)throw Error('本项资料归属暂时无法核对，请重试。');
     if(!row.isConnected||taskFeedbackContext?.task_id!==task.id||taskFeedbackContext.child!==task.child)return;
     row.innerHTML=taskSchoolMaterialHTML(view);
    }catch(error){if(row.isConnected){row.innerHTML=`<p class="error" role="status">${esc(error.message||'读取失败')}；作业与已保存反馈保留。</p><button type="button">重试读取资料</button>`;row.querySelector('button').onclick=read}}

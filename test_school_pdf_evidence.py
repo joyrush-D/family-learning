@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import family_agent as agent
 import family_llm
+import app
 import family_pdf_material as pdfm
 import test_pdf
 import test_pdf_material
@@ -169,6 +170,59 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         rows=self.rows('SELECT evidence,plan,due FROM agent_items ORDER BY due')
         self.assertEqual([[e['ref'] for e in json.loads(r[0])] for r in rows],[[ref_a],[ref_b]])
         self.assertEqual([[d['upload_id'] for d in json.loads(r[1])['school_task']['pdf_evidence']['documents']] for r in rows],[[self.pdf],[paper_b]])
+
+    def scoped_original_tasks(self):
+        keys=self.native_notice('scoped-original')
+        with self.store._db() as c:
+            raw=json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
+                                    (keys['source_id'],keys['message_id'])).fetchone()[0])
+            c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
+                      (json.dumps(dict(raw,text='要求见附件。')),keys['source_id'],keys['message_id']))
+        receipt_file=self.seed_pdf('b'*32,name='虚构独立回执.pdf');self.link(keys,receipt_file)
+        math='数学：2026-02-12前完成练习卷第1至11页，做完检查。'
+        receipt='2026-02-13前签字交回独立活动回执。'
+        self.seed_groups(keys=keys,note=math,uncertainties=[],upload_id=self.pdf)
+        self.seed_groups(keys=keys,note=receipt,uncertainties=[],upload_id=receipt_file)
+        ident=self.candidate(keys=keys,ident='scoped-original')
+        ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
+        reply={'actions':[
+            dict(draft(goal=math),due='2026-02-12',existing_item_id=ident,basis=[dict(part='pdf:'+self.pdf+':1@'+ref,text=math)]),
+            dict(draft(title='事务：签字交回活动回执',goal=receipt,purpose='admin'),due='2026-02-13',existing_item_id='',basis=[dict(part='pdf:'+receipt_file+':1@'+ref,text=receipt)])]}
+        result,_=self.refresh(reply);self.assertEqual(result,dict(used=1,failed=0,created=2))
+        return keys,ident,receipt_file
+
+    def test_same_message_originals_are_scoped_for_task_reading_print_and_check(self):
+        keys,ident,receipt_file=self.scoped_original_tasks();homework=self.item(ident)['task_id']
+        before=self.rows('SELECT * FROM records')
+        view=self.store.message(dict(keys,task_id=homework),app.upload_info)
+        self.assertEqual((view['task_id'],[u['id'] for u in view['attachments']]),(homework,[self.pdf]))
+        self.assertEqual([d['upload_id'] for d in view['pdf_material']['documents']],[self.pdf])
+        self.assertTrue(all('回执' not in q['text'] for q in view['action_material']['quotes']))
+        with patch.object(agent.Store,'_config',return_value=self.store._config()):
+            with self.app.connect() as c:
+                context=app.homework_material_context(c,homework)
+            self.assertEqual(set(context['allowed']),{self.pdf})
+            with self.assertRaises(app.family_print.PrintError):
+                app.homework_print_sources(dict(task_id=homework,question_sources=[dict(type='upload',id=receipt_file)]))
+        full=self.store.message(keys,app.upload_info)
+        self.assertEqual({u['id'] for u in full['attachments']},{self.pdf,receipt_file})
+        self.assertEqual(self.rows('SELECT * FROM records'),before)
+        other=next(r[0] for r in self.rows('SELECT task_id FROM agent_items WHERE task_id!=?',homework))
+        receipt=self.store.message(dict(keys,task_id=other),app.upload_info)
+        self.assertEqual([u['id'] for u in receipt['attachments']],[receipt_file])
+
+    def test_scoped_original_refuses_foreign_task_and_detached_anchor(self):
+        keys,ident,receipt_file=self.scoped_original_tasks();task_id=self.item(ident)['task_id']
+        foreign=app.new_task(dict(child='示例乙',title='虚构其他孩子作业',category='homework'))
+        with self.assertRaises(agent.AgentError):self.store.message(dict(keys,task_id=foreign['id']),app.upload_info)
+        other=self.native_notice('unrelated-message')
+        with self.assertRaises(agent.AgentError):self.store.message(dict(other,task_id=task_id),app.upload_info)
+        self.link(keys,self.pdf,action=DETACH)
+        with self.assertRaises(agent.AgentError):self.store.message(dict(keys,task_id=task_id),app.upload_info)
+        with patch.object(agent.Store,'_config',return_value=self.store._config()):
+            with self.app.connect() as c:context=app.homework_material_context(c,task_id)
+        self.assertTrue(context['school_error']);self.assertEqual(context['allowed'],{})
+        self.assertEqual(self.count('records'),0)
 
     def test_two_originals_require_both_complete_before_one_school_round(self):
         keys,reference=self.multi_originals()

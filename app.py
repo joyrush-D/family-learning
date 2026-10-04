@@ -961,6 +961,7 @@ def homework_material_context(c,task_id,*,answer=None):
         try:
             import family_media
             store=agent_store(read_only=True)
+            original=None
             if task['source'].startswith('Agent建议:'):
                 original=family_agent._school_origin(store,c,task,child['id'])
                 plan=json.loads(original['plan'])
@@ -980,6 +981,8 @@ def homework_material_context(c,task_id,*,answer=None):
                 source,message=store._message_context(c,dict(child_id=child['id'],source_id=key[0],message_id=key[1]))
                 family_media._authorized(store,c,source,message)
                 ids=[r['upload_id'] for r in c.execute('SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=? ORDER BY upload_id',key)]
+                scoped=family_agent.school_original_upload_ids(store,c,original,'message:'+key[0]+':'+key[1],ids) if original is not None else None
+                if scoped is not None: ids=scoped
                 bindings.append([source,message,ids])
                 for ident in ids:
                     store._message_upload(c,child['id'],ident);add(ident,'school')
