@@ -103,7 +103,7 @@ class HomeworkReviewTextTests(unittest.TestCase):
                  steps='独立重算，再核对5。',uncertainty=''),
             dict(label='虚构甲卷第2题',question='1+1=?',question_kind='objective',student_answer='2',
                  answer='教师参考：2',judgment='correct',error_reason='',possible_cause='',steps='',uncertainty=''),
-            dict(label='虚构甲卷第3题',question='',question_kind='unknown',student_answer='',
+            dict(label='虚构甲卷第3题',question='5+1=?',question_kind='objective',student_answer='',
                  answer='',judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty='本次未提供作答。')])
         original=json.loads(json.dumps(raw));scope=['虚构甲卷.pdf：已读取第1页；第2页未读。']
         with patch.object(family_llm,'_chat_json',return_value=raw):
