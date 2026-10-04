@@ -75,6 +75,69 @@ for _name in [n for n in dir(test_media.MediaTests) if n.startswith('test_')]:
 
 
 class PdfMaterialTests(Base):
+    def test_complete_legacy_pages_report_missing_standards_and_failed_upgrade(self):
+        keys=self.school_fragment('虚构PDF原件，完整要求尚未整理。')
+        ident=self.seed_pdf('a'*32);self.link(keys,ident)
+        ref='message:'+keys['source_id']+':'+keys['message_id']
+        self.store._save('synthetic-legacy','fixture',[dict(child_id='child-1',kind='school',title='待整理原件',
+            body=agent.FOCUS['school'],evidence=[dict(ref=ref)])],self.now)
+        with self.store._db() as c:
+            source,message=self.store._message_context(c,keys)
+            fp=pdfm.pdf_input(self.store,c,source,message)['fingerprint']
+            for pages in BATCHES:
+                c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?)',
+                    (source['id'],message['id'],fp,pages[0],json.dumps(pages),11,json.dumps(dict(kind='school_material',**DRAFT)),self.now.isoformat()))
+        old=self.rows('SELECT * FROM agent_pdf_material')
+        shown=self.view(keys)
+        self.assertEqual((shown['complete'],shown['requirements_complete'],shown['processed_pages']),
+                         (True,False,list(range(1,12))))
+        self.assertIn('完整行动与完成标准仍待整理',shown['explanation'])
+        with renderer(),page_model(family_llm.LLMDraftError('虚构升级失败')):
+            self.assertEqual(pdfm.prepare(self.store,self.now),dict(used=1,failed=1))
+        self.assertEqual((self.view(keys)['state'],self.view(keys)['requirements_complete']),('error',False))
+        self.assertIn('暂未成功',self.view(keys)['explanation'])
+        self.assertEqual(self.rows('SELECT * FROM agent_pdf_material'),old)
+        self.assertEqual(self.rows('SELECT * FROM manual_tasks'),[])
+
+    def test_background_cannot_consume_complete_later_page_requirements(self):
+        requirement='数学：2026-02-12前完成第1至3题，第4题选做；写明单位并检查，无需家长签字。'
+        material=[dict(ref='message:synthetic:1',fingerprint='synthetic',upload_id='a'*32,name='虚构完整要求.pdf',
+            page_count=7,batches=[dict(pages=[1,2,3],draft=dict(title='背景',note='背景'*1750,uncertainties=[],
+                originals=[dict(requirements=[])]),updated='synthetic'),
+                dict(pages=[4,5,6],draft=dict(title='背景二',note='背景'*1750,uncertainties=[],originals=[dict(requirements=[])]),updated='synthetic'),
+                dict(pages=[7],draft=dict(title='完整要求',note='后页标准',uncertainties=[],
+                    originals=[dict(requirements=[requirement])]),updated='synthetic')])]
+        evidence=agent._pdf_evidence(material)
+        self.assertTrue(evidence['requirements_complete'])
+        self.assertEqual(evidence['model'][0]['groups'][2]['requirements'],[requirement])
+        self.assertTrue(evidence['model'][0]['groups'][1]['text_truncated'])
+        self.assertEqual(evidence['documents'][0]['truncated'],[])
+        parts=agent._school_original_parts([],evidence,None)
+        self.assertEqual([(p['text'],p['pages']) for p in parts if p.get('requirement')],[(requirement,[7])])
+        # Too many complete requirements are refused as a whole, never silently shortened.
+        for group,labels in zip(material[0]['batches'][:2],[('甲','乙'),('丙','丁')]):
+            group['draft']['originals'][0]['requirements']=['完成练习，'+(label*1490) for label in labels]
+        evidence=agent._pdf_evidence(material)
+        self.assertFalse(evidence['requirements_complete'])
+        self.assertEqual(evidence['model'][0]['groups'],[])
+        self.assertEqual(evidence['documents'][0]['omitted'],['第1–3页','第4–6页','第7页'])
+
+    def test_identical_requirements_merge_pages_only_within_the_same_original(self):
+        requirement='完成第1至3题，写明单位，做完检查。'
+        documents=[dict(ref='message:synthetic:1',upload_id=ident,groups=[
+            dict(pages=pages,text='背景',requirements=[requirement]) for pages in ([1,2,3],[4])])
+            for ident in ('a'*32,'b'*32)]
+        parts=agent._school_original_parts([],dict(model=documents),None)
+        self.assertEqual(len(parts),2)
+        self.assertNotEqual(parts[0]['id'],parts[1]['id'])
+        # Exact repeats do not consume the requirement budget again. Different originals remain separate.
+        material=[dict(ref='message:synthetic:1',fingerprint='synthetic',upload_id='a'*32,name='虚构重复.pdf',
+            page_count=11,batches=[dict(pages=pages,draft=dict(title='重复要求',note='',uncertainties=[],
+                originals=[dict(requirements=['完成练习，'+('甲'*1500)])]),updated='synthetic') for pages in BATCHES])]
+        self.assertTrue(agent._pdf_evidence(material)['requirements_complete'])
+        self.assertEqual([(p['pages'],p['upload_ids']) for p in parts],
+                         [([1,2,3,4],['a'*32]),([1,2,3,4],['b'*32])])
+
     def seed_pdf(self, ident, body=PDF, name='虚构练习卷.pdf'):
         (self.data / 'uploads').mkdir(exist_ok=True)
         (self.data / 'uploads' / ident).write_bytes(body)

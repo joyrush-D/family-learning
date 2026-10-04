@@ -1,6 +1,7 @@
 """Synthetic check: a completely整理 PDF original feeds this pending school candidate's parent-reviewable draft.
 Fictional family, QQ fragment notice and 11-page synthetic PDF; every model reply is a fixture; no render, network or real material."""
 import datetime as dt
+import copy
 import json
 import unittest
 from unittest.mock import patch
@@ -33,13 +34,21 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         super().setUp()
         self.keys = self.school_fragment(TEXT); self.pdf = self.seed_pdf('a' * 32); self.link(self.keys, self.pdf)
 
-    def seed_groups(self, batches=BATCHES, note=DRAFT['note'], keys=None, uncertainties=None, upload_id=None):
+    def seed_groups(self, batches=BATCHES, note=DRAFT['note'], keys=None, uncertainties=None, upload_id=None,
+                    requirements=(TEXT,), legacy=False):
         with self.store._db() as c:
             source, message = self.store._message_context(c, keys or self.keys)
-            fp = pdfm.pdf_input(self.store, c, source, message, upload_id=upload_id)['fingerprint']
+            original = pdfm.pdf_input(self.store, c, source, message, upload_id=upload_id)
+            fp = original['fingerprint']
             for pages in batches:
-                payload = json.dumps(dict(DRAFT, note=note, uncertainties=DRAFT['uncertainties'] if uncertainties is None else uncertainties,
-                                          title='第%s-%s页组' % (pages[0], pages[-1]), kind='school_material'), ensure_ascii=False)
+                group = dict(title='第%s-%s页组' % (pages[0], pages[-1]), note=note,
+                             uncertainties=DRAFT['uncertainties'] if uncertainties is None else uncertainties)
+                if legacy:
+                    payload = dict(group, kind='school_material')
+                else:
+                    payload = dict(kind='school_material', originals=[dict(group, upload_id=original['upload_id'],
+                                                                         requirements=list(requirements))])
+                payload = json.dumps(payload, ensure_ascii=False)
                 c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?)',
                           (source['id'], message['id'], fp, pages[0], json.dumps(pages), 11, payload, self.now.isoformat()))
         return fp
@@ -55,7 +64,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         ident=self.candidate(keys=keys,ident='legacy-pdf-standards')
         short='数学：2026-02-12前完成练习第1至3题。'
         note=short+'写明单位；第4题选做，若选做须用两种方法，做完检查，无需家长签字。\n家长事务：2026-02-13前打印独立活动回执，家长签字后交回。'
-        self.seed_groups(keys=keys,note=note,uncertainties=[])
+        self.seed_groups(keys=keys,note=note,uncertainties=[],legacy=True)
         ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
         reply={'actions':[dict(draft(title='数学：完成练习',goal=short),due='2026-02-12',existing_item_id=ident,
             basis=[dict(part='pdf:'+self.pdf+':1@'+ref,text=short)])]}
@@ -101,7 +110,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.link(self.keys,self.pdf,action=DETACH)
         keys=self.native_notice('upgrade-groups')
         self.candidate(keys=keys,ident='upgrade-groups')
-        self.seed_groups(keys=keys,note='旧页组摘要：数学练习，完整标准尚未结构化。',uncertainties=[])
+        self.seed_groups(keys=keys,note='旧页组摘要：数学练习，完整标准尚未结构化。',uncertainties=[],legacy=True)
         before=self.rows('SELECT first_page,pages,page_count,payload,updated FROM agent_pdf_material ORDER BY first_page')
         seen=[]
         def model(text,images,**kw):
@@ -117,7 +126,9 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         after=self.rows('SELECT first_page,payload FROM agent_pdf_material ORDER BY first_page')
         for old,new in zip(before,after):
             self.assertEqual(json.loads(new[1])['previous_group'],dict(payload=json.loads(old[3]),updated=old[4],pages=json.loads(old[1]),page_count=old[2]))
-        self.assertTrue(self.view(keys)['requirements_complete'])
+        with self.store._db() as c:
+            source,message=self.store._message_context(c,keys)
+            self.assertTrue(pdfm.view(self.store,c,source,message)['requirements_complete'])
         self.assertEqual((self.count('manual_tasks'),self.count('records')),(0,0))
 
     def test_pdf_legacy_upgrade_mixed_decision_and_model_race_never_replace_groups(self):
@@ -125,7 +136,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         keys=self.native_notice('upgrade-decisions')
         first=self.candidate(keys=keys,ident='upgrade-decisions-first')
         second=self.candidate(keys=keys,ident='upgrade-decisions-second')
-        self.seed_groups(keys=keys,note='旧页组，留待完整核对。',uncertainties=[])
+        self.seed_groups(keys=keys,note='旧页组，留待完整核对。',uncertainties=[],legacy=True)
         before=self.rows('SELECT * FROM agent_pdf_material ORDER BY first_page')
         with self.store._db() as c:c.execute("UPDATE agent_items SET state='dismissed' WHERE id=?",(second,))
         with no_render(),patch.object(family_llm,'extract_draft',side_effect=AssertionError('mixed decision must not reread')):
@@ -400,7 +411,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             with self.subTest(label=label):
                 keys=self.native_notice('admin-'+label)
                 ident=self.candidate(keys=keys,ident='admin-'+label)
-                self.seed_groups(keys=keys,note=note,uncertainties=[])
+                self.seed_groups(keys=keys,note=note,uncertainties=[],requirements=[note])
                 result,calls=self.refresh(draft(title='事务：签字交回回执',goal=note,purpose='admin'))
                 self.assertEqual((result['used'],result['failed'],len(calls),self.item(ident)['state']),(1,0,1,state))
                 if state=='pending':self.assertIn('同时提到学习活动',self.brief(ident)['reason'])
@@ -442,7 +453,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         ident=self.candidate(keys=keys,ident='independent-original')
         homework='数学：2026-02-12前完成练习卷第1–3题必做，第4题选做，做完检查。'
         receipt='家长事务：2026-02-13前打印独立活动回执，家长签字后由孩子交回，无需盖章。'
-        self.seed_groups(keys=keys,note=homework+'\n'+receipt,uncertainties=[])
+        self.seed_groups(keys=keys,note=homework+'\n'+receipt,uncertainties=[],requirements=[homework,receipt])
         ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
         reply={'actions':[
             dict(draft(title='数学：完成练习卷',goal=homework),due='2026-02-12',existing_item_id=ident,
@@ -466,9 +477,12 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         ident=self.candidate(keys=keys,ident='separate-date')
         math='数学：2026-02-12前完成练习卷第1至11页。'
         receipt='家长事务：2026-02-13前打印并签字交回活动回执。'
-        self.seed_groups(keys=keys,note=math+'\n'+receipt,uncertainties=[])
+        self.seed_groups(keys=keys,note=math+'\n'+receipt,uncertainties=[],requirements=[math,receipt])
         ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
-        reply={'actions':[dict(draft(goal=math),due='2026-02-13',existing_item_id=ident,basis=[dict(part='pdf:'+self.pdf+':1@'+ref,text=math)])]}
+        reply={'actions':[
+            dict(draft(goal=math),due='2026-02-13',existing_item_id=ident,basis=[dict(part='pdf:'+self.pdf+':1@'+ref,text=math)]),
+            dict(draft(title='事务：打印签字交回活动回执',goal=receipt,purpose='admin',state='review',reason='独立回执留待核对。'),
+                 due='2026-02-13',existing_item_id='',basis=[dict(part='pdf:'+self.pdf+':1@'+ref,text=receipt)])]}
         result,calls=self.refresh(reply)
         self.assertEqual((result['used'],len(calls),self.item(ident)['state'],self.count('manual_tasks')),(1,1,'pending',0))
         self.assertEqual(self.brief(ident)['state'],'review')
@@ -486,8 +500,8 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         maths=['数学：2026-02-12完成练习卷第1至3题，第4题选做，做完检查。',
                '数学：2026-02-13复习错题第1至2题，写出订正过程，不必打印。']
         receipt='家长事务：2026-02-14打印独立活动回执，家长签字后由孩子交回，无需盖章。'
-        self.seed_groups(keys=keys,note='\n'.join(maths),uncertainties=[],upload_id=self.pdf)
-        self.seed_groups(keys=keys,note=receipt,uncertainties=[],upload_id=receipt_file)
+        self.seed_groups(keys=keys,note='\n'.join(maths),uncertainties=[],upload_id=self.pdf,requirements=maths)
+        self.seed_groups(keys=keys,note=receipt,uncertainties=[],upload_id=receipt_file,requirements=[receipt])
         ident=self.candidate(keys=keys,ident='four-model-actions');ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
         reply={'actions':[
             dict(draft(title='英语：朗读Unit5两遍',goal=native,learning_subject='英语'),due='2026-02-11',existing_item_id=ident,basis=[dict(part=ref,text=native)]),
@@ -505,7 +519,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
     def original_action_fixture(self,note,**changes):
         keys=self.native_notice('action-guard')
         ident=self.candidate(keys=keys,ident='action-guard')
-        self.seed_groups(keys=keys,note=note,uncertainties=[])
+        self.seed_groups(keys=keys,note=note,uncertainties=[],requirements=note.splitlines())
         ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
         value=dict(draft(title='事务：交回活动回执',goal=note,purpose='admin'),due='',existing_item_id=ident,
                    basis=[dict(part='pdf:'+self.pdf+':1@'+ref,text=note)])
@@ -549,7 +563,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         ident,reply=self.original_action_fixture('2026-02-13前交回活动回执。')
         second=self.native_notice('second-original')
         other=self.candidate(keys=second,ident='subset')
-        self.seed_groups(keys=second,note='2026-02-13前交回活动回执。',uncertainties=[])
+        self.seed_groups(keys=second,note='2026-02-13前交回活动回执。',uncertainties=[],requirements=['2026-02-13前交回活动回执。'])
         with self.store._db() as c:
             both=json.loads(self.item(ident)['evidence'])+json.loads(self.item(other)['evidence'])
             c.execute('UPDATE agent_items SET evidence=? WHERE id=?',(json.dumps(both),ident))
@@ -586,8 +600,8 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             c.execute('UPDATE agent_items SET evidence=? WHERE id=?',
                       (json.dumps([dict(ref=ref_a,text=TEXT),dict(ref=ref_b,text=TEXT)]),ident))
         math='数学：明天完成练习卷第1至11页。';receipt='明天打印、签字并交回独立活动回执。'
-        self.seed_groups(keys=first,note=math,uncertainties=[],upload_id=self.pdf)
-        self.seed_groups(keys=second,note=receipt,uncertainties=[],upload_id=paper_b)
+        self.seed_groups(keys=first,note=math,uncertainties=[],upload_id=self.pdf,requirements=[math])
+        self.seed_groups(keys=second,note=receipt,uncertainties=[],upload_id=paper_b,requirements=[receipt])
         reply={'actions':[
             dict(draft(goal=math),due='2026-02-11',existing_item_id=ident,basis=[dict(part='pdf:'+self.pdf+':1@'+ref_a,text=math)]),
             dict(draft(title='事务：签字交回活动回执',goal=receipt,purpose='admin'),due='2026-02-12',existing_item_id='',basis=[dict(part='pdf:'+paper_b+':1@'+ref_b,text=receipt)])]}
@@ -608,8 +622,8 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         receipt_file=self.seed_pdf('b'*32,name='虚构独立回执.pdf');self.link(keys,receipt_file)
         math='数学：2026-02-12前完成练习卷第1至11页，做完检查。'
         receipt='2026-02-13前签字交回独立活动回执。'
-        self.seed_groups(keys=keys,note=math,uncertainties=[],upload_id=self.pdf)
-        self.seed_groups(keys=keys,note=receipt,uncertainties=[],upload_id=receipt_file)
+        self.seed_groups(keys=keys,note=math,uncertainties=[],upload_id=self.pdf,requirements=[math])
+        self.seed_groups(keys=keys,note=receipt,uncertainties=[],upload_id=receipt_file,requirements=[receipt])
         ident=self.candidate(keys=keys,ident='scoped-original')
         ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
         reply={'actions':[
@@ -664,11 +678,14 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                                         (keys['source_id'],keys['message_id'])).fetchone()[0])
                 c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
                           (json.dumps(dict(raw,text=text,unread=True)),keys['source_id'],keys['message_id']))
-        self.seed_groups(keys=keys,note='2026-02-13前签字交回独立活动回执。',uncertainties=[])
+        self.seed_groups(keys=keys,note='2026-02-13前签字交回独立活动回执。',uncertainties=[],requirements=['2026-02-13前签字交回独立活动回执。'])
         ident=self.candidate(keys=keys,ident='text-action')
         ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
-        reply={'actions':[dict(draft(title='数学：口算10题',goal=text),due='2026-02-12',existing_item_id=ident,
-                               basis=[dict(part=ref,text=text)])]}
+        receipt='2026-02-13前签字交回独立活动回执。'
+        reply={'actions':[
+            dict(draft(title='数学：口算10题',goal=text),due='2026-02-12',existing_item_id=ident,basis=[dict(part=ref,text=text)]),
+            dict(draft(title='事务：签字交回独立活动回执',goal=receipt,purpose='admin',state='review',reason='独立回执留待核对。'),
+                 due='2026-02-13',existing_item_id='',basis=[dict(part='pdf:'+self.pdf+':1@'+ref,text=receipt)])]}
         return keys,ident,reply
 
     def test_read_native_text_action_does_not_inherit_other_attachment_gap(self):
@@ -700,11 +717,11 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         ident=self.candidate(keys=keys,ident='multi')
         before=self.item(ident)
         note='数学：2026-02-12前完成练习卷第1至11页，做完检查。'
-        self.seed_groups(keys=keys,note=note,uncertainties=[],upload_id=self.pdf)
+        self.seed_groups(keys=keys,note=note,uncertainties=[],upload_id=self.pdf,requirements=[note])
         self.assertIsNone(self.material(keys))
         self.assertEqual(self.refresh(draft()),(dict(used=0,failed=0,created=0),[]))
         self.assertEqual(self.item(ident),before)
-        self.seed_groups(keys=keys,note='本附件为上述练习卷的家长核对参考，不是孩子作答。',uncertainties=[],upload_id=reference)
+        self.seed_groups(keys=keys,note='本附件为上述练习卷的家长核对参考，不是孩子作答。',uncertainties=[],upload_id=reference,requirements=[])
         material=self.material(keys)
         self.assertEqual([d['upload_id'] for d in material['documents']],[self.pdf,reference])
         result,calls=self.refresh(draft(goal=note))
@@ -712,6 +729,24 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         documents=json.loads(calls[0][1]['content'])['pdf_material']
         self.assertEqual([d['upload_id'] for d in documents],[self.pdf,reference])
         self.assertEqual([d['name'] for d in documents],['虚构练习卷.pdf','虚构家长参考.pdf'])
+
+    def test_reference_background_stays_accessible_without_becoming_goal_or_deadline(self):
+        keys,reference=self.multi_originals()
+        requirement='数学：2026-02-12前完成练习卷第1至3题，写明单位，做完检查，无需家长签字。'
+        background='家长核对参考，印刷日期2026-02-13；本页不是孩子作答，也不是签字要求。'
+        self.seed_groups(keys=keys,uncertainties=[],upload_id=self.pdf,requirements=[requirement])
+        self.seed_groups(keys=keys,note=background,uncertainties=[],upload_id=reference,requirements=[])
+        ident=self.candidate(keys=keys,ident='reference-context')
+        result,_=self.refresh(draft(goal='短摘要'))
+        row=self.item(ident)
+        self.assertEqual((result['created'],row['body'],row['due']),(1,requirement,'2026-02-12'))
+        view=self.store.message(dict(keys,task_id=row['task_id']),self.app.upload_info)
+        self.assertEqual({a['id'] for a in view['attachments']},{self.pdf,reference})
+        self.assertEqual(self.count('records'),0)
+        with self.store._db() as c:
+            evidence,_=agent._school_material(self.store,c,row)
+            pdf=agent._pdf_evidence(agent._school_pdf(self.store,c,row))
+        self.assertEqual(agent._school_saved_requirements(row,agent._school_original_parts(evidence,pdf,None)),[requirement])
         self.assertTrue(all(d['complete'] and d['processed_pages']==list(range(1,12)) for d in documents))
         self.assertEqual([d['processed_pages'] for d in documents],[list(range(1,12))]*2)
         row=self.item(ident)
@@ -723,7 +758,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
     def test_reference_reading_gap_does_not_become_a_complete_school_requirement(self):
         keys,reference=self.multi_originals()
         self.seed_groups(keys=keys,note=TEXT,uncertainties=[],upload_id=self.pdf)
-        self.seed_groups(keys=keys,note='家长参考。',uncertainties=['参考最后一页看不清'],upload_id=reference)
+        self.seed_groups(keys=keys,note='家长参考。',uncertainties=['参考最后一页看不清'],upload_id=reference,requirements=[])
         ident=self.candidate(keys=keys,ident='uncertain-multi')
         result,calls=self.refresh(draft())
         self.assertEqual((result['used'],len(calls),self.item(ident)['state'],self.count('manual_tasks')),(1,1,'pending',0))
@@ -742,7 +777,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                       (json.dumps(dict(raw,text=text,unread=True)),keys['source_id'],keys['message_id']))
             before=c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
                              (keys['source_id'],keys['message_id'])).fetchone()[0]
-        self.seed_groups(keys=keys,note=text,uncertainties=[])
+        self.seed_groups(keys=keys,note=text,uncertainties=[],requirements=[text])
         ident=self.candidate(keys=keys,ident='receipt-scope')
         def read_scope(messages):
             context=json.loads(messages[-1]['content']);e=context['evidence'][0]
@@ -762,7 +797,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
     def test_original_refinement_new_learning_restores_exact_goal_and_message_association(self):
         import family_goals
         keys=self.native_notice('restored-learning')
-        self.seed_groups(keys=keys,note='数学：2月12日前完成练习卷第1至11页。',uncertainties=[])
+        self.seed_groups(keys=keys,note='数学：2月12日前完成练习卷第1至11页。',uncertainties=[],requirements=['数学：2月12日前完成练习卷第1至11页。'])
         preliminary=dict(title='',goal='',advice='',state='review',reason='原件尚未整理。',
                          policy=agent.SCHOOL_TASK_POLICY,purpose='learning',change='append',target_id='')
         ident=self.candidate(keys=keys,ident='restored-learning',brief=preliminary)
@@ -838,8 +873,8 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         keys,reference=self.multi_originals()
         with self.store._db() as c:
             c.execute('UPDATE uploads SET name=? WHERE id IN (?,?)',('虚构资料.pdf',self.pdf,reference))
-        self.seed_groups(keys=keys,note='题目原件：完成练习卷第1至11页。',uncertainties=[],upload_id=self.pdf)
-        self.seed_groups(keys=keys,note='家长参考：第1题答案为3，不是孩子作答。',uncertainties=[],upload_id=reference)
+        self.seed_groups(keys=keys,note='题目原件：完成练习卷第1至11页。',uncertainties=[],upload_id=self.pdf,requirements=['题目原件：完成练习卷第1至11页。'])
+        self.seed_groups(keys=keys,note='家长参考：第1题答案为3，不是孩子作答。',uncertainties=[],upload_id=reference,requirements=[])
         ident=self.candidate(keys=keys,ident='same-name-multi')
         result,calls=self.refresh(draft(state='review',reason='请对照两份原件。'))
         documents=json.loads(calls[0][1]['content'])['pdf_material']
@@ -929,14 +964,46 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             if isinstance(reply, Exception): raise reply
             result=reply(messages) if callable(reply) else reply
             context=json.loads(messages[-1]['content'])
+            if 'original_parts' in context and isinstance(result,dict) and set(result)=={'actions'}:
+                result=copy.deepcopy(result)
+                # Old fixtures identify the page group. Map only the identical whole
+                # requirement, never turn a partial quote into the full requirement.
+                for action in result['actions']:
+                    for quote in action['basis']:
+                        matches=[part for part in context['original_parts'] if part.get('requirement')
+                                 and part['id'].split(':requirement:',1)[0]==quote['part']
+                                 and part['text']==quote['text']]
+                        if len(matches)==1:
+                            quote['part']=matches[0]['id']
             if 'original_parts' in context and isinstance(result,dict) and set(result)==set(agent.TASK_BRIEF_SCHEMA['required']):
-                # The existing one-action fixtures keep their business assertions under the new array interface.
-                parts=context['original_parts'];selected=[];seen=set()
+                # A single-draft fixture still assigns every complete requirement.
+                # Identical requirements shared by originals may support one action;
+                # distinct requirements retain separate actions and file ownership.
+                parts=context['original_parts'];groups=[]
                 for part in parts:
-                    if part['upload_ids'] and not set(part['upload_ids'])<=seen:
-                        selected.append(part);seen.update(part['upload_ids'])
-                if not selected:selected=[parts[0]]
-                return {'actions':[dict(result,due='',existing_item_id=context['candidate_id'],basis=[dict(part=part['id'],text=part['text'][:2000]) for part in selected])]}
+                    if not part.get('requirement'):continue
+                    selected=next((group for group in groups if group[0]['text']==part['text']),None)
+                    if selected is None:groups.append([part])
+                    else:selected.append(part)
+                # A reference attachment remains explicitly attached to the action
+                # from the same message. It never becomes an invented requirement.
+                for selected in groups:
+                    refs={part['ref'] for part in selected};seen={u for part in selected for u in part['upload_ids']}
+                    for part in parts:
+                        if part.get('background_only') and part['ref'] in refs and part['text'].strip() and not set(part['upload_ids'])<=seen:
+                            selected.append(part);seen.update(part['upload_ids'])
+                if not groups:
+                    selected=[];seen=set()
+                    for part in parts:
+                        if part['upload_ids'] and part['text'].strip() and not set(part['upload_ids'])<=seen:
+                            selected.append(part);seen.update(part['upload_ids'])
+                    groups=[selected or [parts[0]]]
+                actions=[]
+                for index,selected in enumerate(groups):
+                    basis=[dict(part=part['id'],text=part['text'] if part.get('requirement') else part['text'][:2000])
+                           for part in selected]
+                    actions.append(dict(result,due='',existing_item_id=context['candidate_id'] if index==0 else '',basis=basis))
+                return {'actions':actions}
             return result
         with no_render(), patch.object(family_llm, 'extract_draft', side_effect=AssertionError('no page-group model call here')), \
                 patch.object(family_llm, '_chat_json', side_effect=model):
@@ -1019,7 +1086,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         ]
         for key,published,note,state,due,reason in cases:
             with self.subTest(case=key):
-                keys=self.native_notice(key,published=published);self.seed_groups(keys=keys,note=note,uncertainties=[])
+                keys=self.native_notice(key,published=published);self.seed_groups(keys=keys,note=note,uncertainties=[],requirements=[note])
                 ident=self.candidate(keys=keys,ident=key)
                 result,calls=self.refresh(draft(goal=note))
                 row=self.item(ident)
@@ -1029,9 +1096,9 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
 
     def test_native_pdf_partial_summary_and_uncovered_message_remain_review(self):
         keys=self.native_notice();ident=self.candidate(keys=keys)
-        self.seed_groups(BATCHES[:3],keys=keys,note=TEXT+'摘'*2000,uncertainties=[])
+        self.seed_groups(BATCHES[:3],keys=keys,note=TEXT+'摘'*2000,uncertainties=[],requirements=[TEXT])
         self.assertEqual(self.refresh(draft()),(dict(used=0,failed=0,created=0),[]))
-        self.seed_groups(BATCHES[3:],keys=keys,note='2026-02-12前提交。'+'摘'*2000,uncertainties=[])
+        self.seed_groups(BATCHES[3:],keys=keys,note='2026-02-12前提交。'+'摘'*2000,uncertainties=[],requirements=['2026-02-12前提交。'])
         result,calls=self.refresh(draft())
         self.assertEqual((result['used'],result['created'],self.brief(ident)['state'],self.count('manual_tasks')),(1,0,'review',0))
         self.assertIn('未全部送核',self.brief(ident)['reason'])
@@ -1054,7 +1121,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             self.store.act(dict(id=ident,action='accept',expected_updated=self.item(ident)['updated']),school_auto=True)
 
     def test_other_pdf_notice_date_cannot_become_this_homework_deadline(self):
-        keys=self.native_notice();self.seed_groups(keys=keys,note=TEXT+'示例通知：2026-02-12前提交报名表。',uncertainties=[])
+        keys=self.native_notice();self.seed_groups(keys=keys,note=TEXT+'示例通知：2026-02-12前提交报名表。',uncertainties=[],requirements=[TEXT])
         ident=self.candidate(keys=keys)
         result,calls=self.refresh(draft())
         self.assertEqual((result['used'],len(calls),self.item(ident)['due'],self.item(ident)['state'],self.count('manual_tasks')),(1,1,'','pending',0))
@@ -1128,7 +1195,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertEqual((result['used'], len(calls), self.brief(ident)['pdf_evidence']['documents'][0]['page_count']), (1, 1, 11))
 
     def test_long_group_notes_are_clipped_and_omissions_declared_apart_from_coverage(self):
-        self.seed_groups(note='摘' * 3000); ident = self.candidate()
+        self.seed_groups(note='摘' * 3000,requirements=[]); ident = self.candidate()
         result, calls = self.refresh(draft())
         doc = json.loads(calls[0][1]['content'])['pdf_material'][0]
         self.assertEqual((doc['complete'], doc['processed_pages'], [g['pages'] for g in doc['groups']], doc['truncated_groups'], doc['omitted_groups']),
@@ -1268,7 +1335,11 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
 
             # Change a saved group so this is an actual new model round, not a deduplicated no-op.
             with self.store._db() as c:
-                c.execute('UPDATE agent_pdf_material SET payload=? WHERE fingerprint=? AND first_page=1', (json.dumps(dict(DRAFT, note='新核对摘要', kind='school_material')), evidence['fingerprint']))
+                group=json.loads(c.execute('SELECT payload FROM agent_pdf_material WHERE fingerprint=? AND first_page=1',
+                                           (evidence['fingerprint'],)).fetchone()[0])
+                group['originals'][0]['note']='新核对摘要'
+                c.execute('UPDATE agent_pdf_material SET payload=? WHERE fingerprint=? AND first_page=1',
+                          (json.dumps(group),evidence['fingerprint']))
             def detach(messages):
                 self.link(keys, docx, action=DETACH); return draft()
             self.assertEqual((self.refresh(detach, minutes=2)[0]['used'], self.item(ident)), (1, saved))  # detached in flight: result discarded
@@ -1338,7 +1409,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.link(self.keys, self.pdf, action=DETACH)
         self.pdf = self.seed_docx('f' * 32); self.link(self.keys, self.pdf)
         batches = [[1, 4, 7], [2, 5, 8], [3, 6, 9], [10, 11]]
-        self.seed_groups(batches, note='摘' * 3000); ident = self.candidate()
+        self.seed_groups(batches, note='摘' * 3000,requirements=[]); ident = self.candidate()
         with no_convert(), no_pages():
             result, calls = self.refresh(draft())
         doc = json.loads(calls[0][1]['content'])['pdf_material'][0]

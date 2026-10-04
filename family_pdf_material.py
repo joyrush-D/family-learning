@@ -232,14 +232,18 @@ def _document_view(c, source, message, value):
     pending = _pending(done, page_count); complete = page_count is not None and not pending
     key = _document_key(source, message, value)
     job = c.execute('SELECT * FROM agent_jobs WHERE id=?', (key,)).fetchone()
-    failed = bool(job and not job['done'] and job['error'] and job['fingerprint'] == _hash(_job_value(value['fingerprint'], done)))
-    state = 'ready' if complete else 'error' if failed else 'pending'
+    requirements_complete=complete and all('originals' in b['draft'] for b in batches)
+    structured_done={p for b in batches if 'originals' in b['draft'] for p in b['pages']}
+    failed = bool(job and not job['done'] and job['error'] and job['fingerprint'] in
+                  {_hash(_job_value(value['fingerprint'], pages)) for pages in (done,structured_done)})
+    state = 'error' if failed else 'ready' if complete else 'pending'
     docx = value['original'] == 'docx'; pptx = value['original'] == 'pptx'; xlsx = value['original'] == 'xlsx'
     return dict(state=state, kind=SCHOOL_MATERIAL, upload_id=value['upload_id'], name=value['name'], mime=value['mime'],
                 original=value['original'], conversion=value['conversion'], job_id=key,
                 page_count=page_count, processed_pages=sorted(done), pending_pages=pending, complete=complete, batches=batches,
-                requirements_complete=complete and all('originals' in b['draft'] for b in batches),
-                explanation='' if complete else (FAILED_DOCX if docx else FAILED_PPTX if pptx else FAILED_XLSX if xlsx else FAILED) if failed else
+                requirements_complete=requirements_complete,
+                explanation=(FAILED_DOCX if docx else FAILED_PPTX if pptx else FAILED_XLSX if xlsx else FAILED) if failed else
+                '原件页组已保存；完整行动与完成标准仍待整理。' if complete and not requirements_complete else '' if complete else
                 (WAITING_DOCX if docx else WAITING_PPTX if pptx else WAITING_XLSX if xlsx else WAITING))
 
 

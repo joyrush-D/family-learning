@@ -288,8 +288,9 @@ def _pdf_evidence(material):
     collections=sorted({(m['ref'],m['collection_fingerprint']) for m in material if m.get('collection_fingerprint')})
     if collections: identity.append(collections)
     fingerprint=_hash(identity)
-    requirements_size=sum(len(text) for m in material for b in m['batches']
-                          for original in b['draft'].get('originals',[]) for text in original['requirements'])
+    requirements_size=sum(len(text) for _,_,text in {
+        (m['ref'],m['upload_id'],text) for m in material for b in m['batches']
+        for original in b['draft'].get('originals',[]) for text in original['requirements']})
     # Reserve the whole requirements before sending any background prose, including earlier-page background.
     model=[];documents=[];uncertainties=[];total=min(requirements_size,PDF_TEXT_LIMIT);complete_requirements=requirements_size<=PDF_TEXT_LIMIT
     for m in material:
@@ -2554,8 +2555,9 @@ def _school_saved_requirements(row, parts):
         current=lookup.get(original['id'])
         if not current or not current.get('requirement') or any(current[k]!=original[k] for k in ('ref','upload_ids','text')):
             raise AgentError('原件完整行动要求已变化，原内容与决定保留')
+        texts.append(current['text'])
     for anchor in action['anchors']:
-        texts.append(anchor['quote'])
+        if not anchor['upload_ids'] and anchor['quote'] not in texts:texts.append(anchor['quote'])
     return texts
 
 
@@ -2662,7 +2664,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         chosen=_text(value,'existing_item_id',80)
         if chosen and (chosen not in existing or chosen in used): raise AgentError('原候选行动对应关系无法核对')
         used.add(chosen) if chosen else None
-        basis=value['basis'];anchors=[];requirements=[];compiled=[]
+        basis=value['basis'];anchors=[];action_anchors=[];requirements=[];compiled=[]
         if not isinstance(basis,list) or not 1<=len(basis)<=6: raise AgentError('原件行动缺少对应内容')
         for quote in basis:
             if not isinstance(quote,dict) or set(quote)!={'part','text'}: raise AgentError('原件行动依据结构无法核对')
@@ -2672,14 +2674,16 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
                 if text!=part['text'] or part['id'] in assigned:
                     raise AgentError('完整行动要求被截取或重复分配，原要求保留')
                 assigned.add(part['id']);requirements.append({k:part[k] for k in ('id','ref','upload_ids','text')})
-            if part.get('background_only') and value['state']=='ready':
-                raise AgentError('原件背景没有完整行动要求，不能自动新增任务')
-            compiled.append(text)
             anchor=dict(ref=part['ref'],upload_ids=part['upload_ids'],pages=part['pages'],quote=text)
             if anchor not in anchors: anchors.append(anchor)
+            if not part.get('background_only'):
+                compiled.append(text)
+                if anchor not in action_anchors:action_anchors.append(anchor)
         if requirements: value=_school_requirement_goal(value,compiled)
         has_action=any(_LEARNING_ACTIVITY.search(a['quote']) or _LEARNING_ACTION.search(a['quote'])
-            or re.search(r'打印|签字|交回|盖章|提交|上传|带|携带|准备|领取|报名|缴|考试|测验|比赛|家长会',a['quote']) for a in anchors)
+            or re.search(r'打印|签字|交回|盖章|提交|上传|带|携带|准备|领取|报名|缴|考试|测验|比赛|家长会',a['quote']) for a in action_anchors)
+        if value['state']=='ready' and not has_action and any(lookup[q['part']].get('background_only') for q in basis):
+            raise AgentError('原件背景没有完整行动要求，不能自动新增任务')
         reading_gap=bool((pdf or {}).get('uncertainties') or any(d['omitted'] or d['truncated'] for d in (pdf or {}).get('documents',[])) or (material or {}).get('uncertainties'))
         if value['state']!='reference' and not has_action and not reading_gap:
             raise AgentError('依据没有本项动作和对象，不能仅引用日期或标题')
@@ -2729,7 +2733,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         brief['origin_basis']=_school_message_basis(cited)  # Keep the immutable full message for later stale-source checks.
         due=_text(value,'due',10)
         stamps={e['ref']:sent_day(e.get('time')) for e in cited}
-        dates=set().union(*(deadlines(a['quote'],stamps.get(a['ref'],'')) for a in anchors))
+        dates=set().union(*(deadlines(a['quote'],stamps.get(a['ref'],'')) for a in action_anchors))
         stated=set().union(*(deadlines(brief['goal'],s) for s in stamps.values()))
         resolved=due or (next(iter(dates)) if len(dates)==1 else '')
         if resolved and (not date(resolved) or dates!={resolved} or stated and stated!={resolved}):

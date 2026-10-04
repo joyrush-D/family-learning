@@ -60,7 +60,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   stack=contextlib.ExitStack();stack.enter_context(patch.object(family_pdf.shutil,'which',lambda name:'/synthetic/'+name));stack.enter_context(patch.object(family_pdf,'_run',test_pdf.fake_run_factory(page_count=11)));return stack
  def model(text,images,**kw):
   pages=json.loads(text)['original_pdf']['pages']
-  return dict(title='虚构页组 '+'-'.join(str(p) for p in pages),note='题目与参考答案为老师材料，未见孩子作答。<img src=x onerror=alert(1)>',uncertainties=['发送日期未知 <b>'])
+  return dict(originals=[dict(upload_id=kw['original_ids'][0],title='虚构页组 '+'-'.join(str(p) for p in pages),note='题目与参考答案为老师材料，未见孩子作答。<img src=x onerror=alert(1)>',uncertainties=['发送日期未知 <b>'],requirements=['虚构完整要求：先复习，练习第1至3题必做；第4题选做并检查，无需家长签字。'])])
  step=[0]
  def rounds(n,fail=False):
   for _ in range(n):
@@ -149,7 +149,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
    for ident,note,label in [(upload_id,goal,'虚构语文'),(receipt_id,receipt_goal,'虚构独立回执')]:
     value=family_pdf_material.pdf_input(store,c,source,message,upload_id=ident)
     for pages in ([1,2,3],[4,5,6],[7,8,9],[10,11]):
-     payload=dict(kind='school_material',title=label+'第'+str(pages[0])+'至'+str(pages[-1])+'页',note=note,uncertainties=[])
+     payload=dict(kind='school_material',originals=[dict(upload_id=ident,title=label+'第'+str(pages[0])+'至'+str(pages[-1])+'页',note='题面和空白栏为背景；完整要求单独保留。',uncertainties=[],requirements=[note])])
      c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?)',('qq:123456',message['id'],value['fingerprint'],pages[0],json.dumps(pages),11,json.dumps(payload,ensure_ascii=False),now.isoformat()))
   store._save('native-auto:'+str(w),'fixture',[dict(child_id='child-1',kind='school',title='待理解虚构语文原件 '+str(w),body=family_agent.FOCUS['school'],due=now.date().isoformat(),evidence=[dict(ref=ref,text=message['text'])],plan=dict(school_messages=[dict(source_id='qq:123456',message_id=message['id'])]))],prepared_at)
   brief=dict(title=title,goal=goal,advice='',state='ready',reason='对应原件写明本项要求与完成日期，全部11页已整理。',purpose='learning',submission='',change='new',target_id='',learning_subject='语文',learning_goal_id='')
@@ -158,7 +158,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
    context=json.loads(messages[-1]['content']);assert context['evidence'][0]['ref']==ref,'only this current original is processed'
    assert {d['upload_id'] for d in context['pdf_material']}=={upload_id,receipt_id},'both current original IDs reach the Agent'
    assert all(d['complete'] and len(d['groups'])==4 for d in context['pdf_material']),'all groups of both originals reach the Agent'
-   return dict(actions=[dict(brief,due=now.date().isoformat(),existing_item_id=context['candidate_id'],basis=[dict(part='pdf:'+upload_id+':1@'+ref,text=goal)]),dict(receipt_brief,due=now.date().isoformat(),existing_item_id='',basis=[dict(part='pdf:'+receipt_id+':1@'+ref,text=receipt_goal)])])
+   return dict(actions=[dict(brief,due=now.date().isoformat(),existing_item_id=context['candidate_id'],basis=[dict(part='pdf:'+upload_id+':1@'+ref+':requirement:'+family_agent._hash(goal)[:16],text=goal)]),dict(receipt_brief,due=now.date().isoformat(),existing_item_id='',basis=[dict(part='pdf:'+receipt_id+':1@'+ref+':requirement:'+family_agent._hash(receipt_goal)[:16],text=receipt_goal)])])
   with patch.object(family_llm,'_chat_json',side_effect=ready_original) as calls:
    assert family_agent._refresh_school(app,store,prepared_at,1)==dict(used=1,failed=0,created=2),'both independent actions auto-collected'
    assert calls.call_count==1,'one bounded understanding call'
@@ -569,7 +569,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   await close();await open(ref('unknown'));await panel.waitFor();assert.doesNotMatch(await panel.innerText(),/已读取最新进度|已安排后台重试/,'reopened dialog carries no old notice');assert.equal(await batches.count(),0);await close();
   // 3. Complete 11 pages: four groups, completeness only from the backend, still there after reload.
   await open(ref('ready'));await panel.waitFor();text=await panel.innerText();
-  assert.equal(await panel.getAttribute('data-school-pdf-state'),'ready');assert.match(text,/全部 11 页已整理/);assert.doesNotMatch(text,/未读页|暂未成功/);assert.equal(await batches.count(),4);assert.equal(await retry.count(),0);
+  assert.equal(await panel.getAttribute('data-school-pdf-state'),'ready');assert.match(text,/全部 11 页已整理/);assert.doesNotMatch(text,/未读页|暂未成功/);assert.equal(await batches.count(),4);assert.equal(await retry.count(),0);assert.match(await panel.innerText(),/练习第1至3题必做；第4题选做并检查，无需家长签字/);assert.equal(await panel.locator('[data-school-pdf-requirement]').count(),4);
   assert.match(await batches.nth(3).innerText(),/第 10、11 页[\s\S]*虚构页组 10-11/);await fits(page);await proof(page,'school-pdf-ready-'+width);await close();
   await page.reload();await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();await open(ref('ready'));await panel.waitFor();assert.equal(await batches.count(),4);assert.match(await panel.innerText(),/全部 11 页已整理/);
   // Withdrawn authorization (fictional GET reply) hides the old groups; a real re-read restores them; detaching the PDF removes the panel.
@@ -608,7 +608,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   await close();await open(ref('docx-error'));await panel.waitFor();assert.doesNotMatch(await panel.innerText(),/已读取最新进度|已安排后台重试/,'reopened Word notice carries no old receipt');assert.equal(await batches.count(),1);await close();
   // Complete Word: four groups by converted page numbers, still there after reload. A second Word file makes the backend refuse the set without naming a kind: the panel names neither PDF nor Word, both files stay listed, removing the extra one restores the groups.
   await open(ref('docx-ready'));await panel.waitFor();text=await panel.innerText();
-  assert.equal(await panel.getAttribute('data-school-pdf-state'),'ready');assert.match(text,/Word逐页整理/);assert.match(text,/虚构练习卷-docx-ready-\d+\.docx/);assert.match(text,/全部 11 页已整理/);assert.match(text,/页码可能与Word里显示的分页不同/);assert.doesNotMatch(text,/未读页|暂未成功|PDF逐页整理/);assert.equal(await batches.count(),4);assert.equal(await retry.count(),0);
+  assert.equal(await panel.getAttribute('data-school-pdf-state'),'ready');assert.match(text,/Word逐页整理/);assert.match(text,/虚构练习卷-docx-ready-\d+\.docx/);assert.match(text,/全部 11 页已整理/);assert.match(text,/页码可能与Word里显示的分页不同/);assert.doesNotMatch(text,/未读页|暂未成功|PDF逐页整理/);assert.equal(await batches.count(),4);assert.equal(await retry.count(),0);assert.match(await panel.innerText(),/练习第1至3题必做；第4题选做并检查，无需家长签字/);assert.equal(await panel.locator('[data-school-pdf-requirement]').count(),4);
   assert.match(await batches.nth(3).innerText(),/第 10、11 页[\s\S]*虚构页组 10-11/);await fits(page);await proof(page,'school-docx-ready-'+width);await close();
   await page.reload();await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();await open(ref('docx-ready'));await panel.waitFor();assert.equal(await batches.count(),4);assert.match(await panel.innerText(),/Word逐页整理[\s\S]*全部 11 页已整理/);
   const extraDocx=before.uploads.find(x=>x.name==='synthetic-extra.docx'),readyDocx=await linked('docx-ready');
