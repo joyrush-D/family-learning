@@ -1258,6 +1258,18 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(agent._school_brief(value,evidence=[dict(evidence[0],text=text)])['goal'],value['goal'])
         self.assertEqual(agent._school_brief(value,evidence=[dict(evidence[0],unread=True)])['goal'],value['goal'])
 
+    def test_admin_body_keeps_native_deadline_qualifier_and_absolute_day(self):
+        action='完成学校通讯录中的紧急联系电话核对'
+        value=dict(title='核对学校通讯录',goal='2026-10-05前'+action+'。',advice='',state='ready',reason='',purpose='admin',submission='',change='new',target_id='')
+        entry=dict(ref='message:synthetic:m3',kind='text',time='2026-10-03T16:20:00+08:00',publisher='publisher:a',unread=False,text='请家长后天'+action+'；无误点“已核对”。')
+        brief=agent._school_brief(value,evidence=[entry])
+        self.assertEqual(brief['goal'],'家长：2026-10-05'+action+'。')
+        for qualifier in ('前','之前','以前','内'):
+            corrected=agent._school_brief(dict(value,goal='2026-10-05'+action+'。'),evidence=[dict(entry,text='请家长后天'+qualifier+action+'；无误点“已核对”。')])
+            self.assertEqual(corrected['goal'],'家长：2026-10-05'+qualifier+action+'。')
+        for changed in (dict(entry,unread=True),dict(entry,kind='quote'),dict(entry,time='2026-10-03T16:20:00'),dict(entry,text='有人转述“'+entry['text']+'”')):
+            self.assertIn('2026-10-05前',agent._school_brief(value,evidence=[changed])['goal'])
+
     def _effective_instruction_fixture(self):
         parts,anchors,changes,proof=self._first_batch_condition_fixture()
         parts[-1]['text']='完成《桥的观察单》：'+parts[-1]['text']
