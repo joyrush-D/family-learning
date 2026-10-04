@@ -75,8 +75,7 @@ class HomeworkCauseTests(unittest.TestCase):
         cases={'missing_answer':dict(student_answer=''),
                'missing_reference':dict(answer=''),
                'reference_conflict':dict(uncertainty='教师参考与可见题面冲突，待核对。'),
-               'missing_error_evidence':dict(error_reason=''),
-               'missing_correction_steps':dict(steps='')}
+               'missing_error_evidence':dict(error_reason='')}
         for review in (False,True):
             for name,changes in cases.items():
                 with self.subTest(review=review,missing=name):
@@ -91,6 +90,21 @@ class HomeworkCauseTests(unittest.TestCase):
                     self.assertNotIn('错误依据：',draft['text'])
                     if review and name=='reference_conflict':
                         self.assertEqual(question['answer'],'教师参考：5')
+
+    def test_verified_error_does_not_require_correction_steps(self):
+        for review in (False,True):
+            with self.subTest(review=review):
+                draft=self.draft(review=review,steps='')
+                question=draft['questions'][0]
+                self.assertEqual((draft['wrong_items'],draft['unknown_items']),(1,0))
+                self.assertEqual(question['judgment'],'incorrect')
+                self.assertEqual(question['student_answer'],'4')
+                self.assertEqual(question['answer'],('教师参考：' if review else 'AI自行推导：')+'5')
+                self.assertEqual(question['error_reason'],'卷面作答4与核对答案5不同。')
+                self.assertEqual(question['steps'],'','missing teaching guidance is not missing grading evidence')
+                self.assertEqual(question['possible_cause'],'')
+                self.assertEqual(question['uncertainty'],'')
+                self.assertIn('错误依据：'+question['error_reason'],draft['text'])
 
 
 class HomeworkReviewTextTests(unittest.TestCase):
