@@ -464,7 +464,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertEqual((result['used'],result['failed'],result['created'],len(calls)),(1,0,2,1))
         tasks=self.rows('SELECT title,due,action,original_status,source FROM manual_tasks ORDER BY due')
         self.assertEqual([(r[0],r[1],r[3]) for r in tasks],
-                         [('数学：完成练习卷','2026-02-12','待跟进'),('事务：签字交回活动回执','2026-02-13','待跟进')])
+                         [('数学：完成练习卷（第1–3题必做；第4题选做）','2026-02-12','待跟进'),('事务：签字交回活动回执','2026-02-13','待跟进')])
         self.assertIn('第4题选做',tasks[0][2]);self.assertIn('无需盖章',tasks[1][2])
         self.assertTrue(all(ref in r[4] for r in tasks))
         self.assertEqual((self.item(ident)['state'],self.count('records')),('accepted',0))
@@ -526,11 +526,14 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         value.update(changes)
         return ident,{'actions':[value]}
 
-    def test_original_inferred_date_must_agree_with_goal_date(self):
+    def test_complete_original_date_cannot_be_replaced_by_the_second_summary(self):
         ident,reply=self.original_action_fixture('2026-02-13前交回活动回执。',goal='2026-02-12前交回活动回执。')
         result,_=self.refresh(reply)
-        self.assertEqual((result['created'],self.item(ident)['state'],self.count('manual_tasks')),(0,'pending',0))
-        self.assertIn('日期',self.brief(ident)['reason'])
+        row=self.item(ident)
+        self.assertEqual((result['created'],row['state'],self.count('manual_tasks')),(1,'accepted',1))
+        self.assertEqual((row['body'],row['due']),('2026-02-13前交回活动回执。','2026-02-13'))
+        self.assertEqual(self.rows('SELECT action,due,original_status FROM manual_tasks'),
+                         [('2026-02-13前交回活动回执。','2026-02-13','待跟进')])
 
     def test_original_admin_upload_cannot_swallow_required_learning(self):
         ident,reply=self.original_action_fixture('英语第5课朗读两遍后上传录音。',title='提交录音',goal='录音上传班级区')
@@ -729,8 +732,16 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         documents=json.loads(calls[0][1]['content'])['pdf_material']
         self.assertEqual([d['upload_id'] for d in documents],[self.pdf,reference])
         self.assertEqual([d['name'] for d in documents],['虚构练习卷.pdf','虚构家长参考.pdf'])
+        self.assertTrue(all(d['complete'] and d['processed_pages']==list(range(1,12)) for d in documents))
+        self.assertEqual([d['processed_pages'] for d in documents],[list(range(1,12))]*2)
+        row=self.item(ident)
+        self.assertEqual((row['state'],row['due'],self.count('manual_tasks'),self.count('records')),('accepted','2026-02-12',1,0))
+        self.assertEqual(len(self.brief(ident)['pdf_evidence']['documents']),2)
+        self.assertEqual(self.refresh(draft(),minutes=1),(dict(used=0,failed=0,created=0),[]))
+        self.assertEqual(self.item(ident),row)
 
     def test_reference_background_stays_accessible_without_becoming_goal_or_deadline(self):
+        self.store.app=self.app
         keys,reference=self.multi_originals()
         requirement='数学：2026-02-12前完成练习卷第1至3题，写明单位，做完检查，无需家长签字。'
         background='家长核对参考，印刷日期2026-02-13；本页不是孩子作答，也不是签字要求。'
@@ -747,13 +758,6 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             evidence,_=agent._school_material(self.store,c,row)
             pdf=agent._pdf_evidence(agent._school_pdf(self.store,c,row))
         self.assertEqual(agent._school_saved_requirements(row,agent._school_original_parts(evidence,pdf,None)),[requirement])
-        self.assertTrue(all(d['complete'] and d['processed_pages']==list(range(1,12)) for d in documents))
-        self.assertEqual([d['processed_pages'] for d in documents],[list(range(1,12))]*2)
-        row=self.item(ident)
-        self.assertEqual((row['state'],row['due'],self.count('manual_tasks'),self.count('records')),('accepted','2026-02-12',1,0))
-        self.assertEqual(len(self.brief(ident)['pdf_evidence']['documents']),2)
-        self.assertEqual(self.refresh(draft(),minutes=1),(dict(used=0,failed=0,created=0),[]))
-        self.assertEqual(self.item(ident),row)
 
     def test_reference_reading_gap_does_not_become_a_complete_school_requirement(self):
         keys,reference=self.multi_originals()
@@ -1094,15 +1098,22 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                 if reason:self.assertIn(reason,self.brief(ident)['reason'])
                 self.assertEqual(self.brief(ident)['state'],'ready' if state=='accepted' else 'review')
 
-    def test_native_pdf_partial_summary_and_uncovered_message_remain_review(self):
+    def test_complete_requirements_survive_clipped_background_but_uncovered_messages_do_not(self):
         keys=self.native_notice();ident=self.candidate(keys=keys)
         self.seed_groups(BATCHES[:3],keys=keys,note=TEXT+'摘'*2000,uncertainties=[],requirements=[TEXT])
         self.assertEqual(self.refresh(draft()),(dict(used=0,failed=0,created=0),[]))
-        self.seed_groups(BATCHES[3:],keys=keys,note='2026-02-12前提交。'+'摘'*2000,uncertainties=[],requirements=['2026-02-12前提交。'])
-        result,calls=self.refresh(draft())
-        self.assertEqual((result['used'],result['created'],self.brief(ident)['state'],self.count('manual_tasks')),(1,0,'review',0))
-        self.assertIn('未全部送核',self.brief(ident)['reason'])
-        self.assertEqual(self.item(ident)['due'],'')  # a date in an incompletely sent group does not become a deadline
+        last='本练习2026-02-12前提交，做完检查。'
+        self.seed_groups(BATCHES[3:],keys=keys,note=last+'摘'*2000,uncertainties=[],requirements=[last])
+        ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
+        reply={'actions':[dict(draft(goal='短摘要'),due='2026-02-12',existing_item_id=ident,
+            basis=[dict(part='pdf:'+self.pdf+':1@'+ref,text=TEXT),dict(part='pdf:'+self.pdf+':10@'+ref,text=last)])]}
+        result,calls=self.refresh(reply)
+        self.assertEqual((result['used'],result['created'],self.brief(ident)['state'],self.count('manual_tasks')),(1,1,'ready',1))
+        self.assertEqual((self.item(ident)['body'],self.item(ident)['due']),(TEXT+'\n'+last,'2026-02-12'))
+        doc=json.loads(calls[0][1]['content'])['pdf_material'][0]
+        self.assertEqual([g['requirements'] for g in doc['groups']],[[TEXT],[TEXT],[TEXT],[last]])
+        self.assertTrue(any(g['text_truncated'] for g in doc['groups']))
+        self.assertEqual(self.rows('SELECT original_status FROM manual_tasks'),[('待跟进',)])
         with self.store._db() as c:
             source,message=self.store._message_context(c,keys)
             pdf=agent._pdf_evidence([dict(self.material(keys),ref='message:'+source['id']+':'+message['id'])])
@@ -1121,11 +1132,12 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             self.store.act(dict(id=ident,action='accept',expected_updated=self.item(ident)['updated']),school_auto=True)
 
     def test_other_pdf_notice_date_cannot_become_this_homework_deadline(self):
-        keys=self.native_notice();self.seed_groups(keys=keys,note=TEXT+'示例通知：2026-02-12前提交报名表。',uncertainties=[],requirements=[TEXT])
+        keys=self.native_notice();self.seed_groups(keys=keys,note=TEXT+'示例日期（并非本次要求）：2026-02-12报名表样例。',uncertainties=[],requirements=[TEXT])
         ident=self.candidate(keys=keys)
         result,calls=self.refresh(draft())
-        self.assertEqual((result['used'],len(calls),self.item(ident)['due'],self.item(ident)['state'],self.count('manual_tasks')),(1,1,'','pending',0))
-        self.assertIn('日期未能对应本项',self.brief(ident)['reason'])
+        self.assertEqual((result['used'],len(calls),self.item(ident)['due'],self.item(ident)['state'],self.count('manual_tasks')),(1,1,'','accepted',1))
+        self.assertEqual((self.item(ident)['body'],self.rows('SELECT due,original_status FROM manual_tasks')),
+                         (TEXT,[('','待跟进')]))
 
     def test_auto_acceptance_rechecks_pdf_link_and_rejects_forged_ready_screenshot(self):
         keys=self.native_notice();self.seed_groups(keys=keys,note=TEXT,uncertainties=[]);ident=self.candidate(keys=keys)
@@ -1194,16 +1206,18 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         result, calls = self.refresh(draft(), minutes=6)
         self.assertEqual((result['used'], len(calls), self.brief(ident)['pdf_evidence']['documents'][0]['page_count']), (1, 1, 11))
 
-    def test_long_group_notes_are_clipped_and_omissions_declared_apart_from_coverage(self):
+    def test_clipped_background_keeps_page_groups_but_cannot_invent_an_action(self):
         self.seed_groups(note='摘' * 3000,requirements=[]); ident = self.candidate()
+        before=self.item(ident)
         result, calls = self.refresh(draft())
         doc = json.loads(calls[0][1]['content'])['pdf_material'][0]
         self.assertEqual((doc['complete'], doc['processed_pages'], [g['pages'] for g in doc['groups']], doc['truncated_groups'], doc['omitted_groups']),
-                         (True, list(range(1, 12)), BATCHES[:2], ['第4–6页'], ['第7–9页', '第10–11页']))
+                         (True, list(range(1, 12)), BATCHES, [], []))
         self.assertEqual(sum(len(g['text']) for g in doc['groups']), agent.PDF_TEXT_LIMIT)
-        brief = self.brief(ident); record = brief['pdf_evidence']['documents'][0]
-        self.assertEqual((brief['state'], record['groups'], record['sent'], record['omitted'], record['truncated']), ('review', 4, 2, ['第7–9页', '第10–11页'], ['第4–6页']))
-        self.assertIn('共11页已逐组整理，送核2/4组', brief['reason']); self.assertIn('第7–9页', brief['reason']); self.assertIn('未全部送核', brief['reason'])
+        self.assertEqual([g['text_truncated'] for g in doc['groups']],[False,True,True,True])
+        self.assertEqual([g['requirements'] for g in doc['groups']],[[],[],[],[]])
+        self.assertEqual((result['failed'],result['created'],self.count('manual_tasks'),self.item(ident)),(1,0,0,before))
+        self.assertEqual(self.material()['processed_pages'],list(range(1,12)))
 
     def test_change_confirmation_rechecks_pdf_evidence_and_plain_notice_keeps_old_flow(self):
         other = self.school_fragment('语文：完成虚构习作一篇。')
@@ -1405,22 +1419,22 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         with no_convert(), no_pages():
             self.test_change_during_job_claim_causes_no_model_call_and_same_evidence_recovers_once()
 
-    def test_word_full_coverage_does_not_hide_summary_omissions(self):
+    def test_word_full_coverage_keeps_clipping_explicit_without_inventing_an_action(self):
         self.link(self.keys, self.pdf, action=DETACH)
         self.pdf = self.seed_docx('f' * 32); self.link(self.keys, self.pdf)
         batches = [[1, 4, 7], [2, 5, 8], [3, 6, 9], [10, 11]]
         self.seed_groups(batches, note='摘' * 3000,requirements=[]); ident = self.candidate()
+        before=self.item(ident)
         with no_convert(), no_pages():
             result, calls = self.refresh(draft())
         doc = json.loads(calls[0][1]['content'])['pdf_material'][0]
         self.assertEqual((result['used'], doc['original'], doc['complete'], doc['processed_pages']), (1, 'docx', True, list(range(1,12))))
-        self.assertEqual((doc['truncated_groups'], doc['omitted_groups']), (['第2、5、8页'], ['第3、6、9页', '第10–11页']))
+        self.assertEqual((doc['truncated_groups'], doc['omitted_groups']), ([], []))
         self.assertEqual(sum(len(g['text']) for g in doc['groups']), 6000)
-        brief = self.brief(ident)
-        self.assertEqual(brief['state'], 'review')
-        self.assertIn('Word整理摘要未全部送核', brief['reason'])
-        self.assertIn('转换后共11页', brief['reason'])
-        self.assertIn('第3、6、9页', brief['reason'])
+        self.assertEqual([g['pages'] for g in doc['groups']],batches)
+        self.assertEqual([g['text_truncated'] for g in doc['groups']],[False,True,True,True])
+        self.assertEqual([g['requirements'] for g in doc['groups']],[[],[],[],[]])
+        self.assertEqual((result['failed'],result['created'],self.count('manual_tasks'),self.item(ident)),(1,0,0,before))
 
 
 if __name__ == '__main__':
