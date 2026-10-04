@@ -326,8 +326,8 @@ def _docx_children(node, tag):
             yield child
 
 
-def _docx_style_toggles(root, styles):
-    """True when document defaults, a default style or a style the body names (with its parents) hides or strikes text."""
+def _docx_style_toggles(root, styles, *, strict_numbering=False):
+    """Check effective defaults and body styles, including inherited numbering when required."""
     table = {s.get(_W + 'styleId'): s for s in styles.iter(_W + 'style')}
     used = {e.get(_W + 'val') for e in root.iter() if e.tag in (_W + 'pStyle', _W + 'rStyle', _W + 'tblStyle')}
     pending = [e for e in styles if e.tag != _W + 'style' or e.get(_W + 'styleId') in used
@@ -338,6 +338,8 @@ def _docx_style_toggles(root, styles):
         if id(node) not in seen:
             seen.add(id(node))
             for e in node.iter():
+                if strict_numbering and e.tag == _W + 'numPr':
+                    return True
                 if e.tag in _DOCX_TOGGLES and e.get(_W + 'val', 'true').lower() not in ('0', 'false', 'off'):
                     return True
                 if e.tag in (_W + 'basedOn', _W + 'link') and e.get(_W + 'val') in table:
@@ -345,7 +347,7 @@ def _docx_style_toggles(root, styles):
     return False
 
 
-def docx_text(body):
+def docx_text(body, *, strict_numbering=False):
     """Body paragraphs and table rows of one DOCX; never unpacked to disk, executed or fetched."""
     try:
         with zipfile.ZipFile(io.BytesIO(body)) as z:
@@ -381,6 +383,7 @@ def docx_text(body):
     for e in root.iter():
         on = e.get(_W + 'val', 'true').lower() not in ('0', 'false', 'off')
         require(e.tag not in _DOCX_UNREAD and not (e.tag in _DOCX_TOGGLES and on), 'draft_docx_unsupported')
+        require(not strict_numbering or e.tag != _W + 'numPr', 'draft_docx_unsupported')
     # Hidden or struck text can also come from a style; one in effect for the body would be read as plain text.
     named = {'word/styles.xml'} & set(parts)
     for e in _docx_xml(parts.get('word/_rels/document.xml.rels') or b'<r/>').iter():
@@ -388,7 +391,7 @@ def docx_text(body):
             target = e.get('Target', '')
             named.add(target[1:] if target.startswith('/') else 'word/' + target)
     for name in named:
-        require(name in parts and not _docx_style_toggles(root, _docx_xml(parts[name])), 'draft_docx_unsupported')
+        require(name in parts and not _docx_style_toggles(root, _docx_xml(parts[name]), strict_numbering=strict_numbering), 'draft_docx_unsupported')
     lines = []
     for block in root[0]:
         if block.tag == _W + 'p':

@@ -467,8 +467,8 @@ class PrintStore:
                 image_count+=1
                 coverage.append('%s《%s》：本次读取整张照片。'%('教师参考' if item['role']=='reference' else '题目/孩子作答',item['name']))
             elif mime.startswith('text/plain') or item['role']!='previous' and mime==family_media.DOCX_MIME:
-                try: text=family_media.docx_text(body) if mime==family_media.DOCX_MIME else body
-                except (UnicodeError,MediaError): raise PrintError('题目、作答、参考或先前检查文字无法安全完整读取') from None
+                try: text=family_media.docx_text(body,strict_numbering=True) if mime==family_media.DOCX_MIME else body
+                except (UnicodeError,MediaError): raise PrintError('题目、作答或参考文字无法完整读取（可能含自动编号、图片、公式或复杂结构）；请保留原件并转换为完整PDF') from None
                 archived=False
                 if text is not None:
                     parsed=review_text(text,saved=item['role']=='previous' and allowed[item['source']['id']].get('origin')=='review_result')
