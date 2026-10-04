@@ -2291,7 +2291,7 @@ def _history_context(store,c,source,values,key,*,exclude_id=''):
     return _hash([rows,tasks,state,materials,origin]),known
 
 
-def _history_batch_matches(store,c,sources,eligible,*,saved_originals=False):
+def _history_batch_matches(store,c,sources,eligible,*,saved_originals=False,ack_originals=False):
     """Recover exact old ordered batches, never approximate today's batching."""
     matches={}
     for source in sources.values():
@@ -2304,7 +2304,7 @@ def _history_batch_matches(store,c,sources,eligible,*,saved_originals=False):
             values=[];size=0
             for row in messages[start:start+6]:
                 value=json.loads(row['payload'])
-                if row['processed']!=1 or value['kind']!='text' or value['unread'] and not saved_originals: break
+                if row['processed']!=1 or (not ack_originals and (value['kind']!='text' or value['unread'] and not saved_originals)): break
                 values.append(value);size+=len(_json(value))
                 if size>14000: break
                 old_key='messages:'+_hash([source['id'],[v['id'] for v in values]])[:40]
@@ -2507,12 +2507,60 @@ def _recheck_school_history(app,store,now,budget,scopes):
     return dict(used=used,failed=failed,created=created)
 
 
+def _school_acknowledgement(entry):
+    acknowledgement=r'(?:是的|好的|收到|已上传|已提交|明白了|谢谢(?:老师)?)'
+    return bool(re.fullmatch(acknowledgement+r'(?:[。！!，,\s]+'+acknowledgement+r')*[。！!，,\s]*',entry['text'].strip()))
+
+
+def _school_ack_original(entry):
+    if not _school_acknowledgement(entry):return None
+    if entry.get('kind','text')=='text' and not entry.get('content_incomplete',entry.get('unread',False)) and not entry.get('attachments'):return None
+    # A reading pointer cannot invent an action from a caption or a filename.
+    # The existing original worker replaces its empty brief after reading the material.
+    return dict(title='待整理：学校资料',body=FOCUS['school'],due='',evidence=[dict(ref=entry['ref'],text=entry['text'][:600])],
+        plan=dict(school_selection_revision=SCHOOL_SELECTION_REVISION,school_task=dict(title='',goal='',advice='',
+            state='review',reason='本条还有未读内容或原件，学校要求尚待整理。',policy=SCHOOL_TASK_POLICY)))
+
+
+def _recover_school_ack_originals(store,config,now):
+    """Restore one proven empty acknowledgement batch; never reset intake or old decisions."""
+    sources={s['id']:s for s in config['sources'] if s['enabled']};created=failed=0
+    with store._db() as c:
+        eligible={r['id']:(r['fingerprint'],(8,)) for r in c.execute("SELECT id,fingerprint FROM agent_jobs WHERE id LIKE 'messages:%' AND done=1")
+            if not c.execute('SELECT 1 FROM agent_items WHERE job_id=? LIMIT 1',(r['id'],)).fetchone()}
+        matches=_history_batch_matches(store,c,sources,eligible,ack_originals=True) if eligible else {}
+    for old_key,(source,values) in matches.items():
+        if not all(_school_acknowledgement(v) for v in values):continue
+        origin=(old_key,eligible[old_key][0],'empty');key='school-ack-originals:'+_hash(origin+[source['child_id']] if isinstance(origin,list) else [*origin,source['child_id']])[:40]
+        try:
+            with store._db() as c:
+                evidence=[]
+                for v in values:
+                    attachments=[dict(r) for r in c.execute('SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=?',(source['id'],v['id']))]
+                    evidence.append(dict(v,ref='message:'+source['id']+':'+v['id'],attachments=attachments))
+                items=[item for e in evidence if (item:=_school_ack_original(e))]
+                if not items:continue
+                refs={e['ref'] for e in evidence}
+                # Any saved interpretation or explicit task link is a decision, even if superseded.
+                if any(refs & {e.get('ref') for e in json.loads(r['evidence'])} for r in c.execute("SELECT evidence FROM agent_items WHERE kind='school' AND child_id=?",(source['child_id'],))):continue
+                if any(any(ref in t['source'] for ref in refs) for t in store.app.tasks(c)):continue
+                basis,_=_history_context(store,c,source,values,key)
+            fp=store._job(key,dict(origin=origin,source=source,messages=values),now)
+            if not fp:continue
+            store._save(key,fp,[dict(i,child_id=source['child_id'],kind='school') for i in items],now,
+                history_context=(source,values,basis,origin))
+            created+=len(items)
+        except (AgentError,ValueError,KeyError,TypeError,OSError,sqlite3.Error):failed+=1
+        break  # One exact batch per tick; subsequent material work keeps the original model budget.
+    return dict(created=created,failed=failed)
+
+
 def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None, school_tasks=(),school_existing=None):
+    original_pointers=[]
     if mode == 'school':
-        # Acknowledgements remain in the original message, but cannot invent new school work.
-        acknowledgement=r'(?:是的|好的|收到|已上传|已提交|明白了|谢谢(?:老师)?)'
-        evidence = [e for e in evidence if not re.fullmatch(acknowledgement+r'(?:[。！!，,\s]+'+acknowledgement+r')*[。！!，,\s]*', e['text'].strip())]
-        if not evidence: return []
+        original_pointers=[item for e in evidence if (item:=_school_ack_original(e))]
+        evidence=[e for e in evidence if not _school_acknowledgement(e)]
+        if not evidence:return original_pointers
     as_of = dt.date.fromisoformat(as_of).isoformat() if as_of is not None else _now().date().isoformat()
     routing = mode == 'school' and school_goals is not None
     content = {'mode': mode, 'as_of': as_of, 'child': profile or {}, 'evidence': evidence}
@@ -2664,7 +2712,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 and _school_submission_step(brief,o['plan']['school_task'])),None)
             if owner:
                 brief.update(state='review',reason='同一通知的“'+owner['title'][:40]+'”已含提交要求；若是同一件事请忽略，另有要求再加入，避免重复。')
-    return output
+    return output+original_pointers
 
 
 def _check_school_page(store, c, row, *, accepting=False):
@@ -4172,6 +4220,8 @@ def run_once(app, now=None):
             budget = 3
             material = family_media.prepare_draft(store, now)
             budget -= material['used']; processed += material['used']; failed += material['failed']
+            recovered=_recover_school_ack_originals(store,config,now)
+            created+=recovered['created'];failed+=recovered['failed']
             history_scopes=_history_scopes(store,config)
             # Share the original three-call budget; alternate five-minute windows under the one-minute Agent service.
             history_reserve=int(bool(history_scopes) and now.minute//5%2==0 and budget>0)
