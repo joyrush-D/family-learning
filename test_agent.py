@@ -765,8 +765,8 @@ class AgentTests(unittest.TestCase):
     def test_initial_school_batch_saves_immutable_generated_correction_proof(self):
         self.now=dt.datetime(2026,10,4,10,tzinfo=agent.TZ)
         self.config()
-        texts=['明天完成第二项：《桥的观察单》，A、B、C三栏都要做。',
-               '更正10月3日16:10发布的第二项《桥的观察单》：A、B栏仍必做；C栏改为选做，原期限不变。']
+        texts=['明天完成两项语文要求。第一项朗读课文两遍，不用录音。第二项：完成《桥的观察单》，A、B、C三栏都要做，不打印或上传。',
+               '更正10月3日16:10发布的第二项《桥的观察单》：A、B栏仍必做；C栏改为选做，不做C栏也算完成观察单。其余要求和原期限不变。']
         payload=self.payload(cursor='12')
         payload['messages']=[dict(id=str(11+i),time=['2026-10-03T16:10:00+08:00','2026-10-04T08:05:00+08:00'][i],
             kind='text',sender='虚构发布者',sender_id='synthetic-a',text=text,unread=False) for i,text in enumerate(texts)]
@@ -806,7 +806,7 @@ class AgentTests(unittest.TestCase):
             self.assertIn('condition_changes',schema['properties']['actions']['items']['required'])
             parts=context['original_parts']
             changes=[dict(old_part=parts[0]['id'],old_text='A、B、C三栏都要做',new_part=parts[1]['id'],
-                          new_text='A、B栏仍必做；C栏改为选做')]
+                          new_text='A、B栏仍必做；C栏改为选做，不做C栏也算完成观察单。')]
             return dict(actions=[dict(title='语文：完成《桥的观察单》',goal='完成《桥的观察单》。',advice='',
                 state='ready',reason='同批完整原要求及更正条件已对应。',purpose='learning',submission='',
                 change='new',target_id='',learning_subject='语文',learning_goal_id='',due='2026-10-04',
@@ -821,6 +821,12 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(json.loads(saved['plan'])['school_generated_snapshot'],plan['school_generated_snapshot'])
             self.assertNotIn('A、B、C三栏都要做',saved['body'])
             self.assertIn('C栏改为选做',saved['body'])
+            self.assertIn('不做C栏也算完成观察单',saved['body'])
+            self.assertNotIn('朗读课文',saved['body'])
+            self.assertIn('不打印或上传',saved['body'])
+            action=json.loads(saved['plan'])['school_original_action']
+            self.assertEqual(action['basis_projection'][0]['original']['quote'],texts[0])
+            self.assertEqual(action['basis_projection'][0]['scoped']['quote'],plan['school_first_batch_correction']['action_text'])
             self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
             self.assertEqual(c.execute('SELECT SUM(processed) FROM agent_messages').fetchone()[0],2)
 
@@ -898,6 +904,55 @@ class AgentTests(unittest.TestCase):
         self.assertIn('A、B栏必做；C栏选做',result['title'])
         self.assertEqual(agent._school_requirement_goal(result,texts),result)
 
+    def test_first_batch_scope_projects_only_a_complete_proven_native_action(self):
+        import copy
+        parts,anchors,changes,proof=self._first_batch_condition_fixture()
+        raw=copy.deepcopy(anchors);raw[0]['quote']=parts[0]['text']
+        before=copy.deepcopy((parts,raw,proof))
+        scoped,projection=agent._school_scoped_correction_anchors(parts,raw,proof)
+        self.assertEqual(scoped,anchors)
+        self.assertEqual(projection,[dict(original=raw[0],scoped=anchors[0])])
+        self.assertEqual((parts,raw,proof),before)
+        self.assertEqual(agent._school_scoped_correction_anchors(parts,anchors,proof),(anchors,[]))
+        cases=[]
+        for quote in ['明天完成两项语文要求。第一项朗读课文。',proof['action_text'].split('，')[0],
+                      parts[0]['text'].replace('不打印或上传。','')]:
+            altered=copy.deepcopy(raw);altered[0]['quote']=quote;cases.append((parts,altered,proof))
+        for field in ['requirement','background_only']:
+            altered=copy.deepcopy(parts);altered[0][field]=True;cases.append((altered,raw,proof))
+        altered=copy.deepcopy(parts);altered[0]['text']+='补充说明';cases.append((altered,raw,proof))
+        altered=copy.deepcopy(proof);altered['action_text']='第一项朗读课文。';cases.append((parts,raw,altered))
+        altered=copy.deepcopy(raw);altered[0]['upload_ids']=['a'*32];cases.append((parts,altered,proof))
+        cases.append((parts,raw+[copy.deepcopy(raw[0])],proof))
+        for sources,quotes,basis in cases:
+            with self.subTest(quotes=quotes,basis=basis):
+                with self.assertRaises(agent.AgentError):agent._school_scoped_correction_anchors(sources,quotes,basis)
+
+    def test_effective_conditions_allow_only_matching_optional_completion_equivalence(self):
+        import copy
+        parts,anchors,changes,proof=self._first_batch_condition_fixture()
+        for obj in ['观察单','桥的观察单','《桥的观察单》']:
+            literal='A、B栏仍必做；C栏改为选做，不做C栏也算完成'+obj+'。'
+            sources=copy.deepcopy(parts);sources[1]['text']=sources[1]['text'].replace(
+                'A、B栏仍必做；C栏改为选做，不做C栏也算完成观察单。',literal)
+            quotes=copy.deepcopy(anchors);quotes[1]['quote']=sources[1]['text']
+            basis=dict(proof,correction_text=sources[1]['text'])
+            texts=agent._school_effective_conditions(sources,quotes,[dict(changes[0],new_text=literal)],basis)
+            joined='\n'.join(texts)
+            self.assertIn(literal.rstrip('。'),joined)
+            self.assertIn('C栏（选做时）：用自己的话',joined)
+            self.assertNotIn('。，',joined)
+        for ending in ['不做A栏也算完成观察单','不做C栏也算完成朗读课文','不做C栏也算完成全班作业',
+                       '不做C栏也算完成观察单，明天交回','不做C栏也算完成观察单，B栏只写一句',
+                       '不做C栏也算完成观察单，不用做A栏','不做C栏也算完成所有作业']:
+            literal='A、B栏仍必做；C栏改为选做，'+ending+'。'
+            sources=copy.deepcopy(parts);sources[1]['text']=sources[1]['text'].replace(
+                'A、B栏仍必做；C栏改为选做，不做C栏也算完成观察单。',literal)
+            quotes=copy.deepcopy(anchors);quotes[1]['quote']=sources[1]['text']
+            with self.subTest(ending=ending):
+                with self.assertRaises(agent.AgentError):agent._school_effective_conditions(
+                    sources,quotes,[dict(changes[0],new_text=literal)],dict(proof,correction_text=sources[1]['text']))
+
     def test_effective_column_changes_reject_missing_ambiguous_or_standard_replacements(self):
         import copy
         parts,anchors,changes,proof=self._first_batch_condition_fixture()
@@ -907,7 +962,7 @@ class AgentTests(unittest.TestCase):
         mixed=copy.deepcopy(anchors);mixed[0]['quote']=parts[0]['text']
         cases.append((parts,mixed,changes,proof))
         cases.append((parts,anchors,[dict(changes[0],old_text=parts[0]['text'])],proof))
-        cases.append((parts,anchors,[dict(changes[0],new_text='A、B栏仍必做；C栏改为选做，不做C栏也算完成观察单')],proof))
+        cases.append((parts,anchors,[dict(changes[0],new_text='A、B栏仍必做；C栏改为选做，不做A栏也算完成观察单')],proof))
         cases.append((parts,anchors,[dict(changes[0],new_text='C栏改为选做')],proof))
         cases.append((parts,anchors,changes*2,proof))
         cases.append((parts,anchors[1:],changes,proof))
