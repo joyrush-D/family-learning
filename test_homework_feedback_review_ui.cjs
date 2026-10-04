@@ -71,7 +71,7 @@ def unit_fixture(width):
     store=app.agent_store();calls=[]
     def task(ident):
         with app.connect_read_only() as c:return copy.deepcopy(next(t for t in app.tasks(c) if t['id']==ident))
-    def classify(index,text,title,change='new',target='',deadline=''):
+    def classify(index,text,title,change='new',target='',deadline='',goal=''):
         with store._db() as c:
             prior=c.execute('SELECT cursor FROM agent_sources WHERE id=?',(source['id'],)).fetchone()
         message=dict(id=str(index),time=now.isoformat(),kind='text',sender='虚构英语老师',sender_id='synthetic-unit-teacher-'+str(width),text=text,unread=False)
@@ -81,7 +81,7 @@ def unit_fixture(width):
             before_source=dict(c.execute('SELECT * FROM agent_sources WHERE id=?',(source['id'],)).fetchone())
         ref='message:'+source['id']+':'+str(index)
         evidence=[dict(message,ref=ref,publisher=agent._publisher(source['id'],message),content_incomplete=False)]
-        raw=dict(proposals=[school_proposal(title_quote=text,due=deadline,evidence=[dict(ref=ref)],learning_subject='英语',task_title=title,task_goal=text,task_state='ready',task_reason='虚构明确原文。',task_change=change,task_target_id=target,task_purpose='learning')])
+        raw=dict(proposals=[school_proposal(title_quote=text,due=deadline,evidence=[dict(ref=ref)],learning_subject='英语',task_title=title,task_goal=goal or text,task_state='ready',task_reason='虚构明确原文。',task_change=change,task_target_id=target,task_purpose='learning')])
         def fixed(messages,schema,name,*args,**kwargs):
             assert name=='family_agent_selection';calls.append(dict(index=index,name=name,raw=copy.deepcopy(raw)));return copy.deepcopy(raw)
         with patch.object(agent.family_llm,'_chat_json',side_effect=fixed):
@@ -95,9 +95,15 @@ def unit_fixture(width):
             assert [dict(r) for r in c.execute('SELECT * FROM agent_messages WHERE source_id=? ORDER BY id',(source['id'],))]==before_messages
             assert dict(c.execute('SELECT * FROM agent_sources WHERE id=?',(source['id'],)).fetchone())==before_source
         return row
-    original_text='Unit30课文读两遍，朗读录音上传班级作业区，明天完成。'
-    original=classify(1,original_text,'英语：Unit30朗读 '+str(width),deadline=due)
-    task_id=store.act(dict(id=original['id'],action='accept'))['task_id'];original_task=task(task_id)
+    original_goal='Unit30课文读两遍，朗读录音上传班级作业区，明天完成。'
+    original_text='谁有英语课本照片，发一下。'+original_goal
+    original=classify(1,original_text,'英语：Unit30朗读 '+str(width),deadline=due,goal=original_goal)
+    with patch.object(agent.family_llm,'_chat_json',side_effect=AssertionError('ready school action auto-collects without another model')):
+        agent._refresh_school(app,store,now,0)
+    with store._db() as c:accepted=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(original['id'],)).fetchone())
+    assert accepted['state']=='accepted' and json.loads(accepted['plan'])['school_task']['auto_added']
+    task_id=accepted['task_id'];original_task=task(task_id)
+    assert original_task['action']==original_goal and '谁有' not in original_task['title']+original_task['action'],'mixed resource prefix cannot overwrite homework'
     with store._db() as c:accepted_before=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(original['id'],)).fetchone());count_before=c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0]
     wrong=classify(2,'只补Unit3朗读：上传录音后确认上传成功。','英语：Unit3朗读补充',change='append',target=task_id)
     wrong_brief=json.loads(wrong['plan'])['school_task']
