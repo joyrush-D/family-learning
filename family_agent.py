@@ -2504,7 +2504,23 @@ def _school_requirement_goal(value, texts):
         raise AgentError('本项完整行动要求超过可保存范围，原要求保留')
     # A requirement includes its completion/submission conditions. Do not add a
     # second unconstrained submission summary (for example a blank date field).
-    return dict(value,goal=goal,submission='')
+    title=value['title']
+    if '选做' in goal:
+        question=r'第[0-9一二三四五六七八九十百]+(?:\s*(?:至|到|[-–—~～])\s*[0-9一二三四五六七八九十百]+)?题'
+        labels=[]
+        for match in re.finditer('('+question+r')(?:为|是)?(必做|选做)|(必做|选做)(?:的)?('+question+')',goal):
+            label=(match[1]+match[2]) if match[1] else (match[4]+match[3])
+            if label not in labels: labels.append(label)
+        if labels:
+            # A free title's broad range may imply every question is mandatory.
+            # Keep its task name, but use only the read requirements for the range.
+            title=re.sub(question+r'.*$', '', title).rstrip(' ：:，,；;')
+            title=title+'（'+'；'.join(labels)+'）'
+        elif '选做' not in title:
+            title+='（含选做）'
+        if len(title)>TASK_BRIEF_SCHEMA['properties']['title']['maxLength']:
+            raise AgentError('本项必做选做标题超过可保存范围，原要求保留')
+    return dict(value,title=title,goal=goal,submission='')
 
 
 def _school_saved_requirements(row, parts):

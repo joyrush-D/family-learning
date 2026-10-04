@@ -174,6 +174,21 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         result,calls=self.refresh(reply)
         self.assertEqual((result['created'],len(calls),self.item(ident)['body']),(1,1,requirement))
 
+    def test_original_optional_question_range_is_clear_in_the_saved_title(self):
+        requirement='数学：2026-02-12前完成数学练习：第1至3题必做，第4题选做；第3题写明单位，选做的第4题用两种方法。'
+        ident,parts,keys=self.required_image([requirement])
+        reply={'actions':[dict(draft(title='数学：完成数学练习第1至4题',goal='短摘要'),due='2026-02-12',existing_item_id=ident,
+            basis=[dict(part=parts[0],text=requirement)])]}
+        self.assertEqual(self.refresh(reply)[0]['created'],1)
+        title='数学：完成数学练习（第1至3题必做；第4题选做）'
+        self.assertEqual(self.item(ident)['title'],title)
+        self.assertEqual(self.rows('SELECT title,action FROM manual_tasks')[0],(title,requirement))
+        for text in ('第4题选做','选做的第4题'):
+            result=agent._school_requirement_goal(draft(title='数学：完成第1至4题'),[text+'，写出两种方法。'])
+            self.assertEqual(result['title'],'数学：完成（第4题选做）')
+        result=agent._school_requirement_goal(draft(title='数学：阅读任选章节'),['任选章节为选做，不改变必读第2章。'])
+        self.assertEqual(result['title'],'数学：阅读任选章节（含选做）')
+
     def test_missing_independent_requirement_fails_the_whole_round(self):
         requirements=['数学：2026-02-12前完成第1至3题并写明单位。','数学：2026-02-13前复习错题本第1至2题，并写出订正过程。']
         ident,parts,keys=self.required_image(requirements);before=self.item(ident)
