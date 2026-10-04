@@ -114,6 +114,7 @@ class Store:
         task_id = _text(obj, 'task_id', 30)
         feedback_id = obj.get('feedback_record_id')
         feedback_created = _text(obj, 'feedback_created', 50)
+        feedback_linked_at = _text(obj, 'feedback_linked_at', 50)
         if bool(task_id) != (feedback_id is not None) or (feedback_id is not None and
                 (type(feedback_id) is not int or feedback_id <= 0)):
             raise WrongReviewError('请从同一份作业反馈进入错题核对')
@@ -185,11 +186,15 @@ class Store:
             c.execute('BEGIN IMMEDIATE')
             if task_id:
                 task = next((t for t in self.app.tasks(c) if t['id'] == task_id), None)
-                feedback = c.execute('SELECT child,source,attachments,created FROM records WHERE id=?',
+                feedback = c.execute('SELECT * FROM records WHERE id=?',
                                      (feedback_id,)).fetchone()
-                if (task is None or task['child'] != child or feedback is None or
+                if (task is None or task['child'] != child or task.get('agenda',{}).get('category')!='homework' or feedback is None or
                         self.app.child_names(c).get(feedback['child'], feedback['child']) != child or
-                        feedback['source'] != '事项:' + task_id or feedback['created'] != feedback_created or
+                        not self.app.homework_answer_record(feedback,task_id) or
+                        self.app.legacy_homework_review_files(c,feedback) or
+                        (feedback['source'] != '事项:' + task_id and
+                         (not feedback_linked_at or feedback_linked_at != feedback['linked_task_at'])) or
+                        feedback['created'] != feedback_created or
                         any(item['attachment'] and item['attachment'] not in json.loads(feedback['attachments']) for item in parsed)):
                     raise WrongReviewError('原作业反馈、孩子或照片已变化，请从原作业重新核对', 409, 'wrong_feedback_changed')
             for record in records:

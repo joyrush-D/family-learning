@@ -1004,6 +1004,13 @@ def homework_material_context(c,task_id,*,answer=None):
             if ident in legacy: allowed[ident].update(origin='review_result',review_binding=[other['id'],other['created']])
     return dict(task=task,child_id=child['id'],allowed=allowed,report=report,school=bindings,school_error=school_error)
 
+def homework_answer_record(row,task_id):
+    """Original answers only; an explicit link preserves ordinary provenance."""
+    if row is None or row['related_record_id'] or row['followup_kind'] or row['source']=='错题照片核对':
+        return False
+    source=row['source']
+    return source=='事项:'+task_id or (not source.startswith('事项:') and row['linked_task_id']==task_id)
+
 def homework_review_context(c,task_id,record_id,expected_created=None):
     """Only this saved answer, reported homework and explicitly bound school originals."""
     if type(record_id) is not int or not 0<record_id<=9223372036854775807:
@@ -1013,12 +1020,14 @@ def homework_review_context(c,task_id,record_id,expected_created=None):
         raise family_print.PrintError('这份作答不属于当前孩子的作业','review_source_not_allowed',403)
     if expected_created is not None and (not isinstance(expected_created,str) or expected_created!=row['created']):
         raise family_print.PrintError('原作答已更正，请重新打开后检查','review_source_changed',409)
-    if row['followup_kind']=='作业检查' or legacy_homework_review_files(c,row):
-        raise family_print.PrintError('检查意见不是孩子作答，请回原作答追加复核','review_source_not_allowed',403)
+    if not homework_answer_record(row,task_id) or legacy_homework_review_files(c,row):
+        raise family_print.PrintError('请从当前作业打开原作答；检查意见、错题和订正保留为后续记录','review_source_not_allowed',403)
     material=homework_material_context(c,task_id,answer=row)
     task=material['task']
     context=dict(task=dict(id=task['id'],child=task['child'],source=task['source'],action=task['action']),
                  child_id=material['child_id'],record_id=record_id,created=row['created'],record_ids=json.loads(row['attachments']),answer_note=row['note'],report=material['report'],school=material['school'])
+    if row['source']!='事项:'+task_id:
+        context['record_task_link']=[row['linked_task_id'],row['linked_task_at']]
     fingerprint=hashlib.sha256(json.dumps(context,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
     return dict(task=task,record=dict(row),allowed=material['allowed'],context_sha256=fingerprint,school_error=material['school_error'])
 
