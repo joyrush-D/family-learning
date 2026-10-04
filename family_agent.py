@@ -2513,7 +2513,9 @@ def _school_original_prompt(pages,pdf,material):
     prompt=prompt.replace('整理一条已有学校候选，仅返回title、goal、advice、state、reason。','整理本轮已读原件中的独立行动，按给定actions结构返回。')
     prompt=prompt.replace('只处理candidate所指这一件事，不能扩大到其他列或其他孩子。','处理本孩子本轮原件中的全部独立学校要求。')
     prompt=prompt.replace('candidate仅定位当前这一项，不是完整要求或原文。结合本项全部evidence正文和有效原件，整理完整结论；共享原消息中的其他独立事项不混入本项。','candidate是本轮原件的原候选，不是整份行动清单。')
-    return prompt+'\n本轮返回actions数组（最多36项），逐项写清科目/事务、动作、范围、完成标准和各自due；一份原件可以含多个独立要求，不能只返回其中一项。完成该作业后的打印、签字、交回仍放该作业goal/submission；另一份独立回执单列行政事项。每项basis逐字引用original_parts里含本项动作和对象的文字，part选该段id；摘要仍是Agent参考，不是老师逐字原话。日期必须由本项basis支持，不能借另一项日期。截止没写due留空，不能猜今天。existing_actions中的同一行动用existing_item_id，不新增或恢复accepted/dismissed；当前candidate_id须恰好返回一次，不默认将数组第一项当原候选。新独立行动existing_item_id留空。原件范围、学习/行政、必做/选做、疑点分别保留；页面已读齐不代表行动理解准确。'
+    return prompt+'\n本轮返回actions数组（最多36项），逐项写清科目/事务、动作、范围、完成标准和各自due；一份原件可以含多个独立要求，不能只返回其中一项。完成该作业后的打印、签字、交回仍放该作业goal/submission；另一份独立回执单列行政事项。每项basis逐字引用original_parts里含本项动作和对象的文字，part选该段id；摘要仍是Agent参考，不是老师逐字原话。日期必须由本项basis支持，不能借另一项日期。截止没写due留空，不能猜今天。existing_actions中的同一行动用existing_item_id，不新增或恢复accepted/dismissed；当前candidate_id须恰好返回一次，不默认将数组第一项当原候选。新独立行动existing_item_id留空。原件范围、学习/行政、必做/选做、疑点分别保留；页面已读齐不代表行动理解准确。'+\
+        '\n每条basis.text必须是所选part的text中连续的原文子串，字词、标点和换行均保持原样，禁止跳字、改标点或把不连续句子拼成一次引用。需要引用相隔的句子时，用同一个part的多个basis，每条分别连续引用，不能删掉中间的对照说明后拼接。'+\
+        '\n表头和空白填写栏不是学校行动要求。例如原件只要求打印、家长签字并交回，仅另设“日期：____”空栏而未明确要求填写日期时，goal和submission都不得新增“填写日期”；仅保留明确要求的打印、签字、交回。'
 
 
 def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,material,targets,goals,now):
