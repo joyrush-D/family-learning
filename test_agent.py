@@ -2323,6 +2323,7 @@ class AgentTests(unittest.TestCase):
         quote='家长事务：2026-02-13签字交回独立活动回执，无需盖章。'
         evidence=[dict(text='2026-02-11朗读第5课两遍。\n'+quote,time=self.now.isoformat())]
         self.assertTrue(agent._school_dated_quote(quote,evidence,'2026-02-13',dict(goal=quote)))
+        self.assertTrue(agent._school_dated_quote(quote,evidence,'2026-02-13',dict(goal='签字交回独立活动回执，无需盖章。')))
         for title,goal,due in [(quote,quote,'2026-02-11'),
                                (quote,quote.replace('独立活动回执','另一份报名表'),'2026-02-13'),
                                ('2026-02-13', '2026-02-13','2026-02-13'),
@@ -2350,6 +2351,81 @@ class AgentTests(unittest.TestCase):
         with self.app.connect() as c:
             self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],0)
             self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+
+    def _recover_processed_resource_request_reference(self,*,expired=False):
+        from test_school_history import SchoolHistoryTests
+        request='谁有语文课本照片，发一下。'
+        reading='语文作业：明天朗读第5课两遍。'
+        text=request+reading;ref='message:'+self.source['id']+':11'
+        payload=self.payload();payload['messages'][0]['text']=text
+        self.store.ingest(payload)
+        old_items=self._resource_request_selection(text,[dict(title_quote=request,due='',
+            task_title='群内资料求助',task_goal='本条是在询问资料，尚未给出本家庭须完成的学校要求。',
+            task_state='reference',task_reason='固定旧误判：整条混合消息被当成资料求助。',task_purpose='optional')])
+        old_items[0]['plan']['school_selection_revision']=agent.SCHOOL_SELECTION_REVISION-1
+        old_key='messages:synthetic-old-resource-reference'
+        fp=self.store._job(old_key,dict(school_learning_policy=8,messages=payload['messages']),self.now)
+        self.store._save(old_key,fp,[dict(item,child_id='child-1',kind='school') for item in old_items],self.now,
+                         [(self.source['id'],'11')],school_context=(self.source,payload['messages']))
+        with self.app.connect() as c:
+            old=dict(c.execute('SELECT * FROM agent_items WHERE job_id=?',(old_key,)).fetchone())
+            self.assertEqual((old['state'],json.loads(old['plan'])['school_task']['state']),('pending','reference'))
+            self.assertNotIn('school_action_anchor',json.loads(old['plan']),'do not manufacture a literal anchor on the old generic reference')
+
+        def protected():
+            with self.app.connect() as c:
+                return dict(sources=[dict(r) for r in c.execute('SELECT * FROM agent_sources ORDER BY id')],
+                    messages=[dict(r) for r in c.execute('SELECT * FROM agent_messages ORDER BY source_id,id')],
+                    old_job=dict(c.execute('SELECT * FROM agent_jobs WHERE id=?',(old_key,)).fetchone()),
+                    old_item=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(old['id'],)).fetchone()))
+
+        before=protected()
+        self.assertEqual((before['sources'][0]['cursor'],before['messages'][0]['processed']),('11',1))
+        history=SchoolHistoryTests(methodName='runTest')
+        history.fixture=self;history.app=self.app;history.store=self.store;history.calls=[]
+        history.clock=self.now+dt.timedelta(days=2 if expired else 0)
+        history.history_response=dict(proposals=[
+            school_proposal(title_quote=request,action_quote=request,existing_item_id=old['id'],evidence=[dict(ref=ref)],
+                task_title='群内资料求助',task_goal=request,task_state='reference',task_reason='原求助决定保留。',task_purpose='optional'),
+            school_proposal(title_quote=reading,action_quote=reading,existing_item_id='',due='2026-02-11',evidence=[dict(ref=ref)],
+                learning_subject='语文',task_title='语文：朗读第5课两遍',task_goal=reading,task_state='ready',
+                task_reason='旧混合消息中的独立朗读要求，按原发送日换算明天。',task_purpose='learning')])
+        with patch.object(agent,'_now',return_value=history.clock),patch.object(agent.family_llm,'_chat_json',side_effect=history._model) as model:
+            scopes=agent._history_scopes(self.store,self.store._config())
+            self.assertEqual(len(scopes),1,'an older selection revision opens only the bounded processed scope')
+            first=agent._recheck_school_history(self.app,self.store,history.clock,1,scopes)
+            self.assertEqual((first['used'],first['failed']),(1,0))
+            recovered=history._history_rows()
+            self.assertEqual(len(recovered),1,'keep the old reference instead of duplicating it')
+            row=recovered[0]
+            self.assertEqual((row['body'],row['due'],row['state']),
+                             (reading,'2026-02-11','pending' if expired else 'accepted'))
+            self.assertEqual(json.loads(row['plan'])['school_action_anchor'],{ref:reading})
+            self.assertEqual(protected(),before,'old job, processed message, cursor and reference decision stay byte-for-byte saved')
+            repeated=agent._recheck_school_history(self.app,self.store,history.clock,1,
+                agent._history_scopes(self.store,self.store._config()))
+            self.assertEqual(repeated,dict(used=0,failed=0,created=0))
+            self.assertEqual(model.call_count,1)
+            self.assertEqual(history._history_rows(),recovered)
+        with self.app.connect() as c:
+            tasks=[dict(r) for r in c.execute('SELECT * FROM manual_tasks')]
+            self.assertEqual(len(tasks),0 if expired else 1)
+            if tasks:
+                self.assertEqual((tasks[0]['child'],tasks[0]['action'],tasks[0]['due'],tasks[0]['original_status']),
+                                 ('示例甲',reading,'2026-02-11','待跟进'))
+            else:
+                self.assertEqual(json.loads(row['plan'])['school_task']['state'],'review')
+                self.assertIn('原截止日期已过',json.loads(row['plan'])['school_task']['reason'])
+                self.assertNotEqual(row['due'],history.clock.date().isoformat(),'expired homework must not be reassigned to today')
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
+        self.assertEqual(protected(),before)
+
+    def test_processed_resource_request_reference_recovers_reading_once(self):
+        self._recover_processed_resource_request_reference()
+
+    def test_processed_resource_request_reference_does_not_make_expired_reading_today(self):
+        self._recover_processed_resource_request_reference(expired=True)
 
     def test_school_links_keep_purpose_unknowns_and_the_homework_submission_relation(self):
         ref='message:synthetic-group:11'
