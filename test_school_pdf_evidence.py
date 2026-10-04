@@ -59,8 +59,8 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
         reply={'actions':[dict(draft(title='数学：完成练习',goal=short),due='2026-02-12',existing_item_id=ident,
             basis=[dict(part='pdf:'+self.pdf+':1@'+ref,text=short)])]}
-        result,_=self.refresh(reply)
-        self.assertEqual((result['failed'],result['created'],self.count('manual_tasks')),(1,0,0))
+        result,calls=self.refresh(reply)
+        self.assertEqual((result['failed'],result['created'],self.count('manual_tasks'),len(calls)),(0,0,0,0))
         self.assertEqual(self.item(ident)['state'],'pending')
 
     def test_pdf_complete_requirements_preserve_cross_group_standards_and_receipt(self):
@@ -96,6 +96,46 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertEqual(tasks,[(requirements[0]+'\n'+requirements[1],'2026-02-12'),(requirements[2],'2026-02-13')])
         self.assertEqual(self.count('records'),0)
         self.assertEqual(self.refresh(reply,minutes=1),(dict(used=0,failed=0,created=0),[]))
+
+    def test_pdf_legacy_upgrade_is_bounded_preserves_each_old_group_and_all_decisions(self):
+        keys=self.native_notice('upgrade-groups')
+        self.candidate(keys=keys,ident='upgrade-groups')
+        self.seed_groups(keys=keys,note='旧页组摘要：数学练习，完整标准尚未结构化。',uncertainties=[])
+        before=self.rows('SELECT first_page,pages,page_count,payload,updated FROM agent_pdf_material ORDER BY first_page')
+        seen=[]
+        def model(text,images,**kw):
+            pages=json.loads(text)['original_pdf']['pages'];seen.append(pages)
+            self.assertEqual((kw['original_ids'],kw['original_pages']),([self.pdf],pages))
+            return dict(originals=[dict(upload_id=self.pdf,title='新页组',note='背景',uncertainties=[],requirements=[])])
+        with test_pdf_material.renderer(),patch.object(family_llm,'extract_draft',side_effect=model) as called:
+            self.assertEqual(pdfm.prepare(self.store,self.now,budget=0),dict(used=0,failed=0));called.assert_not_called()
+            for step in range(4):
+                self.assertEqual(pdfm.prepare(self.store,self.now+dt.timedelta(minutes=step)),dict(used=1,failed=0))
+            self.assertEqual(pdfm.prepare(self.store,self.now+dt.timedelta(minutes=4)),dict(used=0,failed=0))
+        self.assertEqual(seen,BATCHES)
+        after=self.rows('SELECT first_page,payload FROM agent_pdf_material ORDER BY first_page')
+        for old,new in zip(before,after):
+            self.assertEqual(json.loads(new[1])['previous_group'],dict(payload=json.loads(old[3]),updated=old[4],pages=json.loads(old[1]),page_count=old[2]))
+        self.assertTrue(self.view(keys)['requirements_complete'])
+        self.assertEqual((self.count('manual_tasks'),self.count('records')),(0,0))
+
+    def test_pdf_legacy_upgrade_mixed_decision_and_model_race_never_replace_groups(self):
+        keys=self.native_notice('upgrade-decisions')
+        first=self.candidate(keys=keys,ident='upgrade-decisions-first')
+        second=self.candidate(keys=keys,ident='upgrade-decisions-second')
+        self.seed_groups(keys=keys,note='旧页组，留待完整核对。',uncertainties=[])
+        before=self.rows('SELECT * FROM agent_pdf_material ORDER BY first_page')
+        with self.store._db() as c:c.execute("UPDATE agent_items SET state='dismissed' WHERE id=?",(second,))
+        with no_render(),patch.object(family_llm,'extract_draft',side_effect=AssertionError('mixed decision must not reread')):
+            self.assertEqual(pdfm.prepare(self.store,self.now),dict(used=0,failed=0))
+        with self.store._db() as c:c.execute("UPDATE agent_items SET state='pending' WHERE id=?",(second,))
+        def changed(text,images,**kw):
+            with self.store._db() as c:c.execute("UPDATE agent_items SET plan=? WHERE id=?",(json.dumps(dict(school_task=dict(goal='家长并发修改'))),first))
+            return dict(originals=[dict(upload_id=self.pdf,title='新页组',note='背景',uncertainties=[],requirements=[])])
+        with test_pdf_material.renderer(),patch.object(family_llm,'extract_draft',side_effect=changed):
+            self.assertEqual(pdfm.prepare(self.store,self.now),dict(used=1,failed=0))
+        self.assertEqual(self.rows('SELECT * FROM agent_pdf_material ORDER BY first_page'),before)
+        self.assertEqual((self.count('manual_tasks'),self.count('records')),(0,0))
 
     def test_docx_only_actions_keep_each_original_standard_and_unrelated_text_separate(self):
         from test_media import MediaTests,docx,para

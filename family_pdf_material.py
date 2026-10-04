@@ -74,7 +74,7 @@ def _document_key(source, message, value):
 
 
 def _job_value(fingerprint, done):
-    return {'pdf_material': fingerprint, 'done': sorted(done)}
+    return {'pdf_material': fingerprint, 'done': sorted(done), 'requirements': 1}
 
 
 def pdf_inputs(store, c, source, message):
@@ -291,6 +291,14 @@ def complete_evidence(store, c, source, message):
     return documents[0] if len(documents) == 1 else dict(fingerprint=_aggregate_fingerprint(values), documents=documents)
 
 
+def _decision_scope(store, c, source, message):
+    """Whole-message decisions, including current plans/tasks/feedback; a timestamp alone is not a snapshot."""
+    from family_agent import _school_original_known, _school_pending_original
+    ref='message:'+source['id']+':'+message['id']
+    scope,known=_school_original_known(store,c,dict(child_id=source['child_id'],evidence=json.dumps([dict(ref=ref)])))
+    return scope,bool(known) and all(_school_pending_original(row) for row in known)
+
+
 def _claim_intact(store, c, source, message, value, key, fp):
     """True only while the same authorization, source, child, full message, original bytes and job claim are current."""
     try:
@@ -298,7 +306,8 @@ def _claim_intact(store, c, source, message, value, key, fp):
     except Exception:
         return False  # Revoked, unreadable or now another child's: treated as changed.
     job = c.execute('SELECT fingerprint FROM agent_jobs WHERE id=?', (key,)).fetchone()
-    return current is not None and current['fingerprint'] == value['fingerprint'] and job is not None and job['fingerprint'] == fp
+    return (current is not None and current['fingerprint'] == value['fingerprint'] and job is not None and job['fingerprint'] == fp
+            and _decision_scope(store,c,source,message)[0] == value['decision_scope'])
 
 
 def _void(c, key, fp):
@@ -332,8 +341,18 @@ def prepare(store, now, budget=ROUND_CALLS):
                 if not values:
                     continue
                 candidates = []
+                decision_scope,undecided=_decision_scope(store,c,source,message)
                 for value in values:
-                    _, done, page_count = _batches(_rows(c, source, message, value['fingerprint']),value['upload_id'])
+                    batches, done, page_count = _batches(_rows(c, source, message, value['fingerprint']),value['upload_id'])
+                    legacy=[b for b in batches if 'originals' not in b['draft']]
+                    if legacy:
+                        if undecided:
+                            done={p for b in batches if 'originals' in b['draft'] for p in b['pages']}
+                            value['upgrade_pages']=legacy[0]['pages']  # Preserve saved boundaries and all other groups.
+                        elif page_count is not None and not _pending(done,page_count):continue
+                        # A shared legacy group never changes after any decision. Missing groups retain the original
+                        # bounded first-read path, which does not replace the already saved legacy groups.
+                    value['decision_scope']=decision_scope
                     if page_count is None or _pending(done, page_count):
                         candidates.append((value, done, page_count))
         except Exception:
@@ -389,7 +408,7 @@ def prepare(store, now, budget=ROUND_CALLS):
             page_count = family_pdf.page_count(body, deadline())
         if value['expected_pages'] is not None:
             require(page_count == value['expected_pages'], 'pptx_page_count_changed')
-        pages = _pending(done, page_count)[:BATCH_PAGES]
+        pages = value.get('upgrade_pages') or _pending(done, page_count)[:BATCH_PAGES]
         require(pages, 'pdf_material_changed')
         rendered = family_pdf.render_pages(body, pages, deadline())
         # A converted DOCX whose page total differs from the saved groups is refused here, before any model call.
@@ -413,7 +432,13 @@ def prepare(store, now, budget=ROUND_CALLS):
             if not _claim_intact(store, c, source, message, value, key, fp):
                 _void(c, key, fp)  # Changed while the model ran: drop the result, keep nothing, leave no error.
                 return dict(used=1, failed=0)
-            _, done_now, count_now = _batches(_rows(c, source, message, value['fingerprint']),value['upload_id'])
+            saved_rows=_rows(c, source, message, value['fingerprint'])
+            batches_now, done_now, count_now = _batches(saved_rows,value['upload_id'])
+            if value.get('upgrade_pages'):
+                old=next((r for r in saved_rows if r['first_page']==pages[0] and json.loads(r['pages'])==pages),None)
+                require(old is not None and any(b['pages']==pages and 'originals' not in b['draft'] for b in batches_now), 'pdf_material_changed')
+                done_now={p for b in batches_now if 'originals' in b['draft'] for p in b['pages']}
+                result['previous_group']=dict(payload=json.loads(old['payload']),updated=old['updated'],pages=json.loads(old['pages']),page_count=old['page_count'])
             require(count_now in (None, page_count) and not (done_now & set(pages)), 'pdf_material_changed')
             c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?) '
                       'ON CONFLICT(source_id,message_id,fingerprint,first_page) DO UPDATE SET '

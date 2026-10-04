@@ -23,6 +23,35 @@ TABLES = ('sqlite_master', 'agent_pdf_material', 'agent_jobs', 'agent_message_dr
           'agent_items', 'records', 'manual_tasks', 'uploads')
 
 
+def page_reply(value, upload_id):
+    """Adapt only valid, explicit background fixtures; malformed replies stay malformed."""
+    if not isinstance(value, dict) or set(value) != {'title', 'note', 'uncertainties'}:
+        return value
+    try:
+        family_llm.validate_school_material(value)
+    except (family_llm.LLMDraftError, ValueError, TypeError):
+        return value
+    return dict(originals=[dict(upload_id=upload_id, **value, requirements=[])])
+
+
+def page_model(reply=DRAFT):
+    """Keep Mock call inspection while explicit page fixtures use the current protocol."""
+    outcomes = iter(reply) if isinstance(reply, (list, tuple)) else None
+
+    def model(text, images, **kwargs):
+        original = json.loads(text)['original_pdf']
+        if kwargs.get('original_ids') != [original['upload_id']] or kwargs.get('original_pages') != original['pages']:
+            raise AssertionError('Page fixture must receive one original ID and the exact sent page numbers')
+        if len(images) != len(original['pages']):
+            raise AssertionError('Page fixture must receive one image for each sent page')
+        value = next(outcomes) if outcomes is not None else reply(text, images, **kwargs) if callable(reply) else reply
+        if isinstance(value, BaseException):
+            raise value
+        return page_reply(value, original['upload_id'])
+
+    return patch.object(family_llm, 'extract_draft', side_effect=model)
+
+
 def renderer(page_count=11):
     """Real poppler when present; otherwise test_pdf's subprocess stand-in, so render_pages/page_count still run."""
     if test_pdf.TOOLS_AVAILABLE:
@@ -65,10 +94,12 @@ class PdfMaterialTests(Base):
         self.assertIsNone(self.store.message(keys, dict)['material_draft'])
         self.assertEqual(self.view(keys)['state'], 'pending')
         facts = self.facts()
-        with renderer(page_count=1), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as model:
+        with renderer(page_count=1), page_model() as model:
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
             model.assert_called_once()
             self.assertEqual(model.call_args.kwargs['timeout'], 90)
+            self.assertEqual(model.call_args.kwargs['original_ids'], [ident])
+            self.assertEqual(model.call_args.kwargs['original_pages'], [1])
         self.assertEqual((self.view(keys)['state'], self.view(keys)['processed_pages']), ('ready', [1]))
         self.assertEqual(self.facts(), facts)
         self.assertEqual(self.rows('SELECT * FROM manual_tasks'), [])
@@ -92,7 +123,7 @@ class PdfMaterialTests(Base):
         self.assertEqual(self.view(keys)['state'],'pending')
         before=(self.data/'uploads'/ident).read_bytes()
         with renderer(page_count=1),patch.object(family_media,'pptx_pdf',return_value=test_pdf.build_pdf(1)) as convert, \
-                patch.object(family_llm,'extract_draft',return_value=DRAFT) as model:
+                page_model() as model:
             self.assertEqual(pdfm.prepare(self.store,self.now),dict(used=1,failed=0))
             convert.assert_called_once_with(body);model.assert_called_once()
         self.assertEqual(self.view(keys)['state'],'ready')
@@ -124,7 +155,7 @@ class PdfMaterialTests(Base):
         self.assertEqual(self.view(keys)['state'],'pending')
         before=self.facts()
         with renderer(page_count=1),patch.object(family_media,'xlsx_pdf',return_value=test_pdf.build_pdf(1)) as convert, \
-                patch.object(family_llm,'extract_draft',return_value=DRAFT) as model:
+                page_model() as model:
             self.assertEqual(pdfm.prepare(self.store,self.now),dict(used=1,failed=0))
             convert.assert_called_once_with(body);model.assert_called_once()
         self.assertEqual(self.view(keys)['state'],'ready')
@@ -193,12 +224,13 @@ class PdfMaterialTests(Base):
             self.assertEqual(context['source_message']['id'], keys['message_id']); self.assertEqual(context['original_pdf']['page_count'], 11)
             calls.append((context['original_pdf']['pages'], context['original_pdf']['unprocessed_pages'], [i['mime'] for i in images], kw))
             return dict(DRAFT, title='第%s页' % context['original_pdf']['pages'])
-        with renderer(), patch.object(family_llm, 'extract_draft', side_effect=model) as m:
+        with renderer(), page_model(model) as m:
             for index, expected in enumerate(BATCHES):
                 self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=index)), dict(used=1, failed=0))
                 pages, left, mimes, kw = calls[-1]
                 self.assertEqual((pages, left, mimes), (expected, list(range(expected[-1] + 1, 12)), ['image/png'] * len(expected)))
                 self.assertIs(kw['school_material'], True); self.assertEqual(kw['target_child'], '示例甲'); self.assertNotIn('documents', kw)
+                self.assertEqual((kw['original_ids'], kw['original_pages']), ([pdf], expected))
                 shown = self.view(keys)
                 self.assertEqual(shown['page_count'], 11); self.assertEqual([b['pages'] for b in shown['batches']], BATCHES[:index + 1])
                 self.assertEqual((shown['processed_pages'], shown['pending_pages']), (list(range(1, expected[-1] + 1)), list(range(expected[-1] + 1, 12))))
@@ -222,7 +254,7 @@ class PdfMaterialTests(Base):
             if isinstance(result, Exception):
                 raise result
             return result
-        with renderer(), patch.object(family_llm, 'extract_draft', side_effect=model):
+        with renderer(), page_model(model):
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=1)), dict(used=1, failed=1))
             shown = self.view(keys)
@@ -244,7 +276,7 @@ class PdfMaterialTests(Base):
 
     def test_revocation_and_other_child_hide_progress_and_stop_calls(self):
         keys = self.school_fragment('语文：见附件。'); pdf = self.seed_pdf('d' * 32); self.link(keys, pdf)
-        with renderer(), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:
+        with renderer(), page_model() as m:
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
             for change, restore in [(lambda: self.write_config(enabled=False), self.write_config),
                                     (lambda: self.set_sources(False), lambda: self.set_sources(True))]:
@@ -276,7 +308,7 @@ class PdfMaterialTests(Base):
             self.link(keys, pdf, 'detach')  # Parent acts while the model runs: no database lock may be held.
             self.assertEqual(self.rows('SELECT * FROM agent_message_attachments WHERE upload_id=?', pdf), [])
             return DRAFT
-        with renderer(), patch.object(family_llm, 'extract_draft', side_effect=unlink_during_model) as m:
+        with renderer(), page_model(unlink_during_model) as m:
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
         self.assertEqual(m.call_count, 1)
         self.assertEqual(self.rows('SELECT COUNT(*) FROM agent_pdf_material'), [(0,)])
@@ -291,13 +323,13 @@ class PdfMaterialTests(Base):
                 payload['text'] += '（家长更正：第3页不用做）'
                 c.execute('UPDATE agent_messages SET payload=? WHERE id=?', (json.dumps(payload, ensure_ascii=False), keys['message_id']))
             return DRAFT
-        with renderer(), patch.object(family_llm, 'extract_draft', side_effect=correct_during_model):
+        with renderer(), page_model(correct_during_model):
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=1)), dict(used=1, failed=0))
         self.assertIn('家长更正', self.store.message(keys, dict)['message']['text'])
         self.assertEqual(self.rows('SELECT COUNT(*) FROM agent_pdf_material'), [(0,)])
         shown = self.view(keys)
         self.assertEqual((shown['state'], shown['batches'], shown['processed_pages']), ('pending', [], []))
-        with renderer(), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:  # Recovery: the corrected notice continues.
+        with renderer(), page_model() as m:  # Recovery: the corrected notice continues.
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=2)), dict(used=1, failed=0))
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=3)), dict(used=1, failed=0))
         self.assertEqual((m.call_count, self.view(keys)['processed_pages'], [r[0] for r in self.progress()]), (2, [1, 2, 3, 4, 5, 6], [1, 4]))
@@ -308,7 +340,7 @@ class PdfMaterialTests(Base):
 
         def model(text, images, **kw):
             seen.append(json.loads(text)['original_pdf']['pages']); return DRAFT
-        with renderer(), patch.object(family_llm, 'extract_draft', side_effect=model):
+        with renderer(), page_model(model):
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
             self.assertEqual(self.view(keys)['processed_pages'], [1, 2, 3])
             other = test_pdf.build_pdf(11, width=2001); self.assertEqual(len(other), len(PDF))
@@ -366,12 +398,13 @@ class PdfMaterialTests(Base):
         with self.store._db() as c:
             c.execute("INSERT INTO manual_tasks(id,child,title,due,original_status,source,action) VALUES('task-1','child-1','虚构学校任务','2026-02-11','待完成','Agent建议:agent-x','家长已确认完成')")
         facts = self.facts(); consumers = self.consumers(); leaked = dict(DRAFT, score=95, total=100)
-        with renderer(), patch.object(family_llm, 'extract_draft', side_effect=[leaked, DRAFT]):
+        with renderer(), page_model([leaked, DRAFT]):
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=1))
             self.assertEqual(self.rows('SELECT COUNT(*) FROM agent_pdf_material'), [(0,)])
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=6)), dict(used=1, failed=0))
         saved = json.loads(self.rows('SELECT payload FROM agent_pdf_material')[0][0])
-        self.assertEqual(set(saved), {'kind', 'title', 'note', 'uncertainties'})
+        self.assertEqual(set(saved), {'kind', 'title', 'note', 'uncertainties', 'originals'})
+        self.assertEqual(saved['originals'], [dict(upload_id='6' * 32, **DRAFT, requirements=[])])
         self.assertEqual((self.facts(), self.consumers()), (facts, consumers))
         self.assertEqual([r[0] for r in self.progress()], [1])
 
@@ -400,7 +433,7 @@ class PdfMaterialTests(Base):
             self.assertEqual(self.rows('SELECT COUNT(*) FROM agent_pdf_material'), [(0,)])
             self.assertEqual(self.rows("SELECT * FROM agent_jobs WHERE id LIKE 'pdf-material:%'"), [])
             restore()
-        with renderer(), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:  # Restored: continues with one call.
+        with renderer(), page_model() as m:  # Restored: continues with one call.
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=5)), dict(used=1, failed=0))
         self.assertEqual((m.call_count, self.view(keys)['processed_pages']), (1, [1, 2, 3]))
 
@@ -416,8 +449,7 @@ class PdfMaterialTests(Base):
                           (source['id'], message['id'], fp, first, json.dumps(pages), count, payload, self.now.isoformat()))
         shown = self.view(keys)
         self.assertEqual((shown['page_count'], shown['processed_pages'], shown['complete'], shown['state']), (11, [7, 8, 9], False, 'pending'))
-        with renderer(), patch.object(family_llm, 'extract_draft',
-                                      side_effect=lambda text, images, **kw: seen.append(json.loads(text)['original_pdf']['pages']) or DRAFT):
+        with renderer(), page_model(lambda text, images, **kw: seen.append(json.loads(text)['original_pdf']['pages']) or DRAFT):
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
         self.assertEqual((seen, self.view(keys)['processed_pages']), ([[1, 2, 3]], [1, 2, 3, 7, 8, 9]))
 
@@ -426,7 +458,7 @@ class PdfMaterialTests(Base):
 
         def spy(store, now, budget=pdfm.ROUND_CALLS):
             budgets.append(budget); return real(store, now, budget)
-        with renderer(), patch.object(pdfm, 'prepare', side_effect=spy), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:
+        with renderer(), patch.object(pdfm, 'prepare', side_effect=spy), page_model() as m:
             agent.run_once(self.app, self.now)
         self.assertEqual(budgets, [1])
         self.assertEqual([c.kwargs.get('school_material') for c in m.call_args_list if 'original_pdf' in c.args[0]], [True])
@@ -470,9 +502,19 @@ class MultiPdfMaterialTests(Base):
             self.assertEqual(data_path, self.data)
             parts = messages[1]['content']
             context = json.loads(parts[0]['text'])
+            original = context['original_pdf']; labels = []; identities = []
+            for part in parts:
+                if part['type'] != 'text': continue
+                value = json.loads(part['text'])
+                if 'original_image' in value: labels.append(value['original_image'])
+                if 'original_ids' in value: identities.append(value['original_ids'])
+            self.assertEqual(identities, [[original['upload_id']]])
+            self.assertEqual(labels, [dict(upload_id=original['upload_id'], page=page) for page in original['pages']])
+            self.assertEqual(schema['properties']['originals']['items']['properties']['upload_id']['enum'], [original['upload_id']])
+            self.assertEqual((schema['properties']['originals']['minItems'], schema['properties']['originals']['maxItems']), (1, 1))
             calls.append(dict(context=context, prompt=messages[0]['content'],
-                              images=sum(p['type'] == 'image_url' for p in parts)))
-            return reply(context) if callable(reply) else reply
+                              images=sum(p['type'] == 'image_url' for p in parts), image_labels=labels))
+            return page_reply(reply(context) if callable(reply) else reply, original['upload_id'])
         return model
 
     def test_page_group_scope_keeps_same_named_originals_separate_without_claiming_sibling_read(self):
@@ -494,6 +536,7 @@ class MultiPdfMaterialTests(Base):
             self.assertEqual(scope, dict(current_upload_id=original['upload_id'], linked_originals=linked,
                                          sent_pages=[1], unprocessed_pages=[], other_originals_sent=False))
             self.assertEqual(call['images'], 1)  # The manifest never sends sibling bytes or pages.
+            self.assertEqual(call['image_labels'], [dict(upload_id=original['upload_id'], page=1)])
             self.assertTrue(all(set(doc) == {'upload_id', 'name', 'mime'} for doc in scope['linked_originals']))
             self.assertIn('不证明其他原件已读或已理解', call['prompt'])
             self.assertIn('同名但不同upload_id仍是不同原件', call['prompt'])
@@ -519,6 +562,7 @@ class MultiPdfMaterialTests(Base):
             self.assertEqual(scope['linked_originals'], [dict(upload_id=a, name='虚构A1.pdf', mime='application/pdf')])
             self.assertEqual((scope['current_upload_id'], scope['sent_pages'], scope['unprocessed_pages'], call['images']),
                              (a, pages, left, len(pages)))
+            self.assertEqual(call['image_labels'], [dict(upload_id=a, page=page) for page in pages])
             self.assertIn('关联清单确实没有的材料', call['prompt'])
             self.assertIn('真实缺页', call['prompt']); self.assertIn('影响当前页理解的未知上下文', call['prompt'])
         evidence = self.evidence(keys); before = self.snapshot()
@@ -558,7 +602,7 @@ class MultiPdfMaterialTests(Base):
             self.assertEqual(kw['target_child'], '示例甲'); self.assertIs(kw['school_material'], True)
             return dict(DRAFT, title=context['name'] + '第%s页' % context['pages'])
         with renderer(), patch.object(family_pdf, 'render_pages', wraps=real_render) as render, \
-                patch.object(family_llm, 'extract_draft', side_effect=model) as m:
+                page_model(model) as m:
             for index in range(8):
                 self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=index), budget=10), dict(used=1, failed=0))
                 self.assertEqual(m.call_count, index + 1)
@@ -592,7 +636,7 @@ class MultiPdfMaterialTests(Base):
             if isinstance(result, Exception):
                 raise result
             return result
-        with renderer(page_count=1), patch.object(family_llm, 'extract_draft', side_effect=model) as m:
+        with renderer(page_count=1), page_model(model) as m:
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=1))
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=1)), dict(used=1, failed=0))
             shown = self.view(keys)
@@ -613,7 +657,7 @@ class MultiPdfMaterialTests(Base):
 
     def test_association_add_remove_and_same_size_sibling_change_hide_all_old_groups(self):
         keys, a, b = self.pair()
-        with renderer(), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:
+        with renderer(), page_model() as m:
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=1)), dict(used=1, failed=0))
             original = self.inputs(keys); fingerprints = [value['fingerprint'] for value in original]
@@ -655,14 +699,14 @@ class MultiPdfMaterialTests(Base):
         def replace_during_model(text, images, **kwargs):
             replacement = test_pdf.build_pdf(1, width=2002); self.assertEqual(len(replacement), len(original))
             (self.data / 'uploads' / b).write_bytes(replacement); return DRAFT
-        with renderer(page_count=1), patch.object(family_llm, 'extract_draft', side_effect=replace_during_model) as m:
+        with renderer(page_count=1), page_model(replace_during_model) as m:
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=1)), dict(used=1, failed=0))
             m.assert_called_once()
         self.assertEqual(self.rows('SELECT * FROM agent_pdf_material'), [])
         self.assertEqual(self.rows("SELECT * FROM agent_jobs WHERE id LIKE 'pdf-material:%'"), [])
         self.assertFalse(self.view(keys)['complete']); self.assertIsNone(self.evidence(keys))
         (self.data / 'uploads' / b).write_bytes(original)
-        with renderer(page_count=1), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:
+        with renderer(page_count=1), page_model() as m:
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=2)), dict(used=1, failed=0))
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=3)), dict(used=1, failed=0))
             self.assertEqual(m.call_count, 2)
@@ -670,7 +714,7 @@ class MultiPdfMaterialTests(Base):
 
     def test_multi_pdf_view_and_full_evidence_are_read_only_and_reject_corrupt_sibling_coverage(self):
         keys, a, b = self.pair(pages=1)
-        with renderer(page_count=1), patch.object(family_llm, 'extract_draft', return_value=DRAFT):
+        with renderer(page_count=1), page_model():
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
             self.assertIsNone(self.evidence(keys))  # A complete first document cannot stand for an unknown second document.
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=1)), dict(used=1, failed=0))
@@ -700,7 +744,7 @@ class MultiPdfMaterialTests(Base):
             old = [3, 'school_material', 'pdf', source, child, message, [a, 'application/pdf', hashlib.sha256(test_pdf.build_pdf(1)).hexdigest()]]
             legacy = hashlib.sha256(json.dumps(old, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
             self.assertEqual(pdfm.pdf_input(self.store, c, source, message)['fingerprint'], legacy)
-        with renderer(page_count=1), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:
+        with renderer(page_count=1), page_model() as m:
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
         single = self.view(keys); evidence = self.evidence(keys); self.assertNotIn('documents', single)
         self.assertEqual((single['job_id'], evidence['fingerprint']), (pdfm.job_key(source, message), legacy))
@@ -851,12 +895,13 @@ class DocxMaterialTests(PdfMaterialTests):
                              (DOCX_MIME, '虚构练习卷.docx', 11, pdfm.CONVERSION))
             calls.append((original['pages'], original['unprocessed_pages'], [i['mime'] for i in images], kw))
             return dict(DRAFT, title='第%s页' % original['pages'])
-        with renderer(), self.converter(), patch.object(family_llm, 'extract_draft', side_effect=model) as m:
+        with renderer(), self.converter(), page_model(model) as m:
             for index, expected in enumerate(BATCHES):
                 self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=index)), dict(used=1, failed=0))
                 pages, left, mimes, kw = calls[-1]
                 self.assertEqual((pages, left, mimes), (expected, list(range(expected[-1] + 1, 12)), ['image/png'] * len(expected)))
                 self.assertIs(kw['school_material'], True); self.assertEqual(kw['target_child'], '示例甲'); self.assertNotIn('documents', kw)
+                self.assertEqual((kw['original_ids'], kw['original_pages']), ([docx], expected))
                 self.assertEqual(len(self.converted), index + 1)  # One conversion per round; no converted copy is kept anywhere.
                 shown = self.view(keys)
                 self.assertEqual((shown['page_count'], [b['pages'] for b in shown['batches']]), (11, BATCHES[:index + 1]))
@@ -877,7 +922,7 @@ class DocxMaterialTests(PdfMaterialTests):
     def test_conversion_failure_and_missing_soffice_save_retryable_failures_keeping_groups(self):
         keys = self.school_fragment('英语：阅读所附材料。'); self.link(keys, self.seed_docx('b' * 32)); seen = []
         model = lambda text, images, **kw: seen.append(json.loads(text)['original_pdf']['pages']) or DRAFT
-        with renderer(), self.converter(), patch.object(family_llm, 'extract_draft', side_effect=model):
+        with renderer(), self.converter(), page_model(model):
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
         with patch.object(family_media, 'docx_pdf', side_effect=family_media.MediaError('process_failed')), no_pages(), \
                 patch.object(family_llm, 'extract_draft', side_effect=AssertionError('model')):
@@ -893,13 +938,13 @@ class DocxMaterialTests(PdfMaterialTests):
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=7)), dict(used=1, failed=1))
         self.assertIn('process_unavailable', self.rows("SELECT error FROM agent_jobs WHERE id LIKE 'pdf-material:%'")[0][0])
         self.assertEqual((self.view(keys)['state'], self.view(keys)['processed_pages']), ('error', [1, 2, 3]))
-        with renderer(), self.converter(), patch.object(family_llm, 'extract_draft', side_effect=model):
+        with renderer(), self.converter(), page_model(model):
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=20)), dict(used=1, failed=0))
         self.assertEqual((seen, [b['pages'] for b in self.view(keys)['batches']]), ([[1, 2, 3], [4, 5, 6]], [[1, 2, 3], [4, 5, 6]]))
 
     def test_page_count_change_between_conversions_is_refused_before_any_model_call(self):
         keys = self.school_fragment('数学：见附件。'); self.link(keys, self.seed_docx('c' * 32))
-        with renderer(), self.converter(), patch.object(family_llm, 'extract_draft', return_value=DRAFT):
+        with renderer(), self.converter(), page_model():
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
         with renderer(12), self.converter(test_pdf.build_pdf(12)), patch.object(family_llm, 'extract_draft', side_effect=AssertionError('model')):
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=1)), dict(used=1, failed=1))
@@ -953,7 +998,7 @@ class DocxMaterialTests(PdfMaterialTests):
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=5)), dict(used=0, failed=0))
         with self.store._db() as c:
             c.execute('DELETE FROM agent_message_attachments WHERE upload_id=?', (other,))
-        with renderer(), self.converter(), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:  # Restored: continues with one call.
+        with renderer(), self.converter(), page_model() as m:  # Restored: continues with one call.
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=6)), dict(used=1, failed=0))
         self.assertEqual((m.call_count, self.view(keys)['processed_pages']), (1, [1, 2, 3]))
 
@@ -1024,14 +1069,14 @@ class DocxMaterialTests(PdfMaterialTests):
             self.assertEqual((self.converted, self.rows('SELECT COUNT(*) FROM agent_pdf_material'),
                               self.rows("SELECT * FROM agent_jobs WHERE id LIKE 'pdf-material:%'")), ([], [(0,)], []))
             restore()
-        with renderer(), self.converter(), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:  # Restored: one conversion, one call.
+        with renderer(), self.converter(), page_model() as m:  # Restored: one conversion, one call.
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=9)), dict(used=1, failed=0))
         self.assertEqual((m.call_count, len(self.converted), self.view(keys)['processed_pages']), (1, 1, [1, 2, 3]))
 
     def test_change_while_docx_model_runs_discards_result_and_reattachment_resumes(self):
         keys = self.school_fragment('数学：见附件。'); docx = self.seed_docx('7' * 32); self.link(keys, docx)
         replacement = self.seed_docx('8' * 32, layout_docx('题目见上图'), '替换件.docx'); entered = []
-        with renderer(), self.converter(), patch.object(family_llm, 'extract_draft', return_value=DRAFT):
+        with renderer(), self.converter(), page_model():
             self.assertEqual(pdfm.prepare(self.store, self.now), dict(used=1, failed=0))
         before = self.rows('SELECT * FROM agent_pdf_material'); self.assertEqual(len(before), 1)
 
@@ -1045,7 +1090,7 @@ class DocxMaterialTests(PdfMaterialTests):
         for index, (change, restore) in enumerate(cases):
             def model(text, images, **kw):  # The model really runs and returns a draft while the parent acts.
                 entered.append(json.loads(text)['original_pdf']['pages']); change(); return DRAFT
-            with renderer(), self.converter(), patch.object(family_llm, 'extract_draft', side_effect=model) as m:
+            with renderer(), self.converter(), page_model(model) as m:
                 self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=index + 1)), dict(used=1, failed=0))
             self.assertEqual((m.call_count, entered[-1], len(self.converted)), (1, [4, 5, 6], index + 2))
             self.assertEqual(self.rows('SELECT * FROM agent_pdf_material'), before)  # The returned draft is discarded; nothing else moves.
@@ -1056,7 +1101,7 @@ class DocxMaterialTests(PdfMaterialTests):
             if index < 2:
                 self.assertEqual((self.view(keys)['upload_id'], self.view(keys)['processed_pages']), (docx, [1, 2, 3]))  # Restored: saved group is back.
         self.assertEqual(self.view(keys)['processed_pages'], [])  # Corrected message: old groups hidden; restart from page one.
-        with renderer(), self.converter(), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:
+        with renderer(), self.converter(), page_model() as m:
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=9)), dict(used=1, failed=0))
         self.assertEqual((m.call_count, self.view(keys)['processed_pages'], len(self.converted)), (1, [1, 2, 3], 5))
 
@@ -1068,7 +1113,7 @@ class DocxMaterialTests(PdfMaterialTests):
             self.assertTrue(body.startswith(b'PK\x03\x04'))
             outputs.append(head + b'%% CreationDate D:2026092300000%d\n%%EOF' % len(outputs) + tail)
             return outputs[-1]
-        with renderer(), patch.object(family_media, 'docx_pdf', side_effect=convert), patch.object(family_llm, 'extract_draft', return_value=DRAFT) as m:
+        with renderer(), patch.object(family_media, 'docx_pdf', side_effect=convert), page_model() as m:
             for index in range(4):
                 self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=index)), dict(used=1, failed=0))
         fingerprints = self.rows('SELECT DISTINCT fingerprint FROM agent_pdf_material')

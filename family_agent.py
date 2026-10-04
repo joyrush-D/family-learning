@@ -2553,6 +2553,50 @@ def _school_saved_requirements(row, parts):
     return texts
 
 
+def _school_pending_original(row):
+    """Only untouched, undecided generated candidates can have shared legacy page summaries replaced."""
+    if row['state']!='pending' or row['task_id']:return False
+    plan=json.loads(row['plan']);brief=plan.get('school_task',{});action=plan.get('school_original_action',{})
+    if plan.get('school_history_job') or plan.get('school_history_uncertain'):return False
+    if row['body']==FOCUS['school'] and not brief.get('title') and not brief.get('goal'):return True
+    if row['title']!=brief.get('title') or row['body']!=brief.get('goal') or not brief.get('origin_basis'):return False
+    if action.get('requirements'):return False
+    from family_agenda import deadlines,sent_day
+    dates=set()
+    for quote in json.loads(row['evidence']):
+        stamp=''  # Absolute dates are sufficient; relative legacy dates without a saved send time are not guessed.
+        for anchor in action.get('anchors',[]):
+            if anchor['ref']==quote['ref']:dates|=deadlines(anchor['quote'],stamp)
+    if not action:dates=deadlines(row['body'],'')
+    return dates==({row['due']} if row['due'] else set())
+
+
+def _school_pdf_reflow(row,pdf,known):
+    action=json.loads(row['plan']).get('school_original_action',{})
+    return bool(pdf and pdf.get('requirements_complete') and action and not action.get('requirements')
+                and any(a.get('upload_ids') and a.get('pages') for a in action.get('anchors',[]))
+                and known and all(_school_pending_original(r) for r in known))
+
+
+def _school_pdf_previous_action(old,parts,known):
+    """A legacy identity can continue only under one-to-one literal original/requirement ownership."""
+    mapped={}
+    for row in known:
+        action=json.loads(row['plan']).get('school_original_action',{})
+        if not action.get('identity'):continue
+        if not _school_pending_original(row):raise AgentError('旧原件行动已有决定或修改，原内容保留')
+        matches=set()
+        for anchor in action.get('anchors',[]):
+            found=[p for p in parts if p.get('requirement') and p['ref']==anchor['ref']
+                   and p['upload_ids']==anchor['upload_ids'] and p['text'].count(anchor['quote'])==1]
+            if len(found)!=1:raise AgentError('旧原件原句无法唯一对应完整要求，原行动保留')
+            matches.add(found[0]['id'])
+        if not matches or any(matches&ids for ids in mapped.values()):
+            raise AgentError('旧原件行动竞争同一完整要求，原编号保留')
+        mapped[row['id']]=matches
+    return mapped.get(old['id'],set())
+
+
 def _school_original_known(store,c,row):
     """Exact same-child message scope, including decisions and current task/feedback state."""
     refs={e['ref'] for e in json.loads(row['evidence'])};known=[];state=[]
@@ -2639,7 +2683,8 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         old=existing.get(chosen)
         old_anchor=json.loads(old['plan']).get('school_original_action',{}) if old else {}
         if old_anchor.get('identity') and old_anchor['identity']!=identity:
-            raise AgentError('原件行动与原候选身份不同，原内容与决定保留')
+            if not _school_pdf_reflow(old,pdf,known) or not _school_pdf_previous_action(old,parts,known)<={q['part'] for q in basis}:
+                raise AgentError('原件行动与原候选身份不同，原内容与决定保留')
         if any(r['id']!=chosen and json.loads(r['plan']).get('school_original_action',{}).get('identity')==identity for r in known):
             raise AgentError('已有原件行动须保留原编号，不能重复新增')
         if old and not old_anchor.get('identity'):
@@ -2710,6 +2755,9 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
             brief.update(state='review',reason='原截止日期已过，请核对是否仍需补做；不推定已完成。')
         if plan.get('school_history_uncertain'): brief.update(state='review',reason='旧决定的动作归属仍待核明，原要求与决定保留。')
         plan['school_original_action']=action
+        if old and old_anchor.get('identity') and old_anchor['identity']!=identity:
+            plan['previous_pdf_action']=dict(action=old_anchor,school_task=json.loads(old['plan']).get('school_task',{}),
+                title=old['title'],body=old['body'],due=old['due'],evidence=json.loads(old['evidence']),updated=old['updated'])
         output.append(dict(id=chosen or 'agent-'+identity[:32],old=old,child_id=row['child_id'],kind='school',
             title=brief['title'] or (old or row)['title'],body=brief['goal'] or (old or row)['body'],due=due,
             evidence=json.loads(item_row['evidence']),plan=plan,brief=brief,reading=cited))
@@ -2803,6 +2851,15 @@ def _refresh_school(app, store, now, budget):
         pdf_evidence=_pdf_evidence(pdf_material) if pdf_material and not source_error else None
         pdf_key=pdf_evidence['fingerprint'] if pdf_evidence else ''
         material_key=material['fingerprint'] if material else ''
+        action=plan.get('school_original_action',{})
+        if pdf_evidence and not pdf_evidence.get('requirements_complete') and (not action or any(a.get('upload_ids') for a in action.get('anchors',[]))):
+            # Saved coverage is not a complete requirement protocol. Keep the old words; the page worker upgrades
+            # only wholly undecided messages under its existing budget. Never auto-accept a legacy short summary.
+            waiting=dict(brief,state='review',reason='原件页组已保存，完整行动与完成标准仍待整理；原要求保留。')
+            if waiting!=brief:
+                plan['school_task']=waiting
+                with store._db() as c:c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=? AND plan=?",(_json(plan),row['id'],row['updated'],row['plan']))
+            continue
         current=brief.get('policy')==SCHOOL_TASK_POLICY
         original_changed=bool(pdf_evidence or material) and brief.get('original_actions_revision')!=SCHOOL_ORIGINAL_REVISION
         recorded=brief.get('page_evidence') or {}
@@ -2850,7 +2907,11 @@ def _refresh_school(app, store, now, budget):
                 context['pdf_material']=pdf_evidence['model']
             if material:
                 value['material']=material_key;context['school_material']=material['model']
-            original_parts=_school_original_parts(evidence,pdf_evidence,material) if (pdf_evidence or material) and not plan.get('school_original_action') else []
+            reflow=False
+            if plan.get('school_original_action') and pdf_evidence:
+                with store._db() as c:_,reflow_known=_school_original_known(store,c,row)
+                reflow=_school_pdf_reflow(row,pdf_evidence,reflow_known)
+            original_parts=_school_original_parts(evidence,pdf_evidence,material) if (pdf_evidence or material) and (not plan.get('school_original_action') or reflow) else []
             compiled_requirements=None
             if plan.get('school_original_action',{}).get('requirements'):
                 try:
