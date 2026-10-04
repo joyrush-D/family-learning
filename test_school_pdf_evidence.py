@@ -149,6 +149,22 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         result,_=self.refresh(model)
         self.assertEqual((result['created'],self.item(ident),self.item(other)['state'],self.count('manual_tasks')),(0,before,'dismissed',0))
 
+    def test_original_known_action_overflow_is_a_bounded_job_failure(self):
+        keys=self.native_notice('too-many-known-actions')
+        ident=self.candidate(keys=keys,ident='overflow-root')
+        self.seed_groups(keys=keys,uncertainties=[])
+        for index in range(agent.SCHOOL_PROPOSAL_LIMIT):
+            previous=self.candidate(keys=keys,ident='overflow-old-'+str(index))
+            with self.store._db() as c:c.execute("UPDATE agent_items SET state='dismissed' WHERE id=?",(previous,))
+        before=self.rows('SELECT id,state,plan,evidence FROM agent_items ORDER BY id')
+        result,calls=self.refresh(draft())
+        self.assertEqual((result,calls),(dict(used=0,failed=1,created=0),[]))
+        self.assertEqual(self.rows('SELECT id,state,plan,evidence FROM agent_items ORDER BY id'),before)
+        self.assertEqual(self.count('manual_tasks'),0)
+        error,next_try=self.rows('SELECT error,next_try FROM agent_jobs WHERE id=?','school-task:'+ident)[0]
+        self.assertIn('超过本轮',error);self.assertGreater(next_try,self.now.isoformat())
+        self.assertEqual(self.refresh(draft(),minutes=1),(dict(used=0,failed=0,created=0),[]))
+
     def test_original_actions_keep_their_own_messages_dates_and_files(self):
         first=self.native_notice('dated-a',published='2026-02-10T08:00:00+08:00')
         paper_b=self.seed_pdf('b'*32,name='虚构独立回执.pdf')
