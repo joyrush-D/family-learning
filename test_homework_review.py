@@ -104,6 +104,8 @@ def duplicate_question_checks():
         [question,question.copy()],
         [question,question|dict(judgment='incorrect',error_reason='本题需要订正。')],
         [question,question|dict(label='  虚构甲卷第1题\n\t  ')],
+        [question,question|dict(label='虚构甲卷 第1题',judgment='incorrect',error_reason='本题需要订正。')],
+        [question|dict(label=''),question|dict(label='',judgment='incorrect',error_reason='本题需要订正。')],
         [question,question|dict(question='另一道题却用了相同卷别题号。',student_answer='6',answer='教师参考：6')],
     ]
     for questions in duplicates:
