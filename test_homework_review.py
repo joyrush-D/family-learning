@@ -59,12 +59,13 @@ def output_contract_checks():
         assert q['question']==q['possible_cause']==q['uncertainty']=='','do not invent a question, cause or prompt'
         assert '需订正1题' in d['text'] and known_wrong['error_reason'] in d['text']
     for changes in (dict(uncertainty='教师参考与可见题面冲突，待核对'),dict(error_reason=''),
-                    dict(student_answer=''),dict(answer=''),dict(question_kind='subjective'),
+                    dict(student_answer=''),dict(answer='',question='虚构甲卷第1题：选择正确选项。'),dict(question_kind='subjective'),
                     dict(question_kind='unknown'),dict(judgment='unknown',error_reason='',steps='无依据的提示')):
         d=draft_for(known_wrong|changes)
         assert d['questions'][0]['judgment']=='unknown' and d['wrong_items']==0 and d['unknown_items']==1
         assert not d['questions'][0]['error_reason'] and not d['questions'][0]['steps']
     rejected(known_wrong,'原题未提供；也没有本题教师参考。',teacher=False)
+    rejected(known_wrong|dict(answer=''),'原题及本题可核对参考均缺失。')
 
     for coverage,expected in (('甲卷第1题；第2页未读','甲卷第1题；第2页未读'),
                               ('甲卷第1题\n第2页未读','甲卷第1题\n第2页未读'),
