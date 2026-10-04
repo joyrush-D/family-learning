@@ -426,7 +426,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
   const causeOriginal=await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),readCause);
   state=await readCause();const originalCauseRecord=state.records.find(r=>r.id===causeOriginal.record_id),causeSources=originalCauseRecord.attachments.map(id=>state.uploads.find(a=>a.id===id));
   const causePhoto=causeSources.find(a=>a.mime==='image/png'),causeTeacher=causeSources.find(a=>a.name===teacherName);assert(causePhoto&&causeTeacher);
-  const causePanel=p.locator('#taskFeedbackHistory [data-homework-review="'+causeOriginal.record_id+'"]');await causePanel.locator(':scope > details > summary').click();
+  const causePanel=p.locator('#taskFeedbackHistory [data-homework-review="'+causeOriginal.record_id+'"]');if(!await causePanel.locator(':scope > details').evaluate(x=>x.open))await causePanel.locator(':scope > details > summary').click();
   await causePanel.locator('[data-review-source="'+causePhoto.id+'"] [data-homework-review-photo]').check();
   const teacherRow=causePanel.locator('[data-review-source="'+causeTeacher.id+'"]');await teacherRow.waitFor();assert.equal(await teacherRow.locator('[data-homework-review-role]').inputValue(),'reference');await teacherRow.locator('[data-homework-review-photo]').check();
   const validatorBefore=await(await fetch(host.url+'__fixture/cause-validator')).json();let causeReply,causeRequest;
