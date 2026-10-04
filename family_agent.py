@@ -2430,7 +2430,9 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         plan=copy.deepcopy(json.loads(old['plan']) if old else json.loads(row['plan']))
         for key in ('school_learning','school_goal_id'): plan.pop(key,None)
         complete_refs,fragments,_=_school_original_coverage(evidence,pdf,material)
-        if learning and _school_learning_route(brief)== 'read_requirements' and not fragments and all(e['ref'] in complete_refs or not (e.get('unread') or e.get('content_incomplete') or _needs_task_details(e.get('text'))) for e in evidence):
+        model_evidence=_school_model_evidence(evidence,pdf,material)
+        read_requirements=any(not e['content_incomplete'] and (e['ref'] in complete_refs or e.get('text','').strip() and not _link_only(e['text'])) for e in model_evidence)
+        if learning and _keeps_learning(brief) and brief['goal'] and read_requirements and not fragments:
             plan['school_learning']=learning
             plan['school_messages']=[dict(zip(('source_id','message_id'),e['ref'][8:].rsplit(':',1))) for e in evidence]
         plan['school_task']=brief
@@ -2652,7 +2654,7 @@ def _refresh_school(app, store, now, budget):
                     c.execute('UPDATE agent_items SET title=?,body=?,plan=?,updated=?,due=? WHERE id=?',
                         (brief['title'] or row['title'],brief['goal'] or row['body'],_json(plan),updated,due,row['id']))
                     c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=? AND fingerprint=?",(key,fp))
-                    row['updated']=updated;row['due']=due
+                    row['updated']=updated;row['due']=due;row['plan']=_json(plan)
             except (family_llm.LLMDraftError,AgentError,ValueError) as error:
                 store._fail(key,now,fingerprint=fp,reason=error);failed+=1;continue
         collected,errors=_accept_school_reading(app,store,row,evidence,now)
