@@ -1013,6 +1013,8 @@ def homework_answer_record(row,task_id):
 
 def homework_review_context(c,task_id,record_id,expected_created=None):
     """Only this saved answer, reported homework and explicitly bound school originals."""
+    if not isinstance(task_id,str) or not task_id or len(task_id)>30:
+        raise family_print.PrintError('请从原作业打开已保存的作答')
     if type(record_id) is not int or not 0<record_id<=9223372036854775807:
         raise family_print.PrintError('请从原作业打开已保存的作答')
     row=c.execute('SELECT * FROM records WHERE id=?',(record_id,)).fetchone()

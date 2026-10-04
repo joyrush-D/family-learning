@@ -484,6 +484,10 @@ def run():
                 linked_row=dict(c.execute('SELECT * FROM records WHERE id=?',(ordinary_id,)).fetchone())
             linked_request=dict(purpose='review',task_id=linked_task['id'],record_id=ordinary_id,
                 expected_created=linked_row['created'],question_sources=[source(answer)],reference_sources=[source(reference)])
+            for invalid_task in (None,1,'','x'*31):
+                with patch.object(family_llm,'_chat_json') as model:
+                    refused(lambda:app.homework_review_draft(linked_request|dict(task_id=invalid_task)),status=400)
+                    assert model.call_count==0
             with patch.object(family_llm,'_chat_json',return_value=dict(items=[item()],coverage='虚构仅第1题')) as model:
                 linked_basis=app.homework_review_draft(linked_request)['review_basis']
                 assert model.call_count==1
