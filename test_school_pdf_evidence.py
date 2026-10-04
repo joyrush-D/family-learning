@@ -91,6 +91,34 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertEqual(self.brief(ident)['state'],'review')
         self.assertIn('日期',self.brief(ident)['reason'])
 
+    def test_four_literal_model_actions_include_revision_and_print_dates(self):
+        keys=self.native_notice('four-model-actions')
+        native='英语：2026-02-11完成Unit5朗读两遍，不用录音。'
+        with self.store._db() as c:
+            raw=json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
+                                    (keys['source_id'],keys['message_id'])).fetchone()[0])
+            c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
+                      (json.dumps(dict(raw,text=native)),keys['source_id'],keys['message_id']))
+        receipt_file=self.seed_pdf('b'*32,name='虚构独立活动回执.pdf');self.link(keys,receipt_file)
+        maths=['数学：2026-02-12完成练习卷第1至3题，第4题选做，做完检查。',
+               '数学：2026-02-13复习错题第1至2题，写出订正过程，不必打印。']
+        receipt='家长事务：2026-02-14打印独立活动回执，家长签字后由孩子交回，无需盖章。'
+        self.seed_groups(keys=keys,note='\n'.join(maths),uncertainties=[],upload_id=self.pdf)
+        self.seed_groups(keys=keys,note=receipt,uncertainties=[],upload_id=receipt_file)
+        ident=self.candidate(keys=keys,ident='four-model-actions');ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
+        reply={'actions':[
+            dict(draft(title='英语：朗读Unit5两遍',goal=native,learning_subject='英语'),due='2026-02-11',existing_item_id=ident,basis=[dict(part=ref,text=native)]),
+            dict(draft(title='数学：完成练习卷题目',goal=maths[0]),due='2026-02-12',existing_item_id='',basis=[dict(part='pdf:'+self.pdf+':1@'+ref,text=maths[0])]),
+            dict(draft(title='数学：复习错题并写订正过程',goal=maths[1]),due='2026-02-13',existing_item_id='',basis=[dict(part='pdf:'+self.pdf+':1@'+ref,text=maths[1])]),
+            dict(draft(title='事务：打印并交回独立活动回执',goal=receipt,purpose='admin'),due='2026-02-14',existing_item_id='',basis=[dict(part='pdf:'+receipt_file+':1@'+ref,text=receipt)])]}
+        result,calls=self.refresh(reply)
+        self.assertEqual((result,len(calls)),(dict(used=1,failed=0,created=4),1))
+        rows=self.rows('SELECT due,plan,state FROM agent_items ORDER BY due')
+        self.assertEqual([r[0] for r in rows],['2026-02-11','2026-02-12','2026-02-13','2026-02-14'])
+        self.assertEqual([sorted({u for a in json.loads(r[1])['school_original_action']['anchors'] for u in a['upload_ids']}) for r in rows],[[],[self.pdf],[self.pdf],[receipt_file]])
+        self.assertTrue(all(r[2]=='accepted' for r in rows));self.assertEqual(self.count('records'),0)
+        self.assertEqual(self.refresh(reply,minutes=1),(dict(used=0,failed=0,created=0),[]))
+
     def original_action_fixture(self,note,**changes):
         keys=self.native_notice('action-guard')
         ident=self.candidate(keys=keys,ident='action-guard')

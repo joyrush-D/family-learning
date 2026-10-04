@@ -68,6 +68,27 @@ class AgendaTest(unittest.TestCase):
         self.assertEqual(agenda.deadlines(notice,'2026-10-05'),{'2026-10-06','2026-10-07'})
         self.assertEqual(agenda.deadline(notice,'2026-10-05'),'','mixed dates still need an exact per-action basis')
 
+    def test_direct_revision_and_parent_actions_keep_explicit_dates(self):
+        for text,expected in [
+            ('2026-10-07复习错题第1至2题，写出订正过程，不必打印。','2026-10-07'),
+            ('2026-10-07复习数学错题第1至2题，写出订正过程。','2026-10-07'),
+            ('2026-10-08打印独立活动回执，家长签字后由孩子交回，无需盖章。','2026-10-08'),
+            ('2026-10-08家长签字后让孩子交回回执。','2026-10-08'),
+            ('明天请打印练习卷。','2026-10-05'),
+            ('明天家长签字。','2026-10-05'),
+            ('明天盖章后交回表格。','2026-10-05')]:
+            with self.subTest(text=text):self.assertEqual(agenda.deadline(text,'2026-10-04'),expected)
+        self.assertEqual(agenda.deadlines('2026-10-07复习错题；2026-10-08打印回执。','2026-10-04'),{'2026-10-07','2026-10-08'})
+        self.assertEqual(agenda.deadline('2026-10-07复习错题；2026-10-08打印回执。','2026-10-04'),'')
+
+    def test_new_action_dates_do_not_turn_announcements_or_unknowns_into_deadlines(self):
+        for text in ['明天公布Unit 3复习资料','明天英语复习资料已发','2026-10-08打印机使用指南',
+                     '明天打印安排另行通知','明天签字要求待定','明天无需打印',
+                     '明天公布打印回执说明','明天，打印回执','明天；复习错题',
+                     '复习错题，时间未定','2026-02-30打印回执']:
+            with self.subTest(text=text):self.assertEqual(agenda.deadline(text,'2026-10-04'),'')
+        self.assertEqual(agenda.deadline('明天复习错题',''),'')
+
     def test_reading_dates_do_not_cross_clause_or_another_date_or_invent_an_action(self):
         for text in ['明天Unit 3课文。读两遍','明天Unit 3课文；读两遍',
                      '明天Unit 3课文，读两遍','10月6日Unit 3资料已发',
