@@ -614,7 +614,8 @@ class AgentTests(unittest.TestCase):
                '不要忘记朗读。','不要只抄写。','无需录音，但完成第1–3题。',
                '不用抄写课文。','并不是禁止同学订正。','不要求朗读速度达标。',
                '不要求朗读流利。','不要求朗读 次数达标。','请家长不要忘记让孩子朗读后签字。',
-               '并非（不用让孩子抄写）。','不是（不需要学生朗读）。')
+               '并非（不用让孩子抄写）。','不是（不需要学生朗读）。',
+               '并非（签字后，不用抄写）。','不是（核对后；无需朗读）。','并非\n不用抄写。')
         # Only direct negated verbs are removed from classification. Unresolved objects
         # and inverse/limited negation remain guarded, never deleted from the notice.
         for clause in cases:

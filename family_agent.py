@@ -158,7 +158,7 @@ _LEARNING_ADMIN_COMPARISON = re.compile(r'(?:该|此|这份)?(?:活动)?(?:回�
 # available to the positive/mixed-learning guard. This is a classification copy;
 # the original notice and its complete negative requirements are never changed.
 _LEARNING_NEGATED_ACTION = re.compile(
-    r'(^|[。；;，,！？!?\n])\s*(?:请\s*)?(?:(?:家长|孩子|学生|同学们?)\s*)?'
+    r'(^|[。；;，,！？!?])\s*(?:请\s*)?(?:(?:家长|孩子|学生|同学们?)\s*)?'
     r'(?:不用|不必|不需(?:要)?|不要求|无需|无须|不要|不得|禁止|切?勿)\s*'
     r'(?:(?:再|额外|另行)\s*)?(?:(?:让|要求)\s*)?(?:(?:孩子|学生|同学们?)\s*)?'
     r'(?:朗读|背诵|抄写|默写|听写|跟读|练习|订正|预习|复习|阅读|口算|习作|作文)'
@@ -166,10 +166,20 @@ _LEARNING_NEGATED_ACTION = re.compile(
 
 
 def _school_learning_text(parts):
-    text=_URL.sub('','\n'.join(parts))
-    text=_LEARNING_NEGATED_ACTION.sub(lambda match:match.group(1),text)
-    text=_LEARNING_NEGATED_OBJECT.sub('',_LEARNING_ADMIN_COMPARISON.sub('',text))
-    return _LEARNING_FORM.sub('',_LEARNING_MATERIAL.sub('',text))
+    checked=[]
+    for part in parts:
+        text=_URL.sub('',part)
+        def direct(match):
+            prefix=text[:match.start()]
+            # A punctuation boundary inside parentheses may still be in an
+            # inverse statement: “并非（签字后，不用抄写）”. Keep it guarded.
+            if prefix.count('（')>prefix.count('）') or prefix.count('(')>prefix.count(')'):
+                return match.group(0)
+            return match.group(1)
+        text=_LEARNING_NEGATED_ACTION.sub(direct,text)
+        text=_LEARNING_NEGATED_OBJECT.sub('',_LEARNING_ADMIN_COMPARISON.sub('',text))
+        checked.append(_LEARNING_FORM.sub('',_LEARNING_MATERIAL.sub('',text)))
+    return '\n'.join(checked)
 
 
 def _links(evidence):
