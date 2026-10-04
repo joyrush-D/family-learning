@@ -1809,7 +1809,7 @@ def _school_dated_quote(quote, evidence, due, brief):
             # disappear when a concise summary omits the date or label.
             names=re.findall(r'(?:签字|盖章|交回)([^。；;，,\n]{0,24}?(?:回执|同意书|确认单|登记表))',text)
             objects.difference_update(('回执','同意书','确认单','登记表'))
-            objects.update(re.sub(r'^(?:(?:签字|盖章|交回)|[并后再、和及将把请])+','',name) for name in names)
+            objects.update(re.sub(r'^(?:[并后再、和及将把请]*(?:签字|盖章|交回))+','',name) for name in names)
         return kinds,objects
     kinds,objects=identity(quote)
     if len(kinds)!=1 or not objects or identity(brief['goal'])!=(kinds,objects):return False
