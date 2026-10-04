@@ -872,6 +872,52 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(row,dict(c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone()))
             self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
 
+    def test_legacy_correction_acceptance_rechecks_arrivals_after_reread_save(self):
+        row,key,fp,evidence=self._legacy_initial_correction();save=agent._save_school_originals
+        def arrived(*args,**kwargs):
+            saved=save(*args,**kwargs)
+            message=dict(id='13',time='2026-10-04T10:01:00+08:00',kind='text',sender='虚构发布者',sender_id='synthetic-a',text='原第二项不用做了。',unread=False)
+            args[1].execute('INSERT INTO agent_messages(source_id,id,payload,processed) VALUES(?,?,?,1)',(self.source['id'],'13',agent._json(message)))
+            return saved
+        with patch.object(agent.family_llm,'_chat_json',side_effect=self._legacy_mapping(row,evidence)),patch.object(agent,'_save_school_originals',side_effect=arrived):
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1),dict(used=1,failed=0,created=0))
+        with self.app.connect() as c:
+            saved=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone());brief=json.loads(saved['plan'])['school_task']
+            self.assertEqual((saved['state'],brief['state']),('pending','review'));self.assertIn('后发变化',brief['reason'])
+            self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
+
+    def test_rejected_legacy_correction_never_falls_back_to_old_policy_summary(self):
+        row,key,fp,evidence=self._legacy_initial_correction()
+        with self.app.connect() as c:
+            plan=json.loads(row['plan']);plan['school_task']['policy']=8
+            c.execute('UPDATE agent_items SET plan=? WHERE id=?',(agent._json(plan),row['id']))
+            message=dict(id='13',time='2026-10-04T10:01:00+08:00',kind='text',sender='虚构发布者',sender_id='synthetic-a',text='原第二项不用做了。',unread=False)
+            c.execute('INSERT INTO agent_messages(source_id,id,payload,processed) VALUES(?,?,?,1)',(self.source['id'],'13',agent._json(message)))
+            old=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone())
+        with patch.object(agent.family_llm,'_chat_json') as model:
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1),dict(used=0,failed=0,created=0))
+        model.assert_not_called()
+        with self.app.connect() as c:self.assertEqual(old,dict(c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone()))
+
+    def test_legacy_correction_includes_complete_additional_native_requirements(self):
+        row,key,fp,evidence=self._legacy_initial_correction()
+        payload=self.payload(expected='12',cursor='13');payload['messages']=[dict(id='13',time='2026-10-04T09:00:00+08:00',kind='text',sender='虚构发布者',sender_id='synthetic-a',text='补发《桥的观察单》：A栏填写两种方法并写单位。',unread=False)]
+        self.store.ingest(payload)
+        with patch.object(agent.family_llm,'_chat_json',side_effect=self._legacy_mapping(row,evidence)):
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1),dict(used=1,failed=0,created=1))
+        with self.app.connect() as c:
+            saved=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone())
+            self.assertIn('A栏填写两种方法并写单位',saved['body'])
+            self.assertIn('message:'+self.source['id']+':13',{e['ref'] for e in json.loads(saved['evidence'])})
+
+    def test_legacy_correction_does_not_ignore_later_unread_original(self):
+        row,key,fp,evidence=self._legacy_initial_correction()
+        payload=self.payload(expected='12',cursor='13');payload['messages']=[dict(id='13',time='2026-10-04T09:00:00+08:00',kind='image',sender='虚构发布者',sender_id='synthetic-a',text='[图片]',unread=True)]
+        self.store.ingest(payload)
+        with patch.object(agent.family_llm,'_chat_json') as model:
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1),dict(used=0,failed=0,created=0))
+        model.assert_not_called()
+
     def test_legacy_correction_model_review_remains_pending(self):
         row,key,fp,evidence=self._legacy_initial_correction();mapped=self._legacy_mapping(row,evidence)
         def uncertain(*args,**kwargs):

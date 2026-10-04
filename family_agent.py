@@ -1428,6 +1428,8 @@ class Store:
                 evidence,_=_school_material(self,c,row)
                 if any(e.get('kind')=='qq_window_fragment' for e in evidence):
                     raise AgentError('截图来源须核对原图、发布日期和附件后加入',409)
+                if not _school_correction_window_current(self,c,row):
+                    raise AgentError('本项有后发变化或未读资料，当前要求须重新核明；原记录和期限保留。',409,'school_correction_changed')
 
             task_id = ''
             if action == 'accept' and row['kind']=='school' and json.loads(row['plan']).get('school_task',{}).get('change','new')!='new':
@@ -2014,7 +2016,13 @@ def _school_competing_correction(evidence,proof):
         publisher=entry.get('publisher') or _publisher(entry['ref'][8:].rsplit(':',1)[0],entry)
         text=entry.get('text','')
         ordinal=re.match(r'第[一二三四五六七八九十0-9]+项',proof['action_text'])
-        if publisher!=proof['publisher'] or not (proof['object'] in text or ordinal and ordinal[0] in text):continue
+        if publisher!=proof['publisher']:continue
+        if entry.get('unread') or entry.get('content_incomplete'):
+            try:
+                later=dt.datetime.fromisoformat(entry['time'])>dt.datetime.fromisoformat(proof['correction_time'])
+            except (KeyError,ValueError,TypeError):later=True
+            if later:return True
+        if not (proof['object'] in text or ordinal and ordinal[0] in text):continue
         if re.search(r'更正|取消|撤销|撤回|不再(?:做|完成)|不用(?:做|完成)|无需(?:做|完成)|改为|改期|延期',text):return True
     return False
 
@@ -2070,13 +2078,24 @@ def _school_legacy_batch_correction(store,c,row,evidence):
         window=[dict(v) for v in c.execute('SELECT id,payload,processed FROM agent_messages WHERE source_id=? ORDER BY rowid DESC LIMIT 500',(source['id'],))]
         full=[dict(json.loads(v['payload']),ref='message:'+source['id']+':'+v['id']) for v in window]
         if _school_competing_correction(full,proof):return None
+        cited={e['ref'] for e in evidence};additional=[]
+        for entry in reversed(full):
+            if entry['ref'] in cited or proof['object'] not in entry['text'] or _publisher(source['id'],entry)!=proof['publisher']:continue
+            if dt.datetime.fromisoformat(entry['time'])<dt.datetime.fromisoformat(proof['original_time']):continue
+            if entry['kind']!='text' or entry['unread'] or _needs_task_details(entry['text']):return None
+            message_id=entry['ref'][8:].rsplit(':',1)[1]
+            if c.execute('SELECT 1 FROM agent_message_attachments WHERE source_id=? AND message_id=? LIMIT 1',(source['id'],message_id)).fetchone():return None
+            additional.append(entry)
+        reading=evidence+additional
+        if len(reading)>6 or sum(len(_json(e)) for e in reading)>14000:return None
+        reading_row=dict(row,evidence=_json([dict(ref=e['ref']) for e in reading]))
         tables={r['name'] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         fallback='AGENT-'+_hash(row['id'])[:24]
         for table,column in [('manual_tasks','id'),('task_focus','task_id'),('task_updates','id'),('task_history','task_id'),('study_items','task_id')]:
             if table in tables and c.execute('SELECT 1 FROM '+table+' WHERE '+column+'=? LIMIT 1',(fallback,)).fetchone():return None
         if c.execute('SELECT 1 FROM records WHERE linked_task_id=? OR source=? LIMIT 1',(fallback,'Agent建议:'+row['id'])).fetchone():return None
         if c.execute('SELECT 1 FROM manual_tasks WHERE source LIKE ? LIMIT 1',('Agent建议:'+row['id']+'\n%',)).fetchone():return None
-        _,known=_school_original_known(store,c,row)
+        _,known=_school_original_known(store,c,reading_row)
         targets={t['id']:t for t in school_targets(store.app,store,row['child_id'],connection=c)}
         originals={e['ref']:e['text'] for e in batch};native=proof['original_text'];start=native.find(proof['action_text']);end=start+len(proof['action_text'])
         for other in known:
@@ -2092,8 +2111,27 @@ def _school_legacy_batch_correction(store,c,row,evidence):
                     or target['title']!=other['title'] or target['goal']!=quote or target['due']!=other['due']):return None
         scope,_=_history_context(store,c,source,values,row['job_id'],exclude_id=row['id'])
         return dict(correction=proof,scope=_hash([row,dict(receipt),source,values,window,scope]),
-            job_id=row['job_id'],fingerprint=receipt['fingerprint'])
+            job_id=row['job_id'],fingerprint=receipt['fingerprint'],additional_evidence=additional)
     except (AgentError,ValueError,KeyError,TypeError,AttributeError):return None
+
+
+def _school_correction_window_current(store,c,row):
+    """Recheck the current source in the actual acceptance transaction, including arrivals after the reread save."""
+    action=json.loads(row['plan']).get('school_original_action',{});proof=action.get('correction_proof')
+    if not proof:return True
+    evidence,_=_school_material(store,c,row)
+    if proof!=_school_first_batch_correction(dict(json.loads(row['plan'])['school_task'],change='update',target_id=''),evidence):return False
+    sources={e['ref'][8:].rsplit(':',1)[0] for e in evidence}
+    if len(sources)!=1:return False
+    source=next(iter(sources));cited={e['ref'] for e in evidence}
+    window=[dict(json.loads(v['payload']),ref='message:'+source+':'+v['id']) for v in c.execute('SELECT id,payload FROM agent_messages WHERE source_id=? ORDER BY rowid DESC LIMIT 500',(source,))]
+    if not cited<={e['ref'] for e in window} or _school_competing_correction(window,proof):return False
+    for entry in window:
+        if entry['ref'] in cited or proof['object'] not in entry['text'] or _publisher(source,entry)!=proof['publisher']:continue
+        try:
+            if dt.datetime.fromisoformat(entry['time'])>=dt.datetime.fromisoformat(proof['original_time']):return False
+        except (KeyError,ValueError,TypeError):return False
+    return True
 
 
 def _history_anchor(row, originals):
@@ -3317,6 +3355,10 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
                 compiled.append(text)
                 if anchor not in action_anchors:action_anchors.append(anchor)
         projection=[]
+        if legacy_correction:
+            for extra in legacy_correction['additional_evidence']:
+                if not any(a['ref']==extra['ref'] and a['quote']==extra['text'] for a in anchors):
+                    raise AgentError('本项其他完整补发要求未全部保留，原资料与候选保留')
         if conditions and batch_proof and value['change']=='new' and not value['target_id']:
             anchors,projection=_school_scoped_correction_anchors(parts,anchors,batch_proof)
             action_anchors=[a for a in anchors if any(not p.get('background_only') and p['ref']==a['ref']
@@ -3359,7 +3401,8 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         if old and (old['state']!='pending' or json.loads(old['plan']).get('school_history_job')):
             continue  # A material round never replaces an accepted/dismissed or literal-history decision.
         cited_refs={a['ref'] for a in anchors};cited=[e for e in evidence if e['ref'] in cited_refs]
-        item_row=dict(row,evidence=_json([q for q in json.loads(row['evidence']) if q['ref'] in cited_refs]))
+        item_row=dict(row,evidence=_json([dict(ref=e['ref'],text=e['text'][:600]) for e in evidence if e['ref'] in cited_refs]) if legacy_correction
+            else _json([q for q in json.loads(row['evidence']) if q['ref'] in cited_refs]))
         item_plan=copy.deepcopy(json.loads(row['plan']))
         action=dict(identity=identity,scope=scope,root_id=row['id'],anchors=anchors)
         if projection:action.update(model_basis=copy.deepcopy(basis),basis_projection=projection)
@@ -3486,6 +3529,10 @@ def _accept_school_reading(app,store,row,evidence,now,*,original=False):
                 result=store.act(dict(id=row['id'],action='accept',expected_updated=row['updated']),school_auto=True)
                 created+=not result.get('deduplicated',False)
         except (AgentError,sqlite3.IntegrityError) as error:
+            if isinstance(error,AgentError) and error.code=='school_correction_changed':
+                expected=_json(plan);brief.update(state='review',reason=str(error));plan['school_task']=brief
+                with store._db() as c:c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=? AND plan=?",(_json(plan),row['id'],row['updated'],expected))
+                return created,failed
             if isinstance(error,AgentError) and error.status==409 and (brief.get('change')!='append' or error.code=='school_source_paused'): return created,failed
             expected=_json(plan);brief.update(state='review',reason=str(error) if brief.get('change')=='append' else '自动收集未成功，请核对事项后再加入。');plan['school_task']=brief
             with store._db() as c:
@@ -3516,6 +3563,10 @@ def _refresh_school(app, store, now, budget):
         legacy_correction=None
         if not source_error:
             with store._db() as c:legacy_correction=_school_legacy_batch_correction(store,c,row,evidence)
+        legacy_candidate=(brief.get('change')=='update' and not brief.get('target_id') and row['job_id'].startswith('messages:')
+            and not plan.get('school_first_batch_correction') and not plan.get('school_original_action'))
+        if legacy_candidate and not legacy_correction:continue  # A rejected recovery must never fall back to a free summary.
+        reading_evidence=evidence+(legacy_correction['additional_evidence'] if legacy_correction else [])
         page_evidence=_page_evidence(evidence,pages) if pages and not source_error else None
         if page_evidence and not page_evidence['read']: page_evidence=None
         page_key=page_evidence['fingerprint'] if page_evidence else ''
@@ -3567,7 +3618,7 @@ def _refresh_school(app, store, now, budget):
             from family_goals import Store as Goals
             school_goals=Goals(app,store).school_candidates(row['child_id'])
             context=dict(as_of=now.date().isoformat(),candidate=candidate,child_id=row['child_id'],
-                         evidence=_school_model_evidence(evidence,pdf_evidence,material),
+                         evidence=_school_model_evidence(reading_evidence,pdf_evidence,material),
                          school_tasks=targets,learning_goals=school_goals)
             value=dict(policy=SCHOOL_TASK_POLICY,candidate=candidate,child_id=row['child_id'],evidence=evidence,plan=row['plan'],updated=row['updated'])
             if legacy_correction:value['legacy_correction_scope']=legacy_correction['scope']
@@ -3606,7 +3657,7 @@ def _refresh_school(app, store, now, budget):
                         plan['school_task']=waiting
                         with store._db() as c:c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=? AND plan=?",(_json(plan),row['id'],row['updated'],row['plan']))
                     continue
-            original_parts=_school_original_parts(evidence,pdf_evidence,material) if (pdf_evidence or material or plan.get('school_first_batch_correction') or legacy_correction) and (not plan.get('school_original_action') or reflow or mapped_reflow) else []
+            original_parts=_school_original_parts(reading_evidence,pdf_evidence,material) if (pdf_evidence or material or plan.get('school_first_batch_correction') or legacy_correction) and (not plan.get('school_original_action') or reflow or mapped_reflow) else []
             compiled_requirements=None
             if plan.get('school_original_action',{}).get('requirements') and not mapped_reflow:
                 try:
@@ -3616,7 +3667,7 @@ def _refresh_school(app, store, now, budget):
             original_key='';known=[]
             if original_parts and not reference and not source_error:
                 try:
-                    with store._db() as c: original_key,known=_school_original_known(store,c,row)
+                    with store._db() as c: original_key,known=_school_original_known(store,c,dict(row,evidence=_json([dict(ref=e['ref']) for e in reading_evidence])))
                     value.update(original_revision=SCHOOL_ORIGINAL_REVISION,original_scope=original_key)
                     context.update(candidate_id=row['id'],original_parts=original_parts,existing_actions=[dict(id=r['id'],state=r['state'],title=r['title'],goal=r['body'],due=r['due'],original_action=json.loads(r['plan']).get('school_original_action',{})) for r in known])
                     with store._db() as c:batch_proof=_school_untouched_batch_correction(store,c,row,evidence)
@@ -3654,14 +3705,14 @@ def _refresh_school(app, store, now, budget):
                             intact=_school_current(store,c,row,evidence,page_key,pdf_key,material_key) and _school_original_known(store,c,row)[0]==original_key and _school_pdf_mapping_intact(store,c,row,mapping_scope) and (not legacy_correction or _school_legacy_batch_correction(store,c,row,evidence)==legacy_correction)
                             if not intact: _discard_job(c,key,fp)
                         if not intact: continue
-                        items=_school_original_actions(store,row,result,original_parts,known,evidence,page_evidence,pdf_evidence,material,targets,school_goals,now,legacy_correction=legacy_correction)
+                        items=_school_original_actions(store,row,result,original_parts,known,reading_evidence,page_evidence,pdf_evidence,material,targets,school_goals,now,legacy_correction=legacy_correction)
                         with store._db() as c:
                             c.execute('BEGIN IMMEDIATE')
                             if not _school_current(store,c,row,evidence,page_key,pdf_key,material_key) or _school_original_known(store,c,row)[0]!=original_key or not _school_pdf_mapping_intact(store,c,row,mapping_scope) or legacy_correction and _school_legacy_batch_correction(store,c,row,evidence)!=legacy_correction:
                                 _discard_job(c,key,fp);continue
                             saved=_save_school_originals(store,c,row,items,key,fp,now)
                         for collected_row in saved:
-                            collected_evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in json.loads(collected_row['evidence'])}]
+                            collected_evidence=[e for e in reading_evidence if e['ref'] in {q['ref'] for q in json.loads(collected_row['evidence'])}]
                             collected,errors=_accept_school_reading(app,store,collected_row,collected_evidence,now,original=True)
                             created+=collected;failed+=errors
                         continue
