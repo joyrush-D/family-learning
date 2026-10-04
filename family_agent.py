@@ -3086,6 +3086,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
                 if anchor not in action_anchors:action_anchors.append(anchor)
         if requirements and not conditions:value=_school_requirement_goal(value,compiled)
         has_action=any(_LEARNING_ACTIVITY.search(a['quote']) or _LEARNING_ACTION.search(a['quote'])
+            or re.search(r'(?:完成|做|写)\s*《[^》\n]{2,40}》',a['quote'])
             or re.search(r'打印|签字|交回|盖章|提交|上传|带|携带|准备|领取|报名|缴|考试|测验|比赛|家长会',a['quote']) for a in action_anchors)
         if value['state']=='ready' and not has_action and any(lookup[q['part']].get('background_only') for q in basis):
             raise AgentError('原件背景没有完整行动要求，不能自动新增任务')
