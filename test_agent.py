@@ -2319,6 +2319,19 @@ class AgentTests(unittest.TestCase):
         self.assertEqual([(t['title'],t['action'],t['due']) for t in tasks],
                          [('事务：独立活动回执',action,'2026-02-11')])
 
+    def test_literal_independent_admin_date_cannot_borrow_or_truncate_an_action(self):
+        quote='家长事务：2026-02-13签字交回独立活动回执，无需盖章。'
+        evidence=[dict(text='2026-02-11朗读第5课两遍。\n'+quote,time=self.now.isoformat())]
+        self.assertTrue(agent._school_dated_quote(quote,evidence,'2026-02-13',dict(goal=quote)))
+        for title,goal,due in [(quote,quote,'2026-02-11'),
+                               (quote,quote.replace('独立活动回执','另一份报名表'),'2026-02-13'),
+                               ('2026-02-13', '2026-02-13','2026-02-13'),
+                               (quote[:-9],quote[:-9],'2026-02-13')]:
+            with self.subTest(quote=title,goal=goal,due=due):
+                self.assertFalse(agent._school_dated_quote(title,evidence,due,dict(goal=goal)))
+        other=[dict(text=quote,time=self.now.isoformat()),dict(text=quote,time=self.now.isoformat())]
+        self.assertFalse(agent._school_dated_quote(quote,other,'2026-02-13',dict(goal=quote)))
+
     def test_resource_request_unread_or_unknown_material_keeps_review(self):
         cases=[('谁有语文课本照片，发一下。',True,True,'learning'),
                ('谁有数学作业照片，发一下。其他要求见未读图片。',False,True,'learning'),
