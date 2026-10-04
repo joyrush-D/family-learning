@@ -497,7 +497,7 @@ def extract_draft(text='',images=(),timeout=60,*,target_child='',data_path=None,
                 if deferred_pages:page_spec['enum']=list(deferred_pages)
                 original_schema['properties']['deferred_contexts']=dict(type='array',maxItems=10 if deferred_pages else 0,
                     items=dict(type='object',additionalProperties=False,required=['pages','note'],properties=dict(
-                        pages=dict(type='array',minItems=1,maxItems=len(deferred_pages),items=page_spec),
+                        pages=dict(type='array',minItems=1,maxItems=max(1,len(deferred_pages)),items=page_spec),
                         note=dict(type='string',minLength=1,maxLength=300))))
             schema=dict(type='object',additionalProperties=False,required=['originals'],properties=dict(
                 originals=dict(type='array',minItems=len(ids),maxItems=len(ids),items=original_schema)))

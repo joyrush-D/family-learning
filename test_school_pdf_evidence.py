@@ -43,6 +43,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             family_llm.validate_school_material(dict(originals=[original]),original_ids=['a'*32],require_requirements=True)
 
     def test_old_untyped_scope_doubt_recheck_preserves_payload_and_does_not_repeat(self):
+        self.link(self.keys,self.pdf,action=DETACH)
         keys=self.native_notice('untyped-scope');self.candidate(keys=keys,ident='untyped-scope')
         self.seed_groups(keys=keys,uncertainties=[])
         with self.store._db() as c:
@@ -65,6 +66,34 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         with self.store._db() as c:
             row=self.item('untyped-scope');pdf=agent._pdf_evidence(agent._school_pdf(self.store,c,row))
         self.assertEqual(pdf['uncertainties'],[])
+
+    def test_covered_deferred_pages_never_clear_a_real_content_doubt(self):
+        for doubt in ['', '第2页单位模糊，无法确定写厘米还是米。']:
+            with self.subTest(doubt=doubt):
+                with self.store._db() as c:c.execute('DELETE FROM agent_pdf_material')
+                self.seed_groups(uncertainties=[])
+                with self.store._db() as c:
+                    rows=list(c.execute('SELECT first_page,payload FROM agent_pdf_material ORDER BY first_page'))
+                    for first,payload in rows:
+                        value=json.loads(payload);original=value['originals'][0]
+                        original['deferred_contexts']=[dict(pages=[4],note='独立回执在后续页整理。')] if first==1 else []
+                        original['uncertainties']=[doubt] if first==1 and doubt else []
+                        c.execute('UPDATE agent_pdf_material SET payload=? WHERE first_page=?',(json.dumps(value),first))
+                    self.candidate(ident='covered-'+str(bool(doubt)))
+                    row=self.item('covered-'+str(bool(doubt)));pdf=agent._pdf_evidence(agent._school_pdf(self.store,c,row))
+                self.assertEqual(pdf['uncertainties'],[doubt] if doubt else [])
+
+    def test_untyped_doubt_is_not_reread_after_any_parent_decision(self):
+        self.link(self.keys,self.pdf,action=DETACH)
+        keys=self.native_notice('scope-decided');ident=self.candidate(keys=keys,ident='scope-decided')
+        self.seed_groups(keys=keys,uncertainties=['第4页尚未送入，回执未知。'])
+        for state in ('accepted','dismissed'):
+            with self.subTest(state=state):
+                with self.store._db() as c:c.execute('UPDATE agent_items SET state=? WHERE id=?',(state,ident))
+                before=self.rows('SELECT * FROM agent_pdf_material ORDER BY first_page')
+                with no_render(),patch.object(family_llm,'extract_draft',side_effect=AssertionError('decision must not be re-read')):
+                    self.assertEqual(pdfm.prepare(self.store,self.now),dict(used=0,failed=0))
+                self.assertEqual(self.rows('SELECT * FROM agent_pdf_material ORDER BY first_page'),before)
 
     seed_pdf = test_pdf_material.PdfMaterialTests.seed_pdf
     rows = test_pdf_material.PdfMaterialTests.rows
@@ -185,7 +214,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         with self.store._db() as c:c.execute("UPDATE agent_items SET state='pending' WHERE id=?",(second,))
         def changed(text,images,**kw):
             with self.store._db() as c:c.execute("UPDATE agent_items SET plan=? WHERE id=?",(json.dumps(dict(school_task=dict(goal='家长并发修改'))),first))
-            return dict(originals=[dict(upload_id=self.pdf,title='新页组',note='背景',uncertainties=[],requirements=[])])
+            return dict(originals=[dict(upload_id=self.pdf,title='新页组',note='背景',uncertainties=[],requirements=[],deferred_contexts=[])])
         with test_pdf_material.renderer(),patch.object(family_llm,'extract_draft',side_effect=changed):
             self.assertEqual(pdfm.prepare(self.store,self.now),dict(used=1,failed=0))
         self.assertEqual(self.rows('SELECT * FROM agent_pdf_material ORDER BY first_page'),before)
