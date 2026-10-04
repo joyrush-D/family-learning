@@ -1488,6 +1488,68 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
             self.assertIn('确认上传成功',next(t for t in self.app.tasks(c) if t['id']==task_id)['action'])
 
+    def test_school_original_action_append_and_repeated_notice_keep_scoped_messages(self):
+        original,task_id=self._school_append_original()
+        keys=dict(child_id='child-1',source_id=self.source['id'])
+        with self.store._db() as c:
+            canonical=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(original['id'],)).fetchone())
+            evidence,_=agent._school_material(self.store,c,canonical)
+            plan=json.loads(canonical['plan']);ref=evidence[0]['ref'];quote=evidence[0]['text']
+            self.assertEqual(plan['school_task']['origin_basis'],agent._school_message_basis(evidence))
+            anchor=dict(ref=ref,upload_ids=[],pages=[],quote=quote)
+            plan['school_original_action']=dict(identity=agent._hash(['child-1',[agent._json([ref,[],quote])]]),
+                scope=agent._hash(['child-1',[ref],[]]),root_id=original['id'],anchors=[anchor])
+            c.execute('UPDATE agent_items SET plan=? WHERE id=?',(agent._json(plan),original['id']))
+
+        def saved_state():
+            with self.app.connect() as c:
+                return {table:[tuple(r) for r in c.execute('SELECT * FROM '+table+' ORDER BY rowid')]
+                        for table in ('agent_items','manual_tasks','records','task_updates','task_focus','task_focus_history')}
+
+        def read_text(message_id,text):
+            before=saved_state()
+            with patch.object(agent.family_llm,'_chat_json',side_effect=AssertionError('saved messages need no model')) as model:
+                view=self.store.message(dict(keys,message_id=message_id,task_id=task_id),self.app.upload_info)
+            model.assert_not_called()
+            self.assertEqual((view['task_id'],view['message']['text']),(task_id,text))
+            self.assertEqual((view['attachments'],view['unavailable_attachment_ids'],view['nearby_materials']),([],[],[]))
+            self.assertIsNone(view['pdf_material']);self.assertIsNone(view['material_draft'])
+            self.assertTrue(view['action_material']['scoped'])
+            self.assertEqual(view['action_material']['quotes'],[dict(text=text,upload_ids=[],pages=[])])
+            self.assertEqual(saved_state(),before,'task message previews must not write family or task records')
+
+        read_text('11',quote)
+        delta='只补朗读：录音上传后确认上传成功，不要求背诵。'
+        added=self._school_append_candidate(12,delta,change='append',target=task_id)
+        self._school_append_auto(added)
+        with self.app.connect() as c:
+            canonical=c.execute('SELECT * FROM agent_items WHERE id=?',(original['id'],)).fetchone()
+            self.assertEqual((canonical['body'],canonical['evidence']),(original['body'],original['evidence']))
+            self.assertEqual(c.execute('SELECT task_id FROM agent_items WHERE id=?',(added['id'],)).fetchone()[0],task_id)
+        with self.subTest(message='accepted supplement'):
+            read_text('12',delta)
+
+        repeated,repeat_id=self._school_append_original(13)
+        self.assertEqual(repeat_id,task_id)
+        with self.subTest(message='original after same-day repeated notice'):
+            read_text('11',quote)
+        with self.app.connect() as c:
+            canonical=c.execute('SELECT * FROM agent_items WHERE id=?',(original['id'],)).fetchone()
+            self.assertEqual(canonical['body'],original['body'])
+            self.assertTrue(all(e in json.loads(canonical['evidence']) for e in json.loads(original['evidence'])))
+            self.assertIn(anchor,json.loads(canonical['plan'])['school_original_action']['anchors'])
+            task=next(t for t in self.app.tasks(c) if t['id']==task_id)
+            self.assertIn(original['body'],task['action']);self.assertEqual(task['action'].count(delta),1)
+            self.assertEqual(task['agenda']['due_on'],'2026-02-11')
+            self.assertEqual(c.execute('SELECT task_id FROM agent_items WHERE id=?',(repeated['id'],)).fetchone()[0],task_id)
+            self.assertEqual(tuple(c.execute('SELECT (SELECT COUNT(*) FROM manual_tasks),'
+                '(SELECT COUNT(*) FROM records),(SELECT COUNT(*) FROM task_updates)').fetchone()),(1,0,0))
+        foreign=self.app.new_task(dict(child='示例乙',title='虚构其他孩子作业',category='homework'))
+        before=saved_state()
+        with self.assertRaises(agent.AgentError):
+            self.store.message(dict(keys,message_id='12',task_id=foreign['id']),self.app.upload_info)
+        self.assertEqual(saved_state(),before,'rejecting a foreign task must not change saved records')
+
     def test_school_cross_batch_textbook_append_and_duplicate_keep_one_requirement(self):
         text='教材第38页第2、3题必做，明天交数学本。'
         original=self._school_append_candidate(11,text,title='数学：教材第38页第2、3题',due='2026-02-11',publisher='synthetic-math-b')
