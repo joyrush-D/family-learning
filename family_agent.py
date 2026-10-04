@@ -67,7 +67,7 @@ learning_goal_id只从输入learning_goals选择同一科目且适合本要求�
 任务要求与老师的后续更正、撤销一起保留原消息作为规划依据；不把它们当成孩子表现。发布者称呼不等于教师身份已确认，不凭群名推断任课老师，不将家长转发说成老师直接发布。保持必须、任选、示例和条件要求，不能读出未提供的图片或链接内容。'''
 # One saved interpretation feeds the task list; it never records child performance.
 SCHOOL_TASK_POLICY = 9
-SCHOOL_SELECTION_REVISION = 1
+SCHOOL_SELECTION_REVISION = 2
 _SCHOOL_DATE_MENTION=re.compile(r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}\s*[日号]|今天|今日|今晚|明天|明日|后天|(?:本|这|下)(?:个)?(?:周|星期|礼拜)|(?:周|星期|礼拜)[一二三四五六日天]|截止|期限|日期|完成时间')
 TASK_BRIEF_SCHEMA = {'type':'object','additionalProperties':False,'required':['title','goal','advice','state','reason'],
     'properties':{**{key:{'type':'string','maxLength':limit} for key,limit in [('title',80),('goal',2000),('advice',1200),('reason',400)]},
@@ -1834,6 +1834,17 @@ def _history_anchor(row, originals):
     quotes=json.loads(row['evidence'])
     for e in quotes:
         ref=e['ref'];text=originals.get(ref,'');quote=saved.get(ref) or row['body'].strip()
+        brief=plan.get('school_task',{})
+        if (row['state']=='pending' and not row['task_id'] and brief.get('state')=='reference'
+                and row['title']==brief.get('title')=='群内资料求助'):
+            # A deterministic old reference saved no family action. Reconstruct
+            # only its literal resource question; later independent clauses are
+            # not covered. Accepted/dismissed or edited decisions stay unknown.
+            ends=[m.end() for m in re.finditer(r'[。！？!?；;\n]',text)]+[len(text)]
+            for end in ends:
+                prefix=text[:end].strip();reference=_reference_brief([dict(text=prefix)])
+                if reference and reference['title']=='群内资料求助' and row['body']==brief.get('goal')==reference['goal']:
+                    return {ref:prefix}
         if not text or not quote or len(quote)>600 or text.count(quote)!=1: continue
         # A legacy whole multi-clause notice does not establish which independent action was saved.
         if not saved.get(ref) and quote==text.strip() and len([v for v in re.split(r'[。；\n]',quote) if v.strip()])>1: continue
