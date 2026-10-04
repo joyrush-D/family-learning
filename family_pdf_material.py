@@ -211,7 +211,8 @@ def _batches(rows, upload_id):
             require(isinstance(draft, dict) and draft.pop('kind', None) == SCHOOL_MATERIAL, 'draft_kind_mismatch')
             draft.pop('previous_group',None)  # Old payload and timestamp remain history, never current action evidence.
             draft = family_llm.validate_school_material(draft,original_ids=[upload_id] if 'originals' in draft else (),
-                                                       require_requirements='originals' in draft,allow_page_scope=True)
+                                                       require_requirements='originals' in draft,allow_page_scope=True,
+                                                       allow_legacy_reading_progress=True)
             for original in draft.get('originals',[]):
                 require(all(set(context['pages'])<=set(range(1,count+1))-set(pages)
                             for context in original.get('deferred_contexts',[])), 'pdf_row_invalid')
@@ -230,22 +231,27 @@ def _pending(done, page_count):
 
 
 def _needs_requirements_upgrade(batch):
+    import family_llm
     draft=batch['draft']
     # Old free-form doubts cannot be deleted by wording or by later page coverage.
     # Only undecided originals are re-read into the explicit scope channel; clear
     # structured groups and all parent decisions retain their existing evidence.
-    return ('originals' not in draft or bool(draft.get('uncertainties'))
+    return ('originals' not in draft or any(family_llm.school_requirement_has_reading_progress(r)
+            for original in draft.get('originals',[]) for r in original['requirements']) or bool(draft.get('uncertainties'))
             and any('deferred_contexts' not in original for original in draft['originals']))
 
 
 def _document_view(c, source, message, value):
     from family_agent import _hash
+    import family_llm
     batches, done, page_count = _batches(_rows(c, source, message, value['fingerprint']),value['upload_id'])
     pending = _pending(done, page_count); complete = page_count is not None and not pending
     key = _document_key(source, message, value)
     job = c.execute('SELECT * FROM agent_jobs WHERE id=?', (key,)).fetchone()
-    requirements_complete=complete and all('originals' in b['draft'] for b in batches)
-    structured_done={p for b in batches if 'originals' in b['draft'] for p in b['pages']}
+    structured=[b for b in batches if 'originals' in b['draft'] and not any(
+        family_llm.school_requirement_has_reading_progress(r) for original in b['draft']['originals'] for r in original['requirements'])]
+    requirements_complete=complete and len(structured)==len(batches)
+    structured_done={p for b in structured for p in b['pages']}
     failed = bool(job and not job['done'] and job['error'] and job['fingerprint'] in
                   {_hash(_job_value(value['fingerprint'], pages)) for pages in (done,structured_done)})
     state = 'error' if failed else 'ready' if complete else 'pending'

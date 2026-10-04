@@ -292,7 +292,10 @@ def _pdf_evidence(material):
         (m['ref'],m['upload_id'],text) for m in material for b in m['batches']
         for original in b['draft'].get('originals',[]) for text in original['requirements']})
     # Reserve the whole requirements before sending any background prose, including earlier-page background.
-    model=[];documents=[];uncertainties=[];total=min(requirements_size,PDF_TEXT_LIMIT);complete_requirements=requirements_size<=PDF_TEXT_LIMIT
+    reading_progress=any(family_llm.school_requirement_has_reading_progress(r)
+        for m in material for b in m['batches'] for original in b['draft'].get('originals',[]) for r in original['requirements'])
+    model=[];documents=[];uncertainties=[];total=min(requirements_size,PDF_TEXT_LIMIT)
+    complete_requirements=requirements_size<=PDF_TEXT_LIMIT and not reading_progress
     for m in material:
         groups=[];omitted=[];truncated=[];processed=[]
         covered={p for batch in m['batches'] for p in batch['pages']}
@@ -321,7 +324,8 @@ def _pdf_evidence(material):
         model.append(dict(ref=m['ref'],name=m['name'],upload_id=m['upload_id'],**kind,page_count=m['page_count'],processed_pages=sorted(processed),complete=True,
                           groups=groups,omitted_groups=omitted,truncated_groups=truncated))
         documents.append(dict(ref=m['ref'],name=m['name'],upload_id=m['upload_id'],**kind,page_count=m['page_count'],groups=len(m['batches']),sent=len(groups),omitted=omitted,truncated=truncated))
-    return dict(fingerprint=fingerprint,documents=documents,model=model,uncertainties=uncertainties,requirements_complete=complete_requirements)
+    return dict(fingerprint=fingerprint,documents=documents,model=model,uncertainties=uncertainties,
+                requirements_complete=complete_requirements,reading_progress_in_requirements=reading_progress)
 
 
 def _original_label(documents):
@@ -2312,10 +2316,14 @@ def _check_school_page(store, c, row):
             raise AgentError('网页片段已失效（消息更正或来源授权变化），请重新读取页面后核对',409,'page_evidence_stale')
     recorded=brief.get('pdf_evidence')
     if recorded is not None:
-        try: seen=(_pdf_evidence(_school_pdf(store,c,row)) or {}).get('fingerprint','')
-        except (AgentError,ValueError,KeyError,TypeError): seen=''
+        try:
+            current_pdf=_pdf_evidence(_school_pdf(store,c,row)) or {}
+            seen=current_pdf.get('fingerprint','')
+        except (AgentError,ValueError,KeyError,TypeError): seen='';current_pdf={}
         if not seen or seen!=recorded.get('fingerprint'):
             raise AgentError(_original_label(recorded.get('documents'))+'原件整理已失效（原件、关联、消息或来源授权变化），请重新核对原件后再确认',409,'pdf_evidence_stale')
+        if current_pdf.get('reading_progress_in_requirements'):
+            raise AgentError('原件读取进度混入完成要求，原内容保留，请重新整理后核对',409,'pdf_requirements_incomplete')
 
 
     recorded=brief.get('material_evidence')

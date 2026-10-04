@@ -25,6 +25,116 @@ def draft(**changes):
 
 
 class SchoolPdfEvidenceTests(test_pdf_material.Base):
+    def test_model_progress_is_not_a_complete_teacher_requirement(self):
+        good='数学：2026-02-12前完成第1至3题，选做条件见第4页；等老师发资料再做另一份练习。'
+        for requirement in (good+'须待第4页送入后按原文核对。',good+'本轮未重送第1至3页。',good+'processed_pages=[1,2,3]'):
+            original=dict(upload_id='a'*32,title='虚构页组',note='本轮第1至3页。',requirements=[requirement],
+                uncertainties=['第2页单位模糊'],deferred_contexts=[dict(pages=[4],note='续页标准待本轮后的处理。')])
+            value=dict(originals=[original]);before=copy.deepcopy(value)
+            with self.assertRaises(family_llm.LLMDraftError):
+                family_llm.validate_school_material(value,original_ids=['a'*32],require_requirements=True,
+                    allow_page_scope=True,deferred_pages=[4])
+            self.assertEqual(value,before)
+            legacy=family_llm.validate_school_material(value,original_ids=['a'*32],require_requirements=True,
+                allow_page_scope=True,allow_legacy_reading_progress=True)
+            self.assertEqual(legacy['originals'][0],original)
+        original['requirements']=[good]
+        self.assertEqual(family_llm.validate_school_material(dict(originals=[original]),original_ids=['a'*32],
+            require_requirements=True,allow_page_scope=True,deferred_pages=[4])['originals'][0]['requirements'],[good])
+
+    def progress_group(self):
+        self.link(self.keys,self.pdf,action=DETACH)
+        keys=self.native_notice('progress-requirements');ident=self.candidate(keys=keys,ident='progress-requirements')
+        self.seed_groups(keys=keys,uncertainties=[])
+        with self.store._db() as c:
+            old=c.execute('SELECT payload FROM agent_pdf_material WHERE message_id=? AND first_page=1',(keys['message_id'],)).fetchone()
+            value=json.loads(old[0]);original=value['originals'][0]
+            original['requirements']=[TEXT+'须待第4页送入后按该页原文核对。']
+            original['deferred_contexts']=[dict(pages=[4],note='后续页处理范围')]
+            c.execute('UPDATE agent_pdf_material SET payload=? WHERE message_id=? AND first_page=1',(json.dumps(value),keys['message_id']))
+        return keys,ident
+
+    def progress_view(self,keys):
+        with self.store._db() as c:
+            source,message=self.store._message_context(c,keys)
+            return pdfm.view(self.store,c,source,message)
+
+    def test_old_progress_remains_readable_and_is_rechecked_without_losing_history(self):
+        keys,ident=self.progress_group()
+        before=self.rows('SELECT first_page,payload,updated,pages,page_count FROM agent_pdf_material ORDER BY first_page')
+        view=self.progress_view(keys)
+        self.assertEqual((view['complete'],view['requirements_complete'],view['processed_pages']),(True,False,list(range(1,12))))
+        with self.store._db() as c:pdf=agent._pdf_evidence(agent._school_pdf(self.store,c,self.item(ident)))
+        self.assertFalse(pdf['requirements_complete']);self.assertTrue(pdf['reading_progress_in_requirements'])
+        with patch.object(family_llm,'_chat_json',side_effect=AssertionError('polluted requirements cannot map actions')):
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1),dict(used=0,failed=0,created=0))
+        bad=dict(originals=[dict(upload_id=self.pdf,title='不正确返回',note='背景',requirements=[TEXT+'须待第4页送入后核对。'],
+            uncertainties=[],deferred_contexts=[])])
+        with test_pdf_material.renderer(),patch.object(family_llm,'extract_draft',return_value=bad):
+            self.assertEqual(pdfm.prepare(self.store,self.now,budget=1),dict(used=1,failed=1))
+        self.assertEqual(self.rows('SELECT first_page,payload,updated,pages,page_count FROM agent_pdf_material ORDER BY first_page'),before)
+        self.assertEqual(self.progress_view(keys)['state'],'error')
+        with no_render(),patch.object(family_llm,'extract_draft',side_effect=AssertionError('backoff or zero budget')):
+            self.assertEqual(pdfm.prepare(self.store,self.now,budget=0),dict(used=0,failed=0))
+            self.assertEqual(pdfm.prepare(self.store,self.now+dt.timedelta(seconds=1),budget=1),dict(used=0,failed=0))
+        def good(text,images,**kw):
+            self.assertEqual(kw['original_pages'],[1,2,3]);self.assertEqual(kw['deferred_pages'],[])
+            return dict(originals=[dict(upload_id=self.pdf,title='重新读取',note='老师要求',requirements=[TEXT],
+                uncertainties=[],deferred_contexts=[])])
+        with test_pdf_material.renderer(),patch.object(family_llm,'extract_draft',side_effect=good) as model:
+            self.assertEqual(pdfm.prepare(self.store,self.now+dt.timedelta(minutes=30),budget=1),dict(used=1,failed=0))
+            self.assertEqual(pdfm.prepare(self.store,self.now+dt.timedelta(minutes=31),budget=1),dict(used=0,failed=0))
+            model.assert_called_once()
+        after=self.rows('SELECT first_page,payload,updated,pages,page_count FROM agent_pdf_material ORDER BY first_page')
+        self.assertEqual(after[1:],before[1:])
+        self.assertEqual(json.loads(after[0][1])['previous_group'],dict(payload=json.loads(before[0][1]),updated=before[0][2],
+            pages=json.loads(before[0][3]),page_count=before[0][4]))
+        self.assertTrue(self.progress_view(keys)['requirements_complete'])
+        self.assertEqual((self.count('manual_tasks'),self.count('records')),(0,0))
+
+    def test_progress_recheck_never_replaces_a_parent_decision_or_edited_candidate(self):
+        keys,ident=self.progress_group()
+        before=self.rows('SELECT * FROM agent_pdf_material ORDER BY first_page')
+        for state,body in [('accepted',agent.FOCUS['school']),('dismissed',agent.FOCUS['school']),('pending','家长修改的实际要求')]:
+            with self.subTest(state=state,body=body):
+                with self.store._db() as c:c.execute('UPDATE agent_items SET state=?,body=? WHERE id=?',(state,body,ident))
+                with no_render(),patch.object(family_llm,'extract_draft',side_effect=AssertionError('decision or edited body')):
+                    self.assertEqual(pdfm.prepare(self.store,self.now),dict(used=0,failed=0))
+                self.assertEqual(self.rows('SELECT * FROM agent_pdf_material ORDER BY first_page'),before)
+
+    def test_progress_recheck_voids_its_result_when_a_decision_changes_mid_call(self):
+        keys,ident=self.progress_group();before=self.rows('SELECT * FROM agent_pdf_material ORDER BY first_page')
+        def model(*a,**kw):
+            with self.store._db() as c:c.execute("UPDATE agent_items SET state='dismissed' WHERE id=?",(ident,))
+            return dict(originals=[dict(upload_id=self.pdf,title='重读',note='原件',requirements=[TEXT],uncertainties=[],deferred_contexts=[])])
+        with test_pdf_material.renderer(),patch.object(family_llm,'extract_draft',side_effect=model):
+            self.assertEqual(pdfm.prepare(self.store,self.now),dict(used=1,failed=0))
+        self.assertEqual(self.rows('SELECT * FROM agent_pdf_material ORDER BY first_page'),before)
+        self.assertEqual(self.item(ident)['state'],'dismissed')
+
+    def test_cached_ready_progress_cannot_be_accepted_or_silently_remapped(self):
+        keys,ident=self.progress_group()
+        with self.store._db() as c:
+            row=self.item(ident);pdf=agent._pdf_evidence(agent._school_pdf(self.store,c,row));evidence,_=agent._school_material(self.store,c,row)
+            full=TEXT+'须待第4页送入后按该页原文核对。'
+            brief=dict(draft(goal=full),policy=agent.SCHOOL_TASK_POLICY,pdf_evidence=dict(fingerprint=pdf['fingerprint'],documents=pdf['documents']),
+                origin_basis=agent._school_message_basis(evidence))
+            plan=json.loads(row['plan']);plan['school_task']=brief
+            plan['school_original_action']=dict(identity='synthetic-progress',anchors=[dict(ref=evidence[0]['ref'],upload_ids=[self.pdf],pages=[1,2,3],quote=full)],
+                requirements=[dict(id='synthetic-requirement',ref=evidence[0]['ref'],upload_ids=[self.pdf],text=full)])
+            c.execute('UPDATE agent_items SET title=?,body=?,due=?,plan=? WHERE id=?',
+                (brief['title'],brief['goal'],'2026-02-12',json.dumps(plan),ident))
+        before=self.rows('SELECT * FROM agent_pdf_material ORDER BY first_page');row=self.item(ident)
+        for automatic in (False,True):
+            with self.subTest(automatic=automatic):
+                with self.assertRaises(agent.AgentError) as caught:
+                    self.store.act(dict(id=ident,action='accept',expected_updated=row['updated']),school_auto=automatic)
+                self.assertEqual((caught.exception.status,caught.exception.code),(409,'pdf_requirements_incomplete'))
+        with no_render(),patch.object(family_llm,'extract_draft',side_effect=AssertionError('complete action identity requires explicit recheck')):
+            self.assertEqual(pdfm.prepare(self.store,self.now),dict(used=0,failed=0))
+        self.assertEqual(self.rows('SELECT * FROM agent_pdf_material ORDER BY first_page'),before)
+        self.assertEqual((self.count('manual_tasks'),self.count('records'),self.item(ident)['body']),(0,0,full))
+
     def test_page_scope_boundary_has_a_checked_channel_without_clearing_real_doubts(self):
         original=dict(upload_id='a'*32,title='虚构页组',note='仅本轮第1至3页。',requirements=['数学：完成第1题。'],
             uncertainties=['第2页单位模糊'],deferred_contexts=[dict(pages=[4],note='通知中的独立回执在后续页另轮整理。')])

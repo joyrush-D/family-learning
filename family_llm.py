@@ -307,12 +307,26 @@ def _school_original_ids(original_ids):
     return list(original_ids)
 
 
-def validate_school_material(value, *, original_ids=(), require_requirements=False, allow_page_scope=False, deferred_pages=None):
+def school_requirement_has_reading_progress(text):
+    """Recognize explicit model page-delivery progress, not a teacher's wait/review instruction.
+
+    Do not remove matching words: a contaminated complete requirement must be
+    re-read or left for review, so its other completion standards cannot be lost.
+    """
+    return bool(re.search(
+        r'(?:待|等待|尚未)[^。！？；;\n]{0,12}第?[0-9一二三四五六七八九十百、至\-–]{1,20}页[^。！？；;\n]{0,20}(?:送入|重送|送核)'
+        r'|(?:本轮|本次|当前批次)[^。！？；;\n]{0,60}(?:未送入|未重送|尚未读取|仍待处理)'
+        r'|processed_pages|unprocessed_pages|deferred_contexts', text))
+
+
+def validate_school_material(value, *, original_ids=(), require_requirements=False, allow_page_scope=False, deferred_pages=None,
+                             allow_legacy_reading_progress=False):
     """Legacy notes stay readable; identified originals must each return their own checked note.
 
     The display summary is assembled locally. It never supplies attachment ownership to actions."""
     ids=_school_original_ids(original_ids)
-    if (type(require_requirements) is not bool or type(allow_page_scope) is not bool or require_requirements and not ids
+    if (type(require_requirements) is not bool or type(allow_page_scope) is not bool
+            or type(allow_legacy_reading_progress) is not bool or require_requirements and not ids
             or deferred_pages is not None and not allow_page_scope):
         raise ValueError('完整学校要求校验须明确逐原件身份')
     if ids:
@@ -341,6 +355,8 @@ def validate_school_material(value, *, original_ids=(), require_requirements=Fal
                 requirement_chars+=sum(len(r) for r in requirements)
                 if requirement_chars>4000:
                     raise LLMDraftError('学校完整行动要求超过本轮限额，未截断，请分次或手动核对')
+                if not allow_legacy_reading_progress and any(school_requirement_has_reading_progress(r) for r in requirements):
+                    raise LLMDraftError('资料读取进度混入学校要求，原件保留，请重新整理')
                 # Freeze only outer whitespace once; preserve all internal words,
                 # punctuation and line breaks for exact later action mapping.
                 checked[ident]['requirements']=[r.strip() for r in requirements]
@@ -517,6 +533,7 @@ uncertainties只写实际读不清、相互冲突、缺页或影响理解的归�
             if pages:prompt+='\n本轮多个original_image具有同一upload_id，各自page对应同一原件的不同页。它们是一个页组，originals只返回这一份原件；requirements完整保留本组各页中的所有独立要求和跨页追加的完成标准，不把一项作业按页拆成重复任务。额外返回deferred_contexts数组：仅把material_scope.unprocessed_pages中尚待分轮送入的页及其处理范围写在这里，每项pages是其中的页码，note说明处理范围，不猜该页内容。没有这种范围用空数组；unprocessed_pages为空时必须用空数组。比如当前第1至3页、通知还提到后续第4页的独立回执，后续页未送入只是deferred_contexts处理进度，不能又在uncertainties写回执缺失。uncertainties仍保留当前页模糊、真实缺件/缺页、冲突、日期/归属疑点，以及不能仅靠处理这些已知后续页核对的实质未知；不得把这些疑点移到deferred_contexts或假称已经解决。已读页及关联清单不是未知上下文的内容证据。'
             prompt+='\nrequirements是本份原件中的完整独立行动要求字符串数组，每项对应一个独立成果；同一作业的打印、签字、交回步骤并入该项，另一份独立回执另列。逐项写明动作、对象、范围、明确日期或期限、必做/选做、适用条件、否定要求及具体输出和完成标准，方法数量、单位、过程、数量和提交方式等不得因简写而遗漏。题目本身可在note中保留，题内明确的完成标准必须并入对应requirements；一份原件有多个行动时全部分别保留。题面、表头、空白填写栏、答案、孩子作答、参考说明和材料对照本身不生成行动；没有明确行动用空数组，读不清或条件不明仍说明具体uncertainties，不猜缺失要求。每份最多12项，每项最多2000字，本轮所有原件的requirements合计最多4000字；不能用标题、总范围或笼统检查替代具体标准。'
             prompt+='\n同一份练习的必做题与选做题是同一成果的不同要求，完整写入同一个requirements字符串，不能仅因选做条件或出现在续页就另造独立任务。续页明确“属于前面的同一份练习”时，把其方法、单位、检查等标准和选做条件合入该练习，保留练习自己的截止日期；不把必做或选做偷换成全员必做。另一份独立练习、独立复习安排或回执仍各列一项，不能仅按科目或同文件合并。'
+            prompt+='\nrequirements只保留学校实际提出的行动、对象和完成标准，不混入模型读取过程或给程序的建议。原文“选做条件见第4页”可照实保留；你自行添加的“须待第4页送入后核对”“本轮未重送”“processed_pages”等处理进度只能放在note或合法deferred_contexts中，不能成为家长作业要求。不要为了去掉进度而省略同段真实标准，也不要猜尚未看到的续页内容。'
         return validate_school_material(_chat_json([dict(role='system',content=prompt),dict(role='user',content=content)],
                                                    schema,'family_school_material_draft',timeout,data_path=data_path),original_ids=ids,require_requirements=bool(ids),
                                         allow_page_scope=bool(pages),deferred_pages=list(deferred_pages) if pages else None)
