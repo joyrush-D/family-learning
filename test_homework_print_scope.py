@@ -148,8 +148,8 @@ class HomeworkPrintScopeTests(unittest.TestCase):
 
     def test_pair_lost_receipt_retries_same_request_without_duplicate_jobs(self):
         original=app.family_print.PrintStore.enqueue;calls=[]
-        def lose_second_receipt(store,body):
-            calls.append(body['idempotency_key']);job=original(store,body)
+        def lose_second_receipt(store,body,**kwargs):
+            calls.append(body['idempotency_key']);job=original(store,body,**kwargs)
             if len(calls)==2: raise app.family_print.PrintError('Synthetic lost receipt','synthetic_receipt_lost',503)
             return job
         with patch.object(app.family_print.PrintStore,'enqueue',lose_second_receipt):
