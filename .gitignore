@@ -231,3 +231,4 @@
 !/test_homework_duplicate_ui.cjs
 !/test_homework_text.py
 !/test_homework_text_ui.cjs
+!/test_homework_text_print_ui.cjs
