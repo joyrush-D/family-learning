@@ -949,6 +949,11 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(deadlines(scope['action_text'],'2026-10-03'),{'2026-10-05'})
         self.assertNotIn('交回回执',scope['action_text'])
         self.assertIsNone(agent._school_first_batch_action_scope(own,'第三项',obj))
+        for prefix in ['明天完成两项中的朗读，观察单不设期限。','明天完成两项但只检查朗读。',
+                       '明天完成三项语文要求。']:
+            scope=agent._school_first_batch_action_scope(prefix+own,ordinal,obj)
+            self.assertEqual(scope['shared_date_text'],'')
+            self.assertEqual(deadlines(scope['action_text'],'2026-10-03'),set())
 
     def _school_batch_failure_recovers(self, failure):
         payload=self.payload(cursor='16')

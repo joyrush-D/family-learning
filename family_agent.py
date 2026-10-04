@@ -1954,7 +1954,9 @@ def _school_first_batch_action_scope(text,ordinal,obj):
     start,end=selected[0];prefix=text[:numbered[0].start()]
     dated=r'(?:今天|明天|后天|(?:\d{4}年)?\d{1,2}月\d{1,2}日?|\d{4}-\d{2}-\d{2})'
     shared=''
-    if re.fullmatch(dated+r'\s*(?:前|之前|以前|内)?\s*完成[两二三四五六七八九十2-9]+项[^。；;\n]{0,20}[。；;\n]\s*',prefix):
+    common=re.fullmatch(dated+r'\s*(?:前|之前|以前|内)?\s*完成([两二三四五六七八九十2-9])项(?:语文|数学|英语|科学|历史|地理|物理|化学|生物)?(?:要求|作业|任务|练习)?[。；;\n]\s*',prefix)
+    count={'两':2,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}
+    if common and count.get(common[1],int(common[1]) if common[1].isdigit() else 0)==len(numbered):
         shared=prefix.strip()
     elif start==numbered[0].start() and re.fullmatch(dated+r'\s*(?:前|之前|以前|内)?\s*完成\s*',prefix):
         start=0  # A date directly before this sole/first numbered action belongs to it.
@@ -3086,7 +3088,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
                 if anchor not in action_anchors:action_anchors.append(anchor)
         if requirements and not conditions:value=_school_requirement_goal(value,compiled)
         has_action=any(_LEARNING_ACTIVITY.search(a['quote']) or _LEARNING_ACTION.search(a['quote'])
-            or conditions and re.search(r'(?:完成|做|写)\s*《[^》\n]{2,40}》',a['quote'])
+            or conditions and re.search(r'(?:完成|做|写)\s*(?:第[一二三四五六七八九十0-9]+项\s*[:：]?\s*)?《[^》\n]{2,40}》',a['quote'])
             or re.search(r'打印|签字|交回|盖章|提交|上传|带|携带|准备|领取|报名|缴|考试|测验|比赛|家长会',a['quote']) for a in action_anchors)
         if value['state']=='ready' and not has_action and any(lookup[q['part']].get('background_only') for q in basis):
             raise AgentError('原件背景没有完整行动要求，不能自动新增任务')
