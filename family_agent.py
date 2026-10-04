@@ -158,7 +158,7 @@ _LEARNING_ADMIN_COMPARISON = re.compile(r'(?:该|此|这份)?(?:活动)?(?:回�
 # available to the positive/mixed-learning guard. This is a classification copy;
 # the original notice and its complete negative requirements are never changed.
 _LEARNING_NEGATED_ACTION = re.compile(
-    r'(^|[。；;，,！？!?\n（(])\s*(?:请\s*)?(?:(?:家长|孩子|学生|同学们?)\s*)?'
+    r'(^|[。；;，,！？!?\n])\s*(?:请\s*)?(?:(?:家长|孩子|学生|同学们?)\s*)?'
     r'(?:不用|不必|不需(?:要)?|不要求|无需|无须|不要|不得|禁止|切?勿)\s*'
     r'(?:(?:再|额外|另行)\s*)?(?:(?:让|要求)\s*)?(?:(?:孩子|学生|同学们?)\s*)?'
     r'(?:朗读|背诵|抄写|默写|听写|跟读|练习|订正|预习|复习|阅读|口算|习作|作文)'
