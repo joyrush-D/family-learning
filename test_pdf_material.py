@@ -102,6 +102,7 @@ class PdfMaterialTests(Base):
             self.assertEqual(context['material_scope']['processed_pages'],[4,5])
             self.assertEqual(context['material_scope']['unprocessed_pages'],[])
             self.assertEqual(context['original_pdf']['previous_requirements'],reply['originals'][0]['requirements'])
+            self.assertEqual(kwargs['previous_requirements'],reply['originals'][0]['requirements'])
             self.assertEqual((kwargs['original_ids'],kwargs['original_pages'],len(images)),([ident],[1,2,3],3))
             return reply
         with renderer(page_count=5),patch.object(family_llm,'extract_draft',side_effect=read) as model:
@@ -224,6 +225,118 @@ class PdfMaterialTests(Base):
         self.assertEqual(len(self.mapped_rows(case,'manual_tasks')),5)
         with patch.object(family_llm,'_chat_json',side_effect=AssertionError('No duplicate mapping')):
             self.assertEqual(agent._refresh_school(case.app,case.store,case.now+dt.timedelta(minutes=7),1),dict(used=0,failed=0,created=0))
+
+    def mapped_added_requirement(self,case):
+        _,reply=self.mapped_reply(case)
+        text='语文：2026-02-15前背诵第1段，不需要打印。'
+        reply['originals'][0]['requirements'].append(text)
+        with renderer(page_count=5),patch.object(family_llm,'extract_draft',return_value=reply):
+            self.assertEqual(pdfm.prepare(case.store,case.now+dt.timedelta(minutes=5),1),dict(used=1,failed=0))
+        return text
+
+    def mapped_added_reply(self,case,new_text,messages):
+        from test_school_pdf_evidence import draft
+        context=json.loads(messages[-1]['content']);parts={p['id']:p for p in context['original_parts']};assigned=set();actions=[]
+        existing={r['id']:r for r in self.mapped_rows(case,'agent_items')}
+        for old in context['existing_actions']:
+            saved=old['original_action'].get('requirements',[])
+            if not saved:continue  # The accepted native English action has no dependency on this PDF.
+            assigned.update(r['id'] for r in saved)
+            brief=json.loads(existing[old['id']]['plan'])['school_task']
+            actions.append(dict(draft(title=old['title'],goal=old['goal'],purpose=brief['purpose']),due=old['due'],existing_item_id=old['id'],
+                basis=[dict(part=r['id'],text=parts[r['id']]['text']) for r in saved]))
+        remaining=[p for p in parts.values() if p.get('requirement') and p['id'] not in assigned]
+        self.assertEqual([p['text'] for p in remaining],[new_text])
+        actions.append(dict(draft(title='语文：背诵第1段',goal=new_text,learning_subject='语文'),due='2026-02-15',existing_item_id='',
+            basis=[dict(part=remaining[0]['id'],text=new_text)]))
+        return dict(actions=actions)
+
+    def test_mapped_refinement_admin_uses_own_complete_requirements_not_shared_english(self):
+        from test_school_pdf_evidence import draft
+        case,keys,_=self.mapped_fixture();_,reply=self.mapped_reply(case)
+        before=self.mapped_rows(case,'agent_items');english=next(r for r in before if r['state']=='accepted')
+        with renderer(page_count=5),patch.object(family_llm,'extract_draft',return_value=reply):
+            self.assertEqual(pdfm.prepare(case.store,case.now+dt.timedelta(minutes=5),1),dict(used=1,failed=0))
+        def model(messages,*args,**kwargs):
+            context=json.loads(messages[-1]['content']);requirements=context['complete_action_requirements']
+            self.assertNotIn('original_parts',context)
+            text='\n'.join(requirements);admin='家长签字后由孩子交回' in text
+            return draft(title='事务：打印并交回独立回执' if admin else '数学：完成本项要求',goal=text,purpose='admin' if admin else 'learning')
+        with patch.object(family_llm,'_chat_json',side_effect=model) as called:
+            results=[agent._refresh_school(case.app,case.store,case.now+dt.timedelta(minutes=6+i),3) for i in range(3)]
+        self.assertEqual(results,[dict(used=1,failed=0,created=1)]*3)
+        self.assertEqual(called.call_count,3)
+        after=self.mapped_rows(case,'agent_items');self.assertTrue(all(r['state']=='accepted' for r in after))
+        self.assertEqual(next(r for r in after if r['id']==english['id']),english)
+        receipt=next(r for r in after if r['due']=='2026-02-14')
+        self.assertEqual(json.loads(receipt['plan'])['school_task']['purpose'],'admin')
+        self.assertEqual(len(self.mapped_rows(case,'manual_tasks')),4)
+
+    def test_new_requirement_maps_around_exact_decision_without_rewriting_it(self):
+        for state in ('accepted','dismissed'):
+            with self.subTest(state=state):
+                case,keys,_=self.mapped_fixture();text=self.mapped_added_requirement(case)
+                old=next(r for r in self.mapped_rows(case,'agent_items') if r['state']=='pending')
+                task='AGENT-'+agent._hash(old['id'])[:24] if state=='accepted' else ''
+                with case.store._db() as c:
+                    c.execute('UPDATE agent_items SET state=?,task_id=? WHERE id=?',(state,task,old['id']))
+                    if task:c.execute('INSERT INTO manual_tasks(id,child,title,due,original_status,source,action) VALUES(?,?,?,?,?,?,?)',
+                        (task,'虚构孩子',old['title'],old['due'],'待跟进','Agent建议:'+old['id']+'\n虚构学校消息',old['body']))
+                before=self.mapped_rows(case,'agent_items');tasks=self.mapped_rows(case,'manual_tasks')
+                with patch.object(family_llm,'_chat_json',side_effect=lambda messages,*a,**k:self.mapped_added_reply(case,text,messages)):
+                    result=agent._refresh_school(case.app,case.store,case.now+dt.timedelta(minutes=6),1)
+                self.assertEqual(result,dict(used=1,failed=0,created=3))
+                after=self.mapped_rows(case,'agent_items');self.assertEqual(next(r for r in after if r['id']==old['id']),next(r for r in before if r['id']==old['id']))
+                self.assertTrue(all(t in self.mapped_rows(case,'manual_tasks') for t in tasks))
+                self.assertEqual([r['body'] for r in after if r['id'] not in {v['id'] for v in before}],[text])
+
+    def test_new_requirement_cannot_disappear_behind_edited_old_subset(self):
+        case,keys,_=self.mapped_fixture();text=self.mapped_added_requirement(case)
+        old=next(r for r in self.mapped_rows(case,'agent_items') if r['state']=='pending')
+        with case.store._db() as c:c.execute('UPDATE agent_items SET title=title||? WHERE id=?',('家长更正',old['id']))
+        before=self.mapped_rows(case,'agent_items');groups=self.mapped_rows(case,'agent_pdf_material')
+        with patch.object(family_llm,'_chat_json',side_effect=AssertionError('Cannot refine only the old subset')):
+            self.assertEqual(agent._refresh_school(case.app,case.store,case.now+dt.timedelta(minutes=6),3),dict(used=0,failed=0,created=0))
+        after=self.mapped_rows(case,'agent_items')
+        self.assertEqual([(r['id'],r['state'],r['title'],r['body']) for r in after],[(r['id'],r['state'],r['title'],r['body']) for r in before])
+        self.assertTrue(all('尚未归属' in json.loads(r['plan'])['school_task']['reason'] for r in after if r['state']=='pending'))
+        self.assertEqual(self.mapped_rows(case,'agent_pdf_material'),groups)
+        self.assertIn(text,json.loads(groups[0]['payload'])['originals'][0]['requirements'])
+        self.assertEqual(len(self.mapped_rows(case,'manual_tasks')),1)
+
+    def test_added_mapping_rechecks_orphan_feedback_before_call_after_call_and_at_save(self):
+        for when in ('before-call','after-call','at-save'):
+            with self.subTest(when=when):
+                case,keys,_=self.mapped_fixture();text=self.mapped_added_requirement(case)
+                before=self.mapped_rows(case,'agent_items');old=next(r for r in before if r['state']=='pending');task='AGENT-'+agent._hash(old['id'])[:24]
+                changed=False;job=case.store._job;actions=agent._school_original_actions
+                def alter():
+                    nonlocal changed
+                    if changed:return
+                    changed=True
+                    with case.store._db() as c:c.execute('INSERT INTO records(child,day,category,subject,title,note,source,created,linked_task_id) VALUES(?,?,?,?,?,?,?,?,?)',
+                        ('虚构孩子',case.now.date().isoformat(),'学习','数学','并发旧反馈','保留家长输入','事项:'+task,case.now.isoformat(),task))
+                def claim(*a,**k):
+                    result=job(*a,**k)
+                    if when=='before-call':alter()
+                    return result
+                def model(messages,*a,**k):
+                    result=self.mapped_added_reply(case,text,messages)
+                    if when=='after-call':alter()
+                    return result
+                def converted(*a,**k):
+                    result=actions(*a,**k)
+                    if when=='at-save':alter()
+                    return result
+                with patch.object(case.store,'_job',side_effect=claim),patch.object(family_llm,'_chat_json',side_effect=model) as called, \
+                        patch.object(agent,'_school_original_actions',side_effect=converted):
+                    result=agent._refresh_school(case.app,case.store,case.now+dt.timedelta(minutes=6),1)
+                self.assertEqual(result,dict(used=0 if when=='before-call' else 1,failed=0,created=0))
+                self.assertEqual(called.call_count,0 if when=='before-call' else 1)
+                after=self.mapped_rows(case,'agent_items')
+                self.assertEqual([(r['id'],r['state'],r['title'],r['body']) for r in after],[(r['id'],r['state'],r['title'],r['body']) for r in before])
+                self.assertEqual(len(self.mapped_rows(case,'manual_tasks')),1)
+                self.assertEqual([r['note'] for r in self.mapped_rows(case,'records')],['保留家长输入'])
 
     def test_complete_legacy_pages_report_missing_standards_and_failed_upgrade(self):
         keys=self.school_fragment('虚构PDF原件，完整要求尚未整理。')

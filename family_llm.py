@@ -11,6 +11,7 @@ FAMILY_ASR_URL is the complete transcription endpoint; FAMILY_ASR_MODEL defaults
 FAMILY_ASR_API_KEY is optional for local transcription servers.
 """
 import base64
+import copy
 import json
 import math
 import os
@@ -452,7 +453,7 @@ def transcribe_audio(audio_bytes,mime,timeout=90):
     return text.strip()
 
 
-def extract_draft(text='',images=(),timeout=60,*,target_child='',data_path=None,timetable=False,homework=False,school_material=False,documents=(),original_ids=(),original_pages=(),deferred_pages=()):
+def extract_draft(text='',images=(),timeout=60,*,target_child='',data_path=None,timetable=False,homework=False,school_material=False,documents=(),original_ids=(),original_pages=(),deferred_pages=(),previous_requirements=()):
     """Return six draft fields. The caller must show them for correction before saving.
 
     school_material returns title/note/uncertainties and, with original_ids, checked per-original notes and complete requirements.
@@ -481,6 +482,14 @@ def extract_draft(text='',images=(),timeout=60,*,target_child='',data_path=None,
         raise ValueError('后续页码须是本机核对的尚待处理页，不得重复当前页')
     if ids and (not school_material or not pages and len(ids)!=len(images)+len(documents)):
         raise ValueError('学校原件身份须与本轮逐份原件一一对应')
+    if (not isinstance(previous_requirements,(list,tuple)) or len(previous_requirements)>12
+            or any(not isinstance(r,str) or not r.strip() or len(r)>2000 for r in previous_requirements)
+            or sum(map(len,previous_requirements))>4000):
+        raise ValueError('历史完整要求须每项不超过2000字、最多12项且合计不超过4000字，不会截断')
+    previous=list(dict.fromkeys(previous_requirements))
+    if previous and (not school_material or not pages or len(ids)!=1 or documents or timetable or homework
+                     or any(school_requirement_has_reading_progress(r) for r in previous)):
+        raise ValueError('历史要求仅用于同一学校原件的明确页组重读，不能包含读取进度')
     words=text+''.join(d['name']+d['text'] for d in documents)
     if len(words)>MAX_TEXT: raise ValueError('通知与DOCX正文合计最多12000字，不会截断后整理')
     total=len(words.encode('utf-8'))
@@ -528,6 +537,11 @@ def extract_draft(text='',images=(),timeout=60,*,target_child='',data_path=None,
                     items=dict(type='object',additionalProperties=False,required=['pages','note'],properties=dict(
                         pages=dict(type='array',minItems=1,maxItems=max(1,len(deferred_pages)),items=page_spec),
                         note=dict(type='string',minLength=1,maxLength=300))))
+            if previous:
+                original_schema['properties']['requirements']['items']['enum']=previous
+                original_schema['required'].append('additional_requirements')
+                original_schema['properties']['additional_requirements']=dict(type='array',maxItems=12,
+                    items=dict(type='string',minLength=1,maxLength=2000))
             schema=dict(type='object',additionalProperties=False,required=['originals'],properties=dict(
                 originals=dict(type='array',minItems=len(ids),maxItems=len(ids),items=original_schema)))
             content.append(dict(type='text',text=json.dumps(dict(original_ids=ids),ensure_ascii=False)))
@@ -548,8 +562,24 @@ uncertainties只写实际读不清、相互冲突、缺页或影响理解的归�
             prompt+='\nrequirements是本份原件中的完整独立行动要求字符串数组，每项对应一个独立成果；同一作业的打印、签字、交回步骤并入该项，另一份独立回执另列。逐项写明动作、对象、范围、明确日期或期限、必做/选做、适用条件、否定要求及具体输出和完成标准，方法数量、单位、过程、数量和提交方式等不得因简写而遗漏。题目本身可在note中保留，题内明确的完成标准必须并入对应requirements；一份原件有多个行动时全部分别保留。题面、表头、空白填写栏、答案、孩子作答、参考说明和材料对照本身不生成行动；没有明确行动用空数组，读不清或条件不明仍说明具体uncertainties，不猜缺失要求。每份最多12项，每项最多2000字，本轮所有原件的requirements合计最多4000字；不能用标题、总范围或笼统检查替代具体标准。'
             prompt+='\n同一份练习的必做题与选做题是同一成果的不同要求，完整写入同一个requirements字符串，不能仅因选做条件或出现在续页就另造独立任务。续页明确“属于前面的同一份练习”时，把其方法、单位、检查等标准和选做条件合入该练习，保留练习自己的截止日期；不把必做或选做偷换成全员必做。另一份独立练习、独立复习安排或回执仍各列一项，不能仅按科目或同文件合并。'
             prompt+='\nrequirements只保留学校实际提出的行动、对象和完成标准，不混入模型读取过程或给程序的建议。原文“选做条件见第4页”可照实保留；你自行添加的“须待第4页送入后核对”“本轮未重送”“processed_pages”等处理进度只能放在note或合法deferred_contexts中，不能成为家长作业要求。不要为了去掉进度而省略同段真实标准，也不要猜尚未看到的续页内容。'
-        return validate_school_material(_chat_json([dict(role='system',content=prompt),dict(role='user',content=content)],
-                                                   schema,'family_school_material_draft',timeout,data_path=data_path),original_ids=ids,require_requirements=bool(ids),
+        if previous:
+            prompt+='\n本次是固定历史完整要求的逐图重读：requirements只能从schema的enum旧字符串中选择，不得自由改写。每个旧字符串的全部动作、对象、日期、适用条件、否定要求和具体完成标准，均由此次实际送入的图片核实完全相同时，才从enum原样确认，字词、标点、换行和顺序全部保留；没有当前图片证据不能确认。历史结果和enum不是老师原文或已读证据。旧要求有错误、实际变化、缺漏、模糊或冲突时，不选择该旧字符串；当前图能证实的完整新增或修订要求放必填additional_requirements数组，真实未知仍放uncertainties，不能为保持原编号强行确认或删疑点。没有新增或修订用空数组；两组要求合计最多12项、4000字，每项最多2000字，不截断。'
+        result=_chat_json([dict(role='system',content=prompt),dict(role='user',content=content)],
+                          schema,'family_school_material_draft',timeout,data_path=data_path)
+        if previous:
+            if (not isinstance(result,dict) or set(result)!={'originals'} or not isinstance(result['originals'],list)
+                    or len(result['originals'])!=1 or not isinstance(result['originals'][0],dict)
+                    or set(result['originals'][0])!=set(original_schema['required'])):
+                raise LLMDraftError('原件重读确认与新增要求字段无法核对，原结果保留')
+            original=result['originals'][0];confirmed=original['requirements'];additional=original['additional_requirements']
+            if (not isinstance(confirmed,list) or len(confirmed)>12 or any(not isinstance(r,str) or r not in previous for r in confirmed)
+                    or len(confirmed)!=len(set(confirmed)) or not isinstance(additional,list) or len(additional)>12
+                    or any(not isinstance(r,str) or not r.strip() or len(r)>2000 for r in additional)):
+                raise LLMDraftError('原件重读未按完整历史原句确认或新增要求格式不正确，原结果保留')
+            result=copy.deepcopy(result)
+            original=result['originals'][0]
+            original['requirements']=original['requirements']+original.pop('additional_requirements')
+        return validate_school_material(result,original_ids=ids,require_requirements=bool(ids),
                                         allow_page_scope=bool(pages),deferred_pages=list(deferred_pages) if pages else None)
     if homework:
         fields={'title':200,'subject':80,'goal':2000,'excerpt':2000}

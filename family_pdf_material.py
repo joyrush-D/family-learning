@@ -469,7 +469,8 @@ def prepare(store, now, budget=ROUND_CALLS):
         require(len(text)<=family_llm.MAX_TEXT,'pdf_material_text_too_large')  # Do not shorten requirements to fit.
         images = [dict(mime='image/png', data=p['data']) for p in rendered['pages']]
         result = family_llm.extract_draft(text, images, target_child=value['child'], timeout=90, data_path=store.data,
-                                          school_material=True,original_ids=[value['upload_id']],original_pages=pages,deferred_pages=left)
+                                          school_material=True,original_ids=[value['upload_id']],original_pages=pages,deferred_pages=left,
+                                          previous_requirements=value.get('previous_requirements',()))
         result = family_llm.validate_school_material(result,original_ids=[value['upload_id']],require_requirements=True,
                                                      allow_page_scope=True,deferred_pages=left)
         with store._db() as c:

@@ -2632,7 +2632,8 @@ def _school_pdf_upgrade_scope(store,c,source,message,upload_id,batches,*,remap=F
 
     The old placeholder route stays separate. A mapped action is eligible only with unchanged full literal
     requirements; a new reading may preserve those exact words, but cannot migrate its identity by similarity.
-    Remapping admits only additional unowned full requirements; current real doubts remain mapping input.
+    Remapping admits additional unowned full requirements; exact accepted/dismissed actions may be included
+    solely for ownership and are never rewritten. Current real doubts remain mapping input.
     """
     ref='message:'+source['id']+':'+message['id']
     known_key,known=_school_original_known(store,c,dict(child_id=source['child_id'],evidence=_json([dict(ref=ref)])))
@@ -2686,7 +2687,9 @@ def _school_pdf_upgrade_scope(store,c,source,message,upload_id,batches,*,remap=F
                     or a['quote'] not in messages[a['ref']]['text'] for a in anchors):return scope,False
                 continue
             affected+=1
-            if row['state']!='pending' or row['task_id'] or row['record_id'] is not None or row['care_id'] or linked[row['id']] or brief.get('target_id') or brief.get('change')!='new':return scope,False
+            decided=remap and row['state'] in ('accepted','dismissed')
+            if not decided and (row['state']!='pending' or row['task_id'] or row['record_id'] is not None or row['care_id'] or linked[row['id']]):return scope,False
+            if brief.get('target_id') or brief.get('change')!='new':return scope,False
             if any(plan.get(k) for k in ('school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id','approved')):return scope,False
             if row['title']!=brief.get('title') or row['body']!=brief.get('goal') or not action.get('requirements'):return scope,False
             texts=_school_saved_requirements(row,parts)
@@ -2708,6 +2711,27 @@ def _school_pdf_reflow(row,pdf,known):
     return bool(pdf and pdf.get('requirements_complete') and action and not action.get('requirements')
                 and any(a.get('upload_ids') and a.get('pages') for a in action.get('anchors',[]))
                 and known and all(_school_pending_original(r) for r in known))
+
+
+def _school_pdf_mapping_scope(store,c,row):
+    """Keep the full dependency proof while mapping additions, including unowned/revised requirements."""
+    _,known=_school_original_known(store,c,row)
+    owned={r['id'] for old in known for r in json.loads(old['plan']).get('school_original_action',{}).get('requirements',[])}
+    proofs=[]
+    for document in _school_pdf(store,c,row):
+        source_id,message_id=document['ref'][8:].rsplit(':',1)
+        source,message=store._message_context(c,dict(child_id=row['child_id'],source_id=source_id,message_id=message_id))
+        scope,eligible=_school_pdf_upgrade_scope(store,c,source,message,document['upload_id'],document['batches'],remap=True)
+        current=_school_original_parts([],_pdf_evidence([document]),None)
+        missing=bool({p['id'] for p in current if p.get('requirement')}-owned)
+        proofs.append(dict(ref=document['ref'],upload_id=document['upload_id'],scope=scope,eligible=eligible,unassigned=missing))
+    return proofs
+
+
+def _school_pdf_mapping_intact(store,c,row,proofs):
+    if not proofs:return True
+    again=_school_pdf_mapping_scope(store,c,row)
+    return again==proofs and any(p['unassigned'] for p in again) and all(p['eligible'] for p in again if p['unassigned'])
 
 
 def _school_pdf_previous_action(old,parts,known):
@@ -3047,19 +3071,25 @@ def _refresh_school(app, store, now, budget):
                 context['pdf_material']=pdf_evidence['model']
             if material:
                 value['material']=material_key;context['school_material']=material['model']
-            reflow=mapped_reflow=False
+            reflow=mapped_reflow=False;mapping_scope=[]
             if plan.get('school_original_action') and pdf_evidence:
                 with store._db() as c:_,reflow_known=_school_original_known(store,c,row)
                 reflow=_school_pdf_reflow(row,pdf_evidence,reflow_known)
                 if action.get('requirements') and pdf_evidence.get('requirements_complete'):
                     # A current reading may discover a new independent requirement. Do not refine only the
                     # old subset and silently lose it: all complete requirements must be assigned together.
-                    with store._db() as c:
-                        for document in pdf_material:
-                            source_id,message_id=document['ref'][8:].rsplit(':',1)
-                            origin,message=store._message_context(c,dict(child_id=row['child_id'],source_id=source_id,message_id=message_id))
-                            _,eligible=_school_pdf_upgrade_scope(store,c,origin,message,document['upload_id'],document['batches'],remap=True)
-                            mapped_reflow|=eligible
+                    with store._db() as c:proofs=_school_pdf_mapping_scope(store,c,row)
+                    missing=[p for p in proofs if p['unassigned']]
+                    mapped_reflow=bool(missing) and all(p['eligible'] for p in missing)
+                    if missing and not mapped_reflow:
+                        # Do not mark an old subset complete while newly read requirements remain unassigned.
+                        # Existing decisions, edits and literal requirements stay intact; the full original remains readable.
+                        waiting=dict(brief,state='review',reason='原件含尚未归属或与旧项不同的完整要求，同出处已有决定或更改，暂不能安全重整；请在原件核对，旧内容与决定保留。')
+                        if waiting!=brief:
+                            plan['school_task']=waiting
+                            with store._db() as c:c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=? AND plan=?",(_json(plan),row['id'],row['updated'],row['plan']))
+                        continue
+                    if mapped_reflow:mapping_scope=proofs;value['mapped_pdf_scope']=proofs
                 if not action.get('requirements') and any(a.get('upload_ids') and a.get('pages') for a in action.get('anchors',[])) and not reflow:
                     # A same-source family decision forbids legacy reflow. It must also forbid falling back to
                     # a free summary that replaces this pending action's original words.
@@ -3098,7 +3128,7 @@ def _refresh_school(app, store, now, budget):
                     raise AgentError('学校消息原文暂不可读取') from source_error
                 # Revoked, detached, corrected or dismissed between the claim and the call: no model round at all.
                 with store._db() as c:
-                    intact=_school_current(store,c,row,evidence,page_key,pdf_key,material_key) and (not original_parts or _school_original_known(store,c,row)[0]==original_key)
+                    intact=_school_current(store,c,row,evidence,page_key,pdf_key,material_key) and (not original_parts or _school_original_known(store,c,row)[0]==original_key) and _school_pdf_mapping_intact(store,c,row,mapping_scope)
                     if not intact: _discard_job(c,key,fp)
                 if not intact: continue
                 if reference: brief=dict(reference)
@@ -3108,13 +3138,13 @@ def _refresh_school(app, store, now, budget):
                         result=family_llm._chat_json([{'role':'system','content':_school_original_prompt(page_evidence,pdf_evidence,material)},{'role':'user','content':_json(context)}],
                             _school_original_schema(original_parts,known,targets,school_goals),'family_school_task',timeout=45,data_path=store.data)
                         with store._db() as c:
-                            intact=_school_current(store,c,row,evidence,page_key,pdf_key,material_key) and _school_original_known(store,c,row)[0]==original_key
+                            intact=_school_current(store,c,row,evidence,page_key,pdf_key,material_key) and _school_original_known(store,c,row)[0]==original_key and _school_pdf_mapping_intact(store,c,row,mapping_scope)
                             if not intact: _discard_job(c,key,fp)
                         if not intact: continue
                         items=_school_original_actions(store,row,result,original_parts,known,evidence,page_evidence,pdf_evidence,material,targets,school_goals,now)
                         with store._db() as c:
                             c.execute('BEGIN IMMEDIATE')
-                            if not _school_current(store,c,row,evidence,page_key,pdf_key,material_key) or _school_original_known(store,c,row)[0]!=original_key:
+                            if not _school_current(store,c,row,evidence,page_key,pdf_key,material_key) or _school_original_known(store,c,row)[0]!=original_key or not _school_pdf_mapping_intact(store,c,row,mapping_scope):
                                 _discard_job(c,key,fp);continue
                             saved=_save_school_originals(store,c,row,items,key,fp,now)
                         for collected_row in saved:
@@ -3130,7 +3160,8 @@ def _refresh_school(app, store, now, budget):
                     if result['purpose'] not in PURPOSES: raise AgentError('学校事项用途无法核对')
                     if compiled_requirements is not None: result=_school_requirement_goal(result,compiled_requirements)
                     learning=_school_learning(result,school_goals)
-                    brief=_school_brief(result,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in evidence),evidence=evidence,school_tasks=targets,pages=page_evidence,pdf=pdf_evidence,material=material)
+                    brief=_school_brief(result,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in evidence),evidence=evidence,school_tasks=targets,pages=page_evidence,pdf=pdf_evidence,material=material,
+                        separate_learning=compiled_requirements is not None)
                 if page_evidence: brief.setdefault('page_evidence',dict(fingerprint=page_key,read=page_evidence['read'],unread=page_evidence['unread'],omitted=page_evidence['omitted']))['candidate']=candidate
                 if pdf_evidence: brief.setdefault('pdf_evidence',dict(fingerprint=pdf_key,documents=pdf_evidence['documents']))['candidate']=candidate
                 if material: brief.setdefault('material_evidence',dict(fingerprint=material_key))
