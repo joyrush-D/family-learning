@@ -699,8 +699,8 @@ def draft_input(store, c, source, message):
     def fingerprint(revision):
         return hashlib.sha256(json.dumps(([revision, kind] if kind else [1]) + [source, child, message, originals],
             ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-    legacy=fingerprint(3);current=fingerprint(4) if original_ids else legacy
-    return dict(fingerprint=current, legacy_fingerprint=legacy, images=images, text=text, child=child['name'],
+    legacy=fingerprint(3);notes=fingerprint(4) if original_ids else legacy;current=fingerprint(5) if original_ids else legacy
+    return dict(fingerprint=current, legacy_fingerprint=legacy, notes_fingerprint=notes, images=images, text=text, child=child['name'],
                 upload_ids=[o[0] for o in originals], kind=kind, documents=documents, original_ids=original_ids)
 
 
@@ -711,15 +711,17 @@ def draft_key(source, message):
 def _saved_draft(row, value, *, legacy=False):
     """Show a saved draft only for the same fingerprint and, when typed, the same checked shape."""
     import family_llm
-    expected=value['legacy_fingerprint'] if legacy else value['fingerprint']
-    if row is None or row['fingerprint'] != expected or legacy and not value['original_ids']:
+    expected=(value['legacy_fingerprint'],value['notes_fingerprint']) if legacy else (value['fingerprint'],)
+    if row is None or row['fingerprint'] not in expected or legacy and not value['original_ids']:
         return None
     try:
         draft = json.loads(row['payload'])
         if not value['kind']: return draft
         require(isinstance(draft, dict) and draft.pop('kind', None) == value['kind'], 'draft_kind_mismatch')
         draft.pop('previous_aggregate',None)  # Retained verbatim for history; never used as action evidence.
-        return family_llm.validate_school_material(draft,original_ids=() if legacy else value['original_ids'])
+        draft.pop('previous_notes',None)
+        ids=() if legacy and row['fingerprint']==value['legacy_fingerprint'] else value['original_ids']
+        return family_llm.validate_school_material(draft,original_ids=ids,require_requirements=bool(ids) and not legacy)
     except (MediaError, family_llm.LLMDraftError,ValueError,TypeError):
         return None
 
@@ -781,7 +783,7 @@ def draft_view(store, c, source, message):
     old=_saved_draft(row,value,legacy=True)
     if old is not None:
         return dict(state='ready',draft=old,updated=row['updated'],upload_ids=value['upload_ids'],legacy=True,
-                    explanation='原汇总草稿保留，尚无逐原件出处，不作为独立行动的附件依据；仅未决定的新证据会在后台重新整理。',**typed)
+                    explanation='原草稿保留为历史展示，尚无已核对的完整独立行动要求，不作为新行动的完整依据；仅未决定的新证据会在后台重新整理。',**typed)
     key = draft_key(source, message)
     job = c.execute('SELECT * FROM agent_jobs WHERE id=?', (key,)).fetchone()
     current = hashlib.sha256(json.dumps({'material': value['fingerprint']}, ensure_ascii=False,
@@ -847,7 +849,7 @@ def prepare_draft(store, now):
         result = family_llm.extract_draft(value['text'], value['images'], target_child=value['child'], timeout=45,
                                           data_path=store.data, **typed)
         if value['kind']:  # Re-checked here: no score, mastery or record field is ever persisted for school material.
-            result = dict(kind=value['kind'], **family_llm.validate_school_material(result,original_ids=value['original_ids']))
+            result = dict(kind=value['kind'], **family_llm.validate_school_material(result,original_ids=value['original_ids'],require_requirements=bool(value['original_ids'])))
         with store._db() as c:
             c.execute('BEGIN IMMEDIATE')
             current = draft_input(store, c, source, message)
@@ -857,13 +859,14 @@ def prepare_draft(store, now):
                     and (not value['original_ids'] or _draft_decisions(c,source,message)==decisions), 'draft_material_changed')
             old=c.execute('SELECT * FROM agent_message_drafts WHERE source_id=? AND message_id=?',(source['id'],message['id'])).fetchone()
             if value['original_ids'] and old:
+                try: previous=json.loads(old['payload'])
+                except (ValueError,TypeError): previous=None
+                if isinstance(previous,dict):
+                    for name in ('previous_aggregate','previous_notes'):
+                        if name in previous:result[name]=previous[name]
                 if _saved_draft(old,value,legacy=True) is not None:
-                    result['previous_aggregate']=dict(fingerprint=old['fingerprint'],payload=old['payload'],updated=old['updated'])
-                else:
-                    try: previous=json.loads(old['payload'])
-                    except (ValueError,TypeError): previous=None
-                    if isinstance(previous,dict) and 'previous_aggregate' in previous:
-                        result['previous_aggregate']=previous['previous_aggregate']
+                    name='previous_aggregate' if old['fingerprint']==value['legacy_fingerprint'] else 'previous_notes'
+                    result[name]=dict(fingerprint=old['fingerprint'],payload=old['payload'],updated=old['updated'])
             c.execute('INSERT OR REPLACE INTO agent_message_drafts VALUES(?,?,?,?,?)',
                       (source['id'], message['id'], value['fingerprint'], json.dumps(result, ensure_ascii=False), now.isoformat()))
             c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=? AND fingerprint=?", (key, fp))

@@ -307,25 +307,37 @@ def _school_original_ids(original_ids):
     return list(original_ids)
 
 
-def validate_school_material(value, *, original_ids=()):
+def validate_school_material(value, *, original_ids=(), require_requirements=False):
     """Legacy notes stay readable; identified originals must each return their own checked note.
 
     The display summary is assembled locally. It never supplies attachment ownership to actions."""
     ids=_school_original_ids(original_ids)
+    if type(require_requirements) is not bool or require_requirements and not ids:
+        raise ValueError('完整学校要求校验须明确逐原件身份')
     if ids:
         if not isinstance(value,dict) or set(value) not in ({'originals'},{'title','note','uncertainties','originals'}):
             raise LLMDraftError('学校逐原件草稿结构不正确，请重试或手动核对')
         originals=value['originals']
         if not isinstance(originals,list) or len(originals)!=len(ids):
             raise LLMDraftError('学校原件未全部整理，原件保留，请重试或手动核对')
-        checked={}
+        checked={};requirement_chars=0
         for original in originals:
-            if not isinstance(original,dict) or set(original)!={'upload_id','title','note','uncertainties'}:
+            fields={'upload_id','title','note','uncertainties'}
+            if not isinstance(original,dict) or set(original) not in ((fields|{'requirements'},) if require_requirements else (fields,fields|{'requirements'})):
                 raise LLMDraftError('学校逐原件草稿字段不正确，请手动核对')
             ident=original['upload_id']
             if not isinstance(ident,str) or ident not in ids or ident in checked:
                 raise LLMDraftError('学校草稿原件身份不一致，请手动核对')
             checked[ident]=dict(upload_id=ident,**validate_school_material({k:original[k] for k in ('title','note','uncertainties')}))
+            if 'requirements' in original:
+                requirements=original['requirements']
+                if not isinstance(requirements,list) or len(requirements)>12 or any(
+                        not isinstance(r,str) or not r.strip() or len(r)>2000 for r in requirements):
+                    raise LLMDraftError('学校独立行动要求格式不正确，请手动核对')
+                requirement_chars+=sum(len(r) for r in requirements)
+                if requirement_chars>4000:
+                    raise LLMDraftError('学校完整行动要求超过本轮限额，未截断，请分次或手动核对')
+                checked[ident]['requirements']=list(requirements)
         ordered=[checked[i] for i in ids]
         summary=dict(title=ordered[0]['title'] if len(ids)==1 else '学校资料（共%d份）'%len(ids),
                      note='\n'.join(o['note'] for o in ordered),
@@ -395,7 +407,7 @@ def transcribe_audio(audio_bytes,mime,timeout=90):
 def extract_draft(text='',images=(),timeout=60,*,target_child='',data_path=None,timetable=False,homework=False,school_material=False,documents=(),original_ids=()):
     """Return six draft fields. The caller must show them for correction before saving.
 
-    school_material returns title/note/uncertainties and, when original_ids are supplied, checked per-original notes.
+    school_material returns title/note/uncertainties and, with original_ids, checked per-original notes and complete requirements.
     Identity order is images first, then documents. DOCX name/text pairs are accepted only in this mode."""
     endpoint,model=configuration(data_path)
     if not isinstance(text,str) or len(text)>MAX_TEXT:
@@ -445,8 +457,9 @@ def extract_draft(text='',images=(),timeout=60,*,target_child='',data_path=None,
             title=dict(type='string',maxLength=200),note=dict(type='string',maxLength=4000),
             uncertainties=dict(type='array',maxItems=10,items=dict(type='string',maxLength=300))))
         if ids:
-            original_schema=dict(schema,required=['upload_id','title','note','uncertainties'],
-                properties=dict(upload_id=dict(type='string',enum=ids),**schema['properties']))
+            original_schema=dict(schema,required=['upload_id','title','note','uncertainties','requirements'],
+                properties=dict(upload_id=dict(type='string',enum=ids),requirements=dict(type='array',maxItems=12,
+                    items=dict(type='string',minLength=1,maxLength=2000)),**schema['properties']))
             schema=dict(type='object',additionalProperties=False,required=['originals'],properties=dict(
                 originals=dict(type='array',minItems=len(ids),maxItems=len(ids),items=original_schema)))
             content.append(dict(type='text',text=json.dumps(dict(original_ids=ids),ensure_ascii=False)))
@@ -461,9 +474,10 @@ title用不超过200字概括这份资料。note（不超过4000字）按原件�
 uncertainties只写实际读不清、相互冲突、缺页或影响理解的归属/日期疑点（最多10项，每项不超过300字）；清楚的原件用空数组。目标孩子已经由授权来源绑定，不因题面未署名就要求再次确认归属。只有time为空或截图才说发布日期未知。未写教材版本、没说签字/录音/打卡/打印或提交方式、未定最低选做数量，都不自动视为缺失：原文没有这些要求就不加要求、不提确认；“选做题任选”保留原话即可。明确的截止不猜测额外提交项目；未注明截止留空，不因此抹掉作业或让家长重做分类。
 本次输出仅供家长核对，不会创建、修改或关闭任何任务、目标或学习记录。'''
         if ids:
-            prompt+='\n本轮original_ids是程序核对的完整原件身份清单。每个original_image身份只对应紧随其后的那张图片；original_document的upload_id只对应其正文。必须逐份返回originals，各含upload_id、title、note、uncertainties；每个身份恰好一次，不能遗漏、重复或合并，不返回跨原件汇总。每份note只写该原件实际可见内容，不将其他图片、文件名或通知中的要求猜成该原件内容；通知只提供日期和解释上下文。读不清的原件仍保留自己的身份并具体说明未知。'
+            prompt+='\n本轮original_ids是程序核对的完整原件身份清单。每个original_image身份只对应紧随其后的那张图片；original_document的upload_id只对应其正文。必须逐份返回originals，各含upload_id、title、note、uncertainties、requirements；每个身份恰好一次，不能遗漏、重复或合并，不返回跨原件汇总。每份note只写该原件实际可见的背景、题面与说明，不将其他图片、文件名或通知中的要求猜成该原件内容；通知只提供日期和解释上下文。读不清的原件仍保留自己的身份并具体说明未知。'
+            prompt+='\nrequirements是本份原件中的完整独立行动要求字符串数组，每项对应一个独立成果；同一作业的打印、签字、交回步骤并入该项，另一份独立回执另列。逐项写明动作、对象、范围、明确日期或期限、必做/选做、适用条件、否定要求及具体输出和完成标准，方法数量、单位、过程、数量和提交方式等不得因简写而遗漏。题目本身可在note中保留，题内明确的完成标准必须并入对应requirements；一份原件有多个行动时全部分别保留。题面、表头、空白填写栏、答案、孩子作答、参考说明和材料对照本身不生成行动；没有明确行动用空数组，读不清或条件不明仍说明具体uncertainties，不猜缺失要求。每份最多12项，每项最多2000字，本轮所有原件的requirements合计最多4000字；不能用标题、总范围或笼统检查替代具体标准。'
         return validate_school_material(_chat_json([dict(role='system',content=prompt),dict(role='user',content=content)],
-                                                   schema,'family_school_material_draft',timeout,data_path=data_path),original_ids=ids)
+                                                   schema,'family_school_material_draft',timeout,data_path=data_path),original_ids=ids,require_requirements=bool(ids))
     if homework:
         fields={'title':200,'subject':80,'goal':2000,'excerpt':2000}
         item=dict(type='object',additionalProperties=False,required=list(fields),properties={k:dict(type='string',maxLength=n) for k,n in fields.items()})
