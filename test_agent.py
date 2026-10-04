@@ -1240,7 +1240,7 @@ class AgentTests(unittest.TestCase):
         before=copy.deepcopy((parts,quotes,changes,proof))
         texts=agent._school_effective_conditions(parts,quotes,changes,proof)
         self.assertEqual((parts,quotes,changes,proof),before)
-        self.assertEqual('\n'.join(texts).count('A、B栏仍必做；C栏改为选做'),1)
+        self.assertEqual(texts[1].count('A、B栏仍必做；C栏改为选做'),1)
         self.assertIn(proof['shared_date_text'],texts)
         partial=copy.deepcopy(quotes);partial[1]['quote']=proof['action_text'].split('C三栏都要做')[0]+'C'
         with self.assertRaises(agent.AgentError):agent._school_effective_conditions(parts,partial,changes,proof)
