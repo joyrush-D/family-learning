@@ -2747,7 +2747,7 @@ def _school_saved_requirements(row, parts):
     for anchor in action['anchors']:
         if not anchor['upload_ids'] and anchor['quote'] not in texts:texts.append(anchor['quote'])
     if action.get('condition_changes'):
-        texts=_school_effective_conditions(parts,action['anchors'],action['condition_changes'],action.get('correction_proof'))
+        texts=_school_effective_instructions(parts,action['anchors'],action['condition_changes'],action.get('correction_proof'))
     return texts
 
 
@@ -2780,7 +2780,7 @@ def _school_scoped_correction_anchors(parts,anchors,proof):
     return result,projection
 
 
-def _school_effective_conditions(parts,anchors,changes,proof):
+def _school_effective_conditions(parts,anchors,changes,proof,*,entries=False):
     """Keep complete literal requirements; replace only proven mandatory/optional clauses."""
     if not proof or not isinstance(changes,list) or not 1<=len(changes)<=6:
         raise AgentError('更正条件缺少原通知、后发更正及逐字对应，原要求保留')
@@ -2861,10 +2861,83 @@ def _school_effective_conditions(parts,anchors,changes,proof):
                 # Preserve every output word, but make its verified optional applicability explicit.
                 text=re.sub(re.escape(label)+r'栏(?=(?:[：:]?(?:从|用|写|补写|填写|完成|选择|选出|列出)))',
                     label+'栏（选做时）',text)
-        if text not in result:result.append(text)
+        if entries:
+            result.append(dict(text=text,part=part))
+        elif text not in result:result.append(text)
     if len(applied)!=sum(len(spans) for spans in edits.values()):
         raise AgentError('待替换条件没有在本项依据中被完整应用')
     return result
+
+
+def _school_instruction_clauses(text):
+    """Keep quoted standards intact when laying out literal instructions."""
+    clauses=[];start=0;closing=[]
+    pairs={'“':'”','‘':'’','《':'》','（':'）','(':')','「':'」','『':'』'}
+    for i,char in enumerate(text):
+        if closing and char==closing[-1]:closing.pop()
+        elif char in pairs:closing.append(pairs[char])
+        if char in '。；;\n' and not closing:
+            clause=text[start:i+1].strip()
+            if clause:clauses.append(clause)
+            start=i+1
+    if text[start:].strip():clauses.append(text[start:].strip())
+    return clauses
+
+
+def _school_effective_instructions(parts,anchors,changes,proof):
+    """Show current literal instructions once; verified routing remains in full source anchors."""
+    entries=_school_effective_conditions(parts,anchors,changes,proof,entries=True)
+    ordinal=re.search(r'第[一二三四五六七八九十0-9]+项',proof['action_text'])
+    ordinal=ordinal[0] if ordinal else ''
+    obj=proof['object'];names={obj,obj[1:-1]}
+    alias=obj[1:-1].rsplit('的',1)[-1]
+    others={name for p in parts for name in re.findall(r'《([^》\n]{2,40})》',p['text']) if name!=obj[1:-1]}
+    if len(alias)>=2 and not any(alias==name.rsplit('的',1)[-1] for name in others):names.add(alias)
+    name_pattern='(?:'+'|'.join(re.escape(name) for name in sorted(names,key=len,reverse=True))+')'
+    stamp=dt.datetime.fromisoformat(proof['original_time']).astimezone(TZ)
+    clock=str(stamp.hour)+':'+str(stamp.minute).zfill(2)
+    wrapper=r'^更正(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})发布的'+re.escape(ordinal+obj)+r'\s*[:：]'
+    from family_agenda import deadlines,sent_day
+    inherited_due=deadlines(proof['action_text']+'\n'+proof['shared_date_text'],sent_day(proof['original_time']))
+    complete_requirements=any(entry['part'].get('requirement') for entry in entries)
+    result=[];seen=set()
+    for entry in entries:
+        text=entry['text'];part=entry['part']
+        native=not part['upload_ids'] and not part['pages'] and not part.get('requirement') and not part.get('background_only')
+        if native and part['ref']==proof['correction_ref'] and part['text']==proof['correction_text']:
+            header=re.match(wrapper,text)
+            changed=dt.datetime.fromisoformat(proof['correction_time']).astimezone(TZ)
+            if header and tuple(map(int,(header[1] or changed.year,*header.groups()[1:])))==(stamp.year,stamp.month,stamp.day,stamp.hour,stamp.minute):
+                text=text[header.end():]
+        if native and part['ref']==proof['original_ref']:
+            text=re.sub(r'^'+re.escape(ordinal)+r'\s*[:：]?\s*','',text,count=1) if ordinal else text
+            # Separate the verified task command from its applied column condition.
+            text=re.sub(r'^(完成'+re.escape(obj)+r')[，,](?=[A-Z](?:[、,，及和][A-Z])*栏)',r'\1。',text,count=1)
+        elif part.get('requirement'):
+            text=re.sub(r'^(完成'+re.escape(obj)+r')[:：](?=[A-Z]栏)',r'\1。',text,count=1)
+        own_read=any(e['part'].get('requirement') and e['part']['ref']==part['ref'] and obj in e['text'] for e in entries)
+        for clause in _school_instruction_clauses(text):
+            bare=clause.rstrip('。；;\n').strip()
+            if native:
+                if part['ref']==proof['correction_ref'] and len(inherited_due)==1 and bare in ('其余要求和原期限不变','原期限不变'):
+                    continue  # The proof and independently validated due date preserve this provenance.
+                if own_read and ordinal and re.fullmatch(r'补发'+name_pattern,bare):continue
+                route=r'本条附件只对应'+re.escape(clock)+r'通知的'+re.escape(ordinal)+name_pattern+r'[，,]不属于第[一二三四五六七八九十0-9]+项[^，,；;。\n]{1,30}材料'
+                if own_read and ordinal and re.fullmatch(route,bare) and not re.search(r'打印|签字|上传|提交|完成|写|做|交回',bare):continue
+                if complete_requirements:
+                    # Remove a read-file pointer, preserving every literal output and negative condition.
+                    bare=re.sub(r'^按稍后附件的栏目要求(?=在[^，,；;。\n]{1,30}作答)','',bare)
+                count=len(re.findall(r'第[一二三四五六七八九十0-9]+项',proof['original_text']))
+                numbers={'两':2,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}
+                separate=re.fullmatch(r'([两二三四五六七八九十2-9])项分别完成',bare)
+                if part['ref']==proof['original_ref'] and separate and numbers.get(separate[1],int(separate[1]) if separate[1].isdigit() else 0)==count:continue
+            # Do not erase equal standards from different files or page groups.
+            # Only an identical native clause (or the repeated task heading) is redundant.
+            redundant=bare in seen and (native or bare=='完成'+obj)
+            if bare and not redundant:
+                result.append(bare+'。')
+                if native or bare=='完成'+obj:seen.add(bare)
+    return ['\n'.join(result)] if result else []
 
 
 def _school_pending_original(row):
@@ -3170,7 +3243,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         if conditions:
             if not generated_match or value['change']!='new' or value['target_id']:
                 raise AgentError('条件更正仅适用于已核的首次同批未决定生成行动，已有事项与决定保留')
-            value=_school_requirement_goal(value,_school_effective_conditions(parts,anchors,conditions,batch_proof))
+            value=_school_requirement_goal(value,_school_effective_instructions(parts,anchors,conditions,batch_proof))
         if old_anchor.get('identity') and old_anchor['identity']!=identity:
             if not _school_pdf_reflow(old,pdf,known) or not _school_pdf_previous_action(old,parts,known)<={q['part'] for q in basis}:
                 raise AgentError('原件行动与原候选身份不同，原内容与决定保留')

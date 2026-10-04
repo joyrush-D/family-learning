@@ -904,6 +904,63 @@ class AgentTests(unittest.TestCase):
         self.assertIn('A、B栏必做；C栏选做',result['title'])
         self.assertEqual(agent._school_requirement_goal(result,texts),result)
 
+    def _effective_instruction_fixture(self):
+        parts,anchors,changes,proof=self._first_batch_condition_fixture()
+        parts[-1]['text']='完成《桥的观察单》：'+parts[-1]['text']
+        anchors[-1]['quote']=parts[-1]['text']
+        changes[0]['new_text']='A、B栏仍必做；C栏改为选做，不做C栏也算完成观察单'
+        caption=dict(id='message:synthetic:m2',ref='message:synthetic:m2',upload_ids=[],pages=[],
+            text='补发《桥的观察单》。本条附件只对应16:10通知的第二项观察单，不属于第一项朗读材料。')
+        parts.insert(1,caption)
+        anchors.insert(1,dict(ref=caption['ref'],upload_ids=[],pages=[],quote=caption['text']))
+        return parts,anchors,changes,proof
+
+    def test_effective_instructions_separate_routing_and_preserve_current_standards(self):
+        import copy
+        parts,anchors,changes,proof=self._effective_instruction_fixture()
+        before=copy.deepcopy((parts,anchors,changes,proof))
+        goal=agent._school_effective_instructions(parts,anchors,changes,proof)[0]
+        self.assertEqual((parts,anchors,changes,proof),before)
+        for text in ['补发','本条附件只对应','更正10月3日16:10','第二项：','其余要求和原期限不变','A、B、C三栏都要做']:
+            self.assertNotIn(text,goal)
+        self.assertEqual(goal.count('A、B栏仍必做'),1)
+        self.assertEqual(goal.count('C栏改为选做，不做C栏也算完成观察单'),1)
+        for text in ['两个描写桥的词语','语文本','三句完整的话','位置、外形和用途','一句喜欢桥的理由',
+                     'C栏（选做时）：用自己的话','不得照抄参考句','不照抄示例','不打印或上传']:
+            self.assertIn(text,goal)
+        self.assertEqual(goal.count('完成《桥的观察单》。'),1)
+
+    def test_effective_instructions_keep_business_residuals_and_other_file_pointers(self):
+        parts,anchors,changes,proof=self._effective_instruction_fixture()
+        parts[1]['text']+='请周五交回并签字。'
+        anchors[1]['quote']=parts[1]['text']
+        parts[2]['text']+='A栏仍须用两种方法。按稍后另一份附件要求在答题卡上作答。'
+        proof['correction_text']=parts[2]['text'];anchors[2]['quote']=parts[2]['text']
+        goal=agent._school_effective_instructions(parts,anchors,changes,proof)[0]
+        for text in ['请周五交回并签字','A栏仍须用两种方法','按稍后另一份附件要求在答题卡上作答']:
+            self.assertIn(text,goal)
+        # An unread caption and a missing unique inherited deadline remain visible.
+        goal=agent._school_effective_instructions(parts,anchors[:-1],changes,dict(proof,shared_date_text='',
+            action_text=proof['action_text'].replace('明天','')))[0]
+        self.assertIn('补发《桥的观察单》',goal)
+        self.assertIn('本条附件只对应',goal)
+        self.assertIn('其余要求和原期限不变',goal)
+
+    def test_effective_instructions_do_not_deduplicate_full_standards_across_files(self):
+        import copy
+        parts,anchors,changes,proof=self._effective_instruction_fixture()
+        other=copy.deepcopy(parts[-1]);other.update(id='requirement:second',upload_ids=['b'*32])
+        parts.append(other);anchors.append(dict(ref=other['ref'],upload_ids=other['upload_ids'],pages=[],quote=other['text']))
+        texts=agent._school_effective_instructions(parts,anchors,changes,proof)
+        goal=agent._school_requirement_goal(dict(title='完成《桥的观察单》',goal='',submission=''),texts)['goal']
+        self.assertEqual(goal.count('两个描写桥的词语'),2)
+        self.assertEqual(goal.count('三句完整的话'),2)
+
+    def test_instruction_layout_keeps_quoted_punctuation_and_decimal_units(self):
+        text='用“先测量；再记录。最后检查”的方法，结果写成1.25厘米。不得照抄。'
+        self.assertEqual(agent._school_instruction_clauses(text),[
+            '用“先测量；再记录。最后检查”的方法，结果写成1.25厘米。','不得照抄。'])
+
     def test_first_batch_scope_projects_only_a_complete_proven_native_action(self):
         import copy
         parts,anchors,changes,proof=self._first_batch_condition_fixture()
