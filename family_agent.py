@@ -131,7 +131,7 @@ def _task_prompt(pages, pdf=None, material=None):
     prompt+='\ncandidate仅定位当前这一项，不是完整要求或原文。结合本项全部evidence正文和有效原件，整理完整结论；共享原消息中的其他独立事项不混入本项。'
     prompt+='\nevidence的collection_content_incomplete记录收集时尚未读全的原始状态，content_incomplete说明当前仍有未读内容；当前已完整读取的原件范围另列在pdf_material或school_material。二者不是家长是否看过、同意或执行的状态，不能把收集时的缺口当成当前适用条件未知。原件摘要的疑点、截断和遗漏仍分别保留，只依据已读清内容。'
     prompt+='\n空白填写栏（如“日期：____”）、表头及材料对照解释不是学校新增行动；只有原文明确要求填写或提交才归纳为要求。“不是作业答题页”“与练习分开”等说明不生成学习要求；无原文证据不添加“全班”等适用人群。'
-    if pdf: prompt+='\n'+SCHOOL_PDF_PROMPT
+    if pdf: prompt+='\n'+SCHOOL_PDF_PROMPT+'\nrequirements_in说明本轮完整要求在哪个字段，original_parts或complete_action_requirements中的完整要求只发送一次；groups.text是另外有界截断的背景摘要，不能用它覆盖或缩短完整要求。页组重复出现的同一要求按同原件合并页码，不产生重复行动。'
     if material: prompt+='\nschool_material是本条消息已关联原件的有效整理，ref对应原消息，draft含title、note和uncertainties。带original_id的条目只对应该upload_id原件，不把其他条目或通知的要求猜成该原件内容。这是Agent从原件整理的参考，不是老师逐字原文或孩子作答；只依据其中明确要求理解作业或通知，不复制成绩、完成或掌握结论。明确的科目、动作、范围和数量写title/goal；uncertainties中的缺失只写reason，不清空已读清的要求。仅不清楚截止日不要求家长确认作业类别；原件有缺失或疑问时state=review，reason具体写待补充的那一部分。'
     return prompt
 

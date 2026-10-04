@@ -207,7 +207,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         result,_=self.refresh(separated,minutes=6)
         self.assertEqual((result['failed'],result['created']),(0,2))
         self.assertEqual(self.rows('SELECT id,body,state FROM agent_items ORDER BY id'),
-                         [(ident,text,'accepted') for ident,text in zip(ids,requirements)])
+                         sorted((ident,text,'accepted') for ident,text in zip(ids,requirements)))
         self.assertTrue(all(json.loads(self.item(ident)['plan'])['previous_pdf_action']['body'] in text
                             for ident,text in zip(ids,requirements)))
         self.assertEqual(self.refresh(separated,minutes=7),(dict(used=0,failed=0,created=0),[]))
@@ -1291,7 +1291,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertTrue(all('requirements' not in g for g in doc['groups']))
         self.assertFalse(any(p.get('requirement') for p in json.loads(calls[0][1]['content'])['original_parts']))
         self.assertEqual((result['failed'],result['created'],self.count('manual_tasks'),self.item(ident)),(1,0,0,before))
-        self.assertEqual(self.material()['documents'][0]['processed_pages'],list(range(1,12)))
+        self.assertEqual(sorted(p for group in self.material()['batches'] for p in group['pages']),list(range(1,12)))
 
     def test_change_confirmation_rechecks_pdf_evidence_and_plain_notice_keeps_old_flow(self):
         other = self.school_fragment('语文：完成虚构习作一篇。')
