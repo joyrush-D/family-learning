@@ -99,16 +99,11 @@ function todayTasksHTML(){
  const reviewDue=x=>x.kind==='task'&&data.tasks.some(t=>t.id===x.task_id&&taskReviewDue(t));
  const items=taskInboxItems().filter(x=>!x.closed&&x.kind!=='event'&&x.agenda.box!=='wish'&&(!x.agenda.published_on||x.agenda.published_on<=data.today)&&(!x.agenda.scheduled_on||x.agenda.scheduled_on<=data.today||x.agenda.due_on||reviewDue(x))).sort(todayTaskOrder);
  const today=items.filter(x=>[x.agenda.due_on,x.agenda.scheduled_on].some(day=>exactTaskDay(day)===data.today));
- const pendingNotices=items.filter(x=>x.kind==='school'&&!today.includes(x)&&exactTaskDay(x.agenda.published_on))
-  .sort((a,b)=>(b.agenda.published_at||b.agenda.published_on).localeCompare(a.agenda.published_at||a.agenda.published_on));
  const receivedHomework=items.filter(x=>x.agenda.category==='homework');
  const recentHomework=receivedHomework.filter(x=>!today.includes(x)&&!reviewDue(x))
   .sort((a,b)=>(b.agenda.published_at||b.agenda.published_on||'').localeCompare(a.agenda.published_at||a.agenda.published_on||''));
  const recentPending=recentHomework.filter(x=>x.kind==='school');
- const pendingAdmin=pendingNotices.filter(x=>x.agenda.category!=='homework'),latestNotice=new Map();
- for(const x of pendingAdmin)for(const id of x.child_ids||[])if(x.agenda.published_on>(latestNotice.get(id)||''))latestNotice.set(id,x.agenda.published_on);
- const recentNotices=pendingAdmin.filter(x=>(x.child_ids||[]).some(id=>x.agenda.published_on===latestNotice.get(id)));
- const actionItems=items.filter(x=>x.agenda.category!=='homework'&&(!reviewDue(x)||today.includes(x))&&(x.kind!=='school'||today.includes(x)||recentNotices.includes(x)));
+ const actionItems=items.filter(x=>x.agenda.category!=='homework'&&(!reviewDue(x)||today.includes(x)));
  const reviews=items.filter(x=>!today.includes(x)&&!actionItems.includes(x)&&reviewDue(x));
  const earlier=items.filter(x=>!today.includes(x)&&!recentHomework.includes(x)&&!actionItems.includes(x)&&!reviews.includes(x));
  const sources=currentSources().filter(s=>matches({child_ids:[s.child_id]}));
