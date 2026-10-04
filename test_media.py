@@ -905,6 +905,23 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(self.db_rows('SELECT state FROM agent_items'),[dict(state='accepted')])
         self.assertEqual(self.db_rows('SELECT * FROM records'),[])
 
+    def test_docx_requirements_do_not_close_an_unspecified_collection_gap(self):
+        import family_llm
+        self.source=dict(id='qq:123456',platform='qq',child_id='child-1',name='虚构QQ班级',cursor='100',enabled=True)
+        self.write_config()
+        message=self.message(kind='text',unread=True);message['text']='学校要求见原件。\n[包含未读取的非文字内容]';self.ingest(message)
+        keys=dict(child_id='child-1',source_id=self.source['id'],message_id=message['id'])
+        ident=self.seed_docx('b'*32,docx(para('数学：完成练习并写明单位。')));self.link(keys,ident)
+        result=dict(originals=[dict(upload_id=ident,title='数学练习',note='本份背景',uncertainties=[],requirements=['数学：完成练习并写明单位。'])])
+        with patch.object(family_llm,'extract_draft',return_value=result):
+            self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=1,failed=0))
+        with self.store._db() as c:
+            source,raw=self.store._message_context(c,keys);evidence=media.school_evidence(self.store,c,source,raw)
+        self.assertFalse(evidence['complete'])  # Reading one file cannot prove the unspecified collection-time gap gone.
+        self.assertEqual(evidence['draft']['originals'],result['originals'])
+        self.assertTrue(raw['unread'])
+        self.assertEqual(self.db_rows('SELECT * FROM manual_tasks'),[])
+
     def test_docx_text_reads_utf8_paragraphs_and_table_rows_or_fails_closed(self):
         self.assertEqual(media.docx_text(docx(DOCX_BODY)), DOCX_TEXT)
         self.assertEqual(media.docx_text(docx(para('字' * media.DOCX_LIMITS['chars']))), '字' * media.DOCX_LIMITS['chars'])

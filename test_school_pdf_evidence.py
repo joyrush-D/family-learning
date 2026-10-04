@@ -64,7 +64,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             raw=json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
                                     (keys['source_id'],keys['message_id'])).fetchone()[0])
             c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
-                      (json.dumps(dict(raw,text=notice)),keys['source_id'],keys['message_id']))
+                      (json.dumps(dict(raw,text=notice,unread=False)),keys['source_id'],keys['message_id']))  # No additional unknown collection gap in this full-action fixture.
         item_id=self.candidate(keys=keys,ident='docx-only')
         notes=[dict(upload_id=i,title=t,note='正文另存完整要求；空白栏不新增行动。',uncertainties=[],requirements=[r])
                for i,t,r in zip(uploads,['数学练习','独立回执'],[math,receipt])]
