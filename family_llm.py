@@ -1027,25 +1027,42 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
         result['coverage']=('仅按所选作答与教师参考作有限比较，共%d项；'%len(result['items'])+
                             unknown_labels[:300]+'仍未判定。未提供的题面、作答要求及评分条件未核实，'
                             '不能据此称全部答对或全卷检查完成。')
-    text=['这是%d页图片的待核对草稿；请对照原题和孩子卷面逐项改正后再保存或打印。'%(len(images)+len(reference_images)),
-          '覆盖范围：'+(result['coverage'] or '未说明'),'', '错题订正（仅列可辨且与参考明确不同的作答）：']
     wrong=[item for item in result['items'] if item['judgment']=='incorrect']
-    if not wrong: text.append('所选图片中没有可确认的错题；这不代表整份作业已检查完、孩子全部答对或已经掌握。')
-    for item in wrong:
-        text.extend([item['label'] or '未标号题','题面：'+(item['question'] or '未提供；仅按可对应的教师参考比较，题目要求未核'),
-                     '卷面作答：'+item['student_answer'],'核对后参考：'+item['answer'],
-                     '错误依据：'+item['error_reason'],'可能原因（待问孩子）：'+item['possible_cause'],
-                     '学习步骤：'+item['steps'],''])
-    text.extend(['','逐题参考与未核对项：'])
-    for index,item in enumerate(result['items'],1):
-        text.extend(['',item['label'] or '第%d题'%index,'题面：'+(item['question'] or '未提供，题目要求未核'),
-                     '卷面作答：'+(item['student_answer'] or '未能确认'),
-                     '参考答案：'+(item['answer'] or '待核对'),
-                     '判题：'+{'correct':'待家长核对：与参考一致','incorrect':'待家长核对：与参考不同','unknown':'未判定'}[item['judgment']]])
-        if item['judgment']!='correct': text.append('辅导步骤：'+(item['steps'] or '待核对'))
-        if item['uncertainty']: text.append('不确定：'+item['uncertainty'])
+    if review:
+        unknown=sum(item['judgment']=='unknown' for item in result['items'])
+        correct=len(result['items'])-len(wrong)-unknown
+        text=['本次核对%d题：需订正%d题，与参考一致%d题，未判定%d题。'%(len(result['items']),len(wrong),correct,unknown)]
+        for index,item in enumerate(result['items'],1):
+            text.extend(['', (item['label'] or '第%d题'%index)+' · '+{
+                'correct':'与参考一致','incorrect':'需订正','unknown':'未判定'}[item['judgment']],
+                '题面：'+(item['question'] or '未提供，题目要求未核'),
+                '卷面作答：'+(item['student_answer'] or '未能确认'),
+                '参考答案：'+(item['answer'] or '待核对')])
+            if item['judgment']=='incorrect':
+                text.extend(['错误依据：'+item['error_reason'],'订正建议：'+item['steps']])
+                if item['possible_cause'].strip(): text.append('可能原因（待问孩子）：'+item['possible_cause'])
+            if item['uncertainty']: text.append('不确定：'+item['uncertainty'])
+        text.extend(['','覆盖说明：'+(result['coverage'] or '未说明')])
+    else:
+        text=['这是%d页图片的待核对草稿；请对照原题和孩子卷面逐项改正后再保存或打印。'%(len(images)+len(reference_images)),
+              '覆盖范围：'+(result['coverage'] or '未说明'),'', '错题订正（仅列可辨且与参考明确不同的作答）：']
+        if not wrong: text.append('所选图片中没有可确认的错题；这不代表整份作业已检查完、孩子全部答对或已经掌握。')
+        for item in wrong:
+            text.extend([item['label'] or '未标号题','题面：'+(item['question'] or '未提供；仅按可对应的教师参考比较，题目要求未核'),
+                         '卷面作答：'+item['student_answer'],'核对后参考：'+item['answer'],
+                         '错误依据：'+item['error_reason'],'可能原因（待问孩子）：'+item['possible_cause'],
+                         '学习步骤：'+item['steps'],''])
+        text.extend(['','逐题参考与未核对项：'])
+        for index,item in enumerate(result['items'],1):
+            text.extend(['',item['label'] or '第%d题'%index,'题面：'+(item['question'] or '未提供，题目要求未核'),
+                         '卷面作答：'+(item['student_answer'] or '未能确认'),
+                         '参考答案：'+(item['answer'] or '待核对'),
+                         '判题：'+{'correct':'待家长核对：与参考一致','incorrect':'待家长核对：与参考不同','unknown':'未判定'}[item['judgment']]])
+            if item['judgment']!='correct': text.append('辅导步骤：'+(item['steps'] or '待核对'))
+            if item['uncertainty']: text.append('不确定：'+item['uncertainty'])
     if program_coverage: text.extend(['','实际读取范围（程序核对）：',*program_coverage,'仅核对本次所选材料；未读取页及无法对应的题目保持未判定。'])
     if comparison: text.extend(['','本次复核比较（待家长核对）：',comparison])
+    if review: text.extend(['','请对照原题核对后保存；本轮结果不代表作业已完成或已经掌握。'])
     joined='\n'.join(text)
     if len(joined)>12000: raise LLMDraftError('参考草稿过长，请缩小范围后分批核对')
     coverage=result['coverage']+('\n实际读取范围：'+'；'.join(program_coverage) if program_coverage else '')
