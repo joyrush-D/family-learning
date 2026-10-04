@@ -1803,6 +1803,13 @@ def _school_dated_quote(quote, evidence, due, brief):
         text=clean(text)
         kinds={i for i,pattern in enumerate(actions) if re.search(pattern,text)}
         objects=set(re.findall(r'unit\d+(?:[-–—]\d+)?|第[一二三四五六七八九十百0-9]+课|《[^》]{1,40}》|练习卷|练习册|教材|作业本|试卷|回执|同意书|确认单|登记表',text))
+        if 2 in kinds:
+            # A receipt category is not its identity. Keep the literal named
+            # object after the action, allowing only leading action words to
+            # disappear when a concise summary omits the date or label.
+            names=re.findall(r'(?:签字|盖章|交回)([^。；;，,\n]{0,24}?(?:回执|同意书|确认单|登记表))',text)
+            objects.difference_update(('回执','同意书','确认单','登记表'))
+            objects.update(re.sub(r'^(?:(?:签字|盖章|交回)|[并后再、和及将把请])+','',name) for name in names)
         return kinds,objects
     kinds,objects=identity(quote)
     if len(kinds)!=1 or not objects or identity(brief['goal'])!=(kinds,objects):return False
