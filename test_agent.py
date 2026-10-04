@@ -594,6 +594,64 @@ class AgentTests(unittest.TestCase):
                 self.assertEqual((brief['title'],brief['goal'],brief['state']),('带阅读材料','带阅读材料到校。','ready'))
                 self.assertEqual(brief.get('purpose',''),'')
 
+    def test_explicitly_negated_child_action_does_not_block_parent_notice(self):
+        endings=('不用让孩子抄写。','无需孩子抄写。','不必抄写。','不要求学生抄写。',
+                 '不要默写。','不得听写。','禁止跟读。','勿背诵。')
+        for ending in endings:
+            text='家长核对学校通讯录，有误修改，无误点“已核对”。不要在群里发电话号码或截图，'+ending
+            value=dict(title='家长事务：核对紧急联系电话',goal=text,advice='',state='ready',
+                       reason='独立家长事务，要求明确。',purpose='admin')
+            for separate in (False,True):
+                with self.subTest(ending=ending,separate=separate):
+                    evidence=[dict(ref='message:synthetic-negative:1',text=text,kind='text',unread=False)]
+                    brief=agent._school_brief(value,evidence=evidence,separate_learning=separate)
+                    self.assertEqual((brief['state'],brief['purpose'],brief['goal']),('ready','admin',text))
+                    self.assertEqual(evidence[0]['text'],text,'negative requirements remain in the original')
+
+    def test_negation_does_not_remove_positive_or_inverse_learning_requirements(self):
+        cases=('不用抄写，但需朗读两遍。','先朗读两遍，再核对通讯录；不用抄写。',
+               '不用抄写再朗读两遍。','并非不用抄写。','不是不需要背诵。',
+               '不要忘记朗读。','不要只抄写。','无需录音，但完成第1–3题。',
+               '不用抄写课文。')
+        # Only direct negated verbs are removed from classification. Unresolved objects
+        # and inverse/limited negation remain guarded, never deleted from the notice.
+        for clause in cases:
+            text='家长核对通讯录。'+clause
+            value=dict(title='家长事务：核对通讯录',goal=text,advice='',state='ready',reason='',purpose='admin')
+            for separate in (False,True):
+                with self.subTest(clause=clause,separate=separate):
+                    brief=agent._school_brief(value,evidence=[dict(ref='message:synthetic-negative:2',text=text,kind='text')],
+                                              separate_learning=separate)
+                    self.assertEqual((brief['state'],brief['goal']),('review',text))
+                    self.assertIn('同时提到学习活动',brief['reason'])
+
+    def test_negated_child_action_parent_notice_is_collected_once_with_original_deadline(self):
+        self.now=dt.datetime(2026,10,4,10,tzinfo=agent.TZ)
+        text='请家长后天核对学校通讯录中的紧急联系电话；有误修改，无误点“已核对”。不要在群里发电话号码或核对截图，不用让孩子抄写。'
+        payload=self.payload();payload['messages'][0].update(text=text,time='2026-10-03T16:20:00+08:00')
+        self.store.ingest(payload)
+        ref='message:'+self.source['id']+':11';title='家长事务：核对紧急联系电话'
+        proposal=school_proposal(title_quote='紧急联系电话',due='2026-10-05',evidence=[dict(ref=ref)],
+            task_title=title,task_goal=text,task_state='ready',task_reason='明确家长事务。',task_purpose='admin')
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):
+            items=agent._select('school',[dict(ref=ref,text=text,time=payload['messages'][0]['time'],content_incomplete=False)],
+                                school_goals=[],school_tasks=[],as_of=self.now.date().isoformat())
+        self.assertEqual(items[0]['plan']['school_task']['state'],'ready')
+        key='synthetic-negative-child-action';fp=self.store._job(key,dict(text=text),self.now)
+        self.store._save(key,fp,[dict(item,child_id='child-1',kind='school') for item in items],self.now,
+                         [(self.source['id'],'11')],school_context=(self.source,payload['messages']))
+        with patch.object(agent.family_llm,'_chat_json',side_effect=AssertionError('saved notice must not need another model')):
+            first=agent._refresh_school(self.app,self.store,self.now,0)
+            repeat=agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=1),0)
+        self.assertEqual((first['created'],repeat['created']),(1,0))
+        with self.app.connect() as c:
+            task,=list(c.execute('SELECT * FROM manual_tasks'))
+            self.assertEqual((task['title'],task['action'],task['due'],task['original_status']),
+                             (title,text,'2026-10-05','待跟进'))
+            self.assertIn(ref,task['source'])
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
+
     def test_school_admin_material_preparation_does_not_hide_actual_learning_actions(self):
         cases=[
             ('请明天带阅读材料到校。','ready'),
