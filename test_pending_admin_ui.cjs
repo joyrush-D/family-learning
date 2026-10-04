@@ -176,7 +176,7 @@ const taskStatus=task=>task.update?.status||task.original_status;
    await eventually(async()=>await original.locator('blockquote.source').count()===1,'older original retry loads');
    assert.deepEqual(originalReads,[identity,identity],'retry keeps the original message and child identity');
    assert.equal(await original.locator('blockquote.source').textContent(),a.evidence[0].text,'the complete old original is shown');
-   assert.match(await original.innerText(),new RegExp(row(a.id).agenda.published_on));await fit(page);await proof(page,'old-original-retry-'+width);
+   const originalDay=row(a.id).agenda.published_on;assert.match(await original.innerText(),new RegExp(Number(originalDay.slice(5,7))+'/'+Number(originalDay.slice(8,10))),'original dialog retains the sender time in its existing month/day format');await fit(page);await proof(page,'old-original-retry-'+width);
    await original.locator('[data-school-original-close]').click();
 
    await notice(a.id).locator('[data-agent-accept]').click();
