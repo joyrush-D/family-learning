@@ -256,8 +256,8 @@ function fixtures(base){
     assert.deepEqual(await earlierTasks(),[]);
     for(const id of ['DUE-RECENT','DUE-OLD','OLD'])assert.equal(await orderPage.locator('.today-recent-homework [data-today-task="'+id+'"]').isVisible(),true,'unfinished school homework from older days is exposed');
     assert.match(await orderPage.locator('#task-group-homework h2').innerText(),/今日作业 · 1/,'pending notices do not become confirmed homework');
-    assert.deepEqual(await recentNoticeOrder(),['notice-4','notice-3']);
-    assert.deepEqual(await olderNoticeOrder(),['notice-2','notice-1','notice-0']);
+    assert.deepEqual(await recentNoticeOrder(),['notice-4','notice-3','notice-2','notice-1','notice-0'],'all received pending administration stays directly visible in source order');
+    assert.deepEqual(await olderNoticeOrder(),[],'older pending administration does not move into the folded backlog');
     assert.match(await orderPage.locator('#task-group-todo').innerText(),/2026-09-27 18:00/);
     await orderPage.locator('#task-group-todo').scrollIntoViewIfNeeded();
     await proof(orderPage,'recent-school-review-'+width);
@@ -266,8 +266,8 @@ function fixtures(base){
     assert.equal(await orderPage.locator('.today-reviews [data-today-task="REVIEW-HOMEWORK"]').isVisible(),true);assert.equal(await orderPage.locator('[data-today-task="REVIEW-HOMEWORK"]').count(),1,'direct review stays single after reopening');
     assert.deepEqual(await earlierTasks(),[],'unfinished school homework remains outside the folded backlog');
     for(const id of ['DUE-RECENT','DUE-OLD','OLD'])assert.equal(await orderPage.locator('.today-recent-homework [data-today-task="'+id+'"]').isVisible(),true,'older unfinished homework survives reload');
-    assert.deepEqual(await recentNoticeOrder(),['notice-4','notice-3'],'recent source order persists after reload');
-    assert.deepEqual(await olderNoticeOrder(),['notice-2','notice-1','notice-0'],'older source remains available after reload');
+    assert.deepEqual(await recentNoticeOrder(),['notice-4','notice-3','notice-2','notice-1','notice-0'],'complete source order persists after reload');
+    assert.deepEqual(await olderNoticeOrder(),[],'reopening does not fold pending administration');
     assert.equal(await orderPage.locator('.today-recent-homework [data-today-task="DUE-NEXT"]').isVisible(),true,'received work is visible separately from work due today');
     const undated=orderTask('COLLECTED-UNDATED','2026-09-27');orderState.tasks.push(undated);
     orderState.today_calendar.inbox.push({id:undated.id,task_id:undated.id,kind:'task',child_ids:[owner.id],title:undated.title,agenda:undated.agenda,status:'待跟进',closed:false});

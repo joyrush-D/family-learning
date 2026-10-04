@@ -15,6 +15,21 @@ function harness(){
  vm.runInContext(source,ctx);ctx.calendarHTML();Object.assign(h,{ctx,get,state:()=>vm.runInContext('calendarState',ctx),pending:()=>vm.runInContext('calendarPending',ctx),click:handlers.click});return h;
 }
 const event=(extra={})=>({id:'a'.repeat(32),version:1,child_ids:['child-a','child-b'],title:'虚构共同阅读',category:'family',day:'2026-09-12',series_day:'2026-09-05',start_time:'',end_time:'',location:'',note:'',status:'tentative',repeat:'weekly',until:'',editable:true,source:'',task_id:'',...extra});
+test('new notices do not hide older or undated pending administrative requirements',()=>{
+ const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.agendaItemHTML=x=>`<article data-notice="${x.id}">${x.title}</article>`;
+ const row=(id,published,extra={})=>({id,task_id:'',kind:'school',child_ids:['child-a'],title:id,closed:false,agenda:{category:'todo',box:'inbox',published_on:published,due_on:'',scheduled_on:''},...extra});
+ const older=row('print-and-sign','2026-09-02'),unknown=row('unknown-publication',''),newer=row('activity-receipt','2026-09-07');
+ const excluded=[row('sibling','2026-09-07',{child_ids:['child-b']}),row('closed','2026-09-07',{closed:true}),row('wish','2026-09-07',{agenda:{...older.agenda,box:'wish'}}),row('future-plan','2026-09-07',{agenda:{...older.agenda,scheduled_on:'2026-09-09'}}),row('future-publication','2026-09-09')];
+ d.today_calendar={inbox:[older],events:[],timetables:[]};assert.match(h.ctx.todayTasksHTML().split('id="task-group-todo"')[1].split('</section>')[0],/data-notice="print-and-sign"/);
+ d.today_calendar.inbox.push(newer,unknown,...excluded);const before=JSON.stringify(d.today_calendar),html=h.ctx.todayTasksHTML(),todo=html.split('id="task-group-todo"')[1].split('</section>')[0];
+ for(const id of ['print-and-sign','activity-receipt','unknown-publication']){assert.match(todo,new RegExp('data-notice="'+id+'"'),'received pending administration is directly visible: '+id);assert.equal((html.match(new RegExp('data-notice="'+id+'"','g'))||[]).length,1)}
+ assert.match(todo,/要办的事 · 0/);assert.match(todo,/待核对 3/);assert.match(html,/今日作业 · 0/);assert.doesNotMatch(html,/today-backlog/);
+ for(const x of excluded)assert.doesNotMatch(html,new RegExp('data-notice="'+x.id+'"'));
+ assert.ok(todo.indexOf('data-notice="activity-receipt"')<todo.indexOf('data-notice="print-and-sign"'));assert.ok(todo.indexOf('data-notice="print-and-sign"')<todo.indexOf('data-notice="unknown-publication"'));
+ assert.equal(JSON.stringify(d.today_calendar),before,'rendering preserves original dates, states and requirements');
+ assert.equal(h.ctx.todayTasksHTML(),html,'reopening retains the complete pending list');
+ h.ctx.child='小岚';const sibling=h.ctx.todayTasksHTML();assert.match(sibling,/data-notice="sibling"/);assert.doesNotMatch(sibling,/data-notice="print-and-sign"|data-notice="activity-receipt"|data-notice="unknown-publication"/);
+});
 test('date navigation crosses month/year and leap day without local timezone shifts',()=>{
  const h=harness();assert.equal(h.ctx.calendarMonday('2027-01-01'),'2026-12-28');assert.equal(h.ctx.calendarAdd('2024-02-28',1),'2024-02-29');assert.equal(h.ctx.calendarAdd('2026-12-31',1),'2027-01-01');
  h.ctx.calendarNavigate('2027-01-03');assert.deepEqual(clean(h.ctx.calendarDays()),['2026-12-28','2026-12-29','2026-12-30','2026-12-31','2027-01-01','2027-01-02','2027-01-03']);
