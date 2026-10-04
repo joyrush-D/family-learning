@@ -31,7 +31,7 @@ def page_reply(value, upload_id):
         family_llm.validate_school_material(value)
     except (family_llm.LLMDraftError, ValueError, TypeError):
         return value
-    return dict(originals=[dict(upload_id=upload_id, **value, requirements=[])])
+    return dict(originals=[dict(upload_id=upload_id, **value, requirements=[],deferred_contexts=[])])
 
 
 def page_model(reply=DRAFT):

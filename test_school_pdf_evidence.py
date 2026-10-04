@@ -157,7 +157,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         def model(text,images,**kw):
             pages=json.loads(text)['original_pdf']['pages'];seen.append(pages)
             self.assertEqual((kw['original_ids'],kw['original_pages']),([self.pdf],pages))
-            return dict(originals=[dict(upload_id=self.pdf,title='新页组',note='背景',uncertainties=[],requirements=[])])
+            return dict(originals=[dict(upload_id=self.pdf,title='新页组',note='背景',uncertainties=[],requirements=[],deferred_contexts=[])])
         with test_pdf_material.renderer(),patch.object(family_llm,'extract_draft',side_effect=model) as called:
             self.assertEqual(pdfm.prepare(self.store,self.now,budget=0),dict(used=0,failed=0));called.assert_not_called()
             for step in range(4):

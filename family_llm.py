@@ -307,12 +307,13 @@ def _school_original_ids(original_ids):
     return list(original_ids)
 
 
-def validate_school_material(value, *, original_ids=(), require_requirements=False):
+def validate_school_material(value, *, original_ids=(), require_requirements=False, allow_page_scope=False, deferred_pages=None):
     """Legacy notes stay readable; identified originals must each return their own checked note.
 
     The display summary is assembled locally. It never supplies attachment ownership to actions."""
     ids=_school_original_ids(original_ids)
-    if type(require_requirements) is not bool or require_requirements and not ids:
+    if (type(require_requirements) is not bool or type(allow_page_scope) is not bool or require_requirements and not ids
+            or deferred_pages is not None and not allow_page_scope):
         raise ValueError('完整学校要求校验须明确逐原件身份')
     if ids:
         if not isinstance(value,dict) or set(value) not in ({'originals'},{'title','note','uncertainties','originals'}):
@@ -323,7 +324,10 @@ def validate_school_material(value, *, original_ids=(), require_requirements=Fal
         checked={};requirement_chars=0
         for original in originals:
             fields={'upload_id','title','note','uncertainties'}
-            if not isinstance(original,dict) or set(original) not in ((fields|{'requirements'},) if require_requirements else (fields,fields|{'requirements'})):
+            allowed=(fields|{'requirements'},) if require_requirements else (fields,fields|{'requirements'})
+            if allow_page_scope:allowed+=(fields|{'requirements','deferred_contexts'},)
+            if (not isinstance(original,dict) or set(original) not in allowed
+                    or deferred_pages is not None and 'deferred_contexts' not in original):
                 raise LLMDraftError('学校逐原件草稿字段不正确，请手动核对')
             ident=original['upload_id']
             if not isinstance(ident,str) or ident not in ids or ident in checked:
@@ -340,6 +344,19 @@ def validate_school_material(value, *, original_ids=(), require_requirements=Fal
                 # Freeze only outer whitespace once; preserve all internal words,
                 # punctuation and line breaks for exact later action mapping.
                 checked[ident]['requirements']=[r.strip() for r in requirements]
+            if 'deferred_contexts' in original:
+                contexts=original['deferred_contexts']
+                if len(ids)!=1 or not isinstance(contexts,list) or len(contexts)>10:
+                    raise LLMDraftError('页组待处理范围无法核对，原件保留')
+                for context in contexts:
+                    if (not isinstance(context,dict) or set(context)!={'pages','note'}
+                            or not isinstance(context['pages'],list) or not 1<=len(context['pages'])<=200
+                            or any(type(p) is not int or not 1<=p<=200 for p in context['pages'])
+                            or context['pages']!=sorted(set(context['pages']))
+                            or deferred_pages is not None and not set(context['pages'])<=set(deferred_pages)
+                            or not isinstance(context['note'],str) or not context['note'].strip() or len(context['note'])>300):
+                        raise LLMDraftError('页组待处理范围不在本轮边界内，原件保留')
+                checked[ident]['deferred_contexts']=contexts
         ordered=[checked[i] for i in ids]
         summary=dict(title=ordered[0]['title'] if len(ids)==1 else '学校资料（共%d份）'%len(ids),
                      note='\n'.join(o['note'] for o in ordered),
@@ -406,7 +423,7 @@ def transcribe_audio(audio_bytes,mime,timeout=90):
     return text.strip()
 
 
-def extract_draft(text='',images=(),timeout=60,*,target_child='',data_path=None,timetable=False,homework=False,school_material=False,documents=(),original_ids=(),original_pages=()):
+def extract_draft(text='',images=(),timeout=60,*,target_child='',data_path=None,timetable=False,homework=False,school_material=False,documents=(),original_ids=(),original_pages=(),deferred_pages=()):
     """Return six draft fields. The caller must show them for correction before saving.
 
     school_material returns title/note/uncertainties and, with original_ids, checked per-original notes and complete requirements.
@@ -429,6 +446,10 @@ def extract_draft(text='',images=(),timeout=60,*,target_child='',data_path=None,
     if pages and (not school_material or documents or len(ids)!=1 or len(pages)!=len(images)
                   or any(type(p) is not int or p<1 for p in pages) or pages!=sorted(set(pages))):
         raise ValueError('学校页组须以同一原件身份对应本轮有序页码')
+    if (not isinstance(deferred_pages,(list,tuple)) or deferred_pages and not pages
+            or any(type(p) is not int or not 1<=p<=200 for p in deferred_pages)
+            or list(deferred_pages)!=sorted(set(deferred_pages)) or set(deferred_pages)&set(pages)):
+        raise ValueError('后续页码须是本机核对的尚待处理页，不得重复当前页')
     if ids and (not school_material or not pages and len(ids)!=len(images)+len(documents)):
         raise ValueError('学校原件身份须与本轮逐份原件一一对应')
     words=text+''.join(d['name']+d['text'] for d in documents)
@@ -470,6 +491,14 @@ def extract_draft(text='',images=(),timeout=60,*,target_child='',data_path=None,
             original_schema=dict(schema,required=['upload_id','title','note','uncertainties','requirements'],
                 properties=dict(upload_id=dict(type='string',enum=ids),requirements=dict(type='array',maxItems=12,
                     items=dict(type='string',minLength=1,maxLength=2000)),**schema['properties']))
+            if pages:
+                original_schema['required'].append('deferred_contexts')
+                page_spec=dict(type='integer',minimum=1,maximum=200)
+                if deferred_pages:page_spec['enum']=list(deferred_pages)
+                original_schema['properties']['deferred_contexts']=dict(type='array',maxItems=10 if deferred_pages else 0,
+                    items=dict(type='object',additionalProperties=False,required=['pages','note'],properties=dict(
+                        pages=dict(type='array',minItems=1,maxItems=len(deferred_pages),items=page_spec),
+                        note=dict(type='string',minLength=1,maxLength=300))))
             schema=dict(type='object',additionalProperties=False,required=['originals'],properties=dict(
                 originals=dict(type='array',minItems=len(ids),maxItems=len(ids),items=original_schema)))
             content.append(dict(type='text',text=json.dumps(dict(original_ids=ids),ensure_ascii=False)))
@@ -485,10 +514,11 @@ uncertainties只写实际读不清、相互冲突、缺页或影响理解的归�
 本次输出仅供家长核对，不会创建、修改或关闭任何任务、目标或学习记录。'''
         if ids:
             prompt+='\n本轮original_ids是程序核对的完整原件身份清单。每个original_image身份只对应紧随其后的那张图片；original_document的upload_id只对应其正文。必须逐份返回originals，各含upload_id、title、note、uncertainties、requirements；每个身份恰好一次，不能遗漏、重复或合并，不返回跨原件汇总。每份note只写该原件实际可见的背景、题面与说明，不将其他图片、文件名或通知中的要求猜成该原件内容；通知只提供日期和解释上下文。读不清的原件仍保留自己的身份并具体说明未知。'
-            if pages:prompt+='\n本轮多个original_image具有同一upload_id，各自page对应同一原件的不同页。它们是一个页组，originals只返回这一份原件；requirements完整保留本组各页中的所有独立要求和跨页追加的完成标准，不把一项作业按页拆成重复任务。页组以外未送入的页只保留读取边界；依赖未读上下文时仍保留具体疑点。'
+            if pages:prompt+='\n本轮多个original_image具有同一upload_id，各自page对应同一原件的不同页。它们是一个页组，originals只返回这一份原件；requirements完整保留本组各页中的所有独立要求和跨页追加的完成标准，不把一项作业按页拆成重复任务。额外返回deferred_contexts数组：仅把material_scope.unprocessed_pages中尚待分轮送入的页及其处理范围写在这里，每项pages是其中的页码，note说明处理范围，不猜该页内容。没有这种范围用空数组；unprocessed_pages为空时必须用空数组。比如当前第1至3页、通知还提到后续第4页的独立回执，后续页未送入只是deferred_contexts处理进度，不能又在uncertainties写回执缺失。uncertainties仍保留当前页模糊、真实缺件/缺页、冲突、日期/归属疑点，以及不能仅靠处理这些已知后续页核对的实质未知；不得把这些疑点移到deferred_contexts或假称已经解决。已读页及关联清单不是未知上下文的内容证据。'
             prompt+='\nrequirements是本份原件中的完整独立行动要求字符串数组，每项对应一个独立成果；同一作业的打印、签字、交回步骤并入该项，另一份独立回执另列。逐项写明动作、对象、范围、明确日期或期限、必做/选做、适用条件、否定要求及具体输出和完成标准，方法数量、单位、过程、数量和提交方式等不得因简写而遗漏。题目本身可在note中保留，题内明确的完成标准必须并入对应requirements；一份原件有多个行动时全部分别保留。题面、表头、空白填写栏、答案、孩子作答、参考说明和材料对照本身不生成行动；没有明确行动用空数组，读不清或条件不明仍说明具体uncertainties，不猜缺失要求。每份最多12项，每项最多2000字，本轮所有原件的requirements合计最多4000字；不能用标题、总范围或笼统检查替代具体标准。'
         return validate_school_material(_chat_json([dict(role='system',content=prompt),dict(role='user',content=content)],
-                                                   schema,'family_school_material_draft',timeout,data_path=data_path),original_ids=ids,require_requirements=bool(ids))
+                                                   schema,'family_school_material_draft',timeout,data_path=data_path),original_ids=ids,require_requirements=bool(ids),
+                                        allow_page_scope=bool(pages),deferred_pages=list(deferred_pages) if pages else None)
     if homework:
         fields={'title':200,'subject':80,'goal':2000,'excerpt':2000}
         item=dict(type='object',additionalProperties=False,required=list(fields),properties={k:dict(type='string',maxLength=n) for k,n in fields.items()})

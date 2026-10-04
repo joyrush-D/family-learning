@@ -295,10 +295,17 @@ def _pdf_evidence(material):
     model=[];documents=[];uncertainties=[];total=min(requirements_size,PDF_TEXT_LIMIT);complete_requirements=requirements_size<=PDF_TEXT_LIMIT
     for m in material:
         groups=[];omitted=[];truncated=[];processed=[]
+        covered={p for batch in m['batches'] for p in batch['pages']}
         for b in m['batches']:
             processed+=b['pages'];span=_span(b['pages'])
             for uncertainty in b['draft'].get('uncertainties',[]):
                 if uncertainty not in uncertainties and len(uncertainties)<20: uncertainties.append(uncertainty)
+            for original in b['draft'].get('originals',[]):
+                for context in original.get('deferred_contexts',[]):
+                    waiting=sorted(set(context['pages'])-covered)
+                    if waiting:
+                        gap='本原件后续'+_span(waiting)+'仍待整理：'+context['note']
+                        if gap not in uncertainties and len(uncertainties)<20:uncertainties.append(gap)
             draft=b['draft'];full='\n'.join([draft.get('title',''),draft.get('note','')]+['待核对：'+u for u in draft.get('uncertainties',[])]).strip()
             originals=draft.get('originals');requirements=originals[0]['requirements'] if originals else None
             if requirements is None:complete_requirements=False

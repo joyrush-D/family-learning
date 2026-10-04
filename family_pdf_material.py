@@ -74,7 +74,7 @@ def _document_key(source, message, value):
 
 
 def _job_value(fingerprint, done):
-    return {'pdf_material': fingerprint, 'done': sorted(done), 'requirements': 1}
+    return {'pdf_material': fingerprint, 'done': sorted(done), 'requirements': 2}
 
 
 def pdf_inputs(store, c, source, message):
@@ -211,7 +211,10 @@ def _batches(rows, upload_id):
             require(isinstance(draft, dict) and draft.pop('kind', None) == SCHOOL_MATERIAL, 'draft_kind_mismatch')
             draft.pop('previous_group',None)  # Old payload and timestamp remain history, never current action evidence.
             draft = family_llm.validate_school_material(draft,original_ids=[upload_id] if 'originals' in draft else (),
-                                                       require_requirements='originals' in draft)
+                                                       require_requirements='originals' in draft,allow_page_scope=True)
+            for original in draft.get('originals',[]):
+                require(all(set(context['pages'])<=set(range(1,count+1))-set(pages)
+                            for context in original.get('deferred_contexts',[])), 'pdf_row_invalid')
         except (ValueError, TypeError, MediaError, family_llm.LLMDraftError):
             continue  # A malformed or foreign row is never shown or counted.
         if page_count is None:
@@ -224,6 +227,15 @@ def _batches(rows, upload_id):
 
 def _pending(done, page_count):
     return [] if page_count is None else [p for p in range(1, page_count + 1) if p not in done]
+
+
+def _needs_requirements_upgrade(batch):
+    draft=batch['draft']
+    # Old free-form doubts cannot be deleted by wording or by later page coverage.
+    # Only undecided originals are re-read into the explicit scope channel; clear
+    # structured groups and all parent decisions retain their existing evidence.
+    return ('originals' not in draft or bool(draft.get('uncertainties'))
+            and any('deferred_contexts' not in original for original in draft['originals']))
 
 
 def _document_view(c, source, message, value):
@@ -348,10 +360,10 @@ def prepare(store, now, budget=ROUND_CALLS):
                 decision_scope,undecided=_decision_scope(store,c,source,message)
                 for value in values:
                     batches, done, page_count = _batches(_rows(c, source, message, value['fingerprint']),value['upload_id'])
-                    legacy=[b for b in batches if 'originals' not in b['draft']]
+                    legacy=[b for b in batches if _needs_requirements_upgrade(b)]
                     if legacy:
                         if undecided:
-                            done={p for b in batches if 'originals' in b['draft'] for p in b['pages']}
+                            done={p for b in batches if not _needs_requirements_upgrade(b) for p in b['pages']}
                             value['upgrade_pages']=legacy[0]['pages']  # Preserve saved boundaries and all other groups.
                         elif page_count is not None and not _pending(done,page_count):continue
                         # A shared legacy group never changes after any decision. Missing groups retain the original
@@ -429,8 +441,9 @@ def prepare(store, now, budget=ROUND_CALLS):
                                                  unprocessed_pages=left, conversion=value['conversion'])), ensure_ascii=False)
         images = [dict(mime='image/png', data=p['data']) for p in rendered['pages']]
         result = family_llm.extract_draft(text, images, target_child=value['child'], timeout=90, data_path=store.data,
-                                          school_material=True,original_ids=[value['upload_id']],original_pages=pages)
-        result = family_llm.validate_school_material(result,original_ids=[value['upload_id']],require_requirements=True)
+                                          school_material=True,original_ids=[value['upload_id']],original_pages=pages,deferred_pages=left)
+        result = family_llm.validate_school_material(result,original_ids=[value['upload_id']],require_requirements=True,
+                                                     allow_page_scope=True,deferred_pages=left)
         with store._db() as c:
             c.execute('BEGIN IMMEDIATE')
             if not _claim_intact(store, c, source, message, value, key, fp):
@@ -440,8 +453,8 @@ def prepare(store, now, budget=ROUND_CALLS):
             batches_now, done_now, count_now = _batches(saved_rows,value['upload_id'])
             if value.get('upgrade_pages'):
                 old=next((r for r in saved_rows if r['first_page']==pages[0] and json.loads(r['pages'])==pages),None)
-                require(old is not None and any(b['pages']==pages and 'originals' not in b['draft'] for b in batches_now), 'pdf_material_changed')
-                done_now={p for b in batches_now if 'originals' in b['draft'] for p in b['pages']}
+                require(old is not None and any(b['pages']==pages and _needs_requirements_upgrade(b) for b in batches_now), 'pdf_material_changed')
+                done_now={p for b in batches_now if not _needs_requirements_upgrade(b) for p in b['pages']}
                 result['previous_group']=dict(payload=json.loads(old['payload']),updated=old['updated'],pages=json.loads(old['pages']),page_count=old['page_count'])
             require(count_now in (None, page_count) and not (done_now & set(pages)), 'pdf_material_changed')
             c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?) '
