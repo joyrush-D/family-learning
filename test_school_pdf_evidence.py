@@ -1228,10 +1228,12 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             saved=app.save_record(dict(child=child,day='2026-02-10',category='学习进展',title='虚构原作答',
                 note='家长独立保存的作答',source='事项:'+task_id,attachments=[own],request_key='synthetic-legacy-answer'))
             with app.connect() as c:
-                answer=c.execute('SELECT * FROM records WHERE id=?',(saved['id'],)).fetchone()
+                answer=c.execute('SELECT * FROM records WHERE id=?',(saved['record_id'],)).fetchone()
                 context=app.homework_material_context(c,task_id,answer=answer)
             self.assertEqual(set(context['allowed']),{own});self.assertEqual(context['allowed'][own]['origin'],'saved_answer')
             self.assertTrue(context['school_error'])
+            with app.connect() as c:independent=app.homework_material_context(c,task_id)
+            self.assertEqual(set(independent['allowed']),{own});self.assertEqual(independent['allowed'][own]['origin'],'same_task')
         self.assertEqual(self.rows('SELECT * FROM agent_items ORDER BY id'),before)
         self.assertEqual(self.count('records'),1)
 

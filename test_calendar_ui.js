@@ -340,6 +340,8 @@ test('list materials request the exact task and reject unscoped or wrong-task or
  vm.runInContext(core.slice(core.indexOf('function verifySchoolOriginal('),core.indexOf('// One click reads one address')),c);
  Object.assign(c,{schoolPdfDocuments:()=>[],schoolPageLinks:()=>[],agentTime:()=>'',uploadHTML:a=>a.id});vm.runInContext(core.slice(core.indexOf('function taskSchoolMaterialHTML('),core.indexOf('function drawTaskSchoolResources(')),c);
  const value=(extra={})=>({child_id:'child-a',source_id:'synthetic-class',message_id:'notice',message:{id:'notice'},attachments:[{id:'synthetic-own-file'}],task_id:task.id,action_material:{scoped:true,quotes:[{text:'虚构完整要求',upload_ids:['synthetic-own-file'],pages:[]}]},...extra});
+ assert.throws(()=>c.taskSchoolMaterialHTML(value({action_material:undefined})),/本项资料范围尚未核明/,'both task entries reject an unscoped success response');
+ assert.match(c.taskSchoolMaterialHTML(value({task_id:undefined,action_material:undefined})),/synthetic-own-file/,'the explicit full message stays readable');
  const state=()=>c.schoolOriginal={identity:{child_id:'child-a',source_id:'synthetic-class',message_id:'notice'},taskMaterialID:task.id,taskMaterialSource:task.source,view:null,busy:false,fullSource:false};
  let s=state(),calls=[];c.apiFetch=async path=>{calls.push(path);return{ok:true,json:async()=>value()}};await c.readSchoolOriginal();
  assert.equal(new URL(calls[0],'https://synthetic.invalid').searchParams.get('task_id'),task.id);assert.equal(s.view.task_id,task.id);
