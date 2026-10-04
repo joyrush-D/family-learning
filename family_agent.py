@@ -3033,6 +3033,7 @@ def _school_effective_conditions(parts,anchors,changes,proof,*,entries=False):
             raise AgentError('更正后的完整行动依据不能唯一对应原件')
         part=matches[0];text=anchor['quote'];offset=part['text'].index(text)
         for start,end,replacement in sorted(edits.get(part['id'],[]),reverse=True):
+            if end<=offset or start>=offset+len(anchor['quote']):continue
             if not offset<=start<end<=offset+len(anchor['quote']):raise AgentError('待替换条件没有被完整引用')
             key=(part['id'],start,end)
             if key in applied:raise AgentError('待替换条件被重复引用')
