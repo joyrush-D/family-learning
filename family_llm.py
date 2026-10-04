@@ -1140,7 +1140,7 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
     result={**result,'items':[dict(item) if isinstance(item,dict) else item for item in result['items']]}
     limits=dict(label=80,question=800,student_answer=300,answer=1000,error_reason=600,
                 possible_cause=600,steps=1200,uncertainty=300)
-    missing_requirements=[]
+    missing_requirements=[];downgraded_judgments=[]
     for item in result['items']:
         question_kind=None
         if review:
@@ -1168,6 +1168,7 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
         if (item['judgment']!='unknown' and (not item['student_answer'].strip() or not item['answer'].strip() or item['uncertainty'].strip())
                 or item['judgment']=='incorrect' and not item['error_reason'].strip()
                 or item['judgment']!='incorrect' and (item['error_reason'].strip() or item['possible_cause'].strip())):
+            if review and item['judgment']!='unknown': downgraded_judgments.append(item['label'])
             if item['uncertainty'].strip():
                 if not teacher_reference or not item['answer'].startswith('教师参考：'): item['answer']=''
                 item['steps']=''
@@ -1186,14 +1187,17 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
     if (not isinstance(comparison,str) or len(comparison)>1000
             or any(ord(ch)<32 and ch not in '\n\r\t' or ord(ch)==127 for ch in comparison)):
         raise LLMDraftError('复核比较说明须为最多1000字的可核对文字')
-    if review and missing_requirements:
-        unknown_labels='、'.join(item['label'] for item in result['items'] if item['judgment']=='unknown')[:700]
-        comparison=('本次仅核对所选材料。'+unknown_labels+'因原题、作答要求或具体核对依据不完整，保持未判定；'
-                    '不能沿用上一轮对这些题目的确定判定。教师参考和实际作答分别保留；其他明确客观答案仅作有限比较，'
-                    '旧AI意见不作教师依据，也不能沿用“全卷已检查完”结论。')
-        result['coverage']=('仅按所选作答与教师参考作有限比较，共%d项；'%len(result['items'])+
-                            unknown_labels[:300]+'仍未判定。未提供的题面、作答要求及评分条件未核实，'
-                            '不能据此称全部答对或全卷检查完成。')
+    reconcile_summary=review and bool(missing_requirements or downgraded_judgments)
+    if reconcile_summary:
+        # A model summary may still carry a grade refused above. Rebuild it from
+        # final judgments; per-question gaps and program-written page scope stay intact.
+        unknown_labels='、'.join(item['label'] or '第%d题'%index for index,item in enumerate(result['items'],1) if item['judgment']=='unknown')[:700]
+        comparison=('本次仅核对所选材料。'+unknown_labels+'因逐题所列依据缺口或冲突，保持未判定；'
+                    '不能沿用上一轮对这些题目的确定判定，具体原因见逐题不确定说明。教师参考和实际作答分别保留；'
+                    '其他有依据的题目保留本次逐题答案比较。旧AI意见不作教师依据，本轮不代表全部完成或全卷检查完。')
+        result['coverage']=('仅按本次所选材料作有限核对，共%d项；'%len(result['items'])+
+                            unknown_labels[:300]+'仍未判定，具体依据缺口或冲突见逐题说明；'
+                            '其他题目按本次逐题结果核对，不能据此称全部答对、全部完成或全卷检查完成。')
     wrong=[item for item in result['items'] if item['judgment']=='incorrect']
     if review:
         unknown=sum(item['judgment']=='unknown' for item in result['items'])
@@ -1235,7 +1239,7 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
     coverage=result['coverage']+('\n实际读取范围：'+'；'.join(program_coverage) if program_coverage else '')
     draft=dict(text=joined,coverage=coverage,items=len(result['items']),questions=result['items'],
                wrong_items=len(wrong),unknown_items=sum(i['judgment']=='unknown' for i in result['items']))
-    if 'comparison' in result: draft['comparison']=comparison
+    if 'comparison' in result or reconcile_summary: draft['comparison']=comparison
     return draft
 
 
