@@ -777,6 +777,7 @@ class AgentTests(unittest.TestCase):
             due='2026-10-04',task_state='ready',task_change='update',task_purpose='learning',learning_subject='语文',
             evidence=[dict(ref=e['ref']) for e in evidence[:2]])
         proposals=[proposal]
+        if duplicate:proposals.append(dict(proposal,evidence=[dict(ref=evidence[2]['ref'])]))
         if sibling:proposals.append(school_proposal(title_quote='朗读课文两遍，不用录音。',task_title='语文：朗读课文',
             task_goal='朗读课文两遍，不用录音。',due='2026-10-04',task_state='ready',task_purpose='learning',learning_subject='语文',evidence=[dict(ref=evidence[0]['ref'])]))
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
@@ -861,12 +862,35 @@ class AgentTests(unittest.TestCase):
     def test_legacy_correction_discards_new_cancellation_during_model(self):
         row,key,fp,evidence=self._legacy_initial_correction();mapped=self._legacy_mapping(row,evidence)
         def changed(*args,**kwargs):
-            payload=self.payload(cursor='13');payload['messages']=[dict(id='13',time='2026-10-04T10:01:00+08:00',kind='text',sender='虚构发布者',sender_id='synthetic-a',text='原第二项不用做了。',unread=False)]
+            payload=self.payload(expected='12',cursor='13');payload['messages']=[dict(id='13',time='2026-10-04T10:01:00+08:00',kind='text',sender='虚构发布者',sender_id='synthetic-a',text='原第二项不用做了。',unread=False)]
             self.store.ingest(payload)
             return mapped(*args,**kwargs)
         with patch.object(agent.family_llm,'_chat_json',side_effect=changed) as model:
             self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1),dict(used=1,failed=0,created=0))
         self.assertEqual(model.call_count,1)
+        with self.app.connect() as c:
+            self.assertEqual(row,dict(c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone()))
+            self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
+
+    def test_legacy_correction_model_review_remains_pending(self):
+        row,key,fp,evidence=self._legacy_initial_correction();mapped=self._legacy_mapping(row,evidence)
+        def uncertain(*args,**kwargs):
+            value=mapped(*args,**kwargs);value['actions'][0].update(state='review',reason='实际栏目要求仍有模糊，不能判为ready。')
+            return value
+        with patch.object(agent.family_llm,'_chat_json',side_effect=uncertain):
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1),dict(used=1,failed=0,created=0))
+        with self.app.connect() as c:
+            saved=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone())
+            self.assertEqual((saved['state'],json.loads(saved['plan'])['school_task']['state']),('pending','review'))
+            self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
+
+    def test_legacy_correction_model_failure_obeys_existing_backoff_and_limit(self):
+        row,key,fp,evidence=self._legacy_initial_correction()
+        with patch.object(agent.family_llm,'_chat_json',side_effect=agent.AgentError('虚构模型失败')) as model:
+            for minute,used in [(0,1),(1,0),(6,1),(7,0),(17,1),(40,0)]:
+                result=agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=minute),1)
+                self.assertEqual(result,dict(used=used,failed=used,created=0))
+        self.assertEqual(model.call_count,3)
         with self.app.connect() as c:
             self.assertEqual(row,dict(c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone()))
             self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
@@ -888,6 +912,12 @@ class AgentTests(unittest.TestCase):
             c.execute('UPDATE agent_jobs SET fingerprint=? WHERE id=?',('unknown',key))
             self.assertIsNone(agent._school_legacy_batch_correction(self.store,c,row,evidence))
             c.execute('ROLLBACK TO invalid_receipt');c.execute('RELEASE invalid_receipt')
+            c.execute('SAVEPOINT hidden_task')
+            fallback='AGENT-'+agent._hash(row['id'])[:24]
+            c.execute('INSERT INTO manual_tasks(id,child,title,due,action,source,original_status) VALUES(?,?,?,?,?,?,?)',
+                (fallback,'示例甲','家长已有独立事项','2026-10-04','保留家长内容','家长手记','待跟进'))
+            self.assertIsNone(agent._school_legacy_batch_correction(self.store,c,row,evidence))
+            c.execute('ROLLBACK TO hidden_task');c.execute('RELEASE hidden_task')
 
     def test_initial_school_batch_saves_immutable_generated_correction_proof(self):
         self.now=dt.datetime(2026,10,4,10,tzinfo=agent.TZ)
