@@ -944,7 +944,7 @@ class AgentTests(unittest.TestCase):
     def _legacy_admin_rejection(self):
         self.now=dt.datetime(2026,10,4,10,tzinfo=agent.TZ);self.config()
         text='请家长后天完成学校通讯录中的紧急联系电话核对；有误就在学校通讯录中修改，无误点“已核对”。不要在班级群发布电话号码或核对截图，不用让孩子抄写。'
-        payload=self.payload();payload['messages'][0].update(time='2026-10-03T16:20:00+08:00',text=text);self.store.ingest(payload)
+        payload=self.payload();payload['messages'][0].update(time='2026-10-03T16:20:00+08:00',text=text,sender='虚构发布者',sender_id='synthetic-a');self.store.ingest(payload)
         evidence=[dict(ref='message:'+self.source['id']+':11',text=text,time='2026-10-03T16:20:00+08:00',kind='text',publisher=agent._publisher(self.source['id'],payload['messages'][0]),content_incomplete=False)]
         proposal=school_proposal(title_quote=text,task_title='家长核对学校通讯录紧急联系电话',task_goal=text,due='2026-10-05',task_state='review',task_purpose='admin',evidence=[dict(ref=evidence[0]['ref'])])
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):items=agent._select('school',evidence,school_goals=[],as_of='2026-10-04')

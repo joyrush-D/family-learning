@@ -2009,20 +2009,24 @@ def _school_first_batch_correction(brief, evidence):
     return None if _school_competing_correction(evidence,proof) else proof
 
 
+def _school_mentions_correction(text,proof):
+    ordinal=re.match(r'第[一二三四五六七八九十0-9]+项',proof['action_text'])
+    return proof['object'] in text or bool(ordinal and ordinal[0] in text)
+
+
 def _school_competing_correction(evidence,proof):
     """A further change or withdrawal cannot be hidden by selecting the earlier optional-column notice."""
     for entry in evidence:
         if entry['ref'] in (proof['original_ref'],proof['correction_ref']):continue
         publisher=entry.get('publisher') or _publisher(entry['ref'][8:].rsplit(':',1)[0],entry)
         text=entry.get('text','')
-        ordinal=re.match(r'第[一二三四五六七八九十0-9]+项',proof['action_text'])
         if publisher!=proof['publisher']:continue
         if entry.get('unread') or entry.get('content_incomplete'):
             try:
                 later=dt.datetime.fromisoformat(entry['time'])>dt.datetime.fromisoformat(proof['correction_time'])
             except (KeyError,ValueError,TypeError):later=True
             if later:return True
-        if not (proof['object'] in text or ordinal and ordinal[0] in text):continue
+        if not _school_mentions_correction(text,proof):continue
         if re.search(r'更正|取消|撤销|撤回|不再(?:做|完成)|不用(?:做|完成)|无需(?:做|完成)|改为|改期|延期',text):return True
     return False
 
@@ -2080,8 +2084,10 @@ def _school_legacy_batch_correction(store,c,row,evidence):
         if _school_competing_correction(full,proof):return None
         cited={e['ref'] for e in evidence};additional=[]
         for entry in reversed(full):
-            if entry['ref'] in cited or proof['object'] not in entry['text'] or _publisher(source['id'],entry)!=proof['publisher']:continue
+            if entry['ref'] in cited or not _school_mentions_correction(entry['text'],proof) or _publisher(source['id'],entry)!=proof['publisher']:continue
             if dt.datetime.fromisoformat(entry['time'])<dt.datetime.fromisoformat(proof['original_time']):continue
+            # A bare ordinal can refer to another later notification. Do not omit it or attach it by guesswork.
+            if proof['object'] not in entry['text']:return None
             if entry['kind']!='text' or entry['unread'] or _needs_task_details(entry['text']):return None
             message_id=entry['ref'][8:].rsplit(':',1)[1]
             if c.execute('SELECT 1 FROM agent_message_attachments WHERE source_id=? AND message_id=? LIMIT 1',(source['id'],message_id)).fetchone():return None
@@ -2115,9 +2121,66 @@ def _school_legacy_batch_correction(store,c,row,evidence):
     except (AgentError,ValueError,KeyError,TypeError,AttributeError):return None
 
 
+def _school_legacy_policy_scope(store,c,row,evidence):
+    """A fresh ordinary legacy reread needs a complete native scope, not only a new policy number."""
+    try:
+        plan=json.loads(row['plan']);brief=plan['school_task']
+        if (row['kind']!='school' or row['state']!='pending' or row['task_id'] or row['record_id'] is not None
+                or row['care_id'] or row['created']!=row['updated'] or not row['job_id'].startswith('messages:')):return None
+        if set(plan)-{'school_task','school_selection_revision','school_selection_receipt'}:return None
+        if row['title']!=brief.get('title') or row['body']!=brief.get('goal') or brief.get('origin_basis')!=_school_message_basis(evidence):return None
+        if not _school_active(store,c,row):return None
+        receipt=c.execute('SELECT * FROM agent_jobs WHERE id=?',(row['job_id'],)).fetchone()
+        if receipt is None or receipt['done']!=1:return None
+        if not any(row['id']=='agent-'+_hash([row['job_id'],receipt['fingerprint'],i])[:32] for i in range(SCHOOL_PROPOSAL_LIMIT)):return None
+        source_ids={e['ref'][8:].rsplit(':',1)[0] for e in evidence}
+        if len(source_ids)!=1:return None
+        sources={s['id']:s for s in store._config(c)['sources'] if s['enabled'] and s['child_id']==row['child_id'] and s['id'] in source_ids}
+        matches=_history_batch_matches(store,c,sources,{row['job_id']:(receipt['fingerprint'],range(1,SCHOOL_TASK_POLICY+1))},saved_originals=True)
+        if row['job_id'] not in matches:return None
+        source,values=matches[row['job_id']]
+        batch,_=_school_material(store,c,dict(row,evidence=_json([dict(ref='message:'+source['id']+':'+v['id']) for v in values])))
+        cited={e['ref'] for e in evidence};publishers={_publisher(source['id'],e) for e in evidence}
+        if len(publishers)!=1 or not all(e['kind']=='text' and not e['unread'] and not _needs_task_details(e['text']) for e in evidence):return None
+        stamps=[dt.datetime.fromisoformat(e['time']) for e in evidence]
+        if any(v.tzinfo is None for v in stamps):return None
+        start=min(stamps);publisher=next(iter(publishers))
+        window=[dict(v) for v in c.execute('SELECT id,payload,processed FROM agent_messages WHERE source_id=? ORDER BY rowid DESC LIMIT 500',(source['id'],))]
+        full=[dict(json.loads(v['payload']),ref='message:'+source['id']+':'+v['id']) for v in window]
+        if not cited<={e['ref'] for e in full}:return None
+        for entry in full:
+            if entry['ref'] in cited or _publisher(source['id'],entry)!=publisher:continue
+            stamp=dt.datetime.fromisoformat(entry['time'])
+            if stamp.tzinfo is None:return None
+            if stamp<start:continue
+            # The sole unrelated-message exception proves its original time, ordinal, object and entire
+            # local column-only change. A different book title alone never proves independence.
+            proof=_school_first_batch_correction(dict(change='update',target_id='',title=entry['text']),batch)
+            local=re.fullmatch(r'更正[^\n]+?发布的第[一二三四五六七八九十0-9]+项《[^》\n]{2,40}》[:：](?:[A-Z](?:、[A-Z])*栏仍必做[；;])?[A-Z]栏改为选做[，,]不做[A-Z]栏也算完成[^。；;\n]+[。；;]其余要求和原期限不变[。]?',entry['text'].strip())
+            if (not proof or not local or entry['kind']!='text' or entry['unread'] or proof['correction_ref']!=entry['ref']
+                    or proof['original_ref'] in cited or any(proof['object'] in e['text'] for e in evidence)
+                    or c.execute('SELECT 1 FROM agent_message_attachments WHERE source_id=? AND message_id=? LIMIT 1',(source['id'],entry['id'])).fetchone()):return None
+        _,known=_school_original_known(store,c,row)
+        if any(v['id']!=row['id'] for v in known):return None
+        tables={r['name'] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")};fallback='AGENT-'+_hash(row['id'])[:24]
+        for table,column in [('manual_tasks','id'),('task_focus','task_id'),('task_updates','id'),('task_history','task_id'),('study_items','task_id')]:
+            if table in tables and c.execute('SELECT 1 FROM '+table+' WHERE '+column+'=? LIMIT 1',(fallback,)).fetchone():return None
+        if c.execute('SELECT 1 FROM records WHERE linked_task_id=? OR source=? LIMIT 1',(fallback,'Agent建议:'+row['id'])).fetchone():return None
+        if c.execute('SELECT 1 FROM manual_tasks WHERE source LIKE ? LIMIT 1',('Agent建议:'+row['id']+'\n%',)).fetchone():return None
+        bound=c.execute('SELECT * FROM agent_sources WHERE id=?',(source['id'],)).fetchone()
+        return _hash([row,evidence,source,dict(bound),dict(receipt),values,window])
+    except (AgentError,ValueError,KeyError,TypeError,AttributeError):return None
+
+
 def _school_correction_window_current(store,c,row):
     """Recheck the current source in the actual acceptance transaction, including arrivals after the reread save."""
-    action=json.loads(row['plan']).get('school_original_action',{});proof=action.get('correction_proof')
+    plan=json.loads(row['plan']);policy_scope=plan.get('school_policy_reread_scope')
+    if policy_scope:
+        previous=plan.get('school_previous_policy')
+        if not previous:return False
+        evidence,_=_school_material(store,c,previous)
+        if _school_legacy_policy_scope(store,c,previous,evidence)!=policy_scope:return False
+    action=plan.get('school_original_action',{});proof=action.get('correction_proof')
     if not proof:return True
     evidence,_=_school_material(store,c,row)
     if proof!=_school_first_batch_correction(dict(json.loads(row['plan'])['school_task'],change='update',target_id=''),evidence):return False
@@ -2127,7 +2190,7 @@ def _school_correction_window_current(store,c,row):
     window=[dict(json.loads(v['payload']),ref='message:'+source+':'+v['id']) for v in c.execute('SELECT id,payload FROM agent_messages WHERE source_id=? ORDER BY rowid DESC LIMIT 500',(source,))]
     if not cited<={e['ref'] for e in window} or _school_competing_correction(window,proof):return False
     for entry in window:
-        if entry['ref'] in cited or proof['object'] not in entry['text'] or _publisher(source,entry)!=proof['publisher']:continue
+        if entry['ref'] in cited or not _school_mentions_correction(entry['text'],proof) or _publisher(source,entry)!=proof['publisher']:continue
         try:
             if dt.datetime.fromisoformat(entry['time'])>=dt.datetime.fromisoformat(proof['original_time']):return False
         except (KeyError,ValueError,TypeError):return False
@@ -3665,6 +3728,11 @@ def _refresh_school(app, store, now, budget):
                     context['complete_action_requirements']=compiled_requirements
                 except AgentError as error: source_error=error
             original_key='';known=[]
+            policy_scope=None
+            if not current and not original_parts and row['job_id'].startswith('messages:'):
+                with store._db() as c:policy_scope=_school_legacy_policy_scope(store,c,row,evidence)
+                if not policy_scope:continue
+                value['legacy_policy_scope']=policy_scope
             if original_parts and not reference and not source_error:
                 try:
                     with store._db() as c: original_key,known=_school_original_known(store,c,dict(row,evidence=_json([dict(ref=e['ref']) for e in reading_evidence])))
@@ -3692,7 +3760,7 @@ def _refresh_school(app, store, now, budget):
                     raise AgentError('学校消息原文暂不可读取') from source_error
                 # Revoked, detached, corrected or dismissed between the claim and the call: no model round at all.
                 with store._db() as c:
-                    intact=_school_current(store,c,row,evidence,page_key,pdf_key,material_key) and (not original_parts or _school_original_known(store,c,row)[0]==original_key) and _school_pdf_mapping_intact(store,c,row,mapping_scope) and (not legacy_correction or _school_legacy_batch_correction(store,c,row,evidence)==legacy_correction)
+                    intact=_school_current(store,c,row,evidence,page_key,pdf_key,material_key) and (not original_parts or _school_original_known(store,c,row)[0]==original_key) and _school_pdf_mapping_intact(store,c,row,mapping_scope) and (not legacy_correction or _school_legacy_batch_correction(store,c,row,evidence)==legacy_correction) and (not policy_scope or _school_legacy_policy_scope(store,c,row,evidence)==policy_scope)
                     if not intact: _discard_job(c,key,fp)
                 if not intact: continue
                 if reference: brief=dict(reference)
@@ -3763,9 +3831,10 @@ def _refresh_school(app, store, now, budget):
                     for field in ('school_learning','school_goal_id'): plan.pop(field,None)
                 plan['school_task']=brief
                 if not current:plan['school_previous_policy']=copy.deepcopy(row)
+                if policy_scope:plan['school_policy_reread_scope']=policy_scope
                 with store._db() as c:
                     c.execute('BEGIN IMMEDIATE')
-                    if not _school_current(store,c,row,evidence,page_key,pdf_key,material_key):
+                    if not _school_current(store,c,row,evidence,page_key,pdf_key,material_key) or policy_scope and _school_legacy_policy_scope(store,c,row,evidence)!=policy_scope:
                         # Candidate, message, binding/authorization, fragments or PDF groups changed while the model ran: drop the result.
                         _discard_job(c,key,fp);continue
                     updated=now.isoformat()
