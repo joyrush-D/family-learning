@@ -164,6 +164,16 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                          (dict(used=1,failed=1,created=0),1,0,before))
         self.assertIn('截取或重复分配',self.rows("SELECT error FROM agent_jobs WHERE id LIKE 'school-task:%'")[0][0])
 
+    def test_requirement_outer_whitespace_is_frozen_without_losing_internal_standards(self):
+        requirement='数学：2026-02-12前完成第1至3题。\n第3题写明单位；第4题选做，须用两种方法。'
+        ident,_,keys=self.required_image(['  '+requirement+'\n'])
+        ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
+        part='material:'+'b'*32+'@'+ref+':requirement:'+agent._hash(requirement)[:16]
+        reply={'actions':[dict(draft(goal='简短摘要'),due='2026-02-12',existing_item_id=ident,
+            basis=[dict(part=part,text=requirement+'\n')])]}
+        result,calls=self.refresh(reply)
+        self.assertEqual((result['created'],len(calls),self.item(ident)['body']),(1,1,requirement))
+
     def test_missing_independent_requirement_fails_the_whole_round(self):
         requirements=['数学：2026-02-12前完成第1至3题并写明单位。','数学：2026-02-13前复习错题本第1至2题，并写出订正过程。']
         ident,parts,keys=self.required_image(requirements);before=self.item(ident)

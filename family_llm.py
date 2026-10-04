@@ -337,7 +337,9 @@ def validate_school_material(value, *, original_ids=(), require_requirements=Fal
                 requirement_chars+=sum(len(r) for r in requirements)
                 if requirement_chars>4000:
                     raise LLMDraftError('学校完整行动要求超过本轮限额，未截断，请分次或手动核对')
-                checked[ident]['requirements']=list(requirements)
+                # Freeze only outer whitespace once; preserve all internal words,
+                # punctuation and line breaks for exact later action mapping.
+                checked[ident]['requirements']=[r.strip() for r in requirements]
         ordered=[checked[i] for i in ids]
         summary=dict(title=ordered[0]['title'] if len(ids)==1 else '学校资料（共%d份）'%len(ids),
                      note='\n'.join(o['note'] for o in ordered),
