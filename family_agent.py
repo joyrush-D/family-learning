@@ -311,11 +311,14 @@ def _reference_brief(evidence):
     if texts and not any(e.get('unread') or e.get('content_incomplete') for e in evidence) and all(status_only(text) for text in texts):
         return dict(title='学校作业反馈或资料进度',goal='原文仅说明作业反馈或材料状态，没有新增完成要求。',advice='',state='reference',reason='不能把反馈、完成情况或待发资料改写为新的作业。',policy=SCHOOL_TASK_POLICY)
     def resource_request(text):
-        # ponytail: explicit resource questions only; quoted or mixed instructions stay in normal review.
-        return (len(text)<=500 and re.match(r'^(?:请问[，,：:\s]*)?(?:(?:有没有|有哪位|哪位)家长|谁有)',text)
-                and re.search(r'课本|教材|页面|页|照片|资料|讲义|练习|作业|图片|记录表|课件|文件',text)
-                and re.search(r'发(?:一?下|我|到群|给)|拍(?:一?下|照|张)|分享|借|提供',text)
-                and not re.search(r'(?:老师(?:说|让|要求|布置)|请(?:同学们|全体|全班|大家))[^。！？\n]{0,80}(?:完成|提交|上交|准备|携带|带来|抄写|背诵|练习)',text))
+        # Only a complete resource question can override a model proposal. A
+        # request at the start says nothing about independent actions after it.
+        material=r'课本|教材|页面|页|照片|资料|讲义|练习册|练习|作业|图片|观察记录|记录表|课件|文件'
+        sending=r'(?:发(?:一?下|我(?:一下)?|到群(?:里)?|给我(?:一下)?)|拍(?:一?下|照|张(?:照片)?)|分享(?:一下)?|借(?:一下)?|提供(?:一下)?)'
+        question=r'(?:请问[，,：:\s]*)?(?:(?:有没有|有哪位|哪位)家长|谁有)[^。！？!?；;：:\n，,]{0,180}?(?:'+material+r')(?:吗|么|呀|啊|呢)?'
+        continuation=r'(?:(?:请|麻烦|能|可以|帮忙|方便的话)?'+sending+r'(?:吗|么|好吗)?|谢谢(?:大家|老师)?|多谢|急用)'
+        return (len(text)<=500 and re.fullmatch(question+r'(?:[。！？!?；;，,\s]*'+continuation+r')*[。！？!?；;，,\s]*',text)
+                and re.search(sending,text))
     if texts and not any(e.get('unread') or e.get('content_incomplete') for e in evidence) and all(resource_request(text) for text in texts):
         return dict(title='群内资料求助',goal='本条是在询问资料，尚未给出本家庭须完成的学校要求。',advice='',state='reference',reason='只有向群友索要资料的请求，不能据此给孩子新增待办或学习目标。',policy=SCHOOL_TASK_POLICY)
     return None
