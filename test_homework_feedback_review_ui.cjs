@@ -6,12 +6,57 @@ const net=require('node:net');
 const {setTimeout:delay}=require('node:timers/promises');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 async function eventually(fn,label){for(let n=0;n<250;n++){if(await fn())return;await delay(40)}throw Error('Timed out: '+label)}
+async function threeAttemptSave(page,path,button,error,success,read){
+ const bodies=[],results=[],before=await read();
+ await page.route('**'+path,async route=>{
+  bodies.push(route.request().postDataJSON());
+  if(bodies.length===1)return route.fulfill({status:503,json:{error:'虚构未写入失败'}});
+  const response=await route.fetch(),value=await response.json();assert.equal(response.status(),200);results.push(value);
+  return bodies.length===2?route.fulfill({status:503,json:{error:'虚构写入成功但回执丢失'}}):route.fulfill({response,json:value});
+ });
+ try{
+  await button.click();await eventually(error,'no-write failure');assert.deepEqual((await read()).records,before.records);
+  await button.click();await eventually(error,'lost receipt retained');assert.equal((await read()).records.length,before.records.length+1);
+  await button.click();await eventually(success,'same numbered retry saved');
+ }finally{await page.unroute('**'+path)}
+ assert.equal(bodies.length,3);assert.deepEqual(bodies[0],bodies[1]);assert.deepEqual(bodies[1],bodies[2]);assert(bodies[0].request_key);
+ const id=value=>path==='/api/wrong/save'?value.saved?.[0]?.id:value.record_id??value.id;
+ assert(Number.isInteger(id(results[1])));assert.equal(id(results[0]),id(results[1]));assert.equal(path==='/api/wrong/save'?results[1].saved?.[0]?.existing:results[1].replayed,true);
+ assert.equal((await read()).records.length,before.records.length+1);return {record_id:id(results[1]),request_key:bodies[0].request_key};
+}
 async function server(){
  const socket=net.createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');const port=socket.address().port;await new Promise(r=>socket.close(r));
  const env={...process.env};for(const k of Object.keys(env))if(k.startsWith('FAMILY_'))delete env[k];
  // The fault stays in this disposable demo process; no worker or household printer is started.
- const setup=`import runpy,sys,json
+ const setup=`import runpy,sys,json,copy
 import app
+cause_raw=dict(items=[dict(label='虚构甲卷第1题',question='虚构甲卷第1题：2+3=?',student_answer='4',answer='教师参考：5',judgment='incorrect',question_kind='objective',error_reason='卷面作答4与核对答案5不同。',possible_cause='',steps='先独立重算2+3，再对照核对答案。',uncertainty='')],coverage='仅虚构甲卷第1题，其余未检查。')
+cause_calls=[]
+validator=app.family_llm.homework_reference_draft
+def mock_chat(messages,schema,name,timeout,**kwargs):
+    assert app.DATA.name.startswith('family-demo-') and name=='family_homework_reference'
+    content=messages[-1]['content']
+    texts=[part['text'] for part in content if part.get('type')=='text']
+    assert any('虚构错因独立校验' in text and '2+3' in text for text in texts)
+    assert any('教师参考原文' in text and '2+3=5' in text for text in texts)
+    assert any('原作答家长说明' in text and '最终作答4' in text for text in texts)
+    assert sum(part.get('type')=='image_url' for part in content)==1
+    cause_calls.append(dict(raw=copy.deepcopy(cause_raw)))
+    return cause_calls[-1]['raw']
+def traced_validator(*args,**kwargs):
+    result=validator(*args,**kwargs)
+    assert cause_calls[-1]['raw']==cause_raw
+    cause_calls[-1]['validated']=copy.deepcopy(result)
+    return result
+app.family_llm._chat_json=mock_chat
+app.family_llm.homework_reference_draft=traced_validator
+get=app.Handler.do_GET
+def fixture_get(self):
+    if self.path=='/__fixture/cause-validator':
+        assert app.DATA.name.startswith('family-demo-')
+        return self.reply(200,dict(synthetic_only=True,shared_validator=True,real_model_calls=0,calls=cause_calls))
+    return get(self)
+app.Handler.do_GET=fixture_get
 original=app.family_print.PrintStore._convert
 app.printer_config=lambda:dict(printers=[dict(name='Synthetic_Printer',label='虚构打印机',color=False,duplex=False)],error='')
 def unlink_after_conversion(store,data,name,directory):
@@ -366,6 +411,48 @@ runpy.run_path('demo.py',run_name='__main__')`;
     await p.locator('#taskDialog [data-close="taskDialog"]').click();assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),false);
    }finally{releaseDraft();releaseUpload();for(const release of sourceGates.values())release();await p.unroute(sourcesPattern);await p.unroute('**/api/print/homework/draft');if(outcome==='success')await p.unroute('**/api/upload')}
   }
+  // Calibration-only regression: fixed model raw, real shared validator and real save endpoints.
+  // The synthetic image is readable fixture material; this does not test OCR or model accuracy.
+  const readCause=async()=>await(await fetch(host.url+'api/state')).json();state=await readCause();
+  const causeTask=(await post('api/task/new',{child,title:'虚构错因独立校验 '+width,category:'homework',action:'虚构错因独立校验：虚构甲卷第1题，2+3=?，对照本卷教师参考核对最终作答。',due:state.today})).task;
+  const openCause=async()=>{await p.locator('nav [data-page=tasks]').click();await p.locator('body[data-page=tasks] #task-group-homework').waitFor();await p.locator('[data-task-box=Inbox]').click();await p.locator('#content [data-task="'+causeTask.id+'"]:visible').first().click();await p.locator('#taskDialog[open]').waitFor()};
+  const sheet=await browser.newPage({viewport:{width:500,height:240}});
+  await sheet.setContent('<html><body style="font:24px sans-serif;background:white;color:black"><h2>SYNTHETIC PAPER A</h2><p>Question 1: 2 + 3 = ?</p><p>Student final answer: 4</p></body></html>');
+  const causeImage=await sheet.screenshot();await sheet.close();await p.reload();await openCause();
+  await p.locator('#taskForm [name=note]').fill('虚构甲卷第1题，完整题面2+3=?，孩子最终作答4。');
+  await p.locator('#cameraInput').setInputFiles({name:'synthetic-cause-answer-'+width+'.png',mimeType:'image/png',buffer:causeImage});await p.locator('#pendingUploads img').waitFor();
+  const teacherName='synthetic-cause-teacher-'+width+'.txt';
+  await p.locator('#fileInput').setInputFiles({name:teacherName,mimeType:'text/plain',buffer:Buffer.from('虚构甲卷第1题：2+3=5。\n')});await p.locator('#pendingUploads').getByText(teacherName,{exact:false}).waitFor();
+  const causeOriginal=await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),readCause);
+  state=await readCause();const originalCauseRecord=state.records.find(r=>r.id===causeOriginal.record_id),causeSources=originalCauseRecord.attachments.map(id=>state.uploads.find(a=>a.id===id));
+  const causePhoto=causeSources.find(a=>a.mime==='image/png'),causeTeacher=causeSources.find(a=>a.name===teacherName);assert(causePhoto&&causeTeacher);
+  const causePanel=p.locator('#taskFeedbackHistory [data-homework-review="'+causeOriginal.record_id+'"]');await causePanel.locator(':scope > details > summary').click();
+  await causePanel.locator('[data-review-source="'+causePhoto.id+'"] [data-homework-review-photo]').check();
+  const teacherRow=causePanel.locator('[data-review-source="'+causeTeacher.id+'"]');await teacherRow.waitFor();assert.equal(await teacherRow.locator('[data-homework-review-role]').inputValue(),'reference');await teacherRow.locator('[data-homework-review-photo]').check();
+  const validatorBefore=await(await fetch(host.url+'__fixture/cause-validator')).json();let causeReply,causeRequest;
+  await p.route('**/api/print/homework/draft',async route=>{causeRequest=route.request().postDataJSON();const response=await route.fetch();assert.equal(response.status(),200);causeReply=await response.json();await route.fulfill({response,json:causeReply})});
+  await causePanel.locator('[data-homework-review-run]').click();await eventually(async()=>!!causeReply,'real validator response');await p.unroute('**/api/print/homework/draft');
+  assert.deepEqual(causeRequest.question_sources,[{type:'upload',id:causePhoto.id}]);assert.deepEqual(causeRequest.reference_sources,[{type:'upload',id:causeTeacher.id}]);assert.deepEqual(causeRequest.previous_sources,[]);
+  assert.equal(causeReply.draft.items,1);assert.equal(causeReply.draft.wrong_items,1);assert.equal(causeReply.draft.unknown_items,0);
+  const causeQuestion=causeReply.draft.questions[0];assert.equal(causeQuestion.judgment,'incorrect');assert.equal(causeQuestion.question,'虚构甲卷第1题：2+3=?');assert.equal(causeQuestion.student_answer,'4');assert.equal(causeQuestion.answer,'教师参考：5');assert.equal(causeQuestion.possible_cause,'');assert.equal(causeQuestion.uncertainty,'');assert(causeQuestion.error_reason&&causeQuestion.steps);
+  const validatorAfter=await(await fetch(host.url+'__fixture/cause-validator')).json();assert(validatorAfter.synthetic_only&&validatorAfter.shared_validator);assert.equal(validatorAfter.real_model_calls,0);assert.equal(validatorAfter.calls.length,validatorBefore.calls.length+1);assert.deepEqual(validatorAfter.calls.at(-1).validated,causeReply.draft);assert.equal(validatorAfter.calls.at(-1).raw.items[0].possible_cause,'');assert.equal(validatorAfter.calls.at(-1).raw.items[0].question_kind,'objective');
+  await eventually(async()=>/1题 · 1题需订正 · 0题未判定/.test(await causePanel.locator('[data-homework-review-status]').innerText()),'verified error survives unknown cause');assert.match(await causePanel.locator('.homework-review-questions').innerText(),/需要订正/);
+  assert.equal((await readCause()).records.filter(r=>r.source==='错题照片核对'&&r.linked_task_id===causeTask.id).length,0,'AI draft does not automatically create a wrong item');
+  await causePanel.locator('[data-homework-review-confirm]').check();await causePanel.locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await causePanel.innerText()),'validated result staged for explicit save');
+  const causeReview=await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),readCause);
+  state=await readCause();const savedCauseReview=state.records.find(r=>r.id===causeReview.record_id);assert.equal(savedCauseReview.related_record_id,causeOriginal.record_id);assert.equal(savedCauseReview.followup_kind,'作业检查');
+  assert.equal(state.records.filter(r=>r.source==='错题照片核对'&&r.linked_task_id===causeTask.id).length,0,'saving a reviewed opinion still does not create a wrong item automatically');
+  const causeWrong=p.locator('#taskFeedbackHistory [data-task-wrong-form="'+causeOriginal.record_id+'"]');await causeWrong.locator(':scope > summary').click();
+  await causeWrong.locator('[data-wrong-field=label]').fill('虚构甲卷第1题');await causeWrong.locator('[data-wrong-field=text]').fill('2+3=?');await causeWrong.locator('[data-wrong-field=answer]').fill('4');await causeWrong.locator('[data-wrong-field=correction]').fill('5');
+  const causeWrongSaved=await threeAttemptSave(p,'/api/wrong/save',causeWrong.locator('[data-task-wrong-save]'),async()=>/结果尚未核对/.test(await causeWrong.innerText()),async()=>/错题已保存在这份作业下/.test(await p.locator('#taskFeedbackStatus').innerText()),readCause);
+  const causeWrongCard=p.locator('#taskFeedbackHistory .task-feedback-record').filter({has:p.locator('[data-record="'+causeWrongSaved.record_id+'"]')});await causeWrongCard.locator('[data-followup]').click();await p.locator('#recordDialog[open]').waitFor();
+  const causeCorrectionForm=p.locator('#recordForm'),causeCorrectionNote='虚构：第1题已订正为5；错因未确认，独立复测待做。';assert.equal(await causeCorrectionForm.locator('[name=followup_kind]').inputValue(),'订正');assert.equal(await causeCorrectionForm.locator('[name=related_record_id]').inputValue(),String(causeWrongSaved.record_id));await causeCorrectionForm.locator('[name=note]').fill(causeCorrectionNote);
+  const causeCorrection=await threeAttemptSave(p,'/api/record',causeCorrectionForm.locator('[type=submit]'),async()=>/虚构/.test(await p.locator('#recordError').innerText()),async()=>!await p.locator('#recordDialog').evaluate(x=>x.open),readCause);
+  await p.reload();await openCause();await p.locator('#taskFeedbackHistory').getByText(causeCorrectionNote,{exact:false}).waitFor();
+  const reopenedCause=p.locator('[data-saved-homework-review="'+causeReview.record_id+'"] [data-saved-review-text]');await eventually(async()=>await reopenedCause.innerText()===causeReply.draft.text,'real calibrated opinion reopens unchanged');assert.match(await reopenedCause.innerText(),/卷面作答：4/);assert.match(await reopenedCause.innerText(),/教师参考：5/);
+  state=await readCause();const finalWrong=state.records.find(r=>r.id===causeWrongSaved.record_id),finalCorrection=state.records.find(r=>r.id===causeCorrection.record_id);assert.equal(finalWrong.related_record_id,causeOriginal.record_id);assert.equal(finalCorrection.related_record_id,finalWrong.id);for(const r of [finalWrong,finalCorrection]){assert.equal(r.child,child);assert.equal(r.linked_task_id,causeTask.id)}assert.equal(finalCorrection.followup_kind,'订正');assert.equal(state.tasks.find(t=>t.id===causeTask.id).update,null);assert.deepEqual(state.printing.jobs.map(j=>j.id).sort(),printIdsBeforeChecks);
+  assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);
+  if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.writeFile(path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'cause-validator-'+width+'.json'),JSON.stringify({scope:'mock raw through real shared validator; not OCR/model accuracy',request:causeRequest,validator:validatorAfter.calls.at(-1),feedback:causeReview,wrong:causeWrongSaved,correction:causeCorrection},null,2));await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'cause-reopened-'+width+'.png')})}
   assert.deepEqual(errors,[]);await p.close();
  }
  console.log('Homework feedback AI review: 360/1440 save, retry, reopen, task status and source preserved');

@@ -75,7 +75,8 @@ class HomeworkCauseTests(unittest.TestCase):
         cases={'missing_answer':dict(student_answer=''),
                'missing_reference':dict(answer=''),
                'reference_conflict':dict(uncertainty='教师参考与可见题面冲突，待核对。'),
-               'missing_error_evidence':dict(error_reason='')}
+               'missing_error_evidence':dict(error_reason=''),
+               'missing_correction_steps':dict(steps='')}
         for review in (False,True):
             for name,changes in cases.items():
                 with self.subTest(review=review,missing=name):
