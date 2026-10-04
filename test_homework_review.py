@@ -472,6 +472,38 @@ def run():
                     else: raise AssertionError('an absent database must not be initialized by a preview')
                 assert not missing_db.exists()
                 assert model.call_count==0,'saved text preview must never call a model'
+            # Explicitly linked ordinary answers retain provenance; a link decision is
+            # part of the review basis even after moving away and back to the same task.
+            linked_task=app.new_task(dict(child='示例甲',title='虚构关联原作答',category='homework'))
+            moved_task=app.new_task(dict(child='示例甲',title='虚构临时关联',category='homework'))
+            ordinary=app.save_record(dict(child='示例甲',day='2026-10-01',category='学习进展',subject='英语',
+                title='虚构独立甲卷',source='试卷 / 作业核对',note='虚构原答：第1题B',attachments=[answer,reference]))
+            ordinary_id=ordinary['record_id']
+            app.link_record_task(dict(record_id=ordinary_id,child='示例甲',task_id=linked_task['id'],expected_linked_at=''))
+            with app.connect() as c:
+                linked_row=dict(c.execute('SELECT * FROM records WHERE id=?',(ordinary_id,)).fetchone())
+            linked_request=dict(purpose='review',task_id=linked_task['id'],record_id=ordinary_id,
+                expected_created=linked_row['created'],question_sources=[source(answer)],reference_sources=[source(reference)])
+            with patch.object(family_llm,'_chat_json',return_value=dict(items=[item()],coverage='虚构仅第1题')) as model:
+                linked_basis=app.homework_review_draft(linked_request)['review_basis']
+                assert model.call_count==1
+            moved=app.link_record_task(dict(record_id=ordinary_id,child='示例甲',task_id=moved_task['id'],
+                expected_linked_at=linked_row['linked_task_at']))
+            app.link_record_task(dict(record_id=ordinary_id,child='示例甲',task_id=linked_task['id'],
+                expected_linked_at=moved['link']['linked_at']))
+            with app.connect() as c:
+                current=dict(c.execute('SELECT * FROM records WHERE id=?',(ordinary_id,)).fetchone())
+                assert current['created']==linked_row['created'] and current['source']==linked_row['source']
+                assert current['linked_task_at']!=linked_row['linked_task_at']
+                refused(lambda:app.guard_homework_review(c,linked_task['id'],linked_basis,[answer,reference]),'review_basis_changed',409)
+            for kind in ('订正','作业检查'):
+                derived=app.save_record(dict(child='示例甲',day='2026-10-01',category='学习进展',subject='英语',
+                    title='虚构'+kind,source='家长观察',note='虚构后续记录',attachments=[answer],
+                    related_record_id=ordinary_id,followup_kind=kind))
+                with patch.object(family_llm,'_chat_json') as model:
+                    refused(lambda:app.homework_review_draft(linked_request|dict(record_id=derived['record_id'],expected_created=None)),
+                        'review_source_not_allowed',403)
+                    assert model.call_count==0
     print('homework review synthetic checks passed')
 
 
