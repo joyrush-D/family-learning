@@ -2500,9 +2500,17 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
             cited_material=_school_drafts(store,c,item_row)
         cited_page=_page_evidence(cited,cited_pages) if cited_pages else None
         if cited_page and not cited_page['read']: cited_page=None
+        # A native body action has no file scope. Its literal anchor is readable
+        # independently of sibling attachments; captured/OCR fragments stay unknown.
+        action_evidence=[]
+        for e in cited:
+            own=[a for a in anchors if a['ref']==e['ref']]
+            native_text=e.get('kind') in ('text','quote') and own and all(not a['upload_ids'] for a in own)
+            action_evidence.append(dict(e,text='\n'.join(a['quote'] for a in own),unread=False,content_incomplete=False) if native_text else e)
         learning=_school_learning(value,goals)
-        brief=_school_brief(value,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in cited),
-            evidence=cited,school_tasks=targets,pages=cited_page,pdf=cited_pdf,material=cited_material,separate_learning=True)
+        brief=_school_brief(value,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in action_evidence),
+            evidence=action_evidence,school_tasks=targets,pages=cited_page,pdf=cited_pdf,material=cited_material,separate_learning=True)
+        brief['origin_basis']=_school_message_basis(cited)  # Keep the immutable full message for later stale-source checks.
         due=_text(value,'due',10)
         stamps={e['ref']:sent_day(e.get('time')) for e in cited}
         dates=set().union(*(deadlines(a['quote'],stamps.get(a['ref'],'')) for a in anchors))
@@ -2523,8 +2531,8 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         brief['original_actions_revision']=SCHOOL_ORIGINAL_REVISION
         plan=copy.deepcopy(json.loads(old['plan']) if old else json.loads(row['plan']))
         for key in ('school_learning','school_goal_id'): plan.pop(key,None)
-        complete_refs,fragments,_=_school_original_coverage(cited,cited_pdf,cited_material)
-        model_evidence=_school_model_evidence(cited,cited_pdf,cited_material)
+        complete_refs,fragments,_=_school_original_coverage(action_evidence,cited_pdf,cited_material)
+        model_evidence=_school_model_evidence(action_evidence,cited_pdf,cited_material)
         read_requirements=any(not e['content_incomplete'] and (e['ref'] in complete_refs or e.get('text','').strip() and not _link_only(e['text'])) for e in model_evidence)
         if learning and _keeps_learning(brief) and brief['goal'] and read_requirements and not fragments:
             plan['school_learning']=learning
