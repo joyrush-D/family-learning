@@ -119,7 +119,8 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
 
     def test_explicit_admin_material_contrast_does_not_hide_a_positive_learning_requirement(self):
         cases=[('negative','家长：2026-02-13前签字交回活动回执。该回执与数学练习分开，不是作业答题页。','accepted'),
-               ('positive','家长：2026-02-13前完成数学练习第1–3题，再签字交回活动回执。该回执不是作业答题页。','pending')]
+               ('positive','家长：2026-02-13前完成数学练习第1–3题，再签字交回活动回执。该回执不是作业答题页。','pending'),
+               ('submit-both','家长：2026-02-13前回执与数学作业分开提交，家长签字。','pending')]
         for label,note,state in cases:
             with self.subTest(label=label):
                 keys=self.native_notice('admin-'+label)
@@ -136,6 +137,9 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             mixed=agent._school_brief(draft(title='事务：签字交回回执',goal=cases[1][1],purpose='admin'),
                 evidence=[dict(ref='message:qq:synthetic:1',text=cases[1][1],kind='text',unread=False)],separate_learning=separate)
             self.assertEqual(mixed['state'],'review')
+            both=agent._school_brief(draft(title='事务：交回回执',goal=cases[2][1],purpose='admin'),
+                evidence=[dict(ref='message:qq:synthetic:1',text=cases[2][1],kind='text',unread=False)],separate_learning=separate)
+            self.assertEqual(both['state'],'review')
 
     def test_complete_original_keeps_independent_homework_and_receipt(self):
         keys=self.native_notice('independent-original')

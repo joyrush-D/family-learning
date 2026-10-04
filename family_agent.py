@@ -148,7 +148,7 @@ _LEARNING_OBJECT = r'(?:语文|数学|英语|科学|历史|地理|物理|化学|
 _LEARNING_NEGATED_OBJECT = re.compile(r'(?:并?不是|并?非|不属于|不作为)\s*'+_LEARNING_OBJECT)
 # Remove a comparison only when its subject is explicitly an administrative material.
 # A positive “完成练习后签字” or “练习与回执分开提交” still reaches the mixed-action guard.
-_LEARNING_ADMIN_COMPARISON = re.compile(r'(?:该|此|这份)?(?:活动)?(?:回执|登记表|报名表|同意书|确认单|通知书)\s*(?:与|和)\s*'+_LEARNING_OBJECT+r'\s*(?:分开|独立|不同|无关)')
+_LEARNING_ADMIN_COMPARISON = re.compile(r'(?:该|此|这份)?(?:活动)?(?:回执|登记表|报名表|同意书|确认单|通知书)\s*(?:与|和)\s*'+_LEARNING_OBJECT+r'\s*(?:分开|独立|不同|无关)(?=[。；;，,！？!?\s]|$)')
 
 
 def _school_learning_text(parts):
