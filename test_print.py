@@ -110,10 +110,11 @@ class HomeworkReviewTextTests(unittest.TestCase):
             draft=family_llm.homework_reference_draft(dict(mime='image/png',data=png()),review=True,
                 program_coverage=scope,reference_documents=[dict(name='teacher.txt',text='虚构甲卷1题5、2题2')])
         self.assertEqual(raw,original)
-        self.assertEqual(draft['questions'],original['items'])
+        expected=[{k:v for k,v in item.items() if k!='question_kind'} for item in original['items']]
+        self.assertEqual(draft['questions'],expected)
         self.assertEqual((draft['items'],draft['wrong_items'],draft['unknown_items']),(3,1,1))
         lines=draft['text'].splitlines()
-        self.assertEqual(lines[0],'本次核对3题：与参考不同1题，与参考一致1题，未判定1题。')
+        self.assertEqual(lines[0],'本次核对3题：需订正1题，与参考一致1题，未判定1题。')
         for item in original['items']:
             self.assertEqual(draft['text'].count(item['label']),1)
         self.assertEqual(draft['text'].count('卷面作答：'),3)
