@@ -26,6 +26,17 @@ RAW=dict(items=[dict(label='虚构甲卷第1题',question='2+3=?',student_answer
 
 
 class TextQuestionContractTests(unittest.TestCase):
+    def test_complete_text_choice_and_reading_use_text_evidence(self):
+        documents=[dict(name='synthetic-choice.txt',text='虚构甲卷第1题：2+3=? A.4 B.5 C.6\n实际作答：B'),
+                   dict(name='synthetic-reading.docx',text='虚构甲卷第2题：原文“周一小林去了图书馆。” 问：小林何时去图书馆？\n实际作答：周一')]
+        with patch.object(family_llm,'_chat_json',return_value=json.loads(json.dumps(RAW))) as model:
+            family_llm.homework_reference_draft([],review=True,question_documents=documents)
+        prompt=model.call_args.args[0][0]['content']
+        self.assertNotIn('在这些图片中缺失时',prompt)
+        self.assertIn('在本次明确提供的题目/作答原件（图片或文字）中缺失时',prompt)
+        self.assertIn('不能从常识猜答案，judgment写unknown',prompt)
+        self.assertFalse(any(p['type']=='image_url' for p in model.call_args.args[0][1]['content']))
+
     def test_only_text_question_is_separate_from_teacher_and_parent_note(self):
         q=dict(name='synthetic-paper.docx',text=QUESTION);r=dict(name='synthetic-teacher.txt',text=REFERENCE)
         raw=json.loads(json.dumps(RAW))
