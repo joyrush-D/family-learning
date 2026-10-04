@@ -1945,9 +1945,9 @@ def _school_admin_native_date(goal,evidence):
     native=re.match(r'^请(?:各位)?家长\s*('+dated+r')\s*'+qualifier+r'\s*((?:完成|核对|打印|签字|盖章|交回|提交)[^。；;\n]{3,180})(?=[。；;\n]|$)',entry.get('text','').strip())
     if not native:return goal
     from family_agenda import deadlines,sent_day
-    dates=deadlines(native[1],sent_day(entry['time']))
+    dates=deadlines(native[1]+native[3],sent_day(entry['time']))
     current=re.match(r'^(?:家长[：:]\s*)?(?P<date>'+dated+r')\s*'+qualifier+r'\s*'+re.escape(native[3])+r'(?=[。；;\n]|$)',goal)
-    if len(dates)!=1 or not current or deadlines(current['date'],sent_day(entry['time']))!=dates:return goal
+    if len(dates)!=1 or not current or deadlines(current['date']+native[3],sent_day(entry['time']))!=dates:return goal
     return goal[:current.start('date')]+next(iter(dates))+(native[2] or '')+native[3]+goal[current.end():]
 
 
