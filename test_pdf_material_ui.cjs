@@ -219,7 +219,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
    const basis=autoResources.locator('[data-task-material-scope="action"]');await basis.waitFor();
    assert.match(await basis.innerText(),/AI 已整理 · 本项资料/);
    assert.equal(await basis.locator('.task-material-text').count(),0,'the task conclusion is not repeated as raw source quotes');
-   assert.match(await basis.locator('[data-task-material-pages]').innerText(),/第 1、2、3 页/);
+   assert.match(await basis.locator('[data-task-material-pages]').innerText(),/第 1、2、3、4、5、6、7、8、9、10、11 页/,'identical complete requirements retain all actual supporting page groups');
    assert.equal(await autoResources.locator('[data-school-pdf-document]').count(),1,'one task keeps only its own original preparation');
    assert.match(await autoResources.innerText(),/原件整理：全部 11 页已整理/);
    assert((await autoResources.innerText()).includes(own.name));assert(!(await autoResources.innerText()).includes(other.name));assert(!(await autoResources.innerText()).includes(otherQuote));
