@@ -941,7 +941,7 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(row,dict(c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone()))
             self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
 
-    def test_school_semantic_upgrade_rereads_old_admin_rejection_and_preserves_payload(self):
+    def _legacy_admin_rejection(self):
         self.now=dt.datetime(2026,10,4,10,tzinfo=agent.TZ);self.config()
         text='请家长后天完成学校通讯录中的紧急联系电话核对；有误就在学校通讯录中修改，无误点“已核对”。不要在班级群发布电话号码或核对截图，不用让孩子抄写。'
         payload=self.payload();payload['messages'][0].update(time='2026-10-03T16:20:00+08:00',text=text);self.store.ingest(payload)
@@ -954,6 +954,10 @@ class AgentTests(unittest.TestCase):
         self.store._save(key,fp,items,self.now,[(self.source['id'],'11')])
         with self.app.connect() as c:old=dict(c.execute('SELECT * FROM agent_items').fetchone())
         result=dict(title=proposal['task_title'],goal=text,advice='',state='ready',reason='原文为独立家长核对事务，孩子抄写被明确否定。',change='new',target_id='',purpose='admin',submission='',learning_subject='',learning_goal_id='')
+        return old,key,fp,result
+
+    def test_school_semantic_upgrade_rereads_old_admin_rejection_and_preserves_payload(self):
+        old,key,fp,result=self._legacy_admin_rejection()
         with patch.object(agent.family_llm,'_chat_json',return_value=result) as model:
             self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1),dict(used=1,failed=0,created=1))
             self.assertEqual(agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=1),1),dict(used=0,failed=0,created=0))
@@ -964,6 +968,28 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(plan['school_previous_policy'],old);self.assertIn('不用让孩子抄写',saved['body'])
             self.assertNotIn('school_learning',plan)
             self.assertEqual(tuple(c.execute('SELECT fingerprint,done FROM agent_jobs WHERE id=?',(key,)).fetchone()),(fp,1))
+
+    def test_legacy_admin_upgrade_rejects_later_cancellation_without_a_model_call(self):
+        old,key,fp,result=self._legacy_admin_rejection()
+        payload=self.payload(expected='11',cursor='12');payload['messages']=[dict(id='12',time='2026-10-04T09:00:00+08:00',kind='text',sender='虚构发布者',sender_id='synthetic-a',text='取消学校通讯录紧急联系电话核对。',unread=False)]
+        # Preserve the native publisher rather than relying on its display name.
+        with self.app.connect() as c:original=json.loads(c.execute('SELECT payload FROM agent_messages WHERE id=?',('11',)).fetchone()[0])
+        payload['messages'][0].update(sender=original['sender'],sender_id=original['sender_id']);self.store.ingest(payload)
+        with patch.object(agent.family_llm,'_chat_json',return_value=result) as model:
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1),dict(used=0,failed=0,created=0))
+        model.assert_not_called()
+        with self.app.connect() as c:
+            self.assertEqual(old,dict(c.execute('SELECT * FROM agent_items WHERE id=?',(old['id'],)).fetchone()))
+            self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
+
+    def test_legacy_correction_does_not_ignore_an_ambiguous_number_only_supplement(self):
+        row,key,fp,evidence=self._legacy_initial_correction()
+        payload=self.payload(expected='12',cursor='13');payload['messages']=[dict(id='13',time='2026-10-04T09:00:00+08:00',kind='text',sender='虚构发布者',sender_id='synthetic-a',text='补发第二项：A栏填写两种方法并写单位。',unread=False)]
+        self.store.ingest(payload)
+        with patch.object(agent.family_llm,'_chat_json',side_effect=self._legacy_mapping(row,evidence)) as model:
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1),dict(used=0,failed=0,created=0))
+        model.assert_not_called()
+        with self.app.connect() as c:self.assertEqual(row,dict(c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone()))
 
     def test_legacy_correction_does_not_recover_an_ambiguous_initial_batch(self):
         row,key,fp,evidence=self._legacy_initial_correction(duplicate=True)
