@@ -19,6 +19,9 @@ class SchoolAckOriginalTests(unittest.TestCase):
         self.addCleanup(self.fixture.doCleanups)
         self.app,self.store,self.now=self.fixture.app,self.fixture.store,self.fixture.now
         self.source=self.fixture.source
+        # WAL lets a second session commit while the eligibility reader retains
+        # its snapshot. A rollback-journal reader would block that writer instead.
+        with self.store._db() as c:c.execute('PRAGMA journal_mode=WAL')
         self.stack=ExitStack();self.addCleanup(self.stack.close)
         self.stack.enter_context(patch('family_qq_capture.run_one',return_value=dict(state='disabled')))
         self.stack.enter_context(patch.object(agent.family_teacher_public,'run_one',return_value=dict(state='disabled')))
@@ -193,6 +196,21 @@ class SchoolAckOriginalTests(unittest.TestCase):
         with self.store._db() as c:
             self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_items WHERE job_id LIKE 'school-ack-originals:%'").fetchone()[0],0)
             self.assertEqual(c.execute("SELECT state FROM agent_items WHERE job_id='synthetic-between-checks'").fetchone()[0],'dismissed')
+
+    def test_attachment_removed_between_eligibility_and_basis_cannot_seed_stale_pointer(self):
+        values=self._input();keys=self._original(values);self._legacy(values)
+        real=agent._history_context;changed=False
+        def intervene(store,c,source,values,key,**kw):
+            nonlocal changed
+            if not changed:
+                changed=True;self.store.message_attachment(dict(keys,action='detach'),dict)
+            return real(store,c,source,values,key,**kw)
+        with patch.object(agent,'_history_context',side_effect=intervene):
+            result=agent._recover_school_ack_originals(self.store,self.store._config(),self.now)
+        self.assertEqual((result['created'],result['failed']),(0,1))
+        with self.store._db() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_message_attachments').fetchone()[0],0)
 
 
 if __name__=='__main__':unittest.main()
