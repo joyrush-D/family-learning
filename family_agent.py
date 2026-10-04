@@ -2427,6 +2427,13 @@ def _school_drafts(store, c, row):
             if value['complete']: complete.append(quote['ref'])
             for draft in selected:
                 bounded={}
+                if 'requirements' in draft:
+                    # Whole action requirements are executable input, not background prose.
+                    # Refuse an over-budget list rather than silently clipping a standard.
+                    requirements=list(draft['requirements'])
+                    length=sum(map(len,requirements))
+                    if length>remaining: raise AgentError('原件完整行动要求超过本轮读取范围，原要求保留')
+                    bounded['requirements']=requirements;remaining-=length
                 for key in ('title','note','uncertainties'):
                     parts=draft[key] if key=='uncertainties' else [draft[key]];sent=[]
                     for part in parts:
@@ -2459,7 +2466,7 @@ def _discard_job(c, key, fp):
     c.execute("UPDATE agent_jobs SET done=1,error='',next_try='',fingerprint=? WHERE id=? AND fingerprint=?",('discarded:'+fp,key,fp))
 
 
-SCHOOL_ORIGINAL_REVISION=1
+SCHOOL_ORIGINAL_REVISION=2
 
 
 def _school_original_parts(evidence, pdf, material):
@@ -2474,8 +2481,45 @@ def _school_original_parts(evidence, pdf, material):
                 ref=doc['ref'],upload_ids=[doc['upload_id']],pages=group['pages'],text=group['text']))
     for entry in (material or {}).get('model',[]):
         part_id='material:'+entry['original_id']+'@'+entry['ref'] if entry.get('original_id') else 'material:'+entry['ref']
-        parts.append(dict(id=part_id,ref=entry['ref'],upload_ids=entry.get('upload_ids',[]),pages=[],text=entry['draft']['note']))
+        requirements=entry['draft'].get('requirements')
+        if requirements is None:
+            parts.append(dict(id=part_id,ref=entry['ref'],upload_ids=entry.get('upload_ids',[]),pages=[],text=entry['draft']['note']))
+        elif requirements:
+            for text in requirements:
+                parts.append(dict(id=part_id+':requirement:'+_hash(text)[:16],ref=entry['ref'],
+                    upload_ids=entry.get('upload_ids',[]),pages=[],text=text,requirement=True))
+        else:
+            parts.append(dict(id=part_id+':background',ref=entry['ref'],upload_ids=entry.get('upload_ids',[]),
+                pages=[],text=entry['draft']['note'],background_only=True))
     return parts
+
+
+def _school_requirement_goal(value, texts):
+    """Compile already-read complete requirements; a later free summary cannot remove them."""
+    lines=[]
+    for text in texts:
+        if text and not any(text in old for old in lines): lines.append(text)
+    goal='\n'.join(lines)
+    if not goal or len(goal)>TASK_BRIEF_SCHEMA['properties']['goal']['maxLength']:
+        raise AgentError('本项完整行动要求超过可保存范围，原要求保留')
+    # A requirement includes its completion/submission conditions. Do not add a
+    # second unconstrained submission summary (for example a blank date field).
+    return dict(value,goal=goal,submission='')
+
+
+def _school_saved_requirements(row, parts):
+    """A pending refinement must still use exactly the requirements behind its original action."""
+    action=json.loads(row['plan']).get('school_original_action',{})
+    saved=action.get('requirements')
+    if not saved: return None
+    lookup={p['id']:p for p in parts};texts=[]
+    for original in saved:
+        current=lookup.get(original['id'])
+        if not current or not current.get('requirement') or any(current[k]!=original[k] for k in ('ref','upload_ids','text')):
+            raise AgentError('原件完整行动要求已变化，原内容与决定保留')
+    for anchor in action['anchors']:
+        texts.append(anchor['quote'])
+    return texts
 
 
 def _school_original_known(store,c,row):
@@ -2516,7 +2560,8 @@ def _school_original_prompt(pages,pdf,material):
     return prompt+'\n本轮返回actions数组（最多36项），逐项写清科目/事务、动作、范围、完成标准和各自due；一份原件可以含多个独立要求，不能只返回其中一项。完成该作业后的打印、签字、交回仍放该作业goal/submission；另一份独立回执单列行政事项。每项basis逐字引用original_parts里含本项动作和对象的文字，part选该段id；摘要仍是Agent参考，不是老师逐字原话。日期必须由本项basis支持，不能借另一项日期。截止没写due留空，不能猜今天。existing_actions中的同一行动用existing_item_id，不新增或恢复accepted/dismissed；当前candidate_id须恰好返回一次，不默认将数组第一项当原候选。新独立行动existing_item_id留空。原件范围、学习/行政、必做/选做、疑点分别保留；页面已读齐不代表行动理解准确。'+\
         '\n每条basis.text必须是所选part的text中连续的原文子串，字词、标点和换行均保持原样，禁止跳字、改标点或把不连续句子拼成一次引用。需要引用相隔的句子时，用同一个part的多个basis，每条分别连续引用，不能删掉中间的对照说明后拼接。'+\
         '\n表头和空白填写栏不是学校行动要求。例如原件只要求打印、家长签字并交回，仅另设“日期：____”空栏而未明确要求填写日期时，goal和submission都不得新增“填写日期”；仅保留明确要求的打印、签字、交回。'+\
-        '\n每项goal/submission分别保留必做和选做部分明确的具体输出与完成标准，包括方法数量、单位、过程及签字等，并保留各自条件。标题、总范围或笼统的“完成后检查”不能代替这些逐项标准；不得因压缩描述而丢掉要求或条件。题目本身可留在原件中，明确的完成标准仍须写入对应行动。'
+        '\n每项goal/submission分别保留必做和选做部分明确的具体输出与完成标准，包括方法数量、单位、过程及签字等，并保留各自条件。标题、总范围或笼统的“完成后检查”不能代替这些逐项标准；不得因压缩描述而丢掉要求或条件。题目本身可留在原件中，明确的完成标准仍须写入对应行动。'+\
+        '\n带requirement=true的part已经包含一个完整独立行动及条件，后续只映射科目/事务、状态、日期和归属。每个requirement part必须恰好在一项action中被完整引用，basis.text等于该part的完整text，不能只摘一句总范围、跳过标准或遗漏整项；相关要求可以归同一行动，但不能混合不同对象或截止。系统由完整要求生成任务正文，goal的短摘要不能替代它。background_only=true只提供背景/疑点，不能据此返回ready。题面、表头、空白填写栏及材料对照不是新要求。'
 
 
 def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,material,targets,goals,now):
@@ -2525,6 +2570,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
     if not isinstance(result,dict) or set(result)!={'actions'} or not isinstance(result['actions'],list) or not 1<=len(result['actions'])<=SCHOOL_PROPOSAL_LIMIT:
         raise AgentError('原件行动清单结构无法核对')
     lookup={p['id']:p for p in parts};existing={r['id']:r for r in known};used=set();identities=set();output=[]
+    required={p['id'] for p in parts if p.get('requirement')};assigned=set()
     fields=set(TASK_BRIEF_SCHEMA['required'])|{'due','existing_item_id','basis'}
     scope=_hash([row['child_id'],sorted(e['ref'] for e in evidence),sorted({u for p in parts for u in p['upload_ids']})])
     for value in result['actions']:
@@ -2535,14 +2581,22 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         chosen=_text(value,'existing_item_id',80)
         if chosen and (chosen not in existing or chosen in used): raise AgentError('原候选行动对应关系无法核对')
         used.add(chosen) if chosen else None
-        basis=value['basis'];anchors=[]
+        basis=value['basis'];anchors=[];requirements=[];compiled=[]
         if not isinstance(basis,list) or not 1<=len(basis)<=6: raise AgentError('原件行动缺少对应内容')
         for quote in basis:
             if not isinstance(quote,dict) or set(quote)!={'part','text'}: raise AgentError('原件行动依据结构无法核对')
             part=lookup.get(quote['part']);text=_text(quote,'text',2000,True).strip()
             if not part or text not in part['text']: raise AgentError('行动依据不在本轮已读原件范围')
+            if part.get('requirement'):
+                if text!=part['text'] or part['id'] in assigned:
+                    raise AgentError('完整行动要求被截取或重复分配，原要求保留')
+                assigned.add(part['id']);requirements.append({k:part[k] for k in ('id','ref','upload_ids','text')})
+            if part.get('background_only') and value['state']=='ready':
+                raise AgentError('原件背景没有完整行动要求，不能自动新增任务')
+            compiled.append(text)
             anchor=dict(ref=part['ref'],upload_ids=part['upload_ids'],pages=part['pages'],quote=text)
             if anchor not in anchors: anchors.append(anchor)
+        if requirements: value=_school_requirement_goal(value,compiled)
         has_action=any(_LEARNING_ACTIVITY.search(a['quote']) or _LEARNING_ACTION.search(a['quote'])
             or re.search(r'打印|签字|交回|盖章|提交|上传|带|携带|准备|领取|报名|缴|考试|测验|比赛|家长会',a['quote']) for a in anchors)
         reading_gap=bool((pdf or {}).get('uncertainties') or any(d['omitted'] or d['truncated'] for d in (pdf or {}).get('documents',[])) or (material or {}).get('uncertainties'))
@@ -2570,7 +2624,9 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         cited_refs={a['ref'] for a in anchors};cited=[e for e in evidence if e['ref'] in cited_refs]
         item_row=dict(row,evidence=_json([q for q in json.loads(row['evidence']) if q['ref'] in cited_refs]))
         item_plan=copy.deepcopy(json.loads(row['plan']))
-        item_plan['school_original_action']=dict(identity=identity,scope=scope,root_id=row['id'],anchors=anchors)
+        action=dict(identity=identity,scope=scope,root_id=row['id'],anchors=anchors)
+        if requirements: action['requirements']=requirements
+        item_plan['school_original_action']=action
         item_row['plan']=_json(item_plan)
         with store._db() as c:
             _,cited_pages=_school_material(store,c,item_row)
@@ -2622,11 +2678,12 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         if brief['state']=='ready' and due and due<now.date().isoformat():
             brief.update(state='review',reason='原截止日期已过，请核对是否仍需补做；不推定已完成。')
         if plan.get('school_history_uncertain'): brief.update(state='review',reason='旧决定的动作归属仍待核明，原要求与决定保留。')
-        plan['school_original_action']=dict(identity=identity,scope=scope,root_id=row['id'],anchors=anchors)
+        plan['school_original_action']=action
         output.append(dict(id=chosen or 'agent-'+identity[:32],old=old,child_id=row['child_id'],kind='school',
             title=brief['title'] or (old or row)['title'],body=brief['goal'] or (old or row)['body'],due=due,
             evidence=json.loads(item_row['evidence']),plan=plan,brief=brief,reading=cited))
     if row['id'] not in used: raise AgentError('原件清单未保留原候选，整组保留重试')
+    if assigned!=required: raise AgentError('原件完整行动要求未全部分配，整组保留重试')
     activities=[v for v in output if v['brief'].get('purpose')=='learning' and v['brief']['state']=='ready' and v['brief']['change']=='new']
     for item in output:
         brief=item['brief']
@@ -2763,6 +2820,12 @@ def _refresh_school(app, store, now, budget):
             if material:
                 value['material']=material_key;context['school_material']=material['model']
             original_parts=_school_original_parts(evidence,pdf_evidence,material) if (pdf_evidence or material) and not plan.get('school_original_action') else []
+            compiled_requirements=None
+            if plan.get('school_original_action',{}).get('requirements'):
+                try:
+                    compiled_requirements=_school_saved_requirements(row,_school_original_parts(evidence,pdf_evidence,material))
+                    context['complete_action_requirements']=compiled_requirements
+                except AgentError as error: source_error=error
             original_key='';known=[]
             if original_parts and not reference and not source_error:
                 try:
@@ -2810,6 +2873,7 @@ def _refresh_school(app, store, now, budget):
                         schema,'family_school_task',timeout=45,data_path=store.data)
                     if not isinstance(result,dict) or set(result) != set(TASK_BRIEF_SCHEMA['required']): raise AgentError('学校事项结构无法核对')
                     if result['purpose'] not in PURPOSES: raise AgentError('学校事项用途无法核对')
+                    if compiled_requirements is not None: result=_school_requirement_goal(result,compiled_requirements)
                     learning=_school_learning(result,school_goals)
                     brief=_school_brief(result,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in evidence),evidence=evidence,school_tasks=targets,pages=page_evidence,pdf=pdf_evidence,material=material)
                 if page_evidence: brief.setdefault('page_evidence',dict(fingerprint=page_key,read=page_evidence['read'],unread=page_evidence['unread'],omitted=page_evidence['omitted']))['candidate']=candidate
@@ -2823,6 +2887,8 @@ def _refresh_school(app, store, now, budget):
                     texts=[(e['ref'],e['draft']['note']) for e in (material or {}).get('model',[])]
                     texts += [(p['ref'],p['text']) for p in (page_evidence or {}).get('model_pages',[])]
                     texts += [(d['ref'],g['text']) for d in (pdf_evidence or {}).get('model',[]) for g in d['groups']]
+                    if compiled_requirements is not None:
+                        texts=[(a['ref'],a['quote']) for a in plan['school_original_action']['anchors']]
                     dates=set().union(*(family_agenda.deadlines(text,stamps.get(ref,'')) for ref,text in texts))
                     if len(dates)==1:
                         resolved=next(iter(dates))

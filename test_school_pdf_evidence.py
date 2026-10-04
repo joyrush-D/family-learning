@@ -68,13 +68,13 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         ident=self.candidate(keys=keys,ident='two-images')
         math='数学：2026-02-12前完成练习卷第1–3题。'
         receipt='家长事务：2026-02-13前家长签字交回独立活动回执。该回执与数学练习分开，不是作业答题页。'
-        reply=dict(originals=[dict(upload_id=i,title=t,note=n,uncertainties=[]) for i,t,n in
+        reply=dict(originals=[dict(upload_id=i,title=t,note=n,uncertainties=[],requirements=[n]) for i,t,n in
                              zip(images,['数学练习卷','活动回执'],[math,receipt])])
         with patch.object(family_llm,'extract_draft',return_value=reply) as model:
             self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=1,failed=0))
         self.assertEqual(model.call_args.kwargs['original_ids'],images)
         ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
-        part_ids=['material:'+i+'@'+ref for i in images]
+        part_ids=['material:'+i+'@'+ref+':requirement:'+agent._hash(n)[:16] for i,n in zip(images,[math,receipt])]
         with self.store._db() as c:
             row=self.item(ident);evidence,_=agent._school_material(self.store,c,row)
             material=agent._school_drafts(self.store,c,row)
@@ -116,6 +116,106 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             whole=agent._school_drafts(self.store,c,row)
         self.assertEqual(selected['uncertainties'],[])
         self.assertEqual(whole['uncertainties'],['回执下方小字模糊'])
+
+    def required_image(self, requirements, ident='required-image'):
+        from test_media import png
+        upload='b'*32;body=png(64,96)
+        (self.data/'uploads'/upload).write_bytes(body)
+        with self.store._db() as c:
+            c.execute('INSERT INTO uploads(id,name,size,mime,created) VALUES(?,?,?,?,?)',
+                      (upload,'虚构完整要求.png',len(body),'image/png',self.now.isoformat()))
+        keys=self.native_notice(ident,upload=upload)
+        reply=dict(originals=[dict(upload_id=upload,title='数学练习要求',note='题面和空白栏只是背景。',
+                                   uncertainties=[],requirements=requirements)])
+        with patch.object(family_llm,'extract_draft',return_value=reply):
+            self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=1,failed=0))
+        item_id=self.candidate(keys=keys,ident=ident)
+        ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
+        parts=['material:'+upload+'@'+ref+':requirement:'+agent._hash(n)[:16] for n in requirements]
+        return item_id,parts,keys
+
+    def test_complete_requirements_replace_a_later_lossy_or_added_action_summary(self):
+        requirement='数学：2026-02-12前完成练习；第1至3题必做，第3题写明单位；第4题选做，若选做须用两种方法；做完检查，不需要家长签字。'
+        ident,parts,keys=self.required_image([requirement])
+        reply={'actions':[dict(draft(title='数学：完成练习',goal='完成第1至3题，并填写日期。',submission='填写日期。'),
+            due='2026-02-12',existing_item_id=ident,basis=[dict(part=parts[0],text=requirement)])]}
+        result,calls=self.refresh(reply)
+        self.assertEqual((result,len(calls)),(dict(used=1,failed=0,created=1),1))
+        saved=self.item(ident);brief=self.brief(ident)
+        self.assertEqual((saved['body'],brief['goal'],brief['submission']),(requirement,requirement,''))
+        task=self.rows('SELECT action FROM manual_tasks')[0][0]
+        self.assertEqual(task,requirement)
+        self.assertEqual(json.loads(saved['plan'])['school_original_action']['requirements'][0]['text'],requirement)
+        self.assertEqual(self.count('records'),0)
+        self.assertEqual(self.refresh(reply,minutes=1),(dict(used=0,failed=0,created=0),[]))
+
+    def test_partial_requirement_quote_fails_before_any_task_or_item_write(self):
+        requirement='数学：2026-02-12前完成第1至3题，第3题写明单位，第4题选做并用两种方法。'
+        ident,parts,keys=self.required_image([requirement]);before=self.item(ident)
+        reply={'actions':[dict(draft(goal='完成第1至3题'),due='2026-02-12',existing_item_id=ident,
+            basis=[dict(part=parts[0],text='完成第1至3题')])]}
+        result,calls=self.refresh(reply)
+        self.assertEqual((result,len(calls),self.count('manual_tasks'),self.item(ident)),
+                         (dict(used=1,failed=1,created=0),1,0,before))
+        self.assertIn('截取或重复分配',self.rows("SELECT error FROM agent_jobs WHERE id LIKE 'school-task:%'")[0][0])
+
+    def test_missing_independent_requirement_fails_the_whole_round(self):
+        requirements=['数学：2026-02-12前完成第1至3题并写明单位。','数学：2026-02-13前复习错题本第1至2题，并写出订正过程。']
+        ident,parts,keys=self.required_image(requirements);before=self.item(ident)
+        reply={'actions':[dict(draft(goal=requirements[0]),due='2026-02-12',existing_item_id=ident,
+            basis=[dict(part=parts[0],text=requirements[0])])]}
+        result,calls=self.refresh(reply)
+        self.assertEqual((result['failed'],self.count('manual_tasks'),self.item(ident)),(1,0,before))
+        self.assertIn('未全部分配',self.rows("SELECT error FROM agent_jobs WHERE id LIKE 'school-task:%'")[0][0])
+
+    def test_duplicate_requirement_assignment_fails_the_whole_round(self):
+        requirement='数学：2026-02-12前完成第1至3题并写明单位。'
+        ident,parts,keys=self.required_image([requirement]);before=self.item(ident)
+        entry=dict(draft(goal=requirement),due='2026-02-12',existing_item_id=ident,basis=[dict(part=parts[0],text=requirement)])
+        reply={'actions':[entry,dict(entry,existing_item_id='',title='数学：再次练习')]}
+        result,calls=self.refresh(reply)
+        self.assertEqual((result['failed'],self.count('manual_tasks'),self.item(ident)),(1,0,before))
+
+    def test_one_original_can_have_two_complete_independent_actions(self):
+        requirements=['数学：2026-02-12前完成第1至3题；第3题写明单位，第4题选做用两种方法。',
+                      '数学：2026-02-13前复习错题本第1至2题，并写出订正过程，不必打印。']
+        ident,parts,keys=self.required_image(requirements)
+        reply={'actions':[dict(draft(title=t,goal='过度简化的摘要'),due=d,existing_item_id=i,basis=[dict(part=p,text=r)])
+                          for t,d,i,p,r in zip(['数学：完成练习','数学：复习错题'],['2026-02-12','2026-02-13'],[ident,''],parts,requirements)]}
+        result,calls=self.refresh(reply)
+        self.assertEqual((result,len(calls)),(dict(used=1,failed=0,created=2),1))
+        self.assertEqual([r[0] for r in self.rows('SELECT body FROM agent_items ORDER BY due')],requirements)
+        self.assertEqual([r[0] for r in self.rows('SELECT action FROM manual_tasks ORDER BY due')],requirements)
+
+    def test_background_only_material_cannot_be_promoted_by_a_ready_summary(self):
+        ident,parts,keys=self.required_image([]);before=self.item(ident)
+        ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
+        reply={'actions':[dict(draft(goal='完成新练习'),due='',existing_item_id=ident,
+            basis=[dict(part='material:'+'b'*32+'@'+ref+':background',text='题面和空白栏只是背景。')])]}
+        result,calls=self.refresh(reply)
+        self.assertEqual((result['failed'],self.count('manual_tasks'),self.item(ident)),(1,0,before))
+
+    def test_pending_refinement_keeps_saved_complete_requirements_and_rejects_changed_ones(self):
+        requirement='数学：2026-02-12前完成第1至3题；第3题写明单位，第4题选做用两种方法。'
+        ident,parts,keys=self.required_image([requirement])
+        reply={'actions':[dict(draft(goal='简短摘要',state='review',reason='是否仍适用不明'),due='2026-02-12',existing_item_id=ident,
+            basis=[dict(part=parts[0],text=requirement)])]}
+        result,calls=self.refresh(reply)
+        self.assertEqual((result['created'],self.item(ident)['state']),(0,'pending'))
+        with self.store._db() as c:
+            plan=json.loads(self.item(ident)['plan']);plan['school_task']['policy']=0
+            c.execute('UPDATE agent_items SET plan=? WHERE id=?',(json.dumps(plan),ident))
+        result,calls=self.refresh(draft(title='数学：完成练习',goal='再一次丢单位和方法数量'),minutes=1)
+        self.assertEqual((result['created'],self.item(ident)['body']),(1,requirement))
+        # The source map is checked independently of free summary wording.
+        row=self.item(ident)
+        with self.store._db() as c:
+            ev,_=agent._school_material(self.store,c,row);material=agent._school_drafts(self.store,c,row)
+        current_parts=agent._school_original_parts(ev,None,material)
+        self.assertEqual(agent._school_saved_requirements(row,current_parts),[requirement])
+        changed=[dict(p,text=p['text']+'新增一步') if p.get('requirement') else p for p in current_parts]
+        with self.assertRaisesRegex(agent.AgentError,'要求已变化'):
+            agent._school_saved_requirements(row,changed)
 
     def test_explicit_admin_material_contrast_does_not_hide_a_positive_learning_requirement(self):
         cases=[('negative','家长：2026-02-13前签字交回活动回执。该回执与数学练习分开，不是作业答题页。','accepted'),
