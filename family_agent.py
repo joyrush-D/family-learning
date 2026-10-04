@@ -2770,7 +2770,7 @@ def _school_scoped_correction_anchors(parts,anchors,proof):
                     or original.get('requirement') or original.get('background_only')):
                 raise AgentError('分项投影仅适用于已核完整原生文字，原件要求不能截取')
             quote=anchor['quote']
-            if quote!=proof['shared_date_text'] and quote not in proof['action_text']:
+            if quote!=proof['action_text'] and (not proof['shared_date_text'] or quote!=proof['shared_date_text']):
                 if quote!=proof['original_text'] or quote.count(proof['action_text'])!=1:
                     raise AgentError('原通知引用未完整覆盖本项，不能借用另一事项')
                 scoped['quote']=proof['action_text']
@@ -2809,10 +2809,10 @@ def _school_effective_conditions(parts,anchors,changes,proof):
         status_pattern=new_pattern+r'(?:[；;，,]\s*'+new_pattern+r')*'
         status_text=new_text;equivalent=None
         if not re.fullmatch(status_pattern+r'[。；;，,]?',new_text):
-            equivalent=re.fullmatch('('+status_pattern+r')[；;，,]\s*不做('+labels+r')栏也算完成(《?[^》。\n；;，,]{2,40}》?)[。；;，,]?',new_text)
+            equivalent=re.fullmatch('(?P<status>'+status_pattern+r')[；;，,]\s*不做(?P<labels>'+labels+r')栏也算完成(?P<object>《?[^》。\n；;，,]{2,40}》?)[。；;，,]?',new_text)
             if not equivalent:
                 raise AgentError('后发替换只保留栏目条件及同项选做完成说明，其余原标准分别保留')
-            status_text=equivalent[1]
+            status_text=equivalent['status']
         expected=set(re.findall(r'[A-Z]',old_text));found={}
         for match in re.finditer(new_pattern,status_text):
             for label in re.findall(r'[A-Z]',match[1]):
@@ -2823,7 +2823,7 @@ def _school_effective_conditions(parts,anchors,changes,proof):
         if equivalent:
             obj=proof['object'][1:-1];names={proof['object'],obj}
             if '的' in obj and len(obj.rsplit('的',1)[1])>=2:names.add(obj.rsplit('的',1)[1])
-            if equivalent[3] not in names or any(found.get(k)!='选做' for k in re.findall(r'[A-Z]',equivalent[2])):
+            if equivalent['object'] not in names or any(found.get(k)!='选做' for k in re.findall(r'[A-Z]',equivalent['labels'])):
                 raise AgentError('不做也算完成只能对应本项明确选做栏目，必做和其他行动保留')
         if statuses and any(k in statuses and statuses[k]!=v for k,v in found.items()):raise AgentError('本项更正条件互相冲突')
         statuses.update(found)
