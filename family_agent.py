@@ -2505,16 +2505,18 @@ def _school_requirement_goal(value, texts):
     # A requirement includes its completion/submission conditions. Do not add a
     # second unconstrained submission summary (for example a blank date field).
     title=value['title']
-    if '选做' in goal:
-        question=r'第[0-9一二三四五六七八九十百]+(?:\s*(?:至|到|[-–—~～])\s*[0-9一二三四五六七八九十百]+)?题'
+    positive_goal=re.sub(r'(?:不是|并非|非|不属于|不能(?:当作?|作为|算作|视为)?|不要(?:当作?|作为)?|不(?:作为|算|按)?|无需|不用|不需要)\s*选做','',goal)
+    if '选做' in positive_goal:
+        question=r'第[0-9一二三四五六七八九十百]+(?:\s*(?:至|到|[-–—~～])\s*第?[0-9一二三四五六七八九十百]+)?题'
         labels=[]
-        for match in re.finditer('('+question+r')(?:为|是)?(必做|选做)|(必做|选做)(?:的)?('+question+')',goal):
+        for match in re.finditer('('+question+r')(?:为|是)?(必做|选做)|(必做|选做)(?:的)?('+question+')',positive_goal):
+            if re.search(r'(?:不是|并非|不属于|不要|无需|不用|取消|不按)\s*$',positive_goal[:match.start()]): continue
             label=(match[1]+match[2]) if match[1] else (match[4]+match[3])
             if label not in labels: labels.append(label)
         if labels:
             # A free title's broad range may imply every question is mandatory.
             # Keep its task name, but use only the read requirements for the range.
-            title=re.sub(question+r'.*$', '', title).rstrip(' ：:，,；;')
+            title=re.sub(question, '', title).rstrip(' ：:，,；;')
             title=title+'（'+'；'.join(labels)+'）'
         elif '选做' not in title:
             title+='（含选做）'

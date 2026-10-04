@@ -188,6 +188,13 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             self.assertEqual(result['title'],'数学：完成（第4题选做）')
         result=agent._school_requirement_goal(draft(title='数学：阅读任选章节'),['任选章节为选做，不改变必读第2章。'])
         self.assertEqual(result['title'],'数学：阅读任选章节（含选做）')
+        for requirement in ('第1至4题必须完成，不是选做','第4题不能当选做，必须完成','不是选做的第4题，必须完成'):
+            result=agent._school_requirement_goal(draft(title='数学：完成第1至4题'),[requirement])
+            self.assertEqual(result['title'],'数学：完成第1至4题')
+        result=agent._school_requirement_goal(draft(title='数学：第1至4题错题订正'),['第1至3题必做，第4题选做'])
+        self.assertEqual(result['title'],'数学：错题订正（第1至3题必做；第4题选做）')
+        result=agent._school_requirement_goal(draft(title='数学：完成第1至第4题'),['第1至第3题必做，第4题选做'])
+        self.assertEqual(result['title'],'数学：完成（第1至第3题必做；第4题选做）')
 
     def test_missing_independent_requirement_fails_the_whole_round(self):
         requirements=['数学：2026-02-12前完成第1至3题并写明单位。','数学：2026-02-13前复习错题本第1至2题，并写出订正过程。']
