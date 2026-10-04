@@ -486,6 +486,13 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
         brief['material_evidence']=dict(fingerprint=material['fingerprint'])
         if state!='reference' and material['uncertainties'] and not any(e.get('kind')=='qq_window_fragment' for e in evidence):
             state='review';brief['reason']='待补充：'+'；'.join(material['uncertainties'])[:350]
+    # A single complete native instruction can explicitly name the executor even when its summary omits it.
+    # Keep that short role in the action; display names, quoted speech and unresolved shared scope do not prove it.
+    if (purpose=='admin' and state=='ready' and len(evidence)==1 and evidence[0].get('kind')=='text'
+            and not (evidence[0].get('unread') or evidence[0].get('content_incomplete'))
+            and re.match(r'^请(?:各位)?家长',evidence[0].get('text','').strip()) and '家长' not in brief['goal']):
+        if len(brief['goal'])+3<=2000:brief['goal']='家长：'+brief['goal']
+        else:state='review';brief['reason']='完整要求和原文保留，执行人尚未能并入本项正文。'
     brief=dict(brief,state=state,policy=SCHOOL_TASK_POLICY,change=change,target_id=target)
     if purpose: brief['purpose']=purpose
     if submission: brief['submission']=submission
