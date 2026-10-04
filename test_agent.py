@@ -1496,6 +1496,106 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
             self.assertEqual(c.execute('SELECT COUNT(*) FROM task_focus_history').fetchone()[0],1)
 
+    def test_school_append_unit_prefix_is_not_the_same_object(self):
+        text='Unit30课文读两遍，朗读录音上传班级作业区，明天完成。'
+        original=self._school_append_candidate(11,text,title='英语：Unit30朗读',due='2026-02-11')
+        task_id=self.store.act(dict(id=original['id'],action='accept'))['task_id']
+        with self.app.connect() as c:
+            before=next(t for t in self.app.tasks(c) if t['id']==task_id)
+            canonical=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(original['id'],)).fetchone())
+        for index,change,delta in ((12,'new','只补Unit3朗读：录音上传后确认上传成功。'),
+                                  (13,'append','只补朗读Unit3：录音上传后确认上传成功。')):
+            with self.subTest(change=change):
+                row=self._school_append_candidate(index,delta,change=change,target=task_id if change=='append' else '')
+                brief=json.loads(row['plan'])['school_task']
+                self.assertEqual(brief['state'],'review','Unit3 must not append to Unit30')
+                self.assertNotIn('target_basis',brief);self.assertNotIn('input_basis',brief)
+        with patch.object(agent.family_llm,'_chat_json') as model,patch.object(agent,'_now',return_value=self.now):
+            self.assertEqual(agent._refresh_school(self.app,self.store,self.now,0)['created'],0)
+            model.assert_not_called()
+        with self.app.connect() as c:
+            self.assertEqual(next(t for t in self.app.tasks(c) if t['id']==task_id),before)
+            self.assertEqual(dict(c.execute('SELECT * FROM agent_items WHERE id=?',(original['id'],)).fetchone()),canonical)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+            for index in (12,13):
+                row=c.execute('SELECT state,task_id FROM agent_items WHERE job_id=?',('synthetic-append:'+str(index),)).fetchone()
+                self.assertEqual(tuple(row),('pending',''))
+
+    def test_school_append_unit_spacing_keeps_one_canonical_task_and_arrangement(self):
+        original,task_id=self._school_append_original()
+        agent.family_task_focus.save(self.app,dict(id=task_id,version=0,request_key='synthetic-unit-spacing-arrangement',
+            mode='waiting',next_action='保留家长安排：晚饭后录音',waiting_for='等虚构家长回家',
+            review_on='2026-02-11',scheduled_on='2026-02-11',box='inbox'))
+        for index,change,delta in ((12,'new','只补Unit3朗读：录音上传后确认上传成功。'),
+                                  (13,'append','只补朗读Unit3：再检查录音音量清楚。')):
+            with self.subTest(change=change):
+                row=self._school_append_candidate(index,delta,change=change,target=task_id if change=='append' else '')
+                brief=json.loads(row['plan'])['school_task']
+                self.assertEqual((brief['state'],brief['change'],brief['target_id']),('ready','append',task_id))
+                self.assertEqual(brief['target_basis']['canonical_id'],original['id'])
+                self._school_append_auto(row)
+        with self.app.connect() as c:
+            task=next(t for t in self.app.tasks(c) if t['id']==task_id)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+            self.assertIn(original['body'],task['action'])
+            self.assertIn('确认上传成功',task['action']);self.assertIn('再检查录音音量清楚',task['action'])
+            self.assertEqual(task['agenda']['due_on'],'2026-02-11')
+            self.assertEqual((task['focus']['mode'],task['focus']['next_action'],task['focus']['waiting_for'],task['focus']['scheduled_on']),
+                ('waiting','保留家长安排：晚饭后录音','等虚构家长回家','2026-02-11'))
+            canonical=c.execute('SELECT state,task_id,evidence,body,due FROM agent_items WHERE id=?',(original['id'],)).fetchone()
+            self.assertEqual(tuple(canonical),('accepted',task_id,original['evidence'],original['body'],original['due']))
+            for index in (11,12,13):self.assertIn('message:synthetic-group:'+str(index),task['source'])
+            for index in (12,13):
+                self.assertEqual(c.execute('SELECT state,task_id FROM agent_items WHERE job_id=?',('synthetic-append:'+str(index),)).fetchone()['task_id'],task_id)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
+
+    def test_school_append_exact_unit_isolates_competing_peer(self):
+        original=self._school_append_candidate(11,'Unit3课文读两遍，朗读录音上传班级作业区，明天完成。',
+            title='英语：Unit3朗读',due='2026-02-11')
+        task_id=self.store.act(dict(id=original['id'],action='accept'))['task_id']
+        other=self._school_append_candidate(12,'Unit30课文读两遍，朗读录音上传班级作业区，明天完成。',
+            title='英语：Unit30朗读',due='2026-02-11')
+        other_id=self.store.act(dict(id=other['id'],action='accept'))['task_id']
+        self.assertNotEqual(task_id,other_id)
+        with self.app.connect() as c:
+            other_before=next(t for t in self.app.tasks(c) if t['id']==other_id)
+            other_canonical=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(other['id'],)).fetchone())
+        row=self._school_append_candidate(13,'只补朗读Unit3：录音上传后确认上传成功。',change='append',target=task_id)
+        brief=json.loads(row['plan'])['school_task']
+        self.assertEqual((brief['state'],brief['target_id']),('ready',task_id))
+        self._school_append_auto(row)
+        with self.app.connect() as c:
+            tasks={t['id']:t for t in self.app.tasks(c)}
+            self.assertEqual(len(tasks),2);self.assertEqual(tasks[other_id],other_before)
+            self.assertEqual(dict(c.execute('SELECT * FROM agent_items WHERE id=?',(other['id'],)).fetchone()),other_canonical)
+            self.assertIn(original['body'],tasks[task_id]['action']);self.assertIn('确认上传成功',tasks[task_id]['action'])
+            self.assertEqual(tasks[task_id]['agenda']['due_on'],'2026-02-11')
+            self.assertIn('message:synthetic-group:13',tasks[task_id]['source'])
+            self.assertNotIn('message:synthetic-group:13',tasks[other_id]['source'])
+
+    def test_school_append_save_rechecks_forged_unit_prefix_basis(self):
+        original=self._school_append_candidate(11,'Unit30课文读两遍，朗读录音上传班级作业区，明天完成。',
+            title='英语：Unit30朗读',due='2026-02-11')
+        task_id=self.store.act(dict(id=original['id'],action='accept'))['task_id']
+        delta='只补朗读Unit3：录音上传后确认上传成功。'
+        row=self._school_append_candidate(12,delta,change='append',target=task_id)
+        # Simulate an old/forged ready receipt that bypassed the routing guard.
+        # Its current source and target fingerprints are valid; only the object is wrong.
+        with self.app.connect() as c:
+            evidence,_=agent._school_material(self.store,c,row)
+            target=next(t for t in agent.school_targets(self.app,self.store,'child-1',connection=c) if t['id']==task_id)
+            plan=json.loads(row['plan'])
+            plan['school_task'].update(state='ready',change='append',target_id=task_id,goal=delta,
+                target_basis=target['append_basis'],input_basis=agent._school_message_basis(evidence))
+            c.execute('UPDATE agent_items SET plan=? WHERE id=?',(json.dumps(plan),row['id']))
+        with self.app.connect() as c:
+            row=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone())
+            before='\n'.join(c.iterdump())
+        with self.assertRaises(agent.AgentError):self._school_append_auto(row)
+        with self.app.connect() as c:self.assertEqual('\n'.join(c.iterdump()),before,'object mismatch must roll back every save')
+
     def test_school_append_rejects_unknown_publisher_other_child_and_competing_activity(self):
         original,task_id=self._school_append_original()
         delta='只补朗读：录音上传后确认上传成功。'
