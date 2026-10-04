@@ -2338,7 +2338,7 @@ def _school_original_parts(evidence, pdf, material):
             parts.append(dict(id='pdf:'+doc['upload_id']+':'+str(group['pages'][0])+'@'+doc['ref'],
                 ref=doc['ref'],upload_ids=[doc['upload_id']],pages=group['pages'],text=group['text']))
     for entry in (material or {}).get('model',[]):
-        parts.append(dict(id='material:'+entry['ref'],ref=entry['ref'],upload_ids=entry['upload_ids'],pages=[],text=entry['draft']['note']))
+        parts.append(dict(id='material:'+entry['ref'],ref=entry['ref'],upload_ids=entry.get('upload_ids',[]),pages=[],text=entry['draft']['note']))
     return parts
 
 
@@ -2389,6 +2389,9 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
     scope=_hash([row['child_id'],sorted(e['ref'] for e in evidence),sorted({u for p in parts for u in p['upload_ids']})])
     for value in result['actions']:
         if not isinstance(value,dict) or set(value)!=fields: raise AgentError('原件行动字段无法核对')
+        for name,spec in TASK_BRIEF_SCHEMA['properties'].items():
+            _text(value,name,spec.get('maxLength',4000))
+            if 'enum' in spec and value[name] not in spec['enum']: raise AgentError('原件行动字段取值无法核对')
         chosen=_text(value,'existing_item_id',80)
         if chosen and (chosen not in existing or chosen in used): raise AgentError('原候选行动对应关系无法核对')
         used.add(chosen) if chosen else None

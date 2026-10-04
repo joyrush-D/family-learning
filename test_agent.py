@@ -841,6 +841,14 @@ class AgentTests(unittest.TestCase):
         with self.store._db() as c: ident=c.execute("SELECT id FROM agent_items WHERE job_id='synthetic-image-task'").fetchone()[0]
         return ident,keys,value
 
+    def _original_reply(self,ident,result):
+        with self.store._db() as c:
+            row=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone())
+            evidence,_=agent._school_material(self.store,c,row)
+            material=agent._school_drafts(self.store,c,row)
+        part=agent._school_original_parts(evidence,None,material)[-1]
+        return {'actions':[dict(result,due='',existing_item_id=ident,basis=[dict(part=part['id'],text=part['text'])])]}
+
     def test_teacher_image_is_school_material_and_prepared_content_reaches_task_understanding(self):
         ident,keys,value=self._prepared_school_image(native=True)
         self.assertEqual(value['kind'],'school_material','teacher originals must not become child performance drafts')
@@ -848,7 +856,7 @@ class AgentTests(unittest.TestCase):
         def model(messages,*args,**kwargs):
             context=json.loads(messages[-1]['content'])
             self.assertEqual(context['school_material'][0]['draft']['note'],'英语：朗读Unit 2课文两遍，完成练习册第8页。')
-            return dict(title='英语：朗读与第8页练习',goal='朗读Unit 2课文两遍；完成练习册第8页。',advice='',state='ready',reason='原件要求明确。',purpose='learning',submission='',change='new',target_id='',learning_subject='英语',learning_goal_id='')
+            return self._original_reply(ident,dict(title='英语：朗读与第8页练习',goal='朗读Unit 2课文两遍；完成练习册第8页。',advice='',state='ready',reason='原件要求明确。',purpose='learning',submission='',change='new',target_id='',learning_subject='英语',learning_goal_id=''))
         with patch.object(agent.family_llm,'_chat_json',side_effect=model) as called:
             self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1)['created'],1)
             self.assertEqual(called.call_count,1)
@@ -867,7 +875,7 @@ class AgentTests(unittest.TestCase):
         with self.store._db() as c:
             before=tuple(c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone())
             original=tuple(c.execute('SELECT * FROM agent_message_drafts').fetchone())
-        with patch.object(agent.family_llm,'_chat_json',side_effect=[partial,ready]) as model:
+        with patch.object(agent.family_llm,'_chat_json',side_effect=[partial,self._original_reply(ident,ready)]) as model:
             failed=agent._refresh_school(self.app,self.store,self.now,1)
             self.assertEqual(failed,dict(used=1,failed=1,created=0))
             with self.store._db() as c:
@@ -896,7 +904,7 @@ class AgentTests(unittest.TestCase):
         with self.store._db() as c:
             before=tuple(c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone())
             original=tuple(c.execute('SELECT * FROM agent_message_drafts').fetchone())
-        with patch.object(agent.family_llm,'_chat_json',return_value=invalid) as model:
+        with patch.object(agent.family_llm,'_chat_json',return_value=self._original_reply(ident,invalid)) as model:
             self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1),dict(used=1,failed=1,created=0))
             self.assertEqual(model.call_count,1)
         with self.store._db() as c:
@@ -909,7 +917,7 @@ class AgentTests(unittest.TestCase):
     def test_uncertain_school_original_keeps_understood_requirements_and_rejects_stale_bytes(self):
         ident,keys,value=self._prepared_school_image(uncertain=True)
         result=dict(title='英语：朗读与第8页练习',goal='朗读Unit 2课文两遍；完成练习册第8页。',advice='',state='ready',reason='模型认为可收集',purpose='learning',submission='',change='new',target_id='',learning_subject='英语',learning_goal_id='')
-        with patch.object(agent.family_llm,'_chat_json',return_value=result):
+        with patch.object(agent.family_llm,'_chat_json',return_value=self._original_reply(ident,result)):
             self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1)['created'],0)
         with self.store._db() as c:
             row=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone());b=json.loads(row['plan'])['school_task']
@@ -936,14 +944,14 @@ class AgentTests(unittest.TestCase):
             draft=json.loads(c.execute('SELECT payload FROM agent_message_drafts').fetchone()[0]);draft['note']='英语：朗读Unit 2两遍，明天提交。'
             c.execute('UPDATE agent_message_drafts SET payload=?',(json.dumps(draft),))
         ready=dict(title='英语：朗读',goal=draft['note'],advice='',state='ready',reason='',purpose='learning',submission='',change='new',target_id='',learning_subject='英语',learning_goal_id='')
-        with patch.object(agent.family_llm,'_chat_json',return_value=ready):
+        with patch.object(agent.family_llm,'_chat_json',return_value=self._original_reply(ident,ready)):
             self.assertEqual(agent._refresh_school(self.app,self.store,self.now+dt.timedelta(days=1),1)['created'],1)
         with self.store._db() as c:self.assertEqual(c.execute('SELECT due FROM agent_items WHERE id=?',(ident,)).fetchone()[0],'2026-02-11')
 
     def test_historical_undated_school_original_retains_requirements_without_today_task(self):
         ident,keys,_=self._prepared_school_image(native=True)
         ready=dict(title='英语：朗读',goal='朗读Unit 2两遍',advice='',state='ready',reason='',purpose='learning',submission='',change='new',target_id='',learning_subject='英语',learning_goal_id='')
-        with patch.object(agent.family_llm,'_chat_json',return_value=ready):
+        with patch.object(agent.family_llm,'_chat_json',return_value=self._original_reply(ident,ready)):
             self.assertEqual(agent._refresh_school(self.app,self.store,self.now+dt.timedelta(days=1),1)['created'],0)
         with self.store._db() as c:
             row=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone())
@@ -957,7 +965,7 @@ class AgentTests(unittest.TestCase):
             c.execute("UPDATE agent_items SET due='2026-02-11' WHERE id=?",(ident,))
             draft=json.loads(c.execute('SELECT payload FROM agent_message_drafts').fetchone()[0]);draft['note']='英语：今天提交朗读。'
             c.execute('UPDATE agent_message_drafts SET payload=?',(json.dumps(draft),))
-        with patch.object(agent.family_llm,'_chat_json',return_value=ready):
+        with patch.object(agent.family_llm,'_chat_json',return_value=self._original_reply(ident,ready)):
             self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1)['created'],0)
         with self.store._db() as c:
             brief=json.loads(c.execute('SELECT plan FROM agent_items WHERE id=?',(ident,)).fetchone()[0])['school_task']
