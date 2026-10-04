@@ -570,6 +570,99 @@ def office_zip(extra=(),method=zipfile.ZIP_DEFLATED):
     return out.getvalue()
 
 
+class TextPrintTests(unittest.TestCase):
+    """Original UTF-8 bytes stay authoritative while the bounded converter receives neutral DOCX."""
+    setUp=PrintTests.setUp
+    tearDown=PrintTests.tearDown
+
+    def text_source(self,name,text):
+        (self.data/'attachments'/name).write_bytes(text)
+        return dict(type='attachment',name=name)
+
+    @staticmethod
+    def lines(body):
+        with zipfile.ZipFile(io.BytesIO(body)) as archive:
+            root=printing.ET.fromstring(archive.read('word/document.xml'))
+            assert all(i.date_time==(1980,1,1,0,0,0) for i in archive.infolist())
+        ns='{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+        return [''.join('\t' if e.tag==ns+'tab' else e.text or '' for e in p.iter() if e.tag in (ns+'t',ns+'tab'))
+                for p in root.iter(ns+'p')]
+
+    def convert(self,seen):
+        def run(body,suffix,directory,soffice,**options):
+            seen.append(self.lines(body));self.assertEqual(suffix,'.docx')
+            self.assertEqual(options['timeout'],printing.OFFICE_TIMEOUT)
+            self.assertEqual(options['limit'],printing.MAX_PDF)
+            return printing.image_pdf(png())
+        self.store.soffice='synthetic-converter-not-executed'
+        return patch.object(printing,'office_convert',side_effect=run)
+
+    def test_utf8_bom_original_keeps_spacing_blank_lines_tabs_and_raw_hash(self):
+        text='\n  虚构纸卷 <>&\n第1题：2+3=?\t答案栏：____\n\n  末尾  \n'
+        raw=b'\xef\xbb\xbf'+text.replace('\n','\r\n').encode()
+        source=self.text_source('synthetic-paper.TXT',raw);seen=[]
+        with self.convert(seen):
+            first=self.store.prepare(source,'synthetic_text_original')
+            self.assertEqual(first,self.store.prepare(source,'synthetic_text_original'))
+        self.assertEqual(seen,[text.split('\n')])
+        self.assertEqual(first['source'],source);self.assertEqual(first['name'],'synthetic-paper.TXT')
+        self.assertEqual(first['source_sha256'],hashlib.sha256(raw).hexdigest())
+        self.assertNotIn('家长参考答案与辅导指南',seen[0])
+        self.assertEqual((self.data/'attachments'/'synthetic-paper.TXT').read_bytes(),raw)
+        self.assertEqual(self.store.list_jobs(),[])
+
+    def test_invalid_or_overlong_text_never_converts_or_queues(self):
+        bad=(b'',b'   \r\n',b'\xff',b'\xed\xa0\x80',b'hello\x00world',b'hello\x1bworld',b'hello\x7fworld',
+             '\ufffe'.encode(),'\uffff'.encode(),('字'*12001).encode())
+        self.store.soffice='synthetic-converter-not-executed'
+        with patch.object(printing,'office_convert',side_effect=AssertionError('invalid text must not convert')):
+            for n,raw in enumerate(bad):
+                with self.subTest(n=n),self.assertRaises(printing.PrintError) as error:
+                    self.store.prepare(self.text_source('bad.txt',raw),'synthetic_bad_text_'+str(n))
+                self.assertEqual(error.exception.status,400)
+        self.assertEqual(self.store.list_jobs(),[])
+        with self.connect() as c:self.assertEqual(c.execute('SELECT count(*) FROM print_preparations').fetchone()[0],0)
+        self.assertFalse(list((self.data/'print').glob('.prepare-*')))
+
+    def test_text_limit_is_inclusive_and_missing_converter_keeps_original(self):
+        source=self.text_source('limit.txt',('字'*12000).encode());seen=[]
+        with self.convert(seen):result=self.store.prepare(source,'synthetic_text_limit')
+        self.assertEqual(seen,[['字'*12000]])
+        with patch.object(self.store,'soffice',None),self.assertRaises(printing.PrintError) as error:
+            self.store.prepare(source,'synthetic_missing_converter')
+        self.assertEqual((error.exception.status,error.exception.code),(503,'preview_unavailable'))
+        self.assertEqual(self.store.preparation(result['id']),result);self.assertEqual(self.store.list_jobs(),[])
+
+    def test_question_and_teacher_text_prepare_all_before_separate_retryable_jobs(self):
+        question=self.text_source('question.txt','虚构题目：2+3=?\n不含老师答案'.encode())
+        guide=self.text_source('teacher.txt','TEACHER_ONLY_CANARY：5'.encode())
+        obj=dict(task_id='TASK-1',request_key='synthetic_text_pair',question_sources=[question],guide_source=guide,
+                 guide_text='',question_confirmed=True,guide_confirmed=True,printer='Synthetic_Printer')
+        task=dict(id='TASK-1',title='虚构文字卷');seen=[]
+        with self.convert(seen):
+            converter=printing.office_convert
+            normal=converter.side_effect
+            def fail_second(*args,**kwargs):
+                if seen:raise printing.OfficeError('no_output')
+                return normal(*args,**kwargs)
+            converter.side_effect=fail_second
+            with self.assertRaises(printing.PrintError):self.store.homework_pair(obj,task)
+            self.assertEqual(self.store.list_jobs(),[])
+            converter.side_effect=normal
+            jobs=self.store.homework_pair(obj,task)
+            self.assertEqual(jobs,self.store.homework_pair(obj,task))
+        self.assertEqual(seen,[['虚构题目：2+3=?','不含老师答案'],['TEACHER_ONLY_CANARY：5']])
+        self.assertNotEqual(jobs['question']['id'],jobs['guide']['id']);self.assertEqual(len(self.store.list_jobs()),2)
+        self.assertEqual(self.store.preparation(jobs['question']['preparation_id'])['source'],question)
+        self.assertEqual(self.store.preparation(jobs['guide']['preparation_id'])['source'],guide)
+
+    def test_generated_parent_guide_preserves_existing_retry_fingerprint(self):
+        seen=[]
+        with patch.object(self.store,'_convert',side_effect=lambda body,name,directory:(seen.append(body),printing.image_pdf(png()))[1]):
+            self.store.prepare_guide('虚构旧参考','第1题：B\n\n  第2题：4\t核对','synthetic_frozen_guide')
+        self.assertEqual(hashlib.sha256(seen[0]).hexdigest(),'a70ee478c1e19fafa0e603b3ba707bb612c63dd222b0c23efa9c23ebb7a0346d')
+
+
 class OfficeConversionTests(unittest.TestCase):
     """The shared Office->PDF path keeps the print contract; soffice is a synthetic script, never LibreOffice."""
     def setUp(self):
