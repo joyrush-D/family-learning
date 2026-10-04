@@ -110,6 +110,10 @@ class TextQuestionHTTPTests(HomeworkPrintScopeTests):
             with patch.object(family_llm,'_chat_json',return_value=json.loads(json.dumps(RAW))) as model:
                 status,out=self.request('POST','/api/print/homework/draft',request)
             self.assertEqual(status,400,out);model.assert_not_called();self.assertEqual(self.dump(),before)
+            request=self.review_request([self.question],[paper]);before=self.dump()
+            with patch.object(family_llm,'_chat_json',return_value=json.loads(json.dumps(RAW))) as model:
+                status,out=self.request('POST','/api/print/homework/draft',request)
+            self.assertEqual(status,400,out);model.assert_not_called();self.assertEqual(self.dump(),before)
 
 
 if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TextQuestionHTTPTests'])
