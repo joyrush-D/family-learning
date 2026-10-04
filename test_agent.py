@@ -2222,6 +2222,122 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(agent._school_brief(ready,evidence=[dict(text=t) for t in texts])['state'],'ready')
         self.assertEqual(agent._school_brief(ready,incomplete=True,evidence=[dict(text=text,unread=True)])['state'],'review')
 
+    def _resource_request_selection(self,text,actions,*,unread=False,incomplete=False):
+        ref='message:'+self.source['id']+':11'
+        proposals=[school_proposal(evidence=[dict(ref=ref)],**action) for action in actions]
+        evidence=[dict(ref=ref,text=text,time=self.now.isoformat(),kind='text',unread=unread,
+                       content_incomplete=incomplete or unread)]
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)) as model:
+            items=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
+        self.assertEqual(model.call_count,1,'selection uses one fixed fictional response')
+        self.assertTrue(all(item['evidence']==[dict(ref=ref,text=text)] for item in items))
+        return items
+
+    def _collect_resource_request_items(self,text,items,*,unread=False):
+        payload=self.payload();payload['messages'][0].update(text=text,unread=unread)
+        self.store.ingest(payload)
+        key='synthetic-resource-request-mixed';fp=self.store._job(key,dict(text=text),self.now)
+        self.store._save(key,fp,[dict(item,child_id='child-1',kind='school') for item in items],self.now,
+                         [(self.source['id'],'11')],school_context=(self.source,payload['messages']))
+        with patch.object(agent.family_llm,'_chat_json',side_effect=AssertionError('saved fictional selection needs no model')):
+            first=agent._refresh_school(self.app,self.store,self.now,0)
+            repeated=agent._refresh_school(self.app,self.store,self.now,0)
+        self.assertEqual(repeated,dict(used=0,failed=0,created=0))
+        with self.app.connect() as c:
+            tasks=[dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY due,title')]
+            self.assertEqual(c.execute('SELECT processed FROM agent_messages').fetchone()[0],1)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
+            self.assertTrue(all(t['original_status']=='待跟进' for t in tasks))
+        self.assertEqual(first['created'],len(tasks))
+        return tasks
+
+    def test_resource_request_only_keeps_reference_without_tasks(self):
+        text='谁有语文课本第5课照片，发一下。'
+        items=self._resource_request_selection(text,[dict(title_quote='语文课本第5课',due='',learning_subject='语文',
+            task_title='语文：朗读第5课',task_goal='朗读第5课两遍。',task_state='ready',
+            task_reason='故意错误的固定回执，求助不能变成作业。',task_purpose='learning')])
+        self.assertEqual(items[0]['plan']['school_task']['state'],'reference')
+        self.assertNotIn('school_learning',items[0]['plan'])
+        self.assertEqual(items[0]['due'],'','sending day is not an unstated deadline')
+        self.assertEqual(self._collect_resource_request_items(text,items),[])
+
+    def test_resource_request_direct_subject_action_survives_same_message(self):
+        cases=[('谁有语文课本照片，发一下。','语文作业：明天朗读第5课两遍。','语文','语文：朗读第5课两遍'),
+               ('有没有家长有数学练习册，拍一下？\n','数学作业：明天完成第8页第1至3题，第4题选做。','数学','数学：练习册第8页'),
+               ('谁有英语课本照片，发到群；','英语：明天背诵Unit5，不用录音。','英语','英语：背诵Unit5')]
+        for request,action,subject,title in cases:
+            with self.subTest(subject=subject):
+                items=self._resource_request_selection(request+action,[dict(title_quote=action,due='2026-02-11',
+                    learning_subject=subject,task_title=title,task_goal=action,task_state='ready',
+                    task_reason='科目和独立动作直接见原文，不需要老师要求或请同学们前缀。',task_purpose='learning')])
+                self.assertEqual(len(items),1)
+                item=items[0];brief=item['plan']['school_task']
+                self.assertEqual((brief['state'],brief['purpose'],item['title'],item['body'],item['due']),
+                                 ('ready','learning',title,action,'2026-02-11'))
+                self.assertEqual(item['plan']['school_learning'],dict(subject=subject,goal_id=''))
+
+    def test_resource_request_mixed_actions_keep_independent_tasks_and_dates(self):
+        request='谁有语文课本照片，发一下。'
+        reading='语文作业：2026-02-11朗读第5课两遍，不用录音。'
+        math='数学作业：2026-02-12完成练习册第8页第1至3题，第4题选做，做完检查。'
+        receipt='家长事务：2026-02-13签字交回独立活动回执，无需盖章。'
+        text=request+'\n'+reading+'\n'+math+'\n'+receipt
+        actions=[dict(title_quote=request,due='',task_title='课本照片求助',task_goal='询问课本照片。',
+                      task_state='reference',task_reason='资料求助单独保留。',task_purpose='optional'),
+                 dict(title_quote=reading,due='2026-02-11',learning_subject='语文',task_title='语文：朗读第5课',
+                      task_goal=reading,task_state='ready',task_reason='独立朗读要求。',task_purpose='learning'),
+                 dict(title_quote=math,due='2026-02-12',learning_subject='数学',task_title='数学：练习册第8页',
+                      task_goal=math,task_state='ready',task_reason='独立做题要求。',task_purpose='learning'),
+                 dict(title_quote=receipt,due='2026-02-13',task_title='事务：独立活动回执',task_goal=receipt,
+                      task_state='ready',task_reason='独立回执，不是朗读或练习册的提交。',task_purpose='admin')]
+        items=self._resource_request_selection(text,actions)
+        self.assertEqual([i['plan']['school_task']['state'] for i in items],['reference','ready','ready','ready'])
+        self.assertEqual([(i['title'],i['body'],i['due']) for i in items[1:]],
+                         [(actions[i]['task_title'],actions[i]['task_goal'],actions[i]['due']) for i in range(1,4)])
+        tasks=self._collect_resource_request_items(text,items)
+        self.assertEqual([(t['title'],t['action'],t['due']) for t in tasks],
+                         [(actions[i]['task_title'],actions[i]['task_goal'],actions[i]['due']) for i in range(1,4)])
+        self.assertTrue(all(t['child']=='示例甲' and text in t['source'] for t in tasks))
+        with self.app.connect() as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_items WHERE state='accepted'").fetchone()[0],3)
+            reference=c.execute("SELECT plan FROM agent_items WHERE state='pending'").fetchone()
+            self.assertEqual(json.loads(reference['plan'])['school_task']['state'],'reference')
+
+    def test_resource_request_independent_admin_action_survives_same_message(self):
+        cases=[('谁有活动回执文件，发一下。','家长事务：明天签字交回独立活动回执，无需盖章。'),
+               ('谁有活动回执文件，发一下，','家长事务：明天签字并盖章后交回独立活动回执。')]
+        for request,action in cases:
+            with self.subTest(action=action):
+                items=self._resource_request_selection(request+action,[dict(title_quote=action,due='2026-02-11',
+                    task_title='事务：独立活动回执',task_goal=action,task_state='ready',
+                    task_reason='正文直接声明独立行政要求。',task_purpose='admin')])
+                self.assertEqual((items[0]['plan']['school_task']['state'],items[0]['plan']['school_task']['purpose']),('ready','admin'))
+                self.assertEqual(items[0]['body'],action,'affirmative and negated stamping requirements remain distinct')
+                self.assertNotIn('school_learning',items[0]['plan'])
+        tasks=self._collect_resource_request_items(request+action,items)
+        self.assertEqual([(t['title'],t['action'],t['due']) for t in tasks],
+                         [('事务：独立活动回执',action,'2026-02-11')])
+
+    def test_resource_request_unread_or_unknown_material_keeps_review(self):
+        cases=[('谁有语文课本照片，发一下。',True,True,'learning'),
+               ('谁有数学作业照片，发一下。其他要求见未读图片。',False,True,'learning'),
+               ('https://example.invalid/synthetic-homework',False,False,'unknown')]
+        for text,unread,incomplete,purpose in cases:
+            with self.subTest(text=text):
+                items=self._resource_request_selection(text,[dict(title_quote=text[:30],due='',learning_subject='数学',
+                    task_title='数学：完成练习',task_goal='完成第1至3题。',task_state='ready',
+                    task_reason='故意猜测的固定回执，不能代替尚未读取的要求。',task_purpose=purpose)],
+                    unread=unread,incomplete=incomplete)
+                brief=items[0]['plan']['school_task']
+                self.assertEqual(brief['state'],'review')
+                self.assertEqual(items[0]['due'],'','unknown material cannot borrow the sending day as a deadline')
+                self.assertNotIn('school_learning',items[0]['plan'])
+                if purpose=='unknown':self.assertEqual((brief['title'],brief['goal']),('',''))
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
+
     def test_school_links_keep_purpose_unknowns_and_the_homework_submission_relation(self):
         ref='message:synthetic-group:11'
         base=dict(focus='school',due='',learning_subject='',learning_goal_id='',task_title='',task_goal='',task_advice='',task_state='review',
