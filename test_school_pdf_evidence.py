@@ -25,6 +25,47 @@ def draft(**changes):
 
 
 class SchoolPdfEvidenceTests(test_pdf_material.Base):
+    def test_page_scope_boundary_has_a_checked_channel_without_clearing_real_doubts(self):
+        original=dict(upload_id='a'*32,title='虚构页组',note='仅本轮第1至3页。',requirements=['数学：完成第1题。'],
+            uncertainties=['第2页单位模糊'],deferred_contexts=[dict(pages=[4],note='通知中的独立回执在后续页另轮整理。')])
+        checked=family_llm.validate_school_material(dict(originals=[original]),original_ids=['a'*32],
+            require_requirements=True,allow_page_scope=True,deferred_pages=[4])
+        self.assertEqual(checked['uncertainties'],['第2页单位模糊'])
+        self.assertEqual(checked['originals'][0]['deferred_contexts'],original['deferred_contexts'])
+        for bad in [dict(original,deferred_contexts=[dict(pages=[5],note='不在当前待处理范围')]),
+                    dict(original,deferred_contexts=[dict(pages=[True],note='布尔值不是页码')]),
+                    dict(original,deferred_contexts=[dict(pages=[4,4],note='重复页码')]),
+                    {k:v for k,v in original.items() if k!='deferred_contexts'}]:
+            with self.assertRaises(family_llm.LLMDraftError):
+                family_llm.validate_school_material(dict(originals=[bad]),original_ids=['a'*32],
+                    require_requirements=True,allow_page_scope=True,deferred_pages=[4])
+        with self.assertRaises(family_llm.LLMDraftError):
+            family_llm.validate_school_material(dict(originals=[original]),original_ids=['a'*32],require_requirements=True)
+
+    def test_old_untyped_scope_doubt_recheck_preserves_payload_and_does_not_repeat(self):
+        keys=self.native_notice('untyped-scope');self.candidate(keys=keys,ident='untyped-scope')
+        self.seed_groups(keys=keys,uncertainties=[])
+        with self.store._db() as c:
+            first=c.execute('SELECT * FROM agent_pdf_material WHERE message_id=? AND first_page=1',(keys['message_id'],)).fetchone()
+            old=json.loads(first['payload']);old['originals'][0]['uncertainties']=['第4页尚未送入，独立回执尚未知。']
+            c.execute('UPDATE agent_pdf_material SET payload=? WHERE message_id=? AND first_page=1',
+                (json.dumps(old,ensure_ascii=False),keys['message_id']))
+        before=self.rows('SELECT first_page,payload,updated,pages,page_count FROM agent_pdf_material WHERE message_id=? ORDER BY first_page',keys['message_id'])
+        def model(text,images,**kw):
+            self.assertEqual(kw['original_pages'],[1,2,3]);self.assertEqual(kw['deferred_pages'],[])
+            return dict(originals=[dict(upload_id=self.pdf,title='重核第1至3页',note='背景',uncertainties=[],
+                requirements=[TEXT],deferred_contexts=[])])
+        with test_pdf_material.renderer(),patch.object(family_llm,'extract_draft',side_effect=model) as called:
+            self.assertEqual(pdfm.prepare(self.store,self.now),dict(used=1,failed=0))
+            self.assertEqual(pdfm.prepare(self.store,self.now+dt.timedelta(minutes=1)),dict(used=0,failed=0))
+            self.assertEqual(called.call_count,1)
+        after=self.rows('SELECT first_page,payload,updated,pages,page_count FROM agent_pdf_material WHERE message_id=? ORDER BY first_page',keys['message_id'])
+        self.assertEqual(after[1:],before[1:])
+        self.assertEqual(json.loads(after[0][1])['previous_group'],dict(payload=old,updated=before[0][2],pages=json.loads(before[0][3]),page_count=before[0][4]))
+        with self.store._db() as c:
+            row=self.item('untyped-scope');pdf=agent._pdf_evidence(agent._school_pdf(self.store,c,row))
+        self.assertEqual(pdf['uncertainties'],[])
+
     seed_pdf = test_pdf_material.PdfMaterialTests.seed_pdf
     rows = test_pdf_material.PdfMaterialTests.rows
     set_sources = test_pdf_material.PdfMaterialTests.set_sources
