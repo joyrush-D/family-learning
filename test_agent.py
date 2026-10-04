@@ -2395,6 +2395,9 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(len(scopes),1,'an older selection revision opens only the bounded processed scope')
             first=agent._recheck_school_history(self.app,self.store,history.clock,1,scopes)
             self.assertEqual((first['used'],first['failed']),(1,0))
+            # The ordinary tick runs the shared auto-collection after history
+            # selection. A selection receipt alone is not a saved task.
+            agent._refresh_school(self.app,self.store,history.clock,0)
             recovered=history._history_rows()
             self.assertEqual(len(recovered),1,'keep the old reference instead of duplicating it')
             row=recovered[0]
