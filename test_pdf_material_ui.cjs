@@ -204,14 +204,16 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   assert.equal(automatic.action,autoExerciseGoal);assert.equal(autoReceiptTask.action,autoReceiptGoal);assert(automatic.school_origin&&autoReceiptTask.school_origin);assert(autoExerciseFile&&autoReceiptFile);
   const autoCard=page.locator('[data-query-target="task:'+automatic.id+'"]');await autoCard.waitFor();
   assert.match(await autoCard.innerText(),/语文：完成虚构练习第1至11页/);
-  await autoCard.locator('[data-school-original-ref="'+autoRef+'"]').click();await until(async()=>await panel.count()===2,'the full original keeps both complete PDFs');
-  assert.match(await dialog.innerText(),/虚构语文老师/);assert.equal(await batches.count(),8);
-  for(const text of await panel.allTextContents()){
-   assert.match(text,/全部 11 页已整理/);
+  await autoCard.locator('[data-school-original-ref="'+autoRef+'"]').click();await until(async()=>await dialog.locator('[data-task-material-scope="action"]').count()===1,'the list opens this action scope');
+  assert.equal(await dialog.locator('.task-record-files a[href*="'+autoExerciseFile.id+'"]').count(),1);assert.equal(await dialog.locator('a[href*="'+autoReceiptFile.id+'"]').count(),0,'the other independent action is absent from the list material');
+  await dialog.locator('[data-school-task-source]').click();const tracePanels=dialog.locator('[data-school-pdf-document]');await until(async()=>await tracePanels.count()===2,'explicit full source keeps both complete PDFs');
+  assert.match(await dialog.innerText(),/虚构语文老师/);assert.equal(await dialog.locator('.task-material-summary').count(),8);
+  for(const text of await tracePanels.allTextContents()){
+   assert.match(text,/11 \/ 11 页/);
    assert.doesNotMatch(text,/待家长核对/,'complete understood requirements do not ask the parent to repeat the Agent classification');
-   assert.match(text,/以上为AI整理，要求以老师原件为准/,'summaries stay distinct from teacher originals');
+   assert.match(await dialog.innerText(),/以上为AI整理，要求以老师原件为准/,'summaries stay distinct from teacher originals');
   }
-  for(const file of [autoExerciseFile,autoReceiptFile])assert.equal(await dialog.locator('[data-school-original-files] a[href*="'+file.id+'"]').count(),1,'the full original retains both actual files');
+  for(const file of [autoExerciseFile,autoReceiptFile])assert.equal(await dialog.locator('.task-record-files a[href*="'+file.id+'"]').count(),1,'the full original retains both actual files');
   assert.equal(await dialog.locator('[data-school-homework-new]').count(),0,'the originals are already linked to their collected tasks');
   await fits(page);await proof(page,'auto-original-collected-'+width);await close();
   const autoFeedback=page.locator('#taskDialog'),autoResources=autoFeedback.locator('#taskSchoolResources'),autoNote='虚构自动收录作业反馈 '+width+'：练习已尝试，第6题待订正。';

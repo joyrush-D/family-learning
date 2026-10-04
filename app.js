@@ -31,6 +31,7 @@ function rememberChild(){try{const id=currentChild()?.id;if(id)localStorage.setI
 function selectChild(id){
  const owner=data.children.find(c=>c.id===id);if(!owner)return false;if(owner.name===child){rememberChild();return true}
  if(owner.name!==child&&(askState.busy||window.FamilyStudy?.canSwitch?.()===false||window.FamilyGoals?.canSwitch?.()===false||window.FamilyWrongReview?.canSwitch?.()===false||window.FamilyTeachers?.canSwitch?.()===false)){toast('请先核对当前保存或处理结果，再切换孩子。');return false}
+ if(schoolOriginal?.taskMaterialID&&schoolOriginal.identity.child_id!==id){$('#schoolOriginalDialog')?.close();schoolOriginal=null}
  child=owner.name;subject='';studyChildID=id;goalChildID=id;goalSelectedID='';calendarState.childID=id;
  if(schoolInbox.child_id!==id){schoolInbox.child_id=id;schoolInbox.view=null;schoolInbox.day='';schoolInbox.offset='0';schoolInbox.error='';schoolInbox.scope=null}
  if(!askState.busy&&askState.child!==child){askState.child=child;askState.result=null;askState.error=''}
@@ -121,7 +122,7 @@ function taskActionHTML(t,compact=false){const f=taskFocus(t),advice=f.next_acti
 
 function taskHTML(t,options={}){
  const compact=options.compact===true,done=status(t)==='已完成',dismissed=taskClosed(t)&&!done,pending=pendingTask?.id===t.id,open=!taskClosed(t);
- const originals=schoolOriginalButtons(String(t.source||'').split('\n').filter(r=>r.startsWith('message:')),data.children.find(c=>c.name===t.child)?.id,t.agenda?.category==='homework'?'查看作业原件':'原通知与原件',t.agenda?.publications);
+ const originals=schoolOriginalButtons(String(t.source||'').split('\n').filter(r=>r.startsWith('message:')),data.children.find(c=>c.name===t.child)?.id,t.agenda?.category==='homework'?'查看作业原件':'原通知与原件',t.agenda?.publications,t.school_origin?t.id:'');
  const reportPending=open&&t.agenda?.category==='homework'&&t.homework_report?.needs_review;
  // ponytail: scan the family-sized record list here; index by task if rendering ever becomes measurably slow.
  const hasFeedback=data.records.some(r=>r.child===t.child&&(r.source==='事项:'+t.id||r.linked_task_id===t.id));
@@ -1573,13 +1574,13 @@ function schoolMessageIdentity(ref,childID){
  if(matches.length!==1)return null;
  return {child_id:childID,source_id:matches[0].id,message_id:ref.slice(('message:'+matches[0].id+':').length)};
 }
-function schoolOriginalButtons(refs,childID,label='原通知与原件',publications=[]){
- const entries=[...new Set(refs)].filter(ref=>schoolMessageIdentity(ref,childID));
+function schoolOriginalButtons(refs,childID,label='原通知与原件',publications=[],taskID=''){
+ const entries=[...new Set(refs)].filter(ref=>schoolMessageIdentity(ref,childID)),taskAttr=taskID?` data-school-task-material="${esc(taskID)}"`:'';
  if(entries.length>1){
   const publisher=ref=>{const p=publications.find(p=>p.ref===ref);return p?(String(p.sender||'').trim()||'发布者未记录'):''},names=[...new Set(entries.map(publisher).filter(Boolean))];
-  return `<div class="toolbar school-original-group">${names.length?`<span class="school-publication-context">${names.map(esc).join('、')}</span>`:''}${entries.map((ref,i)=>{const description=(publisher(ref)?publisher(ref)+' · ':'')+'第 '+(i+1)+' 条'+label;return `<button data-school-original-ref="${esc(ref)}" data-school-original-child="${esc(childID)}" aria-label="${esc(description)}" title="${esc(description)}">原件 ${i+1}</button>`}).join('')}</div>`;
+  return `<div class="toolbar school-original-group">${names.length?`<span class="school-publication-context">${names.map(esc).join('、')}</span>`:''}${entries.map((ref,i)=>{const description=(publisher(ref)?publisher(ref)+' · ':'')+'第 '+(i+1)+' 条'+label;return `<button data-school-original-ref="${esc(ref)}" data-school-original-child="${esc(childID)}"${taskAttr} aria-label="${esc(description)}" title="${esc(description)}">原件 ${i+1}</button>`}).join('')}</div>`;
  }
- return entries.length?`<div class="toolbar">${entries.map((ref,i)=>{const p=publications.find(p=>p.ref===ref);return `<button data-school-original-ref="${esc(ref)}" data-school-original-child="${esc(childID)}">${p?`<span class="school-publication-context">${esc(String(p.sender||'').trim()||'发布者未记录')}</span>`:''}${entries.length===1?label:'第 '+(i+1)+' 条'+label}</button>`}).join('')}</div>`:'';
+ return entries.length?`<div class="toolbar">${entries.map((ref,i)=>{const p=publications.find(p=>p.ref===ref);return `<button data-school-original-ref="${esc(ref)}" data-school-original-child="${esc(childID)}"${taskAttr}>${p?`<span class="school-publication-context">${esc(String(p.sender||'').trim()||'发布者未记录')}</span>`:''}${entries.length===1?label:'第 '+(i+1)+' 条'+label}</button>`}).join('')}</div>`:'';
 }
 // A single original retains its old view; multiple originals keep separate local page numbers.
 function schoolPdfDocuments(material){return !material?[]:Array.isArray(material.documents)?material.documents.filter(p=>p&&typeof p==='object'):[material]}
@@ -1701,6 +1702,14 @@ async function saveSchoolTeacher(){
 }
 function paintSchoolOriginal(){
  const s=schoolOriginal,dialog=$('#schoolOriginalDialog');if(!s||!dialog)return;
+ if(s.taskMaterialID){
+  if(!schoolOriginalCurrent(s)){dialog.close();if(schoolOriginal===s)schoolOriginal=null;return}
+  const task=data.tasks.find(t=>t.id===s.taskMaterialID),material=s.view?taskSchoolMaterialHTML(s.view):'';
+  dialog.innerHTML=`<h2>${s.fullSource?'老师完整原消息':esc(task.title)+' · 本项资料'}</h2>${s.fullSource&&s.view?`<blockquote class="source" style="overflow-wrap:anywhere">${esc(s.view.message.text)}</blockquote>`:''}${material}${s.view&&!s.fullSource&&!s.view.attachments.length&&!s.view.unavailable_attachment_ids?.length?'<p class="small muted">本项没有关联附件；完成要求见列表。</p>':''}${s.view?'<p class="small muted">以上为AI整理，要求以老师原件为准。</p>':''}<p role="status" aria-live="polite">${esc(s.error||(s.busy?'正在读取…':''))}</p>${s.error||!s.view?'<button data-school-original-retry>重试读取资料</button>':''}<div class="toolbar"><button data-school-task-source>${s.fullSource?'返回本项资料':'查看老师完整原消息'}</button><button data-school-original-close>返回列表</button></div>`;
+  for(const button of dialog.querySelectorAll('[data-school-original-ref],[data-print-upload]'))button.remove();
+  for(const button of dialog.querySelectorAll('button'))button.disabled=s.busy&&!button.hasAttribute('data-school-original-close');
+  return;
+ }
  if(s.taskPreview){
   // Looking back at the same task's source must not replace or submit its draft.
   // Reuse the saved-material display; source management stays at its own entry.
@@ -1769,6 +1778,10 @@ function verifySchoolOriginal(view,s){
 }
 function schoolOriginalCurrent(s){
  if(schoolOriginal!==s)return false;
+ if(s.taskMaterialID){
+  const owner=currentChild(),task=data.tasks.find(t=>t.id===s.taskMaterialID);
+  return owner?.id===s.identity.child_id&&task?.child===owner.name&&task.school_origin===true&&task.source===s.taskMaterialSource&&String(task.source).split('\n').includes(`message:${s.identity.source_id}:${s.identity.message_id}`);
+ }
  if(!s.taskPreview)return true;
  const ctx=taskFeedbackContext,owner=data.children.find(c=>c.id===s.identity.child_id);
  const task=ctx&&data.tasks.find(t=>t.id===s.parentTaskID&&t.id===ctx.task_id&&t.child===ctx.child);
@@ -1776,9 +1789,9 @@ function schoolOriginalCurrent(s){
 }
 async function readSchoolOriginal(){
  const s=schoolOriginal;if(!s||s.busy||schoolOriginalPending(s))return;s.busy=true;s.error='';paintSchoolOriginal();
- try{const r=await apiFetch('/api/agent/message?'+new URLSearchParams(s.identity),{signal:AbortSignal.timeout(12000)}),view=await r.json();if(!schoolOriginalCurrent(s))return;if(!r.ok)throw Error(view.error||'这条通知暂时无法读取');s.view=verifySchoolOriginal(view,s)}
+ try{const request=s.taskMaterialID&&!s.fullSource?{...s.identity,task_id:s.taskMaterialID}:s.identity;const r=await apiFetch('/api/agent/message?'+new URLSearchParams(request),{signal:AbortSignal.timeout(12000)}),view=await r.json();if(!schoolOriginalCurrent(s))return;if(!r.ok)throw Error(view.error||'这条通知暂时无法读取');verifySchoolOriginal(view,s);if(s.taskMaterialID&&!s.fullSource&&(view.task_id!==s.taskMaterialID||view.action_material?.scoped!==true))throw Error('本项资料范围尚未核明，可查看老师完整原消息；不能把整条通知的附件当成本项资料。');s.view=view}
  catch(error){if(schoolOriginalCurrent(s))s.error=error.name==='TimeoutError'?'读取超时，请重试。':error.message||'暂时无法读取，请重试。'}
- finally{if(schoolOriginalCurrent(s)){s.busy=false;paintSchoolOriginal()}}
+ finally{if(schoolOriginal===s){s.busy=false;paintSchoolOriginal()}}
 }
 // One click reads one address from the message itself; a lost reply is retried with the same request and served from the server cache.
 async function readSchoolPage(url){
@@ -1828,8 +1841,10 @@ async function uploadSchoolOriginal(file){
  finally{s.busy=false;paintSchoolOriginal()}
  if(s.pending)await saveSchoolOriginal();
 }
-function openSchoolOriginal(ref,childID){
+function openSchoolOriginal(ref,childID,taskID=''){
  const identity=schoolMessageIdentity(ref,childID);if(!identity){toast('消息或孩子归属暂时无法核对，请刷新。');return}
+ const materialTask=taskID&&data.tasks.find(t=>t.id===taskID);
+ if(taskID&&(!materialTask||currentChild()?.id!==childID||materialTask.child!==currentChild()?.name||materialTask.school_origin!==true||!String(materialTask.source).split('\n').includes(ref))){toast('本项资料或当前孩子归属已变化，请刷新后核对。');return}
  const open=[...document.querySelectorAll('dialog[open]')],ctx=taskFeedbackContext;
  const task=ctx&&data.tasks.find(t=>t.id===ctx.task_id&&t.child===ctx.child),owner=data.children.find(c=>c.id===childID);
  const taskPreview=open.length===1&&open[0].id==='taskDialog'&&task&&owner?.name===ctx.child&&String(task.source||'').split('\n').includes(ref);
@@ -1839,13 +1854,15 @@ function openSchoolOriginal(ref,childID){
  let dialog=$('#schoolOriginalDialog');
  if(!dialog){
   dialog=document.createElement('dialog');dialog.id='schoolOriginalDialog';document.body.append(dialog);
-  dialog.addEventListener('cancel',e=>{if(schoolOriginal?.busy)e.preventDefault()});
+  dialog.addEventListener('cancel',e=>{if(schoolOriginal?.busy&&!schoolOriginal.taskMaterialID)e.preventDefault()});
   dialog.addEventListener('close',()=>{if(!schoolOriginalPending(schoolOriginal))schoolOriginal=null});
   dialog.addEventListener('submit',e=>{const f=e.target.closest('[data-school-teacher-form]'),s=schoolOriginal;if(!f||!s)return;e.preventDefault();if(s.busy||schoolOriginalPending(s)||!f.reportValidity())return;s.teacher.pending={...s.identity,...Object.fromEntries(new FormData(f))};saveSchoolTeacher()});
   dialog.addEventListener('change',e=>{if(e.target.matches('[data-school-original-upload]'))uploadSchoolOriginal(e.target.files[0]);if(e.target.name==='attachment_id'&&schoolOriginal)schoolOriginal.selected=e.target.value});
   dialog.addEventListener('click',e=>{
-   const b=e.target.closest('button'),s=schoolOriginal;if(!b||!s||s.busy)return;
-   if(b.hasAttribute('data-school-original-close')){dialog.close();return}
+   const b=e.target.closest('button'),s=schoolOriginal;if(!b||!s)return;
+   if(b.hasAttribute('data-school-original-close')&&(s.taskMaterialID||!s.busy)){dialog.close();return}
+   if(s.busy)return;
+   if(b.hasAttribute('data-school-task-source')&&s.taskMaterialID){s.fullSource=!s.fullSource;s.view=null;s.error='';readSchoolOriginal();return}
    if(b.hasAttribute('data-school-nearby-message')){
     const identity=schoolMessageIdentity(`message:${s.identity.source_id}:${b.dataset.schoolNearbyMessage}`,s.identity.child_id);
     if(!identity){s.error='相邻资料归属暂时无法核对。';paintSchoolOriginal();return}
@@ -1875,11 +1892,11 @@ function openSchoolOriginal(ref,childID){
    if(detach||attach){const id=detach||s.selected;if(!id){s.error='请先选择一份已保存的原件。';paintSchoolOriginal();return}s.pending={...s.identity,attachment_id:id,action:detach?'detach':'attach'};saveSchoolOriginal()}
   });
  }
- if(!schoolOriginalPending(schoolOriginal))schoolOriginal={identity,taskPreview:Boolean(taskPreview),parentTaskID:taskPreview?task.id:null,token:data.token,view:null,busy:false,pending:null,selected:'',error:'',page:null,pdfNotice:'',pdfNotices:{}};
+ if(!schoolOriginalPending(schoolOriginal))schoolOriginal={identity,taskMaterialID:taskID,taskMaterialSource:materialTask?.source||'',fullSource:false,taskPreview:Boolean(taskPreview),parentTaskID:taskPreview?task.id:null,token:data.token,view:null,busy:false,pending:null,selected:'',error:'',page:null,pdfNotice:'',pdfNotices:{}};
  else schoolOriginal.error='请先核对上次未确认的保存；这里仍是上次选择的孩子和通知。';
  paintSchoolOriginal();dialog.showModal();if(!schoolOriginalPending(schoolOriginal))readSchoolOriginal();
 }
-document.addEventListener('click',e=>{const b=e.target.closest('[data-school-original-ref]');if(b)openSchoolOriginal(b.dataset.schoolOriginalRef,b.dataset.schoolOriginalChild)});
+document.addEventListener('click',e=>{const b=e.target.closest('[data-school-original-ref]');if(b)openSchoolOriginal(b.dataset.schoolOriginalRef,b.dataset.schoolOriginalChild,b.dataset.schoolTaskMaterial||'')});
 window.addEventListener('beforeunload',e=>{if(schoolOriginalPending(schoolOriginal)||schoolOriginal?.busy){e.preventDefault();e.returnValue=''}});
 function schoolKnownBrief(item){const brief=item.kind==='school'&&item.plan?.school_task;return brief?.title&&brief?.goal?brief:null}
 function agentItemHTML(item,options={}){

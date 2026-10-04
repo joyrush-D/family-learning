@@ -103,10 +103,10 @@ function fixtures(base){
     assert.match(await p.locator('[data-current-source="synthetic-audio"] [data-current-source-unread]').innerText(),/累计 3 条消息在采集时含图片、附件或截断内容；这不是待同步新消息数/);
     await fit(p);await proof(p,'source-saved-original-gap-'+width);
     await p.locator('nav [data-page="home"]').click();await ready(p);await fit(p);
-    assert.match(await p.locator('.today-backlog > summary').innerText(),/其他未完成及日期待核对 · 6/);
-    await p.locator('.today-backlog > summary').click();
+    assert.match(await p.locator('.today-recent-homework h2').innerText(),/其他未完成作业 · 7/);
+    assert.equal(await p.locator('.today-backlog').count(),0,'unknown dates do not collapse unfinished homework');
     for(const id of ['DONE','NA','DECLINED','ARCHIVE','WISH','PLANNED'])assert.equal(await card(id).count(),0,'closed items, wishes and future plans omitted: '+id);
-    for(const id of ['PAST','FUTURE','UNKNOWN','INVALID','CANCEL-LINK'])assert.equal(await card(id).isVisible(),true,'unfinished deadline/undated tasks stay visible: '+id);
+    for(const id of ['PAST','FUTURE','UNKNOWN','INVALID','CANCEL-LINK'])assert.equal(await card(id).isVisible(),true,'unfinished deadline/undated tasks stay directly visible: '+id);
     assert.equal(await card('LINK').count(),1,'one task is not duplicated');
     assert.match(await card('PAST').innerText(),/逾期/);assert.match(await card('ADMIN').innerText(),/发布：待核对/);
     assert.match(await homework.locator('h2').innerText(),/今日作业 · 1/);assert.equal(await p.locator('[data-agent-item] [data-check]').count(),0,'unconfirmed notifications cannot be completed');
@@ -192,6 +192,35 @@ function fixtures(base){
     assert.equal(await printForm.locator('[name="guide_text"]').inputValue(),'家长在等待期间填写的参考');
     checks.push({width,kind:'classification',homeworkAndTodo:true,deadlinesCarryForward:true,wishesAndFuturePlansExcluded:true,pendingSeparate:true,childIsolation:true,defaultSingleChild:true,noAllChildren:true,childPersistsAcrossNavigationAndReload:true,taskLists:true,sharedCalendar:true,fourNavigationItems:true,moreEntriesReachable:true,noThree:true,taskTop:position.y,noOverflow:true,pairRetry:true});
    }finally{await p.close()}
+
+   // Collected homework with no known date stays in the list; one notice can contain several distinct original files.
+   const listPage=await browser.newPage({viewport:{width,height:820}}),listState=fixtures(await read()),first=listState.children[0],second=listState.children[1];
+   const listSource='synthetic-list-'+width,listRef='message:'+listSource+':shared-notice',listErrors=[],requests=[];
+   const listTask=(id,owner=first,when={})=>({id,child:owner.name,title:'虚构数学练习 '+id,due:'',original_status:'待跟进',source:'Agent建议:synthetic-origin-'+id+'\n'+listRef,school_origin:true,action:'完成第1至3题。\n第4题选做；每题写出过程。',history:[],focus:{mode:'next',box:'inbox'},agenda:{category:'homework',box:'inbox',published_on:'',due_on:'',scheduled_on:'',...when}});
+   listState.tasks=[...Array.from({length:5},(_,n)=>listTask('LIST-'+n)),listTask('LIST-SIBLING',second),listTask('LIST-FUTURE',first,{scheduled_on:'2026-09-09'})];
+   listState.agent.items=[];listState.agent.sources=[{id:listSource,child_id:first.id,name:'虚构班级',enabled:true}];
+   listState.today_calendar={inbox:listState.tasks.map(t=>({id:t.id,task_id:t.id,kind:'task',child_ids:[t.child===first.name?first.id:second.id],title:t.title,closed:false,status:'待跟进',agenda:t.agenda})),agenda:[],events:[],timetables:[]};
+   const originalFiles=Array.from({length:5},(_,n)=>({id:String(n+1).repeat(32),name:'虚构练习-'+n+'.pdf',mime:'application/pdf',size:20}));
+   let failure=true,unscoped=false,wrongTask=false,hold=false,releaseRead=null,lateDone=false;
+   const originalView=ids=>{const task=listState.tasks.find(t=>t.id===ids.task_id),n=task?Number(task.id.slice(-1)):null;return {...ids,source_name:'虚构班级',message:{id:ids.message_id,kind:'text',sender:'示例老师',time:'',text:'五份虚构练习分别完成；独立要求及原件保留。'},attachments:task&&!unscoped?[originalFiles[n]]:originalFiles,unavailable_attachment_ids:[],pages:[],pdf_material:null,material_draft:null,...(task?{task_id:wrongTask?'wrong-task':task.id,...(!unscoped?{action_material:{scoped:true,quotes:[{text:task.action,upload_ids:[originalFiles[n].id],pages:[]}]}}:{})}:{})}};
+   try{
+    listPage.on('pageerror',e=>listErrors.push(e.message));
+    await listPage.route('**/api/state',route=>route.fulfill({json:listState}));
+    await listPage.route('**/api/agent/message?*',async route=>{const ids=Object.fromEntries(new URL(route.request().url()).searchParams);requests.push(ids);const body=originalView(ids);if(hold){await new Promise(resolve=>releaseRead=resolve);await route.fulfill({json:body});lateDone=true;return}if(failure){failure=false;return route.fulfill({status:503,json:{error:'虚构本项资料读取失败'}})}return route.fulfill({json:body})});
+    await listPage.goto(server.url,{waitUntil:'load'});await ready(listPage);await selectedChild(listPage,listState.children,first);
+    const listCard=id=>listPage.locator('[data-query-target="task:'+id+'"]'),listDialog=listPage.locator('#schoolOriginalDialog');
+    assert.match(await listPage.locator('#task-group-homework h2').innerText(),/今日作业 · 0/);assert.match(await listPage.locator('.today-recent-homework h2').innerText(),/其他未完成作业 · 5/);
+    for(let n=0;n<5;n++){assert.equal(await listCard('LIST-'+n).isVisible(),true);assert.equal(await listCard('LIST-'+n).count(),1);assert.match(await listCard('LIST-'+n).innerText(),/发布：待核对[\s\S]*截止待核对/);assert.equal(await listCard('LIST-'+n).locator('.task-requirement').innerText(),'完成第1至3题。\n第4题选做；每题写出过程。')}
+    assert.equal(await listCard('LIST-SIBLING').count(),0);assert.equal(await listCard('LIST-FUTURE').count(),0);assert.equal(await listPage.locator('.today-backlog').count(),0);await fit(listPage);await proof(listPage,'all-date-unknown-homework-'+width);
+    const openMaterial=()=>listCard('LIST-0').locator('[data-school-original-ref]').click(),retry=listDialog.locator('[data-school-original-retry]'),closeList=()=>listDialog.locator('[data-school-original-close]').click();
+    await openMaterial();await listDialog.getByText(/虚构本项资料读取失败/).waitFor();assert.equal(await listDialog.locator('.task-record-files').count(),0);await retry.click();await listDialog.locator('[data-task-material-scope="action"]').waitFor();
+    assert.equal(requests[0].task_id,'LIST-0');assert.deepEqual(requests[0],requests[1]);assert.equal(await listDialog.locator('.task-record-files a').count(),1);assert.match(await listDialog.innerText(),/虚构练习-0.pdf/);assert.doesNotMatch(await listDialog.innerText(),/虚构练习-[1-4].pdf/);await fit(listPage);await proof(listPage,'list-material-retry-'+width);
+    await listDialog.locator('[data-school-task-source]').click();await listDialog.getByRole('heading',{name:'老师完整原消息',exact:true}).waitFor();await eventually(async()=>await listDialog.locator('.task-record-files a').count()===5,'explicit full notice');assert.equal(requests.at(-1).task_id,undefined);await listDialog.locator('[data-school-task-source]').click();await listDialog.locator('[data-task-material-scope="action"]').waitFor();assert.equal(await listDialog.locator('.task-record-files a').count(),1);await closeList();
+    await listPage.reload({waitUntil:'load'});await ready(listPage);await openMaterial();await listDialog.locator('[data-task-material-scope="action"]').waitFor();assert.equal(await listDialog.locator('.task-record-files a').count(),1);assert.equal(await listPage.locator('.today-recent-homework [data-today-task]').count(),5);await fit(listPage);await proof(listPage,'list-material-reopened-'+width);await closeList();
+    for(const bad of ['unscoped','wrong-task']){unscoped=bad==='unscoped';wrongTask=bad==='wrong-task';await openMaterial();await listDialog.getByText(/本项资料范围尚未核明/).waitFor();assert.equal(await listDialog.locator('.task-record-files a').count(),0,'unverified full-notice response never becomes this task material');unscoped=false;wrongTask=false;await retry.click();await listDialog.locator('[data-task-material-scope="action"]').waitFor();await closeList()}
+    hold=true;await openMaterial();await eventually(()=>!!releaseRead,'pending list material');await closeList();await listPage.locator('[data-child-filter="'+second.id+'"]').click();await selectedChild(listPage,listState.children,second);releaseRead();await eventually(()=>lateDone,'late prior child response settled');assert.equal(await listDialog.isVisible(),false);assert.equal(await listCard('LIST-SIBLING').isVisible(),true);assert.equal(await listCard('LIST-0').count(),0);assert.doesNotMatch(await listPage.locator('#content').innerText(),/虚构练习-0.pdf/);await fit(listPage);await proof(listPage,'list-material-late-child-switch-'+width);assert.deepEqual(listErrors,[]);
+    checks.push({width,kind:'homework-list-material',allDateUnknownVisible:true,fiveAssignmentsOnce:true,noInventedDeadline:true,futurePlanExcluded:true,scopedDefault:true,completeSourceExplicit:true,failedReadRetry:true,unscopedRejected:true,wrongTaskRejected:true,reopen:true,lateChildReplyIgnored:true,noOverflow:true});
+   }finally{await listPage.close()}
 
    // A backfilled school notice keeps its original publication day; processing order must not bury recent notices.
    const orderState=fixtures(await read()),owner=orderState.children[0],baseTask=orderState.tasks.find(t=>t.id==='TODAY'),school=orderState.agent.items.find(x=>x.kind==='school');

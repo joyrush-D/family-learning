@@ -153,7 +153,7 @@ test('today and inbox group legacy undated tasks without reopening closed items 
  const row=(id,category,extra={})=>({id,task_id:id,kind:'task',child_ids:['child-a'],closed:false,agenda:{category,box:'inbox',scheduled_on:'',published_on:'',...extra}});
  const rows=[row('assignment','homework'),row('undated-admin','todo'),row('legacy-admin',''),{...row('closed','homework'),closed:true},row('future-plan','todo',{scheduled_on:'2026-09-15'}),row('future-notice','homework',{published_on:'2026-09-15'}),{...row('other-child','todo'),child_ids:['child-b']}];
  d.tasks=rows.map(x=>({id:x.id,title:x.id,child:x.child_ids[0]==='child-a'?'小溪':'小岚',focus:{box:'inbox'}}));d.today_calendar={inbox:rows,agenda:[],events:[],timetables:[]};h.ctx.child='小溪';
- const today=h.ctx.todayTasksHTML();assert.match(today,/今日作业 · 0/);assert.match(today,/要办的事 · 2/);assert.match(today,/其他未完成及日期待核对 · 1/);for(const id of ['undated-admin','legacy-admin']){assert.match(today,new RegExp('<article>'+id+'</article>'));assert.ok(today.indexOf('<article>'+id+'</article>')<today.indexOf('today-backlog'),'undated administration is visible before the backlog')};assert.doesNotMatch(today,/<article>(?:closed|future-plan|future-notice|other-child)<\/article>|待分类/);
+ const today=h.ctx.todayTasksHTML();assert.match(today,/今日作业 · 0/);assert.match(today,/要办的事 · 2/);assert.match(today,/其他未完成作业 · 1/);assert.doesNotMatch(today,/today-backlog/);for(const id of ['undated-admin','legacy-admin']){assert.match(today,new RegExp('<article>'+id+'</article>'));assert.ok(today.indexOf('<article>'+id+'</article>')<today.indexOf('today-backlog'),'undated administration is visible before the backlog')};assert.doesNotMatch(today,/<article>(?:closed|future-plan|future-notice|other-child)<\/article>|待分类/);
  const inbox=h.ctx.taskInboxHTML();assert.match(inbox,/课内作业 · 2/);assert.match(inbox,/待办事项 · 3/);assert.match(inbox,/<article>future-plan<\/article>/);assert.doesNotMatch(inbox,/<article>closed<\/article>|待分类/);
  rows[0].closed=true;assert.match(h.ctx.todayTasksHTML(),/今日作业 · 0/);
 });
@@ -163,7 +163,7 @@ test('today counts only current dated work and marks source gaps without changin
  const rows=[row('today',{due_on:d.today}),row('old'),row('future',{due_on:'2026-09-22'})];
  d.tasks=rows.map(x=>({id:x.id,title:x.id,child:'小溪'}));d.today_calendar={inbox:rows,events:[],timetables:[]};
  h.ctx.currentSources=()=>[{child_id:'child-a',unread_count:2,enabled:true}];h.ctx.currentSourceStatus=()=> '最近读取成功';
- const html=h.ctx.todayTasksHTML();assert.match(html,/今日作业 · 1/);assert.match(html,/其他未完成及日期待核对 · 2/);assert.match(html,/部分消息原件尚未读全。/);assert.doesNotMatch(html,/data-collection-check/);assert.equal(h.ctx.taskBoxes().Inbox.length,3);
+ const html=h.ctx.todayTasksHTML();assert.match(html,/今日作业 · 1/);assert.match(html,/其他未完成作业 · 2/);assert.doesNotMatch(html,/today-backlog/);assert.match(html,/部分消息原件尚未读全。/);assert.doesNotMatch(html,/data-collection-check/);assert.equal(h.ctx.taskBoxes().Inbox.length,3);
  h.ctx.currentSourceStatus=()=> '最近读取未成功';assert.match(h.ctx.todayTasksHTML(),/消息读取有缺口，作业可能缺项。/);assert.match(h.ctx.todayTasksHTML(),/data-collection-check/);
  h.ctx.child='小岚';assert.doesNotMatch(h.ctx.todayTasksHTML(),/作业可能缺项|原件尚未读全/);
 });
@@ -174,10 +174,10 @@ test('agent-classified homework appears with homework while notices stay separat
  const rows=[school('older','2026-09-02'),school('yesterday-a','2026-09-07'),school('yesterday-b','2026-09-07'),school('today-notice',d.today,'todo'),school('unknown','')];
  d.today_calendar={inbox:rows,events:[],timetables:[]};h.ctx.child='小溪';
  const html=h.ctx.todayTasksHTML(),recent=html.split('id="task-group-todo"')[1]?.split('</section>')[0],homework=html.split('today-recent-homework">')[1]?.split('</section>')[0],backlog=html.split('today-backlog">')[1]?.split('</details>')[0];
- assert.match(html,/今日作业 · 0/);assert.match(homework,/待核对 3/);assert.match(recent,/待核对 1/);
+ assert.match(html,/今日作业 · 0/);assert.match(homework,/待核对 4/);assert.match(recent,/待核对 1/);
  for(const id of ['older','yesterday-b','yesterday-a'])assert.match(homework,new RegExp('data-notice="'+id+'"'));
  assert.match(recent,/data-notice="today-notice"/);assert.doesNotMatch(recent,/yesterday-a|yesterday-b|older|unknown/);
- assert.match(backlog,/data-notice="unknown"/);assert.doesNotMatch(backlog,/data-notice="older"/);
+ assert.match(homework,/data-notice="unknown"/);assert.doesNotMatch(backlog,/data-notice="older"|data-notice="unknown"/);
  assert.equal((html.match(/data-notice="yesterday-a"/g)||[]).length,1);
 });
 
@@ -319,4 +319,32 @@ test('multiple originals show publisher once while keeping each message entry',(
  assert.equal(h.schoolOriginalButtons(refs,'child-b','查看作业原件',publications),'','other child remains excluded');
  assert.equal(publications.length,4,'display grouping does not change saved source relations');
  assert.doesNotMatch(html,/虚构班级|发言人：/);
+});
+
+
+test('all-date-unknown collected homework is exposed once for the selected child',()=>{
+ const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.agendaItemHTML=x=>`<article data-notice="${x.id}">${x.title}</article>`;
+ const row=(id,owner='child-a',when={})=>({id,task_id:id,kind:'task',child_ids:[owner],title:id,closed:false,agenda:{category:'homework',box:'inbox',published_on:'',due_on:'',scheduled_on:'',...when}});
+ const rows=[...Array.from({length:8},(_,n)=>row('unknown-'+n)),row('other-child','child-b'),row('future-family','child-a',{scheduled_on:'2026-09-15'})];
+ d.tasks=rows.map(x=>({id:x.id,title:x.title,source:'Agent建议:synthetic-school',child:x.child_ids[0]==='child-a'?'小溪':'小岚'}));d.today_calendar={inbox:rows,events:[],timetables:[]};
+ const before=JSON.stringify(d),html=h.ctx.todayTasksHTML(),recent=html.split('today-recent-homework">')[1]?.split('</section>')[0]||'';
+ assert.match(html,/今日作业 · 0/);assert.match(recent,/其他未完成作业 · 8/);
+ for(let n=0;n<8;n++)assert.equal((recent.match(new RegExp('data-notice="unknown-'+n+'"','g'))||[]).length,1);
+ assert.doesNotMatch(html,/today-backlog|data-notice="other-child"|data-notice="future-family"/);assert.equal(JSON.stringify(d),before,'display never invents dates or changes work');
+});
+
+test('list materials request the exact task and reject unscoped or wrong-task originals',async()=>{
+ const h=harness(),c=h.ctx,core=readFileSync(__dirname+'/app.js','utf8'),ref='message:synthetic-class:notice';
+ const task={id:'synthetic-task',child:'小溪',school_origin:true,source:'Agent建议:synthetic-item\n'+ref};c.data.tasks=[task];
+ Object.assign(c,{schoolOriginal:null,schoolOriginalPending:()=>false,paintSchoolOriginal:()=>{},AbortSignal,URLSearchParams});
+ vm.runInContext(core.slice(core.indexOf('function verifySchoolOriginal('),core.indexOf('// One click reads one address')),c);
+ const value=(extra={})=>({child_id:'child-a',source_id:'synthetic-class',message_id:'notice',message:{id:'notice'},attachments:[{id:'synthetic-own-file'}],task_id:task.id,action_material:{scoped:true},...extra});
+ const state=()=>c.schoolOriginal={identity:{child_id:'child-a',source_id:'synthetic-class',message_id:'notice'},taskMaterialID:task.id,taskMaterialSource:task.source,view:null,busy:false,fullSource:false};
+ let s=state(),calls=[];c.apiFetch=async path=>{calls.push(path);return{ok:true,json:async()=>value()}};await c.readSchoolOriginal();
+ assert.equal(new URL(calls[0],'https://synthetic.invalid').searchParams.get('task_id'),task.id);assert.equal(s.view.task_id,task.id);
+ for(const response of [value({task_id:'other-task'}),value({action_material:undefined})]){s=state();c.apiFetch=async()=>({ok:true,json:async()=>response});await c.readSchoolOriginal();assert.equal(s.view,null);assert.match(s.error,/本项资料范围尚未核明/)}
+ s=state();c.apiFetch=async()=>({ok:false,json:async()=>({error:'虚构读取失败'})});await c.readSchoolOriginal();assert.equal(s.view,null);assert.match(s.error,/虚构读取失败/);c.apiFetch=async()=>({ok:true,json:async()=>value()});await c.readSchoolOriginal();assert.equal(s.error,'');assert.equal(s.view.task_id,task.id);
+ s=state();s.fullSource=true;c.apiFetch=async path=>{assert.equal(new URL(path,'https://synthetic.invalid').searchParams.has('task_id'),false);return{ok:true,json:async()=>value({task_id:undefined,action_material:undefined,attachments:[{id:'own'},{id:'other'}]})}};await c.readSchoolOriginal();assert.equal(s.view.attachments.length,2,'full source is an explicit separate view');
+ let release;s=state();c.apiFetch=()=>new Promise(resolve=>release=resolve);const read=c.readSchoolOriginal();c.child='小岚';release({ok:true,json:async()=>value()});await read;assert.equal(s.view,null,'late reply cannot cross into the next child');
+ c.child='小溪';s=state();c.apiFetch=()=>new Promise(resolve=>release=resolve);const changed=c.readSchoolOriginal();task.source='Agent建议:changed';release({ok:true,json:async()=>value()});await changed;assert.equal(s.view,null,'changed task source rejects the prior material');
 });
