@@ -60,7 +60,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   stack=contextlib.ExitStack();stack.enter_context(patch.object(family_pdf.shutil,'which',lambda name:'/synthetic/'+name));stack.enter_context(patch.object(family_pdf,'_run',test_pdf.fake_run_factory(page_count=11)));return stack
  def model(text,images,**kw):
   pages=json.loads(text)['original_pdf']['pages']
-  return dict(originals=[dict(upload_id=kw['original_ids'][0],title='虚构页组 '+'-'.join(str(p) for p in pages),note='题目与参考答案为老师材料，未见孩子作答。<img src=x onerror=alert(1)>',uncertainties=['发送日期未知 <b>'],requirements=['虚构完整要求：先复习，练习第1至3题必做；第4题选做并检查，无需家长签字。'])])
+  return dict(originals=[dict(upload_id=kw['original_ids'][0],title='虚构页组 '+'-'.join(str(p) for p in pages),note='题目与参考答案为老师材料，未见孩子作答。<img src=x onerror=alert(1)>',uncertainties=['发送日期未知 <b>'],requirements=['虚构完整要求：先复习，练习第1至3题必做；第4题选做并检查，无需家长签字。'],deferred_contexts=[])])
  step=[0]
  def rounds(n,fail=False):
   for _ in range(n):
