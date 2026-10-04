@@ -1246,6 +1246,18 @@ class AgentTests(unittest.TestCase):
         with self.assertRaises(agent.AgentError):agent._school_effective_conditions(parts,partial,changes,proof)
         with self.assertRaises(agent.AgentError):agent._school_effective_conditions(parts,quotes+[dict(anchors[0])],changes,proof)
 
+    def test_admin_body_keeps_the_explicit_native_parent_actor_when_summary_omits_it(self):
+        value=dict(title='核对学校通讯录',goal='在学校通讯录中核对紧急联系电话；有误修改，无误点已核对。',advice='',state='ready',reason='',purpose='admin',submission='',change='new',target_id='')
+        evidence=[dict(ref='message:synthetic:m3',kind='text',time='2026-10-03T16:20:00+08:00',publisher='publisher:a',unread=False,
+            text='请家长后天完成学校通讯录中的紧急联系电话核对；有误就在学校通讯录中修改，无误点“已核对”。不用让孩子抄写。')]
+        brief=agent._school_brief(value,evidence=evidence)
+        self.assertEqual(brief['goal'],'家长：'+value['goal']);self.assertEqual(brief['purpose'],'admin')
+        already=dict(value,goal='家长核对学校通讯录，信息有误时修改。')
+        self.assertEqual(agent._school_brief(already,evidence=evidence)['goal'],already['goal'])
+        for text in ('不用请家长核对学校通讯录。','有人转述“请家长核对学校通讯录”。'):
+            self.assertEqual(agent._school_brief(value,evidence=[dict(evidence[0],text=text)])['goal'],value['goal'])
+        self.assertEqual(agent._school_brief(value,evidence=[dict(evidence[0],unread=True)])['goal'],value['goal'])
+
     def _effective_instruction_fixture(self):
         parts,anchors,changes,proof=self._first_batch_condition_fixture()
         parts[-1]['text']='完成《桥的观察单》：'+parts[-1]['text']
