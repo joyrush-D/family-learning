@@ -145,7 +145,14 @@ class AgendaTest(unittest.TestCase):
         for text in ['每周五交作业','上周五交的作业','每个星期五交作业','上个星期五交的作业','下下周五交作业',
                      '周一到周三交作业','本周五到下周一提交','下周一至三交作业','下周一到周三春游','周末愉快','2月14日开始活动','周五']:
             self.assertEqual(agenda.deadline(text,monday),'',text)
-        self.assertEqual(agenda.deadline('本周五英语复习，数学考试时间另行通知',monday),'','a date cannot cross a comma into another event')
+        notice='本周五英语复习，数学考试时间另行通知'
+        self.assertEqual(agenda.deadline(notice,monday),'2026-09-18','the explicitly dated revision retains its own date')
+        self.store.ingest(dict(source_id='synthetic-class',expected_cursor='0',cursor='1',checked_at=monday+'T08:00:00+08:00',
+            last_message_time=monday+'T08:00:00+08:00',error='',messages=[dict(id='1',time=monday+'T08:00:00+08:00',kind='text',
+            sender='虚构老师',text=notice,unread=False)]))
+        with app.connect() as c:
+            self.assertEqual(agenda.metadata(app,c,'child-1','英语复习','',['message:synthetic-class:1'])['due_on'],'2026-09-18')
+            self.assertEqual(agenda.metadata(app,c,'child-1','数学：考试','',['message:synthetic-class:1'])['due_on'],'','the revision date cannot cross a comma into the unknown exam')
         self.assertEqual(agenda.deadline('周五交',''),'')
         self.assertEqual(agenda.deadline('本周一交','2026-09-16'),'','a weekday already gone this week stays for review')
         notice='今天英语作业：抄写单词。本周五（09月18日）英语单元测验。另外下周一美术课请带一盒水彩笔。'
