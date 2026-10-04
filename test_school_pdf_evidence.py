@@ -38,9 +38,11 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             legacy=family_llm.validate_school_material(value,original_ids=['a'*32],require_requirements=True,
                 allow_page_scope=True,allow_legacy_reading_progress=True)
             self.assertEqual(legacy['originals'][0],original)
-        original['requirements']=[good]
-        self.assertEqual(family_llm.validate_school_material(dict(originals=[original]),original_ids=['a'*32],
-            require_requirements=True,allow_page_scope=True,deferred_pages=[4])['originals'][0]['requirements'],[good])
+        for requirement in (good,'数学：本次复习整理仍待处理的错题，独立写出订正过程。',
+                            '本轮复习第4页中尚未读取的阅读材料，做好笔记。'):
+            original['requirements']=[requirement]
+            self.assertEqual(family_llm.validate_school_material(dict(originals=[original]),original_ids=['a'*32],
+                require_requirements=True,allow_page_scope=True,deferred_pages=[4])['originals'][0]['requirements'],[requirement])
 
     def progress_group(self):
         self.link(self.keys,self.pdf,action=DETACH)
@@ -102,6 +104,24 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                     self.assertEqual(pdfm.prepare(self.store,self.now),dict(used=0,failed=0))
                 self.assertEqual(self.rows('SELECT * FROM agent_pdf_material ORDER BY first_page'),before)
 
+    def test_mixed_old_groups_keep_the_failed_recheck_visible_and_content_doubt(self):
+        keys,ident=self.progress_group()
+        with self.store._db() as c:
+            old=c.execute('SELECT payload FROM agent_pdf_material WHERE message_id=? AND first_page=4',(keys['message_id'],)).fetchone()
+            value=json.loads(old[0]);original=value['originals'][0]
+            original['uncertainties']=['第5页单位模糊，无法确定厘米还是米。']
+            original.pop('deferred_contexts',None)
+            c.execute('UPDATE agent_pdf_material SET payload=? WHERE message_id=? AND first_page=4',(json.dumps(value),keys['message_id']))
+        before=self.rows('SELECT * FROM agent_pdf_material ORDER BY first_page')
+        with test_pdf_material.renderer(),patch.object(family_llm,'extract_draft',side_effect=family_llm.LLMDraftError('虚构读取失败')):
+            self.assertEqual(pdfm.prepare(self.store,self.now,budget=1),dict(used=1,failed=1))
+        self.assertEqual(self.rows('SELECT * FROM agent_pdf_material ORDER BY first_page'),before)
+        view=self.progress_view(keys)
+        self.assertEqual((view['state'],view['complete'],view['requirements_complete']),('error',True,False))
+        with self.store._db() as c:pdf=agent._pdf_evidence(agent._school_pdf(self.store,c,self.item(ident)))
+        self.assertIn('第5页单位模糊，无法确定厘米还是米。',pdf['uncertainties'])
+        self.assertEqual((self.count('manual_tasks'),self.count('records')),(0,0))
+
     def test_progress_recheck_voids_its_result_when_a_decision_changes_mid_call(self):
         keys,ident=self.progress_group();before=self.rows('SELECT * FROM agent_pdf_material ORDER BY first_page')
         def model(*a,**kw):
@@ -132,6 +152,16 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                 self.assertEqual((caught.exception.status,caught.exception.code),(409,'pdf_requirements_incomplete'))
         with no_render(),patch.object(family_llm,'extract_draft',side_effect=AssertionError('complete action identity requires explicit recheck')):
             self.assertEqual(pdfm.prepare(self.store,self.now),dict(used=0,failed=0))
+        self.assertEqual(self.rows('SELECT * FROM agent_pdf_material ORDER BY first_page'),before)
+        self.assertEqual((self.count('manual_tasks'),self.count('records'),self.item(ident)['body']),(0,0,full))
+        # A previous accepted decision keeps its original read/print/check scope.
+        # The new guard applies only while making a new acceptance decision.
+        with self.store._db() as c:
+            c.execute("UPDATE agent_items SET state='accepted',task_id='fictional-legacy-task' WHERE id=?",(ident,))
+            accepted=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone())
+            self.assertEqual(agent.school_original_upload_ids(self.store,c,accepted,evidence[0]['ref'],[self.pdf]),[self.pdf])
+            with self.assertRaises(agent.AgentError) as caught:agent._check_school_page(self.store,c,accepted,accepting=True)
+            self.assertEqual(caught.exception.code,'pdf_requirements_incomplete')
         self.assertEqual(self.rows('SELECT * FROM agent_pdf_material ORDER BY first_page'),before)
         self.assertEqual((self.count('manual_tasks'),self.count('records'),self.item(ident)['body']),(0,0,full))
 

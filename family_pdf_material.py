@@ -251,7 +251,7 @@ def _document_view(c, source, message, value):
     structured=[b for b in batches if 'originals' in b['draft'] and not any(
         family_llm.school_requirement_has_reading_progress(r) for original in b['draft']['originals'] for r in original['requirements'])]
     requirements_complete=complete and len(structured)==len(batches)
-    structured_done={p for b in structured for p in b['pages']}
+    structured_done={p for b in batches if not _needs_requirements_upgrade(b) for p in b['pages']}
     failed = bool(job and not job['done'] and job['error'] and job['fingerprint'] in
                   {_hash(_job_value(value['fingerprint'], pages)) for pages in (done,structured_done)})
     state = 'error' if failed else 'ready' if complete else 'pending'

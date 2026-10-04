@@ -1394,7 +1394,7 @@ class Store:
                         c.execute("UPDATE agent_items SET state='superseded',updated=? WHERE id=?", (changed, review['id']))
                 return {'ok': True, 'state': 'accepted', 'task_id': row['task_id'], 'replayed': False}
             if row['state'] != 'pending': raise AgentError('建议已发生变化，请刷新', 409)
-            if action == 'accept' and row['kind'] == 'school': _check_school_page(self,c,row)
+            if action == 'accept' and row['kind'] == 'school': _check_school_page(self,c,row,accepting=True)
             if school_auto:
                 brief=json.loads(row['plan']).get('school_task',{})
                 if row['kind']!='school' or brief.get('state')!='ready' or brief.get('policy')!=SCHOOL_TASK_POLICY or brief.get('change','new')!='new' or brief.get('target_id') or obj.get('expected_updated')!=row['updated']:
@@ -1727,7 +1727,7 @@ def apply_school_change(app, store, obj, *, school_auto=False):
             if receipt.get('change')=='append': result['deduplicated']=receipt.get('deduplicated',False)
             return result
         if row['state']!='pending' or row['updated']!=expected: raise AgentError('通知已在别处处理，请读取最新记录',409)
-        _check_school_page(store,c,row)
+        _check_school_page(store,c,row,accepting=True)
         owner=next((p['name'] for p in app.profiles(c) if p['id']==row['child_id']),None)
         task=next((t for t in app.tasks(c) if t['id']==target_id and t['child']==owner),None)
         canonical=_school_origin(store,c,task,row['child_id'])
@@ -2303,7 +2303,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     return output
 
 
-def _check_school_page(store, c, row):
+def _check_school_page(store, c, row, *, accepting=False):
     """Both parent acceptance paths recheck page and PDF evidence in their existing transaction (no render, model or network)."""
     brief=json.loads(row['plan']).get('school_task',{})
     recorded=brief.get('page_evidence')
@@ -2322,7 +2322,7 @@ def _check_school_page(store, c, row):
         except (AgentError,ValueError,KeyError,TypeError): seen='';current_pdf={}
         if not seen or seen!=recorded.get('fingerprint'):
             raise AgentError(_original_label(recorded.get('documents'))+'原件整理已失效（原件、关联、消息或来源授权变化），请重新核对原件后再确认',409,'pdf_evidence_stale')
-        if current_pdf.get('reading_progress_in_requirements'):
+        if accepting and current_pdf.get('reading_progress_in_requirements'):
             raise AgentError('原件读取进度混入完成要求，原内容保留，请重新整理后核对',409,'pdf_requirements_incomplete')
 
 
