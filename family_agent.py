@@ -1601,7 +1601,7 @@ def _school_append_brief(brief, evidence, targets):
     def objects(value):
         # Compare complete named objects, not their textual prefixes. Unit
         # spacing/case does not identify another unit; 3, 30 and 3A still do.
-        named=re.findall(r'unit\s*\d+(?:[_a-z][_a-z0-9]*|\.\d+)?|第[一二三四五六七八九十0-9]+课|《[^》]{1,40}》',value.lower())
+        named=re.findall(r'unit\s*\d+(?:[_a-z][_a-z0-9]*|\.[a-z0-9]+|\s*[-–—~～+、,，和与及至到]\s*\d+)*|第[一二三四五六七八九十0-9]+课|《[^》]{1,40}》',value.lower())
         return {re.sub(r'\s+','',obj) if obj.startswith('unit') else obj for obj in named}
     specific=objects(text)
     def matches(task):
