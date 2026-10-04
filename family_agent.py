@@ -1598,14 +1598,19 @@ def _school_append_brief(brief, evidence, targets):
     reading=bool(re.search(r'(?:只|仅)?补(?:充)?(?:[^。：:\n]{0,30})朗读',text))
     textbook=bool(re.search(r'(?:只|仅)?补(?:充)?(?:[^。：:\n]{0,30})教材(?:作业)?',text))
     if reading==textbook: uncertain();return
-    specific=set(re.findall(r'unit\s*\d+|第[一二三四五六七八九十0-9]+课|《[^》]{1,40}》',text.lower()))
+    def objects(value):
+        # Compare complete named objects, not their textual prefixes. Unit
+        # spacing/case does not identify another unit; 3, 30 and 3A still do.
+        named=re.findall(r'unit\s*\d+(?:[_a-z][_a-z0-9]*|\.\d+)?|第[一二三四五六七八九十0-9]+课|《[^》]{1,40}》',value.lower())
+        return {re.sub(r'\s+','',obj) if obj.startswith('unit') else obj for obj in named}
+    specific=objects(text)
     def matches(task):
         content=(task['title']+' '+task['goal']).lower()
         # Mentioning the other task only to exclude replacement does not make
         # this correction another textbook assignment. Positive peers remain.
         content=re.sub(r'不(?:替代|代替|取代)[^。；;，,\n]{0,12}?教材(?:作业)?','',content)
         activity=bool(re.search(r'朗读|跟读|读[一二两三四五六七八九十0-9]+(?:遍|次)',content)) if reading else '教材' in content
-        return activity and all(obj in content for obj in specific)
+        return activity and specific.issubset(objects(content))
     peers=[t for t in targets if (t.get('source_id'),t.get('publisher')) in publishers and matches(t)]
     if len(peers)!=1 or peers[0]['id']!=selected['id']:
         uncertain();return
