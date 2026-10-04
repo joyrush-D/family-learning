@@ -313,6 +313,8 @@ def _reference_brief(evidence):
     def resource_request(text):
         # Only a complete resource question can override a model proposal. A
         # request at the start says nothing about independent actions after it.
+        # A resource link is not an extra assignment or read-page claim.
+        text=_URL.sub('',text).strip()
         material=r'课本|教材|页面|页|照片|资料|讲义|练习册|练习|作业|图片|观察记录|记录表|课件|文件'
         sending=r'(?:发(?:一?下|我(?:一下)?|到群(?:里)?|给我(?:一下)?)|拍(?:一?下|照|张(?:照片)?)|分享(?:一下)?|借(?:一下)?|提供(?:一下)?)'
         question=r'(?:请问[，,：:\s]*)?(?:(?:有没有|有哪位|哪位)家长|谁有)[^。！？!?；;：:\n，,]{0,180}?(?:'+material+r')(?:吗|么|呀|啊|呢)?'
@@ -1805,7 +1807,10 @@ def _school_dated_quote(quote, evidence, due, brief):
     # An independently dated parent action may lack a reading/paper identity.
     # Accept its date only when the full unrewritten action is uniquely quoted;
     # this cannot lend a sibling's date to a paraphrase or a date-only fragment.
-    literal_action=(clean(quote)==clean(brief['goal']) and bool(re.search(r'签字|盖章|交回',quote)))
+    horizontal=lambda text:re.sub(r'[ \t\u3000]+','',text).lower()
+    literal_action=(horizontal(quote)==horizontal(brief['goal'])
+                    and not re.search(r'[。；;\n]',quote.rstrip('。；;\n'))
+                    and bool(re.search(r'签字|盖章|交回',quote)))
     if not typed_action and not literal_action:return False
     matches=[]
     for entry in evidence:
