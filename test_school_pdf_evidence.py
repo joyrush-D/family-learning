@@ -226,6 +226,46 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertTrue(context['school_error']);self.assertEqual(context['allowed'],{})
         self.assertEqual(self.count('records'),0)
 
+    def text_action_original(self,fragment=False):
+        self.store.app=self.app
+        keys=self.keys if fragment else self.native_notice('text-with-receipt')
+        text='数学：2026-02-12前完成口算10题，做完检查。'
+        with self.store._db() as c:
+            raw=json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
+                                    (keys['source_id'],keys['message_id'])).fetchone()[0])
+            c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
+                      (json.dumps(dict(raw,text=text,unread=True)),keys['source_id'],keys['message_id']))
+        self.seed_groups(keys=keys,note='2026-02-13前签字交回独立活动回执。',uncertainties=[])
+        ident=self.candidate(keys=keys,ident='text-action')
+        ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
+        reply={'actions':[dict(draft(title='数学：口算10题',goal=text),due='2026-02-12',existing_item_id=ident,
+                               basis=[dict(part=ref,text=text)])]}
+        return keys,ident,reply
+
+    def test_read_native_text_action_does_not_inherit_other_attachment_gap(self):
+        keys,ident,reply=self.text_action_original()
+        result,_=self.refresh(reply)
+        self.assertEqual(result,dict(used=1,failed=0,created=1))
+        row=self.item(ident);self.assertEqual(row['state'],'accepted')
+        self.assertIn('口算10题',row['body'])
+        brief=self.brief(ident)
+        with self.store._db() as c:
+            evidence,_=agent._school_material(self.store,c,row)
+        self.assertEqual(brief['origin_basis'],agent._school_message_basis(evidence))
+        view=self.store.message(dict(keys,task_id=row['task_id']),self.app.upload_info)
+        self.assertEqual(view['attachments'],[])
+        self.assertEqual(view['action_material']['quotes'][0]['upload_ids'],[])
+        with patch.object(agent.Store,'_config',return_value=self.store._config()):
+            with self.app.connect() as c:context=self.app.homework_material_context(c,row['task_id'])
+        self.assertEqual(context['allowed'],{});self.assertFalse(context['school_error'])
+        self.assertEqual(len(self.store.message(keys,self.app.upload_info)['attachments']),1)
+
+    def test_text_scope_does_not_promote_a_screenshot_fragment(self):
+        _,ident,reply=self.text_action_original(fragment=True)
+        result,_=self.refresh(reply)
+        self.assertEqual((result['created'],self.count('manual_tasks'),self.item(ident)['state']),(0,0,'pending'))
+        self.assertEqual(self.brief(ident)['state'],'review')
+
     def test_two_originals_require_both_complete_before_one_school_round(self):
         keys,reference=self.multi_originals()
         ident=self.candidate(keys=keys,ident='multi')
