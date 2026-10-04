@@ -2654,6 +2654,8 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         raise AgentError('原件行动清单结构无法核对')
     lookup={p['id']:p for p in parts};existing={r['id']:r for r in known};used=set();identities=set();output=[]
     required={p['id'] for p in parts if p.get('requirement')};assigned=set()
+    legacy_owners={old['id']:_school_pdf_previous_action(old,parts,known) for old in known
+                   if _school_pdf_reflow(old,pdf,known)}
     fields=set(TASK_BRIEF_SCHEMA['required'])|{'due','existing_item_id','basis'}
     scope=_hash([row['child_id'],sorted(e['ref'] for e in evidence),sorted({u for p in parts for u in p['upload_ids']})])
     for value in result['actions']:
@@ -2666,6 +2668,9 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         used.add(chosen) if chosen else None
         basis=value['basis'];anchors=[];action_anchors=[];requirements=[];compiled=[]
         if not isinstance(basis,list) or not 1<=len(basis)<=6: raise AgentError('原件行动缺少对应内容')
+        chosen_parts={quote.get('part') for quote in basis if isinstance(quote,dict)}
+        if any(chosen!=owner and chosen_parts&owned for owner,owned in legacy_owners.items()):
+            raise AgentError('完整要求属于另一条旧行动，不能合并或更换原编号')
         for quote in basis:
             if not isinstance(quote,dict) or set(quote)!={'part','text'}: raise AgentError('原件行动依据结构无法核对')
             part=lookup.get(quote['part']);text=_text(quote,'text',2000,True).strip()
@@ -2772,6 +2777,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
             title=brief['title'] or (old or row)['title'],body=brief['goal'] or (old or row)['body'],due=due,
             evidence=json.loads(item_row['evidence']),plan=plan,brief=brief,reading=cited))
     if row['id'] not in used: raise AgentError('原件清单未保留原候选，整组保留重试')
+    if not legacy_owners.keys()<=used: raise AgentError('原件清单遗漏旧行动编号，原要求与决定保留')
     if assigned!=required: raise AgentError('原件完整行动要求未全部分配，整组保留重试')
     activities=[v for v in output if v['brief'].get('purpose')=='learning' and v['brief']['state']=='ready' and v['brief']['change']=='new']
     for item in output:
@@ -2921,6 +2927,14 @@ def _refresh_school(app, store, now, budget):
             if plan.get('school_original_action') and pdf_evidence:
                 with store._db() as c:_,reflow_known=_school_original_known(store,c,row)
                 reflow=_school_pdf_reflow(row,pdf_evidence,reflow_known)
+                if not action.get('requirements') and any(a.get('upload_ids') and a.get('pages') for a in action.get('anchors',[])) and not reflow:
+                    # A same-source family decision forbids legacy reflow. It must also forbid falling back to
+                    # a free summary that replaces this pending action's original words.
+                    waiting=dict(brief,state='review',reason='同出处已有决定或更改，旧原件行动归属仍待核对；原内容与决定保留。')
+                    if waiting!=brief:
+                        plan['school_task']=waiting
+                        with store._db() as c:c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=? AND plan=?",(_json(plan),row['id'],row['updated'],row['plan']))
+                    continue
             original_parts=_school_original_parts(evidence,pdf_evidence,material) if (pdf_evidence or material) and (not plan.get('school_original_action') or reflow) else []
             compiled_requirements=None
             if plan.get('school_original_action',{}).get('requirements'):
@@ -2936,6 +2950,12 @@ def _refresh_school(app, store, now, budget):
                     context.update(candidate_id=row['id'],original_parts=original_parts,existing_actions=[dict(id=r['id'],state=r['state'],title=r['title'],goal=r['body'],due=r['due'],original_action=json.loads(r['plan']).get('school_original_action',{})) for r in known])
                 except AgentError as error:
                     source_error=error;value['original_scope_error']=str(error)
+            if pdf_evidence and (original_parts or compiled_requirements is not None):
+                # Full texts are sent once in original_parts (with merged evidence page scope) or the saved
+                # complete_action_requirements. Repeating them per page group would defeat the input budget.
+                context['pdf_material']=[dict(doc,requirements_in='original_parts' if original_parts else 'complete_action_requirements',
+                    groups=[{k:v for k,v in group.items() if k!='requirements'} for group in doc['groups']])
+                    for doc in pdf_evidence['model']]
             key='school-task:'+row['id'];fp=store._job(key,value,now,model=reference is None)
             if not fp: continue
             paged+=page_changed or pdf_changed or material_changed or original_changed
@@ -2990,7 +3010,8 @@ def _refresh_school(app, store, now, budget):
                     texts += [(p['ref'],p['text']) for p in (page_evidence or {}).get('model_pages',[])]
                     texts += [(d['ref'],g['text']) for d in (pdf_evidence or {}).get('model',[]) for g in d['groups']]
                     if compiled_requirements is not None:
-                        texts=[(a['ref'],a['quote']) for a in plan['school_original_action']['anchors']]
+                        texts=[(r['ref'],r['text']) for r in plan['school_original_action']['requirements']]
+                        texts+=[(a['ref'],a['quote']) for a in plan['school_original_action']['anchors'] if not a['upload_ids']]
                     dates=set().union(*(family_agenda.deadlines(text,stamps.get(ref,'')) for ref,text in texts))
                     if len(dates)==1:
                         resolved=next(iter(dates))

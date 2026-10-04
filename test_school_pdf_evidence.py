@@ -1181,7 +1181,10 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertEqual((result['used'],result['created'],self.brief(ident)['state'],self.count('manual_tasks')),(1,1,'ready',1))
         self.assertEqual((self.item(ident)['body'],self.item(ident)['due']),(TEXT+'\n'+last,'2026-02-12'))
         doc=json.loads(calls[0][1]['content'])['pdf_material'][0]
-        self.assertEqual([g['requirements'] for g in doc['groups']],[[TEXT],[TEXT],[TEXT],[last]])
+        context=json.loads(calls[0][1]['content'])
+        self.assertEqual(doc['requirements_in'],'original_parts')
+        self.assertTrue(all('requirements' not in g for g in doc['groups']))
+        self.assertEqual([p['text'] for p in context['original_parts'] if p.get('requirement')],[TEXT,last])
         self.assertTrue(any(g['text_truncated'] for g in doc['groups']))
         self.assertEqual(self.rows('SELECT original_status FROM manual_tasks'),[('待跟进',)])
         with self.store._db() as c:
@@ -1285,7 +1288,8 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                          (True, list(range(1, 12)), BATCHES, [], []))
         self.assertEqual(sum(len(g['text']) for g in doc['groups']), agent.PDF_TEXT_LIMIT)
         self.assertEqual([g['text_truncated'] for g in doc['groups']],[False,True,True,True])
-        self.assertEqual([g['requirements'] for g in doc['groups']],[[],[],[],[]])
+        self.assertTrue(all('requirements' not in g for g in doc['groups']))
+        self.assertFalse(any(p.get('requirement') for p in json.loads(calls[0][1]['content'])['original_parts']))
         self.assertEqual((result['failed'],result['created'],self.count('manual_tasks'),self.item(ident)),(1,0,0,before))
         self.assertEqual(self.material()['documents'][0]['processed_pages'],list(range(1,12)))
 
@@ -1503,7 +1507,8 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertEqual(sum(len(g['text']) for g in doc['groups']), 6000)
         self.assertEqual([g['pages'] for g in doc['groups']],batches)
         self.assertEqual([g['text_truncated'] for g in doc['groups']],[False,True,True,True])
-        self.assertEqual([g['requirements'] for g in doc['groups']],[[],[],[],[]])
+        self.assertTrue(all('requirements' not in g for g in doc['groups']))
+        self.assertFalse(any(p.get('requirement') for p in json.loads(calls[0][1]['content'])['original_parts']))
         self.assertEqual((result['failed'],result['created'],self.count('manual_tasks'),self.item(ident)),(1,0,0,before))
 
 
