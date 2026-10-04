@@ -161,11 +161,12 @@ _LEARNING_NEGATED_ACTION = re.compile(
     r'(^|[。；;，,！？!?\n（(])\s*(?:请\s*)?(?:(?:家长|孩子|学生|同学们?)\s*)?'
     r'(?:不用|不必|不需(?:要)?|不要求|无需|无须|不要|不得|禁止|切?勿)\s*'
     r'(?:(?:再|额外|另行)\s*)?(?:(?:让|要求)\s*)?(?:(?:孩子|学生|同学们?)\s*)?'
-    r'(?:朗读|背诵|抄写|默写|听写|跟读|练习|订正|预习|复习|阅读|口算|习作|作文)')
+    r'(?:朗读|背诵|抄写|默写|听写|跟读|练习|订正|预习|复习|阅读|口算|习作|作文)'
+    r'(?=\s*(?:[。；;，,！？!?\n）)]|$))')
 
 
 def _school_learning_text(parts):
-    text=_URL.sub('',' '.join(parts))
+    text=_URL.sub('','\n'.join(parts))
     text=_LEARNING_NEGATED_ACTION.sub(lambda match:match.group(1),text)
     text=_LEARNING_NEGATED_OBJECT.sub('',_LEARNING_ADMIN_COMPARISON.sub('',text))
     return _LEARNING_FORM.sub('',_LEARNING_MATERIAL.sub('',text))

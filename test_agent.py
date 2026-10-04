@@ -612,7 +612,8 @@ class AgentTests(unittest.TestCase):
         cases=('不用抄写，但需朗读两遍。','先朗读两遍，再核对通讯录；不用抄写。',
                '不用抄写再朗读两遍。','并非不用抄写。','不是不需要背诵。',
                '不要忘记朗读。','不要只抄写。','无需录音，但完成第1–3题。',
-               '不用抄写课文。')
+               '不用抄写课文。','并不是禁止同学订正。','不要求朗读速度达标。',
+               '不要求朗读流利。','不要求朗读 次数达标。','请家长不要忘记让孩子朗读后签字。')
         # Only direct negated verbs are removed from classification. Unresolved objects
         # and inverse/limited negation remain guarded, never deleted from the notice.
         for clause in cases:
@@ -624,6 +625,11 @@ class AgentTests(unittest.TestCase):
                                               separate_learning=separate)
                     self.assertEqual((brief['state'],brief['goal']),('review',text))
                     self.assertIn('同时提到学习活动',brief['reason'])
+
+        text='不用让孩子抄写。家长核对学校通讯录。'
+        brief=agent._school_brief(dict(title='家长事务：核对联系电话',goal=text,advice='',state='ready',reason='',purpose='admin'),
+            evidence=[dict(ref='message:synthetic-negative:3',text=text,kind='text')],separate_learning=True)
+        self.assertEqual((brief['state'],brief['goal']),('ready',text))
 
     def test_negated_child_action_parent_notice_is_collected_once_with_original_deadline(self):
         self.now=dt.datetime(2026,10,4,10,tzinfo=agent.TZ)
