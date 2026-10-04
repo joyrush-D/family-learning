@@ -37,7 +37,7 @@ class SchoolImageProtocolTests(unittest.TestCase):
         import family_llm as llm
         ident='a'*32
         standard='数学：2026年2月12日前完成第1至3题必做，写明单位；第4题选做，若选做须用两种方法，做完检查，无需家长签字。'
-        original=dict(upload_id=ident,title='虚构页组',note='本轮第4至6页，题面保留在原件。',uncertainties=[],requirements=[standard])
+        original=dict(upload_id=ident,title='虚构页组',note='本轮第4至6页，题面保留在原件。',uncertainties=[],requirements=[standard],deferred_contexts=[])
         with patch.object(llm,'configuration',return_value=('http://127.0.0.1/mock','synthetic')), \
                 patch.object(llm,'_chat_json',return_value=dict(originals=[original])) as model:
             result=llm.extract_draft('虚构原件第4至6页。',[dict(mime='image/png',data=png()) for _ in range(3)],

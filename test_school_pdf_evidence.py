@@ -44,7 +44,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
 
     def test_old_untyped_scope_doubt_recheck_preserves_payload_and_does_not_repeat(self):
         self.link(self.keys,self.pdf,action=DETACH)
-        keys=self.native_notice('untyped-scope');self.candidate(keys=keys,ident='untyped-scope')
+        keys=self.native_notice('untyped-scope');ident=self.candidate(keys=keys,ident='untyped-scope')
         self.seed_groups(keys=keys,uncertainties=[])
         with self.store._db() as c:
             first=c.execute('SELECT * FROM agent_pdf_material WHERE message_id=? AND first_page=1',(keys['message_id'],)).fetchone()
@@ -64,7 +64,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertEqual(after[1:],before[1:])
         self.assertEqual(json.loads(after[0][1])['previous_group'],dict(payload=old,updated=before[0][2],pages=json.loads(before[0][3]),page_count=before[0][4]))
         with self.store._db() as c:
-            row=self.item('untyped-scope');pdf=agent._pdf_evidence(agent._school_pdf(self.store,c,row))
+            row=self.item(ident);pdf=agent._pdf_evidence(agent._school_pdf(self.store,c,row))
         self.assertEqual(pdf['uncertainties'],[])
 
     def test_covered_deferred_pages_never_clear_a_real_content_doubt(self):
@@ -72,6 +72,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             with self.subTest(doubt=doubt):
                 with self.store._db() as c:c.execute('DELETE FROM agent_pdf_material')
                 self.seed_groups(uncertainties=[])
+                ident=self.candidate(ident='covered-'+str(bool(doubt)))
                 with self.store._db() as c:
                     rows=list(c.execute('SELECT first_page,payload FROM agent_pdf_material ORDER BY first_page'))
                     for first,payload in rows:
@@ -79,8 +80,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                         original['deferred_contexts']=[dict(pages=[4],note='独立回执在后续页整理。')] if first==1 else []
                         original['uncertainties']=[doubt] if first==1 and doubt else []
                         c.execute('UPDATE agent_pdf_material SET payload=? WHERE first_page=?',(json.dumps(value),first))
-                    self.candidate(ident='covered-'+str(bool(doubt)))
-                    row=self.item('covered-'+str(bool(doubt)));pdf=agent._pdf_evidence(agent._school_pdf(self.store,c,row))
+                    row=self.item(ident);pdf=agent._pdf_evidence(agent._school_pdf(self.store,c,row))
                 self.assertEqual(pdf['uncertainties'],[doubt] if doubt else [])
 
     def test_untyped_doubt_is_not_reread_after_any_parent_decision(self):
