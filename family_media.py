@@ -695,7 +695,7 @@ def draft_input(store, c, source, message):
     words = text + ''.join(d['name'] + d['text'] for d in documents)
     require(not documents or len(words) <= family_llm.MAX_TEXT, 'draft_text_too_long')  # Never cut to fit.
     require(sum(len(i['data']) for i in images) + len(words.encode()) <= 20 * 1024 * 1024, 'draft_originals_too_large')
-    original_ids=image_ids+document_ids if kind and images else []
+    original_ids=image_ids+document_ids if kind and (images or documents) else []
     def fingerprint(revision):
         return hashlib.sha256(json.dumps(([revision, kind] if kind else [1]) + [source, child, message, originals],
             ensure_ascii=False, sort_keys=True).encode()).hexdigest()
@@ -768,7 +768,7 @@ def draft_view(store, c, source, message):
     except Exception as error:
         explanation = {'draft_image_required':'补充原件中有PDF等目前尚不支持自动整理的文件，本次未读取任何原件；原件保留，可手动核对。' if kind
                            else '目前自动整理支持JPG、PNG、WebP图片；其他文件可保留并手动记录。',
-                       'draft_too_many_originals':'一次最多整理3张原件，请分次关联或手动记录。',
+                       'draft_too_many_originals':'一次最多整理3份原件，请分次关联或手动记录。',
                        'draft_docx_rejected':'DOCX原件已加密、损坏、超出读取限额或含宏、外部链接，本次未读取任何原件；原件保留，请打开原件核对。',
                        'draft_docx_unsupported':'DOCX原件含图片、公式、页眉页脚、批注、修订等暂不能完整读取的内容，为避免遗漏，本次未读取任何原件；原件保留，请打开原件核对。',
                        'draft_text_too_long':'DOCX正文与通知文字合计超过12000字，为避免截断，本次未读取任何原件；可拆分后关联或打开原件核对。',

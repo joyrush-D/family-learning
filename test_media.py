@@ -843,6 +843,68 @@ class MediaTests(unittest.TestCase):
         self.write_config(enabled=False)
         self.assertEqual(self.store.message(keys, dict)['material_draft']['state'], 'unavailable')
 
+    def test_docx_aggregate_history_rereads_only_undecided_requirements_and_keeps_old_payload(self):
+        import family_llm
+        self.source=dict(id='qq:123456',platform='qq',child_id='child-1',name='虚构QQ班级',cursor='100',enabled=True)
+        self.write_config()
+        message=self.message(kind='text');message['text']='学校要求见这两份文档。';self.ingest(message)
+        keys=dict(child_id='child-1',source_id=self.source['id'],message_id=message['id'])
+        requirements=['数学：完成第1至3题必做并写明单位，第4题选做须用两种方法。','家长事务：打印独立回执，家长签字后交回。']
+        ids=[self.seed_docx(i,docx(para(r)),name='相同名称.docx') for i,r in zip(['b'*32,'c'*32],requirements)]
+        for ident in ids:self.link(keys,ident)
+        ref='message:'+keys['source_id']+':'+keys['message_id']
+        self.store._save('docx-old-decisions','fixture',[dict(child_id='child-1',kind='school',title='原决定保留',body='原要求保留',due='',
+                        evidence=[dict(ref=ref,text=message['text'])],plan={})],self.now)
+        old=dict(title='旧文档汇总',note='数学练习和独立回执的旧说明。',uncertainties=[])
+        payload=json.dumps(dict(kind='school_material',**old),ensure_ascii=False)
+        with self.store._db() as c:
+            source,raw=self.store._message_context(c,keys);value=media.draft_input(self.store,c,source,raw)
+            self.assertEqual(value['original_ids'],ids)
+            self.assertNotEqual(value['fingerprint'],value['legacy_fingerprint'])
+            c.execute('INSERT INTO agent_message_drafts VALUES(?,?,?,?,?)',
+                      (source['id'],raw['id'],value['legacy_fingerprint'],payload,self.now.isoformat()))
+            self.assertIsNone(media.school_evidence(self.store,c,source,raw))
+        saved=self.db_rows('SELECT * FROM agent_message_drafts')
+        with patch.object(family_llm,'extract_draft') as model:
+            for state in ('accepted','dismissed'):
+                with self.store._db() as c:c.execute('UPDATE agent_items SET state=?',(state,))
+                self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=0,failed=0));model.assert_not_called()
+                view=self.store.message(keys,dict)['material_draft']
+                self.assertEqual((view['legacy'],view['draft']),(True,old))
+                self.assertEqual(self.db_rows('SELECT * FROM agent_message_drafts'),saved)
+        with self.store._db() as c:c.execute("UPDATE agent_items SET state='pending'")
+        decisions=self.db_rows('SELECT * FROM agent_items')
+        with patch.object(family_llm,'extract_draft',return_value=old):
+            self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=1,failed=1))
+        self.assertEqual(self.db_rows('SELECT * FROM agent_message_drafts'),saved)
+        originals=[dict(upload_id=i,title=t,note='本份背景',uncertainties=[],requirements=[r])
+                   for i,t,r in zip(ids,['数学练习','独立回执'],requirements)]
+        with patch.object(family_llm,'extract_draft',return_value=dict(originals=originals)) as model:
+            self.assertEqual(media.prepare_draft(self.store,self.now+dt.timedelta(minutes=6)),dict(used=1,failed=0));model.assert_called_once()
+        current=self.db_rows('SELECT * FROM agent_message_drafts')[0]
+        parsed=json.loads(current['payload'])
+        self.assertEqual(current['fingerprint'],value['fingerprint'])
+        self.assertEqual(parsed['originals'],originals)
+        self.assertEqual(parsed['previous_aggregate'],dict(fingerprint=value['legacy_fingerprint'],payload=payload,updated=self.now.isoformat()))
+        self.assertEqual(self.db_rows('SELECT * FROM agent_items'),decisions)
+        self.assertEqual(self.db_rows('SELECT * FROM records'),[])
+
+    def test_docx_requirement_reread_rechecks_decision_after_model_before_any_save(self):
+        import family_llm
+        keys=self.school_fragment('虚构学校：见文档要求。')
+        ident=self.seed_docx('b'*32,docx(para('数学：完成练习并写明单位。')));self.link(keys,ident)
+        ref='message:'+keys['source_id']+':'+keys['message_id']
+        self.store._save('docx-race-decision','fixture',[dict(child_id='child-1',kind='school',title='原事项',body='原要求',due='',
+                        evidence=[dict(ref=ref,text='虚构学校：见文档要求。')],plan={})],self.now)
+        def model(*args,**kwargs):
+            with self.store._db() as c:c.execute("UPDATE agent_items SET state='accepted'")
+            return dict(originals=[dict(upload_id=ident,title='数学练习',note='本份背景',uncertainties=[],requirements=['数学：完成练习并写明单位。'])])
+        with patch.object(family_llm,'extract_draft',side_effect=model):
+            self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=1,failed=1))
+        self.assertEqual(self.db_rows('SELECT * FROM agent_message_drafts'),[])
+        self.assertEqual(self.db_rows('SELECT state FROM agent_items'),[dict(state='accepted')])
+        self.assertEqual(self.db_rows('SELECT * FROM records'),[])
+
     def test_docx_text_reads_utf8_paragraphs_and_table_rows_or_fails_closed(self):
         self.assertEqual(media.docx_text(docx(DOCX_BODY)), DOCX_TEXT)
         self.assertEqual(media.docx_text(docx(para('字' * media.DOCX_LIMITS['chars']))), '字' * media.DOCX_LIMITS['chars'])
