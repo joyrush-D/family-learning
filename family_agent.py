@@ -2759,7 +2759,8 @@ def school_original_upload_ids(store,c,row,ref,ids):
     """Shared current original scope for task display, printing and answer checking, read-only."""
     row=school_original_source_row(store,c,row,ref)
     selected=_school_action_upload_ids(row,ref,ids)
-    if selected is None:return None
+    if selected is None:
+        raise AgentError('本项资料范围尚未核明，请查看老师完整原消息',409,'school_original_scope_stale')
     evidence,_=_school_material(store,c,row)
     if json.loads(row['plan']).get('school_task',{}).get('origin_basis')!=_school_message_basis(evidence):
         raise AgentError('本项原消息已变化，请回原消息重新核对',409,'school_original_scope_stale')

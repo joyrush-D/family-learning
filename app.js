@@ -1597,6 +1597,7 @@ function schoolPdfProgress(p){
 // Show the saved preparation beside its task. Reading never schedules a model, collection or record write.
 function taskSchoolMaterialHTML(view){
  const p=view.pdf_material,d=view.material_draft,action=view.action_material,scoped=action?.scoped===true,pages=!scoped&&Array.isArray(view.pages)?view.pages:[];
+ if(view.task_id&&!scoped)throw Error('本项资料范围尚未核明，请查看老师完整原消息。');
  let preparation='';
  if(scoped){
   if(!Array.isArray(action.quotes)||!action.quotes.length||action.quotes.some(q=>!q||typeof q.text!=='string'||!q.text.trim()||!Array.isArray(q.upload_ids)||!Array.isArray(q.pages)||q.pages.some(n=>!Number.isInteger(n)||n<1)))throw Error('本项资料依据暂时无法核对，请重试。');
@@ -1644,7 +1645,7 @@ function drawTaskSchoolResources(task){
     if(task.school_origin===true&&view.task_id!==task.id)throw Error('本项资料归属暂时无法核对，请重试。');
     if(!row.isConnected||taskFeedbackContext?.task_id!==task.id||taskFeedbackContext.child!==task.child)return;
     row.innerHTML=taskSchoolMaterialHTML(view);
-   }catch(error){if(row.isConnected){row.innerHTML=`<p class="error" role="status">${esc(error.message||'读取失败')}；作业与已保存反馈保留。</p><button type="button">重试读取资料</button>`;row.querySelector('button').onclick=read}}
+   }catch(error){if(row.isConnected){row.innerHTML=`<p class="error" role="status">${esc(error.message||'读取失败')}；作业与已保存反馈保留。</p><button type="button" data-task-material-retry>重试读取资料</button><button type="button" data-school-original-ref="${esc('message:'+identity.source_id+':'+identity.message_id)}" data-school-original-child="${esc(identity.child_id)}">查看老师完整原消息</button>`;row.querySelector('[data-task-material-retry]').onclick=read}}
    finally{delete row.dataset.loading}
   };read();
  }
