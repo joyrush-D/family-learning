@@ -233,8 +233,10 @@ def _pending(done, page_count):
 def _has_reading_progress(batch):
     import family_llm
     draft=batch['draft']
-    return any(family_llm.school_requirement_has_reading_progress(text)
-        for original in draft.get('originals',[]) for text in original.get('requirements',[])+original['uncertainties'])
+    return (any(family_llm.school_requirement_has_reading_progress(text)
+        for original in draft.get('originals',[]) for text in original.get('requirements',[])) or
+        any(family_llm.school_uncertainty_has_reading_progress(text)
+        for original in draft.get('originals',[]) for text in original.get('uncertainties',[])))
 
 
 def _needs_requirements_upgrade(batch):

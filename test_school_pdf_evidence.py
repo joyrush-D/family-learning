@@ -39,7 +39,8 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                 allow_page_scope=True,allow_legacy_reading_progress=True)
             self.assertEqual(legacy['originals'][0],original)
         for requirement in (good,'数学：本次复习整理仍待处理的错题，独立写出订正过程。',
-                            '本轮复习第4页中尚未读取的阅读材料，做好笔记。'):
+                            '本轮复习第4页中尚未读取的阅读材料，做好笔记。',
+                            '本次仅读取第1至3页中的数据，记录结果。'):
             original['requirements']=[requirement]
             self.assertEqual(family_llm.validate_school_material(dict(originals=[original]),original_ids=['a'*32],
                 require_requirements=True,allow_page_scope=True,deferred_pages=[4])['originals'][0]['requirements'],[requirement])

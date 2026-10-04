@@ -294,8 +294,8 @@ def _pdf_evidence(material):
     # Reserve the whole requirements before sending any background prose, including earlier-page background.
     reading_progress=any(family_llm.school_requirement_has_reading_progress(r)
         for m in material for b in m['batches'] for original in b['draft'].get('originals',[]) for r in original['requirements'])
-    uncertainty_progress=any(family_llm.school_requirement_has_reading_progress(u)
-        for m in material for b in m['batches'] for original in b['draft'].get('originals',[]) for u in original['uncertainties'])
+    uncertainty_progress=any(family_llm.school_uncertainty_has_reading_progress(u)
+        for m in material for b in m['batches'] for original in b['draft'].get('originals',[]) for u in original.get('uncertainties',[]))
     model=[];documents=[];uncertainties=[];total=min(requirements_size,PDF_TEXT_LIMIT)
     complete_requirements=requirements_size<=PDF_TEXT_LIMIT and not reading_progress and not uncertainty_progress
     for m in material:
