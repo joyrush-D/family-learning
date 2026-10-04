@@ -2518,6 +2518,20 @@ def _school_material(store, c, row):
     return evidence,pages
 
 
+def school_original_publication_ref(store,c,row):
+    """An accepted, unchanged correction proof identifies the original publication, not a supplement."""
+    try:
+        if row['state']!='accepted' or not row['task_id']:return ''
+        plan=json.loads(row['plan']);brief=plan.get('school_task',{})
+        action=plan.get('school_original_action',{});proof=action.get('correction_proof')
+        if not proof or not action.get('condition_changes'):return ''
+        evidence,_=_school_material(store,c,row)
+        if brief.get('origin_basis')!=_school_message_basis(evidence):return ''
+        if proof!=_school_first_batch_correction(dict(brief,change='update',target_id=''),evidence):return ''
+        return proof['original_ref']
+    except (AgentError,ValueError,KeyError,TypeError):return ''
+
+
 def _school_action_upload_ids(row,ref,ids):
     """Saved action anchors, never a filename or client-provided scope; [] explicitly means text only."""
     action=json.loads(row['plan']).get('school_original_action')

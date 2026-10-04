@@ -199,6 +199,8 @@ async function zeroWriteRetry(page,host,route,button,error,success){
    const expectedTasks=input.result.tasks.slice().sort((a,b)=>a.id.localeCompare(b.id)),rawTasks=before.current.manual_tasks.slice().sort((a,b)=>a.id.localeCompare(b.id));assert.deepEqual(rawTasks,expectedTasks,'frozen replay tasks are copied without changes');
    const observation=state.tasks.find(t=>t.id===input.observation.id),reading=state.tasks.find(t=>t.id===input.reading.id),admin=state.tasks.find(t=>t.id===input.admin.id);
    assert.equal(observation.agenda.category,'homework');assert.equal(reading.agenda.category,'homework');assert.equal(admin.agenda.category,'todo');assert.equal(admin.agenda.due_on,'2026-10-05');
+   assert.equal(observation.agenda.published_at,'2026-10-03T16:10:00+08:00','the validated original publication survives later supplements and corrections');
+   assert.equal(reading.agenda.published_at,'2026-10-03T16:10:00+08:00');assert.equal(admin.agenda.published_at,'2026-10-03T16:20:00+08:00');
    for(const task of [observation,reading]){assert.match(task.title,/语文/);assert.equal(task.agenda.due_on,AS_OF)}
    for(const text of ['第2–4自然段','两遍','给家长听','不用录音','不用上传'])assert(reading.action.includes(text),'reading retains its exact frozen requirement: '+text);
    for(const text of ['A、B栏仍必做','C栏改为选做','不做C栏也算完成观察单','语文本','两个描写桥的词语','三句完整的话','位置','外形','用途','不得照抄参考句','不用打印或上传'])assert(observation.action.includes(text),'observation retains its full frozen completion standard: '+text);
@@ -209,6 +211,7 @@ async function zeroWriteRetry(page,host,route,button,error,success){
    assert.deepEqual(await todos.locator('[data-today-task]').evaluateAll(xs=>xs.map(x=>x.dataset.todayTask)),[admin.id]);
    assert.match(await homework.locator('h2').innerText(),/今日作业 · 2/);assert.match(await card(admin.id).innerText(),/2026-10-05/);
    for(const task of [observation,reading,admin]){assert.equal(await card(task.id).isVisible(),true);assert.equal(await card(task.id).locator('[data-check]').isChecked(),false)}
+   assert.match(await card(observation.id).locator('.agenda-dates').innerText(),/发布：2026-10-03 16:10/,'Today displays the original time rather than an unknown or correction time');
    await fit(page);await page.screenshot({path:path.join(input.proof,'frozen-today-'+width+'.png'),fullPage:true});
 
    const original=page.locator('#schoolOriginalDialog'),materialChecks=[];

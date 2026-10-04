@@ -830,6 +830,30 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
             self.assertEqual(c.execute('SELECT SUM(processed) FROM agent_messages').fetchone()[0],2)
 
+        import family_agenda
+        task,=self.app.tasks();self.assertEqual(task['agenda']['published_at'],'2026-10-03T16:10:00+08:00')
+        self.assertEqual(task['agenda']['due_on'],'2026-10-04')
+        refs=[q['ref'] for q in json.loads(saved['evidence'])]
+        with self.app.connect() as c:
+            before='\n'.join(c.iterdump())
+            self.assertEqual(agent.school_original_publication_ref(self.store,c,saved),refs[0])
+            self.assertEqual(agent.school_original_publication_ref(self.store,c,dict(saved,child_id='child-2')),'')
+            self.assertEqual(agent.school_original_publication_ref(self.store,c,dict(saved,state='pending')),'')
+            unproven=family_agenda.metadata(self.app,c,'child-1',task['title'],task['due'],list(reversed(refs)))
+            self.assertEqual(unproven['published_on'],'','unrelated different days still cannot be collapsed to the earliest date')
+            explicit=family_agenda.metadata(self.app,c,'child-1',task['title'],task['due'],refs,
+                dict(category='homework',published_on='2026-10-02'),publication_ref=refs[0])
+            self.assertEqual(explicit['published_on'],'2026-10-02','explicit parent dates retain priority')
+            self.assertEqual(explicit['published_at'],'')
+            self.assertEqual(before,'\n'.join(c.iterdump()))
+            c.execute('SAVEPOINT stale_publication')
+            payload=json.loads(c.execute('SELECT payload FROM agent_messages WHERE id=?',('11',)).fetchone()[0])
+            payload['time']='2026-10-03T16:11:00+08:00'
+            c.execute('UPDATE agent_messages SET payload=? WHERE id=?',(json.dumps(payload),'11'))
+            self.assertEqual(agent.school_original_publication_ref(self.store,c,saved),'','a changed original invalidates the display proof')
+            c.execute('ROLLBACK TO stale_publication');c.execute('RELEASE stale_publication')
+            self.assertEqual(before,'\n'.join(c.iterdump()))
+
     def _school_rejects_first_batch_conversion(self,*,duplicate=False,wrong_date=False,naive=False):
         self.now=dt.datetime(2026,10,4,10,tzinfo=agent.TZ);self.config()
         original=('10月5日完成第二项：《桥的观察单》，A、B、C三栏都要做；10月6日交回活动回执。' if wrong_date

@@ -158,7 +158,7 @@ def task_category(title,purpose=None):
     return 'todo'
 
 
-def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None):
+def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref=''):
     focus=focus or {};messages=[];publications=[]
     store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
     for ref in refs:
@@ -173,8 +173,10 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None):
         except family_agent.AgentError:continue
     times=sorted({sent_at(m.get('time','')) for m in messages}-{''})
     days=sorted({value[:10] for value in times})
+    original_time=next((sent_at(m.get('time','')) for m in messages if
+                       'message:'+m['source_id']+':'+m['id']==publication_ref),'') if publication_ref else ''
     organized=focus.get('category') in ('unknown','homework','todo')
-    published=focus.get('published_on','') if organized else (days[0] if len(days)==1 else '')
+    published=focus.get('published_on','') if organized else (original_time[:10] if original_time else days[0] if len(days)==1 else '')
     subject=re.sub(r'^待核对[：:]?\s*','',title).rstrip('。')
     # Borrow a source deadline only from the clause naming THIS task, not a sibling instruction.
     # An exam task's title is usually rewritten (subject prefix, weekday suffix), so it is no longer a
@@ -194,7 +196,7 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None):
     category=focus.get('category','')
     if category not in ('homework','todo'):category='todo' if category=='unknown' else task_category(title,purpose)
     # Later supplements retain their own source entries, not the first notice's time.
-    published_at=min((value for value in times if value[:10]==published),default='')
+    published_at=original_time if original_time and original_time[:10]==published else min((value for value in times if value[:10]==published),default='')
     return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,scheduled_on=focus.get('scheduled_on',''),
                 category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox')
 
@@ -205,12 +207,15 @@ def enrich(app,c,tasks):
     for task in tasks:
         refs=[x.strip() for x in task['source'].splitlines() if x.strip().startswith('message:')]
         focus=task.get('focus') or {}
-        purpose=None
+        purpose=None;publication_ref=''
         if task.get('school_origin'):
             origin=task['source'].splitlines()[0].removeprefix('Agent建议:')
-            proposal=c.execute("SELECT plan FROM agent_items WHERE id=? AND task_id=? AND child_id=? AND kind='school' AND state='accepted'",
+            proposal=c.execute("SELECT * FROM agent_items WHERE id=? AND task_id=? AND child_id=? AND kind='school' AND state='accepted'",
                                (origin,task['id'],owners.get(task['child'],''))).fetchone()
-            if proposal:purpose=json.loads(proposal['plan']).get('school_task',{}).get('purpose')
+            if proposal:
+                purpose=json.loads(proposal['plan']).get('school_task',{}).get('purpose')
+                store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
+                publication_ref=family_agent.school_original_publication_ref(store,c,proposal)
         due=task['due']
         if task['id'] in reported and task['source'] in ('家庭放学后录入','孩子自述功课，待家长核对'):
             # The capture day is a plan date, not a teacher deadline; preserve explicit later edits.
@@ -218,7 +223,7 @@ def enrich(app,c,tasks):
             if not focus.get('category'):focus['category']='homework'
             if not focus.get('scheduled_on') and not focus.get('version'):focus['scheduled_on']=reported[task['id']]
             due=task['due']=''
-        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose)
+        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref)
     return tasks
 
 
