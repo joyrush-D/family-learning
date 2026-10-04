@@ -15,6 +15,8 @@ def model(messages,*args,**kwargs):
     review_count+=1
     teacher=any('synthetic-teacher' in str(m.get('content','')) for m in messages)
     item=dict(label='第1题',question='虚构第1题：选择A、B或C',student_answer='C',answer='教师参考：B' if teacher else 'AI推导：C',judgment='incorrect' if teacher else 'correct',error_reason='与教师参考不同' if teacher else '',possible_cause='原因待孩子解释' if teacher else '',steps='先独立重答，再核对参考' if teacher else '',uncertainty='')
+    if 'question_kind' in args[0]['properties']['items']['items']['properties']:
+        item['question_kind']='objective'
     note=next((x.get('text','') for m in messages if isinstance(m.get('content'),list) for x in m['content'] if x.get('type')=='text' and x.get('text','').startswith('原作答家长说明')), '')
     if '虚构甲卷' in note or '虚构乙卷' in note:
         paper='甲' if '虚构甲卷' in note else '乙'
