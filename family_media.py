@@ -672,7 +672,7 @@ def draft_input(store, c, source, message):
                     (not screenshot_kind and row['mime'] == 'application/pdf') for _, row in rows):
         return None  # The existing bounded PDF page path owns this original.
     child = next(p for p in store.profiles(c) if p['id'] == source['child_id'])
-    images, documents, originals = [], [], []
+    images, documents, originals, image_ids, document_ids = [], [], [], [], []
     for ident, row in rows:
         docx = bool(kind) and row['mime'] == DOCX_MIME and (screenshot_kind or source.get('platform')=='qq' and message['kind']=='text')  # Only school material may have text originals.
         require(docx or row['mime'] in ('image/jpeg', 'image/png', 'image/webp'), 'draft_image_required')
@@ -684,8 +684,10 @@ def draft_input(store, c, source, message):
             continue  # The same capture uploaded again under another ID is still not an original.
         if docx:  # Every selected original must be readable in full, or nothing is sent.
             documents.append(dict(name=str(row['name'] or ''), text=docx_text(body)))
+            document_ids.append(ident)
         else:
             images.append(dict(mime=row['mime'], data=body))
+            image_ids.append(ident)
         originals.append([ident, row['mime'], digest])
     if not originals:
         return None
@@ -693,30 +695,46 @@ def draft_input(store, c, source, message):
     words = text + ''.join(d['name'] + d['text'] for d in documents)
     require(not documents or len(words) <= family_llm.MAX_TEXT, 'draft_text_too_long')  # Never cut to fit.
     require(sum(len(i['data']) for i in images) + len(words.encode()) <= 20 * 1024 * 1024, 'draft_originals_too_large')
-    # The legacy fingerprint is unchanged; a typed draft can never match a saved draft of another type.
-    fingerprint = hashlib.sha256(json.dumps(([3, kind] if kind else [1]) + [source, child, message, originals],
-        ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-    return dict(fingerprint=fingerprint, images=images, text=text, child=child['name'],
-                upload_ids=[o[0] for o in originals], kind=kind, documents=documents)
+    original_ids=image_ids+document_ids if kind and images else []
+    def fingerprint(revision):
+        return hashlib.sha256(json.dumps(([revision, kind] if kind else [1]) + [source, child, message, originals],
+            ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    legacy=fingerprint(3);current=fingerprint(4) if original_ids else legacy
+    return dict(fingerprint=current, legacy_fingerprint=legacy, images=images, text=text, child=child['name'],
+                upload_ids=[o[0] for o in originals], kind=kind, documents=documents, original_ids=original_ids)
 
 
 def draft_key(source, message):
     return 'message-draft:' + hashlib.sha256(json.dumps([source['id'], message['id']]).encode()).hexdigest()[:40]
 
 
-def _saved_draft(row, value):
+def _saved_draft(row, value, *, legacy=False):
     """Show a saved draft only for the same fingerprint and, when typed, the same checked shape."""
     import family_llm
-    if row is None or row['fingerprint'] != value['fingerprint']:
+    expected=value['legacy_fingerprint'] if legacy else value['fingerprint']
+    if row is None or row['fingerprint'] != expected or legacy and not value['original_ids']:
         return None
-    draft = json.loads(row['payload'])
-    if not value['kind']:
-        return draft
     try:
+        draft = json.loads(row['payload'])
+        if not value['kind']: return draft
         require(isinstance(draft, dict) and draft.pop('kind', None) == value['kind'], 'draft_kind_mismatch')
-        return family_llm.validate_school_material(draft)
-    except (MediaError, family_llm.LLMDraftError):
+        draft.pop('previous_aggregate',None)  # Retained verbatim for history; never used as action evidence.
+        return family_llm.validate_school_material(draft,original_ids=() if legacy else value['original_ids'])
+    except (MediaError, family_llm.LLMDraftError,ValueError,TypeError):
         return None
+
+
+def _draft_decisions(c, source, message):
+    """Only undecided evidence is automatically reread; decided tasks and feedback stay intact."""
+    ref='message:'+source['id']+':'+message['id'];found=[]
+    for row in c.execute("SELECT id,state,updated,evidence FROM agent_items WHERE kind='school' AND child_id=? AND state!='superseded' ORDER BY id",(source['child_id'],)):
+        if any(q['ref']==ref for q in json.loads(row['evidence'])):
+            found.append([row['id'],row['state'],row['updated']])
+    return found
+
+
+def _draft_undecided(decisions):
+    return not decisions or any(row[1]=='pending' for row in decisions)
 
 
 def school_evidence(store, c, source, message):
@@ -760,6 +778,10 @@ def draft_view(store, c, source, message):
     draft = _saved_draft(row, value)
     if draft is not None:
         return dict(state='ready', draft=draft, updated=row['updated'], upload_ids=value['upload_ids'], **typed)
+    old=_saved_draft(row,value,legacy=True)
+    if old is not None:
+        return dict(state='ready',draft=old,updated=row['updated'],upload_ids=value['upload_ids'],legacy=True,
+                    explanation='原汇总草稿保留，尚无逐原件出处，不作为独立行动的附件依据；仅未决定的新证据会在后台重新整理。',**typed)
     key = draft_key(source, message)
     job = c.execute('SELECT * FROM agent_jobs WHERE id=?', (key,)).fetchone()
     current = hashlib.sha256(json.dumps({'material': value['fingerprint']}, ensure_ascii=False,
@@ -793,32 +815,55 @@ def prepare_draft(store, now):
                 value = draft_input(store, c, source, message)
                 if not value:
                     continue
-                old = c.execute('SELECT fingerprint FROM agent_message_drafts WHERE source_id=? AND message_id=?',
+                old = c.execute('SELECT * FROM agent_message_drafts WHERE source_id=? AND message_id=?',
                                 (source['id'], message['id'])).fetchone()
-                if old and old['fingerprint'] == value['fingerprint']:
+                if _saved_draft(old,value) is not None:
                     continue
+                decisions=_draft_decisions(c,source,message) if value['original_ids'] else []
+                if not _draft_undecided(decisions): continue
         except Exception:
             continue  # No model receives unreadable, unsupported, or foreign originals.
         key = draft_key(source, message)
         fp = store._job(key, {'material': value['fingerprint']}, now, model=True)
         if fp:
-            selected = (source, message, value, key, fp)
+            selected = (source, message, value, key, fp, decisions)
             break
     if selected is None:
         return dict(used=0, failed=0)
-    source, message, value, key, fp = selected
+    source, message, value, key, fp, decisions = selected
+    # Claiming a slot and sending bytes are separate steps: a changed binding or decision consumes no model call.
     try:
-        typed = dict(school_material=True, documents=value['documents']) if value['kind'] else {}
+        with store._db() as c:
+            current=draft_input(store,c,source,message)
+            job=c.execute('SELECT fingerprint FROM agent_jobs WHERE id=?',(key,)).fetchone()
+            require(current is not None and current['fingerprint']==value['fingerprint'] and job and job['fingerprint']==fp
+                    and (not value['original_ids'] or _draft_decisions(c,source,message)==decisions), 'draft_material_changed')
+    except Exception:
+        with store._db() as c:
+            c.execute("UPDATE agent_jobs SET done=1,error='',next_try='',fingerprint=? WHERE id=? AND fingerprint=?",('discarded:'+fp,key,fp))
+        return dict(used=0,failed=0)
+    try:
+        typed = dict(school_material=True, documents=value['documents'],original_ids=value['original_ids']) if value['kind'] else {}
         result = family_llm.extract_draft(value['text'], value['images'], target_child=value['child'], timeout=45,
                                           data_path=store.data, **typed)
         if value['kind']:  # Re-checked here: no score, mastery or record field is ever persisted for school material.
-            result = dict(kind=value['kind'], **family_llm.validate_school_material(result))
+            result = dict(kind=value['kind'], **family_llm.validate_school_material(result,original_ids=value['original_ids']))
         with store._db() as c:
             c.execute('BEGIN IMMEDIATE')
             current = draft_input(store, c, source, message)
             job = c.execute('SELECT fingerprint FROM agent_jobs WHERE id=?', (key,)).fetchone()
             require(current is not None and current['fingerprint'] == value['fingerprint']
-                    and job is not None and job['fingerprint'] == fp, 'draft_material_changed')
+                    and job is not None and job['fingerprint'] == fp
+                    and (not value['original_ids'] or _draft_decisions(c,source,message)==decisions), 'draft_material_changed')
+            old=c.execute('SELECT * FROM agent_message_drafts WHERE source_id=? AND message_id=?',(source['id'],message['id'])).fetchone()
+            if value['original_ids'] and old:
+                if _saved_draft(old,value,legacy=True) is not None:
+                    result['previous_aggregate']=dict(fingerprint=old['fingerprint'],payload=old['payload'],updated=old['updated'])
+                else:
+                    try: previous=json.loads(old['payload'])
+                    except (ValueError,TypeError): previous=None
+                    if isinstance(previous,dict) and 'previous_aggregate' in previous:
+                        result['previous_aggregate']=previous['previous_aggregate']
             c.execute('INSERT OR REPLACE INTO agent_message_drafts VALUES(?,?,?,?,?)',
                       (source['id'], message['id'], value['fingerprint'], json.dumps(result, ensure_ascii=False), now.isoformat()))
             c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=? AND fingerprint=?", (key, fp))

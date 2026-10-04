@@ -130,8 +130,9 @@ def _task_prompt(pages, pdf=None, material=None):
     prompt=SCHOOL_TASK_PROMPT.replace(_PAGE_UNREAD,'')+'\n'+SCHOOL_PAGE_PROMPT if pages else SCHOOL_TASK_PROMPT
     prompt+='\ncandidate仅定位当前这一项，不是完整要求或原文。结合本项全部evidence正文和有效原件，整理完整结论；共享原消息中的其他独立事项不混入本项。'
     prompt+='\nevidence的collection_content_incomplete记录收集时尚未读全的原始状态，content_incomplete说明当前仍有未读内容；当前已完整读取的原件范围另列在pdf_material或school_material。二者不是家长是否看过、同意或执行的状态，不能把收集时的缺口当成当前适用条件未知。原件摘要的疑点、截断和遗漏仍分别保留，只依据已读清内容。'
+    prompt+='\n空白填写栏（如“日期：____”）、表头及材料对照解释不是学校新增行动；只有原文明确要求填写或提交才归纳为要求。“不是作业答题页”“与练习分开”等说明不生成学习要求；无原文证据不添加“全班”等适用人群。'
     if pdf: prompt+='\n'+SCHOOL_PDF_PROMPT
-    if material: prompt+='\nschool_material是本条消息已关联原件的有效整理，ref对应原消息，draft含title、note和uncertainties。这是Agent从原件整理的参考，不是老师逐字原文或孩子作答；只依据其中明确要求理解作业或通知，不复制成绩、完成或掌握结论。明确的科目、动作、范围和数量写title/goal；uncertainties中的缺失只写reason，不清空已读清的要求。仅不清楚截止日不要求家长确认作业类别；原件有缺失或疑问时state=review，reason具体写待补充的那一部分。'
+    if material: prompt+='\nschool_material是本条消息已关联原件的有效整理，ref对应原消息，draft含title、note和uncertainties。带original_id的条目只对应该upload_id原件，不把其他条目或通知的要求猜成该原件内容。这是Agent从原件整理的参考，不是老师逐字原文或孩子作答；只依据其中明确要求理解作业或通知，不复制成绩、完成或掌握结论。明确的科目、动作、范围和数量写title/goal；uncertainties中的缺失只写reason，不清空已读清的要求。仅不清楚截止日不要求家长确认作业类别；原件有缺失或疑问时state=review，reason具体写待补充的那一部分。'
     return prompt
 
 
@@ -143,6 +144,17 @@ _LEARNING_MATERIAL = re.compile(r'(?:带(?:来|上|好)?|携带|准备|打印|�
 # Keep an actual reading/exercise clause outside the name intact.
 _LEARNING_FORM = re.compile(r'(?:朗读|背诵|抄写|默写|听写|跟读|练习|作业|订正|预习|复习|阅读|口算|习作|作文|单词|课文)(?:活动|课程|比赛)?(?:回执|登记表|报名表|同意书|确认单|通知书)')
 _LEARNING_ACTION = re.compile(r'(?:完成|做|写|订正)(?:好|完)?\s*(?:第)?[一二两三四五六七八九十\d]+(?:\s*(?:[–—~\-]|至|到)\s*(?:第)?[一二两三四五六七八九十\d]+)?\s*题|做(?:好|完)?(?=后|再|并)|读')
+_LEARNING_OBJECT = r'(?:语文|数学|英语|科学|历史|地理|物理|化学|生物)?(?:作业答题页|作业(?:页|卷|纸|单|本)?|练习(?:页|卷|纸|单|本|册)?|阅读材料|复习资料)'
+_LEARNING_NEGATED_OBJECT = re.compile(r'(?:并?不是|并?非|不属于|不作为)\s*'+_LEARNING_OBJECT)
+# Remove a comparison only when its subject is explicitly an administrative material.
+# A positive “完成练习后签字” or “练习与回执分开提交” still reaches the mixed-action guard.
+_LEARNING_ADMIN_COMPARISON = re.compile(r'(?:该|此|这份)?(?:活动)?(?:回执|登记表|报名表|同意书|确认单|通知书)\s*(?:与|和)\s*'+_LEARNING_OBJECT+r'\s*(?:分开|独立|不同|无关)')
+
+
+def _school_learning_text(parts):
+    text=_URL.sub('',' '.join(parts))
+    text=_LEARNING_NEGATED_OBJECT.sub('',_LEARNING_ADMIN_COMPARISON.sub('',text))
+    return _LEARNING_FORM.sub('',_LEARNING_MATERIAL.sub('',text))
 
 
 def _links(evidence):
@@ -381,7 +393,7 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
     # pass can inspect an administrative action without inheriting unrelated
     # learning words from its shared original. Single/legacy drafts keep the guard.
     learning_parts=[brief['title'],brief['goal']] if separate_learning else [e.get('text','') for e in evidence]+[p['text'] for p in (pages or {}).get('model_pages',[])]
-    learning_text=_LEARNING_FORM.sub('',_LEARNING_MATERIAL.sub('',_URL.sub('',' '.join(learning_parts))))
+    learning_text=_school_learning_text(learning_parts)
     if purpose=='admin' and state!='reference' and (_LEARNING_ACTIVITY.search(learning_text) or _LEARNING_ACTION.search(learning_text)):
         # A check-in label must not swallow homework: the parent sees the whole notice instead.
         # Carrying or printing a named material is not itself the learning action.
@@ -2403,20 +2415,25 @@ def _school_drafts(store, c, row):
         value=family_media.school_evidence(store,c,source,message)
         if value:
             ids=value['upload_ids'];scoped=_school_action_upload_ids(row,quote['ref'],ids)
-            if scoped is not None and set(scoped)!=set(ids):continue  # Aggregate notes cannot prove the contents of one file.
-            entries.append(dict(ref=quote['ref'],**value))
+            originals=value['draft'].get('originals')
+            if originals is None and scoped is not None and set(scoped)!=set(ids):continue  # Legacy aggregate notes cannot prove one file.
+            selected=[o for o in originals if scoped is None or o['upload_id'] in scoped] if originals is not None else [value['draft']]
+            if not selected:continue
+            entries.append(dict(ref=quote['ref'],**value,selected_upload_ids=scoped))
             if value['complete']: complete.append(quote['ref'])
-            draft=value['draft'];bounded={}
-            for key in ('title','note','uncertainties'):
-                parts=draft[key] if key=='uncertainties' else [draft[key]];sent=[]
-                for part in parts:
-                    sent.append(part[:remaining]);remaining-=len(sent[-1])
-                    if sent[-1]!=part: missing.append('原件整理文字未全部读入')
-                bounded[key]=[p for p in sent if p] if key=='uncertainties' else sent[0]
-            model.append(dict(ref=quote['ref'],upload_ids=value['upload_ids'],draft=bounded))
+            for draft in selected:
+                bounded={}
+                for key in ('title','note','uncertainties'):
+                    parts=draft[key] if key=='uncertainties' else [draft[key]];sent=[]
+                    for part in parts:
+                        sent.append(part[:remaining]);remaining-=len(sent[-1])
+                        if sent[-1]!=part: missing.append('原件整理文字未全部读入')
+                    bounded[key]=[p for p in sent if p] if key=='uncertainties' else sent[0]
+                model.append(dict(ref=quote['ref'],upload_ids=[draft['upload_id']] if originals is not None else ids,draft=bounded,
+                                  **(dict(original_id=draft['upload_id']) if originals is not None else {})))
     if not entries: return None
     return dict(fingerprint=_hash(entries),refs=[e['ref'] for e in entries],complete_refs=complete,model=model,
-                uncertainties=list(dict.fromkeys(missing+[u for e in entries for u in e['draft']['uncertainties']])))
+                uncertainties=list(dict.fromkeys(missing+[u for e in model for u in e['draft']['uncertainties']])))
 
 
 def _school_current(store, c, row, evidence, page_key, pdf_key, material_key=''):
@@ -2452,7 +2469,8 @@ def _school_original_parts(evidence, pdf, material):
             parts.append(dict(id='pdf:'+doc['upload_id']+':'+str(group['pages'][0])+'@'+doc['ref'],
                 ref=doc['ref'],upload_ids=[doc['upload_id']],pages=group['pages'],text=group['text']))
     for entry in (material or {}).get('model',[]):
-        parts.append(dict(id='material:'+entry['ref'],ref=entry['ref'],upload_ids=entry.get('upload_ids',[]),pages=[],text=entry['draft']['note']))
+        part_id='material:'+entry['original_id']+'@'+entry['ref'] if entry.get('original_id') else 'material:'+entry['ref']
+        parts.append(dict(id=part_id,ref=entry['ref'],upload_ids=entry.get('upload_ids',[]),pages=[],text=entry['draft']['note']))
     return parts
 
 

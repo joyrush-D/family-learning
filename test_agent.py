@@ -766,8 +766,10 @@ class AgentTests(unittest.TestCase):
         self.store.message_attachment(dict(keys,attachment_id=upload['id'],action='attach'),dict)
         with self.store._db() as c:
             source,message=self.store._message_context(c,keys); value=family_media.draft_input(self.store,c,source,message)
+            note=dict(title='示例朗读练习',note='朗读 Unit 2 两遍；选做题任选。',uncertainties=[])
+            checked=agent.family_llm.validate_school_material(dict(originals=[dict(upload_id=upload['id'],**note)]),original_ids=value['original_ids'])
             c.execute('INSERT INTO agent_message_drafts VALUES(?,?,?,?,?)',(source['id'],'2',value['fingerprint'],
-                json.dumps(dict(kind='school_material',title='示例朗读练习',note='朗读 Unit 2 两遍；选做题任选。',uncertainties=[])),self.now.isoformat()))
+                json.dumps(dict(kind='school_material',**checked)),self.now.isoformat()))
         def snapshot():
             with self.store._db() as c:
                 names=[r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")]
@@ -833,7 +835,8 @@ class AgentTests(unittest.TestCase):
         with self.store._db() as c:
             source,message=self.store._message_context(c,keys)
             value=family_media.draft_input(self.store,c,source,message)
-            draft=dict(kind='school_material',title='虚构英语作业',note='英语：朗读Unit 2课文两遍，完成练习册第8页。',uncertainties=['图片右下角的提交方式看不清'] if uncertain else [])
+            note=dict(title='虚构英语作业',note='英语：朗读Unit 2课文两遍，完成练习册第8页。',uncertainties=['图片右下角的提交方式看不清'] if uncertain else [])
+            draft=dict(kind='school_material',**agent.family_llm.validate_school_material(dict(originals=[dict(upload_id=upload['id'],**note)]),original_ids=value['original_ids']))
             c.execute('INSERT INTO agent_message_drafts VALUES(?,?,?,?,?)',(source['id'],message['id'],value['fingerprint'],json.dumps(draft,ensure_ascii=False),self.now.isoformat()))
         brief=dict(title='',goal='',advice='',state='review',reason='原件或具体要求尚未读全，请先核对。',policy=agent.SCHOOL_TASK_POLICY)
         item=dict(child_id='child-1',kind='school',title='待核对：[图片]',body=agent.FOCUS['school'],due='',evidence=[dict(ref='message:'+self.source['id']+':11',text='[图片]')],plan=dict(school_task=brief))
@@ -942,6 +945,7 @@ class AgentTests(unittest.TestCase):
         ident,keys,_=self._prepared_school_image(native=True)
         with self.store._db() as c:
             draft=json.loads(c.execute('SELECT payload FROM agent_message_drafts').fetchone()[0]);draft['note']='英语：朗读Unit 2两遍，明天提交。'
+            draft['originals'][0]['note']=draft['note']
             c.execute('UPDATE agent_message_drafts SET payload=?',(json.dumps(draft),))
         ready=dict(title='英语：朗读',goal=draft['note'],advice='',state='ready',reason='',purpose='learning',submission='',change='new',target_id='',learning_subject='英语',learning_goal_id='')
         with patch.object(agent.family_llm,'_chat_json',return_value=self._original_reply(ident,ready)):
@@ -964,6 +968,7 @@ class AgentTests(unittest.TestCase):
         with self.store._db() as c:
             c.execute("UPDATE agent_items SET due='2026-02-11' WHERE id=?",(ident,))
             draft=json.loads(c.execute('SELECT payload FROM agent_message_drafts').fetchone()[0]);draft['note']='英语：今天提交朗读。'
+            draft['originals'][0]['note']=draft['note']
             c.execute('UPDATE agent_message_drafts SET payload=?',(json.dumps(draft),))
         with patch.object(agent.family_llm,'_chat_json',return_value=self._original_reply(ident,ready)):
             self.assertEqual(agent._refresh_school(self.app,self.store,self.now,1)['created'],0)

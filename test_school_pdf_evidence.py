@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import family_agent as agent
 import family_llm
+import family_media as media
 import family_pdf_material as pdfm
 import test_pdf
 import test_pdf_material
@@ -48,6 +49,83 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         reference=self.seed_pdf('b'*32,name='虚构家长参考.pdf')
         self.link(keys,reference)
         return keys,reference
+
+    def test_two_same_named_images_build_separate_actions_and_keep_shared_reference_possible(self):
+        from test_media import png
+        images=['b'*32,'c'*32]
+        for index,ident in enumerate(images):
+            body=png(64+index,96)
+            (self.data/'uploads'/ident).write_bytes(body)
+            with self.store._db() as c:
+                c.execute('INSERT INTO uploads(id,name,size,mime,created) VALUES(?,?,?,?,?)',
+                          (ident,'相同名称.png',len(body),'image/png',self.now.isoformat()))
+        keys=self.native_notice('two-images',upload=images[0]);self.link(keys,images[1])
+        with self.store._db() as c:
+            raw=json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
+                                    (keys['source_id'],keys['message_id'])).fetchone()[0])
+            c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
+                      (json.dumps(dict(raw,text='学校要求见两张图片。\n[图片原件：2份，内容未读]',unread=True)),keys['source_id'],keys['message_id']))
+        ident=self.candidate(keys=keys,ident='two-images')
+        math='数学：2026-02-12前完成练习卷第1–3题。'
+        receipt='家长事务：2026-02-13前家长签字交回独立活动回执。该回执与数学练习分开，不是作业答题页。'
+        reply=dict(originals=[dict(upload_id=i,title=t,note=n,uncertainties=[]) for i,t,n in
+                             zip(images,['数学练习卷','活动回执'],[math,receipt])])
+        with patch.object(family_llm,'extract_draft',return_value=reply) as model:
+            self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=1,failed=0))
+        self.assertEqual(model.call_args.kwargs['original_ids'],images)
+        ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
+        part_ids=['material:'+i+'@'+ref for i in images]
+        with self.store._db() as c:
+            row=self.item(ident);evidence,_=agent._school_material(self.store,c,row)
+            material=agent._school_drafts(self.store,c,row)
+        parts=agent._school_original_parts(evidence,None,material)
+        self.assertEqual([(p['id'],p['upload_ids'],p['text']) for p in parts],
+                         [(part_ids[0],[images[0]],math),(part_ids[1],[images[1]],receipt)])
+        schema=agent._school_original_schema(parts,[row],[],[])
+        self.assertEqual(schema['properties']['actions']['items']['properties']['basis']['items']['properties']['part']['enum'],part_ids)
+        actions={'actions':[
+            dict(draft(title='数学：完成练习卷',goal=math),due='2026-02-12',existing_item_id=ident,basis=[dict(part=part_ids[0],text=math)]),
+            dict(draft(title='事务：签字交回回执',goal=receipt,purpose='admin'),due='2026-02-13',existing_item_id='',basis=[dict(part=part_ids[1],text=receipt)])]}
+        result,calls=self.refresh(actions)
+        self.assertEqual((result,len(calls)),(dict(used=1,failed=0,created=2),1))
+        self.assertEqual(self.count('manual_tasks'),2)
+        rows=self.rows('SELECT state,plan FROM agent_items ORDER BY due')
+        self.assertEqual([r[0] for r in rows],['accepted','accepted'])
+        plans=[json.loads(r[1]) for r in rows]
+        self.assertEqual([[a['upload_ids'] for a in p['school_original_action']['anchors']] for p in plans],[[[images[0]]],[[images[1]]]])
+        self.assertEqual(self.count('records'),0)
+        before=self.rows('SELECT * FROM agent_items ORDER BY id')
+        self.assertEqual(self.refresh(actions,minutes=1),(dict(used=0,failed=0,created=0),[]))
+        self.assertEqual(self.rows('SELECT * FROM agent_items ORDER BY id'),before)
+        # Selecting more than one proven part remains supported; no model-created upload selector is added.
+        self.assertEqual(schema['properties']['actions']['items']['properties']['basis']['maxItems'],6)
+        scoped=dict(row,plan=json.dumps(dict(school_original_action=dict(anchors=[dict(ref=ref,upload_ids=images,pages=[],quote=math)]))))
+        with self.store._db() as c: shared=agent._school_drafts(self.store,c,scoped)
+        self.assertEqual([e['upload_ids'] for e in shared['model']],[[images[0]],[images[1]]])
+        scoped['plan']=json.dumps(dict(school_original_action=dict(anchors=[dict(ref=ref,upload_ids=[images[0]],pages=[],quote=math)])))
+        with self.store._db() as c: selected=agent._school_drafts(self.store,c,scoped)
+        self.assertEqual([e['upload_ids'] for e in selected['model']],[[images[0]]])
+        self.assertEqual(selected['model'][0]['draft']['note'],math)
+
+    def test_explicit_admin_material_contrast_does_not_hide_a_positive_learning_requirement(self):
+        cases=[('negative','家长：2026-02-13前签字交回活动回执。该回执与数学练习分开，不是作业答题页。','accepted'),
+               ('positive','家长：2026-02-13前完成数学练习第1–3题，再签字交回活动回执。该回执不是作业答题页。','pending')]
+        for label,note,state in cases:
+            with self.subTest(label=label):
+                keys=self.native_notice('admin-'+label)
+                ident=self.candidate(keys=keys,ident='admin-'+label)
+                self.seed_groups(keys=keys,note=note,uncertainties=[])
+                result,calls=self.refresh(draft(title='事务：签字交回回执',goal=note,purpose='admin'))
+                self.assertEqual((result['used'],result['failed'],len(calls),self.item(ident)['state']),(1,0,1,state))
+                if state=='pending':self.assertIn('同时提到学习活动',self.brief(ident)['reason'])
+        self.assertEqual(self.count('manual_tasks'),1)
+        for separate in (False,True):
+            brief=agent._school_brief(draft(title='事务：签字交回回执',goal=cases[0][1],purpose='admin'),
+                evidence=[dict(ref='message:qq:synthetic:1',text=cases[0][1],kind='text',unread=False)],separate_learning=separate)
+            self.assertEqual(brief['state'],'ready')
+            mixed=agent._school_brief(draft(title='事务：签字交回回执',goal=cases[1][1],purpose='admin'),
+                evidence=[dict(ref='message:qq:synthetic:1',text=cases[1][1],kind='text',unread=False)],separate_learning=separate)
+            self.assertEqual(mixed['state'],'review')
 
     def test_complete_original_keeps_independent_homework_and_receipt(self):
         keys=self.native_notice('independent-original')

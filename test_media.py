@@ -25,6 +25,52 @@ def png(width=96, height=64):
     return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b'')
 
 
+def school_images(note, ids):
+    """Frozen per-original fixture with the locally assembled display fields."""
+    originals=[dict(upload_id=i,**note) for i in ids]
+    return dict(title=note['title'] if len(ids)==1 else '学校资料（共%d份）'%len(ids),
+                note='\n'.join(note['note'] for i in ids),uncertainties=note['uncertainties'],originals=originals)
+
+
+class SchoolImageProtocolTests(unittest.TestCase):
+    def test_identified_images_are_adjacent_and_all_originals_are_required(self):
+        import family_llm as llm
+        ids=['a'*32,'b'*32]
+        a=dict(upload_id=ids[0],title='虚构练习',note='数学：完成第1–3题。',uncertainties=[])
+        b=dict(upload_id=ids[1],title='虚构回执',note='家长签字交回独立回执。',uncertainties=['回执下方一行模糊'])
+        with patch.object(llm,'configuration',return_value=('http://127.0.0.1/mock','synthetic')), \
+                patch.object(llm,'_chat_json',return_value=dict(originals=[b,a])) as model:
+            result=llm.extract_draft('虚构老师：见这两份原件。',[dict(mime='image/png',data=png()),dict(mime='image/png',data=png(64,96))],
+                                     target_child='示例甲',school_material=True,original_ids=ids)
+        self.assertEqual(result,dict(title='学校资料（共2份）',note=a['note']+'\n'+b['note'],
+                                     uncertainties=b['uncertainties'],originals=[a,b]))
+        messages,schema,name=model.call_args.args[:3]
+        self.assertEqual(name,'family_school_material_draft')
+        self.assertEqual(schema['required'],['originals'])
+        self.assertEqual(schema['properties']['originals']['items']['properties']['upload_id']['enum'],ids)
+        content=messages[1]['content'];labels=[]
+        for index,part in enumerate(content):
+            if part['type']=='text' and 'original_image' in part['text']:
+                labels.append(json.loads(part['text'])['original_image']['upload_id'])
+                self.assertEqual(content[index+1]['type'],'image_url')
+        self.assertEqual(labels,ids)
+        for bad in [dict(originals=[a]),dict(originals=[a,a]),dict(originals=[a,dict(b,upload_id='c'*32)]),
+                    dict(originals=[a,dict(b,score=100)]),dict(title='汇总',note='甲乙混在一起',uncertainties=[]),
+                    dict(result,note='改写成别的材料')]:
+            with self.subTest(bad=bad),self.assertRaises(llm.LLMDraftError):
+                llm.validate_school_material(bad,original_ids=ids)
+        for invalid in [ids+['a'*32],['not-an-upload'],['a'*32]*2]:
+            with self.assertRaises(ValueError): llm.validate_school_material(dict(originals=[]),original_ids=invalid)
+        with patch.object(llm,'configuration',return_value=('http://127.0.0.1/mock','synthetic')),self.assertRaises(ValueError):
+            llm.extract_draft('虚构',[],target_child='示例甲',school_material=True,original_ids=ids)
+
+    def test_pdf_legacy_notes_keep_the_exact_three_fields(self):
+        import family_llm as llm
+        original=dict(title='虚构PDF',note='本轮第1–5页：阅读指定材料。',uncertainties=[])
+        self.assertEqual(llm.validate_school_material(original),original)
+        with self.assertRaises(llm.LLMDraftError): llm.validate_school_material(dict(original,originals=[]))
+
+
 _W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 _TYPES = ('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
           '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
@@ -469,7 +515,7 @@ class MediaTests(unittest.TestCase):
         message=self.message();self.ingest(message);ident=self.seed_upload()
         self.store.message_attachment(dict(child_id='child-1',source_id=self.source['id'],message_id='1',
             attachment_id=ident,action='attach'),lambda row:dict(row))
-        result=dict(title='虚构听写结果',note='表中目标行标记F；数值未知。',uncertainties=['具体错词尚未提供'])
+        result=school_images(dict(title='虚构听写结果',note='表中目标行标记F；数值未知。',uncertainties=['具体错词尚未提供']),[ident])
         original=self.db_rows('SELECT payload FROM agent_messages');before=self.db_rows('SELECT * FROM records')
         with patch.object(family_llm,'extract_draft',return_value=result) as model, patch.object(family_llm,'_chat_json',return_value={'proposals':[]}):
             agent.run_once(self.app,self.now)
@@ -505,7 +551,7 @@ class MediaTests(unittest.TestCase):
         import family_llm
         message=self.message();self.ingest(message);ident=self.seed_upload()
         self.store.message_attachment(dict(child_id='child-1',source_id=self.source['id'],message_id='1',attachment_id=ident,action='attach'),dict)
-        result=dict(title='虚构草稿',subject='',score=None,total=None,note='待核对',uncertainties=[])
+        result=school_images(dict(title='虚构草稿',note='待核对',uncertainties=[]),[ident])
         def change(*args,**kwargs):
             self.store.message_attachment(dict(child_id='child-1',source_id=self.source['id'],message_id='1',attachment_id=ident,action='detach'),dict)
             return result
@@ -534,14 +580,74 @@ class MediaTests(unittest.TestCase):
             tables=[r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('agent_message_drafts','agent_jobs') ORDER BY name")]
             return {t:[tuple(r) for r in c.execute('SELECT * FROM "'+t+'"')] for t in tables}
 
+    def test_legacy_image_summary_and_decisions_are_preserved_until_undecided_reread(self):
+        import family_llm
+        keys=self.school_fragment('虚构学校：要求见两张原件。')
+        ids=[self.seed_upload('b'*32,png(64,96)),self.seed_upload('c'*32,png(48,72))]
+        for ident in ids:self.link(keys,ident)
+        legacy=dict(kind='school_material',title='旧汇总',note='数学练习及独立回执；旧汇总未记录逐图出处。',uncertainties=[])
+        payload=json.dumps(legacy,ensure_ascii=False)
+        ref='message:'+keys['source_id']+':'+keys['message_id']
+        item=dict(child_id='child-1',kind='school',title='旧待核学校要求',body='旧要求保留',due='',
+                  evidence=[dict(ref=ref,text='虚构学校：要求见两张原件。')],plan=dict(school_task=dict(state='review')))
+        self.store._save('legacy-image-decisions','fixture',[item],self.now)
+        with self.store._db() as c:
+            source,message=self.store._message_context(c,keys);value=media.draft_input(self.store,c,source,message)
+            self.assertNotEqual(value['fingerprint'],value['legacy_fingerprint'])
+            c.execute('INSERT INTO agent_message_drafts VALUES(?,?,?,?,?)',
+                      (source['id'],message['id'],value['legacy_fingerprint'],payload,self.now.isoformat()))
+            self.assertIsNone(media.school_evidence(self.store,c,source,message))
+            c.execute("UPDATE agent_items SET state='accepted'")
+        saved=self.db_rows('SELECT * FROM agent_message_drafts');decided=self.db_rows('SELECT * FROM agent_items')
+        view=self.store.message(keys,dict)['material_draft']
+        self.assertEqual((view['legacy'],view['draft']), (True,{k:legacy[k] for k in ('title','note','uncertainties')}))
+        with patch.object(family_llm,'extract_draft') as model:
+            self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=0,failed=0));model.assert_not_called()
+            with self.store._db() as c:c.execute("UPDATE agent_items SET state='dismissed'")
+            self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=0,failed=0));model.assert_not_called()
+        self.assertEqual(self.db_rows('SELECT * FROM agent_message_drafts'),saved)
+        with self.store._db() as c:c.execute("UPDATE agent_items SET state='pending'")
+        before=self.db_rows('SELECT * FROM agent_items')
+        note=dict(title='逐原件待核',note='本图的要求仍需家长核对。',uncertainties=['图片小字模糊'])
+        with patch.object(family_llm,'extract_draft',return_value=school_images(note,ids)) as model:
+            self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=1,failed=0));model.assert_called_once()
+        self.assertEqual(self.db_rows('SELECT * FROM agent_items'),before)
+        current=json.loads(self.db_rows('SELECT payload FROM agent_message_drafts')[0]['payload'])
+        self.assertEqual(current['previous_aggregate'],dict(fingerprint=value['legacy_fingerprint'],payload=payload,updated=self.now.isoformat()))
+        self.assertNotIn('legacy',self.store.message(keys,dict)['material_draft'])
+        self.assertEqual(self.db_rows('SELECT * FROM records'),[])
+
+    def test_image_reread_rechecks_decisions_and_binding_before_sending(self):
+        import family_llm
+        keys=self.school_fragment('虚构学校：见新原件。');ident=self.seed_upload('b'*32,png(64,96));self.link(keys,ident)
+        claim=self.store._job
+        def unlink(*args,**kwargs):
+            result=claim(*args,**kwargs);self.link(keys,ident,'detach');return result
+        with patch.object(self.store,'_job',side_effect=unlink),patch.object(family_llm,'extract_draft') as model:
+            self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=0,failed=0));model.assert_not_called()
+        self.assertEqual(self.db_rows('SELECT * FROM agent_message_drafts'),[])
+        self.link(keys,ident)
+        ref='message:'+keys['source_id']+':'+keys['message_id']
+        self.store._save('pending-image-decision','fixture',[dict(child_id='child-1',kind='school',title='虚构待核',body='保留原内容',due='',
+                        evidence=[dict(ref=ref,text='虚构学校：见新原件。')],plan={})],self.now)
+        def decide(*args,**kwargs):
+            with self.store._db() as c:c.execute("UPDATE agent_items SET state='dismissed'")
+            return school_images(dict(title='虚构资料',note='签字交回回执。',uncertainties=[]),[ident])
+        with patch.object(family_llm,'extract_draft',side_effect=decide) as model:
+            self.assertEqual(media.prepare_draft(self.store,self.now+dt.timedelta(minutes=1)),dict(used=1,failed=1));model.assert_called_once()
+        self.assertEqual(self.db_rows('SELECT * FROM agent_message_drafts'),[])
+        self.assertEqual(self.db_rows('SELECT state,body FROM agent_items'),[dict(state='dismissed',body='保留原内容')])
+        with patch.object(family_llm,'extract_draft') as model:
+            self.assertEqual(media.prepare_draft(self.store,self.now+dt.timedelta(minutes=10)),dict(used=0,failed=0));model.assert_not_called()
+
     def test_school_material_reads_only_linked_extra_originals_once_and_leaves_facts(self):
         import family_llm
         keys=self.school_fragment('英语：按所附范文完成仿写。');view=lambda:self.store.message(keys,dict)['material_draft']
         with self.store._db() as c:
             c.execute("INSERT INTO manual_tasks(id,child,title,due,original_status,source,action) VALUES('task-1','child-1','虚构学校任务','2026-02-11','待完成','Agent建议:agent-x','家长已确认完成')")
             c.execute("INSERT INTO task_updates VALUES('task-1','已完成','家长确认',?)",(self.now.isoformat(),))
-        result=dict(title='虚构仿写资料',note='范文与题目为参考材料；未见孩子作答。',uncertainties=['发送日期未知'])
-        with patch.object(family_llm,'extract_draft',return_value=result) as model:
+        note=dict(title='虚构仿写资料',note='范文与题目为参考材料；未见孩子作答。',uncertainties=['发送日期未知'])
+        with patch.object(family_llm,'extract_draft',side_effect=lambda *args,**kwargs:school_images(note,kwargs['original_ids'])) as model:
             self.assertIsNone(view());self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=0,failed=0))
             self.link(keys,self.seed_upload('d'*32,png()))  # The same capture uploaded again is not an original.
             self.assertIsNone(view());self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=0,failed=0));model.assert_not_called()
@@ -554,7 +660,8 @@ class MediaTests(unittest.TestCase):
             self.assertEqual(context['source_message']['time'],'');self.assertIn('captured_at',context['source_message'])
             self.assertEqual([i['data'] for i in images],[png(64,96)])  # Neither copy of the capture is sent as an original.
             self.assertIs(model.call_args.kwargs['school_material'],True);self.assertEqual(model.call_args.kwargs['target_child'],'示例甲')
-            ready=view();self.assertEqual((ready['state'],ready['kind'],ready['draft'],ready['upload_ids']),('ready','school_material',result,[extra]))
+            self.assertEqual(model.call_args.kwargs['original_ids'],[extra])
+            ready=view();self.assertEqual((ready['state'],ready['kind'],ready['draft'],ready['upload_ids']),('ready','school_material',school_images(note,[extra]),[extra]))
             self.assertEqual(json.loads(self.db_rows('SELECT payload FROM agent_message_drafts')[0]['payload'])['kind'],'school_material')
             self.assertEqual(media.prepare_draft(self.store,self.now+dt.timedelta(minutes=1)),dict(used=0,failed=0));self.assertEqual(model.call_count,1)
             self.assertEqual(self.facts(),facts);self.assertEqual(self.db_rows('SELECT payload FROM agent_messages'),saved)
@@ -591,7 +698,7 @@ class MediaTests(unittest.TestCase):
         for index,(name,change) in enumerate(changes.items()):
             self.write_config();keys=self.school_fragment('虚构通知：'+name);ident=self.seed_upload(str(index)*32,png(40+index,50));self.link(keys,ident)
             def during(*args,change=change,keys=keys,ident=ident,**kwargs):
-                change(keys,ident);return result
+                change(keys,ident);return school_images(result,[ident])
             with patch.object(family_llm,'extract_draft',side_effect=during) as model:
                 self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=1,failed=1),name);model.assert_called_once()
             try:self.assertNotEqual((self.store.message(keys,dict)['material_draft'] or {}).get('state'),'ready',name)
@@ -639,7 +746,7 @@ class MediaTests(unittest.TestCase):
         import family_llm
         keys=self.school_fragment('英语：按所附文档完成仿写。');view=lambda:self.store.message(keys,dict)['material_draft']
         result=dict(title='虚构仿写要求',note='文档列出仿写步骤与字数要求；未见孩子作答。',uncertainties=['发送日期未知'])
-        with patch.object(family_llm,'extract_draft',return_value=result) as model:
+        with patch.object(family_llm,'extract_draft',side_effect=lambda *args,**kwargs:school_images(result,kwargs['original_ids']) if kwargs['original_ids'] else result) as model:
             self.assertIsNone(view());self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=0,failed=0));model.assert_not_called()  # Screenshot alone.
             ident=self.seed_docx('f'*32,docx(DOCX_BODY));self.link(keys,ident)
             self.assertEqual((view()['state'],view()['kind']),('pending','school_material'));facts=self.facts()
@@ -655,6 +762,7 @@ class MediaTests(unittest.TestCase):
             extra=self.seed_upload('b'*32,png(64,96));self.link(keys,extra);self.assertEqual(view()['state'],'pending')  # A new original is a new draft.
             self.assertEqual(media.prepare_draft(self.store,self.now+dt.timedelta(minutes=2)),dict(used=1,failed=0))
             self.assertEqual([i['data'] for i in model.call_args.args[1]],[png(64,96)]);self.assertEqual(len(model.call_args.kwargs['documents']),1)
+            self.assertEqual(model.call_args.kwargs['original_ids'],[extra,ident])
         self.assertEqual(self.db_rows('SELECT * FROM records'),[])
 
     def test_unreadable_or_misplaced_docx_never_reaches_model(self):
