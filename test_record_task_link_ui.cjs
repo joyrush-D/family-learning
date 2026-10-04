@@ -46,6 +46,8 @@ const fs=require('node:fs/promises'),path=require('node:path');(async()=>{let br
   // Same task shows the original record, image, transcript and provenance; no duplicate or task completion changes.
   await p.locator('nav [data-page=home]').click();await p.locator('[data-task-all="homework"]').click();await p.locator('[data-task-box="已完成"]').click();await p.locator('[data-task="'+a.id+'"]').first().click();
   const history=p.locator('#taskFeedbackHistory');assert.match(await history.innerText(),/虚构核对转写/);assert.match(await history.innerText(),/试卷 \/ 作业核对/);assert.equal(await history.locator('img').count(),1);assert.equal(await history.locator('[data-task-feedback-edit]').count(),0);
+  assert.equal(await history.locator('[data-homework-review="'+id+'"]').count(),1,'explicitly linked ordinary answer is checkable from the same homework');
+  assert.equal(await history.locator('[data-task-wrong-form="'+id+'"]').count(),1,'explicitly linked ordinary answer keeps the wrong-item entry');
   await history.locator('[data-record="'+id+'"]').click();assert(await p.locator('#recordDialog').evaluate(x=>x.open));assert.equal(await select.inputValue(),a.id);
   assert.equal(await p.locator('#recordDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   if(process.env.RECORD_LINK_UI_PROOF_DIR){await fs.mkdir(process.env.RECORD_LINK_UI_PROOF_DIR,{recursive:true});await p.locator('#recordTaskLink').scrollIntoViewIfNeeded();await p.screenshot({path:path.join(process.env.RECORD_LINK_UI_PROOF_DIR,'record-link-'+width+'.png')})}
