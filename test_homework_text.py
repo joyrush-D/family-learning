@@ -99,5 +99,17 @@ class TextQuestionHTTPTests(HomeworkPrintScopeTests):
             status,out=self.request('POST','/api/print/homework/draft',request)
         self.assertEqual(status,403,out);model.assert_not_called();self.assertEqual(self.dump(),before)
 
+    def test_word_automatic_question_numbers_refuse_instead_of_disappearing(self):
+        teacher=self.upload('synthetic-teacher-number-guard.txt',REFERENCE.encode())
+        ns='http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+        variants=[docx(QUESTION,content='<w:p><w:pPr><w:numPr><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>2+3=? 实际作答：4</w:t></w:r></w:p>'),
+                  docx(QUESTION,extra=[('word/styles.xml','<w:styles xmlns:w="'+ns+'"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:pPr><w:numPr><w:numId w:val="1"/></w:numPr></w:pPr></w:style></w:styles>')]),
+                  docx(QUESTION,content='<w:p><w:pPr><w:pStyle w:val="Question"/></w:pPr><w:r><w:t>2+3=? 实际作答：4</w:t></w:r></w:p>',extra=[('word/styles.xml','<w:styles xmlns:w="'+ns+'"><w:style w:styleId="Base"><w:pPr><w:numPr><w:numId w:val="1"/></w:numPr></w:pPr></w:style><w:style w:styleId="Question"><w:basedOn w:val="Base"/></w:style></w:styles>')])]
+        for n,body in enumerate(variants):
+            paper=self.upload('synthetic-numbered-'+str(n)+'.docx',body);request=self.review_request([paper],[teacher]);before=self.dump()
+            with patch.object(family_llm,'_chat_json',return_value=json.loads(json.dumps(RAW))) as model:
+                status,out=self.request('POST','/api/print/homework/draft',request)
+            self.assertEqual(status,400,out);model.assert_not_called();self.assertEqual(self.dump(),before)
+
 
 if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TextQuestionHTTPTests'])
