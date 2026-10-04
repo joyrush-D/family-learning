@@ -153,10 +153,20 @@ _LEARNING_NEGATED_OBJECT = re.compile(r'(?:并?不是|并?非|不属于|不作�
 # Remove a comparison only when its subject is explicitly an administrative material.
 # A positive “完成练习后签字” or “练习与回执分开提交” still reaches the mixed-action guard.
 _LEARNING_ADMIN_COMPARISON = re.compile(r'(?:该|此|这份)?(?:活动)?(?:回执|登记表|报名表|同意书|确认单|通知书)\s*(?:与|和)\s*'+_LEARNING_OBJECT+r'\s*(?:分开|独立|不同|无关)(?=[。；;，,！？!?\s]|$)')
+# Match only a direct negation at a clause boundary. Inverse reminders such as
+# “并非不用抄写” / “不要忘记朗读” cannot match, and the rest of the clause stays
+# available to the positive/mixed-learning guard. This is a classification copy;
+# the original notice and its complete negative requirements are never changed.
+_LEARNING_NEGATED_ACTION = re.compile(
+    r'(^|[。；;，,！？!?\n（(])\s*(?:请\s*)?(?:(?:家长|孩子|学生|同学们?)\s*)?'
+    r'(?:不用|不必|不需(?:要)?|不要求|无需|无须|不要|不得|禁止|切?勿)\s*'
+    r'(?:(?:再|额外|另行)\s*)?(?:(?:让|要求)\s*)?(?:(?:孩子|学生|同学们?)\s*)?'
+    r'(?:朗读|背诵|抄写|默写|听写|跟读|练习|订正|预习|复习|阅读|口算|习作|作文)')
 
 
 def _school_learning_text(parts):
     text=_URL.sub('',' '.join(parts))
+    text=_LEARNING_NEGATED_ACTION.sub(lambda match:match.group(1),text)
     text=_LEARNING_NEGATED_OBJECT.sub('',_LEARNING_ADMIN_COMPARISON.sub('',text))
     return _LEARNING_FORM.sub('',_LEARNING_MATERIAL.sub('',text))
 
