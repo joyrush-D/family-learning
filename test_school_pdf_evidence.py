@@ -171,6 +171,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertEqual([[d['upload_id'] for d in json.loads(r[1])['school_task']['pdf_evidence']['documents']] for r in rows],[[self.pdf],[paper_b]])
 
     def scoped_original_tasks(self):
+        self.store.app=self.app
         keys=self.native_notice('scoped-original')
         with self.store._db() as c:
             raw=json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
@@ -461,8 +462,12 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             context=json.loads(messages[-1]['content'])
             if 'original_parts' in context and isinstance(result,dict) and set(result)==set(agent.TASK_BRIEF_SCHEMA['required']):
                 # The existing one-action fixtures keep their business assertions under the new array interface.
-                parts=context['original_parts'];part=next((p for p in parts if p['upload_ids']),parts[0])
-                return {'actions':[dict(result,due='',existing_item_id=context['candidate_id'],basis=[dict(part=part['id'],text=part['text'][:2000])])]}
+                parts=context['original_parts'];selected=[];seen=set()
+                for part in parts:
+                    if part['upload_ids'] and not set(part['upload_ids'])<=seen:
+                        selected.append(part);seen.update(part['upload_ids'])
+                if not selected:selected=[parts[0]]
+                return {'actions':[dict(result,due='',existing_item_id=context['candidate_id'],basis=[dict(part=part['id'],text=part['text'][:2000]) for part in selected])]}
             return result
         with no_render(), patch.object(family_llm, 'extract_draft', side_effect=AssertionError('no page-group model call here')), \
                 patch.object(family_llm, '_chat_json', side_effect=model):
