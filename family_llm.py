@@ -934,7 +934,7 @@ student_answer只抄本图清晰可辨的最终作答；没有作答、多处修
 judgment只有在题目、孩子最终作答和参考答案都能独立核实时才写correct或incorrect；否则写unknown并说明缺口。主观题允许有依据的同义表达，不因措辞不同判错。
 判主观题前逐项检查题目要求、作答限制、表达完整性、关键要点与原文依据。必须依据孩子实际写出的内容，不能替孩子补出意思后判对；只答到部分要点、漏写理由或表达不完整时，在error_reason明确缺少什么，不把必需订正写成可选完善。合理同义表达仍可判对，不额外添加题目没有要求的格式或术语。
 先对应题目与独立答题纸上的题号，再核对每一小题；空白或划掉不等于老师免做，是否免做不明时留未判定。题号无法对应时不猜配。
-incorrect时，error_reason说明作答与题目依据的具体差异；possible_cause只能是待孩子解释的假设，不凭一个错选项断定心理、能力或习惯。correct和unknown时这两项留空。
+incorrect时，error_reason说明作答与题目依据的具体差异；possible_cause只能是待孩子解释的假设，不凭一个错选项断定心理、能力或习惯。原因没有可靠依据时possible_cause留空，不能为填满字段猜原因；原因不明不影响已核实的答案比较。correct和unknown时这两项留空。
 逐题只摘足以核对的短题干、作答和答案，不重复整篇文章。答对的题steps留空；只给错题写错误依据、待孩子核实的可能原因，以及“独立尝试→一个轻提示→自己完成”的简短步骤。未判定题只写需要补看什么，不能补猜。阅读题的错题要指出原文依据，接受合理同义表达；不要代写主观作文或声称孩子已经掌握。
 coverage逐张说明已核对的题号或范围及明显未读内容；缺页、不清、划掉、未提供的作文或超过本次25项上限的题目单列，不能把只抽查几题称为全卷已核对。图片中若有可辨的老师参考资料，只用于它实际覆盖的题号和内容，标明与自行推导的答案区别；未提供的PDF等文件不在本次图片输入中，不得声称已读取。所有结果仅是草稿，必须由家长对照原题核对后才可保存为反馈或打印为家长参考。不要输出其他学生信息、心理或能力诊断。'''
     if review:
@@ -1002,7 +1002,7 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
             item['uncertainty']=(gap+item['uncertainty'].strip())[:300]
             missing_requirements.append(item['label'])
         if (item['judgment']!='unknown' and (not item['student_answer'].strip() or not item['answer'].strip() or item['uncertainty'].strip())
-                or item['judgment']=='incorrect' and not all(item[k].strip() for k in ('error_reason','possible_cause','steps'))
+                or item['judgment']=='incorrect' and not all(item[k].strip() for k in ('error_reason','steps'))
                 or item['judgment']!='incorrect' and (item['error_reason'].strip() or item['possible_cause'].strip())):
             if item['uncertainty'].strip():
                 if not teacher_reference or not item['answer'].startswith('教师参考：'): item['answer']=''
