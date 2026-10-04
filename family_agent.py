@@ -2290,7 +2290,7 @@ def _history_context(store,c,source,values,key,*,exclude_id=''):
             [dict(r) for r in c.execute('SELECT * FROM agent_items WHERE job_id=? ORDER BY id',(old_key,))]]
     related_items=[dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND child_id=? AND job_id!=? ORDER BY id",(source['child_id'],key))
         if refs.keys() & {e.get('ref') for e in json.loads(r['evidence'])}]
-    explicit_tasks=[t for t in store.app.tasks(c) if any(ref in t['source'] for ref in refs)] if store.app else []
+    explicit_tasks=[t for t in store.app.tasks(c) if any(ref in (t['source'] or '') for ref in refs)] if store.app else []
     return _hash([rows,tasks,state,materials,origin,related_items,explicit_tasks]),known
 
 
@@ -2547,7 +2547,7 @@ def _recover_school_ack_originals(store,config,now):
                 refs={e['ref'] for e in evidence}
                 # Any saved interpretation or explicit task link is a decision, even if superseded.
                 if any(refs & {e.get('ref') for e in json.loads(r['evidence'])} for r in c.execute("SELECT evidence FROM agent_items WHERE kind='school' AND child_id=?",(source['child_id'],))):continue
-                if any(any(ref in t['source'] for ref in refs) for t in store.app.tasks(c)):continue
+                if any(any(ref in (t['source'] or '') for ref in refs) for t in store.app.tasks(c)):continue
                 basis,_=_history_context(store,c,source,values,key)
             fp=store._job(key,dict(origin=origin,source=source,messages=values),now)
             if not fp:continue
