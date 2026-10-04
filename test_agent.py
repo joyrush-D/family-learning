@@ -1233,6 +1233,19 @@ class AgentTests(unittest.TestCase):
         self.assertIn('A、B栏必做；C栏选做',result['title'])
         self.assertEqual(agent._school_requirement_goal(result,texts),result)
 
+    def test_effective_conditions_apply_only_to_the_anchor_containing_the_changed_span(self):
+        import copy
+        parts,anchors,changes,proof=self._first_batch_condition_fixture()
+        date=dict(anchors[0],quote=proof['shared_date_text']);quotes=[date]+anchors
+        before=copy.deepcopy((parts,quotes,changes,proof))
+        texts=agent._school_effective_conditions(parts,quotes,changes,proof)
+        self.assertEqual((parts,quotes,changes,proof),before)
+        self.assertEqual('\n'.join(texts).count('A、B栏仍必做；C栏改为选做'),1)
+        self.assertIn(proof['shared_date_text'],texts)
+        partial=copy.deepcopy(quotes);partial[1]['quote']=proof['action_text'].split('C三栏都要做')[0]+'C'
+        with self.assertRaises(agent.AgentError):agent._school_effective_conditions(parts,partial,changes,proof)
+        with self.assertRaises(agent.AgentError):agent._school_effective_conditions(parts,quotes+[dict(anchors[0])],changes,proof)
+
     def _effective_instruction_fixture(self):
         parts,anchors,changes,proof=self._first_batch_condition_fixture()
         parts[-1]['text']='完成《桥的观察单》：'+parts[-1]['text']
