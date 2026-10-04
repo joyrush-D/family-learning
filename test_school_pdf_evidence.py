@@ -50,6 +50,50 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.link(keys,reference)
         return keys,reference
 
+    def test_docx_only_actions_keep_each_original_standard_and_unrelated_text_separate(self):
+        from test_media import MediaTests,docx,para
+        uploads=['b'*32,'c'*32]
+        math='数学：2026-02-12前完成练习第1至3题，写明单位；第4题选做，若选做须用两种方法，做完检查，不需要家长签字。'
+        receipt='家长事务：2026-02-13前打印独立活动回执，家长签字后交回；不需要填写日期空白栏。'
+        notice='英语：2026-02-14前背诵Unit3第2页，不需要打印。'
+        keys=self.native_notice('docx-only')
+        for upload,text in zip(uploads,[math,receipt]):
+            self.link(keys,MediaTests.seed_docx(self,upload,docx(para(text)),name='相同名称.docx'))
+        with self.store._db() as c:
+            raw=json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
+                                    (keys['source_id'],keys['message_id'])).fetchone()[0])
+            c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
+                      (json.dumps(dict(raw,text=notice)),keys['source_id'],keys['message_id']))
+        item_id=self.candidate(keys=keys,ident='docx-only')
+        notes=[dict(upload_id=i,title=t,note='正文另存完整要求；空白栏不新增行动。',uncertainties=[],requirements=[r])
+               for i,t,r in zip(uploads,['数学练习','独立回执'],[math,receipt])]
+        with patch.object(family_llm,'extract_draft',return_value=dict(originals=notes)) as model:
+            self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=1,failed=0))
+        self.assertEqual(model.call_args.args[1],[])
+        self.assertEqual(model.call_args.kwargs['original_ids'],uploads)
+        self.assertEqual([d['text'] for d in model.call_args.kwargs['documents']],[math,receipt])
+        ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
+        part_ids=['material:'+i+'@'+ref+':requirement:'+agent._hash(r)[:16] for i,r in zip(uploads,[math,receipt])]
+        with self.store._db() as c:
+            row=self.item(item_id);evidence,_=agent._school_material(self.store,c,row)
+            material=agent._school_drafts(self.store,c,row)
+        parts=agent._school_original_parts(evidence,None,material)
+        self.assertEqual([(p['upload_ids'],p['text']) for p in parts],[([],notice),([uploads[0]],math),([uploads[1]],receipt)])
+        actions={'actions':[
+            dict(draft(title='数学：完成练习',goal='完成练习。'),due='2026-02-12',existing_item_id=item_id,basis=[dict(part=part_ids[0],text=math)]),
+            dict(draft(title='事务：签字交回回执',goal='签字交回。',purpose='admin'),due='2026-02-13',existing_item_id='',basis=[dict(part=part_ids[1],text=receipt)]),
+            dict(draft(title='英语：背诵Unit3第2页',goal=notice,learning_subject='英语'),due='2026-02-14',existing_item_id='',basis=[dict(part=ref,text=notice)])]}
+        self.assertEqual(self.refresh(actions)[0],dict(used=1,failed=0,created=3))
+        saved=self.rows('SELECT body,plan FROM agent_items ORDER BY due')
+        self.assertEqual([r[0] for r in saved],[math,receipt,notice])
+        self.assertEqual([[a['upload_ids'] for a in json.loads(r[1])['school_original_action']['anchors']] for r in saved],
+                         [[[uploads[0]]],[[uploads[1]]],[[]]])
+        self.assertEqual(self.count('manual_tasks'),3)
+        before=self.rows('SELECT * FROM agent_items ORDER BY id')
+        self.assertEqual(self.refresh(actions,minutes=1),(dict(used=0,failed=0,created=0),[]))
+        self.assertEqual(self.rows('SELECT * FROM agent_items ORDER BY id'),before)
+        self.assertEqual(self.count('records'),0)
+
     def test_two_same_named_images_build_separate_actions_and_keep_shared_reference_possible(self):
         from test_media import png
         images=['b'*32,'c'*32]

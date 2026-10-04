@@ -33,6 +33,25 @@ def school_images(note, ids):
 
 
 class SchoolImageProtocolTests(unittest.TestCase):
+    def test_docx_only_protocol_keeps_same_named_originals_and_complete_requirements_separate(self):
+        import family_llm as llm
+        ids=['a'*32,'b'*32]
+        requirements=['数学：2026年2月12日前完成第1至3题，写明单位；第4题选做，若做须用两种方法。',
+                      '家长事务：2026年2月13日前打印独立回执，家长签字后交回；无需填写空白日期栏。']
+        documents=[dict(name='相同名称.docx',text=t) for t in requirements]
+        originals=[dict(upload_id=i,title=t,note=n,uncertainties=[],requirements=[n])
+                   for i,t,n in zip(ids,['数学练习','独立回执'],requirements)]
+        with patch.object(llm,'configuration',return_value=('http://127.0.0.1/mock','synthetic')), \
+                patch.object(llm,'_chat_json',return_value=dict(originals=list(reversed(originals)))) as model:
+            result=llm.extract_draft('虚构老师：按所附两份资料办理。',[],target_child='示例甲',
+                                     school_material=True,documents=documents,original_ids=ids)
+        self.assertEqual(result['originals'],originals)
+        content=model.call_args.args[0][1]['content']
+        sent=[json.loads(p['text']) for p in content if p['type']=='text' and 'original_document' in p['text']]
+        self.assertEqual([(p['upload_id'],p['original_document']) for p in sent],list(zip(ids,documents)))
+        self.assertFalse(any(p['type']=='image_url' for p in content))
+        self.assertEqual(model.call_args.args[1]['properties']['originals']['items']['properties']['upload_id']['enum'],ids)
+
     def test_identified_images_are_adjacent_and_all_originals_are_required(self):
         import family_llm as llm
         ids=['a'*32,'b'*32]
@@ -812,10 +831,12 @@ class MediaTests(unittest.TestCase):
         keys = dict(child_id='child-1', source_id=self.source['id'], message_id=message['id'])
         ident = self.seed_docx('f' * 32, docx(DOCX_BODY)); self.link(keys, ident)
         facts = self.facts()
-        with patch.object(family_llm, 'extract_draft', return_value=dict(title='虚构资料', note='待家长核对', uncertainties=[])) as model:
+        result=dict(title='虚构资料', note='待家长核对', uncertainties=[])
+        with patch.object(family_llm, 'extract_draft', return_value=school_images(result,[ident])) as model:
             self.assertEqual(self.store.message(keys, dict)['material_draft']['kind'], 'school_material')
             self.assertEqual(media.prepare_draft(self.store, self.now), dict(used=1, failed=0))
             self.assertEqual(model.call_args.kwargs['documents'][0]['text'], DOCX_TEXT)
+            self.assertEqual(model.call_args.kwargs['original_ids'],[ident])
         self.assertEqual(self.store.message(keys, dict)['material_draft']['state'], 'ready')
         self.assertEqual(self.facts(), facts)
         self.assertEqual(self.db_rows('SELECT * FROM manual_tasks'), [])
@@ -847,7 +868,8 @@ class MediaTests(unittest.TestCase):
             self.assertNotIn('仿写五句',text);self.assertNotIn('docx',text)  # The notice stays apart from the original's name and text.
             self.assertEqual(model.call_args.kwargs['documents'],[dict(name='虚构仿写要求.docx',text=DOCX_TEXT)])
             self.assertIs(model.call_args.kwargs['school_material'],True);self.assertEqual(model.call_args.kwargs['target_child'],'示例甲')
-            ready=view();self.assertEqual((ready['state'],ready['kind'],ready['draft'],ready['upload_ids']),('ready','school_material',result,[ident]))
+            self.assertEqual(model.call_args.kwargs['original_ids'],[ident])
+            ready=view();self.assertEqual((ready['state'],ready['kind'],ready['draft'],ready['upload_ids']),('ready','school_material',school_images(result,[ident]),[ident]))
             self.assertEqual(media.prepare_draft(self.store,self.now+dt.timedelta(minutes=1)),dict(used=0,failed=0));self.assertEqual(model.call_count,1)
             self.assertEqual(self.facts(),facts)
             extra=self.seed_upload('b'*32,png(64,96));self.link(keys,extra);self.assertEqual(view()['state'],'pending')  # A new original is a new draft.
