@@ -344,13 +344,17 @@ class MediaTests(unittest.TestCase):
             self.assertEqual(media.run_one(self.app, self.store, self.now + dt.timedelta(minutes=1))['state'], 'idle')
 
     def test_missing_media_config_does_not_stop_text_agent(self):
+        from test_agent import school_proposal
         message = self.message('text', kind='text', unread=False); self.ingest(message)
         self.assertEqual(media.run_one(self.app, self.store, self.now)['state'], 'disabled')
         self.assertIsNone(self.store.message(dict(child_id='child-1', source_id=self.source['id'], message_id='text'), lambda row: dict(row))['media'])
-        with patch.object(agent.family_llm, '_chat_json', return_value={'proposals': []}):
+        proposal=school_proposal(title_quote=message['text'],evidence=[dict(ref='message:'+self.source['id']+':text')],
+                                 task_state='reference',task_reason='虚构背景文字，不含新增行动。')
+        with patch.object(agent.family_llm, '_chat_json', return_value={'proposals': [proposal]}):
             result = agent.run_once(self.app, self.now)
         self.assertGreaterEqual(result['processed'], 1)
         self.assertEqual(self.db_rows('SELECT processed FROM agent_messages')[0]['processed'], 1)
+        self.assertEqual(self.db_rows('SELECT * FROM manual_tasks'),[])
 
     def test_original_view_reports_current_collection_without_fetch_or_writes(self):
         message = self.message(); self.ingest(message)

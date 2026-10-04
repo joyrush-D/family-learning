@@ -79,10 +79,10 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             row=self.item(ident);evidence,_=agent._school_material(self.store,c,row)
             material=agent._school_drafts(self.store,c,row)
         parts=agent._school_original_parts(evidence,None,material)
-        self.assertEqual([(p['id'],p['upload_ids'],p['text']) for p in parts],
+        self.assertEqual([(p['id'],p['upload_ids'],p['text']) for p in parts if p['upload_ids']],
                          [(part_ids[0],[images[0]],math),(part_ids[1],[images[1]],receipt)])
         schema=agent._school_original_schema(parts,[row],[],[])
-        self.assertEqual(schema['properties']['actions']['items']['properties']['basis']['items']['properties']['part']['enum'],part_ids)
+        self.assertEqual(schema['properties']['actions']['items']['properties']['basis']['items']['properties']['part']['enum'],[p['id'] for p in parts])
         actions={'actions':[
             dict(draft(title='数学：完成练习卷',goal=math),due='2026-02-12',existing_item_id=ident,basis=[dict(part=part_ids[0],text=math)]),
             dict(draft(title='事务：签字交回回执',goal=receipt,purpose='admin'),due='2026-02-13',existing_item_id='',basis=[dict(part=part_ids[1],text=receipt)])]}
@@ -106,6 +106,16 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         with self.store._db() as c: selected=agent._school_drafts(self.store,c,scoped)
         self.assertEqual([e['upload_ids'] for e in selected['model']],[[images[0]]])
         self.assertEqual(selected['model'][0]['draft']['note'],math)
+        # An unreadable sibling is not silently dropped, and is not attached to this independently scoped action.
+        reply['originals'][1]['uncertainties']=['回执下方小字模糊']
+        checked=family_llm.validate_school_material(reply,original_ids=images)
+        with self.store._db() as c:
+            c.execute('UPDATE agent_message_drafts SET payload=? WHERE source_id=? AND message_id=?',
+                      (json.dumps(dict(kind='school_material',**checked)),keys['source_id'],keys['message_id']))
+            selected=agent._school_drafts(self.store,c,scoped)
+            whole=agent._school_drafts(self.store,c,row)
+        self.assertEqual(selected['uncertainties'],[])
+        self.assertEqual(whole['uncertainties'],['回执下方小字模糊'])
 
     def test_explicit_admin_material_contrast_does_not_hide_a_positive_learning_requirement(self):
         cases=[('negative','家长：2026-02-13前签字交回活动回执。该回执与数学练习分开，不是作业答题页。','accepted'),
