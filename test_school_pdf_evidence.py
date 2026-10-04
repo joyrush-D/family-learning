@@ -1202,6 +1202,39 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         receipt=self.store.message(dict(keys,task_id=other),app.upload_info)
         self.assertEqual([u['id'] for u in receipt['attachments']],[receipt_file])
 
+    def test_legacy_scope_cannot_expand_task_print_or_check_to_the_full_notice(self):
+        app=self.app
+        keys,ident,receipt_file=self.scoped_original_tasks();task_id=self.item(ident)['task_id']
+        with self.store._db() as c:
+            plan=json.loads(self.item(ident)['plan']);plan.pop('school_original_action')
+            c.execute('UPDATE agent_items SET plan=? WHERE id=?',(json.dumps(plan),ident))
+            row=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone())
+            ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
+            self.assertIsNone(agent._school_action_upload_ids(row,ref,[self.pdf,receipt_file]),'raw legacy material can still be understood by the original preparation flow')
+        before=self.rows('SELECT * FROM agent_items ORDER BY id')
+        with self.assertRaises(agent.AgentError) as caught:
+            self.store.message(dict(keys,task_id=task_id),app.upload_info)
+        self.assertEqual((caught.exception.status,caught.exception.code),(409,'school_original_scope_stale'))
+        full=self.store.message(keys,app.upload_info)
+        self.assertEqual({u['id'] for u in full['attachments']},{self.pdf,receipt_file})
+        with patch.object(agent.Store,'_config',return_value=self.store._config()):
+            with app.connect() as c:context=app.homework_material_context(c,task_id)
+            self.assertTrue(context['school_error']);self.assertEqual(context['allowed'],{})
+            with self.assertRaises(app.family_print.PrintError):
+                app.homework_print_sources(dict(task_id=task_id,question_sources=[dict(type='upload',id=receipt_file)]))
+            # A parent's independently saved answer remains usable; no old source/decision is rewritten.
+            own=self.seed_pdf('c'*32,name='虚构家长独立上传.pdf')
+            child=next(t['child'] for t in app.tasks() if t['id']==task_id)
+            saved=app.save_record(dict(child=child,day='2026-02-10',category='学习进展',title='虚构原作答',
+                note='家长独立保存的作答',source='事项:'+task_id,attachments=[own],request_key='synthetic-legacy-answer'))
+            with app.connect() as c:
+                answer=c.execute('SELECT * FROM records WHERE id=?',(saved['id'],)).fetchone()
+                context=app.homework_material_context(c,task_id,answer=answer)
+            self.assertEqual(set(context['allowed']),{own});self.assertEqual(context['allowed'][own]['origin'],'saved_answer')
+            self.assertTrue(context['school_error'])
+        self.assertEqual(self.rows('SELECT * FROM agent_items ORDER BY id'),before)
+        self.assertEqual(self.count('records'),1)
+
     def test_scoped_original_refuses_foreign_task_and_detached_anchor(self):
         app=self.app
         keys,ident,receipt_file=self.scoped_original_tasks();task_id=self.item(ident)['task_id']
