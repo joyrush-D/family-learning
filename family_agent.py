@@ -2556,6 +2556,9 @@ def _school_requirement_goal(value, texts):
         if labels:
             # A free title's broad range may imply every question is mandatory.
             # Keep its task name, but use only the read requirements for the range.
+            phrase=r'(?:'+question+r'\s*(?:为|是)?(?:必做|选做)|(?:必做|选做)(?:的)?\s*'+question+r')'
+            old_labels=r'(?:'+phrase+r'(?:\s*[；;，,、]\s*'+phrase+r')*|必做|选做)'
+            title=re.sub(r'[（(]\s*'+old_labels+r'\s*[）)]','',title)
             title=re.sub(question, '', title).rstrip(' ：:，,；;')
             title=title+'（'+'；'.join(labels)+'）'
         if len(title)>TASK_BRIEF_SCHEMA['properties']['title']['maxLength']:

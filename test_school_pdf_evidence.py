@@ -877,6 +877,18 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         result=agent._school_requirement_goal(draft(title='数学：完成第1至第4题'),['第1至第3题必做，第4题选做'])
         self.assertEqual(result['title'],'数学：完成（第1至第3题必做；第4题选做）')
 
+    def test_refined_optional_title_never_turns_required_questions_into_whole_optional_task(self):
+        requirement='第1至3题必做，第4题选做，若选做须用两种方法；完成后检查。'
+        expected='数学：完成练习甲（第1至3题必做；第4题选做）'
+        for title in ('数学：完成练习甲（第4题选做）','数学：完成练习甲(选做第4题)',
+                      '数学：完成练习甲（选做）',expected):
+            with self.subTest(title=title):
+                result=agent._school_requirement_goal(draft(title=title),[requirement])
+                self.assertEqual((result['title'],result['goal']),(expected,requirement))
+                self.assertEqual(agent._school_requirement_goal(result,[requirement]),result)
+        value=agent._school_requirement_goal(draft(title='数学：完成练习甲（拓展卷）第1至4题'),[requirement])
+        self.assertEqual(value['title'],'数学：完成练习甲（拓展卷）（第1至3题必做；第4题选做）')
+
     def test_missing_independent_requirement_fails_the_whole_round(self):
         requirements=['数学：2026-02-12前完成第1至3题并写明单位。','数学：2026-02-13前复习错题本第1至2题，并写出订正过程。']
         ident,parts,keys=self.required_image(requirements);before=self.item(ident)
