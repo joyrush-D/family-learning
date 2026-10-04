@@ -953,6 +953,23 @@ class AgentTests(unittest.TestCase):
                 with self.assertRaises(agent.AgentError):agent._school_effective_conditions(
                     sources,quotes,[dict(changes[0],new_text=literal)],dict(proof,correction_text=sources[1]['text']))
 
+    def test_optional_completion_short_name_cannot_collide_with_another_named_action(self):
+        import copy
+        parts,anchors,changes,proof=self._first_batch_condition_fixture()
+        for other in ['《河的观察单》','《观察单》']:
+            sources=copy.deepcopy(parts);sources[0]['text']=sources[0]['text'].replace('第一项朗读课文。','第一项：完成'+other+'，写三句话。')
+            basis=dict(proof,original_text=sources[0]['text'])
+            for name in ['观察单','桥的观察单','《桥的观察单》']:
+                literal='A、B栏仍必做；C栏改为选做，不做C栏也算完成'+name+'。'
+                sources[1]['text']=proof['correction_text'].replace(
+                    'A、B栏仍必做；C栏改为选做，不做C栏也算完成观察单。',literal)
+                basis['correction_text']=sources[1]['text'];quotes=copy.deepcopy(anchors);quotes[1]['quote']=sources[1]['text']
+                mapping=[dict(changes[0],new_text=literal)]
+                with self.subTest(other=other,name=name):
+                    if name=='观察单':
+                        with self.assertRaises(agent.AgentError):agent._school_effective_conditions(sources,quotes,mapping,basis)
+                    else:self.assertTrue(agent._school_effective_conditions(sources,quotes,mapping,basis))
+
     def test_effective_column_changes_reject_missing_ambiguous_or_standard_replacements(self):
         import copy
         parts,anchors,changes,proof=self._first_batch_condition_fixture()
