@@ -93,6 +93,43 @@ class HomeworkCauseTests(unittest.TestCase):
                         self.assertEqual(question['answer'],'教师参考：5')
 
 
+class HomeworkReviewTextTests(unittest.TestCase):
+    """The saved opinion must stay complete without repeating the wrong questions."""
+
+    def test_each_question_once_with_scope_and_previous_comparison(self):
+        raw=dict(coverage='只核虚构甲卷第1页；第2页未读。',comparison='补入教师参考；上轮未核的题仍未判定。',items=[
+            dict(label='虚构甲卷第1题',question='2+3=?',question_kind='objective',student_answer='4',
+                 answer='教师参考：5',judgment='incorrect',error_reason='4与5不同。',possible_cause='',
+                 steps='独立重算，再核对5。',uncertainty=''),
+            dict(label='虚构甲卷第2题',question='1+1=?',question_kind='objective',student_answer='2',
+                 answer='教师参考：2',judgment='correct',error_reason='',possible_cause='',steps='',uncertainty=''),
+            dict(label='虚构甲卷第3题',question='',question_kind='unknown',student_answer='',
+                 answer='',judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty='本次未提供作答。')])
+        original=json.loads(json.dumps(raw));scope=['虚构甲卷.pdf：已读取第1页；第2页未读。']
+        with patch.object(family_llm,'_chat_json',return_value=raw):
+            draft=family_llm.homework_reference_draft(dict(mime='image/png',data=png()),review=True,
+                program_coverage=scope,reference_documents=[dict(name='teacher.txt',text='虚构甲卷1题5、2题2')])
+        self.assertEqual(raw,original)
+        self.assertEqual(draft['questions'],original['items'])
+        self.assertEqual((draft['items'],draft['wrong_items'],draft['unknown_items']),(3,1,1))
+        lines=draft['text'].splitlines()
+        self.assertEqual(lines[0],'本次核对3题：与参考不同1题，与参考一致1题，未判定1题。')
+        for item in original['items']:
+            self.assertEqual(draft['text'].count(item['label']),1)
+        self.assertEqual(draft['text'].count('卷面作答：'),3)
+        for text in ('卷面作答：4','教师参考：5','错误依据：4与5不同。','订正建议：独立重算，再核对5。',
+                     '卷面作答：2','教师参考：2','未判定','本次未提供作答。',scope[0],raw['coverage'],raw['comparison']):
+            self.assertIn(text,draft['text'])
+        self.assertNotIn('可能原因',draft['text'])
+        self.assertLess(draft['text'].index('卷面作答：4'),draft['text'].index('覆盖说明：'))
+        self.assertIn('不代表作业已完成或已经掌握',draft['text'])
+
+    def test_supported_cause_keeps_explicit_uncertainty(self):
+        draft=HomeworkCauseTests().draft(review=True,possible_cause='可能重算时发生偏差，须请孩子说明。')
+        self.assertEqual(draft['text'].count('可能原因（待问孩子）：'),1)
+        self.assertIn('可能重算时发生偏差，须请孩子说明。',draft['text'])
+
+
 class PrintTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.data=Path(self.tmp.name)
