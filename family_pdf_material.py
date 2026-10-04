@@ -230,26 +230,29 @@ def _pending(done, page_count):
     return [] if page_count is None else [p for p in range(1, page_count + 1) if p not in done]
 
 
-def _needs_requirements_upgrade(batch):
+def _has_reading_progress(batch):
     import family_llm
+    draft=batch['draft']
+    return any(family_llm.school_requirement_has_reading_progress(text)
+        for original in draft.get('originals',[]) for text in original.get('requirements',[])+original['uncertainties'])
+
+
+def _needs_requirements_upgrade(batch):
     draft=batch['draft']
     # Old free-form doubts cannot be deleted by wording or by later page coverage.
     # Only undecided originals are re-read into the explicit scope channel; clear
     # structured groups and all parent decisions retain their existing evidence.
-    return ('originals' not in draft or any(family_llm.school_requirement_has_reading_progress(r)
-            for original in draft.get('originals',[]) for r in original['requirements']) or bool(draft.get('uncertainties'))
+    return ('originals' not in draft or _has_reading_progress(batch) or bool(draft.get('uncertainties'))
             and any('deferred_contexts' not in original for original in draft['originals']))
 
 
 def _document_view(c, source, message, value):
     from family_agent import _hash
-    import family_llm
     batches, done, page_count = _batches(_rows(c, source, message, value['fingerprint']),value['upload_id'])
     pending = _pending(done, page_count); complete = page_count is not None and not pending
     key = _document_key(source, message, value)
     job = c.execute('SELECT * FROM agent_jobs WHERE id=?', (key,)).fetchone()
-    structured=[b for b in batches if 'originals' in b['draft'] and not any(
-        family_llm.school_requirement_has_reading_progress(r) for original in b['draft']['originals'] for r in original['requirements'])]
+    structured=[b for b in batches if 'originals' in b['draft'] and not _has_reading_progress(b)]
     requirements_complete=complete and len(structured)==len(batches)
     structured_done={p for b in batches if not _needs_requirements_upgrade(b) for p in b['pages']}
     failed = bool(job and not job['done'] and job['error'] and job['fingerprint'] in

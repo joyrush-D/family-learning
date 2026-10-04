@@ -44,6 +44,25 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             self.assertEqual(family_llm.validate_school_material(dict(originals=[original]),original_ids=['a'*32],
                 require_requirements=True,allow_page_scope=True,deferred_pages=[4])['originals'][0]['requirements'],[requirement])
 
+    def test_page_reading_scope_cannot_be_saved_as_a_content_doubt(self):
+        for progress in ['第4页本轮未送入，因此无法核对选做条件。',
+                         '本轮仅见第1至3页，无法核对后页复习和回执。']:
+            original=dict(upload_id='a'*32,title='虚构页组',note='第1至3页已送入',requirements=['选做条件见第4页。'],
+                uncertainties=['第2页单位模糊，厘米与米无法区分。',progress],
+                deferred_contexts=[dict(pages=[4],note='同一练习的后页条件和完整标准')])
+            value=dict(originals=[original]);before=copy.deepcopy(value)
+            with self.assertRaises(family_llm.LLMDraftError):
+                family_llm.validate_school_material(value,original_ids=['a'*32],require_requirements=True,
+                    allow_page_scope=True,deferred_pages=[4])
+            self.assertEqual(value,before)
+            legacy=family_llm.validate_school_material(value,original_ids=['a'*32],require_requirements=True,
+                allow_page_scope=True,allow_legacy_reading_progress=True)
+            self.assertEqual(legacy['originals'][0],original)
+            original['uncertainties']=['第2页单位模糊，厘米与米无法区分。','老师未给第4页所说的另一份参考材料。']
+            checked=family_llm.validate_school_material(value,original_ids=['a'*32],require_requirements=True,
+                allow_page_scope=True,deferred_pages=[4])
+            self.assertEqual(checked['originals'][0]['uncertainties'],original['uncertainties'])
+
     def progress_group(self):
         self.link(self.keys,self.pdf,action=DETACH)
         keys=self.native_notice('progress-requirements');ident=self.candidate(keys=keys,ident='progress-requirements')
@@ -92,6 +111,35 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertEqual(json.loads(after[0][1])['previous_group'],dict(payload=json.loads(before[0][1]),updated=before[0][2],
             pages=json.loads(before[0][3]),page_count=before[0][4]))
         self.assertTrue(self.progress_view(keys)['requirements_complete'])
+        self.assertEqual((self.count('manual_tasks'),self.count('records')),(0,0))
+
+    def test_old_typed_scope_pollution_requires_reread_and_keeps_a_real_doubt(self):
+        keys,ident=self.progress_group()
+        with self.store._db() as c:
+            old=c.execute('SELECT * FROM agent_pdf_material WHERE message_id=? AND first_page=1',(keys['message_id'],)).fetchone()
+            value=json.loads(old['payload']);original=value['originals'][0]
+            original['requirements']=[TEXT]
+            original['uncertainties']=['第4页本轮未送入，完整标准无法核对。','第2页单位模糊，厘米与米无法区分。']
+            c.execute('UPDATE agent_pdf_material SET payload=? WHERE message_id=? AND first_page=1',(json.dumps(value),keys['message_id']))
+        before=self.rows('SELECT first_page,payload,updated,pages,page_count FROM agent_pdf_material ORDER BY first_page')
+        self.assertFalse(self.progress_view(keys)['requirements_complete'])
+        with self.store._db() as c:pdf=agent._pdf_evidence(agent._school_pdf(self.store,c,self.item(ident)))
+        self.assertFalse(pdf['reading_progress_in_requirements']);self.assertTrue(pdf['reading_progress_in_uncertainties'])
+        self.assertFalse(pdf['requirements_complete'])
+        def good(*args,**kw):
+            self.assertEqual(kw['original_pages'],[1,2,3])
+            return dict(originals=[dict(upload_id=self.pdf,title='重读原页组',note='原页组内容',requirements=[TEXT],
+                uncertainties=['第2页单位模糊，厘米与米无法区分。'],deferred_contexts=[])])
+        with test_pdf_material.renderer(),patch.object(family_llm,'extract_draft',side_effect=good) as model:
+            self.assertEqual(pdfm.prepare(self.store,self.now,budget=1),dict(used=1,failed=0))
+            self.assertEqual(pdfm.prepare(self.store,self.now+dt.timedelta(minutes=1),budget=1),dict(used=0,failed=0))
+            model.assert_called_once()
+        after=self.rows('SELECT first_page,payload,updated,pages,page_count FROM agent_pdf_material ORDER BY first_page')
+        self.assertEqual(after[1:],before[1:])
+        self.assertEqual(json.loads(after[0][1])['previous_group']['payload'],json.loads(before[0][1]))
+        with self.store._db() as c:pdf=agent._pdf_evidence(agent._school_pdf(self.store,c,self.item(ident)))
+        self.assertEqual(pdf['uncertainties'],['第2页单位模糊，厘米与米无法区分。'])
+        self.assertFalse(pdf['reading_progress_in_uncertainties']);self.assertTrue(pdf['requirements_complete'])
         self.assertEqual((self.count('manual_tasks'),self.count('records')),(0,0))
 
     def test_progress_recheck_never_replaces_a_parent_decision_or_edited_candidate(self):
