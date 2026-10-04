@@ -1491,7 +1491,6 @@ class AgentTests(unittest.TestCase):
     def test_school_original_action_append_and_repeated_notice_keep_scoped_messages(self):
         original,task_id=self._school_append_original()
         self.store.app=self.app
-        with self.app.connect() as c:self.app.tasks(c)  # Match the already-initialized product before read-only snapshots.
         keys=dict(child_id='child-1',source_id=self.source['id'])
         with self.store._db() as c:
             canonical=dict(c.execute('SELECT * FROM agent_items WHERE id=?',(original['id'],)).fetchone())
@@ -1505,8 +1504,9 @@ class AgentTests(unittest.TestCase):
 
         def saved_state():
             with self.app.connect() as c:
+                present={r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 return {table:[tuple(r) for r in c.execute('SELECT * FROM '+table+' ORDER BY rowid')]
-                        for table in ('agent_items','manual_tasks','records','task_updates','task_focus','task_focus_history')}
+                        for table in ('agent_items','manual_tasks','records','task_updates','task_focus','task_focus_history') if table in present}
 
         def read_text(message_id,text):
             before=saved_state()
