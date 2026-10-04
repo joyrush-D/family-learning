@@ -175,5 +175,24 @@ class SchoolAckOriginalTests(unittest.TestCase):
             self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items').fetchone()[0],1)
             self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_items WHERE job_id LIKE 'school-ack-originals:%'").fetchone()[0],0)
 
+    def test_decision_between_eligibility_and_basis_does_not_become_approved_baseline(self):
+        values=self._input(kind='image',unread=True);self._legacy(values)
+        real=agent._history_context;changed=False
+        def intervene(store,c,source,values,key,**kw):
+            nonlocal changed
+            if not changed:
+                changed=True
+                self.store._save('synthetic-between-checks','fixture',[dict(child_id='child-1',kind='school',
+                    title='另一会话已忽略',body=agent.FOCUS['school'],due='',
+                    evidence=[dict(ref='message:'+self.source['id']+':11',text=values[0]['text'])],plan={})],self.now)
+                with self.store._db() as writer:writer.execute("UPDATE agent_items SET state='dismissed' WHERE job_id='synthetic-between-checks'")
+            return real(store,c,source,values,key,**kw)
+        with patch.object(agent,'_history_context',side_effect=intervene):
+            result=agent._recover_school_ack_originals(self.store,self.store._config(),self.now)
+        self.assertEqual((result['created'],result['failed']),(0,1))
+        with self.store._db() as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_items WHERE job_id LIKE 'school-ack-originals:%'").fetchone()[0],0)
+            self.assertEqual(c.execute("SELECT state FROM agent_items WHERE job_id='synthetic-between-checks'").fetchone()[0],'dismissed')
+
 
 if __name__=='__main__':unittest.main()
