@@ -1592,7 +1592,7 @@ function taskSchoolMaterialHTML(view){
  let preparation='';
  if(scoped){
   if(!Array.isArray(action.quotes)||!action.quotes.length||action.quotes.some(q=>!q||typeof q.text!=='string'||!q.text.trim()||!Array.isArray(q.upload_ids)||!Array.isArray(q.pages)||q.pages.some(n=>!Number.isInteger(n)||n<1)))throw Error('本项资料依据暂时无法核对，请重试。');
-  preparation=`<section data-task-material-state="ready" data-task-material-scope="action"><strong>AI 已整理 · 本项资料</strong>${action.quotes.filter(q=>q.pages.length).map(q=>`<p class="small" data-task-material-pages>本项对应第 ${q.pages.map(n=>esc(String(n))).join('、')} 页</p>`).join('')}</section>`;
+  preparation=`<section data-task-material-state="ready" data-task-material-scope="action"><strong>AI 已整理 · 本项资料</strong>${action.quotes.filter(q=>q.pages.length).map(q=>`<p class="small" data-task-material-pages>归纳引用：第 ${q.pages.map(n=>esc(String(n))).join('、')} 页</p>`).join('')}</section>`;
   preparation+=schoolPdfDocuments(p).map(doc=>`<section data-task-material-state="${esc(doc.state||'unknown')}" data-school-pdf-document="${esc(doc.job_id||doc.upload_id||'')}"><p class="small muted">原件整理：${esc(schoolPdfProgress(doc))}</p>${doc.conversion?`<p class="small muted">${esc(doc.conversion)}</p>`:doc.original&&doc.original!=='pdf'?'<p class="small muted">页码为本机转换后页码，请对照原文件；动画、声音、备注或表格公式等未完整读取。</p>':''}${doc.state==='error'&&doc.explanation?`<p class="small muted">${esc(doc.explanation)}</p>`:''}</section>`).join('');
  }else if(p){
   preparation=schoolPdfDocuments(p).map(doc=>{
