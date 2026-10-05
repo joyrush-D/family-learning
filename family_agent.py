@@ -2618,7 +2618,10 @@ def _school_native_bind(proposal,actions,assigned):
             if 'enum' in field and value not in field['enum']:raise AgentError('学校独立要求字段无法核对')
     refs={q['ref'] for q in proposal['evidence']};quote=proposal['title_quote'].strip().rstrip('；;。').strip()
     matches=[a for a in actions if a['ref'] in refs and quote and quote in a['quote']]
-    if not matches:return proposal,None
+    if not matches:
+        owned={a['ref'] for a in actions}|{s['ref'] for a in actions for s in a['supplements']}
+        if refs&owned:raise AgentError('学校已定位要求未逐项归纳，整批保留重试',code='school_action_coverage')
+        return proposal,None
     if len(matches)!=1 or matches[0]['id'] in assigned:
         raise AgentError('学校独立要求重复或合并，整批保留重试',code='school_action_coverage')
     action=matches[0]
@@ -2662,9 +2665,13 @@ def _school_native_saved(items,evidence):
         expected={action['ref']}|{s['ref'] for s in action['supplements']}
         if ({e['ref'] for e in item['evidence']}!=expected or brief.get('purpose')!='learning'
                 or brief.get('change')!='new' or brief.get('target_id')
-                or any(brief.get(k)!=value[k] for k in ('title','goal','submission'))
+                or any(brief.get(k,'')!=value[k] for k in ('title','goal','submission'))
                 or item['title']!=value['title'] or item['body']!=value['goal']):
             raise AgentError('学校完整要求未按对应行动保存，整批未写入',409,'school_action_coverage')
+        from family_agenda import deadlines,sent_day
+        dates=deadlines(action['header']+'\n'+action['quote'],sent_day(action['time']))
+        if len(dates)>1 or item.get('due','')!=(next(iter(dates)) if dates else ''):
+            raise AgentError('学校行动日期与原要求不符，整批未写入',409,'school_action_coverage')
         assigned.add(ident)
     if assigned!=set(lookup):
         raise AgentError('学校独立要求保存时仍有遗漏，整批未写入',409,'school_action_coverage')
