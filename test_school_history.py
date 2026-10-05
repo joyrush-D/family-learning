@@ -1,0 +1,858 @@
+"""Synthetic processed-message recovery through the ordinary Agent tick; no real models or collectors."""
+from contextlib import ExitStack
+import copy
+import datetime as dt
+import json
+import sqlite3
+import unittest
+from unittest.mock import patch
+
+import family_agent as agent
+import family_task_focus
+import test_agent as fixtures
+
+
+class SchoolHistoryTests(unittest.TestCase):
+    def setUp(self):
+        # Composition keeps unittest from re-running all of AgentTests here.
+        self.fixture = fixtures.AgentTests(methodName='runTest')
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.app, self.store = self.fixture.app, self.fixture.store
+        self.clock = self.fixture.now
+        self.groups, self.calls, self.fresh_responses = [], [], {}
+        self.history_response = None
+        self.sources = [self.fixture.source]
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch.object(agent, '_now', side_effect=lambda value=None: value if value is not None else self.clock))
+        self.stack.enter_context(patch.object(agent.family_llm, '_chat_json', side_effect=self._model))
+        self.stack.enter_context(patch.object(agent.family_llm, 'extract_draft', side_effect=self._unexpected_external))
+        self.stack.enter_context(patch('family_qq_capture.run_one', return_value=dict(state='disabled')))
+        self.stack.enter_context(patch.object(agent.family_teacher_public, 'run_one', return_value=dict(state='disabled')))
+        self.stack.enter_context(patch.object(agent.family_media, 'run_one', return_value=dict(state='ready')))
+        self.stack.enter_context(patch.object(agent.family_media, 'prepare_draft', return_value=dict(used=0, failed=0)))
+        self.stack.enter_context(patch('subprocess.Popen', side_effect=self._unexpected_external))
+        self.stack.enter_context(patch('urllib.request.urlopen', side_effect=self._unexpected_external))
+        self.stack.enter_context(patch('socket.socket.connect', side_effect=self._unexpected_external))
+        self.stack.enter_context(patch('socket.socket.connect_ex', side_effect=self._unexpected_external))
+
+    def _unexpected_external(self, *args, **kwargs):
+        raise AssertionError('Synthetic history tests must not invoke models, collectors, devices or network')
+
+    def _model(self, messages, schema, name, *args, data_path=None, **kwargs):
+        self.assertEqual(data_path, self.fixture.data)
+        context = json.loads(messages[-1]['content'])
+        self.assertEqual(context['as_of'], self.clock.date().isoformat())
+        # The actual model boundary must remain outside the save transaction.
+        with sqlite3.connect(self.app.DB, timeout=0.1) as c:
+            c.execute('BEGIN IMMEDIATE')
+            c.rollback()
+        self.calls.append(dict(name=name, context=copy.deepcopy(context), schema=copy.deepcopy(schema), at=self.clock.isoformat()))
+        if name == 'family_agent_plan':
+            return dict(proposal=None)
+        self.assertEqual(name, 'family_agent_selection')
+        fields = schema['properties']['proposals']['items']
+        ordinary = set(agent._school_fields['required'])
+        if 'existing_actions' in context:
+            self.assertEqual(set(fields['required']), ordinary | {'action_quote', 'existing_item_id'})
+            self.assertEqual(set(fields['properties']['existing_item_id']['enum']),
+                             {''} | {row['id'] for row in context['existing_actions']})
+            self.assertIsNotNone(self.history_response, 'Unexpected history model call')
+            response = self.history_response(context) if callable(self.history_response) else self.history_response
+        else:
+            self.assertEqual(set(fields['required']), ordinary)
+            self.assertNotIn('action_quote', fields['properties'])
+            self.assertNotIn('existing_item_id', fields['properties'])
+            refs = tuple(sorted(e['ref'] for e in context['evidence']))
+            self.assertIn(refs, self.fresh_responses, 'Unexpected fresh school scope')
+            response = self.fresh_responses[refs]
+        return copy.deepcopy(response)
+
+    def _tick(self, minutes):
+        self.clock = self.fixture.now + dt.timedelta(minutes=minutes)
+        before = len(self.calls)
+        result = agent.run_once(self.app, self.clock)
+        self.assertLessEqual(len(self.calls) - before, 3, 'All model paths share the original tick budget')
+        return result
+
+    def _config(self):
+        (self.fixture.data / 'agent.json').write_text(json.dumps(dict(enabled=True, sources=self.sources)))
+
+    def _legacy(self, *, suffix='', ids=('11', '12'), missing=None, tick=0, feedback=False):
+        source = self.fixture.source
+        first = '2月12日前交《回执A' + suffix + '》。'
+        missing = '另项：2月12日前带《材料B' + suffix + '》1份到校。' if missing is None else missing
+        optional = '自愿报名《活动C' + suffix + '》，不参加也无需回复。'
+        refs = ['message:' + source['id'] + ':' + ident for ident in ids]
+        with self.app.connect() as c:
+            saved = c.execute('SELECT cursor FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
+        payload = self.fixture.payload(expected=saved['cursor'] if saved else source['cursor'], cursor=ids[-1], offset=tick)
+        payload['messages'] = [dict(id=ident, time=payload['checked_at'], kind='text', sender='示例老师',
+                                    sender_id='synthetic-teacher-a', text=text, unread=False)
+                               for ident, text in zip(ids, (first + missing, optional))]
+        self.store.ingest(payload)
+        old = dict(proposals=[
+            fixtures.school_proposal(title_quote=first, due='2026-02-12', evidence=[dict(ref=refs[0])],
+                task_title='家长事务：交《回执A' + suffix + '》', task_goal=first, task_state='review',
+                task_reason='虚构旧归纳，待家长确认。', task_purpose='admin'),
+            fixtures.school_proposal(title_quote=optional, evidence=[dict(ref=refs[1])],
+                task_title='可选活动C' + suffix, task_goal=optional, task_state='review',
+                task_reason='原文明确自愿参加。', task_purpose='optional')])
+        self.fresh_responses[tuple(sorted(refs))] = old
+        result = self._tick(tick)
+        self.assertEqual((result['failed'], result['created']), (0, 2))
+        with self.app.connect() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")
+                    if {e['ref'] for e in json.loads(r['evidence'])} & set(refs)]
+            self.assertEqual(len(rows), 2)
+            # Simulate already-saved legacy output; never reset processed or the collection cursor.
+            for row in rows:
+                plan = json.loads(row['plan'])
+                self.assertEqual(plan.pop('school_selection_revision'), agent.SCHOOL_SELECTION_REVISION)
+                c.execute('UPDATE agent_items SET plan=? WHERE id=?', (agent._json(plan), row['id']))
+        a = next(row for row in rows if row['body'] == first)
+        c_item = next(row for row in rows if row['body'] == optional)
+        accepted = self.store.act(dict(id=a['id'], action='accept', title='家长确认：交《回执A' + suffix + '》',
+                                      body=first + '\n家长安排：放在书包文件夹。'))
+        self.store.act(dict(id=c_item['id'], action='dismiss'))
+        self.app.save_task(dict(id=accepted['task_id'], status='待跟进', note='虚构家长：原安排保留。'))
+        group = dict(refs=refs, first=first, missing=missing, optional=optional, a_id=a['id'], c_id=c_item['id'],
+                     task_id=accepted['task_id'], job=a['job_id'], suffix=suffix)
+        self.groups.append(group)
+        if feedback:
+            saved = self.app.save_task_feedback(dict(task_id=group['task_id'], child='示例甲', day='2026-02-10',
+                note='虚构家长反馈：回执已放好，尚未交回。', request_key='synthetic-history-feedback-' + suffix))
+            group['record_id'] = saved['record_id']
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT processed FROM agent_messages WHERE source_id=? AND id=?',
+                (source['id'], ids[0])).fetchone()[0], 1)
+            self.assertEqual(c.execute('SELECT done FROM agent_jobs WHERE id=?', (group['job'],)).fetchone()[0], 1)
+        return group
+
+    def _response(self, group, *, due='2026-02-12', short_old=False):
+        a_quote = '交《回执A' + group['suffix'] + '》' if short_old else group['first']
+        c_quote = '报名《活动C' + group['suffix'] + '》' if short_old else group['optional']
+        def proposal(quote, ref, **fields):
+            return fixtures.school_proposal(title_quote=quote, evidence=[dict(ref=ref)],
+                action_quote=quote, existing_item_id='', **fields)
+        return dict(proposals=[
+            proposal(a_quote, group['refs'][0], task_title='模型换题名A', task_goal=group['first'],
+                     task_state='ready', task_purpose='admin'),
+            proposal(c_quote, group['refs'][1], task_title='模型企图重新报名C', task_goal=group['optional'],
+                     task_state='ready', task_purpose='admin'),
+            proposal(group['missing'], group['refs'][0], due=due, task_title='携带《材料B' + group['suffix'] + '》1份',
+                     task_goal=group['missing'], task_state='ready', task_reason='本项已读、独立且明确。', task_purpose='admin')])
+
+    def _partial_legacy(self, *, middle_text=None):
+        """Frozen old three-message batch whose output cited only the first and last."""
+        group = self._legacy(ids=('11', '13'), missing='', feedback=True)
+        with self.app.connect() as c:
+            first = json.loads(c.execute('SELECT payload FROM agent_messages WHERE id=?', ('11',)).fetchone()[0])
+            last = json.loads(c.execute('SELECT payload FROM agent_messages WHERE id=?', ('13',)).fetchone()[0])
+            middle = dict(first, id='12', text='2月12日前带《材料B》1份到校。' if middle_text is None else middle_text)
+            values = [first, middle, last]
+            key = 'messages:' + agent._hash([self.fixture.source['id'], [v['id'] for v in values]])[:40]
+            fingerprint = agent._hash(dict(school_learning_policy=8, messages=values))
+            c.execute('UPDATE agent_jobs SET id=?,fingerprint=? WHERE id=?', (key, fingerprint, group['job']))
+            c.execute('UPDATE agent_items SET job_id=? WHERE job_id=?', (key, group['job']))
+            c.execute('UPDATE agent_messages SET rowid=3 WHERE id=?', ('13',))
+            c.execute('INSERT INTO agent_messages(rowid,source_id,id,payload,processed) VALUES(?,?,?,?,?)',
+                (2, self.fixture.source['id'], middle['id'], agent._json(middle), 1))
+            receipt = agent._hash([self.fixture.source['id'], '10', '13', first['time'], last['time'], values, False, ''])
+            c.execute('UPDATE agent_sources SET receipt=? WHERE id=?', (receipt, self.fixture.source['id']))
+        group.update(job=key, values=values, refs=['message:' + self.fixture.source['id'] + ':' + v['id'] for v in values], missing=middle['text'])
+        return group
+
+    def _partial_response(self, group, context):
+        old = self._response(group)
+        old['proposals'][1]['evidence'] = [dict(ref=group['refs'][2])]
+        old['proposals'][2]['evidence'] = [dict(ref=group['refs'][1])]
+        supplied = {e['ref'] for e in context['evidence']}
+        return dict(proposals=[p for p in old['proposals'] if p['evidence'][0]['ref'] in supplied])
+
+    def test_original_batch_restores_entirely_unreferenced_message_after_partial_history_done(self):
+        group = self._partial_legacy()
+        before = self._protected()
+        # Simulate the previous cited-only audit having completed without M12.
+        source = self.fixture.source
+        refs = [group['refs'][0], group['refs'][2]]
+        key = 'school-history:' + agent._hash([agent.SCHOOL_SELECTION_REVISION, group['job'], source['child_id'], sorted(refs)])[:40]
+        fp = self.store._job(key, dict(revision=agent.SCHOOL_SELECTION_REVISION, source=source,
+            messages=[group['values'][0], group['values'][2]]), self.clock, model=True)
+        self.store._save(key, fp, [], self.clock)
+        self.history_response = lambda context: self._partial_response(group, context)
+        counts = self._school_task_counts()
+        self.assertEqual((self._tick(10)['failed'], len(self._history_rows())), (0, 1))
+        self._assert_one_school_task_added(counts)
+        row = self._history_rows()[0]
+        self.assertEqual({e['ref'] for e in json.loads(row['evidence'])}, {group['refs'][1]})
+        self.assertEqual(row['body'], group['missing'])
+        self.assertEqual(self._protected(), before)
+        seen = len(self.calls)
+        self.store = agent.Store(self.app.connect, self.app.profiles, self.fixture.data, app=self.app)
+        self.assertEqual(self._tick(20)['created'], 0)
+        self.assertEqual(len(self.calls), seen)
+
+    def _close_complete_scope(self, *, done, old_cited_key=False):
+        scopes = agent._history_scopes(self.store, dict(enabled=True, sources=self.sources))
+        self.assertEqual(len(scopes), 1)
+        source, values, key = scopes[0][:3]
+        self.assertEqual([v['id'] for v in values], ['11', '12', '13'])
+        if old_cited_key:
+            refs = ['message:' + source['id'] + ':' + v['id'] for v in values]
+            key = 'school-history:' + agent._hash([agent.SCHOOL_SELECTION_REVISION,
+                self.groups[0]['job'], source['child_id'], sorted(refs)])[:40]
+        fp = self.store._job(key, dict(revision=agent.SCHOOL_SELECTION_REVISION, source=source,
+            messages=values), self.clock, model=True)
+        if done:
+            self.store._save(key, fp, [], self.clock)
+        else:
+            with self.app.connect() as c:
+                c.execute('UPDATE agent_jobs SET attempts=3,next_try=? WHERE id=?', ('', key))
+        return key
+
+    def _later_processed_messages(self):
+        # Fixture only: later successful collection/processing moves the old batch
+        # outside the discovery window. Rechecking must not shrink its proven scope.
+        for index, start in enumerate(range(101, 602, 200), 1):
+            with self.app.connect() as c:
+                cursor = c.execute('SELECT cursor FROM agent_sources WHERE id=?', (self.fixture.source['id'],)).fetchone()[0]
+            payload = self.fixture.payload(expected=cursor, cursor=str(min(start + 199, 601)), offset=index)
+            payload['messages'] = [dict(id=str(n), time=payload['checked_at'], kind='text', sender='示例老师',
+                sender_id='synthetic-teacher-later', text='虚构后续已读消息 ' + str(n), unread=False)
+                for n in range(start, min(start + 200, 602))]
+            self.store.ingest(payload)
+        with self.app.connect() as c:
+            c.execute('UPDATE agent_messages SET processed=1 WHERE source_id=?', (self.fixture.source['id'],))
+
+    def _assert_complete_scope_not_shrunk(self, *, done, retry=False):
+        group = self._partial_legacy()
+        key = self._close_complete_scope(done=done)
+        if retry:
+            self.store.act(dict(action='retry', id=key))
+        self._later_processed_messages()
+        before = self._protected()
+        jobs = self._history_jobs()
+        self.history_response = lambda context: self._partial_response(group, context)
+        calls = sum('existing_actions' in call['context'] for call in self.calls)
+        self.assertEqual(agent._history_scopes(self.store, dict(enabled=True, sources=self.sources)), [])
+        self.assertEqual(self._tick(10)['created'], 0)
+        self.assertEqual(sum('existing_actions' in call['context'] for call in self.calls), calls)
+        self.assertEqual(self._history_jobs(), jobs)
+        self.assertEqual(self._protected(), before)
+
+    def test_complete_done_scope_leaving_window_does_not_reopen_cited_subset(self):
+        self._assert_complete_scope_not_shrunk(done=True)
+
+    def test_complete_exhausted_scope_leaving_window_does_not_reopen_cited_subset(self):
+        self._assert_complete_scope_not_shrunk(done=False)
+
+    def test_complete_manual_retry_leaving_window_does_not_reopen_cited_subset(self):
+        self._assert_complete_scope_not_shrunk(done=False, retry=True)
+
+    def _assert_old_complete_scope_not_shrunk(self, *, done):
+        self._partial_legacy()
+        key = self._close_complete_scope(done=done, old_cited_key=True)
+        old_jobs = self._history_jobs()
+        self.assertEqual(agent._history_scopes(self.store, dict(enabled=True, sources=self.sources)), [])
+        self.assertEqual(self._history_jobs(), old_jobs)
+        self._later_processed_messages()
+        before = self._protected()
+        self.assertEqual(agent._history_scopes(self.store, dict(enabled=True, sources=self.sources)), [])
+        calls = sum('existing_actions' in call['context'] for call in self.calls)
+        self.assertEqual(self._tick(10)['created'], 0)
+        self.assertEqual(sum('existing_actions' in call['context'] for call in self.calls), calls)
+        self.assertEqual(self._history_jobs(), old_jobs)
+        self.assertEqual(self._protected(), before)
+
+    def test_old_complete_done_receipt_seen_before_window_moves_does_not_reopen_subset(self):
+        self._assert_old_complete_scope_not_shrunk(done=True)
+
+    def test_old_complete_exhausted_receipt_seen_before_window_moves_does_not_reopen_subset(self):
+        self._assert_old_complete_scope_not_shrunk(done=False)
+
+    def _assert_no_stale_scope_marker(self, change):
+        self._partial_legacy()
+        key = self._close_complete_scope(done=False, old_cited_key=True)
+        original = agent._history_scope_mark
+        def race(store, origin, source, values, cited_key, receipt, scope_key):
+            change(key)
+            return original(store, origin, source, values, cited_key, receipt, scope_key)
+        with patch.object(agent, '_history_scope_mark', side_effect=race):
+            self.assertEqual(agent._history_scopes(self.store, dict(enabled=True, sources=self.sources)), [])
+        with self.app.connect() as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_jobs WHERE id LIKE 'school-history-scope:%'").fetchone()[0], 0)
+
+    def test_scanned_old_scope_retried_before_marker_saves_no_marker(self):
+        self._assert_no_stale_scope_marker(lambda key: self.store.act(dict(action='retry', id=key)))
+
+    def test_source_paused_after_scan_saves_no_scope_marker(self):
+        def pause(key):
+            self.fixture.source['enabled'] = False
+            self._config()
+        self._assert_no_stale_scope_marker(pause)
+
+    def test_source_rebound_after_scan_saves_no_scope_marker(self):
+        def rebind(key):
+            self.fixture.source['child_id'] = 'child-2'
+            self._config()
+        self._assert_no_stale_scope_marker(rebind)
+
+    def test_message_changed_after_scan_saves_no_scope_marker(self):
+        def changed(key):
+            with self.app.connect() as c:
+                row = c.execute('SELECT payload FROM agent_messages WHERE id=?', ('12',)).fetchone()
+                value = json.loads(row['payload'])
+                value['text'] += '虚构竞争修改'
+                c.execute('UPDATE agent_messages SET payload=? WHERE id=?', (agent._json(value), '12'))
+        self._assert_no_stale_scope_marker(changed)
+
+    def test_pending_old_full_scope_keeps_same_job_attempts_and_backoff(self):
+        group = self._partial_legacy()
+        key = self._close_complete_scope(done=False, old_cited_key=True)
+        with self.app.connect() as c:
+            c.execute('UPDATE agent_jobs SET attempts=1,next_try=? WHERE id=?',
+                ((self.fixture.now + dt.timedelta(minutes=30)).isoformat(), key))
+        scopes = agent._history_scopes(self.store, dict(enabled=True, sources=self.sources))
+        self.assertEqual(scopes[0][2], key)
+        self.history_response = lambda context: self._partial_response(group, context)
+        calls = sum('existing_actions' in call['context'] for call in self.calls)
+        self.assertEqual(self._tick(10)['created'], 0)
+        self.assertEqual(sum('existing_actions' in call['context'] for call in self.calls), calls)
+        self.assertEqual(self._tick(30)['created'], 2)
+        with self.app.connect() as c:
+            row = c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?', (key,)).fetchone()
+            self.assertEqual((row['done'], row['attempts']), (1, 2))
+        self.assertEqual(len(self._history_rows()), 1)
+
+    def test_legacy_original_receipt_changes_after_discovery_make_no_model_call(self):
+        self._partial_legacy()
+        scopes = agent._history_scopes(self.store, dict(enabled=True, sources=self.sources))
+        self.assertEqual([v['id'] for v in scopes[0][1]], ['11', '12', '13'])
+        with self.app.connect() as c:
+            c.execute('UPDATE agent_jobs SET done=0 WHERE id=?', (self.groups[0]['job'],))
+        calls = len(self.calls)
+        result = agent._recheck_school_history(self.app, self.store, self.clock, 1, scopes)
+        self.assertEqual((result['used'], result['failed']), (0, 1))
+        self.assertEqual(len(self.calls), calls)
+        self.assertEqual(self._history_rows(), [])
+
+    def test_current_revision_group_does_not_reopen_as_legacy(self):
+        group = self._partial_legacy()
+        with self.app.connect() as c:
+            for ident in (group['a_id'], group['c_id']):
+                plan = json.loads(c.execute('SELECT plan FROM agent_items WHERE id=?', (ident,)).fetchone()[0])
+                plan['school_selection_revision'] = agent.SCHOOL_SELECTION_REVISION
+                c.execute('UPDATE agent_items SET plan=? WHERE id=?', (agent._json(plan), ident))
+        before = self._protected()
+        calls = sum('existing_actions' in call['context'] for call in self.calls)
+        self.assertEqual(self._tick(10)['created'], 0)
+        self.assertEqual(sum('existing_actions' in call['context'] for call in self.calls), calls)
+        self.assertEqual(self._protected(), before)
+
+    def test_unproven_full_batch_retains_limited_cited_fallback_without_missing_message(self):
+        group = self._partial_legacy()
+        with self.app.connect() as c:
+            c.execute('UPDATE agent_jobs SET fingerprint=? WHERE id=?', ('unproven-fingerprint', group['job']))
+        before = self._protected()
+        scopes = agent._history_scopes(self.store, dict(enabled=True, sources=self.sources))
+        self.assertEqual([v['id'] for v in scopes[0][1]], ['11', '13'])
+        self.history_response = lambda context: self._partial_response(group, context)
+        self.assertEqual(self._tick(10)['created'], 0)
+        self.assertEqual(self._history_rows(), [])
+        self.assertEqual(self._protected(), before)
+
+    def _empty_legacy(self, *, policy=7, texts=None, ids=None):
+        """Reproduce a saved old successful empty output, without resetting any real cursor."""
+        texts = texts or ['2月12日前带《材料D》1份到校。']
+        ids = ids or [str(51 + n) for n in range(len(texts))]
+        source = self.fixture.source
+        payload = self.fixture.payload(cursor=ids[-1])
+        payload['messages'] = [dict(id=ident, time=payload['checked_at'], kind='text', sender='示例英语老师',
+            sender_id='synthetic-teacher-empty', text=text, unread=False) for ident, text in zip(ids, texts)]
+        self.store.ingest(payload)
+        with self.app.connect() as c:
+            values = [json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
+                (source['id'], ident)).fetchone()[0]) for ident in ids]
+        key = 'messages:' + agent._hash([source['id'], ids])[:40]
+        fingerprint = self.store._job(key, dict(school_learning_policy=policy, messages=values), self.clock, model=True)
+        self.store._save(key, fingerprint, [], self.clock, [(source['id'], ident) for ident in ids])
+        return dict(job=key, values=values, refs=['message:' + source['id'] + ':' + ident for ident in ids])
+
+    def _empty_response(self, group):
+        return dict(proposals=[fixtures.school_proposal(title_quote=v['text'], action_quote=v['text'],
+            existing_item_id='', evidence=[dict(ref=ref)], due='2026-02-12', task_title=v['text'][:120],
+            task_goal=v['text'], task_state='ready', task_purpose='admin', task_reason='完整原文中的独立携带要求。')
+            for v, ref in zip(group['values'], group['refs'])])
+
+    def test_legacy_empty_batch_recovers_once_with_original_job_and_messages_unchanged(self):
+        group = self._empty_legacy()
+        before = self._protected()
+        with self.app.connect() as c:
+            old_job = dict(c.execute('SELECT * FROM agent_jobs WHERE id=?', (group['job'],)).fetchone())
+        self.history_response = self._empty_response(group)
+        result = self._tick(10)
+        self.assertEqual((result['failed'], result['created']), (0, 2))
+        self.assertEqual(len(self._history_rows()), 1)
+        with self.app.connect() as c:
+            task = dict(c.execute('SELECT * FROM manual_tasks').fetchone())
+            self.assertEqual(task['child'], '示例甲')
+            self.assertEqual(task['due'], '2026-02-12')
+            self.assertIn('材料D', task['action'])
+            self.assertIn(group['refs'][0], task['source'])
+            self.assertEqual(dict(c.execute('SELECT * FROM agent_jobs WHERE id=?', (group['job'],)).fetchone()), old_job)
+        self.assertEqual(self._protected(), before)
+        self.store = agent.Store(self.app.connect, self.app.profiles, self.fixture.data, app=self.app)
+        count = len(self.calls)
+        self.assertEqual(self._tick(20)['created'], 0)
+        self.assertEqual(len(self.calls), count)
+        self.assertEqual(len(self._history_rows()), 1)
+
+    def test_empty_legacy_learning_material_ambiguity_remains_review_not_automatic_task(self):
+        group = self._empty_legacy(texts=['2月12日前带《英语练习册》1份到校。'])
+        self.history_response = self._empty_response(group)
+        self.assertEqual((self._tick(10)['failed'], len(self._history_rows())), (0, 1))
+        row = self._history_rows()[0]
+        self.assertEqual(json.loads(row['plan'])['school_task']['state'], 'review')
+        self.assertEqual((row['state'], row['task_id']), ('pending', ''))
+        self.assertEqual(row['body'], group['values'][0]['text'])
+        self.assertEqual(row['due'], '2026-02-12')
+        accepted = self.store.act(dict(id=row['id'], action='accept'))
+        self.assertEqual(accepted['state'], 'accepted')
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0], 1)
+
+    def test_empty_legacy_receipt_changed_after_scope_discovery_makes_no_model_call(self):
+        group = self._empty_legacy()
+        scopes = agent._history_scopes(self.store, self.store._config())
+        self.assertEqual(len(scopes), 1)
+        with self.app.connect() as c:
+            c.execute('UPDATE agent_jobs SET done=0 WHERE id=?', (group['job'],))
+        self.history_response = self._empty_response(group)
+        result = agent._recheck_school_history(self.app, self.store, self.clock, 1, scopes)
+        self.assertEqual((result['failed'], result['created']), (1, 0))
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self._history_rows(), [])
+
+    def test_policy8_empty_batch_is_ambiguous_and_not_rechecked(self):
+        self._empty_legacy(policy=8)
+        before = self._protected()
+        self.assertEqual(agent._history_scopes(self.store, self.store._config()), [])
+        self.assertEqual(self._tick(10)['created'], 0)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self._protected(), before)
+
+    def test_empty_legacy_fingerprint_mismatch_or_unfinished_job_is_not_rechecked(self):
+        for change in ('fingerprint', 'done'):
+            with self.subTest(change=change):
+                self.fixture.setUp()
+                self.app, self.store = self.fixture.app, self.fixture.store
+                group = self._empty_legacy()
+                with self.app.connect() as c:
+                    c.execute('UPDATE agent_jobs SET ' + change + '=? WHERE id=?',
+                        ('different' if change == 'fingerprint' else 0, group['job']))
+                self.assertEqual(agent._history_scopes(self.store, self.store._config()), [])
+
+    def test_empty_legacy_job_changed_during_model_rejects_result_and_preserves_messages(self):
+        group = self._empty_legacy()
+        before = self._protected()
+        def mutate(context):
+            self.assertEqual(context['existing_actions'], [])
+            with self.app.connect() as c:
+                c.execute('UPDATE agent_jobs SET fingerprint=? WHERE id=?', ('changed-legacy-receipt', group['job']))
+            return self._empty_response(group)
+        self.history_response = mutate
+        self.assertEqual(self._tick(10)['failed'], 1)
+        self.assertEqual(self._history_rows(), [])
+        self.assertEqual(self._protected(), before)
+        self.assertTrue(all(not row['done'] for row in self._history_jobs()))
+
+    def test_empty_legacy_exact_source_order_survives_another_source_row_between_messages(self):
+        group = self._empty_legacy(texts=['2月12日前带《材料D》1份到校。', '2月12日前带《材料E》2份到校。'])
+        with self.app.connect() as c:
+            c.execute('UPDATE agent_messages SET rowid=4 WHERE id=?', ('52',))
+            c.execute('UPDATE agent_messages SET rowid=2 WHERE id=?', ('51',))
+            c.execute('INSERT INTO agent_messages(rowid,source_id,id,payload,processed) VALUES(?,?,?,?,?)',
+                (3, 'synthetic-other-source', '51', agent._json(group['values'][0]), 1))
+        before = self._protected()
+        self.history_response = self._empty_response(group)
+        self.assertEqual((self._tick(10)['failed'], len(self._history_rows())), (0, 2))
+        self.assertEqual(self._protected(), before)
+        with self.app.connect() as c:
+            tasks = [dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+        self.assertEqual(len(tasks), 2)
+        self.assertTrue(all(t['child'] == '示例甲' for t in tasks))
+        self.assertEqual({t['action'] for t in tasks}, {v['text'] for v in group['values']})
+
+    def test_empty_legacy_nontext_unread_large_or_over_six_messages_are_not_reinterpreted(self):
+        for mode in ('nontext', 'unread', 'large', 'seven'):
+            with self.subTest(mode=mode):
+                self.fixture.setUp(); self.app, self.store = self.fixture.app, self.fixture.store
+                group = self._empty_legacy(texts=['带《材料D》到校。'] * (7 if mode == 'seven' else 2))
+                if mode != 'seven':
+                    values = copy.deepcopy(group['values'])
+                    if mode == 'nontext': values[0]['kind'] = 'image'
+                    elif mode == 'unread': values[0]['unread'] = True
+                    else:
+                        for value in values: value['text'] = '带《材料D》到校。' + '虚构说明' * 1800
+                    with self.app.connect() as c:
+                        for value in values:
+                            c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
+                                (agent._json(value), self.fixture.source['id'], value['id']))
+                        c.execute('UPDATE agent_jobs SET fingerprint=? WHERE id=?',
+                            (agent._hash(dict(school_learning_policy=7, messages=values)), group['job']))
+                self.assertEqual(agent._history_scopes(self.store, self.store._config()), [])
+
+    def test_empty_legacy_superseded_origin_item_does_not_bypass_existing_decision(self):
+        group = self._empty_legacy()
+        with self.app.connect() as c:
+            c.execute('INSERT INTO agent_items(id,job_id,child_id,kind,title,body,evidence,due,state,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                ('synthetic-superseded-origin', group['job'], 'child-1', 'school', '旧归纳', '旧原句', '[]', '',
+                 'superseded', self.clock.isoformat(), self.clock.isoformat()))
+        self.assertEqual(agent._history_scopes(self.store, self.store._config()), [])
+
+    def test_empty_legacy_old_item_inserted_during_model_rejects_new_result(self):
+        group = self._empty_legacy()
+        def mutate(context):
+            with self.app.connect() as c:
+                c.execute('INSERT INTO agent_items(id,job_id,child_id,kind,title,body,evidence,due,state,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                    ('synthetic-raced-origin', group['job'], 'child-1', 'school', '新到的旧决定', '原要求保留', '[]', '',
+                     'dismissed', self.clock.isoformat(), self.clock.isoformat()))
+            return self._empty_response(group)
+        self.history_response = mutate
+        self.assertEqual(self._tick(10)['failed'], 1)
+        self.assertEqual(self._history_rows(), [])
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT state FROM agent_items WHERE id=?', ('synthetic-raced-origin',)).fetchone()[0], 'dismissed')
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0], 0)
+
+    def _protected(self):
+        item_ids = {g[key] for g in self.groups for key in ('a_id', 'c_id')}
+        task_ids = {g['task_id'] for g in self.groups}
+        old_jobs = {g['job'] for g in self.groups}
+        with self.app.connect() as c:
+            tables = {r['name'] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            value = {table: [dict(r) for r in c.execute('SELECT * FROM ' + table + ' ORDER BY rowid')]
+                     for table in ('agent_sources', 'agent_messages', 'records', 'task_updates', 'task_history')}
+            value['items'] = [dict(r) for r in c.execute('SELECT * FROM agent_items ORDER BY id') if r['id'] in item_ids]
+            value['jobs'] = [dict(r) for r in c.execute('SELECT * FROM agent_jobs ORDER BY id') if r['id'] in old_jobs]
+            value['tasks'] = [dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id') if r['id'] in task_ids]
+            value['focus'] = [dict(r) for r in c.execute('SELECT * FROM task_focus ORDER BY task_id')
+                              if r['task_id'] in task_ids] if 'task_focus' in tables else []
+            value['published_at'] = {t['id']: t['agenda']['published_at'] for t in self.app.tasks(c) if t['id'] in task_ids}
+        return value
+
+    def _history_rows(self):
+        with self.app.connect() as c:
+            return [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")
+                    if json.loads(r['plan']).get('school_history_job')]
+
+    def _history_jobs(self):
+        with self.app.connect() as c:
+            return [dict(r) for r in c.execute("SELECT * FROM agent_jobs WHERE id LIKE 'school-history:%' ORDER BY id")]
+
+    def _school_task_counts(self):
+        with self.app.connect() as c:
+            return dict(
+                school=c.execute("SELECT COUNT(*) FROM agent_items WHERE kind='school'").fetchone()[0],
+                child_school=c.execute("SELECT COUNT(*) FROM agent_items WHERE kind='school' AND child_id='child-1'").fetchone()[0],
+                tasks=c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],
+                child_tasks=c.execute("SELECT COUNT(*) FROM manual_tasks WHERE child='示例甲'").fetchone()[0])
+
+    def _assert_one_school_task_added(self, before):
+        # created counts the candidate and its automatic acceptance separately;
+        # persisted identities must still be exactly one new item and one same-child task.
+        self.assertEqual(self._school_task_counts(), {key: value + 1 for key, value in before.items()})
+
+    def _assert_zero_new(self, before):
+        self.assertEqual(self._protected(), before)
+        self.assertEqual(self._history_rows(), [])
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0], len(self.groups))
+        self.assertTrue(all(not row['done'] for row in self._history_jobs()))
+
+    def test_processed_omission_recovers_once_without_rewriting_parent_decisions_or_sources(self):
+        group = self._legacy(feedback=True)
+        before = self._protected()
+        before_counts = self._school_task_counts()
+        self.history_response = self._response(group)
+        def inspect(context):
+            known = {row['id']: row for row in context['existing_actions']}
+            self.assertEqual(known[group['a_id']]['state'], 'accepted')
+            self.assertEqual(known[group['c_id']]['state'], 'dismissed')
+            self.assertIn('家长安排', known[group['a_id']]['current_task']['action'])
+            self.assertIn(group['missing'], context['evidence'][0]['text'])
+            return self._response(group)
+        self.history_response = inspect
+        result = self._tick(10)
+        self.assertEqual((result['failed'], result['created']), (0, 2))
+        self._assert_one_school_task_added(before_counts)
+        rows = self._history_rows()
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual((row['state'], row['child_id'], row['due']), ('accepted', 'child-1', '2026-02-12'))
+        self.assertEqual(json.loads(row['plan'])['school_action_anchor'], {group['refs'][0]: group['missing']})
+        self.assertEqual({e['ref'] for e in json.loads(row['evidence'])}, {group['refs'][0]})
+        with self.app.connect() as c:
+            task = dict(c.execute('SELECT * FROM manual_tasks WHERE id=?', (row['task_id'],)).fetchone())
+            self.assertEqual((task['action'], task['due'], task['original_status']), (group['missing'], '2026-02-12', '待跟进'))
+            self.assertNotIn(group['refs'][1], task['source'])
+        self.assertEqual(self._protected(), before)
+        self.store = agent.Store(self.app.connect, self.app.profiles, self.fixture.data, app=self.app)
+        history_calls = sum('existing_actions' in call['context'] for call in self.calls)
+        self.store.act(dict(action='retry', id=group['job']))
+        self.store.act(dict(action='retry'))
+        for minutes in (20, 30, 40):
+            self.assertEqual(self._tick(minutes)['created'], 0)
+        self.assertEqual(self._history_rows(), rows)
+        self.assertEqual(sum('existing_actions' in call['context'] for call in self.calls), history_calls)
+        self.assertEqual(self._protected(), before)
+
+    def test_short_old_quotes_do_not_revive_accepted_or_dismissed_actions(self):
+        group = self._legacy()
+        before = self._protected()
+        before_counts = self._school_task_counts()
+        self.history_response = self._response(group, short_old=True)
+        result = self._tick(10)
+        self.assertEqual((result['failed'], result['created']), (0, 2))
+        self._assert_one_school_task_added(before_counts)
+        self.assertEqual(len(self._history_rows()), 1)
+        self.assertIn('材料B', self._history_rows()[0]['title'])
+        self.assertEqual(self._protected(), before)
+
+    def _assert_review(self, group, due, minutes):
+        before = self._protected()
+        self.history_response = self._response(group, due=due)
+        result = self._tick(minutes)
+        self.assertEqual((result['failed'], result['created']), (0, 1))
+        row = self._history_rows()[0]
+        self.assertEqual((row['state'], json.loads(row['plan'])['school_task']['state']), ('pending', 'review'))
+        self.assertEqual(row['due'], due if due and due < self.clock.date().isoformat() else '')
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0], 1)
+        self.assertEqual(self._protected(), before)
+        return row
+
+    def test_old_action_with_unknown_date_stays_review_without_becoming_today(self):
+        group = self._legacy(missing='截止日期另行通知：带《材料B》1份到校。')
+        row = self._assert_review(group, '', 24 * 60)
+        reason = json.loads(row['plan'])['school_task']['reason']
+        self.assertIn('早于今天', reason)
+        self.assertEqual(row['body'], group['missing'])
+
+    def test_history_action_cannot_borrow_another_actions_deadline(self):
+        group = self._legacy(missing='带《材料B》1份到校。')
+        row = self._assert_review(group, '2026-02-12', 10)
+        self.assertIn('截止日期尚无法', json.loads(row['plan'])['school_task']['reason'])
+
+    def test_expired_history_action_retains_original_date_and_remains_review(self):
+        group = self._legacy(missing='2月9日前带《材料B》1份到校。')
+        row = self._assert_review(group, '2026-02-09', 10)
+        self.assertIn('原截止日期已过', json.loads(row['plan'])['school_task']['reason'])
+
+    def test_wrong_existing_binding_and_broad_old_plus_new_quote_reject_entire_scope(self):
+        group = self._legacy()
+        before = self._protected()
+        for index, kind in enumerate(('wrong_binding', 'broad_quote', 'missing_field')):
+            with self.subTest(kind=kind):
+                response = self._response(group)
+                b = response['proposals'][-1]
+                if kind == 'wrong_binding': b['existing_item_id'] = group['a_id']
+                elif kind == 'broad_quote': b['action_quote'] = group['first'] + group['missing']
+                else: b.pop('action_quote')
+                self.history_response = response
+                self.store.act(dict(action='retry'))
+                self.assertGreaterEqual(self._tick(10 + index * 10)['failed'], 1)
+                self._assert_zero_new(before)
+
+    def test_same_literal_missing_action_with_two_titles_rejects_entire_scope(self):
+        group = self._legacy()
+        before = self._protected()
+        response = self._response(group)
+        duplicate = dict(response['proposals'][-1], task_title='模型改名的另一个B', task_goal=group['missing'] + ' 模型重复描述。')
+        response['proposals'].append(duplicate)
+        self.history_response = response
+        self.assertGreaterEqual(self._tick(10)['failed'], 1)
+        self._assert_zero_new(before)
+
+    def test_two_new_action_sentences_half_clause_and_date_only_anchor_reject_entire_scope(self):
+        group = self._legacy(missing='2月13日前带《材料B》1份到校。2月14日前带《物品D》1份到校。')
+        before = self._protected()
+        quotes = (group['missing'], '带《材料B》1份到校', '2月13日')
+        for index, quote in enumerate(quotes):
+            with self.subTest(quote=quote):
+                response = self._response(group, due='2026-02-13')
+                response['proposals'][-1]['action_quote'] = quote
+                self.history_response = response
+                self.store.act(dict(action='retry'))
+                self.assertGreaterEqual(self._tick(10 + index * 10)['failed'], 1)
+                self._assert_zero_new(before)
+
+    def test_parent_edit_during_model_discards_result_and_next_tick_uses_current_decision(self):
+        group = self._legacy(feedback=True)
+        before = self._protected()
+        after_edit = []
+        def edit(context):
+            family_task_focus.save(self.app, dict(id=group['task_id'], version=0,
+                request_key='synthetic-history-parent-edit', mode='next', next_action='', waiting_for='', review_on='',
+                title='家长重新确认的回执A', goal='家长更正：只带回执，等老师答复再交。'))
+            after_edit.append(self._protected())
+            return self._response(group)
+        self.history_response = edit
+        self.assertGreaterEqual(self._tick(10)['failed'], 1)
+        self.assertEqual(self._history_rows(), [])
+        self.assertEqual(self._protected(), after_edit[0])
+        self.assertEqual(after_edit[0]['tasks'], before['tasks'])
+        self.assertEqual(after_edit[0]['items'], before['items'])
+        self.assertEqual(after_edit[0]['records'], before['records'])
+        self.history_response = self._response(group)
+        self.assertEqual((self._tick(20)['failed'], len(self._history_rows())), (0, 1))
+        self.assertEqual(self._protected(), after_edit[0])
+
+    def test_source_pause_during_model_saves_nothing_and_resumes_without_cursor_reset(self):
+        group = self._legacy()
+        before = self._protected()
+        before_counts = self._school_task_counts()
+        def pause(context):
+            self.fixture.source['enabled'] = False
+            self._config()
+            return self._response(group)
+        self.history_response = pause
+        self.assertGreaterEqual(self._tick(10)['failed'], 1)
+        self._assert_zero_new(before)
+        count = len(self.calls)
+        self.assertEqual(self._tick(20)['created'], 0)
+        self.assertEqual(len(self.calls), count)
+        self.fixture.source['enabled'] = True
+        self._config()
+        self.history_response = self._response(group)
+        result = self._tick(30)
+        self.assertEqual((result['failed'], result['created']), (0, 2))
+        self._assert_one_school_task_added(before_counts)
+        self.assertEqual(self._protected(), before)
+
+    def test_history_backoff_three_attempts_allow_later_scope_and_manual_retry_recovers_once(self):
+        good = self._legacy()
+        bad = self._legacy(suffix='2', ids=('21', '22'), tick=5)
+        before = self._protected()
+        before_counts = self._school_task_counts()
+        bad_calls = []
+        failing = [True]
+        def response(context):
+            refs = {e['ref'] for e in context['evidence']}
+            group = bad if bad['refs'][0] in refs else good
+            if group is bad and failing[0]:
+                bad_calls.append(self.clock.isoformat())
+                raise agent.family_llm.LLMDraftError('虚构后台暂时不可用')
+            return self._response(group)
+        self.history_response = response
+        self.assertEqual(self._tick(10)['failed'], 1)
+        job = self._history_jobs()[0]
+        self.assertEqual((job['attempts'], job['done']), (1, 0))
+        self.assertEqual(job['next_try'], (self.fixture.now + dt.timedelta(minutes=15)).isoformat())
+        result = self._tick(12)
+        self.assertEqual((result['failed'], result['created']), (0, 2), 'A waiting failed scope must not block the next group')
+        self._assert_one_school_task_added(before_counts)
+        self.assertEqual(len(bad_calls), 1)
+        self.assertEqual(self._tick(20)['failed'], 1)
+        bad_job = next(row for row in self._history_jobs() if not row['done'])
+        self.assertEqual(bad_job['next_try'], (self.fixture.now + dt.timedelta(minutes=30)).isoformat())
+        self.assertEqual(self._tick(22)['created'], 0)
+        self.assertEqual(len(bad_calls), 2)
+        self.assertEqual(self._tick(30)['failed'], 1)
+        bad_job = next(row for row in self._history_jobs() if not row['done'])
+        self.assertEqual((bad_job['attempts'], bad_job['next_try']), (3, ''))
+        self.assertIn('3次', bad_job['error'])
+        count = len(self.calls)
+        self.assertEqual(self._tick(40)['created'], 0)
+        self.assertEqual(len(self.calls), count)
+        failing[0] = False
+        self.store.act(dict(action='retry', id=bad_job['id']))
+        before_counts = self._school_task_counts()
+        self.assertEqual(self._tick(50)['created'], 2)
+        self._assert_one_school_task_added(before_counts)
+        self.assertEqual(len(self._history_rows()), 2)
+        self.store = agent.Store(self.app.connect, self.app.profiles, self.fixture.data, app=self.app)
+        count = len(self.calls)
+        self.assertEqual(self._tick(60)['created'], 0)
+        self.assertEqual(len(self.calls), count)
+        self.assertTrue(all(row['done'] for row in self._history_jobs()))
+        self.assertEqual(self._protected(), before)
+
+    def test_fresh_history_and_feedback_share_three_calls_and_leave_next_source_for_next_tick(self):
+        group = self._legacy(feedback=True)
+        self.history_response = self._response(group)
+        for index in (1, 2):
+            source = dict(self.fixture.source, id='synthetic-fresh-' + str(index), name='虚构新来源' + str(index))
+            self.sources.append(source)
+            self._config()
+            text = '2月12日前带《物品D' + str(index) + '》1份到校。'
+            ref = 'message:' + source['id'] + ':11'
+            payload = dict(self.fixture.payload(), source_id=source['id'])
+            payload['messages'][0].update(text=text, sender_id='synthetic-fresh-teacher-' + str(index))
+            self.store.ingest(payload)
+            self.fresh_responses[(ref,)] = dict(proposals=[fixtures.school_proposal(title_quote=text, due='2026-02-12',
+                evidence=[dict(ref=ref)], task_title='携带物品D' + str(index), task_goal=text,
+                task_state='ready', task_purpose='admin')])
+        before_calls = len(self.calls)
+        self.assertEqual(self._tick(10)['failed'], 0)
+        calls = self.calls[before_calls:]
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(sum('existing_actions' in call['context'] for call in calls), 1)
+        self.assertEqual(sum(call['name'] == 'family_agent_plan' for call in calls), 1)
+        with self.app.connect() as c:
+            states = {r['source_id']: r['processed'] for r in c.execute("SELECT source_id,processed FROM agent_messages WHERE source_id LIKE 'synthetic-fresh-%'")}
+        self.assertEqual(sorted(states.values()), [0, 1])
+        self.assertEqual(self._tick(15)['failed'], 0)
+        with self.app.connect() as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_messages WHERE source_id LIKE 'synthetic-fresh-%' AND processed=0").fetchone()[0], 0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0], 4)
+        self.assertEqual(len(self._history_rows()), 1)
+
+    def test_later_material_cannot_replace_history_action_with_whole_notice_refinement(self):
+        group = self._legacy(missing='带《材料B》1份到校。')
+        row = self._assert_review(group, '', 24 * 60)
+        protected = self._protected()
+        plan = json.loads(row['plan'])
+        count = len(self.calls)
+        with patch.object(agent, '_school_drafts', return_value=dict(fingerprint='synthetic-changed-material')):
+            result = self._tick(24 * 60 + 10)
+        self.assertEqual(result['failed'], 0)
+        self.assertEqual(len(self.calls), count, 'A whole-notice model cannot reinterpret the saved B action anchor')
+        refreshed = self._history_rows()[0]
+        self.assertEqual((refreshed['title'], refreshed['body'], refreshed['due']), (row['title'], row['body'], row['due']))
+        self.assertEqual(json.loads(refreshed['plan'])['school_action_anchor'], plan['school_action_anchor'])
+        self.assertEqual(json.loads(refreshed['plan'])['school_task']['state'], 'review')
+        self.assertEqual(refreshed['state'], 'pending')
+        self.assertEqual(self._protected(), protected)
+
+    def test_non_text_or_unread_processed_scope_is_left_untouched_without_history_call_or_job(self):
+        self._legacy()
+        with self.app.connect() as c:
+            original = json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
+                (self.fixture.source['id'], '11')).fetchone()['payload'])
+        for index, (kind, unread) in enumerate((('image', False), ('text', True))):
+            with self.subTest(kind=kind, unread=unread):
+                # Only the isolated saved fixture changes; processed and cursor are never reset.
+                value = dict(original, kind=kind, unread=unread)
+                with self.app.connect() as c:
+                    c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
+                        (agent._json(value), self.fixture.source['id'], '11'))
+                    jobs = [dict(row) for row in c.execute('SELECT * FROM agent_jobs ORDER BY id')]
+                before = self._protected()
+                counts = self._school_task_counts()
+                call_count = len(self.calls)
+                result = self._tick(10 + index * 10)
+                self.assertEqual((result['failed'], result['created'], result['processed']), (0, 0, 0))
+                self.assertEqual(len(self.calls), call_count)
+                self.assertEqual(self._history_jobs(), [])
+                self.assertEqual(self._history_rows(), [])
+                self.assertEqual(self._school_task_counts(), counts)
+                self.assertEqual(self._protected(), before)
+                with self.app.connect() as c:
+                    self.assertEqual([dict(row) for row in c.execute('SELECT * FROM agent_jobs ORDER BY id')], jobs)
+
+
+if __name__ == '__main__':
+    unittest.main()

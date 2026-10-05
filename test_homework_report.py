@@ -13,6 +13,7 @@ import app
 import family_child
 import family_llm
 import family_study
+import family_task_focus
 
 
 class HomeworkReportTests(unittest.TestCase):
@@ -114,6 +115,63 @@ class HomeworkReportTests(unittest.TestCase):
         for bad in [report|dict(actor='parent'),report|dict(confirmed_at='pretend'),report|dict(text='x'*6001),report|dict(attachments=[photo,photo]),report|dict(attachments=['../../private'])]:
             with self.assertRaises(family_study.StudyError):self.store.save_item(self.request(title='不应保存',report=bad))
         self.assertEqual(self.counts(),before)
+
+    def test_parent_pdf_material_is_saved_without_model_and_child_pdf_is_refused(self):
+        raw=b'%PDF-synthetic-parent-worksheet'
+        sheet=app.save_upload(io.BytesIO(raw),len(raw),'synthetic-sheet.pdf')['id']
+        body=self.request(title='虚构纸卷练习',report=dict(text='',explanation='',goal='完成第1题',attachments=[sheet]))
+        with patch.object(family_llm,'extract_draft',side_effect=AssertionError('manual PDF capture must not call a model')):
+            saved=self.store.save_item(body)
+            self.assertEqual(self.store.save_item(body)['saved_item_id'],saved['saved_item_id'])
+        self.assertEqual(saved['items'][0]['report']['attachments'],[sheet])
+        with app.connect() as c:
+            c.execute('INSERT INTO child_uploads VALUES (?,?)',(sheet,'child-1'))
+            c.execute('INSERT INTO reading_uploads VALUES (?,?)',(sheet,'child-1'))
+        before=self.counts()
+        with self.assertRaises((family_study.StudyError,family_child.ChildError)):
+            self.child('item',self.request(title='虚构孩子PDF',report=body['report']))
+        self.assertEqual(self.counts(),before)
+
+    def test_parent_manual_many_originals_keep_child_model_and_ownership_limits(self):
+        ids=[self.photo('child-1') for _ in range(20)]
+        for count in (12,20):
+            report=self.report();report['attachments']=ids[:count]
+            body=self.request(title='虚构%d页原卷'%count,report=report)
+            saved=self.store.save_item(body)
+            item=next(i for i in saved['items'] if i['id']==saved['saved_item_id'])
+            self.assertEqual(item['report']['attachments'],ids[:count])
+            self.assertEqual(self.store.save_item(body)['saved_item_id'],saved['saved_item_id'])
+        before=self.counts()
+        with self.assertRaises(family_study.StudyError):
+            self.store.save_item(self.request(title='超过20份',report=self.report()|dict(attachments=ids+[self.photo()])))
+        with self.assertRaises(family_study.StudyError):
+            self.child('item',self.request(title='孩子超过3份',report=self.report()|dict(attachments=ids[:4])))
+        with self.assertRaises(family_study.StudyError):
+            self.store.draft_report(dict(child_id='child-1',day=self.day,text='虚构原话',attachments=ids[:4]))
+        import family_reading
+        with self.assertRaises(family_reading.ReadingError):
+            self.store.save_item(self.request(title='第12份属于另一孩子',report=self.report()|dict(attachments=ids[:11]+[self.photo('child-2')])))
+        self.assertEqual(self.counts(),before);self.assertEqual(self.calls,[])
+
+    def test_recorded_homework_stays_homework_without_an_invented_deadline(self):
+        for actor,title in [('parent','读三段并回答'),('child','读第二页并回答')]:
+            body=self.request(title=title,report=self.report())
+            result=self.store.save_item(body) if actor=='parent' else self.child('item',body)
+            ident=result['saved_item_id']
+            task=next(t for t in app.snapshot()['tasks'] if t['id']==ident)
+            self.assertEqual(task['agenda']['category'],'homework')
+            self.assertEqual(task['agenda']['scheduled_on'],self.day)
+            self.assertEqual(task['agenda']['due_on'],'')
+            self.assertEqual(task['due'],'')
+            self.assertEqual(task['homework_report']['needs_review'],actor=='child')
+            agenda=app.snapshot()['today_calendar']['inbox']
+            self.assertEqual(next(x for x in agenda if x['task_id']==ident)['agenda']['category'],'homework')
+        family_task_focus.save(app,dict(id=ident,version=0,request_key=uuid.uuid4().hex,
+                                        mode='next',next_action='',waiting_for='',review_on='',
+                                        category='todo',scheduled_on=''))
+        changed=next(t for t in app.snapshot()['tasks'] if t['id']==ident)
+        self.assertEqual(changed['agenda']['category'],'todo')
+        self.assertEqual(changed['agenda']['scheduled_on'],'')
 
 
 if __name__=='__main__':unittest.main()

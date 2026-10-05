@@ -14,6 +14,7 @@ from unittest.mock import patch
 import app
 import family_backup
 import family_child
+import family_goals
 import family_guided
 import family_llm
 
@@ -734,6 +735,63 @@ class GuidedTests(unittest.TestCase):
             rows = family_guided.Store(app).snapshot()['sessions']
             self.assertEqual(next(r for r in rows if r['id']==ident)['plan'],expected)
 
+
+    def goal(self, child='child-1', **fields):
+        self.counter += 1
+        return family_goals.Store(app).action(dict(action='create', request_key='fictional-goal-request-' + str(self.counter).zfill(4),
+            child_id=child, title='虚构学校要求：说清加法含义', subject='数学', school_target='学校要求：说出合并数量为什么用加法。') | fields)['id']
+
+    def test_goal_link_is_explicit_same_child_replayed_and_frozen_after_sharing(self):
+        mine, other, gone = self.goal(), self.goal('child-2'), self.goal(title='虚构已失效目标')
+        with app.connect() as c:
+            c.execute("UPDATE agent_items SET state='dismissed' WHERE id=?", (gone,))
+        self.assertIsNone(self.material(title='虚构未关联任务')['goal_id'])
+        for bad in (other, gone, 'goal-missing', 7):
+            with self.assertRaises(family_guided.GuidedError) as caught:
+                self.material(title='虚构拒绝关联', goal_id=bad)
+            self.assertEqual((caught.exception.status, caught.exception.code), (409, 'goal_unavailable'))
+        self.assertFalse(any(s['title'] == '虚构拒绝关联' for s in self.store.snapshot()['sessions']))
+        code, body, _ = self.http('/api/guided/material', self.request(child_id='child-1', version=0, title='虚构跨孩', goal_id=other), parent=True)
+        self.assertEqual((code, body['code']), (409, 'goal_unavailable'))
+        payload = self.request(child_id='child-1', version=0, title='虚构关联任务', subject='数学', question_text='2+3=?',
+                               question_attachments=[], reference_text='5', reference_checked=True, shared=False, goal_id=mine)
+        saved = self.store.save_material(payload)
+        self.assertEqual(self.store.save_material(payload)['session_id'], saved['session_id'])   # lost receipt replays once
+        with app.connect() as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM guided_sessions WHERE title='虚构关联任务'").fetchone()[0], 1)
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM guided_events WHERE session_id=? AND kind='material'", (saved['session_id'],)).fetchone()[0], 1)
+        self.assertEqual({g['id']: g['child_id'] for g in saved['goals']}, {mine: 'child-1', other: 'child-2'})
+        row = self.row(saved['session_id'])
+        self.assertEqual(row['goal_id'], mine)                                     # reopened with the same choice
+        base = dict(id=row['id'], child_id='child-1', title='虚构关联任务', question_text='2+3=?', reference_text='5', reference_checked=True)
+        cleared = self.store.save_material(self.request(version=row['version'], goal_id=None, shared=False, **base))
+        self.assertIsNone(self.row(row['id'])['goal_id'])                          # explicit change while still a draft
+        self.store.save_material(self.request(version=row['version'] + 1, goal_id=mine, shared=True, **base))
+        row = self.row(row['id'])
+        self.assertEqual((row['goal_id'], row['shared']), (mine, True))
+        for version, code in ((row['version'] - 1, 'version_conflict'), (row['version'], 'material_frozen')):
+            with self.assertRaises(family_guided.GuidedError) as caught:
+                self.store.save_material(self.request(version=version, goal_id=None, shared=True, **base))
+            self.assertEqual(caught.exception.code, code)
+        self.assertEqual(self.row(row['id'])['goal_id'], mine)
+        child_view = self.call('state', {})[1]
+        self.assertNotIn('goals', child_view)
+        for hidden in ('goal_id', mine, other, '虚构学校要求'):
+            self.assertNotIn(hidden, json.dumps(child_view, ensure_ascii=False))
+        self.assertTrue(cleared['ok'])
+
+    def test_old_task_table_gains_optional_goal_link_and_old_tasks_read_unchanged(self):
+        old = self.material(title='虚构旧任务')
+        self.goal()
+        with app.connect() as c:
+            c.execute('ALTER TABLE guided_sessions DROP COLUMN goal_id')
+        self.assertEqual(family_goals.Store(app).snapshot()['goals'][0]['records'], [])   # goals read a pre-link table
+        for _ in range(2):
+            family_guided.Store(app)
+        with app.connect() as c:
+            self.assertEqual([r[1] for r in c.execute('PRAGMA table_info(guided_sessions)')].count('goal_id'), 1)
+        self.assertIsNone(self.row(old['id'])['goal_id'])
+        self.assertEqual(self.call('state', {})[1]['sessions'][0]['title'], '虚构旧任务')
 
 if __name__ == '__main__':
     unittest.main()

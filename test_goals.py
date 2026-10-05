@@ -21,7 +21,41 @@ def synthetic_plan(value):
     return {'proposal':dict(title='先核对一个判断过程',goal='能解释判断所用的线索',action='家长请孩子选一道已有题，说说看到的时间线索；不愿继续就停止。',why_now='根据已保存的家长反馈先核对。',estimated_minutes=10,review_on=value['as_of'],evidence=[dict(ref=x['ref'],quote=x['text'][:30]) for x in cited],assessment='现有反馈不足以确定知识缺口。',hypotheses=[dict(reason='句子中时间线索理解可能不牢',support=[],against=[],test='使用现有一道题，请孩子说出选项理由；不提示答案。',status='待验证')],resource='已有课本；具体页码待家长核对。',mastery_check='相近新题中独立解释，记录帮助。',choice='核实')}
 
 
+def synthetic_school_proposal(evidence, subject, title, goal, *, goal_id='', state='ready', reason='已读学校要求明确。', purpose='learning'):
+    """Complete school-model contract with explicit task content, separate from a proposed learning plan."""
+    return dict(title_quote=evidence['text'][:120],focus='school',due='',evidence=[dict(ref=evidence['ref'])],
+        learning_subject=subject,learning_goal_id=goal_id,task_title=title,task_goal=goal,task_advice='',
+        task_state=state,task_reason=reason,task_change='new',task_target_id='',task_purpose=purpose,task_submission='')
+
+
 class GoalTests(unittest.TestCase):
+    def test_interval_new_attempt_cannot_be_described_as_absent(self):
+        first = dict(day='2026-09-08', subject='数学', assistance='独立尝试', practice_relation='')
+        later = dict(day='2026-09-16', subject='数学', assistance='独立尝试', practice_relation='相近的新题或新片段')
+        self.assertEqual(goals._interval_new_attempt([first, later]),('2026-09-08','2026-09-16',8))
+        self.assertIsNone(goals._interval_new_attempt([first, later | {'day':'2026-09-10'}]))
+        self.assertIsNone(goals._interval_new_attempt([first, later | {'assistance':'提示后答对'}]))
+        self.assertIsNone(goals._interval_new_attempt([first, later | {'subject':'语文'}]))
+        claim = '9月16日答对，但目前也没有间隔后复测证据。'
+        corrected = goals._FALSE_INTERVAL_ABSENCE.sub('已记录一次间隔后的独立新题表现，仍需更多证据', claim)
+        self.assertIn('已记录一次间隔后的独立新题表现', corrected)
+        self.assertNotIn('没有间隔后复测', corrected)
+
+    def test_interval_retest_rejects_old_answer_before_independent_new_question(self):
+        self.evaluate()
+        with self.store.agent._db() as c:
+            ctx=self.store._context(c,self.store._get(c,self.ident))
+        ctx['input_records']=[
+            dict(day='2026-09-08',subject='英语',assistance='独立尝试',practice_relation=''),
+            dict(day='2026-09-16',subject='英语',assistance='独立尝试',practice_relation='相近的新题或新片段')]
+        plan=synthetic_plan(self.last_input)
+        plan['proposal']['action']='先告诉孩子上次答案是B，再给一题未做过的新题请他独立答。'
+        with self.assertRaisesRegex(agent.AgentError,'独立新题前'):
+            self.store._proposal(plan,ctx,self.now)
+        plan['proposal']['action']='先给一题未做过的新题请孩子独立答，再讨论上次答案。'
+        result=self.store._proposal(plan,ctx,self.now)
+        self.assertIn('相隔8天',result['assessment'])
+
     def setUp(self):
         tmp=tempfile.TemporaryDirectory(prefix='synthetic-goals-');self.addCleanup(tmp.cleanup)
         self.root=Path(tmp.name);self.data=self.root/'private';self.data.mkdir()
@@ -51,6 +85,21 @@ class GoalTests(unittest.TestCase):
     def resave(self,rid,**changes):
         with self.app.connect() as c:row=dict(c.execute('SELECT * FROM records WHERE id=?',(rid,)).fetchone())
         self.app.save_record(dict({k:row[k] or '' for k in ('child','day','category','subject','title','note','source','assistance','practice_relation')},id=rid,**changes))
+
+    def test_missing_context_wording_does_not_claim_absence(self):
+        def answer(messages,*args,**kwargs):
+            p=synthetic_plan(json.loads(messages[-1]['content']))
+            p['proposal'].update(assessment='当前没有学校任务、时间账或已确认教学计划。孩子没有独立答对。',
+                                 why_now='当前没有当天放学后时间账。',action='今天没有时间账，先核对。')
+            p['proposal']['hypotheses'][0]['reason']='目前没有作答证据，原因待核对。'
+            return p
+        self.model.side_effect=answer
+        result=self.evaluate()['pending']
+        self.assertEqual(result['assessment'],'本轮未提供学校任务、时间账或已确认教学计划。孩子没有独立答对。')
+        self.assertEqual(result['why_now'],'本轮未提供当天放学后时间账。')
+        self.assertEqual(result['action'],'本轮未提供时间账，先核对。')
+        self.assertEqual(result['hypotheses'][0]['reason'],'本轮未提供作答证据，原因待核对。')
+        self.assertEqual(result['evidence'][0]['quote'],'家长提供的情况（尚需结合实际作答核对）：\n家长观察：孩子有时猜选项。'[:30])
 
     def test_method_history_keeps_each_confirmed_method_with_its_feedback_conditions_and_reason(self):
         def adjusts(messages,schema,name,timeout,**kwargs):
@@ -281,6 +330,9 @@ class GoalTests(unittest.TestCase):
         self.assertTrue(any(i['planned_minutes'] is None for i in context['other_registered_work']))
         self.assertNotIn('free_minutes',context);self.assertFalse(context['closed_at'])
         self.assertNotIn('另一孩子私有功课',json.dumps(self.last_input,ensure_ascii=False))
+        with self.store.agent._db() as c:ctx=self.store._context(c,self.store._get(c,self.ident),self.now)
+        pause=synthetic_plan(self.last_input);pause['proposal'].update(choice='暂停',estimated_minutes=None)
+        self.assertIn('截止时间本轮未提供',self.store._proposal(pause,ctx,self.now)['assessment'])
         with self.app.connect() as c: c.execute("UPDATE study_days SET stop_time='19:45' WHERE child_id='child-1' AND day=?",(day,))
         self.assertTrue(self.goal()['pending_stale'])
         with self.assertRaises(agent.AgentError):self.approve(pending)
@@ -429,6 +481,18 @@ class GoalTests(unittest.TestCase):
         self.model.side_effect=concurrent
         self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'stale')
         with self.assertRaises(agent.AgentError):self.approve(g)
+
+    def test_parent_observation_on_goal_task_reaches_original_goal(self):
+        self.approve(self.evaluate());before=self.goal();task=before['task_id']
+        saved=self.app.save_task_feedback(dict(task_id=task,child='示例甲',day=self.now.date().isoformat(),
+            category='家长观察',note='家长观察：孩子独立说出大意，转折仍需核对。',
+            request_key='synthetic-goal-task-observation'))
+        goal=self.goal()
+        self.assertEqual([r['id'] for r in goal['records']],[saved['record_id']])
+        self.assertTrue(goal['evidence_changed'])
+        self.assertEqual(goal['current_plan'],before['current_plan'])
+        self.evaluate()
+        self.assertIn('record:'+str(saved['record_id']),[r['ref'] for r in self.last_input['evidence']])
 
     def test_school_task_feedback_and_results_follow_explicit_links_and_child(self):
         def school_task(child, goal):
@@ -758,6 +822,68 @@ class GoalTests(unittest.TestCase):
     def approve(self,g=None,**overrides):
         g=g or self.goal();return self.action('approve',id=self.ident,expected_version=g['version'],proposal_id=g['pending']['id'],context_hash=g['context_hash'],**overrides)
 
+    def test_linked_teaching_task_attempts_reach_only_that_goal_and_memory_waits_for_approval(self):
+        import family_guided, family_learner_memory as lm
+        self.ident=self.action('create',child_id='child-1',title='虚构学校要求：说清时间线索',subject='英语',
+                               school_target='学校要求：朗读后说出句子里的时间线索。')['id']
+        self.assertEqual(self.goal()['records'],[])
+        self.approve(self.evaluate())
+        def remembered():
+            with self.store.agent._db() as c:return len(lm.timeline(c,'child-1',self.ident))
+        memory=remembered()
+        parent,child=family_guided.Store(self.app),family_guided.Store(self.app,authorize=lambda c,child_id:None)
+        def material(title,**extra):
+            self.count+=1
+            body=dict(request_key='synthetic-guided-'+str(self.count).zfill(8),child_id='child-1',version=0,title=title,subject='英语',
+                      question_text='虚构句子：He reads after dinner. 时间线索是什么？',question_attachments=[],reference_text='after dinner',
+                      reference_checked=True,shared=True,**extra)
+            return body,parent.save_material(body)
+        body,saved=material('虚构关联任务',goal_id=self.ident)
+        self.assertEqual(parent.save_material(body)['session_id'],saved['session_id'])
+        linked,unlinked=saved['session_id'],material('虚构同科未关联任务')[1]['session_id']
+        def act(ident,**fields):
+            self.count+=1;version=next(s for s in parent.snapshot()['sessions'] if s['id']==ident)['version']
+            child.action(dict(request_key='synthetic-attempt-'+str(self.count).zfill(8),child_id='child-1',id=ident,version=version,**fields))
+        with patch.object(family_guided.family_llm,'guided_hint',return_value=dict(hint='先找表示时间的词。',question='哪几个词说明什么时候？',uncertainties=[])):
+            act(linked,action='attempt',kind='first',text='我觉得是 reads。',assistance='')
+            act(linked,action='hint')
+            act(linked,action='attempt',kind='explain_again',text='是 after dinner。',assistance='少量提示')
+            act(unlinked,action='attempt',kind='first',text='未关联任务的回答。',assistance='')
+        sessions={s['id']:s for s in parent.snapshot()['sessions']}
+        first,second=[e['record_id'] for e in sessions[linked]['events'] if e['kind']=='attempt']
+        other=next(e['record_id'] for e in sessions[unlinked]['events'] if e['kind']=='attempt')
+        g=self.goal();seen={r['id']:r for r in g['records']}
+        self.assertEqual(set(seen),{first,second})                          # the same-subject unlinked task stays out
+        self.assertEqual((seen[first]['assistance'],seen[second]['assistance'],seen[second]['related_record_id']),('','少量提示',first))
+        self.assertIn('已提供 0 条系统提示',seen[first]['comparison_note']);self.assertIn('已提供 1 条系统提示',seen[second]['comparison_note'])
+        self.assertIn('不据此认定独立完成或掌握',seen[second]['comparison_note'])
+        self.assertTrue(all(r['source']==family_guided.SOURCE+linked for r in seen.values()))
+        plan_before=g['current_plan'];self.assertTrue(g['evidence_changed'])        # the earlier analysis awaits update
+        self.assertEqual(remembered(),memory)
+        refs=['record:%d'%first,'record:%d'%second]
+        def cites(messages,schema,name,timeout,**kwargs):
+            value=json.loads(messages[-1]['content']);self.last_input=value;plan=synthetic_plan(value)
+            plan['proposal']['hypotheses'][0].update(support=[refs[1]],against=[refs[0]],status='有支持');return plan
+        self.model.side_effect=cites
+        pending=self.evaluate()
+        self.assertLessEqual(set(refs),{e['ref'] for e in self.last_input['evidence']})
+        self.assertNotIn('record:%d'%other,json.dumps(self.last_input))
+        self.assertEqual(pending['current_plan'],plan_before);self.assertEqual(remembered(),memory)   # a suggestion is not memory
+        self.approve(pending)
+        self.assertGreater(remembered(),memory)
+        with self.store.agent._db() as c:card=next(x for x in lm.learner_card(c,'child-1') if x['goal_id']==self.ident)
+        self.assertIn(refs[1],json.dumps(card))
+        # The attempt itself stays immutable; a parent's linked correction and an out-of-band move both mark the analysis stale.
+        note=self.app.save_record(dict(child='示例甲',day=self.now.date().isoformat(),category='学习进展',title='家长补充观察',
+            note='家长更正：再次表达前孩子看过参考。',related_record_id=second,followup_kind='补充观察',assistance='看过讲解或答案'))['record']['id']
+        g=self.goal();self.assertIn(note,{r['id'] for r in g['records']});self.assertTrue(g['evidence_changed'])
+        plan_now=g['current_plan']
+        with self.app.connect() as c:c.execute("UPDATE records SET child='示例乙' WHERE id=?",(second,));c.commit()
+        g=self.goal();self.assertEqual(g['hypotheses_detail'][0]['corrected'],[refs[1]])
+        self.assertNotIn(second,{r['id'] for r in g['records']});self.assertEqual(g['current_plan'],plan_now)
+        mate=self.action('create',child_id='child-2',title='虚构另一孩子目标',subject='英语',baseline='家长观察：虚构。')['id']
+        self.assertEqual(next(x for x in self.store.snapshot()['goals'] if x['id']==mate)['records'],[])
+
     def test_lifecycle_coalesces_same_day_and_updates_same_task(self):
         self.assertEqual(self.goal()['records'],[])
         one=self.feedback();two=self.feedback('家长观察：晚些时候不用提示，能说出一条线索。')
@@ -815,13 +941,70 @@ class GoalTests(unittest.TestCase):
         self.assertEqual(result,dict(state='stale',created=0,used=1));self.assertIsNone(self.goal()['pending'])
 
     def test_feedback_retry_after_rename_and_child_isolation(self):
-        payload=dict(action='feedback',id=self.ident,request_key='synthetic-feedback-stable',day=self.now.date().isoformat(),source='家长观察',note='独立解释仍需要核对。')
-        first=self.store.action(payload);g=self.goal()
+        original=bytes.fromhex('89504e470d0a1a0a0000000d4948445200000001000000010804000000b51c0c020000000b4944415478da63fcff1f0003030200ef9a590d0000000049454e44ae426082')
+        upload=self.app.save_upload(io.BytesIO(original),len(original),'synthetic-evidence.png')['id']
+        payload=dict(action='feedback',id=self.ident,request_key='synthetic-feedback-stable',day=self.now.date().isoformat(),source='家长观察',note='独立解释仍需要核对。',attachments=[upload])
+        read_store=goals.Store(self.app,self.app.agent_store(read_only=True))
+        self.assertEqual(read_store.feedback_receipt(self.ident,payload['request_key'],payload['source'])['state'],'missing')
+        first=self.store.action(payload);g=self.goal();plan=g['current_plan']
+        self.assertEqual(read_store.feedback_receipt(self.ident,payload['request_key'],payload['source']),dict(state='linked',record_id=first['record_id']))
         self.action('edit',id=self.ident,expected_version=g['version'],title='修改后的阶段名称',subject='综合')
-        self.assertEqual(self.store.action(payload)['record_id'],first['record_id'])
+        replay=self.store.action(payload)
+        self.assertEqual(replay['record_id'],first['record_id']);self.assertTrue(replay['replayed'])
+        self.app.save_profile(dict(child_id='child-1',name='示例甲新称呼',grade='四年级',classroom='',reason='虚构档案称呼更正',version=0))
+        self.assertEqual(read_store.feedback_receipt(self.ident,payload['request_key'],payload['source'])['state'],'linked')
+        with self.app.connect() as c:
+            rows=c.execute('SELECT note,attachments,request_key FROM records WHERE source=?',('家长观察 · 学习目标:'+self.ident,)).fetchall()
+        self.assertEqual(len(rows),1);self.assertEqual(rows[0]['note'],payload['note'])
+        self.assertEqual(json.loads(rows[0]['attachments']),[upload]);self.assertEqual((self.data/'uploads'/upload).read_bytes(),original)
+        self.assertEqual(self.goal()['current_plan'],plan)
+        with self.assertRaises(self.app.RecordError):self.store.action(dict(payload,note='另一份文字不能复用原提交标识'))
         second=self.app.save_record(dict(child='示例乙',day=self.now.date().isoformat(),category='家长观察',title='另一位孩子的记录',note='不能串用',source='家长观察'))
         with self.assertRaises(agent.AgentError):self.action('link',id=self.ident,expected_version=self.goal()['version'],record_ids=[second['record_id']])
         self.assertEqual(len(self.goal()['records']),1)
+        self.assertEqual(read_store.feedback_receipt(self.ident,payload['request_key'],'老师反馈')['state'],'changed')
+        self.resave(first['record_id'],note='更正后的原话')
+        self.assertEqual(read_store.feedback_receipt(self.ident,payload['request_key'],payload['source'])['state'],'changed')
+        with self.assertRaises(self.app.RecordError) as changed:self.store.action(payload)
+        self.assertEqual((changed.exception.status,changed.exception.code),(409,'request_record_changed'))
+        self.resave(first['record_id'],source='老师反馈 · 学习目标:'+self.ident)
+        self.assertEqual(read_store.feedback_receipt(self.ident,payload['request_key'],payload['source'])['state'],'changed')
+
+    def test_feedback_receipt_repairs_saved_but_unlinked_record(self):
+        key='synthetic-unlinked-feedback'
+        payload=dict(action='feedback',id=self.ident,request_key=key,day=self.now.date().isoformat(),source='家长观察',note='孩子说了大意，转折待核对。')
+        saved=self.app.save_record(dict(child='示例甲',day=payload['day'],category='家长观察',subject='',title='学习目标反馈',note=payload['note'],source='家长观察 · 学习目标:'+self.ident,assistance='',practice_relation='',attachments=[],request_key='goal-feedback-'+agent._hash([self.ident,key])[:64]))
+        read_store=goals.Store(self.app,self.app.agent_store(read_only=True))
+        self.assertEqual(read_store.feedback_receipt(self.ident,key,payload['source']),dict(state='unlinked',record_id=saved['record_id']))
+        self.assertEqual(self.store.action(payload)['record_id'],saved['record_id'])
+        self.assertEqual(read_store.feedback_receipt(self.ident,key,payload['source'])['state'],'linked')
+        self.assertEqual(len(self.goal()['records']),1)
+
+    def test_feedback_changed_between_record_save_and_goal_link_is_not_linked(self):
+        before=self.goal()['current_plan'];save=self.app.save_record
+        for kind,changes in [('source',{'source':'老师反馈 · 学习目标:'+self.ident}),('child',{'child':'示例乙'})]:
+            with self.subTest(kind=kind):
+                key='synthetic-feedback-link-race-'+kind
+                payload=dict(action='feedback',id=self.ident,request_key=key,day=self.now.date().isoformat(),source='家长观察',note='虚构原话待核对。')
+                def change_before_link(obj):
+                    saved=save(obj)
+                    with self.app.connect() as c: row=dict(c.execute('SELECT * FROM records WHERE id=?',(saved['record_id'],)).fetchone())
+                    save(dict({name:row[name] or '' for name in ('child','day','category','subject','title','note','source','assistance','practice_relation')},id=saved['record_id'],**changes))
+                    return saved
+                with patch.object(self.app,'save_record',side_effect=change_before_link):
+                    with self.assertRaises(agent.AgentError) as changed:self.store.action(payload)
+                self.assertEqual((changed.exception.status,changed.exception.code),(409,'goal_feedback_changed'))
+                self.assertEqual(self.store.feedback_receipt(self.ident,key,payload['source'])['state'],'changed')
+                self.assertEqual(self.goal()['records'],[])
+                self.assertEqual(self.goal()['current_plan'],before)
+        with self.store.agent._db() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],2)
+
+    def test_feedback_survives_model_failure_without_a_fake_plan(self):
+        saved=self.feedback('孩子独立说出大意，但漏了转折。')
+        self.model.side_effect=goals.family_llm.LLMDraftError('synthetic offline')
+        self.assertEqual(self.store.process(self.ident,self.now,explicit=True)['state'],'error')
+        g=self.goal();self.assertEqual([r['id'] for r in g['records']],[saved['record_id']])
+        self.assertIsNone(g['pending']);self.assertIsNone(g['current_plan'])
 
     def test_manual_plan_offline_pause_and_study_result_link(self):
         self.model.side_effect=goals.family_llm.LLMDraftError('offline')
@@ -920,14 +1103,14 @@ class GoalTests(unittest.TestCase):
             if not school:return result
             result['proposal'].update(title='习作：介绍一处喜欢的地方',goal='按老师要求写出2-3个理由，每段有中心句',
                 action='第一步：先口述想介绍的地方和两个理由。\n第二步：给每个理由说一句中心句。\n第三步：补上当时看到、听到或闻到的。\n第四步：对照老师要求自查。',
-                mastery_check='本次要求自查：理由有2-3个、每段有中心句、用了自己的感官体验。学习表现记录：孩子原话、实际帮助、卡住的步骤。',
+                mastery_check='学习表现记录：孩子原话、实际帮助、卡住的步骤；完成习作不等于独立掌握。',
                 evidence=[dict(ref=school[-1]['ref'],quote=quote)])
             result['proposal'].update(changes);return result
         def model(messages,schema,name,timeout,**kwargs):
             value=json.loads(messages[-1]['content'])
             if name=='family_agent_selection':
-                return dict(proposals=[dict(title_quote=e['text'][:30],focus='school',due='',learning_subject='语文',learning_goal_id='',
-                    evidence=[dict(ref=e['ref'])]) for e in value['evidence']])
+                return dict(proposals=[synthetic_school_proposal(e,'语文','语文：介绍喜欢的地方',
+                    '介绍一处喜欢的地方，写2–3个理由；每段有中心句，结合看到、听到、闻到的感官体验。篇幅与截止未说明。') for e in value['evidence']])
             inputs.append(value);return plan(value)
         self.model.side_effect=model
         self.store.agent.ingest(dict(source_id=source['id'],expected_cursor='0',cursor='1',checked_at=self.now.isoformat(),last_message_time=self.now.isoformat(),error='',
@@ -954,11 +1137,15 @@ class GoalTests(unittest.TestCase):
         pause=plan(value);pause['proposal'].update(choice='暂停',estimated_minutes=None,mastery_check='',evidence=[dict(ref=background,quote='尚无作答证据')])
         self.assertEqual(self.store._proposal(pause,ctx,self.now)['choice'],'暂停')
         self.action('approve',id=g['id'],expected_version=g['version'],proposal_id=g['pending']['id'],context_hash=g['context_hash'])
-        g=goal();confirmed=g['current_plan'];self.assertIn('本次要求自查',confirmed['mastery_check']);self.assertTrue(confirmed['review_on'])
+        g=goal();confirmed=g['current_plan'];self.assertIn('学习表现记录',confirmed['mastery_check']);self.assertTrue(confirmed['review_on'])
+        requirement,=g['school_tasks']
+        self.assertEqual(requirement['goal'],next(t for t in self.app.tasks() if t['id']==requirement['id'])['action'])
+        for condition in ('2–3个理由','每段有中心句','感官体验','篇幅与截止未说明'):
+            self.assertIn(condition,requirement['goal'])
         self.assertEqual([(e['quote'],e['available'],e['quote_changed']) for e in g['reviewed_evidence']],[(quote,True,False)])
         card=lambda:json.dumps([dict(r) for r in self.app.connect().execute('SELECT * FROM manual_tasks WHERE id=?',(g['task_id'],))],ensure_ascii=False)
         shown=card();self.assertIn('第一步',shown)
-        for private in ('本次要求自查',g['assessment'],g['hypotheses_detail'][0]['reason']):self.assertNotIn(private,shown)
+        for private in ('学习表现记录',g['assessment'],g['hypotheses_detail'][0]['reason']):self.assertNotIn(private,shown)
         # Feedback proposes an adjustment; the formal plan and the child's task card wait for the parent.
         self.action('feedback',id=g['id'],day=self.now.date().isoformat(),source='家长转述孩子',note='孩子原话：我喜欢外婆家的院子，因为有桂花香；第二个理由想不出来。')
         def adjusted(value):
@@ -969,6 +1156,236 @@ class GoalTests(unittest.TestCase):
         self.assertIn(original,[e['text'] for e in inputs[-1]['evidence']]);self.assertEqual(inputs[-1]['current_plan'],confirmed)
         self.assertEqual(after['pending']['choice'],'调整');self.assertEqual(after['pending']['evidence'][0]['quote'],quote)
         self.assertEqual(after['current_plan'],confirmed);self.assertEqual(card(),shown);self.assertNotIn('桂花香',shown)
+
+    def school_scope_fixture(self, *, before_dates=True):
+        """Saved, entirely fictional tasks; this tests projection, not model extraction quality."""
+        source=dict(id='synthetic-plan-scope',platform='wechat',child_id='child-1',name='虚构来源',cursor='0',enabled=True)
+        (self.data/'agent.json').write_text(json.dumps(dict(enabled=True,sources=[source])))
+        first=(self.now.date()+dt.timedelta(days=1)).isoformat();second=(self.now.date()+dt.timedelta(days=2)).isoformat()
+        texts={
+            'M1':f'请分别完成两项：{first}'+('前' if before_dates else '当日')+f' Unit 3课文读两遍，朗读录音上传班级作业区；{second}前完成练习卷第1–4题，做完检查。',
+            'M4':'补充练习卷：第4题选做，第1–3题必做。',
+            'M5':'练习卷题目和家长参考分别打印；家长参考仅供家长核对，不给孩子照抄。',
+            'M8':'补充 Unit 3朗读：录音要读完整篇，不用背诵。'}
+        self.store.agent.ingest(dict(source_id=source['id'],expected_cursor='0',cursor='4',checked_at=self.now.isoformat(),
+            last_message_time=self.now.isoformat(),error='',messages=[dict(id=ident,time=(self.now+dt.timedelta(minutes=n)).isoformat(),
+                kind='text',sender='虚构英语发布者',text=text,unread=False) for n,(ident,text) in enumerate(texts.items())]))
+        def save(title,body,due,refs,*,accept=True,change='new'):
+            self.count+=1;key='synthetic-school-scope-'+str(self.count)
+            item=dict(child_id='child-1',kind='school',title=title,body=body,due=due,
+                evidence=[dict(ref='message:'+source['id']+':'+ref,text=texts[ref]) for ref in refs],
+                plan=dict(school_learning=dict(subject='英语',goal_id=self.ident),school_goal_id=self.ident,
+                    school_messages=[dict(source_id=source['id'],message_id=ref) for ref in refs],
+                    school_task=dict(title=title,goal=body,advice='',state='ready',change=change,target_id='',purpose='learning',policy=agent.SCHOOL_TASK_POLICY)))
+            fp=self.store.agent._job(key,dict(sequence=self.count),self.now)
+            self.store.agent._save(key,fp,[item],self.now)
+            with self.app.connect() as c:ident=c.execute('SELECT id FROM agent_items WHERE job_id=?',(key,)).fetchone()['id']
+            if accept:return self.store.agent.act(dict(id=ident,action='accept'))['task_id']
+            return ident
+        reading=save('英语：Unit 3朗读','Unit 3课文读两遍，朗读录音上传班级作业区。',first,['M1'])
+        supplement=save('英语：Unit 3朗读补充',texts['M8'],'',['M8'],accept=False,change='append')
+        task=next(t for t in self.app.tasks() if t['id']==reading)
+        with self.app.connect() as c:updated=c.execute('SELECT updated FROM agent_items WHERE id=?',(supplement,)).fetchone()['updated']
+        agent.apply_school_change(self.app,self.store.agent,dict(action='school_change',id=supplement,target_id=reading,change='append',
+            title=task['title'],body=texts['M8'],due='',expected_updated=updated,target_version=task['focus']['version'],target_updated=''))
+        return dict(source=source,texts=texts,first=first,second=second,reading=reading,save=save)
+
+    def test_school_plan_scope_keeps_only_linked_reading_and_complete_shared_original(self):
+        fixture=self.school_scope_fixture();self.evaluate()
+        task,=self.last_input['school_tasks']
+        current=next(t for t in self.app.tasks() if t['id']==fixture['reading'])
+        self.assertEqual((task['id'],task['title'],task['goal'],task['due_on'],task['category']),
+            (current['id'],current['title'],current['action'],fixture['first'],current['agenda']['category']))
+        self.assertIn('读两遍',task['goal']);self.assertIn('上传班级作业区',task['goal']);self.assertIn('不用背诵',task['goal'])
+        self.assertNotIn('练习卷',task['goal'])
+        refs={'school:message:'+fixture['source']['id']+':'+m for m in ('M1','M8')}
+        self.assertEqual(set(task['source_refs']),refs)
+        originals={e['ref']:e for e in self.last_input['evidence'] if e.get('source_kind')=='group_message'}
+        self.assertEqual(set(originals),refs)
+        self.assertEqual(originals['school:message:'+fixture['source']['id']+':M1']['text'],fixture['texts']['M1'])
+        self.assertTrue(all(e['sender']=='虚构英语发布者' and e['time'] for e in originals.values()))
+        effective=next(e for e in self.last_input['evidence'] if e['ref']=='school:task:'+fixture['reading'])
+        self.assertEqual(effective['text'],current['action']);self.assertEqual(set(effective['source_refs']),refs)
+        self.assertIn('未列入school_tasks的其他事项不能扩为本轮要求',goals.PROMPT)
+        # Legacy link lists can omit an already applied append; the current task's publication chain still retains its source.
+        with self.app.connect() as c:
+            row=c.execute('SELECT id,plan FROM agent_items WHERE id=?',(task['item_id'],)).fetchone();plan=json.loads(row['plan'])
+            plan['school_messages']=[dict(source_id=fixture['source']['id'],message_id='M1')]
+            c.execute('UPDATE agent_items SET plan=? WHERE id=?',(json.dumps(plan),row['id']))
+        with self.store.agent._db() as c:ctx=self.store._context(c,self.store._get(c,self.ident),self.now)
+        self.assertEqual(set(ctx['school_tasks'][0]['source_refs']),refs)
+        self.assertEqual({e['ref'] for e in ctx['school_messages']},refs)
+
+    def test_school_plan_scope_keeps_two_linked_tasks_dates_and_optional_reference_limits_separate(self):
+        fixture=self.school_scope_fixture()
+        worksheet=fixture['save']('英语：练习卷','练习卷第1–3题必做，第4题选做，做完检查。'+
+            '保留每题自己的作答，不抄参考。'*30+'题目和家长参考分别打印；家长参考仅供家长核对，不给孩子照抄。',
+            fixture['second'],['M1','M4','M5'])
+        self.evaluate();tasks={t['id']:t for t in self.last_input['school_tasks']}
+        self.assertEqual(set(tasks),{fixture['reading'],worksheet})
+        self.assertEqual(tasks[fixture['reading']]['due_on'],fixture['first']);self.assertEqual(tasks[worksheet]['due_on'],fixture['second'])
+        self.assertNotIn('练习卷',tasks[fixture['reading']]['goal']);self.assertNotIn('朗读',tasks[worksheet]['goal'])
+        self.assertGreater(len(tasks[worksheet]['goal']),400)
+        for condition in ('第1–3题必做','第4题选做','做完检查','分别打印','仅供家长核对','不给孩子照抄'):
+            self.assertIn(condition,tasks[worksheet]['goal'])
+        self.assertEqual(tasks[worksheet]['goal'],next(t for t in self.app.tasks() if t['id']==worksheet)['action'])
+        shared='school:message:'+fixture['source']['id']+':M1'
+        self.assertTrue(all(shared in t['source_refs'] for t in tasks.values()))
+        self.assertEqual(sum(e['ref']==shared for e in self.last_input['evidence']),1)
+        self.assertEqual(set(tasks[fixture['reading']]['source_refs']),{shared,'school:message:'+fixture['source']['id']+':M8'})
+        shown={t['id']:t for t in self.goal()['school_tasks']}
+        self.assertEqual(shown,tasks)
+        self.assertEqual(self.goal()['school_tasks_omitted'],0)
+
+    def test_school_completion_checks_cannot_be_regenerated_as_learning_observations(self):
+        fixture=self.school_scope_fixture();self.evaluate()
+        with self.store.agent._db() as c:
+            ctx=self.store._context(c,self.store._get(c,self.ident),self.now)
+        before=self.goal()
+        wrong=synthetic_plan(self.last_input)
+        wrong['proposal']['mastery_check']='本次要求自查：朗读要背诵。学习表现记录：记录实际帮助。'
+        with self.assertRaisesRegex(agent.AgentError,'不能另列学校完成标准'):
+            self.store._proposal(wrong,ctx,self.now)
+        self.assertEqual(self.goal(),before)
+        observed=synthetic_plan(self.last_input)
+        observed['proposal']['mastery_check']='学习表现记录：记录孩子本次自查时的原话、实际帮助和卡住的步骤；是否能独立读尚未知。'
+        self.assertEqual(self.store._proposal(observed,ctx,self.now)['mastery_check'],observed['proposal']['mastery_check'])
+        self.assertEqual(before['school_tasks'][0]['goal'],next(t for t in self.app.tasks() if t['id']==fixture['reading'])['action'])
+
+    def test_school_execution_plan_cannot_transfer_reading_count_or_shorten_deadline(self):
+        fixture=self.school_scope_fixture(before_dates=False);self.evaluate()
+        with self.store.agent._db() as c:ctx=self.store._context(c,self.store._get(c,self.ident),self.now)
+        before=self.goal()
+        for field,text,error in (('action','按老师要求录制两遍朗读。','录音数量'),
+                ('why_now','请在'+fixture['first']+'前完成朗读。','完成日期'),
+                ('action','录制三次朗读后提交。','录音数量')):
+            wrong=synthetic_plan(self.last_input);wrong['proposal'][field]=text
+            with self.assertRaisesRegex(agent.AgentError,error):self.store._proposal(wrong,ctx,self.now)
+            self.assertEqual(self.goal(),before)
+        proper=synthetic_plan(self.last_input)
+        proper['proposal']['action']='按原要求读两遍，第二遍同时录音；学习观察建议：记录两次朗读的表现。'
+        self.assertEqual(self.store._proposal(proper,ctx,self.now)['action'],proper['proposal']['action'])
+        optional=synthetic_plan(self.last_input);optional['proposal']['action']='可选建议：另录两遍，仅在孩子愿意且家长同意时尝试，不属于学校必做。'
+        self.assertEqual(self.store._proposal(optional,ctx,self.now)['action'],optional['proposal']['action'])
+
+    def test_school_execution_count_and_before_date_need_the_same_effective_task(self):
+        fixture=self.school_scope_fixture();self.evaluate()
+        with self.store.agent._db() as c:ctx=self.store._context(c,self.store._get(c,self.ident),self.now)
+        task=ctx['school_tasks'][0]
+        task['goal']='Unit 3录音2遍，'+fixture['first']+'前交回。'
+        proper=synthetic_plan(self.last_input)
+        proper['proposal']['action']='Unit 3录制二遍。';proper['proposal']['why_now']='原要求是'+fixture['first']+'前交回。'
+        self.assertEqual(self.store._proposal(proper,ctx,self.now)['action'],proper['proposal']['action'])
+        # The complete, uniquely scoped source clause still proves "before"
+        # when the collected task body did not repeat the date phrase.
+        task['goal']='Unit 3课文读两遍，朗读录音上传。'
+        proper=synthetic_plan(self.last_input);proper['proposal']['why_now']='原要求是'+fixture['first']+'前完成朗读。'
+        self.assertEqual(self.store._proposal(proper,ctx,self.now)['why_now'],proper['proposal']['why_now'])
+        other=dict(task,id='synthetic-other-reading',title='英语：Unit 4',goal='Unit 4录音2遍。')
+        task['goal']='Unit 3课文读两遍，朗读录音上传。';ctx['school_tasks'].append(other)
+        borrowed=synthetic_plan(self.last_input);borrowed['proposal']['action']='Unit 3录制两遍。'
+        with self.assertRaisesRegex(agent.AgentError,'录音数量'):self.store._proposal(borrowed,ctx,self.now)
+        # Another task's earlier-deadline wording cannot justify shortening this one.
+        task['goal']+='在'+fixture['first']+'当日完成。'
+        other['goal']='Unit 4录音2遍，'+fixture['second']+'前完成。';other['due_on']=fixture['second']
+        borrowed=synthetic_plan(self.last_input);borrowed['proposal']['why_now']='需在'+fixture['first']+'前完成Unit 3。'
+        with self.assertRaisesRegex(agent.AgentError,'完成日期'):self.store._proposal(borrowed,ctx,self.now)
+
+    def test_school_execution_object_tokens_do_not_borrow_counts_or_date_edges(self):
+        tasks=[dict(id='synthetic-u3',title='英语：Unit 3',goal='Unit 3课文读两遍，2026-10-06当日完成。',due_on='2026-10-06'),
+               dict(id='synthetic-u30',title='英语：Unit 30',goal='Unit 30录音2遍，2026-10-07前完成。',due_on='2026-10-07')]
+        for text in ('Unit3录制两遍。','Unit3须10月7日前完成。','Unit3须10月8日前完成。'):
+            with self.assertRaises(agent.AgentError):goals._school_execution_facts(dict(action=text,why_now='沿原要求。'),tasks)
+        good=dict(action='Unit30录制二遍。',why_now='Unit30在10月7日前完成。')
+        goals._school_execution_facts(good,tasks)
+        tasks[1].update(goal='Unit 30录音2遍，2026-10-06前完成。',due_on='2026-10-06')
+        goals._school_execution_facts(dict(action='Unit30录制二遍。',why_now='Unit30在10月6日前完成。'),tasks)
+        with self.assertRaises(agent.AgentError):
+            goals._school_execution_facts(dict(action='沿原要求。',why_now='在10月6日前完成。'),tasks)
+
+    def test_effective_school_requirement_changes_expire_old_plan_and_reject_late_receipt(self):
+        fixture=self.school_scope_fixture();self.approve(self.evaluate());approved=self.goal()['current_plan']
+        self.feedback('虚构家长反馈：本次还未尝试，学校要求保持。')
+        pending=self.evaluate();old_hash=pending['context_hash'];old_messages=pending['school_messages']
+        def edit(goal,due=None):
+            task=next(t for t in self.app.tasks() if t['id']==fixture['reading']);self.count+=1
+            return agent.family_task_focus.save(self.app,dict(id=task['id'],version=task['focus']['version'],
+                request_key='synthetic-effective-requirement-'+str(self.count),mode='next',next_action='',waiting_for='',review_on='',
+                title=task['title'],goal=goal,category=task['agenda']['category'],published_on=task['agenda']['published_on'],
+                due_on=due or task['agenda']['due_on']))
+        # This is an effective parent correction, not an edit of the immutable school notice.
+        edit('家长核对后的有效要求：Unit 3只读一遍，录音上传班级作业区。',fixture['second'])
+        changed=self.goal();self.assertNotEqual(changed['context_hash'],old_hash);self.assertTrue(changed['pending_stale'])
+        self.assertIsNone(changed['pending']);self.assertEqual(changed['current_plan'],approved);self.assertEqual(changed['school_messages'],old_messages)
+        with self.assertRaises(agent.AgentError):self.approve(pending)
+        self.evaluate();self.assertEqual(self.last_input['school_tasks'][0]['due_on'],fixture['second'])
+        self.assertIn('只读一遍',self.last_input['school_tasks'][0]['goal'])
+        before=self.goal()['pending'];count=self.model.call_count
+        # A feedback save intentionally supersedes pending suggestions. Change the
+        # effective requirement instead, so this round tests the late-return guard
+        # while the previous pending row is still present.
+        edit('家长本轮核对：Unit 3只读第一段，录音上传班级作业区。')
+        def late(messages,*args,**kwargs):
+            value=json.loads(messages[-1]['content']);edit('家长再次核对：Unit 3只读第一句，录音上传班级作业区。')
+            return synthetic_plan(value)
+        self.model.side_effect=late
+        result=self.store.process(self.ident,self.now,explicit=True)
+        self.assertEqual(result['state'],'stale');self.assertEqual(result['created'],0);self.assertEqual(self.model.call_count,count+1)
+        after=self.goal();self.assertIsNone(after['pending']);self.assertTrue(after['pending_stale']);self.assertEqual(after['current_plan'],approved)
+        with self.app.connect() as c:self.assertEqual(c.execute('SELECT state FROM agent_items WHERE id=?',(before['id'],)).fetchone()['state'],'pending')
+
+    def test_school_plan_scope_does_not_borrow_other_goals_or_children(self):
+        fixture=self.school_scope_fixture()
+        other_goal=self.action('create',child_id='child-1',title='虚构另一英语目标',subject='英语')['id']
+        other=fixture['save']('英语：另一目标练习','虚构另一目标要求：练习卷第4题选做。',fixture['second'],['M4'])
+        with self.app.connect() as c:
+            row=c.execute('SELECT id,plan FROM agent_items WHERE task_id=?',(other,)).fetchone();plan=json.loads(row['plan']);plan['school_goal_id']=other_goal
+            c.execute('UPDATE agent_items SET plan=? WHERE id=?',(json.dumps(plan),row['id']))
+        # A dangling task ownership/link is not permission to use another child's current requirements.
+        foreign=fixture['save']('英语：虚构异孩任务','另一孩子的虚构要求。',fixture['second'],['M5'])
+        with self.app.connect() as c:c.execute("UPDATE manual_tasks SET child='示例乙' WHERE id=?",(foreign,))
+        with self.store.agent._db() as c:ctx=self.store._context(c,self.store._get(c,self.ident),self.now)
+        self.assertEqual([t['id'] for t in ctx['school_tasks']],[fixture['reading']])
+        self.assertNotIn('另一孩子的虚构要求',json.dumps(ctx['evidence'],ensure_ascii=False))
+        self.assertNotIn('school:task:'+other,{e['ref'] for e in ctx['evidence']})
+        with self.app.connect() as c:
+            row=c.execute('SELECT id,plan FROM agent_items WHERE task_id=?',(foreign,)).fetchone()
+            c.execute("UPDATE agent_items SET child_id='child-2' WHERE id=?",(row['id'],))
+        self.evaluate();self.assertEqual([t['id'] for t in self.last_input['school_tasks']],[fixture['reading']])
+        source=fixture['source'];source['child_id']='child-2'
+        (self.data/'agent.json').write_text(json.dumps(dict(enabled=True,sources=[source])))
+        with self.store.agent._db() as c:ctx=self.store._context(c,self.store._get(c,self.ident),self.now)
+        self.assertEqual(ctx['school_messages'],[]);self.assertTrue(ctx['school_missing'])
+        self.assertEqual(ctx['school_tasks'],[])
+
+    def test_school_plan_scope_budget_marks_omissions_and_hashes_unselected_requirements(self):
+        fixture=self.school_scope_fixture()
+        def reviewed(messages,*args,**kwargs):
+            value=json.loads(messages[-1]['content']);self.last_input=value;result=synthetic_plan(value)
+            effective=next(e for e in value['evidence'] if e['ref']=='school:task:'+fixture['reading'])
+            result['proposal']['evidence']=[dict(ref=effective['ref'],quote=effective['text'][:30])]
+            return result
+        self.model.side_effect=reviewed;self.approve(self.evaluate())
+        all_ids={fixture['reading']}
+        for n in range(6):
+            self.now+=dt.timedelta(seconds=1)
+            all_ids.add(fixture['save']('英语：虚构独立练习'+str(n),'虚构练习'+str(n)+'：只做当前练习，条件保持完整。'+ '保留该练习的要求。'*50,
+                fixture['second'],['M1']))
+        self.model.side_effect=self.reply;self.evaluate()
+        selected={t['id'] for t in self.last_input['school_tasks']}
+        self.assertEqual(len(selected),6);self.assertEqual(self.last_input['omitted_school_tasks'],1)
+        self.assertIn(fixture['reading'],selected)  # Previously approved task evidence is retrieved within the budget.
+        effective=[e for e in self.last_input['evidence'] if e.get('source_kind')=='effective_school_task']
+        self.assertEqual({e['task_id'] for e in effective},selected)
+        current={t['id']:t for t in self.app.tasks()}
+        self.assertTrue(all(t['goal']==current[t['id']]['action'] for t in self.last_input['school_tasks']))
+        self.assertEqual(self.goal()['school_tasks_omitted'],1)
+        self.assertEqual({t['id'] for t in self.goal()['school_tasks']},selected)
+        self.assertIn('omitted_school_tasks大于零',goals.PROMPT);self.assertIn('不能声称全部学校要求已核完',goals.PROMPT)
+        omitted,=all_ids-selected;old_hash=self.goal()['context_hash'];task=current[omitted]
+        agent.family_task_focus.save(self.app,dict(id=omitted,version=task['focus']['version'],request_key='synthetic-omitted-requirement',
+            mode='next',next_action='',waiting_for='',review_on='',goal=task['action']+'\n家长核对补充：本题无需抄参考。'))
+        changed=self.goal();self.assertNotEqual(changed['context_hash'],old_hash);self.assertTrue(changed['pending_stale'])
 
     def test_independent_message_to_goal_plan_feedback_and_teacher_correction(self):
         source=dict(id='synthetic-school',platform='wechat',child_id='child-1',name='虚构班级',cursor='100',enabled=True)
@@ -984,8 +1401,13 @@ class GoalTests(unittest.TestCase):
             if name=='family_agent_selection':
                 self.assertEqual([g['id'] for g in value['learning_goals']],[self.ident])
                 e=value['evidence'][0]
-                return dict(proposals=[dict(title_quote=e['text'][:30],focus='school',due='',learning_subject='英语',
-                    learning_goal_id=self.ident,evidence=[dict(ref=e['ref'])])])
+                proposal=synthetic_school_proposal(e,'英语','英语：口头介绍一种文具',
+                    '观察家里一件文具，说出两点用途；开头任选提问或直接介绍，用自己的真实观察。',goal_id=self.ident)
+                if e['text'].startswith('更正'):
+                    target=next(t for t in value['school_tasks'] if t['title']=='英语：口头介绍一种文具')
+                    proposal.update(task_goal='本次只说一点用途，开头仍可任选。',task_state='review',
+                        task_reason='更正须核对原学校事项后确认。',task_change='update',task_target_id=target['id'])
+                return dict(proposals=[proposal])
             result=synthetic_plan(value)
             for e in result['proposal']['evidence']: e['quote']=e['quote'].replace('\u00a0',' ')
             return result
@@ -1001,19 +1423,38 @@ class GoalTests(unittest.TestCase):
         with self.assertRaisesRegex(agent.AgentError,'学校要求不是'):self.store._proposal(invalid,ctx,self.now)
         with self.app.connect() as c:
             self.assertEqual(c.execute('SELECT count(*) FROM records').fetchone()[0],0)
-            self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT count(*) FROM manual_tasks WHERE source=?',('学习目标:'+self.ident,)).fetchone()[0],0)
+            school_tasks=[dict(t) for t in c.execute('SELECT * FROM manual_tasks')]
+            self.assertEqual(len(school_tasks),1)
+            school_task=school_tasks[0]
+            self.assertEqual((school_task['title'],school_task['action']),('英语：口头介绍一种文具',
+                '观察家里一件文具，说出两点用途；开头任选提问或直接介绍，用自己的真实观察。'))
+            self.assertIn('message:'+source['id']+':101',school_task['source'])
+        self.assertEqual(g['task_id'],'')  # The original school task exists; the proposed extra plan still waits for approval.
         self.assertEqual(agent.run_once(self.app,self.now)['created'],0);self.assertEqual(len(requests),2)
         self.approve(g);task=self.goal()['task_id'];old_plan=self.goal()['current_plan']
         self.feedback('孩子原话：它可以写字；第二点用途需要家长提示。')
         self.now+=dt.timedelta(minutes=1);agent.run_once(self.app,self.now)
         self.assertIn('第二点用途需要家长提示',agent._json(requests[-1][1]['evidence']))
         self.assertEqual(self.goal()['current_plan'],old_plan)
+        feedback_pending=self.goal()['pending'];self.assertIsNotNone(feedback_pending)
+        plan_calls=sum(name=='family_learning_plan' for name,_ in requests)
         self.now+=dt.timedelta(minutes=1);correction='更正英语口头介绍：本次只说一点用途，开头仍可任选。'
         ingest(102,correction);agent.run_once(self.app,self.now)
-        g=self.goal();self.assertEqual([m['text'] for m in g['school_messages']],[original,correction])
-        self.assertEqual(g['task_id'],task);self.assertEqual(g['current_plan'],old_plan);self.assertIsNotNone(g['pending'])
-        self.store.agent.act(dict(action='dismiss',id=g['school_messages'][-1]['item_id']))
-        g=self.goal();self.assertTrue(g['pending_stale']);self.assertIsNone(g['pending'])
+        g=self.goal();self.assertEqual([m['text'] for m in g['school_messages']],[original])
+        self.assertEqual(g['task_id'],task);self.assertEqual(g['current_plan'],old_plan);self.assertEqual(g['pending'],feedback_pending)
+        self.assertEqual(sum(name=='family_learning_plan' for name,_ in requests),plan_calls)
+        with self.app.connect() as c:
+            changes=[dict(row) for row in c.execute("SELECT * FROM agent_items WHERE kind='school'")
+                if any(e['ref']=='message:'+source['id']+':102' for e in json.loads(row['evidence']))]
+            change,=changes;brief=json.loads(change['plan'])['school_task']
+            self.assertEqual((change['state'],brief['state'],brief['change'],brief['target_id']),('pending','review','update',school_task['id']))
+            self.assertEqual(change['body'],'本次只说一点用途，开头仍可任选。')
+            self.assertIn(correction,json.loads(change['evidence'])[0]['text'])
+            self.assertNotIn('school_learning',json.loads(change['plan']))
+            self.assertEqual(dict(c.execute('SELECT * FROM manual_tasks WHERE id=?',(school_task['id'],)).fetchone()),school_task)
+        self.store.agent.act(dict(action='dismiss',id=change['id']))
+        g=self.goal();self.assertFalse(g['pending_stale']);self.assertEqual(g['pending'],feedback_pending)
         self.assertEqual([m['text'] for m in g['school_messages']],[original]);self.assertEqual(g['current_plan'],old_plan)
         source['child_id']='child-2';(self.data/'agent.json').write_text(json.dumps(dict(enabled=True,sources=[source])))
         self.assertEqual(self.goal()['school_messages'],[]);self.assertEqual(self.goal()['school_missing'],1)
@@ -1025,8 +1466,9 @@ class GoalTests(unittest.TestCase):
             value=json.loads(messages[-1]['content'])
             if name=='family_agent_selection':
                 self.assertFalse(any(g['id']==self.ident for g in value['learning_goals']))
-                return dict(proposals=[dict(title_quote=e['text'],focus='school',due='',learning_subject='语文',learning_goal_id='',
-                    evidence=[dict(ref=e['ref'])]) for e in value['evidence']])
+                return dict(proposals=[synthetic_school_proposal(e,'语文',
+                    '语文：介绍一种文具' if '介绍一种文具' in e['text'] else '语文：按使用顺序说',
+                    '介绍一种文具。' if '介绍一种文具' in e['text'] else '补充要求：按使用顺序说。') for e in value['evidence']])
             return synthetic_plan(value)
         self.model.side_effect=model
         self.store.agent.ingest(dict(source_id=source['id'],expected_cursor='0',cursor='2',checked_at=self.now.isoformat(),last_message_time=self.now.isoformat(),error='',
@@ -1040,24 +1482,37 @@ class GoalTests(unittest.TestCase):
         agent.run_once(self.app,self.now);self.assertEqual(self.model.call_count,before)
         g=next(g for g in self.store.snapshot()['goals'] if g['child_id']=='child-2')
         self.action('resume',id=g['id'],expected_version=g['version'])
-        for message in g['school_messages']:self.store.agent.act(dict(action='dismiss',id=message['item_id']))
-        agent.run_once(self.app,self.now);self.assertEqual(self.model.call_count,before)
+        accepted_refs=[m['ref'] for m in g['school_messages']]
+        # Clear original requirements are now auto-collected; dismissing a pending
+        # suggestion must not delete their accepted tasks or learning evidence.
+        with self.app.connect() as c:
+            accepted_tasks=[dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+        for message in g['school_messages']:
+            with self.assertRaises(agent.AgentError) as rejected:
+                self.store.agent.act(dict(action='dismiss',id=message['item_id']))
+            self.assertEqual(rejected.exception.status,409)
+        agent.run_once(self.app,self.now);self.assertEqual(self.model.call_count,before+1)
+        self.assertEqual(self.model.call_args.args[2],'family_learning_plan')
         g=next(g for g in self.store.snapshot()['goals'] if g['child_id']=='child-2')
-        self.assertEqual(g['school_messages'],[]);self.assertEqual(g['processing'],'current')
+        self.assertEqual([m['ref'] for m in g['school_messages']],accepted_refs);self.assertEqual(g['processing'],'ready')
+        self.assertIsNotNone(g['pending'])  # Resuming produces a fresh proposal, not an already-approved plan.
+        with self.app.connect() as c:
+            self.assertEqual([dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')],accepted_tasks)
+        agent.run_once(self.app,self.now);self.assertEqual(self.model.call_count,before+1)
 
     def test_school_selector_rejects_foreign_goal_and_unread_requirements(self):
         evidence=[dict(ref='message:synthetic:1',text='[图片]',content_incomplete=True)]
-        result=dict(proposals=[dict(title_quote='[图片]',focus='school',due='',learning_subject='英语',learning_goal_id='foreign-goal',
-                                   evidence=[dict(ref=evidence[0]['ref'])])])
+        result=dict(proposals=[synthetic_school_proposal(evidence[0],'英语','','',goal_id='foreign-goal',
+            state='review',reason='图片内容尚未读取，具体学校要求待补充。',purpose='unknown')])
         self.model.side_effect=lambda *a,**k:result
         with self.assertRaisesRegex(agent.AgentError,'归属'):
             agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
         result['proposals'][0]['learning_goal_id']=''
         selected=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
         self.assertEqual(len(selected),1);self.assertNotIn('school_learning',selected[0]['plan']);self.assertEqual(selected[0]['plan']['school_task']['state'],'review');self.assertEqual(selected[0]['plan']['school_task']['title'],'')
+        self.assertIn('未读全',selected[0]['plan']['school_task']['reason'])
         evidence.append(dict(ref='message:synthetic:2',text='英语口述：介绍一种文具。',content_incomplete=False))
-        result['proposals'].append(dict(title_quote=evidence[1]['text'],focus='school',due='',learning_subject='英语',learning_goal_id='',
-                                       evidence=[dict(ref=evidence[1]['ref'])]))
+        result['proposals'].append(synthetic_school_proposal(evidence[1],'英语','英语：口述介绍一种文具','口述介绍一种文具。'))
         selected=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
         self.assertEqual(len(selected),2);self.assertIn('plan',selected[1])
         self.assertEqual(selected[1]['evidence'][0]['text'],evidence[1]['text'])

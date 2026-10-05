@@ -1,5 +1,5 @@
 // Run as test_startup_ui.cjs with PLAYWRIGHT_MODULE / PLAYWRIGHT_CHANNEL.
-// Only demo.py's disposable family and intercepted synthetic sources; no POSTs. Optional SOURCES_UI_PROOF_DIR.
+// Only demo.py's disposable family and intercepted synthetic sources; the source-check POST is mocked.
 const assert=require('node:assert/strict');
 const fs=require('node:fs/promises');
 const path=require('node:path');
@@ -53,8 +53,13 @@ async function reloadPage(p){
   let current={...base,sync,sync_error:'',tasks:[task('source-first',first,'虚构甲待办'),task('source-second',second,'虚构乙待办'),task('source-done',first,'虚构已完成事项','已完成')],agent:{...base.agent,enabled:true,state:'ready',sources:sourceStates,collection_interval_minutes:30}};
   current.today_calendar={...base.today_calendar,inbox:current.tasks.map(t=>({id:t.id,task_id:t.id,kind:'task',child_ids:[base.children.find(c=>c.name===t.child).id],closed:t.original_status==='已完成',status:t.original_status,agenda:{category:'todo',box:'inbox',published_on:'',scheduled_on:'',due_on:''}}))};
   browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});const p=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[],mutations=[],external=[];
+  let checkPosts=0,checkFailure=false;
   p.on('pageerror',e=>errors.push(e.message));
-  await p.route('**/*',async route=>{const req=route.request(),url=new URL(req.url());if(req.method()!=='GET'){mutations.push(req.method()+' '+url.pathname);return route.abort()}if(url.origin!==new URL(server.url).origin){external.push(url.origin);return route.abort()}if(url.pathname==='/api/state')return route.fulfill({json:current});if(url.pathname==='/api/agent')return route.fulfill({json:current.agent});return route.continue()});
+  await p.route('**/*',async route=>{const req=route.request(),url=new URL(req.url());if(url.origin!==new URL(server.url).origin){external.push(url.origin);return route.abort()}if(req.method()==='POST'&&url.pathname==='/api/agent/collector/check'){
+   checkPosts++;assert.deepEqual(req.postDataJSON(),{});if(checkFailure)return route.fulfill({status:503,json:{error:'虚构后台不可用'}});
+   const stamp=new Date().toISOString();current={...current,agent:{...current.agent,sources:current.agent.sources.map(s=>s.enabled?{...s,collection_check:{requested_at:stamp,completed_at:'',status:'pending'}}:s)}};
+   return route.fulfill({json:{ok:true,sources:current.agent.sources.filter(s=>s.enabled).map(s=>({source_id:s.id,requested_at:stamp,status:'pending'}))}})
+  }if(req.method()!=='GET'){mutations.push(req.method()+' '+url.pathname);return route.abort()}if(url.pathname==='/api/state')return route.fulfill({json:current});if(url.pathname==='/api/agent')return route.fulfill({json:current.agent});return route.continue()});
   // Capture the actual object handed to the app, so DOM interactions cannot
   // silently rewrite source history even if the network fixture stays intact.
   await p.addInitScript(()=>{const original=Response.prototype.json;Response.prototype.json=async function(){const value=await original.call(this);if(new URL(this.url).pathname==='/api/state')window.__sourceInput={value,before:JSON.stringify({sync:value.sync,sync_error:value.sync_error,tasks:value.tasks,children:value.children,agent:value.agent})};return value}});
@@ -63,6 +68,20 @@ async function reloadPage(p){
   assert.match(await p.locator('[data-source-coverage]').innerText(),/读取未成功，新消息可能未收录/);
   assert.equal(await p.locator('[data-source-coverage] img,[data-source-coverage] svg,[data-source-coverage] script').count(),0);
   await sources(p);
+  await p.setViewportSize({width:360,height:1000});await p.locator('[data-collection-check]').click();
+  await eventually(async()=>await p.locator('[data-current-source="wechat:current-school"] [data-collection-check-status]').innerText().then(s=>s.includes('已请求原后台读取')),'queued check');
+  assert.equal(checkPosts,1);assert.equal(await p.locator('[data-current-source="qq:current-disabled"] [data-collection-check-status]').count(),0);
+  const stamp=new Date().toISOString();current={...current,agent:{...current.agent,sources:current.agent.sources.map(s=>s.id==='wechat:current-school'?{...s,collection_check:{...s.collection_check,status:'success',completed_at:stamp}}:s.id==='wechat:current-reading'||s.id==='wechat:current-failed'?{...s,collection_check:{...s.collection_check,status:'read_error',completed_at:stamp}}:s)}};
+  await p.locator('[data-collection-result]').click();
+  await eventually(async()=>await p.locator('[data-current-source="wechat:current-school"] [data-collection-check-status]').innerText().then(s=>s.includes('原后台读取成功')),'successful source receipt');
+  assert.match(await p.locator('[data-current-source="wechat:current-school"] [data-collection-check-status]').innerText(),/原后台读取成功/);
+  assert.match(await p.locator('[data-current-source="wechat:current-reading"] [data-collection-check-status]').innerText(),/原后台读取未成功/);
+  await checkWidth(p,'source check 360');
+  checkFailure=true;await p.locator('[data-collection-check]').click();assert.equal(checkPosts,2);
+  await eventually(async()=>await p.locator('[data-collection-notice]').innerText().then(s=>s.includes('请求结果未确认')),'lost check reply');
+  assert.match(await p.locator('[data-collection-notice]').innerText(),/请求结果未确认/);
+  await p.setViewportSize({width:1440,height:1000});await checkWidth(p,'source check failure 1440');
+  checks.push('source check queues one bounded original-background request, shows each source receipt, and never resubmits after a lost reply');
   const currentCard=id=>p.locator('[data-current-source="'+id+'"]'),card=key=>p.locator('[data-source-card="'+key+'"]'),qq=card('qq:synthetic-history');
   assert.equal(await p.locator('[data-current-source]').count(),4);
   assert.equal(await currentCard('wechat:current-school').locator('[data-current-source-status]').innerText(),'最近读取成功');
@@ -131,15 +150,15 @@ async function reloadPage(p){
    await p.setViewportSize({width,height:1000});
    current={...current,agent:{...current.agent,enabled:true,sources:[{...qqSource,enabled:true,error:'旧接口失败',inbox:{pending:1,state:'error',error:'截图保留，请核对群标题'}}]}};
    await reloadPage(p);await sources(p);
-   assert.match(await p.locator('[data-current-source-status]').innerText(),/截图待重试/);
+   assert.match(await p.locator('[data-current-source-status]').innerText(),/最近读取未成功/);
    assert.match(await p.locator('[data-source-inbox]').innerText(),/待整理 1 张/);
-   assert.doesNotMatch(await p.locator('[data-current-sources]').innerText(),/旧接口失败/);
+   assert.match(await p.locator('[data-current-sources]').innerText(),/旧接口失败/);
    await p.locator('nav [data-page="home"]').click();
-   assert.match(await p.locator('[data-source-coverage]').innerText(),/截图整理失败，原图保留待重试/);
+   assert.match(await p.locator('[data-source-coverage]').innerText(),/读取未成功，新消息可能未收录/);
    await sources(p);
    await checkWidth(p,'screenshot inbox '+width);
   }
-  checks.push('QQ inbox mobile/desktop shows pending captures and retry without presenting old native failure as current status');
+  checks.push('QQ inbox mobile/desktop keeps screenshot fallback separate from the failed native source');
 
   const home=async(sources,changes={})=>{
    const stamp=new Date().toISOString();current={...current,sync:{},sync_error:'',agent:{...current.agent,enabled:true,state:'ready',last_error:'',last_run:stamp,sources,...changes}};

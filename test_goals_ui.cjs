@@ -7,12 +7,12 @@ const wait=ms=>new Promise(r=>setTimeout(r,ms));
  const env={...process.env};for(const k of Object.keys(env))if(k.startsWith('FAMILY_'))delete env[k];
  server=spawn(process.env.FAMILY_TEST_PYTHON||'python3',['-c',`import sys,json,runpy,family_llm,app,family_agent,tempfile
 from pathlib import Path
-from test_goals import synthetic_plan
+from test_goals import synthetic_plan,synthetic_school_proposal
 def model(messages,schema,name,*args,**kwargs):
  value=json.loads(messages[-1]['content'])
  if name=='family_agent_selection':
   e=value['evidence'][0]
-  return dict(proposals=[dict(title_quote=e['text'],focus='school',due='',learning_subject='语文',learning_goal_id='',evidence=[dict(ref=e['ref'])])])
+  return dict(proposals=[synthetic_school_proposal(e,'语文','语文：任选一种顺序介绍文具','任选一种顺序介绍文具，说出用途和真实细节。',state='review',reason='虚构课堂观察未明确是否要求本孩子办理，适用性待家长核对。')])
  if name=='family_agent_plan':return dict(proposal=None)
  result=synthetic_plan(value)
  if value.get('learning_goal',{}).get('title','').startswith('虚构画像范围'):
@@ -42,19 +42,41 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
  for(const width of [360,1440]){
   const p=await browser.newPage({viewport:{width,height:900}}),errors=[];p.on('pageerror',e=>{errors.push(e.message);console.error('browser error',e.message)});await p.goto(url);await p.locator('body[data-page="home"] [data-task-all="homework"]').waitFor();await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="goals"]').click();await p.locator('[data-goal-form="create"]').waitFor({state:'attached'});
   const create=p.locator('[data-goal-form="create"]');await create.locator('xpath=ancestor::details').evaluate(e=>e.open=true);
-  await create.getByLabel('阶段目标',{exact:true}).fill('虚构英语目标 '+width);await create.getByLabel('科目',{exact:true}).fill('英语');await create.getByLabel('目前实际表现',{exact:true}).fill('家长观察：有时猜答案，尚未核对原因。');await create.getByText('补充学校要求或已有材料 · 可选',{exact:true}).click();await create.getByLabel('学校要求 / 考试范围',{exact:true}).fill('虚构老师要求：任选一种说明顺序，介绍文具的用途；未给截止。');await create.getByLabel('家里已有的材料、App、设备',{exact:true}).fill('已有课本和学习机，具体题目待核对');let createLost=false;await p.route('**/api/goals/action',async route=>{if(route.request().postDataJSON().action==='create'&&!createLost){createLost=true;await route.fetch();await route.abort('failed')}else await route.continue()});await create.getByRole('button',{name:'保存学习目标'}).click();await p.getByText(/结果未确认，请点原按钮重试/).waitFor();assert(await p.locator('[data-goal-child-select="child-2"]').isDisabled());await p.locator('[data-goal-retry]').click();await p.unroute('**/api/goals/action');
+  await create.getByLabel('阶段目标',{exact:true}).fill('虚构英语目标 '+width);await create.getByLabel('科目',{exact:true}).fill('英语');await create.getByLabel('目前实际表现',{exact:true}).fill('家长观察：有时猜答案，尚未核对原因。');await create.getByText('补充学校要求或已有材料 · 可选',{exact:true}).click();await create.getByLabel('学校要求 / 考试范围',{exact:true}).fill('虚构老师要求：任选一种说明顺序，介绍文具的用途；未给截止。');await create.getByLabel('家里已有的材料、App、设备',{exact:true}).fill('已有课本和学习机，具体题目待核对');let createLost=false;await p.route('**/api/goals/action',async route=>{if(route.request().postDataJSON().action==='create'&&!createLost){createLost=true;await route.fetch();await route.abort('failed')}else await route.continue()});await create.getByRole('button',{name:'保存学习目标'}).click();await p.getByText(/结果未确认，请点原按钮重试/).waitFor();assert(await p.locator('[data-goal-child-select="child-2"]').isDisabled());await p.locator('nav [data-page="more"]').click();await p.locator('[data-child-filter="child-2"]').click();assert.equal(await p.locator('[data-child-filter="child-1"]').getAttribute('aria-pressed'),'true','unresolved goal save cannot switch the shared child');await p.locator('.more-links [data-page="goals"]').click();await p.locator('[data-goal-retry]').click();await p.unroute('**/api/goals/action');
   await p.locator('[data-goal-form="feedback"]').waitFor();assert(await p.getByText('记下原话或作答就可以，不需要判断原因。保存后，Agent会结合反馈提出下一步。',{exact:true}).isVisible());await p.getByRole('heading',{name:'虚构英语目标 '+width,exact:true}).waitFor();assert(await p.getByText('确认建议后，这里会显示家长审核过的计划。',{exact:true}).isVisible());await p.locator('#goal-school-requirement summary').click();assert.match(await p.locator('#goal-school-requirement').innerText(),/任选一种说明顺序/);checks++;
   await p.locator('[data-goal-action="evaluate"]').click();await p.locator('[data-goal-form="approve"]').waitFor();await p.getByText('为什么这样安排 · 判断与依据',{exact:true}).click();await p.getByText('本次引用原文',{exact:true}).click();await p.getByRole('link',{name:'本次学校要求',exact:true}).click();assert(await p.locator('#goal-school-requirement').evaluate(e=>e.open));checks++;
-  const manual=p.locator('[data-goal-form="manual"]');await manual.locator('xpath=ancestor::details').evaluate(e=>e.open=true);await manual.getByLabel('家长怎么带着做、怎么问孩子').fill('用已有课本的一道题，听孩子说出选择的理由；困了就结束。');await manual.getByLabel('怎样核对独立掌握').fill('下次用相近题观察能否独立解释，不用完成次数代替掌握。');await manual.getByLabel('一次预计分钟').fill('8');await manual.getByRole('button',{name:'确认计划并安排'}).click();
+  const manual=p.locator('[data-goal-form="manual"]');await manual.locator('xpath=ancestor::details').evaluate(e=>e.open=true);await manual.getByLabel('家长怎么带着做、怎么问孩子').fill('用已有课本的一道题，听孩子说出选择的理由；困了就结束。');await manual.getByLabel('学习表现怎么记录').fill('下次用相近题观察能否独立解释，不用完成次数代替掌握。');await manual.getByLabel('一次预计分钟').fill('8');await manual.getByRole('button',{name:'确认计划并安排'}).click();
   await p.locator('[data-goal-task]').waitFor();const original=await p.locator('[data-goal-task]').getAttribute('data-goal-task');assert(original);checks++;
   const feedback=p.locator('[data-goal-form="feedback"]');await feedback.getByLabel('孩子怎么答的、用了什么帮助、用时和感受').fill('虚构反馈：练了八分钟，需要少量提示；孩子愿意口头讲。');await feedback.getByLabel('信息来源').selectOption('家长转述孩子');await feedback.getByLabel('获得的帮助').locator('xpath=ancestor::details').evaluate(e=>e.open=true);await feedback.getByLabel('获得的帮助').selectOption('少量提示');await feedback.locator('input[type="file"]').setInputFiles({name:'synthetic-evidence.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQ0AAAAASUVORK5CYII=','base64')});
-  // Simulate a lost response after the server has saved the exact request.
-  let intercepted=false;await p.route('**/api/goals/action',async route=>{const body=route.request().postDataJSON();if(body.action==='feedback'&&!intercepted){intercepted=true;await route.fetch();if(width===360)await route.abort('failed');else await route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'Synthetic failure after save'})})}else await route.continue()});
-  await feedback.getByRole('button',{name:'保存反馈'}).click();await p.getByText(/结果未确认，请点原按钮重试/).waitFor();assert(await feedback.getByLabel('孩子怎么答的、用了什么帮助、用时和感受').isDisabled());await feedback.getByRole('button',{name:'保存反馈'}).click();await p.getByText('虚构反馈：练了八分钟，需要少量提示；孩子愿意口头讲。',{exact:true}).waitFor();assert.equal(await p.locator('[id^="goal-record-"] > [data-goal-record]').count(),1);assert.equal(await p.getByRole('link',{name:'查看原件',exact:true}).count(),1);const originalURL=await p.getByRole('link',{name:'查看原件',exact:true}).getAttribute('href');assert.equal((await p.request.get(new URL(originalURL,url).href)).status(),200);checks++;
+  // 360: response lost after commit. 1440: 503 before the request reaches the server.
+  let intercepted=false;const attempts=[];await p.route('**/api/goals/action',async route=>{const body=route.request().postDataJSON();if(body.action!=='feedback')return route.continue();attempts.push(body);if(intercepted)return route.continue();intercepted=true;if(width===360){await route.fetch();await route.abort('failed')}else await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic failure before save'})})});
+  await feedback.getByRole('button',{name:'保存反馈'}).click();await p.getByText(/结果未确认，请点原按钮重试/).waitFor();assert(await feedback.getByLabel('孩子怎么答的、用了什么帮助、用时和感受').isDisabled());const uncertain=(await(await p.request.get(url+'api/goals')).json()).goals.find(x=>x.task_id===original);assert.equal(uncertain.records.filter(r=>r.note==='虚构反馈：练了八分钟，需要少量提示；孩子愿意口头讲。').length,width===360?1:0);
+  let receiptChecks=0;await p.route('**/api/goals/feedback-receipt*',async route=>{receiptChecks++;const query=new URL(route.request().url()).searchParams;assert.equal(query.get('id'),uncertain.id);assert.equal(query.get('request_key'),attempts[0].request_key);assert.equal(query.get('source'),attempts[0].source);if(width===360&&receiptChecks===1)await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'原提交暂时无法核对'})});else await route.continue()});
+  if(width===360){await feedback.getByRole('button',{name:'保存反馈'}).click();await p.getByText(/原提交暂时无法核对；结果未确认/).waitFor();assert.equal(attempts.length,1)}
+  await feedback.getByRole('button',{name:'保存反馈'}).click();await p.getByText('虚构反馈：练了八分钟，需要少量提示；孩子愿意口头讲。',{exact:true}).waitFor();assert.equal(receiptChecks,width===360?2:1);assert.equal(attempts.length,width===360?1:2);if(width===1440)assert.deepEqual(attempts[1],attempts[0]);assert.equal(attempts[0].attachments.length,1);assert.equal(await p.locator('[id^="goal-record-"] > [data-goal-record]').count(),1);assert.equal(await p.getByRole('link',{name:'查看原件',exact:true}).count(),1);const originalURL=await p.getByRole('link',{name:'查看原件',exact:true}).getAttribute('href');assert.equal((await p.request.get(new URL(originalURL,url).href)).status(),200);const afterRetry=(await(await p.request.get(url+'api/goals')).json()).goals.find(x=>x.task_id===original);assert.deepEqual(afterRetry.current_plan,uncertain.current_plan);checks++;
   const recordTrigger=await p.locator('[id^="goal-record-"] > [data-goal-record]').elementHandle();await recordTrigger.click();await p.locator('#recordDialog[open]').waitFor();assert(await recordTrigger.evaluate(e=>e.isConnected),'opening a source preserves the current goal panel');assert.match(await p.locator('#recordForm [name="note"]').inputValue(),/虚构反馈/);await p.locator('#recordDialog').evaluate(d=>d.close());checks++;
+  // A changed original must not replay an old request; the parent can inspect it and keep the unsaved form.
+  await p.unroute('**/api/goals/action');await p.unroute('**/api/goals/feedback-receipt*');const conflictNote='虚构待核对反馈：先保留原话';let conflictPosts=0;
+  await feedback.getByLabel('孩子怎么答的、用了什么帮助、用时和感受').fill(conflictNote);
+  await feedback.locator('input[type="file"]').setInputFiles({name:'synthetic-conflict.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQ0AAAAASUVORK5CYII=','base64')});
+  await p.route('**/api/goals/action',async route=>{if(route.request().postDataJSON().action==='feedback'){conflictPosts++;await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic conflict setup'})})}else await route.continue()});
+  await feedback.getByRole('button',{name:'保存反馈'}).click();await p.getByText(/Synthetic conflict setup；结果未确认/).waitFor();
+  const changedReceipt={state:'changed',...(width===360?{record_id:afterRetry.records.find(r=>r.note==='虚构反馈：练了八分钟，需要少量提示；孩子愿意口头讲。').id}:{})};
+  await p.route('**/api/goals/feedback-receipt*',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(changedReceipt)}));
+  await p.locator('[data-goal-retry]').click();await p.getByText(/旧请求不会重发；请先核对原记录；也可结束旧重试并保留填写/).waitFor();assert.equal(conflictPosts,1);
+  assert(await p.locator('[data-goal-conflict-resolve]').isEnabled());
+  if(width===360){await p.locator('[data-goal-conflict-record]').click();await p.locator('#recordDialog[open]').waitFor();await p.locator('#recordDialog').evaluate(d=>d.close())}else assert.equal(await p.locator('[data-goal-conflict-record]').count(),0);
+  if(width===360)await p.route('**/api/goals',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic refresh failure'})}));
+  p.once('dialog',d=>d.accept());await p.locator('[data-goal-conflict-resolve]').click();await feedback.getByRole('button',{name:'保存反馈'}).waitFor({state:'visible'});assert(await feedback.getByRole('button',{name:'保存反馈'}).isEnabled());assert.equal(await p.locator('[data-goal-retry]').count(),0);if(width===360)await p.getByText('Synthetic refresh failure',{exact:true}).waitFor();else await p.getByText(/旧请求已结束，填写仍保留/).waitFor();assert.equal(await feedback.getByLabel('孩子怎么答的、用了什么帮助、用时和感受').inputValue(),conflictNote);await feedback.getByText(/已上传 1 份原件/).waitFor();assert.equal(conflictPosts,1);await p.unroute('**/api/goals/action');await p.unroute('**/api/goals/feedback-receipt*');if(width===360)await p.unroute('**/api/goals');checks++;
+  if(width===1440){
+   let racePosts=0;await p.route('**/api/goals/action',async route=>{if(route.request().postDataJSON().action!=='feedback')return route.continue();racePosts++;await route.fulfill({status:racePosts===1?503:409,contentType:'application/json',body:JSON.stringify(racePosts===1?{error:'Synthetic delayed response'}:{error:'原反馈后来已更正',code:'goal_feedback_changed'})})});
+   await feedback.getByRole('button',{name:'保存反馈'}).click();await p.getByText(/Synthetic delayed response；结果未确认/).waitFor();await p.route('**/api/goals/feedback-receipt*',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({state:'missing'})}));
+   await p.locator('[data-goal-retry]').click();await p.getByText(/原反馈后来已更正；也可结束旧重试并保留填写/).waitFor();assert.equal(racePosts,2);assert(await p.locator('[data-goal-conflict-resolve]').isEnabled());
+   p.once('dialog',d=>d.accept());await p.locator('[data-goal-conflict-resolve]').click();await p.getByText(/旧请求已结束，填写仍保留/).waitFor();assert.equal(await feedback.getByLabel('孩子怎么答的、用了什么帮助、用时和感受').inputValue(),conflictNote);await p.unroute('**/api/goals/action');await p.unroute('**/api/goals/feedback-receipt*');checks++;
+  }
   const manual2=p.locator('[data-goal-form="manual"]');await manual2.locator('xpath=ancestor::details').evaluate(e=>e.open=true);await manual2.getByLabel('家长怎么带着做、怎么问孩子').fill('保留口头解释，缩为五分钟，先问孩子想从哪一道开始。');await manual2.getByRole('button',{name:'确认并更新原计划'}).click();await p.getByText('保留口头解释，缩为五分钟，先问孩子想从哪一道开始。',{exact:true}).first().waitFor();assert.equal(await p.locator('[data-goal-task]').getAttribute('data-goal-task'),original);checks++;
   const beforeDecision=(await(await p.request.get(url+'api/goals')).json()).goals.find(g=>g.task_id===original);const preDecisionTeacher=await p.request.post(url+'api/goals/action',{headers:{'X-Family-Token':(await(await p.request.get(url+'api/state')).json()).token},data:{action:'feedback',id:beforeDecision.id,request_key:'synthetic-predecision-teacher-'+width,day:new Date(Date.now()+8*3600000).toISOString().slice(0,10),source:'老师反馈',note:'虚构旧老师结果：这条先于下一次判断确认，不能冒充确认后的新结果。'}});assert.equal(preDecisionTeacher.status(),200,await preDecisionTeacher.text());
-  await p.locator('[data-goal-action="evaluate"]').click();await p.locator('[data-goal-form="approve"]').waitFor();assert(await p.locator('[data-goal-next-step]').isVisible());
+  await p.locator('[data-goal-action="evaluate"]').click();await p.locator('[data-goal-form="approve"]').waitFor();assert(await p.locator('[data-goal-next-step]').isVisible());assert.match(await p.locator('[data-goal-proposal] a[href^="#goal-record-"]').first().textContent(),/记录 \d+ · \d{4}-\d{2}-\d{2}/);
   if(process.env.GOALS_UI_PROOF_DIR){await fs.mkdir(process.env.GOALS_UI_PROOF_DIR,{recursive:true});await p.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'next-step-'+width+'.png'),fullPage:true})}await p.getByText('调整这份建议 · 可选',{exact:true}).click();await p.locator('[data-goal-form="approve"]').getByLabel('家长怎么带着做、怎么问孩子').fill('旧建议的修改不能混入新建议');await feedback.getByLabel('孩子怎么答的、用了什么帮助、用时和感受').fill('补充一条改变依据的反馈');await feedback.getByRole('button',{name:'保存反馈'}).click();await p.locator('[data-goal-form="approve"]').waitFor({state:'detached'});await p.locator('[data-goal-action="evaluate"]').click();await p.locator('[data-goal-form="approve"]').waitFor();assert.doesNotMatch(await p.locator('[data-goal-form="approve"]').getByLabel('家长怎么带着做、怎么问孩子').inputValue(),/旧建议的修改/);await p.getByText('为什么这样安排 · 判断与依据',{exact:true}).click();assert.match(await p.locator('[data-goal-proposal]').innerText(),/待验证/);await p.locator('[data-goal-form="approve"]').getByRole('button',{name:'确认并更新原计划'}).click();await p.locator('[data-goal-proposal]').getByText('没有新的待审核建议。',{exact:true}).waitFor();assert.equal(await p.locator('[data-goal-task]').getAttribute('data-goal-task'),original);checks++;
   await p.locator('[data-goal-action="pause"]').click();await p.getByText('已暂缓自动分析，反馈仍可保存。').waitFor();const pausedManual=p.locator('[data-goal-form="manual"]');await pausedManual.locator('xpath=ancestor::details').evaluate(e=>e.open=true);await pausedManual.getByLabel('家长怎么带着做、怎么问孩子').fill('暂缓期间只整理下次可能怎么做');await pausedManual.getByRole('button',{name:'确认并更新原计划'}).click();await p.getByText('已暂缓自动分析，反馈仍可保存。').waitFor();await p.locator('[data-goal-action="resume"]').click();await p.locator('[data-goal-action="pause"]').waitFor();checks++;
   await p.locator('[data-word-check] > summary').click();const wordForm=p.locator('[data-goal-form="word"]');await wordForm.getByLabel('本次单词',{exact:true}).fill('pen');await wordForm.getByLabel('本次中文义或语境',{exact:true}).fill('用于写字的笔');
@@ -125,6 +147,17 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'candidate list fits the viewport');
   assert.equal(await history.locator('button,select').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'candidate buttons remain touchable');
   if(process.env.GOALS_UI_PROOF_DIR)await history.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'word-retest-'+width+'.png')});
+  await retestForm.locator('[name="word_result_read_meaning"]').selectOption('本次独立答对');
+  await retestForm.locator('[name="note"]').fill('虚构九天后新题：没有提示，独立选出书。');
+  await retestForm.getByRole('button',{name:'保存本词核对',exact:true}).click();
+  await reopenWordHistory();
+  const afterRetest=(await(await p.request.get(url+'api/goals')).json()).goals.find(g=>g.id===wordSnapshot.id);
+  const bookChecks=afterRetest.word_history.checks.filter(c=>c.word==='book'&&c.meaning==='书');
+  assert.equal(bookChecks.length,2,'the older answer and new interval attempt remain separate');
+  assert.deepEqual(bookChecks.map(c=>c.phase).sort(),['首次核对','间隔后复测'].sort());
+  assert.equal(bookChecks.find(c=>c.phase==='间隔后复测').results.read_meaning,'本次独立答对');
+  assert.deepEqual(afterRetest.current_plan,wordSnapshot.current_plan,'the retest does not change the confirmed plan');
+  assert.equal((await(await p.request.get(url+'api/state')).json()).tasks.length,tasksBefore,'the retest does not create a task');
   await draftWord.fill('');checks++;
   // Read-only child profile: aggregates the child's reached-independence directions (and any judgments) with links to the original record.
   const profSeed=(day,check,suf)=>p.request.post(url+'api/goals/action',{headers:{'X-Family-Token':historyAuth},data:{action:'feedback',id:wordSnapshot.id,request_key:'synthetic-profile-'+width+'-'+suf,day,source:'家长观察',note:'',word_check:check}});
@@ -182,6 +215,7 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   await p.locator('nav [data-page="home"]').click();await p.locator('[data-task-all="todo"]').click();
   await p.locator(`[data-query-target="task:${original}"] [data-task]`).click();
   const taskForm=p.locator('#taskForm'),taskNote='虚构作业反馈：孩子说困了，今天先停；看过讲解才说出第一点。';
+  await taskForm.locator('#taskStatusDetails').evaluate(e=>e.open=true);
   await taskForm.locator('[name="status"]').selectOption('进行中');await taskForm.locator('[name="note"]').fill(taskNote);
   let taskFailed=false;await p.route('**/api/task',async route=>{if(!taskFailed){taskFailed=true;await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic task save failure'})})}else await route.continue()});
   await taskForm.getByRole('button',{name:'保存状态'}).click();await p.locator('#taskError').getByText('Synthetic task save failure',{exact:true}).waitFor();assert.equal(await taskForm.locator('[name="note"]').inputValue(),taskNote);
@@ -261,16 +295,25 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   await p.getByRole('button',{name:'查看原消息与原件',exact:true}).click();await originalDialog.locator('[data-school-teacher-open]').click();await messageForm.waitFor();await messageForm.locator('[name="teacher_id"]').selectOption(messageTeacher.id);await messageForm.locator('[name="target"]').selectOption('class');await messageForm.locator('[type="submit"]').click();await originalDialog.getByText('这条消息已有记录，保留现有更正与撤回状态。',{exact:true}).waitFor();assert.equal((await(await p.request.get(url+'api/teachers')).json()).observations.filter(o=>o.teacher_id===messageTeacher.id).length,1);
   await p.locator('[data-school-original-close]').click();checks++;
 
-  const schoolItem=autoGoal.school_messages[0].item_id;await p.locator('nav [data-page="more"]').click();await p.locator('[data-page="agent"]').click();for(const attr of ['data-agent-accept','data-school-record-agent','data-agent-dismiss'])assert(await p.locator(`[${attr}="${schoolItem}"]`).isVisible());await p.locator(`[data-agent-accept="${schoolItem}"]`).click();await p.locator('#agentDialog[open]').waitFor();await p.locator('[data-close="agentDialog"]').click();
+  const schoolItem=autoGoal.school_messages[0].item_id;
+  const openSchoolAgent=async()=>{
+   await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="agent"]').click();
+   const item=p.locator(`[data-agent-item="${schoolItem}"]`);await item.locator(`[data-agent-accept="${schoolItem}"]`).waitFor();
+   assert.equal(await p.locator('[data-child-filter="child-2"]').getAttribute('aria-pressed'),'true','school goal and Agent keep the shared child');
+   const details=item.locator('details.task-more');assert.equal(await details.evaluate(d=>d.open),false);
+   for(const attr of ['data-school-record-agent','data-agent-dismiss']){assert.equal(await item.locator(`[${attr}="${schoolItem}"]`).count(),1);assert.equal(await item.locator(`[${attr}="${schoolItem}"]`).isVisible(),false)}
+   await details.locator(':scope > summary').click();for(const attr of ['data-agent-accept','data-school-record-agent','data-agent-dismiss'])assert(await item.locator(`[${attr}="${schoolItem}"]`).isVisible());
+  };
+  await openSchoolAgent();await p.locator(`[data-agent-accept="${schoolItem}"]`).click();await p.locator('#agentDialog[open]').waitFor();await p.locator('[data-close="agentDialog"]').click();
   if(width===360){
    await p.locator(`[data-school-record-agent="${schoolItem}"]`).click();await p.locator('#recordDialog[open]').waitFor();
    await p.locator('#recordForm [name="category"]').selectOption('课程进度');await p.locator('#recordForm [name="subject"]').fill('语文');
    await p.locator('#recordForm [name="day"]').fill('2026-09-01');await p.locator('#recordForm [name="title"]').fill('虚构学校通知转课程进度');
    assert(await p.locator('#recordForm [name="source"]').isDisabled());await p.locator('#recordForm [type="submit"]').click();await p.locator('#recordDialog').waitFor({state:'hidden'});await p.locator('body[data-page="learning"]').waitFor();
    const saved=(await(await p.request.get(url+'api/state')).json()).records.filter(r=>r.title==='虚构学校通知转课程进度');assert.equal(saved.length,1);assert.equal(saved[0].category,'课程进度');assert.match(saved[0].source,/^message:/);
-   await p.locator('nav [data-page="more"]').click();await p.locator('[data-page="agent"]').click();await p.locator(`[data-school-record-agent="${schoolItem}"]`).click();await p.locator('body[data-page="learning"]').waitFor();assert.equal(await p.locator('#recordDialog[open]').count(),0);
+   await openSchoolAgent();await p.locator(`[data-school-record-agent="${schoolItem}"]`).click();await p.locator('body[data-page="learning"]').waitFor();assert.equal(await p.locator('#recordDialog[open]').count(),0);
    assert.equal((await(await p.request.get(url+'api/state')).json()).records.filter(r=>r.source===saved[0].source).length,1);
-   await p.locator('nav [data-page="more"]').click();await p.locator('[data-page="agent"]').click();checks++;
+   await openSchoolAgent();checks++;
   }
   await p.locator(`[data-goal-id="${autoGoal.id}"]`).first().click();await p.getByRole('heading',{name:autoGoal.title,exact:true}).waitFor();checks++;
   if(process.env.GOALS_UI_PROOF_DIR){await fs.mkdir(process.env.GOALS_UI_PROOF_DIR,{recursive:true});await p.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'goals-'+width+'.png'),fullPage:true})}
@@ -294,6 +337,34 @@ runpy.run_path('demo.py',run_name='__main__')`],{cwd:__dirname,env,stdio:['ignor
   const layerSaved=(await(await p.request.get(url+'api/state')).json()).records.filter(r=>String(r.id)===layerRecord);assert.equal(layerSaved.length,1);assert.equal(layerSaved[0].note,'虚构更正：尚未核对原件 '+width);
   assert.equal((await(await p.request.get(url+'api/goals')).json()).goals.find(g=>g.id===autoGoal.id).current_plan,null);
   if(process.env.GOALS_UI_PROOF_DIR)await layerProfile.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'profile-layers-corrected-'+width+'.png')});checks++;
+  // A parent observation saved from the original task must return to its goal after a failed save and reopen.
+  const beforeObservation=(await(await p.request.get(url+'api/goals')).json()).goals.find(g=>g.id===savedGoal.id),observation='虚构家长观察：独立说出大意，转折仍需核对 '+width;
+  await p.locator('nav [data-page="home"]').click();assert.equal(await p.locator('[data-child-filter="child-2"]').getAttribute('aria-pressed'),'true');
+  assert.equal(await p.locator(`[data-query-target="task:${original}"]`).count(),0,'the other child task is hidden');
+  await p.locator(`[data-child-filter="${beforeObservation.child_id}"]`).click();assert.equal(await p.locator(`[data-child-filter="${beforeObservation.child_id}"]`).getAttribute('aria-pressed'),'true');
+  await p.locator('[data-task-all="todo"]').click();await p.locator(`[data-query-target="task:${original}"] [data-task]`).click();
+  await p.locator('#taskForm [name="note"]').fill(observation);
+  let observationFailed=false;await p.route('**/api/task/feedback',async route=>{if(!observationFailed){observationFailed=true;await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic observation save failure'})})}else await route.continue()});
+  await p.locator('#saveTaskFeedback').click();await p.locator('#taskError').getByText(/Synthetic observation save failure/).waitFor();assert.equal(await p.locator('#taskForm [name="note"]').inputValue(),observation);
+  await p.locator('#saveTaskFeedback').click();await p.locator('#taskFeedbackStatus').getByText(/反馈已保存/).waitFor();await p.unroute('**/api/task/feedback');
+  await p.locator('#taskDialog [data-close="taskDialog"]').click();await p.reload();await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="goals"]').click();await p.locator('[data-goal-child-select="child-1"]').click();
+  const observationGoal=(await(await p.request.get(url+'api/goals')).json()).goals.find(g=>g.id===savedGoal.id),observationRecord=observationGoal.records.find(r=>r.note===observation);
+  assert(observationRecord);assert.equal(observationRecord.category,'家长观察');assert.equal(observationRecord.source,'事项:'+original);assert.deepEqual(observationGoal.current_plan,beforeObservation.current_plan);assert(observationGoal.evidence_changed);
+  assert.equal((await(await p.request.get(url+'api/goals')).json()).goals.find(g=>g.id===secondProfile).records.some(r=>r.note===observation),false);
+  await p.locator(`[data-goal-select="${savedGoal.id}"]`).last().click();await p.locator(`#goal-record-${observationRecord.id}`).getByText(observation,{exact:true}).waitFor();assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);checks++;
+  // Read-only display contract only; real task scope and projection are checked by test_goals.py.
+  const checksFixture=[
+   {id:'synthetic-textbook-check',title:'数学：教材第2、3题',due_on:'2026-10-08',goal:'先独立完成教材第2、3题，写在数学本；按示例检查，标记不会的题，不照抄。'},
+   {id:'synthetic-correction-check',title:'数学：测验第5题订正',due_on:'2026-10-09',goal:'订正测验第5题，写完整过程；写在原卷上。<img src=x onerror="window.schoolCheckInjected=true">'}
+  ];
+  await p.route('**/api/goals',async route=>{const response=await route.fetch(),data=await response.json();const goal=data.goals.find(g=>g.id===savedGoal.id);goal.school_tasks=checksFixture;goal.school_tasks_omitted=1;await route.fulfill({response,json:data})});
+  await p.reload();await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="goals"]').click();await p.locator('[data-goal-child-select="child-1"]').click();await p.locator(`[data-goal-select="${savedGoal.id}"]`).last().click();
+  const liveChecks=p.locator('[data-goal-school-checks]');await liveChecks.waitFor();assert(await liveChecks.isVisible());
+  for(const item of checksFixture){const shown=liveChecks.locator(`[data-goal-school-task="${item.id}"]`);assert.equal(await shown.locator('strong').innerText(),item.title);assert.equal(await shown.locator('.source').innerText(),item.goal);assert.match(await shown.innerText(),new RegExp(item.due_on))}
+  assert.equal(await liveChecks.locator('[data-goal-school-task="synthetic-textbook-check"]').innerText().then(s=>s.includes('完整过程')),false);
+  assert.match(await liveChecks.innerText(),/另有 1 项本轮未纳入/);assert.equal(await liveChecks.locator('textarea,input,select,img').count(),0);assert.equal(await p.evaluate(()=>window.schoolCheckInjected),undefined);assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  if(process.env.GOALS_UI_PROOF_DIR)await liveChecks.screenshot({path:path.join(process.env.GOALS_UI_PROOF_DIR,'current-school-checks-'+width+'.png')});
+  await p.unroute('**/api/goals');checks++;
   await p.close();
  }
  console.log(JSON.stringify({passed:true,checks,viewports:[360,1440],synthetic_only:true}));

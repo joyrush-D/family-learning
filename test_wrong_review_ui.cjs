@@ -95,13 +95,21 @@ async function proof(p, name) {
         await p.locator('[data-wrong-annotate]').waitFor();
         await fit(p);
 
-        // 未选孩子不能标注
-        await p.locator('[data-wrong-annotate]').click();
-        await eventually(async () => /请先选择孩子/.test(await p.locator('[data-wrong-error]').innerText()), 'child required');
-
         const initial = await (await fetch(host.url + 'api/state')).json();
         const childName = initial.children[0].name;
-        await p.locator('[data-wrong-child]').selectOption({label: childName});
+        const other = initial.children[1], childChoice = p.locator('[data-wrong-child]');
+        assert.equal(await childChoice.inputValue(), childName, 'wrong review defaults to the current child');
+        assert.equal(await childChoice.locator('option').count(), initial.children.length);
+        assert.equal(await childChoice.locator('option[value=""]').count(), 0, 'no unspecified or all-child choice');
+        assert.equal(await p.getByText('全部孩子', {exact: true}).count(), 0);
+        await childChoice.evaluate(el => {
+          const invalid = new Option('虚构未知孩子', 'synthetic-invalid-child');
+          el.add(invalid); el.value = invalid.value;
+          el.dispatchEvent(new Event('change', {bubbles: true})); invalid.remove();
+        });
+        assert.equal(await childChoice.inputValue(), childName, 'invalid selector value retains the original child');
+        await p.locator('[data-wrong-annotate]').click();
+        await eventually(async () => /请选择1到3张照片/.test(await p.locator('[data-wrong-error]').innerText()), 'photos required for the selected child');
 
         // 上传两张合成照片（真实 /api/upload）
         await p.locator('[data-wrong-pick]').setInputFiles([
@@ -112,6 +120,19 @@ async function proof(p, name) {
           'two uploaded photos auto-selected');
         const checked = await p.locator('[data-wrong-pool] input:checked').count();
         assert.equal(checked, 2, 'new uploads auto-selected');
+        await childChoice.selectOption({label: other.name});
+        assert.equal(await p.locator('[data-wrong-pool] input:checked').count(), 0, 'other child does not inherit selected photos');
+        await p.locator('[data-wrong-subject]').fill('虚构乙科目');
+        await p.locator('[data-wrong-subject]').dispatchEvent('change');
+        await p.locator('nav [data-page="home"]').click();
+        assert.equal(await p.locator('[data-child-filter="'+other.id+'"]').getAttribute('aria-pressed'), 'true', 'module selection updates the shared child');
+        await p.locator('nav [data-page="more"]').click();
+        await p.locator('.more-links [data-page="wrong"]').click();
+        assert.equal(await childChoice.inputValue(), other.name, 'remount retains the shared child');
+        assert.equal(await p.locator('[data-wrong-subject]').inputValue(), '虚构乙科目');
+        await childChoice.selectOption({label: childName});
+        assert.equal(await p.locator('[data-wrong-pool] input:checked').count(), 2, 'original child selected photos are restored');
+        assert.equal(await p.locator('[data-wrong-subject]').inputValue(), '', 'other child subject stays separate');
         await fit(p);
         await proof(p, 'wrong-upload-' + width);
 
@@ -189,6 +210,12 @@ async function proof(p, name) {
         assert.equal(await p.locator('.wrong-box').count(), 4, 'boxes for all regions');
         assert.match(await p.locator('.wrong-uncertain').innerText(), /对照原图/);
         assert.equal(await p.locator('[data-wrong-keep]:checked').count(), 3, 'all kept by default');
+        await p.locator('.wrong-item').first().locator('[data-wrong-field="note"]').fill('虚构孩子甲标注草稿');
+        await childChoice.selectOption({label: other.name});
+        assert.equal(await p.locator('.wrong-item').count(), 0, 'annotated draft stays with its original child');
+        await childChoice.selectOption({label: childName});
+        assert.equal(await p.locator('.wrong-item').count(), 3);
+        assert.equal(await p.locator('.wrong-item').first().locator('[data-wrong-field="note"]').inputValue(), '虚构孩子甲标注草稿', 'returning restores edited annotations');
         await fit(p);
         await proof(p, 'wrong-annotated-' + width);
 
@@ -228,6 +255,8 @@ async function proof(p, name) {
         for (const selector of ['[data-wrong-child]','[data-wrong-day]','[data-wrong-subject]','[data-wrong-annotate]','[data-wrong-save]','[data-wrong-discard]','[data-wrong-field="note"]']) {
           assert(await p.locator(selector).first().isDisabled(), selector+' locked during upload');
         }
+        assert.equal(await p.evaluate(() => FamilyWrongReview.canSwitch()), false, 'public child-switch guard rejects a pending upload');
+        assert.equal(await childChoice.inputValue(), childName);
         releaseUpload();
         await eventually(async()=>!(await p.locator('[data-wrong-pick]').isDisabled()), 'failed upload unlocks');
         assert.match(await p.locator('[data-wrong-upload-status]').innerText(), /network\.png/);
@@ -294,6 +323,20 @@ async function proof(p, name) {
         const written = (await (await fetch(host.url + 'api/state')).json()).records
           .filter(r => r.source === '错题照片核对').map(r => r.id).sort();
         assert.equal(written.length, 2, 'exactly two records after lost response');
+        await eventually(async () => await p.locator('[data-wrong-save]').isEnabled(), 'uncertain save can retry');
+        assert.equal(await childChoice.isDisabled(), true, 'uncertain save keeps its child fixed');
+        await p.locator('nav [data-page="home"]').click();
+        await p.locator('[data-child-filter="'+other.id+'"]').click();
+        assert.equal(await p.locator('[data-child-filter="'+initial.children[0].id+'"]').getAttribute('aria-pressed'), 'true', 'shared child switch cannot relabel an uncertain save');
+        assert.equal(await p.locator('[data-child-filter="'+other.id+'"]').getAttribute('aria-pressed'), 'false');
+        await p.locator('nav [data-page="more"]').click();
+        await p.locator('.more-links [data-page="wrong"]').click();
+        assert.equal(await childChoice.inputValue(), childName);
+        assert.equal(await childChoice.isDisabled(), true, 'uncertain save remains fixed after reopening');
+        assert.equal(await p.locator('.wrong-item').count(), 3, 'uncertain save cards survive navigation');
+        assert.equal(await first.locator('[data-wrong-keep]').isChecked(), false, 'review selection survives navigation');
+        assert.equal(await kept.locator('[data-wrong-field="note"]').inputValue(), '先让孩子讲错在哪', 'uncertain save draft survives navigation');
+        assert.equal(await kept.locator('[data-wrong-field="topic_hint"]').inputValue(), '除法口诀');
 
         // 不确定写入后家长又改了内容：后端必须拒绝不兼容的键复用，保留编辑文本。
         await kept.locator('[data-wrong-field="note"]').fill('不确定写入后家长又改的虚构备注');
@@ -316,7 +359,7 @@ async function proof(p, name) {
           const state = await (await fetch(host.url + 'api/state')).json();
           const recs = state.records.filter(r => r.source === '错题照片核对');
           return recs.length === 2 &&
-                 recs.every(r => r.category === '学习进展' && r.attachments.length === 1) &&
+                 recs.every(r => r.child === childName && r.category === '学习进展' && r.attachments.length === 1) &&
                  recs.some(r => /家长已核对/.test(r.note)) &&
                  recs.some(r => /先让孩子讲错在哪/.test(r.note));
         }, 'two review records persisted');
@@ -345,7 +388,7 @@ async function proof(p, name) {
         await fit(p);
         await proof(p, 'wrong-reopened-' + width);
         assert.deepEqual(errors, []);
-        checks.push({width, parentReview: true, upload: true, failureRetry: true,
+        checks.push({width, defaultSingleChild: true, childSwitchAndDraftIsolation: true, pendingChildGuard: true, parentReview: true, upload: true, failureRetry: true,
           boxesAndCards: true, editAndDrop: true, candidateEditClear: true, wholeBatchLengthGuard: true, persisted: true, reopen: true, noOverflow: true});
         await p.close();
       } catch (e) {

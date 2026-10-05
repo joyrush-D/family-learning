@@ -17,6 +17,7 @@ import family_agent as agent
 import family_media as media
 import family_qq_capture as qq
 import family_qq_cua as host
+import family_qq_inbox
 from test_agent_http import AgentHTTPTests
 from test_media import png
 
@@ -144,11 +145,12 @@ def check_worker():
         driver=SimpleNamespace(
             list_apps=AsyncMock(return_value=SimpleNamespace(apps=[SimpleNamespace(running=True,bundle_id='com.tencent.qq',launch_path='/Applications/QQ.app',pid=1)])),
             list_windows=AsyncMock(return_value=SimpleNamespace(windows=[SimpleNamespace(pid=1,window_id=2,layer=0,bounds=SimpleNamespace(width=800,height=600))])),
-            get_window_state=AsyncMock(side_effect=[SimpleNamespace(**s) for s in (first,fixture(),fixture())]),click=AsyncMock())
-        with patch.dict(sys.modules,cua_driver=sdk),patch.object(host,'screen_locked',return_value=False),patch.object(qq,'crop_window',return_value=png()) as crop:
+            get_window_state=AsyncMock(side_effect=[SimpleNamespace(**s) for s in (first,first,fixture(),fixture())]),click=AsyncMock())
+        with patch.dict(sys.modules,cua_driver=sdk),patch.object(host,'screen_locked',return_value=False),patch.object(qq,'crop_window',return_value=png()) as crop,patch.object(qq.subprocess,'run') as activate:
             text,body=asyncio.run(qq.capture(driver,SOURCE,Path('/synthetic')))
         assert text=='英语：完成课本练习' and body==png()
         assert driver.click.await_count==(0 if panel else 2)
+        assert activate.call_count==(0 if panel else 1)
         assert all(c.args[0].delivery_mode=='background' and c.args[0].position=='s1:3' for c in driver.click.await_args_list)
         assert crop.call_args.args[1]==[300,85,262,365]
         driver.list_apps.reset_mock()
@@ -213,6 +215,7 @@ def check_cadence():
         binary=native/'Contents/MacOS/FamilyCollector';binary.write_text('#!/bin/sh\nexit 1\n');binary.chmod(0o700)
         local=dict(enabled=True,source_id=SOURCE['id'],host_app=str(native));config=data/'qq-cua.json'
         config.write_text(json.dumps(local));config.chmod(0o600)
+        inbox=data/'qq-inbox.json';inbox.write_text(json.dumps(dict(enabled=True,source_id=SOURCE['id'])));inbox.chmod(0o600)
         calls=[]
         def run(moment,*,status='permission_required',locked=False,stale=False):
             def launch(args,env,timeout,max_stdout):
@@ -229,7 +232,9 @@ def check_cadence():
                 return b''
             with patch.object(qq,'bounded_process',side_effect=launch),patch.object(host,'screen_locked',return_value=locked),patch.object(agent,'_now',side_effect=lambda value=None:value or moment):
                 return qq.run_one(app,store,moment)
-        result=run(now);assert result['state']=='permission_required' and result['next_at']==(now+dt.timedelta(minutes=30)).isoformat()
+        with patch.object(family_qq_inbox,'run_one',side_effect=AssertionError('inbox superseded by configured Cua host')):
+            result=run(now)
+        assert result['state']=='permission_required' and result['next_at']==(now+dt.timedelta(minutes=30)).isoformat()
         result=run(now+dt.timedelta(minutes=5));assert result['state']=='not_due' and len(calls)==1
         result=run(now+dt.timedelta(minutes=30),status='fragment_saved');assert result['state']=='fragment_saved' and len(calls)==2
         result=run(now+dt.timedelta(minutes=60),stale=True);assert result['state']=='not_confirmed'
@@ -245,7 +250,7 @@ def check_cadence():
         with patch.object(qq,'bounded_process') as launch:
             result=agent.run_once(app)
         launch.assert_not_called();assert result['qq_fragment']['state']=='configuration_error' and result['state']=='ready'
-        config.unlink();assert qq.run_one(app,store,now)['state']=='disabled'
+        config.unlink();inbox.unlink();assert qq.run_one(app,store,now)['state']=='disabled'
         assert not list(data.glob('*.plist'))
         assert not list(data.glob('.qq-cycle-*'))
     finally:case.tearDown()

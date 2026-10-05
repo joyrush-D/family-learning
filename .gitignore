@@ -85,6 +85,9 @@
 
 !/test_today.py
 !/test_today_ui.cjs
+!/test_homework_feedback_review_ui.cjs
+!/test_homework_review.py
+!/test_homework_print_scope.py
 
 !/family_agent.py
 !/family_qq_capture.py
@@ -105,6 +108,11 @@
 !/family_wechat_media.py
 !/test_wechat_media.py
 !/test_agent.py
+!/test_school_ack_originals.py
+!/test_school_native_coverage.py
+!/test_school_ack_originals_ui.cjs
+!/test_school_frozen_workflow_ui.cjs
+!/test_school_history.py
 !/test_agent_http.py
 !/test_agent_ui.cjs
 !/test_collect.py
@@ -196,6 +204,7 @@
 !/test_record_task_link.py
 
 !/test_task_media_ui.cjs
+!/test_task_feedback_reconcile_ui.cjs
 !/test_record_task_link_ui.cjs
 
 !/test_video.py
@@ -214,3 +223,17 @@
 !/test_pdf_material_ui.cjs
 !/test_school_pdf_evidence.py
 !/contract.md
+
+!/family_qq_napcat.py
+
+!/test_assistant_scenarios_ui.cjs
+
+# Reviewed public requirements only; editable document exports remain private.
+!/PRD同行评审版.md
+!/test_pending_admin_ui.cjs
+!/test_homework_duplicate_ui.cjs
+!/test_homework_text.py
+!/test_homework_text_ui.cjs
+!/test_homework_text_print_ui.cjs
+!/test_school_native_coverage_ui.cjs
+!/test_school_action_inventory.py

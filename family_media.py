@@ -269,15 +269,21 @@ def run_one(app, store, now):
 SCHOOL_MATERIAL = 'school_material'
 
 
-def _material_kind(message):
+def _material_kind(message, source=None, mimes=()):
     from family_qq_capture import KIND, NOTICE
+    mimes=tuple(mimes)
     ocr = message.get('kind') == KIND and message.get('text', '').startswith(NOTICE+'\n截图本机文字识别（')
-    return SCHOOL_MATERIAL if ocr else ''
+    native_file = source and source.get('platform') == 'qq' and message.get('kind') == 'text' and any(
+        mime in (DOCX_MIME, PPTX_MIME, XLSX_MIME, 'application/pdf') for mime in mimes)
+    school_image = source and source.get('platform') in ('qq', 'wechat') and (message.get('kind') == 'image' or message.get('kind') == 'text' and any(mime in ('image/jpeg','image/png','image/webp') for mime in mimes))
+    return SCHOOL_MATERIAL if ocr or native_file or school_image else ''
 
 
 # Linked DOCX originals are read in memory as plain body text. A file that cannot be read
 # completely is refused, so a draft never claims more than the text it was given.
 DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 DOCX_LIMITS = dict(entries=200, total=8 * 1024 * 1024, member=4 * 1024 * 1024, chars=10000)
 _W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
 _DOCX_SKIP = frozenset(_W + n for n in ('pPr', 'rPr', 'tblPr', 'tblPrEx', 'tblGrid', 'trPr', 'tcPr', 'sectPr',
@@ -320,8 +326,8 @@ def _docx_children(node, tag):
             yield child
 
 
-def _docx_style_toggles(root, styles):
-    """True when document defaults, a default style or a style the body names (with its parents) hides or strikes text."""
+def _docx_style_toggles(root, styles, *, strict_numbering=False):
+    """Check effective defaults and body styles, including inherited numbering when required."""
     table = {s.get(_W + 'styleId'): s for s in styles.iter(_W + 'style')}
     used = {e.get(_W + 'val') for e in root.iter() if e.tag in (_W + 'pStyle', _W + 'rStyle', _W + 'tblStyle')}
     pending = [e for e in styles if e.tag != _W + 'style' or e.get(_W + 'styleId') in used
@@ -332,6 +338,8 @@ def _docx_style_toggles(root, styles):
         if id(node) not in seen:
             seen.add(id(node))
             for e in node.iter():
+                if strict_numbering and e.tag == _W + 'numPr':
+                    return True
                 if e.tag in _DOCX_TOGGLES and e.get(_W + 'val', 'true').lower() not in ('0', 'false', 'off'):
                     return True
                 if e.tag in (_W + 'basedOn', _W + 'link') and e.get(_W + 'val') in table:
@@ -339,7 +347,7 @@ def _docx_style_toggles(root, styles):
     return False
 
 
-def docx_text(body):
+def docx_text(body, *, strict_numbering=False):
     """Body paragraphs and table rows of one DOCX; never unpacked to disk, executed or fetched."""
     try:
         with zipfile.ZipFile(io.BytesIO(body)) as z:
@@ -375,6 +383,7 @@ def docx_text(body):
     for e in root.iter():
         on = e.get(_W + 'val', 'true').lower() not in ('0', 'false', 'off')
         require(e.tag not in _DOCX_UNREAD and not (e.tag in _DOCX_TOGGLES and on), 'draft_docx_unsupported')
+        require(not strict_numbering or e.tag != _W + 'numPr', 'draft_docx_unsupported')
     # Hidden or struck text can also come from a style; one in effect for the body would be read as plain text.
     named = {'word/styles.xml'} & set(parts)
     for e in _docx_xml(parts.get('word/_rels/document.xml.rels') or b'<r/>').iter():
@@ -382,7 +391,7 @@ def docx_text(body):
             target = e.get('Target', '')
             named.add(target[1:] if target.startswith('/') else 'word/' + target)
     for name in named:
-        require(name in parts and not _docx_style_toggles(root, _docx_xml(parts[name])), 'draft_docx_unsupported')
+        require(name in parts and not _docx_style_toggles(root, _docx_xml(parts[name]), strict_numbering=strict_numbering), 'draft_docx_unsupported')
     lines = []
     for block in root[0]:
         if block.tag == _W + 'p':
@@ -417,18 +426,11 @@ def _docx_pdf_output(path, limit):
         raise MediaError('process_output_limit' if path.stat().st_size > limit else 'process_failed') from None
 
 
-def docx_pdf(body, *, soffice=None):
-    """PDF bytes of one real DOCX rendered locally by LibreOffice in a throwaway profile with macros locked.
-
-    A pure function: nothing is stored, queued, fetched or written to the database. Word/WPS-exported DOCX with
-    embedded PNG/JPEG pictures, tables, formulas and ordinary layout is accepted; binary .doc/.wps, macros,
-    OLE/ActiveX objects, active fields/subdocuments, external relationships (hyperlinks included), other media, fonts and damaged archives
-    are refused. The result is LibreOffice's rendering, not Word-exact pagination, sound or animation."""
-    started = time.monotonic()
+def docx_pdf_preflight(body, *, started=None):
+    """Check whether a DOCX is safe for the existing local page conversion, without converting it."""
+    started = time.monotonic() if started is None else started
     require(isinstance(body, (bytes, bytearray)) and len(body) > 0, 'draft_docx_rejected')
     require(len(body) <= MAX_BYTES, 'media_too_large')
-    soffice = soffice or shutil.which('soffice')
-    require(isinstance(soffice, str) and soffice, 'process_unavailable')
     def inspect(name):
         name = name.lower()
         return True if name.endswith(('.xml', '.rels')) else 8 if name.endswith(tuple(_DOCX_PDF_MEDIA)) else None
@@ -457,6 +459,20 @@ def docx_pdf(body, *, soffice=None):
     root = _docx_xml(parts.get('word/document.xml', b''))
     require(root.tag == _W + 'document' and not any(e.tag.rsplit('}', 1)[-1] in _DOCX_PDF_OBJECTS for e in root.iter()),
             'draft_docx_rejected')
+    require(time.monotonic() - started <= DOCX_PDF_TIMEOUT, 'process_timeout')
+
+
+def docx_pdf(body, *, soffice=None):
+    """PDF bytes of one checked DOCX rendered locally by LibreOffice in a throwaway profile with macros locked.
+
+    A pure function: nothing is stored, queued, fetched or written to the database. Word/WPS-exported DOCX with
+    embedded PNG/JPEG pictures, tables, formulas and ordinary layout is accepted; binary .doc/.wps, macros,
+    OLE/ActiveX objects, active fields/subdocuments, external relationships (hyperlinks included), other media, fonts and damaged archives
+    are refused. The result is LibreOffice's rendering, not Word-exact pagination, sound or animation."""
+    started = time.monotonic()
+    docx_pdf_preflight(body, started=started)
+    soffice = soffice or shutil.which('soffice')
+    require(isinstance(soffice, str) and soffice, 'process_unavailable')
     remaining = DOCX_PDF_TIMEOUT - (time.monotonic() - started)
     require(remaining > 0, 'process_timeout')
     with tempfile.TemporaryDirectory(prefix='docx-pdf-') as temporary:
@@ -469,6 +485,171 @@ def docx_pdf(body, *, soffice=None):
     return pdf
 
 
+PPTX_PDF_LIMITS = dict(entries=500, total=100 * 1024 * 1024, member=20 * 1024 * 1024)
+PPTX_PDF_TIMEOUT = 60
+_PPTX_MAIN = PPTX_MIME + '.main+xml'
+_PPTX_BLOCKED = ('vba', 'macro', 'ole', 'activex', 'embedding', 'noteslide', 'comment', 'chart')
+
+
+def pptx_pdf_preflight(body, *, started=None):
+    """Check one static picture/slide PPTX before local conversion; return its declared slide count."""
+    started = time.monotonic() if started is None else started
+    require(isinstance(body, (bytes, bytearray)) and 0 < len(body) <= MAX_BYTES, 'media_too_large')
+    def inspect(name):
+        low = name.lower()
+        return True if low.endswith(('.xml', '.rels')) else 8 if low.endswith(tuple(_DOCX_PDF_MEDIA)) else None
+    try:
+        names, parts = family_print.office_check(bytes(body), PPTX_PDF_LIMITS, inspect,
+                                                  deadline=started + PPTX_PDF_TIMEOUT)
+    except family_print.OfficeError as error:
+        raise MediaError('process_timeout' if error.reason == 'timeout' else 'draft_pptx_rejected') from None
+    low = [name.lower() for name in names]
+    slides = [name for name in names if re.fullmatch(r'ppt/slides/slide[1-9][0-9]*\.xml', name)]
+    require('ppt/presentation.xml' in names and '[Content_Types].xml' in names and 0 < len(slides) <= 200,
+            'draft_pptx_rejected')
+    for name in low:
+        require(not any(block in name for block in _PPTX_BLOCKED) and
+                name.endswith(('.xml', '.rels', '/', '.png', '.jpg', '.jpeg')),
+                'draft_pptx_rejected')
+    for name, data in parts.items():
+        if name.lower().endswith(('.xml', '.rels')):
+            require(b'\x00' not in data and b'<!DOCTYPE' not in data and b'<!ENTITY' not in data,
+                    'draft_pptx_rejected')
+            try: root = ElementTree.fromstring(data)
+            except ElementTree.ParseError: raise MediaError('draft_pptx_rejected') from None
+            require(not any(e.tag.rsplit('}', 1)[-1].lower() in ('oleobj', 'control', 'audio', 'video', 'custdata')
+                            or e.tag.rsplit('}', 1)[-1] == 'fld' and e.get('type') != 'slidenum' for e in root.iter()),
+                    'draft_pptx_rejected')
+        else:
+            require(data.startswith(_DOCX_PDF_MEDIA[Path(name.lower()).suffix]), 'draft_pptx_rejected')
+    types = ElementTree.fromstring(parts['[Content_Types].xml'])
+    require([e.get('ContentType') for e in types.iter() if e.get('PartName') == '/ppt/presentation.xml'] == [_PPTX_MAIN],
+            'draft_pptx_rejected')
+    require(not any(block in e.get('ContentType', '').lower() for e in types.iter() for block in _PPTX_BLOCKED),
+            'draft_pptx_rejected')
+    presentation = ElementTree.fromstring(parts['ppt/presentation.xml'])
+    require(sum(e.tag.rsplit('}', 1)[-1] == 'sldId' for e in presentation.iter()) == len(slides),
+            'draft_pptx_rejected')
+    require(time.monotonic() - started <= PPTX_PDF_TIMEOUT, 'process_timeout')
+    return len(slides)
+
+
+def pptx_pdf(body, *, soffice=None):
+    """Convert one preflighted static PPTX to bounded PDF in a throwaway, macro-locked local profile."""
+    started = time.monotonic()
+    pptx_pdf_preflight(body, started=started)
+    soffice = soffice or shutil.which('soffice')
+    require(isinstance(soffice, str) and soffice, 'process_unavailable')
+    remaining = PPTX_PDF_TIMEOUT - (time.monotonic() - started)
+    require(remaining > 0, 'process_timeout')
+    with tempfile.TemporaryDirectory(prefix='pptx-pdf-') as temporary:
+        try:
+            pdf = family_print.office_convert(bytes(body), '.pptx', Path(temporary).resolve(), soffice,
+                                              timeout=remaining, limit=MAX_BYTES, read=_docx_pdf_output)
+        except family_print.OfficeError as error:
+            raise MediaError(_DOCX_PDF_CODES.get(error.reason, 'process_failed')) from None
+    require(time.monotonic() - started <= PPTX_PDF_TIMEOUT, 'process_timeout')
+    return pdf
+
+
+XLSX_PDF_TIMEOUT = 60
+_XLSX_LIMITS = dict(entries=200, total=20 * 1024 * 1024, member=4 * 1024 * 1024)
+
+
+def xlsx_pdf_preflight(body, *, started=None):
+    """Accept only one visible populated sheet of plain text/numbers; return cells to verify after rendering."""
+    started = time.monotonic() if started is None else started
+    require(isinstance(body, (bytes, bytearray)) and 0 < len(body) <= MAX_BYTES, 'draft_xlsx_rejected')
+    try:
+        names, parts = family_print.office_check(bytes(body), _XLSX_LIMITS,
+            lambda name: name.lower().endswith(('.xml', '.rels')), deadline=started + XLSX_PDF_TIMEOUT)
+    except family_print.OfficeError as error:
+        raise MediaError('process_timeout' if error.reason == 'timeout' else 'draft_xlsx_rejected') from None
+    allowed = {'[Content_Types].xml', '_rels/.rels', 'xl/_rels/workbook.xml.rels',
+               'xl/workbook.xml', 'xl/styles.xml', 'xl/sharedStrings.xml', 'xl/theme/theme1.xml',
+               'docProps/app.xml', 'docProps/core.xml', 'docProps/custom.xml'}
+    require(all(name.endswith('/') or name in allowed or
+                re.fullmatch(r'xl/worksheets/sheet[1-9][0-9]*\.xml', name) for name in names), 'draft_xlsx_rejected')
+    require({'[Content_Types].xml', 'xl/workbook.xml', 'xl/styles.xml', 'xl/sharedStrings.xml',
+             'xl/_rels/workbook.xml.rels'} <= set(names), 'draft_xlsx_rejected')
+    xml = {}
+    for name, data in parts.items():
+        require(b'\x00' not in data and b'<!DOCTYPE' not in data and b'<!ENTITY' not in data, 'draft_xlsx_rejected')
+        try: xml[name] = ElementTree.fromstring(data)
+        except ElementTree.ParseError: raise MediaError('draft_xlsx_rejected') from None
+    local = lambda element: element.tag.rsplit('}', 1)[-1]
+    types = xml['[Content_Types].xml']
+    require([e.get('ContentType') for e in types if e.get('PartName') == '/xl/workbook.xml'] ==
+            [XLSX_MIME + '.main+xml'], 'draft_xlsx_rejected')
+    workbook = xml['xl/workbook.xml']
+    require(not any(local(e) == 'definedName' for e in workbook.iter()), 'draft_xlsx_rejected')
+    sheets = [e for e in workbook.iter() if local(e) == 'sheet']
+    relations = {e.get('Id'): e.get('Target') for e in xml['xl/_rels/workbook.xml.rels']
+                 if e.get('Type', '').endswith('/worksheet')}
+    require(0 < len(sheets) <= 20 and len(relations) == len(sheets)
+            and all(e.get('state', 'visible') == 'visible' for e in sheets), 'draft_xlsx_rejected')
+    strings = []
+    for item in xml['xl/sharedStrings.xml']:
+        require(local(item) == 'si' and len(item) == 1 and local(item[0]) == 't', 'draft_xlsx_rejected')
+        strings.append(item[0].text or '')
+    cell_xfs = next((e for e in xml['xl/styles.xml'].iter() if local(e) == 'cellXfs'), None)
+    require(cell_xfs is not None and all(e.get('numFmtId', '0') == '0' for e in cell_xfs), 'draft_xlsx_rejected')
+    values, populated, seen = [], 0, set()
+    for sheet in sheets:
+        rid = next((v for k, v in sheet.attrib.items() if k.endswith('}id')), None)
+        target = relations.get(rid, '')
+        require(re.fullmatch(r'worksheets/sheet[1-9][0-9]*\.xml', target) is not None
+                and target not in seen and 'xl/' + target in xml, 'draft_xlsx_rejected')
+        seen.add(target); root = xml['xl/' + target]; cells = []
+        for e in root.iter():
+            tag = local(e)
+            require(tag not in {'f', 'hyperlink', 'drawing', 'legacyDrawing', 'mergeCell', 'tablePart',
+                                'conditionalFormatting', 'dataValidation', 'autoFilter', 'sheetProtection',
+                                'pivotTable', 'oleObjects'} and not (tag in {'row', 'col'} and
+                                e.get('hidden', 'false').lower() in ('1', 'true', 'on'))
+                    and not (tag == 'headerFooter' and ''.join(e.itertext()).strip()), 'draft_xlsx_rejected')
+            if tag == 'c':
+                style = e.get('s', '0')
+                require(e.get('t', 'n') in ('s', 'n') and style.isdigit() and int(style) < len(cell_xfs),
+                        'draft_xlsx_rejected')
+                raw = next((v.text for v in e if local(v) == 'v'), None)
+                if raw is not None:
+                    if e.get('t') == 's':
+                        require(raw.isdigit() and int(raw) < len(strings), 'draft_xlsx_rejected')
+                        raw = strings[int(raw)]
+                    cells.append(raw)
+        if cells: populated += 1; values.extend(cells)
+    require({'xl/' + target for target in seen} ==
+            {name for name in names if name.startswith('xl/worksheets/') and name.endswith('.xml')},
+            'draft_xlsx_rejected')
+    require(populated == 1 and 0 < len(values) <= 1000 and sum(len(v) for v in values) <= 10000,
+            'draft_xlsx_rejected')
+    require(time.monotonic() - started < XLSX_PDF_TIMEOUT, 'process_timeout')
+    return values
+
+
+def xlsx_pdf(body, *, soffice=None, pdftotext=None):
+    """Convert a checked simple workbook, then refuse if any source cell is absent from the visible PDF text."""
+    started = time.monotonic(); values = xlsx_pdf_preflight(body, started=started)
+    soffice, pdftotext = soffice or shutil.which('soffice'), pdftotext or shutil.which('pdftotext')
+    require(soffice and pdftotext, 'process_unavailable')
+    with tempfile.TemporaryDirectory(prefix='xlsx-pdf-') as temporary:
+        try:
+            pdf = family_print.office_convert(bytes(body), '.xlsx', Path(temporary).resolve(), soffice,
+                timeout=XLSX_PDF_TIMEOUT - (time.monotonic() - started), limit=MAX_BYTES, read=_docx_pdf_output)
+        except family_print.OfficeError as error:
+            raise MediaError(_DOCX_PDF_CODES.get(error.reason, 'process_failed')) from None
+        remaining = XLSX_PDF_TIMEOUT - (time.monotonic() - started)
+        require(remaining > 0, 'process_timeout')
+        visible = bounded_process([pdftotext, '-layout', str(Path(temporary) / 'source.pdf'), '-'],
+                                  dict(os.environ), remaining, MAX_BYTES).decode('utf-8', 'replace')
+    visible = re.sub(r'\s+', '', visible).lower()
+    require(all(re.sub(r'\s+', '', value).lower() in visible for value in values if value.strip()),
+            'draft_xlsx_rejected')
+    require(time.monotonic() - started < XLSX_PDF_TIMEOUT, 'process_timeout')
+    return pdf
+
+
 def draft_input(store, c, source, message):
     import family_llm
     from family_agent import _json
@@ -476,8 +657,8 @@ def draft_input(store, c, source, message):
     links = [r['upload_id'] for r in c.execute(
         'SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=? ORDER BY upload_id',
         (source['id'], message['id']))]
-    kind = _material_kind(message); screenshot = None
-    if kind:
+    screenshot_kind = _material_kind(message); screenshot = None
+    if screenshot_kind:
         # Already routed to school task drafts; the screenshot alone never becomes a study record.
         # Only explicitly linked extra originals are read, as school material for parent review.
         screenshot = re.fullmatch(r'fragment-([a-f0-9]{40})', message.get('id', ''))
@@ -488,11 +669,15 @@ def draft_input(store, c, source, message):
         return None
     _authorized(store, c, source, message)
     require(len(links) <= 3, 'draft_too_many_originals')
+    rows = [(ident, store._message_upload(c, source['child_id'], ident)) for ident in links]
+    kind = _material_kind(message, source, [row['mime'] for _, row in rows])
+    if kind and any(row['mime'] in (PPTX_MIME, XLSX_MIME) or
+                    (not screenshot_kind and row['mime'] == 'application/pdf') for _, row in rows):
+        return None  # The existing bounded PDF page path owns this original.
     child = next(p for p in store.profiles(c) if p['id'] == source['child_id'])
-    images, documents, originals = [], [], []
-    for ident in links:
-        row = store._message_upload(c, source['child_id'], ident)
-        docx = bool(kind) and row['mime'] == DOCX_MIME  # Only school material may have text originals.
+    images, documents, originals, image_ids, document_ids = [], [], [], [], []
+    for ident, row in rows:
+        docx = bool(kind) and row['mime'] == DOCX_MIME and (screenshot_kind or source.get('platform')=='qq' and message['kind']=='text')  # Only school material may have text originals.
         require(docx or row['mime'] in ('image/jpeg', 'image/png', 'image/webp'), 'draft_image_required')
         body = read_file(store.data / 'uploads' / ident)
         require(len(body) == row['size'], 'media_file_changed')
@@ -502,8 +687,10 @@ def draft_input(store, c, source, message):
             continue  # The same capture uploaded again under another ID is still not an original.
         if docx:  # Every selected original must be readable in full, or nothing is sent.
             documents.append(dict(name=str(row['name'] or ''), text=docx_text(body)))
+            document_ids.append(ident)
         else:
             images.append(dict(mime=row['mime'], data=body))
+            image_ids.append(ident)
         originals.append([ident, row['mime'], digest])
     if not originals:
         return None
@@ -511,34 +698,72 @@ def draft_input(store, c, source, message):
     words = text + ''.join(d['name'] + d['text'] for d in documents)
     require(not documents or len(words) <= family_llm.MAX_TEXT, 'draft_text_too_long')  # Never cut to fit.
     require(sum(len(i['data']) for i in images) + len(words.encode()) <= 20 * 1024 * 1024, 'draft_originals_too_large')
-    # The legacy fingerprint is unchanged; a typed draft can never match a saved draft of another type.
-    fingerprint = hashlib.sha256(json.dumps(([2, kind] if kind else [1]) + [source, child, message, originals],
-        ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-    return dict(fingerprint=fingerprint, images=images, text=text, child=child['name'],
-                upload_ids=[o[0] for o in originals], kind=kind, documents=documents)
+    original_ids=image_ids+document_ids if kind and (images or documents) else []
+    def fingerprint(revision):
+        return hashlib.sha256(json.dumps(([revision, kind] if kind else [1]) + [source, child, message, originals],
+            ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    legacy=fingerprint(3);notes=fingerprint(4) if original_ids else legacy;current=fingerprint(5) if original_ids else legacy
+    return dict(fingerprint=current, legacy_fingerprint=legacy, notes_fingerprint=notes, images=images, text=text, child=child['name'],
+                upload_ids=[o[0] for o in originals], kind=kind, documents=documents, original_ids=original_ids)
 
 
 def draft_key(source, message):
     return 'message-draft:' + hashlib.sha256(json.dumps([source['id'], message['id']]).encode()).hexdigest()[:40]
 
 
-def _saved_draft(row, value):
+def _saved_draft(row, value, *, legacy=False):
     """Show a saved draft only for the same fingerprint and, when typed, the same checked shape."""
     import family_llm
-    if row is None or row['fingerprint'] != value['fingerprint']:
+    expected=(value['legacy_fingerprint'],value['notes_fingerprint']) if legacy else (value['fingerprint'],)
+    if row is None or row['fingerprint'] not in expected or legacy and not value['original_ids']:
         return None
-    draft = json.loads(row['payload'])
-    if not value['kind']:
-        return draft
     try:
+        draft = json.loads(row['payload'])
+        if not value['kind']: return draft
         require(isinstance(draft, dict) and draft.pop('kind', None) == value['kind'], 'draft_kind_mismatch')
-        return family_llm.validate_school_material(draft)
-    except (MediaError, family_llm.LLMDraftError):
+        draft.pop('previous_aggregate',None)  # Retained verbatim for history; never used as action evidence.
+        draft.pop('previous_notes',None)
+        ids=() if legacy and row['fingerprint']==value['legacy_fingerprint'] else value['original_ids']
+        return family_llm.validate_school_material(draft,original_ids=ids,require_requirements=bool(ids) and not legacy)
+    except (MediaError, family_llm.LLMDraftError,ValueError,TypeError):
         return None
+
+
+def _draft_decisions(c, source, message):
+    """Only undecided evidence is automatically reread; decided tasks and feedback stay intact."""
+    ref='message:'+source['id']+':'+message['id'];found=[]
+    for row in c.execute("SELECT id,state,updated,evidence FROM agent_items WHERE kind='school' AND child_id=? AND state!='superseded' ORDER BY id",(source['child_id'],)):
+        if any(q['ref']==ref for q in json.loads(row['evidence'])):
+            found.append([row['id'],row['state'],row['updated']])
+    return found
+
+
+def _draft_undecided(decisions):
+    return not decisions or any(row[1]=='pending' for row in decisions)
+
+
+def school_evidence(store, c, source, message):
+    """This message's current linked school-original interpretation; no model call or write."""
+    row = c.execute('SELECT * FROM agent_message_drafts WHERE source_id=? AND message_id=?',
+                    (source['id'], message['id'])).fetchone()
+    if row is None: return None
+    try:
+        value = draft_input(store, c, source, message)
+        if value is None or value['kind'] != SCHOOL_MATERIAL: return None
+        draft = _saved_draft(row, value)
+    except (MediaError, OSError, ValueError): return None
+    if draft is None: return None
+    count=re.search(r'\n\[图片原件：(\d+)份，内容未读\]$',message.get('text',''))
+    complete=message['kind']=='image' or not message['unread'] or bool(count and int(count[1])==len(value['images'])==len(value['upload_ids']))
+    return dict(fingerprint=value['fingerprint'], draft=draft, updated=row['updated'], complete=complete,
+                upload_ids=value['upload_ids'])
 
 
 def draft_view(store, c, source, message):
-    kind = _material_kind(message); typed = dict(kind=kind) if kind else {}
+    mimes = [r['mime'] for r in c.execute('SELECT u.mime FROM agent_message_attachments a JOIN uploads u ON u.id=a.upload_id '
+                                      'WHERE a.source_id=? AND a.message_id=?', (source['id'], message['id']))] \
+        if source.get('platform') == 'qq' and message.get('kind') == 'text' else []
+    kind = _material_kind(message, source, mimes); typed = dict(kind=kind) if kind else {}
     try:
         value = draft_input(store, c, source, message)
         if value is None:
@@ -546,7 +771,7 @@ def draft_view(store, c, source, message):
     except Exception as error:
         explanation = {'draft_image_required':'补充原件中有PDF等目前尚不支持自动整理的文件，本次未读取任何原件；原件保留，可手动核对。' if kind
                            else '目前自动整理支持JPG、PNG、WebP图片；其他文件可保留并手动记录。',
-                       'draft_too_many_originals':'一次最多整理3张原件，请分次关联或手动记录。',
+                       'draft_too_many_originals':'一次最多整理3份原件，请分次关联或手动记录。',
                        'draft_docx_rejected':'DOCX原件已加密、损坏、超出读取限额或含宏、外部链接，本次未读取任何原件；原件保留，请打开原件核对。',
                        'draft_docx_unsupported':'DOCX原件含图片、公式、页眉页脚、批注、修订等暂不能完整读取的内容，为避免遗漏，本次未读取任何原件；原件保留，请打开原件核对。',
                        'draft_text_too_long':'DOCX正文与通知文字合计超过12000字，为避免截断，本次未读取任何原件；可拆分后关联或打开原件核对。',
@@ -558,6 +783,10 @@ def draft_view(store, c, source, message):
     draft = _saved_draft(row, value)
     if draft is not None:
         return dict(state='ready', draft=draft, updated=row['updated'], upload_ids=value['upload_ids'], **typed)
+    old=_saved_draft(row,value,legacy=True)
+    if old is not None:
+        return dict(state='ready',draft=old,updated=row['updated'],upload_ids=value['upload_ids'],legacy=True,
+                    explanation='原草稿保留为历史展示，尚无已核对的完整独立行动要求，不作为新行动的完整依据；仅未决定的新证据会在后台重新整理。',**typed)
     key = draft_key(source, message)
     job = c.execute('SELECT * FROM agent_jobs WHERE id=?', (key,)).fetchone()
     current = hashlib.sha256(json.dumps({'material': value['fingerprint']}, ensure_ascii=False,
@@ -577,10 +806,10 @@ def prepare_draft(store, now):
         if not config['enabled']:
             return dict(used=0, failed=0)
         sources = {s['id']: s for s in config['sources'] if s['enabled']}
-        # ponytail: inspect at most 200 linked messages; add an indexed queue if this family backlog grows.
+        # ponytail: 500 linked messages cover the current backfill; add an indexed queue if it grows beyond this.
         rows = c.execute("""SELECT m.source_id,m.payload FROM agent_messages m WHERE EXISTS
             (SELECT 1 FROM agent_message_attachments a WHERE a.source_id=m.source_id AND a.message_id=m.id)
-            ORDER BY m.rowid DESC LIMIT 200""").fetchall()
+            ORDER BY m.rowid DESC LIMIT 500""").fetchall()
     for row in rows:
         source = sources.get(row['source_id'])
         if source is None:
@@ -591,32 +820,56 @@ def prepare_draft(store, now):
                 value = draft_input(store, c, source, message)
                 if not value:
                     continue
-                old = c.execute('SELECT fingerprint FROM agent_message_drafts WHERE source_id=? AND message_id=?',
+                old = c.execute('SELECT * FROM agent_message_drafts WHERE source_id=? AND message_id=?',
                                 (source['id'], message['id'])).fetchone()
-                if old and old['fingerprint'] == value['fingerprint']:
+                if _saved_draft(old,value) is not None:
                     continue
+                decisions=_draft_decisions(c,source,message) if value['original_ids'] else []
+                if not _draft_undecided(decisions): continue
         except Exception:
             continue  # No model receives unreadable, unsupported, or foreign originals.
         key = draft_key(source, message)
         fp = store._job(key, {'material': value['fingerprint']}, now, model=True)
         if fp:
-            selected = (source, message, value, key, fp)
+            selected = (source, message, value, key, fp, decisions)
             break
     if selected is None:
         return dict(used=0, failed=0)
-    source, message, value, key, fp = selected
+    source, message, value, key, fp, decisions = selected
+    # Claiming a slot and sending bytes are separate steps: a changed binding or decision consumes no model call.
     try:
-        typed = dict(school_material=True, documents=value['documents']) if value['kind'] else {}
+        with store._db() as c:
+            current=draft_input(store,c,source,message)
+            job=c.execute('SELECT fingerprint FROM agent_jobs WHERE id=?',(key,)).fetchone()
+            require(current is not None and current['fingerprint']==value['fingerprint'] and job and job['fingerprint']==fp
+                    and (not value['original_ids'] or _draft_decisions(c,source,message)==decisions), 'draft_material_changed')
+    except Exception:
+        with store._db() as c:
+            c.execute("UPDATE agent_jobs SET done=1,error='',next_try='',fingerprint=? WHERE id=? AND fingerprint=?",('discarded:'+fp,key,fp))
+        return dict(used=0,failed=0)
+    try:
+        typed = dict(school_material=True, documents=value['documents'],original_ids=value['original_ids']) if value['kind'] else {}
         result = family_llm.extract_draft(value['text'], value['images'], target_child=value['child'], timeout=45,
                                           data_path=store.data, **typed)
         if value['kind']:  # Re-checked here: no score, mastery or record field is ever persisted for school material.
-            result = dict(kind=value['kind'], **family_llm.validate_school_material(result))
+            result = dict(kind=value['kind'], **family_llm.validate_school_material(result,original_ids=value['original_ids'],require_requirements=bool(value['original_ids'])))
         with store._db() as c:
             c.execute('BEGIN IMMEDIATE')
             current = draft_input(store, c, source, message)
             job = c.execute('SELECT fingerprint FROM agent_jobs WHERE id=?', (key,)).fetchone()
             require(current is not None and current['fingerprint'] == value['fingerprint']
-                    and job is not None and job['fingerprint'] == fp, 'draft_material_changed')
+                    and job is not None and job['fingerprint'] == fp
+                    and (not value['original_ids'] or _draft_decisions(c,source,message)==decisions), 'draft_material_changed')
+            old=c.execute('SELECT * FROM agent_message_drafts WHERE source_id=? AND message_id=?',(source['id'],message['id'])).fetchone()
+            if value['original_ids'] and old:
+                try: previous=json.loads(old['payload'])
+                except (ValueError,TypeError): previous=None
+                if isinstance(previous,dict):
+                    for name in ('previous_aggregate','previous_notes'):
+                        if name in previous:result[name]=previous[name]
+                if _saved_draft(old,value,legacy=True) is not None:
+                    name='previous_aggregate' if old['fingerprint']==value['legacy_fingerprint'] else 'previous_notes'
+                    result[name]=dict(fingerprint=old['fingerprint'],payload=old['payload'],updated=old['updated'])
             c.execute('INSERT OR REPLACE INTO agent_message_drafts VALUES(?,?,?,?,?)',
                       (source['id'], message['id'], value['fingerprint'], json.dumps(result, ensure_ascii=False), now.isoformat()))
             c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=? AND fingerprint=?", (key, fp))

@@ -112,6 +112,11 @@ class Store:
                     context_version INTEGER NOT NULL, expires REAL NOT NULL DEFAULT 0,
                     created TEXT NOT NULL, UNIQUE(actor,child_id,request_key));
             ''')
+            # R19/R26: an optional explicit parent link to one current learning goal; older tasks stay unlinked.
+            if 'goal_id' not in {col[1] for col in c.execute('PRAGMA table_info(guided_sessions)')}:
+                c.execute('BEGIN IMMEDIATE')
+                if 'goal_id' not in {col[1] for col in c.execute('PRAGMA table_info(guided_sessions)')}:
+                    c.execute('ALTER TABLE guided_sessions ADD COLUMN goal_id TEXT')
 
     @contextmanager
     def _db(self):
@@ -176,6 +181,20 @@ class Store:
             for ident in ids:
                 c.execute('INSERT OR IGNORE INTO reading_uploads VALUES (?,?)', (ident, child['id']))
         return ids
+
+    def _goals(self, c):
+        """Current learning goals as the goals page lists them; a task joins one only by the parent's explicit choice."""
+        if not _exists(c, 'agent_items'):
+            return []
+        import family_goals  # lazily: the goals module loads the agent stack
+        children, goals = {p['id'] for p in self.app.profiles(c)}, []
+        for row in c.execute("SELECT * FROM agent_items WHERE kind='care' AND state IN ('draft','accepted') ORDER BY updated DESC,id"):
+            plan = json.loads(row['plan'] or '{}')
+            if row['child_id'] in children and plan and family_goals._root(row):
+                meta = plan.get('learning', {})
+                goals.append(dict(id=row['id'], child_id=row['child_id'], title=meta.get('title') or plan.get('goal', row['title']),
+                                  subject=meta.get('subject', ''), paused=plan.get('lifecycle') == 'paused'))
+        return goals
 
     def _metadata(self, c, ident):
         row = c.execute('SELECT id,name,size,mime FROM uploads WHERE id=?', (ident,)).fetchone()
@@ -388,12 +407,14 @@ class Store:
                     actions += ['resume', 'close']
                 if row['state'] in ('draft', 'active', 'paused'):
                     actions += ['guide_draft', 'guide_save']
-                value.update({k: row[k] for k in ('child_id', 'reference_text', 'related_record_id')})
+                value.update({k: row[k] for k in ('child_id', 'reference_text', 'related_record_id', 'goal_id')})
                 value.update(shared=bool(row['shared']), reference_checked=bool(row['reference_checked']), editable=not bool(row['ever_shared']))
                 value.update(plan=self._current_plan(c, row['id']), plan_draft=self._plan_draft(c, row, events))
             value['allowed_actions'] = actions
             sessions.append(value)
-        return dict(ok=True, sessions=sessions)
+        if self.authorize:
+            return dict(ok=True, sessions=sessions)
+        return dict(ok=True, sessions=sessions, goals=[g for g in self._goals(c) if child_id is None or g['child_id'] == child_id])
 
     def snapshot(self, child_id=None):
         with self._db() as c:
@@ -417,7 +438,7 @@ class Store:
         if self.authorize:
             raise GuidedError('题目与参考由家长核对后分享', 403, 'parent_required')
         _fields(obj, ('id', 'child_id', 'version', 'request_key', 'title', 'subject', 'question_text', 'question_attachments',
-                      'reference_text', 'reference_checked', 'related_record_id', 'practice_relation', 'shared'))
+                      'reference_text', 'reference_checked', 'related_record_id', 'practice_relation', 'goal_id', 'shared'))
         with self._db() as c:
             c.execute('BEGIN IMMEDIATE')
             child = self._child(c, obj.get('child_id'))
@@ -451,13 +472,16 @@ class Store:
             practice = _text(obj, 'practice_relation', 30)
             if practice not in self.app.PRACTICE_RELATIONS:
                 raise GuidedError('题目关系不正确；不知道时请留空')
+            goal_id = obj.get('goal_id')
+            if goal_id is not None and not any(g['id'] == goal_id and g['child_id'] == child['id'] for g in self._goals(c)):
+                raise GuidedError('所选学习目标已不可用或不属于这位孩子；输入已保留，请重新选择或不关联。', 409, 'goal_unavailable')
             now = dt.datetime.now(TZ).isoformat()
             row = dict(id=previous['id'] if previous else secrets.token_hex(16), child_id=child['id'],
                        version=previous['version'] + 1 if previous else 1, state='active' if shared else 'draft',
                        shared=int(shared), ever_shared=int(shared), title=title, subject=_text(obj, 'subject', 80),
                        question_text=_text(obj, 'question_text', 4000), question_attachments=_json(self._attachments(c, child, obj.get('question_attachments', []))),
                        reference_text=reference, reference_checked=int(checked), related_record_id=relation,
-                       practice_relation=practice, created=previous['created'] if previous else now, updated=now)
+                       practice_relation=practice, goal_id=goal_id, created=previous['created'] if previous else now, updated=now)
             if previous:
                 self._invalidate(c, row['id'])
                 fields = [k for k in row if k != 'id']

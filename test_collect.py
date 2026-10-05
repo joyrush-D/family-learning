@@ -105,6 +105,45 @@ class FakeClient:
 
 
 class CollectorTests(unittest.TestCase):
+    def test_qq_publication_keeps_account_identity_and_verified_group_order(self):
+        import family_qq_napcat as napcat
+        cfg=dict(group_id='10002',bridge=dict(native_id='99',legacy_id='98'))
+        native=dict(group_id=10002,message_id=101,real_seq=17,time=1700000017,
+            sender=dict(user_id=20001,card='示例英语老师',nickname='示例昵称'),
+            message=[dict(type='text',data=dict(text='英语：朗读课文。'))])
+        with patch.object(napcat,'request',return_value=dict(messages=[native])) as transport:
+            envelope=napcat.history(cfg)
+            transport.assert_called_once_with(cfg,'get_group_msg_history',dict(group_id=10002,count=20))
+        self.assertEqual(envelope['data']['messages'][0]['sender']['user_id'],'20001',
+                         'the product adapter must retain identity before collector normalization')
+        actual=collect.qq_native_page(envelope,QQ_SOURCE)[0][2]
+        self.assertEqual((actual['sender_id'],actual['message_order']),('20001','17'))
+        raw=qq_event(17);raw['sender'].update(user_id=20001,card='示例英语老师')
+        row=collect.qq_native_page(qq_envelope([raw]),QQ_SOURCE)[0][2]
+        self.assertEqual((row['sender'],row['sender_id'],row['message_order']),('示例英语老师','20001','17'))
+        raw['sender']['user_id']='not-a-native-id'
+        with self.assertRaises(collect.CollectError):collect.qq_native_page(qq_envelope([raw]),QQ_SOURCE)
+        raw['sender'].pop('user_id')
+        self.assertNotIn('sender_id',collect.qq_native_page(qq_envelope([raw]),QQ_SOURCE)[0][2])
+        with tempfile.TemporaryDirectory() as folder, patch.dict(collect.os.environ,{'FAMILY_DATA':folder}), \
+             patch.object(collect,'QQ_MAX_PAGES',collect.QQ_MAX_PAGES), patch.object(collect,'Client') as client, \
+             patch.object(collect,'qq_history',return_value=([actual],'101',actual['time'])):
+            client.return_value.request.return_value=dict(enabled=True,sources=[dict(QQ_SOURCE,check_id='a'*24)])
+            client.return_value.ingest.return_value=dict(inserted=1)
+            result=napcat.collect_once(dict(cfg,source_id=QQ_SOURCE['id'],app_url=CONFIG['app_url']))
+            body=client.return_value.ingest.call_args.args[0]
+            self.assertEqual(result['inserted'],1)
+            self.assertEqual((body['expected_cursor'],body['cursor'],body['check_id']),('100','101','a'*24))
+            self.assertEqual(body['messages'][0]['sender_id'],'20001')
+            self.assertTrue((Path(folder)/'.qq-napcat.lock').is_file())
+
+    def test_background_receipt_keeps_parent_check_identity(self):
+        client = FakeClient(sources=[dict(SOURCE, check_id='a'*24)])
+        rows = collect.run_once(CONFIG, client, lambda args, env=None: page([]))
+        self.assertEqual(rows[0]['status'], 'ingested')
+        self.assertEqual(client.posts[0]['check_id'], 'a'*24)
+        self.assertEqual(client.posts[0]['cursor'], SOURCE['cursor'])
+
     def test_no_due_sources_does_not_call_a_cli_or_ingest(self):
         client = FakeClient(sources=[])
         with patch.object(collect, 'cli_json', side_effect=AssertionError('No source is due')) as cli:
@@ -398,6 +437,9 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(env['WECHAT_CLI_DISABLE_AUTO_REFRESH'], '1')
         self.assertNotIn('IMAGE_KEY', env)
         self.assertNotIn('WX_MCP_IMAGE_KEY', env)
+
+        with patch.dict(collect.os.environ, {}, clear=True):
+            self.assertEqual(collect.wechat_env()['HOME'], collect.pwd.getpwuid(collect.os.getuid()).pw_dir)
 
         with patch.object(collect.Path, 'is_file', return_value=False):
             with self.assertRaisesRegex(collect.CollectError, 'wechat_env_unavailable'):

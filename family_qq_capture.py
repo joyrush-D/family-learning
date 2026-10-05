@@ -1,5 +1,6 @@
 """QQ window observations: incomplete evidence, separate from native message cursors."""
 import base64
+import asyncio
 import datetime as dt
 import hashlib
 import json
@@ -121,9 +122,9 @@ def run_one(app, store, now):
     try:
         import family_qq_inbox
         inbox = family_qq_inbox.settings(store.data)
-        if inbox and inbox['enabled']:
-            return family_qq_inbox.run_one(app, store, now)
         local = settings(store.data)
+        if inbox and inbox['enabled'] and not (local and local['enabled'] and local.get('host_app')):
+            return family_qq_inbox.run_one(app, store, now)
         if not local or not local['enabled']: return dict(state='disabled')
         if not local.get('host_app'): return dict(state='manual_only')
         checked(sys.platform == 'darwin', 'qq_capture_platform')
@@ -288,9 +289,17 @@ async def capture(driver, source, directory):
     try:
         try: _, viewport, text = layout(state, source)
         except CollectError:
-            await click(more); opened = True
+            # The QQ details button ignores background AX clicks while another app is frontmost.
+            subprocess.run(['/usr/bin/open', '-a', '/Applications/QQ.app'],
+                           capture_output=True, check=True, timeout=5)
+            await asyncio.sleep(.2)
+            state = await read()
+            more, _, _ = layout(state, source, identity=False)
+            await click(more)
+            await asyncio.sleep(.4)
             state = await read()
             _, viewport, text = layout(state, source)
+            opened = True
         body = crop_window(state, viewport, directory/'fragment.png')
         checked(not screen_locked(), 'screen_locked_during_capture')
         return text, body

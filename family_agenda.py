@@ -12,11 +12,14 @@ def date(value):
         return dt.date.fromisoformat(value).isoformat()
     except (ValueError,TypeError): return ''
 
-def sent_day(value):
+def sent_at(value):
     try:
         stamp=dt.datetime.fromisoformat(value.replace('Z','+00:00'))
-        return stamp.replace(tzinfo=stamp.tzinfo or family_agent.TZ).astimezone(family_agent.TZ).date().isoformat()
+        return stamp.replace(tzinfo=stamp.tzinfo or family_agent.TZ).astimezone(family_agent.TZ).isoformat()
     except (ValueError,TypeError,AttributeError):return ''
+
+def sent_day(value):
+    return sent_at(value)[:10]
 
 
 _WEEKDAYS={'一':0,'二':1,'三':2,'四':3,'五':4,'六':5,'日':6,'天':6}
@@ -50,8 +53,8 @@ def deadlines(text,published):
     if date(text): return {text}
     text=_relative_weekday(text,anchor)
     candidates=set()
-    # A date alone is not a deadline; it must be tied to handing in, bringing or a dated test the child sits.
-    pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:[^。；;，,\n]{0,8}?)(?:前|截止|完成|提交|上交|交齐|带到|带来|交作业|带|穿|交(?!流|通|换|谈)|测验|考试|听写|默写|检测)'
+    # A date alone is not a deadline; it must be tied to an explicit action or dated school event.
+    pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:[^。；;，,\n]{0,8}?)(?:前|截止|完成|订正|提交|上交|交齐|带到|带来|交作业|朗读|背诵|抄写|预习|听[^。；;，,\n]{0,12}录音|带|穿|交(?!流|通|换|谈)|测验|考试|听写|默写|检测)'
     for match in re.finditer(pattern,text or ''):
         token=match[1];value=date(token)
         if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):
@@ -61,6 +64,18 @@ def deadlines(text,published):
         if value:candidates.add(value)
     for match in re.finditer(r'截止(?:时间|日期)?\s*[：:为是]*\s*(\d{4}-\d{2}-\d{2})',text):
         if date(match[1]): candidates.add(match[1])
+    # A directly dated revision/parent action is just as explicit as 完成 or
+    # 提交. Keep this grammar narrow: do not turn 公布复习资料, 打印机指南 or
+    # 签字安排 into a deadline by searching arbitrarily past the date.
+    direct_prefix=r'[ \t：:]*(?:(?:需要|务必|由家长|同学们|家长|孩子|学生|请|需|须|要|先)[ \t]*){0,2}(?:(?:语文|数学|英语|科学|历史|地理|生物|物理|化学)[ \t：:]*)?'
+    direct_action=r'(?:复习|打印|签字|盖章)(?!资料|材料|计划|安排|通知|要求|时间|指南|方法|建议|结果|情况|方式|入口|功能|机)'
+    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)'+direct_prefix+direct_action,text):
+        token=match[1];value=date(token)
+        if not value and anchor and token in ('今天','今日','今晚','明天','明日','后天'):
+            offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[token]
+            try:value=(dt.date.fromisoformat(anchor)+dt.timedelta(days=offset)).isoformat()
+            except OverflowError:pass
+        if value:candidates.add(value)
     for match in re.finditer(r'(?:报名|填报|选课|提交|上交)时间\s*[：:为是]*\s*(\d{4}-\d{2}-\d{2})([^。；;\n]*)',text):
         day,tail=match.groups()
         clock=r'(?:[01]?\d|2[0-3])[:：][0-5]\d'
@@ -71,8 +86,26 @@ def deadlines(text,published):
     # date and the exam word, past the tight window above. Allow that gap but stop before another date
     # or a clause break so separate items keep their own dates. 测试/检测 stay out here: 设备测试/核酸检测
     # are not tests the child sits, and the tight pass already covers their own phrasings.
-    exam_event=r'单元测|体育测试|小测|月考|期中|期末|测验|考试|统考|联考|水平测|质检|摸底'
     span=r'(?:(?!\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)[^。；;，,\n]){0,16}?'
+    reading_event=r'读(?=[一二两三四五六七八九十百0-9]+(?:遍|次))'
+    # Unit/title names can separate the date from the reading action. Do not
+    # cross a different date or clause, or treat a material's name as an action.
+    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)'+span+r'(?:'+reading_event+r')',text or ''):
+        token=match[1];value=date(token)
+        if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):
+            offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[token]
+            try:value=(dt.date.fromisoformat(published)+dt.timedelta(days=offset)).isoformat()
+            except OverflowError:pass
+        if value:candidates.add(value)
+    # A conflicting relative/explicit parenthetical is uncertainty, not a
+    # reason to silently prefer one date. A mere date label remains no action.
+    for match in re.finditer(r'(今天|今日|今晚|明天|明日|后天)\s*[（(]\s*(\d{4}-\d{2}-\d{2})\s*[）)]',text or ''):
+        if not published or not re.match(span+r'(?:完成|订正|提交|上交|交齐|带到|带来|交作业|朗读|背诵|抄写|预习|'+reading_event+r')',text[match.end():]):continue
+        offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[match[1]]
+        try:relative=(dt.date.fromisoformat(published)+dt.timedelta(days=offset)).isoformat()
+        except OverflowError:continue
+        if date(match[2]):candidates.update((relative,match[2]))
+    exam_event=r'单元测|体育测试|小测|月考|期中|期末|测验|考试|统考|联考|水平测|质检|摸底'
     for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)'+span+r'(?:'+exam_event+r')',text or ''):
         token=match[1];value=date(token)
         if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):
@@ -112,8 +145,10 @@ def is_exam(text):
     return bool(_EXAM_RE.search(text))
 
 
-def task_category(title):
+def task_category(title,purpose=None):
     """Classify the requested work, not a school subject mentioned by an admin task."""
+    if purpose in family_agent.PURPOSES:
+        return 'homework' if purpose=='learning' and not is_exam(title) else 'todo'
     title=re.sub(r'^待核对[：:]?\s*','',title)
     if re.search(r'打印|报名|缴费|回执|签字|署名|登记|确认书|请假|接送|招新|选拔|提交渠道|(?:作业|学习)入口|^核(?:对|查)|(?:听写|考试|测验)(?:情况|结果|成绩)|等级',title):
         return 'todo'
@@ -123,20 +158,24 @@ def task_category(title):
     return 'todo'
 
 
-def metadata(app,c,child_id,title,due,refs=(),focus=None):
-    focus=focus or {};messages=[]
+def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref=''):
+    focus=focus or {};messages=[];publications=[];original_time=''
     store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
     for ref in refs:
         if not isinstance(ref,str) or not ref.startswith('message:'):continue
         parts=ref[8:].rsplit(':',1)
         if len(parts)!=2:continue
         try:
-            _,msg=store._message_context(c,dict(child_id=child_id,source_id=parts[0],message_id=parts[1]))
+            source,msg=store._message_context(c,dict(child_id=child_id,source_id=parts[0],message_id=parts[1]))
             messages.append(msg)
+            if ref==publication_ref:original_time=sent_at(msg.get('time',''))
+            if not any(p['ref']==ref for p in publications):
+                publications.append(dict(ref=ref,source_name=source['name'],sender=msg.get('sender','')))
         except family_agent.AgentError:continue
-    days=sorted({sent_day(m.get('time','')) for m in messages}-{''})
+    times=sorted({sent_at(m.get('time','')) for m in messages}-{''})
+    days=sorted({value[:10] for value in times})
     organized=focus.get('category') in ('unknown','homework','todo')
-    published=focus.get('published_on','') if organized else (days[0] if len(days)==1 else '')
+    published=focus.get('published_on','') if organized else (original_time[:10] if original_time else days[0] if len(days)==1 else '')
     subject=re.sub(r'^待核对[：:]?\s*','',title).rstrip('。')
     # Borrow a source deadline only from the clause naming THIS task, not a sibling instruction.
     # An exam task's title is usually rewritten (subject prefix, weekday suffix), so it is no longer a
@@ -154,16 +193,36 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None):
     source_due=next(iter(dates)) if len(dates)==1 and not source_unknown else ''
     due_on=focus.get('due_on','') if organized else deadline(due,published) or deadline(title,published) or source_due
     category=focus.get('category','')
-    if category not in ('homework','todo'):category='todo' if category=='unknown' else task_category(title)
-    return dict(category=category,published_on=published,due_on=due_on,scheduled_on=focus.get('scheduled_on',''),
+    if category not in ('homework','todo'):category='todo' if category=='unknown' else task_category(title,purpose)
+    # Later supplements retain their own source entries, not the first notice's time.
+    published_at=original_time if original_time and original_time[:10]==published else min((value for value in times if value[:10]==published),default='')
+    return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,scheduled_on=focus.get('scheduled_on',''),
                 category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox')
 
 
 def enrich(app,c,tasks):
     owners={p['name']:p['id'] for p in app.profiles(c)}
+    reported={r['task_id']:r['day'] for r in c.execute('SELECT task_id,day FROM study_items WHERE id=task_id')} if c.execute("SELECT 1 FROM sqlite_master WHERE name='study_items'").fetchone() else {}
     for task in tasks:
         refs=[x.strip() for x in task['source'].splitlines() if x.strip().startswith('message:')]
-        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),task['due'],refs,task.get('focus'))
+        focus=task.get('focus') or {}
+        purpose=None;publication_ref=''
+        if task.get('school_origin'):
+            origin=task['source'].splitlines()[0].removeprefix('Agent建议:')
+            proposal=c.execute("SELECT * FROM agent_items WHERE id=? AND task_id=? AND child_id=? AND kind='school' AND state='accepted'",
+                               (origin,task['id'],owners.get(task['child'],''))).fetchone()
+            if proposal:
+                purpose=json.loads(proposal['plan']).get('school_task',{}).get('purpose')
+                store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
+                publication_ref=family_agent.school_original_publication_ref(store,c,proposal)
+        due=task['due']
+        if task['id'] in reported and task['source'] in ('家庭放学后录入','孩子自述功课，待家长核对'):
+            # The capture day is a plan date, not a teacher deadline; preserve explicit later edits.
+            focus=dict(focus)
+            if not focus.get('category'):focus['category']='homework'
+            if not focus.get('scheduled_on') and not focus.get('version'):focus['scheduled_on']=reported[task['id']]
+            due=task['due']=''
+        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref)
     return tasks
 
 
@@ -194,10 +253,14 @@ def snapshot(app,start,end):
                 title=task['title'],agenda=task['agenda'],status=status,closed=status in app.TASK_CLOSED,
                 closed_on=date(u.get('updated','')[:10]),body=task['action']))
         if 'agent_items' in tables:
-            for row in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='pending' ORDER BY created,id"):
-                if row['child_id'] not in ids or json.loads(row['plan']).get('school_task',{}).get('state')=='reference':continue
+            for row in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='pending' ORDER BY created DESC,id DESC"):
+                brief=json.loads(row['plan']).get('school_task',{})
+                if row['child_id'] not in ids or brief.get('state')=='reference':continue
                 refs=[e['ref'] for e in json.loads(row['evidence'])]
+                purpose=brief.get('purpose')
+                category=task_category((brief.get('title') or row['title']) if purpose in family_agent.PURPOSES else row['title'],purpose)
                 m=metadata(app,c,row['child_id'],row['title'],row['due'],refs)
+                m['category']=category
                 items.append(dict(id=row['id'],task_id='',kind='school',child_ids=[row['child_id']],title=row['title'],
                     agenda=m,status='待核对',closed=False,closed_on='',body=row['body']))
         study=[]

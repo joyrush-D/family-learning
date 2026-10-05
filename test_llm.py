@@ -3,6 +3,7 @@ from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from email.parser import BytesParser
 from email.policy import default
 import json
+import copy
 import os
 import sqlite3
 import subprocess
@@ -329,6 +330,23 @@ try:
         assert state['redirect_calls']==0 and len(state['calls'])==before_calls+1
 finally:
     server.shutdown();server.server_close()
+
+if sys.platform=='darwin' and Path('/usr/bin/sips').is_file():
+    import struct,zlib
+    def png_chunk(kind,data):
+        return struct.pack('>I',len(data))+kind+data+struct.pack('>I',zlib.crc32(kind+data)&0xffffffff)
+    width,height=2400,2000;compressor=zlib.compressobj(1);rows=[]
+    for _ in range(height):
+        rows.append(compressor.compress(b'\0'+bytes((byte&15)+120 for byte in os.urandom(width*3))))
+    rows.append(compressor.flush())
+    original=b'\x89PNG\r\n\x1a\n'+png_chunk(b'IHDR',struct.pack('>IIBBBBB',width,height,8,2,0,0,0))+png_chunk(b'IDAT',b''.join(rows))+png_chunk(b'IEND',b'')
+    assert len(original)>llm.MAX_MODEL_PNG
+    preview=llm._model_image(dict(mime='image/png',data=original))
+    assert preview['mime']=='image/jpeg' and preview['data'].startswith(b'\xff\xd8') and len(preview['data'])<llm.MAX_MODEL_PNG
+    assert llm._model_image(dict(mime='image/png',data=original[:100]))['data']==original[:100]
+    try: llm._model_image(dict(mime='image/png',data=b'x'*(llm.MAX_MODEL_PNG+1)))
+    except llm.LLMDraftError: pass
+    else: raise AssertionError('invalid oversized original accepted')
 
 material=dict(title='虚构分数题',subject='数学',question_text='1/2加1/3，先考虑什么？',
               reference_text='先通分为六分之三加六分之二，结果六分之五。',reference_checked=True)
@@ -696,5 +714,77 @@ with patch.object(family_llm, 'build_opener', return_value=Crash()):
     assert 'provider-ark-model' in dump and not any(word in dump for word in ('CANARY','跳绳','画面'))
 finally:
     server.shutdown();server.server_close()
+
+def school_reread_contract():
+    """Mock the original LLM boundary; the new schema confirms fixed full strings without rewriting raw replies."""
+    image=dict(data=b'synthetic-page-one',mime='image/png')
+    old='数学：2026-02-12前完成第1至3题，第2题写单位厘米，第3题写检验过程；选做条件见第4页。'
+    new='2026-02-13前打印独立活动回执，家长签字后由孩子交回，无需盖章。'
+    kwargs=dict(target_child='示例甲',school_material=True,original_ids=['a'*32],original_pages=[1])
+    def reply(confirmed,additional,unknown=()):
+        return dict(originals=[dict(upload_id='a'*32,title='虚构重读',note='当前页图核对后的背景。',
+            requirements=confirmed,additional_requirements=additional,uncertainties=list(unknown),deferred_contexts=[])])
+    with patch.object(llm,'configuration',return_value=('http://fixture.invalid/v1','synthetic-model')):
+        raw=reply([old],[new],['当前页背景说明模糊，无法确定其含义。']);before=copy.deepcopy(raw)
+        with patch.object(llm,'_chat_json',return_value=raw) as model:
+            result=llm.extract_draft('虚构原通知及本轮第1页',[image],previous_requirements=[old],**kwargs)
+        original_schema=model.call_args.args[1]['properties']['originals']['items']
+        assert original_schema['properties']['requirements']['items']['enum']==[old]
+        assert 'additional_requirements' in original_schema['required']
+        assert original_schema['properties']['additional_requirements']['maxItems']==12
+        assert '没有当前图片证据不能确认' in model.call_args.args[0][0]['content']
+        assert result['originals'][0]['requirements']==[old,new]
+        assert result['originals'][0]['uncertainties']==before['originals'][0]['uncertainties']
+        assert 'additional_requirements' not in result['originals'][0] and raw==before
+        # A changed or genuinely unclear old requirement need not be selected. It cannot be silently restored.
+        revised=old.replace('厘米','米')
+        for added in ([],[revised]):
+            raw=reply([],added,['第2题原单位仍无法核对，旧字符串未确认。']);before=copy.deepcopy(raw)
+            with patch.object(llm,'_chat_json',return_value=raw):
+                result=llm.extract_draft('虚构原通知及本轮第1页',[image],previous_requirements=[old],**kwargs)
+            assert result['originals'][0]['requirements']==added and old not in result['originals'][0]['requirements']
+            assert result['originals'][0]['uncertainties']==before['originals'][0]['uncertainties'] and raw==before
+        bad=[reply([revised],[]),reply([old,old],[]),reply([old],[new+'本轮未重送第1至3页。']),
+             reply([old],[str(i)+'：独立要求。' for i in range(12)])]
+        missing=reply([old],[]);missing['originals'][0].pop('additional_requirements');bad.append(missing)
+        extra=reply([old],[]);extra['originals'][0]['confirmation']=True;bad.append(extra)
+        for raw in bad:
+            before=copy.deepcopy(raw)
+            with patch.object(llm,'_chat_json',return_value=raw):
+                try:llm.extract_draft('虚构原通知及本轮第1页',[image],previous_requirements=[old],**kwargs)
+                except llm.LLMDraftError:pass
+                else:raise AssertionError('invalid fixed-string school reread accepted')
+            assert raw==before
+        full=['甲'*2000,'乙'*2000]
+        with patch.object(llm,'_chat_json',return_value=reply(full,['丙'])):
+            try:llm.extract_draft('虚构页图',[image],previous_requirements=full,**kwargs)
+            except llm.LLMDraftError:pass
+            else:raise AssertionError('combined school reread requirements exceeded 4000 characters')
+        invalid=[dict(previous_requirements='旧要求'),dict(previous_requirements=[' ']),dict(previous_requirements=['旧'*2001]),
+                 dict(previous_requirements=['甲'*2000,'乙'*2000,'丙']),dict(previous_requirements=['要求'+str(i) for i in range(13)]),
+                 dict(previous_requirements=[old+'须待第4页送入后核对。']),dict(previous_requirements=[old],original_pages=[]),
+                 dict(previous_requirements=[old],original_ids=['a'*32,'b'*32]),
+                 dict(previous_requirements=[old],school_material=False,original_ids=[],original_pages=[]),
+                 dict(previous_requirements=[old],homework=True),dict(previous_requirements=[old],timetable=True)]
+        with patch.object(llm,'_chat_json',side_effect=AssertionError('invalid history reached the model')) as model:
+            for change in invalid:
+                try:llm.extract_draft('虚构页图',[image],**(kwargs|change))
+                except ValueError:pass
+                else:raise AssertionError('invalid school reread history accepted')
+            model.assert_not_called()
+        # Ordinary page reads keep the existing schema and ordinary result shape.
+        ordinary=reply([old],[]);ordinary['originals'][0].pop('additional_requirements')
+        with patch.object(llm,'_chat_json',return_value=ordinary) as model:
+            result=llm.extract_draft('虚构页图',[image],**kwargs)
+        original_schema=model.call_args.args[1]['properties']['originals']['items']
+        assert 'enum' not in original_schema['properties']['requirements']['items']
+        assert 'additional_requirements' not in original_schema['properties']
+        assert result['originals'][0]['requirements']==[old]
+        with patch.object(llm,'_chat_json',return_value=reply([old],[])):
+            try:llm.extract_draft('虚构页图',[image],**kwargs)
+            except llm.LLMDraftError:pass
+            else:raise AssertionError('ordinary school read accepted reread-only fields')
+
+school_reread_contract()
 
 print('PASS: draft, reading feedback, guided hints, audio and bounded usage ledger; isolated HTTP, redaction, failure and interruption checks')

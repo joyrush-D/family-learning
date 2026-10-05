@@ -44,6 +44,7 @@ _HINT_LIMIT = dict(topic_hint=_LIMITS['name'], error_hint=_LIMITS['error_type'])
 # 「科目错题：题号」，都不是题面、作答或订正。
 _SAVED_FIELDS = ('题面：', '学生原答：', '可见订正/正确答案：', '家长备注：')
 _SAVED_LINE = '由照片标注生成，家长已核对；这不是掌握程度结论。'
+_SAVED_LINES = (_SAVED_LINE, '家长对照原作答记录；这不是掌握程度结论。')
 
 PROMPT = '''你是一起成长Agent的诊断层，面向家长，像一位资深全科老师看错题本：不是记一笔对错，而是判断
 「孩子在哪个知识点没通、犯的是哪一类错、背后可能是什么误解」。只依据本次提供的 records（学习记录，
@@ -192,7 +193,7 @@ def _candidate_only(item):
     heading (科目错题：题号) is not a question or an answer. The record is real, but citing it says nothing
     about what the child did. Untagged records are never judged here, so they validate exactly as before."""
     if not any(item.get(key) for key in _HINT_PREFIX): return False
-    empty, kept = ('', _SAVED_LINE) + _SAVED_FIELDS, tuple(_HINT_PREFIX.values())
+    empty, kept = ('',) + _SAVED_LINES + _SAVED_FIELDS, tuple(_HINT_PREFIX.values())
     return not any(line.strip() not in empty and not line.strip().startswith(kept) for line in (item.get('text') or '').split('\n'))
 
 

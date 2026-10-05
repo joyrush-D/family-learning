@@ -61,6 +61,21 @@ class RecordTaskLinkTests(unittest.TestCase):
         self.app.save_record(dict(id=ident,child='示例甲',day=before['day'],category='学习进展',subject='英语',title='虚构试卷订正',note='虚构：更正说明',source='试卷 / 作业核对'))
         self.assertEqual((self.row(ident)['linked_task_id'],self.row(ident)['linked_task_at']),(self.TASK,after['linked_task_at']))
 
+    def test_followup_of_task_record_stays_with_the_same_task(self):
+        linked,_=self.saved();version=self.link(linked,self.TASK)['link']['linked_at']
+        feedback=self.media(note='虚构：原作业反馈')['record_id']
+        for index,parent in enumerate((linked,feedback),1):
+            body=dict(child='示例甲',day=self.now.date().isoformat(),category='学习进展',subject='英语',
+                      title='虚构订正',note='虚构：先自己订正',source='家长观察',related_record_id=parent,
+                      followup_kind='订正',request_key='synthetic-followup-%02d'%index)
+            saved=self.app.save_record(body);row=self.row(saved['record_id'])
+            self.assertEqual((row['related_record_id'],row['linked_task_id'],row['followup_kind']),
+                             (parent,self.TASK,'订正'))
+            self.assertEqual(self.app.save_record(body)['record_id'],saved['record_id'],'same retry reuses the record')
+        self.link(linked,'',version)
+        separate=self.app.save_record(dict(body,related_record_id=linked,request_key='synthetic-followup-03'))
+        self.assertEqual(self.row(separate['record_id'])['linked_task_id'],'','an explicit unlink is preserved')
+
     def test_every_change_of_an_existing_link_version_is_compared_and_removal_keeps_the_version(self):
         ident,_=self.saved();first=self.link(ident,self.TASK)['link']['linked_at']
         self.refused('record_task_link_conflict',409,lambda:self.link(ident,self.OTHER))

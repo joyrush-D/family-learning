@@ -9,6 +9,7 @@ import datetime as dt
 import ipaddress
 import json
 import os
+import pwd
 from pathlib import Path
 import re
 import signal
@@ -125,6 +126,8 @@ def wechat_env(config_path=None):
     """Return the closed environment used by the read-only WeChat CLI."""
     checked(Path(WECHAT_KEY_BIN).is_file(), 'wechat_env_unavailable')
     env = {key: os.environ[key] for key in _WECHAT_BASE_ENV if key in os.environ}
+    if not env.get('HOME'):
+        env['HOME'] = pwd.getpwuid(os.getuid()).pw_dir
     if config_path is None:
         env.update({key: os.environ[key] for key in _WECHAT_CONFIG_ENV if key in os.environ})
     else:
@@ -256,6 +259,15 @@ def qq_status(envelope, chat):
     return cursor_kind
 
 
+def qq_native_sender(sender):
+    checked(isinstance(sender, dict), 'invalid_sender')
+    name = sender.get('card') or sender.get('nickname') or ''
+    checked(isinstance(name, str), 'invalid_sender')
+    ident = sender.get('user_id', sender.get('id', ''))
+    checked(ident == '' or numeric(str(ident), False), 'invalid_sender')
+    return dict(card=name[:200], nickname='', **({'user_id': str(ident)} if ident != '' else {}))
+
+
 def qq_native_page(envelope, source):
     """Validate one native page; message IDs identify rows, not their chronology."""
     chat = source_chat(source)
@@ -281,19 +293,19 @@ def qq_native_page(envelope, source):
         checked(row.get('raw_message') == ''.join(part['data']['text'] for part in parts)
                 and row['content_complete'] == (not row['recalled'] and not gaps)
                 and (not row['recalled'] or not parts and not gaps))
-        sender = row.get('sender', {})
-        checked(isinstance(sender, dict))
-        sender_name = sender.get('card') or sender.get('nickname') or ''
-        checked(isinstance(sender_name, str))
+        sender = qq_native_sender(row.get('sender', {}))
+        sender_name = sender['card']
         text = row['raw_message']
         if row['recalled']:
             text = '[已撤回，正文未读取]'
         elif gaps:
-            text += '\n[包含未读取的非文字内容]'
+            text += ('\n[图片原件：'+str(len(gaps))+'份，内容未读]' if all(gap.get('element_type')==2 for gap in gaps) else '\n[包含未读取的非文字内容]')
         text, truncated = bounded(text)
         message = dict(id=row['message_id'], time=dt.datetime.fromtimestamp(row['time'], TIMEZONE).isoformat(),
             kind='recalled' if row['recalled'] else 'text', sender=sender_name[:200], text=text,
             unread=not row['content_complete'] or truncated)
+        if 'user_id' in sender: message['sender_id'] = sender['user_id']
+        message['message_order'] = row['message_seq']
         entries.append((int(row['message_seq']), row['time'], message, row))
     ids = [entry[2]['id'] for entry in entries]
     checked(len(set(ids)) == len(ids), 'duplicate_message_id')
@@ -431,7 +443,7 @@ def run_once(config, client=None, read_cli=cli_json, bootstrap_qq=False):
             continue
         deadline = time.monotonic() + QQ_ROUND_SECONDS if source['platform'] == 'qq' else None
         body = dict(source_id=source['id'], expected_cursor=source['cursor'], cursor=source['cursor'],
-                    checked_at='', last_message_time='', messages=[], error='')
+                    checked_at='', last_message_time='', messages=[], error='', check_id=source.get('check_id', ''))
         try:
             if source['platform'] == 'wechat':
                 checked(bool(config.get('wechat_cli')), 'wechat_cli_not_configured')

@@ -17,6 +17,7 @@ import time
 import zipfile
 import zlib
 import xml.etree.ElementTree as ET
+from xml.sax.saxutils import escape
 
 from family_wechat_media import MediaError, bounded_process
 
@@ -84,6 +85,18 @@ def _json(obj):
     return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
+def question_sources(sources, limit=4):
+    if not isinstance(sources,list) or not 1<=len(sources)<=limit or any(not isinstance(source,dict) for source in sources):
+        raise PrintError('每次请选择1至%d张题目与作答原件'%limit)
+    if len({_json(source) for source in sources})!=len(sources):
+        raise PrintError('题目原件不能重复选择')
+    return sources
+
+
+def packet_sha(hashes):
+    return hashes[0] if len(hashes)==1 else _hash(_json(hashes).encode())
+
+
 def _now():
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')
 
@@ -100,6 +113,25 @@ def _read_file(path, limit):
     if not 0 < len(data) <= limit:
         raise PrintError('文件为空或超过打印大小限制')
     return data
+
+
+def review_text(value, *, saved=False):
+    """Saved parent text stays text; only the product's length frame is interpreted."""
+    try: text=value.decode('utf-8-sig') if isinstance(value,bytes) else value
+    except UnicodeError: raise PrintError('参考或先前检查文字无法安全完整读取') from None
+    if not isinstance(text,str) or any(ord(ch)<32 and ch not in '\n\r\t' or ord(ch)==127 for ch in text):
+        raise PrintError('参考或先前检查文字无法安全完整读取')
+    archived=False
+    if saved and text.startswith('作业检查保存格式 v1'):
+        header=re.match(r'\A作业检查保存格式 v1\n最新检查字数：([1-9][0-9]{0,4})\n',text)
+        if header is None: raise PrintError('保存检查的最新文字范围无法核对')
+        size=int(header.group(1));content=text[header.end():]
+        if size>12000 or len(content)<size+1 or content[size]!='\n':
+            raise PrintError('保存检查的最新文字范围无法核对')
+        text=content[:size];archived=bool(content[size+1:].strip())
+    if not text.strip() or len(text)>12000:
+        raise PrintError('参考或先前检查文字须清晰完整且最多12000字，请分批核对')
+    return dict(text=text,has_archived=archived)
 
 
 def _jpeg(data):
@@ -311,6 +343,47 @@ def office_convert(data, suffix, directory, soffice, *, timeout, limit, read):
     return pdf
 
 
+def _invalid_xml(value):
+    return any(ord(ch) < 32 and ch not in "\n\t" or ord(ch) == 127 or 0xd800 <= ord(ch) <= 0xdfff or ord(ch) in (0xfffe,0xffff) for ch in value)
+
+
+def _text_docx(paragraphs, *, original=False):
+    """Deterministic A4 conversion input, with original text kept separate from guide headings."""
+    keep=set();start=0
+    for end in range(len(paragraphs)+1):
+        if end==len(paragraphs) or not paragraphs[end].strip():
+            if end-start<=10: keep.update(range(start,end-1))
+            start=end+1
+    def run(line):
+        if not original:
+            return '<w:t xml:space="preserve">'+escape(line or ' ')+'</w:t>'
+        return '<w:tab/>'.join('<w:t xml:space="preserve">'+escape(part)+'</w:t>' for part in line.split('\t'))
+    document = ''.join('<w:p><w:pPr><w:keepLines/>'+('<w:keepNext/>' if n in keep else '')+'</w:pPr>'
+                       +'<w:r><w:rPr><w:rFonts w:eastAsia="PingFang SC"/></w:rPr>'
+                       +run(line)+'</w:r></w:p>' for n,line in enumerate(paragraphs))
+    docx = io.BytesIO()
+    with zipfile.ZipFile(docx, 'w', zipfile.ZIP_DEFLATED) as archive:
+        def write(name, content):
+            # Generated text is identical across retries; ZIP timestamps must not change its hash.
+            archive.writestr(zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0)), content, compress_type=zipfile.ZIP_DEFLATED)
+        write('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            '</Types>')
+        write('_rels/.rels', '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+            '</Relationships>')
+        write('word/document.xml', '<?xml version="1.0" encoding="UTF-8"?>'
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:body>'+document+'<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
+            '<w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr>'
+            '</w:body></w:document>')
+    return docx.getvalue()
+
+
 class PrintStore:
     def __init__(self, data, connect, *, pdfinfo=None, soffice=None):
         self.data, self.connect = Path(data).resolve(), connect
@@ -349,6 +422,133 @@ class PrintStore:
             raise PrintError('附件路径不正确')
         return name, _read_file(path, MAX_SOURCE)
 
+    def image_for_draft(self, source):
+        name, data = self._source(source)
+        mime = 'image/jpeg' if name.lower().endswith(('.jpg','.jpeg')) and data.startswith(b'\xff\xd8') else 'image/png' if name.lower().endswith('.png') and data.startswith(b'\x89PNG') else ''
+        if not mime: raise PrintError('参考草稿目前只支持一张JPG或PNG题目；PDF、Word可先打印并手动填写核对过的参考')
+        (_jpeg if mime=='image/jpeg' else _png)(data)
+        return dict(mime=mime,data=data,sha256=_hash(data))
+
+    def images_for_draft(self, sources, *, limit=4):
+        sources=question_sources(sources,limit)
+        images=[self.image_for_draft(source) for source in sources]
+        if sum(len(image['data']) for image in images)>MAX_SOURCE:
+            raise PrintError('题目图片合计不能超过20MB')
+        return images,packet_sha([image['sha256'] for image in images])
+
+    @staticmethod
+    def review_sources(data, questions, references, allowed, *, previous_sources=(), previous_text='', render=True):
+        """Explicit same-task originals; PDF subsets are reported, never silently selected."""
+        import family_pdf
+        import family_media
+        previous_sources=list(previous_sources) if isinstance(previous_sources,tuple) else previous_sources
+        if (not isinstance(questions,list) or not questions or not isinstance(references,list)
+                or len(questions)+len(references)>8 or not isinstance(previous_sources,list) or len(previous_sources)>2
+                or len(questions)+len(references)+len(previous_sources)>10):
+            raise PrintError('题目、作答及教师参考最多8份；上一轮检查最多2份，合计最多10份原件')
+        if (not isinstance(previous_text,str) or len(previous_text)>12000
+                or any(ord(ch)<32 and ch not in '\n\r\t' or ord(ch)==127 for ch in previous_text)):
+            raise PrintError('上一轮检查文字须完整清晰且最多12000字')
+        items=[];seen=set();raw_total=len(previous_text.encode('utf-8'))
+        for role,sources in [('question',questions),('reference',references),('previous',previous_sources)]:
+            for source in sources:
+                if (not isinstance(source,dict) or set(source) not in ({'type','id'},{'type','id','pages'})
+                        or source.get('type')!='upload'):
+                    raise PrintError('批改只能使用这项作业已保存的原件')
+                ident=_id(source['id'])
+                if ident not in allowed: raise PrintError('原件不属于这份作答或原作业，请重新打开核对','review_source_not_allowed',403)
+                if ident in seen: raise PrintError('同一原件不能重复选作题目、作答、教师参考或上一轮检查')
+                seen.add(ident);row=allowed[ident]
+                if role!='previous' and row.get('origin')=='review_result':
+                    raise PrintError('已保存的检查意见只能作为上一轮待复核内容，不能作为作答或教师参考','review_source_not_allowed',403)
+                if role=='previous' and not row['mime'].startswith('text/plain'):
+                    raise PrintError('上一轮检查只接受同一作业已保存的纯文字TXT')
+                base=Path(data).resolve()/'uploads';path=base/ident
+                if base.is_symlink() or path.is_symlink() or path.resolve().parent!=base:
+                    raise PrintError('原件路径不正确')
+                name,body=row['name'],_read_file(path,MAX_SOURCE)
+                if len(body)!=row['size']: raise PrintError('原件大小已变化，请重新上传','review_source_changed',409)
+                raw_total+=len(body)
+                if raw_total>MAX_SOURCE: raise PrintError('本次原件合计不能超过20MB，请分批核对')
+                mime=row['mime'];pages=source.get('pages')
+                if pages is not None and (mime!='application/pdf' or not isinstance(pages,list) or not pages
+                        or len(pages)>8 or any(type(p) is not int or not 1<=p<=family_pdf.MAX_DOCUMENT_PAGES for p in pages)
+                        or len(set(pages))!=len(pages)):
+                    raise PrintError('PDF页码须为不重复的1至200整数，一次最多8页')
+                canonical=dict(type='upload',id=ident)
+                if pages is not None: canonical['pages']=list(pages)
+                items.append(dict(role=role,source=canonical,name=name,mime=mime,body=body,sha256=_hash(body),binding=row.get('review_binding')))
+        # All PDF probes and batches share the existing total deadline, even with multiple files.
+        started=time.monotonic()
+        def left():
+            remaining=family_pdf.DEADLINE_SECONDS-(time.monotonic()-started)
+            if remaining<=0: raise family_pdf.PDFError('render timed out')
+            return remaining
+        image_count=0;question_documents=[];documents=[];previous_documents=[];coverage=[]
+        for item in items:
+            mime=item['mime'];body=item['body'];pages=item['source'].get('pages')
+            if mime=='application/pdf':
+                if not body.startswith(b'%PDF-'): raise PrintError('PDF内容不正确')
+                if render:
+                    try: count=family_pdf.page_count(body,left())
+                    except family_pdf.PDFError: raise PrintError('PDF无法安全读取，请核对原件或重新上传','review_pdf_unavailable',503) from None
+                    pages=pages or list(range(1,count+1))
+                    if any(page>count for page in pages): raise PrintError('所选页码超出PDF范围')
+                    item['source']['pages']=pages;item['page_count']=count
+                    omitted=[page for page in range(1,count+1) if page not in pages]
+                    selected=page_selection(','.join(map(str,pages)),count)[0]
+                    missing=page_selection(','.join(map(str,omitted)),count)[0] if omitted else '无'
+                    coverage.append('%s《%s》：共%d页，本次第%s页；未读取页：%s。'%('教师参考' if item['role']=='reference' else '题目/孩子作答',item['name'],count,selected,missing))
+                elif pages is None: raise PrintError('批改依据缺少已核对的PDF页码')
+                image_count+=len(pages)
+            elif mime in ('image/jpeg','image/png','image/webp'):
+                if mime=='image/jpeg': _jpeg(body)
+                elif mime=='image/png': _png(body)
+                elif not (body[:4]==b'RIFF' and body[8:12]==b'WEBP'): raise PrintError('WebP内容不正确')
+                image_count+=1
+                coverage.append('%s《%s》：本次读取整张照片。'%('教师参考' if item['role']=='reference' else '题目/孩子作答',item['name']))
+            elif mime.startswith('text/plain') or item['role']!='previous' and mime==family_media.DOCX_MIME:
+                try: text=family_media.docx_text(body,strict_numbering=True) if mime==family_media.DOCX_MIME else body
+                except (UnicodeError,MediaError): raise PrintError('题目、作答或参考文字无法完整读取（可能含自动编号、图片、公式或复杂结构）；请保留原件并转换为完整PDF') from None
+                archived=False
+                if text is not None:
+                    parsed=review_text(text,saved=item['role']=='previous' and allowed[item['source']['id']].get('origin')=='review_result')
+                    text=parsed['text'];archived=parsed['has_archived']
+                    target=question_documents if item['role']=='question' else previous_documents if item['role']=='previous' else documents
+                    target.append(dict(name=item['name'],text=text))
+                coverage.append('%s《%s》：%s。'%('题目/孩子作答' if item['role']=='question' else '上一轮待复核意见' if item['role']=='previous' else '教师参考',item['name'],
+                    '本次读取最新检查；较早草稿保留在原件，未作为本次复核输入' if archived else '本次读取完整文字'))
+            else: raise PrintError('检查支持图片、PDF或安全纯文字TXT/Word；复杂Word请先保留原件并转换为完整PDF')
+        if not 0<=image_count<=8 or not image_count and not question_documents: raise PrintError('题目、作答及参考合计最多8张照片/PDF页，或提供可完整读取的文字试卷；本次未调用模型')
+        if sum(len(d['text']) for d in question_documents+documents)>12000: raise PrintError('题目、作答与教师参考文字合计最多12000字，请分批核对')
+        if sum(len(d['text']) for d in previous_documents)+len(previous_text)>12000:
+            raise PrintError('上一轮检查文件与文字合计最多12000字，请分批核对')
+        images=[];reference_images=[];image_labels=[];reference_labels=[];total=0
+        if render:
+            for item in items:
+                group=[]
+                if item['mime']=='application/pdf':
+                    pages=item['source']['pages']
+                    for start in range(0,len(pages),family_pdf.MAX_REQUESTED_PAGES):
+                        try: rendered=family_pdf.render_pages(item['body'],pages[start:start+family_pdf.MAX_REQUESTED_PAGES],left())
+                        except family_pdf.PDFError: raise PrintError('PDF页暂时无法安全读取，已保存原件保留','review_pdf_unavailable',503) from None
+                        if rendered['page_count']!=item['page_count']: raise PrintError('PDF页数已变化，请重新核对','review_source_changed',409)
+                        group.extend((dict(mime=page['mime_type'],data=page['data']),item['name']+' 第%d页'%page['page']) for page in rendered['pages'])
+                elif item['mime'].startswith('image/'):
+                    group=[(dict(mime=item['mime'],data=item['body']),item['name'])]
+                for image,label in group:
+                    total+=len(image['data'])
+                    if total+sum(len(d['text'].encode()) for d in question_documents+documents+previous_documents)+len(previous_text.encode('utf-8'))>MAX_SOURCE:
+                        raise PrintError('本次图片/PDF页、参考及先前检查文字合计不能超过20MB，请分批核对')
+                    if item['role']=='reference': reference_images.append(image);reference_labels.append(label)
+                    else: images.append(image);image_labels.append(label)
+        packet=[dict(role=i['role'],source=i['source'],name=i['name'],mime=i['mime'],sha256=i['sha256'],binding=i['binding']) for i in items]
+        return dict(images=images,reference_images=reference_images,question_documents=question_documents,documents=documents,previous_documents=previous_documents,image_labels=image_labels,
+                    reference_labels=reference_labels,coverage=coverage,fingerprint=_hash(_json(packet).encode()),
+                    question_sources=[i['source'] for i in items if i['role']=='question'],
+                    reference_sources=[i['source'] for i in items if i['role']=='reference'],
+                    previous_sources=[i['source'] for i in items if i['role']=='previous'])
+
     def _page_count(self, path):
         if not self.pdfinfo:
             raise PrintError('未配置PDF页数工具，请下载原件；暂不能确认打印', 'preview_unavailable', 503)
@@ -369,8 +569,15 @@ class PrintStore:
         if suffix == '.pdf' and data.startswith(b'%PDF-'): return data
         if suffix in ('.jpg', '.jpeg') and data.startswith(b'\xff\xd8') or suffix == '.png' and data.startswith(b'\x89PNG'):
             return image_pdf(data)
+        if suffix == '.txt':
+            try: text=data.decode('utf-8-sig').replace('\r\n','\n').replace('\r','\n')
+            except UnicodeDecodeError:
+                raise PrintError('文字原件须为UTF-8编码；请保留原件并另存UTF-8或完整PDF') from None
+            if not text.strip() or len(text)>12000 or _invalid_xml(text):
+                raise PrintError('文字原件须为非空、无控制字符且不超过12000字；原件仍保留')
+            data=_text_docx(text.split('\n'),original=True);suffix='.docx'
         if suffix not in ('.docx', '.pptx'):
-            raise PrintError('暂支持PDF、JPEG、PNG；其他文件请下载原件', 'preview_unavailable', 503)
+            raise PrintError('暂支持PDF、JPEG、PNG、安全Office和UTF-8文字；其他文件请下载原件', 'preview_unavailable', 503)
         if not self.soffice:
             raise PrintError('Office转换尚未配置，请下载原件或上传PDF', 'preview_unavailable', 503)
         try:
@@ -379,12 +586,33 @@ class PrintStore:
         except OfficeError as error:
             raise PrintError(*_OFFICE_ERRORS[error.reason]) from None
 
-    def prepare(self, source, idempotency_key):
+    def prepare(self, source, idempotency_key, *, packet=None, revision=False):
         key = _key(idempotency_key)
         name, data = self._source(source)
-        fingerprint = _hash(_json([source, _hash(data)]).encode())
+        return self._prepare_bytes(name, data, source, key,packet=packet,revision=revision)
+
+    def prepare_guide(self, title, text, idempotency_key, *, revision=False):
+        """Prepare a separate parent-only answer sheet after the parent has checked its text."""
+        key = _key(idempotency_key)
+        if not isinstance(title, str) or not title.strip() or len(title) > 200 or _invalid_xml(title):
+            raise PrintError('作业标题不正确')
+        if not isinstance(text, str) or not text.strip() or len(text) > 12000 or _invalid_xml(text):
+            raise PrintError('参考答案与指南须由家长核对，且不超过12000字')
+        paragraphs = ['家长参考答案与辅导指南', title.strip(),
+                      '仅供家长核对使用；答案与原题有冲突时以原题和老师要求为准。', *text.strip().splitlines()]
+        document=_text_docx(paragraphs)
+        name='家长参考-'+re.sub(r'[\\/\x00-\x1f\x7f]', '_', title.strip())[:60]+'.docx'
+        return self._prepare_bytes(name, document,
+                                   dict(type='parent_guide', title=title.strip()), key, revision=revision)
+
+    def _prepare_bytes(self, name, data, source, key, *, packet=None, revision=False):
+        fingerprint = _hash(_json([source, _hash(data)]+([packet] if packet is not None else [])).encode())
         with self._db() as c:
             old = c.execute('SELECT * FROM print_preparations WHERE idem=?', (key,)).fetchone()
+            if revision and (old is None or old['fingerprint'] != fingerprint):
+                # Keep every preparation immutable and reuse matching legacy IDs; enqueue keys stay unchanged.
+                key = _hash((key+':'+fingerprint).encode())[:32]
+                old = c.execute('SELECT * FROM print_preparations WHERE idem=?', (key,)).fetchone()
         if old:
             if old['fingerprint'] != fingerprint: raise PrintError('同一请求的附件已变化，请重新预览', 'conflict', 409)
             self.preview(old['id'])
@@ -404,10 +632,63 @@ class PrintStore:
             return body
         except sqlite3.IntegrityError:
             target.unlink(missing_ok=True)
-            return self.prepare(source, key)
+            with self._db() as c:
+                old = c.execute('SELECT * FROM print_preparations WHERE idem=?', (key,)).fetchone()
+            if not old or old['fingerprint'] != fingerprint:
+                raise PrintError('同一请求的附件已变化，请重新预览', 'conflict', 409)
+            self.preview(old['id'])
+            return json.loads(old['body'])
         except Exception:
             target.unlink(missing_ok=True)
             raise
+
+    def homework_pair(self, obj, task, *, before_queue=None, queue_guard=None, context_sha256='', source_sha256=None):
+        """One reviewed action queues two independent jobs; retries keep each original request key."""
+        if not isinstance(obj, dict) or obj.get('question_confirmed') is not True or obj.get('guide_confirmed') is not True:
+            raise PrintError('请分别核对作业题目和家长参考')
+        if not isinstance(task, dict) or obj.get('task_id') != task.get('id'):
+            raise PrintError('作业事项已变化，请刷新后核对', 'conflict', 409)
+        key = _key(obj.get('request_key'))
+        questions = question_sources(obj.get('question_sources') if 'question_sources' in obj else [obj.get('question_source')])
+        guide = obj.get('guide_source')
+        guide_text = obj.get('guide_text', '')
+        if (guide is None) == (not bool(guide_text)):
+            raise PrintError('请选择参考文件，或填写已核对的参考答案与指南')
+        if guide is not None and guide in questions:
+            raise PrintError('题目与家长参考须选两份不同的资料')
+        settings = {k: obj.get(k, v) for k, v in dict(printer='', copies=1, sides='one-sided', color='monochrome').items()}
+        subkey = lambda role: _hash((key+':'+role).encode())[:32]
+        prepared=[self.prepare(source,subkey('question_prepare'+(str(n+1) if n else '')),
+                               packet=questions if len(questions)>1 else None,revision=True)
+                  for n,source in enumerate(questions)]
+        expected = obj.get('expected_question_sha256', '')
+        if expected and (not isinstance(expected,str) or not re.fullmatch(r'[a-f0-9]{64}',expected) or expected!=packet_sha([p['source_sha256'] for p in prepared])):
+            raise PrintError('题目原件与参考草稿生成时不同，请重新核对答案','conflict',409)
+        second = (self.prepare(guide, subkey('guide_prepare'),revision=True) if guide is not None else
+                  self.prepare_guide(task['title'], guide_text, subkey('guide_prepare'),revision=True))
+        if source_sha256 is not None:
+            for prep in prepared+([second] if guide is not None else []):
+                if prep['source_sha256']!=source_sha256.get(prep['source'].get('id')):
+                    raise PrintError('准备的PDF与冻结原件不一致，请重新打开核对','review_source_changed',409)
+        roles=['question'+(str(n+1) if n else '') for n in range(len(prepared))]+['guide']
+        def transaction_guard(c):
+            if context_sha256:
+                existing=[json.loads(row['body']) for role in roles
+                          if (row:=c.execute('SELECT body FROM print_jobs WHERE idem=?',(subkey(role+'_enqueue'),)).fetchone())]
+                known=[body.get('homework_context_sha256') for body in existing]
+                if (any(value is None for value in known) and (len(existing)!=len(roles) or any(value is not None for value in known))
+                        or any(value is not None and value!=context_sha256 for value in known)):
+                    raise PrintError('原请求已有任务但来源版本无法继续匹配，请核对打印进展；旧任务保留','conflict',409)
+            if queue_guard is not None: queue_guard(c)
+        def queue(prep, role):
+            if before_queue is not None: before_queue()
+            guards={}
+            if queue_guard is not None or context_sha256: guards['queue_guard']=transaction_guard
+            if context_sha256: guards['context_sha256']=context_sha256
+            return self.enqueue(dict(settings, confirmed=True, preparation_id=prep['id'],
+                                     pdf_sha256=prep['pdf_sha256'], idempotency_key=subkey(role+'_enqueue')),**guards)
+        jobs=[queue(prep,'question'+(str(n+1) if n else '')) for n,prep in enumerate(prepared)]
+        return dict(question=jobs[0],questions=jobs,guide=queue(second, 'guide'))
 
     def preparation(self, ident):
         with self._db() as c: row = c.execute('SELECT body FROM print_preparations WHERE id=?', (_id(ident),)).fetchone()
@@ -427,7 +708,7 @@ class PrintStore:
         if private: body.update(claim_token=row['claim_token'], bridge_id=row['bridge_id'], pdf_url='/api/print/bridge/pdf/'+row['id'])
         return body
 
-    def enqueue(self, obj):
+    def enqueue(self, obj, *, queue_guard=None, context_sha256=''):
         if not isinstance(obj, dict) or obj.get('confirmed') is not True: raise PrintError('请先确认打印预览和设置')
         key = _key(obj.get('idempotency_key')); prep = self.preparation(obj.get('preparation_id'))
         if obj.get('pdf_sha256') != prep['pdf_sha256']: raise PrintError('确认的PDF与预览不一致', 'conflict', 409)
@@ -439,12 +720,21 @@ class PrintStore:
         pages, selected = page_selection(obj.get('pages', 'all'), prep['page_count'])
         if selected * copies > 500: raise PrintError('一次打印最多500个页面副本')
         settings = dict(preparation_id=prep['id'], pdf_sha256=prep['pdf_sha256'], printer=printer_name(obj.get('printer')), pages=pages, copies=copies, sides=sides, color=color)
+        legacy_fingerprint = _hash(_json(settings).encode())
+        if context_sha256:
+            if not isinstance(context_sha256,str) or not re.fullmatch(r'[a-f0-9]{64}',context_sha256):
+                raise PrintError('打印来源快照不正确')
+            settings['homework_context_sha256']=context_sha256
         fingerprint = _hash(_json(settings).encode())
         with self._db() as c:
             c.execute('BEGIN IMMEDIATE')
+            if queue_guard is not None: queue_guard(c)
             old = c.execute('SELECT * FROM print_jobs WHERE idem=?', (key,)).fetchone()
             if old:
-                if old['fingerprint'] != fingerprint: raise PrintError('同一打印请求的设置不同', 'conflict', 409)
+                # Old jobs have no scope proof. Matching immutable settings may only read their receipt back;
+                # homework_pair's transaction guard refuses to fill any missing role alongside such a job.
+                expected_fingerprint=(legacy_fingerprint if context_sha256 and 'homework_context_sha256' not in json.loads(old['body']) else fingerprint)
+                if old['fingerprint'] != expected_fingerprint: raise PrintError('同一打印请求的设置或来源版本不同', 'conflict', 409)
                 return self._job(old)
             ident, now = secrets.token_hex(16), _now()
             body = dict(settings, name=prep['name'], source_sha256=prep['source_sha256'], page_count=prep['page_count'], selected_pages=selected, created=now)

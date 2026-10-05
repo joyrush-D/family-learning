@@ -1,6 +1,7 @@
 """Isolated HTTP checks with fictional data; never invokes a real printer."""
 import base64
 import hashlib
+import io
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 import json
@@ -115,6 +116,39 @@ class PrintHTTPTests(unittest.TestCase):
         self.assertEqual(self.request('GET','/api/print/preview/../test.sqlite3')[0],404)
         (app.DATA/'print'/(prep['id']+'.pdf')).write_bytes(b'%PDF-synthetic-tampering')
         self.assertEqual(self.request('GET',prep['preview_url'])[0],409)
+
+    def test_homework_pair_requires_parent_review_and_two_separate_jobs(self):
+        self.config()
+        task=app.new_task(dict(child='示例甲',title='虚构英语练习',due='2000-01-02',
+                               category='homework',request_key='synthetic_task_print_123'))
+        question=app.save_upload(io.BytesIO(PNG),len(PNG),'synthetic-question.png')['id']
+        answer=app.save_upload(io.BytesIO(PNG),len(PNG),'synthetic-reference.png')['id']
+        app.save_task_feedback(dict(task_id=task['id'],child='示例甲',day='2000-01-01',
+                                    request_key='synthetic_pair_materials',attachments=[question,answer]))
+        body=dict(task_id=task['id'],request_key='synthetic_pair_print_123',
+                  question_source=dict(type='upload',id=question),guide_source=dict(type='upload',id=answer),
+                  guide_text='',question_confirmed=True,guide_confirmed=True,printer=PRINTER['name'])
+        self.assertEqual(self.post('/api/print/homework',body,{})[0],403)
+        self.assertEqual(self.post('/api/print/homework',body|{'guide_confirmed':False})[0],400)
+        self.assertEqual(self.post('/api/print/homework',body|{'task_id':'missing'})[0],404)
+        status,_,result=self.post('/api/print/homework',body);self.assertEqual(status,200,result)
+        jobs=json.loads(result)['jobs'];self.assertNotEqual(jobs['question']['id'],jobs['guide']['id'])
+        self.assertEqual(json.loads(self.post('/api/print/homework',body)[2])['jobs'],jobs)
+        self.assertEqual(len(app.print_store().list_jobs()),2)
+
+    def test_reference_draft_reads_only_selected_image(self):
+        with patch.object(app.family_llm,'homework_reference_draft',return_value=dict(text='待核对草稿',items=1,coverage='一页')) as model:
+            status,_,body=self.post('/api/print/homework/draft',dict(question_source=self.source))
+        self.assertEqual(status,200,body);self.assertEqual(json.loads(body)['draft']['text'],'待核对草稿')
+        self.assertEqual(json.loads(body)['question_sha256'],hashlib.sha256(PNG).hexdigest())
+        self.assertEqual(model.call_count,1)
+        (app.DATA/'attachments'/'page2.png').write_bytes(PNG)
+        with patch.object(app.family_llm,'homework_reference_draft',return_value=dict(text='双页草稿',items=1,coverage='两页')) as model:
+            status,_,body=self.post('/api/print/homework/draft',dict(question_sources=[self.source,dict(type='attachment',name='page2.png')]))
+        self.assertEqual(status,200,body)
+        self.assertEqual(len(model.call_args.args[0]),2)
+        self.assertEqual(json.loads(body)['question_sha256'],app.family_print.packet_sha([hashlib.sha256(PNG).hexdigest()]*2))
+        self.assertEqual(self.post('/api/print/homework/draft',dict(question_source=dict(type='url',url='https://example.invalid')))[0],400)
 
     def test_confirmed_hash_authorized_capabilities_and_repeat_clicks(self):
         options=self.options()

@@ -1,0 +1,409 @@
+"""Synthetic homework print scope checks; no household service, model or printer I/O."""
+from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
+import io
+import json
+from pathlib import Path
+import tempfile
+import threading
+import unittest
+from unittest.mock import patch
+
+import app
+from test_print_http import PNG, PRINTER
+
+
+class HomeworkPrintScopeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory(prefix='synthetic-homework-print-scope-')
+        root=Path(self.temp.name);data=root/'private';data.mkdir()
+        (root/'家庭运行规则.md').write_text('| child-1 | 示例甲 | 男 | 10岁 | 四年级 |\n| child-2 | 示例乙 | 女 | 8岁 | 二年级 |\n')
+        (root/'跟踪台账.md').write_text('')
+        (data/'attachments').mkdir();(data/'attachments'/'synthetic.png').write_bytes(PNG)
+        self.paths=patch.multiple(app,ROOT=root,DATA=data,DB=data/'test.sqlite3');self.paths.start()
+        self.environment=patch.dict(app.os.environ,{'FAMILY_HOST':'family.example.invalid','FAMILY_USER':'parent@example.invalid'});self.environment.start()
+        (data/'打印机配置.json').write_text(json.dumps({'printers':[PRINTER]}))
+        self.pages=patch.object(app.family_print.PrintStore,'_page_count',return_value=1);self.pages.start()
+        self.task=self.new_task('示例甲','synthetic-current')
+        self.other_task=self.new_task('示例甲','synthetic-other-task')
+        self.other_child=self.new_task('示例乙','synthetic-other-child')
+        self.question=self.upload('synthetic-paper.png')
+        self.teacher=self.upload('synthetic-teacher.png')
+        self.answer=self.feedback(self.task,[self.question,self.teacher],'synthetic-current-answer')
+        self.foreign_task=self.upload('synthetic-paper.png')
+        self.feedback(self.other_task,[self.foreign_task],'synthetic-other-task-answer')
+        self.foreign_child=self.upload('synthetic-paper.png')
+        self.feedback(self.other_child,[self.foreign_child],'synthetic-other-child-answer')
+        self.unbound=self.upload('synthetic-paper.png')
+        self.server=ThreadingHTTPServer(('127.0.0.1',0),app.Handler)
+        self.thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown();self.server.server_close();self.thread.join(timeout=3)
+        self.pages.stop();self.environment.stop();self.paths.stop();self.temp.cleanup()
+
+    def new_task(self,child,key,**extra):
+        return app.new_task(dict(child=child,title='虚构作业 '+key,category='homework',request_key=key,**extra))
+
+    def upload(self,name,body=PNG):
+        return app.save_upload(io.BytesIO(body),len(body),name)['id']
+
+    def feedback(self,task,attachments,key):
+        return app.save_task_feedback(dict(task_id=task['id'],child=task['child'],day='2026-10-01',request_key=key,attachments=attachments))
+
+    @staticmethod
+    def source(ident): return dict(type='upload',id=ident)
+
+    def request(self,method,path,obj=None):
+        conn=HTTPConnection('127.0.0.1',self.server.server_port,timeout=5)
+        try:
+            conn.request(method,path,json.dumps(obj).encode() if obj is not None else None,{'X-Family-Token':app.TOKEN})
+            response=conn.getresponse();body=response.read()
+            return response.status,json.loads(body)
+        finally: conn.close()
+
+    def materials(self,task=None):
+        return self.request('GET','/api/print/homework/materials?task_id='+(task or self.task)['id'])
+
+    def pair(self,**extra):
+        return dict(task_id=self.task['id'],request_key='synthetic-pair-print',question_sources=[self.source(self.question)],
+                    guide_source=self.source(self.teacher),guide_text='',question_confirmed=True,guide_confirmed=True,printer=PRINTER['name'])|extra
+
+    def dump(self):
+        with app.connect_read_only() as c: return '\n'.join(c.iterdump())
+
+    def test_current_report_feedback_and_source_identity_are_read_only(self):
+        paper=self.upload('synthetic-reported-paper.png')
+        reported=app.study_store().save_item(dict(child_id='child-1',day='2026-10-01',request_key='synthetic-reported-paper',version=0,
+            title='虚构电子试卷',subject='语文',planned_minutes=None,report=dict(text='',explanation='',goal='完成这份试卷',attachments=[paper])))
+        report_task=next(t for t in app.tasks() if t['id']==reported['saved_item_id'])
+        answer=self.feedback(report_task,[self.question],'synthetic-report-answer')
+        generated=self.upload('作业批改参考-'+str(self.answer['record_id'])+'.txt',b'Synthetic previous AI check')
+        result=self.feedback(self.task,[self.question,self.teacher,generated],'synthetic-saved-check')
+        with app.connect() as c:
+            c.execute("UPDATE records SET followup_kind='作业检查',related_record_id=? WHERE id=?",(self.answer['record_id'],result['record_id']))
+        legacy=self.upload('作业批改参考-'+str(self.answer['record_id'])+'.txt',b'Synthetic legacy AI check')
+        legacy_result=self.feedback(self.task,[legacy],'synthetic-legacy-check')
+        with app.connect() as c:
+            c.execute('UPDATE records SET note=? WHERE id=?',('家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #'+str(self.answer['record_id'])+'。',legacy_result['record_id']))
+        before=self.dump()
+        with patch.object(app,'print_store') as store,patch.object(app.family_llm,'homework_reference_draft') as model:
+            status,value=self.materials();report_status,report_value=self.materials(report_task)
+        self.assertEqual((status,report_status),(200,200))
+        self.assertEqual(value['task'],dict(id=self.task['id'],child='示例甲'))
+        self.assertEqual({f['source']['id'] for f in value['files']},{self.question,self.teacher})
+        self.assertEqual({f['source']['id'] for f in report_value['files']},{paper,self.question})
+        self.assertEqual(next(f for f in report_value['files'] if f['source']['id']==paper)['origin'],'reported_homework')
+        self.assertEqual(value['school_error'],'')
+        self.assertEqual(self.dump(),before);store.assert_not_called();model.assert_not_called()
+        with app.connect_read_only() as c:
+            context=app.homework_review_context(c,report_task['id'],answer['record_id'])
+        self.assertEqual(context['allowed'][self.question]['origin'],'saved_answer')
+
+    def test_foreign_unbound_and_old_check_sources_reject_before_any_print_write(self):
+        generated=self.upload('作业批改参考-'+str(self.answer['record_id'])+'.txt',b'Synthetic previous AI check')
+        result=self.feedback(self.task,[generated],'synthetic-generated-result')
+        with app.connect() as c:
+            c.execute("UPDATE records SET followup_kind='作业检查',related_record_id=? WHERE id=?",(self.answer['record_id'],result['record_id']))
+        forbidden=[self.source(i) for i in (self.foreign_task,self.foreign_child,self.unbound,generated)]
+        forbidden.append(dict(type='attachment',name='synthetic.png'))
+        before=self.dump()
+        with patch.object(app,'print_store') as store,patch.object(app.family_llm,'homework_reference_draft') as model:
+            for source in forbidden:
+                for body in (self.pair(question_sources=[source]),self.pair(guide_source=source)):
+                    status,value=self.request('POST','/api/print/homework',body)
+                    self.assertEqual(status,403,value);self.assertEqual(value['code'],'review_source_not_allowed')
+                status,value=self.request('POST','/api/print/homework/draft',dict(purpose='reference',task_id=self.task['id'],question_sources=[source]))
+                self.assertEqual(status,403,value)
+            self.assertEqual(self.request('POST','/api/print/homework',self.pair(task_id='missing'))[0],404)
+        store.assert_not_called();model.assert_not_called();self.assertEqual(self.dump(),before)
+        self.assertFalse((app.DATA/'print').exists())
+
+    def test_school_revocation_preserves_only_independent_saved_materials(self):
+        school_file=self.upload('synthetic-school-paper.png')
+        app.agent_store()
+        school=dict(id='synthetic-school',platform='qq',child_id='child-1',name='虚构学校来源',enabled=True)
+        message=dict(id='synthetic-message',time='2026-10-01T12:00:00+08:00',kind='text',sender='虚构老师',text='虚构作业原件',unread=False)
+        with app.connect() as c:
+            c.execute('INSERT INTO agent_sources (id,binding,cursor) VALUES (?,?,?)',(school['id'],json.dumps(['qq','child-1'],separators=(',',':')),''))
+            c.execute('INSERT INTO agent_messages (source_id,id,payload) VALUES (?,?,?)',(school['id'],message['id'],json.dumps(message)))
+            c.execute('INSERT INTO agent_message_attachments VALUES (?,?,?)',(school['id'],message['id'],school_file))
+        with patch.object(app.family_agent.Store,'_config',return_value=dict(enabled=True,sources=[school])):
+            task=self.new_task('示例甲','synthetic-school-task',source='message:synthetic-school:synthetic-message')
+            empty_task=self.new_task('示例甲','synthetic-school-empty-task',source='message:synthetic-school:synthetic-message')
+            self.feedback(task,[self.question],'synthetic-school-saved-answer')
+            status,value=self.materials(task);self.assertEqual(status,200,value)
+            self.assertEqual({f['source']['id'] for f in value['files']},{school_file,self.question})
+            school['enabled']=False;before=self.dump()
+            with patch.object(app,'print_store') as store,patch.object(app.family_llm,'homework_reference_draft') as model:
+                status,value=self.materials(task);empty_status,empty=self.materials(empty_task)
+                self.assertEqual(status,200,value);self.assertEqual(empty_status,200,empty)
+                self.assertEqual({f['source']['id'] for f in value['files']},{self.question})
+                self.assertTrue(value['school_error']);self.assertEqual(empty['files'],[]);self.assertTrue(empty['school_error'])
+                body=self.pair(task_id=task['id'],guide_source=self.source(school_file))
+                self.assertEqual(self.request('POST','/api/print/homework',body)[0],403)
+                body=dict(purpose='reference',task_id=task['id'],question_sources=[self.source(school_file)])
+                self.assertEqual(self.request('POST','/api/print/homework/draft',body)[0],403)
+            store.assert_not_called();model.assert_not_called();self.assertEqual(self.dump(),before)
+
+    def test_pair_lost_receipt_retries_same_request_without_duplicate_jobs(self):
+        original=app.family_print.PrintStore.enqueue;calls=[]
+        def lose_second_receipt(store,body,**kwargs):
+            calls.append(body['idempotency_key']);job=original(store,body,**kwargs)
+            if len(calls)==2: raise app.family_print.PrintError('Synthetic lost receipt','synthetic_receipt_lost',503)
+            return job
+        with patch.object(app.family_print.PrintStore,'enqueue',lose_second_receipt):
+            status,value=self.request('POST','/api/print/homework',self.pair());self.assertEqual(status,503,value)
+            queued=app.print_store().list_jobs();self.assertEqual(len(queued),2)
+            status,value=self.request('POST','/api/print/homework',self.pair());self.assertEqual(status,200,value)
+        self.assertEqual(calls[:2],calls[2:]);self.assertNotEqual(calls[0],calls[1])
+        self.assertEqual({j['id'] for j in queued},{value['jobs']['question']['id'],value['jobs']['guide']['id']})
+        self.assertEqual(len(app.print_store().list_jobs()),2)
+
+    def print_preparations(self):
+        with app.connect_read_only() as c:
+            rows={r['id']:dict(r) for r in c.execute('SELECT * FROM print_preparations')}
+        pdfs={ident:(app.DATA/'print'/(ident+'.pdf')).read_bytes() for ident in rows}
+        return rows,pdfs
+
+    def assert_prepare_race_rejected(self,change):
+        """Change synthetic originals after both PDFs exist, before the HTTP handler queues either."""
+        original=app.family_print.PrintStore.prepare;snapshots=[];changes_completed=[]
+        def change_after_prepare(store,source,*args,**kwargs):
+            prepared=original(store,source,*args,**kwargs)
+            if source==self.source(self.teacher):
+                snapshots.append(self.print_preparations())
+                change()
+                changes_completed.append(True)
+            return prepared
+        with patch.object(app.family_print.PrintStore,'prepare',change_after_prepare):
+            status,value=self.request('POST','/api/print/homework',self.pair())
+        self.assertEqual(changes_completed,[True],value)  # A rejected correction is not a successful print guard.
+        self.assertEqual(status,409,value)
+        self.assertEqual(app.print_store().list_jobs(),[])
+        self.assertEqual(len(snapshots),1)
+        self.assertEqual(len(snapshots[0][0]),2)
+        self.assertEqual(self.print_preparations(),snapshots[0])
+
+    def test_task_child_changed_during_prepare_rejects_before_queue(self):
+        def change():
+            with app.connect() as c:
+                changed=c.execute('UPDATE manual_tasks SET child=? WHERE id=?',('示例乙',self.task['id']))
+                self.assertEqual(changed.rowcount,1)
+                self.assertEqual(c.execute('SELECT child FROM manual_tasks WHERE id=?',(self.task['id'],)).fetchone()['child'],'示例乙')
+        self.assert_prepare_race_rejected(change)
+
+    def test_task_source_changed_during_prepare_rejects_before_queue(self):
+        def change():
+            with app.connect() as c:
+                changed=c.execute('UPDATE manual_tasks SET source=? WHERE id=?',('虚构来源更正',self.task['id']))
+                self.assertEqual(changed.rowcount,1)
+                self.assertEqual(c.execute('SELECT source FROM manual_tasks WHERE id=?',(self.task['id'],)).fetchone()['source'],'虚构来源更正')
+        self.assert_prepare_race_rejected(change)
+
+    def test_feedback_version_changed_during_prepare_rejects_before_queue(self):
+        def change():
+            with app.connect_read_only() as c:
+                initial=dict(c.execute('SELECT * FROM records WHERE id=?',(self.answer['record_id'],)).fetchone())
+            status,value=self.request('POST','/api/task/feedback',dict(task_id=self.task['id'],child=self.task['child'],
+                record_id=self.answer['record_id'],expected_created=initial['created'],note='虚构原反馈已更正，附件保持不变'))
+            self.assertEqual(status,200,value)
+            with app.connect_read_only() as c:
+                current=dict(c.execute('SELECT * FROM records WHERE id=?',(self.answer['record_id'],)).fetchone())
+            self.assertNotEqual(current['created'],initial['created'])
+            self.assertEqual(current['attachments'],initial['attachments'])
+            self.assertEqual(current['note'],'虚构原反馈已更正，附件保持不变')
+        self.assert_prepare_race_rejected(change)
+
+    def test_originals_rebound_to_new_feedback_during_prepare_reject_before_queue(self):
+        def change():
+            # A limited SQL fixture isolates changed attachment binding; feedback corrections forbid removing originals.
+            with app.connect() as c:
+                changed=c.execute("UPDATE records SET attachments='[]' WHERE id=?",(self.answer['record_id'],))
+                self.assertEqual(changed.rowcount,1)
+            replacement=self.feedback(self.task,[self.question,self.teacher],'synthetic-rebound-current-answer')
+            self.assertNotEqual(replacement['record_id'],self.answer['record_id'])
+            with app.connect_read_only() as c:
+                self.assertEqual(c.execute('SELECT attachments FROM records WHERE id=?',(self.answer['record_id'],)).fetchone()['attachments'],'[]')
+                attachments=json.loads(c.execute('SELECT attachments FROM records WHERE id=?',(replacement['record_id'],)).fetchone()['attachments'])
+                self.assertEqual(attachments,[self.question,self.teacher])
+        self.assert_prepare_race_rejected(change)
+
+    def test_link_version_changed_during_prepare_rejects_before_queue(self):
+        # Ordinary records use the real explicit task-link fields; a feedback's source is its own binding.
+        # Test setup only: remove the competing feedback binding without pretending a forbidden correction succeeded.
+        with app.connect() as c:
+            changed=c.execute("UPDATE records SET attachments='[]' WHERE id=?",(self.answer['record_id'],))
+            self.assertEqual(changed.rowcount,1)
+        linked=app.save_record(dict(child=self.task['child'],day='2026-10-01',category='学习进展',title='虚构关联原件',
+            source='家长网页记录',attachments=[self.question,self.teacher],linked_task_id=self.task['id'],request_key='synthetic-linked-originals'))
+        with app.connect_read_only() as c:
+            initial=dict(c.execute('SELECT * FROM records WHERE id=?',(linked['record_id'],)).fetchone())
+        def change():
+            status,removed=self.request('POST','/api/record/task-link',dict(record_id=linked['record_id'],child=self.task['child'],task_id='',
+                expected_linked_at=initial['linked_task_at']))
+            self.assertEqual(status,200,removed)
+            status,relinked=self.request('POST','/api/record/task-link',dict(record_id=linked['record_id'],child=self.task['child'],task_id=self.task['id'],
+                expected_linked_at=removed['link']['linked_at']))
+            self.assertEqual(status,200,relinked)
+            with app.connect_read_only() as c:
+                current=dict(c.execute('SELECT * FROM records WHERE id=?',(linked['record_id'],)).fetchone())
+            self.assertNotEqual(current['linked_task_at'],initial['linked_task_at'])
+            self.assertEqual(current['linked_task_id'],self.task['id'])
+            self.assertEqual(current['created'],initial['created'])
+            self.assertEqual(current['attachments'],initial['attachments'])
+        self.assert_prepare_race_rejected(change)
+
+    def test_feedback_source_changed_but_still_linked_during_prepare_rejects_before_queue(self):
+        def change():
+            # Keep the same child, task, record version and selectable uploads while changing their origin.
+            with app.connect() as c:
+                changed=c.execute('UPDATE records SET source=?,linked_task_id=?,linked_task_at=? WHERE id=?',
+                    ('虚构手工资料来源',self.task['id'],'2026-10-02T12:00:00',self.answer['record_id']))
+                self.assertEqual(changed.rowcount,1)
+                current=c.execute('SELECT source,linked_task_id FROM records WHERE id=?',(self.answer['record_id'],)).fetchone()
+                self.assertEqual((current['source'],current['linked_task_id']),('虚构手工资料来源',self.task['id']))
+        self.assert_prepare_race_rejected(change)
+
+    def test_question_bytes_changed_during_prepare_reject_before_queue(self):
+        def change():
+            path=app.DATA/'uploads'/self.question;body=path.read_bytes()
+            path.write_bytes(body[:-1]+bytes([body[-1]^1]))  # Same size defeats a size-only guard.
+            self.assertEqual(len(path.read_bytes()),len(body));self.assertNotEqual(path.read_bytes(),body)
+        self.assert_prepare_race_rejected(change)
+
+    def test_teacher_bytes_changed_during_prepare_reject_before_queue(self):
+        def change():
+            path=app.DATA/'uploads'/self.teacher;body=path.read_bytes()
+            path.write_bytes(body[:-1]+bytes([body[-1]^1]))
+            self.assertEqual(len(path.read_bytes()),len(body));self.assertNotEqual(path.read_bytes(),body)
+        self.assert_prepare_race_rejected(change)
+
+    def test_unchanged_pair_retry_reuses_jobs_preparations_and_pdfs(self):
+        status,value=self.request('POST','/api/print/homework',self.pair());self.assertEqual(status,200,value)
+        preparations=self.print_preparations()
+        status,retry=self.request('POST','/api/print/homework',self.pair());self.assertEqual(status,200,retry)
+        self.assertEqual(value['jobs'],retry['jobs']);self.assertEqual(len(app.print_store().list_jobs()),2)
+        self.assertEqual(len(preparations[0]),2);self.assertEqual(self.print_preparations(),preparations)
+
+    def test_partial_receipt_retry_after_feedback_correction_cannot_add_new_guide(self):
+        original=app.family_print.PrintStore.enqueue;calls=[]
+        def lose_first_receipt(store,body,**kwargs):
+            job=original(store,body,**kwargs);calls.append(job)
+            if len(calls)==1: raise app.family_print.PrintError('Synthetic first receipt lost','synthetic_receipt_lost',503)
+            return job
+        with patch.object(app.family_print.PrintStore,'enqueue',lose_first_receipt):
+            status,value=self.request('POST','/api/print/homework',self.pair())
+        self.assertEqual(status,503,value)
+        queued=app.print_store().list_jobs();self.assertEqual(len(queued),1);self.assertEqual(queued[0],calls[0])
+        self.assertRegex(queued[0]['homework_context_sha256'],r'^[a-f0-9]{64}$')
+        preparations=self.print_preparations();self.assertEqual(len(preparations[0]),2)
+        with app.connect_read_only() as c:
+            initial=dict(c.execute('SELECT * FROM records WHERE id=?',(self.answer['record_id'],)).fetchone())
+        status,changed=self.request('POST','/api/task/feedback',dict(task_id=self.task['id'],child=self.task['child'],
+            record_id=self.answer['record_id'],expected_created=initial['created'],note='虚构反馈在题目入队后更正'))
+        self.assertEqual(status,200,changed);self.assertNotEqual(changed['feedback']['created'],initial['created'])
+        status,value=self.request('POST','/api/print/homework',self.pair());self.assertEqual(status,409,value)
+        self.assertEqual(app.print_store().list_jobs(),queued);self.assertEqual(self.print_preparations(),preparations)
+
+    def test_complete_legacy_pair_only_reads_matching_existing_jobs(self):
+        # The old server wrote these same role keys without a homework context digest.
+        expected=app.print_store().homework_pair(self.pair(),self.task)
+        self.assertNotIn('homework_context_sha256',expected['question']);self.assertNotIn('homework_context_sha256',expected['guide'])
+        preparations=self.print_preparations();queued=app.print_store().list_jobs()
+        with patch.object(app.family_print.PrintStore,'_convert',side_effect=AssertionError('legacy PDFs must only be read back')):
+            status,value=self.request('POST','/api/print/homework',self.pair())
+        self.assertEqual(status,200,value);self.assertEqual(value['jobs'],expected)
+        self.assertEqual(app.print_store().list_jobs(),queued);self.assertEqual(self.print_preparations(),preparations)
+
+    def test_partial_legacy_pair_does_not_guess_or_enqueue_missing_guide(self):
+        body=self.pair();store=app.print_store()
+        subkey=lambda role:app.family_print._hash((body['request_key']+':'+role).encode())[:32]
+        question=store.prepare(self.source(self.question),subkey('question_prepare'),revision=True)
+        old=store.enqueue(dict(confirmed=True,preparation_id=question['id'],pdf_sha256=question['pdf_sha256'],
+            printer=PRINTER['name'],idempotency_key=subkey('question_enqueue')))
+        self.assertNotIn('homework_context_sha256',old)
+        preparations=self.print_preparations();self.assertEqual(len(preparations[0]),1)
+        status,value=self.request('POST','/api/print/homework',body);self.assertEqual(status,409,value)
+        self.assertEqual(store.list_jobs(),[old])
+        current=self.print_preparations()
+        for ident,row in preparations[0].items():
+            self.assertEqual(current[0][ident],row);self.assertEqual(current[1][ident],preparations[1][ident])
+
+    def test_final_scope_guard_uses_enqueue_transaction_and_common_digest(self):
+        original=app.homework_print_sources;counts=[]
+        def guard(*args,**kwargs):
+            c=kwargs.get('connection')
+            if c is not None:
+                self.assertTrue(c.in_transaction)
+                counts.append(c.execute('SELECT COUNT(*) FROM print_jobs').fetchone()[0])
+            return original(*args,**kwargs)
+        with patch.object(app,'homework_print_sources',guard):
+            status,value=self.request('POST','/api/print/homework',self.pair())
+        self.assertEqual(status,200,value);self.assertEqual(counts,[0,1])
+        digest=value['jobs']['question']['homework_context_sha256'];self.assertRegex(digest,r'^[a-f0-9]{64}$')
+        self.assertEqual(value['jobs']['guide']['homework_context_sha256'],digest)
+
+    def test_material_unlinked_during_conversion_does_not_enqueue_and_retries_original_key(self):
+        original=app.family_print.PrintStore.prepare
+        def unlink_during_conversion(store,source,*args,**kwargs):
+            prepared=original(store,source,*args,**kwargs)
+            if source==self.source(self.question):
+                with app.connect_read_only() as c:
+                    row=dict(c.execute('SELECT * FROM records WHERE id=?',(self.answer['record_id'],)).fetchone())
+                app.save_record(dict(id=row['id'],child=row['child'],day=row['day'],category=row['category'],
+                                     title=row['title'],source=row['source'],note='虚构资料已解除，待重新核对',attachments=[]))
+            return prepared
+        body=self.pair()
+        with patch.object(app.family_print.PrintStore,'prepare',unlink_during_conversion):
+            status,value=self.request('POST','/api/print/homework',body)
+            self.assertEqual(status,403,value)
+        self.assertEqual(app.print_store().list_jobs(),[])
+        self.feedback(self.task,[self.question,self.teacher],'synthetic-reattach-current')
+        status,value=self.request('POST','/api/print/homework',body);self.assertEqual(status,200,value)
+        status,retry=self.request('POST','/api/print/homework',body);self.assertEqual(status,200,retry)
+        self.assertEqual(value['jobs'],retry['jobs']);self.assertEqual(len(app.print_store().list_jobs()),2)
+
+    def test_prepared_unlinked_question_can_be_replaced_without_changing_old_preparations(self):
+        original=app.family_print.PrintStore.prepare
+        def unlink_after_prepare(store,source,*args,**kwargs):
+            prepared=original(store,source,*args,**kwargs)
+            if source==self.source(self.question):
+                with app.connect_read_only() as c:
+                    row=dict(c.execute('SELECT * FROM records WHERE id=?',(self.answer['record_id'],)).fetchone())
+                app.save_record(dict(id=row['id'],child=row['child'],day=row['day'],category=row['category'],
+                    title=row['title'],source=row['source'],note='虚构原件已解除',attachments=[]))
+            return prepared
+        with patch.object(app.family_print.PrintStore,'prepare',unlink_after_prepare):
+            status,value=self.request('POST','/api/print/homework',self.pair())
+        self.assertEqual(status,403,value);self.assertEqual(app.print_store().list_jobs(),[])
+        with app.connect_read_only() as c:
+            old={r['id']:dict(r) for r in c.execute('SELECT * FROM print_preparations')}
+        self.assertEqual(len(old),2)
+        old_pdfs={ident:(app.DATA/'print'/(ident+'.pdf')).read_bytes() for ident in old}
+        replacement=self.upload('synthetic-replacement-question.png')
+        self.feedback(self.task,[replacement,self.teacher],'synthetic-replacement-materials')
+        body=self.pair(question_sources=[self.source(replacement)])
+        status,value=self.request('POST','/api/print/homework',body);self.assertEqual(status,200,value)
+        status,retry=self.request('POST','/api/print/homework',body);self.assertEqual(status,200,retry)
+        self.assertEqual(value['jobs'],retry['jobs']);self.assertEqual(len(app.print_store().list_jobs()),2)
+        self.assertNotIn(value['jobs']['question']['preparation_id'],old)
+        self.assertIn(value['jobs']['guide']['preparation_id'],old)
+        with app.connect_read_only() as c:
+            for ident,row in old.items():
+                self.assertEqual(dict(c.execute('SELECT * FROM print_preparations WHERE id=?',(ident,)).fetchone()),row)
+                self.assertEqual((app.DATA/'print'/(ident+'.pdf')).read_bytes(),old_pdfs[ident])
+
+    def test_reference_model_failure_and_legacy_independent_draft_remain_retryable(self):
+        body=dict(purpose='reference',task_id=self.task['id'],question_sources=[self.source(self.question)])
+        with patch.object(app.family_llm,'homework_reference_draft',side_effect=app.family_llm.LLMDraftError('Synthetic model unavailable')):
+            self.assertEqual(self.request('POST','/api/print/homework/draft',body)[0],503)
+        with patch.object(app.family_llm,'homework_reference_draft',return_value=dict(text='Synthetic reviewed draft',items=1,coverage='one page')) as model:
+            status,value=self.request('POST','/api/print/homework/draft',body)
+            self.assertEqual(status,200,value);self.assertEqual(model.call_count,1)
+            status,value=self.request('POST','/api/print/homework/draft',dict(question_source=dict(type='attachment',name='synthetic.png')))
+            self.assertEqual(status,200,value);self.assertEqual(model.call_count,2)
+        self.assertEqual(app.print_store().list_jobs(),[])
+
+
+if __name__=='__main__': unittest.main()

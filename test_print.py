@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 import zlib
 import family_print as printing
+import family_llm
 import print_bridge
 
 
@@ -20,6 +21,128 @@ def png(width=2, height=2, color=6):
     channels={0:1,2:3,4:2,6:4}[color]
     body=(b'\x00'+bytes([30,60,90,255][:channels])*width)*height
     return b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',width,height,8,color,0,0,0))+chunk(b'IDAT',zlib.compress(body))+chunk(b'IEND',b'')
+
+
+class HomeworkCauseTests(unittest.TestCase):
+    """Fixed synthetic reading receipts test validation, not image/model accuracy."""
+
+    def draft(self, *, review, **changes):
+        item=dict(label='虚构甲卷第1题',question='虚构甲卷第1题：2+3=?',student_answer='4',
+                  answer=('教师参考：' if review else 'AI自行推导：')+'5',judgment='incorrect',
+                  error_reason='卷面作答4与核对答案5不同。',possible_cause='',
+                  steps='先独立重算2+3，再对照核对答案。',uncertainty='')
+        if review:item['question_kind']='objective'
+        item.update(changes)
+        raw=dict(items=[item],coverage='仅虚构甲卷第1题，其余未检查。')
+        original=json.loads(json.dumps(raw))
+        kwargs=dict(review=review)
+        if review:
+            kwargs.update(reference_documents=[dict(name='synthetic-teacher.txt',text='虚构甲卷第1题：5')],
+                          image_labels=['虚构甲卷第1题'])
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            draft=family_llm.homework_reference_draft(dict(mime='image/png',data=png()),**kwargs)
+        self.assertEqual(model.call_count,1)
+        self.assertEqual(raw,original,'validation must not rewrite the transport receipt')
+        return draft
+
+    def test_review_preserves_wrong_answer_without_inferred_cause(self):
+        for cause in ('','可能重算时发生偏差，须请孩子说明。'):
+            with self.subTest(possible_cause=cause):
+                draft=self.draft(review=True,possible_cause=cause)
+                question=draft['questions'][0]
+                self.assertEqual((draft['wrong_items'],draft['unknown_items']),(1,0))
+                self.assertEqual(question['judgment'],'incorrect')
+                self.assertEqual(question['answer'],'教师参考：5')
+                self.assertEqual(question['student_answer'],'4')
+                self.assertEqual(question['error_reason'],'卷面作答4与核对答案5不同。')
+                self.assertEqual(question['possible_cause'],cause)
+                self.assertEqual(question['steps'],'先独立重算2+3，再对照核对答案。')
+                self.assertEqual(question['uncertainty'],'')
+                self.assertIn('错误依据：'+question['error_reason'],draft['text'])
+
+    def test_print_reference_preserves_wrong_answer_without_inferred_cause(self):
+        draft=self.draft(review=False)
+        question=draft['questions'][0]
+        self.assertEqual((draft['wrong_items'],draft['unknown_items']),(1,0))
+        self.assertEqual(question['judgment'],'incorrect')
+        self.assertEqual(question['answer'],'AI自行推导：5')
+        self.assertEqual(question['error_reason'],'卷面作答4与核对答案5不同。')
+        self.assertEqual(question['possible_cause'],'')
+        self.assertEqual(question['steps'],'先独立重算2+3，再对照核对答案。')
+        self.assertIn('错误依据：'+question['error_reason'],draft['text'])
+
+    def test_wrong_answer_still_requires_observable_evidence(self):
+        cases={'missing_answer':dict(student_answer=''),
+               'missing_reference':dict(answer=''),
+               'reference_conflict':dict(uncertainty='教师参考与可见题面冲突，待核对。'),
+               'missing_error_evidence':dict(error_reason='')}
+        for review in (False,True):
+            for name,changes in cases.items():
+                with self.subTest(review=review,missing=name):
+                    draft=self.draft(review=review,possible_cause='可能重算时发生偏差，须请孩子说明。',**changes)
+                    question=draft['questions'][0]
+                    self.assertEqual((draft['wrong_items'],draft['unknown_items']),(0,1))
+                    self.assertEqual(question['judgment'],'unknown')
+                    self.assertEqual(question['error_reason'],'')
+                    self.assertEqual(question['possible_cause'],'')
+                    self.assertEqual(question['steps'],'')
+                    self.assertTrue(question['uncertainty'])
+                    self.assertNotIn('错误依据：',draft['text'])
+                    if review and name=='reference_conflict':
+                        self.assertEqual(question['answer'],'教师参考：5')
+
+    def test_verified_error_does_not_require_correction_steps(self):
+        for review in (False,True):
+            with self.subTest(review=review):
+                draft=self.draft(review=review,steps='')
+                question=draft['questions'][0]
+                self.assertEqual((draft['wrong_items'],draft['unknown_items']),(1,0))
+                self.assertEqual(question['judgment'],'incorrect')
+                self.assertEqual(question['student_answer'],'4')
+                self.assertEqual(question['answer'],('教师参考：' if review else 'AI自行推导：')+'5')
+                self.assertEqual(question['error_reason'],'卷面作答4与核对答案5不同。')
+                self.assertEqual(question['steps'],'','missing teaching guidance is not missing grading evidence')
+                self.assertEqual(question['possible_cause'],'')
+                self.assertEqual(question['uncertainty'],'')
+                self.assertIn('错误依据：'+question['error_reason'],draft['text'])
+
+
+class HomeworkReviewTextTests(unittest.TestCase):
+    """The saved opinion must stay complete without repeating the wrong questions."""
+
+    def test_each_question_once_with_scope_and_previous_comparison(self):
+        raw=dict(coverage='只核虚构甲卷第1页；第2页未读。',comparison='补入教师参考；上轮未核的题仍未判定。',items=[
+            dict(label='虚构甲卷第1题',question='2+3=?',question_kind='objective',student_answer='4',
+                 answer='教师参考：5',judgment='incorrect',error_reason='4与5不同。',possible_cause='',
+                 steps='独立重算，再核对5。',uncertainty=''),
+            dict(label='虚构甲卷第2题',question='1+1=?',question_kind='objective',student_answer='2',
+                 answer='教师参考：2',judgment='correct',error_reason='',possible_cause='',steps='',uncertainty=''),
+            dict(label='虚构甲卷第3题',question='5+1=?',question_kind='objective',student_answer='',
+                 answer='',judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty='本次未提供作答。')])
+        original=json.loads(json.dumps(raw));scope=['虚构甲卷.pdf：已读取第1页；第2页未读。']
+        with patch.object(family_llm,'_chat_json',return_value=raw):
+            draft=family_llm.homework_reference_draft(dict(mime='image/png',data=png()),review=True,
+                program_coverage=scope,reference_documents=[dict(name='teacher.txt',text='虚构甲卷1题5、2题2')])
+        self.assertEqual(raw,original)
+        expected=[{k:v for k,v in item.items() if k!='question_kind'} for item in original['items']]
+        self.assertEqual(draft['questions'],expected)
+        self.assertEqual((draft['items'],draft['wrong_items'],draft['unknown_items']),(3,1,1))
+        lines=draft['text'].splitlines()
+        self.assertEqual(lines[0],'本次核对3题：需订正1题，与参考一致1题，未判定1题。')
+        for item in original['items']:
+            self.assertEqual(draft['text'].count(item['label']),1)
+        self.assertEqual(draft['text'].count('卷面作答：'),3)
+        for text in ('卷面作答：4','教师参考：5','错误依据：4与5不同。','订正建议：独立重算，再核对5。',
+                     '卷面作答：2','教师参考：2','未判定','本次未提供作答。',scope[0],raw['coverage'],raw['comparison']):
+            self.assertIn(text,draft['text'])
+        self.assertNotIn('可能原因',draft['text'])
+        self.assertLess(draft['text'].index('卷面作答：4'),draft['text'].index('覆盖说明：'))
+        self.assertIn('不代表作业已完成或已经掌握',draft['text'])
+
+    def test_supported_cause_keeps_explicit_uncertainty(self):
+        draft=HomeworkCauseTests().draft(review=True,possible_cause='可能重算时发生偏差，须请孩子说明。')
+        self.assertEqual(draft['text'].count('可能原因（待问孩子）：'),1)
+        self.assertIn('可能重算时发生偏差，须请孩子说明。',draft['text'])
 
 
 class PrintTests(unittest.TestCase):
@@ -58,6 +181,185 @@ class PrintTests(unittest.TestCase):
         (self.data/'attachments'/'sample.png').write_bytes(png(3))
         with self.assertRaises(printing.PrintError):self.prepared()
         self.assertNotEqual(self.prepared('prepare_key_2')['id'],first['id'])
+
+    def test_homework_pair_is_two_jobs_and_retry_does_not_reprint(self):
+        (self.data/'attachments'/'guide.png').write_bytes(png(3))
+        task=dict(id='TASK-1',title='虚构练习')
+        request=dict(task_id='TASK-1',request_key='homework_pair_123',question_source=self.source,
+                     guide_source=dict(type='attachment',name='guide.png'),guide_text='',
+                     question_confirmed=True,guide_confirmed=True,printer='Synthetic_Printer')
+        first=self.store.homework_pair(request,task)
+        self.assertNotEqual(first['question']['id'],first['guide']['id'])
+        self.assertEqual(first,self.store.homework_pair(request,task))
+        self.assertEqual(len(self.store.list_jobs()),2)
+        with self.assertRaises(printing.PrintError):
+            self.store.homework_pair({**request,'guide_source':self.source},task)
+        with self.assertRaises(printing.PrintError):
+            self.store.homework_pair({**request,'request_key':'homework_pair_other','expected_question_sha256':'0'*64},task)
+        self.assertEqual(len(self.store.list_jobs()),2)
+
+    def test_ordered_pages_keep_one_request_and_detect_changed_packet(self):
+        (self.data/'attachments'/'page2.png').write_bytes(png(3))
+        (self.data/'attachments'/'guide.png').write_bytes(png(4))
+        pages=[self.source,dict(type='attachment',name='page2.png')]
+        images,digest=self.store.images_for_draft(pages)
+        self.assertEqual(digest,printing.packet_sha([image['sha256'] for image in images]))
+        request=dict(task_id='TASK-1',request_key='homework_packet_123',question_sources=pages,
+                     guide_source=dict(type='attachment',name='guide.png'),guide_text='',
+                     expected_question_sha256=digest,question_confirmed=True,guide_confirmed=True,
+                     printer='Synthetic_Printer')
+        first=self.store.homework_pair(request,dict(id='TASK-1',title='虚构双页练习'))
+        self.assertEqual(len(first['questions']),2)
+        self.assertEqual(first,self.store.homework_pair(request,dict(id='TASK-1',title='虚构双页练习')))
+        self.assertEqual(len(self.store.list_jobs()),3)
+        with self.assertRaises(printing.PrintError):
+            self.store.homework_pair(request|{'question_sources':list(reversed(pages))},dict(id='TASK-1',title='虚构双页练习'))
+        with self.assertRaises(printing.PrintError):
+            self.store.homework_pair(request|{'request_key':'homework_packet_changed','question_sources':list(reversed(pages))},dict(id='TASK-1',title='虚构双页练习'))
+        self.assertEqual(len(self.store.list_jobs()),3)
+        with self.assertRaises(printing.PrintError):self.store.images_for_draft([pages[0],pages[0]])
+
+    def test_prepared_only_reference_and_ordered_packet_can_change_without_rewriting_pdf(self):
+        for name,width in [('guide.png',3),('replacement.png',4),('page2.png',5)]:
+            (self.data/'attachments'/name).write_bytes(png(width))
+        task=dict(id='TASK-1',title='虚构准备恢复')
+        guide=dict(type='attachment',name='guide.png');replacement=dict(type='attachment',name='replacement.png')
+        page2=dict(type='attachment',name='page2.png')
+        for kind in ('guide','packet'):
+            with self.subTest(kind=kind):
+                request=dict(task_id=task['id'],request_key='synthetic_prepared_only_'+kind,
+                    question_sources=[self.source] if kind=='guide' else [self.source,page2],
+                    guide_source=guide,guide_text='',question_confirmed=True,guide_confirmed=True,printer='Synthetic_Printer')
+                count=len(self.store.list_jobs())
+                with self.assertRaises(printing.PrintError) as error:
+                    self.store.homework_pair(request,task,before_queue=lambda: (_ for _ in ()).throw(printing.PrintError('Synthetic unlinked','review_source_not_allowed',403)))
+                self.assertEqual(error.exception.status,403);self.assertEqual(len(self.store.list_jobs()),count)
+                with self.connect() as c: old={r['id']:dict(r) for r in c.execute('SELECT * FROM print_preparations')}
+                old_pdf={ident:self.store.preview(ident)[0] for ident in old}
+                revised=request|({'guide_source':replacement} if kind=='guide' else {'question_sources':[page2,replacement]})
+                jobs=self.store.homework_pair(revised,task)
+                self.assertEqual(jobs,self.store.homework_pair(revised,task))
+                self.assertEqual(len(self.store.list_jobs()),count+len(revised['question_sources'])+1)
+                with self.connect() as c:
+                    for ident,row in old.items():
+                        self.assertEqual(dict(c.execute('SELECT * FROM print_preparations WHERE id=?',(ident,)).fetchone()),row)
+                        self.assertEqual(self.store.preview(ident)[0],old_pdf[ident])
+
+    def test_lost_partial_receipt_keeps_enqueue_roles_when_materials_change(self):
+        (self.data/'attachments'/'guide.png').write_bytes(png(3))
+        (self.data/'attachments'/'replacement.png').write_bytes(png(4))
+        task=dict(id='TASK-1',title='虚构丢回执')
+        request=dict(task_id=task['id'],request_key='synthetic_lost_partial',question_sources=[self.source],
+            guide_source=dict(type='attachment',name='guide.png'),guide_text='',question_confirmed=True,
+            guide_confirmed=True,printer='Synthetic_Printer')
+        original=self.store.enqueue
+        def lose_receipt(body):
+            original(body)
+            raise printing.PrintError('Synthetic lost receipt','synthetic_receipt_lost',503)
+        with patch.object(self.store,'enqueue',side_effect=lose_receipt),self.assertRaises(printing.PrintError):
+            self.store.homework_pair(request,task)
+        first=self.store.list_jobs();self.assertEqual(len(first),1)
+        replacement=dict(type='attachment',name='replacement.png')
+        with self.assertRaises(printing.PrintError) as error:
+            self.store.homework_pair(request|dict(question_sources=[replacement]),task)
+        self.assertEqual(error.exception.status,409);self.assertEqual(self.store.list_jobs(),first)
+        recovered=self.store.homework_pair(request,task)
+        self.assertEqual(recovered['question']['id'],first[0]['id']);self.assertEqual(len(self.store.list_jobs()),2)
+        with self.assertRaises(printing.PrintError) as error:
+            self.store.homework_pair(request|dict(guide_source=replacement),task)
+        self.assertEqual(error.exception.status,409);self.assertEqual(len(self.store.list_jobs()),2)
+        self.assertEqual(recovered,self.store.homework_pair(request,task))
+
+    def test_matching_legacy_preparations_keep_original_ids_and_enqueue_keys(self):
+        (self.data/'attachments'/'guide.png').write_bytes(png(3))
+        task=dict(id='TASK-1',title='虚构旧请求')
+        request=dict(task_id=task['id'],request_key='synthetic_legacy_pair',question_sources=[self.source],
+            guide_source=dict(type='attachment',name='guide.png'),guide_text='',question_confirmed=True,
+            guide_confirmed=True,printer='Synthetic_Printer')
+        subkey=lambda role:printing._hash((request['request_key']+':'+role).encode())[:32]
+        question=self.store.prepare(self.source,subkey('question_prepare'))
+        guide=self.store.prepare(request['guide_source'],subkey('guide_prepare'))
+        with patch.object(self.store,'_convert',side_effect=AssertionError('legacy preparation must not be reconverted')):
+            jobs=self.store.homework_pair(request,task)
+            self.assertEqual(jobs['question']['preparation_id'],question['id'])
+            self.assertEqual(jobs['guide']['preparation_id'],guide['id'])
+            self.assertEqual(jobs,self.store.homework_pair(request,task))
+        with self.connect() as c:
+            self.assertEqual({r['idem'] for r in c.execute('SELECT idem FROM print_jobs')},
+                {subkey('question_enqueue'),subkey('guide_enqueue')})
+            self.assertEqual({r['id'] for r in c.execute('SELECT id FROM print_preparations')},{question['id'],guide['id']})
+
+    def test_new_text_reference_retry_is_stable_across_zip_clock_changes(self):
+        captured=[]
+        def convert(body,name,directory):captured.append(body);return printing.image_pdf(png())
+        with patch.object(self.store,'_convert',side_effect=convert):
+            with patch.object(printing.zipfile.time,'localtime',return_value=(2026,10,3,1,2,4,5,276,0)):
+                first=self.store.prepare_guide('虚构题目','第1题：B','synthetic_stable_text')
+            with patch.object(printing.zipfile.time,'localtime',return_value=(2027,10,3,1,2,8,6,276,0)):
+                second=self.store.prepare_guide('虚构题目','第1题：B','synthetic_stable_text')
+        self.assertEqual(first,second);self.assertEqual(len(captured),1)
+        with zipfile.ZipFile(io.BytesIO(captured[0])) as archive:
+            self.assertTrue(all(info.date_time==(1980,1,1,0,0,0) for info in archive.infolist()))
+
+    def test_homework_pair_refuses_unreviewed_reference(self):
+        request=dict(task_id='TASK-1',request_key='homework_pair_456',question_source=self.source,
+                     guide_source=None,guide_text='',question_confirmed=True,guide_confirmed=False,
+                     printer='Synthetic_Printer')
+        with self.assertRaises(printing.PrintError):
+            self.store.homework_pair(request,dict(id='TASK-1',title='虚构练习'))
+        self.assertEqual(self.store.list_jobs(),[])
+
+    def test_homework_reference_draft_stays_reviewable(self):
+        item=dict(label='第1题',question='虚构题面',student_answer='C',answer='B',judgment='incorrect',
+                  error_reason='题干问未提及，C在原文中出现。',possible_cause='可能漏看否定词，需请孩子说明。',
+                  steps='先圈出否定词，再逐项找原文依据。',uncertainty='')
+        result=dict(items=[item,dict(item,label='第2题',student_answer='',judgment='unknown',
+                                     error_reason='',possible_cause='',uncertainty='卷面未见作答')],coverage='仅此一页')
+        with patch.object(family_llm,'_chat_json',return_value=result):
+            draft=family_llm.homework_reference_draft(dict(mime='image/png',data=png()))
+        self.assertIn('待核对',draft['text']);self.assertIn('第1题',draft['text']);self.assertIn('可能漏看否定词',draft['text'])
+        self.assertIn('第2题',draft['text']);self.assertIn('未判定',draft['text'])
+        self.assertEqual((draft['wrong_items'],draft['unknown_items']),(1,1))
+        with patch.object(family_llm,'_model_image',return_value=dict(mime='image/jpeg',data=b'preview')) as preview, patch.object(family_llm,'_chat_json',return_value=result) as chat:
+            family_llm.homework_reference_draft(dict(mime='image/png',data=png()))
+        preview.assert_called_once()
+        self.assertIn('data:image/jpeg;base64,',chat.call_args.args[0][1]['content'][2]['image_url']['url'])
+        with patch.object(family_llm,'_model_image',return_value=dict(mime='image/jpeg',data=b'preview')), patch.object(family_llm,'_chat_json',return_value=result) as chat:
+            family_llm.homework_reference_draft([dict(mime='image/png',data=png()),dict(mime='image/png',data=png(3))])
+        self.assertEqual(sum(part['type']=='image_url' for part in chat.call_args.args[0][1]['content']),2)
+        with patch.object(family_llm,'_chat_json',return_value={'items':[dict(result['items'][0],answer='错\x00误')],'coverage':'仅此一页'}),self.assertRaises(family_llm.LLMDraftError):
+            family_llm.homework_reference_draft(dict(mime='image/png',data=png()))
+        for conflict in (dict(item,student_answer=''),dict(item,judgment='unknown'),dict(item,uncertainty='下一页选项缺失')):
+            with patch.object(family_llm,'_chat_json',return_value={'items':[conflict],'coverage':'仅此一页'}):
+                draft=family_llm.homework_reference_draft(dict(mime='image/png',data=png()))
+            self.assertEqual((draft['wrong_items'],draft['unknown_items']),(0,1))
+            self.assertIn('未判定',draft['text'])
+            self.assertNotIn('错误依据：',draft['text'])
+            if conflict['uncertainty']=='下一页选项缺失':self.assertIn('参考答案：待核对',draft['text'])
+
+    def test_answer_review_keeps_five_images_together_without_expanding_print_packets(self):
+        sources=[]
+        for n in range(8):
+            name='synthetic-page-%d.png'%n
+            (self.data/'attachments'/name).write_bytes(png(n+2))
+            sources.append(dict(type='attachment',name=name))
+        with self.assertRaises(printing.PrintError): self.store.images_for_draft(sources[:5])
+        images,fingerprint=self.store.images_for_draft(sources,limit=family_llm.MAX_HOMEWORK_REVIEW_IMAGES)
+        self.assertEqual(len(images),8)
+        self.assertEqual(fingerprint,printing.packet_sha([image['sha256'] for image in images]))
+        with self.assertRaises(printing.PrintError):self.store.images_for_draft(sources+[sources[0]],limit=8)
+        with self.assertRaises(printing.PrintError):self.store.images_for_draft([sources[0],sources[0]],limit=8)
+        item=dict(label='第1题',question='虚构题面',student_answer='B',answer='B',judgment='correct',question_kind='objective',
+                  error_reason='',possible_cause='',steps='',uncertainty='')
+        with patch.object(family_llm,'_chat_json',return_value=dict(items=[item],coverage='仅第1题，其余未核对')) as chat:
+            draft=family_llm.homework_reference_draft([dict(mime=i['mime'],data=i['data']) for i in images],review=True)
+        self.assertEqual(sum(p['type']=='image_url' for p in chat.call_args.args[0][1]['content']),8)
+        self.assertIn('其余未核对',draft['coverage'])
+        with patch.object(family_llm,'_chat_json',side_effect=AssertionError('invalid input must not call a model')):
+            for args in (dict(images=images),dict(images=images+[images[0]],review=True)):
+                # Only mime/data are part of the model input, not the internal file fingerprint.
+                args['images']=[dict(mime=i['mime'],data=i['data']) for i in args['images']]
+                with self.assertRaises(ValueError):family_llm.homework_reference_draft(**args)
 
     def test_pdf_tampering_prevents_confirmation(self):
         prep=self.prepared();(self.data/'print'/(prep['id']+'.pdf')).write_bytes(b'%PDF-replaced')
@@ -266,6 +568,99 @@ def office_zip(extra=(),method=zipfile.ZIP_DEFLATED):
         warnings.simplefilter('ignore')  # A duplicate member is written on purpose.
         for name,text in [('[Content_Types].xml','<Types/>'),('word/document.xml','<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>'),('_rels/.rels','<Relationships/>'),*extra]:z.writestr(name,text)
     return out.getvalue()
+
+
+class TextPrintTests(unittest.TestCase):
+    """Original UTF-8 bytes stay authoritative while the bounded converter receives neutral DOCX."""
+    setUp=PrintTests.setUp
+    tearDown=PrintTests.tearDown
+
+    def text_source(self,name,text):
+        (self.data/'attachments'/name).write_bytes(text)
+        return dict(type='attachment',name=name)
+
+    @staticmethod
+    def lines(body):
+        with zipfile.ZipFile(io.BytesIO(body)) as archive:
+            root=printing.ET.fromstring(archive.read('word/document.xml'))
+            assert all(i.date_time==(1980,1,1,0,0,0) for i in archive.infolist())
+        ns='{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+        return [''.join('\t' if e.tag==ns+'tab' else e.text or '' for e in p.iter() if e.tag in (ns+'t',ns+'tab'))
+                for p in root.iter(ns+'p')]
+
+    def convert(self,seen):
+        def run(body,suffix,directory,soffice,**options):
+            seen.append(self.lines(body));self.assertEqual(suffix,'.docx')
+            self.assertEqual(options['timeout'],printing.OFFICE_TIMEOUT)
+            self.assertEqual(options['limit'],printing.MAX_PDF)
+            return printing.image_pdf(png())
+        self.store.soffice='synthetic-converter-not-executed'
+        return patch.object(printing,'office_convert',side_effect=run)
+
+    def test_utf8_bom_original_keeps_spacing_blank_lines_tabs_and_raw_hash(self):
+        text='\n  虚构纸卷 <>&\n第1题：2+3=?\t答案栏：____\n\n  末尾  \n'
+        raw=b'\xef\xbb\xbf'+text.replace('\n','\r\n').encode()
+        source=self.text_source('synthetic-paper.TXT',raw);seen=[]
+        with self.convert(seen):
+            first=self.store.prepare(source,'synthetic_text_original')
+            self.assertEqual(first,self.store.prepare(source,'synthetic_text_original'))
+        self.assertEqual(seen,[text.split('\n')])
+        self.assertEqual(first['source'],source);self.assertEqual(first['name'],'synthetic-paper.TXT')
+        self.assertEqual(first['source_sha256'],hashlib.sha256(raw).hexdigest())
+        self.assertNotIn('家长参考答案与辅导指南',seen[0])
+        self.assertEqual((self.data/'attachments'/'synthetic-paper.TXT').read_bytes(),raw)
+        self.assertEqual(self.store.list_jobs(),[])
+
+    def test_invalid_or_overlong_text_never_converts_or_queues(self):
+        bad=(b'',b'   \r\n',b'\xff',b'\xed\xa0\x80',b'hello\x00world',b'hello\x1bworld',b'hello\x7fworld',
+             '\ufffe'.encode(),'\uffff'.encode(),('字'*12001).encode())
+        self.store.soffice='synthetic-converter-not-executed'
+        with patch.object(printing,'office_convert',side_effect=AssertionError('invalid text must not convert')):
+            for n,raw in enumerate(bad):
+                with self.subTest(n=n),self.assertRaises(printing.PrintError) as error:
+                    self.store.prepare(self.text_source('bad.txt',raw),'synthetic_bad_text_'+str(n))
+                self.assertEqual(error.exception.status,400)
+        self.assertEqual(self.store.list_jobs(),[])
+        with self.connect() as c:self.assertEqual(c.execute('SELECT count(*) FROM print_preparations').fetchone()[0],0)
+        self.assertFalse(list((self.data/'print').glob('.prepare-*')))
+
+    def test_text_limit_is_inclusive_and_missing_converter_keeps_original(self):
+        source=self.text_source('limit.txt',('字'*12000).encode());seen=[]
+        with self.convert(seen):result=self.store.prepare(source,'synthetic_text_limit')
+        self.assertEqual(seen,[['字'*12000]])
+        with patch.object(self.store,'soffice',None),self.assertRaises(printing.PrintError) as error:
+            self.store.prepare(source,'synthetic_missing_converter')
+        self.assertEqual((error.exception.status,error.exception.code),(503,'preview_unavailable'))
+        self.assertEqual(self.store.preparation(result['id']),result);self.assertEqual(self.store.list_jobs(),[])
+
+    def test_question_and_teacher_text_prepare_all_before_separate_retryable_jobs(self):
+        question=self.text_source('question.txt','虚构题目：2+3=?\n不含老师答案'.encode())
+        guide=self.text_source('teacher.txt','TEACHER_ONLY_CANARY：5'.encode())
+        obj=dict(task_id='TASK-1',request_key='synthetic_text_pair',question_sources=[question],guide_source=guide,
+                 guide_text='',question_confirmed=True,guide_confirmed=True,printer='Synthetic_Printer')
+        task=dict(id='TASK-1',title='虚构文字卷');seen=[]
+        with self.convert(seen):
+            converter=printing.office_convert
+            normal=converter.side_effect
+            def fail_second(*args,**kwargs):
+                if seen:raise printing.OfficeError('no_output')
+                return normal(*args,**kwargs)
+            converter.side_effect=fail_second
+            with self.assertRaises(printing.PrintError):self.store.homework_pair(obj,task)
+            self.assertEqual(self.store.list_jobs(),[])
+            converter.side_effect=normal
+            jobs=self.store.homework_pair(obj,task)
+            self.assertEqual(jobs,self.store.homework_pair(obj,task))
+        self.assertEqual(seen,[['虚构题目：2+3=?','不含老师答案'],['TEACHER_ONLY_CANARY：5']])
+        self.assertNotEqual(jobs['question']['id'],jobs['guide']['id']);self.assertEqual(len(self.store.list_jobs()),2)
+        self.assertEqual(self.store.preparation(jobs['question']['preparation_id'])['source'],question)
+        self.assertEqual(self.store.preparation(jobs['guide']['preparation_id'])['source'],guide)
+
+    def test_generated_parent_guide_preserves_existing_retry_fingerprint(self):
+        seen=[]
+        with patch.object(self.store,'_convert',side_effect=lambda body,name,directory:(seen.append(body),printing.image_pdf(png()))[1]):
+            self.store.prepare_guide('虚构旧参考','第1题：B\n\n  第2题：4\t核对','synthetic_frozen_guide')
+        self.assertEqual(hashlib.sha256(seen[0]).hexdigest(),'a70ee478c1e19fafa0e603b3ba707bb612c63dd222b0c23efa9c23ebb7a0346d')
 
 
 class OfficeConversionTests(unittest.TestCase):
