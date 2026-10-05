@@ -55,20 +55,28 @@ def model(messages,schema,name,timeout,**kwargs):
  texts=[p['text'] for p in content if p.get('type')=='text']
  questions=[text for text in texts if text.startswith('题目/孩子作答原文')]
  references=[text for text in texts if text.startswith('教师参考原文')]
- assert len(questions)==len(references)==1 and questions[0]!=references[0]
- question_documents=json.loads(questions[0][questions[0].index('['):]);reference_documents=json.loads(references[0][references[0].index('['):])
- assert len(question_documents)==len(reference_documents)==1
- assert set(question_documents[0])==set(reference_documents[0])=={'name','text'}
- assert question_documents[0]['text']==paper and reference_documents[0]['text']==teacher
+ assert len(calls)<5
+ phase=('transport_error','valid_word','valid_txt','missing_teacher','ai_derived')[len(calls)]
+ supplied_teacher=phase not in ('missing_teacher','ai_derived')
+ assert len(questions)==1 and len(references)==int(supplied_teacher)
+ question_documents=json.loads(questions[0][questions[0].index('['):]);reference_documents=json.loads(references[0][references[0].index('['):]) if references else []
+ assert len(question_documents)==1 and set(question_documents[0])=={'name','text'} and question_documents[0]['text']==paper
+ if supplied_teacher:
+  assert len(reference_documents)==1 and set(reference_documents[0])=={'name','text'} and reference_documents[0]['text']==teacher
+  assert questions[0]!=references[0] and 'TEACHER_ONLY_CANARY' in references[0] and '孩子最终作答' not in references[0]
+ else:
+  prior=[text for text in texts if text.startswith('上一轮待复核意见原文（不是教师参考，不作答案依据）')]
+  assert len(prior)==1 and '教师参考：' in prior[0],'old teacher claims remain previous opinions, never teacher input'
  assert '第1题：2+3=?' in questions[0] and '孩子最终作答：3' in questions[0] and '第3题：9-1=?' in questions[0]
- assert 'TEACHER_ONLY_CANARY' not in questions[0] and 'TEACHER_ONLY_CANARY' in references[0]
- assert '孩子最终作答' not in references[0] and 'PARENT_NOTE_ONLY_CANARY' not in questions[0]
+ assert 'TEACHER_ONLY_CANARY' not in questions[0] and 'PARENT_NOTE_ONLY_CANARY' not in questions[0]
  assert any('原作答家长说明' in text and 'PARENT_NOTE_ONLY_CANARY' in text for text in texts)
- assert len(calls)<3
- phase=('transport_error','valid_word','valid_txt')[len(calls)]
- assert ('.txt' if phase=='valid_txt' else '.docx') in questions[0]
+ assert ('.txt' if phase in ('valid_txt','missing_teacher','ai_derived') else '.docx') in questions[0]
  raw=None if phase=='transport_error' else copy.deepcopy(raw_template)
- calls.append(dict(phase=phase,question_documents=question_documents,reference_documents=reference_documents,question_documents_segment=questions[0],teacher_segment=references[0],image_count=0,raw=raw,original=copy.deepcopy(raw)))
+ if phase=='ai_derived':
+  for item in raw['items']:item['answer']=item['answer'].replace('教师参考：','AI自行推导：')
+  raw['items'][1]['error_reason']='孩子作答3与核对答案4不同。'
+  raw['items'][2]['uncertainty']='原作答未提供，不能推测孩子作答。'
+ calls.append(dict(phase=phase,question_documents=question_documents,reference_documents=reference_documents,question_documents_segment=questions[0],teacher_segment=references[0] if references else '',image_count=0,raw=raw,original=copy.deepcopy(raw)))
  if phase=='transport_error':raise app.family_llm.LLMDraftError('虚构模型传输失败；本次未返回检查结果')
  return raw
 app.family_llm._chat_json=model
@@ -167,9 +175,13 @@ async function startServer(){
     const response=await fetch(server.url+'api/print/homework/draft',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':value.token},body:JSON.stringify(body)});const payload=await response.json();guardResponses.push({status:response.status,body:payload});assert.equal(response.status,403);assert.match(payload.error,/上一轮|先前|检查意见|教师参考|作答/);assert.equal((await audit()).calls.length,2);assert.deepEqual((await audit()).tables,savedTables,'reclassifying known AI text is rejected before model/write');
    }
    await choose(txt,true,'question');await choose(teacher,true,'reference');await choose(word,false);await run.click();await panel.locator('.homework-question').first().waitFor();assert.equal(replies.length,6);assert.equal(replies[5].status,200);assert.deepEqual(bodies[5].question_sources,[{type:'upload',id:txt.id}]);assert.deepEqual(bodies[5].reference_sources,[{type:'upload',id:teacher.id}]);assert.deepEqual(bodies[5].previous_sources,[]);assert.deepEqual(replies[5].body.draft.questions,draft.questions);
-   assert.equal(await savedText.textContent(),text);assert.deepEqual((await state()).records,value.records);assert.deepEqual((await state()).tasks,before.tasks);const final=await audit();assert.deepEqual(final.tables,savedTables,'TXT-only retry also remains read-only');assert.deepEqual(final.calls.map(c=>c.phase),['transport_error','valid_word','valid_txt']);assert(final.calls.every(c=>c.image_count===0));assert.equal(final.raw_unchanged,true);assert.equal(final.shared_validator,true);assert.equal(final.shared_docx_guard,true);assert.equal(final.real_model_calls,0);
-   assert.deepEqual(final.responses,[...replies.slice(0,5),...guardResponses,replies[5]]);assert.deepEqual(errors,[]);assert.deepEqual(foreign,[]);assert.deepEqual(forbidden,[]);const counts={};for(const path of posts)counts[path]=(counts[path]||0)+1;assert.deepEqual(counts,{'/api/study/item':1,'/api/upload':7,'/api/task/feedback':4,'/api/print/homework/draft':6});await fit(page);await proof(page,'txt-only-check-'+width);
-   results.push({width,synthetic_only:true,unsafe_word_rejected_before_model:3,transport_failures:1,valid_word:1,valid_txt:1,known_ai_roles_rejected:2,actual_model_calls:0,raw_unchanged:true,original_record_id:original.id,check_record_id:saved.id,same_number_retry:true});
+   assert.equal(await savedText.textContent(),text);assert.deepEqual((await state()).records,value.records);assert.deepEqual((await state()).tasks,before.tasks);assert.deepEqual((await audit()).tables,savedTables,'TXT-only retry also remains read-only');await fit(page);await proof(page,'txt-only-check-'+width);
+   await choose(teacher,false);await choose({id:reportId},true,'previous');await run.click();await eventually(async()=>replies.length===7&&replies[6].status===503&&await run.isEnabled()&&/未提供.*教师参考/.test(await panel.locator('[data-homework-review-status]').innerText()),'text teacher claim refused without original');
+   assert.equal(replies[6].body.draft,undefined);assert.deepEqual(bodies[6].question_sources,[{type:'upload',id:txt.id}]);assert.deepEqual(bodies[6].reference_sources,[]);assert.deepEqual(bodies[6].previous_sources,[{type:'upload',id:reportId}]);assert.equal(await panel.locator('[data-homework-review-result] textarea').inputValue(),replies[5].body.draft.text,'failed source claim keeps prior draft');assert.equal(await savedText.textContent(),text);assert.deepEqual((await audit()).tables,savedTables,'false teacher claim writes no row');await fit(page);await proof(page,'text-teacher-claim-rejected-'+width);
+   await run.click();await eventually(async()=>replies.length===8&&replies[7].status===200&&await run.isEnabled(),'retry accepts independent AI derivation');assert.deepEqual(bodies[7],bodies[6]);const derived=replies[7].body.draft;assert.equal(derived.wrong_items,1);assert.equal(derived.unknown_items,1);assert(derived.questions.every(q=>q.answer.startsWith('AI自行推导：')));assert.equal(await panel.locator('[data-homework-review-result] textarea').inputValue(),derived.text);assert.equal(await panel.locator('[data-homework-review-result] [data-homework-review-confirm]').isChecked(),false);assert.equal(await savedText.textContent(),text);
+   const final=await audit();assert.deepEqual(final.tables,savedTables,'successful AI retry remains a read-only draft');assert.deepEqual(final.calls.map(c=>c.phase),['transport_error','valid_word','valid_txt','missing_teacher','ai_derived']);assert(final.calls.every(c=>c.image_count===0));assert.equal(final.raw_unchanged,true);assert.equal(final.shared_validator,true);assert.equal(final.shared_docx_guard,true);assert.equal(final.real_model_calls,0);
+   assert.deepEqual(final.responses,[...replies.slice(0,5),...guardResponses,...replies.slice(5)]);assert.deepEqual(errors,[]);assert.deepEqual(foreign,[]);assert.deepEqual(forbidden,[]);const counts={};for(const path of posts)counts[path]=(counts[path]||0)+1;assert.deepEqual(counts,{'/api/study/item':1,'/api/upload':7,'/api/task/feedback':4,'/api/print/homework/draft':8});await fit(page);await proof(page,'text-ai-derivation-retry-'+width);
+   results.push({width,synthetic_only:true,unsafe_word_rejected_before_model:3,transport_failures:1,valid_word:1,valid_txt:1,known_ai_roles_rejected:2,missing_teacher_claim_rejected:1,ai_derived_retry:1,actual_model_calls:0,raw_unchanged:true,original_record_id:original.id,check_record_id:saved.id,same_number_retry:true});
    await page.close();page=null;await server.stop();server=null;
   }
   if(process.env.HOMEWORK_TEXT_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.writeFile(path.join(process.env.HOMEWORK_TEXT_PROOF_DIR,'result.json'),JSON.stringify(results,null,2)+'\n')}
