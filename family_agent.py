@@ -2605,7 +2605,7 @@ def _school_native_actions(evidence):
             if own[0]['subject'] and object_text.startswith(own[0]['subject']):object_text=object_text[len(own[0]['subject']):]
             owners=[a for a in own if len(object_text)>=2 and a['quote'].count(object_text)==1]
             if len(owners)==1:
-                owners[0]['supplements'].append(dict(ref=supplement['ref'],quote=supplement['text'].strip(),goal=head[2].strip()))
+                owners[0]['supplements'].append(dict(ref=supplement['ref'],quote=supplement['text'].strip(),goal=head[2].strip(),time=supplement['time']))
         actions.extend(own)
     return actions
 
@@ -2636,12 +2636,19 @@ def _school_native_bind(proposal,actions,assigned):
     if len(title)>TASK_BRIEF_SCHEMA['properties']['title']['maxLength']:
         raise AgentError('完整学校行动标题超过范围，原文保留',code='school_action_coverage')
     value=_school_requirement_goal(dict(title=title),[action['quote']]+[s['goal'] for s in action['supplements']])
-    from family_agenda import deadlines,sent_day
-    dates=deadlines(action['header']+'\n'+action['quote'],sent_day(action['time']))
+    dates=_school_native_dates(action)
     if len(dates)>1:raise AgentError('本项学校日期尚无法唯一核对，原文保留',code='school_action_coverage')
     due=next(iter(dates)) if dates else proposal['due']
     assigned.add(action['id'])
     return dict(proposal,task_title=value['title'],task_goal=value['goal'],task_submission='',due=due),action
+
+
+def _school_native_dates(action):
+    from family_agenda import deadlines,sent_day
+    dates=deadlines(action['header']+'\n'+action['quote'],sent_day(action['time']))
+    for supplement in action['supplements']:
+        dates.update(deadlines(supplement['goal'],sent_day(supplement['time'])))
+    return dates
 
 
 def _school_native_scope(action):
@@ -2668,8 +2675,7 @@ def _school_native_saved(items,evidence):
                 or any(brief.get(k,'')!=value[k] for k in ('title','goal','submission'))
                 or item['title']!=value['title'] or item['body']!=value['goal']):
             raise AgentError('学校完整要求未按对应行动保存，整批未写入',409,'school_action_coverage')
-        from family_agenda import deadlines,sent_day
-        dates=deadlines(action['header']+'\n'+action['quote'],sent_day(action['time']))
+        dates=_school_native_dates(action)
         if len(dates)>1 or item.get('due','')!=(next(iter(dates)) if dates else ''):
             raise AgentError('学校行动日期与原要求不符，整批未写入',409,'school_action_coverage')
         assigned.add(ident)
@@ -2759,7 +2765,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         uncertain_due=ambiguous_due=False
         from family_agenda import date, deadlines, sent_day
         cited_evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}]
-        relative=(deadlines(native_action['header']+'\n'+native_action['quote'],sent_day(native_action['time']))
+        relative=(_school_native_dates(native_action)
             if native_action else set().union(*(deadlines(action_anchor.get(e['ref'],'') if historical else e['text'],sent_day(e.get('time',''))) for e in cited_evidence))) if mode=='school' else set()
         if routing and not due and len(result['proposals'])==1 and len(cited_evidence)==1 and len(relative)==1:
             # The model may omit a date that the single original notice states explicitly.
