@@ -136,7 +136,7 @@ def review_text(value, *, saved=False):
     archived=False;continuation=None
     if saved and text.startswith(('作业检查保存格式 v1','作业检查保存格式 v2')):
         if text.startswith('作业检查保存格式 v2'):
-            frame=re.match(r'\A作业检查保存格式 v2\n复核待补清单：([^\n]{1,4000})\n',text)
+            frame=re.match(r'\A作业检查保存格式 v2\n复核待补清单：([^\n]{1,25000})\n',text)
             if frame is None: raise PrintError('保存检查的待补清单无法核对')
             try: continuation=review_continuation(json.loads(frame[1]))
             except (ValueError,TypeError): raise PrintError('保存检查的待补清单无法核对') from None
