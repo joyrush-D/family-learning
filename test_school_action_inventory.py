@@ -100,6 +100,18 @@ class SchoolActionInventoryTests(unittest.TestCase):
         for clause in ('单面打印', '完成第1–3题', '完成后自查并请家长签字', '第4题选做', '不作完成要求'):
             self.assertIn(clause, row['body'], 'retain the original standard instead of asking the model to repeat it')
 
+    def test_preparation_before_main_action_is_compiled_into_the_same_worksheet(self):
+        payload, refs = self._ingest([
+            '英语作业：先单面打印练习卷；明天完成练习卷第1–3题并自查；请家长在这份练习卷上签字。'])
+        exercise = self.proposal('完成练习卷第1–3题', refs, due='2026-10-06')
+        row, = self.saved(payload, self.run_receipt(payload, [exercise]), 1)
+        self.assertTrue(row['title'].startswith('英语：'))
+        self.assertEqual((row['due'], row['state']), ('2026-10-06', 'accepted'))
+        for clause in ('先单面打印练习卷', '明天完成练习卷第1–3题并自查', '请家长在这份练习卷上签字'):
+            self.assertIn(clause, row['body'], 'preparation belongs to this worksheet even before its answer step')
+        self.assertEqual(json.loads(row['plan'])['school_task']['purpose'], 'learning')
+        self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
+
     def test_shared_notice_supplement_is_compiled_only_into_its_exercise(self):
         payload, refs = self._ingest([
             '英语，明天完成：1. 朗读Unit 2课文两遍；2. 完成练习卷第1–3题。',
