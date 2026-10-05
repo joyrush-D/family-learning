@@ -293,6 +293,49 @@ def question_coverage_checks():
     return calls
 
 
+def recheck_pending_http_checks(app,upload):
+    """Known unresolved questions survive same-material continuation; no old answer is evidence."""
+    from http.client import HTTPConnection
+    import threading
+    task=app.new_task(dict(child='示例甲',title='虚构同批补查未判定',category='homework'))
+    answer=upload('synthetic-pending-answer.txt','虚构甲卷第1题B。虚构乙卷第1题作答不清。'.encode())
+    teacher=upload('synthetic-pending-teacher.txt','虚构甲卷第1题B。虚构乙卷第1题C。'.encode())
+    original=app.save_task_feedback(dict(task_id=task['id'],child='示例甲',day='2026-10-05',
+        request_key='synthetic-pending-original',attachments=[answer,teacher],note='虚构甲乙两卷原作答。'))
+    request=dict(purpose='review',task_id=task['id'],record_id=original['record_id'],
+        expected_created=original['feedback']['created'],question_sources=[dict(type='upload',id=answer)],
+        reference_sources=[dict(type='upload',id=teacher)])
+    first=item(label='虚构甲卷第1题')
+    unknown=item(label='虚构乙卷第1题',student_answer='',answer='',judgment='unknown',uncertainty='作答不清。')
+    raw=dict(question_labels=[first['label'],unknown['label']],items=[first,unknown],coverage='仅甲乙两卷第1题。')
+    omitted=dict(question_labels=[first['label']],items=[first],coverage='全部正确。')
+    server=app.ThreadingHTTPServer(('127.0.0.1',0),app.Handler)
+    worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
+    try:
+        def http(path,payload):
+            client=HTTPConnection('127.0.0.1',server.server_port,timeout=5)
+            try:
+                client.request('POST',path,json.dumps(payload),{'Content-Type':'application/json','X-Family-Token':app.TOKEN})
+                response=client.getresponse();return response.status,json.loads(response.read())
+            finally: client.close()
+        with patch.object(family_llm,'_chat_json',return_value=raw):
+            status,initial=http('/api/print/homework/draft',request)
+            assert status==200,initial
+        continued=request|dict(previous_text=initial['draft']['text'],review_instruction='虚构补查乙卷第1题。')
+        if 'continuation' in initial['draft']: continued['previous_continuation']=initial['draft']['continuation']
+        with patch.object(family_llm,'_chat_json',return_value=omitted):
+            status,rechecked=http('/api/print/homework/draft',continued)
+            assert status==200,rechecked
+        d=rechecked['draft']
+        assert [q['label'] for q in d['questions']]==[first['label'],unknown['label']], 'known pending question vanished on same-material recheck'
+        assert d['unknown_items']==1 and d['items']==2 and '未判定1题' in d['text']
+        q=d['questions'][1]
+        assert q['judgment']=='unknown' and all(not q[k] for k in ('question','student_answer','answer','error_reason','possible_cause','steps'))
+        assert '上一轮' in q['uncertainty'] and '补查' in q['uncertainty']
+    finally:
+        server.shutdown();server.server_close();worker.join(timeout=3)
+
+
 def summary_http_checks(app,upload):
     """Real temporary HTTP dispatch, final-source guards, save/retry and original-answer reopen."""
     from http.client import HTTPConnection
@@ -1080,6 +1123,7 @@ def run():
                     refused(lambda:app.homework_review_draft(linked_request|dict(record_id=derived['record_id'],expected_created=None)),
                         'review_source_not_allowed',403)
                     assert model.call_count==0
+            recheck_pending_http_checks(app,upload)
             summary_http_checks(app,upload)
             review_origin_http_checks(app,upload)
     print('homework review synthetic checks passed (%d output contract cases)'%contract_cases)
