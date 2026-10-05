@@ -28,7 +28,13 @@ class SchoolActionInventoryTests(unittest.TestCase):
     def test_example_between_action_and_condition_cannot_supply_a_deadline(self):
         payload, refs = self._ingest(['英语作业：背诵Unit 2；示例：“10月7日前完成练习卷”，仅说明格式；不用录音。'])
         reply = self.proposal('背诵Unit 2', refs, goal='背诵Unit 2；不用录音。')
-        self._assert_rejected_batch(payload, self.run_receipt(payload, [reply]))
+        result = self.run_receipt(payload, [reply])
+        self.assertEqual((result['failed'], result['processed'], result['created']), (1, 0, 0))
+        self.assertEqual(self.model.call_count, 0, 'noncontiguous standards fail before a model request')
+        with self.store._db() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items').fetchone()[0], 0)
+            self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages')], [0])
+            self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages')], payload['messages'])
 
     def proposal(self, quote, refs, *, goal=None, due='', subject='英语', purpose='learning'):
         return fixtures.school_proposal(
