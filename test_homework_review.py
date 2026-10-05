@@ -300,9 +300,9 @@ def review_origin_http_checks(app,upload):
                     request_key=key,attachments=attachments,note=note)|extra)
                 assert status==200 and not result['completion_changed'],result
                 return result
-            def sources(record):
+            def sources(record,task_id=task['id']):
                 before=dump()
-                status,result=http('GET','/api/print/homework/sources?task_id='+task['id']+'&record_id='+str(record['record_id']))
+                status,result=http('GET','/api/print/homework/sources?task_id='+task_id+'&record_id='+str(record['record_id']))
                 assert status==200 and result['created']==record['feedback']['created'],result
                 assert dump()==before,'source classification must not migrate original records'
                 return {entry['id']:entry for entry in result['sources']}
@@ -375,6 +375,94 @@ def review_origin_http_checks(app,upload):
             with app.connect() as c:
                 next_row=c.execute('SELECT * FROM records WHERE id=?',(next_formal['record_id'],)).fetchone()
                 assert next_row['followup_kind']=='作业检查' and next_row['related_record_id']==reattached['record_id']
+            # A later correction can attach P to an ordinary record whose ID precedes F.
+            # First-seen record order must not turn the generated result into original evidence.
+            with patch.object(family_llm,'_chat_json') as model:
+                corrected=feedback('',[answer,answer_text,opinion],'虚构更正：追加旧AI意见，原作答仍为第1题B。',
+                    record_id=original['record_id'],expected_created=original['feedback']['created'])
+                assert corrected['record_id']==original['record_id']<formal['record_id']
+                assert sources(corrected)[opinion]['origin']=='review_result','an earlier ordinary record cannot reclassify a later AI result'
+                assert model.call_count==0
+            corrected_request=request|dict(expected_created=corrected['feedback']['created'],reference_sources=[source(opinion)])
+            before=dump()
+            with patch.object(family_llm,'_chat_json') as model:
+                status,result=http('POST','/api/print/homework/draft',corrected_request)
+                assert status==403 and result.get('code')=='review_source_not_allowed',result
+                assert model.call_count==0,'an appended old result is still refused before the model'
+            assert dump()==before,'refusing a result appended by correction must leave all data unchanged'
+
+            # Reattaching the same generated upload under another same-child task does
+            # not grant teacher or question roles. No cross-task previous-text behavior is asserted.
+            other_task=app.new_task(dict(child='示例甲',title='虚构另一份作业重挂结果',category='homework',
+                request_key='synthetic-origin-other-task'))
+            other_answer=upload('synthetic-origin-other-answer.png',png(11))
+            with patch.object(family_llm,'_chat_json') as model:
+                other_record=feedback('synthetic-origin-other-reattached',[other_answer,opinion],
+                    '虚构另一作业的原作答及重挂旧AI意见。',task_id=other_task['id'])
+                assert sources(other_record,task_id=other_task['id'])[opinion]['origin']=='review_result'
+                assert model.call_count==0
+            other_request=dict(purpose='review',task_id=other_task['id'],record_id=other_record['record_id'],
+                expected_created=other_record['feedback']['created'],question_sources=[source(other_answer)],reference_sources=[])
+            for role,changes in (('question',dict(question_sources=[source(other_answer),source(opinion)])),
+                                 ('reference',dict(reference_sources=[source(opinion)]))):
+                before=dump()
+                with patch.object(family_llm,'_chat_json') as model:
+                    status,result=http('POST','/api/print/homework/draft',other_request|changes)
+                    assert status==403 and result.get('code')=='review_source_not_allowed',(role,status,result)
+                    assert model.call_count==0,'changing tasks does not authorize an AI result as original evidence'
+                assert dump()==before,'cross-task rejected result inputs must not write any data'
+
+            # Two distinct TXT uploads may have the same product-looking filename.
+            # The teacher file was bound before the formal typed check and remains an input.
+            same_task=app.new_task(dict(child='示例甲',title='虚构同名教师资料身份',category='homework',
+                request_key='synthetic-origin-same-name-task'))
+            same_answer=upload('synthetic-origin-same-name-answer.png',png(13))
+            same_original=feedback('synthetic-origin-same-name-original',[same_answer],
+                '虚构甲卷原作答，第1题B。',task_id=same_task['id'])
+            same_name='作业批改参考-'+str(same_original['record_id'])+'.txt'
+            same_teacher_text='虚构同名教师原参考：第1题B。'
+            same_teacher=upload(same_name,same_teacher_text.encode())
+            teacher_record=feedback('synthetic-origin-same-name-teacher',[same_teacher],
+                '虚构普通反馈绑定的教师原参考。',task_id=same_task['id'])
+            same_request=dict(purpose='review',task_id=same_task['id'],record_id=same_original['record_id'],
+                expected_created=same_original['feedback']['created'],question_sources=[source(same_answer)],
+                reference_sources=[source(same_teacher)])
+            with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+                status,same_generated=http('POST','/api/print/homework/draft',same_request)
+                assert status==200 and model.call_count==1 and raw==transport_original,same_generated
+            same_opinion=upload(same_name,same_generated['draft']['text'].encode())
+            assert same_opinion!=same_teacher,'the same filename is not the same upload identity'
+            with patch.object(family_llm,'_chat_json') as model:
+                same_formal=feedback('synthetic-origin-same-name-formal',[same_answer,same_teacher,same_opinion],
+                    '家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #'+str(same_original['record_id'])+'。',
+                    task_id=same_task['id'],review_basis=same_generated['review_basis'])
+                assert model.call_count==0
+            with app.connect() as c:
+                row=c.execute('SELECT * FROM records WHERE id=?',(same_formal['record_id'],)).fetchone()
+                assert row['followup_kind']=='作业检查' and row['related_record_id']==same_original['record_id']
+                assert set(json.loads(row['attachments']))=={same_answer,same_teacher,same_opinion}
+            for stage in ('original_teacher_note','corrected_teacher_note'):
+                if stage=='corrected_teacher_note':
+                    with patch.object(family_llm,'_chat_json') as model:
+                        teacher_corrected=feedback('',[same_teacher],'虚构只更正教师资料的备注，原附件不变。',
+                            task_id=same_task['id'],record_id=teacher_record['record_id'],
+                            expected_created=teacher_record['feedback']['created'])
+                        assert teacher_corrected['record_id']==teacher_record['record_id'] and model.call_count==0
+                    with app.connect() as c:
+                        row=c.execute('SELECT * FROM records WHERE id=?',(teacher_record['record_id'],)).fetchone()
+                        assert json.loads(row['attachments'])==[same_teacher] and not row['followup_kind']
+                before=dump()
+                with patch.object(family_llm,'homework_reference_draft',wraps=family_llm.homework_reference_draft) as generate,\
+                     patch.object(family_llm,'_chat_json',return_value=raw) as model:
+                    listed=sources(same_original,task_id=same_task['id'])
+                    assert listed[same_teacher]['name']==listed[same_opinion]['name']==same_name
+                    assert listed[same_teacher]['origin']!='review_result',(stage,'teacher input was incorrectly classified')
+                    assert listed[same_opinion]['origin']=='review_result',(stage,'generated opinion lost its result identity')
+                    assert model.call_count==0
+                    status,result=http('POST','/api/print/homework/draft',same_request)
+                    assert status==200 and model.call_count==1 and raw==transport_original,(stage,result)
+                    assert generate.call_args.kwargs['reference_documents']==[dict(name=same_name,text=same_teacher_text)]
+                assert dump()==before,'reading an unchanged teacher file must not migrate its record or save a check'
         finally:
             server.shutdown();server.server_close();worker.join(timeout=3)
 
