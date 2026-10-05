@@ -110,6 +110,8 @@ try:
         return reply
     fixture.model.side_effect=traced_reply
     first=agent.run_once(app,now);fixture._assert_rejected_batch(payload,first)
+    failed_state=app.snapshot()
+    assert failed_state['tasks']==[] and failed_state['agent']['sources'][0]['pending_message_count']==2
     with store._db() as c:
         failed_job=dict(c.execute("SELECT id,attempts,done,error,next_try FROM agent_jobs WHERE id LIKE 'messages:%'").fetchone())
         original_sources=[dict(r) for r in c.execute('SELECT * FROM agent_sources')]
@@ -156,7 +158,7 @@ try:
     fixture.model.side_effect=AssertionError('no further model receipt allowed')
     proof=dict(synthetic_only=True,real_model_calls=0,collector_calls=0,printer_calls=0,
         form=form,today=today,child='虚构甲',source_id=fixture.source['id'],messages=payload['messages'],items=items,date_control=date_control,
-        first=first,failed_job=failed_job,delayed=delayed,recovered=recovered,done_job=done_job,replay=replay,
+        first=first,failed_state=failed_state,failed_job=failed_job,delayed=delayed,recovered=recovered,done_job=done_job,replay=replay,
         mock_calls=calls,originals_preserved=True,source_cursor_preserved=True,
         scope='ordinary numbered and same-paragraph outcomes; literal exercise standards; fixed receipts are not model accuracy')
     class Handler(app.Handler):
@@ -213,7 +215,20 @@ async function screenshot(page,name){await noOverflow(page);await page.screensho
    const openExercise=async()=>{await home();await card(exercise.task_id).locator('[data-task="'+exercise.task_id+'"]').first().click();await page.locator('#taskDialog[open]').waitFor();assert.equal(await page.locator('#taskForm [name=id]').inputValue(),exercise.task_id);assert.equal(await page.locator('#taskRequirement').innerText(),exercise.requirements)};
    let state=await read();assert.equal(state.today,proof.intake.today);assert.equal(state.tasks.length,2);assert.deepEqual(state.tasks.map(t=>t.id).sort(),items.map(i=>i.task_id).sort());
    for(const item of items){const task=state.tasks.find(t=>t.id===item.task_id);assert.equal(task.school_origin,true);assert.equal(task.child,'虚构甲');assert.equal(task.action,item.requirements);assert.equal(task.agenda.due_on,proof.intake.today);assert.equal(task.agenda.category,'homework');assert.equal(task.update,null)}
+   // Use the real rejected-batch snapshot, with fresh synthetic collection times to isolate processing from read-health warnings.
+   const failedState=structuredClone(proof.intake.failed_state);
+   failedState.agent.sources.forEach(s=>Object.assign(s,{last_success:new Date().toISOString(),next_collection_at:new Date(Date.now()+1800000).toISOString(),error:'',unread_count:0}));
+   const failedRoute=route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(failedState)});
+   await page.route('**/api/state',failedRoute);await page.goto(host.url,{waitUntil:'domcontentloaded',timeout:15000});await page.locator('[data-child-filter="child-1"]').click();
+   const pending=page.locator('#content [data-school-processing]');await pending.waitFor();assert.match(await pending.innerText(),/2 条学校消息尚未整理，作业清单可能不完整/);
+   assert.equal(await page.locator('#content [data-today-task]').count(),0);assert.equal(await page.locator('#content .today-source-gap').count(),0,'successful collection and complete originals do not hide pending processing');
+   await page.reload();await pending.waitFor();await screenshot(page,'processing-pending-'+width+'.png');
+   await pending.locator('[data-page=sources]').click();await page.locator('[data-current-source-pending]').waitFor();assert.match(await page.locator('[data-current-source-pending]').innerText(),/2 条消息尚未整理/);
+   await page.locator('nav [data-page=home]').click();await page.locator('[data-child-filter="child-2"]').click();assert.equal(await pending.count(),0,'another child does not inherit the first child processing warning');
+   await page.locator('[data-child-filter="child-1"]').click();await pending.waitFor();
+   await page.unroute('**/api/state',failedRoute);await page.reload();
    await page.goto(host.url,{waitUntil:'domcontentloaded',timeout:15000});await home();
+   assert.equal(await pending.count(),0,'the actual successful retry clears the processing warning');assert.equal(state.agent.sources[0].pending_message_count,0);
    assert.equal(await page.locator('#content [data-today-task]').count(),2,'today shows two independent school tasks for the selected child');
    assert.match(await card(reading.task_id).innerText(),/朗读Unit 2课文两遍/);assert(!(await card(reading.task_id).innerText()).includes('练习卷'));
    for(const clause of ['完成练习卷第1–3题','单面打印','完成后自查并请家长签字','第4题选做'])assert((await card(exercise.task_id).innerText()).includes(clause));assert(!(await card(exercise.task_id).innerText()).includes('朗读'));
@@ -248,7 +263,7 @@ async function screenshot(page,name){await noOverflow(page);await page.screensho
    const cross=await fetch(host.url+'api/task/feedback',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify({...feedback.body,child:'虚构乙',request_key:'synthetic-native-other-child-'+width}),signal:AbortSignal.timeout(5000)});assert.equal(cross.status,409);assert.deepEqual((await read()).records,state.records);
    await page.locator('[data-child-filter="child-1"]').click();for(const item of items)await card(item.task_id).waitFor();assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
    const runtime=await json(host.url+'__fixture/proof');assert.equal(runtime.model_receipts,2);assert.equal(runtime.print_attempts,0);assert.deepEqual(runtime.mock_calls,proof.intake.mock_calls);
-   proof.widths.push({form,width,school_task_ids:items.map(i=>i.task_id),scoped_views:scopedViews,exercise_task_id:exercise.task_id,feedback,wrong:wrongSaved,correction,reopened_same_task:true,reading_untouched:true,cross_child_rejected:true,no_horizontal_overflow:true});
+   proof.widths.push({form,width,processing_pending_visible:true,processing_reopen:true,processing_child_isolated:true,processing_recovered:true,school_task_ids:items.map(i=>i.task_id),scoped_views:scopedViews,exercise_task_id:exercise.task_id,feedback,wrong:wrongSaved,correction,reopened_same_task:true,reading_untouched:true,cross_child_rejected:true,no_horizontal_overflow:true});
    await page.close();lastPage=null;
   }
   await host.stop();host=null;
