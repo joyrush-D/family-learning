@@ -2565,38 +2565,87 @@ def _recover_school_ack_originals(store,config,now):
     return dict(created=created,failed=failed)
 
 
+_SCHOOL_NATIVE_SUBJECTS=r'语文|数学|英语|科学|历史|地理|物理|化学|生物'
+_SCHOOL_NATIVE_DATE=r'(?:今天|今晚|明天|明晚|后天|(?:本|下)周[一二三四五六日天]|(?:\d{4}年)?\d{1,2}月\d{1,2}日?|\d{4}-\d{2}-\d{2})'
+_SCHOOL_NATIVE_MARKER=r'(?:[1-9][0-9]?[.．、]|第[一二三四五六七八九十0-9]+项\s*[:：]?)\s*'
+
+
+def _school_native_command(clause):
+    """A literal addressed outcome, not a verb search inside examples or reports."""
+    value=re.sub(r'^'+_SCHOOL_NATIVE_MARKER,'',clause.strip())
+    prefix=r'(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')[，,:：]\s*|'+_SCHOOL_NATIVE_DATE+r'\s*(?:前|之前|以前|内)?\s*|请(?:各位)?(?:家长|同学们?|大家)?\s*|只需\s*)'
+    value=re.sub(r'^(?:'+prefix+r')*','',value)
+    learning=r'(?:朗读|背诵|抄写|默写|听写|跟读|订正|预习|复习|阅读|口算|习作|练习)(?!后|完|已|完成)[^：:。；;]{2,}'
+    exercise=r'(?:完成|做|写)(?!后|完|过|了)(?:好)?\s*[^：:。；;]{0,35}(?:练习卷|练习册|作业本|作业单|试卷|习题|作文|第[^。；;]{1,16}题)[^：:。；;]*'
+    object_first=r'(?:[^：:。；;，,]{0,16}(?:练习卷|练习册|作业本|试卷)第[^：:。；;，,]{1,16}题)[^：:。；;]{0,15}(?:完成|交)[^：:。；;]*'
+    admin=r'(?:签署|签字|填写|填好|提交|交回|打印|盖章|完成|核对)[^：:。；;]{0,35}(?:回执|同意书|确认单|登记表|申请表|报名表|证明|安全承诺书)[^：:。；;]*'
+    if re.match(admin,value):return 'admin'
+    if re.match(learning+'|'+exercise+'|'+object_first,value):return 'learning'
+    return ''
+
+
+def _school_native_blocks(text):
+    """Keep contiguous action/condition blocks; punctuation alone is not a task.
+
+    Numbered and ordinary native text use the same ledger. A worksheet's print,
+    answer, check and handback steps stay together. Corrections, quoted examples,
+    reports and materials retain the existing semantic reader, not inferred tasks.
+    """
+    if re.match(r'^\s*(?:补充|更正|取消|撤销|撤回)',text):return []
+    # A heading may share a date only when it names the following requirements.
+    # A date directly before a first command remains inside that command.
+    header='';body_start=0;container=False
+    head=re.match(r'^([^。；;\n]{1,100})[：:]\s*',text)
+    if head:
+        lead=head[1]
+        container=bool(re.search(r'(?:完成|做|订正)[^。；;]{0,35}(?:练习卷|练习册|试卷)',lead))
+        common=bool(re.search(r'(?:作业|要求|任务|完成(?:[二两三四五六七八九十2-9]项)?(?:要求|作业|任务|练习)?)\s*$',lead))
+        label=bool(re.fullmatch(r'(?:'+_SCHOOL_NATIVE_SUBJECTS+r')(?:和(?:'+_SCHOOL_NATIVE_SUBJECTS+r'))*',lead))
+        if not container and (common or label):header=lead;body_start=head.end()
+    pieces=[]
+    for match in re.finditer(r'[^。；;\n]+',text[body_start:]):
+        start=body_start+match.start();end=body_start+match.end()
+        marker=re.match(r'\s*'+_SCHOOL_NATIVE_MARKER,text[start:end])
+        if marker:start+=marker.end()
+        clause=text[start:end].strip()
+        if not clause:continue
+        purpose=_school_native_command(clause)
+        # The container's numbered "complete questions" is its answer step,
+        # not another worksheet. Other reading/learning outcomes still split.
+        step=container and bool(re.match(r'^(?:完成|做|写)[^。；;]*(?:题|这份|该卷)',clause))
+        if purpose and not step:
+            pieces.append(dict(start=start,end=end,purpose=purpose,primary=head[1] if container and not pieces else clause))
+        elif pieces:
+            pieces[-1]['end']=end
+        elif container:
+            pieces.append(dict(start=0,end=end,purpose='learning',primary=head[1]))
+    # A stated total is an extra consistency check, never a prerequisite.
+    count=re.search(r'完成\s*([二两三四五六七八九十2-9])项',header)
+    if count:
+        expected=int(count[1]) if count[1].isdigit() else {'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}[count[1]]
+        if len(pieces)!=expected:
+            raise AgentError('学校明示项数与可核对行动不一致，原批次保留待完整整理',code='school_action_coverage')
+    return [dict(part,quote=text[part['start']:part['end']].strip().rstrip('；;。').strip(),header=header) for part in pieces]
+
+
 def _school_native_actions(evidence):
-    """Literal, explicitly counted independent actions; not a generic language coverage claim."""
-    subjects=r'语文|数学|英语|科学|历史|地理|物理|化学|生物'
-    numbers={'一':1,'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}
+    """One shared ledger for complete literal outcomes, standards and own dates."""
     actions=[]
     for index,entry in enumerate(evidence):
         text=entry['text']
         if entry.get('kind','text')!='text' or entry.get('content_incomplete') or entry.get('unread') or entry.get('attachments') or _needs_task_details(text):continue
-        markers=list(re.finditer(r'(?:^|[：:；;。\n])\s*(?:([1-9][0-9]?)[.．、]|第([一二三四五六七八九十0-9]+)项\s*[:：]?)\s*',text))
-        if len(markers)<2:continue
-        header=text[:markers[0].start()].strip()
-        count=re.search(r'完成\s*([二两三四五六七八九十2-9])项(?:'+subjects+r')?(?:要求|作业|任务|练习)?[：:；;。\s]*$',header)
-        if not count or re.search(r'步骤|流程|方法|示例|参考|更正|取消|撤销|不用|无需|不再',header):continue
-        expected=numbers.get(count[1],int(count[1]) if count[1].isdigit() else 0)
-        ordinals=[int(m[1]) if m[1] else numbers.get(m[2],int(m[2]) if m[2].isdigit() else 0) for m in markers]
-        if expected!=len(markers) or ordinals!=list(range(1,expected+1)):continue
         publisher=entry.get('publisher','');source=entry['ref'][8:].rsplit(':',1)[0]
         # Changes retain the existing dated correction/old-decision protocol.
-        # This literal first-intake guard does not reinterpret changed outcomes.
         if publisher and any(s.get('publisher')==publisher and s['ref'][8:].rsplit(':',1)[0]==source
                 and re.match(r'^\s*(?:更正|取消|撤销|撤回)',s['text']) for s in evidence if s is not entry):continue
         own=[]
-        for position,match in enumerate(markers):
-            end=markers[position+1].start() if position+1<len(markers) else len(text)
-            quote=text[match.end():end].strip().rstrip('；;。').strip()
-            # Printing, signing or uploading after one activity are its steps,
-            # not additional outcomes. Leave unsupported lists to the normal reader.
-            if not re.match(r'(?:朗读|背诵|抄写|默写|听写|跟读|练习|订正|预习|复习|阅读|口算|习作|完成(?!后)|核对)\S.{1,}',quote):break
-            named=set(re.findall(subjects,quote));shared=set(re.findall(subjects,header))
+        for part in _school_native_blocks(text):
+            quote=part['quote'];header=part['header']
+            named=set(re.findall(_SCHOOL_NATIVE_SUBJECTS,part['primary']));shared=set(re.findall(_SCHOOL_NATIVE_SUBJECTS,header))
             subject=next(iter(named)) if len(named)==1 else next(iter(shared)) if not named and len(shared)==1 else ''
-            own.append(dict(id='native:'+_hash([entry['ref'],match.end(),end,quote])[:24],ref=entry['ref'],quote=quote,
-                header=header,subject=subject,publisher=entry.get('publisher',''),time=entry.get('time',''),supplements=[]))
+            own.append(dict(id='native:'+_hash([entry['ref'],part['start'],part['end'],quote])[:24],ref=entry['ref'],quote=quote,
+                header=header,primary=part['primary'],purpose=part['purpose'],subject=subject if part['purpose']=='learning' else '',
+                publisher=entry.get('publisher',''),time=entry.get('time',''),supplements=[]))
         if len(own)!=expected:continue
         for supplement in evidence[index+1:]:
             head=re.match(r'^补充([^：:\n]{2,40})[：:]\s*(.+)$',supplement['text'].strip(),re.S)
@@ -2611,7 +2660,7 @@ def _school_native_actions(evidence):
             if re.search(r'更正|取消|撤销|不再|不用|无需|改为|改期|延期',head[2]):
                 own=[];break  # A later change needs the existing correction reader.
             object_text=head[1]
-            if own[0]['subject'] and object_text.startswith(own[0]['subject']):object_text=object_text[len(own[0]['subject']):]
+            object_text=re.sub(r'^(?:'+_SCHOOL_NATIVE_SUBJECTS+r')','',object_text)
             owners=[a for a in own if len(object_text)>=2 and a['quote'].count(object_text)==1]
             if len(owners)==1:
                 owners[0]['supplements'].append(dict(ref=supplement['ref'],quote=supplement['text'].strip(),goal=head[2].strip(),time=supplement['time']))
@@ -2623,6 +2672,16 @@ def _school_native_actions(evidence):
     if any(len(values)!=1 for values in owners.values()):
         raise AgentError('学校补充同时对应多项作业，原文保留待明确归属',code='school_action_coverage')
     return actions
+
+
+def _school_native_value(action):
+    """A short source-derived heading and all of this outcome's literal standards."""
+    primary=action['primary']
+    primary=re.sub(r'^(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')[，,:：]\s*|'+_SCHOOL_NATIVE_DATE+r'\s*(?:前|之前|以前|内)?\s*)+','',primary)
+    title=primary.split('，',1)[0].split(',',1)[0]
+    if action['subject'] and not title.startswith(action['subject']):title=action['subject']+'：'+title
+    if len(title)>80:raise AgentError('本项行动标题超过可核对范围，原文保留',code='school_action_coverage')
+    return _school_requirement_goal(dict(title=title),[action['quote']]+[s['goal'] for s in action['supplements']])
 
 
 def _school_native_bind(proposal,actions,assigned):
@@ -2640,17 +2699,14 @@ def _school_native_bind(proposal,actions,assigned):
     if len(matches)!=1 or matches[0]['id'] in assigned:
         raise AgentError('学校独立要求重复或合并，整批保留重试',code='school_action_coverage')
     action=matches[0]
-    if proposal['task_change']!='new' or proposal['task_target_id'] or proposal['task_state']=='reference' or proposal['task_purpose']!='learning':
+    if proposal['task_change']!='new' or proposal['task_target_id'] or proposal['task_state']=='reference' or proposal['task_purpose']!=action['purpose']:
         raise AgentError('学校独立要求未形成对应行动，整批保留重试',code='school_action_coverage')
     expected={action['ref']}|{s['ref'] for s in action['supplements']}
     if expected!=refs:
         raise AgentError('学校补充要求未归到对应作业，整批保留重试',code='school_action_coverage')
     if any(other['quote'] in proposal['task_goal'] for other in actions if other['id']!=action['id']):
         raise AgentError('不同学校成果被合并，整批保留重试',code='school_action_coverage')
-    title=(action['subject']+'：' if action['subject'] else '')+action['quote']
-    if len(title)>TASK_BRIEF_SCHEMA['properties']['title']['maxLength']:
-        raise AgentError('完整学校行动标题超过范围，原文保留',code='school_action_coverage')
-    value=_school_requirement_goal(dict(title=title),[action['quote']]+[s['goal'] for s in action['supplements']])
+    value=_school_native_value(action)
     dates=_school_native_dates(action)
     if len(dates)>1:raise AgentError('本项学校日期尚无法唯一核对，原文保留',code='school_action_coverage')
     due=next(iter(dates)) if dates else proposal['due']
@@ -2683,10 +2739,9 @@ def _school_native_saved(items,evidence):
         ident=saved.get('id');action=lookup.get(ident);brief=plan.get('school_task',{})
         if not action or saved!=action or ident in assigned or plan.get('school_original_action')!=_school_native_scope(action):
             raise AgentError('学校独立要求的保存依据已变化，整批未写入',409,'school_action_coverage')
-        title=(action['subject']+'：' if action['subject'] else '')+action['quote']
-        value=_school_requirement_goal(dict(title=title),[action['quote']]+[s['goal'] for s in action['supplements']])
+        value=_school_native_value(action)
         expected={action['ref']}|{s['ref'] for s in action['supplements']}
-        if ({e['ref'] for e in item['evidence']}!=expected or brief.get('purpose')!='learning'
+        if ({e['ref'] for e in item['evidence']}!=expected or brief.get('purpose')!=action['purpose']
                 or brief.get('change')!='new' or brief.get('target_id')
                 or any(brief.get(k,'')!=value[k] for k in ('title','goal','submission'))
                 or item['title']!=value['title'] or item['body']!=value['goal']):
@@ -2721,7 +2776,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         fields['properties'].update(action_quote={'type':'string','maxLength':600},existing_item_id={'type':'string','enum':['']+[r['id'] for r in school_existing]})
     if routing: schema['properties']['proposals']['items']['properties']['task_target_id']['enum']=['']+[t['id'] for t in school_tasks]
     prompt=SCHOOL_PROMPT if routing else PROMPT
-    if native_actions:prompt+='\nrequired_native_actions是程序定位的明确编号独立要求，每项必须单独返回一次，title_quote逐字从该项quote选择包含动作和对象的文字。supplements是同一稳定发布者明确点名的本项补充，必须一起引用对应ref，不分给其他作业；不能把两项合为一项，也不能只引用消息编号后漏掉其中要求。完整要求由程序保留，日期只按该项header/quote和原发送日核对。'
+    if native_actions:prompt+='\nrequired_native_actions是程序按原文定位的独立成果及其完整条件，不要求老师写明总数或编号。每项必须单独返回一次，title_quote逐字从该项quote选择包含动作和对象的文字，task_purpose与本项purpose一致。打印、作答、自查、签字等同一份资料的步骤已归本项，不另起任务。supplements是同一稳定发布者明确点名的本项补充，必须一起引用对应ref，不分给其他作业；不能合并独立成果，也不能只引用消息编号后漏掉要求。完整标准由程序保留，日期只按该项header/quote和各自原发送日核对，不借同通知另一项的截止。'
     if historical: prompt+='\n这是已处理消息的独立行动补漏。逐项对照existing_actions，保留家长当前修改与accepted/dismissed/pending决定，不恢复原任务。action_quote逐字引用包含本项动作和对象的完整原句，不将多个独立事项合并；existing_item_id只有同一具体行动才填旧编号，新漏项填空。已归纳/已忽略事项也返回以覆盖输入，但不会另建。不能按标题相似合并；同消息另项仍单独返回。due只从本项action_quote按原发送日换算，不能借用同通知另一项或旧任务日期。适用性/原件仍未读保留具体缺口。'
     result = family_llm._chat_json([{'role': 'system', 'content': prompt},
         {'role': 'user', 'content': _json(content)}], schema, 'family_agent_selection', timeout=45, data_path=data_path)
