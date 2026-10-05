@@ -9,7 +9,7 @@ from xml.sax.saxutils import escape
 
 import app
 import family_llm
-from test_homework_print_scope import HomeworkPrintScopeTests
+from test_homework_print_scope import HomeworkPrintScopeTests, PNG
 
 
 def docx(text, extra=(), content=None):
@@ -27,6 +27,32 @@ RAW=dict(items=[dict(label='虚构甲卷第1题',question='2+3=?',student_answer
 
 
 class TextQuestionContractTests(unittest.TestCase):
+    def test_text_teacher_claim_requires_teacher_original(self):
+        previous=[{},dict(previous_text='虚构旧意见：教师参考为5。'),
+                  dict(previous_documents=[dict(name='synthetic-previous.txt',text='虚构旧意见：教师参考为5。')])]
+        for answer in ('教师参考：5',' \t教师参考:5'):
+            for prior in previous:
+                with self.subTest(answer=answer,previous=list(prior)):
+                    raw=json.loads(json.dumps(RAW));raw['items'][0]['answer']=answer
+                    original=json.loads(json.dumps(raw))
+                    with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+                        with self.assertRaisesRegex(family_llm.LLMDraftError,'未提供.*教师参考'):
+                            family_llm.homework_reference_draft([],review=True,
+                                question_documents=[dict(name='synthetic-paper.txt',text=QUESTION)],**prior)
+                    self.assertEqual(model.call_count,1);self.assertEqual(raw,original)
+
+    def test_image_teacher_claim_keeps_existing_review_and_print_contract(self):
+        for review in (False,True):
+            with self.subTest(review=review):
+                raw=json.loads(json.dumps(RAW))
+                if not review:raw['items'][0].pop('question_kind')
+                original=json.loads(json.dumps(raw))
+                with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+                    result=family_llm.homework_reference_draft([dict(mime='image/png',data=PNG)],review=review)
+                self.assertEqual(model.call_count,1);self.assertEqual(raw,original)
+                self.assertEqual(result['questions'][0]['answer'],'教师参考：5')
+                self.assertEqual((result['wrong_items'],result['unknown_items']),(1,0))
+
     def test_blank_text_answer_keeps_teacher_reference_but_not_model_summary(self):
         raw=json.loads(json.dumps(RAW));q=raw['items'][0]
         q.update(student_answer='',judgment='unknown',error_reason='',uncertainty='答题格空白。')
