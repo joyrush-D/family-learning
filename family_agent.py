@@ -1547,6 +1547,10 @@ class Store:
                 source,values=school_context
                 originals=[dict(ref='message:'+source['id']+':'+v['id'],text=v['text'],time=v['time'],
                     publisher=_publisher(source['id'],v),kind=v['kind'],content_incomplete=v['unread']) for v in values]
+                for original,v in zip(originals,values):
+                    original['attachments']=[r['upload_id'] for r in c.execute(
+                        'SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=?',(source['id'],v['id']))]
+                _school_native_saved(items,originals)
                 # Validate the whole initial batch before inserting its independent sibling candidates.
                 for item in items:
                     plan=item.get('plan',{});raw=plan.get('school_selection_receipt');brief=plan.get('school_task',{})
@@ -2559,6 +2563,113 @@ def _recover_school_ack_originals(store,config,now):
     return dict(created=created,failed=failed)
 
 
+def _school_native_actions(evidence):
+    """Literal, explicitly counted independent actions; not a generic language coverage claim."""
+    subjects=r'语文|数学|英语|科学|历史|地理|物理|化学|生物'
+    numbers={'一':1,'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}
+    actions=[]
+    for index,entry in enumerate(evidence):
+        text=entry['text']
+        if entry.get('kind','text')!='text' or entry.get('content_incomplete') or entry.get('unread') or entry.get('attachments') or _needs_task_details(text):continue
+        markers=list(re.finditer(r'(?:^|[：:；;。\n])\s*(?:([1-9][0-9]?)[.．、]|第([一二三四五六七八九十0-9]+)项\s*[:：]?)\s*',text))
+        if len(markers)<2:continue
+        header=text[:markers[0].start()].strip()
+        count=re.search(r'完成\s*([二两三四五六七八九十2-9])项(?:'+subjects+r')?(?:要求|作业|任务|练习)?[：:；;。\s]*$',header)
+        if not count or re.search(r'步骤|流程|方法|示例|参考|更正|取消|撤销|不用|无需|不再',header):continue
+        expected=numbers.get(count[1],int(count[1]) if count[1].isdigit() else 0)
+        ordinals=[int(m[1]) if m[1] else numbers.get(m[2],int(m[2]) if m[2].isdigit() else 0) for m in markers]
+        if expected!=len(markers) or ordinals!=list(range(1,expected+1)):continue
+        own=[]
+        for position,match in enumerate(markers):
+            end=markers[position+1].start() if position+1<len(markers) else len(text)
+            quote=text[match.end():end].strip().rstrip('；;。').strip()
+            # Printing, signing or uploading after one activity are its steps,
+            # not additional outcomes. Leave unsupported lists to the normal reader.
+            if not re.match(r'(?:朗读|背诵|抄写|默写|听写|跟读|练习|订正|预习|复习|阅读|口算|习作|完成(?!后)|核对)\S.{1,}',quote):break
+            own.append(dict(id='native:'+_hash([entry['ref'],match.end(),end,quote])[:24],ref=entry['ref'],quote=quote,
+                header=header,subject=next(iter(re.findall(subjects,header)),''),publisher=entry.get('publisher',''),time=entry.get('time',''),supplements=[]))
+        if len(own)!=expected:continue
+        for supplement in evidence[index+1:]:
+            head=re.match(r'^补充([^：:\n]{2,40})[：:]\s*(.+)$',supplement['text'].strip(),re.S)
+            if not head:continue
+            publisher=entry.get('publisher','')
+            if (not publisher or supplement.get('publisher')!=publisher or supplement['ref'][8:].rsplit(':',1)[0]!=entry['ref'][8:].rsplit(':',1)[0]
+                    or supplement.get('kind','text')!='text' or supplement.get('content_incomplete') or supplement.get('unread') or supplement.get('attachments')):continue
+            try:
+                stamp=dt.datetime.fromisoformat(entry['time']);later=dt.datetime.fromisoformat(supplement['time'])
+                if stamp.tzinfo is None or later.tzinfo is None or not 0<=(later-stamp).total_seconds()<=120:continue
+            except (KeyError,ValueError,TypeError):continue
+            if re.search(r'更正|取消|撤销|不再|不用|无需|改为|改期|延期',head[2]):
+                own=[];break  # A later change needs the existing correction reader.
+            object_text=head[1]
+            if own[0]['subject'] and object_text.startswith(own[0]['subject']):object_text=object_text[len(own[0]['subject']):]
+            owners=[a for a in own if len(object_text)>=2 and a['quote'].count(object_text)==1]
+            if len(owners)==1:
+                owners[0]['supplements'].append(dict(ref=supplement['ref'],quote=supplement['text'].strip(),goal=head[2].strip()))
+        actions.extend(own)
+    return actions
+
+
+def _school_native_bind(proposal,actions,assigned):
+    """Allocate one literal outcome per proposal and retain its complete named supplements."""
+    for name,field in _school_fields['properties'].items():
+        if field.get('type')=='string':
+            value=_text(proposal,name,field.get('maxLength',4000))
+            if 'enum' in field and value not in field['enum']:raise AgentError('学校独立要求字段无法核对')
+    refs={q['ref'] for q in proposal['evidence']};quote=proposal['title_quote'].strip().rstrip('；;。').strip()
+    matches=[a for a in actions if a['ref'] in refs and quote and quote in a['quote']]
+    if not matches:return proposal,None
+    if len(matches)!=1 or matches[0]['id'] in assigned:
+        raise AgentError('学校独立要求重复或合并，整批保留重试',code='school_action_coverage')
+    action=matches[0]
+    if proposal['task_change']!='new' or proposal['task_target_id'] or proposal['task_state']=='reference' or proposal['task_purpose']!='learning':
+        raise AgentError('学校独立要求未形成对应行动，整批保留重试',code='school_action_coverage')
+    expected={action['ref']}|{s['ref'] for s in action['supplements']}
+    if expected!=refs:
+        raise AgentError('学校补充要求未归到对应作业，整批保留重试',code='school_action_coverage')
+    if any(other['quote'] in proposal['task_goal'] for other in actions if other['id']!=action['id']):
+        raise AgentError('不同学校成果被合并，整批保留重试',code='school_action_coverage')
+    title=(action['subject']+'：' if action['subject'] else '')+action['quote']
+    if len(title)>TASK_BRIEF_SCHEMA['properties']['title']['maxLength']:
+        raise AgentError('完整学校行动标题超过范围，原文保留',code='school_action_coverage')
+    value=_school_requirement_goal(dict(title=title),[action['quote']]+[s['goal'] for s in action['supplements']])
+    from family_agenda import deadlines,sent_day
+    dates=deadlines(action['header']+'\n'+action['quote'],sent_day(action['time']))
+    if len(dates)>1:raise AgentError('本项学校日期尚无法唯一核对，原文保留',code='school_action_coverage')
+    due=next(iter(dates)) if dates else proposal['due']
+    assigned.add(action['id'])
+    return dict(proposal,task_title=value['title'],task_goal=value['goal'],task_submission='',due=due),action
+
+
+def _school_native_scope(action):
+    anchors=[dict(ref=action['ref'],upload_ids=[],pages=[],quote=action['quote'])]
+    anchors.extend(dict(ref=s['ref'],upload_ids=[],pages=[],quote=s['quote']) for s in action['supplements'])
+    identity=_hash(sorted([a['ref'],a['upload_ids'],a['pages'],a['quote']] for a in anchors))
+    return dict(identity=identity,anchors=anchors)
+
+
+def _school_native_saved(items,evidence):
+    """Recheck complete literal allocation under the existing intake write transaction."""
+    actions=_school_native_actions(evidence);lookup={a['id']:a for a in actions};assigned=set()
+    for item in items:
+        plan=item.get('plan',{});saved=plan.get('school_native_action')
+        if not saved:continue
+        ident=saved.get('id');action=lookup.get(ident);brief=plan.get('school_task',{})
+        if not action or saved!=action or ident in assigned or plan.get('school_original_action')!=_school_native_scope(action):
+            raise AgentError('学校独立要求的保存依据已变化，整批未写入',409,'school_action_coverage')
+        title=(action['subject']+'：' if action['subject'] else '')+action['quote']
+        value=_school_requirement_goal(dict(title=title),[action['quote']]+[s['goal'] for s in action['supplements']])
+        expected={action['ref']}|{s['ref'] for s in action['supplements']}
+        if ({e['ref'] for e in item['evidence']}!=expected or brief.get('purpose')!='learning'
+                or brief.get('change')!='new' or brief.get('target_id')
+                or any(brief.get(k)!=value[k] for k in ('title','goal','submission'))
+                or item['title']!=value['title'] or item['body']!=value['goal']):
+            raise AgentError('学校完整要求未按对应行动保存，整批未写入',409,'school_action_coverage')
+        assigned.add(ident)
+    if assigned!=set(lookup):
+        raise AgentError('学校独立要求保存时仍有遗漏，整批未写入',409,'school_action_coverage')
+
+
 def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None, school_tasks=(),school_existing=None):
     original_pointers=[]
     if mode == 'school':
@@ -2567,8 +2678,11 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         if not evidence:return original_pointers
     as_of = dt.date.fromisoformat(as_of).isoformat() if as_of is not None else _now().date().isoformat()
     routing = mode == 'school' and school_goals is not None
+    native_actions=_school_native_actions(evidence) if routing and school_existing is None else []
+    native_assigned=set()
     content = {'mode': mode, 'as_of': as_of, 'child': profile or {}, 'evidence': evidence}
     if routing: content.update(learning_goals=school_goals,school_tasks=school_tasks)
+    if native_actions:content['required_native_actions']=native_actions
     schema=_evidence_schema(SCHOOL_SCHEMA if routing else SCHEMA,evidence)
     historical=routing and school_existing is not None
     if historical:
@@ -2578,6 +2692,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         fields['properties'].update(action_quote={'type':'string','maxLength':600},existing_item_id={'type':'string','enum':['']+[r['id'] for r in school_existing]})
     if routing: schema['properties']['proposals']['items']['properties']['task_target_id']['enum']=['']+[t['id'] for t in school_tasks]
     prompt=SCHOOL_PROMPT if routing else PROMPT
+    if native_actions:prompt+='\nrequired_native_actions是程序定位的明确编号独立要求，每项必须单独返回一次，title_quote逐字从该项quote选择包含动作和对象的文字。supplements是同一稳定发布者明确点名的本项补充，必须一起引用对应ref，不分给其他作业；不能把两项合为一项，也不能只引用消息编号后漏掉其中要求。完整要求由程序保留，日期只按该项header/quote和原发送日核对。'
     if historical: prompt+='\n这是已处理消息的独立行动补漏。逐项对照existing_actions，保留家长当前修改与accepted/dismissed/pending决定，不恢复原任务。action_quote逐字引用包含本项动作和对象的完整原句，不将多个独立事项合并；existing_item_id只有同一具体行动才填旧编号，新漏项填空。已归纳/已忽略事项也返回以覆盖输入，但不会另建。不能按标题相似合并；同消息另项仍单独返回。due只从本项action_quote按原发送日换算，不能借用同通知另一项或旧任务日期。适用性/原件仍未读保留具体缺口。'
     result = family_llm._chat_json([{'role': 'system', 'content': prompt},
         {'role': 'user', 'content': _json(content)}], schema, 'family_agent_selection', timeout=45, data_path=data_path)
@@ -2589,6 +2704,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         raise AgentError('模型筛选字段不正确')
     refs = {entry['ref']: entry['text'] for entry in evidence}; output = []; accounted = set();history_actions=[]
     for proposal in result['proposals']:
+        native_action=None
         action_anchor={};history_uncertain=False
         if historical:
             for name,field in _school_fields['properties'].items():
@@ -2622,6 +2738,9 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             # School selection chooses message identities; copying source text is the application's job.
             text = refs[ref][:600] if routing else _source_quote(refs, ref, _text(quote, 'quote', 600, True))
             cited.append({'ref': ref, 'text': text})
+        if native_actions:
+            proposal,native_action=_school_native_bind(proposal,native_actions,native_assigned)
+            due=proposed_due=proposal['due']
         # Publication groups are reading hints only. Each task keeps exactly its
         # verified citations; unrelated task originals must never be added here.
         dated_quote=title if title and any(title in refs[entry['ref']] for entry in cited) else ''
@@ -2633,7 +2752,8 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         uncertain_due=ambiguous_due=False
         from family_agenda import date, deadlines, sent_day
         cited_evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}]
-        relative=set().union(*(deadlines(action_anchor.get(e['ref'],'') if historical else e['text'],sent_day(e.get('time',''))) for e in cited_evidence)) if mode=='school' else set()
+        relative=(deadlines(native_action['header']+'\n'+native_action['quote'],sent_day(native_action['time']))
+            if native_action else set().union(*(deadlines(action_anchor.get(e['ref'],'') if historical else e['text'],sent_day(e.get('time',''))) for e in cited_evidence))) if mode=='school' else set()
         if routing and not due and len(result['proposals'])==1 and len(cited_evidence)==1 and len(relative)==1:
             # The model may omit a date that the single original notice states explicitly.
             due=next(iter(relative))
@@ -2689,6 +2809,9 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             if brief['title'] and brief['goal']: item.update(title=brief['title'],body=brief['goal'])
             if not _keeps_learning(brief): item.get('plan',{}).pop('school_learning',None)
             item.setdefault('plan',{})['school_task']=brief
+            if native_action:
+                item['plan']['school_native_action']=native_action
+                item['plan']['school_original_action']=_school_native_scope(native_action)
             item['plan']['school_selection_revision']=SCHOOL_SELECTION_REVISION
             if historical:
                 item['plan']['school_action_anchor']=action_anchor
@@ -2698,6 +2821,8 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
 
         if item not in output: output.append(item)
     if routing:
+        if native_assigned!={a['id'] for a in native_actions}:
+            raise AgentError('学校独立要求有遗漏，整批保留未处理，待原后台重试',code='school_action_coverage')
         if set(refs) != accounted:
             raise AgentError('学校消息归纳有遗漏，整批保留未处理，待原后台重试', code='school_coverage_incomplete')
         # Only final, guarded learning results can carry a mixed notice's activity.
