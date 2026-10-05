@@ -139,7 +139,7 @@ def review_text(value, *, saved=False):
             frame=re.match(r'\A作业检查保存格式 v2\n复核待补清单：([^\n]{1,25000})\n',text)
             if frame is None: raise PrintError('保存检查的待补清单无法核对')
             try: continuation=review_continuation(json.loads(frame[1]))
-            except (ValueError,TypeError): raise PrintError('保存检查的待补清单无法核对') from None
+            except (ValueError,TypeError,RecursionError): raise PrintError('保存检查的待补清单无法核对') from None
             text='作业检查保存格式 v1\n'+text[frame.end():]
         header=re.match(r'\A作业检查保存格式 v1\n最新检查字数：([1-9][0-9]{0,4})\n',text)
         if header is None: raise PrintError('保存检查的最新文字范围无法核对')

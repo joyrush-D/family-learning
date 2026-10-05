@@ -388,7 +388,8 @@ def recheck_pending_http_checks(app,upload):
             status,out=http('/api/print/homework/draft',continued)
             assert status!=200 and '超过25项' in out['error'],out
         for invalid in ('作业检查保存格式 v2\n无结构\n',
-                '作业检查保存格式 v2\n复核待补清单：{}\n最新检查字数：1\n甲\n'):
+                '作业检查保存格式 v2\n复核待补清单：{}\n最新检查字数：1\n甲\n',
+                '作业检查保存格式 v2\n复核待补清单：'+'['*1100+'0'+']'*1100+'\n最新检查字数：1\n甲\n'):
             refused(lambda:family_print.review_text(invalid,saved=True))
         for labels in ([str(n)+'"\\'*39 for n in range(10)], [str(n)+'\U0001f600'*78 for n in range(25)]):
             state=pending|dict(pending_labels=labels)
