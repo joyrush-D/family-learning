@@ -1182,6 +1182,8 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
                 or not item['question'].strip() and not (review and item['label'].strip()
                     and (item['judgment']=='unknown' or teacher_reference and item['answer'].startswith('教师参考：')))):
             raise LLMDraftError('参考草稿有无法核对的题目，请手动整理')
+        if review and not images and not teacher_reference and item['answer'].lstrip().startswith(('教师参考：','教师参考:')):
+            raise LLMDraftError('本次未提供教师参考原件，模型不能将答案标为教师参考；请重新检查或手动核对')
         if review:
             question_label=''.join(item['label'].split())
             if not question_label or question_label in seen_question_labels:

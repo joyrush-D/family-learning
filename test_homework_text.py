@@ -72,8 +72,12 @@ class TextQuestionContractTests(unittest.TestCase):
     def test_complete_text_choice_and_reading_use_text_evidence(self):
         documents=[dict(name='synthetic-choice.txt',text='虚构甲卷第1题：2+3=? A.4 B.5 C.6\n实际作答：B'),
                    dict(name='synthetic-reading.docx',text='虚构甲卷第2题：原文“周一小林去了图书馆。” 问：小林何时去图书馆？\n实际作答：周一')]
-        with patch.object(family_llm,'_chat_json',return_value=json.loads(json.dumps(RAW))) as model:
-            family_llm.homework_reference_draft([],review=True,question_documents=documents)
+        raw=json.loads(json.dumps(RAW));raw['items'][0].update(question='2+3=? A.4 B.5 C.6',
+            student_answer='B',answer='AI自行推导：B',judgment='correct',error_reason='')
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            result=family_llm.homework_reference_draft([],review=True,question_documents=documents)
+        self.assertEqual(model.call_count,1);self.assertEqual(result['questions'][0]['student_answer'],'B')
+        self.assertEqual(result['questions'][0]['answer'],'AI自行推导：B');self.assertEqual((result['wrong_items'],result['unknown_items']),(0,0))
         prompt=model.call_args.args[0][0]['content']
         self.assertNotIn('在这些图片中缺失时',prompt)
         self.assertIn('在本次明确提供的题目/作答原件（图片或文字）中缺失时',prompt)
