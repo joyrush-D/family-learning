@@ -717,7 +717,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
   const missingRow=coveragePanel().locator('.homework-question').filter({hasText:'虚构甲卷第2题'});assert.equal(await missingRow.count(),1);assert.match(await missingRow.innerText(),/未返回逐题检查结果/);assert.match(await missingRow.innerText(),/孩子作答：未能辨认/);
   const coverageGapText=await coveragePanel().locator('[data-homework-review-result] textarea').inputValue();assert(!coverageGapText.includes('第1、2题均正确'));assert(coverageGapText.includes('虚构甲卷第2题'));
   await coveragePanel().locator('[data-homework-review-instruction]').fill('虚构再次漏列第2题：仍须保留待补查。');
-  await coveragePanel().locator('[data-homework-review-run]').click();await eventually(async()=>/上一轮此题仍未判定/.test(await coveragePanel().innerText()),'unsaved same-scope pending survives omitted inventory');
+  p.once('dialog',d=>d.accept());await coveragePanel().locator('[data-homework-review-run]').click();await eventually(async()=>/上一轮此题仍未判定/.test(await coveragePanel().innerText()),'unsaved same-scope pending survives omitted inventory');
   assert.equal(await coveragePanel().locator('[data-homework-review-result] .homework-question').count(),2);assert.match(await coveragePanel().locator('[data-homework-review-status]').innerText(),/1题未判定/);
   const unsavedPending=JSON.parse(await coveragePanel().locator('[data-homework-review-result]').getAttribute('data-continuation'));assert.deepEqual(unsavedPending.pending_labels,['虚构甲卷第2题']);
   const coveragePendingText=await coveragePanel().locator('[data-homework-review-result] textarea').inputValue();
@@ -730,7 +730,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
   assert.equal(await coveragePanel().locator('[data-homework-review-result] .homework-question').count(),2);assert.match(await coveragePanel().locator('[data-homework-review-status]').innerText(),/1题未判定/);
   if(process.env.HOMEWORK_QUICK_PROOF_DIR){await coveragePanel().locator('[data-homework-review-result]').scrollIntoViewIfNeeded();await p.screenshot({path:require('node:path').join(process.env.HOMEWORK_QUICK_PROOF_DIR,'recheck-pending-'+width+'.png')})}
   await coveragePanel().locator('[data-homework-review-instruction]').fill('虚构补查第2题，按教师参考核对3与4。');
-  await coveragePanel().locator('[data-homework-review-run]').click();await eventually(async()=>/2题 · 1题需订正 · 0题未判定/.test(await coveragePanel().locator('[data-homework-review-status]').innerText()),'second question actually rechecked');
+  p.once('dialog',d=>d.accept());await coveragePanel().locator('[data-homework-review-run]').click();await eventually(async()=>/2题 · 1题需订正 · 0题未判定/.test(await coveragePanel().locator('[data-homework-review-status]').innerText()),'second question actually rechecked');
   const checkedRow=coveragePanel().locator('.homework-question').filter({hasText:'虚构甲卷第2题'});assert.match(await checkedRow.innerText(),/孩子作答：3/);assert.match(await checkedRow.innerText(),/教师参考：4/);assert.match(await checkedRow.innerText(),/孩子作答3与教师参考4不同/);
   const coverageCheckedText=await coveragePanel().locator('[data-homework-review-result] textarea').inputValue();await coveragePanel().locator('[data-homework-review-confirm]').check();await coveragePanel().locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await coveragePanel().innerText()),'second result staged');
   const coverageCheckedSaved=await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),readCause);
