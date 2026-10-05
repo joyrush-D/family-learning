@@ -150,6 +150,11 @@ def connect():
             except sqlite3.OperationalError:
                 if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
                     c.close(); raise
+    if 'review_output_ids' not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+        try: c.execute('ALTER TABLE records ADD COLUMN review_output_ids TEXT')
+        except sqlite3.OperationalError:
+            if 'review_output_ids' not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+                c.close(); raise
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS record_request_key ON records(request_key) WHERE request_key<>''")
     c.execute('CREATE TABLE IF NOT EXISTS uploads (id TEXT PRIMARY KEY, name TEXT NOT NULL, size INTEGER NOT NULL, mime TEXT NOT NULL, created TEXT NOT NULL)')
     c.execute('CREATE TABLE IF NOT EXISTS revisions (id INTEGER PRIMARY KEY, record_id INTEGER, previous TEXT, changed TEXT)')
@@ -939,21 +944,26 @@ def homework_review_result_bindings(c,child,names):
         if not isinstance(previous,dict) or previous.get('id')!=revision['record_id']:
             raise family_print.PrintError('原件历史暂时无法核对，请保留原记录后重试','review_source_changed',409)
         if names.get(previous.get('child'),previous.get('child'))==child: versions.append(previous)
-    events=[];known={};bindings=[]
+    events=[];known=set();bindings=[]
     for record in versions:
         record=dict(followup_kind='',related_record_id=None,note='')|record
         try:
             attachments=json.loads(record['attachments'])
             kind=record.get('followup_kind','');parent=record.get('related_record_id')
-            if kind=='作业检查' and type(parent) is int and parent>0:
+            explicit=record.get('review_output_ids')
+            if kind=='作业检查' and explicit is not None:
+                outputs=json.loads(explicit)
+                if not isinstance(outputs,list) or any(not isinstance(i,str) or i not in attachments for i in outputs): raise ValueError('invalid result binding')
+                outputs=set(outputs)
+            elif kind=='作业检查' and type(parent) is int and parent>0:
                 outputs={r['id'] for r in c.execute("SELECT id FROM uploads WHERE name=? AND mime LIKE 'text/plain%'",('作业批改参考-'+str(parent)+'.txt',)) if r['id'] in attachments}
             else: outputs=legacy_homework_review_files(c,record)
         except (KeyError,ValueError,TypeError):
             raise family_print.PrintError('原件历史暂时无法核对，请保留原记录后重试','review_source_changed',409) from None
-        for ident in outputs: known.setdefault(ident,[record['id'],current[record['id']]['created']])
+        known.update(outputs)
         bindings.append((record,attachments,outputs))
     for record,attachments,outputs in bindings:
-        attachments=set(attachments)&known.keys()
+        attachments=set(attachments)&known
         if not attachments: continue
         # Current IDs alone are insufficient: a later correction may append the result to an older answer.
         try:
@@ -965,8 +975,8 @@ def homework_review_result_bindings(c,child,names):
     first={}
     for _,ident,attachments,outputs in sorted(events,key=lambda event:(event[0],event[1])):
         for upload_id in attachments:
-            if upload_id in known: first.setdefault(upload_id,upload_id in outputs)
-    return {ident:binding for ident,binding in known.items() if first.get(ident)}
+            if upload_id in known: first.setdefault(upload_id,ident if upload_id in outputs else None)
+    return {upload_id:[ident,current[ident]['created']] for upload_id,ident in first.items() if ident is not None}
 
 
 def homework_material_context(c,task_id,*,answer=None):
@@ -1045,7 +1055,7 @@ def homework_material_context(c,task_id,*,answer=None):
             upload=c.execute('SELECT mime FROM uploads WHERE id=?',(ident,)).fetchone()
             origin='review_result' if (other['followup_kind']=='作业检查' or ident in legacy) and upload is not None and upload['mime'].startswith('text/plain') else 'same_task'
             add(ident,origin,[other['id'],other['created']])
-            if ident in legacy: allowed[ident].update(origin='review_result',review_binding=[other['id'],other['created']])
+            if ident in legacy and ident not in results: allowed[ident].update(origin='review_result',review_binding=[other['id'],other['created']])
     return dict(task=task,child_id=child['id'],allowed=allowed,report=report,school=bindings,school_error=school_error)
 
 def homework_answer_record(row,task_id):
@@ -1313,6 +1323,15 @@ def save_task_feedback(obj):
                 or not set(basis['photo_ids']).issubset(json.loads(original['attachments']))
                 or not set(basis['photo_ids']).issubset(attachments)):
                 raise RecordError('原作答已在别处更正；批改依据需要重新核对，本次反馈未保存',409,'review_basis_changed')
+        output_ids=None
+        if material_basis and previous is None and titled is None:
+            # Freeze the newly written result IDs before inserting the check that also retains its true inputs.
+            check_review_basis()
+            original=c.execute('SELECT * FROM records WHERE id=?',(basis['record_id'],)).fetchone()
+            inputs=homework_material_context(c,task_id,answer=original)['allowed']
+            result_name='作业批改参考-'+str(basis['record_id'])+'.txt'
+            output_ids=[i for i in attachments if i not in inputs and c.execute(
+                "SELECT 1 FROM uploads WHERE id=? AND name=? AND mime LIKE 'text/plain%'",(i,result_name)).fetchone()]
         if previous is not None and all(record[k]==(saved if k=='attachments' else previous[k]) for k in record if k not in ('child','source','title','review_basis')):
             # The same correction again (for example after a lost reply) changes nothing and is not a conflict.
             if request_key: raise RecordError('更正已有文字记录不能复用新增反馈的提交标识')
@@ -1327,7 +1346,10 @@ def save_task_feedback(obj):
             # The explicit completion choice is part of the submission, so one key cannot later carry a different choice.
             else: record.update(request_key=request_key,completion=dict(complete=complete,note=completion_note))
             result=_save_record(record,False,{},c);key_replay=result['replayed']
-        if basis is not None and previous is None and not key_replay: check_review_basis()
+        if basis is not None and previous is None and not key_replay:
+            if output_ids is not None:
+                c.execute('UPDATE records SET review_output_ids=? WHERE id=?',(json.dumps(output_ids),result['record_id']))
+            check_review_basis()
         changed=False
         if complete and not key_replay:
             update=c.execute('SELECT status FROM task_updates WHERE id=?',(task_id,)).fetchone()
