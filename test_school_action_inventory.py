@@ -64,7 +64,7 @@ class SchoolActionInventoryTests(unittest.TestCase):
             for row in accepted:
                 self.assertEqual((tasks[row['task_id']]['action'], tasks[row['task_id']]['due'],
                                   tasks[row['task_id']]['original_status']),
-                                 (row['body'], row['due'], '待跟进'))
+                                 (row['body'], row['due'] or '无明确截止', '待跟进'))
         return rows
 
     def reject_inventory_change_in_transaction(self, payload, proposals, change):
