@@ -2579,7 +2579,7 @@ def _school_native_command(clause):
     value=re.sub(r'^'+_SCHOOL_NATIVE_MARKER,'',clause.strip())
     prefix=r'(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')[，,:：]\s*|'+_SCHOOL_NATIVE_DATE+r'\s*(?:前|之前|以前|内)?\s*|请(?:各位)?(?:家长|同学们?|大家)?\s*|只需\s*|另(?:外)?\s*)'
     value=re.sub(r'^(?:'+prefix+r')*','',value)
-    learning=r'(?:朗读|背诵|抄写|默写|听写|跟读|订正|预习|复习|阅读|口算|习作|练习)(?!后|完|已|完成)[^：:。；;]{2,}'
+    learning=r'(?:朗读|背诵|抄写|默写|听写|跟读|订正|预习|复习|阅读|口算|习作|练习)(?!后|完|已|完成|录音|音频)[^：:。；;]{2,}'
     exercise=r'(?:完成|做|写)(?!后|完|过|了)(?:好)?\s*[^：:。；;]{0,35}(?:练习卷|练习册|作业本|作业单|试卷|习题|作文|第[^。；;]{1,16}题)[^：:。；;]*'
     object_first=r'(?:[^：:。；;，,]{0,16}(?:练习卷|练习册|作业本|试卷)第[^：:。；;，,]{1,16}题)[^：:。；;]{0,15}(?:完成|交)[^：:。；;]*'
     compact=r'(?:Unit\s*[0-9]+[^。；;，,]{0,24}|《[^》]+》|课文)[^。；;，,]{0,12}(?:读|背)[一二两三四五六七八九十0-9]+遍'
@@ -2638,6 +2638,7 @@ def _school_native_blocks(text):
         if marker:start+=marker.end()
         clause=text[start:end].strip().rstrip('。；;').strip()
         if not clause:continue
+        if re.match(r'^(?:示例|例如|格式示例)[：:]',clause):continue
         purpose=_school_native_command(clause)
         # The container's numbered "complete questions" is its answer step,
         # not another worksheet. Other reading/learning outcomes still split.
@@ -2649,6 +2650,8 @@ def _school_native_blocks(text):
                 start=preparation[0][0]
                 preparation=[]
             pieces.append(dict(start=start,end=end,purpose=purpose,primary=head[1] if container and not pieces else clause))
+        elif step and pieces and _school_native_object(pieces[-1]['primary'])!=container_object:
+            raise AgentError('穿插的资料步骤尚未能唯一归属，完整原批次保留',code='school_action_coverage')
         elif pieces:
             pieces[-1]['end']=end
         elif container:
@@ -2686,8 +2689,8 @@ def _school_native_actions(evidence):
         for part in _school_native_blocks(text):
             quote=part['quote'];header=part['header']
             # A sole question/range explicitly labelled optional is not mandatory.
-            optional=re.search(r'第[^题。；;]{1,16}题[（(]选做[^）)]*[）)]\s*[。；;]?$',quote)
-            if part['purpose']=='learning' and optional and '题' not in quote[:optional.start()] and '必做' not in quote:
+            optional=re.search(r'第[^题。；;]{1,16}题[（(]选做[^）)]*[）)]\s*[。；;]?$',part['primary'])
+            if part['purpose']=='learning' and optional and '题' not in part['primary'][:optional.start()] and '必做' not in quote:
                 part['purpose']='optional'
             named=set(re.findall(_SCHOOL_NATIVE_SUBJECTS,part['primary']));shared=set(re.findall(_SCHOOL_NATIVE_SUBJECTS,header))
             subject=next(iter(named)) if len(named)==1 else next(iter(shared)) if not named and len(shared)==1 else ''
@@ -2707,7 +2710,7 @@ def _school_native_actions(evidence):
                 stamp=dt.datetime.fromisoformat(entry['time']);later=dt.datetime.fromisoformat(supplement['time'])
                 if stamp.tzinfo is None or later.tzinfo is None or not 0<=(later-stamp).total_seconds()<=120:continue
             except (KeyError,ValueError,TypeError):continue
-            if re.search(r'更正|取消|撤销|改为|改期|延期',head[2]):
+            if re.search(r'更正|取消|撤销|不再(?:做|完成)|不用(?:做|完成)|无需(?:做|完成)|改为|改期|延期',head[2]):
                 own=[];break  # A later change needs the existing correction reader.
             object_text=head[1]
             object_text=re.sub(r'^(?:'+_SCHOOL_NATIVE_SUBJECTS+r')','',object_text)
