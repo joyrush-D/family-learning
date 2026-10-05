@@ -126,6 +126,20 @@ class SchoolActionInventoryTests(unittest.TestCase):
                     self.assertNotIn(foreign, body, 'the shared standard must not merge independent actions')
                     self.assertIn(shared, body, 'a trailing all-actions standard belongs to both outcomes')
 
+    def test_unproven_shared_scope_is_rejected_before_selection(self):
+        first = '英语作业：朗读Unit 2课文两遍。完成练习卷第1–3题。'
+        for tail in ('三项都请家长检查。',
+                     '两项都请家长检查。预习Unit 3课文。',
+                     '两项都请家长检查。明天交。',
+                     '示例：“家长检查”，仅说明格式。两项都请家长检查。'):
+            with self.subTest(tail=tail):
+                with self.assertRaises(agent.AgentError) as error:
+                    agent._school_native_blocks(first + tail)
+                self.assertEqual(error.exception.code, 'school_action_coverage')
+        # Global optionality needs semantic classification; never force the old
+        # mandatory action purposes merely because two literal commands exist.
+        self.assertEqual(agent._school_native_blocks(first + '两项都选做。'), [])
+
     def test_exercise_deadline_in_next_sentence_is_not_borrowed_by_reading(self):
         payload, refs = self._ingest([
             '英语作业：朗读Unit 2课文两遍。完成练习卷第1–3题，明天交。'])

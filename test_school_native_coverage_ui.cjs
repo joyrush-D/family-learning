@@ -67,8 +67,10 @@ try:
     fixture.stack.enter_context(patch('subprocess.Popen',side_effect=AssertionError('external CLI forbidden')))
     printer=fixture.stack.enter_context(patch.object(app.family_print.PrintStore,'enqueue',side_effect=AssertionError('printing forbidden')))
     app.printer_config=lambda:dict(printers=[],error='')
-    form=os.environ['SCHOOL_NATIVE_NOTICE_FORM'];assert form in ('numbered','semicolon')
+    form=os.environ['SCHOOL_NATIVE_NOTICE_FORM'];assert form in ('numbered','semicolon','shared')
+    shared='两项都今天完成并请家长检查' if form=='shared' else ''
     notice=('英语，今天完成：1. 朗读Unit 2课文两遍；2. 完成练习卷第1–3题。' if form=='numbered' else
+            '英语作业：朗读Unit 2课文两遍。完成练习卷第1–3题。'+shared+'。' if shared else
             '英语作业：朗读Unit 2课文两遍，今天完成；完成练习卷第1–3题，今天完成。')
     texts=[notice,
            '补充英语练习卷：单面打印；完成后自查并请家长签字；第4题选做。']
@@ -103,6 +105,7 @@ try:
         actions=context['required_native_actions']
         assert len(actions)==2 and reading['title_quote'] in actions[0]['quote'] and exercise['title_quote'] in actions[1]['quote']
         assert actions[0]['quote'] in notice and actions[1]['quote'] in notice
+        if shared:assert all(a['shared_conditions']==[shared] for a in actions)
         assert actions[0]['supplements']==[] and [s['quote'] for s in actions[1]['supplements']]==[texts[1]]
         assert actions[0]['publisher'] and actions[0]['publisher']==actions[1]['publisher']
         reply=fixed(messages,schema,name,*args,**kwargs)
@@ -133,8 +136,11 @@ try:
         for role,row,wanted_refs in (('reading',reading_row,refs[:1]),('exercise',exercise_row,refs)):
             plan=json.loads(row['plan']);anchors=plan['school_original_action']['anchors'];task=tasks[row['task_id']]
             assert [e['ref'] for e in json.loads(row['evidence'])]==wanted_refs
-            assert [a['ref'] for a in anchors]==wanted_refs and all(a['upload_ids']==[] and a['pages']==[] for a in anchors)
+            assert list(dict.fromkeys(a['ref'] for a in anchors))==wanted_refs and all(a['upload_ids']==[] and a['pages']==[] for a in anchors)
             expected_anchors=[dict(ref=refs[0],upload_ids=[],pages=[],quote=calls[-1]['required_native_actions'][0 if role=='reading' else 1]['quote'])]
+            if shared:
+                assert shared in row['body'] and shared in task['action']
+                expected_anchors.append(dict(ref=refs[0],upload_ids=[],pages=[],quote=shared))
             if role=='exercise':expected_anchors.append(dict(ref=refs[1],upload_ids=[],pages=[],quote=texts[1]))
             assert anchors==expected_anchors,'anchors must be literal clauses for this outcome, never the whole mixed notice'
             assert (task['title'],task['action'],task['child'],task['due'],task['original_status'])==(row['title'],row['body'],'虚构甲',today,'待跟进')
@@ -157,7 +163,7 @@ try:
         assert [dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]==saved_tasks
     fixture.model.side_effect=AssertionError('no further model receipt allowed')
     proof=dict(synthetic_only=True,real_model_calls=0,collector_calls=0,printer_calls=0,
-        form=form,today=today,child='虚构甲',source_id=fixture.source['id'],messages=payload['messages'],items=items,date_control=date_control,
+        form=form,shared_condition=shared,today=today,child='虚构甲',source_id=fixture.source['id'],messages=payload['messages'],items=items,date_control=date_control,
         first=first,failed_state=failed_state,failed_job=failed_job,delayed=delayed,recovered=recovered,done_job=done_job,replay=replay,
         mock_calls=calls,originals_preserved=True,source_cursor_preserved=True,
         scope='ordinary numbered and same-paragraph outcomes; literal exercise standards; fixed receipts are not model accuracy')
@@ -203,7 +209,7 @@ async function screenshot(page,name){await noOverflow(page);await page.screensho
  try{
   assert(proofDir,'SCHOOL_NATIVE_PROOF_DIR is required');const sourcePath=await fs.realpath(__dirname),proofPath=path.resolve(proofDir);assert(proofPath!==sourcePath&&!proofPath.startsWith(sourcePath+path.sep),'proof must stay outside the checkout');await fs.mkdir(proofDir,{recursive:true});const actualProofPath=await fs.realpath(proofDir);assert(actualProofPath!==sourcePath&&!actualProofPath.startsWith(sourcePath+path.sep),'proof symlink must stay outside the checkout');proofReady=true;
   browser=await chromium.launch({headless:true,channel:process.env.PLAYWRIGHT_CHANNEL||'chrome'});
-  for(const form of ['numbered','semicolon']){
+  for(const form of ['numbered','semicolon','shared']){
   host=await server(form);proof.intake=await json(host.url+'__fixture/proof');proof.scenarios.push({form,intake:proof.intake});assert.equal(proof.intake.model_receipts,2);assert.equal(proof.intake.print_attempts,0);
   for(const width of [360,1440]){
    const page=await browser.newPage({viewport:{width,height:850},timezoneId:'Asia/Shanghai'});lastPage=page;page.noticeForm=form;page.setDefaultTimeout(10000);
@@ -233,6 +239,7 @@ async function screenshot(page,name){await noOverflow(page);await page.screensho
    assert.match(await card(reading.task_id).innerText(),/朗读Unit 2课文两遍/);assert(!(await card(reading.task_id).innerText()).includes('练习卷'));
    for(const clause of ['完成练习卷第1–3题','单面打印','完成后自查并请家长签字','第4题选做'])assert((await card(exercise.task_id).innerText()).includes(clause));assert(!(await card(exercise.task_id).innerText()).includes('朗读'));
    for(const item of items){const title=await card(item.task_id).locator('h3').innerText();assert.equal(title,item.title);assert(title.length<=40&&!/单面打印|自查|签字/.test(title),'main list title stays short while the body retains standards');assert(!title.includes('选做')||(title.endsWith('（第4题选做）')&&title.split('选做').length===2),'only the compact optional-question boundary belongs in the title')}
+   if(proof.intake.shared_condition)for(const item of items)assert((await card(item.task_id).innerText()).includes(proof.intake.shared_condition),'both tasks keep the explicit all-items standard');
    await screenshot(page,'today-'+width+'.png');
    const scopedViews=[];
    for(const item of items){
@@ -248,7 +255,7 @@ async function screenshot(page,name){await noOverflow(page);await page.screensho
      await original.locator('[data-school-original-close]').click();
     }
     await card(item.task_id).locator('[data-task="'+item.task_id+'"]').first().click();await page.locator('#taskDialog[open]').waitFor();assert.equal(await page.locator('#taskRequirement').innerText(),item.requirements);
-    await eventually(async()=>await page.locator('#taskSchoolResources [data-task-material-scope=action]').count()===item.anchors.length,'same task resources use their own scoped originals');await noOverflow(page);await page.locator('#taskDialog [data-close="taskDialog"]').click();
+    await eventually(async()=>await page.locator('#taskSchoolResources [data-task-material-scope=action]').count()===new Set(item.anchors.map(a=>a.ref)).size,'same task resources use their own scoped originals');await noOverflow(page);await page.locator('#taskDialog [data-close="taskDialog"]').click();
    }
    const before=await read();await openExercise();const note='虚构练习反馈 '+width+'：第1题原答4，另核参考5；第2–3题和第4题选做尚未核对。';await page.locator('#taskForm [name=note]').fill(note);
    const feedback=await threeAttemptSave(page,'/api/task/feedback',page.locator('#saveTaskFeedback'),async()=>/虚构/.test(await page.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await page.locator('#taskFeedbackStatus').innerText()),read,()=>screenshot(page,'feedback-retry-'+width+'.png'));
