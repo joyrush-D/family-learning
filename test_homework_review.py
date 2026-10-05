@@ -127,7 +127,7 @@ def duplicate_question_checks():
 
 
 def summary_consistency_checks():
-    """A program downgrade must reach both summaries without rewriting transport evidence."""
+    """Both original unknowns and program downgrades must reach the summaries."""
     calls=0
     scope='教师参考《虚构甲卷.pdf》：共11页，本次第1、3页；未读取页：2、4-11。'
     stale_coverage='甲卷第3题已核实需订正；整卷已经检查完成。'
@@ -135,6 +135,8 @@ def summary_consistency_checks():
     definite=item(label='甲卷第3题',question='虚构第3题：选择正确选项。',student_answer='C',
         judgment='incorrect',error_reason='作答C与教师参考B不同。')
     changes=[
+        dict(judgment='unknown',student_answer='',error_reason='',uncertainty='答题格空白，未能确认作答。'),
+        dict(judgment='unknown',student_answer='',error_reason=''),
         dict(uncertainty='教师参考与可见题面冲突，待老师核对。'),
         dict(judgment='correct',error_reason='',uncertainty='所选参考的题号对应不明。'),
         dict(student_answer=''),dict(answer=''),dict(error_reason=''),
