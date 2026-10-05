@@ -114,12 +114,20 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         self._use_replies(payload, [dict(proposals=[incomplete]), dict(proposals=[reading, exercise])])
         first = agent.run_once(self.app, self.now)
         self._assert_rejected_batch(payload, first)
+        source = self.store.snapshot()['sources'][0]
+        self.assertEqual(source['pending_message_count'], 2, 'received messages are still awaiting successful processing')
+        self.assertEqual((source['error'], source['last_success']), ('', payload['checked_at']),
+                         'successful collection does not mean the school list is complete')
         agent.run_once(self.app, self.now + dt.timedelta(minutes=1))
+        self.assertEqual(self.store.snapshot()['sources'][0]['pending_message_count'], 2)
+        with self.store._db() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0], 0)
         self.assertEqual(self.model.call_count, 1, 'respect the existing retry delay')
 
         recovered = agent.run_once(self.app, self.now + dt.timedelta(minutes=6))
         self.assertEqual((recovered['failed'], recovered['processed']), (0, 2))
         self.assertEqual(self.model.call_count, 2)
+        self.assertEqual(self.store.snapshot()['sources'][0]['pending_message_count'], 0)
         with self.store._db() as c:
             # route_school legitimately creates a care root for the subject;
             # count school outcomes without deleting that unrelated workflow.
@@ -164,6 +172,39 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         with self.store._db() as c:
             self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM agent_items ORDER BY id')], item_rows)
             self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')], task_rows)
+
+    def test_pending_message_counts_are_source_scoped_and_reject_stale_bindings(self):
+        self.assertEqual(self.store.snapshot()['sources'][0]['pending_message_count'], 0)
+        self._two_actions()
+        second = dict(self.source, id='synthetic-second-group', child_id='child-2', name='虚构另一班级')
+        empty = dict(self.source, id='synthetic-empty-group', name='虚构未读取班级')
+        path = self.app.DATA / 'agent.json'
+        config = json.loads(path.read_text())
+        config['sources'] = [self.source, second, empty]
+        path.write_text(json.dumps(config, ensure_ascii=False))
+        self.store.ingest(dict(self.fixture.payload(), source_id=second['id']))
+        with self.store._db() as c:
+            before = [tuple(r) for r in c.execute('SELECT * FROM agent_messages ORDER BY source_id,id')]
+        sources = {s['id']: s for s in self.store.snapshot()['sources']}
+        self.assertEqual({key: row['pending_message_count'] for key, row in sources.items()},
+                         {self.source['id']: 2, second['id']: 1, empty['id']: 0})
+        for changes in ({'child_id': 'child-2'}, {'platform': 'qq'}):
+            with self.subTest(changes=changes):
+                config['sources'][0] = dict(self.source, **changes)
+                path.write_text(json.dumps(config, ensure_ascii=False))
+                sources = {s['id']: s for s in self.store.snapshot()['sources']}
+                self.assertTrue(sources[self.source['id']]['error'])
+                self.assertEqual(sources[self.source['id']]['pending_message_count'], 0,
+                                 'an invalid binding must not expose another ownership context')
+                self.assertEqual(sources[second['id']]['pending_message_count'], 1)
+                self.assertEqual(sources[empty['id']]['pending_message_count'], 0)
+        config['sources'] = [second, empty]
+        path.write_text(json.dumps(config, ensure_ascii=False))
+        self.assertEqual({s['id'] for s in self.store.snapshot()['sources']}, {second['id'], empty['id']})
+        with self.store._db() as c:
+            self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM agent_messages ORDER BY source_id,id')], before)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0], 0)
+        self.model.assert_not_called()
 
     def test_two_independent_actions_cannot_be_merged_into_one_receipt(self):
         payload, refs, reading, exercise = self._two_actions()
