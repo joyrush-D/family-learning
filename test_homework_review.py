@@ -103,7 +103,7 @@ def choice_judgment_checks():
         return draft
     for previous in (False,True):
         for student,answer,judgment in (('C','B','correct'),('B','B','incorrect'),
-                                        (' c ',' b ','correct'),('b','B','incorrect')):
+                                        (' C ',' B ','correct'),(' B ','B','incorrect')):
             question=item(label='虚构甲卷第1题',student_answer=student,answer='教师参考：'+answer,
                 judgment=judgment,error_reason='虚构模型判为不同。' if judgment=='incorrect' else '')
             draft=generate(question,previous=previous);q=draft['questions'][0]
@@ -113,11 +113,14 @@ def choice_judgment_checks():
             assert draft['text'].startswith('本次核对1题：需订正0题，与参考一致0题，未判定1题。')
     for question in (item(),item(student_answer='C',judgment='incorrect',error_reason='C与教师参考B不同。'),
                      item(student_answer='C',judgment='unknown',uncertainty='原题号未核明。'),
+                     item(question='虚构填空：请写出小写字母b。',student_answer='B',answer='教师参考：b',
+                          judgment='incorrect',error_reason='题目要求小写b，孩子写大写B。'),
                      item(question='虚构解释题：说明原因。',question_kind='subjective',student_answer='因为阳光',answer='教师参考：有阳光'),
                      item(student_answer='1/2',answer='教师参考：0.5'),
                      item(student_answer='AB',answer='教师参考：BA')):
         draft=generate(question)
-        assert draft['questions'][0]['judgment']==question['judgment'], 'do not infer semantic, numeric or multiple-choice equivalence'
+        assert draft['questions'][0]['judgment']==question['judgment'], 'do not infer case, semantic, numeric or multiple-choice equivalence'
+        assert draft['questions'][0]['error_reason']==question['error_reason']
     return calls
 
 
