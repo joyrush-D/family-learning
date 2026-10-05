@@ -141,6 +141,11 @@ class SchoolActionInventoryTests(unittest.TestCase):
                         finally:
                             t.doCleanups()
 
+    def test_recurring_past_and_ranged_weekdays_are_not_native_command_dates(self):
+        for prefix in ('每周五', '上周五', '周一至周五', '星期一到星期五', '礼拜一至礼拜五'):
+            with self.subTest(prefix=prefix):
+                self.assertEqual(agent._school_native_command(prefix + '前朗读Unit 2课文两遍'), '')
+
     def test_semicolon_actions_cannot_be_covered_by_one_message_reference(self):
         payload, refs = self._ingest(['英语作业：朗读Unit 2课文两遍；完成练习卷第1–3题。'])
         reading = self.proposal('朗读Unit 2课文两遍', refs)
