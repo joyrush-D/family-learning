@@ -186,6 +186,9 @@ async function startServer(){
   }
   if(process.env.HOMEWORK_TEXT_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.writeFile(path.join(process.env.HOMEWORK_TEXT_PROOF_DIR,'result.json'),JSON.stringify(results,null,2)+'\n')}
   console.log(JSON.stringify(results,null,2));
- }catch(error){if(page)try{await proof(page,'failure-'+page.viewportSize().width)}catch{}throw error}
+ }catch(error){
+  if(server)try{const failed=await(await fetch(server.url+'__fixture/text')).json();console.error(JSON.stringify({phases:failed.calls.map(c=>c.phase),responses:failed.responses.slice(-2),status:page?await page.locator('[data-homework-review-status]').first().innerText():''},null,2))}catch{}
+  if(page)try{await proof(page,'failure-'+page.viewportSize().width)}catch{}throw error
+ }
  finally{if(page)await Promise.race([page.close().catch(()=>{}),delay(3000)]);if(server)await server.stop();if(browser)await Promise.race([browser.close().catch(()=>{}),delay(5000)])}
 })().catch(error=>{console.error(error);process.exitCode=1});
