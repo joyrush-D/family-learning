@@ -1684,6 +1684,12 @@ def school_targets(app, store, child_id, connection=None):
         return result
 
 
+def _school_named_objects(value):
+    """Complete literal names; Unit 3, 30 and 3A are different objects."""
+    named=re.findall(r'unit\s*\d+(?:[_a-z][_a-z0-9]*|\.[a-z0-9]+|\s*[-–—~～+/&、,，和与及至到]\s*\d+)*|第[一二三四五六七八九十0-9]+课|《[^》]{1,40}》',value.lower())
+    return {re.sub(r'\s+','',obj) if obj.startswith('unit') else obj for obj in named}
+
+
 def _school_append_brief(brief, evidence, targets):
     """A narrow additive relation, never a guess from a date, nickname or model target alone."""
     if brief.get('change')=='new' and brief.get('state')=='ready':
@@ -1744,24 +1750,19 @@ def _school_append_brief(brief, evidence, targets):
     reading=bool(re.search(r'(?:只|仅)?补(?:充)?(?:[^。：:\n]{0,30})朗读',text))
     textbook=bool(re.search(r'(?:只|仅)?补(?:充)?(?:[^。：:\n]{0,30})教材(?:作业)?',text))
     if reading==textbook: uncertain();return
-    def objects(value):
-        # Compare complete named objects, not their textual prefixes. Unit
-        # spacing/case does not identify another unit; 3, 30 and 3A still do.
-        named=re.findall(r'unit\s*\d+(?:[_a-z][_a-z0-9]*|\.[a-z0-9]+|\s*[-–—~～+/&、,，和与及至到]\s*\d+)*|第[一二三四五六七八九十0-9]+课|《[^》]{1,40}》',value.lower())
-        return {re.sub(r'\s+','',obj) if obj.startswith('unit') else obj for obj in named}
-    specific=objects(text)
+    specific=_school_named_objects(text)
     def matches(task):
         content=(task['title']+' '+task['goal']).lower()
         # Mentioning the other task only to exclude replacement does not make
         # this correction another textbook assignment. Positive peers remain.
         content=re.sub(r'不(?:替代|代替|取代)[^。；;，,\n]{0,12}?教材(?:作业)?','',content)
         activity=bool(re.search(r'朗读|跟读|读[一二两三四五六七八九十0-9]+(?:遍|次)',content)) if reading else '教材' in content
-        return activity and specific.issubset(objects(content))
+        return activity and specific.issubset(_school_named_objects(content))
     peers=[t for t in targets if (t.get('source_id'),t.get('publisher')) in publishers and matches(t)]
     if len(peers)!=1 or peers[0]['id']!=selected['id']:
         uncertain();return
-    proposed=objects(brief['title']+' '+brief['goal'])
-    if not proposed.issubset(objects(selected['title']+' '+selected['goal'])) or (specific and not proposed.issubset(specific)):
+    proposed=_school_named_objects(brief['title']+' '+brief['goal'])
+    if not proposed.issubset(_school_named_objects(selected['title']+' '+selected['goal'])) or (specific and not proposed.issubset(specific)):
         uncertain('补充归纳中的单元或篇目与原文、原事项不一致，原要求保留待核对。');return
     old=re.sub(r'不(?:要求|需要|用|必|要|再)?[^。；;，,\n]*','',selected['goal'])
     # Negative limits on an otherwise new step are retained (e.g. no recitation,
@@ -2647,7 +2648,7 @@ def _school_native_blocks(text):
             gap=bool(pieces)
             continue
         purpose=_school_native_command(clause)
-        common=re.match(r'^(?:以上|这)?([二两三四五六七八九十2-9])项(?:作业|任务|要求)?(?:都|均)',clause)
+        common=re.match(r'^(?:(?:以上|这)?([二两三四五六七八九十2-9])项(?:作业|任务|要求)?|(?:以上|上述|这些|所有)(?:作业|任务|要求))(?:都|均)',clause)
         if common and pieces:
             if gap:raise AgentError('共同标准与行动之间含未归属内容，完整原批次保留',code='school_action_coverage')
             # ponytail: do not share a comma's possible subject switch; richer scope needs a proved clause allocation.
@@ -2657,7 +2658,7 @@ def _school_native_blocks(text):
             # ponytail: only positive common standards are compiled; negated scope needs a proved semantic allocation.
             if re.search(r'不|无须|无需|免|勿|毋',clause[common.end():]):
                 raise AgentError('共同标准含未核明的否定条件，完整原批次保留',code='school_action_coverage')
-            count=int(common[1]) if common[1].isdigit() else {'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}[common[1]]
+            count=(int(common[1]) if common[1].isdigit() else {'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}[common[1]]) if common[1] else len(pieces)
             shared.append((count,clause))
             continue
         # The container's numbered "complete questions" is its answer step,
@@ -2746,7 +2747,9 @@ def _school_native_actions(evidence):
                 own=[];break  # A later change needs the existing correction reader.
             object_text=head[1]
             object_text=re.sub(r'^(?:'+_SCHOOL_NATIVE_SUBJECTS+r')','',object_text)
-            owners=[a for a in own if len(object_text)>=2 and a['quote'].count(object_text)==1]
+            specific=_school_named_objects(object_text)
+            owners=[a for a in own if len(object_text)>=2 and a['quote'].count(object_text)==1
+                    and specific.issubset(_school_named_objects(a['quote']))]
             if len(owners)==1:
                 owners[0]['supplements'].append(dict(ref=supplement['ref'],quote=supplement['text'].strip(),goal=head[2].strip(),time=supplement['time']))
         actions.extend(own)
