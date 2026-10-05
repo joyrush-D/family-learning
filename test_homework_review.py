@@ -328,8 +328,11 @@ def review_origin_http_checks(app,upload):
                 formal_row=c.execute('SELECT * FROM records WHERE id=?',(formal['record_id'],)).fetchone()
                 assert formal_row['followup_kind']=='作业检查' and formal_row['related_record_id']==original['record_id']
                 assert set(json.loads(formal_row['attachments']))=={answer,answer_text,ordinary_teacher,school_teacher,opinion}
+                assert json.loads(formal_row['review_output_ids'])==[opinion], 'only the newly written result is marked, never retained teacher or answer inputs'
             # The parent reuses the exact upload, not a new file with a similar name.
-            reattached=feedback('synthetic-origin-reattached',[answer,opinion],'虚构普通反馈重挂原照片及旧AI意见。')
+            reattached=feedback('synthetic-origin-reattached',[answer,opinion],'虚构普通反馈重挂原照片及旧AI意见。',review_output_ids='[]')
+            with app.connect() as c:
+                assert c.execute('SELECT review_output_ids FROM records WHERE id=?',(reattached['record_id'],)).fetchone()[0] is None, 'an ordinary client cannot alter the server-only result binding'
             with patch.object(family_llm,'_chat_json') as model:
                 listed=sources(reattached)
                 assert listed[opinion]['origin']=='review_result','re-attaching a formal result cannot make it a saved answer'
@@ -479,6 +482,18 @@ def run():
             (root/'家庭运行规则.md').write_text('| child-1 | 示例甲 | 男 | 10岁 | 四年级 |\n| child-2 | 示例乙 | 女 | 8岁 | 二年级 |\n')
             (root/'跟踪台账.md').write_text('')
             def upload(name,body): return app.save_upload(io.BytesIO(body),len(body),name)['id']
+            # Upgrade a real old-column layout in this disposable database; preserve every old field.
+            import sqlite3
+            migration_file=upload('synthetic-origin-migration.txt',b'Synthetic original teacher text')
+            migration=app._save_record(dict(child='示例甲',day='2026-10-05',category='学习进展',title='虚构旧原件记录',
+                source='家长网页记录',note='虚构迁移保留原话',attachments=[migration_file]),False,{})
+            with sqlite3.connect(app.DB) as c:
+                c.execute('ALTER TABLE records DROP COLUMN review_output_ids')
+                old_columns=[r[1] for r in c.execute('PRAGMA table_info(records)')]
+                old_rows=c.execute('SELECT * FROM records').fetchall()
+            with app.connect() as c:
+                assert [tuple(r) for r in c.execute('SELECT '+','.join(old_columns)+' FROM records')]==old_rows
+                assert c.execute('SELECT review_output_ids FROM records WHERE id=?',(migration['record_id'],)).fetchone()[0] is None
             answer=upload('synthetic-answer.png',png())
             reference=upload('synthetic-reference.txt',b'1. B\n')
             paper=upload('synthetic-paper.pdf',b'%PDF-synthetic-paper')
