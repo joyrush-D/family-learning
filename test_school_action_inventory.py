@@ -238,6 +238,67 @@ class SchoolActionInventoryTests(unittest.TestCase):
         self.assertEqual(injected, [True], 'inject only after the real input check inside the write transaction')
         self._assert_rejected_batch(payload, result)
 
+    def test_holdout_elliptical_worksheet_still_requires_its_own_action(self):
+        payload, refs = self._ingest(['英语作业：Unit 2课文读两遍；练习卷第1–3题。'])
+        reading = self.proposal('Unit 2课文读两遍', refs)
+        self._assert_rejected_batch(payload, self.run_receipt(payload, [reading]))
+
+    def test_holdout_comma_between_two_outcomes_cannot_hide_the_second(self):
+        payload, refs = self._ingest(['英语作业：朗读Unit 2课文两遍，完成练习卷第1–3题。'])
+        reading = self.proposal('朗读Unit 2课文两遍', refs)
+        self._assert_rejected_batch(payload, self.run_receipt(payload, [reading]))
+
+    def test_holdout_two_named_worksheets_are_not_one_container(self):
+        payload, refs = self._ingest([
+            '英语，明天完成甲练习卷：单面打印；完成甲练习卷第1–3题；另完成乙练习卷第1–3题。'])
+        first = self.proposal('完成甲练习卷第1–3题', refs, due='2026-10-06')
+        second = self.proposal('完成乙练习卷第1–3题', refs)
+        merged = dict(first, task_goal='单面打印；完成甲练习卷第1–3题；另完成乙练习卷第1–3题。')
+        self._use_replies(payload, [dict(proposals=[merged]), dict(proposals=[first, second])])
+        self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
+        result = agent.run_once(self.app, self.now + dt.timedelta(minutes=6))
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        self.assertEqual(self.model.call_count, 2)
+        with self.store._db() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+            self.assertEqual(len(rows), 2)
+            first_row = next(r for r in rows if '甲练习卷' in r['title'])
+            second_row = next(r for r in rows if '乙练习卷' in r['title'])
+            self.assertIn('单面打印', first_row['body'])
+            self.assertIn('完成甲练习卷第1–3题', first_row['body'])
+            self.assertNotIn('乙练习卷', first_row['body'])
+            self.assertIn('完成乙练习卷第1–3题', second_row['body'])
+            self.assertNotIn('甲练习卷', second_row['body'])
+            self.assertNotIn('单面打印', second_row['body'])
+            for row in rows:
+                self.assertEqual(json.loads(row['plan'])['school_task']['purpose'], 'learning')
+            self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages')],
+                             payload['messages'])
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0], 0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0], 0)
+
+    def test_holdout_quoted_example_does_not_create_reading_or_exercise(self):
+        payload, refs = self._ingest([
+            '示例：“朗读课文；完成练习卷”。今天不用做练习，只需明天背诵Unit 2。'])
+        recitation = self.proposal('背诵Unit 2', refs, due='2026-10-06')
+        row, = self.saved(payload, self.run_receipt(payload, [recitation]), 1)
+        self.assertEqual((row['due'], row['state']), ('2026-10-06', 'accepted'))
+        self.assertIn('背诵Unit 2', row['body'])
+        self.assertNotIn('朗读课文', row['body'])
+        self.assertNotIn('完成练习卷', row['body'])
+        self.assertEqual(json.loads(row['plan'])['school_task']['purpose'], 'learning')
+
+    def test_holdout_tomorrow_and_day_after_keep_separate_deadlines(self):
+        payload, refs = self._ingest(['英语：明天朗读Unit 2；后天完成练习卷第1–3题。'])
+        reading = self.proposal('朗读Unit 2', refs, due='2026-10-06')
+        exercise = self.proposal('完成练习卷第1–3题', refs, due='2026-10-07')
+        rows = self.saved(payload, self.run_receipt(payload, [reading, exercise]), 2)
+        for own, expected, forbidden in [('朗读Unit 2', '2026-10-06', '后天'),
+                                         ('完成练习卷第1–3题', '2026-10-07', '明天')]:
+            row = next(r for r in rows if own in r['body'])
+            self.assertEqual((row['due'], row['state']), (expected, 'accepted'))
+            self.assertNotIn(forbidden, row['body'])
+
 
 if __name__ == '__main__':
     unittest.main()
