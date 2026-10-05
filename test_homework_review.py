@@ -329,6 +329,13 @@ def review_origin_http_checks(app,upload):
                 assert formal_row['followup_kind']=='作业检查' and formal_row['related_record_id']==original['record_id']
                 assert set(json.loads(formal_row['attachments']))=={answer,answer_text,ordinary_teacher,school_teacher,opinion}
                 assert json.loads(formal_row['review_output_ids'])==[opinion], 'only the newly written result is marked, never retained teacher or answer inputs'
+            before=dump()
+            with patch.object(family_llm,'_chat_json') as model:
+                repeated=feedback('synthetic-origin-formal',[answer,answer_text,ordinary_teacher,school_teacher,opinion],
+                    '家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #'+str(original['record_id'])+'。',
+                    review_basis=generated['review_basis'])
+                assert repeated['replayed'] and repeated['record_id']==formal['record_id'] and model.call_count==0
+            assert dump()==before, 'same numbered retry must not change output metadata or any old row'
             # The parent reuses the exact upload, not a new file with a similar name.
             reattached=feedback('synthetic-origin-reattached',[answer,opinion],'虚构普通反馈重挂原照片及旧AI意见。',review_output_ids='[]')
             with app.connect() as c:
