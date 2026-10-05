@@ -30,7 +30,7 @@ def _relative_weekday(text,anchor):
     if not anchor: return text
     sent=dt.date.fromisoformat(anchor); monday=sent-dt.timedelta(days=sent.weekday())
     def resolve(match):
-        if match.group('range'): return match[0]
+        if match.group('range') or re.search(r'[每上本这下个]\s+$',text[:match.start()]): return match[0]
         prefix,name=match.group('prefix') or '',_WEEKDAYS[match.group('day')]
         if prefix in ('本','这','这个','本个'): value=monday+dt.timedelta(days=name)
         elif prefix in ('下','下个'): value=monday+dt.timedelta(days=7+name)
