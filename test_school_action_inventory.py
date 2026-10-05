@@ -352,16 +352,31 @@ class SchoolActionInventoryTests(unittest.TestCase):
                 self.assertTrue(row['title'].startswith('英语：'))
                 self.assertIn(own, row['body'])
                 self.assertNotIn(foreign, row['body'])
-                self.assertEqual((row['due'], row['state']), ('', 'pending'))
+                # README r188 and PRD 5 keep explicit, current homework visible
+                # with unknown dates; missing dates do not make a ready task unread.
+                self.assertEqual((row['due'], row['state']), ('', 'accepted'))
                 self.assertEqual(json.loads(row['plan'])['school_task']['purpose'], 'learning')
                 self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
             self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages')],
                              payload['messages'])
             self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages')], [1])
-            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0], 0,
-                             'an unknown deadline remains unknown rather than becoming today')
+            tasks = {r['id']: dict(r) for r in c.execute('SELECT * FROM manual_tasks')}
+            self.assertEqual(set(tasks), {row['task_id'] for row in rows})
+            for row in rows:
+                self.assertEqual((tasks[row['task_id']]['due'], tasks[row['task_id']]['action']),
+                                 ('无明确截止', row['body']))
             self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0], 0)
             self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0], 0)
+        today = self.now.date().isoformat()
+        calendar = self.app.calendar_snapshot(today, today)
+        collected = [item for item in calendar['inbox'] if item['task_id'] in tasks]
+        self.assertEqual(len(collected), 2)
+        for item in collected:
+            self.assertEqual((item['agenda']['published_on'], item['agenda']['due_on'],
+                              item['agenda']['scheduled_on']), (today, '', ''))
+            self.assertEqual(item['agenda']['category'], 'homework')
+        self.assertEqual([item for item in collected if item['agenda']['due_on'] == today], [],
+                         'visible undated homework is not counted as explicitly due today')
 
     def test_holdout_comma_between_two_outcomes_cannot_hide_the_second(self):
         payload, refs = self._ingest(['英语作业：朗读Unit 2课文两遍，完成练习卷第1–3题。'])
@@ -396,6 +411,114 @@ class SchoolActionInventoryTests(unittest.TestCase):
                              payload['messages'])
             self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0], 0)
             self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0], 0)
+
+    def test_return_to_first_worksheet_does_not_attach_its_steps_to_the_second(self):
+        payload, refs = self._ingest([
+            '英语，明天完成甲练习卷：单面打印；另完成乙练习卷第1–3题；完成甲练习卷第4–6题并自查。'])
+        first = self.proposal('完成甲练习卷', refs, due='2026-10-06')
+        second = self.proposal('完成乙练习卷第1–3题', refs)
+        result = self.run_receipt(payload, [first, second])
+        if result['failed']:
+            # Noncontiguous ownership may remain retryable; the existing
+            # adjacent two-worksheet test controls successful normal ordering.
+            self.assertEqual((result['failed'], result['processed'], result['created']), (1, 0, 0))
+            self.assertLessEqual(self.model.call_count, 1)
+            with self.store._db() as c:
+                for table in ('agent_items', 'manual_tasks', 'records', 'task_updates'):
+                    self.assertEqual(c.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0], 0)
+                self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')],
+                                 payload['messages'])
+                self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages')], [0])
+                job = c.execute("SELECT attempts,done,error,next_try FROM agent_jobs WHERE id LIKE 'messages:%'").fetchone()
+                self.assertEqual((job['attempts'], job['done']), (1, 0))
+                self.assertTrue(job['error'])
+                self.assertEqual(job['next_try'], (self.now + dt.timedelta(minutes=5)).isoformat())
+            return
+        rows = self.saved(payload, result, 2)
+        first_row = next(row for row in rows if '甲练习卷' in row['title'])
+        second_row = next(row for row in rows if '乙练习卷' in row['title'])
+        for clause in ('单面打印', '完成甲练习卷第4–6题并自查'):
+            self.assertIn(clause, first_row['body'], 'explicitly returning to the first worksheet keeps its steps there')
+            self.assertNotIn(clause, second_row['body'])
+        self.assertNotIn('乙练习卷', first_row['body'])
+        self.assertIn('完成乙练习卷第1–3题', second_row['body'])
+        self.assertNotIn('甲练习卷', second_row['body'])
+        self.assertEqual(first_row['due'], '2026-10-06')
+        self.assertEqual(second_row['due'], '', 'the second worksheet must not borrow the first worksheet date')
+        for row in rows:
+            self.assertEqual(json.loads(row['plan'])['school_task']['purpose'], 'learning')
+            self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
+
+    def test_cancelling_supplement_cannot_turn_a_ready_receipt_into_required_work(self):
+        payload, refs = self._ingest([
+            '英语，明天完成练习卷第1–3题。',
+            '补充英语练习卷：练习卷不用做了。'])
+        exercise = self.proposal('完成练习卷第1–3题', refs, due='2026-10-06',
+                                 goal='完成练习卷第1–3题；练习卷不用做了。')
+        result = self.run_receipt(payload, [exercise])
+        # Both retrying the conflicting batch and preserving a review item are
+        # safe; attaching the cancellation as another mandatory step is not.
+        if result['failed']:
+            self.assertEqual((result['failed'], result['processed'], result['created']), (1, 0, 0))
+            self.assertLessEqual(self.model.call_count, 1)
+            with self.store._db() as c:
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items').fetchone()[0], 0)
+                self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')],
+                                 payload['messages'])
+                self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages')], [0, 0])
+                job = c.execute("SELECT attempts,done,error,next_try FROM agent_jobs WHERE id LIKE 'messages:%'").fetchone()
+                self.assertEqual((job['attempts'], job['done']), (1, 0))
+                self.assertTrue(job['error'])
+                self.assertEqual(job['next_try'], (self.now + dt.timedelta(minutes=5)).isoformat())
+        else:
+            row, = self.saved(payload, result, 1)
+            self.assertEqual((row['state'], row['task_id']), ('pending', ''))
+            self.assertEqual(json.loads(row['plan'])['school_task']['state'], 'review')
+            self.assertIn('练习卷不用做了', row['body'])
+            self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
+        with self.store._db() as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_items WHERE state='accepted'").fetchone()[0], 0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0], 0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0], 0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0], 0)
+
+    def test_cancelling_supplement_keeps_a_correct_cancel_review_receipt(self):
+        payload, refs = self._ingest([
+            '英语，明天完成练习卷第1–3题。',
+            '补充英语练习卷：练习卷不用做了。'])
+        cancellation = self.proposal('练习卷不用做了', refs, goal='练习卷不用做了。')
+        cancellation.update(task_state='review', task_change='cancel', task_reason='同批补充取消练习卷，待核对原要求。')
+        row, = self.saved(payload, self.run_receipt(payload, [cancellation]), 1)
+        self.assertEqual((row['state'], row['task_id']), ('pending', ''))
+        brief = json.loads(row['plan'])['school_task']
+        self.assertEqual((brief['state'], brief['change']), ('review', 'cancel'))
+        self.assertIn('练习卷不用做了', row['body'])
+        self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
+
+    def test_example_date_after_recitation_does_not_pollute_its_deadline_or_standards(self):
+        payload, refs = self._ingest([
+            '英语：明天背诵Unit 2。示例：“10月7日完成练习卷”，只说明格式，不是作业。'])
+        recitation = self.proposal('背诵Unit 2', refs, due='2026-10-06')
+        row, = self.saved(payload, self.run_receipt(payload, [recitation]), 1)
+        self.assertEqual((row['due'], row['state']), ('2026-10-06', 'accepted'))
+        self.assertIn('背诵Unit 2', row['body'])
+        for example in ('10月7日', '完成练习卷', '示例'):
+            self.assertNotIn(example, row['body'])
+        self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
+
+    def test_optional_exercise_followed_by_no_signature_stays_optional(self):
+        payload, refs = self._ingest([
+            '英语作业：明天完成练习卷第4题（选做，不要求提交），无需家长签字。'])
+        exercise = self.proposal('完成练习卷第4题', refs, due='2026-10-06', purpose='optional',
+                                 goal='明天完成练习卷第4题（选做，不要求提交），无需家长签字。')
+        exercise.update(task_state='review', task_reason='整项选做，不要求提交或家长签字。')
+        row, = self.saved(payload, self.run_receipt(payload, [exercise]), 1)
+        self.assertEqual((row['due'], row['state'], row['task_id']), ('2026-10-06', 'pending', ''))
+        brief = json.loads(row['plan'])['school_task']
+        self.assertEqual((brief['purpose'], brief['state']), ('optional', 'review'))
+        for clause in ('完成练习卷第4题', '选做', '不要求提交', '无需家长签字'):
+            self.assertIn(clause, row['body'])
+        self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
 
     def test_holdout_quoted_example_does_not_create_reading_or_exercise(self):
         payload, refs = self._ingest([
