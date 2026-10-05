@@ -148,7 +148,7 @@ class SchoolActionInventoryTests(unittest.TestCase):
 
     def test_unresolved_header_weekday_is_not_cut_into_a_shared_single_day(self):
         quote = '朗读Unit 2课文两遍'
-        for prefix in ('每周五', '上周五', '每 周五', '上 星期五', '周一至周五', '星期一 到 星期五', '礼拜一至礼拜五'):
+        for prefix in ('每周五', '上周五', '每 周五', '上 星期五', '周一至周五', '星期一 到 星期五', '礼拜一至礼拜五', '每周一至周五', '上周一至周五', '每个周一至周五', '上个周一至周五'):
             with self.subTest(prefix=prefix):
                 t = type(self)(methodName='runTest')
                 t.setUp()
