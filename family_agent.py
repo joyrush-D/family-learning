@@ -2583,7 +2583,7 @@ def _school_native_actions(evidence):
         # Changes retain the existing dated correction/old-decision protocol.
         # This literal first-intake guard does not reinterpret changed outcomes.
         if publisher and any(s.get('publisher')==publisher and s['ref'][8:].rsplit(':',1)[0]==source
-                and re.match(r'^\s*(?:更正|取消|撤销|撤回)',s['text']) for s in evidence[index+1:]):continue
+                and re.match(r'^\s*(?:更正|取消|撤销|撤回)',s['text']) for s in evidence if s is not entry):continue
         own=[]
         for position,match in enumerate(markers):
             end=markers[position+1].start() if position+1<len(markers) else len(text)
