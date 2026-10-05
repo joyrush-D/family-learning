@@ -2631,20 +2631,23 @@ def _school_native_blocks(text):
         common=bool(re.search(r'(?:作业|要求|任务|事项|通知|完成(?:[二两三四五六七八九十2-9]项)?(?:要求|作业|任务|练习|事项|通知)?)\s*$',lead))
         label=bool(re.fullmatch(r'(?:'+_SCHOOL_NATIVE_SUBJECTS+r')(?:和(?:'+_SCHOOL_NATIVE_SUBJECTS+r'))*',lead))
         if not container and (common or label):header=lead;body_start=head.end()
-    pieces=[];preparation=[]
+    pieces=[];preparation=[];gap=False
     container_object=_school_native_object(head[1]) if container else ''
     for start,end in _school_native_spans(text,body_start):
         marker=re.match(r'\s*'+_SCHOOL_NATIVE_MARKER,text[start:end])
         if marker:start+=marker.end()
         clause=text[start:end].strip().rstrip('。；;').strip()
         if not clause:continue
-        if re.match(r'^(?:示例|例如|格式示例)[：:]',clause):continue
+        if re.match(r'^(?:示例|例如|格式示例)[：:]',clause):
+            gap=bool(pieces)
+            continue
         purpose=_school_native_command(clause)
         # The container's numbered "complete questions" is its answer step,
         # not another worksheet. Other reading/learning outcomes still split.
         step=(container and bool(re.match(r'^(?:完成|做|写)[^。；;]*(?:题|这份|该卷)',clause))
               and (not _school_native_object(clause) or _school_native_object(clause)==container_object))
         if purpose and not step:
+            gap=False
             obj=_school_native_object(clause)
             if preparation and obj and all(_school_native_object(text[left:right])==obj for left,right in preparation):
                 start=preparation[0][0]
@@ -2653,6 +2656,7 @@ def _school_native_blocks(text):
         elif step and pieces and _school_native_object(pieces[-1]['primary'])!=container_object:
             raise AgentError('穿插的资料步骤尚未能唯一归属，完整原批次保留',code='school_action_coverage')
         elif pieces:
+            if gap:raise AgentError('示例前后的行动条件无法连续核对，完整原批次保留',code='school_action_coverage')
             pieces[-1]['end']=end
         elif container:
             pieces.append(dict(start=0,end=end,purpose='learning',primary=head[1]))

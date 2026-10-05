@@ -25,6 +25,11 @@ class SchoolActionInventoryTests(unittest.TestCase):
     _use_replies = native.SchoolNativeCoverageTests._use_replies
     _assert_rejected_batch = native.SchoolNativeCoverageTests._assert_rejected_batch
 
+    def test_example_between_action_and_condition_cannot_supply_a_deadline(self):
+        payload, refs = self._ingest(['英语作业：背诵Unit 2；示例：“10月7日前完成练习卷”，仅说明格式；不用录音。'])
+        reply = self.proposal('背诵Unit 2', refs, goal='背诵Unit 2；不用录音。')
+        self._assert_rejected_batch(payload, self.run_receipt(payload, [reply]))
+
     def proposal(self, quote, refs, *, goal=None, due='', subject='英语', purpose='learning'):
         return fixtures.school_proposal(
             title_quote=quote, due=due, evidence=[dict(ref=ref) for ref in refs],
