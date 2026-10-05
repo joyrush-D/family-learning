@@ -2633,7 +2633,13 @@ def _school_native_actions(evidence):
     actions=[]
     for index,entry in enumerate(evidence):
         text=entry['text']
-        if entry.get('kind','text')!='text' or entry.get('content_incomplete') or entry.get('unread') or entry.get('attachments') or _needs_task_details(text):continue
+        if (entry.get('kind')!='text' or not entry.get('publisher') or entry.get('content_incomplete')
+                or entry.get('unread') or entry.get('attachments') or _needs_task_details(text)):continue
+        # A source with missing author provenance and an original-material group
+        # continue through their existing reader. This literal ledger cannot
+        # prove another message's attachment scope or invent a publisher.
+        related=set(entry.get('related_messages',[]))
+        if any(e['ref'] in related and (e.get('attachments') or e.get('content_incomplete') or e.get('kind')!='text') for e in evidence):continue
         publisher=entry.get('publisher','');source=entry['ref'][8:].rsplit(':',1)[0]
         # Changes retain the existing dated correction/old-decision protocol.
         if publisher and any(s.get('publisher')==publisher and s['ref'][8:].rsplit(':',1)[0]==source
@@ -2646,6 +2652,9 @@ def _school_native_actions(evidence):
             own.append(dict(id='native:'+_hash([entry['ref'],part['start'],part['end'],quote])[:24],ref=entry['ref'],quote=quote,
                 header=header,primary=part['primary'],purpose=part['purpose'],subject=subject if part['purpose']=='learning' else '',
                 publisher=entry.get('publisher',''),time=entry.get('time',''),supplements=[]))
+        # Standalone administrative notices already have executor, object,
+        # date and handback guards. Mixed outcomes need this shared allocation.
+        if len(own)==1 and own[0]['purpose']=='admin':continue
         for supplement in evidence[index+1:]:
             head=re.match(r'^补充([^：:\n]{2,40})[：:]\s*(.+)$',supplement['text'].strip(),re.S)
             if not head:continue
