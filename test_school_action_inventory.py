@@ -126,6 +126,17 @@ class SchoolActionInventoryTests(unittest.TestCase):
                     self.assertNotIn(foreign, body, 'the shared standard must not merge independent actions')
                     self.assertIn(shared, body, 'a trailing all-actions standard belongs to both outcomes')
 
+    def test_negated_shared_deadline_cannot_become_a_required_date(self):
+        shared = '两项都不要求明天交'
+        quotes = ('朗读Unit 2课文两遍', '完成练习卷第1–3题')
+        payload, refs = self._ingest(['英语作业：' + '。'.join((*quotes, shared)) + '。'])
+        proposals = [self.proposal(quote, refs, goal=quote + '。' + shared + '。')
+                     for quote in quotes]
+        # The positive date parser cannot prove a negated common condition.
+        # Preserve the whole batch rather than replacing the correct empty due.
+        self._assert_rejected_batch(payload, self.run_receipt(payload, proposals))
+        self.assertEqual(self.model.call_count, 0)
+
     def test_unproven_shared_scope_is_rejected_before_selection(self):
         first = '英语作业：朗读Unit 2课文两遍。完成练习卷第1–3题。'
         for tail in ('三项都请家长检查。',
