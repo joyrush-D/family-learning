@@ -267,7 +267,6 @@ def review_origin_http_checks(app,upload):
     answer=upload('synthetic-origin-answer.png',png(9))
     answer_text=upload('synthetic-origin-original-answer.txt','虚构甲卷原作答：第1题B。'.encode())
     ordinary_teacher=upload('synthetic-origin-ordinary-teacher.txt','虚构甲卷教师参考：第1题B。'.encode())
-    school_teacher=upload('synthetic-origin-school-teacher.txt','虚构学校教师参考：甲卷第1题B。'.encode())
     app.agent_store()
     school=dict(id='synthetic-origin-school',platform='qq',child_id='child-1',name='虚构身份学校来源',enabled=True)
     message=dict(id='synthetic-origin-message',time='2026-10-05T12:00:00+08:00',kind='text',sender='虚构老师',
@@ -277,7 +276,6 @@ def review_origin_http_checks(app,upload):
             (school['id'],json.dumps(['qq','child-1'],separators=(',',':')),''))
         c.execute('INSERT INTO agent_messages (source_id,id,payload) VALUES (?,?,?)',
             (school['id'],message['id'],json.dumps(message)))
-        c.execute('INSERT INTO agent_message_attachments VALUES (?,?,?)',(school['id'],message['id'],school_teacher))
     def dump():
         with app.connect() as c: return '\n'.join(c.iterdump())
     raw=dict(items=[item(label='虚构甲卷第1题')],coverage='仅虚构甲卷第1题的明确答案比较，原题要求未核。')
@@ -307,6 +305,10 @@ def review_origin_http_checks(app,upload):
                 assert dump()==before,'source classification must not migrate original records'
                 return {entry['id']:entry for entry in result['sources']}
             original=feedback('synthetic-origin-original',[answer,answer_text],'虚构甲卷原作答，第1题B。')
+            school_teacher_name='作业批改参考-'+str(original['record_id'])+'.txt'
+            school_teacher=upload(school_teacher_name,'虚构学校教师参考：甲卷第1题B。'.encode())
+            with app.connect() as c:
+                c.execute('INSERT INTO agent_message_attachments VALUES (?,?,?)',(school['id'],message['id'],school_teacher))
             feedback('synthetic-origin-teacher',[ordinary_teacher],'虚构家长后补教师原参考。')
             request=dict(purpose='review',task_id=task['id'],record_id=original['record_id'],
                 expected_created=original['feedback']['created'],question_sources=[source(answer)],
@@ -345,7 +347,7 @@ def review_origin_http_checks(app,upload):
                     assert model.call_count==0,'the AI-result role must be refused before a model call'
                 assert dump()==before,'refused AI-result inputs must not change any saved data'
             for ident,name,text in ((ordinary_teacher,'synthetic-origin-ordinary-teacher.txt','虚构甲卷教师参考：第1题B。'),
-                                    (school_teacher,'synthetic-origin-school-teacher.txt','虚构学校教师参考：甲卷第1题B。')):
+                                    (school_teacher,school_teacher_name,'虚构学校教师参考：甲卷第1题B。')):
                 before=dump()
                 with patch.object(family_llm,'homework_reference_draft',wraps=family_llm.homework_reference_draft) as generate,\
                      patch.object(family_llm,'_chat_json',return_value=raw) as model:
@@ -363,7 +365,7 @@ def review_origin_http_checks(app,upload):
                     assert status==200 and model.call_count==1 and raw==transport_original,rechecked
                     assert generate.call_args.kwargs['previous_documents']==[dict(name=name,text=text)]
                     assert [d['name'] for d in generate.call_args.kwargs['reference_documents']]==[
-                        'synthetic-origin-ordinary-teacher.txt','synthetic-origin-school-teacher.txt']
+                        'synthetic-origin-ordinary-teacher.txt',school_teacher_name]
                     assert name not in [d['name'] for d in generate.call_args.kwargs['reference_documents']]
                 assert dump()==before,'an allowed text input stays a draft until explicitly saved'
             next_opinion=upload('作业批改参考-'+str(reattached['record_id'])+'.txt',rechecked['draft']['text'].encode())
