@@ -2636,7 +2636,7 @@ def _school_native_blocks(text):
         common=bool(re.search(r'(?:作业|要求|任务|事项|通知|完成(?:[二两三四五六七八九十2-9]项)?(?:要求|作业|任务|练习|事项|通知)?)\s*$',lead))
         label=bool(re.fullmatch(r'(?:'+_SCHOOL_NATIVE_SUBJECTS+r')(?:和(?:'+_SCHOOL_NATIVE_SUBJECTS+r'))*',lead))
         if not container and (common or label):header=lead;body_start=head.end()
-    pieces=[];preparation=[];gap=False
+    pieces=[];preparation=[];shared=[];gap=False
     container_object=_school_native_object(head[1]) if container else ''
     for start,end in _school_native_spans(text,body_start):
         marker=re.match(r'\s*'+_SCHOOL_NATIVE_MARKER,text[start:end])
@@ -2647,6 +2647,19 @@ def _school_native_blocks(text):
             gap=bool(pieces)
             continue
         purpose=_school_native_command(clause)
+        common=re.match(r'^(?:以上|这)?([二两三四五六七八九十2-9])项(?:作业|任务|要求)?(?:都|均)',clause)
+        if common and pieces:
+            if gap:raise AgentError('共同标准与行动之间含未归属内容，完整原批次保留',code='school_action_coverage')
+            # ponytail: do not share a comma's possible subject switch; richer scope needs a proved clause allocation.
+            if re.search(r'[，,]',clause):raise AgentError('共同标准含未核明的单项条件，完整原批次保留',code='school_action_coverage')
+            # Changes and optionality still need the existing semantic reader.
+            if re.search(r'选做|必做|更正|取消|撤销|撤回|改为|改期|不再(?:做|完成)|不用(?:做|完成)|无需(?:做|完成)',clause):return []
+            # ponytail: only positive common standards are compiled; negated scope needs a proved semantic allocation.
+            if re.search(r'不|无须|无需|免|勿|毋',clause[common.end():]):
+                raise AgentError('共同标准含未核明的否定条件，完整原批次保留',code='school_action_coverage')
+            count=int(common[1]) if common[1].isdigit() else {'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}[common[1]]
+            shared.append((count,clause))
+            continue
         # The container's numbered "complete questions" is its answer step,
         # not another worksheet. Other reading/learning outcomes still split.
         step=(container and bool(re.match(r'^(?:完成|做|写)[^。；;]*(?:题|这份|该卷)',clause))
@@ -2661,7 +2674,7 @@ def _school_native_blocks(text):
         elif step and pieces and _school_native_object(pieces[-1]['primary'])!=container_object:
             raise AgentError('穿插的资料步骤尚未能唯一归属，完整原批次保留',code='school_action_coverage')
         elif pieces:
-            if gap:raise AgentError('示例前后的行动条件无法连续核对，完整原批次保留',code='school_action_coverage')
+            if gap or shared:raise AgentError('行动条件无法连续核对，完整原批次保留',code='school_action_coverage')
             pieces[-1]['end']=end
         elif container:
             pieces.append(dict(start=0,end=end,purpose='learning',primary=head[1]))
@@ -2669,13 +2682,16 @@ def _school_native_blocks(text):
             preparation.append((start,end))
     if preparation and pieces:
         raise AgentError('准备资料尚未能归到唯一学校行动，完整原批次保留',code='school_action_coverage')
+    if any(count!=len(pieces) for count,_ in shared):
+        raise AgentError('共同标准的项数与独立行动不一致，完整原批次保留',code='school_action_coverage')
     # A stated total is an extra consistency check, never a prerequisite.
     count=re.search(r'完成\s*([二两三四五六七八九十2-9])项',header)
     if count:
         expected=int(count[1]) if count[1].isdigit() else {'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}[count[1]]
         if len(pieces)!=expected:
             raise AgentError('学校明示项数与可核对行动不一致，原批次保留待完整整理',code='school_action_coverage')
-    return [dict(part,quote=text[part['start']:part['end']].strip().rstrip('；;。').strip(),header=header) for part in pieces]
+    return [dict(part,quote=text[part['start']:part['end']].strip().rstrip('；;。').strip(),header=header,
+        **(dict(shared_conditions=[clause for _,clause in shared]) if shared else {})) for part in pieces]
 
 
 def _school_native_actions(evidence):
@@ -2707,6 +2723,9 @@ def _school_native_actions(evidence):
             own.append(dict(id='native:'+_hash([entry['ref'],part['start'],part['end'],quote])[:24],ref=entry['ref'],quote=quote,
                 header=header,primary=part['primary'],purpose=part['purpose'],subject=subject if part['purpose'] in ('learning','optional') else '',
                 publisher=entry.get('publisher',''),time=entry.get('time',''),supplements=[]))
+            if part.get('shared_conditions'):
+                own[-1]['shared_conditions']=part['shared_conditions']
+                own[-1]['id']='native:'+_hash([own[-1]['id'],part['shared_conditions']])[:24]
         # Standalone administrative notices already have executor, object,
         # date and handback guards. Mixed outcomes need this shared allocation.
         if len(own)==1 and own[0]['purpose']=='admin':continue
@@ -2748,7 +2767,7 @@ def _school_native_value(action):
     if action['subject'] and not title.startswith(action['subject']):title=action['subject']+'：'+title
     if len(title)>80:raise AgentError('本项行动标题超过可核对范围，原文保留',code='school_action_coverage')
     shared_date=re.search(_SCHOOL_NATIVE_DATE+r'\s*(?:之前|以前|前|内)?',action['header'])
-    standards=([shared_date[0]] if shared_date else [])+[action['quote']]+[s['goal'] for s in action['supplements']]
+    standards=([shared_date[0]] if shared_date else [])+[action['quote']]+action.get('shared_conditions',[])+[s['goal'] for s in action['supplements']]
     return _school_requirement_goal(dict(title=title),standards)
 
 
@@ -2784,7 +2803,7 @@ def _school_native_bind(proposal,actions,assigned):
 
 def _school_native_dates(action):
     from family_agenda import deadlines,sent_day
-    dates=deadlines(action['header']+'\n'+action['quote'],sent_day(action['time']))
+    dates=deadlines('\n'.join([action['header'],action['quote'],*action.get('shared_conditions',[])]),sent_day(action['time']))
     for supplement in action['supplements']:
         dates.update(deadlines(supplement['goal'],sent_day(supplement['time'])))
     return dates
@@ -2792,7 +2811,9 @@ def _school_native_dates(action):
 
 def _school_native_scope(action,child_id=''):
     anchors=[dict(ref=action['ref'],upload_ids=[],pages=[],quote=action['quote'])]
+    anchors.extend(dict(ref=action['ref'],upload_ids=[],pages=[],quote=quote) for quote in action.get('shared_conditions',[]))
     anchors.extend(dict(ref=s['ref'],upload_ids=[],pages=[],quote=s['quote']) for s in action['supplements'])
+    if len(anchors)>6:raise AgentError('本项原文条件超出既有核对范围，完整原批次保留',code='school_action_coverage')
     scope=dict(anchors=anchors)
     if child_id:scope['identity']=_hash([child_id,sorted(_json([a['ref'],a['upload_ids'],a['quote']]) for a in anchors)])
     return scope
@@ -2844,7 +2865,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         fields['properties'].update(action_quote={'type':'string','maxLength':600},existing_item_id={'type':'string','enum':['']+[r['id'] for r in school_existing]})
     if routing: schema['properties']['proposals']['items']['properties']['task_target_id']['enum']=['']+[t['id'] for t in school_tasks]
     prompt=SCHOOL_PROMPT if routing else PROMPT
-    if native_actions:prompt+='\nrequired_native_actions是程序按原文定位的独立成果及其完整条件，不要求老师写明总数或编号。每项必须单独返回一次，title_quote逐字从该项quote选择包含动作和对象的文字，task_purpose与本项purpose一致。打印、作答、自查、签字等同一份资料的步骤已归本项，不另起任务。supplements是同一稳定发布者明确点名的本项补充，必须一起引用对应ref，不分给其他作业；不能合并独立成果，也不能只引用消息编号后漏掉要求。完整标准由程序保留，日期只按该项header/quote和各自原发送日核对，不借同通知另一项的截止。'
+    if native_actions:prompt+='\nrequired_native_actions是程序按原文定位的独立成果及其完整条件，不要求老师写明总数或编号。每项必须单独返回一次，title_quote逐字从该项quote选择包含动作和对象的文字，task_purpose与本项purpose一致。打印、作答、自查、签字等同一份资料的步骤已归本项，不另起任务。shared_conditions是本消息明确适用于所有本项的共同标准，每项都须保留。supplements是同一稳定发布者明确点名的本项补充，必须一起引用对应ref，不分给其他作业；不能合并独立成果，也不能只引用消息编号后漏掉要求。完整标准由程序保留，日期只按该项header/quote/shared_conditions和各自原发送日核对，不借同通知另一项的截止。'
     if historical: prompt+='\n这是已处理消息的独立行动补漏。逐项对照existing_actions，保留家长当前修改与accepted/dismissed/pending决定，不恢复原任务。action_quote逐字引用包含本项动作和对象的完整原句，不将多个独立事项合并；existing_item_id只有同一具体行动才填旧编号，新漏项填空。已归纳/已忽略事项也返回以覆盖输入，但不会另建。不能按标题相似合并；同消息另项仍单独返回。due只从本项action_quote按原发送日换算，不能借用同通知另一项或旧任务日期。适用性/原件仍未读保留具体缺口。'
     result = family_llm._chat_json([{'role': 'system', 'content': prompt},
         {'role': 'user', 'content': _json(content)}], schema, 'family_agent_selection', timeout=45, data_path=data_path)
