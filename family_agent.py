@@ -2576,7 +2576,7 @@ def _recover_school_ack_originals(store,config,now):
 
 
 _SCHOOL_NATIVE_SUBJECTS=r'语文|数学|英语|科学|历史|地理|物理|化学|生物'
-_SCHOOL_NATIVE_DATE=r'(?:今天|今晚|明天|明晚|后天|(?:本|下)周[一二三四五六日天]|(?:\d{4}年)?\d{1,2}月\d{1,2}日?|\d{4}-\d{2}-\d{2})'
+_SCHOOL_NATIVE_DATE=r'(?:今天|今晚|明天|明晚|后天|(?:本|下)?(?:周|星期|礼拜)[一二三四五六日天]|(?:\d{4}年)?\d{1,2}月\d{1,2}日?|\d{4}-\d{2}-\d{2})'
 _SCHOOL_NATIVE_MARKER=r'(?:[1-9][0-9]?[.．、]|第[一二三四五六七八九十0-9]+项\s*[:：]?)\s*'
 
 
