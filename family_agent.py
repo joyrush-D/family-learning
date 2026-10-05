@@ -2650,6 +2650,8 @@ def _school_native_blocks(text):
         common=re.match(r'^(?:以上|这)?([二两三四五六七八九十2-9])项(?:作业|任务|要求)?(?:都|均)',clause)
         if common and pieces:
             if gap:raise AgentError('共同标准与行动之间含未归属内容，完整原批次保留',code='school_action_coverage')
+            # ponytail: do not share a comma's possible subject switch; richer scope needs a proved clause allocation.
+            if re.search(r'[，,]',clause):raise AgentError('共同标准含未核明的单项条件，完整原批次保留',code='school_action_coverage')
             # Changes and optionality still need the existing semantic reader.
             if re.search(r'选做|必做|更正|取消|撤销|撤回|改为|改期|不再(?:做|完成)|不用(?:做|完成)|无需(?:做|完成)',clause):return []
             count=int(common[1]) if common[1].isdigit() else {'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}[common[1]]

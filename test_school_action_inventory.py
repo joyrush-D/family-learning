@@ -129,6 +129,7 @@ class SchoolActionInventoryTests(unittest.TestCase):
     def test_unproven_shared_scope_is_rejected_before_selection(self):
         first = '英语作业：朗读Unit 2课文两遍。完成练习卷第1–3题。'
         for tail in ('三项都请家长检查。',
+                     '两项都请家长检查，练习卷明天交。',
                      '两项都请家长检查。预习Unit 3课文。',
                      '两项都请家长检查。明天交。',
                      '示例：“家长检查”，仅说明格式。两项都请家长检查。'):
