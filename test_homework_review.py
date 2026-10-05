@@ -332,6 +332,64 @@ def recheck_pending_http_checks(app,upload):
         q=d['questions'][1]
         assert q['judgment']=='unknown' and all(not q[k] for k in ('question','student_answer','answer','error_reason','possible_cause','steps'))
         assert '上一轮' in q['uncertainty'] and '补查' in q['uncertainty']
+        pending=d['continuation'];assert pending['pending_labels']==[unknown['label']]
+        def saved(result,key,continuation=None):
+            text=result['draft']['text'];state=continuation or result['draft']['continuation']
+            frame='作业检查保存格式 v2\n复核待补清单：'+json.dumps(state,ensure_ascii=False)+'\n最新检查字数：'+str(len(text))+'\n'+text+'\n此前检查草稿：虚构旧判定不作答案证据。'
+            ident=upload('作业批改参考-'+str(original['record_id'])+'.txt',frame.encode())
+            inputs=[s['id'] for s in result['review_basis']['question_sources']+result['review_basis']['reference_sources']+result['review_basis'].get('previous_sources',[])]
+            feedback=dict(task_id=task['id'],child='示例甲',day='2026-10-05',request_key=key,
+                note='虚构核对的检查意见。',attachments=inputs+[ident],review_basis=result['review_basis'])
+            status,value=http('/api/task/feedback',feedback)
+            return status,value,feedback,ident
+        with patch.object(family_llm,'_chat_json') as model:
+            status,formal,payload,prior=saved(rechecked,'synthetic-pending-saved')
+            assert status==200 and not formal['completion_changed'],formal
+            status,retry=http('/api/task/feedback',payload)
+            assert status==200 and retry['replayed'] and retry['record_id']==formal['record_id']
+            reopened=app.homework_saved_review(task['id'],formal['record_id'])
+            assert reopened['text']==d['text'] and reopened['continuation']==pending and reopened['has_archived']
+            assert model.call_count==0
+        third=request|dict(previous_sources=[dict(type='upload',id=prior)])
+        with patch.object(family_llm,'_chat_json',return_value=omitted):
+            status,rechecked=http('/api/print/homework/draft',third)
+            assert status==200 and rechecked['draft']['unknown_items']==1,rechecked
+        # Current sound evidence clears the pending label, not an old opinion's answer.
+        resolved=raw|dict(items=[first,item(label=unknown['label'],student_answer='C',answer='教师参考：C')])
+        with patch.object(family_llm,'_chat_json',return_value=resolved):
+            status,finished=http('/api/print/homework/draft',third)
+            assert status==200 and finished['draft']['continuation']['pending_labels']==[],finished
+        status,formal,_,newer=saved(finished,'synthetic-pending-resolved')
+        assert status==200,formal
+        with patch.object(family_llm,'_chat_json',return_value=omitted):
+            for previous in ([prior,newer],[newer,prior]):
+                status,out=http('/api/print/homework/draft',request|dict(previous_sources=[dict(type='upload',id=i) for i in previous]))
+                assert status==200 and out['draft']['unknown_items']==0,'older pending label must not revive after a newer same-scope check'
+            changed=upload('synthetic-pending-new-teacher.txt','虚构新范围：甲卷第1题B。'.encode())
+            app.save_task_feedback(dict(task_id=task['id'],child='示例甲',day='2026-10-05',request_key='synthetic-pending-new-reference',attachments=[changed]))
+            status,out=http('/api/print/homework/draft',continued|dict(reference_sources=[dict(type='upload',id=changed)]))
+            assert status==200 and out['draft']['unknown_items']==0,'a changed original scope must not inherit old labels'
+            status,out=http('/api/print/homework/draft',continued|dict(previous_continuation=pending|dict(scope_sha256='0'*64)))
+            assert status==200 and out['draft']['unknown_items']==0
+            status,out=http('/api/print/homework/draft',continued|dict(previous_continuation=pending|dict(pending_labels=['bad\x00label'])))
+            assert status==400,out
+        # A forged saved scope cannot enter a formal result; originals and records stay intact.
+        with app.connect() as c: before=c.execute('SELECT COUNT(*) FROM records').fetchone()[0]
+        status,out,_,_=saved(initial,'synthetic-pending-foreign-scope',pending|dict(scope_sha256='0'*64))
+        assert status==409 and out['code']=='review_basis_changed',out
+        with app.connect() as c: assert c.execute('SELECT COUNT(*) FROM records').fetchone()[0]==before
+        # Legacy output without a model inventory still keeps the same pending checklist.
+        with patch.object(family_llm,'_chat_json',return_value={k:v for k,v in omitted.items() if k!='question_labels'}):
+            status,out=http('/api/print/homework/draft',continued)
+            assert status==200 and out['draft']['unknown_items']==1,out
+        over=dict(question_labels=[f'虚构甲卷第{n}题' for n in range(1,26)],
+            items=[item(label=f'虚构甲卷第{n}题') for n in range(1,26)],coverage='虚构本次25项。')
+        with patch.object(family_llm,'_chat_json',return_value=over):
+            status,out=http('/api/print/homework/draft',continued)
+            assert status!=200 and '超过25项' in out['error'],out
+        for invalid in ('作业检查保存格式 v2\n无结构\n',
+                '作业检查保存格式 v2\n复核待补清单：{}\n最新检查字数：1\n甲\n'):
+            refused(lambda:family_print.review_text(invalid,saved=True))
     finally:
         server.shutdown();server.server_close();worker.join(timeout=3)
 
