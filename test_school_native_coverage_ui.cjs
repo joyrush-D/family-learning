@@ -136,7 +136,8 @@ try:
             if role=='exercise':expected_anchors.append(dict(ref=refs[1],upload_ids=[],pages=[],quote=texts[1]))
             assert anchors==expected_anchors,'anchors must be literal clauses for this outcome, never the whole mixed notice'
             assert (task['title'],task['action'],task['child'],task['due'],task['original_status'])==(row['title'],row['body'],'虚构甲',today,'待跟进')
-            assert len(row['title'])<=40 and not any(s in row['title'] for s in ('单面打印','自查','签字','选做'))
+            assert len(row['title'])<=40 and not any(s in row['title'] for s in ('单面打印','自查','签字'))
+            assert '选做' not in row['title'] or (row['title'].endswith('（第4题选做）') and row['title'].count('选做')==1)
             items.append(dict(role=role,item_id=row['id'],task_id=row['task_id'],title=row['title'],requirements=row['body'],anchors=anchors))
         assert [r[0] for r in c.execute('SELECT processed FROM agent_messages ORDER BY rowid')]==[1,1]
         assert [json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]==payload['messages']
@@ -216,7 +217,7 @@ async function screenshot(page,name){await noOverflow(page);await page.screensho
    assert.equal(await page.locator('#content [data-today-task]').count(),2,'today shows two independent school tasks for the selected child');
    assert.match(await card(reading.task_id).innerText(),/朗读Unit 2课文两遍/);assert(!(await card(reading.task_id).innerText()).includes('练习卷'));
    for(const clause of ['完成练习卷第1–3题','单面打印','完成后自查并请家长签字','第4题选做'])assert((await card(exercise.task_id).innerText()).includes(clause));assert(!(await card(exercise.task_id).innerText()).includes('朗读'));
-   for(const item of items){const title=await card(item.task_id).locator('h3').innerText();assert.equal(title,item.title);assert(title.length<=40&&!/单面打印|自查|签字|选做/.test(title),'main list title stays short while the body retains standards')}
+   for(const item of items){const title=await card(item.task_id).locator('h3').innerText();assert.equal(title,item.title);assert(title.length<=40&&!/单面打印|自查|签字/.test(title),'main list title stays short while the body retains standards');assert(!title.includes('选做')||(title.endsWith('（第4题选做）')&&title.split('选做').length===2),'only the compact optional-question boundary belongs in the title')}
    await screenshot(page,'today-'+width+'.png');
    const scopedViews=[];
    for(const item of items){
