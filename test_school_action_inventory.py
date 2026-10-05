@@ -241,7 +241,32 @@ class SchoolActionInventoryTests(unittest.TestCase):
     def test_holdout_elliptical_worksheet_still_requires_its_own_action(self):
         payload, refs = self._ingest(['英语作业：Unit 2课文读两遍；练习卷第1–3题。'])
         reading = self.proposal('Unit 2课文读两遍', refs)
-        self._assert_rejected_batch(payload, self.run_receipt(payload, [reading]))
+        exercise = self.proposal('练习卷第1–3题', refs)
+        self._use_replies(payload, [dict(proposals=[reading]), dict(proposals=[reading, exercise])])
+        self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
+        recovered = agent.run_once(self.app, self.now + dt.timedelta(minutes=6))
+        self.assertEqual((recovered['failed'], recovered['processed']), (0, 1),
+                         'rejecting every receipt is not successful action coverage')
+        self.assertEqual(self.model.call_count, 2)
+        with self.store._db() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+            self.assertEqual(len(rows), 2)
+            for own, foreign in [('Unit 2课文读两遍', '练习卷第1–3题'),
+                                  ('练习卷第1–3题', 'Unit 2课文读两遍')]:
+                row = next(r for r in rows if own in r['title'])
+                self.assertTrue(row['title'].startswith('英语：'))
+                self.assertIn(own, row['body'])
+                self.assertNotIn(foreign, row['body'])
+                self.assertEqual((row['due'], row['state']), ('', 'pending'))
+                self.assertEqual(json.loads(row['plan'])['school_task']['purpose'], 'learning')
+                self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
+            self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages')],
+                             payload['messages'])
+            self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages')], [1])
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0], 0,
+                             'an unknown deadline remains unknown rather than becoming today')
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0], 0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0], 0)
 
     def test_holdout_comma_between_two_outcomes_cannot_hide_the_second(self):
         payload, refs = self._ingest(['英语作业：朗读Unit 2课文两遍，完成练习卷第1–3题。'])
