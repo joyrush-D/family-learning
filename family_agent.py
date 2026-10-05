@@ -2576,7 +2576,8 @@ def _recover_school_ack_originals(store,config,now):
 
 
 _SCHOOL_NATIVE_SUBJECTS=r'语文|数学|英语|科学|历史|地理|物理|化学|生物'
-_SCHOOL_NATIVE_DATE=r'(?:今天|今晚|明天|明晚|后天|(?:本|下)?(?:周|星期|礼拜)[一二三四五六日天]|(?:\d{4}年)?\d{1,2}月\d{1,2}日?|\d{4}-\d{2}-\d{2})'
+_SCHOOL_NATIVE_DAY=r'(?:今天|今晚|明天|明晚|后天|(?:\d{4}年)?\d{1,2}月\d{1,2}日?|\d{4}-\d{2}-\d{2})'
+_SCHOOL_NATIVE_DATE=r'(?:'+_SCHOOL_NATIVE_DAY+r'|(?:本|下)?(?:周|星期|礼拜)[一二三四五六日天])'
 _SCHOOL_NATIVE_MARKER=r'(?:[1-9][0-9]?[.．、]|第[一二三四五六七八九十0-9]+项\s*[:：]?)\s*'
 
 
@@ -2765,12 +2766,15 @@ def _school_native_actions(evidence):
 
 def _school_native_value(action):
     """A short source-derived heading and all of this outcome's literal standards."""
+    from family_agenda import _relative_weekday,sent_day
     primary=action['primary']
     primary=re.sub(r'^(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')[，,:：]\s*|'+_SCHOOL_NATIVE_DATE+r'\s*(?:前|之前|以前|内)?\s*)+','',primary)
     title=primary.split('，',1)[0].split(',',1)[0]
     if action['subject'] and not title.startswith(action['subject']):title=action['subject']+'：'+title
     if len(title)>80:raise AgentError('本项行动标题超过可核对范围，原文保留',code='school_action_coverage')
-    shared_date=re.search(_SCHOOL_NATIVE_DATE+r'\s*(?:之前|以前|前|内)?',action['header'])
+    # Only resolved weekdays can supply a shared day; never crop a recurring, past or ranged phrase.
+    header=_relative_weekday(action['header'],sent_day(action['time']))
+    shared_date=re.search(_SCHOOL_NATIVE_DAY+r'\s*(?:之前|以前|前|内)?',header)
     standards=([shared_date[0]] if shared_date else [])+[action['quote']]+action.get('shared_conditions',[])+[s['goal'] for s in action['supplements']]
     return _school_requirement_goal(dict(title=title),standards)
 
