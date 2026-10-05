@@ -1550,6 +1550,10 @@ class Store:
                 for original,v in zip(originals,values):
                     original['attachments']=[r['upload_id'] for r in c.execute(
                         'SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=?',(source['id'],v['id']))]
+                views=[dict(source_id=source['id'],message=v,attachments=e['attachments']) for v,e in zip(values,originals)]
+                related={v['message']['id']:['message:'+source['id']+':'+m['message']['id'] for m in group['messages']]
+                         for group in _publication_groups(views) for v in group['messages']}
+                for original,v in zip(originals,values):original['related_messages']=related[v['id']]
                 _school_native_saved(items,originals)
                 # Validate the whole initial batch before inserting its independent sibling candidates.
                 for item in items:
@@ -2573,15 +2577,40 @@ _SCHOOL_NATIVE_MARKER=r'(?:[1-9][0-9]?[.．、]|第[一二三四五六七八九�
 def _school_native_command(clause):
     """A literal addressed outcome, not a verb search inside examples or reports."""
     value=re.sub(r'^'+_SCHOOL_NATIVE_MARKER,'',clause.strip())
-    prefix=r'(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')[，,:：]\s*|'+_SCHOOL_NATIVE_DATE+r'\s*(?:前|之前|以前|内)?\s*|请(?:各位)?(?:家长|同学们?|大家)?\s*|只需\s*)'
+    prefix=r'(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')[，,:：]\s*|'+_SCHOOL_NATIVE_DATE+r'\s*(?:前|之前|以前|内)?\s*|请(?:各位)?(?:家长|同学们?|大家)?\s*|只需\s*|另(?:外)?\s*)'
     value=re.sub(r'^(?:'+prefix+r')*','',value)
     learning=r'(?:朗读|背诵|抄写|默写|听写|跟读|订正|预习|复习|阅读|口算|习作|练习)(?!后|完|已|完成)[^：:。；;]{2,}'
     exercise=r'(?:完成|做|写)(?!后|完|过|了)(?:好)?\s*[^：:。；;]{0,35}(?:练习卷|练习册|作业本|作业单|试卷|习题|作文|第[^。；;]{1,16}题)[^：:。；;]*'
     object_first=r'(?:[^：:。；;，,]{0,16}(?:练习卷|练习册|作业本|试卷)第[^：:。；;，,]{1,16}题)[^：:。；;]{0,15}(?:完成|交)[^：:。；;]*'
+    compact=r'(?:Unit\s*[0-9]+[^。；;，,]{0,24}|《[^》]+》|课文)[^。；;，,]{0,12}(?:读|背)[一二两三四五六七八九十0-9]+遍'
     admin=r'(?:签署|签字|填写|填好|提交|交回|打印|盖章|完成|核对)[^：:。；;]{0,35}(?:回执|同意书|确认单|登记表|申请表|报名表|证明|安全承诺书)[^：:。；;]*'
     if re.match(admin,value):return 'admin'
-    if re.match(learning+'|'+exercise+'|'+object_first,value):return 'learning'
+    if re.match(learning+'|'+exercise+'|'+object_first+'|'+compact,value):return 'learning'
     return ''
+
+
+def _school_native_object(text):
+    """Only a literal worksheet name can join another answer step to it."""
+    match=re.search(r'(?:完成|做|写|订正|打印|准备|领取)(?:好)?\s*(?:一份|这份|该份|该)?([^。；;，,：:\n]{0,20}(?:练习卷|练习册|作业本|试卷))',text)
+    return match[1] if match else ''
+
+
+def _school_native_spans(text, start):
+    """Reuse quote-safe layout; commas split only a following addressed outcome."""
+    cursor=start
+    for full in _school_instruction_clauses(text[start:]):
+        left=text.index(full,cursor);right=left+len(full);cursor=right
+        closing=[];boundary=left
+        pairs={'“':'”','‘':'’','《':'》','（':'）','(':')','「':'」','『':'』','"':'"'}
+        for i in range(left,right):
+            char=text[i]
+            if closing and char==closing[-1]:closing.pop()
+            elif char in pairs:closing.append(pairs[char])
+            if (char in '，,' and not closing and _school_native_command(text[boundary:i])
+                    and _school_native_command(text[i+1:right])):
+                yield boundary,i
+                boundary=i+1
+        yield boundary,right
 
 
 def _school_native_blocks(text):
@@ -2599,26 +2628,35 @@ def _school_native_blocks(text):
     if head:
         lead=head[1]
         container=bool(re.search(r'(?:完成|做|订正)[^。；;]{0,35}(?:练习卷|练习册|试卷)',lead))
-        common=bool(re.search(r'(?:作业|要求|任务|完成(?:[二两三四五六七八九十2-9]项)?(?:要求|作业|任务|练习)?)\s*$',lead))
+        common=bool(re.search(r'(?:作业|要求|任务|事项|通知|完成(?:[二两三四五六七八九十2-9]项)?(?:要求|作业|任务|练习|事项|通知)?)\s*$',lead))
         label=bool(re.fullmatch(r'(?:'+_SCHOOL_NATIVE_SUBJECTS+r')(?:和(?:'+_SCHOOL_NATIVE_SUBJECTS+r'))*',lead))
         if not container and (common or label):header=lead;body_start=head.end()
-    pieces=[]
-    for match in re.finditer(r'[^。；;\n]+',text[body_start:]):
-        start=body_start+match.start();end=body_start+match.end()
+    pieces=[];preparation=[]
+    container_object=_school_native_object(head[1]) if container else ''
+    for start,end in _school_native_spans(text,body_start):
         marker=re.match(r'\s*'+_SCHOOL_NATIVE_MARKER,text[start:end])
         if marker:start+=marker.end()
-        clause=text[start:end].strip()
+        clause=text[start:end].strip().rstrip('。；;').strip()
         if not clause:continue
         purpose=_school_native_command(clause)
         # The container's numbered "complete questions" is its answer step,
         # not another worksheet. Other reading/learning outcomes still split.
-        step=container and bool(re.match(r'^(?:完成|做|写)[^。；;]*(?:题|这份|该卷)',clause))
+        step=(container and bool(re.match(r'^(?:完成|做|写)[^。；;]*(?:题|这份|该卷)',clause))
+              and (not _school_native_object(clause) or _school_native_object(clause)==container_object))
         if purpose and not step:
+            obj=_school_native_object(clause)
+            if preparation and obj and all(_school_native_object(text[left:right])==obj for left,right in preparation):
+                start=preparation[0][0]
+                preparation=[]
             pieces.append(dict(start=start,end=end,purpose=purpose,primary=head[1] if container and not pieces else clause))
         elif pieces:
             pieces[-1]['end']=end
         elif container:
             pieces.append(dict(start=0,end=end,purpose='learning',primary=head[1]))
+        elif _school_native_object(clause):
+            preparation.append((start,end))
+    if preparation and pieces:
+        raise AgentError('准备资料尚未能归到唯一学校行动，完整原批次保留',code='school_action_coverage')
     # A stated total is an extra consistency check, never a prerequisite.
     count=re.search(r'完成\s*([二两三四五六七八九十2-9])项',header)
     if count:
@@ -2647,10 +2685,14 @@ def _school_native_actions(evidence):
         own=[]
         for part in _school_native_blocks(text):
             quote=part['quote'];header=part['header']
+            # A sole question/range explicitly labelled optional is not mandatory.
+            optional=re.search(r'第[^题。；;]{1,16}题[（(]选做[^）)]*[）)]\s*[。；;]?$',quote)
+            if part['purpose']=='learning' and optional and '题' not in quote[:optional.start()] and '必做' not in quote:
+                part['purpose']='optional'
             named=set(re.findall(_SCHOOL_NATIVE_SUBJECTS,part['primary']));shared=set(re.findall(_SCHOOL_NATIVE_SUBJECTS,header))
             subject=next(iter(named)) if len(named)==1 else next(iter(shared)) if not named and len(shared)==1 else ''
             own.append(dict(id='native:'+_hash([entry['ref'],part['start'],part['end'],quote])[:24],ref=entry['ref'],quote=quote,
-                header=header,primary=part['primary'],purpose=part['purpose'],subject=subject if part['purpose']=='learning' else '',
+                header=header,primary=part['primary'],purpose=part['purpose'],subject=subject if part['purpose'] in ('learning','optional') else '',
                 publisher=entry.get('publisher',''),time=entry.get('time',''),supplements=[]))
         # Standalone administrative notices already have executor, object,
         # date and handback guards. Mixed outcomes need this shared allocation.
@@ -2665,7 +2707,7 @@ def _school_native_actions(evidence):
                 stamp=dt.datetime.fromisoformat(entry['time']);later=dt.datetime.fromisoformat(supplement['time'])
                 if stamp.tzinfo is None or later.tzinfo is None or not 0<=(later-stamp).total_seconds()<=120:continue
             except (KeyError,ValueError,TypeError):continue
-            if re.search(r'更正|取消|撤销|不再|不用|无需|改为|改期|延期',head[2]):
+            if re.search(r'更正|取消|撤销|改为|改期|延期',head[2]):
                 own=[];break  # A later change needs the existing correction reader.
             object_text=head[1]
             object_text=re.sub(r'^(?:'+_SCHOOL_NATIVE_SUBJECTS+r')','',object_text)
@@ -2689,7 +2731,9 @@ def _school_native_value(action):
     title=primary.split('，',1)[0].split(',',1)[0]
     if action['subject'] and not title.startswith(action['subject']):title=action['subject']+'：'+title
     if len(title)>80:raise AgentError('本项行动标题超过可核对范围，原文保留',code='school_action_coverage')
-    return _school_requirement_goal(dict(title=title),[action['quote']]+[s['goal'] for s in action['supplements']])
+    shared_date=re.search(_SCHOOL_NATIVE_DATE+r'\s*(?:之前|以前|前|内)?',action['header'])
+    standards=([shared_date[0]] if shared_date else [])+[action['quote']]+[s['goal'] for s in action['supplements']]
+    return _school_requirement_goal(dict(title=title),standards)
 
 
 def _school_native_bind(proposal,actions,assigned):
