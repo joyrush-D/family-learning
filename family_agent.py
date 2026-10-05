@@ -2646,7 +2646,6 @@ def _school_native_actions(evidence):
             own.append(dict(id='native:'+_hash([entry['ref'],part['start'],part['end'],quote])[:24],ref=entry['ref'],quote=quote,
                 header=header,primary=part['primary'],purpose=part['purpose'],subject=subject if part['purpose']=='learning' else '',
                 publisher=entry.get('publisher',''),time=entry.get('time',''),supplements=[]))
-        if len(own)!=expected:continue
         for supplement in evidence[index+1:]:
             head=re.match(r'^补充([^：:\n]{2,40})[：:]\s*(.+)$',supplement['text'].strip(),re.S)
             if not head:continue
