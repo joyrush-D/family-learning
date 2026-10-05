@@ -2579,6 +2579,11 @@ def _school_native_actions(evidence):
         expected=numbers.get(count[1],int(count[1]) if count[1].isdigit() else 0)
         ordinals=[int(m[1]) if m[1] else numbers.get(m[2],int(m[2]) if m[2].isdigit() else 0) for m in markers]
         if expected!=len(markers) or ordinals!=list(range(1,expected+1)):continue
+        publisher=entry.get('publisher','');source=entry['ref'][8:].rsplit(':',1)[0]
+        # Changes retain the existing dated correction/old-decision protocol.
+        # This literal first-intake guard does not reinterpret changed outcomes.
+        if publisher and any(s.get('publisher')==publisher and s['ref'][8:].rsplit(':',1)[0]==source
+                and re.match(r'^\s*(?:更正|取消|撤销|撤回)',s['text']) for s in evidence[index+1:]):continue
         own=[]
         for position,match in enumerate(markers):
             end=markers[position+1].start() if position+1<len(markers) else len(text)
