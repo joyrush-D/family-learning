@@ -78,6 +78,54 @@ class SchoolActionInventoryTests(unittest.TestCase):
         reading = self.proposal('朗读Unit 2课文两遍', refs)
         self._assert_rejected_batch(payload, self.run_receipt(payload, [reading]))
 
+    def test_trailing_shared_standard_is_kept_for_each_independent_action(self):
+        shared = '两项都请家长检查'
+        quotes = ('朗读Unit 2课文两遍', '完成练习卷第1–3题')
+        text = '英语作业：' + '。'.join((*quotes, shared)) + '。'
+        payload, refs = self._ingest([text])
+        # Both fixed receipts are complete; compilation must not remove the
+        # first action's standard or turn a shared step into another task.
+        proposals = [self.proposal(quote, refs, goal=quote + '。\n' + shared + '。')
+                     for quote in quotes]
+        result = self.run_receipt(payload, proposals)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        self.assertEqual(self.model.call_count, 1)
+        with self.store._db() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all((r['state'], r['due']) == ('accepted', '') for r in rows))
+            tasks = {r['id']: dict(r) for r in c.execute('SELECT * FROM manual_tasks')}
+            self.assertEqual(set(tasks), {r['task_id'] for r in rows})
+            for row in rows:
+                self.assertEqual((tasks[row['task_id']]['due'], tasks[row['task_id']]['original_status']),
+                                 ('无明确截止', '待跟进'))
+            self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages')],
+                             payload['messages'], 'the original teacher message must remain unchanged')
+            self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages')], [1])
+            self.assertEqual(tuple(c.execute("SELECT done,error,next_try FROM agent_jobs WHERE id LIKE 'messages:%'").fetchone()),
+                             (1, '', ''))
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0], 0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0], 0)
+        today = self.now.date().isoformat()
+        calendar = self.app.calendar_snapshot(today, today)
+        collected = {item['task_id']: item for item in calendar['inbox']
+                     if item['task_id'] in tasks and self.source['child_id'] in item['child_ids']}
+        self.assertEqual(set(collected), set(tasks), 'both actions reach the selected child list')
+        for item in collected.values():
+            self.assertEqual(item['child_ids'], [self.source['child_id']])
+            self.assertEqual((item['agenda']['published_on'], item['agenda']['due_on'],
+                              item['agenda']['scheduled_on'], item['agenda']['category']),
+                             (today, '', '', 'homework'), 'an unstated deadline must not become due today')
+        for own, foreign in (quotes, quotes[::-1]):
+            row = next(r for r in rows if own in r['title'])
+            for surface, body in (('agent body', row['body']),
+                                  ('manual task', tasks[row['task_id']]['action']),
+                                  ('single child list', collected[row['task_id']]['body'])):
+                with self.subTest(action=own, surface=surface):
+                    self.assertIn(own, body)
+                    self.assertNotIn(foreign, body, 'the shared standard must not merge independent actions')
+                    self.assertIn(shared, body, 'a trailing all-actions standard belongs to both outcomes')
+
     def test_exercise_deadline_in_next_sentence_is_not_borrowed_by_reading(self):
         payload, refs = self._ingest([
             '英语作业：朗读Unit 2课文两遍。完成练习卷第1–3题，明天交。'])
