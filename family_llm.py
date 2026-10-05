@@ -1213,13 +1213,10 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
         unverified_model_summary=dict(coverage=result['coverage'],comparison=comparison)
         # Original unknowns and downgraded grades share the final summary. Keep
         # question identities once, in their rows, and retain program page scope.
-        comparison=('本次仅核对所选材料，%d题因逐题所列依据缺口或冲突，保持未判定；'%unknown+
-                    '不能沿用上一轮对这些题目的确定判定，具体原因见逐题不确定说明。教师参考和实际作答分别保留；'
-                    '其他有依据的题目保留本次逐题答案比较。旧AI意见不作教师依据，本轮不代表全部完成或全卷检查完。')
-        result['coverage']=('仅按本次所选材料作有限核对，共%d项，%d题仍未判定；'%(len(result['items']),unknown)+
-                            '具体依据缺口或冲突见逐题说明；模型原覆盖说明尚未逐项核实，'
-                            '未列入本次逐题结果的题目和资料范围仍未检查。'
-                            '其他题目按本次逐题结果核对，不能据此称全部答对、全部完成或全卷检查完成。')
+        comparison=('本次%d题未判定，不能沿用上一轮对这些题的确定判定。'%unknown+
+                    '其他题目以本次逐题结果为准；教师参考和孩子作答分别保留，旧AI意见不作答案依据。')
+        result['coverage']=('本次%d题，%d题仍未判定。'%(len(result['items']),unknown)+
+                            '未列入本次逐题结果的题目和资料范围仍未检查；模型原覆盖说明尚未核明。')
     wrong=[item for item in result['items'] if item['judgment']=='incorrect']
     if review:
         correct=len(result['items'])-len(wrong)-unknown

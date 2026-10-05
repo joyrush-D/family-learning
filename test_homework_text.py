@@ -27,6 +27,22 @@ RAW=dict(items=[dict(label='虚构甲卷第1题',question='2+3=?',student_answer
 
 
 class TextQuestionContractTests(unittest.TestCase):
+    def test_blank_text_answer_keeps_teacher_reference_but_not_model_summary(self):
+        raw=json.loads(json.dumps(RAW));q=raw['items'][0]
+        q.update(student_answer='',judgment='unknown',error_reason='',uncertainty='答题格空白。')
+        raw.update(coverage='第1题正确；作文未提供。',comparison='整卷检查完成。')
+        original=json.loads(json.dumps(raw));scope=['题目原文：本次读取synthetic-paper.txt。']
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            result=family_llm.homework_reference_draft([],review=True,
+                question_documents=[dict(name='synthetic-paper.txt',text='虚构甲卷第1题：2+3=?\n实际作答：')],
+                reference_documents=[dict(name='teacher.txt',text=REFERENCE)],program_coverage=scope)
+        self.assertEqual(model.call_count,1);self.assertEqual(raw,original)
+        self.assertEqual(result['questions'][0]['student_answer'],'');self.assertEqual(result['questions'][0]['answer'],'教师参考：5')
+        self.assertEqual((result['wrong_items'],result['unknown_items']),(0,1))
+        self.assertEqual(result['unverified_model_summary'],dict(coverage=raw['coverage'],comparison=raw['comparison']))
+        for text in (raw['coverage'],raw['comparison']):self.assertNotIn(text,result['text'])
+        for text in ('答题格空白。','1题仍未判定',scope[0]):self.assertIn(text,result['text'])
+
     def test_complete_text_choice_and_reading_use_text_evidence(self):
         documents=[dict(name='synthetic-choice.txt',text='虚构甲卷第1题：2+3=? A.4 B.5 C.6\n实际作答：B'),
                    dict(name='synthetic-reading.docx',text='虚构甲卷第2题：原文“周一小林去了图书馆。” 问：小林何时去图书馆？\n实际作答：周一')]
