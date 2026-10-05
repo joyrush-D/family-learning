@@ -927,6 +927,48 @@ def legacy_homework_review_files(c,record):
     return {r['id'] for r in c.execute("SELECT id FROM uploads WHERE name=? AND mime LIKE 'text/plain%'",('作业批改参考-'+match[1]+'.txt',)) if r['id'] in attachments}
 
 
+def homework_review_result_bindings(c,child,names):
+    """A product-written result keeps its role when an ordinary feedback reuses the upload."""
+    records=[dict(r) for r in c.execute('SELECT * FROM records ORDER BY id') if names.get(r['child'],r['child'])==child]
+    current={r['id']:r for r in records};versions=list(records)
+    for revision in c.execute('SELECT record_id,previous FROM revisions ORDER BY id'):
+        if revision['record_id'] not in current: continue
+        try: previous=json.loads(revision['previous'])
+        except (ValueError,TypeError):
+            raise family_print.PrintError('原件历史暂时无法核对，请保留原记录后重试','review_source_changed',409) from None
+        if not isinstance(previous,dict) or previous.get('id')!=revision['record_id']:
+            raise family_print.PrintError('原件历史暂时无法核对，请保留原记录后重试','review_source_changed',409)
+        if names.get(previous.get('child'),previous.get('child'))==child: versions.append(previous)
+    events=[];known={};bindings=[]
+    for record in versions:
+        record=dict(followup_kind='',related_record_id=None,note='',**record)
+        try:
+            attachments=json.loads(record['attachments'])
+            kind=record.get('followup_kind','');parent=record.get('related_record_id')
+            if kind=='作业检查' and type(parent) is int and parent>0:
+                outputs={r['id'] for r in c.execute("SELECT id FROM uploads WHERE name=? AND mime LIKE 'text/plain%'",('作业批改参考-'+str(parent)+'.txt',)) if r['id'] in attachments}
+            else: outputs=legacy_homework_review_files(c,record)
+        except (KeyError,ValueError,TypeError):
+            raise family_print.PrintError('原件历史暂时无法核对，请保留原记录后重试','review_source_changed',409) from None
+        for ident in outputs: known.setdefault(ident,[record['id'],current[record['id']]['created']])
+        bindings.append((record,attachments,outputs))
+    for record,attachments,outputs in bindings:
+        attachments=set(attachments)&known.keys()
+        if not attachments: continue
+        # Current IDs alone are insufficient: a later correction may append the result to an older answer.
+        try:
+            stamp=dt.datetime.fromisoformat(record['created'])
+            if stamp.tzinfo is None: stamp=stamp.replace(tzinfo=dt.timezone(dt.timedelta(hours=8)))
+        except (KeyError,ValueError,TypeError):
+            raise family_print.PrintError('原件历史暂时无法核对，请保留原记录后重试','review_source_changed',409) from None
+        events.append((stamp,record['id'],attachments,outputs))
+    first={}
+    for _,ident,attachments,outputs in sorted(events,key=lambda event:(event[0],event[1])):
+        for upload_id in attachments:
+            if upload_id in known: first.setdefault(upload_id,upload_id in outputs)
+    return {ident:binding for ident,binding in known.items() if first.get(ident)}
+
+
 def homework_material_context(c,task_id,*,answer=None):
     """Current homework's explicit bindings; caller supplies an existing read transaction."""
     if not isinstance(task_id,str) or not task_id or len(task_id)>30:
@@ -941,6 +983,7 @@ def homework_material_context(c,task_id,*,answer=None):
             or answer['source']!='事项:'+task_id and answer['linked_task_id']!=task_id):
         raise family_print.PrintError('这份作答不属于当前孩子的作业','review_source_not_allowed',403)
     child=next(p for p in profiles(c) if p['name']==task['child'])
+    results=homework_review_result_bindings(c,task['child'],names)
     allowed={};bindings=[];record_ids=json.loads(answer['attachments']) if answer is not None else [];report={};school_error=''
     def add(ident,origin,binding=None):
         upload=c.execute('SELECT * FROM uploads WHERE id=?',(ident,)).fetchone()
@@ -950,6 +993,7 @@ def homework_material_context(c,task_id,*,answer=None):
         for other in c.execute("SELECT child,attachments FROM records WHERE attachments<>'[]'"):
             if names.get(other['child'],other['child'])!=task['child'] and ident in json.loads(other['attachments']):
                 raise family_print.PrintError('原件已归属另一位孩子','review_source_not_allowed',403)
+        if ident in results: origin='review_result';binding=results[ident]
         allowed.setdefault(ident,dict(upload)|dict(origin=origin,review_binding=binding))
     for ident in record_ids: add(ident,'saved_answer')
     if 'report' in {r[1] for r in c.execute('PRAGMA table_info(study_items)')}:
