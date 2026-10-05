@@ -2586,8 +2586,10 @@ def _school_native_actions(evidence):
             # Printing, signing or uploading after one activity are its steps,
             # not additional outcomes. Leave unsupported lists to the normal reader.
             if not re.match(r'(?:朗读|背诵|抄写|默写|听写|跟读|练习|订正|预习|复习|阅读|口算|习作|完成(?!后)|核对)\S.{1,}',quote):break
+            named=set(re.findall(subjects,quote));shared=set(re.findall(subjects,header))
+            subject=next(iter(named)) if len(named)==1 else next(iter(shared)) if not named and len(shared)==1 else ''
             own.append(dict(id='native:'+_hash([entry['ref'],match.end(),end,quote])[:24],ref=entry['ref'],quote=quote,
-                header=header,subject=next(iter(re.findall(subjects,header)),''),publisher=entry.get('publisher',''),time=entry.get('time',''),supplements=[]))
+                header=header,subject=subject,publisher=entry.get('publisher',''),time=entry.get('time',''),supplements=[]))
         if len(own)!=expected:continue
         for supplement in evidence[index+1:]:
             head=re.match(r'^补充([^：:\n]{2,40})[：:]\s*(.+)$',supplement['text'].strip(),re.S)
