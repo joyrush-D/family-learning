@@ -1267,6 +1267,8 @@ class Store:
                     **{k: saved[k] if saved else '' for k in ['last_attempt', 'last_success', 'last_message_time', 'error']},
                     'error': binding_error or (saved['error'] if saved else ''),
                     'unread_count': saved['unread_count'] if saved else 0,
+                    'pending_message_count': c.execute('SELECT COUNT(*) FROM agent_messages WHERE source_id=? AND processed=0',
+                        (source['id'],)).fetchone()[0] if saved and not binding_error else 0,
                     'next_collection_at': due,
                     'cursor': saved['cursor'] if saved else source['cursor']})
                 check = _collection_check(saved)
