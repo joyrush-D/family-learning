@@ -28,7 +28,7 @@ async function server(){
  const socket=net.createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');const port=socket.address().port;await new Promise(r=>socket.close(r));
  const env={...process.env};for(const k of Object.keys(env))if(k.startsWith('FAMILY_'))delete env[k];
  // The fault stays in this disposable demo process; no worker or household printer is started.
- const setup=`import runpy,sys,json,copy
+ const setup=`import runpy,sys,json,copy,hashlib
 from unittest.mock import patch
 from urllib.parse import urlparse,parse_qs
 import app
@@ -39,11 +39,20 @@ consistency_raw=dict(items=[
     dict(label='虚构乙卷第3题',question='虚构乙卷第3题：1+1=?',student_answer='2',answer='教师参考：2',judgment='correct',question_kind='objective',error_reason='',possible_cause='',steps='',uncertainty='')],
     coverage='第1题已核实需订正；整卷已经检查完成。',comparison='后补老师参考后，第1题从正确改为确定错误，须订正。')
 cause_calls=[]
+origin_calls=[]
 validator=app.family_llm.homework_reference_draft
 def mock_chat(messages,schema,name,timeout,**kwargs):
     assert app.DATA.name.startswith('family-demo-') and name=='family_homework_reference'
     content=messages[-1]['content']
     texts=[part['text'] for part in content if part.get('type')=='text']
+    if any('虚构来源身份' in text for text in texts):
+        raw=copy.deepcopy(cause_raw)
+        raw['items'][0].update(label='虚构身份甲卷第1题',question='虚构身份甲卷第1题：2+3=?')
+        raw['coverage']='仅虚构身份甲卷第1题，未检查其余题目。'
+        if any(text.startswith('上一轮待复核意见原文') for text in texts):
+            raw['comparison']='复核原照片和教师原参考后，仍需订正第1题；旧AI意见仅供对照。'
+        origin_calls.append(dict(raw=raw,original=copy.deepcopy(raw),texts=texts,image_count=sum(part.get('type')=='image_url' for part in content)))
+        return raw
     if any('虚构结论一致' in text for text in texts):
         raw=consistency_raw
         assert any('教师参考原文' in text and '2+3=6' in text and '6-2=4' in text for text in texts)
@@ -57,6 +66,16 @@ def mock_chat(messages,schema,name,timeout,**kwargs):
     cause_calls.append(dict(raw=copy.deepcopy(raw),original=copy.deepcopy(raw)))
     return cause_calls[-1]['raw']
 def traced_validator(*args,**kwargs):
+    if '虚构来源身份' in kwargs.get('task_action',''):
+        result=validator(*args,**kwargs)
+        call=origin_calls[-1]
+        assert call['raw']==call['original']
+        call['inputs']=dict(images=[dict(mime=image['mime'],sha256=hashlib.sha256(image['data']).hexdigest()) for image in args[0]],
+            reference_image_count=len(kwargs.get('reference_images',())),question_documents=copy.deepcopy(kwargs.get('question_documents',())),
+            reference_documents=copy.deepcopy(kwargs.get('reference_documents',())),previous_documents=copy.deepcopy(kwargs.get('previous_documents',())),
+            previous_text=kwargs.get('previous_text',''),task_action=kwargs['task_action'],answer_note=kwargs.get('answer_note',''))
+        call['validated']=copy.deepcopy(result)
+        return result
     result=validator(*args,**kwargs)
     assert cause_calls[-1]['raw']==cause_calls[-1]['original']
     cause_calls[-1]['validated']=copy.deepcopy(result)
@@ -152,6 +171,11 @@ def fixture_get(self):
     if self.path=='/__fixture/cause-validator':
         assert app.DATA.name.startswith('family-demo-')
         return self.reply(200,dict(synthetic_only=True,shared_validator=True,real_model_calls=0,calls=cause_calls))
+    if self.path=='/__fixture/review-origin':
+        assert app.DATA.name.startswith('family-demo-')
+        with app.connect_read_only() as c:
+            records=[dict(r) for r in c.execute('SELECT id,source,linked_task_id,related_record_id,followup_kind,attachments,review_output_ids FROM records ORDER BY id')]
+        return self.reply(200,dict(synthetic_only=True,shared_validator=True,real_model_calls=0,calls=origin_calls,records=records))
     if urlparse(self.path).path=='/__fixture/unit-identity':
         query=parse_qs(urlparse(self.path).query)
         if set(query)!={'width'} or query['width'] not in (['360'],['1440']):return self.reply(400,dict(error='虚构宽度不正确'))
@@ -633,6 +657,56 @@ runpy.run_path('demo.py',run_name='__main__')`;
   assert.match(await reopenedConsistency.innerText(),/需订正1题，与参考一致1题，未判定1题/);assert(!(await reopenedConsistency.innerText()).includes(staleComparison));state=await readCause();const consistencyFinalWrong=state.records.find(r=>r.id===consistencyWrongSaved.record_id),consistencyFinalCorrection=state.records.find(r=>r.id===consistencyCorrection.record_id);assert.equal(consistencyFinalWrong.related_record_id,consistencyOriginal.record_id);assert.equal(consistencyFinalCorrection.related_record_id,consistencyFinalWrong.id);for(const r of [consistencyFinalWrong,consistencyFinalCorrection]){assert.equal(r.child,child);assert.equal(r.linked_task_id,consistencyTask.id)}assert.equal(state.tasks.find(t=>t.id===consistencyTask.id).update,null);assert.deepEqual(state.printing.jobs.map(j=>j.id).sort(),printIdsBeforeChecks);
   assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);
   if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.writeFile(path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'consistency-validator-'+width+'.json'),JSON.stringify({scope:'fixed synthetic raw through real shared validator; not model accuracy',request:consistencyRequest,validator:consistencyTrace.calls.at(-1),feedback:consistencyReview,wrong:consistencyWrongSaved,correction:consistencyCorrection},null,2));await reopenedConsistency.scrollIntoViewIfNeeded();await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'consistency-reopened-'+width+'.png')})}
+  // Isolated origin regression: real HTTP creates F(Q,S,P), then ordinary R2
+  // reuses that exact P. Only fixed synthetic model raw bypasses the transport.
+  await p.locator('#taskDialog [data-close="taskDialog"]').click();state=await readCause();
+  const readOrigin=async()=>await(await fetch(host.url+'__fixture/review-origin')).json(),originBefore=await readOrigin();
+  const originTask=(await post('api/task/new',{child,title:'虚构来源身份 '+width,category:'homework',action:'虚构来源身份 '+width+'：甲卷第1题2+3=?，按教师原参考复核最终作答4。',due:state.today})).task;
+  const originUpload=async(name,mime,buffer)=>{const response=await fetch(host.url+'api/upload',{method:'POST',headers:{'X-Family-Token':state.token,'Content-Type':mime,'X-File-Name':encodeURIComponent(name)},body:buffer});assert.equal(response.status,200);return (await response.json()).attachment};
+  const originFeedback=async(key,attachments,note,extra={})=>post('api/task/feedback',{task_id:originTask.id,child,day:state.today,request_key:'synthetic-origin-ui-'+width+'-'+key,attachments,note,...extra});
+  const originPhoto=await originUpload('synthetic-origin-ui-answer-'+width+'.png','image/png',causeImage);
+  const originOriginal=await originFeedback('original',[originPhoto.id],'虚构身份甲卷第1题，完整题面2+3=?，最终作答4。');
+  const originName='作业批改参考-'+originOriginal.record_id+'.txt',originTeacherText='虚构身份甲卷第1题教师原参考：2+3=5。';
+  const originTeacher=await originUpload(originName,'text/plain',Buffer.from(originTeacherText));
+  const originTeacherRecord=await originFeedback('teacher',[originTeacher.id],'虚构教师原参考资料，按附件原文核对。');
+  const originInitial=await post('api/print/homework/draft',{purpose:'review',task_id:originTask.id,record_id:originOriginal.record_id,expected_created:originOriginal.feedback.created,question_sources:[{type:'upload',id:originPhoto.id}],reference_sources:[{type:'upload',id:originTeacher.id}]});
+  const originOpinion=await originUpload(originName,'text/plain',Buffer.from(originInitial.draft.text));assert.notEqual(originOpinion.id,originTeacher.id);assert.equal(originOpinion.name,originTeacher.name,'same filename does not identify the teacher or generated result');
+  const originFormal=await originFeedback('formal',[originPhoto.id,originTeacher.id,originOpinion.id],'家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #'+originOriginal.record_id+'。',{review_basis:originInitial.review_basis});
+  const originR2=await originFeedback('reattached',[originPhoto.id,originOpinion.id],'虚构身份甲卷第1题最终作答4；重挂原照片与上一轮AI意见。');
+  let originTrace=await readOrigin();assert(originTrace.synthetic_only&&originTrace.shared_validator);assert.equal(originTrace.real_model_calls,0);assert.equal(originTrace.calls.length,originBefore.calls.length+1);
+  const originFormalRow=originTrace.records.find(r=>r.id===originFormal.record_id);assert.equal(originFormalRow.followup_kind,'作业检查');assert.equal(originFormalRow.related_record_id,originOriginal.record_id);assert.deepEqual(JSON.parse(originFormalRow.review_output_ids),[originOpinion.id],'formal output binding excludes the retained same-name teacher TXT');
+  const originSources=await(await fetch(host.url+'api/print/homework/sources?task_id='+originTask.id+'&record_id='+originR2.record_id)).json();assert.equal(originSources.created,originR2.feedback.created);
+  assert.equal(originSources.sources.find(a=>a.id===originOpinion.id).origin,'review_result');assert.equal(originSources.sources.find(a=>a.id===originTeacher.id).origin,'same_task');assert.deepEqual((await readOrigin()).records,originTrace.records,'source listing does not rewrite original bindings');
+  const openOrigin=async()=>{await p.locator('nav [data-page=tasks]').click();await p.locator('body[data-page=tasks] #task-group-homework').waitFor();await p.locator('[data-task-box=Inbox]').click();await p.locator('#content [data-task="'+originTask.id+'"]:visible').first().click();await p.locator('#taskDialog[open]').waitFor()};
+  const originPanel=()=>p.locator('#taskFeedbackHistory [data-homework-review="'+originR2.record_id+'"]');
+  const originRows=()=>({photo:originPanel().locator('[data-review-source="'+originPhoto.id+'"]'),teacher:originPanel().locator('[data-review-source="'+originTeacher.id+'"]'),previous:originPanel().locator('[data-review-source="'+originOpinion.id+'"]')});
+  const checkOriginChoices=async()=>{const rows=originRows();await rows.teacher.waitFor();await eventually(async()=>JSON.stringify(await rows.previous.locator('[data-homework-review-role] option').evaluateAll(xs=>xs.map(x=>x.value)))==='["previous"]','reattached output exposes only the previous-opinion role');assert.deepEqual(await rows.previous.locator('[data-homework-review-role] option').allTextContents(),['上次 AI 检查 · 供复核']);assert((await rows.teacher.locator('[data-homework-review-role] option').evaluateAll(xs=>xs.map(x=>x.value))).includes('reference'));return rows};
+  await p.reload();await openOrigin();await originPanel().locator(':scope > details > summary').click();const originChoices=await checkOriginChoices();
+  await originChoices.photo.locator('[data-homework-review-photo]').check();await originChoices.teacher.locator('[data-homework-review-photo]').check();await originChoices.previous.locator('[data-homework-review-photo]').check();
+  for(const [row,role] of [[originChoices.teacher,'reference'],[originChoices.previous,'previous']]){await row.locator('details > summary').click();await row.locator('[data-homework-review-role]').selectOption(role)}
+  const originDraftBodies=[];let originReply;
+  await p.route('**/api/print/homework/draft',async route=>{originDraftBodies.push(route.request().postDataJSON());if(originDraftBodies.length===1)return route.fulfill({status:503,json:{error:'虚构来源身份检查暂不可用'}});const response=await route.fetch();assert.equal(response.status(),200);originReply=await response.json();await route.fulfill({response,json:originReply})});
+  try{
+   await originPanel().locator('[data-homework-review-run]').click();await eventually(async()=>/虚构来源身份检查暂不可用/.test(await originPanel().innerText()),'origin draft 503 keeps saved originals');
+   assert.equal((await readOrigin()).calls.length,originBefore.calls.length+1);assert.deepEqual((await readOrigin()).records,originTrace.records);
+   for(const row of Object.values(originChoices))assert.equal(await row.locator('[data-homework-review-photo]').isChecked(),true,'draft failure retains each selected input');
+   assert.equal(await originChoices.teacher.locator('[data-homework-review-role]').inputValue(),'reference');assert.equal(await originChoices.previous.locator('[data-homework-review-role]').inputValue(),'previous');
+   await originPanel().locator('[data-homework-review-run]').click();await eventually(async()=>!!originReply,'origin recheck reaches the real shared validator');
+  }finally{await p.unroute('**/api/print/homework/draft')}
+  assert.equal(originDraftBodies.length,2);assert.deepEqual(originDraftBodies[0],originDraftBodies[1]);const originRequest=originDraftBodies[1];
+  assert.equal(originRequest.record_id,originR2.record_id);assert.deepEqual(originRequest.question_sources,[{type:'upload',id:originPhoto.id}]);assert.deepEqual(originRequest.reference_sources,[{type:'upload',id:originTeacher.id}]);assert.deepEqual(originRequest.previous_sources,[{type:'upload',id:originOpinion.id}]);
+  originTrace=await readOrigin();assert.equal(originTrace.calls.length,originBefore.calls.length+2);const originCall=originTrace.calls.at(-1),originInputs=originCall.inputs;
+  assert.deepEqual(originInputs.images,[{mime:'image/png',sha256:require('node:crypto').createHash('sha256').update(causeImage).digest('hex')}]);assert.equal(originInputs.reference_image_count,0);assert.deepEqual(originInputs.question_documents,[]);assert.deepEqual(originInputs.reference_documents,[{name:originName,text:originTeacherText}]);assert.deepEqual(originInputs.previous_documents,[{name:originName,text:originInitial.draft.text}]);assert.equal(originInputs.previous_text,'');assert.equal(originInputs.answer_note,originR2.feedback.note);
+  assert.equal(originCall.image_count,1);assert(originCall.texts.some(text=>text.startsWith('教师参考原文')&&text.includes(originTeacherText)));assert(!originCall.texts.filter(text=>text.startsWith('教师参考原文')).some(text=>text.includes(originInitial.draft.text)));assert(originCall.texts.some(text=>text.startsWith('上一轮待复核意见原文')&&text.includes('不是教师参考')));assert.deepEqual(originCall.validated,originReply.draft);assert.deepEqual(originCall.raw,originCall.original);
+  await eventually(async()=>/1题 · 1题需订正 · 0题未判定/.test(await originPanel().locator('[data-homework-review-status]').innerText()),'reattached result supports explicit previous-opinion recheck');assert.match(originReply.draft.comparison,/旧AI意见仅供对照/);
+  await originPanel().locator('[data-homework-review-confirm]').check();await originPanel().locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await originPanel().innerText()),'origin recheck stages a new result');
+  const originSaved=await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),readCause);
+  state=await readCause();const originSavedRecord=state.records.find(r=>r.id===originSaved.record_id),originSavedOutputs=originSavedRecord.attachments.filter(id=>![originPhoto.id,originTeacher.id,originOpinion.id].includes(id));assert.equal(originSavedOutputs.length,1);assert.equal(originSavedRecord.followup_kind,'作业检查');assert.equal(originSavedRecord.related_record_id,originR2.record_id);assert.equal(originSavedRecord.linked_task_id,originTask.id);assert.equal(originSavedRecord.child,child);assert(originSavedRecord.attachments.includes(originTeacher.id));
+  const originAfterSave=await readOrigin();assert.deepEqual(JSON.parse(originAfterSave.records.find(r=>r.id===originSaved.record_id).review_output_ids),originSavedOutputs);assert.deepEqual(originAfterSave.records.find(r=>r.id===originFormal.record_id),originFormalRow);assert.deepEqual(originAfterSave.records.find(r=>r.id===originTeacherRecord.record_id),originTrace.records.find(r=>r.id===originTeacherRecord.record_id));assert.equal(originAfterSave.calls.length,originBefore.calls.length+2,'save and lost-receipt retry add no model call');
+  await p.reload();await openOrigin();const reopenedOrigin=p.locator('[data-saved-homework-review="'+originSaved.record_id+'"] [data-saved-review-text]');await eventually(async()=>await reopenedOrigin.innerText()===originReply.draft.text,'origin recheck reopens its complete saved opinion under R2');
+  await originPanel().locator(':scope > details > summary').click();await checkOriginChoices();const originReopenedSources=await(await fetch(host.url+'api/print/homework/sources?task_id='+originTask.id+'&record_id='+originR2.record_id)).json();for(const id of [originOpinion.id,...originSavedOutputs])assert.equal(originReopenedSources.sources.find(a=>a.id===id).origin,'review_result');assert.equal(originReopenedSources.sources.find(a=>a.id===originTeacher.id).origin,'same_task');assert.deepEqual((await readOrigin()).records,originAfterSave.records);assert.equal((await readOrigin()).calls.length,originBefore.calls.length+2);assert.equal((await(await fetch(host.url+'__fixture/cause-validator')).json()).calls.length,consistencyTrace.calls.length,'isolated origin fixture does not change prior model assertions');
+  state=await readCause();assert.equal(state.tasks.find(t=>t.id===originTask.id).update,null);assert.equal(state.records.filter(r=>r.source==='错题照片核对'&&r.linked_task_id===originTask.id).length,0);assert.deepEqual(state.printing.jobs.map(j=>j.id).sort(),printIdsBeforeChecks);assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);
+  if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.writeFile(path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'review-origin-'+width+'.json'),JSON.stringify({scope:'synthetic same-name teacher and AI output; real HTTP, shared validator, browser save/retry/reopen; not model accuracy',original:originOriginal.record_id,formal:originFormal.record_id,reattached:originR2.record_id,photo:originPhoto.id,teacher:originTeacher.id,previous:originOpinion.id,request:originRequest,validator:originCall,feedback:originSaved,output_ids:originSavedOutputs,sources:originReopenedSources},null,2));await reopenedOrigin.scrollIntoViewIfNeeded();await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'review-origin-reopened-'+width+'.png')})}
   assert.deepEqual(errors,[]);await p.close();
  }
  console.log('Homework feedback AI review: 360/1440 save, retry, reopen, task status and source preserved');
