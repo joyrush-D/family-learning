@@ -695,7 +695,9 @@ runpy.run_path('demo.py',run_name='__main__')`;
   async function selectCoverage(previous){
    if(!await coveragePanel().locator(':scope > details').evaluate(x=>x.open))await coveragePanel().locator(':scope > details > summary').click();
    for(const [id,role] of [[coverageAnswer.id,'question'],[coverageTeacher.id,'reference'],...(previous?[[previous,'previous']]:[])]){
-    const choice=coveragePanel().locator('[data-review-source="'+id+'"]');await choice.locator('[data-homework-review-photo]').check();await choice.locator('[data-homework-review-role]').selectOption(role);
+    const choice=coveragePanel().locator('[data-review-source="'+id+'"]');await choice.locator('[data-homework-review-photo]').check();
+    const options=choice.locator('details');if(!await options.evaluate(x=>x.open))await options.locator(':scope > summary').click();
+    await choice.locator('[data-homework-review-role]').selectOption(role);
    }
   }
   await selectCoverage();const coverageTraceBefore=(await(await fetch(host.url+'__fixture/question-coverage')).json()).calls.length;
@@ -704,6 +706,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
   await coveragePanel().locator('[data-homework-review-run]').click();await eventually(async()=>/2题 · 0题需订正 · 1题未判定/.test(await coveragePanel().locator('[data-homework-review-status]').innerText()),'omitted second question becomes visible');
   const missingRow=coveragePanel().locator('.homework-question').filter({hasText:'虚构甲卷第2题'});assert.equal(await missingRow.count(),1);assert.match(await missingRow.innerText(),/未返回逐题检查结果/);assert.match(await missingRow.innerText(),/孩子作答：未能辨认/);
   const coverageGapText=await coveragePanel().locator('[data-homework-review-result] textarea').inputValue();assert(!coverageGapText.includes('第1、2题均正确'));assert(coverageGapText.includes('虚构甲卷第2题'));
+  if(process.env.HOMEWORK_QUICK_PROOF_DIR){await missingRow.scrollIntoViewIfNeeded();await p.screenshot({path:require('node:path').join(process.env.HOMEWORK_QUICK_PROOF_DIR,'question-coverage-gap-'+width+'.png')})}
   await coveragePanel().locator('[data-homework-review-confirm]').check();await coveragePanel().locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await coveragePanel().innerText()),'gap staged for save');
   const coverageGapSaved=await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),readCause);
   await p.reload();await openCoverage();const savedGap=p.locator('[data-saved-homework-review="'+coverageGapSaved.record_id+'"] [data-saved-review-text]');await eventually(async()=>await savedGap.innerText()===coverageGapText,'missing question remains visible on reopen');
