@@ -941,7 +941,7 @@ def homework_review_result_bindings(c,child,names):
         if names.get(previous.get('child'),previous.get('child'))==child: versions.append(previous)
     events=[];known={};bindings=[]
     for record in versions:
-        record=dict(followup_kind='',related_record_id=None,note='',**record)
+        record=dict(followup_kind='',related_record_id=None,note='')|record
         try:
             attachments=json.loads(record['attachments'])
             kind=record.get('followup_kind','');parent=record.get('related_record_id')
