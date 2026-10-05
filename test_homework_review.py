@@ -366,7 +366,7 @@ def review_origin_http_checks(app,upload):
                     assert generate.call_args.kwargs['previous_documents']==[dict(name=name,text=text)]
                     assert [d['name'] for d in generate.call_args.kwargs['reference_documents']]==[
                         'synthetic-origin-ordinary-teacher.txt',school_teacher_name]
-                    assert name not in [d['name'] for d in generate.call_args.kwargs['reference_documents']]
+                    assert dict(name=name,text=text) not in generate.call_args.kwargs['reference_documents'], 'same filenames do not make AI text a teacher input'
                 assert dump()==before,'an allowed text input stays a draft until explicitly saved'
             next_opinion=upload('作业批改参考-'+str(reattached['record_id'])+'.txt',rechecked['draft']['text'].encode())
             with patch.object(family_llm,'_chat_json') as model:
