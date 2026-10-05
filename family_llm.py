@@ -1182,15 +1182,15 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
                 raise LLMDraftError('检查结果的卷别或题号为空或重复，无法分别核对；请明确卷别、题号与小题后再次检查')
             seen_question_labels.add(question_label)
         if review and teacher_reference and question_kind=='objective' and item['answer'].startswith('教师参考：'):
-            # ponytail: literal A-H single choices only; broader answers need an evidenced comparator.
-            student=item['student_answer'].strip().upper()
-            reference=item['answer'].removeprefix('教师参考：').strip().upper()
+            # ponytail: literal uppercase A-H only; other answers need an evidenced comparator.
+            student=item['student_answer'].strip()
+            reference=item['answer'].removeprefix('教师参考：').strip()
             if (re.fullmatch('[A-H]',student) and re.fullmatch('[A-H]',reference)
                     and item['judgment'] in ('correct','incorrect')
                     and (student==reference)!=(item['judgment']=='correct')):
                 item['judgment']='unknown'
                 item['error_reason']=item['possible_cause']=item['steps']=''
-                item['uncertainty']=('单选作答与教师参考的字母比较和模型判定矛盾，请重新核对。'+item['uncertainty'].strip())[:300]
+                item['uncertainty']=('字母作答与教师参考的比较和模型判定矛盾，请重新核对。'+item['uncertainty'].strip())[:300]
         if review and not item['question'].strip() and question_kind!='objective':
             # Matching reference words cannot establish a subjective answer's completeness.
             # Keep the observed answer and teacher original, but not the model's unsupported grade.
