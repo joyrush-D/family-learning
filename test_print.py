@@ -356,7 +356,8 @@ class PrintTests(unittest.TestCase):
         with patch.object(family_llm,'_chat_json',return_value=dict(items=[item],coverage='仅第1题，其余未核对')) as chat:
             draft=family_llm.homework_reference_draft([dict(mime=i['mime'],data=i['data']) for i in images],review=True)
         self.assertEqual(sum(p['type']=='image_url' for p in chat.call_args.args[0][1]['content']),8)
-        self.assertIn('其余未核对',draft['coverage'])
+        self.assertIn('其余未核对',draft['unverified_model_summary']['coverage'])
+        self.assertIn('未列入本次逐题结果',draft['coverage'])
         with patch.object(family_llm,'_chat_json',side_effect=AssertionError('invalid input must not call a model')):
             for args in (dict(images=images),dict(images=images+[images[0]],review=True)):
                 # Only mime/data are part of the model input, not the internal file fingerprint.
