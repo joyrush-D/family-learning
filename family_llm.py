@@ -1157,7 +1157,7 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
     result={**result,'items':[dict(item) if isinstance(item,dict) else item for item in result['items']]}
     limits=dict(label=80,question=800,student_answer=300,answer=1000,error_reason=600,
                 possible_cause=600,steps=1200,uncertainty=300)
-    missing_requirements=[];downgraded_judgments=[];seen_question_labels=set()
+    seen_question_labels=set()
     for item in result['items']:
         question_kind=None
         if review:
@@ -1186,11 +1186,9 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
             gap=('原题与主观题作答、评分要求未提供，不能仅凭参考文字相同判定完整。'
                  if question_kind=='subjective' else '原题与题型要求无法核对，不能仅凭参考文字判定。')
             item['uncertainty']=(gap+item['uncertainty'].strip())[:300]
-            missing_requirements.append(item['label'])
         if (item['judgment']!='unknown' and (not item['student_answer'].strip() or not item['answer'].strip() or item['uncertainty'].strip())
                 or item['judgment']=='incorrect' and not item['error_reason'].strip()
                 or item['judgment']!='incorrect' and (item['error_reason'].strip() or item['possible_cause'].strip())):
-            if review and item['judgment']!='unknown': downgraded_judgments.append(item['label'])
             if item['uncertainty'].strip():
                 if not teacher_reference or not item['answer'].startswith('教师参考：'): item['answer']=''
                 item['steps']=''
@@ -1209,20 +1207,18 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
     if (not isinstance(comparison,str) or len(comparison)>1000
             or any(ord(ch)<32 and ch not in '\n\r\t' or ord(ch)==127 for ch in comparison)):
         raise LLMDraftError('复核比较说明须为最多1000字的可核对文字')
-    reconcile_summary=review and bool(missing_requirements or downgraded_judgments)
+    unknown=sum(item['judgment']=='unknown' for item in result['items'])
+    reconcile_summary=review and bool(unknown)
     if reconcile_summary:
-        # A model summary may still carry a grade refused above. Rebuild it from
-        # final judgments; per-question gaps and program-written page scope stay intact.
-        unknown_labels='、'.join(item['label'] or '第%d题'%index for index,item in enumerate(result['items'],1) if item['judgment']=='unknown')[:700]
-        comparison=('本次仅核对所选材料。'+unknown_labels+'因逐题所列依据缺口或冲突，保持未判定；'
-                    '不能沿用上一轮对这些题目的确定判定，具体原因见逐题不确定说明。教师参考和实际作答分别保留；'
-                    '其他有依据的题目保留本次逐题答案比较。旧AI意见不作教师依据，本轮不代表全部完成或全卷检查完。')
-        result['coverage']=('仅按本次所选材料作有限核对，共%d项；'%len(result['items'])+
-                            unknown_labels[:300]+'仍未判定，具体依据缺口或冲突见逐题说明；'
-                            '其他题目按本次逐题结果核对，不能据此称全部答对、全部完成或全卷检查完成。')
+        unverified_model_summary=dict(coverage=result['coverage'],comparison=comparison)
+        # Original unknowns and downgraded grades share the final summary. Keep
+        # question identities once, in their rows, and retain program page scope.
+        comparison=('本次%d题未判定，不能沿用上一轮对这些题的确定判定。'%unknown+
+                    '其他题目以本次逐题结果为准；教师参考和孩子作答分别保留，旧AI意见不作答案依据。')
+        result['coverage']=('本次%d题，%d题仍未判定。'%(len(result['items']),unknown)+
+                            '未列入本次逐题结果的题目和资料范围仍未检查；模型原覆盖说明尚未核明。')
     wrong=[item for item in result['items'] if item['judgment']=='incorrect']
     if review:
-        unknown=sum(item['judgment']=='unknown' for item in result['items'])
         correct=len(result['items'])-len(wrong)-unknown
         text=['本次核对%d题：需订正%d题，与参考一致%d题，未判定%d题。'%(len(result['items']),len(wrong),correct,unknown)]
         for index,item in enumerate(result['items'],1):
@@ -1262,6 +1258,7 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
     draft=dict(text=joined,coverage=coverage,items=len(result['items']),questions=result['items'],
                wrong_items=len(wrong),unknown_items=sum(i['judgment']=='unknown' for i in result['items']))
     if 'comparison' in result or reconcile_summary: draft['comparison']=comparison
+    if reconcile_summary: draft['unverified_model_summary']=unverified_model_summary
     return draft
 
 
