@@ -97,6 +97,50 @@ class SchoolActionInventoryTests(unittest.TestCase):
         reading = self.proposal('朗读Unit 2课文两遍', refs, due='2026-10-06')
         self._assert_rejected_batch(payload, self.run_receipt(payload, [reading]))
 
+    def test_weekday_numbered_actions_keep_two_tasks_or_retry(self):
+        quotes = ('朗读Unit 2课文两遍', '完成练习卷第1–3题')
+        standard = '完成后自查并请家长签字'
+        variants = (('周五前', '2026-10-09'), ('星期五前', '2026-10-09'),
+                    ('礼拜五前', '2026-10-09'), ('本周五前', '2026-10-09'),
+                    ('下周五前', '2026-10-16'), ('', ''))
+        for prefix, due in variants:
+            for dated in (0, 1):
+                for complete in (True, False):
+                    with self.subTest(prefix=prefix, dated=dated, complete=complete):
+                        t = type(self)(methodName='runTest')
+                        t.setUp()
+                        try:
+                            text = '英语作业：' + '；'.join(
+                                str(i + 1) + '. ' + (prefix if i == dated else '') + quote
+                                for i, quote in enumerate(quotes)) + '；' + standard + '。'
+                            payload, refs = t._ingest([text])
+                            proposals = [t.proposal(quote, refs, due=due if i == dated else '')
+                                         for i, quote in enumerate(quotes)]
+                            result = t.run_receipt(payload, proposals if complete else [proposals[1 - dated]])
+                            if not complete:
+                                t._assert_rejected_batch(payload, result)
+                                continue
+                            rows = t.saved(payload, result, 2)
+                            today = t.now.date().isoformat()
+                            listed = {x['task_id']: x for x in t.app.calendar_snapshot(today, today)['inbox']
+                                      if x['task_id'] in {r['task_id'] for r in rows}}
+                            self.assertEqual(set(listed), {r['task_id'] for r in rows})
+                            for i, own in enumerate(quotes):
+                                row = next(r for r in rows if own in r['title'])
+                                expected_due = due if i == dated else ''
+                                self.assertEqual((row['state'], row['due']), ('accepted', expected_due))
+                                item = listed[row['task_id']]
+                                self.assertEqual(item['child_ids'], [t.source['child_id']])
+                                self.assertEqual((item['agenda']['published_on'], item['agenda']['due_on'],
+                                                  item['agenda']['scheduled_on'], item['agenda']['category']),
+                                                 (today, expected_due, '', 'homework'))
+                                for body in (row['body'], item['body']):
+                                    self.assertIn(own, body)
+                                    self.assertNotIn(quotes[1 - i], body)
+                                    self.assertEqual(standard in body, i == 1)
+                        finally:
+                            t.doCleanups()
+
     def test_semicolon_actions_cannot_be_covered_by_one_message_reference(self):
         payload, refs = self._ingest(['英语作业：朗读Unit 2课文两遍；完成练习卷第1–3题。'])
         reading = self.proposal('朗读Unit 2课文两遍', refs)
