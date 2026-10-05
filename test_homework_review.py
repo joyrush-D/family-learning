@@ -395,6 +395,38 @@ def recheck_pending_http_checks(app,upload):
             state=pending|dict(pending_labels=labels)
             frame='作业检查保存格式 v2\n复核待补清单：'+json.dumps(state)+'\n最新检查字数：1\n甲\n'
             assert family_print.review_text(frame,saved=True)['continuation']==state,'valid bounded labels must survive JSON escaping'
+        with patch.object(family_llm,'_chat_json',return_value=omitted):
+            status,out=http('/api/print/homework/draft',continued|dict(question_sources=request['reference_sources'],reference_sources=request['question_sources']))
+            assert status==200 and out['draft']['unknown_items']==0,'role changes must not inherit old pending labels'
+            path=Path(app.DATA)/'uploads'/teacher;old=path.read_bytes()
+            try:
+                path.write_bytes(old.replace(b'C',b'D'))
+                status,out=http('/api/print/homework/draft',continued)
+                assert status==200 and out['draft']['unknown_items']==0,'same ID with changed bytes is a new review scope'
+            finally: path.write_bytes(old)
+        pdf=upload('synthetic-pending-reference.pdf',b'%PDF-synthetic-pending')
+        app.save_task_feedback(dict(task_id=task['id'],child='示例甲',day='2026-10-05',request_key='synthetic-pending-pdf',attachments=[pdf]))
+        pdf_request=request|dict(reference_sources=[dict(type='upload',id=pdf,pages=[1])])
+        def render(body,pages,deadline):
+            return dict(page_count=2,pages=[dict(page=p,mime_type='image/png',data=png(p)) for p in pages],omitted_pages=[],complete=False)
+        with patch.object(family_pdf,'page_count',return_value=2),patch.object(family_pdf,'render_pages',side_effect=render):
+            with patch.object(family_llm,'_chat_json',return_value=raw):
+                status,partial=http('/api/print/homework/draft',pdf_request);assert status==200,partial
+            with patch.object(family_llm,'_chat_json',return_value=omitted):
+                status,out=http('/api/print/homework/draft',pdf_request|dict(reference_sources=[dict(type='upload',id=pdf,pages=[2])],previous_continuation=partial['draft']['continuation']))
+                assert status==200 and out['draft']['unknown_items']==0,'changing PDF selection must not inherit old scope'
+        # Plain imported opinions never become deterministic scope checklists, even with a v2-shaped header.
+        state=pending;frame='作业检查保存格式 v2\n复核待补清单：'+json.dumps(state)+'\n最新检查字数：1\n甲\n'
+        plain=upload('synthetic-pending-imported-opinion.txt',frame.encode())
+        app.save_task_feedback(dict(task_id=task['id'],child='示例甲',day='2026-10-05',request_key='synthetic-pending-imported',attachments=[plain]))
+        with patch.object(family_llm,'_chat_json',return_value=omitted):
+            status,out=http('/api/print/homework/draft',request|dict(previous_sources=[dict(type='upload',id=plain)]))
+            assert status==200 and out['draft']['unknown_items']==0,'imported text is not a product checklist'
+        corrected=app.save_task_feedback(dict(task_id=task['id'],child='示例甲',day='2026-10-05',record_id=original['record_id'],
+            expected_created=original['feedback']['created'],note='虚构原作答说明更正。',attachments=[answer,teacher]))
+        with patch.object(family_llm,'_chat_json',return_value=omitted):
+            status,out=http('/api/print/homework/draft',continued|dict(expected_created=corrected['feedback']['created']))
+            assert status==200 and out['draft']['unknown_items']==0,'a new answer version must not inherit the old checklist'
     finally:
         server.shutdown();server.server_close();worker.join(timeout=3)
 

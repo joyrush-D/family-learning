@@ -61,7 +61,7 @@ def mock_chat(messages,schema,name,timeout,**kwargs):
         if any(text.startswith('家长本次补充') and '再次漏列' in text for text in texts):
             raw['question_labels']=[first['label']]
         if any(text.startswith('家长本次补充') and '补查第2题' in text for text in texts):
-            assert any(text.startswith('上一轮待复核意见原文') and '未返回逐题检查结果' in text for text in texts)
+            assert any(text.startswith('上一轮待复核意见原文') and '虚构甲卷第2题' in text and '未判定' in text for text in texts)
             raw['items'].append(dict(first,label='虚构甲卷第2题',question='6-2=?',student_answer='3',answer='教师参考：4',judgment='incorrect',error_reason='孩子作答3与教师参考4不同。'))
         coverage_calls.append(dict(raw=raw,original=copy.deepcopy(raw),texts=texts,image_count=sum(part.get('type')=='image_url' for part in content)))
         return raw
