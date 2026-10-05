@@ -86,6 +86,41 @@ def output_contract_checks():
     return calls
 
 
+def choice_judgment_checks():
+    """Explicit single-choice letters must not contradict their own comparison."""
+    calls=0
+    def generate(question,*,previous=False):
+        nonlocal calls
+        raw=dict(question_labels=[question['label']],items=[question],coverage='本题已与教师参考核对。')
+        original=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            draft=family_llm.homework_reference_draft([],review=True,
+                question_documents=[dict(name='synthetic-choice-child.txt',text='虚构甲卷第1题最终作答C。')],
+                reference_documents=[dict(name='synthetic-choice-teacher.txt',text='虚构甲卷第1题教师参考B。')],
+                previous_text='虚构旧意见：第1题正确。' if previous else '')
+            assert model.call_count==1 and raw==original
+            calls+=1
+        return draft
+    for previous in (False,True):
+        for student,answer,judgment in (('C','B','correct'),('B','B','incorrect'),
+                                        (' c ',' b ','correct'),('b','B','incorrect')):
+            question=item(label='虚构甲卷第1题',student_answer=student,answer='教师参考：'+answer,
+                judgment=judgment,error_reason='虚构模型判为不同。' if judgment=='incorrect' else '')
+            draft=generate(question,previous=previous);q=draft['questions'][0]
+            assert q['judgment']=='unknown' and draft['unknown_items']==1 and draft['wrong_items']==0
+            assert q['student_answer']==student and q['answer']==question['answer']
+            assert '判定矛盾' in q['uncertainty'] and not q['error_reason'] and not q['possible_cause'] and not q['steps']
+            assert draft['text'].startswith('本次核对1题：需订正0题，与参考一致0题，未判定1题。')
+    for question in (item(),item(student_answer='C',judgment='incorrect',error_reason='C与教师参考B不同。'),
+                     item(student_answer='C',judgment='unknown',uncertainty='原题号未核明。'),
+                     item(question='虚构解释题：说明原因。',question_kind='subjective',student_answer='因为阳光',answer='教师参考：有阳光'),
+                     item(student_answer='1/2',answer='教师参考：0.5'),
+                     item(student_answer='AB',answer='教师参考：BA')):
+        draft=generate(question)
+        assert draft['questions'][0]['judgment']==question['judgment'], 'do not infer semantic, numeric or multiple-choice equivalence'
+    return calls
+
+
 def duplicate_question_checks():
     """One visible question identity cannot carry two counts or opposite grades."""
     calls=0
@@ -542,7 +577,7 @@ def review_origin_http_checks(app,upload):
 
 
 def run():
-    contract_cases=output_contract_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()
+    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:
         root=Path(temporary);data=root/'private';data.mkdir()
         with patch.dict(os.environ,{'FAMILY_DATA':str(data)}):
