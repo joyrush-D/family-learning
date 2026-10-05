@@ -133,8 +133,10 @@ class HomeworkReviewTextTests(unittest.TestCase):
             self.assertEqual(draft['text'].count(item['label']),1)
         self.assertEqual(draft['text'].count('卷面作答：'),3)
         for text in ('卷面作答：4','教师参考：5','错误依据：4与5不同。','订正建议：独立重算，再核对5。',
-                     '卷面作答：2','教师参考：2','未判定','本次未提供作答。',scope[0],raw['coverage'],raw['comparison']):
+                     '卷面作答：2','教师参考：2','未判定','本次未提供作答。',scope[0],'1题仍未判定'):
             self.assertIn(text,draft['text'])
+        self.assertEqual(draft['unverified_model_summary'],dict(coverage=raw['coverage'],comparison=raw['comparison']))
+        self.assertNotIn(raw['comparison'],draft['text'])
         self.assertNotIn('可能原因',draft['text'])
         self.assertLess(draft['text'].index('卷面作答：4'),draft['text'].index('覆盖说明：'))
         self.assertIn('不代表作业已完成或已经掌握',draft['text'])

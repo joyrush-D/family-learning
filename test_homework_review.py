@@ -163,7 +163,8 @@ def summary_consistency_checks():
         assert not q['error_reason'] and not q['steps'] and q['uncertainty']
         assert stale_coverage not in d['coverage']+d['text'],'coverage must not retain a grade the program refused'
         assert stale_comparison not in d['comparison']+d['text'],'comparison must not retain a grade the program refused'
-        assert '甲卷第3题' in d['coverage'] and '未判定' in d['coverage'] and '不能沿用' in d['comparison']
+        assert d['text'].count('甲卷第3题')==1 and '1题仍未判定' in d['coverage'] and '不能沿用' in d['comparison']
+        assert d['unverified_model_summary']==dict(coverage=stale_coverage,comparison=stale_comparison)
         assert scope in d['coverage'] and scope in d['text'],'actual selected and unread pages must remain visible'
         assert q['uncertainty'] in d['text'] and q['student_answer'] in d['text']
         if change.get('answer')!='': assert q['answer']=='教师参考：B'
@@ -182,16 +183,26 @@ def summary_consistency_checks():
     # A missing optional comparison still needs the replacement when a grade was changed.
     d=generate([conflict],stale_coverage)
     assert d['comparison'] and '未判定' in d['comparison']
+    original_unknown=definite|dict(judgment='unknown',student_answer='',error_reason='',uncertainty='答题格空白。')
+    mixed_scope='第3题正确；作文未提供，超出本批材料。'
+    d=generate([original_unknown,item(label='乙卷第3题')],mixed_scope,stale_comparison,program_scope=[scope])
+    assert [q['judgment'] for q in d['questions']]==['unknown','correct']
+    assert '第3题正确' not in d['text']+d['coverage']+d['comparison']
+    assert d['unverified_model_summary']==dict(coverage=mixed_scope,comparison=stale_comparison)
+    assert '未列入本次逐题结果的题目和资料范围仍未检查' in d['coverage'] and scope in d['text']
+    assert d['questions'][0]['uncertainty']=='答题格空白。' and d['questions'][0]['answer']=='教师参考：B'
     # Sound existing comparisons and reference-printing output retain their original contract.
     normal_coverage='虚构甲卷仅核第1、2题；第3题尚未检查。'
     normal_comparison='虚构复核：第1题一致，第2题仍需订正，第3题未检查。'
     d=generate([sound_correct,sound_wrong],normal_coverage,normal_comparison)
     assert d['coverage']==normal_coverage and d['comparison']==normal_comparison
+    assert 'unverified_model_summary' not in d
     assert normal_comparison in d['text'] and normal_coverage in d['text']
     printed=definite|dict(uncertainty='虚构参考冲突。');printed.pop('question_kind')
     d=generate([printed],normal_coverage,review=False)
     assert d['questions'][0]['judgment']=='unknown' and d['coverage']==normal_coverage
     assert 'comparison' not in d,'reference printing must not gain review comparison fields'
+    assert 'unverified_model_summary' not in d
     return calls
 
 
@@ -604,10 +615,11 @@ def run():
             assert limited['questions'][1]['student_answer']=='Plants get energy from sunlight.'
             assert limited['questions'][1]['answer']=='教师参考：Plants get energy from sunlight.'
             assert all(not q['steps'] and not q['error_reason'] and not q['possible_cause'] for q in limited['questions'][1:])
-            assert 'Q2' in limited['comparison'] and 'Q3' in limited['comparison'] and '不能沿用' in limited['comparison']
+            assert '2题' in limited['comparison'] and '不能沿用' in limited['comparison']
+            assert all(limited['text'].count(label)==1 for label in ('Q2','Q3'))
             assert '上一轮三题均正确' not in limited['comparison']
             assert 'Q1—Q3均正确，整卷已检查完' not in limited['text']+limited['coverage']
-            assert all(label in limited['coverage'] for label in ('Q2','Q3')) and '仍未判定' in limited['coverage']
+            assert '2题仍未判定' in limited['coverage']
             assert answer_only_raw['coverage']=='Q1—Q3均正确，整卷已检查完'
             assert answer_only_raw['items'][1]['question_kind']=='subjective' and answer_only_raw['items'][1]['judgment']=='correct'
             for kind in ('unknown','subjective'):
