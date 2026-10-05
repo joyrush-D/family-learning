@@ -87,10 +87,10 @@ class SchoolNativeCoverageTests(unittest.TestCase):
 
         self.model.side_effect = saved_reply
 
-    def _assert_rejected_batch(self, payload, result):
+    def _assert_rejected_batch(self, payload, result, *, model_calls=1):
         self.assertEqual((result['failed'], result['processed'], result['created']), (1, 0, 0),
                          'invalid action allocation must not finish or partially save the batch')
-        self.assertEqual(self.model.call_count, 1)
+        self.assertEqual(self.model.call_count, model_calls)
         with self.store._db() as c:
             self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages ORDER BY rowid')],
                              [0] * len(payload['messages']))
