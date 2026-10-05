@@ -139,6 +139,10 @@ class SchoolNativeCoverageTests(unittest.TestCase):
                 self.assertEqual((row['due'], row['state']), ('2026-10-06', 'accepted'))
                 self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], expected_refs)
                 self.assertEqual(json.loads(row['plan'])['school_task']['purpose'], 'learning')
+                scope=json.loads(row['plan'])['school_original_action']
+                self.assertEqual(scope['identity'],agent._hash([row['child_id'],sorted(
+                    agent._json([a['ref'],a['upload_ids'],a['quote']]) for a in scope['anchors'])]))
+                self.assertTrue(all(a['upload_ids']==[] and a['pages']==[] for a in scope['anchors']))
             tasks = {r['id']: dict(r) for r in c.execute('SELECT * FROM manual_tasks')}
             self.assertEqual(set(tasks), {r['task_id'] for r in saved})
             for row in saved:

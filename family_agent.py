@@ -1554,6 +1554,8 @@ class Store:
                 # Validate the whole initial batch before inserting its independent sibling candidates.
                 for item in items:
                     plan=item.get('plan',{});raw=plan.get('school_selection_receipt');brief=plan.get('school_task',{})
+                    if plan.get('school_native_action'):
+                        plan['school_original_action']=_school_native_scope(plan['school_native_action'],item['child_id'])
                     refs={e['ref'] for e in item['evidence']};evidence=[e for e in originals if e['ref'] in refs]
                     proof=_school_first_batch_correction(brief,evidence)
                     if (proof and (_school_first_batch_correction(brief,originals)!=proof
@@ -2664,11 +2666,12 @@ def _school_native_dates(action):
     return dates
 
 
-def _school_native_scope(action):
+def _school_native_scope(action,child_id=''):
     anchors=[dict(ref=action['ref'],upload_ids=[],pages=[],quote=action['quote'])]
     anchors.extend(dict(ref=s['ref'],upload_ids=[],pages=[],quote=s['quote']) for s in action['supplements'])
-    identity=_hash(sorted([a['ref'],a['upload_ids'],a['pages'],a['quote']] for a in anchors))
-    return dict(identity=identity,anchors=anchors)
+    scope=dict(anchors=anchors)
+    if child_id:scope['identity']=_hash([child_id,sorted(_json([a['ref'],a['upload_ids'],a['quote']]) for a in anchors)])
+    return scope
 
 
 def _school_native_saved(items,evidence):
