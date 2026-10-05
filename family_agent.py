@@ -2654,6 +2654,9 @@ def _school_native_blocks(text):
             if re.search(r'[，,]',clause):raise AgentError('共同标准含未核明的单项条件，完整原批次保留',code='school_action_coverage')
             # Changes and optionality still need the existing semantic reader.
             if re.search(r'选做|必做|更正|取消|撤销|撤回|改为|改期|不再(?:做|完成)|不用(?:做|完成)|无需(?:做|完成)',clause):return []
+            # ponytail: only positive common standards are compiled; negated scope needs a proved semantic allocation.
+            if re.search(r'不|无须|无需|免|勿|毋',clause[common.end():]):
+                raise AgentError('共同标准含未核明的否定条件，完整原批次保留',code='school_action_coverage')
             count=int(common[1]) if common[1].isdigit() else {'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}[common[1]]
             shared.append((count,clause))
             continue
@@ -2862,7 +2865,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         fields['properties'].update(action_quote={'type':'string','maxLength':600},existing_item_id={'type':'string','enum':['']+[r['id'] for r in school_existing]})
     if routing: schema['properties']['proposals']['items']['properties']['task_target_id']['enum']=['']+[t['id'] for t in school_tasks]
     prompt=SCHOOL_PROMPT if routing else PROMPT
-    if native_actions:prompt+='\nrequired_native_actions是程序按原文定位的独立成果及其完整条件，不要求老师写明总数或编号。每项必须单独返回一次，title_quote逐字从该项quote选择包含动作和对象的文字，task_purpose与本项purpose一致。打印、作答、自查、签字等同一份资料的步骤已归本项，不另起任务。supplements是同一稳定发布者明确点名的本项补充，必须一起引用对应ref，不分给其他作业；不能合并独立成果，也不能只引用消息编号后漏掉要求。完整标准由程序保留，日期只按该项header/quote和各自原发送日核对，不借同通知另一项的截止。'
+    if native_actions:prompt+='\nrequired_native_actions是程序按原文定位的独立成果及其完整条件，不要求老师写明总数或编号。每项必须单独返回一次，title_quote逐字从该项quote选择包含动作和对象的文字，task_purpose与本项purpose一致。打印、作答、自查、签字等同一份资料的步骤已归本项，不另起任务。shared_conditions是本消息明确适用于所有本项的共同标准，每项都须保留。supplements是同一稳定发布者明确点名的本项补充，必须一起引用对应ref，不分给其他作业；不能合并独立成果，也不能只引用消息编号后漏掉要求。完整标准由程序保留，日期只按该项header/quote/shared_conditions和各自原发送日核对，不借同通知另一项的截止。'
     if historical: prompt+='\n这是已处理消息的独立行动补漏。逐项对照existing_actions，保留家长当前修改与accepted/dismissed/pending决定，不恢复原任务。action_quote逐字引用包含本项动作和对象的完整原句，不将多个独立事项合并；existing_item_id只有同一具体行动才填旧编号，新漏项填空。已归纳/已忽略事项也返回以覆盖输入，但不会另建。不能按标题相似合并；同消息另项仍单独返回。due只从本项action_quote按原发送日换算，不能借用同通知另一项或旧任务日期。适用性/原件仍未读保留具体缺口。'
     result = family_llm._chat_json([{'role': 'system', 'content': prompt},
         {'role': 'user', 'content': _json(content)}], schema, 'family_agent_selection', timeout=45, data_path=data_path)
