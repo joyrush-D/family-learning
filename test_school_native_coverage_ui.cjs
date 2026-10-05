@@ -67,8 +67,9 @@ try:
     fixture.stack.enter_context(patch('subprocess.Popen',side_effect=AssertionError('external CLI forbidden')))
     printer=fixture.stack.enter_context(patch.object(app.family_print.PrintStore,'enqueue',side_effect=AssertionError('printing forbidden')))
     app.printer_config=lambda:dict(printers=[],error='')
-    form=os.environ['SCHOOL_NATIVE_NOTICE_FORM'];assert form in ('numbered','semicolon','shared')
-    shared='两项都今天完成并请家长检查' if form=='shared' else ''
+    form=os.environ['SCHOOL_NATIVE_NOTICE_FORM'];assert form in ('numbered','semicolon','shared','shared_all')
+    shared=('以上作业都今天完成并请家长检查' if form=='shared_all' else
+            '两项都今天完成并请家长检查' if form=='shared' else '')
     notice=('英语，今天完成：1. 朗读Unit 2课文两遍；2. 完成练习卷第1–3题。' if form=='numbered' else
             '英语作业：朗读Unit 2课文两遍。完成练习卷第1–3题。'+shared+'。' if shared else
             '英语作业：朗读Unit 2课文两遍，今天完成；完成练习卷第1–3题，今天完成。')
@@ -209,7 +210,7 @@ async function screenshot(page,name){await noOverflow(page);await page.screensho
  try{
   assert(proofDir,'SCHOOL_NATIVE_PROOF_DIR is required');const sourcePath=await fs.realpath(__dirname),proofPath=path.resolve(proofDir);assert(proofPath!==sourcePath&&!proofPath.startsWith(sourcePath+path.sep),'proof must stay outside the checkout');await fs.mkdir(proofDir,{recursive:true});const actualProofPath=await fs.realpath(proofDir);assert(actualProofPath!==sourcePath&&!actualProofPath.startsWith(sourcePath+path.sep),'proof symlink must stay outside the checkout');proofReady=true;
   browser=await chromium.launch({headless:true,channel:process.env.PLAYWRIGHT_CHANNEL||'chrome'});
-  for(const form of ['numbered','semicolon','shared']){
+  for(const form of ['numbered','semicolon','shared','shared_all']){
   host=await server(form);proof.intake=await json(host.url+'__fixture/proof');proof.scenarios.push({form,intake:proof.intake});assert.equal(proof.intake.model_receipts,2);assert.equal(proof.intake.print_attempts,0);
   for(const width of [360,1440]){
    const page=await browser.newPage({viewport:{width,height:850},timezoneId:'Asia/Shanghai'});lastPage=page;page.noticeForm=form;page.setDefaultTimeout(10000);
