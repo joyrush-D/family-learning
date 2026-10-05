@@ -2700,6 +2700,9 @@ def _school_native_actions(evidence):
         # Standalone administrative notices already have executor, object,
         # date and handback guards. Mixed outcomes need this shared allocation.
         if len(own)==1 and own[0]['purpose']=='admin':continue
+        # A single noun-first reading retains the established reading/recording
+        # and later-supplement identity; the ledger only adds it to a multi-outcome list.
+        if len(own)==1 and re.match(r'^(?:Unit\s*[0-9]+|课文|《)',own[0]['primary']):continue
         for supplement in evidence[index+1:]:
             head=re.match(r'^补充([^：:\n]{2,40})[：:]\s*(.+)$',supplement['text'].strip(),re.S)
             if not head:continue
