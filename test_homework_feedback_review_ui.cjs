@@ -721,6 +721,15 @@ runpy.run_path('demo.py',run_name='__main__')`;
   assert.equal(await coveragePanel().locator('[data-homework-review-result] .homework-question').count(),2);assert.match(await coveragePanel().locator('[data-homework-review-status]').innerText(),/1题未判定/);
   const unsavedPending=JSON.parse(await coveragePanel().locator('[data-homework-review-result]').getAttribute('data-continuation'));assert.deepEqual(unsavedPending.pending_labels,['虚构甲卷第2题']);
   const coveragePendingText=await coveragePanel().locator('[data-homework-review-result] textarea').inputValue();
+  for(const [status,error] of [[503,'虚构补查模型失败'],[422,'本次题目与上一轮待补题合计超过25项']]){
+   const beforeFailedRecheck=(await(await fetch(host.url+'__fixture/question-coverage')).json()).calls.length;
+   await p.route('**/api/print/homework/draft',r=>r.fulfill({status,json:{error}}));
+   try{p.once('dialog',d=>d.accept());await coveragePanel().locator('[data-homework-review-run]').click();await eventually(async()=>(await coveragePanel().locator('[data-homework-review-status]').innerText()).includes(error),'failed recheck keeps known pending draft');
+    assert.equal(await coveragePanel().locator('[data-homework-review-result] textarea').inputValue(),coveragePendingText);
+    assert.deepEqual(JSON.parse(await coveragePanel().locator('[data-homework-review-result]').getAttribute('data-continuation')),unsavedPending);
+    assert.equal((await(await fetch(host.url+'__fixture/question-coverage')).json()).calls.length,beforeFailedRecheck);
+   }finally{await p.unroute('**/api/print/homework/draft')}
+  }
   if(process.env.HOMEWORK_QUICK_PROOF_DIR){await missingRow.scrollIntoViewIfNeeded();await p.screenshot({path:require('node:path').join(process.env.HOMEWORK_QUICK_PROOF_DIR,'question-coverage-gap-'+width+'.png')})}
   await coveragePanel().locator('[data-homework-review-confirm]').check();await coveragePanel().locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await coveragePanel().innerText()),'gap staged for save');
   const coverageGapSaved=await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),readCause);
