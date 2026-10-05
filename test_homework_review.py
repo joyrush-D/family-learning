@@ -206,6 +206,40 @@ def summary_consistency_checks():
     return calls
 
 
+def question_coverage_checks():
+    """A sound returned item is not proof that every supplied question was checked."""
+    calls=0
+    question=item(label='虚构甲卷第1题',question='虚构甲卷第1题：2+3=?',student_answer='5',answer='教师参考：5')
+    def generate(raw):
+        nonlocal calls
+        original=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            try:
+                return family_llm.homework_reference_draft([],review=True,
+                    question_documents=[dict(name='synthetic-paper-a-answer.txt',text='虚构甲卷\n第1题 2+3，孩子作答5。\n第2题 6-2，孩子作答3。')],
+                    reference_documents=[dict(name='synthetic-paper-a-teacher.txt',text='虚构甲卷\n第1题5。\n第2题4。')],
+                    program_coverage=['题目/孩子作答《synthetic-paper-a-answer.txt》：本次读取完整文字。'])
+            finally:
+                assert model.call_count==1 and raw==original
+                calls+=1
+    claim='第1、2题均正确，全卷已经核对完成。'
+    raw=dict(items=[question],coverage=claim,comparison=claim)
+    draft=generate(raw)
+    assert claim not in draft['text']+draft['coverage']+draft.get('comparison',''), 'a missing item must not be marked checked by a free summary'
+    assert '未列入' in draft['coverage'], 'missing inventory must leave unlisted questions explicitly unchecked'
+    scoped=raw|dict(question_labels=['虚构甲卷第1题','虚构甲卷第2题'])
+    draft=generate(scoped)
+    assert [q['label'] for q in draft['questions']]==scoped['question_labels']
+    assert [q['judgment'] for q in draft['questions']]==['correct','unknown']
+    assert draft['items']==2 and draft['unknown_items']==1 and draft['wrong_items']==0
+    missing=draft['questions'][1]
+    assert all(not missing[key] for key in ('question','student_answer','answer','error_reason','possible_cause','steps'))
+    assert '未返回逐题检查结果' in missing['uncertainty'] and missing['uncertainty'] in draft['text']
+    assert draft['text'].count('虚构甲卷第2题')==1
+    assert claim not in draft['text'] and draft['unverified_model_summary']==dict(coverage=claim,comparison=claim)
+    return calls
+
+
 def summary_http_checks(app,upload):
     """Real temporary HTTP dispatch, final-source guards, save/retry and original-answer reopen."""
     from http.client import HTTPConnection
