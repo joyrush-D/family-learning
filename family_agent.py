@@ -2614,6 +2614,12 @@ def _school_native_actions(evidence):
             if len(owners)==1:
                 owners[0]['supplements'].append(dict(ref=supplement['ref'],quote=supplement['text'].strip(),goal=head[2].strip(),time=supplement['time']))
         actions.extend(own)
+    owners={}
+    for action in actions:
+        for supplement in action['supplements']:
+            owners.setdefault(supplement['ref'],set()).add(action['id'])
+    if any(len(values)!=1 for values in owners.values()):
+        raise AgentError('学校补充同时对应多项作业，原文保留待明确归属',code='school_action_coverage')
     return actions
 
 

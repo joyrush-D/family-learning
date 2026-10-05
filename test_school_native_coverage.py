@@ -262,6 +262,25 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         self._use_replies(payload, [dict(proposals=[reading, foreign_link])])
         self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
 
+    def test_two_notices_cannot_compete_for_the_same_ambiguous_supplement(self):
+        payload,refs=self._ingest([
+            '英语，明天完成两项要求：1. 朗读Unit 1课文两遍；2. 完成甲练习卷第1–3题。',
+            '英语，明天完成两项要求：1. 朗读Unit 2课文两遍；2. 完成乙练习卷第1–3题。',
+            '补充英语练习卷：第4题选做。'])
+        result=agent.run_once(self.app,self.now)
+        self.assertEqual((result['failed'],result['processed'],result['created']),(1,0,0))
+        self.model.assert_not_called()
+        with self.store._db() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],0)
+            self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages')],[0,0,0])
+            self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages')],payload['messages'])
+            self.assertEqual(c.execute('SELECT cursor FROM agent_sources').fetchone()[0],payload['cursor'])
+            job=c.execute("SELECT attempts,done,error,next_try FROM agent_jobs WHERE id LIKE 'messages:%'").fetchone()
+            self.assertEqual((job['attempts'],job['done']),(1,0))
+            self.assertIn('同时对应多项',job['error'])
+            self.assertEqual(job['next_try'],(self.now+dt.timedelta(minutes=5)).isoformat())
+
     def test_one_exercise_with_numbered_print_check_and_sign_steps_stays_one_task(self):
         # This is a steps list, not a counted list of independent outcomes.
         # The ordinary reader already returns the correct single receipt;
