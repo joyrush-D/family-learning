@@ -74,9 +74,10 @@ def output_contract_checks():
                               ('甲卷第1题\t第2页未读','甲卷第1题 第2页未读'),
                               ('甲卷第1题\r\n\t第2页未读','甲卷第1题\n 第2页未读')):
         d=draft_for(correct,coverage)
-        assert d['coverage']==expected and expected in d['text']
+        assert d['unverified_model_summary']['coverage']==expected
+        assert '未列入' in d['coverage'] and '完整覆盖尚未核明' in d['text']
         assert d['questions'][0]['judgment']=='correct' and d['unknown_items']==0
-    assert len(draft_for(correct,'范'*599+'\t')['coverage'])==600
+    assert len(draft_for(correct,'范'*599+'\t')['unverified_model_summary']['coverage'])==600
     # A 601-character raw reply cannot evade the schema's 600 limit by CRLF normalization.
     for coverage in (None,7,[],dict(text='不能替代字符串'),'范'*601,'范'*599+'\r\n'):
         rejected(correct,coverage)
@@ -191,18 +192,66 @@ def summary_consistency_checks():
     assert d['unverified_model_summary']==dict(coverage=mixed_scope,comparison=stale_comparison)
     assert '未列入本次逐题结果的题目和资料范围仍未检查' in d['coverage'] and scope in d['text']
     assert d['questions'][0]['uncertainty']=='答题格空白。' and d['questions'][0]['answer']=='教师参考：B'
-    # Sound existing comparisons and reference-printing output retain their original contract.
+    # Sound grades survive; free summaries are observations, not coverage proof.
     normal_coverage='虚构甲卷仅核第1、2题；第3题尚未检查。'
     normal_comparison='虚构复核：第1题一致，第2题仍需订正，第3题未检查。'
     d=generate([sound_correct,sound_wrong],normal_coverage,normal_comparison)
-    assert d['coverage']==normal_coverage and d['comparison']==normal_comparison
-    assert 'unverified_model_summary' not in d
-    assert normal_comparison in d['text'] and normal_coverage in d['text']
+    assert d['unverified_model_summary']==dict(coverage=normal_coverage,comparison=normal_comparison)
+    assert [q['judgment'] for q in d['questions']]==['correct','incorrect']
+    assert normal_comparison not in d['text'] and normal_coverage not in d['text']
     printed=definite|dict(uncertainty='虚构参考冲突。');printed.pop('question_kind')
     d=generate([printed],normal_coverage,review=False)
     assert d['questions'][0]['judgment']=='unknown' and d['coverage']==normal_coverage
     assert 'comparison' not in d,'reference printing must not gain review comparison fields'
     assert 'unverified_model_summary' not in d
+    return calls
+
+
+def question_coverage_checks():
+    """A sound returned item is not proof that every supplied question was checked."""
+    calls=0
+    question=item(label='虚构甲卷第1题',question='虚构甲卷第1题：2+3=?',student_answer='5',answer='教师参考：5')
+    def generate(raw):
+        nonlocal calls
+        original=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            try:
+                return family_llm.homework_reference_draft([],review=True,
+                    question_documents=[dict(name='synthetic-paper-a-answer.txt',text='虚构甲卷\n第1题 2+3，孩子作答5。\n第2题 6-2，孩子作答3。')],
+                    reference_documents=[dict(name='synthetic-paper-a-teacher.txt',text='虚构甲卷\n第1题5。\n第2题4。')],
+                    program_coverage=['题目/孩子作答《synthetic-paper-a-answer.txt》：本次读取完整文字。'])
+            finally:
+                assert model.call_count==1 and raw==original
+                calls+=1
+    claim='第1、2题均正确，全卷已经核对完成。'
+    raw=dict(items=[question],coverage=claim,comparison=claim)
+    draft=generate(raw)
+    assert claim not in draft['text']+draft['coverage']+draft.get('comparison',''), 'a missing item must not be marked checked by a free summary'
+    assert '未列入' in draft['coverage'], 'missing inventory must leave unlisted questions explicitly unchecked'
+    scoped=raw|dict(question_labels=['虚构甲卷第1题','虚构甲卷第2题'])
+    draft=generate(scoped)
+    assert [q['label'] for q in draft['questions']]==scoped['question_labels']
+    assert [q['judgment'] for q in draft['questions']]==['correct','unknown']
+    assert draft['items']==2 and draft['unknown_items']==1 and draft['wrong_items']==0
+    missing=draft['questions'][1]
+    assert all(not missing[key] for key in ('question','student_answer','answer','error_reason','possible_cause','steps'))
+    assert '未返回逐题检查结果' in missing['uncertainty'] and missing['uncertainty'] in draft['text']
+    assert draft['text'].count('虚构甲卷第2题')==1
+    assert claim not in draft['text'] and draft['unverified_model_summary']==dict(coverage=claim,comparison=claim)
+    second=item(label='虚构甲卷第2题',question='虚构甲卷第2题：6-2=?',student_answer='3',answer='教师参考：4',
+                judgment='incorrect',error_reason='孩子作答3与教师参考4不同。')
+    completed=generate(scoped|dict(items=[question,second]))
+    assert [q['judgment'] for q in completed['questions']]==['correct','incorrect']
+    assert completed['unknown_items']==0 and completed['wrong_items']==1 and '3与教师参考4' in completed['text']
+    for labels in ([],['虚构甲卷第1题']*2,['虚构甲卷第1题','虚构甲卷 第1题'],['虚构甲卷第2题'],
+                   ['虚构甲卷第1题',3],['虚构甲卷第1题',''],['虚构甲卷第1题','坏\x00题号'],
+                   ['虚构甲卷第1题','题'*81],['虚构甲卷第1题']+[f'虚构甲卷第{n}题' for n in range(2,27)]):
+        try: generate(raw|dict(question_labels=labels))
+        except family_llm.LLMDraftError: pass
+        else: raise AssertionError('invalid or conflicting inventory must not silently truncate or guess')
+    reordered=generate(scoped|dict(question_labels=['虚构甲卷第2题','虚构甲卷 第1题']))
+    assert [q['judgment'] for q in reordered['questions']]==['unknown','correct']
+    assert reordered['questions'][1]['label']==question['label']
     return calls
 
 
@@ -493,7 +542,7 @@ def review_origin_http_checks(app,upload):
 
 
 def run():
-    contract_cases=output_contract_checks()+duplicate_question_checks()+summary_consistency_checks()
+    contract_cases=output_contract_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:
         root=Path(temporary);data=root/'private';data.mkdir()
         with patch.dict(os.environ,{'FAMILY_DATA':str(data)}):
@@ -775,7 +824,10 @@ def run():
             recheck_request=initial_request|dict(reference_sources=[source(later_teacher)],previous_sources=[source(prior)],
                 review_instruction=instruction,previous_text=previous_text)
             comparison='虚构复核差异：第1题不变，新增第2题理由缺漏；只核对所选范围。'
-            recheck_model_result=model_result|dict(comparison=comparison)
+            recheck_model_result=model_result|dict(comparison=comparison,question_labels=['第1题','第2题'],items=[item(),
+                item(label='第2题',question='虚构第2题：判断并写出理由。',student_answer='B，未写理由。',
+                     answer='教师参考：B，必须写理由。',question_kind='subjective',judgment='incorrect',
+                     error_reason='第2题作答缺少老师要求的判断理由。')])
             def recheck_model(messages,schema,name,timeout,**kwargs):
                 serialized=json.dumps(messages,ensure_ascii=False)
                 assert all(text in serialized for text in (action,instruction,prior_text,previous_text,'第2题必须写理由'))
@@ -786,8 +838,10 @@ def run():
                 assert args['task_action']==action and args['review_instruction']==instruction and args['previous_text']==previous_text
                 assert args['previous_documents']==[dict(name=review_name,text=prior_text)]
                 assert args['reference_documents']==[dict(name='synthetic-recheck-later-teacher.txt',text='虚构教师参考：第1题B，第2题必须写理由。')]
-            assert rechecked['draft']['comparison']==comparison
-            assert comparison in rechecked['draft']['text'],'comparison must be included in the persisted review text'
+            assert rechecked['draft']['unverified_model_summary']['comparison']==comparison
+            assert [q['label'] for q in rechecked['draft']['questions']]==['第1题','第2题']
+            assert rechecked['draft']['questions'][1]['judgment']=='incorrect'
+            assert '第2题作答缺少老师要求的判断理由' in rechecked['draft']['text'], 'the new question must actually reach the saved review'
             foreign_previous=upload('synthetic-recheck-other-child.txt',b'Synthetic other-child opinion')
             app.save_task_feedback(dict(task_id=another['id'],child='示例乙',day='2026-10-02',request_key='synthetic-recheck-other-child',attachments=[foreign_previous]))
             unrelated_previous=upload('synthetic-recheck-other-task.txt',b'Synthetic unrelated-task opinion')

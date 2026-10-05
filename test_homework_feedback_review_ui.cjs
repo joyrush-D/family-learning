@@ -40,11 +40,23 @@ consistency_raw=dict(items=[
     coverage='第1题正确；作文未提供，超出本批材料。',comparison='后补老师参考后，第1题保持正确，整卷检查完成。')
 cause_calls=[]
 origin_calls=[]
+coverage_calls=[]
 validator=app.family_llm.homework_reference_draft
 def mock_chat(messages,schema,name,timeout,**kwargs):
     assert app.DATA.name.startswith('family-demo-') and name=='family_homework_reference'
     content=messages[-1]['content']
     texts=[part['text'] for part in content if part.get('type')=='text']
+    if any('虚构漏题覆盖' in text for text in texts):
+        assert 'question_labels' in schema['required'] and schema['properties']['question_labels']['maxItems']==25
+        assert any('题目/孩子作答原文' in text and '孩子作答5' in text and '孩子作答3' in text for text in texts)
+        assert any('教师参考原文' in text and '第1题5' in text and '第2题4' in text for text in texts)
+        first=dict(label='虚构甲卷第1题',question='2+3=?',student_answer='5',answer='教师参考：5',judgment='correct',question_kind='objective',error_reason='',possible_cause='',steps='',uncertainty='')
+        raw=dict(question_labels=['虚构甲卷第1题','虚构甲卷第2题'],items=[first],coverage='第1、2题均正确，全卷已经核对完成。',comparison='第1、2题均正确，全卷已经核对完成。')
+        if any(text.startswith('家长本次补充') and '补查第2题' in text for text in texts):
+            assert any(text.startswith('上一轮待复核意见原文') and '未返回逐题检查结果' in text for text in texts)
+            raw['items'].append(dict(first,label='虚构甲卷第2题',question='6-2=?',student_answer='3',answer='教师参考：4',judgment='incorrect',error_reason='孩子作答3与教师参考4不同。'))
+        coverage_calls.append(dict(raw=raw,original=copy.deepcopy(raw),texts=texts,image_count=sum(part.get('type')=='image_url' for part in content)))
+        return raw
     if any('虚构来源身份' in text for text in texts):
         raw=copy.deepcopy(cause_raw)
         raw['items'][0].update(label='虚构身份甲卷第1题',question='虚构身份甲卷第1题：2+3=?')
@@ -66,6 +78,11 @@ def mock_chat(messages,schema,name,timeout,**kwargs):
     cause_calls.append(dict(raw=copy.deepcopy(raw),original=copy.deepcopy(raw)))
     return cause_calls[-1]['raw']
 def traced_validator(*args,**kwargs):
+    if '虚构漏题覆盖' in kwargs.get('task_action',''):
+        result=validator(*args,**kwargs)
+        assert coverage_calls[-1]['raw']==coverage_calls[-1]['original']
+        coverage_calls[-1]['validated']=copy.deepcopy(result)
+        return result
     if '虚构来源身份' in kwargs.get('task_action',''):
         result=validator(*args,**kwargs)
         call=origin_calls[-1]
@@ -168,6 +185,9 @@ def unit_fixture(width):
     unit_cases[width]=result;return result
 get=app.Handler.do_GET
 def fixture_get(self):
+    if self.path=='/__fixture/question-coverage':
+        assert app.DATA.name.startswith('family-demo-')
+        return self.reply(200,dict(synthetic_only=True,shared_validator=True,real_model_calls=0,calls=coverage_calls))
     if self.path=='/__fixture/cause-validator':
         assert app.DATA.name.startswith('family-demo-')
         return self.reply(200,dict(synthetic_only=True,shared_validator=True,real_model_calls=0,calls=cause_calls))
@@ -657,6 +677,52 @@ runpy.run_path('demo.py',run_name='__main__')`;
   assert.match(await reopenedConsistency.innerText(),/需订正1题，与参考一致1题，未判定1题/);assert(!(await reopenedConsistency.innerText()).includes(staleComparison));state=await readCause();const consistencyFinalWrong=state.records.find(r=>r.id===consistencyWrongSaved.record_id),consistencyFinalCorrection=state.records.find(r=>r.id===consistencyCorrection.record_id);assert.equal(consistencyFinalWrong.related_record_id,consistencyOriginal.record_id);assert.equal(consistencyFinalCorrection.related_record_id,consistencyFinalWrong.id);for(const r of [consistencyFinalWrong,consistencyFinalCorrection]){assert.equal(r.child,child);assert.equal(r.linked_task_id,consistencyTask.id)}assert.equal(state.tasks.find(t=>t.id===consistencyTask.id).update,null);assert.deepEqual(state.printing.jobs.map(j=>j.id).sort(),printIdsBeforeChecks);
   assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);
   if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.writeFile(path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'consistency-validator-'+width+'.json'),JSON.stringify({scope:'fixed synthetic raw through real shared validator; not model accuracy',request:consistencyRequest,validator:consistencyTrace.calls.at(-1),feedback:consistencyReview,wrong:consistencyWrongSaved,correction:consistencyCorrection},null,2));await reopenedConsistency.scrollIntoViewIfNeeded();await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'consistency-reopened-'+width+'.png')})}
+
+  // A returned correct item must not hide another identified question. Save the
+  // gap, reopen it, then actually recheck the second question under the same task.
+  await p.locator('#taskDialog [data-close="taskDialog"]').click();state=await readCause();
+  const coverageTask=(await post('api/task/new',{child,title:'虚构漏题覆盖 '+width,category:'homework',action:'虚构漏题覆盖：检查甲卷两题，第2题不得漏查。',due:state.today})).task;
+  const openCoverage=async()=>{await p.locator('nav [data-page=tasks]').click();await p.locator('body[data-page=tasks] #task-group-homework').waitFor();await p.locator('[data-task-box=Inbox]').click();await p.locator('#content [data-task="'+coverageTask.id+'"]:visible').first().click();await p.locator('#taskDialog[open]').waitFor()};
+  await p.reload();await openCoverage();await p.locator('#taskForm [name=note]').fill('虚构甲卷，孩子第1题作答5，第2题作答3。');
+  const coverageAnswerName='synthetic-paper-a-answer.txt',coverageTeacherName='synthetic-paper-a-teacher.txt';
+  for(const [name,text] of [[coverageAnswerName,'虚构甲卷\n第1题 2+3，孩子作答5。\n第2题 6-2，孩子作答3。'],[coverageTeacherName,'虚构甲卷\n第1题5。\n第2题4。']]){
+   await p.locator('#fileInput').setInputFiles({name,mimeType:'text/plain',buffer:Buffer.from(text)});await p.locator('#pendingUploads').getByRole('link',{name,exact:true}).waitFor();
+  }
+  const coverageOriginal=await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),readCause);
+  state=await readCause();const coverageRecord=state.records.find(r=>r.id===coverageOriginal.record_id),coverageInputs=coverageRecord.attachments.map(id=>state.uploads.find(a=>a.id===id));
+  const coverageAnswer=coverageInputs.find(a=>a.name===coverageAnswerName),coverageTeacher=coverageInputs.find(a=>a.name===coverageTeacherName);
+  const coveragePanel=()=>p.locator('#taskFeedbackHistory [data-homework-review="'+coverageOriginal.record_id+'"]');
+  async function selectCoverage(previous){
+   if(!await coveragePanel().locator(':scope > details').evaluate(x=>x.open))await coveragePanel().locator(':scope > details > summary').click();
+   for(const [id,role] of [[coverageAnswer.id,'question'],[coverageTeacher.id,'reference'],...(previous?[[previous,'previous']]:[])]){
+    const choice=coveragePanel().locator('[data-review-source="'+id+'"]');await choice.locator('[data-homework-review-photo]').check();
+    const options=choice.locator('details');if(!await options.evaluate(x=>x.open))await options.locator(':scope > summary').click();
+    await choice.locator('[data-homework-review-role]').selectOption(role);
+   }
+  }
+  await selectCoverage();const coverageTraceBefore=(await(await fetch(host.url+'__fixture/question-coverage')).json()).calls.length;
+  await p.route('**/api/print/homework/draft',r=>r.fulfill({status:503,json:{error:'虚构模型失败，原件保留'}}));await coveragePanel().locator('[data-homework-review-run]').click();await eventually(async()=>/虚构模型失败/.test(await coveragePanel().innerText()),'coverage model failure retained');await p.unroute('**/api/print/homework/draft');
+  assert.equal((await(await fetch(host.url+'__fixture/question-coverage')).json()).calls.length,coverageTraceBefore);
+  await coveragePanel().locator('[data-homework-review-run]').click();await eventually(async()=>/2题 · 0题需订正 · 1题未判定/.test(await coveragePanel().locator('[data-homework-review-status]').innerText()),'omitted second question becomes visible');
+  const missingRow=coveragePanel().locator('.homework-question').filter({hasText:'虚构甲卷第2题'});assert.equal(await missingRow.count(),1);assert.match(await missingRow.innerText(),/未返回逐题检查结果/);assert.match(await missingRow.innerText(),/孩子作答：未能辨认/);
+  const coverageGapText=await coveragePanel().locator('[data-homework-review-result] textarea').inputValue();assert(!coverageGapText.includes('第1、2题均正确'));assert(coverageGapText.includes('虚构甲卷第2题'));
+  if(process.env.HOMEWORK_QUICK_PROOF_DIR){await missingRow.scrollIntoViewIfNeeded();await p.screenshot({path:require('node:path').join(process.env.HOMEWORK_QUICK_PROOF_DIR,'question-coverage-gap-'+width+'.png')})}
+  await coveragePanel().locator('[data-homework-review-confirm]').check();await coveragePanel().locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await coveragePanel().innerText()),'gap staged for save');
+  const coverageGapSaved=await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),readCause);
+  await p.reload();await openCoverage();const savedGap=p.locator('[data-saved-homework-review="'+coverageGapSaved.record_id+'"] [data-saved-review-text]');await eventually(async()=>await savedGap.innerText()===coverageGapText,'missing question remains visible on reopen');
+  state=await readCause();const coverageOutputs=JSON.parse(state.records.find(r=>r.id===coverageGapSaved.record_id).review_output_ids);assert.equal(coverageOutputs.length,1);const coveragePrevious=coverageOutputs[0];assert.match(coveragePrevious,/^[a-f0-9]{32}$/);await selectCoverage(coveragePrevious);await coveragePanel().locator('[data-homework-review-instruction]').fill('虚构补查第2题，按教师参考核对3与4。');
+  await coveragePanel().locator('[data-homework-review-run]').click();await eventually(async()=>/2题 · 1题需订正 · 0题未判定/.test(await coveragePanel().locator('[data-homework-review-status]').innerText()),'second question actually rechecked');
+  const checkedRow=coveragePanel().locator('.homework-question').filter({hasText:'虚构甲卷第2题'});assert.match(await checkedRow.innerText(),/孩子作答：3/);assert.match(await checkedRow.innerText(),/教师参考：4/);assert.match(await checkedRow.innerText(),/孩子作答3与教师参考4不同/);
+  const coverageCheckedText=await coveragePanel().locator('[data-homework-review-result] textarea').inputValue();await coveragePanel().locator('[data-homework-review-confirm]').check();await coveragePanel().locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await coveragePanel().innerText()),'second result staged');
+  const coverageCheckedSaved=await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),readCause);
+  const coverageWrong=p.locator('#taskFeedbackHistory [data-task-wrong-form="'+coverageOriginal.record_id+'"]');await coverageWrong.locator(':scope > summary').click();for(const [name,value] of [['label','虚构甲卷第2题'],['text','6-2=?'],['answer','3'],['correction','4']])await coverageWrong.locator('[data-wrong-field='+name+']').fill(value);
+  const coverageWrongSaved=await threeAttemptSave(p,'/api/wrong/save',coverageWrong.locator('[data-task-wrong-save]'),async()=>/结果尚未核对/.test(await coverageWrong.innerText()),async()=>/错题已保存在这份作业下/.test(await p.locator('#taskFeedbackStatus').innerText()),readCause);
+  const coverageWrongCard=p.locator('#taskFeedbackHistory .task-feedback-record').filter({has:p.locator('[data-record="'+coverageWrongSaved.record_id+'"]')});await coverageWrongCard.locator('[data-followup]').click();await p.locator('#recordDialog[open]').waitFor();const coverageCorrectionNote='虚构甲卷第2题订正：6-2=4，回原题核对。';await p.locator('#recordForm [name=note]').fill(coverageCorrectionNote);
+  const coverageCorrection=await threeAttemptSave(p,'/api/record',p.locator('#recordForm [type=submit]'),async()=>/虚构/.test(await p.locator('#recordError').innerText()),async()=>!await p.locator('#recordDialog').evaluate(x=>x.open),readCause);
+  await p.reload();await openCoverage();await p.locator('#taskFeedbackHistory').getByText(coverageCorrectionNote,{exact:false}).waitFor();const reopenedCoverage=p.locator('[data-saved-homework-review="'+coverageCheckedSaved.record_id+'"] [data-saved-review-text]');await eventually(async()=>await reopenedCoverage.innerText()===coverageCheckedText,'second check saved under original task');
+  state=await readCause();for(const id of [coverageGapSaved.record_id,coverageCheckedSaved.record_id,coverageWrongSaved.record_id,coverageCorrection.record_id]){const r=state.records.find(x=>x.id===id);assert.equal(r.child,child);assert.equal(r.linked_task_id,coverageTask.id)}assert.equal(state.tasks.find(t=>t.id===coverageTask.id).update,null);assert.deepEqual(state.printing.jobs.map(j=>j.id).sort(),printIdsBeforeChecks);
+  const coverageTrace=await(await fetch(host.url+'__fixture/question-coverage')).json();assert.equal(coverageTrace.calls.length,coverageTraceBefore+2);assert(coverageTrace.calls.slice(-2).every(call=>JSON.stringify(call.raw)===JSON.stringify(call.original)));
+  if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.writeFile(path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'question-coverage-'+width+'.json'),JSON.stringify({scope:'synthetic identified question omitted, saved, reopened and actually rechecked; real HTTP/shared validator; zero actual model or business calls',validator:coverageTrace.calls.slice(-2),original:coverageOriginal,gap:coverageGapSaved,checked:coverageCheckedSaved,wrong:coverageWrongSaved,correction:coverageCorrection},null,2));await reopenedCoverage.scrollIntoViewIfNeeded();await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'question-coverage-reopened-'+width+'.png')})}
   // Isolated origin regression: real HTTP creates F(Q,S,P), then ordinary R2
   // reuses that exact P. Only fixed synthetic model raw bypasses the transport.
   await p.locator('#taskDialog [data-close="taskDialog"]').click();state=await readCause();
@@ -698,7 +764,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
   originTrace=await readOrigin();assert.equal(originTrace.calls.length,originBefore.calls.length+2);const originCall=originTrace.calls.at(-1),originInputs=originCall.inputs;
   assert.deepEqual(originInputs.images,[{mime:'image/png',sha256:require('node:crypto').createHash('sha256').update(causeImage).digest('hex')}]);assert.equal(originInputs.reference_image_count,0);assert.deepEqual(originInputs.question_documents,[]);assert.deepEqual(originInputs.reference_documents,[{name:originName,text:originTeacherText}]);assert.deepEqual(originInputs.previous_documents,[{name:originName,text:originInitial.draft.text}]);assert.equal(originInputs.previous_text,'');assert.equal(originInputs.answer_note,originR2.feedback.note);
   assert.equal(originCall.image_count,1);assert(originCall.texts.some(text=>text.startsWith('教师参考原文')&&text.includes(originTeacherText)));assert(!originCall.texts.filter(text=>text.startsWith('教师参考原文')).some(text=>text.includes(originInitial.draft.text)));assert(originCall.texts.some(text=>text.startsWith('上一轮待复核意见原文')&&text.includes('不是教师参考')));assert.deepEqual(originCall.validated,originReply.draft);assert.deepEqual(originCall.raw,originCall.original);
-  await eventually(async()=>/1题 · 1题需订正 · 0题未判定/.test(await originPanel().locator('[data-homework-review-status]').innerText()),'reattached result supports explicit previous-opinion recheck');assert.match(originReply.draft.comparison,/旧AI意见仅供对照/);
+  await eventually(async()=>/1题 · 1题需订正 · 0题未判定/.test(await originPanel().locator('[data-homework-review-status]').innerText()),'reattached result supports explicit previous-opinion recheck');assert.match(originReply.draft.comparison,/旧AI意见不作答案依据/);assert.match(originReply.draft.unverified_model_summary.comparison,/旧AI意见仅供对照/);
   await originPanel().locator('[data-homework-review-confirm]').check();await originPanel().locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await originPanel().innerText()),'origin recheck stages a new result');
   const originSaved=await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),readCause);
   state=await readCause();const originSavedRecord=state.records.find(r=>r.id===originSaved.record_id),originSavedOutputs=originSavedRecord.attachments.filter(id=>![originPhoto.id,originTeacher.id,originOpinion.id].includes(id));assert.equal(originSavedOutputs.length,1);assert.equal(originSavedRecord.followup_kind,'作业检查');assert.equal(originSavedRecord.related_record_id,originR2.record_id);assert.equal(originSavedRecord.linked_task_id,originTask.id);assert.equal(originSavedRecord.child,child);assert(originSavedRecord.attachments.includes(originTeacher.id));
