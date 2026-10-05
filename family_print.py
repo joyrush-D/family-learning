@@ -115,14 +115,32 @@ def _read_file(path, limit):
     return data
 
 
+def review_continuation(value):
+    """Bounded unresolved labels are a checklist, never an answer or a grade."""
+    if (not isinstance(value,dict) or set(value)!={'scope_sha256','pending_labels'}
+            or not isinstance(value['scope_sha256'],str) or not re.fullmatch('[a-f0-9]{64}',value['scope_sha256'])
+            or not isinstance(value['pending_labels'],list) or len(value['pending_labels'])>25
+            or any(not isinstance(label,str) or not label.strip() or len(label)>80
+                   or any(ord(ch)<32 or ord(ch)==127 for ch in label) for label in value['pending_labels'])
+            or len({''.join(label.split()) for label in value['pending_labels']})!=len(value['pending_labels'])):
+        raise PrintError('上一轮待补题号或原件范围无法核对，请重新打开检查')
+    return value
+
+
 def review_text(value, *, saved=False):
     """Saved parent text stays text; only the product's length frame is interpreted."""
     try: text=value.decode('utf-8-sig') if isinstance(value,bytes) else value
     except UnicodeError: raise PrintError('参考或先前检查文字无法安全完整读取') from None
     if not isinstance(text,str) or any(ord(ch)<32 and ch not in '\n\r\t' or ord(ch)==127 for ch in text):
         raise PrintError('参考或先前检查文字无法安全完整读取')
-    archived=False
-    if saved and text.startswith('作业检查保存格式 v1'):
+    archived=False;continuation=None
+    if saved and text.startswith(('作业检查保存格式 v1','作业检查保存格式 v2')):
+        if text.startswith('作业检查保存格式 v2'):
+            frame=re.match(r'\A作业检查保存格式 v2\n复核待补清单：([^\n]{1,4000})\n',text)
+            if frame is None: raise PrintError('保存检查的待补清单无法核对')
+            try: continuation=review_continuation(json.loads(frame[1]))
+            except (ValueError,TypeError): raise PrintError('保存检查的待补清单无法核对') from None
+            text='作业检查保存格式 v1\n'+text[frame.end():]
         header=re.match(r'\A作业检查保存格式 v1\n最新检查字数：([1-9][0-9]{0,4})\n',text)
         if header is None: raise PrintError('保存检查的最新文字范围无法核对')
         size=int(header.group(1));content=text[header.end():]
@@ -131,7 +149,9 @@ def review_text(value, *, saved=False):
         text=content[:size];archived=bool(content[size+1:].strip())
     if not text.strip() or len(text)>12000:
         raise PrintError('参考或先前检查文字须清晰完整且最多12000字，请分批核对')
-    return dict(text=text,has_archived=archived)
+    result=dict(text=text,has_archived=archived)
+    if continuation is not None: result['continuation']=continuation
+    return result
 
 
 def _jpeg(data):
@@ -484,7 +504,7 @@ class PrintStore:
             remaining=family_pdf.DEADLINE_SECONDS-(time.monotonic()-started)
             if remaining<=0: raise family_pdf.PDFError('render timed out')
             return remaining
-        image_count=0;question_documents=[];documents=[];previous_documents=[];coverage=[]
+        image_count=0;question_documents=[];documents=[];previous_documents=[];coverage=[];continuations=[]
         for item in items:
             mime=item['mime'];body=item['body'];pages=item['source'].get('pages')
             if mime=='application/pdf':
@@ -513,6 +533,7 @@ class PrintStore:
                 archived=False
                 if text is not None:
                     parsed=review_text(text,saved=item['role']=='previous' and allowed[item['source']['id']].get('origin')=='review_result')
+                    if 'continuation' in parsed: continuations.append((item['binding'][0],parsed['continuation']))
                     text=parsed['text'];archived=parsed['has_archived']
                     target=question_documents if item['role']=='question' else previous_documents if item['role']=='previous' else documents
                     target.append(dict(name=item['name'],text=text))
@@ -545,6 +566,7 @@ class PrintStore:
         packet=[dict(role=i['role'],source=i['source'],name=i['name'],mime=i['mime'],sha256=i['sha256'],binding=i['binding']) for i in items]
         return dict(images=images,reference_images=reference_images,question_documents=question_documents,documents=documents,previous_documents=previous_documents,image_labels=image_labels,
                     reference_labels=reference_labels,coverage=coverage,fingerprint=_hash(_json(packet).encode()),
+                    scope_fingerprint=_hash(_json([i for i in packet if i['role']!='previous']).encode()),previous_continuations=continuations,
                     question_sources=[i['source'] for i in items if i['role']=='question'],
                     reference_sources=[i['source'] for i in items if i['role']=='reference'],
                     previous_sources=[i['source'] for i in items if i['role']=='previous'])

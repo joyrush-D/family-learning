@@ -1044,7 +1044,7 @@ retry提出经家庭商量后隔一段时间不看讲解再试、或试一道相
 def homework_reference_draft(images, *, data_path=None, timeout=90, review=False, reference_images=(),
                              reference_documents=(), image_labels=(), reference_labels=(), program_coverage=(),
                              previous_documents=(), previous_text='', review_instruction='', task_action='', answer_note='',
-                             question_documents=()):
+                             question_documents=(), pending_labels=()):
     """Ordered worksheet/answer images; printing stays at four, answer review at eight."""
     if type(review) is not bool: raise ValueError('作业整理用途不正确')
     limit=MAX_HOMEWORK_REVIEW_IMAGES if review else 4
@@ -1085,6 +1085,11 @@ def homework_reference_draft(images, *, data_path=None, timeout=90, review=False
             raise ValueError('批改原件页码标签不正确')
     if not isinstance(program_coverage,(list,tuple)) or len(program_coverage)>10 or any(not isinstance(line,str) or len(line)>1200 for line in program_coverage):
         raise ValueError('批改原件覆盖范围不正确')
+    if (not isinstance(pending_labels,(list,tuple)) or len(pending_labels)>25 or not review and pending_labels
+            or any(not isinstance(label,str) or not label.strip() or len(label)>80
+                   or any(ord(ch)<32 or ord(ch)==127 for ch in label) for label in pending_labels)
+            or len({''.join(label.split()) for label in pending_labels})!=len(pending_labels)):
+        raise ValueError('上一轮待补题号无法核对')
     teacher_reference=bool(reference_images or reference_documents)
     field = lambda limit: dict(type='string',maxLength=limit)
     schema=dict(type='object',additionalProperties=False,required=['items','coverage'],properties=dict(
@@ -1150,6 +1155,7 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
     if review_instruction: content.append(dict(type='text',text='家长本次补充（待核对，不是孩子作答或已证实事实）：'+review_instruction))
     if previous_documents: content.append(dict(type='text',text='上一轮待复核意见原文（不是教师参考，不作答案依据）：'+json.dumps(previous_documents,ensure_ascii=False)))
     if previous_text: content.append(dict(type='text',text='上一轮尚未保存的完整意见（待复核，不作事实或答案依据）：'+previous_text))
+    if pending_labels: content.append(dict(type='text',text='同一批原件上一轮仍待补查的题号（只作待核清单，不是题目、作答或答案证据）：'+json.dumps(list(pending_labels),ensure_ascii=False)))
     if program_coverage: content.append(dict(type='text',text='程序核对的实际原件覆盖：'+json.dumps(list(program_coverage),ensure_ascii=False)))
     result=_chat_json([dict(role='system',content=prompt),dict(role='user',content=content)],
                       schema,'family_homework_reference',timeout,data_path=data_path)
@@ -1224,6 +1230,13 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
         result['items']=[checked.get(key) or dict.fromkeys(limits,'')|dict(
             label=re.sub(r'[\r\n\t]+',' ',label).strip(),judgment='unknown',
             uncertainty='本批识别到此题，但未返回逐题检查结果，请补查。') for label,key in zip(labels,normalized)]
+    if review and pending_labels:
+        checked={''.join(item['label'].split()) for item in result['items']}
+        missing=[label for label in pending_labels if ''.join(label.split()) not in checked]
+        if len(result['items'])+len(missing)>25:
+            raise LLMDraftError('本次题目与上一轮待补题合计超过25项；上次结果保留，请缩小原件或页码范围后检查')
+        result['items'].extend(dict.fromkeys(limits,'')|dict(label=label,judgment='unknown',
+            uncertainty='上一轮此题仍未判定，本轮未返回检查结果，请补查。') for label in missing)
     if (not isinstance(result['coverage'],str) or len(result['coverage'])>600
             or any(ord(c)<32 and c not in '\n\r\t' or ord(c)==127 for c in result['coverage'])):
         raise LLMDraftError('参考草稿的覆盖范围无法核对')

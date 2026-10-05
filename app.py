@@ -1209,14 +1209,16 @@ def guard_homework_review(c,task_id,basis,attachments):
         # No second database connection, PDF probe, conversion or model inside the save transaction.
         materials=family_print.PrintStore.review_sources(DATA,basis['question_sources'],basis['reference_sources'],context['allowed'],previous_sources=basis.get('previous_sources',[]),render=False)
         if materials['fingerprint']!=basis['material_sha256'] or context['context_sha256']!=basis['context_sha256']: raise ValueError()
+        return hashlib.sha256((materials['scope_fingerprint']+context['context_sha256']).encode()).hexdigest()
     except (ValueError,KeyError,TypeError,OSError,family_reading.ReadingError):
         raise RecordError('原作答、题目或参考已变化；批改依据需要重新核对，本次反馈未保存',409,'review_basis_changed') from None
 
 def homework_review_draft(obj):
-    if not isinstance(obj,dict) or set(obj)-{'purpose','task_id','record_id','expected_created','question_sources','reference_sources','previous_sources','review_instruction','previous_text'}:
+    if not isinstance(obj,dict) or set(obj)-{'purpose','task_id','record_id','expected_created','question_sources','reference_sources','previous_sources','review_instruction','previous_text','previous_continuation'}:
         raise family_print.PrintError('请只提供这次作答的题目与教师参考')
     if 'expected_created' not in obj: raise family_print.PrintError('请保留原作答版本后重试')
     instruction=clean(obj,'review_instruction',1000);previous_text=clean(obj,'previous_text',12000)
+    continuation=family_print.review_continuation(obj['previous_continuation']) if obj.get('previous_continuation') is not None else None
     with connect() as c:
         context=homework_review_context(c,obj.get('task_id'),obj.get('record_id'),obj['expected_created'])
     materials=family_print.PrintStore.review_sources(DATA,obj.get('question_sources'),obj.get('reference_sources',[]),context['allowed'],previous_sources=obj.get('previous_sources',[]),previous_text=previous_text)
@@ -1226,14 +1228,18 @@ def homework_review_draft(obj):
                question_sources=materials['question_sources'],reference_sources=materials['reference_sources'],
                material_sha256=materials['fingerprint'],context_sha256=context['context_sha256'])
     if materials['previous_sources']: basis['previous_sources']=materials['previous_sources']
-    with connect() as c: guard_homework_review(c,obj['task_id'],basis,ids)
+    with connect() as c: scope=guard_homework_review(c,obj['task_id'],basis,ids)
+    snapshots=[(ident,value) for ident,value in materials['previous_continuations'] if value['scope_sha256']==scope]
+    if continuation is not None and continuation['scope_sha256']==scope: pending=continuation['pending_labels']
+    else: pending=max(snapshots,key=lambda entry:entry[0])[1]['pending_labels'] if snapshots else []
     draft=family_llm.homework_reference_draft(materials['images'],data_path=DATA,timeout=120,review=True,
         question_documents=materials['question_documents'],
         reference_images=materials['reference_images'],reference_documents=materials['documents'],
         image_labels=materials['image_labels'],reference_labels=materials['reference_labels'],program_coverage=materials['coverage'],
         previous_documents=materials['previous_documents'],previous_text=previous_text,review_instruction=instruction,
-        task_action=context['task']['action'],answer_note=context['record']['note'])
+        task_action=context['task']['action'],answer_note=context['record']['note'],pending_labels=pending)
     with connect() as c: guard_homework_review(c,obj['task_id'],basis,ids)
+    draft['continuation']=dict(scope_sha256=scope,pending_labels=[q['label'] for q in draft['questions'] if q['judgment']=='unknown'])
     return dict(draft=draft,question_sha256=materials['fingerprint'],review_basis=basis)
 
 def save_task(obj, connection=None):
@@ -1332,6 +1338,11 @@ def save_task_feedback(obj):
             result_name='作业批改参考-'+str(basis['record_id'])+'.txt'
             output_ids=[i for i in attachments if i not in inputs and c.execute(
                 "SELECT 1 FROM uploads WHERE id=? AND name=? AND mime LIKE 'text/plain%'",(i,result_name)).fetchone()]
+            scope=guard_homework_review(c,task_id,basis,attachments)
+            for output_id in output_ids:
+                parsed=family_print.review_text(family_print._read_file(Path(DATA)/'uploads'/output_id,family_print.MAX_SOURCE),saved=True)
+                if 'continuation' in parsed and parsed['continuation']['scope_sha256']!=scope:
+                    raise RecordError('检查待补题号不属于本次原件范围；本次反馈未保存',409,'review_basis_changed')
         if previous is not None and all(record[k]==(saved if k=='attachments' else previous[k]) for k in record if k not in ('child','source','title','review_basis')):
             # The same correction again (for example after a lost reply) changes nothing and is not a conflict.
             if request_key: raise RecordError('更正已有文字记录不能复用新增反馈的提交标识')
