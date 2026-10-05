@@ -372,6 +372,22 @@ class SchoolActionInventoryTests(unittest.TestCase):
         self.assertLessEqual(self.model.call_count, 1)
         self._assert_rejected_batch(payload, result, model_calls=self.model.call_count)
 
+    def test_supplement_cannot_use_an_object_named_only_in_a_background_clause(self):
+        payload, refs = self._ingest([
+            '英语作业：朗读Unit 4课文三遍；Unit 3不作要求；完成英语练习卷第1至3题。',
+            '补充英语Unit 3：明天上传朗读录音。'])
+        reading = self.proposal('朗读Unit 4课文三遍', refs, due='2026-10-06')
+        exercise = self.proposal('完成英语练习卷第1至3题', refs[:1])
+        self._assert_rejected_batch(payload, self.run_receipt(payload, [reading, exercise]))
+
+    def test_supplement_cannot_use_an_object_named_only_in_an_inline_negation(self):
+        payload, refs = self._ingest([
+            '英语作业：朗读Unit 4课文三遍，Unit 3不作要求；完成英语练习卷第1至3题。',
+            '补充英语Unit 3：明天上传朗读录音。'])
+        reading = self.proposal('朗读Unit 4课文三遍', refs, due='2026-10-06')
+        exercise = self.proposal('完成英语练习卷第1至3题', refs[:1])
+        self._assert_rejected_batch(payload, self.run_receipt(payload, [reading, exercise]))
+
     def test_matching_unit3_supplement_keeps_its_standard_and_own_deadline(self):
         payload, refs = self._ingest([
             '英语作业：朗读Unit 3课文三遍；完成英语练习卷第1至3题。',
