@@ -436,6 +436,9 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
         elif not incomplete: brief['reason']=brief['reason'] or '用途或内容无法从已读文字判断，请核对原消息。'
     if state=='ready' and (not brief['title'] or not brief['goal']):
         state='review';brief['reason']='原件或具体要求尚未读全，请先核对。'
+    withdrawal=r'(?:练习卷|练习册|试卷|作业本)(?:不用|无需|不再)(?:做|完成)了'
+    if state=='ready' and any(m[0] in e.get('text','') for m in re.finditer(withdrawal,brief['goal']) for e in evidence):
+        state='review';brief['reason']='归纳仍含原文已取消的作答，完整要求保留待重新整理，不加入必做。'
     if purpose=='optional' and state=='ready':
         state='review';brief['reason']='自愿参加或参考资料，不自动加入必做事项；是否参加由家长决定。'
     # The batch checks peers only after their own reading/date guards. This first
@@ -2693,8 +2696,9 @@ def _school_native_actions(evidence):
         for part in _school_native_blocks(text):
             quote=part['quote'];header=part['header']
             # A sole question/range explicitly labelled optional is not mandatory.
-            optional=re.search(r'第[^题。；;]{1,16}题[（(]选做[^）)]*[）)]\s*[。；;]?$',part['primary'])
-            if part['purpose']=='learning' and optional and '题' not in part['primary'][:optional.start()] and '必做' not in quote:
+            optional=re.search(r'第[^题。；;]{1,16}题[（(]选做[^）)]*[）)]',part['primary'])
+            if (part['purpose']=='learning' and optional and '题' not in part['primary'][:optional.start()]
+                    and '题' not in part['primary'][optional.end():] and '必做' not in quote):
                 part['purpose']='optional'
             named=set(re.findall(_SCHOOL_NATIVE_SUBJECTS,part['primary']));shared=set(re.findall(_SCHOOL_NATIVE_SUBJECTS,header))
             subject=next(iter(named)) if len(named)==1 else next(iter(shared)) if not named and len(shared)==1 else ''
