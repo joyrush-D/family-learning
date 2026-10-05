@@ -67,6 +67,30 @@ class SchoolActionInventoryTests(unittest.TestCase):
                                  (row['body'], row['due'], '待跟进'))
         return rows
 
+    def reject_inventory_change_in_transaction(self, payload, proposals, change):
+        self._use_replies(payload, [dict(proposals=proposals)])
+        real_save, real_current = agent.Store._save, agent.Store._school_selection_current
+        inflight, contexts, injected = [], [], []
+
+        def capture(store, key, fingerprint, items, *args, **kwargs):
+            if kwargs.get('school_context'):
+                inflight[:] = items
+                contexts[:] = [kwargs['school_context']]
+            return real_save(store, key, fingerprint, items, *args, **kwargs)
+
+        def changed_inventory(store, c, *args, **kwargs):
+            current = real_current(store, c, *args, **kwargs)
+            if current and c.in_transaction and inflight and not injected:
+                change(inflight, contexts[0])
+                injected.append(True)
+            return current
+
+        with patch.object(agent.Store, '_save', new=capture), \
+                patch.object(agent.Store, '_school_selection_current', new=changed_inventory):
+            result = agent.run_once(self.app, self.now)
+        self.assertEqual(injected, [True], 'check ownership after the real input check in the write transaction')
+        self._assert_rejected_batch(payload, result)
+
     def test_numbered_actions_without_announced_count_cannot_lose_second_action(self):
         payload, refs = self._ingest([
             '英语，明天完成：1. 朗读Unit 2课文两遍；2. 完成练习卷第1–3题。'])
@@ -136,6 +160,41 @@ class SchoolActionInventoryTests(unittest.TestCase):
         # Preserve the whole batch rather than replacing the correct empty due.
         self._assert_rejected_batch(payload, self.run_receipt(payload, proposals), model_calls=0)
 
+    def test_uncounted_all_assignments_keep_each_standard_and_deadline_in_the_child_list(self):
+        shared = '以上作业都请家长检查后明天提交'
+        quotes = ('朗读Unit 4课文三遍', '完成英语练习卷第1至3题')
+        payload, refs = self._ingest(['英语作业：' + '；'.join(quotes) + '。' + shared + '。'])
+        proposals = [self.proposal(quote, refs, goal=quote + '。' + shared + '。', due='2026-10-06')
+                     for quote in quotes]
+        rows = self.saved(payload, self.run_receipt(payload, proposals), 2)
+        today = self.now.date().isoformat()
+        calendar = self.app.calendar_snapshot(today, today)
+        collected = {item['task_id']: item for item in calendar['inbox']
+                     if item['task_id'] in {row['task_id'] for row in rows}}
+        self.assertEqual(set(collected), {row['task_id'] for row in rows})
+        for own, foreign in (quotes, quotes[::-1]):
+            row = next(row for row in rows if own in row['title'])
+            self.assertEqual((row['state'], row['due']), ('accepted', '2026-10-06'))
+            self.assertEqual(json.loads(row['plan'])['school_task']['state'], 'ready')
+            for body in (row['body'], collected[row['task_id']]['body']):
+                self.assertIn(own, body)
+                self.assertIn(shared, body)
+                self.assertNotIn(foreign, body, 'a common standard must not merge the two outcomes')
+            self.assertEqual(collected[row['task_id']]['child_ids'], [self.source['child_id']])
+            self.assertEqual(collected[row['task_id']]['agenda']['due_on'], '2026-10-06')
+
+    def test_uncounted_shared_standard_is_rechecked_in_the_write_transaction(self):
+        shared = '以上作业都请家长检查后明天提交'
+        quotes = ('朗读Unit 4课文三遍', '完成英语练习卷第1至3题')
+        payload, refs = self._ingest(['英语作业：' + '；'.join(quotes) + '。' + shared + '。'])
+        proposals = [self.proposal(quote, refs, goal=quote + '。' + shared + '。', due='2026-10-06')
+                     for quote in quotes]
+
+        def omit_common_standard(items, context):
+            next(item for item in items if '朗读' in item['title'])['body'] = quotes[0]
+
+        self.reject_inventory_change_in_transaction(payload, proposals, omit_common_standard)
+
     def test_unproven_shared_scope_is_rejected_before_selection(self):
         first = '英语作业：朗读Unit 2课文两遍。完成练习卷第1–3题。'
         for tail in ('三项都请家长检查。',
@@ -143,6 +202,11 @@ class SchoolActionInventoryTests(unittest.TestCase):
                      '两项都明天不用交。',
                      '两项都无需明天交。',
                      '两项都明天免交。',
+                     '以上作业都不要求明天交。',
+                     '以上作业都明天不用交。',
+                     '以上作业都无需明天交。',
+                     '以上作业都明天免交。',
+                     '以上作业都请家长检查，练习卷明天交。',
                      '两项都请家长检查。预习Unit 3课文。',
                      '两项都请家长检查。明天交。',
                      '示例：“家长检查”，仅说明格式。两项都请家长检查。'):
@@ -297,6 +361,53 @@ class SchoolActionInventoryTests(unittest.TestCase):
         self.assertEqual([e['ref'] for e in json.loads(reading_row['evidence'])], refs[:1])
         self.assertEqual([e['ref'] for e in json.loads(exercise_row['evidence'])], refs)
 
+    def test_named_unit3_supplement_cannot_bind_to_unit30(self):
+        payload, refs = self._ingest([
+            '英语作业：朗读Unit 30课文三遍；完成英语练习卷第1至3题。',
+            '补充英语Unit 3：明天上传朗读录音。'])
+        reading = self.proposal('朗读Unit 30课文三遍', refs, due='2026-10-06',
+                                goal='朗读Unit 30课文三遍。明天上传朗读录音。')
+        exercise = self.proposal('完成英语练习卷第1至3题', refs[:1])
+        result = self.run_receipt(payload, [reading, exercise])
+        self.assertLessEqual(self.model.call_count, 1)
+        self._assert_rejected_batch(payload, result, model_calls=self.model.call_count)
+
+    def test_matching_unit3_supplement_keeps_its_standard_and_own_deadline(self):
+        payload, refs = self._ingest([
+            '英语作业：朗读Unit 3课文三遍；完成英语练习卷第1至3题。',
+            '补充英语Unit 3：明天上传朗读录音。'])
+        reading = self.proposal('朗读Unit 3课文三遍', refs, due='2026-10-06')
+        exercise = self.proposal('完成英语练习卷第1至3题', refs[:1])
+        rows = self.saved(payload, self.run_receipt(payload, [reading, exercise]), 2)
+        reading_row = next(row for row in rows if '朗读' in row['title'])
+        exercise_row = next(row for row in rows if '练习卷' in row['title'])
+        self.assertEqual((reading_row['state'], reading_row['due']), ('accepted', '2026-10-06'))
+        self.assertIn('明天上传朗读录音', reading_row['body'])
+        self.assertEqual([e['ref'] for e in json.loads(reading_row['evidence'])], refs)
+        self.assertEqual((exercise_row['state'], exercise_row['due']), ('accepted', ''))
+        self.assertNotIn('上传', exercise_row['body'])
+        self.assertEqual([e['ref'] for e in json.loads(exercise_row['evidence'])], refs[:1])
+
+    def test_changed_named_supplement_is_rechecked_in_the_write_transaction(self):
+        payload, refs = self._ingest([
+            '英语作业：朗读Unit 30课文三遍；完成英语练习卷第1至3题。',
+            '补充英语Unit 30：明天上传朗读录音。'])
+        reading = self.proposal('朗读Unit 30课文三遍', refs, due='2026-10-06')
+        exercise = self.proposal('完成英语练习卷第1至3题', refs[:1])
+
+        def forge_prefix_owner(items, context):
+            # Alter only the already-checked in-flight snapshot, never the DB
+            # original. The write guard must recompute full object ownership.
+            text = '补充英语Unit 3：明天上传朗读录音。'
+            context[1][1]['text'] = text
+            item = next(item for item in items if '朗读' in item['title'])
+            action = item['plan']['school_native_action']
+            action['supplements'][0]['quote'] = text
+            item['plan']['school_original_action'] = agent._school_native_scope(action)
+            next(e for e in item['evidence'] if e['ref'] == refs[1])['text'] = text
+
+        self.reject_inventory_change_in_transaction(payload, [reading, exercise], forge_prefix_owner)
+
     def test_subjects_and_independent_actions_do_not_bleed_across_semicolons(self):
         payload, refs = self._ingest([
             '明天作业：语文，朗读《示例短文》两遍；数学，完成练习册第8页。'])
@@ -397,28 +508,11 @@ class SchoolActionInventoryTests(unittest.TestCase):
         reading = self.proposal('朗读Unit 2课文两遍', refs, due='2026-10-06')
         exercise = self.proposal('完成练习卷第1–3题', refs, due='2026-10-06',
                                  goal='完成练习卷第1–3题，第4题选做。')
-        self._use_replies(payload, [dict(proposals=[reading, exercise])])
-        real_save, real_current = agent.Store._save, agent.Store._school_selection_current
-        inflight, injected = [], []
 
-        def capture(store, key, fingerprint, items, *args, **kwargs):
-            if kwargs.get('school_context'):
-                inflight[:] = items
-            return real_save(store, key, fingerprint, items, *args, **kwargs)
+        def omit_exercise_standard(items, context):
+            next(item for item in items if '练习卷' in item['title'])['body'] = '完成练习卷第1–3题。'
 
-        def changed_standard(store, c, *args, **kwargs):
-            current = real_current(store, c, *args, **kwargs)
-            if current and c.in_transaction and inflight and not injected:
-                exercise_item = next(item for item in inflight if '练习卷' in item['title'])
-                exercise_item['body'] = '完成练习卷第1–3题。'
-                injected.append(True)
-            return current
-
-        with patch.object(agent.Store, '_save', new=capture), \
-                patch.object(agent.Store, '_school_selection_current', new=changed_standard):
-            result = agent.run_once(self.app, self.now)
-        self.assertEqual(injected, [True], 'inject only after the real input check inside the write transaction')
-        self._assert_rejected_batch(payload, result)
+        self.reject_inventory_change_in_transaction(payload, [reading, exercise], omit_exercise_standard)
 
     def test_holdout_elliptical_worksheet_still_requires_its_own_action(self):
         payload, refs = self._ingest(['英语作业：Unit 2课文读两遍；练习卷第1–3题。'])
