@@ -259,6 +259,126 @@ def summary_http_checks(app,upload):
         server.shutdown();server.server_close();worker.join(timeout=3)
 
 
+def review_origin_http_checks(app,upload):
+    """A saved AI result cannot regain an original role by attachment re-use."""
+    from http.client import HTTPConnection
+    import threading
+    source=lambda ident:dict(type='upload',id=ident)
+    answer=upload('synthetic-origin-answer.png',png(9))
+    answer_text=upload('synthetic-origin-original-answer.txt','虚构甲卷原作答：第1题B。'.encode())
+    ordinary_teacher=upload('synthetic-origin-ordinary-teacher.txt','虚构甲卷教师参考：第1题B。'.encode())
+    school_teacher=upload('synthetic-origin-school-teacher.txt','虚构学校教师参考：甲卷第1题B。'.encode())
+    app.agent_store()
+    school=dict(id='synthetic-origin-school',platform='qq',child_id='child-1',name='虚构身份学校来源',enabled=True)
+    message=dict(id='synthetic-origin-message',time='2026-10-05T12:00:00+08:00',kind='text',sender='虚构老师',
+        text='虚构甲卷教师参考',unread=False)
+    with app.connect() as c:
+        c.execute('INSERT INTO agent_sources (id,binding,cursor) VALUES (?,?,?)',
+            (school['id'],json.dumps(['qq','child-1'],separators=(',',':')),''))
+        c.execute('INSERT INTO agent_messages (source_id,id,payload) VALUES (?,?,?)',
+            (school['id'],message['id'],json.dumps(message)))
+        c.execute('INSERT INTO agent_message_attachments VALUES (?,?,?)',(school['id'],message['id'],school_teacher))
+    def dump():
+        with app.connect() as c: return '\n'.join(c.iterdump())
+    raw=dict(items=[item(label='虚构甲卷第1题')],coverage='仅虚构甲卷第1题的明确答案比较，原题要求未核。')
+    transport_original=json.loads(json.dumps(raw))
+    with patch.object(app.family_agent.Store,'_config',return_value=dict(enabled=True,sources=[school])):
+        task=app.new_task(dict(child='示例甲',title='虚构结果身份重挂',category='homework',
+            source='message:'+school['id']+':'+message['id'],request_key='synthetic-origin-task'))
+        server=app.ThreadingHTTPServer(('127.0.0.1',0),app.Handler)
+        worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
+        try:
+            def http(method,path,payload=None):
+                client=HTTPConnection('127.0.0.1',server.server_port,timeout=5)
+                try:
+                    client.request(method,path,json.dumps(payload) if payload is not None else None,
+                        {'Content-Type':'application/json','X-Family-Token':app.TOKEN})
+                    response=client.getresponse();return response.status,json.loads(response.read())
+                finally: client.close()
+            def feedback(key,attachments,note,**extra):
+                status,result=http('POST','/api/task/feedback',dict(task_id=task['id'],child='示例甲',day='2026-10-05',
+                    request_key=key,attachments=attachments,note=note)|extra)
+                assert status==200 and not result['completion_changed'],result
+                return result
+            def sources(record):
+                before=dump()
+                status,result=http('GET','/api/print/homework/sources?task_id='+task['id']+'&record_id='+str(record['record_id']))
+                assert status==200 and result['created']==record['feedback']['created'],result
+                assert dump()==before,'source classification must not migrate original records'
+                return {entry['id']:entry for entry in result['sources']}
+            original=feedback('synthetic-origin-original',[answer,answer_text],'虚构甲卷原作答，第1题B。')
+            feedback('synthetic-origin-teacher',[ordinary_teacher],'虚构家长后补教师原参考。')
+            request=dict(purpose='review',task_id=task['id'],record_id=original['record_id'],
+                expected_created=original['feedback']['created'],question_sources=[source(answer)],
+                reference_sources=[source(ordinary_teacher),source(school_teacher)])
+            with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+                status,generated=http('POST','/api/print/homework/draft',request)
+                assert status==200 and model.call_count==1 and raw==transport_original,generated
+            opinion_text=generated['draft']['text']
+            opinion_name='作业批改参考-'+str(original['record_id'])+'.txt'
+            opinion=upload(opinion_name,opinion_text.encode())
+            with patch.object(family_llm,'_chat_json') as model:
+                formal=feedback('synthetic-origin-formal',[answer,answer_text,ordinary_teacher,school_teacher,opinion],
+                    '家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #'+str(original['record_id'])+'。',
+                    review_basis=generated['review_basis'])
+                assert model.call_count==0,'saving the generated check must not call the model again'
+            with app.connect() as c:
+                formal_row=c.execute('SELECT * FROM records WHERE id=?',(formal['record_id'],)).fetchone()
+                assert formal_row['followup_kind']=='作业检查' and formal_row['related_record_id']==original['record_id']
+                assert set(json.loads(formal_row['attachments']))=={answer,answer_text,ordinary_teacher,school_teacher,opinion}
+            # The parent reuses the exact upload, not a new file with a similar name.
+            reattached=feedback('synthetic-origin-reattached',[answer,opinion],'虚构普通反馈重挂原照片及旧AI意见。')
+            with patch.object(family_llm,'_chat_json') as model:
+                listed=sources(reattached)
+                assert listed[opinion]['origin']=='review_result','re-attaching a formal result cannot make it a saved answer'
+                assert listed[ordinary_teacher]['origin']!='review_result','an earlier ordinary teacher original stays usable'
+                assert listed[school_teacher]['origin']=='school','a school-bound teacher original stays usable'
+                assert sources(original)[answer_text]['origin']=='saved_answer','a reused original answer TXT keeps its identity'
+                assert model.call_count==0,'source listing must not request another judgment'
+            recheck=request|dict(record_id=reattached['record_id'],expected_created=reattached['feedback']['created'])
+            for role,changes in (('question',dict(question_sources=[source(answer),source(opinion)])),
+                                 ('reference',dict(reference_sources=[source(opinion)]))):
+                before=dump()
+                with patch.object(family_llm,'_chat_json') as model:
+                    status,result=http('POST','/api/print/homework/draft',recheck|changes)
+                    assert status==403 and result.get('code')=='review_source_not_allowed',(role,status,result)
+                    assert model.call_count==0,'the AI-result role must be refused before a model call'
+                assert dump()==before,'refused AI-result inputs must not change any saved data'
+            for ident,name,text in ((ordinary_teacher,'synthetic-origin-ordinary-teacher.txt','虚构甲卷教师参考：第1题B。'),
+                                    (school_teacher,'synthetic-origin-school-teacher.txt','虚构学校教师参考：甲卷第1题B。')):
+                before=dump()
+                with patch.object(family_llm,'homework_reference_draft',wraps=family_llm.homework_reference_draft) as generate,\
+                     patch.object(family_llm,'_chat_json',return_value=raw) as model:
+                    status,result=http('POST','/api/print/homework/draft',recheck|dict(reference_sources=[source(ident)]))
+                    assert status==200 and model.call_count==1,result
+                    assert generate.call_args.kwargs['reference_documents']==[dict(name=name,text=text)]
+                assert dump()==before,'reusing a teacher input must not write a check automatically'
+            # An explicitly selected previous-text input keeps its role separate from teacher references.
+            for ident,name,text in ((answer_text,'synthetic-origin-original-answer.txt','虚构甲卷原作答：第1题B。'),
+                                    (opinion,opinion_name,opinion_text)):
+                before=dump()
+                with patch.object(family_llm,'homework_reference_draft',wraps=family_llm.homework_reference_draft) as generate,\
+                     patch.object(family_llm,'_chat_json',return_value=raw) as model:
+                    status,rechecked=http('POST','/api/print/homework/draft',recheck|dict(previous_sources=[source(ident)]))
+                    assert status==200 and model.call_count==1 and raw==transport_original,rechecked
+                    assert generate.call_args.kwargs['previous_documents']==[dict(name=name,text=text)]
+                    assert [d['name'] for d in generate.call_args.kwargs['reference_documents']]==[
+                        'synthetic-origin-ordinary-teacher.txt','synthetic-origin-school-teacher.txt']
+                    assert name not in [d['name'] for d in generate.call_args.kwargs['reference_documents']]
+                assert dump()==before,'an allowed text input stays a draft until explicitly saved'
+            next_opinion=upload('作业批改参考-'+str(reattached['record_id'])+'.txt',rechecked['draft']['text'].encode())
+            with patch.object(family_llm,'_chat_json') as model:
+                next_formal=feedback('synthetic-origin-recheck-saved',
+                    [answer,ordinary_teacher,school_teacher,opinion,next_opinion],
+                    '虚构家长核对旧AI意见后追加复核，原意见保留。',review_basis=rechecked['review_basis'])
+                assert model.call_count==0
+            with app.connect() as c:
+                next_row=c.execute('SELECT * FROM records WHERE id=?',(next_formal['record_id'],)).fetchone()
+                assert next_row['followup_kind']=='作业检查' and next_row['related_record_id']==reattached['record_id']
+        finally:
+            server.shutdown();server.server_close();worker.join(timeout=3)
+
+
 def run():
     contract_cases=output_contract_checks()+duplicate_question_checks()+summary_consistency_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:
@@ -743,6 +863,7 @@ def run():
                         'review_source_not_allowed',403)
                     assert model.call_count==0
             summary_http_checks(app,upload)
+            review_origin_http_checks(app,upload)
     print('homework review synthetic checks passed (%d output contract cases)'%contract_cases)
 
 
