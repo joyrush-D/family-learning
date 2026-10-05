@@ -5,8 +5,10 @@ No household data, collector, device or external model is used. Missing an
 independent outcome must remain retryable; an omitted literal standard of a
 known action should instead be compiled from the complete original text.
 """
+import base64
 import copy
 import datetime as dt
+import io
 import json
 import unittest
 from unittest.mock import patch
@@ -111,6 +113,87 @@ class SchoolActionInventoryTests(unittest.TestCase):
             self.assertIn(clause, row['body'], 'preparation belongs to this worksheet even before its answer step')
         self.assertEqual(json.loads(row['plan'])['school_task']['purpose'], 'learning')
         self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
+
+    def test_entire_optional_exercise_remains_optional_and_outside_required_tasks(self):
+        payload, refs = self._ingest([
+            '英语作业：明天完成练习卷第4题（选做，不要求提交）。'])
+        exercise = self.proposal('完成练习卷第4题', refs, due='2026-10-06',
+                                 goal='明天完成练习卷第4题（选做，不要求提交）。', purpose='optional')
+        exercise.update(task_state='review', task_reason='整项选做，不自动加入必做事项。')
+        row, = self.saved(payload, self.run_receipt(payload, [exercise]), 1)
+        self.assertEqual((row['state'], row['task_id']), ('pending', ''))
+        brief = json.loads(row['plan'])['school_task']
+        self.assertEqual((brief['purpose'], brief['state']), ('optional', 'review'))
+        for clause in ('完成练习卷第4题', '选做', '不要求提交'):
+            self.assertIn(clause, row['body'])
+        self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
+
+    def test_shared_before_deadline_qualifier_is_retained_for_both_actions(self):
+        payload, refs = self._ingest([
+            '英语，10月6日前完成两项要求：1. 朗读Unit 2课文两遍；2. 完成练习卷第1–3题。'])
+        quotes = ('朗读Unit 2课文两遍', '完成练习卷第1–3题')
+        proposals = [self.proposal(quote, refs, due='2026-10-06') for quote in quotes]
+        rows = self.saved(payload, self.run_receipt(payload, proposals), 2)
+        for own, foreign in (quotes, quotes[::-1]):
+            row = next(r for r in rows if own in r['title'])
+            self.assertEqual((row['due'], row['state']), ('2026-10-06', 'accepted'))
+            self.assertIn(own, row['body'])
+            self.assertIn('10月6日前', row['body'], 'the date alone must not erase the before qualifier')
+            self.assertNotIn(foreign, row['body'])
+            self.assertEqual(json.loads(row['plan'])['school_task']['purpose'], 'learning')
+
+    def test_adjacent_unread_image_keeps_body_reviewable_through_the_save_transaction(self):
+        self.source['platform'] = 'qq'
+        self.fixture.config()
+        payload = self.fixture.payload(cursor='12')
+        common = dict(sender='虚构英语老师', sender_id='synthetic-teacher-1')
+        payload['messages'] = [
+            dict(common, id='11', message_order='11', time=self.now.isoformat(),
+                 kind='text', unread=False, text='明天朗读Unit 2课文两遍'),
+            dict(common, id='12', message_order='12', time=(self.now + dt.timedelta(seconds=30)).isoformat(),
+                 kind='image', unread=True, text='[图片]'),
+        ]
+        self.store.ingest(payload)
+        refs = ['message:' + self.source['id'] + ':' + message['id'] for message in payload['messages']]
+        # The existing original-material fixture's synthetic one-pixel PNG has
+        # real isolated bytes and a real attachment link, but no read draft.
+        png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII=')
+        upload = self.app.save_upload(io.BytesIO(png), len(png), 'synthetic-reading.png')
+        self.store.message_attachment(dict(child_id='child-1', source_id=self.source['id'],
+                                          message_id='12', attachment_id=upload['id'], action='attach'), dict)
+        reading = self.proposal('朗读Unit 2课文两遍', refs, due='2026-10-06',
+                                goal='明天朗读Unit 2课文两遍')
+        reading.update(task_state='review', task_reason='正文要求已读，相邻图片原件尚未读全。')
+
+        def reply(messages, schema, name, timeout=60, *, data_path=None):
+            self.assertEqual((name, data_path), ('family_agent_selection', self.app.DATA))
+            evidence = json.loads(messages[-1]['content'])['evidence']
+            self.assertEqual([(e['ref'], e['text']) for e in evidence],
+                             list(zip(refs, [m['text'] for m in payload['messages']])))
+            self.assertTrue(evidence[0]['publisher'])
+            self.assertEqual(evidence[0]['publisher'], evidence[1]['publisher'])
+            self.assertEqual([e['related_messages'] for e in evidence], [refs, refs])
+            self.assertEqual([(e['kind'], e['content_incomplete']) for e in evidence],
+                             [('text', False), ('image', True)])
+            self.assertEqual(evidence[0]['attachments'], [])
+            self.assertEqual(evidence[1]['attachments'], [dict(name='synthetic-reading.png', mime='image/png')])
+            return copy.deepcopy(dict(proposals=[reading]))
+
+        self.model.side_effect = reply
+        row, = self.saved(payload, agent.run_once(self.app, self.now), 1)
+        self.assertEqual((row['state'], row['task_id']), ('pending', ''))
+        self.assertIn('朗读Unit 2课文两遍', row['body'])
+        plan = json.loads(row['plan'])
+        self.assertEqual((plan['school_task']['purpose'], plan['school_task']['state']), ('learning', 'review'))
+        self.assertIn('未读', plan['school_task']['reason'])
+        self.assertFalse(plan.get('school_native_action'), 'unread originals remain on the original-material review route')
+        self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
+        with self.store._db() as c:
+            self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages ORDER BY rowid')], [1, 1])
+            self.assertEqual([tuple(r) for r in c.execute('SELECT message_id,upload_id FROM agent_message_attachments')],
+                             [('12', upload['id'])])
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_message_drafts').fetchone()[0], 0)
+        self.assertEqual((self.fixture.data / 'uploads' / upload['id']).read_bytes(), png)
 
     def test_shared_notice_supplement_is_compiled_only_into_its_exercise(self):
         payload, refs = self._ingest([
