@@ -639,7 +639,7 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
   if(result.querySelector('textarea:not(:disabled)')?.value.trim()&&!confirm('再次检查会保留当前结果，并新增一轮复核，确定继续？'))return;
   const extra=instruction(),previousText=result.querySelector('textarea')?.value.trim()||'',serial=++homeworkReviewSerial;homeworkReviewBusy=true;button.disabled=true;status.textContent='正在检查所选作答和参考；上次结果保留…';
   try{
-   const out=await printPost('homework/draft',{purpose:'review',task_id:task.id,record_id:recordId,expected_created:record.created,question_sources:selection.filter(x=>x.role==='question').map(x=>x.source),reference_sources:selection.filter(x=>x.role==='reference').map(x=>x.source),previous_sources:selection.filter(x=>x.role==='previous').map(x=>x.source),review_instruction:extra,previous_text:previousText},150000);
+   const out=await printPost('homework/draft',{purpose:'review',task_id:task.id,record_id:recordId,expected_created:record.created,question_sources:selection.filter(x=>x.role==='question').map(x=>x.source),reference_sources:selection.filter(x=>x.role==='reference').map(x=>x.source),previous_sources:selection.filter(x=>x.role==='previous').map(x=>x.source),review_instruction:extra,previous_text:previousText,previous_continuation:JSON.parse(result.dataset.continuation||'null')},150000);
    if(serial!==homeworkReviewSerial||!$('#taskDialog').open)return;
    if(JSON.stringify(selection)!==JSON.stringify(selected())||instruction()!==extra||(result.querySelector('textarea')?.value.trim()||'')!==previousText){status.textContent='资料、补充或上次意见已变化；上次结果保留，请重新检查。';return}
    if(typeof out.draft?.text!=='string'||!out.draft.text||out.draft.text.length>12000)throw Error('批改草稿回执不完整');
@@ -652,7 +652,7 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
    const edit=document.createElement('details'),label=document.createElement('label');edit.open=!Array.isArray(out.draft.questions);edit.innerHTML='<summary>查看 / 修改完整检查结果</summary>';label.textContent='检查意见';const area=document.createElement('textarea');area.maxLength=12000;area.rows=8;area.value=out.draft.text;label.append(area);edit.append(label);result.append(edit);
    const confirm=document.createElement('label');confirm.className='print-file-check';confirm.innerHTML='<input type="checkbox" data-homework-review-confirm><span>已对照原题和孩子最终作答核对；不确定项仍标为未判定</span>';result.append(confirm);
    const apply=document.createElement('button');apply.type='button';apply.dataset.homeworkReviewApply=String(recordId);apply.textContent='填入待保存反馈';result.append(apply);panel.querySelector('[data-homework-review-instruction]').disabled=false;
-   result.dataset.instruction=extra;result.dataset.photoIds=JSON.stringify(ids);result.dataset.selection=JSON.stringify(selection);result.dataset.recordCreated=record.created;result.dataset.reviewBasis=JSON.stringify(out.review_basis||{record_id:recordId,created:record.created,photo_ids:ids});status.textContent=reviewCounts;if(!document.activeElement.matches('input,textarea,select')){result.tabIndex=-1;result.scrollIntoView({block:'start'});result.focus({preventScroll:true})}
+   result.dataset.continuation=JSON.stringify(out.draft.continuation||null);result.dataset.instruction=extra;result.dataset.photoIds=JSON.stringify(ids);result.dataset.selection=JSON.stringify(selection);result.dataset.recordCreated=record.created;result.dataset.reviewBasis=JSON.stringify(out.review_basis||{record_id:recordId,created:record.created,photo_ids:ids});status.textContent=reviewCounts;if(!document.activeElement.matches('input,textarea,select')){result.tabIndex=-1;result.scrollIntoView({block:'start'});result.focus({preventScroll:true})}
   }catch(error){if(serial===homeworkReviewSerial)status.textContent=(error.message||'批改暂不可用')+'；原反馈和照片已保存。结果不明时再次点击可能再次调用模型。'}
   finally{finishHomeworkReview();if(serial===homeworkReviewSerial)button.disabled=false}
   return;
@@ -669,7 +669,8 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
  try{
   const previous=[...panel.querySelectorAll('[data-homework-review-previous] textarea')].map((x,i)=>'此前第'+(i+1)+'轮检查草稿：\n'+x.value.trim());
   const latest=area.value.trim();
-  const file=new File(['作业检查保存格式 v1\n最新检查字数：'+[...latest].length+'\n'+latest+'\n'+(previous.length?'\n此前检查草稿（仅供对照，不是教师参考）：\n'+previous.join('\n\n')+'\n':'')],'作业批改参考-'+recordId+'.txt',{type:'text/plain'}),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),120000);let upload;
+  const continuation=JSON.parse(result.dataset.continuation||'null');
+  const file=new File([(continuation?'作业检查保存格式 v2\n复核待补清单：'+JSON.stringify(continuation)+'\n':'作业检查保存格式 v1\n')+'最新检查字数：'+[...latest].length+'\n'+latest+'\n'+(previous.length?'\n此前检查草稿（仅供对照，不是教师参考）：\n'+previous.join('\n\n')+'\n':'')],'作业批改参考-'+recordId+'.txt',{type:'text/plain'}),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),120000);let upload;
   try{const response=await apiFetch('/api/upload',{signal:controller.signal,method:'POST',headers:{'X-Family-Token':data.token,'X-File-Name':encodeURIComponent(file.name),'Content-Type':'application/octet-stream'},body:file});upload=await response.json();if(!response.ok)throw Error(upload.error||'核对文字未保存')}finally{clearTimeout(timer)}
   if(!$('#taskDialog').open||!taskFeedbackContext||taskFeedbackContext.task_id!==task.id)return;
   if(!/^[a-f0-9]{32}$/.test(upload.attachment?.id))throw Error('文字原件回执无法核对');
