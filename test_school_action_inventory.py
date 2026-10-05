@@ -146,6 +146,20 @@ class SchoolActionInventoryTests(unittest.TestCase):
             with self.subTest(prefix=prefix):
                 self.assertEqual(agent._school_native_command(prefix + '前朗读Unit 2课文两遍'), '')
 
+    def test_unresolved_header_weekday_is_not_cut_into_a_shared_single_day(self):
+        quote = '朗读Unit 2课文两遍'
+        for prefix in ('每周五', '上周五', '周一至周五', '星期一 到 星期五', '礼拜一至礼拜五'):
+            with self.subTest(prefix=prefix):
+                t = type(self)(methodName='runTest')
+                t.setUp()
+                try:
+                    payload, refs = t._ingest(['英语' + prefix + '作业：' + quote + '。'])
+                    rows = t.saved(payload, t.run_receipt(payload, [t.proposal(quote, refs)]), 1)
+                    self.assertEqual(rows[0]['body'], quote)
+                    self.assertEqual(rows[0]['due'], '')
+                finally:
+                    t.doCleanups()
+
     def test_semicolon_actions_cannot_be_covered_by_one_message_reference(self):
         payload, refs = self._ingest(['英语作业：朗读Unit 2课文两遍；完成练习卷第1–3题。'])
         reading = self.proposal('朗读Unit 2课文两遍', refs)
