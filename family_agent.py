@@ -2748,8 +2748,9 @@ def _school_native_actions(evidence):
             object_text=head[1]
             object_text=re.sub(r'^(?:'+_SCHOOL_NATIVE_SUBJECTS+r')','',object_text)
             specific=_school_named_objects(object_text)
-            owners=[a for a in own if len(object_text)>=2 and a['quote'].count(object_text)==1
-                    and specific.issubset(_school_named_objects(a['quote']))]
+            # ponytail: only one literal action object proves ownership; mixed named mentions stay unbound.
+            owners=[a for a in own if len(object_text)>=2 and a['primary'].count(object_text)==1
+                    and (not specific or specific==_school_named_objects(a['primary']))]
             if len(owners)==1:
                 owners[0]['supplements'].append(dict(ref=supplement['ref'],quote=supplement['text'].strip(),goal=head[2].strip(),time=supplement['time']))
         actions.extend(own)
