@@ -1051,7 +1051,7 @@ _REF_GENERIC_PAPER=re.compile(r'[本该此这那全整每各原同两多]?[试�
 _REF_SECTION=re.compile(r'第\s*(\d{1,2}|[一二三四五六七八九十]{1,3})\s*(?:大题|部分)|(?:^|[^第\d一二三四五六七八九十])([一二三四五六七八九十]{1,3})\s*[、.．]')
 _REF_QUESTION=re.compile(r'第\s*(\d{1,3})\s*题|(?<![\d.．])(\d{1,3})\s*题|(?<![A-Za-z])[Qq]\s*(\d{1,3})(?!\d)|(?:^|(?<=[\s、，,；;]))(\d{1,3})\s*[.．、](?!\d)')
 _REF_SUB=re.compile(r'\s*(?:[（(]\s*(\d{1,2})\s*[)）]|第\s*(\d{1,2})\s*小题)')
-_REF_WORDS='教师参考答案|教师参考|参考答案|老师答案|老师参考|答案|教师|老师|参考'
+_REF_WORDS='(?:(?:教师|老师)(?:原|的)?)?(?:参考答案|参考|答案)|教师|老师'  # 「教师原参考」 is a source word too
 _REF_SOURCE=re.compile(r'^[\s:：]*(?:%s)?\s*(?:均为|都是|均是|都为|为|是)?[\s:：]*'%_REF_WORDS)
 _REF_NOISE=re.compile(r'%s|如下|以下|第\s*\d{1,3}\s*页|[\W_]'%_REF_WORDS)
 
@@ -1083,7 +1083,7 @@ def _teacher_reference_entries(documents):
             new,section,words=_ref_scope(head,section)
             cover=re.search(_REF_WORDS,head) is not None  # 「教师参考答案（…）」 describes the document, not a paper.
             if new is not None: paper,title=new,''
-            elif words and not marks and (not cover or paper is not None or len(entries)>first):
+            elif words and not marks and not _REF_SECTION.search(head) and (not cover or paper is not None or len(entries)>first):
                 paper,title=None,'' if cover else words  # A title names its own scope; none inherits the previous paper.
             here,rest=(None,'' if cover else words) if marks and new is None and words else (paper,title)  # Words on the line qualify its own entries.
             for n,mark in enumerate(marks):
@@ -1102,10 +1102,11 @@ def _teacher_reference_entries(documents):
 
 def _ref_relation(label,entry):
     """same / different / unsure: an unnamed or ambiguous paper, section or sub-question is never guessed."""
-    mark=_REF_QUESTION.search(label)
+    mark=_REF_QUESTION.search(label) or re.fullmatch(r'(.*?)(?<![\d.．])(\d{1,3})\s*',label)  # 「1」「一、1」「虚构乙卷1」
     if not mark: return 'unsure'
-    if int(next(g for g in mark.groups() if g))!=entry['number']: return 'different'
-    sub=_REF_SUB.match(label,mark.end());paper,section,rest=_ref_scope(label[:mark.start()])
+    bare=mark.re is not _REF_QUESTION;number=int(mark[2] if bare else next(g for g in mark.groups() if g))
+    if number!=entry['number']: return 'different'
+    sub=None if bare else _REF_SUB.match(label,mark.end());paper,section,rest=_ref_scope(mark[1] if bare else label[:mark.start()])
     paper='*' if isinstance(paper,tuple) else paper  # A label naming two papers identifies neither.
     part=paper is None and entry['paper'] is None and rest!=entry['rest']  # unnamed papers only match word for word
     unsure=False
@@ -1114,7 +1115,7 @@ def _ref_relation(label,entry):
         if mine is None or theirs is None or '*' in (mine,theirs):
             if n==2: part=True
             else: unsure=True
-        elif mine!=theirs and not (isinstance(mine,str) and isinstance(theirs,str) and (mine.endswith(theirs) or theirs.endswith(mine))): return 'different'
+        elif mine!=theirs and not (isinstance(mine,str) and isinstance(theirs,str) and (mine.endswith(theirs) or theirs.endswith(mine))): return 'other'
     return 'unsure' if unsure else 'part' if part else 'same'
 
 
@@ -1122,9 +1123,9 @@ def _ref_agrees(claimed,teacher):
     """A teacher-labelled value must be the teacher's whole value; added letters or words are not the teacher's.
     A bare equation 「2+3=5」 and its one final value 「5」 are the same value; nothing is computed."""
     whole=lambda value:re.sub(r'[，,；;。.．、！!？?]+$','',''.join(value.split()).replace('＝','='))
-    def final(value):
-        parts=value.split('=')
-        return parts[-1] if len(parts)>1 and all(parts) and not re.search(r'[或、，,；;/和及与]|[^\w+\-×÷*/^().%·]',parts[-1]+''.join(parts)) else None
+    def final(value):  # Only one numeric equation 「2+3=5」「12-5=7米」 has one final value; letters and chains do not.
+        found=re.fullmatch(r'(?=[^=]*\d)[\d.()（）]*(?:[+\-×÷*/][\d.()（）]+)+=(\d+(?:\.\d+)?[^\W\d_]{0,3})',value)
+        return found[1] if found else None
     claimed,teacher=whole(claimed),whole(teacher)
     return claimed==teacher or final(teacher)==claimed or final(claimed)==teacher
 
@@ -1135,7 +1136,7 @@ def _prefer_teacher_reference(item,question_kind,entries,images):
     related=[(_ref_relation(item['label'],entry),entry['answer']) for entry in entries]
     same=sorted({answer for relation,answer in related if relation=='same'})
     claimed=item['answer'].removeprefix('教师参考：').strip() if item['answer'].startswith('教师参考：') else None
-    shown=lambda value,limit=200:value if len(value)<=limit else value[:limit]+'…'
+    shown=lambda value,limit=995:value if len(value)<=limit else value[:limit]+'…'  # The whole teacher answer fits the answer field.
     def pending(answer,note):
         item.update(answer=answer,judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty=(note+item['uncertainty'].strip())[:300])
     if not same:
@@ -1143,6 +1144,8 @@ def _prefer_teacher_reference(item,question_kind,entries,images):
         if any(relation in ('unsure','part') for relation,_ in related):
             pending('','教师参考写有同题号答案，但卷别、大题或小题与本题无法核明对应；%s，未判定，请核明后补查。'%(
                 '未采用模型自行推导' if claimed is None else '模型所标教师参考的归属无法核实'))
+        elif claimed is not None and not images and any(relation=='other' for relation,_ in related):
+            pending('','教师参考文字只写了别的卷别或大题的同号题，模型所标教师参考无从核实，未判定，请核明后补查。')
         return
     if len(same)>1: return pending('','教师参考文字对本题写有不同答案（%s），未判定，待老师或家长核对。'%'／'.join(shown(a,40) for a in same))
     teacher=same[0];letter=re.fullmatch('[A-H]',teacher)
@@ -1155,7 +1158,8 @@ def _prefer_teacher_reference(item,question_kind,entries,images):
                            error_reason='' if student==teacher else '作答%s与教师参考%s不同。'%(student,teacher))
     if claimed is None and _ref_agrees(re.sub(r'^\s*AI自行推导\s*[:：]','',item['answer']),teacher):
         item['answer']='教师参考：'+shown(teacher);return  # Same value, only the label was wrong.
-    pending('教师参考：'+shown(teacher),misquoted or '本题有教师参考，模型未按教师参考核对，未判定；请对照教师参考补查。')
+    pending('教师参考：'+shown(teacher),(misquoted or '本题有教师参考，模型未按教师参考核对，未判定；请对照教师参考补查。')
+            +('教师参考超过结果字数上限，只列前995字，完整内容以教师原件为准。' if len(teacher)>995 else ''))
 
 
 def homework_reference_draft(images, *, data_path=None, timeout=90, review=False, reference_images=(),
