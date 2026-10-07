@@ -469,4 +469,34 @@ class TextQuestionHTTPTests(HomeworkPrintScopeTests):
             self.assertEqual(status,400,out);model.assert_not_called();self.assertEqual(self.dump(),before)
 
 
+class TeacherPaperWholeNameTest(unittest.TestCase):
+    """Fictional S01-S04 and L01: two explicit papers are one paper only when their whole names are equal."""
+
+    def compare(self,label,teacher):
+        from family_llm import _prefer_teacher_reference,_ref_relation,_teacher_reference_entries
+        entries=_teacher_reference_entries([dict(name='synthetic-teacher.txt',text=teacher)])
+        item=dict(label=label,question='1+2=? A.1 B.2 C.3',student_answer='C',answer='AI自行推导：C',judgment='correct',
+                  question_kind='objective',error_reason='',possible_cause='',steps='',uncertainty='')
+        relations=[_ref_relation(label,entry) for entry in entries]
+        _prefer_teacher_reference(item,'objective',entries,False)
+        return relations,item['answer'],item['judgment']
+
+    def test_a_paper_name_ending_with_another_or_sharing_a_long_tail_is_another_paper(self):
+        long='实验练习资料基础数学测验甲卷'
+        for label,teacher in (('青树北窗卷 第1题','北窗卷 第1题：教师参考B'),('北窗卷 第1题','青树北窗卷 第1题：教师参考B'),
+                              ('青树卷 第1题','北窗卷 第1题：教师参考B'),('青树%s 第1题'%long,'北窗%s 第1题：教师参考B'%long)):
+            with self.subTest(label=label,teacher=teacher):
+                self.assertEqual(self.compare(label,teacher),(['other'],'AI自行推导：C','correct'))
+
+    def test_the_same_whole_paper_name_still_takes_the_teacher_answer(self):
+        for paper in ('北窗卷','北窗实验练习资料基础数学测验甲卷'):
+            with self.subTest(paper=paper):
+                self.assertEqual(self.compare(paper+' 第1题',paper+' 第1题：教师参考B'),(['same'],'教师参考：B','incorrect'))
+
+    def test_a_paper_name_too_long_to_read_whole_is_never_cut_to_a_shared_tail(self):
+        long='实验练习资料基础数学测验'*3+'甲卷'
+        relations,answer,judgment=self.compare('青树%s 第1题'%long,'北窗%s 第1题：教师参考B'%long)
+        self.assertNotIn('same',relations);self.assertIn(judgment,('correct','unknown'));self.assertNotEqual(answer,'教师参考：B')
+
+
 if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TeacherReferenceScopeTests','TeacherReferenceSourceTests','TeacherReferenceEquationTests','TeacherReferenceGrammarTests','TextQuestionHTTPTests'])
