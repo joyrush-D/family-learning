@@ -1045,11 +1045,15 @@ retry提出经家庭商量后隔一段时间不看讲解再试、或试一道相
 # several entries per line, a paper or section line applying to the lines below. A paper is the whole explicit name
 # ending in 卷 (not 试卷/本卷 and the like), one paper only when the whole names are equal, never by a shared tail;
 # no character of it is ever dropped: a source word, 试/考/答 or 与/和/及 written inside the name is part of the name;
-# a name too long to read whole stays unknown. Any other new title starts an unnamed scope whose words must match
+# a name too long to read whole stays unknown. A title an original declares on its own line (「试卷名称：甲卷和平卷」) is one
+# paper wherever it is written whole; other names joined by 与/和/及 are a list only where one value is given to each. Any other new title starts an unnamed scope whose words must match
 # exactly. Anything else, and every reference image, proves nothing here; the model's answer prefix alone never
 # decides the source, and teacher values are compared whole, never cut short.
 _REF_PAPER=re.compile(r'(?<![^\s，,；;。：:、（）()【】\[\]“”"卷])[^\s，,；;。：:、（）()【】\[\]“”"]{1,30}?卷')  # from its separator
 _REF_PAPER_LONG=re.compile(r'[^\s，,；;。：:、（）()【】\[\]“”"卷]{31}卷')
+_REF_WHOLE=re.compile(r'(?<![^\s，,；;。：:、（）()【】\[\]“”"])[^\s，,；;。：:、（）()【】\[\]“”"]{1,30}卷')  # a whole name up to its last 卷, joins inside and all
+_REF_DECLARED=re.compile(r'[^\s，,；;。：:、（）()【】\[\]“”"]{1,12}[：:]\s*(%s)\s*[。.]?'%_REF_WHOLE.pattern)  # 「试卷名称：甲卷和平卷」 on its own line
+_REF_LISTED=re.compile('均为|都是|均是|都为')  # one value given to each listed paper
 _REF_GENERIC_PAPER=re.compile(r'[本该此这那全整每各原同两多]?[试考答问纸]?卷')
 _REF_SECTION=re.compile(r'第\s*(\d{1,2}|[一二三四五六七八九十]{1,3})\s*(?:大题|部分)|(?:^|[^第\d一二三四五六七八九十])([一二三四五六七八九十]{1,3})\s*[、.．]')
 _REF_QUESTION=re.compile(r'第\s*(\d{1,3})\s*题|(?<![\d.．])(\d{1,3})\s*题|(?<![A-Za-z])[Qq]\s*(\d{1,3})(?!\d)|(?:^|(?<=[\s、，,；;]))(\d{1,3})\s*[.．、](?!\d)')
@@ -1066,25 +1070,34 @@ def _ref_number(value):
     return (digits.index(tens)+1 if tens else 1)*10+(digits.index(ones)+1 if ones else 0) if len(tens)<=1 and len(ones)<=1 else value
 
 
-def _ref_scope(text,section=None):
+def _ref_titles(documents):
+    """Whole titles the originals declare on a line of their own; each names one paper, 卷与/卷和/卷及 inside and all."""
+    return frozenset(found[1] for document in documents for line in document['text'].splitlines()
+                     if not _REF_QUESTION.search(line) for found in [_REF_DECLARED.fullmatch(line.strip())] if found)
+
+
+def _ref_scope(text,section=None,titles=frozenset(),listed=False):
     """The one reading of a label or teacher heading: explicit paper name or None, 大题 number, leftover words."""
-    names=[name for part in re.split(r'(?<=卷)\s*[与和及]',text) for name in _REF_PAPER.findall(part)  # 与/和/及 joins papers only after a whole name
+    declared=[name for name in _REF_WHOLE.findall(text) if name in titles]  # 「甲卷和平卷」 declared whole is not 甲卷 and 平卷
+    rest=_REF_WHOLE.sub(lambda found:'，' if found[0] in titles else found[0],text)
+    names=declared+[name for part in re.split(r'(?<=卷)\s*[与和及]',rest) for name in _REF_PAPER.findall(part)  # 与/和/及 joins papers only after a whole name
            if not _REF_GENERIC_PAPER.fullmatch(re.sub('^(?:%s)+'%_REF_WORDS,'',name))]  # 「教师参考答卷」 names no paper; 「老师青树卷」 is all its own
     paper=(names[0] if len(names)==1 else tuple(names)) if names and not any(re.search('[两均都]',name) for name in names) else '*' if names else None
-    paper='*' if _REF_PAPER_LONG.search(text) else paper  # Never cut a name to a shared tail; too long to read whole is unknown.
+    paper='*' if _REF_PAPER_LONG.search(text) or names and not listed and re.search(r'卷\s*[与和及]',rest) else paper  # Never cut a name to a shared tail; too long to read whole is unknown.
     found=_REF_SECTION.search(text)
     section=_ref_number(found[1] or found[2]) if found else None if names else section
     return paper,section,_REF_NOISE.sub('',_REF_SECTION.sub('',_REF_PAPER.sub('',text)))
 
 
-def _teacher_reference_entries(documents):
+def _teacher_reference_entries(documents,titles=frozenset()):
     entries=[]
     for document in documents:
         paper=section=None;title='';first=len(entries)
         for line in document['text'].splitlines():
             marks=list(_REF_QUESTION.finditer(line))
             head=line[:marks[0].start()] if marks else line
-            new,section,words=_ref_scope(head,section)
+            listed=_REF_LISTED.search(line) is not None  # an unmarked join of names may be one title: unknown
+            new,section,words=_ref_scope(head,section,titles,listed)
             cover=re.search(_REF_WORDS,head) is not None  # 「教师参考答案（…）」 describes the document, not a paper.
             if new is not None: paper,title=new,''
             elif words and not marks and not _REF_SECTION.search(head) and (not cover or paper is not None or len(entries)>first):
@@ -1099,18 +1112,18 @@ def _teacher_reference_entries(documents):
                     if answer: entries.append(dict(paper=one,section=section,rest=rest,number=int(next(g for g in mark.groups() if g)),
                                                    sub=int(next(g for g in sub.groups() if g)) if sub else None,answer=answer))
                 if after:
-                    new,section,words=_ref_scope(tail[after.start(1):],section)
+                    new,section,words=_ref_scope(tail[after.start(1):],section,titles,listed)
                     if new is not None: paper=here=new;title=rest=''
     return entries
 
 
-def _ref_relation(label,entry):
+def _ref_relation(label,entry,titles=frozenset()):
     """same / different / unsure: an unnamed or ambiguous paper, section or sub-question is never guessed."""
     mark=_REF_QUESTION.search(label) or re.fullmatch(r'(.*?)(?<![\d.．])(\d{1,3})\s*',label)  # 「1」「一、1」「虚构乙卷1」
     if not mark: return 'unsure'
     bare=mark.re is not _REF_QUESTION;number=int(mark[2] if bare else next(g for g in mark.groups() if g))
     if number!=entry['number']: return 'different'
-    sub=None if bare else _REF_SUB.match(label,mark.end());paper,section,rest=_ref_scope(mark[1] if bare else label[:mark.start()])
+    sub=None if bare else _REF_SUB.match(label,mark.end());paper,section,rest=_ref_scope(mark[1] if bare else label[:mark.start()],titles=titles)
     paper='*' if isinstance(paper,tuple) else paper  # A label naming two papers identifies neither.
     part=paper is None and entry['paper'] is None and rest!=entry['rest']  # unnamed papers only match word for word
     unsure=False
@@ -1134,10 +1147,10 @@ def _ref_agrees(claimed,teacher):
     return claimed==teacher or final(teacher)==claimed or final(claimed)==teacher
 
 
-def _prefer_teacher_reference(item,question_kind,entries,images):
+def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset()):
     """A question the supplied teacher text covers is compared by that text, whatever source the model claims."""
     if not item['answer'].strip(): return  # No answer is the existing missing-basis path, not a claimed source.
-    related=[(_ref_relation(item['label'],entry),entry['answer']) for entry in entries]
+    related=[(_ref_relation(item['label'],entry,titles),entry['answer']) for entry in entries]
     same=sorted({answer for relation,answer in related if relation=='same'})
     claimed=item['answer'].removeprefix('教师参考：').strip() if item['answer'].startswith('教师参考：') else None
     shown=lambda value,limit=995:value if len(value)<=limit else value[:limit]+'…'  # The whole teacher answer fits the answer field.
@@ -1216,7 +1229,8 @@ def homework_reference_draft(images, *, data_path=None, timeout=90, review=False
             or len({''.join(label.split()) for label in pending_labels})!=len(pending_labels)):
         raise ValueError('上一轮待补题号无法核对')
     teacher_reference=bool(reference_images or reference_documents)
-    teacher_entries=_teacher_reference_entries(reference_documents) if review else []
+    titles=_ref_titles(list(question_documents or ())+list(reference_documents or ())) if review else frozenset()
+    teacher_entries=_teacher_reference_entries(reference_documents,titles) if review else []
     field = lambda limit: dict(type='string',maxLength=limit)
     schema=dict(type='object',additionalProperties=False,required=['items','coverage'],properties=dict(
         items=dict(type='array',minItems=1,maxItems=25,items=dict(type='object',additionalProperties=False,
@@ -1315,7 +1329,7 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
             if not question_label or question_label in seen_question_labels:
                 raise LLMDraftError('检查结果的卷别或题号为空或重复，无法分别核对；请明确卷别、题号与小题后再次检查')
             seen_question_labels.add(question_label)
-        if teacher_entries: _prefer_teacher_reference(item,question_kind,teacher_entries,bool(reference_images))
+        if teacher_entries: _prefer_teacher_reference(item,question_kind,teacher_entries,bool(reference_images),titles)
         if review and teacher_reference and question_kind=='objective' and item['answer'].startswith('教师参考：'):
             # ponytail: literal uppercase A-H only; other answers need an evidenced comparator.
             student=item['student_answer'].strip()
