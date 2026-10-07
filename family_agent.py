@@ -2882,8 +2882,11 @@ def _school_native_actions(evidence):
                 stamp=dt.datetime.fromisoformat(entry['time']);later=dt.datetime.fromisoformat(supplement['time'])
                 if stamp.tzinfo is None or later.tzinfo is None or not 0<=(later-stamp).total_seconds()<=120:continue
             except (KeyError,ValueError,TypeError):continue
-            # A change is not a supplement; below it binds only to the one outcome it names consistently.
-            if re.search(_SCHOOL_NATIVE_CHANGE,head[2]):continue
+            # A change is not a supplement; below it binds only to the one outcome it names consistently. A sole
+            # outcome it cannot bind (e.g. the same minute) keeps the existing correction reader; siblings never leave.
+            if re.search(_SCHOOL_NATIVE_CHANGE,head[2]):
+                if len(own)==1 and not _school_native_change_owner(entry,supplement,own):own=[];break
+                continue
             object_text=head[1]
             object_text=re.sub(r'^(?:'+_SCHOOL_NATIVE_SUBJECTS+r')','',object_text)
             specific=_school_named_objects(object_text)
