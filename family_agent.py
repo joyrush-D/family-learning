@@ -2887,7 +2887,8 @@ def _school_native_cancelled(action):
         for sentence in re.split(r'(?<=[。！!？?\n])',body):
             for clause in filter(str.strip,re.split(r'[。；;，,！!？?\n]',sentence)):
                 if _school_native_withdrawn(lead+clause):
-                    named=_school_native_questions(lead+clause);whole=whole or not named or bool(own) and own<=named
+                    # The header only names the object: question numbers the clause states bound the range, so "第1-6题：取消第6题" stays partial.
+                    named=_school_native_questions(clause) or _school_native_questions(lead);whole=whole or not named or bool(own) and own<=named
                 elif not (re.fullmatch(_SCHOOL_NATIVE_BESIDE,clause.strip())
                           or _school_native_affirmed(clause,sentence) and _school_named_objects(clause)-titles):proven=False
         if whole and proven:return True
