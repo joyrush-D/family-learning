@@ -242,13 +242,19 @@ class AgentTests(unittest.TestCase):
             ('英语：完成练习卷','第1–3题必做，第4题选做。','2026-10-06',refs[:4],'learning',''),
             ('家长事务：活动回执','家长打印回执并签字，再让孩子交回；无需盖章。','2026-10-07',refs[4:],'admin',''),
         ]:
-            proposals.append(dict(title_quote=texts[0] if purpose=='learning' else texts[4],focus='school',due=due,
+            proposals.append(dict(title_quote=texts[4] if purpose=='admin' else 'Unit 2课文读两遍' if '朗读' in title else '练习卷第1–4题',focus='school',due=due,
                 evidence=[dict(ref=ref) for ref in selected],learning_subject='英语' if purpose=='learning' else '',
                 learning_goal_id='',task_title=title,task_goal=goal,task_advice='',task_state='ready',
                 task_reason='原文要求明确。',task_change='new',task_target_id='',task_purpose=purpose,task_submission=submission))
+        # A whole-message quote cannot show which known outcome each item covers: the batch is retried, never released.
+        lazy=[dict(p,title_quote=texts[0]) if p['task_purpose']=='learning' else p for p in proposals]
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=lazy)),self.assertRaises(agent.AgentError):
+            agent._select('school',copy.deepcopy(evidence),school_goals=[],as_of='2026-10-05')
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
             items=agent._select('school',evidence,school_goals=[],as_of='2026-10-05')
         self.assertEqual(len(items),3)
+        # The worksheet cites its linked material and clarification only as visible limits: not ready.
+        self.assertEqual([i['plan']['school_task']['state'] for i in items],['ready','review','ready'])
         # A publication can contain two tasks; its worksheet is not an attachment to the reading task.
         self.assertEqual([q['ref'] for q in items[0]['evidence']],refs[:1])
         self.assertEqual([q['ref'] for q in items[1]['evidence']],refs[:4])

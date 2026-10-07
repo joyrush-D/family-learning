@@ -770,6 +770,13 @@ class SiblingCoverageTest(unittest.TestCase):
                     _select_school_a(base[1:], evidence=evidence)
 
 
+    def test_trailing_condition_naming_an_earlier_outcome_stays_with_it(self):
+        import family_agent
+        text = '明天完成两项：Unit 2课文读两遍；练习卷第1–4题。朗读录音上传班级作业区。'
+        evidence = [dict(copy.deepcopy(SCHOOL_CASES['school-a']['evidence'][0]), text=text)]
+        actions = {a['primary']: (a['quote'], a.get('conditions', [])) for a in family_agent._school_native_actions(evidence)}
+        self.assertEqual(actions, {'Unit 2课文读两遍': ('Unit 2课文读两遍', ['朗读录音上传班级作业区']), '练习卷第1–4题': ('练习卷第1–4题', [])})
+
     def test_same_teachers_linked_incomplete_message_never_releases_known_siblings(self):
         import family_agent
         base = _school_a_reply()
@@ -781,9 +788,15 @@ class SiblingCoverageTest(unittest.TestCase):
                 ledger = {a['quote'][:4]: [c['ref'][-1] for c in a['changes']]
                           for a in family_agent._school_native_actions(copy.deepcopy(evidence)) if a['ref'] == evidence[0]['ref']}
                 self.assertEqual(ledger, {'背诵《秋': [], '完成练习': []})
-                for proposals in (base[1:], base + [copy.deepcopy(base[0])], base):
+                for proposals in (base[1:], base + [copy.deepcopy(base[0])]):
                     with self.assertRaises(family_agent.AgentError):
                         _select_school_a(proposals, evidence=evidence)
+                # 引用这条未核实关联消息只能作待核依据：练习册不 ready；未读/不完整时保留原文“第1-5题”，不按它改写；背诵仍按原文 ready。
+                rows = school_rows(_select_school_a(base, evidence=evidence))
+                worksheet = next(r for r in rows if '练习册' in r['text'] and r['state'] != 'reference')
+                self.assertNotEqual(worksheet['state'], 'ready', worksheet)
+                if label != 'attachment': self.assertIn('第1-5题', worksheet['text'], worksheet)
+                self.assertEqual([r['state'] for r in rows if '背诵' in r['text']], ['ready'], rows)
                 # 练习册只引原清单、未读补充单列待核时可接受；保存层仍拒绝漏掉未变的背诵。
                 kept = copy.deepcopy(base); kept[1]['evidence'] = [dict(ref=evidence[0]['ref'])]
                 kept.append(dict(copy.deepcopy(base[7]), title_quote=evidence[5]['text'].rstrip('。'), evidence=[dict(ref=evidence[5]['ref'])],
