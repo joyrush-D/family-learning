@@ -256,6 +256,61 @@ class TeacherReferenceEquationTests(TeacherReferenceSourceTests):
         self.assertIn((q['answer'],q['judgment']),[('教师参考：'+demand,'unknown'),('教师参考：'+demand,'incorrect')])
 
 
+LONG_TEACHER='TEACHER_ONLY_CANARY\n虚构甲卷\n第一大题\n第1题：6个零件。应写出2×3=6，并说明2表示每轮处理的零件数、3表示已经完成的轮数，乘法表示三轮相同工作量的合计；结果单位是“个零件”，不能只写一个数字而让读者猜测量的含义。还要解释只有每轮确实完成2个零件时才可以使用该式，若其中一轮只完成1个，实际总数为5个零件，应把2、2、1逐轮相加，不能继续把计划的三轮都当作已经完成。答题时须把总数、单位、列式、各量意义和条件说明五项分别交代清楚，让老师能从原作答核对计算与推理是否相符。单独写“6”只能核对到计划总数这一部分，不足以证明其余要求已经回答；是否满足完整作答须依据原题与学生完整文字，不得把参考说明补成学生已经写出的理由'
+LONG_QUESTION='一台机器每轮处理2个零件，连续完成3轮，共处理多少？请给出总数、单位、列式，解释各数字表示的量，并说明若一轮只完成1个零件时为什么不能继续使用完整三轮的结果。五项要求都须回答。'
+
+
+class TeacherReferenceGrammarTests(unittest.TestCase):
+    """Fourth review: letters and chains are not equations, bare numbers and sections pair by text, original-reference
+    headers are source words, and a long teacher answer survives whole."""
+    def run_case(self,questions,teacher,item):
+        raw=frozen(item);original=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            result=family_llm.homework_reference_draft([],review=True,question_documents=[dict(name='synthetic-paper.txt',text=questions)],
+                reference_documents=[dict(name='synthetic-teacher.txt',text=teacher)])
+        self.assertEqual(model.call_count,1);self.assertEqual(raw,original)
+        q=result['questions'][0];self.assertEqual(q['student_answer'],item['student_answer'])
+        return (q['answer'],q['judgment']),result
+
+    def test_letter_or_chained_claim_is_not_a_teacher_equation(self):
+        got,_=self.run_case('虚构甲卷第21题：请选择正确选项（A/B/C/D）。 实际作答C。','虚构甲卷第21题：B。',
+                            objective('虚构甲卷第21题','请选择正确选项（A/B/C/D）。','C','教师参考：C=B'))
+        self.assertIn(got,[('教师参考：B','incorrect'),('教师参考：B','unknown')])
+        got,_=self.run_case('虚构甲卷第22题：请填写教师已明确给出的本题结果。 实际作答6。','虚构甲卷第22题：6。',
+                            objective('虚构甲卷第22题','请填写教师已明确给出的本题结果。','6','教师参考：2+3=5=6'))
+        self.assertIn(got,[('教师参考：6','unknown'),('教师参考：6','correct')])
+        got,_=self.run_case('虚构甲卷第1题：2+3=?\n实际作答：4','虚构甲卷第1题：2+3=5',objective('虚构甲卷第1题','2+3=?','4','教师参考：5','incorrect',error_reason='作答4与教师参考5不同。'))
+        self.assertIn(got,[('教师参考：5','incorrect'),('教师参考：2+3=5','incorrect')])
+        got,_=self.run_case('虚构甲卷第3题：2+3=?\n实际作答：5','虚构甲卷第3题：5',objective('虚构甲卷第3题','2+3=?','5','教师参考：2+3=5'))
+        self.assertIn(got,[('教师参考：5','correct'),('教师参考：2+3=5','correct')])
+
+    def test_bare_numbers_and_sections_pair_only_by_teacher_text(self):
+        two='一、计算\n1. 36+47=? 作答83\n二、计算\n1. 30+17=? 作答47'
+        cases=[('1. 36+47=? 作答83','1. 83',objective('1','36+47=?','83','教师参考：83'),[('教师参考：83','correct')]),
+               ('1. 36+47=? 作答82','1. 83',objective('1','36+47=?','82','教师参考：83','incorrect',error_reason='作答82与教师参考83不同。'),[('教师参考：83','incorrect')]),
+               ('一、计算\n1. 36+47=? 作答83','一、计算\n1. 83',objective('一、1','36+47=?','83','教师参考：83'),[('教师参考：83','correct')]),
+               (two,'一、计算\n1. 83',objective('二、1','30+17=?','47','AI自行推导：47'),[('AI自行推导：47','correct')]),
+               (two,'一、计算\n1. 83',objective('二、1','30+17=?','47','教师参考：47'),[('','unknown'),('AI自行推导：47','correct')]),
+               ('虚构乙卷\n1. 30+17=? 作答47','虚构甲卷\n1. 83',objective('虚构乙卷1','30+17=?','47','教师参考：47'),[('','unknown'),('AI自行推导：47','correct')])]
+        for n,(questions,teacher,item,allowed) in enumerate(cases,1):
+            with self.subTest(case='B0%d'%n):
+                got,_=self.run_case(questions,teacher,item);self.assertIn(got,allowed)
+
+    def test_teacher_original_reference_header_is_a_source_word(self):
+        item=objective('虚构身份甲卷第1题','虚构身份甲卷第1题：2+3=?','4','教师参考：5','incorrect',error_reason='卷面作答4与核对答案5不同。',
+                       steps='先独立重算2+3，再对照核对答案。')
+        got,result=self.run_case('虚构身份甲卷第1题：2+3=? 实际作答4','虚构身份甲卷第1题教师原参考：2+3=5。',item)
+        self.assertEqual(got,('教师参考：5','incorrect'));self.assertEqual((result['wrong_items'],result['unknown_items']),(1,0))
+
+    def test_long_teacher_answer_is_kept_whole_and_the_short_claim_stays_pending(self):
+        teacher=LONG_TEACHER.split('第1题：',1)[1]
+        item=objective('虚构甲卷第一大题第1题',LONG_QUESTION,'6','教师参考：6',question_kind='subjective')
+        got,result=self.run_case('虚构甲卷\n第一大题\n第1题：'+LONG_QUESTION+'\n孩子最终作答：6',LONG_TEACHER,item)
+        self.assertEqual(got,('教师参考：'+teacher,'unknown'));self.assertEqual(len(teacher),286)
+        self.assertIn('参考答案：教师参考：'+teacher,result['text']);self.assertEqual(result['questions'][0]['student_answer'],'6')
+        self.assertEqual((result['wrong_items'],result['unknown_items']),(0,1))
+
+
 class TextQuestionContractTests(unittest.TestCase):
     def test_text_teacher_claim_requires_teacher_original(self):
         previous=[{},dict(previous_text='虚构旧意见：教师参考为5。'),
@@ -414,4 +469,4 @@ class TextQuestionHTTPTests(HomeworkPrintScopeTests):
             self.assertEqual(status,400,out);model.assert_not_called();self.assertEqual(self.dump(),before)
 
 
-if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TeacherReferenceScopeTests','TeacherReferenceSourceTests','TeacherReferenceEquationTests','TextQuestionHTTPTests'])
+if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TeacherReferenceScopeTests','TeacherReferenceSourceTests','TeacherReferenceEquationTests','TeacherReferenceGrammarTests','TextQuestionHTTPTests'])
