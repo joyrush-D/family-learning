@@ -142,6 +142,50 @@ class TeacherReferenceIdentityTests(unittest.TestCase):
         self.assertEqual([(q['answer'],q['judgment']) for q in result['questions']],[('教师参考：7米','correct')])
 
 
+LONG_PREFIX='这是虚构教师参考长答案的共同前缀'*8
+
+
+class TeacherReferenceScopeTests(unittest.TestCase):
+    """Second independent review: sections, new titles, unsure pairing and whole teacher values."""
+    def run_case(self,teacher,*items,images=0):
+        raw=frozen(*items);original=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            result=family_llm.homework_reference_draft([],review=True,question_documents=[dict(name='synthetic-paper.txt',text='虚构题目与孩子原答。')],
+                reference_documents=[dict(name='synthetic-teacher.txt',text=teacher)],reference_images=[dict(mime='image/png',data=PNG)]*images)
+        self.assertEqual(model.call_count,1);self.assertEqual(raw,original)
+        return [(q['answer'],q['judgment']) for q in result['questions']],result
+
+    def test_numbered_section_keeps_its_own_teacher_answer(self):
+        got,_=self.run_case('虚构甲卷第1大题第1题B',objective('虚构甲卷第1大题第1题','2+3=? A.4 B.5 C.6','B','教师参考：B'),
+                            objective('虚构甲卷第2大题第1题','3+4=? A.6 B.8 C.7','C','AI自行推导：C'))
+        self.assertEqual(got,[('教师参考：B','correct'),('AI自行推导：C','correct')])
+
+    def test_new_title_line_does_not_inherit_the_previous_paper(self):
+        for title in ('南风卷','南风练习'):
+            with self.subTest(title=title):
+                got,_=self.run_case('虚构甲卷\n第1题教师B\n%s\n第1题教师C'%title,objective('虚构甲卷第1题','2+3=? A.4 B.5 C.6','B','教师参考：B'),
+                                    objective(title+'第1题','1+2=? A.1 B.2 C.3','C','教师参考：C'))
+                self.assertEqual(got,[('教师参考：B','correct'),('教师参考：C','correct')])
+
+    def test_teacher_label_cannot_settle_an_unsure_pairing(self):
+        got,result=self.run_case('虚构甲卷 第1题：教师参考B',objective('第1题','2+3=? A.4 B.5 C.6','B','教师参考：B'))
+        self.assertEqual(got[0][1],'unknown');self.assertIn('卷别',result['questions'][0]['uncertainty'])
+        self.assertEqual((result['wrong_items'],result['unknown_items']),(0,1))
+
+    def test_claimed_teacher_value_must_be_the_whole_teacher_text(self):
+        rope=objective('虚构甲卷第2题','一根绳子长12米，剪去5米，还剩几米？','8米','教师参考：8米')
+        got,result=self.run_case('虚构甲卷 第2题：教师参考7米',rope,images=1)
+        self.assertEqual(got,[('教师参考：7米','unknown')]);self.assertIn('8米',result['questions'][0]['uncertainty'])
+        got,_=self.run_case('虚构甲卷 第1题：教师参考B',objective('虚构甲卷第1题','2+3=? A.4 B.5 C.6','C','教师参考：选C'))
+        self.assertIn(got[0][1],('incorrect','unknown'));self.assertIn('B',got[0][0])
+        cut=objective('虚构甲卷第3题','虚构长答案题。','虚构作答','教师参考：'+LONG_PREFIX[:100])
+        for teacher in ('虚构甲卷 第3题：%s甲结论\n虚构甲卷 第3题：%s乙结论'%(LONG_PREFIX,LONG_PREFIX),'虚构甲卷 第3题：%s甲结论'%LONG_PREFIX):
+            with self.subTest(entries=teacher.count('\n')+1):
+                got,result=self.run_case(teacher,cut)
+                self.assertEqual(got[0][1],'unknown');self.assertNotEqual(got[0][0],cut['answer'])
+                self.assertEqual((result['wrong_items'],result['unknown_items']),(0,1))
+
+
 class TextQuestionContractTests(unittest.TestCase):
     def test_text_teacher_claim_requires_teacher_original(self):
         previous=[{},dict(previous_text='虚构旧意见：教师参考为5。'),
@@ -300,4 +344,4 @@ class TextQuestionHTTPTests(HomeworkPrintScopeTests):
             self.assertEqual(status,400,out);model.assert_not_called();self.assertEqual(self.dump(),before)
 
 
-if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TextQuestionHTTPTests'])
+if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TeacherReferenceScopeTests','TextQuestionHTTPTests'])
