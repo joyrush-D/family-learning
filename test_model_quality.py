@@ -717,6 +717,70 @@ class SiblingCoverageTest(unittest.TestCase):
                     _select_school_a(base[1:], evidence=evidence)
 
 
+    def test_same_teachers_linked_incomplete_message_never_releases_known_siblings(self):
+        import family_agent
+        base = _school_a_reply()
+        for label, change in [('incomplete', dict(content_incomplete=True)), ('unread', dict(unread=True)),
+                              ('attachment', dict(attachments=[dict(name='全虚构未读取附件', mime='image/png')]))]:
+            evidence = copy.deepcopy(SCHOOL_CASES['school-a']['evidence'])  # 冻结关联：1↔6，同一老师
+            evidence[5].update(change)
+            with self.subTest(label):
+                ledger = {a['quote'][:4]: [c['ref'][-1] for c in a['changes']]
+                          for a in family_agent._school_native_actions(copy.deepcopy(evidence)) if a['ref'] == evidence[0]['ref']}
+                self.assertEqual(ledger, {'背诵《秋': [], '完成练习': []})
+                for proposals in (base[1:], base + [copy.deepcopy(base[0])], base):
+                    with self.assertRaises(family_agent.AgentError):
+                        _select_school_a(proposals, evidence=evidence)
+                # 练习册只引原清单、未读补充单列待核时可接受；保存层仍拒绝漏掉未变的背诵。
+                kept = copy.deepcopy(base); kept[1]['evidence'] = [dict(ref=evidence[0]['ref'])]
+                kept.append(dict(copy.deepcopy(base[7]), title_quote=evidence[5]['text'].rstrip('。'), evidence=[dict(ref=evidence[5]['ref'])],
+                                 task_title='语文：练习册补充待核', task_goal='补充消息未完整读取，待核对。', task_state='review',
+                                 task_reason='补充未读完。', task_purpose='learning', learning_subject='语文'))
+                items = _select_school_a(kept, evidence=evidence)
+                family_agent._school_native_saved(copy.deepcopy(items), copy.deepcopy(evidence))
+                with self.assertRaises(family_agent.AgentError):
+                    family_agent._school_native_saved([i for i in copy.deepcopy(items) if '背诵' not in i['title']], copy.deepcopy(evidence))
+
+    def test_later_correction_binds_its_one_outcome_and_never_releases_siblings(self):
+        import family_agent
+        base = _school_a_reply()
+        evidence = [dict(e, related_messages=[e['ref']]) for e in copy.deepcopy(SCHOOL_CASES['school-a']['evidence'])]
+        evidence[5]['text'] = '更正：练习册第5题不用做，只做第1-4题。'
+        ledger = {a['quote'][:4]: [c['ref'][-1] for c in a['changes']]
+                  for a in family_agent._school_native_actions(copy.deepcopy(evidence)) if a['ref'] == evidence[0]['ref']}
+        self.assertEqual(ledger, {'背诵《秋': [], '完成练习': ['6']})
+        result = score_school('school-a', school_rows(_select_school_a(base, evidence=evidence)))
+        self.assertEqual((result['covered'], result['usable'], result['citation_errors'], result['extra']), (7, 7, [], []), result)
+        for proposals in (base[1:], base + [copy.deepcopy(base[0])]):
+            with self.assertRaises(family_agent.AgentError):
+                _select_school_a(proposals, evidence=evidence)
+        # 后发但对象无法核对的更正：清单仍在；更正单列待核、练习册只引原清单时，漏背诵仍拒绝。
+        evidence[5]['text'] = '更正：刚才的作业有调整，请等通知。'
+        self.assertEqual([a['quote'][:4] for a in family_agent._school_native_actions(copy.deepcopy(evidence)) if a['ref'] == evidence[0]['ref']],
+                         ['背诵《秋', '完成练习'])
+        dropped = copy.deepcopy(base[1:]); dropped[0]['evidence'] = [dict(ref=evidence[0]['ref'])]
+        dropped.append(dict(copy.deepcopy(base[7]), title_quote='更正：刚才的作业有调整，请等通知', evidence=[dict(ref=evidence[5]['ref'])],
+                            task_title='语文：作业调整待通知', task_goal='老师说作业有调整，待通知。', task_state='review',
+                            task_reason='调整内容未说明。', task_purpose='learning', learning_subject='语文'))
+        with self.assertRaises(family_agent.AgentError):
+            _select_school_a(dropped, evidence=evidence)
+        _select_school_a([copy.deepcopy(base[0])] + dropped, evidence=evidence)
+
+    def test_bound_date_change_is_review_not_a_permanent_rejection(self):
+        import family_agent
+        base = _school_a_reply()
+        evidence = [dict(e, related_messages=[e['ref']]) for e in copy.deepcopy(SCHOOL_CASES['school-a']['evidence'])]
+        evidence[5]['text'] = '更正：练习册改为下周一交。'
+        revised = copy.deepcopy(base)
+        revised[1].update(task_change='update', task_state='review', due='2026-10-12', task_goal='练习册第12页第1-5题改为下周一交。')
+        rows = school_rows(_select_school_a(revised, evidence=evidence))
+        worksheet = next(r for r in rows if '练习册' in r['text'] and r['state'] != 'reference')
+        self.assertNotEqual(worksheet['state'], 'ready', worksheet)
+        self.assertEqual(sum('背诵' in r['text'] for r in rows), 1, rows)
+        with self.assertRaises(family_agent.AgentError):
+            _select_school_a(revised[1:], evidence=evidence)
+
+
 def ingest_school(name, reply, runs=1):
     """Store.ingest → run_once → _select → _save; the model seam returns a saved parsed reply with refs remapped."""
     from contextlib import ExitStack
@@ -797,6 +861,31 @@ class RealIngestTest(unittest.TestCase):
         self.assertEqual((result['covered'], result['usable'], result['missed'], result['purpose_errors'], result['requirement_errors'],
                           result['citation_errors'], result['reference_errors'], result['extra']), (7, 7, [], [], [], [], [], []), result)
 
+    RECEIPTS = Path(__file__).resolve().parent / 'private' / 'model-quality-20261007'
+
+    def test_saved_strong_school_a_reply_keeps_seven_independent_ready_rows(self):
+        path = self.RECEIPTS / 'school-a-strong.json'
+        if not path.exists(): self.skipTest('本机没有私有已存回执；不发任何请求')
+        run = ingest_school('school-a', json.loads(path.read_text())['captured']['raw_model_output'], runs=2)
+        self.assertEqual((len(run['calls']), run['counts'][0] == run['counts'][1]), (1, True), run['results'])
+        result = score_school('school-a', school_rows(run['items']))
+        self.assertEqual((result['covered'], result['ready'], result['due_errors'], result['review'], result['citation_errors'],
+                          result['reference_errors'], result['extra']), (7, 7, [], [], [], [], []), result)
+        # 每项各自核对：成果、原消息科目、原消息来源与本项日期；不靠标题关键词或处理条数。
+        prefix = 'message:synthetic-school-a:'
+        texts = {e['ref']: e['text'] for e in SCHOOL_CASES['school-a']['evidence']}
+        used = set()
+        for truth in SCHOOL_CASES['school-a']['truth']:
+            refs = sorted(prefix + str(r) for r in truth['refs'])
+            subject = re.search('语文|数学|英语', texts[refs[0]])[0] if truth['purpose'] == 'learning' else None
+            found = [n for n, item in enumerate(run['items']) if n not in used
+                     and sorted(e['ref'] for e in item['evidence']) == refs and item['due'] == truth['due']
+                     and item['plan']['school_task']['state'] == 'ready' and item['plan']['school_task']['purpose'] == truth['purpose']
+                     and (item['plan'].get('school_learning') or {}).get('subject') == subject
+                     and all(k in item['title'] + item['body'] for k in truth['keys'])]
+            self.assertEqual(len(found), 1, (truth['id'], [(i['title'], i['due'], i['plan']['school_task']['state']) for i in run['items']]))
+            used.add(found[0])
+
     def test_school_a_keeps_each_explicit_action_date(self):
         result = score_school('school-a', school_rows(ingest_school('school-a', dict(proposals=_school_a_reply()))['items']))
         self.assertEqual((result['covered'], result['usable'], result['due_errors'], result['review']), (7, 7, [], []), result)
@@ -825,7 +914,37 @@ class ActionDateTest(unittest.TestCase):
         if evidence_edit: evidence_edit(evidence)
         if proposal_edit: proposal_edit(proposals)
         rows = school_rows(_select_school_a(proposals, evidence=evidence))
-        return {key: next(r for r in rows if key in r['text']) for key in ('背诵', '运动服', '抄写', '听写', '告知书')}
+        return {key: next(r for r in rows if key in r['text']) for key in ('背诵', '运动服', '抄写', '听写', '告知书', '练习册')}
+
+    SPORTS_PARAPHRASE = '周四学校体检。\n孩子当天穿运动服。'  # 已存较强回执里的合理改写（加“当天”），不是新增真值
+
+    def test_paraphrased_goal_with_the_same_arrangement_keeps_its_date(self):
+        row = self.rows(None, lambda p: p[4].update(task_goal=self.SPORTS_PARAPHRASE))['运动服']
+        self.assertEqual((row['due'], row['state']), ('2026-10-08', 'ready'), row)
+
+    def test_goal_date_contradicting_due_or_its_own_clause_is_never_ready(self):
+        import family_agent
+        notice = '打印《秋游安全告知书》，家长签字后10月10日前交回班主任；不需要盖章。'
+        cases = [('notice_goal_oct11_due_oct10', '告知书', lambda p: p[3].update(task_goal=notice.replace('10日前', '11日前'))),
+                 ('sports_goal_from_notice_due_oct10', '运动服', lambda p: p[4].update(task_goal=notice, due='2026-10-10')),
+                 ('sports_goal_from_notice_due_oct8', '运动服', lambda p: p[4].update(task_goal=notice)),
+                 ('sports_paraphrase_due_oct9', '运动服', lambda p: p[4].update(task_goal=self.SPORTS_PARAPHRASE, due='2026-10-09')),
+                 ('copying_goal_friday', '抄写', lambda p: p[5].update(task_goal='今晚把Unit 3单词每个抄写两遍，周五交。')),
+                 ('changed_worksheet_goal_thursday', '练习册', lambda p: p[1].update(task_goal='完成练习册第12页第1-4题，第5题不用做；本周四交。'))]
+        for label, key, edit in cases:
+            with self.subTest(label):
+                self.assertNotEqual(self.rows(None, edit)[key]['state'], 'ready')
+        # 保存层同样不收“摘要日期≠本项日期”的就绪项（纯回执，不经数据库）。
+        evidence = [dict(e, related_messages=[e['ref']]) for e in copy.deepcopy(SCHOOL_CASES['school-a']['evidence'])]
+        items = _select_school_a(_school_a_reply(), evidence=evidence)
+        family_agent._school_native_saved(copy.deepcopy(items), copy.deepcopy(evidence))
+        for key, old, new in (('告知书', '10月10日前', '10月11日前'), ('练习册', '本周五交', '本周四交')):
+            tampered = copy.deepcopy(items); item = next(i for i in tampered if key in i['title'])
+            self.assertEqual(item['plan']['school_task']['state'], 'ready')
+            self.assertIn(old, item['body'], item['body'])
+            item['body'] = item['body'].replace(old, new); item['plan']['school_task']['goal'] = item['body']
+            with self.subTest(saved=key), self.assertRaises(family_agent.AgentError):
+                family_agent._school_native_saved(tampered, copy.deepcopy(evidence))
 
     def test_each_action_keeps_its_own_arrangement_date(self):
         self.assertEqual({k: (r['due'], r['state']) for k, r in self.rows().items()},
@@ -891,6 +1010,29 @@ class UnansweredReasonTest(unittest.TestCase):
             self.assertEqual(claim['passed'], truth[n]['source'] == 'ai', claim)
 
 
+class ScorerPacketTest(unittest.TestCase):
+    """独立评分反例包：每例只改一个字段，冻结真值不变；本机有私有已存较强回执时也以其为底逐一复核。"""
+    CASES = [('homework-a', 0, dict(answer='教师参考：183')), ('homework-a', 0, dict(answer='教师参考：-83')),
+             ('homework-a', 0, dict(answer='教师参考：不是83')), ('homework-a', 2, dict(uncertainty='')),
+             ('homework-b', 5, dict(uncertainty='教师参考缺失，因此无法判断')), ('homework-a', 2, dict(answer='AI自行推导：7米')),
+             ('homework-b', 5, dict(answer='教师参考：A. 一')), ('homework-b', 0, dict(question_kind='unknown')),
+             ('homework-a', 5, dict(student_answer='不是因为它是长方形')), ('homework-a', 5, dict(question='长方形是怎样的三角形？'))]
+
+    def bases(self, name):
+        yield 'truthful', _homework_reply(name)['items']
+        path = Path(__file__).resolve().parent / 'private' / 'model-quality-20261007' / (name + '-strong.json')
+        if path.exists():
+            yield 'saved-strong', json.loads(path.read_text())['captured']['raw_model_output']['items']
+
+    def test_each_counterexample_fails_while_its_base_passes(self):
+        for name, index, change in self.CASES:
+            for label, items in self.bases(name):
+                with self.subTest(name=name, base=label, change=change):
+                    self.assertTrue(score_homework(name, copy.deepcopy(items))['passed'], (label, score_homework(name, copy.deepcopy(items))))
+                    edited = copy.deepcopy(items); edited[index].update(change)
+                    self.assertFalse(score_homework(name, edited)['passed'], change)
+
+
 class ExactAnswerTest(unittest.TestCase):
     def test_objective_answers_need_the_whole_value(self):
         import family_llm
@@ -948,6 +1090,18 @@ class _FakeOpener:
         return io.BytesIO(json.dumps(body, ensure_ascii=False).encode())
 
 
+class _EchoOpener:
+    """FAKE upstream body echoing a configured test marker; no real credential is read or sent."""
+
+    def __init__(self, status, body):
+        self.status, self.body = status, body
+
+    def open(self, request, timeout=None):
+        if self.status != 200:
+            raise HTTPError(request.full_url, self.status, 'fake', None, io.BytesIO(self.body.encode()))
+        return io.BytesIO(self.body.encode())
+
+
 class LiveEvidenceTest(unittest.TestCase):
     """Fixed fake HTTP only: no product model request is made by these checks."""
 
@@ -981,6 +1135,24 @@ class LiveEvidenceTest(unittest.TestCase):
         with patch.object(family_llm, 'build_opener', lambda *handlers: fake), self.assertRaises(SystemExit):
             live(self.cfg, self.out, 'strong', ['homework-a'])
         self.assertEqual((len(fake.calls), path.read_bytes()), (1, before))
+
+    def test_configured_secret_echo_is_redacted_and_labeled_with_raw_hash(self):
+        import family_llm
+        cfg = Path(self.cfg) / 'model.json'
+        cfg.write_text(json.dumps(dict(json.loads(cfg.read_text()), api_key='fake-key-sentinel')))  # FAKE 测试标记，绝非真实凭据
+        draft = _homework_reply('homework-a'); draft['items'][0]['question'] = 'fake-key-sentinel 36 + 47 = ____'
+        probes = [('homework-a', _EchoOpener(200, '{"error":{"message":"upstream reflected Authorization: Bearer fake-key-sentinel"}}')),
+                  ('homework-b', _EchoOpener(401, '{"error":{"message":"upstream reflected fake-key-sentinel"}}')),
+                  ('school-b', _FakeOpener(draft))]
+        for name, opener in probes:
+            with patch.object(family_llm, 'build_opener', lambda *handlers, o=opener: o):
+                live(self.cfg, self.out, 'strong', [name])
+            record = json.loads((self.out / (name + '-strong.json')).read_text())
+            with self.subTest(name):
+                self.assertIn('redaction', record, record)
+                self.assertTrue(record['redaction']['raw_sha256'], record['redaction'])
+        self.assertNotIn('fake-key-sentinel', self.saved())
+        self.assertNotIn('fake-endpoint', self.saved())
 
     def test_http_failure_body_and_status_kept(self):
         import family_llm
