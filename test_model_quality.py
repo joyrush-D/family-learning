@@ -874,6 +874,11 @@ C = 'message:synthetic-school-heldout-c:'
 SCHOOL_C_REFS = {'纸船背诵': [1, 5], '语文练习1-5': [1, 5], '计算卡C4': [2, 6], '阅读确认单': [3], '磁铁装置图': [4]}
 # 本修复后才走到的另一道既有守卫：确认单原文含“阅读”且要交回，转家长核对（冻结真值为ready）；不属本根因，未在本分支放宽。
 SCHOOL_C_REVIEW = {'阅读确认单': '原文同时提到学习活动和打卡/提交，请核对是否含作业'}
+# 消息5末句是肯定、明确的“不变”。前三条是本机独立验收的固定虚构反例（否定、点名别的科目），后三条是独立等价的否定、问句、尚未确定变体：都不能证明背诵不变。
+SCHOOL_C_KEEP = '《纸船》第二节的背诵和抽查安排不变。'
+SCHOOL_C_NOT_KEPT = {'并非不变': '《纸船》第二节的背诵和抽查安排并非不变。', '不是不变': '《纸船》第二节的背诵和抽查安排不是不变。',
+                     '英语': '《纸船》第二节的英语背诵和抽查安排不变。', '未必不变': '《纸船》第二节的背诵和抽查安排未必不变。',
+                     '不变对吗': '《纸船》第二节的背诵和抽查安排不变，对吗？', '是否不变': '《纸船》第二节的背诵和抽查安排是否不变尚未确定。'}
 
 
 def _select_school_c(proposals=None, real=False, **changes):
@@ -961,6 +966,39 @@ class SchoolCorrectionScopeTest(unittest.TestCase):
                         continue
                     row = next(i for i in items if key in i['title'] + i['body'])
                     self.assertNotEqual(row['plan']['school_task']['state'], 'ready', (label, real, row['title'], row['due']))
+
+    def test_negated_asked_or_other_subject_unchanged_clause_proves_nothing(self):
+        # 实际入库形状：同一个判定供选择与保存两层复用；只有肯定、明确且科目一致的“不变”可作背诵出处。
+        import family_agent
+        five = _SCHOOL_C['evidence'][4]['text']
+        self.assertEqual(five.count(SCHOOL_C_KEEP), 1)
+        real = [dict(e, related_messages=[e['ref']]) for e in copy.deepcopy(_SCHOOL_C['evidence'])]
+        actions = family_agent._school_native_actions(real); entries = {e['ref']: e for e in real}
+        kept = {a['quote'][:4]: sorted(family_agent._school_native_kept(a, actions, entries)) for a in actions}
+        self.assertEqual(kept, {'背诵《纸': [C + '5'], '完成语文': [], '完成计算': [C + '6']}, kept)
+        legal = _select_school_c(real=True)
+        family_agent._school_native_saved(legal, real)
+        for label, sentence in SCHOOL_C_NOT_KEPT.items():
+            evidence = [dict(e, text=five.replace(SCHOOL_C_KEEP, sentence)) if e['ref'] == C + '5' else e for e in real]
+            actions = family_agent._school_native_actions(evidence); entries = {e['ref']: e for e in evidence}
+            with self.subTest(label, layer='kept'):
+                kept = {a['quote'][:4]: sorted(family_agent._school_native_kept(a, actions, entries)) for a in actions}
+                self.assertEqual(kept, {'背诵《纸': [], '完成语文': [], '完成计算': [C + '6']}, kept)
+            with self.subTest(label, layer='select'):
+                try:
+                    items = _select_school_c(real=True, m5=dict(text=evidence[4]['text']))
+                except family_agent.AgentError:
+                    pass
+                else:
+                    row = next(i for i in items if '纸船' in i['title'] + i['body'])
+                    self.assertNotEqual(row['plan']['school_task']['state'], 'ready', (label, row['title'], row['due']))
+            with self.subTest(label, layer='save'):
+                # 选择层若照旧放过（模拟原判定），保存层用同一判定独立拦下整批；行动台账与本变体原文一致。
+                loose = lambda a, *_: {C + '5'} if a['quote'].startswith('背诵') else {C + '6'} if a['quote'].startswith('完成计算') else set()
+                with patch.object(family_agent, '_school_native_kept', side_effect=loose):
+                    items = _select_school_c(real=True, m5=dict(text=evidence[4]['text']))
+                with self.assertRaisesRegex(family_agent.AgentError, '学校完整要求未按对应行动保存'):
+                    family_agent._school_native_saved(items, evidence)
 
 
 def ingest_school(name, reply, runs=1):
@@ -1084,6 +1122,17 @@ class RealIngestTest(unittest.TestCase):
                                                   (C + '2', '完成计算卡C4第1-8题，后天交；每题写出计算过程', [])])
         _school_c_matches(self, run['items'], 'ingest')
         self.assertEqual(run['originals'], [e['text'] for e in _SCHOOL_C['evidence']])
+
+    def test_school_c_negated_or_other_subject_unchanged_clause_saves_no_ready_recitation_citing_it(self):
+        five = _SCHOOL_C['evidence'][4]['text']
+        for label, sentence in SCHOOL_C_NOT_KEPT.items():
+            evidence = copy.deepcopy(_SCHOOL_C['evidence']); evidence[4]['text'] = five.replace(SCHOOL_C_KEEP, sentence)
+            with self.subTest(label), patch.dict(SCHOOL_CASES, {'school-heldout-c': dict(SCHOOL_CASES['school-heldout-c'], evidence=evidence)}):
+                run = ingest_school('school-heldout-c', copy.deepcopy(_SCHOOL_C['reply']))
+                self.assertEqual(run['originals'], [e['text'] for e in evidence])
+                recite = [(i['plan']['school_task']['state'], i['due'], [e['ref'][-1] for e in i['evidence']])
+                          for i in run['items'] if '纸船' in i['title'] + i['body']]
+                self.assertFalse([r for r in recite if r[0] == 'ready' and '5' in r[2]], (label, recite, run['counts'], run['results']))
 
     def test_school_b_wrong_model_date_or_empty_reply_is_not_accepted(self):
         result = score_school('school-b', school_rows(ingest_school('school-b', dict(proposals=_school_b_reply(wrong_date=True)))['items']))
