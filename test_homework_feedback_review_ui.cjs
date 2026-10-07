@@ -366,7 +366,11 @@ runpy.run_path('demo.py',run_name='__main__')`;
   assert.equal(wrongRecords[0].attachments[0],state.records.find(r=>r.source==='事项:'+id).attachments[0],'saved photo is reused');
   assert.equal(state.tasks.find(t=>t.id===id).update,null,'recording a wrong answer does not complete homework');
   assert.equal(await p.locator('#taskFeedbackHistory [data-homework-review]').count(),1,'wrong-item record does not start a second AI review');
-  await p.keyboard.press('Escape');await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskFeedbackHistory').getByText('作业错题', {exact:false}).first().waitFor();
+  await p.keyboard.press('Escape');await p.locator('[data-task="'+id+'"]').first().click();
+  // Fictional review: under the "错题" heading the link line read "关联记录 · 错题：第2题 · 作业错题"; it now names the item once, and the saved title, source and homework link stay as they were.
+  const wrongCard=p.locator('#taskFeedbackHistory .task-feedback-record').filter({has:p.locator('[data-record="'+wrongRecords[0].id+'"]')});await wrongCard.waitFor();
+  assert.equal(await wrongCard.locator('.task-record-heading strong').innerText(),'错题');assert.equal(await wrongCard.locator('p.muted').filter({hasText:'关联记录'}).innerText(),'关联记录 · '+wrongRecords[0].title.replace(/^错题：/,''),'wrong-item link line names the item once');
+  const savedWrong=(await(await fetch(host.url+'api/state')).json()).records.find(r=>r.id===wrongRecords[0].id);assert.deepEqual([savedWrong.title,savedWrong.source,savedWrong.linked_task_id],[wrongRecords[0].title,'错题照片核对',id],'the shorter line leaves the saved wrong item unchanged');
   // Fictional 360 report: help level and feedback date each got about 125px, cutting "未记录 / 不确定" and the date's last digit.
   assert.equal(await p.getByRole('dialog',{name:child+' · '+title}).count(),1,'feedback dialog is named after the original homework');
   await p.locator('#taskFeedbackDay').scrollIntoViewIfNeeded();
@@ -376,7 +380,6 @@ runpy.run_path('demo.py',run_name='__main__')`;
   const feedbackLook=await p.evaluate(()=>{const t=document.querySelector('#taskTitle'),row=document.querySelector('#taskFeedbackHistory .task-link-actions:has([data-followup])'),[a,b]=['[data-record]','[data-followup]'].map(s=>row.querySelector(s).getBoundingClientRect());return {focused:document.activeElement===t,outline:getComputedStyle(t).outlineStyle,gap:Math.max(b.left-a.right,b.top-a.bottom),sizes:[...document.querySelectorAll('#taskForm .capture-actions>*')].map(x=>getComputedStyle(x).fontSize)}});
   assert(feedbackLook.focused&&feedbackLook.outline==='none','programmatic focus stays on the plain title without an input-like box');assert(feedbackLook.gap>=6,'linked-record buttons are spaced: '+feedbackLook.gap);assert.equal(new Set(feedbackLook.sizes).size,1,'capture buttons share one size: '+feedbackLook.sizes);
   if(process.env.CORRECTION_PROOF_DIR)await p.screenshot({path:require('node:path').join(process.env.CORRECTION_PROOF_DIR,'task-feedback'+'-'+width+'.png')});
-  const wrongCard=p.locator('#taskFeedbackHistory .task-feedback-record').filter({has:p.locator('[data-record="'+wrongRecords[0].id+'"]')});
   await p.locator('#taskForm [name=note]').fill('虚构未保存的新反馈');p.once('dialog',d=>d.dismiss());
   await wrongCard.locator('[data-followup]').click();assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'correction does not discard unsaved feedback');
   assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'虚构未保存的新反馈');await p.locator('#taskForm [name=note]').fill('');
