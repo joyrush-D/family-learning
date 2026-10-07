@@ -590,12 +590,12 @@ function dialogVisibleBox(node){
  if(bar&&!bar.contains(node)&&getComputedStyle(bar).position==='sticky')box.bottom=Math.min(box.bottom,bar.getBoundingClientRect().top);
  return box;
 }
-// Scroll the dialog until the nodes are whole in that box. A stuck sticky column does not move, so when a scroll left them in place, also cover the distance it holds before it scrolls.
-function revealInDialog(nodes){
+// Scroll the dialog until the nodes, plus gap px of clear space above and below, are whole in that box. A stuck sticky column does not move, so when a scroll left them in place, also cover the distance it holds before it scrolls.
+function revealInDialog(nodes,gap=0){
  const dialog=nodes[0].closest('dialog');let sticky=null,last=null;if(!dialog)return;
  for(let x=nodes[0].parentElement;x&&x!==dialog&&!sticky;x=x.parentElement)if(getComputedStyle(x).position==='sticky')sticky=x;
  for(let i=0;i<5;i++){
-  const box=dialogVisibleBox(nodes[0]),rects=nodes.map(n=>n.getBoundingClientRect()),top=Math.min(...rects.map(r=>r.top)),bottom=Math.max(...rects.map(r=>r.bottom));
+  const box=dialogVisibleBox(nodes[0]),rects=nodes.map(n=>n.getBoundingClientRect()),top=Math.min(...rects.map(r=>r.top))-gap,bottom=Math.max(...rects.map(r=>r.bottom))+gap;
   let delta=bottom>box.bottom?Math.min(bottom-box.bottom,top-box.top):top<box.top?top-box.top:0;if(Math.abs(delta)<1)return;
   if(sticky&&delta>0&&last!==null&&Math.abs(last-top)<1)delta+=Math.max(0,sticky.parentElement.getBoundingClientRect().bottom-sticky.getBoundingClientRect().bottom);
   const was=dialog.scrollTop;last=top;dialog.scrollTop+=delta;if(dialog.scrollTop===was)return;
@@ -730,8 +730,10 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
   taskFeedbackExcluded.clear();drawPending();
   f.elements.note.value='家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #'+recordId+'。';
   status.textContent='已填入反馈，尚未保存；请点“保存这次反馈”。作业完成状态不会改变。';button.disabled=true;area.disabled=true;panel.querySelector('[data-homework-review-instruction]').disabled=false;
-  // The original save button stays the only save; the unsaved note and that button end whole inside what the dialog shows, not only inside the window.
-  const unsaved=$('#taskFeedbackStatus'),unsavedPair=[unsaved,$('#saveTaskFeedback')];unsaved.textContent='检查意见已填入，尚未保存；请保存这次反馈。';unsaved.scrollIntoView({block:matchMedia('(max-width:760px)').matches?'center':'nearest'});revealInDialog(unsavedPair);requestAnimationFrame(()=>revealInDialog(unsavedPair));unsavedPair[1].focus({preventScroll:true});
+  // Only a real fill moves this result to the filled stage; a failed upload or a blocked fill keeps the pending stage, and a new run builds a fresh one.
+  const filledStage=result.querySelector('.homework-review-stage'),filledHint=result.querySelector('.homework-review-next>p');if(filledStage)filledStage.textContent='检查意见已填入，尚未保存';if(filledHint)filledHint.textContent='检查意见已填入，尚未保存；请保存这次反馈。';
+  // The original save button stays the only save; the unsaved note and that button, with its focus ring, end at least 12px (13 for rounding) inside what the dialog shows, not only inside the window.
+  const unsaved=$('#taskFeedbackStatus'),unsavedPair=[unsaved,$('#saveTaskFeedback')];unsaved.textContent='检查意见已填入，尚未保存；请保存这次反馈。';unsaved.scrollIntoView({block:matchMedia('(max-width:760px)').matches?'center':'nearest'});unsavedPair[1].focus({preventScroll:true});const saveRing=getComputedStyle(unsavedPair[1]),saveGap=13+(saveRing.outlineStyle==='none'?0:parseFloat(saveRing.outlineWidth)+Math.max(0,parseFloat(saveRing.outlineOffset)||0));revealInDialog(unsavedPair,saveGap);requestAnimationFrame(()=>revealInDialog(unsavedPair,saveGap));
  }catch(error){status.textContent=(error.name==='AbortError'?'文字原件上传超时':error.message||'文字原件未保存')+'；草稿仍在，可重试。';editing.forEach(x=>x.disabled=false);button.disabled=false}
  finally{finishHomeworkReview()}
 });
