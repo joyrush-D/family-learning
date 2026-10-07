@@ -186,6 +186,50 @@ class TeacherReferenceScopeTests(unittest.TestCase):
                 self.assertEqual((result['wrong_items'],result['unknown_items']),(0,1))
 
 
+class TeacherReferenceSourceTests(unittest.TestCase):
+    """Third review: an unpaired or extended "教师参考：" label never proves its own source."""
+    def run_case(self,teacher,item):
+        raw=frozen(item);original=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            result=family_llm.homework_reference_draft([],review=True,question_documents=[dict(name='synthetic-paper.txt',text='虚构题目与孩子原答。')],
+                reference_documents=[dict(name='synthetic-teacher.txt',text=teacher)])
+        self.assertEqual(model.call_count,1);self.assertEqual(raw,original)
+        q=result['questions'][0]
+        self.assertEqual((q['student_answer'],q['question']),(item['student_answer'],item['question']))
+        return q
+
+    def test_extended_teacher_letter_is_not_the_teacher_value(self):
+        for claimed in ('B或C','B（因为2+3=5）'):
+            with self.subTest(claimed=claimed):
+                q=self.run_case('虚构甲卷 第4题：教师参考B',objective('虚构甲卷第4题','2+3=? A.4 B.5 C.6','C','教师参考：'+claimed))
+                self.assertIn(q['judgment'],('incorrect','unknown'));self.assertEqual(q['answer'],'教师参考：B')
+        q=self.run_case('虚构甲卷 第4题：教师参考B',objective('虚构甲卷第4题','2+3=? A.4 B.5 C.6','B','教师参考：B（因为2+3=5）'))
+        self.assertEqual((q['answer'],q['judgment']),('教师参考：B','correct'))
+
+    def test_title_or_sub_question_gap_cannot_make_a_teacher_source(self):
+        for teacher in ('南风练习\n第1题：教师参考B','南风练习 第1题：教师参考B'):
+            with self.subTest(teacher=teacher):
+                q=self.run_case(teacher,objective('海风练习第1题','1+2=? A.2 B.4 C.3','C','教师参考：C'))
+                self.assertEqual(q['judgment'],'unknown');self.assertNotEqual(q['answer'],'教师参考：C')
+                q=self.run_case(teacher,objective('南风练习第1题','2+3=? A.4 B.5 C.6','B','教师参考：B'))
+                self.assertEqual((q['answer'],q['judgment']),('教师参考：B','correct'))
+                q=self.run_case(teacher,objective('南风练习第1题','2+3=? A.4 B.5 C.6','C','教师参考：C'))
+                self.assertIn(q['judgment'],('incorrect','unknown'));self.assertNotEqual(q['answer'],'教师参考：C')
+        q=self.run_case('虚构甲卷 第1题（1）：教师参考B',objective('虚构甲卷第1题','1+2=? A.2 B.4 C.3','C','教师参考：C'))
+        self.assertEqual(q['judgment'],'unknown');self.assertNotEqual(q['answer'],'教师参考：C')
+        q=self.run_case('虚构甲卷 第1题（1）：教师参考B',objective('虚构甲卷第1题（1）','2+3=? A.4 B.5 C.6','B','教师参考：B'))
+        self.assertEqual((q['answer'],q['judgment']),('教师参考：B','correct'))
+
+    def test_cover_heading_and_whole_values_keep_paired_results(self):
+        q=self.run_case('虚构教师参考答案\n第1题：教师参考B',objective('第1题','2+3=? A.4 B.5 C.6','B','教师参考：B'))
+        self.assertEqual((q['answer'],q['judgment']),('教师参考：B','correct'))
+        q=self.run_case('虚构甲卷 第5题：教师参考2+3=5',objective('虚构甲卷第5题','写出2+3的算式和结果。','2+3=5','教师参考：2+3=5'))
+        self.assertEqual((q['answer'],q['judgment']),('教师参考：2+3=5','correct'))
+        whole=LONG_PREFIX+'甲结论'
+        q=self.run_case('虚构甲卷 第6题：'+whole,objective('虚构甲卷第6题','虚构长答案题。',whole,'教师参考：'+whole))
+        self.assertEqual((q['answer'],q['judgment']),('教师参考：'+whole,'correct'))
+
+
 class TextQuestionContractTests(unittest.TestCase):
     def test_text_teacher_claim_requires_teacher_original(self):
         previous=[{},dict(previous_text='虚构旧意见：教师参考为5。'),
@@ -344,4 +388,4 @@ class TextQuestionHTTPTests(HomeworkPrintScopeTests):
             self.assertEqual(status,400,out);model.assert_not_called();self.assertEqual(self.dump(),before)
 
 
-if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TeacherReferenceScopeTests','TextQuestionHTTPTests'])
+if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TeacherReferenceScopeTests','TeacherReferenceSourceTests','TextQuestionHTTPTests'])
