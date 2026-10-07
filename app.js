@@ -1038,16 +1038,17 @@ $('#draftButton').onclick=async()=>{
   const r=await apiFetch('/api/draft',{method:'POST',signal:controller.signal,headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify({child_id:selected.id,text,attachments:pendingIDs.filter(id=>['image/jpeg','image/png','image/webp'].includes((data.uploads||[]).find(a=>a.id===id)?.mime))})});
   const result=await r.json();if(!current())return;if(!r.ok)throw Error(result.error);
   if(result.child_id!==selected.id||result.child_name!==selected.name)throw Error('孩子归属已变化，请重新选择并整理');
-  draft=result.draft;
-  $('#draftResult').innerHTML=`<div class="note"><strong>${esc(selected.name)} · 请核对草稿</strong><p>${esc(draft.title)}</p><p>${esc(draft.subject)}${draft.score!==null?' · '+esc(draft.score)+' / '+esc(draft.total??'满分待核对'):''}</p><p class="source">${esc(draft.note)}</p>${draft.uncertainties.length?`<p>待核对：${draft.uncertainties.map(esc).join('；')}</p>`:''}<button type="button" id="applyDraft">填入表单，继续核对</button></div>`;
+  draft=result.draft;const fixed=$('#recordForm').classList.contains('followup-mode');
+  $('#draftResult').innerHTML=`<div class="note"><strong>${esc(selected.name)} · 请核对草稿</strong><p>${esc(draft.title)}</p><p>${esc(draft.subject)}${draft.score!==null?' · '+esc(draft.score)+' / '+esc(draft.total??'满分待核对'):''}</p><p class="source">${esc(draft.note)}</p>${draft.uncertainties.length?`<p>待核对：${draft.uncertainties.map(esc).join('；')}</p>`:''}<button type="button" id="applyDraft">${fixed?'填入标题和详情，继续核对':'填入表单，继续核对'}</button></div>`;
   $('#draftStatus').textContent='草稿尚未写入成长记录。请核对，再保存。';
   $('#applyDraft').onclick=()=>{
    if(!current()||!draft)return;
-   const values={title:draft.title,subject:draft.subject,note:(draft.note+(draft.uncertainties.length?'\n待核对：'+draft.uncertainties.join('；'):'')).slice(0,4000),score:String(draft.score??''),total:String(draft.total??''),category:f.elements.category.value==='课程进度'?'课程进度':draft.score!==null&&draft.total!==null?'成绩':'学习进展'},before={};
+   // A correction keeps the subject and category fixed by its wrong item (shown above, hidden below); the draft fills only the visible title and note.
+   const values={title:draft.title,note:(draft.note+(draft.uncertainties.length?'\n待核对：'+draft.uncertainties.join('；'):'')).slice(0,4000),...fixed?{}:{subject:draft.subject,score:String(draft.score??''),total:String(draft.total??''),category:f.elements.category.value==='课程进度'?'课程进度':draft.score!==null&&draft.total!==null?'成绩':'学习进展'}},before={},skipped=fixed&&(draft.subject!==f.elements.subject.value||draft.score!==null||draft.total!==null);
    for(const [name,value] of Object.entries(values)){before[name]=appliedDraft&&f.elements[name].value===appliedDraft.values[name]?appliedDraft.before[name]:f.elements[name].value;f.elements[name].value=value}
    appliedDraft={before,values};$('#applyDraft').disabled=true;
    updateRecordCategory();
-   $('#draftStatus').textContent='已填入表单，可修改任何字段；点击保存记录才会入档。';
+   $('#draftStatus').textContent=fixed?'已填入标题和详情；科目和类型仍按原错题'+(skipped?'，草稿里的科目或分数未填入':'')+'。点击保存记录才会入档。':'已填入表单，可修改任何字段；点击保存记录才会入档。';
   };
  }catch(err){if(current())$('#draftStatus').textContent=(err.name==='AbortError'?'整理超时，请稍后重试':err.message)+'。原件和当前填写内容仍保留。';}
  finally{clearTimeout(timer);drafting=false;f.elements.title.readOnly=false;f.elements.note.readOnly=false;captureLock(false);}

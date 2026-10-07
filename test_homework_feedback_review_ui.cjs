@@ -374,7 +374,8 @@ runpy.run_path('demo.py',run_name='__main__')`;
   await p.locator('#taskForm [name=note]').fill('虚构未保存的新反馈');p.once('dialog',d=>d.dismiss());
   await wrongCard.locator('[data-followup]').click();assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'correction does not discard unsaved feedback');
   assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'虚构未保存的新反馈');await p.locator('#taskForm [name=note]').fill('');
-  await wrongCard.locator('[data-followup]').click();
+  // The draft button needs a configured model; every draft below is a fictional receipt, with no model call.
+  await p.evaluate(()=>{data.llm={...data.llm,configured:true}});await wrongCard.locator('[data-followup]').click();
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),false,'correction opens from the original homework');
   const correctionForm=p.locator('#recordForm');assert.equal(await correctionForm.locator('[name=followup_kind]').inputValue(),'订正');
   // Fictional report: the correction opened as "记下一个成长瞬间" with child/type/subject and media help before the wrong item.
@@ -395,6 +396,12 @@ runpy.run_path('demo.py',run_name='__main__')`;
   assert.equal(discardPrompts,2,'both exits ask before discarding correction');p.off('dialog',keepDraft);
   assert.equal(await correctionForm.locator('[name=note]').inputValue(),'虚构：孩子独立订正后仍需换题核对');
   assert(await p.evaluate(()=>{const e=new Event('beforeunload',{cancelable:true});window.dispatchEvent(e);return e.defaultPrevented}),'refresh protects unsaved correction');
+  // Fictional review: a draft with another subject and a score rewrote the hidden subject and category of a fixed correction.
+  const draftBodies=[];await p.route('**/api/draft',route=>{const body=route.request().postDataJSON();draftBodies.push(body);return route.fulfill({json:{child_id:body.child_id,child_name:child,draft:{title:'虚构草稿：第2题订正',subject:'虚构其他科目',score:88,total:100,note:'虚构：孩子独立订正后仍需换题核对；草稿另写了分数。',uncertainties:[]}}})});
+  await p.locator('#draftButton').click();await p.locator('#applyDraft').waitFor();assert.equal(await p.locator('#applyDraft').innerText(),'填入标题和详情，继续核对');await p.locator('#applyDraft').click();
+  assert.deepEqual(await correctionForm.evaluate(f=>['title','child','subject','category','score','total','related_record_id'].map(k=>f.elements[k].value)),['虚构草稿：第2题订正',child,wrongRecords[0].subject,'学习进展','','',String(wrongRecords[0].id)],'draft fills title and note only');
+  assert.equal(await p.locator('#scoreFields').isVisible(),false,'a draft score does not open score fields in a correction');assert.match(await p.locator('#draftStatus').innerText(),/科目和类型仍按原错题，草稿里的科目或分数未填入/);
+  assert.equal(await p.locator('#recordFollowupOwner').innerText(),[child,wrongRecords[0].subject].filter(Boolean).join(' · ')+' · 保存后留在这份作业下，不改作业状态','fixed context above matches what is submitted');
   let releaseReceipt;const heldReceipt=new Promise(resolve=>releaseReceipt=resolve);
   const keys=[],correctionBodies=[];await p.route('**/api/record',async route=>{const body=route.request().postDataJSON();keys.push(body.request_key);correctionBodies.push(body);if(keys.length===1){await route.fetch();await heldReceipt;await route.fulfill({status:503,json:{error:'虚构回执丢失'}})}else await route.continue()});
   await correctionForm.locator('[type=submit]').click();await eventually(async()=>await correctionForm.getAttribute('data-saving')==='yes','correction save in flight');
@@ -403,13 +410,18 @@ runpy.run_path('demo.py',run_name='__main__')`;
   releaseReceipt();await eventually(async()=>/虚构回执丢失/.test(await p.locator('#recordError').innerText()),'correction receipt lost');
   await correctionForm.locator('[type=submit]').click();await eventually(async()=>!(await p.locator('#recordDialog').evaluate(x=>x.open)),'same correction retry saved');await p.unroute('**/api/record');
   assert.equal(keys.length,2);assert(keys[0]&&keys[0]===keys[1],'retry reuses one request key');
-  for(const body of correctionBodies)assert.deepEqual([body.child,body.category,body.related_record_id,body.followup_kind],[child,'学习进展',wrongRecords[0].id,'订正'],'correction keeps fixed child and original link');
-  await p.evaluate(()=>document.querySelector('#add').click());assert.equal(await p.locator('#recordDialogTitle').innerText(),'记下一个成长瞬间','general record leaves correction mode');
+  for(const body of correctionBodies){assert.deepEqual([body.child,body.category,body.subject,body.title,body.related_record_id,body.followup_kind],[child,'学习进展',wrongRecords[0].subject,'虚构草稿：第2题订正',wrongRecords[0].id,'订正'],'correction keeps fixed child, subject and original link');assert(!body.score&&!body.total,'no draft score is submitted with a correction')}
+  await p.evaluate(()=>{data.llm={...data.llm,configured:true};document.querySelector('#add').click()});assert.equal(await p.locator('#recordDialogTitle').innerText(),'记下一个成长瞬间','general record leaves correction mode');
   assert.equal(await p.locator('#recordFollowupContext').isVisible(),false);assert.equal(await correctionForm.locator('[name=child]').isVisible(),true);assert.equal(await p.getByRole('dialog',{name:'记下一个成长瞬间'}).count(),1);
   assert(await p.evaluate(()=>document.querySelector('#recordForm .capture').getBoundingClientRect().top<document.querySelector('#recordForm [name=child]').getBoundingClientRect().top),'general record keeps capture first');
+  // An ordinary record still takes the draft's subject, score and category.
+  await correctionForm.locator('[name=child]').selectOption(child);await p.locator('#draftButton').click();await p.locator('#applyDraft').waitFor();assert.equal(await p.locator('#applyDraft').innerText(),'填入表单，继续核对');await p.locator('#applyDraft').click();
+  assert.deepEqual(await correctionForm.evaluate(f=>['subject','category','score','total'].map(k=>f.elements[k].value)),['虚构其他科目','成绩','88','100'],'general record keeps the old draft fill');assert.equal(await p.locator('#scoreFields').isVisible(),true);
+  await p.unroute('**/api/draft');assert.deepEqual(draftBodies.map(b=>b.child_id),Array(2).fill(state.children.find(c=>c.name===child).id),'both drafts were requested for the original child');p.once('dialog',d=>d.accept());
   await p.locator('#recordDialog [data-close="recordDialog"]').click();assert.equal(await p.locator('#recordDialog').evaluate(x=>x.open),false);
   state=await(await fetch(host.url+'api/state')).json();const corrected=state.records.filter(r=>r.related_record_id===wrongRecords[0].id&&r.followup_kind==='订正');
   assert.equal(corrected.length,1,'lost receipt does not duplicate correction');assert.equal(corrected[0].linked_task_id,id,'correction stays on original homework');
+  assert.deepEqual([corrected[0].child,corrected[0].subject,corrected[0].category],[child,wrongRecords[0].subject,'学习进展'],'saved correction keeps the wrong item owner');assert(corrected[0].score==null&&corrected[0].total==null,'saved correction carries no draft score');
   assert.equal(state.tasks.find(t=>t.id===id).update,null,'correction does not complete homework');
   await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskFeedbackHistory').getByText('孩子独立订正后仍需换题核对').waitFor();
   const panel=p.locator('#taskFeedbackHistory [data-homework-review]').first(),firstAnswerId=Number(await panel.getAttribute('data-homework-review'));await panel.locator(':scope > details > summary').click();assert.equal(await panel.locator(':scope > details').evaluate(x=>x.open),true,'saved photo exposes review');assert.equal(await panel.locator(' :scope > details > .homework-review-material [data-homework-review-photo]').count(),1);
