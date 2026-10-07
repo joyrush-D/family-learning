@@ -1092,6 +1092,7 @@ def _ref_relation(label,entry):
 
 def _prefer_teacher_reference(item,question_kind,entries,images):
     """A question the supplied teacher text covers is compared by that text, whatever source the model claims."""
+    if not item['answer'].strip(): return  # No answer is the existing missing-basis path, not a claimed source.
     related=[(_ref_relation(item['label'],entry),entry['answer']) for entry in entries]
     same=sorted({answer for relation,answer in related if relation=='same'})
     claimed=item['answer'].removeprefix('教师参考：').strip() if item['answer'].startswith('教师参考：') else None
