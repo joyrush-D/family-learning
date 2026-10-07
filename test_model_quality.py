@@ -1116,7 +1116,8 @@ class SchoolFirstBatchCancelTest(unittest.TestCase):
                 with self.subTest(label, real=real):
                     evidence = _school_c_evidence(real, m5=change)
                     ledger = {a['quote'][:4]: [c['ref'] for c in a['changes']] for a in family_agent._school_native_actions(evidence)}
-                    self.assertEqual(ledger, {'背诵《纸': [], '完成语文': [], '完成计算': []})
+                    # 别老师（数学发布者）的后发取消：数学单项清单沿既有更正读取路线，不进本台账（不属本项、未改）。
+                    self.assertEqual(ledger, {'背诵《纸': [], '完成语文': [], **({} if label == '别老师' else {'完成计算': []})})
                     items = _select_school_c(_school_c_cancel_rows(other=(ref, change['text'])), real=real, m5=change)
                     original = next(i for i in items if [e['ref'] for e in i['evidence']] == [C + '1'] and '练习本' in i['title'] + i['body'])
                     brief = original['plan']['school_task']
