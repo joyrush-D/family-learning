@@ -1001,6 +1001,173 @@ class SchoolCorrectionScopeTest(unittest.TestCase):
                     family_agent._school_native_saved(items, evidence)
 
 
+# 本机独立验收的虚构反例（逐字摘自合成证据）：消息5改为整项具名取消（含原第1-6题），完整raw仍把练习写成第1-5题new/ready、10月9日交。
+# 基线63b9211已存在（数学只引2、参考6单列的同一最小raw也误放），不是“不变”补丁引入；程序须从已证明的取消中拒绝待完成。
+SCHOOL_C_CANCEL = '取消昨天的语文练习本第18页作业，不用做第1-6题，也不用交；《纸船》第二节的背诵和抽查安排不变。'
+SCHOOL_C_CANCEL_RAW = json.loads(r'''{"title_quote":"完成语文练习本第18页第1-6题，10月9日交","focus":"school","due":"2026-10-09","evidence":[{"ref":"message:synthetic-school-heldout-c:1"},{"ref":"message:synthetic-school-heldout-c:5"}],"learning_subject":"语文","learning_goal_id":"","task_title":"语文：完成练习本第18页第1-5题","task_goal":"完成语文练习本第18页第1—5题。\n第6题不用做。\n2026年10月9日交。\n请家长检查。","task_advice":"完成后可按题号逐项核对，确认第6题留空不做。","task_change":"new","task_target_id":"","task_state":"ready","task_reason":"原要求与同批更正均已读清，题目范围、提交日期和家长检查要求明确。","task_purpose":"learning","task_submission":"2026年10月9日交语文练习本。"}''')
+# 沿取消待核流程保留的合法回答：不当完成，不改日期。
+SCHOOL_C_CANCEL_REVIEW = dict(task_title='语文：取消练习本第18页作业', task_goal='取消昨天的语文练习本第18页作业，不用做第1-6题，也不用交。',
+                              task_advice='', task_change='cancel', task_state='review', task_reason='同批同一老师具名取消原要求，待家长核对。',
+                              task_submission='')
+# 整项取消的等价变体：只写取消、只写原全部题号都不用做。
+SCHOOL_C_WHOLE = {'具名取消': SCHOOL_C_CANCEL, '只写取消': '取消昨天的语文练习本第18页作业；' + SCHOOL_C_KEEP,
+                  '全部题不用做': '更正昨天的语文练习本第18页：第1-6题都不用做，也不用交；' + SCHOOL_C_KEEP}
+# 只减部分题（含“取消”“不用做”字样）：仍是原项的局部更正，第1-5题照常new/ready。
+SCHOOL_C_PART = {'取消第6题': '取消昨天的语文练习本第18页第6题，第1-5题仍10月9日交；' + SCHOOL_C_KEEP,
+                 '第6题不用做': '更正昨天的语文练习本第18页：第6题不用做，第1-5题仍10月9日交；' + SCHOOL_C_KEEP}
+# 别日、别页、别对象、别老师、别来源、早发的整项取消：不对应本批原项，不能取消它或别的兄弟项。
+SCHOOL_C_OTHER = {'别日': dict(text=SCHOOL_C_CANCEL.replace('昨天', '前天')), '别页': dict(text=SCHOOL_C_CANCEL.replace('第18页', '第19页')),
+                  '别对象': dict(text=SCHOOL_C_CANCEL.replace('语文练习本', '语文作业本')),
+                  '别老师': dict(text=SCHOOL_C_CANCEL, publisher='publisher:synthetic-c-math', sender='虚构数学教师乙'),
+                  '别来源': dict(text=SCHOOL_C_CANCEL, ref='message:synthetic-school-heldout-x:5', related_messages=['message:synthetic-school-heldout-x:5']),
+                  '早发': dict(text=SCHOOL_C_CANCEL.replace('昨天的', ''), time='2026-10-06T18:05:00+08:00')}
+
+
+def _school_c_evidence(real=False, **changes):
+    evidence = copy.deepcopy(_SCHOOL_C['evidence'])
+    for e in evidence:
+        if real: e['related_messages'] = [e['ref']]
+        e.update(changes.get('m' + e['ref'].rsplit(':', 1)[1], {}))
+    return evidence
+
+
+def _school_c_cancel_rows(reference6=False, other=None, **worksheet):
+    """完整C回答，练习一行换成争议raw（可改字段）；reference6：数学只引2、参考6单列；other=(ref, text)：消息5不对应原项，单列待核。"""
+    rows = copy.deepcopy(_SCHOOL_C['reply']['proposals'])
+    rows[1] = dict(copy.deepcopy(SCHOOL_C_CANCEL_RAW), **worksheet)
+    if reference6:
+        rows[2]['evidence'] = [dict(ref=C + '2')]
+        rows.append(dict(rows[2], title_quote='仅供家长核对，不要求抄写答案，不新增作业', due='', evidence=[dict(ref=C + '6')], learning_subject='',
+                         task_title='计算卡C4教师参考仅供家长核对', task_goal='计算卡C4教师参考答案仅供家长核对，不要求抄写答案，不新增作业。',
+                         task_advice='', task_state='reference', task_reason='仅供家长核对的参考资料，不新增作业。', task_purpose='optional',
+                         task_submission=''))
+    if other:
+        for row in rows[:2]: row['evidence'] = [dict(ref=C + '1')]
+        quote = other[1].split('，')[0]
+        rows.append(dict(rows[1], **dict(SCHOOL_C_CANCEL_REVIEW, task_title='语文：' + quote, task_goal=quote + '。'),
+                         title_quote=quote, due='', evidence=[dict(ref=other[0])]))
+    return rows
+
+
+def _school_c_row(items, key='练习本'):
+    return next(i for i in items if key in i['title'] + i['body'])
+
+
+class SchoolFirstBatchCancelTest(unittest.TestCase):
+    """A proven named cancel of a first-batch outcome leaves no new/ready task for it; partial or unrelated cancels change nothing."""
+
+    def assertSiblings(self, items, recite):
+        # 未变兄弟项照旧：背诵、计算卡、磁铁图（截止未知仍ready）各自ready；确认单沿既有admin/review限制（不在此项放宽）。
+        for key, due, cited in (('纸船', '2026-10-07', recite), ('计算卡', '2026-10-08', None), ('磁铁', '', [C + '4'])):
+            row = _school_c_row(items, key); brief = row['plan']['school_task']
+            self.assertEqual((brief['change'], brief['state'], row['due']), ('new', 'ready', due), (key, row['title']))
+            if cited: self.assertEqual(sorted(e['ref'] for e in row['evidence']), cited, key)
+        self.assertEqual(_school_c_row(items, '确认单')['plan']['school_task']['state'], 'review')
+
+    def test_named_whole_cancel_keeps_no_new_ready_original_at_select(self):
+        import family_agent
+        for label, text in SCHOOL_C_WHOLE.items():
+            for reference6 in (False, True):
+                for real in (False, True):
+                    with self.subTest(label, reference6=reference6, real=real):
+                        try:
+                            items = _select_school_c(_school_c_cancel_rows(reference6), real=real, m5=dict(text=text))
+                        except family_agent.AgentError:
+                            continue
+                        row = _school_c_row(items); brief = row['plan']['school_task']
+                        self.assertEqual((brief['change'], brief['state']), ('cancel', 'review'), (label, row['title'], row['due']))
+
+    def test_cancel_review_is_kept_and_save_rejects_it_tampered_back_to_pending(self):
+        import family_agent
+        for label, text in SCHOOL_C_WHOLE.items():
+            for real in (False, True):
+                evidence = _school_c_evidence(real, m5=dict(text=text))
+                items = _select_school_c(_school_c_cancel_rows(**SCHOOL_C_CANCEL_REVIEW), real=real, m5=dict(text=text))
+                row = _school_c_row(items); brief = row['plan']['school_task']
+                self.assertEqual((brief['change'], brief['state'], brief['target_id'], row['due']), ('cancel', 'review', '', '2026-10-09'), (label, real))
+                self.assertEqual(sorted(e['ref'] for e in row['evidence']), [C + '1', C + '5'])
+                self.assertSiblings(items, [C + '1', C + '5'])
+                family_agent._school_native_saved(items, evidence)
+                for change, state in (('new', 'ready'), ('new', 'review'), ('update', 'review'), ('cancel', 'ready')):
+                    tampered = copy.deepcopy(items); _school_c_row(tampered)['plan']['school_task'].update(change=change, state=state)
+                    with self.subTest(label, real=real, change=change, state=state), \
+                            self.assertRaisesRegex(family_agent.AgentError, '学校完整要求未按对应行动保存'):
+                        family_agent._school_native_saved(tampered, evidence)
+
+    def test_partial_cancel_keeps_remaining_questions_new_ready(self):
+        import family_agent
+        for label, text in SCHOOL_C_PART.items():
+            for real in (False, True):
+                with self.subTest(label, real=real):
+                    evidence = _school_c_evidence(real, m5=dict(text=text))
+                    ledger = {a['quote'][:4]: [c['ref'] for c in a['changes']] for a in family_agent._school_native_actions(evidence)}
+                    self.assertEqual(ledger, {'背诵《纸': [], '完成语文': [C + '5'], '完成计算': []})
+                    items = _select_school_c(_school_c_cancel_rows(), real=real, m5=dict(text=text))
+                    row = _school_c_row(items); brief = row['plan']['school_task']
+                    self.assertEqual((brief['change'], brief['state'], row['due']), ('new', 'ready', '2026-10-09'), (label, row['title']))
+                    self.assertSiblings(items, [C + '1', C + '5'])
+                    family_agent._school_native_saved(items, evidence)
+
+    def test_other_day_page_object_teacher_source_or_earlier_cancel_cancels_nothing(self):
+        import family_agent
+        for label, change in SCHOOL_C_OTHER.items():
+            ref = change.get('ref', C + '5')
+            for real in (False, True):
+                with self.subTest(label, real=real):
+                    evidence = _school_c_evidence(real, m5=change)
+                    ledger = {a['quote'][:4]: [c['ref'] for c in a['changes']] for a in family_agent._school_native_actions(evidence)}
+                    self.assertEqual(ledger, {'背诵《纸': [], '完成语文': [], '完成计算': []})
+                    items = _select_school_c(_school_c_cancel_rows(other=(ref, change['text'])), real=real, m5=change)
+                    original = next(i for i in items if [e['ref'] for e in i['evidence']] == [C + '1'] and '练习本' in i['title'] + i['body'])
+                    brief = original['plan']['school_task']
+                    self.assertEqual((brief['change'], brief['state'], original['due']), ('new', 'ready', '2026-10-09'), (label, original['title']))
+                    self.assertTrue(re.search(r'1\s*[-–—~至到]\s*6', original['title'] + original['body']), original['body'])
+                    self.assertSiblings(items, [C + '1'])
+                    held = [i for i in items if [e['ref'] for e in i['evidence']] == [ref]]
+                    self.assertEqual([i['plan']['school_task']['state'] for i in held], ['review'], label)
+                    self.assertEqual([i for i in items if i['plan']['school_task']['change'] == 'cancel'], held)
+                    family_agent._school_native_saved(items, evidence)
+
+    def test_named_cancel_through_ingest_saves_once_and_tampered_pending_writes_nothing(self):
+        import family_agent
+        evidence = _school_c_evidence(m5=dict(text=SCHOOL_C_CANCEL)); texts = [e['text'] for e in evidence]
+        with patch.dict(SCHOOL_CASES, {'school-heldout-c': dict(SCHOOL_CASES['school-heldout-c'], evidence=evidence)}):
+            wrong = ingest_school('school-heldout-c', dict(proposals=_school_c_cancel_rows()))
+            self.assertEqual(wrong['originals'], texts)
+            pending = [(i['title'], i['due'], i['plan']['school_task']['change'], i['plan']['school_task']['state']) for i in wrong['items']
+                       if '练习本' in i['title'] + i['body'] and i['plan']['school_task']['change'] != 'cancel']
+            self.assertEqual(pending, [], (wrong['counts'], wrong['results']))
+            legal = ingest_school('school-heldout-c', dict(proposals=_school_c_cancel_rows(**SCHOOL_C_CANCEL_REVIEW)), runs=2)
+            self.assertEqual((len(legal['calls']), legal['counts'][0] == legal['counts'][1], len(legal['items'])), (1, True, 5), legal['results'])
+            self.assertEqual(legal['originals'], texts)
+            self.assertEqual(legal['calls'][0]['evidence'], [(C + str(n), [C + str(n)]) for n in range(1, 7)])
+            row = _school_c_row(legal['items']); brief = row['plan']['school_task']
+            self.assertEqual((row['state'], brief['change'], brief['state'], row['due']), ('pending', 'cancel', 'review', '2026-10-09'), row['title'])
+            self.assertSiblings(legal['items'], [C + '1', C + '5'])
+            select = family_agent._select
+
+            def tampered(*args, **kwargs):
+                items = select(*args, **kwargs)
+                for item in items:
+                    if '练习本' in item['title'] + item['body']: item['plan']['school_task'].update(change='new', state='ready')
+                return items
+            with patch.object(family_agent, '_select', side_effect=tampered):
+                run = ingest_school('school-heldout-c', dict(proposals=_school_c_cancel_rows(**SCHOOL_C_CANCEL_REVIEW)))
+            self.assertEqual((run['counts'], run['items'], run['originals']), ([0], [], texts), run['results'])
+
+    def test_confirmed_target_cancel_stays_review_and_keeps_its_target(self):
+        # 既有保护：已确认目标列表＋明确cancel/target_id仍review且保留目标；不回填真实旧任务。
+        import family_agent
+        task = dict(id='task-synthetic-c-18', title='语文：完成练习本第18页第1-6题', goal='完成语文练习本第18页第1-6题。', due='2026-10-09', status='待跟进')
+        five = dict(_school_c_evidence(True)[4], text=SCHOOL_C_CANCEL)
+        proposal = dict(SCHOOL_C_CANCEL_RAW, **SCHOOL_C_CANCEL_REVIEW, title_quote='取消昨天的语文练习本第18页作业', evidence=[dict(ref=C + '5')],
+                        task_target_id=task['id'])
+        with patch.object(family_agent.family_llm, '_chat_json', return_value=dict(proposals=[proposal])):
+            items = family_agent._select('school', [five], school_goals=[], school_tasks=[task], as_of=AS_OF)
+        self.assertEqual([(i['plan']['school_task']['change'], i['plan']['school_task']['target_id'], i['plan']['school_task']['state'])
+                          for i in items], [('cancel', task['id'], 'review')])
+
+
 def ingest_school(name, reply, runs=1):
     """Store.ingest → run_once → _select → _save; the model seam returns a saved parsed reply with refs remapped."""
     from contextlib import ExitStack
