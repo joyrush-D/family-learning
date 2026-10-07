@@ -5,6 +5,12 @@ const {spawn}=require('node:child_process'),{once}=require('node:events');
 const {setTimeout:delay}=require('node:timers/promises'),{randomUUID}=require('node:crypto');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 async function eventually(check,label,timeout=12000){const end=Date.now()+timeout;while(Date.now()<end){if(await check())return;await delay(40)}throw Error('Timed out: '+label)}
+// The shared validator adds the continuation scope to the reply; every other field must equal what it validated.
+function assertDraftReceipt(validated,draft){
+ const {continuation,...fields}=draft;assert.deepEqual(validated,fields);
+ assert.match(continuation.scope_sha256,/^[a-f0-9]{64}$/);
+ assert.deepEqual(continuation.pending_labels,draft.questions.filter(q=>q.judgment==='unknown').map(q=>q.label));
+}
 async function threeAttemptSave(page,path,button,error,success,read){
  const bodies=[],results=[],before=await read();
  await page.route('**'+path,async route=>{
@@ -114,7 +120,7 @@ const fs=require('node:fs/promises'),path=require('node:path');(async()=>{let br
   const reply=reviewReplies[1].out;assert.equal(reviewRequests[1].task_id,a.id);assert.equal(reviewRequests[1].record_id,id);assert.equal(reviewRequests[1].expected_created,linkedAnswer.created);assert.deepEqual(reviewRequests[1].question_sources,[{type:'upload',id:up.attachment.id}]);assert.deepEqual(reviewRequests[1].reference_sources,[]);
   // Since ae216e0 the shared validator replaces the model's own coverage note: unlisted questions stay unchecked, and without a returned label inventory complete coverage stays unverified.
   assert.equal(reply.review_basis.record_id,id);assert.equal(reply.review_basis.created,linkedAnswer.created);assert.equal(reply.draft.questions[0].judgment,'incorrect');assert.equal(reply.draft.questions[0].student_answer,'yestoday');assert.equal(reply.draft.questions[0].answer,'AI自行推导：yesterday');assert.equal(reply.draft.questions[0].possible_cause,'');assert.match(reply.draft.coverage,/未列入本次逐题结果的题目和资料范围仍未检查/);assert.match(reply.draft.coverage,/模型原覆盖说明尚未核明/);assert.match(reply.draft.coverage,/未返回识别题号清单，完整覆盖尚未核明/);assert.doesNotMatch(reply.draft.coverage,/仅虚构原图第1题/,'the model coverage note is not adopted as coverage proof');
-  const validated=await fetch(url+'__fixture/linked-review-validator').then(r=>r.json());assert.equal(validated.real_model_calls,0);assert.equal(validated.calls.filter(c=>c.width===width).length,2);assert.deepEqual(validated.calls.at(-1).validated,reply.draft);assert.equal(validated.calls.at(-1).raw.items[0].student_answer,'yestoday');assert.match(await panel.locator('.homework-review-questions').innerText(),/需要订正/);
+  const validated=await fetch(url+'__fixture/linked-review-validator').then(r=>r.json());assert.equal(validated.real_model_calls,0);assert.equal(validated.calls.filter(c=>c.width===width).length,2);assertDraftReceipt(validated.calls.at(-1).validated,reply.draft);assert.equal(validated.calls.at(-1).raw.items[0].student_answer,'yestoday');assert.match(await panel.locator('.homework-review-questions').innerText(),/需要订正/);
   assert.deepEqual((await read()).records,linkedBefore.records,'the model draft does not create records');
   await panel.locator('[data-homework-review-confirm]').check();await panel.locator('[data-homework-review-apply]').click();await eventually(async()=>/请点下方/.test(await panel.innerText()),'linked review staged for explicit feedback save');
   const reviewed=await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),read);

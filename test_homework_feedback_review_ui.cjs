@@ -242,8 +242,11 @@ runpy.run_path('demo.py',run_name='__main__')`;
    assert(bundle.startsWith('(()=>{\n'+current),'the baseline replaces the application actually loaded by the page');baselineLoads++;
    return r.fulfill({contentType:'text/javascript',body:'(()=>{\n'+baseline+bundle.slice('(()=>{\n'.length+current.length)});
   });
-  await p.route('**/api/state',async route=>{const response=await route.fetch(),value=await response.json();value.printing={...value.printing,printers:[{name:'Synthetic_Printer',label:'虚构打印机',color:false,duplex:false}]};await route.fulfill({response,json:value})});
+  // The record draft button needs a configured model, so the fixture state says so from the first load; every draft below is a fictional /api/draft receipt, with no model call.
+  await p.route('**/api/state',async route=>{const response=await route.fetch(),value=await response.json();value.printing={...value.printing,printers:[{name:'Synthetic_Printer',label:'虚构打印机',color:false,duplex:false}]};value.llm={...value.llm,configured:true};await route.fulfill({response,json:value})});
   await p.goto(host.url);
+  // The 1×1 PNG stays a format fixture; screenshots show a clearly fictional sheet drawn by the page's own canvas. The fake models never read either.
+  const answerSheet=Buffer.from((await p.evaluate(()=>{const c=document.createElement('canvas');c.width=720;c.height=480;const g=c.getContext('2d');g.fillStyle='#fffdf6';g.fillRect(0,0,720,480);g.fillStyle='#1d2733';g.font='bold 30px sans-serif';g.fillText('虚构练习卷 · 界面测试样例',40,62);g.font='24px sans-serif';[['1. 3 + 4 = ?','原答：7'],['2. 选出表示“昨天”的词','原答：C'],['3. 12 的一半是多少？','原答：6']].forEach(([q,a],i)=>{g.fillText(q,40,140+i*76);g.fillText(a,500,140+i*76)});g.fillStyle='#b4232c';g.fillText('教师参考（虚构）：第2题 B',40,388);g.font='18px sans-serif';g.fillStyle='#6b7280';g.fillText('非真实作业 · 仅用于界面截图',40,446);return c.toDataURL('image/png')})).split(',')[1],'base64');
   if(process.env.PRINT_SCOPE_BASELINE_APP_JS)assert.equal(baselineLoads,1,'old application was actually loaded');
   await p.locator('[data-homework-new]').first().click();const entry=p.locator('#homeworkInputDialog');await entry.waitFor();assert.match(await entry.innerText(),/记作业/);
   const item=entry.locator('[data-homework-item="0"]');assert.equal(await item.locator('[name=title]').isVisible(),true,'parent can enter one homework directly');assert.equal(await entry.locator('[data-homework-original]').evaluate(x=>x.open),false,'source capture stays optional');await entry.locator('[data-homework-original] > summary').click();await entry.locator('[name=text]').fill('虚构老师原话：核对一页阅读题');
@@ -259,7 +262,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'close dismissal keeps unsaved feedback');
   assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'虚构未保存反馈');
   await p.locator('#taskForm [name=note]').fill('');
-  await p.locator('#cameraInput').setInputFiles({name:'synthetic-answer.png',mimeType:'image/png',buffer:png});await p.locator('#pendingUploads img').waitFor();
+  await p.locator('#cameraInput').setInputFiles({name:'synthetic-answer.png',mimeType:'image/png',buffer:answerSheet});await p.locator('#pendingUploads img').waitFor();
   p.once('dialog',d=>d.dismiss());await p.locator('#taskDialog [data-close="taskDialog"]').click();
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'close dismissal keeps unsaved photo');
   assert.equal(await p.locator('#pendingUploads img').count(),1);
@@ -369,25 +372,41 @@ runpy.run_path('demo.py',run_name='__main__')`;
   await p.locator('#taskFeedbackDay').scrollIntoViewIfNeeded();
   const fit=await p.evaluate(()=>[['#taskAssistance','未记录 / 不确定'],['#taskFeedbackDay','2026-10-07']].map(([selector,text])=>{const e=document.querySelector(selector),s=getComputedStyle(e),c=document.createElement('canvas').getContext('2d');c.font=s.font;return {selector,visible:!!e.offsetParent,have:e.clientWidth,need:Math.ceil(c.measureText(text).width+parseFloat(s.paddingLeft)+parseFloat(s.paddingRight)+28)}}));
   console.log('feedback-fit',width,JSON.stringify(fit));for(const f of fit)if(f.visible)assert(f.have>=f.need,f.selector+' is readable in full at '+width+': '+JSON.stringify(f));assert(fit[1].visible,'feedback date is visible');
+  // Fictional 1440 review: the focused title looked like an input, the two linked-record buttons touched, and "录一段语音" was larger than its row.
+  const feedbackLook=await p.evaluate(()=>{const t=document.querySelector('#taskTitle'),row=document.querySelector('#taskFeedbackHistory .task-link-actions:has([data-followup])'),[a,b]=['[data-record]','[data-followup]'].map(s=>row.querySelector(s).getBoundingClientRect());return {focused:document.activeElement===t,outline:getComputedStyle(t).outlineStyle,gap:Math.max(b.left-a.right,b.top-a.bottom),sizes:[...document.querySelectorAll('#taskForm .capture-actions>*')].map(x=>getComputedStyle(x).fontSize)}});
+  assert(feedbackLook.focused&&feedbackLook.outline==='none','programmatic focus stays on the plain title without an input-like box');assert(feedbackLook.gap>=6,'linked-record buttons are spaced: '+feedbackLook.gap);assert.equal(new Set(feedbackLook.sizes).size,1,'capture buttons share one size: '+feedbackLook.sizes);
   if(process.env.CORRECTION_PROOF_DIR)await p.screenshot({path:require('node:path').join(process.env.CORRECTION_PROOF_DIR,'task-feedback'+'-'+width+'.png')});
   const wrongCard=p.locator('#taskFeedbackHistory .task-feedback-record').filter({has:p.locator('[data-record="'+wrongRecords[0].id+'"]')});
   await p.locator('#taskForm [name=note]').fill('虚构未保存的新反馈');p.once('dialog',d=>d.dismiss());
   await wrongCard.locator('[data-followup]').click();assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'correction does not discard unsaved feedback');
   assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'虚构未保存的新反馈');await p.locator('#taskForm [name=note]').fill('');
-  // The draft button needs a configured model; every draft below is a fictional receipt, with no model call.
-  await p.evaluate(()=>{data.llm={...data.llm,configured:true}});await wrongCard.locator('[data-followup]').click();
+  await wrongCard.locator('[data-followup]').click();
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),false,'correction opens from the original homework');
   const correctionForm=p.locator('#recordForm');assert.equal(await correctionForm.locator('[name=followup_kind]').inputValue(),'订正');
   // Fictional report: the correction opened as "记下一个成长瞬间" with child/type/subject and media help before the wrong item.
   assert.equal(await p.getByRole('dialog',{name:'记订正 / 复测 '+title}).count(),1,'correction dialog is named after the original homework');
   assert.equal(await p.evaluate(()=>document.activeElement?.id),'recordDialogTitle','correction opens on its heading');
-  assert.equal(await p.locator('#recordFollowupTask').innerText(),title);assert.equal(await p.locator('#recordFollowupItem').innerText(),wrongRecords[0].title);
+  assert.equal(await p.locator('#recordFollowupTask').innerText(),title);assert.match(wrongRecords[0].title,/^错题：./,'fixture item keeps its saved prefix');
+  // Fictional review: the item row read "错题　错题：第2题" and the new title "跟进：错题：第2题"; only the shown name and the new title drop the prefix.
+  const itemName=wrongRecords[0].title.replace(/^错题：/,'');assert.equal(await p.locator('#recordFollowupItem').innerText(),itemName);assert.equal(await correctionForm.locator('[name=title]').inputValue(),'跟进：'+itemName,'new correction title carries one prefix');
   for(const selector of ['[name=child]','[name=category]','[name=subject]','#relationTitle'])assert.equal(await correctionForm.locator(selector).isVisible(),false,selector+' is fixed by the original item');
   assert.deepEqual(await correctionForm.evaluate(f=>{const d=new FormData(f);return [d.get('child'),d.get('subject'),d.get('related_record_id')]}),[child,wrongRecords[0].subject,String(wrongRecords[0].id)],'fixed values are still submitted');
-  const correctionTops=await p.evaluate(()=>['#recordFollowupContext','[name=followup_kind]','[name=day]','[name=note]','.capture'].map(s=>document.querySelector('#recordDialog '+s).getBoundingClientRect().top));
-  for(let i=1;i<correctionTops.length;i++)assert(correctionTops[i-1]<correctionTops[i],'correction reading order '+JSON.stringify(correctionTops));assert(correctionTops[3]<760,'correction note starts on the first screen: '+correctionTops[3]);
+  // Fictional review: kind and date each took a full-width row, photo entry sat below the optional help fields, 1440 showed no save button, and at 360 the bar covered the help select with the next label showing under it.
+  const formBox=await p.evaluate(()=>Object.fromEntries(['#recordFollowupContext','[name=followup_kind]','[name=day]','[name=title]','[name=note]','.capture','.capture .filebutton','[name=assistance]','[name=source]','.actions'].map(s=>{const r=document.querySelector('#recordDialog '+s).getBoundingClientRect();return [s,{top:r.top,bottom:r.bottom,left:r.left,right:r.right}]})));
+  const readingOrder=['#recordFollowupContext','[name=followup_kind]','[name=title]','[name=note]','.capture','[name=assistance]','[name=source]'];for(let i=1;i<readingOrder.length;i++)assert(formBox[readingOrder[i-1]].bottom<=formBox[readingOrder[i]].top+1,'correction reading order '+JSON.stringify(box));
+  const kindBox=formBox['[name=followup_kind]'],dayBox=formBox['[name=day]'];if(width>=1000)assert(Math.abs(kindBox.top-dayBox.top)<2&&kindBox.right<dayBox.left,'desktop kind and date share a row');else assert(kindBox.bottom<=dayBox.top&&dayBox.bottom<=formBox['[name=title]'].top,'narrow kind and date stack in order');
+  assert(formBox['.capture'].top-formBox['[name=note]'].bottom<48,'photo entry sits right below the note');assert(formBox['[name=note]'].bottom<=formBox['.actions'].top,'the note is clear of the save bar on the first screen');assert(formBox['.actions'].bottom<=850,'save is on the first screen');
+  if(width>=1000)assert(formBox['.capture .filebutton'].bottom<=formBox['.actions'].top,'desktop shows photo entry above the save bar on the first screen');
+  assert.match(await p.locator('#recordForm .capture .muted.small').innerText(),/^拍下订正后的卷面或复测结果/,'capture help is short for a correction');
+  const correctionFit=await p.evaluate(()=>[...document.querySelectorAll('#recordDialog :is([name=followup_kind],[name=day],[name=assistance],[name=practice_relation],[name=source])')].map(e=>{const s=getComputedStyle(e),c=document.createElement('canvas').getContext('2d');c.font=s.font;return {name:e.name,have:e.clientWidth,need:Math.ceil(c.measureText(e.tagName==='SELECT'?e.selectedOptions[0].text:'2026-10-07').width+parseFloat(s.paddingLeft)+parseFloat(s.paddingRight)+28)}}));
+  for(const f of correctionFit)assert(f.have>=f.need,f.name+' reads in full at '+width+': '+JSON.stringify(f));
   assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth&&document.querySelector('#recordDialog').scrollWidth<=document.querySelector('#recordDialog').clientWidth),true,'correction has no horizontal overflow');
   if(process.env.CORRECTION_PROOF_DIR)await p.screenshot({path:require('node:path').join(process.env.CORRECTION_PROOF_DIR,'correction'+'-'+width+'.png')});
+  // Each control scrolled into view lies wholly above the save bar and takes the tap; the strip under the bar shows and takes nothing else.
+  const covered=await p.evaluate(()=>{const d=document.querySelector('#recordDialog'),bar=d.querySelector('.actions'),edge=d.getBoundingClientRect(),under=document.elementFromPoint(edge.left+edge.width/2,edge.bottom-4),out=bar.contains(under)?[]:['under bar: '+(under?.name||under?.id||under?.tagName)];
+   for(const e of d.querySelectorAll('#recordForm :is(select,input:not([type=hidden]),textarea,button,summary)')){if(bar.contains(e)||!e.getClientRects().length)continue;const target=e.type==='file'?e.closest('.filebutton'):e;target.scrollIntoView({block:'nearest'});const r=target.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);if(r.bottom>bar.getBoundingClientRect().top+1||!target.contains(hit))out.push(e.name||e.id||e.textContent.trim().slice(0,12))}
+   d.scrollTop=0;return out});
+  assert.deepEqual(covered,[],'correction controls clear of the save bar at '+width);
   await p.keyboard.press('Tab');assert.equal(await p.evaluate(()=>document.activeElement?.name),'followup_kind','Tab moves from the heading to correction kind');
   await correctionForm.locator('[name=note]').fill('虚构：孩子独立订正后仍需换题核对');
   let discardPrompts=0;const keepDraft=d=>{discardPrompts++;d.dismiss()};p.on('dialog',keepDraft);
@@ -411,16 +430,17 @@ runpy.run_path('demo.py',run_name='__main__')`;
   await correctionForm.locator('[type=submit]').click();await eventually(async()=>!(await p.locator('#recordDialog').evaluate(x=>x.open)),'same correction retry saved');await p.unroute('**/api/record');
   assert.equal(keys.length,2);assert(keys[0]&&keys[0]===keys[1],'retry reuses one request key');
   for(const body of correctionBodies){assert.deepEqual([body.child,body.category,body.subject,body.title,body.related_record_id,body.followup_kind],[child,'学习进展',wrongRecords[0].subject,'虚构草稿：第2题订正',wrongRecords[0].id,'订正'],'correction keeps fixed child, subject and original link');assert(!body.score&&!body.total,'no draft score is submitted with a correction')}
-  await p.evaluate(()=>{data.llm={...data.llm,configured:true};document.querySelector('#add').click()});assert.equal(await p.locator('#recordDialogTitle').innerText(),'记下一个成长瞬间','general record leaves correction mode');
+  await p.evaluate(()=>document.querySelector('#add').click());assert.equal(await p.locator('#recordDialogTitle').innerText(),'记下一个成长瞬间','general record leaves correction mode');
   assert.equal(await p.locator('#recordFollowupContext').isVisible(),false);assert.equal(await correctionForm.locator('[name=child]').isVisible(),true);assert.equal(await p.getByRole('dialog',{name:'记下一个成长瞬间'}).count(),1);
   assert(await p.evaluate(()=>document.querySelector('#recordForm .capture').getBoundingClientRect().top<document.querySelector('#recordForm [name=child]').getBoundingClientRect().top),'general record keeps capture first');
+  assert.match(await p.locator('#recordForm .capture .muted.small').innerText(),/原件先保存，可稍后补充记录/,'general record restores the full capture help');assert.equal(await p.evaluate(()=>document.querySelector('#recordKindRow').nextElementSibling.id),'relationFields','general record restores the kind row');
   // An ordinary record still takes the draft's subject, score and category.
   await correctionForm.locator('[name=child]').selectOption(child);await p.locator('#draftButton').click();await p.locator('#applyDraft').waitFor();assert.equal(await p.locator('#applyDraft').innerText(),'填入表单，继续核对');await p.locator('#applyDraft').click();
   assert.deepEqual(await correctionForm.evaluate(f=>['subject','category','score','total'].map(k=>f.elements[k].value)),['虚构其他科目','成绩','88','100'],'general record keeps the old draft fill');assert.equal(await p.locator('#scoreFields').isVisible(),true);
   await p.unroute('**/api/draft');assert.deepEqual(draftBodies.map(b=>b.child_id),Array(2).fill(state.children.find(c=>c.name===child).id),'both drafts were requested for the original child');p.once('dialog',d=>d.accept());
   await p.locator('#recordDialog [data-close="recordDialog"]').click();assert.equal(await p.locator('#recordDialog').evaluate(x=>x.open),false);
   state=await(await fetch(host.url+'api/state')).json();const corrected=state.records.filter(r=>r.related_record_id===wrongRecords[0].id&&r.followup_kind==='订正');
-  assert.equal(corrected.length,1,'lost receipt does not duplicate correction');assert.equal(corrected[0].linked_task_id,id,'correction stays on original homework');
+  assert.equal(corrected.length,1,'lost receipt does not duplicate correction');assert.equal(corrected[0].linked_task_id,id,'correction stays on original homework');assert.equal(state.records.find(r=>r.id===wrongRecords[0].id).title,wrongRecords[0].title,'the saved wrong item keeps its title');
   assert.deepEqual([corrected[0].child,corrected[0].subject,corrected[0].category],[child,wrongRecords[0].subject,'学习进展'],'saved correction keeps the wrong item owner');assert(corrected[0].score==null&&corrected[0].total==null,'saved correction carries no draft score');
   assert.equal(state.tasks.find(t=>t.id===id).update,null,'correction does not complete homework');
   await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskFeedbackHistory').getByText('孩子独立订正后仍需换题核对').waitFor();
