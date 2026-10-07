@@ -1041,42 +1041,60 @@ retry提出经家庭商量后隔一段时间不看讲解再试、或试一道相
     return dict(plan=plan,uncertainties=[v.strip() for v in result['uncertainties']])
 
 
-# Bounded teacher-text grammar: "[卷别][大题] 第N题/N题/QN/N.[(小题)] [教师参考/答案：]答案", one line or
+# Bounded teacher-text grammar: "[卷别][第N大题/一、] 第N题/N题/QN/N.[(小题)] [教师参考/答案：]答案", one line or
 # several entries per line, a paper or section line applying to the lines below. A paper is any explicit name
-# ending in 卷 (not 试卷/本卷 and the like); other leftover words before the number must match exactly. Anything
-# else, and every reference image, proves nothing here; the model's answer prefix alone never decides the source.
+# ending in 卷 (not 试卷/本卷 and the like); any other new title starts an unnamed scope whose words must match
+# exactly. Anything else, and every reference image, proves nothing here; the model's answer prefix alone never
+# decides the source, and teacher values are compared whole, never cut short.
 _REF_PAPER=re.compile(r'[^\s，,；;。：:、（）()【】\[\]“”"]{1,12}?卷')
 _REF_GENERIC_PAPER=re.compile(r'[本该此这那全整每各原同两多]?[试考答问纸]?卷')
-_REF_SECTION=re.compile(r'第([一二三四五六七八九十]{1,3})(?:大题|部分)|(?:^|[^第\d一二三四五六七八九十])([一二三四五六七八九十]{1,3})\s*[、.．]')
+_REF_SECTION=re.compile(r'第\s*(\d{1,2}|[一二三四五六七八九十]{1,3})\s*(?:大题|部分)|(?:^|[^第\d一二三四五六七八九十])([一二三四五六七八九十]{1,3})\s*[、.．]')
 _REF_QUESTION=re.compile(r'第\s*(\d{1,3})\s*题|(?<![\d.．])(\d{1,3})\s*题|(?<![A-Za-z])[Qq]\s*(\d{1,3})(?!\d)|(?:^|(?<=[\s、，,；;]))(\d{1,3})\s*[.．、](?!\d)')
 _REF_SUB=re.compile(r'\s*(?:[（(]\s*(\d{1,2})\s*[)）]|第\s*(\d{1,2})\s*小题)')
-_REF_SOURCE=re.compile(r'^[\s:：]*(?:教师参考答案|教师参考|参考答案|老师答案|答案)?\s*(?:为|是)?[\s:：]*')
-_REF_NOISE=re.compile(r'教师参考答案|教师参考|参考答案|老师答案|答案|第\s*\d{1,3}\s*页|[\W_]')
+_REF_WORDS='教师参考答案|教师参考|参考答案|老师答案|老师参考|答案|教师|老师|参考'
+_REF_SOURCE=re.compile(r'^[\s:：]*(?:%s)?\s*(?:均为|都是|均是|都为|为|是)?[\s:：]*'%_REF_WORDS)
+_REF_NOISE=re.compile(r'%s|如下|以下|第\s*\d{1,3}\s*页|[\W_]'%_REF_WORDS)
 
 
-def _ref_scope(text,paper=None,section=None):
-    """The one reading of a label or teacher heading: explicit paper name, 大题 numeral and leftover words."""
-    names=[re.sub('[试考答]卷$','卷',name) for name in _REF_PAPER.findall(text) if not _REF_GENERIC_PAPER.fullmatch(name)]
-    if names: paper,section=(names[0] if len(names)==1 and not re.search('[与和及两均都]',names[0]) else '*'),None
+def _ref_number(value):
+    if value.isdigit(): return int(value)
+    digits='一二三四五六七八九';tens,ten,ones=value.rpartition('十')
+    if not ten: return digits.index(value)+1 if len(value)==1 else value
+    return (digits.index(tens)+1 if tens else 1)*10+(digits.index(ones)+1 if ones else 0) if len(tens)<=1 and len(ones)<=1 else value
+
+
+def _ref_scope(text,section=None):
+    """The one reading of a label or teacher heading: explicit paper name or None, 大题 number, leftover words."""
+    names=[re.sub('[试考答]卷$','卷',name) for part in re.split('[与和及]',text) for name in _REF_PAPER.findall(part)
+           if not _REF_GENERIC_PAPER.fullmatch(name)]
+    paper=(names[0] if len(names)==1 else tuple(names)) if names and not any(re.search('[两均都]',name) for name in names) else '*' if names else None
     found=_REF_SECTION.search(text)
-    return paper,(found[1] or found[2] if found else section),_REF_NOISE.sub('',_REF_SECTION.sub('',_REF_PAPER.sub('',text)))
+    section=_ref_number(found[1] or found[2]) if found else None if names else section
+    return paper,section,_REF_NOISE.sub('',_REF_SECTION.sub('',_REF_PAPER.sub('',text)))
 
 
 def _teacher_reference_entries(documents):
     entries=[]
     for document in documents:
-        paper=section=None
+        paper=section=None;title='';first=len(entries)
         for line in document['text'].splitlines():
             marks=list(_REF_QUESTION.finditer(line))
-            paper,section,rest=_ref_scope(line[:marks[0].start()] if marks else line,paper,section)
+            new,section,words=_ref_scope(line[:marks[0].start()] if marks else line,section)
+            if new is not None: paper,title=new,''
+            elif words and not marks and (paper is not None or len(entries)>first):
+                paper,title=None,words  # A later unrecognized title never inherits the previous paper or entries.
+            here,rest=(None,words) if marks and new is None and words else (paper,title)  # Words on the line qualify its own entries.
             for n,mark in enumerate(marks):
                 tail=line[mark.end():marks[n+1].start() if n+1<len(marks) else len(line)]
                 sub=_REF_SUB.match(tail);tail=tail[sub.end():] if sub else tail
-                after=re.search(r'[\s，,；;。]((?:%s)|第[一二三四五六七八九十]{1,3}(?:大题|部分)|[一二三四五六七八九十]{1,3}\s*[、.．])'%_REF_PAPER.pattern,tail)
+                after=re.search(r'[\s，,；;。]((?:%s)|第\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*(?:大题|部分)|[一二三四五六七八九十]{1,3}\s*[、.．])'%_REF_PAPER.pattern,tail)
                 answer=re.sub(r'[\s，,；;。.．、]+$','',_REF_SOURCE.sub('',tail[:after.start()] if after else tail,count=1))
-                if answer: entries.append(dict(paper=paper,section=section,rest=rest,number=int(next(g for g in mark.groups() if g)),
-                                               sub=int(next(g for g in sub.groups() if g)) if sub else None,answer=answer[:100]))
-                if after: paper,section,rest=_ref_scope(tail[after.start(1):],paper,section)
+                for one in here if isinstance(here,tuple) else (here,):  # 「甲卷与乙卷第1题均为5」 names each paper once.
+                    if answer: entries.append(dict(paper=one,section=section,rest=rest,number=int(next(g for g in mark.groups() if g)),
+                                                   sub=int(next(g for g in sub.groups() if g)) if sub else None,answer=answer))
+                if after:
+                    new,section,words=_ref_scope(tail[after.start(1):],section)
+                    if new is not None: paper=here=new;title=rest=''
     return entries
 
 
@@ -1086,21 +1104,25 @@ def _ref_relation(label,entry):
     if not mark: return 'unsure'
     if int(next(g for g in mark.groups() if g))!=entry['number']: return 'different'
     sub=_REF_SUB.match(label,mark.end());paper,section,rest=_ref_scope(label[:mark.start()])
-    unsure=paper is None and entry['paper'] is None and rest!=entry['rest']  # unnamed papers only match word for word
-    for mine,theirs in ((paper,entry['paper']),(section,entry['section']),(int(next(g for g in sub.groups() if g)) if sub else None,entry['sub'])):
+    paper='*' if isinstance(paper,tuple) else paper  # A label naming two papers identifies neither.
+    part=paper is None and entry['paper'] is None and rest!=entry['rest']  # unnamed papers only match word for word
+    unsure=False
+    for n,(mine,theirs) in enumerate(((paper,entry['paper']),(section,entry['section']),(int(next(g for g in sub.groups() if g)) if sub else None,entry['sub']))):
         if mine is None and theirs is None: continue
-        if mine is None or theirs is None or '*' in (mine,theirs): unsure=True
-        elif mine!=theirs and not (isinstance(mine,str) and (mine.endswith(theirs) or theirs.endswith(mine))): return 'different'
-    return 'unsure' if unsure else 'same'
+        if mine is None or theirs is None or '*' in (mine,theirs):
+            if n==2: part=True
+            else: unsure=True
+        elif mine!=theirs and not (isinstance(mine,str) and isinstance(theirs,str) and (mine.endswith(theirs) or theirs.endswith(mine))): return 'different'
+    return 'unsure' if unsure else 'part' if part else 'same'
 
 
 def _ref_agrees(claimed,teacher):
-    """A teacher-labelled value must be the teacher's letter, or the teacher's text in whole words or numbers."""
+    """A teacher-labelled value must be the teacher's letter, or the teacher's whole text."""
     if re.fullmatch('[A-H]',teacher):
         found=re.match(r'([A-H])(?![A-Za-z])',claimed)
         return bool(found) and found[1]==teacher
-    short,long=sorted((re.sub(r'[，,；;。.．、！!？?]+$','',''.join(value.split())) for value in (claimed,teacher)),key=len)
-    return bool(short) and re.search(r'(?<![0-9A-Za-z])(?<![0-9][.．])'+re.escape(short)+r'(?![0-9A-Za-z])(?![.．][0-9])',long) is not None
+    whole=lambda value:re.sub(r'[，,；;。.．、！!？?]+$','',''.join(value.split()))
+    return whole(claimed)==whole(teacher)
 
 
 def _prefer_teacher_reference(item,question_kind,entries,images):
@@ -1109,24 +1131,28 @@ def _prefer_teacher_reference(item,question_kind,entries,images):
     related=[(_ref_relation(item['label'],entry),entry['answer']) for entry in entries]
     same=sorted({answer for relation,answer in related if relation=='same'})
     claimed=item['answer'].removeprefix('教师参考：').strip() if item['answer'].startswith('教师参考：') else None
+    shown=lambda value,limit=200:value if len(value)<=limit else value[:limit]+'…'
     def pending(answer,note):
         item.update(answer=answer,judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty=(note+item['uncertainty'].strip())[:300])
     if not same:
-        if claimed is None and any(relation=='unsure' for relation,_ in related):
-            pending('','教师参考写有同题号答案，但卷别、大题或小题与本题无法核明对应；未采用模型自行推导，请核明后补查。')
+        # A named paper or 大题 is never settled by the model's own label; a gap only in leftover words or the
+        # sub-question still blocks AI derivation but keeps the old contract for a teacher-labelled value.
+        if any(relation=='unsure' or relation=='part' and claimed is None for relation,_ in related):
+            pending('','教师参考写有同题号答案，但卷别、大题或小题与本题无法核明对应；%s，未判定，请核明后补查。'%(
+                '未采用模型自行推导' if claimed is None else '模型所标教师参考的归属无法核实'))
         return
-    if len(same)>1: return pending('','教师参考文字对本题写有不同答案（%s），未判定，待老师或家长核对。'%'／'.join(same))
+    if len(same)>1: return pending('','教师参考文字对本题写有不同答案（%s），未判定，待老师或家长核对。'%'／'.join(shown(a,40) for a in same))
     teacher=same[0];letter=re.fullmatch('[A-H]',teacher)
     if claimed is not None and _ref_agrees(claimed,teacher): return
-    misquoted='模型所称教师参考“%s”与教师参考原文“%s”不一致，未判定；请对照教师原件核对。'%(claimed[:40],teacher[:60]) if claimed is not None else ''
-    if misquoted and images: return pending('教师参考：'+teacher,misquoted)
+    misquoted='模型所称教师参考“%s”与教师参考原文“%s”不一致，未判定；请对照教师原件核对。'%(shown(claimed,40),shown(teacher,60)) if claimed is not None else ''
+    if misquoted and images: return pending('教师参考：'+shown(teacher),misquoted)
     student=item['student_answer'].strip()
     if letter and question_kind=='objective' and item['judgment']!='unknown' and re.fullmatch('[A-H]',student):
         return item.update(answer='教师参考：'+teacher,judgment='correct' if student==teacher else 'incorrect',possible_cause='',steps='',
                            error_reason='' if student==teacher else '作答%s与教师参考%s不同。'%(student,teacher))
     if claimed is None and ''.join(re.sub(r'^\s*AI自行推导\s*[:：]','',item['answer']).split())==''.join(teacher.split()):
-        item['answer']='教师参考：'+teacher;return  # Same value, only the label was wrong.
-    pending('教师参考：'+teacher,misquoted or '本题有教师参考，模型未按教师参考核对，未判定；请对照教师参考补查。')
+        item['answer']='教师参考：'+shown(teacher);return  # Same value, only the label was wrong.
+    pending('教师参考：'+shown(teacher),misquoted or '本题有教师参考，模型未按教师参考核对，未判定；请对照教师参考补查。')
 
 
 def homework_reference_draft(images, *, data_path=None, timeout=90, review=False, reference_images=(),

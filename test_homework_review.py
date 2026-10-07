@@ -89,14 +89,14 @@ def output_contract_checks():
 def choice_judgment_checks():
     """Explicit single-choice letters must not contradict their own comparison."""
     calls=0
-    def generate(question,*,previous=False):
+    def generate(question,*,previous=False,teacher='虚构甲卷第1题教师参考B。'):
         nonlocal calls
         raw=dict(question_labels=[question['label']],items=[question],coverage='本题已与教师参考核对。')
         original=json.loads(json.dumps(raw))
         with patch.object(family_llm,'_chat_json',return_value=raw) as model:
             draft=family_llm.homework_reference_draft([],review=True,
                 question_documents=[dict(name='synthetic-choice-child.txt',text='虚构甲卷第1题最终作答C。')],
-                reference_documents=[dict(name='synthetic-choice-teacher.txt',text='虚构甲卷第1题教师参考B。')],
+                reference_documents=[dict(name='synthetic-choice-teacher.txt',text=teacher)],
                 previous_text='虚构旧意见：第1题正确。' if previous else '')
             assert model.call_count==1 and raw==original
             calls+=1
@@ -118,7 +118,8 @@ def choice_judgment_checks():
                      item(question='虚构解释题：说明原因。',question_kind='subjective',student_answer='因为阳光',answer='教师参考：有阳光'),
                      item(student_answer='1/2',answer='教师参考：0.5'),
                      item(student_answer='AB',answer='教师参考：BA')):
-        draft=generate(question)
+        # A bare 第1题 cannot be paired with a 虚构甲卷 teacher line, so give the same unnamed number its own teacher value.
+        draft=generate(question,teacher='第1题教师参考'+question['answer'].removeprefix('教师参考：'))
         assert draft['questions'][0]['judgment']==question['judgment'], 'do not infer case, semantic, numeric or multiple-choice equivalence'
         assert draft['questions'][0]['error_reason']==question['error_reason']
     return calls
