@@ -1039,6 +1039,14 @@ SCHOOL_C_DENIED = {'说法不对': '更正昨天的语文练习本第18页：取
                    '是误传': '更正昨天的语文练习本第18页：取消第1-6题是误传；' + SCHOOL_C_KEEP,
                    '不是真的': '更正昨天的语文练习本第18页：取消第1-6题不是真的；' + SCHOOL_C_KEEP,
                    '并不属实': '更正昨天的语文练习本第18页：取消第1-6题并不属实；' + SCHOOL_C_KEEP}
+# 本机独立验收在8496复现的两条词表外反例（只整句替换消息5）：A撤销词后直接说“错了”；B只引述他人转述“第1-6题全部不用做”，
+# 说明与老师原要求不符、实际仍要完成第1-6题。另加逗号后、后一句的词表外否认。没有封闭、直接、肯定的整项撤销证据，
+# 取消就未被证明：只能保留原第1-6题或待核，不能写为确定取消。
+SCHOOL_C_UNPROVEN = {'取消错了': '更正昨天的语文练习本第18页：取消第1-6题错了；' + SCHOOL_C_KEEP,
+                     '转述不符': '更正昨天的语文练习本第18页：有人转述“第1-6题全部不用做”，这段转述与老师原要求不符，请勿按它执行。'
+                                 '实际要求仍是完成第1-6题，10月9日交，仍请家长检查；' + SCHOOL_C_KEEP,
+                     '逗号后不符': '更正昨天的语文练习本第18页：取消第1-6题，这与老师原要求不符；' + SCHOOL_C_KEEP,
+                     '后句不符': '更正昨天的语文练习本第18页：取消第1-6题。这与老师原要求不符，请勿执行；' + SCHOOL_C_KEEP}
 # 只免家长检查、只免交回：作业仍要做，不是取消。
 SCHOOL_C_STILL_DONE = {'只免检查': '更正昨天的语文练习本第18页：取消家长检查，第1-6题仍10月9日交；' + SCHOOL_C_KEEP,
                        '只免交回': '更正昨天的语文练习本第18页：撤回交回要求，第1-6题仍要完成；' + SCHOOL_C_KEEP}
@@ -1148,14 +1156,14 @@ class SchoolFirstBatchCancelTest(unittest.TestCase):
 
     def unsettled_rows(self, text, **worksheet):
         rows = _school_c_cancel_rows(**dict(SCHOOL_C_ORIGINAL, **worksheet))
-        if text in {**SCHOOL_C_UNSETTLED, **SCHOOL_C_DENIED}.values() and 'cancel' not in rows[1]['task_change']: rows[1]['task_goal'] += '\n请家长检查。'
+        if text in {**SCHOOL_C_UNSETTLED, **SCHOOL_C_DENIED, **SCHOOL_C_UNPROVEN}.values() and 'cancel' not in rows[1]['task_change']: rows[1]['task_goal'] += '\n请家长检查。'
         # “如果”与“不变”同句：既有“不变”保护不认背诵未变，背诵只引原消息1（不放宽该保护）。
         if '如果' in text: rows[0]['evidence'] = [dict(ref=C + '1')]
         return rows
 
     def test_unsettled_or_check_only_cancel_keeps_the_original_and_never_saves_cancel(self):
         import family_agent
-        for label, text in {**SCHOOL_C_UNSETTLED, **SCHOOL_C_DENIED, **SCHOOL_C_STILL_DONE}.items():
+        for label, text in {**SCHOOL_C_UNSETTLED, **SCHOOL_C_DENIED, **SCHOOL_C_UNPROVEN, **SCHOOL_C_STILL_DONE}.items():
             recite = [C + '1'] if '如果' in text else [C + '1', C + '5']
             for real in (False, True):
                 with self.subTest(label, real=real):
@@ -1174,8 +1182,8 @@ class SchoolFirstBatchCancelTest(unittest.TestCase):
 
     def test_unsettled_cancel_through_ingest_keeps_the_original_once_and_illegal_cancel_writes_nothing(self):
         import family_agent
-        for label in ('条件A', '否定B', '询问吗', '说法不对', '假消息'):
-            text = {**SCHOOL_C_UNSETTLED, **SCHOOL_C_DENIED}[label]
+        for label in ('条件A', '否定B', '询问吗', '说法不对', '假消息', '取消错了', '转述不符'):
+            text = {**SCHOOL_C_UNSETTLED, **SCHOOL_C_DENIED, **SCHOOL_C_UNPROVEN}[label]
             evidence = _school_c_evidence(m5=dict(text=text)); texts = [e['text'] for e in evidence]
             with self.subTest(label), patch.dict(SCHOOL_CASES, {'school-heldout-c': dict(SCHOOL_CASES['school-heldout-c'], evidence=evidence)}):
                 wrong = ingest_school('school-heldout-c', dict(proposals=self.unsettled_rows(text, **SCHOOL_C_CANCEL_REVIEW)))
@@ -1193,9 +1201,19 @@ class SchoolFirstBatchCancelTest(unittest.TestCase):
                     for item in items:
                         if '练习本' in item['title'] + item['body']: item['plan']['school_task'].update(change='cancel', state='review')
                     return items
-                with patch.object(family_agent, '_select', side_effect=tampered):
+                saved, raised = family_agent.Store._save, []
+
+                def direct(store, *args, **kwargs):
+                    before = _db_rows(store)
+                    try:
+                        return saved(store, *args, **kwargs)
+                    except family_agent.AgentError as error:
+                        raised.append((str(error), before == _db_rows(store))); raise
+                with patch.object(family_agent, '_select', side_effect=tampered), patch.object(family_agent.Store, '_save', new=direct):
                     run = ingest_school('school-heldout-c', dict(proposals=self.unsettled_rows(text)))
                 self.assertEqual((run['counts'], run['items'], run['originals']), ([0], [], texts), run['results'])
+                # 实际_save这一层自己拒收错误取消，且调用前后全库每张表零写入（不拿run_once的运行记录当零写证据）。
+                self.assertEqual([('学校完整要求未按对应行动保存' in message, same) for message, same in raised], [(True, True)], raised)
 
     def test_other_day_page_object_teacher_source_or_earlier_cancel_cancels_nothing(self):
         import family_agent
@@ -1256,6 +1274,13 @@ class SchoolFirstBatchCancelTest(unittest.TestCase):
             items = family_agent._select('school', [five], school_goals=[], school_tasks=[task], as_of=AS_OF)
         self.assertEqual([(i['plan']['school_task']['change'], i['plan']['school_task']['target_id'], i['plan']['school_task']['state'])
                           for i in items], [('cancel', task['id'], 'review')])
+
+
+def _db_rows(store):
+    """全库每张表的全部行，用于核对一次直接保存是否零写入。"""
+    with store._db() as c:
+        tables = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+        return {t: [tuple(r) for r in c.execute('SELECT * FROM "%s"' % t).fetchall()] for t in tables}
 
 
 def ingest_school(name, reply, runs=1):
