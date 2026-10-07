@@ -583,6 +583,24 @@ function prepareTaskCapture(task,record=null,recentId=null){
 function homeworkReviewOriginalId(record){const old=/^家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #([1-9][0-9]*)。$/.exec(record.note||'');return record.followup_kind==='作业检查'?record.related_record_id:old&&(record.attachments||[]).some(id=>data.uploads.some(a=>a.id===id&&a.mime?.startsWith('text/plain')&&a.name==='作业批改参考-'+old[1]+'.txt'))?Number(old[1]):null}
 function homeworkAnswerRecord(record,task){return !!record&&!!task&&record.child===task.child&&!record.related_record_id&&!record.followup_kind&&record.source!=='错题照片核对'&&!homeworkReviewOriginalId(record)&&(record.source==='事项:'+task.id||(!record.source.startsWith('事项:')&&record.linked_task_id===task.id))}
 function homeworkReviewTextFile(a){return a.mime?.startsWith('text/plain')||a.mime==='application/vnd.openxmlformats-officedocument.wordprocessingml.document'}
+// What a parent can see of a node in a dialog: the viewport, the dialog and each clipping ancestor inside it (a modal dialog sits above the page), above its sticky close bar.
+function dialogVisibleBox(node){
+ const dialog=node.closest('dialog'),box={top:0,bottom:innerHeight},bar=dialog?.querySelector(':scope>form>.actions');
+ for(let x=node.parentElement;x&&x!==dialog?.parentElement;x=x.parentElement)if(x===dialog||getComputedStyle(x).overflowY!=='visible'){const top=x.getBoundingClientRect().top+x.clientTop;box.top=Math.max(box.top,top);box.bottom=Math.min(box.bottom,top+x.clientHeight)}
+ if(bar&&!bar.contains(node)&&getComputedStyle(bar).position==='sticky')box.bottom=Math.min(box.bottom,bar.getBoundingClientRect().top);
+ return box;
+}
+// Scroll the dialog until the nodes are whole in that box. A stuck sticky column does not move, so when a scroll left them in place, also cover the distance it holds before it scrolls.
+function revealInDialog(nodes){
+ const dialog=nodes[0].closest('dialog');let sticky=null,last=null;if(!dialog)return;
+ for(let x=nodes[0].parentElement;x&&x!==dialog&&!sticky;x=x.parentElement)if(getComputedStyle(x).position==='sticky')sticky=x;
+ for(let i=0;i<5;i++){
+  const box=dialogVisibleBox(nodes[0]),rects=nodes.map(n=>n.getBoundingClientRect()),top=Math.min(...rects.map(r=>r.top)),bottom=Math.max(...rects.map(r=>r.bottom));
+  let delta=bottom>box.bottom?Math.min(bottom-box.bottom,top-box.top):top<box.top?top-box.top:0;if(Math.abs(delta)<1)return;
+  if(sticky&&delta>0&&last!==null&&Math.abs(last-top)<1)delta+=Math.max(0,sticky.parentElement.getBoundingClientRect().bottom-sticky.getBoundingClientRect().bottom);
+  const was=dialog.scrollTop;last=top;dialog.scrollTop+=delta;if(dialog.scrollTop===was)return;
+ }
+}
 // Display only: an answer that already starts with a literal source label shows that label once; q.answer and draft.text stay unchanged.
 function homeworkReviewReferenceHTML(q,open=false){
  const answer=String(q.answer||''),prefix=['教师参考：','AI自行推导：'].find(x=>answer.startsWith(x)),body=prefix?answer.slice(prefix.length):answer||'需补充资料',chars=[...body].length;
@@ -712,8 +730,8 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
   taskFeedbackExcluded.clear();drawPending();
   f.elements.note.value='家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #'+recordId+'。';
   status.textContent='已填入反馈，尚未保存；请点“保存这次反馈”。作业完成状态不会改变。';button.disabled=true;area.disabled=true;panel.querySelector('[data-homework-review-instruction]').disabled=false;
-  // The original save button stays the only save; bring it and the unsaved state into view.
-  const unsaved=$('#taskFeedbackStatus');unsaved.textContent='检查意见已填入，尚未保存；请保存这次反馈。';unsaved.scrollIntoView({block:matchMedia('(max-width:760px)').matches?'center':'nearest'});$('#saveTaskFeedback').focus({preventScroll:true});
+  // The original save button stays the only save; the unsaved note and that button end whole inside what the dialog shows, not only inside the window.
+  const unsaved=$('#taskFeedbackStatus'),unsavedPair=[unsaved,$('#saveTaskFeedback')];unsaved.textContent='检查意见已填入，尚未保存；请保存这次反馈。';unsaved.scrollIntoView({block:matchMedia('(max-width:760px)').matches?'center':'nearest'});revealInDialog(unsavedPair);requestAnimationFrame(()=>revealInDialog(unsavedPair));unsavedPair[1].focus({preventScroll:true});
  }catch(error){status.textContent=(error.name==='AbortError'?'文字原件上传超时':error.message||'文字原件未保存')+'；草稿仍在，可重试。';editing.forEach(x=>x.disabled=false);button.disabled=false}
  finally{finishHomeworkReview()}
 });

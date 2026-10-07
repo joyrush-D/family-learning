@@ -5,6 +5,12 @@ const {once}=require('node:events');
 const net=require('node:net');
 const {setTimeout:delay}=require('node:timers/promises');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+// After filling, the unsaved note and the original save button must both be whole where a parent can see them: the viewport, the modal task dialog and every clipping ancestor inside it, above its sticky close bar.
+const savePairView=page=>page.evaluate(()=>{const nodes=['#taskFeedbackStatus','#saveTaskFeedback'].map(s=>document.querySelector(s)),dialog=document.querySelector('#taskDialog'),box={top:0,left:0,bottom:innerHeight,right:innerWidth};
+ for(let x=nodes[1].parentElement;x&&x!==dialog.parentElement;x=x.parentElement){const s=getComputedStyle(x);if(x===dialog||s.overflowX!=='visible'||s.overflowY!=='visible'){const r=x.getBoundingClientRect(),top=r.top+x.clientTop,left=r.left+x.clientLeft;box.top=Math.max(box.top,top);box.left=Math.max(box.left,left);box.bottom=Math.min(box.bottom,top+x.clientHeight);box.right=Math.min(box.right,left+x.clientWidth)}}
+ const bar=dialog.querySelector(':scope>form>.actions');if(bar&&!bar.contains(nodes[1])&&getComputedStyle(bar).position==='sticky')box.bottom=Math.min(box.bottom,bar.getBoundingClientRect().top);
+ const rects=nodes.map(n=>{const r=n.getBoundingClientRect();return {top:r.top,left:r.left,bottom:r.bottom,right:r.right}});
+ return {box,rects,focus:document.activeElement?.id,modal:dialog.matches(':modal'),inside:dialog.matches(':modal')&&nodes.every(n=>dialog.contains(n))&&rects.every(r=>r.bottom>r.top&&r.top>=box.top-.5&&r.left>=box.left-.5&&r.bottom<=box.bottom+.5&&r.right<=box.right+.5)}});
 async function eventually(fn,label){for(let n=0;n<250;n++){if(await fn())return;await delay(40)}throw Error('Timed out: '+label)}
 function assertDraftReceipt(validated,draft){
  const {continuation,...fields}=draft;assert.deepEqual(validated,fields);
@@ -484,7 +490,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
   assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'虚构：上传期间补写的观察','upload completion keeps concurrent parent input');
   assert.match(await panel.innerText(),/反馈输入.*变化/);
   await p.locator('#taskForm [name=note]').fill('');
-  await panel.locator('[data-homework-review-apply]').click();await eventually(async()=>/已填入反馈，尚未保存/.test(await panel.innerText()),'review staged after explicit retry');
+  await panel.locator('[data-homework-review-apply]').click();await eventually(async()=>/已填入反馈，尚未保存/.test(await panel.innerText()),'review staged after explicit retry');{const view=await savePairView(p);assert(view.inside,'photo review filled: the unsaved note and the original save button are whole inside the viewport, the task dialog and its clipping ancestors, above a sticky close bar: '+JSON.stringify(view))}
   assert.match(await p.locator('#taskForm [name=note]').inputValue(),/家长核对的作业批改参考/);
   p.once('dialog',d=>d.dismiss());await p.locator('#taskDialog [data-close="taskDialog"]').click();
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'review draft stays after declining discard');
@@ -741,7 +747,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
   assert.equal(await consistencyResult.evaluate(el=>{const q=el.querySelector('.homework-review-questions'),n=el.querySelector('.homework-review-next'),c=el.querySelector('[data-homework-review-coverage]');return !!(q&&n&&c&&q.compareDocumentPosition(n)&Node.DOCUMENT_POSITION_FOLLOWING&&n.compareDocumentPosition(c)&Node.DOCUMENT_POSITION_FOLLOWING)&&[...el.querySelectorAll('button,summary,.print-file-check')].filter(x=>x.getClientRects().length).every(x=>x.getBoundingClientRect().height>=44)}),true,'the two-step action follows the questions, before the visible scope, with 44px targets');
   assert.equal(await consistencyResult.locator('textarea').inputValue(),consistentDraft.text,'layout never reconstructs or truncates the saved review');
   if(process.env.HOMEWORK_QUICK_PROOF_DIR){await p.screenshot({path:require('node:path').join(process.env.HOMEWORK_QUICK_PROOF_DIR,'consistency-draft-'+width+'.png')})}
-  await consistencyPanel.locator('[data-homework-review-confirm]').check();await consistencyPanel.locator('[data-homework-review-apply]').click();await eventually(async()=>/已填入反馈，尚未保存/.test(await consistencyPanel.innerText()),'consistent result staged for explicit save');
+  await consistencyPanel.locator('[data-homework-review-confirm]').check();await consistencyPanel.locator('[data-homework-review-apply]').click();await eventually(async()=>/已填入反馈，尚未保存/.test(await consistencyPanel.innerText()),'consistent result staged for explicit save');{const view=await savePairView(p);assert(view.inside,'consistency review filled: the unsaved note and the original save button are whole inside the viewport, the task dialog and its clipping ancestors, above a sticky close bar: '+JSON.stringify(view))}
   const consistencyReview=await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),readCause);
   state=await readCause();assert.equal(state.records.find(r=>r.id===consistencyReview.record_id).related_record_id,consistencyOriginal.record_id);assert.equal(state.records.filter(r=>r.source==='错题照片核对'&&r.linked_task_id===consistencyTask.id).length,0,'unknown and sound error remain explicit decisions, no automatic wrong item');
   const consistencyWrong=p.locator('#taskFeedbackHistory [data-task-wrong-form="'+consistencyOriginal.record_id+'"]');await consistencyWrong.locator(':scope > summary').click();await consistencyWrong.locator('[data-wrong-field=label]').fill('虚构乙卷第2题');await consistencyWrong.locator('[data-wrong-field=text]').fill('6-2=?');await consistencyWrong.locator('[data-wrong-field=answer]').fill('3');await consistencyWrong.locator('[data-wrong-field=correction]').fill('4');
