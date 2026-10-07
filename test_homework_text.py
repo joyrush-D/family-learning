@@ -230,6 +230,32 @@ class TeacherReferenceSourceTests(unittest.TestCase):
         self.assertEqual((q['answer'],q['judgment']),('教师参考：'+whole,'correct'))
 
 
+class TeacherReferenceEquationTests(TeacherReferenceSourceTests):
+    """A teacher's bare equation and its one final value are the same teacher value; alternatives or added demands are not."""
+    test_extended_teacher_letter_is_not_the_teacher_value=test_title_or_sub_question_gap_cannot_make_a_teacher_source=None
+    test_cover_heading_and_whole_values_keep_paired_results=None
+
+    def case(self,n,teacher,student,claimed,judgment,**changes):
+        return self.run_case('虚构甲卷第%d题：%s'%(n,teacher),objective('虚构甲卷第%d题'%n,'2+3=?',student,'教师参考：'+claimed,judgment,**changes))
+
+    def test_equation_final_value_and_same_value_expression_agree(self):
+        q=self.case(1,'2+3=5。','4','5','incorrect',error_reason='作答4与教师参考5不同。')
+        self.assertIn((q['answer'],q['judgment']),[('教师参考：5','incorrect'),('教师参考：2+3=5','incorrect')])
+        q=self.case(2,'2+3=5','5','5','correct')
+        self.assertIn((q['answer'],q['judgment']),[('教师参考：5','correct'),('教师参考：2+3=5','correct')])
+        q=self.case(3,'5','5','2+3=5','correct')
+        self.assertIn((q['answer'],q['judgment']),[('教师参考：5','correct'),('教师参考：2+3=5','correct')])
+
+    def test_other_final_value_alternatives_or_added_demands_stay_the_teachers(self):
+        q=self.case(4,'2+3=5','6','2+3=6','correct')
+        self.assertIn((q['answer'],q['judgment']),[('教师参考：2+3=5','unknown'),('教师参考：5','unknown'),('教师参考：2+3=5','incorrect'),('教师参考：5','incorrect')])
+        q=self.case(5,'5或6','5','5','correct')
+        self.assertEqual((q['answer'],q['judgment']),('教师参考：5或6','unknown'))
+        demand='5，并且必须说明把两组数量合并后得到总数的理由'
+        q=self.case(6,demand,'5','5','correct')
+        self.assertIn((q['answer'],q['judgment']),[('教师参考：'+demand,'unknown'),('教师参考：'+demand,'incorrect')])
+
+
 class TextQuestionContractTests(unittest.TestCase):
     def test_text_teacher_claim_requires_teacher_original(self):
         previous=[{},dict(previous_text='虚构旧意见：教师参考为5。'),
@@ -388,4 +414,4 @@ class TextQuestionHTTPTests(HomeworkPrintScopeTests):
             self.assertEqual(status,400,out);model.assert_not_called();self.assertEqual(self.dump(),before)
 
 
-if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TeacherReferenceScopeTests','TeacherReferenceSourceTests','TextQuestionHTTPTests'])
+if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TeacherReferenceScopeTests','TeacherReferenceSourceTests','TeacherReferenceEquationTests','TextQuestionHTTPTests'])
