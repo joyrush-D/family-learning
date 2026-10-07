@@ -301,6 +301,31 @@ class FrozenTruthTest(unittest.TestCase):
         self.assertEqual((bad['source_errors'], len(bad['missed'])), (['2-1'], 5))
 
 
+class ProgramPathTest(unittest.TestCase):
+    """A reply that already matches truth must survive validation unchanged (separates program from model)."""
+
+    def test_truthful_answer_check_reply_keeps_every_frozen_result(self):
+        import family_llm
+        for name, case in HOMEWORK_CASES.items():
+            sectioned = any(t['section'] for t in case['truth'])
+            labels, items = [], []
+            for t in case['truth']:
+                label = ('%s、第%d题' % ('一二'[t['section'] - 1], t['number']) if sectioned else '第%d题' % t['number'])
+                judged = t['judgments'][0] != 'unknown'
+                labels.append(label)
+                items.append(dict(label=label, question='题%d' % t['number'], student_answer='作答' if judged else '',
+                                  answer=(('教师参考：' if t['source'] == 'teacher' else 'AI自行推导：') + '参考') if judged else '',
+                                  judgment=t['judgments'][0], error_reason='与参考不同' if t['judgments'][0] == 'incorrect' else '',
+                                  possible_cause='', steps='', uncertainty='' if judged else '未作答，待补看',
+                                  question_kind='objective'))
+            reply = dict(items=items, coverage='已按文字原件核对全部题号。', comparison='', question_labels=labels)
+            with patch.object(family_llm, '_chat_json', return_value=copy.deepcopy(reply)):
+                final = run_case(name, None)
+            result = score_homework(name, final['questions'])
+            self.assertEqual((result['covered'], result['wrong_judgment'], result['undetermined'], result['source_errors']),
+                             (len(case['truth']), [], [], []), (name, result))
+
+
 if __name__ == '__main__':
     if len(sys.argv) >= 5 and sys.argv[1] == '--live':
         live(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:] or list(SCHOOL_CASES) + list(HOMEWORK_CASES))
