@@ -87,6 +87,61 @@ class TeacherReferencePriorityTests(unittest.TestCase):
         self.assertEqual((result['questions'][0]['answer'],result['questions'][0]['judgment']),('教师参考：7米','correct'))
 
 
+def frozen(*items):
+    return dict(question_labels=[i['label'] for i in items],items=list(items),coverage='只核本次虚构原件内明确的卷别与题号。')
+
+
+def objective(label,question,student,answer,judgment='correct',**changes):
+    return dict(label=label,question=question,student_answer=student,answer=answer,judgment=judgment,question_kind='objective',
+                error_reason='',possible_cause='',steps='',uncertainty='')|changes
+
+
+class TeacherReferenceIdentityTests(unittest.TestCase):
+    """Independent review cases: a named paper's teacher answer is never lent to another paper or misquoted."""
+    def run_case(self,questions,references,raw):
+        original=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            result=family_llm.homework_reference_draft([],review=True,question_documents=[dict(name=n,text=t) for n,t in questions],
+                reference_documents=[dict(name=n,text=t) for n,t in references])
+        self.assertEqual(model.call_count,1);self.assertEqual(raw,original)
+        return result
+
+    def test_named_papers_without_letter_names_keep_their_own_source(self):
+        dipper=objective('虚构北斗卷第12题','5×5等于多少？A.20 B.21 C.24 D.26 E.25 F.30 G.35 H.15。','E','教师参考：E')
+        south=objective('虚构南风卷第12题','3+3等于多少？A.3 B.4 C.5 D.6 E.7 F.8 G.9 H.10。','D','AI自行推导：D')
+        result=self.run_case([('synthetic-heldout-dipper-q12-answer.txt','虚构北斗卷 第12题：5×5等于多少？A.20 B.21 C.24 D.26 E.25 F.30 G.35 H.15。学生原答：E。'),
+                              ('synthetic-heldout-south-q12-answer.txt','虚构南风卷 第12题：3+3等于多少？A.3 B.4 C.5 D.6 E.7 F.8 G.9 H.10。学生原答：D。')],
+                             [('synthetic-heldout-dipper-q12-teacher.txt','虚构北斗卷 第12题：教师参考E。')],frozen(dipper,south))
+        self.assertEqual([(q['answer'],q['judgment']) for q in result['questions']],[('教师参考：E','correct'),('AI自行推导：D','correct')])
+        self.assertEqual((result['wrong_items'],result['unknown_items']),(0,0))
+        bridge=objective('虚构星桥卷第19题','9-5等于多少？A.1 B.2 C.3 D.5 E.6 F.7 G.4 H.8。','G','AI自行推导：G')
+        result=self.run_case([('synthetic-heldout-bridge-q19-answer.txt','虚构星桥卷 第19题：9-5等于多少？A.1 B.2 C.3 D.5 E.6 F.7 G.4 H.8。学生原答：G。')],
+                             [('synthetic-heldout-valley-q19-teacher.txt','虚构溪谷卷 第19题：教师参考H。')],frozen(bridge))
+        self.assertEqual([(q['answer'],q['judgment']) for q in result['questions']],[('AI自行推导：G','correct')])
+        self.assertEqual((result['wrong_items'],result['unknown_items']),(0,0))
+
+    def test_unrecognized_paper_names_are_isolated_but_one_unnamed_paper_still_compares(self):
+        south=objective('虚构南风练习第12题','3+3等于多少？A.5 B.6','B','AI自行推导：B')
+        result=self.run_case([('synthetic-south-practice.txt','虚构南风练习第12题：3+3等于多少？A.5 B.6\n实际作答：B')],
+                             [('synthetic-dipper-practice-teacher.txt','虚构北斗练习 第12题：教师参考A')],frozen(south))
+        q=result['questions'][0];self.assertNotEqual(q['judgment'],'incorrect');self.assertNotIn('A',q['answer'])
+        self.assertEqual(result['wrong_items'],0)
+        single=objective('第1题','2+3=? A.4 B.5 C.6','B','AI自行推导：C','incorrect',error_reason='作答B与推导C不同。')
+        result=self.run_case([('synthetic-single.txt','第1题：2+3=? A.4 B.5 C.6\n实际作答：B')],[('synthetic-single-teacher.txt','第1题：教师参考B')],frozen(single))
+        self.assertEqual([(q['answer'],q['judgment']) for q in result['questions']],[('教师参考：B','correct')])
+
+    def test_teacher_label_on_a_different_non_letter_value_is_not_confirmed(self):
+        rope=objective('虚构甲卷第2题','一根绳子长12米，剪去5米，还剩几米？','8米','教师参考：8米')
+        questions=[('synthetic-rope.txt','虚构甲卷第2题：一根绳子长12米，剪去5米，还剩几米？\n实际作答：8米')]
+        teacher=[('synthetic-rope-teacher.txt','虚构甲卷 第2题：教师参考7米')]
+        result=self.run_case(questions,teacher,frozen(rope));q=result['questions'][0]
+        self.assertEqual((q['answer'],q['judgment'],result['wrong_items'],result['unknown_items']),('教师参考：7米','unknown',0,1))
+        self.assertIn('8米',q['uncertainty']);self.assertIn('7米',q['uncertainty'])
+        same=rope|dict(student_answer='7米',answer='教师参考：7米')
+        result=self.run_case([('synthetic-rope.txt','虚构甲卷第2题：一根绳子长12米，剪去5米，还剩几米？\n实际作答：7米')],teacher,frozen(same))
+        self.assertEqual([(q['answer'],q['judgment']) for q in result['questions']],[('教师参考：7米','correct')])
+
+
 class TextQuestionContractTests(unittest.TestCase):
     def test_text_teacher_claim_requires_teacher_original(self):
         previous=[{},dict(previous_text='虚构旧意见：教师参考为5。'),
@@ -245,4 +300,4 @@ class TextQuestionHTTPTests(HomeworkPrintScopeTests):
             self.assertEqual(status,400,out);model.assert_not_called();self.assertEqual(self.dump(),before)
 
 
-if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TextQuestionHTTPTests'])
+if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TextQuestionHTTPTests'])
