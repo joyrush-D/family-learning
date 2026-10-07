@@ -2831,8 +2831,8 @@ def _school_native_change_owner(entry,later,actions):
     return owners[0] if len(owners)==1 else None
 
 
-def _school_native_change_clauses(sent,text,time):
-    """Each changing clause of a later message after the object its header names, with its sentence; None when it names another sending day."""
+def _school_native_change_body(sent,text,time):
+    """The object a later message's header names and the body after it; None when it names another sending day."""
     # "补充语文练习册：第5题不用做" names its object before the colon; a dated correction header only says when the list was sent.
     text=re.sub(r'^\s*更正\s*(?:\d{4}年)?\d{1,2}月\d{1,2}日\s*\d{1,2}[:：]\d{2}\s*发布的','更正',text)
     # "更正/取消昨天的…" says when the list was sent; it names this list only when that is the list's own sending day.
@@ -2842,7 +2842,14 @@ def _school_native_change_clauses(sent,text,time):
         if (dt.date.fromisoformat(sent_day(time))-dt.timedelta(days=('今天','昨天','前天').index(day[2]))).isoformat()!=sent_day(sent):return None
         text=day[1]+text[day.end():]
     head=re.match(r'^\s*(?:补充|更正|取消|撤销|撤回)([^：:\n]{0,40})[：:]',text)
-    lead=head[1] if head else '';body=text[head.end():] if head else text
+    return (head[1],text[head.end():]) if head else ('',text)
+
+
+def _school_native_change_clauses(sent,text,time):
+    """Each changing clause of a later message after the object its header names, with its sentence; None when it names another sending day."""
+    parts=_school_native_change_body(sent,text,time)
+    if parts is None:return None
+    lead,body=parts
     # A question mark ends its clause like a full stop: "要取消第1-6题吗？《纸船》…不变" is two clauses.
     return [(lead+re.sub(r'(?:不是|并非|而非|除了|除去)[^，,。；;是]*(?:而是|是)?','',clause),sentence)
             for sentence in re.split(r'(?<=[。！!？?\n])',body) for clause in re.split(r'[。；;，,！!？?\n]',sentence)
@@ -2850,31 +2857,40 @@ def _school_native_change_clauses(sent,text,time):
 
 
 _SCHOOL_NATIVE_WITHDRAW=r'取消|撤销|撤回|不再(?:做|完成)|不用(?:做|完成)|无需(?:做|完成)'
-# Withdrawing only the check, signature or handback ("取消家长检查", "撤回交回要求") leaves the work itself to do.
-_SCHOOL_NATIVE_ACCOMPANYING=r'检查|签字|签名|交回|上交|提交|批改|抽查|打卡|拍照|上传'
-# Denying, faulting or only reporting the withdrawal after it in its sentence ("取消第1-6题的说法不对", "…，这是误传").
-_SCHOOL_NATIVE_DENIED=(r'说法|传言|传闻|谣言|谣传|误传|误发|讹传|假消息|假话|是假|虚假|不实|不对|不准确|不正确|不属实|不成立|不算数'
-                      r'|不是真|并非(?:事实|真)|有误|是错(?!题)|弄错|搞错|发错|说错|传错|没有?这回事')
+# Besides this outcome's own literal objects, a closed whole withdrawal holds only its withdrawing word and these fillers.
+_SCHOOL_NATIVE_OWN=(r'《[^》]*》|unit\s*\d+|第[一二三四五六七八九十0-9]+课|第\s*\d+\s*页|第\s*[0-9][0-9\s\-–—~～至到、]*\s*题|'
+                    +_SCHOOL_NATIVE_WORKSHEET+'|'+_SCHOOL_NATIVE_SUBJECTS+r'|作业|全部|的|都|也|\s')
+# The only other clauses a proven cancel may carry: its handback ("也不用交") and a misprint reason ("题目印错了").
+_SCHOOL_NATIVE_BESIDE=r'(?:也|并且)?(?:不用|无需|不必)(?:再)?(?:交|交回|上交|提交)了?|(?:因为)?题目(?:印|排)错了?'
+
+
+def _school_native_withdrawn(clause):
+    """"取消语文练习本第18页作业" or "第1-6题都不用做": the withdrawing word with nothing but this outcome's own objects."""
+    return re.fullmatch('(?:'+_SCHOOL_NATIVE_WITHDRAW+')',re.sub(_SCHOOL_NATIVE_OWN,'',clause,flags=re.I)) is not None
 
 
 def _school_native_cancelled(action):
-    """A bound change settles withdrawing this whole outcome: an affirmed withdrawing clause naming no question, or every question it lists.
+    """A bound change settles withdrawing this whole outcome only through closed, direct and affirmed evidence.
 
-    The change already passed the same-publisher, same-source, strictly-later, complete and named-object checks.
-    "第6题不用做" or "取消第6题" only narrows the outcome; "更正/改为/改期" alone withdraws nothing. A negation before the
-    withdrawing word ("并不取消"), a denial of it later in its sentence ("取消第1-6题的说法不对", "…是假消息"), a question,
-    condition or unsettled word in its sentence ("如果下雨就取消", "要取消…吗？")
-    or withdrawing only the check or handback settles nothing. "不用做" is itself an affirmed withdrawal, not a negation.
+    The change already passed the same-publisher, same-source, strictly-later, complete and named-object checks. One clause
+    must be a closed withdrawal naming no question or every question of this outcome ("取消…作业", "第1-6题都不用做"); every
+    other clause of that message may only be another such withdrawal, its handback ("也不用交"), a misprint reason
+    ("题目印错了") or another named outcome affirmed unchanged ("《纸船》…安排不变"). Any other wording — a negation, denial,
+    report or quote ("并不取消", "取消第1-6题错了", "有人转述“…”，与原要求不符"), a question, condition or unsettled word, a
+    partial ("第6题不用做") or check-only withdrawal ("取消家长检查") — proves no cancel, so the original stays to do or for review.
     """
-    own=_school_native_questions(action['primary'])
+    own=_school_native_questions(action['primary']);titles=_school_named_objects(action['primary'])
     for change in action.get('changes',[]):
-        for clause,sentence in _school_native_change_clauses(action['time'],change['quote'],change['time']) or []:
-            word=re.search(_SCHOOL_NATIVE_WITHDRAW,clause)
-            if (not word or re.search(r'[不非未没无否别]',clause[:word.start()]) or re.search(_SCHOOL_NATIVE_UNSETTLED,sentence)
-                    or re.search(_SCHOOL_NATIVE_ACCOMPANYING,clause)
-                    or re.search('(?:'+_SCHOOL_NATIVE_WITHDRAW+').*?(?:'+_SCHOOL_NATIVE_DENIED+')',sentence)):continue
-            named=_school_native_questions(clause)
-            if not named or own and own<=named:return True
+        parts=_school_native_change_body(action['time'],change['quote'],change['time'])
+        if parts is None or re.search(_SCHOOL_NATIVE_UNSETTLED,parts[1]):continue
+        lead,body=parts;whole=False;proven=True
+        for sentence in re.split(r'(?<=[。！!？?\n])',body):
+            for clause in filter(str.strip,re.split(r'[。；;，,！!？?\n]',sentence)):
+                if _school_native_withdrawn(lead+clause):
+                    named=_school_native_questions(lead+clause);whole=whole or not named or bool(own) and own<=named
+                elif not (re.fullmatch(_SCHOOL_NATIVE_BESIDE,clause.strip())
+                          or _school_native_affirmed(clause,sentence) and _school_named_objects(clause)-titles):proven=False
+        if whole and proven:return True
     return False
 
 
@@ -3071,7 +3087,7 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
     cancelled=_school_native_cancelled(action)
     if cancelled and (proposal['task_change'],proposal['task_state'])!=('cancel','review'):
         raise AgentError('学校原要求已被同批具名取消，不能保留为待完成，整批保留重试',code='school_action_coverage')
-    # A negated, conditional, questioned, partial or check-only withdrawal leaves the outcome standing: never a cancel.
+    # A withdrawal no closed evidence proves (negated, denied, reported, conditional, questioned, partial, check-only) leaves the outcome standing: never a cancel.
     if proposal['task_change']=='cancel' and not cancelled:
         raise AgentError('学校原要求的取消尚未成立，不能写为取消，整批保留重试',code='school_action_coverage')
     expected={action['ref']}|{s['ref'] for s in action['supplements']+action.get('changes',[])}
