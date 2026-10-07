@@ -530,35 +530,176 @@ class ProgramPathTest(unittest.TestCase):
                 _select_school_a(proposals, extra)
 
 
-def _select_school_a(proposals, extra=()):
+def _select_school_a(proposals, extra=(), evidence=None):
     import family_agent
-    evidence = copy.deepcopy(SCHOOL_CASES['school-a']['evidence']) + [copy.deepcopy(e) for e in extra]
+    evidence = copy.deepcopy(evidence or SCHOOL_CASES['school-a']['evidence']) + [copy.deepcopy(e) for e in extra]
     with patch.object(family_agent.family_llm, '_chat_json', return_value=dict(proposals=copy.deepcopy(proposals))):
         return family_agent._select('school', evidence, school_goals=[], as_of=AS_OF)
 
 
 class NativeLedgerChangeTest(unittest.TestCase):
-    """Only a later change linked to the list, or naming one of its objects, leaves the literal ledger."""
+    """A later change binds only to the one located outcome it names; the list never leaves the ledger."""
     LIST = 'message:synthetic-school-a:1'
 
-    def located(self, text, clock='19:25:00', publisher='publisher:synthetic-chinese', linked=True):
+    def ledger(self, text, clock='19:25:00', publisher='publisher:synthetic-chinese', source='school-a', **extra):
         import family_agent
         base = dict(copy.deepcopy(SCHOOL_CASES['school-a']['evidence'][0]), related_messages=[self.LIST])
-        ref = 'message:synthetic-school-a:9'
+        ref = 'message:synthetic-%s:9' % source
         later = dict(ref=ref, text=text, time='2026-10-07T%s+08:00' % clock, kind='text', source='虚构班级群', sender='示例',
-                     publisher=publisher, content_incomplete=False, attachments=[],
-                     related_messages=[ref] + ([self.LIST] if linked else []))
-        return self.LIST in {a['ref'] for a in family_agent._school_native_actions([base, later])}
+                     publisher=publisher, content_incomplete=False, attachments=[], related_messages=[ref])
+        later.update(extra)
+        return {a['quote'][:4]: [c['ref'][-1] for c in a.get('changes', [])]
+                for a in family_agent._school_native_actions([base, later]) if a['ref'] == self.LIST}
 
-    def test_linked_or_named_later_change_uses_correction_path(self):
-        self.assertFalse(self.located('补充：练习册第5题不用做，只做第1-4题。'))
-        self.assertFalse(self.located('《秋夜》第2自然段改为朗读两遍。', linked=False))
+    def test_change_binds_only_the_named_outcome(self):
+        self.assertEqual(self.ledger('补充：练习册第5题不用做，只做第1-4题。'), {'背诵《秋': [], '完成练习': ['9']})
+        self.assertEqual(self.ledger('《秋夜》第2自然段改为朗读两遍。'), {'背诵《秋': ['9'], '完成练习': []})
 
-    def test_unrelated_reverse_time_or_other_person_keeps_ledger(self):
-        self.assertTrue(self.located('周记本周不用写。', linked=False))
-        self.assertTrue(self.located('下周一的书法课不用带毛笔。', linked=False))
-        self.assertTrue(self.located('补充：练习册第5题不用做。', clock='18:30:00'))
-        self.assertTrue(self.located('第5题不用做吗？', publisher='publisher:synthetic-parent'))
+    def test_unrelated_unverifiable_or_ambiguous_change_binds_nothing(self):
+        kept = {'背诵《秋': [], '完成练习': []}
+        for label, kwargs in [('unrelated', dict(text='周记本周不用写。')), ('other_date', dict(text='下周一的书法课不用带毛笔。')),
+                              ('earlier', dict(text='补充：练习册第5题不用做。', clock='18:30:00')),
+                              ('other_person', dict(text='练习册第5题不用做吗？', publisher='publisher:synthetic-parent')),
+                              ('incomplete', dict(text='补充：练习册第5题不用做。', content_incomplete=True)),
+                              ('other_object', dict(text='补充：作业本第5题不用做。')),
+                              ('ambiguous', dict(text='《秋夜》改为朗读，练习册第5题不用做。')),
+                              ('other_source', dict(text='补充：练习册第5题不用做。', source='other'))]:
+            with self.subTest(label):
+                self.assertEqual(self.ledger(**kwargs), kept)
+
+
+class SiblingCoverageTest(unittest.TestCase):
+    def test_unchanged_siblings_stay_exactly_once_with_real_or_frozen_links(self):
+        import family_agent
+        base = _school_a_reply()
+        real = [dict(e, related_messages=[e['ref']]) for e in copy.deepcopy(SCHOOL_CASES['school-a']['evidence'])]
+        for links, evidence in (('frozen', None), ('real', real)):
+            result = score_school('school-a', school_rows(_select_school_a(base, evidence=evidence)))
+            self.assertEqual((result['covered'], result['usable'], result['citation_errors'], result['reference_errors'], result['extra']),
+                             (7, 7, [], [], []), (links, result))
+            for label, proposals in [('drop_recite', base[1:]), ('drop_mental', base[:2] + base[3:]),
+                                     ('dup_recite', base + [copy.deepcopy(base[0])]), ('dup_dictation', base + [copy.deepcopy(base[6])])]:
+                with self.subTest(links=links, case=label), self.assertRaises(family_agent.AgentError):
+                    _select_school_a(proposals, evidence=evidence)
+
+    def test_unverifiable_or_foreign_change_cannot_release_the_list(self):
+        # Real ingest links each message only to itself; an explicitly linked incomplete message keeps the
+        # pre-existing original-material-group route and is reported separately.
+        import family_agent
+        base = _school_a_reply()
+        for label, change in [('incomplete', dict(content_incomplete=True)), ('wrong_publisher', dict(publisher='publisher:synthetic-head')),
+                              ('other_object', dict(text='补充：作业本第5题不用做，只做第1-4题。'))]:
+            evidence = [dict(e, related_messages=[e['ref']]) for e in copy.deepcopy(SCHOOL_CASES['school-a']['evidence'])]
+            evidence[5].update(change)
+            for proposals in (base, base[1:]):
+                with self.subTest(label, proposals=len(proposals)), self.assertRaises(family_agent.AgentError):
+                    _select_school_a(proposals, evidence=evidence)
+
+
+def ingest_school(name, reply, runs=1):
+    """Store.ingest → run_once → _select → _save; the model seam returns a saved parsed reply with refs remapped."""
+    from contextlib import ExitStack
+    import datetime as dt
+    import family_agent as agent
+    import family_media
+    import test_agent as fixtures
+    fixture = fixtures.AgentTests(methodName='runTest'); fixture.setUp()
+    try:
+        fixture.now = dt.datetime(2026, 10, 7, 20, tzinfo=agent.TZ)
+        case = SCHOOL_CASES[name]
+        payload = fixture.payload(cursor=str(10 + len(case['evidence'])))
+        payload['messages'] = [dict(id=str(10 + n), message_order=str(10 + n), time=e['time'], kind='text', sender=e['sender'],
+                                    sender_id=e['publisher'].split(':', 1)[1], text=e['text'], unread=False)
+                               for n, e in enumerate(case['evidence'], 1)]
+        fixture.store.ingest(payload)
+        ref_map = {e['ref']: 'message:' + fixture.source['id'] + ':' + m['id'] for e, m in zip(case['evidence'], payload['messages'])}
+        reverse = {v: k for k, v in ref_map.items()}
+        calls, counts = [], []
+
+        def seam(messages, schema, task, timeout=60, *, data_path=None):
+            context = json.loads(messages[-1]['content'])
+            calls.append(dict(task=task, input_sha256=_input_hash(messages, schema, task),
+                              evidence=[(reverse.get(e['ref'], e['ref']), [reverse.get(r, r) for r in e.get('related_messages', [])])
+                                        for e in context['evidence']],
+                              native=[(reverse.get(a['ref'], a['ref']), a['quote'], [reverse.get(s['ref'], s['ref']) for s in a.get('changes', [])])
+                                      for a in context.get('required_native_actions', [])]))
+            text = json.dumps(reply, ensure_ascii=False)
+            for old, new in ref_map.items(): text = text.replace('"%s"' % old, '"%s"' % new)
+            return json.loads(text)
+        with ExitStack() as stack:
+            stack.enter_context(patch('family_qq_capture.run_one', return_value=dict(state='disabled')))
+            stack.enter_context(patch.object(agent.family_teacher_public, 'run_one', return_value=dict(state='disabled')))
+            stack.enter_context(patch.object(family_media, 'run_one', return_value=dict(state='ready')))
+            stack.enter_context(patch.object(family_media, 'prepare_draft', return_value=dict(used=0, failed=0)))
+            stack.enter_context(patch('family_goals.Store.run', return_value=dict(used=0, failed=0, created=0, children=set())))
+            stack.enter_context(patch.object(agent.family_llm, '_chat_json', side_effect=seam))
+            results = []
+            for _ in range(runs):
+                results.append(agent.run_once(fixture.app, now=fixture.now))
+                with fixture.store._db() as c:
+                    counts.append(c.execute('SELECT COUNT(*) FROM agent_items').fetchone()[0])
+        with fixture.store._db() as c:
+            items = [dict(title=r['title'], body=r['body'], due=r['due'], state=r['state'], plan=json.loads(r['plan']),
+                          evidence=[dict(e, ref=reverse.get(e.get('ref'), e.get('ref'))) for e in json.loads(r['evidence'])])
+                     for r in c.execute('SELECT * FROM agent_items ORDER BY rowid')]
+        return dict(results=results, counts=counts, items=items, calls=calls, ref_map=ref_map)
+    finally:
+        fixture.doCleanups()
+
+
+def _school_b_reply(wrong_date=False):
+    rows = [('科学：观察豆芽连续记录3天', '观察豆芽生长，连续记录3天，下周一（10月12日）带记录表到校。', '2026-10-12', 'learning', '观察豆芽生长，连续记录3天，下周一（10月12日）带记录表到校', [1]),
+            ('打印签字交回视力检查回执', '10月9日前打印《视力检查回执》，签字后交回。', '2026-10-09', 'admin', '请家长10月9日前打印《视力检查回执》，签字后交回', [2]),
+            ('学籍信息确认表单位盖章', '《学籍信息确认表》需要家长单位盖章，下周三前交。', '2026-10-14', 'admin', '《学籍信息确认表》需要家长单位盖章，下周三前交', [2]),
+            ('语文：写日记一篇', '写日记一篇，不少于200字，后天交。', '2026-10-09', 'learning', '写日记一篇，不少于200字，后天交', [3]),
+            ('数学练习卷答案仅供家长参考', '答案仅供家长参考，没有新增要求。', '', 'optional', '数学练习卷答案见群文件，仅供家长参考。', [4]),
+            ('数学：同步练习第3课', '同步练习第3课，周四交。', '2026-10-09' if wrong_date else '2026-10-08', 'learning', '同步练习第3课，周四交', [5])]
+    return [dict(title_quote=quote, focus='school', due=due, evidence=[dict(ref='message:synthetic-school-b:%d' % r) for r in refs],
+                 learning_subject=title.split('：')[0] if purpose == 'learning' else '', learning_goal_id='', task_title=title,
+                 task_goal=goal, task_advice='', task_state='reference' if refs == [4] else 'ready', task_reason='原文明确。',
+                 task_change='new', task_target_id='', task_purpose=purpose, task_submission='')
+            for title, goal, due, purpose, quote, refs in rows]
+
+
+class RealIngestTest(unittest.TestCase):
+    """Store.ingest → run_once with saved fictional replies; no product model request, no pre-filled links or tasks."""
+
+    def test_school_a_keeps_actions_reference_and_reruns_without_duplicates(self):
+        run = ingest_school('school-a', dict(proposals=_school_a_reply()), runs=2)
+        self.assertEqual((len(run['calls']), run['counts'][0], run['counts'][1]), (1, 8, 8), run['results'])
+        self.assertTrue(all(related == [ref] for ref, related in run['calls'][0]['evidence']), run['calls'][0]['evidence'])
+        self.assertIn(('message:synthetic-school-a:1', '完成练习册第12页第1-5题，本周五交', ['message:synthetic-school-a:6']), run['calls'][0]['native'])
+        result = score_school('school-a', school_rows(run['items']))
+        self.assertEqual((result['covered'], result['usable'], result['missed'], result['purpose_errors'], result['requirement_errors'],
+                          result['citation_errors'], result['reference_errors'], result['extra']), (7, 7, [], [], [], [], [], []), result)
+
+    def test_school_a_keeps_each_explicit_action_date(self):
+        result = score_school('school-a', school_rows(ingest_school('school-a', dict(proposals=_school_a_reply()))['items']))
+        self.assertEqual((result['covered'], result['usable'], result['due_errors'], result['review']), (7, 7, [], []), result)
+
+    def test_school_b_wrong_model_date_or_empty_reply_is_not_accepted(self):
+        result = score_school('school-b', school_rows(ingest_school('school-b', dict(proposals=_school_b_reply(wrong_date=True)))['items']))
+        self.assertIn('同步练习:无≠2026-10-08', result['due_errors'], result)
+        self.assertTrue(any(r.startswith('同步练习:') for r in result['review']), result)
+        empty = ingest_school('school-b', dict(proposals=[]))
+        self.assertEqual((empty['counts'], empty['results'][0]['processed']), ([0], 0), empty['results'])
+        self.assertGreaterEqual(empty['results'][0].get('failed', 0), 1, empty['results'])
+
+
+class ExactAnswerTest(unittest.TestCase):
+    def test_objective_answers_need_the_whole_value(self):
+        import family_llm
+        reply = _homework_reply('homework-a')
+        for item, wrong in zip(reply['items'], ['183', '163', None, None, '162', None]):
+            if wrong: item['answer'] = '教师参考：' + wrong
+        with patch.object(family_llm, '_chat_json', return_value=reply):
+            result = score_homework('homework-a', run_case('homework-a', None)['questions'])
+        self.assertFalse(result['passed'])
+        self.assertEqual(sorted(e for e in result['content_errors'] if e.endswith('答案不符')), ['1:答案不符', '2:答案不符', '5:答案不符'], result)
+        for answer, ok in [('教师参考：62', True), ('教师参考：100-38=62', True), ('教师参考：62或72', False), ('教师参考：7米', True)]:
+            self.assertEqual(_value_ok(('num', '62' if '7米' not in answer else '7'), re.sub(r'^教师参考：', '', answer)), ok, answer)
+        self.assertTrue(_value_ok(('choice', 'C', '34'), 'C. 34')); self.assertFalse(_value_ok(('choice', 'C', '34'), 'C或D'))
+        self.assertTrue(_value_ok(('word', '朋友'), '朋友（péng yǒu）')); self.assertFalse(_value_ok(('word', '朋友'), '朋友、明友'))
 
 
 class ScorerHardeningTest(unittest.TestCase):
