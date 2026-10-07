@@ -25,6 +25,7 @@
 
 !/family_llm.py
 !/test_llm.py
+!/test_model_quality.py
 !/test_query.py
 !/test_followup.py
 !/test_profiles.py
