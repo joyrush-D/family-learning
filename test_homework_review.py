@@ -370,7 +370,7 @@ def recheck_pending_http_checks(app,upload):
             for previous in ([prior,newer],[newer,prior]):
                 status,out=http('/api/print/homework/draft',request|dict(previous_sources=[dict(type='upload',id=i) for i in previous]))
                 assert status==200 and out['draft']['unknown_items']==0,'older pending label must not revive after a newer same-scope check'
-            changed=upload('synthetic-pending-new-teacher.txt','虚构新范围：甲卷第1题B。'.encode())
+            changed=upload('synthetic-pending-new-teacher.txt','虚构新范围：虚构甲卷第1题B。'.encode())
             app.save_task_feedback(dict(task_id=task['id'],child='示例甲',day='2026-10-05',request_key='synthetic-pending-new-reference',attachments=[changed]))
             status,out=http('/api/print/homework/draft',continued|dict(reference_sources=[dict(type='upload',id=changed)]))
             assert status==200 and out['draft']['unknown_items']==0,'a changed original scope must not inherit old labels'
