@@ -26,6 +26,67 @@ REFERENCE='虚构甲卷第1题教师参考：5'
 RAW=dict(items=[dict(label='虚构甲卷第1题',question='2+3=?',student_answer='4',answer='教师参考：5',judgment='incorrect',question_kind='objective',error_reason='作答4与教师参考5不同。',possible_cause='',steps='',uncertainty='')],coverage='仅本次虚构甲卷第1题。')
 
 
+CHOICE='虚构甲卷第1题：2+3=? A.4 B.5 C.6\n实际作答：B'
+TEACHER_B='虚构甲卷 第1题：教师参考B'
+
+
+def choice(**changes):
+    """Frozen synthetic reply that swaps the teacher-covered answer for its own derivation."""
+    return dict(label='虚构甲卷第1题',question='2+3=? A.4 B.5 C.6',student_answer='B',answer='AI自行推导：C',judgment='incorrect',
+                question_kind='objective',error_reason='作答B与推导C不同。',possible_cause='',steps='先重新计算。',uncertainty='')|changes
+
+
+class TeacherReferencePriorityTests(unittest.TestCase):
+    def draft(self,items,teacher=TEACHER_B,question=CHOICE,**extra):
+        raw=dict(question_labels=[i['label'] for i in items],items=items,coverage='虚构冻结回执。')
+        original=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            result=family_llm.homework_reference_draft([],review=True,question_documents=[dict(name='synthetic-choice.txt',text=question)],
+                reference_documents=[dict(name='synthetic-choice-teacher.txt',text=teacher)],**extra)
+        self.assertEqual(model.call_count,1);self.assertEqual(raw,original)
+        return result
+
+    def test_same_paper_question_compares_by_teacher_not_model_source(self):
+        result=self.draft([choice()]);q=result['questions'][0]
+        self.assertEqual((q['answer'],q['judgment'],q['error_reason'],q['steps']),('教师参考：B','correct','',''))
+        self.assertEqual((result['wrong_items'],result['unknown_items']),(0,0));self.assertIn('需订正0题',result['text'])
+        self.assertNotIn('AI自行推导：C',result['text'])
+        result=self.draft([choice(student_answer='C',judgment='correct',error_reason='',steps='')]);q=result['questions'][0]
+        self.assertEqual((q['answer'],q['judgment']),('教师参考：B','incorrect'))
+        self.assertIn('C',q['error_reason']);self.assertIn('教师参考B',q['error_reason'])
+        self.assertEqual((result['wrong_items'],result['unknown_items']),(1,0));self.assertIn('需订正1题',result['text'])
+        # A teacher label on a different letter is still the model's claim, not the supplied teacher text.
+        result=self.draft([choice(answer='教师参考：C')]);q=result['questions'][0]
+        self.assertEqual((q['answer'],q['judgment'],result['wrong_items']),('教师参考：B','correct',0))
+
+    def test_other_question_or_paper_keeps_legal_ai_and_teacher_text_still_compares(self):
+        question=CHOICE+'\n虚构甲卷第2题：3+3=? A.5 B.6 C.7\n实际作答：B\n虚构乙卷第1题：1+1=? A.2 B.3\n实际作答：B'
+        items=[choice(),choice(label='虚构甲卷第2题',question='3+3=? A.5 B.6 C.7',answer='AI自行推导：B',judgment='correct',error_reason='',steps=''),
+               choice(label='虚构乙卷第1题',question='1+1=? A.2 B.3',answer='AI自行推导：A',error_reason='作答B与推导A不同。')]
+        result=self.draft(items,question=question)
+        self.assertEqual([q['answer'] for q in result['questions']],['教师参考：B','AI自行推导：B','AI自行推导：A'])
+        self.assertEqual([q['judgment'] for q in result['questions']],['correct','correct','incorrect'])
+        self.assertEqual((result['wrong_items'],result['unknown_items']),(1,0))
+        self.assertIn('有限写法',result['text'])
+
+    def test_conflicting_or_unmatched_teacher_text_stays_pending_without_ai_answer(self):
+        result=self.draft([choice()],teacher=TEACHER_B+'\n虚构甲卷 第1题：教师参考C');q=result['questions'][0]
+        self.assertEqual(q['judgment'],'unknown');self.assertNotIn('AI自行推导',q['answer'])
+        self.assertIn('B',q['uncertainty']);self.assertIn('C',q['uncertainty'])
+        result=self.draft([choice(label='第1题')]);q=result['questions'][0]
+        self.assertEqual((q['answer'],q['judgment']),('','unknown'));self.assertIn('卷别',q['uncertainty'])
+        self.assertEqual((result['wrong_items'],result['unknown_items']),(0,1))
+
+    def test_answer_only_teacher_text_is_not_widened_into_free_text_grading(self):
+        question='虚构甲卷第2题：一根绳子长12米，剪去5米，还剩几米？\n实际作答：8米'
+        item=choice(label='虚构甲卷第2题',question='一根绳子长12米，剪去5米，还剩几米？',student_answer='8米',answer='AI自行推导：8米',
+                    judgment='correct',error_reason='',steps='')
+        result=self.draft([item],teacher='虚构甲卷 第2题：教师参考7米',question=question);q=result['questions'][0]
+        self.assertEqual((q['answer'],q['judgment'],result['wrong_items']),('教师参考：7米','unknown',0))
+        result=self.draft([item|dict(student_answer='7米',answer='AI自行推导：7米')],teacher='虚构甲卷 第2题：教师参考7米',question=question)
+        self.assertEqual((result['questions'][0]['answer'],result['questions'][0]['judgment']),('教师参考：7米','correct'))
+
+
 class TextQuestionContractTests(unittest.TestCase):
     def test_text_teacher_claim_requires_teacher_original(self):
         previous=[{},dict(previous_text='虚构旧意见：教师参考为5。'),
@@ -131,6 +192,26 @@ class TextQuestionHTTPTests(HomeworkPrintScopeTests):
                 self.assertEqual(out['review_basis']['reference_sources'],[self.source(teacher)])
                 self.assertEqual(self.dump(),before)
 
+    def test_teacher_choice_beats_frozen_ai_source_through_save_retry_and_reopen(self):
+        paper=self.upload('synthetic-choice.txt',CHOICE.encode());teacher=self.upload('synthetic-choice-teacher.txt',TEACHER_B.encode())
+        request=self.review_request([paper],[teacher])
+        raw=dict(question_labels=['虚构甲卷第1题'],items=[choice()],coverage='虚构冻结回执。');original=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            status,out=self.request('POST','/api/print/homework/draft',request)
+        self.assertEqual(status,200,out);self.assertEqual(model.call_count,1);self.assertEqual(raw,original)
+        d=out['draft'];self.assertEqual((d['wrong_items'],d['unknown_items']),(0,0))
+        self.assertEqual(d['questions'][0]['answer'],'教师参考：B');self.assertEqual(d['continuation']['pending_labels'],[])
+        result=self.upload('作业批改参考-%d.txt'%request['record_id'],d['text'].encode())
+        feedback=dict(task_id=self.task['id'],child=self.task['child'],day='2026-10-01',request_key='synthetic-teacher-priority-save',
+                      note='虚构家长核对的检查。',attachments=[paper,teacher,result],review_basis=out['review_basis'])
+        with patch.object(family_llm,'_chat_json') as model:
+            status,saved=self.request('POST','/api/task/feedback',feedback);self.assertEqual(status,200,saved)
+            status,retry=self.request('POST','/api/task/feedback',feedback);self.assertEqual(status,200,retry)
+            self.assertTrue(retry['replayed']);self.assertEqual(retry['record_id'],saved['record_id'])
+            status,view=self.request('GET','/api/print/homework/saved-review?task_id=%s&record_id=%d'%(self.task['id'],saved['record_id']))
+            self.assertEqual(status,200,view);model.assert_not_called()
+        self.assertEqual(view['text'],d['text']);self.assertIn('需订正0题',view['text']);self.assertNotIn('AI自行推导：C',view['text'])
+
     def test_complex_word_and_missing_scope_still_refuse_before_model(self):
         teacher=self.upload('synthetic-teacher.txt',REFERENCE.encode())
         unsafe=[docx(QUESTION,extra=[('word/media/synthetic.png',b'not-read')]),
@@ -164,4 +245,4 @@ class TextQuestionHTTPTests(HomeworkPrintScopeTests):
             self.assertEqual(status,400,out);model.assert_not_called();self.assertEqual(self.dump(),before)
 
 
-if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TextQuestionHTTPTests'])
+if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TextQuestionHTTPTests'])
