@@ -535,4 +535,20 @@ class TeacherPaperFormalNameTest(unittest.TestCase):
                 self.assertEqual(([_ref_relation(label,entry) for entry in entries],[entry['answer'] for entry in entries]),(relations,['B']*len(relations)))
 
 
+    def test_a_title_declared_whole_stays_one_paper_even_with_a_join_inside(self):
+        # Fictional E01-E03: each original declares one whole title after 「试卷名称：」; 甲卷和平卷 is not 甲卷 and 平卷.
+        for paper,teacher,ask,expected in (('甲卷和平卷','平卷','1+2=? A.1 B.2 C.3',([('AI自行推导：C','correct')],0)),
+                                           ('平卷','甲卷和平卷','1+2=? A.1 B.2 C.3',([('AI自行推导：C','correct')],0)),
+                                           ('甲卷和平卷','甲卷和平卷','1+1=? A.1 B.2 C.3',([('教师参考：B','incorrect')],1))):
+            with self.subTest(paper=paper,teacher=teacher):
+                self.assertEqual(self.review('试卷名称：%s\n第1题：%s\n学生原答：C。'%(paper,ask),'试卷名称：%s\n第1题：教师参考B。'%teacher,
+                                             paper+'第1题',ask),expected)
+
+    def test_an_undeclared_unmarked_join_never_lends_its_teacher_answer(self):
+        for teacher in ('甲卷和平卷\n第1题：教师参考B。','甲卷和平卷第1题：教师参考B。'):
+            with self.subTest(teacher=teacher):
+                got,wrong=self.review('试卷名称：平卷\n第1题：1+2=? A.1 B.2 C.3\n学生原答：C。',teacher,'平卷第1题')
+                self.assertEqual(wrong,0);self.assertIn(got[0][1],('correct','unknown'));self.assertNotEqual(got[0][0],'教师参考：B')
+
+
 if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TeacherReferenceScopeTests','TeacherReferenceSourceTests','TeacherReferenceEquationTests','TeacherReferenceGrammarTests','TextQuestionHTTPTests','TeacherPaperWholeNameTest','TeacherPaperFormalNameTest'])
