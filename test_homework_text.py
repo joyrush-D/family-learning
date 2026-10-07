@@ -529,7 +529,7 @@ class TeacherPaperFormalNameTest(unittest.TestCase):
     def test_a_separated_source_word_cover_heading_or_paper_list_still_pairs(self):
         from family_llm import _ref_relation,_teacher_reference_entries
         for label,teacher,relations in (('青树卷 第1题','教师参考：青树卷\n第1题：B',['same']),('第1题','教师参考答卷\n第1题：教师参考B',['same']),
-                                        ('乙卷 第1题','甲卷 与乙卷第1题均为B',['other','same']),('和平卷 第1题','甲卷和平卷第1题均为B',['other','unsure'])):
+                                        ('乙卷 第1题','甲卷 与乙卷第1题均为B',['other','same']),('和平卷 第1题','甲卷和平卷第1题均为B',['other','other'])):
             with self.subTest(label=label,teacher=teacher):
                 entries=_teacher_reference_entries([dict(name='synthetic-teacher.txt',text=teacher)])
                 self.assertEqual(([_ref_relation(label,entry) for entry in entries],[entry['answer'] for entry in entries]),(relations,['B']*len(relations)))

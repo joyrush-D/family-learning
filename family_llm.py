@@ -1044,6 +1044,7 @@ retry提出经家庭商量后隔一段时间不看讲解再试、或试一道相
 # Bounded teacher-text grammar: "[卷别][第N大题/一、] 第N题/N题/QN/N.[(小题)] [教师参考/答案：]答案", one line or
 # several entries per line, a paper or section line applying to the lines below. A paper is the whole explicit name
 # ending in 卷 (not 试卷/本卷 and the like), one paper only when the whole names are equal, never by a shared tail;
+# no character of it is ever dropped: a source word, 试/考/答 or 与/和/及 written inside the name is part of the name;
 # a name too long to read whole stays unknown. Any other new title starts an unnamed scope whose words must match
 # exactly. Anything else, and every reference image, proves nothing here; the model's answer prefix alone never
 # decides the source, and teacher values are compared whole, never cut short.
@@ -1067,8 +1068,8 @@ def _ref_number(value):
 
 def _ref_scope(text,section=None):
     """The one reading of a label or teacher heading: explicit paper name or None, 大题 number, leftover words."""
-    names=[re.sub('[试考答]卷$','卷',name) for part in re.split('[与和及]',text) for name in _REF_PAPER.findall(part)
-           for name in [re.sub('^(?:%s)+'%_REF_WORDS,'',name)] if not _REF_GENERIC_PAPER.fullmatch(name)]  # 「教师参考北窗卷」 is 北窗卷
+    names=[name for part in re.split(r'(?<=卷)\s*[与和及]',text) for name in _REF_PAPER.findall(part)  # 与/和/及 joins papers only after a whole name
+           if not _REF_GENERIC_PAPER.fullmatch(re.sub('^(?:%s)+'%_REF_WORDS,'',name))]  # 「教师参考答卷」 names no paper; 「老师青树卷」 is all its own
     paper=(names[0] if len(names)==1 else tuple(names)) if names and not any(re.search('[两均都]',name) for name in names) else '*' if names else None
     paper='*' if _REF_PAPER_LONG.search(text) else paper  # Never cut a name to a shared tail; too long to read whole is unknown.
     found=_REF_SECTION.search(text)
