@@ -2821,25 +2821,47 @@ def _school_native_change_owner(entry,later,actions):
     question, a negated mention, an object outside the list or several candidates bind nothing.
     """
     if not actions or not _school_native_later_text(entry,later) or not re.search(_SCHOOL_NATIVE_CHANGE,later['text']):return None
-    # "补充语文练习册：第5题不用做" names its object before the colon; a dated correction header only says when the list was sent.
-    text=re.sub(r'^\s*更正\s*(?:\d{4}年)?\d{1,2}月\d{1,2}日\s*\d{1,2}[:：]\d{2}\s*发布的','更正',later['text'])
-    # "更正昨天的…" says when the list was sent; it names this list only when that is the list's own sending day.
-    day=re.match(r'^\s*(补充|更正)(今天|昨天|前天)的',text)
-    if day:
-        from family_agenda import sent_day
-        sent=dt.date.fromisoformat(sent_day(later['time']))-dt.timedelta(days=('今天','昨天','前天').index(day[2]))
-        if sent.isoformat()!=sent_day(entry['time']):return None
-        text=day[1]+text[day.end():]
-    head=re.match(r'^\s*(?:补充|更正|取消|撤销|撤回)([^：:\n]{0,40})[：:]',text)
-    lead=head[1] if head else '';body=text[head.end():] if head else text
+    clauses=_school_native_change_clauses(entry['time'],later['text'],later['time'])
+    if clauses is None:return None
     owners=[]
-    for clause in re.split(r'[。；;，,\n]',body):
-        if not re.search(_SCHOOL_NATIVE_CHANGE,clause):continue
-        clause=re.sub(r'(?:不是|并非|而非|除了|除去)[^，,。；;是]*(?:而是|是)?','',clause)
-        owner=_school_native_change_target(lead+clause,actions)
+    for clause in clauses:
+        owner=_school_native_change_target(clause,actions)
         if owner is None:return None
         if owner not in owners:owners.append(owner)
     return owners[0] if len(owners)==1 else None
+
+
+def _school_native_change_clauses(sent,text,time):
+    """Each changing clause of a later message after the object its header names; None when it names another sending day."""
+    # "补充语文练习册：第5题不用做" names its object before the colon; a dated correction header only says when the list was sent.
+    text=re.sub(r'^\s*更正\s*(?:\d{4}年)?\d{1,2}月\d{1,2}日\s*\d{1,2}[:：]\d{2}\s*发布的','更正',text)
+    # "更正/取消昨天的…" says when the list was sent; it names this list only when that is the list's own sending day.
+    day=re.match(r'^\s*(补充|更正|取消|撤销|撤回)(今天|昨天|前天)的',text)
+    if day:
+        from family_agenda import sent_day
+        if (dt.date.fromisoformat(sent_day(time))-dt.timedelta(days=('今天','昨天','前天').index(day[2]))).isoformat()!=sent_day(sent):return None
+        text=day[1]+text[day.end():]
+    head=re.match(r'^\s*(?:补充|更正|取消|撤销|撤回)([^：:\n]{0,40})[：:]',text)
+    lead=head[1] if head else '';body=text[head.end():] if head else text
+    return [lead+re.sub(r'(?:不是|并非|而非|除了|除去)[^，,。；;是]*(?:而是|是)?','',clause)
+            for clause in re.split(r'[。；;，,\n]',body) if re.search(_SCHOOL_NATIVE_CHANGE,clause)]
+
+
+_SCHOOL_NATIVE_WITHDRAW=r'取消|撤销|撤回|不再(?:做|完成)|不用(?:做|完成)|无需(?:做|完成)'
+
+
+def _school_native_cancelled(action):
+    """A bound change withdraws this whole outcome: a withdrawing clause naming no question, or every question it lists.
+
+    The change already passed the same-publisher, same-source, strictly-later, complete and named-object checks.
+    "第6题不用做" or "取消第6题" only narrows the outcome; "更正/改为/改期" alone withdraws nothing.
+    """
+    own=_school_native_questions(action['primary'])
+    for change in action.get('changes',[]):
+        for clause in _school_native_change_clauses(action['time'],change['quote'],change['time']) or []:
+            named=_school_native_questions(clause)
+            if re.search(_SCHOOL_NATIVE_WITHDRAW,clause) and (not named or own and own<=named):return True
+    return False
 
 
 _SCHOOL_NATIVE_KEPT=r'不变|不更改|不改变'
@@ -3031,6 +3053,9 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
     revised=bool(action['changes']) and proposal['task_change'] in ('update','cancel') and proposal['task_state']=='review'
     if (proposal['task_change']!='new' and not revised) or proposal['task_target_id'] or proposal['task_state']=='reference' or proposal['task_purpose']!=action['purpose']:
         raise AgentError('学校独立要求未形成对应行动，整批保留重试',code='school_action_coverage')
+    # A proven named cancel of this whole outcome leaves nothing to do: only cancel/review keeps it, never a pending task.
+    if _school_native_cancelled(action) and (proposal['task_change'],proposal['task_state'])!=('cancel','review'):
+        raise AgentError('学校原要求已被同批具名取消，不能保留为待完成，整批保留重试',code='school_action_coverage')
     expected={action['ref']}|{s['ref'] for s in action['supplements']+action.get('changes',[])}
     linked=refs&set(action.get('linked',[]))
     # A later same-teacher message naming only this outcome as unchanged may be cited; it adds nothing to it.
@@ -3095,6 +3120,7 @@ def _school_native_saved(items,evidence):
             if (not expected<=cited or cited-expected-linked-_school_native_kept(action,actions,entries) or not linked or sorted(linked)!=cover.get('linked')
                     or brief.get('state')=='ready' or brief.get('purpose')!=action['purpose'] or brief.get('target_id')
                     or brief.get('change')!='new' and not (action.get('changes') and brief.get('change') in ('update','cancel'))
+                    or _school_native_cancelled(action) and brief.get('change')!='cancel'
                     or unread and not action.get('changes') and (brief.get('title')!=value['title'] or brief.get('goal')!=value['goal'])
                     or len(dates)==1 and item.get('due','')!=next(iter(dates)) or not dates and item.get('due','')):
                 raise AgentError('学校完整要求未按对应行动保存，整批未写入',409,'school_action_coverage')
@@ -3110,6 +3136,7 @@ def _school_native_saved(items,evidence):
         cited={e['ref'] for e in item['evidence']}
         if (not expected<=cited or cited-expected-_school_native_kept(action,actions,entries) or brief.get('purpose')!=action['purpose']
                 or brief.get('change')!='new' and not (action.get('changes') and brief.get('change') in ('update','cancel') and brief.get('state')=='review')
+                or _school_native_cancelled(action) and (brief.get('change'),brief.get('state'))!=('cancel','review')
                 or brief.get('target_id')
                 or literal and (any(brief.get(k,'')!=value[k] for k in ('title','goal','submission'))
                                 or item['title']!=value['title'] or item['body']!=value['goal'])):
