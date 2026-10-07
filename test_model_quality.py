@@ -252,7 +252,7 @@ def score_homework(name, questions):
         if key is None or key in found: extra.append(str(item.get('label', ''))[:40]); continue
         found[key] = item
     result = dict(missed=[], wrong_judgment=[], undetermined=[], source_errors=[], ai_unlabeled=[], content_errors=[],
-                  unanswered_kept=[], extra=extra)
+                  reason_errors=[], unanswered_kept=[], extra=extra)
     for truth in case['truth']:
         key = (truth['section'], truth['number']); tag = '%s-%s' % key if sectioned else str(truth['number'])
         item = found.pop(key, None)
@@ -261,7 +261,7 @@ def score_homework(name, questions):
         if judgment not in truth['judgments']:
             (result['undetermined'] if judgment == 'unknown' else result['wrong_judgment']).append(
                 '%s:%s≠%s' % (tag, judgment, '/'.join(truth['judgments'])))
-        if judgment in ('correct', 'incorrect'):
+        if judgment in ('correct', 'incorrect') or answer_text:  # 未判定题若给了答案，也核教师/AI来源
             teacher = answer_text.startswith('教师参考：')
             if teacher != (truth['source'] == 'teacher'): result['source_errors'].append(tag)
             if truth['source'] == 'ai' and not answer_text.startswith('AI自行推导：'): result['ai_unlabeled'].append(tag)
@@ -272,7 +272,14 @@ def score_homework(name, questions):
         elif not re.search(content['question'], question): result['content_errors'].append(tag + ':题面不符')
         if content['student'] is None:
             if student: result['content_errors'].append(tag + ':未作答却填了原答')
-            elif judgment == 'unknown': result['unanswered_kept'].append(tag)
+            elif judgment != 'unknown': pass
+            # 未判定须说明是未作答；有教师参考的题不能只称“无教师参考/参考未覆盖”。
+            elif not re.search(r'未作答|没有作答|没作答|未答|空白|未填|没有填写|未写', _flat(item.get('uncertainty')) + _flat(item.get('error_reason'))):
+                result['reason_errors'].append(tag + ':未说明未作答')
+            elif truth['source'] == 'teacher' and re.search(r'(无|没有|缺少?|未提供|不含|未覆盖)[^。；，,]{0,4}参考|参考[^。；，,]{0,4}(未覆盖|缺失|没有)',
+                                                            _flat(item.get('uncertainty')) + _flat(item.get('error_reason'))):
+                result['reason_errors'].append(tag + ':误称无教师参考')
+            else: result['unanswered_kept'].append(tag)
         elif not _value_ok(content['student'], student): result['content_errors'].append(tag + ':原答不符')
         if (judgment in ('correct', 'incorrect') or answer.strip()) and not _value_ok(content['answer'], answer):
             result['content_errors'].append(tag + ':答案不符')
@@ -282,7 +289,7 @@ def score_homework(name, questions):
     result['total'] = len(case['truth'])
     result['covered'] = result['total'] - len(result['missed'])
     result['passed'] = not any(result[k] for k in ('missed', 'wrong_judgment', 'undetermined', 'source_errors', 'ai_unlabeled',
-                                                    'content_errors', 'extra'))
+                                                    'content_errors', 'reason_errors', 'extra'))
     return result
 
 

@@ -1948,6 +1948,50 @@ def _school_dated_quote(quote, evidence, due, brief):
     return bool(matches) and all(values=={due} for values in matches) and (kinds!={2} or len(matches)==1)
 
 
+_SCHOOL_ARRANGEMENT=r'(?:抽查|检查|抽背|抽测|默写|听写|背诵|朗读|体检|测试|测验|考试|上交|交|带|穿)'
+
+
+def _school_own_dates(quote,published):
+    """Dates one action clause states for itself: its deadlines, else one school arrangement day (明天早读抽查, 周四学校体检).
+
+    A second, recurring, past, ranged or open-ended day, or a day this clause does not arrange, is not this action's date.
+    """
+    from family_agenda import _relative_weekday,date,deadlines
+    values=deadlines(quote,published)
+    if values or not date(published):return values
+    def iso(match):
+        year,month,day=match.groups()
+        if not year and int(month)!=int(published[5:7]):return match[0]
+        value=f'{int(year or published[:4]):04d}-{int(month):02d}-{int(day):02d}'
+        return value if date(value) else match[0]
+    text=_relative_weekday(re.sub(r'(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日',iso,quote),published)
+    days=re.findall(r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}|今天|今日|今晚|明天|明日|明早|明晚|后天|昨天|前天|每天|每晚|(?:周|星期|礼拜)[一二三四五六日天]',text)
+    found=re.search(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)(?!\s*(?:起|开始|以后|之后|以来|至|到|[-–—~～]))[^。；;，,\n]{0,8}?'+_SCHOOL_ARRANGEMENT,text)
+    if len(days)!=1 or not found or re.search(r'每\s*$',text[:found.start()]):return set()
+    offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}
+    value=date(found[1]) or (dt.date.fromisoformat(published)+dt.timedelta(days=offset[found[1]])).isoformat()
+    return {value} if value>=published else set()
+
+
+def _school_own_clause_dates(quote,cited,others,goal):
+    """A complete clause only this proposal quotes, restated by its goal, grounds its own date in a mixed notice."""
+    from family_agenda import sent_day
+    homes=[e for e in cited if quote and quote in e['text']]
+    if len(homes)!=1 or homes[0]['text'].count(quote)!=1:return set()
+    text=homes[0]['text'];start=text.index(quote);end=start+len(quote)
+    left=text[:start].rstrip(' \t\r');right=text[end:].lstrip(' \t\r')
+    if left and left[-1] not in '。；;：:\n' or right and right[0] not in '。；;\n':return set()
+    for other in others:  # Another proposal quoting any of this clause makes it shared, not this item's own.
+        at=0
+        while other and (at:=text.find(other,at))!=-1:
+            if max(start,at)<min(end,at+len(other)):return set()
+            at+=len(other)
+    flat=lambda value:re.sub(r'[\W_]+','',value)
+    grams=lambda value:{value[i:i+4] for i in range(len(value)-3)}
+    if not grams(flat(quote))&grams(flat(goal)):return set()
+    return _school_own_dates(quote,sent_day(homes[0].get('time','')))
+
+
 def _school_admin_native_date(goal,evidence):
     """Keep a directly addressed native action's date qualifier, never a model-added one."""
     if len(evidence)!=1:return goal
@@ -2702,17 +2746,66 @@ _SCHOOL_NATIVE_CHANGE=r'更正|取消|撤销|不再(?:做|完成)|不用(?:做|�
 _SCHOOL_NATIVE_WORKSHEET=r'练习卷|练习册|作业本|作业单|试卷'
 
 
-def _school_native_change_owner(entry,later,actions):
-    """The one located outcome that a strictly later, complete change by the same publisher and source names literally."""
-    if (later is entry or not actions or later.get('publisher')!=entry.get('publisher') or later.get('kind','text')!='text'
+_SCHOOL_NATIVE_FILLER=r'补充|更正|另外|关于|还有|大家|同学们?|孩子们?|请|再|也|都|就|是|的|[\s：:]'
+
+
+def _school_native_later_text(entry,later):
+    """A complete text message strictly after this list, from the same publisher and source."""
+    if (later is entry or later.get('publisher')!=entry.get('publisher') or later.get('kind','text')!='text'
             or later.get('content_incomplete') or later.get('unread') or later.get('attachments')
-            or later['ref'][8:].rsplit(':',1)[0]!=entry['ref'][8:].rsplit(':',1)[0] or not re.search(_SCHOOL_NATIVE_CHANGE,later['text'])):
-        return None
-    try:
-        if not dt.datetime.fromisoformat(later['time'])>dt.datetime.fromisoformat(entry['time']):return None
-    except (KeyError,ValueError,TypeError):return None
-    named=_school_named_objects(later['text']);sheets=set(re.findall(_SCHOOL_NATIVE_WORKSHEET,later['text']))
-    owners=[a for a in actions if named&_school_named_objects(a['primary']) or any(a['primary'].count(sheet)==1 for sheet in sheets)]
+            or later['ref'][8:].rsplit(':',1)[0]!=entry['ref'][8:].rsplit(':',1)[0]):return False
+    try:return dt.datetime.fromisoformat(later['time'])>dt.datetime.fromisoformat(entry['time'])
+    except (KeyError,ValueError,TypeError):return False
+
+
+def _school_native_questions(text):
+    """Question numbers a clause states (第5题, 第1-4题, 第1、3题); ranges are inclusive."""
+    found=set()
+    for match in re.finditer(r'第\s*([0-9][0-9\s\-–—~～至到、,，]*)\s*题',text):
+        for part in re.split(r'[、,，]',match[1]):
+            bounds=[int(n) for n in re.findall(r'\d+',part)]
+            if len(bounds)==1:found.add(bounds[0])
+            elif len(bounds)==2 and bounds[0]<=bounds[1]<=bounds[0]+200:found.update(range(bounds[0],bounds[1]+1))
+    return found
+
+
+def _school_native_change_target(text,actions):
+    """The one located outcome whose own literal objects include every title, Unit, page, worksheet, subject and question named here."""
+    named=_school_named_objects(text);sheets=set(re.findall(_SCHOOL_NATIVE_WORKSHEET,text))
+    pages=set(re.findall(r'第\s*(\d+)\s*页',text));subjects=set(re.findall(_SCHOOL_NATIVE_SUBJECTS,text))
+    questions=_school_native_questions(text)
+    # An object this ledger cannot check (周记第5题, 书法课不用做) proves no listed outcome.
+    lead=re.split(r'第|'+_SCHOOL_NATIVE_CHANGE,text,maxsplit=1)[0]
+    lead=re.sub(r'《[^》]*》|unit\s*\d+[^\u4e00-\u9fff]*|第[一二三四五六七八九十0-9]+课','',lead,flags=re.I)
+    if re.sub(_SCHOOL_NATIVE_WORKSHEET+'|'+_SCHOOL_NATIVE_SUBJECTS+'|'+_SCHOOL_NATIVE_FILLER,'',lead):return None
+    if not (named or sheets or pages or subjects or questions):return None
+    owners=[]
+    for action in actions:
+        own=action['primary']
+        if (named and not named<=_school_named_objects(own) or any(own.count(sheet)!=1 for sheet in sheets)
+                or pages and not pages<=set(re.findall(r'第\s*(\d+)\s*页',own)) or subjects and subjects!={action['subject']}
+                or questions and not questions<=_school_native_questions(own)):continue
+        owners.append(action)
+    return owners[0] if len(owners)==1 else None
+
+
+def _school_native_change_owner(entry,later,actions):
+    """The one located outcome that a strictly later, complete change by the same publisher and source names consistently.
+
+    Each changing clause must point to that same outcome. A conflicting explicit title, page, Unit, subject or
+    question, a negated mention, an object outside the list or several candidates bind nothing.
+    """
+    if not actions or not _school_native_later_text(entry,later) or not re.search(_SCHOOL_NATIVE_CHANGE,later['text']):return None
+    # "补充语文练习册：第5题不用做" names its object before the colon.
+    head=re.match(r'^\s*(?:补充|更正)([^：:\n]{0,40})[：:]',later['text'])
+    lead=head[1] if head else '';body=later['text'][head.end():] if head else later['text']
+    owners=[]
+    for clause in re.split(r'[。；;，,\n]',body):
+        if not re.search(_SCHOOL_NATIVE_CHANGE,clause):continue
+        clause=re.sub(r'(?:不是|并非|而非|除了|除去)[^，,。；;是]*(?:而是|是)?','',clause)
+        owner=_school_native_change_target(lead+clause,actions)
+        if owner is None:return None
+        if owner not in owners:owners.append(owner)
     return owners[0] if len(owners)==1 else None
 
 
@@ -2747,12 +2840,16 @@ def _school_native_actions(evidence):
         # A source with missing author provenance and an original-material group
         # continue through their existing reader. This literal ledger cannot
         # prove another message's attachment scope or invent a publisher.
+        # Only the same publisher's linked material keeps that group reader. Someone else's unread,
+        # attached or incomplete message cannot change this complete list; it remains its own visible gap.
         related=set(entry.get('related_messages',[]))
-        if any(e['ref'] in related and (e.get('attachments') or e.get('content_incomplete') or e.get('kind')!='text') for e in evidence):continue
         publisher=entry.get('publisher','');source=entry['ref'][8:].rsplit(':',1)[0]
-        # Changes retain the existing dated correction/old-decision protocol.
-        if publisher and any(s.get('publisher')==publisher and s['ref'][8:].rsplit(':',1)[0]==source
-                and re.match(r'^\s*(?:更正|取消|撤销|撤回)',s['text']) for s in evidence if s is not entry):continue
+        if any(e['ref'] in related and e.get('publisher')==publisher and e['ref'][8:].rsplit(':',1)[0]==source
+               and (e.get('attachments') or e.get('content_incomplete') or e.get('kind')!='text') for e in evidence):continue
+        # A verifiable later correction retains the existing dated correction/old-decision protocol. An earlier,
+        # incomplete or attached one cannot show what it changes, so it never releases the known outcomes.
+        if publisher and any(re.match(r'^\s*(?:更正|取消|撤销|撤回)',s['text']) and _school_native_later_text(entry,s)
+                for s in evidence if s is not entry):continue
         own=[]
         for part in _school_native_blocks(text):
             quote=part['quote'];header=part['header']
@@ -2785,8 +2882,8 @@ def _school_native_actions(evidence):
                 stamp=dt.datetime.fromisoformat(entry['time']);later=dt.datetime.fromisoformat(supplement['time'])
                 if stamp.tzinfo is None or later.tzinfo is None or not 0<=(later-stamp).total_seconds()<=120:continue
             except (KeyError,ValueError,TypeError):continue
-            if re.search(_SCHOOL_NATIVE_CHANGE,head[2]):
-                own=[];break  # A later change needs the existing correction reader.
+            # A change is not a supplement; below it binds only to the one outcome it names consistently.
+            if re.search(_SCHOOL_NATIVE_CHANGE,head[2]):continue
             object_text=head[1]
             object_text=re.sub(r'^(?:'+_SCHOOL_NATIVE_SUBJECTS+r')','',object_text)
             specific=_school_named_objects(object_text)
@@ -2861,7 +2958,10 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
 
 def _school_native_dates(action):
     from family_agenda import deadlines,sent_day
-    dates=deadlines('\n'.join([action['header'],action['quote'],*action.get('shared_conditions',[])]),sent_day(action['time']))
+    published=sent_day(action['time'])
+    dates=deadlines('\n'.join([action['header'],action['quote'],*action.get('shared_conditions',[])]),published)
+    # A school arrangement in this outcome's own quote (明天早读抽查) is its day; a header date is never borrowed.
+    if not dates:dates=_school_own_dates(action['quote'],published)
     for supplement in action['supplements']:
         dates.update(deadlines(supplement['goal'],sent_day(supplement['time'])))
     for change in action.get('changes',[]):
@@ -2938,7 +3038,8 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     if routing and any(not isinstance(p,dict) or set(p)!=required for p in result['proposals']):
         raise AgentError('模型筛选字段不正确')
     refs = {entry['ref']: entry['text'] for entry in evidence}; output = []; accounted = set();history_actions=[]
-    for proposal in result['proposals']:
+    title_quotes=[p['title_quote'].strip() if isinstance(p,dict) and isinstance(p.get('title_quote'),str) else '' for p in result['proposals']]
+    for index,proposal in enumerate(result['proposals']):
         native_action=None
         action_anchor={};history_uncertain=False
         if historical:
@@ -2992,13 +3093,18 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         if routing and not due and len(result['proposals'])==1 and len(cited_evidence)==1 and len(relative)==1:
             # The model may omit a date that the single original notice states explicitly.
             due=next(iter(relative))
+        # This item's own complete clause decides its date; another item's date in the same notice is not borrowed.
+        own=(_school_own_clause_dates(dated_quote,cited_evidence,title_quotes[:index]+title_quotes[index+1:],str(proposal.get('task_goal','')))
+             if routing and not historical and not native_action and dated_quote else set())
         if due:
             # One notice may carry several dated requirements; the model's date must be one the sending day grounds.
             grounded=due in relative if mode=='school' else any(due in item['text'] for item in cited)
+            if own and due not in own:grounded=False
+            elif own=={due}:grounded=True
             if not date(due) or not grounded:
                 if not routing: raise AgentError('模型日期缺少原文依据')
                 due='';uncertain_due=True
-            elif len(relative)>1:
+            elif len(relative)>1 and own!={due}:
                 if not routing: raise AgentError('原文含多个日期，需家长核对')
                 ambiguous_due=True
         item = dict(title='待核对：' + title, body=FOCUS[proposal['focus']], due=due, evidence=cited)
