@@ -186,14 +186,14 @@ def summary_consistency_checks():
         dict(judgment='correct',error_reason='',possible_cause='没有依据的原因。'),
         dict(question='',question_kind='subjective'),
     ]
-    def generate(questions,coverage,comparison=None,*,review=True,program_scope=()):
+    def generate(questions,coverage,comparison=None,*,review=True,program_scope=(),teacher='虚构甲卷 第1题B，第2题B，第3题B。'):
         nonlocal calls
         raw=dict(items=questions,coverage=coverage)
         if comparison is not None: raw['comparison']=comparison
         original=json.loads(json.dumps(raw))
         with patch.object(family_llm,'_chat_json',return_value=raw) as model:
             draft=family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=review,
-                reference_documents=[dict(name='synthetic-teacher.txt',text='虚构甲卷 第1题B，第2题B，第3题B。')] if review else [],
+                reference_documents=[dict(name='synthetic-teacher.txt',text=teacher)] if review else [],
                 program_coverage=program_scope)
             assert model.call_count==1 and raw==original,'the original transport evidence must remain unchanged'
             calls+=1
@@ -227,7 +227,9 @@ def summary_consistency_checks():
     assert d['comparison'] and '未判定' in d['comparison']
     original_unknown=definite|dict(judgment='unknown',student_answer='',error_reason='',uncertainty='答题格空白。')
     mixed_scope='第3题正确；作文未提供，超出本批材料。'
-    d=generate([original_unknown,item(label='乙卷第3题')],mixed_scope,stale_comparison,program_scope=[scope])
+    # A 乙卷 item cannot vouch for itself against a 甲卷-only teacher line, so this teacher text names 乙卷第3题 too.
+    d=generate([original_unknown,item(label='乙卷第3题')],mixed_scope,stale_comparison,program_scope=[scope],
+               teacher='虚构甲卷 第1题B，第2题B，第3题B。虚构乙卷 第3题B。')
     assert [q['judgment'] for q in d['questions']]==['unknown','correct']
     assert '第3题正确' not in d['text']+d['coverage']+d['comparison']
     assert d['unverified_model_summary']==dict(coverage=mixed_scope,comparison=stale_comparison)
