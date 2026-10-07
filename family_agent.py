@@ -2668,6 +2668,17 @@ def _school_native_spans(text, start):
         yield boundary,right
 
 
+def _school_native_condition_owner(clause,pieces):
+    """The one outcome a trailing condition names by its literal object or activity; none or several stay with the last."""
+    def marks(text):
+        verbs={'读' if verb in ('朗读','跟读','读') else verb for verb in
+               re.findall(r'朗读|跟读|背诵|抄写|听写|默写|口算|读(?=[一二两三四五六七八九十0-9]+遍)',text)}
+        return _school_named_objects(text)|set(re.findall(_SCHOOL_NATIVE_WORKSHEET,text))|verbs
+    named=marks(clause)
+    owners=[piece for piece in pieces if named&marks(piece['primary'])] if named else []
+    return owners[0] if len(owners)==1 else None
+
+
 def _school_native_blocks(text):
     """Keep contiguous action/condition blocks; punctuation alone is not a task.
 
@@ -2725,7 +2736,10 @@ def _school_native_blocks(text):
             raise AgentError('穿插的资料步骤尚未能唯一归属，完整原批次保留',code='school_action_coverage')
         elif pieces:
             if gap or shared:raise AgentError('行动条件无法连续核对，完整原批次保留',code='school_action_coverage')
-            pieces[-1]['end']=end
+            # A later condition naming one earlier outcome (朗读录音上传…) belongs to it, not to the last outcome.
+            owner=_school_native_condition_owner(clause,pieces)
+            if owner is not None and owner is not pieces[-1]:owner.setdefault('conditions',[]).append(clause)
+            else:pieces[-1]['end']=end
         elif container:
             pieces.append(dict(start=0,end=end,purpose='learning',primary=head[1]))
         elif _school_native_object(clause):
@@ -2771,6 +2785,10 @@ def _school_native_questions(text):
             if len(bounds)==1:found.add(bounds[0])
             elif len(bounds)==2 and bounds[0]<=bounds[1]<=bounds[0]+200:found.update(range(bounds[0],bounds[1]+1))
     return found
+
+
+def _school_native_unverified(entry):
+    return bool(entry.get('attachments') or entry.get('content_incomplete') or entry.get('unread') or entry.get('kind','text')!='text')
 
 
 def _school_native_change_target(text,actions):
@@ -2825,8 +2843,9 @@ def _school_native_unlocated(quote,refs,actions,entries,spans):
     for action in actions:
         if action['ref']!=ref:continue
         if text.count(action['quote'])!=1 or quote in action.get('header',''):return False
-        left=text.index(action['quote'])
-        if max(start,left)<min(end,left+len(action['quote'])):return False
+        for own in [action['quote']]+action.get('conditions',[]):
+            left=text.find(own)
+            if left!=-1 and max(start,left)<min(end,left+len(own)):return False
     source=ref[8:].rsplit(':',1)[0]
     if any(r not in entries or entries[r].get('publisher')!=entry.get('publisher') or r[8:].rsplit(':',1)[0]!=source for r in refs):
         return False
@@ -2863,6 +2882,9 @@ def _school_native_actions(evidence):
             if part.get('shared_conditions'):
                 own[-1]['shared_conditions']=part['shared_conditions']
                 own[-1]['id']='native:'+_hash([own[-1]['id'],part['shared_conditions']])[:24]
+            if part.get('conditions'):
+                own[-1]['conditions']=part['conditions']
+                own[-1]['id']='native:'+_hash([own[-1]['id'],part['conditions']])[:24]
         # Standalone administrative notices already have executor, object,
         # date and handback guards. Mixed outcomes need this shared allocation.
         if len(own)==1 and own[0]['purpose']=='admin':continue
@@ -2900,6 +2922,15 @@ def _school_native_actions(evidence):
         # with several outcomes the list always stays, so no unchanged sibling can be dropped.
         if (len(own)==1 and not own[0]['changes'] and any(re.match(r'^\s*(?:更正|取消|撤销|撤回)',later['text'])
                 and _school_native_later_text(entry,later) for later in evidence)):own=[]
+        # The same publisher's linked unread, attached, incomplete or non-text material: a sole outcome keeps the
+        # existing original-material reader; several outcomes each stay required and may cite the group only as review.
+        related=set(entry.get('related_messages',[]))-{entry['ref']}
+        group=[e for e in evidence if e['ref'] in related and e.get('publisher')==entry.get('publisher')
+               and e['ref'][8:].rsplit(':',1)[0]==entry['ref'][8:].rsplit(':',1)[0]]
+        if own and any(_school_native_unverified(e) for e in group):
+            if len(own)==1 and not own[0]['changes']:own=[]
+            bound={s['ref'] for a in own for s in a['supplements']+a['changes']}
+            for action in own:action['linked']=sorted(e['ref'] for e in group if e['ref'] not in bound)
         actions.extend(own)
     owners={}
     for action in actions:
@@ -2921,7 +2952,7 @@ def _school_native_value(action):
     # Only resolved weekdays can supply a shared day; never crop a recurring, past or ranged phrase.
     header=_relative_weekday(action['header'],sent_day(action['time']))
     shared_date=re.search(_SCHOOL_NATIVE_DAY+r'\s*(?:之前|以前|前|内)?',header)
-    standards=([shared_date[0]] if shared_date else [])+[action['quote']]+action.get('shared_conditions',[])+[s['goal'] for s in action['supplements']]
+    standards=([shared_date[0]] if shared_date else [])+[action['quote']]+action.get('conditions',[])+action.get('shared_conditions',[])+[s['goal'] for s in action['supplements']]
     return _school_requirement_goal(dict(title=title),standards)
 
 
@@ -2947,7 +2978,8 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
     if (proposal['task_change']!='new' and not revised) or proposal['task_target_id'] or proposal['task_state']=='reference' or proposal['task_purpose']!=action['purpose']:
         raise AgentError('学校独立要求未形成对应行动，整批保留重试',code='school_action_coverage')
     expected={action['ref']}|{s['ref'] for s in action['supplements']+action.get('changes',[])}
-    if expected!=refs:
+    linked=refs&set(action.get('linked',[]))
+    if not expected<=refs or refs-expected-linked:
         raise AgentError('学校补充要求未归到对应作业，整批保留重试',code='school_action_coverage')
     if any(other['quote'] in proposal['task_goal'] for other in actions if other['id']!=action['id']):
         raise AgentError('不同学校成果被合并，整批保留重试',code='school_action_coverage')
@@ -2957,8 +2989,9 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
     if len(dates)>1 and not action['changes']:raise AgentError('本项学校日期尚无法唯一核对，原文保留',code='school_action_coverage')
     due=next(iter(dates)) if len(dates)==1 else '' if dates else proposal['due']
     assigned.add(action['id'])
-    if action['changes']:
-        # The later change supersedes part of the literal quote: keep the summary under the general checks, this outcome's own date and every cited original.
+    unread=any(entries and (entries[r].get('content_incomplete') or entries[r].get('unread')) for r in linked)
+    if action['changes'] or linked and not unread:
+        # A bound change, or cited linked material (review only), keeps the summary under the general checks with this outcome's own date.
         return dict(proposal,due=due),action
     return dict(proposal,task_title=value['title'],task_goal=value['goal'],task_submission='',due=due),action
 
@@ -2966,7 +2999,7 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
 def _school_native_dates(action):
     from family_agenda import deadlines,sent_day
     published=sent_day(action['time'])
-    dates=deadlines('\n'.join([action['header'],action['quote'],*action.get('shared_conditions',[])]),published)
+    dates=deadlines('\n'.join([action['header'],action['quote'],*action.get('conditions',[]),*action.get('shared_conditions',[])]),published)
     # A school arrangement in this outcome's own quote (明天早读抽查) is its day; a header date is never borrowed.
     if not dates:dates=_school_own_dates(action['quote'],published)
     for supplement in action['supplements']:
@@ -2978,7 +3011,7 @@ def _school_native_dates(action):
 
 def _school_native_scope(action,child_id=''):
     anchors=[dict(ref=action['ref'],upload_ids=[],pages=[],quote=action['quote'])]
-    anchors.extend(dict(ref=action['ref'],upload_ids=[],pages=[],quote=quote) for quote in action.get('shared_conditions',[]))
+    anchors.extend(dict(ref=action['ref'],upload_ids=[],pages=[],quote=quote) for quote in action.get('conditions',[])+action.get('shared_conditions',[]))
     anchors.extend(dict(ref=s['ref'],upload_ids=[],pages=[],quote=s['quote']) for s in action['supplements']+action.get('changes',[]))
     if len(anchors)>6:raise AgentError('本项原文条件超出既有核对范围，完整原批次保留',code='school_action_coverage')
     scope=dict(anchors=anchors)
@@ -2992,10 +3025,25 @@ def _school_native_saved(items,evidence):
     for item in items:
         plan=item.get('plan',{});saved=plan.get('school_native_action');brief=plan.get('school_task',{})
         # A ready summary may not name another day than the date it is saved with (literal ledger text excepted).
+        cover=plan.get('school_native_cover')
         if (brief.get('state')=='ready' and item.get('due') and 'school_action_anchor' not in plan and (not saved or saved.get('changes'))):
             declared=_school_goal_dates(brief.get('goal',''),[e for e in evidence if e['ref'] in {q.get('ref') for q in item.get('evidence',[])}])
             if declared and declared!={item['due']}:
                 raise AgentError('学校事项摘要日期与保存日期不符，整批未写入',409,'school_action_coverage')
+        if cover:
+            action=lookup.get(cover.get('id'));cited={e['ref'] for e in item['evidence']}
+            if not action or saved or plan.get('school_original_action') or action['id'] in assigned:
+                raise AgentError('学校独立要求的保存依据已变化，整批未写入',409,'school_action_coverage')
+            expected={action['ref']}|{s['ref'] for s in action['supplements']+action.get('changes',[])}
+            linked=cited&set(action.get('linked',[]));value=_school_native_value(action);dates=_school_native_dates(action)
+            unread=any(e['ref'] in linked and (e.get('content_incomplete') or e.get('unread')) for e in evidence)
+            if (not expected<=cited or cited-expected-linked or not linked or sorted(linked)!=cover.get('linked')
+                    or brief.get('state')=='ready' or brief.get('purpose')!=action['purpose'] or brief.get('target_id')
+                    or brief.get('change')!='new' and not (action.get('changes') and brief.get('change') in ('update','cancel'))
+                    or unread and not action.get('changes') and (brief.get('title')!=value['title'] or brief.get('goal')!=value['goal'])
+                    or len(dates)==1 and item.get('due','')!=next(iter(dates)) or not dates and item.get('due','')):
+                raise AgentError('学校完整要求未按对应行动保存，整批未写入',409,'school_action_coverage')
+            assigned.add(action['id']);continue
         if not saved:continue
         ident=saved.get('id');action=lookup.get(ident)
         if not action or saved!=action or ident in assigned or plan.get('school_original_action')!=_school_native_scope(action):
@@ -3164,7 +3212,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             elif ambiguous_due and brief['state']=='ready' and not _school_dated_quote(dated_quote,cited_evidence,due,brief):
                 brief.update(state='review',reason=brief['reason'][:300]+' 原通知含多个日期，已按原文取'+due+'；请核对这一天是否属于本事项。')
             # A summary that names another day than this item's date, or a change that moves its day, is not ready.
-            if brief['state']=='ready' and not historical and (not native_action or native_action['changes']):
+            if brief['state']=='ready' and not historical and (not native_action or native_action['changes'] or set(native_action.get('linked',[]))&{q['ref'] for q in cited}):
                 declared=_school_goal_dates(brief['goal'],cited_evidence)
                 if native_action and len(_school_native_dates(native_action))>1:
                     brief.update(state='review',reason=brief['reason'][:300]+' 更正涉及另一日期，原日期与更正日期待核对；未自动改期。')
@@ -3173,7 +3221,13 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             if brief['title'] and brief['goal']: item.update(title=brief['title'],body=brief['goal'])
             if not _keeps_learning(brief): item.get('plan',{}).pop('school_learning',None)
             item.setdefault('plan',{})['school_task']=brief
-            if native_action:
+            linked_cited=sorted({q['ref'] for q in cited}&set(native_action.get('linked',[]))) if native_action else []
+            if linked_cited:
+                # Linked material stays on its existing original route; the outcome is still counted exactly once.
+                item['plan']['school_native_cover']=dict(id=native_action['id'],linked=linked_cited)
+                if brief['state']=='ready':
+                    brief.update(state='review',reason=brief['reason'][:300]+' 同一老师的关联消息或附件尚未核实，是否改变本项待核对；原文要求保留。')
+            elif native_action:
                 item['plan']['school_native_action']=native_action
                 item['plan']['school_original_action']=_school_native_scope(native_action)
             item['plan']['school_selection_revision']=SCHOOL_SELECTION_REVISION

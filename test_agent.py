@@ -249,7 +249,7 @@ class AgentTests(unittest.TestCase):
         # A whole-message quote cannot show which known outcome each item covers: the batch is retried, never released.
         lazy=[dict(p,title_quote=texts[0]) if p['task_purpose']=='learning' else p for p in proposals]
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=lazy)),self.assertRaises(agent.AgentError):
-            agent._select('school',copy.deepcopy(evidence),school_goals=[],as_of='2026-10-05')
+            agent._select('school',json.loads(json.dumps(evidence)),school_goals=[],as_of='2026-10-05')
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
             items=agent._select('school',evidence,school_goals=[],as_of='2026-10-05')
         self.assertEqual(len(items),3)
