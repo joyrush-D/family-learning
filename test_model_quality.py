@@ -378,19 +378,31 @@ def _ledger_rows(path):
 REDACTED = '[已隐去：配置凭据或端点回显]'
 
 
+def _secret_forms(secrets):
+    return [form for secret in secrets for form in dict.fromkeys((secret, json.dumps(secret)[1:-1])) if form]
+
+
 def _redact_record(record, secrets):
-    """Configured secrets echoed upstream never reach disk; each changed field keeps the SHA-256 of its raw text only."""
+    """Configured secrets echoed upstream never reach disk, in values, keys or field paths; each changed text keeps its raw SHA-256 only."""
     marks = {}
+
+    def scrub(text):
+        for form in _secret_forms(secrets): text = text.replace(form, REDACTED)
+        return text
 
     def walk(value, path):
         if isinstance(value, str):
-            raw = value
-            for secret in secrets:
-                for form in {secret, json.dumps(secret)[1:-1]}:
-                    value = value.replace(form, REDACTED)
-            if value != raw: marks[path] = hashlib.sha256(raw.encode('utf-8')).hexdigest()
-            return value
-        if isinstance(value, dict): return {k: walk(v, path + '/' + str(k)) for k, v in value.items()}
+            clean = scrub(value)
+            if clean != value: marks[path] = hashlib.sha256(value.encode('utf-8')).hexdigest()
+            return clean
+        if isinstance(value, dict):
+            out = {}
+            for raw, item in value.items():
+                key = base = scrub(str(raw)); n = 1
+                while key in out: n += 1; key = '%s#%d' % (base, n)  # Keys equal after redaction are all kept.
+                if key != str(raw): marks[path + '/' + key + '#key'] = hashlib.sha256(str(raw).encode('utf-8')).hexdigest()
+                out[key] = walk(item, path + '/' + key)
+            return out
         if isinstance(value, list): return [walk(v, '%s/%d' % (path, n)) for n, v in enumerate(value)]
         return value
     clean = walk(record, '')
