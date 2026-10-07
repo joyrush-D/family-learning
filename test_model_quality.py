@@ -134,20 +134,36 @@ SCHOOL_CHECKS = {
     'school-b': {'视力回执': [r'(不|无需|不用|不必|免)(需要)?(打印|签字)'],
                  '学籍盖章': [r'(不|无需|不用|不必|免)(需要)?盖章']},
 }
-HOMEWORK_CONTENT = {  # 原件中明确的题面、孩子原答与教师参考/简单推导
-    'homework-a': {(0, 1): dict(question=r'36\+47', student=r'^83$', answer=r'83', kind='objective'),
-                   (0, 2): dict(question=r'9[×xX*]7', student=r'^56$', answer=r'63', kind='objective'),
-                   (0, 3): dict(question=r'12米', student='', answer=r'7', kind='objective'),
-                   (0, 4): dict(question=r'偶数', student=r'^C', answer=r'C|34', kind='objective'),
-                   (0, 5): dict(question=r'100-38', student=r'^72$', answer=r'62', kind='objective'),
-                   (0, 6): dict(question=r'长方形', student=r'因为它是长方形', answer=r'平行且相等', kind='subjective')},
-    'homework-b': {(1, 1): dict(question=r'chūntiān', student=r'^春天$', answer=r'春天', kind='objective'),
-                   (1, 2): dict(question=r'huāduǒ', student=r'^花朵$', answer=r'花朵', kind='objective'),
-                   (1, 3): dict(question=r'péngyǒu', student=r'^明友$', answer=r'朋友', kind='objective'),
-                   (2, 1): dict(question=r'天来了', student=r'^A', answer=r'A|春', kind='objective'),
-                   (2, 2): dict(question=r'唱歌', student=r'^B', answer=r'A|树', kind='objective'),
-                   (2, 3): dict(question=r'读书', student='', answer=r'A|一', kind='objective')},
+HOMEWORK_CONTENT = {  # 原件中明确的题面、孩子原答与教师参考/简单推导；客观题核完整值，None 表示未作答
+    'homework-a': {(0, 1): dict(question=r'36\+47', student=('num', '83'), answer=('num', '83'), kind='objective'),
+                   (0, 2): dict(question=r'9[×xX*]7', student=('num', '56'), answer=('num', '63'), kind='objective'),
+                   (0, 3): dict(question=r'12米', student=None, answer=('num', '7'), kind='objective'),
+                   (0, 4): dict(question=r'偶数', student=('choice', 'C', '34'), answer=('choice', 'C', '34'), kind='objective'),
+                   (0, 5): dict(question=r'100-38', student=('num', '72'), answer=('num', '62'), kind='objective'),
+                   (0, 6): dict(question=r'长方形', student=('text', '因为它是长方形'), answer=('text', '平行且相等'), kind='subjective')},
+    'homework-b': {(1, 1): dict(question=r'chūntiān', student=('word', '春天'), answer=('word', '春天'), kind='objective'),
+                   (1, 2): dict(question=r'huāduǒ', student=('word', '花朵'), answer=('word', '花朵'), kind='objective'),
+                   (1, 3): dict(question=r'péngyǒu', student=('word', '明友'), answer=('word', '朋友'), kind='objective'),
+                   (2, 1): dict(question=r'天来了', student=('choice', 'A', '春'), answer=('choice', 'A', '春'), kind='objective'),
+                   (2, 2): dict(question=r'唱歌', student=('choice', 'B', '竖'), answer=('choice', 'A', '树'), kind='objective'),
+                   (2, 3): dict(question=r'读书', student=None, answer=('choice', 'A', '一'), kind='objective')},
 }
+
+
+def _value_ok(spec, text):
+    """Whole objective value: one final number, one option letter or the exact word; subjective keeps the frozen requirement."""
+    kind, value = spec[0], spec[1]
+    text = re.sub(r'[。.；;，,]+$', '', re.sub(r'\s+', '', str(text or '')))
+    if kind == 'num':
+        return re.findall(r'\d+(?:\.\d+)?', text.rsplit('=', 1)[-1]) == [value]
+    if kind == 'choice':
+        letters = set(re.findall(r'(?<![A-Za-z])[A-H](?![A-Za-z])', text))
+        return letters == {value} if letters else text == spec[2]
+    if kind == 'word':
+        return re.sub(r'[（(][^）)]*[）)]', '', text) == value
+    return bool(re.search(value, text))
+
+
 USABLE = ('ready', 'review')
 
 
@@ -251,14 +267,14 @@ def score_homework(name, questions):
             if truth['source'] == 'ai' and not answer_text.startswith('AI自行推导：'): result['ai_unlabeled'].append(tag)
         content = HOMEWORK_CONTENT[name][key]
         question, student = _flat(item.get('question')), _flat(item.get('student_answer')).rstrip('。.；;')
-        answer = _flat(re.sub(r'^(教师参考|AI自行推导)：', '', answer_text))
+        answer = re.sub(r'^(教师参考|AI自行推导)：', '', answer_text)
         if not question: result['content_errors'].append(tag + ':题面缺失')
         elif not re.search(content['question'], question): result['content_errors'].append(tag + ':题面不符')
-        if not content['student']:
+        if content['student'] is None:
             if student: result['content_errors'].append(tag + ':未作答却填了原答')
             elif judgment == 'unknown': result['unanswered_kept'].append(tag)
-        elif not re.search(content['student'], student): result['content_errors'].append(tag + ':原答不符')
-        if (judgment in ('correct', 'incorrect') or answer) and not re.search(content['answer'], answer):
+        elif not _value_ok(content['student'], student): result['content_errors'].append(tag + ':原答不符')
+        if (judgment in ('correct', 'incorrect') or answer.strip()) and not _value_ok(content['answer'], answer):
             result['content_errors'].append(tag + ':答案不符')
         if item.get('question_kind') in ('objective', 'subjective') and item['question_kind'] != content['kind']:
             result['content_errors'].append(tag + ':题型不符')
@@ -407,6 +423,24 @@ def replay(out_dir):
         entry.update(replayed=True, input_sha256=seen.get('input_sha256'),
                      same_input=seen.get('input_sha256') == entry['original_input_sha256'], error=error, final=final,
                      score=score(record['case'], final, raw))
+        results.append(entry)
+    return results
+
+
+def replay_ingest(out_dir):
+    """Saved school replies through Store.ingest -> run_once with zero model calls; originals stay untouched."""
+    import family_llm
+    results = []
+    for path in sorted(Path(out_dir).glob('school-*-*.json')):
+        record = json.loads(path.read_text()); raw = (record.get('captured') or {}).get('raw_model_output')
+        entry = dict(case=record['case'], role=record['role'], original_input_sha256=(record.get('captured') or {}).get('input_sha256'))
+        if raw is None:
+            entry.update(replayed=False, note='原调用没有解析回执，不复放；完整HTTP原体当时未保存'); results.append(entry); continue
+        with patch.object(family_llm, 'build_opener', side_effect=AssertionError('复放不得联网')):
+            run = ingest_school(record['case'], raw, runs=2)
+        entry.update(replayed=True, ref_map=run['ref_map'], calls=run['calls'], counts=run['counts'], results=run['results'],
+                     input_changed=[call['input_sha256'] != entry['original_input_sha256'] for call in run['calls']],
+                     items=run['items'], score=score_school(record['case'], school_rows(run['items'])))
         results.append(entry)
     return results
 
@@ -807,5 +841,9 @@ if __name__ == '__main__':
         target = Path(sys.argv[3])
         if target.exists(): raise SystemExit('复放结果已存在，未覆盖：' + target.name)
         target.write_text(json.dumps(replay(sys.argv[2]), ensure_ascii=False, indent=1, default=str))
+    elif len(sys.argv) == 4 and sys.argv[1] == '--replay-ingest':
+        target = Path(sys.argv[3])
+        if target.exists(): raise SystemExit('复放结果已存在，未覆盖：' + target.name)
+        target.write_text(json.dumps(replay_ingest(sys.argv[2]), ensure_ascii=False, indent=1, default=str))
     else:
         unittest.main()
