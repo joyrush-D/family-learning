@@ -1009,9 +1009,10 @@ SCHOOL_C_CANCEL_RAW = json.loads(r'''{"title_quote":"完成语文练习本第18�
 SCHOOL_C_CANCEL_REVIEW = dict(task_title='语文：取消练习本第18页作业', task_goal='取消昨天的语文练习本第18页作业，不用做第1-6题，也不用交。',
                               task_advice='', task_change='cancel', task_state='review', task_reason='同批同一老师具名取消原要求，待家长核对。',
                               task_submission='')
-# 整项取消的等价变体：只写取消、只写原全部题号都不用做。
+# 整项取消的等价变体：只写取消、只写原全部题号都不用做；撤销后另写原因（不是否认取消）仍是整项取消。
 SCHOOL_C_WHOLE = {'具名取消': SCHOOL_C_CANCEL, '只写取消': '取消昨天的语文练习本第18页作业；' + SCHOOL_C_KEEP,
-                  '全部题不用做': '更正昨天的语文练习本第18页：第1-6题都不用做，也不用交；' + SCHOOL_C_KEEP}
+                  '全部题不用做': '更正昨天的语文练习本第18页：第1-6题都不用做，也不用交；' + SCHOOL_C_KEEP,
+                  '原因在后': '更正昨天的语文练习本第18页：第1-6题都不用做，题目印错了，也不用交；' + SCHOOL_C_KEEP}
 # 只减部分题（含“取消”“不用做”字样）：仍是原项的局部更正，第1-5题照常new/ready。
 SCHOOL_C_PART = {'取消第6题': '取消昨天的语文练习本第18页第6题，第1-5题仍10月9日交；' + SCHOOL_C_KEEP,
                  '第6题不用做': '更正昨天的语文练习本第18页：第6题不用做，第1-5题仍10月9日交；' + SCHOOL_C_KEEP}
@@ -1030,6 +1031,14 @@ SCHOOL_C_UNSETTLED = {'条件A': '更正昨天的语文练习本第18页：如�
                       '条件在前': '更正昨天的语文练习本第18页：如果下雨，就取消第1-6题；' + SCHOOL_C_KEEP,
                       '询问吗': '更正昨天的语文练习本第18页：要取消第1-6题吗？' + SCHOOL_C_KEEP,
                       '询问对吗': '更正昨天的语文练习本第18页：取消第1-6题，对吗？' + SCHOOL_C_KEEP}
+# 本机独立验收的两条后置否认反例（说法不对、假消息）及等价变体：撤销词之后在同句否认、判假或称误传该取消说法（含逗号后另起分句），
+# 取消并未成立，只能保留原第1-6题或待核，不能写为确定取消。
+SCHOOL_C_DENIED = {'说法不对': '更正昨天的语文练习本第18页：取消第1-6题的说法不对；' + SCHOOL_C_KEEP,
+                   '假消息': '更正昨天的语文练习本第18页：取消第1-6题是假消息；' + SCHOOL_C_KEEP,
+                   '逗号后否认': '更正昨天的语文练习本第18页：取消第1-6题，这个说法不对；' + SCHOOL_C_KEEP,
+                   '是误传': '更正昨天的语文练习本第18页：取消第1-6题是误传；' + SCHOOL_C_KEEP,
+                   '不是真的': '更正昨天的语文练习本第18页：取消第1-6题不是真的；' + SCHOOL_C_KEEP,
+                   '并不属实': '更正昨天的语文练习本第18页：取消第1-6题并不属实；' + SCHOOL_C_KEEP}
 # 只免家长检查、只免交回：作业仍要做，不是取消。
 SCHOOL_C_STILL_DONE = {'只免检查': '更正昨天的语文练习本第18页：取消家长检查，第1-6题仍10月9日交；' + SCHOOL_C_KEEP,
                        '只免交回': '更正昨天的语文练习本第18页：撤回交回要求，第1-6题仍要完成；' + SCHOOL_C_KEEP}
@@ -1139,14 +1148,14 @@ class SchoolFirstBatchCancelTest(unittest.TestCase):
 
     def unsettled_rows(self, text, **worksheet):
         rows = _school_c_cancel_rows(**dict(SCHOOL_C_ORIGINAL, **worksheet))
-        if text in SCHOOL_C_UNSETTLED.values() and 'cancel' not in rows[1]['task_change']: rows[1]['task_goal'] += '\n请家长检查。'
+        if text in {**SCHOOL_C_UNSETTLED, **SCHOOL_C_DENIED}.values() and 'cancel' not in rows[1]['task_change']: rows[1]['task_goal'] += '\n请家长检查。'
         # “如果”与“不变”同句：既有“不变”保护不认背诵未变，背诵只引原消息1（不放宽该保护）。
         if '如果' in text: rows[0]['evidence'] = [dict(ref=C + '1')]
         return rows
 
     def test_unsettled_or_check_only_cancel_keeps_the_original_and_never_saves_cancel(self):
         import family_agent
-        for label, text in {**SCHOOL_C_UNSETTLED, **SCHOOL_C_STILL_DONE}.items():
+        for label, text in {**SCHOOL_C_UNSETTLED, **SCHOOL_C_DENIED, **SCHOOL_C_STILL_DONE}.items():
             recite = [C + '1'] if '如果' in text else [C + '1', C + '5']
             for real in (False, True):
                 with self.subTest(label, real=real):
@@ -1165,8 +1174,8 @@ class SchoolFirstBatchCancelTest(unittest.TestCase):
 
     def test_unsettled_cancel_through_ingest_keeps_the_original_once_and_illegal_cancel_writes_nothing(self):
         import family_agent
-        for label in ('条件A', '否定B', '询问吗'):
-            text = SCHOOL_C_UNSETTLED[label]
+        for label in ('条件A', '否定B', '询问吗', '说法不对', '假消息'):
+            text = {**SCHOOL_C_UNSETTLED, **SCHOOL_C_DENIED}[label]
             evidence = _school_c_evidence(m5=dict(text=text)); texts = [e['text'] for e in evidence]
             with self.subTest(label), patch.dict(SCHOOL_CASES, {'school-heldout-c': dict(SCHOOL_CASES['school-heldout-c'], evidence=evidence)}):
                 wrong = ingest_school('school-heldout-c', dict(proposals=self.unsettled_rows(text, **SCHOOL_C_CANCEL_REVIEW)))
