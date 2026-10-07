@@ -2764,7 +2764,7 @@ def _school_native_blocks(text):
 _SCHOOL_NATIVE_CHANGE=r'更正|取消|撤销|撤回|不再(?:做|完成)|不用(?:做|完成)|无需(?:做|完成)|改为|改期|延期'
 
 
-_SCHOOL_NATIVE_WORKSHEET=r'练习卷|练习册|作业本|作业单|试卷'
+_SCHOOL_NATIVE_WORKSHEET=r'练习卷|练习册|练习本|作业本|作业单|试卷'
 
 
 _SCHOOL_NATIVE_FILLER=r'补充|更正|另外|关于|还有|大家|同学们?|孩子们?|请|再|也|都|就|是|的|[\s：:]'
@@ -2823,6 +2823,13 @@ def _school_native_change_owner(entry,later,actions):
     if not actions or not _school_native_later_text(entry,later) or not re.search(_SCHOOL_NATIVE_CHANGE,later['text']):return None
     # "补充语文练习册：第5题不用做" names its object before the colon; a dated correction header only says when the list was sent.
     text=re.sub(r'^\s*更正\s*(?:\d{4}年)?\d{1,2}月\d{1,2}日\s*\d{1,2}[:：]\d{2}\s*发布的','更正',later['text'])
+    # "更正昨天的…" says when the list was sent; it names this list only when that is the list's own sending day.
+    day=re.match(r'^\s*(补充|更正)(今天|昨天|前天)的',text)
+    if day:
+        from family_agenda import sent_day
+        sent=dt.date.fromisoformat(sent_day(later['time']))-dt.timedelta(days=('今天','昨天','前天').index(day[2]))
+        if sent.isoformat()!=sent_day(entry['time']):return None
+        text=day[1]+text[day.end():]
     head=re.match(r'^\s*(?:补充|更正|取消|撤销|撤回)([^：:\n]{0,40})[：:]',text)
     lead=head[1] if head else '';body=text[head.end():] if head else text
     owners=[]
@@ -2833,6 +2840,37 @@ def _school_native_change_owner(entry,later,actions):
         if owner is None:return None
         if owner not in owners:owners.append(owner)
     return owners[0] if len(owners)==1 else None
+
+
+_SCHOOL_NATIVE_KEPT=r'不变|不更改|不改变'
+
+
+def _school_native_kept(action,actions,entries):
+    """Strictly later, complete messages by the same publisher and source whose own clause names only this outcome as unchanged.
+
+    "《纸船》第二节的背诵和抽查安排不变" may be cited for that recitation; it never alters its text or date. A message whose
+    change binds to no other listed outcome, or a clause that changes, names another title, page, section, question or day,
+    or several outcomes, proves nothing.
+    """
+    entry=(entries or {}).get(action['ref'])
+    if not entry:return set()
+    siblings=[a for a in actions if a['ref']==action['ref']];own=action['primary'];kept=set()
+    def marks(text):return set(re.findall(r'第[^第，,。；;：:]{1,8}?[节段页题课]',text))
+    for later in entries.values():
+        if not _school_native_later_text(entry,later):continue
+        if re.search(_SCHOOL_NATIVE_CHANGE,later['text']):
+            owner=_school_native_change_owner(entry,later,siblings)
+            if owner is None or owner['id']==action['id']:continue
+        for clause in re.split(r'[。；;，,\n]',later['text']):
+            name=re.match(r'^\s*(?:不更改|不改变)?\s*([^的]{2,24}?)的',clause)
+            if (not re.search(_SCHOOL_NATIVE_KEPT,clause) or re.search(_SCHOOL_NATIVE_CHANGE,clause) or not name
+                    or [a['id'] for a in siblings if a['primary'].count(name[1])==1]!=[action['id']]
+                    or not _school_named_objects(clause)<=_school_named_objects(own) or not marks(clause)<=marks(own)
+                    or any(own.count(sheet)!=1 for sheet in re.findall(_SCHOOL_NATIVE_WORKSHEET,clause))):continue
+            declared=_school_goal_dates(clause,[later])
+            if declared and declared!=_school_native_dates(action):continue
+            kept.add(later['ref'])
+    return kept
 
 
 def _school_native_unlocated(quote,refs,actions,entries,spans):
@@ -2982,7 +3020,8 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
         raise AgentError('学校独立要求未形成对应行动，整批保留重试',code='school_action_coverage')
     expected={action['ref']}|{s['ref'] for s in action['supplements']+action.get('changes',[])}
     linked=refs&set(action.get('linked',[]))
-    if not expected<=refs or refs-expected-linked:
+    # A later same-teacher message naming only this outcome as unchanged may be cited; it adds nothing to it.
+    if not expected<=refs or refs-expected-linked-_school_native_kept(action,actions,entries):
         raise AgentError('学校补充要求未归到对应作业，整批保留重试',code='school_action_coverage')
     if any(other['quote'] in proposal['task_goal'] for other in actions if other['id']!=action['id']):
         raise AgentError('不同学校成果被合并，整批保留重试',code='school_action_coverage')
@@ -3024,7 +3063,7 @@ def _school_native_scope(action,child_id=''):
 
 def _school_native_saved(items,evidence):
     """Recheck complete literal allocation under the existing intake write transaction."""
-    actions=_school_native_actions(evidence);lookup={a['id']:a for a in actions};assigned=set()
+    actions=_school_native_actions(evidence);lookup={a['id']:a for a in actions};assigned=set();entries={e['ref']:e for e in evidence}
     for item in items:
         plan=item.get('plan',{});saved=plan.get('school_native_action');brief=plan.get('school_task',{})
         # A ready summary may not name another day than the date it is saved with (literal ledger text excepted).
@@ -3040,7 +3079,7 @@ def _school_native_saved(items,evidence):
             expected={action['ref']}|{s['ref'] for s in action['supplements']+action.get('changes',[])}
             linked=cited&set(action.get('linked',[]));value=_school_native_value(action);dates=_school_native_dates(action)
             unread=any(e['ref'] in linked and (e.get('content_incomplete') or e.get('unread')) for e in evidence)
-            if (not expected<=cited or cited-expected-linked or not linked or sorted(linked)!=cover.get('linked')
+            if (not expected<=cited or cited-expected-linked-_school_native_kept(action,actions,entries) or not linked or sorted(linked)!=cover.get('linked')
                     or brief.get('state')=='ready' or brief.get('purpose')!=action['purpose'] or brief.get('target_id')
                     or brief.get('change')!='new' and not (action.get('changes') and brief.get('change') in ('update','cancel'))
                     or unread and not action.get('changes') and (brief.get('title')!=value['title'] or brief.get('goal')!=value['goal'])
@@ -3055,7 +3094,8 @@ def _school_native_saved(items,evidence):
         expected={action['ref']}|{s['ref'] for s in action['supplements']+action.get('changes',[])}
         # A changed outcome keeps the checked summary; refs, purpose and its own date still match the ledger.
         literal=not action.get('changes')
-        if ({e['ref'] for e in item['evidence']}!=expected or brief.get('purpose')!=action['purpose']
+        cited={e['ref'] for e in item['evidence']}
+        if (not expected<=cited or cited-expected-_school_native_kept(action,actions,entries) or brief.get('purpose')!=action['purpose']
                 or brief.get('change')!='new' and not (action.get('changes') and brief.get('change') in ('update','cancel') and brief.get('state')=='review')
                 or brief.get('target_id')
                 or literal and (any(brief.get(k,'')!=value[k] for k in ('title','goal','submission'))
