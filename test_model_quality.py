@@ -2,19 +2,24 @@
 
 真值由开发者在任何产品模型调用前写定并提交；模型返回的题号清单或摘要不能用来证明无漏项。
 school-a/homework-a 可用于归因与修复，school-b/homework-b 是保留变体，不据其结果改提示或真值。
+默认只跑离线检查（含固定假HTTP的证据采集检查，不发产品请求）；`--replay 输出目录 结果文件` 用已存解析回执零调用复放。
 默认只跑离线检查。`--live 配置目录 输出目录 角色` 才经产品入口发送真实请求：每案每模型一次，失败不重试；
 配置只在本进程内存中使用，用量写入输出目录下隔离的 family.sqlite3，不写回配置目录。
 """
 import copy
 import hashlib
+import io
 import json
 import os
 import re
+import shutil
 import sqlite3
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 AS_OF = '2026-10-07'  # 周三
@@ -120,48 +125,89 @@ HOMEWORK_CASES = {
 
 STAMP_EXEMPT = re.compile(r'(不需要|无需|不用|不必|不需|免)盖章')
 
+# 2026-10-07 续接：首轮评分只看关键词、日期和必需引用，未读 plan.school_task 的状态/用途，也不看作答内容，
+# 已被独立反证（全部 dismissed、purpose 缺失、外来源引用、否定要求仍得满分）；原8份回执里的旧 score 字段保留但作废。
+# 以下判据只依据冻结原件追加，不改上方首轮冻结真值，也不依据任何模型回答。
+SCHOOL_CHECKS = {
+    'school-a': {'练习册1-4': [r'5题[^。；\n]{0,6}(必须|必做|要做|仍需)'],
+                 '告知书': [r'(不|无需|不用|不必|免)(需要)?(打印|签字)']},
+    'school-b': {'视力回执': [r'(不|无需|不用|不必|免)(需要)?(打印|签字)'],
+                 '学籍盖章': [r'(不|无需|不用|不必|免)(需要)?盖章']},
+}
+HOMEWORK_CONTENT = {  # 原件中明确的题面、孩子原答与教师参考/简单推导
+    'homework-a': {(0, 1): dict(question=r'36\+47', student=r'^83$', answer=r'83', kind='objective'),
+                   (0, 2): dict(question=r'9[×xX*]7', student=r'^56$', answer=r'63', kind='objective'),
+                   (0, 3): dict(question=r'12米', student='', answer=r'7', kind='objective'),
+                   (0, 4): dict(question=r'偶数', student=r'^C', answer=r'C|34', kind='objective'),
+                   (0, 5): dict(question=r'100-38', student=r'^72$', answer=r'62', kind='objective'),
+                   (0, 6): dict(question=r'长方形', student=r'因为它是长方形', answer=r'平行且相等', kind='subjective')},
+    'homework-b': {(1, 1): dict(question=r'chūntiān', student=r'^春天$', answer=r'春天', kind='objective'),
+                   (1, 2): dict(question=r'huāduǒ', student=r'^花朵$', answer=r'花朵', kind='objective'),
+                   (1, 3): dict(question=r'péngyǒu', student=r'^明友$', answer=r'朋友', kind='objective'),
+                   (2, 1): dict(question=r'天来了', student=r'^A', answer=r'A|春', kind='objective'),
+                   (2, 2): dict(question=r'唱歌', student=r'^B', answer=r'A|树', kind='objective'),
+                   (2, 3): dict(question=r'读书', student='', answer=r'A|一', kind='objective')},
+}
+USABLE = ('ready', 'review')
+
 
 def school_rows(items, raw=False):
     rows = []
     for item in items or []:
         if raw:
             text = '\n'.join(str(item.get(k, '')) for k in ('task_title', 'task_goal'))
-            purpose = item.get('task_purpose', '')
-            state = item.get('task_state', '')
+            purpose, state, reason = item.get('task_purpose'), item.get('task_state'), item.get('task_reason', '')
         else:
+            task = (item.get('plan') or {}).get('school_task') or {}
             text = '\n'.join(str(item.get(k, '')) for k in ('title', 'body'))
-            purpose = next((item[k] for k in ('purpose', 'task_purpose', 'school_purpose') if isinstance(item.get(k), str)), None)
-            state = item.get('state', item.get('task_state', ''))
+            purpose, state, reason = task.get('purpose'), task.get('state'), task.get('reason', '')
         refs = [e.get('ref') if isinstance(e, dict) else e for e in item.get('evidence') or []]
-        rows.append(dict(text=text, due=item.get('due', ''), purpose=purpose, state=state, refs=refs))
+        rows.append(dict(text=text, due=item.get('due', ''), purpose=purpose, state=state, reason=reason or '', refs=refs))
     return rows
 
 
 def score_school(name, rows):
     case = SCHOOL_CASES[name]
     prefix = 'message:synthetic-%s:' % name
-    matched, used, result = {}, set(), dict(missed=[], due_errors=[], purpose_errors=[], requirement_errors=[],
-                                             citation_errors=[], extra=[])
+    publisher = {e['ref']: e['publisher'] for e in case['evidence']}
+    reference_refs = {prefix + str(r) for r in case['reference_only']}
+    result = dict(missed=[], unusable=[], review=[], due_errors=[], purpose_errors=[], requirement_errors=[],
+                  citation_errors=[], reference_errors=[], extra=[], extra_reference=[])
+    used = set()
     for truth in case['truth']:
-        for n, row in enumerate(rows):
-            if n not in used and row['state'] != 'reference' and all(k in row['text'] for k in truth['keys']):
-                matched[truth['id']] = row; used.add(n); break
-        else:
-            result['missed'].append(truth['id']); continue
-        row = matched[truth['id']]
-        if row['due'] != truth['due']: result['due_errors'].append('%s:%s≠%s' % (truth['id'], row['due'] or '无', truth['due']))
-        if row['purpose'] is not None and row['purpose'] != truth['purpose']:
-            result['purpose_errors'].append('%s:%s≠%s' % (truth['id'], row['purpose'], truth['purpose']))
-        if any(not re.search(p, row['text']) for p in truth['require']) or (
-                truth.get('forbid_stamp') and '盖章' in STAMP_EXEMPT.sub('', row['text'])):
-            result['requirement_errors'].append(truth['id'])
-        if any(prefix + str(r) not in row['refs'] for r in truth['refs']):
-            result['citation_errors'].append(truth['id'])
+        tag = truth['id']
+        n = next((n for n, row in enumerate(rows) if n not in used and all(k in row['text'] for k in truth['keys'])), None)
+        if n is None: result['missed'].append(tag); continue
+        used.add(n); row = rows[n]
+        if row['state'] not in USABLE: result['unusable'].append('%s:%s' % (tag, row['state']))
+        elif row['state'] == 'review': result['review'].append('%s:%s' % (tag, row['reason'][-70:]))
+        if row['due'] != truth['due']: result['due_errors'].append('%s:%s≠%s' % (tag, row['due'] or '无', truth['due']))
+        if row['purpose'] != truth['purpose']: result['purpose_errors'].append('%s:%s≠%s' % (tag, row['purpose'], truth['purpose']))
+        if (any(not re.search(p, row['text']) for p in truth['require'])
+                or truth.get('forbid_stamp') and '盖章' in STAMP_EXEMPT.sub('', row['text'])
+                or any(re.search(p, row['text']) for p in SCHOOL_CHECKS.get(name, {}).get(tag, ()))):
+            result['requirement_errors'].append(tag)
+        expected = {prefix + str(r) for r in truth['refs']}
+        if not expected <= set(row['refs']) or any(publisher.get(r) not in {publisher[x] for x in expected} for r in row['refs']):
+            result['citation_errors'].append('%s:%s' % (tag, [r.rsplit(':', 1)[-1] for r in row['refs']]))
+    for ref in sorted(reference_refs):
+        citing = [n for n, row in enumerate(rows) if ref in row['refs']]
+        if not any(rows[n]['state'] == 'reference' for n in citing):
+            result['reference_errors'].append(ref.rsplit(':', 1)[-1] + ':未作参考保留')
+        for n in citing:
+            if n in used: continue
+            if rows[n]['state'] == 'reference': used.add(n)
+            elif set(rows[n]['refs']) <= reference_refs:
+                result['reference_errors'].append(ref.rsplit(':', 1)[-1] + ':成了%s事项' % rows[n]['state']); used.add(n)
     for n, row in enumerate(rows):
-        if n not in used and row['state'] != 'reference':
-            result['extra'].append(row['text'][:40])
-    result['covered'] = len(case['truth']) - len(result['missed'])
+        if n not in used:
+            result['extra_reference' if row['state'] == 'reference' else 'extra'].append('%s:%s' % (row['state'], row['text'][:30]))
     result['total'] = len(case['truth'])
+    result['covered'] = result['total'] - len(result['missed'])
+    result['usable'] = result['covered'] - len(result['unusable'])
+    result['ready'] = result['usable'] - len(result['review'])
+    result['passed'] = not any(result[k] for k in ('missed', 'unusable', 'due_errors', 'purpose_errors', 'requirement_errors',
+                                                    'citation_errors', 'reference_errors', 'extra'))
     return result
 
 
@@ -177,30 +223,50 @@ def parse_label(label, sectioned):
     return (section, numbers[0]) if section and numbers else None
 
 
+def _flat(value):
+    return re.sub(r'\s+', '', str(value or ''))
+
+
 def score_homework(name, questions):
     case = HOMEWORK_CASES[name]
     sectioned = any(t['section'] for t in case['truth'])
-    found = {}
-    extra = []
+    found, extra = {}, []
     for item in questions or []:
         key = parse_label(str(item.get('label', '')), sectioned)
         if key is None or key in found: extra.append(str(item.get('label', ''))[:40]); continue
         found[key] = item
-    result = dict(missed=[], wrong_judgment=[], undetermined=[], source_errors=[], extra=extra)
+    result = dict(missed=[], wrong_judgment=[], undetermined=[], source_errors=[], ai_unlabeled=[], content_errors=[],
+                  unanswered_kept=[], extra=extra)
     for truth in case['truth']:
         key = (truth['section'], truth['number']); tag = '%s-%s' % key if sectioned else str(truth['number'])
         item = found.pop(key, None)
         if item is None: result['missed'].append(tag); continue
-        judgment = item.get('judgment')
+        judgment = item.get('judgment'); answer_text = str(item.get('answer', '')).strip()
         if judgment not in truth['judgments']:
             (result['undetermined'] if judgment == 'unknown' else result['wrong_judgment']).append(
                 '%s:%s≠%s' % (tag, judgment, '/'.join(truth['judgments'])))
         if judgment in ('correct', 'incorrect'):
-            teacher = str(item.get('answer', '')).startswith('教师参考：')
+            teacher = answer_text.startswith('教师参考：')
             if teacher != (truth['source'] == 'teacher'): result['source_errors'].append(tag)
+            if truth['source'] == 'ai' and not answer_text.startswith('AI自行推导：'): result['ai_unlabeled'].append(tag)
+        content = HOMEWORK_CONTENT[name][key]
+        question, student = _flat(item.get('question')), _flat(item.get('student_answer')).rstrip('。.；;')
+        answer = _flat(re.sub(r'^(教师参考|AI自行推导)：', '', answer_text))
+        if not question: result['content_errors'].append(tag + ':题面缺失')
+        elif not re.search(content['question'], question): result['content_errors'].append(tag + ':题面不符')
+        if not content['student']:
+            if student: result['content_errors'].append(tag + ':未作答却填了原答')
+            elif judgment == 'unknown': result['unanswered_kept'].append(tag)
+        elif not re.search(content['student'], student): result['content_errors'].append(tag + ':原答不符')
+        if (judgment in ('correct', 'incorrect') or answer) and not re.search(content['answer'], answer):
+            result['content_errors'].append(tag + ':答案不符')
+        if item.get('question_kind') in ('objective', 'subjective') and item['question_kind'] != content['kind']:
+            result['content_errors'].append(tag + ':题型不符')
     result['extra'] += ['%s-%s' % key for key in found]
-    result['covered'] = len(case['truth']) - len(result['missed'])
     result['total'] = len(case['truth'])
+    result['covered'] = result['total'] - len(result['missed'])
+    result['passed'] = not any(result[k] for k in ('missed', 'wrong_judgment', 'undetermined', 'source_errors', 'ai_unlabeled',
+                                                    'content_errors', 'extra'))
     return result
 
 
@@ -223,45 +289,162 @@ def score(name, final, raw):
                 final=score_homework(name, final.get('questions')) if final else None)
 
 
+def _input_hash(messages, schema, task):
+    return hashlib.sha256(json.dumps([messages, schema, task], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
+class _Recorder:
+    """Keeps the exact request body and HTTP response of one explicit run; never headers, key or endpoint."""
+
+    def __init__(self, opener, sink):
+        self.opener, self.sink = opener, sink
+
+    def open(self, request, timeout=None):
+        import family_llm
+        self.sink['request_body'] = json.loads(request.data.decode('utf-8'))
+        try:
+            response = self.opener.open(request, timeout=timeout)
+        except HTTPError as error:
+            body = error.read() if error.fp else b''
+            self.sink.update(http_status=error.code, response_body=body.decode('utf-8', 'replace'))
+            raise HTTPError('', error.code, str(error.msg), error.hdrs, io.BytesIO(body)) from None
+        except Exception as error:
+            self.sink['transport_failure'] = type(error).__name__
+            raise
+        with response:
+            raw = response.read(family_llm.MAX_RESPONSE + 1)
+        self.sink.update(http_status=getattr(response, 'status', None), response_body=raw.decode('utf-8', 'replace'))
+        return io.BytesIO(raw)
+
+
+def _ledger_rows(path):
+    if not path.exists(): return [], '未建台账文件：请求未发出'
+    with sqlite3.connect(path) as db:
+        db.row_factory = sqlite3.Row
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='llm_usage_ledger'").fetchone():
+            return [], '无台账表：请求未发出'
+        return [dict(r) for r in db.execute('SELECT * FROM llm_usage_ledger ORDER BY id')], ''
+
+
 def live(config_dir, out_dir, role, names):
-    """One request per case for one configured model; failures are kept, never retried."""
+    """One request per case for one configured model; failures are kept, never retried or overwritten."""
     import family_llm
+    out = Path(out_dir)
+    existing = [p.name for n in names for p in (out / (n + '-' + role + '.json'), out / (n + '-' + role + '-data'),
+                                                 out / (n + '-' + role + '.started')) if p.exists()]
+    if existing:
+        raise SystemExit('已有本角色输出或启动标记，未发送任何请求，原证据保留：' + '、'.join(existing))
     config = family_llm.model_values(config_dir)
     model = config['model' if role == 'strong' else 'light_model'].strip()
-    out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
     for name in names:
+        path = out / (name + '-' + role + '.json')
         record = dict(case=name, role=role, requested_model=model, reasoning_effort=config['reasoning_effort'],
                       held_out=(SCHOOL_CASES.get(name) or HOMEWORK_CASES[name])['held_out'])
         if not model:
-            record.update(error='未配置该角色模型，未发送请求'); (out / (name + '-' + role + '.json')).write_text(
-                json.dumps(record, ensure_ascii=False, indent=1)); continue
-        data = out / (name + '-' + role + '-data'); data.mkdir(exist_ok=True)
-        captured, real = {}, family_llm._chat_json
+            record.update(error='未配置该角色模型，未发送请求')
+            path.write_text(json.dumps(record, ensure_ascii=False, indent=1)); continue
+        (out / (name + '-' + role + '.started')).write_text(time.strftime('%Y-%m-%dT%H:%M:%S%z'))
+        data = out / (name + '-' + role + '-data'); data.mkdir()
+        captured, http, final, error = {}, {}, None, ''
+        real_chat, real_build = family_llm._chat_json, family_llm.build_opener
 
         def capture(messages, schema, task, timeout=60, *, data_path=None):
-            captured.update(task=task, timeout=timeout, input_sha256=hashlib.sha256(json.dumps(
-                [messages, schema, task], ensure_ascii=False, sort_keys=True).encode()).hexdigest())
+            captured.update(task=task, timeout=timeout, input_sha256=_input_hash(messages, schema, task))
             try:
-                draft = real(messages, schema, task, timeout, data_path=data_path)
-            except Exception as error:
-                captured['transport_error'] = '%s: %s' % (type(error).__name__, error); raise
+                draft = real_chat(messages, schema, task, timeout, data_path=data_path)
+            except Exception as exc:
+                captured['transport_error'] = '%s: %s' % (type(exc).__name__, exc); raise
             captured['raw_model_output'] = copy.deepcopy(draft)
             return draft
         env = {'FAMILY_LLM_BASE_URL': config['base_url'], 'FAMILY_LLM_MODEL': model, 'FAMILY_LLM_LIGHT_MODEL': '',
                'FAMILY_LLM_API_KEY': config['api_key'], 'FAMILY_LLM_REASONING_EFFORT': config['reasoning_effort']}
-        started = time.monotonic(); final = None; error = ''
-        with patch.dict(os.environ, env), patch.object(family_llm, '_chat_json', capture):
+        started = time.monotonic()
+        try:
+            with patch.dict(os.environ, env), patch.object(family_llm, '_chat_json', capture), \
+                    patch.object(family_llm, 'build_opener', lambda *handlers: _Recorder(real_build(*handlers), http)):
+                try:
+                    final = run_case(name, str(data))
+                except Exception as exc:
+                    error = '%s: %s' % (type(exc).__name__, exc)
+        finally:
+            record['wall_ms'] = round((time.monotonic() - started) * 1000)
+            record['ledger'], record['ledger_note'] = _ledger_rows(data / 'family.sqlite3')
+            record.update(captured=captured, http=http, final=final, error=error)
             try:
-                final = run_case(name, str(data))
+                record['score'] = score(name, final, captured.get('raw_model_output'))
+            except Exception as exc:
+                record['score_error'] = '%s: %s' % (type(exc).__name__, exc)
+            path.write_text(json.dumps(record, ensure_ascii=False, indent=1, default=str))
+
+
+def replay(out_dir):
+    """Zero-call replay of saved parsed replies through the current program; original records are not touched."""
+    import family_llm
+
+    def no_network(*args, **kwargs):
+        raise AssertionError('复放不得建立网络连接')
+    results = []
+    for path in sorted(Path(out_dir).glob('*-*.json')):
+        if path.name.startswith('replay'): continue
+        record = json.loads(path.read_text())
+        raw = (record.get('captured') or {}).get('raw_model_output')
+        entry = dict(case=record['case'], role=record['role'], original_error=record.get('error', ''),
+                     original_input_sha256=(record.get('captured') or {}).get('input_sha256'))
+        if raw is None:
+            entry.update(replayed=False, note='原调用没有解析回执，不复放；完整HTTP原体当时未保存'); results.append(entry); continue
+        seen = {}
+
+        def fixed(messages, schema, task, timeout=60, *, data_path=None):
+            seen['input_sha256'] = _input_hash(messages, schema, task)
+            return copy.deepcopy(raw)
+        final, error = None, ''
+        with patch.object(family_llm, '_chat_json', fixed), patch.object(family_llm, 'build_opener', no_network):
+            try:
+                final = run_case(record['case'], None)
             except Exception as exc:
                 error = '%s: %s' % (type(exc).__name__, exc)
-        record['wall_ms'] = round((time.monotonic() - started) * 1000)
-        with sqlite3.connect(data / 'family.sqlite3') as db:
-            db.row_factory = sqlite3.Row
-            record['ledger'] = [dict(r) for r in db.execute('SELECT * FROM llm_usage_ledger ORDER BY id')]
-        record.update(captured=captured, final=final, error=error,
-                      score=score(name, final, captured.get('raw_model_output')))
-        (out / (name + '-' + role + '.json')).write_text(json.dumps(record, ensure_ascii=False, indent=1, default=str))
+        entry.update(replayed=True, input_sha256=seen.get('input_sha256'),
+                     same_input=seen.get('input_sha256') == entry['original_input_sha256'], error=error, final=final,
+                     score=score(record['case'], final, raw))
+        results.append(entry)
+    return results
+
+
+def _school_a_reply():
+    rows = [('语文：背诵《秋夜》第2自然段', '背诵《秋夜》第2自然段，明天早读抽查。', '2026-10-08', 'learning', '背诵《秋夜》第2自然段，明天早读抽查', [1]),
+            ('语文：练习册第12页第1-4题', '完成练习册第12页第1-4题，第5题不用做；本周五交。', '2026-10-09', 'learning', '完成练习册第12页第1-5题，本周五交', [1, 6]),
+            ('数学：口算本第8页', '口算本第8页全部完成，明天交给课代表。', '2026-10-08', 'learning', '口算本第8页全部完成，明天交给课代表', [2]),
+            ('打印并签字交回秋游安全告知书', '打印《秋游安全告知书》，家长签字后10月10日前交回班主任；不需要盖章。', '2026-10-10', 'admin',
+             '请打印《秋游安全告知书》，家长签字后于10月10日前交回班主任，不需要盖章', [3]),
+            ('周四体检穿运动服', '周四学校体检，孩子穿运动服。', '2026-10-08', 'admin', '另外周四学校体检，请孩子穿运动服', [3]),
+            ('英语：Unit 3单词抄写两遍', '今晚把Unit 3单词每个抄写两遍，明天交。', '2026-10-08', 'learning', '今晚把Unit 3单词每个抄写两遍，明天交', [4]),
+            ('英语：周五听写Unit 3单词', '周五听写Unit 3单词。', '2026-10-09', 'learning', '周五听写Unit 3单词', [4]),
+            ('家长询问第5题', '家长提问，没有新增要求。', '', 'optional', '请问练习册第5题必须做吗？', [5])]
+    return [dict(title_quote=quote, focus='school', due=due, evidence=[dict(ref='message:synthetic-school-a:%d' % r) for r in refs],
+                 learning_subject=title.split('：')[0] if purpose == 'learning' else '', learning_goal_id='', task_title=title,
+                 task_goal=goal, task_advice='', task_state='reference' if refs == [5] else 'ready', task_reason='原文明确。',
+                 task_change='new', task_target_id='', task_purpose=purpose, task_submission='')
+            for title, goal, due, purpose, quote, refs in rows]
+
+
+def _homework_reply(name, wrong=False):
+    texts = {'homework-a': [('36 + 47 = ____', '83', '教师参考：83', ''), ('9 × 7 = ____', '56', '教师参考：63', '9×7=63，作答56与教师参考不同'),
+                            ('一根绳子长12米，剪去5米，还剩几米？', '', '', ''), ('下面哪个数是偶数？ A. 15  B. 27  C. 34  D. 41', 'C', '教师参考：C', ''),
+                            ('100 - 38 = ____', '72', '教师参考：62', '100-38=62，作答72与教师参考不同'),
+                            ('用一句话说明：为什么长方形的两组对边相等？', '因为它是长方形。', '教师参考：长方形两组对边分别平行且相等', '只重复“它是长方形”，没有说明对边平行且相等')],
+             'homework-b': [('chūn tiān（    ）', '春天', '教师参考：春天', ''), ('huā duǒ（    ）', '花朵', '教师参考：花朵', ''),
+                            ('péng yǒu（    ）', '明友', '教师参考：朋友', '“朋”写成了“明”'), ('（  ）天来了。 A. 春  B. 椿', 'A', 'AI自行推导：A（春）', ''),
+                            ('小鸟在（  ）上唱歌。 A. 树  B. 竖', 'B', 'AI自行推导：A（树）', '“树”才是树木，选B不对'), ('我们（  ）起读书。 A. 一  B. 衣', '', '', '')]}[name]
+    case = HOMEWORK_CASES[name]; sectioned = any(t['section'] for t in case['truth']); labels, items = [], []
+    for t, (question, student, answer, reason) in zip(case['truth'], texts):
+        label = ('%s、第%d题' % ('一二'[t['section'] - 1], t['number']) if sectioned else '第%d题' % t['number'])
+        if wrong: question, student, answer = '错题面', ('错答' if student else ''), (answer[:answer.find('：') + 1] + '错误答案' if answer else '')
+        labels.append(label)
+        items.append(dict(label=label, question=question, student_answer=student, answer=answer, judgment=t['judgments'][0],
+                          error_reason=reason, possible_cause='', steps='', uncertainty='' if student else '未作答，待孩子补做后再核',
+                          question_kind=HOMEWORK_CONTENT[name][(t['section'], t['number'])]['kind']))
+    return dict(items=items, coverage='已按文字原件核对全部题号。', comparison='', question_labels=labels)
 
 
 class FrozenTruthTest(unittest.TestCase):
@@ -302,56 +485,178 @@ class FrozenTruthTest(unittest.TestCase):
 
 
 class ProgramPathTest(unittest.TestCase):
-    """A reply that already matches truth must survive validation unchanged (separates program from model)."""
+    """A reply that already matches truth must survive validation (separates program from model)."""
 
     def test_truthful_answer_check_reply_keeps_every_frozen_result(self):
         import family_llm
-        for name, case in HOMEWORK_CASES.items():
-            sectioned = any(t['section'] for t in case['truth'])
-            labels, items = [], []
-            for t in case['truth']:
-                label = ('%s、第%d题' % ('一二'[t['section'] - 1], t['number']) if sectioned else '第%d题' % t['number'])
-                judged = t['judgments'][0] != 'unknown'
-                labels.append(label)
-                items.append(dict(label=label, question='题%d' % t['number'], student_answer='作答' if judged else '',
-                                  answer=(('教师参考：' if t['source'] == 'teacher' else 'AI自行推导：') + '参考') if judged else '',
-                                  judgment=t['judgments'][0], error_reason='与参考不同' if t['judgments'][0] == 'incorrect' else '',
-                                  possible_cause='', steps='', uncertainty='' if judged else '未作答，待补看',
-                                  question_kind='objective'))
-            reply = dict(items=items, coverage='已按文字原件核对全部题号。', comparison='', question_labels=labels)
-            with patch.object(family_llm, '_chat_json', return_value=copy.deepcopy(reply)):
-                final = run_case(name, None)
-            result = score_homework(name, final['questions'])
-            self.assertEqual((result['covered'], result['wrong_judgment'], result['undetermined'], result['source_errors']),
-                             (len(case['truth']), [], [], []), (name, result))
+        for name in HOMEWORK_CASES:
+            with patch.object(family_llm, '_chat_json', return_value=_homework_reply(name)):
+                result = score_homework(name, run_case(name, None)['questions'])
+            self.assertTrue(result['passed'], (name, result))
+            self.assertEqual(len(result['unanswered_kept']), 1, result)
+            with patch.object(family_llm, '_chat_json', return_value=_homework_reply(name, wrong=True)):
+                wrong = score_homework(name, run_case(name, None)['questions'])
+            # 首轮判据（题号/判定/来源前缀）对全错内容仍无错；内容判据必须失败。
+            self.assertEqual((wrong['covered'], wrong['wrong_judgment'], wrong['source_errors']), (6, [], []))
+            self.assertFalse(wrong['passed']); self.assertGreaterEqual(len(wrong['content_errors']), 6, wrong)
 
     def test_truthful_school_reply_citing_later_same_teacher_change_is_kept(self):
         # school-a: a numbered list, then the same teacher later says question 5 is no longer required.
+        texts = {e['ref']: e['text'] for e in SCHOOL_CASES['school-a']['evidence']}
+        proposals = _school_a_reply()
+        self.assertTrue(all(p['title_quote'] in texts[p['evidence'][0]['ref']] for p in proposals))
+        result = score_school('school-a', school_rows(_select_school_a(proposals)))
+        self.assertTrue(result['passed'], result)
+        self.assertEqual((result['covered'], result['usable']), (7, 7), result)
+
+    def test_unlocated_outcome_needs_disjoint_literal_quote_from_same_publisher(self):
         import family_agent
-        texts = {int(e['ref'].rsplit(':', 1)[1]): e['text'] for e in SCHOOL_CASES['school-a']['evidence']}
-        rows = [('语文：背诵《秋夜》第2自然段', '背诵《秋夜》第2自然段，明天早读抽查。', '2026-10-08', 'learning', '背诵《秋夜》第2自然段，明天早读抽查', [1]),
-                ('语文：练习册第12页第1-4题', '完成练习册第12页第1-4题，第5题不用做；本周五交。', '2026-10-09', 'learning', '完成练习册第12页第1-5题，本周五交', [1, 6]),
-                ('数学：口算本第8页', '口算本第8页全部完成，明天交给课代表。', '2026-10-08', 'learning', '口算本第8页全部完成，明天交给课代表', [2]),
-                ('打印并签字交回秋游安全告知书', '打印《秋游安全告知书》，家长签字后10月10日前交回班主任；不需要盖章。', '2026-10-10', 'admin',
-                 '请打印《秋游安全告知书》，家长签字后于10月10日前交回班主任，不需要盖章', [3]),
-                ('周四体检穿运动服', '周四学校体检，孩子穿运动服。', '2026-10-08', 'admin', '另外周四学校体检，请孩子穿运动服', [3]),
-                ('英语：Unit 3单词抄写两遍', '今晚把Unit 3单词每个抄写两遍，明天交。', '2026-10-08', 'learning', '今晚把Unit 3单词每个抄写两遍，明天交', [4]),
-                ('英语：周五听写Unit 3单词', '周五听写Unit 3单词。', '2026-10-09', 'learning', '周五听写Unit 3单词', [4]),
-                ('家长询问第5题', '家长提问，没有新增要求。', '', 'optional', '请问练习册第5题必须做吗？', [5])]
-        proposals = [dict(title_quote=quote, focus='school', due=due, evidence=[dict(ref='message:synthetic-school-a:%d' % r) for r in refs],
-                          learning_subject=title.split('：')[0] if purpose == 'learning' else '', learning_goal_id='', task_title=title,
-                          task_goal=goal, task_advice='', task_state='reference' if refs == [5] else 'ready', task_reason='原文明确。',
-                          task_change='new', task_target_id='', task_purpose=purpose, task_submission='')
-                     for title, goal, due, purpose, quote, refs in rows]
-        self.assertTrue(all(p['title_quote'] in texts[int(p['evidence'][0]['ref'].rsplit(':', 1)[1])] for p in proposals))
-        with patch.object(family_agent.family_llm, '_chat_json', return_value=dict(proposals=copy.deepcopy(proposals))):
-            final = run_case('school-a', None)
-        result = score_school('school-a', school_rows([i for i in final if '家长提问' not in i.get('body', '')]))
-        self.assertEqual((result['covered'], result['missed'], result['citation_errors']), (7, [], []), result)
+        base = _school_a_reply()
+        overlap = copy.deepcopy(base); overlap[5]['title_quote'] = '每个抄写两遍，明天交；周五听写Unit 3单词'
+        duplicate = copy.deepcopy(base) + [copy.deepcopy(base[5])]
+        missing = [p for n, p in enumerate(copy.deepcopy(base)) if n != 6]
+        other_teacher = copy.deepcopy(base); other_teacher[5]['evidence'].append(dict(ref='message:synthetic-school-a:2'))
+        other_source = copy.deepcopy(base); other_source[5]['evidence'].append(dict(ref='message:synthetic-other:1'))
+        foreign = dict(SCHOOL_CASES['school-a']['evidence'][3], ref='message:synthetic-other:1', text='收到。',
+                       related_messages=['message:synthetic-other:1'])
+        for label, proposals, extra in [('overlap', overlap, ()), ('duplicate', duplicate, ()), ('missing', missing, ()),
+                                        ('other_teacher', other_teacher, ()), ('other_source', other_source, (foreign,))]:
+            with self.subTest(label), self.assertRaises(family_agent.AgentError):
+                _select_school_a(proposals, extra)
+
+
+def _select_school_a(proposals, extra=()):
+    import family_agent
+    evidence = copy.deepcopy(SCHOOL_CASES['school-a']['evidence']) + [copy.deepcopy(e) for e in extra]
+    with patch.object(family_agent.family_llm, '_chat_json', return_value=dict(proposals=copy.deepcopy(proposals))):
+        return family_agent._select('school', evidence, school_goals=[], as_of=AS_OF)
+
+
+class NativeLedgerChangeTest(unittest.TestCase):
+    """Only a later change linked to the list, or naming one of its objects, leaves the literal ledger."""
+    LIST = 'message:synthetic-school-a:1'
+
+    def located(self, text, clock='19:25:00', publisher='publisher:synthetic-chinese', linked=True):
+        import family_agent
+        base = dict(copy.deepcopy(SCHOOL_CASES['school-a']['evidence'][0]), related_messages=[self.LIST])
+        ref = 'message:synthetic-school-a:9'
+        later = dict(ref=ref, text=text, time='2026-10-07T%s+08:00' % clock, kind='text', source='虚构班级群', sender='示例',
+                     publisher=publisher, content_incomplete=False, attachments=[],
+                     related_messages=[ref] + ([self.LIST] if linked else []))
+        return self.LIST in {a['ref'] for a in family_agent._school_native_actions([base, later])}
+
+    def test_linked_or_named_later_change_uses_correction_path(self):
+        self.assertFalse(self.located('补充：练习册第5题不用做，只做第1-4题。'))
+        self.assertFalse(self.located('《秋夜》第2自然段改为朗读两遍。', linked=False))
+
+    def test_unrelated_reverse_time_or_other_person_keeps_ledger(self):
+        self.assertTrue(self.located('周记本周不用写。', linked=False))
+        self.assertTrue(self.located('下周一的书法课不用带毛笔。', linked=False))
+        self.assertTrue(self.located('补充：练习册第5题不用做。', clock='18:30:00'))
+        self.assertTrue(self.located('第5题不用做吗？', publisher='publisher:synthetic-parent'))
+
+
+class ScorerHardeningTest(unittest.TestCase):
+    def test_dismissed_negated_and_foreign_rows_fail(self):
+        prefix = 'message:synthetic-school-a:'
+        items = []
+        for truth in SCHOOL_CASES['school-a']['truth']:
+            body = ' '.join(truth['keys']) + ' 两遍 1-4' + {'告知书': ' 不打印 不签字', '练习册1-4': ' 第5题仍必须做'}.get(truth['id'], '')
+            items.append(dict(title=truth['id'], body=body, due=truth['due'], evidence=[dict(ref=prefix + str(r)) for r in truth['refs'] + [5]],
+                              plan=dict(school_task=dict(state='dismissed', purpose=None, reason=''))))
+        result = score_school('school-a', school_rows(items))
+        self.assertFalse(result['passed'])
+        self.assertEqual((len(result['unusable']), len(result['purpose_errors']), len(result['citation_errors'])), (7, 7, 7))
+        self.assertTrue({'告知书', '练习册1-4'} <= set(result['requirement_errors']), result)
+        self.assertEqual(result['reference_errors'], ['5:未作参考保留'])
+
+    def test_reference_row_is_consumed_and_reference_as_task_fails(self):
+        prefix = 'message:synthetic-school-b:'
+        rows = [dict(text=' '.join(t['keys'] + [p.split('|')[0] for p in t['require']]), due=t['due'], purpose=t['purpose'],
+                     state='ready', reason='', refs=[prefix + str(r) for r in t['refs']]) for t in SCHOOL_CASES['school-b']['truth']]
+        reference = dict(text='答案仅供家长参考', due='', purpose='optional', state='reference', reason='', refs=[prefix + '4'])
+        good = score_school('school-b', rows + [reference])
+        self.assertTrue(good['passed'], good); self.assertEqual(good['extra_reference'], [])
+        bad = score_school('school-b', rows + [dict(reference, state='review')])
+        self.assertFalse(bad['passed']); self.assertIn('4:成了review事项', bad['reference_errors'])
+        late = score_school('school-b', [dict(r, due='', state='review', reason='日期无法核对') if '同步练习' in r['text'] else r
+                                         for r in rows] + [reference])
+        self.assertFalse(late['passed']); self.assertEqual(len(late['review']), 1)
+
+
+class _FakeOpener:
+    def __init__(self, reply=None, status=None):
+        self.reply, self.status, self.calls = reply, status, []
+
+    def open(self, request, timeout=None):
+        self.calls.append(dict(request.header_items()))
+        if self.status:
+            raise HTTPError(request.full_url, self.status, 'fake', None, io.BytesIO(b'{"error":{"message":"fake overload"}}'))
+        body = dict(model='fake-strong-reported', usage=dict(prompt_tokens=11, completion_tokens=7, total_tokens=18),
+                    choices=[dict(index=0, finish_reason='stop', message=dict(role='assistant', content=json.dumps(self.reply, ensure_ascii=False)))])
+        return io.BytesIO(json.dumps(body, ensure_ascii=False).encode())
+
+
+class LiveEvidenceTest(unittest.TestCase):
+    """Fixed fake HTTP only: no product model request is made by these checks."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp()); cfg = self.root / 'cfg'; cfg.mkdir()
+        (cfg / 'model.json').write_text(json.dumps(dict(base_url='https://fake-endpoint.invalid/v1', model='fake-strong',
+                                                       light_model='fake-light', api_key='fake-secret-key', reasoning_effort='low')))
+        self.cfg, self.out = str(cfg), self.root / 'out'
+        self.env = patch.dict(os.environ); self.env.start()
+        for key in ('FAMILY_LLM_BASE_URL', 'FAMILY_LLM_MODEL', 'FAMILY_LLM_LIGHT_MODEL', 'FAMILY_LLM_API_KEY', 'FAMILY_LLM_REASONING_EFFORT'):
+            os.environ.pop(key, None)
+
+    def tearDown(self):
+        self.env.stop(); shutil.rmtree(self.root)
+
+    def saved(self):
+        return '\n'.join(p.read_text(errors='replace') for p in self.out.rglob('*') if p.is_file())
+
+    def test_request_and_response_kept_without_secrets_and_rerun_refused(self):
+        import family_llm
+        fake = _FakeOpener(_homework_reply('homework-a'))
+        with patch.object(family_llm, 'build_opener', lambda *handlers: fake):
+            live(self.cfg, self.out, 'strong', ['homework-a'])
+        path = self.out / 'homework-a-strong.json'; before = path.read_bytes(); record = json.loads(before)
+        self.assertEqual(record['http']['request_body']['model'], 'fake-strong')
+        self.assertIn('fake-strong-reported', record['http']['response_body'])
+        self.assertEqual((record['ledger'][0]['state'], record['ledger'][0]['reported_model']), ('returned', 'fake-strong-reported'))
+        self.assertTrue(record['score']['final']['passed'], record['score'])
+        self.assertIn('Authorization', fake.calls[0])
+        self.assertNotIn('fake-secret-key', self.saved()); self.assertNotIn('fake-endpoint', self.saved())
+        with patch.object(family_llm, 'build_opener', lambda *handlers: fake), self.assertRaises(SystemExit):
+            live(self.cfg, self.out, 'strong', ['homework-a'])
+        self.assertEqual((len(fake.calls), path.read_bytes()), (1, before))
+
+    def test_http_failure_body_and_status_kept(self):
+        import family_llm
+        with patch.object(family_llm, 'build_opener', lambda *handlers: _FakeOpener(status=503)):
+            live(self.cfg, self.out, 'light', ['school-b'])
+        record = json.loads((self.out / 'school-b-light.json').read_text())
+        self.assertIn('模型服务未能处理请求', record['error'])
+        self.assertEqual((record['http']['http_status'], record['ledger'][0]['state']), (503, 'failed'))
+        self.assertIn('fake overload', record['http']['response_body'])
+        self.assertEqual(record['http']['request_body']['model'], 'fake-light')
+
+    def test_refusal_before_send_keeps_reason_without_ledger_table(self):
+        import family_llm
+        with patch.object(family_llm, 'homework_reference_draft', side_effect=family_llm.LLMUnavailable('预检拒绝：未发送')), \
+                patch.object(family_llm, 'build_opener', side_effect=AssertionError('不应联网')):
+            live(self.cfg, self.out, 'strong', ['homework-b'])
+        record = json.loads((self.out / 'homework-b-strong.json').read_text())
+        self.assertIn('预检拒绝', record['error']); self.assertEqual((record['ledger'], record['http']), ([], {}))
+        self.assertIn('请求未发出', record['ledger_note'])
 
 
 if __name__ == '__main__':
     if len(sys.argv) >= 5 and sys.argv[1] == '--live':
         live(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:] or list(SCHOOL_CASES) + list(HOMEWORK_CASES))
+    elif len(sys.argv) == 4 and sys.argv[1] == '--replay':
+        target = Path(sys.argv[3])
+        if target.exists(): raise SystemExit('复放结果已存在，未覆盖：' + target.name)
+        target.write_text(json.dumps(replay(sys.argv[2]), ensure_ascii=False, indent=1, default=str))
     else:
         unittest.main()
