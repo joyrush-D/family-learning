@@ -129,7 +129,7 @@ def duplicate_question_checks():
     """One visible question identity cannot carry two counts or opposite grades."""
     calls=0
     question=item(label='虚构甲卷第1题',question='虚构第1题：2+3=?',student_answer='5',answer='教师参考：5')
-    def generate(questions,teacher='虚构甲卷与乙卷第1题均为5。'):
+    def generate(questions,teacher='虚构甲卷与虚构乙卷第1题均为5。'):
         nonlocal calls
         raw=dict(items=questions,coverage='仅核本次明确的卷别与题号。')
         original=json.loads(json.dumps(raw))
@@ -154,7 +154,7 @@ def duplicate_question_checks():
             assert '重复' in str(error) and '题' in str(error)
         else: raise AssertionError('a repeated question identity must not become two visible judgments')
     # A whole-question teacher line no longer vouches for each sub-question, so the sub-question pair gets its own lines.
-    for labels,teacher in ((('虚构甲卷第1题','虚构乙卷第1题'),'虚构甲卷与乙卷第1题均为5。'),
+    for labels,teacher in ((('虚构甲卷第1题','虚构乙卷第1题'),'虚构甲卷与虚构乙卷第1题均为5。'),
                            (('虚构甲卷第1题（1）','虚构甲卷第1题（2）'),'虚构甲卷第1题（1）5；第1题（2）5。')):
         questions=[question|dict(label=labels[0]),question|dict(label=labels[1],student_answer='4',judgment='incorrect',error_reason='作答4与教师参考5不同。')]
         draft=generate(questions,teacher)
@@ -186,7 +186,7 @@ def summary_consistency_checks():
         dict(judgment='correct',error_reason='',possible_cause='没有依据的原因。'),
         dict(question='',question_kind='subjective'),
     ]
-    def generate(questions,coverage,comparison=None,*,review=True,program_scope=(),teacher='虚构甲卷 第1题B，第2题B，第3题B。'):
+    def generate(questions,coverage,comparison=None,*,review=True,program_scope=(),teacher='甲卷 第1题B，第2题B，第3题B。'):
         nonlocal calls
         raw=dict(items=questions,coverage=coverage)
         if comparison is not None: raw['comparison']=comparison
@@ -229,7 +229,7 @@ def summary_consistency_checks():
     mixed_scope='第3题正确；作文未提供，超出本批材料。'
     # A 乙卷 item cannot vouch for itself against a 甲卷-only teacher line, so this teacher text names 乙卷第3题 too.
     d=generate([original_unknown,item(label='乙卷第3题')],mixed_scope,stale_comparison,program_scope=[scope],
-               teacher='虚构甲卷 第1题B，第2题B，第3题B。虚构乙卷 第3题B。')
+               teacher='甲卷 第1题B，第2题B，第3题B。乙卷 第3题B。')
     assert [q['judgment'] for q in d['questions']]==['unknown','correct']
     assert '第3题正确' not in d['text']+d['coverage']+d['comparison']
     assert d['unverified_model_summary']==dict(coverage=mixed_scope,comparison=stale_comparison)
