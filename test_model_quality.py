@@ -872,8 +872,8 @@ SCHOOL_CASES['school-heldout-c'] = dict(held_out=False, evidence=_SCHOOL_C['evid
 C = 'message:synthetic-school-heldout-c:'
 # 每项应引用的原消息：未变的背诵可引用点名“不变”的更正5，计算卡可引用同老师仅供家长的参考6。
 SCHOOL_C_REFS = {'纸船背诵': [1, 5], '语文练习1-5': [1, 5], '计算卡C4': [2, 6], '阅读确认单': [3], '磁铁装置图': [4]}
-# 本修复后才走到的另一道既有守卫：确认单原文含“阅读”且要交回，转家长核对（冻结真值为ready）；不属本根因，未在本分支放宽。
-SCHOOL_C_REVIEW = {'阅读确认单': '原文同时提到学习活动和打卡/提交，请核对是否含作业'}
+# 消息3是待打印签字的确认单，原文直接写明“不是阅读作业”：按冻结真值admin/ready，行动逐项保留，不关联学习目标。
+SCHOOL_C_FORM = ('打印《校内阅读活动确认单》', '家长在确认栏签字', '不需要盖章', '2026年10月9日交班主任')
 # 消息5末句是肯定、明确的“不变”。前三条是本机独立验收的固定虚构反例（否定、点名别的科目），后三条是独立等价的否定、问句、尚未确定变体：都不能证明背诵不变。
 SCHOOL_C_KEEP = '《纸船》第二节的背诵和抽查安排不变。'
 SCHOOL_C_NOT_KEPT = {'并非不变': '《纸船》第二节的背诵和抽查安排并非不变。', '不是不变': '《纸船》第二节的背诵和抽查安排不是不变。',
@@ -900,8 +900,7 @@ def _school_c_matches(test, items, label=''):
         refs = [C + str(n) for n in SCHOOL_C_REFS[truth['id']]]
         found = [n for n, item in enumerate(items) if n not in used and sorted(e['ref'] for e in item['evidence']) == refs
                  and item['due'] == truth['due']
-                 and item['plan']['school_task']['state'] == ('review' if truth['id'] in SCHOOL_C_REVIEW else 'ready')
-                 and SCHOOL_C_REVIEW.get(truth['id'], '') in item['plan']['school_task']['reason']
+                 and item['plan']['school_task']['state'] == 'ready'
                  and item['plan']['school_task']['purpose'] == truth['purpose'] and all(k in item['title'] + item['body'] for k in truth['keys'])]
         test.assertEqual(len(found), 1, (label, truth['id'], [(i['title'], i['due'], i['plan']['school_task']['state'],
                                                                 [e['ref'][-1] for e in i['evidence']]) for i in items]))
@@ -912,6 +911,10 @@ def _school_c_matches(test, items, label=''):
     test.assertFalse(re.search(r'1\s*[-–—~至到]\s*5|第6题', text['纸船背诵']), text['纸船背诵'])
     test.assertFalse(re.search(r'1\s*[-–—~至到]\s*6', text['语文练习1-5']), text['语文练习1-5'])
     test.assertFalse(re.search(r'第\d题\s*\d|12，|54', text['计算卡C4']), text['计算卡C4'])
+    form = next(i for i in items if '确认单' in i['title'] + i['body'])
+    test.assertEqual(form['plan']['school_task']['purpose'], 'admin', label)
+    test.assertFalse(form['plan'].get('school_learning'), (label, form['plan']))
+    test.assertTrue(all(part in form['body'] for part in SCHOOL_C_FORM), (label, form['body']))
 
 
 class SchoolCorrectionScopeTest(unittest.TestCase):
@@ -930,6 +933,18 @@ class SchoolCorrectionScopeTest(unittest.TestCase):
                               result['citation_errors'], result['extra']), (5, 5, [], [], [], [], []), result)
             # 冻结评分器要求消息6另有参考行；本回答把它随原任务引用，这一判据如实保留为未满足，不改评分器。
             self.assertEqual(result['reference_errors'], ['6:未作参考保留'], result)
+
+    def test_form_summary_without_direct_denial_of_reading_homework_stays_for_review(self):
+        # 选择层复用_school_brief同一守卫：摘要把否定写成双重否定、反问、条件或其后接着布置阅读时，确认单不自动加入。
+        for clause in ('该表单并非不是阅读作业。', '该表单不是阅读作业，对吗？', '如果该表单不是阅读作业，就签字。',
+                       '该表单不是阅读作业；请阅读《虚构短文》并写一段感想。'):
+            rows = copy.deepcopy(_SCHOOL_C['reply']['proposals'])
+            rows[3]['task_goal'] = rows[3]['task_goal'].replace('该表单不是阅读作业。', clause)
+            for real in (False, True):
+                with self.subTest(clause, real=real):
+                    row = _school_c_row(_select_school_c(rows, real=real), '确认单'); brief = row['plan']['school_task']
+                    self.assertEqual((brief['purpose'], brief['state'], row['due']), ('admin', 'review', '2026-10-09'), brief['reason'])
+                    self.assertIn('同时提到学习活动', brief['reason'])
 
     def test_unchanged_sibling_and_referenced_task_stay_exactly_once(self):
         import family_agent
@@ -1094,12 +1109,12 @@ class SchoolFirstBatchCancelTest(unittest.TestCase):
     """A proven named cancel of a first-batch outcome leaves no new/ready task for it; partial or unrelated cancels change nothing."""
 
     def assertSiblings(self, items, recite):
-        # 未变兄弟项照旧：背诵、计算卡、磁铁图（截止未知仍ready）各自ready；确认单沿既有admin/review限制（不在此项放宽）。
-        for key, due, cited in (('纸船', '2026-10-07', recite), ('计算卡', '2026-10-08', None), ('磁铁', '', [C + '4'])):
+        # 未变兄弟项照旧：背诵、计算卡、磁铁图（截止未知仍ready）、确认单（admin，后天交）各自ready。
+        for key, due, cited in (('纸船', '2026-10-07', recite), ('计算卡', '2026-10-08', None), ('磁铁', '', [C + '4']),
+                                ('确认单', '2026-10-09', [C + '3'])):
             row = _school_c_row(items, key); brief = row['plan']['school_task']
             self.assertEqual((brief['change'], brief['state'], row['due']), ('new', 'ready', due), (key, row['title']))
             if cited: self.assertEqual(sorted(e['ref'] for e in row['evidence']), cited, key)
-        self.assertEqual(_school_c_row(items, '确认单')['plan']['school_task']['state'], 'review')
 
     def test_named_whole_cancel_keeps_no_new_ready_original_at_select(self):
         import family_agent
@@ -1448,6 +1463,21 @@ class RealIngestTest(unittest.TestCase):
                                                   (C + '2', '完成计算卡C4第1-8题，后天交；每题写出计算过程', [])])
         _school_c_matches(self, run['items'], 'ingest')
         self.assertEqual(run['originals'], [e['text'] for e in _SCHOOL_C['evidence']])
+        # 确认单两轮后仍只一条：自动加入（accepted/ready），后天=10月9日，原消息3逐字保存一次。
+        form = [(i['state'], i['plan']['school_task']['state'], i['due']) for i in run['items'] if '确认单' in i['title'] + i['body']]
+        self.assertEqual(form, [('accepted', 'ready', '2026-10-09')], run['results'])
+        self.assertEqual(run['originals'].count(_SCHOOL_C['evidence'][2]['text']), 1)
+
+    def test_school_c_form_double_negation_through_ingest_stays_pending_once(self):
+        # 原文与摘要都写“并非不是阅读作业”：保存层同样不自动加入，原文逐字保存，重跑不重复。
+        evidence = copy.deepcopy(_SCHOOL_C['evidence']); evidence[2]['text'] = evidence[2]['text'].replace('不是阅读作业', '并非不是阅读作业')
+        reply = copy.deepcopy(_SCHOOL_C['reply']); goal = reply['proposals'][3]['task_goal']
+        reply['proposals'][3]['task_goal'] = goal.replace('该表单不是阅读作业', '该表单并非不是阅读作业')
+        with patch.dict(SCHOOL_CASES, {'school-heldout-c': dict(SCHOOL_CASES['school-heldout-c'], evidence=evidence)}):
+            run = ingest_school('school-heldout-c', reply, runs=2)
+        self.assertEqual(run['originals'], [e['text'] for e in evidence])
+        form = [(i['state'], i['plan']['school_task']['state'], i['due']) for i in run['items'] if '确认单' in i['title'] + i['body']]
+        self.assertEqual((form, run['counts'][0] == run['counts'][1]), ([('pending', 'review', '2026-10-09')], True), run['results'])
 
     def test_school_c_negated_or_other_subject_unchanged_clause_saves_no_ready_recitation_citing_it(self):
         five = _SCHOOL_C['evidence'][4]['text']

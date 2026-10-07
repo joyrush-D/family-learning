@@ -639,6 +639,31 @@ class AgentTests(unittest.TestCase):
             evidence=[dict(ref='message:synthetic-negative:3',text=text,kind='text')],separate_learning=True)
         self.assertEqual((brief['state'],brief['goal']),('ready',text))
 
+    def test_named_form_directly_denying_compound_learning_object_is_admin_only(self):
+        # Only a sentence that starts with the named form and ends right after the denied
+        # compound object (“阅读作业”) is admin. Inverse, asked, conditional, undetermined,
+        # quoted, subject-less or continued-learning wording stays guarded; text never changes.
+        head='班级事务：请打印《校内阅读活动确认单》，家长在确认栏签字，后天交班主任，不需要盖章。'
+        ready=('这是待打印签字的表单，不是阅读作业。','该表单不是阅读作业。','该表单并非阅读作业。','该表单不属于阅读作业。',
+               '该表单不作为阅读作业。','该表单不是练习作业。','这份确认单不是背诵作业。')
+        review=('并非不是阅读作业。','不是阅读作业，对吗？','如果这不是阅读作业，就签字。','是否不是阅读作业尚未确定。',
+                '不是阅读作业；请阅读《虚构短文》并写一段感想。','不是阅读作业；完成第1-3题后再签字。','不是阅读作业。',
+                '该表单并非不是阅读作业。','这是待打印签字的表单，并非不是阅读作业。','该表单不是阅读作业，对吗？',
+                '该表单不是阅读作业？','这是待打印签字的表单，不是阅读作业吗？','如果该表单不是阅读作业，就签字。',
+                '该表单是否不是阅读作业尚未确定。','该表单不是阅读作业尚未确定。','老师说该表单不是阅读作业。',
+                '“该表单不是阅读作业。”','并非（签字后。该表单不是阅读作业。）','该表单不是阅读作业；请阅读《虚构短文》并写一段感想。',
+                '该表单不是阅读作业；完成第1-3题后再签字。','并非不是练习作业。','该表单并非不是练习作业。','如果这不是背诵作业，就签字。')
+        for clause,state in [(c,'ready') for c in ready]+[(c,'review') for c in review]:
+            text=head+clause
+            value=dict(title='班级事务：打印并签署阅读活动确认单',goal=text,advice='',state='ready',reason='',purpose='admin')
+            for separate in (False,True):
+                with self.subTest(clause=clause,separate=separate):
+                    evidence=[dict(ref='message:synthetic-admin-form:1',text=text,kind='text',unread=False)]
+                    brief=agent._school_brief(value,evidence=evidence,separate_learning=separate)
+                    self.assertEqual((brief['state'],brief['purpose'],brief['goal']),(state,'admin',text))
+                    self.assertEqual(evidence[0]['text'],text)
+                    if state=='review':self.assertIn('同时提到学习活动',brief['reason'])
+
     def test_negated_child_action_parent_notice_is_collected_once_with_original_deadline(self):
         self.now=dt.datetime(2026,10,4,10,tzinfo=agent.TZ)
         text='请家长后天完成学校通讯录中的紧急联系电话核对；有误修改，无误点“已核对”。不要在群里发电话号码或核对截图，不用让孩子抄写。'
