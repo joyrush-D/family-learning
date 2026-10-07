@@ -150,18 +150,42 @@ HOMEWORK_CONTENT = {  # 原件中明确的题面、孩子原答与教师参考/�
 }
 
 
+NEGATED = r'不是|不等于|不为|并非|≠|!='
+UNANSWERED = (r'未作答|未答|空白|作答为空|(?:没有|没|未|无)(?:提供)?(?:孩子|学生)?(?:的)?(?:本题)?(?:作答|答题|填写|填答)'
+              r'|(?:孩子|学生)(?:本题)?(?:未|没有?)(?:提供)?(?:作答|答题|填写)')
+
+
 def _value_ok(spec, text):
-    """Whole objective value: one final number, one option letter or the exact word; subjective keeps the frozen requirement."""
+    """Whole objective value: one final signed number, one option letter or the exact word; subjective keeps the frozen requirement."""
     kind, value = spec[0], spec[1]
     text = re.sub(r'[。.；;，,]+$', '', re.sub(r'\s+', '', str(text or '')))
+    if kind in ('num', 'choice') and re.search(NEGATED, text):
+        return False  # “不是83”不等于83
     if kind == 'num':
-        return re.findall(r'\d+(?:\.\d+)?', text.rsplit('=', 1)[-1]) == [value]
+        return re.findall(r'-?\d+(?:\.\d+)?', text.rsplit('=', 1)[-1]) == [value]
     if kind == 'choice':
         letters = set(re.findall(r'(?<![A-Za-z])[A-H](?![A-Za-z])', text))
         return letters == {value} if letters else text == spec[2]
     if kind == 'word':
         return re.sub(r'[（(][^）)]*[）)]', '', text) == value
-    return bool(re.search(value, text))
+    # 冻结原句前加否定（“不是因为…”“不平行…”）改变含义，不能靠子串出现通过。
+    return any(not re.search(r'(?:不是|不|没有|没|并非|非|无|未)$', text[:m.start()]) for m in re.finditer(value, text))
+
+
+def _stem_core(text):
+    """The stem before options, without blanks or punctuation; taken from the frozen material, not new gold."""
+    return re.sub(r'[\s_（）()　，。？?！!、：:；;]+', '', re.split(r'\s[A-H][.．、]', text, maxsplit=1)[0])
+
+
+def _frozen_stems(name):
+    case = HOMEWORK_CASES[name]; sectioned = any(t['section'] for t in case['truth'])
+    stems, section = {}, 0
+    for line in case['question']['text'].splitlines():
+        line = line.strip()
+        if sectioned and re.match(r'^[一二三]、', line): section = SECTION[line[0]]; continue
+        found = re.match(r'^(\d+)[.．、]\s*(.+)$', line)
+        if found: stems[(section, int(found[1]))] = _stem_core(found[2])
+    return stems
 
 
 USABLE = ('ready', 'review')
@@ -266,15 +290,17 @@ def score_homework(name, questions):
             if teacher != (truth['source'] == 'teacher'): result['source_errors'].append(tag)
             if truth['source'] == 'ai' and not answer_text.startswith('AI自行推导：'): result['ai_unlabeled'].append(tag)
         content = HOMEWORK_CONTENT[name][key]
+        core = _frozen_stems(name).get(key, '')
         question, student = _flat(item.get('question')), _flat(item.get('student_answer')).rstrip('。.；;')
         answer = re.sub(r'^(教师参考|AI自行推导)：', '', answer_text)
         if not question: result['content_errors'].append(tag + ':题面缺失')
-        elif not re.search(content['question'], question): result['content_errors'].append(tag + ':题面不符')
+        elif not re.search(content['question'], question) or core not in _stem_core(str(item.get('question') or '')):
+            result['content_errors'].append(tag + ':题面不符')  # 含同一关键词的另一题不能冒充原题
         if content['student'] is None:
             if student: result['content_errors'].append(tag + ':未作答却填了原答')
             elif judgment != 'unknown': pass
             # 未判定须说明是未作答；有教师参考的题不能只称“无教师参考/参考未覆盖”。
-            elif not re.search(r'未作答|没有作答|没作答|未答|空白|未填|没有填写|未写', _flat(item.get('uncertainty')) + _flat(item.get('error_reason'))):
+            elif not re.search(UNANSWERED, _flat(item.get('uncertainty')) + _flat(item.get('error_reason'))):
                 result['reason_errors'].append(tag + ':未说明未作答')
             elif truth['source'] == 'teacher' and re.search(r'(无|没有|缺少?|未提供|不含|未覆盖)[^。；，,]{0,4}参考|参考[^。；，,]{0,4}(未覆盖|缺失|没有)',
                                                             _flat(item.get('uncertainty')) + _flat(item.get('error_reason'))):
@@ -283,7 +309,7 @@ def score_homework(name, questions):
         elif not _value_ok(content['student'], student): result['content_errors'].append(tag + ':原答不符')
         if (judgment in ('correct', 'incorrect') or answer.strip()) and not _value_ok(content['answer'], answer):
             result['content_errors'].append(tag + ':答案不符')
-        if item.get('question_kind') in ('objective', 'subjective') and item['question_kind'] != content['kind']:
+        if 'question_kind' in item and item['question_kind'] != content['kind']:  # unknown 不能绕过已明确的题型
             result['content_errors'].append(tag + ':题型不符')
     result['extra'] += ['%s-%s' % key for key in found]
     result['total'] = len(case['truth'])
@@ -349,6 +375,31 @@ def _ledger_rows(path):
         return [dict(r) for r in db.execute('SELECT * FROM llm_usage_ledger ORDER BY id')], ''
 
 
+REDACTED = '[已隐去：配置凭据或端点回显]'
+
+
+def _redact_record(record, secrets):
+    """Configured secrets echoed upstream never reach disk; each changed field keeps the SHA-256 of its raw text only."""
+    marks = {}
+
+    def walk(value, path):
+        if isinstance(value, str):
+            raw = value
+            for secret in secrets:
+                for form in {secret, json.dumps(secret)[1:-1]}:
+                    value = value.replace(form, REDACTED)
+            if value != raw: marks[path] = hashlib.sha256(raw.encode('utf-8')).hexdigest()
+            return value
+        if isinstance(value, dict): return {k: walk(v, path + '/' + str(k)) for k, v in value.items()}
+        if isinstance(value, list): return [walk(v, '%s/%d' % (path, n)) for n, v in enumerate(value)]
+        return value
+    clean = walk(record, '')
+    if marks:
+        clean['redaction'] = dict(marker=REDACTED, raw_sha256=marks,
+                                  note='上游回显了配置凭据或端点：这些字段已隐去，保存内容不再逐字完整；只留原文SHA-256，原文未保存。')
+    return clean
+
+
 def live(config_dir, out_dir, role, names):
     """One request per case for one configured model; failures are kept, never retried or overwritten."""
     import family_llm
@@ -398,6 +449,8 @@ def live(config_dir, out_dir, role, names):
                 record['score'] = score(name, final, captured.get('raw_model_output'))
             except Exception as exc:
                 record['score_error'] = '%s: %s' % (type(exc).__name__, exc)
+            record = _redact_record(json.loads(json.dumps(record, ensure_ascii=False, default=str)),
+                                    [v for v in (config['api_key'], config['base_url']) if v])
             path.write_text(json.dumps(record, ensure_ascii=False, indent=1, default=str))
 
 
@@ -949,7 +1002,7 @@ class ActionDateTest(unittest.TestCase):
     def test_each_action_keeps_its_own_arrangement_date(self):
         self.assertEqual({k: (r['due'], r['state']) for k, r in self.rows().items()},
                          {'背诵': ('2026-10-08', 'ready'), '运动服': ('2026-10-08', 'ready'), '抄写': ('2026-10-08', 'ready'),
-                          '听写': ('2026-10-09', 'ready'), '告知书': ('2026-10-10', 'ready')})
+                          '听写': ('2026-10-09', 'ready'), '告知书': ('2026-10-10', 'ready'), '练习册': ('2026-10-09', 'ready')})
 
     def test_borrowed_recurring_past_range_sent_day_or_invented_dates_are_not_ready(self):
         def clause(n, old, new):
