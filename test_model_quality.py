@@ -864,6 +864,100 @@ class SiblingCoverageTest(unittest.TestCase):
             _select_school_a(revised[1:], evidence=evidence)
 
 
+# 2026-10-07 学校C：修复前r211验收保留的全虚构反例（6条完整原消息、冻结真值、较强模型一次已解析回答，均原样）。
+# 本修复已读到它，自此只作回归，不是新的held-out或准确率证明。消息6仅供家长参考，回答把它随计算卡C4引用、没有单独参考行。
+_SCHOOL_C = json.loads(r'''{"evidence":[{"ref":"message:synthetic-school-heldout-c:1","text":"语文：1. 背诵《纸船》第二节，明天早读逐人抽查；2. 完成语文练习本第18页第1-6题，10月9日交。两项都请家长检查。","time":"2026-10-06T18:10:00+08:00","kind":"text","source":"全虚构验收班级文字来源","sender":"虚构语文教师甲","publisher":"publisher:synthetic-c-chinese","content_incomplete":false,"attachments":[],"related_messages":["message:synthetic-school-heldout-c:1","message:synthetic-school-heldout-c:5"]},{"ref":"message:synthetic-school-heldout-c:2","text":"数学：完成计算卡C4第1-8题，后天交；每题写出计算过程。","time":"2026-10-06T18:20:00+08:00","kind":"text","source":"全虚构验收班级文字来源","sender":"虚构数学教师乙","publisher":"publisher:synthetic-c-math","content_incomplete":false,"attachments":[],"related_messages":["message:synthetic-school-heldout-c:2","message:synthetic-school-heldout-c:6"]},{"ref":"message:synthetic-school-heldout-c:3","text":"班级事务：请打印《校内阅读活动确认单》，家长在确认栏签字，后天交班主任，不需要盖章。该单空白正文已展开为：校内阅读活动确认单；家长确认栏：________。这是待打印签字的表单，不是阅读作业。","time":"2026-10-07T18:05:00+08:00","kind":"text","source":"全虚构验收班级文字来源","sender":"虚构班主任丙","publisher":"publisher:synthetic-c-head","content_incomplete":false,"attachments":[],"related_messages":["message:synthetic-school-heldout-c:3"]},{"ref":"message:synthetic-school-heldout-c:4","text":"科学：在科学本画出磁铁吸引铁钉的实验装置，给磁铁和铁钉各标名称。截止日期另行通知。","time":"2026-10-07T18:15:00+08:00","kind":"text","source":"全虚构验收班级文字来源","sender":"虚构科学教师丁","publisher":"publisher:synthetic-c-science","content_incomplete":false,"attachments":[],"related_messages":["message:synthetic-school-heldout-c:4"]},{"ref":"message:synthetic-school-heldout-c:5","text":"更正昨天的语文练习本第18页：只做第1-5题，第6题不用做；10月9日交，家长检查要求不变。《纸船》第二节的背诵和抽查安排不变。","time":"2026-10-07T18:25:00+08:00","kind":"text","source":"全虚构验收班级文字来源","sender":"虚构语文教师甲","publisher":"publisher:synthetic-c-chinese","content_incomplete":false,"attachments":[],"related_messages":["message:synthetic-school-heldout-c:5","message:synthetic-school-heldout-c:1"]},{"ref":"message:synthetic-school-heldout-c:6","text":"资料说明：《计算卡C4教师参考-虚构.txt》全文已展开：第1题12，第2题18，第3题24，第4题30，第5题36，第6题42，第7题48，第8题54。仅供家长核对，不要求抄写答案，不新增作业，不更改计算卡C4的题目范围、计算过程要求或10月8日交期。","time":"2026-10-07T18:35:00+08:00","kind":"text","source":"全虚构验收班级文字来源","sender":"虚构数学教师乙","publisher":"publisher:synthetic-c-math","content_incomplete":false,"attachments":[],"related_messages":["message:synthetic-school-heldout-c:6","message:synthetic-school-heldout-c:2"]}],"truth":[{"id":"纸船背诵","keys":["背诵","纸船"],"require":["第二节|第2节","家长.*检查"],"due":"2026-10-07","purpose":"learning","refs":[1]},{"id":"语文练习1-5","keys":["练习本","18"],"require":["1\\s*[-–—~至到]\\s*5","家长.*检查"],"due":"2026-10-09","purpose":"learning","refs":[1,5]},{"id":"计算卡C4","keys":["计算卡","C4"],"require":["1\\s*[-–—~至到]\\s*8","每题.*计算过程"],"due":"2026-10-08","purpose":"learning","refs":[2]},{"id":"阅读确认单","keys":["阅读活动确认单"],"require":["打印","家长.*签字"],"forbid_stamp":true,"due":"2026-10-09","purpose":"admin","refs":[3]},{"id":"磁铁装置图","keys":["磁铁","铁钉"],"require":["画","标.*名称"],"due":"","purpose":"learning","refs":[4]}],"reference_only":[6],"reply":{"proposals":[{"title_quote":"背诵《纸船》第二节，明天早读逐人抽查","focus":"school","due":"2026-10-07","evidence":[{"ref":"message:synthetic-school-heldout-c:1"},{"ref":"message:synthetic-school-heldout-c:5"}],"learning_subject":"语文","learning_goal_id":"","task_title":"语文：背诵《纸船》第二节","task_goal":"背诵《纸船》第二节。\n2026年10月7日早读时逐人抽查。\n请家长检查。\n后续更正明确：《纸船》第二节的背诵和抽查安排不变。","task_advice":"可让孩子先读熟，再尝试脱离课本背诵，重点核对第二节内容。","task_change":"new","task_target_id":"","task_state":"ready","task_reason":"原文明确要求全班完成背诵，并说明抽查时间和家长检查要求。","task_purpose":"learning","task_submission":"2026年10月7日早读逐人抽查；不另收书面作业。"},{"title_quote":"更正昨天的语文练习本第18页：只做第1-5题，第6题不用做；10月9日交，家长检查要求不变。","focus":"school","due":"2026-10-09","evidence":[{"ref":"message:synthetic-school-heldout-c:1"},{"ref":"message:synthetic-school-heldout-c:5"}],"learning_subject":"语文","learning_goal_id":"","task_title":"语文：完成练习本第18页第1-5题","task_goal":"完成语文练习本第18页第1—5题。\n第6题不用做。\n2026年10月9日交。\n请家长检查。","task_advice":"完成后可按题号逐项核对，确认第6题留空不做。","task_change":"new","task_target_id":"","task_state":"ready","task_reason":"原要求与同批更正均已读清，题目范围、提交日期和家长检查要求明确。","task_purpose":"learning","task_submission":"2026年10月9日交语文练习本。"},{"title_quote":"完成计算卡C4第1-8题，后天交；每题写出计算过程。","focus":"school","due":"2026-10-08","evidence":[{"ref":"message:synthetic-school-heldout-c:2"},{"ref":"message:synthetic-school-heldout-c:6"}],"learning_subject":"数学","learning_goal_id":"","task_title":"数学：完成计算卡C4第1-8题","task_goal":"完成计算卡C4第1—8题。\n每题必须写出计算过程。\n2026年10月8日交。\n教师参考答案仅供家长核对，不要求抄写答案。\n不新增作业，不更改题目范围、计算过程要求或10月8日交期。","task_advice":"孩子完成后，家长可参考已给出的答案核对结果，但仍应重点检查计算过程是否完整。","task_change":"new","task_target_id":"","task_state":"ready","task_reason":"题目范围、过程要求、交期和参考答案用途均明确。","task_purpose":"learning","task_submission":"2026年10月8日交计算卡C4。"},{"title_quote":"请打印《校内阅读活动确认单》，家长在确认栏签字，后天交班主任，不需要盖章。","focus":"school","due":"2026-10-09","evidence":[{"ref":"message:synthetic-school-heldout-c:3"}],"learning_subject":"","learning_goal_id":"","task_title":"班级事务：打印并签署阅读活动确认单","task_goal":"打印《校内阅读活动确认单》。\n家长在确认栏签字。\n不需要盖章。\n2026年10月9日交班主任。\n该表单不是阅读作业。","task_advice":"打印后只需检查家长确认栏已签字，无需额外准备阅读内容。","task_change":"new","task_target_id":"","task_state":"ready","task_reason":"原文明确要求打印、家长签字、不得盖章，并说明交回对象和日期。","task_purpose":"admin","task_submission":"2026年10月9日交班主任。"},{"title_quote":"在科学本画出磁铁吸引铁钉的实验装置，给磁铁和铁钉各标名称。","focus":"school","due":"","evidence":[{"ref":"message:synthetic-school-heldout-c:4"}],"learning_subject":"科学","learning_goal_id":"","task_title":"科学：画磁铁吸引铁钉实验装置","task_goal":"在科学本上画出磁铁吸引铁钉的实验装置。\n给磁铁和铁钉分别标出名称。\n截止日期另行通知。","task_advice":"画图时可先确定磁铁和铁钉的位置，再用箭头或连线表现吸引关系。","task_change":"new","task_target_id":"","task_state":"ready","task_reason":"具体绘图和标注要求明确；仅截止日期尚未通知，不影响任务成立。","task_purpose":"learning","task_submission":"画在科学本上；提交时间另行通知。"}]}}''')
+SCHOOL_CASES['school-heldout-c'] = dict(held_out=False, evidence=_SCHOOL_C['evidence'], truth=_SCHOOL_C['truth'],
+                                        reference_only=_SCHOOL_C['reference_only'])
+C = 'message:synthetic-school-heldout-c:'
+# 每项应引用的原消息：未变的背诵可引用点名“不变”的更正5，计算卡可引用同老师仅供家长的参考6。
+SCHOOL_C_REFS = {'纸船背诵': [1, 5], '语文练习1-5': [1, 5], '计算卡C4': [2, 6], '阅读确认单': [3], '磁铁装置图': [4]}
+
+
+def _select_school_c(proposals=None, real=False, **changes):
+    """changes: m<N>=字段更新，作用于冻结原消息副本；real 时每条消息只关联自身（实际入库形状）。"""
+    import family_agent
+    evidence = copy.deepcopy(_SCHOOL_C['evidence'])
+    for e in evidence:
+        if real: e['related_messages'] = [e['ref']]
+        e.update(changes.get('m' + e['ref'].rsplit(':', 1)[1], {}))
+    reply = dict(proposals=copy.deepcopy(proposals if proposals is not None else _SCHOOL_C['reply']['proposals']))
+    with patch.object(family_agent.family_llm, '_chat_json', return_value=reply):
+        return family_agent._select('school', evidence, school_goals=[], as_of=AS_OF)
+
+
+def _school_c_matches(test, items, label=''):
+    """Each frozen outcome exactly once: its refs, own date, ready state and purpose; the change stays on its own item."""
+    used = set()
+    for truth in SCHOOL_CASES['school-heldout-c']['truth']:
+        refs = [C + str(n) for n in SCHOOL_C_REFS[truth['id']]]
+        found = [n for n, item in enumerate(items) if n not in used and sorted(e['ref'] for e in item['evidence']) == refs
+                 and item['due'] == truth['due'] and item['plan']['school_task']['state'] == 'ready'
+                 and item['plan']['school_task']['purpose'] == truth['purpose'] and all(k in item['title'] + item['body'] for k in truth['keys'])]
+        test.assertEqual(len(found), 1, (label, truth['id'], [(i['title'], i['due'], i['plan']['school_task']['state'],
+                                                                [e['ref'][-1] for e in i['evidence']]) for i in items]))
+        used.add(found[0])
+    text = {next(t['id'] for t in SCHOOL_CASES['school-heldout-c']['truth'] if all(k in i['title'] + i['body'] for k in t['keys'])):
+            i['title'] + '\n' + i['body'] for i in items}
+    test.assertTrue(re.search(r'第二节', text['纸船背诵']) and re.search('家长.*检查', text['纸船背诵']), text['纸船背诵'])
+    test.assertFalse(re.search(r'1\s*[-–—~至到]\s*5|第6题', text['纸船背诵']), text['纸船背诵'])
+    test.assertFalse(re.search(r'1\s*[-–—~至到]\s*6', text['语文练习1-5']), text['语文练习1-5'])
+    test.assertFalse(re.search(r'第\d题\s*\d|12，|54', text['计算卡C4']), text['计算卡C4'])
+
+
+class SchoolCorrectionScopeTest(unittest.TestCase):
+    """A later same-teacher message changes only the outcome it names; a sibling it names unchanged may cite it."""
+
+    def test_frozen_reply_keeps_five_outcomes_with_frozen_or_real_links(self):
+        import family_agent
+        for real in (False, True):
+            evidence = [dict(e, related_messages=[e['ref']]) if real else e for e in copy.deepcopy(_SCHOOL_C['evidence'])]
+            ledger = {a['quote'][:4]: [c['ref'] for c in a['changes']] for a in family_agent._school_native_actions(evidence)}
+            self.assertEqual(ledger, {'背诵《纸': [], '完成语文': [C + '5'], '完成计算': []}, (real, ledger))
+            items = _select_school_c(real=real)
+            _school_c_matches(self, items, 'real' if real else 'frozen')
+            result = score_school('school-heldout-c', school_rows(items))
+            self.assertEqual((result['covered'], result['usable'], result['due_errors'], result['purpose_errors'], result['requirement_errors'],
+                              result['citation_errors'], result['extra']), (5, 5, [], [], [], [], []), result)
+            # 冻结评分器要求消息6另有参考行；本回答把它随原任务引用，这一判据如实保留为未满足，不改评分器。
+            self.assertEqual(result['reference_errors'], ['6:未作参考保留'], result)
+
+    def test_unchanged_sibling_and_referenced_task_stay_exactly_once(self):
+        import family_agent
+        base = _SCHOOL_C['reply']['proposals']
+        for label, proposals in [('drop_recite', base[1:]), ('dup_recite', base + [copy.deepcopy(base[0])]),
+                                 ('drop_math', base[:2] + base[3:]), ('dup_math', base + [copy.deepcopy(base[2])])]:
+            with self.subTest(label), self.assertRaises(family_agent.AgentError):
+                _select_school_c(proposals, real=True)
+
+    def test_unproven_or_ambiguous_later_citation_is_rejected_or_held(self):
+        # 别发布者/不完整/附件/早发/别日/别页/别名称/别节/模糊多项更正、参考消息别对象/别日期：不能作已核出处。
+        import family_agent
+        five, six = _SCHOOL_C['evidence'][4]['text'], _SCHOOL_C['evidence'][5]['text']
+        upload = [dict(upload_id='synthetic-upload')]
+        variants = [('other_publisher', '纸船', dict(m5=dict(publisher='publisher:synthetic-c-math'))),
+                    ('incomplete', '纸船', dict(m5=dict(content_incomplete=True))), ('attachment', '纸船', dict(m5=dict(attachments=upload))),
+                    ('earlier', '纸船', dict(m5=dict(time='2026-10-06T18:05:00+08:00'))),
+                    ('other_day', '练习本', dict(m5=dict(text=five.replace('昨天', '前天')))),
+                    ('other_page', '练习本', dict(m5=dict(text=five.replace('第18页', '第19页')))),
+                    ('other_title', '纸船', dict(m5=dict(text=five.replace('《纸船》第二节', '《纸鹤》第二节')))),
+                    ('other_section', '纸船', dict(m5=dict(text=five.replace('《纸船》第二节', '《纸船》第三节')))),
+                    ('ambiguous_change', '纸船', dict(m5=dict(text=five.replace('的背诵和抽查安排不变', '改为朗读')))),
+                    ('six_other_publisher', '计算卡', dict(m6=dict(publisher='publisher:synthetic-c-chinese'))),
+                    ('six_other_object', '计算卡', dict(m6=dict(text=six.replace('不更改计算卡C4', '不更改计算卡C5')))),
+                    ('six_other_date', '计算卡', dict(m6=dict(text=six.replace('10月8日交期', '10月9日交期')))),
+                    ('six_attachment', '计算卡', dict(m6=dict(attachments=upload)))]
+        for label, key, changes in variants:
+            for real in (False, True):
+                with self.subTest(label, real=real):
+                    try:
+                        items = _select_school_c(real=real, **changes)
+                    except family_agent.AgentError:
+                        continue
+                    row = next(i for i in items if key in i['title'] + i['body'])
+                    self.assertNotEqual(row['plan']['school_task']['state'], 'ready', (label, real, row['title'], row['due']))
+
+
 def ingest_school(name, reply, runs=1):
     """Store.ingest → run_once → _select → _save; the model seam returns a saved parsed reply with refs remapped."""
     from contextlib import ExitStack
@@ -911,9 +1005,10 @@ def ingest_school(name, reply, runs=1):
                          evidence=[dict(e, ref=reverse.get(e.get('ref'), e.get('ref'))) for e in json.loads(r['evidence'])])
                     for r in c.execute('SELECT * FROM agent_items ORDER BY rowid')]
         # Learning-goal rows created alongside school tasks carry no school_task and are not school actions.
+            originals = [json.loads(r['payload'])['text'] for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
         items = [r for r in rows if r['plan'].get('school_task')]
         return dict(results=results, counts=counts, items=items, other_kinds=sorted(r['kind'] for r in rows if r not in items),
-                    calls=calls, ref_map=ref_map)
+                    calls=calls, ref_map=ref_map, originals=originals)
     finally:
         fixture.doCleanups()
 
@@ -972,6 +1067,18 @@ class RealIngestTest(unittest.TestCase):
     def test_school_a_keeps_each_explicit_action_date(self):
         result = score_school('school-a', school_rows(ingest_school('school-a', dict(proposals=_school_a_reply()))['items']))
         self.assertEqual((result['covered'], result['usable'], result['due_errors'], result['review']), (7, 7, [], []), result)
+
+    def test_school_c_frozen_reply_through_ingest_keeps_five_outcomes_and_reruns_without_duplicates(self):
+        run = ingest_school('school-heldout-c', copy.deepcopy(_SCHOOL_C['reply']), runs=2)
+        self.assertEqual((len(run['calls']), run['counts'][0] == run['counts'][1], len(run['items'])), (1, True, 5), run['results'])
+        call = run['calls'][0]
+        # 实际入库：同一批正好6条原消息、每条只关联自身；回答只返回给这一批。
+        self.assertEqual([(ref, related) for ref, related in call['evidence']], [(C + str(n), [C + str(n)]) for n in range(1, 7)])
+        self.assertEqual(sorted(call['native']), [(C + '1', '完成语文练习本第18页第1-6题，10月9日交', [C + '5']),
+                                                  (C + '1', '背诵《纸船》第二节，明天早读逐人抽查', []),
+                                                  (C + '2', '完成计算卡C4第1-8题，后天交；每题写出计算过程', [])])
+        _school_c_matches(self, run['items'], 'ingest')
+        self.assertEqual(run['originals'], [e['text'] for e in _SCHOOL_C['evidence']])
 
     def test_school_b_wrong_model_date_or_empty_reply_is_not_accepted(self):
         result = score_school('school-b', school_rows(ingest_school('school-b', dict(proposals=_school_b_reply(wrong_date=True)))['items']))
