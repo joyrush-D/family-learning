@@ -2852,6 +2852,9 @@ def _school_native_change_clauses(sent,text,time):
 _SCHOOL_NATIVE_WITHDRAW=r'取消|撤销|撤回|不再(?:做|完成)|不用(?:做|完成)|无需(?:做|完成)'
 # Withdrawing only the check, signature or handback ("取消家长检查", "撤回交回要求") leaves the work itself to do.
 _SCHOOL_NATIVE_ACCOMPANYING=r'检查|签字|签名|交回|上交|提交|批改|抽查|打卡|拍照|上传'
+# Denying, faulting or only reporting the withdrawal after it in its sentence ("取消第1-6题的说法不对", "…，这是误传").
+_SCHOOL_NATIVE_DENIED=(r'说法|传言|传闻|谣言|谣传|误传|误发|讹传|假消息|假话|是假|虚假|不实|不对|不准确|不正确|不属实|不成立|不算数'
+                      r'|不是真|并非(?:事实|真)|有误|是错(?!题)|弄错|搞错|发错|说错|传错|没有?这回事')
 
 
 def _school_native_cancelled(action):
@@ -2859,7 +2862,8 @@ def _school_native_cancelled(action):
 
     The change already passed the same-publisher, same-source, strictly-later, complete and named-object checks.
     "第6题不用做" or "取消第6题" only narrows the outcome; "更正/改为/改期" alone withdraws nothing. A negation before the
-    withdrawing word ("并不取消"), a question, condition or unsettled word in its sentence ("如果下雨就取消", "要取消…吗？")
+    withdrawing word ("并不取消"), a denial of it later in its sentence ("取消第1-6题的说法不对", "…是假消息"), a question,
+    condition or unsettled word in its sentence ("如果下雨就取消", "要取消…吗？")
     or withdrawing only the check or handback settles nothing. "不用做" is itself an affirmed withdrawal, not a negation.
     """
     own=_school_native_questions(action['primary'])
@@ -2867,7 +2871,8 @@ def _school_native_cancelled(action):
         for clause,sentence in _school_native_change_clauses(action['time'],change['quote'],change['time']) or []:
             word=re.search(_SCHOOL_NATIVE_WITHDRAW,clause)
             if (not word or re.search(r'[不非未没无否别]',clause[:word.start()]) or re.search(_SCHOOL_NATIVE_UNSETTLED,sentence)
-                    or re.search(_SCHOOL_NATIVE_ACCOMPANYING,clause)):continue
+                    or re.search(_SCHOOL_NATIVE_ACCOMPANYING,clause)
+                    or re.search('(?:'+_SCHOOL_NATIVE_WITHDRAW+').*?(?:'+_SCHOOL_NATIVE_DENIED+')',sentence)):continue
             named=_school_native_questions(clause)
             if not named or own and own<=named:return True
     return False
