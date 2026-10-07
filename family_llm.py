@@ -1119,9 +1119,14 @@ def _ref_relation(label,entry):
 
 
 def _ref_agrees(claimed,teacher):
-    """A teacher-labelled value must be the teacher's whole value; added letters or words are not the teacher's."""
-    whole=lambda value:re.sub(r'[，,；;。.．、！!？?]+$','',''.join(value.split()))
-    return whole(claimed)==whole(teacher)
+    """A teacher-labelled value must be the teacher's whole value; added letters or words are not the teacher's.
+    A bare equation 「2+3=5」 and its one final value 「5」 are the same value; nothing is computed."""
+    whole=lambda value:re.sub(r'[，,；;。.．、！!？?]+$','',''.join(value.split()).replace('＝','='))
+    def final(value):
+        parts=value.split('=')
+        return parts[-1] if len(parts)>1 and all(parts) and not re.search(r'[或、，,；;/和及与]|[^\w+\-×÷*/^().%·]',parts[-1]+''.join(parts)) else None
+    claimed,teacher=whole(claimed),whole(teacher)
+    return claimed==teacher or final(teacher)==claimed or final(claimed)==teacher
 
 
 def _prefer_teacher_reference(item,question_kind,entries,images):
@@ -1148,7 +1153,7 @@ def _prefer_teacher_reference(item,question_kind,entries,images):
     if letter and question_kind=='objective' and item['judgment']!='unknown' and re.fullmatch('[A-H]',student):
         return item.update(answer='教师参考：'+teacher,judgment='correct' if student==teacher else 'incorrect',possible_cause='',steps='',
                            error_reason='' if student==teacher else '作答%s与教师参考%s不同。'%(student,teacher))
-    if claimed is None and ''.join(re.sub(r'^\s*AI自行推导\s*[:：]','',item['answer']).split())==''.join(teacher.split()):
+    if claimed is None and _ref_agrees(re.sub(r'^\s*AI自行推导\s*[:：]','',item['answer']),teacher):
         item['answer']='教师参考：'+shown(teacher);return  # Same value, only the label was wrong.
     pending('教师参考：'+shown(teacher),misquoted or '本题有教师参考，模型未按教师参考核对，未判定；请对照教师参考补查。')
 
