@@ -2699,24 +2699,28 @@ def _school_native_blocks(text):
 _SCHOOL_NATIVE_CHANGE=r'更正|取消|撤销|不再(?:做|完成)|不用(?:做|完成)|无需(?:做|完成)|改为|改期|延期'
 
 
-def _school_native_later_change(entry,later,actions):
-    """A strictly later change by the same publisher and source that is linked to this list or names one of its objects."""
-    if (later is entry or later.get('publisher')!=entry.get('publisher') or later.get('kind','text')!='text'
+_SCHOOL_NATIVE_WORKSHEET=r'练习卷|练习册|作业本|作业单|试卷'
+
+
+def _school_native_change_owner(entry,later,actions):
+    """The one located outcome that a strictly later, complete change by the same publisher and source names literally."""
+    if (later is entry or not actions or later.get('publisher')!=entry.get('publisher') or later.get('kind','text')!='text'
+            or later.get('content_incomplete') or later.get('unread') or later.get('attachments')
             or later['ref'][8:].rsplit(':',1)[0]!=entry['ref'][8:].rsplit(':',1)[0] or not re.search(_SCHOOL_NATIVE_CHANGE,later['text'])):
-        return False
+        return None
     try:
-        if not dt.datetime.fromisoformat(later['time'])>dt.datetime.fromisoformat(entry['time']):return False
-    except (KeyError,ValueError,TypeError):return False
-    named=_school_named_objects(later['text'])
-    return (later['ref'] in entry.get('related_messages',[]) or entry['ref'] in later.get('related_messages',[])
-            or bool(named) and any(named&_school_named_objects(a['primary']) for a in actions))
+        if not dt.datetime.fromisoformat(later['time'])>dt.datetime.fromisoformat(entry['time']):return None
+    except (KeyError,ValueError,TypeError):return None
+    named=_school_named_objects(later['text']);sheets=set(re.findall(_SCHOOL_NATIVE_WORKSHEET,later['text']))
+    owners=[a for a in actions if named&_school_named_objects(a['primary']) or any(a['primary'].count(sheet)==1 for sheet in sheets)]
+    return owners[0] if len(owners)==1 else None
 
 
 def _school_native_unlocated(quote,refs,actions,entries,spans):
     """An outcome the literal ledger missed: one literal quote in one located message, disjoint from its located outcomes."""
     located=refs&{a['ref'] for a in actions}
     if (not quote or entries is None or spans is None or len(located)!=1
-            or refs&{s['ref'] for a in actions for s in a['supplements']}):return False
+            or refs&{s['ref'] for a in actions for s in a['supplements']+a['changes']}):return False
     ref=next(iter(located));entry=entries.get(ref);text=entry['text'] if entry else ''
     if text.count(quote)!=1:return False
     start=text.index(quote);end=start+len(quote)
@@ -2761,12 +2765,10 @@ def _school_native_actions(evidence):
             subject=next(iter(named)) if len(named)==1 else next(iter(shared)) if not named and len(shared)==1 else ''
             own.append(dict(id='native:'+_hash([entry['ref'],part['start'],part['end'],quote])[:24],ref=entry['ref'],quote=quote,
                 header=header,primary=part['primary'],purpose=part['purpose'],subject=subject if part['purpose'] in ('learning','optional') else '',
-                publisher=entry.get('publisher',''),time=entry.get('time',''),supplements=[]))
+                publisher=entry.get('publisher',''),time=entry.get('time',''),supplements=[],changes=[]))
             if part.get('shared_conditions'):
                 own[-1]['shared_conditions']=part['shared_conditions']
                 own[-1]['id']='native:'+_hash([own[-1]['id'],part['shared_conditions']])[:24]
-        # So does a later change worded as a supplement ("补充：第5题不用做") when it is linked to, or names, this list.
-        if any(_school_native_later_change(entry,s,own) for s in evidence):continue
         # Standalone administrative notices already have executor, object,
         # date and handback guards. Mixed outcomes need this shared allocation.
         if len(own)==1 and own[0]['purpose']=='admin':continue
@@ -2793,10 +2795,14 @@ def _school_native_actions(evidence):
                     and (not specific or specific==_school_named_objects(a['primary']))]
             if len(owners)==1:
                 owners[0]['supplements'].append(dict(ref=supplement['ref'],quote=supplement['text'].strip(),goal=head[2].strip(),time=supplement['time']))
+        # A later change ("补充：练习册第5题不用做") binds only to the one outcome it names; siblings stay literal.
+        for later in evidence:
+            if (owner:=_school_native_change_owner(entry,later,own)):
+                owner['changes'].append(dict(ref=later['ref'],quote=later['text'].strip(),time=later['time']))
         actions.extend(own)
     owners={}
     for action in actions:
-        for supplement in action['supplements']:
+        for supplement in action['supplements']+action['changes']:
             owners.setdefault(supplement['ref'],set()).add(action['id'])
     if any(len(values)!=1 for values in owners.values()):
         raise AgentError('学校补充同时对应多项作业，原文保留待明确归属',code='school_action_coverage')
@@ -2827,7 +2833,7 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
     refs={q['ref'] for q in proposal['evidence']};quote=proposal['title_quote'].strip().rstrip('；;。').strip()
     matches=[a for a in actions if a['ref'] in refs and quote and quote in a['quote']]
     if not matches:
-        owned={a['ref'] for a in actions}|{s['ref'] for a in actions for s in a['supplements']}
+        owned={a['ref'] for a in actions}|{s['ref'] for a in actions for s in a['supplements']+a['changes']}
         # An outcome the ledger did not locate keeps the general checks only when disjoint from every located one.
         if refs&owned and not _school_native_unlocated(quote,refs,actions,entries,spans):
             raise AgentError('学校已定位要求未逐项归纳，整批保留重试',code='school_action_coverage')
@@ -2837,7 +2843,7 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
     action=matches[0]
     if proposal['task_change']!='new' or proposal['task_target_id'] or proposal['task_state']=='reference' or proposal['task_purpose']!=action['purpose']:
         raise AgentError('学校独立要求未形成对应行动，整批保留重试',code='school_action_coverage')
-    expected={action['ref']}|{s['ref'] for s in action['supplements']}
+    expected={action['ref']}|{s['ref'] for s in action['supplements']+action.get('changes',[])}
     if expected!=refs:
         raise AgentError('学校补充要求未归到对应作业，整批保留重试',code='school_action_coverage')
     if any(other['quote'] in proposal['task_goal'] for other in actions if other['id']!=action['id']):
@@ -2847,6 +2853,9 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
     if len(dates)>1:raise AgentError('本项学校日期尚无法唯一核对，原文保留',code='school_action_coverage')
     due=next(iter(dates)) if dates else proposal['due']
     assigned.add(action['id'])
+    if action['changes']:
+        # The later change supersedes part of the literal quote: keep the summary under the general checks, this outcome's own date and every cited original.
+        return dict(proposal,due=due),action
     return dict(proposal,task_title=value['title'],task_goal=value['goal'],task_submission='',due=due),action
 
 
@@ -2855,13 +2864,15 @@ def _school_native_dates(action):
     dates=deadlines('\n'.join([action['header'],action['quote'],*action.get('shared_conditions',[])]),sent_day(action['time']))
     for supplement in action['supplements']:
         dates.update(deadlines(supplement['goal'],sent_day(supplement['time'])))
+    for change in action.get('changes',[]):
+        dates.update(deadlines(change['quote'],sent_day(change['time'])))
     return dates
 
 
 def _school_native_scope(action,child_id=''):
     anchors=[dict(ref=action['ref'],upload_ids=[],pages=[],quote=action['quote'])]
     anchors.extend(dict(ref=action['ref'],upload_ids=[],pages=[],quote=quote) for quote in action.get('shared_conditions',[]))
-    anchors.extend(dict(ref=s['ref'],upload_ids=[],pages=[],quote=s['quote']) for s in action['supplements'])
+    anchors.extend(dict(ref=s['ref'],upload_ids=[],pages=[],quote=s['quote']) for s in action['supplements']+action.get('changes',[]))
     if len(anchors)>6:raise AgentError('本项原文条件超出既有核对范围，完整原批次保留',code='school_action_coverage')
     scope=dict(anchors=anchors)
     if child_id:scope['identity']=_hash([child_id,sorted(_json([a['ref'],a['upload_ids'],a['quote']]) for a in anchors)])
@@ -2878,11 +2889,13 @@ def _school_native_saved(items,evidence):
         if not action or saved!=action or ident in assigned or plan.get('school_original_action')!=_school_native_scope(action):
             raise AgentError('学校独立要求的保存依据已变化，整批未写入',409,'school_action_coverage')
         value=_school_native_value(action)
-        expected={action['ref']}|{s['ref'] for s in action['supplements']}
+        expected={action['ref']}|{s['ref'] for s in action['supplements']+action.get('changes',[])}
+        # A changed outcome keeps the checked summary; refs, purpose and its own date still match the ledger.
+        literal=not action.get('changes')
         if ({e['ref'] for e in item['evidence']}!=expected or brief.get('purpose')!=action['purpose']
                 or brief.get('change')!='new' or brief.get('target_id')
-                or any(brief.get(k,'')!=value[k] for k in ('title','goal','submission'))
-                or item['title']!=value['title'] or item['body']!=value['goal']):
+                or literal and (any(brief.get(k,'')!=value[k] for k in ('title','goal','submission'))
+                                or item['title']!=value['title'] or item['body']!=value['goal'])):
             raise AgentError('学校完整要求未按对应行动保存，整批未写入',409,'school_action_coverage')
         dates=_school_native_dates(action)
         if len(dates)>1 or item.get('due','')!=(next(iter(dates)) if dates else ''):

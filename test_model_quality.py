@@ -639,10 +639,13 @@ def ingest_school(name, reply, runs=1):
                 with fixture.store._db() as c:
                     counts.append(c.execute('SELECT COUNT(*) FROM agent_items').fetchone()[0])
         with fixture.store._db() as c:
-            items = [dict(title=r['title'], body=r['body'], due=r['due'], state=r['state'], plan=json.loads(r['plan']),
-                          evidence=[dict(e, ref=reverse.get(e.get('ref'), e.get('ref'))) for e in json.loads(r['evidence'])])
-                     for r in c.execute('SELECT * FROM agent_items ORDER BY rowid')]
-        return dict(results=results, counts=counts, items=items, calls=calls, ref_map=ref_map)
+            rows = [dict(title=r['title'], body=r['body'], due=r['due'], state=r['state'], kind=r['kind'], plan=json.loads(r['plan']),
+                         evidence=[dict(e, ref=reverse.get(e.get('ref'), e.get('ref'))) for e in json.loads(r['evidence'])])
+                    for r in c.execute('SELECT * FROM agent_items ORDER BY rowid')]
+        # Learning-goal rows created alongside school tasks carry no school_task and are not school actions.
+        items = [r for r in rows if r['plan'].get('school_task')]
+        return dict(results=results, counts=counts, items=items, other_kinds=sorted(r['kind'] for r in rows if r not in items),
+                    calls=calls, ref_map=ref_map)
     finally:
         fixture.doCleanups()
 
@@ -666,7 +669,7 @@ class RealIngestTest(unittest.TestCase):
 
     def test_school_a_keeps_actions_reference_and_reruns_without_duplicates(self):
         run = ingest_school('school-a', dict(proposals=_school_a_reply()), runs=2)
-        self.assertEqual((len(run['calls']), run['counts'][0], run['counts'][1]), (1, 8, 8), run['results'])
+        self.assertEqual((len(run['calls']), run['counts'][0] == run['counts'][1], len(run['items'])), (1, True, 8), run['results'])
         self.assertTrue(all(related == [ref] for ref, related in run['calls'][0]['evidence']), run['calls'][0]['evidence'])
         self.assertIn(('message:synthetic-school-a:1', '完成练习册第12页第1-5题，本周五交', ['message:synthetic-school-a:6']), run['calls'][0]['native'])
         result = score_school('school-a', school_rows(run['items']))
