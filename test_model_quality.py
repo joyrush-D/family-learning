@@ -422,6 +422,11 @@ def live(config_dir, out_dir, role, names):
         raise SystemExit('已有本角色输出或启动标记，未发送任何请求，原证据保留：' + '、'.join(existing))
     config = family_llm.model_values(config_dir)
     model = config['model' if role == 'strong' else 'light_model'].strip()
+    secrets, real_reported = [v for v in (config['api_key'], config['base_url']) if v], family_llm._reported_model
+
+    def reported(value):  # Checked before the usage row is written: a configured key/endpoint echo is never stored there.
+        value = real_reported(value)
+        return None if value and any(form in value for form in _secret_forms(secrets)) else value
     out.mkdir(parents=True, exist_ok=True)
     for name in names:
         path = out / (name + '-' + role + '.json')
@@ -448,6 +453,7 @@ def live(config_dir, out_dir, role, names):
         started = time.monotonic()
         try:
             with patch.dict(os.environ, env), patch.object(family_llm, '_chat_json', capture), \
+                    patch.object(family_llm, '_reported_model', reported), \
                     patch.object(family_llm, 'build_opener', lambda *handlers: _Recorder(real_build(*handlers), http)):
                 try:
                     final = run_case(name, str(data))
@@ -461,8 +467,7 @@ def live(config_dir, out_dir, role, names):
                 record['score'] = score(name, final, captured.get('raw_model_output'))
             except Exception as exc:
                 record['score_error'] = '%s: %s' % (type(exc).__name__, exc)
-            record = _redact_record(json.loads(json.dumps(record, ensure_ascii=False, default=str)),
-                                    [v for v in (config['api_key'], config['base_url']) if v])
+            record = _redact_record(json.loads(json.dumps(record, ensure_ascii=False, default=str)), secrets)
             path.write_text(json.dumps(record, ensure_ascii=False, indent=1, default=str))
 
 
