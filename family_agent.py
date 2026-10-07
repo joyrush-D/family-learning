@@ -2843,14 +2843,26 @@ def _school_native_change_owner(entry,later,actions):
 
 
 _SCHOOL_NATIVE_KEPT=r'不变|不更改|不改变'
+# A question, condition or unsettled word in the sentence: "…不变，对吗？" or "…是否不变尚未确定" states nothing unchanged.
+_SCHOOL_NATIVE_UNSETTLED=r'[？?吗呢吧]|是否|如果|假如|要是|若|除非|可能|也许|或许|大概|暂|待|尚未|另行'
+
+
+def _school_native_affirmed(clause,sentence):
+    """One affirmative, explicit "unchanged": the clause ends with it ("…安排不变") or opens with it ("不更改…的…").
+
+    A negation in what it names ("并非不变", "不是不变", "未必不变") or a question, condition or unsettled word in its sentence
+    leaves the outcome unproven, so it stays held instead of being read as unchanged.
+    """
+    rest=re.sub(r'^\s*(?:不更改|不改变)|(?:'+_SCHOOL_NATIVE_KEPT+r')\s*$','',clause,count=1)
+    return rest!=clause and not re.search(r'[不非未没无否]',rest) and not re.search(_SCHOOL_NATIVE_UNSETTLED,sentence)
 
 
 def _school_native_kept(action,actions,entries):
     """Strictly later, complete messages by the same publisher and source whose own clause names only this outcome as unchanged.
 
     "《纸船》第二节的背诵和抽查安排不变" may be cited for that recitation; it never alters its text or date. A message whose
-    change binds to no other listed outcome, or a clause that changes, names another title, page, section, question or day,
-    or several outcomes, proves nothing.
+    change binds to no other listed outcome, or a clause that changes, is not affirmed, names another subject, title, page,
+    section, question or day, or several outcomes, proves nothing.
     """
     entry=(entries or {}).get(action['ref'])
     if not entry:return set()
@@ -2861,9 +2873,10 @@ def _school_native_kept(action,actions,entries):
         if re.search(_SCHOOL_NATIVE_CHANGE,later['text']):
             owner=_school_native_change_owner(entry,later,siblings)
             if owner is None or owner['id']==action['id']:continue
-        for clause in re.split(r'[。；;，,\n]',later['text']):
+        for sentence,clause in ((s,c) for s in re.split(r'(?<=[。！!？?\n])',later['text']) for c in re.split(r'[。；;，,\n]',s)):
             name=re.match(r'^\s*(?:不更改|不改变)?\s*([^的]{2,24}?)的',clause)
-            if (not re.search(_SCHOOL_NATIVE_KEPT,clause) or re.search(_SCHOOL_NATIVE_CHANGE,clause) or not name
+            if (not _school_native_affirmed(clause,sentence) or re.search(_SCHOOL_NATIVE_CHANGE,clause) or not name
+                    or set(re.findall(_SCHOOL_NATIVE_SUBJECTS,sentence))-{action['subject']}
                     or [a['id'] for a in siblings if a['primary'].count(name[1])==1]!=[action['id']]
                     or not _school_named_objects(clause)<=_school_named_objects(own) or not marks(clause)<=marks(own)
                     or any(own.count(sheet)!=1 for sheet in re.findall(_SCHOOL_NATIVE_WORKSHEET,clause))):continue
