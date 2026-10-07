@@ -1986,9 +1986,9 @@ def _school_own_clause_dates(quote,cited,others,goal):
         while other and (at:=text.find(other,at))!=-1:
             if max(start,at)<min(end,at+len(other)):return set()
             at+=len(other)
-    flat=lambda value:re.sub(r'[\W_]+','',value)
-    grams=lambda value:{value[i:i+4] for i in range(len(value)-3)}
-    if not grams(flat(quote))&grams(flat(goal)):return set()
+    # Shared words (签字交回, 无需盖章) are no identity: the goal may only restate this clause's own characters.
+    chars=lambda value:set(re.findall(r'[\u4e00-\u9fffA-Za-z0-9]',value))
+    if not chars(goal) or not chars(goal)<=chars(quote):return set()
     return _school_own_dates(quote,sent_day(homes[0].get('time','')))
 
 
@@ -2928,7 +2928,7 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
             value=_text(proposal,name,field.get('maxLength',4000))
             if 'enum' in field and value not in field['enum']:raise AgentError('学校独立要求字段无法核对')
     refs={q['ref'] for q in proposal['evidence']};quote=proposal['title_quote'].strip().rstrip('；;。').strip()
-    matches=[a for a in actions if a['ref'] in refs and quote and quote in a['quote']]
+    matches=[a for a in actions if a['ref'] in refs and quote and (quote in a['quote'] or any(quote in c['quote'] for c in a['changes']))]
     if not matches:
         owned={a['ref'] for a in actions}|{s['ref'] for a in actions for s in a['supplements']+a['changes']}
         # An outcome the ledger did not locate keeps the general checks only when disjoint from every located one.
@@ -2938,7 +2938,9 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
     if len(matches)!=1 or matches[0]['id'] in assigned:
         raise AgentError('学校独立要求重复或合并，整批保留重试',code='school_action_coverage')
     action=matches[0]
-    if proposal['task_change']!='new' or proposal['task_target_id'] or proposal['task_state']=='reference' or proposal['task_purpose']!=action['purpose']:
+    # Only the outcome a bound change names may be an update/cancel, and then only for review; siblings stay new.
+    revised=bool(action['changes']) and proposal['task_change'] in ('update','cancel') and proposal['task_state']=='review'
+    if (proposal['task_change']!='new' and not revised) or proposal['task_target_id'] or proposal['task_state']=='reference' or proposal['task_purpose']!=action['purpose']:
         raise AgentError('学校独立要求未形成对应行动，整批保留重试',code='school_action_coverage')
     expected={action['ref']}|{s['ref'] for s in action['supplements']+action.get('changes',[])}
     if expected!=refs:
@@ -2993,7 +2995,8 @@ def _school_native_saved(items,evidence):
         # A changed outcome keeps the checked summary; refs, purpose and its own date still match the ledger.
         literal=not action.get('changes')
         if ({e['ref'] for e in item['evidence']}!=expected or brief.get('purpose')!=action['purpose']
-                or brief.get('change')!='new' or brief.get('target_id')
+                or brief.get('change')!='new' and not (action.get('changes') and brief.get('change') in ('update','cancel') and brief.get('state')=='review')
+                or brief.get('target_id')
                 or literal and (any(brief.get(k,'')!=value[k] for k in ('title','goal','submission'))
                                 or item['title']!=value['title'] or item['body']!=value['goal'])):
             raise AgentError('学校完整要求未按对应行动保存，整批未写入',409,'school_action_coverage')
