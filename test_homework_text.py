@@ -499,4 +499,40 @@ class TeacherPaperWholeNameTest(unittest.TestCase):
         self.assertNotIn('same',relations);self.assertIn(judgment,('correct','unknown'));self.assertNotEqual(answer,'教师参考：B')
 
 
-if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TeacherReferenceScopeTests','TeacherReferenceSourceTests','TeacherReferenceEquationTests','TeacherReferenceGrammarTests','TextQuestionHTTPTests'])
+class TeacherPaperFormalNameTest(unittest.TestCase):
+    """Fictional D01-D03 and S04: a formal paper name is read whole; a source word, 试/考/答 or connector in it is never cut off."""
+
+    def review(self,question,teacher,label,ask='1+2=? A.1 B.2 C.3'):
+        raw=frozen(objective(label,ask,'C','AI自行推导：C'));original=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            result=family_llm.homework_reference_draft([],review=True,question_documents=[dict(name='synthetic-explicit-name-question.txt',text=question)],
+                reference_documents=[dict(name='synthetic-explicit-name-teacher.txt',text=teacher)])
+        self.assertEqual(model.call_count,1);self.assertEqual(raw,original)
+        return [(q['answer'],q['judgment']) for q in result['questions']],result['wrong_items']
+
+    def named(self,paper,teacher):
+        return self.review('试卷名称：%s\n第1题：1+2=? A.1 B.2 C.3\n学生原答：C。'%paper,'试卷名称：%s\n第1题：教师参考B。'%teacher,paper+' 第1题')
+
+    def test_a_source_word_or_connector_inside_a_formal_name_is_never_cut_off(self):
+        for paper,teacher in (('老师青树卷','青树卷'),('青树卷','老师青树卷'),('参考北窗卷','北窗卷'),
+                              ('教师青树卷','青树卷'),('青树卷','参考答案青树卷'),('青树卷','青树试卷'),('平卷','和平卷')):
+            with self.subTest(paper=paper,teacher=teacher):
+                self.assertEqual(self.named(paper,teacher),([('AI自行推导：C','correct')],0))
+
+    def test_the_same_whole_formal_name_still_takes_the_teacher_answer(self):
+        self.assertEqual(self.review('北窗卷 第1题：1+1=? A.1 B.2 C.3\n学生原答：C','北窗卷 第1题：教师参考B','北窗卷 第1题','1+1=? A.1 B.2 C.3'),
+                         ([('教师参考：B','incorrect')],1))
+        for paper in ('北窗卷','老师青树卷','参考北窗卷','和平卷','青树试卷'):
+            with self.subTest(paper=paper):
+                self.assertEqual(self.named(paper,paper),([('教师参考：B','incorrect')],1))
+
+    def test_a_separated_source_word_cover_heading_or_paper_list_still_pairs(self):
+        from family_llm import _ref_relation,_teacher_reference_entries
+        for label,teacher,relations in (('青树卷 第1题','教师参考：青树卷\n第1题：B',['same']),('第1题','教师参考答卷\n第1题：教师参考B',['same']),
+                                        ('乙卷 第1题','甲卷 与乙卷第1题均为B',['other','same']),('和平卷 第1题','甲卷和平卷第1题均为B',['other','unsure'])):
+            with self.subTest(label=label,teacher=teacher):
+                entries=_teacher_reference_entries([dict(name='synthetic-teacher.txt',text=teacher)])
+                self.assertEqual(([_ref_relation(label,entry) for entry in entries],[entry['answer'] for entry in entries]),(relations,['B']*len(relations)))
+
+
+if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TeacherReferenceScopeTests','TeacherReferenceSourceTests','TeacherReferenceEquationTests','TeacherReferenceGrammarTests','TextQuestionHTTPTests','TeacherPaperWholeNameTest','TeacherPaperFormalNameTest'])
