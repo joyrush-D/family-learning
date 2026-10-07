@@ -2696,6 +2696,9 @@ def _school_native_blocks(text):
         **(dict(shared_conditions=[clause for _,clause in shared]) if shared else {})) for part in pieces]
 
 
+_SCHOOL_NATIVE_CHANGE=r'更正|取消|撤销|不再(?:做|完成)|不用(?:做|完成)|无需(?:做|完成)|改为|改期|延期'
+
+
 def _school_native_actions(evidence):
     """One shared ledger for complete literal outcomes, standards and own dates."""
     actions=[]
@@ -2709,9 +2712,11 @@ def _school_native_actions(evidence):
         related=set(entry.get('related_messages',[]))
         if any(e['ref'] in related and (e.get('attachments') or e.get('content_incomplete') or e.get('kind')!='text') for e in evidence):continue
         publisher=entry.get('publisher','');source=entry['ref'][8:].rsplit(':',1)[0]
-        # Changes retain the existing dated correction/old-decision protocol.
+        # Changes retain the existing dated correction/old-decision protocol,
+        # including a later change worded as a supplement (e.g. "补充：第5题不用做").
         if publisher and any(s.get('publisher')==publisher and s['ref'][8:].rsplit(':',1)[0]==source
-                and re.match(r'^\s*(?:更正|取消|撤销|撤回)',s['text']) for s in evidence if s is not entry):continue
+                and (re.match(r'^\s*(?:更正|取消|撤销|撤回)',s['text']) or n>index and re.search(_SCHOOL_NATIVE_CHANGE,s['text']))
+                for n,s in enumerate(evidence) if s is not entry):continue
         own=[]
         for part in _school_native_blocks(text):
             quote=part['quote'];header=part['header']
@@ -2744,7 +2749,7 @@ def _school_native_actions(evidence):
                 stamp=dt.datetime.fromisoformat(entry['time']);later=dt.datetime.fromisoformat(supplement['time'])
                 if stamp.tzinfo is None or later.tzinfo is None or not 0<=(later-stamp).total_seconds()<=120:continue
             except (KeyError,ValueError,TypeError):continue
-            if re.search(r'更正|取消|撤销|不再(?:做|完成)|不用(?:做|完成)|无需(?:做|完成)|改为|改期|延期',head[2]):
+            if re.search(_SCHOOL_NATIVE_CHANGE,head[2]):
                 own=[];break  # A later change needs the existing correction reader.
             object_text=head[1]
             object_text=re.sub(r'^(?:'+_SCHOOL_NATIVE_SUBJECTS+r')','',object_text)
