@@ -325,6 +325,30 @@ class ProgramPathTest(unittest.TestCase):
             self.assertEqual((result['covered'], result['wrong_judgment'], result['undetermined'], result['source_errors']),
                              (len(case['truth']), [], [], []), (name, result))
 
+    def test_truthful_school_reply_citing_later_same_teacher_change_is_kept(self):
+        # school-a: a numbered list, then the same teacher later says question 5 is no longer required.
+        import family_agent
+        texts = {int(e['ref'].rsplit(':', 1)[1]): e['text'] for e in SCHOOL_CASES['school-a']['evidence']}
+        rows = [('语文：背诵《秋夜》第2自然段', '背诵《秋夜》第2自然段，明天早读抽查。', '2026-10-08', 'learning', '背诵《秋夜》第2自然段，明天早读抽查', [1]),
+                ('语文：练习册第12页第1-4题', '完成练习册第12页第1-4题，第5题不用做；本周五交。', '2026-10-09', 'learning', '完成练习册第12页第1-5题，本周五交', [1, 6]),
+                ('数学：口算本第8页', '口算本第8页全部完成，明天交给课代表。', '2026-10-08', 'learning', '口算本第8页全部完成，明天交给课代表', [2]),
+                ('打印并签字交回秋游安全告知书', '打印《秋游安全告知书》，家长签字后10月10日前交回班主任；不需要盖章。', '2026-10-10', 'admin',
+                 '请打印《秋游安全告知书》，家长签字后于10月10日前交回班主任，不需要盖章', [3]),
+                ('周四体检穿运动服', '周四学校体检，孩子穿运动服。', '2026-10-08', 'admin', '另外周四学校体检，请孩子穿运动服', [3]),
+                ('英语：Unit 3单词抄写两遍', '今晚把Unit 3单词每个抄写两遍，明天交。', '2026-10-08', 'learning', '今晚把Unit 3单词每个抄写两遍，明天交', [4]),
+                ('英语：周五听写Unit 3单词', '周五听写Unit 3单词。', '2026-10-09', 'learning', '周五听写Unit 3单词', [4]),
+                ('家长询问第5题', '家长提问，没有新增要求。', '', 'optional', '请问练习册第5题必须做吗？', [5])]
+        proposals = [dict(title_quote=quote, focus='school', due=due, evidence=[dict(ref='message:synthetic-school-a:%d' % r) for r in refs],
+                          learning_subject=title.split('：')[0] if purpose == 'learning' else '', learning_goal_id='', task_title=title,
+                          task_goal=goal, task_advice='', task_state='reference' if refs == [5] else 'ready', task_reason='原文明确。',
+                          task_change='new', task_target_id='', task_purpose=purpose, task_submission='')
+                     for title, goal, due, purpose, quote, refs in rows]
+        self.assertTrue(all(p['title_quote'] in texts[int(p['evidence'][0]['ref'].rsplit(':', 1)[1])] for p in proposals))
+        with patch.object(family_agent.family_llm, '_chat_json', return_value=dict(proposals=copy.deepcopy(proposals))):
+            final = run_case('school-a', None)
+        result = score_school('school-a', school_rows([i for i in final if '家长提问' not in i.get('body', '')]))
+        self.assertEqual((result['covered'], result['missed'], result['citation_errors']), (7, [], []), result)
+
 
 if __name__ == '__main__':
     if len(sys.argv) >= 5 and sys.argv[1] == '--live':
