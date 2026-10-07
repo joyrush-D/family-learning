@@ -1022,6 +1022,10 @@ SCHOOL_C_OTHER = {'别日': dict(text=SCHOOL_C_CANCEL.replace('昨天', '前天'
                   '别老师': dict(text=SCHOOL_C_CANCEL, publisher='publisher:synthetic-c-math', sender='虚构数学教师乙'),
                   '别来源': dict(text=SCHOOL_C_CANCEL, ref='message:synthetic-school-heldout-x:5', related_messages=['message:synthetic-school-heldout-x:5']),
                   '早发': dict(text=SCHOOL_C_CANCEL.replace('昨天的', ''), time='2026-10-06T18:05:00+08:00')}
+# 本机独立验收的虚构反例：标题写出原项第1-6题，只用来认出被改的练习本；正文明确只取消第6题，仍是局部更正，不能借标题题号扩大成整项取消。
+# 另加同一标题/正文共因的“第6题不用做”变体。更正后第1-5题照常new/ready、10月9日交、家长检查。
+SCHOOL_C_TITLED_PART = {'标题题号取消第6题': '更正昨天的语文练习本第18页第1-6题：取消第6题；' + SCHOOL_C_KEEP,
+                        '标题题号第6题不用做': '更正昨天的语文练习本第18页第1-6题：第6题不用做；' + SCHOOL_C_KEEP}
 
 
 # 本机独立验收的两条全虚构最小反例（只整句替换消息5，其它5消息与原时间不变）：撤销词出现不等于撤销已经成立。A假设尚未成立、B明确否定；
@@ -1129,7 +1133,7 @@ class SchoolFirstBatchCancelTest(unittest.TestCase):
 
     def test_partial_cancel_keeps_remaining_questions_new_ready(self):
         import family_agent
-        for label, text in SCHOOL_C_PART.items():
+        for label, text in {**SCHOOL_C_PART, **SCHOOL_C_TITLED_PART}.items():
             for real in (False, True):
                 with self.subTest(label, real=real):
                     evidence = _school_c_evidence(real, m5=dict(text=text))
@@ -1214,6 +1218,46 @@ class SchoolFirstBatchCancelTest(unittest.TestCase):
                 self.assertEqual((run['counts'], run['items'], run['originals']), ([0], [], texts), run['results'])
                 # 实际_save这一层自己拒收错误取消，且调用前后全库每张表零写入（不拿run_once的运行记录当零写证据）。
                 self.assertEqual([('学校完整要求未按对应行动保存' in message, same) for message, same in raised], [(True, True)], raised)
+
+    def test_titled_partial_cancel_through_ingest_keeps_q1_5_once_and_tampered_cancel_writes_nothing(self):
+        import family_agent
+        for label, text in SCHOOL_C_TITLED_PART.items():
+            evidence = _school_c_evidence(m5=dict(text=text)); texts = [e['text'] for e in evidence]
+            with patch.dict(SCHOOL_CASES, {'school-heldout-c': dict(SCHOOL_CASES['school-heldout-c'], evidence=evidence)}):
+                with self.subTest(label, layer='wrong'):
+                    wrong = ingest_school('school-heldout-c', dict(proposals=_school_c_cancel_rows(**SCHOOL_C_CANCEL_REVIEW)))
+                    self.assertEqual((wrong['counts'], wrong['items'], wrong['originals']), ([0], [], texts), wrong['results'])
+                with self.subTest(label, layer='legal'):
+                    legal = ingest_school('school-heldout-c', dict(proposals=_school_c_cancel_rows()), runs=2)
+                    self.assertEqual((len(legal['calls']), legal['counts'][0] == legal['counts'][1], len(legal['items'])), (1, True, 5), legal['results'])
+                    self.assertEqual(legal['originals'], texts)
+                    row = _school_c_row(legal['items']); brief = row['plan']['school_task']
+                    self.assertEqual((brief['change'], brief['state'], brief['target_id'], row['due'], sorted(e['ref'] for e in row['evidence'])),
+                                     ('new', 'ready', '', '2026-10-09', [C + '1', C + '5']), row['title'])
+                    self.assertTrue(re.search(r'1\s*[-–—~至到]\s*5', row['title'] + row['body']) and '家长检查' in row['body'], row['body'])
+                    self.assertSiblings(legal['items'], [C + '1', C + '5'])
+                with self.subTest(label, layer='tampered'):
+                    select = family_agent._select
+
+                    def tampered(*args, **kwargs):
+                        # 绕过选择：选择层按局部更正放行new/ready，再改成cancel/review，只由实际_save自己判定。
+                        with patch.object(family_agent, '_school_native_cancelled', return_value=False):
+                            items = select(*args, **kwargs)
+                        for item in items:
+                            if '练习本' in item['title'] + item['body']: item['plan']['school_task'].update(change='cancel', state='review')
+                        return items
+                    saved, raised = family_agent.Store._save, []
+
+                    def direct(store, *args, **kwargs):
+                        before = _db_rows(store)
+                        try:
+                            return saved(store, *args, **kwargs)
+                        except family_agent.AgentError as error:
+                            raised.append((str(error), before == _db_rows(store))); raise
+                    with patch.object(family_agent, '_select', side_effect=tampered), patch.object(family_agent.Store, '_save', new=direct):
+                        run = ingest_school('school-heldout-c', dict(proposals=_school_c_cancel_rows()))
+                    self.assertEqual((run['counts'], run['items'], run['originals']), ([0], [], texts), run['results'])
+                    self.assertEqual([('学校完整要求未按对应行动保存' in message, same) for message, same in raised], [(True, True)], raised)
 
     def test_other_day_page_object_teacher_source_or_earlier_cancel_cancels_nothing(self):
         import family_agent
