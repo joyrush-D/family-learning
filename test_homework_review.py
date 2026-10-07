@@ -129,14 +129,14 @@ def duplicate_question_checks():
     """One visible question identity cannot carry two counts or opposite grades."""
     calls=0
     question=item(label='虚构甲卷第1题',question='虚构第1题：2+3=?',student_answer='5',answer='教师参考：5')
-    def generate(questions):
+    def generate(questions,teacher='虚构甲卷与乙卷第1题均为5。'):
         nonlocal calls
         raw=dict(items=questions,coverage='仅核本次明确的卷别与题号。')
         original=json.loads(json.dumps(raw))
         with patch.object(family_llm,'_chat_json',return_value=raw) as model:
             try:
                 return family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=True,
-                    reference_documents=[dict(name='synthetic-two-papers.txt',text='虚构甲卷与乙卷第1题均为5。')])
+                    reference_documents=[dict(name='synthetic-two-papers.txt',text=teacher)])
             finally:
                 assert model.call_count==1 and raw==original,'rejected replies must keep the original transport intact'
                 calls+=1
@@ -153,9 +153,11 @@ def duplicate_question_checks():
         except family_llm.LLMDraftError as error:
             assert '重复' in str(error) and '题' in str(error)
         else: raise AssertionError('a repeated question identity must not become two visible judgments')
-    for labels in (('虚构甲卷第1题','虚构乙卷第1题'),('虚构甲卷第1题（1）','虚构甲卷第1题（2）')):
+    # A whole-question teacher line no longer vouches for each sub-question, so the sub-question pair gets its own lines.
+    for labels,teacher in ((('虚构甲卷第1题','虚构乙卷第1题'),'虚构甲卷与乙卷第1题均为5。'),
+                           (('虚构甲卷第1题（1）','虚构甲卷第1题（2）'),'虚构甲卷第1题（1）5；第1题（2）5。')):
         questions=[question|dict(label=labels[0]),question|dict(label=labels[1],student_answer='4',judgment='incorrect',error_reason='作答4与教师参考5不同。')]
-        draft=generate(questions)
+        draft=generate(questions,teacher)
         assert draft['items']==2 and draft['wrong_items']==1 and draft['unknown_items']==0
         assert [q['label'] for q in draft['questions']]==list(labels)
         assert [q['judgment'] for q in draft['questions']]==['correct','incorrect']
@@ -990,7 +992,7 @@ def run():
             first_feedback=dict(task_id=recheck_task['id'],child='示例甲',day='2026-10-02',request_key='synthetic-recheck-first',
                 note=review_note,attachments=[recheck_answer,old_teacher,prior],review_basis=legacy_basis)
             first=app.save_task_feedback(first_feedback)
-            later_teacher=upload('synthetic-recheck-later-teacher.txt','虚构教师参考：第1题B，第2题必须写理由。'.encode())
+            later_teacher=upload('synthetic-recheck-later-teacher.txt','虚构教师参考：第1题B，第2题B，必须写理由。'.encode())
             app.save_task_feedback(dict(task_id=recheck_task['id'],child='示例甲',day='2026-10-02',request_key='synthetic-recheck-later-teacher',attachments=[later_teacher]))
             with app.connect() as c:
                 ctx=app.homework_review_context(c,recheck_task['id'],original_id)
@@ -1007,14 +1009,14 @@ def run():
                      error_reason='第2题作答缺少老师要求的判断理由。')])
             def recheck_model(messages,schema,name,timeout,**kwargs):
                 serialized=json.dumps(messages,ensure_ascii=False)
-                assert all(text in serialized for text in (action,instruction,prior_text,previous_text,'第2题必须写理由'))
+                assert all(text in serialized for text in (action,instruction,prior_text,previous_text,'第2题B，必须写理由'))
                 return recheck_model_result
             with patch.object(family_llm,'homework_reference_draft',wraps=family_llm.homework_reference_draft) as generate,patch.object(family_llm,'_chat_json',side_effect=recheck_model):
                 rechecked=app.homework_review_draft(recheck_request)
                 args=generate.call_args.kwargs
                 assert args['task_action']==action and args['review_instruction']==instruction and args['previous_text']==previous_text
                 assert args['previous_documents']==[dict(name=review_name,text=prior_text)]
-                assert args['reference_documents']==[dict(name='synthetic-recheck-later-teacher.txt',text='虚构教师参考：第1题B，第2题必须写理由。')]
+                assert args['reference_documents']==[dict(name='synthetic-recheck-later-teacher.txt',text='虚构教师参考：第1题B，第2题B，必须写理由。')]
             assert rechecked['draft']['unverified_model_summary']['comparison']==comparison
             assert [q['label'] for q in rechecked['draft']['questions']]==['第1题','第2题']
             assert rechecked['draft']['questions'][1]['judgment']=='incorrect'
