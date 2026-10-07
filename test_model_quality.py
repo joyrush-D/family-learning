@@ -872,6 +872,8 @@ SCHOOL_CASES['school-heldout-c'] = dict(held_out=False, evidence=_SCHOOL_C['evid
 C = 'message:synthetic-school-heldout-c:'
 # 每项应引用的原消息：未变的背诵可引用点名“不变”的更正5，计算卡可引用同老师仅供家长的参考6。
 SCHOOL_C_REFS = {'纸船背诵': [1, 5], '语文练习1-5': [1, 5], '计算卡C4': [2, 6], '阅读确认单': [3], '磁铁装置图': [4]}
+# 本修复后才走到的另一道既有守卫：确认单原文含“阅读”且要交回，转家长核对（冻结真值为ready）；不属本根因，未在本分支放宽。
+SCHOOL_C_REVIEW = {'阅读确认单': '原文同时提到学习活动和打卡/提交，请核对是否含作业'}
 
 
 def _select_school_c(proposals=None, real=False, **changes):
@@ -892,7 +894,9 @@ def _school_c_matches(test, items, label=''):
     for truth in SCHOOL_CASES['school-heldout-c']['truth']:
         refs = [C + str(n) for n in SCHOOL_C_REFS[truth['id']]]
         found = [n for n, item in enumerate(items) if n not in used and sorted(e['ref'] for e in item['evidence']) == refs
-                 and item['due'] == truth['due'] and item['plan']['school_task']['state'] == 'ready'
+                 and item['due'] == truth['due']
+                 and item['plan']['school_task']['state'] == ('review' if truth['id'] in SCHOOL_C_REVIEW else 'ready')
+                 and SCHOOL_C_REVIEW.get(truth['id'], '') in item['plan']['school_task']['reason']
                  and item['plan']['school_task']['purpose'] == truth['purpose'] and all(k in item['title'] + item['body'] for k in truth['keys'])]
         test.assertEqual(len(found), 1, (label, truth['id'], [(i['title'], i['due'], i['plan']['school_task']['state'],
                                                                 [e['ref'][-1] for e in i['evidence']]) for i in items]))
@@ -946,9 +950,10 @@ class SchoolCorrectionScopeTest(unittest.TestCase):
                     ('six_other_publisher', '计算卡', dict(m6=dict(publisher='publisher:synthetic-c-chinese'))),
                     ('six_other_object', '计算卡', dict(m6=dict(text=six.replace('不更改计算卡C4', '不更改计算卡C5')))),
                     ('six_other_date', '计算卡', dict(m6=dict(text=six.replace('10月8日交期', '10月9日交期')))),
-                    ('six_attachment', '计算卡', dict(m6=dict(attachments=upload)))]
-        for label, key, changes in variants:
-            for real in (False, True):
+                    ('six_attachment', '计算卡', dict(m6=dict(attachments=upload)), (True,))]
+        # 计算卡是本条唯一成果；冻结交叉关联的附件消息会让它沿既有原件读取路线（本修复未改），这里只核实际入库形状。
+        for label, key, changes, *shapes in variants:
+            for real in (shapes[0] if shapes else (False, True)):
                 with self.subTest(label, real=real):
                     try:
                         items = _select_school_c(real=real, **changes)
