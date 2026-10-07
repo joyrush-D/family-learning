@@ -1053,6 +1053,56 @@ class ActionDateTest(unittest.TestCase):
         row = self.rows(None, due(4, ''))['运动服']
         self.assertEqual(row['due'], '', row)
 
+    # 独立虚构反例（accept5原包，逐字）：10月7日完整通知原定10月10日，同一发布者10月8日只补充“交回班主任”；
+    # 摘要写10月11日、保存日10月10日。两条原文发送日不同不等于摘要没写日期。
+    CROSS_DAY_EVIDENCE = [
+        dict(ref='message:synthetic-school-a:3', text='各位家长：请打印《秋游安全告知书》，家长签字后于10月10日前交回班主任，不需要盖章。另外周四学校体检，请孩子穿运动服。',
+             time='2026-10-07T19:10:00+08:00', kind='text', source='虚构班级群', sender='示例班主任', publisher='publisher:synthetic-head',
+             content_incomplete=False, attachments=[], related_messages=['message:synthetic-school-a:3']),
+        dict(ref='message:synthetic-school-a:7', text='补充：请家长将《秋游安全告知书》交回班主任。',
+             time='2026-10-08T19:10:00+08:00', kind='text', source='虚构班级群', sender='示例班主任', publisher='publisher:synthetic-head',
+             content_incomplete=False, attachments=[], related_messages=['message:synthetic-school-a:7'])]
+    CROSS_DAY_PROPOSALS = [
+        dict(title_quote='请打印《秋游安全告知书》，家长签字后于10月10日前交回班主任，不需要盖章', focus='school', due='2026-10-10',
+             evidence=[dict(ref='message:synthetic-school-a:3'), dict(ref='message:synthetic-school-a:7')], learning_subject='', learning_goal_id='',
+             task_title='打印并签字交回秋游安全告知书', task_goal='打印《秋游安全告知书》，家长签字后10月11日前交回班主任；不需要盖章。', task_advice='',
+             task_state='ready', task_reason='原文明确。', task_change='new', task_target_id='', task_purpose='admin', task_submission=''),
+        dict(title_quote='另外周四学校体检，请孩子穿运动服', focus='school', due='2026-10-08', evidence=[dict(ref='message:synthetic-school-a:3')],
+             learning_subject='', learning_goal_id='', task_title='周四体检穿运动服', task_goal='周四学校体检，孩子穿运动服。', task_advice='',
+             task_state='ready', task_reason='原文明确。', task_change='new', task_target_id='', task_purpose='admin', task_submission='')]
+
+    def test_summary_date_across_sending_days_is_checked_not_skipped(self):
+        import family_agent
+        as_of = '2026-10-08'
+        packet = dict(evidence=self.CROSS_DAY_EVIDENCE, proposals=self.CROSS_DAY_PROPOSALS, as_of=as_of)
+        self.assertEqual(hashlib.sha256(json.dumps(packet, ensure_ascii=False, sort_keys=True).encode()).hexdigest(),
+                         'f39f8cd1722813c1af5583f669d4dfc0f1bdc302506d45fdae5800b064f34b34')
+
+        def select(goal=None):
+            proposals = copy.deepcopy(self.CROSS_DAY_PROPOSALS)
+            if goal is not None: proposals[0]['task_goal'] = goal
+            with patch.object(family_agent.family_llm, '_chat_json', return_value=dict(proposals=proposals)):
+                items = family_agent._select('school', copy.deepcopy(self.CROSS_DAY_EVIDENCE), school_goals=[], as_of=as_of)
+            return {key: next(i for i in items if key in i['title']) for key in ('告知书', '运动服')}, items
+        rows, _ = select()
+        self.assertEqual(rows['告知书']['plan']['school_task']['state'], 'review', rows['告知书'])
+        self.assertNotEqual(rows['告知书']['due'], '2026-10-11', rows['告知书'])
+        self.assertEqual((rows['运动服']['due'], rows['运动服']['plan']['school_task']['state']), ('2026-10-08', 'ready'))
+        # 正确改写与未写日期的摘要保持原日期ready；随发送日变化的相对日期无法确定依据，不得ready。
+        notice = '打印《秋游安全告知书》，家长签字后10月10日前交回班主任；不需要盖章。'
+        for label, goal, state in (('same_absolute_day', notice, 'ready'), ('no_date', notice.replace('10月10日前', ''), 'ready'),
+                                   ('relative_differs_by_sending_day', notice.replace('10月10日前', '后天前'), 'review')):
+            with self.subTest(label):
+                row = select(goal)[0]['告知书']
+                self.assertEqual((row['due'], row['plan']['school_task']['state']), ('2026-10-10', state), row)
+        # 保存层同样不收跨发送日的矛盾就绪摘要（纯回执，不经数据库）。
+        _, items = select(notice)
+        family_agent._school_native_saved(copy.deepcopy(items), copy.deepcopy(self.CROSS_DAY_EVIDENCE))
+        tampered = copy.deepcopy(items); item = next(i for i in tampered if '告知书' in i['title'])
+        item['body'] = item['plan']['school_task']['goal'] = self.CROSS_DAY_PROPOSALS[0]['task_goal']
+        with self.assertRaises(family_agent.AgentError):
+            family_agent._school_native_saved(tampered, copy.deepcopy(self.CROSS_DAY_EVIDENCE))
+
 
 class UnansweredReasonTest(unittest.TestCase):
     def test_unanswered_unknown_needs_its_own_reason_and_source(self):
@@ -1144,14 +1194,14 @@ class ScorerHardeningTest(unittest.TestCase):
 
 
 class _FakeOpener:
-    def __init__(self, reply=None, status=None):
-        self.reply, self.status, self.calls = reply, status, []
+    def __init__(self, reply=None, status=None, model='fake-strong-reported'):
+        self.reply, self.status, self.model, self.calls = reply, status, model, []
 
     def open(self, request, timeout=None):
         self.calls.append(dict(request.header_items()))
         if self.status:
             raise HTTPError(request.full_url, self.status, 'fake', None, io.BytesIO(b'{"error":{"message":"fake overload"}}'))
-        body = dict(model='fake-strong-reported', usage=dict(prompt_tokens=11, completion_tokens=7, total_tokens=18),
+        body = dict(model=self.model, usage=dict(prompt_tokens=11, completion_tokens=7, total_tokens=18),
                     choices=[dict(index=0, finish_reason='stop', message=dict(role='assistant', content=json.dumps(self.reply, ensure_ascii=False)))])
         return io.BytesIO(json.dumps(body, ensure_ascii=False).encode())
 
@@ -1219,6 +1269,31 @@ class LiveEvidenceTest(unittest.TestCase):
                 self.assertTrue(record['redaction']['raw_sha256'], record['redaction'])
         self.assertNotIn('fake-key-sentinel', self.saved())
         self.assertNotIn('fake-endpoint', self.saved())
+
+    def test_configured_marker_as_parsed_key_or_reported_model_is_not_kept_in_keys_metadata_or_usage_db(self):
+        import family_llm
+        # accept5原包逐字：解析结果以FAKE标记为字典键（FAKE 测试标记，绝非真实凭据）。键与raw_sha256路径都不得再含该标记。
+        value = 'upstream parsed value echoing fake-key-sentinel'
+        clean = _redact_record(dict(captured=dict(raw_model_output={'fake-key-sentinel': value})), ['fake-key-sentinel'])
+        self.assertNotIn('fake-key-sentinel', json.dumps(clean, ensure_ascii=False))
+        self.assertEqual(clean['redaction']['marker'], REDACTED)
+        self.assertEqual(sorted(clean['redaction']['raw_sha256'].values()),
+                         sorted(hashlib.sha256(raw.encode()).hexdigest() for raw in ('fake-key-sentinel', value)))
+        # 隐去后同名的两个键都保留，不互相覆盖。
+        both = _redact_record({'fake-key-sentinel': 'a', REDACTED: 'b'}, ['fake-key-sentinel'])
+        self.assertEqual(sorted(v for k, v in both.items() if k != 'redaction'), ['a', 'b'])
+        # 实际live路径：上游报告的模型名回显配置标记时，用量库本身不写入该名；令牌计数与作业结果照常保留。
+        cfg = Path(self.cfg) / 'model.json'
+        cfg.write_text(json.dumps(dict(json.loads(cfg.read_text()), api_key='fake-key-sentinel')))
+        with patch.object(family_llm, 'build_opener', lambda *handlers: _FakeOpener(_homework_reply('homework-a'), model='fake-key-sentinel')):
+            live(self.cfg, self.out, 'strong', ['homework-a'])
+        record = json.loads((self.out / 'homework-a-strong.json').read_text())
+        row = record['ledger'][0]
+        self.assertEqual((row['state'], row['reported_model'], row['input_tokens'], row['output_tokens'], row['total_tokens']),
+                         ('returned', None, 11, 7, 18), row)
+        self.assertTrue(record['score']['final']['passed'], record['score'])
+        self.assertNotIn(b'fake-key-sentinel', (self.out / 'homework-a-strong-data' / 'family.sqlite3').read_bytes())
+        self.assertNotIn('fake-key-sentinel', self.saved())
 
     def test_http_failure_body_and_status_kept(self):
         import family_llm
