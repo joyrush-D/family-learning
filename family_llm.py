@@ -1079,11 +1079,13 @@ def _teacher_reference_entries(documents):
         paper=section=None;title='';first=len(entries)
         for line in document['text'].splitlines():
             marks=list(_REF_QUESTION.finditer(line))
-            new,section,words=_ref_scope(line[:marks[0].start()] if marks else line,section)
+            head=line[:marks[0].start()] if marks else line
+            new,section,words=_ref_scope(head,section)
+            cover=re.search(_REF_WORDS,head) is not None  # 「教师参考答案（…）」 describes the document, not a paper.
             if new is not None: paper,title=new,''
-            elif words and not marks and (paper is not None or len(entries)>first):
-                paper,title=None,words  # A later unrecognized title never inherits the previous paper or entries.
-            here,rest=(None,words) if marks and new is None and words else (paper,title)  # Words on the line qualify its own entries.
+            elif words and not marks and (not cover or paper is not None or len(entries)>first):
+                paper,title=None,'' if cover else words  # A title names its own scope; none inherits the previous paper.
+            here,rest=(None,'' if cover else words) if marks and new is None and words else (paper,title)  # Words on the line qualify its own entries.
             for n,mark in enumerate(marks):
                 tail=line[mark.end():marks[n+1].start() if n+1<len(marks) else len(line)]
                 sub=_REF_SUB.match(tail);tail=tail[sub.end():] if sub else tail
@@ -1117,10 +1119,7 @@ def _ref_relation(label,entry):
 
 
 def _ref_agrees(claimed,teacher):
-    """A teacher-labelled value must be the teacher's letter, or the teacher's whole text."""
-    if re.fullmatch('[A-H]',teacher):
-        found=re.match(r'([A-H])(?![A-Za-z])',claimed)
-        return bool(found) and found[1]==teacher
+    """A teacher-labelled value must be the teacher's whole value; added letters or words are not the teacher's."""
     whole=lambda value:re.sub(r'[，,；;。.．、！!？?]+$','',''.join(value.split()))
     return whole(claimed)==whole(teacher)
 
@@ -1135,9 +1134,8 @@ def _prefer_teacher_reference(item,question_kind,entries,images):
     def pending(answer,note):
         item.update(answer=answer,judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty=(note+item['uncertainty'].strip())[:300])
     if not same:
-        # A named paper or 大题 is never settled by the model's own label; a gap only in leftover words or the
-        # sub-question still blocks AI derivation but keeps the old contract for a teacher-labelled value.
-        if any(relation=='unsure' or relation=='part' and claimed is None for relation,_ in related):
+        # An unpaired same number is never settled by the model's own label, whether paper, 大题, title or sub-question.
+        if any(relation in ('unsure','part') for relation,_ in related):
             pending('','教师参考写有同题号答案，但卷别、大题或小题与本题无法核明对应；%s，未判定，请核明后补查。'%(
                 '未采用模型自行推导' if claimed is None else '模型所标教师参考的归属无法核实'))
         return
