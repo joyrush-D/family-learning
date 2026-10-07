@@ -1042,11 +1042,13 @@ retry提出经家庭商量后隔一段时间不看讲解再试、或试一道相
 
 
 # Bounded teacher-text grammar: "[卷别][第N大题/一、] 第N题/N题/QN/N.[(小题)] [教师参考/答案：]答案", one line or
-# several entries per line, a paper or section line applying to the lines below. A paper is any explicit name
-# ending in 卷 (not 试卷/本卷 and the like); any other new title starts an unnamed scope whose words must match
+# several entries per line, a paper or section line applying to the lines below. A paper is the whole explicit name
+# ending in 卷 (not 试卷/本卷 and the like), one paper only when the whole names are equal, never by a shared tail;
+# a name too long to read whole stays unknown. Any other new title starts an unnamed scope whose words must match
 # exactly. Anything else, and every reference image, proves nothing here; the model's answer prefix alone never
 # decides the source, and teacher values are compared whole, never cut short.
-_REF_PAPER=re.compile(r'[^\s，,；;。：:、（）()【】\[\]“”"]{1,12}?卷')
+_REF_PAPER=re.compile(r'(?<![^\s，,；;。：:、（）()【】\[\]“”"卷])[^\s，,；;。：:、（）()【】\[\]“”"]{1,30}?卷')  # from its separator
+_REF_PAPER_LONG=re.compile(r'[^\s，,；;。：:、（）()【】\[\]“”"卷]{31}卷')
 _REF_GENERIC_PAPER=re.compile(r'[本该此这那全整每各原同两多]?[试考答问纸]?卷')
 _REF_SECTION=re.compile(r'第\s*(\d{1,2}|[一二三四五六七八九十]{1,3})\s*(?:大题|部分)|(?:^|[^第\d一二三四五六七八九十])([一二三四五六七八九十]{1,3})\s*[、.．]')
 _REF_QUESTION=re.compile(r'第\s*(\d{1,3})\s*题|(?<![\d.．])(\d{1,3})\s*题|(?<![A-Za-z])[Qq]\s*(\d{1,3})(?!\d)|(?:^|(?<=[\s、，,；;]))(\d{1,3})\s*[.．、](?!\d)')
@@ -1066,8 +1068,9 @@ def _ref_number(value):
 def _ref_scope(text,section=None):
     """The one reading of a label or teacher heading: explicit paper name or None, 大题 number, leftover words."""
     names=[re.sub('[试考答]卷$','卷',name) for part in re.split('[与和及]',text) for name in _REF_PAPER.findall(part)
-           if not _REF_GENERIC_PAPER.fullmatch(name)]
+           for name in [re.sub('^(?:%s)+'%_REF_WORDS,'',name)] if not _REF_GENERIC_PAPER.fullmatch(name)]  # 「教师参考北窗卷」 is 北窗卷
     paper=(names[0] if len(names)==1 else tuple(names)) if names and not any(re.search('[两均都]',name) for name in names) else '*' if names else None
+    paper='*' if _REF_PAPER_LONG.search(text) else paper  # Never cut a name to a shared tail; too long to read whole is unknown.
     found=_REF_SECTION.search(text)
     section=_ref_number(found[1] or found[2]) if found else None if names else section
     return paper,section,_REF_NOISE.sub('',_REF_SECTION.sub('',_REF_PAPER.sub('',text)))
@@ -1115,7 +1118,7 @@ def _ref_relation(label,entry):
         if mine is None or theirs is None or '*' in (mine,theirs):
             if n==2: part=True
             else: unsure=True
-        elif mine!=theirs and not (isinstance(mine,str) and isinstance(theirs,str) and (mine.endswith(theirs) or theirs.endswith(mine))): return 'other'
+        elif mine!=theirs: return 'other'  # whole names only: 「青树北窗卷」 is not 「北窗卷」
     return 'unsure' if unsure else 'part' if part else 'same'
 
 
