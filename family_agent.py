@@ -1974,10 +1974,13 @@ def _school_own_dates(quote,published):
 
 
 def _school_goal_dates(goal,cited):
-    """Dates a summary declares for itself, read on its originals' one sending day; several sending days are not guessed."""
+    """Dates a summary declares for itself, read on each of its originals' sending days.
+
+    Several sending days are not guessed, but a declared date is not an undeclared one: every reading is kept,
+    so a day that differs between them or from the saved date never equals that date.
+    """
     from family_agenda import sent_day
-    days={sent_day(e.get('time','')) for e in cited}
-    return _school_own_dates(goal,next(iter(days))) if len(days)==1 and all(days) else set()
+    return set().union(*(_school_own_dates(goal,day) for day in {sent_day(e.get('time','')) for e in cited} if day))
 
 
 def _school_own_clause_dates(quote,cited,others):
@@ -3159,7 +3162,9 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         # another item's date in the same notice, or a summary naming another day, never grounds it.
         clause=(_school_own_clause_dates(dated_quote,cited_evidence,title_quotes[:index]+title_quotes[index+1:])
                 if routing and not historical and not native_action and dated_quote else set())
-        owned=bool(clause) and clause=={due} and _school_goal_dates(str(proposal.get('task_goal','')),cited_evidence)=={due}
+        sent={sent_day(e.get('time','')) for e in cited_evidence}
+        owned=(bool(clause) and clause=={due} and len(sent)==1 and all(sent)
+               and _school_goal_dates(str(proposal.get('task_goal','')),cited_evidence)=={due})
         if due:
             # One notice may carry several dated requirements; the model's date must be one the sending day grounds.
             grounded=due in relative if mode=='school' else any(due in item['text'] for item in cited)
