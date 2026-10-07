@@ -428,7 +428,9 @@ const correctionItemName=title=>String(title||'').replace(/^错题[:：]\s*/,'')
 function showCorrectionContext(task,r){
  const f=$('#recordForm'),d=$('#recordDialog'),detail=String(r.note||'').split('\n')[0].slice(0,120),item=correctionItemName(r.title);
  f.classList.add('followup-mode');$('#recordDialogTitle').textContent='记订正 / 复测';
- $('#recordFollowupTask').textContent=task.title;$('#recordFollowupItem').textContent=item;$('#recordFollowupNote').textContent=detail;$('#recordFollowupNote').hidden=!detail;
+ $('#recordFollowupTask').textContent=task.title;$('#recordFollowupItem').textContent=item;
+ // The note's first line ("学生原答：C") joins the label/value columns; a line without a short label keeps the value column.
+ const [noteLabel,noteValue]=detail.match(/^([^：:\s]{1,4})[：:]\s*(.*)$/)?.slice(1)||['',detail];$('#recordFollowupNote span').textContent=noteLabel;$('#recordFollowupNote strong').textContent=noteValue;$('#recordFollowupNote').hidden=!detail;
  $('#recordFollowupOwner').textContent=[r.child,r.subject].filter(Boolean).join(' · ')+' · 保存后留在这份作业下，不改作业状态';
  // Kind shares the date's row; photo entry follows the note, before the optional help fields.
  $('#recordFollowupContext').hidden=false;f.elements.day.closest('label').before($('#relationFields'));$('#recordFollowupCaptureHome').after(sharedCapture);captureHint.textContent='拍下订正后的卷面或复测结果，也可选文件或录一段语音；每份最多20MB，原件先保存。';
