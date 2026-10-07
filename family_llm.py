@@ -1041,6 +1041,81 @@ retry提出经家庭商量后隔一段时间不看讲解再试、或试一道相
     return dict(plan=plan,uncertainties=[v.strip() for v in result['uncertainties']])
 
 
+# Bounded teacher-text grammar: "[卷别][大题] 第N题/N题/QN/N.[(小题)] [教师参考/答案：]答案", one line or
+# several entries per line, a paper or section line applying to the lines below. Anything else, and every
+# reference image, proves nothing here; the model's answer prefix alone never decides the source.
+_REF_PAPER=re.compile(r'[^\s，,；;。：:、（）()【】\[\]“”"]{0,8}?[甲乙丙丁戊己庚辛壬癸A-Z上下]卷')
+_REF_SECTION=re.compile(r'第([一二三四五六七八九十]{1,3})(?:大题|部分)|(?:^|[^第\d一二三四五六七八九十])([一二三四五六七八九十]{1,3})\s*[、.．]')
+_REF_QUESTION=re.compile(r'第\s*(\d{1,3})\s*题|(?<![\d.．])(\d{1,3})\s*题|(?<![A-Za-z])[Qq]\s*(\d{1,3})(?!\d)|(?:^|(?<=[\s、，,；;]))(\d{1,3})\s*[.．、](?!\d)')
+_REF_SUB=re.compile(r'\s*(?:[（(]\s*(\d{1,2})\s*[)）]|第\s*(\d{1,2})\s*小题)')
+_REF_SOURCE=re.compile(r'^[\s:：]*(?:教师参考答案|教师参考|参考答案|老师答案|答案)?\s*(?:为|是)?[\s:：]*')
+
+
+def _ref_scope(text,paper=None,section=None):
+    papers=_REF_PAPER.findall(text)
+    if papers: paper,section=(papers[0] if len(papers)==1 else '*'),None
+    found=_REF_SECTION.search(text)
+    return paper,(found[1] or found[2] if found else section)
+
+
+def _teacher_reference_entries(documents):
+    entries=[]
+    for document in documents:
+        paper=section=None
+        for line in document['text'].splitlines():
+            marks=list(_REF_QUESTION.finditer(line))
+            paper,section=_ref_scope(line[:marks[0].start()] if marks else line,paper,section)
+            for n,mark in enumerate(marks):
+                tail=line[mark.end():marks[n+1].start() if n+1<len(marks) else len(line)]
+                sub=_REF_SUB.match(tail);tail=tail[sub.end():] if sub else tail
+                after=re.search(r'[\s，,；;。]((?:%s)|第[一二三四五六七八九十]{1,3}(?:大题|部分)|[一二三四五六七八九十]{1,3}\s*[、.．])'%_REF_PAPER.pattern,tail)
+                answer=re.sub(r'[\s，,；;。.．、]+$','',_REF_SOURCE.sub('',tail[:after.start()] if after else tail,count=1))
+                if answer: entries.append(dict(paper=paper,section=section,number=int(next(g for g in mark.groups() if g)),
+                                               sub=int(next(g for g in sub.groups() if g)) if sub else None,answer=answer[:100]))
+                if after: paper,section=_ref_scope(tail[after.start(1):],paper,section)
+    return entries
+
+
+def _ref_relation(label,entry):
+    """same / different / unsure: an unnamed or ambiguous paper, section or sub-question is never guessed."""
+    mark=_REF_QUESTION.search(label)
+    if not mark: return 'unsure'
+    if int(next(g for g in mark.groups() if g))!=entry['number']: return 'different'
+    sub=_REF_SUB.match(label,mark.end());paper,section=_ref_scope(label[:mark.start()])
+    unsure=False
+    for mine,theirs in ((paper,entry['paper']),(section,entry['section']),(int(next(g for g in sub.groups() if g)) if sub else None,entry['sub'])):
+        if mine is None and theirs is None: continue
+        if mine is None or theirs is None or '*' in (mine,theirs): unsure=True
+        elif mine!=theirs and not (isinstance(mine,str) and (mine.endswith(theirs) or theirs.endswith(mine))): return 'different'
+    return 'unsure' if unsure else 'same'
+
+
+def _prefer_teacher_reference(item,question_kind,entries,images):
+    """A question the supplied teacher text covers is compared by that text, whatever source the model claims."""
+    related=[(_ref_relation(item['label'],entry),entry['answer']) for entry in entries]
+    same=sorted({answer for relation,answer in related if relation=='same'})
+    claimed=item['answer'].removeprefix('教师参考：').strip() if item['answer'].startswith('教师参考：') else None
+    def pending(answer,note):
+        item.update(answer=answer,judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty=(note+item['uncertainty'].strip())[:300])
+    if not same:
+        if claimed is None and any(relation=='unsure' for relation,_ in related):
+            pending('','教师参考写有同题号答案，但卷别、大题或小题与本题无法核明对应；未采用模型自行推导，请核明后补查。')
+        return
+    if len(same)>1: return pending('','教师参考文字对本题写有不同答案（%s），未判定，待老师或家长核对。'%'／'.join(same))
+    teacher=same[0];letter=re.fullmatch('[A-H]',teacher)
+    claimed_letter=re.match(r'([A-H])(?![A-Za-z])',claimed) if claimed else None
+    if claimed is not None and (claimed==teacher or not (letter and claimed_letter and claimed_letter[1]!=teacher)): return
+    if claimed is not None and images:
+        return pending('教师参考：'+teacher,'模型所称教师参考%s与教师参考文字%s不一致，未判定，请核对教师原件。'%(claimed_letter[1],teacher))
+    student=item['student_answer'].strip()
+    if letter and question_kind=='objective' and item['judgment']!='unknown' and re.fullmatch('[A-H]',student):
+        return item.update(answer='教师参考：'+teacher,judgment='correct' if student==teacher else 'incorrect',possible_cause='',steps='',
+                           error_reason='' if student==teacher else '作答%s与教师参考%s不同。'%(student,teacher))
+    if claimed is None and ''.join(re.sub(r'^\s*AI自行推导\s*[:：]','',item['answer']).split())==''.join(teacher.split()):
+        item['answer']='教师参考：'+teacher;return  # Same value, only the label was wrong.
+    pending('教师参考：'+teacher,'本题有教师参考，模型未按教师参考核对，未判定；请对照教师参考补查。')
+
+
 def homework_reference_draft(images, *, data_path=None, timeout=90, review=False, reference_images=(),
                              reference_documents=(), image_labels=(), reference_labels=(), program_coverage=(),
                              previous_documents=(), previous_text='', review_instruction='', task_action='', answer_note='',
@@ -1091,6 +1166,7 @@ def homework_reference_draft(images, *, data_path=None, timeout=90, review=False
             or len({''.join(label.split()) for label in pending_labels})!=len(pending_labels)):
         raise ValueError('上一轮待补题号无法核对')
     teacher_reference=bool(reference_images or reference_documents)
+    teacher_entries=_teacher_reference_entries(reference_documents) if review else []
     field = lambda limit: dict(type='string',maxLength=limit)
     schema=dict(type='object',additionalProperties=False,required=['items','coverage'],properties=dict(
         items=dict(type='array',minItems=1,maxItems=25,items=dict(type='object',additionalProperties=False,
@@ -1189,6 +1265,7 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
             if not question_label or question_label in seen_question_labels:
                 raise LLMDraftError('检查结果的卷别或题号为空或重复，无法分别核对；请明确卷别、题号与小题后再次检查')
             seen_question_labels.add(question_label)
+        if teacher_entries: _prefer_teacher_reference(item,question_kind,teacher_entries,bool(reference_images))
         if review and teacher_reference and question_kind=='objective' and item['answer'].startswith('教师参考：'):
             # ponytail: literal uppercase A-H only; other answers need an evidenced comparator.
             student=item['student_answer'].strip()
@@ -1274,6 +1351,8 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
                 text.extend(['错误依据：'+item['error_reason'],'订正建议：'+item['steps']])
                 if item['possible_cause'].strip(): text.append('可能原因（待问孩子）：'+item['possible_cause'])
             if item['uncertainty']: text.append('不确定：'+item['uncertainty'])
+        if teacher_reference and any(item['answer'].startswith('AI自行推导') for item in result['items']):
+            text.extend(['','标“AI自行推导”的题：程序只按教师参考文字中“卷别/大题 第N题 答案”等有限写法核过不在老师覆盖内；参考图片及其他写法未经程序逐题核对，请对照原件。'])
         text.extend(['','覆盖说明：'+(result['coverage'] or '未说明')])
     else:
         text=['这是%d页图片的待核对草稿；请对照原题和孩子卷面逐项改正后再保存或打印。'%(len(images)+len(reference_images)),
