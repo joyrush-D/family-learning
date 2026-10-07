@@ -543,10 +543,9 @@ class ProgramPathTest(unittest.TestCase):
         self.assertEqual((result['covered'], result['usable'], result['missed']), (7, 7, []), result)
         for key in ('purpose_errors', 'requirement_errors', 'citation_errors', 'reference_errors', 'extra'):
             self.assertEqual(result[key], [], (key, result))
-        # 一般校验无法从原句核对的日期被清空并转待核对，不保存错日期；仍计未通过，作为剩余程序限制报告。
-        self.assertFalse(result['passed'])
-        self.assertEqual(sorted(e.split(':')[0] for e in result['due_errors']), ['背诵', '运动服'], result)
-        self.assertTrue(all(e.split(':')[1].startswith('无') for e in result['due_errors']), result)
+        # 背诵“明天早读抽查”、运动服“周四学校体检”是各项自己的安排日；抄写/听写同条各保本项日期，不因另一项日期转待核对。
+        self.assertEqual((result['due_errors'], result['review']), ([], []), result)
+        self.assertTrue(result['passed'], result)
 
     def test_unlocated_outcome_needs_disjoint_literal_quote_from_same_publisher(self):
         import family_agent
@@ -575,14 +574,15 @@ class NativeLedgerChangeTest(unittest.TestCase):
     """A later change binds only to the one located outcome it names; the list never leaves the ledger."""
     LIST = 'message:synthetic-school-a:1'
 
-    def ledger(self, text, clock='19:25:00', publisher='publisher:synthetic-chinese', source='school-a', **extra):
+    def ledger(self, text, clock='19:25:00', publisher='publisher:synthetic-chinese', source='school-a', base_text=None, key=4, **extra):
         import family_agent
         base = dict(copy.deepcopy(SCHOOL_CASES['school-a']['evidence'][0]), related_messages=[self.LIST])
+        if base_text: base['text'] = base_text
         ref = 'message:synthetic-%s:9' % source
         later = dict(ref=ref, text=text, time='2026-10-07T%s+08:00' % clock, kind='text', source='虚构班级群', sender='示例',
                      publisher=publisher, content_incomplete=False, attachments=[], related_messages=[ref])
         later.update(extra)
-        return {a['quote'][:4]: [c['ref'][-1] for c in a.get('changes', [])]
+        return {a['quote'][:key]: [c['ref'][-1] for c in a.get('changes', [])]
                 for a in family_agent._school_native_actions([base, later]) if a['ref'] == self.LIST}
 
     def test_change_binds_only_the_named_outcome(self):
@@ -600,6 +600,33 @@ class NativeLedgerChangeTest(unittest.TestCase):
                               ('other_source', dict(text='补充：练习册第5题不用做。', source='other'))]:
             with self.subTest(label):
                 self.assertEqual(self.ledger(**kwargs), kept)
+
+
+    def test_change_must_match_every_specific_object_it_names(self):
+        # 书名/页码/Unit/科目/题号与原项冲突、否定提及或未列对象都不能绑定；未写对象的“第N题”只按唯一可核对对象绑定。
+        kept, bound = {'背诵《秋': [], '完成练习': []}, {'背诵《秋': [], '完成练习': ['9']}
+        for label, text in [('other_page', '补充：练习册第9页第5题不用做，只做第1-4题。'),
+                            ('other_title', '补充：《数学专项》练习册第5题不用做，只做第1-4题。'),
+                            ('other_subject', '补充数学练习册：第5题不用做，只做第1-4题。'),
+                            ('negated_mention', '补充：不是练习册，是作业本第5题不用做。'),
+                            ('question_outside_list', '补充：练习册第8题不用做。'),
+                            ('unlisted_object', '补充：周记第5题不用做。')]:
+            with self.subTest(label):
+                self.assertEqual(self.ledger(text), kept)
+        for label, text in [('same_page', '补充：练习册第12页第5题不用做。'), ('same_subject', '补充语文练习册：第5题不用做，只做第1-4题。'),
+                            ('unnamed_sole_object', '补充：第5题不用做，只做第1-4题。')]:
+            with self.subTest(label):
+                self.assertEqual(self.ledger(text), bound)
+        unit = '今天英语作业：1. 背诵Unit 3课文第一段；2. 完成Unit 3练习册第1-5题，本周五交。'
+        self.assertEqual(self.ledger('补充：Unit 30练习册第5题不用做。', base_text=unit), {'背诵Un': [], '完成Un': []})
+        self.assertEqual(self.ledger('补充：Unit 3练习册第5题不用做。', base_text=unit), {'背诵Un': [], '完成Un': ['9']})
+        two = '今天语文作业：1. 完成练习册第12页第1-5题；2. 完成练习册第13页第1-5题。'
+        self.assertEqual(self.ledger('补充：第5题不用做。', base_text=two, key=9), {'完成练习册第12页': [], '完成练习册第13页': []})
+        self.assertEqual(self.ledger('补充：练习册第13页第5题不用做。', base_text=two, key=9), {'完成练习册第12页': [], '完成练习册第13页': ['9']})
+
+    def test_change_within_two_minutes_binds_its_one_outcome_without_releasing_the_list(self):
+        self.assertEqual(self.ledger('补充语文练习册：第5题不用做，只做第1-4题。', clock='19:01:00'), {'背诵《秋': [], '完成练习': ['9']})
+        self.assertEqual(self.ledger('补充：《数学专项》练习册第5题不用做。', clock='19:01:00'), {'背诵《秋': [], '完成练习': []})
 
 
 class SiblingCoverageTest(unittest.TestCase):
@@ -628,6 +655,59 @@ class SiblingCoverageTest(unittest.TestCase):
             for proposals in (base, base[1:]):
                 with self.subTest(label, proposals=len(proposals)), self.assertRaises(family_agent.AgentError):
                     _select_school_a(proposals, evidence=evidence)
+
+
+    def test_change_naming_another_page_or_title_rejects_the_reply_citing_it(self):
+        import family_agent
+        for text in ('补充：练习册第9页第5题不用做，只做第1-4题。', '补充：《数学专项》练习册第5题不用做，只做第1-4题。'):
+            evidence = [dict(e, related_messages=[e['ref']]) for e in copy.deepcopy(SCHOOL_CASES['school-a']['evidence'])]
+            evidence[5]['text'] = text
+            with self.subTest(text), self.assertRaises(family_agent.AgentError):
+                _select_school_a(_school_a_reply(), evidence=evidence)
+
+    def test_change_within_two_minutes_keeps_each_unchanged_sibling_exactly_once(self):
+        import family_agent
+        base = _school_a_reply()
+        evidence = [dict(e, related_messages=[e['ref']]) for e in copy.deepcopy(SCHOOL_CASES['school-a']['evidence'])]
+        evidence[5].update(text='补充语文练习册：第5题不用做，只做第1-4题。', time='2026-10-07T19:01:00+08:00')
+        result = score_school('school-a', school_rows(_select_school_a(base, evidence=evidence)))
+        self.assertEqual((result['covered'], result['usable'], result['citation_errors'], result['reference_errors'], result['extra']),
+                         (7, 7, [], [], []), result)
+        for label, proposals in [('drop_recite', base[1:]), ('dup_recite', base + [copy.deepcopy(base[0])])]:
+            with self.subTest(label), self.assertRaises(family_agent.AgentError):
+                _select_school_a(proposals, evidence=evidence)
+
+    def test_someone_elses_linked_unread_or_attachment_message_keeps_the_complete_list(self):
+        # 原清单完整；家长的关联消息未读/有附件/不完整只保留为可见限制，不让所有已知文字行动可漏。
+        import family_agent
+        base = _school_a_reply()
+        for label, change in [('unread', dict(unread=True)), ('attachment', dict(attachments=[dict(name='全虚构未读取附件', mime='image/png')])),
+                              ('incomplete', dict(content_incomplete=True))]:
+            evidence = copy.deepcopy(SCHOOL_CASES['school-a']['evidence'])
+            evidence[0]['related_messages'] = [evidence[0]['ref'], evidence[4]['ref'], evidence[5]['ref']]
+            evidence[4].update(change, related_messages=[evidence[4]['ref'], evidence[0]['ref']])
+            with self.subTest(label):
+                ledger = {a['quote'][:4]: [c['ref'][-1] for c in a['changes']]
+                          for a in family_agent._school_native_actions(copy.deepcopy(evidence)) if a['ref'] == evidence[0]['ref']}
+                self.assertEqual(ledger, {'背诵《秋': [], '完成练习': ['6']})
+                for proposals in (base[1:], base + [copy.deepcopy(base[0])]):
+                    with self.assertRaises(family_agent.AgentError):
+                        _select_school_a(proposals, evidence=evidence)
+
+    def test_unverifiable_correction_prefix_does_not_release_the_list(self):
+        # 早于原清单、不完整或带未读附件的“更正”无法核对它改哪项：清单保留，漏未变行动仍拒绝。
+        import family_agent
+        base = _school_a_reply()
+        for label, change in [('earlier', dict(text='更正：练习册第5题不用做。', time='2026-10-07T18:30:00+08:00')),
+                              ('incomplete', dict(text='更正：练习册第5题不用做。', content_incomplete=True)),
+                              ('attachment', dict(text='更正：练习册第5题不用做。', attachments=[dict(name='全虚构未读取附件', mime='image/png')]))]:
+            evidence = [dict(e, related_messages=[e['ref']]) for e in copy.deepcopy(SCHOOL_CASES['school-a']['evidence'])]
+            evidence[5].update(change)
+            with self.subTest(label):
+                ledger = [a['quote'][:4] for a in family_agent._school_native_actions(copy.deepcopy(evidence)) if a['ref'] == evidence[0]['ref']]
+                self.assertEqual(ledger, ['背诵《秋', '完成练习'])
+                with self.assertRaises(family_agent.AgentError):
+                    _select_school_a(base[1:], evidence=evidence)
 
 
 def ingest_school(name, reply, runs=1):
@@ -721,6 +801,87 @@ class RealIngestTest(unittest.TestCase):
         empty = ingest_school('school-b', dict(proposals=[]))
         self.assertEqual((empty['counts'], empty['results'][0]['processed']), ([0], 0), empty['results'])
         self.assertGreaterEqual(empty['results'][0].get('failed', 0), 1, empty['results'])
+        # 保留变体：两项行政日期由各自原句明确（10月9日前／下周三前），应各自ready；借另一项日期不得ready。
+        good = score_school('school-b', school_rows(ingest_school('school-b', dict(proposals=_school_b_reply()))['items']))
+        self.assertEqual((good['covered'], good['usable'], good['due_errors'], good['review']), (5, 5, [], []), good)
+        borrowed = _school_b_reply(); borrowed[2]['due'] = '2026-10-09'
+        row = next(r for r in school_rows(ingest_school('school-b', dict(proposals=borrowed))['items']) if '学籍' in r['text'])
+        self.assertNotEqual(row['due'], '2026-10-09', row); self.assertNotEqual(row['state'], 'ready', row)
+
+
+class ActionDateTest(unittest.TestCase):
+    """本项安排日只来自本项原句；借日期、周期、过去、范围、发送日当截止、无日期补今天和模型编日都不能成为ready日期。"""
+
+    def rows(self, evidence_edit=None, proposal_edit=None):
+        evidence = [dict(e, related_messages=[e['ref']]) for e in copy.deepcopy(SCHOOL_CASES['school-a']['evidence'])]
+        proposals = _school_a_reply()
+        if evidence_edit: evidence_edit(evidence)
+        if proposal_edit: proposal_edit(proposals)
+        rows = school_rows(_select_school_a(proposals, evidence=evidence))
+        return {key: next(r for r in rows if key in r['text']) for key in ('背诵', '运动服', '抄写', '听写', '告知书')}
+
+    def test_each_action_keeps_its_own_arrangement_date(self):
+        self.assertEqual({k: (r['due'], r['state']) for k, r in self.rows().items()},
+                         {'背诵': ('2026-10-08', 'ready'), '运动服': ('2026-10-08', 'ready'), '抄写': ('2026-10-08', 'ready'),
+                          '听写': ('2026-10-09', 'ready'), '告知书': ('2026-10-10', 'ready')})
+
+    def test_borrowed_recurring_past_range_sent_day_or_invented_dates_are_not_ready(self):
+        def clause(n, old, new):
+            def edit(evidence): evidence[n]['text'] = evidence[n]['text'].replace(old, new)
+            return edit
+
+        def quote(n, old, new, due=None):
+            def edit(proposals):
+                proposals[n]['title_quote'] = proposals[n]['title_quote'].replace(old, new)
+                if due is not None: proposals[n]['due'] = due
+            return edit
+
+        def due(n, value):
+            def edit(proposals): proposals[n]['due'] = value
+            return edit
+        cases = [('borrow_notice_date', '运动服', '2026-10-10', None, due(4, '2026-10-10')),
+                 ('borrow_dictation_date', '抄写', '2026-10-09', None, due(5, '2026-10-09')),
+                 ('borrow_other_clause', '告知书', '2026-10-08', None,
+                  lambda p: p[3].update(title_quote='另外周四学校体检，请孩子穿运动服', due='2026-10-08')),
+                 ('recurring', '运动服', '2026-10-08', clause(2, '另外周四', '另外每周四'), quote(4, '另外周四', '另外每周四')),
+                 ('past_week', '运动服', '2026-10-08', clause(2, '另外周四', '另外上周四'), quote(4, '另外周四', '另外上周四')),
+                 ('range', '运动服', '2026-10-08', clause(2, '另外周四', '另外周四至周五'), quote(4, '另外周四', '另外周四至周五')),
+                 ('past_day', '背诵', '2026-10-08', clause(0, '明天早读', '昨天早读'), quote(0, '明天早读', '昨天早读')),
+                 ('sent_day_as_due', '背诵', '2026-10-07', clause(0, '明天早读', '早读'), quote(0, '明天早读', '早读', '2026-10-07')),
+                 ('invented_admin', '运动服', '2026-10-09', None, due(4, '2026-10-09')),
+                 ('invented_native', '背诵', '2026-10-09', None, due(0, '2026-10-09'))]
+        truth = {'背诵': '2026-10-08', '运动服': '2026-10-08', '抄写': '2026-10-08', '告知书': '2026-10-10'}
+        for label, key, bad, evidence_edit, proposal_edit in cases:
+            with self.subTest(label):
+                row = self.rows(evidence_edit, proposal_edit)[key]
+                self.assertNotEqual(row['due'], bad, row)
+                kept_truth = evidence_edit is None and row['due'] == truth[key]
+                self.assertTrue(row['state'] != 'ready' or kept_truth, row)
+        # 模型没给日期时不补今天，也不借同条另一项日期。
+        row = self.rows(None, due(4, ''))['运动服']
+        self.assertEqual(row['due'], '', row)
+
+
+class UnansweredReasonTest(unittest.TestCase):
+    def test_unanswered_unknown_needs_its_own_reason_and_source(self):
+        for name, key in (('homework-a', (0, 3)), ('homework-b', (2, 3))):
+            truth = HOMEWORK_CASES[name]['truth']
+            n = next(i for i, t in enumerate(truth) if (t['section'], t['number']) == key)
+
+            def scored(**edit):
+                items = _homework_reply(name)['items']; items[n].update(edit)
+                return score_homework(name, items)
+            self.assertTrue(scored()['passed'], scored())
+            for label, edit in [('no_reason', dict(uncertainty='', error_reason='')),
+                                ('only_no_reference', dict(uncertainty='无教师参考，无法判定'))]:
+                with self.subTest(name=name, case=label):
+                    result = scored(**edit)
+                    self.assertFalse(result['passed'], result); self.assertEqual(result['unanswered_kept'], [], result)
+            wrong = scored(answer='AI自行推导：7米' if truth[n]['source'] == 'teacher' else '教师参考：A')
+            self.assertFalse(wrong['passed'], wrong); self.assertTrue(wrong['source_errors'], wrong)
+            # “教师参考未覆盖”只在真值确无教师参考时属实。
+            claim = scored(uncertainty='未作答，教师参考未覆盖本题')
+            self.assertEqual(claim['passed'], truth[n]['source'] == 'ai', claim)
 
 
 class ExactAnswerTest(unittest.TestCase):
