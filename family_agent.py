@@ -2699,6 +2699,40 @@ def _school_native_blocks(text):
 _SCHOOL_NATIVE_CHANGE=r'更正|取消|撤销|不再(?:做|完成)|不用(?:做|完成)|无需(?:做|完成)|改为|改期|延期'
 
 
+def _school_native_later_change(entry,later,actions):
+    """A strictly later change by the same publisher and source that is linked to this list or names one of its objects."""
+    if (later is entry or later.get('publisher')!=entry.get('publisher') or later.get('kind','text')!='text'
+            or later['ref'][8:].rsplit(':',1)[0]!=entry['ref'][8:].rsplit(':',1)[0] or not re.search(_SCHOOL_NATIVE_CHANGE,later['text'])):
+        return False
+    try:
+        if not dt.datetime.fromisoformat(later['time'])>dt.datetime.fromisoformat(entry['time']):return False
+    except (KeyError,ValueError,TypeError):return False
+    named=_school_named_objects(later['text'])
+    return (later['ref'] in entry.get('related_messages',[]) or entry['ref'] in later.get('related_messages',[])
+            or bool(named) and any(named&_school_named_objects(a['primary']) for a in actions))
+
+
+def _school_native_unlocated(quote,refs,actions,entries,spans):
+    """An outcome the literal ledger missed: one literal quote in one located message, disjoint from its located outcomes."""
+    located=refs&{a['ref'] for a in actions}
+    if (not quote or entries is None or spans is None or len(located)!=1
+            or refs&{s['ref'] for a in actions for s in a['supplements']}):return False
+    ref=next(iter(located));entry=entries.get(ref);text=entry['text'] if entry else ''
+    if text.count(quote)!=1:return False
+    start=text.index(quote);end=start+len(quote)
+    for action in actions:
+        if action['ref']!=ref:continue
+        if text.count(action['quote'])!=1 or quote in action.get('header',''):return False
+        left=text.index(action['quote'])
+        if max(start,left)<min(end,left+len(action['quote'])):return False
+    source=ref[8:].rsplit(':',1)[0]
+    if any(r not in entries or entries[r].get('publisher')!=entry.get('publisher') or r[8:].rsplit(':',1)[0]!=source for r in refs):
+        return False
+    if any(r==ref and max(start,left)<min(end,right) for r,left,right in spans):return False
+    spans.add((ref,start,end))
+    return True
+
+
 def _school_native_actions(evidence):
     """One shared ledger for complete literal outcomes, standards and own dates."""
     actions=[]
@@ -2712,11 +2746,9 @@ def _school_native_actions(evidence):
         related=set(entry.get('related_messages',[]))
         if any(e['ref'] in related and (e.get('attachments') or e.get('content_incomplete') or e.get('kind')!='text') for e in evidence):continue
         publisher=entry.get('publisher','');source=entry['ref'][8:].rsplit(':',1)[0]
-        # Changes retain the existing dated correction/old-decision protocol,
-        # including a later change worded as a supplement (e.g. "补充：第5题不用做").
+        # Changes retain the existing dated correction/old-decision protocol.
         if publisher and any(s.get('publisher')==publisher and s['ref'][8:].rsplit(':',1)[0]==source
-                and (re.match(r'^\s*(?:更正|取消|撤销|撤回)',s['text']) or n>index and re.search(_SCHOOL_NATIVE_CHANGE,s['text']))
-                for n,s in enumerate(evidence) if s is not entry):continue
+                and re.match(r'^\s*(?:更正|取消|撤销|撤回)',s['text']) for s in evidence if s is not entry):continue
         own=[]
         for part in _school_native_blocks(text):
             quote=part['quote'];header=part['header']
@@ -2733,6 +2765,8 @@ def _school_native_actions(evidence):
             if part.get('shared_conditions'):
                 own[-1]['shared_conditions']=part['shared_conditions']
                 own[-1]['id']='native:'+_hash([own[-1]['id'],part['shared_conditions']])[:24]
+        # So does a later change worded as a supplement ("补充：第5题不用做") when it is linked to, or names, this list.
+        if any(_school_native_later_change(entry,s,own) for s in evidence):continue
         # Standalone administrative notices already have executor, object,
         # date and handback guards. Mixed outcomes need this shared allocation.
         if len(own)==1 and own[0]['purpose']=='admin':continue
@@ -2784,7 +2818,7 @@ def _school_native_value(action):
     return _school_requirement_goal(dict(title=title),standards)
 
 
-def _school_native_bind(proposal,actions,assigned):
+def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
     """Allocate one literal outcome per proposal and retain its complete named supplements."""
     for name,field in _school_fields['properties'].items():
         if field.get('type')=='string':
@@ -2794,7 +2828,9 @@ def _school_native_bind(proposal,actions,assigned):
     matches=[a for a in actions if a['ref'] in refs and quote and quote in a['quote']]
     if not matches:
         owned={a['ref'] for a in actions}|{s['ref'] for a in actions for s in a['supplements']}
-        if refs&owned:raise AgentError('学校已定位要求未逐项归纳，整批保留重试',code='school_action_coverage')
+        # An outcome the ledger did not locate keeps the general checks only when disjoint from every located one.
+        if refs&owned and not _school_native_unlocated(quote,refs,actions,entries,spans):
+            raise AgentError('学校已定位要求未逐项归纳，整批保留重试',code='school_action_coverage')
         return proposal,None
     if len(matches)!=1 or matches[0]['id'] in assigned:
         raise AgentError('学校独立要求重复或合并，整批保留重试',code='school_action_coverage')
@@ -2865,7 +2901,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     as_of = dt.date.fromisoformat(as_of).isoformat() if as_of is not None else _now().date().isoformat()
     routing = mode == 'school' and school_goals is not None
     native_actions=_school_native_actions(evidence) if routing and school_existing is None else []
-    native_assigned=set()
+    native_assigned=set();native_spans=set()
     content = {'mode': mode, 'as_of': as_of, 'child': profile or {}, 'evidence': evidence}
     if routing: content.update(learning_goals=school_goals,school_tasks=school_tasks)
     if native_actions:content['required_native_actions']=native_actions
@@ -2925,7 +2961,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             text = refs[ref][:600] if routing else _source_quote(refs, ref, _text(quote, 'quote', 600, True))
             cited.append({'ref': ref, 'text': text})
         if native_actions:
-            proposal,native_action=_school_native_bind(proposal,native_actions,native_assigned)
+            proposal,native_action=_school_native_bind(proposal,native_actions,native_assigned,{e['ref']:e for e in evidence},native_spans)
             due=proposed_due=proposal['due']
         # Publication groups are reading hints only. Each task keeps exactly its
         # verified citations; unrelated task originals must never be added here.

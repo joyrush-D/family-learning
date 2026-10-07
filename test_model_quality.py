@@ -506,8 +506,13 @@ class ProgramPathTest(unittest.TestCase):
         proposals = _school_a_reply()
         self.assertTrue(all(p['title_quote'] in texts[p['evidence'][0]['ref']] for p in proposals))
         result = score_school('school-a', school_rows(_select_school_a(proposals)))
-        self.assertTrue(result['passed'], result)
-        self.assertEqual((result['covered'], result['usable']), (7, 7), result)
+        self.assertEqual((result['covered'], result['usable'], result['missed']), (7, 7, []), result)
+        for key in ('purpose_errors', 'requirement_errors', 'citation_errors', 'reference_errors', 'extra'):
+            self.assertEqual(result[key], [], (key, result))
+        # 一般校验无法从原句核对的日期被清空并转待核对，不保存错日期；仍计未通过，作为剩余程序限制报告。
+        self.assertFalse(result['passed'])
+        self.assertEqual(sorted(e.split(':')[0] for e in result['due_errors']), ['背诵', '运动服'], result)
+        self.assertTrue(all(e.split(':')[1].startswith('无') for e in result['due_errors']), result)
 
     def test_unlocated_outcome_needs_disjoint_literal_quote_from_same_publisher(self):
         import family_agent
