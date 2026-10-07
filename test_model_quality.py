@@ -1689,8 +1689,12 @@ class ExactAnswerTest(unittest.TestCase):
         reply = _homework_reply('homework-a')
         for item, wrong in zip(reply['items'], ['183', '163', None, None, '162', None]):
             if wrong: item['answer'] = '教师参考：' + wrong
+        # The program now holds a teacher-labelled value the teacher text contradicts, so score the frozen reply itself.
         with patch.object(family_llm, '_chat_json', return_value=reply):
-            result = score_homework('homework-a', run_case('homework-a', None)['questions'])
+            program = run_case('homework-a', None)['questions']
+        self.assertEqual([(q['judgment'], q['answer']) for q in program if q['label'] in ('第1题', '第2题', '第5题')],
+                         [('unknown', '教师参考：83'), ('unknown', '教师参考：63'), ('unknown', '教师参考：62')])
+        result = score_homework('homework-a', reply['items'])
         self.assertFalse(result['passed'])
         self.assertEqual(sorted(e for e in result['content_errors'] if e.endswith('答案不符')), ['1:答案不符', '2:答案不符', '5:答案不符'], result)
         for answer, ok in [('教师参考：62', True), ('教师参考：100-38=62', True), ('教师参考：62或72', False), ('教师参考：7米', True)]:
