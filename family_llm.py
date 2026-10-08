@@ -1152,9 +1152,13 @@ _GAP_UNABLE=r'(?:无法|不能|没法|无从|不可能)'
 _GAP_OPEN=re.compile(_GAP_UNABLE+r'[^，,。；;！!？?\s]{0,3}?(?:计算|算|求|得出|得到|确定|核定|判定|判断|比较)')
 _GAP_SHUT=re.compile(_GAP_UNABLE+r'(?:核定|[^，,。；;！!？?\s]{0,3}?(?:计算|算|求|得)[出得到]?(?:确定|唯一|准确))')
 # What is missing must be a given of this question: not the child's skill, work, unit or wording, nor the stem itself.
-_GAP_SKILL=(r'掌握|理解|学会|熟练|公式|进率|概念|方法|过程|步骤|草稿|演算|竖式|算式|列式|思路|解答|解题|单位|书写|字迹|错别字|标点|格式|'
+_GAP_SKILL=(r'掌握|理解|学会|熟练|公式|进率|概念|方法|过程|步骤|草稿|演算|竖式|算式|列式|思路|解答|解题|书写|字迹|错别字|标点|格式|'
             r'答句|作答|答题|答案|订正|检查|耐心|细心|粗心|马虎|习惯')
 _GAP_NOT_GIVEN=re.compile(r'^(?:缺|[看读审想学记会懂用按写填答作算列画抄]|(?:题干|原题|题面|题目)(?![中里上内的]))|'+_GAP_SKILL)
+# A missing unit is the child's (「缺单位扣1分」「作答没有单位」「没标单位」) unless the question is said not to give it
+# (「没有提供长度单位」「未标明单位」) or its own material is said to lack it (「题中数值缺少单位」).
+_GAP_UNIT_GIVEN=re.compile(r'给|提供|告[诉知]|说明|注明|标[出注明]')
+_GAP_QUESTION=re.compile(r'题目|题干|原题|题面|题中|图中|图上|已知|数值|数据')
 _GAP_STEM_END=re.compile(r'(?:题干|原题|题面|题目)(?:的?(?:内容|文字))?$')
 _GAP_PERSON=re.compile(r'(?:孩子|学生|该生|小朋友|同学)(?!的)')
 _GAP_NOT_VALUE=re.compile(r'独立|步骤|过程|题意|思路|书写|字迹|原因|方法|掌握|态度|习惯|抄')
@@ -1168,8 +1172,9 @@ _GAP_PHRASE=r'[，,、：:]'
 def _condition_gap(text,strict=False):
     """This question's actual statement that a decisive given is missing and so no value can be settled, else ''.
     A lone 「缺」 or 「无法」 is not enough; a hypothesis, negation, question, another question or a paper note does not count,
-    nor does the child's skill, work, unit or wording. Only the next 。/； sentence opening with the inability may finish
-    a statement. It only vetoes a definite grade; no grade is ever made from it."""
+    nor does the child's skill, work, unit or wording (a unit counts only when the question is said not to give it).
+    Only the next 。/； sentence opening with the inability may finish a statement. It only vetoes a definite grade;
+    no grade is ever made from it."""
     unable=_GAP_SHUT if strict else _GAP_OPEN
     parts=re.split(r'([。！？!?；;\n]+)',text);sentences,ends=parts[0::2],parts[1::2]+['']
     def scoped(s,lo,hi):  # No hypothesis up to the claim; no other question or paper since this question was last named.
@@ -1182,10 +1187,12 @@ def _condition_gap(text,strict=False):
     for k,s in enumerate(sentences):
         if re.search('[？?]',ends[k]): continue  # A question asks; it does not state.
         for m in _GAP_MISSING.finditer(s):
-            head=re.split(_GAP_PHRASE,s[:m.start()])[-1]
-            thing=re.sub(r'^(?:[少失乏有出注明]|给出?|标[出注明]?|提供|写明|说明|告诉|告知)+','',re.split(_GAP_PHRASE,s[m.end():])[0])
+            head=re.split(_GAP_PHRASE,s[:m.start()])[-1];rest=re.split(_GAP_PHRASE,s[m.end():])[0]
+            verb=re.match(r'(?:[少失乏有出注明]|给出?|标[出注明]?|提供|写明|说明|告诉|告知)*',rest)[0];thing=rest[len(verb):]
             thing='' if re.match(_GAP_UNABLE,thing) else thing
-            if (re.search(r'(?:[不没未无非]|没有)$|不是|并非|而非',head) or _GAP_PERSON.search(head)
+            unit='单位' in (thing or head) and (re.search(_GAP_SKILL+'|扣',head+thing)
+                                               or not (_GAP_UNIT_GIVEN.search(m[0]+verb) or _GAP_QUESTION.search(head)))
+            if (re.search(r'(?:[不没未无非]|没有)$|不是|并非|而非',head) or _GAP_PERSON.search(head) or unit
                     or (_GAP_NOT_GIVEN.search(thing) if thing else _GAP_STEM_END.search(head) or re.search(_GAP_SKILL,head))):
                 continue
             for u in unable.finditer(s):
