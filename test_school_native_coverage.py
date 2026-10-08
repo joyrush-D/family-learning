@@ -421,6 +421,73 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         self.assertEqual(injected, [True], 'the assigned proof must change after the input check in the save transaction')
         self._assert_rejected_batch(payload, result)
 
+    def _vocabulary_writing(self):
+        payload, refs = self._ingest(['英语作业：朗读Unit 2课文两遍；将生词写进词汇本，每词两行。'])
+        reading, writing = (fixtures.school_proposal(
+            title_quote=quote, evidence=[dict(ref=refs[0])], learning_subject='英语',
+            task_title='英语：' + quote, task_goal=goal, task_state='ready',
+            task_reason='虚构固定回执，非模型质量证据。', task_purpose='learning')
+            for quote, goal in [('朗读Unit 2课文两遍', '朗读Unit 2课文两遍。'),
+                                ('将生词写进词汇本', '将生词写进词汇本，每词两行。')])
+        return payload, refs, reading, writing
+
+    def test_directed_writing_into_its_own_notebook_is_a_separate_outcome(self):
+        payload, refs, reading, writing = self._vocabulary_writing()
+        self._use_replies(payload, [dict(proposals=[reading, writing])])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        with self.store._db() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")]
+            self.assertEqual(len(rows), 2)
+            read = next(r for r in rows if '朗读' in r['body'])
+            write = next(r for r in rows if '词汇本' in r['body'])
+            self.assertIn('两遍', read['body'])
+            self.assertNotIn('词汇本', read['body'])
+            self.assertIn('每词两行', write['body'])
+            self.assertNotIn('朗读', write['body'])
+            self.assertEqual((read['due'], write['due']), ('', ''), 'no date is stated, so none is invented or borrowed')
+            for row in rows:
+                self.assertEqual([q['ref'] for q in json.loads(row['evidence'])], refs)
+            tasks = [dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+            self.assertEqual(sorted(t['id'] for t in tasks), sorted(r['task_id'] for r in rows))
+            self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages')], [1])
+            self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages')],
+                             payload['messages'], 'the complete original stays with both outcomes')
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=1))
+        self.assertEqual((replay['processed'], replay['created']), (0, 0))
+        self.assertEqual(self.model.call_count, 1)
+
+    def test_directed_outcome_merged_into_its_sibling_rejects_the_whole_batch(self):
+        payload, refs, reading, writing = self._vocabulary_writing()
+        merged = dict(reading, task_goal='朗读Unit 2课文两遍；将生词写进词汇本，每词两行。')
+        self._use_replies(payload, [dict(proposals=[merged])])
+        self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
+
+    def test_directed_outcomes_keep_their_own_conditions_without_splitting_same_work_steps(self):
+        split = {
+            '语文作业：背诵《静夜思》；把好词好句摘抄到积累本上，不少于五句。':
+                ['背诵《静夜思》', '把好词好句摘抄到积累本上，不少于五句'],
+            '数学作业：完成练习册第12页，把错题抄在错题本上，并写出正确解法。':
+                ['完成练习册第12页', '把错题抄在错题本上，并写出正确解法'],
+            '英语：将新单词记在单词卡上，每张卡一个词；跟读Unit 3对话三遍。':
+                ['将新单词记在单词卡上，每张卡一个词', '跟读Unit 3对话三遍'],
+            '语文作业：朗读第5课两遍，将本课生字写入田字格本，每字三遍。':
+                ['朗读第5课两遍', '将本课生字写入田字格本，每字三遍'],
+        }
+        for text, quotes in split.items():
+            with self.subTest(text=text):
+                self.assertEqual([a['quote'] for a in agent._school_native_blocks(text)], quotes)
+        # Answers, uploads and working of the same exercise are its steps, not another homework.
+        for text in ['数学作业：完成练习卷第1–3题；将答案写在作业本上；完成后自查并请家长签字。',
+                     '英语作业：完成练习卷第1–3题；把完成的练习卷拍照上传到班级群。',
+                     '数学作业：完成练习册第8页；把计算过程写在草稿本上。']:
+            with self.subTest(text=text):
+                self.assertEqual(len(agent._school_native_blocks(text)), 1)
+        # Administrative handbacks, parent notes and plain notices never become learning outcomes.
+        for text in ['请家长将回执签字后交回。', '请将意见写在家校联系本上。', '本周五学校开放日，欢迎家长来校参观。']:
+            with self.subTest(text=text):
+                self.assertEqual(agent._school_native_blocks(text), [])
+
 
 if __name__ == '__main__':
     unittest.main()
