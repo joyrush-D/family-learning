@@ -1042,7 +1042,9 @@ retry提出经家庭商量后隔一段时间不看讲解再试、或试一道相
 
 
 # Bounded teacher-text grammar: "[卷别][第N大题/一、] 第N题/N题/QN/N.[(小题)] [教师参考/答案：]答案", one line or
-# several entries per line, a paper or section line applying to the lines below. A paper is the whole explicit name
+# several entries per line, a paper or section line applying to the lines below. Inside a line a paper or 大题 starts a
+# new scope only as a heading, nothing but names, 大题 and source words up to the next question or the line end; named
+# among other words it is part of the current teacher value, and one right before the next question leaves that unknown. A paper is the whole explicit name
 # ending in 卷 (not 试卷/本卷 and the like), one paper only when the whole names are equal, never by a shared tail;
 # no character of it is ever dropped: a source word, 试/考/答 or 与/和/及 written inside the name is part of the name;
 # a name too long to read whole stays unknown. A title an original declares on its own line (「试卷名称：甲卷和平卷」) is one
@@ -1057,6 +1059,7 @@ _REF_LISTED=re.compile('均为|都是|均是|都为')  # one value given to each
 _REF_GENERIC_PAPER=re.compile(r'[本该此这那全整每各原同两多]?[试考答问纸]?卷')
 _REF_SECTION=re.compile(r'第\s*(\d{1,2}|[一二三四五六七八九十]{1,3})\s*(?:大题|部分)|(?:^|[^第\d一二三四五六七八九十])([一二三四五六七八九十]{1,3})\s*[、.．]')
 _REF_QUESTION=re.compile(r'第\s*(\d{1,3})\s*题|(?<![\d.．])(\d{1,3})\s*题|(?<![A-Za-z])[Qq]\s*(\d{1,3})(?!\d)|(?:^|(?<=[\s、，,；;]))(\d{1,3})\s*[.．、](?!\d)')
+_REF_NAMED=re.compile(r'[\s，,；;。]((?:%s)|第\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*(?:大题|部分)|[一二三四五六七八九十]{1,3}\s*[、.．])'%_REF_PAPER.pattern)
 _REF_SUB=re.compile(r'\s*(?:[（(]\s*(\d{1,2})\s*[)）]|第\s*(\d{1,2})\s*小题)')
 _REF_WORDS='(?:(?:教师|老师)(?:原|的)?)?(?:参考答案|参考|答案)|教师|老师'  # 「教师原参考」 is a source word too
 _REF_SOURCE=re.compile(r'^[\s:：]*(?:%s)?\s*(?:均为|都是|均是|都为|为|是)?[\s:：]*'%_REF_WORDS)
@@ -1106,7 +1109,8 @@ def _teacher_reference_entries(documents,titles=frozenset()):
             for n,mark in enumerate(marks):
                 tail=line[mark.end():marks[n+1].start() if n+1<len(marks) else len(line)]
                 sub=_REF_SUB.match(tail);tail=tail[sub.end():] if sub else tail
-                after=re.search(r'[\s，,；;。]((?:%s)|第\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*(?:大题|部分)|[一二三四五六七八九十]{1,3}\s*[、.．])'%_REF_PAPER.pattern,tail)
+                # 「500。乙卷缺少宽度…本卷本题参考500」 is one value; 「5；乙卷第1题6」 and 「8。虚构乙卷」 ending a line are headings.
+                after=next((found for found in _REF_NAMED.finditer(tail) if not _ref_scope(tail[found.start(1):],section,titles,listed)[2]),None)
                 answer=re.sub(r'[\s，,；;。.．、]+$','',_REF_SOURCE.sub('',tail[:after.start()] if after else tail,count=1))
                 for one in here if isinstance(here,tuple) else (here,):  # 「甲卷与乙卷第1题均为5」 names each paper once.
                     if answer: entries.append(dict(paper=one,section=section,rest=rest,number=int(next(g for g in mark.groups() if g)),
@@ -1114,6 +1118,11 @@ def _teacher_reference_entries(documents,titles=frozenset()):
                 if after:
                     new,section,words=_ref_scope(tail[after.start(1):],section,titles,listed)
                     if new is not None: paper=here=new;title=rest=''
+                elif n+1<len(marks):  # Named with other words right before the next question: whose question it is stays unknown.
+                    slot=re.split('[，,；;。！!？?]',re.sub(r'[\s，,；;。.．、：:]+$','',tail))[-1]
+                    for found in _REF_NAMED.finditer(' '+slot):
+                        if _ref_scope(found[1],None,titles,listed)[0] is not None: paper=here='*';title=rest=''
+                        if _REF_SECTION.search(found[1]): section='*'
     return entries
 
 
@@ -1165,6 +1174,8 @@ _GAP_NOT_VALUE=re.compile(r'独立|步骤|过程|题意|思路|书写|字迹|原
 _GAP_IF=re.compile(r'如果|如若|假如|假若|假使|假设|假定|倘若|倘使|要是|若(?!干)|万一|即使|即便|就算|哪怕|一旦|的话')
 _GAP_ELSEWHERE=re.compile(r'(?:[上下前后另别某每各]|其[他它余]|有的|有些|部分|个别)[一二两几个道小的各面]*(?:题(?![目干意面])|问(?!题))|'
                           r'第[\d０-９一二三四五六七八九十百、和与及至\-~～\s]+[小大]?(?:题|问)|的小?题(?![目干意面])|[全本整试该此各附]卷|卷(?:[首尾末]|附|说明)')
+_GAP_PAPER=re.compile(r'(?:^|(?<=[\s，,、：:]))[^\s，,、：:；;。“”"（）()题]{1,30}?卷(?=[：:]?\s*(?:%s))'%_GAP_MISSING.pattern)  # 「乙卷缺少宽度」: that paper's
+_GAP_GENERIC=re.compile(r'(?:^|(?=[本该此这那全整每各原同两多]))(?:%s)$'%_REF_GENERIC_PAPER.pattern)  # 「原卷」「这试卷」 or a name ending so
 _GAP_OWN=re.compile(r'本小?题|此题|这[一道]?题|该题')
 _GAP_PHRASE=r'[，,、：:]'
 
@@ -1179,7 +1190,9 @@ def _condition_gap(text,strict=False):
     parts=re.split(r'([。！？!?；;\n]+)',text);sentences,ends=parts[0::2],parts[1::2]+['']
     def scoped(s,lo,hi):  # No hypothesis up to the claim; no other question or paper since this question was last named.
         own=[m.end() for m in _GAP_OWN.finditer(s,0,lo)]
-        return not _GAP_IF.search(s,0,hi) and not _GAP_ELSEWHERE.search(s,own[-1] if own else 0,hi)
+        since=own[-1] if own else 0  # A generic 「原卷/这卷」 names no other paper, as in the reference grammar: still this question's.
+        return not _GAP_IF.search(s,0,hi) and not _GAP_ELSEWHERE.search(s,since,hi) and all(
+            _GAP_GENERIC.search(found[0]) for found in _GAP_PAPER.finditer(s,since,hi))
     def valid(s,u):  # The inability is the value's own: not the child's, not negated, not about steps, meaning or independence.
         head=re.split(_GAP_PHRASE,s[:u.start()])[-1]
         return not (_GAP_PERSON.search(head) or re.search(r'(?:非|不是|不会|并不|未必)$',head)
