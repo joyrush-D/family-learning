@@ -396,6 +396,14 @@ class TextQuestionContractTests(unittest.TestCase):
             model.assert_not_called()
 
 
+# Disclosed fictional W01/S01 text inputs, raw model returns and oracles, verbatim.
+DISCLOSED_TEACHER_FIDELITY=[
+    {'case_id': 'W01', 'question_name': 'synthetic-next-w01-answer.txt', 'question_text': '虚构萤光卷 第1题：请写出英语短语“许多”（两个单词）。\n实际作答：alot\n', 'question_sha256': '23ea3d4799ea423dc907cabc0f29f748afebdbd760208c418243c641665843ee', 'teacher_name': 'synthetic-next-w01-teacher.txt', 'teacher_text': '虚构萤光卷 第1题：教师参考a lot\n', 'teacher_sha256': 'f88087e51768c34e0573933e9c88331cea18a9d73016d4ee876ab7c7bb7213db', 'raw_model': {'question_labels': ['虚构萤光卷第1题'], 'items': [{'label': '虚构萤光卷第1题', 'question': '请写出英语短语“许多”（两个单词）。', 'student_answer': 'alot', 'answer': '教师参考：alot', 'judgment': 'correct', 'question_kind': 'objective', 'error_reason': '', 'possible_cause': '', 'steps': '', 'uncertainty': ''}], 'coverage': '仅本次虚构萤光卷第1题。'}, 'oracle': {'judgment': 'unknown', 'answer': '教师参考：a lot', 'student_answer': 'alot', 'wrong_items': 0, 'unknown_items': 1, 'pending_labels': ['虚构萤光卷第1题'], 'required_uncertainty': ['alot', 'a lot']}},
+    {'case_id': 'S01', 'question_name': 'synthetic-next-s01-answer.txt', 'question_text': '虚构星芽卷 第1题：\n第1问：1+1=? A.1 B.2 C.3\n第2问：2+2=? A.2 B.3 C.4\n第2问实际作答：C\n', 'question_sha256': '9279e2a270359b8b01f4b86a8af87432275c17dcea88f502a0e6273c4ec38441', 'teacher_name': 'synthetic-next-s01-teacher.txt', 'teacher_text': '虚构星芽卷 第1题：教师参考B\n', 'teacher_sha256': '1d3bf1bb149144107bf5e679258edca57a235d0770e1c3856b9c08d33c2ff831', 'raw_model': {'question_labels': ['虚构星芽卷第1题第2问'], 'items': [{'label': '虚构星芽卷第1题第2问', 'question': '2+2=? A.2 B.3 C.4', 'student_answer': 'C', 'answer': 'AI自行推导：C', 'judgment': 'correct', 'question_kind': 'objective', 'error_reason': '', 'possible_cause': '', 'steps': '', 'uncertainty': ''}], 'coverage': '仅本次虚构星芽卷第1题第2问。'}, 'oracle': {'judgment': 'unknown', 'answer': '', 'student_answer': 'C', 'wrong_items': 0, 'unknown_items': 1, 'pending_labels': ['虚构星芽卷第1题第2问'], 'required_uncertainty': ['小题']}},
+]
+DISCLOSED_SUMMARY='本次核对1题：需订正0题，与参考一致0题，未判定1题。'
+
+
 class TextQuestionHTTPTests(HomeworkPrintScopeTests):
     def review_request(self,questions,teachers):
         key='synthetic-text-original-'+hashlib.sha256(json.dumps([questions,teachers]).encode()).hexdigest()
@@ -435,6 +443,33 @@ class TextQuestionHTTPTests(HomeworkPrintScopeTests):
             status,view=self.request('GET','/api/print/homework/saved-review?task_id=%s&record_id=%d'%(self.task['id'],saved['record_id']))
             self.assertEqual(status,200,view);model.assert_not_called()
         self.assertEqual(view['text'],d['text']);self.assertIn('需订正0题',view['text']);self.assertNotIn('AI自行推导：C',view['text'])
+
+    def test_disclosed_letter_spacing_and_unread_sub_question_stay_pending_through_save_retry_and_reopen(self):
+        for case in DISCLOSED_TEACHER_FIDELITY:
+            with self.subTest(case=case['case_id']):
+                for key in ('question','teacher'):self.assertEqual(hashlib.sha256(case[key+'_text'].encode()).hexdigest(),case[key+'_sha256'])
+                paper=self.upload(case['question_name'],case['question_text'].encode());teacher=self.upload(case['teacher_name'],case['teacher_text'].encode())
+                request=self.review_request([paper],[teacher]);before=self.dump();raw=json.loads(json.dumps(case['raw_model']));oracle=case['oracle']
+                with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+                    status,out=self.request('POST','/api/print/homework/draft',request)
+                self.assertEqual(status,200,out);self.assertEqual(model.call_count,1);self.assertEqual(raw,case['raw_model']);self.assertEqual(self.dump(),before)
+                d=out['draft'];self.assertEqual(len(d['questions']),1);q=d['questions'][0]
+                self.assertEqual((q['judgment'],q['answer'],q['student_answer']),(oracle['judgment'],oracle['answer'],oracle['student_answer']))
+                self.assertEqual((q['error_reason'],q['possible_cause'],q['steps']),('','',''))
+                for words in oracle['required_uncertainty']:self.assertIn(words,q['uncertainty'])
+                self.assertEqual((d['wrong_items'],d['unknown_items']),(oracle['wrong_items'],oracle['unknown_items']))
+                self.assertEqual(d['continuation']['pending_labels'],oracle['pending_labels']);self.assertIn(DISCLOSED_SUMMARY,d['text'])
+                for shown in (oracle['answer'],oracle['student_answer']):self.assertIn(shown,d['text'])
+                result=self.upload('作业批改参考-%d.txt'%request['record_id'],d['text'].encode())
+                feedback=dict(task_id=self.task['id'],child=self.task['child'],day='2026-10-01',request_key='synthetic-teacher-fidelity-'+case['case_id'],
+                              note='虚构家长核对的检查。',attachments=[paper,teacher,result],review_basis=out['review_basis'])
+                with patch.object(family_llm,'_chat_json') as model:
+                    status,saved=self.request('POST','/api/task/feedback',feedback);self.assertEqual(status,200,saved)
+                    status,retry=self.request('POST','/api/task/feedback',feedback);self.assertEqual(status,200,retry)
+                    self.assertTrue(retry['replayed']);self.assertEqual(retry['record_id'],saved['record_id'])
+                    status,view=self.request('GET','/api/print/homework/saved-review?task_id=%s&record_id=%d'%(self.task['id'],saved['record_id']))
+                    self.assertEqual(status,200,view);model.assert_not_called()
+                self.assertEqual(view['text'],d['text'])
 
     def test_complex_word_and_missing_scope_still_refuse_before_model(self):
         teacher=self.upload('synthetic-teacher.txt',REFERENCE.encode())
