@@ -2780,11 +2780,13 @@ def _school_native_blocks(text):
         expected=int(count[1]) if count[1].isdigit() else {'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}[count[1]]
         if len(pieces)!=expected:
             raise AgentError('学校明示项数与可核对行动不一致，原批次保留待完整整理',code='school_action_coverage')
-    # A ba-phrase only finds an outcome. As for any administrative reply, its use is the complete original's own
-    # learning reading; a subject word is context and alone never overrides a plainly administrative body.
-    learning_text=_school_learning_text([text])
-    taught=bool(container or _LEARNING_ACTIVITY.search(learning_text) or _LEARNING_ACTION.search(learning_text))
-    return [dict(part,purpose='learning' if part['purpose']=='directed' and taught else part['purpose'],quote=text[part['start']:part['end']].strip().rstrip('；;。').strip(),header=header,
+    # A ba-phrase only finds an outcome. Its use is the learning reading of its own complete requirement and of the
+    # context stated for every outcome (heading, worksheet, common standards), never of a sibling outcome's words;
+    # a subject word is context and alone never overrides a plainly administrative body.
+    def taught(part):
+        learning_text=_school_learning_text([header,text[part['start']:part['end']]]+part.get('conditions',[])+[clause for _,clause in shared])
+        return bool(container or _LEARNING_ACTIVITY.search(learning_text) or _LEARNING_ACTION.search(learning_text))
+    return [dict(part,purpose='learning' if part['purpose']=='directed' and taught(part) else part['purpose'],quote=text[part['start']:part['end']].strip().rstrip('；;。').strip(),header=header,
         **(dict(shared_conditions=[clause for _,clause in shared]) if shared else {})) for part in pieces]
 
 
