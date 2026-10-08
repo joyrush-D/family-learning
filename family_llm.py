@@ -1184,6 +1184,7 @@ _GAP_ELSEWHERE=re.compile(r'(?:[上下前后另别某每各]|其[他它余]|有�
 _GAP_PAPER=re.compile(r'(?:^|(?<=[\s，,、：:]))[^\s，,、：:；;。“”"（）()题]{1,30}?卷(?=[：:]?\s*(?:%s))'%_GAP_MISSING.pattern)  # 「乙卷缺少宽度」: that paper's
 _GAP_GENERIC=re.compile(r'^[本该此这那全整每各原同两多]|(?:^|(?=[本该此这那全整每各原同两多]))(?:%s)$'%_REF_GENERIC_PAPER.pattern)  # 「原卷」「这张卷」 point at a paper and name none, or a name ends so
 _GAP_OWN=re.compile(r'本小?题|此题|这[一道]?题|该题')
+_GAP_STATED=re.compile(r'(?:%s)\s*的?\s*(?:%s)'%(_GAP_OWN.pattern,_REF_WORDS))  # 「本卷本题参考500」: this question's own reference
 _GAP_PHRASE=r'[，,、：:]'
 
 
@@ -1195,15 +1196,16 @@ def _condition_gap(text,strict=False,paper=None,titles=frozenset()):
     no grade is ever made from it."""
     unable=_GAP_SHUT if strict else _GAP_OPEN
     parts=re.split(r'([。！？!?；;\n]+)',text);sentences,ends=parts[0::2],parts[1::2]+['']
-    def elsewhere(name):  # Only a paper whose whole name differs from this question's known paper; its own, a shortened or an unknown one stays.
+    def elsewhere(name,s):  # Another paper's only when the whole names differ and the source separates them: the teacher states this
+        # question's own reference apart from the note. A name alone, however it differs, confirms nothing: 「当前卷」 may be this paper.
         other=_ref_scope(name,titles=titles)[0]
         return (isinstance(paper,str) and paper!='*' and isinstance(other,str) and other!='*' and not _GAP_GENERIC.search(name)
-                and not other.endswith(paper) and not paper.endswith(other))
+                and not other.endswith(paper) and not paper.endswith(other) and len(_GAP_STATED.findall(text))>len(_GAP_STATED.findall(s)))
     def scoped(s,lo,hi):  # No hypothesis up to the claim; no other question or paper since this question was last named.
         own=[m.end() for m in _GAP_OWN.finditer(s,0,lo)]
         since=own[-1] if own else 0  # A generic 「原卷/这卷」 names no other paper, as in the reference grammar: still this question's.
         return not _GAP_IF.search(s,0,hi) and not _GAP_ELSEWHERE.search(s,since,hi) and not any(
-            elsewhere(found[0]) for found in _GAP_PAPER.finditer(s,since,hi))
+            elsewhere(found[0],s) for found in _GAP_PAPER.finditer(s,since,hi))
     def valid(s,u):  # The inability is the value's own: not the child's, not negated, not about steps, meaning or independence.
         head=re.split(_GAP_PHRASE,s[:u.start()])[-1]
         return not (_GAP_PERSON.search(head) or re.search(r'(?:非|不是|不会|并不|未必)$',head)
