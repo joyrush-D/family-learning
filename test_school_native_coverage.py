@@ -556,6 +556,70 @@ class SchoolNativeCoverageTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(agent._school_native_blocks(text), [])
 
+    def _administrative_notice(self, text):
+        payload = self.fixture.payload(cursor='11')
+        payload['messages'] = [dict(id='11', message_order='11', time=self.now.isoformat(), kind='text',
+                                    sender='虚构学校办公室', sender_id='synthetic-school-office', text=text, unread=False)]
+        self.store.ingest(payload)
+        return payload, 'message:' + self.source['id'] + ':11'
+
+    def _admin_proposal(self, ref, quote, title, goal):
+        return fixtures.school_proposal(title_quote=quote, evidence=[dict(ref=ref)], learning_subject='',
+                                        task_title=title, task_goal=goal, task_state='ready',
+                                        task_reason='全虚构固定行政回执，不是模型质量证据。', task_purpose='admin')
+
+    def test_disclosed_directed_writing_under_an_administrative_heading_keeps_its_admin_purpose(self):
+        # Writing an object somewhere is one outcome; the phrase alone does not make it learning.
+        text = '学校行政事项：请同学把校车申请理由写在A4纸上，供老师审核。'
+        payload, ref = self._administrative_notice(text)
+        self._use_replies(payload, [dict(proposals=[
+            self._admin_proposal(ref, '把校车申请理由写在A4纸上', '填写校车申请理由', text)])])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        with self.store._db() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")]
+            self.assertEqual(len(rows), 1)
+            self.assertIn('校车申请理由', rows[0]['body'])
+            self.assertEqual(rows[0]['due'], '', 'no date is stated, so none is invented')
+            self.assertEqual([q['ref'] for q in json.loads(rows[0]['evidence'])], [ref])
+            tasks = [dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+            self.assertEqual([t['id'] for t in tasks], [rows[0]['task_id']])
+            self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages')], [1])
+            self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages')],
+                             payload['messages'], 'the complete original stays with the outcome')
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=1))
+        self.assertEqual((replay['processed'], replay['created']), (0, 0))
+        self.assertEqual(self.model.call_count, 1)
+
+    def test_administrative_writing_beside_a_form_stays_its_own_outcome(self):
+        text = '学校行政事项：请家长签署校车安全承诺书；请同学把校车申请理由写在A4纸上，供老师审核。'
+        payload, ref = self._administrative_notice(text)
+        sign = self._admin_proposal(ref, '签署校车安全承诺书', '签署校车安全承诺书', '请家长签署校车安全承诺书。')
+        write = self._admin_proposal(ref, '把校车申请理由写在A4纸上', '填写校车申请理由',
+                                     '请同学把校车申请理由写在A4纸上，供老师审核。')
+        self._use_replies(payload, [dict(proposals=[sign, write])])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        with self.store._db() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")]
+            self.assertEqual(len(rows), 2)
+            self.assertNotIn('承诺书', next(r for r in rows if '申请理由' in r['body'])['body'])
+            self.assertNotIn('申请理由', next(r for r in rows if '承诺书' in r['body'])['body'])
+            self.assertEqual([r['due'] for r in rows], ['', ''])
+
+    def test_administrative_writing_merged_into_its_form_rejects_the_whole_batch(self):
+        text = '学校行政事项：请家长签署校车安全承诺书；请同学把校车申请理由写在A4纸上，供老师审核。'
+        payload, ref = self._administrative_notice(text)
+        merged = self._admin_proposal(ref, '签署校车安全承诺书', '签署承诺书并写申请理由', text)
+        self._use_replies(payload, [dict(proposals=[merged])])
+        self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
+
+    def test_open_destination_writing_under_a_subject_heading_still_rejects_an_admin_reply(self):
+        # The subject heading keeps the writing a learning outcome: relabelling it administrative is not saved.
+        payload, refs, reading, writing = self._keyword_note_writing()
+        admin = dict(writing, task_purpose='admin', learning_subject='')
+        self._use_replies(payload, [dict(proposals=[reading, admin])])
+        self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
 
 
 if __name__ == '__main__':
