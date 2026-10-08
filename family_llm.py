@@ -1145,6 +1145,13 @@ def _ref_relation(label,entry,titles=frozenset()):
     return 'unsure' if unsure else 'part' if part else 'same'
 
 
+def _ref_label_paper(label,titles=frozenset()):
+    """The paper a label names, read as _ref_relation reads it: a whole name, None when unnamed, '*' when unclear."""
+    mark=_REF_QUESTION.search(label) or re.fullmatch(r'(.*?)(?<![\d.．])(\d{1,3})\s*',label)
+    paper=_ref_scope(label[:mark.start()] if mark.re is _REF_QUESTION else mark[1],titles=titles)[0] if mark else '*'
+    return '*' if isinstance(paper,tuple) else paper
+
+
 def _ref_agrees(claimed,teacher):
     """A teacher-labelled value must be the teacher's whole value; added letters or words are not the teacher's.
     A bare equation 「2+3=5」 and its one final value 「5」 are the same value; nothing is computed."""
@@ -1175,12 +1182,12 @@ _GAP_IF=re.compile(r'如果|如若|假如|假若|假使|假设|假定|倘若|倘
 _GAP_ELSEWHERE=re.compile(r'(?:[上下前后另别某每各]|其[他它余]|有的|有些|部分|个别)[一二两几个道小的各面]*(?:题(?![目干意面])|问(?!题))|'
                           r'第[\d０-９一二三四五六七八九十百、和与及至\-~～\s]+[小大]?(?:题|问)|的小?题(?![目干意面])|[全本整试该此各附]卷|卷(?:[首尾末]|附|说明)')
 _GAP_PAPER=re.compile(r'(?:^|(?<=[\s，,、：:]))[^\s，,、：:；;。“”"（）()题]{1,30}?卷(?=[：:]?\s*(?:%s))'%_GAP_MISSING.pattern)  # 「乙卷缺少宽度」: that paper's
-_GAP_GENERIC=re.compile(r'(?:^|(?=[本该此这那全整每各原同两多]))(?:%s)$'%_REF_GENERIC_PAPER.pattern)  # 「原卷」「这试卷」 or a name ending so
+_GAP_GENERIC=re.compile(r'^[本该此这那全整每各原同两多]|(?:^|(?=[本该此这那全整每各原同两多]))(?:%s)$'%_REF_GENERIC_PAPER.pattern)  # 「原卷」「这张卷」 point at a paper and name none, or a name ends so
 _GAP_OWN=re.compile(r'本小?题|此题|这[一道]?题|该题')
 _GAP_PHRASE=r'[，,、：:]'
 
 
-def _condition_gap(text,strict=False):
+def _condition_gap(text,strict=False,paper=None,titles=frozenset()):
     """This question's actual statement that a decisive given is missing and so no value can be settled, else ''.
     A lone 「缺」 or 「无法」 is not enough; a hypothesis, negation, question, another question or a paper note does not count,
     nor does the child's skill, work, unit or wording (a unit counts only when the question is said not to give it).
@@ -1188,11 +1195,15 @@ def _condition_gap(text,strict=False):
     no grade is ever made from it."""
     unable=_GAP_SHUT if strict else _GAP_OPEN
     parts=re.split(r'([。！？!?；;\n]+)',text);sentences,ends=parts[0::2],parts[1::2]+['']
+    def elsewhere(name):  # Only a paper whose whole name differs from this question's known paper; its own, a shortened or an unknown one stays.
+        other=_ref_scope(name,titles=titles)[0]
+        return (isinstance(paper,str) and paper!='*' and isinstance(other,str) and other!='*' and not _GAP_GENERIC.search(name)
+                and not other.endswith(paper) and not paper.endswith(other))
     def scoped(s,lo,hi):  # No hypothesis up to the claim; no other question or paper since this question was last named.
         own=[m.end() for m in _GAP_OWN.finditer(s,0,lo)]
         since=own[-1] if own else 0  # A generic 「原卷/这卷」 names no other paper, as in the reference grammar: still this question's.
-        return not _GAP_IF.search(s,0,hi) and not _GAP_ELSEWHERE.search(s,since,hi) and all(
-            _GAP_GENERIC.search(found[0]) for found in _GAP_PAPER.finditer(s,since,hi))
+        return not _GAP_IF.search(s,0,hi) and not _GAP_ELSEWHERE.search(s,since,hi) and not any(
+            elsewhere(found[0]) for found in _GAP_PAPER.finditer(s,since,hi))
     def valid(s,u):  # The inability is the value's own: not the child's, not negated, not about steps, meaning or independence.
         head=re.split(_GAP_PHRASE,s[:u.start()])[-1]
         return not (_GAP_PERSON.search(head) or re.search(r'(?:非|不是|不会|并不|未必)$',head)
@@ -1244,7 +1255,7 @@ def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset
     if len(same)>1: return pending('','教师参考文字对本题写有不同答案（%s），未判定，待老师或家长核对。'%'／'.join(shown(a,40) for a in same))
     teacher=same[0];letter=re.fullmatch('[A-H]',teacher)
     over='教师参考超过结果字数上限，只列前995字，完整内容以教师原件为准。' if len(teacher)>995 else ''
-    gap=_condition_gap(teacher) if item['judgment']!='unknown' else ''
+    gap=_condition_gap(teacher,paper=_ref_label_paper(item['label'],titles),titles=titles) if item['judgment']!='unknown' else ''
     if gap:  # The teacher's own words leave no value to compare: the grade is vetoed, the whole original kept.
         return pending(item['answer'] if claimed is not None and _ref_agrees(claimed,teacher) else '教师参考：'+shown(teacher),
                        '教师参考原文写明本题缺少决定性条件（“%s”），不能核定作答对错，未判定；请补全该条件后再核对。'%shown(gap,120)+over)
@@ -1416,8 +1427,9 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
         if teacher_entries: _prefer_teacher_reference(item,question_kind,teacher_entries,bool(reference_images),titles)
         if item['judgment']!='unknown':
             # The item's own reference, or its stated basis, saying no value can be settled vetoes a definite grade.
-            gap,source=_condition_gap(item['answer'].removeprefix('教师参考：')),'所列参考'
-            if not gap: gap,source=_condition_gap(item['error_reason'],strict=True),'检查依据'
+            label_paper=_ref_label_paper(item['label'],titles)  # a paper named in the basis is another only against this label's paper
+            gap,source=_condition_gap(item['answer'].removeprefix('教师参考：'),paper=label_paper,titles=titles),'所列参考'
+            if not gap: gap,source=_condition_gap(item['error_reason'],strict=True,paper=label_paper,titles=titles),'检查依据'
             if gap:
                 item.update(judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty=(
                     '本题%s写明缺少决定性条件（“%s”），不能核定作答对错，未判定；请补全该条件后再核对。'%(
