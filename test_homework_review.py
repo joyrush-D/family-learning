@@ -968,6 +968,44 @@ def teacher_note_owner_checks():
     result,got=draft([item(label='虚构沐岑卷第35题',question='虚构题面')|dict(student_answer='9',answer='教师参考：'+apart,judgment='incorrect',
                       error_reason='作答9与教师参考8不同。')],'虚构沐岑卷第35题 '+apart)
     assert got['虚构沐岑卷第35题']['judgment']=='incorrect' and got['虚构沐岑卷第35题']['answer']=='教师参考：'+apart and result['wrong_items']==1,result
+    # Disclosed full-entry regression (fictional; a development regression, not held out): this question's value opens with 12 and
+    # restates it after a note naming 「当前卷」. A pointing name confirms no other paper however the value goes on, so through the
+    # real entry the child's answer and the whole teacher original stay, unknown, with the definite correction cleared.
+    leading='12。当前卷缺少半径，无法核定面积；本卷本题参考12'
+    regression=current|dict(answer='教师参考：'+leading)
+    with patch.object(family_llm,'_chat_json',return_value=dict(items=[regression],coverage='只核对本虚构题，其他未核。')) as model:
+        result=family_llm.homework_reference_draft([],review=True,
+            question_documents=[dict(name='fictional-question.txt',text='虚构沐岑卷第29题 本题的圆形题图未标半径或直径，求面积。\n实际作答：16π平方厘米')],
+            reference_documents=[dict(name='fictional-teacher.txt',text='虚构沐岑卷第29题 '+leading)])
+        assert model.call_count==1
+    calls+=1;judged=[q['judgment'] for q in result['questions']];q=result['questions'][0]
+    unknown(q,'16π平方厘米','教师参考：'+leading)
+    assert q['label']==regression['label'] and q['question']==regression['question'] and '半径' in q['uncertainty'],q
+    assert ((result['items'],result['wrong_items'],result['unknown_items'],result.get('correct_items',0))==(1,0,1,0)
+            ==(len(judged),judged.count('incorrect'),judged.count('unknown'),judged.count('correct'))),result
+    # Same cause, development checks: a determiner phrase the one-character generic form read as a name confirms no other paper even
+    # beside this question's own 12, and as a heading it reads as 「本卷」 does, never as another paper's question.
+    for n,pointing in enumerate(('上述卷','当前的卷','这份卷')):
+        label,said='虚构沐岑卷第%d题'%(36+n),'12。%s缺少半径，无法核定面积；本题参考答案12'%pointing
+        result,got=draft([replay|dict(label=label,answer='教师参考：'+said)],label+' '+said)
+        unknown(got[label],'16π平方厘米','教师参考：'+said)
+    read=[]
+    for heading in ('本卷','当前卷'):
+        result,got=draft([item(label='虚构沐岑卷第39题',question='虚构题面')|dict(student_answer='21',answer='教师参考：12',judgment='incorrect',
+                          error_reason='作答21与教师参考12不同。')],heading+'第39题 12')
+        read.append({k:got['虚构沐岑卷第39题'][k] for k in ('judgment','answer','uncertainty')})
+    assert read[0]==read[1] and read[0]['judgment']=='unknown',read
+    # A whole name the shared reading gives as another paper is set aside only when this question's own reference stands apart, in
+    # whatever order: the 12 opening the value or given in a sentence of its own still grades the child's 21, while another paper's
+    # note with only a request about this question has no reference of this question's and stays unknown.
+    for n,said in enumerate(('12。虚构青石卷缺少半径，无法核定面积','虚构青石卷缺少半径，无法核定面积；本题参考答案12')):
+        label='虚构沐岑卷第%d题'%(40+n)
+        result,got=draft([item(label=label,question='虚构题面')|dict(student_answer='21',answer='教师参考：'+said,judgment='incorrect',
+                          error_reason='作答21与教师参考12不同。')],label+' '+said)
+        assert got[label]['judgment']=='incorrect' and got[label]['answer']=='教师参考：'+said and result['wrong_items']==1,result
+    said='虚构青石卷缺少半径，无法核定面积；请补全本题半径后再核对'
+    result,got=draft([replay|dict(label='虚构沐岑卷第42题',answer='教师参考：'+said)],'虚构沐岑卷第42题 '+said)
+    unknown(got['虚构沐岑卷第42题'],'16π平方厘米','教师参考：'+said)
     return calls
 
 
