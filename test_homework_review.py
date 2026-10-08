@@ -813,7 +813,29 @@ def missing_condition_checks():
     vetoed(got['第2题'],'25','AI自行推导：图中没有标出宽。所以无法求出确定的面积。','所列参考','图中没有标出宽。所以无法求出确定的面积')
     vetoed(got['第6题'],'25','AI自行推导：存在以下问题：缺少宽，无法计算确定的面积。','所列参考','缺少宽')
     assert got['第1题']['judgment']=='correct' and all(got['第%d题'%n]['judgment']=='incorrect' and got['第%d题'%n]['error_reason'] for n in (3,4,5)),got
-    return 6
+    # Root's frozen unit pair: the question's own lengths given without a unit leave no comparison, while the child
+    # leaving the unit off a given 3米+2米 stays a definite mistake. Unseen variants follow on both sides.
+    elm=lambda paper,n,question,student,teacher,reason:dict(label='虚构%s卷·第%d题'%(paper,n),question=question,question_kind='objective',
+        student_answer=student,answer='教师参考：'+teacher,judgment='incorrect',error_reason=reason,possible_cause='确定错因示例。',
+        steps='确定订正步骤示例。',uncertainty='')
+    bare='题目只给出两段长度数值2和30，但没有提供长度单位，无法比较哪一段更长。本题不提供确定比较答案。'
+    two='两段长度只分别标出数值2和30，没有标明长度单位，哪一段更长？';rope='一根绳子长3米，接上2米，共长多少米？'
+    result,got=draft([elm('榆树',10,two,'数值2的那段更短',bare,'仅比较数值2小于30，因此认定长度2更短。')],'试卷名称：虚构榆树卷\n第10题：%s\n'%bare)
+    vetoed(got['虚构榆树卷·第10题'],'数值2的那段更短','教师参考：'+bare,'教师参考原文','但没有提供长度单位，无法比较哪一段更长')
+    assert (len(result['questions']),result['wrong_items'],result['unknown_items'])==(1,0,1),result
+    result,got=draft([elm('榆树',11,rope,'5','5米。缺单位扣1分。','孩子漏写单位米，作答未按要求写完整长度。')],'试卷名称：虚构榆树卷\n第11题：5米。缺单位扣1分。\n')
+    q=got['虚构榆树卷·第11题']
+    assert (q['judgment'],q['answer'],q['error_reason'],q['steps'])==('incorrect','教师参考：5米。缺单位扣1分。','孩子漏写单位米，作答未按要求写完整长度。','确定订正步骤示例。'),q
+    assert (len(result['questions']),result['wrong_items'],result['unknown_items'])==(1,1,0),result
+    units=['题目没有给出单位，无法比较两段长短','图中两个数值未标明单位，无法判断哪段更长','两段长度的单位没有提供，无法比较长短',
+           '题中数值缺少单位，无法确定哪个更大','5米。作答没有单位，无法判定为全对','5米。缺少单位，不能判定为全对',
+           '5米。没标单位，无法判定为满分','5米。孩子没有标明单位，无法判定为满分']
+    result,got=draft([elm('枫杨',n,two,'数值2的那段更短',t+'。','只比较了数值。') if n<5 else elm('枫杨',n,rope,'5',t+'。','漏写单位米。')
+                      for n,t in enumerate(units,1)],'试卷名称：虚构枫杨卷\n'+''.join('第%d题：%s。\n'%(n,t) for n,t in enumerate(units,1)))
+    for n,t in enumerate(units[:4],1): vetoed(got['虚构枫杨卷·第%d题'%n],'数值2的那段更短','教师参考：'+t+'。','教师参考原文',t)
+    assert all((got['虚构枫杨卷·第%d题'%n]['judgment'],got['虚构枫杨卷·第%d题'%n]['error_reason'])==('incorrect','漏写单位米。') for n in range(5,9)),got
+    assert (result['wrong_items'],result['unknown_items'])==(4,4),result
+    return 9
 
 
 def run():
