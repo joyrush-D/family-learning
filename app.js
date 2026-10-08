@@ -652,9 +652,16 @@ function homeworkReviewScopeText(coverage,comparison,text){
 // Display only: the saved TXT stays the record and every character stays in the DOM, so copy, find and screen readers keep it verbatim.
 // A paragraph takes the live check's hierarchy only when it is exactly a generated question block: "题号 · 判定", then the program's own labels in order.
 // There a generic "参考答案：" before a 教师参考/AI自行推导 source and an empty "订正建议：" stay in the text but are not shown; anything else stays plain.
+// The validator's own closing paragraphs (savedHomeworkReviewScopeLabel) share one quieter scope area like the live check's; consecutive ones stay together with their labels.
 function savedHomeworkReviewParts(text){
- const parts=[],add=(value,kind='',judgment='')=>{if(value)parts.push({text:value,kind,judgment})},judgments={与参考一致:'correct',需订正:'incorrect',未判定:'unknown'};
+ const parts=[],add=(value,kind='',judgment='')=>{if(value)parts.push({text:value,kind,judgment})},judgments={与参考一致:'correct',需订正:'incorrect',未判定:'unknown'};let scope=null;
  text.split('\n\n').forEach((block,index)=>{
+  const scopeLabel=savedHomeworkReviewScopeLabel(block);
+  if(scopeLabel!==null){
+   if(scope){scope.text+='\n\n'+block;scope.parts.push({text:'\n\n',kind:''})}else{if(index)add('\n\n');scope={text:block,kind:'scope',judgment:'',parts:[]};parts.push(scope)}
+   if(scopeLabel)scope.parts.push({text:scopeLabel,kind:'scope-label'});if(block.length>scopeLabel.length)scope.parts.push({text:block.slice(scopeLabel.length),kind:''});return;
+  }
+  scope=null;
   if(index)add('\n\n');
   const lines=block.split('\n'),head=/^(.+) · (与参考一致|需订正|未判定)$/.exec(lines[0]),judgment=head?judgments[head[2]]:'',rest=lines.slice(1);
   const labels=['题面：','卷面作答：','参考答案：',...(judgment==='incorrect'?['错误依据：','订正建议：']:[])];let tail=rest.slice(labels.length);
@@ -670,6 +677,16 @@ function savedHomeworkReviewParts(text){
  });
  return parts;
 }
+// The label of a paragraph that is exactly one the shared validator writes after the questions (family_llm.py, read entries from family_print.py), '' for its unlabelled closing line, else null.
+// Upload names cannot hold a newline, so each read entry is one line; old formats, the model's own wording and parent edits never match and stay plain.
+function savedHomeworkReviewScopeLabel(block){
+ const lines=block.split('\n'),pages='[1-9]\\d*(?:-[1-9]\\d*)?(?:,[1-9]\\d*(?:-[1-9]\\d*)?)*',entry=new RegExp('^(?:(?:题目/孩子作答|教师参考)《.*》：(?:本次读取整张照片|共[1-9]\\d*页，本次第'+pages+'页；未读取页：(?:无|'+pages+'))|(?:题目/孩子作答|上一轮待复核意见|教师参考)《.*》：(?:本次读取完整文字|本次读取最新检查；较早草稿保留在原件，未作为本次复核输入))。$');
+ if(block==='标“AI自行推导”的题：程序只按教师参考文字中“卷别/大题 第N题 答案”等有限写法核过不在老师覆盖内；参考图片及其他写法未经程序逐题核对，请对照原件。')return '标“AI自行推导”的题：';
+ if(/^覆盖说明：本次\d+题，\d+题仍未判定。未列入本次逐题结果的题目和资料范围仍未检查；模型原覆盖说明尚未核明。(?:未返回识别题号清单，完整覆盖尚未核明。)?$/.test(block))return '覆盖说明：';
+ if(lines[0]==='实际读取范围（程序核对）：'&&lines.length>=3&&lines.length<=12&&lines.at(-1)==='仅核对本次所选材料；未读取页及无法对应的题目保持未判定。'&&lines.slice(1,-1).every(x=>entry.test(x)))return lines[0];
+ if(/^本次复核比较（待家长核对）：\n(?:本次\d+题未判定，不能沿用上一轮对这些题的确定判定。其他题目以本次逐题结果为准；教师参考和孩子作答分别保留，旧AI意见不作答案依据。|本次复核以逐题结果为准；未列题目仍未检查，旧AI意见不作答案依据。)$/.test(block))return lines[0];
+ return block==='请对照原题核对后保存；本轮结果不代表作业已完成或已经掌握。'?'':null;
+}
 async function loadSavedHomeworkReview(panel,record,task){
  if(panel.dataset.loading||panel.dataset.loaded)return;panel.dataset.loading='true';const status=panel.querySelector('[data-saved-review-status]'),retry=panel.querySelector('button');retry.hidden=true;let retryable=true;status.textContent='正在读取已保存检查…';
  try{
@@ -678,7 +695,8 @@ async function loadSavedHomeworkReview(panel,record,task){
   if(!panel.isConnected||!$('#taskDialog').open||taskFeedbackContext?.task_id!==task.id)return;
   if(out.task_id!==task.id||out.record_id!==record.id||out.created!==record.created||out.original_record_id!==homeworkReviewOriginalId(record)){retryable=false;throw Error('检查原记录已变化，请重新打开核对')}
   if(typeof out.text!=='string'||!out.text.trim()||[...out.text].length>12000){retryable=false;throw Error('检查文字无法完整展示，请下载文字原件核对')}
-  panel.querySelector('[data-saved-review-text]').replaceChildren(...savedHomeworkReviewParts(out.text).map(part=>{if(!part.kind)return part.text;const span=document.createElement('span');span.className='saved-review-'+part.kind;if(part.judgment)span.dataset.judgment=part.judgment;span.textContent=part.text;return span}));status.textContent=out.has_archived?'较早未单独保存的草稿仍在文字原件，可下载对照。':'';panel.dataset.loaded='true';
+  const node=part=>{if(!part.kind)return part.text;const span=document.createElement('span');span.className='saved-review-'+part.kind;if(part.judgment)span.dataset.judgment=part.judgment;if(part.parts)span.append(...part.parts.map(node));else span.textContent=part.text;return span};
+  panel.querySelector('[data-saved-review-text]').replaceChildren(...savedHomeworkReviewParts(out.text).map(node));status.textContent=out.has_archived?'较早未单独保存的草稿仍在文字原件，可下载对照。':'';panel.dataset.loaded='true';
  }catch(error){if(panel.isConnected){status.textContent=error.message+'；已保存记录与原件保留。';retry.hidden=!retryable}}
  finally{delete panel.dataset.loading}
 }
