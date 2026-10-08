@@ -940,6 +940,34 @@ def teacher_note_owner_checks():
     result,got=draft([item(label='虚构沐岑卷第31题',question='虚构题面')|dict(student_answer='21',answer='教师参考：'+other,judgment='incorrect',
                       error_reason='作答21与教师参考12不同。')],'虚构沐岑卷第31题 '+other)
     assert got['虚构沐岑卷第31题']['judgment']=='incorrect' and got['虚构沐岑卷第31题']['answer']=='教师参考：'+other and result['wrong_items']==1,result
+    # Disclosed full-entry regression (fictional; a development regression, not held out): a note under this question's own heading
+    # naming 「当前卷」 points at a paper and confirms no other, so through the real entry, with the question and teacher documents and
+    # no image, the child's answer and the whole teacher original stay, unknown, with the definite correction cleared.
+    current=dict(label='虚构沐岑卷第29题',question='本题的圆形题图未标半径或直径，求面积。',student_answer='16π平方厘米',
+                 answer='教师参考：当前卷缺少半径，无法核定面积',judgment='incorrect',question_kind='objective',
+                 error_reason='虚构模型认定16π与参考不同。',possible_cause='虚构模型猜测发生运算错误。',steps='虚构模型要求重新计算本题面积。',
+                 uncertainty='')
+    with patch.object(family_llm,'_chat_json',return_value=dict(items=[current],coverage='只核对本虚构题，其他未核。')) as model:
+        result=family_llm.homework_reference_draft([],review=True,
+            question_documents=[dict(name='fictional-question.txt',text='虚构沐岑卷第29题 本题的圆形题图未标半径或直径，求面积。\n实际作答：16π平方厘米')],
+            reference_documents=[dict(name='fictional-teacher.txt',text='虚构沐岑卷第29题 当前卷缺少半径，无法核定面积')])
+        assert model.call_count==1
+    calls+=1;judged=[q['judgment'] for q in result['questions']];q=result['questions'][0]
+    unknown(q,'16π平方厘米','教师参考：当前卷缺少半径，无法核定面积')
+    assert q['label']==current['label'] and q['question']==current['question'] and '半径' in q['uncertainty'],q
+    assert ((result['items'],result['wrong_items'],result['unknown_items'],result.get('correct_items',0))==(1,0,1,0)
+            ==(len(judged),judged.count('incorrect'),judged.count('unknown'),judged.count('correct'))),result
+    # Same cause, development checks: a pointing name no determiner list holds, or a whole name the source never separates from
+    # this question, confirms no other paper; a request about this question is no reference of its own either.
+    for n,said in enumerate(('上述卷缺少半径，无法核定面积','虚构青石卷缺少半径，无法核定面积','上述卷缺少半径，无法核定面积；请补全本题半径后再核对')):
+        label='虚构沐岑卷第%d题'%(32+n)
+        result,got=draft([replay|dict(label=label,answer='教师参考：'+said)],label+' '+said)
+        unknown(got[label],'16π平方厘米','教师参考：'+said)
+    # Only when the teacher states this question's own reference apart from the note is a different whole name another paper's.
+    apart='8。虚构乙卷缺少宽度，无法核定周长；本题参考答案8'
+    result,got=draft([item(label='虚构沐岑卷第35题',question='虚构题面')|dict(student_answer='9',answer='教师参考：'+apart,judgment='incorrect',
+                      error_reason='作答9与教师参考8不同。')],'虚构沐岑卷第35题 '+apart)
+    assert got['虚构沐岑卷第35题']['judgment']=='incorrect' and got['虚构沐岑卷第35题']['answer']=='教师参考：'+apart and result['wrong_items']==1,result
     return calls
 
 
