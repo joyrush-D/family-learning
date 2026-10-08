@@ -902,8 +902,50 @@ def teacher_note_checks():
     return calls
 
 
+def teacher_note_owner_checks():
+    """A paper named in a missing-given note is another paper's only when that whole name is known to differ from this question's."""
+    calls=0
+    def draft(items,teacher,coverage='只核对这些虚构题，其他未核。'):
+        nonlocal calls
+        with patch.object(family_llm,'_chat_json',return_value=dict(items=items,coverage=coverage)) as model:
+            result=family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=True,
+                reference_documents=[dict(name='synthetic-teacher-note.txt',text=teacher)])
+            assert model.call_count==1
+        calls+=1;got={q['label']:q for q in result['questions']}
+        judged=[q['judgment'] for q in result['questions']]  # counts and text follow the guarded questions
+        assert result['items']==len(judged) and result['wrong_items']==judged.count('incorrect') and result['unknown_items']==judged.count('unknown'),result
+        return result,got
+    def unknown(q,student,answer):  # the child's answer and the whole teacher original stay, no definite correction is left
+        assert q['judgment']=='unknown' and q['student_answer']==student and q['answer']==answer,q
+        assert not q['error_reason'] and not q['possible_cause'] and not q['steps'] and q['uncertainty'].strip(),q
+    # Disclosed regression replay (fictional; a development regression, not held out): the note names this question's own whole paper.
+    note='本题条件说明：虚构沐岑卷：缺少半径，无法核定面积；请补全本题半径后再核对'
+    replay=dict(label='虚构沐岑卷第29题',question='本题的圆形题图未标半径或直径，求面积。',student_answer='16π平方厘米',answer='教师参考：'+note,
+                judgment='incorrect',question_kind='objective',error_reason='虚构模型认定16π与参考不同。',possible_cause='虚构模型猜测发生运算错误。',
+                steps='虚构模型要求重新计算本题面积。',uncertainty='')
+    result,got=draft([replay],'虚构沐岑卷第29题 '+note,'只核对本虚构题，其他未核。')
+    unknown(got['虚构沐岑卷第29题'],'16π平方厘米','教师参考：'+note)
+    judged=[q['judgment'] for q in result['questions']]
+    assert got['虚构沐岑卷第29题']['question']==replay['question'] and judged.count('correct')==result.get('correct_items',0)==0,result
+    assert (result['items'],result['wrong_items'],result['unknown_items'])==(1,0,1),result
+    # When this question's paper cannot be confirmed, the named note is not set aside either.
+    result,got=draft([replay|dict(label='第29题')],'第29题 '+note)
+    unknown(got['第29题'],'16π平方厘米','教师参考：'+note)
+    # A pointing 「这张卷」 names no other paper: this question's missing given still vetoes, as on the earlier main.
+    this='这张卷缺少半径，无法核定面积'
+    result,got=draft([replay|dict(label='虚构沐岑卷第30题',answer='教师参考：'+this)],'虚构沐岑卷第30题 '+this)
+    unknown(got['虚构沐岑卷第30题'],'16π平方厘米','教师参考：'+this)
+    # Only a note under a whole paper name known to differ is set aside: this paper's own 12 still grades the child's 21.
+    other='12。虚构青石卷：缺少半径，无法核定面积；本卷本题参考12'
+    result,got=draft([item(label='虚构沐岑卷第31题',question='虚构题面')|dict(student_answer='21',answer='教师参考：'+other,judgment='incorrect',
+                      error_reason='作答21与教师参考12不同。')],'虚构沐岑卷第31题 '+other)
+    assert got['虚构沐岑卷第31题']['judgment']=='incorrect' and got['虚构沐岑卷第31题']['answer']=='教师参考：'+other and result['wrong_items']==1,result
+    return calls
+
+
+
 def run():
-    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+missing_condition_checks()+teacher_note_checks()
+    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+missing_condition_checks()+teacher_note_checks()+teacher_note_owner_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:
         root=Path(temporary);data=root/'private';data.mkdir()
         with patch.dict(os.environ,{'FAMILY_DATA':str(data)}):
