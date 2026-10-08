@@ -656,6 +656,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
   const causePanel=p.locator('#taskFeedbackHistory [data-homework-review="'+causeOriginal.record_id+'"]');if(!await causePanel.locator(':scope > details').evaluate(x=>x.open))await causePanel.locator(':scope > details > summary').click();
   await causePanel.locator('[data-review-source="'+causePhoto.id+'"] [data-homework-review-photo]').check();
   const teacherRow=causePanel.locator('[data-review-source="'+causeTeacher.id+'"]');await teacherRow.waitFor();assert.equal(await teacherRow.locator('[data-homework-review-role]').inputValue(),'reference');await teacherRow.locator('[data-homework-review-photo]').check();
+  assert.equal(await teacherRow.locator('.upload-item a[href$="/upload/'+causeTeacher.id+'"]').count(),1,'each source row opens its own original beside its choice');assert.equal(await teacherRow.locator('label a,label button,label img').count(),0,'opening an original never toggles the choice');
   const validatorBefore=await(await fetch(host.url+'__fixture/cause-validator')).json();let causeReply,causeRequest;
   await p.route('**/api/print/homework/draft',async route=>{causeRequest=route.request().postDataJSON();const response=await route.fetch();assert.equal(response.status(),200);causeReply=await response.json();await route.fulfill({response,json:causeReply})});
   await causePanel.locator('[data-homework-review-run]').click();await eventually(async()=>!!causeReply,'real validator response');await p.unroute('**/api/print/homework/draft');
