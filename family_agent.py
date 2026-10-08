@@ -2661,12 +2661,12 @@ def _school_native_command(clause):
     # A ba-phrase writing its own object to a short destination its own clause closes is one more outcome;
     # the destination is bounded by length and punctuation, not a word list. Answers, working, names, media,
     # notes and forms of the same work or for the school stay with that work, items are not written, and a
-    # parent's errand keeps its own purpose.
+    # parent's errand keeps its own purpose. The phrase only finds the outcome, not its use.
     forms=r'回执|同意书|确认单|登记表|申请表|报名表|证明|承诺书'
     directed=re.match(r'(?:把|将)([^：:。；;，,]{1,16}?)(?:(?:抄写|摘抄|誊写|默写|听写|摘录|抄|写|记)(?:进|在|到|入)([^：:。；;，,]{1,12}?)(?:上|里|中|内)?|整理(?:进|在|到|入)([^：:。；;，,]{1,12}?)上)(?=\s*(?:$|[，,。；;并再]))',value)
     if (directed and '家长' not in lead
             and not re.search(r'答|过程|结果|演算|检查|自查|签|姓名|名字|学号|照片|图片|截图|录音|音频|视频|作业|要求|通知|任务|意见|建议|反馈|'+forms,directed[1])
-            and not re.search(r'草稿|联系|记事|记作业|家校|'+forms,directed[2] or directed[3])):return 'learning'
+            and not re.search(r'草稿|联系|记事|记作业|家校|'+forms,directed[2] or directed[3])):return 'directed'
     return ''
 
 
@@ -2780,7 +2780,10 @@ def _school_native_blocks(text):
         expected=int(count[1]) if count[1].isdigit() else {'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}[count[1]]
         if len(pieces)!=expected:
             raise AgentError('学校明示项数与可核对行动不一致，原批次保留待完整整理',code='school_action_coverage')
-    return [dict(part,quote=text[part['start']:part['end']].strip().rstrip('；;。').strip(),header=header,
+    # A ba-phrase outcome is learning under a subject, homework or worksheet heading; elsewhere it stays
+    # one outcome whose purpose the reply's own reading of the whole message keeps.
+    taught=bool(container or re.search(_SCHOOL_NATIVE_SUBJECTS+r'|作业',header))
+    return [dict(part,purpose='learning' if part['purpose']=='directed' and taught else part['purpose'],quote=text[part['start']:part['end']].strip().rstrip('；;。').strip(),header=header,
         **(dict(shared_conditions=[clause for _,clause in shared]) if shared else {})) for part in pieces]
 
 
@@ -3086,6 +3089,11 @@ def _school_native_value(action):
     return _school_requirement_goal(dict(title=title),standards)
 
 
+def _school_native_purpose(action,purpose):
+    """A ba-phrase outcome outside a taught heading keeps the reply's own learning or administrative purpose."""
+    return purpose==action['purpose'] or action['purpose']=='directed' and purpose in ('learning','admin')
+
+
 def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
     """Allocate one literal outcome per proposal and retain its complete named supplements."""
     for name,field in _school_fields['properties'].items():
@@ -3105,7 +3113,7 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
     action=matches[0]
     # Only the outcome a bound change names may be an update/cancel, and then only for review; siblings stay new.
     revised=bool(action['changes']) and proposal['task_change'] in ('update','cancel') and proposal['task_state']=='review'
-    if (proposal['task_change']!='new' and not revised) or proposal['task_target_id'] or proposal['task_state']=='reference' or proposal['task_purpose']!=action['purpose']:
+    if (proposal['task_change']!='new' and not revised) or proposal['task_target_id'] or proposal['task_state']=='reference' or not _school_native_purpose(action,proposal['task_purpose']):
         raise AgentError('学校独立要求未形成对应行动，整批保留重试',code='school_action_coverage')
     # A proven named cancel of this whole outcome leaves nothing to do: only cancel/review keeps it, never a pending task.
     cancelled=_school_native_cancelled(action)
@@ -3176,7 +3184,7 @@ def _school_native_saved(items,evidence):
             linked=cited&set(action.get('linked',[]));value=_school_native_value(action);dates=_school_native_dates(action)
             unread=any(e['ref'] in linked and (e.get('content_incomplete') or e.get('unread')) for e in evidence)
             if (not expected<=cited or cited-expected-linked-_school_native_kept(action,actions,entries) or not linked or sorted(linked)!=cover.get('linked')
-                    or brief.get('state')=='ready' or brief.get('purpose')!=action['purpose'] or brief.get('target_id')
+                    or brief.get('state')=='ready' or not _school_native_purpose(action,brief.get('purpose')) or brief.get('target_id')
                     or brief.get('change')!='new' and not (action.get('changes') and brief.get('change') in ('update','cancel'))
                     or (brief.get('change')=='cancel')!=_school_native_cancelled(action)
                     or unread and not action.get('changes') and (brief.get('title')!=value['title'] or brief.get('goal')!=value['goal'])
@@ -3192,7 +3200,7 @@ def _school_native_saved(items,evidence):
         # A changed outcome keeps the checked summary; refs, purpose and its own date still match the ledger.
         literal=not action.get('changes')
         cited={e['ref'] for e in item['evidence']}
-        if (not expected<=cited or cited-expected-_school_native_kept(action,actions,entries) or brief.get('purpose')!=action['purpose']
+        if (not expected<=cited or cited-expected-_school_native_kept(action,actions,entries) or not _school_native_purpose(action,brief.get('purpose'))
                 or brief.get('change')!='new' and not (action.get('changes') and brief.get('change') in ('update','cancel') and brief.get('state')=='review')
                 or (brief.get('change')=='cancel')!=_school_native_cancelled(action)
                 or brief.get('target_id')
