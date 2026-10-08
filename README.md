@@ -1746,3 +1746,4 @@ PDF开发基础：`family_pdf.render_pages`只将明确指定的至多3页转为
 - 软件证据：单项作业资料按 upload_id 把每份老师原件的打开/照片预览、本份引用页与本份读取状态放在同一处，不再分列；作业检查的用途行在勾选旁显示本份原件打开或照片预览，打开链接不在勾选 label 内。
 - 缺口：开发环境无 Node/Playwright，浏览器回归未在开发方运行；同名 image.png 认图的完整浏览器流程尚未新增断言。
 - 下一步：由独立验收方在本机复验完整入口、360/1440、保存重开、失败重试与打印内容守卫。
+- 2026-10-09 有界测试位置修补（同一已提交候选，未合入、未部署，不预称 r219）：Root 披露原公开 test_pdf_material_ui.cjs:224 实际失败——旧断言在本项结论 [data-task-material-scope="action"] 内找 [data-task-material-pages]，而本候选已按 upload_id 把引用页放进兄弟的 [data-task-material-original]。只改测试定位，不改回产品结构：按 own.id 找本份原件，在其中核全部 1–11 引用页、本份读取进度与本份文件链接，兄弟原件/附件/引用不得混入；原有业务断言与完整反馈→错题→订正→保存→失败重试→重开流程未删未弱化，app.js/ui.css/后端未改。M4 只用已有 JavaScriptCore 做了源语法解析（exit 0）；无 Node/Playwright，浏览器测试未运行。下一步由 Root 独立复验原四个 cjs 与 360/1440 完整流程后再决定合入。
