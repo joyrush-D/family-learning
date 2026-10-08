@@ -1147,6 +1147,27 @@ def _ref_agrees(claimed,teacher):
     return claimed==teacher or final(teacher)==claimed or final(claimed)==teacher
 
 
+_GAP_MISSING=re.compile(r'(?:缺|没(?:有|给|标)|未(?:给|提供|标)|条件不[足全])(?!\s*[写填答作])')
+_GAP_UNABLE=r'(?:无法|不能|没法|无从|不可能)'
+_GAP_OPEN=re.compile(_GAP_UNABLE+r'[^，,。；;！!？?\s]{0,3}?(?:计算|算|求|得出|得到|确定|核定|判定|判断|比较)')
+_GAP_SHUT=re.compile(_GAP_UNABLE+r'(?:核定|[^，,。；;！!？?\s]{0,3}?(?:计算|算|求|得)[出得到]?(?:确定|唯一|准确))')
+
+
+def _condition_gap(text,strict=False):
+    """The one clause saying this question lacks a decisive given and so has no settled value, else ''.
+    A lone 「缺」 or 「无法」 is not enough. It only vetoes a definite grade; no grade is ever made from it."""
+    for clause in re.split(r'[。！？!?；;\n]+',text):
+        if _GAP_MISSING.search(clause) and (_GAP_SHUT if strict else _GAP_OPEN).search(clause): return clause.strip()
+    return ''
+
+
+def _ref_leads(listed,teacher):
+    """Wording only: 「200」 opening 「200。空外已印厘米」 is not yet matched to the note, and never agrees."""
+    whole=lambda value:re.sub(r'[，,；;。.．、！!？?]+$','',''.join(value.split()))
+    listed,teacher=whole(listed),whole(teacher)
+    return bool(listed) and teacher.startswith(listed) and teacher[len(listed):][:1] in tuple('，,；;。、！!？?（(：:')
+
+
 def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset()):
     """A question the supplied teacher text covers is compared by that text, whatever source the model claims."""
     if not item['answer'].strip(): return  # No answer is the existing missing-basis path, not a claimed source.
@@ -1166,8 +1187,14 @@ def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset
         return
     if len(same)>1: return pending('','教师参考文字对本题写有不同答案（%s），未判定，待老师或家长核对。'%'／'.join(shown(a,40) for a in same))
     teacher=same[0];letter=re.fullmatch('[A-H]',teacher)
+    over='教师参考超过结果字数上限，只列前995字，完整内容以教师原件为准。' if len(teacher)>995 else ''
+    gap=_condition_gap(teacher) if item['judgment']!='unknown' else ''
+    if gap:  # The teacher's own words leave no value to compare: the grade is vetoed, the whole original kept.
+        return pending(item['answer'] if claimed is not None and _ref_agrees(claimed,teacher) else '教师参考：'+shown(teacher),
+                       '教师参考原文写明本题缺少决定性条件（“%s”），不能核定作答对错，未判定；请补全该条件后再核对。'%shown(gap,120)+over)
     if claimed is not None and _ref_agrees(claimed,teacher): return
-    misquoted='模型所称教师参考“%s”与教师参考原文“%s”不一致，未判定；请对照教师原件核对。'%(shown(claimed,40),shown(teacher,60)) if claimed is not None else ''
+    misquoted=('模型所称教师参考“%s”只写了教师参考原文“%s”的开头，与全文附注的对应尚未核明，未判定；请对照教师原件核对。' if _ref_leads(claimed,teacher)
+               else '模型所称教师参考“%s”与教师参考原文“%s”不一致，未判定；请对照教师原件核对。')%(shown(claimed,40),shown(teacher,60)) if claimed is not None else ''
     if misquoted and images: return pending('教师参考：'+shown(teacher),misquoted)
     student=item['student_answer'].strip()
     if letter and question_kind=='objective' and item['judgment']!='unknown' and re.fullmatch('[A-H]',student):
@@ -1175,8 +1202,9 @@ def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset
                            error_reason='' if student==teacher else '作答%s与教师参考%s不同。'%(student,teacher))
     if claimed is None and _ref_agrees(re.sub(r'^\s*AI自行推导\s*[:：]','',item['answer']),teacher):
         item['answer']='教师参考：'+shown(teacher);return  # Same value, only the label was wrong.
-    pending('教师参考：'+shown(teacher),(misquoted or '本题有教师参考，模型未按教师参考核对，未判定；请对照教师参考补查。')
-            +('教师参考超过结果字数上限，只列前995字，完整内容以教师原件为准。' if len(teacher)>995 else ''))
+    listed=re.sub(r'^\s*AI自行推导\s*[:：]','',item['answer']).strip()  # Unmatched is not proof the teacher was ignored.
+    pending('教师参考：'+shown(teacher),(misquoted or '本题有教师参考；检查所列参考“%s”%s，未判定；请对照教师参考全文补查。'%(shown(listed,40),
+            '与教师参考原文开头相同，但与全文附注的对应尚未核明' if _ref_leads(listed,teacher) else '与教师参考原文未能逐字核明对应'))+over)
 
 
 def homework_reference_draft(images, *, data_path=None, timeout=90, review=False, reference_images=(),
@@ -1330,6 +1358,14 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
                 raise LLMDraftError('检查结果的卷别或题号为空或重复，无法分别核对；请明确卷别、题号与小题后再次检查')
             seen_question_labels.add(question_label)
         if teacher_entries: _prefer_teacher_reference(item,question_kind,teacher_entries,bool(reference_images),titles)
+        if item['judgment']!='unknown':
+            # The item's own reference, or its stated basis, saying no value can be settled vetoes a definite grade.
+            gap,source=_condition_gap(item['answer'].removeprefix('教师参考：')),'所列参考'
+            if not gap: gap,source=_condition_gap(item['error_reason'],strict=True),'检查依据'
+            if gap:
+                item.update(judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty=(
+                    '本题%s写明缺少决定性条件（“%s”），不能核定作答对错，未判定；请补全该条件后再核对。'%(
+                        source,gap if len(gap)<=120 else gap[:120]+'…')+item['uncertainty'].strip())[:300])
         if review and teacher_reference and question_kind=='objective' and item['answer'].startswith('教师参考：'):
             # ponytail: literal uppercase A-H only; other answers need an evidenced comparator.
             student=item['student_answer'].strip()
