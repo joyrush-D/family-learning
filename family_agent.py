@@ -2658,6 +2658,11 @@ def _school_native_command(clause):
     admin=r'(?:签署|签字|填写|填好|提交|交回|打印|盖章|完成|核对)[^：:。；;]{0,35}(?:回执|同意书|确认单|登记表|申请表|报名表|证明|安全承诺书)[^：:。；;]*'
     if re.match(admin,value):return 'admin'
     if re.match(learning+'|'+exercise+'|'+object_first+'|'+compact,value):return 'learning'
+    # A ba-phrase writing a named object into its own notebook or card is one more outcome; answers,
+    # working, names, media and notes of the same work or for the school stay with that work.
+    directed=re.match(r'(?:把|将)([^：:。；;，,]{1,16}?)(?:抄写|摘抄|誊写|默写|听写|摘录|整理|抄|写|记)(?:进|在|到|入)([^：:。；;，,]{0,12}?(?:本|册|簿|卡)(?:子|片)?)(?:上|里|中|内)?(?=\s*(?:$|[，,。；;并再]))',value)
+    if (directed and not re.search(r'答|过程|结果|演算|检查|自查|签|姓名|名字|学号|照片|图片|截图|录音|音频|视频|作业|要求|通知|任务|意见|建议|反馈|回执|同意书|确认单|登记表|申请表|报名表|证明|承诺书',directed[1])
+            and not re.search(r'草稿|联系|记事|记作业|家校',directed[2])):return 'learning'
     return ''
 
 
