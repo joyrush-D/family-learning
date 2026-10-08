@@ -1056,7 +1056,7 @@ _REF_PAPER_LONG=re.compile(r'[^\s，,；;。：:、（）()【】\[\]“”"卷]
 _REF_WHOLE=re.compile(r'(?<![^\s，,；;。：:、（）()【】\[\]“”"])[^\s，,；;。：:、（）()【】\[\]“”"]{1,30}卷')  # a whole name up to its last 卷, joins inside and all
 _REF_DECLARED=re.compile(r'[^\s，,；;。：:、（）()【】\[\]“”"]{1,12}[：:]\s*(%s)\s*[。.]?'%_REF_WHOLE.pattern)  # 「试卷名称：甲卷和平卷」 on its own line
 _REF_LISTED=re.compile('均为|都是|均是|都为')  # one value given to each listed paper
-_REF_GENERIC_PAPER=re.compile(r'[本该此这那全整每各原同两多]?[试考答问纸]?卷')
+_REF_GENERIC_PAPER=re.compile(r'(?:[本该此这那全整每各原同两多某]|当前|上述|前述)*的?(?:[一两几]?[张份套])?[试考答问纸]?卷')  # a determiner phrase, 「当前卷」「这张卷」 too
 _REF_SECTION=re.compile(r'第\s*(\d{1,2}|[一二三四五六七八九十]{1,3})\s*(?:大题|部分)|(?:^|[^第\d一二三四五六七八九十])([一二三四五六七八九十]{1,3})\s*[、.．]')
 _REF_QUESTION=re.compile(r'第\s*(\d{1,3})\s*题|(?<![\d.．])(\d{1,3})\s*题|(?<![A-Za-z])[Qq]\s*(\d{1,3})(?!\d)|(?:^|(?<=[\s、，,；;]))(\d{1,3})\s*[.．、](?!\d)')
 _REF_NAMED=re.compile(r'[\s，,；;。]((?:%s)|第\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*(?:大题|部分)|[一二三四五六七八九十]{1,3}\s*[、.．])'%_REF_PAPER.pattern)
@@ -1184,7 +1184,8 @@ _GAP_ELSEWHERE=re.compile(r'(?:[上下前后另别某每各]|其[他它余]|有�
 _GAP_PAPER=re.compile(r'(?:^|(?<=[\s，,、：:]))[^\s，,、：:；;。“”"（）()题]{1,30}?卷(?=[：:]?\s*(?:%s))'%_GAP_MISSING.pattern)  # 「乙卷缺少宽度」: that paper's
 _GAP_GENERIC=re.compile(r'^[本该此这那全整每各原同两多]|(?:^|(?=[本该此这那全整每各原同两多]))(?:%s)$'%_REF_GENERIC_PAPER.pattern)  # 「原卷」「这张卷」 point at a paper and name none, or a name ends so
 _GAP_OWN=re.compile(r'本小?题|此题|这[一道]?题|该题')
-_GAP_STATED=re.compile(r'(?:%s)\s*的?\s*(?:%s)'%(_GAP_OWN.pattern,_REF_WORDS))  # 「本卷本题参考500」: this question's own reference
+_GAP_STATED=re.compile(r'(?:%s)?\s*(?:%s)\s*的?\s*(?:(?:教师|老师)(?:原|的)?)?(?:参考答案|参考|答案)\s*[:：为是]?\s*[^\s，,、：:]'%(
+    _REF_GENERIC_PAPER.pattern,_GAP_OWN.pattern))  # 「本卷本题参考500」 opening a sentence gives this question's reference as an entry does
 _GAP_PHRASE=r'[，,、：:]'
 
 
@@ -1196,16 +1197,20 @@ def _condition_gap(text,strict=False,paper=None,titles=frozenset()):
     no grade is ever made from it."""
     unable=_GAP_SHUT if strict else _GAP_OPEN
     parts=re.split(r'([。！？!?；;\n]+)',text);sentences,ends=parts[0::2],parts[1::2]+['']
-    def elsewhere(name,s):  # Another paper's only when the whole names differ and the source separates them: the teacher states this
-        # question's own reference apart from the note. A name alone, however it differs, confirms nothing: 「当前卷」 may be this paper.
-        other=_ref_scope(name,titles=titles)[0]
+    def elsewhere(name,k):  # Another paper's only when the shared reading gives both whole names and they differ, a pointing
+        # 「当前卷」 or unclear name being no other paper, and this question's own reference stands apart from note sentence k: the
+        # reference opens with it, as the grammar reads the answer right after the question, or a sentence gives it as an entry does.
+        other=_ref_scope(name,titles=titles)[0];lead=sentences[0].strip()
+        apart=(k>0 and not strict and lead and not (_REF_PAPER.search(lead) or _GAP_OWN.search(lead) or _GAP_MISSING.search(lead)
+                                                    or re.search(_GAP_UNABLE,lead))
+               or any(_GAP_STATED.match(t.strip()) for j,t in enumerate(sentences) if j!=k))
         return (isinstance(paper,str) and paper!='*' and isinstance(other,str) and other!='*' and not _GAP_GENERIC.search(name)
-                and not other.endswith(paper) and not paper.endswith(other) and len(_GAP_STATED.findall(text))>len(_GAP_STATED.findall(s)))
-    def scoped(s,lo,hi):  # No hypothesis up to the claim; no other question or paper since this question was last named.
+                and not other.endswith(paper) and not paper.endswith(other) and bool(apart))
+    def scoped(s,lo,hi,k):  # No hypothesis up to the claim; no other question or paper since this question was last named.
         own=[m.end() for m in _GAP_OWN.finditer(s,0,lo)]
         since=own[-1] if own else 0  # A generic 「原卷/这卷」 names no other paper, as in the reference grammar: still this question's.
         return not _GAP_IF.search(s,0,hi) and not _GAP_ELSEWHERE.search(s,since,hi) and not any(
-            elsewhere(found[0],s) for found in _GAP_PAPER.finditer(s,since,hi))
+            elsewhere(found[0],k) for found in _GAP_PAPER.finditer(s,since,hi))
     def valid(s,u):  # The inability is the value's own: not the child's, not negated, not about steps, meaning or independence.
         head=re.split(_GAP_PHRASE,s[:u.start()])[-1]
         return not (_GAP_PERSON.search(head) or re.search(r'(?:非|不是|不会|并不|未必)$',head)
@@ -1222,8 +1227,8 @@ def _condition_gap(text,strict=False,paper=None,titles=frozenset()):
                     or (_GAP_NOT_GIVEN.search(thing) if thing else _GAP_STEM_END.search(head) or re.search(_GAP_SKILL,head))):
                 continue
             for u in unable.finditer(s):
-                if valid(s,u) and scoped(s,min(m.start(),u.start()),max(m.end(),u.end())): return s.strip()
-            if unable.search(s) or not re.fullmatch(r'[。；;]+',ends[k]) or k+1==len(sentences) or not scoped(s,m.start(),len(s)): continue
+                if valid(s,u) and scoped(s,min(m.start(),u.start()),max(m.end(),u.end()),k): return s.strip()
+            if unable.search(s) or not re.fullmatch(r'[。；;]+',ends[k]) or k+1==len(sentences) or not scoped(s,m.start(),len(s),k): continue
             after=sentences[k+1].lstrip();lead=re.match(r'(?:所以|因此|因而|故而?|从而|于是|那么|这样|由此)?[也就则便]*',after)
             u=unable.match(after,lead.end())
             if u and valid(after,u) and not re.search('[？?]',ends[k+1]): return s.strip()+ends[k][0]+after.strip()
