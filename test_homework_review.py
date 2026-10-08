@@ -838,8 +838,72 @@ def missing_condition_checks():
     return 9
 
 
+def teacher_note_checks():
+    """A paper or 大题 named inside a teacher note is part of that value; only a heading starts a new scope."""
+    calls=0
+    def draft(items,teacher):
+        nonlocal calls
+        with patch.object(family_llm,'_chat_json',return_value=dict(items=items,coverage='仅这些虚构题，其他未核。')) as model:
+            result=family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=True,
+                reference_documents=[dict(name='synthetic-teacher-note.txt',text=teacher)])
+            assert model.call_count==1
+        calls+=1;got={q['label']:q for q in result['questions']}
+        judged=[q['judgment'] for q in result['questions']]  # counts and text follow the guarded questions
+        assert result['items']==len(judged) and result['wrong_items']==judged.count('incorrect') and result['unknown_items']==judged.count('unknown'),result
+        return result,got
+    def kept(q,judgment,answer):
+        assert q['judgment']==judgment and q['answer']==answer,q
+    def unknown(q,student,*words):
+        assert q['judgment']=='unknown' and q['student_answer']==student and not q['error_reason'] and not q['steps'],q
+        assert all(word in q['uncertainty'] for word in words),q
+    # Disclosed regression replay: the whole same-paper teacher value, its note on 乙卷 included, is the reference.
+    mint='虚构薄荷卷第16题 500。乙卷缺少宽度，无法核定周长；本卷本题参考500'
+    note='500。乙卷缺少宽度，无法核定周长；本卷本题参考500'
+    replay=dict(label='虚构薄荷卷第16题',question='将5米换成厘米。',student_answer='50',answer='教师参考：'+note,judgment='incorrect',
+                question_kind='objective',error_reason='虚构已知作答与参考不同。',possible_cause='',steps='',uncertainty='')
+    result,got=draft([replay],mint)
+    kept(got['虚构薄荷卷第16题'],'incorrect','教师参考：'+note)
+    assert got['虚构薄荷卷第16题']['student_answer']=='50' and result['wrong_items']==1 and result['unknown_items']==0
+    # The whole note is the teacher's: quoting only its opening 500 is not yet matched, and the full original is shown.
+    result,got=draft([replay|dict(answer='教师参考：500')],mint)
+    unknown(got['虚构薄荷卷第16题'],'50','开头');assert got['虚构薄荷卷第16题']['answer']=='教师参考：'+note
+    # A note naming another 大题 is not cut either, and the next line keeps this paper.
+    a=lambda label,**c:item(label=label,question='虚构题面')|c
+    pine='虚构松针卷\n第7题 12。第二大题缺少高度，无法核定面积；本题参考12\n第8题 6'
+    note7='12。第二大题缺少高度，无法核定面积；本题参考12'
+    result,got=draft([a('虚构松针卷第7题',student_answer='21',answer='教师参考：'+note7,judgment='incorrect',error_reason='作答21与教师参考12不同。'),
+                      a('虚构松针卷第8题',student_answer='6',answer='教师参考：6')],pine)
+    kept(got['虚构松针卷第7题'],'incorrect','教师参考：'+note7);kept(got['虚构松针卷第8题'],'correct','教师参考：6')
+    # Real headings on one line still split papers, 大题 and questions; a bare heading ending a line applies below.
+    multi='虚构甲卷第1题 5；虚构乙卷第1题 6\n虚构丙卷 第一大题 第2题 A 第二大题 第2题 C\n虚构丁卷第3题 8。虚构戊卷\n第3题 9'
+    result,got=draft([a('虚构甲卷第1题',student_answer='5',answer='教师参考：5'),
+                      a('虚构乙卷第1题',student_answer='5',answer='教师参考：6',judgment='incorrect',error_reason='作答5与教师参考6不同。'),
+                      a('虚构丙卷第一大题第2题',student_answer='C',answer='教师参考：A',judgment='incorrect',error_reason='作答C与教师参考A不同。'),
+                      a('虚构丙卷第二大题第2题',student_answer='C',answer='教师参考：C'),
+                      a('虚构丁卷第3题',student_answer='8',answer='教师参考：8'),a('虚构戊卷第3题',student_answer='9',answer='教师参考：9')],multi)
+    assert [q['judgment'] for q in result['questions']]==['correct','incorrect','incorrect','correct','correct','correct'],result['questions']
+    # Same number on another paper stays isolated: 乙卷第3题's own value is its note, not 甲卷's 8.
+    result,got=draft([a('虚构甲卷第3题',student_answer='8',answer='教师参考：8'),a('虚构乙卷第3题',student_answer='8',answer='教师参考：8')],
+                     '虚构甲卷第3题 8。虚构乙卷第3题另有说明')
+    kept(got['虚构甲卷第3题'],'correct','教师参考：8');unknown(got['虚构乙卷第3题'],'8','不一致')
+    # Unclear structure stays unknown: a paper named with other words right before the next question owns neither reading.
+    result,got=draft([a('虚构甲卷第2题',student_answer='6',answer='教师参考：6'),a('虚构乙卷第2题',student_answer='6',answer='教师参考：6')],
+                     '虚构甲卷第1题 5，虚构乙卷另附说明第2题 6')
+    unknown(got['虚构甲卷第2题'],'6');unknown(got['虚构乙卷第2题'],'6','无法核明')
+    # A note on another paper never stands for this question's missing given; this question's own stays a veto.
+    result,got=draft([a('虚构薄荷卷第18题',student_answer='20',answer='教师参考：乙卷另有长方形。本题缺少宽度，无法核定周长',judgment='incorrect',
+                        error_reason='作答与参考不同。')],'虚构薄荷卷第18题 乙卷另有长方形。本题缺少宽度，无法核定周长')
+    unknown(got['虚构薄荷卷第18题'],'20','缺少决定性条件','补全')
+    # The child's own missing unit is not a missing condition, even beside another paper's note.
+    unit='500厘米。乙卷同题作答缺单位不得分'
+    result,got=draft([a('虚构薄荷卷第19题',student_answer='500',answer='教师参考：'+unit,judgment='incorrect',error_reason='作答缺少单位。')],
+                     '虚构薄荷卷第19题 '+unit)
+    kept(got['虚构薄荷卷第19题'],'incorrect','教师参考：'+unit)
+    return calls
+
+
 def run():
-    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+missing_condition_checks()
+    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+missing_condition_checks()+teacher_note_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:
         root=Path(temporary);data=root/'private';data.mkdir()
         with patch.dict(os.environ,{'FAMILY_DATA':str(data)}):
