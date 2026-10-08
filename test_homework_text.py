@@ -457,6 +457,15 @@ class TextQuestionHTTPTests(HomeworkPrintScopeTests):
     def test_disclosed_accented_word_space_stays_pending_through_save_retry_and_reopen(self):
         self.disclosed_stay_pending(DISCLOSED_UNICODE_BOUNDARY)
 
+    def test_word_space_after_any_letter_or_its_combining_marks_still_parts_words(self):
+        # Developer pairs only: equal Unicode values agree as written; ASCII words, numeric equations and wide CJK spacing keep their earlier reading.
+        nfc,nfd='caf\u00e9 noir','cafe\u0301 noir'
+        for claimed,teacher,agrees in [(nfc,nfc,True),(nfd,nfd,True),('caf\u00e9noir',nfc,False),('cafe\u0301noir',nfd,False),(nfc+'。',nfc,True),
+                                       ('μία φορά','μία φορά',True),('μίαφορά','μία φορά',False),('да нет','да нет',True),('данет','да нет',False),
+                                       ('a lot','a  lot',True),('alot','a lot',False),('2 + 3 = 5','2+3=5',True),('5','2+3=5',True),('三角形','三 角 形',True)]:
+            with self.subTest(claimed=claimed,teacher=teacher):self.assertEqual(family_llm._ref_agrees(claimed,teacher),agrees)
+        self.assertTrue(family_llm._ref_leads(nfd,nfd+'，空外另注'));self.assertFalse(family_llm._ref_leads('cafe\u0301noir',nfd+'，空外另注'))
+
     def disclosed_stay_pending(self,cases):
         for case in cases:
             with self.subTest(case=case['case_id']):
