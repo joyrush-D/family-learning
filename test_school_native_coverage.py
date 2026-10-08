@@ -622,5 +622,50 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
 
 
+    def test_disclosed_subject_word_does_not_turn_a_plainly_administrative_writing_into_learning(self):
+        # D01 full entry: a subject word in the heading is context; the body's own administrative use stands.
+        text = '英语课行政事项：请同学把校车申请理由写在A4纸上，供学校办公室登记。'
+        payload, ref = self._administrative_notice(text)
+        self._use_replies(payload, [dict(proposals=[
+            self._admin_proposal(ref, '把校车申请理由写在A4纸上', '填写校车申请理由', text)])])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        with self.store._db() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")]
+            self.assertEqual(len(rows), 1)
+            self.assertIn('校车申请理由', rows[0]['body'])
+            self.assertEqual(rows[0]['due'], '', 'no date is stated, so none is invented')
+            self.assertEqual([q['ref'] for q in json.loads(rows[0]['evidence'])], [ref])
+            tasks = [dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+            self.assertEqual([t['id'] for t in tasks], [rows[0]['task_id']])
+            self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages')], [1])
+            self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages')],
+                             payload['messages'], 'the complete original stays with the outcome')
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=1))
+        self.assertEqual((replay['processed'], replay['created']), (0, 0))
+        self.assertEqual(self.model.call_count, 1)
+
+    def test_model_input_asks_only_for_purposes_its_schema_allows(self):
+        # The internal ba-phrase outcome marker is not a reply value: every purpose the input asks for is allowed.
+        text = '学校行政事项：请同学把校车申请理由写在A4纸上，供老师审核。'
+        payload, ref = self._administrative_notice(text)
+        self._use_replies(payload, [dict(proposals=[
+            self._admin_proposal(ref, '把校车申请理由写在A4纸上', '填写校车申请理由', text)])])
+        agent.run_once(self.app, self.now)
+        messages, schema = self.model.call_args.args[:2]
+        allowed = set(schema['properties']['proposals']['items']['properties']['task_purpose']['enum'])
+        actions = json.loads(messages[-1]['content'])['required_native_actions']
+        self.assertTrue(actions)
+        for action in actions:
+            asked = [action['purpose']] if 'purpose' in action else action.get('purpose_options', [])
+            self.assertTrue(asked and set(asked) <= allowed, action)
+
+    def test_learning_writing_under_a_homework_heading_still_rejects_an_admin_reply(self):
+        # The whole original reads as learning, so an administrative relabel is not saved.
+        text = '英语作业：把生词写在卡片上，每词三遍。'
+        payload, ref = self._administrative_notice(text)
+        self._use_replies(payload, [dict(proposals=[self._admin_proposal(ref, '把生词写在卡片上', '写生词卡片', text)])])
+        self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
+
 if __name__ == '__main__':
     unittest.main()
