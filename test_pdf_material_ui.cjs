@@ -221,7 +221,11 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
    const basis=autoResources.locator('[data-task-material-scope="action"]');await basis.waitFor();
    assert.match(await basis.innerText(),/AI 已整理 · 本项资料/);
    assert.equal(await basis.locator('.task-material-text').count(),0,'the task conclusion is not repeated as raw source quotes');
-   assert.match(await basis.locator('[data-task-material-pages]').innerText(),/第 1、2、3、4、5、6、7、8、9、10、11 页/,'identical complete requirements retain all actual supporting page groups');
+   assert.equal(await basis.locator('[data-task-material-pages],[data-task-material-unbound-pages]').count(),0,'quoted pages sit with the original they cite, not in the sibling task conclusion');
+   const original=autoResources.locator('[data-task-material-original="'+own.id+'"]');assert.equal(await original.count(),1,'this task groups its own original by upload ID');assert.equal(await autoResources.locator('[data-task-material-original]').count(),1,'no sibling original is mixed into this task');assert.equal(await autoResources.locator('[data-task-material-original="'+other.id+'"]').count(),0);
+   assert.match(await original.locator('[data-task-material-pages]').innerText(),/归纳引用：第 1、2、3、4、5、6、7、8、9、10、11 页/,'identical complete requirements retain all actual supporting page groups beside their own original');assert.equal(await autoResources.locator('[data-task-material-pages]').count(),1,'the cited pages appear once, inside their own original');
+   assert.match(await original.innerText(),/归纳引用：第 1、2、3、4、5、6、7、8、9、10、11 页[\s\S]*原件整理：全部 11 页已整理/,'its own reading state stays beside its own pages');assert.equal(await autoResources.locator('[data-task-material-original="'+own.id+'"][data-school-pdf-document]').count(),1,'the only PDF reading state belongs to this original by upload ID');
+   assert.equal(await original.locator('.upload-item a[href*="/upload/"][href*="'+own.id+'"]').count(),1,'its own file opens inside the same original');assert(!(await original.innerText()).includes(other.name));assert(!(await original.innerText()).includes(otherQuote));
    assert.equal(await autoResources.locator('[data-school-pdf-document]').count(),1,'one task keeps only its own original preparation');
    assert.match(await autoResources.innerText(),/原件整理：全部 11 页已整理/);
    assert((await autoResources.innerText()).includes(own.name));assert(!(await autoResources.innerText()).includes(other.name));assert(!(await autoResources.innerText()).includes(otherQuote));
