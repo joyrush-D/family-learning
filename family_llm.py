@@ -1060,7 +1060,8 @@ _REF_GENERIC_PAPER=re.compile(r'(?:[本该此这那全整每各原同两多某]|
 _REF_SECTION=re.compile(r'第\s*(\d{1,2}|[一二三四五六七八九十]{1,3})\s*(?:大题|部分)|(?:^|[^第\d一二三四五六七八九十])([一二三四五六七八九十]{1,3})\s*[、.．]')
 _REF_QUESTION=re.compile(r'第\s*(\d{1,3})\s*题|(?<![\d.．])(\d{1,3})\s*题|(?<![A-Za-z])[Qq]\s*(\d{1,3})(?!\d)|(?:^|(?<=[\s、，,；;]))(\d{1,3})\s*[.．、](?!\d)')
 _REF_NAMED=re.compile(r'[\s，,；;。]((?:%s)|第\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*(?:大题|部分)|[一二三四五六七八九十]{1,3}\s*[、.．])'%_REF_PAPER.pattern)
-_REF_SUB=re.compile(r'\s*(?:[（(]\s*(\d{1,2})\s*[)）]|第\s*(\d{1,2})\s*小题)')
+_REF_SUB=re.compile(r'\s*(?:[（(]\s*(\d{1,2})\s*[)）]|第\s*(\d{1,2})\s*(?:小题|小?问))')
+_REF_SUB_UNREAD=re.compile(r'\s*(?:第\s*[\d一二三四五六七八九十]{1,3}\s*(?:小题|小?问|空)|[（(]\s*[一二三四五六七八九十]{1,3}\s*[)）]|[①-⑳])')
 _REF_WORDS='(?:(?:教师|老师)(?:原|的)?)?(?:参考答案|参考|答案)|教师|老师'  # 「教师原参考」 is a source word too
 _REF_SOURCE=re.compile(r'^[\s:：]*(?:%s)?\s*(?:均为|都是|均是|都为|为|是)?[\s:：]*'%_REF_WORDS)
 _REF_NOISE=re.compile(r'%s|如下|以下|第\s*\d{1,3}\s*页|[\W_]'%_REF_WORDS)
@@ -1092,6 +1093,15 @@ def _ref_scope(text,section=None,titles=frozenset(),listed=False):
     return paper,section,_REF_NOISE.sub('',_REF_SECTION.sub('',_REF_PAPER.sub('',text)))
 
 
+def _ref_sub(text,at=0):
+    """The sub-question named right after a question number, read alike on a label and a teacher line:
+    its number, '*' when 「第二问」「②」 is named but unread, else None. An unread one is never the whole question."""
+    sub=_REF_SUB.match(text,at)
+    if sub: return int(next(g for g in sub.groups() if g)),sub.end()
+    unread=_REF_SUB_UNREAD.match(text,at)
+    return ('*',unread.end()) if unread else (None,at)
+
+
 def _teacher_reference_entries(documents,titles=frozenset()):
     entries=[]
     for document in documents:
@@ -1108,13 +1118,13 @@ def _teacher_reference_entries(documents,titles=frozenset()):
             here,rest=(None,'' if cover else words) if marks and new is None and words else (paper,title)  # Words on the line qualify its own entries.
             for n,mark in enumerate(marks):
                 tail=line[mark.end():marks[n+1].start() if n+1<len(marks) else len(line)]
-                sub=_REF_SUB.match(tail);tail=tail[sub.end():] if sub else tail
+                sub,end=_ref_sub(tail);tail=tail[end:]
                 # 「500。乙卷缺少宽度…本卷本题参考500」 is one value; 「5；乙卷第1题6」 and 「8。虚构乙卷」 ending a line are headings.
                 after=next((found for found in _REF_NAMED.finditer(tail) if not _ref_scope(tail[found.start(1):],section,titles,listed)[2]),None)
                 answer=re.sub(r'[\s，,；;。.．、]+$','',_REF_SOURCE.sub('',tail[:after.start()] if after else tail,count=1))
                 for one in here if isinstance(here,tuple) else (here,):  # 「甲卷与乙卷第1题均为5」 names each paper once.
                     if answer: entries.append(dict(paper=one,section=section,rest=rest,number=int(next(g for g in mark.groups() if g)),
-                                                   sub=int(next(g for g in sub.groups() if g)) if sub else None,answer=answer))
+                                                   sub=sub,answer=answer))
                 if after:
                     new,section,words=_ref_scope(tail[after.start(1):],section,titles,listed)
                     if new is not None: paper=here=new;title=rest=''
@@ -1132,11 +1142,11 @@ def _ref_relation(label,entry,titles=frozenset()):
     if not mark: return 'unsure'
     bare=mark.re is not _REF_QUESTION;number=int(mark[2] if bare else next(g for g in mark.groups() if g))
     if number!=entry['number']: return 'different'
-    sub=None if bare else _REF_SUB.match(label,mark.end());paper,section,rest=_ref_scope(mark[1] if bare else label[:mark.start()],titles=titles)
+    sub=None if bare else _ref_sub(label,mark.end())[0];paper,section,rest=_ref_scope(mark[1] if bare else label[:mark.start()],titles=titles)
     paper='*' if isinstance(paper,tuple) else paper  # A label naming two papers identifies neither.
     part=paper is None and entry['paper'] is None and rest!=entry['rest']  # unnamed papers only match word for word
     unsure=False
-    for n,(mine,theirs) in enumerate(((paper,entry['paper']),(section,entry['section']),(int(next(g for g in sub.groups() if g)) if sub else None,entry['sub']))):
+    for n,(mine,theirs) in enumerate(((paper,entry['paper']),(section,entry['section']),(sub,entry['sub']))):
         if mine is None and theirs is None: continue
         if mine is None or theirs is None or '*' in (mine,theirs):
             if n==2: part=True
@@ -1152,10 +1162,15 @@ def _ref_label_paper(label,titles=frozenset()):
     return '*' if isinstance(paper,tuple) else paper
 
 
+def _ref_unspaced(value):
+    """Spacing is layout, except between letters where it parts words: 「a lot」 is never 「alot」."""
+    return re.sub(r'(?<=[A-Za-z])(\s+)(?=[A-Za-z])|\s+',lambda m:' ' if m[1] else '',value)
+
+
 def _ref_agrees(claimed,teacher):
     """A teacher-labelled value must be the teacher's whole value; added letters or words are not the teacher's.
     A bare equation 「2+3=5」 and its one final value 「5」 are the same value; nothing is computed."""
-    whole=lambda value:re.sub(r'[，,；;。.．、！!？?]+$','',''.join(value.split()).replace('＝','='))
+    whole=lambda value:re.sub(r'[，,；;。.．、！!？?]+$','',_ref_unspaced(value).replace('＝','='))
     def final(value):  # Only one numeric equation 「2+3=5」「12-5=7米」 has one final value; letters and chains do not.
         found=re.fullmatch(r'(?=[^=]*\d)[\d.()（）]*(?:[+\-×÷*/][\d.()（）]+)+=(\d+(?:\.\d+)?[^\W\d_]{0,3})',value)
         return found[1] if found else None
@@ -1237,7 +1252,7 @@ def _condition_gap(text,strict=False,paper=None,titles=frozenset()):
 
 def _ref_leads(listed,teacher):
     """Wording only: 「200」 opening 「200。空外已印厘米」 is not yet matched to the note, and never agrees."""
-    whole=lambda value:re.sub(r'[，,；;。.．、！!？?]+$','',''.join(value.split()))
+    whole=lambda value:re.sub(r'[，,；;。.．、！!？?]+$','',_ref_unspaced(value))
     listed,teacher=whole(listed),whole(teacher)
     return bool(listed) and teacher.startswith(listed) and teacher[len(listed):][:1] in tuple('，,；;。、！!？?（(：:')
 
