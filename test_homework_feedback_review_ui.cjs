@@ -623,7 +623,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
     const checkEditable=async latePanel=>{
      const material=latePanel.locator('[data-homework-review-sources] [data-review-source="'+reference+'"]'),choice=material.locator('[data-homework-review-photo]'),role=material.locator('[data-homework-review-role]'),pages=material.locator('[data-homework-review-pages]');
      for(const control of [choice,role,pages])assert.equal(await control.isEnabled(),true,'late source controls restored after '+outcome);
-     await choice.check();await material.locator('details').evaluate(x=>x.open=true);await role.selectOption('reference');await pages.fill('1');
+     await choice.check();assert.equal(await role.isVisible(),true,'the late source role is visible in its row');assert.equal(await pages.isVisible(),true,'the late PDF shows its page numbers in its row');await role.selectOption('reference');await pages.fill('1');
      assert.equal(await choice.isChecked(),true);assert.equal(await role.inputValue(),'reference');assert.equal(await pages.inputValue(),'1');await choice.uncheck();
     };
     for(const latePanel of returnedPanels)await checkEditable(latePanel);
@@ -782,7 +782,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
    if(!await coveragePanel().locator(':scope > details').evaluate(x=>x.open))await coveragePanel().locator(':scope > details > summary').click();
    for(const [id,role] of [[coverageAnswer.id,'question'],[coverageTeacher.id,'reference'],...(previous?[[previous,'previous']]:[])]){
     const choice=coveragePanel().locator('[data-review-source="'+id+'"]');await choice.locator('[data-homework-review-photo]').check();
-    const options=choice.locator('details');if(!await options.evaluate(x=>x.open))await options.locator(':scope > summary').click();
+    assert.equal(await choice.locator('details').count(),0,'the source role sits directly in its row');
     await choice.locator('[data-homework-review-role]').selectOption(role);
    }
   }
@@ -853,7 +853,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
   const checkOriginChoices=async()=>{const rows=originRows();await rows.teacher.waitFor();await eventually(async()=>JSON.stringify(await rows.previous.locator('[data-homework-review-role] option').evaluateAll(xs=>xs.map(x=>x.value)))==='["previous"]','reattached output exposes only the previous-opinion role');assert.deepEqual(await rows.previous.locator('[data-homework-review-role] option').allTextContents(),['上次 AI 检查 · 供复核']);assert((await rows.teacher.locator('[data-homework-review-role] option').evaluateAll(xs=>xs.map(x=>x.value))).includes('reference'));return rows};
   await p.reload();await openOrigin();await originPanel().locator(':scope > details > summary').click();const originChoices=await checkOriginChoices();
   await originChoices.photo.locator('[data-homework-review-photo]').check();await originChoices.teacher.locator('[data-homework-review-photo]').check();await originChoices.previous.locator('[data-homework-review-photo]').check();
-  for(const [row,role] of [[originChoices.teacher,'reference'],[originChoices.previous,'previous']]){await row.locator('details > summary').click();await row.locator('[data-homework-review-role]').selectOption(role)}
+  for(const [row,role] of [[originChoices.teacher,'reference'],[originChoices.previous,'previous']]){assert.equal(await row.locator('[data-homework-review-role]').isVisible(),true,'the source role is visible in its row');await row.locator('[data-homework-review-role]').selectOption(role)}
   const originDraftBodies=[];let originReply;
   await p.route('**/api/print/homework/draft',async route=>{originDraftBodies.push(route.request().postDataJSON());if(originDraftBodies.length===1)return route.fulfill({status:503,json:{error:'虚构来源身份检查暂不可用'}});const response=await route.fetch();assert.equal(response.status(),200);originReply=await response.json();await route.fulfill({response,json:originReply})});
   try{
