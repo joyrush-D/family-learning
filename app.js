@@ -147,10 +147,12 @@ document.addEventListener('change',async e=>{
  catch(err){toast(err.message||'保存结果未确认，请重试核对。')}
  finally{busy=false;pendingTask=null;render()}
 });
+// Small originals read as B or KB instead of 0.00 MB; 1MB and up keep the two-decimal MB.
+function fileSizeText(size){return size<1024?size+' B':size<1048576?(size/1024).toFixed(size<10240?1:0)+' KB':(size/1048576).toFixed(2)+' MB'}
 function uploadHTML(a,options={}){
  const url=endpoint('/upload/')+encodeURIComponent(a.id),media=a.mime.startsWith('audio/')?'audio':a.mime.startsWith('video/')?'video':'';
  const photo=['image/jpeg','image/png','image/webp'].includes(a.mime)?`<img src="${url}" alt="${esc(a.name)}" loading="${options?.eager?'eager':'lazy'}">`:'';
- return `<div class="upload-item"><span class="upload-name"><a href="${url}" target="_blank" rel="noopener">${esc(a.name)}</a> <span class="muted small">${(a.size/1024/1024).toFixed(2)} MB</span></span>${/\.(pdf|jpe?g|png|docx?|pptx|txt)$/i.test(a.name)?` <button type="button" data-print-upload="${esc(a.id)}">打印</button>`:''}${photo?(options?.collapsed?`<details class="task-saved-originals"><summary>展开作答照片</summary>${photo}</details>`:photo):media?`<${media} controls ${media==='video'?'playsinline':''} preload="${media==='video'?'metadata':'none'}" src="${url}" aria-label="播放${esc(a.name)}"></${media}><div class="media-tools"><label>播放速度<select data-media-speed><option value="0.5">0.5× 慢速</option><option value="0.75">0.75× 慢速</option><option value="1" selected>1× 正常</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option></select></label><button type="button" data-media-back>重听前5秒</button></div><p class="small muted" data-media-status>${media==='video'?'视频原件仅供回放，声音与内容尚未评估。':'可暂停、拖动和调速；听过不代表已经会写。'}无法回放时点文件名打开原件。</p>`:''}</div>`;
+ return `<div class="upload-item"><span class="upload-name"><a href="${url}" target="_blank" rel="noopener">${esc(a.name)}</a> <span class="muted small">${fileSizeText(a.size)}</span></span>${/\.(pdf|jpe?g|png|docx?|pptx|txt)$/i.test(a.name)?` <button type="button" data-print-upload="${esc(a.id)}">打印</button>`:''}${photo?(options?.collapsed?`<details class="task-saved-originals"><summary>展开作答照片</summary>${photo}</details>`:photo):media?`<${media} controls ${media==='video'?'playsinline':''} preload="${media==='video'?'metadata':'none'}" src="${url}" aria-label="播放${esc(a.name)}"></${media}><div class="media-tools"><label>播放速度<select data-media-speed><option value="0.5">0.5× 慢速</option><option value="0.75">0.75× 慢速</option><option value="1" selected>1× 正常</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option></select></label><button type="button" data-media-back>重听前5秒</button></div><p class="small muted" data-media-status>${media==='video'?'视频原件仅供回放，声音与内容尚未评估。':'可暂停、拖动和调速；听过不代表已经会写。'}无法回放时点文件名打开原件。</p>`:''}</div>`;
 }
 document.addEventListener('change',e=>{if(!e.target.matches('[data-media-speed]'))return;const media=e.target.closest('.upload-item')?.querySelector('audio,video');if(media)media.playbackRate=Number(e.target.value)});
 document.addEventListener('click',e=>{const button=e.target.closest('[data-media-back]');if(!button)return;const box=button.closest('.upload-item'),media=box?.querySelector('audio,video');if(!media)return;media.currentTime=Math.max(0,(Number.isFinite(media.currentTime)?media.currentTime:0)-5);media.play().catch(()=>{box.querySelector('[data-media-status]').textContent='无法播放这份原件，请点文件名下载或打开核对。'})});
@@ -647,6 +649,27 @@ function homeworkReviewScopeText(coverage,comparison,text){
  if(typeof coverage==='string'&&entries.length&&entries.every(x=>/^(?:题目\/孩子作答|上一轮待复核意见|教师参考)《.*》：.+。$/.test(x))&&scope.endsWith(read))scope=scope.slice(0,-read.length)+'\n实际读取范围：'+entries.map(x=>x.replace(/》：本次(读取(?:完整文字|整张照片|最新检查；较早草稿保留在原件，未作为本次复核输入))。$|。$/,(m,status)=>status?'》：'+status:'')).join('；')+'。';
  return {coverage:'本次检查范围：'+scope+'\n仅本次所选资料，未判定和未检查部分不算已完成。',comparison:comparison?'本次复核：'+comparison.replace(/^本次(?=\d+题未判定，不能沿用上一轮对这些题的确定判定。)|^本次复核(?=以逐题结果为准；未列题目仍未检查，旧AI意见不作答案依据。)/,''):''};
 }
+// Display only: the saved TXT stays the record and every character stays in the DOM, so copy, find and screen readers keep it verbatim.
+// A paragraph takes the live check's hierarchy only when it is exactly a generated question block: "题号 · 判定", then the program's own labels in order.
+// There a generic "参考答案：" before a 教师参考/AI自行推导 source and an empty "订正建议：" stay in the text but are not shown; anything else stays plain.
+function savedHomeworkReviewParts(text){
+ const parts=[],add=(value,kind='',judgment='')=>{if(value)parts.push({text:value,kind,judgment})},judgments={与参考一致:'correct',需订正:'incorrect',未判定:'unknown'};
+ text.split('\n\n').forEach((block,index)=>{
+  if(index)add('\n\n');
+  const lines=block.split('\n'),head=/^(.+) · (与参考一致|需订正|未判定)$/.exec(lines[0]),judgment=head?judgments[head[2]]:'',rest=lines.slice(1);
+  const labels=['题面：','卷面作答：','参考答案：',...(judgment==='incorrect'?['错误依据：','订正建议：']:[])];let tail=rest.slice(labels.length);
+  if(judgment==='incorrect'&&tail[0]?.startsWith('可能原因（待问孩子）：'))tail=tail.slice(1);
+  if(tail[0]?.startsWith('不确定：'))tail=tail.slice(1);
+  if(!judgment||tail.length||rest.length<labels.length||!labels.every((label,i)=>rest[i].startsWith(label))){add(block,!index&&/^本次核对\d+题：需订正\d+题，与参考一致\d+题，未判定\d+题。$/.test(block)?'summary':'');return}
+  add(head[1],'question');add(' · '+head[2],'judgment',judgment);
+  for(const line of rest){
+   const label=line.slice(0,line.indexOf('：')+1),value=line.slice(label.length),source=label==='参考答案：'&&/^(?:教师参考|AI自行推导)：/.exec(value);
+   if(line==='订正建议：'){add('\n'+line,'redundant');continue}
+   add('\n');if(source){add(label,'redundant');add(source[0],'field');add(value.slice(source[0].length))}else{add(label,'field');add(value)}
+  }
+ });
+ return parts;
+}
 async function loadSavedHomeworkReview(panel,record,task){
  if(panel.dataset.loading||panel.dataset.loaded)return;panel.dataset.loading='true';const status=panel.querySelector('[data-saved-review-status]'),retry=panel.querySelector('button');retry.hidden=true;let retryable=true;status.textContent='正在读取已保存检查…';
  try{
@@ -655,7 +678,7 @@ async function loadSavedHomeworkReview(panel,record,task){
   if(!panel.isConnected||!$('#taskDialog').open||taskFeedbackContext?.task_id!==task.id)return;
   if(out.task_id!==task.id||out.record_id!==record.id||out.created!==record.created||out.original_record_id!==homeworkReviewOriginalId(record)){retryable=false;throw Error('检查原记录已变化，请重新打开核对')}
   if(typeof out.text!=='string'||!out.text.trim()||[...out.text].length>12000){retryable=false;throw Error('检查文字无法完整展示，请下载文字原件核对')}
-  panel.querySelector('[data-saved-review-text]').textContent=out.text;status.textContent=out.has_archived?'较早未单独保存的草稿仍在文字原件，可下载对照。':'';panel.dataset.loaded='true';
+  panel.querySelector('[data-saved-review-text]').replaceChildren(...savedHomeworkReviewParts(out.text).map(part=>{if(!part.kind)return part.text;const span=document.createElement('span');span.className='saved-review-'+part.kind;if(part.judgment)span.dataset.judgment=part.judgment;span.textContent=part.text;return span}));status.textContent=out.has_archived?'较早未单独保存的草稿仍在文字原件，可下载对照。':'';panel.dataset.loaded='true';
  }catch(error){if(panel.isConnected){status.textContent=error.message+'；已保存记录与原件保留。';retry.hidden=!retryable}}
  finally{delete panel.dataset.loading}
 }
