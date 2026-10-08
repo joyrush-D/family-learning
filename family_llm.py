@@ -19,6 +19,7 @@ import re
 import secrets
 import sqlite3
 import time
+import unicodedata
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1163,8 +1164,14 @@ def _ref_label_paper(label,titles=frozenset()):
 
 
 def _ref_unspaced(value):
-    """Spacing is layout, except between letters where it parts words: 「a lot」 is never 「alot」."""
-    return re.sub(r'(?<=[A-Za-z])(\s+)(?=[A-Za-z])|\s+',lambda m:' ' if m[1] else '',value)
+    """Spacing is layout, except between letters where it parts words: 「a lot」 is never 「alot」, nor 「café noir」 「cafénoir」.
+    A letter ends after the combining marks written on it; wide East Asian forms do not part words by spacing, so theirs stays layout."""
+    def word(ch):return ch.isalpha() and unicodedata.east_asian_width(ch) not in ('W','F','H')
+    def kept(m):
+        end=m.start()
+        while end and unicodedata.category(value[end-1])[0]=='M':end-=1
+        return ' ' if end and m.end()<len(value) and word(value[end-1]) and word(value[m.end()]) else ''
+    return re.sub(r'\s+',kept,value)
 
 
 def _ref_agrees(claimed,teacher):
