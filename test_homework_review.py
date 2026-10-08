@@ -808,8 +808,10 @@ def missing_condition_checks():
     result,got=draft([v(1,student_answer='27',answer='AI自行推导：如果图中没有标出宽，就无法求出面积；本题宽为3，面积27',judgment='correct',error_reason=''),
         v(2,answer='AI自行推导：图中没有标出宽。所以无法求出确定的面积。'),v(3,answer='AI自行推导：27。图中没有标出宽。孩子无法求出面积。'),
         v(4,answer='AI自行推导：27。第6题图中缺宽，无法核定。',error_reason='并非缺少条件，无法核定的是孩子的书写；作答25与27不同。'),
-        v(5,answer='AI自行推导：27',error_reason='题中缺少宽？无法核定。作答25与27不同。')],'')
+        v(5,answer='AI自行推导：27',error_reason='题中缺少宽？无法核定。作答25与27不同。'),
+        v(6,answer='AI自行推导：存在以下问题：缺少宽，无法计算确定的面积。')],'')
     vetoed(got['第2题'],'25','AI自行推导：图中没有标出宽。所以无法求出确定的面积。','所列参考','图中没有标出宽。所以无法求出确定的面积')
+    vetoed(got['第6题'],'25','AI自行推导：存在以下问题：缺少宽，无法计算确定的面积。','所列参考','缺少宽')
     assert got['第1题']['judgment']=='correct' and all(got['第%d题'%n]['judgment']=='incorrect' and got['第%d题'%n]['error_reason'] for n in (3,4,5)),got
     return 6
 
