@@ -403,6 +403,13 @@ DISCLOSED_TEACHER_FIDELITY=[
 ]
 DISCLOSED_SUMMARY='本次核对1题：需订正0题，与参考一致0题，未判定1题。'
 
+# Disclosed fictional UA01/UA02 text inputs, raw model returns and oracles, verbatim. The accent is escaped only in this source:
+# UA01 carries precomposed U+00E9 and UA02 carries e+U+0301, and the sha256 checks prove each text is the given file's bytes.
+DISCLOSED_UNICODE_BOUNDARY=[
+    {'case_id': 'UA01', 'question_name': 'UA01-虚构作答.txt', 'question_text': '虚构萤光卷 第1题：请写出英语短语“许多”（两个单词）。\n实际作答：caf\u00e9noir\n', 'question_sha256': '24b2fcdc924814498f55e59f52a8a69b1f427bb03748cba695a199d4152a7c56', 'teacher_name': 'UA01-虚构教师.txt', 'teacher_text': '虚构萤光卷 第1题：教师参考caf\u00e9 noir\n', 'teacher_sha256': '79ca1ac9a5c37afc96605c8ad9617c3b37290e6191cd8b4490d3b65e3c9b7dfa', 'raw_model': {'question_labels': ['虚构萤光卷第1题'], 'items': [{'label': '虚构萤光卷第1题', 'question': '请写出英语短语“许多”（两个单词）。', 'student_answer': 'caf\u00e9noir', 'answer': '教师参考：caf\u00e9noir', 'judgment': 'correct', 'question_kind': 'objective', 'error_reason': '', 'possible_cause': '', 'steps': '', 'uncertainty': ''}], 'coverage': '仅本次虚构萤光卷第1题。'}, 'oracle': {'judgment': 'unknown', 'answer': '教师参考：caf\u00e9 noir', 'student_answer': 'caf\u00e9noir', 'wrong_items': 0, 'unknown_items': 1, 'pending_labels': ['虚构萤光卷第1题'], 'required_uncertainty': ['caf\u00e9noir', 'caf\u00e9 noir']}},
+    {'case_id': 'UA02', 'question_name': 'UA02-虚构作答.txt', 'question_text': '虚构萤光卷 第1题：请写出英语短语“许多”（两个单词）。\n实际作答：cafe\u0301noir\n', 'question_sha256': 'cc43f23f728b77d77ada7d2442c9284123557475abc07474c97b7e681fd39ffa', 'teacher_name': 'UA02-虚构教师.txt', 'teacher_text': '虚构萤光卷 第1题：教师参考cafe\u0301 noir\n', 'teacher_sha256': 'd2ad553a4179f0644d7b8d6a28d8753dc51422507ea9d106c77058ba2d4a4493', 'raw_model': {'question_labels': ['虚构萤光卷第1题'], 'items': [{'label': '虚构萤光卷第1题', 'question': '请写出英语短语“许多”（两个单词）。', 'student_answer': 'cafe\u0301noir', 'answer': '教师参考：cafe\u0301noir', 'judgment': 'correct', 'question_kind': 'objective', 'error_reason': '', 'possible_cause': '', 'steps': '', 'uncertainty': ''}], 'coverage': '仅本次虚构萤光卷第1题。'}, 'oracle': {'judgment': 'unknown', 'answer': '教师参考：cafe\u0301 noir', 'student_answer': 'cafe\u0301noir', 'wrong_items': 0, 'unknown_items': 1, 'pending_labels': ['虚构萤光卷第1题'], 'required_uncertainty': ['cafe\u0301noir', 'cafe\u0301 noir']}},
+]
+
 
 class TextQuestionHTTPTests(HomeworkPrintScopeTests):
     def review_request(self,questions,teachers):
@@ -445,7 +452,13 @@ class TextQuestionHTTPTests(HomeworkPrintScopeTests):
         self.assertEqual(view['text'],d['text']);self.assertIn('需订正0题',view['text']);self.assertNotIn('AI自行推导：C',view['text'])
 
     def test_disclosed_letter_spacing_and_unread_sub_question_stay_pending_through_save_retry_and_reopen(self):
-        for case in DISCLOSED_TEACHER_FIDELITY:
+        self.disclosed_stay_pending(DISCLOSED_TEACHER_FIDELITY)
+
+    def test_disclosed_accented_word_space_stays_pending_through_save_retry_and_reopen(self):
+        self.disclosed_stay_pending(DISCLOSED_UNICODE_BOUNDARY)
+
+    def disclosed_stay_pending(self,cases):
+        for case in cases:
             with self.subTest(case=case['case_id']):
                 for key in ('question','teacher'):self.assertEqual(hashlib.sha256(case[key+'_text'].encode()).hexdigest(),case[key+'_sha256'])
                 paper=self.upload(case['question_name'],case['question_text'].encode());teacher=self.upload(case['teacher_name'],case['teacher_text'].encode())
