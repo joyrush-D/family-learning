@@ -1147,17 +1147,53 @@ def _ref_agrees(claimed,teacher):
     return claimed==teacher or final(teacher)==claimed or final(claimed)==teacher
 
 
-_GAP_MISSING=re.compile(r'(?:缺|没(?:有|给|标)|未(?:给|提供|标)|条件不[足全])(?!\s*[写填答作])')
+_GAP_MISSING=re.compile(r'(?:缺(?![点陷席勤])|没(?:有|给|标)|未(?:给|提供|标)|条件不[足全])(?!\s*[写填答作])')
 _GAP_UNABLE=r'(?:无法|不能|没法|无从|不可能)'
 _GAP_OPEN=re.compile(_GAP_UNABLE+r'[^，,。；;！!？?\s]{0,3}?(?:计算|算|求|得出|得到|确定|核定|判定|判断|比较)')
 _GAP_SHUT=re.compile(_GAP_UNABLE+r'(?:核定|[^，,。；;！!？?\s]{0,3}?(?:计算|算|求|得)[出得到]?(?:确定|唯一|准确))')
+# What is missing must be a given of this question: not the child's skill, work, unit or wording, nor the stem itself.
+_GAP_SKILL=(r'掌握|理解|学会|熟练|公式|进率|概念|方法|过程|步骤|草稿|演算|竖式|算式|列式|思路|解答|解题|单位|书写|字迹|错别字|标点|格式|'
+            r'答句|作答|答题|答案|订正|检查|耐心|细心|粗心|马虎|习惯')
+_GAP_NOT_GIVEN=re.compile(r'^(?:缺|[看读审想学记会懂用按写填答作算列画抄]|(?:题干|原题|题面|题目)(?![中里上内的]))|'+_GAP_SKILL)
+_GAP_STEM_END=re.compile(r'(?:题干|原题|题面|题目)(?:的?(?:内容|文字))?$')
+_GAP_PERSON=re.compile(r'(?:孩子|学生|该生|小朋友|同学)(?!的)')
+_GAP_NOT_VALUE=re.compile(r'独立|步骤|过程|题意|思路|书写|字迹|原因|方法|掌握|态度|习惯|抄')
+_GAP_IF=re.compile(r'如果|如若|假如|假若|假使|假设|假定|倘若|倘使|要是|若(?!干)|万一|即使|即便|就算|哪怕|一旦|的话')
+_GAP_ELSEWHERE=re.compile(r'(?:[上下前后另别某每各]|其[他它余]|有的|有些|部分|个别)[一二两几个道小的各面]*(?:题|问)(?![目干意面])|'
+                          r'第[\d０-９一二三四五六七八九十百、和与及至\-~～\s]+[小大]?(?:题|问)|的小?题(?![目干意面])|[全本整试该此各附]卷|卷(?:[首尾末]|附|说明)')
+_GAP_OWN=re.compile(r'本小?题|此题|这[一道]?题|该题')
+_GAP_PHRASE=r'[，,、：:]'
 
 
 def _condition_gap(text,strict=False):
-    """The one clause saying this question lacks a decisive given and so has no settled value, else ''.
-    A lone 「缺」 or 「无法」 is not enough. It only vetoes a definite grade; no grade is ever made from it."""
-    for clause in re.split(r'[。！？!?；;\n]+',text):
-        if _GAP_MISSING.search(clause) and (_GAP_SHUT if strict else _GAP_OPEN).search(clause): return clause.strip()
+    """This question's actual statement that a decisive given is missing and so no value can be settled, else ''.
+    A lone 「缺」 or 「无法」 is not enough; a hypothesis, negation, question, another question or a paper note does not count,
+    nor does the child's skill, work, unit or wording. Only the next 。/； sentence opening with the inability may finish
+    a statement. It only vetoes a definite grade; no grade is ever made from it."""
+    unable=_GAP_SHUT if strict else _GAP_OPEN
+    parts=re.split(r'([。！？!?；;\n]+)',text);sentences,ends=parts[0::2],parts[1::2]+['']
+    def scoped(s,lo,hi):  # No hypothesis up to the claim; no other question or paper since this question was last named.
+        own=[m.end() for m in _GAP_OWN.finditer(s,0,lo)]
+        return not _GAP_IF.search(s,0,hi) and not _GAP_ELSEWHERE.search(s,own[-1] if own else 0,hi)
+    def valid(s,u):  # The inability is the value's own: not the child's, not negated, not about steps, meaning or independence.
+        head=re.split(_GAP_PHRASE,s[:u.start()])[-1]
+        return not (_GAP_PERSON.search(head) or re.search(r'(?:非|不是|不会|并不|未必)$',head)
+                    or _GAP_NOT_VALUE.search(u[0]+re.split(_GAP_PHRASE,s[u.end():])[0]))
+    for k,s in enumerate(sentences):
+        if re.search('[？?]',ends[k]): continue  # A question asks; it does not state.
+        for m in _GAP_MISSING.finditer(s):
+            head=re.split(_GAP_PHRASE,s[:m.start()])[-1]
+            thing=re.sub(r'^(?:[少失乏有出注明]|给出?|标[出注明]?|提供|写明|说明|告诉|告知)+','',re.split(_GAP_PHRASE,s[m.end():])[0])
+            thing='' if re.match(_GAP_UNABLE,thing) else thing
+            if (re.search(r'(?:[不没未无非]|没有)$|不是|并非|而非',head) or _GAP_PERSON.search(head)
+                    or (_GAP_NOT_GIVEN.search(thing) if thing else _GAP_STEM_END.search(head) or re.search(_GAP_SKILL,head))):
+                continue
+            for u in unable.finditer(s):
+                if valid(s,u) and scoped(s,min(m.start(),u.start()),max(m.end(),u.end())): return s.strip()
+            if unable.search(s) or not re.fullmatch(r'[。；;]+',ends[k]) or k+1==len(sentences) or not scoped(s,m.start(),len(s)): continue
+            after=sentences[k+1].lstrip();lead=re.match(r'(?:所以|因此|因而|故而?|从而|于是|那么|这样|由此)?[也就则便]*',after)
+            u=unable.match(after,lead.end())
+            if u and valid(after,u) and not re.search('[？?]',ends[k+1]): return s.strip()+ends[k][0]+after.strip()
     return ''
 
 

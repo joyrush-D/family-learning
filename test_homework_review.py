@@ -782,7 +782,36 @@ def missing_condition_checks():
     vetoed(got['第1题'],'36平方厘米','AI自行推导：图中没有给出高，无法计算确定的面积。','所列参考','没有给出高')
     vetoed(got['第2题'],'36','AI自行推导：40','检查依据','缺少宽')
     assert got['第3题']['judgment']=='incorrect' and got['第3题']['error_reason'],got
-    return 4
+    # Nine fictional boundary cases: only this question's actual missing given, with no settled value, vetoes a grade;
+    # a hypothesis, the child's skill or work, another question, a negation or a missing stem does not.
+    cases=[('槐树',7,'图中半径明确为4，求圆的面积。','16π','若没有半径则无法计算，本题半径明确为4，面积为16π','correct',''),
+        ('银杏',2,'图中半径明确为4，求圆的面积。','8π','16π。孩子没有掌握公式，无法计算','incorrect','作答8π与老师明确16π不同。'),
+        ('山茶',3,'本题2米换算成厘米。','20','200。上一题缺宽无法核定，本题教师参考200','incorrect','本题20与教师200不同。'),
+        ('梧桐',4,'本题2米换算成厘米。','20','200','incorrect','孩子没有掌握进率，无法算出准确结果，最终20与参考200不同。'),
+        ('石楠',5,'本题2+3的值，题目条件完整。','4','5。条件并不缺失，无法核定的只是孩子是否独立完成','incorrect','本题4与参考5不同。'),
+        ('木兰',8,'本题2米换算成厘米。','20','200','incorrect','学生未提供计算过程，无法核定其解题步骤，但最终20与参考200不同。'),
+        ('杜鹃',9,'图中仅给长9，短边长度未标注，求周长。','24','所给图示没有短边长度，无法计算确定的周长。本题不提供数值参考','incorrect','题中缺少短边长度，不能得出确定的周长。'),
+        ('栀子',11,'','C','B','incorrect','题干缺失，无法确定题意；作答C与教师参考B不同。'),
+        ('花梨',12,'已标长9，短边标签缺失，求长方形周长。','24厘米','题目没有给出短边长度。无法核定周长。','incorrect','作答24厘米未核定。')]
+    label=lambda paper,n:'虚构%s卷·第%d题'%(paper,n)
+    result,got=draft([item(label=label(p,n),question=q,student_answer=s,answer='教师参考：'+t,judgment=j,error_reason=e) for p,n,q,s,t,j,e in cases],
+                     ''.join('试卷名称：虚构%s卷\n第%d题：%s\n'%(p,n,t) for p,n,_,_,t,_,_ in cases))
+    vetoed(got[label('杜鹃',9)],'24','教师参考：'+cases[6][4],'教师参考原文','所给图示没有短边长度，无法计算确定的周长')
+    vetoed(got[label('花梨',12)],'24厘米','教师参考：'+cases[8][4],'教师参考原文','题目没有给出短边长度。无法核定周长')
+    for p,n,_,s,t,j,e in cases[:6]+cases[7:8]:
+        q=got[label(p,n)]
+        assert (q['judgment'],q['student_answer'],q['answer'],q['error_reason'],q['uncertainty'])==(j,s,'教师参考：'+t,e,''),q
+    assert '需订正6题，与参考一致1题，未判定2题' in result['text'] and (result['wrong_items'],result['unknown_items'])==(6,2),result
+    # Unseen variants: a linked 「所以无法」 sentence vetoes; 「如果」, the child's inability, another question,
+    # 「并非缺少」 and a question mark do not.
+    v=lambda n,**c:item(label='第%d题'%n,question='虚构题面',student_answer='25',judgment='incorrect',error_reason='作答25与27不同。')|c
+    result,got=draft([v(1,student_answer='27',answer='AI自行推导：如果图中没有标出宽，就无法求出面积；本题宽为3，面积27',judgment='correct',error_reason=''),
+        v(2,answer='AI自行推导：图中没有标出宽。所以无法求出确定的面积。'),v(3,answer='AI自行推导：27。图中没有标出宽。孩子无法求出面积。'),
+        v(4,answer='AI自行推导：27。第6题图中缺宽，无法核定。',error_reason='并非缺少条件，无法核定的是孩子的书写；作答25与27不同。'),
+        v(5,answer='AI自行推导：27',error_reason='题中缺少宽？无法核定。作答25与27不同。')],'')
+    vetoed(got['第2题'],'25','AI自行推导：图中没有标出宽。所以无法求出确定的面积。','所列参考','图中没有标出宽。所以无法求出确定的面积')
+    assert got['第1题']['judgment']=='correct' and all(got['第%d题'%n]['judgment']=='incorrect' and got['第%d题'%n]['error_reason'] for n in (3,4,5)),got
+    return 6
 
 
 def run():
