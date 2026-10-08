@@ -722,8 +722,71 @@ def review_origin_http_checks(app,upload):
             server.shutdown();server.server_close();worker.join(timeout=3)
 
 
+def missing_condition_checks():
+    """A6 replay and unseen variants: stated missing givens leave no definite grade; other guards stay."""
+    def draft(items,teacher):
+        with patch.object(family_llm,'_chat_json',return_value=dict(items=items,coverage='虚构合成检查。')) as model:
+            result=family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=True,
+                reference_documents=[dict(name='synthetic-teacher.txt',text=teacher)] if teacher else [])
+            assert model.call_count==1
+        return result,{q['label']:q for q in result['questions']}
+    def vetoed(q,student,answer,*words):
+        assert q['judgment']=='unknown' and q['student_answer']==student and q['answer']==answer,q
+        assert not q['error_reason'] and not q['possible_cause'] and not q['steps'],q
+        assert all(word in q['uncertainty'] for word in words+('补全',)),q
+    pine=('独立教师参考（全虚构）\n试卷名称：虚构松石卷\n第1题：74\n第2题：200。题目空格外已印“厘米”。\n'
+          '第3题：22厘米。题目跨第1页和第2页，仍为同一题。\n第4题：375毫升。\n'
+          '第5题：长方形有两条长边和两条宽边，所以周长是长宽之和的2倍。含义相同的说明可接受。\n'
+          '第6题：所给图示没有短边长度，无法计算确定的周长。本题不提供数值参考。')
+    gap='所给图示没有短边长度，无法计算确定的周长';a6='所给图示没有短边长度，无法计算确定的周长。本题不提供数值参考'
+    a=lambda n,**c:item(label='虚构松石卷·第%d题'%n,question='虚构题面%d'%n)|c
+    five='每种边长都有2条，所以长宽相加后再乘2。'
+    result,got=draft([a(1,student_answer='74',answer='教师参考：74'),
+        a(2,student_answer='20',answer='教师参考：200。题目空格外已印“厘米”。',judgment='incorrect',
+          error_reason='1米等于100厘米，所以2米应等于200厘米；作答写成20，单位换算错误。',possible_cause='可能把进率误记为10。',steps='先写出1米＝100厘米。'),
+        a(3,student_answer='22厘米',answer='教师参考：22厘米。题目跨第1页和第2页，仍为同一题。'),
+        a(4,student_answer='',answer='教师参考：375毫升',judgment='unknown',uncertainty='作答区域为空白，未见孩子的最终作答，无法进行答案比较。'),
+        a(5,student_answer=five,answer='教师参考：长方形有两条长边和两条宽边，所以周长是长宽之和的2倍。含义相同的说明可接受。',question_kind='subjective'),
+        a(6,question='求下图长方形的周长。图中标出长边9厘米，短边标签缺失。',student_answer='24厘米',answer='教师参考：'+a6+'。',
+          judgment='incorrect',error_reason='长方形周长必须知道长和宽；图中只有长边9厘米，缺少短边长度，不能得出确定的24厘米。',
+          possible_cause='可能自行假设了短边长度。',steps='独立尝试：先列出周长公式。')],pine)
+    vetoed(got['虚构松石卷·第6题'],'24厘米','教师参考：'+a6+'。','教师参考原文',gap)
+    assert [got['虚构松石卷·第%d题'%n]['judgment'] for n in range(1,6)]==['correct','incorrect','correct','unknown','correct'],got
+    assert got['虚构松石卷·第2题']['error_reason'] and got['虚构松石卷·第4题']['uncertainty'].startswith('作答区域为空白')
+    assert '需订正1题，与参考一致3题，未判定2题' in result['text'] and (result['wrong_items'],result['unknown_items'])==(1,2),result
+    assert '错误依据：长方形周长' not in result['text'] and '订正建议：独立尝试：先列出周长公式' not in result['text']
+    result,got=draft([a(1,student_answer='74',answer='74'),
+        a(2,student_answer='20',answer='200',judgment='incorrect',error_reason='2米等于200厘米，学生作答20错误'),
+        a(3,student_answer='22厘米',answer='22厘米'),a(5,student_answer=five,answer='长方形有两条长边和两条宽边，所以周长是长宽之和的2倍。',question_kind='subjective'),
+        a(6,student_answer='24厘米',answer=gap,judgment='incorrect',error_reason='题目未提供长方形短边的长度，无法计算确定的周长，学生作答24厘米错误')],pine)
+    vetoed(got['虚构松石卷·第6题'],'24厘米','教师参考：'+a6,'教师参考原文',gap)
+    assert got['虚构松石卷·第1题']['judgment']=='correct'
+    for n in (2,3,5):
+        q=got['虚构松石卷·第%d题'%n]
+        assert q['judgment']=='unknown' and '尚未核明' in q['uncertainty'] and '未按教师参考' not in q['uncertainty'] and '附注' in q['uncertainty'],q
+    fir=('试卷名称：虚构云杉卷\n第3题：图中圆没有标出半径，无法求出确定的面积。\n第4题：B\n'
+         '第8题：只给出一个数量，缺少第二个数量，不能核定两数之差。\n第9题：5米。缺单位扣1分。')
+    b=lambda n,**c:item(label='虚构云杉卷·第%d题'%n,question='虚构题面%d'%n)|c
+    result,got=draft([b(3,student_answer='12.56平方厘米',answer='教师参考：图中圆没有标出半径，无法求出确定的面积。'),
+        b(4,question='',student_answer='C',judgment='incorrect',error_reason='题干缺失，无法确定题意；作答C与教师参考B不同。'),
+        b(8,student_answer='7',answer='AI自行推导：9',judgment='incorrect',error_reason='两数之差应为9，作答7错误。',steps='再算一次。'),
+        b(9,student_answer='5',answer='教师参考：5米。缺单位扣1分。',judgment='incorrect',error_reason='缺少单位米。')],fir)
+    vetoed(got['虚构云杉卷·第3题'],'12.56平方厘米','教师参考：图中圆没有标出半径，无法求出确定的面积。','没有标出半径')
+    vetoed(got['虚构云杉卷·第8题'],'7','教师参考：只给出一个数量，缺少第二个数量，不能核定两数之差','缺少第二个数量')
+    assert got['虚构云杉卷·第4题']['judgment']=='incorrect' and got['虚构云杉卷·第4题']['answer']=='教师参考：B',got
+    assert got['虚构云杉卷·第9题']['judgment']=='incorrect' and got['虚构云杉卷·第9题']['error_reason']=='缺少单位米。',got
+    result,got=draft([item(label='第1题',question='虚构题面',student_answer='36平方厘米',answer='AI自行推导：图中没有给出高，无法计算确定的面积。',
+                           judgment='incorrect',error_reason='面积应另行计算。'),
+        item(label='第2题',question='虚构题面',student_answer='36',answer='AI自行推导：40',judgment='incorrect',error_reason='题中缺少宽，不能得出确定的面积。'),
+        item(label='第3题',question='虚构题面',student_answer='20',answer='AI自行推导：200',judgment='incorrect',error_reason='没有掌握进率，不能得出正确结果。')],'')
+    vetoed(got['第1题'],'36平方厘米','AI自行推导：图中没有给出高，无法计算确定的面积。','所列参考','没有给出高')
+    vetoed(got['第2题'],'36','AI自行推导：40','检查依据','缺少宽')
+    assert got['第3题']['judgment']=='incorrect' and got['第3题']['error_reason'],got
+    return 4
+
+
 def run():
-    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()
+    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+missing_condition_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:
         root=Path(temporary);data=root/'private';data.mkdir()
         with patch.dict(os.environ,{'FAMILY_DATA':str(data)}):
