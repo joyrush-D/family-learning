@@ -667,5 +667,73 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         self._use_replies(payload, [dict(proposals=[self._admin_proposal(ref, '把生词写在卡片上', '写生词卡片', text)])])
         self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
 
+    def _mixed_purpose_notice(self):
+        # M01 full entry: one reading and one administrative writing in the same school message.
+        payload, ref = self._administrative_notice('英语事项：朗读Unit 2课文两遍；将校服尺码写在便签上，供学校办公室统计订购信息。')
+        reading = fixtures.school_proposal(title_quote='朗读Unit 2课文两遍', evidence=[dict(ref=ref)],
+                                           learning_subject='英语', task_title='朗读Unit 2课文两遍',
+                                           task_goal='朗读Unit 2课文两遍。', task_state='ready',
+                                           task_reason='全虚构固定学习回执，不是模型质量证据。', task_purpose='learning')
+        sizes = self._admin_proposal(ref, '将校服尺码写在便签上', '记录校服尺码',
+                                     '将校服尺码写在便签上，供学校办公室统计订购信息。')
+        return payload, ref, reading, sizes
+
+    def test_disclosed_sibling_reading_does_not_turn_an_administrative_writing_into_learning(self):
+        payload, ref, reading, sizes = self._mixed_purpose_notice()
+        self._use_replies(payload, [dict(proposals=[reading, sizes])])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        with self.store._db() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")]
+            self.assertEqual(len(rows), 2)
+            read_row = next(r for r in rows if '朗读' in r['body'])
+            size_row = next(r for r in rows if '校服尺码' in r['body'])
+            self.assertEqual([json.loads(r['plan'])['school_task']['purpose'] for r in (read_row, size_row)],
+                             ['learning', 'admin'], 'each outcome keeps the use of its own requirement')
+            self.assertIn('供学校办公室统计订购信息', size_row['body'])
+            self.assertNotIn('校服', read_row['body'])
+            self.assertNotIn('朗读', size_row['body'])
+            self.assertNotIn('英语', json.dumps(json.loads(size_row['plan'])['school_task'], ensure_ascii=False),
+                             'the subject stays with the reading')
+            self.assertEqual([r['due'] for r in rows], ['', ''], 'no date is stated, so none is invented or borrowed')
+            for row in rows:
+                self.assertEqual([q['ref'] for q in json.loads(row['evidence'])], [ref])
+            tasks = [dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+            self.assertEqual(sorted(t['id'] for t in tasks), sorted(r['task_id'] for r in rows))
+            self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages')], [1])
+            self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages')],
+                             payload['messages'], 'the complete original stays with both outcomes')
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=1))
+        self.assertEqual((replay['processed'], replay['created']), (0, 0))
+        self.assertEqual(self.model.call_count, 1)
+        messages, schema = self.model.call_args.args[:2]
+        allowed = set(schema['properties']['proposals']['items']['properties']['task_purpose']['enum'])
+        actions = json.loads(messages[-1]['content'])['required_native_actions']
+        self.assertEqual(len(actions), 2)
+        asked = [[a['purpose']] if 'purpose' in a else a.get('purpose_options', []) for a in actions]
+        for options in asked:
+            self.assertTrue(options and set(options) <= allowed, actions)
+        self.assertEqual(asked[0], ['learning'])
+        self.assertIn('admin', asked[1], 'a sibling reading does not decide the writing\'s use')
+
+    def test_disclosed_mixed_message_still_rejects_an_administrative_reading(self):
+        payload, ref, reading, sizes = self._mixed_purpose_notice()
+        admin_reading = dict(reading, task_purpose='admin', learning_subject='')
+        self._use_replies(payload, [dict(proposals=[admin_reading, sizes])])
+        self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
+
+    def test_each_outcome_reads_its_use_from_its_own_requirement_and_shared_heading(self):
+        def asked(text):
+            return [a.get('purpose') or tuple(a['purpose_options'])
+                    for a in map(agent._school_native_view, agent._school_native_blocks(text))]
+        options = ('learning', 'admin')
+        self.assertEqual(asked('英语事项：朗读Unit 2课文两遍；将校服尺码写在便签上，供学校办公室统计订购信息。'), ['learning', options])
+        self.assertEqual(asked('英语事项：将校服尺码写在便签上，供学校办公室统计订购信息；朗读Unit 2课文两遍。'), [options, 'learning'])
+        # The writing's own learning object still makes it learning; it is not lent to the administrative sibling.
+        self.assertEqual(asked('英语事项：将校服尺码写在便签上，供学校办公室统计订购信息；把课文生词写在卡片上，每词三遍。'),
+                         [options, 'learning'])
+        # A heading stated for every outcome still applies to each.
+        self.assertEqual(asked('英语作业：朗读Unit 2课文两遍；将校服尺码写在便签上。'), ['learning', 'learning'])
+
 if __name__ == '__main__':
     unittest.main()
