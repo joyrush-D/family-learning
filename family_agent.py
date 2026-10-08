@@ -2650,7 +2650,7 @@ def _school_native_command(clause):
     """A literal addressed outcome, not a verb search inside examples or reports."""
     value=re.sub(r'^'+_SCHOOL_NATIVE_MARKER,'',clause.strip())
     prefix=r'(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')[，,:：]\s*|'+_SCHOOL_NATIVE_DATE+r'\s*(?:前|之前|以前|内)?\s*|请(?:各位)?(?:家长|同学们?|大家)?\s*|只需\s*|另(?:外)?\s*)'
-    value=re.sub(r'^(?:'+prefix+r')*','',value)
+    lead=re.match(r'^(?:'+prefix+r')*',value)[0];value=value[len(lead):]
     learning=r'(?:朗读|背诵|抄写|默写|听写|跟读|订正|预习|复习|阅读|口算|习作|练习)(?!后|完|已|完成|录音|音频)[^：:。；;]{2,}'
     exercise=r'(?:完成|做|写)(?!后|完|过|了)(?:好)?\s*[^：:。；;]{0,35}(?:练习卷|练习册|作业本|作业单|试卷|习题|作文|第[^。；;]{1,16}题)[^：:。；;]*'
     object_first=r'(?:[^：:。；;，,]{0,16}(?:练习卷|练习册|作业本|试卷)第[^：:。；;，,]{1,16}题)[^：:。；;]{0,15}(?:完成|交)[^：:。；;]*'
@@ -2658,11 +2658,15 @@ def _school_native_command(clause):
     admin=r'(?:签署|签字|填写|填好|提交|交回|打印|盖章|完成|核对)[^：:。；;]{0,35}(?:回执|同意书|确认单|登记表|申请表|报名表|证明|安全承诺书)[^：:。；;]*'
     if re.match(admin,value):return 'admin'
     if re.match(learning+'|'+exercise+'|'+object_first+'|'+compact,value):return 'learning'
-    # A ba-phrase writing a named object into its own notebook or card is one more outcome; answers,
-    # working, names, media and notes of the same work or for the school stay with that work.
-    directed=re.match(r'(?:把|将)([^：:。；;，,]{1,16}?)(?:抄写|摘抄|誊写|默写|听写|摘录|整理|抄|写|记)(?:进|在|到|入)([^：:。；;，,]{0,12}?(?:本|册|簿|卡)(?:子|片)?)(?:上|里|中|内)?(?=\s*(?:$|[，,。；;并再]))',value)
-    if (directed and not re.search(r'答|过程|结果|演算|检查|自查|签|姓名|名字|学号|照片|图片|截图|录音|音频|视频|作业|要求|通知|任务|意见|建议|反馈|回执|同意书|确认单|登记表|申请表|报名表|证明|承诺书',directed[1])
-            and not re.search(r'草稿|联系|记事|记作业|家校',directed[2])):return 'learning'
+    # A ba-phrase writing its own object to a short destination its own clause closes is one more outcome;
+    # the destination is bounded by length and punctuation, not a word list. Answers, working, names, media,
+    # notes and forms of the same work or for the school stay with that work, items are not written, and a
+    # parent's errand keeps its own purpose.
+    forms=r'回执|同意书|确认单|登记表|申请表|报名表|证明|承诺书'
+    directed=re.match(r'(?:把|将)([^：:。；;，,]{1,16}?)(?:(?:抄写|摘抄|誊写|默写|听写|摘录|抄|写|记)(?:进|在|到|入)([^：:。；;，,]{1,12}?)(?:上|里|中|内)?|整理(?:进|在|到|入)([^：:。；;，,]{1,12}?)上)(?=\s*(?:$|[，,。；;并再]))',value)
+    if (directed and '家长' not in lead
+            and not re.search(r'答|过程|结果|演算|检查|自查|签|姓名|名字|学号|照片|图片|截图|录音|音频|视频|作业|要求|通知|任务|意见|建议|反馈|'+forms,directed[1])
+            and not re.search(r'草稿|联系|记事|记作业|家校|'+forms,directed[2] or directed[3])):return 'learning'
     return ''
 
 
