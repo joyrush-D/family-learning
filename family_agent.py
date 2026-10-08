@@ -2780,9 +2780,10 @@ def _school_native_blocks(text):
         expected=int(count[1]) if count[1].isdigit() else {'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}[count[1]]
         if len(pieces)!=expected:
             raise AgentError('学校明示项数与可核对行动不一致，原批次保留待完整整理',code='school_action_coverage')
-    # A ba-phrase outcome is learning under a subject, homework or worksheet heading; elsewhere it stays
-    # one outcome whose purpose the reply's own reading of the whole message keeps.
-    taught=bool(container or re.search(_SCHOOL_NATIVE_SUBJECTS+r'|作业',header))
+    # A ba-phrase only finds an outcome. As for any administrative reply, its use is the complete original's own
+    # learning reading; a subject word is context and alone never overrides a plainly administrative body.
+    learning_text=_school_learning_text([text])
+    taught=bool(container or _LEARNING_ACTIVITY.search(learning_text) or _LEARNING_ACTION.search(learning_text))
     return [dict(part,purpose='learning' if part['purpose']=='directed' and taught else part['purpose'],quote=text[part['start']:part['end']].strip().rstrip('；;。').strip(),header=header,
         **(dict(shared_conditions=[clause for _,clause in shared]) if shared else {})) for part in pieces]
 
@@ -3090,8 +3091,14 @@ def _school_native_value(action):
 
 
 def _school_native_purpose(action,purpose):
-    """A ba-phrase outcome outside a taught heading keeps the reply's own learning or administrative purpose."""
+    """A ba-phrase outcome its original does not read as learning keeps the reply's own learning or administrative purpose."""
     return purpose==action['purpose'] or action['purpose']=='directed' and purpose in ('learning','admin')
+
+
+def _school_native_view(action):
+    """The model is asked only for purposes its schema allows; the internal ba-phrase marker stays internal."""
+    if action['purpose']!='directed':return action
+    return dict({k:v for k,v in action.items() if k!='purpose'},purpose_options=['learning','admin'])
 
 
 def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
@@ -3228,7 +3235,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     native_assigned=set();native_spans=set()
     content = {'mode': mode, 'as_of': as_of, 'child': profile or {}, 'evidence': evidence}
     if routing: content.update(learning_goals=school_goals,school_tasks=school_tasks)
-    if native_actions:content['required_native_actions']=native_actions
+    if native_actions:content['required_native_actions']=[_school_native_view(a) for a in native_actions]
     schema=_evidence_schema(SCHOOL_SCHEMA if routing else SCHEMA,evidence)
     historical=routing and school_existing is not None
     if historical:
@@ -3238,7 +3245,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         fields['properties'].update(action_quote={'type':'string','maxLength':600},existing_item_id={'type':'string','enum':['']+[r['id'] for r in school_existing]})
     if routing: schema['properties']['proposals']['items']['properties']['task_target_id']['enum']=['']+[t['id'] for t in school_tasks]
     prompt=SCHOOL_PROMPT if routing else PROMPT
-    if native_actions:prompt+='\nrequired_native_actions是程序按原文定位的独立成果及其完整条件，不要求老师写明总数或编号。每项必须单独返回一次，title_quote逐字从该项quote选择包含动作和对象的文字，task_purpose与本项purpose一致。打印、作答、自查、签字等同一份资料的步骤已归本项，不另起任务。shared_conditions是本消息明确适用于所有本项的共同标准，每项都须保留。supplements是同一稳定发布者明确点名的本项补充，必须一起引用对应ref，不分给其他作业；不能合并独立成果，也不能只引用消息编号后漏掉要求。完整标准由程序保留，日期只按该项header/quote/shared_conditions和各自原发送日核对，不借同通知另一项的截止。'
+    if native_actions:prompt+='\nrequired_native_actions是程序按原文定位的独立成果及其完整条件，不要求老师写明总数或编号。每项必须单独返回一次，title_quote逐字从该项quote选择包含动作和对象的文字，task_purpose与本项purpose一致；没有purpose而给出purpose_options的写入成果，按完整原消息的实际用途从中选择，科目词或把/将写入句式本身不决定用途。打印、作答、自查、签字等同一份资料的步骤已归本项，不另起任务。shared_conditions是本消息明确适用于所有本项的共同标准，每项都须保留。supplements是同一稳定发布者明确点名的本项补充，必须一起引用对应ref，不分给其他作业；不能合并独立成果，也不能只引用消息编号后漏掉要求。完整标准由程序保留，日期只按该项header/quote/shared_conditions和各自原发送日核对，不借同通知另一项的截止。'
     if historical: prompt+='\n这是已处理消息的独立行动补漏。逐项对照existing_actions，保留家长当前修改与accepted/dismissed/pending决定，不恢复原任务。action_quote逐字引用包含本项动作和对象的完整原句，不将多个独立事项合并；existing_item_id只有同一具体行动才填旧编号，新漏项填空。已归纳/已忽略事项也返回以覆盖输入，但不会另建。不能按标题相似合并；同消息另项仍单独返回。due只从本项action_quote按原发送日换算，不能借用同通知另一项或旧任务日期。适用性/原件仍未读保留具体缺口。'
     result = family_llm._chat_json([{'role': 'system', 'content': prompt},
         {'role': 'user', 'content': _json(content)}], schema, 'family_agent_selection', timeout=45, data_path=data_path)
