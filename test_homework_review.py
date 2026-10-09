@@ -441,7 +441,7 @@ def recheck_pending_http_checks(app,upload):
         resolved=dict(question_labels=[first['label'],unknown['label']],items=[first,item(label=unknown['label'])],coverage='甲乙两卷第1题均已判定。')
         edit_task=app.new_task(dict(child='示例甲',title='虚构家长修改检查后续查',category='homework'))
         edit_answer=upload('synthetic-edited-answer.txt','虚构甲卷第1题B。虚构乙卷第1题B。（修改续查）\n'.encode())
-        edit_teacher=upload('synthetic-edited-teacher.txt','虚构甲卷第1题B。虚构乙卷第1题B。（修改续查教师）\n'.encode())
+        edit_teacher=upload('synthetic-edited-teacher.txt','（修改续查教师）虚构甲卷第1题B。虚构乙卷第1题B。\n'.encode())
         edit_original=app.save_task_feedback(dict(task_id=edit_task['id'],child='示例甲',day='2026-10-05',
             request_key='synthetic-edited-original',attachments=[edit_answer,edit_teacher],note='虚构甲乙两卷原作答。'))
         edit_request=dict(purpose='review',task_id=edit_task['id'],record_id=edit_original['record_id'],
