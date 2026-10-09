@@ -1062,8 +1062,12 @@ _REF_SECTION=re.compile(r'第\s*(\d{1,2}|[一二三四五六七八九十]{1,3})\
 _REF_QUESTION=re.compile(r'第\s*(\d{1,3})\s*题|(?<![\d.．])(\d{1,3})\s*题|(?<![A-Za-z])[Qq]\s*(\d{1,3})(?!\d)|(?:^|(?<=[\s、，,；;]))(\d{1,3})\s*[.．、](?!\d)')
 _REF_NAMED=re.compile(r'[\s，,；;。]((?:%s)|第\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*(?:大题|部分)|[一二三四五六七八九十]{1,3}\s*[、.．])'%_REF_PAPER.pattern)
 _REF_SUB=re.compile(r'\s*(?:[（(]\s*(\d{1,2})\s*[)）]|第\s*(\d{1,2})\s*(?:小题|小?问))')
-_REF_LEVEL=r'[\dA-Za-zＡ-Ｚａ-ｚⅠ-ⅿ一二三四五六七八九十百千零〇]+(?:[-－.．、][\dA-Za-zＡ-Ｚａ-ｚⅠ-ⅿ一二三四五六七八九十百千零〇]+)*|[①-⓿❶-➓㈠-㈩㊀-㊉]'  # one whole level number, never cut short
-_REF_SUB_UNREAD=re.compile(r'\s*(?:[^\s。；;！!？?：:\n][^。；;！!？?：:\n]*?(?:小题|小问)(?![㐀-鿿])|第\s*[（(]?\s*(?:%s)\s*[)）]?\s*(?:(?:[个道]\s*)?(?:小题|小问|空)|问)|(?:%s)\s*(?:小题|小问)|(?:小题|小问)\s*(?:%s)|[（(]\s*[一二三四五六七八九十]{1,3}\s*[)）]|[①-⓿❶-➓㈠-㈩㊀-㊉]|[（(]\s*(?:[a-zａ-ｚ]|[ivx]{2,4}|[IVX]{1,4}|[ⅰ-ⅻⅠ-Ⅻ])\s*[)）])'%((_REF_LEVEL,)*3))
+_REF_DIGIT=r'(?:[\dA-Za-zＡ-Ｚａ-ｚⅠ-ⅿ一二三四五六七八九十百千零〇壹贰叁肆伍陆柒捌玖拾佰仟甲乙丙丁戊己庚辛壬癸]+|[①-⓿❶-➓㈠-㈩㊀-㊉])'  # digits, letters, numerals, 甲乙丙丁
+_REF_LEVEL=r'%s(?:\s*[-－.．、，,]\s*%s)*'%(_REF_DIGIT,_REF_DIGIT)  # one whole level number or a listed run 「1、 2」, never cut short
+_REF_FRAME=r'第\s*(?:(?:[（(]\s*(?:%s)\s*[)）]\s*)+|(?:%s))\s*(?:(?:[个道]\s*)?(?:小题|小问|空)|问)'%(_REF_LEVEL,_REF_LEVEL)  # 「第甲小问」「第(丙)问」「第一个空」
+# An ordinal frame names a level right after the path or later in the same clause; a number and its level word, either way round, or a
+# bracket or circled mark names one only right after it. A level word with no number before it is plain words.
+_REF_SUB_UNREAD=re.compile(r'\s*(?:[^\s。；;！!？?：:\n][^。；;！!？?：:\n]*?)??(?:%s)|\s*(?:(?:%s)\s*(?:小题|小问)|(?:小题|小问)\s*(?:%s)|[（(]\s*[一二三四五六七八九十]{1,3}\s*[)）]|[①-⓿❶-➓㈠-㈩㊀-㊉]|[（(]\s*(?:[a-zａ-ｚ]|[ivx]{2,4}|[IVX]{1,4}|[ⅰ-ⅻⅠ-Ⅻ])\s*[)）])'%(_REF_FRAME,_REF_LEVEL,_REF_LEVEL))
 _REF_SUB_PAGE=re.compile(r'\s*[（(［\[【〔]\s*(?:第\s*\d{1,3}\s*(?:[-－~～至、,，]\s*\d{1,3}\s*)?页|[Pp]\s*\.?\s*\d{1,3}(?:\s*[-－~～]\s*\d{1,3})?)\s*[)）］\]】〕]')
 _REF_SUB_OTHER=re.compile(r'\s*(?:[（(［\[【〔][^()（）［］\[\]【】〔〕\n]*[)）］\]】〕]?|[)）］\]】〕])')
 _REF_SUB_JOIN=re.compile(r'\s*[、，,/／和及与或~～至—–-]\s*')  # a list mark, read only before another level
@@ -1102,8 +1106,9 @@ def _ref_sub(text,at=0):
     """The sub-question path named right after a question number, read alike on a label and a teacher line:
     every level's number in order, 「（2）（1）」 and 「(2)第1小问」 alike (2,1); '*' when any level 「第二问」「第VIII小问」「A小问」「②」
     「⑴」「(a)」 is named but unread, else None. A level is one whole number before its level word, never cut short, and plain words
-    「第一次问路」 name none. An explicit 「小问」「小题」 closing what follows names a level however written,
-    「第甲小问」「第1、 2小问」, and a list mark before another level 「(4)、(5)」 names a list. An unread one is never the whole question, and a path is never cut to the levels read:
+    「第一次问路」 name none. A level number is one whole run of digits, letters, numerals or 甲乙丙丁, a list 「1、 2」 too, so
+    「第甲小问的答案」「第甲问」「第1、 2小问」 name a level, as does an ordinal frame 「第…小问/问/空」 later in the same clause;
+    a level word with no number before it, 「是这道选择小题」「有个小问题」, is plain words. A list mark before another level 「(4)、(5)」 names a list. An unread one is never the whole question, and a path is never cut to the levels read:
     「（2）②」 is '*', never 「（2）」. Any other bracket right after it, 「(A)」「【甲】」, long, empty 「()」, never closed or a
     stray closing 「)」, is a level not read, never left over; only a page note 「（第2页）」「【第2页】」 is no level."""
     levels=[];end=at
