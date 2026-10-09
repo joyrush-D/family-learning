@@ -1066,9 +1066,11 @@ _REF_HAN='㐀-䶿一-鿿豈-﫿'  # Han characters: words, unless numerals
 _REF_NUMERAL='一二三四五六七八九十百千零〇壹贰叁肆伍陆柒捌玖拾佰仟甲乙丙丁戊己庚辛壬癸'
 _REF_DIGIT=r'(?:(?![%s])[^\W_]|[%s])+'%(_REF_HAN,_REF_NUMERAL)  # letters and numbers of any script 「θ」「VIII」「①」, numerals 「甲」
 _REF_LEVEL=r'%s(?:(?:\s*[-－.．、，,/／~～—–和及与或至]\s*|\s+)%s)*'%(_REF_DIGIT,_REF_DIGIT)  # one whole level number or a listed run 「1 / 2」, never cut short
-_REF_MARKS=r'(?:[^\s%s。；;！!？?：:\n]|[%s和及与或至])(?:[^%s。；;！!？?：:\n]|[%s和及与或至])*?'%((_REF_HAN,_REF_NUMERAL)*2)
-_REF_FRAME=r'第\s*%s\s*(?:(?:[个道]\s*)?(?:小题|小问|空)|问)'%_REF_MARKS  # whatever it encloses but words: 「第θ小问」「第1 / 2小问」「第(丙)问」「第一个空」
-# An ordinal frame names a level right after the path or later in the same clause; a number and its level word, either way round, or a
+# An ordinal frame 「第…小题/小问/问/空」 is read whole before its number: it encloses one run of marks, numbers, letters, list marks and
+# 「？」, or one word standing for the number 「几」, so a number not read is '*', never the parent; two words 「第一次问路」「第2次问老师」 are prose.
+_REF_MARKS=r'(?:[^\s%s。；;！!：:\n]|[%s和及与或至])(?:[^%s。；;！!：:\n]|[%s和及与或至])*?|[%s]'%((_REF_HAN,_REF_NUMERAL)*2+(_REF_HAN,))
+_REF_FRAME=r'第\s*(?:%s)\s*(?:(?:[个道]\s*)?(?:小题|小问|空)|问)'%_REF_MARKS  # 「第θ小问」「第1 / 2小问」「第(丙)问」「第一个空」「第？小问」「第几问」
+# An ordinal frame names a level right after the path, after 「的」 joining it, or on a label later in the same clause; a number and its level word, either way round, or a
 # bracket or circled mark names one only right after it. A level word with no number before it is plain words.
 _REF_SUB_UNREAD=re.compile(r'\s*(?:%s|(?:%s)\s*(?:小题|小问)|(?:小题|小问)\s*(?:%s)|[（(]\s*[一二三四五六七八九十]{1,3}\s*[)）]|[①-⓿❶-➓㈠-㈩㊀-㊉]|[（(]\s*(?:[a-zａ-ｚ]|[ivx]{2,4}|[IVX]{1,4}|[ⅰ-ⅻⅠ-Ⅻ])\s*[)）])'%(_REF_FRAME,_REF_LEVEL,_REF_LEVEL))
 _REF_SUB_LATER=re.compile(r'\s*[^\s。；;！!？?：:\n][^。；;！!？?：:\n]*?(?:%s)'%_REF_FRAME)
@@ -1077,10 +1079,9 @@ _REF_SUB_OTHER=re.compile(r'\s*(?:[（(［\[【〔][^()（）［］\[\]【】〔
 _REF_SUB_JOIN=re.compile(r'\s*[、，,/／和及与或~～至—–-]\s*')  # a list mark, read only before another level
 _REF_WORDS='(?:(?:教师|老师)(?:原|的)?)?(?:参考答案|参考|答案)|教师|老师'  # 「教师原参考」 is a source word too
 _REF_SOURCE=re.compile(r'^[\s:：]*(?:%s)?\s*(?:均为|都是|均是|都为|为|是)?[\s:：]*'%_REF_WORDS)
-_REF_CLAUSE=r'(?:(?!%s)[^。；;！!？?：:\n])'%_REF_WORDS
-# On a teacher line the answer starts at 「教师参考答案为」 or 「：」, or right after the path when neither comes: a frame later in
-# the clause is read only before them, never inside the answer.
-_REF_SUB_HEAD=re.compile(r'\s*(?!\s)%s+?(?:%s)(?=%s*(?:[:：]|%s))'%(_REF_CLAUSE,_REF_FRAME,_REF_CLAUSE,_REF_WORDS))
+# A teacher line's heading is only its continuous path: levels, page notes, list marks and 「的」 right after the question number. The first
+# other content starts the answer, so a later 「参考」「答案」 or ordinal frame is that answer's own words, never heading and never cut off.
+_REF_SUB_LINK=re.compile(r'\s*(?:[中里]?的|之)\s*')  # a heading connector, read only before another level: 「(4)的第甲小问」「(4)的(1)」
 _REF_NOISE=re.compile(r'%s|如下|以下|第\s*\d{1,3}\s*页|[\W_]'%_REF_WORDS)
 
 
@@ -1113,17 +1114,20 @@ def _ref_scope(text,section=None,titles=frozenset(),listed=False):
 def _ref_sub(text,at=0,teacher=False):
     """The sub-question path named right after a question number, read alike on a label and a teacher line:
     every level's number in order, 「（2）（1）」 and 「(2)第1小问」 alike (2,1); '*' when any level 「第二问」「第VIII小问」「A小问」「②」
-    「⑴」「(a)」 is named but unread, else None. A level is one whole number before its level word, never cut short, and plain words
-    「第一次问路」 name none. A level number is one whole run of digits, letters, numerals or 甲乙丙丁, a list 「1、 2」 too, so
-    「第甲小问的答案」「第甲问」「第1、 2小问」 name a level, as does an ordinal frame 「第…小问/问/空」 later in the same clause;
-    a level word with no number before it, 「是这道选择小题」「有个小问题」, is plain words. Whatever but words an ordinal frame encloses,
-    a mark not read 「第θ小问」 or a list with spaces 「第1 / 2小问」, names a level; on a teacher line nothing in its answer does. A list mark before another level 「(4)、(5)」 names a list. An unread one is never the whole question, and a path is never cut to the levels read:
+    「⑴」「(a)」 is named but unread, else None. An ordinal frame 「第…小题/小问/问/空」 is recognised whole before its number is read:
+    whatever marks it encloses, 「第θ小问」「第1 / 2小问」「第？小问」, or one word for its number, 「第几小问」「第甲问」, names a level, and
+    only a whole integer 「第2小问」 is read; two words 「第一次问路」「第2次问老师」, or a level word with no number before it,
+    「是这道选择小题」「有个小问题」, are plain words. A list mark before another level 「(4)、(5)」 names a list, and 「的」 joins the path
+    to its next level 「(4)的第甲小问」「(4)的(1)」. An unread level is never the whole question, and a path is never cut to the levels read:
     「（2）②」 is '*', never 「（2）」. Any other bracket right after it, 「(A)」「【甲】」, long, empty 「()」, never closed or a
-    stray closing 「)」, is a level not read, never left over; only a page note 「（第2页）」「【第2页】」 is no level."""
+    stray closing 「)」, is a level not read, never left over; only a page note 「（第2页）」「【第2页】」 is no level.
+    A label has no answer, so a frame later in its clause still names a level; a teacher line's heading ends where its continuous path
+    does, so its answer, 「5，这是第θ小问的参考思路」, names no level and is never cut."""
     levels=[];end=at
-    later=_REF_SUB_HEAD if teacher else _REF_SUB_LATER
-    level=lambda at:_REF_SUB.match(text,at) or _REF_SUB_UNREAD.match(text,at) or later.match(text,at) or _REF_SUB_OTHER.match(text,at)
-    while more:=_REF_SUB_PAGE.match(text,end) or level(end) or (joined:=_REF_SUB_JOIN.match(text,end)) and level(joined.end()) and joined:
+    level=lambda at:(_REF_SUB.match(text,at) or _REF_SUB_UNREAD.match(text,at) or not teacher and _REF_SUB_LATER.match(text,at)
+                     or _REF_SUB_OTHER.match(text,at))
+    while more:=(_REF_SUB_PAGE.match(text,end) or level(end) or (joined:=_REF_SUB_JOIN.match(text,end)) and level(joined.end()) and joined
+                 or (linked:=_REF_SUB_LINK.match(text,end)) and (_REF_SUB_PAGE.match(text,linked.end()) or level(linked.end()))):
         if more.re is not _REF_SUB_PAGE: levels.append(int(next(g for g in more.groups() if g)) if more.re is _REF_SUB else '*')
         end=more.end()
     return (None if not levels else '*' if '*' in levels else tuple(levels)),end
