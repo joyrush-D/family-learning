@@ -907,6 +907,22 @@ def nested_sub_checks():
         q,result=draft(case,sub,teacher,answer)
         assert q['judgment']=='unknown' and q['answer']=='' and result['unknown_items']==1,(case,q)
 
+    # Disclosed full synthetic F01/F02 (repair1): an unread qualifier 「(A)」 after 「(3)」 is never its parent; a teacher line naming 「(4)(a)」 with no answer keeps the question pending, never the model's claimed teacher value.
+    for case,paper,own,teacher in (('repair1-F01','虚构青岸卷','第7题(3)(A)','试卷名称：虚构青岸卷\n第7题(3)：B'),
+                                   ('repair1-F02','虚构白沙卷','第9题(4)(a)','试卷名称：虚构白沙卷\n第9题(4)(a)')):
+        label=paper+own
+        raw=dict(items=[dict(label=label,question='全虚构选择题',student_answer='B',answer='教师参考：B',judgment='correct',question_kind='objective',
+            error_reason='',possible_cause='',steps='',uncertainty='')],question_labels=[label],coverage='仅核这一虚构题，其余未核。')
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            result=family_llm.homework_reference_draft([],review=True,
+                question_documents=[dict(name='synthetic-%s-answer.txt'%case,text='%s\n%s请选择正确选项，孩子作答B。'%(paper,label))],
+                reference_documents=[dict(name='synthetic-%s-teacher.txt'%case,text=teacher)])
+            assert model.call_count==1
+        q,=result['questions']
+        assert (q['label'],q['student_answer'],q['answer'],q['judgment'])==(label,'B','','unknown'),(case,q)
+        assert not q['error_reason'] and not q['possible_cause'] and not q['steps'] and q['uncertainty'],(case,q)
+        assert result['unknown_items']==1 and result['wrong_items']==0,(case,result)
+        assert [p['label'] for p in result['questions'] if p['judgment']=='unknown']==[label],(case,result)
 
 def teacher_note_checks():
     """A paper or 大题 named inside a teacher note is part of that value; only a heading starts a new scope."""
