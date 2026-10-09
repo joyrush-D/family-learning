@@ -883,6 +883,20 @@ def nested_sub_checks():
         q,result=draft(case,sub,teacher)
         assert q['judgment']=='unknown' and q['answer']=='' and '小题' in q['uncertainty'] and result['unknown_items']==1,(case,q)
         assert not q['error_reason'] and not q['possible_cause'] and not q['steps'],(case,q)
+    # Disclosed full synthetic D01/D02: both sides name the whole path 「(2)(1)」「(3)(2)」 of the same paper and question, so it is the teacher's.
+    for case,label,student,judgment,reason in (('qualified-D01','虚构松林卷第8题(2)(1)','B','correct',''),
+                                               ('qualified-D02','虚构枫桥卷第9题(3)(2)','C','incorrect','作答C与教师参考B不同。')):
+        paper,own=label.split('第',1);own='第'+own
+        raw=dict(items=[dict(label=label,question='全虚构选择题，选择正确选项。',student_answer=student,answer='教师参考：B',judgment=judgment,question_kind='objective',
+            error_reason=reason,possible_cause='',steps='',uncertainty='')],coverage='仅核本次全虚构明确的小题；其他题未列入。',question_labels=[label])
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            result=family_llm.homework_reference_draft([],review=True,
+                question_documents=[dict(name='synthetic-%s-answer.txt'%case,text='%s\n%s请选择正确选项；孩子作答%s。'%(paper,own,student))],
+                reference_documents=[dict(name='synthetic-%s-teacher.txt'%case,text='试卷名称：%s\n%s：B。'%(paper,own))])
+            assert model.call_count==1
+        q,=result['questions']
+        assert (q['label'],q['student_answer'],q['answer'],q['judgment'],q['error_reason'])==(label,student,'教师参考：B',judgment,reason),(case,q)
+        assert result['unknown_items']==0 and result['wrong_items']==(judgment=='incorrect'),(case,result)
 
 
 def teacher_note_checks():
