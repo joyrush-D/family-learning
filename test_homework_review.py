@@ -923,6 +923,15 @@ def nested_sub_checks():
         assert not q['error_reason'] and not q['possible_cause'] and not q['steps'] and q['uncertainty'],(case,q)
         assert result['unknown_items']==1 and result['wrong_items']==0,(case,result)
         assert [p['label'] for p in result['questions'] if p['judgment']=='unknown']==[label],(case,result)
+    # A page note 「（第1页）」 after the path is no level: the whole path 「(3)」 still pairs with the teacher's 「(3)」.
+    label='虚构青岸卷第7题(3)（第1页）'
+    raw=dict(items=[dict(label=label,question='全虚构选择题',student_answer='B',answer='教师参考：B',judgment='correct',question_kind='objective',
+        error_reason='',possible_cause='',steps='',uncertainty='')],question_labels=[label],coverage='仅核这一虚构题，其余未核。')
+    with patch.object(family_llm,'_chat_json',return_value=raw):
+        result=family_llm.homework_reference_draft([],review=True,question_documents=[dict(name='synthetic-page-answer.txt',text='虚构青岸卷\n%s请选择正确选项，孩子作答B。'%label)],
+            reference_documents=[dict(name='synthetic-page-teacher.txt',text='试卷名称：虚构青岸卷\n第7题(3)：B')])
+    q,=result['questions']
+    assert (q['answer'],q['judgment'])==('教师参考：B','correct') and result['unknown_items']==0,q
 
 def teacher_note_checks():
     """A paper or 大题 named inside a teacher note is part of that value; only a heading starts a new scope."""

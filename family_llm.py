@@ -1063,6 +1063,8 @@ _REF_QUESTION=re.compile(r'第\s*(\d{1,3})\s*题|(?<![\d.．])(\d{1,3})\s*题|(?
 _REF_NAMED=re.compile(r'[\s，,；;。]((?:%s)|第\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*(?:大题|部分)|[一二三四五六七八九十]{1,3}\s*[、.．])'%_REF_PAPER.pattern)
 _REF_SUB=re.compile(r'\s*(?:[（(]\s*(\d{1,2})\s*[)）]|第\s*(\d{1,2})\s*(?:小题|小?问))')
 _REF_SUB_UNREAD=re.compile(r'\s*(?:第\s*[\d一二三四五六七八九十]{1,3}\s*(?:小题|小?问|空)|[（(]\s*[一二三四五六七八九十]{1,3}\s*[)）]|[①-⑳]|[（(]\s*(?:[a-zａ-ｚ]|[ivx]{2,4}|[IVX]{1,4}|[ⅰ-ⅻⅠ-Ⅻ])\s*[)）])')
+_REF_SUB_PAGE=re.compile(r'\s*[（(]\s*(?:第\s*\d{1,3}\s*(?:[-－~～至、,，]\s*\d{1,3}\s*)?页|[Pp]\s*\.?\s*\d{1,3}(?:\s*[-－~～]\s*\d{1,3})?)\s*[)）]')
+_REF_SUB_OTHER=re.compile(r'\s*[（(][^()（）\n]{1,20}[)）]')
 _REF_WORDS='(?:(?:教师|老师)(?:原|的)?)?(?:参考答案|参考|答案)|教师|老师'  # 「教师原参考」 is a source word too
 _REF_SOURCE=re.compile(r'^[\s:：]*(?:%s)?\s*(?:均为|都是|均是|都为|为|是)?[\s:：]*'%_REF_WORDS)
 _REF_NOISE=re.compile(r'%s|如下|以下|第\s*\d{1,3}\s*页|[\W_]'%_REF_WORDS)
@@ -1098,10 +1100,12 @@ def _ref_sub(text,at=0):
     """The sub-question path named right after a question number, read alike on a label and a teacher line:
     every level's number in order, 「（2）（1）」 and 「(2)第1小问」 alike (2,1); '*' when any level 「第二问」「②」「(a)」 is
     named but unread, else None. An unread one is never the whole question, and a path is never cut to the levels read:
-    「（2）②」 is '*', never 「（2）」."""
+    「（2）②」 is '*', never 「（2）」. Any other bracket right after it, 「(A)」「(甲)」, is a level not read, never left
+    over; only a page note 「（第2页）」 is no level."""
     levels=[];end=at
-    while more:=_REF_SUB.match(text,end) or _REF_SUB_UNREAD.match(text,end):
-        levels.append(int(next(g for g in more.groups() if g)) if more.re is _REF_SUB else '*');end=more.end()
+    while more:=_REF_SUB_PAGE.match(text,end) or _REF_SUB.match(text,end) or _REF_SUB_UNREAD.match(text,end) or _REF_SUB_OTHER.match(text,end):
+        if more.re is not _REF_SUB_PAGE: levels.append(int(next(g for g in more.groups() if g)) if more.re is _REF_SUB else '*')
+        end=more.end()
     return (None if not levels else '*' if '*' in levels else tuple(levels)),end
 
 
@@ -1126,7 +1130,8 @@ def _teacher_reference_entries(documents,titles=frozenset()):
                 after=next((found for found in _REF_NAMED.finditer(tail) if not _ref_scope(tail[found.start(1):],section,titles,listed)[2]),None)
                 answer=re.sub(r'[\s，,；;。.．、]+$','',_REF_SOURCE.sub('',tail[:after.start()] if after else tail,count=1))
                 for one in here if isinstance(here,tuple) else (here,):  # 「甲卷与乙卷第1题均为5」 names each paper once.
-                    if answer: entries.append(dict(paper=one,section=section,rest=rest,number=int(next(g for g in mark.groups() if g)),
+                    # Named without an answer is kept: that scope's answer is missing, never the model's to supply.
+                    entries.append(dict(paper=one,section=section,rest=rest,number=int(next(g for g in mark.groups() if g)),
                                                    sub=sub,answer=answer))
                 if after:
                     new,section,words=_ref_scope(tail[after.start(1):],section,titles,listed)
@@ -1273,11 +1278,16 @@ def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset
     """A question the supplied teacher text covers is compared by that text, whatever source the model claims."""
     if not item['answer'].strip(): return  # No answer is the existing missing-basis path, not a claimed source.
     related=[(_ref_relation(item['label'],entry,titles),entry['answer']) for entry in entries]
+    blank=any(not answer and relation in ('same','unsure','part') for relation,answer in related)
+    related=[(relation,answer) for relation,answer in related if answer]
     same=sorted({answer for relation,answer in related if relation=='same'})
     claimed=item['answer'].removeprefix('教师参考：').strip() if item['answer'].startswith('教师参考：') else None
     shown=lambda value,limit=995:value if len(value)<=limit else value[:limit]+'…'  # The whole teacher answer fits the answer field.
     def pending(answer,note):
         item.update(answer=answer,judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty=(note+item['uncertainty'].strip())[:300])
+    if not same and blank:  # The original names this scope but gives no answer: nothing the model says stands in for it.
+        return pending('','教师参考原件写有本题题号或小题，但没有可读的答案；%s，未判定，请核明后补查。'%(
+            '未采用模型自行推导' if claimed is None else '模型所标教师参考无从核实'))
     if not same:
         # An unpaired same number is never settled by the model's own label, whether paper, 大题, title or sub-question.
         if any(relation in ('unsure','part') for relation,_ in related):
