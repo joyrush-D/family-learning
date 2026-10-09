@@ -1168,6 +1168,21 @@ def homework_saved_review(task_id,record_id):
         parsed=family_print.review_text(body,saved=True)
         return dict(task_id=task_id,record_id=record_id,created=row['created'],original_record_id=original,**parsed)
 
+def homework_saved_pending(task_id,record_id,scope):
+    """A default reopen continues the newest saved same-scope checklist's labels only, never its text, answers or grades."""
+    try:
+        with connect_read_only() as c:
+            ids=[r['id'] for r in c.execute("SELECT id FROM records WHERE followup_kind='作业检查' AND related_record_id=? AND source=? ORDER BY id DESC",(record_id,'事项:'+task_id))]
+        for ident in ids:
+            # A newer check that cannot be verified may be this scope; refuse before the model rather than show a gap-free result.
+            try: state=homework_saved_review(task_id,ident).get('continuation')
+            except family_print.PrintError:
+                raise family_print.PrintError('此前保存的检查无法核对，本次未调用模型；原件保留，可下载核对或稍后重试','saved_review_unverifiable',409) from None
+            if state is not None and state['scope_sha256']==scope: return state['pending_labels']
+    except sqlite3.OperationalError:
+        raise family_print.PrintError('此前保存的检查暂时无法读取，本次未调用模型；请稍后重试','storage_unavailable',503) from None
+    return []
+
 def homework_review_basis(obj):
     """Structural validation is separate from the save transaction's live source checks."""
     required={'record_id','created','photo_ids','question_sources','reference_sources','material_sha256','context_sha256'}
@@ -1231,7 +1246,8 @@ def homework_review_draft(obj):
     with connect() as c: scope=guard_homework_review(c,obj['task_id'],basis,ids)
     snapshots=[(ident,value) for ident,value in materials['previous_continuations'] if value['scope_sha256']==scope]
     if continuation is not None and continuation['scope_sha256']==scope: pending=continuation['pending_labels']
-    else: pending=max(snapshots,key=lambda entry:entry[0])[1]['pending_labels'] if snapshots else []
+    elif snapshots: pending=max(snapshots,key=lambda entry:entry[0])[1]['pending_labels']
+    else: pending=homework_saved_pending(obj['task_id'],obj['record_id'],scope)
     draft=family_llm.homework_reference_draft(materials['images'],data_path=DATA,timeout=120,review=True,
         question_documents=materials['question_documents'],
         reference_images=materials['reference_images'],reference_documents=materials['documents'],
