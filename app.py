@@ -1185,10 +1185,10 @@ def homework_saved_pending(task_id,record_id,scope):
                 if not bare: checks.append(row['id'])
         for ident in checks:
             # A newer check that cannot be verified may be this scope; refuse before the model rather than show a gap-free result.
-            try: state=homework_saved_review(task_id,ident).get('continuation')
+            try: saved=homework_saved_review(task_id,ident);state=saved.get('continuation')
             except (family_print.PrintError,OSError,ValueError):
                 raise family_print.PrintError('此前保存的检查无法核对，本次未调用模型；原件保留，可下载核对或稍后重试','saved_review_unverifiable',409) from None
-            if state is not None and state['scope_sha256']==scope: return state['pending_labels']
+            if state is not None and state['scope_sha256']==scope: return family_print.review_pending(state,saved['text'])
     except sqlite3.OperationalError:
         raise family_print.PrintError('此前保存的检查暂时无法读取，本次未调用模型；请稍后重试','storage_unavailable',503) from None
     return []
@@ -1255,7 +1255,7 @@ def homework_review_draft(obj):
     if materials['previous_sources']: basis['previous_sources']=materials['previous_sources']
     with connect() as c: scope=guard_homework_review(c,obj['task_id'],basis,ids)
     snapshots=[(ident,value) for ident,value in materials['previous_continuations'] if value['scope_sha256']==scope]
-    if continuation is not None and continuation['scope_sha256']==scope: pending=continuation['pending_labels']
+    if continuation is not None and continuation['scope_sha256']==scope: pending=family_print.review_pending(continuation,previous_text)
     elif snapshots: pending=max(snapshots,key=lambda entry:entry[0])[1]['pending_labels']
     else: pending=homework_saved_pending(obj['task_id'],obj['record_id'],scope)
     draft=family_llm.homework_reference_draft(materials['images'],data_path=DATA,timeout=120,review=True,
@@ -1265,7 +1265,8 @@ def homework_review_draft(obj):
         previous_documents=materials['previous_documents'],previous_text=previous_text,review_instruction=instruction,
         task_action=context['task']['action'],answer_note=context['record']['note'],pending_labels=pending)
     with connect() as c: guard_homework_review(c,obj['task_id'],basis,ids)
-    draft['continuation']=dict(scope_sha256=scope,pending_labels=[q['label'] for q in draft['questions'] if q['judgment']=='unknown'])
+    draft['continuation']=dict(scope_sha256=scope,pending_labels=[q['label'] for q in draft['questions'] if q['judgment']=='unknown'],
+        known_labels=[q['label'] for q in draft['questions']],text_sha256=family_print.review_text_sha256(draft['text']))
     return dict(draft=draft,question_sha256=materials['fingerprint'],review_basis=basis)
 
 def save_task(obj, connection=None):
