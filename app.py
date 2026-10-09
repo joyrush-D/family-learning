@@ -932,6 +932,18 @@ def legacy_homework_review_files(c,record):
     return {r['id'] for r in c.execute("SELECT id FROM uploads WHERE name=? AND mime LIKE 'text/plain%'",('作业批改参考-'+match[1]+'.txt',)) if r['id'] in attachments}
 
 
+def homework_review_outputs(c,record,attachments):
+    """An explicit output list, even an empty one, is authoritative; only an unmarked check falls back to its named result TXT."""
+    kind=record.get('followup_kind','');parent=record.get('related_record_id')
+    explicit=record.get('review_output_ids')
+    if kind=='作业检查' and explicit is not None:
+        outputs=json.loads(explicit)
+        if not isinstance(outputs,list) or any(not isinstance(i,str) or i not in attachments for i in outputs): raise ValueError('invalid result binding')
+        return set(outputs)
+    if kind=='作业检查' and type(parent) is int and parent>0:
+        return {r['id'] for r in c.execute("SELECT id FROM uploads WHERE name=? AND mime LIKE 'text/plain%'",('作业批改参考-'+str(parent)+'.txt',)) if r['id'] in attachments}
+    return legacy_homework_review_files(c,record)
+
 def homework_review_result_bindings(c,child,names):
     """A product-written result keeps its role when an ordinary feedback reuses the upload."""
     records=[dict(r) for r in c.execute('SELECT * FROM records ORDER BY id') if names.get(r['child'],r['child'])==child]
@@ -949,15 +961,7 @@ def homework_review_result_bindings(c,child,names):
         record=dict(followup_kind='',related_record_id=None,note='')|record
         try:
             attachments=json.loads(record['attachments'])
-            kind=record.get('followup_kind','');parent=record.get('related_record_id')
-            explicit=record.get('review_output_ids')
-            if kind=='作业检查' and explicit is not None:
-                outputs=json.loads(explicit)
-                if not isinstance(outputs,list) or any(not isinstance(i,str) or i not in attachments for i in outputs): raise ValueError('invalid result binding')
-                outputs=set(outputs)
-            elif kind=='作业检查' and type(parent) is int and parent>0:
-                outputs={r['id'] for r in c.execute("SELECT id FROM uploads WHERE name=? AND mime LIKE 'text/plain%'",('作业批改参考-'+str(parent)+'.txt',)) if r['id'] in attachments}
-            else: outputs=legacy_homework_review_files(c,record)
+            outputs=homework_review_outputs(c,record,attachments)
         except (KeyError,ValueError,TypeError):
             raise family_print.PrintError('原件历史暂时无法核对，请保留原记录后重试','review_source_changed',409) from None
         known.update(outputs)
@@ -1172,15 +1176,16 @@ def homework_saved_pending(task_id,record_id,scope):
     """A default reopen continues the newest saved same-scope checklist's labels only, never its text, answers or grades."""
     try:
         with connect_read_only() as c:
-            rows=c.execute("SELECT id,attachments,review_output_ids FROM records WHERE followup_kind='作业检查' AND related_record_id=? AND source=? ORDER BY id DESC",(record_id,'事项:'+task_id)).fetchall()
-            named={r['id'] for r in c.execute("SELECT id FROM uploads WHERE name=? AND mime LIKE 'text/plain%'",('作业批改参考-'+str(record_id)+'.txt',))}
-        for row in rows:
-            # A check saved without any output has nothing to continue; one that declares or attaches an output must verify.
-            try: bare=(row['review_output_ids'] is None or json.loads(row['review_output_ids'])==[]) and not named&set(json.loads(row['attachments']))
-            except (ValueError,TypeError): bare=False
-            if bare: continue
+            checks=[]
+            for row in c.execute("SELECT * FROM records WHERE followup_kind='作业检查' AND related_record_id=? AND source=? ORDER BY id DESC",(record_id,'事项:'+task_id)).fetchall():
+                # The result bindings' own rule: a check without output (an explicit empty list stays empty beside a same-named
+                # teacher input) has nothing to continue; one that declares or attaches an output, or cannot be read, must verify.
+                try: bare=not homework_review_outputs(c,dict(row),json.loads(row['attachments']))
+                except (KeyError,ValueError,TypeError): bare=False
+                if not bare: checks.append(row['id'])
+        for ident in checks:
             # A newer check that cannot be verified may be this scope; refuse before the model rather than show a gap-free result.
-            try: state=homework_saved_review(task_id,row['id']).get('continuation')
+            try: state=homework_saved_review(task_id,ident).get('continuation')
             except (family_print.PrintError,OSError,ValueError):
                 raise family_print.PrintError('此前保存的检查无法核对，本次未调用模型；原件保留，可下载核对或稍后重试','saved_review_unverifiable',409) from None
             if state is not None and state['scope_sha256']==scope: return state['pending_labels']
