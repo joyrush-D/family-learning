@@ -370,6 +370,72 @@ def recheck_pending_http_checks(app,upload):
         with patch.object(family_llm,'_chat_json',return_value=omitted):
             status,out=http('/api/print/homework/draft',request)
             assert status==200 and out['draft']['unknown_items']==1 and out['draft']['continuation']==pending,'a saved check without structured output must neither block nor clear the known gap'
+        # A teacher TXT may legitimately carry the product-looking result name and be bound as an input beforehand.
+        # A newer check saved with an explicit empty output list still has nothing to continue despite that filename.
+        named_task=app.new_task(dict(child='示例甲',title='虚构同名教师参考续查',category='homework'))
+        named_answer=upload('synthetic-pending-named-answer.txt','虚构甲卷第1题B。虚构乙卷第1题作答不清。\n'.encode())
+        named_original=app.save_task_feedback(dict(task_id=named_task['id'],child='示例甲',day='2026-10-05',
+            request_key='synthetic-pending-named-original',attachments=[named_answer],note='虚构甲乙两卷原作答。'))
+        named_teacher=upload('作业批改参考-'+str(named_original['record_id'])+'.txt','虚构甲卷第1题B。虚构乙卷第1题C。\n'.encode())
+        app.save_task_feedback(dict(task_id=named_task['id'],child='示例甲',day='2026-10-05',
+            request_key='synthetic-pending-named-teacher',attachments=[named_teacher],note='虚构普通反馈绑定的教师原参考。'))
+        named_request=dict(purpose='review',task_id=named_task['id'],record_id=named_original['record_id'],
+            expected_created=named_original['feedback']['created'],question_sources=[dict(type='upload',id=named_answer)],
+            reference_sources=[dict(type='upload',id=named_teacher)])
+        with patch.object(family_llm,'_chat_json',return_value=raw):
+            status,named_initial=http('/api/print/homework/draft',named_request)
+            assert status==200,named_initial
+        named_continued=named_request|dict(previous_text=named_initial['draft']['text'],review_instruction='虚构补查乙卷第1题。')
+        if 'continuation' in named_initial['draft']: named_continued['previous_continuation']=named_initial['draft']['continuation']
+        with patch.object(family_llm,'_chat_json',return_value=omitted):
+            status,named_checked=http('/api/print/homework/draft',named_continued)
+            assert status==200 and named_checked['draft']['unknown_items']==1,named_checked
+        named_pending=named_checked['draft']['continuation'];assert named_pending['pending_labels']==[unknown['label']]
+        named_text=named_checked['draft']['text'];named_basis=named_checked['review_basis']
+        frame='作业检查保存格式 v2\n复核待补清单：'+json.dumps(named_pending,ensure_ascii=False)+'\n最新检查字数：'+str(len(named_text))+'\n'+named_text+'\n此前检查草稿：虚构旧判定不作答案证据。'
+        named_output=upload('作业批改参考-'+str(named_original['record_id'])+'.txt',frame.encode())
+        assert named_output!=named_teacher,'the same filename is not the same upload identity'
+        named_inputs=[s['id'] for s in named_basis['question_sources']+named_basis['reference_sources']+named_basis.get('previous_sources',[])]
+        with patch.object(family_llm,'_chat_json') as model:
+            status,named_formal=http('/api/task/feedback',dict(task_id=named_task['id'],child='示例甲',day='2026-10-05',
+                request_key='synthetic-pending-named-saved',note='虚构核对的检查意见。',attachments=named_inputs+[named_output],review_basis=named_basis))
+            assert status==200 and not named_formal['completion_changed'] and model.call_count==0,named_formal
+        with app.connect() as c:
+            row=c.execute('SELECT attachments,review_output_ids FROM records WHERE id=?',(named_formal['record_id'],)).fetchone()
+            assert named_teacher in json.loads(row[0]) and json.loads(row[1])==[named_output],'only the written result is the declared output'
+        with patch.object(family_llm,'_chat_json',return_value=omitted):
+            status,named_out=http('/api/print/homework/draft',named_request)
+            assert status==200 and named_out['draft']['unknown_items']==1 and named_out['draft']['continuation']==named_pending,named_out
+        named_bare=dict(task_id=named_task['id'],child='示例甲',day='2026-10-05',request_key='synthetic-pending-named-no-output',
+            note='虚构核对的检查意见，未附检查文字。',attachments=[named_answer,named_teacher],review_basis=named_out['review_basis'])
+        with patch.object(family_llm,'_chat_json') as model:
+            status,named_plain=http('/api/task/feedback',named_bare)
+            assert status==200 and not named_plain['completion_changed'] and model.call_count==0,named_plain
+        with app.connect() as c:
+            row=c.execute('SELECT attachments,review_output_ids,followup_kind,related_record_id FROM records WHERE id=?',(named_plain['record_id'],)).fetchone()
+            assert named_teacher in json.loads(row[0]) and row[1] is not None and json.loads(row[1])==[],'the same-named teacher input is not a declared output'
+            assert row[2]=='作业检查' and row[3]==named_original['record_id']
+        with patch.object(family_llm,'_chat_json',return_value=omitted) as model:
+            status,named_out=http('/api/print/homework/draft',named_request)
+            assert status==200 and model.call_count==1,('an explicit empty output beside a same-named teacher input must not block the default reopen',status,named_out)
+            assert named_out['draft']['unknown_items']==1 and named_out['draft']['continuation']==named_pending,'nor clear the earlier saved gap'
+            q=named_out['draft']['questions'][1];assert q['label']==unknown['label'] and '上一轮' in q['uncertainty']
+            assert all(not q[k] for k in ('student_answer','answer','error_reason')),'only the label continues, never an old answer or judgment'
+        # Only a valid explicit list is authoritative: a malformed, non-list or foreign declaration still stops before the model.
+        with app.connect() as c: named_kept=c.execute('SELECT review_output_ids FROM records WHERE id=?',(named_plain['record_id'],)).fetchone()[0]
+        try:
+            for corrupt in ('[',json.dumps({}),json.dumps(named_teacher),json.dumps([1]),json.dumps(['0'*32])):
+                with app.connect() as c: c.execute('UPDATE records SET review_output_ids=? WHERE id=?',(corrupt,named_plain['record_id']))
+                with app.connect() as c: named_dump='\n'.join(c.iterdump())
+                with patch.object(family_llm,'_chat_json',return_value=omitted) as model:
+                    status,out=http('/api/print/homework/draft',named_request)
+                    assert status==409 and model.call_count==0,('an invalid declared output must not be skipped as if none was saved',corrupt,status,out)
+                with app.connect() as c: assert '\n'.join(c.iterdump())==named_dump,'a refused reopen writes nothing'
+        finally:
+            with app.connect() as c: c.execute('UPDATE records SET review_output_ids=? WHERE id=?',(named_kept,named_plain['record_id']))
+        with patch.object(family_llm,'_chat_json',return_value=omitted):
+            status,named_out=http('/api/print/homework/draft',named_request)
+            assert status==200 and named_out['draft']['continuation']==named_pending,named_out
         third=request|dict(previous_sources=[dict(type='upload',id=prior)])
         with patch.object(family_llm,'_chat_json',return_value=omitted):
             status,rechecked=http('/api/print/homework/draft',third)
