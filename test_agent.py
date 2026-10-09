@@ -4074,6 +4074,53 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
             brief=json.loads(rows[title]['plan'])['school_task'];self.assertEqual(brief['state'],'review');self.assertIn('含多个日期',brief['reason']);self.assertIn(due,brief['reason'])
         invented=rows['编造的下周五要求'];self.assertEqual(invented['due'],'');self.assertIn('未采用模型日期',json.loads(invented['plan'])['school_task']['reason'])
 
+    def test_attended_school_event_date_contract_keeps_only_its_own_arranged_day(self):
+        # Fictional D01/D02: a dated meeting the parent is asked to attend is that item's arranged day, not a deadline.
+        from family_agenda import deadlines
+        meeting='家长会定于2026年10月15日上午9点举行，请家长参加';d02=meeting+'；另2026年10月16日前交回活动回执。'
+        self.assertEqual(deadlines('虚构槐溪学校：家长会定于2026年10月15日上午9点在体育馆举行，请家长参加。','2026-10-10'),{'2026-10-15'})
+        self.assertEqual(deadlines(d02,'2026-10-10'),{'2026-10-15','2026-10-16'})
+        self.assertEqual(deadlines('发布时间：2026年10月10日。'+meeting+'。','2026-10-10'),{'2026-10-15'})
+        self.assertEqual(deadlines('2026年10月16日前交回活动回执；家长会时间另行通知，请家长参加。','2026-10-10'),{'2026-10-16'})
+        for text in ('2026年10月15日家长会资料已发布，请家长查阅。','回顾：家长会已于2026年10月15日举行，感谢家长参加。',
+                     '家长会定于2026年10月15日上午9点举行，本次无需家长参加。','运动会定于2026年10月15日举行，请家长不必参加。',
+                     '原定2026年10月15日举行的家长会取消，请家长留意后续参加安排。','家长会定于2026年10月15日或10月16日举行，请家长参加。',
+                     '家长会时间另行通知，请家长参加。','家长会将于2026年10月15日举行。'):
+            self.assertEqual(deadlines(text,'2026-10-10'),set(),text)
+        cited=[dict(ref='message:synthetic-group:11',text=d02,time='2026-10-10T08:30:00+08:00')]
+        self.assertEqual(agent._school_own_clause_dates(meeting,cited,['另2026年10月16日前交回活动回执']),{'2026-10-15'})
+        self.assertEqual(agent._school_own_clause_dates('另2026年10月16日前交回活动回执',cited,[meeting]),{'2026-10-16'})
+
+    def _school_event_run(self,text,proposals):
+        self.now=dt.datetime(2026,10,10,9,tzinfo=agent.TZ)
+        payload=self.payload(cursor='11');payload['messages'][0].update(text=text,time='2026-10-10T08:30:00+08:00');self.store.ingest(payload)
+        base=dict(focus='school',learning_subject='',learning_goal_id='',task_advice='',task_state='ready',task_reason='明确要求。',
+                  task_change='new',task_target_id='',task_purpose='admin',evidence=[dict(ref='message:synthetic-group:11')])
+        with patch.object(agent.family_llm,'_chat_json',return_value={'proposals':[school_proposal(**{**base,**p}) for p in proposals]}) as called:
+            self.assertEqual(agent.run_once(self.app,self.now)['failed'],0);self.assertEqual(called.call_count,1)
+        with self.app.connect() as c:
+            return ({r['title']:dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")},
+                    sorted((r['title'],r['due']) for r in c.execute('SELECT title,due FROM manual_tasks')))
+
+    def test_d01_dated_parent_meeting_keeps_its_day_for_the_calendar(self):
+        d01='虚构槐溪学校：家长会定于2026年10月15日上午9点在体育馆举行，请家长参加。'
+        rows,tasks=self._school_event_run(d01,[dict(title_quote=d01,due='2026-10-15',task_title='参加家长会（体育馆）',task_goal=d01)])
+        row=rows['参加家长会（体育馆）'];brief=json.loads(row['plan'])['school_task']
+        self.assertEqual((row['state'],row['due'],brief['state'],brief['purpose']),('accepted','2026-10-15','ready','admin'))
+        self.assertNotIn('未采用模型日期',brief.get('reason',''));self.assertEqual(tasks,[('参加家长会（体育馆）','2026-10-15')])
+
+    def test_d02_meeting_and_reply_slip_stay_two_actions_with_their_own_dates(self):
+        meeting='家长会定于2026年10月15日上午9点举行，请家长参加';slip='另2026年10月16日前交回活动回执'
+        rows,tasks=self._school_event_run(meeting+'；'+slip+'。',[
+            dict(title_quote=meeting,due='2026-10-15',task_title='参加家长会',task_goal=meeting+'。'),
+            dict(title_quote=slip,due='2026-10-16',task_title='交回活动回执',task_goal='2026年10月16日前交回活动回执。')])
+        self.assertEqual(tasks,[('交回活动回执','2026-10-16'),('参加家长会','2026-10-15')])
+        for title,due,own,other in (('参加家长会','2026-10-15','10月15日','10月16日'),('交回活动回执','2026-10-16','10月16日','10月15日')):
+            brief=json.loads(rows[title]['plan'])['school_task']
+            self.assertEqual((rows[title]['state'],rows[title]['due'],brief['state'],brief['purpose']),('accepted',due,'ready','admin'),title)
+            self.assertIn(own,brief['goal']);self.assertNotIn(other,brief['goal'])
+            self.assertEqual([e['ref'] for e in json.loads(rows[title]['evidence'])],['message:synthetic-group:11'])
+
     def test_uncertain_school_date_stays_review_without_poisoning_valid_batch(self):
         payload=self.payload(cursor='13');payload['messages'][0]['text']='请准备阅读材料，日期另行通知。'
         payload['messages'].extend([dict(id='12',time=self.now.isoformat(),kind='text',sender='虚构老师',text='请填回执，截止时间：2026 年 2 月 12 日。',unread=False),
