@@ -1172,11 +1172,16 @@ def homework_saved_pending(task_id,record_id,scope):
     """A default reopen continues the newest saved same-scope checklist's labels only, never its text, answers or grades."""
     try:
         with connect_read_only() as c:
-            ids=[r['id'] for r in c.execute("SELECT id FROM records WHERE followup_kind='作业检查' AND related_record_id=? AND source=? ORDER BY id DESC",(record_id,'事项:'+task_id))]
-        for ident in ids:
+            rows=c.execute("SELECT id,attachments,review_output_ids FROM records WHERE followup_kind='作业检查' AND related_record_id=? AND source=? ORDER BY id DESC",(record_id,'事项:'+task_id)).fetchall()
+            named={r['id'] for r in c.execute("SELECT id FROM uploads WHERE name=? AND mime LIKE 'text/plain%'",('作业批改参考-'+str(record_id)+'.txt',))}
+        for row in rows:
+            # A check saved without any output has nothing to continue; one that declares or attaches an output must verify.
+            try: bare=(row['review_output_ids'] is None or json.loads(row['review_output_ids'])==[]) and not named&set(json.loads(row['attachments']))
+            except (ValueError,TypeError): bare=False
+            if bare: continue
             # A newer check that cannot be verified may be this scope; refuse before the model rather than show a gap-free result.
-            try: state=homework_saved_review(task_id,ident).get('continuation')
-            except family_print.PrintError:
+            try: state=homework_saved_review(task_id,row['id']).get('continuation')
+            except (family_print.PrintError,OSError,ValueError):
                 raise family_print.PrintError('此前保存的检查无法核对，本次未调用模型；原件保留，可下载核对或稍后重试','saved_review_unverifiable',409) from None
             if state is not None and state['scope_sha256']==scope: return state['pending_labels']
     except sqlite3.OperationalError:
