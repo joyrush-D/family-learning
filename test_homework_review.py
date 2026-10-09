@@ -964,6 +964,29 @@ def nested_sub_checks():
         got=scoped(case,label,teacher,student,images,answer,question)
         if got!=(label,student,expected,'correct' if expected else 'unknown','',int(not expected),0): bad.append((case,got))
     assert not bad,bad
+    # Disclosed full synthetic repair6 Handler cases: whatever stops the path short, a stray 「)」 before 「(A)」, a level word 「第A小问」
+    # or any other mark not read, leaves the scope unknown on a label and a teacher line alike; the parent's answer is never borrowed,
+    # nor is it waived by an image. A whole same path, a page note, plain words after the path and an image of the same scope still compare.
+    reed,elm,q6='试卷名称：虚构芦溪卷\n第7题(3)：C。','试卷名称：虚构榆溪卷\n第9题(4)：C。','全虚构选择题。'
+    bad=[]
+    for case,label,teacher,student,images,expected,judgment in (
+            ('R6-01','虚构芦溪卷第7题(3))(A)',reed,'C',0,'','unknown'),('R6-02','虚构榆溪卷第9题(4)第A小问',elm,'C',0,'','unknown'),
+            ('stray-close','虚构芦溪卷第7题(3)）',reed,'C',0,'','unknown'),
+            ('stray-after-number','虚构芦溪卷第7题)(A)','试卷名称：虚构芦溪卷\n第7题：C。','C',0,'','unknown'),
+            ('square','虚构芦溪卷第7题(3)[A]',reed,'C',0,'','unknown'),('lenticular','虚构芦溪卷第7题(3)【甲】',reed,'C',0,'','unknown'),
+            ('letter-ask','虚构榆溪卷第9题(4)第a问',elm,'C',0,'','unknown'),('roman-sub','虚构榆溪卷第9题(4)第Ⅱ小题',elm,'C',0,'','unknown'),
+            ('mark-word','虚构榆溪卷第9题(4)A小问',elm,'C',0,'','unknown'),('word-mark','虚构榆溪卷第9题(4)小问B',elm,'C',0,'','unknown'),
+            ('enclosed','虚构榆溪卷第9题(4)⑴',elm,'C',0,'','unknown'),
+            ('teacher-mark','虚构榆溪卷第9题(4)','试卷名称：虚构榆溪卷\n第9题(4)第A小问：C。','C',0,'','unknown'),
+            ('teacher-stray','虚构芦溪卷第7题(3)','试卷名称：虚构芦溪卷\n第7题(3))(A)：C。','C',0,'','unknown'),
+            ('image-mark','虚构榆溪卷第9题(4)第A小问','试卷名称：虚构榆溪卷\n第9题(4)','C',1,'','unknown'),
+            ('path-same','虚构芦溪卷第7题(3)(1)','试卷名称：虚构芦溪卷\n第7题(3)(1)：C。','C',0,'教师参考：C','correct'),
+            ('page-lenticular','虚构芦溪卷第7题(3)【第2页】',reed,'C',0,'教师参考：C','correct'),
+            ('plain-words','虚构芦溪卷第7题(3) 看图选择',reed,'C',0,'教师参考：C','correct'),
+            ('image-same','虚构榆溪卷第9题(4)','试卷名称：虚构榆溪卷\n第9题(4)','C',1,'教师参考：C','correct')):
+        got=scoped(case,label,teacher,student,images,'教师参考：'+student,q6)
+        if got!=(label,student,expected,judgment,'',int(judgment=='unknown'),0): bad.append((case,got))
+    assert not bad,bad
 
 def teacher_note_checks():
     """A paper or 大题 named inside a teacher note is part of that value; only a heading starts a new scope."""
