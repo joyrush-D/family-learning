@@ -1062,7 +1062,8 @@ _REF_SECTION=re.compile(r'第\s*(\d{1,2}|[一二三四五六七八九十]{1,3})\
 _REF_QUESTION=re.compile(r'第\s*(\d{1,3})\s*题|(?<![\d.．])(\d{1,3})\s*题|(?<![A-Za-z])[Qq]\s*(\d{1,3})(?!\d)|(?:^|(?<=[\s、，,；;]))(\d{1,3})\s*[.．、](?!\d)')
 _REF_NAMED=re.compile(r'[\s，,；;。]((?:%s)|第\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*(?:大题|部分)|[一二三四五六七八九十]{1,3}\s*[、.．])'%_REF_PAPER.pattern)
 _REF_SUB=re.compile(r'\s*(?:[（(]\s*(\d{1,2})\s*[)）]|第\s*(\d{1,2})\s*(?:小题|小?问))')
-_REF_SUB_UNREAD=re.compile(r'\s*(?:第\s*[^\s，,。；;：:、]{1,3}?\s*(?:小题|小?问|空)|[\dA-Za-zＡ-Ｚａ-ｚⅰ-ⅻⅠ-Ⅻ一二三四五六七八九十]{1,3}\s*(?:小题|小问)|(?:小题|小问)\s*[\dA-Za-zＡ-Ｚａ-ｚⅰ-ⅻⅠ-Ⅻ一二三四五六七八九十]{1,3}|[（(]\s*[一二三四五六七八九十]{1,3}\s*[)）]|[①-⓿❶-➓㈠-㈩㊀-㊉]|[（(]\s*(?:[a-zａ-ｚ]|[ivx]{2,4}|[IVX]{1,4}|[ⅰ-ⅻⅠ-Ⅻ])\s*[)）])')
+_REF_LEVEL=r'[\dA-Za-zＡ-Ｚａ-ｚⅠ-ⅿ一二三四五六七八九十百千零〇]+(?:[-－.．][\dA-Za-zＡ-Ｚａ-ｚⅠ-ⅿ一二三四五六七八九十百千零〇]+)*|[①-⓿❶-➓㈠-㈩㊀-㊉]'  # one whole level number, never cut short
+_REF_SUB_UNREAD=re.compile(r'\s*(?:第\s*[（(]?\s*(?:%s)\s*[)）]?\s*(?:(?:个\s*)?(?:小题|小问|空)|问)|(?:%s)\s*(?:小题|小问)|(?:小题|小问)\s*(?:%s)|[（(]\s*[一二三四五六七八九十]{1,3}\s*[)）]|[①-⓿❶-➓㈠-㈩㊀-㊉]|[（(]\s*(?:[a-zａ-ｚ]|[ivx]{2,4}|[IVX]{1,4}|[ⅰ-ⅻⅠ-Ⅻ])\s*[)）])'%((_REF_LEVEL,)*3))
 _REF_SUB_PAGE=re.compile(r'\s*[（(［\[【〔]\s*(?:第\s*\d{1,3}\s*(?:[-－~～至、,，]\s*\d{1,3}\s*)?页|[Pp]\s*\.?\s*\d{1,3}(?:\s*[-－~～]\s*\d{1,3})?)\s*[)）］\]】〕]')
 _REF_SUB_OTHER=re.compile(r'\s*(?:[（(［\[【〔][^()（）［］\[\]【】〔〕\n]*[)）］\]】〕]?|[)）］\]】〕])')
 _REF_WORDS='(?:(?:教师|老师)(?:原|的)?)?(?:参考答案|参考|答案)|教师|老师'  # 「教师原参考」 is a source word too
@@ -1098,9 +1099,10 @@ def _ref_scope(text,section=None,titles=frozenset(),listed=False):
 
 def _ref_sub(text,at=0):
     """The sub-question path named right after a question number, read alike on a label and a teacher line:
-    every level's number in order, 「（2）（1）」 and 「(2)第1小问」 alike (2,1); '*' when any level 「第二问」「第A小问」「A小问」「②」「⑴」
-    「(a)」 is named but unread, else None. An unread one is never the whole question, and a path is never cut to the levels
-    read: 「（2）②」 is '*', never 「（2）」. Any other bracket right after it, 「(A)」「【甲】」, long, empty 「()」, never closed or a
+    every level's number in order, 「（2）（1）」 and 「(2)第1小问」 alike (2,1); '*' when any level 「第二问」「第VIII小问」「A小问」「②」
+    「⑴」「(a)」 is named but unread, else None. A level is one whole number before its level word, never cut short, and plain words
+    「第一次问路」 name none. An unread one is never the whole question, and a path is never cut to the levels read:
+    「（2）②」 is '*', never 「（2）」. Any other bracket right after it, 「(A)」「【甲】」, long, empty 「()」, never closed or a
     stray closing 「)」, is a level not read, never left over; only a page note 「（第2页）」「【第2页】」 is no level."""
     levels=[];end=at
     while more:=_REF_SUB_PAGE.match(text,end) or _REF_SUB.match(text,end) or _REF_SUB_UNREAD.match(text,end) or _REF_SUB_OTHER.match(text,end):
