@@ -1064,7 +1064,7 @@ _REF_NAMED=re.compile(r'[\s，,；;。]((?:%s)|第\s*(?:\d{1,2}|[一二三四五
 _REF_SUB=re.compile(r'\s*(?:[（(]\s*(\d{1,2})\s*[)）]|第\s*(\d{1,2})\s*(?:小题|小?问))')
 _REF_SUB_UNREAD=re.compile(r'\s*(?:第\s*[\d一二三四五六七八九十]{1,3}\s*(?:小题|小?问|空)|[（(]\s*[一二三四五六七八九十]{1,3}\s*[)）]|[①-⑳]|[（(]\s*(?:[a-zａ-ｚ]|[ivx]{2,4}|[IVX]{1,4}|[ⅰ-ⅻⅠ-Ⅻ])\s*[)）])')
 _REF_SUB_PAGE=re.compile(r'\s*[（(]\s*(?:第\s*\d{1,3}\s*(?:[-－~～至、,，]\s*\d{1,3}\s*)?页|[Pp]\s*\.?\s*\d{1,3}(?:\s*[-－~～]\s*\d{1,3})?)\s*[)）]')
-_REF_SUB_OTHER=re.compile(r'\s*[（(][^()（）\n]{1,20}[)）]')
+_REF_SUB_OTHER=re.compile(r'\s*[（(][^()（）\n]*[)）]?')
 _REF_WORDS='(?:(?:教师|老师)(?:原|的)?)?(?:参考答案|参考|答案)|教师|老师'  # 「教师原参考」 is a source word too
 _REF_SOURCE=re.compile(r'^[\s:：]*(?:%s)?\s*(?:均为|都是|均是|都为|为|是)?[\s:：]*'%_REF_WORDS)
 _REF_NOISE=re.compile(r'%s|如下|以下|第\s*\d{1,3}\s*页|[\W_]'%_REF_WORDS)
@@ -1100,8 +1100,8 @@ def _ref_sub(text,at=0):
     """The sub-question path named right after a question number, read alike on a label and a teacher line:
     every level's number in order, 「（2）（1）」 and 「(2)第1小问」 alike (2,1); '*' when any level 「第二问」「②」「(a)」 is
     named but unread, else None. An unread one is never the whole question, and a path is never cut to the levels read:
-    「（2）②」 is '*', never 「（2）」. Any other bracket right after it, 「(A)」「(甲)」, is a level not read, never left
-    over; only a page note 「（第2页）」 is no level."""
+    「（2）②」 is '*', never 「（2）」. Any other bracket right after it, 「(A)」「(甲)」, long, empty 「()」 or never closed, is a
+    level not read, never left over; only a page note 「（第2页）」 is no level."""
     levels=[];end=at
     while more:=_REF_SUB_PAGE.match(text,end) or _REF_SUB.match(text,end) or _REF_SUB_UNREAD.match(text,end) or _REF_SUB_OTHER.match(text,end):
         if more.re is not _REF_SUB_PAGE: levels.append(int(next(g for g in more.groups() if g)) if more.re is _REF_SUB else '*')
@@ -1278,10 +1278,12 @@ def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset
     """A question the supplied teacher text covers is compared by that text, whatever source the model claims."""
     if not item['answer'].strip(): return  # No answer is the existing missing-basis path, not a claimed source.
     related=[(_ref_relation(item['label'],entry,titles),entry['answer']) for entry in entries]
-    blank=any(not answer and relation in ('same','unsure','part') for relation,answer in related)
+    claimed=item['answer'].removeprefix('教师参考：').strip() if item['answer'].startswith('教师参考：') else None
+    # The teacher's image may give, quoted as the teacher's, what its text names for this very scope without an answer;
+    # no image settles a parent, an unread level or an unnamed paper or 大题.
+    blank=any(not answer and (relation in ('unsure','part') or relation=='same' and not (images and claimed)) for relation,answer in related)
     related=[(relation,answer) for relation,answer in related if answer]
     same=sorted({answer for relation,answer in related if relation=='same'})
-    claimed=item['answer'].removeprefix('教师参考：').strip() if item['answer'].startswith('教师参考：') else None
     shown=lambda value,limit=995:value if len(value)<=limit else value[:limit]+'…'  # The whole teacher answer fits the answer field.
     def pending(answer,note):
         item.update(answer=answer,judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty=(note+item['uncertainty'].strip())[:300])
