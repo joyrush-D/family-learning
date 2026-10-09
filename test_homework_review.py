@@ -862,6 +862,29 @@ def word_boundary_checks():
         assert agrees(claimed,teacher) and agrees(teacher,claimed),(claimed,teacher)
 
 
+def nested_sub_checks():
+    """D01/D02: a sub-question is read to its last level; the teacher's 「第4题（2）」 answers 「（2）」 only, never 「（2）②」."""
+    def draft(case,sub,teacher):
+        label='虚构松丘卷第4题'+sub
+        raw=dict(items=[dict(label=label,question='全虚构选择题',student_answer='B',answer='教师参考：B',judgment='correct',question_kind='objective',
+            error_reason='',possible_cause='',steps='',uncertainty='')],coverage='只核本次全虚构小题。',question_labels=[label])
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            result=family_llm.homework_reference_draft([],review=True,
+                question_documents=[dict(name='synthetic-nested-%s-answer.txt'%case,text='虚构松丘卷\n%s选择正确选项，孩子作答B。'%label)],
+                reference_documents=[dict(name='synthetic-nested-%s-teacher.txt'%case,text='试卷名称：虚构松丘卷\n'+teacher)])
+            assert model.call_count==1
+        q,=result['questions']
+        assert q['label']==label and q['student_answer']=='B' and result['wrong_items']==0,(case,q,result)
+        return q,result
+    q,result=draft('D02','（2）','第4题（2） B。')  # the one level both name is still the teacher's reference
+    assert q['judgment']=='correct' and q['answer']=='教师参考：B' and result['unknown_items']==0,('D02',q)
+    # 「（2）②」 is not 「（2）」, nor 「（2）①」: a level read only in part stays unknown and the teacher's answer is not borrowed.
+    for case,sub,teacher in (('D01','（2）②','第4题（2） B。'),('D01-teacher-deeper','（2）','第4题（2）② B。'),('D01-sibling','（2）②','第4题（2）① B。')):
+        q,result=draft(case,sub,teacher)
+        assert q['judgment']=='unknown' and q['answer']=='' and '小题' in q['uncertainty'] and result['unknown_items']==1,(case,q)
+        assert not q['error_reason'] and not q['possible_cause'] and not q['steps'],(case,q)
+
+
 def teacher_note_checks():
     """A paper or 大题 named inside a teacher note is part of that value; only a heading starts a new scope."""
     calls=0
@@ -1037,6 +1060,7 @@ def teacher_note_owner_checks():
 def run():
     contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+missing_condition_checks()+teacher_note_checks()+teacher_note_owner_checks()
     word_boundary_checks()
+    nested_sub_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:
         root=Path(temporary);data=root/'private';data.mkdir()
         with patch.dict(os.environ,{'FAMILY_DATA':str(data)}):
