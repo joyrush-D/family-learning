@@ -361,6 +361,15 @@ def recheck_pending_http_checks(app,upload):
             assert status==200 and out['draft']['items']==2 and out['draft']['unknown_items']==1,'saved same-scope pending label lost on default reopen'
             q=out['draft']['questions'][1];assert out['draft']['continuation']==pending and q['label']==unknown['label'] and '上一轮' in q['uncertainty']
             assert all(not q[k] for k in ('student_answer','answer','error_reason')),'only the label continues, never an old answer or judgment'
+        # A newer valid check saved without structured output has nothing to continue: it neither blocks nor clears the known gap.
+        bare=dict(task_id=task['id'],child='示例甲',day='2026-10-05',request_key='synthetic-pending-no-output',
+            note='虚构核对的检查意见，未附检查文字。',attachments=[answer,teacher],review_basis=out['review_basis'])
+        with patch.object(family_llm,'_chat_json') as model:
+            status,plain=http('/api/task/feedback',bare)
+            assert status==200 and not plain['completion_changed'] and model.call_count==0,plain
+        with patch.object(family_llm,'_chat_json',return_value=omitted):
+            status,out=http('/api/print/homework/draft',request)
+            assert status==200 and out['draft']['unknown_items']==1 and out['draft']['continuation']==pending,'a saved check without structured output must neither block nor clear the known gap'
         third=request|dict(previous_sources=[dict(type='upload',id=prior)])
         with patch.object(family_llm,'_chat_json',return_value=omitted):
             status,rechecked=http('/api/print/homework/draft',third)
@@ -378,9 +387,16 @@ def recheck_pending_http_checks(app,upload):
         path=Path(app.DATA)/'uploads'/newer;kept=path.read_bytes()
         try:
             path.write_bytes(kept+b'x')
+            with app.connect() as c: rows='\n'.join(c.iterdump())
             with patch.object(family_llm,'_chat_json',return_value=omitted) as model:
                 status,out=http('/api/print/homework/draft',request)
                 assert status==409 and model.call_count==0,'an unverifiable newest saved check must not become a gap-free draft'
+            with app.connect() as c: assert '\n'.join(c.iterdump())==rows and path.read_bytes()==kept+b'x','a refused reopen writes nothing and keeps the saved original'
+            # A declared output that is missing is not a check saved without output: it also stops before the model.
+            path.unlink()
+            with patch.object(family_llm,'_chat_json',return_value=omitted) as model:
+                status,out=http('/api/print/homework/draft',request)
+                assert status==409 and model.call_count==0,'a missing declared saved output must not be skipped as if none was saved'
         finally: path.write_bytes(kept)
         with patch.object(family_llm,'_chat_json',return_value=omitted):
             for previous in ([prior,newer],[newer,prior]):
