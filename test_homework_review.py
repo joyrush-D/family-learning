@@ -437,8 +437,9 @@ def recheck_pending_http_checks(app,upload):
 
 
 def scope_handler_checks(app,upload):
-    """Disclosed G03-G10 through real HTTP draft, save, same-key retry and reopen: an unread level stays pending, never the parent's answer,
-    while plain words after the path, 「是这道选择小题」, still compare as the path, as does a teacher's answer naming 「第2问」 (G10)."""
+    """Disclosed G03-G10 and R13-1..3 through real HTTP draft, save, same-key retry and reopen: an unread level 「第几小问」「第？小问」 stays
+    pending, never the parent's answer, while plain words after the path, 「是这道选择小题」, still compare as the path, as does a teacher's
+    answer naming 「第2问」 (G10) or, with no source word, a later 「参考」 and 「第θ小问」 (R13-3), kept whole."""
     from http.client import HTTPConnection
     import threading
     server=app.ThreadingHTTPServer(('127.0.0.1',0),app.Handler)
@@ -452,7 +453,8 @@ def scope_handler_checks(app,upload):
     try:
         for case,label in (('G03','虚构榆溪卷第9题(4)第甲小问'),('G04','虚构榆溪卷第9题(4)第1、 2小问'),
                            ('G05','虚构榆溪卷第9题(4)第甲小问的答案'),('G06','虚构榆溪卷第9题(4)第甲问'),
-                           ('G08','虚构榆溪卷第9题(4)第θ小问'),('G09','虚构榆溪卷第9题(4)第1 / 2小问')):
+                           ('G08','虚构榆溪卷第9题(4)第θ小问'),('G09','虚构榆溪卷第9题(4)第1 / 2小问'),
+                           ('R13-1','虚构榆溪卷第9题(4)第几小问'),('R13-2','虚构榆溪卷第9题(4)第？小问')):
             task=app.new_task(dict(child='示例甲',title='虚构榆溪卷'+case,category='homework'))
             answer=upload('synthetic-%s-answer.txt'%case,('虚构榆溪卷\n%s 全虚构选择题。孩子作答C。'%label).encode())
             teacher=upload('synthetic-%s-teacher.txt'%case,'试卷名称：虚构榆溪卷\n第9题(4)：C。'.encode())
@@ -508,34 +510,37 @@ def scope_handler_checks(app,upload):
             status,view=http('GET','/api/print/homework/saved-review?task_id='+task['id']+'&record_id='+str(saved['record_id']))
             assert status==200 and view['original_record_id']==original['record_id'] and view['text']==d['text'],(case,view)
             assert label in view['text'] and model.call_count==0,(case,'save, same-key retry and reopen keep the compared label without a model')
-        # G10: a teacher's answer starts at 「教师参考答案为」, so 「第2问」 inside it names no level and the whole answer compares.
-        case,label,stem,said='G10','虚构榆溪卷第9题(4)','客观填空：按老师给出的步骤填写处理顺序。','先解第2问，再检查。'
-        task=app.new_task(dict(child='示例甲',title='虚构榆溪卷'+case,category='homework'))
-        answer=upload('synthetic-%s-answer.txt'%case,('虚构榆溪卷\n%s %s孩子作答：%s'%(label,stem,said)).encode())
-        teacher=upload('synthetic-%s-teacher.txt'%case,'试卷名称：虚构榆溪卷\n第9题(4) 教师参考答案为先解第2问，再检查。'.encode())
-        original=app.save_task_feedback(dict(task_id=task['id'],child='示例甲',day='2026-10-09',
-            request_key='synthetic-%s-original'%case,note='虚构榆溪卷第9题。',attachments=[answer,teacher]))
-        request=dict(purpose='review',task_id=task['id'],record_id=original['record_id'],expected_created=original['feedback']['created'],
-            question_sources=[source(answer)],reference_sources=[source(teacher)])
-        raw=dict(items=[item(label=label,question=stem,student_answer=said,answer='教师参考：'+said)],
-            coverage='仅核这一虚构题，其余未核。',question_labels=[label])
-        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
-            status,result=http('POST','/api/print/homework/draft',request)
-            assert status==200 and model.call_count==1,(case,status,result)
-        d=result['draft'];q,=d['questions']
-        assert (q['label'],q['student_answer'],q['answer'],q['judgment'],d['unknown_items'],d['wrong_items'])==(label,said,'教师参考：'+said,'correct',0,0),(case,q)
-        assert label in d['text'] and '教师参考：'+said in d['text'] and not q['uncertainty'],(case,d['text'])
-        ident=upload('作业批改参考-%s.txt'%original['record_id'],d['text'].encode())
-        feedback=dict(task_id=task['id'],child='示例甲',day='2026-10-09',request_key='synthetic-%s-saved'%case,
-            note='虚构家长核对：本题与教师参考一致。',attachments=[answer,teacher,ident],review_basis=result['review_basis'],
-            **({'comparison_note':d['comparison']} if d.get('comparison') else {}))
-        with patch.object(family_llm,'_chat_json') as model:
-            status,saved=http('POST','/api/task/feedback',feedback);assert status==200,(case,saved)
-            status,retry=http('POST','/api/task/feedback',feedback)
-            assert status==200 and retry['replayed'] and retry['record_id']==saved['record_id'],(case,retry)
-            status,view=http('GET','/api/print/homework/saved-review?task_id='+task['id']+'&record_id='+str(saved['record_id']))
-            assert status==200 and view['original_record_id']==original['record_id'] and view['text']==d['text'],(case,view)
-            assert '教师参考：'+said in view['text'] and model.call_count==0,(case,'save, same-key retry and reopen keep the whole teacher answer without a model')
+        # G10: a teacher's answer starts at 「教师参考答案为」, so 「第2问」 inside it names no level and the whole answer compares; R13-3:
+        # with no source word the first answer content 「5」 starts it, so a later 「参考」 and 「第θ小问」 are that answer, kept whole.
+        for case,line,stem,said in (('G10','第9题(4) 教师参考答案为先解第2问，再检查。','客观填空：按老师给出的步骤填写处理顺序。','先解第2问，再检查。'),
+                                    ('R13-3','第9题(4)5，这是第θ小问的参考思路','客观填空：照老师给出的原话填写。','5，这是第θ小问的参考思路')):
+            label='虚构榆溪卷第9题(4)'
+            task=app.new_task(dict(child='示例甲',title='虚构榆溪卷'+case,category='homework'))
+            answer=upload('synthetic-%s-answer.txt'%case,('虚构榆溪卷\n%s %s孩子作答：%s'%(label,stem,said)).encode())
+            teacher=upload('synthetic-%s-teacher.txt'%case,('试卷名称：虚构榆溪卷\n'+line).encode())
+            original=app.save_task_feedback(dict(task_id=task['id'],child='示例甲',day='2026-10-09',
+                request_key='synthetic-%s-original'%case,note='虚构榆溪卷第9题。',attachments=[answer,teacher]))
+            request=dict(purpose='review',task_id=task['id'],record_id=original['record_id'],expected_created=original['feedback']['created'],
+                question_sources=[source(answer)],reference_sources=[source(teacher)])
+            raw=dict(items=[item(label=label,question=stem,student_answer=said,answer='教师参考：'+said)],
+                coverage='仅核这一虚构题，其余未核。',question_labels=[label])
+            with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+                status,result=http('POST','/api/print/homework/draft',request)
+                assert status==200 and model.call_count==1,(case,status,result)
+            d=result['draft'];q,=d['questions']
+            assert (q['label'],q['student_answer'],q['answer'],q['judgment'],d['unknown_items'],d['wrong_items'])==(label,said,'教师参考：'+said,'correct',0,0),(case,q)
+            assert label in d['text'] and '教师参考：'+said in d['text'] and not q['uncertainty'],(case,d['text'])
+            ident=upload('作业批改参考-%s.txt'%original['record_id'],d['text'].encode())
+            feedback=dict(task_id=task['id'],child='示例甲',day='2026-10-09',request_key='synthetic-%s-saved'%case,
+                note='虚构家长核对：本题与教师参考一致。',attachments=[answer,teacher,ident],review_basis=result['review_basis'],
+                **({'comparison_note':d['comparison']} if d.get('comparison') else {}))
+            with patch.object(family_llm,'_chat_json') as model:
+                status,saved=http('POST','/api/task/feedback',feedback);assert status==200,(case,saved)
+                status,retry=http('POST','/api/task/feedback',feedback)
+                assert status==200 and retry['replayed'] and retry['record_id']==saved['record_id'],(case,retry)
+                status,view=http('GET','/api/print/homework/saved-review?task_id='+task['id']+'&record_id='+str(saved['record_id']))
+                assert status==200 and view['original_record_id']==original['record_id'] and view['text']==d['text'],(case,view)
+                assert '教师参考：'+said in view['text'] and model.call_count==0,(case,'save, same-key retry and reopen keep the whole teacher answer without a model')
     finally:
         server.shutdown();server.server_close();worker.join(timeout=3)
 
@@ -1162,6 +1167,31 @@ def nested_sub_checks():
                               ('answer-is','第9题(4) 答案是先解第2小问，再检查。','先解第2小问，再检查。'),
                               ('answer-bare','第9题(4) 先解第2问，再检查。','先解第2问，再检查。'),
                               ('answer-person','第9题(4) 教师参考答案为第一个人问。','第一个人问。')):
+        got=scoped(case,'虚构榆溪卷第9题(4)','试卷名称：虚构榆溪卷\n'+teacher,said,0,'教师参考：'+said,q10)
+        if got!=('虚构榆溪卷第9题(4)',said,'教师参考：'+said,'correct','',0,0): bad.append((case,got))
+    assert not bad,bad
+    # Disclosed full synthetic repair13 cases R13-1..3: an ordinal frame is read whole before its number, so 「第几小问」「第？小问」 name a
+    # level not read, never the parent's answer, and 「的」 joins a heading to its next level 「(4)的(1)」 on a label and a teacher line
+    # alike; plain words 「第一次问路」「第2次问老师」「有个小问题」 name none. On a teacher line only the continuous path is heading: the
+    # first answer content starts the body, so a later 「参考」「答案」 or ordinal inside it neither names a level nor cuts the value.
+    bad=[]
+    for case,label,teacher,expected,judgment in (
+            ('R13-1','虚构榆溪卷第9题(4)第几小问',elm,'','unknown'),('R13-2','虚构榆溪卷第9题(4)第？小问',elm,'','unknown'),
+            ('ask-ascii','虚构榆溪卷第9题(4)第?小问',elm,'','unknown'),('ask-how-many','虚构榆溪卷第9题(4)第几问',elm,'','unknown'),
+            ('blank-how-many','虚构榆溪卷第9题(4)第几个空',elm,'','unknown'),('linked-frame','虚构榆溪卷第9题(4)的第几小问',elm,'','unknown'),
+            ('linked-bracket','虚构榆溪卷第9题(4)的(1)',elm,'','unknown'),
+            ('teacher-how-many','虚构榆溪卷第9题(4)','试卷名称：虚构榆溪卷\n第9题(4)第几小问：C。','','unknown'),
+            ('teacher-ask','虚构榆溪卷第9题(4)','试卷名称：虚构榆溪卷\n第9题(4)的第？小问：C。','','unknown'),
+            ('teacher-linked','虚构榆溪卷第9题(4)(1)','试卷名称：虚构榆溪卷\n第9题(4)的(1)：C。','教师参考：C','correct'),
+            ('words-way','虚构榆溪卷第9题(4)第一次问路',elm,'教师参考：C','correct'),
+            ('words-teacher','虚构榆溪卷第9题(4)第2次问老师',elm,'教师参考：C','correct'),
+            ('words-how-often','虚构榆溪卷第9题(4) 第几次问老师',elm,'教师参考：C','correct'),
+            ('words-small','虚构榆溪卷第9题(4)有个小问题',elm,'教师参考：C','correct')):
+        got=scoped(case,label,teacher,'C',0,'教师参考：C',q6)
+        if got!=(label,'C',expected,judgment,'',int(judgment=='unknown'),0): bad.append((case,got))
+    for case,teacher,said in (('R13-3','第9题(4)5，这是第θ小问的参考思路','5，这是第θ小问的参考思路'),
+                              ('body-later-word','第9题(4) 先解第2问，再写答案。','先解第2问，再写答案。'),
+                              ('body-source-first','第9题(4) 教师参考答案为先核第3问，然后订正。','先核第3问，然后订正。')):
         got=scoped(case,'虚构榆溪卷第9题(4)','试卷名称：虚构榆溪卷\n'+teacher,said,0,'教师参考：'+said,q10)
         if got!=('虚构榆溪卷第9题(4)',said,'教师参考：'+said,'correct','',0,0): bad.append((case,got))
     assert not bad,bad
