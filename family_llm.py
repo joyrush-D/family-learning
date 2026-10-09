@@ -1062,17 +1062,25 @@ _REF_SECTION=re.compile(r'第\s*(\d{1,2}|[一二三四五六七八九十]{1,3})\
 _REF_QUESTION=re.compile(r'第\s*(\d{1,3})\s*题|(?<![\d.．])(\d{1,3})\s*题|(?<![A-Za-z])[Qq]\s*(\d{1,3})(?!\d)|(?:^|(?<=[\s、，,；;]))(\d{1,3})\s*[.．、](?!\d)')
 _REF_NAMED=re.compile(r'[\s，,；;。]((?:%s)|第\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*(?:大题|部分)|[一二三四五六七八九十]{1,3}\s*[、.．])'%_REF_PAPER.pattern)
 _REF_SUB=re.compile(r'\s*(?:[（(]\s*(\d{1,2})\s*[)）]|第\s*(\d{1,2})\s*(?:小题|小?问))')
-_REF_DIGIT=r'(?:[\dA-Za-zＡ-Ｚａ-ｚⅠ-ⅿ一二三四五六七八九十百千零〇壹贰叁肆伍陆柒捌玖拾佰仟甲乙丙丁戊己庚辛壬癸]+|[①-⓿❶-➓㈠-㈩㊀-㊉])'  # digits, letters, numerals, 甲乙丙丁
-_REF_LEVEL=r'%s(?:\s*[-－.．、，,]\s*%s)*'%(_REF_DIGIT,_REF_DIGIT)  # one whole level number or a listed run 「1、 2」, never cut short
-_REF_FRAME=r'第\s*(?:(?:[（(]\s*(?:%s)\s*[)）]\s*)+|(?:%s))\s*(?:(?:[个道]\s*)?(?:小题|小问|空)|问)'%(_REF_LEVEL,_REF_LEVEL)  # 「第甲小问」「第(丙)问」「第一个空」
+_REF_HAN='㐀-䶿一-鿿豈-﫿'  # Han characters: words, unless numerals
+_REF_NUMERAL='一二三四五六七八九十百千零〇壹贰叁肆伍陆柒捌玖拾佰仟甲乙丙丁戊己庚辛壬癸'
+_REF_DIGIT=r'(?:(?![%s])[^\W_]|[%s])+'%(_REF_HAN,_REF_NUMERAL)  # letters and numbers of any script 「θ」「VIII」「①」, numerals 「甲」
+_REF_LEVEL=r'%s(?:(?:\s*[-－.．、，,/／~～—–和及与或至]\s*|\s+)%s)*'%(_REF_DIGIT,_REF_DIGIT)  # one whole level number or a listed run 「1 / 2」, never cut short
+_REF_MARKS=r'(?:[^\s%s。；;！!？?：:\n]|[%s和及与或至])(?:[^%s。；;！!？?：:\n]|[%s和及与或至])*?'%((_REF_HAN,_REF_NUMERAL)*2)
+_REF_FRAME=r'第\s*%s\s*(?:(?:[个道]\s*)?(?:小题|小问|空)|问)'%_REF_MARKS  # whatever it encloses but words: 「第θ小问」「第1 / 2小问」「第(丙)问」「第一个空」
 # An ordinal frame names a level right after the path or later in the same clause; a number and its level word, either way round, or a
 # bracket or circled mark names one only right after it. A level word with no number before it is plain words.
-_REF_SUB_UNREAD=re.compile(r'\s*(?:[^\s。；;！!？?：:\n][^。；;！!？?：:\n]*?)??(?:%s)|\s*(?:(?:%s)\s*(?:小题|小问)|(?:小题|小问)\s*(?:%s)|[（(]\s*[一二三四五六七八九十]{1,3}\s*[)）]|[①-⓿❶-➓㈠-㈩㊀-㊉]|[（(]\s*(?:[a-zａ-ｚ]|[ivx]{2,4}|[IVX]{1,4}|[ⅰ-ⅻⅠ-Ⅻ])\s*[)）])'%(_REF_FRAME,_REF_LEVEL,_REF_LEVEL))
+_REF_SUB_UNREAD=re.compile(r'\s*(?:%s|(?:%s)\s*(?:小题|小问)|(?:小题|小问)\s*(?:%s)|[（(]\s*[一二三四五六七八九十]{1,3}\s*[)）]|[①-⓿❶-➓㈠-㈩㊀-㊉]|[（(]\s*(?:[a-zａ-ｚ]|[ivx]{2,4}|[IVX]{1,4}|[ⅰ-ⅻⅠ-Ⅻ])\s*[)）])'%(_REF_FRAME,_REF_LEVEL,_REF_LEVEL))
+_REF_SUB_LATER=re.compile(r'\s*[^\s。；;！!？?：:\n][^。；;！!？?：:\n]*?(?:%s)'%_REF_FRAME)
 _REF_SUB_PAGE=re.compile(r'\s*[（(［\[【〔]\s*(?:第\s*\d{1,3}\s*(?:[-－~～至、,，]\s*\d{1,3}\s*)?页|[Pp]\s*\.?\s*\d{1,3}(?:\s*[-－~～]\s*\d{1,3})?)\s*[)）］\]】〕]')
 _REF_SUB_OTHER=re.compile(r'\s*(?:[（(［\[【〔][^()（）［］\[\]【】〔〕\n]*[)）］\]】〕]?|[)）］\]】〕])')
 _REF_SUB_JOIN=re.compile(r'\s*[、，,/／和及与或~～至—–-]\s*')  # a list mark, read only before another level
 _REF_WORDS='(?:(?:教师|老师)(?:原|的)?)?(?:参考答案|参考|答案)|教师|老师'  # 「教师原参考」 is a source word too
 _REF_SOURCE=re.compile(r'^[\s:：]*(?:%s)?\s*(?:均为|都是|均是|都为|为|是)?[\s:：]*'%_REF_WORDS)
+_REF_CLAUSE=r'(?:(?!%s)[^。；;！!？?：:\n])'%_REF_WORDS
+# On a teacher line the answer starts at 「教师参考答案为」 or 「：」, or right after the path when neither comes: a frame later in
+# the clause is read only before them, never inside the answer.
+_REF_SUB_HEAD=re.compile(r'\s*(?!\s)%s+?(?:%s)(?=%s*(?:[:：]|%s))'%(_REF_CLAUSE,_REF_FRAME,_REF_CLAUSE,_REF_WORDS))
 _REF_NOISE=re.compile(r'%s|如下|以下|第\s*\d{1,3}\s*页|[\W_]'%_REF_WORDS)
 
 
@@ -1102,17 +1110,19 @@ def _ref_scope(text,section=None,titles=frozenset(),listed=False):
     return paper,section,_REF_NOISE.sub('',_REF_SECTION.sub('',_REF_PAPER.sub('',text)))
 
 
-def _ref_sub(text,at=0):
+def _ref_sub(text,at=0,teacher=False):
     """The sub-question path named right after a question number, read alike on a label and a teacher line:
     every level's number in order, 「（2）（1）」 and 「(2)第1小问」 alike (2,1); '*' when any level 「第二问」「第VIII小问」「A小问」「②」
     「⑴」「(a)」 is named but unread, else None. A level is one whole number before its level word, never cut short, and plain words
     「第一次问路」 name none. A level number is one whole run of digits, letters, numerals or 甲乙丙丁, a list 「1、 2」 too, so
     「第甲小问的答案」「第甲问」「第1、 2小问」 name a level, as does an ordinal frame 「第…小问/问/空」 later in the same clause;
-    a level word with no number before it, 「是这道选择小题」「有个小问题」, is plain words. A list mark before another level 「(4)、(5)」 names a list. An unread one is never the whole question, and a path is never cut to the levels read:
+    a level word with no number before it, 「是这道选择小题」「有个小问题」, is plain words. Whatever but words an ordinal frame encloses,
+    a mark not read 「第θ小问」 or a list with spaces 「第1 / 2小问」, names a level; on a teacher line nothing in its answer does. A list mark before another level 「(4)、(5)」 names a list. An unread one is never the whole question, and a path is never cut to the levels read:
     「（2）②」 is '*', never 「（2）」. Any other bracket right after it, 「(A)」「【甲】」, long, empty 「()」, never closed or a
     stray closing 「)」, is a level not read, never left over; only a page note 「（第2页）」「【第2页】」 is no level."""
     levels=[];end=at
-    level=lambda at:_REF_SUB.match(text,at) or _REF_SUB_UNREAD.match(text,at) or _REF_SUB_OTHER.match(text,at)
+    later=_REF_SUB_HEAD if teacher else _REF_SUB_LATER
+    level=lambda at:_REF_SUB.match(text,at) or _REF_SUB_UNREAD.match(text,at) or later.match(text,at) or _REF_SUB_OTHER.match(text,at)
     while more:=_REF_SUB_PAGE.match(text,end) or level(end) or (joined:=_REF_SUB_JOIN.match(text,end)) and level(joined.end()) and joined:
         if more.re is not _REF_SUB_PAGE: levels.append(int(next(g for g in more.groups() if g)) if more.re is _REF_SUB else '*')
         end=more.end()
@@ -1135,7 +1145,7 @@ def _teacher_reference_entries(documents,titles=frozenset()):
             here,rest=(None,'' if cover else words) if marks and new is None and words else (paper,title)  # Words on the line qualify its own entries.
             for n,mark in enumerate(marks):
                 tail=line[mark.end():marks[n+1].start() if n+1<len(marks) else len(line)]
-                sub,end=_ref_sub(tail);tail=tail[end:]
+                sub,end=_ref_sub(tail,teacher=True);tail=tail[end:]
                 # 「500。乙卷缺少宽度…本卷本题参考500」 is one value; 「5；乙卷第1题6」 and 「8。虚构乙卷」 ending a line are headings.
                 after=next((found for found in _REF_NAMED.finditer(tail) if not _ref_scope(tail[found.start(1):],section,titles,listed)[2]),None)
                 answer=re.sub(r'[\s，,；;。.．、]+$','',_REF_SOURCE.sub('',tail[:after.start()] if after else tail,count=1))
