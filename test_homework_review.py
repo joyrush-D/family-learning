@@ -437,8 +437,8 @@ def recheck_pending_http_checks(app,upload):
             status,named_out=http('/api/print/homework/draft',named_request)
             assert status==200 and named_out['draft']['continuation']==named_pending,named_out
         # D01/D02 (synthetic): a parent's edit to the complete text is not a verified result, so a later check keeps every
-        # label that check knew, on the same page, after a fill and after a save; an unedited newer check still clears the gap.
-        resolved=dict(question_labels=[first['label'],unknown['label']],items=[first,item(label=unknown['label'])],coverage='甲乙两卷第1题均已判定。')
+        # label that check knew, on the same page, after a fill and after a save; an unedited edit_newer check still clears the gap.
+        edit_resolved=dict(question_labels=[first['label'],unknown['label']],items=[first,item(label=unknown['label'])],coverage='甲乙两卷第1题均已判定。')
         edit_task=app.new_task(dict(child='示例甲',title='虚构家长修改检查后续查',category='homework'))
         edit_answer=upload('synthetic-edited-answer.txt','虚构甲卷第1题B。虚构乙卷第1题B。（修改续查）\n'.encode())
         edit_teacher=upload('synthetic-edited-teacher.txt','（修改续查教师）虚构甲卷第1题B。虚构乙卷第1题B。\n'.encode())
@@ -465,7 +465,7 @@ def recheck_pending_http_checks(app,upload):
         def edit_shape(out): return out['draft']['items'],out['draft']['unknown_items'],out['draft']['continuation']['pending_labels']
         gap=(2,1,[unknown['label']])
         # No earlier gap: the first check is explicit, then the parent marks the known 乙 question undetermined in its text.
-        explicit=edit_check(resolved);assert edit_shape(explicit)==(2,0,[]),edit_shape(explicit)
+        explicit=edit_check(edit_resolved);assert edit_shape(explicit)==(2,0,[]),edit_shape(explicit)
         edited=explicit['draft']['text']+'\n家长修改：虚构乙卷第1题改为未判定，待补查。'
         # Edited and not filled, or filled and unsaved: the same page sends the edited text beside the generated checklist.
         same_page=edit_check(omitted,edit_request|dict(previous_text=edited,previous_continuation=explicit['draft']['continuation']))
@@ -474,15 +474,15 @@ def recheck_pending_http_checks(app,upload):
         edit_saved('synthetic-edited-first',explicit,edited)
         reopened=edit_check(omitted)
         assert edit_shape(reopened)==gap,('a saved edited check keeps its known labels on the default reopen',edit_shape(reopened))
-        # D02: an older gap, then an unedited newer same-scope explicit result saved normally, clears the gap for good.
+        # D02: an older gap, then an unedited edit_newer same-scope explicit result saved normally, clears the gap for good.
         older=edit_check(raw);assert edit_shape(older)==gap,edit_shape(older);edit_saved('synthetic-edited-older-gap',older,older['draft']['text'])
-        newer=edit_check(resolved);assert edit_shape(newer)==(2,0,[]),edit_shape(newer);edit_saved('synthetic-edited-newer-clear',newer,newer['draft']['text'])
+        edit_newer=edit_check(edit_resolved);assert edit_shape(edit_newer)==(2,0,[]),edit_shape(edit_newer);edit_saved('synthetic-edited-newer-clear',edit_newer,edit_newer['draft']['text'])
         cleared=edit_check(omitted);assert edit_shape(cleared)==(1,0,[]),('an unedited verified empty checklist still clears the older gap',edit_shape(cleared))
         # D01 saved route: explicit -> edit -> fill -> save (+same-ID retry) -> default reopen -> save (+retry) -> reopen.
-        second=edit_check(resolved);assert edit_shape(second)==(2,0,[]),edit_shape(second)
+        second=edit_check(edit_resolved);assert edit_shape(second)==(2,0,[]),edit_shape(second)
         edit_saved('synthetic-edited-second',second,second['draft']['text']+'\n家长再次修改：虚构乙卷第1题未判定。')
-        continued=edit_check(omitted);assert edit_shape(continued)==gap,('the default reopen after an edited save keeps the label',edit_shape(continued))
-        edit_saved('synthetic-edited-continued',continued,continued['draft']['text'])
+        edit_continued=edit_check(omitted);assert edit_shape(edit_continued)==gap,('the default reopen after an edited save keeps the label',edit_shape(edit_continued))
+        edit_saved('synthetic-edited-continued',edit_continued,edit_continued['draft']['text'])
         final=edit_check(omitted);assert edit_shape(final)==gap,edit_shape(final)
         for bad in (dict(known_labels=['bad\x00label']),dict(text_sha256='0'*63)):
             with patch.object(family_llm,'_chat_json',return_value=omitted) as model:
