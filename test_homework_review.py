@@ -1002,6 +1002,13 @@ def nested_sub_checks():
         got=scoped(case,label,teacher,'C',0,'教师参考：C',q6)
         if got!=(label,'C',expected,judgment,'',int(judgment=='unknown'),0): bad.append((case,got))
     assert not bad,bad
+    # A classifier 「道」 or a listed run 「1、2」 inside the frame still names a level; a dish 「第一道菜」 is plain words.
+    bad=[]
+    for case,label,expected,judgment in (('classifier','虚构榆溪卷第9题(4)第一道小题','','unknown'),('listed','虚构榆溪卷第9题(4)第1、2小问','','unknown'),
+                                         ('words-dish','虚构榆溪卷第9题(4) 第一道菜很香','教师参考：C','correct')):
+        got=scoped(case,label,elm,'C',0,'教师参考：C',q6)
+        if got!=(label,'C',expected,judgment,'',int(judgment=='unknown'),0): bad.append((case,got))
+    assert not bad,bad
 
 def teacher_note_checks():
     """A paper or 大题 named inside a teacher note is part of that value; only a heading starts a new scope."""
