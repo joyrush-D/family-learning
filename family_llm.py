@@ -1096,11 +1096,14 @@ def _ref_scope(text,section=None,titles=frozenset(),listed=False):
 
 def _ref_sub(text,at=0):
     """The sub-question named right after a question number, read alike on a label and a teacher line:
-    its number, '*' when 「第二问」「②」 is named but unread, else None. An unread one is never the whole question."""
-    sub=_REF_SUB.match(text,at)
-    if sub: return int(next(g for g in sub.groups() if g)),sub.end()
-    unread=_REF_SUB_UNREAD.match(text,at)
-    return ('*',unread.end()) if unread else (None,at)
+    its number, '*' when 「第二问」「②」 is named but unread, else None. An unread one is never the whole question.
+    Every level right after it is the same scope: 「（2）②」 is read only in part, so it is '*', never 「（2）」."""
+    sub=_REF_SUB.match(text,at);more=sub or _REF_SUB_UNREAD.match(text,at)
+    if not more: return None,at
+    while more:
+        end=more.end();more=_REF_SUB.match(text,end) or _REF_SUB_UNREAD.match(text,end)
+        if more: sub=None
+    return (int(next(g for g in sub.groups() if g)) if sub else '*'),end
 
 
 def _teacher_reference_entries(documents,titles=frozenset()):
