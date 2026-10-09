@@ -437,7 +437,7 @@ def recheck_pending_http_checks(app,upload):
             status,named_out=http('/api/print/homework/draft',named_request)
             assert status==200 and named_out['draft']['continuation']==named_pending,named_out
         # D01/D02 (synthetic): a parent's edit to the complete text is not a verified result, so a later check keeps every
-        # label that check knew, on the same page, after a fill and after a save; an unedited edit_newer check still clears the gap.
+        # label that check knew, on the same page, after a fill and after a save; an unedited newer check still clears the gap.
         edit_resolved=dict(question_labels=[first['label'],unknown['label']],items=[first,item(label=unknown['label'])],coverage='甲乙两卷第1题均已判定。')
         edit_task=app.new_task(dict(child='示例甲',title='虚构家长修改检查后续查',category='homework'))
         edit_answer=upload('synthetic-edited-answer.txt','虚构甲卷第1题B。虚构乙卷第1题B。（修改续查）\n'.encode())
@@ -474,7 +474,7 @@ def recheck_pending_http_checks(app,upload):
         edit_saved('synthetic-edited-first',explicit,edited)
         reopened=edit_check(omitted)
         assert edit_shape(reopened)==gap,('a saved edited check keeps its known labels on the default reopen',edit_shape(reopened))
-        # D02: an older gap, then an unedited edit_newer same-scope explicit result saved normally, clears the gap for good.
+        # D02: an older gap, then an unedited newer same-scope explicit result saved normally, clears the gap for good.
         older=edit_check(raw);assert edit_shape(older)==gap,edit_shape(older);edit_saved('synthetic-edited-older-gap',older,older['draft']['text'])
         edit_newer=edit_check(edit_resolved);assert edit_shape(edit_newer)==(2,0,[]),edit_shape(edit_newer);edit_saved('synthetic-edited-newer-clear',edit_newer,edit_newer['draft']['text'])
         cleared=edit_check(omitted);assert edit_shape(cleared)==(1,0,[]),('an unedited verified empty checklist still clears the older gap',edit_shape(cleared))
