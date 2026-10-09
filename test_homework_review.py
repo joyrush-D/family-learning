@@ -932,6 +932,38 @@ def nested_sub_checks():
             reference_documents=[dict(name='synthetic-page-teacher.txt',text='试卷名称：虚构青岸卷\n第7题(3)：B')])
     q,=result['questions']
     assert (q['answer'],q['judgment'])==('教师参考：B','correct') and result['unknown_items']==0,q
+    # Disclosed full synthetic F03-F08 (repair4): a long, empty or unclosed bracket after the path is a level not read, never its parent's;
+    # a teacher image may answer the very scope its text names without an answer, but no image settles a parent, an unread level or an unnamed paper.
+    def scoped(case,label,teacher,student,images,answer,question):
+        paper=label.split('第',1)[0]
+        raw=dict(items=[dict(label=label,question=question,student_answer=student,answer=answer,judgment='correct',question_kind='objective',
+            error_reason='',possible_cause='',steps='',uncertainty='')],question_labels=[label],coverage='仅核这一虚构题，其余未核。')
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            result=family_llm.homework_reference_draft([],review=True,
+                question_documents=[dict(name='synthetic-%s-answer.txt'%case,text='%s\n%s %s 孩子作答%s。'%(paper,label,question,student))],
+                reference_documents=[dict(name='synthetic-%s-teacher.txt'%case,text=teacher)],reference_images=[dict(mime='image/png',data=png())]*images)
+            assert model.call_count==1
+        q,=result['questions']
+        return q['label'],q['student_answer'],q['answer'],q['judgment'],q['error_reason']+q['possible_cause']+q['steps'],result['unknown_items'],result['wrong_items']
+    reed,stone,willow,sums='虚构芦溪卷 第7题(3)：C','虚构石径卷 第9题（2）：D','试卷名称：虚构柳沙卷\n第11题（1）','2+3=? A.2 B.3 C.4 D.5'
+    bad=[]
+    for case,label,teacher,student,images,answer,question,expected in (
+            ('F03','虚构芦溪卷第7题(3)(uvwxyzabcdefghijklmnoq)',reed,'C',0,'教师参考：C','全虚构选择题。',''),
+            ('F04','虚构石径卷第9题（2）（zyxwvutsrqponmlkjihgf）',stone,'D',0,'教师参考：D','全虚构选择题。',''),
+            ('unclosed','虚构芦溪卷第7题(3)(uvw',reed,'C',0,'教师参考：C','全虚构选择题。',''),
+            ('empty','虚构芦溪卷第7题(3)()',reed,'C',0,'教师参考：C','全虚构选择题。',''),
+            ('empty-fullwidth','虚构石径卷第9题（2）（）',stone,'D',0,'教师参考：D','全虚构选择题。',''),
+            ('F05','虚构芦溪卷第7题(3)(1)','虚构芦溪卷 第7题(3)(1)：C','C',0,'教师参考：C','全虚构选择题。','教师参考：C'),
+            ('F06','虚构芦溪卷第7题(3)（第2页）',reed,'C',0,'教师参考：C','全虚构选择题。','教师参考：C'),
+            ('F07','虚构柳沙卷第11题（1）',willow,'D',1,'教师参考：D',sums,'教师参考：D'),
+            ('F08','虚构柳沙卷第11题（1）（A）',willow,'D',1,'教师参考：D','全虚构选择小题。',''),
+            ('F07-no-image','虚构柳沙卷第11题（1）',willow,'D',0,'教师参考：D',sums,''),
+            ('F07-image-own','虚构柳沙卷第11题（1）',willow,'D',1,'AI自行推导：D',sums,''),
+            ('F07-image-parent','虚构柳沙卷第11题',willow,'D',1,'教师参考：D',sums,''),
+            ('F07-image-paper','虚构柳沙卷第11题（1）','第11题（1）','D',1,'教师参考：D',sums,'')):
+        got=scoped(case,label,teacher,student,images,answer,question)
+        if got!=(label,student,expected,'correct' if expected else 'unknown','',int(not expected),0): bad.append((case,got))
+    assert not bad,bad
 
 def teacher_note_checks():
     """A paper or 大题 named inside a teacher note is part of that value; only a heading starts a new scope."""
