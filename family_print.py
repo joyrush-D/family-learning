@@ -116,15 +116,32 @@ def _read_file(path, limit):
 
 
 def review_continuation(value):
-    """Bounded unresolved labels are a checklist, never an answer or a grade."""
-    if (not isinstance(value,dict) or set(value)!={'scope_sha256','pending_labels'}
-            or not isinstance(value['scope_sha256'],str) or not re.fullmatch('[a-f0-9]{64}',value['scope_sha256'])
-            or not isinstance(value['pending_labels'],list) or len(value['pending_labels'])>25
-            or any(not isinstance(label,str) or not label.strip() or len(label)>80
-                   or any(ord(ch)<32 or ord(ch)==127 for ch in label) for label in value['pending_labels'])
-            or len({''.join(label.split()) for label in value['pending_labels']})!=len(value['pending_labels'])):
+    """Bounded unresolved labels are a checklist, never an answer or a grade. A check also names every label it knew and
+    its generated text's hash, so a later check can tell that a parent rewrote that text."""
+    if (not isinstance(value,dict) or not {'scope_sha256','pending_labels'}<=set(value)<={'scope_sha256','pending_labels','known_labels','text_sha256'}
+            or ('known_labels' in value)!=('text_sha256' in value)
+            or any(not isinstance(value[key],str) or not re.fullmatch('[a-f0-9]{64}',value[key]) for key in ('scope_sha256','text_sha256') if key in value)
+            or any(not isinstance(labels,list) or len(labels)>25
+                   or any(not isinstance(label,str) or not label.strip() or len(label)>80
+                          or any(ord(ch)<32 or ord(ch)==127 for ch in label) for label in labels)
+                   or len({''.join(label.split()) for label in labels})!=len(labels)
+                   for labels in (value[key] for key in ('pending_labels','known_labels') if key in value))):
         raise PrintError('上一轮待补题号或原件范围无法核对，请重新打开检查')
     return value
+
+
+def review_text_sha256(text):
+    """The page trims a check's text and keeps LF line ends, so unchanged words hash the same after a resend or a save."""
+    return hashlib.sha256(text.replace('\r\n','\n').replace('\r','\n').strip().encode()).hexdigest()
+
+
+def review_pending(continuation,text):
+    """A parent's edit to the generated text is not a verified result, so every label that check knew is checked again.
+    Only labels continue and no wording is read as resolved; an unedited or older check keeps its own checklist."""
+    pending=continuation['pending_labels']
+    if 'text_sha256' not in continuation or review_text_sha256(text)==continuation['text_sha256']: return pending
+    known={''.join(label.split()) for label in continuation['known_labels']}
+    return continuation['known_labels']+[label for label in pending if ''.join(label.split()) not in known]
 
 
 def review_text(value, *, saved=False):
@@ -533,7 +550,7 @@ class PrintStore:
                 archived=False
                 if text is not None:
                     parsed=review_text(text,saved=item['role']=='previous' and allowed[item['source']['id']].get('origin')=='review_result')
-                    if 'continuation' in parsed: continuations.append((item['binding'][0],parsed['continuation']))
+                    if 'continuation' in parsed: continuations.append((item['binding'][0],parsed['continuation']|dict(pending_labels=review_pending(parsed['continuation'],parsed['text']))))
                     text=parsed['text'];archived=parsed['has_archived']
                     target=question_documents if item['role']=='question' else previous_documents if item['role']=='previous' else documents
                     target.append(dict(name=item['name'],text=text))
