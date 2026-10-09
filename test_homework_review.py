@@ -436,6 +436,51 @@ def recheck_pending_http_checks(app,upload):
         server.shutdown();server.server_close();worker.join(timeout=3)
 
 
+def scope_handler_checks(app,upload):
+    """Disclosed G03/G04 through real HTTP draft, save, same-key retry and reopen: an unread level stays pending, never the parent's answer."""
+    from http.client import HTTPConnection
+    import threading
+    server=app.ThreadingHTTPServer(('127.0.0.1',0),app.Handler)
+    worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
+    def http(method,path,payload=None):
+        client=HTTPConnection('127.0.0.1',server.server_port,timeout=5)
+        try:
+            client.request(method,path,json.dumps(payload) if payload is not None else None,{'Content-Type':'application/json','X-Family-Token':app.TOKEN})
+            response=client.getresponse();return response.status,json.loads(response.read())
+        finally: client.close()
+    try:
+        for case,label in (('G03','虚构榆溪卷第9题(4)第甲小问'),('G04','虚构榆溪卷第9题(4)第1、 2小问')):
+            task=app.new_task(dict(child='示例甲',title='虚构榆溪卷'+case,category='homework'))
+            answer=upload('synthetic-%s-answer.txt'%case,('虚构榆溪卷\n%s 全虚构选择题。孩子作答C。'%label).encode())
+            teacher=upload('synthetic-%s-teacher.txt'%case,'试卷名称：虚构榆溪卷\n第9题(4)：C。'.encode())
+            original=app.save_task_feedback(dict(task_id=task['id'],child='示例甲',day='2026-10-09',
+                request_key='synthetic-%s-original'%case,note='虚构榆溪卷第9题。',attachments=[answer,teacher]))
+            source=lambda ident:dict(type='upload',id=ident)
+            request=dict(purpose='review',task_id=task['id'],record_id=original['record_id'],expected_created=original['feedback']['created'],
+                question_sources=[source(answer)],reference_sources=[source(teacher)])
+            raw=dict(items=[item(label=label,question='全虚构选择题。',student_answer='C',answer='教师参考：C')],
+                coverage='仅核这一虚构题，其余未核。',question_labels=[label])
+            with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+                status,result=http('POST','/api/print/homework/draft',request)
+                assert status==200 and model.call_count==1,(case,status,result)
+            d=result['draft'];q,=d['questions']
+            assert (q['label'],q['student_answer'],q['answer'],q['judgment'],d['unknown_items'],d['wrong_items'])==(label,'C','','unknown',1,0),(case,q)
+            assert label in d['text'] and '教师参考：C' not in d['text'],(case,d['text'])
+            ident=upload('作业批改参考-%s.txt'%original['record_id'],d['text'].encode())
+            feedback=dict(task_id=task['id'],child='示例甲',day='2026-10-09',request_key='synthetic-%s-saved'%case,
+                note='虚构家长核对：本题待补依据。',attachments=[answer,teacher,ident],review_basis=result['review_basis'],
+                **({'comparison_note':d['comparison']} if d.get('comparison') else {}))
+            with patch.object(family_llm,'_chat_json') as model:
+                status,saved=http('POST','/api/task/feedback',feedback);assert status==200,(case,saved)
+                status,retry=http('POST','/api/task/feedback',feedback)
+                assert status==200 and retry['replayed'] and retry['record_id']==saved['record_id'],(case,retry)
+                status,view=http('GET','/api/print/homework/saved-review?task_id='+task['id']+'&record_id='+str(saved['record_id']))
+                assert status==200 and view['original_record_id']==original['record_id'] and view['text']==d['text'],(case,view)
+                assert label in view['text'] and model.call_count==0,'save, same-key retry and reopen keep the pending label without a model'
+    finally:
+        server.shutdown();server.server_close();worker.join(timeout=3)
+
+
 def summary_http_checks(app,upload):
     """Real temporary HTTP dispatch, final-source guards, save/retry and original-answer reopen."""
     from http.client import HTTPConnection
@@ -1007,6 +1052,22 @@ def nested_sub_checks():
     for case,label,expected,judgment in (('classifier','虚构榆溪卷第9题(4)第一道小题','','unknown'),('listed','虚构榆溪卷第9题(4)第1、2小问','','unknown'),
                                          ('words-dish','虚构榆溪卷第9题(4) 第一道菜很香','教师参考：C','correct')):
         got=scoped(case,label,elm,'C',0,'教师参考：C',q6)
+        if got!=(label,'C',expected,judgment,'',int(judgment=='unknown'),0): bad.append((case,got))
+    assert not bad,bad
+    # Disclosed full synthetic repair8 Handler cases G03/G04: an explicit level word 「小问」「小题」 closing what follows the path names a
+    # level however its number is written, 「第甲小问」「第1、 2小问」, and a list mark before another level names a list; neither is ever
+    # the parent's answer. A level word inside plain words 「小问题」, a list mark before plain words or 「小题」 restating (4) is no level.
+    bad=[]
+    for case,label,teacher,expected,judgment in (
+            ('G03','虚构榆溪卷第9题(4)第甲小问',elm,'','unknown'),('G04','虚构榆溪卷第9题(4)第1、 2小问',elm,'','unknown'),
+            ('named-bare','虚构榆溪卷第9题(4)甲小问',elm,'','unknown'),('named-bracketed','虚构榆溪卷第9题(4)第(甲)小问',elm,'','unknown'),
+            ('named-comma','虚构榆溪卷第9题(4)第1，2小问',elm,'','unknown'),
+            ('list-mark','虚构榆溪卷第9题(4)、(5)',elm,'','unknown'),('list-word','虚构榆溪卷第9题(4)和(5)',elm,'','unknown'),
+            ('teacher-named','虚构榆溪卷第9题(4)','试卷名称：虚构榆溪卷\n第9题(4)第甲小问：C。','','unknown'),
+            ('words-problem','虚构榆溪卷第9题(4) 有个小问题',elm,'教师参考：C','correct'),
+            ('words-after-list','虚构榆溪卷第9题(4)、第一次问路',elm,'教师参考：C','correct'),
+            ('word-restated','虚构榆溪卷第9题(4)小题',elm,'教师参考：C','correct')):
+        got=scoped(case,label,teacher,'C',0,'教师参考：C',q6)
         if got!=(label,'C',expected,judgment,'',int(judgment=='unknown'),0): bad.append((case,got))
     assert not bad,bad
 
@@ -1687,6 +1748,7 @@ def run():
                     assert model.call_count==0
             recheck_pending_http_checks(app,upload)
             summary_http_checks(app,upload)
+            scope_handler_checks(app,upload)
             review_origin_http_checks(app,upload)
     print('homework review synthetic checks passed (%d output contract cases)'%contract_cases)
 
