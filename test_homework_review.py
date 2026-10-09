@@ -355,6 +355,12 @@ def recheck_pending_http_checks(app,upload):
             reopened=app.homework_saved_review(task['id'],formal['record_id'])
             assert reopened['text']==d['text'] and reopened['continuation']==pending and reopened['has_archived']
             assert model.call_count==0
+        # Default reopen: only the same answer and teacher reference, no saved AI text selected; the saved same-scope gap continues.
+        with patch.object(family_llm,'_chat_json',return_value=omitted):
+            status,out=http('/api/print/homework/draft',request)
+            assert status==200 and out['draft']['items']==2 and out['draft']['unknown_items']==1,'saved same-scope pending label lost on default reopen'
+            q=out['draft']['questions'][1];assert out['draft']['continuation']==pending and q['label']==unknown['label'] and '上一轮' in q['uncertainty']
+            assert all(not q[k] for k in ('student_answer','answer','error_reason')),'only the label continues, never an old answer or judgment'
         third=request|dict(previous_sources=[dict(type='upload',id=prior)])
         with patch.object(family_llm,'_chat_json',return_value=omitted):
             status,rechecked=http('/api/print/homework/draft',third)
@@ -366,6 +372,16 @@ def recheck_pending_http_checks(app,upload):
             assert status==200 and finished['draft']['continuation']['pending_labels']==[],finished
         status,formal,_,newer=saved(finished,'synthetic-pending-resolved')
         assert status==200,formal
+        with patch.object(family_llm,'_chat_json',return_value=omitted):
+            status,out=http('/api/print/homework/draft',request)
+            assert status==200 and out['draft']['unknown_items']==0,'a newer same-scope saved check must not revive the older gap on default reopen'
+        path=Path(app.DATA)/'uploads'/newer;kept=path.read_bytes()
+        try:
+            path.write_bytes(kept+b'x')
+            with patch.object(family_llm,'_chat_json',return_value=omitted) as model:
+                status,out=http('/api/print/homework/draft',request)
+                assert status==409 and model.call_count==0,'an unverifiable newest saved check must not become a gap-free draft'
+        finally: path.write_bytes(kept)
         with patch.object(family_llm,'_chat_json',return_value=omitted):
             for previous in ([prior,newer],[newer,prior]):
                 status,out=http('/api/print/homework/draft',request|dict(previous_sources=[dict(type='upload',id=i) for i in previous]))
