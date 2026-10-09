@@ -113,6 +113,15 @@ def deadlines(text,published):
             try:value=(dt.date.fromisoformat(published)+dt.timedelta(days=offset)).isoformat()
             except OverflowError:pass
         if value:candidates.add(value)
+    # A dated school event the family is asked to attend (家长会定于10月15日举行，请家长参加) is that
+    # item's arranged day, not a completion deadline. One sentence, one date, a held event and a direct
+    # request to attend; a cancelled, past, reviewed or optional event or a second day stays out.
+    for sentence in re.split(r'[。；;\n]',text):
+        days=re.findall(r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}|今天|今日|今晚|明天|明日|明早|明晚|后天|昨天|前天|(?:周|星期|礼拜)[一二三四五六日天]',sentence)
+        if (len(days)==1 and date(days[0]) and re.search(r'\d{4}-\d{2}-\d{2}[^，,]{0,20}?(?:举行|召开|举办)',sentence)
+                and re.search(r'请(?:各位)?(?:家长|学生|同学们?|孩子们?)(?:准时|按时|届时|务必)?(?:参加|出席|到场|参会)(?!安排|通知|方式|时间|人员|名单)',sentence)
+                and not re.search(r'取消|延期|改期|推迟|暂停|原定|已于|已经|回顾|无需|不必|不用|无须',sentence)):
+            candidates.add(days[0])
     return candidates
 
 
