@@ -1164,9 +1164,12 @@ def _ref_label_paper(label,titles=frozenset()):
 
 
 def _ref_unspaced(value):
-    """Spacing is layout, except between letters where it parts words: 「a lot」 is never 「alot」, nor 「café noir」 「cafénoir」.
-    A letter ends after the combining marks written on it; wide East Asian forms do not part words by spacing, so theirs stays layout."""
-    def word(ch):return ch.isalpha() and unicodedata.east_asian_width(ch) not in ('W','F','H')
+    """Spacing is layout, except between letters where it parts words: 「a lot」 is never 「alot」, nor 「café noir」 「cafénoir」, nor 「ｉｃｅ ｃｒｅａｍ」 「ｉｃｅｃｒｅａｍ」.
+    A letter ends after the combining marks written on it; a fullwidth Latin letter is still Latin, while other wide East Asian forms do not part words by spacing, so theirs stays layout."""
+    def word(ch):  # Classify only: 「ｉ」 is read as the 「i」 it widens; the value itself is never rewritten.
+        wide=unicodedata.decomposition(ch)
+        if wide.startswith('<wide> '):ch=chr(int(wide.split()[1],16))
+        return ch.isalpha() and unicodedata.east_asian_width(ch) not in ('W','F','H')
     def kept(m):
         end=m.start()
         while end and unicodedata.category(value[end-1])[0]=='M':end-=1
