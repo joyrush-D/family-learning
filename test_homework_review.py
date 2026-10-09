@@ -864,9 +864,9 @@ def word_boundary_checks():
 
 def nested_sub_checks():
     """D01/D02: a sub-question is read to its last level; the teacher's 「第4题（2）」 answers 「（2）」 only, never 「（2）②」."""
-    def draft(case,sub,teacher):
+    def draft(case,sub,teacher,answer='教师参考：B'):
         label='虚构松丘卷第4题'+sub
-        raw=dict(items=[dict(label=label,question='全虚构选择题',student_answer='B',answer='教师参考：B',judgment='correct',question_kind='objective',
+        raw=dict(items=[dict(label=label,question='全虚构选择题',student_answer='B',answer=answer,judgment='correct',question_kind='objective',
             error_reason='',possible_cause='',steps='',uncertainty='')],coverage='只核本次全虚构小题。',question_labels=[label])
         with patch.object(family_llm,'_chat_json',return_value=raw) as model:
             result=family_llm.homework_reference_draft([],review=True,
@@ -897,6 +897,15 @@ def nested_sub_checks():
         q,=result['questions']
         assert (q['label'],q['student_answer'],q['answer'],q['judgment'],q['error_reason'])==(label,student,'教师参考：B',judgment,reason),(case,q)
         assert result['unknown_items']==0 and result['wrong_items']==(judgment=='incorrect'),(case,result)
+    # The same whole path pairs in any read notation; a parent, a deeper path, an unread level 「②」「(a)」 or another branch never does,
+    # whichever source the model claims: 「AI自行推导」 is not kept beside a teacher answer whose scope is only a prefix of this one.
+    q,result=draft('full-notation','（2）第1小问','第4题(2)(1) B。','AI自行推导：B')
+    assert q['judgment']=='correct' and q['answer']=='教师参考：B' and result['unknown_items']==0,('full-notation',q)
+    for case,sub,teacher,answer in (('full-parent','(2)(1)','第4题(2) B。','AI自行推导：B'),('full-deeper','(2)','第4题（2）（1） B。','AI自行推导：B'),
+                                    ('full-unread-level','(2)(1)','第4题(2)② B。','教师参考：B'),('letter-level','(2)(a)','第4题(2) B。','AI自行推导：B'),
+                                    ('full-branch','(2)(1)','第4题(2)(2) B。','教师参考：B')):
+        q,result=draft(case,sub,teacher,answer)
+        assert q['judgment']=='unknown' and q['answer']=='' and result['unknown_items']==1,(case,q)
 
 
 def teacher_note_checks():

@@ -1062,7 +1062,7 @@ _REF_SECTION=re.compile(r'第\s*(\d{1,2}|[一二三四五六七八九十]{1,3})\
 _REF_QUESTION=re.compile(r'第\s*(\d{1,3})\s*题|(?<![\d.．])(\d{1,3})\s*题|(?<![A-Za-z])[Qq]\s*(\d{1,3})(?!\d)|(?:^|(?<=[\s、，,；;]))(\d{1,3})\s*[.．、](?!\d)')
 _REF_NAMED=re.compile(r'[\s，,；;。]((?:%s)|第\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*(?:大题|部分)|[一二三四五六七八九十]{1,3}\s*[、.．])'%_REF_PAPER.pattern)
 _REF_SUB=re.compile(r'\s*(?:[（(]\s*(\d{1,2})\s*[)）]|第\s*(\d{1,2})\s*(?:小题|小?问))')
-_REF_SUB_UNREAD=re.compile(r'\s*(?:第\s*[\d一二三四五六七八九十]{1,3}\s*(?:小题|小?问|空)|[（(]\s*[一二三四五六七八九十]{1,3}\s*[)）]|[①-⑳])')
+_REF_SUB_UNREAD=re.compile(r'\s*(?:第\s*[\d一二三四五六七八九十]{1,3}\s*(?:小题|小?问|空)|[（(]\s*[一二三四五六七八九十]{1,3}\s*[)）]|[①-⑳]|[（(]\s*(?:[a-zａ-ｚ]|[ivx]{2,4}|[IVX]{1,4}|[ⅰ-ⅻⅠ-Ⅻ])\s*[)）])')
 _REF_WORDS='(?:(?:教师|老师)(?:原|的)?)?(?:参考答案|参考|答案)|教师|老师'  # 「教师原参考」 is a source word too
 _REF_SOURCE=re.compile(r'^[\s:：]*(?:%s)?\s*(?:均为|都是|均是|都为|为|是)?[\s:：]*'%_REF_WORDS)
 _REF_NOISE=re.compile(r'%s|如下|以下|第\s*\d{1,3}\s*页|[\W_]'%_REF_WORDS)
@@ -1095,15 +1095,14 @@ def _ref_scope(text,section=None,titles=frozenset(),listed=False):
 
 
 def _ref_sub(text,at=0):
-    """The sub-question named right after a question number, read alike on a label and a teacher line:
-    its number, '*' when 「第二问」「②」 is named but unread, else None. An unread one is never the whole question.
-    Every level right after it is the same scope: 「（2）②」 is read only in part, so it is '*', never 「（2）」."""
-    sub=_REF_SUB.match(text,at);more=sub or _REF_SUB_UNREAD.match(text,at)
-    if not more: return None,at
-    while more:
-        end=more.end();more=_REF_SUB.match(text,end) or _REF_SUB_UNREAD.match(text,end)
-        if more: sub=None
-    return (int(next(g for g in sub.groups() if g)) if sub else '*'),end
+    """The sub-question path named right after a question number, read alike on a label and a teacher line:
+    every level's number in order, 「（2）（1）」 and 「(2)第1小问」 alike (2,1); '*' when any level 「第二问」「②」「(a)」 is
+    named but unread, else None. An unread one is never the whole question, and a path is never cut to the levels read:
+    「（2）②」 is '*', never 「（2）」."""
+    levels=[];end=at
+    while more:=_REF_SUB.match(text,end) or _REF_SUB_UNREAD.match(text,end):
+        levels.append(int(next(g for g in more.groups() if g)) if more.re is _REF_SUB else '*');end=more.end()
+    return (None if not levels else '*' if '*' in levels else tuple(levels)),end
 
 
 def _teacher_reference_entries(documents,titles=frozenset()):
@@ -1152,8 +1151,8 @@ def _ref_relation(label,entry,titles=frozenset()):
     unsure=False
     for n,(mine,theirs) in enumerate(((paper,entry['paper']),(section,entry['section']),(sub,entry['sub']))):
         if mine is None and theirs is None: continue
-        if mine is None or theirs is None or '*' in (mine,theirs):
-            if n==2: part=True
+        if mine is None or theirs is None or '*' in (mine,theirs) or n==2 and mine!=theirs and mine[:len(theirs)]==theirs[:len(mine)]:
+            if n==2: part=True  # 「（2）」 is the parent of 「（2）（1）」, never its answer; 「（2）（2）」 is another branch
             else: unsure=True
         elif mine!=theirs: return 'other'  # whole names only: 「青树北窗卷」 is not 「北窗卷」
     return 'unsure' if unsure else 'part' if part else 'same'
