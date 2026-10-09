@@ -987,6 +987,21 @@ def nested_sub_checks():
         got=scoped(case,label,teacher,student,images,'教师参考：'+student,q6)
         if got!=(label,student,expected,judgment,'',int(judgment=='unknown'),0): bad.append((case,got))
     assert not bad,bad
+    # Disclosed full synthetic repair7 Handler cases G01/G02: a level names one whole number before its level word, so 「第VIII小问」 is
+    # never cut back to 「(4)」, while plain words after the path, 「第一次问路」, are no level and the same path still compares.
+    bad=[]
+    for case,label,teacher,expected,judgment in (
+            ('G01','虚构榆溪卷第9题(4)第VIII小问',elm,'','unknown'),('G02','虚构榆溪卷第9题(4) 第一次问路',elm,'教师参考：C','correct'),
+            ('long-word-mark','虚构榆溪卷第9题(4)VIII小问',elm,'','unknown'),('long-sub','虚构榆溪卷第9题(4)第XIII小题',elm,'','unknown'),
+            ('long-bracketed','虚构榆溪卷第9题(4)第(VIII)小问',elm,'','unknown'),
+            ('teacher-long','虚构榆溪卷第9题(4)','试卷名称：虚构榆溪卷\n第9题(4)第VIII小问：C。','','unknown'),
+            ('words-day','虚构榆溪卷第9题(4)第二天问老师',elm,'教师参考：C','correct'),
+            ('words-person','虚构榆溪卷第9题(4) 第一个问路的人',elm,'教师参考：C','correct'),
+            ('blank-word','虚构榆溪卷第9题(4)第一个空',elm,'','unknown'),('ask-word','虚构榆溪卷第9题(4)第二问',elm,'','unknown'),
+            ('mark-long-after','虚构榆溪卷第9题(4)小问VIII',elm,'','unknown'),('joined','虚构榆溪卷第9题(4)第4-1小问',elm,'','unknown')):
+        got=scoped(case,label,teacher,'C',0,'教师参考：C',q6)
+        if got!=(label,'C',expected,judgment,'',int(judgment=='unknown'),0): bad.append((case,got))
+    assert not bad,bad
 
 def teacher_note_checks():
     """A paper or 大题 named inside a teacher note is part of that value; only a heading starts a new scope."""
