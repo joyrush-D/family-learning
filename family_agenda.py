@@ -132,9 +132,29 @@ _ATTEND_REQUEST=r'(?:请|务必|必须|须|需)(?:各位|全体)?(?:家长|学�
 _EVENT_STATE=(r'取消|延期|改期|推迟|暂停|停办|改为|改到|改至|原定|已于|已经|已举行|已召开|已结束|回顾|暂定|初定|拟(?:于|在|定)|待定|待确定|尚未确定|未定'
               r'|另行(?:通知|告知|安排)|(?:后续|稍后|随后|再行|届时)(?:通知|告知|公布)|待通知'
               r'|自愿|自由|可选|可以?不|不必|无需|无须|不用|不需要?|不要求|不强制|非强制|非必须|不作(?:统一|强制)?要求|酌情|视情况|仅供参考|选择性')
-# What is left of a clause about this event, its time or attending it; 座位、打印材料、带材料 are other objects.
-_EVENT_SELF=(r'本次|此次|这次|该次?|届时|如有(?:变动|变化|调整)|若有(?:变动|变化|调整)|具体|准确|确切|详细|时间|日期|安排|的|将|会|再|均|都|也|是|为'
-             r'|请|各位|全体|家长们?|学生们?|同学们?|孩子们?|准时|按时|务必|必须|须|需|参加|出席|到场|参会|会议|活动|开会|大会|集会|运动|典礼|仪式|讲座|开放日|演出|比赛|\s')
+# A state word taking what follows as its object: 取消打印材料 cancels the printing, 可不参加 the attending.
+_EVENT_STATE_OBJECT=r'取消|暂停|停办|推迟|延期|改期|改为|改到|改至|可以?不|不必|无需|无须|不用|不需要?|不要求|不强制'
+
+
+def _event_mention(event):
+    """What still means this held event in another clause: its own name (家长会定于… → 家长会), attending or holding it, or its time."""
+    cut=r'(?:'+_EVENT_DAY+r')|[\d\s：:（）()]|(?:定|将|拟|计划|安排|暂定|初定|原定)?(?:于|在)|暂定|初定|原定|举行|召开|举办|不是|并非|不'
+    names=[p for p in re.split(cut,event) if len(p)>=2][:1]+re.findall(r'(?:举行|召开|举办)([^\d\s：:（）()]{2,})',event)
+    own=sorted({name[i:] for name in names for i in range(len(name)-1)},key=len,reverse=True)
+    return '|'.join([re.escape(x) for x in own]+[r'参加|出席|到场|参会|举行|召开|举办|活动|会议|^的?(?:时间|日期)|(?:具体|准确|确切|详细)的?(?:时间|日期)'])
+
+
+def _modifies_event(part,mention):
+    """A state word modifies the event when its own object, else the clause it predicates, still means the event.
+
+    参加由家长自愿决定、本次家长会已取消 are about the event; 取消打印材料、座位可选、无需带材料 are about another object;
+    a clause holding nothing but the state (不作统一要求) can only be about the event.
+    """
+    for m in re.finditer(_EVENT_STATE,part):
+        after=re.sub(r'[\s、：:]','',part[m.end():])
+        scope=after if after and re.fullmatch(_EVENT_STATE_OBJECT,m[0]) else re.sub(r'[\s、：:]','',part[:m.start()]+part[m.end():])
+        if not scope or re.search(mention,scope):return True
+    return False
 
 
 def event_days(text,published):
@@ -144,8 +164,8 @@ def event_days(text,published):
     holding the event and a direct request to attend (明日 grounds on the sending day; 务必/须参加 is as direct as
     请参加); ！？ end a sentence, so a notice's own date never reaches a later event. A negation, state or option counts
     on what it modifies: the event's own clause (不是10月15日举行、暂定、原定…取消、按10月9日通知), the request (自愿参加)
-    or a clause with no other object (参加自愿、不作统一要求、准确时间后续告知). 座位可选、取消打印材料、无需带材料 keep
-    the meeting; a past day stays out.
+    or another clause whose state's object or subject is still the event (本次家长会已取消、参加由家长自愿决定、准确时间后续告知)
+    or which states nothing else (不作统一要求). 座位可选、取消打印材料、无需带材料 keep the meeting; a past day stays out.
     """
     anchor=date(published)
     text=_relative_weekday(_grounded_text(text,anchor),anchor)
@@ -153,14 +173,16 @@ def event_days(text,published):
     found=set()
     for sentence in re.split(r'[。；;！!？?\n]',text):
         values={date(d) or (anchor and d in relative and (dt.date.fromisoformat(anchor)+dt.timedelta(days=relative[d])).isoformat()) or '' for d in re.findall(_DAY_WORDS,sentence)}
-        clauses=[c for c in re.split(r'[，,、：:]',sentence) if c.strip()]
-        held=[n for n,c in enumerate(clauses) if re.search(r'(?:'+_EVENT_DAY+r')[^，,]{0,20}?(?:举行|召开|举办)',c)]
+        clauses=[c for c in re.split(r'[，,]',sentence) if c.strip()]
+        # A long place or gathering note between the day and 举行 is still the same clause; another day is not.
+        held=[n for n,c in enumerate(clauses) if re.search(r'(?:'+_EVENT_DAY+r')(?:(?!'+_EVENT_DAY+r').)*?(?:举行|召开|举办)',c)]
         if len(values)!=1 or '' in values or len(held)!=1 or not re.search(_ATTEND_REQUEST,sentence):continue
         value=next(iter(values));event=clauses[held[0]]
         if (anchor and value<anchor or re.search(_EVENT_STATE,event)
                 or re.search(r'(?:不是|并非|而非|并不在|不在|不于|不会在)\s*(?:于|在)?\s*(?:'+_EVENT_DAY+r')|(?:不|未|没有?|无法|不能|不会|不再)\s*(?:如期|按时|正常)?\s*(?:举行|召开|举办)',event)
                 or re.search(r'(?:根据|依据|按照|参照|参见|据|按|见|同)\s*(?:'+_EVENT_DAY+r')|(?:'+_EVENT_DAY+r')[^，,]{0,6}?(?:通知|公告|文件|来函|消息|发布|发出)',event)):continue
-        if any(re.search(_EVENT_STATE,c) and not re.sub(_EVENT_SELF,'',re.sub(_EVENT_STATE,'',c)) for n,c in enumerate(clauses) if n!=held[0]):continue
+        mention=_event_mention(event)
+        if any(_modifies_event(part,mention) for n,c in enumerate(clauses) if n!=held[0] for part in re.split(r'、|(?<!\d)[：:]|[：:](?!\d)',c)):continue
         found.add(value)
     return found
 
@@ -227,6 +249,8 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
             if not any(p['ref']==ref for p in publications):
                 publications.append(dict(ref=ref,source_name=source['name'],sender=msg.get('sender','')))
         except family_agent.AgentError:continue
+    # Only words found in this child's own originals of this item can tell what its day means.
+    if date_quote and not any(date_quote in m.get('text','') for m in messages):date_quote=''
     times=sorted({sent_at(m.get('time','')) for m in messages}-{''})
     days=sorted({value[:10] for value in times})
     organized=focus.get('category') in ('unknown','homework','todo')
@@ -274,10 +298,14 @@ def enrich(app,c,tasks):
             proposal=c.execute("SELECT * FROM agent_items WHERE id=? AND task_id=? AND child_id=? AND kind='school' AND state='accepted'",
                                (origin,task['id'],owners.get(task['child'],''))).fetchone()
             if proposal:
-                purpose=json.loads(proposal['plan']).get('school_task',{}).get('purpose')
+                plan=json.loads(proposal['plan'])
+                purpose=plan.get('school_task',{}).get('purpose')
                 store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
                 publication_ref=family_agent.school_original_publication_ref(store,c,proposal)
-                date_quote=re.sub(r'^待核对[：:]?\s*','',proposal['title'])
+                # The item's own stored original words; its rewritten short title (参加家长会) states no day or request.
+                anchors=list((plan.get('school_action_anchor') or {}).values())[:1]
+                date_quote=next((v.strip() for v in (plan.get('school_date_quote'),(plan.get('school_native_action') or {}).get('quote'),*anchors,
+                                                     re.sub(r'^待核对[：:]?\s*','',proposal['title'])) if isinstance(v,str) and v.strip()),'')
         due=task['due']
         if task['id'] in reported and task['source'] in ('家庭放学后录入','孩子自述功课，待家长核对'):
             # The capture day is a plan date, not a teacher deadline; preserve explicit later edits.

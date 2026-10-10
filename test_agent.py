@@ -4187,6 +4187,38 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
         rows,tasks=self._school_event_run(text,[dict(title_quote=text,due='2026-10-15',task_title='参加家长会',task_goal=text)])
         self.assertEqual(rows['参加家长会']['due'],'');self.assertNotIn(('参加家长会','2026-10-15'),tasks)
 
+    def test_event_state_counts_on_the_object_it_modifies(self):
+        # Fictional: cancelling or making optional the meeting itself drops its day; another object's state or a long place keeps it.
+        from family_agenda import date_meaning,event_days
+        for text,want in (('家长会定于2026年10月15日举行，请家长参加，本次家长会已取消。',set()),
+                          ('家长会定于2026年10月15日举行，请家长参加，参加由家长自愿决定。',set()),
+                          ('家长会定于2026年10月15日举行，请家长参加，取消打印材料。',{'2026-10-15'}),
+                          ('家长会定于2026年10月15日举行，请家长参加，报名时间另行通知。',{'2026-10-15'}),
+                          ('家长会定于2026年10月15日举行，请家长参加，家长会回执无需交回。',{'2026-10-15'}),
+                          ('运动会定于2026年10月20日上午7:30在学校东校区田径场举行，请同学参加。',{'2026-10-20'}),
+                          ('2026年10月18日前提交报名资料，家长会日期另行通知。',set())):
+            self.assertEqual(event_days(text,'2026-10-10'),want,text)
+        self.assertEqual(date_meaning('2026年10月18日前提交报名资料，家长会日期另行通知。','2026-10-18','2026-10-10'),'deadline')
+
+    def test_full_sentence_quote_keeps_its_own_event_day_beside_another_action(self):
+        # Fictional: a complete quoted sentence ending in 。 is its own source even when another action follows it.
+        show='学校展示日定于2026年10月16日上午10点在一楼报告厅、二楼会议室举行，请家长参加。';slip='请家长于2026年10月14日前交回已签字的展示日回执。'
+        rows,tasks=self._school_event_run(show+slip,[dict(title_quote=show,due='2026-10-16',task_title='参加学校展示日',task_goal=show),
+                                                     dict(title_quote=slip,due='2026-10-14',task_title='交回展示日回执',task_goal=slip)])
+        self.assertEqual(set(tasks),{('参加学校展示日','2026-10-16'),('交回展示日回执','2026-10-14')})
+        self.assertEqual({t:json.loads(rows[t]['plan'])['school_task']['state'] for t in rows},{'参加学校展示日':'ready','交回展示日回执':'ready'})
+        self.assertEqual({t['title']:t['agenda']['due_kind'] for t in self.app.tasks()},{'参加学校展示日':'event','交回展示日回执':'deadline'})
+
+    def test_unknown_meeting_never_takes_a_same_sentence_action_day(self):
+        text='2026年10月18日前提交报名资料，家长会日期另行通知，请家长参加。'
+        rows,tasks=self._school_event_run(text,[dict(title_quote='家长会日期另行通知，请家长参加。',due='2026-10-18',task_title='参加家长会',task_goal='家长会日期另行通知，请家长参加。')])
+        self.assertEqual(rows['参加家长会']['due'],'');self.assertNotIn(('参加家长会','2026-10-18'),tasks)
+
+    def test_unknown_meeting_quoting_the_whole_sentence_never_takes_its_action_day(self):
+        text='2026年10月18日前提交报名资料，家长会日期另行通知。'
+        rows,tasks=self._school_event_run(text,[dict(title_quote=text,due='2026-10-18',task_title='参加家长会',task_goal='家长会日期另行通知，届时请家长参加。')])
+        self.assertEqual(rows['参加家长会']['due'],'');self.assertNotIn(('参加家长会','2026-10-18'),tasks)
+
     def test_generic_deadline_label_still_covers_the_items_after_it(self):
         label='截止时间：2026年10月16日。';slip='以下各项请完成：交回活动回执。'
         rows,tasks=self._school_event_run(label+slip,[dict(title_quote=slip,due='2026-10-16',task_title='交回活动回执',task_goal='2026年10月16日前交回活动回执。')])
