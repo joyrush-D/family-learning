@@ -116,12 +116,18 @@ def deadlines(text,published):
     # A dated school event the family is asked to attend (家长会定于10月15日举行，请家长参加) is that
     # item's arranged day, not a completion deadline. One sentence, one date, a held event and a direct
     # request to attend; a cancelled, past, reviewed or optional event or a second day stays out.
-    for sentence in re.split(r'[。；;\n]',text):
+    # 明日/今天 ground on the sending day like the actions above; 务必/须参加 is as direct as 请参加.
+    # ！？ end a sentence, so a notice's own date never reaches a later event. A negation only counts
+    # when it is about attending (无需带材料 keeps the meeting); 自愿/可不参加/暂定/另行通知 stay out.
+    for sentence in re.split(r'[。；;！!？?\n]',text):
         days=re.findall(r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}|今天|今日|今晚|明天|明日|明早|明晚|后天|昨天|前天|(?:周|星期|礼拜)[一二三四五六日天]',sentence)
-        if (len(days)==1 and date(days[0]) and re.search(r'\d{4}-\d{2}-\d{2}[^，,]{0,20}?(?:举行|召开|举办)',sentence)
-                and re.search(r'请(?:各位)?(?:家长|学生|同学们?|孩子们?)(?:准时|按时|届时|务必)?(?:参加|出席|到场|参会)(?!安排|通知|方式|时间|人员|名单)',sentence)
-                and not re.search(r'取消|延期|改期|推迟|暂停|原定|已于|已经|回顾|无需|不必|不用|无须',sentence)):
-            candidates.add(days[0])
+        relative={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}
+        values={date(d) or (anchor and d in relative and (dt.date.fromisoformat(anchor)+dt.timedelta(days=relative[d])).isoformat()) or '' for d in days}
+        if (len(values)==1 and '' not in values and re.search(r'(?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)[^，,]{0,20}?(?:举行|召开|举办)',sentence)
+                and re.search(r'(?:请|务必|必须|须|需)(?:各位|全体)?(?:家长|学生|同学们?|孩子们?)?(?:准时|按时|届时|务必|必须|须|需)?(?:参加|出席|到场|参会)(?!安排|通知|方式|时间|人员|名单)',sentence)
+                and not re.search(r'(?:无需|无须|不必|不用|不需要?|不要求|可以?不|自愿|自由|可选|选择性?|酌情|视情况|非必须)[^，,]{0,6}?(?:参加|出席|到场|参会)',sentence)
+                and not re.search(r'取消|延期|改期|推迟|暂停|原定|已于|已经|已举行|已召开|回顾|自愿|不强制|非强制|不作(?:统一|强制)?要求|仅供|可选|待定|待确定|尚未确定|另行通知|暂定',sentence)):
+            candidates|=values
     return candidates
 
 

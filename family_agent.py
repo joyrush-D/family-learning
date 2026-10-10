@@ -2013,6 +2013,24 @@ def _school_own_clause_dates(quote,cited,others):
     return _school_own_dates(quote,sent_day(homes[0].get('time','')))
 
 
+def _school_borrowed_day(quote,cited,due):
+    """True when this item's own original sentence states no day and due is another sentence's own dated action.
+
+    A date label or a header introducing the items after it (截止时间：…；以下各项…) still covers them;
+    运动会's own 10月15日 never becomes the day of 家长会时间另行通知 in the next sentence.
+    """
+    from family_agenda import deadlines,sent_day
+    homes=[e for e in cited if quote and quote in e['text']]
+    if not due or len(homes)!=1 or homes[0]['text'].count(quote)!=1:return False
+    text=homes[0]['text'];start=text.index(quote);end=start+len(quote.rstrip('。；;！!？? \n'))
+    parts=list(re.finditer(r'[^。；;！!？?\n]+',text))
+    own=''.join(m[0] for m in parts if m.start()<end and m.end()>start)
+    if re.search(r'\d{4}\s*[-年]|\d{1,2}\s*月\s*\d{1,2}|今天|今日|今晚|明天|明日|明早|明晚|后天|(?:周|星期|礼拜)[一二三四五六日天]',own):return False
+    published=sent_day(homes[0].get('time',''))
+    owners=[m[0] for m in parts if not (m.start()<end and m.end()>start) and due in deadlines(m[0],published)]
+    return bool(owners) and not any(re.search(r'[：:]|以下|下列|如下|上述|以上|各项|所有|全部|均|一律',p) for p in owners)
+
+
 def _school_admin_native_date(goal,evidence):
     """Keep a directly addressed native action's date qualifier, never a model-added one."""
     if len(evidence)!=1:return goal
@@ -3310,7 +3328,8 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         cited_evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}]
         relative=(_school_native_dates(native_action)
             if native_action else set().union(*(deadlines(action_anchor.get(e['ref'],'') if historical else e['text'],sent_day(e.get('time',''))) for e in cited_evidence))) if mode=='school' else set()
-        if routing and not due and len(result['proposals'])==1 and len(cited_evidence)==1 and len(relative)==1:
+        if (routing and not due and len(result['proposals'])==1 and len(cited_evidence)==1 and len(relative)==1
+                and not (dated_quote and not historical and not native_action and _school_borrowed_day(dated_quote,cited_evidence,next(iter(relative))))):
             # The model may omit a date that the single original notice states explicitly.
             due=next(iter(relative))
         # This item's own complete clause decides its date only when its summary declares that same day;
@@ -3325,6 +3344,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             grounded=due in relative if mode=='school' else any(due in item['text'] for item in cited)
             if clause and due not in clause:grounded=False
             elif owned:grounded=True
+            elif routing and not historical and not native_action and _school_borrowed_day(dated_quote,cited_evidence,due):grounded=False
             if not date(due) or not grounded:
                 if not routing: raise AgentError('模型日期缺少原文依据')
                 due='';uncertain_due=True
