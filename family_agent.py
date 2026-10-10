@@ -2039,26 +2039,63 @@ def _school_title_named(texts,title):
     return [size==best for size in sizes] if best>=2 and sizes.count(best)<len(sizes) else [True]*len(texts)
 
 
-def _school_event_dropped(quote,cited,title=''):
+def _school_goal_named(texts,goal):
+    """Which of an item's clauses its own action requirement restates, or None when it sets none apart.
+
+    Each clause of the goal names the clauses holding its longest end, as a title does, so 家长会定于2026年10月18日举行，
+    请家长参加。 places the meeting item on the meeting's own clauses beside 并请家长2026年10月18日前寄出退款回执原件, and
+    请家长2026年10月22日前确认是否参加学校开放日。 places the confirming item on its own clause. The goal only places the
+    item; its day and state still come from those original words. A goal restating every clause, or none, sets none apart.
+    """
+    picks=[keep for words in re.findall(r'[^，,。；;！!？?\n]+',goal or '') if not all(keep:=_school_title_named(texts,words))]
+    named=[any(keep[n] for keep in picks) for n in range(len(texts))]
+    return named if any(named) and not all(named) else None
+
+
+def _school_action_named(texts,title,goal=''):
+    """Which of an item's clauses are its own action, and whether its goal placed them.
+
+    A title is only how the item is shown (落实家长会参会安排、参加意向确认：学校开放日), so the clauses its goal restates
+    decide, else those its title names. A goal and a title naming clauses wholly apart leave the item unplaced.
+    """
+    named=_school_title_named(texts,title);placed=_school_goal_named(texts,goal)
+    if placed and (all(named) or any(g and t for g,t in zip(placed,named))):return placed,True
+    return (named if placed is None else [True]*len(texts)),False
+
+
+def _school_own_words(text,start,end,title,goal=''):
+    """The item's own words in each sentence of text[start:end], with whether its goal placed them.
+
+    Its own clauses are those _school_action_named picks, with days ending the clauses right before them
+    (请家长于2026年10月18日前，寄出退款回执原件).
+    """
+    clauses=[(s,m) for s in re.finditer(r'[^。；;！!？?\n]+',text) for m in re.finditer(r'[^，,]+',s[0]) if s.start()+m.start()<end and s.start()+m.end()>start]
+    named,placed=_school_action_named([m[0] for s,m in clauses],title,goal)
+    picked=[(s,m) for (s,m),keep in zip(clauses,named) if keep]
+    lead=(r'(?:[^，,]*(?:\d{1,2}\s*[日号]|\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天|(?:周|星期|礼拜)[一二三四五六日天])'
+          r'\s*(?:之前|以前|前|截止|为止|以内|内|止)?\s*[，,])+$')
+    def own(s):return '，'.join(s[0][r.start() if (r:=re.search(lead,s[0][:m.start()])) else m.start():m.end()] for t,m in picked if t is s)
+    return [(s,own(s)) for s in dict.fromkeys(s for s,m in picked)],placed
+
+
+def _school_event_dropped(quote,cited,title='',goal=''):
     """Days of the event this item's own sentences hold that the rest of its notice no longer holds.
 
-    The item's own action is what its title names among the clauses it quotes; the event that sentence holds keeps its day
-    only while the notice after it leaves it held (现通知该家长会取消、本次家长会延期至下周 drop it; 运动会取消、家长会回执取消
-    do not). The whole sentence is read for the event it holds, never for its other clauses' action days: only the item's
-    own clauses, with days ending the clauses right before them (请家长于2026年10月18日前，寄出退款回执原件), tie a day to
-    its own action, so 并请家长2026年10月18日前寄出退款回执原件 keeps the refund's day but not the cancelled meeting's.
+    The item's own action is what its goal restates, else what its title names, among the clauses it quotes; the event that
+    sentence holds keeps its day only while the notice after it leaves it held (现通知该家长会取消、本次家长会延期至下周 drop
+    it; 运动会取消、家长会回执取消 do not). The whole sentence is read for the event it holds, never for its other clauses'
+    action days: only the item's own clauses, with days ending the clauses right before them (请家长于2026年10月18日前，
+    寄出退款回执原件), tie a day to its own action, so 并请家长2026年10月18日前寄出退款回执原件 keeps the refund's day but not
+    the cancelled meeting's, however the meeting item's title is shown (落实家长会参会安排).
     """
     from family_agenda import later_dropped_days,sent_day
     homes=[e for e in cited if quote and quote in e['text']]
     if len(homes)!=1 or homes[0]['text'].count(quote)!=1:return set()
     text=homes[0]['text'];start=text.index(quote);end=start+len(quote.rstrip('。；;！!？? \n'))
-    clauses=[(s,m) for s in re.finditer(r'[^。；;！!？?\n]+',text) for m in re.finditer(r'[^，,]+',s[0]) if s.start()+m.start()<end and s.start()+m.end()>start]
-    picked=[(s,m) for (s,m),keep in zip(clauses,_school_title_named([m[0] for s,m in clauses],title)) if keep]
-    lead=(r'(?:[^，,]*(?:\d{1,2}\s*[日号]|\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天|(?:周|星期|礼拜)[一二三四五六日天])'
-          r'\s*(?:之前|以前|前|截止|为止|以内|内|止)?\s*[，,])+$')
-    def own(s):return '，'.join(s[0][r.start() if (r:=re.search(lead,s[0][:m.start()])) else m.start():m.end()] for t,m in picked if t is s)
+    words,placed=_school_own_words(text,start,end,title,goal)
     published=sent_day(homes[0].get('time',''))
-    return set().union(*(later_dropped_days(s[0],text[s.start():],published,own(s),title) for s in dict.fromkeys(s for s,m in picked)))
+    # Placed by its goal, the item's own words alone decide; only an unplaced item's title can still be attending the event.
+    return set().union(*(later_dropped_days(s[0],text[s.start():],published,own,'' if placed else title) for s,own in words))
 
 
 def _school_borrowed_day(quote,cited,due,goal='',title=''):
@@ -2068,8 +2105,8 @@ def _school_borrowed_day(quote,cited,due,goal='',title=''):
     A day ending its clause (请家长于10月16日前，交回回执), a generic date label or a header introducing the items
     (截止时间：…；明天完成以下两项：…) still covers the clauses after it; a colon followed by its own action is no header,
     so 运动会：10月15日举行 never becomes the day of 家长会时间另行通知. Own words that both defer a time and state a day
-    hold two actions: the item is the one its title names, so quoting or summarising the whole sentence never moves the
-    form's day to the meeting. A title naming neither cannot place the item in its original, so the item stays unconfirmed:
+    hold two actions: the item is the one its goal restates, else its title names, so quoting or summarising the whole sentence
+    never moves the form's day to the meeting. Naming neither cannot place the item in its original, so it stays unconfirmed:
     a summary declaring a day (开放日活动定于…举行) never overrides the original's own 时间待定.
     Own words stating a day keep it only while it is still that item's own: when the event the item's own (title-named)
     sentence holds is later cancelled, postponed or rescheduled in the same notice (现通知该家长会取消), due has no own day
@@ -2090,12 +2127,12 @@ def _school_borrowed_day(quote,cited,due,goal='',title=''):
             r'(?:\d{1,2}\s*[日号]|\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天|(?:周|星期|礼拜)[一二三四五六日天])\s*(?:之前|以前|前|截止|为止|以内|内|止)?\s*$|(?:'+day+r')[^：:]*[：:]',m[0])]
     lead=leads(own)
     if re.search(day,''.join(clauses[n][1][0] for n in lead+own)):
-        if not re.search(_SCHOOL_DEFERRED,'，'.join(clauses[n][1][0] for n in own)):return due in _school_event_dropped(quote,cited,title)
-        picked=[n for n,keep in zip(own,_school_title_named([clauses[n][1][0] for n in own],title)) if keep]
+        if not re.search(_SCHOOL_DEFERRED,'，'.join(clauses[n][1][0] for n in own)):return due in _school_event_dropped(quote,cited,title,goal)
+        picked=[n for n,keep in zip(own,_school_action_named([clauses[n][1][0] for n in own],title,goal)[0]) if keep]
         if len(picked)==len(own):return True
         own=picked;lead=leads(own)
         if re.search(day,''.join(clauses[n][1][0] for n in lead+own)):
-            return bool(re.search(_SCHOOL_DEFERRED,'，'.join(clauses[n][1][0] for n in own))) or due in _school_event_dropped(quote,cited,title)
+            return bool(re.search(_SCHOOL_DEFERRED,'，'.join(clauses[n][1][0] for n in own))) or due in _school_event_dropped(quote,cited,title,goal)
     # Own clauses state no day, so another clause stating one is where its sentence's day (event or deadline) belongs.
     owners=[s[0] for n,(s,m) in enumerate(clauses) if n not in own+lead and re.search(day,m[0]) and due in deadlines(s[0],published)]
     owners+=[p for e in cited if e is not homes[0] for p in re.findall(r'[^。；;！!？?\n]+',e['text']) if due in deadlines(p,sent_day(e.get('time','')))]
@@ -3430,7 +3467,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 ambiguous_due=True
         # An item whose own event its notice later cancels, postpones or reschedules has no day on any path, quoted or not.
         void=bool(routing and dated_quote and not historical and not native_action
-                  and _school_event_dropped(dated_quote,cited_evidence,str(proposal.get('task_title',''))))
+                  and _school_event_dropped(dated_quote,cited_evidence,str(proposal.get('task_title','')),str(proposal.get('task_goal',''))))
         if void:due=''
         item = dict(title='待核对：' + title, body=FOCUS[proposal['focus']], due=due, evidence=cited)
         if routing:

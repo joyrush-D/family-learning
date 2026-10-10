@@ -251,18 +251,22 @@ def _attends(title,event):
     (参加家长会、准时参加学校开放日、按时出席家长会并签到); or the title is the event's name, alone or followed only by
     attending it (学校开放日、家长会，请准时参加). Another predicate before the name (确认是否参加学校开放日、报名参加) or
     after it (学校开放日，确认是否参加) is the item's own action, and words after the name other than a joined predicate make
-    it a modifier of another object (寄出家长会回执原件).
+    it a modifier of another object (寄出家长会回执原件). A colon ends a label, so attending never reaches across it to the
+    name (参加意向确认：学校开放日 labels the open day with another action).
     """
     words=re.sub(r'[（(][^）)]*[）)]|\s','',re.sub(r'^\s*待核对[：:]?','',title or ''))
     name=r'(?:'+_event_named(event)+r')';joined=r'(?:(?:[，,、；;。！!？?]|并|且|然后|同时|再).*)?'
-    return bool(re.fullmatch(_ATTEND_TITLE+r'[^，,、；;。！!？?]*?'+name+joined+r'|'+name+r'(?:[，,、；;：:]*'+_ATTEND_TITLE+joined+r')?',words))
+    return bool(re.fullmatch(_ATTEND_TITLE+r'[^，,、；;。！!？?：:]*?'+name+joined+r'|'+name+r'(?:[，,、；;：:]*'+_ATTEND_TITLE+joined+r')?',words))
 
 
-def date_meaning(quote,due,published,title=''):
+def date_meaning(quote,due,published,title='',goal=''):
     """'event' when due is the arranged day of the held event this item's own action attends.
 
     The same day can also be a sibling action's deadline in that notice (2026年10月18日前寄出家长会回执); it stays that
-    action's. The item's own predicate decides, not an event name its title ends with or holds: only a title whose own
+    action's. The item's own action decides: the quoted clauses its goal restates (family_agent._school_own_words) mean an
+    event unless they tie the day to an action of their own (请家长2026年10月22日前确认是否参加学校开放日), however the title
+    is shown (参加意向确认：学校开放日、落实家长会参会安排). Unplaced, its title's own predicate decides, not an event name
+    its title ends with or holds: only a title whose own
     predicate attends the event (参加家长会、准时参加学校开放日、按时出席家长会并签到) or which is the event's name itself
     keeps the arranged day. A Chinese object ends in its own noun, so words after the event's name other than a joined
     predicate (并签到) make it a modifier of another object (寄出家长会回执原件); and a title whose own predicate comes first
@@ -273,6 +277,8 @@ def date_meaning(quote,due,published,title=''):
     held=[event for value,event in _held_events(quote,published) if value==due]
     if not held:return 'deadline'
     if due not in _action_deadlines(quote,published):return 'event'
+    words,placed=family_agent._school_own_words(quote,0,len(quote.rstrip('。；;！!？? \n')),title,goal)
+    if placed:return 'deadline' if any(due in _action_deadlines(own,published) for s,own in words) else 'event'
     return 'event' if any(_attends(title,event) for event in held) else 'deadline'
 
 
@@ -331,7 +337,7 @@ def task_category(title,purpose=None):
     return 'todo'
 
 
-def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote=''):
+def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal=''):
     focus=focus or {};messages=[];publications=[];original_time=''
     store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
     for ref in refs:
@@ -377,7 +383,7 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
     # Saving the task records its original day in the focus too; a different (parent-edited) date keeps the deadline contract.
     original=date(due) if date_quote else ''
     sent=original_time[:10] if original_time else days[0] if len(days)==1 else ''
-    due_kind=date_meaning(date_quote,due_on,sent,subject) if original and due_on==original else 'deadline' if due_on else ''
+    due_kind=date_meaning(date_quote,due_on,sent,subject,goal) if original and due_on==original else 'deadline' if due_on else ''
     return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,due_kind=due_kind,scheduled_on=focus.get('scheduled_on',''),
                 category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox')
 
@@ -395,14 +401,14 @@ def enrich(app,c,tasks):
     for task in tasks:
         refs=[x.strip() for x in task['source'].splitlines() if x.strip().startswith('message:')]
         focus=task.get('focus') or {}
-        purpose=None;publication_ref='';date_quote=''
+        purpose=None;publication_ref='';date_quote='';goal=''
         if task.get('school_origin'):
             origin=task['source'].splitlines()[0].removeprefix('Agent建议:')
             proposal=c.execute("SELECT * FROM agent_items WHERE id=? AND task_id=? AND child_id=? AND kind='school' AND state='accepted'",
                                (origin,task['id'],owners.get(task['child'],''))).fetchone()
             if proposal:
                 plan=json.loads(proposal['plan'])
-                purpose=plan.get('school_task',{}).get('purpose')
+                purpose=plan.get('school_task',{}).get('purpose');goal=str(plan.get('school_task',{}).get('goal') or '')
                 store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
                 publication_ref=family_agent.school_original_publication_ref(store,c,proposal)
                 date_quote=_stored_date_quote(plan) or re.sub(r'^待核对[：:]?\s*','',proposal['title']).strip()
@@ -413,7 +419,7 @@ def enrich(app,c,tasks):
             if not focus.get('category'):focus['category']='homework'
             if not focus.get('scheduled_on') and not focus.get('version'):focus['scheduled_on']=reported[task['id']]
             due=task['due']=''
-        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote)
+        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal)
     return tasks
 
 
@@ -453,7 +459,7 @@ def snapshot(app,start,end):
                 category=task_category((brief.get('title') or row['title']) if purpose in family_agent.PURPOSES else row['title'],purpose)
                 # A candidate reads its day from the same stored original words and publication as its accepted item.
                 m=metadata(app,c,row['child_id'],row['title'],row['due'],refs,publication_ref=family_agent.school_original_publication_ref(store,c,row),
-                           date_quote=_stored_date_quote(plan))
+                           date_quote=_stored_date_quote(plan),goal=str(brief.get('goal') or ''))
                 m['category']=category
                 items.append(dict(id=row['id'],task_id='',kind='school',child_ids=[row['child_id']],title=row['title'],
                     agenda=m,status='待核对',closed=False,closed_on='',body=row['body']))
