@@ -639,13 +639,40 @@ class TeacherRequestTitleTest(unittest.TestCase):
                      error='回答只是重复“它是长方形”，没有说明长方形两组对边分别平行且相等这一性质，理由不完整。',cause='可能知道结论，但不会用图形性质解释原因。',
                      steps='独立尝试：先写出长方形对边的位置关系和长度关系。轻提示：长方形的两组对边分别怎样，长度又怎样。自己完成：用一句话完整写出“两组对边分别平行且相等”。')]
 
-    def review(self,question,key,items):
+    def review(self,question,key,items,whole=False):
         raw=dict(items=items,coverage='本次核对1份题目/作答文字原件。',question_labels=[one['label'] for one in items]);original=json.loads(json.dumps(raw))
         with patch.object(family_llm,'_chat_json',return_value=raw) as model:
             result=family_llm.homework_reference_draft([],review=True,question_documents=[dict(name='synthetic-request-question.txt',text=question)],
                 reference_documents=[dict(name='synthetic-request-teacher.txt',text=key)])
         self.assertEqual(model.call_count,1);self.assertEqual(raw,original)
-        return [(q['answer'],q['judgment']) for q in result['questions']]
+        return result['questions'] if whole else [(q['answer'],q['judgment']) for q in result['questions']]
+
+    def assert_unproven(self,question,key,items):
+        """No owner proven: no teacher answer, grade, reason, cause or steps, and the item says what is missing."""
+        for q in self.review(question,key,items,whole=True):
+            self.assertEqual((q['answer'],q['judgment'],q['error_reason'],q['possible_cause'],q['steps']),('','unknown','','',''))
+            self.assertTrue(q['uncertainty'].strip())
+
+    def test_a_second_title_anywhere_in_one_file_lends_no_bare_teacher_number(self):
+        # Root's phase46 counterexample 1, whole: one TXT, a second title after the first answer, numbers that continue.
+        item=self.item;title='四年级数学练习-虚构 '
+        items=[item(title+'第1题','2 + 3 = ____','5','教师参考：5','correct'),
+               item(title+'第2题','9 - 1 = ____','7','教师参考：8','incorrect',error='9-1的结果是8，孩子写成7。',
+                    cause='可能口算时少减或多减，需请孩子说明。',steps='独立尝试：重新计算9-1。轻提示：从9往回数一个。自己完成：订正为8。')]
+        for second in ('五年级数学练习（虚构）\n2. 9 - 1 = ____','五年级数学练习（虚构） 2. 9 - 1 = ____'):  # its own line, or beside the number
+            with self.subTest(second=second):
+                self.assert_unproven('四年级数学练习（虚构）\n1. 2 + 3 = ____\n孩子作答：5\n%s\n孩子作答：7'%second,'教师参考答案（虚构）\n1. 5\n2. 8',items)
+
+    def test_a_teacher_title_on_its_section_line_is_read(self):
+        # Root's phase46 counterexample 2, whole: another title shares its line with 「一、」; the same title still lends its answer.
+        item=self.item;label='四年级数学练习-虚构 一、1';text='哪个数等于2+3？ A. 5 B. 6'
+        question='四年级数学练习（虚构）\n一、选择题\n1. %s\n孩子作答：A'%text
+        for key in ('五年级数学练习（虚构） 一、参考答案\n1. B','五年级数学练习（虚构）参考答案 一、1. B'):
+            with self.subTest(key=key):
+                self.assert_unproven(question,key,[item(label,text,'A','教师参考：B','incorrect',error='教师参考为B，孩子选了A。',
+                                                        cause='可能没有逐项核对选项，需孩子说明。',steps='独立尝试：先算出2+3。轻提示：再看哪个选项等于它。自己完成：重新选择。')])
+        self.assertEqual(self.review(question,'教师参考答案（虚构）\n一、1. A',[item(label,text,'A','教师参考：A','correct')]),
+                         [('教师参考：A','correct')])
 
     def test_the_whole_original_title_takes_the_bare_teacher_numbers(self):
         self.assertEqual(self.review(self.MATH,self.KEY,self.math()),

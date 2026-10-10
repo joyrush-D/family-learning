@@ -1168,29 +1168,44 @@ def _teacher_reference_entries(documents,titles=frozenset()):
     return entries
 
 
+def _ref_line_heading(line):
+    """What a line says of its scope: all of a line with no question or 大题 mark, else everything before its first mark, wherever
+    that stands 「五年级数学练习（虚构） 一、参考答案」; only a bracketed note opening onto the mark 「（只含第一大题）」 is the mark's own."""
+    starts=[found.start() for found in [_REF_QUESTION.search(line)] if found]+[
+        found.start(2) if found[2] else found.start() for found in [_REF_SECTION.search(line)] if found]  # 「一、」, not the character before it
+    return re.sub(r'(?<=[（(【\[])[^\W_]+$','',line[:min(starts)]) if starts else line
+
+
 def _ref_request_title(questions,references,entries,titles=frozenset()):
     """The one ordinary title this request's whole question text gives, read as a label's words are, or None. The heading lines
-    before each original's first question or 大题 give one value, no paper is named and no number repeats under one 大题, so a
-    second paper of the same numbers in one file leaves none. The selected teacher text names no scope of its own: every entry is
-    bare, and outside question and 大题 lines only words of that title 「教师参考答案（虚构）」, never another 「五年级练习参考答案」."""
-    heads,seen=set(),set()
+    before each original's first question or 大题 give one value, and every later heading of the whole file repeats it: another
+    title on its own line after any question 「五年级数学练习（虚构）」, or before a question or 大题 mark on its line, leaves none,
+    whether or not its numbers continue. After the first question a line 「孩子作答：5」 is that question's answer, one field name
+    throughout, never a heading. No paper is named and no number repeats under one 大题, so a second paper of the same numbers in
+    one file leaves none. The selected teacher text names no scope of its own: every entry is bare, and every line's heading, question
+    and 大题 lines included, is only words of that title 「教师参考答案（虚构）」, never another 「五年级练习参考答案」
+    「五年级数学练习（虚构） 一、参考答案」."""
+    heads,later,fields,seen=set(),set(),set(),set()
     for document in questions:
         section=None;opened=False
         for line in document['text'].splitlines():
             marks=list(_REF_QUESTION.finditer(line));head=line[:marks[0].start()] if marks else line
-            paper,section,words=_ref_scope(head,section,titles)
+            paper,section,_=_ref_scope(head,section,titles)
             if paper is not None: return None
-            opened=opened or bool(marks) or _REF_SECTION.search(head) is not None
-            if words and not opened: heads.add(words)
+            path=bool(marks) or _REF_SECTION.search(head) is not None
+            field=opened and not path and re.match(r'\s*([^\W_]{1,12})\s*[：:]',line)  # 「孩子作答：5」 answers its question
+            if field: fields.add(field[1])
+            elif words:=_ref_scope(_ref_line_heading(line),titles=titles)[2]: (later if opened or path else heads).add(words)
+            opened=opened or path
             for key in [(section,int(next(g for g in mark.groups() if g))) for mark in marks]:
                 if key in seen: return None
                 seen.add(key)
-    if len(heads)!=1 or any(entry['paper'] is not None or entry['rest'] for entry in entries): return None
+    if (len(heads)!=1 or not later<=heads or len(fields)>1
+            or any(entry['paper'] is not None or entry['rest'] for entry in entries)): return None
     title=heads.pop()
     for document in references:
         for line in document['text'].splitlines():
-            if _REF_QUESTION.search(line) or _REF_SECTION.search(line): continue
-            paper,_,words=_ref_scope(line,None,titles)
+            paper,_,words=_ref_scope(_ref_line_heading(line),None,titles)
             if paper is not None or words not in title: return None
     return title
 
