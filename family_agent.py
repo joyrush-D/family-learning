@@ -2039,6 +2039,22 @@ def _school_title_named(texts,title):
     return [size==best for size in sizes] if best>=2 and sizes.count(best)<len(sizes) else [True]*len(texts)
 
 
+def _school_event_dropped(quote,cited,title=''):
+    """Days of the event this item's own sentences hold that the rest of its notice no longer holds.
+
+    The item's own action is what its title names among the clauses it quotes; the event that sentence holds keeps its day
+    only while the notice after it leaves it held (现通知该家长会取消、本次家长会延期至下周 drop it; 运动会取消、家长会回执取消
+    do not), and a day that sentence ties to an action of its own stays that action's.
+    """
+    from family_agenda import later_dropped_days,sent_day
+    homes=[e for e in cited if quote and quote in e['text']]
+    if len(homes)!=1 or homes[0]['text'].count(quote)!=1:return set()
+    text=homes[0]['text'];start=text.index(quote);end=start+len(quote.rstrip('。；;！!？? \n'))
+    clauses=[(s,m) for s in re.finditer(r'[^。；;！!？?\n]+',text) for m in re.finditer(r'[^，,]+',s[0]) if s.start()+m.start()<end and s.start()+m.end()>start]
+    picked=dict.fromkeys(s for (s,m),keep in zip(clauses,_school_title_named([m[0] for s,m in clauses],title)) if keep)
+    return set().union(*(later_dropped_days(s[0],text[s.start():],sent_day(homes[0].get('time',''))) for s in picked))
+
+
 def _school_borrowed_day(quote,cited,due,goal='',title=''):
     """True when due is not this item's own day: its own clauses state no day and due is another clause's or original's dated action.
 
@@ -2053,7 +2069,7 @@ def _school_borrowed_day(quote,cited,due,goal='',title=''):
     sentence holds is later cancelled, postponed or rescheduled in the same notice (现通知该家长会取消), due has no own day
     left, so a sibling's same day (请家长2026年10月18日前寄出退款回执原件) is borrowed however much the item quotes.
     """
-    from family_agenda import deadlines,later_dropped_days,sent_day
+    from family_agenda import deadlines,sent_day
     homes=[e for e in cited if quote and quote in e['text']]
     if not due or len(homes)!=1 or homes[0]['text'].count(quote)!=1:return False
     text=homes[0]['text'];start=text.index(quote);end=start+len(quote.rstrip('。；;！!？? \n'))
@@ -2067,18 +2083,13 @@ def _school_borrowed_day(quote,cited,due,goal='',title=''):
         return [n for n,(s,m) in enumerate(clauses) if own and s is clauses[own[0]][0] and n<own[0] and re.search(
             r'(?:\d{1,2}\s*[日号]|\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天|(?:周|星期|礼拜)[一二三四五六日天])\s*(?:之前|以前|前|截止|为止|以内|内|止)?\s*$|(?:'+day+r')[^：:]*[：:]',m[0])]
     lead=leads(own)
-    def dropped(own):
-        # The item's own action is the one its title names among its clauses; the event its sentence holds keeps due only
-        # while the rest of the notice leaves it held, and a day that sentence ties to an action of its own stays that action's.
-        picked=[n for n,keep in zip(own,_school_title_named([clauses[n][1][0] for n in own],title)) if keep]
-        return any(due in later_dropped_days(s[0],text[s.start():],published) for s in {clauses[n][0] for n in picked})
     if re.search(day,''.join(clauses[n][1][0] for n in lead+own)):
-        if not re.search(_SCHOOL_DEFERRED,'，'.join(clauses[n][1][0] for n in own)):return dropped(own)
+        if not re.search(_SCHOOL_DEFERRED,'，'.join(clauses[n][1][0] for n in own)):return due in _school_event_dropped(quote,cited,title)
         picked=[n for n,keep in zip(own,_school_title_named([clauses[n][1][0] for n in own],title)) if keep]
         if len(picked)==len(own):return True
         own=picked;lead=leads(own)
         if re.search(day,''.join(clauses[n][1][0] for n in lead+own)):
-            return bool(re.search(_SCHOOL_DEFERRED,'，'.join(clauses[n][1][0] for n in own))) or dropped(own)
+            return bool(re.search(_SCHOOL_DEFERRED,'，'.join(clauses[n][1][0] for n in own))) or due in _school_event_dropped(quote,cited,title)
     # Own clauses state no day, so another clause stating one is where its sentence's day (event or deadline) belongs.
     owners=[s[0] for n,(s,m) in enumerate(clauses) if n not in own+lead and re.search(day,m[0]) and due in deadlines(s[0],published)]
     owners+=[p for e in cited if e is not homes[0] for p in re.findall(r'[^。；;！!？?\n]+',e['text']) if due in deadlines(p,sent_day(e.get('time','')))]
@@ -3411,6 +3422,10 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             elif len(relative)>1 and not owned:
                 if not routing: raise AgentError('原文含多个日期，需家长核对')
                 ambiguous_due=True
+        # An item whose own event its notice later cancels, postpones or reschedules has no day on any path, quoted or not.
+        void=bool(routing and dated_quote and not historical and not native_action
+                  and _school_event_dropped(dated_quote,cited_evidence,str(proposal.get('task_title',''))))
+        if void:due=''
         item = dict(title='待核对：' + title, body=FOCUS[proposal['focus']], due=due, evidence=cited)
         if routing:
             learning=_school_learning(proposal,school_goals)
@@ -3423,7 +3438,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                                 incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence if e['ref'] in {q['ref'] for q in cited}),evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}],school_tasks=school_tasks,separate_learning=True)
             item.setdefault('plan',{})['school_selection_receipt']={key:proposal.get('task_'+key,'') for key in
                 ['title','goal','advice','state','reason','change','target_id','purpose','submission']}
-            if not due and not proposed_due and not historical and not native_action:
+            if not due and not proposed_due and not historical and not native_action and not void:
                 due=_school_explicit_action_due(brief,cited_evidence)
                 if borrowed(due):due=''
                 item['due']=due
@@ -3444,8 +3459,9 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             status_reply=cited and all(e['text'].strip('。！! ') in {'已签署','已完成','已处理','已确认','已提交','已报名','已打卡','已阅读','已知悉'} for e in cited)
             if status_reply and raw_change=='new' and target and brief['title'].strip()==target['title'].strip() and brief['goal'].strip()==target['goal'].strip() and (not due or due==target.get('due','')):
                 continue
-            if uncertain_due and brief['state']!='reference':
-                brief.update(state='review',reason=brief['reason'][:300]+' 截止日期尚无法从原文核对，未采用模型日期；请核对原通知。')
+            if (uncertain_due or void) and brief['state']!='reference':
+                brief.update(state='review',reason=brief['reason'][:300]+(' 截止日期尚无法从原文核对，未采用模型日期；请核对原通知。' if uncertain_due else
+                                                                          ' 原通知后文改变了本项活动的安排，原日期不能作为本项日期；请核对原通知。'))
             elif due and due<as_of and brief['state']!='reference':
                 brief.update(state='review',reason=brief['reason'][:300]+' 原截止日期已过，请核对是否已处理或仍需补办；不推定完成或安排今天补做。')
             elif not due and brief['state']=='ready' and any((sent_day(e.get('time','')) or as_of)<as_of for e in cited_evidence):
