@@ -1331,7 +1331,7 @@ async function openHomeworkPrint(id){
   f.querySelector('details').open=[2,3,4].some(n=>f.elements['question_source_'+n].value);
   f.dataset.questionSha=saved?.task_id===id&&typeof saved.expected_question_sha256==='string'?saved.expected_question_sha256:'';
   f.dataset.requestKey=saved?.task_id===id&&/^[A-Za-z0-9_-]{8,128}$/.test(saved.request_key||'')?saved.request_key:crypto.randomUUID();
-  $('#homeworkPrintTask').textContent=task.child+' · '+task.title+(task.agenda?.due_on?' · 截止 '+task.agenda.due_on:'');
+  $('#homeworkPrintTask').textContent=task.child+' · '+task.title+(task.agenda?.due_on?' · '+agendaDueLabel(task.agenda)+' '+task.agenda.due_on:'');
   $('#homeworkPrintError').textContent=unavailable?'原选择有资料现在无法核对；参考文字与请求编号保留，请回原作业核对资料。':materials.school_error||'';
   const printers=data.printing?.printers||[];normalizePrintDefaults();
   let printer=f.elements.printer;
@@ -2177,7 +2177,7 @@ $('#taskFocusForm').onsubmit=async e=>{
 };
 $('#taskFocusReload').onclick=async()=>{
  if(busy)return;busy=true;const f=$('#taskFocusForm'),b=$('#taskFocusReload');b.disabled=true;
- try{await load();const t=data.tasks.find(t=>t.id===f.elements.id.value);if(!t)throw Error('原事项已不可用');const focus=taskFocus(t);f.elements.version.value=focus.version;f.elements.request_key.value=crypto.randomUUID();$('#taskFocusLatest').textContent='最新标题：'+t.title+'；完成目标：'+(t.action||'待明确')+'；计划日期：'+(t.agenda?.scheduled_on||'未定')+'；截止：'+(t.agenda?.due_on||'待核对')+'；最新安排：'+({next:'下一步',waiting:'等待中',later:'以后再说'}[focus.mode])+' · '+(focus.next_action||'未写下一步')+(focus.waiting_for?' · 等待'+focus.waiting_for:'')+(focus.review_on?' · '+focus.review_on+'回看':'')+'；事项状态：'+taskStatusLabel(status(t));$('#taskFocusError').textContent='输入仍保留，请核对后再保存。';b.hidden=true}
+ try{await load();const t=data.tasks.find(t=>t.id===f.elements.id.value);if(!t)throw Error('原事项已不可用');const focus=taskFocus(t);f.elements.version.value=focus.version;f.elements.request_key.value=crypto.randomUUID();$('#taskFocusLatest').textContent='最新标题：'+t.title+'；完成目标：'+(t.action||'待明确')+'；计划日期：'+(t.agenda?.scheduled_on||'未定')+'；'+agendaDueLabel(t.agenda)+'：'+(t.agenda?.due_on||'待核对')+'；最新安排：'+({next:'下一步',waiting:'等待中',later:'以后再说'}[focus.mode])+' · '+(focus.next_action||'未写下一步')+(focus.waiting_for?' · 等待'+focus.waiting_for:'')+(focus.review_on?' · '+focus.review_on+'回看':'')+'；事项状态：'+taskStatusLabel(status(t));$('#taskFocusError').textContent='输入仍保留，请核对后再保存。';b.hidden=true}
  catch(err){$('#taskFocusError').textContent=err.message||'读取失败，请重试'}finally{busy=false;b.disabled=false}
 };
 $('#taskFocusDialog').addEventListener('cancel',e=>{if(busy)e.preventDefault()});

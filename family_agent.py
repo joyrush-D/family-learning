@@ -2016,8 +2016,8 @@ def _school_own_clause_dates(quote,cited,others):
 def _school_borrowed_day(quote,cited,due):
     """True when this item's own original sentence states no day and due is another sentence's own dated action.
 
-    A date label or a header introducing the items after it (截止时间：…；以下各项…) still covers them;
-    运动会's own 10月15日 never becomes the day of 家长会时间另行通知 in the next sentence.
+    Only a generic date label or a header introducing the items (截止时间：…；以下各项…) still covers them; a colon
+    is no such header, so 运动会：10月15日举行 never becomes the day of 家长会时间另行通知, nor does a reply slip's day.
     """
     from family_agenda import deadlines,sent_day
     homes=[e for e in cited if quote and quote in e['text']]
@@ -2028,7 +2028,9 @@ def _school_borrowed_day(quote,cited,due):
     if re.search(r'\d{4}\s*[-年]|\d{1,2}\s*月\s*\d{1,2}|今天|今日|今晚|明天|明日|明早|明晚|后天|(?:周|星期|礼拜)[一二三四五六日天]',own):return False
     published=sent_day(homes[0].get('time',''))
     owners=[m[0] for m in parts if not (m.start()<end and m.end()>start) and due in deadlines(m[0],published)]
-    return bool(owners) and not any(re.search(r'[：:]|以下|下列|如下|上述|以上|各项|所有|全部|均|一律',p) for p in owners)
+    header=(r'^\s*(?:统一|全部|所有|各项)?(?:截止|提交|上交|完成|交回)?(?:时间|日期|期限)\s*(?:为|是)?\s*[：:]'
+            r'|以下|下列|如下|上述|以上|各项|上列|所列|(?:所有|全部|各)(?:事项|作业|材料|任务|内容|项目|要求)|均(?:须|需|应|要)?(?:于|在)|一律')
+    return bool(owners) and not any(re.search(header,p) for p in owners)
 
 
 def _school_admin_native_date(goal,evidence):
