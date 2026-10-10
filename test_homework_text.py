@@ -725,5 +725,45 @@ class TeacherRequestTitleTest(unittest.TestCase):
                              [self.item('四年级数学练习-虚构 第2题','哪个数等于9-1？ A.8 B.7','A','教师参考：B','incorrect',
                                         error='孩子作答A与模型所称教师参考B不同。')])
 
+    def test_a_line_after_an_answer_opening_on_a_bracketed_number_is_a_heading(self):
+        # Root's phase49 B1, whole: 「（2）班…」 after question 1's answer takes no answer before question 2, so it is another
+        # title, never a level of question 1; the answered 「（1）」「（2）」 levels of V6/V5 stay levels (above).
+        self.assert_unproven('青松数学练习（虚构）\n1. 哪个数等于2+3？ A.5 B.6\n孩子作答：A\n（2）班海岸数学练习（虚构）\n2. 哪个数等于9-1？ A.8 B.7\n孩子作答：A\n',
+                             '教师参考答案（虚构）\n1. A\n2. B\n',
+                             [self.item('青松数学练习-虚构 第2题','哪个数等于9-1？ A.8 B.7','A','教师参考：B','incorrect',
+                                        error='孩子作答A与模型所称教师参考B不同。')])
+
+    def test_a_stem_continued_and_options_on_their_own_lines_stay_in_their_question(self):
+        # Root's phase49 B2, whole: one title; the stem's next line and the A/B options wait with question 1 for its answer.
+        self.assertEqual(self.review('青松数学练习（虚构）\n1. 请选择正确答案。\n哪个数等于2+3？\nA. 5\nB. 6\n孩子作答：A\n','教师参考答案（虚构）\n1. A\n',
+                                     [self.item('青松数学练习-虚构 第1题','请选择正确答案。哪个数等于2+3？ A. 5 B. 6','A','教师参考：A','correct')]),
+                         [('教师参考：A','correct')])
+
+    def test_a_teacher_title_after_its_section_mark_is_read(self):
+        # Root's phase49 B3, whole: words after 「第一大题」 in the same bracket name another title; the name the question
+        # text gives that same 大题 「一、选择题」 is no other title.
+        item=self.item;label='四年级数学练习-虚构 一、1';text='哪个数等于2+3？ A.5 B.6'
+        question='四年级数学练习（虚构）\n一、选择题\n1. %s\n孩子作答：A\n'%text
+        self.assert_unproven(question,'教师参考（第一大题，五年级数学练习）\n1.B\n',
+                             [item(label,text,'A','教师参考：B','incorrect',error='孩子作答A与模型所称教师参考B不同。')])
+        self.assertEqual(self.review(question,'教师参考答案（虚构）\n一、选择题\n1.A\n',[item(label,text,'A','教师参考：A','correct')]),
+                         [('教师参考：A','correct')])
+
+    def test_a_second_title_ending_in_an_answer_word_is_no_answer_field(self):
+        # Root's phase49 F1, whole: 「五年级数学问答：」 follows a question answered on its own line, so it answers nothing and
+        # heads question 2. A field a waiting question takes must share one field name, and every question needs its answer.
+        item=self.item
+        self.assert_unproven('四年级数学练习（虚构）\n1.哪个数等于2+3？ A.5 B.6 孩子作答：A\n五年级数学问答：\n2.哪个数等于9-1？ A.8 B.7 孩子作答：A\n',
+                             '教师参考答案（虚构）\n1.A\n2.B\n',
+                             [item('四年级数学练习-虚构 第2题','哪个数等于9-1？ A.8 B.7','A','教师参考：B','incorrect',error='孩子作答A与模型所称教师参考B不同。')])
+        for question in ('四年级数学练习（虚构）\n1. 2 + 3 = ____\n五年级数学问答：\n2. 9 - 1 = ____\n孩子作答：7\n',  # two field names
+                         '四年级数学练习（虚构）\n1. 2 + 3 = ____\n五年级数学问答：\n2. 9 - 1 = ____\n'):  # question 2 never answered
+            with self.subTest(question=question):
+                self.assert_unproven(question,'教师参考答案（虚构）\n1. 5\n2. 8\n',
+                                     [item('四年级数学练习-虚构 第2题','9 - 1 = ____','','教师参考：8','unknown',uncertainty='原件中该题的作答待核对。')])
+        self.assertEqual(self.review('四年级数学练习（虚构）\n1.哪个数等于2+3？ A.5 B.6 孩子作答：A\n2.哪个数等于9-1？ A.8 B.7 孩子作答：A\n',
+                                     '教师参考答案（虚构）\n1.A\n2.B\n',[item('四年级数学练习-虚构 第1题','哪个数等于2+3？ A.5 B.6','A','教师参考：A','correct')]),
+                         [('教师参考：A','correct')])
+
 
 if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TeacherReferenceScopeTests','TeacherReferenceSourceTests','TeacherReferenceEquationTests','TeacherReferenceGrammarTests','TextQuestionHTTPTests','TeacherPaperWholeNameTest','TeacherPaperFormalNameTest','TeacherRequestTitleTest'])
