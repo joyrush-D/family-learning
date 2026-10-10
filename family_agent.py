@@ -2048,32 +2048,44 @@ _SCHOOL_ACTION_OPEN=(r'请|须|需|务必|(?:\d{1,2}\s*[日号]|\d{4}-\d{2}-\d{2
 _SCHOOL_ACTION_WHO=r'\s*(?:各位|全体)?(?:家长|学生|同学们?|孩子们?)?(?:准时|按时|届时|务必|必须|须|需)?'
 # Where an action starts after its subject: the request, or the whole day with 于/在 ending its deadline (请于…前、于2026年10月18日前).
 _SCHOOL_ACTION_HEAD=r'(?:于|在)?\s*(?:\d{4}\s*年\s*)?(?:\d{1,2}\s*月\s*)?(?:'+_SCHOOL_ACTION_OPEN+')'
+# A predicate joined after an action's own (参加家长会并签到): it ends that action's object and its predicate.
+_SCHOOL_ACTION_JOINED=r'并|且|然后|同时|再'
 
 
 def _school_end_own(text,end,said):
     """Whether a clause holds a goal clause's end as that goal's own subject or object, not inside another action.
 
-    A Chinese predicate comes after its subject and before its object, so each place of the end is read against its action.
-    Where a predicate stands between an action opened before it (a request or a deadline day) and the end, the end is that
-    action's object, and the predicate must be the goal's own, ending the goal's words before its end (said): 请家长参加家长会
-    never names 并请家长2026年10月18日前寄出家长会退款回执原件 or …前答复是否参加家长会, while 请家长准时参加家长会 is its own.
-    Where none stands before it, the end begins a subject, and the action after it acts on that whole subject: the end is the
-    goal's object only as the whole of it (家长会请家长准时参加), never as the first words of another thing the action acts on
-    (家长会退款回执原件请于2026年10月18日前寄出). With no action after it the clause is about it (家长会定于2026年10月18日举行).
-    So nothing between is never proof: only an end carrying the goal's own predicate (参加家长会), or a goal stating none, is
-    its own wherever no other predicate acts on it.
+    A Chinese predicate comes after its subject and before its object, so each place of the end is read against its action,
+    and that action is the goal's only when both its predicate and its whole subject or object are the goal's own.
+    Where an action opened before it (a request or a deadline day) acts on the end, the end is that action's object: the
+    predicate between them must be the goal's own, ending the goal's words before its end (said), and the end must be the
+    whole object, followed only by the clause end, a joined predicate or a note (参加家长会并签到、参加家长会（体育馆）).
+    So 请家长参加家长会 never names 并请家长2026年10月18日前寄出家长会退款回执原件 or …前答复是否参加家长会, and
+    请家长参加科技讲座 never names the same predicate on another whole object beginning with it (另请家长2026年10月24日前
+    参加科技讲座筹备会议), while 请家长准时参加家长会 is its own.
+    Where none stands before it, the end begins a subject. With no action after it the clause is about it (家长会定于2026年
+    10月18日举行). An action after it acts on that whole subject: the end is the goal's own only as the whole of it, never as
+    the first words of another thing (家长会退款回执原件请于2026年10月18日前寄出), and only by the goal's own predicate
+    (家长会请家长准时参加); another predicate on the same whole subject is a sibling's action, so 请学生参加学校开放日 never
+    names 学校开放日请家长2026年10月22日前确认是否参加. So nothing between is never proof: only an end carrying the goal's
+    own predicate (参加家长会), or a goal stating none, is its own wherever no other predicate acts on it.
     """
     opened=[o.end() for o in re.finditer(_SCHOOL_ACTION_OPEN,said)]
     bare=re.sub('^'+_SCHOOL_ACTION_WHO,'',said[opened[-1] if opened else 0:]).strip()
+    whole=r'\s*(?:$|[、：:（(]|'+_SCHOOL_ACTION_JOINED+')'
     for m in re.finditer(re.escape(end),text):
         opened=[o.end() for o in re.finditer(_SCHOOL_ACTION_OPEN,text[:m.start()])]
         verb=re.sub('^'+_SCHOOL_ACTION_WHO,'',text[opened[-1]:m.start()]).strip() if opened else ''
-        if verb:
-            if said.endswith(verb):return True
+        if opened and (verb or not bare):
+            if (not verb or said.endswith(verb)) and re.match(whole,text[m.end():]):return True
             continue
         if not bare:return True
-        acts=re.search(_SCHOOL_ACTION_HEAD,text[m.end():])
-        if not acts or not re.sub('^'+_SCHOOL_ACTION_WHO,'',text[m.end():m.end()+acts.start()]).strip():return True
+        rest=text[m.end():];acts=re.search(_SCHOOL_ACTION_HEAD,rest)
+        if not acts:return True
+        if re.sub('^'+_SCHOOL_ACTION_WHO,'',rest[:acts.start()]).strip():continue
+        heads=[o.end() for o in re.finditer(_SCHOOL_ACTION_OPEN,rest)]
+        verb=re.match(r'(.+?)\s*(?:(?:[、（(]|'+_SCHOOL_ACTION_JOINED+r').*)?$',re.sub('^'+_SCHOOL_ACTION_WHO,'',rest[heads[-1]:]).strip())
+        if verb and said.endswith(verb[1]):return True
     return False
 
 
