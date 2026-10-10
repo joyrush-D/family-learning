@@ -253,9 +253,11 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
     if category not in ('homework','todo'):category='todo' if category=='unknown' else task_category(title,purpose)
     # Later supplements retain their own source entries, not the first notice's time.
     published_at=original_time if original_time and original_time[:10]==published else min((value for value in times if value[:10]==published),default='')
-    # The same day reads as the meeting's arranged day or a hand-in deadline by what the item's own clause asks;
-    # a parent-edited date keeps the deadline contract.
-    due_kind=date_meaning(date_quote,due_on,published) if date_quote and not organized else 'deadline' if due_on else ''
+    # The same day reads as the meeting's arranged day or a hand-in deadline by what the item's own clause asks.
+    # Saving the task records its original day in the focus too; a different (parent-edited) date keeps the deadline contract.
+    original=date(due) if date_quote else ''
+    sent=original_time[:10] if original_time else days[0] if len(days)==1 else ''
+    due_kind=date_meaning(date_quote,due_on,sent) if original and due_on==original else 'deadline' if due_on else ''
     return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,due_kind=due_kind,scheduled_on=focus.get('scheduled_on',''),
                 category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox')
 
