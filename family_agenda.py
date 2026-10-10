@@ -171,12 +171,22 @@ def _event_mention(event):
     return '|'.join([re.escape(x) for x in own]+[r'参加|出席|到场|参会|举行|召开|举办|活动|会议|^的?(?:时间|日期)|(?:具体|准确|确切|详细)的?(?:时间|日期)'])
 
 
-def _event_named(event):
+# A word pointing back at what the notice already named (该、本次、上述).
+_EVENT_POINTER=r'(?:该|此|本|这|上述|以上)(?:次|项|场|个)?'
+
+
+def _event_named(event,whole=False):
     """What names this held event itself outside its own sentence or in an item's title: its name or a tail of at least three of
     its words (学校开放日 → 开放日), or a word pointing back at it (该活动、本次会议). Attending, a time, or 活动 ending another
-    name (开放日活动取消) can belong to another action or event there, so they never stand for this one."""
-    own=sorted({name[i:] for name in _event_names(event) for i in range(len(name)-min(3,len(name))+1)},key=len,reverse=True)
-    return '|'.join([re.escape(x) for x in own]+[r'(?:该|此|本|这|上述|以上)(?:次|项|场|个)?(?:活动|会议)'])
+    name (开放日活动取消) can belong to another action or event there, so they never stand for this one.
+
+    In another sentence of the notice (whole) a shortened tail is the event only as a whole object, where its words begin or
+    right after a pointer back (开放日取消、该开放日延期); words before it make it the tail of another complete name, so
+    道路安全讲座取消 never cancels 校园安全讲座. Its full name stays the event wherever it stands (现通知该学校开放日取消)."""
+    names=set(_event_names(event))
+    own=sorted({name[i:] for name in names for i in range(len(name)-min(3,len(name))+1)},key=len,reverse=True)
+    lead=r'(?:^\s*|'+_EVENT_POINTER+')' if whole else ''
+    return '|'.join([re.escape(x) if x in names else lead+re.escape(x) for x in own]+[_EVENT_POINTER+r'(?:活动|会议)'])
 
 
 def _modifies_event(part,mention):
@@ -232,8 +242,8 @@ def _held_events(text,published):
                 or re.search(r'(?:根据|依据|按照|参照|参见|据|按|见|同)\s*(?:'+_EVENT_DAY+r')|(?:'+_EVENT_DAY+r')[^，,]{0,6}?(?:通知|公告|文件|来函|消息|发布|发出)',event)):continue
         mention=_event_mention(event)
         if any(_modifies_event(part,mention) for n,c in enumerate(clauses) if n!=held[0] for part in re.split(r'、|(?<!\d)[：:]|[：:](?!\d)',c)):continue
-        # A sentence end does not end the same notice: a later part naming the event itself is read by the same rule.
-        named=_event_named(event)
+        # A sentence end does not end the same notice: a later part naming the event itself, as a whole object, is read by the same rule.
+        named=_event_named(event,True)
         if any(re.search(named,part) and _modifies_event(part,named) for later in sentences[at+1:]
                for c in re.split(r'[，,]',later) for part in re.split(r'、|(?<!\d)[：:]|[：:](?!\d)',c)):continue
         found.append((value,event))
