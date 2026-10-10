@@ -240,21 +240,28 @@ def _held_events(text,published):
     return found
 
 
+# Who attends and how, before an item's own predicate of attending (请家长准时参加、按时出席、到场参加).
+_ATTEND_TITLE=r'(?:请|务必|必须|须|需)?(?:各位|全体)?(?:家长|学生|同学们?|孩子们?)?(?:准时|按时|届时|务必|必须|须|需)?(?:参加|出席|到场|参会)+'
+
+
 def date_meaning(quote,due,published,title=''):
     """'event' when due is the arranged day of the held event this item's own action attends.
 
     The same day can also be a sibling action's deadline in that notice (2026年10月18日前寄出家长会回执); it stays that
-    action's. The item's own action decides: only one whose object is the event itself, its title ending in the event's name
-    (参加家长会), keeps the arranged day. A Chinese object ends in its own noun, so any words after the event's name make it
-    a modifier of another object, however that object is described (寄出家长会回执原件); that item, or one not naming the
-    event, keeps the deadline.
+    action's. The item's own predicate decides, not an event name its title ends with or holds: only a title whose own
+    predicate attends the event (参加家长会、准时参加学校开放日、按时出席家长会并签到) or which is the event's name itself
+    keeps the arranged day. A Chinese object ends in its own noun, so words after the event's name other than a joined
+    predicate (并签到) make it a modifier of another object (寄出家长会回执原件); and a title whose own predicate comes first
+    and takes attending or the event as its object (确认是否参加学校开放日、报名参加、回复是否参加) acts on that day as a
+    deadline, as does one not naming the event.
     """
     if not date(due):return ''
     held=[event for value,event in _held_events(quote,published) if value==due]
     if not held:return 'deadline'
     if due not in _action_deadlines(quote,published):return 'event'
-    words=re.sub(r'[（(][^）)]*[）)]|[\s。；;，,！!？?]','',re.sub(r'^\s*待核对[：:]?','',title or ''))
-    return 'event' if any(re.search(r'(?:'+_event_named(event)+r')$',words) for event in held) else 'deadline'
+    words=re.sub(r'[（(][^）)]*[）)]|\s','',re.sub(r'^\s*待核对[：:]?','',title or ''))
+    own=r'(?:'+_ATTEND_TITLE+r'[^，,、；;。！!？?]*?)?(?:{})(?:(?:[，,、；;。！!？?]|并|且|然后|同时|再).*)?'
+    return 'event' if any(re.fullmatch(own.format(_event_named(event)),words) for event in held) else 'deadline'
 
 
 def later_dropped_days(quote,text,published):

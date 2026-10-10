@@ -2049,11 +2049,15 @@ def _school_borrowed_day(quote,cited,due,goal='',title=''):
     hold two actions: the item is the one its title names, so quoting or summarising the whole sentence never moves the
     form's day to the meeting. A title naming neither cannot place the item in its original, so the item stays unconfirmed:
     a summary declaring a day (开放日活动定于…举行) never overrides the original's own 时间待定.
+    Own words stating a day keep it only while it is still that item's own: when the event the item's own (title-named)
+    sentence holds is later cancelled, postponed or rescheduled in the same notice (现通知该家长会取消), due has no own day
+    left, so a sibling's same day (请家长2026年10月18日前寄出退款回执原件) is borrowed however much the item quotes.
     """
-    from family_agenda import deadlines,sent_day
+    from family_agenda import deadlines,later_dropped_days,sent_day
     homes=[e for e in cited if quote and quote in e['text']]
     if not due or len(homes)!=1 or homes[0]['text'].count(quote)!=1:return False
     text=homes[0]['text'];start=text.index(quote);end=start+len(quote.rstrip('。；;！!？? \n'))
+    published=sent_day(homes[0].get('time',''))
     day=r'\d{4}\s*[-年]|\d{1,2}\s*月\s*\d{1,2}|今天|今日|今晚|明天|明日|明早|明晚|后天|(?:周|星期|礼拜)[一二三四五六日天]'
     sentences=list(re.finditer(r'[^。；;！!？?\n]+',text))
     clauses=[(s,m) for s in sentences for m in re.finditer(r'[^，,]+',s[0])]
@@ -2063,15 +2067,20 @@ def _school_borrowed_day(quote,cited,due,goal='',title=''):
         return [n for n,(s,m) in enumerate(clauses) if own and s is clauses[own[0]][0] and n<own[0] and re.search(
             r'(?:\d{1,2}\s*[日号]|\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天|(?:周|星期|礼拜)[一二三四五六日天])\s*(?:之前|以前|前|截止|为止|以内|内|止)?\s*$|(?:'+day+r')[^：:]*[：:]',m[0])]
     lead=leads(own)
+    def dropped(own):
+        # The item's own action is the one its title names among its clauses; the event its sentence holds keeps due only
+        # while the rest of the notice leaves it held, and a day that sentence ties to an action of its own stays that action's.
+        picked=[n for n,keep in zip(own,_school_title_named([clauses[n][1][0] for n in own],title)) if keep]
+        return any(due in later_dropped_days(s[0],text[s.start():],published) for s in {clauses[n][0] for n in picked})
     if re.search(day,''.join(clauses[n][1][0] for n in lead+own)):
-        if not re.search(_SCHOOL_DEFERRED,'，'.join(clauses[n][1][0] for n in own)):return False
+        if not re.search(_SCHOOL_DEFERRED,'，'.join(clauses[n][1][0] for n in own)):return dropped(own)
         picked=[n for n,keep in zip(own,_school_title_named([clauses[n][1][0] for n in own],title)) if keep]
         if len(picked)==len(own):return True
         own=picked;lead=leads(own)
         if re.search(day,''.join(clauses[n][1][0] for n in lead+own)):
-            return bool(re.search(_SCHOOL_DEFERRED,'，'.join(clauses[n][1][0] for n in own)))
+            return bool(re.search(_SCHOOL_DEFERRED,'，'.join(clauses[n][1][0] for n in own))) or dropped(own)
     # Own clauses state no day, so another clause stating one is where its sentence's day (event or deadline) belongs.
-    owners=[s[0] for n,(s,m) in enumerate(clauses) if n not in own+lead and re.search(day,m[0]) and due in deadlines(s[0],sent_day(homes[0].get('time','')))]
+    owners=[s[0] for n,(s,m) in enumerate(clauses) if n not in own+lead and re.search(day,m[0]) and due in deadlines(s[0],published)]
     owners+=[p for e in cited if e is not homes[0] for p in re.findall(r'[^。；;！!？?\n]+',e['text']) if due in deadlines(p,sent_day(e.get('time','')))]
     header=(r'[：:]\s*$|^\s*(?:统一|全部|所有|各项)?(?:截止|提交|上交|完成|交回)?(?:时间|日期|期限)\s*(?:为|是)?\s*[：:]'
             r'|以下|下列|如下|上述|以上|各项|上列|所列|(?:所有|全部|各)(?:事项|作业|材料|任务|内容|项目|要求)|均(?:须|需|应|要)?(?:于|在)|一律')
