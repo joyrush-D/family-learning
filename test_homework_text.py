@@ -702,5 +702,28 @@ class TeacherRequestTitleTest(unittest.TestCase):
             with self.subTest(question=question[-12:],key=key[:14],title=title):
                 self.assertEqual(self.review(question,key,self.math(title)),[('','unknown')]*6)
 
+    def test_a_sub_question_line_is_a_level_of_its_question(self):
+        # Root's phase48 V6 and V5, whole: 「（1）」「（2）」 lines are levels of question 1, never another title; only the exact path lends.
+        question='山泉数学练习（虚构）\n1. 完成两道选择小题。\n（1）哪个数等于2+3？ A. 5 B. 6\n孩子作答：A\n（2）哪个数等于3+4？ A. 7 B. 8\n孩子作答：A\n'
+        items=[self.item('山泉数学练习-虚构 第1题（1）','哪个数等于2+3？ A. 5 B. 6','A','教师参考：A','correct')]
+        self.assertEqual(self.review(question,'教师参考答案（虚构）\n1.（1）A\n',items),[('教师参考：A','correct')])
+        self.assert_unproven(question,'教师参考答案（虚构）\n1. A\n',items)  # the parent's 「1. A」 is never its sub-question's
+
+    def test_a_bracketed_title_before_its_section_mark_is_read(self):
+        # Root's phase48 P1 and P2, whole: a note saying only how far the mark reaches is its own; another title there is not.
+        item=self.item;label='四年级数学练习-虚构 一、1';text='哪个数等于2+3？ A.5 B.6'
+        question='四年级数学练习（虚构）\n一、选择题\n1.%s\n孩子作答：A\n'%text
+        self.assert_unproven(question,'教师参考（五年级数学练习第一大题）\n1.B\n',
+                             [item(label,text,'A','教师参考：B','incorrect',error='孩子作答A与模型所称教师参考B不同。')])
+        self.assertEqual(self.review(question,'教师参考（只含第一大题）\n1.A\n',[item(label,text,'A','教师参考：A','correct')]),
+                         [('教师参考：A','correct')])
+
+    def test_a_second_title_ending_in_a_colon_is_no_answer_field(self):
+        # Root's phase48 C1, whole: 「五年级数学练习：」 names no answer, so it is a second title; 「孩子作答：」 lines stay answers (MATH).
+        self.assert_unproven('四年级数学练习（虚构）\n1.哪个数等于2+3？ A.5 B.6 孩子作答：A\n五年级数学练习：\n2.哪个数等于9-1？ A.8 B.7 孩子作答：A\n',
+                             '教师参考答案（虚构）\n1.A\n2.B\n',
+                             [self.item('四年级数学练习-虚构 第2题','哪个数等于9-1？ A.8 B.7','A','教师参考：B','incorrect',
+                                        error='孩子作答A与模型所称教师参考B不同。')])
+
 
 if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TeacherReferenceScopeTests','TeacherReferenceSourceTests','TeacherReferenceEquationTests','TeacherReferenceGrammarTests','TextQuestionHTTPTests','TeacherPaperWholeNameTest','TeacherPaperFormalNameTest','TeacherRequestTitleTest'])
