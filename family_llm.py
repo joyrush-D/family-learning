@@ -1193,6 +1193,17 @@ def _ref_teacher_heading(line):
                                line[:found.start()] if found else line)
 
 
+_REF_TITLE_NOTE=re.compile(r'[（(【\[]([^（()）【】\[\]\n]*)[)）】\]]')  # one bracketed note of a heading 「（虚构）」
+
+
+def _ref_title_parts(text,titles=frozenset()):
+    """A heading read alike on the question text and on a teacher line: the words it names outside its brackets, and the words
+    of each bracketed note, every one whole. 「四年级数学练习（虚构）」 names 「四年级数学练习」 with its note 「虚构」; 「教师参考答案（虚构）」
+    names nothing and only repeats that note; 「数学练习（虚构）参考答案」 names 「数学练习」, a piece of that title, never the title."""
+    return (_ref_scope(_REF_TITLE_NOTE.sub('，',text),titles=titles)[2],
+            frozenset(_ref_scope(note,titles=titles)[2] for note in _REF_TITLE_NOTE.findall(text)))
+
+
 def _ref_request_title(questions,references,entries,titles=frozenset()):
     """The one ordinary title this request's whole question text gives, read as a label's words are, or None. A line's role
     comes from where it stands in the whole original, never from its words alone. The heading lines before each original's
@@ -1206,10 +1217,11 @@ def _ref_request_title(questions,references,entries,titles=frozenset()):
     nothing; with no field nothing closes a block, and where the original answers in fields a question or level left without its
     answer leaves none. No paper is named and no number repeats under one 大题, so a second paper of the same numbers in one
     file leaves none. The selected teacher text names no scope of its own: every entry is bare, and all of every line before its
-    first question number, words after a 大题 mark included, is only words of that title 「教师参考答案（虚构）」 or the name the
-    question text gives that same 大题 「一、选择题」, never another 「五年级练习参考答案」「五年级数学练习（虚构） 一、参考答案」
+    first question number, words after a 大题 mark included, is that whole title, the name the question text gives that same 大题
+    「一、选择题」, or no name outside its brackets with only that title's own bracketed notes 「教师参考答案（虚构）」. A title is read
+    whole, so a piece of it 「数学练习（虚构）参考答案」 is another title, as are 「五年级练习参考答案」「五年级数学练习（虚构） 一、参考答案」
     「教师参考（五年级数学练习第一大题）」「教师参考（第一大题，五年级数学练习）」."""
-    heads,later,fields,names,seen=set(),set(),set(),set(),set();unanswered=False
+    heads,later,fields,names,seen,notes=set(),set(),set(),set(),set(),{''};unanswered=False
     for document in questions:
         section=None;opened=waiting=False;pending=[]
         for line in document['text'].splitlines():
@@ -1230,7 +1242,7 @@ def _ref_request_title(questions,references,entries,titles=frozenset()):
             elif opened:
                 if words: pending.append(words)
                 waiting=waiting or bool(level)
-            elif words: heads.add(words)
+            elif words: heads.add(words);notes.update(_ref_title_parts(line,titles)[1])  # the title's own notes 「（虚构）」
             if waiting and (answer:=_REF_FIELD.search(line,marks[-1].end() if marks else level.end() if level else 0)):
                 fields.add(answer[1]);waiting=False;pending=[]  # the lines that waited were the block's stem, options and levels
             for key in [(section,int(next(g for g in mark.groups() if g))) for mark in marks]:
@@ -1242,8 +1254,9 @@ def _ref_request_title(questions,references,entries,titles=frozenset()):
     title=heads.pop()
     for document in references:
         for line in document['text'].splitlines():
-            paper,section,words=_ref_scope(_ref_teacher_heading(line),None,titles)
-            if paper is not None or words not in title and (section,words) not in names: return None
+            heading=_ref_teacher_heading(line);paper,section,words=_ref_scope(heading,None,titles);name,said=_ref_title_parts(heading,titles)
+            # Never a piece of the title: 「数学练习（虚构）」 is not 「四年级数学练习（虚构）」; naming nothing, a line repeats only its notes.
+            if paper is not None or words!=title and (section,words) not in names and (name or not said<=notes): return None
     return title
 
 

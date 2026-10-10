@@ -765,5 +765,17 @@ class TeacherRequestTitleTest(unittest.TestCase):
                                      '教师参考答案（虚构）\n1.A\n2.B\n',[item('四年级数学练习-虚构 第1题','哪个数等于2+3？ A.5 B.6','A','教师参考：A','correct')]),
                          [('教师参考：A','correct')])
 
+    def test_a_piece_of_the_title_is_another_teacher_title(self):
+        # Root's phase51 T1 and T2, whole: the teacher's 「数学练习（虚构）参考答案」 is only a piece of 「四年级数学练习（虚构）」, with no
+        # other proof of one paper, so its bare number lends nothing; the same whole title, and the plain heading that names nothing
+        # outside its brackets and repeats only the title's own note 「教师参考答案（虚构）」, still lend teacher A.
+        item=self.item;label='四年级数学练习-虚构 第1题';text='哪个数等于2+3？ A.5 B.6'
+        question='四年级数学练习（虚构）\n1. %s\n孩子作答：A\n'%text
+        self.assert_unproven(question,'数学练习（虚构）参考答案\n1. B\n',
+                             [item(label,text,'A','教师参考：B','incorrect',error='孩子作答A与模型所称教师参考B不同。')])
+        for key in ('四年级数学练习（虚构）参考答案\n1. A\n','教师参考答案（虚构）\n1. A\n'):
+            with self.subTest(key=key):
+                self.assertEqual(self.review(question,key,[item(label,text,'A','教师参考：A','correct')]),[('教师参考：A','correct')])
+
 
 if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TeacherReferenceScopeTests','TeacherReferenceSourceTests','TeacherReferenceEquationTests','TeacherReferenceGrammarTests','TextQuestionHTTPTests','TeacherPaperWholeNameTest','TeacherPaperFormalNameTest','TeacherRequestTitleTest'])
