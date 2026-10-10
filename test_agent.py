@@ -4933,6 +4933,64 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
             self.assertEqual(_school_event_dropped(first,cited(first+later),'参加校园安全讲座',attend),{'2026-10-24'} if want else set(),later)
             self.assertEqual(_school_borrowed_day(first,cited(first+later),'2026-10-24',attend,'参加校园安全讲座'),want,later)
 
+    def test_cancelled_lecture_must_not_reappear_in_agenda(self):
+        # Fictional counterexample E: the cancelled lecture's review candidate keeps no day in the whole agenda either. Its title
+        # only begins the meeting's whole object (另请家长…前参加科技讲座筹备会议), so the agenda never borrows that sibling's
+        # deadline back onto it; the meeting stays the one formal task, a deadline on its own day, open, with its publication day.
+        import family_agenda
+        first='科技讲座定于2026年10月24日举行，请家长参加，另请家长2026年10月24日前参加科技讲座筹备会议。'
+        attend='请家长参加科技讲座。';meeting='请家长2026年10月24日前参加科技讲座筹备会议。';sent='2026-10-10T09:00:00+08:00'
+        text=first+'现通知该科技讲座取消。';source=[('message:synthetic-group:11','虚构班级 · '+sent+'\n'+text)]
+        rows,tasks=self._school_event_run(text,[dict(title_quote=first,due='2026-10-24',task_title='参加科技讲座',task_goal=attend),
+                                                dict(title_quote=first,due='2026-10-24',task_title='参加科技讲座筹备会议',task_goal=meeting)],time=sent)
+        row=rows['参加科技讲座'];plan=json.loads(row['plan']);brief=plan['school_task']
+        self.assertEqual((row['state'],row['due'],brief['state'],brief['purpose'],brief['goal'],plan['school_date_quote']),
+                         ('pending','','review','admin',attend,first))
+        self.assertTrue(brief['reason'].strip());self.assertEqual(tasks,[('参加科技讲座筹备会议','2026-10-24')])
+        for _ in range(2):
+            self._school_head_reopened({'参加科技讲座':('pending','',attend,source),'参加科技讲座筹备会议':('accepted','2026-10-24',meeting,source)})
+            self.assertEqual({t['title']:(t['agenda']['due_on'],t['agenda']['due_kind'],t['agenda']['published_on']) for t in self.app.tasks()},
+                             {'参加科技讲座筹备会议':('2026-10-24','deadline','2026-10-10')})
+            whole=family_agenda.snapshot(self.app,'2026-10-10','2026-10-31')
+            self.assertEqual([(i['title'],i['agenda']['due_on']) for i in whole['inbox'] if i['kind']=='task'],[('参加科技讲座筹备会议','2026-10-24')])
+            self.assertEqual([(i['id'],i['agenda']['due_on'],i['agenda']['due_kind']) for i in self._school_inbox()],[(row['id'],'','')])
+            # The candidate shows only on its publication day for review, never dated; the meeting is the one scheduled task.
+            lecture=[(i['day'],i['kind'],i['agenda']['due_on'],i['agenda']['due_kind']) for i in whole['agenda'] if i['id']==row['id']]
+            self.assertEqual(lecture,[('2026-10-10','school','','')])
+            self.assertEqual({(i['title'],i['agenda']['due_on'],i['agenda']['due_kind'],i['closed']) for i in whole['agenda'] if i['kind']=='task'},
+                             {('参加科技讲座筹备会议','2026-10-24','deadline',False)})
+            self.assertEqual([(i['title'],i['agenda']['due_kind'],i['closed']) for i in family_agenda.snapshot(self.app,'2026-10-24','2026-10-24')['agenda']],
+                             [('参加科技讲座筹备会议','deadline',False)])
+
+    def test_preposed_cancel_of_same_shortened_lecture(self):
+        # Fictional counterexample F: 取消安全讲座 puts the cancelling predicate before the shortened name. The tail right after
+        # a predicate acting on it is the whole object, as it is before 取消, so the campus lecture goes to review with no day,
+        # no formal task and no agenda day, its reason, goal, quote, whole original and ref kept; 取消道路安全讲座 still
+        # cancels another whole lecture, and 改为安全讲座 gives a new value, not this lecture's state.
+        import family_agenda
+        from family_agenda import event_days
+        from family_agent import _school_borrowed_day,_school_event_dropped
+        first='校园安全讲座定于2026年10月24日举行，请学生参加。';attend='请学生参加校园安全讲座。';sent='2026-10-10T09:00:00+08:00'
+        text=first+'取消安全讲座。';source=[('message:synthetic-group:11','虚构班级 · '+sent+'\n'+text)]
+        rows,tasks=self._school_event_run(text,[dict(title_quote=first,due='2026-10-24',task_title='参加校园安全讲座',task_goal=attend)],time=sent)
+        row=rows['参加校园安全讲座'];plan=json.loads(row['plan']);brief=plan['school_task']
+        self.assertEqual((row['state'],row['due'],brief['state'],brief['purpose'],brief['goal'],plan['school_date_quote']),
+                         ('pending','','review','admin',attend,first))
+        self.assertTrue(brief['reason'].startswith('明确要求。'));self.assertIn('未采用模型日期',brief['reason']);self.assertEqual(tasks,[])
+        for _ in range(2):
+            self._school_head_reopened({'参加校园安全讲座':('pending','',attend,source)})
+            self.assertEqual(self.app.tasks(),[])
+            whole=family_agenda.snapshot(self.app,'2026-10-10','2026-10-31')
+            self.assertEqual([i for i in whole['inbox'] if i['kind']=='task'],[])
+            self.assertEqual([(i['day'],i['kind'],i['agenda']['due_on'],i['agenda']['due_kind']) for i in whole['agenda']],[('2026-10-10','school','','')])
+            self.assertEqual([(i['id'],i['agenda']['due_on'],i['agenda']['due_kind']) for i in self._school_inbox()],[(row['id'],'','')])
+        cited=lambda notice:[dict(ref='message:synthetic-group:11',text=notice,time=sent)]
+        for later,want in (('取消安全讲座。',True),('现通知取消安全讲座。',True),('取消该安全讲座。',True),('延期安全讲座。',True),
+                           ('取消道路安全讲座。',False),('道路安全讲座取消。',False),('取消安全讲座回执。',False),('原定的运动会改为安全讲座。',False)):
+            self.assertEqual(event_days(first+later,'2026-10-10'),set() if want else {'2026-10-24'},later)
+            self.assertEqual(_school_event_dropped(first,cited(first+later),'参加校园安全讲座',attend),{'2026-10-24'} if want else set(),later)
+            self.assertEqual(_school_borrowed_day(first,cited(first+later),'2026-10-24',attend,'参加校园安全讲座'),want,later)
+
     def test_a_display_titled_attendance_confirmation_keeps_its_deadline_by_its_own_goal(self):
         # Fictional counterexample: the confirming item's display title starts with 参加 (参加意向确认：学校开放日). Its goal
         # places it on its own clause, which ties the day to confirming, so it stays a deadline beside attending the open day,

@@ -134,6 +134,8 @@ _EVENT_STATE=(r'取消|延期|改期|推迟|暂停|停办|改为|改到|改至|�
               r'|自愿|自由|可选|可以?不|不必|无需|无须|不用|不需要?|不要求|不强制|非强制|非必须|不作(?:统一|强制)?要求|酌情|视情况|仅供参考|选择性')
 # A state word that can take what follows as its object: 取消打印材料 cancels the printing, 可不参加 the attending.
 _EVENT_STATE_OBJECT=r'取消|暂停|停办|推迟|延期|改期|改为|改到|改至|可以?不|不必|无需|无须|不用|不需要?|不要求|不强制'
+# Of those, one whose object is what it acts on (取消安全讲座), not the new value it gives (改为安全讲座).
+_EVENT_STATE_ON=r'(?:(?!改为|改到|改至)(?:'+_EVENT_STATE_OBJECT+r'))'
 # Another object's own noun. A Chinese name ends in its noun, so it is the last word before the state or the clause end.
 _EVENT_OBJECT_NOUN=r'回执|资料|材料|座位|车位|表|单|册|书|证|卡|票|物品|用品'
 # Words that open a clause around a name rather than sit inside it: a cause or agent (因单位安排、由…), a place or
@@ -180,12 +182,13 @@ def _event_named(event,whole=False):
     its words (学校开放日 → 开放日), or a word pointing back at it (该活动、本次会议). Attending, a time, or 活动 ending another
     name (开放日活动取消) can belong to another action or event there, so they never stand for this one.
 
-    In another sentence of the notice (whole) a shortened tail is the event only as a whole object, where its words begin or
-    right after a pointer back (开放日取消、该开放日延期); words before it make it the tail of another complete name, so
-    道路安全讲座取消 never cancels 校园安全讲座. Its full name stays the event wherever it stands (现通知该学校开放日取消)."""
+    In another sentence of the notice (whole) a shortened tail is the event only as a whole object, where its words begin,
+    right after a pointer back, or right after a state predicate taking it as its object (开放日取消、该开放日延期、取消安全讲座);
+    words before it make it the tail of another complete name, so 道路安全讲座取消 and 取消道路安全讲座 never cancel
+    校园安全讲座. Its full name stays the event wherever it stands (现通知该学校开放日取消)."""
     names=set(_event_names(event))
     own=sorted({name[i:] for name in names for i in range(len(name)-min(3,len(name))+1)},key=len,reverse=True)
-    lead=r'(?:^\s*|'+_EVENT_POINTER+')' if whole else ''
+    lead=r'(?:^\s*|'+_EVENT_POINTER+'|'+_EVENT_STATE_ON+r'\s*)' if whole else ''
     return '|'.join([re.escape(x) if x in names else lead+re.escape(x) for x in own]+[_EVENT_POINTER+r'(?:活动|会议)'])
 
 
@@ -385,6 +388,10 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
     source_unknown=any(re.search(r'(?:时间|日期).{0,6}(?:另行通知|另行安排|待定|未定)',clause) for clause,_ in selected)
     source_due=next(iter(dates)) if len(dates)==1 and not source_unknown else ''
     due_on=focus.get('due_on','') if organized else deadline(due,published) or deadline(title,published) or source_due
+    # A school item's day not saved with it is its own only by the same shared placement its proposal passed: a sibling's
+    # same-day deadline (另请家长…前参加科技讲座筹备会议) never dates an item whose own event the notice later cancels.
+    if (not organized and date_quote and due_on and due_on!=date(due) and family_agent._school_borrowed_day(
+            date_quote,[dict(text=m.get('text',''),time=m.get('time','')) for m in messages],due_on,goal,subject)):due_on=''
     category=focus.get('category','')
     if category not in ('homework','todo'):category='todo' if category=='unknown' else task_category(title,purpose)
     # Later supplements retain their own source entries, not the first notice's time.
