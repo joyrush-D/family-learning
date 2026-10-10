@@ -132,20 +132,30 @@ _ATTEND_REQUEST=r'(?:请|务必|必须|须|需)(?:各位|全体)?(?:家长|学�
 _EVENT_STATE=(r'取消|延期|改期|推迟|暂停|停办|改为|改到|改至|原定|已于|已经|已举行|已召开|已结束|回顾|暂定|初定|拟(?:于|在|定)|待定|待确定|尚未确定|未定'
               r'|另行(?:通知|告知|安排)|(?:后续|稍后|随后|再行|届时)(?:通知|告知|公布)|待通知'
               r'|自愿|自由|可选|可以?不|不必|无需|无须|不用|不需要?|不要求|不强制|非强制|非必须|不作(?:统一|强制)?要求|酌情|视情况|仅供参考|选择性')
-# A state word taking what follows as its object: 取消打印材料 cancels the printing, 可不参加 the attending.
+# A state word that can take what follows as its object: 取消打印材料 cancels the printing, 可不参加 the attending.
 _EVENT_STATE_OBJECT=r'取消|暂停|停办|推迟|延期|改期|改为|改到|改至|可以?不|不必|无需|无须|不用|不需要?|不要求|不强制'
+# Another object's own noun. A Chinese name ends in its noun, so it is the last word before the state or the clause end.
+_EVENT_OBJECT_NOUN=r'回执|资料|材料|座位|车位|表|单|册|书|证|卡|票|物品|用品'
+# Words that open a clause around a name rather than sit inside it: a cause or agent (因单位安排、由…), a place or
+# time preposition, a conjunction joining another predicate (并退费), an adverb or a negation.
+_EVENT_CLAUSE_WORD=r'因|由|被|把|将|于|在|从|据|经|并|且|而|已|未|没|仍|还|再|又|均|都|也|不|无|非'
 # The only words that make the event's words a modifier of another object: what follows them is that object's
-# complete name, holding no state before its own noun (家长会回执、会议资料、家长会安排表), then how that object stands
-# (家长会回执已经取消). Anything else between them and the state (原本已经、因故、已) leaves the state on the event itself,
-# so a relation that cannot be read from the original stays unconfirmed.
-_EVENT_OTHER_OBJECT=(r'的?(?:(?!'+_EVENT_STATE+r'|(?:'+_DAY_WORDS+r'))[^，,])*?'
-                     r'(?:回执|资料|材料|座位|车位|表|单|册|书|证|卡|票|物品|用品)(?:(?!'+_DAY_WORDS+r')[^，,])*')
-# A day labelling an edition (2026年10月10日版), or one whose 的 phrase reports the event before it is held
-# (10月10日的家长会资料说明家长会将…举行), dates that edition or material, not when the event is held. The reporting
-# word must be followed by a complete reported clause: the holding itself or a nameable event of its own before it.
-# A word inside the held event's own name (2026年10月18日的学校说明会在报告厅举行) leaves the day on that event.
+# complete name ending in its own noun (家长会回执、会议资料、家长会安排表), then only how that object stands
+# (家长会回执已经取消). A noun inside a cause or another word (因单位安排、因书面通知、因书面材料), or any other words
+# between them and the state (原本已经、因故、已), leaves the state on the event itself, so a relation that cannot be
+# read from the original stays unconfirmed.
+_EVENT_OTHER_OBJECT=(r'的?(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|'+_EVENT_CLAUSE_WORD+r')[^，,])*?(?:'+_EVENT_OBJECT_NOUN+r')'
+                     r'(?:'+_EVENT_STATE+r'|已|均|都|也|亦|一律|全部|暂时?)*')
+# What can report an event: a document or material carrying its content, never a seat, a ticket or a book.
+_EVENT_DOCUMENT=r'资料|材料|回执|通知书?|告知书|告家长书|倡议书|说明书|公告|文件|简报|来函|海报|消息|邮件|表格|清单|手册'
+# A day labelling an edition (2026年10月10日版), or one whose 的 phrase names a document that reports the event before it
+# is held (10月10日的家长会资料说明家长会将…举行), dates that edition or document, not when the event is held. The
+# reporting word must be the predicate of that complete document name, followed by a complete reported clause: the
+# holding itself or a nameable event of its own before it. A reporting word inside the held event's own name, after
+# anything but a document (2026年10月18日的学校说明会、学校科创成果介绍交流会在报告厅举行), leaves the day on that event.
 _EVENT_OTHER_DAY=(r'(?:'+_EVENT_DAY+r')\s*(?:[（(][^）)]*[）)])?\s*版(?!画)'
-                  r'|(?:'+_EVENT_DAY+r')\s*的(?:(?!'+_EVENT_DAY+r'|[将定拟于在]|举行|召开|举办)[^，,])*?(?:说明|显示|表示|指出|提到|写明|写道|告知|介绍|载明|注明)'
+                  r'|(?:'+_EVENT_DAY+r')\s*的(?:(?!'+_EVENT_DAY+r'|[将定拟于在]|举行|召开|举办)[^，,])*?(?:'+_EVENT_DOCUMENT+r')'
+                  r'(?:说明|显示|表示|指出|提到|写明|写道|告知|介绍|载明|注明)'
                   r'(?:(?:(?!'+_EVENT_DAY+r'|[将定拟于在]|举行|召开|举办)[^，,]){2,})?(?:[将定拟于在]|举行|召开|举办)')
 
 
@@ -163,11 +173,13 @@ def _modifies_event(part,mention):
     参加由家长自愿决定、本次家长会已取消、家长会原本已经取消 are about the event; 取消打印材料、座位可选、无需带材料 are
     about another object; a clause holding nothing but the state (不作统一要求) can only be about the event. The event's
     words only modify another object when the words from them to the state (or to the clause's end) complete that object's
-    own name, so 家长会回执可选、家长会回执取消、家长会安排表可选 keep the meeting while 家长会安排可选 does not.
+    own name, so 家长会回执可选、家长会回执取消、家长会安排表可选 keep the meeting while 家长会安排可选、家长会因单位安排取消
+    do not. What follows a state is its object only when it names one (取消打印材料、取消家长会、可不参加); a joined
+    predicate or a complement (本次家长会取消并退费、延期至下周、取消了) leaves the state on the subject before it.
     """
     for m in re.finditer(_EVENT_STATE,part):
         before=re.sub(r'[\s、：:]','',part[:m.start()]);after=re.sub(r'[\s、：:]','',part[m.end():])
-        if len(after)>1 and re.fullmatch(_EVENT_STATE_OBJECT,m[0]):before=''  # Its object is what follows it (取消了 has none).
+        if re.fullmatch(_EVENT_STATE_OBJECT,m[0]) and (re.search(mention,after) or re.fullmatch(r'了?(?:'+_EVENT_OTHER_OBJECT+r')',after)):before=''
         if not before+after:return True
         if any(not re.fullmatch(_EVENT_OTHER_OBJECT,side[x.end():]) for side in (before,after) for x in re.finditer(mention,side)):return True
     return False
