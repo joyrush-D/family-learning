@@ -4099,7 +4099,7 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
         base=dict(focus='school',learning_subject='',learning_goal_id='',task_advice='',task_state='ready',task_reason='明确要求。',
                   task_change='new',task_target_id='',task_purpose='admin',evidence=[dict(ref='message:synthetic-group:11')])
         with patch.object(agent.family_llm,'_chat_json',return_value={'proposals':[school_proposal(**{**base,**p}) for p in proposals]}) as called:
-            self.assertEqual(agent.run_once(self.app,self.now)['failed'],0);self.assertEqual(called.call_count,1)
+            self.school_run=agent.run_once(self.app,self.now);self.assertEqual(self.school_run['failed'],0);self.assertEqual(called.call_count,1)
         with self.app.connect() as c:
             return ({r['title']:dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")},
                     sorted((r['title'],r['due']) for r in c.execute('SELECT title,due FROM manual_tasks')))
@@ -5000,6 +5000,46 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
         # Fictional counterexample H: 不取消安全讲座 negates the cancelling predicate; its polarity is kept, never stripped.
         self._a_later_sentence_keeps_the_campus_lecture('不取消安全讲座。')
 
+    def test_double_negation_cancel(self):
+        # Fictional counterexample I: 不能不取消安全讲座 negates the negation, so the lecture is cancelled. The negations are read
+        # together as one chain, never by the last one alone: the campus lecture goes to review with no day, no formal task and
+        # no agenda day, its reason, goal, quote, whole original and ref kept, shown only on its publication day.
+        import family_agenda
+        from family_agenda import event_days
+        from family_agent import _school_borrowed_day,_school_event_dropped
+        first='校园安全讲座定于2026年10月24日举行，请学生参加。';attend='请学生参加校园安全讲座。';sent='2026-10-10T09:00:00+08:00'
+        text=first+'不能不取消安全讲座。';source=[('message:synthetic-group:11','虚构班级 · '+sent+'\n'+text)]
+        rows,tasks=self._school_event_run(text,[dict(title_quote=first,due='2026-10-24',task_title='参加校园安全讲座',task_goal=attend)],time=sent)
+        self.assertEqual((self.school_run.get('processed'),self.school_run['failed']),(1,0));self.assertEqual(list(rows),['参加校园安全讲座'])
+        row=rows['参加校园安全讲座'];plan=json.loads(row['plan']);brief=plan['school_task']
+        self.assertEqual((row['state'],row['due'],brief['state'],brief['purpose'],brief['goal'],plan['school_date_quote']),
+                         ('pending','','review','admin',attend,first))
+        self.assertTrue(brief['reason'].strip());self.assertEqual(tasks,[])
+        for _ in range(2):
+            self._school_head_reopened({'参加校园安全讲座':('pending','',attend,source)})
+            self.assertEqual(self.app.tasks(),[])
+            with self.app.connect() as c:
+                self.assertEqual([dict(r) for r in c.execute('SELECT * FROM manual_tasks')],[])
+            whole=family_agenda.snapshot(self.app,'2026-10-10','2026-10-31')
+            self.assertEqual([i for i in whole['inbox'] if i['kind']=='task'],[])
+            self.assertEqual([(i['day'],i['kind'],i['agenda']['due_on'],i['agenda']['due_kind']) for i in whole['agenda']],[('2026-10-10','school','','')])
+            self.assertEqual([(i['id'],i['agenda']['due_on'],i['agenda']['due_kind']) for i in self._school_inbox()],[(row['id'],'','')])
+        # One polarity rule for 取消X and X取消: an odd chain keeps the lecture, an even one cancels it, and a chain left
+        # unreadable by another negation before it (未必不、不可能不) or no chain at all (未必取消) never keeps it confirmed.
+        cited=lambda notice:[dict(ref='message:synthetic-group:11',text=notice,time=sent)]
+        for later,want in (('不能不取消安全讲座。',True),('安全讲座不能不取消。',True),('不得不取消安全讲座。',True),('不会不取消安全讲座。',True),
+                           ('并非不取消安全讲座。',True),('未必不取消安全讲座。',True),('不可能不取消安全讲座。',True),('未必取消安全讲座。',True),
+                           ('不能取消安全讲座。',False),('安全讲座不能取消。',False),('不取消安全讲座。',False),('无需取消安全讲座。',False),
+                           ('安全讲座并未取消。',False),('不能不取消安全讲座筹备会议。',False),('不能不取消道路安全讲座。',False)):
+            self.assertEqual(event_days(first+later,'2026-10-10'),set() if want else {'2026-10-24'},later)
+            self.assertEqual(_school_event_dropped(first,cited(first+later),'参加校园安全讲座',attend),{'2026-10-24'} if want else set(),later)
+            self.assertEqual(_school_borrowed_day(first,cited(first+later),'2026-10-24',attend,'参加校园安全讲座'),want,later)
+
+    def test_single_negation_no_cancel(self):
+        # Fictional counterexample J: 不能取消安全讲座 has one negation, so the campus lecture keeps its day as an event and its
+        # one formal task, open, in every daily view and through reopening.
+        self._a_later_sentence_keeps_the_campus_lecture('不能取消安全讲座。')
+
     def _a_later_sentence_keeps_the_campus_lecture(self,later):
         import family_agenda
         from family_agenda import event_days
@@ -5007,7 +5047,7 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
         first='校园安全讲座定于2026年10月24日举行，请学生参加。';attend='请学生参加校园安全讲座。';sent='2026-10-10T09:00:00+08:00'
         text=first+later;source=[('message:synthetic-group:11','虚构班级 · '+sent+'\n'+text)]
         rows,tasks=self._school_event_run(text,[dict(title_quote=first,due='2026-10-24',task_title='参加校园安全讲座',task_goal=attend)],time=sent)
-        self.assertEqual(list(rows),['参加校园安全讲座'])
+        self.assertEqual((self.school_run.get('processed'),self.school_run['failed']),(1,0));self.assertEqual(list(rows),['参加校园安全讲座'])
         row=rows['参加校园安全讲座'];plan=json.loads(row['plan']);brief=plan['school_task']
         self.assertEqual((row['state'],row['due'],brief['state'],brief['purpose'],brief['goal'],plan['school_date_quote']),
                          ('accepted','2026-10-24','ready','admin',attend,first))
@@ -5016,9 +5056,9 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
             self._school_head_reopened({'参加校园安全讲座':('accepted','2026-10-24',attend,source)})
             with self.app.connect() as c:
                 formal=[dict(r) for r in c.execute('SELECT * FROM manual_tasks')]
-            self.assertEqual(len(formal),1);self.assertIn(attend,list(formal[0].values()))
-            self.assertEqual([(t['title'],t['agenda']['due_on'],t['agenda']['due_kind'],t['agenda']['published_on']) for t in self.app.tasks()],
-                             [('参加校园安全讲座','2026-10-24','event','2026-10-10')])
+            self.assertEqual(len(formal),1);self.assertIn(attend,list(formal[0].values()));self.assertEqual(formal[0]['action'],attend)
+            self.assertEqual([(t['title'],t['action'],t['agenda']['due_on'],t['agenda']['due_kind'],t['agenda']['published_on']) for t in self.app.tasks()],
+                             [('参加校园安全讲座',attend,'2026-10-24','event','2026-10-10')])
             whole=family_agenda.snapshot(self.app,'2026-10-10','2026-10-31')
             self.assertEqual([(i['title'],i['agenda']['due_on']) for i in whole['inbox'] if i['kind']=='task'],[('参加校园安全讲座','2026-10-24')])
             # The one formal task may remind on several days; every view keeps its own day and role, open.
