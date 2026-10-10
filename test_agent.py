@@ -4340,6 +4340,60 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
         row=rows['参加家长会'];brief=json.loads(row['plan'])['school_task']
         self.assertEqual((row['state'],row['due'],brief['state']),('accepted','2026-10-18','ready'));self.assertEqual(tasks,[('参加家长会','2026-10-18')])
 
+    def _school_inbox(self):
+        import family_agenda
+        return [i for i in family_agenda.snapshot(self.app,'2026-10-01','2026-10-31')['inbox'] if i['kind']=='school']
+
+    def test_a_later_sentence_states_the_same_meeting_but_not_another_event_or_its_receipt(self):
+        # Fictional: a later sentence of the same original still cancels or postpones the meeting it names or points back
+        # at; cancelling another event or only the meeting's receipt leaves the meeting's own day.
+        from family_agenda import deadlines,event_days
+        meeting='家长会定于2026年10月18日在体育馆举行，请家长参加。'
+        for text,want in ((meeting+'现通知该家长会取消。',set()),(meeting+'本次家长会延期至下周。',set()),
+                          (meeting+'家长会改期，具体时间另行通知。',set()),(meeting+'现取消家长会。',set()),
+                          (meeting+'本次活动因故取消。',set()),
+                          (meeting+'运动会取消。',{'2026-10-18'}),(meeting+'开放日活动取消。',{'2026-10-18'}),
+                          (meeting+'家长会回执取消。',{'2026-10-18'}),(meeting+'取消家长会回执。',{'2026-10-18'}),
+                          (meeting+'家长会座位可选。',{'2026-10-18'})):
+            self.assertEqual(deadlines(text,'2026-10-10'),want,text);self.assertEqual(event_days(text,'2026-10-10'),want,text)
+        text=meeting+'现通知该家长会取消。'
+        rows,tasks=self._school_event_run(text,[dict(title_quote=text,due='2026-10-18',task_title='参加家长会',task_goal=text)])
+        row=rows['参加家长会'];brief=json.loads(row['plan'])['school_task']
+        self.assertEqual((row['state'],row['due'],brief['state'],brief['purpose']),('pending','','review','admin'));self.assertEqual(tasks,[])
+        self.assertEqual([e['ref'] for e in json.loads(row['evidence'])],['message:synthetic-group:11'])
+        self.assertEqual([(i['id'],i['agenda']['due_on'],i['agenda']['due_kind']) for i in self._school_inbox()],[(row['id'],'','')])
+
+    def test_a_sibling_receipt_deadline_on_the_same_day_never_turns_the_meeting_into_a_deadline(self):
+        # Fictional: the receipt's same-day deadline is the receipt's own; the meeting item keeps its arranged day.
+        from family_agenda import date_meaning
+        text='家长会定于2026年10月18日举行，请家长参加；2026年10月18日前寄出家长会回执。'
+        rows,tasks=self._school_event_run(text,[dict(title_quote=text,due='2026-10-18',task_title='参加家长会',task_goal='家长会定于2026年10月18日举行，请家长参加。')])
+        row=rows['参加家长会'];brief=json.loads(row['plan'])['school_task']
+        self.assertEqual((row['state'],row['due'],brief['state']),('accepted','2026-10-18','ready'));self.assertEqual(tasks,[('参加家长会','2026-10-18')])
+        self.assertEqual({t['title']:t['agenda']['due_kind'] for t in self.app.tasks()},{'参加家长会':'event'})
+        import family_agenda
+        self.assertEqual([(i['title'],i['agenda']['due_kind']) for i in family_agenda.snapshot(self.app,'2026-10-18','2026-10-18')['agenda']],[('参加家长会','event')])
+        for title,want in (('参加家长会','event'),('参加家长会（体育馆）','event'),('寄出家长会回执','deadline'),('交回活动回执','deadline'),('','deadline')):
+            self.assertEqual(date_meaning(text,'2026-10-18','2026-10-10',title),want,title)
+
+    def test_meeting_and_its_receipt_on_one_day_keep_their_own_date_meanings_through_run_once(self):
+        meeting='家长会定于2026年10月18日举行，请家长参加';slip='2026年10月18日前寄出家长会回执'
+        rows,tasks=self._school_event_run(meeting+'；'+slip+'。',[
+            dict(title_quote=meeting,due='2026-10-18',task_title='参加家长会',task_goal=meeting+'。'),
+            dict(title_quote=slip,due='2026-10-18',task_title='寄出家长会回执',task_goal=slip+'。')])
+        self.assertEqual(tasks,[('参加家长会','2026-10-18'),('寄出家长会回执','2026-10-18')])
+        self.assertEqual({t['title']:t['agenda']['due_kind'] for t in self.app.tasks()},{'参加家长会':'event','寄出家长会回执':'deadline'})
+
+    def test_a_review_meeting_candidate_reads_the_same_original_event_day(self):
+        # Fictional: who attends still needs the parent, so the candidate stays pending, yet its original day is the meeting's.
+        text='家长会定于2026年10月18日举行，请家长参加。'
+        rows,tasks=self._school_event_run(text,[dict(title_quote=text,due='2026-10-18',task_title='参加家长会',task_goal=text,
+                                                     task_state='review',task_reason='参加人待家长核对。')])
+        row=rows['参加家长会'];brief=json.loads(row['plan'])['school_task']
+        self.assertEqual((row['state'],row['due'],brief['state']),('pending','2026-10-18','review'));self.assertEqual(tasks,[])
+        self.assertEqual([(i['id'],i['status'],i['agenda']['due_on'],i['agenda']['due_kind']) for i in self._school_inbox()],
+                         [(row['id'],'待核对','2026-10-18','event')])
+
     def test_unlocated_open_day_never_takes_its_summary_day_over_the_original_pending_time(self):
         # Fictional: the title cannot place 开放日活动 in its original, so the summary's day never overrides 时间待定;
         # the voucher keeps its own deadline.
