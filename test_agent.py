@@ -4121,6 +4121,23 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
             self.assertIn(own,brief['goal']);self.assertNotIn(other,brief['goal'])
             self.assertEqual([e['ref'] for e in json.loads(rows[title]['evidence'])],['message:synthetic-group:11'])
 
+    def test_attended_event_day_variants_keep_own_day_but_optional_or_borrowed_days_stay_out(self):
+        # Fictional variants: relative and directly required days stay; optional, unset or another item's day never ground one.
+        from family_agenda import deadlines
+        for text,want in (('家长会安排在明日上午9点召开，请各位家长出席。',{'2026-10-11'}),('家长会将于10月17日上午举行，家长务必参加。',{'2026-10-17'}),
+                          ('家长会定于2026年10月17日举行，请家长参加，无需带材料。',{'2026-10-17'}),
+                          ('家长会定于2026年10月15日举行，请家长自愿参加。',set()),('家长会定于2026年10月15日举行，请家长参加，可不参加。',set()),
+                          ('家长会定于2026年10月17日举行，请家长参加，自愿参加、不作统一要求。',set()),
+                          ('本通知日期：2026年10月10日！家长会稍后举行，请家长参加。',set()),
+                          ('家长会暂定于2026年10月15日举行，请家长参加。',set()),('家长会将于11月17日举行，请家长参加。',set())):
+            self.assertEqual(deadlines(text,'2026-10-10'),want,text)
+        sports='2026年10月15日学校举行运动会，请同学参加。';meeting='家长会时间另行通知，请家长参加。'
+        rows,tasks=self._school_event_run(sports+meeting,[dict(title_quote=sports,due='2026-10-15',task_title='参加运动会',task_goal=sports),
+                                                          dict(title_quote=meeting,due='2026-10-15',task_title='参加家长会',task_goal=meeting)])
+        self.assertEqual(tasks,[('参加运动会','2026-10-15')])
+        brief=json.loads(rows['参加家长会']['plan'])['school_task']
+        self.assertEqual((rows['参加家长会']['due'],brief['state']),('','review'));self.assertIn('未采用模型日期',brief['reason'])
+
     def test_uncertain_school_date_stays_review_without_poisoning_valid_batch(self):
         payload=self.payload(cursor='13');payload['messages'][0]['text']='请准备阅读材料，日期另行通知。'
         payload['messages'].extend([dict(id='12',time=self.now.isoformat(),kind='text',sender='虚构老师',text='请填回执，截止时间：2026 年 2 月 12 日。',unread=False),
