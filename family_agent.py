@@ -2042,7 +2042,8 @@ def _school_borrowed_day(quote,cited,due,goal='',title=''):
     (截止时间：…；明天完成以下两项：…) still covers the clauses after it; a colon followed by its own action is no header,
     so 运动会：10月15日举行 never becomes the day of 家长会时间另行通知. Own words that both defer a time and state a day
     hold two actions: the item is the one its title names, so quoting or summarising the whole sentence never moves the
-    form's day to the meeting. A title naming neither leaves the day another action's unless the summary states it without deferring.
+    form's day to the meeting. A title naming neither cannot place the item in its original, so the item stays unconfirmed:
+    a summary declaring a day (开放日活动定于…举行) never overrides the original's own 时间待定.
     """
     from family_agenda import deadlines,sent_day
     homes=[e for e in cited if quote and quote in e['text']]
@@ -2060,8 +2061,7 @@ def _school_borrowed_day(quote,cited,due,goal='',title=''):
     if re.search(day,''.join(clauses[n][1][0] for n in lead+own)):
         if not re.search(_SCHOOL_DEFERRED,'，'.join(clauses[n][1][0] for n in own)):return False
         picked=[n for n,keep in zip(own,_school_title_named([clauses[n][1][0] for n in own],title)) if keep]
-        if len(picked)==len(own):
-            return bool(re.search(_SCHOOL_DEFERRED,goal)) or due not in _school_goal_dates(goal,homes)
+        if len(picked)==len(own):return True
         own=picked;lead=leads(own)
         if re.search(day,''.join(clauses[n][1][0] for n in lead+own)):
             return bool(re.search(_SCHOOL_DEFERRED,'，'.join(clauses[n][1][0] for n in own)))
