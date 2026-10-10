@@ -175,6 +175,12 @@ def _event_mention(event):
 
 # A word pointing back at what the notice already named (该、本次、上述).
 _EVENT_POINTER=r'(?:该|此|本|这|上述|以上)(?:次|项|场|个)?'
+# A negation right before a predicate (不取消、并未延期、没有被取消、无需取消) states its opposite; 不得不 does not negate.
+_EVENT_NEGATION=r'(?:不必|无需|无须|不用|不需要?|不得|不能|不会|不再|无法|没有?|不是|并非|(?<!不得)不|未)被?'
+# Where a whole name ends: the words after it open a predicate, a clause, a day or a joined name (安全讲座取消、安全讲座因故
+#延期、安全讲座和运动会取消), or name its time. Any other word goes on naming a longer object it only heads (安全讲座筹备会议).
+_EVENT_NAME_END=(r'(?!(?!'+_EVENT_STATE+r'|'+_EVENT_CLAUSE_WORD+r'|'+_DAY_WORDS+r'|[和与及或跟同等了]|的?(?:时间|日期))'
+                 r'[^\s，,、；;：:。！!？?])')
 
 
 def _event_named(event,whole=False):
@@ -185,11 +191,14 @@ def _event_named(event,whole=False):
     In another sentence of the notice (whole) a shortened tail is the event only as a whole object, where its words begin,
     right after a pointer back, or right after a state predicate taking it as its object (开放日取消、该开放日延期、取消安全讲座);
     words before it make it the tail of another complete name, so 道路安全讲座取消 and 取消道路安全讲座 never cancel
-    校园安全讲座. Its full name stays the event wherever it stands (现通知该学校开放日取消)."""
+    校园安全讲座. The whole object also ends with the tail: name words after it make the tail the head of another complete
+    object, so 取消安全讲座筹备会议 and 安全讲座筹备会议取消 keep 校园安全讲座 as they keep it from 取消安全讲座回执. Its full
+    name stays the event wherever it stands (现通知该学校开放日取消)."""
     names=set(_event_names(event))
     own=sorted({name[i:] for name in names for i in range(len(name)-min(3,len(name))+1)},key=len,reverse=True)
     lead=r'(?:^\s*|'+_EVENT_POINTER+'|'+_EVENT_STATE_ON+r'\s*)' if whole else ''
-    return '|'.join([re.escape(x) if x in names else lead+re.escape(x) for x in own]+[_EVENT_POINTER+r'(?:活动|会议)'])
+    end=_EVENT_NAME_END if whole else ''
+    return '|'.join([re.escape(x) if x in names else lead+re.escape(x)+end for x in own]+[_EVENT_POINTER+r'(?:活动|会议)'])
 
 
 def _modifies_event(part,mention):
@@ -201,9 +210,12 @@ def _modifies_event(part,mention):
     own name, so 家长会回执可选、家长会回执取消、家长会安排表可选 keep the meeting while 家长会安排可选、家长会因单位安排取消
     do not. What follows a state is its object only when it names one (取消打印材料、取消家长会、可不参加); a joined
     predicate or a complement (本次家长会取消并退费、延期至下周、取消了) leaves the state on the subject before it.
+    Before or after its subject or object, a negated predicate (不取消安全讲座、家长会并未延期) states the opposite, and a
+    state whose object is another predicate (无需取消、可以不改期) only sets that predicate's polarity, so neither is a state.
     """
     for m in re.finditer(_EVENT_STATE,part):
         before=re.sub(r'[\s、：:]','',part[:m.start()]);after=re.sub(r'[\s、：:]','',part[m.end():])
+        if re.search(_EVENT_NEGATION+r'$',before) or (re.fullmatch(_EVENT_STATE_OBJECT,m[0]) and re.match(_EVENT_STATE_OBJECT,after)):continue
         if re.fullmatch(_EVENT_STATE_OBJECT,m[0]) and (re.search(mention,after) or re.fullmatch(r'了?(?:'+_EVENT_OTHER_OBJECT+r')',after)):before=''
         if not before+after:return True
         if any(not re.fullmatch(_EVENT_OTHER_OBJECT,side[x.end():]) for side in (before,after) for x in re.finditer(mention,side)):return True
