@@ -4290,6 +4290,56 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
         rows,tasks=self._school_event_run(text,[dict(title_quote=text,due='2026-10-18',task_title='参加家长会',task_goal=text)])
         self.assertEqual(rows['参加家长会']['due'],'');self.assertEqual(tasks,[])
 
+    def test_day_and_state_follow_the_complete_subject_object_and_predicate(self):
+        # Fictional: a cause (因单位安排、因书面通知) or a joined predicate (并退费、至下周) is not another object, and a
+        # word inside a held event's complete name (科创成果介绍交流会) is not a material reporting it; only a complete
+        # other object (家长会回执、打印材料) or a material's own report keeps or drops the day.
+        from family_agenda import date_meaning,deadlines,event_days
+        meeting='家长会定于2026年10月18日举行，请家长参加，'
+        for text,want in ((meeting+'家长会因单位安排取消。',set()),
+                          ('学校开放日定于2026年10月18日举行，请家长参加，本次学校开放日因书面通知延期。',set()),
+                          (meeting+'本次家长会取消并退费。',set()),
+                          ('2026年10月18日的学校科创成果介绍交流会在报告厅举行，请家长参加。',{'2026-10-18'}),
+                          (meeting+'家长会回执已经取消。',{'2026-10-18'}),
+                          (meeting+'家长会因书面材料延期。',set()),
+                          (meeting+'本次家长会延期至下周。',set()),
+                          (meeting+'本次家长会取消打印材料。',{'2026-10-18'}),
+                          ('2026年10月10日的家长会资料介绍交流会将在报告厅举行，请家长参加。',set())):
+            self.assertEqual(deadlines(text,'2026-10-10'),want,text);self.assertEqual(event_days(text,'2026-10-10'),want,text)
+        self.assertEqual(date_meaning('2026年10月18日的学校科创成果介绍交流会在报告厅举行，请家长参加','2026-10-18','2026-10-10'),'event')
+
+    def _unconfirmed_event_run(self,text,title):
+        rows,tasks=self._school_event_run(text,[dict(title_quote=text,due='2026-10-18',task_title=title,task_goal=text)])
+        row=rows[title];brief=json.loads(row['plan'])['school_task']
+        self.assertEqual((row['state'],row['due'],brief['state']),('pending','','review'),text);self.assertEqual(tasks,[],text)
+
+    def test_meeting_cancelled_for_a_cause_stays_unconfirmed_through_run_once(self):
+        self._unconfirmed_event_run('家长会定于2026年10月18日举行，请家长参加，家长会因单位安排取消。','参加家长会')
+
+    def test_open_day_postponed_for_a_cause_stays_unconfirmed_through_run_once(self):
+        self._unconfirmed_event_run('学校开放日定于2026年10月18日举行，请家长参加，本次学校开放日因书面通知延期。','参加学校开放日')
+
+    def test_meeting_cancelled_with_a_joined_predicate_stays_unconfirmed_through_run_once(self):
+        self._unconfirmed_event_run('家长会定于2026年10月18日举行，请家长参加，本次家长会取消并退费。','参加家长会')
+
+    def test_event_named_with_a_reporting_word_keeps_its_day_through_run_once(self):
+        text='2026年10月18日的学校科创成果介绍交流会在报告厅举行，请家长参加。';title='参加学校科创成果介绍交流会'
+        rows,tasks=self._school_event_run(text,[dict(title_quote=text,due='2026-10-18',task_title=title,task_goal=text)])
+        row=rows[title];brief=json.loads(row['plan'])['school_task']
+        self.assertEqual((row['state'],row['due'],brief['state']),('accepted','2026-10-18','ready'))
+        self.assertNotIn('未采用模型日期',brief.get('reason',''));self.assertEqual(tasks,[(title,'2026-10-18')])
+        self.assertEqual({t['title']:t['agenda']['due_kind'] for t in self.app.tasks()},{title:'event'})
+        with patch.object(agent.family_llm,'_chat_json',return_value={'proposals':[]}) as called:
+            agent.run_once(self.app,self.now+dt.timedelta(minutes=1));self.assertEqual(called.call_count,0)
+        with self.app.connect() as c:
+            self.assertEqual(sorted((r['title'],r['due']) for r in c.execute('SELECT title,due FROM manual_tasks')),[(title,'2026-10-18')])
+
+    def test_cancelled_receipt_keeps_the_required_meeting_through_run_once(self):
+        text='家长会定于2026年10月18日举行，请家长参加，家长会回执已经取消。'
+        rows,tasks=self._school_event_run(text,[dict(title_quote=text,due='2026-10-18',task_title='参加家长会',task_goal=text)])
+        row=rows['参加家长会'];brief=json.loads(row['plan'])['school_task']
+        self.assertEqual((row['state'],row['due'],brief['state']),('accepted','2026-10-18','ready'));self.assertEqual(tasks,[('参加家长会','2026-10-18')])
+
     def test_unlocated_open_day_never_takes_its_summary_day_over_the_original_pending_time(self):
         # Fictional: the title cannot place 开放日活动 in its original, so the summary's day never overrides 时间待定;
         # the voucher keeps its own deadline.
