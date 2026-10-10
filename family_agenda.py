@@ -40,16 +40,25 @@ def _relative_weekday(text,anchor):
     return re.sub(r'(?<![每上本这下个])(?P<prefix>每个|上个|本个|这个|下个|每|上|本|这|下)?(?:周|星期|礼拜)(?P<day>[一二三四五六日天])(?P<range>\s*(?:到|至|[-–—~～])\s*(?:本个|这个|下个|本|这|下)?(?:周|星期|礼拜)?[一二三四五六日天])?(?![周月年])',resolve,text)
 
 
-def deadlines(text,published):
-    """Every date the text ties to a required action or dated school event, grounded on the sending day."""
-    anchor=date(published)
+def _grounded_text(text,anchor):
     def chinese_date(match):
         year,month,day=match.groups()
         # ponytail: an omitted year is grounded only within the sending month; other cases need review.
         if not year and (not anchor or int(month)!=int(anchor[5:7])): return match[0]
         value=f'{int(year or anchor[:4]):04d}-{int(month):02d}-{int(day):02d}'
         return value if date(value) else match[0]
-    text=re.sub(r'(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日',chinese_date,text or '')
+    return re.sub(r'(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日',chinese_date,text or '')
+
+
+def deadlines(text,published):
+    """Every date the text ties to a required action or dated school event, grounded on the sending day."""
+    return _action_deadlines(text,published)|event_days(text,published)
+
+
+def _action_deadlines(text,published):
+    """Every date the text ties to a required action, grounded on the sending day."""
+    anchor=date(published)
+    text=_grounded_text(text,anchor)
     if date(text): return {text}
     text=_relative_weekday(text,anchor)
     candidates=set()
@@ -113,22 +122,53 @@ def deadlines(text,published):
             try:value=(dt.date.fromisoformat(published)+dt.timedelta(days=offset)).isoformat()
             except OverflowError:pass
         if value:candidates.add(value)
-    # A dated school event the family is asked to attend (家长会定于10月15日举行，请家长参加) is that
-    # item's arranged day, not a completion deadline. One sentence, one date, a held event and a direct
-    # request to attend; a cancelled, past, reviewed or optional event or a second day stays out.
-    # 明日/今天 ground on the sending day like the actions above; 务必/须参加 is as direct as 请参加.
-    # ！？ end a sentence, so a notice's own date never reaches a later event. A negation only counts
-    # when it is about attending (无需带材料 keeps the meeting); 自愿/可不参加/暂定/另行通知 stay out.
-    for sentence in re.split(r'[。；;！!？?\n]',text):
-        days=re.findall(r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}|今天|今日|今晚|明天|明日|明早|明晚|后天|昨天|前天|(?:周|星期|礼拜)[一二三四五六日天]',sentence)
-        relative={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}
-        values={date(d) or (anchor and d in relative and (dt.date.fromisoformat(anchor)+dt.timedelta(days=relative[d])).isoformat()) or '' for d in days}
-        if (len(values)==1 and '' not in values and re.search(r'(?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)[^，,]{0,20}?(?:举行|召开|举办)',sentence)
-                and re.search(r'(?:请|务必|必须|须|需)(?:各位|全体)?(?:家长|学生|同学们?|孩子们?)?(?:准时|按时|届时|务必|必须|须|需)?(?:参加|出席|到场|参会)(?!安排|通知|方式|时间|人员|名单)',sentence)
-                and not re.search(r'(?:无需|无须|不必|不用|不需要?|不要求|可以?不|自愿|自由|可选|选择性?|酌情|视情况|非必须)[^，,]{0,6}?(?:参加|出席|到场|参会)',sentence)
-                and not re.search(r'取消|延期|改期|推迟|暂停|原定|已于|已经|已举行|已召开|回顾|自愿|不强制|非强制|不作(?:统一|强制)?要求|仅供|可选|待定|待确定|尚未确定|另行通知|暂定',sentence)):
-            candidates|=values
     return candidates
+
+
+_EVENT_DAY=r'\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天'
+_DAY_WORDS=r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}|今天|今日|今晚|明天|明日|明早|明晚|后天|昨天|前天|(?:周|星期|礼拜)[一二三四五六日天]'
+_ATTEND_REQUEST=r'(?:请|务必|必须|须|需)(?:各位|全体)?(?:家长|学生|同学们?|孩子们?)?(?:准时|按时|届时|务必|必须|须|需)?(?:参加|出席|到场|参会)(?!安排|通知|方式|时间|人员|名单)'
+# Not (yet) held on that day, or attending it is optional.
+_EVENT_STATE=(r'取消|延期|改期|推迟|暂停|停办|改为|改到|改至|原定|已于|已经|已举行|已召开|已结束|回顾|暂定|初定|拟(?:于|在|定)|待定|待确定|尚未确定|未定'
+              r'|另行(?:通知|告知|安排)|(?:后续|稍后|随后|再行|届时)(?:通知|告知|公布)|待通知'
+              r'|自愿|自由|可选|可以?不|不必|无需|无须|不用|不需要?|不要求|不强制|非强制|非必须|不作(?:统一|强制)?要求|酌情|视情况|仅供参考|选择性')
+# What is left of a clause about this event, its time or attending it; 座位、打印材料、带材料 are other objects.
+_EVENT_SELF=(r'本次|此次|这次|该次?|届时|如有(?:变动|变化|调整)|若有(?:变动|变化|调整)|具体|准确|确切|详细|时间|日期|安排|的|将|会|再|均|都|也|是|为'
+             r'|请|各位|全体|家长们?|学生们?|同学们?|孩子们?|准时|按时|务必|必须|须|需|参加|出席|到场|参会|会议|活动|开会|大会|集会|运动|典礼|仪式|讲座|开放日|演出|比赛|\s')
+
+
+def event_days(text,published):
+    """The arranged day of a held school event the family is directly asked to attend (家长会定于10月15日举行，请家长参加).
+
+    It is that item's own arranged day, not a completion deadline. One sentence states one grounded day, one clause
+    holding the event and a direct request to attend (明日 grounds on the sending day; 务必/须参加 is as direct as
+    请参加); ！？ end a sentence, so a notice's own date never reaches a later event. A negation, state or option counts
+    on what it modifies: the event's own clause (不是10月15日举行、暂定、原定…取消、按10月9日通知), the request (自愿参加)
+    or a clause with no other object (参加自愿、不作统一要求、准确时间后续告知). 座位可选、取消打印材料、无需带材料 keep
+    the meeting; a past day stays out.
+    """
+    anchor=date(published)
+    text=_relative_weekday(_grounded_text(text,anchor),anchor)
+    relative={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}
+    found=set()
+    for sentence in re.split(r'[。；;！!？?\n]',text):
+        values={date(d) or (anchor and d in relative and (dt.date.fromisoformat(anchor)+dt.timedelta(days=relative[d])).isoformat()) or '' for d in re.findall(_DAY_WORDS,sentence)}
+        clauses=[c for c in re.split(r'[，,、：:]',sentence) if c.strip()]
+        held=[n for n,c in enumerate(clauses) if re.search(r'(?:'+_EVENT_DAY+r')[^，,]{0,20}?(?:举行|召开|举办)',c)]
+        if len(values)!=1 or '' in values or len(held)!=1 or not re.search(_ATTEND_REQUEST,sentence):continue
+        value=next(iter(values));event=clauses[held[0]]
+        if (anchor and value<anchor or re.search(_EVENT_STATE,event)
+                or re.search(r'(?:不是|并非|而非|并不在|不在|不于|不会在)\s*(?:于|在)?\s*(?:'+_EVENT_DAY+r')|(?:不|未|没有?|无法|不能|不会|不再)\s*(?:如期|按时|正常)?\s*(?:举行|召开|举办)',event)
+                or re.search(r'(?:根据|依据|按照|参照|参见|据|按|见|同)\s*(?:'+_EVENT_DAY+r')|(?:'+_EVENT_DAY+r')[^，,]{0,6}?(?:通知|公告|文件|来函|消息|发布|发出)',event)):continue
+        if any(re.search(_EVENT_STATE,c) and not re.sub(_EVENT_SELF,'',re.sub(_EVENT_STATE,'',c)) for n,c in enumerate(clauses) if n!=held[0]):continue
+        found.add(value)
+    return found
+
+
+def date_meaning(quote,due,published):
+    """'event' when due is the arranged day of the held event this item's own original clause asks to attend."""
+    if not date(due):return ''
+    return 'event' if due in event_days(quote,published) and due not in _action_deadlines(quote,published) else 'deadline'
 
 
 def deadline(text,published):
@@ -173,7 +213,7 @@ def task_category(title,purpose=None):
     return 'todo'
 
 
-def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref=''):
+def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote=''):
     focus=focus or {};messages=[];publications=[];original_time=''
     store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
     for ref in refs:
@@ -203,6 +243,8 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
     fallback=[(clause,m) for clause,m in clauses if exam_subject and exam_subject in clause and
               _exam_identity(clause)[0]==exam_kind and (not exam_units or exam_units & _exam_identity(clause)[1])]
     selected=(named or fallback) if is_exam(subject) else named
+    # A school item's date comes only from its own original clause, never from another action naming it.
+    if date_quote:selected=[(clause,m) for clause,m in selected if clause.strip() and clause.strip() in date_quote]
     dates={deadline(clause,sent_day(m.get('time',''))) for clause,m in selected}-{''}
     source_unknown=any(re.search(r'(?:时间|日期).{0,6}(?:另行通知|另行安排|待定|未定)',clause) for clause,_ in selected)
     source_due=next(iter(dates)) if len(dates)==1 and not source_unknown else ''
@@ -211,7 +253,10 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
     if category not in ('homework','todo'):category='todo' if category=='unknown' else task_category(title,purpose)
     # Later supplements retain their own source entries, not the first notice's time.
     published_at=original_time if original_time and original_time[:10]==published else min((value for value in times if value[:10]==published),default='')
-    return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,scheduled_on=focus.get('scheduled_on',''),
+    # The same day reads as the meeting's arranged day or a hand-in deadline by what the item's own clause asks;
+    # a parent-edited date keeps the deadline contract.
+    due_kind=date_meaning(date_quote,due_on,published) if date_quote and not organized else 'deadline' if due_on else ''
+    return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,due_kind=due_kind,scheduled_on=focus.get('scheduled_on',''),
                 category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox')
 
 
@@ -221,7 +266,7 @@ def enrich(app,c,tasks):
     for task in tasks:
         refs=[x.strip() for x in task['source'].splitlines() if x.strip().startswith('message:')]
         focus=task.get('focus') or {}
-        purpose=None;publication_ref=''
+        purpose=None;publication_ref='';date_quote=''
         if task.get('school_origin'):
             origin=task['source'].splitlines()[0].removeprefix('Agent建议:')
             proposal=c.execute("SELECT * FROM agent_items WHERE id=? AND task_id=? AND child_id=? AND kind='school' AND state='accepted'",
@@ -230,6 +275,7 @@ def enrich(app,c,tasks):
                 purpose=json.loads(proposal['plan']).get('school_task',{}).get('purpose')
                 store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
                 publication_ref=family_agent.school_original_publication_ref(store,c,proposal)
+                date_quote=re.sub(r'^待核对[：:]?\s*','',proposal['title'])
         due=task['due']
         if task['id'] in reported and task['source'] in ('家庭放学后录入','孩子自述功课，待家长核对'):
             # The capture day is a plan date, not a teacher deadline; preserve explicit later edits.
@@ -237,7 +283,7 @@ def enrich(app,c,tasks):
             if not focus.get('category'):focus['category']='homework'
             if not focus.get('scheduled_on') and not focus.get('version'):focus['scheduled_on']=reported[task['id']]
             due=task['due']=''
-        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref)
+        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote)
     return tasks
 
 
