@@ -2046,20 +2046,34 @@ _SCHOOL_ACTION_OPEN=(r'请|须|需|务必|(?:\d{1,2}\s*[日号]|\d{4}-\d{2}-\d{2
                      r'\s*(?:之前|以前|前|截止|为止|以内|内|止)')
 # Who is asked and how, before that predicate (家长、各位家长准时).
 _SCHOOL_ACTION_WHO=r'\s*(?:各位|全体)?(?:家长|学生|同学们?|孩子们?)?(?:准时|按时|届时|务必|必须|须|需)?'
+# Where an action starts after its subject: the request, or the whole day with 于/在 ending its deadline (请于…前、于2026年10月18日前).
+_SCHOOL_ACTION_HEAD=r'(?:于|在)?\s*(?:\d{4}\s*年\s*)?(?:\d{1,2}\s*月\s*)?(?:'+_SCHOOL_ACTION_OPEN+')'
 
 
 def _school_end_own(text,end,said):
     """Whether a clause holds a goal clause's end as that goal's own subject or object, not inside another action.
 
-    A Chinese predicate comes before its object. Where no request or deadline before the end opens an action in the clause, the
-    end is what the clause is about (家长会定于2026年10月18日举行); after one, the predicate between them must be the goal's own,
-    ending the goal's words before its end (said). Sharing a noun is not sharing an action: 请家长参加家长会 never names
-    并请家长2026年10月18日前寄出家长会退款回执原件 or …前答复是否参加家长会, where 寄出 or 答复是否 acts on it, while
-    请家长准时参加家长会 is its own.
+    A Chinese predicate comes after its subject and before its object, so each place of the end is read against its action.
+    Where a predicate stands between an action opened before it (a request or a deadline day) and the end, the end is that
+    action's object, and the predicate must be the goal's own, ending the goal's words before its end (said): 请家长参加家长会
+    never names 并请家长2026年10月18日前寄出家长会退款回执原件 or …前答复是否参加家长会, while 请家长准时参加家长会 is its own.
+    Where none stands before it, the end begins a subject, and the action after it acts on that whole subject: the end is the
+    goal's object only as the whole of it (家长会请家长准时参加), never as the first words of another thing the action acts on
+    (家长会退款回执原件请于2026年10月18日前寄出). With no action after it the clause is about it (家长会定于2026年10月18日举行).
+    So nothing between is never proof: only an end carrying the goal's own predicate (参加家长会), or a goal stating none, is
+    its own wherever no other predicate acts on it.
     """
+    opened=[o.end() for o in re.finditer(_SCHOOL_ACTION_OPEN,said)]
+    bare=re.sub('^'+_SCHOOL_ACTION_WHO,'',said[opened[-1] if opened else 0:]).strip()
     for m in re.finditer(re.escape(end),text):
         opened=[o.end() for o in re.finditer(_SCHOOL_ACTION_OPEN,text[:m.start()])]
-        if said.endswith(re.sub('^'+_SCHOOL_ACTION_WHO,'',text[opened[-1]:m.start()]).strip() if opened else ''):return True
+        verb=re.sub('^'+_SCHOOL_ACTION_WHO,'',text[opened[-1]:m.start()]).strip() if opened else ''
+        if verb:
+            if said.endswith(verb):return True
+            continue
+        if not bare:return True
+        acts=re.search(_SCHOOL_ACTION_HEAD,text[m.end():])
+        if not acts or not re.sub('^'+_SCHOOL_ACTION_WHO,'',text[m.end():m.end()+acts.start()]).strip():return True
     return False
 
 
