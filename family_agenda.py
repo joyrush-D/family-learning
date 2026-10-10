@@ -244,6 +244,20 @@ def _held_events(text,published):
 _ATTEND_TITLE=r'(?:请|务必|必须|须|需)?(?:各位|全体)?(?:家长|学生|同学们?|孩子们?)?(?:准时|按时|届时|务必|必须|须|需)?(?:参加|出席|到场|参会)+'
 
 
+def _attends(title,event):
+    """True when an item's title is attending this held event itself, so the event's arranged day is its own action's day.
+
+    Its own predicate attends the event and comes first, taking the event as its object, with any joined predicate after it
+    (参加家长会、准时参加学校开放日、按时出席家长会并签到); or the title is the event's name, alone or followed only by
+    attending it (学校开放日、家长会，请准时参加). Another predicate before the name (确认是否参加学校开放日、报名参加) or
+    after it (学校开放日，确认是否参加) is the item's own action, and words after the name other than a joined predicate make
+    it a modifier of another object (寄出家长会回执原件).
+    """
+    words=re.sub(r'[（(][^）)]*[）)]|\s','',re.sub(r'^\s*待核对[：:]?','',title or ''))
+    name=r'(?:'+_event_named(event)+r')';joined=r'(?:(?:[，,、；;。！!？?]|并|且|然后|同时|再).*)?'
+    return bool(re.fullmatch(_ATTEND_TITLE+r'[^，,、；;。！!？?]*?'+name+joined+r'|'+name+r'(?:[，,、；;：:]*'+_ATTEND_TITLE+joined+r')?',words))
+
+
 def date_meaning(quote,due,published,title=''):
     """'event' when due is the arranged day of the held event this item's own action attends.
 
@@ -253,26 +267,26 @@ def date_meaning(quote,due,published,title=''):
     keeps the arranged day. A Chinese object ends in its own noun, so words after the event's name other than a joined
     predicate (并签到) make it a modifier of another object (寄出家长会回执原件); and a title whose own predicate comes first
     and takes attending or the event as its object (确认是否参加学校开放日、报名参加、回复是否参加) acts on that day as a
-    deadline, as does one not naming the event.
+    deadline, as does one naming the event before another predicate (学校开放日，确认是否参加) or not naming it.
     """
     if not date(due):return ''
     held=[event for value,event in _held_events(quote,published) if value==due]
     if not held:return 'deadline'
     if due not in _action_deadlines(quote,published):return 'event'
-    words=re.sub(r'[（(][^）)]*[）)]|\s','',re.sub(r'^\s*待核对[：:]?','',title or ''))
-    own=r'(?:'+_ATTEND_TITLE+r'[^，,、；;。！!？?]*?)?(?:{})(?:(?:[，,、；;。！!？?]|并|且|然后|同时|再).*)?'
-    return 'event' if any(re.fullmatch(own.format(_event_named(event)),words) for event in held) else 'deadline'
+    return 'event' if any(_attends(title,event) for event in held) else 'deadline'
 
 
-def later_dropped_days(quote,text,published):
+def later_dropped_days(quote,text,published,own=None,title=''):
     """Event days quote holds on its own that its original text, read from quote to the end, no longer holds.
 
     A model may quote only 家长会定于2026年10月18日在体育馆举行，请家长参加。 while the same notice goes on 现通知该家长会取消。;
     that later state still binds the meeting the quote holds. Cancelling another event or another object of it (运动会取消、
-    家长会回执取消) keeps the day, and a day the quote ties to an action of its own stays that action's.
+    家长会回执取消) keeps the day. Only a day the item's own words (own, else quote) tie to an action of its own stays that
+    action's: a sibling's same-day deadline in the quoted sentence (并请家长2026年10月18日前寄出退款回执原件) is not the
+    meeting item's, and an item whose title attends the event (参加家长会) has no other action of its own on that day.
     """
-    kept=set(_held_events(text,published))
-    return {value for value,event in _held_events(quote,published) if (value,event) not in kept}-_action_deadlines(quote,published)
+    kept=set(_held_events(text,published));mine=_action_deadlines(quote if own is None else own,published)
+    return {value for value,event in _held_events(quote,published) if (value,event) not in kept and (value not in mine or _attends(title,event))}
 
 
 def deadline(text,published):

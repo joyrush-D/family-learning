@@ -2044,15 +2044,21 @@ def _school_event_dropped(quote,cited,title=''):
 
     The item's own action is what its title names among the clauses it quotes; the event that sentence holds keeps its day
     only while the notice after it leaves it held (现通知该家长会取消、本次家长会延期至下周 drop it; 运动会取消、家长会回执取消
-    do not), and a day that sentence ties to an action of its own stays that action's.
+    do not). The whole sentence is read for the event it holds, never for its other clauses' action days: only the item's
+    own clauses, with days ending the clauses right before them (请家长于2026年10月18日前，寄出退款回执原件), tie a day to
+    its own action, so 并请家长2026年10月18日前寄出退款回执原件 keeps the refund's day but not the cancelled meeting's.
     """
     from family_agenda import later_dropped_days,sent_day
     homes=[e for e in cited if quote and quote in e['text']]
     if len(homes)!=1 or homes[0]['text'].count(quote)!=1:return set()
     text=homes[0]['text'];start=text.index(quote);end=start+len(quote.rstrip('。；;！!？? \n'))
     clauses=[(s,m) for s in re.finditer(r'[^。；;！!？?\n]+',text) for m in re.finditer(r'[^，,]+',s[0]) if s.start()+m.start()<end and s.start()+m.end()>start]
-    picked=dict.fromkeys(s for (s,m),keep in zip(clauses,_school_title_named([m[0] for s,m in clauses],title)) if keep)
-    return set().union(*(later_dropped_days(s[0],text[s.start():],sent_day(homes[0].get('time',''))) for s in picked))
+    picked=[(s,m) for (s,m),keep in zip(clauses,_school_title_named([m[0] for s,m in clauses],title)) if keep]
+    lead=(r'(?:[^，,]*(?:\d{1,2}\s*[日号]|\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天|(?:周|星期|礼拜)[一二三四五六日天])'
+          r'\s*(?:之前|以前|前|截止|为止|以内|内|止)?\s*[，,])+$')
+    def own(s):return '，'.join(s[0][r.start() if (r:=re.search(lead,s[0][:m.start()])) else m.start():m.end()] for t,m in picked if t is s)
+    published=sent_day(homes[0].get('time',''))
+    return set().union(*(later_dropped_days(s[0],text[s.start():],published,own(s),title) for s in dict.fromkeys(s for s,m in picked)))
 
 
 def _school_borrowed_day(quote,cited,due,goal='',title=''):
