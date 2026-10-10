@@ -608,4 +608,72 @@ class TeacherPaperFormalNameTest(unittest.TestCase):
                 self.assertEqual(wrong,0);self.assertIn(got[0][1],('correct','unknown'));self.assertNotEqual(got[0][0],'教师参考：B')
 
 
-if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TeacherReferenceScopeTests','TeacherReferenceSourceTests','TeacherReferenceEquationTests','TeacherReferenceGrammarTests','TextQuestionHTTPTests','TeacherPaperWholeNameTest','TeacherPaperFormalNameTest'])
+class TeacherRequestTitleTest(unittest.TestCase):
+    """Fictional phase44 replay: a bare teacher number takes the one ordinary title the whole question text gives, only for a
+    label naming that whole title; 大题 and 小题 still match exactly. Another title, a second paper of the same numbers in one
+    file, or a teacher text naming another title never lends its answer."""
+    MATH=('四年级数学练习（虚构）\n1. 36 + 47 = ____\n孩子作答：83\n2. 9 × 7 = ____\n孩子作答：56\n3. 一根绳子长12米，剪去5米，还剩几米？\n孩子作答：\n'
+          '4. 下面哪个数是偶数？ A. 15  B. 27  C. 34  D. 41\n孩子作答：C\n5. 100 - 38 = ____\n孩子作答：72\n6. 用一句话说明：为什么长方形的两组对边相等？\n孩子作答：因为它是长方形。\n')
+    RULE='长方形两组对边分别平行且相等；答出“对边平行且相等”的性质即可。'
+    KEY='教师参考答案（虚构）\n1. 83\n2. 63\n3. 7米\n4. C\n5. 62\n6. %s\n'%RULE
+    CHINESE=('二年级语文小测（虚构）\n一、看拼音写词语\n1. chūn tiān（    ）\n孩子作答：春天\n2. huā duǒ（    ）\n孩子作答：花朵\n3. péng yǒu（    ）\n孩子作答：明友\n'
+             '二、选择正确的字填空\n1. （  ）天来了。 A. 春  B. 椿\n孩子作答：A\n2. 小鸟在（  ）上唱歌。 A. 树  B. 竖\n孩子作答：B\n3. 我们（  ）起读书。 A. 一  B. 衣\n孩子作答：\n')
+
+    @staticmethod
+    def item(label,question,student,answer,judgment,kind='objective',error='',cause='',steps='',uncertainty=''):
+        return dict(label=label,question=question,student_answer=student,answer=answer,judgment=judgment,question_kind=kind,
+                    error_reason=error,possible_cause=cause,steps=steps,uncertainty=uncertainty)
+
+    def math(self,title='四年级数学练习-虚构'):
+        item=self.item
+        return [item(title+' 第1题','36 + 47 = ____','83','教师参考：83','correct'),
+                item(title+' 第2题','9 × 7 = ____','56','教师参考：63','incorrect',error='9×7的正确结果是63，孩子写成56。',
+                     cause='可能与8×7的结果混淆，需请孩子说明乘法口诀的使用过程。',
+                     steps='独立尝试：背诵9的乘法口诀并计算9×7。轻提示：想一想7×9和7×8分别是多少。自己完成：订正结果并再算一道同类乘法题。'),
+                item(title+' 第3题','一根绳子长12米，剪去5米，还剩几米？','','教师参考：7米','unknown',uncertainty='原件中该题没有可见作答，需补看孩子的实际答题情况。'),
+                item(title+' 第4题','下面哪个数是偶数？ A. 15  B. 27  C. 34  D. 41','C','教师参考：C','correct'),
+                item(title+' 第5题','100 - 38 = ____','72','教师参考：62','incorrect',error='100-38的正确结果是62，孩子写成72。',
+                     cause='可能在退位减法中出现计算错误，需请孩子说明退位过程。',
+                     steps='独立尝试：用竖式计算100-38，注意个位和十位的退位。轻提示：100减去30后还要再减去多少。自己完成：订正为62并检查退位步骤。'),
+                item(title+' 第6题','用一句话说明：为什么长方形的两组对边相等？','因为它是长方形。','教师参考：'+self.RULE,'incorrect',kind='subjective',
+                     error='回答只是重复“它是长方形”，没有说明长方形两组对边分别平行且相等这一性质，理由不完整。',cause='可能知道结论，但不会用图形性质解释原因。',
+                     steps='独立尝试：先写出长方形对边的位置关系和长度关系。轻提示：长方形的两组对边分别怎样，长度又怎样。自己完成：用一句话完整写出“两组对边分别平行且相等”。')]
+
+    def review(self,question,key,items):
+        raw=dict(items=items,coverage='本次核对1份题目/作答文字原件。',question_labels=[one['label'] for one in items]);original=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            result=family_llm.homework_reference_draft([],review=True,question_documents=[dict(name='synthetic-request-question.txt',text=question)],
+                reference_documents=[dict(name='synthetic-request-teacher.txt',text=key)])
+        self.assertEqual(model.call_count,1);self.assertEqual(raw,original)
+        return [(q['answer'],q['judgment']) for q in result['questions']]
+
+    def test_the_whole_original_title_takes_the_bare_teacher_numbers(self):
+        self.assertEqual(self.review(self.MATH,self.KEY,self.math()),
+                         [('教师参考：83','correct'),('教师参考：63','incorrect'),('教师参考：7米','unknown'),  # unanswered keeps the teacher's 7米
+                          ('教师参考：C','correct'),('教师参考：62','incorrect'),('教师参考：'+self.RULE,'incorrect')])  # circular reasoning is never correct
+
+    def test_a_partial_teacher_text_keeps_its_own_section(self):
+        item=self.item;title='二年级语文小测-虚构 '
+        items=[item(title+'一、1','看拼音写词语：chūn tiān（    ）','春天','教师参考：春天','correct'),
+               item(title+'一、2','看拼音写词语：huā duǒ（    ）','花朵','教师参考：花朵','correct'),
+               item(title+'一、3','看拼音写词语：péng yǒu（    ）','明友','教师参考：朋友','incorrect',error='正确词语是“朋友”，孩子写成了“明友”，“朋”字写错。',
+                    cause='可能把“朋”误写成读音相近的“明”，需孩子确认。'),
+               item(title+'二、1','选择正确的字填空：（  ）天来了。 A. 春  B. 椿','A','AI自行推导：A. 春','correct'),
+               item(title+'二、2','选择正确的字填空：小鸟在（  ）上唱歌。 A. 树  B. 竖','B','AI自行推导：A. 树','incorrect',
+                    error='句子应为“小鸟在树上唱歌”，应选 A“树”；孩子选了 B“竖”。',cause='可能混淆了读音相同或相近的“树”和“竖”，需孩子确认。'),
+               item(title+'二、3','选择正确的字填空：我们（  ）起读书。 A. 一  B. 衣','','AI自行推导：A. 一','unknown',uncertainty='孩子本题未作答，需补看是否要求完成或是否有纸面订正。')]
+        self.assertEqual(self.review(self.CHINESE,'教师参考（只含第一大题）\n一、1. 春天  2. 花朵  3. 朋友\n',items),
+                         [('教师参考：春天','correct'),('教师参考：花朵','correct'),('教师参考：朋友','incorrect'),
+                          ('AI自行推导：A. 春','correct'),('AI自行推导：A. 树','incorrect'),('AI自行推导：A. 一','unknown')])
+
+    def test_another_title_or_a_second_paper_never_lends_a_bare_teacher_number(self):
+        second=self.MATH+'五年级数学练习（虚构）\n1. 50 + 50 = ____\n孩子作答：100\n'
+        for question,key,title in ((self.MATH,self.KEY,'五年级数学练习-虚构'),  # another title, same numbers
+                                   (second,self.KEY,'四年级数学练习-虚构'),  # one file, a second paper of the same numbers
+                                   (self.MATH,'五年级数学练习（虚构）参考答案'+self.KEY[len('教师参考答案（虚构）'):],'四年级数学练习-虚构'),
+                                   (self.MATH,'五年级数学练习（虚构）\n'+self.KEY,'四年级数学练习-虚构')):
+            with self.subTest(question=question[-12:],key=key[:14],title=title):
+                self.assertEqual(self.review(question,key,self.math(title)),[('','unknown')]*6)
+
+
+if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TeacherReferenceScopeTests','TeacherReferenceSourceTests','TeacherReferenceEquationTests','TeacherReferenceGrammarTests','TextQuestionHTTPTests','TeacherPaperWholeNameTest','TeacherPaperFormalNameTest','TeacherRequestTitleTest'])

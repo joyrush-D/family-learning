@@ -1168,6 +1168,33 @@ def _teacher_reference_entries(documents,titles=frozenset()):
     return entries
 
 
+def _ref_request_title(questions,references,entries,titles=frozenset()):
+    """The one ordinary title this request's whole question text gives, read as a label's words are, or None. The heading lines
+    before each original's first question or 大题 give one value, no paper is named and no number repeats under one 大题, so a
+    second paper of the same numbers in one file leaves none. The selected teacher text names no scope of its own: every entry is
+    bare, and outside question and 大题 lines only words of that title 「教师参考答案（虚构）」, never another 「五年级练习参考答案」."""
+    heads,seen=set(),set()
+    for document in questions:
+        section=None;opened=False
+        for line in document['text'].splitlines():
+            marks=list(_REF_QUESTION.finditer(line));head=line[:marks[0].start()] if marks else line
+            paper,section,words=_ref_scope(head,section,titles)
+            if paper is not None: return None
+            opened=opened or bool(marks) or _REF_SECTION.search(head) is not None
+            if words and not opened: heads.add(words)
+            for key in [(section,int(next(g for g in mark.groups() if g))) for mark in marks]:
+                if key in seen: return None
+                seen.add(key)
+    if len(heads)!=1 or any(entry['paper'] is not None or entry['rest'] for entry in entries): return None
+    title=heads.pop()
+    for document in references:
+        for line in document['text'].splitlines():
+            if _REF_QUESTION.search(line) or _REF_SECTION.search(line): continue
+            paper,_,words=_ref_scope(line,None,titles)
+            if paper is not None or words not in title: return None
+    return title
+
+
 def _ref_relation(label,entry,titles=frozenset()):
     """same / different / unsure: an unnamed or ambiguous paper, section or sub-question is never guessed."""
     mark=_REF_QUESTION.search(label) or re.fullmatch(r'(.*?)(?<![\d.．])(\d{1,3})\s*',label)  # 「1」「一、1」「虚构乙卷1」
@@ -1176,7 +1203,8 @@ def _ref_relation(label,entry,titles=frozenset()):
     if number!=entry['number']: return 'different'
     sub=None if bare else _ref_sub(label,mark.end())[0];paper,section,rest=_ref_scope(mark[1] if bare else label[:mark.start()],titles=titles)
     paper='*' if isinstance(paper,tuple) else paper  # A label naming two papers identifies neither.
-    part=paper is None and entry['paper'] is None and rest!=entry['rest']  # unnamed papers only match word for word
+    # Unnamed papers only match word for word; a bare teacher number also stands under the request's one whole title.
+    part=paper is None and entry['paper'] is None and rest!=entry['rest'] and rest!=entry.get('request')
     unsure=False
     for n,(mine,theirs) in enumerate(((paper,entry['paper']),(section,entry['section']),(sub,entry['sub']))):
         if mine is None and theirs is None: continue
@@ -1396,6 +1424,9 @@ def homework_reference_draft(images, *, data_path=None, timeout=90, review=False
     teacher_reference=bool(reference_images or reference_documents)
     titles=_ref_titles(list(question_documents or ())+list(reference_documents or ())) if review else frozenset()
     teacher_entries=_teacher_reference_entries(reference_documents,titles) if review else []
+    # Only text originals are read whole: with any image the request's one title is unproven and nothing is inherited.
+    request_title=None if images or reference_images else _ref_request_title(question_documents,reference_documents,teacher_entries,titles)
+    for entry in teacher_entries if request_title else (): entry['request']=request_title
     field = lambda limit: dict(type='string',maxLength=limit)
     schema=dict(type='object',additionalProperties=False,required=['items','coverage'],properties=dict(
         items=dict(type='array',minItems=1,maxItems=25,items=dict(type='object',additionalProperties=False,
