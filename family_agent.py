@@ -2018,14 +2018,31 @@ def _school_own_clause_dates(quote,cited,others):
     return _school_own_dates(quote,sent_day(homes[0].get('time','')))
 
 
-def _school_borrowed_day(quote,cited,due,goal=''):
+_SCHOOL_DEFERRED=(r'(?:时间|日期)[^，,]{0,6}?(?:另行(?:通知|告知|安排)|(?:后续|稍后|随后|再行|届时)(?:通知|告知|公布)'
+                  r'|待通知|待定|待确定|尚未确定|未定)')
+
+
+def _school_title_named(texts,title):
+    """Which of an item's clauses its own title names: those holding the longest end of the title (its object comes last).
+
+    参加家长会 names 家长会的日期另行通知, not 2026年10月29日前提交报名表, while 家长会报名 names the form's clause.
+    A title naming every clause, or none, picks none out.
+    """
+    words=re.sub(r'[（(][^）)]*[）)]|[\s。；;，,！!？?、]+$','',re.sub(r'^\s*(?:待核对[：:]\s*)?(?:[^：:]{1,8}[：:]\s*)?','',title or ''))
+    sizes=[next((n for n in range(len(words),1,-1) if words[-n:] in text),0) for text in texts]
+    best=max(sizes,default=0)
+    return [size==best for size in sizes] if best>=2 and sizes.count(best)<len(sizes) else [True]*len(texts)
+
+
+def _school_borrowed_day(quote,cited,due,goal='',title=''):
     """True when due is not this item's own day: its own clauses state no day and due is another clause's or original's dated action.
 
     A day belongs to the action of its own clause, so 2026年10月18日前提交报名资料，家长会日期另行通知 gives the meeting no day.
     A day ending its clause (请家长于10月16日前，交回回执), a generic date label or a header introducing the items
     (截止时间：…；明天完成以下两项：…) still covers the clauses after it; a colon followed by its own action is no header,
-    so 运动会：10月15日举行 never becomes the day of 家长会时间另行通知. When this item's own words defer a time
-    (家长会日期另行通知), a day they also quote is another action's unless this item's own summary states it.
+    so 运动会：10月15日举行 never becomes the day of 家长会时间另行通知. Own words that both defer a time and state a day
+    hold two actions: the item is the one its title names, so quoting or summarising the whole sentence never moves the
+    form's day to the meeting. A title naming neither leaves the day another action's unless the summary states it without deferring.
     """
     from family_agenda import deadlines,sent_day
     homes=[e for e in cited if quote and quote in e['text']]
@@ -2036,12 +2053,18 @@ def _school_borrowed_day(quote,cited,due,goal=''):
     clauses=[(s,m) for s in sentences for m in re.finditer(r'[^，,]+',s[0])]
     own=[n for n,(s,m) in enumerate(clauses) if s.start()+m.start()<end and s.start()+m.end()>start]
     # A day ending its clause (于10月16日前，) or heading a colon (明天完成：…) modifies the actions after it in the same sentence.
-    lead=[n for n,(s,m) in enumerate(clauses) if own and s is clauses[own[0]][0] and n<own[0] and re.search(
-        r'(?:\d{1,2}\s*[日号]|\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天|(?:周|星期|礼拜)[一二三四五六日天])\s*(?:之前|以前|前|截止|为止|以内|内|止)?\s*$|(?:'+day+r')[^：:]*[：:]',m[0])]
+    def leads(own):
+        return [n for n,(s,m) in enumerate(clauses) if own and s is clauses[own[0]][0] and n<own[0] and re.search(
+            r'(?:\d{1,2}\s*[日号]|\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天|(?:周|星期|礼拜)[一二三四五六日天])\s*(?:之前|以前|前|截止|为止|以内|内|止)?\s*$|(?:'+day+r')[^：:]*[：:]',m[0])]
+    lead=leads(own)
     if re.search(day,''.join(clauses[n][1][0] for n in lead+own)):
-        deferred=re.search(r'(?:时间|日期)[^，,]{0,6}?(?:另行(?:通知|告知|安排)|(?:后续|稍后|随后|再行|届时)(?:通知|告知|公布)|待通知|待定|待确定|尚未确定|未定)',
-                           '，'.join(clauses[n][1][0] for n in own))
-        return bool(deferred) and due not in _school_goal_dates(goal,homes)
+        if not re.search(_SCHOOL_DEFERRED,'，'.join(clauses[n][1][0] for n in own)):return False
+        picked=[n for n,keep in zip(own,_school_title_named([clauses[n][1][0] for n in own],title)) if keep]
+        if len(picked)==len(own):
+            return bool(re.search(_SCHOOL_DEFERRED,goal)) or due not in _school_goal_dates(goal,homes)
+        own=picked;lead=leads(own)
+        if re.search(day,''.join(clauses[n][1][0] for n in lead+own)):
+            return bool(re.search(_SCHOOL_DEFERRED,'，'.join(clauses[n][1][0] for n in own)))
     # Own clauses state no day, so another clause stating one is where its sentence's day (event or deadline) belongs.
     owners=[s[0] for n,(s,m) in enumerate(clauses) if n not in own+lead and re.search(day,m[0]) and due in deadlines(s[0],sent_day(homes[0].get('time','')))]
     owners+=[p for e in cited if e is not homes[0] for p in re.findall(r'[^。；;！!？?\n]+',e['text']) if due in deadlines(p,sent_day(e.get('time','')))]
@@ -3347,8 +3370,12 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         cited_evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}]
         relative=(_school_native_dates(native_action)
             if native_action else set().union(*(deadlines(action_anchor.get(e['ref'],'') if historical else e['text'],sent_day(e.get('time',''))) for e in cited_evidence))) if mode=='school' else set()
+        def borrowed(day):
+            # Every path reads one rule: a day that another action's clause states never becomes this item's own.
+            return bool(routing and day and dated_quote and not historical and not native_action
+                        and _school_borrowed_day(dated_quote,cited_evidence,day,str(proposal.get('task_goal','')),str(proposal.get('task_title',''))))
         if (routing and not due and len(result['proposals'])==1 and len(cited_evidence)==1 and len(relative)==1
-                and not (dated_quote and not historical and not native_action and _school_borrowed_day(dated_quote,cited_evidence,next(iter(relative)),str(proposal.get('task_goal',''))))):
+                and not borrowed(next(iter(relative)))):
             # The model may omit a date that the single original notice states explicitly.
             due=next(iter(relative))
         # This item's own complete clause decides its date only when its summary declares that same day;
@@ -3357,13 +3384,13 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 if routing and not historical and not native_action and dated_quote else set())
         sent={sent_day(e.get('time','')) for e in cited_evidence}
         owned=(bool(clause) and clause=={due} and len(sent)==1 and all(sent)
-               and _school_goal_dates(str(proposal.get('task_goal','')),cited_evidence)=={due})
+               and _school_goal_dates(str(proposal.get('task_goal','')),cited_evidence)=={due} and not borrowed(due))
         if due:
             # One notice may carry several dated requirements; the model's date must be one the sending day grounds.
             grounded=due in relative if mode=='school' else any(due in item['text'] for item in cited)
             if clause and due not in clause:grounded=False
             elif owned:grounded=True
-            elif routing and not historical and not native_action and _school_borrowed_day(dated_quote,cited_evidence,due,str(proposal.get('task_goal',''))):grounded=False
+            elif borrowed(due):grounded=False
             if not date(due) or not grounded:
                 if not routing: raise AgentError('模型日期缺少原文依据')
                 due='';uncertain_due=True
@@ -3384,6 +3411,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 ['title','goal','advice','state','reason','change','target_id','purpose','submission']}
             if not due and not proposed_due and not historical and not native_action:
                 due=_school_explicit_action_due(brief,cited_evidence)
+                if borrowed(due):due=''
                 item['due']=due
             target=next((t for t in school_tasks if t['id']==raw_target),None)
             if (uncertain_due and brief.get('change')=='append' and brief['state']=='ready'

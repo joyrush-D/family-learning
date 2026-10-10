@@ -134,6 +134,13 @@ _EVENT_STATE=(r'取消|延期|改期|推迟|暂停|停办|改为|改到|改至|�
               r'|自愿|自由|可选|可以?不|不必|无需|无须|不用|不需要?|不要求|不强制|非强制|非必须|不作(?:统一|强制)?要求|酌情|视情况|仅供参考|选择性')
 # A state word taking what follows as its object: 取消打印材料 cancels the printing, 可不参加 the attending.
 _EVENT_STATE_OBJECT=r'取消|暂停|停办|推迟|延期|改期|改为|改到|改至|可以?不|不必|无需|无须|不用|不需要?|不要求|不强制'
+# What may follow the event's words while they still name the event: its own time or arrangement, attending or holding it,
+# or a function word. Any other word makes them a modifier of that word's object (家长会回执、会议资料、家长会座位).
+_EVENT_SUBJECT_END=r'(?:的?(?:(?:具体|准确|确切|详细)的?)?(?:时间|日期|安排)|参加|出席|到场|参会|举行|召开|举办|[已将暂也均都被再仍还又不没未无则可需须要应改由是为于在]|$)'
+# A day labelling an edition (2026年10月10日版), or one whose 的 phrase reports the event before it is held
+# (10月10日的家长会资料说明家长会将…举行), dates that edition or material, not when the event is held.
+_EVENT_OTHER_DAY=(r'(?:'+_EVENT_DAY+r')\s*(?:[（(][^）)]*[）)])?\s*版(?!画)'
+                  r'|(?:'+_EVENT_DAY+r')\s*的(?:(?!'+_EVENT_DAY+r'|[将定拟于在]|举行|召开|举办)[^，,])*?(?:说明|显示|表示|指出|提到|写明|写道|告知|介绍|载明|注明)')
 
 
 def _event_mention(event):
@@ -148,12 +155,13 @@ def _modifies_event(part,mention):
     """A state word modifies the event when its own object, else the clause it predicates, still means the event.
 
     参加由家长自愿决定、本次家长会已取消 are about the event; 取消打印材料、座位可选、无需带材料 are about another object;
-    a clause holding nothing but the state (不作统一要求) can only be about the event.
+    a clause holding nothing but the state (不作统一要求) can only be about the event. The event's words followed by another
+    object's word only modify it, so 家长会回执可选、家长会回执取消 keep the meeting.
     """
     for m in re.finditer(_EVENT_STATE,part):
         after=re.sub(r'[\s、：:]','',part[m.end():])
         scope=after if after and re.fullmatch(_EVENT_STATE_OBJECT,m[0]) else re.sub(r'[\s、：:]','',part[:m.start()]+part[m.end():])
-        if not scope or re.search(mention,scope):return True
+        if not scope or any(re.match(_EVENT_SUBJECT_END,scope[x.end():]) for x in re.finditer(mention,scope)):return True
     return False
 
 
@@ -165,7 +173,8 @@ def event_days(text,published):
     请参加); ！？ end a sentence, so a notice's own date never reaches a later event. A negation, state or option counts
     on what it modifies: the event's own clause (不是10月15日举行、暂定、原定…取消、按10月9日通知), the request (自愿参加)
     or another clause whose state's object or subject is still the event (本次家长会已取消、参加由家长自愿决定、准确时间后续告知)
-    or which states nothing else (不作统一要求). 座位可选、取消打印材料、无需带材料 keep the meeting; a past day stays out.
+    or which states nothing else (不作统一要求). 座位可选、取消打印材料、无需带材料、家长会回执可选 keep the meeting; a past day
+    stays out, and so does a day that dates an edition or a material reporting the event (2026年10月10日版的家长会资料说明…举行).
     """
     anchor=date(published)
     text=_relative_weekday(_grounded_text(text,anchor),anchor)
@@ -178,7 +187,7 @@ def event_days(text,published):
         held=[n for n,c in enumerate(clauses) if re.search(r'(?:'+_EVENT_DAY+r')(?:(?!'+_EVENT_DAY+r').)*?(?:举行|召开|举办)',c)]
         if len(values)!=1 or '' in values or len(held)!=1 or not re.search(_ATTEND_REQUEST,sentence):continue
         value=next(iter(values));event=clauses[held[0]]
-        if (anchor and value<anchor or re.search(_EVENT_STATE,event)
+        if (anchor and value<anchor or re.search(_EVENT_STATE,event) or re.search(_EVENT_OTHER_DAY,event)
                 or re.search(r'(?:不是|并非|而非|并不在|不在|不于|不会在)\s*(?:于|在)?\s*(?:'+_EVENT_DAY+r')|(?:不|未|没有?|无法|不能|不会|不再)\s*(?:如期|按时|正常)?\s*(?:举行|召开|举办)',event)
                 or re.search(r'(?:根据|依据|按照|参照|参见|据|按|见|同)\s*(?:'+_EVENT_DAY+r')|(?:'+_EVENT_DAY+r')[^，,]{0,6}?(?:通知|公告|文件|来函|消息|发布|发出)',event)):continue
         mention=_event_mention(event)

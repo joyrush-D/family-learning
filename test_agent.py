@@ -816,6 +816,7 @@ class AgentTests(unittest.TestCase):
         for item in items:
             item.update(child_id='child-1',kind='school')
             item['plan'].pop('school_selection_receipt',None)  # This field did not exist in r188.
+            item['plan'].pop('school_date_quote',None)  # Nor did the saved original date words.
         key='messages:'+agent._hash([self.source['id'],[v['id'] for v in values]])[:40]
         fp=self.store._job(key,dict(school_learning_policy=8,messages=values),self.now,model=True)
         self.store._save(key,fp,items,self.now,[(self.source['id'],v['id']) for v in values])
@@ -980,6 +981,7 @@ class AgentTests(unittest.TestCase):
         proposal=school_proposal(title_quote=text,task_title='家长核对学校通讯录紧急联系电话',task_goal=text,due='2026-10-05',task_state='review',task_purpose='admin',evidence=[dict(ref=evidence[0]['ref'])])
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):items=agent._select('school',evidence,school_goals=[],as_of='2026-10-04')
         item=items[0];item.update(kind='school',child_id='child-1');item['plan'].pop('school_selection_receipt',None)
+        item['plan'].pop('school_date_quote',None)  # r189 saved neither field.
         item['plan']['school_task'].update(policy=9,state='review',reason='旧规则将孩子抄写误当正向学习动作。')
         key='messages:'+agent._hash([self.source['id'],['11']])[:40];fp=self.store._job(key,dict(school_learning_policy=9,messages=payload['messages']),self.now,model=True)
         self.store._save(key,fp,items,self.now,[(self.source['id'],'11')])
@@ -4218,6 +4220,49 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
         text='2026年10月18日前提交报名资料，家长会日期另行通知。'
         rows,tasks=self._school_event_run(text,[dict(title_quote=text,due='2026-10-18',task_title='参加家长会',task_goal='家长会日期另行通知，届时请家长参加。')])
         self.assertEqual(rows['参加家长会']['due'],'');self.assertNotIn(('参加家长会','2026-10-18'),tasks)
+
+    def test_whole_original_quote_and_goal_never_give_the_meeting_the_form_deadline(self):
+        # Fictional: the original, title_quote and goal are one sentence; only the title tells which action the item is.
+        text='2026年10月29日前提交报名表，家长会的日期另行通知。'
+        rows,tasks=self._school_event_run(text,[dict(title_quote=text,due='2026-10-29',task_title='参加家长会',task_goal=text)])
+        brief=json.loads(rows['参加家长会']['plan'])['school_task']
+        self.assertEqual((rows['参加家长会']['due'],brief['state']),('','review'));self.assertEqual(tasks,[])
+        cited=[dict(ref='message:synthetic-group:11',text=text,time='2026-10-10T08:30:00+08:00')]
+        self.assertTrue(agent._school_borrowed_day(text,cited,'2026-10-29',text,'参加家长会'))
+        self.assertTrue(agent._school_borrowed_day(text,cited,'2026-10-29',text,'学校事项'))
+        self.assertFalse(agent._school_borrowed_day(text,cited,'2026-10-29',text,'提交报名表'))
+        self.assertFalse(agent._school_borrowed_day(text,cited,'2026-10-29','2026年10月29日前提交报名表。','家长会报名'))
+
+    def test_form_keeps_its_own_deadline_beside_the_undated_meeting(self):
+        text='2026年10月29日前提交报名表，家长会的日期另行通知。'
+        rows,tasks=self._school_event_run(text,[dict(title_quote=text,due='2026-10-29',task_title='参加家长会',task_goal=text),
+                                                dict(title_quote='2026年10月29日前提交报名表',due='2026-10-29',task_title='提交报名表',task_goal='2026年10月29日前提交报名表。')])
+        self.assertEqual({t:(rows[t]['due'],json.loads(rows[t]['plan'])['school_task']['state']) for t in rows},
+                         {'参加家长会':('','review'),'提交报名表':('2026-10-29','ready')})
+        self.assertEqual(tasks,[('提交报名表','2026-10-29')])
+
+    def test_meeting_without_a_model_date_is_never_filled_from_the_form_clause(self):
+        text='2026年10月29日前提交报名表，家长会的日期另行通知。'
+        rows,tasks=self._school_event_run(text,[dict(title_quote=text,due='',task_title='参加家长会',task_goal=text)])
+        self.assertEqual(rows['参加家长会']['due'],'');self.assertNotIn(('参加家长会','2026-10-29'),tasks)
+
+    def test_optional_receipt_keeps_the_meeting_and_an_edition_day_is_not_when_it_is_held(self):
+        # Fictional: a state counts on the object it modifies; a material's edition day never becomes the meeting's day.
+        from family_agenda import deadlines
+        for text,want in (('家长会定于2026年10月15日举行，请家长参加，家长会回执可选。',{'2026-10-15'}),
+                          ('家长会定于2026年10月15日举行，请家长参加，家长会回执取消。',{'2026-10-15'}),
+                          ('家长会定于2026年10月15日举行，请家长参加，会议资料可选。',{'2026-10-15'}),
+                          ('家长会定于2026年10月15日举行，请家长参加，座位可选。',{'2026-10-15'}),
+                          ('家长会定于2026年10月15日举行，请家长参加，取消打印材料。',{'2026-10-15'}),
+                          ('家长会定于2026年10月15日举行，请家长参加，无需带材料。',{'2026-10-15'}),
+                          ('家长会定于2026年10月15日举行，请家长参加，家长会可选。',set()),
+                          ('家长会定于2026年10月15日举行，请家长参加，家长会已取消。',set()),
+                          ('家长会定于2026年10月15日举行，请家长参加，家长会自愿参加。',set()),
+                          ('2026年10月10日版的家长会资料说明家长会将在体育馆举行，请家长参加。',set()),
+                          ('2026年10月10日的家长会资料说明家长会将在体育馆举行，请家长参加。',set()),
+                          ('2026年10月15日的家长会将在体育馆举行，请家长参加。',{'2026-10-15'}),
+                          ('家长会将于2026年10月15日在学校体育馆一楼东侧多功能报告厅（请从北门进入并按指示牌说明就座）举行，请家长参加。',{'2026-10-15'})):
+            self.assertEqual(deadlines(text,'2026-10-10'),want,text)
 
     def test_generic_deadline_label_still_covers_the_items_after_it(self):
         label='截止时间：2026年10月16日。';slip='以下各项请完成：交回活动回执。'
