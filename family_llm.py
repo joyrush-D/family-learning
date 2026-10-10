@@ -1178,41 +1178,72 @@ def _ref_line_heading(line):
     return re.sub(r'(?<=[（(【\[])\s*(?:[只仅共]|以下|如下)?(?:包?含|包括|有|限于?|为|是)?\s*$','',line[:min(starts)]) if starts else line
 
 
+# A line's role comes from where it stands in the whole original, never from its words alone: 「孩子作答：」 answers only a question
+# or level waiting for it, and a line no answer takes heads what follows.
+_REF_FIELD=re.compile(r'(?<![^\W_])([^\W_]{0,10}答[案题]?)\s*[：:]')  # a field whose name says it holds the answer 「孩子作答：5」「孩子作答：」
+_REF_REACH_NOTE=re.compile(r'[（(【\[]\s*(?:[只仅共]|以下|如下)?(?:包?含|包括|有|限于?|为|是)?\s*([^（()）【】\[\]\n]*?)\s*[)）】\]]')
+
+
+def _ref_teacher_heading(line):
+    """All a teacher line says of its scope: everything before its first question number, a 大题 mark and the words after it
+    included 「教师参考（第一大题，五年级数学练习）」; what follows a question number is that question's answer, never heading.
+    A bracket saying no more than how far a 大题 mark reaches 「（只含第一大题）」 is the mark's own."""
+    found=_REF_QUESTION.search(line)
+    return _REF_REACH_NOTE.sub(lambda note:' %s '%note[1] if _REF_SECTION.search(note[1]) and not _ref_scope(note[1])[2] else note[0],
+                               line[:found.start()] if found else line)
+
+
 def _ref_request_title(questions,references,entries,titles=frozenset()):
-    """The one ordinary title this request's whole question text gives, read as a label's words are, or None. The heading lines
-    before each original's first question or 大题 give one value, and every later heading of the whole file repeats it: another
-    title on its own line after any question 「五年级数学练习（虚构）」「五年级数学练习：」, or before a question or 大题 mark on its
-    line, leaves none, whether or not its numbers continue. After the first question a line opening on a sub-question number
-    「（1）哪个数等于2+3？」 is a level of the question above, and a line whose field name says it holds the answer 「孩子作答：5」
-    「孩子作答：」 is that question's answer, one field name throughout; neither is a heading, and no short name before a colon is
-    a field for its length alone. No paper is named and no number repeats under one 大题, so a second paper of the same numbers in
-    one file leaves none. The selected teacher text names no scope of its own: every entry is bare, and every line's heading, question
-    and 大题 lines included, is only words of that title 「教师参考答案（虚构）」, never another 「五年级练习参考答案」
-    「五年级数学练习（虚构） 一、参考答案」「教师参考（五年级数学练习第一大题）」."""
-    heads,later,fields,seen=set(),set(),set(),set()
+    """The one ordinary title this request's whole question text gives, read as a label's words are, or None. A line's role
+    comes from where it stands in the whole original, never from its words alone. The heading lines before each original's
+    first question or 大题 give one value. A question number, and after it a line opening on a sub-question number
+    「（1）哪个数等于2+3？」, opens a block that waits for its answer: a field whose name says it holds the answer 「孩子作答：5」
+    「孩子作答：」, after the stem on its line or on a line of its own, one field name throughout. The lines between a mark and
+    that answer are the block's own, a stem's next line and options standing alone 「哪个数等于2+3？」「A. 5」 included; every
+    line after an answer and before the next mark heads what follows and repeats the title, or leaves none: another title
+    opening on a bracketed number 「（2）班海岸数学练习（虚构）」 or ending in a colon or 答 「五年级数学练习：」「五年级数学问答：」,
+    whether or not its numbers continue, as one before a question or 大题 mark on its line. A field where no block waits answers
+    nothing; with no field nothing closes a block, and where the original answers in fields a question or level left without its
+    answer leaves none. No paper is named and no number repeats under one 大题, so a second paper of the same numbers in one
+    file leaves none. The selected teacher text names no scope of its own: every entry is bare, and all of every line before its
+    first question number, words after a 大题 mark included, is only words of that title 「教师参考答案（虚构）」 or the name the
+    question text gives that same 大题 「一、选择题」, never another 「五年级练习参考答案」「五年级数学练习（虚构） 一、参考答案」
+    「教师参考（五年级数学练习第一大题）」「教师参考（第一大题，五年级数学练习）」."""
+    heads,later,fields,names,seen=set(),set(),set(),set(),set();unanswered=False
     for document in questions:
-        section=None;opened=False
+        section=None;opened=waiting=False;pending=[]
         for line in document['text'].splitlines():
             marks=list(_REF_QUESTION.finditer(line))
-            level=opened and not marks and _REF_SUB.match(line) is not None  # 「（1）哪个数…」 opens a level of the question above
+            level=opened and not marks and _REF_SUB.match(line)  # 「（1）哪个数…」 is a level of the question above once answered
             head=line[:marks[0].start()] if marks else '' if level else line
             paper,section,_=_ref_scope(head,section,titles)
             if paper is not None: return None
-            path=bool(marks) or level or _REF_SECTION.search(head) is not None
-            field=opened and not path and re.match(r'\s*([^\W_]{0,10}答[案题]?)\s*[：:]',line)  # 「孩子作答：5」 names the answer; 「五年级数学练习：」 none
-            if field: fields.add(field[1])
-            elif not level and (words:=_ref_scope(_ref_line_heading(line),titles=titles)[2]): (later if opened or path else heads).add(words)
-            opened=opened or path
+            words=_ref_scope(_ref_line_heading(line),titles=titles)[2]
+            path=marks or _REF_SECTION.search(head)
+            if path or level and not waiting:  # the lines no answer took since the last one head what follows
+                unanswered=unanswered or waiting;later.update(pending);pending=[]
+            if path:
+                if words: later.add(words)
+                found=_ref_scope(_ref_teacher_heading(line),None,titles)
+                if found[1] is not None: names.add(found[1:])  # 「一、选择题」: the name this 大题 is given
+                opened=True;waiting=bool(marks)
+            elif opened:
+                if words: pending.append(words)
+                waiting=waiting or bool(level)
+            elif words: heads.add(words)
+            if waiting and (answer:=_REF_FIELD.search(line,marks[-1].end() if marks else level.end() if level else 0)):
+                fields.add(answer[1]);waiting=False;pending=[]  # the lines that waited were the block's stem, options and levels
             for key in [(section,int(next(g for g in mark.groups() if g))) for mark in marks]:
                 if key in seen: return None
                 seen.add(key)
-    if (len(heads)!=1 or not later<=heads or len(fields)>1
+        unanswered=unanswered or waiting;later.update(pending)
+    if (len(heads)!=1 or not later<=heads or len(fields)>1 or fields and unanswered
             or any(entry['paper'] is not None or entry['rest'] for entry in entries)): return None
     title=heads.pop()
     for document in references:
         for line in document['text'].splitlines():
-            paper,_,words=_ref_scope(_ref_line_heading(line),None,titles)
-            if paper is not None or words not in title: return None
+            paper,section,words=_ref_scope(_ref_teacher_heading(line),None,titles)
+            if paper is not None or words not in title and (section,words) not in names: return None
     return title
 
 
