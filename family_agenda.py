@@ -175,8 +175,21 @@ def _event_mention(event):
 
 # A word pointing back at what the notice already named (该、本次、上述).
 _EVENT_POINTER=r'(?:该|此|本|这|上述|以上)(?:次|项|场|个)?'
-# A negation right before a predicate (不取消、并未延期、没有被取消、无需取消) states its opposite; 不得不 does not negate.
-_EVENT_NEGATION=r'(?:不必|无需|无须|不用|不需要?|不得|不能|不会|不再|无法|没有?|不是|并非|(?<!不得)不|未)被?'
+# One negation word right before a predicate or another negation (不取消、并未延期、没有被取消、无需取消、不能不取消).
+_EVENT_NEGATION=r'(?:不必|无需|无须|不用|不需要?|不得|不能|不会|不再|无法|没有?|不是|并非|不|未)被?'
+
+
+def _negated(before):
+    """Whether the negations right before a predicate state its opposite. They are read together as one chain, each negating
+    what follows it: one states the opposite (不取消、不能取消、无需取消), a second restores the predicate (不得不取消、不能不取消、
+    并非不取消), and so on by their count. A negation still left just before the chain (未必不取消、不可能不取消) makes the
+    chain unreadable, so the predicate is never read as negated and its event stays unconfirmed."""
+    count=0
+    while True:
+        m=re.search(_EVENT_NEGATION+r'$',before)
+        if not m:break
+        count+=1;before=before[:m.start()]
+    return count%2==1 and not re.search(r'(?:不|没|未|无|非|别|莫|勿)\S{0,2}$',before)
 # Where a whole name ends: the words after it open a predicate, a clause, a day or a joined name (安全讲座取消、安全讲座因故
 #延期、安全讲座和运动会取消), or name its time. Any other word goes on naming a longer object it only heads (安全讲座筹备会议).
 _EVENT_NAME_END=(r'(?!(?!'+_EVENT_STATE+r'|'+_EVENT_CLAUSE_WORD+r'|'+_DAY_WORDS+r'|[和与及或跟同等了]|的?(?:时间|日期))'
@@ -210,12 +223,13 @@ def _modifies_event(part,mention):
     own name, so 家长会回执可选、家长会回执取消、家长会安排表可选 keep the meeting while 家长会安排可选、家长会因单位安排取消
     do not. What follows a state is its object only when it names one (取消打印材料、取消家长会、可不参加); a joined
     predicate or a complement (本次家长会取消并退费、延期至下周、取消了) leaves the state on the subject before it.
-    Before or after its subject or object, a negated predicate (不取消安全讲座、家长会并未延期) states the opposite, and a
-    state whose object is another predicate (无需取消、可以不改期) only sets that predicate's polarity, so neither is a state.
+    Before or after its subject or object, a negated predicate (不取消安全讲座、家长会并未延期、安全讲座不能取消) states the
+    opposite, and a state whose object is another predicate (无需取消、可以不改期) only sets that predicate's polarity, so
+    neither is a state; a negated negation (不能不取消安全讲座、安全讲座不得不取消) is the state again.
     """
     for m in re.finditer(_EVENT_STATE,part):
         before=re.sub(r'[\s、：:]','',part[:m.start()]);after=re.sub(r'[\s、：:]','',part[m.end():])
-        if re.search(_EVENT_NEGATION+r'$',before) or (re.fullmatch(_EVENT_STATE_OBJECT,m[0]) and re.match(_EVENT_STATE_OBJECT,after)):continue
+        if _negated(before) or (re.fullmatch(_EVENT_STATE_OBJECT,m[0]) and re.match(_EVENT_STATE_OBJECT,after)):continue
         if re.fullmatch(_EVENT_STATE_OBJECT,m[0]) and (re.search(mention,after) or re.fullmatch(r'了?(?:'+_EVENT_OTHER_OBJECT+r')',after)):before=''
         if not before+after:return True
         if any(not re.fullmatch(_EVENT_OTHER_OBJECT,side[x.end():]) for side in (before,after) for x in re.finditer(mention,side)):return True
