@@ -4457,7 +4457,7 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
                          ('accepted','2026-10-18','ready',refund,refund))
         self.assertEqual(tasks,[('寄出退款回执原件','2026-10-18')])
         for saved in (row,receipt):
-            self.assertEqual([(e['ref'],e.get('text',text)) for e in json.loads(saved['evidence'])],[('message:synthetic-group:11',text)])
+            self.assertEqual([(e['ref'],e['text'].split('\n',1)[1]) for e in json.loads(saved['evidence'])],[('message:synthetic-group:11',text)])
         for _ in range(2):  # Each read opens new connections and keeps the same days and meanings.
             self.assertEqual({t['title']:(t['agenda']['due_on'],t['agenda']['due_kind']) for t in self.app.tasks()},{'寄出退款回执原件':('2026-10-18','deadline')})
             self.assertEqual([(i['title'],i['agenda']['due_kind']) for i in family_agenda.snapshot(self.app,'2026-10-18','2026-10-18')['agenda']],[('寄出退款回执原件','deadline')])
@@ -4500,7 +4500,7 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
             row=rows[title];plan=json.loads(row['plan']);brief=plan['school_task']
             self.assertEqual((row['state'],row['due'],brief['state'],brief['purpose'],brief['goal'],plan['school_date_quote']),
                              ('accepted','2026-10-22','ready','admin',goal,quote),title)
-            self.assertEqual([(e['ref'],e.get('text',text)) for e in json.loads(row['evidence'])],[('message:synthetic-group:11',text)])
+            self.assertEqual([(e['ref'],e['text'].split('\n',1)[1]) for e in json.loads(row['evidence'])],[('message:synthetic-group:11',text)])
         self.assertEqual({t['title']:(t['agenda']['due_on'],t['agenda']['due_kind']) for t in self.app.tasks()},
                          {'参加学校开放日':('2026-10-22','event'),'确认是否参加学校开放日':('2026-10-22','deadline')})
         self.assertEqual(sorted((i['title'],i['agenda']['due_kind']) for i in family_agenda.snapshot(self.app,'2026-10-22','2026-10-22')['agenda']),
