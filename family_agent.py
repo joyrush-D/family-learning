@@ -1951,8 +1951,7 @@ def _school_dated_quote(quote, evidence, due, brief):
                 if values and values!={due}:return False
         while (start:=text.find(quote,start))!=-1:
             end=start+len(quote)
-            left=text[:start].rstrip(' \t\r');right=text[end:].lstrip(' \t\r')
-            complete=(not left or left[-1] in '。；;：:\n') and (not right or right[0] in '。；;\n')
+            complete=_school_complete_span(text,start,end)
             if complete:
                 published=sent_day(entry.get('time',''))
                 matches.append(deadlines(quote,published))
@@ -1960,6 +1959,13 @@ def _school_dated_quote(quote, evidence, due, brief):
                 if stated and stated!={due}:return False
             start=end
     return bool(matches) and all(values=={due} for values in matches) and (kinds!={2} or len(matches)==1)
+
+
+def _school_complete_span(text,start,end):
+    """Whether text[start:end] is whole sentences or 分号句: each side meets a sentence end, which may be the quote's own last mark."""
+    left=text[:start].rstrip(' \t\r');quoted=text[start:end].strip(' \t\r');right=text[end:].lstrip(' \t\r')
+    return ((not left or left[-1] in '。；;！!？?：:\n' or quoted[:1]=='\n')
+            and (not right or right[0] in '。；;！!？?\n' or quoted[-1:] in tuple('。；;！!？?\n')))
 
 
 _SCHOOL_ARRANGEMENT=r'(?:抽查|检查|抽背|抽测|默写|听写|背诵|朗读|体检|测试|测验|考试|上交|交|带|穿)'
@@ -2003,8 +2009,7 @@ def _school_own_clause_dates(quote,cited,others):
     homes=[e for e in cited if quote and quote in e['text']]
     if len(homes)!=1 or homes[0]['text'].count(quote)!=1:return set()
     text=homes[0]['text'];start=text.index(quote);end=start+len(quote)
-    left=text[:start].rstrip(' \t\r');right=text[end:].lstrip(' \t\r')
-    if left and left[-1] not in '。；;：:\n' or right and right[0] not in '。；;\n':return set()
+    if not _school_complete_span(text,start,end):return set()
     for other in others:  # Another proposal quoting any of this clause makes it shared, not this item's own.
         at=0
         while other and (at:=text.find(other,at))!=-1:
@@ -2013,21 +2018,33 @@ def _school_own_clause_dates(quote,cited,others):
     return _school_own_dates(quote,sent_day(homes[0].get('time','')))
 
 
-def _school_borrowed_day(quote,cited,due):
-    """True when this item's own original sentence states no day and due is another sentence's own dated action.
+def _school_borrowed_day(quote,cited,due,goal=''):
+    """True when due is not this item's own day: its own clauses state no day and due is another clause's or original's dated action.
 
-    Only a generic date label or a header introducing the items (截止时间：…；明天完成：⏎…；以下各项…) still covers them;
-    a colon followed by its own action is no header, so 运动会：10月15日举行 never becomes the day of 家长会时间另行通知.
+    A day belongs to the action of its own clause, so 2026年10月18日前提交报名资料，家长会日期另行通知 gives the meeting no day.
+    A day ending its clause (请家长于10月16日前，交回回执), a generic date label or a header introducing the items
+    (截止时间：…；明天完成以下两项：…) still covers the clauses after it; a colon followed by its own action is no header,
+    so 运动会：10月15日举行 never becomes the day of 家长会时间另行通知. When this item's own words defer a time
+    (家长会日期另行通知), a day they also quote is another action's unless this item's own summary states it.
     """
     from family_agenda import deadlines,sent_day
     homes=[e for e in cited if quote and quote in e['text']]
     if not due or len(homes)!=1 or homes[0]['text'].count(quote)!=1:return False
     text=homes[0]['text'];start=text.index(quote);end=start+len(quote.rstrip('。；;！!？? \n'))
-    parts=list(re.finditer(r'[^。；;！!？?\n]+',text))
-    own=''.join(m[0] for m in parts if m.start()<end and m.end()>start)
-    if re.search(r'\d{4}\s*[-年]|\d{1,2}\s*月\s*\d{1,2}|今天|今日|今晚|明天|明日|明早|明晚|后天|(?:周|星期|礼拜)[一二三四五六日天]',own):return False
-    published=sent_day(homes[0].get('time',''))
-    owners=[m[0] for m in parts if not (m.start()<end and m.end()>start) and due in deadlines(m[0],published)]
+    day=r'\d{4}\s*[-年]|\d{1,2}\s*月\s*\d{1,2}|今天|今日|今晚|明天|明日|明早|明晚|后天|(?:周|星期|礼拜)[一二三四五六日天]'
+    sentences=list(re.finditer(r'[^。；;！!？?\n]+',text))
+    clauses=[(s,m) for s in sentences for m in re.finditer(r'[^，,]+',s[0])]
+    own=[n for n,(s,m) in enumerate(clauses) if s.start()+m.start()<end and s.start()+m.end()>start]
+    # A day ending its clause (于10月16日前，) or heading a colon (明天完成：…) modifies the actions after it in the same sentence.
+    lead=[n for n,(s,m) in enumerate(clauses) if own and s is clauses[own[0]][0] and n<own[0] and re.search(
+        r'(?:\d{1,2}\s*[日号]|\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天|(?:周|星期|礼拜)[一二三四五六日天])\s*(?:之前|以前|前|截止|为止|以内|内|止)?\s*$|(?:'+day+r')[^：:]*[：:]',m[0])]
+    if re.search(day,''.join(clauses[n][1][0] for n in lead+own)):
+        deferred=re.search(r'(?:时间|日期)[^，,]{0,6}?(?:另行(?:通知|告知|安排)|(?:后续|稍后|随后|再行|届时)(?:通知|告知|公布)|待通知|待定|待确定|尚未确定|未定)',
+                           '，'.join(clauses[n][1][0] for n in own))
+        return bool(deferred) and due not in _school_goal_dates(goal,homes)
+    # Own clauses state no day, so another clause stating one is where its sentence's day (event or deadline) belongs.
+    owners=[s[0] for n,(s,m) in enumerate(clauses) if n not in own+lead and re.search(day,m[0]) and due in deadlines(s[0],sent_day(homes[0].get('time','')))]
+    owners+=[p for e in cited if e is not homes[0] for p in re.findall(r'[^。；;！!？?\n]+',e['text']) if due in deadlines(p,sent_day(e.get('time','')))]
     header=(r'[：:]\s*$|^\s*(?:统一|全部|所有|各项)?(?:截止|提交|上交|完成|交回)?(?:时间|日期|期限)\s*(?:为|是)?\s*[：:]'
             r'|以下|下列|如下|上述|以上|各项|上列|所列|(?:所有|全部|各)(?:事项|作业|材料|任务|内容|项目|要求)|均(?:须|需|应|要)?(?:于|在)|一律')
     return bool(owners) and not any(re.search(header,p) for p in owners)
@@ -3331,7 +3348,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         relative=(_school_native_dates(native_action)
             if native_action else set().union(*(deadlines(action_anchor.get(e['ref'],'') if historical else e['text'],sent_day(e.get('time',''))) for e in cited_evidence))) if mode=='school' else set()
         if (routing and not due and len(result['proposals'])==1 and len(cited_evidence)==1 and len(relative)==1
-                and not (dated_quote and not historical and not native_action and _school_borrowed_day(dated_quote,cited_evidence,next(iter(relative))))):
+                and not (dated_quote and not historical and not native_action and _school_borrowed_day(dated_quote,cited_evidence,next(iter(relative)),str(proposal.get('task_goal',''))))):
             # The model may omit a date that the single original notice states explicitly.
             due=next(iter(relative))
         # This item's own complete clause decides its date only when its summary declares that same day;
@@ -3346,7 +3363,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             grounded=due in relative if mode=='school' else any(due in item['text'] for item in cited)
             if clause and due not in clause:grounded=False
             elif owned:grounded=True
-            elif routing and not historical and not native_action and _school_borrowed_day(dated_quote,cited_evidence,due):grounded=False
+            elif routing and not historical and not native_action and _school_borrowed_day(dated_quote,cited_evidence,due,str(proposal.get('task_goal',''))):grounded=False
             if not date(due) or not grounded:
                 if not routing: raise AgentError('模型日期缺少原文依据')
                 due='';uncertain_due=True
@@ -3413,6 +3430,8 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 item['plan']['school_native_action']=native_action
                 item['plan']['school_original_action']=_school_native_scope(native_action)
             item['plan']['school_selection_revision']=SCHOOL_SELECTION_REVISION
+            # The verified original words this item was dated from; its saved title is the rewritten short one.
+            if dated_quote and not native_action and not historical:item['plan']['school_date_quote']=dated_quote
             if historical:
                 item['plan']['school_action_anchor']=action_anchor
                 item['plan']['school_history_uncertain']=history_uncertain
