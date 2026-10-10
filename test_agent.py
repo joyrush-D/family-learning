@@ -4640,6 +4640,74 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
             self.assertEqual({t['title']:(t['agenda']['due_on'],t['agenda']['due_kind']) for t in self.app.tasks()},
                              {title:('2026-10-18','event'),'寄出退款回执原件':('2026-10-18','deadline')})
 
+    def test_a_cancelled_meeting_whose_goal_only_shares_the_refunds_noun_keeps_no_day(self):
+        # Fictional counterexample A: the meeting's goal (请家长参加家长会。) ends in the noun the same sentence's refund object
+        # begins with (寄出家长会退款回执原件). Sharing a noun is not sharing an action, so the goal places the item on the meeting
+        # it attends, which the notice later cancels: no day and no formal task. The refund keeps its own deadline, and the whole
+        # original under its source and sending-time header, the quotes, goals and message ref stay through reopening.
+        import family_agenda
+        from family_agent import _school_borrowed_day,_school_event_dropped,_school_goal_named
+        first='家长会定于2026年10月18日举行，请家长参加，并请家长2026年10月18日前寄出家长会退款回执原件。'
+        refund='请家长2026年10月18日前寄出家长会退款回执原件。';goal='请家长参加家长会。';sent='2026-10-10T09:00:00+08:00'
+        text=first+'现通知该家长会取消。'
+        rows,tasks=self._school_event_run(text,[dict(title_quote=first,due='2026-10-18',task_title='参加家长会',task_goal=goal),
+                                                dict(title_quote=first[:-1],due='2026-10-18',task_title='寄出家长会退款回执原件',task_goal=refund)],time=sent)
+        row=rows['参加家长会'];plan=json.loads(row['plan']);brief=plan['school_task']
+        self.assertEqual((row['state'],row['due'],brief['state'],brief['purpose'],brief['goal'],plan['school_date_quote']),
+                         ('pending','','review','admin',goal,first))
+        receipt=rows['寄出家长会退款回执原件'];kept=json.loads(receipt['plan'])
+        self.assertEqual((receipt['state'],receipt['due'],kept['school_task']['state'],kept['school_task']['purpose'],kept['school_task']['goal'],kept['school_date_quote']),
+                         ('accepted','2026-10-18','ready','admin',refund,first[:-1]))
+        self.assertEqual(tasks,[('寄出家长会退款回执原件','2026-10-18')])
+        for saved in (row,receipt):
+            self.assertEqual([(e['ref'],e['text']) for e in json.loads(saved['evidence'])],[('message:synthetic-group:11','虚构班级 · '+sent+'\n'+text)])
+        for _ in range(2):  # Each read opens new connections and keeps the same days, meanings and open states.
+            self.assertEqual({t['title']:(t['agenda']['due_on'],t['agenda']['due_kind']) for t in self.app.tasks()},{'寄出家长会退款回执原件':('2026-10-18','deadline')})
+            self.assertEqual([(i['title'],i['agenda']['due_kind'],i['closed']) for i in family_agenda.snapshot(self.app,'2026-10-18','2026-10-18')['agenda']],
+                             [('寄出家长会退款回执原件','deadline',False)])
+            self.assertEqual([(i['id'],i['agenda']['due_on'],i['agenda']['due_kind']) for i in self._school_inbox()],[(row['id'],'','')])
+        with self.app.connect() as c:
+            self.assertEqual([(r['state'],r['due']) for r in c.execute("SELECT state,due FROM agent_items WHERE kind='school' ORDER BY title")],
+                             [('pending',''),('accepted','2026-10-18')])
+        clauses=['家长会定于2026年10月18日举行','请家长参加','并请家长2026年10月18日前寄出家长会退款回执原件']
+        self.assertEqual((_school_goal_named(clauses,goal),_school_goal_named(clauses,refund)),([True,False,False],[False,False,True]))
+        cited=lambda notice:[dict(ref='message:synthetic-group:11',text=notice,time=sent)]
+        for later,want in (('现通知该家长会取消。',True),('本次家长会延期至下周。',True),('家长会改期，具体时间另行通知。',True),
+                           ('运动会取消。',False),('家长会回执取消。',False),('',False)):
+            for shown in ('参加家长会','落实家长会参会安排',''):  # However the title is shown, the goal places the same item.
+                self.assertEqual(_school_borrowed_day(first,cited(first+later),'2026-10-18',goal,shown),want,(later,shown))
+                self.assertEqual(_school_event_dropped(first,cited(first+later),shown,goal),{'2026-10-18'} if want else set(),(later,shown))
+            self.assertFalse(_school_borrowed_day(first[:-1],cited(first+later),'2026-10-18',refund,'寄出家长会退款回执原件'),later)
+            self.assertEqual(_school_event_dropped(first[:-1],cited(first+later),'寄出家长会退款回执原件',refund),set(),later)
+
+    def test_a_held_meeting_whose_goal_only_shares_the_refunds_noun_keeps_its_event_day(self):
+        # Fictional counterexample B: the same sentence without the cancellation. The goal places the item on the meeting it
+        # attends, so it keeps the arranged day as an event, never the refund's same-day deadline; the refund keeps its own.
+        # Another action on the same noun (寄回、提交、答复是否参加) stays that sibling's deadline beside attending.
+        import family_agenda
+        from family_agenda import date_meaning
+        first='家长会定于2026年10月18日举行，请家长参加，并请家长2026年10月18日前寄出家长会退款回执原件。'
+        refund='请家长2026年10月18日前寄出家长会退款回执原件。';goal='请家长参加家长会。';sent='2026-10-10T09:00:00+08:00'
+        rows,tasks=self._school_event_run(first,[dict(title_quote=first,due='2026-10-18',task_title='参加家长会',task_goal=goal),
+                                                 dict(title_quote=first[:-1],due='2026-10-18',task_title='寄出家长会退款回执原件',task_goal=refund)],time=sent)
+        self.assertEqual(tasks,[('参加家长会','2026-10-18'),('寄出家长会退款回执原件','2026-10-18')])
+        for title,want,quote in (('参加家长会',goal,first),('寄出家长会退款回执原件',refund,first[:-1])):
+            row=rows[title];plan=json.loads(row['plan']);brief=plan['school_task']
+            self.assertEqual((row['state'],row['due'],brief['state'],brief['purpose'],brief['goal'],plan['school_date_quote']),
+                             ('accepted','2026-10-18','ready','admin',want,quote),title)
+            self.assertEqual([(e['ref'],e['text']) for e in json.loads(row['evidence'])],[('message:synthetic-group:11','虚构班级 · '+sent+'\n'+first)],title)
+        for _ in range(2):  # Each read opens new connections and keeps the same days, meanings and open states.
+            self.assertEqual({t['title']:(t['agenda']['due_on'],t['agenda']['due_kind']) for t in self.app.tasks()},
+                             {'参加家长会':('2026-10-18','event'),'寄出家长会退款回执原件':('2026-10-18','deadline')})
+            self.assertEqual(sorted((i['title'],i['agenda']['due_kind'],i['closed']) for i in family_agenda.snapshot(self.app,'2026-10-18','2026-10-18')['agenda']),
+                             [('参加家长会','event',False),('寄出家长会退款回执原件','deadline',False)])
+        for sibling in ('寄出家长会退款回执原件','寄回家长会回执','提交家长会报名表','答复是否参加家长会'):
+            notice=first.replace('寄出家长会退款回执原件',sibling);own='请家长2026年10月18日前'+sibling+'。'
+            for shown in ('参加家长会','落实家长会参会安排'):
+                self.assertEqual(date_meaning(notice,'2026-10-18','2026-10-10',shown,goal),'event',(sibling,shown))
+            self.assertEqual(date_meaning(notice[:-1],'2026-10-18','2026-10-10',sibling,own),'deadline',sibling)
+            self.assertEqual(date_meaning(notice,'2026-10-18','2026-10-10','请家长准时参加家长会',goal.replace('参加','准时参加')),'event',sibling)
+
     def test_a_display_titled_attendance_confirmation_keeps_its_deadline_by_its_own_goal(self):
         # Fictional counterexample: the confirming item's display title starts with 参加 (参加意向确认：学校开放日). Its goal
         # places it on its own clause, which ties the day to confirming, so it stays a deadline beside attending the open day,

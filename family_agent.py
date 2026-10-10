@@ -2027,27 +2027,52 @@ _SCHOOL_DEFERRED=(r'(?:时间|日期)[^，,]{0,6}?(?:另行(?:通知|告知|安�
                   r'|待通知|待定|待确定|尚未确定|未定)')
 
 
-def _school_title_named(texts,title):
+def _school_title_named(texts,title,acting=False):
     """Which of an item's clauses its own title names: those holding the longest end of the title (its object comes last).
 
     参加家长会 names 家长会的日期另行通知, not 2026年10月29日前提交报名表, while 家长会报名 names the form's clause.
-    A title naming every clause, or none, picks none out.
+    An acting goal clause says its own predicate before that end, so each clause counts the longest end it holds as the
+    goal's own (_school_end_own), never one inside another action. A title naming every clause, or none, picks none out.
     """
     words=re.sub(r'[（(][^）)]*[）)]|[\s。；;，,！!？?、]+$','',re.sub(r'^\s*(?:待核对[：:]\s*)?(?:[^：:]{1,8}[：:]\s*)?','',title or ''))
-    sizes=[next((n for n in range(len(words),1,-1) if words[-n:] in text),0) for text in texts]
+    sizes=[next((n for n in range(len(words),1,-1) if words[-n:] in text and (not acting or _school_end_own(text,words[-n:],words[:-n]))),0)
+           for text in texts]
     best=max(sizes,default=0)
     return [size==best for size in sizes] if best>=2 and sizes.count(best)<len(sizes) else [True]*len(texts)
+
+
+# A request, or a day ending its deadline, opens the action whose predicate follows it in a clause (请家长…寄出、2026年10月18日前寄出).
+_SCHOOL_ACTION_OPEN=(r'请|须|需|务必|(?:\d{1,2}\s*[日号]|\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天|(?:周|星期|礼拜)[一二三四五六日天])'
+                     r'\s*(?:之前|以前|前|截止|为止|以内|内|止)')
+# Who is asked and how, before that predicate (家长、各位家长准时).
+_SCHOOL_ACTION_WHO=r'\s*(?:各位|全体)?(?:家长|学生|同学们?|孩子们?)?(?:准时|按时|届时|务必|必须|须|需)?'
+
+
+def _school_end_own(text,end,said):
+    """Whether a clause holds a goal clause's end as that goal's own subject or object, not inside another action.
+
+    A Chinese predicate comes before its object. Where no request or deadline before the end opens an action in the clause, the
+    end is what the clause is about (家长会定于2026年10月18日举行); after one, the predicate between them must be the goal's own,
+    ending the goal's words before its end (said). Sharing a noun is not sharing an action: 请家长参加家长会 never names
+    并请家长2026年10月18日前寄出家长会退款回执原件 or …前答复是否参加家长会, where 寄出 or 答复是否 acts on it, while
+    请家长准时参加家长会 is its own.
+    """
+    for m in re.finditer(re.escape(end),text):
+        opened=[o.end() for o in re.finditer(_SCHOOL_ACTION_OPEN,text[:m.start()])]
+        if said.endswith(re.sub('^'+_SCHOOL_ACTION_WHO,'',text[opened[-1]:m.start()]).strip() if opened else ''):return True
+    return False
 
 
 def _school_goal_named(texts,goal):
     """Which of an item's clauses its own action requirement restates, or None when it sets none apart.
 
-    Each clause of the goal names the clauses holding its longest end, as a title does, so 家长会定于2026年10月18日举行，
-    请家长参加。 places the meeting item on the meeting's own clauses beside 并请家长2026年10月18日前寄出退款回执原件, and
-    请家长2026年10月22日前确认是否参加学校开放日。 places the confirming item on its own clause. The goal only places the
-    item; its day and state still come from those original words. A goal restating every clause, or none, sets none apart.
+    Each clause of the goal names the clauses holding its longest end as its own, as a title does, so 家长会定于2026年10月18日
+    举行，请家长参加。 places the meeting item on the meeting's own clauses beside 并请家长2026年10月18日前寄出退款回执原件;
+    请家长参加家长会。 places it on the meeting held, never on 寄出家长会退款回执原件, whose action and object only share its
+    noun; and 请家长2026年10月22日前确认是否参加学校开放日。 places the confirming item on its own clause. The goal only places
+    the item; its day and state still come from those original words. A goal restating every clause, or none, sets none apart.
     """
-    picks=[keep for words in re.findall(r'[^，,。；;！!？?\n]+',goal or '') if not all(keep:=_school_title_named(texts,words))]
+    picks=[keep for words in re.findall(r'[^，,。；;！!？?\n]+',goal or '') if not all(keep:=_school_title_named(texts,words,True))]
     named=[any(keep[n] for keep in picks) for n in range(len(texts))]
     return named if any(named) and not all(named) else None
 
