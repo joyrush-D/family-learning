@@ -244,15 +244,28 @@ def date_meaning(quote,due,published,title=''):
     """'event' when due is the arranged day of the held event this item's own action attends.
 
     The same day can also be a sibling action's deadline in that notice (2026年10月18日前寄出家长会回执); it stays that
-    action's. An item whose title names the event itself (参加家长会) keeps the arranged day, while one naming another object
-    of it (寄出家长会回执) or not naming the event keeps the deadline.
+    action's. The item's own action decides: only one whose object is the event itself, its title ending in the event's name
+    (参加家长会), keeps the arranged day. A Chinese object ends in its own noun, so any words after the event's name make it
+    a modifier of another object, however that object is described (寄出家长会回执原件); that item, or one not naming the
+    event, keeps the deadline.
     """
     if not date(due):return ''
     held=[event for value,event in _held_events(quote,published) if value==due]
     if not held:return 'deadline'
     if due not in _action_deadlines(quote,published):return 'event'
     words=re.sub(r'[（(][^）)]*[）)]|[\s。；;，,！!？?]','',re.sub(r'^\s*待核对[：:]?','',title or ''))
-    return 'event' if any(not re.fullmatch(_EVENT_OTHER_OBJECT,words[x.end():]) for event in held for x in re.finditer(_event_named(event),words)) else 'deadline'
+    return 'event' if any(re.search(r'(?:'+_event_named(event)+r')$',words) for event in held) else 'deadline'
+
+
+def later_dropped_days(quote,text,published):
+    """Event days quote holds on its own that its original text, read from quote to the end, no longer holds.
+
+    A model may quote only 家长会定于2026年10月18日在体育馆举行，请家长参加。 while the same notice goes on 现通知该家长会取消。;
+    that later state still binds the meeting the quote holds. Cancelling another event or another object of it (运动会取消、
+    家长会回执取消) keeps the day, and a day the quote ties to an action of its own stays that action's.
+    """
+    kept=set(_held_events(text,published))
+    return {value for value,event in _held_events(quote,published) if (value,event) not in kept}-_action_deadlines(quote,published)
 
 
 def deadline(text,published):

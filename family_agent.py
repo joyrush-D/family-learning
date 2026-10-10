@@ -2004,8 +2004,12 @@ def _school_goal_dates(goal,cited):
 
 
 def _school_own_clause_dates(quote,cited,others):
-    """The dates of a complete clause that only this proposal quotes; its goal must still declare the same day."""
-    from family_agenda import sent_day
+    """The dates of a complete clause that only this proposal quotes; its goal must still declare the same day.
+
+    The quote may stop before the rest of its notice, which still states the event it holds: 现通知该家长会取消 after the
+    quoted meeting leaves it no day, so neither the local quote nor the summary can make a cancelled day valid.
+    """
+    from family_agenda import later_dropped_days,sent_day
     homes=[e for e in cited if quote and quote in e['text']]
     if len(homes)!=1 or homes[0]['text'].count(quote)!=1:return set()
     text=homes[0]['text'];start=text.index(quote);end=start+len(quote)
@@ -2015,7 +2019,8 @@ def _school_own_clause_dates(quote,cited,others):
         while other and (at:=text.find(other,at))!=-1:
             if max(start,at)<min(end,at+len(other)):return set()
             at+=len(other)
-    return _school_own_dates(quote,sent_day(homes[0].get('time','')))
+    published=sent_day(homes[0].get('time',''))
+    return _school_own_dates(quote,published)-later_dropped_days(quote,text[start:],published)
 
 
 _SCHOOL_DEFERRED=(r'(?:时间|日期)[^，,]{0,6}?(?:另行(?:通知|告知|安排)|(?:后续|稍后|随后|再行|届时)(?:通知|告知|公布)'
