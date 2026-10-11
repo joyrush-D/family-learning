@@ -1710,10 +1710,87 @@ class ExactAnswerTest(unittest.TestCase):
             ('62', '62.0'), ('－５', '-5'), ('５０％', '50%'), ('7 米。', '7米'), (long, long + '.000')]], ['same'] * 5)
         self.assertEqual([relation(*pair) for pair in [
             ('-5', '5'), ('62', '63'), (long + '8', long + '9'), ('0.' + long + '1', '0.' + long)]], ['different'] * 4)
-        # A decimal trailing on is never cut short; several values, an expression, other words or a unit change prove nothing.
+        # A decimal trailing on is never cut short; alternatives, an expression, other words or grouped digits prove nothing.
         self.assertEqual([relation(*pair) for pair in [
             ('3.33...', '3.33'), ('3.3。。。', '3.4'), ('62或72', '62'), ('100-38=62', '62'),
-            ('答：62', '62'), ('1/2', '0.5'), ('50厘米', '0.5米'), ('7', '7米')]], [None] * 8)
+            ('答：62', '62'), ('1/2', '0.5'), ('3,500', '3500')]], [None] * 7)
+        # Several results keep their count and order; a metric unit converts digit for digit, any other unit is left open.
+        self.assertEqual([relation(*pair) for pair in [
+            ('3，5', '3、5'), ('50厘米', '0.5米'), ('2千克', '2000克'), ('5，3', '3，5'), ('3', '3，5'), ('600厘米', '7米'),
+            ('7', '7米'), ('5个', '5米'), ('1千克', '1米')]], ['same'] * 3 + ['different'] * 3 + ['unit'] * 3)
+        # A bare number and its percent or permille are one value; a bare 5 against 5% may omit the %, so it proves nothing.
+        self.assertEqual([relation(*pair) for pair in [('50%', '0.5'), ('0.5', '５０％'), ('5‰', '0.5%'), ('5', '5%'), ('6%', '5%')]],
+                         ['same', 'same', 'same', 'unit', 'different'])
+
+    def test_ref_value_check_keeps_each_grade_to_its_evidence(self):
+        import family_llm
+        def check(student, reference, judgment, question='2+3=?', error_reason='', steps=''):
+            item = dict(label='虚构甲卷第1题', question=question, student_answer=student, answer='教师参考：' + reference,
+                        judgment=judgment, error_reason=error_reason, possible_cause='', steps=steps, uncertainty='')
+            family_llm._ref_value_check(item, student, reference)
+            return item
+        wrong = '作答%s与教师参考%s不同。'
+        # The disclosed integer cases: a contradicted correct is withdrawn, an evidenced incorrect and a sound correct stay.
+        self.assertEqual(check('4', '5', 'correct')['judgment'], 'unknown')
+        self.assertEqual([check('4', '5', 'incorrect', error_reason=wrong % (4, 5))[k] for k in ('judgment', 'error_reason')],
+                         ['incorrect', wrong % (4, 5)])
+        self.assertEqual(check('5', '5', 'correct')['judgment'], 'correct')
+        # Count, order, sign and the teacher's stated final result all count; an equal result is not cut from other words.
+        for student, reference in [('3', '3，5'), ('5，3', '3，5'), ('-5', '5'), ('4', '2+3=5'), ('2+3=6', '2+3=5')]:
+            self.assertEqual(check(student, reference, 'correct')['judgment'], 'unknown', (student, reference))
+        self.assertIn('结果个数不同（作答1个、教师参考2个）', check('3', '3，5', 'correct')['uncertainty'])
+        self.assertIn('第1、2个结果不同', check('5，3', '3，5', 'correct')['uncertainty'])
+        self.assertEqual([check(s, r, 'correct')['judgment'] for s, r in [('3，5', '3，5'), ('5', '2+3=5'), ('3+2=5', '2+3=5')]],
+                         ['correct'] * 3)
+        # Two long values that part only past the shown width are cut where they part, never as one same prefix.
+        long = '9' * 5000
+        note = check(long + '8', long + '9', 'correct')['uncertainty']
+        self.assertIn('“…' + '9' * 20 + '8”', note); self.assertIn('“…' + '9' * 20 + '9”', note); self.assertIn('第5001字', note)
+        note = check(long, long + '.000', 'incorrect', error_reason=wrong % ('', ''))['uncertainty']
+        self.assertIn('“…' + '9' * 20 + '.000”', note)
+        # An equal value written another way withdraws a bare value reason, but a precision or equation the question asks for stays.
+        self.assertEqual([check('5.0', '5', 'incorrect', error_reason=wrong % ('5.0', 5))[k] for k in ('judgment', 'error_reason')],
+                         ['unknown', ''])
+        precision, steps = '2.5×2=?（结果保留一位小数）', '先算出5，再按要求写成一位小数。'
+        kept = check('5', '5.0', 'incorrect', precision, '题目要求保留一位小数，作答5没有保留一位小数。', steps)
+        self.assertEqual([kept['judgment'], kept['steps']], ['incorrect', steps])
+        self.assertEqual(check('5', '5.0', 'correct', precision)['judgment'], 'unknown')
+        self.assertIn('保留一位小数', check('5', '5.0', 'correct', precision)['uncertainty'])
+        self.assertEqual(check('62', '62.0', 'correct', '100-38=?')['judgment'], 'correct')
+        column = '列式计算：2+3=?'
+        self.assertEqual(check('5', '2+3=5', 'correct', column)['judgment'], 'unknown')
+        self.assertEqual(check('5', '2+3=5', 'incorrect', column, '题目要求列式计算，作答只写了得数，缺少算式。')['judgment'], 'incorrect')
+        self.assertEqual(check('5', '5', 'incorrect', error_reason='没有写出过程。')['judgment'], 'unknown')
+        # A unit printed after the blank or a metric conversion proves the value; any other unit gap leaves a correct open.
+        self.assertEqual([check(s, r, 'correct', q)['judgment'] for s, r, q in [
+            ('7', '7米', '绳长____米。'), ('50厘米', '0.5米', '绳长多少？'), ('7', '7米', '绳长多少？'),
+            ('50厘米', '0.5米', '绳长多少？（用米作单位）')]], ['correct', 'correct', 'unknown', 'unknown'])
+        self.assertIn('单位写法不同', check('7', '7米', 'correct', '绳长多少？')['uncertainty'])
+        self.assertEqual(check('7', '7米', 'incorrect', '绳长____米。', '作答7缺少单位。')['judgment'], 'unknown')
+        self.assertEqual(check('6', '7米', 'incorrect', '绳长多少？', wrong % (6, '7米'))['judgment'], 'incorrect')
+        # A value the question leaves to the child is never graded by the teacher's example value.
+        free = '按个人喜好写一个数字（任意数字均可）。'
+        self.assertEqual(check('4', '5', 'correct', free)['judgment'], 'correct')
+        self.assertEqual(check('4', '5', 'incorrect', free, wrong % (4, 5))['judgment'], 'unknown')
+        self.assertEqual(check('4', '15', 'incorrect', '写一个大于10的数（任选）。', '题目要求大于10，作答4不大于10。')['judgment'], 'incorrect')
+        # Answers it cannot read whole, and grades already open, are left as the model gave them.
+        self.assertEqual([check(s, r, j, q)['judgment'] for s, r, j, q in [
+            ('1/2', '0.5', 'correct', '写出二分之一的值（分数或小数均可）。'), ('x+1', '2', 'unknown', '写出x+1的值。'),
+            ('62或72', '62', 'incorrect', '100-38=?')]], ['correct', 'unknown', 'incorrect'])
+        # The precision the question asks for decides against a longer teacher value; a free word alone frees no value.
+        places = '圆的周长约是多少米？（结果保留两位小数）'
+        self.assertEqual([check(s, '3.1416', j, places, e)['judgment'] for s, j, e in [
+            ('3.14', 'correct', ''), ('3.15', 'correct', ''), ('3.1', 'correct', ''), ('3.14', 'incorrect', wrong % (3.14, 3.1416)),
+            ('3.1', 'incorrect', '题目要求保留两位小数，作答3.1只保留了一位小数。')]], ['correct', 'unknown', 'unknown', 'unknown', 'incorrect'])
+        self.assertIn('四舍五入后相同', check('3.14', '3.1416', 'incorrect', places, wrong % (3.14, 3.1416))['uncertainty'])
+        self.assertEqual([family_llm._ref_round(family_llm._ref_values(v)[0], 2)[1:3] for v in ('9.995', '0.005', '2.675', '7')],
+                         [('10', ''), ('', '01'), ('2', '68'), ('7', '')])
+        self.assertEqual([check(s, r, 'correct', q)['judgment'] for s, r, q in [
+            ('50%', '0.5', '0.5是百分之几？'), ('0.5', '50%', '把0.5用百分数表示。'), ('360', '180', '任意三角形的内角和是多少度？')]],
+            ['correct', 'unknown', 'unknown'])
+        # Several different long teacher answers are cut where each parts from its nearest, never shown alike.
+        apart = family_llm._ref_apart(['1' * 60 + '2', '1' * 60 + '3', '4'])
+        self.assertEqual(len(set(apart)), 3); self.assertIn('第41字起…', apart[0])
 
 
 class ScorerHardeningTest(unittest.TestCase):
