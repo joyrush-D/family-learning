@@ -1598,6 +1598,21 @@ def _ref_printed(question,match):
     return all(_ref_binds(question,start,end)=='no' for start,end in asks)
 
 
+def _ref_lent(question,count,n,unit):
+    """Whether result n of count ordered results, written without a unit, takes the teacher's unit: only where its own
+    words (_ref_whose) waive one or print that unit after a blank, and no words that may be its own ask one, so one
+    result's waiver never excuses another's missing unit. Words that only tell the unit is printed (_ref_printed) neither
+    ask nor waive one, and a negated word still waives; words that also have the child write or copy it (「照抄已印单位」)
+    ask it, which the unit printed after the blank never meets. A lone result is held to this as each of several is."""
+    blank=r'(?:_{2,}|＿{2,}|[（(]\s*[)）]|□+)\s*'
+    whose=lambda at:_ref_whose(question,count,at)[2]
+    spoken=[(_ref_binds(question,m.start(),m.end()),whose(m.start())) for m in re.finditer('单位',question)
+            if not _ref_printed(question,m) or _ref_binds(question,m.start(),m.end())=='no']
+    if any(scope!='no' and (results is None or n in results) for scope,results in spoken): return False
+    return (any(n in (results or ()) for _,results in spoken)
+            or any(n in (whose(m.start()) or ()) for m in re.finditer(blank+re.escape(unit),question)))
+
+
 def _ref_kept(match,question,sides,cited=None):
     """Whether the child's results (sides, as _ref_value_check reads them) keep the writing one _REF_FORM match asks, held
     to the results whose own words ask it (_ref_whose) and, with cited, to those of them a reason names: True when provably
@@ -1812,9 +1827,10 @@ def _ref_value_check(item,student,reference):
     provably kept for what it governs (_ref_kept: 「原单位」 the unit, never the spelling of the digits). A precision the
     question positively asks of each result (_ref_places_each) keeps a correct only when the child wrote just those decimals
     there and the teacher's value, rounded half up for the comparison alone, agrees. A unit neither written alike, printed
-    after the blank nor converted leaves a correct open, and one waived or printed for one of several results is that
-    result's alone; a requirement the child's results provably break (a lone value where an equation is asked) leaves it
-    open even in the teacher's very writing. A question that leaves the value to the child is no value check."""
+    after the blank nor converted leaves a correct open, one waived or printed for one of several results is that result's
+    alone, and a printed unit stands in for none whose own words ask it written (_ref_lent), one result as several; a
+    requirement the child's results provably break (a lone value where an equation is asked) leaves it open even in the
+    teacher's very writing. A question that leaves the value to the child is no value check."""
     judged,question=item['judgment'],item['question']
     if judged not in ('correct','incorrect'): return
     sides=[]
@@ -1824,24 +1840,16 @@ def _ref_value_check(item,student,reference):
         if values is None: return
         sides.append((values,_ref_unspaced(text) if equation else [value[4] for value in values]))
     (mine,mine_form),(theirs,theirs_form)=sides
-    blank=r'(?:_{2,}|＿{2,}|[（(]\s*[)）]|□+)\s*'
-    if len(mine)>1 and len(mine)==len(theirs):
-        # Several results: one takes the teacher's unit only where its own words (_ref_whose) waive it or print it after
-        # the blank and no words that may be its own ask one, so one result's waiver never excuses another's missing unit.
-        # Words that only tell the unit is printed (_ref_printed) neither ask nor waive one; a negated word still waives.
-        count=len(mine);whose=lambda at:_ref_whose(question,count,at)[2]
-        spoken=[(_ref_binds(question,m.start(),m.end()),whose(m.start())) for m in re.finditer('单位',question)
-                if not _ref_printed(question,m) or _ref_binds(question,m.start(),m.end())=='no']
-        waived=lambda n,unit:not any(scope!='no' and (results is None or n in results) for scope,results in spoken) and (
-            any(n in (results or ()) for _,results in spoken)
-            or any(n in (whose(m.start()) or ()) for m in re.finditer(blank+re.escape(unit),question)))
-        mine=[a[:3]+(b[3],a[4]+b[3]) if b[3] and not a[3] and waived(n,b[3]) else a for n,(a,b) in enumerate(zip(mine,theirs))]
+    count=len(mine)
+    if count==len(theirs):
+        # Each result, one alone as each of several, takes the teacher's unit only where _ref_lent lends it that result.
+        mine=[a[:3]+(b[3],a[4]+b[3]) if b[3] and not a[3] and _ref_lent(question,count,n,b[3]) else a
+              for n,(a,b) in enumerate(zip(mine,theirs))]
     else:
         units={value[3] for value in theirs}
-        unitless=any(_ref_binds(question,m.start(),m.end())=='no' for m in re.finditer('单位',question))  # 「不用写单位」
-        if len(units)==1 and '' not in units and all(not value[3] for value in mine) and (unitless or re.search(
-                blank+re.escape(min(units)),question)):
-            # The unit is printed after the blank, or the question asks for none: the child writes the number only.
+        if (len(units)==1 and '' not in units and all(not value[3] for value in mine)
+                and all(_ref_lent(question,count,n,min(units)) for n in range(count))):
+            # The unit is printed after the blanks, or the question asks for none: the child writes the numbers only.
             mine=[value[:3]+(min(units),value[4]+min(units)) for value in mine]
     if not isinstance(mine_form,str): mine_form=[value[4] for value in mine]
     # Each result keeps the precision its own part positively asks (_ref_places_each), met only by exactly those decimals in
