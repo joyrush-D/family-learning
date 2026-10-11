@@ -1391,6 +1391,23 @@ def _ref_leads(listed,teacher):
     return bool(listed) and teacher.startswith(listed) and teacher[len(listed):][:1] in tuple('，,；;。、！!？?（(：:')
 
 
+def _ref_value_relation(student,reference):
+    """'same' or 'different' only when each whole answer is one complete plain decimal in the same written unit; otherwise None.
+    The sign counts (-5 is not 5), 5.0 is 5 and full-width ５０％ is 50%; every written digit is compared, however long.
+    A fraction, an expression, several values, other words, another unit or a decimal trailing on (3.33...) is not one
+    complete value here: nothing is converted, solved, cut short or picked out of more, so the model's grade is left unproven."""
+    values,narrow=[],str.maketrans({0x2212:'-',**{code:code-0xFEE0 for code in range(0xFF01,0xFF5F)}})  # Full-width ASCII and − as ASCII.
+    for text in (student,reference):
+        text=str(text).translate(narrow).strip()
+        if text.endswith(tuple(',;.!。、')): text=text[:-1].rstrip()  # One closing mark only: 3.33... or 5。。。 still trails on.
+        match=re.fullmatch(r'([+-]?)(?=\.?[0-9])([0-9]*)(?:\.([0-9]+))?\s*((?:[^\W\d_]|[%‰°℃])*)',text)
+        if not match: return None
+        sign,whole,part,unit=match.groups();whole,part=whole.lstrip('0'),(part or '').rstrip('0')
+        values.append((sign=='-' and bool(whole or part),whole,part,unit))
+    if values[0][3]!=values[1][3]: return None  # 50厘米 against 0.5米 needs a conversion this check never makes.
+    return 'same' if values[0]==values[1] else 'different'
+
+
 def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset()):
     """A question the supplied teacher text covers is compared by that text, whatever source the model claims."""
     if not item['answer'].strip(): return  # No answer is the existing missing-basis path, not a claimed source.
@@ -1601,15 +1618,23 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
                     '本题%s写明缺少决定性条件（“%s”），不能核定作答对错，未判定；请补全该条件后再核对。'%(
                         source,gap if len(gap)<=120 else gap[:120]+'…')+item['uncertainty'].strip())[:300])
         if review and teacher_reference and question_kind=='objective' and item['answer'].startswith('教师参考：'):
-            # ponytail: literal uppercase A-H only; other answers need an evidenced comparator.
+            # Runs after the source check: a teacher answer quoted right never makes a different child answer agree with it.
+            # Literal uppercase A-H, or one whole value in one unit (_ref_value_relation); other answers need an evidenced comparator.
             student=item['student_answer'].strip()
             reference=item['answer'].removeprefix('教师参考：').strip()
+            relation=_ref_value_relation(student,reference)
             if (re.fullmatch('[A-H]',student) and re.fullmatch('[A-H]',reference)
                     and item['judgment'] in ('correct','incorrect')
                     and (student==reference)!=(item['judgment']=='correct')):
                 item['judgment']='unknown'
                 item['error_reason']=item['possible_cause']=item['steps']=''
                 item['uncertainty']=('字母作答与教师参考的比较和模型判定矛盾，请重新核对。'+item['uncertainty'].strip())[:300]
+            elif relation and item['judgment'] in ('correct','incorrect') and (relation=='same')!=(item['judgment']=='correct'):
+                shown=lambda value:value if len(value)<=40 else value[:40]+'…'
+                found,graded=('数值相同','需订正') if relation=='same' else ('数值不同','与参考一致')
+                item.update(judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty=(
+                    '作答“%s”与教师参考“%s”%s，却判为%s，二者矛盾，未判定；请对照原题与教师原件核对。'%(
+                        shown(student),shown(reference),found,graded)+item['uncertainty'].strip())[:300])
         if review and not item['question'].strip() and question_kind!='objective':
             # Matching reference words cannot establish a subjective answer's completeness.
             # Keep the observed answer and teacher original, but not the model's unsupported grade.
