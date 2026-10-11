@@ -1410,8 +1410,10 @@ _REF_FORM=re.compile(r'(?:保留|精确到|写成|化成|改写成)[^，。；;,
                      r'|简便|简算|记数法|单位|列式|竖式|脱式|递等式|过程|步骤')
 _REF_NOUN=r'单位|列式|竖式|脱式|递等式|过程|步骤|简便|简算|记数法|最简|约分|近似|省略'  # The bare words a 、 list may share.
 _REF_WORK=r'算式|列式|竖式|脱式|递等式|过程|步骤'  # Written work: an equation or steps the child shows.
-# The question's own numbered parts: （1）, ①, or 第一项, 第2个结果, 第三空.
-_REF_PART=re.compile(r'[（(]\s*([1-9])\s*[)）]|([①②③④⑤⑥⑦⑧⑨])|第([1-9一二三四五六七八九])(?:项|个(?:结果|答案|得数|空)|空)')
+# The question's own numbered parts: （1）, ①, or 第一项, 第2个结果, 第三空, 第二问; a thing it numbers (第一根, 第二条) is
+# group 4, read as a part only for a number no part takes (_ref_marks).
+_REF_PART=re.compile(r'[（(]\s*([1-9])\s*[)）]|([①②③④⑤⑥⑦⑧⑨])|第([1-9一二三四五六七八九])'
+                     r'(?:项|个(?:结果|答案|得数|近似数|数|空)?|空|问|小题|(根|条|段|块|袋|箱|堆))')
 
 
 _REF_PLACES=re.compile(r'保留(\d{1,2}|[一二两三四五六七八九])位小数|(?:精确|保留|四舍五入)到(?:([十百千万])分位|0\.(0{0,8})1(?![\d.])'
@@ -1472,55 +1474,129 @@ def _ref_places(question):
     return None if any(scope=='no' and n==places or scope is None and n!=places for n,scope in mentions) else places
 
 
-def _ref_places_each(question,count):
-    """The decimals each of count ordered results must keep: one result by _ref_places; several only by the question's own
-    numbered parts (_REF_PART: ①, （1）, 第一项, 第2个结果…), each number once, the words after a number to the result of
-    that number, None for a part asking none. None when the parts cannot be matched to the results one by one, a part only
-    joins the next (「第一项和第二项都…」), one precision speaks for several (都, 均, 分别, 各) or a precision stands outside
-    them: which result it binds is unproven, and no result's precision is lent to another."""
-    if count==1: return [_ref_places(question)]
-    marks=list(_REF_PART.finditer(question))
-    numbers=[int(m[1]) if m[1] else '①②③④⑤⑥⑦⑧⑨'.index(m[2])+1 if m[2] else int(m[3]) if m[3].isdigit()
-             else ' 一二三四五六七八九'.index(m[3]) for m in marks]
-    if sorted(numbers)!=list(range(1,count+1)): return None
-    if re.search(_REF_CUT+'|'+_REF_UNROUNDED+'|'+_REF_PLACES.pattern,question[:marks[0].start()]): return None
-    parts=[question[m.end():n.start() if n else len(question)] for m,n in zip(marks,marks[1:]+[None])]
-    if any(not re.sub(_REF_CLAUSE+r'|\s|[和与及或]','',part) or re.search(
-            r'(?:都|(?<!平)均|分别|各|皆|一律)[^，,。；;！？!?\n]{0,8}?(?:保留|精确|四舍五入)',part) for part in parts):
+def _ref_nth(match):
+    """The number one _REF_PART match names: 「（2）」, 「②」, 「第二项」, 「第2个结果」 and 「第二根」 are all 2."""
+    return (int(match[1]) if match[1] else '①②③④⑤⑥⑦⑧⑨'.index(match[2])+1 if match[2] else int(match[3]) if match[3].isdigit()
+            else ' 一二三四五六七八九'.index(match[3]))
+
+
+def _ref_marks(text):
+    """The numbers text gives its own parts, in order, as (match, number) (_REF_PART); a thing it numbers (第一根) stands
+    for a part only where no part takes that number, so in 「（1）两根中第二根…」 it is still part 1."""
+    marks=[(m,_ref_nth(m)) for m in _REF_PART.finditer(text)]
+    parts={n for m,n in marks if not m[4]}
+    return [(m,n) for m,n in marks if not m[4] or n not in parts]
+
+
+_REF_BREAK=r'[，,；;。！？!?\n：:]'  # Where a clause of the question ends; 、 and brackets stay inside it.
+
+
+def _ref_segments(question,count):
+    """The words of the question each of count ordered results owns, as (start, end, results). One result owns them all,
+    and without numbers of its own every word speaks for every result. Otherwise the words before the first number
+    (_ref_marks) speak for every result, the words after a number for its result up to the clause holding the next number,
+    numbers only joined (「第一项和第二项都…」, 「按第一项、第二项的顺序」) for all of them, and the start of a clause
+    before a later number for no proven result (None). A number named again declares nothing by itself: words after it
+    may only refer back (「先写第一项的结果」). None when the numbers are not exactly 1..count, or the order of the answers
+    is set other than in turn (「按第二项、第一项的顺序」, 「写在…后面」): whose any later word is stays unproven."""
+    every=tuple(range(count))
+    marks=_ref_marks(question) if count>1 else []
+    if not marks: return [(0,len(question),every)]
+    clause=lambda m:re.split(_REF_BREAK,question[:m.start()])[-1]+m[0]+re.split(_REF_BREAK,question[m.end():])[0]
+    told=[n for m,n in marks if re.search('顺序|依次|先|再|倒序|逆序|反序',clause(m))]
+    if ({n for m,n in marks}!=set(range(1,count+1)) or told!=sorted(told)
+            or any(re.search('[前后][面边]|之[前后]',clause(m)) for m,n in marks)):
         return None
-    places=[None]*count
-    for n,part in zip(numbers,parts): places[n-1]=_ref_places(part)
+    segments=[(0,marks[0][0].start(),every)];joined=[]
+    for (m,n),(after,_) in zip(marks,marks[1:]+[(None,None)]):
+        joined+=[] if n-1 in joined else [n-1]
+        end=after.start() if after else len(question)
+        cut=end if not after else m.end()+max((b.end() for b in re.finditer(_REF_BREAK,question[m.end():end])),default=end-m.end())
+        if not after or cut<end or re.sub(_REF_CLAUSE+r'|\s|[和与及或]','',question[m.end():cut]):
+            segments.append((m.end(),cut,tuple(joined)));joined=[]
+        if cut<end: segments.append((cut,end,None))
+    return segments
+
+
+def _ref_whose(question,count,at):
+    """The words of the question around position at, as (start, end, results) from _ref_segments, results None where
+    unproven; where the numbers leave every later word unproven, the words before the first still speak for every result."""
+    segments=_ref_segments(question,count)
+    if segments is None:
+        first=_ref_marks(question)[0][0].start()
+        return (0,first,tuple(range(count))) if at<first else (first,len(question),None)
+    return next((segment for segment in segments if segment[0]<=at<segment[1]),(0,len(question),None))
+
+
+def _ref_cites(reason,mine):
+    """The results a model's reason names, as indexes into mine (_ref_values): by number (第二项, 第2个, （2）, ②, 第二根),
+    else by a child's value as written there (「作答4.47…」); every result when it names none, as the one of one answer."""
+    every=set(range(len(mine)))
+    if len(mine)<2: return every
+    named={n-1 for m,n in _ref_marks(reason)}&every
+    quoted={n for n,value in enumerate(mine) if re.search(
+        r'(?<![\d.第])'+re.escape(value[4][:len(value[4])-len(value[3])])+r'(?![\d位])(?!\.\d)',reason)}
+    return named or quoted or every
+
+
+def _ref_places_each(question,count):
+    """The decimals each of count ordered results must keep: one result by _ref_places; several only by the words after
+    a result's own number that declare one (_ref_segments), once for each result, None for a result none declares. Words
+    that only refer back to a number or set the order of the answers declare nothing. None when the parts cannot be matched
+    to the results one by one, one precision speaks for several (都, 均, 分别, 各, numbers joined) or stands outside them,
+    or a result's precision is declared twice: which result it binds is unproven, and no result's is lent to another."""
+    if count==1: return [_ref_places(question)]
+    segments=_ref_segments(question,count);asks=_REF_CUT+'|'+_REF_UNROUNDED+'|'+_REF_PLACES.pattern
+    if not segments or len(segments)<2 or re.search(asks,question[:segments[0][1]]): return None
+    places,said=[None]*count,set()
+    for start,end,results in segments[1:]:
+        part=question[start:end]
+        if re.search(r'(?:都|(?<!平)均|分别|各|皆|一律)[^，,。；;！？!?\n]{0,8}?(?:保留|精确|四舍五入)',part): return None
+        if not re.search(asks,part): continue  # Only names its result: a reference back, or the order of the answers.
+        if results is None or len(results)>1 or results[0] in said: return None  # Shared, unowned, or declared twice.
+        said.add(results[0]);places[results[0]]=_ref_places(part)
     return places
 
 
-def _ref_kept(match,question,sides):
+def _ref_kept(match,question,sides,cited=None):
     """Whether the child's results (sides, as _ref_value_check reads them) keep the writing one _REF_FORM match asks, held
-    to what that writing governs: True when provably kept, False when provably broken, None when this cannot tell. A
-    percent or permille is its sign; a unit is the one named (「用米作单位」), any where one is to be written (「写单位」,
-    「带单位」), otherwise the teacher's as written, so 「原单位」 is kept when neither writes a unit and broken by another;
-    「写出算式」 or 「列式」 is kept by a whole equation, its result already compared, and broken by a lone value, as steps
-    (过程, 竖式) are, which nothing here proves kept. Any other writing is unproven."""
+    to the results whose own words ask it (_ref_whose) and, with cited, to those of them a reason names: True when provably
+    kept, False when provably broken, None when this cannot tell. A percent or permille is its sign; a unit is the one
+    those words name (「用米作单位」), any where one is to be written (「写单位」, 「带单位」), otherwise the teacher's as
+    written, so 「原单位」 is kept when neither writes a unit and broken by another; 「写出算式」 or 「列式」 is kept by a whole
+    equation, its result already compared, and broken by a lone value, as steps (过程, 竖式) are, which nothing here proves
+    kept. Any other writing is unproven, as is one a reason names for a result it is not proven to be asked of; where whose
+    words ask it is unproven, it is kept only when every result keeps it and broken only when every result breaks it."""
     (mine,mine_form),(theirs,_)=sides
     key=re.search('百分数|千分数|单位|'+_REF_WORK,match[0])
     if not key: return None
-    if key[0] in ('百分数','千分数'): return all(value[3]==('%' if key[0]=='百分数' else '‰') for value in mine)
+    start,end,whose=_ref_whose(question,len(mine),match.start())
+    if cited is not None and not (set(whose)&set(cited) if whose else set(cited)>=set(range(len(mine)))): return None
     if key[0] in ('算式','列式'): return isinstance(mine_form,str)
-    if key[0]!='单位': return None if isinstance(mine_form,str) else False
-    named=re.search(r'[用以]\s*([^\W\d_]{1,3}?)\s*[作为当]单位|单位\s*[用是为：:]\s*([^\W\d_]{1,3})',question)
-    if named: return all(value[3]==(named[1] or named[2]) for value in mine)
+    if key[0] not in ('百分数','千分数','单位'): return None if isinstance(mine_form,str) else False
+    named=re.search(r'[用以]\s*([^\W\d_]{1,3}?)\s*[作为当]单位|单位\s*[用是为：:]\s*([^\W\d_]{1,3})',question[start:end] if whose else question)
     near=re.split(_REF_CLAUSE,question[:match.start()])[-1]+re.split(_REF_CLAUSE,question[match.end():])[0]
-    if re.search('[写带注标加填有]',near) and not all(value[3] for value in mine): return False
-    same=all(a[3]==b[3] for a,b in zip(mine,theirs))
-    return True if same else False if re.search('原|同|一致|统一',near) else None
+    def kept(n):
+        unit=mine[n][3]
+        if key[0]!='单位': return unit==('%' if key[0]=='百分数' else '‰')
+        if named: return unit==(named[1] or named[2])
+        if re.search('[写带注标加填有]',near) and not unit: return False
+        if n<len(theirs) and unit==theirs[n][3]: return True
+        return False if re.search('原|同|一致|统一',near) else None
+    found=[kept(n) for n in (whose or range(len(mine))) if not (whose and cited is not None) or n in cited]
+    if False in found and (whose or set(found)=={False}): return False
+    return True if found and all(found) else None
 
 
-def _ref_form(question,rounded=False,sides=None):
+def _ref_form(question,rounded=False,sides=None,broken=False):
     """The first writing (_REF_FORM) the question positively asks of its final result that the child's results (sides) are
-    not proven to keep (_ref_kept), any asked when no sides are given; None when none is left. A word negated, conditional,
-    optional or for an earlier step asks nothing (_ref_binds). With rounded, a precision rounding already meets is left out."""
+    not proven to keep (_ref_kept), any asked when no sides are given; with broken, only one they provably break, which
+    even the teacher's very writing does not meet for them. None when none is left. A word negated, conditional, optional
+    or for an earlier step asks nothing (_ref_binds). With rounded, a precision rounding already meets is left out."""
     text=re.sub('四舍五入|近似',lambda m:' '*len(m[0]),_REF_PLACES.sub(lambda m:' '*len(m[0]),question)) if rounded else question
+    kept=lambda m:_ref_kept(m,question,sides) is not False if broken else _ref_kept(m,question,sides)
     return next((m[0] for m in _REF_FORM.finditer(text) if _ref_binds(question,m.start(),m.end())=='yes'
-                 and not (sides and _ref_kept(m,question,sides))),None)
+                 and not (sides and kept(m))),None)
 
 
 def _ref_decimals(value):
@@ -1658,23 +1734,31 @@ def _ref_breaks(match,values):
 
 def _ref_cited(reason,question,answers,sides,each):
     """Whether a reason rests on a requirement the question itself positively asks (_ref_binds 'yes', never one negated,
-    conditional, optional or for an earlier step), names that very requirement, and the child's results provably break it:
-    decimals other than the precision asked of that same result (_ref_places_each), a writing _ref_kept finds broken (only
-    a value where an equation or steps are asked, a unit or percent not used as asked), or a condition on the value (大于10,
-    偶数) the child's results break and the teacher's keep. 「算式」 and 「列式」 name one requirement. A shared word, a
-    requirement the answer meets, or one this cannot check keeps nothing."""
+    conditional, optional or for an earlier step), names that very requirement, and a result the reason names (_ref_cites)
+    that the requirement is asked of provably breaks it: decimals other than the precision asked of that same result
+    (_ref_places_each), a writing _ref_kept finds broken there (only a value where an equation or steps are asked, a unit
+    or percent not used as asked), or a condition on the value (大于10, 偶数) that result breaks and the teacher's keeps.
+    「算式」 and 「列式」 name one requirement. A shared word, a requirement the answer meets, one this cannot check, or a
+    break by another result than the one named keeps nothing."""
     mine,theirs=sides[0][0],sides[1][0]
     said=bare=re.sub(r'\s','',reason)
     for answer in sorted(answers,key=len,reverse=True): bare=bare.replace(re.sub(r'\s','',answer),'') if answer.strip() else bare
     named={_ref_digits(m) for m in re.finditer(r'(\d{1,2}|[一二两三四五六七八九])位小数|([十百千万])分位|0\.(0{0,8})1(?![\d.])|个位|整数',bare)}
-    if any(p is not None and p in named and _ref_decimals(value)!=p for p,value in zip(each,mine)): return True
+    cites=_ref_cites(bare,mine)
+    if any(p is not None and p in named and _ref_decimals(value)!=p for n,(p,value) in enumerate(zip(each,mine)) if n in cites):
+        return True
     for m in _REF_FORM.finditer(question):
         key=re.search('百分数|千分数|单位|'+_REF_WORK,m[0])
         if (key and re.search('算式|列式' if key[0] in ('算式','列式') else key[0],said)
-                and _ref_binds(question,m.start(),m.end())=='yes' and _ref_kept(m,question,sides) is False):
+                and _ref_binds(question,m.start(),m.end())=='yes' and _ref_kept(m,question,sides,cites) is False):
             return True  # e.g. only a value written where the question asks 「写出算式」 and the reason names that equation.
-    return any(_ref_binds(question,m.start(),m.end())=='yes' and re.sub(r'\s','',m[0]) in said
-               and _ref_breaks(m,mine) is True and _ref_breaks(m,theirs) is False for m in _REF_BOUND.finditer(question))
+    for m in _REF_BOUND.finditer(question):
+        held=[n for n in _ref_whose(question,len(mine),m.start())[2] or () if n in cites]
+        if (held and _ref_binds(question,m.start(),m.end())=='yes' and re.sub(r'\s','',m[0]) in said
+                and _ref_breaks(m,[mine[n] for n in held]) is True
+                and _ref_breaks(m,[theirs[n] for n in held] if len(theirs)==len(mine) else theirs) is False):
+            return True
+    return False
 
 
 def _ref_value_check(item,student,reference):
@@ -1686,7 +1770,9 @@ def _ref_value_check(item,student,reference):
     provably kept for what it governs (_ref_kept: 「原单位」 the unit, never the spelling of the digits). A precision the
     question positively asks of each result (_ref_places_each) keeps a correct only when the child wrote just those decimals
     there and the teacher's value, rounded half up for the comparison alone, agrees. A unit neither written alike, printed
-    after the blank nor converted leaves a correct open; a question that leaves the value to the child is no value check."""
+    after the blank nor converted leaves a correct open, and one waived or printed for one of several results is that
+    result's alone; a requirement the child's results provably break (a lone value where an equation is asked) leaves it
+    open even in the teacher's very writing. A question that leaves the value to the child is no value check."""
     judged,question=item['judgment'],item['question']
     if judged not in ('correct','incorrect'): return
     sides=[]
@@ -1696,13 +1782,24 @@ def _ref_value_check(item,student,reference):
         if values is None: return
         sides.append((values,_ref_unspaced(text) if equation else [value[4] for value in values]))
     (mine,mine_form),(theirs,theirs_form)=sides
-    units={value[3] for value in theirs}
-    unitless=any(_ref_binds(question,m.start(),m.end())=='no' for m in re.finditer('单位',question))  # 「不用写单位」
-    printed=len(units)==1 and '' not in units and all(not value[3] for value in mine) and (unitless or re.search(
-        r'(?:_{2,}|＿{2,}|[（(]\s*[)）]|□+)\s*'+re.escape(min(units)),question))
-    if printed:  # The unit is printed after the blank, or the question asks for none: the child writes the number only.
-        mine=[value[:3]+(min(units),value[4]+min(units)) for value in mine]
-        if not isinstance(mine_form,str): mine_form=[value[4] for value in mine]
+    blank=r'(?:_{2,}|＿{2,}|[（(]\s*[)）]|□+)\s*'
+    if len(mine)>1 and len(mine)==len(theirs):
+        # Several results: one takes the teacher's unit only where its own words (_ref_whose) waive it or print it after
+        # the blank and no words that may be its own ask one, so one result's waiver never excuses another's missing unit.
+        count=len(mine);whose=lambda at:_ref_whose(question,count,at)[2]
+        spoken=[(_ref_binds(question,m.start(),m.end()),whose(m.start())) for m in re.finditer('单位',question)]
+        waived=lambda n,unit:not any(scope!='no' and (results is None or n in results) for scope,results in spoken) and (
+            any(n in (results or ()) for _,results in spoken)
+            or any(n in (whose(m.start()) or ()) for m in re.finditer(blank+re.escape(unit),question)))
+        mine=[a[:3]+(b[3],a[4]+b[3]) if b[3] and not a[3] and waived(n,b[3]) else a for n,(a,b) in enumerate(zip(mine,theirs))]
+    else:
+        units={value[3] for value in theirs}
+        unitless=any(_ref_binds(question,m.start(),m.end())=='no' for m in re.finditer('单位',question))  # 「不用写单位」
+        if len(units)==1 and '' not in units and all(not value[3] for value in mine) and (unitless or re.search(
+                blank+re.escape(min(units)),question)):
+            # The unit is printed after the blank, or the question asks for none: the child writes the number only.
+            mine=[value[:3]+(min(units),value[4]+min(units)) for value in mine]
+    if not isinstance(mine_form,str): mine_form=[value[4] for value in mine]
     # Each result keeps the precision its own part positively asks (_ref_places_each), met only by exactly those decimals in
     # the teacher's unit; that teacher value alone is rounded half up, in a copy for this comparison. Nothing written changes.
     each=_ref_places_each(question,len(mine)) if len(mine)==len(theirs) else None
@@ -1749,8 +1846,11 @@ def _ref_value_check(item,student,reference):
                 wrote='、'.join('第%d个结果写了%d位小数'%(n+1,_ref_decimals(mine[n])) for n in short)
             return pending('题面写有“%s”，作答“%s”%s，与所要求的位数不同；与教师参考“%s”%s%s，未判定；请对照原题核对。'%(
                 asked,shown_mine,wrote,shown_theirs,found,where))
-        if mine_form==theirs_form or not required: return
-        return pending('题面写有“%s”，作答“%s”与教师参考“%s”%s但写法不同%s，是否符合该要求未能核明，未判定；请对照原题核对。'%(
+        alike=mine_form==theirs_form  # The teacher's very writing still never meets a requirement the results provably break.
+        if alike: required=_ref_form(question,exact,((mine,mine_form),(theirs,theirs_form)),True)
+        if not required: return
+        return pending(('题面写有“%s”，作答“%s”未按该要求写出，与教师参考“%s”%s%s，未判定；请对照原题核对。' if alike else
+                        '题面写有“%s”，作答“%s”与教师参考“%s”%s但写法不同%s，是否符合该要求未能核明，未判定；请对照原题核对。')%(
             required,shown_mine,shown_theirs,found,where))
     if cited: return  # The precision, unit, equation or step the question asks for is the real reason; equal values do not undo it.
     return pending('作答“%s”与教师参考“%s”%s%s，却判为需订正，二者矛盾，未判定；请对照原题与教师原件核对。'%(
