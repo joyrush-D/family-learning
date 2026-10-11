@@ -1870,6 +1870,71 @@ class ExactAnswerTest(unittest.TestCase):
         q = review('第1题')
         self.assertEqual(q['judgment'], 'unknown'); self.assertIn('大题或小题与本题无法核明对应', q['uncertainty'])
 
+    def test_teacher_reference_holds_each_completion_requirement_to_what_it_governs(self):
+        import family_llm
+        def review(question, teacher, student, judgment='correct', error_reason='', steps=''):
+            # The complete teacher-source path above, the model's own reason and steps given as they would be returned.
+            item = dict(label='第1题', question=question, student_answer=student, answer='教师参考：' + teacher, judgment=judgment,
+                        error_reason=error_reason, possible_cause='', steps=steps, uncertainty='', question_kind='objective')
+            reply = dict(items=[item], coverage='已按文字原件核对全部题号。', comparison='', question_labels=['第1题'])
+            with patch.object(family_llm, '_chat_json', return_value=reply):
+                [q] = family_llm.homework_reference_draft([], review=True, data_path=None, question_documents=[dict(
+                    name='五年级数学练习-虚构.txt', text='五年级数学练习（虚构）\n1. %s\n孩子作答：%s\n' % (question, student))],
+                    reference_documents=[dict(name='教师参考答案-虚构.txt', text='教师参考答案（虚构）\n1. %s\n' % teacher)])['questions']
+            self.assertEqual([q['answer'], q['student_answer'], q['question']], ['教师参考：' + teacher, student, question])
+            return q
+        # 1. An equation the question asks outright: a lone equal value keeps the model's reason and steps, 算式 naming 列式
+        # too. A result-only question inherits no such error, and a whole equation is never read as one left out.
+        expression = '计算6+2，必须写出算式和结果；只写结果不符合完成要求。'
+        reason, steps = '只写结果8，漏写题目要求的6+2=8算式。', '先写出算式6+2=8，再写出结果8。'
+        q = review(expression, '8.00', '8', 'incorrect', reason, steps)
+        self.assertEqual([q['judgment'], q['error_reason'], q['steps']], ['incorrect', reason, steps])
+        q = review('列式计算6+2。', '8.00', '8', 'incorrect', '没有写出算式，只写了得数8。', steps)
+        self.assertEqual([q['judgment'], q['steps']], ['incorrect', steps])
+        for question, student in [('计算6+2，只写结果。', '8'), (expression, '6+2=8')]:
+            q = review(question, '8.00', student, 'incorrect', '漏写题目要求的算式。', steps)
+            self.assertEqual([q['judgment'], q['error_reason'], q['steps']], ['unknown', '', ''], (question, student))
+            self.assertIn('数值相同', q['uncertainty'], (question, student))
+        self.assertEqual([review(expression, '8.00', s)['judgment'] for s in ('6+2=8', '8')], ['correct', 'unknown'])
+        # 2. 「原单位」 governs the unit alone: equal long values, neither with a unit, stay correct whatever their trailing
+        # zero, and what the question denies (「不要求算式、步骤…」) is never borrowed; a changed unit is still left open.
+        reading = '写出虚构读数。只核完整数值与原单位；小数末尾零不影响答案，不要求算式、步骤、理由或指定小数位数。'
+        value = '27.' + '13' * 30
+        self.assertEqual([review(reading, t, s)['judgment'] for t, s in [(value + '0', value), (value, value + '0')]],
+                         ['correct', 'correct'])
+        q = review(reading, value + '0', value, 'incorrect', '作答与原单位写法不同，少写末尾的0。')
+        self.assertEqual([q['judgment'], q['error_reason']], ['unknown', ''])
+        rope = '绳长多少？只核完整数值与原单位。'
+        self.assertEqual(review(rope, '0.5米', '0.50米')['judgment'], 'correct')
+        q = review(rope, '0.5米', '50厘米')
+        self.assertEqual(q['judgment'], 'unknown'); self.assertIn('换算后数值相同', q['uncertainty'])
+        binds = family_llm._ref_binds
+        for question, word, bound in [('不要求算式、步骤、理由或指定小数位数。', '步骤', 'no'), ('必须写出算式、步骤和结果。', '步骤', 'yes'),
+                                      ('先写出算式，再写出结果。', '写出算式', 'yes'), ('把2.5和3.5分别保留整数。', '保留整数', 'yes')]:
+            self.assertEqual(binds(question, question.index(word), question.index(word) + len(word)), bound, question)
+        # 3. Each ordered result keeps its own part's precision, 第一项/第二项 as well as ①/（1）: none is lent to another
+        # result, a swapped, missing or wrongly kept result never stays correct, and a reason must name its own result.
+        ordered, teacher = '依次写出两个近似数：第一项把6.0827保留两位小数，第二项把4.4721保留一位小数。', '6.0827，4.4721'
+        self.assertEqual(review(ordered, teacher, '6.08，4.5')['judgment'], 'correct')
+        for student, note in [('4.5，6.08', '第1、2个结果不同'), ('6.08', '结果个数不同（作答1个、教师参考2个）'),
+                              ('6.08，4.47', '第2个结果不同'), ('6.0827，4.5', '第1个结果保留2位小数')]:
+            q = review(ordered, teacher, student)
+            self.assertEqual([q['judgment'], q['error_reason']], ['unknown', ''], student)
+            self.assertIn(note, q['uncertainty'], student)
+        reason = '第一项要求保留两位小数，作答6.0827保留了四位小数。'
+        self.assertEqual([review(ordered, teacher, '6.0827，4.5', 'incorrect', reason)[k] for k in ('judgment', 'error_reason')],
+                         ['incorrect', reason])
+        self.assertEqual(review(ordered, teacher, '6.0827，4.5', 'incorrect', '第二项要求保留一位小数，作答没有保留一位小数。')['judgment'],
+                         'unknown')
+        places = family_llm._ref_places_each
+        self.assertEqual([places(q, n) for q, n in [
+            ('按顺序写出：第1项把7.349精确到十分位；第2项把12.5保留整数；第3项把0.0456保留两位小数。', 3),
+            ('第二项把4.4721保留一位小数，第一项把6.0827保留两位小数。', 2),
+            ('把6.0827和4.4721分别按要求取近似数：第一项保留两位小数，第二项保留一位小数。', 2),
+            ('（1）把3.1416保留2位小数；（2）把2.7183保留整数。', 2)]], [[1, 0, 2], [2, 1], [2, 1], [2, 0]])
+        self.assertEqual([places(q, 2) for q in ['第一项和第二项都保留两位小数。', '第一项把6.0827保留两位小数。',
+                                                 '保留两位小数：第一项是6.0827，第二项是4.4721。']], [None] * 3)
+
 
 class ScorerHardeningTest(unittest.TestCase):
     def test_dismissed_negated_and_foreign_rows_fail(self):
