@@ -1408,14 +1408,30 @@ _REF_FORM=re.compile(r'(?:保留|精确到|写成|化成|改写成)[^，。；;,
                      r'|简便|简算|记数法|单位|列式|竖式|脱式|递等式|过程|步骤')
 
 
+_REF_PLACES=re.compile(r'保留(\d{1,2}|[一二两三四五六七八九])位小数|(?:精确|保留|四舍五入)到(?:([十百千万])分位|0\.(0{0,8})1(?![\d.])'
+                       r'|个位|整数位?)|保留整数(?!部分)')
+_REF_CLAUSE=r'[，,、；;。！？!?\n（()）]'
+
+
 def _ref_places(question):
-    """The decimals a question asks each result to keep: 「保留两位小数」, 「精确到百分位」 and 「精确到0.01」 are 2,
-    「精确到个位」 is 0. None when it asks none, or several so that which one applies is unproven."""
-    found={int(n) if n.isdigit() else ' 一二三四五六七八九'.find(n)
-           for n in re.findall(r'保留(\d{1,2}|[一二三四五六七八九])位小数',question.replace('两','二'))}
-    found|={'个十百千万'.find(n) for n in re.findall(r'精确到([十百千万])分位',question)}
-    found|={len(n)+1 for n in re.findall(r'精确到0\.(0{0,8})1',question)}
-    found|={0 for _ in re.findall(r'精确到(?:个位|整数)|保留整数',question)}
+    """The decimals a question positively asks its one final result to keep, half up: 「保留两位小数」, 「精确到百分位」 and
+    「精确到0.01」 are 2, 「精确到个位」 is 0. None when it asks none or several, or when any is negated, conditional or
+    optional, for a step before the last (先…再…, …后), for one of several parts, or cut another way (去尾, 进一, 舍去):
+    then which decimals the result is written with is unproven."""
+    if re.search(r'去尾|进一|收尾|舍去|截取|截断|直接取|向上取|向下取|[不没未无非别勿免否][^，,。；;！？!?\n]{0,6}(?:四舍五入|近似)'
+                 r'|[（(]\s*[2-9二三四五六七八九]\s*[)）]|[②③④⑤⑥⑦⑧⑨]|第[2-9二三四五六七八九]空',question):
+        return None
+    found=set()
+    for m in _REF_PLACES.finditer(question):
+        clauses=re.split(_REF_CLAUSE,question[:m.start()]);head=clauses[-1]
+        before=next((c for c in reversed(clauses[:-1]) if c.strip()),'');tail=re.split(_REF_CLAUSE,question[m.end():])[0]
+        if (re.search(r'[不没未无非别勿免否或可亦先就则时]|如果|若|假如|假设|倘|要是|万一|的话|那么|中间|过程|每一?步',head+tail)
+                or re.search(r'如果|若|假如|假设|倘|要是|万一|的话|如需|时$',before)
+                or re.search(r'^\s*以?后|再|然后|接着|随后|之后|以后',question[m.end():])):
+            return None
+        n=m[1] or ''
+        found.add(int(n) if n.isdigit() else ' 一二三四五六七八九'.find(n.replace('两','二')) if n
+                  else '个十百千万'.find(m[2]) if m[2] else len(m[3])+1 if m[3] is not None else 0)
     return found.pop() if len(found)==1 else None
 
 
@@ -1521,7 +1537,9 @@ def _ref_value_check(item,student,reference):
     A whole numeric equation 「2+3=5」 is compared by the result it states. A difference in a value, its sign, any digit,
     the count or the order of results never stays correct; an evidenced incorrect stays. Equal results keep an incorrect only
     when its reason cites words of the question or teacher text (a precision, unit, equation or step requirement), and keep
-    a correct written another way only when the question states no such requirement. A unit neither written alike, printed
+    a correct written another way only when the question states no such requirement. A precision the question positively
+    asks (_ref_places) keeps a correct only when the child wrote just those decimals and the teacher's value, rounded half
+    up for the comparison alone, agrees. A unit neither written alike, printed
     after the blank nor converted leaves a correct open; a question that leaves the value to the child is no value check."""
     judged,question=item['judgment'],item['question']
     if judged not in ('correct','incorrect'): return
@@ -1539,6 +1557,13 @@ def _ref_value_check(item,student,reference):
         mine=[value[:3]+(min(units),value[4]+min(units)) for value in mine]
         if not isinstance(mine_form,str): mine_form=[value[4] for value in mine]
     relation=_ref_compare(mine,theirs)
+    # The precision the question positively asks of its one result is met only by exactly those decimals in the teacher's
+    # unit; then the teacher's value is rounded half up for this comparison alone. Nothing written is changed.
+    places=_ref_places(question) if len(mine)==len(theirs)==1 and mine[0][3]==theirs[0][3] else None
+    exact=places is not None and _ref_decimals(mine[0])==places
+    if exact:
+        rounded=_ref_round(theirs[0],places);relation=_ref_compare(mine,[rounded])
+        rounded=('-' if rounded[0] else '')+(rounded[1] or '0')+('.'+rounded[2].ljust(places,'0') if places else '')+rounded[3]
     shown_mine,shown_theirs,where=_ref_pair(student,reference)
     cited=judged=='incorrect' and _ref_cited(item['error_reason'],question+'\n'+reference,(student,reference))
     def pending(note):
@@ -1551,7 +1576,7 @@ def _ref_value_check(item,student,reference):
         if judged=='incorrect': return
         found=('结果个数不同（作答%d个、教师参考%d个）'%(len(mine),len(theirs)) if len(mine)!=len(theirs) else
                '第%s个结果不同'%'、'.join(str(n) for n,(a,b) in enumerate(zip(mine,theirs),1) if _ref_compare([a],[b])=='different')
-               if len(mine)>1 else '数值不同')
+               if len(mine)>1 else '按题面要求的精度四舍五入后数值仍不同' if exact else '数值不同')
         return pending('作答“%s”与教师参考“%s”%s%s，却判为与参考一致，二者矛盾，未判定；请对照原题与教师原件核对。'%(
             shown_mine,shown_theirs,found,where))
     if relation=='unit':
@@ -1560,7 +1585,14 @@ def _ref_value_check(item,student,reference):
             shown_mine,shown_theirs,where))
     found='换算后数值相同' if any(a[3]!=b[3] for a,b in zip(mine,theirs)) else '数值相同'
     required=_REF_FORM.search(question)
+    if exact:  # Rounding meets the precision alone: a unit or representation also asked for still needs the same writing.
+        found='按题面要求的精度四舍五入后相同'
+        required=_REF_FORM.search(re.sub('四舍五入|近似',' ',_REF_PLACES.sub(' ',question)))
+        if not isinstance(theirs_form,str): theirs_form=[rounded]
     if judged=='correct':
+        if places is not None and not exact:  # Equal values, or the very teacher text, are not the decimals asked for.
+            return pending('题面写有“%s”，作答“%s”写了%d位小数，与所要求的位数不同；与教师参考“%s”%s%s，未判定；请对照原题核对。'%(
+                _REF_PLACES.search(question)[0],shown_mine,_ref_decimals(mine[0]),shown_theirs,found,where))
         if mine_form==theirs_form or not required: return
         return pending('题面写有“%s”，作答“%s”与教师参考“%s”%s但写法不同%s，是否符合该要求未能核明，未判定；请对照原题核对。'%(
             required[0],shown_mine,shown_theirs,found,where))

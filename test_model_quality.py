@@ -1792,6 +1792,62 @@ class ExactAnswerTest(unittest.TestCase):
         apart = family_llm._ref_apart(['1' * 60 + '2', '1' * 60 + '3', '4'])
         self.assertEqual(len(set(apart)), 3); self.assertIn('第41字起…', apart[0])
 
+    def test_teacher_reference_keeps_correct_only_at_the_precision_the_question_asks(self):
+        import family_llm
+        def review(question, teacher, student, judgment='correct', error_reason='', uncertainty=''):
+            # The existing teacher-source path: complete question and teacher original as text, one same-question objective item.
+            item = dict(label='第1题', question=question, student_answer=student, answer='教师参考：' + teacher, judgment=judgment,
+                        error_reason=error_reason, possible_cause='', steps='', uncertainty=uncertainty, question_kind='objective')
+            reply = dict(items=[item], coverage='已按文字原件核对全部题号。', comparison='', question_labels=['第1题'])
+            with patch.object(family_llm, '_chat_json', return_value=reply):
+                [q] = family_llm.homework_reference_draft([], review=True, data_path=None, question_documents=[dict(
+                    name='五年级数学练习-虚构.txt', text='五年级数学练习（虚构）\n1. %s\n孩子作答：%s\n' % (question, student))],
+                    reference_documents=[dict(name='教师参考答案-虚构.txt', text='教师参考答案（虚构）\n1. %s\n' % teacher)])['questions']
+            # The teacher original, the child's answer and the question stay literal: nothing is rounded into the record.
+            self.assertEqual([q['answer'], q['student_answer'], q['question']], ['教师参考：' + teacher, student, question])
+            return q
+        rounding = '把3.1416四舍五入，保留2位小数。'
+        # Control 1: the child wrote just the 2 decimals asked for, and the teacher original rounded half up agrees.
+        self.assertEqual(review(rounding, '3.1416', '3.14')['judgment'], 'correct')
+        # Controls 2-5: a wrong rounding, extra decimals, no rounding asked, or another unit never stay correct, nor become incorrect.
+        for question, teacher, student, note in [
+                (rounding, '3.1416', '3.15', '四舍五入后数值仍不同'),
+                ('把3.1400四舍五入，保留2位小数。', '3.1400', '3.140', '写了3位小数'),
+                ('写出给定数3.1416，不作近似。', '3.1416', '3.14', '数值不同'),
+                ('将3.1416米的长度四舍五入，保留2位小数并以米为单位作答。', '3.1416米', '3.14厘米', '数值不同')]:
+            q = review(question, teacher, student)
+            self.assertEqual([q['judgment'], q['error_reason']], ['unknown', ''], (question, student))
+            self.assertIn(note, q['uncertainty'], (question, student))
+        # A requirement negated, conditional, optional, ambiguous, cut another way, for an earlier step or for one of several
+        # results proves no precision: the complete values still differ, so the correct is withdrawn as before.
+        for question, teacher, student in [
+                ('把3.1416四舍五入，不用保留2位小数。', '3.1416', '3.14'), ('3.1416是多少？如果需要，保留2位小数。', '3.1416', '3.14'),
+                ('3.1416约是多少？（可以保留2位小数）', '3.1416', '3.14'), ('把3.1416保留2位小数或3位小数。', '3.1416', '3.14'),
+                ('把3.1456用去尾法保留2位小数。', '3.1456', '3.15'), ('把3.1416保留2位小数后再写成百分数。', '3.1416', '3.14'),
+                ('把3.1416和2.7183分别保留2位小数。', '3.1416，2.7183', '3.14，2.72'),
+                ('把-3.1416四舍五入，保留2位小数。', '-3.1416', '3.14')]:
+            self.assertEqual(review(question, teacher, student)['judgment'], 'unknown', question)
+        # Other explicit precisions; a later representation and a unit printed after the blank are still checked as written.
+        for question, teacher, student, judgment in [
+                ('把3.1416精确到百分位。', '3.1416', '3.14', 'correct'), ('3.1416精确到个位是多少？', '3.1416', '3', 'correct'),
+                ('3.1416精确到个位是多少？', '3.1416', '3.0', 'unknown'), ('把3.1416米保留2位小数：____米', '3.1416米', '3.14', 'correct'),
+                ('把0.31416用百分数表示，保留2位小数。', '31.416%', '31.42%', 'correct'),
+                ('把0.31416用百分数表示，保留2位小数。', '31.416%', '0.31', 'unknown'),
+                ('将3.1416米的长度四舍五入，保留2位小数并以米为单位作答。', '3.1416米', '3.14', 'unknown')]:
+            self.assertEqual(review(question, teacher, student)['judgment'], judgment, (question, student))
+        # The very teacher text is not the decimals asked for; a grade is never raised and evidenced wrong answers stay.
+        self.assertEqual(review(rounding, '3.1416', '3.1416')['judgment'], 'unknown')
+        q = review(rounding, '3.1416', '3.14', 'incorrect', '作答3.14与教师参考3.1416不同。')
+        self.assertEqual(q['judgment'], 'unknown'); self.assertIn('四舍五入后相同', q['uncertainty'])
+        self.assertEqual(review(rounding, '3.1416', '3.14', 'unknown', uncertainty='作答字迹待核。')['judgment'], 'unknown')
+        reason = '按题目要求保留2位小数应为3.14，作答3.15不同。'
+        self.assertEqual([review(rounding, '3.1416', '3.15', 'incorrect', reason)[k] for k in ('judgment', 'error_reason')],
+                         ['incorrect', reason])
+        # Without a question there is no precision: the shared relation still compares complete values.
+        self.assertEqual(family_llm._ref_value_relation('3.14', '3.1416'), 'different')
+        self.assertEqual([family_llm._ref_places(q) for q in [rounding, '圆的周长约是多少米？（结果精确到0.01）', '3.1416精确到个位是多少？',
+                                                               '（1）把3.1416保留2位小数；（2）把2.7183保留整数。']], [2, 2, 0, None])
+
 
 class ScorerHardeningTest(unittest.TestCase):
     def test_dismissed_negated_and_foreign_rows_fail(self):
