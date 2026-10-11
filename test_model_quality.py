@@ -155,6 +155,7 @@ UNANSWERED = (r'未作答|未答|空白|作答为空|(?:没有|没|未|无)(?:�
               r'|(?:孩子|学生)(?:本题)?(?:未|没有?)(?:提供)?(?:作答|答题|填写)')
 
 
+# @@locate-c
 def _value_ok(spec, text):
     """Whole objective value: one final signed number, one option letter or the exact word; subjective keeps the frozen requirement."""
     kind, value = spec[0], spec[1]
@@ -1701,6 +1702,18 @@ class ExactAnswerTest(unittest.TestCase):
             self.assertEqual(_value_ok(('num', '62' if '7米' not in answer else '7'), re.sub(r'^教师参考：', '', answer)), ok, answer)
         self.assertTrue(_value_ok(('choice', 'C', '34'), 'C. 34')); self.assertFalse(_value_ok(('choice', 'C', '34'), 'C或D'))
         self.assertTrue(_value_ok(('word', '朋友'), '朋友（péng yǒu）')); self.assertFalse(_value_ok(('word', '朋友'), '朋友、明友'))
+
+    def test_ref_value_relation_reads_each_whole_value(self):
+        import family_llm
+        relation, long = family_llm._ref_value_relation, '9' * 5000  # Past int()'s default digit limit: every digit counts as written.
+        self.assertEqual([relation(*pair) for pair in [
+            ('62', '62.0'), ('－５', '-5'), ('５０％', '50%'), ('7 米。', '7米'), (long, long + '.000')]], ['same'] * 5)
+        self.assertEqual([relation(*pair) for pair in [
+            ('-5', '5'), ('62', '63'), (long + '8', long + '9'), ('0.' + long + '1', '0.' + long)]], ['different'] * 4)
+        # A decimal trailing on is never cut short; several values, an expression, other words or a unit change prove nothing.
+        self.assertEqual([relation(*pair) for pair in [
+            ('3.33...', '3.33'), ('3.3。。。', '3.4'), ('62或72', '62'), ('100-38=62', '62'),
+            ('答：62', '62'), ('1/2', '0.5'), ('50厘米', '0.5米'), ('7', '7米')]], [None] * 8)
 
 
 class ScorerHardeningTest(unittest.TestCase):
