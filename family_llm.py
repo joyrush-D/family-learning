@@ -1411,8 +1411,9 @@ _REF_FORM=re.compile(r'(?:保留|精确到|写成|化成|改写成)[^，。；;,
 _REF_NOUN=r'单位|列式|竖式|脱式|递等式|过程|步骤|简便|简算|记数法|最简|约分|近似|省略'  # The bare words a 、 list may share.
 _REF_WORK=r'算式|列式|竖式|脱式|递等式|过程|步骤'  # Written work: an equation or steps the child shows.
 # The question's own numbered parts: （1）, ①, or 第一项, 第2个结果, 第三空, 第二问; a thing it numbers (第一根, 第二条) is
-# group 4, read as a part only for a number no part takes (_ref_marks).
-_REF_PART=re.compile(r'[（(]\s*([1-9])\s*[)）]|([①②③④⑤⑥⑦⑧⑨])|第([1-9一二三四五六七八九])'
+# group 4, read as a part only for a number no part takes (_ref_marks). Every number is read whole, 0, （10）, ⑫, 第十项
+# and 第二十一个 too, so one that no part or result has is still that number, never passed over.
+_REF_PART=re.compile(r'[（(]\s*(\d{1,2})\s*[)）]|([①-⑳])|第(\d{1,3}|[零〇一二两三四五六七八九十]{1,3})'
                      r'(?:项|个(?:结果|答案|得数|近似数|数|空)?|空|问|小题|(根|条|段|块|袋|箱|堆))')
 
 
@@ -1475,9 +1476,16 @@ def _ref_places(question):
 
 
 def _ref_nth(match):
-    """The number one _REF_PART match names: 「（2）」, 「②」, 「第二项」, 「第2个结果」 and 「第二根」 are all 2."""
-    return (int(match[1]) if match[1] else '①②③④⑤⑥⑦⑧⑨'.index(match[2])+1 if match[2] else int(match[3]) if match[3].isdigit()
-            else ' 一二三四五六七八九'.index(match[3]))
+    """The number one _REF_PART match names: 「（2）」, 「②」, 「第二项」, 「第2个结果」 and 「第二根」 are all 2, 「（10）」,
+    「⑩」 and 「第十个」 10, 「第十二项」 12, 「第二十一个」 21. 0, which no part or result has, for 「第0个」, 「第零个」 or
+    numerals that spell no one number (「第一二个」), so such a mark is never read as another number."""
+    if match[2]: return ord(match[2])-ord('①')+1
+    n=match[1] or match[3]
+    if re.fullmatch(r'\d+',n): return int(n)
+    digit=lambda c,empty:'零一二三四五六七八九'.find(c) if len(c)==1 else empty if not c else -1
+    tens,ten,ones=n.replace('〇','零').replace('两','二').partition('十')
+    whole=digit(tens,1)*10+digit(ones,0) if ten else digit(tens,-1)
+    return whole if whole>0 and min(digit(tens,1),digit(ones,0))>=0 else 0
 
 
 def _ref_marks(text):
@@ -1531,12 +1539,14 @@ def _ref_whose(question,count,at):
 def _ref_cites(reason,mine):
     """The results a model's reason names, as indexes into mine (_ref_values): by number (第二项, 第2个, （2）, ②, 第二根),
     else by a child's value as written there (「作答4.47…」); every result when it names none, as the one of one answer.
-    A number names its own result alone, whatever value the reason also quotes; a number the answer has no result for
-    names none (an empty set), so that reason rests on no result here, never on every result nor on a value it quotes."""
+    A number names its own result alone, whatever value the reason also quotes, and is read before one answer's single
+    result may stand in: a number the answer has no result for (第二个 of one result, 第零个, 第十个 of two) names none
+    (an empty set), so that reason rests on no result here, never on every result nor on a value it quotes. The question
+    of one result numbers no parts (_ref_segments), so a thing it numbers (第二根) names no result there."""
     every=set(range(len(mine)))
-    if len(mine)<2: return every
-    named={n-1 for m,n in _ref_marks(reason)}
+    named={n-1 for m,n in _ref_marks(reason) if len(mine)>1 or not m[4]}
     if named: return named if named<=every else set()
+    if len(mine)<2: return every
     quoted={n for n,value in enumerate(mine) if re.search(
         r'(?<![\d.第])'+re.escape(value[4][:len(value[4])-len(value[3])])+r'(?![\d位])(?!\.\d)',reason)}
     return quoted or every
@@ -1561,21 +1571,38 @@ def _ref_places_each(question,count):
     return places
 
 
+_REF_COPY=r'(?:照|誊)?抄写?|[补誊填]?写|(?:带|加|补|注|标|填)[上明出]'  # Writing a unit down: 「照抄」「写上」「带上」「注明」.
+
+
 def _ref_printed(question,match):
     """Whether the 单位 at match only tells that the page already prints or gives the unit (「（单位已印在空格后）」,
     「空格后已印好单位」, 「单位已经给出」): such words ask the child for nothing, neither a unit nor its waiver. Read
-    right at the word, so 「写单位」, 「带单位」, 「用米作单位」, 「与已给出的单位一致」 or 「确认已写单位」 still ask one."""
+    right at the word, so 「写单位」, 「带单位」, 「用米作单位」, 「与已给出的单位一致」 or 「确认已写单位」 still ask one.
+    Telling it is printed is not all they say where they also have the child write or copy that unit, in its own clause
+    (「照抄已印单位」) or a later one of its note before the next part's number, the writing taking no other object
+    (「单位已印好，也要抄写」, 「单位已印在空格后，答案须写上」): words that so ask, or may ask (_ref_binds other than
+    'no'), make it a requirement. A waiver (「不用再写」), other writing (「只写数」, 「写在横线上」) or another 单位
+    (「答案仍要写单位」, read for itself) leaves it a description."""
     near=r'[^，,、；;。！？!?\n（()）]{0,6}?'  # A few words of the same clause: 「单位已在空格后印好」.
-    return bool(re.search(r'印[好有出上了着]*$',question[:match.start()]) or re.match(
-        r'\s*[：:]?\s*(?:在'+near+r')?[都均也皆是]?(?:(?:已经?|早已)(?:预先?|提前|打|在'+near+r')?[印给]|(?:预先?|提前|打)?印)',
-        question[match.end():]))
+    if not (re.search(r'印[好有出上了着]*$',question[:match.start()]) or re.match(
+            r'\s*[：:]?\s*(?:在'+near+r')?[都均也皆是]?(?:(?:已经?|早已)(?:预先?|提前|打|在'+near+r')?[印给]|(?:预先?|提前|打)?印)',
+            question[match.end():])):
+        return False
+    head=re.split(_REF_CLAUSE+'|[：:]',question[:match.start()])[-1]
+    note=re.split(r'[；;。！？!?\n)）]',question[match.end():])[0]
+    part=_REF_PART.search(note);note=note[:part.start()] if part else note
+    at=match.start()-len(head)
+    asks=[(at+m.start(),at+m.end()) for m in re.finditer(r'(?:%s)(?![在到进时]|得?数)'%_REF_COPY,head)]
+    asks+=[(match.end()+m.start(),match.end()+m.end()) for m in re.finditer(
+        r'(?:%s)(?:[上出明全]|出来|上去)?(?:即可|才行)?(?=\s*(?:%s|$))'%(_REF_COPY,_REF_CLAUSE),note)]
+    return all(_ref_binds(question,start,end)=='no' for start,end in asks)
 
 
 def _ref_kept(match,question,sides,cited=None):
     """Whether the child's results (sides, as _ref_value_check reads them) keep the writing one _REF_FORM match asks, held
     to the results whose own words ask it (_ref_whose) and, with cited, to those of them a reason names: True when provably
     kept, False when provably broken, None when this cannot tell. A percent or permille is its sign; a unit is the one
-    those words name (「用米作单位」), any where one is to be written (「写单位」, 「带单位」), otherwise the teacher's as
+    those words name (「用米作单位」), any where one is to be written (「写单位」, 「带单位」, 「照抄已印单位」), otherwise the teacher's as
     written, so 「原单位」 is kept when neither writes a unit and broken by another; 「写出算式」 or 「列式」 is kept by a whole
     equation, its result already compared, and broken by a lone value, as steps (过程, 竖式) are, which nothing here proves
     kept. Any other writing is unproven, as is one a reason names for a result it is not proven to be asked of; where whose
@@ -1595,7 +1622,7 @@ def _ref_kept(match,question,sides,cited=None):
         unit=mine[n][3]
         if key[0]!='单位': return unit==('%' if key[0]=='百分数' else '‰')
         if named: return unit==(named[1] or named[2])
-        if re.search('[写带注标加填有]',near) and not unit: return False
+        if re.search('[写带注标加填有抄]',near) and not unit: return False
         if n<len(theirs) and unit==theirs[n][3]: return True
         return False if re.search('原|同|一致|统一',near) else None
     found=[kept(n) for n in (whose or range(len(mine))) if not (whose and cited is not None) or n in cited]
@@ -1759,7 +1786,7 @@ def _ref_cited(reason,question,answers,sides,each):
     said=bare=re.sub(r'\s','',reason)
     for answer in sorted(answers,key=len,reverse=True): bare=bare.replace(re.sub(r'\s','',answer),'') if answer.strip() else bare
     named={_ref_digits(m) for m in re.finditer(r'(\d{1,2}|[一二两三四五六七八九])位小数|([十百千万])分位|0\.(0{0,8})1(?![\d.])|个位|整数',bare)}
-    cites=_ref_cites(bare,mine)
+    cites=_ref_cites(said if _ref_marks(said) else bare,mine)  # A number as written, before any answer is taken out (「第2个」).
     if any(p is not None and p in named and _ref_decimals(value)!=p for n,(p,value) in enumerate(zip(each,mine)) if n in cites):
         return True
     for m in _REF_FORM.finditer(question):

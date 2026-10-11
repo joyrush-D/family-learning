@@ -2034,6 +2034,40 @@ class ExactAnswerTest(unittest.TestCase):
         self.assertEqual([review(lone, teacher, s)['judgment'] for s in ('4.5，7厘米', '4.5，7')], ['correct', 'unknown'])
         asked = '第一个空：____厘米（单位已印在空格后，答案仍要写单位）；第二个空：____厘米。'
         self.assertEqual([review(asked, teacher, s)['judgment'] for s in ('4.5厘米，7', '4.5，7')], ['correct', 'unknown'])
+        # 3. A number binds before one answer's single result may stand in: a reason naming a second, 0th, tenth or twelfth
+        # result of a one-result answer rests on no result, never on that result nor a value it quotes, though the result
+        # really breaks its precision. The first named, or none, keeps all the model gave; a numeric difference keeps its own.
+        single, teacher = '把6.258四舍五入，保留两位小数。', '6.258'
+        cause, steps = '可能没有看清要保留的位数，需问孩子。', '把6.258保留两位小数，写成6.26。'
+        for reason, kept in [('第一个结果要求保留两位小数，作答6.258保留了三位小数。', True), ('作答6.258保留了三位小数，没有保留两位小数。', True),
+                             ('第二个结果要求保留两位小数，作答6.258保留了三位小数。', False), ('第2个结果没有保留两位小数。', False),
+                             ('第十个结果没有保留两位小数。', False), ('第0个结果没有保留两位小数。', False), ('（12）没有保留两位小数。', False)]:
+            q = review(single, teacher, teacher, 'incorrect', reason, cause, steps)
+            self.assertEqual([q[k] for k in fields], ['incorrect', reason, cause, steps] if kept else ['unknown', '', '', ''], reason)
+            if not kept: self.assertIn('却判为需订正', q['uncertainty'], reason)
+        reason = '第二个结果应为6.26，作答6.25与教师参考不同。'
+        self.assertEqual([review(single, '6.26', '6.25', 'incorrect', reason, cause, steps)[k] for k in fields],
+                         ['incorrect', reason, cause, steps])
+        cites, values = family_llm._ref_cites, family_llm._ref_values
+        self.assertEqual([cites(r, values('6.258')) for r in ('第一项保留了三位小数。', '第二根彩带写了三位小数。', '第零个结果写错。', '⑩写错。')]
+                         + [cites(r, values('4.2，5.6')) for r in ('第二十项写错。', '第十二个结果写错。', '第二项写错，作答4.2也错。', '作答5.6写错。')],
+                         [{0}, {0}, set(), set(), set(), set(), {1}, {1}])
+        # 4. Words telling a unit is printed ask nothing unless they also have the child write or copy it: then that result
+        # alone must show it, its sibling printed after the blank need not, and an evidenced incorrect keeps its reason. A
+        # waiver, or writing of something else, beside the printed unit still asks nothing.
+        teacher = '3.5千克，6千克'
+        for note in ('（须照抄已印单位）', '（单位已印好，作答也要抄写）', '（单位已印在空格后，答案须写上）'):
+            question = '第一个空：____千克%s；第二个空：____千克。' % note
+            self.assertEqual([review(question, teacher, s)['judgment'] for s in ('3.5，6', '3.5千克，6千克', '3.5千克，6')],
+                             ['unknown', 'correct', 'correct'], note)
+        for note in ('（单位已印好）', '（单位已印好，不用再写）', '（单位已印好，只写数）', '（空格后已印好单位，答案写在横线上）'):
+            question = '第一个空：____千克%s；第二个空：____千克。' % note
+            self.assertEqual([review(question, teacher, s)['judgment'] for s in ('3.5，6', '3.5千克，6千克')], ['correct', 'correct'], note)
+        later = '第一个空：____千克；第二个空：____千克（须照抄已印单位）。'
+        self.assertEqual([review(later, teacher, s)['judgment'] for s in ('3.5，6千克', '3.5千克，6')], ['correct', 'unknown'])
+        reason = '第一个空要求照抄已印单位，作答3.5没有写千克。'
+        q = review('第一个空：____千克（须照抄已印单位）；第二个空：____千克。', teacher, '3.5，6', 'incorrect', reason)
+        self.assertEqual([q['judgment'], q['error_reason']], ['incorrect', reason])
 
 
 class ScorerHardeningTest(unittest.TestCase):
