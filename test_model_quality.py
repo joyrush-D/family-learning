@@ -2068,6 +2068,25 @@ class ExactAnswerTest(unittest.TestCase):
         reason = '第一个空要求照抄已印单位，作答3.5没有写千克。'
         q = review('第一个空：____千克（须照抄已印单位）；第二个空：____千克。', teacher, '3.5，6', 'incorrect', reason)
         self.assertEqual([q['judgment'], q['error_reason']], ['incorrect', reason])
+        # 5. One result is held as each of several: the unit printed after its blank stands in for a lone bare value only
+        # where no words ask it written, so 「照抄已印单位」 leaves that value open and keeps an evidenced incorrect, while a
+        # unit the child wrote, one only told printed, or one waived keeps the supported correct and drops a reason blaming it.
+        teacher, cause, steps = '5千克', '可能漏看了照抄单位的要求，需问孩子。', '在5后面照抄单位千克，写成5千克。'
+        for note in ('（作答必须照抄已印单位）', '（单位已印好，作答也要抄写）'):
+            question = '一袋大米重____千克%s。' % note
+            q = review(question, teacher, '5')
+            self.assertEqual([q[k] for k in fields], ['unknown', '', '', ''], note)
+            self.assertIn('单位写法不同', q['uncertainty'], note)
+            self.assertEqual(review(question, teacher, '5千克')['judgment'], 'correct', note)
+            for student, reason in [('5', '题面要求照抄已印单位，作答5没有写千克。'), ('6', '大米重5千克，作答6与教师参考不同。')]:
+                self.assertEqual([review(question, teacher, student, 'incorrect', reason, cause, steps)[k] for k in fields],
+                                 ['incorrect', reason, cause, steps], note)
+        for note in ('', '（单位已印在空格后）', '（单位已印好，不用再写）'):
+            question = '一袋大米重____千克%s。' % note
+            self.assertEqual([review(question, teacher, s)['judgment'] for s in ('5', '5千克')], ['correct', 'correct'], note)
+            q = review(question, teacher, '5', 'incorrect', '作答5没有写单位千克。', cause, steps)
+            self.assertEqual([q[k] for k in fields], ['unknown', '', '', ''], note)
+            self.assertIn('却判为需订正', q['uncertainty'], note)
 
 
 class ScorerHardeningTest(unittest.TestCase):
