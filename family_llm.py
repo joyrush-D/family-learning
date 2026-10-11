@@ -1415,7 +1415,7 @@ _REF_CUT=r'去尾|进一|收尾|舍去|截取|截断|直接取|向上取|向下�
 _REF_UNROUNDED=r'[不没未无非别勿免否][^，,。；;！？!?\n]{0,6}(?:四舍五入|近似)'
 
 
-def _ref_scope(question,start,end):
+def _ref_binds(question,start,end):
     """How the requirement written at question[start:end] binds the final result, read in its own clause only: 'yes' when
     asked outright, 'no' when that clause negates it, 'step' when it is for a step before the last (先…, 中间…, …后再…),
     None when conditional, optional or one of alternatives, so unproven. Another clause's 不 or 如果 is not this one's."""
@@ -1441,15 +1441,15 @@ def _ref_digits(match):
 
 def _ref_places(question):
     """The decimals a question positively asks its one final result to keep, half up: 「保留两位小数」, 「精确到百分位」 and
-    「精确到0.01」 are 2, 「精确到个位」 is 0. Each mention is read in its own clause (_ref_scope): one negated or for a step
+    「精确到0.01」 are 2, 「精确到个位」 is 0. Each mention is read in its own clause (_ref_binds): one negated or for a step
     before the last never stands for the final result nor undoes a different positive one; a conditional, optional or
     alternative other decimals leaves it unproven. None when no one decimals is positively asked, when those very decimals
     are also negated, for one of several parts, or when the result is cut another way (去尾, 进一, 舍去) or not rounded."""
     if re.search(_REF_CUT+r'|[（(]\s*[2-9二三四五六七八九]\s*[)）]|[②③④⑤⑥⑦⑧⑨]|第[2-9二三四五六七八九]空',question):
         return None
-    if any(_ref_scope(question,m.start(),m.end())!='step' for m in re.finditer(_REF_UNROUNDED,question)):
+    if any(_ref_binds(question,m.start(),m.end())!='step' for m in re.finditer(_REF_UNROUNDED,question)):
         return None  # 「不要四舍五入」 for the result itself; 「计算过程中不要四舍五入」 is a step's.
-    mentions=[(_ref_digits(m),_ref_scope(question,m.start(),m.end())) for m in _REF_PLACES.finditer(question)]
+    mentions=[(_ref_digits(m),_ref_binds(question,m.start(),m.end())) for m in _REF_PLACES.finditer(question)]
     asked={places for places,scope in mentions if scope=='yes'}
     if len(asked)!=1: return None
     places=asked.pop()
@@ -1469,9 +1469,9 @@ def _ref_places_each(question,count):
 
 def _ref_form(question,rounded=False):
     """The first writing (_REF_FORM) the question positively asks of its final result, or None: a word negated, conditional,
-    optional or for an earlier step asks nothing (_ref_scope). With rounded, a precision rounding already meets is left out."""
+    optional or for an earlier step asks nothing (_ref_binds). With rounded, a precision rounding already meets is left out."""
     text=re.sub('四舍五入|近似',lambda m:' '*len(m[0]),_REF_PLACES.sub(lambda m:' '*len(m[0]),question)) if rounded else question
-    return next((m[0] for m in _REF_FORM.finditer(text) if _ref_scope(question,m.start(),m.end())=='yes'),None)
+    return next((m[0] for m in _REF_FORM.finditer(text) if _ref_binds(question,m.start(),m.end())=='yes'),None)
 
 
 def _ref_decimals(value):
@@ -1608,7 +1608,7 @@ def _ref_breaks(match,values):
 
 
 def _ref_cited(reason,question,answers,sides,each):
-    """Whether a reason rests on a requirement the question itself positively asks (_ref_scope 'yes', never one negated,
+    """Whether a reason rests on a requirement the question itself positively asks (_ref_binds 'yes', never one negated,
     conditional, optional or for an earlier step), names that very requirement, and the child's results provably break it:
     decimals other than a precision asked (_ref_places_each), only a value where an equation or steps are asked, a unit or
     percent not used as asked, or a condition on the value (大于10, 偶数) the child's results break and the teacher's keep.
@@ -1620,7 +1620,7 @@ def _ref_cited(reason,question,answers,sides,each):
     if any(p is not None and p in named and _ref_decimals(value)!=p for p,value in zip(each,mine)): return True
     for m in _REF_FORM.finditer(question):
         key=re.search(r'列式|竖式|脱式|递等式|过程|步骤|单位|百分数|千分数',m[0])
-        if not key or key[0] not in said or _ref_scope(question,m.start(),m.end())!='yes': continue
+        if not key or key[0] not in said or _ref_binds(question,m.start(),m.end())!='yes': continue
         if key[0] in ('百分数','千分数'):
             if any(value[3]!=('%' if key[0]=='百分数' else '‰') for value in mine): return True
         elif key[0]=='单位':
@@ -1628,7 +1628,7 @@ def _ref_cited(reason,question,answers,sides,each):
             unit=unit and (unit[1] or unit[2])
             if any(value[3]!=unit if unit else not value[3] for value in mine): return True
         elif not isinstance(mine_form,str): return True  # Only a value is written where an equation or steps are asked.
-    return any(_ref_scope(question,m.start(),m.end())=='yes' and re.sub(r'\s','',m[0]) in said
+    return any(_ref_binds(question,m.start(),m.end())=='yes' and re.sub(r'\s','',m[0]) in said
                and _ref_breaks(m,mine) is True and _ref_breaks(m,theirs) is False for m in _REF_BOUND.finditer(question))
 
 
@@ -1651,7 +1651,7 @@ def _ref_value_check(item,student,reference):
         sides.append((values,_ref_unspaced(text) if equation else [value[4] for value in values]))
     (mine,mine_form),(theirs,theirs_form)=sides
     units={value[3] for value in theirs}
-    unitless=any(_ref_scope(question,m.start(),m.end())=='no' for m in re.finditer('单位',question))  # 「不用写单位」
+    unitless=any(_ref_binds(question,m.start(),m.end())=='no' for m in re.finditer('单位',question))  # 「不用写单位」
     printed=len(units)==1 and '' not in units and all(not value[3] for value in mine) and (unitless or re.search(
         r'(?:_{2,}|＿{2,}|[（(]\s*[)）]|□+)\s*'+re.escape(min(units)),question))
     if printed:  # The unit is printed after the blank, or the question asks for none: the child writes the number only.
@@ -1695,7 +1695,7 @@ def _ref_value_check(item,student,reference):
     if judged=='correct':
         if short:  # Equal values, or the very teacher text, are not the decimals asked for.
             if len(mine)==1:
-                asked=next(m[0] for m in _REF_PLACES.finditer(question) if _ref_scope(question,m.start(),m.end())=='yes')
+                asked=next(m[0] for m in _REF_PLACES.finditer(question) if _ref_binds(question,m.start(),m.end())=='yes')
                 wrote='写了%d位小数'%_ref_decimals(mine[0])
             else:
                 asked='、'.join('第%d个结果保留%d位小数'%(n+1,each[n]) for n in short)

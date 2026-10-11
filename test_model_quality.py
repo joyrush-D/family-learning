@@ -1848,6 +1848,28 @@ class ExactAnswerTest(unittest.TestCase):
         self.assertEqual([family_llm._ref_places(q) for q in [rounding, '圆的周长约是多少米？（结果精确到0.01）', '3.1416精确到个位是多少？',
                                                                '（1）把3.1416保留2位小数；（2）把2.7183保留整数。']], [2, 2, 0, None])
 
+    def test_teacher_reference_scope_and_question_precision_hold_together(self):
+        import family_llm
+        # The teacher-text parser reads each line's paper, 大题 and title (positionally and by titles=), while the question's
+        # precision is read clause by clause; the two helpers once shared one name and every teacher-text review raised.
+        question = '把2.7183四舍五入，保留2位小数。'
+        def review(label):
+            item = dict(label=label, question=question, student_answer='2.72', answer='教师参考：2.7183', judgment='correct',
+                        error_reason='', possible_cause='', steps='', uncertainty='', question_kind='objective')
+            reply = dict(items=[item], coverage='已按文字原件核对全部题号。', comparison='', question_labels=[label])
+            with patch.object(family_llm, '_chat_json', return_value=reply):
+                [q] = family_llm.homework_reference_draft([], review=True, data_path=None, question_documents=[dict(
+                    name='六年级数学练习-虚构.txt', text='六年级数学练习（虚构）\n一、计算题\n1. %s\n孩子作答：2.72\n' % question)],
+                    reference_documents=[dict(name='教师参考答案-虚构.txt', text='教师参考答案（虚构）\n一、计算题\n1. 2.7183\n')])['questions']
+            return q
+        # The teacher's 大题 heading carries to its numbered answer and the label names that same 大题; 2.7183 rounded half up
+        # to the 2 decimals asked is the child's 2.72, so the supported correct stays and every value is kept as written.
+        q = review('一、第1题')
+        self.assertEqual([q['judgment'], q['answer'], q['student_answer'], q['question']], ['correct', '教师参考：2.7183', '2.72', question])
+        # The same number without that 大题 is never paired with the teacher's answer: nothing is settled.
+        q = review('第1题')
+        self.assertEqual(q['judgment'], 'unknown'); self.assertIn('大题或小题与本题无法核明对应', q['uncertainty'])
+
 
 class ScorerHardeningTest(unittest.TestCase):
     def test_dismissed_negated_and_foreign_rows_fail(self):
