@@ -1301,15 +1301,20 @@ def _ref_unspaced(value):
     return re.sub(r'\s+',kept,value)
 
 
+def _ref_result(value):
+    """The one final value a whole numeric equation states: 「2+3=5」 gives 「5」, 「12-5=7米」 「7米」.
+    Letters, chains, other words or a bare value give None; no trailing digit is picked out of more."""
+    value=re.sub(r'[，,；;。.．、！!？?]+$','',_ref_unspaced(value).replace('＝','='))
+    found=re.fullmatch(r'(?=[^=]*\d)[\d.()（）]*(?:[+\-×÷*/][\d.()（）]+)+=(\d+(?:\.\d+)?[^\W\d_]{0,3})',value)
+    return found[1] if found else None
+
+
 def _ref_agrees(claimed,teacher):
     """A teacher-labelled value must be the teacher's whole value; added letters or words are not the teacher's.
     A bare equation 「2+3=5」 and its one final value 「5」 are the same value; nothing is computed."""
     whole=lambda value:re.sub(r'[，,；;。.．、！!？?]+$','',_ref_unspaced(value).replace('＝','='))
-    def final(value):  # Only one numeric equation 「2+3=5」「12-5=7米」 has one final value; letters and chains do not.
-        found=re.fullmatch(r'(?=[^=]*\d)[\d.()（）]*(?:[+\-×÷*/][\d.()（）]+)+=(\d+(?:\.\d+)?[^\W\d_]{0,3})',value)
-        return found[1] if found else None
     claimed,teacher=whole(claimed),whole(teacher)
-    return claimed==teacher or final(teacher)==claimed or final(claimed)==teacher
+    return claimed==teacher or _ref_result(teacher)==claimed or _ref_result(claimed)==teacher
 
 
 _GAP_MISSING=re.compile(r'(?:缺(?![点陷席勤])|没(?:有|给|标)|未(?:给|提供|标)|条件不[足全])(?!\s*[写填答作])')
@@ -1391,21 +1396,177 @@ def _ref_leads(listed,teacher):
     return bool(listed) and teacher.startswith(listed) and teacher[len(listed):][:1] in tuple('，,；;。、！!？?（(：:')
 
 
-def _ref_value_relation(student,reference):
-    """'same' or 'different' only when each whole answer is one complete plain decimal in the same written unit; otherwise None.
-    The sign counts (-5 is not 5), 5.0 is 5 and full-width ５０％ is 50%; every written digit is compared, however long.
-    A fraction, an expression, several values, other words, another unit or a decimal trailing on (3.33...) is not one
-    complete value here: nothing is converted, solved, cut short or picked out of more, so the model's grade is left unproven."""
-    values,narrow=[],str.maketrans({0x2212:'-',**{code:code-0xFEE0 for code in range(0xFF01,0xFF5F)}})  # Full-width ASCII and − as ASCII.
-    for text in (student,reference):
-        text=str(text).translate(narrow).strip()
-        if text.endswith(tuple(',;.!。、')): text=text[:-1].rstrip()  # One closing mark only: 3.33... or 5。。。 still trails on.
-        match=re.fullmatch(r'([+-]?)(?=\.?[0-9])([0-9]*)(?:\.([0-9]+))?\s*((?:[^\W\d_]|[%‰°℃])*)',text)
+# Metric length and mass, and a bare number against % or ‰, each as a power of ten: a conversion shifts the decimal point
+# and never rounds.
+_REF_UNIT_SCALE={unit:(kind,power) for kind,table in (
+    ('length',{'毫米':0,'mm':0,'厘米':1,'cm':1,'分米':2,'dm':2,'米':3,'m':3,'千米':6,'公里':6,'km':6}),
+    ('mass',{'克':0,'g':0,'千克':3,'公斤':3,'kg':3,'吨':6,'t':6}),
+    ('ratio',{'':0,'%':-2,'‰':-3})) for unit,power in table.items()}
+# The question leaves the value itself to the child; 「任意三角形」 alone frees no value.
+_REF_FREE=re.compile('任意[^，。；;！？]{0,8}?(?:均可|都可|皆可|即可)|任意?[写填举选]|自选|自拟|喜好|不唯一')
+_REF_FORM=re.compile(r'(?:保留|精确到|写成|化成|改写成)[^，。；;,）)\s]{0,8}|用[^，。；;,）)\s]{0,8}表示|四舍五入|最简|约分|近似|省略'
+                     r'|简便|简算|记数法|单位|列式|竖式|脱式|递等式|过程|步骤')
+
+
+def _ref_places(question):
+    """The decimals a question asks each result to keep: 「保留两位小数」, 「精确到百分位」 and 「精确到0.01」 are 2,
+    「精确到个位」 is 0. None when it asks none, or several so that which one applies is unproven."""
+    found={int(n) if n.isdigit() else ' 一二三四五六七八九'.find(n)
+           for n in re.findall(r'保留(\d{1,2}|[一二三四五六七八九])位小数',question.replace('两','二'))}
+    found|={'个十百千万'.find(n) for n in re.findall(r'精确到([十百千万])分位',question)}
+    found|={len(n)+1 for n in re.findall(r'精确到0\.(0{0,8})1',question)}
+    found|={0 for _ in re.findall(r'精确到(?:个位|整数)|保留整数',question)}
+    return found.pop() if len(found)==1 else None
+
+
+def _ref_decimals(value):
+    """How many decimals a value from _ref_values is written with: 「5.0」 one, 「5」 and 「7米」 none."""
+    return len(re.match(r'[^.]*\.?(\d*)',value[4])[1])
+
+
+def _ref_round(value,places):
+    """A value from _ref_values rounded half up to places decimals digit by digit, as 「四舍五入」 does; unit and writing kept."""
+    negative,whole,part,unit,written=value
+    digits=list(whole+part.ljust(places,'0')[:places])
+    if part[places:places+1]>='5':  # Carry through any run of 9s without int(), however long the value.
+        n=len(digits)-1
+        while n>=0 and digits[n]=='9': digits[n]='0';n-=1
+        if n<0: digits.insert(0,'1')
+        else: digits[n]=str(int(digits[n])+1)
+    digits=''.join(digits);split=len(digits)-places
+    whole,part=digits[:split].lstrip('0'),digits[split:].rstrip('0')
+    return (negative and bool(whole or part),whole,part,unit,written)
+
+
+def _ref_values(text):
+    """Each whole result of one answer in its written order, or None when the answer is not a list of plain decimals.
+    「3，5」 is two results in this order; 「62或72」, an expression, other words, a fraction or 3.33... is none here.
+    The sign counts (-5 is not 5), 5.0 is 5 and full-width ５０％ is 50%; every written digit is kept, however long."""
+    narrow=str.maketrans({0x2212:'-',**{code:code-0xFEE0 for code in range(0xFF01,0xFF5F)}})  # Full-width ASCII and − as ASCII.
+    text=str(text).strip()
+    if text.endswith(tuple('，,；;.．!！。、')): text=text[:-1].rstrip()  # One closing mark only: 3.33... or 5。。。 still trails on.
+    if not text or re.search(r'\d\s*,\s*\d',text): return None  # 3,500 may group digits rather than list two results.
+    values=[]
+    for written in re.split(r'\s*[，,、；;]\s*',text):
+        match=re.fullmatch(r'([+-]?)(?=\.?[0-9])([0-9]*)(?:\.([0-9]+))?\s*((?:[^\W\d_]|[%‰°℃])*)',written.translate(narrow))
         if not match: return None
-        sign,whole,part,unit=match.groups();whole,part=whole.lstrip('0'),(part or '').rstrip('0')
-        values.append((sign=='-' and bool(whole or part),whole,part,unit))
-    if values[0][3]!=values[1][3]: return None  # 50厘米 against 0.5米 needs a conversion this check never makes.
-    return 'same' if values[0]==values[1] else 'different'
+        sign,whole,part,unit=match.groups()
+        written=sign+whole+('.'+part if part is not None else '')+unit  # As written, only spacing and width aside.
+        whole,part=whole.lstrip('0'),(part or '').rstrip('0')
+        values.append((sign=='-' and bool(whole or part),whole,part,unit,written))
+    return values
+
+
+def _ref_compare(student,reference):
+    """'same', 'different' or 'unit' for two lists of results from _ref_values, position by position; None if either is None.
+    A result left out, added or moved is a difference however the rest agree. Units written alike compare digit for digit;
+    50厘米 and 0.5米 compare after the decimal point shifts; 7 against 7米, or 5个 against 5米, is 'unit': nothing proves either."""
+    if student is None or reference is None: return None
+    if len(student)!=len(reference): return 'different'
+    def amount(value,power):  # value×10**power as (sign, digits, exponent), without int() or rounding
+        digits=(value[1]+value[2]).lstrip('0');kept=digits.rstrip('0')
+        return (value[0],kept,power-len(value[2])+len(digits)-len(kept) if kept else 0)
+    found=set()
+    for mine,theirs in zip(student,reference):
+        scale=_REF_UNIT_SCALE.get(mine[3]),_REF_UNIT_SCALE.get(theirs[3])
+        if mine[3]==theirs[3]: found.add('same' if mine[:3]==theirs[:3] else 'different')
+        elif None in scale or scale[0][0]!=scale[1][0]: found.add('unit')
+        elif amount(mine,scale[0][1])==amount(theirs,scale[1][1]): found.add('same')
+        else: found.add('unit' if '' in (mine[3],theirs[3]) else 'different')  # A bare 50 against 50% may only omit the %.
+    return 'different' if 'different' in found else 'unit' if 'unit' in found else 'same'
+
+
+def _ref_value_relation(student,reference):
+    """'same', 'different' or 'unit' when each whole answer is a list of complete plain decimals; otherwise None.
+    Nothing is solved, cut short or picked out of more, so an answer this cannot read leaves the model's grade unproven."""
+    return _ref_compare(_ref_values(student),_ref_values(reference))
+
+
+def _ref_pair(first,second,limits=(40,40)):
+    """Two values for one message: whole when short, or cut where their difference still shows. Past that, both are cut
+    from one place just before where they part, so two long values never show alike and a lone 「…9」 against 「…9.000」 stays."""
+    shown=lambda value,limit:value if len(value)<=limit else value[:limit]+'…'
+    at=next((n for n,(a,b) in enumerate(zip(first,second)) if a!=b),min(len(first),len(second)))
+    if first==second or at<min(limits) or len(first)<=limits[0] and len(second)<=limits[1]:
+        return shown(first,limits[0]),shown(second,limits[1]),''
+    width=min(limits);start=max(0,at-width//2)
+    cut=lambda value:('…' if start else '')+value[start:start+width]+('…' if len(value)>start+width else '')
+    return cut(first),cut(second),'（两者自第%d字起不同）'%(at+1)
+
+
+def _ref_apart(values,limit=40):
+    """Several different values for one message, never shown alike: two as _ref_pair cuts them; more each whole when short
+    or cut at the limit, and where long ones still share that start, each around where it parts from its nearest, place named."""
+    if len(values)==2: return list(_ref_pair(*values,(limit,limit))[:2])
+    shown=[value if len(value)<=limit else value[:limit]+'…' for value in values]
+    if len(set(shown))==len(shown): return shown
+    part=lambda a,b:next((n for n,(x,y) in enumerate(zip(a,b)) if x!=y),min(len(a),len(b)))
+    for n,value in enumerate(values):
+        start=max(0,max(part(value,other) for m,other in enumerate(values) if m!=n)-limit//2)
+        if len(value)>limit and start:
+            shown[n]='第%d字起…%s%s'%(start+1,value[start:start+limit],'…' if len(value)>start+limit else '')
+    return shown if len(set(shown))==len(shown) else ['%d个较长答案开头相同，请对照教师原件'%len(values)]
+
+
+def _ref_cited(reason,basis,answers):
+    """Whether a reason rests on words the question or teacher text itself writes, beyond the compared answers and the
+    wording of a comparison: 「保留一位小数」 in both is cited; 「作答5.0与教师参考5不同」 alone cites nothing."""
+    for answer in sorted(answers,key=len,reverse=True): reason=reason.replace(answer,'') if answer else reason
+    pairs=lambda text:{text[n:n+2] for n in range(len(text)-1) if all('一'<=ch<='鿿' for ch in text[n:n+2])}
+    return bool(pairs(reason)&pairs(basis)-{'作答','教师','参考','答案','题目','本题','要求','不同','一致','正确','错误','孩子','学生','数值','结果'})
+
+
+def _ref_value_check(item,student,reference):
+    """Hold an objective grade to the whole results it compares, in place; where nothing is proven the model's grade stands.
+    A whole numeric equation 「2+3=5」 is compared by the result it states. A difference in a value, its sign, any digit,
+    the count or the order of results never stays correct; an evidenced incorrect stays. Equal results keep an incorrect only
+    when its reason cites words of the question or teacher text (a precision, unit, equation or step requirement), and keep
+    a correct written another way only when the question states no such requirement. A unit neither written alike, printed
+    after the blank nor converted leaves a correct open; a question that leaves the value to the child is no value check."""
+    judged,question=item['judgment'],item['question']
+    if judged not in ('correct','incorrect'): return
+    sides=[]
+    for text in (student,reference):
+        values=_ref_values(text);equation=values is None
+        if equation: values=_ref_values(_ref_result(text) or '')
+        if values is None: return
+        sides.append((values,_ref_unspaced(text) if equation else [value[4] for value in values]))
+    (mine,mine_form),(theirs,theirs_form)=sides
+    units={value[3] for value in theirs}
+    printed=len(units)==1 and '' not in units and all(not value[3] for value in mine) and re.search(
+        r'(?:_{2,}|＿{2,}|[（(]\s*[)）]|□+)\s*'+re.escape(min(units)),question)
+    if printed:  # The unit is printed after the blank: the child writes the number only.
+        mine=[value[:3]+(min(units),value[4]+min(units)) for value in mine]
+        if not isinstance(mine_form,str): mine_form=[value[4] for value in mine]
+    relation=_ref_compare(mine,theirs)
+    shown_mine,shown_theirs,where=_ref_pair(student,reference)
+    cited=judged=='incorrect' and _ref_cited(item['error_reason'],question+'\n'+reference,(student,reference))
+    def pending(note):
+        item.update(judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty=(note+item['uncertainty'].strip())[:300])
+    free=_REF_FREE.search(question)
+    if free:
+        if judged=='correct' or cited: return
+        return pending('题面允许自选（“%s”），教师参考“%s”只能作示例；所判需订正的原因未见题面依据，未判定；请对照原题核对。'%(free[0],shown_theirs))
+    if relation=='different':
+        if judged=='incorrect': return
+        found=('结果个数不同（作答%d个、教师参考%d个）'%(len(mine),len(theirs)) if len(mine)!=len(theirs) else
+               '第%s个结果不同'%'、'.join(str(n) for n,(a,b) in enumerate(zip(mine,theirs),1) if _ref_compare([a],[b])=='different')
+               if len(mine)>1 else '数值不同')
+        return pending('作答“%s”与教师参考“%s”%s%s，却判为与参考一致，二者矛盾，未判定；请对照原题与教师原件核对。'%(
+            shown_mine,shown_theirs,found,where))
+    if relation=='unit':
+        if judged=='incorrect': return  # Not proven wrong by the program, nor proven right: the model's evidence stands.
+        return pending('作答“%s”与教师参考“%s”单位写法不同%s；单位是否预印在空格外或能否换算未能核明，未判定；请对照原题核对单位。'%(
+            shown_mine,shown_theirs,where))
+    found='换算后数值相同' if any(a[3]!=b[3] for a,b in zip(mine,theirs)) else '数值相同'
+    required=_REF_FORM.search(question)
+    if judged=='correct':
+        if mine_form==theirs_form or not required: return
+        return pending('题面写有“%s”，作答“%s”与教师参考“%s”%s但写法不同%s，是否符合该要求未能核明，未判定；请对照原题核对。'%(
+            required[0],shown_mine,shown_theirs,found,where))
+    if cited: return  # The precision, unit, equation or step the question asks for is the real reason; equal values do not undo it.
+    return pending('作答“%s”与教师参考“%s”%s%s，却判为需订正，二者矛盾，未判定；请对照原题与教师原件核对。'%(
+        shown_mine,shown_theirs,found,where))
 
 
 def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset()):
@@ -1432,7 +1593,8 @@ def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset
         elif claimed is not None and not images and any(relation=='other' for relation,_ in related):
             pending('','教师参考文字只写了别的卷别或大题的同号题，模型所标教师参考无从核实，未判定，请核明后补查。')
         return
-    if len(same)>1: return pending('','教师参考文字对本题写有不同答案（%s），未判定，待老师或家长核对。'%'／'.join(shown(a,40) for a in same))
+    if len(same)>1: return pending('','教师参考文字对本题写有不同答案（%s），未判定，待老师或家长核对。'%'／'.join(
+        _ref_pair(*same)[:2] if len(same)==2 else [shown(a,40) for a in same]))  # Two long answers never show alike.
     teacher=same[0];letter=re.fullmatch('[A-H]',teacher)
     over='教师参考超过结果字数上限，只列前995字，完整内容以教师原件为准。' if len(teacher)>995 else ''
     gap=_condition_gap(teacher,paper=_ref_label_paper(item['label'],titles),titles=titles) if item['judgment']!='unknown' else ''
@@ -1440,8 +1602,9 @@ def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset
         return pending(item['answer'] if claimed is not None and _ref_agrees(claimed,teacher) else '教师参考：'+shown(teacher),
                        '教师参考原文写明本题缺少决定性条件（“%s”），不能核定作答对错，未判定；请补全该条件后再核对。'%shown(gap,120)+over)
     if claimed is not None and _ref_agrees(claimed,teacher): return
-    misquoted=('模型所称教师参考“%s”只写了教师参考原文“%s”的开头，与全文附注的对应尚未核明，未判定；请对照教师原件核对。' if _ref_leads(claimed,teacher)
-               else '模型所称教师参考“%s”与教师参考原文“%s”不一致，未判定；请对照教师原件核对。')%(shown(claimed,40),shown(teacher,60)) if claimed is not None else ''
+    mine,theirs,where=_ref_pair(claimed,teacher,(40,60)) if claimed is not None else ('','','')  # Cut where they part.
+    misquoted=('模型所称教师参考“%s”只写了教师参考原文“%s”的开头，与全文附注的对应尚未核明，未判定；请对照教师原件核对。'%(mine,theirs) if _ref_leads(claimed,teacher)
+               else '模型所称教师参考“%s”与教师参考原文“%s”不一致%s，未判定；请对照教师原件核对。'%(mine,theirs,where)) if claimed is not None else ''
     if misquoted and images: return pending('教师参考：'+shown(teacher),misquoted)
     student=item['student_answer'].strip()
     if letter and question_kind=='objective' and item['judgment']!='unknown' and re.fullmatch('[A-H]',student):
@@ -1619,22 +1782,16 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
                         source,gap if len(gap)<=120 else gap[:120]+'…')+item['uncertainty'].strip())[:300])
         if review and teacher_reference and question_kind=='objective' and item['answer'].startswith('教师参考：'):
             # Runs after the source check: a teacher answer quoted right never makes a different child answer agree with it.
-            # Literal uppercase A-H, or one whole value in one unit (_ref_value_relation); other answers need an evidenced comparator.
+            # Literal uppercase A-H, or whole results read in order (_ref_value_check); other answers need an evidenced comparator.
             student=item['student_answer'].strip()
             reference=item['answer'].removeprefix('教师参考：').strip()
-            relation=_ref_value_relation(student,reference)
             if (re.fullmatch('[A-H]',student) and re.fullmatch('[A-H]',reference)
                     and item['judgment'] in ('correct','incorrect')
                     and (student==reference)!=(item['judgment']=='correct')):
                 item['judgment']='unknown'
                 item['error_reason']=item['possible_cause']=item['steps']=''
                 item['uncertainty']=('字母作答与教师参考的比较和模型判定矛盾，请重新核对。'+item['uncertainty'].strip())[:300]
-            elif relation and item['judgment'] in ('correct','incorrect') and (relation=='same')!=(item['judgment']=='correct'):
-                shown=lambda value:value if len(value)<=40 else value[:40]+'…'
-                found,graded=('数值相同','需订正') if relation=='same' else ('数值不同','与参考一致')
-                item.update(judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty=(
-                    '作答“%s”与教师参考“%s”%s，却判为%s，二者矛盾，未判定；请对照原题与教师原件核对。'%(
-                        shown(student),shown(reference),found,graded)+item['uncertainty'].strip())[:300])
+            else: _ref_value_check(item,student,reference)
         if review and not item['question'].strip() and question_kind!='objective':
             # Matching reference words cannot establish a subjective answer's completeness.
             # Keep the observed answer and teacher original, but not the model's unsupported grade.
