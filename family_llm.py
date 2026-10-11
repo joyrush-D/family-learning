@@ -1530,13 +1530,16 @@ def _ref_whose(question,count,at):
 
 def _ref_cites(reason,mine):
     """The results a model's reason names, as indexes into mine (_ref_values): by number (第二项, 第2个, （2）, ②, 第二根),
-    else by a child's value as written there (「作答4.47…」); every result when it names none, as the one of one answer."""
+    else by a child's value as written there (「作答4.47…」); every result when it names none, as the one of one answer.
+    A number names its own result alone, whatever value the reason also quotes; a number the answer has no result for
+    names none (an empty set), so that reason rests on no result here, never on every result nor on a value it quotes."""
     every=set(range(len(mine)))
     if len(mine)<2: return every
-    named={n-1 for m,n in _ref_marks(reason)}&every
+    named={n-1 for m,n in _ref_marks(reason)}
+    if named: return named if named<=every else set()
     quoted={n for n,value in enumerate(mine) if re.search(
         r'(?<![\d.第])'+re.escape(value[4][:len(value[4])-len(value[3])])+r'(?![\d位])(?!\.\d)',reason)}
-    return named or quoted or every
+    return quoted or every
 
 
 def _ref_places_each(question,count):
@@ -1558,6 +1561,16 @@ def _ref_places_each(question,count):
     return places
 
 
+def _ref_printed(question,match):
+    """Whether the 单位 at match only tells that the page already prints or gives the unit (「（单位已印在空格后）」,
+    「空格后已印好单位」, 「单位已经给出」): such words ask the child for nothing, neither a unit nor its waiver. Read
+    right at the word, so 「写单位」, 「带单位」, 「用米作单位」, 「与已给出的单位一致」 or 「确认已写单位」 still ask one."""
+    near=r'[^，,、；;。！？!?\n（()）]{0,6}?'  # A few words of the same clause: 「单位已在空格后印好」.
+    return bool(re.search(r'印[好有出上了着]*$',question[:match.start()]) or re.match(
+        r'\s*[：:]?\s*(?:在'+near+r')?[都均也皆是]?(?:(?:已经?|早已)(?:预先?|提前|打|在'+near+r')?[印给]|(?:预先?|提前|打)?印)',
+        question[match.end():]))
+
+
 def _ref_kept(match,question,sides,cited=None):
     """Whether the child's results (sides, as _ref_value_check reads them) keep the writing one _REF_FORM match asks, held
     to the results whose own words ask it (_ref_whose) and, with cited, to those of them a reason names: True when provably
@@ -1566,10 +1579,12 @@ def _ref_kept(match,question,sides,cited=None):
     written, so 「原单位」 is kept when neither writes a unit and broken by another; 「写出算式」 or 「列式」 is kept by a whole
     equation, its result already compared, and broken by a lone value, as steps (过程, 竖式) are, which nothing here proves
     kept. Any other writing is unproven, as is one a reason names for a result it is not proven to be asked of; where whose
-    words ask it is unproven, it is kept only when every result keeps it and broken only when every result breaks it."""
+    words ask it is unproven, it is kept only when every result keeps it and broken only when every result breaks it.
+    Words that only tell the unit is printed (_ref_printed) ask nothing, so nothing there is broken."""
     (mine,mine_form),(theirs,_)=sides
     key=re.search('百分数|千分数|单位|'+_REF_WORK,match[0])
     if not key: return None
+    if key[0]=='单位' and _ref_printed(question,match): return True
     start,end,whose=_ref_whose(question,len(mine),match.start())
     if cited is not None and not (set(whose)&set(cited) if whose else set(cited)>=set(range(len(mine)))): return None
     if key[0] in ('算式','列式'): return isinstance(mine_form,str)
@@ -1786,8 +1801,10 @@ def _ref_value_check(item,student,reference):
     if len(mine)>1 and len(mine)==len(theirs):
         # Several results: one takes the teacher's unit only where its own words (_ref_whose) waive it or print it after
         # the blank and no words that may be its own ask one, so one result's waiver never excuses another's missing unit.
+        # Words that only tell the unit is printed (_ref_printed) neither ask nor waive one; a negated word still waives.
         count=len(mine);whose=lambda at:_ref_whose(question,count,at)[2]
-        spoken=[(_ref_binds(question,m.start(),m.end()),whose(m.start())) for m in re.finditer('单位',question)]
+        spoken=[(_ref_binds(question,m.start(),m.end()),whose(m.start())) for m in re.finditer('单位',question)
+                if not _ref_printed(question,m) or _ref_binds(question,m.start(),m.end())=='no']
         waived=lambda n,unit:not any(scope!='no' and (results is None or n in results) for scope,results in spoken) and (
             any(n in (results or ()) for _,results in spoken)
             or any(n in (whose(m.start()) or ()) for m in re.finditer(blank+re.escape(unit),question)))

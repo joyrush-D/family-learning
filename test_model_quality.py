@@ -1993,6 +1993,48 @@ class ExactAnswerTest(unittest.TestCase):
         q = review(equation, '14', '14', 'incorrect', reason, steps)
         self.assertEqual([q['judgment'], q['error_reason'], q['steps']], ['incorrect', reason, steps])
 
+    def test_teacher_reference_holds_a_named_result_and_a_printed_unit_to_that_very_result(self):
+        import family_llm
+        def review(question, teacher, student, judgment='correct', error_reason='', possible_cause='', steps=''):
+            # The complete teacher-source path above, the model's own grade, reason, cause and steps given as they would be returned.
+            item = dict(label='第1题', question=question, student_answer=student, answer='教师参考：' + teacher, judgment=judgment,
+                        error_reason=error_reason, possible_cause=possible_cause, steps=steps, uncertainty='', question_kind='objective')
+            reply = dict(items=[item], coverage='已按文字原件核对全部题号。', comparison='', question_labels=['第1题'])
+            with patch.object(family_llm, '_chat_json', return_value=reply):
+                [q] = family_llm.homework_reference_draft([], review=True, data_path=None, question_documents=[dict(
+                    name='三年级数学练习-虚构.txt', text='三年级数学练习（虚构）\n1. %s\n孩子作答：%s\n' % (question, student))],
+                    reference_documents=[dict(name='教师参考答案-虚构.txt', text='教师参考答案（虚构）\n1. %s\n' % teacher)])['questions']
+            self.assertEqual([q['answer'], q['student_answer'], q['question']], ['教师参考：' + teacher, student, question])
+            return q
+        fields = ('judgment', 'error_reason', 'possible_cause', 'steps')
+        # 1. A reason naming a result the answer does not have rests on no result: neither every result nor a value it also
+        # quotes stands in, though another result really breaks its own precision. Named rightly, all the model gave stays.
+        pair, teacher, student = '第一项把8.2463保留一位小数，第二项把5.1379保留两位小数。', '8.2463，5.1379', '8.2463，5.14'
+        cause, steps = '可能漏看了第一项要求的位数，需问孩子。', '把8.2463保留一位小数，写成8.2。'
+        reason = '第一项要求保留一位小数，作答8.2463保留了四位小数。'
+        self.assertEqual([review(pair, teacher, student, 'incorrect', reason, cause, steps)[k] for k in fields],
+                         ['incorrect', reason, cause, steps])
+        for reason in ('第三项要求保留一位小数，作答8.2463保留了四位小数。', '第三项没有保留一位小数。'):
+            q = review(pair, teacher, student, 'incorrect', reason, cause, steps)
+            self.assertEqual([q[k] for k in fields], ['unknown', '', '', ''], reason)
+            self.assertIn('却判为需订正', q['uncertainty'], reason)
+        # An ordinary numeric difference, where no writing is asked, stays incorrect on its own evidence.
+        sums, reason = '依次写出两个结果：第一项算4.36+2.5，第二项算9.1-3.75。', '第二项应为5.35，作答5.45与教师参考不同。'
+        cause, steps = '可能在退位减法时算错，需问孩子。', '重新计算9.1-3.75=5.35。'
+        self.assertEqual([review(sums, '6.86，5.35', '6.86，5.45', 'incorrect', reason, cause, steps)[k] for k in fields],
+                         ['incorrect', reason, cause, steps])
+        # 2. A unit printed after its ordered blank is not the child's to write, with or without words telling so; it is that
+        # result's alone, and a unit the question still asks for, or a reason blaming the printed one, stays open.
+        printed, teacher = '第一个空：____厘米（单位已印在空格后）；第二个空：____厘米。', '4.5厘米，7厘米'
+        for question in (printed, printed.replace('（单位已印在空格后）', '')):
+            self.assertEqual(review(question, teacher, '4.5，7')['judgment'], 'correct', question)
+        q = review(printed, teacher, '4.5，7', 'incorrect', '第一个空没有写单位厘米。')
+        self.assertEqual([q[k] for k in fields], ['unknown', '', '', ''])
+        lone = '第一个空：____厘米（单位已印在空格后）；第二个空：____。'
+        self.assertEqual([review(lone, teacher, s)['judgment'] for s in ('4.5，7厘米', '4.5，7')], ['correct', 'unknown'])
+        asked = '第一个空：____厘米（单位已印在空格后，答案仍要写单位）；第二个空：____厘米。'
+        self.assertEqual([review(asked, teacher, s)['judgment'] for s in ('4.5厘米，7', '4.5，7')], ['correct', 'unknown'])
+
 
 class ScorerHardeningTest(unittest.TestCase):
     def test_dismissed_negated_and_foreign_rows_fail(self):
