@@ -1411,28 +1411,67 @@ _REF_FORM=re.compile(r'(?:保留|精确到|写成|化成|改写成)[^，。；;,
 _REF_PLACES=re.compile(r'保留(\d{1,2}|[一二两三四五六七八九])位小数|(?:精确|保留|四舍五入)到(?:([十百千万])分位|0\.(0{0,8})1(?![\d.])'
                        r'|个位|整数位?)|保留整数(?!部分)')
 _REF_CLAUSE=r'[，,、；;。！？!?\n（()）]'
+_REF_CUT=r'去尾|进一|收尾|舍去|截取|截断|直接取|向上取|向下取'
+_REF_UNROUNDED=r'[不没未无非别勿免否][^，,。；;！？!?\n]{0,6}(?:四舍五入|近似)'
+
+
+def _ref_scope(question,start,end):
+    """How the requirement written at question[start:end] binds the final result, read in its own clause only: 'yes' when
+    asked outright, 'no' when that clause negates it, 'step' when it is for a step before the last (先…, 中间…, …后再…),
+    None when conditional, optional or one of alternatives, so unproven. Another clause's 不 or 如果 is not this one's."""
+    clauses=re.split(_REF_CLAUSE,question[:start]);head=clauses[-1]
+    before=next((c for c in reversed(clauses[:-1]) if c.strip()),'')
+    tail=re.sub('[均都皆即]可以?','',re.split(_REF_CLAUSE,question[end:])[0])  # 「…即可」 asks it; 「可以…」 only allows it.
+    if re.search(r'[不没未无非别勿免否]|毋须',head): return 'no'
+    if re.search(r'先|中间|过程|每一?步|计算时|计算中',head) or re.search(r'中间|过程中|每一?步',tail) or re.search(
+            r'^\s*以?后|再|然后|接着|随后|之后|以后',question[end:]):
+        return 'step'
+    if (re.search(r'[不没未无非别勿免否或可亦就则时]|如果|若|假如|假设|倘|要是|万一|的话|那么|如需|必要',head+tail)
+            or re.search(r'如果|若|假如|假设|倘|要是|万一|的话|如需|时$',before)):
+        return None
+    return 'yes'
+
+
+def _ref_digits(match):
+    """The decimals one precision match names: 「两位小数」 and 「百分位」 2, 「0.001」 3, 「个位」 and 「整数」 0."""
+    n=match[1] or ''
+    return (int(n) if n.isdigit() else ' 一二三四五六七八九'.find(n.replace('两','二')) if n
+            else '个十百千万'.find(match[2]) if match[2] else len(match[3])+1 if match[3] is not None else 0)
 
 
 def _ref_places(question):
     """The decimals a question positively asks its one final result to keep, half up: 「保留两位小数」, 「精确到百分位」 and
-    「精确到0.01」 are 2, 「精确到个位」 is 0. None when it asks none or several, or when any is negated, conditional or
-    optional, for a step before the last (先…再…, …后), for one of several parts, or cut another way (去尾, 进一, 舍去):
-    then which decimals the result is written with is unproven."""
-    if re.search(r'去尾|进一|收尾|舍去|截取|截断|直接取|向上取|向下取|[不没未无非别勿免否][^，,。；;！？!?\n]{0,6}(?:四舍五入|近似)'
-                 r'|[（(]\s*[2-9二三四五六七八九]\s*[)）]|[②③④⑤⑥⑦⑧⑨]|第[2-9二三四五六七八九]空',question):
+    「精确到0.01」 are 2, 「精确到个位」 is 0. Each mention is read in its own clause (_ref_scope): one negated or for a step
+    before the last never stands for the final result nor undoes a different positive one; a conditional, optional or
+    alternative other decimals leaves it unproven. None when no one decimals is positively asked, when those very decimals
+    are also negated, for one of several parts, or when the result is cut another way (去尾, 进一, 舍去) or not rounded."""
+    if re.search(_REF_CUT+r'|[（(]\s*[2-9二三四五六七八九]\s*[)）]|[②③④⑤⑥⑦⑧⑨]|第[2-9二三四五六七八九]空',question):
         return None
-    found=set()
-    for m in _REF_PLACES.finditer(question):
-        clauses=re.split(_REF_CLAUSE,question[:m.start()]);head=clauses[-1]
-        before=next((c for c in reversed(clauses[:-1]) if c.strip()),'');tail=re.split(_REF_CLAUSE,question[m.end():])[0]
-        if (re.search(r'[不没未无非别勿免否或可亦先就则时]|如果|若|假如|假设|倘|要是|万一|的话|那么|中间|过程|每一?步',head+tail)
-                or re.search(r'如果|若|假如|假设|倘|要是|万一|的话|如需|时$',before)
-                or re.search(r'^\s*以?后|再|然后|接着|随后|之后|以后',question[m.end():])):
-            return None
-        n=m[1] or ''
-        found.add(int(n) if n.isdigit() else ' 一二三四五六七八九'.find(n.replace('两','二')) if n
-                  else '个十百千万'.find(m[2]) if m[2] else len(m[3])+1 if m[3] is not None else 0)
-    return found.pop() if len(found)==1 else None
+    if any(_ref_scope(question,m.start(),m.end())!='step' for m in re.finditer(_REF_UNROUNDED,question)):
+        return None  # 「不要四舍五入」 for the result itself; 「计算过程中不要四舍五入」 is a step's.
+    mentions=[(_ref_digits(m),_ref_scope(question,m.start(),m.end())) for m in _REF_PLACES.finditer(question)]
+    asked={places for places,scope in mentions if scope=='yes'}
+    if len(asked)!=1: return None
+    places=asked.pop()
+    return None if any(scope=='no' and n==places or scope is None and n!=places for n,scope in mentions) else places
+
+
+def _ref_places_each(question,count):
+    """The decimals each of count ordered results must keep: one result by _ref_places; several only by the question's own
+    numbered parts ①… or （1）… in order, one part to each result, None for a part asking none. None when the parts cannot
+    be matched to the results one by one or a precision stands outside them: which result it binds is unproven."""
+    if count==1: return [_ref_places(question)]
+    marks=list(re.finditer(r'[（(]\s*([1-9])\s*[)）]|([①②③④⑤⑥⑦⑧⑨])',question))
+    if [int(m[1]) if m[1] else '①②③④⑤⑥⑦⑧⑨'.index(m[2])+1 for m in marks]!=list(range(1,count+1)): return None
+    if re.search(_REF_CUT+'|'+_REF_UNROUNDED+'|'+_REF_PLACES.pattern,question[:marks[0].start()]): return None
+    return [_ref_places(question[m.end():n.start() if n else len(question)]) for m,n in zip(marks,marks[1:]+[None])]
+
+
+def _ref_form(question,rounded=False):
+    """The first writing (_REF_FORM) the question positively asks of its final result, or None: a word negated, conditional,
+    optional or for an earlier step asks nothing (_ref_scope). With rounded, a precision rounding already meets is left out."""
+    text=re.sub('四舍五入|近似',lambda m:' '*len(m[0]),_REF_PLACES.sub(lambda m:' '*len(m[0]),question)) if rounded else question
+    return next((m[0] for m in _REF_FORM.finditer(text) if _ref_scope(question,m.start(),m.end())=='yes'),None)
 
 
 def _ref_decimals(value):
@@ -1512,24 +1551,85 @@ def _ref_pair(first,second,limits=(40,40)):
 
 def _ref_apart(values,limit=40):
     """Several different values for one message, never shown alike: two as _ref_pair cuts them; more each whole when short
-    or cut at the limit, and where long ones still share that start, each around where it parts from its nearest, place named."""
+    or cut at the limit, and while long ones still show alike, each is cut again around where it parts from the nearest of
+    those it shows alike with, place named, so the real difference shows however long the shared start."""
     if len(values)==2: return list(_ref_pair(*values,(limit,limit))[:2])
     shown=[value if len(value)<=limit else value[:limit]+'…' for value in values]
-    if len(set(shown))==len(shown): return shown
     part=lambda a,b:next((n for n,(x,y) in enumerate(zip(a,b)) if x!=y),min(len(a),len(b)))
-    for n,value in enumerate(values):
-        start=max(0,max(part(value,other) for m,other in enumerate(values) if m!=n)-limit//2)
-        if len(value)>limit and start:
-            shown[n]='第%d字起…%s%s'%(start+1,value[start:start+limit],'…' if len(value)>start+limit else '')
-    return shown if len(set(shown))==len(shown) else ['%d个较长答案开头相同，请对照教师原件'%len(values)]
+    for _ in values:
+        alike={n:[m for m in range(len(values)) if m!=n and shown[m]==shown[n]] for n in range(len(values))}
+        if not any(alike.values()): return shown
+        for n,others in alike.items():
+            if others:
+                start=max(0,max(part(values[n],values[m]) for m in others)-limit//2)
+                shown[n]='第%d字起…%s%s'%(start+1,values[n][start:start+limit],'…' if len(values[n])>start+limit else '')
+    return [text if shown.count(text)==1 else '第%d个答案（与其他答案的差异超出可显示范围）'%(n+1) for n,text in enumerate(shown)]
 
 
-def _ref_cited(reason,basis,answers):
-    """Whether a reason rests on words the question or teacher text itself writes, beyond the compared answers and the
-    wording of a comparison: 「保留一位小数」 in both is cited; 「作答5.0与教师参考5不同」 alone cites nothing."""
-    for answer in sorted(answers,key=len,reverse=True): reason=reason.replace(answer,'') if answer else reason
-    pairs=lambda text:{text[n:n+2] for n in range(len(text)-1) if all('一'<=ch<='鿿' for ch in text[n:n+2])}
-    return bool(pairs(reason)&pairs(basis)-{'作答','教师','参考','答案','题目','本题','要求','不同','一致','正确','错误','孩子','学生','数值','结果'})
+def _ref_conflict(values,room=300):
+    """The note for different teacher answers to one question within room characters, every answer shown apart (_ref_apart)
+    as wide as fits; when even narrow cuts cannot all fit, the first that fit are shown and the count and limit are said."""
+    note='教师参考文字对本题写有不同答案（%s），未判定，待老师或家长核对。'
+    if len(values)==2: return note%'／'.join(_ref_pair(*values)[:2])  # Two long answers never show alike.
+    for limit in (40,30,20,12,8):
+        text=note%'／'.join(_ref_apart(values,limit))
+        if len(text)<=room: return text
+    shown=_ref_apart(values,8)
+    for count in range(len(values)-1,0,-1):
+        text=note%'／'.join(shown[:count])+'共%d个不同答案，说明限%d字只列前%d个；全部答案请沿原入口查看教师原件。'%(len(values),room,count)
+        if len(text)<=room: return text
+    return '教师参考文字对本题写有%d个不同答案，说明限%d字无法逐一列出，未判定；请沿原入口查看教师原件全文。'%(len(values),room)
+
+
+_REF_UNIT=r'\s*(毫米|厘米|分米|千米|公里|米|千克|公斤|克|吨|%|‰)?'
+# A condition the question sets on a value it may leave to the child: 「大于10」, 「不超过5」, 「比20小」, 「3以内」, 「偶数」, 「4的倍数」.
+_REF_BOUND=re.compile(r'(不)?(大于|小于|超过|高于|低于|多于|少于|不足)\s*([+-]?\d+(?:\.\d+)?)'+_REF_UNIT+r'|比\s*([+-]?\d+(?:\.\d+)?)'
+                      +_REF_UNIT+r'\s*([大小多少高低])|([+-]?\d+(?:\.\d+)?)'+_REF_UNIT+r'\s*以([上下内])|([奇偶])数|(\d{1,9})的倍数')
+
+
+def _ref_breaks(match,values):
+    """Whether results from _ref_values break the condition of a _REF_BOUND match: True when one provably does, False when
+    each provably keeps it, None when this cannot tell (another unit). Every written digit counts, compared exactly."""
+    from decimal import Decimal
+    found=set()
+    for negative,whole,part,unit,_ in values:
+        if match[11] or match[12]:  # Parity and multiples are of whole numbers only.
+            mod=int(match[12] or 2);rest=0
+            if not mod: return None
+            for digit in whole or '0': rest=(rest*10+int(digit))%mod
+            found.add(bool(part) or rest!=('偶奇'.index(match[11]) if match[11] else 0));continue
+        if unit!=(match[4] or match[6] or match[9] or ''): return None
+        number,bound=Decimal(('-' if negative else '')+(whole or '0')+'.'+(part or '0')),Decimal(match[3] or match[5] or match[8])
+        keeps=((number>bound if match[2] in ('大于','超过','高于','多于') else number<bound)!=bool(match[1]) if match[2]
+               else number>bound if match[7] and match[7] in '大多高' else number<bound if match[7]
+               else number>=bound if match[10]=='上' else number<=bound)
+        found.add(not keeps)
+    return True if True in found else False if found else None
+
+
+def _ref_cited(reason,question,answers,sides,each):
+    """Whether a reason rests on a requirement the question itself positively asks (_ref_scope 'yes', never one negated,
+    conditional, optional or for an earlier step), names that very requirement, and the child's results provably break it:
+    decimals other than a precision asked (_ref_places_each), only a value where an equation or steps are asked, a unit or
+    percent not used as asked, or a condition on the value (大于10, 偶数) the child's results break and the teacher's keep.
+    A shared word, a requirement the answer meets, or one this cannot check keeps nothing."""
+    (mine,mine_form),(theirs,_)=sides
+    said=bare=re.sub(r'\s','',reason)
+    for answer in sorted(answers,key=len,reverse=True): bare=bare.replace(re.sub(r'\s','',answer),'') if answer.strip() else bare
+    named={_ref_digits(m) for m in re.finditer(r'(\d{1,2}|[一二两三四五六七八九])位小数|([十百千万])分位|0\.(0{0,8})1(?![\d.])|个位|整数',bare)}
+    if any(p is not None and p in named and _ref_decimals(value)!=p for p,value in zip(each,mine)): return True
+    for m in _REF_FORM.finditer(question):
+        key=re.search(r'列式|竖式|脱式|递等式|过程|步骤|单位|百分数|千分数',m[0])
+        if not key or key[0] not in said or _ref_scope(question,m.start(),m.end())!='yes': continue
+        if key[0] in ('百分数','千分数'):
+            if any(value[3]!=('%' if key[0]=='百分数' else '‰') for value in mine): return True
+        elif key[0]=='单位':
+            unit=re.search(r'[用以]\s*([^\W\d_]{1,3}?)\s*[作为当]单位|单位\s*[用是为：:]\s*([^\W\d_]{1,3})',question)
+            unit=unit and (unit[1] or unit[2])
+            if any(value[3]!=unit if unit else not value[3] for value in mine): return True
+        elif not isinstance(mine_form,str): return True  # Only a value is written where an equation or steps are asked.
+    return any(_ref_scope(question,m.start(),m.end())=='yes' and re.sub(r'\s','',m[0]) in said
+               and _ref_breaks(m,mine) is True and _ref_breaks(m,theirs) is False for m in _REF_BOUND.finditer(question))
 
 
 def _ref_value_check(item,student,reference):
@@ -1551,21 +1651,25 @@ def _ref_value_check(item,student,reference):
         sides.append((values,_ref_unspaced(text) if equation else [value[4] for value in values]))
     (mine,mine_form),(theirs,theirs_form)=sides
     units={value[3] for value in theirs}
-    printed=len(units)==1 and '' not in units and all(not value[3] for value in mine) and re.search(
-        r'(?:_{2,}|＿{2,}|[（(]\s*[)）]|□+)\s*'+re.escape(min(units)),question)
-    if printed:  # The unit is printed after the blank: the child writes the number only.
+    unitless=any(_ref_scope(question,m.start(),m.end())=='no' for m in re.finditer('单位',question))  # 「不用写单位」
+    printed=len(units)==1 and '' not in units and all(not value[3] for value in mine) and (unitless or re.search(
+        r'(?:_{2,}|＿{2,}|[（(]\s*[)）]|□+)\s*'+re.escape(min(units)),question))
+    if printed:  # The unit is printed after the blank, or the question asks for none: the child writes the number only.
         mine=[value[:3]+(min(units),value[4]+min(units)) for value in mine]
         if not isinstance(mine_form,str): mine_form=[value[4] for value in mine]
-    relation=_ref_compare(mine,theirs)
-    # The precision the question positively asks of its one result is met only by exactly those decimals in the teacher's
-    # unit; then the teacher's value is rounded half up for this comparison alone. Nothing written is changed.
-    places=_ref_places(question) if len(mine)==len(theirs)==1 and mine[0][3]==theirs[0][3] else None
-    exact=places is not None and _ref_decimals(mine[0])==places
-    if exact:
-        rounded=_ref_round(theirs[0],places);relation=_ref_compare(mine,[rounded])
-        rounded=('-' if rounded[0] else '')+(rounded[1] or '0')+('.'+rounded[2].ljust(places,'0') if places else '')+rounded[3]
+    # Each result keeps the precision its own part positively asks (_ref_places_each), met only by exactly those decimals in
+    # the teacher's unit; that teacher value alone is rounded half up, in a copy for this comparison. Nothing written changes.
+    each=_ref_places_each(question,len(mine)) if len(mine)==len(theirs) else None
+    each=[p if p is not None and a[3]==b[3] else None for p,a,b in zip(each,mine,theirs)] if each else [None]*len(theirs)
+    short=[n for n,p in enumerate(each) if p is not None and _ref_decimals(mine[n])!=p]
+    exact=not short and any(p is not None for p in each)
+    compared=[_ref_round(value,each[n]) if each[n] is not None and not short else value for n,value in enumerate(theirs)]
+    relation=_ref_compare(mine,compared)
+    if exact and not isinstance(theirs_form,str):
+        theirs_form=[value[4] if each[n] is None else ('-' if value[0] else '')+(value[1] or '0')+(
+            '.'+value[2].ljust(each[n],'0') if each[n] else '')+value[3] for n,value in enumerate(compared)]
     shown_mine,shown_theirs,where=_ref_pair(student,reference)
-    cited=judged=='incorrect' and _ref_cited(item['error_reason'],question+'\n'+reference,(student,reference))
+    cited=judged=='incorrect' and _ref_cited(item['error_reason'],question,(student,reference),((mine,mine_form),(theirs,theirs_form)),each)
     def pending(note):
         item.update(judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty=(note+item['uncertainty'].strip())[:300])
     free=_REF_FREE.search(question)
@@ -1575,7 +1679,8 @@ def _ref_value_check(item,student,reference):
     if relation=='different':
         if judged=='incorrect': return
         found=('结果个数不同（作答%d个、教师参考%d个）'%(len(mine),len(theirs)) if len(mine)!=len(theirs) else
-               '第%s个结果不同'%'、'.join(str(n) for n,(a,b) in enumerate(zip(mine,theirs),1) if _ref_compare([a],[b])=='different')
+               ('按题面要求的精度四舍五入后' if exact else '')+'第%s个结果不同'%'、'.join(
+                   str(n) for n,(a,b) in enumerate(zip(mine,compared),1) if _ref_compare([a],[b])=='different')
                if len(mine)>1 else '按题面要求的精度四舍五入后数值仍不同' if exact else '数值不同')
         return pending('作答“%s”与教师参考“%s”%s%s，却判为与参考一致，二者矛盾，未判定；请对照原题与教师原件核对。'%(
             shown_mine,shown_theirs,found,where))
@@ -1584,18 +1689,22 @@ def _ref_value_check(item,student,reference):
         return pending('作答“%s”与教师参考“%s”单位写法不同%s；单位是否预印在空格外或能否换算未能核明，未判定；请对照原题核对单位。'%(
             shown_mine,shown_theirs,where))
     found='换算后数值相同' if any(a[3]!=b[3] for a,b in zip(mine,theirs)) else '数值相同'
-    required=_REF_FORM.search(question)
-    if exact:  # Rounding meets the precision alone: a unit or representation also asked for still needs the same writing.
-        found='按题面要求的精度四舍五入后相同'
-        required=_REF_FORM.search(re.sub('四舍五入|近似',' ',_REF_PLACES.sub(' ',question)))
-        if not isinstance(theirs_form,str): theirs_form=[rounded]
+    # Rounding meets the precision alone: a unit or representation also positively asked still needs the same writing.
+    required=_ref_form(question,exact)
+    if exact: found='按题面要求的精度四舍五入后相同'
     if judged=='correct':
-        if places is not None and not exact:  # Equal values, or the very teacher text, are not the decimals asked for.
-            return pending('题面写有“%s”，作答“%s”写了%d位小数，与所要求的位数不同；与教师参考“%s”%s%s，未判定；请对照原题核对。'%(
-                _REF_PLACES.search(question)[0],shown_mine,_ref_decimals(mine[0]),shown_theirs,found,where))
+        if short:  # Equal values, or the very teacher text, are not the decimals asked for.
+            if len(mine)==1:
+                asked=next(m[0] for m in _REF_PLACES.finditer(question) if _ref_scope(question,m.start(),m.end())=='yes')
+                wrote='写了%d位小数'%_ref_decimals(mine[0])
+            else:
+                asked='、'.join('第%d个结果保留%d位小数'%(n+1,each[n]) for n in short)
+                wrote='、'.join('第%d个结果写了%d位小数'%(n+1,_ref_decimals(mine[n])) for n in short)
+            return pending('题面写有“%s”，作答“%s”%s，与所要求的位数不同；与教师参考“%s”%s%s，未判定；请对照原题核对。'%(
+                asked,shown_mine,wrote,shown_theirs,found,where))
         if mine_form==theirs_form or not required: return
         return pending('题面写有“%s”，作答“%s”与教师参考“%s”%s但写法不同%s，是否符合该要求未能核明，未判定；请对照原题核对。'%(
-            required[0],shown_mine,shown_theirs,found,where))
+            required,shown_mine,shown_theirs,found,where))
     if cited: return  # The precision, unit, equation or step the question asks for is the real reason; equal values do not undo it.
     return pending('作答“%s”与教师参考“%s”%s%s，却判为需订正，二者矛盾，未判定；请对照原题与教师原件核对。'%(
         shown_mine,shown_theirs,found,where))
@@ -1625,8 +1734,7 @@ def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset
         elif claimed is not None and not images and any(relation=='other' for relation,_ in related):
             pending('','教师参考文字只写了别的卷别或大题的同号题，模型所标教师参考无从核实，未判定，请核明后补查。')
         return
-    if len(same)>1: return pending('','教师参考文字对本题写有不同答案（%s），未判定，待老师或家长核对。'%'／'.join(
-        _ref_pair(*same)[:2] if len(same)==2 else [shown(a,40) for a in same]))  # Two long answers never show alike.
+    if len(same)>1: return pending('',_ref_conflict(same))  # Whole values compared; each shown apart within the 300-character note.
     teacher=same[0];letter=re.fullmatch('[A-H]',teacher)
     over='教师参考超过结果字数上限，只列前995字，完整内容以教师原件为准。' if len(teacher)>995 else ''
     gap=_condition_gap(teacher,paper=_ref_label_paper(item['label'],titles),titles=titles) if item['judgment']!='unknown' else ''
