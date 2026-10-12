@@ -708,6 +708,11 @@ function drawTaskFeedback(task,recentId=null){
  videoDraftSerial++;videoDraftViews.clear();videoReviewPending.clear();videoTranscripts.clear();
  drawTaskSchoolResources(task);
  const records=data.records.filter(r=>(r.source==='事项:'+task.id||r.linked_task_id===task.id)&&r.child===task.child);
+ // Saved work leads as one line in the cards' terms beside the saved task status, so the add-answer entry stays on the first screen; every card below stays complete and the line never marks the work done.
+ if(records.length){
+  const homework=task.agenda?.category==='homework',count=test=>records.filter(test).length,saved=[[homework?'作答':'反馈',count(r=>homeworkAnswerRecord(r,task)),homework?'份':'条'],['检查',count(r=>!!homeworkReviewOriginalId(r)),'次'],['错题',count(r=>r.source==='错题照片核对'),'条'],['订正/复测',count(r=>['订正','复测'].includes(r.followup_kind)),'条']],other=records.length-saved.reduce((n,x)=>n+x[1],0),taskState=status(task)||'待跟进';
+  $('#taskFeedbackIntro').textContent='已保存 '+[...saved.filter(x=>x[1]).map(([name,n,unit])=>name+n+unit),...(other>0?['其他关联'+other+'条']:[])].join(' · ')+'；事项状态：'+(taskState==='不适用'?'无需处理':taskState)+'。';
+ }
  $('#taskFeedbackHistory').innerHTML=records.length?'<h3>已保存的作答与反馈</h3>'+records.map(r=>{
   const reviewOriginal=homeworkReviewOriginalId(r);
   const latest=reviewOriginal&&!records.some(x=>homeworkReviewOriginalId(x)===reviewOriginal&&(x.created>r.created||x.created===r.created&&x.id>r.id));
@@ -1075,7 +1080,7 @@ $('#saveTaskFeedback').onclick=async()=>{
     if(saved&&task&&saved.source==='事项:'+body.task_id&&saved.child===body.child){
      taskFeedbackPending=null;ctx.request_key=crypto.randomUUID();delete f.dataset.saving;lockTaskFeedback(false);
      prepareTaskCapture(task,retained.length?null:saved,saved.id);restoreHomeworkReviewViews(reviewViews,task);pendingIDs=retained.length?retained:pendingIDs;drawPending();render();
-     $('#taskFeedbackStatus').textContent='这次反馈已保存，后来又被更正；请核对上方最新记录。'+(retained.length?'其余材料仍待另存为下一份作答。':'已打开最新记录，请核对后再修改。');
+     $('#taskFeedbackStatus').textContent='这次反馈已保存，后来又被更正；请核对“已保存的作答与反馈”中的最新记录。'+(retained.length?'其余材料仍待另存为下一份作答。':'已打开最新记录，请核对后再修改。');
      return;
     }
     throw Error('原反馈已保存但归属或事项已变化；当前输入保留，请刷新后从原记录核对。');
@@ -1086,7 +1091,7 @@ $('#saveTaskFeedback').onclick=async()=>{
   taskFeedbackPending=null;ctx.request_key=crypto.randomUUID();ctx.record_id=null;ctx.expected_created=null;ctx.originals=[];delete ctx.review_basis;delete ctx.comparison_note;
   const selectedStatus=f.elements.status.value;
   try{await load();const task=data.tasks.find(t=>t.id===body.task_id);if(task){prepareTaskCapture(task,null,result.record_id);
-  restoreHomeworkReviewViews(reviewViews,task);f.elements.status.value=selectedStatus}pendingIDs=retained;taskFeedbackExcluded.clear();drawPending();$('#taskFeedbackStatus').textContent='反馈已保存；事项状态未改变。'+(retained.length?'其余'+retained.length+'份材料仍在下方，请写下一份卷的名称并保存。':task?.agenda?.category==='homework'&&body.attachments.some(id=>['image/jpeg','image/png'].includes(data.uploads.find(a=>a.id===id)?.mime))?'可在上方检查这次作答。':'')}
+  restoreHomeworkReviewViews(reviewViews,task);f.elements.status.value=selectedStatus}pendingIDs=retained;taskFeedbackExcluded.clear();drawPending();$('#taskFeedbackStatus').textContent='反馈已保存；事项状态未改变。'+(retained.length?'其余'+retained.length+'份材料仍在下方，请写下一份卷的名称并保存。':task?.agenda?.category==='homework'&&body.attachments.some(id=>['image/jpeg','image/png'].includes(data.uploads.find(a=>a.id===id)?.mime))?'可在“已保存的作答与反馈”的这份作答下检查。':'')}
   catch{restoreHomeworkReviewViews(reviewViews,data.tasks.find(t=>t.id===body.task_id));$('#taskFeedbackStatus').textContent='反馈已保存；列表未刷新，请重新打开核对。'+(retained.length?'其余材料仍在下方待保存。':'');pendingIDs=retained;taskFeedbackExcluded.clear();f.elements.note.value='';$('#taskTranscript').value='';drawPending();}
  }catch(error){
   if(knownFailure&&!wasPending)taskFeedbackPending=null;
@@ -1328,7 +1333,7 @@ async function openHomeworkPrint(id){
     }
     f.elements.question_confirmed.checked=!unavailable&&!!saved.question_confirmed;f.elements.guide_confirmed.checked=!unavailable&&!!saved.guide_confirmed;
   }
-  f.querySelector('details').open=[2,3,4].some(n=>f.elements['question_source_'+n].value);
+  f.querySelector('details').open=[2,3,4].some(n=>f.elements['question_source_'+n].value);drawHomeworkPrintFiles(f);
   f.dataset.questionSha=saved?.task_id===id&&typeof saved.expected_question_sha256==='string'?saved.expected_question_sha256:'';
   f.dataset.requestKey=saved?.task_id===id&&/^[A-Za-z0-9_-]{8,128}$/.test(saved.request_key||'')?saved.request_key:crypto.randomUUID();
   $('#homeworkPrintTask').textContent=task.child+' · '+task.title+(task.agenda?.due_on?' · '+agendaDueLabel(task.agenda)+' '+task.agenda.due_on:'');
@@ -1348,12 +1353,20 @@ function homeworkPrintSelectionCurrent(f){
 }
 document.addEventListener('click',e=>{const b=e.target.closest('[data-homework-print]');if(b)openHomeworkPrint(b.dataset.homeworkPrint)});
 $('#homeworkPrintForm')?.addEventListener('input',e=>{if(homeworkPrintBusy)return;if(e.target.name==='guide_text'&&!e.target.value.trim())e.currentTarget.dataset.questionSha='';saveHomeworkPrintDraft(e.currentTarget)});
+// A question slot holds one chosen file whatever its page count: the extra-file summary, the queue line and the browser's empty-choice message count files in slot order and never guess PDF pages.
+function drawHomeworkPrintFiles(f){
+  const files=homeworkQuestionValues(f).length,extra=[2,3,4].filter(n=>f.elements['question_source_'+n].value).length;
+  f.querySelector('details>summary').textContent='还有其他题目文件（第2—4份）'+(extra?' · 已选'+extra+'份':'');
+  f.elements.question_source.setCustomValidity(f.elements.question_source.value?'':'请先选择第1份题目文件。');
+  $('#homeworkPrintQueue').textContent='参考文件与文字二选一。'+(files?'已选'+files+'份题目文件，按所选顺序各成一个打印任务':'题目按所选顺序每份文件一个打印任务')+'（多页文件不拆开），家长参考另成一个任务，不夹在孩子的题目里。';
+}
 $('#homeworkPrintForm')?.addEventListener('change',e=>{
   if(homeworkPrintBusy)return;
   if(e.target.name?.startsWith('question_source')){
-    $('#homeworkDraftStatus').textContent='题目页已更换；旧参考草稿不能用于新题目。请清空后重新整理或手动填写，并逐题核对。';
+    $('#homeworkDraftStatus').textContent='题目文件已更换；旧参考草稿不能用于新题目。请清空后重新整理或手动填写，并逐题核对。';
     e.currentTarget.elements.question_confirmed.checked=false;
     e.currentTarget.elements.guide_confirmed.checked=false;
+    drawHomeworkPrintFiles(e.currentTarget);
   }
   saveHomeworkPrintDraft(e.currentTarget);
   const error=$('#homeworkPrintError');
@@ -1362,10 +1375,10 @@ $('#homeworkPrintForm')?.addEventListener('change',e=>{
 $('#homeworkDraftButton')?.addEventListener('click',async()=>{
   if(homeworkPrintBusy)return;const f=$('#homeworkPrintForm'),status=$('#homeworkDraftStatus');
   if(!homeworkPrintSelectionCurrent(f)){status.textContent='原已选资料当前无法核对，请回原作业核对后重试。';return}
-  if(!f.elements.question_source.value){status.textContent='请先选择题目第1页。';return}
+  if(!f.elements.question_source.value){status.textContent='请先选择第1份题目文件。';return}
   if(f.elements.guide_text.value.trim()||f.elements.guide_source.value){status.textContent='已有参考文字或文件；请先核对、保存或自行清空，再重新整理，避免覆盖已填写的内容。';return}
   const selected=homeworkQuestionValues(f),taskId=f.elements.task_id.value,button=$('#homeworkDraftButton');button.disabled=true;
-  status.textContent='正在核对所选页可辨作答并整理待核对草稿；不会自动保存或打印…';
+  status.textContent='正在核对所选题目文件中可辨的作答并整理待核对草稿；不会自动保存或打印…';
   try{
     const out=await printPost('homework/draft',{task_id:taskId,question_sources:selected.map(value=>JSON.parse(value))},150000);
     if(!$('#homeworkPrintDialog').open||JSON.stringify(homeworkQuestionValues(f))!==JSON.stringify(selected)||f.elements.task_id.value!==taskId)return;
@@ -1377,7 +1390,7 @@ $('#homeworkDraftButton')?.addEventListener('click',async()=>{
     saveHomeworkPrintDraft(f);
     const count=Number.isInteger(out.draft.wrong_items)&&Number.isInteger(out.draft.unknown_items)?
       ` 草稿标出${out.draft.wrong_items}道可能错题、${out.draft.unknown_items}道未判定；`:'';
-    status.textContent='仅核对所选'+selected.length+'页图片。'+count+'请对照原题和孩子卷面逐题改正，再勾选家长确认。';
+    status.textContent='仅核对所选'+selected.length+'份题目文件。'+count+'请对照原题和孩子卷面逐题改正，再勾选家长确认。';
   }catch(err){status.textContent=(err.message||'参考草稿暂不可用')+'；题目与已填内容仍保留。超时后不会自动再次调用模型。'}
   finally{button.disabled=false}
 });
@@ -1399,7 +1412,7 @@ $('#homeworkPrintForm')?.addEventListener('submit',async e=>{
     const result=await printPost('homework',body,180000);
     if(result.jobs?.questions?.length!==sources.length||result.jobs.questions.some(job=>!job.id)||!result.jobs?.guide?.id)throw Error('打印回执不完整，请用原请求编号重试，避免重复打印');
     sessionStorage.removeItem(homeworkPrintKey+':'+f.elements.task_id.value);$('#homeworkPrintDialog').close();
-    await refreshPrintJobs();page='print';render();toast('所选题目页和家长参考已分别提交打印');
+    await refreshPrintJobs();page='print';render();toast('已按所选顺序提交'+sources.length+'份题目文件和家长参考，共'+(sources.length+1)+'个打印任务');
   }catch(err){error.textContent=(err.message||'打印未完成')+'。已提交的部分不会因原编号重试而重复提交；请核对打印进展。'}
   finally{homeworkPrintBusy=false;controls.forEach(c=>c.disabled=false)}
 });
