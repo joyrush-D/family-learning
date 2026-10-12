@@ -671,17 +671,19 @@ def _school_pending_batches(store, source_id):
                 if overlap: covered = max(covered, offset + len(overlap))
                 offset += 1
             if covered > len(fixed):
+                publication = []
                 while covered:
                     overlap = claimed()
                     if overlap: covered = max(covered, len(overlap))
-                    pending.popleft(); covered -= 1
-                continue
-            for _ in fixed: pending.popleft()
-            yield fixed
+                    value = pending.popleft(); covered -= 1
+                    publication = [v['message'] for v in groups(publication + [value])[-1]['messages']]
+            else:
+                for _ in fixed: pending.popleft()
+                yield fixed
+                publication = [v['message'] for v in groups(fixed)[-1]['messages']]
             # A late attachment/caption of a blocked publication must not create a new
             # job containing its old body. Keep that new suffix pending until the body
             # is handled; later independent publications can still pass it.
-            publication = [v['message'] for v in groups(fixed)[-1]['messages']]
             fill(1)
             while pending and len(publication) < 6 and not claimed():
                 candidate = publication + [pending[0]]
