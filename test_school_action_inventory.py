@@ -67,7 +67,7 @@ class SchoolActionInventoryTests(unittest.TestCase):
             self.assertEqual('不用录音' in row['body'], '背诵' in row['title'])
 
     def test_first_body_example_does_not_swallow_the_real_header(self):
-        for header, due in (('英语作业：', ''), ('英语，明天作业：', '2026-10-06')):
+        for header, due in (('英语作业：', ''), ('英语，明天作业：', ''), ('英语，明天前完成作业：', '2026-10-06')):
             with self.subTest(header=header):
                 t = type(self)(methodName='runTest')
                 t.setUp()
@@ -88,6 +88,12 @@ class SchoolActionInventoryTests(unittest.TestCase):
             '英语作业：背诵Unit 2；示例：“10月7日前完成练习卷”，仅说明格式；不用录音。'])
         proposals = [self.proposal('背诵Unit 2', refs),
                      self.proposal('完成练习卷', refs, due='2026-10-07')]
+        self._assert_rejected_batch(payload, self.run_receipt(payload, proposals))
+
+    def test_model_cannot_create_an_extra_action_from_the_first_body_example(self):
+        payload, refs = self._ingest([
+            '英语作业：示例：“10月7日前完成练习卷”，仅说明格式；背诵Unit 2；不用录音。'])
+        proposals = [self.proposal('背诵Unit 2', refs), self.proposal('完成练习卷', refs)]
         self._assert_rejected_batch(payload, self.run_receipt(payload, proposals))
 
     def test_model_example_deadline_is_held_without_losing_the_real_conditions(self):
