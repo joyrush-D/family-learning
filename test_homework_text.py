@@ -112,6 +112,43 @@ class TeacherReferencePriorityTests(unittest.TestCase):
                           question='四年级语文练习（虚构）\n1. %s\n孩子作答：C\n'%ask);q=result['questions'][0]
         self.assertEqual((q['answer'],q['judgment'],result['wrong_items']),('教师参考：B；'+note,'correct',0))
 
+    def test_colon_note_before_later_question_keeps_each_papers_own_value(self):
+        first='虚构甲卷第1题';second='虚构甲卷第2题';other='虚构乙卷第1题'
+        ask='请选择符合题目要求的一项。A.甲 B.乙 C.丙'
+        notes=['本题接受B或C。','本题仅接受B。','本卷仅接受B，前卷例外不适用。']
+        teacher='虚构甲卷\n第1题：教师参考B。\n说明：'+notes[0]+'\n第2题：教师参考B。\n说明：'+notes[1]+'\n虚构乙卷\n第1题：教师参考B。\n说明：'+notes[2]
+        labels=[first,second,other];grades=['correct','incorrect','incorrect']
+        items=[choice(label=label,question=ask,student_answer='C',answer='教师参考：B；说明：'+note,
+                      judgment=grade,error_reason='' if grade=='correct' else 'C不符合本题教师要求。',steps='')
+               for label,note,grade in zip(labels,notes,grades)]
+        result=self.draft(items,teacher=teacher,question='\n'.join(label+'：'+ask+'\n实际作答：C' for label in labels))
+        self.assertEqual([q['judgment'] for q in result['questions']],grades)
+        for q,note in zip(result['questions'],notes):self.assertIn(note,q['answer'])
+        partial=self.draft([items[0]|dict(answer='教师参考：B')],teacher=teacher,question=first+'：'+ask+'\n实际作答：C')
+        self.assertEqual(partial['questions'][0]['judgment'],'unknown')
+        self.assertIn(notes[0],partial['questions'][0]['answer'])
+
+    def test_unresolved_prose_before_next_number_never_grades_on_first_line(self):
+        note='本题可以选择C，其他题另按各自要求。'
+        teacher=TEACHER_B+'。\n'+note+'\n第2题：教师参考A'
+        result=self.draft([choice(student_answer='C',answer='教师参考：B',judgment='correct',error_reason='',steps='')],teacher=teacher)
+        self.assertEqual(result['questions'][0]['judgment'],'unknown')
+        self.assertIn(note,result['questions'][0]['answer'])
+
+    def test_numeric_paragraph_boundaries_cannot_turn_two_values_into_one(self):
+        for teacher,quoted in (('1，\n2','12'),('1\n2','12'),('1.\n5','15')):
+            with self.subTest(teacher=teacher):
+                item=choice(question='按题目要求写出数值。',student_answer=quoted,answer='教师参考：'+quoted,
+                            judgment='correct',error_reason='',steps='')
+                result=self.draft([item],teacher='虚构甲卷 第1题：教师参考'+teacher,
+                                  question='虚构甲卷第1题：按题目要求写出数值。\n实际作答：'+quoted)
+                self.assertEqual(result['questions'][0]['judgment'],'unknown')
+                self.assertIn('2' if '2' in teacher else '5',result['questions'][0]['answer'])
+        item=choice(question='写出给定的小数。',student_answer='1.5',answer='教师参考：1.5',judgment='correct',error_reason='',steps='')
+        result=self.draft([item],teacher='虚构甲卷 第1题：教师参考1.\n5',
+                          question='虚构甲卷第1题：写出给定的小数。\n实际作答：1.5')
+        self.assertEqual(result['questions'][0]['judgment'],'correct')
+
 
 def frozen(*items):
     return dict(question_labels=[i['label'] for i in items],items=list(items),coverage='只核本次虚构原件内明确的卷别与题号。')
