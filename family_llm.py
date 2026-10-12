@@ -1139,17 +1139,25 @@ def _ref_plain(line,titles=frozenset()):
             and _ref_sub(line,teacher=True)[0] is None and _ref_scope(line,None,titles,_REF_LISTED.search(line) is not None)[0] is None)
 
 
-def _ref_continued(lines,at,titles=frozenset()):
+def _ref_continued(lines,at,titles=frozenset(),number=None):
     """Where the plain lines from `at` (_ref_plain), right under a line giving one question its answer, end when they go on
     with that answer, else `at`. A line's role comes from where it stands in the whole original: they are the answer's own
     words only when nothing below can take them as its heading, their paragraph ending at a blank line or the original's end,
-    or the next line naming its own paper. Before another question or 大题, whose they are stays unproven, so they keep their
-    reading as a title, as do lines after a blank one."""
+    or the next line naming its own paper. Nonempty colon fields can also end at a later unqualified question number.
+    Other lines before another question or 大题 keep their heading reading; an ambiguous increasing-number boundary
+    retains the preceding original for pending review instead of grading on its first line alone."""
     stop=at
     while stop<len(lines) and _ref_plain(lines[stop],titles): stop+=1
     if stop==len(lines) or not lines[stop].strip(): return stop
     found=_REF_QUESTION.search(lines[stop]);head=lines[stop][:found.start()] if found else lines[stop]
-    return stop if _ref_scope(head,None,titles,_REF_LISTED.search(lines[stop]) is not None)[0] is not None else at
+    if _ref_scope(head,None,titles,_REF_LISTED.search(lines[stop]) is not None)[0] is not None: return stop
+    # A nonempty field beneath an answer is its body. A following unqualified,
+    # increasing question closes that body; it does not turn it into a new title.
+    # Plain names, empty title fields and reset/repeated numbers keep the heading path.
+    if (found and not head.strip() and number is not None
+            and int(next(g for g in found.groups() if g))>number
+            and all(re.search(r'[^：:]+[：:]\s*\S',line) for line in lines[at:stop])): return stop
+    return at
 
 
 def _teacher_reference_entries(documents,titles=frozenset(),continued=None):
@@ -1159,10 +1167,21 @@ def _teacher_reference_entries(documents,titles=frozenset(),continued=None):
         paper=section=None;title='';first=len(entries);lines=document['text'].splitlines();owner=None;skip=set()
         for at,line in enumerate(lines):
             if at in skip: continue
-            if owner and (stop:=_ref_continued(lines,at,titles))>at:  # One answer's whole paragraph is its one value, never a heading.
+            if owner and (stop:=_ref_continued(lines,at,titles,owner[0][0]['number']))>at:  # One answer's whole paragraph is its one value, never a heading.
                 value='\n'.join([owner[1]]+[part.strip() for part in lines[at:stop]])
                 for entry in owner[0]: entry['answer']=re.sub(r'[\s，,；;。.．、]+$','',value)
                 skip.update(range(at,stop));owner=None;continue
+            if owner and _ref_plain(line,titles):
+                end=at
+                while end<len(lines) and _ref_plain(lines[end],titles): end+=1
+                next_mark=_REF_QUESTION.search(lines[end]) if end<len(lines) else None
+                if (next_mark and not lines[end][:next_mark.start()].strip()
+                        and int(next(g for g in next_mark.groups() if g))>owner[0][0]['number']):
+                    # Without field/heading proof the lines may be a note or a new
+                    # title. Keep their original text, and never grade on B alone.
+                    for entry in owner[0]:
+                        entry['answer']='\n'.join([owner[1]]+[part.strip() for part in lines[at:end]])
+                        entry['continuation_unresolved']=True
             marks=list(_REF_QUESTION.finditer(line));made=len(entries)
             head=line[:marks[0].start()] if marks else line
             listed=_REF_LISTED.search(line) is not None  # an unmarked join of names may be one title: unknown
@@ -1345,12 +1364,25 @@ def _ref_agrees(claimed,teacher):
     A bare equation 「2+3=5」 and its one final value 「5」 are the same value; nothing is computed. Where a line of the teacher's
     paragraph ends, a quote on one line may put one run of clause marks 「；」「。」 or read the break as spacing does (a space
     still parts two words); no line is ever left out."""
-    whole=lambda value:re.sub(r'[，,；;。.．、！!？?]+$','',_ref_unspaced(value).replace('＝','='))
-    lines=[line for line in map(whole,teacher.split('\n')) if line]
-    joined=''.join(re.escape(a)+'(?:%s|[，,；;。.．、！!？?]+)'%re.escape(_ref_unspaced(a+'\n'+b)[len(a):-len(b)]) for a,b in zip(lines,lines[1:]))
+    # A newline between digits is a result boundary, not a licence to make 1/2
+    # into 12. NUL cannot occur in validated input and is only a comparison marker.
+    whole=lambda value:re.sub(r'[，,；;。.．、！!？?]+$','',_ref_unspaced(
+        re.sub(r'(?<=\d)[^\S\n]*\n[^\S\n]*(?=\d)','\x00',value)).replace('＝','='))
+    lines=[_ref_unspaced(line.strip()).replace('＝','=') for line in teacher.split('\n') if line.strip()]
+    joined=[]
+    for left,right in zip(lines,lines[1:]):
+        closing=re.search(r'[，,；;。.．、！!？?]+$',left)
+        core=left[:closing.start()] if closing else left
+        numeric=bool(core and right and core[-1].isdigit() and right[0].isdigit())
+        gap=_ref_unspaced(core+'\n'+right)[len(core):-len(right)]
+        if numeric:
+            separator=re.escape(closing[0]) if closing else r'[，,；;、]+'
+        else:
+            separator='(?:'+re.escape(gap)+'|[，,；;。.．、！!？?]+)'
+        joined.append(re.escape(core)+separator)
     claimed,teacher=whole(claimed),whole(teacher)
     return (claimed==teacher or _ref_result(teacher)==claimed or _ref_result(claimed)==teacher
-            or len(lines)>1 and re.fullmatch(joined+re.escape(lines[-1]),claimed) is not None)
+            or len(lines)>1 and re.fullmatch(''.join(joined)+re.escape(re.sub(r'[，,；;。.．、！!？?]+$','',lines[-1])),claimed) is not None)
 
 
 _GAP_MISSING=re.compile(r'(?:缺(?![点陷席勤])|没(?:有|给|标)|未(?:给|提供|标)|条件不[足全])(?!\s*[写填答作])')
@@ -1960,6 +1992,9 @@ def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset
     shown=lambda value,limit=995:flat(value if len(value)<=limit else value[:limit]+'…')  # The whole teacher answer fits the answer field.
     def pending(answer,note):
         item.update(answer=flat(answer),judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty=flat(note+item['uncertainty'].strip())[:300])
+    if any(entry.get('continuation_unresolved') and _ref_relation(item['label'],entry,titles)=='same' for entry in entries):
+        return pending('教师参考：'+shown(same[0]) if len(same)==1 else '',
+                       '教师参考题号行后还有文字，其属于本题说明还是下一题标题尚未核明；未按首行答案强判，请对照完整原件核对。')
     if not same and blank:  # The original names this scope but gives no answer: nothing the model says stands in for it.
         return pending('','教师参考原件写有本题题号或小题，但没有可读的答案；%s，未判定，请核明后补查。'%(
             '未采用模型自行推导' if claimed is None else '模型所标教师参考无从核实'))
