@@ -2885,14 +2885,8 @@ def _school_native_condition_owner(clause,pieces):
     return owners[0] if len(owners)==1 else None
 
 
-def _school_native_blocks(text):
-    """Keep each action's literal requirement fragments; punctuation alone is not a task.
-
-    Numbered and ordinary native text use the same ledger. A worksheet's print,
-    answer, check and handback steps stay together. Corrections, quoted examples,
-    reports and materials retain the existing semantic reader, not inferred tasks.
-    """
-    if re.match(r'^\s*(?:补充|更正|取消|撤销|撤回)',text):return []
+def _school_native_heading(text):
+    """The same literal header/body boundary for requirement allocation and extra-outcome checks."""
     # A heading may share a date only when it names the following requirements.
     # A date directly before a first command remains inside that command.
     header='';body_start=0;container=False
@@ -2902,14 +2896,26 @@ def _school_native_blocks(text):
         container=bool(re.search(r'(?:完成|做|订正)[^。；;]{0,35}(?:练习卷|练习册|试卷)',lead))
         common=bool(re.search(r'(?:作业|要求|任务|事项|通知|完成(?:[二两三四五六七八九十2-9]项)?(?:要求|作业|任务|练习|事项|通知)?)\s*$',lead))
         label=bool(re.fullmatch(r'(?:'+_SCHOOL_NATIVE_SUBJECTS+r')(?:和(?:'+_SCHOOL_NATIVE_SUBJECTS+r'))*',lead))
-        if not container and (common or label):header=lead;body_start=head.end()
+        if container:body_start=head.end()
+        elif common or label:header=lead;body_start=head.end()
+    return head,header,body_start,container
+
+
+def _school_native_blocks(text):
+    """Keep each action's literal requirement fragments; punctuation alone is not a task.
+
+    Numbered and ordinary native text use the same ledger. A worksheet's print,
+    answer, check and handback steps stay together. Corrections, quoted examples,
+    reports and materials retain the existing semantic reader, not inferred tasks.
+    """
+    if re.match(r'^\s*(?:补充|更正|取消|撤销|撤回)',text):return []
+    head,header,body_start,container=_school_native_heading(text)
     pieces=[];preparation=[];shared=[];examples=[]
     def crosses_example(left,right):return any(left<end and start<right for start,end in examples)
     container_object=_school_native_object(head[1]) if container else ''
     if container:
         # The worksheet's own heading is a requirement; its first body clause can already be an example.
         pieces.append(dict(start=0,end=head.end(),purpose='learning',primary=head[1]))
-        body_start=head.end()
     for start,end in _school_native_spans(text,body_start):
         marker=re.match(r'\s*'+_SCHOOL_NATIVE_MARKER,text[start:end])
         if marker:start+=marker.end()
@@ -3168,7 +3174,7 @@ def _school_native_unlocated(quote,refs,actions,entries,spans):
     ref=next(iter(located));entry=entries.get(ref);text=entry['text'] if entry else ''
     if text.count(quote)!=1:return False
     start=text.index(quote);end=start+len(quote)
-    for left,right in _school_native_spans(text,0):
+    for left,right in _school_native_spans(text,_school_native_heading(text)[2]):
         clause=re.sub(r'^\s*'+_SCHOOL_NATIVE_MARKER,'',text[left:right]).strip()
         if _SCHOOL_NATIVE_EXAMPLE.match(clause) and max(start,left)<min(end,right):return False
     for action in actions:
