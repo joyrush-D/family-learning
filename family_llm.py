@@ -1133,12 +1133,37 @@ def _ref_sub(text,at=0,teacher=False):
     return (None if not levels else '*' if '*' in levels else tuple(levels)),end
 
 
-def _teacher_reference_entries(documents,titles=frozenset()):
+def _ref_plain(line,titles=frozenset()):
+    """A line naming nothing of its own: words with no question, 大题 or paper, and no level or bracket opening it."""
+    return (bool(line.strip()) and not _REF_QUESTION.search(line) and not _REF_SECTION.search(line)
+            and _ref_sub(line,teacher=True)[0] is None and _ref_scope(line,None,titles,_REF_LISTED.search(line) is not None)[0] is None)
+
+
+def _ref_continued(lines,at,titles=frozenset()):
+    """Where the plain lines from `at` (_ref_plain), right under a line giving one question its answer, end when they go on
+    with that answer, else `at`. A line's role comes from where it stands in the whole original: they are the answer's own
+    words only when nothing below can take them as its heading, their paragraph ending at a blank line or the original's end,
+    or the next line naming its own paper. Before another question or 大题, whose they are stays unproven, so they keep their
+    reading as a title, as do lines after a blank one."""
+    stop=at
+    while stop<len(lines) and _ref_plain(lines[stop],titles): stop+=1
+    if stop==len(lines) or not lines[stop].strip(): return stop
+    found=_REF_QUESTION.search(lines[stop]);head=lines[stop][:found.start()] if found else lines[stop]
+    return stop if _ref_scope(head,None,titles,_REF_LISTED.search(lines[stop]) is not None)[0] is not None else at
+
+
+def _teacher_reference_entries(documents,titles=frozenset(),continued=None):
+    """Each original read in order; `continued`, when a list, gets each original's lines that go on with an answer."""
     entries=[]
     for document in documents:
-        paper=section=None;title='';first=len(entries)
-        for line in document['text'].splitlines():
-            marks=list(_REF_QUESTION.finditer(line))
+        paper=section=None;title='';first=len(entries);lines=document['text'].splitlines();owner=None;skip=set()
+        for at,line in enumerate(lines):
+            if at in skip: continue
+            if owner and (stop:=_ref_continued(lines,at,titles))>at:  # One answer's whole paragraph is its one value, never a heading.
+                value='\n'.join([owner[1]]+[part.strip() for part in lines[at:stop]])
+                for entry in owner[0]: entry['answer']=re.sub(r'[\s，,；;。.．、]+$','',value)
+                skip.update(range(at,stop));owner=None;continue
+            marks=list(_REF_QUESTION.finditer(line));made=len(entries)
             head=line[:marks[0].start()] if marks else line
             listed=_REF_LISTED.search(line) is not None  # an unmarked join of names may be one title: unknown
             new,section,words=_ref_scope(head,section,titles,listed)
@@ -1165,6 +1190,10 @@ def _teacher_reference_entries(documents,titles=frozenset()):
                     for found in _REF_NAMED.finditer(' '+slot):
                         if _ref_scope(found[1],None,titles,listed)[0] is not None: paper=here='*';title=rest=''
                         if _REF_SECTION.search(found[1]): section='*'
+            # Only a line giving one question its answer, with no scope named after it, owns the plain lines right under it;
+            # that answer keeps its line's closing mark 「B。」 inside the paragraph.
+            owner=(entries[made:],answer+re.search(r'[\s，,；;。.．、]*$',line)[0].strip()) if len(marks)==1 and not after and answer else None
+        if continued is not None: continued.append(skip)
     return entries
 
 
@@ -1252,8 +1281,10 @@ def _ref_request_title(questions,references,entries,titles=frozenset()):
     if (len(heads)!=1 or not later<=heads or len(fields)>1 or fields and unanswered
             or any(entry['paper'] is not None or entry['rest'] for entry in entries)): return None
     title=heads.pop()
-    for document in references:
-        for line in document['text'].splitlines():
+    owned=[];_teacher_reference_entries(references,titles,owned)  # A line going on with an answer is that answer's words, never a title.
+    for document,skip in zip(references,owned):
+        for at,line in enumerate(document['text'].splitlines()):
+            if at in skip: continue
             heading=_ref_teacher_heading(line);paper,section,words=_ref_scope(heading,None,titles);name,said=_ref_title_parts(heading,titles)
             # Never a piece of the title: 「数学练习（虚构）」 is not 「四年级数学练习（虚构）」; naming nothing, a line repeats only its notes.
             if paper is not None or words!=title and (section,words) not in names and (name or not said<=notes): return None
@@ -1311,10 +1342,15 @@ def _ref_result(value):
 
 def _ref_agrees(claimed,teacher):
     """A teacher-labelled value must be the teacher's whole value; added letters or words are not the teacher's.
-    A bare equation 「2+3=5」 and its one final value 「5」 are the same value; nothing is computed."""
+    A bare equation 「2+3=5」 and its one final value 「5」 are the same value; nothing is computed. Where a line of the teacher's
+    paragraph ends, a quote on one line may put one run of clause marks 「；」「。」 or read the break as spacing does (a space
+    still parts two words); no line is ever left out."""
     whole=lambda value:re.sub(r'[，,；;。.．、！!？?]+$','',_ref_unspaced(value).replace('＝','='))
+    lines=[line for line in map(whole,teacher.split('\n')) if line]
+    joined=''.join(re.escape(a)+'(?:%s|[，,；;。.．、！!？?]+)'%re.escape(_ref_unspaced(a+'\n'+b)[len(a):-len(b)]) for a,b in zip(lines,lines[1:]))
     claimed,teacher=whole(claimed),whole(teacher)
-    return claimed==teacher or _ref_result(teacher)==claimed or _ref_result(claimed)==teacher
+    return (claimed==teacher or _ref_result(teacher)==claimed or _ref_result(claimed)==teacher
+            or len(lines)>1 and re.fullmatch(joined+re.escape(lines[-1]),claimed) is not None)
 
 
 _GAP_MISSING=re.compile(r'(?:缺(?![点陷席勤])|没(?:有|给|标)|未(?:给|提供|标)|条件不[足全])(?!\s*[写填答作])')
@@ -1390,9 +1426,10 @@ def _condition_gap(text,strict=False,paper=None,titles=frozenset()):
 
 
 def _ref_leads(listed,teacher):
-    """Wording only: 「200」 opening 「200。空外已印厘米」 is not yet matched to the note, and never agrees."""
+    """Wording only: 「200」 opening 「200。空外已印厘米」 is not yet matched to the note, and never agrees; a line of the
+    teacher's paragraph ends as a clause does."""
     whole=lambda value:re.sub(r'[，,；;。.．、！!？?]+$','',_ref_unspaced(value))
-    listed,teacher=whole(listed),whole(teacher)
+    listed,teacher=whole(listed),whole(re.sub(r'\s*\n\s*','；',teacher))
     return bool(listed) and teacher.startswith(listed) and teacher[len(listed):][:1] in tuple('，,；;。、！!？?（(：:')
 
 
@@ -1919,9 +1956,10 @@ def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset
     blank=any(not answer and (relation in ('unsure','part') or relation=='same' and not (images and claimed)) for relation,answer in related)
     related=[(relation,answer) for relation,answer in related if answer]
     same=sorted({answer for relation,answer in related if relation=='same'})
-    shown=lambda value,limit=995:value if len(value)<=limit else value[:limit]+'…'  # The whole teacher answer fits the answer field.
+    flat=lambda value:value.replace('\n',' ')  # A teacher paragraph's line ends read as spaces: every result field is one line.
+    shown=lambda value,limit=995:flat(value if len(value)<=limit else value[:limit]+'…')  # The whole teacher answer fits the answer field.
     def pending(answer,note):
-        item.update(answer=answer,judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty=(note+item['uncertainty'].strip())[:300])
+        item.update(answer=flat(answer),judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty=flat(note+item['uncertainty'].strip())[:300])
     if not same and blank:  # The original names this scope but gives no answer: nothing the model says stands in for it.
         return pending('','教师参考原件写有本题题号或小题，但没有可读的答案；%s，未判定，请核明后补查。'%(
             '未采用模型自行推导' if claimed is None else '模型所标教师参考无从核实'))

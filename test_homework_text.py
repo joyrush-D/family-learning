@@ -86,6 +86,32 @@ class TeacherReferencePriorityTests(unittest.TestCase):
         result=self.draft([item|dict(student_answer='7米',answer='AI自行推导：7米')],teacher='虚构甲卷 第2题：教师参考7米',question=question)
         self.assertEqual((result['questions'][0]['answer'],result['questions'][0]['judgment']),('教师参考：7米','correct'))
 
+    def test_a_teacher_paragraph_is_one_whole_value_of_its_own_question_only(self):
+        # Fictional phase100 paragraph cases: plain lines right under one question's teacher answer, up to a blank line, the end or
+        # another paper, are that answer's whole value however one line joins them; under another question, paper or 大题, or
+        # after a blank line, they are never lent and the letter alone still decides.
+        note='评分说明：写C同样给分，不要求只写B';ask='哪个可以用来写字？ A.石块 B.铅笔 C.钢笔'
+        quote=lambda answer:choice(question=ask,student_answer='C',answer='教师参考：'+answer,judgment='correct',error_reason='',steps='')
+        question='虚构甲卷第1题：%s\n实际作答：C'%ask
+        for teacher in (TEACHER_B+'\n'+note+'。\n',TEACHER_B+'。\n'+note+'。\n\n虚构甲卷 第2题：教师参考A',TEACHER_B+'\n'+note+'\n虚构乙卷 第1题：教师参考A'):
+            for joined in ('B；'+note,'B。'+note,'B '+note):
+                with self.subTest(teacher=teacher,joined=joined):
+                    result=self.draft([quote(joined)],teacher=teacher,question=question);q=result['questions'][0]
+                    self.assertEqual((q['answer'],q['judgment'],q['error_reason']),('教师参考：'+joined,'correct',''))
+                    self.assertEqual((result['wrong_items'],result['unknown_items']),(0,0))
+        # The first line alone is not the teacher's whole value: pending with the whole paragraph, never graded on B alone.
+        result=self.draft([quote('B')],teacher=TEACHER_B+'\n'+note+'。',question=question);q=result['questions'][0]
+        self.assertEqual((q['answer'],q['judgment'],result['wrong_items']),('教师参考：B '+note,'unknown',0))
+        for teacher in (TEACHER_B+'\n虚构甲卷 第2题：教师参考A\n'+note,TEACHER_B+'\n虚构乙卷\n'+note,TEACHER_B+'\n第二大题\n'+note,TEACHER_B+'\n\n'+note):
+            with self.subTest(teacher=teacher):
+                result=self.draft([quote('B；'+note)],teacher=teacher,question=question);q=result['questions'][0]
+                self.assertEqual((q['answer'],q['judgment']),('教师参考：B','incorrect'));self.assertIn('教师参考B',q['error_reason'])
+                self.assertEqual((result['wrong_items'],result['unknown_items']),(1,0))
+        # A bare number under the question text's one title: the answer's own line is no other title.
+        result=self.draft([quote('B；'+note)|dict(label='四年级语文练习-虚构 第1题')],teacher='教师参考答案（虚构）\n1. B\n'+note+'。\n',
+                          question='四年级语文练习（虚构）\n1. %s\n孩子作答：C\n'%ask);q=result['questions'][0]
+        self.assertEqual((q['answer'],q['judgment'],result['wrong_items']),('教师参考：B；'+note,'correct',0))
+
 
 def frozen(*items):
     return dict(question_labels=[i['label'] for i in items],items=list(items),coverage='只核本次虚构原件内明确的卷别与题号。')
