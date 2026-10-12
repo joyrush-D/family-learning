@@ -1139,7 +1139,11 @@ def _ref_plain(line,titles=frozenset()):
     Empty title fields, numbered paths and bracketed headings keep their ordinary scope reading.
     """
     name,colon,value=re.split(r'([：:])',line,maxsplit=1) if re.search('[：:]',line) else (line,'','')
-    text=name if colon and value.strip() else line
+    body=value.lstrip()
+    field=(colon and body and not _REF_DECLARED.fullmatch(line.strip())
+           and not _REF_QUESTION.match(body) and not _REF_SECTION.match(body)
+           and _ref_sub(body,teacher=True)[0] is None)
+    text=name if field else line
     return (bool(text.strip()) and not _REF_QUESTION.search(text) and not _REF_SECTION.search(text)
             and _ref_sub(text,teacher=True)[0] is None and _ref_scope(text,None,titles,_REF_LISTED.search(text) is not None)[0] is None)
 
