@@ -3773,6 +3773,39 @@ class AgentTests(unittest.TestCase):
         self.assertEqual({k:self._school_forward_jobs()[k] for k in old},old)
         with self.app.connect() as c:self.assertEqual(dict(c.execute('SELECT id,processed FROM agent_messages')),{'1':0,'2':0,'3':1})
 
+    def test_school_crossing_jobs_defer_their_full_publication_suffix_and_pass_independent_notice(self):
+        for suffix in ('attachment','caption'):
+            with self.subTest(suffix=suffix):
+                self.setUp()
+                messages=self._school_forward_messages(3)
+                for i,m in enumerate(messages):
+                    m.update(sender_id='20001',message_order=str(i+1),time=(self.now+dt.timedelta(seconds=i)).isoformat())
+                if suffix=='attachment':messages[-1]['text']='英语：朗读课文，题目见附件。'
+                else:messages[-1].update(text='[图片原件：1份，内容未读]',kind='image',unread=True)
+                self.store.ingest(dict(self.payload(cursor='3'),messages=messages))
+                for values in (messages[:2],messages[1:]):
+                    key='messages:'+agent._hash([self.source['id'],[v['id'] for v in values]])[:40]
+                    fp=self.store._job(key,dict(school_learning_policy=8,messages=values),self.now,model=True)
+                    self.store._fail(key,self.now,fingerprint=fp,reason='虚构交错失败')
+                old=self._school_forward_jobs()
+                later=self._school_forward_messages(5)[3:]
+                later[0].update(sender_id='20001',message_order='4',time=(self.now+dt.timedelta(seconds=3)).isoformat(),
+                    text='[图片原件：1份，内容未读]' if suffix=='attachment' else '以上是朗读练习的题目。',
+                    kind='image' if suffix=='attachment' else 'text',unread=suffix=='attachment')
+                later[1].update(text='明天交回活动回执。',sender_id='20002',message_order='5')
+                self.store.ingest(dict(self.payload(expected='3',cursor='5',offset=6),messages=later))
+                self.assertEqual([[m['id'] for m in batch] for batch in agent._school_pending_batches(self.store,self.source['id'])],[['5']])
+                with patch.object(agent.family_llm,'_chat_json',side_effect=self._school_forward_good_model) as model:
+                    result=agent.run_once(self.app,self.now+dt.timedelta(minutes=6))
+                    agent.run_once(self.app,self.now+dt.timedelta(minutes=7))
+                self.assertEqual((result['processed'],model.call_count),(1,1))
+                self.assertEqual({key:self._school_forward_jobs()[key] for key in old},old)
+                with self.app.connect() as c:
+                    self.assertEqual(dict(c.execute('SELECT id,processed FROM agent_messages')),{'1':0,'2':0,'3':0,'4':0,'5':1})
+                    self.assertEqual(c.execute('SELECT cursor FROM agent_sources').fetchone()[0],'5')
+                    self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')],messages+later)
+                    self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+
     def test_incomplete_twelve_message_batch_recovers_in_smaller_batches(self):
         payload = self.payload(cursor='22')
         payload['messages'] = [dict(id=str(i), time=self.now.isoformat(), kind='text', sender='虚构老师',
