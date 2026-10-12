@@ -66,6 +66,23 @@ class SchoolActionInventoryTests(unittest.TestCase):
             self.assertNotIn('10月7日', listed[row['task_id']]['body'])
             self.assertEqual('不用录音' in row['body'], '背诵' in row['title'])
 
+    def test_first_body_example_does_not_swallow_the_real_header(self):
+        for header, due in (('英语作业：', ''), ('英语，明天作业：', '2026-10-06')):
+            with self.subTest(header=header):
+                t = type(self)(methodName='runTest')
+                t.setUp()
+                try:
+                    text = header + '示例：“10月7日前完成练习卷”，仅说明格式；背诵Unit 2；不用录音。'
+                    payload, refs = t._ingest([text])
+                    row, = t.saved(payload, t.run_receipt(payload, [t.proposal('背诵Unit 2', refs)]), 1)
+                    self.assertEqual((row['state'], row['due']), ('accepted', due))
+                    self.assertIn('背诵Unit 2', row['body'])
+                    self.assertIn('不用录音', row['body'])
+                    for example in ('示例', '10月7日', '完成练习卷'):self.assertNotIn(example, row['body'])
+                    anchors = json.loads(row['plan'])['school_original_action']['anchors']
+                    self.assertTrue(all(a['quote'] in text and '示例' not in a['quote'] for a in anchors))
+                finally:t.doCleanups()
+
     def test_model_cannot_create_an_extra_action_from_a_format_example(self):
         payload, refs = self._ingest([
             '英语作业：背诵Unit 2；示例：“10月7日前完成练习卷”，仅说明格式；不用录音。'])

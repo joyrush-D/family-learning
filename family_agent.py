@@ -2896,7 +2896,7 @@ def _school_native_blocks(text):
     # A heading may share a date only when it names the following requirements.
     # A date directly before a first command remains inside that command.
     header='';body_start=0;container=False
-    head=re.match(r'^([^。；;\n]{1,100})[：:]\s*',text)
+    head=re.match(r'^([^。；;\n]{1,100}?)[：:]\s*',text)
     if head:
         lead=head[1]
         container=bool(re.search(r'(?:完成|做|订正)[^。；;]{0,35}(?:练习卷|练习册|试卷)',lead))
