@@ -2906,6 +2906,10 @@ def _school_native_blocks(text):
     pieces=[];preparation=[];shared=[];examples=[]
     def crosses_example(left,right):return any(left<end and start<right for start,end in examples)
     container_object=_school_native_object(head[1]) if container else ''
+    if container:
+        # The worksheet's own heading is a requirement; its first body clause can already be an example.
+        pieces.append(dict(start=0,end=head.end(),purpose='learning',primary=head[1]))
+        body_start=head.end()
     for start,end in _school_native_spans(text,body_start):
         marker=re.match(r'\s*'+_SCHOOL_NATIVE_MARKER,text[start:end])
         if marker:start+=marker.end()
@@ -2956,8 +2960,6 @@ def _school_native_blocks(text):
                 raise AgentError('示例后的条件尚未能唯一归到学校行动，完整原批次保留',code='school_action_coverage')
             if owner is not pieces[-1] or separated:owner.setdefault('conditions',[]).append(clause)
             else:pieces[-1]['end']=end
-        elif container:
-            pieces.append(dict(start=0,end=end,purpose='learning',primary=head[1]))
         elif _school_native_object(clause):
             preparation.append((start,end))
     if preparation and pieces:

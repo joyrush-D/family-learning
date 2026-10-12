@@ -92,15 +92,15 @@ class SchoolActionInventoryTests(unittest.TestCase):
     def test_example_separated_condition_keeps_the_named_action_not_its_sibling(self):
         payload, refs = self._ingest([
             '今天作业：英语，朗读Unit 2课文两遍；数学，完成练习卷第1–3题；'
-            '格式示例：“10月7日前完成练习卷”，仅说明格式；朗读不用录音。'])
+            '格式示例：“10月7日前完成练习卷”，仅说明格式；朗读录音不用上传。'])
         rows = self.saved(payload, self.run_receipt(payload, [self.proposal('朗读Unit 2课文两遍', refs),
             self.proposal('完成练习卷第1–3题', refs, subject='数学')]), 2)
         for row in rows:
-            self.assertEqual('朗读不用录音' in row['body'], '朗读' in row['title'])
+            self.assertEqual('朗读录音不用上传' in row['body'], '朗读' in row['title'])
             self.assertNotIn('10月7日', row['body'])
 
     def test_example_cannot_prove_a_condition_for_another_subject_or_object(self):
-        for condition in ('数学不用录音', 'Unit 3不用录音', '练习卷不用签字'):
+        for condition in ('数学不用录音', 'Unit 3不用录音', '这份练习卷不用签字'):
             with self.subTest(condition=condition):
                 t = type(self)(methodName='runTest')
                 t.setUp()
@@ -111,6 +111,7 @@ class SchoolActionInventoryTests(unittest.TestCase):
 
     def test_worksheet_steps_and_preparation_keep_literal_fragments_across_examples(self):
         for text in (
+            '英语，明天完成一份练习卷：示例：“10月7日前完成练习卷”，仅说明格式；单面打印；完成第1–3题；请家长签字。',
             '英语，明天完成一份练习卷：单面打印；示例：“10月7日前完成练习卷”，仅说明格式；完成第1–3题；请家长签字。',
             '英语作业：先单面打印练习卷；示例：“10月7日前完成练习卷”，仅说明格式；明天完成练习卷第1–3题；请家长签字。'):
             with self.subTest(text=text):
