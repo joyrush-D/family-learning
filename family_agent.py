@@ -2823,6 +2823,7 @@ _SCHOOL_NATIVE_SUBJECTS=r'语文|数学|英语|科学|历史|地理|物理|化�
 _SCHOOL_NATIVE_DAY=r'(?:今天|今晚|明天|明晚|后天|(?:\d{4}年)?\d{1,2}月\d{1,2}日?|\d{4}-\d{2}-\d{2})'
 _SCHOOL_NATIVE_DATE=r'(?:'+_SCHOOL_NATIVE_DAY+r'|(?:本|下)?(?:周|星期|礼拜)[一二三四五六日天])'
 _SCHOOL_NATIVE_MARKER=r'(?:[1-9][0-9]?[.．、]|第[一二三四五六七八九十0-9]+项\s*[:：]?)\s*'
+_SCHOOL_NATIVE_EXAMPLE=re.compile(r'^(?:示例|例如|格式示例)[：:]')
 
 
 def _school_native_command(clause):
@@ -2885,7 +2886,7 @@ def _school_native_condition_owner(clause,pieces):
 
 
 def _school_native_blocks(text):
-    """Keep contiguous action/condition blocks; punctuation alone is not a task.
+    """Keep each action's literal requirement fragments; punctuation alone is not a task.
 
     Numbered and ordinary native text use the same ledger. A worksheet's print,
     answer, check and handback steps stay together. Corrections, quoted examples,
@@ -2902,20 +2903,20 @@ def _school_native_blocks(text):
         common=bool(re.search(r'(?:作业|要求|任务|事项|通知|完成(?:[二两三四五六七八九十2-9]项)?(?:要求|作业|任务|练习|事项|通知)?)\s*$',lead))
         label=bool(re.fullmatch(r'(?:'+_SCHOOL_NATIVE_SUBJECTS+r')(?:和(?:'+_SCHOOL_NATIVE_SUBJECTS+r'))*',lead))
         if not container and (common or label):header=lead;body_start=head.end()
-    pieces=[];preparation=[];shared=[];gap=False
+    pieces=[];preparation=[];shared=[];examples=[]
+    def crosses_example(left,right):return any(left<end and start<right for start,end in examples)
     container_object=_school_native_object(head[1]) if container else ''
     for start,end in _school_native_spans(text,body_start):
         marker=re.match(r'\s*'+_SCHOOL_NATIVE_MARKER,text[start:end])
         if marker:start+=marker.end()
         clause=text[start:end].strip().rstrip('。；;').strip()
         if not clause:continue
-        if re.match(r'^(?:示例|例如|格式示例)[：:]',clause):
-            gap=bool(pieces)
+        if _SCHOOL_NATIVE_EXAMPLE.match(clause):
+            examples.append((start,end))
             continue
         purpose=_school_native_command(clause)
         common=re.match(r'^(?:(?:以上|这)?([二两三四五六七八九十2-9])项(?:作业|任务|要求)?|(?:以上|上述|这些|所有)(?:作业|任务|要求))(?:都|均)',clause)
         if common and pieces:
-            if gap:raise AgentError('共同标准与行动之间含未归属内容，完整原批次保留',code='school_action_coverage')
             # ponytail: do not share a comma's possible subject switch; richer scope needs a proved clause allocation.
             if re.search(r'[，,]',clause):raise AgentError('共同标准含未核明的单项条件，完整原批次保留',code='school_action_coverage')
             # Changes and optionality still need the existing semantic reader.
@@ -2931,19 +2932,29 @@ def _school_native_blocks(text):
         step=(container and bool(re.match(r'^(?:完成|做|写)[^。；;]*(?:题|这份|该卷)',clause))
               and (not _school_native_object(clause) or _school_native_object(clause)==container_object))
         if purpose and not step:
-            gap=False
             obj=_school_native_object(clause)
+            conditions=[]
             if preparation and obj and all(_school_native_object(text[left:right])==obj for left,right in preparation):
-                start=preparation[0][0]
+                if crosses_example(preparation[0][0],end):
+                    # Each retained quote must remain a literal substring, including preparation before an example.
+                    conditions=[text[left:right].strip().rstrip('。；;').strip() for left,right in preparation[1:]]+[clause]
+                    start,end=preparation[0]
+                else:start=preparation[0][0]
                 preparation=[]
             pieces.append(dict(start=start,end=end,purpose=purpose,primary=head[1] if container and not pieces else clause))
+            if conditions:pieces[-1]['conditions']=conditions
         elif step and pieces and _school_native_object(pieces[-1]['primary'])!=container_object:
             raise AgentError('穿插的资料步骤尚未能唯一归属，完整原批次保留',code='school_action_coverage')
         elif pieces:
-            if gap or shared:raise AgentError('行动条件无法连续核对，完整原批次保留',code='school_action_coverage')
+            if shared:raise AgentError('行动条件无法连续核对，完整原批次保留',code='school_action_coverage')
             # A later condition naming one earlier outcome (朗读录音上传…) belongs to it, not to the last outcome.
-            owner=_school_native_condition_owner(clause,pieces)
-            if owner is not None and owner is not pieces[-1]:owner.setdefault('conditions',[]).append(clause)
+            owner=_school_native_condition_owner(clause,pieces) or pieces[-1]
+            separated=crosses_example(owner['start'],end)
+            if separated and (_school_named_objects(clause)-_school_named_objects(owner['primary'])
+                    or set(re.findall(_SCHOOL_NATIVE_SUBJECTS,clause))-set(re.findall(_SCHOOL_NATIVE_SUBJECTS,owner['primary']+'\n'+header))
+                    or set(re.findall(_SCHOOL_NATIVE_WORKSHEET,clause))-set(re.findall(_SCHOOL_NATIVE_WORKSHEET,owner['primary']))):
+                raise AgentError('示例后的条件尚未能唯一归到学校行动，完整原批次保留',code='school_action_coverage')
+            if owner is not pieces[-1] or separated:owner.setdefault('conditions',[]).append(clause)
             else:pieces[-1]['end']=end
         elif container:
             pieces.append(dict(start=0,end=end,purpose='learning',primary=head[1]))
@@ -3155,6 +3166,9 @@ def _school_native_unlocated(quote,refs,actions,entries,spans):
     ref=next(iter(located));entry=entries.get(ref);text=entry['text'] if entry else ''
     if text.count(quote)!=1:return False
     start=text.index(quote);end=start+len(quote)
+    for left,right in _school_native_spans(text,0):
+        clause=re.sub(r'^\s*'+_SCHOOL_NATIVE_MARKER,'',text[left:right]).strip()
+        if _SCHOOL_NATIVE_EXAMPLE.match(clause) and max(start,left)<min(end,right):return False
     for action in actions:
         if action['ref']!=ref:continue
         if text.count(action['quote'])!=1 or quote in action.get('header',''):return False
@@ -3289,7 +3303,8 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
             value=_text(proposal,name,field.get('maxLength',4000))
             if 'enum' in field and value not in field['enum']:raise AgentError('学校独立要求字段无法核对')
     refs={q['ref'] for q in proposal['evidence']};quote=proposal['title_quote'].strip().rstrip('；;。').strip()
-    matches=[a for a in actions if a['ref'] in refs and quote and (quote in a['quote'] or any(quote in c['quote'] for c in a['changes']))]
+    matches=[a for a in actions if a['ref'] in refs and quote and (any(quote in own for own in [a['quote']]+a.get('conditions',[]))
+        or any(quote in c['quote'] for c in a['changes']))]
     if not matches:
         owned={a['ref'] for a in actions}|{s['ref'] for a in actions for s in a['supplements']+a['changes']}
         # An outcome the ledger did not locate keeps the general checks only when disjoint from every located one.
@@ -3426,7 +3441,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         fields['properties'].update(action_quote={'type':'string','maxLength':600},existing_item_id={'type':'string','enum':['']+[r['id'] for r in school_existing]})
     if routing: schema['properties']['proposals']['items']['properties']['task_target_id']['enum']=['']+[t['id'] for t in school_tasks]
     prompt=SCHOOL_PROMPT if routing else PROMPT
-    if native_actions:prompt+='\nrequired_native_actions是程序按原文定位的独立成果及其完整条件，不要求老师写明总数或编号。每项必须单独返回一次，title_quote逐字从该项quote选择包含动作和对象的文字，task_purpose与本项purpose一致；没有purpose而给出purpose_options的写入成果，按完整原消息的实际用途从中选择，科目词或把/将写入句式本身不决定用途。打印、作答、自查、签字等同一份资料的步骤已归本项，不另起任务。shared_conditions是本消息明确适用于所有本项的共同标准，每项都须保留。supplements是同一稳定发布者明确点名的本项补充，必须一起引用对应ref，不分给其他作业；不能合并独立成果，也不能只引用消息编号后漏掉要求。完整标准由程序保留，日期只按该项header/quote/shared_conditions和各自原发送日核对，不借同通知另一项的截止。'
+    if native_actions:prompt+='\nrequired_native_actions是程序按原文定位的独立成果及其完整条件，不要求老师写明总数或编号。每项必须单独返回一次，title_quote逐字从该项quote或conditions的一段原句选择包含动作和对象的文字，不能拼接片段；格式示例不是行动或截止。task_purpose与本项purpose一致；没有purpose而给出purpose_options的写入成果，按完整原消息的实际用途从中选择，科目词或把/将写入句式本身不决定用途。打印、作答、自查、签字等同一份资料的步骤已归本项，不另起任务。shared_conditions是本消息明确适用于所有本项的共同标准，每项都须保留。supplements是同一稳定发布者明确点名的本项补充，必须一起引用对应ref，不分给其他作业；不能合并独立成果，也不能只引用消息编号后漏掉要求。完整标准由程序保留，日期只按该项header/quote/conditions/shared_conditions和各自原发送日核对，不借同通知另一项的截止。'
     if historical: prompt+='\n这是已处理消息的独立行动补漏。逐项对照existing_actions，保留家长当前修改与accepted/dismissed/pending决定，不恢复原任务。action_quote逐字引用包含本项动作和对象的完整原句，不将多个独立事项合并；existing_item_id只有同一具体行动才填旧编号，新漏项填空。已归纳/已忽略事项也返回以覆盖输入，但不会另建。不能按标题相似合并；同消息另项仍单独返回。due只从本项action_quote按原发送日换算，不能借用同通知另一项或旧任务日期。适用性/原件仍未读保留具体缺口。'
     result = family_llm._chat_json([{'role': 'system', 'content': prompt},
         {'role': 'user', 'content': _json(content)}], schema, 'family_agent_selection', timeout=45, data_path=data_path)

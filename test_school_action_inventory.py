@@ -27,14 +27,105 @@ class SchoolActionInventoryTests(unittest.TestCase):
 
     def test_example_between_action_and_condition_cannot_supply_a_deadline(self):
         payload, refs = self._ingest(['英语作业：背诵Unit 2；示例：“10月7日前完成练习卷”，仅说明格式；不用录音。'])
-        reply = self.proposal('背诵Unit 2', refs, goal='背诵Unit 2；不用录音。')
+        reply = self.proposal('背诵Unit 2', refs)  # The complete original supplies the omitted condition.
         result = self.run_receipt(payload, [reply])
-        self.assertEqual((result['failed'], result['processed'], result['created']), (1, 0, 0))
-        self.assertEqual(self.model.call_count, 0, 'noncontiguous standards fail before a model request')
+        row, = self.saved(payload, result, 1)
+        self.assertEqual((row['state'], row['due']), ('accepted', ''))
+        self.assertIn('背诵Unit 2', row['body'])
+        self.assertIn('不用录音', row['body'])
+        for example in ('示例', '10月7日', '完成练习卷'):
+            self.assertNotIn(example, row['body'])
+        plan = json.loads(row['plan'])
+        anchors = plan['school_original_action']['anchors']
+        self.assertEqual([a['quote'] for a in anchors], ['背诵Unit 2', '不用录音'])
+        self.assertTrue(all(a['ref'] == refs[0] and not a['upload_ids'] and not a['pages']
+                            and a['quote'] in payload['messages'][0]['text'] for a in anchors))
         with self.store._db() as c:
-            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items').fetchone()[0], 0)
-            self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages')], [0])
+            self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages')], [1])
             self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages')], payload['messages'])
+            self.assertEqual(tuple(c.execute("SELECT done,error,next_try FROM agent_jobs WHERE id LIKE 'messages:%'").fetchone()),
+                             (1, '', ''))
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=6))
+        self.assertEqual((replay['failed'], replay['processed'], replay['created']), (0, 0, 0))
+        self.assertEqual(self.model.call_count, 1)
+
+    def test_format_example_does_not_block_another_message_in_the_batch(self):
+        payload, refs = self._ingest([
+            '英语作业：背诵Unit 2；示例：“10月7日前完成练习卷”，仅说明格式；不用录音。',
+            '数学作业：完成练习卷第1–3题。'])
+        proposals = [self.proposal('背诵Unit 2', refs[:1]),
+                     self.proposal('完成练习卷第1–3题', refs[1:], subject='数学')]
+        rows = self.saved(payload, self.run_receipt(payload, proposals), 2)
+        today = self.now.date().isoformat()
+        listed = {r['task_id']: r for r in self.app.calendar_snapshot(today, today)['inbox']}
+        for row in rows:
+            self.assertEqual((row['state'], row['due']), ('accepted', ''))
+            self.assertEqual([e['ref'] for e in json.loads(row['evidence'])],
+                             refs[:1] if '背诵' in row['title'] else refs[1:])
+            self.assertEqual(listed[row['task_id']]['agenda']['category'], 'homework')
+            self.assertNotIn('10月7日', listed[row['task_id']]['body'])
+            self.assertEqual('不用录音' in row['body'], '背诵' in row['title'])
+
+    def test_model_cannot_create_an_extra_action_from_a_format_example(self):
+        payload, refs = self._ingest([
+            '英语作业：背诵Unit 2；示例：“10月7日前完成练习卷”，仅说明格式；不用录音。'])
+        proposals = [self.proposal('背诵Unit 2', refs),
+                     self.proposal('完成练习卷', refs, due='2026-10-07')]
+        self._assert_rejected_batch(payload, self.run_receipt(payload, proposals))
+
+    def test_model_example_deadline_is_held_without_losing_the_real_conditions(self):
+        payload, refs = self._ingest([
+            '英语作业：背诵Unit 2；示例：“10月7日前完成练习卷”，仅说明格式；不用录音。'])
+        row, = self.saved(payload, self.run_receipt(payload, [self.proposal('背诵Unit 2', refs, due='2026-10-07')]), 1)
+        self.assertEqual((row['state'], row['due'], row['task_id']), ('pending', '', ''))
+        self.assertEqual(json.loads(row['plan'])['school_task']['state'], 'review')
+        self.assertIn('不用录音', row['body'])
+        self.assertNotIn('10月7日', row['body'])
+
+    def test_example_separated_condition_is_rechecked_in_the_save_transaction(self):
+        payload, refs = self._ingest([
+            '英语作业：背诵Unit 2；示例：“10月7日前完成练习卷”，仅说明格式；不用录音。'])
+        def omit_condition(items, context):
+            next(i for i in items if '背诵' in i['title'])['body'] = '背诵Unit 2'
+        self.reject_inventory_change_in_transaction(payload, [self.proposal('背诵Unit 2', refs)], omit_condition)
+
+    def test_example_separated_condition_keeps_the_named_action_not_its_sibling(self):
+        payload, refs = self._ingest([
+            '今天作业：英语，朗读Unit 2课文两遍；数学，完成练习卷第1–3题；'
+            '格式示例：“10月7日前完成练习卷”，仅说明格式；朗读不用录音。'])
+        rows = self.saved(payload, self.run_receipt(payload, [self.proposal('朗读Unit 2课文两遍', refs),
+            self.proposal('完成练习卷第1–3题', refs, subject='数学')]), 2)
+        for row in rows:
+            self.assertEqual('朗读不用录音' in row['body'], '朗读' in row['title'])
+            self.assertNotIn('10月7日', row['body'])
+
+    def test_example_cannot_prove_a_condition_for_another_subject_or_object(self):
+        for condition in ('数学不用录音', 'Unit 3不用录音', '练习卷不用签字'):
+            with self.subTest(condition=condition):
+                t = type(self)(methodName='runTest')
+                t.setUp()
+                try:
+                    payload, refs = t._ingest(['英语作业：背诵Unit 2；示例：“完成练习卷”，仅说明格式；' + condition + '。'])
+                    t._assert_rejected_batch(payload, t.run_receipt(payload, [t.proposal('背诵Unit 2', refs)]), model_calls=0)
+                finally:t.doCleanups()
+
+    def test_worksheet_steps_and_preparation_keep_literal_fragments_across_examples(self):
+        for text in (
+            '英语，明天完成一份练习卷：单面打印；示例：“10月7日前完成练习卷”，仅说明格式；完成第1–3题；请家长签字。',
+            '英语作业：先单面打印练习卷；示例：“10月7日前完成练习卷”，仅说明格式；明天完成练习卷第1–3题；请家长签字。'):
+            with self.subTest(text=text):
+                t = type(self)(methodName='runTest')
+                t.setUp()
+                try:
+                    payload, refs = t._ingest([text])
+                    quote = '完成第1–3题' if '完成第1–3题' in text else '完成练习卷第1–3题'
+                    row, = t.saved(payload, t.run_receipt(payload, [t.proposal(quote, refs, due='2026-10-06')]), 1)
+                    self.assertEqual((row['state'], row['due']), ('accepted', '2026-10-06'))
+                    for own in ('单面打印', quote, '请家长签字'):self.assertIn(own, row['body'])
+                    for example in ('示例', '10月7日'):self.assertNotIn(example, row['body'])
+                    anchors = json.loads(row['plan'])['school_original_action']['anchors']
+                    self.assertTrue(all(a['quote'] in text and '示例' not in a['quote'] and '10月7日' not in a['quote'] for a in anchors))
+                finally:t.doCleanups()
 
     def proposal(self, quote, refs, *, goal=None, due='', subject='英语', purpose='learning'):
         return fixtures.school_proposal(
@@ -271,8 +362,7 @@ class SchoolActionInventoryTests(unittest.TestCase):
                      '以上作业都明天免交。',
                      '以上作业都请家长检查，练习卷明天交。',
                      '两项都请家长检查。预习Unit 3课文。',
-                     '两项都请家长检查。明天交。',
-                     '示例：“家长检查”，仅说明格式。两项都请家长检查。'):
+                     '两项都请家长检查。明天交。'):
             with self.subTest(tail=tail):
                 with self.assertRaises(agent.AgentError) as error:
                     agent._school_native_blocks(first + tail)
@@ -280,6 +370,19 @@ class SchoolActionInventoryTests(unittest.TestCase):
         # Global optionality needs semantic classification; never force the old
         # mandatory action purposes merely because two literal commands exist.
         self.assertEqual(agent._school_native_blocks(first + '两项都选做。'), [])
+
+    def test_format_example_does_not_interrupt_an_explicit_shared_standard(self):
+        shared = '两项都请家长检查'
+        quotes = ('朗读Unit 2课文两遍', '完成练习卷第1–3题')
+        payload, refs = self._ingest(['英语作业：' + '。'.join(quotes) + '。'
+            '示例：“10月7日前完成练习卷”，仅说明格式。' + shared + '。'])
+        rows = self.saved(payload, self.run_receipt(payload, [self.proposal(quote, refs) for quote in quotes]), 2)
+        for row in rows:
+            self.assertEqual((row['state'], row['due']), ('accepted', ''))
+            self.assertIn(shared, row['body'])
+            self.assertNotIn('10月7日', row['body'])
+            self.assertNotIn('示例', row['body'])
+            self.assertEqual([a['quote'] for a in json.loads(row['plan'])['school_original_action']['anchors']][-1], shared)
 
     def test_exercise_deadline_in_next_sentence_is_not_borrowed_by_reading(self):
         payload, refs = self._ingest([
