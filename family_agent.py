@@ -5,6 +5,7 @@ Collectors only ingest configured sources; model selections never write growth f
 """
 import argparse
 import copy
+from collections import deque
 from contextlib import contextmanager, nullcontext
 import datetime as dt
 import hashlib
@@ -616,6 +617,91 @@ def _school_batches(source_id, messages):
                 batches.append([]); size = 0
             batches[-1].append(value); size += length
     return batches
+
+
+def _school_pending_batches(store, source_id):
+    """Scan this tick's finite inbox without moving the collector cursor or regrouping claimed jobs."""
+    with store._db() as c:
+        end = c.execute('SELECT MAX(rowid) FROM agent_messages WHERE source_id=?', (source_id,)).fetchone()[0] or 0
+        jobs = dict(c.execute("SELECT id,fingerprint FROM agent_jobs WHERE done=0 AND id LIKE 'messages:%'"))
+
+    def rows():
+        position = 0
+        while position < end:
+            with store._db() as c:
+                page = c.execute('SELECT rowid,payload FROM agent_messages WHERE source_id=? AND processed=0 AND rowid>? AND rowid<=? ORDER BY rowid LIMIT 72',
+                                 (source_id, position, end)).fetchall()
+            if not page: return
+            position = page[-1]['rowid']
+            for row in page: yield json.loads(row['payload'])
+
+    incoming = iter(rows()); pending = deque(); batch = []; size = 0
+
+    def fill(count):
+        while len(pending) < count:
+            try: pending.append(next(incoming))
+            except StopIteration: break
+
+    def claimed(offset=0):
+        fill(offset + 6)
+        values = []; result = None
+        for message in list(pending)[offset:offset + 6]:
+            values.append(message)
+            key = 'messages:' + _hash([source_id, [v['id'] for v in values]])[:40]
+            if key in jobs and jobs[key] == _hash({'school_learning_policy': 8, 'messages': values}):
+                result = values.copy()
+        return result
+
+    def groups(values):
+        return _publication_groups([dict(source_id=source_id, message=v) for v in values])
+
+    while True:
+        fill(1)
+        if not pending: break
+        fixed = claimed()
+        if fixed:
+            if batch:
+                yield batch; batch = []; size = 0
+            # Older append behavior can have claimed overlapping inputs. Only a
+            # complete existing job covering the overlap may run; never invent a
+            # fresh job for a member left over by one of those failed inputs.
+            covered = len(fixed); offset = 1
+            while offset < covered and covered <= 6:
+                overlap = claimed(offset)
+                if overlap: covered = max(covered, offset + len(overlap))
+                offset += 1
+            if covered > len(fixed):
+                while covered:
+                    overlap = claimed()
+                    if overlap: covered = max(covered, len(overlap))
+                    pending.popleft(); covered -= 1
+                continue
+            for _ in fixed: pending.popleft()
+            yield fixed
+            # A late attachment/caption of a blocked publication must not create a new
+            # job containing its old body. Keep that new suffix pending until the body
+            # is handled; later independent publications can still pass it.
+            publication = [v['message'] for v in groups(fixed)[-1]['messages']]
+            fill(1)
+            while pending and len(publication) < 6 and not claimed():
+                candidate = publication + [pending[0]]
+                if len(groups(candidate)) != 1: break
+                publication.append(pending.popleft()); fill(1)
+            continue
+        publication = [pending.popleft()]
+        fill(1)
+        while pending and len(publication) < 6 and not claimed():
+            candidate = publication + [pending[0]]
+            if len(groups(candidate)) != 1: break
+            publication.append(pending.popleft()); fill(1)
+        lengths = [len(_json(v)) for v in publication]
+        if sum(lengths) <= 14000 and batch and (len(batch) + len(publication) > 6 or size + sum(lengths) > 14000):
+            yield batch; batch = []; size = 0
+        for value, length in zip(publication, lengths):
+            if batch and (len(batch) >= 6 or size + length > 14000):
+                yield batch; batch = []; size = 0
+            batch.append(value); size += length
+    if batch: yield batch
 
 
 class AgentError(ValueError):
@@ -5158,10 +5244,7 @@ def run_once(app, now=None):
                 with store._db() as c:
                     saved = c.execute('SELECT * FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
                     store._binding(source, saved)
-                    messages = c.execute('SELECT id,payload FROM agent_messages WHERE source_id=? AND processed=0 ORDER BY rowid LIMIT 72', (source['id'],)).fetchall()
-                if not messages: continue
-                batches = _school_batches(source['id'], messages)
-                for values in batches:
+                for values in _school_pending_batches(store, source['id']):
                     key = 'messages:' + _hash([source['id'], [row['id'] for row in values]])[:40]
                     fp = store._job(key, {'school_learning_policy': 8, 'messages': values}, now, model=True)
                     if not fp: continue
