@@ -126,7 +126,8 @@ class TeacherReferencePriorityTests(unittest.TestCase):
         for q,note in zip(result['questions'],notes):self.assertIn(note,q['answer'])
         partial=self.draft([items[0]|dict(answer='教师参考：B')],teacher=teacher,question=first+'：'+ask+'\n实际作答：C')
         self.assertEqual(partial['questions'][0]['judgment'],'unknown')
-        self.assertIn(notes[0],partial['questions'][0]['answer'])
+        # Result fields trim the paragraph's final stop, while keeping its words.
+        self.assertIn(notes[0].rstrip('。'),partial['questions'][0]['answer'])
 
     def test_unresolved_prose_before_next_number_never_grades_on_first_line(self):
         note='本题可以选择C，其他题另按各自要求。'
