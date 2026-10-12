@@ -3596,6 +3596,183 @@ class AgentTests(unittest.TestCase):
         self.store.ingest(self.payload(expected='11', cursor='12', message='12', offset=20))
         self.assertEqual(self.store.snapshot()['sources'][0]['error'], '')
 
+    def _school_forward_messages(self, count):
+        return [dict(id=str(i),time=self.now.isoformat(),kind='text',sender='虚构老师',
+                     text='独立的虚构通知 '+str(i),unread=False) for i in range(1,count+1)]
+
+    def _school_forward_good_model(self, messages, *args, **kwargs):
+        evidence=json.loads(messages[-1]['content'])['evidence']
+        return dict(proposals=[school_proposal(title_quote=e['text'],evidence=[dict(ref=e['ref'])],
+            due='2026-02-11' if e['text']=='明天交回活动回执。' else '',
+            task_title='交回活动回执' if e['text']=='明天交回活动回执。' else '',
+            task_goal=e['text'] if e['text']=='明天交回活动回执。' else '',
+            task_state='ready' if e['text']=='明天交回活动回执。' else 'reference',
+            task_purpose='admin' if e['text']=='明天交回活动回执。' else 'unknown',
+            task_reason='虚构通知按原文保留。') for e in evidence])
+
+    def _school_forward_jobs(self):
+        with self.app.connect() as c:
+            return {r['id']:dict(r) for r in c.execute("SELECT * FROM agent_jobs WHERE id LIKE 'messages:%'")}
+
+    def _school_forward_exhausted_prefix(self, count):
+        messages=self._school_forward_messages(count)
+        self.store.ingest(dict(self.payload(cursor=str(count)),messages=messages))
+        for start in range(0,count,6):
+            values=messages[start:start+6]
+            key='messages:'+agent._hash([self.source['id'],[v['id'] for v in values]])[:40]
+            for minutes in (0,6,17):
+                now=self.now+dt.timedelta(minutes=minutes)
+                fp=self.store._job(key,dict(school_learning_policy=8,messages=values),now,model=True)
+                self.assertTrue(fp)
+                self.store._fail(key,now,fingerprint=fp,reason='虚构固定失败')
+        return messages,self._school_forward_jobs()
+
+    def test_school_exhausted_prefix_beyond_both_old_bounds_keeps_new_batch_reachable(self):
+        for count in (36,78):
+            with self.subTest(count=count):
+                # Each subcase has its own synthetic database and natural Store retry ledger.
+                self.setUp()
+                original,old_jobs=self._school_forward_exhausted_prefix(count)
+                new=self.payload(expected=str(count),cursor=str(count+1),message=str(count+1),offset=18)
+                new['messages'][0]['text']='明天交回活动回执。';self.store.ingest(new)
+                with patch.object(agent.family_llm,'_chat_json',side_effect=self._school_forward_good_model) as model:
+                    first=agent.run_once(self.app,self.now+dt.timedelta(minutes=18))
+                    agent.run_once(self.app,self.now+dt.timedelta(minutes=27))
+                    agent.run_once(self.app,self.now+dt.timedelta(days=1))
+                self.assertEqual((first['processed'],model.call_count),(1,1))
+                jobs=self._school_forward_jobs()
+                self.assertEqual({key:jobs[key] for key in old_jobs},old_jobs)
+                with self.app.connect() as c:
+                    self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+                    self.assertEqual(c.execute('SELECT cursor FROM agent_sources').fetchone()[0],str(count+1))
+                    saved=list(c.execute('SELECT payload,processed FROM agent_messages ORDER BY rowid'))
+                self.assertEqual([json.loads(r['payload']) for r in saved[:-1]],original)
+                self.assertTrue(all(r['processed']==0 for r in saved[:-1]));self.assertEqual(saved[-1]['processed'],1)
+                self.assertEqual(first['state'],'needs_attention','old failures remain visible after new success')
+                # The existing explicit retry route recovers an old exact batch and never replays the new one.
+                key=next(iter(old_jobs));self.store.act(dict(action='retry',id=key))
+                with patch.object(agent.family_llm,'_chat_json',side_effect=self._school_forward_good_model) as retry:
+                    recovered=agent.run_once(self.app,self.now+dt.timedelta(days=1,minutes=1))
+                    agent.run_once(self.app,self.now+dt.timedelta(days=1,minutes=2))
+                self.assertEqual((recovered['processed'],retry.call_count),(6,1))
+                job=self._school_forward_jobs()[key]
+                self.assertEqual((job['fingerprint'],job['attempts'],job['done']),(old_jobs[key]['fingerprint'],1,1))
+                with self.app.connect() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],1)
+
+    def test_school_cooling_partial_batch_and_later_independent_append_keep_original_identity(self):
+        original=self._school_forward_messages(2)
+        self.store.ingest(dict(self.payload(cursor='2'),messages=original))
+        with patch.object(agent.family_llm,'_chat_json',side_effect=agent.family_llm.LLMUnavailable('synthetic-offline')) as failed:
+            agent.run_once(self.app,self.now)
+        self.assertEqual(failed.call_count,1);old=self._school_forward_jobs()
+        new=self.payload(expected='2',cursor='3',message='3',offset=1)
+        new['messages'][0]['text']='明天交回活动回执。';self.store.ingest(new)
+        with patch.object(agent.family_llm,'_chat_json',side_effect=self._school_forward_good_model) as model:
+            result=agent.run_once(self.app,self.now+dt.timedelta(minutes=1))
+            agent.run_once(self.app,self.now+dt.timedelta(minutes=2))
+            self.assertEqual((result['processed'],model.call_count),(1,1))
+            request=json.loads(model.call_args.args[0][-1]['content'])
+            self.assertEqual([e['ref'].rsplit(':',1)[-1] for e in request['evidence']],['3'])
+            self.assertEqual({k:self._school_forward_jobs()[k] for k in old},old)
+            recovered=agent.run_once(self.app,self.now+dt.timedelta(minutes=5))
+            agent.run_once(self.app,self.now+dt.timedelta(minutes=6))
+        self.assertEqual((recovered['processed'],model.call_count),(2,2))
+        job=self._school_forward_jobs()[next(iter(old))]
+        self.assertEqual((job['fingerprint'],job['attempts'],job['done']),(next(iter(old.values()))['fingerprint'],2,1))
+
+    def test_school_naturally_exhausted_partial_batch_does_not_get_new_key_after_append(self):
+        original=self._school_forward_messages(2)
+        self.store.ingest(dict(self.payload(cursor='2'),messages=original))
+        with patch.object(agent.family_llm,'_chat_json',side_effect=agent.family_llm.LLMUnavailable('synthetic-offline')) as failed:
+            for minute in (0,5,15,16,1440):agent.run_once(self.app,self.now+dt.timedelta(minutes=minute))
+        self.assertEqual(failed.call_count,3);old=self._school_forward_jobs()
+        new=self.payload(expected='2',cursor='3',message='3',offset=1441)
+        new['messages'][0]['text']='明天交回活动回执。';self.store.ingest(new)
+        with patch.object(agent.family_llm,'_chat_json',side_effect=self._school_forward_good_model) as model:
+            result=agent.run_once(self.app,self.now+dt.timedelta(minutes=1441))
+            agent.run_once(self.app,self.now+dt.timedelta(minutes=1450))
+        self.assertEqual((result['processed'],model.call_count),(1,1))
+        self.assertEqual({k:self._school_forward_jobs()[k] for k in old},old)
+        with self.app.connect() as c:self.assertEqual(dict(c.execute('SELECT id,processed FROM agent_messages')),{'1':0,'2':0,'3':1})
+
+    def test_school_scan_keeps_publication_across_page_boundary_and_limits_current_snapshot(self):
+        messages=self._school_forward_messages(77)
+        for i,m in enumerate(messages):m.update(sender_id='20001',message_order=str(i+1),time=(self.now+dt.timedelta(seconds=i)).isoformat())
+        messages[71]['text']='英语：朗读课文，题目见附件。'
+        messages[72].update(text='[图片原件：1份，内容未读]',unread=True)
+        messages[73]['text']='以上是朗读练习的题目。'
+        self.store.ingest(dict(self.payload(cursor='77'),messages=messages))
+        batches=agent._school_pending_batches(self.store,self.source['id'])
+        first=next(batches)
+        self.store.ingest(self.payload(expected='77',cursor='78',message='78',offset=3))
+        values=[first,*batches]
+        ids=[[m['id'] for m in b] for b in values]
+        self.assertEqual([m['id'] for b in values for m in b],[m['id'] for m in messages])
+        self.assertEqual([b for b in ids if '72' in b],[list(map(str,range(72,78)))])
+        self.assertTrue(all(len(b)<=6 and sum(len(agent._json(m)) for m in b)<=14000 for b in values))
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT cursor FROM agent_sources').fetchone()[0],'78')
+            self.assertEqual(c.execute('SELECT SUM(processed) FROM agent_messages').fetchone()[0],0)
+
+    def test_school_existing_overlap_uses_full_longest_job_and_short_retry_does_not_free_long_budget(self):
+        messages=self._school_forward_messages(2)
+        self.store.ingest(dict(self.payload(cursor='2'),messages=messages))
+        keys=[]
+        for values in (messages[:1],messages):
+            key='messages:'+agent._hash([self.source['id'],[v['id'] for v in values]])[:40];keys.append(key)
+            for minute in (0,5,15):
+                now=self.now+dt.timedelta(minutes=minute)
+                fp=self.store._job(key,dict(school_learning_policy=8,messages=values),now,model=True)
+                self.store._fail(key,now,fingerprint=fp,reason='虚构旧追加失败')
+        self.store.act(dict(action='retry',id=keys[0]));old=self._school_forward_jobs()
+        new=self.payload(expected='2',cursor='3',message='3',offset=16)
+        new['messages'][0]['text']='明天交回活动回执。';self.store.ingest(new)
+        with patch.object(agent.family_llm,'_chat_json',side_effect=self._school_forward_good_model) as model:
+            result=agent.run_once(self.app,self.now+dt.timedelta(minutes=16))
+            agent.run_once(self.app,self.now+dt.timedelta(minutes=17))
+        self.assertEqual((result['processed'],model.call_count),(1,1))
+        self.assertEqual({key:self._school_forward_jobs()[key] for key in old},old)
+        self.store.act(dict(action='retry',id=keys[1]))
+        with patch.object(agent.family_llm,'_chat_json',side_effect=self._school_forward_good_model) as retry:
+            recovered=agent.run_once(self.app,self.now+dt.timedelta(minutes=18))
+        self.assertEqual((recovered['processed'],retry.call_count),(2,1))
+        self.assertEqual(self._school_forward_jobs()[keys[0]],old[keys[0]],'overlap recovery does not rewrite an older job')
+
+    def test_school_crossing_old_jobs_without_one_full_identity_stay_pending_and_new_notice_passes(self):
+        messages=self._school_forward_messages(3)
+        self.store.ingest(dict(self.payload(cursor='3'),messages=messages))
+        for values in (messages[:2],messages[1:]):
+            key='messages:'+agent._hash([self.source['id'],[v['id'] for v in values]])[:40]
+            fp=self.store._job(key,dict(school_learning_policy=8,messages=values),self.now,model=True)
+            self.store._fail(key,self.now,fingerprint=fp,reason='虚构交错失败')
+        old=self._school_forward_jobs()
+        new=self.payload(expected='3',cursor='4',message='4',offset=6)
+        new['messages'][0]['text']='明天交回活动回执。';self.store.ingest(new)
+        with patch.object(agent.family_llm,'_chat_json',side_effect=self._school_forward_good_model) as model:
+            result=agent.run_once(self.app,self.now+dt.timedelta(minutes=6))
+            agent.run_once(self.app,self.now+dt.timedelta(minutes=7))
+        self.assertEqual((result['processed'],model.call_count),(1,1))
+        self.assertEqual({key:self._school_forward_jobs()[key] for key in old},old)
+        with self.app.connect() as c:self.assertEqual(dict(c.execute('SELECT id,processed FROM agent_messages')),{'1':0,'2':0,'3':0,'4':1})
+
+    def test_school_late_attachment_of_exhausted_body_waits_without_blocking_independent_notice(self):
+        messages=self._school_forward_messages(1)
+        messages[0].update(text='英语：朗读课文，题目见附件。',sender_id='20001',message_order='1')
+        self.store.ingest(dict(self.payload(cursor='1'),messages=messages))
+        with patch.object(agent.family_llm,'_chat_json',side_effect=agent.family_llm.LLMUnavailable('synthetic-offline')):
+            for minute in (0,5,15):agent.run_once(self.app,self.now+dt.timedelta(minutes=minute))
+        old=self._school_forward_jobs()
+        later=self._school_forward_messages(3)[1:]
+        later[0].update(text='[图片原件：1份，内容未读]',sender_id='20001',message_order='2',unread=True,
+                        time=(self.now+dt.timedelta(seconds=1)).isoformat())
+        later[1]['text']='明天交回活动回执。'
+        self.store.ingest(dict(self.payload(expected='1',cursor='3'),messages=later))
+        with patch.object(agent.family_llm,'_chat_json',side_effect=self._school_forward_good_model) as model:
+            result=agent.run_once(self.app,self.now+dt.timedelta(minutes=16))
+        self.assertEqual((result['processed'],model.call_count),(1,1))
+        self.assertEqual({k:self._school_forward_jobs()[k] for k in old},old)
+        with self.app.connect() as c:self.assertEqual(dict(c.execute('SELECT id,processed FROM agent_messages')),{'1':0,'2':0,'3':1})
+
     def test_incomplete_twelve_message_batch_recovers_in_smaller_batches(self):
         payload = self.payload(cursor='22')
         payload['messages'] = [dict(id=str(i), time=self.now.isoformat(), kind='text', sender='虚构老师',
