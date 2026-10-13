@@ -299,7 +299,8 @@ def question_coverage_checks():
         except family_llm.LLMDraftError: pass
         else: raise AssertionError('invalid or conflicting inventory must not silently truncate or guess')
     reordered=generate(scoped|dict(question_labels=['虚构甲卷第2题','虚构甲卷 第1题']))
-    assert [q['judgment'] for q in reordered['questions']]==['unknown','correct']
+    assert [q['label'] for q in reordered['questions']]==scoped['question_labels'], 'proven original order, not the model checklist order'
+    assert [q['judgment'] for q in reordered['questions']]==['correct','unknown']
     assert reordered['questions'][1]['label']==question['label']
     return calls
 
