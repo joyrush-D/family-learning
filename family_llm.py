@@ -2066,9 +2066,19 @@ def _source_material_questions(lines):
     for start,end in zip(marks,marks[1:]+[len(lines)]):
         # A field belongs to the preceding question, not to the whole document.
         # Empty child fields are explicit too; their values never become grades.
-        fields=[field[1] for _,line in lines[start:end] for field in _REF_FIELD.finditer(line)]
-        if any(_source_child_field(field) for field in fields): kept.extend(lines[start:end])
-        else: unresolved=True
+        levels=[at for at in range(start+1,end) if _REF_SUB.match(lines[at][1].strip())]
+        boundaries=levels or [start];body=[]
+        for first,last in zip(boundaries,boundaries[1:]+[end]):
+            if levels and _ref_sub(lines[first][1].strip(),teacher=True)[0]=='*':
+                unresolved=True;continue
+            fields=[field[1] for _,line in lines[first:last] for field in _REF_FIELD.finditer(line)]
+            if any(_source_child_field(field) for field in fields): body.extend(lines[first:last])
+            else: unresolved=True
+        if body:
+            # Keep the parent heading that gives accepted leaves their complete
+            # path. Its own field cannot stand in for a sibling leaf's field.
+            if levels: kept.extend(lines[start:levels[0]])
+            kept.extend(body)
     return kept,unresolved
 
 
