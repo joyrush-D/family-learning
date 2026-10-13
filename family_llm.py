@@ -2052,7 +2052,10 @@ def _source_material_questions(lines):
         found=instruction.fullmatch(line)
         # A negative immediately governing the action is no positive role proof;
         # a material name containing a negative character is not that predicate.
-        return found and not re.search(r'(?:不要|请勿|不需要|不必|不用|不得|无需|禁止|勿|毋须)\s*$',found['basis'])
+        if not found: return False
+        basis=found['basis'].rstrip()
+        if re.search(r'(?:不得不|不能不|不可不)$',basis): return True
+        return not re.search(r'(?:不(?:要|必|用|得|能|可|需(?:要)?)?|无需|无须|禁止|请?勿|毋须)$',basis)
     marks=[at for at,(_,line) in enumerate(lines) if _REF_QUESTION.match(line.strip())]
     if not marks: return False
     before=[line.strip() for _,line in lines[:marks[0]] if line.strip()]
@@ -2062,7 +2065,7 @@ def _source_material_questions(lines):
     for start,end in zip(marks,marks[1:]+[len(lines)]):
         # A field belongs to the preceding question, not to the whole document.
         # Empty child fields are explicit too; their values never become grades.
-        if not any((field:=_REF_FIELD.search(line)) and re.fullmatch(r'(?:学生|孩子)(?:的)?(?:作答|答题|答案)',field[1])
+        if not any((field:=_REF_FIELD.search(line)) and re.match(r'(?:学生|孩子)',field[1])
                    for _,line in lines[start:end]): return False
     return True
 

@@ -1637,6 +1637,17 @@ def source_reading_role_checks():
     source=paper.replace('根据上文回答下面问题。','根据上文不要回答下面问题。')
     rows,unresolved=family_llm._source_question_inventory([dict(name='synthetic-negative-role.txt',text=source)])
     assert rows==[] and unresolved
+    for field in ('孩子答：','孩子的作答：','学生本次答案：'):
+        source=paper.replace('学生作答：木桥',field).replace('学生作答：送信员',field)
+        rows,unresolved=family_llm._source_question_inventory([dict(name='synthetic-child-field.txt',text=source)])
+        assert not unresolved and [row['line'] for row in rows]==[6,8]
+    for prefix in ('暂不','尚不','不能','无需','请勿'):
+        source=paper.replace('根据上文回答下面问题。','请根据材料'+prefix+'完成下面两道题目。')
+        rows,unresolved=family_llm._source_question_inventory([dict(name='synthetic-negative-predicate.txt',text=source)])
+        assert rows==[] and unresolved
+    source=paper.replace('根据上文回答下面问题。','根据材料不得不完成下面两道题目。')
+    rows,unresolved=family_llm._source_question_inventory([dict(name='synthetic-positive-predicate.txt',text=source)])
+    assert not unresolved and [row['line'] for row in rows]==[6,8]
     return calls
 
 
