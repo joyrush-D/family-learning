@@ -2045,28 +2045,30 @@ def _source_question_inventory(documents):
     question is no heading; conflicting identities remain unproven. These rows
     locate missing checks only and cannot supply a student's answer or a grade.
     """
-    titles=_ref_titles(documents);rows=[];unresolved=False
-    for document_index,document in enumerate(documents):
-        lines=document['text'].splitlines();ordinary=_ref_request_title([document],(),[],titles)
-        paper=None;section=None;parent=None;local=[];answer_section=False
-        first=next((n for n,line in enumerate(lines) if _REF_QUESTION.match(line.strip())),len(lines))
-        bare=not any(line.strip() for line in lines[:first])
-        for at,original in enumerate(lines,1):
+    titles=_ref_titles(documents);rows=[];unresolved=False;scoped=[]
+    for document in documents:
+        lines=[];answer_section=False
+        for at,original in enumerate(document['text'].splitlines(),1):
             line=original.strip()
-            if not line: continue
-            # A dedicated reference heading changes the role of the following
-            # numbered lines. They are answers, not a second copy of the stems.
-            # Preserve named titles and ordinary/empty student answer fields.
             role=_ref_scope(_ref_teacher_heading(line),None,titles)
             if (not _REF_QUESTION.search(line) and role[0] is None and not role[2]
                     and (re.search('参考',line) or re.search(r'^(?:教师|老师).*答案',line))):
-                answer_section=True;parent=None;continue
+                answer_section=True;continue
             if answer_section:
-                # Only an explicit question-role heading reopens stems; a new
-                # paper name can also belong to a multi-paper reference section.
-                if re.fullmatch(r'(?:试题|题目)\s*[:：]?',line):
-                    answer_section=False;paper=section=parent=None
+                if re.fullmatch(r'(?:试题|题目)\s*[:：]?',line): answer_section=False
                 continue
+            lines.append((at,original))
+        # The ordinary title must describe the same question-role lines as the
+        # inventory, not duplicate numbers in the appended reference section.
+        scoped.append((document,lines,dict(document,text='\n'.join(line for _,line in lines))))
+    for document_index,(document,lines,question_text) in enumerate(scoped):
+        ordinary=_ref_request_title([question_text],(),[],titles)
+        paper=None;section=None;parent=None;local=[]
+        first=next((n for n,(_,line) in enumerate(lines) if _REF_QUESTION.match(line.strip())),len(lines))
+        bare=not any(line.strip() for _,line in lines[:first])
+        for at,original in lines:
+            line=original.strip()
+            if not line: continue
             declared=_REF_DECLARED.fullmatch(line);named=declared[1] if declared else line
             if _REF_WHOLE.fullmatch(named) and not _REF_GENERIC_PAPER.fullmatch(named):
                 paper=named;section=None;parent=None;continue
