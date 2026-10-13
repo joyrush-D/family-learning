@@ -2039,6 +2039,99 @@ def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset
             '与教师参考原文开头相同，但与全文附注的对应尚未核明' if _ref_leads(listed,teacher) else '与教师参考原文未能逐字核明对应'))+over)
 
 
+def _source_question_inventory(documents):
+    """Question headings from the selected, fully read originals, never from answers.
+    Reuse the reference reader's paper/section/path identities. A body mentioning a
+    question is no heading; conflicting identities remain unproven. These rows
+    locate missing checks only and cannot supply a student's answer or a grade.
+    """
+    titles=_ref_titles(documents);rows=[];unresolved=False
+    for document_index,document in enumerate(documents):
+        lines=document['text'].splitlines();ordinary=_ref_request_title([document],(),[],titles)
+        paper=None;section=None;parent=None;local=[]
+        first=next((n for n,line in enumerate(lines) if _REF_QUESTION.match(line.strip())),len(lines))
+        bare=not any(line.strip() for line in lines[:first])
+        for at,original in enumerate(lines,1):
+            line=original.strip()
+            if not line: continue
+            declared=_REF_DECLARED.fullmatch(line);named=declared[1] if declared else line
+            if _REF_WHOLE.fullmatch(named) and not _REF_GENERIC_PAPER.fullmatch(named):
+                paper=named;section=None;parent=None;continue
+            mark=_REF_QUESTION.search(line)
+            head=line[:mark.start()] if mark else line
+            new,part,words=_ref_scope(head,section,titles)
+            if not mark and _REF_SECTION.match(line):
+                section=part;parent=None;continue
+            if mark:
+                # Scope words before a mark must identify it, not be prose or a
+                # request such as "请复习第2题". Never name a paper by its filename.
+                if words and words!=ordinary or new=='*' or isinstance(new,tuple):
+                    continue
+                current=new if new is not None else paper
+                if current is None and ordinary is None and not bare:
+                    unresolved=True;continue
+                number=int(next(g for g in mark.groups() if g))
+                sub,end=_ref_sub(line,mark.end(),teacher=True)
+                separator=line[mark.end():]
+                if sub=='*': unresolved=True;parent=None;continue
+                if not sub and separator and not separator[0].isspace() and separator[0] not in ':：':
+                    # "第2题的订正见后文" is prose, not a numbered question.
+                    continue
+                parent=(current,part,number,sub)
+                paper=current;section=part
+            else:
+                level=_REF_SUB.match(line)
+                if not level or parent is None: continue
+                sub,end=_ref_sub(line,teacher=True)
+                if sub=='*' or _ref_scope(line[end:],titles=titles)[0] is not None:
+                    unresolved=True;continue
+                current,part,number,base=parent
+                sub=(base or ())+sub
+            body=line[end:]
+            if not body.strip(' :：'): continue
+            label=' '.join(value for value in (current or ordinary or '',
+                '第%s大题'%part if part is not None else '',
+                '第%d题'%number+''.join('（%d）'%n for n in sub or ())) if value)
+            if len(label)>80: unresolved=True;continue
+            local.append(dict(paper=current,section=part,rest=ordinary or '' if current is None else '',
+                number=number,sub=sub,label=label,question=line if len(line)<=800 else '',
+                document=document['name'],line=at,document_index=document_index,original_text=document['text']))
+        # A parent introducing explicitly numbered children is not an extra
+        # check. Only the distinct leaf paths are retained, with their own lines.
+        parents={(row['paper'],row['section'],row['rest'],row['number'],(row['sub'] or ())[:n])
+                 for row in local for n in range(len(row['sub'] or ()))}
+        local=[row for row in local if (row['paper'],row['section'],row['rest'],row['number'],row['sub'] or ()) not in parents]
+        rows.extend(local)
+    key=lambda row:(row['paper'],row['section'],row['rest'],row['number'],row['sub'])
+    groups={}
+    for row in rows: groups.setdefault(key(row),[]).append(row)
+    rows=[]
+    for group in groups.values():
+        # Identical complete copies name one question. Repeated numbers within
+        # one original, or conflicting originals, do not prove one identity.
+        if len(group)==1 or (len({row['document_index'] for row in group})==len(group)
+                             and len({row['original_text'] for row in group})==1): rows.append(group[0])
+        else: unresolved=True
+    if len(rows)>25: raise LLMDraftError('本次文字原件明确列出超过25题，请缩小原件范围分批检查；本次未调用模型')
+    return rows,unresolved
+
+
+def _source_question_matches(label,rows,titles,allow_bare):
+    matches=[row for row in rows if _ref_relation(label,row,titles)=='same']
+    if matches or not allow_bare: return matches
+    mark=_REF_QUESTION.search(label)
+    if mark is None: return []
+    paper,section,words=_ref_scope(label[:mark.start()],titles=titles)
+    sub=_ref_sub(label,mark.end())[0]
+    if paper is not None or words or sub=='*': return []
+    number=int(next(g for g in mark.groups() if g))
+    # A bare label can name the single matching heading in these text originals,
+    # never a same-number question on another paper or an unselected image.
+    candidates=[row for row in rows if row['number']==number and row['sub']==sub
+                and (section is None or row['section']==section)]
+    return candidates if len(candidates)==1 else []
+
+
 def homework_reference_draft(images, *, data_path=None, timeout=90, review=False, reference_images=(),
                              reference_documents=(), image_labels=(), reference_labels=(), program_coverage=(),
                              previous_documents=(), previous_text='', review_instruction='', task_action='', answer_note='',
@@ -2160,6 +2253,7 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
     if previous_text: content.append(dict(type='text',text='上一轮尚未保存的完整意见（待复核，不作事实或答案依据）：'+previous_text))
     if pending_labels: content.append(dict(type='text',text='同一批原件上一轮仍待补查的题号（只作待核清单，不是题目、作答或答案证据）：'+json.dumps(list(pending_labels),ensure_ascii=False)))
     if program_coverage: content.append(dict(type='text',text='程序核对的实际原件覆盖：'+json.dumps(list(program_coverage),ensure_ascii=False)))
+    source_inventory,source_unresolved=_source_question_inventory(question_documents) if review else ([],False)
     result=_chat_json([dict(role='system',content=prompt),dict(role='user',content=content)],
                       schema,'family_homework_reference',timeout,data_path=data_path)
     if (not isinstance(result,dict) or not {'items','coverage'}<=set(result) or set(result)-{'items','coverage'}-({'comparison','question_labels'} if review else set())
@@ -2247,9 +2341,26 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
         result['items']=[checked.get(key) or dict.fromkeys(limits,'')|dict(
             label=re.sub(r'[\r\n\t]+',' ',label).strip(),judgment='unknown',
             uncertainty='本批识别到此题，但未返回逐题检查结果，请补查。') for label,key in zip(labels,normalized)]
+    source_titles=_ref_titles(question_documents)
+    def source_key(label):
+        found=_source_question_matches(label,source_inventory,source_titles,not images)
+        return ('source',found[0]['label']) if len(found)==1 else ('label',''.join(label.split()))
+    if review and source_inventory:
+        if len({source_key(item['label']) for item in result['items']})!=len(result['items']):
+            raise LLMDraftError('返回结果重复对应同一原件题目，请重新检查；原结果保留')
+        for row in source_inventory:
+            matches=[item for item in result['items'] if row in
+                     _source_question_matches(item['label'],source_inventory,source_titles,not images)]
+            if not matches:
+                if len(result['items'])>=25:
+                    raise LLMDraftError('原件明确题号与返回结果合计超过25项，请缩小原件范围检查；原结果保留')
+                result['items'].append(dict.fromkeys(limits,'')|dict(label=row['label'],question=row['question'],
+                    judgment='unknown',uncertainty='原件《%s》第%d行明确列出本题；本轮未返回对应检查结果，尚未检查，请补查。'%(row['document'],row['line'])))
+        order={row['label']:n for n,row in enumerate(source_inventory)}
+        result['items'].sort(key=lambda item:order.get(source_key(item['label'])[1],len(order)))
     if review and pending_labels:
-        checked={''.join(item['label'].split()) for item in result['items']}
-        missing=[label for label in pending_labels if ''.join(label.split()) not in checked]
+        checked={source_key(item['label']) for item in result['items']}
+        missing=[label for label in pending_labels if source_key(label) not in checked]
         if len(result['items'])+len(missing)>25:
             raise LLMDraftError('本次题目与上一轮待补题合计超过25项；上次结果保留，请缩小原件或页码范围后检查')
         result['items'].extend(dict.fromkeys(limits,'')|dict(label=label,judgment='unknown',
@@ -2275,6 +2386,8 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
         result['coverage']=('本次%d题，%d题仍未判定。'%(len(result['items']),unknown)+
                             '未列入本次逐题结果的题目和资料范围仍未检查；模型原覆盖说明尚未核明。')
         if 'question_labels' not in result: result['coverage']+='未返回识别题号清单，完整覆盖尚未核明。'
+        if source_inventory: result['coverage']+='已核对所选文字原件的%d个明确题号；不代表图片、PDF或未核明题号的完整覆盖。'%len(source_inventory)
+        if source_unresolved: result['coverage']+='文字中另有题号或归属无法唯一核明，请对照原件检查。'
     wrong=[item for item in result['items'] if item['judgment']=='incorrect']
     if review:
         correct=len(result['items'])-len(wrong)-unknown

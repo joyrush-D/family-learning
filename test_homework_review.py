@@ -271,6 +271,12 @@ def question_coverage_checks():
     draft=generate(raw)
     assert claim not in draft['text']+draft['coverage']+draft.get('comparison',''), 'a missing item must not be marked checked by a free summary'
     assert '未列入' in draft['coverage'], 'missing inventory must leave unlisted questions explicitly unchecked'
+    assert draft['items']==2 and draft['unknown_items']==1, 'the independent original must locate a question omitted from both raw lists'
+    missing=draft['questions'][1]
+    assert ''.join(missing['label'].split())=='虚构甲卷第2题'
+    assert missing['question']=='第2题 6-2，孩子作答3。' and '第3行' in missing['uncertainty']
+    assert 'synthetic-paper-a-answer.txt' in missing['uncertainty'] and '尚未检查' in missing['uncertainty']
+    assert all(not missing[key] for key in ('student_answer','answer','error_reason','possible_cause','steps'))
     scoped=raw|dict(question_labels=['虚构甲卷第1题','虚构甲卷第2题'])
     draft=generate(scoped)
     assert [q['label'] for q in draft['questions']]==scoped['question_labels']
@@ -1518,8 +1524,34 @@ def teacher_note_owner_checks():
 
 
 
+def source_inventory_checks():
+    paper='暮泉计算卷\n第1题：8+4=（    ）。\n学生作答：12\n第2题：21-6=（    ）。\n学生作答：15\n'
+    documents=[dict(name='synthetic-source-paper.txt',text=paper)]
+    teacher=[dict(name='synthetic-source-teacher.txt',text='暮泉计算卷\n第1题：12\n第2题：15\n第3题：99\n')]
+    first=item(label='暮泉计算卷 第1题',question='8+4=（    ）。',student_answer='12',answer='教师参考：12')
+    second=item(label='暮泉计算卷 第2题',question='21-6=（    ）。',student_answer='15',answer='教师参考：15')
+    calls=0
+    for raw,pending,expected in [(dict(items=[first],coverage='本卷两题全部核对正确。',question_labels=[first['label']]),(),['correct','unknown']),
+                                  (dict(items=[first],coverage='本次一题'),(),['correct','unknown']),
+                                  (dict(items=[second,first],coverage='本次两题',question_labels=[second['label'],first['label']]),('暮泉计算卷 第2题',),['correct','correct'])]:
+        original=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            draft=family_llm.homework_reference_draft([],review=True,question_documents=documents,
+                reference_documents=teacher,pending_labels=pending)
+        assert model.call_count==1 and raw==original;calls+=1
+        assert [q['judgment'] for q in draft['questions']]==expected
+        assert [q['label'].replace(' ','') for q in draft['questions']]==['暮泉计算卷第1题','暮泉计算卷第2题']
+        if expected[-1]=='unknown':
+            missed=draft['questions'][-1]
+            assert missed['question']=='第2题：21-6=（    ）。' and '第4行' in missed['uncertainty']
+            assert 'synthetic-source-paper.txt' in missed['uncertainty'] and '尚未检查' in missed['uncertainty']
+            assert all(missed[k]=='' for k in ['student_answer','answer','error_reason','possible_cause','steps'])
+        assert not any('第3题' in q['label'] for q in draft['questions']), 'the teacher-only extra question is not a worksheet question'
+    return calls
+
+
 def run():
-    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+missing_condition_checks()+teacher_note_checks()+teacher_note_owner_checks()
+    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+source_inventory_checks()+missing_condition_checks()+teacher_note_checks()+teacher_note_owner_checks()
     word_boundary_checks()
     nested_sub_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:
