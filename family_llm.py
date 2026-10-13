@@ -1682,7 +1682,8 @@ def _ref_lent(question,count,n,unit):
     result's waiver never excuses another's missing unit. Words that only tell the unit is printed (_ref_printed) neither
     ask nor waive one, and a negated word still waives; words that also have the child write or copy it (「照抄已印单位」)
     ask it, which the unit printed after the blank never meets. A lone result is held to this as each of several is."""
-    blank=r'(?:_{2,}|＿{2,}|[（(]\s*[)）]|□+)\s*'
+    mark=r'(?:_{2,}|＿{2,}|□+)'
+    blank=r'(?:%s|[（(]\s*[)）]|\(\s*%s\s*\)|（\s*%s\s*）)\s*'%(mark,mark,mark)
     whose=lambda at:_ref_whose(question,count,at)[2]
     spoken=[(_ref_binds(question,m.start(),m.end()),whose(m.start())) for m in re.finditer('单位',question)
             if not _ref_printed(question,m) or _ref_binds(question,m.start(),m.end())=='no']

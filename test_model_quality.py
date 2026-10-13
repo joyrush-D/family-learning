@@ -2089,6 +2089,67 @@ class ExactAnswerTest(unittest.TestCase):
             self.assertIn('却判为需订正', q['uncertainty'], note)
 
 
+class WrappedAnswerBlankTest(unittest.TestCase):
+    def review(self, question, teacher, student, judgment='correct', error_reason=''):
+        import family_llm
+        item = dict(label='第1题', question=question, student_answer=student, answer='教师参考：' + teacher,
+                    judgment=judgment, error_reason=error_reason, possible_cause='', steps='', uncertainty='',
+                    question_kind='objective')
+        raw = dict(items=[item], coverage='仅本次虚构第1题。', question_labels=['第1题'])
+        frozen = copy.deepcopy(raw)
+        with patch.object(family_llm, '_chat_json', return_value=raw) as model:
+            result = family_llm.homework_reference_draft([], review=True, data_path=None,
+                question_documents=[dict(name='度量练习-虚构.txt', text='度量练习（虚构）\n1. %s\n孩子作答：%s\n' % (question, student))],
+                reference_documents=[dict(name='教师参考-虚构.txt', text='教师参考答案（虚构）\n1. %s\n' % teacher)])
+        model.assert_called_once(); self.assertEqual(raw, frozen)
+        [q] = result['questions']
+        self.assertEqual([q['question'], q['student_answer'], q['answer']], [question, student, '教师参考：' + teacher])
+        return q
+
+    def test_wrapped_and_original_blanks_keep_supported_correct_answers(self):
+        # A teacher unit already printed after this blank is not missing from a number the child was asked to fill in.
+        for blank in ('（____）', '(____)', '（＿＿＿）', '(＿＿＿)', '（□）', '(□□)',
+                      '（ \t____ \t ）', '( □□ )', '____', '＿＿＿', '□', '（ ）', '( )'):
+            with self.subTest(blank=blank):
+                question = '350厘米 = %s米。' % blank
+                self.assertEqual(self.review(question, '3.5米', '3.5')['judgment'], 'correct')
+                self.assertEqual(self.review(question, '3.5米', '3.5米')['judgment'], 'correct')
+                q = self.review(question, '3.5米', '3.5', 'incorrect', '作答3.5没有写单位米。')
+                self.assertEqual((q['judgment'], q['error_reason']), ('unknown', ''))
+        self.assertEqual(self.review('350厘米 =（____）米。单位已印在空格外，只需填数字。', '3.5米', '3.5')['judgment'], 'correct')
+
+    def test_wrapped_blank_does_not_waive_a_required_unit_or_read_filled_parentheses(self):
+        for question in ('350厘米 =（____）米。答案必须写单位。',
+                         '350厘米 = (____)米（须照抄已印单位）。',
+                         '350厘米等于多少米？', '350厘米 =（3.5）米。', '350厘米 =（____示例）米。',
+                         '350厘米 =（□3.5）米。', '350厘米 =（____ A ____）米。'):
+            with self.subTest(question=question):
+                q = self.review(question, '3.5米', '3.5')
+                self.assertEqual(q['judgment'], 'unknown'); self.assertIn('单位写法不同', q['uncertainty'])
+        reason = '题面要求照抄单位，作答3.5没有写米。'
+        q = self.review('350厘米 =（____）米（须照抄已印单位）。', '3.5米', '3.5', 'incorrect', reason)
+        self.assertEqual((q['judgment'], q['error_reason']), ('incorrect', reason))
+        q = self.review('350厘米 =（____）米。', '3.5米', '3.6')
+        self.assertEqual(q['judgment'], 'unknown'); self.assertIn('数值仍不同', q['uncertainty'])
+        reason = '教师参考为3.5米，作答3.6与教师参考数值不同。'
+        q = self.review('350厘米 =（____）米。', '3.5米', '3.6', 'incorrect', reason)
+        self.assertEqual((q['judgment'], q['error_reason']), ('incorrect', reason))
+
+    def test_each_wrapped_blank_keeps_its_own_unit_order_and_precision(self):
+        question = '第一个空：（____）厘米；第二个空：(□)米。'
+        self.assertEqual(self.review(question, '3.5厘米，2米', '3.5，2')['judgment'], 'correct')
+        for question, student in (
+                ('第一个空：（____）厘米；第二个空：(□)。', '3.5，2'),
+                ('第一个空：（____）厘米（答案仍要写单位）；第二个空：(□)米。', '3.5，2'),
+                ('第一个空：（____）厘米；第二个空：(□)米。', '2，3.5')):
+            with self.subTest(question=question, student=student):
+                self.assertEqual(self.review(question, '3.5厘米，2米', student)['judgment'], 'unknown')
+        question = '把3.1416米四舍五入保留两位小数：（____）米。'
+        self.assertEqual(self.review(question, '3.1416米', '3.14')['judgment'], 'correct')
+        self.assertEqual(self.review(question, '3.1416米', '3.1')['judgment'], 'unknown')
+        self.assertEqual(self.review('350厘米 =（____）米。', '3.5米', '3.5', 'unknown')['judgment'], 'unknown')
+
+
 class ScorerHardeningTest(unittest.TestCase):
     def test_dismissed_negated_and_foreign_rows_fail(self):
         prefix = 'message:synthetic-school-a:'
