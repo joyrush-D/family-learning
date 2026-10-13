@@ -334,7 +334,7 @@ class SchoolActionInventoryTests(unittest.TestCase):
                        '两项都检查不规范的地方', '上述作业均标注不可数名词',
                        '两项都把不等式标出', '两项都在各自练习里圈出不规则动词',
                        '两项都把不及物动词写在行末', '两项都在页眉写“勿忘我”',
-                       '所有作业均贴上免冠照片'):
+                       '所有作业均贴上免冠照片', '两项都写“不用提交”'):
             with self.subTest(shared=shared):
                 t = type(self)(methodName='runTest');t.setUp()
                 try:
@@ -366,7 +366,8 @@ class SchoolActionInventoryTests(unittest.TestCase):
                        '两项都圈出动词但不要求明天交', '两项都检查不清楚',
                        '两项都不规则', '两项都请家长不签字',
                        '两项都把动词不圈出', '两项都在练习上不标注动词',
-                       '两项都写“不用提交”后不交', '两项都贴上照片但勿提交'):
+                       '两项都写“不用提交”后不交', '两项都贴上照片但勿提交',
+                       '两项都“不要明天提交”', '两项都「勿提交」'):
             with self.subTest(shared=shared):
                 with self.assertRaises(agent.AgentError) as error:
                     agent._school_native_blocks(first + shared + '。')
