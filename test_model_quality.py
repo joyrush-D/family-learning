@@ -2103,7 +2103,8 @@ class WrappedAnswerBlankTest(unittest.TestCase):
                 reference_documents=[dict(name='教师参考-虚构.txt', text='教师参考答案（虚构）\n1. %s\n' % teacher)])
         model.assert_called_once(); self.assertEqual(raw, frozen)
         [q] = result['questions']
-        self.assertEqual([q['question'], q['student_answer'], q['answer']], [question, student, '教师参考：' + teacher])
+        # Existing display text replaces control tabs with spaces; supplied originals and raw above stay unchanged.
+        self.assertEqual([q['question'], q['student_answer'], q['answer']], [question.replace('\t', ' '), student, '教师参考：' + teacher])
         return q
 
     def test_wrapped_and_original_blanks_keep_supported_correct_answers(self):
@@ -2130,7 +2131,7 @@ class WrappedAnswerBlankTest(unittest.TestCase):
         q = self.review('350厘米 =（____）米（须照抄已印单位）。', '3.5米', '3.5', 'incorrect', reason)
         self.assertEqual((q['judgment'], q['error_reason']), ('incorrect', reason))
         q = self.review('350厘米 =（____）米。', '3.5米', '3.6')
-        self.assertEqual(q['judgment'], 'unknown'); self.assertIn('数值仍不同', q['uncertainty'])
+        self.assertEqual(q['judgment'], 'unknown'); self.assertIn('数值不同', q['uncertainty'])
         reason = '教师参考为3.5米，作答3.6与教师参考数值不同。'
         q = self.review('350厘米 =（____）米。', '3.5米', '3.6', 'incorrect', reason)
         self.assertEqual((q['judgment'], q['error_reason']), ('incorrect', reason))
