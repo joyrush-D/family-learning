@@ -2989,6 +2989,29 @@ def _school_native_heading(text):
     return head,header,body_start,container
 
 
+
+def _school_native_common_negative(value):
+    """A negated predicate is not a negative character inside its literal object.
+
+    Only an affirmative addressed predicate can establish an object span. Unknown
+    predicates, negative modals and later scope changes keep the conservative hold.
+    This reads grammar, not subject names or a list of permitted negative nouns.
+    """
+    negative=r'不|无须|无需|免|勿|毋'
+    if not re.search(negative,value):return False
+    predicate=r'(?:圈|标|划|画|找|摘|写|列|指)出|标记|选择|记录|整理|检查|核对|朗读|背诵|抄写|默写|听写|跟读|订正|预习|复习|阅读|口算|签字|打印|提交|交回|完成'
+    prefix=r'(?:请(?:家长|同学们?|大家)?\s*|(?:必须|需要|应当|应该|要|须)\s*|(?:认真|仔细|逐一|分别)\s*|'+_SCHOOL_NATIVE_DATE+r'\s*(?:前|之前|以前|内)?\s*)*'
+    addressed=re.match(r'^'+prefix+r'(?:'+predicate+r')',value)
+    if not addressed:return True
+    object_text=value[addressed.end():]
+    # A modal negation or a negated later action/standard is still a scope issue.
+    if re.search(r'不(?:要|用|必|需|须|得|能|可|应|准|许|再)|无须|无需',object_text):return True
+    following=r'(?:'+_SCHOOL_NATIVE_DATE+r'\s*|再|也|仍|一定|必须|认真|仔细)*'
+    action=r'(?:'+predicate+r'|交|做|写|读|抄|背|看|圈|标|画|改|要求|清楚|完整|工整|正确|独立)'
+    if re.search(r'(?:'+negative+r')\s*'+following+action,object_text):return True
+    return bool(re.search(r'(?:后|之后|以后|并|但|再|然后|且|也|仍|而)[^。；;]{0,20}(?:'+negative+r')',object_text))
+
+
 def _school_native_blocks(text):
     """Keep each action's literal requirement fragments; punctuation alone is not a task.
 
@@ -3020,7 +3043,7 @@ def _school_native_blocks(text):
             # Changes and optionality still need the existing semantic reader.
             if re.search(r'选做|必做|更正|取消|撤销|撤回|改为|改期|不再(?:做|完成)|不用(?:做|完成)|无需(?:做|完成)',clause):return []
             # ponytail: only positive common standards are compiled; negated scope needs a proved semantic allocation.
-            if re.search(r'不|无须|无需|免|勿|毋',clause[common.end():]):
+            if _school_native_common_negative(clause[common.end():]):
                 raise AgentError('共同标准含未核明的否定条件，完整原批次保留',code='school_action_coverage')
             count=(int(common[1]) if common[1].isdigit() else {'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}[common[1]]) if common[1] else len(pieces)
             shared.append((count,clause))
