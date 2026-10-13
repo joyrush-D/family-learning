@@ -3002,16 +3002,36 @@ def _school_native_common_negative(value):
     value=re.sub(r'“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』|"[^"]*"',lambda m:'□'*len(m[0]),value)
     predicate=r'标注|标记|(?:圈|标|划|画|找|摘|写|列|指)(?:出|上|在|到|入)?|贴(?:上|在|到)?|选择|记录|整理|比较|分析|说明|归纳|识别|辨认|区分|检查|核对|朗读|背诵|抄写|默写|听写|跟读|订正|预习|复习|阅读|口算|签字|打印|提交|交回|完成'
     modifier=r'请(?:家长|同学们?|大家)?\s*|(?:必须|需要|应当|应该|要|须)\s*|(?:认真|仔细|逐一|分别)\s*|'+_SCHOOL_NATIVE_DATE+r'\s*(?:前|之前|以前|内)?\s*'
-    prefix=r'(?:(?:'+modifier+r')|(?:在|从|对|用|按|依据|根据)[^。；;，,]{1,40}?)*'
-    addressed=re.match(r'^(?P<lead>'+prefix+r')(?:(?:把|将)(?P<object>[^。；;，,]{1,60}?))?(?:'+predicate+r')',value)
+    def repeated_before(text,terms,ending):
+        # Same greedy repeated-token / lazy location-object grammar, but each
+        # position is resolved once. Overlapping prefixes must not backtrack
+        # exponentially when the required predicate is absent. No text is cut.
+        terms=[(re.compile(pattern),lazy) for pattern,lazy in terms]
+        ending=re.compile(ending);resolved={}
+        for start in range(len(text),-1,-1):
+            found=None
+            for token,lazy in terms:
+                match=token.match(text,start)
+                if not match:continue
+                ends=range(start+1,match.end()+1) if lazy else range(match.end(),start,-1)
+                for end in ends:
+                    if end in resolved and token.fullmatch(text,start,end):
+                        found=resolved[end];break
+                if found is not None:break
+            if found is None:found=ending.match(text,start)
+            if found is not None:resolved[start]=found
+        return resolved
+    prefixes=[(modifier,False),(r'(?:在|从|对|用|按|依据|根据)[^。；;，,]{1,40}',True)]
+    addressed=repeated_before(value,prefixes,r'(?:(?:把|将)(?P<object>[^。；;，,]{1,60}?))?(?:'+predicate+r')').get(0)
     if not addressed:return True
     # Prepositions and ba objects cannot swallow an actual negation of this action.
-    before=(addressed['lead'] or '')+(addressed['object'] or '')
+    before=value[:addressed.start()]+(addressed['object'] or '')
     if re.search(r'(?:不(?:要|用|必|需|须|得|能|可|应|准|许|再)?|无须|无需|免|勿|毋)\s*$',before):return True
     object_text=value[addressed.end():]
-    following=r'(?:要|用|必|需|须|得|能|可|应|准|许|再|'+_SCHOOL_NATIVE_DATE+r'\s*|也|仍|一定|必须|认真|仔细)*'
+    following=r'(?:要|用|必|需|须|得|能|可|应|准|许|再|'+_SCHOOL_NATIVE_DATE+r'\s*|也|仍|一定|必须|认真|仔细)'
     action=r'(?:'+predicate+r'|交|做|写|读|抄|背|看|圈|标|画|改|要求|清楚|完整|工整|正确|独立)'
-    if re.search(r'(?:'+negative+r')\s*'+following+action,object_text):return True
+    followed=repeated_before(object_text,[(following,False)],action)
+    if any(match.end() in followed for match in re.finditer(r'(?:'+negative+r')\s*',object_text)):return True
     if re.search(r'(?:不(?:要|用|必|需|须|得|能|可|应|准|许|再)|无须|无需|免|勿|毋)\s*$',object_text):return True
     return bool(re.search(r'(?:后|之后|以后|并|但|再|然后|且|也|仍|而)[^。；;]{0,20}(?:'+negative+r')',object_text))
 

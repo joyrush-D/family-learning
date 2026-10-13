@@ -10,6 +10,7 @@ import copy
 import datetime as dt
 import io
 import json
+import time
 import unittest
 from unittest.mock import patch
 
@@ -334,7 +335,8 @@ class SchoolActionInventoryTests(unittest.TestCase):
                        '两项都检查不规范的地方', '上述作业均标注不可数名词',
                        '两项都把不等式标出', '两项都在各自练习里圈出不规则动词',
                        '两项都把不及物动词写在行末', '两项都在页眉写“勿忘我”',
-                       '所有作业均贴上免冠照片', '两项都写“不用提交”'):
+                       '所有作业均贴上免冠照片', '两项都写“不用提交”',
+                       '两项都'+'在示例栏旁'*24+'圈出不常用词形'):
             with self.subTest(shared=shared):
                 t = type(self)(methodName='runTest');t.setUp()
                 try:
@@ -358,6 +360,28 @@ class SchoolActionInventoryTests(unittest.TestCase):
                     self.assertEqual((again['failed'], again['processed'], again['created']), (0, 0, 0))
                     self.assertEqual(t.model.call_count, 1)
                 finally:t.doCleanups()
+
+    def test_repeated_common_prefixes_and_modals_return_without_backtracking(self):
+        prefix='在示例栏旁'*24
+        cases=[(prefix+'不常用词形',True),
+               (prefix+'圈出不常用词形',False),
+               (prefix+'不要圈出异常词尾',True),
+               ('圈出不'+'必须'*24+'词形',False),
+               ('圈出动词后不'+'必须'*24+'提交',True),
+               ('请认真'*300+'圈出不常用词形',False)]
+        for value,expected in cases:
+            with self.subTest(value=value):
+                started=time.monotonic()
+                self.assertEqual(agent._school_native_common_negative(value),expected)
+                self.assertLess(time.monotonic()-started,1.0)
+
+    def test_unresolved_repeated_common_prefix_keeps_raw_batch_before_model(self):
+        shared='两项都'+'在示例栏旁'*24+'不常用词形'
+        payload,refs=self._ingest(['英语作业：朗读Unit 2课文两遍；抄写Unit 2课文一遍。'+shared+'。',
+                                   '数学作业：完成数学练习卷第1至3题。'])
+        started=time.monotonic()
+        self._assert_rejected_batch(payload,self.run_receipt(payload,[]),model_calls=0)
+        self.assertLess(time.monotonic()-started,1.0)
 
     def test_shared_negative_predicates_are_not_treated_as_positive_objects(self):
         first = '英语作业：朗读Unit 2课文两遍。抄写Unit 2课文一遍。'
