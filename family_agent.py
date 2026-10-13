@@ -2995,9 +2995,11 @@ def _school_native_common_negative(value):
     Bounded addressed/ba/prepositional grammar only; unresolved predicate scope
     keeps the batch. Object names and school subjects are not special cases.
     """
+    # Quoted object text is literal material, not an instruction's predicate.
+    value=re.sub(r'“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』|"[^"]*"',lambda m:'□'*len(m[0]),value)
     negative=r'不|无须|无需|免|勿|毋'
     if not re.search(negative,value):return False
-    predicate=r'(?:圈|标|划|画|找|摘|写|列|指)出|标注|标记|选择|记录|整理|比较|分析|说明|归纳|识别|辨认|区分|检查|核对|朗读|背诵|抄写|默写|听写|跟读|订正|预习|复习|阅读|口算|签字|打印|提交|交回|完成'
+    predicate=r'标注|标记|(?:圈|标|划|画|找|摘|写|列|指)(?:出|上|在|到|入)?|贴(?:上|在|到)?|选择|记录|整理|比较|分析|说明|归纳|识别|辨认|区分|检查|核对|朗读|背诵|抄写|默写|听写|跟读|订正|预习|复习|阅读|口算|签字|打印|提交|交回|完成'
     modifier=r'请(?:家长|同学们?|大家)?\s*|(?:必须|需要|应当|应该|要|须)\s*|(?:认真|仔细|逐一|分别)\s*|'+_SCHOOL_NATIVE_DATE+r'\s*(?:前|之前|以前|内)?\s*'
     prefix=r'(?:(?:'+modifier+r')|(?:在|从|对|用|按|依据|根据)[^。；;，,]{1,40}?)*'
     addressed=re.match(r'^(?P<lead>'+prefix+r')(?:(?:把|将)(?P<object>[^。；;，,]{1,60}?))?(?:'+predicate+r')',value)
