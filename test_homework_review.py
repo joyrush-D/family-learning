@@ -1627,6 +1627,16 @@ def source_reading_role_checks():
     example=paper.replace('第2题 谁先走过桥？','示例【仅供教师演示】\n第2题 谁先走过桥？')
     rows,unresolved=family_llm._source_question_inventory([dict(name='synthetic-later-example.txt',text=example)])
     assert not unresolved and [row['label'] for row in rows]==['虚构溪桥阅读卷 第1题']
+    # Quantity frames describe the instruction, not which source numbers exist.
+    for instruction in ('依据这段记录，作答下面两道问题。','请根据材料回答以下3个题目。',
+                        '结合上文完成下列十二道试题。','依据上文作答所有题。',
+                        '根据不规则动词材料回答下面问题。'):
+        source=paper.replace('根据上文回答下面问题。',instruction)
+        rows,unresolved=family_llm._source_question_inventory([dict(name='synthetic-quantity-role.txt',text=source)])
+        assert not unresolved and [row['line'] for row in rows]==[6,8]
+    source=paper.replace('根据上文回答下面问题。','根据上文不要回答下面问题。')
+    rows,unresolved=family_llm._source_question_inventory([dict(name='synthetic-negative-role.txt',text=source)])
+    assert rows==[] and unresolved
     return calls
 
 

@@ -2044,13 +2044,20 @@ def _source_material_questions(lines):
     and explicit child-answer blocks, never from a topic or an answer's value.
     A teacher's examples keep their stronger role; incomplete roles stay unknown.
     """
-    instruction=re.compile(r'(?:请\s*)?(?:根据|依据|结合)\s*[^：:。！？；“”"「」\n]+?'
-        r'(?:回答|完成|作答)\s*(?:(?:下面|以下|下列|后面|本卷)的?)?\s*(?:问题|题目|试题)\s*[。.!！:：]?')
+    instruction=re.compile(r'(?:请\s*)?(?:根据|依据|结合)\s*(?P<basis>[^：:。！？；“”"「」\n]+?)'
+        r'(?:回答|完成|作答)\s*(?:(?:下面|以下|下列|后面|本卷|这些|所有|全部)的?)?\s*'
+        r'(?:(?:[0-9〇零一二三四五六七八九十百千万两]+|若干|几|各)\s*(?:道|个|项|条)?\s*)?'
+        r'(?:问题|题目|试题|题)\s*[。.!！:：]?')
+    def directed(line):
+        found=instruction.fullmatch(line)
+        # A negative immediately governing the action is no positive role proof;
+        # a material name containing a negative character is not that predicate.
+        return found and not re.search(r'(?:不要|请勿|不需要|不必|不用|不得|无需|禁止|勿|毋须)\s*$',found['basis'])
     marks=[at for at,(_,line) in enumerate(lines) if _REF_QUESTION.match(line.strip())]
     if not marks: return False
     before=[line.strip() for _,line in lines[:marks[0]] if line.strip()]
-    if (not any(instruction.fullmatch(line) for line in before)
-            or not any(not instruction.fullmatch(line) and _ref_plain(line) for line in before)
+    if (not any(directed(line) for line in before)
+            or not any(not directed(line) and _ref_plain(line) for line in before)
             or any(_source_example_heading(line) for line in before)): return False
     for start,end in zip(marks,marks[1:]+[len(lines)]):
         # A field belongs to the preceding question, not to the whole document.
