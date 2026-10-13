@@ -1583,6 +1583,14 @@ def source_answer_section_checks():
         draft=family_llm.homework_reference_draft([],review=True,question_documents=[dict(name='synthetic-named-paper.txt',text=paper)],
             reference_documents=[dict(teacher[0],text=teacher[0]['text'].replace('虚构林间卷','参考虚构林间卷'))])
     assert model.call_count==1 and any(q['label']=='参考虚构林间卷 第2题' for q in draft['questions']);calls+=1
+    ordinary=body.replace('虚构林间卷','六年级数学练习')+'\n教师参考答案\n第1题：12\n第2题：15\n'
+    rows,unresolved=family_llm._source_question_inventory([dict(name='synthetic-ordinary-source.txt',text=ordinary)])
+    assert not unresolved and [r['label'] for r in rows]==['六年级数学练习 第1题','六年级数学练习 第2题']
+    assert [r['line'] for r in rows]==[2,4]
+    continued=body+'\n教师参考答案\n第1题：12\n第2题：15\n\n题目\n第3题：2+3=（    ）。\n学生作答：5\n第4题：7-2=（    ）。\n学生作答：5\n'
+    rows,unresolved=family_llm._source_question_inventory([dict(name='synthetic-resumed-source.txt',text=continued)])
+    assert not unresolved and [r['label'] for r in rows]==['虚构林间卷 第%d题'%n for n in (1,2,3,4)]
+    assert [r['line'] for r in rows]==[2,4,12,14]
     return calls
 
 
