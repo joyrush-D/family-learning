@@ -2057,26 +2057,40 @@ def _source_material_questions(lines):
         if re.search(r'(?:不得不|不能不|不可不)$',basis): return True
         return not re.search(r'(?:不(?:要|必|用|得|能|可|需(?:要)?)?|无需|无须|禁止|请?勿|毋须)$',basis)
     marks=[at for at,(_,line) in enumerate(lines) if _REF_QUESTION.match(line.strip())]
-    if not marks: return False
+    if not marks: return [],True
     before=[line.strip() for _,line in lines[:marks[0]] if line.strip()]
     if (not any(directed(line) for line in before)
             or not any(not directed(line) and _ref_plain(line) for line in before)
-            or any(_source_example_heading(line) for line in before)): return False
+            or any(_source_example_heading(line) for line in before)): return [],True
+    kept=lines[:marks[0]];unresolved=False
     for start,end in zip(marks,marks[1:]+[len(lines)]):
         # A field belongs to the preceding question, not to the whole document.
         # Empty child fields are explicit too; their values never become grades.
-        if not any((field:=_REF_FIELD.search(line)) and re.match(r'(?:学生|孩子)',field[1])
-                   for _,line in lines[start:end]): return False
-    return True
+        fields=[field[1] for _,line in lines[start:end] for field in _REF_FIELD.finditer(line)]
+        if any(_source_child_field(field) for field in fields): kept.extend(lines[start:end])
+        else: unresolved=True
+    return kept,unresolved
 
 
-def _source_example_heading(line):
+def _source_child_field(name):
+    actor=re.match(r'(?:学生|孩子)(?:的)?',name)
+    if not actor: return False
+    # Reuse the existing field's answer carrier; its role is in the name, never
+    # in the child's value (which may legitimately discuss an example).
+    kind=re.sub(r'(?:作)?答[案题]?$','',name[actor.end():]).rstrip('的')
+    if _source_example_heading(kind,field=True): return False
+    paper,_,words=_ref_scope(kind)
+    return not (paper is None and not words and re.search('教师|老师|参考',kind))
+
+
+def _source_example_heading(line,field=False):
     # A heading's bracketed purpose and source words do not change its role.
     # A numbered stem or a whole paper title is never this standalone heading.
     head=re.split('[:：]',line,maxsplit=1)[0]
     if _REF_QUESTION.search(head) or _REF_DECLARED.fullmatch(line.strip()): return False
     paper,_,words=_ref_scope(_REF_TITLE_NOTE.sub('',head).strip())
-    return paper is None and words in ('示例','示范','范例','例题','解析')
+    return paper is None and (words in ('示例','示范','范例','例题','解析')
+                              or field and bool(re.search('示例|示范|范例|例题',words)))
 
 
 def _source_question_inventory(documents):
@@ -2090,9 +2104,10 @@ def _source_question_inventory(documents):
         lines=[];segment=[];answer_section=None
         def flush():
             nonlocal unresolved
-            if answer_section is None or answer_section=='material' and _source_material_questions(segment):
-                lines.extend(segment)
-            elif answer_section=='material': unresolved=True
+            if answer_section is None: lines.extend(segment)
+            elif answer_section=='material':
+                body,unknown=_source_material_questions(segment)
+                lines.extend(body);unresolved=unresolved or unknown
             segment.clear()
         for at,original in enumerate(document['text'].splitlines(),1):
             line=original.strip()

@@ -1648,6 +1648,16 @@ def source_reading_role_checks():
     source=paper.replace('根据上文回答下面问题。','根据材料不得不完成下面两道题目。')
     rows,unresolved=family_llm._source_question_inventory([dict(name='synthetic-positive-predicate.txt',text=source)])
     assert not unresolved and [row['line'] for row in rows]==[6,8]
+    for field in ('学生示例答案：','学生的示例作答：','孩子示范答题：','学生参考答案：'):
+        source=paper.replace('学生作答：木桥',field+'木桥').replace('学生作答：送信员',field+'送信员')
+        rows,unresolved=family_llm._source_question_inventory([dict(name='synthetic-sample-field.txt',text=source)])
+        assert rows==[] and unresolved
+    source=paper.replace('学生作答：送信员','学生示例答案：送信员')
+    rows,unresolved=family_llm._source_question_inventory([dict(name='synthetic-mixed-field.txt',text=source)])
+    assert unresolved and [row['line'] for row in rows]==[6]
+    source=paper.replace('学生作答：木桥','学生作答：我从示例里找到木桥')
+    rows,unresolved=family_llm._source_question_inventory([dict(name='synthetic-example-value.txt',text=source)])
+    assert not unresolved and [row['line'] for row in rows]==[6,8]
     return calls
 
 
