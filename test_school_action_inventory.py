@@ -331,7 +331,8 @@ class SchoolActionInventoryTests(unittest.TestCase):
     def test_positive_shared_predicate_keeps_negative_characters_in_its_object(self):
         for shared in ('两项都圈出不规则动词', '两项都要圈出不规则动词',
                        '两项都请同学标出不等式', '两项都记录免疫现象',
-                       '两项都检查不规范的地方'):
+                       '两项都检查不规范的地方', '上述作业均标注不可数名词',
+                       '两项都把不等式标出', '两项都在各自练习里圈出不规则动词'):
             with self.subTest(shared=shared):
                 t = type(self)(methodName='runTest');t.setUp()
                 try:
@@ -361,7 +362,8 @@ class SchoolActionInventoryTests(unittest.TestCase):
         for shared in ('两项都不圈出动词', '两项都不要圈出动词', '两项都勿圈出动词',
                        '两项都免交', '两项都圈出动词后不用提交',
                        '两项都圈出动词但不要求明天交', '两项都检查不清楚',
-                       '两项都不规则', '两项都请家长不签字'):
+                       '两项都不规则', '两项都请家长不签字',
+                       '两项都把动词不圈出', '两项都在练习上不标注动词'):
             with self.subTest(shared=shared):
                 with self.assertRaises(agent.AgentError) as error:
                     agent._school_native_blocks(first + shared + '。')
