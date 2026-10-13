@@ -1594,8 +1594,39 @@ def source_answer_section_checks():
     return calls
 
 
+def source_reading_role_checks():
+    paper='试卷名称：虚构溪桥阅读卷\n参考\n阅读文章：《小桥》（供回答本卷问题）\n清晨，送信员走过木桥。\n根据上文回答下面问题。\n第1题 小河上架着哪一种桥？\n学生作答：木桥\n第2题 谁先走过桥？\n学生作答：送信员\n'
+    teacher=[dict(name='synthetic-reading-teacher.txt',text='试卷名称：虚构溪桥阅读卷\n第1题 木桥\n第2题 送信员\n')]
+    first=item(label='虚构溪桥阅读卷 第1题',question='小河上架着哪一种桥？',student_answer='木桥',answer='教师参考：木桥')
+    raw=dict(items=[first],question_labels=[first['label']],coverage='首次仅第1题。')
+    calls=0
+    for source in (paper,paper.replace('学生作答：送信员','学生作答：'),
+                   paper.replace('根据上文回答下面问题。','请依据上文完成下列题目。')):
+        original=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            draft=family_llm.homework_reference_draft([],review=True,
+                question_documents=[dict(name='synthetic-reading-source.txt',text=source)],reference_documents=teacher)
+        assert model.call_count==1 and raw==original;calls+=1
+        assert [q['judgment'] for q in draft['questions']]==['correct','unknown']
+        missed=draft['questions'][1]
+        assert missed['label']=='虚构溪桥阅读卷 第2题' and missed['question']=='第2题 谁先走过桥？'
+        assert '第8行' in missed['uncertainty'] and '尚未检查' in missed['uncertainty']
+        assert all(missed[k]=='' for k in ('student_answer','answer','error_reason','possible_cause','steps'))
+    # Explicit teacher roles still dominate their sample student-answer fields.
+    strong=paper.replace('\n参考\n','\n教师参考答案\n')
+    rows,unresolved=family_llm._source_question_inventory([dict(name='synthetic-strong-role.txt',text=strong)])
+    assert rows==[] and not unresolved
+    # Neither a child field alone nor a quoted instruction proves material use.
+    for ambiguous in (paper.replace('根据上文回答下面问题。',''),
+                      paper.replace('根据上文回答下面问题。','“根据上文回答下面问题。”'),
+                      paper.replace('阅读文章：《小桥》（供回答本卷问题）','示例：教师提供的示范学生作答')):
+        rows,unresolved=family_llm._source_question_inventory([dict(name='synthetic-weak-role.txt',text=ambiguous)])
+        assert rows==[] and unresolved
+    return calls
+
+
 def run():
-    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+source_inventory_checks()+source_answer_section_checks()+missing_condition_checks()+teacher_note_checks()+teacher_note_owner_checks()
+    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+source_inventory_checks()+source_answer_section_checks()+source_reading_role_checks()+missing_condition_checks()+teacher_note_checks()+teacher_note_owner_checks()
     word_boundary_checks()
     nested_sub_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:

@@ -2039,6 +2039,28 @@ def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset
             '与教师参考原文开头相同，但与全文附注的对应尚未核明' if _ref_leads(listed,teacher) else '与教师参考原文未能逐字核明对应'))+over)
 
 
+def _source_material_questions(lines):
+    """Prove a weak reference marker's body from a material-to-question instruction
+    and explicit child-answer blocks, never from a topic or an answer's value.
+    A teacher's examples keep their stronger role; incomplete roles stay unknown.
+    """
+    instruction=re.compile(r'(?:请\s*)?(?:根据|依据|结合)\s*[^：:。！？；“”"「」\n]+?'
+        r'(?:回答|完成|作答)\s*(?:(?:下面|以下|下列|后面|本卷)的?)?\s*(?:问题|题目|试题)\s*[。.!！:：]?')
+    marks=[at for at,(_,line) in enumerate(lines) if _REF_QUESTION.match(line.strip())]
+    if not marks: return False
+    before=[line.strip() for _,line in lines[:marks[0]] if line.strip()]
+    if (not any(instruction.fullmatch(line) for line in before)
+            or not any(not instruction.fullmatch(line) and _ref_plain(line) for line in before)
+            or any(re.fullmatch(r'(?:教师|老师)?(?:参考答案|答案解析|解析|示例|示范|范例|例题)(?:\s*[:：].*)?',line)
+                   for line in before)): return False
+    for start,end in zip(marks,marks[1:]+[len(lines)]):
+        # A field belongs to the preceding question, not to the whole document.
+        # Empty child fields are explicit too; their values never become grades.
+        if not any((field:=_REF_FIELD.search(line)) and re.fullmatch(r'(?:学生|孩子)(?:的)?(?:作答|答题|答案)',field[1])
+                   for _,line in lines[start:end]): return False
+    return True
+
+
 def _source_question_inventory(documents):
     """Question headings from the selected, fully read originals, never from answers.
     Reuse the reference reader's paper/section/path identities. A body mentioning a
@@ -2047,17 +2069,29 @@ def _source_question_inventory(documents):
     """
     titles=_ref_titles(documents);rows=[];unresolved=False;scoped=[]
     for document in documents:
-        lines=[];answer_section=False
+        lines=[];segment=[];answer_section=None
+        def flush():
+            nonlocal unresolved
+            if answer_section is None or answer_section=='material' and _source_material_questions(segment):
+                lines.extend(segment)
+            elif answer_section=='material': unresolved=True
+            segment.clear()
         for at,original in enumerate(document['text'].splitlines(),1):
             line=original.strip()
             role=_ref_scope(_ref_teacher_heading(line),None,titles)
             if (not _REF_QUESTION.search(line) and role[0] is None and not role[2]
                     and (re.search('参考',line) or re.search(r'^(?:教师|老师).*答案',line))):
-                answer_section=True;continue
-            if answer_section:
-                if re.fullmatch(r'(?:试题|题目)\s*[:：]?',line): answer_section=False
+                # "参考" can name material for subsequent questions. Only an
+                # explicit teacher/answer role excludes it without further proof.
+                if answer_section!='teacher':
+                    flush();answer_section='teacher' if re.search('教师|老师|答案',line) else 'material'
                 continue
-            lines.append((at,original))
+            if answer_section:
+                if re.fullmatch(r'(?:试题|题目)\s*[:：]?',line):
+                    flush();answer_section=None;continue
+                if answer_section=='teacher': continue
+            segment.append((at,original))
+        flush()
         # The ordinary title must describe the same question-role lines as the
         # inventory, not duplicate numbers in the appended reference section.
         scoped.append((document,lines,dict(document,text='\n'.join(line for _,line in lines))))
