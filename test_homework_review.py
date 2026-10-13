@@ -1551,8 +1551,43 @@ def source_inventory_checks():
     return calls
 
 
+def source_answer_section_checks():
+    body='虚构林间卷\n第1题：8+4=（    ）。\n学生作答：12\n第2题：21-6=（    ）。\n学生作答：15\n'
+    teacher=[dict(name='synthetic-section-teacher.txt',text='虚构林间卷\n第1题：12\n第2题：15\n')]
+    first=item(label='虚构林间卷 第1题',question='8+4=（    ）。',student_answer='12',answer='教师参考：12')
+    raw=dict(items=[first],question_labels=[first['label']],coverage='本次仅第1题。')
+    calls=0
+    for heading in ('教师参考答案','参考答案：','老师答案','教师原参考','一、参考答案','参考（第一大题）'):
+        original=json.loads(json.dumps(raw))
+        paper=body+'\n'+heading+'\n第1题：12\n第2题：15\n第3题：99\n'
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            draft=family_llm.homework_reference_draft([],review=True,
+                question_documents=[dict(name='synthetic-section-paper.txt',text=paper)],reference_documents=teacher)
+        assert model.call_count==1 and raw==original;calls+=1
+        assert [q['judgment'] for q in draft['questions']]==['correct','unknown']
+        missed=draft['questions'][1]
+        assert missed['label']=='虚构林间卷 第2题' and missed['question']=='第2题：21-6=（    ）。'
+        assert '第4行' in missed['uncertainty'] and '尚未检查' in missed['uncertainty']
+        assert all(missed[k]=='' for k in ('student_answer','answer','error_reason','possible_cause','steps'))
+        assert not any('第3题' in q['label'] for q in draft['questions'])
+    # An empty answer field is still a student's field, not a reference section.
+    paper=body.replace('学生作答：12','答案：').replace('学生作答：15','答案：')
+    with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+        draft=family_llm.homework_reference_draft([],review=True,
+            question_documents=[dict(name='synthetic-empty-answer-paper.txt',text=paper)],reference_documents=teacher)
+    assert model.call_count==1 and [q['judgment'] for q in draft['questions']]==['correct','unknown'];calls+=1
+    # A named paper beginning with a reference word remains the actual title.
+    paper=body.replace('虚构林间卷','参考虚构林间卷')
+    named=dict(items=[dict(first,label='参考虚构林间卷 第1题')],question_labels=['参考虚构林间卷 第1题'],coverage='仅一题')
+    with patch.object(family_llm,'_chat_json',return_value=named) as model:
+        draft=family_llm.homework_reference_draft([],review=True,question_documents=[dict(name='synthetic-named-paper.txt',text=paper)],
+            reference_documents=[dict(teacher[0],text=teacher[0]['text'].replace('虚构林间卷','参考虚构林间卷'))])
+    assert model.call_count==1 and any(q['label']=='参考虚构林间卷 第2题' for q in draft['questions']);calls+=1
+    return calls
+
+
 def run():
-    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+source_inventory_checks()+missing_condition_checks()+teacher_note_checks()+teacher_note_owner_checks()
+    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+source_inventory_checks()+source_answer_section_checks()+missing_condition_checks()+teacher_note_checks()+teacher_note_owner_checks()
     word_boundary_checks()
     nested_sub_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:
