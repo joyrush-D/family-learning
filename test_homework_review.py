@@ -1619,9 +1619,14 @@ def source_reading_role_checks():
     # Neither a child field alone nor a quoted instruction proves material use.
     for ambiguous in (paper.replace('根据上文回答下面问题。',''),
                       paper.replace('根据上文回答下面问题。','“根据上文回答下面问题。”'),
-                      paper.replace('阅读文章：《小桥》（供回答本卷问题）','示例：教师提供的示范学生作答')):
+                      paper.replace('阅读文章：《小桥》（供回答本卷问题）','示例：教师提供的示范学生作答'),
+                      paper.replace('\n参考\n','\n参考\n示例（仅供教师演示）\n')):
         rows,unresolved=family_llm._source_question_inventory([dict(name='synthetic-weak-role.txt',text=ambiguous)])
         assert rows==[] and unresolved
+    # A later explicit example closes the preceding proved body, not vice versa.
+    example=paper.replace('第2题 谁先走过桥？','示例【仅供教师演示】\n第2题 谁先走过桥？')
+    rows,unresolved=family_llm._source_question_inventory([dict(name='synthetic-later-example.txt',text=example)])
+    assert not unresolved and [row['label'] for row in rows]==['虚构溪桥阅读卷 第1题']
     return calls
 
 

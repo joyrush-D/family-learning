@@ -2051,14 +2051,22 @@ def _source_material_questions(lines):
     before=[line.strip() for _,line in lines[:marks[0]] if line.strip()]
     if (not any(instruction.fullmatch(line) for line in before)
             or not any(not instruction.fullmatch(line) and _ref_plain(line) for line in before)
-            or any(re.fullmatch(r'(?:教师|老师)?(?:参考答案|答案解析|解析|示例|示范|范例|例题)(?:\s*[:：].*)?',line)
-                   for line in before)): return False
+            or any(_source_example_heading(line) for line in before)): return False
     for start,end in zip(marks,marks[1:]+[len(lines)]):
         # A field belongs to the preceding question, not to the whole document.
         # Empty child fields are explicit too; their values never become grades.
         if not any((field:=_REF_FIELD.search(line)) and re.fullmatch(r'(?:学生|孩子)(?:的)?(?:作答|答题|答案)',field[1])
                    for _,line in lines[start:end]): return False
     return True
+
+
+def _source_example_heading(line):
+    # A heading's bracketed purpose and source words do not change its role.
+    # A numbered stem or a whole paper title is never this standalone heading.
+    head=re.split('[:：]',line,maxsplit=1)[0]
+    if _REF_QUESTION.search(head) or _REF_DECLARED.fullmatch(line.strip()): return False
+    paper,_,words=_ref_scope(_REF_TITLE_NOTE.sub('',head).strip())
+    return paper is None and words in ('示例','示范','范例','例题','解析')
 
 
 def _source_question_inventory(documents):
@@ -2089,6 +2097,10 @@ def _source_question_inventory(documents):
             if answer_section:
                 if re.fullmatch(r'(?:试题|题目)\s*[:：]?',line):
                     flush();answer_section=None;continue
+                if answer_section=='material' and _source_example_heading(line):
+                    # Close the proved question blocks before this example; do
+                    # not let later sample child fields override an example role.
+                    flush();answer_section='teacher';continue
                 if answer_section=='teacher': continue
             segment.append((at,original))
         flush()
