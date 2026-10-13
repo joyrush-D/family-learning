@@ -328,6 +328,54 @@ class SchoolActionInventoryTests(unittest.TestCase):
                     self.assertNotIn(foreign, body, 'the shared standard must not merge independent actions')
                     self.assertIn(shared, body, 'a trailing all-actions standard belongs to both outcomes')
 
+    def test_positive_shared_predicate_keeps_negative_characters_in_its_object(self):
+        for shared in ('两项都圈出不规则动词', '两项都要圈出不规则动词',
+                       '两项都请同学标出不等式', '两项都记录免疫现象',
+                       '两项都检查不规范的地方'):
+            with self.subTest(shared=shared):
+                t = type(self)(methodName='runTest');t.setUp()
+                try:
+                    quotes = ('朗读Unit 2课文两遍', '抄写Unit 2课文一遍')
+                    payload, refs = t._ingest([
+                        '英语，明天完成两项要求：' + '；'.join(quotes) + '。' + shared + '。',
+                        '数学，明天完成：完成数学练习卷第1至3题。'])
+                    proposals = [t.proposal(quote, refs[:1], due='2026-10-06') for quote in quotes]
+                    proposals.append(t.proposal('完成数学练习卷第1至3题', refs[1:], subject='数学', due='2026-10-06'))
+                    rows = t.saved(payload, t.run_receipt(payload, proposals), 3)
+                    self.assertEqual(t.model.call_count, 1)
+                    for row in rows:
+                        self.assertEqual(row['due'], '2026-10-06')
+                        self.assertEqual(shared in row['body'], '数学' not in row['title'])
+                        anchors = json.loads(row['plan'])['school_original_action']['anchors']
+                        self.assertTrue(all(a['quote'] in payload['messages'][0 if '数学' not in row['title'] else 1]['text'] for a in anchors))
+                    with t.store._db() as c:
+                        self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')], payload['messages'])
+                        self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages ORDER BY rowid')], [1, 1])
+                    again = agent.run_once(t.app, t.now + dt.timedelta(minutes=6))
+                    self.assertEqual((again['failed'], again['processed'], again['created']), (0, 0, 0))
+                    self.assertEqual(t.model.call_count, 1)
+                finally:t.doCleanups()
+
+    def test_shared_negative_predicates_are_not_treated_as_positive_objects(self):
+        first = '英语作业：朗读Unit 2课文两遍。抄写Unit 2课文一遍。'
+        for shared in ('两项都不圈出动词', '两项都不要圈出动词', '两项都勿圈出动词',
+                       '两项都免交', '两项都圈出动词后不用提交',
+                       '两项都圈出动词但不要求明天交', '两项都检查不清楚',
+                       '两项都不规则', '两项都请家长不签字'):
+            with self.subTest(shared=shared):
+                with self.assertRaises(agent.AgentError) as error:
+                    agent._school_native_blocks(first + shared + '。')
+                self.assertEqual(error.exception.code, 'school_action_coverage')
+
+    def test_negative_character_shared_standard_still_has_transaction_coverage(self):
+        shared = '两项都圈出不规则动词'
+        quotes = ('朗读Unit 2课文两遍', '抄写Unit 2课文一遍')
+        payload, refs = self._ingest(['英语作业：' + '；'.join(quotes) + '。' + shared + '。'])
+        proposals = [self.proposal(quote, refs) for quote in quotes]
+        def omit_standard(items, context):
+            next(item for item in items if '朗读' in item['title'])['body'] = quotes[0]
+        self.reject_inventory_change_in_transaction(payload, proposals, omit_standard)
+
     def test_negated_shared_deadline_cannot_become_a_required_date(self):
         shared = '两项都不要求明天交'
         quotes = ('朗读Unit 2课文两遍', '完成练习卷第1–3题')
