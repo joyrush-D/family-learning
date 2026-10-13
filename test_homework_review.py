@@ -1658,6 +1658,17 @@ def source_reading_role_checks():
     source=paper.replace('学生作答：木桥','学生作答：我从示例里找到木桥')
     rows,unresolved=family_llm._source_question_inventory([dict(name='synthetic-example-value.txt',text=source)])
     assert not unresolved and [row['line'] for row in rows]==[6,8]
+    nested='\n'.join(paper.splitlines()[:5])+'\n第1题 根据材料填写：\n（1）小河上是哪一种桥？\n学生作答：木桥\n（2）谁先走过桥？\n学生示例答案：送信员（仅供教师演示）\n'
+    rows,unresolved=family_llm._source_question_inventory([dict(name='synthetic-mixed-leaves.txt',text=nested)])
+    assert unresolved and [(row['label'],row['line']) for row in rows]==[('虚构溪桥阅读卷 第1题（1）',7)]
+    leaf=dict(first,label='虚构溪桥阅读卷 第1题（1）')
+    leaf_raw=dict(items=[leaf],question_labels=[leaf['label']],coverage='仅检查实际第1小题。')
+    with patch.object(family_llm,'_chat_json',return_value=leaf_raw) as model:
+        draft=family_llm.homework_reference_draft([],review=True,
+            question_documents=[dict(name='synthetic-mixed-leaves.txt',text=nested)],
+            reference_documents=[dict(name='synthetic-leaf-teacher.txt',text='试卷名称：虚构溪桥阅读卷\n第1题（1） 木桥\n')])
+    assert model.call_count==1 and [q['label'] for q in draft['questions']]==[leaf['label']];calls+=1
+    assert '另有题号或归属无法唯一核明' in draft['coverage']
     return calls
 
 
