@@ -9,7 +9,7 @@ const DOCX='application/vnd.openxmlformats-officedocument.wordprocessingml.docum
 // The served bundle keeps app helpers private, so build the same question markup from the exact app.js source in an isolated VM and let the real page lay it out.
 const appSource=require('node:fs').readFileSync(require('node:path').join(__dirname,'app.js'),'utf8'),vm=require('node:vm');
 const appFunction=name=>{const m=new RegExp('^function '+name+'\\(.*\\n(?:.*\\n)*?\\}$','m').exec(appSource);assert(m,'app.js defines '+name);return m[0]};
-const reviewQuestionHTML=vm.runInNewContext(appFunction('homeworkReviewReferenceHTML')+'\n'+appFunction('homeworkReviewQuestionHTML')+'\nhomeworkReviewQuestionHTML',{esc:vm.runInNewContext(/(?:^|[\s,;])esc=(s=>.*?\}\[c\]\)\))/m.exec(appSource)[1])});
+const reviewQuestionHTML=vm.runInNewContext(appFunction('homeworkReviewReferenceHTML')+'\n'+appFunction('homeworkReviewInspection')+'\n'+appFunction('homeworkReviewQuestionHTML')+'\nhomeworkReviewQuestionHTML',{esc:vm.runInNewContext(/(?:^|[\s,;])esc=(s=>.*?\}\[c\]\)\))/m.exec(appSource)[1])});
 // Root's held-out red case and its controls run against the exact app.js scope helper; the exact c62 helper is kept only to show the red case catches it.
 const scopeText=vm.runInNewContext(appFunction('homeworkReviewScopeText')+'\nhomeworkReviewScopeText');
 const c62ScopeText=vm.runInNewContext(String.raw`function homeworkReviewScopeText(coverage,comparison){
