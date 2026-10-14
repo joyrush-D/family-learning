@@ -1952,6 +1952,75 @@ def source_inventory_checks():
     return calls
 
 
+def source_leading_blank_checks():
+    """A stem-leading blank belongs to the proved source question, never to a teacher/label path."""
+    calls=0
+    title='试卷名称：虚构春塘填空卷\n'
+    section='一、选择正确的字填空\n'
+    first='1. （  ）天来了。 A. 春  B. 椿'
+    second='2. 树叶很（  ）。 A. 绿  B. 蓝'
+    body=title+section+first+'\n学生完整最终作答：A\n'+second+'\n学生完整最终作答：\n'
+    source=lambda text:[dict(name='synthetic-leading-blank-source.txt',text=text)]
+    rows,unknown=family_llm._source_question_inventory(source(body))
+    assert not unknown and [(r['section'],r['number'],r['sub']) for r in rows]==[(1,1,None),(1,2,None)],rows
+    assert rows[0]['question']==first and rows[0]['line']==3 and rows[0]['window_span']==(3,4)
+    assert rows[0]['heading_end']==2 and rows[0]['original_text']==body,rows[0]
+    teacher=[dict(name='synthetic-leading-blank-teacher.txt',text=title+'第一大题\n第1题：A\n第2题：A\n')]
+    known=item(label=rows[0]['label'],question=first[2:].lstrip(),student_answer='A',answer='教师参考：A')
+    pending=item(label=rows[1]['label'],question=second[2:].lstrip(),student_answer='',answer='教师参考：A',
+                 judgment='unknown',uncertainty='本题原作答为空。')
+    for items in ([pending,known],[pending]):
+        raw=dict(items=items,question_labels=[q['label'] for q in items],coverage='仅按完整虚构原件核本次结果。')
+        frozen=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            result=family_llm.homework_reference_draft([],review=True,question_documents=source(body),reference_documents=teacher)
+        calls+=1;assert model.call_count==1 and raw==frozen
+        assert [q['label'] for q in result['questions']]==[r['label'] for r in rows],result
+        assert result['questions'][1]['judgment']=='unknown','an empty original answer is not filled or graded'
+        if len(items)==1:
+            missed=result['questions'][0]
+            assert missed['question']==first and '第3行' in missed['uncertainty'] and '尚未检查' in missed['uncertainty'],missed
+            assert all(missed[k]=='' for k in ('student_answer','answer','error_reason','possible_cause','steps'))
+    raw=dict(items=[known],question_labels=[known['label']],coverage='只核本批第1题。');frozen=json.loads(json.dumps(raw))
+    with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+        result=family_llm.homework_reference_draft([],review=True,question_documents=source(body),reference_documents=teacher,
+            selected_labels=[rows[0]['label']])
+    calls+=1;assert model.call_count==1 and raw==frozen and result['items']==1
+    assert result['questions'][0]['student_answer']=='A' and result['questions'][0]['judgment']=='correct',result
+    assert family_llm._source_final_answer(known,rows,family_llm._ref_titles(source(body)),False)=='A'
+    for instruction in ('填空题','选择合适的词语填空'):
+        variant=body.replace('选择正确的字填空',instruction).replace('（  ）天','( )天')
+        got,unknown=family_llm._source_question_inventory(source(variant))
+        assert not unknown and len(got)==2 and got[0]['sub'] is None and '( )天' in got[0]['question']
+    for changed in ('1. （?）天来了。','第1题（?）天来了。','第1题（ ）天来了。',
+                    '1. （ ）：请完成本小题。','1. （ ） 天来了。','1. （1）（ ）天来了。'):
+        got,unknown=family_llm._source_question_inventory(source(body.replace(first,changed)))
+        assert unknown and not any(r['number']==1 for r in got),(changed,got)
+        with patch.object(family_llm,'_chat_json') as model:
+            try: family_llm.homework_reference_draft([],review=True,question_documents=source(body.replace(first,changed)),
+                    reference_documents=teacher,selected_labels=[got[0]['label']])
+            except family_llm.LLMDraftError: pass
+            else: raise AssertionError('unread source paths still block batching before a model call')
+            assert model.call_count==0
+    for instruction in ('阅读题','不要填空','观察孩子填空情况'):
+        got,unknown=family_llm._source_question_inventory(source(body.replace('选择正确的字填空',instruction)))
+        assert unknown and not any(r['number']==1 for r in got),(instruction,got)
+    for role in ('教师参考答案','老师答案'):
+        got,unknown=family_llm._source_question_inventory(source(title+role+'\n'+section+first+'\n学生作答：A\n'))
+        assert not got,(role,got)
+    for label in ('虚构春塘填空卷 第1题（ ）','虚构春塘填空卷 第1题（?）'):
+        assert family_llm._ref_sub(label,family_llm._REF_QUESTION.search(label).end())[0]=='*'
+    entries=family_llm._teacher_reference_entries([dict(name='synthetic-unread-leading-teacher.txt',text=title+section+first+'\n')])
+    assert entries and entries[0]['sub']=='*',entries
+    nested=title+'一、填空题\n1. 完成两道小题。\n（1）字母是什么？\n学生作答：A\n（2）字母是什么？\n学生作答：B\n'
+    got,unknown=family_llm._source_question_inventory(source(nested))
+    assert not unknown and [r['sub'] for r in got]==[(1,),(2,)],got
+    other=body+'试卷名称：虚构另一卷\n1. （ ）天来了。\n学生作答：A\n'
+    got,unknown=family_llm._source_question_inventory(source(other))
+    assert unknown and len(got)==2 and all(r['paper']=='虚构春塘填空卷' for r in got),got
+    return calls
+
+
 def source_answer_section_checks():
     body='虚构林间卷\n第1题：8+4=（    ）。\n学生作答：12\n第2题：21-6=（    ）。\n学生作答：15\n'
     teacher=[dict(name='synthetic-section-teacher.txt',text='虚构林间卷\n第1题：12\n第2题：15\n')]
@@ -2074,7 +2143,7 @@ def source_reading_role_checks():
 
 
 def run():
-    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+source_inventory_checks()+source_answer_section_checks()+source_reading_role_checks()+missing_condition_checks()+teacher_caption_checks()+natural_unit_instruction_checks()+teacher_wording_caption_checks()+teacher_note_checks()+teacher_note_owner_checks()
+    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+source_inventory_checks()+source_leading_blank_checks()+source_answer_section_checks()+source_reading_role_checks()+missing_condition_checks()+teacher_caption_checks()+natural_unit_instruction_checks()+teacher_wording_caption_checks()+teacher_note_checks()+teacher_note_owner_checks()
     word_boundary_checks()
     nested_sub_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:

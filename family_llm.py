@@ -2171,11 +2171,7 @@ def _source_final_answer(item,rows,titles,images,*,identity_only=False,unambiguo
         if pointer is not None:line=line[end:].lstrip()
         field=re.fullmatch(r'(?:(?:学生|孩子)(?:的)?(?:完整最终|最终完整|最终|完整)?(?:作答|答案)|实际作答)\s*[:：]\s*(.*)',line)
         return field[1] if field else None
-    if _REF_SUB.match(line): _,end=_ref_sub(line,teacher=True)
-    else:
-        mark=_REF_QUESTION.search(line)
-        if mark is None: return None
-        _,end=_ref_sub(line,mark.end())
+    end=row['heading_end']  # Reuse the source identity, including a proved stem-leading blank.
     if _ref_unspaced(line[end:].lstrip(' :：'))!=_ref_unspaced(item['question']): return None
     field=None
     for line in lines[row['line']:]:
@@ -2355,6 +2351,18 @@ def _source_example_heading(line,field=False):
                               or field and bool(re.search('示例|示范|范例|例题',words)))
 
 
+def _source_question_sub(line,mark,instruction):
+    """A source fill-in stem, never a relaxed teacher/label path.
+    A numbered dot entry under a complete fill-in instruction can begin with
+    a spaced, closed blank joined to the stem's words. Other brackets, explicit
+    第N题 paths, and unproved instructions keep the shared unread-level guard.
+    """
+    sub,end=_ref_sub(line,mark.end(),teacher=True)
+    filling=re.fullmatch(r'(?:填空题?|(?:选择|选出|选用)(?:正确|合适|恰当)的?(?:字|词语?|选项|答案)填空)[。.]?',instruction)
+    blank=re.match(r'\s+(?:\(\s*\)|（\s*）)(?=[^\W\d_])',line[mark.end():])
+    return (None,mark.end()) if sub=='*' and mark[4] and mark[0].rstrip()[-1] in '.．' and filling and blank else (sub,end)
+
+
 def _source_question_inventory(documents, *, limit=25, layouts=None):
     """Question headings from the selected, fully read originals, never from answers.
     Reuse the reference reader's paper/section/path identities. A body mentioning a
@@ -2404,7 +2412,7 @@ def _source_question_inventory(documents, *, limit=25, layouts=None):
         scoped.append((document,lines,dict(document,text='\n'.join(line for _,line in lines)),teacher_headings,issues))
     for document_index,(document,lines,question_text,teacher_headings,issues) in enumerate(scoped):
         ordinary=_ref_request_title([question_text],(),[],titles)
-        paper=None;section=None;parent=None;local=[];boundaries=[];headings=dict(teacher_headings);answer_fields=set();owners={}
+        paper=None;section=None;parent=None;instruction='';local=[];boundaries=[];headings=dict(teacher_headings);answer_fields=set();owners={}
         first=next((n for n,(_,line) in enumerate(lines) if _REF_QUESTION.match(line.strip())),len(lines))
         bare=not any(line.strip() for _,line in lines[:first])
         for at,original in lines:
@@ -2414,7 +2422,7 @@ def _source_question_inventory(documents, *, limit=25, layouts=None):
             declared=_REF_DECLARED.fullmatch(line);named=declared[1] if declared else line
             if _REF_WHOLE.fullmatch(named) and not _REF_GENERIC_PAPER.fullmatch(named):
                 boundaries.append(at)
-                paper=named;section=None;parent=None;continue
+                paper=named;section=None;parent=None;instruction='';continue
             pointer,pointer_end=_ref_sub(line,teacher=True)
             field=_REF_FIELD.match(line[pointer_end:].lstrip()) if pointer is not None else None
             if field and _source_child_field(field[1],actual=True):
@@ -2430,7 +2438,7 @@ def _source_question_inventory(documents, *, limit=25, layouts=None):
             new,part,words=_ref_scope(head,section,titles)
             if not mark and _REF_SECTION.match(line):
                 boundaries.append(at)
-                section=part;parent=None;continue
+                section=part;parent=None;instruction=line[_REF_SECTION.match(line).end():].strip(' :：');continue
             if mark:
                 # Scope words before a mark must identify it, not be prose or a
                 # request such as "请复习第2题". Never name a paper by its filename.
@@ -2440,7 +2448,8 @@ def _source_question_inventory(documents, *, limit=25, layouts=None):
                 if current is None and ordinary is None and not bare:
                     unresolved=True;continue
                 number=int(next(g for g in mark.groups() if g))
-                sub,end=_ref_sub(line,mark.end(),teacher=True)
+                if new is not None and new!=paper: instruction=''
+                sub,end=_source_question_sub(line,mark,instruction)
                 separator=line[mark.end():]
                 if sub=='*': unresolved=True;parent=None;continue
                 if not sub and separator and not separator[0].isspace() and separator[0] not in ':：':
@@ -2469,7 +2478,7 @@ def _source_question_inventory(documents, *, limit=25, layouts=None):
             if len(label)>80: unresolved=True;continue
             local.append(dict(paper=current,section=part,rest=ordinary or '' if current is None else '',
                 number=number,sub=sub,label=label,question=line if len(line)<=800 else '',
-                document=document['name'],line=at,document_index=document_index,original_text=document['text']))
+                document=document['name'],line=at,heading_end=end,document_index=document_index,original_text=document['text']))
         # A parent introducing explicitly numbered children is not an extra
         # check. Only the distinct leaf paths are retained, with their own lines.
         parents={(row['paper'],row['section'],row['rest'],row['number'],(row['sub'] or ())[:n])
