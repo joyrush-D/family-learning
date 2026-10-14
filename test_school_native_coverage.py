@@ -426,6 +426,12 @@ class SchoolNativeCoverageTests(unittest.TestCase):
     def test_shared_standard_with_a_second_clause_binds_nothing(self):
         self._assert_shared_rejected([self.SHARED_LIST, '以上两项均请家长核对，朗读另外录音上传。'])
 
+    def test_background_about_the_list_is_not_bound_as_a_standard(self):
+        payload, refs, proposals = self._shared_messages([self.SHARED_LIST, '以上两项都很重要。'])
+        upgraded = [dict(p, task_goal=p['title_quote'] + '；以上两项都很重要。') for p in proposals]
+        self._use_replies(payload, [dict(proposals=upgraded)])
+        self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
+
     def test_unread_shared_standard_binds_nothing(self):
         self._assert_shared_rejected([self.SHARED_LIST, self.SHARED_STANDARD], unread_last=True)
 

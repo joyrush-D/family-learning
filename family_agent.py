@@ -3156,8 +3156,9 @@ def _school_native_shared_later(entry,evidence,count):
     except (KeyError,ValueError,TypeError):return None
     clause=later['text'].strip().rstrip('。；;').strip()
     common=re.match(r'^(?:以上|上述|这)([二两三四五六七八九十2-9])项(?:作业|任务|要求)?(?:都|均)',clause)
-    if (not common or re.search(r'[，,。；;！!？?\n]',clause) or re.search(_SCHOOL_NATIVE_CHANGE+r'|选做|必做',clause)
-            or _school_native_common_negative(clause[common.end():])):return None
+    # Only a stated request is a standard; background about the list ("以上两项都很重要") stays outside both outcomes.
+    if (not common or not re.match(r'(?:请|要|需|须|必须|应)',clause[common.end():]) or re.search(r'[，,。；;！!？?\n]',clause)
+            or re.search(_SCHOOL_NATIVE_CHANGE+r'|选做|必做',clause) or _school_native_common_negative(clause[common.end():])):return None
     if (int(common[1]) if common[1].isdigit() else {'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}[common[1]])!=count:
         raise AgentError('共同标准的项数与独立行动不一致，完整原批次保留',code='school_action_coverage')
     return dict(ref=later['ref'],quote=later['text'].strip(),goal=clause,time=later['time'])
