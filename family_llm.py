@@ -2848,6 +2848,14 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
             # Literal uppercase A-H, or whole results read in order (_ref_value_check); other answers need an evidenced comparator.
             student=item['student_answer'].strip()
             reference=caption['value'] if caption else item['answer'].removeprefix('教师参考：').strip()
+            # A fully quoted teacher note need not be a parseable numeric key.
+            # Negative own-field evidence precedes every caption/comparison shortcut.
+            final=(_source_final_answer(item,source_inventory,_ref_titles(question_documents),bool(images),
+                    identity_only=True,unambiguous=not source_unresolved)
+                if '单位' in item['question'] and item['judgment']!='unknown' and _ref_values(student) is not None else None)
+            if final is not None and _ref_unspaced(final)!=_ref_unspaced(item['student_answer']):
+                item.update(judgment='unknown',error_reason='',possible_cause='',steps='',
+                    uncertainty=('原答抄写尚未核明：同题完整文字作答为“%s”，模型抄为“%s”；不能以单位描述代替原写法，请对照原件补查。'%(final,item['student_answer']))[:300])
             caption_checked=_ref_caption_requirement(item,caption,source_inventory,_ref_titles(question_documents),bool(images)) if caption else False
             if (re.fullmatch('[A-H]',student) and re.fullmatch('[A-H]',reference)
                     and item['judgment'] in ('correct','incorrect')
@@ -2855,15 +2863,7 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
                 item['judgment']='unknown'
                 item['error_reason']=item['possible_cause']=item['steps']=''
                 item['uncertainty']=('字母作答与教师参考的比较和模型判定矛盾，请重新核对。'+item['uncertainty'].strip())[:300]
-            elif not caption_checked:
-                final=(_source_final_answer(item,source_inventory,_ref_titles(question_documents),bool(images),
-                        identity_only=True,unambiguous=not source_unresolved)
-                    if question_kind=='objective' and '单位' in item['question'] and item['judgment']!='unknown'
-                    and _ref_values(student) is not None and _ref_values(reference) is not None else None)
-                if final is not None and _ref_unspaced(final)!=_ref_unspaced(item['student_answer']):
-                    item.update(judgment='unknown',error_reason='',possible_cause='',steps='',
-                        uncertainty=('原答抄写尚未核明：同题完整文字作答为“%s”，模型抄为“%s”；不能以单位描述代替原写法，请对照原件补查。'%(final,item['student_answer']))[:300])
-                else:_ref_value_check(item,student,reference)
+            elif not caption_checked:_ref_value_check(item,student,reference)
         if review and not item['question'].strip() and question_kind!='objective':
             # Matching reference words cannot establish a subjective answer's completeness.
             # Keep the observed answer and teacher original, but not the model's unsupported grade.

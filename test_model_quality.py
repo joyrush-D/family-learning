@@ -2091,11 +2091,12 @@ class ExactAnswerTest(unittest.TestCase):
 
 class UnitWritingPermissionTest(unittest.TestCase):
     """A page fact grants no permission; complete own writing still guards raw transcription."""
-    def review(self, question, student='270', judgment='incorrect', *, original=None, field='孩子作答', uncertainty=''):
+    def review(self, question, student='270', judgment='incorrect', *, original=None, field='孩子作答', uncertainty='',
+               teacher='270厘米。', quote=None):
         import family_llm
         reason = (('原答只写270，未写本题要求的厘米单位。' if student == '270' else
                    '原答%s，与教师参考的数值不同。' % student) if judgment == 'incorrect' else '')
-        item = dict(label='第1题', question=question, student_answer=student, answer='教师参考：270厘米。',
+        item = dict(label='第1题', question=question, student_answer=student, answer='教师参考：' + (teacher if quote is None else quote),
                     judgment=judgment, error_reason=reason, possible_cause='', steps='', uncertainty=uncertainty,
                     question_kind='objective')
         raw = dict(items=[item], coverage='仅虚构第1题。', question_labels=['第1题'])
@@ -2103,13 +2104,13 @@ class UnitWritingPermissionTest(unittest.TestCase):
         # original can contain extra question prose: only the proven field rejects a wrong transcription.
         text = '单位练习（虚构）\n1. %s\n%s：%s\n' % (question, field, student if original is None else original)
         documents = [dict(name='单位练习-虚构.txt', text=text)]
-        teachers = [dict(name='教师参考-虚构.txt', text='教师参考答案（虚构）\n1. 270厘米。\n')]
+        teachers = [dict(name='教师参考-虚构.txt', text='教师参考答案（虚构）\n1. %s\n' % teacher)]
         originals = copy.deepcopy((documents, teachers))
         with patch.object(family_llm, '_chat_json', return_value=raw) as model:
             [result] = family_llm.homework_reference_draft([], review=True, data_path=None,
                 question_documents=documents, reference_documents=teachers)['questions']
         model.assert_called_once(); self.assertEqual(raw, frozen); self.assertEqual((documents, teachers), originals)
-        self.assertEqual((result['student_answer'], result['answer']), (student, '教师参考：270厘米。'))
+        self.assertEqual((result['student_answer'], result['answer']), (student, '教师参考：' + teacher))
         return result
 
     def test_absent_print_and_unwritten_answer_are_not_writing_waivers(self):
@@ -2202,6 +2203,23 @@ class UnitWritingPermissionTest(unittest.TestCase):
         self.assertTrue(unresolved)
         self.assertIsNone(family_llm._source_final_answer(item, rows, family_llm._ref_titles(documents), False,
             identity_only=True, unambiguous=not unresolved))
+
+    def test_full_teacher_note_and_caption_never_bypass_wrong_transcription(self):
+        for question, teacher in (('2.7米改写为厘米。空格外未印单位。', '270厘米。请核孩子完整原作答。'),
+                                  ('2.7米=____厘米（单位已印好）。', '270厘米。空格外已印厘米。')):
+            with self.subTest(question=question, teacher=teacher):
+                q = self.review(question, original='270厘米', field='学生完整最终作答', teacher=teacher)
+                self.assertEqual((q['judgment'], q['error_reason'], q['steps']), ('unknown', '', ''))
+                self.assertIn('原答抄写尚未核明', q['uncertainty'])
+                self.assertIn('作答为“270厘米”', q['uncertainty']); self.assertIn('模型抄为“270”', q['uncertainty'])
+                q = self.review(question, original='270厘米', judgment='unknown', uncertainty='原答待核。', teacher=teacher)
+                self.assertEqual((q['judgment'], q['uncertainty']), ('unknown', '原答待核。'))
+        question, teacher = '2.7米改写为厘米。空格外未印单位。', '270厘米。请核孩子完整原作答。'
+        self.assertEqual(self.review(question, teacher=teacher)['judgment'], 'incorrect')
+        # A cropped teacher quote is still rejected first; original writing cannot override a missing full source quote.
+        q = self.review(question, original='270厘米', teacher=teacher, quote='270厘米。')
+        self.assertEqual(q['judgment'], 'unknown'); self.assertIn('开头', q['uncertainty'])
+        self.assertNotIn('原答抄写尚未核明', q['uncertainty'])
 
 
 class WrappedAnswerBlankTest(unittest.TestCase):
