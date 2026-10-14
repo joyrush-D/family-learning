@@ -29,7 +29,7 @@ def read_upload(data, connection, ident):
     return dict(row),body
 
 
-def first_page(data, connection, ident):
+def first_page(data, connection, ident, *, refresh=False):
     row,body=read_upload(data,connection,ident)
     digest=hashlib.sha256(body).hexdigest()
     key=hashlib.sha256(('first-page-v1:'+row['mime']+':'+digest).encode()).hexdigest()
@@ -42,7 +42,7 @@ def first_page(data, connection, ident):
     if not _LOCK.acquire(timeout=1):
         raise family_print.PrintError('另一份首页正在准备，请稍后重试','preview_busy',503)
     try:
-        if target.is_file():
+        if target.is_file() and not refresh:
             try:
                 cached=family_print._read_file(target,family_pdf.MAX_PAGE_BYTES);family_pdf._validate_png(cached)
             except (family_pdf.PDFError,family_print.PrintError): target.unlink()

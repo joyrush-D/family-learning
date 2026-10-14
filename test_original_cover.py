@@ -80,6 +80,28 @@ class Covers(unittest.TestCase):
             with self.connect() as c,patch('family_print.office_convert') as converter:
                 with self.assertRaises(PrintError):family_preview.first_page(self.data,c,ident)
                 converter.assert_not_called()
+    def test_explicit_retry_rebuilds_an_undecodable_cache_without_changing_the_original(self):
+        ident='7'*32;body=b'%PDF-fictional-refresh';self.upload(ident,body,'application/pdf','fictional-refresh.pdf');png=image()
+        def chunk(kind,value):return struct.pack('>I',len(value))+kind+value+struct.pack('>I',zlib.crc32(kind+value)&0xffffffff)
+        broken=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',2,3,8,2,0,0,0))+chunk(b'IDAT',b'not-a-zlib-stream')+chunk(b'IEND',b'')
+        self.assertEqual(family_pdf._validate_png(broken),(2,3))
+        with self.connect() as c,patch('family_pdf.render_pages',return_value=dict(pages=[dict(data=png)])) as render:
+            _,key=family_preview.first_page(self.data,c,ident);cache=self.data/'original-previews'/(key+'.png');cache.write_bytes(broken)
+            self.assertEqual(family_preview.first_page(self.data,c,ident),(broken,key));self.assertEqual(render.call_count,1)
+            self.assertEqual(family_preview.first_page(self.data,c,ident,refresh=True),(png,key));self.assertEqual(render.call_count,2)
+            self.assertEqual(cache.read_bytes(),png);self.assertEqual(family_preview.first_page(self.data,c,ident),(png,key));self.assertEqual(render.call_count,2)
+        self.assertEqual((self.data/'uploads'/ident).read_bytes(),body)
+    def test_failed_refresh_preserves_cache_and_original_then_same_operation_recovers(self):
+        ident='8'*32;body=b'%PDF-fictional-retry';self.upload(ident,body,'application/pdf','fictional-retry.pdf');png=image()
+        with self.connect() as c:
+            with patch('family_pdf.render_pages',return_value=dict(pages=[dict(data=png)])):
+                _,key=family_preview.first_page(self.data,c,ident)
+            cache=self.data/'original-previews'/(key+'.png')
+            with patch('family_pdf.render_pages',side_effect=family_pdf.PDFError('fictional failure')):
+                with self.assertRaises(PrintError):family_preview.first_page(self.data,c,ident,refresh=True)
+            self.assertEqual(cache.read_bytes(),png);self.assertEqual((self.data/'uploads'/ident).read_bytes(),body)
+            with patch('family_pdf.render_pages',return_value=dict(pages=[dict(data=png)])) as render:
+                self.assertEqual(family_preview.first_page(self.data,c,ident,refresh=True),(png,key));self.assertEqual(render.call_count,1)
     def test_original_path_symlink_and_unsupported_format_guard(self):
         ident='9'*32;self.upload(ident,b'fictional legacy','application/msword','old.doc')
         with self.connect() as c:
