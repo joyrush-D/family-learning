@@ -988,6 +988,169 @@ def review_origin_http_checks(app,upload):
             server.shutdown();server.server_close();worker.join(timeout=3)
 
 
+def teacher_caption_checks():
+    """Frozen fictional sources: reference value, whole caption and actual answer evidence stay separate."""
+    scenarios = [{'case_id': 'C01',
+  'question_documents': [{'name': '虚构榆砂卷原题与作答', 'text': '试卷名称：虚构榆砂卷\n第一大题：单位换算\n第4题（2） 11千米＝（ ）米。\n学生作答：1100\n'}],
+  'teacher_documents': [{'name': '虚构榆砂卷教师参考', 'text': '教师参考答案\n试卷名称：虚构榆砂卷\n第一大题\n第4题（2）：11000。题目空格外已印“米”。\n'}],
+  'raw_model_response': {'comparison': '',
+                         'coverage': '仅对本次明确提供的本卷本小题生成结果；不代表其他题目或资料已核对。',
+                         'items': [{'answer': '11000',
+                                    'error_reason': '1千米等于1000米，11千米应为11000米；作答1100与11000不同。',
+                                    'judgment': 'incorrect',
+                                    'label': '虚构榆砂卷 第一大题 第4题（2）',
+                                    'possible_cause': '',
+                                    'question': '11千米＝（ ）米。',
+                                    'question_kind': 'objective',
+                                    'steps': '先列出1千米＝1000米，再计算11×1000并核对结果。',
+                                    'student_answer': '1100',
+                                    'uncertainty': ''}],
+                         'question_labels': ['虚构榆砂卷 第一大题 第4题（2）']}},
+ {'case_id': 'C02',
+  'question_documents': [{'name': '虚构禾岚卷第1页', 'text': '试卷名称：虚构禾岚卷\n第二大题：图形计算\n第5题（1） 一个长方形长17厘米，\n'},
+                         {'name': '虚构禾岚卷第2页', 'text': '试卷名称：虚构禾岚卷\n第二大题\n接第5题（1）：宽12厘米，求它的周长。\n学生作答：58厘米\n'}],
+  'teacher_documents': [{'name': '虚构禾岚卷教师参考',
+                         'text': '教师参考答案\n试卷名称：虚构禾岚卷\n第二大题\n第5题（1）：58厘米。题干接在所选第2页，本小题跨两页，按同一题核对。\n'}],
+  'raw_model_response': {'comparison': '',
+                         'coverage': '仅对本次明确提供的本卷本小题生成结果；不代表其他题目或资料已核对。',
+                         'items': [{'answer': '58厘米',
+                                    'error_reason': '',
+                                    'judgment': 'correct',
+                                    'label': '虚构禾岚卷 第二大题 第5题（1）',
+                                    'possible_cause': '',
+                                    'question': '一个长方形长17厘米、宽12厘米，求它的周长。',
+                                    'question_kind': 'objective',
+                                    'steps': '',
+                                    'student_answer': '58厘米',
+                                    'uncertainty': ''}],
+                         'question_labels': ['虚构禾岚卷 第二大题 第5题（1）']}},
+ {'case_id': 'C03',
+  'question_documents': [{'name': '虚构汀竹卷原题与作答',
+                          'text': '试卷名称：虚构汀竹卷\n'
+                                  '第一大题：单位换算\n'
+                                  '第7题（3） 把2.7米改写为厘米。答题空格后没有预印单位，作答必须写出数值和厘米单位。\n'
+                                  '学生作答：270\n'}],
+  'teacher_documents': [{'name': '虚构汀竹卷教师参考',
+                         'text': '教师参考答案\n试卷名称：虚构汀竹卷\n第一大题\n第7题（3）：270厘米。评分要求：必须在作答中写出厘米，未写单位不符合本题要求。\n'}],
+  'raw_model_response': {'comparison': '',
+                         'coverage': '仅对本次明确提供的本卷本小题生成结果；不代表其他题目或资料已核对。',
+                         'items': [{'answer': '270厘米',
+                                    'error_reason': '',
+                                    'judgment': 'correct',
+                                    'label': '虚构汀竹卷 第一大题 第7题（3）',
+                                    'possible_cause': '',
+                                    'question': '把2.7米改写为厘米。答题空格后没有预印单位，作答必须写出数值和厘米单位。',
+                                    'question_kind': 'objective',
+                                    'steps': '',
+                                    'student_answer': '270',
+                                    'uncertainty': ''}],
+                         'question_labels': ['虚构汀竹卷 第一大题 第7题（3）']}},
+ {'case_id': 'C04',
+  'question_documents': [{'name': '虚构栖露卷原题与作答',
+                          'text': '试卷名称：虚构栖露卷\n第三大题：近似数\n第8题（4） 把6.285按四舍五入保留两位小数，结果必须恰好写两位小数。\n学生作答：6.290\n'}],
+  'teacher_documents': [{'name': '虚构栖露卷教师参考',
+                         'text': '教师参考答案\n试卷名称：虚构栖露卷\n第三大题\n第8题（4）：6.29。评分要求：结果必须恰好写两位小数，不能多写或少写小数位。\n'}],
+  'raw_model_response': {'comparison': '',
+                         'coverage': '仅对本次明确提供的本卷本小题生成结果；不代表其他题目或资料已核对。',
+                         'items': [{'answer': '6.29',
+                                    'error_reason': '',
+                                    'judgment': 'correct',
+                                    'label': '虚构栖露卷 第三大题 第8题（4）',
+                                    'possible_cause': '',
+                                    'question': '把6.285按四舍五入保留两位小数，结果必须恰好写两位小数。',
+                                    'question_kind': 'objective',
+                                    'steps': '',
+                                    'student_answer': '6.290',
+                                    'uncertainty': ''}],
+                         'question_labels': ['虚构栖露卷 第三大题 第8题（4）']}},
+ {'case_id': 'C05',
+  'question_documents': [{'name': '虚构雁珀卷原题与作答',
+                          'text': '试卷名称：虚构雁珀卷\n'
+                                  '第二大题：解决问题\n'
+                                  '第9题（2） 每盒彩笔13支，共4盒，一共有多少支？请写出算式和得数，不能只写最后的数。\n'
+                                  '学生作答（本次仅已读得数片段）：52支\n'}],
+  'teacher_documents': [{'name': '虚构雁珀卷教师参考',
+                         'text': '教师参考答案\n试卷名称：虚构雁珀卷\n第二大题\n第9题（2）：13×4＝52（支）。评分要求：必须同时写出算式与得数，只写52支不符合本题要求。\n'}],
+  'raw_model_response': {'comparison': '',
+                         'coverage': '仅对本次明确提供的本卷本小题生成结果；不代表其他题目或资料已核对。',
+                         'items': [{'answer': '52支',
+                                    'error_reason': '',
+                                    'judgment': 'correct',
+                                    'label': '虚构雁珀卷 第二大题 第9题（2）',
+                                    'possible_cause': '',
+                                    'question': '每盒彩笔13支，共4盒，一共有多少支？请写出算式和得数，不能只写最后的数。',
+                                    'question_kind': 'objective',
+                                    'steps': '',
+                                    'student_answer': '52支',
+                                    'uncertainty': ''}],
+                         'question_labels': ['虚构雁珀卷 第二大题 第9题（2）']}},
+ {'case_id': 'C06',
+  'question_documents': [{'name': '虚构星荫卷原题与作答',
+                          'text': '试卷名称：虚构星荫卷\n第一大题：单位换算\n第6题（3） 将1.8米改写为厘米。\n学生作答：180厘米\n'}],
+  'teacher_documents': [{'name': '虚构星荫卷参考页', 'text': '教师参考答案\n试卷名称：虚构星荫卷\n第一大题\n第6题（3）：180厘米。\n'},
+                        {'name': '虚构星荫卷未标版本订正页',
+                         'text': '教师参考答案\n试卷名称：虚构星荫卷\n第一大题\n第6题（3）：1800厘米。订正页未注明适用的题目版本。\n'}],
+  'raw_model_response': {'comparison': '',
+                         'coverage': '仅对本次明确提供的本卷本小题生成结果；不代表其他题目或资料已核对。',
+                         'items': [{'answer': '教师参考：180厘米。',
+                                    'error_reason': '',
+                                    'judgment': 'unknown',
+                                    'label': '虚构星荫卷 第一大题 第6题（3）',
+                                    'possible_cause': '',
+                                    'question': '将1.8米改写为厘米。',
+                                    'question_kind': 'objective',
+                                    'steps': '',
+                                    'student_answer': '180厘米',
+                                    'uncertainty': '两份参考在同卷同小题写出不同答案，订正页未注明适用版本，不能确定本题应采用哪个参考值。'}],
+                         'question_labels': ['虚构星荫卷 第一大题 第6题（3）']}}]
+    calls=0
+    def draft(case,*,pictures=False):
+        nonlocal calls
+        raw=json.loads(json.dumps(case['raw_model_response']))
+        untouched=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            result=family_llm.homework_reference_draft([dict(mime='image/png',data=png())] if pictures else [],
+                review=True,question_documents=case['question_documents'],reference_documents=case['teacher_documents'])
+            assert model.call_count==1 and raw==untouched
+            calls+=1
+        assert result['items']==1 and len(result['questions'])==1,result
+        q=result['questions'][0]
+        assert q['label']==untouched['items'][0]['label'] and q['student_answer']==untouched['items'][0]['student_answer'],q
+        assert q['question']==untouched['items'][0]['question'] and not q['possible_cause'],q
+        assert 'fixture_metadata' not in str(model.call_args) and 'material_completeness' not in str(model.call_args)
+        return result,q
+    expected=['incorrect','correct','incorrect','incorrect','unknown','unknown']
+    for case,judgment in zip(scenarios,expected):
+        result,q=draft(case)
+        assert q['judgment']==judgment,(case['case_id'],q)
+        assert (result['wrong_items'],result['unknown_items'])==(int(judgment=='incorrect'),int(judgment=='unknown')),result
+        if case['case_id']!='C06':
+            entry=case['teacher_documents'][0]['text'].split('：',2)[-1].strip()
+            assert q['answer'].startswith('教师参考：') and q['answer'].removeprefix('教师参考：').rstrip('。')==entry.rstrip('。'),q
+        if case['case_id'] in ('C03','C04'):
+            assert ('单位' if case['case_id']=='C03' else '小数') in q['error_reason'] and '数值与参考相符' in q['error_reason'],q
+            assert '计算错误' not in q['error_reason'] and not q['uncertainty'],q
+        if judgment=='unknown':
+            assert not q['error_reason'] and not q['steps'] and q['uncertainty'],q
+    base=scenarios[0]
+    unknown=json.loads(json.dumps(base));unknown['raw_model_response']['items'][0].update(judgment='unknown',error_reason='',steps='',uncertainty='原题读取仍不清，待核对。')
+    assert draft(unknown)[1]['judgment']=='unknown','a caption never upgrades a raw unknown'
+    wrong_quote=json.loads(json.dumps(base));wrong_quote['raw_model_response']['items'][0]['answer']='教师参考：1100'
+    assert draft(wrong_quote)[1]['judgment']=='unknown','a comparison value cannot excuse a false teacher quote'
+    foreign=json.loads(json.dumps(base));foreign['teacher_documents'][0]['text']=foreign['teacher_documents'][0]['text'].replace('虚构榆砂卷','虚构另一卷')
+    foreign['raw_model_response']['items'][0]['answer']='教师参考：11000'
+    assert draft(foreign)[1]['judgment']=='unknown','another paper remains another paper'
+    substantive=json.loads(json.dumps(base));substantive['teacher_documents'][0]['text']=substantive['teacher_documents'][0]['text'].replace('题目空格外已印“米”。','题目空格外已印“米”。必须另写单位。')
+    assert draft(substantive)[1]['judgment']=='unknown','unparsed substantive words are not stripped'
+    for changed in ('学生作答（仅得数片段）：270','学生示例答案：270','学生作答：27'):
+        partial=json.loads(json.dumps(scenarios[2]));partial['question_documents'][0]['text']=partial['question_documents'][0]['text'].replace('学生作答：270',changed)
+        assert draft(partial)[1]['judgment']=='unknown',changed
+    assert draft(scenarios[2],pictures=True)[1]['judgment']=='unknown','a text field does not prove an unseen image has no further work'
+    invented=json.loads(json.dumps(scenarios[2]));invented['question_documents'][0]['text']=invented['question_documents'][0]['text'].replace('答题空格后没有预印单位，作答必须写出数值和厘米单位。','')
+    assert draft(invented)[1]['judgment']=='unknown','model-added requirements are not source evidence'
+    return calls
+
+
 def missing_condition_checks():
     """A6 replay and unseen variants: stated missing givens leave no definite grade; other guards stay."""
     def draft(items,teacher):
@@ -1027,7 +1190,8 @@ def missing_condition_checks():
         a(6,student_answer='24厘米',answer=gap,judgment='incorrect',error_reason='题目未提供长方形短边的长度，无法计算确定的周长，学生作答24厘米错误')],pine)
     vetoed(got['虚构松石卷·第6题'],'24厘米','教师参考：'+a6,'教师参考原文',gap)
     assert got['虚构松石卷·第1题']['judgment']=='correct'
-    for n in (2,3,5):
+    assert got['虚构松石卷·第3题']['judgment']=='correct' and '题目跨第1页和第2页' in got['虚构松石卷·第3题']['answer']
+    for n in (2,5):
         q=got['虚构松石卷·第%d题'%n]
         assert q['judgment']=='unknown' and '尚未核明' in q['uncertainty'] and '未按教师参考' not in q['uncertainty'] and '附注' in q['uncertainty'],q
     fir=('试卷名称：虚构云杉卷\n第3题：图中圆没有标出半径，无法求出确定的面积。\n第4题：B\n'
@@ -1673,7 +1837,7 @@ def source_reading_role_checks():
 
 
 def run():
-    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+source_inventory_checks()+source_answer_section_checks()+source_reading_role_checks()+missing_condition_checks()+teacher_note_checks()+teacher_note_owner_checks()
+    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+source_inventory_checks()+source_answer_section_checks()+source_reading_role_checks()+missing_condition_checks()+teacher_caption_checks()+teacher_note_checks()+teacher_note_owner_checks()
     word_boundary_checks()
     nested_sub_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:
