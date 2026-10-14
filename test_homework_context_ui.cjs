@@ -86,7 +86,7 @@ async function start(){
   await panel().locator('[data-homework-batch-load]').click();await until(async()=>/请先为已选资料选择用途/.test(await status().innerText()),'undecided catalog stops');
   assert.equal((await audit()).calls.length,0,'an undecided role reaches no model');assert.equal(await panel().locator('[data-homework-review-result] textarea').count(),0);
   await role(paper).selectOption('question');await until(async()=>/1 份用途未定/.test(await note().innerText()),'one undecided');await role(teacher).selectOption('reference');
-  await until(async()=>await note().innerText()==='没有更多已关联资料；老师参考已在上方选用。','reference selected note');assert.equal(await role(paper).getAttribute('aria-invalid'),null);await shot('context-'+width+'-roles-chosen',note());
+  await until(async()=>await note().innerText()==='没有更多已关联资料；老师参考已在上方选用。','reference selected note');assert.equal(await status().innerText(),'','the role reminder clears once every selected file has a role');assert.equal(await role(paper).getAttribute('aria-invalid'),null);await shot('context-'+width+'-roles-chosen',note());
   // Live check: the program's inspection names the missing question and the proved blank; nothing else claims a blank or illegible answer.
   await panel().locator('[data-homework-review-run]').click();await until(async()=>await panel().locator('[data-homework-review-result] textarea').count()===1,'draft');
   const result=panel().locator('[data-homework-review-result]'),rows=result.locator('.homework-question'),q=label=>rows.filter({has:page.locator('h4',{hasText:label})});
@@ -115,7 +115,8 @@ async function start(){
   assert(Math.min(...await focus.locator('button').evaluateAll(xs=>xs.map(x=>x.getBoundingClientRect().height)))>=44,'touch targets');
   await shot('context-'+width+'-reopened-focus',focus);await fit();
   await focus.getByRole('button',{name:'查看 '+L(2,3)+' · 尚未检查'}).click();
-  assert.deepEqual(await page.evaluate(()=>{const x=document.activeElement,r=x.getBoundingClientRect();return [x.className,x.textContent,r.top>=0&&r.bottom<=innerHeight]}),['saved-review-question',L(2,3),true]);await shot('context-'+width+'-reopened-located');
+  // The located question opens at the top of the dialog, so its lines are readable above the close bar.
+  assert.deepEqual(await page.evaluate(()=>{const x=document.activeElement,r=x.getBoundingClientRect(),d=x.closest('dialog').getBoundingClientRect();return [x.className,x.textContent,r.top>=d.top&&r.top<=d.top+80]}),['saved-review-question',L(2,3),true]);await shot('context-'+width+'-reopened-located');
   // Only a text that parses exactly gets the summary; an edited or older text shows its complete text alone.
   const strict=await page.evaluate(([source,texts])=>{const {savedHomeworkReviewParts,savedHomeworkReviewFocus}=new Function(source+';return {savedHomeworkReviewParts,savedHomeworkReviewFocus}')();return texts.map(t=>{const panel=document.createElement('section');panel.innerHTML='<div data-saved-review-focus hidden></div>';const parts=savedHomeworkReviewParts(t),nodes=parts.map(p=>{if(!p.kind)return p.text;const s=document.createElement('span');s.textContent=p.text;return s});savedHomeworkReviewFocus(panel,parts,nodes);return panel.querySelector('[data-saved-review-focus]').hidden})},[savedSource,[generated,generated.replace(/\n\n虚构柳叶卷 第2大题 第3题 · 未判定\n[^]*?(?=\n\n标)/,''),generated.replace('本次核对6题：','本次核对6题，'),generated.replace('卷面作答：明友','卷面作答：明友\n家长补充：看错了')]]);
   assert.deepEqual(strict,[false,true,true,true]);

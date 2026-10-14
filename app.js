@@ -652,6 +652,7 @@ function homeworkReviewMaterialNote(panel){
  const note=panel.querySelector('[data-homework-material-note]');if(!note)return;
  const chosen=[...panel.querySelectorAll('[data-review-source]')].filter(x=>x.querySelector('[data-homework-review-photo]')?.checked).map(x=>x.querySelector('[data-homework-review-role]')),undecided=chosen.filter(x=>!x?.value),more=!!panel.querySelector('[data-homework-review-sources] [data-review-source]');
  for(const role of panel.querySelectorAll('[data-homework-review-role]'))if(undecided.includes(role))role.setAttribute('aria-invalid','true');else role.removeAttribute('aria-invalid');
+ const status=panel.querySelector('[data-homework-review-status]');if(!undecided.length&&status?.textContent.startsWith('请先为已选资料选择用途'))status.textContent='';
  note.textContent=undecided.length?`已选 ${chosen.length} 份中 ${undecided.length} 份用途未定，请选择后再检查。`:more?'':chosen.some(x=>x.value==='reference')?'没有更多已关联资料；老师参考已在上方选用。':'没有更多已关联资料。如有老师参考，可在“追加一次作答 / 反馈”上传保存后，在这里选用。';
  note.hidden=!note.textContent;
 }
@@ -758,7 +759,7 @@ function savedHomeworkReviewFocus(panel,parts,nodes){
  for(const [judgment,name] of [['incorrect','需订正'],['unknown','待补查']]){
   const group=items.filter(x=>x.judgment===judgment);if(!group.length)continue;
   const row=document.createElement('p'),title=document.createElement('strong');row.className='saved-review-focus-row';row.dataset.judgment=judgment;title.textContent=name+' '+group.length+' 题';row.append(title);
-  for(const item of group){const button=document.createElement('button'),note=item.answer==='本题尚未检查，待补查'?' · 尚未检查':item.answer.startsWith('原件作答栏留空（程序核对《')?' · 原件留空':'';button.type='button';button.textContent=item.label.slice(cut)+note;button.setAttribute('aria-label','查看 '+item.label+note);button.onclick=()=>{item.node.tabIndex=-1;revealInDialog([item.node],12);item.node.focus({preventScroll:true})};row.append(button)}
+  for(const item of group){const button=document.createElement('button'),note=item.answer==='本题尚未检查，待补查'?' · 尚未检查':item.answer.startsWith('原件作答栏留空（程序核对《')?' · 原件留空':'';button.type='button';button.textContent=item.label.slice(cut)+note;button.setAttribute('aria-label','查看 '+item.label+note);button.onclick=()=>{item.node.tabIndex=-1;item.node.scrollIntoView({block:'start'});item.node.focus({preventScroll:true})};row.append(button)}
   nav.append(row);
  }
  nav.hidden=!nav.childNodes.length;
