@@ -1195,9 +1195,16 @@ def natural_unit_instruction_checks():
                     teacher_paper+'\n第一大题\n'+teacher_path+'：'+teacher+'\n')])
         calls+=1
         assert model.call_count==1 and raw==untouched,'normalizing never changes the frozen transport reply'
-        q,=result['questions']
+        q=next(q for q in result['questions'] if q['label']==label)
         assert (q['label'],q['question'],q['student_answer'])==(label,question,original['student_answer']),q
-        assert result['items']==1 and result['unknown_items']==int(q['judgment']=='unknown'),result
+        assert result['items']==len(result['questions']) and result['unknown_items']==sum(
+            q['judgment']=='unknown' for q in result['questions']),result
+        if source_paper!=paper:
+            missing,=[q for q in result['questions'] if q['label']!=label]
+            assert source_paper in missing['label'] and missing['judgment']=='unknown',missing
+            assert not missing['student_answer'] and not missing['answer'] and '尚未检查' in missing['uncertainty'],missing
+        else:
+            assert result['items']==1,result
         if q['judgment']=='unknown':
             assert q['uncertainty'] and not q['error_reason'] and not q['possible_cause'] and not q['steps'],q
         return q
@@ -1242,8 +1249,9 @@ def natural_unit_instruction_checks():
                  changes=dict(answer='教师参考：270厘米。'))['judgment']=='unknown'
     assert draft(allowed,teacher='270厘米。本题以修订版答案为准。',
                  changes=dict(answer='教师参考：270厘米。'))['judgment']=='unknown'
-    for changes in (dict(teacher_paper='虚构另一单位卷'),dict(source_paper='虚构另一单位卷'),dict(teacher_path='第1题（3）')):
+    for changes in (dict(teacher_paper='虚构另一单位卷'),dict(teacher_path='第1题（3）')):
         assert draft(allowed,**changes)['judgment']=='unknown',changes
+    assert draft(allowed,source_paper='虚构另一单位卷')['judgment']=='correct','another source scope stays separately unchecked'
     q=draft(allowed,student='260')
     assert q['judgment']=='unknown' and '数值不同' in q['uncertainty'],q
     q=draft(allowed,student='260',changes=dict(judgment='incorrect',error_reason='数值260与教师参考270不同。'))
