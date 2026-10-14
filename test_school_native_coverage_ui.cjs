@@ -178,7 +178,8 @@ try:
             plan=json.loads(row['plan']);anchors=plan['school_original_action']['anchors'];task=tasks[row['task_id']]
             assert [e['ref'] for e in json.loads(row['evidence'])]==wanted_refs
             assert list(dict.fromkeys(a['ref'] for a in anchors))==wanted_refs and all(a['upload_ids']==[] and a['pages']==[] for a in anchors)
-            expected_anchors=[dict(ref=refs[0],upload_ids=[],pages=[],quote=calls[-1]['required_native_actions'][0 if role=='reading' else 1]['quote'])]
+            listing=next(call for call in reversed(calls) if call['required_native_actions'])
+            expected_anchors=[dict(ref=refs[0],upload_ids=[],pages=[],quote=listing['required_native_actions'][0 if role=='reading' else 1]['quote'])]
             if shared:
                 assert shared in row['body'] and shared in task['action']
                 expected_anchors.append(dict(ref=refs[0],upload_ids=[],pages=[],quote=shared))
