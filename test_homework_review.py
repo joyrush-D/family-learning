@@ -1174,6 +1174,82 @@ def teacher_caption_checks():
     return calls
 
 
+def natural_unit_instruction_checks():
+    """Whole fictional scopes and frozen replies; writing permission never supplies a grade."""
+    calls=0
+    paper='虚构海舟单位卷'
+    label=paper+' 第一大题 第1题（2）'
+    def draft(note,*,student='270',teacher='270厘米。',changes=None,question=None,source_student=None,
+              teacher_paper=paper,source_paper=paper,teacher_path='第1题（2）'):
+        nonlocal calls
+        question=question or '2.7米改写为厘米。本题要求：'+note
+        original=item(label=label,question=question,student_answer=student,answer='教师参考：'+teacher)
+        original.update(changes or {})
+        raw=dict(items=[original],question_labels=[label],coverage='本次仅虚构第1题（2）。')
+        untouched=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            result=family_llm.homework_reference_draft([],review=True,
+                question_documents=[dict(name='synthetic-natural-unit-answer.txt',text='试卷名称：'+source_paper+
+                    '\n第一大题\n第1题（2） '+question+'\n学生完整最终作答：'+(student if source_student is None else source_student)+'\n')],
+                reference_documents=[dict(name='synthetic-natural-unit-teacher.txt',text='教师参考答案\n试卷名称：'+
+                    teacher_paper+'\n第一大题\n'+teacher_path+'：'+teacher+'\n')])
+        calls+=1
+        assert model.call_count==1 and raw==untouched,'normalizing never changes the frozen transport reply'
+        q,=result['questions']
+        assert (q['label'],q['question'],q['student_answer'])==(label,question,original['student_answer']),q
+        assert result['items']==1 and result['unknown_items']==int(q['judgment']=='unknown'),result
+        if q['judgment']=='unknown':
+            assert q['uncertainty'] and not q['error_reason'] and not q['possible_cause'] and not q['steps'],q
+        return q
+    permissions=('只填数字，不带单位。','答案不写单位。','无需在答案中写单位。','单位不用写。',
+                 '无需在作答中写单位。','答案不在答案中写单位。','不必写单位。','不用另写单位。')
+    for note in permissions:
+        q=draft(note)
+        assert q['judgment']=='correct' and '270厘米' in q['answer'],(note,q)
+    wrong=dict(judgment='incorrect',error_reason='原答未按要求写单位。')
+    for fact in ('空格外未印单位。','孩子未写单位。'):
+        q=draft('答案必须写单位。'+fact,changes=wrong)
+        assert q['judgment']=='incorrect' and q['error_reason']==wrong['error_reason'],q
+    # Absence/behaviour, true negation and conditional instructions provide no permission.
+    for note in ('空格外未印单位。','孩子未写单位。','作答没有单位。','孩子不写单位。',
+                 '不能不写单位。','不得不带单位。','不是不写单位。','并非无需在答案中写单位。',
+                 '不许不写单位。','如果需要，答案不写单位。','若无特别说明，答案不写单位。',
+                 '仅在练习时，答案不写单位。','答案不写单位或写单位都可。',
+                 '答案不写单位，但仍须写上。','无需在答案中写单位，但答案仍必须照抄单位。'):
+        assert draft(note)['judgment']=='unknown',note
+    q=draft('',question='2.7米=____厘米。单位已经印好，但答案仍必须照抄单位。')
+    assert q['judgment']=='unknown',q
+    for behavior in ('孩子不写单位。','原作答不带单位。','原作答：不带单位。','孩子行为：只填数字，不带单位。',
+                     '本题要求：只填数字。原作答：不带单位。'):
+        assert draft('',question='2.7米改写为厘米。'+behavior)['judgment']=='unknown',behavior
+    # Each permission stays with its numbered result, including a positive counterpart.
+    pair='2.7米和2.7米分别改写为厘米。本题要求：'
+    scoped=pair+'第一项答案不写单位；第二项必须写单位。'
+    assert draft('',question=scoped,student='270，270厘米',teacher='270厘米，270厘米。')['judgment']=='correct'
+    assert draft('',question=scoped,student='270，270',teacher='270厘米，270厘米。')['judgment']=='unknown'
+    reverse=pair+'第一项必须写单位；第二项无需在答案中写单位。'
+    assert draft('',question=reverse,student='270，270',teacher='270厘米，270厘米。')['judgment']=='unknown'
+    assert draft('',question=reverse,student='270厘米，270',teacher='270厘米，270厘米。')['judgment']=='correct'
+    both=pair+'第一项答案不写单位；第二项无需在答案中写单位。'
+    assert draft('',question=both,student='270，270',teacher='270厘米，270厘米。')['judgment']=='correct'
+    assert draft('',question=pair+'第末项答案不写单位。',student='270，270',teacher='270厘米，270厘米。')['judgment']=='unknown'
+    # Teacher scope/body/version, literal transcription, numbers and raw unknown remain separate guards.
+    allowed='无需在答案中写单位。'
+    assert draft(allowed,changes=dict(judgment='unknown',uncertainty='原答区域未核明。'))['judgment']=='unknown'
+    q=draft(allowed,source_student='270厘米')
+    assert q['judgment']=='unknown' and '原答抄写' in q['uncertainty'] and '270厘米' in q['uncertainty'],q
+    assert draft(allowed,teacher='270厘米。评分要求：本题还须写出计算过程。',
+                 changes=dict(answer='教师参考：270厘米。'))['judgment']=='unknown'
+    assert draft(allowed,teacher='270厘米。本题以修订版答案为准。')['judgment']=='unknown'
+    for changes in (dict(teacher_paper='虚构另一单位卷'),dict(source_paper='虚构另一单位卷'),dict(teacher_path='第1题（3）')):
+        assert draft(allowed,**changes)['judgment']=='unknown',changes
+    q=draft(allowed,student='260')
+    assert q['judgment']=='unknown' and '数值不同' in q['uncertainty'],q
+    q=draft(allowed,student='260',changes=dict(judgment='incorrect',error_reason='数值260与教师参考270不同。'))
+    assert q['judgment']=='incorrect' and q['error_reason']=='数值260与教师参考270不同。',q
+    return calls
+
+
 def teacher_wording_caption_checks():
     """Fixed fictional replies: a pure wording policy is separate, never a semantic grader."""
     calls=0
@@ -1971,7 +2047,7 @@ def source_reading_role_checks():
 
 
 def run():
-    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+source_inventory_checks()+source_answer_section_checks()+source_reading_role_checks()+missing_condition_checks()+teacher_caption_checks()+teacher_wording_caption_checks()+teacher_note_checks()+teacher_note_owner_checks()
+    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+source_inventory_checks()+source_answer_section_checks()+source_reading_role_checks()+missing_condition_checks()+teacher_caption_checks()+natural_unit_instruction_checks()+teacher_wording_caption_checks()+teacher_note_checks()+teacher_note_owner_checks()
     word_boundary_checks()
     nested_sub_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:

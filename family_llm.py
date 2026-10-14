@@ -1740,10 +1740,18 @@ def _ref_unit_waiver(question,match):
     no=r'(?:无需|无须|毋须|不需(?:要)?|不用|不必|不要求|不要|免(?:于)?)'
     write=r'(?:%s|书写|标注|带|加|注|标|填)'%_REF_COPY
     again=r'(?:再|另(?:外|行)?)?'
+    place=r'(?:在(?:答案|作答|结果|得数)(?:中|里|内|上))?'
     printed=r'(?:(?:已经?|预先?|提前|预)?印[好有出上了着]*)?'
+    # A bare 不 is permission only as a writing instruction, not a statement
+    # about the child (「孩子不写单位」). Answer-position words keep that action.
+    instruction=r'(?:本题|答题|作答|书写)?(?:要求|规定)\s*[：:]'
+    direct=(re.search(instruction,head+'；'+before) and re.fullmatch(
+        r'\s*(?:'+instruction+r'\s*)?(?:本题)?(?:答案|作答|结果|得数)?\s*不'+again+place+write+
+        r'[上出明全]?'+printed+r'\s*',_REF_PART.sub('',head)))
+    omission=(re.search(no+again+r'(?:'+write+r'[上出明全]?'+printed+r')?\s*$',head)
+              or re.search(no+again+place+write+r'[上出明全]?'+printed+r'\s*$',head) or direct)
     # A missing print predicate (未印/没印) is not one of these writing modalities.
-    if (re.search(no+again+r'(?:'+write+r'[上出明全]?'+printed+r')?\s*$',head)
-            and re.match(r'^\s*(?:$|、|(?:即可|就行|了)\s*$)',tail)): return True
+    if omission and re.match(r'^\s*(?:$|、|(?:即可|就行|了)\s*$)',tail): return True
     listed=r'(?:\s*、\s*(?:%s))*\s*[均都皆也]?'%_REF_NOUN
     return bool(re.match(listed+no+again+write+r'[上出明全]?(?=\s*(?:$|[。；;，,]))',tail))
 
