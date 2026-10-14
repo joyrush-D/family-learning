@@ -2684,7 +2684,7 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
                 sum(len(document['text']) for document in reference_documents))
             if (sum(len(image['data']) for image in images+reference_images)
                     +sum(len(document['text'].encode('utf-8')) for document in model_documents+reference_documents+previous_documents)
-                    +len(previous_text.encode('utf-8'))+len(window_wire.encode('utf-8'))>MAX_INPUT:
+                    +len(previous_text.encode('utf-8'))+len(window_wire.encode('utf-8'))>MAX_INPUT):
                 raise LLMDraftError('本批内容与原始行范围超过20MB，原件保留，本次未调用模型')
             prompt+='\n本次模型仅读取本批文字窗口与完整教师参考；程序另核完整原件。只省略清单中已证明独立的未选题块，保留行均为原文。不得称已读取整卷原文，不得将题内参考当公共教师答案；原始行范围与未读取题块见窗口清单。'
     content=[dict(type='text',text='请核对本批文字窗口；完整原件由程序另核，模型未读取省略的未选题块。' if window_manifest is not None else
