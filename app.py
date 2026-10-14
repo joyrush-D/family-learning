@@ -2309,6 +2309,8 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith('/api/original/preview/'):
                 ident=path.removeprefix('/api/original/preview/');query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
                 if set(query)!={'child_id'} or any(len(v)!=1 for v in query.values()): raise family_print.PrintError('首页预览须保留当前孩子','preview_not_allowed',403)
+                refresh=self.headers.get_all('X-Family-Preview-Refresh',[])
+                if refresh not in ([],['1']): raise family_print.PrintError('首页重试请求不正确','preview_not_allowed',403)
                 with connect() as c:
                     profile=next((p for p in profiles(c) if p['id']==query['child_id'][0]),None)
                     if profile is None: raise family_print.PrintError('当前孩子不存在','preview_not_allowed',403)
@@ -2317,7 +2319,7 @@ class Handler(BaseHTTPRequestHandler):
                     for record in c.execute('SELECT child,attachments FROM records WHERE attachments LIKE ?',('%'+ident+'%',)):
                         if ident in json.loads(record['attachments']) and names.get(record['child'],record['child'])!=profile['name']:
                             raise family_print.PrintError('原件不属于当前孩子','preview_not_allowed',403)
-                    image,key=family_preview.first_page(DATA,c,ident)
+                    image,key=family_preview.first_page(DATA,c,ident,refresh=bool(refresh))
                 return self.reply(200,image,'image/png',headers={'ETag':'"'+key+'"'})
             if path=='/api/print/jobs': return self.reply(200,dict(jobs=print_store().list_jobs()))
             if path.startswith('/api/print/preview/'):

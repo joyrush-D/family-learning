@@ -2245,9 +2245,9 @@ function queueOriginalPreviews(root=document){
 }
 async function loadOriginalPreview(box){
  if(!box.isConnected)return;
- const status=box.querySelector('figcaption'),image=box.querySelector('img'),retry=box.querySelector('button');box.dataset.previewState='loading';status.textContent='正在准备首页预览…';retry.hidden=true;
+ const status=box.querySelector('figcaption'),image=box.querySelector('img'),retry=box.querySelector('button'),refresh=box.dataset.previewRefresh==='1';delete box.dataset.previewRefresh;box.dataset.previewState='loading';status.textContent=refresh?'正在从原件重新生成首页…':'正在准备首页预览…';retry.hidden=true;if(refresh){image.removeAttribute('src');image.hidden=true}
  try{
-  const response=await apiFetch(box.dataset.originalPreview,{signal:AbortSignal.timeout(65000)});
+  const response=await apiFetch(box.dataset.originalPreview,{signal:AbortSignal.timeout(65000),headers:refresh?{'X-Family-Preview-Refresh':'1'}:{}});
   if(!response.ok){const out=await response.json();throw Error(out.error||'首页暂不可读取')}
   if(!(response.headers.get('Content-Type')||'').startsWith('image/png'))throw Error('首页预览返回格式不正确');
   const blob=await response.blob();if(!blob.size||blob.size>4*1024*1024)throw Error('首页预览大小不正确');
@@ -2256,7 +2256,7 @@ async function loadOriginalPreview(box){
  }catch(error){if(!box.isConnected)return;image.hidden=true;box.dataset.previewState='error';const message=error.name==='TimeoutError'?'首页预览超时':error.message;status.textContent=message.includes('原件保留')?message:message+'；原件保留，可打开原件或重试。';retry.hidden=false}
 }
 if(typeof MutationObserver!=='undefined')new MutationObserver(()=>queueOriginalPreviews()).observe(document.body,{childList:true,subtree:true});
-document.addEventListener('click',e=>{const button=e.target.closest('[data-original-preview-retry]');if(!button)return;const box=button.closest('[data-original-preview]');if(box.dataset.previewState==='loading'||box.dataset.previewState==='queued')return;delete box.dataset.previewState;queueOriginalPreviews(box.parentElement)});
+document.addEventListener('click',e=>{const button=e.target.closest('[data-original-preview-retry]');if(!button)return;const box=button.closest('[data-original-preview]');if(box.dataset.previewState==='loading'||box.dataset.previewState==='queued')return;box.dataset.previewRefresh='1';delete box.dataset.previewState;queueOriginalPreviews(box.parentElement)});
 document.addEventListener('error',e=>{if(!e.target.matches?.('[data-original-preview-image]'))return;const box=e.target.closest('[data-original-preview]');e.target.hidden=true;box.dataset.previewState='error';box.querySelector('figcaption').textContent='首页图像无法显示；原件保留，可打开原件或重试。';box.querySelector('button').hidden=false},true);
 
 document.addEventListener('toggle',()=>queueOriginalPreviews(),true);
