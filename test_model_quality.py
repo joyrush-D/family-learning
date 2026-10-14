@@ -2089,6 +2089,121 @@ class ExactAnswerTest(unittest.TestCase):
             self.assertIn('却判为需订正', q['uncertainty'], note)
 
 
+class UnitWritingPermissionTest(unittest.TestCase):
+    """A page fact grants no permission; complete own writing still guards raw transcription."""
+    def review(self, question, student='270', judgment='incorrect', *, original=None, field='孩子作答', uncertainty=''):
+        import family_llm
+        reason = (('原答只写270，未写本题要求的厘米单位。' if student == '270' else
+                   '原答%s，与教师参考的数值不同。' % student) if judgment == 'incorrect' else '')
+        item = dict(label='第1题', question=question, student_answer=student, answer='教师参考：270厘米。',
+                    judgment=judgment, error_reason=reason, possible_cause='', steps='', uncertainty=uncertainty,
+                    question_kind='objective')
+        raw = dict(items=[item], coverage='仅虚构第1题。', question_labels=['第1题'])
+        frozen = copy.deepcopy(raw)
+        # original can contain extra question prose: only the proven field rejects a wrong transcription.
+        text = '单位练习（虚构）\n1. %s\n%s：%s\n' % (question, field, student if original is None else original)
+        documents = [dict(name='单位练习-虚构.txt', text=text)]
+        teachers = [dict(name='教师参考-虚构.txt', text='教师参考答案（虚构）\n1. 270厘米。\n')]
+        originals = copy.deepcopy((documents, teachers))
+        with patch.object(family_llm, '_chat_json', return_value=raw) as model:
+            [result] = family_llm.homework_reference_draft([], review=True, data_path=None,
+                question_documents=documents, reference_documents=teachers)['questions']
+        model.assert_called_once(); self.assertEqual(raw, frozen); self.assertEqual((documents, teachers), originals)
+        self.assertEqual((result['student_answer'], result['answer']), (student, '教师参考：270厘米。'))
+        return result
+
+    def test_absent_print_and_unwritten_answer_are_not_writing_waivers(self):
+        import family_llm
+        for note in ('空格外未印单位。', '空格外没印单位。', '空格后没有预印单位。', '单位未印。',
+                     '单位没有印。', '单位未给出。', '孩子未写单位。', '孩子没有写单位。'):
+            with self.subTest(note=note):
+                question = '2.7米改写为厘米。' + note
+                self.assertFalse(family_llm._ref_lent(question, 1, 0, '厘米'))
+                q = self.review(question)
+                self.assertEqual((q['judgment'], q['error_reason']), ('incorrect', '原答只写270，未写本题要求的厘米单位。'))
+                self.assertEqual(self.review(question, judgment='correct')['judgment'], 'unknown')
+
+    def test_explicit_writing_waivers_keep_their_own_clauses_and_lists(self):
+        import family_llm
+        for note in ('无需单位。', '不用写单位。', '不必书写单位。', '不必标注单位。', '单位不必写。',
+                     '单位、步骤都不必写。', '不用写已印单位。', '不要求写单位。', '无须另行写单位。',
+                     '空格外未印单位。作答不必写单位。', '单位未印。作答不必写单位。', '未给出单位。单位不必写。'):
+            with self.subTest(note=note):
+                question = '2.7米改写为厘米。' + note
+                self.assertTrue(family_llm._ref_lent(question, 1, 0, '厘米'))
+                self.assertEqual(self.review(question, judgment='correct')['judgment'], 'correct')
+                self.assertEqual(self.review(question)['judgment'], 'unknown')
+        for note in ('如果另有要求，不必写单位。', '单位或步骤不必写。', '不是不必写单位。', '并非无需单位。',
+                     '不必写单位。答案仍须写单位。', '单位不必写。最终作答必须写单位。',
+                     '不要写已印单位，但必须抄写。', '单位不必写，也要抄写。', '单位未印，但必须抄写。',
+                     '本题不需要单位换算，直接计算。', '本题不要求单位转换。', '不必写单位换算过程。'):
+            with self.subTest(note=note):
+                self.assertFalse(family_llm._ref_lent('2.7米改写为厘米。' + note, 1, 0, '厘米'))
+
+    def test_preprinted_blank_and_required_copy_remain_distinct(self):
+        import family_llm
+        for question in ('2.7米=____厘米。', '2.7米=（____）厘米（单位已印好）。'):
+            self.assertTrue(family_llm._ref_lent(question, 1, 0, '厘米'))
+            self.assertEqual(self.review(question, judgment='correct')['judgment'], 'correct')
+        for question in ('2.7米=____厘米（须照抄已印单位）。', '2.7米=____厘米（单位已印好，作答也要抄写）。',
+                         '2.7米=____厘米。单位不必写。答案必须写单位。',
+                         '2.7米=____厘米。不要写已印单位但必须抄写。',
+                         '2.7米=____厘米。单位不必写但仍要抄写。',
+                         '2.7米=____厘米。单位不必写却必须抄写。'):
+            self.assertFalse(family_llm._ref_lent(question, 1, 0, '厘米'))
+            self.assertEqual(self.review(question, judgment='correct')['judgment'], 'unknown')
+
+    def test_one_results_permission_never_waives_another_or_unknown_path(self):
+        import family_llm
+        question = '第一项换成厘米，不必写单位；第二项换成厘米，必须写单位。'
+        self.assertEqual([family_llm._ref_lent(question, 2, n, '厘米') for n in range(2)], [True, False])
+        for question in ('第一项换成厘米；第三项不必写单位。', '第二项不必写单位。'):
+            self.assertFalse(family_llm._ref_lent(question, 2, 0, '厘米'))
+        for question in ('第甲项单位不必写。', '第几项单位不必写。', '第甲项只填数，单位不用写。'):
+            for count in (1, 2):
+                self.assertFalse(family_llm._ref_lent(question, count, 0, '厘米'), (question, count))
+
+    def test_raw_unknown_and_numeric_contradiction_are_preserved(self):
+        question = '2.7米改写为厘米。空格外未印单位。答案必须写单位。'
+        q = self.review(question, judgment='unknown', uncertainty='原作答末尾尚未读清，请补查。')
+        self.assertEqual((q['judgment'], q['uncertainty']), ('unknown', '原作答末尾尚未读清，请补查。'))
+        self.assertEqual(self.review(question, student='271厘米', judgment='correct')['judgment'], 'unknown')
+        self.assertEqual(self.review(question, student='271厘米')['judgment'], 'incorrect')
+        self.assertEqual(self.review(question, student='270厘米', judgment='correct')['judgment'], 'correct')
+
+    def test_wrong_raw_unit_transcription_is_not_the_childs_omission(self):
+        question = '2.7米改写为厘米。空格外未印单位。'
+        for original in ('270厘米', ''):
+            with self.subTest(original=original):
+                q = self.review(question, original=original)
+                self.assertEqual((q['judgment'], q['error_reason'], q['steps']), ('unknown', '', ''))
+                self.assertIn('原答抄写尚未核明', q['uncertainty']); self.assertIn('模型抄为“270”', q['uncertainty'])
+                self.assertIn('作答为“%s”' % original, q['uncertainty'])
+        self.assertEqual(self.review(question, original='270厘米', judgment='unknown', uncertainty='原答待核。')['uncertainty'], '原答待核。')
+
+    def test_partial_or_reference_field_never_proves_complete_child_writing(self):
+        import family_llm
+        item = dict(label='第1题', question='2.7米改写为厘米。空格外未印单位。')
+        for field in ('孩子作答片段', '孩子示范作答', '实际教师答案', '本次参考答案', '教师答案', '实际作答片段'):
+            documents = [dict(name='单位练习-虚构.txt', text='单位练习（虚构）\n1. %s\n%s：270厘米\n' % (item['question'], field))]
+            rows, unresolved = family_llm._source_question_inventory(documents)
+            self.assertIsNone(family_llm._source_final_answer(item, rows, family_llm._ref_titles(documents), False,
+                identity_only=True, unambiguous=not unresolved), field)
+        documents = [dict(name='单位练习-虚构.txt', text='单位练习（虚构）\n1. %s\n实际作答：270厘米\n' % item['question'])]
+        rows, unresolved = family_llm._source_question_inventory(documents)
+        self.assertEqual(family_llm._source_final_answer(item, rows, family_llm._ref_titles(documents), False,
+            identity_only=True, unambiguous=not unresolved), '270厘米')
+        self.assertIsNone(family_llm._source_final_answer(item, rows, family_llm._ref_titles(documents), False, identity_only=True))
+        self.assertIsNone(family_llm._source_final_answer(item, rows, family_llm._ref_titles(documents), True,
+            identity_only=True, unambiguous=not unresolved))
+        # An unresolved child can leave a closed span, but cannot make its field the parent's complete answer.
+        documents = [dict(name='单位练习-虚构.txt', text='单位练习（虚构）\n1. %s\n（2）②：另一小问。\n学生完整最终作答：270厘米\n' % item['question'])]
+        rows, unresolved = family_llm._source_question_inventory(documents)
+        self.assertTrue(unresolved)
+        self.assertIsNone(family_llm._source_final_answer(item, rows, family_llm._ref_titles(documents), False,
+            identity_only=True, unambiguous=not unresolved))
+
+
 class WrappedAnswerBlankTest(unittest.TestCase):
     def review(self, question, teacher, student, judgment='correct', error_reason=''):
         import family_llm
