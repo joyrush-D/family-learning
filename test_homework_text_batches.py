@@ -200,11 +200,18 @@ def run_window_guards():
     words,manifest,_=window(shared,[0]);assert preserved in words[0]['text'] and len(manifest[0]['omitted'])==25
     base_size=len(words[0]['text']);words,_,wire=window(shared,[0],reference=12000-base_size)
     assert len(words[0]['text'])+12000-base_size==12000 and len(wire)>0
+    # A preserved shared-book condition is not a question dependency merely because it says 沿用.
+    story=shared.replace('范围：本卷全部题适用，版本乙。','末句条件：只计算星期二归还后的本数；不得沿用归还前两本。')
+    words,manifest,_=window(story,[0]);assert '不得沿用归还前两本。' in words[0]['text'] and len(manifest[0]['omitted'])==25
     # Parent stem and all of its cross-line material survive while independent leaves close separately.
     parent='试卷名称：虚构山泉卷\n第一大题\n第1题：共同题干保留。\n材料：虚构共同故事。\n统一评分说明：适用于第一大题第1题全部26小题，必须写单位。\n'
     leaves=''.join('（%d）：本小题独立材料：%s\n完整要求另行。\n学生完整最终作答：%s\n'%(n,'虚构材料'*130,'' if n%2 else 'A') for n in range(1,27))
     nested=parent+leaves;words,manifest,_=window(nested,[0]);assert parent in words[0]['text'] and len(manifest[0]['omitted'])==25
     assert '学生完整最终作答：\n' in words[0]['text'] and '完整要求另行。' in words[0]['text']
+    # A trailing parenthesized range retains the complete new unit/scoring requirement without all sibling data.
+    footer='统一评分要求（适用于第一大题第1题的全部26小题）：答案必须写出厘米单位；只写数值不符合本题要求。\n'
+    scored=nested.replace('统一评分说明：适用于第一大题第1题全部26小题，必须写单位。\n','')+footer
+    words,manifest,_=window(scored,list(range(6)));assert footer in words[0]['text'] and len(manifest[0]['omitted'])==19
     # A scoped parent range can precede its heading; it still contains no borrowed leaf data.
     early=nested.replace('统一评分说明：适用于第一大题第1题全部26小题，必须写单位。\n','').replace('第1题：共同题干保留。','统一评分说明：适用于第一大题第1题全部26小题，必须写单位。\n第1题：共同题干保留。')
     words,manifest,_=window(early,[0]);assert '全部26小题，必须写单位。' in words[0]['text'] and len(manifest[0]['omitted'])==25
