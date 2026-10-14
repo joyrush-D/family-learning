@@ -67,9 +67,10 @@ try:
     fixture.stack.enter_context(patch('subprocess.Popen',side_effect=AssertionError('external CLI forbidden')))
     printer=fixture.stack.enter_context(patch.object(app.family_print.PrintStore,'enqueue',side_effect=AssertionError('printing forbidden')))
     app.printer_config=lambda:dict(printers=[],error='')
-    form=os.environ['SCHOOL_NATIVE_NOTICE_FORM'];assert form in ('numbered','semicolon','shared','shared_all','weekday','cross_message')
+    form=os.environ['SCHOOL_NATIVE_NOTICE_FORM'];assert form in ('numbered','semicolon','shared','shared_all','weekday','cross_message','late_message')
     # cross_message: the same teacher's all-items standard arrives as the next message 60 seconds after the list.
-    cross=form=='cross_message'
+    # late_message: the same standard is collected only after the list was already saved as two tasks (a later run_once).
+    late=form=='late_message';cross=form=='cross_message' or late
     shared=('以上作业都今天完成并请家长检查' if form=='shared_all' else
             '两项都今天完成并请家长检查' if form=='shared' else '')
     weekday='一二三四五六日'[now.weekday()]
@@ -84,12 +85,15 @@ try:
         payload=fixture.fixture.payload(cursor='12')
         payload['messages']=[dict(id=str(11+i),message_order=str(11+i),time=(now-dt.timedelta(minutes=2-i)).isoformat(),kind='text',
             sender='虚构英语老师',sender_id='synthetic-teacher-1',unread=False,text=text) for i,text in enumerate(texts)]
-        store.ingest(payload);refs=['message:'+fixture.source['id']+':'+m['id'] for m in payload['messages']]
+        all_messages=payload['messages'];refs=['message:'+fixture.source['id']+':'+m['id'] for m in all_messages]
+        if late:payload=dict(payload,cursor='11',messages=all_messages[:1])
+        store.ingest(payload)
     else:payload,refs=fixture._ingest(texts,publishers=['synthetic-teacher-1','synthetic-teacher-1'])
-    reading=school_proposal(title_quote='朗读Unit 2课文两遍',due=today,evidence=[dict(ref=ref) for ref in (refs if cross else refs[:1])],
+    listed=refs[:1] if late else refs
+    reading=school_proposal(title_quote='朗读Unit 2课文两遍',due=today,evidence=[dict(ref=ref) for ref in (listed if cross else refs[:1])],
         learning_subject='英语',task_title='英语：朗读Unit 2课文',task_goal='朗读Unit 2课文两遍。',
         task_state='ready',task_reason='原文第一项明确。',task_purpose='learning')
-    exercise=school_proposal(title_quote='完成练习卷第1–3题',due=today,evidence=[dict(ref=ref) for ref in refs],
+    exercise=school_proposal(title_quote='完成练习卷第1–3题',due=today,evidence=[dict(ref=ref) for ref in listed],
         learning_subject='英语',task_title='英语：完成练习卷',
         task_goal='完成练习卷第1–3题。',
         task_state='ready',task_reason='同一稳定发布者补充本项标准。',task_purpose='learning')
@@ -108,16 +112,25 @@ try:
     assert date_exercise['due']==today and '今天交' in date_exercise['body']
     date_control=dict(original=date_text,items=date_items,mock_receipts=1,
         scope='selection-only negative control; undated reading cannot borrow the exercise deadline')
-    incomplete=dict(reading,evidence=[dict(ref=ref) for ref in refs])
+    incomplete=dict(reading,evidence=[dict(ref=ref) for ref in listed])
     replies=[dict(proposals=[incomplete]),dict(proposals=[reading,exercise])]
-    fixture._use_replies(payload,replies);fixed=fixture.model.side_effect;calls=[]
+    fixture._use_replies(payload,replies);fixed=fixture.model.side_effect;calls=[];late_targets={}
     def traced_reply(messages,schema,name,*args,**kwargs):
         context=json.loads(messages[-1]['content'])
+        if late and [e['ref'] for e in context['evidence']]==refs[1:]:
+            # The fixed append/ready receipt for the late standard, its targets bound from the tasks this run saved.
+            assert 'required_native_actions' not in context and all('shared_standard' not in t for t in context['school_tasks'])
+            reply=dict(proposals=[school_proposal(title_quote=texts[1],due='',evidence=[dict(ref=refs[1])],learning_subject='英语',
+                task_title=title,task_goal=texts[1],task_state='ready',task_reason='明确以上两项共同完成标准，追加到已存原作业。',
+                task_change='append',task_target_id=late_targets[role],task_purpose='learning') for role,title in (('reading','英语：朗读Unit 2课文两遍'),('exercise','英语：完成练习卷第1–3题'))])
+            calls.append(dict(name=name,as_of=context['as_of'],required_native_actions=[],reply=copy.deepcopy(reply)))
+            return reply
         actions=context['required_native_actions']
         assert len(actions)==2 and reading['title_quote'] in actions[0]['quote'] and exercise['title_quote'] in actions[1]['quote']
         assert actions[0]['quote'] in notice and actions[1]['quote'] in notice
         if shared:assert all(a['shared_conditions']==[shared] for a in actions)
-        if cross:assert all(a['supplements']==[] and [s['quote'] for s in a['shared_supplements']]==[texts[1]] for a in actions)
+        if late:assert all(a['supplements']==[] and 'shared_supplements' not in a for a in actions)
+        elif cross:assert all(a['supplements']==[] and [s['quote'] for s in a['shared_supplements']]==[texts[1]] for a in actions)
         else:assert actions[0]['supplements']==[] and [s['quote'] for s in actions[1]['supplements']]==[texts[1]]
         assert actions[0]['publisher'] and actions[0]['publisher']==actions[1]['publisher']
         reply=fixed(messages,schema,name,*args,**kwargs)
@@ -126,15 +139,31 @@ try:
     fixture.model.side_effect=traced_reply
     first=agent.run_once(app,now);fixture._assert_rejected_batch(payload,first)
     failed_state=app.snapshot()
-    assert failed_state['tasks']==[] and failed_state['agent']['sources'][0]['pending_message_count']==2
+    pending_count=len(payload['messages'])
+    assert failed_state['tasks']==[] and failed_state['agent']['sources'][0]['pending_message_count']==pending_count
     with store._db() as c:
         failed_job=dict(c.execute("SELECT id,attempts,done,error,next_try FROM agent_jobs WHERE id LIKE 'messages:%'").fetchone())
         original_sources=[dict(r) for r in c.execute('SELECT * FROM agent_sources')]
     delayed=agent.run_once(app,now+dt.timedelta(minutes=1));assert fixture.model.call_count==1
     recovered=agent.run_once(app,now+dt.timedelta(minutes=6))
-    assert recovered['failed']==0 and recovered['processed']==2 and fixture.model.call_count==2
+    assert recovered['failed']==0 and recovered['processed']==pending_count and fixture.model.call_count==2
+    late_run=None
+    if late:
+        with store._db() as c:
+            saved={json.loads(r['plan'])['school_native_action']['quote']:r['task_id'] for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")}
+            original_sources=[dict(r) for r in c.execute('SELECT * FROM agent_sources')]
+        late_targets.update(reading=saved[reading['title_quote']],exercise=saved[exercise['title_quote']])
+        store.ingest(dict(payload,expected_cursor='11',cursor='12',messages=all_messages[1:]))
+        with store._db() as c:original_sources=[dict(r) for r in c.execute('SELECT * FROM agent_sources')]
+        late_run=agent.run_once(app,now+dt.timedelta(minutes=7))
+        assert late_run['failed']==0 and late_run['processed']==1 and fixture.model.call_count==3
+        payload=dict(payload,messages=all_messages)
     with store._db() as c:
         rows=[dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")]
+        appended=[r for r in rows if late and [e['ref'] for e in json.loads(r['evidence'])]==refs[1:]]
+        rows=[r for r in rows if r not in appended]
+        assert sorted((r['state'],r['task_id']) for r in appended)==sorted(('accepted',t) for t in late_targets.values())
+        api_tasks={t['id']:t for t in app.tasks(c)}
         assert len(rows)==2 and all(r['state']=='accepted' and r['due']==today for r in rows)
         reading_row=next(r for r in rows if reading['title_quote'] in r['body'])
         exercise_row=next(r for r in rows if exercise['title_quote'] in r['body'])
@@ -145,7 +174,7 @@ try:
         tasks={r['id']:dict(r) for r in c.execute('SELECT * FROM manual_tasks')}
         assert set(tasks)=={r['task_id'] for r in rows}
         items=[]
-        for role,row,wanted_refs in (('reading',reading_row,refs if cross else refs[:1]),('exercise',exercise_row,refs)):
+        for role,row,wanted_refs in (('reading',reading_row,listed if cross else refs[:1]),('exercise',exercise_row,listed)):
             plan=json.loads(row['plan']);anchors=plan['school_original_action']['anchors'];task=tasks[row['task_id']]
             assert [e['ref'] for e in json.loads(row['evidence'])]==wanted_refs
             assert list(dict.fromkeys(a['ref'] for a in anchors))==wanted_refs and all(a['upload_ids']==[] and a['pages']==[] for a in anchors)
@@ -153,7 +182,10 @@ try:
             if shared:
                 assert shared in row['body'] and shared in task['action']
                 expected_anchors.append(dict(ref=refs[0],upload_ids=[],pages=[],quote=shared))
-            if cross:
+            if late:
+                # Saved as its own list outcome first; the late standard is then appended to the same task, its record unchanged.
+                assert texts[1] not in row['body'] and api_tasks[row['task_id']]['action']==row['body']+'\n补充要求：'+texts[1]
+            elif cross:
                 assert texts[1].rstrip('。') in row['body'] and texts[1].rstrip('。') in task['action']
                 expected_anchors.append(dict(ref=refs[1],upload_ids=[],pages=[],quote=texts[1]))
             elif role=='exercise':expected_anchors.append(dict(ref=refs[1],upload_ids=[],pages=[],quote=texts[1]))
@@ -161,7 +193,8 @@ try:
             assert (task['title'],task['action'],task['child'],task['due'],task['original_status'])==(row['title'],row['body'],'虚构甲',today,'待跟进')
             assert len(row['title'])<=40 and not any(s in row['title'] for s in ('单面打印','自查','签字'))
             assert '选做' not in row['title'] or (row['title'].endswith('（第4题选做）') and row['title'].count('选做')==1)
-            items.append(dict(role=role,item_id=row['id'],task_id=row['task_id'],title=row['title'],requirements=row['body'],anchors=anchors))
+            items.append(dict(role=role,item_id=row['id'],task_id=row['task_id'],title=row['title'],requirements=api_tasks[row['task_id']]['action'],
+                anchors=anchors+([dict(ref=refs[1],upload_ids=[],pages=[],quote=texts[1])] if late else [])))
         assert [r[0] for r in c.execute('SELECT processed FROM agent_messages ORDER BY rowid')]==[1,1]
         assert [json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]==payload['messages']
         assert [dict(r) for r in c.execute('SELECT * FROM agent_sources')]==original_sources
@@ -171,8 +204,8 @@ try:
         assert c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0]==0
         saved_items=[dict(r) for r in c.execute('SELECT * FROM agent_items ORDER BY id')]
         saved_tasks=[dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
-    replay=agent.run_once(app,now+dt.timedelta(minutes=7))
-    assert replay['processed']==replay['created']==0 and fixture.model.call_count==2
+    replay=agent.run_once(app,now+dt.timedelta(minutes=8 if late else 7))
+    assert replay['processed']==replay['created']==0 and fixture.model.call_count==(3 if late else 2)
     with store._db() as c:
         assert [dict(r) for r in c.execute('SELECT * FROM agent_items ORDER BY id')]==saved_items
         assert [dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]==saved_tasks
@@ -180,6 +213,7 @@ try:
     proof=dict(synthetic_only=True,real_model_calls=0,collector_calls=0,printer_calls=0,
         form=form,shared_condition=shared,cross_message_standard=texts[1].rstrip('。') if cross else '',today=today,child='虚构甲',source_id=fixture.source['id'],messages=payload['messages'],items=items,date_control=date_control,
         first=first,failed_state=failed_state,failed_job=failed_job,delayed=delayed,recovered=recovered,done_job=done_job,replay=replay,
+        late_run=late_run,expected_receipts=3 if late else 2,pending_count=pending_count,
         mock_calls=calls,originals_preserved=True,source_cursor_preserved=True,
         scope='ordinary numbered and same-paragraph outcomes; literal exercise standards; fixed receipts are not model accuracy')
     class Handler(app.Handler):
@@ -226,7 +260,7 @@ async function screenshot(page,name){await noOverflow(page);await page.screensho
   browser=await chromium.launch({headless:true,channel:process.env.PLAYWRIGHT_CHANNEL||'chrome'});
   // SCHOOL_NATIVE_FORMS may narrow the run to forms an unchanged-UI patch affects; the default keeps every form.
   for(const form of (process.env.SCHOOL_NATIVE_FORMS||'numbered,semicolon,shared,shared_all,weekday,cross_message').split(',')){
-  host=await server(form);proof.intake=await json(host.url+'__fixture/proof');proof.scenarios.push({form,intake:proof.intake});assert.equal(proof.intake.model_receipts,2);assert.equal(proof.intake.print_attempts,0);
+  host=await server(form);proof.intake=await json(host.url+'__fixture/proof');proof.scenarios.push({form,intake:proof.intake});assert.equal(proof.intake.model_receipts,proof.intake.expected_receipts);assert.equal(proof.intake.print_attempts,0);
   for(const width of [360,1440]){
    const page=await browser.newPage({viewport:{width,height:850},timezoneId:'Asia/Shanghai'});lastPage=page;page.noticeForm=form;page.setDefaultTimeout(10000);
    const errors=[],external=[];page.on('pageerror',e=>errors.push(e.message));
@@ -242,10 +276,10 @@ async function screenshot(page,name){await noOverflow(page);await page.screensho
    failedState.agent.sources.forEach(s=>Object.assign(s,{last_success:new Date().toISOString(),next_collection_at:new Date(Date.now()+1800000).toISOString(),error:'',unread_count:0}));
    const failedRoute=route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(failedState)});
    await page.route('**/api/state',failedRoute);await page.goto(host.url,{waitUntil:'domcontentloaded',timeout:15000});await page.locator('[data-child-filter="child-1"]').click();
-   const pending=page.locator('#content [data-school-processing]');await pending.waitFor();assert.match(await pending.innerText(),/2 条学校消息尚未整理，作业清单可能不完整/);
+   const pending=page.locator('#content [data-school-processing]');await pending.waitFor();assert.match(await pending.innerText(),new RegExp(proof.intake.pending_count+' 条学校消息尚未整理，作业清单可能不完整'));
    assert.equal(await page.locator('#content [data-today-task]').count(),0);assert.equal(await page.locator('#content .today-source-gap').count(),0,'successful collection and complete originals do not hide pending processing');
    await page.reload();await pending.waitFor();await screenshot(page,'processing-pending-'+width+'.png');
-   await pending.locator('[data-page=sources]').click();await page.locator('[data-current-source-pending]').waitFor();assert.match(await page.locator('[data-current-source-pending]').innerText(),/2 条消息尚未整理/);
+   await pending.locator('[data-page=sources]').click();await page.locator('[data-current-source-pending]').waitFor();assert.match(await page.locator('[data-current-source-pending]').innerText(),new RegExp(proof.intake.pending_count+' 条消息尚未整理'));
    await page.locator('nav [data-page=home]').click();await page.locator('[data-child-filter="child-2"]').click();assert.equal(await pending.count(),0,'another child does not inherit the first child processing warning');
    await page.locator('[data-child-filter="child-1"]').click();await pending.waitFor();
    await page.unroute('**/api/state',failedRoute);await page.reload();
@@ -286,7 +320,7 @@ async function screenshot(page,name){await noOverflow(page);await page.screensho
    await screenshot(page,'exercise-reopen-'+width+'.png');await page.locator('#taskDialog [data-close="taskDialog"]').click();await page.locator('[data-child-filter="child-2"]').click();for(const item of items)assert.equal(await card(item.task_id).count(),0);assert.equal(await page.locator('#content [data-school-original-ref]').count(),0);await noOverflow(page);
    const cross=await fetch(host.url+'api/task/feedback',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify({...feedback.body,child:'虚构乙',request_key:'synthetic-native-other-child-'+width}),signal:AbortSignal.timeout(5000)});assert.equal(cross.status,409);assert.deepEqual((await read()).records,state.records);
    await page.locator('[data-child-filter="child-1"]').click();for(const item of items)await card(item.task_id).waitFor();assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
-   const runtime=await json(host.url+'__fixture/proof');assert.equal(runtime.model_receipts,2);assert.equal(runtime.print_attempts,0);assert.deepEqual(runtime.mock_calls,proof.intake.mock_calls);
+   const runtime=await json(host.url+'__fixture/proof');assert.equal(runtime.model_receipts,proof.intake.expected_receipts);assert.equal(runtime.print_attempts,0);assert.deepEqual(runtime.mock_calls,proof.intake.mock_calls);
    proof.widths.push({form,width,processing_pending_visible:true,processing_reopen:true,processing_child_isolated:true,processing_recovered:true,school_task_ids:items.map(i=>i.task_id),scoped_views:scopedViews,exercise_task_id:exercise.task_id,feedback,wrong:wrongSaved,correction,reopened_same_task:true,reading_untouched:true,cross_child_rejected:true,no_horizontal_overflow:true});
    await page.close();lastPage=null;
   }
