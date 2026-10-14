@@ -1,5 +1,6 @@
 """Synthetic text-paper role, safety and real HTTP checks; no model or printer I/O."""
 import io
+import copy
 import hashlib
 import json
 import unittest
@@ -888,4 +889,74 @@ class TeacherRequestTitleTest(unittest.TestCase):
                 self.assertEqual(self.review(question,key,[item(label,text,'A','教师参考：A','correct')]),[('教师参考：A','correct')])
 
 
-if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TeacherReferenceScopeTests','TeacherReferenceSourceTests','TeacherReferenceEquationTests','TeacherReferenceGrammarTests','TextQuestionHTTPTests','TeacherPaperWholeNameTest','TeacherPaperFormalNameTest','TeacherRequestTitleTest'])
+class TextInspectionProvenanceTests(unittest.TestCase):
+    paper='虚构柳叶卷\n一、选择正确答案。\n1. 1+1=? A.1 B.2 C.3\n孩子作答：B\n2. 2+2=? A.3 B.4 C.5\n孩子作答：\n'
+    labels=['虚构柳叶卷 第1大题 第1题','虚构柳叶卷 第1大题 第2题']
+
+    def raw(self):
+        return dict(question_labels=self.labels[:],coverage='仅本次全虚构资料。',items=[
+            dict(label=self.labels[0],question='1+1=? A.1 B.2 C.3',student_answer='B',answer='AI自行推导：B.2',
+                 judgment='correct',question_kind='objective',error_reason='',possible_cause='',steps='',uncertainty=''),
+            dict(label=self.labels[1],question='2+2=? A.3 B.4 C.5',student_answer='',answer='AI自行推导：B.4',
+                 judgment='unknown',question_kind='objective',error_reason='',possible_cause='',steps='',uncertainty='孩子未作答，仍须核对。')])
+
+    def draft(self,raw,paper=None,images=(),**kwargs):
+        original=copy.deepcopy(raw)
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            out=family_llm.homework_reference_draft(images,review=True,
+                question_documents=[dict(name='synthetic-willow.txt',text=self.paper if paper is None else paper)],**kwargs)
+        self.assertEqual(model.call_count,1);self.assertEqual(raw,original)
+        return out
+
+    def test_closed_source_blank_supplies_status_but_no_answer_or_grade(self):
+        raw=self.raw();out=self.draft(raw);q=out['questions'][1]
+        self.assertEqual(q['inspection'],dict(state='blank_answer',basis='closed_text_field',document='synthetic-willow.txt',line=6))
+        self.assertEqual({k:q[k] for k in raw['items'][1] if k!='question_kind'},
+                         {k:v for k,v in raw['items'][1].items() if k!='question_kind'})
+        self.assertEqual((out['wrong_items'],out['unknown_items']),(0,1))
+        self.assertNotIn('inspection',out['questions'][0])
+
+    def test_source_omission_stays_unchecked_even_when_original_answer_is_blank(self):
+        raw=self.raw();raw['items']=raw['items'][:1];raw['question_labels']=raw['question_labels'][:1]
+        out=self.draft(raw);q=out['questions'][1]
+        self.assertEqual(q['inspection'],dict(state='not_checked',basis='source_inventory',document='synthetic-willow.txt',line=5))
+        assert_source_pending(self,q,self.labels[1],'2. 2+2=? A.3 B.4 C.5','synthetic-willow.txt',5)
+        self.assertEqual((out['wrong_items'],out['unknown_items']),(0,1))
+
+    def test_model_list_omission_is_not_independent_source_evidence(self):
+        raw=self.raw();raw['items']=raw['items'][:1]
+        out=self.draft(raw);q=out['questions'][1]
+        self.assertEqual(q['inspection'],dict(state='not_checked',basis='model_label_list'))
+        self.assertEqual((q['student_answer'],q['answer'],q['judgment']),('','','unknown'))
+
+    def test_empty_raw_value_without_a_proved_closed_blank_is_not_blank_evidence(self):
+        for paper in (self.paper.replace('孩子作答：\n','孩子作答：B\n'),
+                      self.paper.removesuffix('孩子作答：\n'),
+                      self.paper.replace('孩子作答：\n','字迹无法辨认\n')):
+            with self.subTest(paper=paper[-30:]):
+                out=self.draft(self.raw(),paper)
+                q=next(q for q in out['questions'] if q['label']==self.labels[1])
+                self.assertEqual((q['student_answer'],q['judgment']),('','unknown'))
+                self.assertNotIn('inspection',q)
+
+    def test_images_prevent_a_text_field_from_proving_the_final_answer_blank(self):
+        out=self.draft(self.raw(),images=[dict(mime='image/png',data=PNG)])
+        self.assertNotIn('inspection',out['questions'][1])
+        self.assertEqual(out['questions'][1]['judgment'],'unknown')
+
+    def test_previous_pending_label_gets_no_claim_of_source_or_answer(self):
+        out=self.draft(self.raw(),pending_labels=['虚构柳叶卷 第1大题 第3题'])
+        q=out['questions'][-1]
+        self.assertEqual(q['inspection'],dict(state='not_checked',basis='previous_pending'))
+        self.assertEqual((q['student_answer'],q['answer'],q['judgment']),('','','unknown'))
+
+    def test_model_cannot_supply_its_own_program_inspection_proof(self):
+        raw=self.raw();raw['items'][1]['inspection']=dict(state='blank_answer',basis='closed_text_field')
+        original=copy.deepcopy(raw)
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            with self.assertRaises(family_llm.LLMDraftError):
+                family_llm.homework_reference_draft([],review=True,question_documents=[dict(name='synthetic-willow.txt',text=self.paper)])
+        self.assertEqual(model.call_count,1);self.assertEqual(raw,original)
+
+
+if __name__=='__main__':unittest.main(defaultTest=['TextQuestionContractTests','TeacherReferencePriorityTests','TeacherReferenceIdentityTests','TeacherReferenceScopeTests','TeacherReferenceSourceTests','TeacherReferenceEquationTests','TeacherReferenceGrammarTests','TextQuestionHTTPTests','TeacherPaperWholeNameTest','TeacherPaperFormalNameTest','TeacherRequestTitleTest','TextInspectionProvenanceTests'])

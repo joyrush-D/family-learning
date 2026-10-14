@@ -2921,7 +2921,8 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
         checked={''.join(item['label'].split()):item for item in result['items']}
         result['items']=[checked.get(key) or dict.fromkeys(limits,'')|dict(
             label=re.sub(r'[\r\n\t]+',' ',label).strip(),judgment='unknown',
-            uncertainty='本批识别到此题，但未返回逐题检查结果，请补查。') for label,key in zip(labels,normalized)]
+            uncertainty='本批识别到此题，但未返回逐题检查结果，请补查。',
+            inspection=dict(state='not_checked',basis='model_label_list')) for label,key in zip(labels,normalized)]
     source_titles=_ref_titles(question_documents)
     if selected_labels:
         for item in result['items']:
@@ -2942,7 +2943,8 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
                 if len(result['items'])>=25:
                     raise LLMDraftError('原件明确题号与返回结果合计超过25项，请缩小原件范围检查；原结果保留')
                 result['items'].append(dict.fromkeys(limits,'')|dict(label=row['label'],question=row['question'],
-                    judgment='unknown',uncertainty='原件《%s》第%d行明确列出本题；本轮未返回对应检查结果，尚未检查，请补查。'%(row['document'],row['line'])))
+                    judgment='unknown',uncertainty='原件《%s》第%d行明确列出本题；本轮未返回对应检查结果，尚未检查，请补查。'%(row['document'],row['line']),
+                    inspection=dict(state='not_checked',basis='source_inventory',document=row['document'],line=row['line'])))
         order={row['label']:n for n,row in enumerate(source_inventory)}
         result['items'].sort(key=lambda item:order.get(source_key(item['label'])[1],len(order)))
     if review and pending_labels:
@@ -2951,7 +2953,18 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
         if len(result['items'])+len(missing)>25:
             raise LLMDraftError('本次题目与上一轮待补题合计超过25项；上次结果保留，请缩小原件或页码范围后检查')
         result['items'].extend(dict.fromkeys(limits,'')|dict(label=label,judgment='unknown',
-            uncertainty='上一轮此题仍未判定，本轮未返回检查结果，请补查。') for label in missing)
+            uncertainty='上一轮此题仍未判定，本轮未返回检查结果，请补查。',
+            inspection=dict(state='not_checked',basis='previous_pending')) for label in missing)
+    if review and source_inventory and not source_unresolved and not images:
+        for item in result['items']:
+            # A missing result stays uninspected even if its source field is
+            # empty. The model's empty value alone proves no blank answer.
+            if 'inspection' in item or item['judgment']!='unknown' or item['student_answer'].strip(): continue
+            if _source_final_answer(item,source_inventory,source_titles,False,
+                                    identity_only=True,unambiguous=True)!='': continue
+            row=_source_question_matches(item['label'],source_inventory,source_titles,True)[0]
+            item['inspection']=dict(state='blank_answer',basis='closed_text_field',
+                                    document=row['document'],line=row['window_span'][1])
     if (not isinstance(result['coverage'],str) or len(result['coverage'])>600
             or any(ord(c)<32 and c not in '\n\r\t' or ord(c)==127 for c in result['coverage'])):
         raise LLMDraftError('参考草稿的覆盖范围无法核对')
