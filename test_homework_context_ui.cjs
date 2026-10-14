@@ -52,7 +52,7 @@ async function start(){
   page=await browser.newPage({viewport:{width,height:850}});page.setDefaultTimeout(12000);const errors=[],foreign=[],bad=[],dialogs=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>{dialogs.push(d.message());d.dismiss()});
   await page.route('**/*',async route=>{const r=route.request(),u=new URL(r.url());if(u.origin!==new URL(server.url).origin){foreign.push(r.url());return route.abort()}if(r.method()==='POST'&&u.pathname.startsWith('/api/print/')&&!['/api/print/homework/draft','/api/print/homework/catalog'].includes(u.pathname)){bad.push(u.pathname);return route.abort()}return route.continue()});
   const fit=async()=>assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1&&[...document.querySelectorAll('dialog[open]')].every(d=>d.scrollWidth<=d.clientWidth+1)),'no horizontal overflow');
-  await page.goto(server.url);
+  await page.goto(server.url);await until(async()=>await page.evaluate(()=>typeof agendaDateHTML==='function'&&typeof taskFamilyEntry==='function'&&typeof savedHomeworkReviewFocus==='function'),'scripts loaded');
   // Publication: a school item (message, accepted origin or a free-text school source) keeps "待核对"; only a family entry without a date omits it.
   const dates=await page.evaluate(()=>({school:agendaDateHTML({published_on:''},'2026-10-15',taskFamilyEntry({source:'Agent建议:x\nmessage:s:1',school_origin:true,agenda:{}})),
    message:agendaDateHTML({published_on:''},'2026-10-15',taskFamilyEntry({source:'message:s:1',agenda:{publications:[{ref:'message:s:1'}]}})),
