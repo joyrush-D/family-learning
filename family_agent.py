@@ -1800,16 +1800,21 @@ def _school_origin(store, c, task, child_id):
     return row
 
 
-def school_targets(app, store, child_id, connection=None):
-    """Bounded saved tasks for the existing school model call, no new collector."""
+def school_targets(app, store, child_id, connection=None, *, shared=False):
+    """Bounded saved tasks for the existing school model call, no new collector.
+
+    With ``shared`` each target also carries the program's own proof (never shown to the model) when the very next stored
+    message after its list is that list's all-items standard; see _school_late_shared.
+    """
     with store._db() if connection is None else nullcontext(connection) as c:
         name=next((p['name'] for p in app.profiles(c) if p['id']==child_id),None)
-        updates={r['id']:dict(r) for r in c.execute('SELECT * FROM task_updates')};result=[]
+        updates={r['id']:dict(r) for r in c.execute('SELECT * FROM task_updates')};result=[];natives=[];canonicals={}
         # ponytail: latest 24 collected school tasks; unlisted or ambiguous targets need parent selection.
         for task in app.tasks(c):
             if task['child']!=name: continue
             try:
                 canonical=_school_origin(store,c,task,child_id)
+                if isinstance(json.loads(canonical['plan']).get('school_native_action'),dict):natives.append((task['id'],canonical))
                 originals=[];publishers=set();originals_read=True
                 canonical_plan=json.loads(canonical['plan']);changes=canonical_plan.get('school_changes',[])
                 source_rows=[canonical]
@@ -1850,10 +1855,52 @@ def school_targets(app, store, child_id, connection=None):
                 due=task['agenda']['due_on'],status=app.task_status(task,update['status'] if update else None),source_id=source,publisher=publisher,
                 append_basis=basis,append_eligible=bool(publisher) and originals_read and requirements_kept and _school_active(store,c,canonical) and not update and not feedback and not study
                     and (not focus['title'] and not focus['goal'] or own_append)))
+            canonicals[task['id']]=canonical
         complete=len(result)<=24
         result=result[:24]
-        for task in result: task['targets_complete']=complete
+        for task in result:
+            task['targets_complete']=complete
+            if shared:
+                try:proof=_school_late_shared(store,c,child_id,canonicals[task['id']],natives)
+                except (AgentError,ValueError,KeyError,TypeError):proof=None
+                if proof:task['shared_standard']=proof
         return result
+
+
+def _school_late_shared(store, c, child_id, canonical, natives):
+    """Program proof that the very next stored message after this task's own list is the list's all-items standard.
+
+    The model's target never proves the relation. This task's only original must be its list, still read as the same
+    outcomes; the next stored message of that source must be what the same-batch reading (r243) binds to every outcome:
+    the same stable teacher's complete text within 120 seconds, wholly one positive all-items clause whose stated count,
+    if any, equals the outcomes. Every outcome must already be exactly one saved task. Anything else proves nothing.
+    """
+    plan=json.loads(canonical['plan']);action=plan.get('school_native_action')
+    if plan.get('school_changes') or [e['ref'] for e in json.loads(canonical['evidence'])]!=[action.get('ref')]:return None
+    source_id,message_id=action['ref'][8:].rsplit(':',1)
+    _,listing=store._message_context(c,dict(child_id=child_id,source_id=source_id,message_id=message_id))
+    later=c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND rowid>(SELECT rowid FROM agent_messages WHERE source_id=? AND id=?) ORDER BY rowid LIMIT 1',
+                    (source_id,source_id,message_id)).fetchone()
+    if later is None:return None
+    later=json.loads(later['payload'])
+    if not _school_shared_follows(listing,later):return None
+    def entry(message):
+        ids=[r['upload_id'] for r in c.execute('SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=?',(source_id,message['id']))]
+        return dict(ref='message:'+source_id+':'+message['id'],text=message['text'],time=message['time'],publisher=_publisher(source_id,message),
+                    kind=message['kind'],content_incomplete=bool(message.get('unread')),unread=bool(message.get('unread')),attachments=ids)
+    first,second=entry(listing),entry(later)
+    try:alone=_school_native_actions([first]);pair=_school_native_actions([first,second])
+    except AgentError:return None
+    standard=dict(ref=second['ref'],quote=later['text'].strip(),goal=_school_shared_standard(later['text'])[1],time=later['time'])
+    owners={}
+    for task_id,row in natives:
+        saved=json.loads(row['plan'])['school_native_action']
+        if saved.get('ref')==action['ref']:owners.setdefault(saved.get('id'),[]).append((task_id,saved))
+    ledger={a['id']:a for a in alone}
+    if (len(alone)<2 or pair!=[dict(a,shared_supplements=[standard]) for a in alone] or ledger.get(action.get('id'))!=action
+            or set(owners)!=set(ledger) or any(len(found)!=1 or found[0][1]!=ledger[ident] for ident,found in owners.items())):return None
+    tasks=sorted(found[0][0] for found in owners.values())
+    return dict(ref=standard['ref'],quote=standard['quote'],tasks=tasks,basis=_hash([listing,later,alone,tasks]))
 
 
 def _school_named_objects(value):
@@ -1864,6 +1911,10 @@ def _school_named_objects(value):
 
 def _school_append_brief(brief, evidence, targets):
     """A narrow additive relation, never a guess from a date, nickname or model target alone."""
+    if brief.get('change')=='new' and brief.get('state')=='ready' and evidence and all(_school_shared_standard(e.get('text','')) for e in evidence):
+        # "以上两项均请…" alone names no outcome of its own: never an independent task, whatever the model called it.
+        brief.update(state='review',reason='本条是老师对以上各项的共同要求，不另建作业；原文保留，待补入对应原作业。')
+        return
     if brief.get('change')=='new' and brief.get('state')=='ready':
         # Relation validation cannot depend on the model choosing "append".
         # Only an explicit, wholly-read supplement can use the existing unique
@@ -1896,7 +1947,8 @@ def _school_append_brief(brief, evidence, targets):
         brief.update(state='review',reason=reason)
         brief.pop('target_basis',None)
         brief.pop('input_basis',None)
-    if brief.get('state')!='ready': brief.pop('target_basis',None);brief.pop('input_basis',None);return
+        brief.pop('shared_basis',None)
+    if brief.get('state')!='ready': brief.pop('target_basis',None);brief.pop('input_basis',None);brief.pop('shared_basis',None);return
     selected=next((t for t in targets if t['id']==brief.get('target_id')),None)
     if not selected or not selected.get('append_basis') or not selected.get('targets_complete') or selected.get('goal_truncated') or not selected.get('append_eligible'):
         uncertain();return
@@ -1917,6 +1969,17 @@ def _school_append_brief(brief, evidence, targets):
     # an empty model date and one copied from the target.
     if any(_SCHOOL_DATE_MENTION.search(value) for value in (text,brief['goal'],brief.get('submission',''))):
         uncertain('补充含日期或期限表述，是否改变原截止待核对；原要求、安排和反馈保留。');return
+    shared=selected.get('shared_standard')
+    if shared and [e.get('ref') for e in evidence]==[shared['ref']]:
+        # The program proved this whole message is the all-items standard of this task's own list; the literal original
+        # is appended, never the model's wording, title, date or handback.
+        if evidence[0]['text'].strip()!=shared['quote'] or brief.get('purpose') not in ('learning','admin'):
+            uncertain();return
+        brief['goal']=shared['quote'];brief.pop('submission',None)
+        brief['target_basis']=copy.deepcopy(selected['append_basis'])
+        brief['input_basis']=_school_message_basis(evidence)
+        brief['shared_basis']=shared['basis']
+        return
     # "Only supplement reading/textbook homework" identifies an activity only
     # if exactly one saved task by this source/publisher has that activity.
     reading=bool(re.search(r'(?:只|仅)?补(?:充)?(?:[^。：:\n]{0,30})朗读',text))
@@ -1987,13 +2050,15 @@ def apply_school_change(app, store, obj, *, school_auto=False):
             if change!='append' or brief.get('change')!='append' or brief.get('state')!='ready' or brief.get('policy')!=SCHOOL_TASK_POLICY or not basis or _school_append_request(row,brief)!=obj:
                 raise AgentError('补充要求或原事项已变化，原要求保留待核对',409)
             if not _school_active(store,c,row): raise AgentError('Agent或原消息来源已停用，补充未自动保存',409,'school_source_paused')
-            current=next((t for t in school_targets(app,store,row['child_id'],connection=c) if t['id']==target_id),None)
+            targets=school_targets(app,store,row['child_id'],connection=c,shared=True)
+            current=next((t for t in targets if t['id']==target_id),None)
             if current is None or current['append_basis']!=basis or not current['append_eligible']:
                 raise AgentError('原事项已有安排、反馈或来源变化，补充未自动保存',409)
             original,_=_school_material(store,c,row);checked=copy.deepcopy(brief)
-            _school_append_brief(checked,original,school_targets(app,store,row['child_id'],connection=c))
+            _school_append_brief(checked,original,targets)
             from family_agenda import sent_day
             if (checked.get('state')!='ready' or checked.get('target_basis')!=basis or checked.get('input_basis')!=brief.get('input_basis') or update
+                    or checked.get('shared_basis')!=brief.get('shared_basis')
                     or app.task_status(task,None) in app.TASK_CLOSED
                     or basis['due'] and basis['due']<_now().date().isoformat()
                     or any(sent_day(e.get('time'))!=_now().date().isoformat() for e in original)
@@ -3709,7 +3774,8 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     native_actions=_school_native_actions(evidence) if routing and school_existing is None else []
     native_assigned=set();native_spans=set()
     content = {'mode': mode, 'as_of': as_of, 'child': profile or {}, 'evidence': evidence}
-    if routing: content.update(learning_goals=school_goals,school_tasks=school_tasks)
+    # The program's late-standard proof is checked here, not shown to the model: its input stays unchanged.
+    if routing: content.update(learning_goals=school_goals,school_tasks=[{k:v for k,v in t.items() if k!='shared_standard'} for t in school_tasks])
     if native_actions:content['required_native_actions']=[_school_native_view(a) for a in native_actions]
     schema=_evidence_schema(SCHOOL_SCHEMA if routing else SCHEMA,evidence)
     historical=routing and school_existing is not None
@@ -3890,6 +3956,12 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             raise AgentError('学校独立要求有遗漏，整批保留未处理，待原后台重试',code='school_action_coverage')
         if set(refs) != accounted:
             raise AgentError('学校消息归纳有遗漏，整批保留未处理，待原后台重试', code='school_coverage_incomplete')
+        # A proven late all-items standard is no task of its own: exactly one append of it alone per saved task of its list.
+        for proof in {t['shared_standard']['ref']:t['shared_standard'] for t in school_tasks if t.get('shared_standard')}.values():
+            citing=[o for o in output if proof['ref'] in {e['ref'] for e in o['evidence']}]
+            if proof['ref'] in refs and (any({e['ref'] for e in o['evidence']}!={proof['ref']} or o['plan']['school_task'].get('change')!='append' for o in citing)
+                    or sorted(o['plan']['school_task'].get('target_id','') for o in citing)!=proof['tasks']):
+                raise AgentError('老师对以上各项的共同要求未逐项补入原作业，整批保留重试',code='school_action_coverage')
         # Only final, guarded learning results can carry a mixed notice's activity.
         # Missing reading/date evidence, optional resources and changes never qualify.
         activities=[o for o in output if o['plan']['school_task'].get('purpose')=='learning'
@@ -5453,7 +5525,7 @@ def run_once(app, now=None):
                     budget -= 1
                     try:
                         proposals = _select('school', evidence, profiles[source['child_id']], as_of=now.date().isoformat(), data_path=store.data,
-                                            school_goals=goals.school_candidates(source['child_id']),school_tasks=school_targets(app,store,source['child_id']))
+                                            school_goals=goals.school_candidates(source['child_id']),school_tasks=school_targets(app,store,source['child_id'],shared=True))
                         anchors = {entry['ref']: entry for entry in evidence}
                         for item in proposals:
                             for quote in item['evidence']:
