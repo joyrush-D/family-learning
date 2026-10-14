@@ -2459,7 +2459,7 @@ def _source_window_references(body,owner,rows,titles):
         if found is None: return None
         # Only a positive carrier of applicability/range (not a data/action
         # phrase) names the retained parent's scope without borrowing its leaves.
-        scope=re.fullmatch(r'(?:(?:统一|本)?(?:评分|范围|版本)?(?:说明|要求)?(?:适用于?|覆盖|针对)|(?:适用)?范围(?:包括|为|是)?)',words)
+        scope=re.fullmatch(r'(?:(?:(?:公共|共用|共同)(?:阅读)?材料|(?:统一|本)?(?:评分|范围|版本)?(?:说明|要求)?)(?:适用于?|覆盖|针对)|(?:适用)?范围(?:包括|为|是)?)',words)
         tail=body[end:].strip();clause=re.split(r'[。；;，,:：\n]',tail,maxsplit=1)[0].strip()
         # A closed parenthesized scope ends before its complete scoring clause;
         # the clause remains original context, not borrowed sibling leaf data.
