@@ -1181,19 +1181,21 @@ def teacher_wording_caption_checks():
     student='我会先看题目，读完整篇文章后，再说出自己的想法。'
     label='虚构芦芽阅读卷 第一大题 第7题（2）'
     policy='含义相同的说明可接受。'
-    def draft(teacher=body+policy,answer=None,*,changes=None,other=None,paper='虚构芦芽阅读卷',pictures=False,source_answer=None,field='学生作答：'):
+    def draft(teacher=body+policy,answer=None,*,changes=None,other=None,paper='虚构芦芽阅读卷',pictures=False,source_answer=None,field='学生作答：',teacher_parent=False,source_parent=False):
         nonlocal calls
         original=item(label=label,question='请说明阅读文章的顺序与最后要做的事。',question_kind='subjective',
                       student_answer=student,answer='AI自行推导：'+body if answer is None else answer)
         original.update(changes or {})
         raw=dict(items=[original],question_labels=[original['label']],coverage='仅核本次虚构卷的明确小题，不代表其他题目。')
         untouched=json.loads(json.dumps(raw))
-        documents=[dict(name='synthetic-wording-teacher.txt',text='教师参考答案\n试卷名称：'+paper+'\n第一大题\n第7题（2）：'+teacher+'\n')]
+        teacher_path='第7题\n（2）：' if teacher_parent else '第7题（2）：'
+        documents=[dict(name='synthetic-wording-teacher.txt',text='教师参考答案\n试卷名称：'+paper+'\n第一大题\n'+teacher_path+teacher+'\n')]
         if other is not None:
             documents.append(dict(name='synthetic-wording-other.txt',text='教师参考答案\n试卷名称：'+paper+'\n第一大题\n第7题（2）：'+other+'\n'))
+        source_path='第一大题\n第7题\n（2）：' if source_parent else original['label']+' '
         with patch.object(family_llm,'_chat_json',return_value=raw) as model:
             result=family_llm.homework_reference_draft([dict(mime='image/png',data=png())] if pictures else [],review=True,
-                question_documents=[dict(name='synthetic-wording-answer.txt',text='试卷名称：虚构芦芽阅读卷\n'+original['label']+' '+original['question']+'\n'+field+(original['student_answer'] if source_answer is None else source_answer)+'\n')],
+                question_documents=[dict(name='synthetic-wording-answer.txt',text='试卷名称：虚构芦芽阅读卷\n'+source_path+original['question']+'\n'+field+(original['student_answer'] if source_answer is None else source_answer)+'\n')],
                 reference_documents=documents)
         assert model.call_count==1 and raw==untouched,'the frozen transport reply is not edited'
         calls+=1
@@ -1206,16 +1208,21 @@ def teacher_wording_caption_checks():
             assert q['uncertainty'] and not q['error_reason'] and not q['possible_cause'] and not q['steps'],q
         return q
     for note in (policy,'意思一致的表述可以接受。','语义相同的解释均可认可。','同义回答也可接受。',
-                 '说明含义一致可以接受。','意思相同即可。','备注：意思一样的说法都可接受。'):
+                 '说明含义一致可以接受。','意思相同即可。','备注：意思一样的说法都可接受。',
+                 '只要含义相同，可用自己的话说明。','意思一致，可以以不同措辞解释。'):
         q=draft(body+note)
         assert q['judgment']=='correct' and not q['uncertainty'],q
     for answer in ('教师参考：'+body,'AI自行推导：'+body,body):
         assert draft(answer=answer)['judgment']=='correct'
     assert draft(teacher=body+'\n'+policy,pictures=True)['judgment']=='correct','a proven policy is not inferred from an image'
+    assert draft(teacher_parent=True,source_parent=True)['judgment']=='correct'
+    assert draft(teacher_parent=True,source_parent=True,teacher=body+'只要意思一致，可以用自己的语言解释。')['judgment']=='correct'
     wrong=dict(judgment='incorrect',error_reason='作答漏了阅读后的理解说明。',steps='先独立尝试补全阅读后的行动。')
     q=draft(changes=wrong)
     assert q['judgment']=='incorrect' and q['error_reason']==wrong['error_reason'] and q['steps']==wrong['steps'],q
+    assert draft(changes=wrong,teacher_parent=True,source_parent=True)['judgment']=='incorrect'
     assert draft(changes=dict(judgment='unknown',uncertainty='作答区域尚未读全。'))['judgment']=='unknown'
+    assert draft(changes=dict(judgment='unknown',uncertainty='作答区域尚未读全。'),teacher_parent=True,source_parent=True)['judgment']=='unknown'
     assert draft(changes=dict(uncertainty='孩子是否完成最后一步未核明。'))['judgment']=='unknown'
     assert draft(changes=dict(student_answer=''))['judgment']=='unknown','teacher policy cannot fill an empty answer'
     assert draft(changes=dict(question_kind='unknown'))['judgment']=='unknown'
@@ -1223,6 +1230,9 @@ def teacher_wording_caption_checks():
         q=draft(changes=wrong if judgment=='incorrect' else {},source_answer='我只看标题，没有读正文。')
         assert q['judgment']=='unknown' and '原答抄写' in q['uncertainty'] and '我只看标题' in q['uncertainty'],q
         assert student in q['uncertainty'],q
+        q=draft(changes=wrong if judgment=='incorrect' else {},teacher_parent=True,source_parent=True,
+                source_answer='我只看标题，没有读正文。',field='学生完整最终作答：')
+        assert q['judgment']=='unknown' and '原答抄写' in q['uncertainty'] and '我只看标题' in q['uncertainty'],q
     assert draft(source_answer='我只看标题，没有读正文。',pictures=True)['judgment']=='correct','an image is not proven by a text-only field'
     for field in ('学生作答（仅片段）：','学生示例答案：'):
         assert draft(source_answer='我只看标题，没有读正文。',field=field)['judgment']=='correct','an unproven field supplies no transcription contradiction'
@@ -1243,6 +1253,7 @@ def teacher_wording_caption_checks():
                  '含义接近的说明可接受。','“含义相同的说明可接受”。',
                  '含义相同的说明可接受。第二句必须引用原文。'):
         assert draft(body+note)['judgment']=='unknown',note
+    assert draft(teacher_parent=True,source_parent=True,teacher=body+'只要意思一致，可以用自己的语言解释，但不能省略单位。')['judgment']=='unknown'
     assert draft(body+'必须明确提到阅读后的理解。'+policy)['judgment']=='unknown'
     assert draft(teacher=body.rstrip('。')+'，'+policy)['judgment']=='unknown','no half-sentence is cut into an answer'
     assert draft(paper='虚构另一本阅读卷',answer='教师参考：'+body)['judgment']=='unknown'
@@ -1254,6 +1265,21 @@ def teacher_wording_caption_checks():
     # A policy does not bypass the objective whole-value contradiction guard.
     assert draft(teacher='24厘米。'+policy,answer='AI自行推导：24厘米。',
                  changes=dict(question='求周长，答案用厘米表示。',question_kind='objective',student_answer='26厘米'))['judgment']=='unknown'
+    # Structural leaf reading keeps the empty parent, sibling values, complete
+    # nested paths and each paper's scope. No blank/title/unread path is lent.
+    def entries(text):
+        return family_llm._teacher_reference_entries([dict(name='synthetic-parent-leaf-teacher.txt',text=text)])
+    prefix='试卷名称：虚构芦芽阅读卷\n第一大题\n第7题\n'
+    rows=entries(prefix+'（1）：观察标题。\n（2）：'+body+policy+'\n')
+    assert [(r['number'],r['sub'],r['answer']) for r in rows]==[(7,None,''),(7,(1,),'观察标题'),(7,(2,),body+policy.rstrip('。'))],rows
+    rows=entries(prefix+'（2）（1）：完整小题参考。\n（3）：另一个小题参考。\n')
+    assert [r['sub'] for r in rows]==[None,(2,1),(3,)],rows
+    for boundary in ('\n','另一份练习\n','第二大题\n','（2）②：未读层级。\n','（二）：未读层级。\n'):
+        rows=entries(prefix+boundary+'（2）：不能借用此前空父。\n')
+        assert not any(r['sub']==(2,) and r['answer'] for r in rows),rows
+    rows=entries(prefix+'（2）：本卷参考。\n试卷名称：虚构另一本卷\n第一大题\n第7题\n（2）：另一卷参考。\n')
+    assert [(r['paper'],r['sub'],r['answer']) for r in rows]==[
+        ('虚构芦芽阅读卷',None,''),('虚构芦芽阅读卷',(2,),'本卷参考'),('虚构另一本卷',None,''),('虚构另一本卷',(2,),'另一卷参考')],rows
     return calls
 
 

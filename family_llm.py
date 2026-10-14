@@ -1173,7 +1173,7 @@ def _teacher_reference_entries(documents,titles=frozenset(),continued=None):
     """Each original read in order; `continued`, when a list, gets each original's lines that go on with an answer."""
     entries=[]
     for document in documents:
-        paper=section=None;title='';first=len(entries);lines=document['text'].splitlines();owner=None;skip=set()
+        paper=section=None;title='';first=len(entries);lines=document['text'].splitlines();owner=parent=None;skip=set()
         for at,line in enumerate(lines):
             if at in skip: continue
             if owner and (stop:=_ref_continued(lines,at,titles,owner[0][0]['number']))>at:  # One answer's whole paragraph is its one value, never a heading.
@@ -1192,6 +1192,26 @@ def _teacher_reference_entries(documents,titles=frozenset(),continued=None):
                         entry['answer']='\n'.join([owner[1]]+[part.strip() for part in lines[at:end]])
                         entry['continuation_unresolved']=True
             marks=list(_REF_QUESTION.finditer(line));made=len(entries)
+            if not marks and parent and _REF_SUB.match(line):
+                sub,end=_ref_sub(line,teacher=True)
+                if sub!='*':
+                    # A named empty parent owns consecutive explicit leaf lines;
+                    # each leaf keeps the parent's entire path and scope. It
+                    # never supplies the parent's missing answer or a sibling's.
+                    tail=line[end:];listed=_REF_LISTED.search(line) is not None
+                    after=next((found for found in _REF_NAMED.finditer(tail) if not _ref_scope(tail[found.start(1):],section,titles,listed)[2]),None)
+                    answer=re.sub(r'[\s，,；;。.．、]+$','',_REF_SOURCE.sub('',tail[:after.start()] if after else tail,count=1))
+                    for entry in parent:
+                        entries.append(dict(entry,sub=(entry['sub'] or ())+sub,answer=answer))
+                    owner=(entries[made:],answer+re.search(r'[\s，,；;。.．、]*$',line)[0].strip()) if answer and not after else None
+                    if after:
+                        new,section,words=_ref_scope(tail[after.start(1):],section,titles,listed)
+                        if new is not None: paper,title=new,''
+                        parent=None
+                    continue
+            # A blank, heading, prose or unread level breaks this proof. Plain
+            # paragraph continuation above still belongs to its proven leaf.
+            parent=None
             head=line[:marks[0].start()] if marks else line
             listed=_REF_LISTED.search(line) is not None  # an unmarked join of names may be one title: unknown
             new,section,words=_ref_scope(head,section,titles,listed)
@@ -1221,6 +1241,7 @@ def _teacher_reference_entries(documents,titles=frozenset(),continued=None):
             # Only a line giving one question its answer, with no scope named after it, owns the plain lines right under it;
             # that answer keeps its line's closing mark 「B。」 inside the paragraph.
             owner=(entries[made:],answer+re.search(r'[\s，,；;。.．、]*$',line)[0].strip()) if len(marks)==1 and not after and answer else None
+            if len(marks)==1 and not after and not answer and sub!='*': parent=entries[made:]
         if continued is not None: continued.append(skip)
     return entries
 
@@ -2005,10 +2026,12 @@ def _ref_caption_value(teacher,question,question_kind='objective'):
             meaning=r'(?:含义|意思|意义|语义)(?:相同|一致|一样)'
             expression=r'(?:说明|解释|表述|表达|说法|回答|答案)'
             acceptance=r'(?:均|都|也)?可(?:以)?(?:接受|认可)?'
+            own_words=r'(?:自己的(?:话|语言|说法)|不同的?(?:措辞|表述|表达|说法))'
             policy=_ref_unspaced(tail[2])
             policy=re.sub(r'^(?:(?:教师|老师)?(?:附注|说明)|备注)[:：]','',policy)
             if re.fullmatch(r'(?:(?:'+meaning+r'的?|同义的?)'+expression+acceptance+
-                            r'|'+expression+meaning+acceptance+r'|'+meaning+r'(?:即可|'+acceptance+r'))',policy):
+                            r'|'+expression+meaning+acceptance+r'|'+meaning+r'(?:即可|'+acceptance+r')'
+                            r'|(?:只要)?'+meaning+r'[，,](?:就)?可(?:以)?(?:用|以)'+own_words+r'(?:说明|解释|回答|表达|表述))',policy):
                 return dict(value=tail[1].strip(),kind='wording')
     if question_kind!='objective': return None
     # A separately headed whole-paper caution changes neither this entry's value
@@ -2069,9 +2092,11 @@ def _source_final_answer(item,rows,titles,images):
     matches=_source_question_matches(item['label'],rows,titles,True)
     if len(matches)!=1: return None
     row=matches[0];lines=row['original_text'].splitlines();line=lines[row['line']-1].strip()
-    mark=_REF_QUESTION.search(line)
-    if mark is None: return None
-    _,end=_ref_sub(line,mark.end())
+    if _REF_SUB.match(line): _,end=_ref_sub(line,teacher=True)
+    else:
+        mark=_REF_QUESTION.search(line)
+        if mark is None: return None
+        _,end=_ref_sub(line,mark.end())
     if _ref_unspaced(line[end:].lstrip(' :：'))!=_ref_unspaced(item['question']): return None
     field=None
     for line in lines[row['line']:]:
