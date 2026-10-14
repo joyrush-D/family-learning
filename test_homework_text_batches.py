@@ -130,7 +130,7 @@ def run_long(text=None,teacher=None):
                     before=dump();status,catalog=post(catalog_path,req)
                     assert status==200 and len(catalog['questions'])==26 and dump()==before,(status,catalog)
                     status,blocked=post(draft_path,req)
-                    assert status==503 and '选择本批题号' in blocked['error'] and model.call_count==0 and dump()==before
+                    assert status==400 and '选择本批题号' in blocked['error'] and model.call_count==0 and dump()==before
                 labels=[q['label'] for q in catalog['questions']]
                 def draft(chosen,unknown=()):
                     batch=dict(inventory_sha256=catalog['inventory_sha256'],labels=chosen)
