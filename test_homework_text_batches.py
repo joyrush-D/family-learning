@@ -239,6 +239,9 @@ def run_window_guards():
     reject(numbered_chart,'材料编号')
     for carrier in ('表2','材料甲','附录A','上图','下表'):
         reject(text.replace('第1题：阅读材料后选出字母A。','第1题：根据'+carrier+'填写。'),'第2行')
+    for reference in ('沿用结论','沿用上述结论','根据上述结论'):
+        reject(text.replace('第1题：阅读材料后选出字母A。','第1题：'+reference+'填写答案。'),'第2行')
+        reject(text.replace('第2题：阅读材料后选出字母A。','第2题：'+reference+'填写答案。'),'第4行')
     reject(attributed,'上下文')
     reject(scored.replace('全部26小题','全部27小题'),'上下文')
     reject(text.replace('第1题：阅读材料后选出字母A。','第1题：沿用上一题材料。'),'第2行')
