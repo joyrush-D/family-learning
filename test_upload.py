@@ -1,5 +1,6 @@
 """Run python3 test_upload.py; synthetic files and database stay in a temporary directory."""
 import base64
+import hashlib
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 import io
@@ -33,6 +34,7 @@ with tempfile.TemporaryDirectory() as tmp:
     first=upload('示例卷子.png',PNG)
     second=upload('示例卷子.png',PNG)
     assert first['id']!=second['id'] and first['size']==len(PNG) and first['mime']=='image/png'
+    assert first['sha256']==second['sha256']==hashlib.sha256(PNG).hexdigest()
     assert (app.DATA/'uploads'/first['id']).read_bytes()==PNG
     assert not (app.DATA/'uploads'/'示例卷子.png').exists()
     assert len(app.snapshot()['uploads'])==2
@@ -108,6 +110,7 @@ with tempfile.TemporaryDirectory() as tmp:
         status,_,body=request('POST','/api/upload',PNG,headers)
         assert status==200
         received=json.loads(body)['attachment'];assert received['name']=='照片.png'
+        assert received['sha256']==hashlib.sha256(PNG).hexdigest()
         status,response_headers,body=request('GET',received['url'])
         assert status==200 and body==PNG
         assert response_headers['Content-Type']=='image/png' and response_headers['Content-Disposition'].startswith('inline;')

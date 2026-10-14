@@ -42,10 +42,10 @@ function wireReadingCover(f){
   const save=f.querySelector('[type=submit]');readingBusy=true;save.disabled=true;choice.disabled=true;status.textContent='正在保存封面图片…';
   try{
    if(!file.size||file.size>20*1024*1024)throw Error('封面图片须在20MB以内');
-   const digest=await crypto.subtle.digest('SHA-256',await file.arrayBuffer()),sha=[...new Uint8Array(digest)].map(x=>x.toString(16).padStart(2,'0')).join('');
    const response=await apiFetch('/api/upload',{method:'POST',signal:AbortSignal.timeout(120000),headers:{'X-Family-Token':data.token,'X-File-Name':encodeURIComponent(file.name),'Content-Type':'application/octet-stream'},body:file}),out=await response.json();
    if(!response.ok)throw Error(out.error||'封面上传失败');
    if(!['image/jpeg','image/png','image/webp'].includes(out.attachment?.mime))throw Error('封面须为JPEG、PNG或WebP图片');
+   const sha=out.attachment.sha256;if(!/^[a-f0-9]{64}$/.test(sha||''))throw Error('封面原件回执不完整，请重新选择');
    if(!f.isConnected)return;
    f.elements.cover_upload_id.value=out.attachment.id;f.elements.cover_sha256.value=sha;const img=document.createElement('img');img.src=endpoint('/upload/'+out.attachment.id);img.alt='本次选择的封面';preview.replaceChildren(img);remove.hidden=false;status.textContent='封面原件已保存；保存这次阅读约定后在书卡显示。';
   }catch(error){status.textContent=(error.name==='TimeoutError'?'封面上传超时':error.message)+'；原约定与原封面保留，可重新选择。'}
