@@ -67,18 +67,26 @@ try:
     fixture.stack.enter_context(patch('subprocess.Popen',side_effect=AssertionError('external CLI forbidden')))
     printer=fixture.stack.enter_context(patch.object(app.family_print.PrintStore,'enqueue',side_effect=AssertionError('printing forbidden')))
     app.printer_config=lambda:dict(printers=[],error='')
-    form=os.environ['SCHOOL_NATIVE_NOTICE_FORM'];assert form in ('numbered','semicolon','shared','shared_all','weekday')
+    form=os.environ['SCHOOL_NATIVE_NOTICE_FORM'];assert form in ('numbered','semicolon','shared','shared_all','weekday','cross_message')
+    # cross_message: the same teacher's all-items standard arrives as the next message 60 seconds after the list.
+    cross=form=='cross_message'
     shared=('以上作业都今天完成并请家长检查' if form=='shared_all' else
             '两项都今天完成并请家长检查' if form=='shared' else '')
     weekday='一二三四五六日'[now.weekday()]
     notice=('英语作业：1. 周'+weekday+'前朗读Unit 2课文两遍；2. 星期'+weekday+'前完成练习卷第1–3题。' if form=='weekday' else
             '英语，今天完成：1. 朗读Unit 2课文两遍；2. 完成练习卷第1–3题。' if form=='numbered' else
+            '英语，今天完成两项要求：1. 朗读Unit 2课文两遍；2. 完成练习卷第1–3题。' if cross else
             '英语作业：朗读Unit 2课文两遍。完成练习卷第1–3题。'+shared+'。' if shared else
             '英语作业：朗读Unit 2课文两遍，今天完成；完成练习卷第1–3题，今天完成。')
     texts=[notice,
-           '补充英语练习卷：单面打印；完成后自查并请家长签字；第4题选做。']
-    payload,refs=fixture._ingest(texts,publishers=['synthetic-teacher-1','synthetic-teacher-1'])
-    reading=school_proposal(title_quote='朗读Unit 2课文两遍',due=today,evidence=[dict(ref=refs[0])],
+           '以上两项均请家长核对并在记录本签字。' if cross else '补充英语练习卷：单面打印；完成后自查并请家长签字；第4题选做。']
+    if cross:
+        payload=fixture.fixture.payload(cursor='12')
+        payload['messages']=[dict(id=str(11+i),message_order=str(11+i),time=(now-dt.timedelta(minutes=2-i)).isoformat(),kind='text',
+            sender='虚构英语老师',sender_id='synthetic-teacher-1',unread=False,text=text) for i,text in enumerate(texts)]
+        store.ingest(payload);refs=['message:'+fixture.source['id']+':'+m['id'] for m in payload['messages']]
+    else:payload,refs=fixture._ingest(texts,publishers=['synthetic-teacher-1','synthetic-teacher-1'])
+    reading=school_proposal(title_quote='朗读Unit 2课文两遍',due=today,evidence=[dict(ref=ref) for ref in (refs if cross else refs[:1])],
         learning_subject='英语',task_title='英语：朗读Unit 2课文',task_goal='朗读Unit 2课文两遍。',
         task_state='ready',task_reason='原文第一项明确。',task_purpose='learning')
     exercise=school_proposal(title_quote='完成练习卷第1–3题',due=today,evidence=[dict(ref=ref) for ref in refs],
@@ -109,7 +117,8 @@ try:
         assert len(actions)==2 and reading['title_quote'] in actions[0]['quote'] and exercise['title_quote'] in actions[1]['quote']
         assert actions[0]['quote'] in notice and actions[1]['quote'] in notice
         if shared:assert all(a['shared_conditions']==[shared] for a in actions)
-        assert actions[0]['supplements']==[] and [s['quote'] for s in actions[1]['supplements']]==[texts[1]]
+        if cross:assert all(a['supplements']==[] and [s['quote'] for s in a['shared_supplements']]==[texts[1]] for a in actions)
+        else:assert actions[0]['supplements']==[] and [s['quote'] for s in actions[1]['supplements']]==[texts[1]]
         assert actions[0]['publisher'] and actions[0]['publisher']==actions[1]['publisher']
         reply=fixed(messages,schema,name,*args,**kwargs)
         calls.append(dict(name=name,as_of=context['as_of'],required_native_actions=copy.deepcopy(actions),reply=copy.deepcopy(reply)))
@@ -130,13 +139,13 @@ try:
         reading_row=next(r for r in rows if reading['title_quote'] in r['body'])
         exercise_row=next(r for r in rows if exercise['title_quote'] in r['body'])
         assert reading_row['id']!=exercise_row['id'] and reading_row['task_id']!=exercise_row['task_id']
-        for clause in (exercise['title_quote'],'单面打印','完成后自查并请家长签字','第4题选做'):
+        for clause in ((exercise['title_quote'],) if cross else (exercise['title_quote'],'单面打印','完成后自查并请家长签字','第4题选做')):
             assert clause in exercise_row['body'] and clause not in reading_row['body']
         assert reading['title_quote'] not in exercise_row['body']
         tasks={r['id']:dict(r) for r in c.execute('SELECT * FROM manual_tasks')}
         assert set(tasks)=={r['task_id'] for r in rows}
         items=[]
-        for role,row,wanted_refs in (('reading',reading_row,refs[:1]),('exercise',exercise_row,refs)):
+        for role,row,wanted_refs in (('reading',reading_row,refs if cross else refs[:1]),('exercise',exercise_row,refs)):
             plan=json.loads(row['plan']);anchors=plan['school_original_action']['anchors'];task=tasks[row['task_id']]
             assert [e['ref'] for e in json.loads(row['evidence'])]==wanted_refs
             assert list(dict.fromkeys(a['ref'] for a in anchors))==wanted_refs and all(a['upload_ids']==[] and a['pages']==[] for a in anchors)
@@ -144,7 +153,10 @@ try:
             if shared:
                 assert shared in row['body'] and shared in task['action']
                 expected_anchors.append(dict(ref=refs[0],upload_ids=[],pages=[],quote=shared))
-            if role=='exercise':expected_anchors.append(dict(ref=refs[1],upload_ids=[],pages=[],quote=texts[1]))
+            if cross:
+                assert texts[1].rstrip('。') in row['body'] and texts[1].rstrip('。') in task['action']
+                expected_anchors.append(dict(ref=refs[1],upload_ids=[],pages=[],quote=texts[1]))
+            elif role=='exercise':expected_anchors.append(dict(ref=refs[1],upload_ids=[],pages=[],quote=texts[1]))
             assert anchors==expected_anchors,'anchors must be literal clauses for this outcome, never the whole mixed notice'
             assert (task['title'],task['action'],task['child'],task['due'],task['original_status'])==(row['title'],row['body'],'虚构甲',today,'待跟进')
             assert len(row['title'])<=40 and not any(s in row['title'] for s in ('单面打印','自查','签字'))
@@ -166,7 +178,7 @@ try:
         assert [dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]==saved_tasks
     fixture.model.side_effect=AssertionError('no further model receipt allowed')
     proof=dict(synthetic_only=True,real_model_calls=0,collector_calls=0,printer_calls=0,
-        form=form,shared_condition=shared,today=today,child='虚构甲',source_id=fixture.source['id'],messages=payload['messages'],items=items,date_control=date_control,
+        form=form,shared_condition=shared,cross_message_standard=texts[1].rstrip('。') if cross else '',today=today,child='虚构甲',source_id=fixture.source['id'],messages=payload['messages'],items=items,date_control=date_control,
         first=first,failed_state=failed_state,failed_job=failed_job,delayed=delayed,recovered=recovered,done_job=done_job,replay=replay,
         mock_calls=calls,originals_preserved=True,source_cursor_preserved=True,
         scope='ordinary numbered and same-paragraph outcomes; literal exercise standards; fixed receipts are not model accuracy')
@@ -212,7 +224,8 @@ async function screenshot(page,name){await noOverflow(page);await page.screensho
  try{
   assert(proofDir,'SCHOOL_NATIVE_PROOF_DIR is required');const sourcePath=await fs.realpath(__dirname),proofPath=path.resolve(proofDir);assert(proofPath!==sourcePath&&!proofPath.startsWith(sourcePath+path.sep),'proof must stay outside the checkout');await fs.mkdir(proofDir,{recursive:true});const actualProofPath=await fs.realpath(proofDir);assert(actualProofPath!==sourcePath&&!actualProofPath.startsWith(sourcePath+path.sep),'proof symlink must stay outside the checkout');proofReady=true;
   browser=await chromium.launch({headless:true,channel:process.env.PLAYWRIGHT_CHANNEL||'chrome'});
-  for(const form of ['numbered','semicolon','shared','shared_all','weekday']){
+  // SCHOOL_NATIVE_FORMS may narrow the run to forms an unchanged-UI patch affects; the default keeps every form.
+  for(const form of (process.env.SCHOOL_NATIVE_FORMS||'numbered,semicolon,shared,shared_all,weekday,cross_message').split(',')){
   host=await server(form);proof.intake=await json(host.url+'__fixture/proof');proof.scenarios.push({form,intake:proof.intake});assert.equal(proof.intake.model_receipts,2);assert.equal(proof.intake.print_attempts,0);
   for(const width of [360,1440]){
    const page=await browser.newPage({viewport:{width,height:850},timezoneId:'Asia/Shanghai'});lastPage=page;page.noticeForm=form;page.setDefaultTimeout(10000);
@@ -240,9 +253,10 @@ async function screenshot(page,name){await noOverflow(page);await page.screensho
    assert.equal(await pending.count(),0,'the actual successful retry clears the processing warning');assert.equal(state.agent.sources[0].pending_message_count,0);
    assert.equal(await page.locator('#content [data-today-task]').count(),2,'today shows two independent school tasks for the selected child');
    assert.match(await card(reading.task_id).innerText(),/朗读Unit 2课文两遍/);assert(!(await card(reading.task_id).innerText()).includes('练习卷'));
-   for(const clause of ['完成练习卷第1–3题','单面打印','完成后自查并请家长签字','第4题选做'])assert((await card(exercise.task_id).innerText()).includes(clause));assert(!(await card(exercise.task_id).innerText()).includes('朗读'));
+   for(const clause of proof.intake.cross_message_standard?['完成练习卷第1–3题']:['完成练习卷第1–3题','单面打印','完成后自查并请家长签字','第4题选做'])assert((await card(exercise.task_id).innerText()).includes(clause));assert(!(await card(exercise.task_id).innerText()).includes('朗读'));
    for(const item of items){const title=await card(item.task_id).locator('h3').innerText();assert.equal(title,item.title);assert(title.length<=40&&!/单面打印|自查|签字/.test(title),'main list title stays short while the body retains standards');assert(!title.includes('选做')||(title.endsWith('（第4题选做）')&&title.split('选做').length===2),'only the compact optional-question boundary belongs in the title')}
    if(proof.intake.shared_condition)for(const item of items)assert((await card(item.task_id).innerText()).includes(proof.intake.shared_condition),'both tasks keep the explicit all-items standard');
+   if(proof.intake.cross_message_standard)for(const item of items)assert((await card(item.task_id).innerText()).includes(proof.intake.cross_message_standard),'both tasks keep the next message all-items standard');
    await screenshot(page,'today-'+width+'.png');
    const scopedViews=[];
    for(const item of items){
@@ -253,7 +267,7 @@ async function screenshot(page,name){await noOverflow(page);await page.screensho
      assert.equal(scoped.task_id,item.task_id);assert.equal(scoped.action_material.scoped,true);assert.deepEqual(scoped.action_material.quotes,item.anchors.filter(a=>a.ref===anchor.ref).map(a=>({text:a.quote,upload_ids:a.upload_ids,pages:a.pages})));assert.deepEqual(scoped.attachments,[]);scopedViews.push({task_id:item.task_id,message_id:messageID,quotes:scoped.action_material.quotes});
      const original=page.locator('#schoolOriginalDialog');await page.locator('#schoolOriginalDialog[open]').waitFor();await original.locator('[data-task-material-scope=action]').waitFor();
      await original.locator('[data-school-task-source]').click();const raw=proof.intake.messages.find(m=>m.id===messageID);await eventually(async()=>await original.locator('blockquote').textContent()===raw.text,'complete teacher original stays complete');
-     assert.equal(scoped.message.text,raw.text);if(item.role==='reading')assert((await original.locator('blockquote').innerText()).includes('完成练习卷'),'complete source is not a fabricated reading-only quote');
+     assert.equal(scoped.message.text,raw.text);if(item.role==='reading'&&messageID===proof.intake.messages[0].id)assert((await original.locator('blockquote').innerText()).includes('完成练习卷'),'complete source is not a fabricated reading-only quote');
      if(item.role==='exercise'&&messageID===proof.intake.messages[1].id)await screenshot(page,'exercise-original-'+width+'.png');
      await original.locator('[data-school-original-close]').click();
     }
