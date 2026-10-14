@@ -1152,6 +1152,25 @@ def teacher_caption_checks():
     unit_conflict['raw_model_response']['items'][0]['question']='把2.7米改写后以米作单位，作答必须写单位。'
     unit_conflict['question_documents'][0]['text']=unit_conflict['question_documents'][0]['text'].replace(scenarios[2]['raw_model_response']['items'][0]['question'],unit_conflict['raw_model_response']['items'][0]['question'])
     assert draft(unit_conflict)[1]['judgment']=='unknown','a caption cannot impose a unit different from the question'
+    cropped=json.loads(json.dumps(scenarios[3]))
+    cropped['raw_model_response']['items'][0]['student_answer']='6.29'
+    q=draft(cropped)[1]
+    assert q['judgment']=='unknown' and '原答抄写' in q['uncertainty'] and '6.290' in q['uncertainty'],q
+    assert not q['error_reason'] and not q['steps'],'numeric equivalence is not literal final-writing evidence'
+    scope=json.loads(json.dumps(scenarios[0]))
+    scope['question_documents']=[dict(name='虚构峦川卷原题',text='试卷名称：虚构峦川卷\n第26题 计算26+6。\n学生作答：32\n')]
+    footer='完整教师附注：本参考仅用于本卷可对应的题号；未核明的题目和作答不算完成，全部原文应保留'
+    scope['teacher_documents']=[dict(name='虚构峦川卷教师参考',text='教师参考答案\n试卷名称：虚构峦川卷\n第26题：32\n'+footer+'。\n')]
+    scope['raw_model_response']['items'][0].update(label='虚构峦川卷 第26题',question='',student_answer='32',answer='教师参考：32',judgment='correct',error_reason='',steps='')
+    scope['raw_model_response']['question_labels']=['虚构峦川卷 第26题']
+    q=draft(scope)[1]
+    assert q['judgment']=='correct' and q['answer']=='教师参考：32 '+footer,q
+    for ending in ('。本题还需写出计算过程。','。本题答案另以订正页为准。','。本题作答必须写厘米单位。'):
+        uncertain=json.loads(json.dumps(scope));uncertain['teacher_documents'][0]['text']=uncertain['teacher_documents'][0]['text'].replace(footer+'。',footer+ending)
+        q=draft(uncertain)[1]
+        assert q['judgment']=='unknown' and not q['error_reason'] and not q['steps'],q
+    scope_unknown=json.loads(json.dumps(scope));scope_unknown['raw_model_response']['items'][0].update(judgment='unknown',uncertainty='本题作答区域未核明。')
+    assert draft(scope_unknown)[1]['judgment']=='unknown','a whole-paper caution never upgrades raw unknown'
     return calls
 
 

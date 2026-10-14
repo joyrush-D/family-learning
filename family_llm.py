@@ -1995,6 +1995,13 @@ def _ref_caption_value(teacher,question):
     whose requirement the question itself also asks. Other prose remains part
     of the unverified whole reference, including alternative values and versions.
     """
+    # A separately headed whole-paper caution changes neither this entry's value
+    # nor the independently checked scope. No other prose is removed from it.
+    scope=re.fullmatch(r'([^\n]+)\n(?:完整)?(?:教师|老师)(?:附注|说明)[:：]\s*'
+        r'本参考仅(?:供|用于)本卷(?:可|已)?对应的题号[；;]'
+        r'未核明的题目和作答不算完成[，,](?:全部|完整)原文(?:应|须)保留[。]?',teacher.strip())
+    if scope and _ref_values(scope[1]) is not None:
+        return dict(value=scope[1],kind='scope')
     parts=re.split(r'[。；;\n]',teacher,maxsplit=1)
     if len(parts)!=2: return None
     written,note=parts[0].strip(),parts[1].strip().rstrip('。；;')
@@ -2042,23 +2049,23 @@ def _source_final_value(item,rows,titles,images):
     another leaf's field proves no omission. The full question must also match;
     this evidence is used only for the unit/decimal writing of that final value.
     """
-    if images: return False
+    if images: return None
     matches=_source_question_matches(item['label'],rows,titles,True)
-    if len(matches)!=1: return False
+    if len(matches)!=1: return None
     row=matches[0];lines=row['original_text'].splitlines();line=lines[row['line']-1].strip()
     mark=_REF_QUESTION.search(line)
-    if mark is None: return False
+    if mark is None: return None
     _,end=_ref_sub(line,mark.end())
-    if _ref_unspaced(line[end:].lstrip(' :：'))!=_ref_unspaced(item['question']): return False
+    if _ref_unspaced(line[end:].lstrip(' :：'))!=_ref_unspaced(item['question']): return None
     field=None
     for line in lines[row['line']:]:
         line=line.strip()
         if not line: continue
         if _REF_QUESTION.match(line) or _REF_SUB.match(line) or _REF_SECTION.match(line) or _REF_DECLARED.fullmatch(line): break
         found=re.fullmatch(r'(?:学生|孩子)(?:的)?(?:完整最终|最终完整|最终|完整)?(?:作答|答案)\s*[:：]\s*(.+)',line)
-        if not found or field is not None: return False
+        if not found or field is not None: return None
         field=found[1]
-    return field is not None and _ref_values(field) is not None and _ref_agrees(field,item['student_answer'])
+    return field if field is not None and _ref_values(field) is not None else None
 
 
 def _ref_caption_requirement(item,caption,rows,titles,images):
@@ -2067,6 +2074,12 @@ def _ref_caption_requirement(item,caption,rows,titles,images):
             or item['possible_cause'].strip() or caption['kind'] not in ('unit','precision','work')): return
     mine=_ref_values(item['student_answer']);theirs=_ref_values(caption['value'])
     if mine is None or theirs is None or len(mine)!=1 or len(theirs)!=1: return
+    final=_source_final_value(item,rows,titles,images)
+    if final is not None and _ref_unspaced(final)!=_ref_unspaced(item['student_answer']):
+        item.update(judgment='unknown',error_reason='',possible_cause='',steps='',
+                    uncertainty=('原答抄写尚未核明：同题最终文字作答为“%s”，模型抄为“%s”；不能以数值等价代替单位或小数位的原写法，请对照原件补查。'%(
+                        final,item['student_answer']))[:300])
+        return True
     missing=None
     if caption['kind']=='unit' and not mine[0][3]:
         lent=[mine[0][:3]+(theirs[0][3],mine[0][4]+theirs[0][3])]
@@ -2076,7 +2089,7 @@ def _ref_caption_requirement(item,caption,rows,titles,images):
     elif caption['kind']=='work' and _ref_compare(mine,theirs)=='same':
         missing='本轮只核明得数“%s”；题面还要求算式与得数，实际算式区域是否完整尚未核明，不能仅凭得数判定整题符合要求。'%item['student_answer']
     if not missing: return
-    if caption['kind']!='work' and _source_final_value(item,rows,titles,images):
+    if caption['kind']!='work' and final is not None:
         item.update(judgment='incorrect',error_reason=missing+'数值与参考相符，本次需订正的是明确书写要求。',
                     possible_cause='',steps='',uncertainty='')
     else:
