@@ -2218,7 +2218,7 @@ def _source_example_heading(line,field=False):
                               or field and bool(re.search('示例|示范|范例|例题',words)))
 
 
-def _source_question_inventory(documents):
+def _source_question_inventory(documents, *, limit=25):
     """Question headings from the selected, fully read originals, never from answers.
     Reuse the reference reader's paper/section/path identities. A body mentioning a
     question is no heading; conflicting identities remain unproven. These rows
@@ -2323,7 +2323,8 @@ def _source_question_inventory(documents):
         if len(group)==1 or (len({row['document_index'] for row in group})==len(group)
                              and len({row['original_text'] for row in group})==1): rows.append(group[0])
         else: unresolved=True
-    if len(rows)>25: raise LLMDraftError('本次文字原件明确列出超过25题，请缩小原件范围分批检查；本次未调用模型')
+    if len(rows)>limit:
+        raise LLMDraftError('本次文字原件明确列出超过%d题，请使用文字题号分批；原件保留，本次未调用模型'%limit)
     return rows,unresolved
 
 
@@ -2346,7 +2347,7 @@ def _source_question_matches(label,rows,titles,allow_bare):
 def homework_reference_draft(images, *, data_path=None, timeout=90, review=False, reference_images=(),
                              reference_documents=(), image_labels=(), reference_labels=(), program_coverage=(),
                              previous_documents=(), previous_text='', review_instruction='', task_action='', answer_note='',
-                             question_documents=(), pending_labels=()):
+                             question_documents=(), pending_labels=(), selected_labels=()):
     """Ordered worksheet/answer images; printing stays at four, answer review at eight."""
     if type(review) is not bool: raise ValueError('作业整理用途不正确')
     limit=MAX_HOMEWORK_REVIEW_IMAGES if review else 4
@@ -2464,7 +2465,18 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
     if previous_text: content.append(dict(type='text',text='上一轮尚未保存的完整意见（待复核，不作事实或答案依据）：'+previous_text))
     if pending_labels: content.append(dict(type='text',text='同一批原件上一轮仍待补查的题号（只作待核清单，不是题目、作答或答案证据）：'+json.dumps(list(pending_labels),ensure_ascii=False)))
     if program_coverage: content.append(dict(type='text',text='程序核对的实际原件覆盖：'+json.dumps(list(program_coverage),ensure_ascii=False)))
-    source_inventory,source_unresolved=_source_question_inventory(question_documents) if review else ([],False)
+    if selected_labels and (not review or images or not isinstance(selected_labels,(list,tuple))
+            or not 1<=len(selected_labels)<=25 or any(not isinstance(x,str) for x in selected_labels)
+            or len(set(selected_labels))!=len(selected_labels)):
+        raise LLMDraftError('文字分批须选用完整文字原件的1至25个明确题号；本次未调用模型')
+    all_source_inventory,source_unresolved=_source_question_inventory(question_documents,limit=100 if selected_labels else 25) if review else ([],False)
+    source_inventory=all_source_inventory
+    if selected_labels:
+        if source_unresolved or not set(selected_labels)<=set(row['label'] for row in all_source_inventory):
+            raise LLMDraftError('文字分批的题号或原卷范围无法核对；本次未调用模型')
+        source_inventory=[row for row in all_source_inventory if row['label'] in selected_labels]
+        prompt+='\n本次有程序明确选择的文字题号：只为这些完整卷别/大题/小题生成question_labels和items，不检查其他题号；其他完整原文保留作上下文，不能把未选题称作已检查。最多25题的结果上限不变。'
+        content.append(dict(type='text',text='程序明确选择的本批题号（只限定范围，不是作答或答案证据）：'+json.dumps(list(selected_labels),ensure_ascii=False)))
     result=_chat_json([dict(role='system',content=prompt),dict(role='user',content=content)],
                       schema,'family_homework_reference',timeout,data_path=data_path)
     if (not isinstance(result,dict) or not {'items','coverage'}<=set(result) or set(result)-{'items','coverage'}-({'comparison','question_labels'} if review else set())
@@ -2554,6 +2566,12 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
             label=re.sub(r'[\r\n\t]+',' ',label).strip(),judgment='unknown',
             uncertainty='本批识别到此题，但未返回逐题检查结果，请补查。') for label,key in zip(labels,normalized)]
     source_titles=_ref_titles(question_documents)
+    if selected_labels:
+        for item in result['items']:
+            found=_source_question_matches(item['label'],all_source_inventory,source_titles,True)
+            if len(found)!=1 or found[0]['label'] not in selected_labels:
+                raise LLMDraftError('模型返回了未选或无法唯一对应本批的题号；原结果保留，请重新核对')
+            item['label']=found[0]['label']
     def source_key(label):
         found=_source_question_matches(label,source_inventory,source_titles,not images)
         return ('source',found[0]['label']) if len(found)==1 else ('label',''.join(label.split()))

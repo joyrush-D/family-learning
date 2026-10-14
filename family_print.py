@@ -115,10 +115,21 @@ def _read_file(path, limit):
     return data
 
 
+def review_batch(value):
+    """Explicit bounded text labels, not a free-text instruction or answer."""
+    if (not isinstance(value,dict) or set(value)!={'inventory_sha256','labels'}
+            or not isinstance(value['inventory_sha256'],str) or not re.fullmatch('[a-f0-9]{64}',value['inventory_sha256'])
+            or not isinstance(value['labels'],list) or not 1<=len(value['labels'])<=25
+            or any(not isinstance(x,str) or not x.strip() or len(x)>80 or any(ord(ch)<32 or ord(ch)==127 for ch in x) for x in value['labels'])
+            or len({''.join(x.split()) for x in value['labels']})!=len(value['labels'])):
+        raise PrintError('请选择文字试卷中1至25个明确题号，保留完整原件')
+    return value
+
+
 def review_continuation(value):
     """Bounded unresolved labels are a checklist, never an answer or a grade. A check also names every label it knew and
     its generated text's hash, so a later check can tell that a parent rewrote that text."""
-    if (not isinstance(value,dict) or not {'scope_sha256','pending_labels'}<=set(value)<={'scope_sha256','pending_labels','known_labels','text_sha256'}
+    if (not isinstance(value,dict) or not {'scope_sha256','pending_labels'}<=set(value)<={'scope_sha256','pending_labels','known_labels','text_sha256','batch'}
             or ('known_labels' in value)!=('text_sha256' in value)
             or any(not isinstance(value[key],str) or not re.fullmatch('[a-f0-9]{64}',value[key]) for key in ('scope_sha256','text_sha256') if key in value)
             or any(not isinstance(labels,list) or len(labels)>25
@@ -127,6 +138,10 @@ def review_continuation(value):
                    or len({''.join(label.split()) for label in labels})!=len(labels)
                    for labels in (value[key] for key in ('pending_labels','known_labels') if key in value))):
         raise PrintError('上一轮待补题号或原件范围无法核对，请重新打开检查')
+    if 'batch' in value:
+        batch=review_batch(value['batch'])
+        if value.get('known_labels')!=batch['labels'] or not set(value['pending_labels'])<=set(batch['labels']):
+            raise PrintError('保存的文字分批与本批题号无法核对')
     return value
 
 
@@ -474,7 +489,7 @@ class PrintStore:
         return images,packet_sha([image['sha256'] for image in images])
 
     @staticmethod
-    def review_sources(data, questions, references, allowed, *, previous_sources=(), previous_text='', render=True):
+    def review_sources(data, questions, references, allowed, *, previous_sources=(), previous_text='', render=True, question_batch=None):
         """Explicit same-task originals; PDF subsets are reported, never silently selected."""
         import family_pdf
         import family_media
@@ -581,8 +596,9 @@ class PrintStore:
                     if item['role']=='reference': reference_images.append(image);reference_labels.append(label)
                     else: images.append(image);image_labels.append(label)
         packet=[dict(role=i['role'],source=i['source'],name=i['name'],mime=i['mime'],sha256=i['sha256'],binding=i['binding']) for i in items]
+        fingerprint=packet if question_batch is None else dict(originals=packet,batch=review_batch(question_batch))
         return dict(images=images,reference_images=reference_images,question_documents=question_documents,documents=documents,previous_documents=previous_documents,image_labels=image_labels,
-                    reference_labels=reference_labels,coverage=coverage,fingerprint=_hash(_json(packet).encode()),
+                    reference_labels=reference_labels,coverage=coverage,fingerprint=_hash(_json(fingerprint).encode()),
                     scope_fingerprint=_hash(_json([i for i in packet if i['role']!='previous']).encode()),previous_continuations=continuations,
                     question_sources=[i['source'] for i in items if i['role']=='question'],
                     reference_sources=[i['source'] for i in items if i['role']=='reference'],
