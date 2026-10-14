@@ -1240,7 +1240,8 @@ def natural_unit_instruction_checks():
     assert q['judgment']=='unknown' and '原答抄写' in q['uncertainty'] and '270厘米' in q['uncertainty'],q
     assert draft(allowed,teacher='270厘米。评分要求：本题还须写出计算过程。',
                  changes=dict(answer='教师参考：270厘米。'))['judgment']=='unknown'
-    assert draft(allowed,teacher='270厘米。本题以修订版答案为准。')['judgment']=='unknown'
+    assert draft(allowed,teacher='270厘米。本题以修订版答案为准。',
+                 changes=dict(answer='教师参考：270厘米。'))['judgment']=='unknown'
     for changes in (dict(teacher_paper='虚构另一单位卷'),dict(source_paper='虚构另一单位卷'),dict(teacher_path='第1题（3）')):
         assert draft(allowed,**changes)['judgment']=='unknown',changes
     q=draft(allowed,student='260')
