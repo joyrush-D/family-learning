@@ -1172,7 +1172,7 @@ def homework_saved_review(task_id,record_id):
         parsed=family_print.review_text(body,saved=True)
         return dict(task_id=task_id,record_id=record_id,created=row['created'],original_record_id=original,**parsed)
 
-def homework_saved_pending(task_id,record_id,scope):
+def homework_saved_states(task_id,record_id):
     """A default reopen continues the newest saved same-scope checklist's labels only, never its text, answers or grades."""
     try:
         with connect_read_only() as c:
@@ -1188,15 +1188,63 @@ def homework_saved_pending(task_id,record_id,scope):
             try: saved=homework_saved_review(task_id,ident);state=saved.get('continuation')
             except (family_print.PrintError,OSError,ValueError):
                 raise family_print.PrintError('此前保存的检查无法核对，本次未调用模型；原件保留，可下载核对或稍后重试','saved_review_unverifiable',409) from None
-            if state is not None and state['scope_sha256']==scope: return family_print.review_pending(state,saved['text'])
+            if state is not None: yield state,saved['text']
     except sqlite3.OperationalError:
         raise family_print.PrintError('此前保存的检查暂时无法读取，本次未调用模型；请稍后重试','storage_unavailable',503) from None
+
+def homework_saved_pending(task_id,record_id,scope):
+    for state,text in homework_saved_states(task_id,record_id):
+        if state['scope_sha256']==scope: return family_print.review_pending(state,text)
     return []
+
+def homework_batch_inventory(materials):
+    if len(materials['question_documents'])!=len(materials['question_sources']) or materials['images']:
+        raise family_print.PrintError('文字题号分批只用于完整可读的TXT或纯文字Word；照片/PDF仍按所选页检查')
+    rows,unresolved=family_llm._source_question_inventory(materials['question_documents'],limit=100)
+    if not rows or unresolved:
+        raise family_print.PrintError('原卷有无法唯一核对的题号或范围，暂不能自动文字分批；完整原件保留')
+    catalog=[{key:row[key] for key in ('label','document','line')} for row in rows]
+    digest=hashlib.sha256(json.dumps(dict(source=materials['scope_fingerprint'],questions=catalog),ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+    return catalog,digest
+
+def homework_batch_validate(materials,batch):
+    batch=family_print.review_batch(batch);catalog,digest=homework_batch_inventory(materials)
+    labels=[q['label'] for q in catalog if q['label'] in batch['labels']]
+    if digest!=batch['inventory_sha256']:
+        raise family_print.PrintError('原卷或题号已变化，请重新读取题号；本次未调用模型','review_source_changed',409)
+    if labels!=batch['labels']:
+        raise family_print.PrintError('所选题号须唯一对应原卷并保持原顺序')
+    return catalog
+
+def homework_batch_progress(task_id,record_id,scope,digest,catalog):
+    states={};allowed={q['label'] for q in catalog}
+    for state,text in reversed(list(homework_saved_states(task_id,record_id))):
+        if state['scope_sha256']!=scope: continue
+        if 'batch' in state and state['batch']['inventory_sha256']!=digest: continue
+        pending=set(family_print.review_pending(state,text))
+        for label in state.get('known_labels',state['pending_labels']):
+            if label in allowed: states[label]='unknown' if label in pending else 'reviewed'
+    return states
+
+def homework_review_catalog(obj):
+    if not isinstance(obj,dict) or set(obj)-{'purpose','task_id','record_id','expected_created','question_sources','reference_sources','previous_sources'} or 'expected_created' not in obj:
+        raise family_print.PrintError('请从原作答读取文字题号')
+    with connect() as c: context=homework_review_context(c,obj.get('task_id'),obj.get('record_id'),obj['expected_created'])
+    materials=family_print.PrintStore.review_sources(DATA,obj.get('question_sources'),obj.get('reference_sources',[]),context['allowed'],previous_sources=obj.get('previous_sources',[]))
+    ids=[s['id'] for s in materials['question_sources']+materials['reference_sources']+materials['previous_sources']]
+    basis=dict(record_id=obj['record_id'],created=context['record']['created'],photo_ids=[i for i in ids if i in json.loads(context['record']['attachments'])],question_sources=materials['question_sources'],reference_sources=materials['reference_sources'],material_sha256=materials['fingerprint'],context_sha256=context['context_sha256'])
+    if materials['previous_sources']: basis['previous_sources']=materials['previous_sources']
+    with connect() as c: scope=guard_homework_review(c,obj['task_id'],basis,ids)
+    catalog,digest=homework_batch_inventory(materials)
+    states=homework_batch_progress(obj['task_id'],obj['record_id'],scope,digest,catalog)
+    questions=[q|dict(state=states.get(q['label'],'unchecked')) for q in catalog]
+    next_labels=[q['label'] for q in questions if q['state']=='unchecked'][:25] or [q['label'] for q in questions if q['state']=='unknown'][:25]
+    return dict(inventory_sha256=digest,questions=questions,next_labels=next_labels,scope_sha256=scope,created=context['record']['created'])
 
 def homework_review_basis(obj):
     """Structural validation is separate from the save transaction's live source checks."""
     required={'record_id','created','photo_ids','question_sources','reference_sources','material_sha256','context_sha256'}
-    if not isinstance(obj,dict) or not required<=set(obj) or set(obj)-required-{'previous_sources'}:
+    if not isinstance(obj,dict) or not required<=set(obj) or set(obj)-required-{'previous_sources','question_batch'}:
         raise RecordError('批改所依据的原件格式不正确，请重新核对',400,'review_basis_invalid')
     if (type(obj['record_id']) is not int or not 0<obj['record_id']<=9223372036854775807
             or not isinstance(obj['created'],str) or not obj['created'] or len(obj['created'])>40
@@ -1222,6 +1270,7 @@ def homework_review_basis(obj):
         ids.append(source['id'])
     if len(set(ids))!=len(ids) or not set(obj['photo_ids'])<=set(ids):
         raise RecordError('批改所依据的原件重复或归属不正确',400,'review_basis_invalid')
+    if 'question_batch' in obj: family_print.review_batch(obj['question_batch'])
     return obj
 
 def guard_homework_review(c,task_id,basis,attachments):
@@ -1232,41 +1281,55 @@ def guard_homework_review(c,task_id,basis,attachments):
         if not {s['id'] for s in basis['question_sources']}&set(record_ids): raise ValueError()
         if set(basis['photo_ids'])!={ident for ident in ids if ident in record_ids} or not set(ids)<=set(attachments): raise ValueError()
         # No second database connection, PDF probe, conversion or model inside the save transaction.
-        materials=family_print.PrintStore.review_sources(DATA,basis['question_sources'],basis['reference_sources'],context['allowed'],previous_sources=basis.get('previous_sources',[]),render=False)
+        materials=family_print.PrintStore.review_sources(DATA,basis['question_sources'],basis['reference_sources'],context['allowed'],previous_sources=basis.get('previous_sources',[]),render=False,question_batch=basis.get('question_batch'))
+        if 'question_batch' in basis: homework_batch_validate(materials,basis['question_batch'])
         if materials['fingerprint']!=basis['material_sha256'] or context['context_sha256']!=basis['context_sha256']: raise ValueError()
         return hashlib.sha256((materials['scope_fingerprint']+context['context_sha256']).encode()).hexdigest()
     except (ValueError,KeyError,TypeError,OSError,family_reading.ReadingError):
         raise RecordError('原作答、题目或参考已变化；批改依据需要重新核对，本次反馈未保存',409,'review_basis_changed') from None
 
 def homework_review_draft(obj):
-    if not isinstance(obj,dict) or set(obj)-{'purpose','task_id','record_id','expected_created','question_sources','reference_sources','previous_sources','review_instruction','previous_text','previous_continuation'}:
+    if not isinstance(obj,dict) or set(obj)-{'purpose','task_id','record_id','expected_created','question_sources','reference_sources','previous_sources','review_instruction','previous_text','previous_continuation','question_batch'}:
         raise family_print.PrintError('请只提供这次作答的题目与教师参考')
     if 'expected_created' not in obj: raise family_print.PrintError('请保留原作答版本后重试')
     instruction=clean(obj,'review_instruction',1000);previous_text=clean(obj,'previous_text',12000)
     continuation=family_print.review_continuation(obj['previous_continuation']) if obj.get('previous_continuation') is not None else None
     with connect() as c:
         context=homework_review_context(c,obj.get('task_id'),obj.get('record_id'),obj['expected_created'])
-    materials=family_print.PrintStore.review_sources(DATA,obj.get('question_sources'),obj.get('reference_sources',[]),context['allowed'],previous_sources=obj.get('previous_sources',[]),previous_text=previous_text)
+    batch=family_print.review_batch(obj['question_batch']) if 'question_batch' in obj else None
+    materials=family_print.PrintStore.review_sources(DATA,obj.get('question_sources'),obj.get('reference_sources',[]),context['allowed'],previous_sources=obj.get('previous_sources',[]),previous_text=previous_text,question_batch=batch)
+    if batch: catalog=homework_batch_validate(materials,batch)
     ids=[source['id'] for source in materials['question_sources']+materials['reference_sources']+materials['previous_sources']]
     basis=dict(record_id=obj['record_id'],created=context['record']['created'],
                photo_ids=[ident for ident in ids if ident in json.loads(context['record']['attachments'])],
                question_sources=materials['question_sources'],reference_sources=materials['reference_sources'],
                material_sha256=materials['fingerprint'],context_sha256=context['context_sha256'])
     if materials['previous_sources']: basis['previous_sources']=materials['previous_sources']
+    if batch: basis['question_batch']=batch
     with connect() as c: scope=guard_homework_review(c,obj['task_id'],basis,ids)
     snapshots=[(ident,value) for ident,value in materials['previous_continuations'] if value['scope_sha256']==scope]
     if continuation is not None and continuation['scope_sha256']==scope: pending=family_print.review_pending(continuation,previous_text)
     elif snapshots: pending=max(snapshots,key=lambda entry:entry[0])[1]['pending_labels']
     else: pending=homework_saved_pending(obj['task_id'],obj['record_id'],scope)
+    if batch:
+        states=homework_batch_progress(obj['task_id'],obj['record_id'],scope,batch['inventory_sha256'],catalog)
+        pending=[label for label in batch['labels'] if label in pending or states.get(label)=='unknown']
     draft=family_llm.homework_reference_draft(materials['images'],data_path=DATA,timeout=120,review=True,
         question_documents=materials['question_documents'],
         reference_images=materials['reference_images'],reference_documents=materials['documents'],
         image_labels=materials['image_labels'],reference_labels=materials['reference_labels'],program_coverage=materials['coverage'],
         previous_documents=materials['previous_documents'],previous_text=previous_text,review_instruction=instruction,
-        task_action=context['task']['action'],answer_note=context['record']['note'],pending_labels=pending)
+        task_action=context['task']['action'],answer_note=context['record']['note'],pending_labels=pending,selected_labels=batch['labels'] if batch else ())
     with connect() as c: guard_homework_review(c,obj['task_id'],basis,ids)
     draft['continuation']=dict(scope_sha256=scope,pending_labels=[q['label'] for q in draft['questions'] if q['judgment']=='unknown'],
         known_labels=[q['label'] for q in draft['questions']],text_sha256=family_print.review_text_sha256(draft['text']))
+    if batch:
+        summary='文字分批：原件保留，共明确读到%d个题号；本批检查%d题，另外%d题未在本批检查。各批保留在同一原作答下，不表示整卷已完成。'%(len(catalog),len(batch['labels']),len(catalog)-len(batch['labels']))
+        draft['coverage']+='\n'+summary;draft['text']+='\n\n'+summary
+        if len(draft['text'])>12000: raise family_print.PrintError('本批检查文字超过保存上限，请减少所选题号；原件和原草稿保留')
+        draft['continuation'].update(batch=batch,text_sha256=family_print.review_text_sha256(draft['text']))
+        family_print.review_continuation(draft['continuation'])
+        draft['batch']=dict(total=len(catalog),selected_labels=batch['labels'],inventory_sha256=batch['inventory_sha256'])
     return dict(draft=draft,question_sha256=materials['fingerprint'],review_basis=basis)
 
 def save_task(obj, connection=None):
@@ -1370,6 +1433,8 @@ def save_task_feedback(obj):
                 parsed=family_print.review_text(family_print._read_file(Path(DATA)/'uploads'/output_id,family_print.MAX_SOURCE),saved=True)
                 if 'continuation' in parsed and parsed['continuation']['scope_sha256']!=scope:
                     raise RecordError('检查待补题号不属于本次原件范围；本次反馈未保存',409,'review_basis_changed')
+                if 'question_batch' in basis and parsed.get('continuation',{}).get('batch')!=basis['question_batch']:
+                    raise RecordError('保存检查的文字分批与本批依据不同；本次反馈未保存',409,'review_basis_changed')
         if previous is not None and all(record[k]==(saved if k=='attachments' else previous[k]) for k in record if k not in ('child','source','title','review_basis')):
             # The same correction again (for example after a lost reply) changes nothing and is not a conflict.
             if request_key: raise RecordError('更正已有文字记录不能复用新增反馈的提交标识')
@@ -2393,6 +2458,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200,reading_store().mutate(path.removeprefix('/api/reading/'),obj))
             if path=='/api/print/prepare':
                 return self.reply(200,dict(preparation=print_store().prepare(obj.get('source'),obj.get('idempotency_key'))))
+            if path=='/api/print/homework/catalog':
+                try: return self.reply(200,homework_review_catalog(obj))
+                except family_llm.LLMDraftError as e: return self.reply(400,dict(error=str(e)))
             if path=='/api/print/homework/draft':
                 self.connection.settimeout(160)
                 purpose=obj.get('purpose','reference')
