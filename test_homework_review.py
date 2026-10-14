@@ -1229,6 +1229,16 @@ def natural_unit_instruction_checks():
     for behavior in ('孩子不写单位。','原作答不带单位。','原作答：不带单位。','孩子行为：只填数字，不带单位。',
                      '本题要求：只填数字。原作答：不带单位。'):
         assert draft('',question='2.7米改写为厘米。'+behavior)['judgment']=='unknown',behavior
+    for instruction in ('答题要求：只填数字，不带单位。','作答要求：答案不写单位。',
+                        '书写规定：答案不写单位。','本题要求：只写数值，不写单位。'):
+        assert draft('',question='2.7米改写为厘米。'+instruction)['judgment']=='correct',instruction
+    # A requirement to observe/record is not the child's answer-writing instruction.
+    for observation in ('答题观察要求：记录孩子已有答案，答案不写单位（实际作答描述，非书写许可）。',
+                        '本题要求：记录孩子已有答案，答案不写单位。',
+                        '观察本题要求：只填数字，答案不写单位。',
+                        '本题观察要求：只填数字，答案不写单位。',
+                        '本题要求：观察孩子书写，答案不写单位。'):
+        assert draft('',question='3.2厘米改写为毫米。'+observation,student='32',teacher='32毫米。')['judgment']=='unknown',observation
     # Each permission stays with its numbered result, including a positive counterpart.
     pair='2.7米和2.7米分别改写为厘米。本题要求：'
     scoped=pair+'第一项答案不写单位；第二项必须写单位。'
