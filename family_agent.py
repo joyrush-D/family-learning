@@ -1876,7 +1876,7 @@ def _school_late_shared(store, c, child_id, canonical, natives):
     if any, equals the outcomes. Every outcome must already be exactly one saved task. Anything else proves nothing.
     """
     plan=json.loads(canonical['plan']);action=plan.get('school_native_action')
-    if plan.get('school_changes') or [e['ref'] for e in json.loads(canonical['evidence'])]!=[action.get('ref')]:return None
+    if not isinstance(action,dict) or plan.get('school_changes') or [e['ref'] for e in json.loads(canonical['evidence'])]!=[action.get('ref')]:return None
     source_id,message_id=action['ref'][8:].rsplit(':',1)
     _,listing=store._message_context(c,dict(child_id=child_id,source_id=source_id,message_id=message_id))
     later=c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND rowid>(SELECT rowid FROM agent_messages WHERE source_id=? AND id=?) ORDER BY rowid LIMIT 1',
