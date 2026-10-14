@@ -1526,13 +1526,8 @@ _REF_NO=r'(?:[不没未无非勿免否]|(?<![分区差特类级识辨判个告�
 _REF_UNROUNDED=_REF_NO+r'[^，,。；;！？!?\n]{0,6}(?:四舍五入|近似)'
 
 
-def _ref_binds(question,start,end):
-    """How the requirement written at question[start:end] binds the final result, read in its own clause only: 'yes' when
-    asked outright, 'no' when that clause negates it, 'step' when it is for a step before the last (先…, 中间…, …后再…),
-    None when conditional, optional or one of alternatives, so unproven. Another clause's 不 or 如果 is not this one's.
-    A bare word listed with 、 is read with its whole list (「不要求算式、步骤」 denies 步骤, 「单位、步骤都不必写」 asks no
-    单位), a requirement with its own verb (「…、保留两位小数」) by its own words. An equation or steps asked first
-    (「先列式，再…」) are still written by the child, so they are never a step's."""
+def _ref_clause_parts(question,start,end):
+    """The existing requirement clause/list boundaries, shared by binding and unit permission proof."""
     clauses=re.split(_REF_CLAUSE,question[:start]);head=clauses[-1]
     before=next((c for c in reversed(clauses[:-1]) if c.strip()),'')
     tail=re.split(_REF_CLAUSE,question[end:])[0]
@@ -1540,6 +1535,17 @@ def _ref_binds(question,start,end):
         listed=_REF_CLAUSE.replace('、','')
         if not head.strip(): head=re.split(listed,question[:start])[-1]
         if not tail.strip(): tail=re.split(listed,question[end:])[0]
+    return head,tail,before
+
+
+def _ref_binds(question,start,end):
+    """How the requirement written at question[start:end] binds the final result, read in its own clause only: 'yes' when
+    asked outright, 'no' when that clause negates it, 'step' when it is for a step before the last (先…, 中间…, …后再…),
+    None when conditional, optional or one of alternatives, so unproven. Another clause's 不 or 如果 is not this one's.
+    A bare word listed with 、 is read with its whole list (「不要求算式、步骤」 denies 步骤, 「单位、步骤都不必写」 asks no
+    单位), a requirement with its own verb (「…、保留两位小数」) by its own words. An equation or steps asked first
+    (「先列式，再…」) are still written by the child, so they are never a step's."""
+    head,tail,before=_ref_clause_parts(question,start,end)
     tail=re.sub('[均都皆即]可以?','',tail)  # 「…即可」 asks it; 「可以…」 only allows it.
     if re.search(_REF_NO+'|毋须',head): return 'no'
     if not re.search(_REF_WORK,question[start:end]) and (re.search(r'先|中间|过程|每一?步|计算时|计算中',head) or re.search(
@@ -1675,6 +1681,28 @@ def _ref_places_each(question,count):
 _REF_COPY=r'(?:照|誊)?抄写?|[补誊填]?写|(?:带|加|补|注|标|填)[上明出]'  # Writing a unit down: 「照抄」「写上」「带上」「注明」.
 
 
+def _ref_unit_copy_asks(question,match):
+    """The existing unit note's own writing actions, before the next numbered result."""
+    head=re.split(_REF_CLAUSE+'|[：:]',question[:match.start()])[-1]
+    note=re.split(r'[；;。！？!?\n)）]',question[match.end():])[0]
+    part=_REF_PART.search(note);note=note[:part.start()] if part else note
+    at=match.start()-len(head)
+    asks=[(at+m.start(),at+m.end()) for m in re.finditer(r'(?:%s)(?![在到进时]|得?数)'%_REF_COPY,head)]
+    asks+=[(match.end()+m.start(),match.end()+m.end()) for m in re.finditer(
+        r'(?:%s)(?:[上出明全]|出来|上去)?(?:即可|才行)?(?=\s*(?:%s|$))'%(_REF_COPY,_REF_CLAUSE),note)]
+    return asks
+
+
+def _ref_unit_copy_scope(question,start,end):
+    """A later contrasting writing action cannot borrow the earlier action's negation."""
+    head,_,_=_ref_clause_parts(question,start,end)
+    contrast=list(re.finditer('但|却|仍|然而|不过|可是',head))
+    if contrast:
+        offset=start-len(head)+contrast[-1].end()
+        return _ref_binds(question[offset:],start-offset,end-offset)
+    return _ref_binds(question,start,end)
+
+
 def _ref_printed(question,match):
     """Whether the 单位 at match only tells that the page already prints or gives the unit (「（单位已印在空格后）」,
     「空格后已印好单位」, 「单位已经给出」): such words ask the child for nothing, neither a unit nor its waiver. Read
@@ -1689,27 +1717,55 @@ def _ref_printed(question,match):
             r'\s*[：:]?\s*(?:在'+near+r')?[都均也皆是]?(?:(?:已经?|早已)(?:预先?|提前|打|在'+near+r')?[印给]|(?:预先?|提前|打)?印)',
             question[match.end():])):
         return False
-    head=re.split(_REF_CLAUSE+'|[：:]',question[:match.start()])[-1]
-    note=re.split(r'[；;。！？!?\n)）]',question[match.end():])[0]
-    part=_REF_PART.search(note);note=note[:part.start()] if part else note
-    at=match.start()-len(head)
-    asks=[(at+m.start(),at+m.end()) for m in re.finditer(r'(?:%s)(?![在到进时]|得?数)'%_REF_COPY,head)]
-    asks+=[(match.end()+m.start(),match.end()+m.end()) for m in re.finditer(
-        r'(?:%s)(?:[上出明全]|出来|上去)?(?:即可|才行)?(?=\s*(?:%s|$))'%(_REF_COPY,_REF_CLAUSE),note)]
-    return all(_ref_binds(question,start,end)=='no' for start,end in asks)
+    return all(_ref_unit_copy_scope(question,start,end)=='no' for start,end in _ref_unit_copy_asks(question,match))
+
+
+def _ref_unit_absent(question,match):
+    """A negated print/given fact, with no permission or child-writing action inferred."""
+    fact=r'(?:尚未|并未|未|没(?:有)?|没有|不曾)(?:预先?|提前|预)?(?:印[好有出上了着]*|给出)'
+    return bool(re.search(fact+r'\s*$',question[:match.start()]) or re.match(r'\s*'+fact,question[match.end():]))
+
+
+def _ref_unit_waiver(question,match):
+    """Positive evidence of permission to omit writing this unit, never a negated page/answer fact.
+    Reuse its own clause/list and let _ref_whose bind any permission to the existing result path.
+    """
+    head,tail,before=_ref_clause_parts(question,match.start(),match.end())
+    # An explicit but unread result marker cannot become a permission for all
+    # results merely because the existing scope parser found no numbered part.
+    if re.search(r'第[^，,；;。！？!?\n：:]{1,8}?(?:项|个(?:结果|答案|得数|数|空)?|空|问|小题)',
+            _REF_PART.sub('',question)): return False
+    if (re.search(r'如果|若|假如|假设|倘|要是|万一|的话|如需|必要|[或则时]|不是|并非|并不|不能|不得|不许',head+tail)
+            or re.search(r'如果|若|假如|假设|倘|要是|万一|的话|如需|时$',before)): return False
+    no=r'(?:无需|无须|毋须|不需(?:要)?|不用|不必|不要求|不要|免(?:于)?)'
+    write=r'(?:%s|书写|标注|带|加|注|标|填)'%_REF_COPY
+    again=r'(?:再|另(?:外|行)?)?'
+    printed=r'(?:(?:已经?|预先?|提前|预)?印[好有出上了着]*)?'
+    # A missing print predicate (未印/没印) is not one of these writing modalities.
+    if (re.search(no+again+r'(?:'+write+r'[上出明全]?'+printed+r')?\s*$',head)
+            and re.match(r'^\s*(?:$|、|(?:即可|就行|了)\s*$)',tail)): return True
+    listed=r'(?:\s*、\s*(?:%s))*\s*[均都皆也]?'%_REF_NOUN
+    return bool(re.match(listed+no+again+write+r'[上出明全]?(?=\s*(?:$|[。；;，,]))',tail))
 
 
 def _ref_lent(question,count,n,unit):
     """Whether result n of count ordered results, written without a unit, takes the teacher's unit: only where its own
     words (_ref_whose) waive one or print that unit after a blank, and no words that may be its own ask one, so one
     result's waiver never excuses another's missing unit. Words that only tell the unit is printed (_ref_printed) neither
-    ask nor waive one, and a negated word still waives; words that also have the child write or copy it (「照抄已印单位」)
+    ask nor waive one. Only explicit writing permission (_ref_unit_waiver) waives; an absent print or an unwritten answer
+    supplies none. Words that also have the child write or copy it (「照抄已印单位」)
     ask it, which the unit printed after the blank never meets. A lone result is held to this as each of several is."""
     mark=r'(?:_{2,}|＿{2,}|□+)'
     blank=r'(?:%s|[（(]\s*[)）]|\(\s*%s\s*\)|（\s*%s\s*）)\s*'%(mark,mark,mark)
     whose=lambda at:_ref_whose(question,count,at)[2]
-    spoken=[(_ref_binds(question,m.start(),m.end()),whose(m.start())) for m in re.finditer('单位',question)
-            if not _ref_printed(question,m) or _ref_binds(question,m.start(),m.end())=='no']
+    spoken=[]
+    for match in re.finditer('单位',question):
+        if any(_ref_unit_copy_scope(question,start,end)!='no' and (whose(start) is None or n in whose(start))
+                for start,end in _ref_unit_copy_asks(question,match)): return False
+        waiver=_ref_unit_waiver(question,match)
+        if (_ref_printed(question,match) or _ref_unit_absent(question,match)) and not waiver: continue
+        scope=_ref_binds(question,match.start(),match.end())
+        spoken.append(('no' if waiver else None if scope=='no' else scope,whose(match.start())))
     if any(scope!='no' and (results is None or n in results) for scope,results in spoken): return False
     return (any(n in (results or ()) for _,results in spoken)
             or any(n in (whose(m.start()) or ()) for m in re.finditer(blank+re.escape(unit),question)))
@@ -2083,17 +2139,28 @@ def _ref_caption_value(teacher,question,question_kind='objective'):
     return None
 
 
-def _source_final_answer(item,rows,titles,images):
+def _source_final_answer(item,rows,titles,images,*,identity_only=False,unambiguous=False):
     """Prove the literal answer in this question's own complete text field.
 
     A model's cropped answer, a sample, a fragment-labelled field, an image, or
-    another leaf's field proves no omission. The full question must also match;
-    this proves the source writing, never correctness or semantic equivalence.
+    another leaf's field proves no omission. The full question must also match
+    for a requirement proof; identity_only can only reject a transcription
+    against the inventory's own closed field. Neither gives a grade or value.
     """
     if images: return None
     matches=_source_question_matches(item['label'],rows,titles,True)
     if len(matches)!=1: return None
     row=matches[0];lines=row['original_text'].splitlines();line=lines[row['line']-1].strip()
+    if identity_only:
+        # A closed original field can reject a wrong transcription even when
+        # the model abbreviated the stem. It supplies no grade or missing value.
+        if unambiguous is not True:return None
+        span=row.get('window_span')
+        if span is None:return None
+        line=lines[span[1]-1].strip();pointer,end=_ref_sub(line,teacher=True)
+        if pointer is not None:line=line[end:].lstrip()
+        field=re.fullmatch(r'(?:(?:学生|孩子)(?:的)?(?:完整最终|最终完整|最终|完整)?(?:作答|答案)|实际作答)\s*[:：]\s*(.*)',line)
+        return field[1] if field else None
     if _REF_SUB.match(line): _,end=_ref_sub(line,teacher=True)
     else:
         mark=_REF_QUESTION.search(line)
@@ -2788,7 +2855,15 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
                 item['judgment']='unknown'
                 item['error_reason']=item['possible_cause']=item['steps']=''
                 item['uncertainty']=('字母作答与教师参考的比较和模型判定矛盾，请重新核对。'+item['uncertainty'].strip())[:300]
-            elif not caption_checked: _ref_value_check(item,student,reference)
+            elif not caption_checked:
+                final=(_source_final_answer(item,source_inventory,_ref_titles(question_documents),bool(images),
+                        identity_only=True,unambiguous=not source_unresolved)
+                    if question_kind=='objective' and '单位' in item['question'] and item['judgment']!='unknown'
+                    and _ref_values(student) is not None and _ref_values(reference) is not None else None)
+                if final is not None and _ref_unspaced(final)!=_ref_unspaced(item['student_answer']):
+                    item.update(judgment='unknown',error_reason='',possible_cause='',steps='',
+                        uncertainty=('原答抄写尚未核明：同题完整文字作答为“%s”，模型抄为“%s”；不能以单位描述代替原写法，请对照原件补查。'%(final,item['student_answer']))[:300])
+                else:_ref_value_check(item,student,reference)
         if review and not item['question'].strip() and question_kind!='objective':
             # Matching reference words cannot establish a subjective answer's completeness.
             # Keep the observed answer and teacher original, but not the model's unsupported grade.
