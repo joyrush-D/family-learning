@@ -860,17 +860,17 @@ def save_upload(stream, size, encoded_name):
     try:
         with tempfile.NamedTemporaryFile(dir=directory,prefix='.upload-',delete=False) as f:
             temporary=Path(f.name)
-            left=size
+            left=size;digest=hashlib.sha256()
             while left:
                 block=stream.read(min(left,65536))
                 if not block: raise ValueError('文件上传不完整，请重试')
-                f.write(block);left-=len(block)
+                f.write(block);digest.update(block);left-=len(block)
         mime=upload_mime(temporary,name)
         with connect() as c:
             c.execute('INSERT INTO uploads (id,name,size,mime,created) VALUES (?,?,?,?,?)',(ident,name,size,mime,dt.datetime.now().isoformat()))
             os.replace(temporary,target)
             stored=True
-        return upload_info(dict(id=ident,name=name,size=size,mime=mime))
+        return upload_info(dict(id=ident,name=name,size=size,mime=mime))|dict(sha256=digest.hexdigest())
     except Exception:
         if stored: target.unlink(missing_ok=True)
         raise
