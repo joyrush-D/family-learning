@@ -237,6 +237,7 @@ def run_window_guards():
     for carrier in ('表2','材料甲','附录A','上图','下表'):
         reject(text.replace('第1题：阅读材料后选出字母A。','第1题：根据'+carrier+'填写。'),'第2行')
     reject(attributed,'上下文')
+    reject(scored.replace('全部26小题','全部27小题'),'上下文')
     reject(text.replace('第1题：阅读材料后选出字母A。','第1题：沿用上一题材料。'),'第2行')
     reject(text.replace('第2题：阅读材料后选出字母A。','第2题：沿用上一题材料。'),'第4行')
     reject('试卷名称：虚构河湾整卷\n公共材料：'+'字'*12001+'\n'+text.split('\n',1)[1],'上下文')

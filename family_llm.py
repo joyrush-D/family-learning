@@ -2466,7 +2466,7 @@ def _source_window_references(body,owner,rows,titles):
         scope_tail=re.match(r'(的?(?:(?:全部|所有|共)\s*\d{1,3}\s*个?(?:小题|小问|问)|(?:全部|所有|各)(?:小题|小问)))\s*[)）](?=\s*[:：。；;，,]|$)',clause)
         if scope_tail:clause=scope_tail[1]
         count=re.fullmatch(r'的?(?:全部|所有|共)\s*(\d{1,3})\s*个?(?:小题|小问|问)',clause)
-        pure_range=not clause or count is not None or re.fullmatch(r'的?(?:全部|所有|各)(?:小题|小问)',clause)
+        pure_range=(not clause or count is not None or re.fullmatch(r'的?(?:全部|所有|各)(?:小题|小问)',clause)) and (not count or int(count[1])==len(found))
         data_carrier=re.search(r'(?:给出|提供|列出|所述|所示|所用|里(?:的)?|中(?:的)?)[^。；;\n]{0,24}(?:图|表|数据|结果|材料|题干|原文|答案|作答|条件|步骤)',tail)
         target=found[0]
         same_parent=owner and owner[:3]==(target['paper'],target['section'],target['number']) and owner[3]==sub
