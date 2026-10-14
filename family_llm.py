@@ -2672,7 +2672,7 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
         raise LLMDraftError('文字分批须选用完整文字原件的1至25个明确题号；本次未调用模型')
     full_size=sum(len(document['text']) for document in question_documents+reference_documents)
     if full_size>MAX_TEXT and not selected_labels:
-        raise LLMDraftError('完整原卷超过本次模型12000字预算，请从“选择本批题号”选题后检查；完整原件保留，本次未调用模型')
+        raise ValueError('完整原卷超过本次模型12000字预算，请从“选择本批题号”选题后检查；完整原件保留，本次未调用模型')
     layouts=[]
     all_source_inventory,source_unresolved=_source_question_inventory(question_documents,limit=100 if selected_labels else 25,layouts=layouts) if review else ([],False)
     source_inventory=all_source_inventory;model_documents=question_documents;window_manifest=None
