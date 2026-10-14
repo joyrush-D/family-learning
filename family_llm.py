@@ -2432,7 +2432,7 @@ def _source_question_inventory(documents, *, limit=25, layouts=None):
     return rows,unresolved
 
 
-_SOURCE_SHARED_NOTE=re.compile(r'公共|共用|共同|本卷|全卷|整卷|各题|所有题|全部题|后续|[下后]面的?题|以下.*题|范围|版本|附[注录]|评分|例外|跨[页题]|接第')
+_SOURCE_SHARED_NOTE=re.compile(r'公共|共用|共同|本卷|全卷|整卷|各题|所有题|全部题|后续|[下后]面的?题|以下.*题|范围|版本|附[注录]|评分|例外|跨[页题]|接第|适用|针对|覆盖')
 _SOURCE_UNLOCATED_DEPENDENCY=re.compile(r'(?:上|前|下|后)(?:一|面[的]?|道)?(?:题|问)|上文|前文|下文|后文|同上|据此|照此|沿用|前述|上述(?:结果|答案|数据|条件)|上一(?:步|问)|前一(?:步|问)|(?:根据|依据|参考|利用|接|按)[^。；;\n]{0,24}[（(]\d{1,2}[)）]')
 
 
@@ -2496,7 +2496,8 @@ def _source_batch_window(documents,rows,layouts,selected_labels,reference_size):
             body=''.join(lines[at-1][layout['headings'].get(at,0):] for at in range(start,end+1))
             # A question's own material is in its span; applicability, version,
             # scoring and shared carriers keep their original complete block.
-            if _SOURCE_SHARED_NOTE.search(body): continue
+            dependencies=_source_window_references(body,layout['owners'].get(start),rows,titles)
+            if _SOURCE_SHARED_NOTE.search(body) or dependencies is None or dependencies: continue
             removable.append(row)
         plans.append((document,lines,layout,removable))
     # At most one pass per distinct question is needed: references can only add
