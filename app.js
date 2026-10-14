@@ -2253,7 +2253,7 @@ async function loadOriginalPreview(box){
   const blob=await response.blob();if(!blob.size||blob.size>4*1024*1024)throw Error('首页预览大小不正确');
   const src=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(Error('首页图像读取失败'));reader.readAsDataURL(blob)});
   if(!box.isConnected)return;image.src=src;image.hidden=false;box.dataset.previewState='ready';status.textContent='第1页预览 · 用于辨认原件，不代表全文已理解。';
- }catch(error){if(!box.isConnected)return;image.hidden=true;box.dataset.previewState='error';status.textContent=(error.name==='TimeoutError'?'首页预览超时':error.message)+'；原件保留，可打开原件或重试。';retry.hidden=false}
+ }catch(error){if(!box.isConnected)return;image.hidden=true;box.dataset.previewState='error';const message=error.name==='TimeoutError'?'首页预览超时':error.message;status.textContent=message.includes('原件保留')?message:message+'；原件保留，可打开原件或重试。';retry.hidden=false}
 }
 if(typeof MutationObserver!=='undefined')new MutationObserver(()=>queueOriginalPreviews()).observe(document.body,{childList:true,subtree:true});
 document.addEventListener('click',e=>{const button=e.target.closest('[data-original-preview-retry]');if(!button)return;const box=button.closest('[data-original-preview]');if(box.dataset.previewState==='loading'||box.dataset.previewState==='queued')return;delete box.dataset.previewState;queueOriginalPreviews(box.parentElement)});
