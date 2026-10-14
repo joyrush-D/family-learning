@@ -215,7 +215,6 @@ def run_window_guards():
     chart=text.replace('第1题：阅读材料后选出字母A。','第1题：要求适用于第2题给出的图表。')
     words,manifest,_=window(chart,[0]);assert '第2题：' in words[0]['text'] and len(manifest[0]['omitted'])==24
     attributed=nested.replace('全部26小题，必须写单位。','全部26小题，使用各小题给出的图表。')
-    words,manifest,_=window(attributed,[0]);assert len(manifest[0]['omitted'])==0
     # A dependency in an unselected block is not proof of independence either.
     unselected=text.replace('第2题：阅读材料后选出字母A。','第2题：利用第3题的材料。')
     words,manifest,_=window(unselected,[0]);assert all('第%d题：'%n in words[0]['text'] for n in (1,2,3)) and len(manifest[0]['omitted'])==23
@@ -226,6 +225,7 @@ def run_window_guards():
             except (ValueError,llm.LLMDraftError) as error:assert phrase in str(error),str(error)
             else:raise AssertionError('must reject without a model call')
             assert model.call_count==0
+    reject(attributed,'上下文')
     reject(text.replace('第1题：阅读材料后选出字母A。','第1题：沿用上一题材料。'),'第2行')
     reject(text.replace('第2题：阅读材料后选出字母A。','第2题：沿用上一题材料。'),'第4行')
     reject('试卷名称：虚构河湾整卷\n公共材料：'+'字'*12001+'\n'+text.split('\n',1)[1],'上下文')
