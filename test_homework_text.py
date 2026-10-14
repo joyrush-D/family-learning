@@ -903,7 +903,7 @@ class TextInspectionProvenanceTests(unittest.TestCase):
     def draft(self,raw,paper=None,images=(),**kwargs):
         original=copy.deepcopy(raw)
         with patch.object(family_llm,'_chat_json',return_value=raw) as model:
-            out=family_llm.homework_reference_draft(images,review=True,
+            out=family_llm.homework_reference_draft(list(images),review=True,
                 question_documents=[dict(name='synthetic-willow.txt',text=self.paper if paper is None else paper)],**kwargs)
         self.assertEqual(model.call_count,1);self.assertEqual(raw,original)
         return out
