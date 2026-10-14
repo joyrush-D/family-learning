@@ -1201,9 +1201,10 @@ def homework_saved_pending(task_id,record_id,scope):
 def homework_batch_inventory(materials):
     if len(materials['question_documents'])!=len(materials['question_sources']) or materials['images']:
         raise family_print.PrintError('文字题号分批只用于完整可读的TXT或纯文字Word；照片/PDF仍按所选页检查')
-    rows,unresolved=family_llm._source_question_inventory(materials['question_documents'],limit=100)
+    layouts=[]
+    rows,unresolved=family_llm._source_question_inventory(materials['question_documents'],limit=100,layouts=layouts)
     if not rows or unresolved:
-        raise family_print.PrintError('原卷有无法唯一核对的题号或范围，暂不能自动文字分批；完整原件保留')
+        raise family_print.PrintError(family_llm._source_inventory_location(materials['question_documents'],layouts)+'原卷有无法唯一核对的题号或范围，暂不能自动文字分批；完整原件保留')
     catalog=[{key:row[key] for key in ('label','document','line')} for row in rows]
     digest=hashlib.sha256(json.dumps(dict(source=materials['scope_fingerprint'],questions=catalog),ensure_ascii=False,sort_keys=True).encode()).hexdigest()
     return catalog,digest

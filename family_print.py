@@ -159,7 +159,7 @@ def review_pending(continuation,text):
     return continuation['known_labels']+[label for label in pending if ''.join(label.split()) not in known]
 
 
-def review_text(value, *, saved=False):
+def review_text(value, *, saved=False, limit=12000):
     """Saved parent text stays text; only the product's length frame is interpreted."""
     try: text=value.decode('utf-8-sig') if isinstance(value,bytes) else value
     except UnicodeError: raise PrintError('参考或先前检查文字无法安全完整读取') from None
@@ -179,8 +179,9 @@ def review_text(value, *, saved=False):
         if size>12000 or len(content)<size+1 or content[size]!='\n':
             raise PrintError('保存检查的最新文字范围无法核对')
         text=content[:size];archived=bool(content[size+1:].strip())
-    if not text.strip() or len(text)>12000:
-        raise PrintError('参考或先前检查文字须清晰完整且最多12000字，请分批核对')
+    if not text.strip() or len(text)>limit:
+        raise PrintError('题目原文超过完整读取上限，原件保留；本次未读取模型输入' if limit!=12000 else
+                         '参考或先前检查文字须清晰完整且最多12000字，请分批核对')
     result=dict(text=text,has_archived=archived)
     if continuation is not None: result['continuation']=continuation
     return result
@@ -493,6 +494,7 @@ class PrintStore:
         """Explicit same-task originals; PDF subsets are reported, never silently selected."""
         import family_pdf
         import family_media
+        import family_llm
         previous_sources=list(previous_sources) if isinstance(previous_sources,tuple) else previous_sources
         if (not isinstance(questions,list) or not questions or not isinstance(references,list)
                 or len(questions)+len(references)>8 or not isinstance(previous_sources,list) or len(previous_sources)>2
@@ -564,7 +566,8 @@ class PrintStore:
                 except (UnicodeError,MediaError): raise PrintError('题目、作答或参考文字无法完整读取（可能含自动编号、图片、公式或复杂结构）；请保留原件并转换为完整PDF') from None
                 archived=False
                 if text is not None:
-                    parsed=review_text(text,saved=item['role']=='previous' and allowed[item['source']['id']].get('origin')=='review_result')
+                    parsed=review_text(text,saved=item['role']=='previous' and allowed[item['source']['id']].get('origin')=='review_result',
+                        limit=family_llm.MAX_HOMEWORK_SOURCE_TEXT if item['role']=='question' else 12000)
                     if 'continuation' in parsed: continuations.append((item['binding'][0],parsed['continuation']|dict(pending_labels=review_pending(parsed['continuation'],parsed['text']))))
                     text=parsed['text'];archived=parsed['has_archived']
                     target=question_documents if item['role']=='question' else previous_documents if item['role']=='previous' else documents
@@ -573,7 +576,10 @@ class PrintStore:
                     '本次读取最新检查；较早草稿保留在原件，未作为本次复核输入' if archived else '本次读取完整文字'))
             else: raise PrintError('检查支持图片、PDF或安全纯文字TXT/Word；复杂Word请先保留原件并转换为完整PDF')
         if not 0<=image_count<=8 or not image_count and not question_documents: raise PrintError('题目、作答及参考合计最多8张照片/PDF页，或提供可完整读取的文字试卷；本次未调用模型')
-        if sum(len(d['text']) for d in question_documents+documents)>12000: raise PrintError('题目、作答与教师参考文字合计最多12000字，请分批核对')
+        if sum(len(d['text']) for d in question_documents)>family_llm.MAX_HOMEWORK_SOURCE_TEXT:
+            raise PrintError('完整题目文字合计最多100000字；原件保留，本次未调用模型')
+        if sum(len(d['text']) for d in documents)>12000:
+            raise PrintError('完整教师参考文字合计最多12000字；不能截断附注，本次未调用模型')
         if sum(len(d['text']) for d in previous_documents)+len(previous_text)>12000:
             raise PrintError('上一轮检查文件与文字合计最多12000字，请分批核对')
         images=[];reference_images=[];image_labels=[];reference_labels=[];total=0
@@ -619,17 +625,23 @@ class PrintStore:
         if not 1 <= count <= MAX_PAGES: raise PrintError('打印PDF须为1至200页')
         return count
 
-    def _convert(self, data, name, directory):
+    @staticmethod
+    def _original_text(data,limit):
+        try: text=data.decode('utf-8-sig').replace('\r\n','\n').replace('\r','\n')
+        except UnicodeDecodeError:
+            raise PrintError('文字原件须为UTF-8编码；请保留原件并另存UTF-8或完整PDF') from None
+        if not text.strip() or len(text)>limit or _invalid_xml(text):
+            raise PrintError('文字原件须为非空、无控制字符且不超过%d字；原件仍保留'%limit)
+        return text
+
+    def _convert(self, data, name, directory, *, text_limit=None):
         suffix = Path(name).suffix.lower()
         if suffix == '.pdf' and data.startswith(b'%PDF-'): return data
         if suffix in ('.jpg', '.jpeg') and data.startswith(b'\xff\xd8') or suffix == '.png' and data.startswith(b'\x89PNG'):
             return image_pdf(data)
         if suffix == '.txt':
-            try: text=data.decode('utf-8-sig').replace('\r\n','\n').replace('\r','\n')
-            except UnicodeDecodeError:
-                raise PrintError('文字原件须为UTF-8编码；请保留原件并另存UTF-8或完整PDF') from None
-            if not text.strip() or len(text)>12000 or _invalid_xml(text):
-                raise PrintError('文字原件须为非空、无控制字符且不超过12000字；原件仍保留')
+            from family_llm import MAX_HOMEWORK_SOURCE_TEXT
+            text=self._original_text(data,MAX_HOMEWORK_SOURCE_TEXT if text_limit is None else text_limit)
             data=_text_docx(text.split('\n'),original=True);suffix='.docx'
         if suffix not in ('.docx', '.pptx'):
             raise PrintError('暂支持PDF、JPEG、PNG、安全Office和UTF-8文字；其他文件请下载原件', 'preview_unavailable', 503)
@@ -641,10 +653,10 @@ class PrintStore:
         except OfficeError as error:
             raise PrintError(*_OFFICE_ERRORS[error.reason]) from None
 
-    def prepare(self, source, idempotency_key, *, packet=None, revision=False):
+    def prepare(self, source, idempotency_key, *, packet=None, revision=False, text_limit=None):
         key = _key(idempotency_key)
         name, data = self._source(source)
-        return self._prepare_bytes(name, data, source, key,packet=packet,revision=revision)
+        return self._prepare_bytes(name, data, source, key,packet=packet,revision=revision,text_limit=text_limit)
 
     def prepare_guide(self, title, text, idempotency_key, *, revision=False):
         """Prepare a separate parent-only answer sheet after the parent has checked its text."""
@@ -660,7 +672,9 @@ class PrintStore:
         return self._prepare_bytes(name, document,
                                    dict(type='parent_guide', title=title.strip()), key, revision=revision)
 
-    def _prepare_bytes(self, name, data, source, key, *, packet=None, revision=False):
+    def _prepare_bytes(self, name, data, source, key, *, packet=None, revision=False, text_limit=None):
+        if text_limit is not None and Path(name).suffix.lower()=='.txt':
+            self._original_text(data,text_limit)  # Validate a guide before returning an old matching preparation.
         fingerprint = _hash(_json([source, _hash(data)]+([packet] if packet is not None else [])).encode())
         with self._db() as c:
             old = c.execute('SELECT * FROM print_preparations WHERE idem=?', (key,)).fetchone()
@@ -676,7 +690,7 @@ class PrintStore:
         try:
             with tempfile.TemporaryDirectory(prefix='.prepare-', dir=self.directory) as temporary:
                 directory = Path(temporary)
-                pdf = self._convert(data, name, directory)
+                pdf = self._convert(data, name, directory,**(dict(text_limit=text_limit) if text_limit is not None else {}))
                 if not pdf.startswith(b'%PDF-') or len(pdf) > MAX_PDF: raise PrintError('预览PDF内容不正确或过大')
                 stage = directory/'preview.pdf'; stage.write_bytes(pdf); stage.chmod(0o600)
                 pages = self._page_count(stage)
@@ -719,7 +733,7 @@ class PrintStore:
         expected = obj.get('expected_question_sha256', '')
         if expected and (not isinstance(expected,str) or not re.fullmatch(r'[a-f0-9]{64}',expected) or expected!=packet_sha([p['source_sha256'] for p in prepared])):
             raise PrintError('题目原件与参考草稿生成时不同，请重新核对答案','conflict',409)
-        second = (self.prepare(guide, subkey('guide_prepare'),revision=True) if guide is not None else
+        second = (self.prepare(guide, subkey('guide_prepare'),revision=True,text_limit=12000) if guide is not None else
                   self.prepare_guide(task['title'], guide_text, subkey('guide_prepare'),revision=True))
         if source_sha256 is not None:
             for prep in prepared+([second] if guide is not None else []):
