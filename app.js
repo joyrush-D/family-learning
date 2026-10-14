@@ -2239,6 +2239,7 @@ document.addEventListener('click',e=>{if(!e.target.closest('[data-course-record]
 let originalPreviewQueue=Promise.resolve();
 function queueOriginalPreviews(root=document){
  for(const box of root.querySelectorAll('[data-original-preview]:not([data-preview-state])')){
+  if(!box.getClientRects().length)continue;
   box.dataset.previewState='queued';originalPreviewQueue=originalPreviewQueue.then(()=>loadOriginalPreview(box));
  }
 }
@@ -2257,3 +2258,5 @@ async function loadOriginalPreview(box){
 if(typeof MutationObserver!=='undefined')new MutationObserver(()=>queueOriginalPreviews()).observe(document.body,{childList:true,subtree:true});
 document.addEventListener('click',e=>{const button=e.target.closest('[data-original-preview-retry]');if(!button)return;const box=button.closest('[data-original-preview]');if(box.dataset.previewState==='loading'||box.dataset.previewState==='queued')return;delete box.dataset.previewState;queueOriginalPreviews(box.parentElement)});
 document.addEventListener('error',e=>{if(!e.target.matches?.('[data-original-preview-image]'))return;const box=e.target.closest('[data-original-preview]');e.target.hidden=true;box.dataset.previewState='error';box.querySelector('figcaption').textContent='首页图像无法显示；原件保留，可打开原件或重试。';box.querySelector('button').hidden=false},true);
+
+document.addEventListener('toggle',()=>queueOriginalPreviews(),true);
