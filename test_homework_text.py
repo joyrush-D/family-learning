@@ -950,6 +950,30 @@ class TextInspectionProvenanceTests(unittest.TestCase):
         self.assertEqual(q['inspection'],dict(state='not_checked',basis='previous_pending'))
         self.assertEqual((q['student_answer'],q['answer'],q['judgment']),('','','unknown'))
 
+    def test_generated_text_states_only_program_proved_answer_conditions(self):
+        # The new text names a proved closed blank and a missing result; an empty or claimed model value stays not confirmed.
+        def answer_line(out,label):
+            block=next(b for b in out['text'].split('\n\n') if b.split('\n')[0]==label+' · 未判定')
+            return next(line for line in block.split('\n') if line.startswith('卷面作答：'))
+        raw=self.raw();out=self.draft(raw)
+        self.assertEqual(answer_line(out,self.labels[1]),'卷面作答：原件作答栏留空（程序核对《synthetic-willow.txt》第6行）')
+        self.assertEqual(out['questions'][1]['student_answer'],'');self.assertIn('不确定：孩子未作答，仍须核对。',out['text'])
+        missing=self.raw();missing['items']=missing['items'][:1];missing['question_labels']=missing['question_labels'][:1]
+        self.assertEqual(answer_line(self.draft(missing),self.labels[1]),'卷面作答：本题尚未检查，待补查')
+        listed=self.raw();listed['items']=listed['items'][:1]
+        self.assertEqual(answer_line(self.draft(listed),self.labels[1]),'卷面作答：本题尚未检查，待补查')
+        pending=self.draft(self.raw(),pending_labels=['虚构柳叶卷 第1大题 第3题'])
+        self.assertEqual(answer_line(pending,'虚构柳叶卷 第1大题 第3题'),'卷面作答：本题尚未检查，待补查')
+        self.assertEqual(answer_line(pending,self.labels[1]),'卷面作答：原件作答栏留空（程序核对《synthetic-willow.txt》第6行）')
+        for paper in (self.paper.replace('孩子作答：\n','字迹无法辨认\n'),self.paper.removesuffix('孩子作答：\n')):
+            with self.subTest(paper=paper[-12:]):
+                out=self.draft(self.raw(),paper)
+                self.assertEqual(answer_line(out,self.labels[1]),'卷面作答：未能确认')
+        out=self.draft(self.raw(),images=[dict(mime='image/png',data=PNG)])
+        self.assertEqual(answer_line(out,self.labels[1]),'卷面作答：未能确认')
+        for out in (self.draft(self.raw()),self.draft(missing)):
+            self.assertNotIn('空答',out['text']);self.assertNotIn('未能辨认',out['text'])
+
     def test_model_cannot_supply_its_own_program_inspection_proof(self):
         raw=self.raw();raw['items'][1]['inspection']=dict(state='blank_answer',basis='closed_text_field')
         original=copy.deepcopy(raw)

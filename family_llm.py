@@ -2995,10 +2995,17 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
         correct=len(result['items'])-len(wrong)-unknown
         text=['本次核对%d题：需订正%d题，与参考一致%d题，未判定%d题。'%(len(result['items']),len(wrong),correct,unknown)]
         for index,item in enumerate(result['items'],1):
+            # Only the program's inspection describes an answer: a missing result is not checked yet, and a proved
+            # closed text field was left blank on the original. An empty model value stays not confirmed.
+            inspection=item.get('inspection') or {}
+            if inspection.get('state')=='blank_answer':
+                shown='原件作答栏留空（程序核对《%s》第%d行）'%(inspection['document'],inspection['line'])
+            elif item['student_answer']: shown=item['student_answer']
+            else: shown='本题尚未检查，待补查' if inspection.get('state')=='not_checked' else '未能确认'
             text.extend(['', (item['label'] or '第%d题'%index)+' · '+{
                 'correct':'与参考一致','incorrect':'需订正','unknown':'未判定'}[item['judgment']],
                 '题面：'+(item['question'] or '未提供，题目要求未核'),
-                '卷面作答：'+(item['student_answer'] or '未能确认'),
+                '卷面作答：'+shown,
                 '参考答案：'+(item['answer'] or '待核对')])
             if item['judgment']=='incorrect':
                 text.extend(['错误依据：'+item['error_reason'],'订正建议：'+item['steps']])
