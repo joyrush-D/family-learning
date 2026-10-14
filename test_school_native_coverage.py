@@ -534,16 +534,17 @@ class SchoolNativeCoverageTests(unittest.TestCase):
 
     def test_shared_standard_in_a_next_message_saves_like_the_same_message(self):
         """A: midnight (the standard's own day), B: 以上作业都, C: 两项都 — split and merged forms save alike."""
-        listing = '英语，完成两项要求：1. 朗读Unit 8课文两遍；2. 完成练习卷第2–4题。'
-        for standard, stamps, due in (
-                ('以上两项都今天完成并请家长签字。', ('2026-10-15T23:59:00+08:00', '2026-10-16T00:00:00+08:00'), '2026-10-16'),
-                ('以上作业都请家长核对并在记录本签字。', ('2026-10-15T07:58:00+08:00', '2026-10-15T07:59:00+08:00'), ''),
-                ('两项都请家长核对并在记录本签字。', ('2026-10-15T07:58:00+08:00', '2026-10-15T07:59:00+08:00'), '')):
+        undated = '英语，完成两项要求：1. 朗读Unit 8课文两遍；2. 完成练习卷第2–4题。'
+        morning = ('2026-10-15T07:58:00+08:00', '2026-10-15T07:59:00+08:00')
+        for listing, standard, stamps in (
+                (undated, '以上两项都今天完成并请家长签字。', ('2026-10-15T23:59:00+08:00', '2026-10-16T00:00:00+08:00')),
+                (self.SHARED_LIST, '以上作业都请家长核对并在记录本签字。', morning),
+                (self.SHARED_LIST, '两项都请家长核对并在记录本签字。', morning)):
             with self.subTest(standard=standard):
                 split = self._saved_fresh([listing, standard], stamps)
-                merged = self._saved_fresh([listing + standard], stamps[1:])
+                merged = self._saved_fresh([listing + standard], stamps[1:] if listing is undated else stamps[:1])
                 self.assertEqual(split, merged)
-                self.assertEqual([(due, 'accepted' if due else 'pending')] * 2, [(row[2], row[3]) for row in split])
+                self.assertEqual([('2026-10-16', 'accepted')] * 2, [(row[2], row[3]) for row in split])
                 self.assertTrue(all(standard.rstrip('。') in row[1] for row in split))
 
     def test_p11_claimed_batch_recovers_completely_when_due_without_a_new_budget(self):
@@ -568,7 +569,9 @@ class SchoolNativeCoverageTests(unittest.TestCase):
                 task_state='reference', task_purpose='unknown', task_reason='虚构通知按原文保留。') for e in evidence])
 
         self.model.side_effect = reply
-        jobs = lambda: {r['id']: dict(r) for r in self.store._db().execute("SELECT * FROM agent_jobs WHERE id LIKE 'messages:%'")}
+        def jobs():
+            with self.store._db() as c:
+                return {r['id']: dict(r) for r in c.execute("SELECT * FROM agent_jobs WHERE id LIKE 'messages:%'")}
         frozen = jobs()[old]
         for minute in (1, 4):
             self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(minutes=minute))['processed'], 0)
