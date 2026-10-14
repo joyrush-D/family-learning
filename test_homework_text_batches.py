@@ -225,6 +225,10 @@ def run_window_guards():
             except (ValueError,llm.LLMDraftError) as error:assert phrase in str(error),str(error)
             else:raise AssertionError('must reject without a model call')
             assert model.call_count==0
+    numbered_chart=text.replace('第1题：阅读材料后选出字母A。','第1题：根据图2填写横坐标。').replace('第2题：阅读材料后选出字母A。','第2题：图2：横坐标为3。')
+    reject(numbered_chart,'材料编号')
+    for carrier in ('表2','材料甲','附录A','上图','下表'):
+        reject(text.replace('第1题：阅读材料后选出字母A。','第1题：根据'+carrier+'填写。'),'第2行')
     reject(attributed,'上下文')
     reject(text.replace('第1题：阅读材料后选出字母A。','第1题：沿用上一题材料。'),'第2行')
     reject(text.replace('第2题：阅读材料后选出字母A。','第2题：沿用上一题材料。'),'第4行')

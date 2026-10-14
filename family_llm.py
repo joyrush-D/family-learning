@@ -2434,7 +2434,7 @@ def _source_question_inventory(documents, *, limit=25, layouts=None):
 
 
 _SOURCE_SHARED_NOTE=re.compile(r'公共|共用|共同|本卷|全卷|整卷|各题|所有题|全部题|后续|[下后]面的?题|以下.*题|范围|版本|附[注录]|评分|例外|跨[页题]|接第|适用|针对|覆盖')
-_SOURCE_UNLOCATED_DEPENDENCY=re.compile(r'(?:上|前|下|后)(?:一|面[的]?|道)?(?:题|问)|上文|前文|下文|后文|同上|据此|照此|沿用|前述|上述(?:结果|答案|数据|条件)|上一(?:步|问)|前一(?:步|问)|(?:根据|依据|参考|利用|接|按)[^。；;\n]{0,24}[（(]\d{1,2}[)）]')
+_SOURCE_UNLOCATED_DEPENDENCY=re.compile(r'(?:上|前|下|后)(?:一|面[的]?|道)?(?:题|问)|上文|前文|下文|后文|同上|据此|照此|沿用|前述|上述(?:结果|答案|数据|条件)|上一(?:步|问)|前一(?:步|问)|(?:根据|依据|参考|利用|接|按)[^。；;\n]{0,24}[（(]\d{1,2}[)）]|(?:图|表|材料|附录)\s*(?:[（(]?\s*(?:\d{1,3}|[A-Za-z]|[一二三四五六七八九十甲乙丙丁戊己庚辛壬癸]+)\s*[)）]?)(?![A-Za-z0-9])|(?:上|下|前|后)(?:图|表)|如(?:图|表))')
 
 
 def _source_window_references(body,owner,rows,titles):
@@ -2526,7 +2526,7 @@ def _source_batch_window(documents,rows,layouts,selected_labels,reference_size):
                 body=line[layout['headings'].get(at,0):]
                 needed=_source_window_references(body,layout['owners'].get(at),rows,titles)
                 if needed is None:
-                    raise LLMDraftError('%s第%d行有无法定位的题目/顺序依赖，不能安全省略上下文；本批未调用模型，原件保留'%(document['name'],at))
+                    raise LLMDraftError('%s第%d行有无法定位的题目、材料编号或顺序依赖，不能安全省略上下文；本批未调用模型，原件保留'%(document['name'],at))
                 additions.update(needed)
         if additions<=required: break
         required.update(additions)
