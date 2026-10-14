@@ -1988,13 +1988,29 @@ def _ref_value_check(item,student,reference):
         shown_mine,shown_theirs,found,where))
 
 
-def _ref_caption_value(teacher,question):
-    """A whole numeric value and one proven caption; the original is never cut for display.
+def _ref_caption_value(teacher,question,question_kind='objective'):
+    """A whole answer and one proven caption; the original is never cut for display.
 
-    Read only explicit printed-unit/cross-page descriptions or a scoring clause
-    whose requirement the question itself also asks. Other prose remains part
-    of the unverified whole reference, including alternative values and versions.
+    A final sentence permitting equivalent wording has no further criterion.
+    It separates only the policy, never a sentence from the answer body or a
+    substantive requirement. This proves no semantic relation to the child.
+    Numeric captions still require an objective question and their own evidence.
     """
+    if question_kind in ('objective','subjective'):
+        # Read from the last sentence boundary: a multi-sentence body must match
+        # in full. A comma/half-sentence, quoted policy, condition, exception,
+        # score, scope or version wording cannot fit this whole policy grammar.
+        tail=re.fullmatch(r'(.+[。；;\n])\s*([^。；;\n]+)[。；;]?\s*',teacher.strip(),re.S)
+        if tail:
+            meaning=r'(?:含义|意思|意义|语义)(?:相同|一致|一样)'
+            expression=r'(?:说明|解释|表述|表达|说法|回答|答案)'
+            acceptance=r'(?:均|都|也)?可(?:以)?(?:接受|认可)?'
+            policy=_ref_unspaced(tail[2])
+            policy=re.sub(r'^(?:(?:教师|老师)?(?:附注|说明)|备注)[:：]','',policy)
+            if re.fullmatch(r'(?:(?:'+meaning+r'的?|同义的?)'+expression+acceptance+
+                            r'|'+expression+meaning+acceptance+r'|'+meaning+r'(?:即可|'+acceptance+r'))',policy):
+                return dict(value=tail[1].strip(),kind='wording')
+    if question_kind!='objective': return None
     # A separately headed whole-paper caution changes neither this entry's value
     # nor the independently checked scope. No other prose is removed from it.
     scope=re.fullmatch(r'([^\n]+)\n(?:完整)?(?:教师|老师)(?:附注|说明)[:：]\s*'
@@ -2042,12 +2058,12 @@ def _ref_caption_value(teacher,question):
     return None
 
 
-def _source_final_value(item,rows,titles,images):
-    """Prove the literal final value in this question's own text field, not complete work.
+def _source_final_answer(item,rows,titles,images):
+    """Prove the literal answer in this question's own complete text field.
 
     A model's cropped answer, a sample, a fragment-labelled field, an image, or
     another leaf's field proves no omission. The full question must also match;
-    this evidence is used only for the unit/decimal writing of that final value.
+    this proves the source writing, never correctness or semantic equivalence.
     """
     if images: return None
     matches=_source_question_matches(item['label'],rows,titles,True)
@@ -2065,11 +2081,26 @@ def _source_final_value(item,rows,titles,images):
         found=re.fullmatch(r'(?:学生|孩子)(?:的)?(?:完整最终|最终完整|最终|完整)?(?:作答|答案)\s*[:：]\s*(.+)',line)
         if not found or field is not None: return None
         field=found[1]
+    return field
+
+
+def _source_final_value(item,rows,titles,images):
+    """The same own-field evidence, restricted to a whole numeric final value."""
+    field=_source_final_answer(item,rows,titles,images)
     return field if field is not None and _ref_values(field) is not None else None
 
 
 def _ref_caption_requirement(item,caption,rows,titles,images):
     """Keep numeric equality separate from an evidenced final-value writing requirement."""
+    if caption['kind']=='wording':
+        if item['judgment'] not in ('correct','incorrect'): return
+        final=_source_final_answer(item,rows,titles,images)
+        if final is not None and _ref_unspaced(final)!=_ref_unspaced(item['student_answer']):
+            item.update(judgment='unknown',error_reason='',possible_cause='',steps='',
+                        uncertainty=('原答抄写尚未核明：同题完整文字作答为“%s”，模型抄为“%s”；同义表述许可不证明两种抄录对应，请对照原件补查。'%(
+                            final,item['student_answer']))[:300])
+            return True
+        return False
     if (item['judgment']!='correct' or item['uncertainty'].strip() or item['error_reason'].strip()
             or item['possible_cause'].strip() or caption['kind'] not in ('unit','precision','work')): return
     mine=_ref_values(item['student_answer']);theirs=_ref_values(caption['value'])
@@ -2133,7 +2164,7 @@ def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset
     if gap:  # The teacher's own words leave no value to compare: the grade is vetoed, the whole original kept.
         return pending(item['answer'] if claimed is not None and _ref_agrees(claimed,teacher) else '教师参考：'+shown(teacher),
                        '教师参考原文写明本题缺少决定性条件（“%s”），不能核定作答对错，未判定；请补全该条件后再核对。'%shown(gap,120)+over)
-    caption=_ref_caption_value(teacher,item['question']) if question_kind=='objective' else None
+    caption=_ref_caption_value(teacher,item['question'],question_kind)
     listed=claimed if claimed is not None else re.sub(r'^\s*AI自行推导\s*[:：]','',item['answer']).strip()
     if caption and (_ref_agrees(listed,teacher) or _ref_agrees(listed,caption['value'])):
         item['answer']='教师参考：'+shown(teacher)
@@ -2510,6 +2541,8 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
                 raise LLMDraftError('检查结果的卷别或题号为空或重复，无法分别核对；请明确卷别、题号与小题后再次检查')
             seen_question_labels.add(question_label)
         caption=_prefer_teacher_reference(item,question_kind,teacher_entries,bool(reference_images),titles) if teacher_entries else None
+        if caption and caption['kind']=='wording':
+            _ref_caption_requirement(item,caption,source_inventory,_ref_titles(question_documents),bool(images))
         if item['judgment']!='unknown':
             # The item's own reference, or its stated basis, saying no value can be settled vetoes a definite grade.
             label_paper=_ref_label_paper(item['label'],titles)  # a paper named in the basis is another only against this label's paper
