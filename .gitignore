@@ -240,6 +240,7 @@
 !/test_homework_text_ui.cjs
 !/test_homework_text_print_ui.cjs
 !/test_school_native_coverage_ui.cjs
+!/test_school_material_requirements_ui.cjs
 !/test_school_action_inventory.py
 
 !/family_preview.py
