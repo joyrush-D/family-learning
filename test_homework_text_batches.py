@@ -208,6 +208,9 @@ def run_window_guards():
     # Explicit referenced targets stay transitively, while unrelated blocks can still be omitted.
     dependent=text.replace('第1题：阅读材料后选出字母A。','第1题：利用第2题的材料。').replace('第2题：阅读材料后选出字母A。','第2题：参考第3题的数据。')
     words,manifest,_=window(dependent,[0]);assert all('第%d题：'%n in words[0]['text'] for n in (1,2,3)) and len(manifest[0]['omitted'])==23
+    # A dependency in an unselected block is not proof of independence either.
+    unselected=text.replace('第2题：阅读材料后选出字母A。','第2题：利用第3题的材料。')
+    words,manifest,_=window(unselected,[0]);assert all('第%d题：'%n in words[0]['text'] for n in (1,2,3)) and len(manifest[0]['omitted'])==23
     def reject(text,phrase):
         rows,unknown,_=inventory(text);assert rows
         with patch.object(llm,'_chat_json') as model:
@@ -216,6 +219,7 @@ def run_window_guards():
             else:raise AssertionError('must reject without a model call')
             assert model.call_count==0
     reject(text.replace('第1题：阅读材料后选出字母A。','第1题：沿用上一题材料。'),'第2行')
+    reject(text.replace('第2题：阅读材料后选出字母A。','第2题：沿用上一题材料。'),'第4行')
     reject('试卷名称：虚构河湾整卷\n公共材料：'+'字'*12001+'\n'+text.split('\n',1)[1],'上下文')
     reject(text.replace('学生作答：A','教师示范作答：A'),'上下文')
     reject(text.replace('学生作答：A','学生作答：A\n归属待核的文字。'),'上下文')
