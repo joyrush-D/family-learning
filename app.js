@@ -748,18 +748,19 @@ function savedHomeworkReviewScopeLabel(block){
 }
 // A saved check whose every question block parses exactly and matches its own count line opens with what needs attention: questions to
 // correct, then those still to check, each in original order and moving to its block in the complete text, which stays as it was.
-// Old formats and edited texts that do not parse exactly show the complete text alone.
+// The saved text is editable and comes back without the program's own checks, so the summary names questions only, never whether one was
+// checked or left blank. Old formats, texts without questions and edited texts that do not parse exactly show the complete text alone.
 function savedHomeworkReviewFocus(panel,parts,nodes){
  const nav=panel.querySelector('[data-saved-review-focus]'),count=parts[0]?.kind==='summary'&&/^本次核对(\d+)题：需订正(\d+)题，与参考一致(\d+)题，未判定(\d+)题。$/.exec(parts[0].text),items=[];if(!nav)return;
- parts.forEach((part,i)=>{if(part.kind==='question')items.push({node:nodes[i],label:part.text,judgment:parts[i+1]?.judgment,answer:''});else if(part.kind==='field'&&part.text==='卷面作答：'&&items.length&&!parts[i+1]?.kind)items.at(-1).answer=parts[i+1].text});
+ parts.forEach((part,i)=>{if(part.kind==='question')items.push({node:nodes[i],label:part.text,judgment:parts[i+1]?.judgment})});
  nav.replaceChildren();nav.hidden=true;
- if(!count||items.length!==Number(count[1])||[['incorrect',2],['correct',3],['unknown',4]].some(([judgment,n])=>items.filter(x=>x.judgment===judgment).length!==Number(count[n])))return;
+ if(!count||!items.length||items.length!==Number(count[1])||[['incorrect',2],['correct',3],['unknown',4]].some(([judgment,n])=>items.filter(x=>x.judgment===judgment).length!==Number(count[n])))return;
  // Labels that all start with the same paper title show only their own part here; the complete label stays in the text and the button's name.
  const shared=items.map(x=>x.label).reduce((a,b)=>{let n=0;while(n<a.length&&a[n]===b[n])n++;return a.slice(0,n)});let cut=items.length>1?shared.lastIndexOf(' ')+1:0;if(items.some(x=>!x.label.slice(cut).trim()))cut=0;
  for(const [judgment,name] of [['incorrect','需订正'],['unknown','待补查']]){
   const group=items.filter(x=>x.judgment===judgment);if(!group.length)continue;
   const row=document.createElement('p'),title=document.createElement('strong');row.className='saved-review-focus-row';row.dataset.judgment=judgment;title.textContent=name+' '+group.length+' 题';row.append(title);
-  for(const item of group){const button=document.createElement('button'),note=item.answer==='本题尚未检查，待补查'?' · 尚未检查':item.answer.startsWith('原件作答栏留空（程序核对《')?' · 原件留空':'';button.type='button';button.textContent=item.label.slice(cut)+note;button.setAttribute('aria-label','查看 '+item.label+note);button.onclick=()=>{item.node.tabIndex=-1;item.node.scrollIntoView({block:'start'});item.node.focus({preventScroll:true})};row.append(button)}
+  for(const item of group){const button=document.createElement('button');button.type='button';button.textContent=item.label.slice(cut);button.setAttribute('aria-label','查看 '+item.label);button.onclick=()=>{item.node.tabIndex=-1;item.node.scrollIntoView({block:'start'});item.node.focus({preventScroll:true})};row.append(button)}
   nav.append(row);
  }
  nav.hidden=!nav.childNodes.length;
