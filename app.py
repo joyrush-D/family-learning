@@ -2489,6 +2489,7 @@ class Handler(BaseHTTPRequestHandler):
                 if purpose=='review' and any(key in obj for key in ('task_id','record_id','expected_created','reference_sources','previous_sources','review_instruction','previous_text')):
                     try: return self.reply(200,homework_review_draft(obj))
                     except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
+                    except (RecordError,family_print.PrintError): raise
                     except ValueError as e: return self.reply(400,dict(error=str(e)))
                 sources=obj.get('question_sources') if 'question_sources' in obj else [obj.get('question_source')]
                 if purpose=='reference' and 'task_id' in obj: homework_print_sources(obj)
