@@ -215,6 +215,9 @@ def run_window_guards():
     # A scoped parent range can precede its heading; it still contains no borrowed leaf data.
     early=nested.replace('统一评分说明：适用于第一大题第1题全部26小题，必须写单位。\n','').replace('第1题：共同题干保留。','统一评分说明：适用于第一大题第1题全部26小题，必须写单位。\n第1题：共同题干保留。')
     words,manifest,_=window(early,[0]);assert '全部26小题，必须写单位。' in words[0]['text'] and len(manifest[0]['omitted'])==25
+    common='共用阅读材料（适用于第一大题第1题的全部26小题）：\n'+preserved+'末句条件：只计算星期二归还后的本数；不得沿用归还前两本。\n'
+    with_common=early.replace('统一评分说明：适用于第一大题第1题全部26小题，必须写单位。\n',common)
+    words,manifest,_=window(with_common,[0]);assert common in words[0]['text'] and len(manifest[0]['omitted'])==25
     # Explicit referenced targets stay transitively, while unrelated blocks can still be omitted.
     dependent=text.replace('第1题：阅读材料后选出字母A。','第1题：利用第2题的材料。').replace('第2题：阅读材料后选出字母A。','第2题：参考第3题的数据。')
     words,manifest,_=window(dependent,[0]);assert all('第%d题：'%n in words[0]['text'] for n in (1,2,3)) and len(manifest[0]['omitted'])==23
