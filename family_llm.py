@@ -2015,9 +2015,15 @@ def _ref_caption_value(teacher,question):
     values=_ref_values(value)
     if values is None or len(values)!=1: return None
     unit=re.fullmatch(r'必须在作答中写出([^\W\d_]{1,3})[，,]未写单位不符合本题要求',criterion)
-    if unit and unit[1]==values[0][3] and any(_ref_binds(question,m.start(),m.end())=='yes'
-                                           for m in re.finditer('单位',question)):
-        return dict(value=value,kind='unit',unit=unit[1])
+    if unit and unit[1]==values[0][3]:
+        known='|'.join(re.escape(name) for name in sorted(_REF_UNIT_SCALE,key=len,reverse=True) if name)
+        named=[]
+        for match in re.finditer('单位',question):
+            if _ref_binds(question,match.start(),match.end())!='yes': continue
+            clause=re.split(_REF_CLAUSE,question[:match.start()])[-1]+'单位'+re.split(_REF_CLAUSE,question[match.end():])[0]
+            found=re.search(r'(?:用|以)('+known+r')[作为当]*单位|('+known+r')单位|单位[用是为：:]('+known+r')',clause)
+            if found: named.append(next(group for group in found.groups() if group))
+        if named and set(named)=={unit[1]}: return dict(value=value,kind='unit',unit=unit[1])
     precision=re.fullmatch(r'结果必须恰好写([一二两三四五六七八九\d]{1,2})位小数[，,]不能多写或少写小数位',criterion)
     if precision:
         places=_ref_number(precision[1].replace('两','二'))

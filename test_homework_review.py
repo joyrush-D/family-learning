@@ -1148,6 +1148,10 @@ def teacher_caption_checks():
     assert draft(scenarios[2],pictures=True)[1]['judgment']=='unknown','a text field does not prove an unseen image has no further work'
     invented=json.loads(json.dumps(scenarios[2]));invented['question_documents'][0]['text']=invented['question_documents'][0]['text'].replace('答题空格后没有预印单位，作答必须写出数值和厘米单位。','')
     assert draft(invented)[1]['judgment']=='unknown','model-added requirements are not source evidence'
+    unit_conflict=json.loads(json.dumps(scenarios[2]))
+    unit_conflict['raw_model_response']['items'][0]['question']='把2.7米改写后以米作单位，作答必须写单位。'
+    unit_conflict['question_documents'][0]['text']=unit_conflict['question_documents'][0]['text'].replace(scenarios[2]['raw_model_response']['items'][0]['question'],unit_conflict['raw_model_response']['items'][0]['question'])
+    assert draft(unit_conflict)[1]['judgment']=='unknown','a caption cannot impose a unit different from the question'
     return calls
 
 
