@@ -29,6 +29,11 @@ const model=String.raw`def model(messages,schema,name,timeout,**kwargs):
 `;
 fixture=fixture.replace(/^def model\([\s\S]*?(?=app.family_llm._chat_json=model)/m,model);
 const L=(a,b)=>`虚构柳叶卷 第${a}大题 第${b}题`;
+// Like test_homework_text_ui.cjs, the page's own function source is read from the shipped files and run unchanged.
+const appSource=fs.readFileSync(path.join(__dirname,'app.js'),'utf8'),calendarSource=fs.readFileSync(path.join(__dirname,'calendar.js'),'utf8');
+const between=(source,start,end)=>{const i=source.indexOf(start),j=source.indexOf(end,i);assert(i>=0&&j>i,start);return source.slice(i,j)};
+const savedSource=between(appSource,'function savedHomeworkReviewParts(text){','\nasync function loadSavedHomeworkReview');
+const {agendaDateHTML,taskFamilyEntry}=new Function('esc','data',between(calendarSource,'function agendaDueLabel(','function agendaItemHTML(')+between(appSource,'function taskFamilyEntry(','\nfunction taskReviewDue(')+';return {agendaDateHTML,taskFamilyEntry}')(x=>String(x),{today:'2026-10-15'});
 async function until(fn,label){const end=Date.now()+12000;while(Date.now()<end){if(await fn())return;await delay(80)}throw Error(label)}
 async function start(){
  const socket=net.createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');const port=socket.address().port;await new Promise(r=>socket.close(r));
@@ -52,14 +57,14 @@ async function start(){
   page=await browser.newPage({viewport:{width,height:850}});page.setDefaultTimeout(12000);const errors=[],foreign=[],bad=[],dialogs=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>{dialogs.push(d.message());d.dismiss()});
   await page.route('**/*',async route=>{const r=route.request(),u=new URL(r.url());if(u.origin!==new URL(server.url).origin){foreign.push(r.url());return route.abort()}if(r.method()==='POST'&&u.pathname.startsWith('/api/print/')&&!['/api/print/homework/draft','/api/print/homework/catalog'].includes(u.pathname)){bad.push(u.pathname);return route.abort()}return route.continue()});
   const fit=async()=>assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1&&[...document.querySelectorAll('dialog[open]')].every(d=>d.scrollWidth<=d.clientWidth+1)),'no horizontal overflow');
-  await page.goto(server.url);await until(async()=>await page.evaluate(()=>typeof agendaDateHTML==='function'&&typeof taskFamilyEntry==='function'&&typeof savedHomeworkReviewFocus==='function'),'scripts loaded');
+  await page.goto(server.url);
   // Publication: a school item (message, accepted origin or a free-text school source) keeps "待核对"; only a family entry without a date omits it.
-  const dates=await page.evaluate(()=>({school:agendaDateHTML({published_on:''},'2026-10-15',taskFamilyEntry({source:'Agent建议:x\nmessage:s:1',school_origin:true,agenda:{}})),
+  const dates={school:agendaDateHTML({published_on:''},'2026-10-15',taskFamilyEntry({source:'Agent建议:x\nmessage:s:1',school_origin:true,agenda:{}})),
    message:agendaDateHTML({published_on:''},'2026-10-15',taskFamilyEntry({source:'message:s:1',agenda:{publications:[{ref:'message:s:1'}]}})),
    freeText:agendaDateHTML({published_on:''},'2026-10-15',taskFamilyEntry({source:'虚构学校通知',agenda:{}})),
    family:agendaDateHTML({published_on:'',due_on:''},'2026-10-15',taskFamilyEntry({source:'家长录入',agenda:{}})),
    familyDated:agendaDateHTML({published_on:'2026-10-14'},'2026-10-15',taskFamilyEntry({source:'家长录入',agenda:{}})),
-   familyLinked:taskFamilyEntry({source:'家长录入',agenda:{publications:[{ref:'message:s:1'}]}})}));
+   familyLinked:taskFamilyEntry({source:'家长录入',agenda:{publications:[{ref:'message:s:1'}]}})};
   for(const key of ['school','message','freeText'])assert.match(dates[key],/发布：待核对/,key);
   assert.doesNotMatch(dates.family,/发布/);assert.match(dates.family,/截止待核对/);assert.match(dates.familyDated,/发布：2026-10-14/);assert.equal(dates.familyLinked,false);
   await page.locator('[data-homework-new]').first().click();const entry=page.locator('#homeworkInputDialog'),row=entry.locator('[data-homework-item="0"]'),title='虚构两大题六题 '+width;
@@ -112,7 +117,7 @@ async function start(){
   await focus.getByRole('button',{name:'查看 '+L(2,3)+' · 尚未检查'}).click();
   assert.deepEqual(await page.evaluate(()=>{const x=document.activeElement,r=x.getBoundingClientRect();return [x.className,x.textContent,r.top>=0&&r.bottom<=innerHeight]}),['saved-review-question',L(2,3),true]);await shot('context-'+width+'-reopened-located');
   // Only a text that parses exactly gets the summary; an edited or older text shows its complete text alone.
-  const strict=await page.evaluate(texts=>texts.map(t=>{const panel=document.createElement('section');panel.innerHTML='<nav data-saved-review-focus hidden></nav>';const parts=savedHomeworkReviewParts(t),nodes=parts.map(p=>{if(!p.kind)return p.text;const s=document.createElement('span');s.textContent=p.text;return s});savedHomeworkReviewFocus(panel,parts,nodes);return panel.querySelector('nav').hidden}),[generated,generated.replace(/\n\n虚构柳叶卷 第2大题 第3题 · 未判定\n[^]*?(?=\n\n标)/,''),generated.replace('本次核对6题：','本次核对6题，'),generated.replace('卷面作答：明友','卷面作答：明友\n家长补充：看错了')]);
+  const strict=await page.evaluate(([source,texts])=>{const {savedHomeworkReviewParts,savedHomeworkReviewFocus}=new Function(source+';return {savedHomeworkReviewParts,savedHomeworkReviewFocus}')();return texts.map(t=>{const panel=document.createElement('section');panel.innerHTML='<nav data-saved-review-focus hidden></nav>';const parts=savedHomeworkReviewParts(t),nodes=parts.map(p=>{if(!p.kind)return p.text;const s=document.createElement('span');s.textContent=p.text;return s});savedHomeworkReviewFocus(panel,parts,nodes);return panel.querySelector('nav').hidden})},[savedSource,[generated,generated.replace(/\n\n虚构柳叶卷 第2大题 第3题 · 未判定\n[^]*?(?=\n\n标)/,''),generated.replace('本次核对6题：','本次核对6题，'),generated.replace('卷面作答：明友','卷面作答：明友\n家长补充：看错了')]]);
   assert.deepEqual(strict,[false,true,true,true]);
   // The saved check is offered to this answer only as the previous round.
   if(!await panel().locator(':scope > details').evaluate(x=>x.open))await panel().locator(':scope > details > summary').click();await until(async()=>await panel().locator('[data-homework-review-sources] [data-review-source]').count()===1,'saved check offered');
