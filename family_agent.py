@@ -636,8 +636,11 @@ def _school_batches(source_id, messages):
     return batches
 
 
-def _school_pending_batches(store, source_id):
-    """Scan this tick's finite inbox without moving the collector cursor or regrouping claimed jobs."""
+def _school_pending_batches(store, source_id, now=None):
+    """Scan this tick's finite inbox without moving the collector cursor or regrouping claimed jobs.
+
+    Only with ``now`` may a due claimed job whose last publication grew be continued by recorded successors.
+    """
     with store._db() as c:
         end = c.execute('SELECT MAX(rowid) FROM agent_messages WHERE source_id=?', (source_id,)).fetchone()[0] or 0
         jobs = dict(c.execute("SELECT id,fingerprint FROM agent_jobs WHERE done=0 AND id LIKE 'messages:%'"))
@@ -695,6 +698,21 @@ def _school_pending_batches(store, source_id):
                     value = pending.popleft(); covered -= 1
                     publication = [v['message'] for v in groups(publication + [value])[-1]['messages']]
             else:
+                # A due job whose last publication now reaches past its frozen input (a list's shared standard sent
+                # next) is continued by traceable successors with its attempts; cooling/exhausted jobs stay as they are.
+                tail = [v['message'] for v in groups(fixed)[-1]['messages']]; grown = list(tail); fill(len(fixed) + 1)
+                while len(fixed) + len(grown) - len(tail) < len(pending) and len(grown) < 6 and not claimed(len(fixed) + len(grown) - len(tail)):
+                    candidate = grown + [pending[len(fixed) + len(grown) - len(tail)]]
+                    if len(groups(candidate)) != 1: break
+                    grown = candidate; fill(len(fixed) + len(grown) - len(tail) + 1)
+                head = fixed[:len(fixed) - len(tail)]
+                successors = (now is not None and len(grown) > len(tail) and sum(len(_json(v)) for v in grown) <= 14000
+                              and store._school_succeed(source_id, fixed, head, grown, now))
+                if successors:
+                    jobs.update(successors)
+                    for _ in head: pending.popleft()
+                    if head: yield head
+                    continue
                 for _ in fixed: pending.popleft()
                 yield fixed
                 publication = [v['message'] for v in groups(fixed)[-1]['messages']]
@@ -1636,6 +1654,27 @@ class Store:
                 return fingerprint
             c.execute('INSERT OR REPLACE INTO agent_jobs(id,fingerprint,attempts) VALUES(?,?,?)', (key, fingerprint, int(model)))
         return fingerprint
+
+    def _school_succeed(self, source_id, old, head, tail, now):
+        """Continue a due school batch whose last publication has grown past its frozen input.
+
+        The old job keeps its key, fingerprint and attempts and records which successor keys continue it; each
+        successor starts from those attempts, so no message regains a retry budget. A cooling, exhausted or
+        changed job is left exactly as it is.
+        """
+        key=lambda values:'messages:'+_hash([source_id,[v['id'] for v in values]])[:40]
+        fingerprint=lambda values:_hash({'school_learning_policy':8,'messages':values})
+        with self._db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            row=c.execute('SELECT * FROM agent_jobs WHERE id=? AND fingerprint=? AND done=0',(key(old),fingerprint(old))).fetchone()
+            if not row or row['attempts']>=MAX_ATTEMPTS or row['next_try']>now.isoformat():return None
+            successors=[(key(values),fingerprint(values)) for values in (head,tail) if values]
+            if any(c.execute('SELECT 1 FROM agent_jobs WHERE id=?',(ident,)).fetchone() for ident,_ in successors):return None
+            for ident,value in successors:
+                c.execute('INSERT INTO agent_jobs(id,fingerprint,attempts) VALUES(?,?,?)',(ident,value,row['attempts']))
+            c.execute('UPDATE agent_jobs SET done=1,error=? WHERE id=?',('末项发布已由后续原消息补全，由'+'、'.join(ident for ident,_ in successors)
+                +'按完整发布接续；本批'+str(row['attempts'])+'次尝试计入后继批次。',key(old)))
+        return dict(successors)
 
     def _school_selection_current(self, c, key, fingerprint, source, messages, *, processed=0):
         """Recheck only the original school batch, under the settings/save transaction; no model or collection."""
@@ -3017,29 +3056,8 @@ def _school_native_common_negative(value):
     # A quoted negative still requires an affirmative predicate outside the quote.
     # Mask literal objects only in this syntax copy, never in the saved original.
     value=re.sub(r'“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』|"[^"]*"',lambda m:'□'*len(m[0]),value)
-    predicate=r'标注|标记|(?:圈|标|划|画|找|摘|写|列|指)(?:出|上|在|到|入)?|贴(?:上|在|到)?|选择|记录|整理|比较|分析|说明|归纳|识别|辨认|区分|检查|核对|朗读|背诵|抄写|默写|听写|跟读|订正|预习|复习|阅读|口算|签字|打印|提交|交回|完成'
-    modifier=r'请(?:家长|同学们?|大家)?\s*|(?:必须|需要|应当|应该|要|须)\s*|(?:认真|仔细|逐一|分别)\s*|'+_SCHOOL_NATIVE_DATE+r'\s*(?:前|之前|以前|内)?\s*'
-    def repeated_before(text,terms,ending):
-        # Same greedy repeated-token / lazy location-object grammar, but each
-        # position is resolved once. Overlapping prefixes must not backtrack
-        # exponentially when the required predicate is absent. No text is cut.
-        terms=[(re.compile(pattern),lazy) for pattern,lazy in terms]
-        ending=re.compile(ending);resolved={}
-        for start in range(len(text),-1,-1):
-            found=None
-            for token,lazy in terms:
-                match=token.match(text,start)
-                if not match:continue
-                ends=range(start+1,match.end()+1) if lazy else range(match.end(),start,-1)
-                for end in ends:
-                    if end in resolved and token.fullmatch(text,start,end):
-                        found=resolved[end];break
-                if found is not None:break
-            if found is None:found=ending.match(text,start)
-            if found is not None:resolved[start]=found
-        return resolved
-    prefixes=[(modifier,False),(r'(?:在|从|对|用|按|依据|根据)[^。；;，,]{1,40}',True)]
-    addressed=repeated_before(value,prefixes,r'(?:(?:把|将)(?P<object>[^。；;，,]{1,60}?))?(?:'+predicate+r')').get(0)
+    predicate=_SCHOOL_NATIVE_PREDICATE;repeated_before=_school_repeated_before
+    addressed=_school_native_common_addressed(value)
     if not addressed:return True
     # Prepositions and ba objects cannot swallow an actual negation of this action.
     before=value[:addressed.start()]+(addressed['object'] or '')
@@ -3051,6 +3069,45 @@ def _school_native_common_negative(value):
     if any(match.end() in followed for match in re.finditer(r'(?:'+negative+r')\s*',object_text)):return True
     if re.search(r'(?:不(?:要|用|必|需|须|得|能|可|应|准|许|再)|无须|无需|免|勿|毋)\s*$',object_text):return True
     return bool(re.search(r'(?:后|之后|以后|并|但|再|然后|且|也|仍|而)[^。；;]{0,20}(?:'+negative+r')',object_text))
+
+
+_SCHOOL_NATIVE_PREDICATE=r'标注|标记|(?:圈|标|划|画|找|摘|写|列|指)(?:出|上|在|到|入)?|贴(?:上|在|到)?|选择|记录|整理|比较|分析|说明|归纳|识别|辨认|区分|检查|核对|朗读|背诵|抄写|默写|听写|跟读|订正|预习|复习|阅读|口算|签字|打印|提交|交回|完成'
+
+
+def _school_repeated_before(text,terms,ending):
+    # Same greedy repeated-token / lazy location-object grammar, but each
+    # position is resolved once. Overlapping prefixes must not backtrack
+    # exponentially when the required predicate is absent. No text is cut.
+    terms=[(re.compile(pattern),lazy) for pattern,lazy in terms]
+    ending=re.compile(ending);resolved={}
+    for start in range(len(text),-1,-1):
+        found=None
+        for token,lazy in terms:
+            match=token.match(text,start)
+            if not match:continue
+            ends=range(start+1,match.end()+1) if lazy else range(match.end(),start,-1)
+            for end in ends:
+                if end in resolved and token.fullmatch(text,start,end):
+                    found=resolved[end];break
+            if found is not None:break
+        if found is None:found=ending.match(text,start)
+        if found is not None:resolved[start]=found
+    return resolved
+
+
+def _school_native_common_addressed(value):
+    """The affirmative predicate a common standard opens with ("今天完成…", "请家长核对…"), after its modifiers and places.
+
+    The negation reader uses the same grammar; background about the list ("很重要", "是为了复习") opens with no predicate.
+    """
+    modifier=r'请(?:家长|同学们?|大家)?\s*|(?:必须|需要|应当|应该|要|须)\s*|(?:认真|仔细|逐一|分别)\s*|'+_SCHOOL_NATIVE_DATE+r'\s*(?:前|之前|以前|内)?\s*'
+    prefixes=[(modifier,False),(r'(?:在|从|对|用|按|依据|根据)[^。；;，,]{1,40}',True)]
+    return _school_repeated_before(value,prefixes,r'(?:(?:把|将)(?P<object>[^。；;，,]{1,60}?))?(?:'+_SCHOOL_NATIVE_PREDICATE+r')').get(0)
+
+
+# "以上两项都…", "两项都…", "以上作业都…": the one scope reading a list's common standard uses, in or after its message.
+_SCHOOL_NATIVE_COMMON=r'^(?:(?:以上|这)?([二两三四五六七八九十2-9])项(?:作业|任务|要求)?|(?:以上|上述|这些|所有)(?:作业|任务|要求))(?:都|均)'
+_SCHOOL_NATIVE_COUNT={'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}
 
 
 def _school_native_blocks(text):
@@ -3077,7 +3134,7 @@ def _school_native_blocks(text):
             examples.append((start,end))
             continue
         purpose=_school_native_command(clause)
-        common=re.match(r'^(?:(?:以上|这)?([二两三四五六七八九十2-9])项(?:作业|任务|要求)?|(?:以上|上述|这些|所有)(?:作业|任务|要求))(?:都|均)',clause)
+        common=re.match(_SCHOOL_NATIVE_COMMON,clause)
         if common and pieces:
             # ponytail: do not share a comma's possible subject switch; richer scope needs a proved clause allocation.
             if re.search(r'[，,]',clause):raise AgentError('共同标准含未核明的单项条件，完整原批次保留',code='school_action_coverage')
@@ -3086,7 +3143,7 @@ def _school_native_blocks(text):
             # ponytail: only positive common standards are compiled; negated scope needs a proved semantic allocation.
             if _school_native_common_negative(clause[common.end():]):
                 raise AgentError('共同标准含未核明的否定条件，完整原批次保留',code='school_action_coverage')
-            count=(int(common[1]) if common[1].isdigit() else {'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}[common[1]]) if common[1] else len(pieces)
+            count=(int(common[1]) if common[1].isdigit() else _SCHOOL_NATIVE_COUNT[common[1]]) if common[1] else len(pieces)
             shared.append((count,clause))
             continue
         # The container's numbered "complete questions" is its answer step,
@@ -3173,19 +3230,25 @@ def _school_native_shared_later(entry,evidence,count):
     except (KeyError,ValueError,TypeError):return None
     shared=_school_shared_standard(later['text'])
     if not shared:return None
-    if shared[0]!=count:
+    if shared[0] is not None and shared[0]!=count:
         raise AgentError('共同标准的项数与独立行动不一致，完整原批次保留',code='school_action_coverage')
     return dict(ref=later['ref'],quote=later['text'].strip(),goal=shared[1],time=later['time'])
 
 
 def _school_shared_standard(text):
-    """(stated count, clause) when a whole message is one positive request for every listed outcome, else None."""
+    """(stated count or None, clause) when a whole message is one positive common requirement, else None.
+
+    It is read exactly like a list's own common clause (same scope words, comma, change, optionality and negation
+    limits); being a separate message, it must also open with an affirmative predicate after its modifiers, so
+    background about the list ("以上两项都很重要") stays outside every outcome.
+    """
     clause=text.strip().rstrip('。；;').strip()
-    common=re.match(r'^(?:以上|上述|这)([二两三四五六七八九十2-9])项(?:作业|任务|要求)?(?:都|均)',clause)
-    # Only a stated request is a standard; background about the list ("以上两项都很重要") stays outside both outcomes.
-    if (not common or not re.match(r'(?:请|要|需|须|必须|应)',clause[common.end():]) or re.search(r'[，,。；;！!？?\n]',clause)
-            or re.search(_SCHOOL_NATIVE_CHANGE+r'|选做|必做',clause) or _school_native_common_negative(clause[common.end():])):return None
-    return (int(common[1]) if common[1].isdigit() else {'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}[common[1]]),clause
+    common=re.match(_SCHOOL_NATIVE_COMMON,clause)
+    if not common:return None
+    rest=clause[common.end():]
+    if (re.search(r'[，,。；;！!？?\n]',clause) or re.search(_SCHOOL_NATIVE_CHANGE+r'|选做|必做',clause)
+            or _school_native_common_negative(rest) or not _school_native_common_addressed(rest)):return None
+    return (int(common[1]) if common[1].isdigit() else _SCHOOL_NATIVE_COUNT[common[1]]) if common[1] else None,clause
 
 
 def _school_native_later(action):
@@ -5352,7 +5415,7 @@ def run_once(app, now=None):
                 with store._db() as c:
                     saved = c.execute('SELECT * FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
                     store._binding(source, saved)
-                for values in _school_pending_batches(store, source['id']):
+                for values in _school_pending_batches(store, source['id'], now):
                     key = 'messages:' + _hash([source['id'], [row['id'] for row in values]])[:40]
                     fp = store._job(key, {'school_learning_policy': 8, 'messages': values}, now, model=True)
                     if not fp: continue
