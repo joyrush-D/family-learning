@@ -1186,7 +1186,7 @@ def teacher_wording_caption_checks():
         original=item(label=label,question='请说明阅读文章的顺序与最后要做的事。',question_kind='subjective',
                       student_answer=student,answer='AI自行推导：'+body if answer is None else answer)
         original.update(changes or {})
-        raw=dict(items=[original],question_labels=[label],coverage='仅核本次虚构卷的明确小题，不代表其他题目。')
+        raw=dict(items=[original],question_labels=[original['label']],coverage='仅核本次虚构卷的明确小题，不代表其他题目。')
         untouched=json.loads(json.dumps(raw))
         documents=[dict(name='synthetic-wording-teacher.txt',text='教师参考答案\n试卷名称：'+paper+'\n第一大题\n第7题（2）：'+teacher+'\n')]
         if other is not None:
