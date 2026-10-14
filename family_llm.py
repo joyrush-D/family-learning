@@ -1742,12 +1742,13 @@ def _ref_unit_waiver(question,match):
     again=r'(?:再|另(?:外|行)?)?'
     place=r'(?:在(?:答案|作答|结果|得数)(?:中|里|内|上))?'
     printed=r'(?:(?:已经?|预先?|提前|预)?印[好有出上了着]*)?'
-    # A bare 不 is permission only as a writing instruction, not a statement
-    # about the child (「孩子不写单位」). Answer-position words keep that action.
-    instruction=r'(?:本题|答题|作答|书写)?(?:要求|规定)\s*[：:]'
-    direct=(re.search(instruction,head+'；'+before) and re.fullmatch(
-        r'\s*(?:'+instruction+r'\s*)?(?:本题)?(?:答案|作答|结果|得数)?\s*不'+again+place+write+
-        r'[上出明全]?'+printed+r'\s*',_REF_PART.sub('',head)))
+    # Read a whole answer-writing instruction, not a 要求 substring belonging
+    # to an observation/record. 「只填数字，不带单位」 shares that writing action.
+    instruction=r'(?:本题|答题|作答|答案|书写)(?:要求|规定)\s*[：:]\s*'
+    action=r'(?:本题)?(?:答案|作答|结果|得数)?\s*不'+again+place+write+r'[上出明全]?'+printed+r'\s*'
+    direct=(re.fullmatch(r'\s*'+instruction+action,_REF_PART.sub('',head)) or
+            re.fullmatch(r'\s*'+instruction+r'(?:只|仅)[填写](?:数字|数值|答案|结果|得数)\s*',_REF_PART.sub('',before))
+            and re.fullmatch(r'\s*'+action,_REF_PART.sub('',head)))
     omission=(re.search(no+again+r'(?:'+write+r'[上出明全]?'+printed+r')?\s*$',head)
               or re.search(no+again+place+write+r'[上出明全]?'+printed+r'\s*$',head) or direct)
     # A missing print predicate (未印/没印) is not one of these writing modalities.
