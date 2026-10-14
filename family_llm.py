@@ -2332,7 +2332,7 @@ def _source_question_inventory(documents, *, limit=25, layouts=None):
         bare=not any(line.strip() for _,line in lines[:first])
         for at,original in lines:
             line=original.strip()
-            owners[at]=parent
+            owners[at]=parent or ((paper,section,None,None) if paper is not None else None)
             if not line: continue
             declared=_REF_DECLARED.fullmatch(line);named=declared[1] if declared else line
             if _REF_WHOLE.fullmatch(named) and not _REF_GENERIC_PAPER.fullmatch(named):
@@ -2410,7 +2410,8 @@ def _source_question_inventory(documents, *, limit=25, layouts=None):
             # answer field closes the block; trailing prose is never assumed to
             # belong to it or discarded as another question's optional material.
             if (len(fields)==1 and fields[0]>0 and not any(line.strip() for line in block[fields[0]+1:])
-                    and all(at in role_lines for at in range(row['line'],end+1))):
+                    and all(at in role_lines for at in range(row['line'],end+1))
+                    and not any(_source_example_heading(line.strip()) for line in block)):
                 row['window_span']=(row['line'],row['line']+fields[0])
         if layouts is not None: layouts.append(dict(headings=headings,role_lines=role_lines,owners=owners,issues=issues))
         rows.extend(local)
@@ -2459,7 +2460,20 @@ def _source_window_references(body,owner,rows,titles):
         # Only a positive carrier of applicability/range (not a data/action
         # phrase) names the retained parent's scope without borrowing its leaves.
         scope=re.fullmatch(r'(?:(?:统一|本)?(?:评分|范围|版本)?(?:说明|要求)?(?:适用于?|覆盖|针对)|(?:适用)?范围(?:包括|为|是)?)',words)
-        if not scope: needed.update(row['label'] for row in found)
+        tail=body[end:].strip();clause=re.split(r'[。；;，,\n]',tail,maxsplit=1)[0].strip(' :：')
+        count=re.fullmatch(r'的?(?:全部|所有|共)\s*(\d{1,3})\s*个?(?:小题|小问|问)',clause)
+        pure_range=not clause or count is not None or re.fullmatch(r'的?(?:全部|所有|各)(?:小题|小问)',clause)
+        data_carrier=re.search(r'(?:给出|提供|列出|所述|所示|所用|里(?:的)?|中(?:的)?)[^。；;\n]{0,24}(?:图|表|数据|结果|材料|题干|原文|答案|作答|条件|步骤)',tail)
+        target=found[0]
+        same_parent=owner and owner[:3]==(target['paper'],target['section'],target['number']) and owner[3]==sub
+        # Before the parent heading, an explicit complete same-paper scope and
+        # exact leaf count can name that one known parent, never borrow its data.
+        early_parent=(owner and owner[2] is None and owner[0]==target['paper']
+            and (owner[1] is None or owner[1]==target['section']) and sub is None and count
+            and int(count[1])==len(found) and all(row['sub'] for row in found)
+            and _ref_scope(prefix,titles=titles)[1]==target['section'])
+        if not (scope and pure_range and not data_carrier and (same_parent or early_parent)):
+            needed.update(row['label'] for row in found)
     for mark in re.finditer(_REF_FRAME,body):
         if any(start<=mark.start()<end for start,end in paths): continue
         sub,_=_ref_sub(body,mark.start(),teacher=True)
