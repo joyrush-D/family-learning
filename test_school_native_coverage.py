@@ -643,7 +643,9 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         self.assertEqual(set(after), {five, six, tail})
         for key in (five, six):
             self.assertEqual(after[key]['fingerprint'], frozen[key]['fingerprint'])
-            self.assertTrue(after[key]['error'].startswith(frozen[key]['error']), 'both original failure texts stay')
+        self.assertTrue(frozen[six]['error'] and after[six]['error'].startswith(frozen[six]['error']), 'the continued job keeps its failure text')
+        # The reused head then succeeded on its own key: the existing success path clears its retry state as for any recovery.
+        self.assertEqual((after[five]['error'], after[five]['next_try']), ('', ''))
         self.assertEqual([(after[k]['attempts'], after[k]['done']) for k in (five, six, tail)], [(2, 1), (1, 1), (2, 1)])
         self.assertIn(five, after[six]['error']);self.assertIn(tail, after[six]['error'])
         standard_rows = [r for r in rows if refs[6] in [e['ref'] for e in json.loads(r['evidence'])]]
