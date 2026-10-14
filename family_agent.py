@@ -592,12 +592,29 @@ def _publication_groups(views):
                 pointer = re.match(r'^(?:以上|上述|上面|这些|这份|附件|以下|下面)', message.get('text', '').strip())
                 if 0 <= gap <= 120 and (bare(view) or bare(previous) and pointer):
                     combined = True; reason = '同一发言人连续发送的正文与附件'
+            if not combined and _school_shared_follows(prior, message):
+                combined = True; reason = '同一发言人紧接清单的共同要求'
         if combined:
             groups[-1]['messages'].append(view); groups[-1]['reason'] = reason
         else:
             groups.append(dict(publisher=publisher, sender=message.get('sender', ''), source=view.get('source_name', ''),
                 time=message.get('time', ''), reason='', messages=[view]))
     return groups
+
+
+def _school_shared_follows(prior, message):
+    """A complete text that is wholly one common request ("以上两项均请…") read with the same publisher's text just before it.
+
+    The caller already proved the same source and stable publisher and that no message of the source lies between them in
+    the stored order. This relation uses only the originals, never a sequence gap or attachment lookup, so selection and the
+    save transaction group alike; whether the standard binds stays with the native ledger.
+    """
+    if (prior['kind'] != 'text' or message['kind'] != 'text' or prior.get('unread') or message.get('unread')
+            or not _school_shared_standard(message.get('text', ''))):return False
+    try:
+        if prior.get('message_order') and message.get('message_order') and int(message['message_order']) <= int(prior['message_order']):return False
+        return 0 < (dt.datetime.fromisoformat(message['time']) - dt.datetime.fromisoformat(prior['time'])).total_seconds() <= 120
+    except (KeyError, TypeError, ValueError):return False
 
 
 def _school_batches(source_id, messages):
@@ -3154,14 +3171,21 @@ def _school_native_shared_later(entry,evidence,count):
     try:
         if not 0<(dt.datetime.fromisoformat(later['time'])-dt.datetime.fromisoformat(entry['time'])).total_seconds()<=120:return None
     except (KeyError,ValueError,TypeError):return None
-    clause=later['text'].strip().rstrip('。；;').strip()
+    shared=_school_shared_standard(later['text'])
+    if not shared:return None
+    if shared[0]!=count:
+        raise AgentError('共同标准的项数与独立行动不一致，完整原批次保留',code='school_action_coverage')
+    return dict(ref=later['ref'],quote=later['text'].strip(),goal=shared[1],time=later['time'])
+
+
+def _school_shared_standard(text):
+    """(stated count, clause) when a whole message is one positive request for every listed outcome, else None."""
+    clause=text.strip().rstrip('。；;').strip()
     common=re.match(r'^(?:以上|上述|这)([二两三四五六七八九十2-9])项(?:作业|任务|要求)?(?:都|均)',clause)
     # Only a stated request is a standard; background about the list ("以上两项都很重要") stays outside both outcomes.
     if (not common or not re.match(r'(?:请|要|需|须|必须|应)',clause[common.end():]) or re.search(r'[，,。；;！!？?\n]',clause)
             or re.search(_SCHOOL_NATIVE_CHANGE+r'|选做|必做',clause) or _school_native_common_negative(clause[common.end():])):return None
-    if (int(common[1]) if common[1].isdigit() else {'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}[common[1]])!=count:
-        raise AgentError('共同标准的项数与独立行动不一致，完整原批次保留',code='school_action_coverage')
-    return dict(ref=later['ref'],quote=later['text'].strip(),goal=clause,time=later['time'])
+    return (int(common[1]) if common[1].isdigit() else {'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}[common[1]]),clause
 
 
 def _school_native_later(action):

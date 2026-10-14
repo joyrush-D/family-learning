@@ -426,6 +426,92 @@ class SchoolNativeCoverageTests(unittest.TestCase):
     def test_shared_standard_with_a_second_clause_binds_nothing(self):
         self._assert_shared_rejected([self.SHARED_LIST, '以上两项均请家长核对，朗读另外录音上传。'])
 
+    def _p11_payload(self, standard_sender='synthetic-teacher-1'):
+        """P11: five independent notices, then the list and its standard 60 seconds later; orders are not consecutive."""
+        self.now = self.fixture.now = dt.datetime(2026, 10, 15, 8, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='17')
+        texts = ['独立的虚构通知 ' + str(i) for i in range(1, 6)] + [self.SHARED_LIST, self.SHARED_STANDARD]
+        stamps = ['2026-10-15T07:5%d:00+08:00' % i for i in range(5)] + ['2026-10-15T07:58:00+08:00', '2026-10-15T07:59:00+08:00']
+        orders = ['101', '103', '104', '108', '109', '113', '116']
+        senders = ['synthetic-teacher-1'] * 6 + [standard_sender]
+        payload['messages'] = [dict(id=str(11 + i), message_order=order, time=stamp, kind='text', sender='虚构英语老师',
+                                    sender_id=sender, unread=False, text=text)
+                               for i, (text, stamp, order, sender) in enumerate(zip(texts, stamps, orders, senders))]
+        return payload, ['message:' + self.source['id'] + ':' + m['id'] for m in payload['messages']]
+
+    def test_p11_list_and_its_next_shared_standard_stay_one_reading_after_five_notices(self):
+        payload, refs = self._p11_payload()
+        self.store.ingest(payload)
+        proposals = [fixtures.school_proposal(
+            title_quote=quote, due='2026-10-16', evidence=[dict(ref=ref) for ref in refs[5:]],
+            learning_subject='英语', task_title='英语：' + quote, task_goal=quote + '；以上两项均请家长核对并在记录本签字。',
+            task_state='ready', task_reason='虚构回执：本项行动与共同核对签字标准明确。', task_purpose='learning')
+            for quote in self.SHARED_ACTIONS]
+        batches = []
+
+        def reply(messages, schema, name, timeout=60, *, data_path=None):
+            self.assertEqual((name, data_path), ('family_agent_selection', self.app.DATA))
+            evidence = json.loads(messages[-1]['content'])['evidence']
+            self.assertTrue(all(e['text'] == payload['messages'][refs.index(e['ref'])]['text'] for e in evidence))
+            batches.append([e['ref'] for e in evidence])
+            if batches[-1] == refs[5:]:return copy.deepcopy(dict(proposals=proposals))
+            return dict(proposals=[fixtures.school_proposal(title_quote=e['text'], evidence=[dict(ref=e['ref'])],
+                task_state='reference', task_purpose='unknown', task_reason='虚构通知按原文保留。') for e in evidence])
+
+        self.model.side_effect = reply
+        rounds = [agent.run_once(self.app, self.now), agent.run_once(self.app, self.now + dt.timedelta(minutes=1))]
+        self.assertEqual([r['failed'] for r in rounds], [0, 0])
+        self.assertEqual(batches, [refs[:5], refs[5:]], 'the list and its shared standard are read in one batch')
+        self.assertEqual(self.model.call_count, 2)
+        self.assertEqual(self.store.snapshot()['sources'][0]['pending_message_count'], 0)
+        with self.store._db() as c:
+            self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages ORDER BY rowid')], [1] * 7)
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")]
+            standard_rows = [r for r in rows if refs[6] in [e['ref'] for e in json.loads(r['evidence'])]]
+            self.assertEqual(len(standard_rows), 2, 'the standard is no generic pending item of its own')
+            for quote, other in (self.SHARED_ACTIONS, self.SHARED_ACTIONS[::-1]):
+                row = next(r for r in standard_rows if quote in r['body'])
+                self.assertNotIn(other, row['body'])
+                self.assertIn('以上两项均请家长核对并在记录本签字', row['body'])
+                self.assertEqual((row['due'], row['state']), ('2026-10-16', 'accepted'))
+                self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs[5:])
+                self.assertEqual({a['ref'] for a in json.loads(row['plan'])['school_original_action']['anchors']}, set(refs[5:]))
+            key = 'messages:' + agent._hash([self.source['id'], [m['id'] for m in payload['messages'][5:]]])[:40]
+            self.assertEqual(tuple(c.execute('SELECT attempts,done FROM agent_jobs WHERE id=?', (key,)).fetchone()), (1, 1))
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=8))
+        self.assertEqual((replay['processed'], replay['created'], self.model.call_count), (0, 0, 2))
+
+    def test_p11_standard_groups_only_with_a_proved_same_publisher_complete_neighbour(self):
+        payload, refs = self._p11_payload()
+        views = [dict(source_id=self.source['id'], message=m) for m in payload['messages'][5:]]
+        self.assertEqual([g['reason'] for g in agent._publication_groups(views)], ['同一发言人紧接清单的共同要求'])
+        for changes in (dict(sender_id='synthetic-teacher-2'), dict(sender_id=''), dict(time='2026-10-15T08:00:01+08:00'),
+                        dict(message_order='112'), dict(unread=True), dict(text='以上两项都很重要。'), dict(kind='image')):
+            with self.subTest(changes=changes):
+                changed = [views[0], dict(views[1], message=dict(views[1]['message'], **changes))]
+                self.assertEqual(len(agent._publication_groups(changed)), 2)
+        raw = [dict(payload=json.dumps(m)) for m in payload['messages']]
+        self.assertEqual([[m['id'] for m in b] for b in agent._school_batches(self.source['id'], raw)],
+                         [[m['id'] for m in payload['messages'][:5]], ['16', '17']])
+
+    def test_p11_claimed_cooling_six_message_batch_keeps_its_key_and_holds_the_standard(self):
+        payload, refs = self._p11_payload()
+        self.store.ingest(payload)
+        values = payload['messages'][:6]
+        key = 'messages:' + agent._hash([self.source['id'], [v['id'] for v in values]])[:40]
+        fp = self.store._job(key, dict(school_learning_policy=8, messages=values), self.now, model=True)
+        self.assertTrue(fp)
+        self.store._fail(key, self.now, fingerprint=fp, reason='虚构旧批冷却')
+        with self.store._db() as c:
+            before = tuple(c.execute('SELECT attempts,done,fingerprint,next_try FROM agent_jobs WHERE id=?', (key,)).fetchone())
+        self.assertEqual([[v['id'] for v in b] for b in agent._school_pending_batches(self.store, self.source['id'])],
+                         [[v['id'] for v in values]], 'the claimed job is not regrouped and its standard waits')
+        self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(minutes=1))['processed'], 0)
+        self.model.assert_not_called()
+        with self.store._db() as c:
+            self.assertEqual(tuple(c.execute('SELECT attempts,done,fingerprint,next_try FROM agent_jobs WHERE id=?', (key,)).fetchone()), before)
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_jobs WHERE id LIKE 'messages:%'").fetchone()[0], 1)
+
     def test_background_about_the_list_is_not_bound_as_a_standard(self):
         payload, refs, proposals = self._shared_messages([self.SHARED_LIST, '以上两项都很重要。'])
         upgraded = [dict(p, task_goal=p['title_quote'] + '；以上两项都很重要。') for p in proposals]
