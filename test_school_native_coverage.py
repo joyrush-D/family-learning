@@ -1119,5 +1119,296 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         # A heading stated for every outcome still applies to each.
         self.assertEqual(asked('英语作业：朗读Unit 2课文两遍；将校服尺码写在便签上。'), ['learning', 'learning'])
 
+    # The frozen synthetic case of the late shared standard: the list is saved as two tasks by one run_once; the same
+    # stable teacher's all-items standard is collected 60 seconds later and read alone by the next run_once.
+    LATE_SOURCE = 'synthetic-late-group'
+    LATE_LIST = '英语，明天完成两项要求：1. 朗读Unit 2课文两遍；2. 完成练习卷第1–3题。'
+    LATE_STANDARD = '以上两项均请家长核对并在记录本签字。'
+    LATE_ACTIONS = ('朗读Unit 2课文两遍', '完成练习卷第1–3题')
+    # Frozen receipt IDs from the recorded run; real task IDs are regenerated and are bound from the first run.
+    LATE_FROZEN_TARGETS = ('AGENT-cbc1946298d488488dba7bf5', 'AGENT-6706e356f8e23dbf85bd27ae')
+
+    def _late_message(self, ident, time, text, sender_id='synthetic-stable-teacher', **extra):
+        return dict(dict(id=ident, message_order=ident, time=time, kind='text', sender='虚构英语老师',
+                         sender_id=sender_id, text=text, unread=False), **extra)
+
+    def _late_ingest(self, expected, messages, checked):
+        self.store.ingest(dict(source_id=self.LATE_SOURCE, expected_cursor=expected, cursor=messages[-1]['id'],
+                               checked_at=checked, last_message_time=messages[-1]['time'], error='', messages=messages))
+
+    def _late_first_reply(self, ref):
+        return dict(proposals=[fixtures.school_proposal(
+            title_quote=quote, due='2026-10-16', evidence=[dict(ref=ref)], learning_subject='英语',
+            task_title=title, task_goal=quote + '。', task_state='ready', task_reason=reason, task_purpose='learning')
+            for quote, title, reason in ((self.LATE_ACTIONS[0], '英语：朗读Unit 2课文', '第一项明确。'),
+                                         (self.LATE_ACTIONS[1], '英语：完成练习卷', '第二项明确。'))])
+
+    def _late_second_reply(self, ref, targets, standard=None, **values):
+        """The frozen append/ready receipt with each frozen target replaced by the task the first run actually saved."""
+        standard = standard or self.LATE_STANDARD
+        return dict(proposals=[fixtures.school_proposal(**dict(dict(
+            title_quote=standard, due='', evidence=[dict(ref=ref)], learning_subject='英语',
+            task_title='英语：' + quote, task_goal=standard, task_state='ready',
+            task_reason='明确以上两项共同完成标准，追加到已存原作业。', task_change='append', task_target_id=target,
+            task_purpose='learning'), **values)) for quote, target in zip(self.LATE_ACTIONS, targets)])
+
+    def _late_first_run(self):
+        """Run 1 of the frozen case: the list alone becomes two accepted tasks; returns the task IDs in action order."""
+        self.source['id'] = self.LATE_SOURCE
+        self.fixture.config()
+        self.now = self.fixture.now = dt.datetime(2026, 10, 15, 14, tzinfo=agent.TZ)
+        first = self._late_message('11', '2026-10-15T14:00:00+08:00', self.LATE_LIST)
+        self._late_ingest('10', [first], '2026-10-15T14:00:00+08:00')
+        ref = 'message:' + self.LATE_SOURCE + ':11'
+        replies = [self._late_first_reply(ref)]
+        self.model.side_effect = lambda messages, *args, **kwargs: copy.deepcopy(replies.pop(0))
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        with self.store._db() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")]
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(r['state'] == 'accepted' and r['task_id'] for r in rows))
+        # Bound from this run's saved tasks; whether they equal the frozen receipt's IDs is not a premise of any check.
+        targets = tuple(next(r['task_id'] for r in rows if quote in r['body']) for quote in self.LATE_ACTIONS)
+        self.assertEqual(len(set(targets)), 2)
+        return first, targets
+
+    def _late_second_run(self, targets, *, message=None, reply=None, at=None):
+        later = message or self._late_message('12', '2026-10-15T14:01:00+08:00', self.LATE_STANDARD)
+        with self.store._db() as c:
+            cursor = c.execute('SELECT cursor FROM agent_sources WHERE id=?', (self.LATE_SOURCE,)).fetchone()[0]
+        self._late_ingest(cursor, [later], later['time'] if not at else at.isoformat())
+        ref = 'message:' + self.LATE_SOURCE + ':' + later['id']
+        replies = [reply or self._late_second_reply(ref, targets)]
+        seen = []
+
+        def second(messages, schema, name, timeout=60, *, data_path=None):
+            context = json.loads(messages[-1]['content'])
+            seen.append([e['ref'] for e in context['evidence']])
+            return copy.deepcopy(replies.pop(0))
+
+        self.model.side_effect = second
+        result = agent.run_once(self.app, at or dt.datetime(2026, 10, 15, 14, 1, tzinfo=agent.TZ))
+        return result, ref, seen
+
+    def _late_state(self):
+        with self.store._db() as c:
+            present = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            return {table: [dict(r) for r in c.execute('SELECT * FROM ' + table + ' ORDER BY rowid')]
+                    for table in ('agent_items', 'agent_jobs', 'agent_messages', 'manual_tasks', 'task_updates', 'task_focus',
+                                  'task_focus_history', 'records', 'study_items') if table in present}
+
+    def _late_tasks(self, targets):
+        with self.store._db() as c:
+            updates = {r['id']: r['status'] for r in c.execute('SELECT id,status FROM task_updates')}
+            return {t['id']: dict(t, status=self.app.task_status(t, updates.get(t['id']))) for t in self.app.tasks(c) if t['id'] in targets}
+
+    def _late_scoped(self, task_id, message_id):
+        return self.store.message(dict(child_id='child-1', source_id=self.LATE_SOURCE, message_id=message_id, task_id=task_id),
+                                  self.app.upload_info)
+
+    def test_late_shared_standard_reaches_each_saved_task_of_its_list(self):
+        first, targets = self._late_first_run()
+        before = self._late_tasks(targets)
+        with self.store._db() as c:
+            canonicals = {r['task_id']: dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")}
+        real_apply, requests = agent.apply_school_change, []
+
+        def recorded(app, store, obj, **kwargs):
+            requests.append((copy.deepcopy(obj), kwargs))
+            return real_apply(app, store, obj, **kwargs)
+
+        with patch.object(agent, 'apply_school_change', side_effect=recorded):
+            result, ref, seen = self._late_second_run(targets)
+        self.assertEqual(sorted((obj['target_id'], kwargs) for obj, kwargs in requests),
+                         sorted((t, dict(school_auto=True)) for t in targets), 'the existing automatic append path, once per task')
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        self.assertEqual(seen, [[ref]], 'the standard is read alone; no extra model call')
+        state = self._late_state()
+        self.assertEqual({t['id'] for t in state['manual_tasks']}, set(targets), 'no third task')
+        appends = [r for r in state['agent_items'] if r['kind'] == 'school' and ref in r['evidence']]
+        self.assertEqual(sorted((r['state'], r['task_id']) for r in appends), sorted(('accepted', t) for t in targets))
+        after = self._late_tasks(targets)
+        for quote, task_id in zip(self.LATE_ACTIONS, targets):
+            task, old = after[task_id], before[task_id]
+            self.assertEqual(task['action'], old['action'] + '\n补充要求：' + self.LATE_STANDARD)
+            self.assertNotIn((set(self.LATE_ACTIONS) - {quote}).pop(), task['action'], 'the sibling outcome is never merged')
+            self.assertEqual((task['title'], task['agenda']['due_on'], task['status']), (old['title'], old['agenda']['due_on'], old['status']))
+            self.assertTrue(task['source'].startswith(old['source']), 'the original source 11 is kept first')
+            self.assertIn('\n\n' + ref + '\n', task['source'])
+            self.assertTrue(task['source'].endswith('\n' + self.LATE_STANDARD))
+            canonical = state['agent_items'][[r['id'] for r in state['agent_items']].index(canonicals[task_id]['id'])]
+            self.assertEqual((canonical['evidence'], canonical['body'], canonical['state']),
+                             (canonicals[task_id]['evidence'], canonicals[task_id]['body'], 'accepted'))
+            change, = json.loads(canonical['plan'])['school_changes']
+            self.assertEqual((change['change'], change['goal'], change['auto_added']), ('append', self.LATE_STANDARD, True))
+            for message_id, text in (('11', self.LATE_LIST), ('12', self.LATE_STANDARD)):
+                view = self._late_scoped(task_id, message_id)
+                self.assertEqual((view['task_id'], view['message']['text']), (task_id, text))
+        self.assertEqual(state['records'], [])
+        # The lost-receipt replay of the same request changes nothing; the next natural tick neither calls nor writes.
+        for obj, kwargs in requests:
+            self.assertTrue(real_apply(self.app, self.store, obj, **kwargs)['replayed'])
+        self.model.side_effect = AssertionError('no model call on replay')
+        tick = agent.run_once(self.app, dt.datetime(2026, 10, 15, 14, 8, tzinfo=agent.TZ))
+        self.assertEqual((tick['failed'], tick['processed']), (0, 0))
+        self.assertEqual(self._late_state()['agent_items'], state['agent_items'])
+        self.assertEqual(self._late_tasks(targets), after)
+        # Later feedback and completion stay on the same task through another tick.
+        self.app.save_task(dict(id=targets[0], status='已完成', note='虚构家长核对：已朗读并签字。'))
+        done = self._late_tasks(targets)
+        agent.run_once(self.app, dt.datetime(2026, 10, 15, 14, 15, tzinfo=agent.TZ))
+        self.assertEqual(self._late_tasks(targets), done)
+        self.assertEqual(done[targets[0]]['status'], '已完成')
+
+    def _late_variant(self, change_message=None, reply=None, extra=None, child_source=None):
+        """One fresh synthetic family per variant: run 1 as frozen, then a changed second message or receipt."""
+        case = type(self)('test_late_shared_standard_reaches_each_saved_task_of_its_list')
+        case.setUp()
+        try:
+            first, targets = case._late_first_run()
+            before = case._late_tasks(targets)
+            message = case._late_message('12', '2026-10-15T14:01:00+08:00', case.LATE_STANDARD)
+            message.update(change_message or {})
+            if child_source:
+                config = json.loads((case.fixture.data / 'agent.json').read_text())
+                config['sources'].append(dict(case.source, id=child_source[0], child_id=child_source[1], cursor='10'))
+                (case.fixture.data / 'agent.json').write_text(json.dumps(config))
+                case.store.ingest(dict(source_id=child_source[0], expected_cursor='10', cursor=message['id'], checked_at=message['time'],
+                                       last_message_time=message['time'], error='', messages=[message]))
+                ref = 'message:' + child_source[0] + ':' + message['id']
+                case.model.side_effect = lambda *args, **kwargs: copy.deepcopy(reply(ref, targets))
+                result = agent.run_once(case.app, dt.datetime(2026, 10, 15, 14, 1, tzinfo=agent.TZ))
+            else:
+                messages = (extra or []) + [message]
+                with case.store._db() as c:
+                    cursor = c.execute('SELECT cursor FROM agent_sources WHERE id=?', (case.LATE_SOURCE,)).fetchone()[0]
+                case._late_ingest(cursor, messages, message['time'])
+                refs = ['message:' + case.LATE_SOURCE + ':' + m['id'] for m in messages]
+                value = reply(refs[-1], targets) if reply else case._late_second_reply(refs[-1], targets)
+                for other in refs[:-1]:
+                    value['proposals'].append(fixtures.school_proposal(title_quote='明天带跳绳', evidence=[dict(ref=other)],
+                        task_state='reference', task_purpose='unknown', task_reason='虚构其他通知按原文保留。'))
+                case.model.side_effect = lambda *args, **kwargs: copy.deepcopy(value)
+                result = agent.run_once(case.app, dt.datetime(2026, 10, 15, 14, 1, tzinfo=agent.TZ))
+            state = case._late_state()
+            after = case._late_tasks(targets)
+            for task_id in targets:
+                self.assertEqual(after[task_id]['action'], before[task_id]['action'], 'no standard reaches a task unproven')
+                self.assertEqual(after[task_id]['source'], before[task_id]['source'])
+                with self.assertRaises(agent.AgentError):case._late_scoped(task_id, '12')
+            self.assertEqual({t['id'] for t in state['manual_tasks']}, set(targets), 'never a third task')
+            return result, [(r['state'], json.loads(r['plan'])['school_task']['state'], json.loads(r['plan'])['school_task']['change'])
+                            for r in state['agent_items'] if r['kind'] == 'school' and r['task_id'] not in targets]
+        finally:
+            case.doCleanups()
+
+    def test_late_shared_standard_unproven_relations_stay_for_review(self):
+        review = [('pending', 'review', 'append')] * 2
+        for name, change in (('other teacher', dict(sender_id='synthetic-other-teacher')),
+                             ('stated count differs', dict(text='以上三项均请家长核对并在记录本签字。')),
+                             ('true negation', dict(text='以上两项均不用家长签字。')),
+                             ('incomplete original', dict(unread=True)),
+                             ('outside the window', dict(time='2026-10-15T14:03:00+08:00')),
+                             ('a date of its own', dict(text='以上两项都明天前请家长核对并在记录本签字。'))):
+            with self.subTest(name):
+                result, held = self._late_variant(change)
+                self.assertEqual((result['failed'], result['processed']), (0, 1))
+                self.assertEqual(held, review)
+        with self.subTest('an independent message between'):
+            other = self._late_message('12', '2026-10-15T14:00:30+08:00', '明天带跳绳。', sender_id='synthetic-other-teacher')
+            result, held = self._late_variant(dict(id='13', message_order='13'), extra=[other])
+            self.assertEqual((result['failed'], result['processed']), (0, 2))
+            self.assertEqual(sorted(h for h in held if h[2] == 'append'), review)
+            self.assertEqual([h[0] for h in held if h[2] != 'append'], ['pending'], 'the other notice keeps its own item')
+        with self.subTest('another source of the same child'):
+            new = lambda ref, targets: self._late_second_reply(ref, targets)
+            result, held = self._late_variant(child_source=('synthetic-late-other', 'child-1'), reply=new)
+            self.assertEqual(held, review)
+        with self.subTest('another child'):
+            third = lambda ref, targets: dict(proposals=[fixtures.school_proposal(
+                title_quote=self.LATE_STANDARD, evidence=[dict(ref=ref)], learning_subject='英语', task_title='英语：家长核对签字',
+                task_goal=self.LATE_STANDARD, task_state='ready', task_reason='虚构错误回执。', task_purpose='learning')])
+            result, held = self._late_variant(child_source=('synthetic-late-sibling', 'child-2'), reply=third)
+            self.assertEqual((result['failed'], held), (0, [('pending', 'review', 'new')]))
+
+    def test_late_shared_standard_wrong_receipts_keep_the_batch_without_a_third_task(self):
+        def new(ref, targets):
+            return dict(proposals=[fixtures.school_proposal(
+                title_quote=self.LATE_STANDARD, evidence=[dict(ref=ref)], learning_subject='英语', task_title='英语：家长核对签字',
+                task_goal=self.LATE_STANDARD, task_state='ready', task_reason='虚构错误回执把共同标准当成新作业。', task_purpose='learning')])
+        def partial(ref, targets):
+            return dict(proposals=self._late_second_reply(ref, targets)['proposals'][:1])
+        def twice(ref, targets):
+            return self._late_second_reply(ref, (targets[0], targets[0]))
+        def plus_new(ref, targets):
+            return dict(proposals=self._late_second_reply(ref, targets)['proposals'] + new(ref, targets)['proposals'])
+        for reply in (new, partial, twice, plus_new):
+            with self.subTest(reply.__name__):
+                result, held = self._late_variant(reply=reply)
+                self.assertEqual((result['failed'], result['processed']), (1, 0))
+                self.assertEqual(held, [], 'nothing of the rejected receipt is saved')
+
+    def test_late_shared_standard_model_failure_writes_nothing_and_retries_the_same_job(self):
+        first, targets = self._late_first_run()
+        later = self._late_message('12', '2026-10-15T14:01:00+08:00', self.LATE_STANDARD)
+        self._late_ingest('11', [later], later['time'])
+        before = self._late_state()
+        self.model.side_effect = agent.family_llm.LLMDraftError('虚构503未写入')
+        failed = agent.run_once(self.app, dt.datetime(2026, 10, 15, 14, 1, tzinfo=agent.TZ))
+        self.assertEqual((failed['failed'], failed['processed']), (1, 0))
+        after = self._late_state()
+        for table in ('agent_items', 'agent_messages', 'manual_tasks', 'task_focus_history', 'records'):
+            self.assertEqual(after.get(table), before.get(table), table)
+        job, = [j for j in after['agent_jobs'] if j['id'].startswith('messages:') and not j['done']]
+        ref = 'message:' + self.LATE_SOURCE + ':12'
+        self.model.side_effect = lambda *args, **kwargs: copy.deepcopy(self._late_second_reply(ref, targets))
+        retried = agent.run_once(self.app, dt.datetime(2026, 10, 15, 14, 7, tzinfo=agent.TZ))
+        self.assertEqual((retried['failed'], retried['processed']), (0, 1))
+        done = next(j for j in self._late_state()['agent_jobs'] if j['id'] == job['id'])
+        self.assertEqual((done['fingerprint'], done['attempts'], done['done']), (job['fingerprint'], 2, 1))
+        self.assertTrue(all('补充要求：' + self.LATE_STANDARD in t['action'] for t in self._late_tasks(targets).values()))
+
+    def test_late_shared_standard_respects_parent_edits_and_feedback(self):
+        first, targets = self._late_first_run()
+        record = self.app.save_record(dict(child='示例甲', day='2026-10-15', category='学习进展', subject='英语', title='虚构反馈',
+                                           note='虚构家长反馈：已开始练习卷。', source='事项:' + targets[1])) \
+            if hasattr(self.app, 'save_record') else None
+        if record is None:
+            with self.app.connect() as c:
+                c.execute('INSERT INTO records(child,day,category,subject,title,note,source,created,linked_task_id) VALUES(?,?,?,?,?,?,?,?,?)',
+                          ('示例甲', '2026-10-15', '学习进展', '英语', '虚构反馈', '虚构家长反馈：已开始练习卷。', '家长记录',
+                           self.now.isoformat(), targets[1]))
+        edited = []
+
+        def parent_edit():
+            with self.store._db() as c:
+                focus = next(t for t in self.app.tasks(c) if t['id'] == targets[0])['focus']
+            agent.family_task_focus.save(self.app, dict(id=targets[0], version=focus['version'], request_key='synthetic-late-edit',
+                mode='later', next_action='等家长核对', waiting_for='', review_on='2026-10-16', goal='家长改写：只朗读第一段。'))
+            edited.append(True)
+
+        ref = 'message:' + self.LATE_SOURCE + ':12'
+        reply = self._late_second_reply(ref, targets)
+
+        def during_model(*args, **kwargs):
+            parent_edit()
+            return copy.deepcopy(reply)
+
+        later = self._late_message('12', '2026-10-15T14:01:00+08:00', self.LATE_STANDARD)
+        self._late_ingest('11', [later], later['time'])
+        self.model.side_effect = during_model
+        result = agent.run_once(self.app, dt.datetime(2026, 10, 15, 14, 1, tzinfo=agent.TZ))
+        # The edited task's append is refused in its write transaction (409) and kept for review, counted as before.
+        self.assertEqual((edited, result['failed'], result['processed']), ([True], 1, 1))
+        tasks = self._late_tasks(targets)
+        self.assertEqual(tasks[targets[0]]['action'], '家长改写：只朗读第一段。', 'a concurrent parent edit is never overwritten')
+        self.assertNotIn(self.LATE_STANDARD, tasks[targets[1]]['action'], 'a task with feedback is not changed automatically')
+        state = self._late_state()
+        appends = {json.loads(r['plan'])['school_task']['target_id']: r for r in state['agent_items'] if ref in r['evidence']}
+        self.assertEqual({t: (r['state'], json.loads(r['plan'])['school_task']['state']) for t, r in appends.items()},
+                         {t: ('pending', 'review') for t in targets})
+        self.assertEqual(len(state['records']), 1)
+
 if __name__ == '__main__':
     unittest.main()
