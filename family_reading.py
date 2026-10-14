@@ -12,6 +12,7 @@ import json
 import re
 import secrets
 import sqlite3
+from urllib.parse import urlencode
 
 
 class ReadingError(ValueError):
@@ -66,8 +67,8 @@ class Store:
     TASK_ACTIONS={'create','edit','start','submit','confirm','request_more','pause','resume','revoke'}
     REDEMPTION_ACTIONS={'reserve','fulfill','cancel_redemption','correct_redemption'}
 
-    def __init__(self,connect,profiles,tasks):
-        self.connect=connect;self.profiles=profiles;self.source_tasks=tasks
+    def __init__(self,connect,profiles,tasks,*,cover_original=None):
+        self.connect=connect;self.profiles=profiles;self.source_tasks=tasks;self.cover_original=cover_original
         with self._db() as c:
             c.executescript('''
                 CREATE TABLE IF NOT EXISTS reading_tasks (
@@ -102,6 +103,10 @@ class Store:
                 CREATE TABLE IF NOT EXISTS reading_uploads (
                     upload_id TEXT PRIMARY KEY, child_id TEXT NOT NULL);
             ''')
+            columns={r['name'] for r in c.execute('PRAGMA table_info(reading_tasks)')}
+            for name in ('cover_upload_id','cover_sha256'):
+                if name not in columns: c.execute('ALTER TABLE reading_tasks ADD COLUMN '+name+" TEXT NOT NULL DEFAULT ''")
+            c.commit()
 
     @contextmanager
     def _db(self):
@@ -131,6 +136,8 @@ class Store:
         award=c.execute('SELECT amount,status,granted_on,reason FROM reading_awards WHERE task_id=?',(value['id'],)).fetchone()
         value['award']=dict(award) if award else None
         value['history']=self._history(c,'task_id',value['id'])
+        value['cover']=dict(id=value['cover_upload_id'],sha256=value['cover_sha256'],
+            url='/api/reading/cover?'+urlencode(dict(task_id=value['id'],child_id=value['child_id'],version=value['version']))) if value['cover_upload_id'] else None
         return value
 
     def _redemption(self,c,row,names):
@@ -189,6 +196,36 @@ class Store:
             c.execute('INSERT OR IGNORE INTO reading_uploads VALUES (?,?)',(ident,child_id))
         return ids
 
+    def _cover(self,c,obj,row,child_id,names):
+        ident=_text(obj,'cover_upload_id',32,row.get('cover_upload_id',''))
+        expected=_text(obj,'cover_sha256',64,row.get('cover_sha256',''))
+        if not ident:
+            if expected: raise ReadingError('未选择封面时不能保留封面校验值')
+            return dict(cover_upload_id='',cover_sha256='')
+        if not re.fullmatch(r'[a-f0-9]{32}',ident) or not re.fullmatch(r'[a-f0-9]{64}',expected):
+            raise ReadingError('请保留所选封面原件及校验值')
+        if self.cover_original is None: raise ReadingError('封面原件读取暂不可用','cover_unavailable',503)
+        upload,body=self.cover_original(c,ident)
+        if upload['mime'] not in ('image/jpeg','image/png','image/webp'): raise ReadingError('封面须为JPEG、PNG或WebP图片')
+        if hashlib.sha256(body).hexdigest()!=expected: raise ReadingError('封面原件已变化，请重新选择','cover_changed',409)
+        self._attachments(c,[ident],child_id,names)
+        return dict(cover_upload_id=ident,cover_sha256=expected)
+
+    def cover(self,obj):
+        child_id=_text(obj,'child_id',100,required=True)
+        with self._db() as c:
+            c.execute('BEGIN');names=self._profiles()
+            if child_id not in names: raise ReadingError('孩子档案暂不可核对','cover_missing',404)
+            row=self._load(c,'reading_tasks',obj,child_id)
+            ident=row['cover_upload_id']
+            owner=c.execute('SELECT child_id FROM reading_uploads WHERE upload_id=?',(ident,)).fetchone()
+            if not ident or owner is None or owner[0]!=child_id or self.cover_original is None:
+                raise ReadingError('这次约定没有可读取的封面','cover_missing',404)
+            upload,body=self.cover_original(c,ident)
+            if upload['mime'] not in ('image/jpeg','image/png','image/webp') or hashlib.sha256(body).hexdigest()!=row['cover_sha256']:
+                raise ReadingError('封面原件已变化；请重新选择，原约定保留','cover_changed',409)
+            return body,upload['mime']
+
     def _load(self,c,table,obj,child_id):
         ident=_text(obj,'id',100,required=True)
         row=c.execute('SELECT * FROM '+table+' WHERE id=? AND child_id=?',(ident,child_id)).fetchone()
@@ -230,6 +267,7 @@ class Store:
                              planned_on=_day(obj.get('planned_on','')),work_text='',attachments='[]',parent_note='',started='',created=now,updated=now)
                     row.update({k:_text(obj,k,limit) for k,limit in self.AGREEMENT.items()})
                     self._source(row['source_task_id'],child_id,names)
+                    row.update(self._cover(c,obj,row,child_id,names))
                     c.execute('INSERT INTO reading_tasks ('+','.join(row)+') VALUES ('+','.join('?' for _ in row)+')',tuple(row.values()))
                 else:
                     row=self._load(c,'reading_tasks',obj,child_id);previous=dict(row)
@@ -247,6 +285,7 @@ class Store:
                         if row['started'] and not all(row[k] for k in ['book','scope','method','criteria']):
                             raise ReadingError('已开始的任务必须保留书名、阅读范围、表达方式和完成条件')
                         row['planned_on']=_day(obj.get('planned_on',row['planned_on']))
+                        row.update(self._cover(c,obj,row,child_id,names))
                         if row['source_task_id']!=previous['source_task_id']: self._source(row['source_task_id'],child_id,names)
                     elif action=='start':
                         if state!='草案': raise ReadingError('只有草案可以开始','state_conflict',409)

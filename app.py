@@ -19,6 +19,7 @@ import family_llm
 import family_growth
 import family_print
 import family_reading
+import family_preview
 import family_calendar
 import family_child
 import family_agent
@@ -475,7 +476,7 @@ def calendar_subscription():
     return family_calendar.render_ics(events,children,dt.datetime.now(dt.timezone.utc),namespace,states)
 
 def reading_store():
-    return family_reading.Store(connect,profiles,tasks)
+    return family_reading.Store(connect,profiles,tasks,cover_original=lambda c,ident:family_preview.read_upload(DATA,c,ident))
 
 def print_store():
     # Resolve DATA and connect at request time, including isolated test instances.
@@ -2298,6 +2299,25 @@ class Handler(BaseHTTPRequestHandler):
                         or not re.fullmatch(r'[1-9][0-9]{0,18}',query['record_id'][0])):
                     raise family_print.PrintError('请提供唯一的作业和已保存检查编号')
                 return self.reply(200,homework_saved_review(query['task_id'][0],int(query['record_id'][0])))
+            if path=='/api/reading/cover':
+                query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+                if set(query)!={'task_id','child_id','version'} or any(len(v)!=1 for v in query.values()) or not re.fullmatch(r'[1-9][0-9]{0,9}',query['version'][0]):
+                    raise family_reading.ReadingError('封面需要当前孩子、阅读约定与版本')
+                body,mime=reading_store().cover(dict(id=query['task_id'][0],child_id=query['child_id'][0],version=int(query['version'][0])))
+                return self.reply(200,body,mime)
+            if path.startswith('/api/original/preview/'):
+                ident=path.removeprefix('/api/original/preview/');query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+                if set(query)!={'child_id'} or any(len(v)!=1 for v in query.values()): raise family_print.PrintError('首页预览须保留当前孩子','preview_not_allowed',403)
+                with connect() as c:
+                    profile=next((p for p in profiles(c) if p['id']==query['child_id'][0]),None)
+                    if profile is None: raise family_print.PrintError('当前孩子不存在','preview_not_allowed',403)
+                    family_reading.validate_record_attachments(c,profile['id'],[ident])
+                    names=child_names(c)
+                    for record in c.execute('SELECT child,attachments FROM records WHERE attachments LIKE ?',('%'+ident+'%',)):
+                        if ident in json.loads(record['attachments']) and names.get(record['child'],record['child'])!=profile['name']:
+                            raise family_print.PrintError('原件不属于当前孩子','preview_not_allowed',403)
+                    image,key=family_preview.first_page(DATA,c,ident)
+                return self.reply(200,image,'image/png',headers={'ETag':'"'+key+'"'})
             if path=='/api/print/jobs': return self.reply(200,dict(jobs=print_store().list_jobs()))
             if path.startswith('/api/print/preview/'):
                 body,name=print_store().preview(path[len('/api/print/preview/'):])
@@ -2338,7 +2358,7 @@ class Handler(BaseHTTPRequestHandler):
                 if p.parent!=base or not p.is_file(): return self.reply(404,{'error':'附件不存在'})
                 return self.reply(200,p.read_bytes(),'application/octet-stream')
             return self.reply(404,{'error':'不存在'})
-        except (family_print.PrintError,family_calendar.CalendarError,ProfileError,family_child.ChildError,family_agent.AgentError,family_study.StudyError,family_settings.SettingsError,family_teachers.TeacherError) as e: return self.reply(e.status,dict(error=str(e),code=e.code))
+        except (family_print.PrintError,family_reading.ReadingError,family_calendar.CalendarError,ProfileError,family_child.ChildError,family_agent.AgentError,family_study.StudyError,family_settings.SettingsError,family_teachers.TeacherError) as e: return self.reply(e.status,dict(error=str(e),code=e.code))
         except (OSError,sqlite3.Error,json.JSONDecodeError): return self.reply(500,{'error':'读取失败，记录未更改'})
     def do_POST(self):
         if not self.authorize_request(): return
