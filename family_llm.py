@@ -2358,7 +2358,13 @@ def _source_question_sub(line,mark,instruction):
     第N题 paths, and unproved instructions keep the shared unread-level guard.
     """
     sub,end=_ref_sub(line,mark.end(),teacher=True)
-    filling=re.fullmatch(r'(?:填空题?|(?:选择|选出|选用)(?:正确|合适|恰当)的?(?:字|词语?|选项|答案)填空)[。.]?',instruction)
+    # Read the heading as a command with a completion action and its object,
+    # rather than enumerating whole instruction sentences. Its basis is not a
+    # command on its own; negated/conditional actions remain unproved.
+    filling=re.fullmatch(r'(?:请)?(?:(?:按(?:照)?|根据|依据)[^，。；:：]{1,16}?)?'
+                         r'(?:(?:选择|选出|选用)(?:正确|合适|恰当)的?(?:字|词语?|选项|答案))?'
+                         r'(?P<action>(?:填写?|补全)(?:空|字|词语?))题?[。.]?',instruction)
+    filling=filling and _ref_binds(instruction,*filling.span('action'))=='yes'
     blank=re.match(r'\s+(?:\(\s*\)|（\s*）)(?=[^\W\d_])',line[mark.end():])
     return (None,mark.end()) if sub=='*' and mark[4] and mark[0].rstrip()[-1] in '.．' and filling and blank else (sub,end)
 
