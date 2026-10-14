@@ -13,7 +13,7 @@ import family_pdf
 import family_print
 
 _LOCK = threading.Lock()
-DEADLINE = 20
+DEADLINE = 60
 
 
 def read_upload(data, connection, ident):
@@ -50,18 +50,20 @@ def first_page(data, connection, ident):
         mime=row['mime']
         if mime=='application/pdf': pdf=body
         elif mime in (family_media.DOCX_MIME,family_media.PPTX_MIME):
-            if mime==family_media.DOCX_MIME: family_media.docx_pdf_preflight(body);suffix='.docx'
-            else: family_media.pptx_pdf_preflight(body);suffix='.pptx'
+            if mime==family_media.DOCX_MIME: family_media.docx_pdf_preflight(body,started=started);suffix='.docx'
+            else: family_media.pptx_pdf_preflight(body,started=started);suffix='.pptx'
             soffice=os.environ.get('FAMILY_PRINT_SOFFICE') or shutil.which('soffice')
             if not soffice: raise family_print.PrintError('本机尚未配置Office转换；可打开原件或另存PDF','preview_unavailable',503)
+            remaining=DEADLINE-(time.monotonic()-started)
+            if remaining<=0: raise family_pdf.PDFError('render timed out')
             with tempfile.TemporaryDirectory(prefix='.office-',dir=directory) as temporary:
                 pdf=family_print.office_convert(body,suffix,Path(temporary),soffice,
-                    timeout=max(.01,DEADLINE-(time.monotonic()-started)),limit=family_pdf.MAX_BODY_BYTES,read=family_print._read_file)
+                    timeout=remaining,limit=family_pdf.MAX_BODY_BYTES,read=family_print._read_file)
         else:
             raise family_print.PrintError('首页预览支持PDF及安全纯文字/版式Word、静态PPT；其他格式请打开原件','preview_unavailable',503)
         left=DEADLINE-(time.monotonic()-started)
         if left<=0: raise family_pdf.PDFError('render timed out')
-        image=family_pdf.render_pages(bytes(pdf),[1],deadline=left)['pages'][0]['data']
+        image=family_pdf.render_pages(bytes(pdf),[1],deadline=min(left,family_pdf.DEADLINE_SECONDS))['pages'][0]['data']
         _,current=read_upload(data,connection,ident)
         if hashlib.sha256(current).hexdigest()!=digest:
             raise family_print.PrintError('生成期间原件已变化，请重新打开核对','preview_changed',409)
