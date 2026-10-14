@@ -1230,15 +1230,23 @@ def natural_unit_instruction_checks():
                      '本题要求：只填数字。原作答：不带单位。'):
         assert draft('',question='2.7米改写为厘米。'+behavior)['judgment']=='unknown',behavior
     for instruction in ('答题要求：只填数字，不带单位。','作答要求：答案不写单位。',
-                        '书写规定：答案不写单位。','本题要求：只写数值，不写单位。'):
+                        '书写规定：答案不写单位。','本题要求：只写数值，不写单位。',
+                        '本题要求：只填写数字，答案不写单位。','本题要求：在答题格只填写数字，答案不写单位。',
+                        '本题要求：在作答栏只书写数字，答案不写单位。','本题要求：在答案中只填写数值，不带单位。'):
         assert draft('',question='2.7米改写为厘米。'+instruction)['judgment']=='correct',instruction
     # A requirement to observe/record is not the child's answer-writing instruction.
     for observation in ('答题观察要求：记录孩子已有答案，答案不写单位（实际作答描述，非书写许可）。',
                         '本题要求：记录孩子已有答案，答案不写单位。',
                         '观察本题要求：只填数字，答案不写单位。',
                         '本题观察要求：只填数字，答案不写单位。',
-                        '本题要求：观察孩子书写，答案不写单位。'):
+                        '本题要求：观察孩子书写，答案不写单位。',
+                        '本题要求：记录孩子已有答案，答案不写单位（此句记录既有写法，并非答题格式许可）。',
+                        '本题要求：在答题格记录孩子已有答案，答案不写单位。',
+                        '本题要求：在观察表只填写数字，答案不写单位。',
+                        '本题要求：在答题格只观察数字，答案不写单位。'):
         assert draft('',question='3.2厘米改写为毫米。'+observation,student='32',teacher='32毫米。')['judgment']=='unknown',observation
+    assert draft('',question='3.2厘米改写为毫米。本题要求：在答题格只填写数字，答案不写单位。',student='32',teacher='32毫米。',
+                 changes=dict(judgment='unknown',uncertainty='本题原答仍未核明。'))['judgment']=='unknown'
     # Each permission stays with its numbered result, including a positive counterpart.
     pair='2.7米和2.7米分别改写为厘米。本题要求：'
     scoped=pair+'第一项答案不写单位；第二项必须写单位。'
