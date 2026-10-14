@@ -2434,7 +2434,7 @@ def _source_question_inventory(documents, *, limit=25, layouts=None):
 
 
 _SOURCE_SHARED_NOTE=re.compile(r'公共|共用|共同|本卷|全卷|整卷|各题|所有题|全部题|后续|[下后]面的?题|以下.*题|范围|版本|附[注录]|评分|例外|跨[页题]|接第|适用|针对|覆盖')
-_SOURCE_UNLOCATED_DEPENDENCY=re.compile(r'(?:上|前|下|后)(?:一|面[的]?|道)?(?:题|问)|上文|前文|下文|后文|同上|据此|照此|沿用|前述|上述(?:结果|答案|数据|条件)|上一(?:步|问)|前一(?:步|问)|(?:根据|依据|参考|利用|接|按)[^。；;\n]{0,24}[（(]\d{1,2}[)）]|(?:图|表|材料|附录)\s*(?:[（(]?\s*(?:\d{1,3}|[A-Za-z]|[一二三四五六七八九十甲乙丙丁戊己庚辛壬癸]+)\s*[)）]?)(?![A-Za-z0-9])|(?:上|下|前|后)(?:图|表)|如(?:图|表)')
+_SOURCE_UNLOCATED_DEPENDENCY=re.compile(r'(?:上|前|下|后)(?:一|面[的]?|道)?(?:题|问)|上文|前文|下文|后文|同上|据此|照此|前述|上述(?:结果|答案|数据|条件)|上一(?:步|问)|前一(?:步|问)|(?:根据|依据|参考|利用|接|按)[^。；;\n]{0,24}[（(]\d{1,2}[)）]|(?:图|表|材料|附录)\s*(?:[（(]?\s*(?:\d{1,3}|[A-Za-z]|[一二三四五六七八九十甲乙丙丁戊己庚辛壬癸]+)\s*[)）]?)(?![A-Za-z0-9])|(?:上|下|前|后)(?:图|表)|如(?:图|表)')
 
 
 def _source_window_references(body,owner,rows,titles):
@@ -2460,7 +2460,11 @@ def _source_window_references(body,owner,rows,titles):
         # Only a positive carrier of applicability/range (not a data/action
         # phrase) names the retained parent's scope without borrowing its leaves.
         scope=re.fullmatch(r'(?:(?:统一|本)?(?:评分|范围|版本)?(?:说明|要求)?(?:适用于?|覆盖|针对)|(?:适用)?范围(?:包括|为|是)?)',words)
-        tail=body[end:].strip();clause=re.split(r'[。；;，,\n]',tail,maxsplit=1)[0].strip(' :：')
+        tail=body[end:].strip();clause=re.split(r'[。；;，,:：\n]',tail,maxsplit=1)[0].strip()
+        # A closed parenthesized scope ends before its complete scoring clause;
+        # the clause remains original context, not borrowed sibling leaf data.
+        scope_tail=re.match(r'(的?(?:(?:全部|所有|共)\s*\d{1,3}\s*个?(?:小题|小问|问)|(?:全部|所有|各)(?:小题|小问)))\s*[)）](?=\s*[:：。；;，,]|$)',clause)
+        if scope_tail:clause=scope_tail[1]
         count=re.fullmatch(r'的?(?:全部|所有|共)\s*(\d{1,3})\s*个?(?:小题|小问|问)',clause)
         pure_range=not clause or count is not None or re.fullmatch(r'的?(?:全部|所有|各)(?:小题|小问)',clause)
         data_carrier=re.search(r'(?:给出|提供|列出|所述|所示|所用|里(?:的)?|中(?:的)?)[^。；;\n]{0,24}(?:图|表|数据|结果|材料|题干|原文|答案|作答|条件|步骤)',tail)
