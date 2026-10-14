@@ -1988,7 +1988,7 @@ def source_leading_blank_checks():
     calls+=1;assert model.call_count==1 and raw==frozen and result['items']==1
     assert result['questions'][0]['student_answer']=='A' and result['questions'][0]['judgment']=='correct',result
     assert family_llm._source_final_answer(known,rows,family_llm._ref_titles(source(body)),False)=='A'
-    for instruction in ('填空题','选择合适的词语填空'):
+    for instruction in ('填空题','选择合适的词语填空','按词义补全词语'):
         variant=body.replace('选择正确的字填空',instruction).replace('（  ）天','( )天')
         got,unknown=family_llm._source_question_inventory(source(variant))
         assert not unknown and len(got)==2 and got[0]['sub'] is None and '( )天' in got[0]['question']
@@ -2002,7 +2002,7 @@ def source_leading_blank_checks():
             except family_llm.LLMDraftError: pass
             else: raise AssertionError('unread source paths still block batching before a model call')
             assert model.call_count==0
-    for instruction in ('阅读题','不要填空','观察孩子填空情况'):
+    for instruction in ('阅读题','不要填空','观察孩子填空情况','按词义不要补全词语'):
         got,unknown=family_llm._source_question_inventory(source(body.replace('选择正确的字填空',instruction)))
         assert unknown and not any(r['number']==1 for r in got),(instruction,got)
     for role in ('教师参考答案','老师答案'):
