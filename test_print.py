@@ -616,7 +616,7 @@ class TextPrintTests(unittest.TestCase):
 
     def test_invalid_or_overlong_text_never_converts_or_queues(self):
         bad=(b'',b'   \r\n',b'\xff',b'\xed\xa0\x80',b'hello\x00world',b'hello\x1bworld',b'hello\x7fworld',
-             '\ufffe'.encode(),'\uffff'.encode(),('字'*12001).encode())
+             '\ufffe'.encode(),'\uffff'.encode(),('字'*100001).encode())
         self.store.soffice='synthetic-converter-not-executed'
         with patch.object(printing,'office_convert',side_effect=AssertionError('invalid text must not convert')):
             for n,raw in enumerate(bad):
@@ -635,6 +635,28 @@ class TextPrintTests(unittest.TestCase):
             self.store.prepare(source,'synthetic_missing_converter')
         self.assertEqual((error.exception.status,error.exception.code),(503,'preview_unavailable'))
         self.assertEqual(self.store.preparation(result['id']),result);self.assertEqual(self.store.list_jobs(),[])
+
+    def test_long_original_is_complete_bounded_and_never_queues(self):
+        text='试卷名称：虚构山泉卷\n'+''.join('第%d题：材料：%s\n学生作答：A\n'%(n,'虚构材料'*135) for n in range(1,27))
+        self.assertGreater(len(text),12000);raw=text.encode();source=self.text_source('synthetic-long.txt',raw);seen=[]
+        with self.convert(seen):
+            first=self.store.prepare(source,'synthetic_long_original')
+            self.assertEqual(first,self.store.prepare(source,'synthetic_long_original'))
+        self.assertEqual(seen,[text.split('\n')]);self.assertEqual(first['source_sha256'],hashlib.sha256(raw).hexdigest())
+        self.assertEqual((self.data/'attachments'/'synthetic-long.txt').read_bytes(),raw)
+        with self.assertRaises(printing.PrintError):self.store.prepare(source,'synthetic_long_original',text_limit=12000)
+        self.assertEqual(self.store.list_jobs(),[])
+        limit=self.text_source('inclusive-long.txt',('字'*100000).encode());seen=[]
+        with self.convert(seen):self.store.prepare(limit,'synthetic_long_limit')
+        self.assertEqual(seen,[['字'*100000]]);self.assertEqual(self.store.list_jobs(),[])
+
+    def test_long_teacher_source_keeps_its_original_budget_and_never_queues(self):
+        question=self.text_source('synthetic-short-question.txt','虚构原题：选择A。'.encode())
+        guide=self.text_source('synthetic-overlong-teacher.txt',('字'*12001).encode());seen=[]
+        obj=dict(task_id='TASK-1',request_key='synthetic_teacher_budget',question_sources=[question],guide_source=guide,
+                 guide_text='',question_confirmed=True,guide_confirmed=True,printer='Synthetic_Printer')
+        with self.convert(seen),self.assertRaises(printing.PrintError):self.store.homework_pair(obj,dict(id='TASK-1',title='虚构原题'))
+        self.assertEqual(seen,[['虚构原题：选择A。']]);self.assertEqual(self.store.list_jobs(),[])
 
     def test_question_and_teacher_text_prepare_all_before_separate_retryable_jobs(self):
         question=self.text_source('question.txt','虚构题目：2+3=?\n不含老师答案'.encode())
