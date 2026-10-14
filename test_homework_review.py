@@ -1174,6 +1174,89 @@ def teacher_caption_checks():
     return calls
 
 
+def teacher_wording_caption_checks():
+    """Fixed fictional replies: a pure wording policy is separate, never a semantic grader."""
+    calls=0
+    body='先观察标题，再阅读正文。最后结合全文说明自己的理解。'
+    student='我会先看题目，读完整篇文章后，再说出自己的想法。'
+    label='虚构芦芽阅读卷 第一大题 第7题（2）'
+    policy='含义相同的说明可接受。'
+    def draft(teacher=body+policy,answer=None,*,changes=None,other=None,paper='虚构芦芽阅读卷',pictures=False,source_answer=None,field='学生作答：'):
+        nonlocal calls
+        original=item(label=label,question='请说明阅读文章的顺序与最后要做的事。',question_kind='subjective',
+                      student_answer=student,answer='AI自行推导：'+body if answer is None else answer)
+        original.update(changes or {})
+        raw=dict(items=[original],question_labels=[label],coverage='仅核本次虚构卷的明确小题，不代表其他题目。')
+        untouched=json.loads(json.dumps(raw))
+        documents=[dict(name='synthetic-wording-teacher.txt',text='教师参考答案\n试卷名称：'+paper+'\n第一大题\n第7题（2）：'+teacher+'\n')]
+        if other is not None:
+            documents.append(dict(name='synthetic-wording-other.txt',text='教师参考答案\n试卷名称：'+paper+'\n第一大题\n第7题（2）：'+other+'\n'))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            result=family_llm.homework_reference_draft([dict(mime='image/png',data=png())] if pictures else [],review=True,
+                question_documents=[dict(name='synthetic-wording-answer.txt',text='试卷名称：虚构芦芽阅读卷\n第一大题\n第7题（2） '+original['question']+'\n'+field+(original['student_answer'] if source_answer is None else source_answer)+'\n')],
+                reference_documents=documents)
+        assert model.call_count==1 and raw==untouched,'the frozen transport reply is not edited'
+        calls+=1
+        q,=result['questions']
+        assert q['label']==original['label'] and q['student_answer']==original['student_answer'] and q['question']==original['question'],q
+        assert (result['items'],result['wrong_items'],result['unknown_items'])==(1,int(q['judgment']=='incorrect'),int(q['judgment']=='unknown')),result
+        if other is None and paper=='虚构芦芽阅读卷' and original['label']==label:
+            assert q['answer']=='教师参考：'+teacher.rstrip('。').replace('\n',' '),q
+        if q['judgment']=='unknown':
+            assert q['uncertainty'] and not q['error_reason'] and not q['possible_cause'] and not q['steps'],q
+        return q
+    for note in (policy,'意思一致的表述可以接受。','语义相同的解释均可认可。','同义回答也可接受。',
+                 '说明含义一致可以接受。','意思相同即可。','备注：意思一样的说法都可接受。'):
+        q=draft(body+note)
+        assert q['judgment']=='correct' and not q['uncertainty'],q
+    for answer in ('教师参考：'+body,'AI自行推导：'+body,body):
+        assert draft(answer=answer)['judgment']=='correct'
+    assert draft(teacher=body+'\n'+policy,pictures=True)['judgment']=='correct','a proven policy is not inferred from an image'
+    wrong=dict(judgment='incorrect',error_reason='作答漏了阅读后的理解说明。',steps='先独立尝试补全阅读后的行动。')
+    q=draft(changes=wrong)
+    assert q['judgment']=='incorrect' and q['error_reason']==wrong['error_reason'] and q['steps']==wrong['steps'],q
+    assert draft(changes=dict(judgment='unknown',uncertainty='作答区域尚未读全。'))['judgment']=='unknown'
+    assert draft(changes=dict(uncertainty='孩子是否完成最后一步未核明。'))['judgment']=='unknown'
+    assert draft(changes=dict(student_answer=''))['judgment']=='unknown','teacher policy cannot fill an empty answer'
+    assert draft(changes=dict(question_kind='unknown'))['judgment']=='unknown'
+    for judgment in ('correct','incorrect'):
+        q=draft(changes=wrong if judgment=='incorrect' else {},source_answer='我只看标题，没有读正文。')
+        assert q['judgment']=='unknown' and '原答抄写' in q['uncertainty'] and '我只看标题' in q['uncertainty'],q
+        assert student in q['uncertainty'],q
+    assert draft(source_answer='我只看标题，没有读正文。',pictures=True)['judgment']=='correct','an image is not proven by a text-only field'
+    for field in ('学生作答（仅片段）：','学生示例答案：'):
+        assert draft(source_answer='我只看标题，没有读正文。',field=field)['judgment']=='correct','an unproven field supplies no transcription contradiction'
+    # The entire answer body is required, including its last sentence/line.
+    for answer in ('教师参考：先观察标题，再阅读正文。','AI自行推导：先观察标题。','教师参考：'+student):
+        assert draft(answer=answer)['judgment']=='unknown',answer
+    lines='先观察标题，再阅读正文\n最后结合全文说明自己的理解。'
+    assert draft(teacher=lines+policy,answer='教师参考：先观察标题，再阅读正文；最后结合全文说明自己的理解。')['judgment']=='correct'
+    # No condition, extra scoring/process/unit criterion, exception, scope or
+    # version is silently waived by a policy appearing beside it.
+    for note in ('含义相同的说明可接受，但必须提到阅读后的理解。',
+                 '含义相同的说明可接受，不能省略单位。',
+                 '含义相同的说明可接受，需完整写出每一步。',
+                 '含义相同的说明可接受，只适用于本题第一问。',
+                 '含义相同的说明可接受，以修订版为准。',
+                 '含义相同的说明可接受，但仅得一分。',
+                 '如果先读完全文，含义相同的说明可接受。',
+                 '含义接近的说明可接受。','“含义相同的说明可接受”。',
+                 '含义相同的说明可接受。第二句必须引用原文。'):
+        assert draft(body+note)['judgment']=='unknown',note
+    assert draft(body+'必须明确提到阅读后的理解。'+policy)['judgment']=='unknown'
+    assert draft(teacher=body.rstrip('。')+'，'+policy)['judgment']=='unknown','no half-sentence is cut into an answer'
+    assert draft(paper='虚构另一本阅读卷',answer='教师参考：'+body)['judgment']=='unknown'
+    assert draft(answer='教师参考：'+body,changes=dict(label='虚构芦芽阅读卷 第二大题 第7题（2）'))['judgment']=='unknown'
+    assert draft(answer='教师参考：'+body,changes=dict(label='虚构芦芽阅读卷 第一大题 第7题（3）'))['judgment']=='unknown'
+    assert draft(other='先阅读正文，再观察标题。'+policy)['judgment']=='unknown','different full references remain conflicting'
+    assert draft(teacher='本题材料缺少结尾，无法判断完整的阅读顺序。'+policy,
+                 answer='AI自行推导：本题材料缺少结尾，无法判断完整的阅读顺序。')['judgment']=='unknown'
+    # A policy does not bypass the objective whole-value contradiction guard.
+    assert draft(teacher='24厘米。'+policy,answer='AI自行推导：24厘米。',
+                 changes=dict(question='求周长，答案用厘米表示。',question_kind='objective',student_answer='26厘米'))['judgment']=='unknown'
+    return calls
+
+
 def missing_condition_checks():
     """A6 replay and unseen variants: stated missing givens leave no definite grade; other guards stay."""
     def draft(items,teacher):
@@ -1860,7 +1943,7 @@ def source_reading_role_checks():
 
 
 def run():
-    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+source_inventory_checks()+source_answer_section_checks()+source_reading_role_checks()+missing_condition_checks()+teacher_caption_checks()+teacher_note_checks()+teacher_note_owner_checks()
+    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+source_inventory_checks()+source_answer_section_checks()+source_reading_role_checks()+missing_condition_checks()+teacher_caption_checks()+teacher_wording_caption_checks()+teacher_note_checks()+teacher_note_owner_checks()
     word_boundary_checks()
     nested_sub_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:
