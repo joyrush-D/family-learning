@@ -1297,9 +1297,11 @@ def missing_condition_checks():
     vetoed(got['虚构松石卷·第6题'],'24厘米','教师参考：'+a6,'教师参考原文',gap)
     assert got['虚构松石卷·第1题']['judgment']=='correct'
     assert got['虚构松石卷·第3题']['judgment']=='correct' and '题目跨第1页和第2页' in got['虚构松石卷·第3题']['answer']
-    for n in (2,5):
-        q=got['虚构松石卷·第%d题'%n]
-        assert q['judgment']=='unknown' and '尚未核明' in q['uncertainty'] and '未按教师参考' not in q['uncertainty'] and '附注' in q['uncertainty'],q
+    q=got['虚构松石卷·第2题']
+    assert q['judgment']=='unknown' and '尚未核明' in q['uncertainty'] and '未按教师参考' not in q['uncertainty'] and '附注' in q['uncertainty'],q
+    q=got['虚构松石卷·第5题']
+    assert q['judgment']=='correct' and not q['uncertainty'] and q['student_answer']==five,q
+    assert q['answer']=='教师参考：长方形有两条长边和两条宽边，所以周长是长宽之和的2倍。含义相同的说明可接受',q
     fir=('试卷名称：虚构云杉卷\n第3题：图中圆没有标出半径，无法求出确定的面积。\n第4题：B\n'
          '第8题：只给出一个数量，缺少第二个数量，不能核定两数之差。\n第9题：5米。缺单位扣1分。')
     b=lambda n,**c:item(label='虚构云杉卷·第%d题'%n,question='虚构题面%d'%n)|c
