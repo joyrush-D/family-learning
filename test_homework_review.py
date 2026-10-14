@@ -1193,7 +1193,7 @@ def teacher_wording_caption_checks():
             documents.append(dict(name='synthetic-wording-other.txt',text='教师参考答案\n试卷名称：'+paper+'\n第一大题\n第7题（2）：'+other+'\n'))
         with patch.object(family_llm,'_chat_json',return_value=raw) as model:
             result=family_llm.homework_reference_draft([dict(mime='image/png',data=png())] if pictures else [],review=True,
-                question_documents=[dict(name='synthetic-wording-answer.txt',text='试卷名称：虚构芦芽阅读卷\n第一大题\n第7题（2） '+original['question']+'\n'+field+(original['student_answer'] if source_answer is None else source_answer)+'\n')],
+                question_documents=[dict(name='synthetic-wording-answer.txt',text='试卷名称：虚构芦芽阅读卷\n'+original['label']+' '+original['question']+'\n'+field+(original['student_answer'] if source_answer is None else source_answer)+'\n')],
                 reference_documents=documents)
         assert model.call_count==1 and raw==untouched,'the frozen transport reply is not edited'
         calls+=1
