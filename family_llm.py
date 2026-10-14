@@ -1988,6 +1988,97 @@ def _ref_value_check(item,student,reference):
         shown_mine,shown_theirs,found,where))
 
 
+def _ref_caption_value(teacher,question):
+    """A whole numeric value and one proven caption; the original is never cut for display.
+
+    Read only explicit printed-unit/cross-page descriptions or a scoring clause
+    whose requirement the question itself also asks. Other prose remains part
+    of the unverified whole reference, including alternative values and versions.
+    """
+    parts=re.split(r'[。；;\n]',teacher,maxsplit=1)
+    if len(parts)!=2: return None
+    written,note=parts[0].strip(),parts[1].strip().rstrip('。；;')
+    # Parentheses around a stated result's unit are notation, not an operation.
+    value=re.sub(r'(?<=\d)[（(]([^\W\d_]{1,3})[)）]$',r'\1',written)
+    value=value if _ref_values(value) is not None else _ref_result(value)
+    if value is None or not question.strip(): return None
+    compact=_ref_unspaced(note)
+    printed=re.fullmatch(r'(?:题目|题干|本题)?空格外已印[“"「]?([^\W\d_]{1,3})[”"」]?',compact)
+    if printed and _ref_lent(question,1,0,printed[1]):
+        return dict(value=value,kind='layout')
+    pages=r'(?:第\d{1,3}页和第\d{1,3}页|[一二两三四五六七八九十\d]{1,3}页)'
+    if re.fullmatch(r'(?:题干接在(?:所选)?第\d{1,3}页[，,])?(?:题目|题干|本题|本小题)跨'+pages+
+                    r'[，,](?:仍为同一题|按同一题核对)',compact):
+        return dict(value=value,kind='layout')
+    if not compact.startswith('评分要求：'): return None
+    criterion=compact.removeprefix('评分要求：')
+    values=_ref_values(value)
+    if values is None or len(values)!=1: return None
+    unit=re.fullmatch(r'必须在作答中写出([^\W\d_]{1,3})[，,]未写单位不符合本题要求',criterion)
+    if unit and unit[1]==values[0][3] and any(_ref_binds(question,m.start(),m.end())=='yes'
+                                           for m in re.finditer('单位',question)):
+        return dict(value=value,kind='unit',unit=unit[1])
+    precision=re.fullmatch(r'结果必须恰好写([一二两三四五六七八九\d]{1,2})位小数[，,]不能多写或少写小数位',criterion)
+    if precision:
+        places=_ref_number(precision[1].replace('两','二'))
+        if places==_ref_places(question): return dict(value=value,kind='precision',places=places)
+    work=re.fullmatch(r'必须同时写出算式与得数[，,]只写(.+)不符合本题要求',criterion)
+    if work and _ref_agrees(work[1],value) and any(_ref_binds(question,m.start(),m.end())=='yes'
+                                                for m in re.finditer(r'写出算式(?!的)',question)):
+        return dict(value=value,kind='work')
+    return None
+
+
+def _source_final_value(item,rows,titles,images):
+    """Prove the literal final value in this question's own text field, not complete work.
+
+    A model's cropped answer, a sample, a fragment-labelled field, an image, or
+    another leaf's field proves no omission. The full question must also match;
+    this evidence is used only for the unit/decimal writing of that final value.
+    """
+    if images: return False
+    matches=_source_question_matches(item['label'],rows,titles,True)
+    if len(matches)!=1: return False
+    row=matches[0];lines=row['original_text'].splitlines();line=lines[row['line']-1].strip()
+    mark=_REF_QUESTION.search(line)
+    if mark is None: return False
+    _,end=_ref_sub(line,mark.end())
+    if _ref_unspaced(line[end:].lstrip(' :：'))!=_ref_unspaced(item['question']): return False
+    field=None
+    for line in lines[row['line']:]:
+        line=line.strip()
+        if not line: continue
+        if _REF_QUESTION.match(line) or _REF_SUB.match(line) or _REF_SECTION.match(line) or _REF_DECLARED.fullmatch(line): break
+        found=re.fullmatch(r'(?:学生|孩子)(?:的)?(?:完整最终|最终完整|最终|完整)?(?:作答|答案)\s*[:：]\s*(.+)',line)
+        if not found or field is not None: return False
+        field=found[1]
+    return field is not None and _ref_values(field) is not None and _ref_agrees(field,item['student_answer'])
+
+
+def _ref_caption_requirement(item,caption,rows,titles,images):
+    """Keep numeric equality separate from an evidenced final-value writing requirement."""
+    if (item['judgment']!='correct' or item['uncertainty'].strip() or item['error_reason'].strip()
+            or item['possible_cause'].strip() or caption['kind'] not in ('unit','precision','work')): return
+    mine=_ref_values(item['student_answer']);theirs=_ref_values(caption['value'])
+    if mine is None or theirs is None or len(mine)!=1 or len(theirs)!=1: return
+    missing=None
+    if caption['kind']=='unit' and not mine[0][3]:
+        lent=[mine[0][:3]+(theirs[0][3],mine[0][4]+theirs[0][3])]
+        if _ref_compare(lent,theirs)=='same': missing='题面要求在作答中写出%s单位，所抄作答“%s”没有该单位。'%(caption['unit'],item['student_answer'])
+    elif caption['kind']=='precision' and _ref_compare(mine,theirs)=='same' and _ref_decimals(mine[0])!=caption['places']:
+        missing='题面要求恰好写%d位小数，所抄作答“%s”写了%d位小数。'%(caption['places'],item['student_answer'],_ref_decimals(mine[0]))
+    elif caption['kind']=='work' and _ref_compare(mine,theirs)=='same':
+        missing='本轮只核明得数“%s”；题面还要求算式与得数，实际算式区域是否完整尚未核明，不能仅凭得数判定整题符合要求。'%item['student_answer']
+    if not missing: return
+    if caption['kind']!='work' and _source_final_value(item,rows,titles,images):
+        item.update(judgment='incorrect',error_reason=missing+'数值与参考相符，本次需订正的是明确书写要求。',
+                    possible_cause='',steps='',uncertainty='')
+    else:
+        item.update(judgment='unknown',error_reason='',possible_cause='',steps='',
+                    uncertainty=(('完整最终作答证据尚未核明；' if caption['kind']!='work' else '')+missing)[:300])
+    return True
+
+
 def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset()):
     """A question the supplied teacher text covers is compared by that text, whatever source the model claims."""
     if not item['answer'].strip(): return  # No answer is the existing missing-basis path, not a claimed source.
@@ -2023,6 +2114,11 @@ def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset
     if gap:  # The teacher's own words leave no value to compare: the grade is vetoed, the whole original kept.
         return pending(item['answer'] if claimed is not None and _ref_agrees(claimed,teacher) else '教师参考：'+shown(teacher),
                        '教师参考原文写明本题缺少决定性条件（“%s”），不能核定作答对错，未判定；请补全该条件后再核对。'%shown(gap,120)+over)
+    caption=_ref_caption_value(teacher,item['question']) if question_kind=='objective' else None
+    listed=claimed if claimed is not None else re.sub(r'^\s*AI自行推导\s*[:：]','',item['answer']).strip()
+    if caption and (_ref_agrees(listed,teacher) or _ref_agrees(listed,caption['value'])):
+        item['answer']='教师参考：'+shown(teacher)
+        return caption  # Comparison-only value; the complete original still owns the answer field.
     if claimed is not None and _ref_agrees(claimed,teacher): return
     mine,theirs,where=_ref_pair(claimed,teacher,(40,60)) if claimed is not None else ('','','')  # Cut where they part.
     misquoted=('模型所称教师参考“%s”只写了教师参考原文“%s”的开头，与全文附注的对应尚未核明，未判定；请对照教师原件核对。'%(mine,theirs) if _ref_leads(claimed,teacher)
@@ -2382,7 +2478,7 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
             if not question_label or question_label in seen_question_labels:
                 raise LLMDraftError('检查结果的卷别或题号为空或重复，无法分别核对；请明确卷别、题号与小题后再次检查')
             seen_question_labels.add(question_label)
-        if teacher_entries: _prefer_teacher_reference(item,question_kind,teacher_entries,bool(reference_images),titles)
+        caption=_prefer_teacher_reference(item,question_kind,teacher_entries,bool(reference_images),titles) if teacher_entries else None
         if item['judgment']!='unknown':
             # The item's own reference, or its stated basis, saying no value can be settled vetoes a definite grade.
             label_paper=_ref_label_paper(item['label'],titles)  # a paper named in the basis is another only against this label's paper
@@ -2396,14 +2492,15 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
             # Runs after the source check: a teacher answer quoted right never makes a different child answer agree with it.
             # Literal uppercase A-H, or whole results read in order (_ref_value_check); other answers need an evidenced comparator.
             student=item['student_answer'].strip()
-            reference=item['answer'].removeprefix('教师参考：').strip()
+            reference=caption['value'] if caption else item['answer'].removeprefix('教师参考：').strip()
+            caption_checked=_ref_caption_requirement(item,caption,source_inventory,_ref_titles(question_documents),bool(images)) if caption else False
             if (re.fullmatch('[A-H]',student) and re.fullmatch('[A-H]',reference)
                     and item['judgment'] in ('correct','incorrect')
                     and (student==reference)!=(item['judgment']=='correct')):
                 item['judgment']='unknown'
                 item['error_reason']=item['possible_cause']=item['steps']=''
                 item['uncertainty']=('字母作答与教师参考的比较和模型判定矛盾，请重新核对。'+item['uncertainty'].strip())[:300]
-            else: _ref_value_check(item,student,reference)
+            elif not caption_checked: _ref_value_check(item,student,reference)
         if review and not item['question'].strip() and question_kind!='objective':
             # Matching reference words cannot establish a subjective answer's completeness.
             # Keep the observed answer and teacher original, but not the model's unsupported grade.
