@@ -3141,6 +3141,33 @@ def _school_native_later_text(entry,later):
     except (KeyError,ValueError,TypeError):return False
 
 
+def _school_native_shared_later(entry,evidence,count):
+    """The source's very next message, when it is wholly one positive common standard for this list's every outcome.
+
+    "以上两项均请家长核对并在记录本签字" sent within the supplement window by the same publisher in the same source reads as
+    if it closed the list itself. Another message between them, a later day, a clause list, a change, optionality, a negation or
+    no stated count binds nothing; a stated count other than this list's outcomes keeps the whole batch.
+    """
+    source=entry['ref'][8:].rsplit(':',1)[0]
+    later=next((e for e in evidence if e['ref'][8:].rsplit(':',1)[0]==source),None)
+    if not later or not _school_native_later_text(entry,later):return None
+    try:
+        if not 0<(dt.datetime.fromisoformat(later['time'])-dt.datetime.fromisoformat(entry['time'])).total_seconds()<=120:return None
+    except (KeyError,ValueError,TypeError):return None
+    clause=later['text'].strip().rstrip('。；;').strip()
+    common=re.match(r'^(?:以上|上述|这)([二两三四五六七八九十2-9])项(?:作业|任务|要求)?(?:都|均)',clause)
+    if (not common or re.search(r'[，,。；;！!？?\n]',clause) or re.search(_SCHOOL_NATIVE_CHANGE+r'|选做|必做',clause)
+            or _school_native_common_negative(clause[common.end():])):return None
+    if (int(common[1]) if common[1].isdigit() else {'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}[common[1]])!=count:
+        raise AgentError('共同标准的项数与独立行动不一致，完整原批次保留',code='school_action_coverage')
+    return dict(ref=later['ref'],quote=later['text'].strip(),goal=clause,time=later['time'])
+
+
+def _school_native_later(action):
+    """Later records this outcome must cite: its named supplements, its list's shared standard and bound changes."""
+    return action['supplements']+action.get('shared_supplements',[])+action.get('changes',[])
+
+
 def _school_native_questions(text):
     """Question numbers a clause states (第5题, 第1-4题, 第1、3题); ranges are inclusive."""
     found=set()
@@ -3305,7 +3332,7 @@ def _school_native_unlocated(quote,refs,actions,entries,spans):
     """An outcome the literal ledger missed: one literal quote in one located message, disjoint from its located outcomes."""
     located=refs&{a['ref'] for a in actions}
     if (not quote or entries is None or spans is None or len(located)!=1
-            or refs&{s['ref'] for a in actions for s in a['supplements']+a['changes']}):return False
+            or refs&{s['ref'] for a in actions for s in _school_native_later(a)}):return False
     ref=next(iter(located));entry=entries.get(ref);text=entry['text'] if entry else ''
     if text.count(quote)!=1:return False
     start=text.index(quote);end=start+len(quote)
@@ -3386,6 +3413,9 @@ def _school_native_actions(evidence):
                     and (not specific or specific==_school_named_objects(a['primary']))]
             if len(owners)==1:
                 owners[0]['supplements'].append(dict(ref=supplement['ref'],quote=supplement['text'].strip(),goal=head[2].strip(),time=supplement['time']))
+        # A common standard sent as the list's next message belongs to every outcome here, never a task of its own.
+        if len(own)>1 and (shared:=_school_native_shared_later(entry,evidence[index+1:],len(own))):
+            for action in own:action['shared_supplements']=[shared]
         # A later change ("补充：练习册第5题不用做") binds only to the one outcome it names; siblings stay literal.
         for later in evidence:
             if (owner:=_school_native_change_owner(entry,later,own)):
@@ -3401,14 +3431,18 @@ def _school_native_actions(evidence):
                and e['ref'][8:].rsplit(':',1)[0]==entry['ref'][8:].rsplit(':',1)[0]]
         if own and any(_school_native_unverified(e) for e in group):
             if len(own)==1 and not own[0]['changes']:own=[]
-            bound={s['ref'] for a in own for s in a['supplements']+a['changes']}
+            bound={s['ref'] for a in own for s in _school_native_later(a)}
             for action in own:action['linked']=sorted(e['ref'] for e in group if e['ref'] not in bound)
         actions.extend(own)
     owners={}
     for action in actions:
         for supplement in action['supplements']+action['changes']:
             owners.setdefault(supplement['ref'],set()).add(action['id'])
-    if any(len(values)!=1 for values in owners.values()):
+    # A shared standard belongs to one list's outcomes only, and is never also one outcome's named supplement or change.
+    lists={}
+    for action in actions:
+        for shared in action.get('shared_supplements',[]):lists.setdefault(shared['ref'],set()).add(action['ref'])
+    if any(len(values)!=1 for values in owners.values()) or set(lists)&set(owners) or any(len(values)!=1 for values in lists.values()):
         raise AgentError('学校补充同时对应多项作业，原文保留待明确归属',code='school_action_coverage')
     return actions
 
@@ -3424,7 +3458,7 @@ def _school_native_value(action):
     # Only resolved weekdays can supply a shared day; never crop a recurring, past or ranged phrase.
     header=_relative_weekday(action['header'],sent_day(action['time']))
     shared_date=re.search(_SCHOOL_NATIVE_DAY+r'\s*(?:之前|以前|前|内)?',header)
-    standards=([shared_date[0]] if shared_date else [])+[action['quote']]+action.get('conditions',[])+action.get('shared_conditions',[])+[s['goal'] for s in action['supplements']]
+    standards=([shared_date[0]] if shared_date else [])+[action['quote']]+action.get('conditions',[])+action.get('shared_conditions',[])+[s['goal'] for s in action.get('shared_supplements',[])+action['supplements']]
     return _school_requirement_goal(dict(title=title),standards)
 
 
@@ -3449,7 +3483,7 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
     matches=[a for a in actions if a['ref'] in refs and quote and (any(quote in own for own in [a['quote']]+a.get('conditions',[]))
         or any(quote in c['quote'] for c in a['changes']))]
     if not matches:
-        owned={a['ref'] for a in actions}|{s['ref'] for a in actions for s in a['supplements']+a['changes']}
+        owned={a['ref'] for a in actions}|{s['ref'] for a in actions for s in _school_native_later(a)}
         # An outcome the ledger did not locate keeps the general checks only when disjoint from every located one.
         if refs&owned and not _school_native_unlocated(quote,refs,actions,entries,spans):
             raise AgentError('学校已定位要求未逐项归纳，整批保留重试',code='school_action_coverage')
@@ -3468,7 +3502,7 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
     # A withdrawal no closed evidence proves (negated, denied, reported, conditional, questioned, partial, check-only) leaves the outcome standing: never a cancel.
     if proposal['task_change']=='cancel' and not cancelled:
         raise AgentError('学校原要求的取消尚未成立，不能写为取消，整批保留重试',code='school_action_coverage')
-    expected={action['ref']}|{s['ref'] for s in action['supplements']+action.get('changes',[])}
+    expected={action['ref']}|{s['ref'] for s in _school_native_later(action)}
     linked=refs&set(action.get('linked',[]))
     # A later same-teacher message naming only this outcome as unchanged may be cited; it adds nothing to it.
     if not expected<=refs or refs-expected-linked-_school_native_kept(action,actions,entries):
@@ -3494,7 +3528,7 @@ def _school_native_dates(action):
     dates=deadlines('\n'.join([action['header'],action['quote'],*action.get('conditions',[]),*action.get('shared_conditions',[])]),published)
     # A school arrangement in this outcome's own quote (明天早读抽查) is its day; a header date is never borrowed.
     if not dates:dates=_school_own_dates(action['quote'],published)
-    for supplement in action['supplements']:
+    for supplement in action.get('shared_supplements',[])+action['supplements']:
         dates.update(deadlines(supplement['goal'],sent_day(supplement['time'])))
     for change in action.get('changes',[]):
         dates.update(deadlines(change['quote'],sent_day(change['time'])))
@@ -3504,7 +3538,7 @@ def _school_native_dates(action):
 def _school_native_scope(action,child_id=''):
     anchors=[dict(ref=action['ref'],upload_ids=[],pages=[],quote=action['quote'])]
     anchors.extend(dict(ref=action['ref'],upload_ids=[],pages=[],quote=quote) for quote in action.get('conditions',[])+action.get('shared_conditions',[]))
-    anchors.extend(dict(ref=s['ref'],upload_ids=[],pages=[],quote=s['quote']) for s in action['supplements']+action.get('changes',[]))
+    anchors.extend(dict(ref=s['ref'],upload_ids=[],pages=[],quote=s['quote']) for s in _school_native_later(action))
     if len(anchors)>6:raise AgentError('本项原文条件超出既有核对范围，完整原批次保留',code='school_action_coverage')
     scope=dict(anchors=anchors)
     if child_id:scope['identity']=_hash([child_id,sorted(_json([a['ref'],a['upload_ids'],a['quote']]) for a in anchors)])
@@ -3526,7 +3560,7 @@ def _school_native_saved(items,evidence):
             action=lookup.get(cover.get('id'));cited={e['ref'] for e in item['evidence']}
             if not action or saved or plan.get('school_original_action') or action['id'] in assigned:
                 raise AgentError('学校独立要求的保存依据已变化，整批未写入',409,'school_action_coverage')
-            expected={action['ref']}|{s['ref'] for s in action['supplements']+action.get('changes',[])}
+            expected={action['ref']}|{s['ref'] for s in _school_native_later(action)}
             linked=cited&set(action.get('linked',[]));value=_school_native_value(action);dates=_school_native_dates(action)
             unread=any(e['ref'] in linked and (e.get('content_incomplete') or e.get('unread')) for e in evidence)
             if (not expected<=cited or cited-expected-linked-_school_native_kept(action,actions,entries) or not linked or sorted(linked)!=cover.get('linked')
@@ -3542,7 +3576,7 @@ def _school_native_saved(items,evidence):
         if not action or saved!=action or ident in assigned or plan.get('school_original_action')!=_school_native_scope(action):
             raise AgentError('学校独立要求的保存依据已变化，整批未写入',409,'school_action_coverage')
         value=_school_native_value(action)
-        expected={action['ref']}|{s['ref'] for s in action['supplements']+action.get('changes',[])}
+        expected={action['ref']}|{s['ref'] for s in _school_native_later(action)}
         # A changed outcome keeps the checked summary; refs, purpose and its own date still match the ledger.
         literal=not action.get('changes')
         cited={e['ref'] for e in item['evidence']}
@@ -3584,7 +3618,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         fields['properties'].update(action_quote={'type':'string','maxLength':600},existing_item_id={'type':'string','enum':['']+[r['id'] for r in school_existing]})
     if routing: schema['properties']['proposals']['items']['properties']['task_target_id']['enum']=['']+[t['id'] for t in school_tasks]
     prompt=SCHOOL_PROMPT if routing else PROMPT
-    if native_actions:prompt+='\nrequired_native_actions是程序按原文定位的独立成果及其完整条件，不要求老师写明总数或编号。每项必须单独返回一次，title_quote逐字从该项quote或conditions的一段原句选择包含动作和对象的文字，不能拼接片段；格式示例不是行动或截止。task_purpose与本项purpose一致；没有purpose而给出purpose_options的写入成果，按完整原消息的实际用途从中选择，科目词或把/将写入句式本身不决定用途。打印、作答、自查、签字等同一份资料的步骤已归本项，不另起任务。shared_conditions是本消息明确适用于所有本项的共同标准，每项都须保留。supplements是同一稳定发布者明确点名的本项补充，必须一起引用对应ref，不分给其他作业；不能合并独立成果，也不能只引用消息编号后漏掉要求。完整标准由程序保留，日期只按该项header/quote/conditions/shared_conditions和各自原发送日核对，不借同通知另一项的截止。'
+    if native_actions:prompt+='\nrequired_native_actions是程序按原文定位的独立成果及其完整条件，不要求老师写明总数或编号。每项必须单独返回一次，title_quote逐字从该项quote或conditions的一段原句选择包含动作和对象的文字，不能拼接片段；格式示例不是行动或截止。task_purpose与本项purpose一致；没有purpose而给出purpose_options的写入成果，按完整原消息的实际用途从中选择，科目词或把/将写入句式本身不决定用途。打印、作答、自查、签字等同一份资料的步骤已归本项，不另起任务。shared_conditions是本消息明确适用于所有本项的共同标准，每项都须保留。supplements是同一稳定发布者明确点名的本项补充，必须一起引用对应ref，不分给其他作业；shared_supplements是同一发布者紧接本清单发出、明确适用于本清单每一项的共同标准，每项都须保留并引用对应ref，不另起任务；不能合并独立成果，也不能只引用消息编号后漏掉要求。完整标准由程序保留，日期只按该项header/quote/conditions/shared_conditions和各自原发送日核对，不借同通知另一项的截止。'
     if historical: prompt+='\n这是已处理消息的独立行动补漏。逐项对照existing_actions，保留家长当前修改与accepted/dismissed/pending决定，不恢复原任务。action_quote逐字引用包含本项动作和对象的完整原句，不将多个独立事项合并；existing_item_id只有同一具体行动才填旧编号，新漏项填空。已归纳/已忽略事项也返回以覆盖输入，但不会另建。不能按标题相似合并；同消息另项仍单独返回。due只从本项action_quote按原发送日换算，不能借用同通知另一项或旧任务日期。适用性/原件仍未读保留具体缺口。'
     result = family_llm._chat_json([{'role': 'system', 'content': prompt},
         {'role': 'user', 'content': _json(content)}], schema, 'family_agent_selection', timeout=45, data_path=data_path)

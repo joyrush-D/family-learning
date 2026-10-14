@@ -326,6 +326,122 @@ class SchoolNativeCoverageTests(unittest.TestCase):
             self.assertIn('同时对应多项',job['error'])
             self.assertEqual(job['next_try'],(self.now+dt.timedelta(minutes=5)).isoformat())
 
+    SHARED_LIST = '英语，明天完成两项要求：1. 朗读Unit 8课文两遍；2. 完成练习卷第2–4题。'
+    SHARED_STANDARD = '以上两项均请家长核对并在记录本签字。'
+    SHARED_ACTIONS = ('朗读Unit 8课文两遍', '完成练习卷第2–4题')
+
+    def _shared_messages(self, texts, *, stamps=('2026-10-15T07:58:00+08:00', '2026-10-15T07:59:00+08:00'),
+                         publishers=None, cited=None, unread_last=False):
+        """A wholly synthetic list and its same-teacher shared standard; the receipt is a fixed complete reply."""
+        self.now = self.fixture.now = dt.datetime(2026, 10, 15, 8, tzinfo=agent.TZ)
+        publishers = publishers or ['synthetic-teacher-1'] * len(texts)
+        payload = self.fixture.payload(cursor=str(10 + len(texts)))
+        payload['messages'] = [dict(id=str(11 + i), message_order=str(11 + i), time=stamp, kind='text',
+                                    sender='虚构英语老师', sender_id=publisher, text=text,
+                                    unread=unread_last and i == len(texts) - 1)
+                               for i, (text, stamp, publisher) in enumerate(zip(texts, stamps, publishers))]
+        self.store.ingest(payload)
+        refs = ['message:' + self.source['id'] + ':' + m['id'] for m in payload['messages']]
+        proposals = [fixtures.school_proposal(
+            title_quote=quote, due='2026-10-16', evidence=[dict(ref=ref) for ref in (cited or refs)],
+            learning_subject='英语', task_title='英语：' + quote,
+            task_goal=quote + '；以上两项均请家长核对并在记录本签字。', task_state='ready',
+            task_reason='虚构回执：本项行动与共同核对签字标准明确。', task_purpose='learning')
+            for quote in self.SHARED_ACTIONS]
+        return payload, refs, proposals
+
+    def _assert_shared_saved(self, payload, refs, proposals):
+        self._use_replies(payload, [dict(proposals=proposals)])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, len(refs)))
+        self.assertEqual(self.model.call_count, 1)
+        with self.store._db() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")]
+            self.assertEqual(len(rows), 2, 'the shared standard is no third task and the two actions stay separate')
+            for quote, other in (self.SHARED_ACTIONS, self.SHARED_ACTIONS[::-1]):
+                row = next(r for r in rows if quote in r['body'])
+                self.assertNotIn(other, row['body'])
+                self.assertIn('以上两项均请家长核对并在记录本签字', row['body'])
+                self.assertEqual((row['due'], row['state']), ('2026-10-16', 'accepted'))
+                self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
+                scope = json.loads(row['plan'])['school_original_action']
+                self.assertEqual({a['ref'] for a in scope['anchors']}, set(refs))
+                self.assertTrue(all(payload['messages'][refs.index(a['ref'])]['text'].count(a['quote']) == 1
+                                    for a in scope['anchors']), 'every anchor stays a literal original quote')
+                self.assertEqual(scope['identity'], agent._hash([row['child_id'], sorted(
+                    agent._json([a['ref'], a['upload_ids'], a['quote']]) for a in scope['anchors'])]))
+            tasks = {r['id']: dict(r) for r in c.execute('SELECT * FROM manual_tasks')}
+            self.assertEqual(set(tasks), {r['task_id'] for r in rows})
+            for row in rows:
+                self.assertEqual((tasks[row['task_id']]['action'], tasks[row['task_id']]['due']), (row['body'], '2026-10-16'))
+            self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages ORDER BY rowid')], [1] * len(refs))
+            before = ([tuple(r) for r in c.execute('SELECT * FROM agent_items ORDER BY id')],
+                      [tuple(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')])
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['processed'], replay['created']), (0, 0))
+        self.assertEqual(self.model.call_count, 1, 'a saved batch is not sent again')
+        with self.store._db() as c:
+            self.assertEqual(([tuple(r) for r in c.execute('SELECT * FROM agent_items ORDER BY id')],
+                              [tuple(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]), before)
+        return sorted((r['title'], r['body'], r['due'], r['state']) for r in rows)
+
+    SHARED_SAVED = [('英语：完成练习卷第2–4题', '明天\n完成练习卷第2–4题\n以上两项均请家长核对并在记录本签字', '2026-10-16', 'accepted'),
+                    ('英语：朗读Unit 8课文两遍', '明天\n朗读Unit 8课文两遍\n以上两项均请家长核对并在记录本签字', '2026-10-16', 'accepted')]
+
+    def test_list_and_its_next_shared_standard_message_save_like_one_message(self):
+        saved = self._assert_shared_saved(*self._shared_messages([self.SHARED_LIST, self.SHARED_STANDARD]))
+        self.assertEqual(saved, self.SHARED_SAVED)
+
+    def test_one_message_list_with_its_shared_standard_saves_the_same_two_tasks(self):
+        saved = self._assert_shared_saved(*self._shared_messages([self.SHARED_LIST + self.SHARED_STANDARD]))
+        self.assertEqual(saved, self.SHARED_SAVED)
+
+    def _assert_shared_rejected(self, texts, *, model_calls=1, **values):
+        payload, refs, proposals = self._shared_messages(texts, **values)
+        if values.get('unread_last'):
+            # The unread original reaches the model as its own gap; the fixed complete receipt still cites it.
+            self.model.side_effect = lambda *args, **kwargs: copy.deepcopy(dict(proposals=proposals))
+        else:
+            self._use_replies(payload, [dict(proposals=proposals)])
+        self._assert_rejected_batch(payload, agent.run_once(self.app, self.now), model_calls=model_calls)
+        self.assertEqual(self.store.snapshot()['sources'][0]['pending_message_count'], len(texts))
+
+    def test_shared_standard_from_another_teacher_binds_nothing(self):
+        self._assert_shared_rejected([self.SHARED_LIST, self.SHARED_STANDARD],
+                                     publishers=['synthetic-teacher-1', 'synthetic-teacher-2'])
+
+    def test_shared_standard_outside_the_supplement_window_binds_nothing(self):
+        self._assert_shared_rejected([self.SHARED_LIST, self.SHARED_STANDARD],
+                                     stamps=('2026-10-15T07:50:00+08:00', '2026-10-15T07:59:00+08:00'))
+
+    def test_shared_standard_after_another_message_binds_nothing(self):
+        self._assert_shared_rejected([self.SHARED_LIST, '明天带跳绳。', self.SHARED_STANDARD],
+                                     stamps=('2026-10-15T07:58:00+08:00', '2026-10-15T07:58:30+08:00', '2026-10-15T07:59:00+08:00'),
+                                     publishers=['synthetic-teacher-1', 'synthetic-teacher-2', 'synthetic-teacher-1'],
+                                     cited=['message:' + self.source['id'] + ':' + i for i in ('11', '13')])
+
+    def test_shared_standard_naming_another_count_keeps_the_batch_before_any_model_call(self):
+        self._assert_shared_rejected([self.SHARED_LIST, '以上三项均请家长核对并在记录本签字。'], model_calls=0)
+
+    def test_shared_standard_with_a_second_clause_binds_nothing(self):
+        self._assert_shared_rejected([self.SHARED_LIST, '以上两项均请家长核对，朗读另外录音上传。'])
+
+    def test_unread_shared_standard_binds_nothing(self):
+        self._assert_shared_rejected([self.SHARED_LIST, self.SHARED_STANDARD], unread_last=True)
+
+    def test_receipt_omitting_the_shared_standard_is_rejected(self):
+        self._assert_shared_rejected([self.SHARED_LIST, self.SHARED_STANDARD],
+                                     cited=['message:' + self.source['id'] + ':11'])
+
+    def test_shared_standard_as_a_third_task_is_rejected(self):
+        payload, refs, proposals = self._shared_messages([self.SHARED_LIST, self.SHARED_STANDARD])
+        third = fixtures.school_proposal(
+            title_quote='以上两项均请家长核对并在记录本签字', due='2026-10-16', evidence=[dict(ref=refs[1])],
+            learning_subject='英语', task_title='英语：家长核对签字', task_goal='以上两项均请家长核对并在记录本签字。',
+            task_state='ready', task_reason='虚构错误回执把共同标准当成第三项。', task_purpose='learning')
+        self._use_replies(payload, [dict(proposals=proposals + [third])])
+        self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
+
     def test_one_exercise_with_numbered_print_check_and_sign_steps_stays_one_task(self):
         # This is a steps list, not a counted list of independent outcomes.
         # The ordinary reader already returns the correct single receipt;
