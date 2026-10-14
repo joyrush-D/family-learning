@@ -539,7 +539,8 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         for listing, standard, stamps in (
                 (undated, '以上两项都今天完成并请家长签字。', ('2026-10-15T23:59:00+08:00', '2026-10-16T00:00:00+08:00')),
                 (self.SHARED_LIST, '以上作业都请家长核对并在记录本签字。', morning),
-                (self.SHARED_LIST, '两项都请家长核对并在记录本签字。', morning)):
+                (self.SHARED_LIST, '两项都请家长核对并在记录本签字。', morning),
+                (self.SHARED_LIST, '上述两项均请家长核对并在记录本签字。', morning)):
             with self.subTest(standard=standard):
                 split = self._saved_fresh([listing, standard], stamps)
                 merged = self._saved_fresh([listing + standard], stamps[1:] if listing is undated else stamps[:1])
@@ -586,6 +587,7 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         self.assertEqual(set(after), {old, head, tail})
         self.assertEqual((after[old]['fingerprint'], after[old]['attempts'], after[old]['done']), (frozen['fingerprint'], 1, 1))
         self.assertIn(head, after[old]['error']);self.assertIn(tail, after[old]['error'])
+        self.assertTrue(frozen['error'] and after[old]['error'].startswith(frozen['error']), 'the original failure text is kept first')
         self.assertEqual([(after[k]['attempts'], after[k]['done']) for k in (head, tail)], [(2, 1), (2, 1)],
                          'successors start from the original attempt, never from a fresh budget')
         self.assertEqual(self.store.snapshot()['sources'][0]['pending_message_count'], 0)
@@ -596,6 +598,76 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         for row in standard_rows:
             self.assertIn('以上两项均请家长核对并在记录本签字', row['body'])
             self.assertEqual((row['due'], row['state']), ('2026-10-16', 'accepted'))
+
+    def _p11_old_prefix_jobs(self, prefix_value=None):
+        """The older append form: claimed jobs for the first five and the first six originals, both cooling from attempt 1."""
+        payload, refs = self._p11_payload()
+        self.store.ingest(payload)
+        keys = []
+        for count, value in ((5, prefix_value), (6, None)):
+            values = payload['messages'][:count]
+            key = 'messages:' + agent._hash([self.source['id'], [v['id'] for v in values]])[:40]
+            fp = self.store._job(key, value or dict(school_learning_policy=8, messages=values), self.now, model=True)
+            self.store._fail(key, self.now, fingerprint=fp, reason='虚构旧批冷却' + str(count))
+            keys.append(key)
+        with self.store._db() as c:
+            frozen = {r['id']: dict(r) for r in c.execute("SELECT * FROM agent_jobs WHERE id LIKE 'messages:%'")}
+        return payload, refs, keys, frozen
+
+    def test_p11_same_fingerprint_old_prefix_job_is_reused_as_the_due_head(self):
+        payload, refs, (five, six), frozen = self._p11_old_prefix_jobs()
+        proposals = [fixtures.school_proposal(
+            title_quote=quote, due='2026-10-16', evidence=[dict(ref=ref) for ref in refs[5:]],
+            learning_subject='英语', task_title='英语：' + quote, task_goal=quote + '；以上两项均请家长核对并在记录本签字。',
+            task_state='ready', task_reason='虚构回执：本项行动与共同核对签字标准明确。', task_purpose='learning')
+            for quote in self.SHARED_ACTIONS]
+        batches = []
+
+        def reply(messages, schema, name, timeout=60, *, data_path=None):
+            evidence = json.loads(messages[-1]['content'])['evidence']
+            batches.append([e['ref'] for e in evidence])
+            if batches[-1] == refs[5:]:return copy.deepcopy(dict(proposals=proposals))
+            return dict(proposals=[fixtures.school_proposal(title_quote=e['text'], evidence=[dict(ref=e['ref'])],
+                task_state='reference', task_purpose='unknown', task_reason='虚构通知按原文保留。') for e in evidence])
+
+        self.model.side_effect = reply
+        self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(minutes=4))['processed'], 0)
+        self.model.assert_not_called()
+        for minute in (5, 6, 7, 8, 10, 15):
+            self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(minutes=minute))['failed'], 0)
+        self.assertEqual(batches, [refs[:5], refs[5:]])
+        tail = 'messages:' + agent._hash([self.source['id'], ['16', '17']])[:40]
+        with self.store._db() as c:
+            after = {r['id']: dict(r) for r in c.execute("SELECT * FROM agent_jobs WHERE id LIKE 'messages:%'")}
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")]
+        self.assertEqual(set(after), {five, six, tail})
+        for key in (five, six):
+            self.assertEqual(after[key]['fingerprint'], frozen[key]['fingerprint'])
+            self.assertTrue(after[key]['error'].startswith(frozen[key]['error']), 'both original failure texts stay')
+        self.assertEqual([(after[k]['attempts'], after[k]['done']) for k in (five, six, tail)], [(2, 1), (1, 1), (2, 1)])
+        self.assertIn(five, after[six]['error']);self.assertIn(tail, after[six]['error'])
+        standard_rows = [r for r in rows if refs[6] in [e['ref'] for e in json.loads(r['evidence'])]]
+        self.assertEqual([(r['due'], r['state']) for r in standard_rows], [('2026-10-16', 'accepted')] * 2)
+        self.assertTrue(all('以上两项均请家长核对并在记录本签字' in r['body'] for r in standard_rows))
+        self.assertEqual(self.store.snapshot()['sources'][0]['pending_message_count'], 0)
+
+    def test_p11_conflicting_successor_key_runs_nothing_and_keeps_every_original(self):
+        payload, refs, (five, six), frozen = self._p11_old_prefix_jobs(
+            prefix_value=dict(school_learning_policy=7, messages=['虚构旧策略输入']))
+        self.assertNotEqual(frozen[five]['fingerprint'], agent._hash(dict(school_learning_policy=8, messages=payload['messages'][:5])))
+        for minute in (5, 6, 10):
+            self.assertEqual(agent.run_once(self.app, self.now + dt.timedelta(minutes=minute))['processed'], 0)
+        self.model.assert_not_called()
+        with self.store._db() as c:
+            after = {r['id']: dict(r) for r in c.execute("SELECT * FROM agent_jobs WHERE id LIKE 'messages:%'")}
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_items WHERE kind='school'").fetchone()[0], 0)
+        self.assertEqual(set(after), {five, six})
+        self.assertEqual(after[five], frozen[five])
+        self.assertEqual({k: after[six][k] for k in ('fingerprint', 'attempts', 'done', 'next_try')},
+                         {k: frozen[six][k] for k in ('fingerprint', 'attempts', 'done', 'next_try')})
+        self.assertTrue(after[six]['error'].startswith(frozen[six]['error']))
+        self.assertEqual(after[six]['error'].count('不能安全接续'), 1)
+        self.assertEqual(self.store.snapshot()['sources'][0]['pending_message_count'], 7)
 
     def test_p11_exhausted_batch_keeps_its_visible_state_and_waits_for_manual_retry(self):
         payload, refs = self._p11_payload()

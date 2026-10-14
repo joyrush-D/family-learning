@@ -706,8 +706,14 @@ def _school_pending_batches(store, source_id, now=None):
                     if len(groups(candidate)) != 1: break
                     grown = candidate; fill(len(fixed) + len(grown) - len(tail) + 1)
                 head = fixed[:len(fixed) - len(tail)]
-                successors = (now is not None and len(grown) > len(tail) and sum(len(_json(v)) for v in grown) <= 14000
-                              and store._school_succeed(source_id, fixed, head, grown, now))
+                successors = None
+                if now is not None and len(grown) > len(tail) and sum(len(_json(v)) for v in grown) <= 14000:
+                    successors = store._school_succeed(source_id, fixed, head, grown, now)
+                if successors is False:
+                    # An unsafe continuation runs nothing: the incomplete reading is never accepted, and every original stays pending.
+                    for _ in range(len(fixed) + len(grown) - len(tail)): pending.popleft()
+                    fill(1)
+                    continue
                 if successors:
                     jobs.update(successors)
                     for _ in head: pending.popleft()
@@ -1658,9 +1664,11 @@ class Store:
     def _school_succeed(self, source_id, old, head, tail, now):
         """Continue a due school batch whose last publication has grown past its frozen input.
 
-        The old job keeps its key, fingerprint and attempts and records which successor keys continue it; each
-        successor starts from those attempts, so no message regains a retry budget. A cooling, exhausted or
-        changed job is left exactly as it is.
+        The old job keeps its key, fingerprint, attempts and original error, after which it records which successor
+        keys continue it; each successor starts from those attempts, so no message regains a retry budget. A successor
+        key already holding the same input (an older prefix job of the same originals) is reused with its own history and
+        retry time, its attempts never below the continued job's. A cooling, exhausted or changed job is left as it is
+        (None); a successor key holding other content or already done makes the continuation unsafe (False).
         """
         key=lambda values:'messages:'+_hash([source_id,[v['id'] for v in values]])[:40]
         fingerprint=lambda values:_hash({'school_learning_policy':8,'messages':values})
@@ -1669,10 +1677,16 @@ class Store:
             row=c.execute('SELECT * FROM agent_jobs WHERE id=? AND fingerprint=? AND done=0',(key(old),fingerprint(old))).fetchone()
             if not row or row['attempts']>=MAX_ATTEMPTS or row['next_try']>now.isoformat():return None
             successors=[(key(values),fingerprint(values)) for values in (head,tail) if values]
-            if any(c.execute('SELECT 1 FROM agent_jobs WHERE id=?',(ident,)).fetchone() for ident,_ in successors):return None
-            for ident,value in successors:
-                c.execute('INSERT INTO agent_jobs(id,fingerprint,attempts) VALUES(?,?,?)',(ident,value,row['attempts']))
-            c.execute('UPDATE agent_jobs SET done=1,error=? WHERE id=?',('末项发布已由后续原消息补全，由'+'、'.join(ident for ident,_ in successors)
+            found=[c.execute('SELECT fingerprint,done FROM agent_jobs WHERE id=?',(ident,)).fetchone() for ident,_ in successors]
+            kept=row['error']+(' ' if row['error'] else '')
+            if any(prior and (prior['fingerprint']!=value or prior['done']) for (_,value),prior in zip(successors,found)):
+                note='后继批次编号已有不同内容或已完成，末项发布不能安全接续，原批次与原消息保留待核对。'
+                if note not in row['error']:c.execute('UPDATE agent_jobs SET error=? WHERE id=?',(kept+note,key(old)))
+                return False
+            for (ident,value),prior in zip(successors,found):
+                if prior:c.execute('UPDATE agent_jobs SET attempts=MAX(attempts,?) WHERE id=?',(row['attempts'],ident))
+                else:c.execute('INSERT INTO agent_jobs(id,fingerprint,attempts) VALUES(?,?,?)',(ident,value,row['attempts']))
+            c.execute('UPDATE agent_jobs SET done=1,error=? WHERE id=?',(kept+'末项发布已由后续原消息补全，由'+'、'.join(ident for ident,_ in successors)
                 +'按完整发布接续；本批'+str(row['attempts'])+'次尝试计入后继批次。',key(old)))
         return dict(successors)
 
@@ -3106,7 +3120,7 @@ def _school_native_common_addressed(value):
 
 
 # "以上两项都…", "两项都…", "以上作业都…": the one scope reading a list's common standard uses, in or after its message.
-_SCHOOL_NATIVE_COMMON=r'^(?:(?:以上|这)?([二两三四五六七八九十2-9])项(?:作业|任务|要求)?|(?:以上|上述|这些|所有)(?:作业|任务|要求))(?:都|均)'
+_SCHOOL_NATIVE_COMMON=r'^(?:(?:以上|上述|这)?([二两三四五六七八九十2-9])项(?:作业|任务|要求)?|(?:以上|上述|这些|所有)(?:作业|任务|要求))(?:都|均)'
 _SCHOOL_NATIVE_COUNT={'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}
 
 
