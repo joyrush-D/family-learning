@@ -2251,6 +2251,8 @@ async function loadOriginalPreview(box){
   if(!response.ok){const out=await response.json();throw Error(out.error||'首页暂不可读取')}
   if(!(response.headers.get('Content-Type')||'').startsWith('image/png'))throw Error('首页预览返回格式不正确');
   const blob=await response.blob();if(!blob.size||blob.size>4*1024*1024)throw Error('首页预览大小不正确');
+  if(typeof createImageBitmap!=='function')throw Error('此浏览器无法核对首页图像，请打开原件');
+  try{const bitmap=await createImageBitmap(blob);bitmap.close()}catch{throw Error('首页图像无法显示')}
   const src=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(Error('首页图像读取失败'));reader.readAsDataURL(blob)});
   if(!box.isConnected)return;image.src=src;image.hidden=false;box.dataset.previewState='ready';status.textContent='第1页预览 · 用于辨认原件，不代表全文已理解。';
  }catch(error){if(!box.isConnected)return;image.hidden=true;box.dataset.previewState='error';const message=error.name==='TimeoutError'?'首页预览超时':error.message;status.textContent=message.includes('原件保留')?message:message+'；原件保留，可打开原件或重试。';retry.hidden=false}
