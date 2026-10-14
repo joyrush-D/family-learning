@@ -36,6 +36,14 @@ def choice(**changes):
                 question_kind='objective',error_reason='作答B与推导C不同。',possible_cause='',steps='先重新计算。',uncertainty='')|changes
 
 
+def assert_source_pending(test,row,label,question,document,line):
+    """An independently named source omission keeps its stem, but supplies no answer or grade."""
+    test.assertEqual({key:row[key] for key in ('label','question','student_answer','answer','judgment','error_reason','possible_cause','steps')},
+                     dict(label=label,question=question,student_answer='',answer='',judgment='unknown',error_reason='',possible_cause='',steps=''))
+    for words in ('原件《%s》第%d行'%(document,line),'未返回对应检查结果','尚未检查'):
+        test.assertIn(words,row['uncertainty'])
+
+
 class TeacherReferencePriorityTests(unittest.TestCase):
     def draft(self,items,teacher=TEACHER_B,question=CHOICE,**extra):
         raw=dict(question_labels=[i['label'] for i in items],items=items,coverage='虚构冻结回执。')
@@ -426,7 +434,12 @@ class TextQuestionContractTests(unittest.TestCase):
         with patch.object(family_llm,'_chat_json',return_value=raw) as model:
             result=family_llm.homework_reference_draft([],review=True,question_documents=documents)
         self.assertEqual(model.call_count,1);self.assertEqual(result['questions'][0]['student_answer'],'B')
-        self.assertEqual(result['questions'][0]['answer'],'AI自行推导：B');self.assertEqual((result['wrong_items'],result['unknown_items']),(0,0))
+        self.assertEqual(result['questions'][0]['answer'],'AI自行推导：B');self.assertEqual((result['wrong_items'],result['unknown_items']),(0,1))
+        self.assertEqual([q['label'] for q in result['questions']],['虚构甲卷第1题','虚构甲卷 第2题'])
+        self.assertEqual((result['questions'][0]['question'],result['questions'][0]['judgment'],result['questions'][0]['error_reason']),
+                         ('2+3=? A.4 B.5 C.6','correct',''))
+        self.assertEqual(result['questions'][0],{key:value for key,value in raw['items'][0].items() if key!='question_kind'})
+        assert_source_pending(self,result['questions'][1],'虚构甲卷 第2题',documents[1]['text'].splitlines()[0],'synthetic-reading.docx',1)
         prompt=model.call_args.args[0][0]['content']
         self.assertNotIn('在这些图片中缺失时',prompt)
         self.assertIn('在本次明确提供的题目/作答原件（图片或文字）中缺失时',prompt)
@@ -539,12 +552,20 @@ class TextQuestionHTTPTests(HomeworkPrintScopeTests):
                 with patch.object(family_llm,'_chat_json',return_value=raw) as model:
                     status,out=self.request('POST','/api/print/homework/draft',request)
                 self.assertEqual(status,200,out);self.assertEqual(model.call_count,1);self.assertEqual(raw,case['raw_model']);self.assertEqual(self.dump(),before)
-                d=out['draft'];self.assertEqual(len(d['questions']),1);q=d['questions'][0]
+                d=out['draft'];source_gap=case['case_id']=='S01'
+                # The disclosed oracle describes the original raw row; the source also has its unreturned first leaf.
+                labels=(['虚构星芽卷 第1题（1）'] if source_gap else [])+case['raw_model']['question_labels']
+                self.assertEqual([q['label'] for q in d['questions']],labels);self.assertEqual(len(d['questions']),2 if source_gap else 1)
+                q=d['questions'][-1]
+                self.assertEqual(q['question'],case['raw_model']['items'][0]['question'])
+                if source_gap:
+                    assert_source_pending(self,d['questions'][0],labels[0],'第1问：1+1=? A.1 B.2 C.3',case['question_name'],2)
                 self.assertEqual((q['judgment'],q['answer'],q['student_answer']),(oracle['judgment'],oracle['answer'],oracle['student_answer']))
                 self.assertEqual((q['error_reason'],q['possible_cause'],q['steps']),('','',''))
                 for words in oracle['required_uncertainty']:self.assertIn(words,q['uncertainty'])
-                self.assertEqual((d['wrong_items'],d['unknown_items']),(oracle['wrong_items'],oracle['unknown_items']))
-                self.assertEqual(d['continuation']['pending_labels'],oracle['pending_labels']);self.assertIn(DISCLOSED_SUMMARY,d['text'])
+                self.assertEqual((d['wrong_items'],d['unknown_items']),(oracle['wrong_items'],2 if source_gap else oracle['unknown_items']))
+                self.assertEqual(d['continuation']['pending_labels'],(['虚构星芽卷 第1题（1）'] if source_gap else [])+oracle['pending_labels'])
+                self.assertIn('本次核对2题：需订正0题，与参考一致0题，未判定2题。' if source_gap else DISCLOSED_SUMMARY,d['text'])
                 for shown in (oracle['answer'],oracle['student_answer']):self.assertIn(shown,d['text'])
                 result=self.upload('作业批改参考-%d.txt'%request['record_id'],d['text'].encode())
                 feedback=dict(task_id=self.task['id'],child=self.task['child'],day='2026-10-01',request_key='synthetic-teacher-fidelity-'+case['case_id'],
@@ -556,6 +577,7 @@ class TextQuestionHTTPTests(HomeworkPrintScopeTests):
                     status,view=self.request('GET','/api/print/homework/saved-review?task_id=%s&record_id=%d'%(self.task['id'],saved['record_id']))
                     self.assertEqual(status,200,view);model.assert_not_called()
                 self.assertEqual(view['text'],d['text'])
+                for label in labels:self.assertIn(label,view['text'])
 
     def test_complex_word_and_missing_scope_still_refuse_before_model(self):
         teacher=self.upload('synthetic-teacher.txt',REFERENCE.encode())
@@ -759,19 +781,43 @@ class TeacherRequestTitleTest(unittest.TestCase):
 
     def test_another_title_or_a_second_paper_never_lends_a_bare_teacher_number(self):
         second=self.MATH+'五年级数学练习（虚构）\n1. 50 + 50 = ____\n孩子作答：100\n'
-        for question,key,title in ((self.MATH,self.KEY,'五年级数学练习-虚构'),  # another title, same numbers
+        for at,(question,key,title) in enumerate(((self.MATH,self.KEY,'五年级数学练习-虚构'),  # another title, same numbers
                                    (second,self.KEY,'四年级数学练习-虚构'),  # one file, a second paper of the same numbers
                                    (self.MATH,'五年级数学练习（虚构）参考答案'+self.KEY[len('教师参考答案（虚构）'):],'四年级数学练习-虚构'),
-                                   (self.MATH,'五年级数学练习（虚构）\n'+self.KEY,'四年级数学练习-虚构')):
+                                   (self.MATH,'五年级数学练习（虚构）\n'+self.KEY,'四年级数学练习-虚构'))):
             with self.subTest(question=question[-12:],key=key[:14],title=title):
-                self.assertEqual(self.review(question,key,self.math(title)),[('','unknown')]*6)
+                items=self.math(title);rows=self.review(question,key,items,whole=True)
+                # Wrong-paper raw rows cannot consume the six distinctly named original-paper questions.
+                source_labels=['四年级数学练习虚构 第%d题'%n for n in range(1,7)] if at==0 else []
+                self.assertEqual([q['label'] for q in rows],source_labels+[q['label'] for q in items])
+                self.assertEqual([(q['answer'],q['judgment']) for q in rows],[('','unknown')]*(12 if at==0 else 6))
+                for n,label in enumerate(source_labels):
+                    assert_source_pending(self,rows[n],label,self.MATH.splitlines()[2*n+1],'synthetic-request-question.txt',2*n+2)
+                for q,raw in zip(rows[6:] if at==0 else rows,items):
+                    self.assertEqual((q['question'],q['student_answer'],q['answer'],q['judgment'],q['error_reason'],q['possible_cause'],q['steps']),
+                                     (raw['question'],raw['student_answer'],'','unknown','','',''))
+                    self.assertIn('卷别、大题或小题',q['uncertainty']);self.assertIn('归属无法核实',q['uncertainty'])
+                    if raw['uncertainty']:self.assertIn(raw['uncertainty'],q['uncertainty'])
 
     def test_a_sub_question_line_is_a_level_of_its_question(self):
         # Root's phase48 V6 and V5, whole: 「（1）」「（2）」 lines are levels of question 1, never another title; only the exact path lends.
         question='山泉数学练习（虚构）\n1. 完成两道选择小题。\n（1）哪个数等于2+3？ A. 5 B. 6\n孩子作答：A\n（2）哪个数等于3+4？ A. 7 B. 8\n孩子作答：A\n'
         items=[self.item('山泉数学练习-虚构 第1题（1）','哪个数等于2+3？ A. 5 B. 6','A','教师参考：A','correct')]
-        self.assertEqual(self.review(question,'教师参考答案（虚构）\n1.（1）A\n',items),[('教师参考：A','correct')])
-        self.assert_unproven(question,'教师参考答案（虚构）\n1. A\n',items)  # the parent's 「1. A」 is never its sub-question's
+        rows=self.review(question,'教师参考答案（虚构）\n1.（1）A\n',items,whole=True)
+        labels=[items[0]['label'],'山泉数学练习虚构 第1题（2）']
+        self.assertEqual([q['label'] for q in rows],labels)
+        self.assertEqual([(q['answer'],q['judgment']) for q in rows],[('教师参考：A','correct'),('','unknown')])
+        self.assertEqual((rows[0]['question'],rows[0]['student_answer'],rows[0]['error_reason'],rows[0]['possible_cause'],rows[0]['steps']),
+                         (items[0]['question'],'A','','',''))
+        self.assertEqual(rows[0]['uncertainty'],'')
+        assert_source_pending(self,rows[1],labels[1],'（2）哪个数等于3+4？ A. 7 B. 8','synthetic-request-question.txt',5)
+        rows=self.review(question,'教师参考答案（虚构）\n1. A\n',items,whole=True)  # the parent's 「1. A」 is never its sub-question's
+        self.assertEqual([q['label'] for q in rows],labels)
+        for q in rows:
+            self.assertEqual((q['answer'],q['judgment'],q['error_reason'],q['possible_cause'],q['steps']),('','unknown','','',''))
+            self.assertTrue(q['uncertainty'].strip())
+        self.assertEqual((rows[0]['question'],rows[0]['student_answer']),(items[0]['question'],'A'));self.assertIn('小题',rows[0]['uncertainty'])
+        assert_source_pending(self,rows[1],labels[1],'（2）哪个数等于3+4？ A. 7 B. 8','synthetic-request-question.txt',5)
 
     def test_a_bracketed_title_before_its_section_mark_is_read(self):
         # Root's phase48 P1 and P2, whole: a note saying only how far the mark reaches is its own; another title there is not.
