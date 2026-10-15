@@ -2516,6 +2516,41 @@ def first_review_context_checks():
         recheck=generate(root,**context)
         assert recheck['comparison']==unknown_note,context
         first_matches_recheck(first,recheck)
+    # The model's actual input: only an old opinion with content brings the task of comparing with an earlier round.
+    def asked(**context):
+        nonlocal calls
+        seen=[]
+        def model(messages,schema,name,timeout,**kwargs):
+            seen.append(messages);return json.loads(json.dumps(root))
+        with patch.object(family_llm,'_chat_json',side_effect=model):
+            draft=family_llm.homework_reference_draft([],review=True,question_documents=paper,reference_documents=teacher,**context)
+        assert len(seen)==1;calls+=1
+        return draft,seen[0][0]['content'],[part['text'] for part in seen[0][1]['content'] if part['type']=='text']
+    note='核对本次第1题的实际作答。';parent='家长本次补充（待核对，不是孩子作答或已证实事实）：'+note
+    opinion='上一轮待复核意见原文（不是教师参考，不作答案依据）：'+json.dumps(old,ensure_ascii=False)
+    pending_part='同一批原件上一轮仍待补查的题号（只作待核清单，不是题目、作答或答案证据）：'+json.dumps(['虚构新芽卷 第1题'],ensure_ascii=False)
+    # First check: this check's note is kept verbatim, but it and blank old text prove no earlier round.
+    for context in (dict(review_instruction=note),dict(previous_text=' \n\t '),dict(previous_text=' \n\t ',review_instruction=note)):
+        draft,system,texts=asked(**context)
+        assert draft==first,context
+        assert '请另给comparison' not in system and '相对于上一轮' not in system,context
+        assert not any(text.startswith(('上一轮','同一批原件上一轮')) for text in texts),context
+        assert [text for text in texts if text.startswith('家长本次补充')]==([parent] if 'review_instruction' in context else []),context
+    # A pending label alone is a checked scope: listed as is, without an old opinion or a history comparison task.
+    for context in (dict(pending_labels=['虚构新芽卷 第1题']),dict(pending_labels=['虚构新芽卷 第1题'],review_instruction=note)):
+        draft,system,texts=asked(**context)
+        assert '请另给comparison' not in system and '相对于上一轮' not in system,context
+        assert [text for text in texts if '上一轮' in text]==[pending_part],context
+        assert draft['comparison']==unknown_note;first_matches_recheck(first,draft)
+    # An old opinion document, non-blank old text kept verbatim, or both with pending and a note keep the comparison task.
+    kept=' 虚构未保存的上一轮：第1题未判定。\n'
+    for context,parts in ((dict(previous_documents=old),[opinion]),
+                          (dict(previous_text=kept),['上一轮尚未保存的完整意见（待复核，不作事实或答案依据）：'+kept]),
+                          (dict(previous_documents=old,pending_labels=['虚构新芽卷 第1题'],review_instruction=note),[opinion,pending_part,parent])):
+        draft,system,texts=asked(**context)
+        assert '请另给comparison' in system and '相对于上一轮' in system,context
+        assert all(part in texts for part in parts),context
+        assert draft['comparison']==unknown_note;first_matches_recheck(first,draft)
     # No unknown, with no, empty or a model-invented comparison: only a supplied earlier round makes a recheck note.
     image=[dict(mime='image/png',data=png())]
     sound=[item(label='甲卷第1题'),item(label='甲卷第2题',student_answer='C',judgment='incorrect',error_reason='第2题C与参考B不同。')]
