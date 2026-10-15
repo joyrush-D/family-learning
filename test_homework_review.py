@@ -26,6 +26,15 @@ def refused(fn,code=None,status=None):
     else: raise AssertionError('expected refusal')
 
 
+def first_matches_recheck(first,recheck):
+    """One reply checked first, or against an earlier round this call was given, differs only in the program's comparison."""
+    assert first.keys()==recheck.keys() and first.get('comparison','')=='','a first check states no earlier round'
+    block='\n\n本次复核比较（待家长核对）：\n'+recheck['comparison'] if recheck.get('comparison') else ''
+    assert block in recheck['text'] and first['text']==recheck['text'].replace(block,'',1)
+    assert {k:v for k,v in first.items() if k not in ('text','comparison')}=={k:v for k,v in recheck.items() if k not in ('text','comparison')}
+    for claim in ('上一轮','复核','旧AI意见'): assert claim not in first['text']+first['coverage'],claim
+
+
 def output_contract_checks():
     """Only supplied synthetic transport replies; no configuration or model access."""
     calls=0
@@ -186,7 +195,9 @@ def summary_consistency_checks():
         dict(judgment='correct',error_reason='',possible_cause='没有依据的原因。'),
         dict(question='',question_kind='subjective'),
     ]
-    def generate(questions,coverage,comparison=None,*,review=True,program_scope=(),teacher='甲卷 第1题B，第2题B，第3题B。'):
+    # A saved earlier opinion actually supplied to this check; without one the same reply is a first check.
+    earlier=[dict(name='作业批改参考-7.txt',text='虚构上一轮：甲卷第3题与参考一致。')]
+    def generate(questions,coverage,comparison=None,*,review=True,program_scope=(),teacher='甲卷 第1题B，第2题B，第3题B。',previous=()):
         nonlocal calls
         raw=dict(items=questions,coverage=coverage)
         if comparison is not None: raw['comparison']=comparison
@@ -194,22 +205,25 @@ def summary_consistency_checks():
         with patch.object(family_llm,'_chat_json',return_value=raw) as model:
             draft=family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=review,
                 reference_documents=[dict(name='synthetic-teacher.txt',text=teacher)] if review else [],
-                program_coverage=program_scope)
+                program_coverage=program_scope,previous_documents=previous)
             assert model.call_count==1 and raw==original,'the original transport evidence must remain unchanged'
             calls+=1
         return draft
     for change in changes:
-        d=generate([definite|change],stale_coverage,stale_comparison,program_scope=[scope])
-        q=d['questions'][0]
-        assert q['judgment']=='unknown' and d['wrong_items']==0 and d['unknown_items']==1
-        assert not q['error_reason'] and not q['steps'] and q['uncertainty']
-        assert stale_coverage not in d['coverage']+d['text'],'coverage must not retain a grade the program refused'
-        assert stale_comparison not in d['comparison']+d['text'],'comparison must not retain a grade the program refused'
-        assert d['text'].count('甲卷第3题')==1 and '1题仍未判定' in d['coverage'] and '不能沿用' in d['comparison']
-        assert d['unverified_model_summary']==dict(coverage=stale_coverage,comparison=stale_comparison)
-        assert scope in d['coverage'] and scope in d['text'],'actual selected and unread pages must remain visible'
-        assert q['uncertainty'] in d['text'] and q['student_answer'] in d['text']
-        if change.get('answer')!='': assert q['answer']=='教师参考：B'
+        first=generate([definite|change],stale_coverage,stale_comparison,program_scope=[scope])
+        for d in (first,generate([definite|change],stale_coverage,stale_comparison,program_scope=[scope],previous=earlier)):
+            q=d['questions'][0]
+            assert q['judgment']=='unknown' and d['wrong_items']==0 and d['unknown_items']==1
+            assert not q['error_reason'] and not q['steps'] and q['uncertainty']
+            assert stale_coverage not in d['coverage']+d['text'],'coverage must not retain a grade the program refused'
+            assert stale_comparison not in d['comparison']+d['text'],'comparison must not retain a grade the program refused'
+            assert d['text'].count('甲卷第3题')==1 and '1题仍未判定' in d['coverage']
+            assert d['unverified_model_summary']==dict(coverage=stale_coverage,comparison=stale_comparison)
+            assert scope in d['coverage'] and scope in d['text'],'actual selected and unread pages must remain visible'
+            assert q['uncertainty'] in d['text'] and q['student_answer'] in d['text']
+            if change.get('answer')!='': assert q['answer']=='教师参考：B'
+        assert '不能沿用' in d['comparison'],'a real earlier opinion keeps the conservative recheck note'
+        first_matches_recheck(first,d)
     # A changed summary must not erase sound grades, or require invented hints or causes.
     sound_correct=item(label='甲卷第1题')
     sound_wrong=item(label='甲卷第2题',student_answer='C',judgment='incorrect',error_reason='第2题C与参考B不同。')
@@ -222,9 +236,10 @@ def summary_consistency_checks():
     assert '需订正1题，与参考一致1题，未判定1题' in d['text']
     assert stale_coverage not in d['text'] and stale_comparison not in d['text']
     assert scope in d['text'] and conflict['uncertainty'] in d['text']
-    # A missing optional comparison still needs the replacement when a grade was changed.
-    d=generate([conflict],stale_coverage)
+    # A missing optional comparison still needs the replacement when a grade was changed, but only against an earlier round.
+    d=generate([conflict],stale_coverage,previous=earlier)
     assert d['comparison'] and '未判定' in d['comparison']
+    first_matches_recheck(generate([conflict],stale_coverage),d)
     original_unknown=definite|dict(judgment='unknown',student_answer='',error_reason='',uncertainty='答题格空白。')
     mixed_scope='第3题正确；作文未提供，超出本批材料。'
     # A 乙卷 item cannot vouch for itself against a 甲卷-only teacher line, so this teacher text names 乙卷第3题 too.
@@ -242,6 +257,10 @@ def summary_consistency_checks():
     assert d['unverified_model_summary']==dict(coverage=normal_coverage,comparison=normal_comparison)
     assert [q['judgment'] for q in d['questions']]==['correct','incorrect']
     assert normal_comparison not in d['text'] and normal_coverage not in d['text']
+    # The model's own "复核" wording names no earlier round: only a supplied one keeps the recheck note.
+    recheck=generate([sound_correct,sound_wrong],normal_coverage,normal_comparison,previous=earlier)
+    assert recheck['comparison']=='本次复核以逐题结果为准；未列题目仍未检查，旧AI意见不作答案依据。'
+    first_matches_recheck(d,recheck)
     printed=definite|dict(uncertainty='虚构参考冲突。');printed.pop('question_kind')
     d=generate([printed],normal_coverage,review=False)
     assert d['questions'][0]['judgment']=='unknown' and d['coverage']==normal_coverage
@@ -2465,8 +2484,78 @@ def source_reading_role_checks():
     return calls
 
 
+def first_review_context_checks():
+    """Root's case: a first check given no earlier round names none; a supplied opinion or pending label keeps every guard."""
+    calls=0
+    paper=[dict(name='虚构新芽卷.txt',text='虚构新芽卷\n第1题：1+1=（____）。\n孩子作答：\n')]
+    teacher=[dict(name='教师参考.txt',text='虚构新芽卷\n第1题 答案：2\n')]
+    blank=dict(label='虚构新芽卷 第1题',question='1+1=（____）。',student_answer='',question_kind='objective',answer='教师参考：2',
+               judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty='本题没有提供可见的学生作答，不能核定对错。')
+    root=dict(items=[blank],question_labels=['虚构新芽卷 第1题'],coverage='本次列出第1题。',comparison='')
+    old=[dict(name='作业批改参考-7.txt',text='虚构上一轮：虚构新芽卷第1题未判定。')]
+    unknown_note='本次1题未判定，不能沿用上一轮对这些题的确定判定。其他题目以本次逐题结果为准；教师参考和孩子作答分别保留，旧AI意见不作答案依据。'
+    def generate(raw,images=(),documents=True,**context):
+        nonlocal calls
+        original=json.loads(json.dumps(raw))
+        with patch.object(family_llm,'_chat_json',return_value=raw) as model:
+            draft=(family_llm.homework_reference_draft([],review=True,question_documents=paper,reference_documents=teacher,**context) if documents else
+                   family_llm.homework_reference_draft(list(images),review=True,reference_documents=[dict(name='synthetic-teacher.txt',text='甲卷 第1题B，第2题B，第3题B。')],**context))
+            assert model.call_count==1 and raw==original,'the fixed reply stays unchanged'
+            calls+=1
+        return draft
+    # First check, one blank original answer: unknown and the original's blank field stay; no earlier round is claimed.
+    first=generate(root);q=first['questions'][0]
+    assert (first['items'],first['wrong_items'],first['unknown_items'])==(1,0,1) and q['judgment']=='unknown'
+    assert (q['student_answer'],q['answer'],q['uncertainty'])==('','教师参考：2',blank['uncertainty'])
+    assert q['inspection']['state']=='blank_answer' and '原件作答栏留空' in first['text']
+    assert first['text'].startswith('本次核对1题：需订正0题，与参考一致0题，未判定1题。') and '1题仍未判定' in first['coverage']
+    assert first['unverified_model_summary']==dict(coverage='本次列出第1题。',comparison='')
+    # Explicit old opinion, an unsaved one, a program pending label, or both: the same reply keeps the conservative note.
+    for context in (dict(previous_documents=old),dict(previous_text='虚构未保存的上一轮：第1题未判定。'),
+                    dict(pending_labels=['虚构新芽卷 第1题']),dict(previous_documents=old,pending_labels=['虚构新芽卷 第1题'])):
+        recheck=generate(root,**context)
+        assert recheck['comparison']==unknown_note,context
+        first_matches_recheck(first,recheck)
+    # No unknown, with no, empty or a model-invented comparison: only a supplied earlier round makes a recheck note.
+    image=[dict(mime='image/png',data=png())]
+    sound=[item(label='甲卷第1题'),item(label='甲卷第2题',student_answer='C',judgment='incorrect',error_reason='第2题C与参考B不同。')]
+    claim='上一轮甲卷第1题判错，本次复核改为正确，旧AI意见已核对。'
+    blank_third=item(label='甲卷第3题',student_answer='',judgment='unknown',uncertainty='答题格空白。')
+    for items,comparison,expected in ((sound,None,None),(sound,'',''),(sound,claim,'本次复核以逐题结果为准；未列题目仍未检查，旧AI意见不作答案依据。'),
+                                       (sound+[blank_third],claim,unknown_note)):
+        raw=dict(items=items,coverage='仅甲卷所列各题。',**({} if comparison is None else dict(comparison=comparison)))
+        first=generate(raw,image,False)
+        assert [q['judgment'] for q in first['questions']]==['correct','incorrect','unknown'][:len(items)]
+        assert ('comparison' in first)==(comparison is not None or len(items)==3)
+        assert first['unverified_model_summary']==dict(coverage='仅甲卷所列各题。',comparison=comparison or '')
+        recheck=generate(raw,image,False,previous_documents=old)
+        assert recheck.get('comparison')==expected
+        first_matches_recheck(first,recheck)
+    # A pending label the reply omits is still added for recheck, alone or with an old opinion.
+    for context in (dict(pending_labels=['甲卷第3题']),dict(pending_labels=['甲卷第3题'],previous_documents=old)):
+        pending=generate(dict(items=sound,coverage='仅甲卷第1、2题。',comparison=claim),image,False,**context)
+        added=pending['questions'][-1]
+        assert [q['label'] for q in pending['questions']]==['甲卷第1题','甲卷第2题','甲卷第3题'] and pending['unknown_items']==1
+        assert added['inspection']==dict(state='not_checked',basis='previous_pending') and '上一轮此题仍未判定' in added['uncertainty']
+        assert pending['comparison']==unknown_note and pending['unverified_model_summary']['comparison']==claim
+    # Old entries: the print reference draft gains no review fields; the context-free review call is a first check.
+    printed=item(label='甲卷第1题',question='虚构第1题：选择正确选项。',student_answer='C',judgment='incorrect',error_reason='第1题C与参考B不同。')
+    printed.pop('question_kind')
+    with patch.object(family_llm,'_chat_json',return_value=dict(items=[printed],coverage='仅第1题。')) as model:
+        reference=family_llm.homework_reference_draft(image)
+        assert model.call_count==1;calls+=1
+    assert set(reference)=={'text','coverage','items','questions','wrong_items','unknown_items'} and '复核' not in reference['text']
+    legacy=dict(items=[item(label='甲卷第1题',student_answer='',answer='',judgment='unknown',uncertainty='答题格空白。')],coverage='仅这些照片。',comparison=claim)
+    with patch.object(family_llm,'_chat_json',return_value=legacy) as model:
+        bare=family_llm.homework_reference_draft(image,review=True)
+        assert model.call_count==1;calls+=1
+    assert bare['comparison']=='' and bare['unknown_items']==1 and bare['unverified_model_summary']['comparison']==claim
+    assert all(text not in bare['text']+bare['coverage'] for text in ('上一轮','复核','旧AI意见'))
+    return calls
+
+
 def run():
-    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+source_inventory_checks()+source_leading_blank_checks()+source_answer_section_checks()+source_reading_role_checks()+missing_condition_checks()+teacher_caption_checks()+natural_unit_instruction_checks()+teacher_wording_caption_checks()+teacher_note_checks()+teacher_note_owner_checks()
+    contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+first_review_context_checks()+question_coverage_checks()+source_inventory_checks()+source_leading_blank_checks()+source_answer_section_checks()+source_reading_role_checks()+missing_condition_checks()+teacher_caption_checks()+natural_unit_instruction_checks()+teacher_wording_caption_checks()+teacher_note_checks()+teacher_note_owner_checks()
     word_boundary_checks()
     declared_ordinary_title_checks()
     owned_title_field_checks()
@@ -2587,19 +2676,25 @@ def run():
                 item(label='Q3',judgment='unknown',student_answer='2',answer='教师参考：2 m',
                      steps='如果要单位，就补写2 m。',uncertainty='原题单位格式未提供')]
             answer_only_raw=dict(items=answer_only,coverage='Q1—Q3均正确，整卷已检查完',comparison='上一轮三题均正确')
-            with patch.object(family_llm,'_chat_json',return_value=answer_only_raw):
-                limited=family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=True,
-                    reference_documents=[dict(name='synthetic-answer-only.txt',text='Q1 B; Q2 Plants get energy from sunlight.; Q3 2 m')])
-            assert [q['judgment'] for q in limited['questions']]==['correct','unknown','unknown']
-            assert limited['unknown_items']==2 and limited['wrong_items']==0
-            assert limited['questions'][1]['student_answer']=='Plants get energy from sunlight.'
-            assert limited['questions'][1]['answer']=='教师参考：Plants get energy from sunlight.'
-            assert all(not q['steps'] and not q['error_reason'] and not q['possible_cause'] for q in limited['questions'][1:])
+            # The model claims an earlier round; only the second call is given one.
+            for previous in ((),[dict(name='作业批改参考-8.txt',text='虚构上一轮：Q1—Q3均正确。')]):
+                with patch.object(family_llm,'_chat_json',return_value=answer_only_raw):
+                    limited=family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=True,
+                        reference_documents=[dict(name='synthetic-answer-only.txt',text='Q1 B; Q2 Plants get energy from sunlight.; Q3 2 m')],
+                        previous_documents=previous)
+                assert [q['judgment'] for q in limited['questions']]==['correct','unknown','unknown']
+                assert limited['unknown_items']==2 and limited['wrong_items']==0
+                assert limited['questions'][1]['student_answer']=='Plants get energy from sunlight.'
+                assert limited['questions'][1]['answer']=='教师参考：Plants get energy from sunlight.'
+                assert all(not q['steps'] and not q['error_reason'] and not q['possible_cause'] for q in limited['questions'][1:])
+                assert all(limited['text'].count(label)==1 for label in ('Q2','Q3'))
+                assert '上一轮三题均正确' not in limited['comparison']
+                assert 'Q1—Q3均正确，整卷已检查完' not in limited['text']+limited['coverage']
+                assert '2题仍未判定' in limited['coverage']
+                assert limited['unverified_model_summary']==dict(coverage=answer_only_raw['coverage'],comparison=answer_only_raw['comparison'])
+                if not previous: first_limited=limited
             assert '2题' in limited['comparison'] and '不能沿用' in limited['comparison']
-            assert all(limited['text'].count(label)==1 for label in ('Q2','Q3'))
-            assert '上一轮三题均正确' not in limited['comparison']
-            assert 'Q1—Q3均正确，整卷已检查完' not in limited['text']+limited['coverage']
-            assert '2题仍未判定' in limited['coverage']
+            first_matches_recheck(first_limited,limited)
             assert answer_only_raw['coverage']=='Q1—Q3均正确，整卷已检查完'
             assert answer_only_raw['items'][1]['question_kind']=='subjective' and answer_only_raw['items'][1]['judgment']=='correct'
             for kind in ('unknown','subjective'):

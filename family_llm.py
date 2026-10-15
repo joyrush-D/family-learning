@@ -3008,7 +3008,11 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
         unverified_model_summary=dict(coverage=result['coverage'],comparison=comparison)
         # Sound returned grades do not prove complete coverage. Reconcile every
         # review; a same-call model inventory is still not independent evidence.
-        comparison=(('本次%d题未判定，不能沿用上一轮对这些题的确定判定。'%unknown+
+        # Only an earlier round this call was given (its opinion or the program's pending
+        # labels) is compared; unknowns or the model's own comparison prove none.
+        earlier=bool(previous_documents or previous_text or pending_labels)
+        comparison=('' if not earlier else
+                    ('本次%d题未判定，不能沿用上一轮对这些题的确定判定。'%unknown+
                      '其他题目以本次逐题结果为准；教师参考和孩子作答分别保留，旧AI意见不作答案依据。') if unknown else
                     '本次复核以逐题结果为准；未列题目仍未检查，旧AI意见不作答案依据。' if comparison else '')
         result['coverage']=('本次%d题，%d题仍未判定。'%(len(result['items']),unknown)+
