@@ -734,33 +734,34 @@ function homeworkReviewScopeText(coverage,comparison,text){
  if(typeof coverage==='string'&&entries.length&&entries.every(x=>/^(?:题目\/孩子作答|上一轮待复核意见|教师参考)《.*》：.+。$/.test(x))&&scope.endsWith(read)){reads=entries.map(x=>x.replace(/》：本次(读取(?:完整文字|整张照片|最新检查；较早草稿保留在原件，未作为本次复核输入))。$|。$/,(m,status)=>status?'》：'+status:''));scope=scope.slice(0,-read.length)+'\n实际读取范围：'+reads.join('；')+'。'}
  return {coverage:'本次检查范围：'+scope+'\n仅本次所选资料，未判定和未检查部分不算已完成。',comparison:comparison?'本次复核：'+comparison.replace(/^本次(?=\d+题未判定，不能沿用上一轮对这些题的确定判定。)|^本次复核(?=以逐题结果为准；未列题目仍未检查，旧AI意见不作答案依据。)/,''):'',reads};
 }
-// Display only: the scope paragraph keeps exactly homeworkReviewScopeText's coverage as its text. Only proven read entries become one row
-// per material, its use first and unread pages marked; a count equal to the structured result's own count line stays in the text, not shown twice.
+// Display only: the scope paragraph keeps exactly homeworkReviewScopeText's coverage as its text. Only when the read entries are proven does it
+// become short rows: the validator's own facts one per row, then one row per material; a count equal to the structured count line is not shown twice.
+// Line breaks the text keeps between rows stay in it without adding blank lines; anything unproven stays one text with only its label marked.
 function homeworkReviewScopeNodes(host,scope,counts){
- const text=scope.coverage,tail='\n仅本次所选资料，未判定和未检查部分不算已完成。',read='\n实际读取范围：'+scope.reads.join('；')+'。',proven=scope.reads.length>0&&text.endsWith(read+tail),same=counts?'本次检查范围：'+counts.items+'题，'+counts.unknown_items+'题仍未判定。':null,span=(value,name)=>{const x=document.createElement('span');x.className=name;x.textContent=value;return x};
- let head=proven?text.slice(0,-(read+tail).length):text;
- if(same&&head.startsWith(same)){host.append(span('本次检查范围：','homework-review-scope-label'),span(same.slice(7),'homework-review-redundant'));head=head.slice(same.length)}
- if(!proven){host.append(head);return}
- host.append(head+'\n',span('实际读取范围：','homework-review-scope-label'));
- scope.reads.forEach((entry,i)=>{const row=span('','homework-review-read'),m=/^(题目\/孩子作答|上一轮待复核意见|教师参考)(《.*》：)(.*?)(；未读取页：(?!无$).+)?$/.exec(entry);if(m){row.append(span(m[1],'homework-review-read-use'),m[2]+m[3]);if(m[4])row.append(span(m[4],'homework-review-read-gap'))}else row.append(entry);row.append(i===scope.reads.length-1?'。':'；');host.append(row)});
- // The line break the text keeps before the closing line is already the last row's end, so it stays in the text without adding a blank line.
- host.append(span('\n','homework-review-break'));
- host.append(tail.slice(1));
+ const text=scope.coverage,label='本次检查范围：',tail='\n仅本次所选资料，未判定和未检查部分不算已完成。',read='\n实际读取范围：'+scope.reads.join('；')+'。',proven=scope.reads.length>0&&text.startsWith(label)&&text.endsWith(read+tail);
+ const count=/^\d+题，\d+题仍未判定。/.exec(text.slice(label.length))?.[0]||'',same=!!count&&!!counts&&count===counts.items+'题，'+counts.unknown_items+'题仍未判定。',node=part=>homeworkReviewNode(part,'homework-review-');
+ if(!proven){host.append(...(text.startsWith(label)?[node({text:label,kind:'scope-label'}),...(same?[node({text:count,kind:'redundant'})]:[]),text.slice(label.length+(same?count.length:0))]:[text]));return}
+ const body=text.slice(label.length+count.length,-(read+tail).length),facts=homeworkReviewCoverageFacts(body)||(body?[body]:[]);
+ host.append(...[{kind:'scope-head',parts:[{text:label,kind:'scope-label'},...(count?[{text:count,kind:same?'redundant':'scope-count'}]:[])]},...facts.map(x=>({text:x,kind:'scope-fact'})),{text:'\n',kind:'break'},{kind:'scope-head',parts:[{text:'实际读取范围：',kind:'scope-label'}]},
+  ...scope.reads.map((entry,i,all)=>{const end=i===all.length-1?'。':'；';return {kind:'read',parts:homeworkReviewReadParts(entry,'read-',end)||[{text:entry+end,kind:''}]}}),{text:'\n',kind:'break'},{text:tail.slice(1),kind:'scope-fact'}].map(node));
 }
 // Display only: the saved TXT stays the record and every character stays in the DOM, so copy, find and screen readers keep it verbatim.
 // A paragraph takes the live check's hierarchy only when it is exactly a generated question block: "题号 · 判定", then the program's own labels in order.
 // There a generic "参考答案：" before a 教师参考/AI自行推导 source and an empty "订正建议：" stay in the text but are not shown; anything else stays plain.
 // The validator's own closing paragraphs (savedHomeworkReviewScopeLabel) share one quieter scope area like the live check's; consecutive ones stay together with their labels.
 function savedHomeworkReviewParts(text){
- const parts=[],add=(value,kind='',judgment='')=>{if(value)parts.push({text:value,kind,judgment})},judgments={与参考一致:'correct',需订正:'incorrect',未判定:'unknown'};let scope=null;
+ const parts=[],add=(value,kind='',judgment='')=>{if(value)parts.push({text:value,kind,judgment})},judgments={与参考一致:'correct',需订正:'incorrect',未判定:'unknown'};let scope=null,scopeCount=null;
  text.split('\n\n').forEach((block,index)=>{
   const scopeLabel=savedHomeworkReviewScopeLabel(block);
   if(scopeLabel!==null){
-   if(scope){scope.text+='\n\n'+block;scope.parts.push({text:'\n\n',kind:''})}else{if(index)add('\n\n');scope={text:block,kind:'scope',judgment:'',parts:[]};parts.push(scope)}
-   if(scopeLabel)scope.parts.push({text:scopeLabel,kind:'scope-label'});
-   // Each read entry of the program's own block is one line already: its use leads and unread pages stand out, every character kept.
-   if(scopeLabel==='实际读取范围（程序核对）：')block.slice(scopeLabel.length).split('\n').forEach((line,i)=>{if(i)scope.parts.push({text:'\n',kind:''});const m=/^(题目\/孩子作答|上一轮待复核意见|教师参考)(《.*》：)(.*?)(；未读取页：(?!无。$).+)?$/.exec(line);if(!m){if(line)scope.parts.push({text:line,kind:''});return}scope.parts.push({text:m[1],kind:'scope-use'},{text:m[2]+m[3],kind:''});if(m[4])scope.parts.push({text:m[4],kind:'scope-gap'})});
-   else if(block.length>scopeLabel.length)scope.parts.push({text:block.slice(scopeLabel.length),kind:''});return;
+   if(scope){scope.text+='\n\n'+block;scope.parts.push({text:'\n\n',kind:'break'})}else{if(index)add('\n\n');scope={text:block,kind:'scope',judgment:'',parts:[]};parts.push(scope)}
+   // Each exact paragraph becomes short rows like the live check's: its label, the validator's facts one per row, one row per read material.
+   // The line breaks between rows stay in the text without adding blank lines; the coverage count is its own part, shown once (below).
+   const body=block.slice(scopeLabel.length),head={kind:'scope-head',parts:[{text:scopeLabel,kind:'scope-label'}]},lined=body.startsWith('\n');let rows=lined?body.slice(1).split('\n'):body?[body]:[];
+   if(scopeLabel==='覆盖说明：'){const count=/^本次\d+题，\d+题仍未判定。/.exec(body)[0];scopeCount={text:count,kind:'scope-count'};head.parts.push(scopeCount);rows=homeworkReviewCoverageFacts(body.slice(count.length))||[body.slice(count.length)]}
+   if(scopeLabel)scope.parts.push(head);
+   for(const line of rows){if(lined)scope.parts.push({text:'\n',kind:'break'});const read=scopeLabel==='实际读取范围（程序核对）：'&&homeworkReviewReadParts(line,'scope-');scope.parts.push(read?{kind:'scope-read',parts:read}:{text:line,kind:'scope-fact'})}
+   return;
   }
   scope=null;
   if(index)add('\n\n');
@@ -776,7 +777,33 @@ function savedHomeworkReviewParts(text){
    add('\n');if(source){add(label,'redundant');add(source[0],'field');add(value.slice(source[0].length))}else{add(label,'field');add(value)}
   }
  });
+ // The coverage count is shown once only where the whole text parses exactly and its count line, always shown, has the same total and undecided.
+ const count=savedHomeworkReviewCount(parts);if(count&&scopeCount?.text==='本次'+count.items+'题，'+count.unknown+'题仍未判定。')scopeCount.kind='redundant';
  return parts;
+}
+// The count line of a saved check whose every question block parses exactly and matches it, with those questions' parts; else null.
+function savedHomeworkReviewCount(parts){
+ const count=parts[0]?.kind==='summary'&&/^本次核对(\d+)题：需订正(\d+)题，与参考一致(\d+)题，未判定(\d+)题。$/.exec(parts[0].text),questions=[];
+ parts.forEach((part,i)=>{if(part.kind==='question')questions.push({index:i,label:part.text,judgment:parts[i+1]?.judgment})});
+ if(!count||!questions.length||questions.length!==Number(count[1])||[['incorrect',2],['correct',3],['unknown',4]].some(([judgment,n])=>questions.filter(x=>x.judgment===judgment).length!==Number(count[n])))return null;
+ return {items:Number(count[1]),unknown:Number(count[4]),questions};
+}
+// The shared validator's fixed coverage facts after its count (family_llm.py), one short row each; null unless the text is exactly them in order.
+function homeworkReviewCoverageFacts(text){
+ const facts=/^(未列入本次逐题结果的题目和资料范围仍未检查；)(模型原覆盖说明尚未核明。)(未返回识别题号清单，完整覆盖尚未核明。)?(已核对所选文字原件的[1-9]\d*个明确题号；不代表图片、PDF或未核明题号的完整覆盖。)?(文字中另有题号或归属无法唯一核明，请对照原件检查。)?(模型仅读取本批保留行窗口，省略\d+个可证明独立的未选题块；完整原件由程序另核，省略块未被模型读取。)?$/.exec(text);
+ return facts&&facts.slice(1).filter(Boolean);
+}
+// One exact read entry: its use, the source's full name, then a row of its pages or what was read, unread pages marked; null for any other line.
+function homeworkReviewReadParts(entry,prefix,end=''){
+ const m=/^(题目\/孩子作答|上一轮待复核意见|教师参考)(《.*》：)(.+?)(未读取页：(?!无。?$)[^。]+)?(。?)$/.exec(entry);
+ return m&&[{text:m[1],kind:prefix+'use'},{text:m[2],kind:prefix+'name'},{text:m[3]+(m[4]||'')+m[5]+end,kind:prefix+'pages',parts:[{text:m[3],kind:''},...(m[4]?[{text:m[4],kind:prefix+'gap'}]:[]),{text:m[5]+end,kind:''}]}];
+}
+// Builds a display part and its nested parts; plain parts stay text nodes, so the text reads back exactly.
+function homeworkReviewNode(part,prefix){
+ if(!part.kind)return part.text;
+ const span=document.createElement('span');span.className=prefix+part.kind;if(part.judgment)span.dataset.judgment=part.judgment;
+ if(part.parts)span.append(...part.parts.map(x=>homeworkReviewNode(x,prefix)));else span.textContent=part.text;
+ return span;
 }
 // The label of a paragraph that is exactly one the shared validator writes after the questions (family_llm.py, read entries from family_print.py), '' for its unlabelled closing line, else null.
 // Upload names cannot hold a newline, so each read entry is one line; old formats, the model's own wording and parent edits never match and stay plain.
@@ -793,10 +820,10 @@ function savedHomeworkReviewScopeLabel(block){
 // The saved text is editable and comes back without the program's own checks, so the summary names questions only, never whether one was
 // checked or left blank. Old formats, texts without questions and edited texts that do not parse exactly show the complete text alone.
 function savedHomeworkReviewFocus(panel,parts,nodes){
- const nav=panel.querySelector('[data-saved-review-focus]'),count=parts[0]?.kind==='summary'&&/^本次核对(\d+)题：需订正(\d+)题，与参考一致(\d+)题，未判定(\d+)题。$/.exec(parts[0].text),items=[];if(!nav)return;
- parts.forEach((part,i)=>{if(part.kind==='question')items.push({node:nodes[i],label:part.text,judgment:parts[i+1]?.judgment})});
+ const nav=panel.querySelector('[data-saved-review-focus]'),count=savedHomeworkReviewCount(parts);if(!nav)return;
  nav.replaceChildren();nav.hidden=true;
- if(!count||!items.length||items.length!==Number(count[1])||[['incorrect',2],['correct',3],['unknown',4]].some(([judgment,n])=>items.filter(x=>x.judgment===judgment).length!==Number(count[n])))return;
+ if(!count)return;
+ const items=count.questions.map(x=>({node:nodes[x.index],label:x.label,judgment:x.judgment}));
  // Labels that all start with the same paper title show only their own part here; the complete label stays in the text and the button's name.
  const shared=items.map(x=>x.label).reduce((a,b)=>{let n=0;while(n<a.length&&a[n]===b[n])n++;return a.slice(0,n)});let cut=items.length>1?shared.lastIndexOf(' ')+1:0;if(items.some(x=>!x.label.slice(cut).trim()))cut=0;
  for(const [judgment,name] of [['incorrect','需订正'],['unknown','待补查']]){
@@ -815,8 +842,7 @@ async function loadSavedHomeworkReview(panel,record,task){
   if(!panel.isConnected||!$('#taskDialog').open||taskFeedbackContext?.task_id!==task.id)return;
   if(out.task_id!==task.id||out.record_id!==record.id||out.created!==record.created||out.original_record_id!==homeworkReviewOriginalId(record)){retryable=false;throw Error('检查原记录已变化，请重新打开核对')}
   if(typeof out.text!=='string'||!out.text.trim()||[...out.text].length>12000){retryable=false;throw Error('检查文字无法完整展示，请下载文字原件核对')}
-  const node=part=>{if(!part.kind)return part.text;const span=document.createElement('span');span.className='saved-review-'+part.kind;if(part.judgment)span.dataset.judgment=part.judgment;if(part.parts)span.append(...part.parts.map(node));else span.textContent=part.text;return span};
-  const parts=savedHomeworkReviewParts(out.text),nodes=parts.map(node);
+  const parts=savedHomeworkReviewParts(out.text),nodes=parts.map(part=>homeworkReviewNode(part,'saved-review-'));
   panel.querySelector('[data-saved-review-text]').replaceChildren(...nodes);savedHomeworkReviewFocus(panel,parts,nodes);status.textContent=out.has_archived?'较早未单独保存的草稿仍在文字原件，可下载对照。':'';panel.dataset.loaded='true';
  }catch(error){if(panel.isConnected){status.textContent=error.message+'；已保存记录与原件保留。';retry.hidden=!retryable}}
  finally{delete panel.dataset.loading}

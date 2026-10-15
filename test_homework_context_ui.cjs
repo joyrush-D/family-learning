@@ -99,6 +99,8 @@ async function start(){
   assert.equal(reply.questions.find(x=>x.label===L(2,1)).student_answer,'');assert.deepEqual(reply.questions.find(x=>x.label===L(2,3)).inspection,{state:'not_checked',basis:'source_inventory',document:'synthetic-context-paper.txt',line:14});
   for(const line of ['卷面作答：本题尚未检查，待补查','卷面作答：原件作答栏留空（程序核对《synthetic-context-paper.txt》第11行）'])assert(generated.split('\n').includes(line),line);
   await shot('context-'+width+'-live-missing',q(L(2,3)));await fit();
+  // The scope area itself is photographed: the validator's facts and each material as short rows below the questions and the next step.
+  {const scope=result.locator(':scope > .homework-review-scope').first();assert.equal(await scope.locator('.homework-review-read').count(),2,'one row per material');assert.equal(await scope.locator('.homework-review-redundant').count(),1,'the count above is not shown twice');assert.equal(await scope.locator('.homework-review-redundant').evaluate(x=>x.getBoundingClientRect().width),0);await scope.evaluate(x=>x.scrollIntoView({block:'end'}));await shot('context-'+width+'-live-scope');await fit()}
   // Save: a 503 writes nothing and keeps the draft; the retry saves once and keeps the parent's roles on the redrawn answer.
   let fault=1;await page.route('**/api/task/feedback',async route=>{if(fault===1){fault=0;return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'虚构保存失败，零写'})})}return route.continue()});
   await panel().locator('[data-homework-review-confirm]').check();await panel().locator('[data-homework-review-apply]').click();await until(async()=>/已填入反馈/.test(await status().innerText()),'fill');
@@ -114,6 +116,8 @@ async function start(){
   assert.deepEqual(groups,[['需订正 2 题',['第1大题 第3题','第2大题 第2题']],['待补查 2 题',['第2大题 第1题','第2大题 第3题']]]);
   assert(Math.min(...await focus.locator('button').evaluateAll(xs=>xs.map(x=>x.getBoundingClientRect().height)))>=44,'touch targets');
   await shot('context-'+width+'-reopened-focus',focus);await fit();
+  // The saved scope shows the same rows; its coverage count equals the exact count line above it, so it stays in the text but is shown once.
+  {const scope=text.locator('.saved-review-scope').first();assert.equal(await scope.locator('.saved-review-scope-read').count(),2);assert.match(await scope.locator('.saved-review-redundant').textContent(),/^本次\d+题，\d+题仍未判定。$/);assert.equal(await scope.locator('.saved-review-scope-count').count(),0);assert.equal(await text.locator('.saved-review-summary').isVisible(),true);await scope.evaluate(x=>x.scrollIntoView({block:'end'}));await shot('context-'+width+'-reopened-scope');await fit()}
   await focus.getByRole('button',{name:'查看 '+L(2,3),exact:true}).click();
   // The located question opens at the top of the dialog, so its lines are readable above the close bar.
   assert.deepEqual(await page.evaluate(()=>{const x=document.activeElement,r=x.getBoundingClientRect(),d=x.closest('dialog').getBoundingClientRect();return [x.className,x.textContent,r.top>=d.top&&r.top<=d.top+80]}),['saved-review-question',L(2,3),true]);await shot('context-'+width+'-reopened-located');
