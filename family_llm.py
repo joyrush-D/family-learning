@@ -1111,22 +1111,6 @@ def _ref_title_field(text):
     return found[1] if found and not _REF_QUESTION.search(found[1]) and not _REF_SECTION.search(found[1]) else None
 
 
-def _ref_title_name(text):
-    """The name an explicit title field that is all of its line is written under, 「试卷名称」, else None."""
-    return re.sub(r'\s+','',re.split('[：:]',text.strip(),maxsplit=1)[0]).lower() if _ref_title_field(text) else None
-
-
-def _ref_title_heads(lines):
-    """The names of the title fields an original heads its own questions with, each on a line no question above it in its
-    paragraph can own: 「试卷名称：虚构甲卷」 opening it. Under an answer, a field of such a name names the next title."""
-    heads=set();owned=False
-    for line in lines:
-        owned=owned and bool(line.strip())
-        if not owned and _ref_title_field(line): heads.add(_ref_title_name(line))
-        owned=owned or _REF_QUESTION.search(line) is not None
-    return frozenset(heads)
-
-
 def _ref_scope(text,section=None,titles=frozenset(),listed=False):
     """The one reading of a label or teacher heading: explicit paper name or None, 大题 number, leftover words."""
     text=_ref_title_field(text) or text  # a declared title is read whole, the same as the label naming it
@@ -1180,38 +1164,42 @@ def _ref_plain(line,titles=frozenset()):
             and _ref_sub(text,teacher=True)[0] is None and _ref_scope(text,None,titles,_REF_LISTED.search(text) is not None)[0] is None)
 
 
-def _ref_beyond(lines,at,stop,heads=frozenset()):
+def _ref_beyond(lines,at,stop):
     """The line the plain lines [at:stop] stand right above: the next one, or the next nonblank one when one of them is a title
-    the original itself heads its questions with (_ref_title_heads), so ordinary paragraph spacing never makes it an answer's words."""
-    if any(_ref_title_name(line) in heads for line in lines[at:stop]):
+    field (_ref_title_field). It may head what follows whatever this original's own headings look like, a bare title 「虚构甲卷」
+    or another field name, so ordinary paragraph spacing never makes it an answer's words."""
+    if any(_ref_title_field(line) for line in lines[at:stop]):
         while stop<len(lines) and not lines[stop].strip(): stop+=1
     return stop
 
 
-def _ref_continued(lines,at,titles=frozenset(),number=None,heads=frozenset()):
-    """Where the plain lines from `at` (_ref_plain), right under a line giving one question its answer, end when they go on
-    with that answer, else `at`. A line's role comes from where it stands in the whole original: they are the answer's own
+def _ref_continued(lines,at,titles=frozenset(),number=None):
+    """How far the plain lines from `at` (_ref_plain), right under a line giving one question its answer, go on with that
+    answer: (own, unresolved), where the lines that are its own words end and where those that may be its words or a heading
+    end, each `at` when none. A line's role comes from where it stands in the whole original: they are the answer's own
     words only when nothing below can take them as its heading, their paragraph ending at a blank line or the original's end,
     or the next line naming its own paper. Nonempty colon fields other than a title field, which may head it, can also end at
-    a later unqualified question number. A title the original itself heads its questions with is read past blank lines
-    (_ref_beyond): when it heads anything, the lines above it are the answer's own and it never is.
-    Other lines before another question or 大题 keep their heading reading; an ambiguous increasing-number boundary
-    retains the preceding original for pending review instead of grading on its first line alone."""
+    a later unqualified question number. A title field is read past blank lines (_ref_beyond): there only an unqualified
+    question number that does not go on from the answer's proves it heads that question, the lines above it being the
+    answer's own; before any other line, a later number, a 大题, a note or a separator, nothing proves whose words it is.
+    Other lines before another question or 大题 keep their heading reading. Unresolved lines keep the whole preceding original
+    for pending review instead of grading on its first line alone, and are read as headings: the answer's paper never goes
+    on past a title that may name another."""
     stop=at
     while stop<len(lines) and _ref_plain(lines[stop],titles): stop+=1
-    after=_ref_beyond(lines,at,stop,heads)
-    if after==len(lines) or not lines[after].strip(): return stop
+    after=_ref_beyond(lines,at,stop)
+    if after==len(lines) or not lines[after].strip(): return stop,at
     found=_REF_QUESTION.search(lines[after]);head=lines[after][:found.start()] if found else lines[after]
-    if _ref_scope(head,None,titles,_REF_LISTED.search(lines[after]) is not None)[0] is not None: return stop
+    if _ref_scope(head,None,titles,_REF_LISTED.search(lines[after]) is not None)[0] is not None: return stop,at
     later=found and not head.strip() and number is not None and int(next(g for g in found.groups() if g))>number
-    if after>stop and not later: return next(k for k in range(at,stop) if _ref_title_name(lines[k]) in heads)
+    if after>stop and found and not head.strip() and not later: return next(k for k in range(at,stop) if _ref_title_field(lines[k])),at
     # A nonempty field beneath an answer is its body. A following unqualified,
     # increasing question closes that body; it does not turn it into a new title.
     # Plain names, empty title fields and reset/repeated numbers keep the heading path.
     # A title field 「试卷名称：OTHER TEST」 may as well head that question, so it proves
     # no body: the answer keeps its whole text pending review, never borrowing the next.
-    if later and all(re.search(r'[^：:]+[：:]\s*\S',line) and not _ref_title_field(line) for line in lines[at:stop]): return stop
-    return at
+    if later and all(re.search(r'[^：:]+[：:]\s*\S',line) and not _ref_title_field(line) for line in lines[at:stop]): return stop,at
+    return at,stop if later or after>stop else at
 
 
 def _teacher_reference_entries(documents,titles=frozenset(),continued=None):
@@ -1219,25 +1207,19 @@ def _teacher_reference_entries(documents,titles=frozenset(),continued=None):
     entries=[]
     for document in documents:
         paper=section=None;title='';first=len(entries);lines=document['text'].splitlines();owner=parent=None;skip=set()
-        heads=_ref_title_heads(lines)  # 「试卷名称：…」 under an answer names the next title only where this original heads with it
         for at,line in enumerate(lines):
             if at in skip: continue
-            if owner and (stop:=_ref_continued(lines,at,titles,owner[0][0]['number'],heads))>at:  # One answer's whole paragraph is its one value, never a heading.
-                value='\n'.join([owner[1]]+[part.strip() for part in lines[at:stop]])
+            own,unresolved=_ref_continued(lines,at,titles,owner[0][0]['number']) if owner else (at,at)
+            if own>at:  # One answer's whole paragraph is its one value, never a heading.
+                value='\n'.join([owner[1]]+[part.strip() for part in lines[at:own]])
                 for entry in owner[0]: entry['answer']=re.sub(r'[\s，,；;。.．、]+$','',value)
-                skip.update(range(at,stop));owner=None;continue
-            if owner and _ref_plain(line,titles):
-                end=at
-                while end<len(lines) and _ref_plain(lines[end],titles): end+=1
-                after=_ref_beyond(lines,at,end,heads)
-                next_mark=_REF_QUESTION.search(lines[after]) if after<len(lines) else None
-                if (next_mark and not lines[after][:next_mark.start()].strip()
-                        and int(next(g for g in next_mark.groups() if g))>owner[0][0]['number']):
-                    # Without field/heading proof the lines may be a note or a new
-                    # title. Keep their original text, and never grade on B alone.
-                    for entry in owner[0]:
-                        entry['answer']='\n'.join([owner[1]]+[part.strip() for part in lines[at:end]])
-                        entry['continuation_unresolved']=True
+                skip.update(range(at,own));owner=None;continue
+            if unresolved>at:
+                # Without field/heading proof the lines may be a note or a new
+                # title. Keep their original text, and never grade on B alone.
+                for entry in owner[0]:
+                    entry['answer']='\n'.join([owner[1]]+[part.strip() for part in lines[at:unresolved]])
+                    entry['continuation_unresolved']=True
             marks=list(_REF_QUESTION.finditer(line));made=len(entries)
             if not marks and parent and _REF_SUB.match(line):
                 sub,end=_ref_sub(line,teacher=True)
