@@ -1681,6 +1681,43 @@ def declared_ordinary_title_checks():
     assert [(q['judgment'],q['answer']) for q in result['questions']]==[('incorrect','教师参考：5')],result
 
 
+def owned_title_field_checks():
+    """T02: a title field under an answer is read where it stands, never by its words. 「标题：春天；还需说明理由。」 or a bare
+    「名称：…」 ending the answer's paragraph is that answer's own words, so the teacher's whole 「春天\n标题：春天；还需说明理由」 never
+    grades a partial 「教师参考：春天」 correct. Right before the next question it may head that question: the answer keeps its whole
+    text pending review, and the next question's answer stays under the title it may name, never borrowed back."""
+    label='虚构春树卷 第1题';source='试卷名称：虚构春树卷\n第1题 请拟一个标题，并说明理由。\n孩子作答：春天\n'
+    raw=dict(question_labels=[label],coverage='仅核对虚构春树卷第1题，其余未检查。',items=[dict(label=label,question='请拟一个标题，并说明理由。',
+        student_answer='春天',answer='教师参考：春天',judgment='correct',question_kind='subjective',error_reason='',possible_cause='',
+        steps='',uncertainty='')])
+    def draft(reference):
+        with patch.object(family_llm,'_chat_json',return_value=json.loads(json.dumps(raw))) as model:
+            result=family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=True,
+                question_documents=[dict(name='synthetic-spring-question.txt',text=source)],
+                reference_documents=[dict(name='synthetic-spring-teacher.txt',text=reference)])
+        assert model.call_count==1
+        q,=result['questions']
+        assert (q['judgment'],q['student_answer'])==('unknown','春天') and q['answer']!='教师参考：春天',(reference,q)
+        assert (result['wrong_items'],result['unknown_items'])==(0,1),result
+    def entries(reference,question=source):
+        documents=[dict(name='q.txt',text=question),dict(name='t.txt',text=reference)]
+        return [(entry['paper'],entry['rest'],entry['number'],entry['answer'],bool(entry.get('continuation_unresolved')))
+                for entry in family_llm._teacher_reference_entries(documents[1:],family_llm._ref_titles(documents))]
+    head='试卷名称：虚构春树卷\n第1题：春天\n'
+    for field in ('标题：春天；还需说明理由。','名称：春天；还需说明理由。','试卷名称：春天还需说明理由','标题：春天'):
+        for reference in (head+field+'\n',head+field+'\n\n第2题：秋天\n',head+field+'\n乙卷第2题：秋天\n'):
+            got=entries(reference)
+            assert got[0]==('虚构春树卷','',1,'春天\n'+field.rstrip('。'),False),(reference,got)
+        draft(head+field+'\n');draft(head+field+'\n\n第2题：秋天\n')
+    for field,rest in (('标题：春天；还需说明理由。','春天还需说明理由'),('试卷名称：OTHER TEST','OTHERTEST')):
+        got=entries(head+field+'\n第2题：秋天\n')
+        assert got==[('虚构春树卷','',1,'春天\n'+field,True),(None,rest,2,'秋天',False)],(field,got)
+        draft(head+field+'\n第2题：秋天\n')
+    orchard='教师参考答案\n试卷名称：SYNTHETIC ORCHARD TEST\n第1题：5\n试卷名称：OTHER TEST\n第2题：6\n'
+    got=entries(orchard,'SYNTHETIC ORCHARD TEST\n第1题 2+3=?\n孩子作答：4\n')
+    assert got==[(None,'SYNTHETICORCHARDTEST',1,'5\n试卷名称：OTHER TEST',True),(None,'OTHERTEST',2,'6',False)],got
+
+
 def nested_sub_checks():
     """D01/D02: a sub-question is read to its last level; the teacher's 「第4题（2）」 answers 「（2）」 only, never 「（2）②」."""
     def draft(case,sub,teacher,answer='教师参考：B'):
@@ -2298,6 +2335,7 @@ def run():
     contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+source_inventory_checks()+source_leading_blank_checks()+source_answer_section_checks()+source_reading_role_checks()+missing_condition_checks()+teacher_caption_checks()+natural_unit_instruction_checks()+teacher_wording_caption_checks()+teacher_note_checks()+teacher_note_owner_checks()
     word_boundary_checks()
     declared_ordinary_title_checks()
+    owned_title_field_checks()
     nested_sub_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:
         root=Path(temporary);data=root/'private';data.mkdir()
