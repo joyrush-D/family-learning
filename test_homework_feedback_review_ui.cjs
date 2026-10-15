@@ -260,8 +260,8 @@ def fixture_get(self):
 app.Handler.do_GET=fixture_get
 original=app.family_print.PrintStore._convert
 app.printer_config=lambda:dict(printers=[dict(name='Synthetic_Printer',label='虚构打印机',color=False,duplex=False)],error='')
-def unlink_after_conversion(store,data,name,directory):
-    result=original(store,data,name,directory)
+def unlink_after_conversion(store,data,name,directory,**kwargs):
+    result=original(store,data,name,directory,**kwargs)
     if name.startswith('synthetic-recovery-original-A-'):
         assert app.DATA.name.startswith('family-demo-')
         with app.connect_read_only() as c:
