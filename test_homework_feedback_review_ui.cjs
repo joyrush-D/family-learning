@@ -312,7 +312,10 @@ async function splitPdfFlow(p,host,width){
  await panel().locator('[data-homework-review-run]').click();await eventually(async()=>/虚构模型失败/.test(await status()),'model failure kept');await p.unroute('**/api/print/homework/draft');
  assert.equal((await trace()).calls.length,before);
  let request;await p.route('**/api/print/homework/draft',async r=>{request=r.request().postDataJSON();await r.continue()});
- await panel().locator('[data-homework-review-run]').click();await eventually(async()=>/1题需订正/.test(await panel().locator('[data-homework-review-result]').innerText()),'split check result');await p.unroute('**/api/print/homework/draft');
+ await panel().locator('[data-homework-review-run]').click();
+ try{await eventually(async()=>/1题需订正/.test(await panel().locator('[data-homework-review-result]').innerText()),'split check result')}
+ catch(error){throw Error(error.message+' · status: '+await status()+' · request: '+JSON.stringify(request))}
+ await p.unroute('**/api/print/homework/draft');
  const sorted=xs=>xs.map(x=>JSON.stringify(x)).sort();
  assert.deepEqual(sorted(request.question_sources),sorted([{type:'upload',id:teacher,pages:[1]},{type:'upload',id:answer}]));assert.deepEqual(request.reference_sources,[{type:'upload',id:teacher,pages:[2]}]);
  let calls=(await trace()).calls;assert.equal(calls.length,before+1);
