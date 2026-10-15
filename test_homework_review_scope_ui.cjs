@@ -6,7 +6,7 @@ const appFunction=name=>{const m=new RegExp('^function '+name+'\\(.*\\n(?:.*\\n)
 // A minimal element: enough for append/textContent/className, so the rows and the exact text can be read back.
 class El{constructor(){this.className='';this.dataset={};this.kids=[]}append(...xs){this.kids.push(...xs)}set textContent(v){this.kids=[String(v)]}get textContent(){return this.kids.map(x=>typeof x==='string'?x:x.textContent).join('')}find(name){return this.kids.flatMap(x=>typeof x==='string'?[]:[...(x.className===name?[x]:[]),...x.find(name)])}}
 const ctx={document:{createElement:()=>new El()}};
-const names=['homeworkReviewScopeText','homeworkReviewScopeNodes','savedHomeworkReviewParts','savedHomeworkReviewScopeLabel','savedHomeworkReviewCount','homeworkReviewCoverageFacts','homeworkReviewReadParts','homeworkReviewNode'];
+const names=['homeworkReviewScopeText','homeworkReviewScopeNodes','homeworkReviewComparisonNodes','savedHomeworkReviewParts','savedHomeworkReviewScopeLabel','savedHomeworkReviewCount','homeworkReviewCoverageFacts','homeworkReviewComparisonFacts','homeworkReviewReadParts','homeworkReviewNode'];
 const app=vm.runInNewContext(names.map(appFunction).join('\n')+'\n({'+names.join(',')+'})',ctx);
 // The helpers run in their own VM realm, so their arrays are copied here before deep comparison.
 const list=xs=>Array.from(xs,x=>x.textContent??x.text);
@@ -43,4 +43,14 @@ for(const other of [text.replace('覆盖说明：本次1题，0题','覆盖说�
 for(const edited of [text.replace('本次第1页','第1页'),text.replace('实际读取范围（程序核对）：','实际读取范围：'),text.replace('；未读取页：2。','；未读取页：2（家长补）'),text.replace('模型原覆盖说明尚未核明。','模型原覆盖说明已核明。')]){const parts=app.savedHomeworkReviewParts(edited);assert.equal(flat(parts),edited);const changed=parts.find(x=>x.text.includes('第1页')&&x.text.includes('《')&&!x.kind)||parts.find(x=>x.text.startsWith('覆盖说明：')&&!x.kind);assert(changed,'the edited paragraph stays one plain part')}
 const old='作业检查结果\n第1题：孩子写4，参考5，需订正。\n覆盖说明：本次1题，0题仍未判定。',oldParts=app.savedHomeworkReviewParts(old);assert.equal(flat(oldParts),old);assert.deepEqual(Array.from(oldParts,x=>x.kind),[''],'an old format stays one neutral text');
 const none=text.replace('；未读取页：2。','；未读取页：无。').replace('；未读取页：1。','；未读取页：无。'),noneParts=app.savedHomeworkReviewParts(none);assert.equal(flat(noneParts),none);assert.equal(kinds(noneParts,'scope-gap').length,0,'nothing unread, nothing marked');
+// 5) The comparison: only the validator's two fixed comparisons become short rows, live and saved; other wording stays one text.
+const compare='本次1题未判定，不能沿用上一轮对这些题的确定判定。其他题目以本次逐题结果为准；教师参考和孩子作答分别保留，旧AI意见不作答案依据。',plain='本次复核以逐题结果为准；未列题目仍未检查，旧AI意见不作答案依据。';
+for(const [raw,rows] of [[compare,['1题未判定，不能沿用上一轮对这些题的确定判定。','其他题目以本次逐题结果为准；','教师参考和孩子作答分别保留，旧AI意见不作答案依据。']],[plain,['以逐题结果为准；','未列题目仍未检查，旧AI意见不作答案依据。']]]){
+ const shown=app.homeworkReviewScopeText(coverage,raw,text).comparison,c=new El();app.homeworkReviewComparisonNodes(c,shown);assert.equal(c.textContent,shown,'the comparison text stays exact');assert.deepEqual(list(c.find('homework-review-scope-fact')),rows);assert.deepEqual(list(c.find('homework-review-scope-label')),['本次复核：']);
+ const saved=text.replace('\n\n请对照原题','\n\n本次复核比较（待家长核对）：\n'+raw+'\n\n请对照原题'),parts=app.savedHomeworkReviewParts(saved),s=parts.find(x=>x.kind==='scope').parts;assert.equal(flat(parts),saved);assert.deepEqual(list(kinds(s,'scope-fact')).slice(-rows.length-1,-1),[raw.slice(0,raw.length-rows.slice(1).join('').length),...rows.slice(1)],'the saved comparison is the same rows, its "本次" kept')}
+for(const other of ['本次1题未判定，模型说其余都对。','后补参考“字面。；符号”后仍未判定。']){const shown=app.homeworkReviewScopeText(coverage,other,text).comparison,c=new El();app.homeworkReviewComparisonNodes(c,shown);assert.equal(c.textContent,shown);assert.equal(c.find('homework-review-scope-fact').length,0,'other wording stays one text')}
+// 6) All matching or all undecided: the count line still opens the text and stays shown, whether or not the focus row has buttons.
+for(const [judgment,word,line] of [['correct','与参考一致','本次核对1题：需订正0题，与参考一致1题，未判定0题。'],['unknown','未判定','本次核对1题：需订正0题，与参考一致0题，未判定1题。']]){
+ const one=line+'\n\nSYNTHETIC ORCHARD TEST 第1题 · '+word+'\n题面：2+3=?\n卷面作答：5\n参考答案：教师参考：5'+(judgment==='unknown'?'\n不确定：照片中的内容本次无法确认。':'')+'\n\n覆盖说明：本次1题，'+(judgment==='unknown'?1:0)+'题仍未判定。'+facts.join('')+'\n\n'+block+'\n\n请对照原题核对后保存；本轮结果不代表作业已完成或已经掌握。';
+ const parts=app.savedHomeworkReviewParts(one);assert.equal(flat(parts),one);assert.deepEqual([parts[0].kind,parts[0].text],['summary',line],'the complete count line stays shown');assert.deepEqual(list(kinds(parts,'redundant')).filter(x=>/仍未判定/.test(x)),['本次1题，'+(judgment==='unknown'?1:0)+'题仍未判定。'],'the coverage count is shown once, by the count line')}
 console.log('review scope display: ok');
