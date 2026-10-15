@@ -207,8 +207,34 @@ def unit_fixture(width):
         assert dict(c.execute('SELECT * FROM agent_sources WHERE id=?',(source['id'],)).fetchone())==final_source
     result=dict(synthetic_only=True,shared_guard=True,real_model_calls=0,task_id=task_id,title=final_task['title'],action=final_task['action'],due=due,source_id=source['id'],original_ref='message:'+source['id']+':1',original_text=original_text,original_id=original['id'],wrong_id=wrong['id'],correct_id=correct['id'],wrong_state=wrong_brief['state'],correct_state=brief['state'],calls=calls,messages=final_messages,source=final_source,accepted_before=accepted_before,accepted_after=accepted_after,classification_preserved_sources=True,wrong_preserved_canonical=True,accepted_original_preserved=True)
     unit_cases[width]=result;return result
+# One fictional two-page PDF (paper page 1, teacher page 2): this machine's renderer is replaced only for these bytes; a fixed transport reply.
+import family_pdf
+from test_print import png as split_png
+split_calls=[]
+split_marker=b'%PDF-1.4\\n% SYNTHETIC ORCHARD'
+split_count,split_render=family_pdf.page_count,family_pdf.render_pages
+def split_page_count(body,deadline=family_pdf.DEADLINE_SECONDS):
+    return 2 if body.startswith(split_marker) else split_count(body,deadline)
+def split_pages(body,pages,deadline=family_pdf.DEADLINE_SECONDS):
+    if not body.startswith(split_marker): return split_render(body,pages,deadline)
+    return dict(page_count=2,pages=[dict(page=p,mime_type='image/png',data=split_png(p+1)) for p in pages],omitted_pages=[p for p in (1,2) if p not in pages],complete=False)
+family_pdf.page_count,family_pdf.render_pages=split_page_count,split_pages
+chat=app.family_llm._chat_json
+def split_chat(messages,schema,name,timeout,**kwargs):
+    content=messages[-1]['content'];texts=[part['text'] for part in content if part.get('type')=='text']
+    if not any('虚构果园分页' in text for text in texts): return chat(messages,schema,name,timeout,**kwargs)
+    assert app.DATA.name.startswith('family-demo-')
+    raw=dict(items=[dict(label='第1题',question='2+3=?',student_answer='4',answer='教师参考：5',judgment='incorrect',question_kind='objective',error_reason='4与教师参考5不同。',possible_cause='',steps='',uncertainty='')],coverage='虚构果园卷第1题。')
+    split_calls.append(dict(labels=[t for t in texts if t.startswith(('题目/孩子作答：','教师参考：'))],image_count=sum(part.get('type')=='image_url' for part in content),raw=copy.deepcopy(raw)))
+    return raw
+app.family_llm._chat_json=split_chat
 get=app.Handler.do_GET
 def fixture_get(self):
+    if self.path=='/__fixture/split-pdf':
+        assert app.DATA.name.startswith('family-demo-')
+        with app.connect_read_only() as c:
+            records=[dict(r) for r in c.execute('SELECT id,source,related_record_id,followup_kind,attachments FROM records ORDER BY id')]
+        return self.reply(200,dict(synthetic_only=True,real_model_calls=0,calls=split_calls,records=records))
     if self.path=='/__fixture/question-coverage':
         assert app.DATA.name.startswith('family-demo-')
         return self.reply(200,dict(synthetic_only=True,shared_validator=True,real_model_calls=0,calls=coverage_calls))
@@ -246,6 +272,70 @@ runpy.run_path('demo.py',run_name='__main__')`;
  await eventually(async()=>{try{return(await fetch(url,{signal:AbortSignal.timeout(400)})).ok}catch{return false}},'demo startup');
  return {url,stop:async()=>{if(proc.exitCode!==null)return;const done=once(proc,'exit');proc.kill('SIGINT');await Promise.race([done,delay(2000)]);if(proc.exitCode===null){proc.kill('SIGKILL');await done}}};
 }
+// The current single-child entry with one saved fictional two-page PDF (paper page 1, teacher page 2) beside the child's TXT answer:
+// one row names both page sets, a model failure retries, the save survives a no-write failure and a lost receipt under one key,
+// and a closed and reopened task shows the saved ranges and checks again — model labels and database rows read beside the screenshots.
+async function splitPdfFlow(p,host,width){
+ const read=async()=>await(await fetch(host.url+'api/state')).json(),trace=async()=>await(await fetch(host.url+'__fixture/split-pdf')).json();
+ const shot=name=>process.env.HOMEWORK_SPLIT_PDF_PROOF_DIR?p.screenshot({path:require('node:path').join(process.env.HOMEWORK_SPLIT_PDF_PROOF_DIR,name+'-'+width+'.png')}):null;
+ let state=await read();const child=state.children[0].name,token=state.token;
+ const post=async(path,body)=>{const r=await fetch(host.url+path,{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':token},body:JSON.stringify(body)});assert.equal(r.status,200,path);return r.json()};
+ const upload=async(name,body)=>{const r=await fetch(host.url+'api/upload',{method:'POST',headers:{'X-Family-Token':token,'X-File-Name':encodeURIComponent(name),'Content-Type':'application/octet-stream'},body});assert.equal(r.status,200,name);return (await r.json()).attachment.id};
+ const pdfName='synthetic-questions-and-reference.pdf',pdf=Buffer.from('%PDF-1.4\n% SYNTHETIC ORCHARD TEST: page 1 question Q1 2 + 3 = ?; page 2 teacher reference Q1: 5\n%%EOF\n');
+ const task=(await post('api/task/new',{child,title:'虚构果园分页 '+width,category:'homework',action:'虚构果园分页：核对第1题。',due:state.today})).task;
+ const answer=await upload('synthetic-orchard-answer-'+width+'.txt',Buffer.from('SYNTHETIC ORCHARD TEST\n第1题 2+3=?\n孩子作答：4\n')),teacher=await upload(pdfName,pdf);
+ const original=await post('api/task/feedback',{task_id:task.id,child,day:state.today,request_key:'synthetic-split-original-'+width,note:'虚构果园卷第1题。',attachments:[answer,teacher]});
+ const open=async()=>{await p.locator('nav [data-page=tasks]').click();await p.locator('body[data-page=tasks] #task-group-homework').waitFor();await p.locator('[data-task-box=Inbox]').click();await p.locator('#content [data-task="'+task.id+'"]:visible').first().click();await p.locator('#taskDialog[open]').waitFor()};
+ const panel=()=>p.locator('#taskFeedbackHistory [data-homework-review="'+original.record_id+'"]'),row=id=>panel().locator('[data-review-source="'+id+'"]');
+ const choose=async()=>{
+  if(!await panel().locator(':scope > details').evaluate(x=>x.open))await panel().locator(':scope > details > summary').click();
+  assert.deepEqual(await row(teacher).locator('[data-homework-review-role] option').evaluateAll(xs=>xs.map(x=>x.value)),['','question','reference','split']);
+  assert.deepEqual(await row(answer).locator('[data-homework-review-role] option').evaluateAll(xs=>xs.map(x=>x.value)),['','question','reference','previous'],'no split for a TXT');
+  assert.equal(await row(teacher).locator('[data-homework-reference-pages]').isVisible(),false,'one page field until the split is chosen');
+  await row(teacher).locator('[data-homework-review-photo]').check();await row(teacher).locator('[data-homework-review-role]').selectOption('split');
+  assert.equal(await row(teacher).locator('[data-homework-reference-pages]').isVisible(),true);
+  assert.match(await row(teacher).locator('.homework-material-options').innerText(),/试卷 \/ 孩子作答页[\s\S]*老师参考页/);
+  await row(teacher).locator('[data-homework-review-pages]').fill('1');await row(teacher).locator('[data-homework-review-reference-pages]').fill('2');
+  await row(answer).locator('[data-homework-review-photo]').check();await row(answer).locator('[data-homework-review-role]').selectOption('question');
+ };
+ await p.reload();await open();await choose();
+ const before=(await trace()).calls.length,status=()=>panel().locator('[data-homework-review-status]').innerText();
+ for(const [paper,reference,error] of [['1','1',/不能重复/],['','2',/分别写明两类页码/]]){
+  await row(teacher).locator('[data-homework-review-pages]').fill(paper);await row(teacher).locator('[data-homework-review-reference-pages]').fill(reference);
+  await panel().locator('[data-homework-review-run]').click();await eventually(async()=>error.test(await status()),'unclear page sets stop in the page');
+ }
+ await row(teacher).locator('[data-homework-review-pages]').fill('1');await row(teacher).locator('[data-homework-review-reference-pages]').fill('2');
+ assert.equal((await trace()).calls.length,before,'no model call for overlapping or blank page sets');
+ await row(teacher).scrollIntoViewIfNeeded();await shot('split-pdf-select');
+ const overflow=await p.evaluate(()=>document.documentElement.scrollWidth-innerWidth);assert(overflow<=0,'no horizontal overflow: '+overflow);
+ await p.route('**/api/print/homework/draft',r=>r.fulfill({status:503,json:{error:'虚构模型失败，原件保留'}}));
+ await panel().locator('[data-homework-review-run]').click();await eventually(async()=>/虚构模型失败/.test(await status()),'model failure kept');await p.unroute('**/api/print/homework/draft');
+ assert.equal((await trace()).calls.length,before);
+ let request;await p.route('**/api/print/homework/draft',async r=>{request=r.request().postDataJSON();await r.continue()});
+ await panel().locator('[data-homework-review-run]').click();await eventually(async()=>/1题需订正/.test(await panel().locator('[data-homework-review-result]').innerText()),'split check result');await p.unroute('**/api/print/homework/draft');
+ const sorted=xs=>xs.map(x=>JSON.stringify(x)).sort();
+ assert.deepEqual(sorted(request.question_sources),sorted([{type:'upload',id:teacher,pages:[1]},{type:'upload',id:answer}]));assert.deepEqual(request.reference_sources,[{type:'upload',id:teacher,pages:[2]}]);
+ let calls=(await trace()).calls;assert.equal(calls.length,before+1);
+ assert.deepEqual(calls.at(-1).labels,['题目/孩子作答：'+pdfName+' 第1页','教师参考：'+pdfName+' 第2页']);assert.equal(calls.at(-1).image_count,2);
+ const scope=await panel().locator('[data-homework-review-result] .homework-review-scope').first().innerText();assert.match(scope,/第1页/);assert.match(scope,/第2页/);
+ await panel().locator('[data-homework-review-result]').scrollIntoViewIfNeeded();await shot('split-pdf-result');
+ await panel().locator('[data-homework-review-confirm]').check();await panel().locator('[data-homework-review-apply]').click();
+ await p.locator('#pendingUploads').getByRole('link',{name:'作业批改参考-'+original.record_id+'.txt',exact:true}).waitFor();
+ const saved=await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),read);
+ const record=(await trace()).records.find(r=>r.id===saved.record_id),ids=JSON.parse(record.attachments);
+ assert.equal(record.followup_kind,'作业检查');assert.equal(record.related_record_id,original.record_id);assert.equal(record.source,'事项:'+task.id);
+ assert.equal(new Set(ids).size,ids.length,'one attachment list, the PDF once');assert(ids.includes(teacher)&&ids.includes(answer));
+ await p.locator('#taskDialog [data-close="taskDialog"]').click();await p.reload();await open();
+ const savedPanel=p.locator('#taskFeedbackHistory [data-saved-homework-review="'+saved.record_id+'"]'),history=p.locator('#taskFeedbackHistory details.task-feedback-record').filter({has:savedPanel});
+ if(await history.count()&&!await history.evaluate(x=>x.open))await history.locator(':scope > summary').click();
+ const savedText=()=>savedPanel.evaluate(x=>x.innerText+'\n'+[...x.querySelectorAll('textarea')].map(t=>t.value).join('\n'));
+ await eventually(async()=>{const text=await savedText().catch(()=>'');return /本次第1页/.test(text)&&/本次第2页/.test(text)&&/教师参考：5/.test(text)},'reopened check shows both ranges and the teacher reference');
+ await savedPanel.scrollIntoViewIfNeeded();await shot('split-pdf-reopen');
+ await choose();p.once('dialog',d=>d.accept());await panel().locator('[data-homework-review-run]').click();
+ await eventually(async()=>(await trace()).calls.length===before+2&&/1题需订正/.test(await panel().locator('[data-homework-review-result]').innerText()),'check again after reopening');
+ calls=(await trace()).calls;assert.deepEqual(calls.at(-1).labels,calls.at(-2).labels);assert(calls.every(c=>JSON.stringify(c.raw).includes('教师参考：5')));
+ await p.locator('#taskDialog [data-close="taskDialog"]').click();
+}
 (async()=>{let host,browser,lastPage;try{
  host=await server();browser=await chromium.launch({headless:true,channel:process.env.PLAYWRIGHT_CHANNEL||'chrome'});
  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWF8AAAAASUVORK5CYII=','base64');
@@ -261,6 +351,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
   // The record draft button needs a configured model, so the fixture state says so from the first load; every draft below is a fictional /api/draft receipt, with no model call.
   await p.route('**/api/state',async route=>{const response=await route.fetch(),value=await response.json();value.printing={...value.printing,printers:[{name:'Synthetic_Printer',label:'虚构打印机',color:false,duplex:false}]};value.llm={...value.llm,configured:true};await route.fulfill({response,json:value})});
   await p.goto(host.url);
+  if(process.env.HOMEWORK_SPLIT_PDF_ONLY){await splitPdfFlow(p,host,width);assert.deepEqual(errors,[]);await p.close();continue}
   // The 1×1 PNG stays a format fixture; screenshots show a clearly fictional sheet drawn by the page's own canvas. The fake models never read either.
   const answerSheet=Buffer.from((await p.evaluate(()=>{const c=document.createElement('canvas');c.width=720;c.height=480;const g=c.getContext('2d');g.fillStyle='#fffdf6';g.fillRect(0,0,720,480);g.fillStyle='#1d2733';g.font='bold 30px sans-serif';g.fillText('虚构练习卷 · 界面测试样例',40,62);g.font='24px sans-serif';[['1. 3 + 4 = ?','原答：7'],['2. 选出表示“昨天”的词','原答：C'],['3. 12 的一半是多少？','原答：6']].forEach(([q,a],i)=>{g.fillText(q,40,140+i*76);g.fillText(a,500,140+i*76)});g.fillStyle='#b4232c';g.fillText('教师参考（虚构）：第2题 B',40,388);g.font='18px sans-serif';g.fillStyle='#6b7280';g.fillText('非真实作业 · 仅用于界面截图',40,446);return c.toDataURL('image/png')})).split(',')[1],'base64');
   if(process.env.PRINT_SCOPE_BASELINE_APP_JS)assert.equal(baselineLoads,1,'old application was actually loaded');
@@ -934,6 +1025,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
   await originPanel().locator(':scope > details > summary').click();await checkOriginChoices();const originReopenedSources=await(await fetch(host.url+'api/print/homework/sources?task_id='+originTask.id+'&record_id='+originR2.record_id)).json();for(const id of [originOpinion.id,...originSavedOutputs])assert.equal(originReopenedSources.sources.find(a=>a.id===id).origin,'review_result');assert.equal(originReopenedSources.sources.find(a=>a.id===originTeacher.id).origin,'same_task');assert.deepEqual((await readOrigin()).records,originAfterSave.records);assert.equal((await readOrigin()).calls.length,originBefore.calls.length+2);assert.equal((await(await fetch(host.url+'__fixture/cause-validator')).json()).calls.length,consistencyTrace.calls.length,'isolated origin fixture does not change prior model assertions');
   state=await readCause();assert.equal(state.tasks.find(t=>t.id===originTask.id).update,null);assert.equal(state.records.filter(r=>r.source==='错题照片核对'&&r.linked_task_id===originTask.id).length,0);assert.deepEqual(state.printing.jobs.map(j=>j.id).sort(),printIdsBeforeChecks);assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);
   if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.writeFile(path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'review-origin-'+width+'.json'),JSON.stringify({scope:'synthetic same-name teacher and AI output; real HTTP, shared validator, browser save/retry/reopen; not model accuracy',original:originOriginal.record_id,formal:originFormal.record_id,reattached:originR2.record_id,photo:originPhoto.id,teacher:originTeacher.id,previous:originOpinion.id,request:originRequest,validator:originCall,feedback:originSaved,output_ids:originSavedOutputs,sources:originReopenedSources},null,2));await reopenedOrigin.scrollIntoViewIfNeeded();await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'review-origin-reopened-'+width+'.png')})}
+  await splitPdfFlow(p,host,width);
   assert.deepEqual(errors,[]);await p.close();
  }
  console.log('Homework feedback AI review: 360/1440 save, retry, reopen, task status and source preserved');
