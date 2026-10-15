@@ -751,7 +751,7 @@ def split_pdf_review_checks(app,upload):
             assert status==200 and called.call_count==1,(status,result)
             assert probe.call_count==1 and rendered==[[1],[2]],'one original probed once; each page rendered once under its own role'
         sent=seen[-1]
-        assert sent.count('"image_url"')==2 and '题目/孩子作答：'+name+' 第1页' in sent and '教师参考：'+name+' 第2页' in sent,sent[:2000]
+        assert sent.count('"type": "image_url"')==2 and '题目/孩子作答：'+name+' 第1页' in sent and '教师参考：'+name+' 第2页' in sent,sent[:2000]
         assert '题目/孩子作答：'+name+' 第2页' not in sent and '教师参考：'+name+' 第1页' not in sent and '孩子作答：4' in sent
         assert json.dumps(raw,ensure_ascii=False,sort_keys=True)==frozen,'the model raw reply is never edited'
         assert (app.DATA/'uploads'/teacher).read_bytes()==stored==pdf,'the original PDF is neither copied nor changed'
