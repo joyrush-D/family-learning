@@ -742,7 +742,9 @@ function homeworkReviewScopeNodes(host,scope,counts){
  if(same&&head.startsWith(same)){host.append(span('本次检查范围：','homework-review-scope-label'),span(same.slice(7),'homework-review-redundant'));head=head.slice(same.length)}
  if(!proven){host.append(head);return}
  host.append(head+'\n',span('实际读取范围：','homework-review-scope-label'));
- scope.reads.forEach((entry,i)=>{const row=span('','homework-review-read'),m=/^(题目\/孩子作答|上一轮待复核意见|教师参考)(《.*》：)(.*?)(；未读取页：(?!无$).+)?$/.exec(entry);if(m){row.append(span(m[1],'homework-review-read-use'),m[2]+m[3]);if(m[4])row.append(span(m[4],'homework-review-read-gap'))}else row.append(entry);row.append(i===scope.reads.length-1?'。\n':'；');host.append(row)});
+ scope.reads.forEach((entry,i)=>{const row=span('','homework-review-read'),m=/^(题目\/孩子作答|上一轮待复核意见|教师参考)(《.*》：)(.*?)(；未读取页：(?!无$).+)?$/.exec(entry);if(m){row.append(span(m[1],'homework-review-read-use'),m[2]+m[3]);if(m[4])row.append(span(m[4],'homework-review-read-gap'))}else row.append(entry);row.append(i===scope.reads.length-1?'。':'；');host.append(row)});
+ // The line break the text keeps before the closing line is already the last row's end, so it stays in the text without adding a blank line.
+ host.append(span('\n','homework-review-break'));
  host.append(tail.slice(1));
 }
 // Display only: the saved TXT stays the record and every character stays in the DOM, so copy, find and screen readers keep it verbatim.
