@@ -1719,7 +1719,7 @@ def owned_title_field_checks():
             assert got[0]==('虚构春树卷','',1,'春天\n'+field.rstrip('。'),True) and all(entry[0]!='虚构春树卷' for entry in got[1:]),(gap,got)
     for field,rest in (('标题：春天；还需说明理由。','春天还需说明理由'),('试卷名称：OTHER TEST','OTHERTEST')):
         got=entries(head+field+'\n第2题：秋天\n')
-        assert got==[('虚构春树卷','',1,'春天\n'+field.rstrip('。'),True),(None,rest,2,'秋天',False)],(field,got)
+        assert got==[('虚构春树卷','',1,'春天\n'+field,True),(None,rest,2,'秋天',False)],(field,got)
         draft(head+field+'\n第2题：秋天\n')
     orchard='教师参考答案\n试卷名称：SYNTHETIC ORCHARD TEST\n第1题：5\n试卷名称：OTHER TEST\n第2题：6\n'
     got=entries(orchard,'SYNTHETIC ORCHARD TEST\n第1题 2+3=?\n孩子作答：4\n')
