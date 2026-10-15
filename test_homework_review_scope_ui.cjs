@@ -26,7 +26,8 @@ const noModel=homeworkReviewScopeText(undefined,'',''),n=new El();homeworkReview
 // 3) Saved TXT: every character is kept, repeated reads do not add anything, and only the exact program block gets use/gap marks.
 const flat=parts=>parts.map(x=>x.parts?flat(x.parts):x.text).join('');
 for(let i=0;i<2;i++){const parts=savedHomeworkReviewParts(text);assert.equal(parts.map(x=>x.text).join(''),text);assert.equal(flat(parts),text,'nested parts are verbatim');
- const scopeParts=parts.find(x=>x.kind==='scope').parts;assert.deepEqual(scopeParts.filter(x=>x.kind==='scope-use').map(x=>x.text),['题目/孩子作答','教师参考','教师参考','上一轮待复核意见']);assert.deepEqual(scopeParts.filter(x=>x.kind==='scope-gap').map(x=>x.text),['；未读取页：2。','；未读取页：1。'])}
+ // The helpers run in their own VM realm, so their arrays are copied here before deep comparison.
+ const scopeParts=parts.find(x=>x.kind==='scope').parts;assert.deepEqual(Array.from(scopeParts.filter(x=>x.kind==='scope-use'),x=>x.text),['题目/孩子作答','教师参考','教师参考','上一轮待复核意见']);assert.deepEqual(Array.from(scopeParts.filter(x=>x.kind==='scope-gap'),x=>x.text),['；未读取页：2。','；未读取页：1。'])}
 // 4) Old formats and parent rewrites keep the original as plain text: no use/gap marks and nothing promoted from a prefix.
 for(const edited of [text.replace('本次第1页','第1页'),text.replace('实际读取范围（程序核对）：','实际读取范围：'),text.replace('；未读取页：2。','；未读取页：2（家长补）')]){const parts=savedHomeworkReviewParts(edited);assert.equal(flat(parts),edited);assert(!JSON.stringify(parts).includes('scope-gap'),'edited block stays plain')}
 const none=text.replace('；未读取页：2。','；未读取页：无。').replace('；未读取页：1。','；未读取页：无。'),noneParts=savedHomeworkReviewParts(none);assert.equal(flat(noneParts),none);assert(!JSON.stringify(noneParts).includes('scope-gap'),'nothing unread, nothing marked');
