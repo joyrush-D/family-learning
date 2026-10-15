@@ -736,14 +736,14 @@ function homeworkReviewScopeText(coverage,comparison,text){
 }
 // Display only: the scope paragraph keeps exactly homeworkReviewScopeText's coverage as its text. Only when the read entries are proven does it
 // become short rows: the validator's own facts one per row, then one row per material; a count equal to the structured count line is not shown twice.
-// Line breaks the text keeps between rows stay in it without adding blank lines; anything unproven stays one text with only its label marked.
+// Rows are full-width inline blocks, so the text's own line breaks stay the only ones copied; anything unproven stays one text with only its label marked.
 function homeworkReviewScopeNodes(host,scope,counts){
  const text=scope.coverage,label='本次检查范围：',tail='\n仅本次所选资料，未判定和未检查部分不算已完成。',read='\n实际读取范围：'+scope.reads.join('；')+'。',proven=scope.reads.length>0&&text.startsWith(label)&&text.endsWith(read+tail);
  const count=/^\d+题，\d+题仍未判定。/.exec(text.slice(label.length))?.[0]||'',same=!!count&&!!counts&&count===counts.items+'题，'+counts.unknown_items+'题仍未判定。',node=part=>homeworkReviewNode(part,'homework-review-');
  if(!proven){host.append(...(text.startsWith(label)?[node({text:label,kind:'scope-label'}),...(same?[node({text:count,kind:'redundant'})]:[]),text.slice(label.length+(same?count.length:0))]:[text]));return}
  const body=text.slice(label.length+count.length,-(read+tail).length),facts=homeworkReviewCoverageFacts(body)||(body?[body]:[]);
- host.append(...[{kind:'scope-head',parts:[{text:label,kind:'scope-label'},...(count?[{text:count,kind:same?'redundant':'scope-count'}]:[])]},...facts.map(x=>({text:x,kind:'scope-fact'})),{text:'\n',kind:'break'},{kind:'scope-head',parts:[{text:'实际读取范围：',kind:'scope-label'}]},
-  ...scope.reads.map((entry,i,all)=>{const end=i===all.length-1?'。':'；';return {kind:'read',parts:homeworkReviewReadParts(entry,'read-',end)||[{text:entry+end,kind:''}]}}),{text:'\n',kind:'break'},{text:tail.slice(1),kind:'scope-fact'}].map(node));
+ host.append(...[{kind:'scope-head',parts:[{text:label,kind:'scope-label'},...(count?[{text:count,kind:same?'redundant':'scope-count'}]:[])]},...facts.map(x=>({text:x,kind:'scope-fact'})),'\n',{kind:'scope-head',parts:[{text:'实际读取范围：',kind:'scope-label'}]},
+  ...scope.reads.map((entry,i,all)=>{const end=i===all.length-1?'。':'；';return {kind:'read',parts:homeworkReviewReadParts(entry,'read-',end)||[{text:entry+end,kind:''}]}}),'\n',{text:tail.slice(1),kind:'scope-fact'}].map(x=>typeof x==='string'?x:node(x)));
 }
 // Display only: the saved TXT stays the record and every character stays in the DOM, so copy, find and screen readers keep it verbatim.
 // A paragraph takes the live check's hierarchy only when it is exactly a generated question block: "题号 · 判定", then the program's own labels in order.
@@ -754,13 +754,13 @@ function savedHomeworkReviewParts(text){
  text.split('\n\n').forEach((block,index)=>{
   const scopeLabel=savedHomeworkReviewScopeLabel(block);
   if(scopeLabel!==null){
-   if(scope){scope.text+='\n\n'+block;scope.parts.push({text:'\n\n',kind:'break'})}else{if(index)add('\n\n');scope={text:block,kind:'scope',judgment:'',parts:[]};parts.push(scope)}
+   if(scope){scope.text+='\n\n'+block;scope.parts.push({text:'\n\n',kind:''})}else{if(index)add('\n\n');scope={text:block,kind:'scope',judgment:'',parts:[]};parts.push(scope)}
    // Each exact paragraph becomes short rows like the live check's: its label, the validator's facts one per row, one row per read material.
-   // The line breaks between rows stay in the text without adding blank lines; the coverage count is its own part, shown once (below).
+   // Rows are full-width inline blocks, so copying gives back the text's own line breaks only; the coverage count is its own part, shown once (below).
    const body=block.slice(scopeLabel.length),head={kind:'scope-head',parts:[{text:scopeLabel,kind:'scope-label'}]},lined=body.startsWith('\n');let rows=lined?body.slice(1).split('\n'):body?[body]:[];
    if(scopeLabel==='覆盖说明：'){const count=/^本次\d+题，\d+题仍未判定。/.exec(body)[0];scopeCount={text:count,kind:'scope-count'};head.parts.push(scopeCount);rows=homeworkReviewCoverageFacts(body.slice(count.length))||[body.slice(count.length)]}
    if(scopeLabel)scope.parts.push(head);
-   for(const line of rows){if(lined)scope.parts.push({text:'\n',kind:'break'});const read=scopeLabel==='实际读取范围（程序核对）：'&&homeworkReviewReadParts(line,'scope-');scope.parts.push(read?{kind:'scope-read',parts:read}:{text:line,kind:'scope-fact'})}
+   for(const line of rows){if(lined)scope.parts.push({text:'\n',kind:''});const read=scopeLabel==='实际读取范围（程序核对）：'&&homeworkReviewReadParts(line,'scope-');scope.parts.push(read?{kind:'scope-read',parts:read}:{text:line,kind:'scope-fact'})}
    return;
   }
   scope=null;
