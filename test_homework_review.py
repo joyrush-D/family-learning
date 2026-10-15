@@ -1707,7 +1707,9 @@ def owned_title_field_checks():
     for field in ('标题：春天；还需说明理由。','名称：春天；还需说明理由。','试卷名称：春天还需说明理由','标题：春天'):
         for reference in (head+field+'\n',head+field+'\n\n第2题：秋天\n',head+field+'\n乙卷第2题：秋天\n'):
             got=entries(reference)
-            assert got[0]==('虚构春树卷','',1,'春天\n'+field.rstrip('。'),False),(reference,got)
+            # This original heads with 「试卷名称：」, so that field may head 第2题 past a blank line (T03): still whole, pending review.
+            pending=field.startswith('试卷名称') and '\n\n第2题' in reference
+            assert got[0]==('虚构春树卷','',1,'春天\n'+field.rstrip('。'),pending),(reference,got)
         draft(head+field+'\n');draft(head+field+'\n\n第2题：秋天\n')
     for field,rest in (('标题：春天；还需说明理由。','春天还需说明理由'),('试卷名称：OTHER TEST','OTHERTEST')):
         got=entries(head+field+'\n第2题：秋天\n')
@@ -1716,6 +1718,43 @@ def owned_title_field_checks():
     orchard='教师参考答案\n试卷名称：SYNTHETIC ORCHARD TEST\n第1题：5\n试卷名称：OTHER TEST\n第2题：6\n'
     got=entries(orchard,'SYNTHETIC ORCHARD TEST\n第1题 2+3=?\n孩子作答：4\n')
     assert got==[(None,'SYNTHETICORCHARDTEST',1,'5\n试卷名称：OTHER TEST',True),(None,'OTHERTEST',2,'6',False)],got
+
+
+def next_title_spacing_checks():
+    """T03: a title field the original itself heads its questions with names the next title across ordinary paragraph spacing.
+    「试卷名称：OTHER TEST」 under 虚构甲卷's answer, a blank line and 「第2题：6」 never hand OTHER TEST's 6 to 虚构甲卷第2题: the answer
+    above keeps its whole text pending review, and lines above that title stay its own. Ending the original or right above a
+    question naming its own paper, it heads nothing and stays that answer's words; a 「标题：」 line the original never heads with
+    keeps every owned-body boundary (T02)."""
+    label='虚构甲卷 第2题';source='试卷名称：虚构甲卷\n第2题 3+3=?\n孩子作答：6\n';top='试卷名称：虚构甲卷\n第1题：5\n'
+    raw=dict(question_labels=[label],coverage='仅核对虚构甲卷第2题，其余未检查。',items=[dict(label=label,question='3+3=?',
+        student_answer='6',answer='教师参考：6',judgment='correct',question_kind='objective',error_reason='',possible_cause='',
+        steps='',uncertainty='')])
+    def entries(reference):
+        documents=[dict(name='q.txt',text=source),dict(name='t.txt',text=reference)]
+        return [(entry['paper'],entry['rest'],entry['number'],entry['answer'],bool(entry.get('continuation_unresolved')))
+                for entry in family_llm._teacher_reference_entries(documents[1:],family_llm._ref_titles(documents))]
+    for spacing in ('','\n','\n\n'):
+        reference=top+'试卷名称：OTHER TEST\n'+spacing+'第2题：6\n'
+        got=entries(reference)
+        assert got==[('虚构甲卷','',1,'5\n试卷名称：OTHER TEST',True),(None,'OTHERTEST',2,'6',False)],(reference,got)
+        with patch.object(family_llm,'_chat_json',return_value=json.loads(json.dumps(raw))) as model:
+            result=family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=True,
+                question_documents=[dict(name='synthetic-paper-a-question.txt',text=source)],
+                reference_documents=[dict(name='synthetic-two-paper-teacher.txt',text=reference)])
+        assert model.call_count==1
+        q,=result['questions']
+        assert (q['judgment'],q['student_answer'])==('unknown','6') and q['answer']!='教师参考：6',(reference,q)
+        assert (result['wrong_items'],result['unknown_items'])==(0,1),result
+    for reference,want in ((top+'试卷名称：OTHER TEST\n\n第1题：6\n',[('虚构甲卷','',1,'5',False),(None,'OTHERTEST',1,'6',False)]),
+                           (top+'说明：结果写数字\n试卷名称：OTHER TEST\n\n第1题：6\n',
+                            [('虚构甲卷','',1,'5\n说明：结果写数字',False),(None,'OTHERTEST',1,'6',False)]),
+                           (top+'试卷名称：OTHER TEST\n\n',[('虚构甲卷','',1,'5\n试卷名称：OTHER TEST',False)]),
+                           (top+'试卷名称：OTHER TEST\n\n乙卷第2题：6\n',[('虚构甲卷','',1,'5\n试卷名称：OTHER TEST',False),('乙卷','',2,'6',False)])):
+        got=entries(reference)
+        assert got==want,(reference,got)
+    got=entries(top+'标题：OTHER TEST\n\n第2题：6\n')  # this original never heads with 「标题：」: still the answer's own words (T02)
+    assert got[0]==('虚构甲卷','',1,'5\n标题：OTHER TEST',False),got
 
 
 def nested_sub_checks():
@@ -2336,6 +2375,7 @@ def run():
     word_boundary_checks()
     declared_ordinary_title_checks()
     owned_title_field_checks()
+    next_title_spacing_checks()
     nested_sub_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:
         root=Path(temporary);data=root/'private';data.mkdir()
