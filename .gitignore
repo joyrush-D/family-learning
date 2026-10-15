@@ -238,6 +238,7 @@
 !/test_homework_duplicate_ui.cjs
 !/test_homework_text.py
 !/test_homework_text_ui.cjs
+!/test_homework_review_scope_ui.cjs
 !/test_homework_text_print_ui.cjs
 !/test_school_native_coverage_ui.cjs
 !/test_school_material_requirements_ui.cjs
