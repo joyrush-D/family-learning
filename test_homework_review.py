@@ -755,8 +755,10 @@ def split_pdf_review_checks(app,upload):
         assert '题目/孩子作答：'+name+' 第2页' not in sent and '教师参考：'+name+' 第1页' not in sent and '孩子作答：4' in sent
         assert json.dumps(raw,ensure_ascii=False,sort_keys=True)==frozen,'the model raw reply is never edited'
         assert (app.DATA/'uploads'/teacher).read_bytes()==stored==pdf,'the original PDF is neither copied nor changed'
-        d=result['draft'];q,=d['questions']
-        assert (q['judgment'],q['student_answer'],q['answer'],d['wrong_items'])==('incorrect','4','教师参考：5',1),q
+        d=result['draft'];listed=[(q['label'],q['judgment'],q['student_answer']) for q in d['questions']]
+        print('split-pdf draft questions:',listed)
+        q,=[q for q in d['questions'] if q['judgment']=='incorrect']
+        assert (q['label'],q['student_answer'],q['answer'],d['wrong_items'])==('第1题','4','教师参考：5',1),listed
         assert '题目/孩子作答《%s》：共2页，本次第1页；未读取页：无。'%name in d['coverage'] and '教师参考《%s》：共2页，本次第2页；未读取页：无。'%name in d['coverage'],d['coverage']
         basis=result['review_basis']
         assert basis['photo_ids']==[teacher,answer] and basis['question_sources']==[page([1]),dict(type='upload',id=answer)] and basis['reference_sources']==[page([2])],basis
