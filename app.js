@@ -867,8 +867,9 @@ function drawTaskFeedback(task,recentId=null){
  drawTaskSchoolResources(task);
  const records=data.records.filter(r=>(r.source==='事项:'+task.id||r.linked_task_id===task.id)&&r.child===task.child);
  // Saved work leads as one line in the cards' terms beside the saved task status, so the add-answer entry stays on the first screen; every card below stays complete and the line never marks the work done.
+ // An ordinary saved feedback may hold the child's answer or only a teacher reference, and nothing saved tells which, so the line counts these records under the cards' own “作答 / 反馈” and never as answers or attempts.
  if(records.length){
-  const homework=task.agenda?.category==='homework',count=test=>records.filter(test).length,saved=[[homework?'作答':'反馈',count(r=>homeworkAnswerRecord(r,task)),homework?'份':'条'],['检查',count(r=>!!homeworkReviewOriginalId(r)),'次'],['错题',count(r=>r.source==='错题照片核对'),'条'],['订正/复测',count(r=>['订正','复测'].includes(r.followup_kind)),'条']],other=records.length-saved.reduce((n,x)=>n+x[1],0),taskState=status(task)||'待跟进';
+  const homework=task.agenda?.category==='homework',count=test=>records.filter(test).length,saved=[[homework?'作答 / 反馈':'反馈',count(r=>homeworkAnswerRecord(r,task)),'条'],['检查',count(r=>!!homeworkReviewOriginalId(r)),'次'],['错题',count(r=>r.source==='错题照片核对'),'条'],['订正/复测',count(r=>['订正','复测'].includes(r.followup_kind)),'条']],other=records.length-saved.reduce((n,x)=>n+x[1],0),taskState=status(task)||'待跟进';
   $('#taskFeedbackIntro').textContent='已保存 '+[...saved.filter(x=>x[1]).map(([name,n,unit])=>name+n+unit),...(other>0?['其他关联'+other+'条']:[])].join(' · ')+'；事项状态：'+(taskState==='不适用'?'无需处理':taskState)+'。';
  }
  $('#taskFeedbackHistory').innerHTML=records.length?'<h3>已保存的作答与反馈</h3>'+records.map(r=>{
