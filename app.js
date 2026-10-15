@@ -702,11 +702,16 @@ async function loadHomeworkBatch(panel,record,task){
  }finally{finishHomeworkReview()}
 }
 function finishHomeworkReview(){homeworkReviewBusy=false;for(const control of $('#taskFeedbackHistory').querySelectorAll('[data-review-source] input,[data-review-source] select,[data-homework-batch] input'))control.disabled=false}
+// Only a panel's latest read applies. A panel moved back after a save is the same, still connected element, so an earlier read answering
+// late, by success or failure, would redraw an older list without files saved since, drop choices made on the newer list or overwrite its state.
+const homeworkReviewSourceReads=new WeakMap(),homeworkReviewSourceKept='；原选择、作答和检查意见仍保留。';
 async function loadHomeworkReviewSources(panel,record,task){
- const host=panel.querySelector('[data-homework-review-sources]');
+ const host=panel.querySelector('[data-homework-review-sources]'),read={},current=()=>panel.isConnected&&homeworkReviewSourceReads.get(panel)===read;
+ homeworkReviewSourceReads.set(panel,read);
  try{
   const response=await apiFetch('/api/print/homework/sources?task_id='+encodeURIComponent(task.id)+'&record_id='+record.id,{signal:AbortSignal.timeout(15000)}),out=await response.json();
-  if(!response.ok)throw Error(out.error||'老师资料暂时无法读取');if(!panel.isConnected)return;
+  if(!current())return;
+  if(!response.ok)throw Error(out.error||'老师资料暂时无法读取');
   if(out.created!==record.created)throw Error('原作答已更正，请重新打开');
   if(!Array.isArray(out.sources))throw Error('资料回执无法核对');
   const choices=[...host.querySelectorAll('[data-review-source]')].map(x=>({id:x.dataset.reviewSource,checked:x.querySelector('input[type=checkbox]').checked,role:x.querySelector('select').value,pages:x.querySelector('[data-homework-review-pages]')?.value,reference:x.querySelector('[data-homework-review-reference-pages]')?.value}));
@@ -715,9 +720,11 @@ async function loadHomeworkReviewSources(panel,record,task){
   const extras=out.sources.filter(a=>/^[a-f0-9]{32}$/.test(a.id)&&(['image/jpeg','image/png','image/webp','application/pdf'].includes(a.mime)||homeworkReviewTextFile(a))&&!existing.has(a.id));
   host.innerHTML=(out.school_error?'<p class="small">'+esc(out.school_error)+'</p>':'')+extras.map(a=>homeworkReviewSourceHTML(a,false,record.id)).join('')+'<p class="small muted" data-homework-material-note hidden></p>';
  for(const choice of choices){const row=host.querySelector('[data-review-source="'+choice.id+'"]');if(!row)continue;row.querySelector('input[type=checkbox]').checked=choice.checked;const role=row.querySelector('select');if([...role.options].some(x=>x.value===choice.role))role.value=choice.role;const pages=row.querySelector('[data-homework-review-pages]');if(pages&&choice.pages!==undefined)pages.value=choice.pages;const reference=row.querySelector('[data-homework-review-reference-pages]');if(reference&&choice.reference!==undefined)reference.value=choice.reference;homeworkReviewPagesMode(row)}
+ // An earlier read's failure line goes once this read answers; any other status line stays.
+ const status=panel.querySelector('[data-homework-review-status]');if(status?.textContent.endsWith(homeworkReviewSourceKept))status.textContent='';
  homeworkReviewMaterialNote(panel);
  if(homeworkReviewBusy)for(const control of host.querySelectorAll('input,select'))control.disabled=true;
- }catch(error){if(panel.isConnected){const message=error.message+'；原选择、作答和检查意见仍保留。';(host.querySelector('[data-review-source]')?panel.querySelector('[data-homework-review-status]'):host).textContent=message}}
+ }catch(error){if(current()){const message=error.message+homeworkReviewSourceKept;(host.querySelector('[data-review-source]')?panel.querySelector('[data-homework-review-status]'):host).textContent=message}}
 }
 // Display only: the shared validator starts its own scope and comparison sentences with "本次" right after these labels, and joins its sentence-final read entries with "；".
 // Tidy only that generated structure, and only where draft.text's program block proves the exact entries (upload names cannot hold a newline); names, quotes and anything unproven stay verbatim.
