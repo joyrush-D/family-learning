@@ -1216,10 +1216,10 @@ def _teacher_reference_entries(documents,titles=frozenset(),continued=None):
             if unresolved>at:
                 # Without field/heading proof the lines may be a note or a new
                 # title. Keep their original text, and never grade on B alone;
-                # the paragraph reads the same value as when it is the answer's own.
+                # a paragraph a blank line closes reads as when it is the answer's own.
                 value='\n'.join([owner[1]]+[part.strip() for part in lines[at:unresolved]])
                 for entry in owner[0]:
-                    entry['answer']=re.sub(r'[\s，,；;。.．、]+$','',value)
+                    entry['answer']=value if lines[unresolved].strip() else re.sub(r'[\s，,；;。.．、]+$','',value)
                     entry['continuation_unresolved']=True
             marks=list(_REF_QUESTION.finditer(line));made=len(entries)
             if not marks and parent and _REF_SUB.match(line):
