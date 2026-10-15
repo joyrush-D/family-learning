@@ -1151,8 +1151,9 @@ def _ref_plain(line,titles=frozenset()):
     """Unmarked body words, or a nonempty field whose name names no scope.
     A field's value can mention another paper or question; that is its body, not a heading.
     Empty title fields, numbered paths and bracketed headings keep their ordinary scope reading.
+    A title field 「标题：春天；还需说明理由。」 is read the same: its words alone never say whether it heads what follows or
+    goes on with an answer; only where it stands (_ref_continued) does.
     """
-    if _ref_title_field(line): return False  # a declared title heads what follows; it never goes on with an answer
     name,colon,value=re.split(r'([：:])',line,maxsplit=1) if re.search('[：:]',line) else (line,'','')
     body=value.lstrip()
     field=(colon and body and not _REF_DECLARED.fullmatch(line.strip())
@@ -1167,7 +1168,8 @@ def _ref_continued(lines,at,titles=frozenset(),number=None):
     """Where the plain lines from `at` (_ref_plain), right under a line giving one question its answer, end when they go on
     with that answer, else `at`. A line's role comes from where it stands in the whole original: they are the answer's own
     words only when nothing below can take them as its heading, their paragraph ending at a blank line or the original's end,
-    or the next line naming its own paper. Nonempty colon fields can also end at a later unqualified question number.
+    or the next line naming its own paper. Nonempty colon fields other than a title field, which may head it, can also end at
+    a later unqualified question number.
     Other lines before another question or 大题 keep their heading reading; an ambiguous increasing-number boundary
     retains the preceding original for pending review instead of grading on its first line alone."""
     stop=at
@@ -1178,9 +1180,11 @@ def _ref_continued(lines,at,titles=frozenset(),number=None):
     # A nonempty field beneath an answer is its body. A following unqualified,
     # increasing question closes that body; it does not turn it into a new title.
     # Plain names, empty title fields and reset/repeated numbers keep the heading path.
+    # A title field 「试卷名称：OTHER TEST」 may as well head that question, so it proves
+    # no body: the answer keeps its whole text pending review, never borrowing the next.
     if (found and not head.strip() and number is not None
             and int(next(g for g in found.groups() if g))>number
-            and all(re.search(r'[^：:]+[：:]\s*\S',line) for line in lines[at:stop])): return stop
+            and all(re.search(r'[^：:]+[：:]\s*\S',line) and not _ref_title_field(line) for line in lines[at:stop])): return stop
     return at
 
 
