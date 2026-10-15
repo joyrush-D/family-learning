@@ -702,6 +702,124 @@ def scope_handler_checks(app,upload):
         server.shutdown();server.server_close();worker.join(timeout=3)
 
 
+def split_pdf_review_checks(app,upload):
+    """One saved fictional two-page PDF holds the paper (page 1) and the teacher's reference (page 2) beside the child's TXT answer under
+    the same homework. Explicit, disjoint pages are two uses of one original through draft, save, lost-reply retry and reopen; any other
+    reuse or failure is refused before the model with nothing saved, and a changed page set or answer version is refused at save."""
+    from http.client import HTTPConnection
+    import sqlite3,threading
+    server=app.ThreadingHTTPServer(('127.0.0.1',0),app.Handler)
+    worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
+    def http(method,path,payload=None):
+        client=HTTPConnection('127.0.0.1',server.server_port,timeout=10)
+        try:
+            client.request(method,path,json.dumps(payload) if payload is not None else None,{'Content-Type':'application/json','X-Family-Token':app.TOKEN})
+            response=client.getresponse();return response.status,json.loads(response.read())
+        finally: client.close()
+    def dump():
+        with sqlite3.connect(app.DB) as c: return '\n'.join(c.iterdump())
+    pdf=b'%PDF-1.4\n% SYNTHETIC ORCHARD TEST: page 1 question Q1 2 + 3 = ?; page 2 teacher reference Q1: 5\n%%EOF\n'
+    name='synthetic-questions-and-reference.pdf';rendered=[]
+    def render(body,pages,deadline):
+        assert body==pdf and 0<deadline<=family_pdf.DEADLINE_SECONDS
+        rendered.append(list(pages))
+        return dict(page_count=2,pages=[dict(page=p,mime_type='image/png',data=png(p+1)) for p in pages],omitted_pages=[p for p in (1,2) if p not in pages],complete=False)
+    try:
+        task=app.new_task(dict(child='示例甲',title='虚构果园卷',category='homework'))
+        answer=upload('synthetic-orchard-answer.txt','SYNTHETIC ORCHARD TEST\n第1题 2+3=?\n孩子作答：4\n'.encode())
+        teacher=upload(name,pdf);stored=(app.DATA/'uploads'/teacher).read_bytes()
+        original=app.save_task_feedback(dict(task_id=task['id'],child='示例甲',day='2026-10-15',request_key='synthetic-split-original',
+            note='虚构果园卷第1题。',attachments=[answer,teacher]))
+        page=lambda pages:dict(type='upload',id=teacher,pages=pages)
+        request=dict(purpose='review',task_id=task['id'],record_id=original['record_id'],expected_created=original['feedback']['created'],
+            question_sources=[page([1]),dict(type='upload',id=answer)],reference_sources=[page([2])])
+        raw=dict(items=[item(question='2+3=?',student_answer='4',answer='教师参考：5',judgment='incorrect',error_reason='4与教师参考5不同。')],
+            coverage='虚构果园卷第1题。',question_labels=['第1题'])
+        frozen=json.dumps(raw,ensure_ascii=False,sort_keys=True);seen=[]
+        def model(messages,*args,**kwargs):
+            seen.append(json.dumps(messages,ensure_ascii=False));return json.loads(frozen)
+        # Model failure, then a retry: the same request reaches the model again with nothing written in between.
+        before=dump()
+        with patch.object(family_pdf,'page_count',return_value=2) as probe,patch.object(family_pdf,'render_pages',side_effect=render),\
+                patch.object(family_llm,'_chat_json',side_effect=family_llm.LLMDraftError('虚构模型暂不可用')):
+            status,failed=http('POST','/api/print/homework/draft',request)
+            assert status>=400 and dump()==before,(status,failed)
+        rendered.clear()
+        with patch.object(family_pdf,'page_count',return_value=2) as probe,patch.object(family_pdf,'render_pages',side_effect=render),\
+                patch.object(family_llm,'_chat_json',side_effect=model) as called:
+            status,result=http('POST','/api/print/homework/draft',request)
+            assert status==200 and called.call_count==1,(status,result)
+            assert probe.call_count==1 and rendered==[[1],[2]],'one original probed once; each page rendered once under its own role'
+        sent=seen[-1]
+        assert sent.count('"image_url"')==2 and '题目/孩子作答：'+name+' 第1页' in sent and '教师参考：'+name+' 第2页' in sent,sent[:2000]
+        assert '题目/孩子作答：'+name+' 第2页' not in sent and '教师参考：'+name+' 第1页' not in sent and '孩子作答：4' in sent
+        assert json.dumps(raw,ensure_ascii=False,sort_keys=True)==frozen,'the model raw reply is never edited'
+        assert (app.DATA/'uploads'/teacher).read_bytes()==stored==pdf,'the original PDF is neither copied nor changed'
+        d=result['draft'];q,=d['questions']
+        assert (q['judgment'],q['student_answer'],q['answer'],d['wrong_items'])==('incorrect','4','教师参考：5',1),q
+        assert '题目/孩子作答《%s》：共2页，本次第1页；未读取页：无。'%name in d['coverage'] and '教师参考《%s》：共2页，本次第2页；未读取页：无。'%name in d['coverage'],d['coverage']
+        basis=result['review_basis']
+        assert basis['photo_ids']==[teacher,answer] and basis['question_sources']==[page([1]),dict(type='upload',id=answer)] and basis['reference_sources']==[page([2])],basis
+        # Overlap, a blank (whole) page set beside a split, a second same-role use, non-PDF reuse, a previous-check reuse, too many pages,
+        # another child's task, a stale answer version and an unreadable PDF: refused before rendering, the model or any write.
+        many=upload('synthetic-orchard-many.pdf',b'%PDF-1.4\n% synthetic nine pages\n%%EOF\n')
+        with app.connect() as c: c.execute('UPDATE records SET attachments=? WHERE id=?',(json.dumps([answer,teacher,many]),original['record_id']))
+        with app.connect() as c: created=c.execute('SELECT created FROM records WHERE id=?',(original['record_id'],)).fetchone()[0]
+        request['expected_created']=created
+        other=app.new_task(dict(child='示例乙',title='虚构另一孩子果园卷',category='homework'))
+        before=dump()
+        for case,change in (('overlap',dict(reference_sources=[page([1])])),('overlap-part',dict(question_sources=[page([1,2]),dict(type='upload',id=answer)])),
+                ('whole-paper',dict(question_sources=[dict(type='upload',id=teacher),dict(type='upload',id=answer)])),
+                ('whole-teacher',dict(reference_sources=[dict(type='upload',id=teacher)])),
+                ('same-role',dict(question_sources=[page([1]),page([2]),dict(type='upload',id=answer)],reference_sources=[])),
+                ('teacher-first',dict(question_sources=[dict(type='upload',id=answer)],reference_sources=[page([2]),page([1])])),
+                ('txt-reuse',dict(reference_sources=[page([2]),dict(type='upload',id=answer)])),
+                ('previous-reuse',dict(previous_sources=[dict(type='upload',id=answer)])),
+                ('nine-pages',dict(question_sources=[page([1]),dict(type='upload',id=many,pages=list(range(1,8))),dict(type='upload',id=answer)])),
+                ('other-child',dict(task_id=other['id'])),('stale',dict(expected_created='2026-01-01T00:00:00+08:00'))):
+            with patch.object(family_pdf,'page_count',return_value=9) as probe,patch.object(family_pdf,'render_pages',side_effect=render) as renderer,\
+                    patch.object(family_llm,'_chat_json') as called:
+                status,refusal=http('POST','/api/print/homework/draft',request|change)
+                assert 400<=status<500 and called.call_count==0 and renderer.call_count==0,(case,status,refusal)
+                assert dump()==before,case
+        with patch.object(family_pdf,'page_count',side_effect=family_pdf.PDFError('synthetic unreadable')),patch.object(family_llm,'_chat_json') as called:
+            status,refusal=http('POST','/api/print/homework/draft',request)
+            assert status==503 and refusal.get('code')=='review_pdf_unavailable' and called.call_count==0 and dump()==before,(status,refusal)
+        with app.connect() as c: c.execute('UPDATE records SET attachments=? WHERE id=?',(json.dumps([answer,teacher]),original['record_id']))
+        with app.connect() as c: created=c.execute('SELECT created FROM records WHERE id=?',(original['record_id'],)).fetchone()[0]
+        assert created==original['feedback']['created']
+        # Save: a forged page set or a changed answer version is 409/400 with no write; the true basis saves once and a lost reply's
+        # same-key retry returns the same record, whose single attachment list keeps the PDF once.
+        opinion=upload('作业批改参考-%s.txt'%original['record_id'],d['text'].encode())
+        feedback=dict(task_id=task['id'],child='示例甲',day='2026-10-15',request_key='synthetic-split-saved',
+            note='虚构家长核对：第1题需订正。',attachments=[teacher,answer,teacher,opinion],review_basis=basis)
+        before=dump()
+        for forged in (basis|dict(reference_sources=[page([1])]),basis|dict(reference_sources=[page([2]),page([2])]),
+                       basis|dict(question_sources=[dict(type='upload',id=teacher),dict(type='upload',id=answer)])):
+            status,refusal=http('POST','/api/task/feedback',feedback|dict(review_basis=forged))
+            assert status==400 and refusal.get('code')=='review_basis_invalid' and dump()==before,(status,refusal)
+        for stale in (basis|dict(reference_sources=[page([1,2])],question_sources=[page([3]),dict(type='upload',id=answer)]),basis|dict(created='2026-01-01T00:00:00+08:00')):
+            status,refusal=http('POST','/api/task/feedback',feedback|dict(review_basis=stale))
+            assert status==409 and refusal.get('code')=='review_basis_changed' and dump()==before,(status,refusal)
+        with patch.object(app,'_save_record',side_effect=app.RecordError('虚构存储暂不可用',503,'storage_unavailable')):
+            status,refusal=http('POST','/api/task/feedback',feedback)
+            assert status==503 and dump()==before,(status,refusal)
+        with patch.object(family_llm,'_chat_json') as called,patch.object(family_pdf,'render_pages') as renderer:
+            status,saved=http('POST','/api/task/feedback',feedback);assert status==200 and not saved['replayed'],saved
+            status,retry=http('POST','/api/task/feedback',feedback)
+            assert status==200 and retry['replayed'] and retry['record_id']==saved['record_id'],retry
+            assert [a['id'] for a in saved['feedback']['attachments']]==[teacher,answer,opinion],saved['feedback']['attachments']
+            status,view=http('GET','/api/print/homework/saved-review?task_id='+task['id']+'&record_id='+str(saved['record_id']))
+            assert status==200 and view['original_record_id']==original['record_id'] and view['text']==d['text'],view
+            assert '本次第1页' in view['text'] and '本次第2页' in view['text'] and '教师参考：5' in view['text'] and called.call_count==renderer.call_count==0
+        with app.connect() as c:
+            assert c.execute('SELECT COUNT(*) FROM records WHERE request_key=?',('synthetic-split-saved',)).fetchone()[0]==1
+            row=c.execute('SELECT related_record_id,followup_kind,source FROM records WHERE id=?',(saved['record_id'],)).fetchone()
+            assert tuple(row)==(original['record_id'],'作业检查','事项:'+task['id']),tuple(row)
+    finally:
+        server.shutdown();server.server_close();worker.join(timeout=3)
+
+
 def summary_http_checks(app,upload):
     """Real temporary HTTP dispatch, final-source guards, save/retry and original-answer reopen."""
     from http.client import HTTPConnection
@@ -2648,6 +2766,7 @@ def run():
             recheck_pending_http_checks(app,upload)
             summary_http_checks(app,upload)
             scope_handler_checks(app,upload)
+            split_pdf_review_checks(app,upload)
             review_origin_http_checks(app,upload)
     print('homework review synthetic checks passed (%d output contract cases)'%contract_cases)
 

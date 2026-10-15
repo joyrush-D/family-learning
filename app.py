@@ -1233,7 +1233,7 @@ def homework_review_catalog(obj):
         raise family_print.PrintError('请从原作答读取文字题号')
     with connect() as c: context=homework_review_context(c,obj.get('task_id'),obj.get('record_id'),obj['expected_created'])
     materials=family_print.PrintStore.review_sources(DATA,obj.get('question_sources'),obj.get('reference_sources',[]),context['allowed'],previous_sources=obj.get('previous_sources',[]))
-    ids=[s['id'] for s in materials['question_sources']+materials['reference_sources']+materials['previous_sources']]
+    ids=list(dict.fromkeys(s['id'] for s in materials['question_sources']+materials['reference_sources']+materials['previous_sources']))
     basis=dict(record_id=obj['record_id'],created=context['record']['created'],photo_ids=[i for i in ids if i in json.loads(context['record']['attachments'])],question_sources=materials['question_sources'],reference_sources=materials['reference_sources'],material_sha256=materials['fingerprint'],context_sha256=context['context_sha256'])
     if materials['previous_sources']: basis['previous_sources']=materials['previous_sources']
     with connect() as c: scope=guard_homework_review(c,obj['task_id'],basis,ids)
@@ -1259,18 +1259,20 @@ def homework_review_basis(obj):
     if (not isinstance(questions,list) or not questions or not isinstance(references,list) or len(questions)+len(references)>8
             or not isinstance(previous,list) or len(previous)>2 or len(questions)+len(references)+len(previous)>10):
         raise RecordError('批改所依据的原件格式不正确，请重新核对',400,'review_basis_invalid')
-    ids=[]
-    for source in questions+references+previous:
+    seen={}
+    for role,source in [('question',s) for s in questions]+[('reference',s) for s in references]+[('previous',s) for s in previous]:
         if (not isinstance(source,dict) or set(source) not in ({'type','id'},{'type','id','pages'}) or source.get('type')!='upload'
                 or not isinstance(source.get('id'),str) or not re.fullmatch('[a-f0-9]{32}',source['id'])):
             raise RecordError('批改所依据的原件格式不正确，请重新核对',400,'review_basis_invalid')
         if 'pages' in source and (not isinstance(source['pages'],list) or not 1<=len(source['pages'])<=8
                 or any(type(p) is not int or not 1<=p<=200 for p in source['pages']) or len(set(source['pages']))!=len(source['pages'])):
             raise RecordError('批改所依据的原件页码不正确，请重新核对',400,'review_basis_invalid')
-        if source in previous and 'pages' in source:
+        if role=='previous' and 'pages' in source:
             raise RecordError('上一轮检查只能引用完整TXT文字',400,'review_basis_invalid')
-        ids.append(source['id'])
-    if len(set(ids))!=len(ids) or not set(obj['photo_ids'])<=set(ids):
+        # The live save check also proves a reused ID is a PDF; structurally only disjoint paper/teacher pages may share it.
+        try: family_print.PrintStore.review_reuse(seen,source['id'],role,source)
+        except family_print.PrintError: raise RecordError('批改所依据的原件重复或归属不正确',400,'review_basis_invalid') from None
+    if not set(obj['photo_ids'])<=set(seen):
         raise RecordError('批改所依据的原件重复或归属不正确',400,'review_basis_invalid')
     if 'question_batch' in obj: family_print.review_batch(obj['question_batch'])
     return obj
@@ -1301,7 +1303,8 @@ def homework_review_draft(obj):
     batch=family_print.review_batch(obj['question_batch']) if 'question_batch' in obj else None
     materials=family_print.PrintStore.review_sources(DATA,obj.get('question_sources'),obj.get('reference_sources',[]),context['allowed'],previous_sources=obj.get('previous_sources',[]),previous_text=previous_text,question_batch=batch)
     if batch: catalog=homework_batch_validate(materials,batch)
-    ids=[source['id'] for source in materials['question_sources']+materials['reference_sources']+materials['previous_sources']]
+    # One PDF split into paper and teacher pages is still one original and one photo ID.
+    ids=list(dict.fromkeys(source['id'] for source in materials['question_sources']+materials['reference_sources']+materials['previous_sources']))
     basis=dict(record_id=obj['record_id'],created=context['record']['created'],
                photo_ids=[ident for ident in ids if ident in json.loads(context['record']['attachments'])],
                question_sources=materials['question_sources'],reference_sources=materials['reference_sources'],

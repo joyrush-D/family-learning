@@ -633,17 +633,36 @@ function homeworkReviewQuestionHTML(q){
 // A saved check can only be the previous round; any other file's role is the parent's explicit choice, never guessed from its type or name.
 // A choice made in this page stays with that answer and file when the list is drawn again, for example after a check is saved.
 const homeworkReviewRoles=new Map();
+// One PDF holding both the paper and the teacher's pages stays one row: the same role select offers the split, which names both page sets.
+const homeworkReviewRoleNames={question:'试卷 / 孩子作答',reference:'老师参考答案',split:'同一PDF分页：试卷 + 老师参考',previous:'上次 AI 检查 · 供复核'};
 function homeworkReviewSourceHTML(a,checked=false,recordId=''){
- const pdf=a.mime==='application/pdf',previous=a.origin==='review_result',plain=a.mime?.startsWith('text/plain'),roles=[...(previous?[]:['question','reference']),...(plain?['previous']:[])],kept=homeworkReviewRoles.get(recordId+':'+a.id),role=roles.includes(kept)?kept:'';
- return `<div class="homework-review-material" data-review-source="${esc(a.id)}"><label class="print-file-check"><input type="checkbox" data-homework-review-photo value="${esc(a.id)}" aria-label="选用 ${esc(a.name)}" ${checked?'checked':''}><span>选用</span></label>${uploadHTML({...a,mime:a.mime||''},{eager:true,print:false})}<div class="homework-material-options"><label class="small">用途<select data-homework-review-role="${esc(a.id)}">${previous?'':'<option value="">请选择用途</option>'}${roles.map(x=>`<option value="${x}" ${x===role?'selected':''}>${{question:'试卷 / 孩子作答',reference:'老师参考答案',previous:'上次 AI 检查 · 供复核'}[x]}</option>`).join('')}</select></label>${pdf?`<label class="small">PDF页码 · 留空为全部<input data-homework-review-pages="${esc(a.id)}" placeholder="例如 1,2,3；每批合计最多8页" maxlength="80"></label>`:''}</div></div>`;
+ const pdf=a.mime==='application/pdf',previous=a.origin==='review_result',plain=a.mime?.startsWith('text/plain'),roles=[...(previous?[]:['question','reference']),...(pdf&&!previous?['split']:[]),...(plain?['previous']:[])],kept=homeworkReviewRoles.get(recordId+':'+a.id),role=roles.includes(kept)?kept:'';
+ return `<div class="homework-review-material" data-review-source="${esc(a.id)}"><label class="print-file-check"><input type="checkbox" data-homework-review-photo value="${esc(a.id)}" aria-label="选用 ${esc(a.name)}" ${checked?'checked':''}><span>选用</span></label>${uploadHTML({...a,mime:a.mime||''},{eager:true,print:false})}<div class="homework-material-options"><label class="small">用途<select data-homework-review-role="${esc(a.id)}">${previous?'':'<option value="">请选择用途</option>'}${roles.map(x=>`<option value="${x}" ${x===role?'selected':''}>${homeworkReviewRoleNames[x]}</option>`).join('')}</select></label>${pdf?`<label class="small"><span data-homework-pages-caption>${role==='split'?'试卷 / 孩子作答页':'PDF页码 · 留空为全部'}</span><input data-homework-review-pages="${esc(a.id)}" placeholder="例如 1,2,3；每批合计最多8页" maxlength="80"></label><label class="small" data-homework-reference-pages ${role==='split'?'':'hidden'}><span>老师参考页</span><input data-homework-review-reference-pages="${esc(a.id)}" placeholder="例如 4；不与试卷页重复" maxlength="80"></label>`:''}</div></div>`;
+}
+// Only the split shows the teacher's page field; there neither field may be blank, so no page is read as both or guessed as "all".
+function homeworkReviewPagesMode(row){
+ const split=row.querySelector('[data-homework-review-role]')?.value==='split',caption=row.querySelector('[data-homework-pages-caption]'),reference=row.querySelector('[data-homework-reference-pages]');
+ if(!caption||!reference)return;
+ caption.textContent=split?'试卷 / 孩子作答页':'PDF页码 · 留空为全部';reference.hidden=!split;
+}
+function homeworkReviewPages(value){
+ if(!/^[1-9]\d*(?:\s*[,，]\s*[1-9]\d*)*$/.test(value))throw Error('PDF页码请写成1,2,3，不能猜漏页');
+ return value.split(/[,，]/).map(Number);
 }
 // A selected file without a chosen role stops the check here; it never falls back to the paper and reaches no model.
 function homeworkReviewSelection(panel){
- return [...panel.querySelectorAll('[data-homework-review-photo]:checked')].map(x=>{
+ return [...panel.querySelectorAll('[data-homework-review-photo]:checked')].flatMap(x=>{
   const source={type:'upload',id:x.value},pages=panel.querySelector('[data-homework-review-pages="'+x.value+'"]')?.value.trim(),role=panel.querySelector('[data-homework-review-role="'+x.value+'"]')?.value;
-  if(pages){if(!/^[1-9]\d*(?:\s*[,，]\s*[1-9]\d*)*$/.test(pages))throw Error('PDF页码请写成1,2,3，不能猜漏页');source.pages=pages.split(/[,，]/).map(Number)}
+  if(role==='split'){
+   const reference=panel.querySelector('[data-homework-review-reference-pages="'+x.value+'"]')?.value.trim();
+   if(!pages||!reference)throw Error('同一PDF分作试卷和老师参考时，请分别写明两类页码；不能留空为全部');
+   const question=homeworkReviewPages(pages),teacher=homeworkReviewPages(reference);
+   if(question.some(n=>teacher.includes(n)))throw Error('试卷页和老师参考页不能重复，请核对页码');
+   return [{role:'question',source:{...source,pages:question}},{role:'reference',source:{...source,pages:teacher}}];
+  }
+  if(pages)source.pages=homeworkReviewPages(pages);
   if(!['question','reference','previous'].includes(role))throw Error('请先为已选资料选择用途：试卷 / 孩子作答，或老师参考答案');
-  return {role,source};
+  return [{role,source}];
  });
 }
 // The line under other materials reads the whole panel as it stands: a selected file still without a role, no more files, or (with no
@@ -653,7 +672,7 @@ function homeworkReviewMaterialNote(panel){
  const chosen=[...panel.querySelectorAll('[data-review-source]')].filter(x=>x.querySelector('[data-homework-review-photo]')?.checked).map(x=>x.querySelector('[data-homework-review-role]')),undecided=chosen.filter(x=>!x?.value),more=!!panel.querySelector('[data-homework-review-sources] [data-review-source]');
  for(const role of panel.querySelectorAll('[data-homework-review-role]'))if(undecided.includes(role))role.setAttribute('aria-invalid','true');else role.removeAttribute('aria-invalid');
  const status=panel.querySelector('[data-homework-review-status]');if(!undecided.length&&status?.textContent.startsWith('请先为已选资料选择用途'))status.textContent='';
- note.textContent=undecided.length?`已选 ${chosen.length} 份中 ${undecided.length} 份用途未定，请选择后再检查。`:more?'':chosen.some(x=>x.value==='reference')?'没有更多已关联资料；老师参考已在上方选用。':'没有更多已关联资料。如有老师参考，可在“追加一次作答 / 反馈”上传保存后，在这里选用。';
+ note.textContent=undecided.length?`已选 ${chosen.length} 份中 ${undecided.length} 份用途未定，请选择后再检查。`:more?'':chosen.some(x=>['reference','split'].includes(x.value))?'没有更多已关联资料；老师参考已在上方选用。':'没有更多已关联资料。如有老师参考，可在“追加一次作答 / 反馈”上传保存后，在这里选用。';
  note.hidden=!note.textContent;
 }
 function homeworkReviewBatch(panel){
@@ -690,12 +709,12 @@ async function loadHomeworkReviewSources(panel,record,task){
   if(!response.ok)throw Error(out.error||'老师资料暂时无法读取');if(!panel.isConnected)return;
   if(out.created!==record.created)throw Error('原作答已更正，请重新打开');
   if(!Array.isArray(out.sources))throw Error('资料回执无法核对');
-  const choices=[...host.querySelectorAll('[data-review-source]')].map(x=>({id:x.dataset.reviewSource,checked:x.querySelector('input[type=checkbox]').checked,role:x.querySelector('select').value,pages:x.querySelector('[data-homework-review-pages]')?.value}));
+  const choices=[...host.querySelectorAll('[data-review-source]')].map(x=>({id:x.dataset.reviewSource,checked:x.querySelector('input[type=checkbox]').checked,role:x.querySelector('select').value,pages:x.querySelector('[data-homework-review-pages]')?.value,reference:x.querySelector('[data-homework-review-reference-pages]')?.value}));
   const existing=new Set([...panel.querySelectorAll('[data-homework-review-photo]')].filter(x=>!host.contains(x)).map(x=>x.value));
   for(const a of out.sources.filter(a=>a.origin==='review_result'&&existing.has(a.id))){const role=panel.querySelector('[data-homework-review-role="'+a.id+'"]');if(role)role.innerHTML='<option value="previous">上次 AI 检查 · 供复核</option>'}
   const extras=out.sources.filter(a=>/^[a-f0-9]{32}$/.test(a.id)&&(['image/jpeg','image/png','image/webp','application/pdf'].includes(a.mime)||homeworkReviewTextFile(a))&&!existing.has(a.id));
   host.innerHTML=(out.school_error?'<p class="small">'+esc(out.school_error)+'</p>':'')+extras.map(a=>homeworkReviewSourceHTML(a,false,record.id)).join('')+'<p class="small muted" data-homework-material-note hidden></p>';
- for(const choice of choices){const row=host.querySelector('[data-review-source="'+choice.id+'"]');if(!row)continue;row.querySelector('input[type=checkbox]').checked=choice.checked;const role=row.querySelector('select');if([...role.options].some(x=>x.value===choice.role))role.value=choice.role;const pages=row.querySelector('[data-homework-review-pages]');if(pages&&choice.pages!==undefined)pages.value=choice.pages}
+ for(const choice of choices){const row=host.querySelector('[data-review-source="'+choice.id+'"]');if(!row)continue;row.querySelector('input[type=checkbox]').checked=choice.checked;const role=row.querySelector('select');if([...role.options].some(x=>x.value===choice.role))role.value=choice.role;const pages=row.querySelector('[data-homework-review-pages]');if(pages&&choice.pages!==undefined)pages.value=choice.pages;const reference=row.querySelector('[data-homework-review-reference-pages]');if(reference&&choice.reference!==undefined)reference.value=choice.reference;homeworkReviewPagesMode(row)}
  homeworkReviewMaterialNote(panel);
  if(homeworkReviewBusy)for(const control of host.querySelectorAll('input,select'))control.disabled=true;
  }catch(error){if(panel.isConnected){const message=error.message+'；原选择、作答和检查意见仍保留。';(host.querySelector('[data-review-source]')?panel.querySelector('[data-homework-review-status]'):host).textContent=message}}
@@ -807,16 +826,17 @@ function drawTaskFeedback(task,recentId=null){
  for(const panel of $('#taskFeedbackHistory').querySelectorAll('[data-homework-review]')){const record=records.find(r=>r.id===Number(panel.dataset.homeworkReview));loadHomeworkReviewSources(panel,record,task)}
 }
 $('#taskDialog').addEventListener('close',()=>{homeworkReviewSerial++});
-$('#taskFeedbackHistory').addEventListener('change',e=>{const panel=e.target.closest('[data-homework-review]');if(!panel||!e.target.matches('[data-homework-review-photo],[data-homework-review-role]'))return;if(e.target.matches('[data-homework-review-role]'))homeworkReviewRoles.set(panel.dataset.homeworkReview+':'+e.target.dataset.homeworkReviewRole,e.target.value);homeworkReviewMaterialNote(panel)});
+$('#taskFeedbackHistory').addEventListener('change',e=>{const panel=e.target.closest('[data-homework-review]');if(!panel||!e.target.matches('[data-homework-review-photo],[data-homework-review-role]'))return;if(e.target.matches('[data-homework-review-role]')){homeworkReviewRoles.set(panel.dataset.homeworkReview+':'+e.target.dataset.homeworkReviewRole,e.target.value);homeworkReviewPagesMode(e.target.closest('[data-review-source]'))}homeworkReviewMaterialNote(panel)});
 $('#taskFeedbackHistory').addEventListener('click',async e=>{
  const button=e.target.closest('[data-homework-review-run],[data-homework-review-apply],[data-homework-batch-load],[data-homework-batch-next]');if(!button||homeworkReviewBusy||taskFeedbackPending||taskWrongPending||captureBusy())return;
  const panel=button.closest('[data-homework-review]'),recordId=Number(panel?.dataset.homeworkReview),record=data.records.find(r=>r.id===recordId),task=data.tasks.find(t=>t.id===taskFeedbackContext?.task_id);
  if(!panel||!record||!task||task.agenda?.category!=='homework'||!homeworkAnswerRecord(record,task))return;
  const status=panel.querySelector('[data-homework-review-status]'),result=panel.querySelector('[data-homework-review-result]');
- const selected=()=>homeworkReviewSelection(panel),selectedIds=()=>selected().map(x=>x.source.id),instruction=()=>panel.querySelector('[data-homework-review-instruction]').value.trim();
+ // A PDF split into paper and teacher pages is two selected uses of one original, kept once as a photo and attachment.
+ const selected=()=>homeworkReviewSelection(panel),selectedIds=()=>[...new Set(selected().map(x=>x.source.id))],instruction=()=>panel.querySelector('[data-homework-review-instruction]').value.trim();
  if(button.hasAttribute('data-homework-batch-load')||button.hasAttribute('data-homework-batch-next')){try{await loadHomeworkBatch(panel,record,task)}catch(error){status.textContent=error.message+'；原输入保留，可重试。'}return}
  if(button.hasAttribute('data-homework-review-run')){
-  let selection,batch;try{selection=selected();batch=homeworkReviewBatch(panel)}catch(error){status.textContent=error.message;return}const ids=selection.map(x=>x.source.id);
+  let selection,batch;try{selection=selected();batch=homeworkReviewBatch(panel)}catch(error){status.textContent=error.message;return}const ids=[...new Set(selection.map(x=>x.source.id))];
   if(!selection.some(x=>x.role==='question')||selection.filter(x=>x.role!=='previous').length>8||selection.filter(x=>x.role==='previous').length>2){status.textContent='请选择孩子作答或试卷；每批合计最多8页。';return}
   if(result.querySelector('textarea:not(:disabled)')?.value.trim()&&!confirm('再次检查会保留当前结果，并新增一轮复核，确定继续？'))return;
   const extra=instruction(),previousText=result.querySelector('textarea')?.value.trim()||'',serial=++homeworkReviewSerial;homeworkReviewBusy=true;button.disabled=true;status.textContent='正在检查所选作答和参考；上次结果保留…';
@@ -849,7 +869,7 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
  try{if(JSON.stringify(ids)!==JSON.stringify(selectedIds())||result.dataset.selection!==JSON.stringify(selected())||result.dataset.batch!==JSON.stringify(homeworkReviewBatch(panel))||result.dataset.instruction!==instruction()){status.textContent='所选资料、用途、页码或补充已变化，请重新检查；原草稿保留。';return}}catch(error){status.textContent=error.message;return}
  const f=$('#taskForm');if(f.elements.note.value.trim()||pendingIDs.length||$('#taskTranscript').value.trim()){status.textContent='当前还有未保存的反馈，请先保存或清空，再填入批改意见。';return}
  const inputState=taskFeedbackDraftState();
- const editing=[area,confirmed,panel.querySelector('[data-homework-review-instruction]'),...panel.querySelectorAll('[data-homework-review-photo],[data-homework-review-role],[data-homework-review-pages],[data-homework-batch-label],[data-homework-batch-size]')];
+ const editing=[area,confirmed,panel.querySelector('[data-homework-review-instruction]'),...panel.querySelectorAll('[data-homework-review-photo],[data-homework-review-role],[data-homework-review-pages],[data-homework-review-reference-pages],[data-homework-batch-label],[data-homework-batch-size]')];
  homeworkReviewBusy=true;button.disabled=true;editing.forEach(x=>x.disabled=true);status.textContent='正在保存核对文字原件…';
  try{
   const previous=[...panel.querySelectorAll('[data-homework-review-previous] textarea')].map((x,i)=>'此前第'+(i+1)+'轮检查草稿：\n'+x.value.trim());
