@@ -1179,12 +1179,12 @@ def _ref_continued(lines,at,titles=frozenset(),number=None):
     end, each `at` when none. A line's role comes from where it stands in the whole original: they are the answer's own
     words only when nothing below can take them as its heading, their paragraph ending at a blank line or the original's end,
     or the next line naming its own paper. Nonempty colon fields other than a title field, which may head it, can also end at
-    a later unqualified question number. A title field is read past blank lines (_ref_beyond): there only an unqualified
-    question number that does not go on from the answer's proves it heads that question, the lines above it being the
-    answer's own; before any other line, a later number, a 大题, a note or a separator, nothing proves whose words it is.
-    Other lines before another question or 大题 keep their heading reading. Unresolved lines keep the whole preceding original
-    for pending review instead of grading on its first line alone, and are read as headings: the answer's paper never goes
-    on past a title that may name another."""
+    a later unqualified question number. A title field is read past blank lines (_ref_beyond): its paragraph closes with the
+    answer's, so whatever line comes next, a reset or repeated question number, a later one, a 大题, a note or a separator,
+    nothing proves whose words it is. Right above a question with no blank between, a reset or repeated number still proves
+    it heads that question. Other lines before another question or 大题 keep their heading reading. Unresolved lines keep the
+    whole preceding original for pending review instead of grading on its first line alone, and are read as headings: the
+    answer's paper never goes on past a title that may name another."""
     stop=at
     while stop<len(lines) and _ref_plain(lines[stop],titles): stop+=1
     after=_ref_beyond(lines,at,stop)
@@ -1192,7 +1192,6 @@ def _ref_continued(lines,at,titles=frozenset(),number=None):
     found=_REF_QUESTION.search(lines[after]);head=lines[after][:found.start()] if found else lines[after]
     if _ref_scope(head,None,titles,_REF_LISTED.search(lines[after]) is not None)[0] is not None: return stop,at
     later=found and not head.strip() and number is not None and int(next(g for g in found.groups() if g))>number
-    if after>stop and found and not head.strip() and not later: return next(k for k in range(at,stop) if _ref_title_field(lines[k])),at
     # A nonempty field beneath an answer is its body. A following unqualified,
     # increasing question closes that body; it does not turn it into a new title.
     # Plain names, empty title fields and reset/repeated numbers keep the heading path.
@@ -1216,9 +1215,11 @@ def _teacher_reference_entries(documents,titles=frozenset(),continued=None):
                 skip.update(range(at,own));owner=None;continue
             if unresolved>at:
                 # Without field/heading proof the lines may be a note or a new
-                # title. Keep their original text, and never grade on B alone.
+                # title. Keep their original text, and never grade on B alone;
+                # the paragraph reads the same value as when it is the answer's own.
+                value='\n'.join([owner[1]]+[part.strip() for part in lines[at:unresolved]])
                 for entry in owner[0]:
-                    entry['answer']='\n'.join([owner[1]]+[part.strip() for part in lines[at:unresolved]])
+                    entry['answer']=re.sub(r'[\s，,；;。.．、]+$','',value)
                     entry['continuation_unresolved']=True
             marks=list(_REF_QUESTION.finditer(line));made=len(entries)
             if not marks and parent and _REF_SUB.match(line):
