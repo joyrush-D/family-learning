@@ -745,6 +745,13 @@ function homeworkReviewScopeNodes(host,scope,counts){
  host.append(...[{kind:'scope-head',parts:[{text:label,kind:'scope-label'},...(count?[{text:count,kind:same?'redundant':'scope-count'}]:[])]},...facts.map(x=>({text:x,kind:'scope-fact'})),'\n',{kind:'scope-head',parts:[{text:'实际读取范围：',kind:'scope-label'}]},
   ...scope.reads.map((entry,i,all)=>{const end=i===all.length-1?'。':'；';return {kind:'read',parts:homeworkReviewReadParts(entry,'read-',end)||[{text:entry+end,kind:''}]}}),'\n',{text:tail.slice(1),kind:'scope-fact'}].map(x=>typeof x==='string'?x:node(x)));
 }
+// Display only, like the scope: the comparison paragraph keeps exactly homeworkReviewScopeText's comparison as its text, and only the validator's
+// two fixed comparisons become short rows; any other wording stays one text.
+function homeworkReviewComparisonNodes(host,text){
+ const label='本次复核：',facts=text.startsWith(label)&&homeworkReviewComparisonFacts(text.slice(label.length));
+ if(!facts){host.textContent=text;return}
+ host.append(...[{kind:'scope-head',parts:[{text:label,kind:'scope-label'}]},...facts.map(x=>({text:x,kind:'scope-fact'}))].map(x=>homeworkReviewNode(x,'homework-review-')));
+}
 // Display only: the saved TXT stays the record and every character stays in the DOM, so copy, find and screen readers keep it verbatim.
 // A paragraph takes the live check's hierarchy only when it is exactly a generated question block: "题号 · 判定", then the program's own labels in order.
 // There a generic "参考答案：" before a 教师参考/AI自行推导 source and an empty "订正建议：" stay in the text but are not shown; anything else stays plain.
@@ -759,6 +766,8 @@ function savedHomeworkReviewParts(text){
    // Rows are full-width inline blocks, so copying gives back the text's own line breaks only; the coverage count is its own part, shown once (below).
    const body=block.slice(scopeLabel.length),head={kind:'scope-head',parts:[{text:scopeLabel,kind:'scope-label'}]},lined=body.startsWith('\n');let rows=lined?body.slice(1).split('\n'):body?[body]:[];
    if(scopeLabel==='覆盖说明：'){const count=/^本次\d+题，\d+题仍未判定。/.exec(body)[0];scopeCount={text:count,kind:'scope-count'};head.parts.push(scopeCount);rows=homeworkReviewCoverageFacts(body.slice(count.length))||[body.slice(count.length)]}
+   // The comparison's one line splits into the validator's fixed sentences after its single line break.
+   if(scopeLabel==='本次复核比较（待家长核对）：'&&homeworkReviewComparisonFacts(rows[0])){scope.parts.push(head,{text:'\n',kind:''},...homeworkReviewComparisonFacts(rows[0]).map(x=>({text:x,kind:'scope-fact'})));return}
    if(scopeLabel)scope.parts.push(head);
    for(const line of rows){if(lined)scope.parts.push({text:'\n',kind:''});const read=scopeLabel==='实际读取范围（程序核对）：'&&homeworkReviewReadParts(line,'scope-');scope.parts.push(read?{kind:'scope-read',parts:read}:{text:line,kind:'scope-fact'})}
    return;
@@ -791,6 +800,12 @@ function savedHomeworkReviewCount(parts){
 // The shared validator's fixed coverage facts after its count (family_llm.py), one short row each; null unless the text is exactly them in order.
 function homeworkReviewCoverageFacts(text){
  const facts=/^(未列入本次逐题结果的题目和资料范围仍未检查；)(模型原覆盖说明尚未核明。)(未返回识别题号清单，完整覆盖尚未核明。)?(已核对所选文字原件的[1-9]\d*个明确题号；不代表图片、PDF或未核明题号的完整覆盖。)?(文字中另有题号或归属无法唯一核明，请对照原件检查。)?(模型仅读取本批保留行窗口，省略\d+个可证明独立的未选题块；完整原件由程序另核，省略块未被模型读取。)?$/.exec(text);
+ return facts&&facts.slice(1).filter(Boolean);
+}
+// The shared validator's two fixed comparisons (family_llm.py), with or without the "本次"/"本次复核" the live label already says, one short row
+// per fact; null for any other wording, so old, edited and model text stays whole.
+function homeworkReviewComparisonFacts(text){
+ const facts=/^((?:本次)?\d+题未判定，不能沿用上一轮对这些题的确定判定。)(其他题目以本次逐题结果为准；)(教师参考和孩子作答分别保留，旧AI意见不作答案依据。)$|^((?:本次复核)?以逐题结果为准；)(未列题目仍未检查，旧AI意见不作答案依据。)$/.exec(text);
  return facts&&facts.slice(1).filter(Boolean);
 }
 // One exact read entry: its use, the source's full name, then a row of its pages or what was read, unread pages marked; null for any other line.
@@ -900,7 +915,7 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
    const unchecked=Array.isArray(out.draft.questions)?out.draft.questions.filter(q=>!['correct','incorrect'].includes(q?.judgment)&&homeworkReviewInspection(q)?.state==='not_checked').length:0,reviewCounts=`${out.draft.items}题 · ${out.draft.wrong_items}题需订正 · ${out.draft.unknown_items}题未判定${unchecked?`（其中${unchecked}题尚未检查）`:''}。`;
    if(Array.isArray(out.draft.questions)){const summary=document.createElement('div');summary.className='homework-review-questions';summary.innerHTML='<p class="homework-review-counts"><strong>'+esc(reviewCounts)+'</strong></p><p class="homework-review-stage">检查意见待核对，尚未保存</p>'+out.draft.questions.map(q=>homeworkReviewQuestionHTML(q)).join('');result.append(summary)}
    const scopeText=homeworkReviewScopeText(out.draft.coverage,out.draft.comparison,out.draft.text),coverage=document.createElement('p');coverage.className='small source homework-review-scope';coverage.dataset.homeworkReviewCoverage=typeof out.draft.coverage==='string'?out.draft.coverage:'';homeworkReviewScopeNodes(coverage,scopeText,Array.isArray(out.draft.questions)&&out.draft);result.append(coverage);
-   if(out.draft.comparison){const comparison=document.createElement('p');comparison.className='note homework-review-scope';comparison.dataset.homeworkReviewComparison=out.draft.comparison;comparison.textContent=scopeText.comparison;result.append(comparison)}
+   if(out.draft.comparison){const comparison=document.createElement('p');comparison.className='note homework-review-scope';comparison.dataset.homeworkReviewComparison=out.draft.comparison;homeworkReviewComparisonNodes(comparison,scopeText.comparison);result.append(comparison)}
    const edit=document.createElement('details'),label=document.createElement('label');edit.open=!Array.isArray(out.draft.questions);edit.innerHTML='<summary>查看 / 修改完整检查结果</summary>';label.textContent='检查意见';const area=document.createElement('textarea');area.maxLength=12000;area.rows=8;area.value=out.draft.text;area.dataset.generated=area.value;area.addEventListener('input',()=>{const stage=result.querySelector('.homework-review-stage');if(stage&&!area.disabled)stage.textContent=homeworkReviewEdited(area)?homeworkReviewEditedStage:'检查意见待核对，尚未保存'});label.append(area);edit.append(label);result.append(edit);
    const nextStep=document.createElement('div'),confirm=document.createElement('label');nextStep.className='homework-review-next';confirm.className='print-file-check';confirm.innerHTML='<input type="checkbox" data-homework-review-confirm><span>已对照原题和孩子最终作答核对；不确定项仍标为未判定</span>';
    const apply=document.createElement('button');apply.type='button';apply.dataset.homeworkReviewApply=String(recordId);apply.textContent='核对后填入反馈';nextStep.append(confirm,apply);nextStep.insertAdjacentHTML('beforeend','<p class="small">先保存文字原件并填入，仍需保存这次反馈。</p>');
