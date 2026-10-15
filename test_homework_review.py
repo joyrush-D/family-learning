@@ -1649,6 +1649,38 @@ def word_boundary_checks():
         assert agrees(claimed,teacher) and agrees(teacher,claimed),(claimed,teacher)
 
 
+def declared_ordinary_title_checks():
+    """T01: 「试卷名称：SYNTHETIC ORCHARD TEST」 names that whole title, 卷 or not, on the teacher text and the question text
+    alike: the teacher's 5 stays apart from the child's 4, and one question is listed once. A shared tail, a note or quote,
+    another 大题, two values or another title's lines keep it unknown."""
+    title='SYNTHETIC ORCHARD TEST';label=title+' 第1题';source=title+'\n第1题 2+3=?\n孩子作答：4\n'
+    teacher='教师参考答案\n试卷名称：%s\n第1题：5\n'%title
+    raw=dict(question_labels=[label],coverage='仅核对%s第1题，其余未检查。'%title,items=[dict(label=label,question='2+3=?',
+        student_answer='4',answer='教师参考：5',judgment='incorrect',question_kind='objective',error_reason='4与教师参考5不同。',
+        possible_cause='',steps='',uncertainty='')])
+    def draft(question,reference):
+        with patch.object(family_llm,'_chat_json',return_value=json.loads(json.dumps(raw))) as model:
+            result=family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=True,
+                question_documents=[dict(name='synthetic-orchard-question.txt',text=question)],
+                reference_documents=[dict(name='synthetic-orchard-teacher.txt',text=reference)])
+        assert model.call_count==1
+        return result
+    for question in (source,'试卷名称：'+source,'Test title: '+source):
+        result=draft(question,teacher);q,=result['questions']
+        assert (q['label'],q['judgment'],q['answer'],q['student_answer'])==(label,'incorrect','教师参考：5','4'),(question,q)
+        assert q['error_reason']=='4与教师参考5不同。' and (result['wrong_items'],result['unknown_items'])==(1,0),result
+    rows,unresolved=family_llm._source_question_inventory([dict(name='q.txt',text='试卷名称：'+source)])
+    assert [(row['label'],row['rest']) for row in rows]==[('SYNTHETICORCHARDTEST 第1题','SYNTHETICORCHARDTEST')] and not unresolved,rows
+    for reference in ('教师参考答案\n试卷名称：ORCHARD TEST\n第1题：5\n','教师参考答案\n备注：试卷名称：%s\n第1题：5\n'%title,
+                      '教师参考答案\n“试卷名称：%s”\n第1题：5\n'%title,'教师参考答案\n试卷名称：%s\n第一大题\n第1题：5\n'%title,
+                      teacher+'试卷名称：%s\n第1题：6\n'%title,'教师参考答案\n试卷名称：OTHER TEST\n第1题：5\n试卷名称：%s\n第2题：6\n'%title):
+        result=draft(source,reference);q,=result['questions']
+        assert (q['judgment'],q['answer'],q['student_answer'])==('unknown','','4'),(reference,q)
+        assert (result['wrong_items'],result['unknown_items'])==(0,1),result
+    result=draft(source,'教师参考答案\n试卷名称：%s\n第1题：5\n试卷名称：OTHER TEST\n第1题：6\n'%title)
+    assert [(q['judgment'],q['answer']) for q in result['questions']]==[('incorrect','教师参考：5')],result
+
+
 def nested_sub_checks():
     """D01/D02: a sub-question is read to its last level; the teacher's 「第4题（2）」 answers 「（2）」 only, never 「（2）②」."""
     def draft(case,sub,teacher,answer='教师参考：B'):
@@ -2265,6 +2297,7 @@ def source_reading_role_checks():
 def run():
     contract_cases=output_contract_checks()+choice_judgment_checks()+duplicate_question_checks()+summary_consistency_checks()+question_coverage_checks()+source_inventory_checks()+source_leading_blank_checks()+source_answer_section_checks()+source_reading_role_checks()+missing_condition_checks()+teacher_caption_checks()+natural_unit_instruction_checks()+teacher_wording_caption_checks()+teacher_note_checks()+teacher_note_owner_checks()
     word_boundary_checks()
+    declared_ordinary_title_checks()
     nested_sub_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:
         root=Path(temporary);data=root/'private';data.mkdir()

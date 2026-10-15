@@ -1085,6 +1085,9 @@ _REF_SOURCE=re.compile(r'^[\s:：]*(?:%s)?\s*(?:均为|都是|均是|都为|为|
 # other content starts the answer, so a later 「参考」「答案」 or ordinal frame is that answer's own words, never heading and never cut off.
 _REF_SUB_LINK=re.compile(r'\s*(?:[中里]?的|之)\s*')  # a heading connector, read only before another level: 「(4)的第甲小问」「(4)的(1)」
 _REF_NOISE=re.compile(r'%s|如下|以下|第\s*\d{1,3}\s*页|[\W_]'%_REF_WORDS)
+# An explicit title field standing alone on its line 「试卷名称：SYNTHETIC ORCHARD TEST」 declares that whole title, 卷 or not.
+_REF_TITLE_FIELD=re.compile(r'(?:(?:试卷|试题|练习|作业|测验|测试|考试)?(?:名称|标题)|试?卷名|(?i:(?:test|paper|exam|quiz|worksheet)\s*(?:title|name)|title))'
+                            r'\s*[：:]\s*([^\s：:][^：:\n]{0,59}?)\s*[。.]?')
 
 
 def _ref_number(value):
@@ -1100,8 +1103,17 @@ def _ref_titles(documents):
                      if not _REF_QUESTION.search(line) for found in [_REF_DECLARED.fullmatch(line.strip())] if found)
 
 
+def _ref_title_field(text):
+    """The whole value of an explicit title field that is all of its line, else None. Its name only says the value is the
+    title, so 「试卷名称：SYNTHETIC ORCHARD TEST」 reads as the bare title line does, never as 「名称…」. Any other field, a quote,
+    a note 「备注：试卷名称：…」, or a value naming a question or 大题 declares nothing and keeps its whole words."""
+    found=_REF_TITLE_FIELD.fullmatch(text.strip())
+    return found[1] if found and not _REF_QUESTION.search(found[1]) and not _REF_SECTION.search(found[1]) else None
+
+
 def _ref_scope(text,section=None,titles=frozenset(),listed=False):
     """The one reading of a label or teacher heading: explicit paper name or None, 大题 number, leftover words."""
+    text=_ref_title_field(text) or text  # a declared title is read whole, the same as the label naming it
     declared=[name for name in _REF_WHOLE.findall(text) if name in titles]  # 「甲卷和平卷」 declared whole is not 甲卷 and 平卷
     rest=_REF_WHOLE.sub(lambda found:'，' if found[0] in titles else found[0],text)
     names=declared+[name for part in re.split(r'(?<=卷)\s*[与和及]',rest) for name in _REF_PAPER.findall(part)  # 与/和/及 joins papers only after a whole name
@@ -1140,6 +1152,7 @@ def _ref_plain(line,titles=frozenset()):
     A field's value can mention another paper or question; that is its body, not a heading.
     Empty title fields, numbered paths and bracketed headings keep their ordinary scope reading.
     """
+    if _ref_title_field(line): return False  # a declared title heads what follows; it never goes on with an answer
     name,colon,value=re.split(r'([：:])',line,maxsplit=1) if re.search('[：:]',line) else (line,'','')
     body=value.lstrip()
     field=(colon and body and not _REF_DECLARED.fullmatch(line.strip())
