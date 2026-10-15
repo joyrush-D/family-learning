@@ -490,6 +490,18 @@ class PrintStore:
         return images,packet_sha([image['sha256'] for image in images])
 
     @staticmethod
+    def review_reuse(seen, ident, role, source):
+        """Each original is read once, except one PDF's explicit, non-overlapping paper pages then teacher pages; True for that second use."""
+        uses=seen.setdefault(ident,[])
+        if uses:
+            pages=[uses[0][1],source.get('pages')]
+            if ([use[0] for use in uses]!=['question'] or role!='reference'
+                    or not all(isinstance(p,list) and p and all(type(n) is int for n in p) for p in pages) or set(pages[0])&set(pages[1])):
+                raise PrintError('同一原件不能重复选作题目、作答、教师参考或上一轮检查；同一PDF只能把不重叠的明确页码分作试卷和老师参考')
+        uses.append((role,source.get('pages')))
+        return len(uses)>1
+
+    @staticmethod
     def review_sources(data, questions, references, allowed, *, previous_sources=(), previous_text='', render=True, question_batch=None):
         """Explicit same-task originals; PDF subsets are reported, never silently selected."""
         import family_pdf
@@ -503,7 +515,7 @@ class PrintStore:
         if (not isinstance(previous_text,str) or len(previous_text)>12000
                 or any(ord(ch)<32 and ch not in '\n\r\t' or ord(ch)==127 for ch in previous_text)):
             raise PrintError('上一轮检查文字须完整清晰且最多12000字')
-        items=[];seen=set();raw_total=len(previous_text.encode('utf-8'))
+        items=[];seen={};bodies={};raw_total=len(previous_text.encode('utf-8'))
         for role,sources in [('question',questions),('reference',references),('previous',previous_sources)]:
             for source in sources:
                 if (not isinstance(source,dict) or set(source) not in ({'type','id'},{'type','id','pages'})
@@ -511,19 +523,23 @@ class PrintStore:
                     raise PrintError('批改只能使用这项作业已保存的原件')
                 ident=_id(source['id'])
                 if ident not in allowed: raise PrintError('原件不属于这份作答或原作业，请重新打开核对','review_source_not_allowed',403)
-                if ident in seen: raise PrintError('同一原件不能重复选作题目、作答、教师参考或上一轮检查')
-                seen.add(ident);row=allowed[ident]
+                row=allowed[ident]
+                if PrintStore.review_reuse(seen,ident,role,source) and row['mime']!='application/pdf':
+                    raise PrintError('同一原件不能重复选作题目、作答、教师参考或上一轮检查；同一PDF只能把不重叠的明确页码分作试卷和老师参考')
                 if role!='previous' and row.get('origin')=='review_result':
                     raise PrintError('已保存的检查意见只能作为上一轮待复核内容，不能作为作答或教师参考','review_source_not_allowed',403)
                 if role=='previous' and not row['mime'].startswith('text/plain'):
                     raise PrintError('上一轮检查只接受同一作业已保存的纯文字TXT')
-                base=Path(data).resolve()/'uploads';path=base/ident
-                if base.is_symlink() or path.is_symlink() or path.resolve().parent!=base:
-                    raise PrintError('原件路径不正确')
-                name,body=row['name'],_read_file(path,MAX_SOURCE)
-                if len(body)!=row['size']: raise PrintError('原件大小已变化，请重新上传','review_source_changed',409)
-                raw_total+=len(body)
-                if raw_total>MAX_SOURCE: raise PrintError('本次原件合计不能超过20MB，请分批核对')
+                if ident not in bodies:
+                    # A PDF split into paper and teacher pages is one original: read once, counted once in the raw budget.
+                    base=Path(data).resolve()/'uploads';path=base/ident
+                    if base.is_symlink() or path.is_symlink() or path.resolve().parent!=base:
+                        raise PrintError('原件路径不正确')
+                    bodies[ident]=_read_file(path,MAX_SOURCE)
+                    if len(bodies[ident])!=row['size']: raise PrintError('原件大小已变化，请重新上传','review_source_changed',409)
+                    raw_total+=len(bodies[ident])
+                    if raw_total>MAX_SOURCE: raise PrintError('本次原件合计不能超过20MB，请分批核对')
+                name,body=row['name'],bodies[ident]
                 mime=row['mime'];pages=source.get('pages')
                 if pages is not None and (mime!='application/pdf' or not isinstance(pages,list) or not pages
                         or len(pages)>8 or any(type(p) is not int or not 1<=p<=family_pdf.MAX_DOCUMENT_PAGES for p in pages)
@@ -538,18 +554,23 @@ class PrintStore:
             remaining=family_pdf.DEADLINE_SECONDS-(time.monotonic()-started)
             if remaining<=0: raise family_pdf.PDFError('render timed out')
             return remaining
-        image_count=0;question_documents=[];documents=[];previous_documents=[];coverage=[];continuations=[]
+        image_count=0;question_documents=[];documents=[];previous_documents=[];coverage=[];continuations=[];counts={}
+        # Pages a split PDF supplies under either role; only pages outside both are reported as unread.
+        shared={ident:{page for _,pages in uses for page in pages} for ident,uses in seen.items() if len(uses)>1}
         for item in items:
             mime=item['mime'];body=item['body'];pages=item['source'].get('pages')
             if mime=='application/pdf':
                 if not body.startswith(b'%PDF-'): raise PrintError('PDF内容不正确')
                 if render:
-                    try: count=family_pdf.page_count(body,left())
-                    except family_pdf.PDFError: raise PrintError('PDF无法安全读取，请核对原件或重新上传','review_pdf_unavailable',503) from None
+                    ident=item['source']['id']
+                    if ident not in counts:
+                        try: counts[ident]=family_pdf.page_count(body,left())
+                        except family_pdf.PDFError: raise PrintError('PDF无法安全读取，请核对原件或重新上传','review_pdf_unavailable',503) from None
+                    count=counts[ident]
                     pages=pages or list(range(1,count+1))
                     if any(page>count for page in pages): raise PrintError('所选页码超出PDF范围')
                     item['source']['pages']=pages;item['page_count']=count
-                    omitted=[page for page in range(1,count+1) if page not in pages]
+                    omitted=[page for page in range(1,count+1) if page not in shared.get(ident,pages)]
                     selected=page_selection(','.join(map(str,pages)),count)[0]
                     missing=page_selection(','.join(map(str,omitted)),count)[0] if omitted else '无'
                     coverage.append('%s《%s》：共%d页，本次第%s页；未读取页：%s。'%('教师参考' if item['role']=='reference' else '题目/孩子作答',item['name'],count,selected,missing))
