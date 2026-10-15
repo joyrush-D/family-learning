@@ -1683,9 +1683,10 @@ def declared_ordinary_title_checks():
 
 def owned_title_field_checks():
     """T02: a title field under an answer is read where it stands, never by its words. 「标题：春天；还需说明理由。」 or a bare
-    「名称：…」 ending the answer's paragraph is that answer's own words, so the teacher's whole 「春天\n标题：春天；还需说明理由」 never
-    grades a partial 「教师参考：春天」 correct. Right before the next question it may head that question: the answer keeps its whole
-    text pending review, and the next question's answer stays under the title it may name, never borrowed back."""
+    「名称：…」 ending the original or right above a question naming its own paper is that answer's own words, so the teacher's whole
+    「春天\n标题：春天；还需说明理由」 never grades a partial 「教师参考：春天」 correct. Right before the next question, past blank lines
+    too, it may head that question: the answer keeps its whole text pending review, and the next question's answer stays under
+    the title it may name, never borrowed back."""
     label='虚构春树卷 第1题';source='试卷名称：虚构春树卷\n第1题 请拟一个标题，并说明理由。\n孩子作答：春天\n'
     raw=dict(question_labels=[label],coverage='仅核对虚构春树卷第1题，其余未检查。',items=[dict(label=label,question='请拟一个标题，并说明理由。',
         student_answer='春天',answer='教师参考：春天',judgment='correct',question_kind='subjective',error_reason='',possible_cause='',
@@ -1707,10 +1708,15 @@ def owned_title_field_checks():
     for field in ('标题：春天；还需说明理由。','名称：春天；还需说明理由。','试卷名称：春天还需说明理由','标题：春天'):
         for reference in (head+field+'\n',head+field+'\n\n第2题：秋天\n',head+field+'\n乙卷第2题：秋天\n'):
             got=entries(reference)
-            # This original heads with 「试卷名称：」, so that field may head 第2题 past a blank line (T03): still whole, pending review.
-            pending=field.startswith('试卷名称') and '\n\n第2题' in reference
-            assert got[0]==('虚构春树卷','',1,'春天\n'+field.rstrip('。'),pending),(reference,got)
+            # Any title field may head 第2题 past a blank line (T03/T04), whatever this original heads with: still whole, pending review.
+            pending='\n\n第2题' in reference
+            assert got[0]==('虚构春树卷','',1,'春天\n'+(field if pending else field.rstrip('。')),pending),(reference,got)
+            assert all(entry[0]!='虚构春树卷' for entry in got[1:]),(reference,got)
         draft(head+field+'\n');draft(head+field+'\n\n第2题：秋天\n')
+        # Past a blank line a separator or words prove no heading either: still whole and pending, 第2题 never 虚构春树卷's (T04).
+        for gap in ('——','另起一段说明'):
+            got=entries(head+field+'\n\n%s\n第2题：秋天\n'%gap);draft(head+field+'\n\n%s\n第2题：秋天\n'%gap)
+            assert got[0]==('虚构春树卷','',1,'春天\n'+field,True) and all(entry[0]!='虚构春树卷' for entry in got[1:]),(gap,got)
     for field,rest in (('标题：春天；还需说明理由。','春天还需说明理由'),('试卷名称：OTHER TEST','OTHERTEST')):
         got=entries(head+field+'\n第2题：秋天\n')
         assert got==[('虚构春树卷','',1,'春天\n'+field,True),(None,rest,2,'秋天',False)],(field,got)
@@ -1721,11 +1727,11 @@ def owned_title_field_checks():
 
 
 def next_title_spacing_checks():
-    """T03: a title field the original itself heads its questions with names the next title across ordinary paragraph spacing.
+    """T03: a title field names the next title across ordinary paragraph spacing, whatever this original heads with (T04).
     「试卷名称：OTHER TEST」 under 虚构甲卷's answer, a blank line and 「第2题：6」 never hand OTHER TEST's 6 to 虚构甲卷第2题: the answer
     above keeps its whole text pending review, and lines above that title stay its own. Ending the original or right above a
-    question naming its own paper, it heads nothing and stays that answer's words; a 「标题：」 line the original never heads with
-    keeps every owned-body boundary (T02)."""
+    question naming its own paper, it heads nothing and stays that answer's words; a 「标题：」 line is read the same, never by
+    whether this original heads with 「标题：」."""
     label='虚构甲卷 第2题';source='试卷名称：虚构甲卷\n第2题 3+3=?\n孩子作答：6\n';top='试卷名称：虚构甲卷\n第1题：5\n'
     raw=dict(question_labels=[label],coverage='仅核对虚构甲卷第2题，其余未检查。',items=[dict(label=label,question='3+3=?',
         student_answer='6',answer='教师参考：6',judgment='correct',question_kind='objective',error_reason='',possible_cause='',
@@ -1753,8 +1759,57 @@ def next_title_spacing_checks():
                            (top+'试卷名称：OTHER TEST\n\n乙卷第2题：6\n',[('虚构甲卷','',1,'5\n试卷名称：OTHER TEST',False),('乙卷','',2,'6',False)])):
         got=entries(reference)
         assert got==want,(reference,got)
-    got=entries(top+'标题：OTHER TEST\n\n第2题：6\n')  # this original never heads with 「标题：」: still the answer's own words (T02)
-    assert got[0]==('虚构甲卷','',1,'5\n标题：OTHER TEST',False),got
+    got=entries(top+'标题：OTHER TEST\n\n第2题：6\n')  # never heading with 「标题：」 proves no body: whole, pending, its 6 never 虚构甲卷's
+    assert got==[('虚构甲卷','',1,'5\n标题：OTHER TEST',True),(None,'OTHERTEST',2,'6',False)],got
+
+
+def bare_title_scope_checks():
+    """T04: a title field under an answer may head the next question across paragraph spacing however the original wrote its
+    first heading, a bare 「虚构甲卷」, 「卷名：」 or 「试卷名称：」, and whichever title field 「试卷名称：」「标题：」「Paper title:」 it is.
+    Before a later question the answer above keeps its whole text pending review and the question stays under that title, so
+    虚构甲卷第2题 never borrows OTHER TEST's 6 (unknown, child's 6 kept), while the same teacher text still compares OTHER TEST第2题
+    with its own 6 (child 4 incorrect). Before a 大题, separator or words nothing proves whose words the title is: whole, pending,
+    and 虚构甲卷's scope never goes on past it. The original's end, a question naming its own paper, or a reset number decide as before."""
+    mine,theirs='试卷名称：虚构甲卷\n第2题 3+3=?\n孩子作答：6\n','试卷名称：OTHER TEST\n第2题 3+3=?\n孩子作答：4\n'
+    def draft(question,reference,label,student,judgment,reason=''):
+        raw=dict(question_labels=[label],coverage='仅核对%s，其余未检查。'%label.replace(' 第','第'),items=[dict(label=label,question='3+3=?',
+            student_answer=student,answer='教师参考：6',judgment=judgment,question_kind='objective',error_reason=reason,possible_cause='',
+            steps='',uncertainty='')])
+        with patch.object(family_llm,'_chat_json',return_value=json.loads(json.dumps(raw))) as model:
+            result=family_llm.homework_reference_draft([dict(mime='image/png',data=png())],review=True,
+                question_documents=[dict(name='synthetic-paper-question.txt',text=question)],
+                reference_documents=[dict(name='synthetic-two-paper-teacher.txt',text=reference)])
+        assert model.call_count==1
+        return result
+    def entries(reference,question=mine):
+        documents=[dict(name='q.txt',text=question),dict(name='t.txt',text=reference)]
+        return [(entry['paper'],entry['rest'],entry['number'],entry['answer'],bool(entry.get('continuation_unresolved')))
+                for entry in family_llm._teacher_reference_entries(documents[1:],family_llm._ref_titles(documents))]
+    def borrowed_never(reference):
+        result=draft(mine,reference,'虚构甲卷 第2题','6','correct');q,=result['questions']
+        assert (q['judgment'],q['student_answer'])==('unknown','6') and '6' not in q['answer'],(reference,q)
+        assert (result['wrong_items'],result['unknown_items'])==(0,1),result
+    for top in ('虚构甲卷','卷名：虚构甲卷','试卷名称：虚构甲卷'):
+        for field in ('试卷名称：OTHER TEST','标题：OTHER TEST','Paper title: OTHER TEST'):
+            for spacing in ('','\n','\n\n'):
+                reference='%s\n第1题：5\n%s\n%s第2题：6\n'%(top,field,spacing)
+                assert entries(reference)==[('虚构甲卷','',1,'5\n'+field,True),(None,'OTHERTEST',2,'6',False)],(reference,entries(reference))
+                assert entries(reference,theirs)==entries(reference),reference
+                borrowed_never(reference)
+                result=draft(theirs,reference,'OTHER TEST 第2题','4','incorrect','4与教师参考6不同。');q,=result['questions']
+                assert (q['judgment'],q['answer'],q['student_answer'],q['error_reason'])==('incorrect','教师参考：6','4','4与教师参考6不同。'),(reference,q)
+                assert (result['wrong_items'],result['unknown_items'])==(1,0),result
+    top='虚构甲卷\n第1题：5\n试卷名称：OTHER TEST\n'
+    for gap,rest in (('——','OTHERTEST'),('说明：结果写数字','说明结果写数字')):
+        reference=top+'\n%s\n第2题：6\n'%gap
+        assert entries(reference)==[('虚构甲卷','',1,'5\n试卷名称：OTHER TEST',True),(None,rest,2,'6',False)],(reference,entries(reference))
+        borrowed_never(reference)
+    reference=top+'\n第二大题\n第2题：6\n'  # a 大题 may go on with 虚构甲卷 or open OTHER TEST: unknown, never borrowed
+    assert entries(reference)==[('虚构甲卷','',1,'5\n试卷名称：OTHER TEST',True),(None,'OTHERTEST',2,'6',False)],entries(reference)
+    for reference,want in ((top+'\n',[('虚构甲卷','',1,'5\n试卷名称：OTHER TEST',False)]),
+                           (top+'\n乙卷第2题：6\n',[('虚构甲卷','',1,'5\n试卷名称：OTHER TEST',False),('乙卷','',2,'6',False)]),
+                           (top+'\n第1题：6\n',[('虚构甲卷','',1,'5',False),(None,'OTHERTEST',1,'6',False)])):
+        assert entries(reference)==want,(reference,entries(reference))
 
 
 def nested_sub_checks():
@@ -2376,6 +2431,7 @@ def run():
     declared_ordinary_title_checks()
     owned_title_field_checks()
     next_title_spacing_checks()
+    bare_title_scope_checks()
     nested_sub_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:
         root=Path(temporary);data=root/'private';data.mkdir()
