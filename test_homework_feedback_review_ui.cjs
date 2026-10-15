@@ -228,6 +228,11 @@ def split_chat(messages,schema,name,timeout,**kwargs):
     split_calls.append(dict(labels=[t for t in texts if t.startswith(('题目/孩子作答：','教师参考：'))],image_count=sum(part.get('type')=='image_url' for part in content),raw=copy.deepcopy(raw)))
     return raw
 app.family_llm._chat_json=split_chat
+traced=app.family_llm.homework_reference_draft
+def split_validator(*args,**kwargs):
+    # The split-PDF task goes straight through the real shared validator; the other traces keep their own wrapper.
+    return validator(*args,**kwargs) if '虚构果园分页' in kwargs.get('task_action','') else traced(*args,**kwargs)
+app.family_llm.homework_reference_draft=split_validator
 get=app.Handler.do_GET
 def fixture_get(self):
     if self.path=='/__fixture/split-pdf':
