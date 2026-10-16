@@ -173,6 +173,10 @@ _LEARNING_ADMIN_COMPARISON = re.compile(r'(?:该|此|这份)?(?:活动)?(?:回�
 # or continued wording never matches. Only the denial leaves the classification copy;
 # the form name and every other clause stay guarded.
 _LEARNING_ADMIN_FORM = r'(?:活动)?(?:回执|登记表|报名表|同意书|确认单|通知书|表单)'
+# A closed 《》 name ending in such a form's own noun is that form (《语文阅读调查登记表》): its inner learning words
+# name the form, not an outcome. Only a name the original itself closes counts, so a reply's title or summary
+# cannot add one; words outside it, an unclosed or clause-crossing name and any other title stay guarded.
+_LEARNING_FORM_TITLE = re.compile(r'《[^《》。；;，,！!？?\n]{0,38}?'+_LEARNING_ADMIN_FORM+r'》')
 _LEARNING_FORM_DENIES_COMPOUND = re.compile(
     r'((?:^|[。；;！!\n])\s*(?:(?:该|此|这|本)(?:份|张)?'+_LEARNING_ADMIN_FORM+
     r'|这是[^。；;，,！？!?\n“”"「」（）()不否吗呢吧]{0,12}?'+_LEARNING_ADMIN_FORM+r'\s*[，,])\s*)'
@@ -191,7 +195,9 @@ _LEARNING_NEGATED_ACTION = re.compile(
     r'(?=\s*(?:[。；;，,！？!?\n）)]|$))')
 
 
-def _school_learning_text(parts):
+def _school_learning_text(parts, originals=None):
+    from family_agenda import _titles_read_as_objects
+    names={m[0] for t in (parts if originals is None else originals) for m in _LEARNING_FORM_TITLE.finditer(t)}
     checked=[]
     for part in parts:
         text=_URL.sub('',part)
@@ -206,6 +212,7 @@ def _school_learning_text(parts):
         # Before the plain-object rule, which would otherwise leave “作业” of “练习作业”.
         text=_LEARNING_FORM_DENIES_COMPOUND.sub(direct,text)
         text=_LEARNING_NEGATED_OBJECT.sub('',_LEARNING_ADMIN_COMPARISON.sub('',text))
+        for name in names:text=text.replace(name,_titles_read_as_objects(name))
         checked.append(_LEARNING_FORM.sub('',_LEARNING_MATERIAL.sub('',text)))
     return '\n'.join(checked)
 
@@ -497,8 +504,9 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
     # The batch checks peers only after their own reading/date guards. This first
     # pass can inspect an administrative action without inheriting unrelated
     # learning words from its shared original. Single/legacy drafts keep the guard.
-    learning_parts=[brief['title'],brief['goal']] if separate_learning else [e.get('text','') for e in evidence]+[p['text'] for p in (pages or {}).get('model_pages',[])]
-    learning_text=_school_learning_text(learning_parts)
+    originals=[e.get('text','') for e in evidence]+[p['text'] for p in (pages or {}).get('model_pages',[])]
+    learning_parts=[brief['title'],brief['goal']] if separate_learning else originals
+    learning_text=_school_learning_text(learning_parts,originals)
     if purpose=='admin' and state!='reference' and (_LEARNING_ACTIVITY.search(learning_text) or _LEARNING_ACTION.search(learning_text)):
         # A check-in label must not swallow homework: the parent sees the whole notice instead.
         # Carrying or printing a named material is not itself the learning action.
