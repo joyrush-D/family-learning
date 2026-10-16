@@ -552,7 +552,7 @@ def _school_focus(c,task,proposal,plan):
 
 def enrich(app,c,tasks):
     owners={p['name']:p['id'] for p in app.profiles(c)}
-    reported={r['task_id']:(r['child_id'],r['day']) for r in c.execute('SELECT task_id,child_id,day FROM study_items WHERE id=task_id')} if c.execute("SELECT 1 FROM sqlite_master WHERE name='study_items'").fetchone() else {}
+    reported={r['task_id']:(r['child_id'],r['day'],r['report']) for r in c.execute('SELECT task_id,child_id,day,report FROM study_items WHERE id=task_id')} if c.execute("SELECT 1 FROM sqlite_master WHERE name='study_items'").fetchone() else {}
     for task in tasks:
         refs=[x.strip() for x in task['source'].splitlines() if x.strip().startswith('message:')]
         focus=task.get('focus') or {}
@@ -569,7 +569,7 @@ def enrich(app,c,tasks):
                 date_quote=_stored_date_quote(plan) or re.sub(r'^待核对[：:]?\s*','',proposal['title']).strip()
                 date_header=_stored_date_header(plan,date_quote)
                 school_focus=_school_focus(c,task,proposal,plan)
-        due=task['due']
+        due=task['due'];teacher={}
         captured=reported.get(task['id'])
         if captured and captured[0]==owners.get(task['child']) and task['source'] in family_study.CAPTURE_SOURCES:
             # The capture day is a plan date, not a teacher deadline; preserve explicit later edits.
@@ -577,7 +577,12 @@ def enrich(app,c,tasks):
             if not focus.get('category'):focus['category']='homework'
             if not focus.get('scheduled_on') and not focus.get('version'):focus['scheduled_on']=captured[1]
             due=task['due']=''
+            # Only days the parent or child explicitly entered as the teacher's own are teacher days; a plan never writes them.
+            teacher={k:v for k,v in json.loads(captured[2] or '{}').items() if k in family_study.TEACHER_DAYS and v}
+            if teacher.get('handback_on'):focus['due_on']=teacher['handback_on']
         task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus)
+        if teacher.get('handback_on'):task['agenda']['due_kind']='handback'
+        if teacher.get('complete_on'):task['agenda']['complete_on']=teacher['complete_on']
     return tasks
 
 

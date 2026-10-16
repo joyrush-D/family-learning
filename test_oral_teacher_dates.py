@@ -96,8 +96,12 @@ with tempfile.TemporaryDirectory(prefix='synthetic-oral-dates-') as temporary:
         child=family_study.Store(app,authorize=lambda c,i:None); child._now=store._now
         reject(lambda:child.save_item(request(id=ident,version=version+2,teacher_dates=dict(handback_on='2026-09-16'))))
 
-        # OD-A4: future, due and overdue views keep the same task and teacher days.
-        for day in ('2026-09-08','2026-09-11','2026-09-15','2026-09-18'):
-            assert family_agenda.visible_on(agenda(ident),day), day
-        assert not family_agenda.visible_on(agenda(blank),'2026-09-12')
+        # OD-A4: capture, future, due and overdue days list the same one task with its teacher days; blank is no deadline.
+        listed=family_agenda.snapshot(app,'2026-09-08','2026-09-20')['agenda']
+        def days(task): return [x['day'] for x in listed if x['id']==task]
+        assert days(only)==['2026-09-%02d'%d for d in range(8,21)], days(only)
+        assert days(ident)==['2026-09-%02d'%d for d in range(9,21)], days(ident)
+        assert all((x['agenda']['due_on'],x['agenda']['due_kind'])==('2026-09-15','handback') for x in listed if x['id']==ident)
+        assert days(blank)==days(legacy)==['2026-09-08'], (days(blank),days(legacy))
+        assert family_agenda.visible_on(dict(agenda(only),agenda=dict(agenda(only)['agenda'],complete_on='2026-09-30')),'2026-09-30')
 print('test_oral_teacher_dates: ok')
