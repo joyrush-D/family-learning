@@ -2242,18 +2242,20 @@ def _school_handback_day(text,published,values):
     18日 in its goal. Only one completion clause before one handback of that same work (摘记本, or an unnamed 交) collapse;
     another object (回执), a handback not after the completion, or another dated clause keeps every day, never the latest.
     A restated handback (提交要求：摘记本于2026年10月20日…) is the same clause again, not another day.
+    The completion is whatever action its time limit (…21:00前订正…) precedes; the handback names that work when its holder
+    (订正本, 摘记本) is written outside every title in this item's own words before it, never inside a 《》 name.
     """
-    from family_agenda import deadlines
+    from family_agenda import _titles_read_as_objects,deadlines
     dated=[(re.sub(r'^\s*[^：:，,]{0,6}[：:]','',c),d) for c in re.split(r'[。；;\n]',text) if (d:=deadlines(c,published))]
     if len(values)!=2 or len(dated)<2 or any(len(d)!=1 for c,d in dated):return values
     (done,early),*backs=dated;late=values-early
-    work=re.search(r'前\s*完成([^，,。；;\n（(]+)',done)
+    work=re.search(r'(?:[日号]|\d{1,2}[:：]\d{2})\s*(?:之前|以前|前)\s*[^，,。；;\n（(]',done)
     if not work or '交' in done or len(late)!=1 or min(early)>=min(late):return values
     for back,day in backs:
         held=re.match(r'\s*([^\d，,：:（(]*?)\s*(?:于|在)?\s*\d',back)
         name=re.sub(r'[本册]$','',held[1]) if held else None
         if (day!=late or not re.search(r'交(?:给|回|到|至)|提交|上交|交\s*$',back)
-                or name is None or name and (len(name)<2 or not work[1].endswith(name))):return values
+                or name is None or name and (len(name)<2 or name not in _titles_read_as_objects(text)[:text.find(back)])):return values
     return late
 
 
@@ -2262,7 +2264,7 @@ def _school_own_dates(quote,published):
 
     A second, recurring, past, ranged or open-ended day, or a day this clause does not arrange, is not this action's date.
     """
-    from family_agenda import _in_title,_relative_weekday,date,deadlines
+    from family_agenda import _in_title,_relative_weekday,_titles_read_as_objects,date,deadlines
     values=deadlines(quote,published)
     if values or not date(published):return _school_handback_day(quote,published,values)
     def iso(match):
@@ -2273,6 +2275,11 @@ def _school_own_dates(quote,published):
     text=_relative_weekday(re.sub(r'(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日',iso,quote),published)
     days=re.findall(r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}|今天|今日|今晚|明天|明日|明早|明晚|后天|昨天|前天|每天|每晚|(?:周|星期|礼拜)[一二三四五六日天]',text)
     found=re.search(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)(?!\s*(?:起|开始|以后|之后|以来|至|到|[-–—~～]))[^。；;，,\n]{0,8}?'+_SCHOOL_ARRANGEMENT,text)
+    from family_agenda import _EVENT_STATE,_EVENT_STATE_OBJECT
+    # A complete clause headed by its one explicit full date (2026年10月24日地理课做3分钟口头说明) states that day for
+    # itself whatever its verb; a changed, cancelled, negated, asked or open-ended day still states none.
+    if not found and not re.search(_EVENT_STATE+'|'+_EVENT_STATE_OBJECT+r'|[？?]',_titles_read_as_objects(quote)):
+        found=re.match(r'\s*(\d{4}-\d{2}-\d{2})(?!\s*(?:起|开始|以后|之后|以来|至|到|前|之前|以前|[-–—~～]))',text) if re.match(r'\s*\d{4}\s*年',quote) else None
     if len(days)!=1 or not found or _in_title(text,found.start(1)) or re.search(r'每\s*$',text[:found.start()]):return set()
     offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}
     value=date(found[1]) or (dt.date.fromisoformat(published)+dt.timedelta(days=offset[found[1]])).isoformat()
