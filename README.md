@@ -1,5 +1,11 @@
 # 一起成长 · Family Agent
 
+## M4学校未读原件用途保持unknown（R09/R14/S03）：本项候选，已提交、未推送、未合入、未部署；本候选未编号
+
+同分支`codex/school-reference-native-classification`续接（e248之上）。拒收原因：Root全虚构N06仅有一张“[图片消息，内容尚未读取]”学校图片、未提供字节；故意错误的合成回执称reference/optional时，既有未读守卫已清空标题/要求并改review，却保留模型用途，保存为review/optional；正确合成回执review/unknown本就正确。基线632同样如此，非e248引入。修复只在既有未读/可读性守卫一处：原件没有任何已读正文、截图片段或已读资料时，用途与内容一样为unknown（与既有unknown用途守卫同一结果）；原始选择回执仍按模型原话保留供审计。已读明确正文行动附带未读补充材料、截图片段、已读资料均不变；无新词表、分类器或服务，提示词未改。
+
+证据（全虚构，0产品/模型API、0图片字节）：N06错误reference与正确unknown两份合成回执经完整证据`_select`及真实run_once→_save→自动收录→重放→新开Store重读，均为1条review/unknown，无标题/要求/日期/待办/学习关联/目标，原件与原始回执保留，模型1次、重放不重复；回执猜learning也只得unknown。相邻对照：已读明确正文行动+未读补充附件在完整证据`_select`中仍为learning、保留要求、review待补。K12原生修复测试保持通过；五套517项（test_agent 263、test_school_native_coverage 93、test_school_action_inventory 58、test_school_pdf_evidence 87、test_school_page_evidence 16）在精确提交通过。合成控制不是实际模型准确性。未达：相邻对照的run_once版本（已读文字消息+另一条未读图片消息、同一提案引用二者）在测试提交`69105b6`整批拒收，原因本轮未诊断，改用`_select`路径并保留为待查；本轮未在旧e248产品码上反向复跑（基线以Root程序对照为准）；Root独立变体与实际模型、360/1440原链、真实家长/手机/出纸、全来源与整体P1待办。整体ACTIVE，全部42需求与主备路线保留。
+
 ## M4学校纯参考材料不入原生必做账本（R09/R14/S03）：本项候选，已提交、未推送、未合入、未部署；本候选未编号
 
 分支`codex/school-reference-native-classification`（自已合入main `5d5594a`）。拒收原因：Root全虚构K12“阅读活动参考资料仅供了解，自愿查看。下一次全班具体任务及日期将另行通知。”的实际Flash（configured effort none）回执已正确reference/optional、无标题/goal/due，c131程序却以school_action_coverage整批拒收：`_school_native_command`把材料名开头的“阅读”读成必做阅读，原生账本先造一项必做，`_school_native_bind`随后拒绝正确reference——程序误造必做，不是模型漏任务。最小修复只在原生账本`_school_native_blocks`：分句由“材料名词（资料/材料）+紧接仅供/只供…”开头、其余逗号分句仅为无日期/数量/义务的“自愿…”时，该分句是自身一段而非必做行动，不输出到账本，后续附注照旧归属、不被前后项吞并；coverage、bind与保存复核未放宽，未加K12专属词表、未跳过整消息、无新分类器。以请/日期/数字/引号/义务词开头或带其他要求的分句（“阅读第10页，自愿查看拓展资料”“…仅供了解，周五前交读后感”“朗读课文供家长检查”）仍为必做；同条后句与同批他条明确任务照旧入账，错把真实要求称reference或以整段reference吞并仍整批拒收；未读/附件消息仍不进本账本（该路径未改，本次未另测）。schema与提示文本未改；K12请求不再含required_native_actions，故旧实际raw只是固定程序控制，不代表新请求下的真实准确性。证据（0产品/模型API）：K12实际parsed raw经真实run_once→_select→_save→自动收录→新开Store重读为1参考/optional、0任务/0手工任务、无school_learning与学习目标、0附件且无预处理/打印声称，重放不重复、模型1次；同批纯参考+真实阅读写理由+行政签交两项均保存为待办；同一测试在未修复main上复现原拒收“学校独立要求未形成对应行动”。未达：Root独立变体与新实际调用、360/1440原链、真实家长/手机/出纸、全来源与整体P1。
