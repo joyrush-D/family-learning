@@ -3367,7 +3367,8 @@ class AgentTests(unittest.TestCase):
     def test_dated_ba_title_and_page_object_keeps_its_own_date_through_select(self):
         from family_agenda import deadlines
         quote='数学：请于2026年10月22日把《图形与证明综合练习》的第4页完成并逐题检查。'
-        for text in [quote,'请于2026年10月22日把《因数与倍数》第3-5页订正。','请2026年10月22日把《古诗三首》第二课背诵。']:
+        for text in [quote,'请于2026年10月22日把《因数与倍数》第3-5页订正。','请2026年10月22日把《古诗三首》第二课背诵。',
+                     '请于2026年10月22日把数学练习册第4页完成。','2026年10月22日把语文配套练习第3课第2题订正。']:
             with self.subTest(text=text):
                 self.assertEqual(deadlines(text,'2026-10-16'),{'2026-10-22'})
         ref='message:synthetic-ba-title:1'
@@ -3384,6 +3385,8 @@ class AgentTests(unittest.TestCase):
         for text in ['请于2026年10月22日把《已取消的综合练习》第4页完成。',
                      '请于2026年10月22日把不需要的《图形与证明综合练习》第4页完成。',
                      '请于2026年10月22日把《图形与证明综合练习》的第4页答案发到群里。',
+                     '请于2026年10月22日把不需要的数学练习册第4页完成。',
+                     '请于2026年10月22日把已发的数学练习册第4页答案发到群里。',
                      '2026年10月16日通知：请把《图形与证明综合练习》的第4页完成。']:
             with self.subTest(text=text):
                 self.assertEqual(deadlines(text,'2026-10-16'),set(),'state, other day, negation, no own action or publication day stays undated')

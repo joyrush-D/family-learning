@@ -70,12 +70,14 @@ def _action_deadlines(text,published):
                 r'(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|'+_EVENT_CLAUSE_WORD+r')[一-鿿A-Za-z0-9])*?'
                 r'('+_EVENT_OBJECT_NOUN+r')(?=签字|盖章|交|带|上交|提交)',r'\1\2',text or '')
     action=r'(?:前|截止|完成|订正|提交|上交|交齐|带到|带来|交作业|朗读|背诵|抄写|预习|听[^。；;，,\n]{0,12}录音|带|穿|交(?!流|通|换|谈)|测验|考试|听写|默写|检测)'
-    # A 《》 title ends at its own closing bracket, so the title with its page/lesson numbers
-    # (把《图形与证明综合练习》的第4页完成) is likewise one object for the same action list below; a state or another
-    # day inside the title, or anything else between it and the action, leaves the text as it was.
+    # A 《》 title ends at its own closing bracket, and a page/lesson number ends a plain book name the same way, so
+    # 把《图形与证明综合练习》的第4页完成 or 把数学练习册第4页完成 is likewise one object for the same action list below; a
+    # state or another day inside it, a clause word in the plain name, or anything else before the action leaves the
+    # text as it was.
+    locator=r'(?:[、和]?的?第?[0-9一二三四五六七八九十百]+(?:[-–~～至到]第?[0-9一二三四五六七八九十百]+)?(?:页|题|课|单元|章|节))'
     text=re.sub(r'((?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:(?:由家长|家长|孩子|学生|请)[ \t]*){0,2}把)'
-                r'《(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r')[^《》。；;，,\n])+》'
-                r'(?:的?第?[0-9一二三四五六七八九十百]+(?:[-–~～至到、和]第?[0-9一二三四五六七八九十百]+)?(?:页|题|课|单元|章|节))*'
+                r'(?:《(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r')[^《》。；;，,\n])+》'+locator+r'*'
+                r'|(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|'+_EVENT_CLAUSE_WORD+r')[一-鿿A-Za-z])+?'+locator+r'+)'
                 r'(?='+action+r')',r'\1《》',text)
     # A date alone is not a deadline; it must be tied to an explicit action or dated school event.
     pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:[^。；;，,\n]{0,8}?)'+action
