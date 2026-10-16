@@ -2566,6 +2566,102 @@ class SchoolActionPurposeTests(unittest.TestCase):
         self.assertEqual([r['id'] for r in fresh[0]], [r['id'] for r in first[0]], 'reopen keeps the one item without duplicates')
         self.assertEqual(self.model.call_count, 1)
 
+    # Known fictional N06 (disclosed by Root): one school image whose content was never read; no bytes exist. Both receipts are
+    # authored fictional controls, not provider output: the wrong one claims reference/optional, the correct one review/unknown.
+    N06_TEXT = '[图片消息，内容尚未读取]'
+    N06_CORRECT = dict(title_quote=N06_TEXT, focus='school', due='', evidence=[0], task_title='', task_goal='', task_advice='',
+                       learning_subject='', learning_goal_id='', task_change='new', task_target_id='', task_state='review',
+                       task_reason='仅有未读图片占位；尚不知其中是作业、通知或参考，原件仍待读取。', task_purpose='unknown', task_submission='')
+    N06_WRONG = dict(N06_CORRECT, task_state='reference', task_reason='故意错误的合成回执：没有读取图片却宣称只是参考。', task_purpose='optional')
+
+    def test_known_n06_unread_image_keeps_an_unknown_purpose_whatever_use_the_receipt_claims_on_full_evidence(self):
+        ref = 'message:fictional-native-reference-n06:1'
+        evidence = [dict(ref=ref, text=self.N06_TEXT, sender='虚构学校发布人', publisher='publisher:fictional-native-reference:n06',
+                         time='2026-11-05T18:00:00+08:00', kind='image', content_incomplete=True, unread=True,
+                         attachments=[dict(name='虚构学校资料.png', type='image/png')], source='fictional-school-image', related_messages=[])]
+        claims = {'wrong reference': self.N06_WRONG, 'correct unknown': self.N06_CORRECT,
+                  'guessed learning': dict(self.N06_WRONG, task_state='review', task_purpose='learning')}
+        for label, raw in claims.items():
+            with self.subTest(claim=label):
+                self.model.side_effect = lambda *args, raw=raw, **kwargs: dict(proposals=[dict(copy.deepcopy(raw), evidence=[dict(ref=ref)])])
+                item, = agent._select('school', copy.deepcopy(evidence), school_goals=[], as_of='2026-11-05')
+                brief, receipt = item['plan']['school_task'], item['plan']['school_selection_receipt']
+                self.assertEqual((brief['state'], brief['purpose'], item['due']), ('review', 'unknown', ''))
+                self.assertEqual((brief['title'], brief['goal'], brief['advice']), ('', '', ''), 'nothing is guessed from a name or placeholder')
+                self.assertEqual((receipt['state'], receipt['purpose']), (raw['task_state'], raw['task_purpose']), 'the raw receipt stays for audit')
+                self.assertFalse({'pdf_evidence', 'material_evidence', 'page_evidence'} & set(brief), 'no attachment was read or prepared')
+
+    def _n06_run_once(self, raw):
+        self.fixture.now = self.now = dt.datetime(2026, 11, 5, 20, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='11')
+        payload['messages'] = [dict(id='11', message_order='11', time='2026-11-05T18:00:00+08:00', kind='image', sender='虚构学校发布人',
+                                    sender_id='fictional-native-reference-n06', text=self.N06_TEXT, unread=True)]
+        self.store.ingest(payload)
+        ref = 'message:' + self.source['id'] + ':11'
+        requests = []
+
+        def reply(messages, schema, name, timeout=60, *, data_path=None):
+            self.assertEqual((name, data_path), ('family_agent_selection', self.app.DATA), 'only the synthetic school selection')
+            requests.append(json.loads(messages[-1]['content']))
+            return dict(proposals=[dict(copy.deepcopy(raw), evidence=[dict(ref=ref)])])
+        self.model.side_effect = reply
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        self.assertEqual([(e['ref'], e['kind'], bool(e['content_incomplete'])) for e in requests[0]['evidence']], [(ref, 'image', True)])
+        import family_review
+
+        def check(rows, tasks, originals, manual, goals):
+            row, = rows
+            plan = json.loads(row['plan']);brief = plan['school_task'];receipt = plan['school_selection_receipt']
+            self.assertEqual((brief['state'], brief['purpose'], row['due'], row['task_id'] or '', plan.get('school_learning'), plan.get('school_goal_id', '')),
+                             ('review', 'unknown', '', '', None, ''), 'an unread original stays an unknown review, never a reference or a to-do')
+            self.assertEqual((brief['title'], brief['goal'], brief['advice']), ('', '', ''))
+            self.assertEqual((receipt['state'], receipt['purpose']), (raw['task_state'], raw['task_purpose']), 'the raw receipt is kept for audit only')
+            self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], [ref])
+            self.assertFalse({'pdf_evidence', 'material_evidence', 'page_evidence'} & set(brief), 'no attachment was read or prepared')
+            self.assertEqual((tasks, manual), ({}, 0), 'no to-do is created from an unread image')
+            self.assertEqual(originals, payload['messages'], 'the complete original stays unchanged')
+            self.assertEqual(goals, [], 'no guessed learning goal')
+
+        first = self._k12_facts(self.app, self.store);check(*first)
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['failed'], replay['processed'], replay['created']), (0, 0, 0))
+        app = family_review.load_app(self.fixture.root, self.fixture.data)
+        fresh = self._k12_facts(app, agent.Store(app.connect, app.profiles, self.fixture.data, app=app))
+        check(*fresh)
+        self.assertEqual([r['id'] for r in fresh[0]], [r['id'] for r in first[0]], 'reopen keeps the one item without duplicates')
+        self.assertEqual(self.model.call_count, 1)
+
+    def test_known_n06_wrong_reference_on_an_unread_image_saves_an_unknown_review_through_intake_and_fresh_store_reopen(self):
+        self._n06_run_once(self.N06_WRONG)
+
+    def test_known_n06_correct_unknown_receipt_saves_the_same_unknown_review_through_intake_and_fresh_store_reopen(self):
+        self._n06_run_once(self.N06_CORRECT)
+
+    def test_explicit_read_action_with_a_supplemental_unread_image_keeps_its_own_purpose_and_requirement(self):
+        self.fixture.now = self.now = dt.datetime(2026, 11, 5, 20, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='12')
+        common = dict(time='2026-11-05T18:00:00+08:00', sender='虚构学校发布人', sender_id='fictional-native-reference-n06')
+        payload['messages'] = [dict(common, id='11', message_order='11', kind='text', text='语文：请完成练习册第5页。', unread=False),
+                               dict(common, id='12', message_order='12', kind='image', text=self.N06_TEXT, unread=True)]
+        self.store.ingest(payload)
+        refs = ['message:' + self.source['id'] + ':' + m['id'] for m in payload['messages']]
+        proposal = fixtures.school_proposal(
+            title_quote='请完成练习册第5页', evidence=[dict(ref=ref) for ref in refs], learning_subject='语文', task_title='语文：完成练习册第5页',
+            task_goal='完成练习册第5页。', task_state='ready', task_reason='虚构回执。', task_purpose='learning')
+        self.model.side_effect = lambda *args, **kwargs: dict(proposals=[copy.deepcopy(proposal)])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 2))
+        rows, tasks, originals, manual, goals = self._k12_facts(self.app, self.store)
+        row, = rows
+        brief = json.loads(row['plan'])['school_task']
+        self.assertEqual((brief['state'], brief['purpose']), ('review', 'learning'), 'explicit read text keeps its own use; only the supplement waits')
+        self.assertIn('练习册第5页', brief['title'])
+        self.assertIn('完成练习册第5页', brief['goal'])
+        self.assertIn('已读正文要求已保留', brief['reason'])
+        self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
+        self.assertEqual(originals, payload['messages'])
+
     def test_reference_scope_is_its_own_clause_and_never_hides_or_creates_a_required_outcome(self):
         def actions(text):
             entry = dict(ref='message:synthetic-reference:1', text=text, kind='text', publisher='p', time='2026-10-16T18:03:00+08:00')
