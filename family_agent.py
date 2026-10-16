@@ -4329,7 +4329,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         if (routing and not historical and not native_action and proposal['task_purpose']=='admin' and proposal['task_state']!='reference'
                 and len(single)==1 and single[0].get('kind','text')=='text' and not (single[0].get('unread') or single[0].get('content_incomplete'))
                 and title and title in refs[single[0]['ref']]
-                and any(name not in str(proposal.get('task_goal','')) for name in _school_named_outcomes(title))):
+                and any(name[1:-1] not in str(proposal.get('task_goal','')) for name in _school_named_outcomes(title))):
             raise AgentError('同一句老师要求中的明确成果未完整归纳，整批保留重试',code='school_action_coverage')
         # Publication groups are reading hints only. Each task keeps exactly its
         # verified citations; unrelated task originals must never be added here.
