@@ -3380,8 +3380,8 @@ class AgentTests(unittest.TestCase):
         self.assertEqual([(i['due'],i['body'],i['plan']['school_task']['state']) for i in items],
                          [('2026-10-22','把《图形与证明综合练习》的第4页完成并逐题检查。','ready')])
         self.assertEqual(evidence[0]['text'],quote,'original text unchanged')
+        self.assertNotIn('2026-10-22',deadlines('请于2026年10月22日把《10月25日综合练习》第4页完成。','2026-10-16'),'another day inside the title')
         for text in ['请于2026年10月22日把《已取消的综合练习》第4页完成。',
-                     '请于2026年10月22日把《10月25日综合练习》第4页完成。',
                      '请于2026年10月22日把不需要的《图形与证明综合练习》第4页完成。',
                      '请于2026年10月22日把《图形与证明综合练习》的第4页答案发到群里。',
                      '2026年10月16日通知：请把《图形与证明综合练习》的第4页完成。']:
