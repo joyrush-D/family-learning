@@ -32,10 +32,26 @@ def _text(obj, key, limit, default=''):
     return value.strip()
 
 
+TEACHER_DAYS = ('complete_on', 'handback_on')
+
+
+def teacher_days(value, keys=None):
+    """Only the teacher's own explicit complete/handback days; blank stays unknown and is never filled from text."""
+    keys = [k for k in TEACHER_DAYS if k in value] if keys is None else keys
+    days = {}
+    for key in keys:
+        days[key] = value[key]
+        if days[key] == '': continue
+        try: _day(days[key])
+        except StudyError: raise StudyError('老师要求的完成日或交回日不正确；不知道时可以留空') from None
+    return days
+
+
 def report_fields(value, *, limit=3):
-    if not isinstance(value,dict) or set(value)-{'text','explanation','excerpt','goal','attachments'}:
+    if not isinstance(value,dict) or set(value)-{'text','explanation','excerpt','goal','attachments',*TEACHER_DAYS}:
         raise StudyError('作业原始材料字段不正确')
     report={k:_text(value,k,limit) for k,limit in [('text',6000),('explanation',3000),('excerpt',2000),('goal',2000)]}
+    report.update(teacher_days(value))
     ids=value.get('attachments',[])
     if not isinstance(ids,list) or len(ids)>limit or any(not isinstance(i,str) or not re.fullmatch('[a-f0-9]{32}',i) for i in ids) or len(set(ids))!=len(ids):
         raise StudyError('作业原件格式不正确，最多关联%d份已上传材料'%limit)
@@ -231,12 +247,18 @@ class Store:
         return dict(draft=result,child_id=child_id,day=day)
 
     def save_item(self, obj):
-        child_id, day, key, version, digest = self._request(obj, {'id', 'task_id', 'title', 'subject', 'planned_minutes', 'report'})
+        child_id, day, key, version, digest = self._request(obj, {'id', 'task_id', 'title', 'subject', 'planned_minutes', 'report', 'teacher_dates'})
         ident = _text(obj, 'id', 30)
         if ident and not re.fullmatch(r'STUDY-[a-f0-9]{24}', ident): raise StudyError('功课编号不正确')
         creating = not ident
         report=report_fields(obj['report'],limit=3 if self.actor=='child' else 20) if 'report' in obj else {}
         if report and (not creating or obj.get('task_id')): raise StudyError('作业原文随新增功课保存；已有学校事项请保留原来源')
+        corrected=obj.get('teacher_dates')
+        if 'teacher_dates' in obj:
+            if self.actor!='parent': raise StudyError('老师日期由家长在原作业上更正',403,'parent_required')
+            if creating or not isinstance(corrected,dict) or not corrected or set(corrected)-set(TEACHER_DAYS):
+                raise StudyError('请在已保存的原作业上更正老师完成日或交回日')
+            corrected=teacher_days(corrected)
         ident = ident or 'STUDY-' + hashlib.sha256(_json([child_id, day, key]).encode()).hexdigest()[:24]
         with self._db() as c:
             c.execute('BEGIN IMMEDIATE'); child = self._child(c, child_id)
@@ -258,8 +280,14 @@ class Store:
                 if old:
                     if 'task_id' in obj and obj['task_id'] != old['task_id'] or 'title' in obj and obj['title'] != old['title']:
                         raise StudyError('原待办和标题保持不变，请修改原待办或添加另一项功课')
+                    original=json.loads(old['report'] or '{}')
+                    if corrected is not None and not original: raise StudyError('只有补录的原作业可以更正老师日期')
                     c.execute('UPDATE study_items SET subject=?,planned_minutes=?,version=?,last_request_key=?,last_request_hash=? WHERE id=?',
                         (subject, planned, version+1, key, digest, ident))
+                    if corrected is not None:
+                        # The original words stay; each correction keeps the teacher days it replaced.
+                        history=original.get('date_history',[])+[dict({k:original.get(k,'') for k in TEACHER_DAYS},replaced_at=self._now().isoformat(),actor=self.actor)]
+                        c.execute('UPDATE study_items SET report=? WHERE id=?',(_json(dict(original,**corrected,date_history=history)),ident))
                     if old['record_id']:
                         updated = dict(c.execute('SELECT * FROM study_items WHERE id=?', (ident,)).fetchone())
                         self._record(c, updated, child)
