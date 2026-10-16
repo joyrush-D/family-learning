@@ -104,4 +104,66 @@ with tempfile.TemporaryDirectory(prefix='synthetic-oral-dates-') as temporary:
         assert all((x['agenda']['due_on'],x['agenda']['due_kind'])==('2026-09-15','handback') for x in listed if x['id']==ident)
         assert days(blank)==days(legacy)==['2026-09-08'], (days(blank),days(legacy))
         assert family_agenda.visible_on(dict(agenda(only),agenda=dict(agenda(only)['agenda'],complete_on='2026-09-30')),'2026-09-30')
+
+        # Root OD-QA-1: only a teacher complete day, handback unknown. The open task stays listed after that day until a
+        # parent closes it; no handback/deadline is invented from the complete day.
+        complete_only=store.save_item(request(title='语文抄写',report=dict(text='示例原话：10日前完成，交回时间未知',goal='抄写短句',attachments=[],complete_on='2026-09-10',handback_on='')))['saved_item_id']
+        listed=family_agenda.snapshot(app,'2026-09-08','2026-09-20')['agenda']
+        assert days(complete_only)==['2026-09-%02d'%d for d in range(8,21)], days(complete_only)
+        assert all((x['agenda']['complete_on'],x['agenda']['due_on'],x['agenda']['due_kind'])==('2026-09-10','','') for x in listed if x['id']==complete_only)
+        closed=dict(agenda(complete_only),closed=True,closed_on='2026-09-12')
+        assert family_agenda.visible_on(closed,'2026-09-10') and family_agenda.visible_on(closed,'2026-09-12')
+        assert not any(family_agenda.visible_on(closed,'2026-09-%02d'%d) for d in (11,13,14,20))
+        # A blank teacher day still carries nothing forward.
+        assert days(blank)==['2026-09-08']
+
+        # Root OD-QA-2: the generic task form round-trips the displayed teacher handback day as due_on; that copy is not a
+        # second parent deadline, so a later clear/correction of the teacher day reads the same in Today and the calendar.
+        import json
+        def task(ident):
+            with app.connect() as c: return next(t for t in app.tasks(c) if t['id']==ident)
+        def focus_payload(ident, key, **changes):
+            t=task(ident); f=t['focus']
+            return dict(dict(id=ident,version=f['version'],request_key='synthetic-oral-focus-'+key,mode=f['mode'],next_action='先核对原要求',
+                waiting_for=f['waiting_for'],review_on=f['review_on'],category=t['agenda']['category'],published_on=t['agenda']['published_on'],
+                due_on=t['agenda']['due_on'],scheduled_on=t['agenda']['scheduled_on'],box=f['box'],title=t['title'],goal=t['action']),**changes)
+        def same_views(ident, start='2026-09-08', end='2026-09-20'):
+            today=task(ident)['agenda']; calendar=agenda(ident,start,end)['agenda']
+            assert {k:today[k] for k in ('due_on','due_kind','complete_on','scheduled_on')}=={k:calendar[k] for k in ('due_on','due_kind','complete_on','scheduled_on')}, (today,calendar)
+            return today
+        copied=store.save_item(request(title='数学口算第2页',report=dict(text='示例原话：16日交回',goal='口算第2页',attachments=[],complete_on='',handback_on='2026-09-16')))['saved_item_id']
+        payload=focus_payload(copied,'0001')
+        assert payload['due_on']=='2026-09-16'
+        family_task_focus.save(app,payload)
+        m=same_views(copied)
+        assert (m['due_on'],m['due_kind'],m['scheduled_on'])==('2026-09-16','handback','2026-09-08'), m
+        assert task(copied)['focus']['due_on']=='', task(copied)['focus']
+        # Same request replays as a no-op; a stale form version rejects without writes.
+        frozen=task(copied)['focus']
+        assert family_task_focus.save(app,payload)['request_replayed'] and task(copied)['focus']==frozen
+        try: family_task_focus.save(app,dict(payload,request_key='synthetic-oral-focus-0002'))
+        except family_task_focus.FocusError as error: assert (error.status,error.code)==(409,'task_focus_conflict')
+        else: raise AssertionError('stale focus accepted')
+        assert task(copied)['focus']==frozen
+        # Clearing the teacher handback day leaves no deadline anywhere; words, history and plan stay.
+        store.save_item(request(id=copied,version=rows()[copied][2],teacher_dates=dict(handback_on='')))
+        m=same_views(copied)
+        assert (m['due_on'],m['due_kind'],m['complete_on'],m['scheduled_on'])==('','','','2026-09-08'), m
+        report=json.loads(rows()[copied][1])
+        assert (report['handback_on'],report['text'],report['date_history'][-1]['handback_on'])==('','示例原话：16日交回','2026-09-16')
+        listed=family_agenda.snapshot(app,'2026-09-08','2026-09-20')['agenda']
+        assert days(copied)==['2026-09-08'], days(copied)
+        # A later explicit teacher day after the round-trip shows as that teacher day only.
+        store.save_item(request(id=copied,version=rows()[copied][2],teacher_dates=dict(handback_on='2026-09-17')))
+        m=same_views(copied)
+        assert (m['due_on'],m['due_kind'])==('2026-09-17','handback'), m
+        # The parent's own different plan and own different date in the same generic form stay the parent's.
+        planned=store.save_item(request(title='英语听写',report=dict(text='示例原话：16日交回',goal='',attachments=[],complete_on='',handback_on='2026-09-16')))['saved_item_id']
+        family_task_focus.save(app,focus_payload(planned,'0003',scheduled_on='2026-09-09',due_on='2026-09-18'))
+        assert (task(planned)['focus']['scheduled_on'],task(planned)['focus']['due_on'])==('2026-09-09','2026-09-18')
+        m=same_views(planned)
+        assert (m['due_on'],m['due_kind'],m['scheduled_on'])==('2026-09-16','handback','2026-09-09'), m
+        store.save_item(request(id=planned,version=rows()[planned][2],teacher_dates=dict(handback_on='')))
+        m=same_views(planned)
+        assert (m['due_on'],m['scheduled_on'])==('2026-09-18','2026-09-09') and m['due_kind']!='handback', m
 print('test_oral_teacher_dates: ok')
