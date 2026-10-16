@@ -1207,7 +1207,13 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         return self.store.message(dict(child_id='child-1', source_id=self.LATE_SOURCE, message_id=message_id, task_id=task_id),
                                   self.app.upload_info)
 
+    def _late_clock(self, at=dt.datetime(2026, 10, 15, 14, 1, tzinfo=agent.TZ)):
+        """Freeze the system clock read without an argument (apply_school_change's same-day guard) to the case's round."""
+        real = agent._now
+        self.stack.enter_context(patch.object(agent, '_now', lambda value=None: real(value or at)))
+
     def test_late_shared_standard_reaches_each_saved_task_of_its_list(self):
+        self._late_clock()
         first, targets = self._late_first_run()
         before = self._late_tasks(targets)
         with self.store._db() as c:
@@ -1349,7 +1355,21 @@ class SchoolNativeCoverageTests(unittest.TestCase):
                 self.assertEqual((result['failed'], result['processed']), (1, 0))
                 self.assertEqual(held, [], 'nothing of the rejected receipt is saved')
 
+    def test_late_shared_standard_next_system_day_is_refused_and_kept_for_review(self):
+        self._late_clock(dt.datetime(2026, 10, 16, 14, 1, tzinfo=agent.TZ))
+        first, targets = self._late_first_run()
+        before = self._late_tasks(targets)
+        result, ref, seen = self._late_second_run(targets)
+        self.assertEqual((result['failed'], result['processed']), (2, 1), 'each append is refused (409) on another day')
+        self.assertEqual(self._late_tasks(targets), before, 'no task is changed')
+        state = self._late_state()
+        self.assertEqual({t['id'] for t in state['manual_tasks']}, set(targets), 'no third task')
+        appends = {json.loads(r['plan'])['school_task']['target_id']: r for r in state['agent_items'] if ref in r['evidence']}
+        self.assertEqual({t: (r['state'], json.loads(r['plan'])['school_task']['state']) for t, r in appends.items()},
+                         {t: ('pending', 'review') for t in targets})
+
     def test_late_shared_standard_model_failure_writes_nothing_and_retries_the_same_job(self):
+        self._late_clock()
         first, targets = self._late_first_run()
         later = self._late_message('12', '2026-10-15T14:01:00+08:00', self.LATE_STANDARD)
         self._late_ingest('11', [later], later['time'])
