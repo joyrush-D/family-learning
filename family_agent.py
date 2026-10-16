@@ -3472,8 +3472,8 @@ def _school_native_change_target(text,actions):
     if bare:
         # "口算改成6道": a bare object word naming no title, page, sheet or question binds only the one outcome whose own original has it.
         if not re.fullmatch('[一-鿿]{2,6}',bare) or named or sheets or pages or questions:return None
-        owners=[a for a in actions if bare in a['primary'] and (not subjects or subjects=={a['subject']})]
-        return owners[0] if len(owners)==1 else None
+        owners=[a for a in actions if any(bare in own for own in [a['quote'],a['primary']]+a.get('conditions',[]))]
+        return owners[0] if len(owners)==1 and (not subjects or subjects=={owners[0]['subject']}) else None
     if not (named or sheets or pages or subjects or questions):return None
     owners=[]
     for action in actions:
