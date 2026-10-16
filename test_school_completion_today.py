@@ -10,6 +10,7 @@ import unittest
 
 import family_agenda
 import family_agent as agent
+import family_task_focus
 import test_school_native_coverage as native
 
 MESSAGES = [  # (time, publisher, sender, text, related)
@@ -325,6 +326,84 @@ def saved_h01_state(path):
             json.dump(state, f, ensure_ascii=False, default=str)
     finally:
         case.doCleanups()
+
+
+T08 = ('2026-10-16T18:10:00+08:00',
+       '更正：《秋日观察》第2页摘录改为2026年10月21日早读交回语文老师；摘录仍须2026年10月18日20:00前完成，摘录两句、每句写一句理由的要求不变。')
+T08_GOAL = '语文：2026年10月18日20:00前完成《秋日观察》第2页，摘录两句，每句写一句理由；2026年10月21日早读交回语文老师。'
+T08_STANDARDS = ('《秋日观察》第2页', '摘录两句', '每句写一句理由', '20:00前', '早读交回')
+
+
+class ConfirmedSchoolHandbackCorrectionTests(unittest.TestCase):
+    """Original T08: a parent-confirmed same-task teacher handback correction is the school's change, not a parent's plan."""
+    setUp = native.SchoolNativeCoverageTests.setUp
+    _save_h01 = ExplicitOwnCompletionDayStoreTests._save_h01
+
+    def _agenda(self, task_id):
+        with self.app.connect() as c:
+            return [(t['agenda']['complete_on'], t['agenda']['due_on']) for t in self.app.tasks(c) if t['id'] == task_id]
+
+    def _roles(self, task_id, day):
+        return [(x['agenda']['complete_on'], x['agenda']['due_on'])
+                for x in self.app.calendar_snapshot(day, day)['agenda'] if x['task_id'] == task_id]
+
+    def _confirm_t08(self):
+        _, task = self._save_h01()
+        payload = self.fixture.payload(cursor='12')
+        payload['messages'] = [dict(id='12', message_order='12', time=T08[0], kind='text', sender=H01[2], sender_id=H01[1],
+                                    text=T08[1], unread=False)]
+        self.store.ingest(payload)
+        reply = dict(proposals=[dict(title_quote=T08[1], focus='school', due='2026-10-21', evidence=[dict(ref='message:' + self.source['id'] + ':12')],
+                                     learning_subject='语文', learning_goal_id='', task_title='语文：完成《秋日观察》第2页摘录', task_goal=T08_GOAL,
+                                     task_advice='', task_change='update', task_target_id=task['id'], task_state='ready',
+                                     task_reason='全虚构固定更正回执。', task_purpose='learning', task_submission='')])
+        self.model.side_effect = lambda *args, **kwargs: copy.deepcopy(reply)
+        result = agent.run_once(self.app, self.now + dt.timedelta(minutes=10))
+        self.assertEqual(result['failed'], 0, result)
+        with self.store._db() as c:
+            pending = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='pending'")]
+        self.assertEqual(len(pending), 1, pending)
+        # The natural run only proposes the correction; the saved task keeps its original roles until a parent confirms.
+        self.assertEqual(self._agenda(task['id']), [('2026-10-18', '2026-10-20')])
+        request = dict(action='school_change', id=pending[0]['id'], target_id=task['id'], change='update', title='语文：完成《秋日观察》第2页摘录',
+                       body=T08_GOAL, due='2026-10-21', expected_updated=pending[0]['updated'], target_version=0, target_updated='')
+        first = agent.apply_school_change(self.app, self.store, copy.deepcopy(request), school_auto=False)
+        again = agent.apply_school_change(self.app, self.store, copy.deepcopy(request), school_auto=False)
+        self.assertEqual((first['state'], first['replayed'], again['state'], again['replayed']), ('accepted', False, 'accepted', True))
+        return task
+
+    def test_confirmed_handback_correction_keeps_the_own_completion_day_on_the_same_task_after_replay_and_reopen(self):
+        task = self._confirm_t08()
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=16))
+        self.assertEqual((replay['failed'], replay['created']), (0, 0))
+        reopened = agent.Store(self.app.connect, self.app.profiles, self.app.DATA, initialize=False)
+        self.assertIsNotNone(reopened)
+        with self.app.connect() as c:
+            saved = self.app.tasks(c)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0], 0)
+        self.assertEqual([t['id'] for t in saved], [task['id']])
+        self.assertEqual((saved[0]['agenda']['complete_on'], saved[0]['agenda']['due_on'], saved[0]['focus']['version']), ('2026-10-18', '2026-10-21', 1))
+        self.assertTrue(all(s in saved[0]['action'] for s in T08_STANDARDS), saved[0]['action'])
+        self.assertEqual(saved[0]['original_action'], task['action'])
+        for text in (H01[3], T08[1], ':11', ':12'):
+            self.assertIn(text, saved[0]['source'])
+        for day in ('2026-10-18', '2026-10-21'):
+            self.assertEqual(self._roles(task['id'], day), [('2026-10-18', '2026-10-21')], (day, 'one ID counted once with its own roles'))
+
+    def test_a_later_parent_edit_after_the_confirmed_correction_still_comes_first(self):
+        task = self._confirm_t08()
+        with self.app.connect() as c:
+            focus = next(t for t in self.app.tasks(c) if t['id'] == task['id'])['focus']
+        family_task_focus.save(self.app, dict({k: focus[k] for k in ('mode', 'waiting_for', 'review_on')}, id=task['id'], version=focus['version'],
+                                              request_key='parent-note-t08-0001', next_action='先读第2页'))
+        self.assertEqual(self._agenda(task['id']), [('', '2026-10-21')])
+
+    def test_a_parent_plan_under_a_school_change_shaped_key_is_still_the_parent_choice(self):
+        _, task = self._save_h01()
+        family_task_focus.save(self.app, dict(id=task['id'], version=0, request_key='school-change-' + agent._hash('agent-forged')[:32], mode='next',
+                                              next_action='', waiting_for='', review_on='', category='homework', published_on='2026-10-16',
+                                              due_on='2026-10-21'))
+        self.assertEqual(self._agenda(task['id']), [('', '2026-10-21')])
 
 
 if __name__ == '__main__':
