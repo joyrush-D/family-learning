@@ -2422,7 +2422,7 @@ PY
 
 ## 模型配置与故障
 
-后台支持Chat Completions与Responses接口，要求支持所用任务的图片及严格JSON Schema。Chat Completions填写API基础地址，Responses填写以`/responses`结尾的完整接口地址。家庭设置支持保存私有`private/model.json`；也可在服务器环境设置`FAMILY_LLM_BASE_URL`和`FAMILY_LLM_MODEL`，需要鉴权时设置`FAMILY_LLM_API_KEY`。已有环境配置优先且不能在网页覆盖。可选`FAMILY_LLM_LIGHT_MODEL`仅供文字学校通知筛选，与默认模型共用服务和密钥；留空继续单模型。可选`FAMILY_LLM_REASONING_EFFORT`只在两个模型均支持时设置，不同服务能力不能由接口名称推定。密钥不在网页响应中回显或写入公开仓库。
+后台支持Chat Completions与Responses接口，要求支持所用任务的图片及严格JSON Schema。Chat Completions填写API基础地址，Responses填写以`/responses`结尾的完整接口地址。家庭设置支持保存私有`private/model.json`；也可在服务器环境设置`FAMILY_LLM_BASE_URL`和`FAMILY_LLM_MODEL`，需要鉴权时设置`FAMILY_LLM_API_KEY`。已有环境配置优先且不能在网页覆盖。可选`FAMILY_LLM_LIGHT_MODEL`仅供文字学校通知筛选，与默认模型共用服务和密钥；留空继续单模型。可选`FAMILY_LLM_REASONING_EFFORT`只在两个模型均支持时设置，不同服务能力不能由接口名称推定。可选`FAMILY_LLM_LIGHT_REASONING_EFFORT`（私有配置键`light_reasoning_effort`，值域同全局）只在本次请求实际选中已配置轻模型时替换全局推理参数（显式`none`照发）；缺省或空继承全局，默认模型、图片等回退及其它任务始终用全局值，与两个模型名是否相同无关。它属于整套环境配置，只设它而缺地址/模型时如实显示不完整，不混用私有文件；网页没有新增控件，保存其它字段时保留已存值。本项仅为源码候选，未更换正式模型或家庭配置。密钥不在网页响应中回显或写入公开仓库。
 
 `model.json`与`model.env`均为机器专属模型配置，不进入家庭数据备份；本次恢复后已重新配置并通过真实固定合成文字调用。换机器或恢复家庭备份后仍需重新配置模型。资料、孩子和学习记录的恢复不依赖这些密钥。
 

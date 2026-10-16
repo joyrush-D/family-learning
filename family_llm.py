@@ -103,9 +103,13 @@ class NoRedirect(HTTPRedirectHandler):
 
 MODEL_ENV={'base_url':'FAMILY_LLM_BASE_URL','model':'FAMILY_LLM_MODEL',
            'light_model':'FAMILY_LLM_LIGHT_MODEL','api_key':'FAMILY_LLM_API_KEY',
-           'reasoning_effort':'FAMILY_LLM_REASONING_EFFORT'}
+           'reasoning_effort':'FAMILY_LLM_REASONING_EFFORT',
+           'light_reasoning_effort':'FAMILY_LLM_LIGHT_REASONING_EFFORT'}
 MODEL_FILE_KEYS={'base_url','model','light_model','api_key','reasoning_effort'}
 LEGACY_MODEL_FILE_KEYS=MODEL_FILE_KEYS-{'light_model'}
+# The light effort is one optional key on either saved shape; missing or empty inherits reasoning_effort.
+MODEL_FILE_SHAPES=(LEGACY_MODEL_FILE_KEYS,MODEL_FILE_KEYS,LEGACY_MODEL_FILE_KEYS|{'light_reasoning_effort'},MODEL_FILE_KEYS|{'light_reasoning_effort'})
+REASONING_EFFORTS=('none','minimal','low','medium','high','xhigh','max')
 LIGHT_TASKS={'family_agent_selection','family_light_connection_test'}
 LEDGER_TABLE='llm_usage_ledger'
 
@@ -123,9 +127,10 @@ def model_values(data_path=None):
     try:
         if path.is_symlink() or path.stat().st_size>16384: raise ValueError()
         obj=json.loads(path.read_text())
-        if not isinstance(obj,dict) or set(obj) not in (LEGACY_MODEL_FILE_KEYS,MODEL_FILE_KEYS): raise ValueError()
+        if not isinstance(obj,dict) or set(obj) not in MODEL_FILE_SHAPES: raise ValueError()
         if any(not isinstance(value,str) or len(value)>4096 or any(ord(ch)<32 or ord(ch)==127 for ch in value) for value in obj.values()): raise ValueError()
         obj.setdefault('light_model','')
+        obj.setdefault('light_reasoning_effort','')
         validate_model(obj,allow_empty=True)
         return {**obj,'origin':'file'}
     except (OSError,ValueError,TypeError):
@@ -134,7 +139,7 @@ def model_values(data_path=None):
 
 def validate_model(config,allow_empty=False):
     if not isinstance(config,dict): raise LLMUnavailable('模型服务配置不正确，请检查后台配置')
-    limits={'base_url':2000,'model':200,'light_model':200,'api_key':4096,'reasoning_effort':200}
+    limits={'base_url':2000,'model':200,'light_model':200,'api_key':4096,'reasoning_effort':200,'light_reasoning_effort':200}
     values={key:config.get(key,'') for key in limits}
     if any(not isinstance(value,str) or len(value)>limits[key] or any(ord(char)<32 or ord(char)==127 for char in value)
            for key,value in values.items()):
@@ -147,7 +152,7 @@ def validate_model(config,allow_empty=False):
         parsed=urlsplit(base)
         if parsed.scheme not in ('http','https') or not parsed.hostname or parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment or parsed.port==0:
             raise ValueError()
-        if values['reasoning_effort'] not in ('','none','minimal','low','medium','high','xhigh','max'): raise ValueError()
+        if any(values[key] not in ('',*REASONING_EFFORTS) for key in ('reasoning_effort','light_reasoning_effort')): raise ValueError()
     except ValueError:
         raise LLMUnavailable('模型服务配置不正确，请检查后台配置') from None
     return (base if parsed.path.rstrip('/').endswith('/responses') else
@@ -617,12 +622,14 @@ def _chat_json(messages,schema,name,timeout=60,*,data_path=None):
     config=model_values(data_path)
     endpoint,model=validate_model(config)
     light=config.get('light_model','').strip()
+    # The light effort follows the light role actually chosen here, never a model name match.
+    light_selected=False
     if name=='family_light_connection_test':
         if not light or not _light_request(name,messages):
             raise LLMUnavailable('轻模型未配置，无法检查轻模型连接')
-        model=light
+        model=light;light_selected=True
     elif _light_request(name,messages) and light:
-        model=light
+        model=light;light_selected=True
     # 错题图片标注每页最多30个区域并转写题面，3000输出token会截断整批草稿。
     output_tokens = 6000 if name in ('family_agent_selection', 'family_wrong_questions_annotate', 'family_homework_reference') else 3000
     output_name={'family_learning_answer':'回答','family_reading_feedback':'反馈','family_guided_hint':'提示'}.get(name,'草稿')
@@ -652,8 +659,10 @@ def _chat_json(messages,schema,name,timeout=60,*,data_path=None):
         body=dict(model=model,input=inputs,text=dict(format=dict(type='json_schema',name=name,strict=True,schema=schema)),
                   temperature=0,max_output_tokens=output_tokens,stream=False,store=False)
     effort=config['reasoning_effort']
+    if light_selected and config.get('light_reasoning_effort',''):
+        effort=config['light_reasoning_effort']
     if effort:
-        if effort not in ('none','minimal','low','medium','high','xhigh','max'):
+        if effort not in REASONING_EFFORTS:
             raise LLMUnavailable('模型推理参数配置不正确，请检查后台配置')
         if responses: body['reasoning']=dict(effort=effort)
         else: body['reasoning_effort']=effort
