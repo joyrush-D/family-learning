@@ -275,6 +275,18 @@ class SchoolNativeCoverageTests(unittest.TestCase):
                     self.assertFalse(any('不用交订正本' in t['action'] for t in tasks), 'the parent relay stays reference')
                 self.doCleanups()
 
+    def test_a_bare_correction_word_binds_only_the_one_outcome_whose_original_has_it(self):
+        text = '数学：2026年10月17日21:00前订正《小数运算练习》第2页第3、5、7题，每题写出正确过程并写一句错因；订正本2026年10月18日第一节课前交给数学课代表；2026年10月18日数学课前独立完成10道两位小数加减口算，写在口算本上。'
+        actions = agent._school_native_actions([dict(ref='message:m4-math:1', text=text, time='2026-10-16T17:00:00+08:00', kind='text',
+                                                     publisher='publisher:m4-math', content_incomplete=False, attachments=[], unread=False)])
+        self.assertEqual(len(actions), 2)
+        owner = agent._school_native_change_target('口算改成6道', actions)
+        self.assertTrue(owner and '口算' in owner['primary'] and '小数运算练习' not in owner['primary'])
+        # A word both outcomes contain, one no outcome has, another subject, or a page or question binds nothing.
+        for clause in ('课前改成课后', '听写改成6道', '语文口算改成6道', '口算第3题改成6道', '口算本第2页改成第3页'):
+            with self.subTest(clause=clause):
+                self.assertIsNone(agent._school_native_change_target(clause, actions))
+
     def test_a_same_second_correction_binds_only_a_known_later_order_from_the_same_teacher(self):
         oral_quote = '2026年10月18日数学课前独立完成10道两位小数加减口算，写在口算本上'
         cases = (('another teacher', dict(corrector='synthetic-teacher-3')),
