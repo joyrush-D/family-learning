@@ -1715,7 +1715,7 @@ class Store:
         with self._db() as c:
             c.execute('INSERT OR REPLACE INTO agent_runtime(id,state,last_run,last_error) VALUES(1,?,?,?)', (state, now.isoformat(), error))
 
-    def _job(self, key, value, now, *, model=False):
+    def _job(self, key, value, now, *, model=False, keep_budget=False):
         fingerprint = _hash(value)
         with self._db() as c:
             c.execute('BEGIN IMMEDIATE')
@@ -1723,6 +1723,12 @@ class Store:
             if row and row['fingerprint'] == fingerprint:
                 if row['done'] or (model and row['attempts'] >= MAX_ATTEMPTS) or row['next_try'] > now.isoformat(): return None
                 if model: c.execute('UPDATE agent_jobs SET attempts=attempts+1 WHERE id=?', (key,))
+                return fingerprint
+            if keep_budget and row and not row['done']:
+                # A recovery identity keeps its attempts, backoff and error history under any later request: only the
+                # existing explicit retry renews it, never a changed fingerprint.
+                if (model and row['attempts'] >= MAX_ATTEMPTS) or row['next_try'] > now.isoformat(): return None
+                c.execute('UPDATE agent_jobs SET fingerprint=?,attempts=attempts+? WHERE id=?', (fingerprint, int(model), key))
                 return fingerprint
             c.execute('INSERT OR REPLACE INTO agent_jobs(id,fingerprint,attempts) VALUES(?,?,?)', (key, fingerprint, int(model)))
         return fingerprint
@@ -5380,7 +5386,10 @@ def _refresh_school(app, store, now, budget):
                          school_tasks=targets,learning_goals=school_goals)
             value=dict(policy=SCHOOL_TASK_POLICY,candidate=candidate,child_id=row['child_id'],evidence=evidence,plan=row['plan'],updated=row['updated'])
             if legacy_correction:value['legacy_correction_scope']=legacy_correction['scope']
-            if saved_reread:value['saved_reread']=saved_reread  # stable while the item is untouched: same job, same attempts
+            if saved_reread:
+                # The budget proof is the untouched row and originals only; source display names, config and request
+                # text are not part of it, so they cannot renew the same item's attempts.
+                value=dict(policy=SCHOOL_TASK_POLICY,item=row['id'],child_id=row['child_id'],saved_reread=saved_reread)
             if page_evidence:
                 value['pages']=page_key
                 context.update(pages=page_evidence['model_pages'],unread_links=page_evidence['unread']+page_evidence['omitted'])
@@ -5447,7 +5456,7 @@ def _refresh_school(app, store, now, budget):
                 context['pdf_material']=[dict(doc,requirements_in='original_parts' if original_parts else 'complete_action_requirements',
                     groups=[{k:v for k,v in group.items() if k!='requirements'} for group in doc['groups']])
                     for doc in pdf_evidence['model']]
-            key='school-task:'+row['id'];fp=store._job(key,value,now,model=reference is None)
+            key='school-task:'+row['id'];fp=store._job(key,value,now,model=reference is None,keep_budget=bool(saved_reread))
             if not fp: continue
             paged+=bool(page_changed or pdf_changed or material_changed or original_changed or saved_reread)
             try:
@@ -5487,9 +5496,16 @@ def _refresh_school(app, store, now, budget):
                     if not isinstance(result,dict) or set(result) != set(TASK_BRIEF_SCHEMA['required']): raise AgentError('学校事项结构无法核对')
                     if result['purpose'] not in PURPOSES: raise AgentError('学校事项用途无法核对')
                     if compiled_requirements is not None: result=_school_requirement_goal(result,compiled_requirements)
+                    if saved_reread:
+                        # A reread decides again but never rewrites its originals: any day it states must be the one day
+                        # they prove, and the goal carries their complete requirements through the shared compilation.
+                        import family_agenda
+                        stated=set().union(*(family_agenda.deadlines(result[field],family_agenda.sent_day(e.get('time'))) for field in ('title','goal') for e in evidence))
+                        if stated-{row['due']}: raise AgentError('重新理解的日期与原消息不一致，原内容与日期保留')
+                        result=_school_requirement_goal(result,[e['text'] for e in evidence])
                     learning=_school_learning(result,school_goals)
                     brief=_school_brief(result,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in evidence),evidence=evidence,school_tasks=targets,pages=page_evidence,pdf=pdf_evidence,material=material,
-                        separate_learning=compiled_requirements is not None)
+                        separate_learning=compiled_requirements is not None or bool(saved_reread))
                 if page_evidence: brief.setdefault('page_evidence',dict(fingerprint=page_key,read=page_evidence['read'],unread=page_evidence['unread'],omitted=page_evidence['omitted']))['candidate']=candidate
                 if pdf_evidence: brief.setdefault('pdf_evidence',dict(fingerprint=pdf_key,documents=pdf_evidence['documents']))['candidate']=candidate
                 if material: brief.setdefault('material_evidence',dict(fingerprint=material_key))
