@@ -116,6 +116,7 @@
 !/test_school_ack_originals.py
 !/test_school_native_coverage.py
 !/test_school_completion_today.py
+!/test_school_completion_today_ui.cjs
 !/test_school_ack_originals_ui.cjs
 !/test_school_frozen_workflow_ui.cjs
 !/test_school_history.py
