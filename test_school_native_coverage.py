@@ -106,6 +106,68 @@ class SchoolNativeCoverageTests(unittest.TestCase):
             self.assertEqual(job['next_try'], (self.now + dt.timedelta(minutes=5)).isoformat())
             self.assertEqual(c.execute('SELECT cursor FROM agent_sources').fetchone()[0], payload['cursor'])
 
+    def _excerpt_batch(self, due, correction_publisher='synthetic-teacher-1'):
+        texts = ['语文：2026年10月18日20:00前完成《河岸随记》的阅读摘记，摘录两句并各写一句选择理由；摘记本2026年10月19日早读交给语文课代表；2026年10月19日早读默写《山行》全文。',
+                 '更正：摘记本改为2026年10月20日早读交给语文课代表；摘记仍须2026年10月18日20:00前完成；《山行》默写安排不变。',
+                 '家长问：摘记本是不是只交一本？活动回执有没有电子版？']
+        payload, refs = self._ingest(texts, ['synthetic-teacher-1', correction_publisher, 'synthetic-parent-1'])
+        excerpt = fixtures.school_proposal(
+            title_quote='语文：2026年10月18日20:00前完成《河岸随记》的阅读摘记，摘录两句并各写一句选择理由；摘记本2026年10月19日早读交给语文课代表；',
+            due=due, evidence=[dict(ref=refs[0]), dict(ref=refs[1])], learning_subject='语文', task_title='语文：完成《河岸随记》阅读摘记',
+            task_goal='2026年10月18日20:00前完成《河岸随记》的阅读摘记。\n摘录两句，并各写一句选择理由。\n摘记本于2026年10月20日早读交给语文课代表（原为10月19日早读，已更正）。',
+            task_state='ready', task_reason='虚构回执：完成时间与更正后的交回时间。', task_purpose='learning',
+            task_submission='摘记本于2026年10月20日早读交给语文课代表。')
+        dictation = fixtures.school_proposal(
+            title_quote='2026年10月19日早读默写《山行》全文。', due='2026-10-19', evidence=[dict(ref=refs[0]), dict(ref=refs[1])],
+            learning_subject='语文', task_title='语文：早读默写《山行》全文', task_goal='2026年10月19日早读默写《山行》全文。\n《山行》默写安排不变。',
+            task_state='ready', task_reason='虚构回执。', task_purpose='learning')
+        question = fixtures.school_proposal(
+            title_quote=texts[2], evidence=[dict(ref=refs[2])], task_state='reference', task_purpose='optional',
+            task_reason='虚构回执：家长个人询问，不是老师要求。')
+        return payload, refs, [excerpt, dictation, question]
+
+    def test_corrected_handback_day_saves_one_excerpt_task_with_its_completion_time(self):
+        payload, refs, replies = self._excerpt_batch('2026-10-20')
+        self._use_replies(payload, [dict(proposals=replies)])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 3))
+        with self.store._db() as c:
+            saved = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+            excerpt, = [r for r in saved if '河岸随记' in r['title']]
+            self.assertEqual((excerpt['due'], excerpt['state']), ('2026-10-20', 'accepted'))
+            for words in ('2026年10月18日20:00前完成', '摘录两句', '各写一句选择理由', '2026年10月20日早读交给语文课代表'):
+                self.assertIn(words, excerpt['body'])
+            self.assertEqual([e['ref'] for e in json.loads(excerpt['evidence'])], refs[:2])
+            dictation, = [r for r in saved if '山行' in r['title']]
+            self.assertEqual(dictation['due'], '2026-10-19', 'the dictation never borrows the corrected handback day')
+            question = [r for r in saved if r['evidence'] and refs[2] in r['evidence']]
+            self.assertTrue(question and all(json.loads(r['plan'])['school_task']['state'] == 'reference' and not r['task_id']
+                                             for r in question), 'the parent question stays reference, never a todo')
+            tasks = [dict(r) for r in c.execute('SELECT * FROM manual_tasks')]
+            self.assertEqual(sorted(t['due'] for t in tasks), ['2026-10-19', '2026-10-20'])
+            self.assertFalse(any('只交一本' in t['action'] for t in tasks))
+            rows = [tuple(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['processed'], replay['created']), (0, 0))
+        with self.store._db() as c:
+            self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')], rows, 'no second excerpt task')
+
+    def test_old_completion_day_or_another_teachers_correction_keeps_the_excerpt_unconfirmed(self):
+        payload, refs, original = self._excerpt_batch('')
+        for due, publisher in (('2026-10-18', 't1'), ('2026-10-19', 't1'), ('2026-10-20', 't2')):
+            with self.subTest(due=due, publisher=publisher):
+                replies = copy.deepcopy(original);replies[0]['due'] = due
+                with patch.object(agent.family_llm, '_chat_json', return_value=dict(proposals=replies)):
+                    evidence = [dict(ref=r, text=m['text'], time=m['time'], kind='text', publisher='publisher:' + p,
+                                     content_incomplete=False, attachments=[], unread=False)
+                                for r, m, p in zip(refs, payload['messages'], ['t1', publisher, 'p1'])]
+                    items = agent._select('school', evidence, school_goals=[], school_tasks=[], as_of='2026-10-05')
+                excerpt, = [i for i in items if '河岸随记' in i['title']]
+                self.assertEqual((excerpt['due'], excerpt['plan']['school_task']['state']), ('', 'review'),
+                                 'a wrong or unowned day is neither kept nor rewritten to the corrected day')
+                question, = [i for i in items if i['evidence'][0]['ref'] == refs[2]]
+                self.assertEqual(question['plan']['school_task']['state'], 'reference')
+
     def test_missing_second_action_and_supplement_keeps_batch_retryable(self):
         payload, refs, reading, exercise = self._two_actions()
         # Both message refs are present, so the old ref-only coverage guard
