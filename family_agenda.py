@@ -377,23 +377,32 @@ def completion_day(quote,header,time,due_on):
 
     今天/今日/今晚 counts only when it opens the item's own work clause (今晚把Unit 3单词每个抄写两遍，明天交), or is its own
     list heading (今天语文作业：1. 背诵《秋夜》第2自然段，明天早读抽查) while its own words check/hand it back 明天, read on its
-    own message's sending day in that message's own written timezone. A time without an offset, a heading item with a later
-    deadline of its own (本周五交), a day inside a 《》 title, or only a handback day (口算本第8页全部完成，明天交给课代表) stays
-    unknown; due_on is never rewritten.
+    own message's sending day in that message's own written timezone. Otherwise the one day that same first work clause ties
+    to its own work by the deadline parse (语文：2026年10月18日20:00前完成…；2026年10月20日早读交回) is its day. A time without
+    an offset, a heading item with a later deadline of its own (本周五交), a day inside a 《》 title, a second or handback day
+    in the work clause, a negated clause, or only a handback day (口算本第8页全部完成，明天交给课代表) stays unknown; due_on
+    is never rewritten.
     """
     stamp=(time or '').strip()
     if not quote or not re.search(r'(?:[+-]\d{2}:?\d{2}|Z)$',stamp):return ''
     try:sent=dt.datetime.fromisoformat(stamp.replace('Z','+00:00')).date()
     except ValueError:return ''
     words=_titles_read_as_objects(quote).strip()
+    # The item's own subject label (语文：) names it; its work clause starts after it.
+    if (header or '').strip():words=re.sub(r'^'+re.escape(header.strip())+r'\s*[：:]\s*','',words)
     first,_,rest=(re.split(r'([，,。；;\n])',words,maxsplit=1)+['',''])[:3]
     lead=re.match(r'(今天|今日|今晚)',first)
     work=first[lead.end():] if lead else first
-    if not re.search(_COMPLETION_VERB,work) or re.search(_DAY_WORDS,work):return ''
-    if not lead and not (re.fullmatch(r'\s*(?:今天|今日|今晚)的?[^，,。；;\n\d]{0,8}?作业\s*[：:]?\s*',header or '')
-                         and re.match(r'\s*(?:明天|明日|明早)',rest) and not re.search(_DAY_WORDS,re.sub(r'^\s*(?:明天|明日|明早)','',rest))):
-        return ''
+    if not re.search(_COMPLETION_VERB,work) or re.search(r'不用|不必|无需|无须|不需要?|不要求',work):return ''
     day=sent.isoformat()
+    if lead or (re.fullmatch(r'\s*(?:今天|今日|今晚)的?[^，,。；;\n\d]{0,8}?作业\s*[：:]?\s*',header or '')
+                and re.match(r'\s*(?:明天|明日|明早)',rest) and not re.search(_DAY_WORDS,re.sub(r'^\s*(?:明天|明日|明早)','',rest))):
+        if re.search(_DAY_WORDS,work):return ''
+    else:
+        grounded=_relative_weekday(_grounded_text(first,day),day)
+        days=_action_deadlines(first,day)
+        if len(days)!=1 or len(re.findall(_DAY_WORDS+r'|\d{1,2}\s*[日号]',grounded))!=1 or re.search(r'交|带',work):return ''
+        day=next(iter(days))
     return day if not due_on or due_on>day else ''
 
 
