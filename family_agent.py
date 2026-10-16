@@ -177,6 +177,14 @@ _LEARNING_ADMIN_FORM = r'(?:活动)?(?:回执|登记表|报名表|同意书|确�
 # name the form, not an outcome. Only a name the original itself closes counts, so a reply's title or summary
 # cannot add one; words outside it, an unclosed or clause-crossing name and any other title stay guarded.
 _LEARNING_FORM_TITLE = re.compile(r'《[^《》。；;，,！!？?\n]{0,38}?'+_LEARNING_ADMIN_FORM+r'》')
+# The original may instead prove a closed name is the form being filled, whatever its last noun: one clause writes
+# 在《…》上填写 or 填写《…》的 followed only by identity, contact or count fields up to the clause end
+# (在《听写背诵订正材料领取登记单》上填写学生姓名和领取份数，). A negated clause, a clause inside another title, any
+# other field (答案, 阅读页数) and every word outside the name stay guarded.
+_LEARNING_FILL_FIELD = r'(?:学生|孩子|家长|领取)?(?:姓名|班级|学号|联系方式|联系电话|电话|份数)'
+_LEARNING_FILLED_TITLE = re.compile(
+    r'(?:在\s*(《[^《》。；;，,！!？?\n]{1,38}》)\s*(?:上|中)\s*(?:填写|登记)|(?:填写|登记)\s*(《[^《》。；;，,！!？?\n]{1,38}》)\s*(?:上|中)?的)\s*'
+    +_LEARNING_FILL_FIELD+r'(?:\s*(?:、|和|及|与|以及)\s*'+_LEARNING_FILL_FIELD+r')*(?=\s*(?:[。；;，,！!？?\n]|$))')
 _LEARNING_FORM_DENIES_COMPOUND = re.compile(
     r'((?:^|[。；;！!\n])\s*(?:(?:该|此|这|本)(?:份|张)?'+_LEARNING_ADMIN_FORM+
     r'|这是[^。；;，,！？!?\n“”"「」（）()不否吗呢吧]{0,12}?'+_LEARNING_ADMIN_FORM+r'\s*[，,])\s*)'
@@ -195,9 +203,20 @@ _LEARNING_NEGATED_ACTION = re.compile(
     r'(?=\s*(?:[。；;，,！？!?\n）)]|$))')
 
 
+def _learning_form_names(texts):
+    from family_agenda import _in_title
+    names=set()
+    for t in texts:
+        names|={m[0] for m in _LEARNING_FORM_TITLE.finditer(t)}
+        for m in _LEARNING_FILLED_TITLE.finditer(t):
+            clause=re.split(r'[。；;，,！!？?\n]',t[:m.start()])[-1]
+            if not _in_title(t,m.start()) and not re.search(r'不|无需|无须|勿|未|没|免',clause):names.add(m[1] or m[2])
+    return names
+
+
 def _school_learning_text(parts, originals=None):
     from family_agenda import _titles_read_as_objects
-    names={m[0] for t in (parts if originals is None else originals) for m in _LEARNING_FORM_TITLE.finditer(t)}
+    names=_learning_form_names(parts if originals is None else originals)
     checked=[]
     for part in parts:
         text=_URL.sub('',part)
