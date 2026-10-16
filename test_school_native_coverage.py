@@ -2157,14 +2157,16 @@ class SchoolActionAnchorTests(unittest.TestCase):
                     self.assertEqual(agent._school_corrected_quote(original, evidence[0], [evidence[0], evidence[2]]) != original, proven)
 
     def test_frozen_a_chronology_variants_save_only_a_proven_correction_through_ingest_reopen_and_replay(self):
-        for case in self._A_SAVED:
-            change, proven = self._A_CHRONOLOGY[case]
+        # The strictly later T00 times whose teacher messages carry no sender_id: the collector hashes no publisher, so no one.
+        cases = [(case, *self._A_CHRONOLOGY[case], False) for case in self._A_SAVED] + [('T00-without-sender-ids', dict(), False, True)]
+        for case, change, proven, anonymous in cases:
             with self.subTest(case):
                 self.setUp()
                 self.fixture.source['id'] = 'p1-heldout-a';self.fixture.config()
                 stamp = '2026-10-16T17:20:00+08:00'
                 messages = [dict(id=n, time=time, kind='text', sender=sender, sender_id=publisher, text=text, unread=False)
                             for n, time, publisher, sender, text in self._A_MESSAGES]
+                for message in (messages[0], messages[2]) if anonymous else ():message.pop('sender_id')
                 if change.get('time'):messages[2]['time'] = change['time']
                 for message, order in zip((messages[0], messages[2]), change.get('orders', (None, None))):
                     if order is not None:message['message_order'] = order
