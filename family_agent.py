@@ -2794,6 +2794,11 @@ def _school_saved_reread(store,c,row,evidence,now):
     if any(plan.get(k) for k in ('school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id',
                                  'approved','school_original_action','school_first_batch_correction','school_previous_policy','school_learning')):return None
     if not evidence or brief.get('origin_basis')!=_school_message_basis(evidence):return None
+    # The reread saves the complete original text as one goal. Originals with more than one clause carrying its own
+    # deadline may hold separate forms or outcomes, so they stay for review instead of being merged into one task.
+    from family_agenda import deadlines,sent_day
+    dated=[v for e in evidence for v in re.split(r'[。；\n]+',e.get('text','')) if v.strip() and deadlines(v,sent_day(e.get('time','')))]
+    if len(dated)>1:return None
     # Positive proof that only an older rule held it: today's guards read the very same saved receipt as ready.
     # A review the current rules also hold is not reread, so a fresh review never earns a second call.
     raw=plan.get('school_selection_receipt')
