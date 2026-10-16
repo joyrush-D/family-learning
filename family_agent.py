@@ -2391,6 +2391,8 @@ def _school_corrected_quote(quote,home,cited):
     apart from the day and the change word. Another publisher, a clause naming other work or keeping no day of its own
     (《山行》默写安排不变), and a relative day that reads differently on the two sending days change nothing.
     The same teacher is a positive identity: an empty or missing publisher proves no one, so it corrects nothing.
+    Only a message _school_native_later_text proves later in the same source corrects: an equal time with no, equal or
+    reversed collector order, an earlier time or another source keeps the original day.
     A 《》 title keeps its own words as the object's name (_titles_read_as_objects): its days and verbs are neither removed
     nor read, so 《10月20日课堂摘记》 is not 《10月18日课堂摘记》 and 《改为实操指南》 holds no change word.
     """
@@ -2401,9 +2403,8 @@ def _school_corrected_quote(quote,home,cited):
         for span in reversed(spans):clause=clause[:span.start()]+clause[span.end():]
         return clause
     bare=lambda clause:cut(clause,r'(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*[日号]?|\d{4}-\d{2}-\d{2}').strip()
-    if not home.get('publisher'):return quote
     for entry in cited:
-        if entry is home or entry.get('publisher')!=home.get('publisher') or entry.get('time','')<home.get('time',''):continue
+        if not _school_native_later_text(home,entry):continue
         for fix in re.split(r'[。；;\n]',entry['text']):
             fix=re.sub(r'^(?:'+_SCHOOL_NATIVE_FILLER+r')+','',fix.strip())
             if not re.search(r'改为|改到|改至',_titles_read_as_objects(fix)):continue
@@ -3464,16 +3465,19 @@ def _school_native_later_text(entry,later):
     """A complete text message strictly after this list, from the same publisher and source.
 
     Within one stored second only the collector's own message_order of both originals orders them; a numeric id or ref tail
-    proves no order, and an unknown, equal or reversed order or a missing publisher keeps the later message unbound.
+    proves no order, and an unknown, equal or reversed order keeps the later message unbound. The same publisher is a
+    positive identity at every gap: two missing or empty publishers, or no named source, prove no one.
     """
-    if (later is entry or later.get('publisher')!=entry.get('publisher') or later.get('kind','text')!='text'
-            or later.get('content_incomplete') or later.get('unread') or later.get('attachments')
-            or later['ref'][8:].rsplit(':',1)[0]!=entry['ref'][8:].rsplit(':',1)[0]):return False
+    source=lambda e:str(e.get('ref') or '')[8:].rsplit(':',1)[0]
+    publisher=entry.get('publisher')
+    if (later is entry or not isinstance(publisher,str) or not publisher.strip() or later.get('publisher')!=publisher
+            or later.get('kind','text')!='text' or later.get('content_incomplete') or later.get('unread') or later.get('attachments')
+            or not source(entry) or source(later)!=source(entry)):return False
     try:gap=(dt.datetime.fromisoformat(later['time'])-dt.datetime.fromisoformat(entry['time'])).total_seconds()
     except (KeyError,ValueError,TypeError):return False
     if gap:return gap>0
     order=[str(e.get('message_order') or '') for e in (entry,later)]
-    return bool(entry.get('publisher')) and all(re.fullmatch(r'[0-9]{1,40}',o) for o in order) and int(order[1])>int(order[0])
+    return all(re.fullmatch(r'[0-9]{1,40}',o) for o in order) and int(order[1])>int(order[0])
 
 
 def _school_native_shared_later(entry,evidence,count):
