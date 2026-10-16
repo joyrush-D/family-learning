@@ -2770,6 +2770,39 @@ def _school_untouched_batch_correction(store,c,row,evidence):
     return proof
 
 
+def _school_saved_reread(store,c,row,evidence):
+    """Prove a saved current-policy review is still the untouched first output of its own finished original batch.
+
+    processed=1/done=1 only end the old round; they never prove its review right. Such an item may be read again once,
+    under its own stable school-task job (same attempts, backoff and three-call round), only while nothing but the
+    Agent ever wrote it: the immutable generated snapshot still matches, no parent decision, link, task, record or
+    feedback exists, and the same child's original messages are unchanged and still processed. Anything else -- or
+    an item already reread -- keeps exactly its saved state (None); auto acceptance alone is never a parent decision,
+    but it is also not covered here and stays a recorded gap.
+    """
+    plan=json.loads(row['plan']);brief=plan.get('school_task',{})
+    if row['state']!='pending' or brief.get('state')!='review' or row['task_id'] or row['record_id'] is not None or row['care_id']:return None
+    if not row['job_id'].startswith('messages:') or plan.get('school_saved_reread'):return None
+    snapshot=plan.get('school_generated_snapshot')
+    if not snapshot or snapshot!=_school_generated_snapshot(row):return None
+    if any(plan.get(k) for k in ('school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id',
+                                 'approved','school_original_action','school_first_batch_correction','school_previous_policy','school_learning')):return None
+    if not evidence or brief.get('origin_basis')!=_school_message_basis(evidence):return None
+    job=c.execute('SELECT fingerprint,done FROM agent_jobs WHERE id=?',(row['job_id'],)).fetchone()
+    if job is None or not job['done']:return None
+    for e in evidence:
+        source_id,message_id=e['ref'][len('message:'):].rsplit(':',1)
+        message=c.execute('SELECT processed FROM agent_messages WHERE source_id=? AND id=?',(source_id,message_id)).fetchone()
+        if message is None or message['processed']!=1:return None
+    tables={r['name'] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    task_id='AGENT-'+_hash(row['id'])[:24]
+    for table,column in [('manual_tasks','id'),('task_focus','task_id'),('task_updates','id'),('task_history','task_id'),('study_items','task_id')]:
+        if table in tables and c.execute('SELECT 1 FROM '+table+' WHERE '+column+'=? LIMIT 1',(task_id,)).fetchone():return None
+    if c.execute('SELECT 1 FROM records WHERE linked_task_id=? OR source=? LIMIT 1',(task_id,'Agent建议:'+row['id'])).fetchone():return None
+    if c.execute('SELECT 1 FROM manual_tasks WHERE source LIKE ? LIMIT 1',('Agent建议:'+row['id']+'\n%',)).fetchone():return None
+    return dict(snapshot=snapshot,job_id=row['job_id'],job_fingerprint=job['fingerprint'],origin_basis=brief['origin_basis'])
+
+
 def _school_legacy_batch_correction(store,c,row,evidence):
     """Authorize a fresh full reread of an unlinked legacy selection, never certify its old model output."""
     try:
@@ -5295,6 +5328,10 @@ def _refresh_school(app, store, now, budget):
         pdf_changed=current and pdf_key!=recorded_pdf.get('fingerprint','')
         recorded_material=brief.get('material_evidence') or {}
         material_changed=current and material_key!=recorded_material.get('fingerprint','')
+        saved_reread=None
+        if current and not (page_changed or pdf_changed or material_changed or original_changed or source_error or legacy_correction):
+            # An untouched saved review of a finished batch: one reread in this item's own job, never a fresh budget.
+            with store._db() as c:saved_reread=_school_saved_reread(store,c,row,evidence)
         if plan.get('school_history_job') and (not current or page_changed or pdf_changed or material_changed):
             # This audit proves a literal message action only. A generic whole-notice refresh cannot change its identity.
             brief.update(state='review',reason='补漏依据限于这项原消息动作；新资料或规则变化尚未核其对应关系，原事项与要求保留。')
@@ -5315,8 +5352,8 @@ def _refresh_school(app, store, now, budget):
             with store._db() as c:
                 c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=? AND plan=?",(_json(plan),row['id'],row['updated'],row['plan']))
             continue
-        if (page_changed or pdf_changed or material_changed or original_changed) and paged: continue
-        if not current or page_changed or pdf_changed or material_changed or original_changed:
+        if (page_changed or pdf_changed or material_changed or original_changed or saved_reread) and paged: continue
+        if not current or page_changed or pdf_changed or material_changed or original_changed or saved_reread:
             reference=_reference_brief(evidence) if not source_error else None
             if not reference and used>=budget: continue
             targets=school_targets(app,store,row['child_id'])
@@ -5327,6 +5364,7 @@ def _refresh_school(app, store, now, budget):
                          school_tasks=targets,learning_goals=school_goals)
             value=dict(policy=SCHOOL_TASK_POLICY,candidate=candidate,child_id=row['child_id'],evidence=evidence,plan=row['plan'],updated=row['updated'])
             if legacy_correction:value['legacy_correction_scope']=legacy_correction['scope']
+            if saved_reread:value['saved_reread']=saved_reread  # stable while the item is untouched: same job, same attempts
             if page_evidence:
                 value['pages']=page_key
                 context.update(pages=page_evidence['model_pages'],unread_links=page_evidence['unread']+page_evidence['omitted'])
@@ -5395,14 +5433,14 @@ def _refresh_school(app, store, now, budget):
                     for doc in pdf_evidence['model']]
             key='school-task:'+row['id'];fp=store._job(key,value,now,model=reference is None)
             if not fp: continue
-            paged+=page_changed or pdf_changed or material_changed or original_changed
+            paged+=bool(page_changed or pdf_changed or material_changed or original_changed or saved_reread)
             try:
                 if source_error:
                     if isinstance(source_error,AgentError):raise source_error
                     raise AgentError('学校消息原文暂不可读取') from source_error
                 # Revoked, detached, corrected or dismissed between the claim and the call: no model round at all.
                 with store._db() as c:
-                    intact=_school_current(store,c,row,evidence,page_key,pdf_key,material_key) and (not original_parts or _school_original_known(store,c,row)[0]==original_key) and _school_pdf_mapping_intact(store,c,row,mapping_scope) and (not legacy_correction or _school_legacy_batch_correction(store,c,row,evidence)==legacy_correction) and (not policy_scope or _school_legacy_policy_scope(store,c,row,evidence)==policy_scope)
+                    intact=_school_current(store,c,row,evidence,page_key,pdf_key,material_key) and (not original_parts or _school_original_known(store,c,row)[0]==original_key) and _school_pdf_mapping_intact(store,c,row,mapping_scope) and (not legacy_correction or _school_legacy_batch_correction(store,c,row,evidence)==legacy_correction) and (not policy_scope or _school_legacy_policy_scope(store,c,row,evidence)==policy_scope) and (not saved_reread or _school_saved_reread(store,c,row,evidence)==saved_reread)
                     if not intact: _discard_job(c,key,fp)
                 if not intact: continue
                 if reference: brief=dict(reference)
@@ -5474,9 +5512,11 @@ def _refresh_school(app, store, now, budget):
                 plan['school_task']=brief
                 if not current:plan['school_previous_policy']=copy.deepcopy(row)
                 if policy_scope:plan['school_policy_reread_scope']=policy_scope
+                if saved_reread:plan['school_saved_reread']=saved_reread  # once per item; the generated snapshot stays the original proof
                 with store._db() as c:
                     c.execute('BEGIN IMMEDIATE')
-                    if not _school_current(store,c,row,evidence,page_key,pdf_key,material_key) or policy_scope and _school_legacy_policy_scope(store,c,row,evidence)!=policy_scope:
+                    if (not _school_current(store,c,row,evidence,page_key,pdf_key,material_key) or policy_scope and _school_legacy_policy_scope(store,c,row,evidence)!=policy_scope
+                            or saved_reread and _school_saved_reread(store,c,row,evidence)!=saved_reread):
                         # Candidate, message, binding/authorization, fragments or PDF groups changed while the model ran: drop the result.
                         _discard_job(c,key,fp);continue
                     updated=now.isoformat()
