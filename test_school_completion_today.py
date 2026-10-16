@@ -7,6 +7,7 @@ import copy
 import datetime as dt
 import json
 import unittest
+from unittest.mock import patch
 
 import family_agenda
 import family_agent as agent
@@ -332,6 +333,7 @@ T08 = ('2026-10-16T18:10:00+08:00',
        '更正：《秋日观察》第2页摘录改为2026年10月21日早读交回语文老师；摘录仍须2026年10月18日20:00前完成，摘录两句、每句写一句理由的要求不变。')
 T08_GOAL = '语文：2026年10月18日20:00前完成《秋日观察》第2页，摘录两句，每句写一句理由；2026年10月21日早读交回语文老师。'
 T08_STANDARDS = ('《秋日观察》第2页', '摘录两句', '每句写一句理由', '20:00前', '早读交回')
+T08_DELTA = '补充：《秋日观察》第2页摘录，每句理由另起一行。'
 
 
 class ConfirmedSchoolHandbackCorrectionTests(unittest.TestCase):
@@ -404,6 +406,56 @@ class ConfirmedSchoolHandbackCorrectionTests(unittest.TestCase):
                                               next_action='', waiting_for='', review_on='', category='homework', published_on='2026-10-16',
                                               due_on='2026-10-21'))
         self.assertEqual(self._agenda(task['id']), [('', '2026-10-21')])
+
+    def _parent_note_after_a_duplicate_append(self, use_duplicate_key):
+        original = self._confirm_t08()
+
+        def current():
+            with self.app.connect() as c:
+                return copy.deepcopy(next(t for t in self.app.tasks(c) if t['id'] == original['id']))
+
+        accepted = []
+        for index in (13, 14):
+            self.fixture.now = self.now + dt.timedelta(minutes=index)  # collected after T08's saved check
+            row = self.fixture._school_append_candidate(index, T08_DELTA, change='append', target=original['id'], title='语文：摘录补充',
+                                                        goal=T08_DELTA, publisher=H01[1])
+            task = current()
+            with self.app.connect() as c:
+                update = c.execute('SELECT updated FROM task_updates WHERE id=?', (original['id'],)).fetchone()
+            request = dict(action='school_change', id=row['id'], target_id=original['id'], change='append', title=task['title'], body=T08_DELTA,
+                           due=task['agenda']['due_on'], expected_updated=row['updated'], target_version=task['focus']['version'],
+                           target_updated=update['updated'] if update else '')
+            with patch.object(agent, '_now', return_value=self.now):
+                accepted.append((row['id'], agent.apply_school_change(self.app, self.store, request, school_auto=False)))
+        self.assertEqual([reply['deduplicated'] for _, reply in accepted], [False, True])
+        before = current()
+        # The first append really saved the focus and keeps the own day; the accepted duplicate saved nothing, so its key is unused.
+        self.assertEqual((before['focus']['version'], before['agenda']['complete_on'], before['agenda']['due_on']), (2, '2026-10-18', '2026-10-21'))
+        duplicate_key = 'school-change-' + agent._hash(accepted[-1][0])[:32]
+        with self.app.connect() as c:
+            self.assertIsNone(c.execute('SELECT 1 FROM task_focus_history WHERE request_key=?', (duplicate_key,)).fetchone())
+        focus = before['focus']
+        family_task_focus.save(self.app, dict({k: focus[k] for k in ('mode', 'waiting_for', 'review_on', 'category', 'published_on', 'due_on',
+                                                                      'scheduled_on', 'box', 'title', 'goal')},
+                                              id=original['id'], version=focus['version'], next_action='先核对第2页摘录的安排',
+                                              request_key=duplicate_key if use_duplicate_key else 'parent-note-duplicate-control-0001'))
+        after = current()
+        self.assertEqual((after['focus']['next_action'], after['focus']['version']), ('先核对第2页摘录的安排', 3))
+        for key in ('due_on', 'title', 'goal'):
+            self.assertEqual(after['focus'][key], focus[key])
+        self.assertEqual((after['source'], after['original_action'], after['action'].count(T08_DELTA)), (before['source'], original['action'], 1))
+        for text in (H01[3], T08[1], ':11', ':12', ':13', ':14'):
+            self.assertIn(text, after['source'])
+        return after['agenda']
+
+    def test_a_parent_note_under_an_accepted_duplicate_append_key_is_still_the_parent_choice(self):
+        for use_duplicate_key in (False, True):
+            with self.subTest(use_duplicate_key=use_duplicate_key):
+                if use_duplicate_key:
+                    self.doCleanups()
+                    self.setUp()
+                agenda = self._parent_note_after_a_duplicate_append(use_duplicate_key)
+                self.assertEqual((agenda['complete_on'], agenda['due_on']), ('', '2026-10-21'), 'a parent next_action save is no school-change write')
 
 
 if __name__ == '__main__':
