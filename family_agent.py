@@ -3379,7 +3379,7 @@ def _school_native_blocks(text):
         **(dict(shared_conditions=[clause for _,clause in shared]) if shared else {})) for part in pieces]
 
 
-_SCHOOL_NATIVE_CHANGE=r'更正|取消|撤销|撤回|不再(?:做|完成)|不用(?:做|完成)|无需(?:做|完成)|改为|改期|延期'
+_SCHOOL_NATIVE_CHANGE=r'更正|取消|撤销|撤回|不再(?:做|完成)|不用(?:做|完成)|无需(?:做|完成)|改为|改成|改期|延期'
 
 
 _SCHOOL_NATIVE_WORKSHEET=r'练习卷|练习册|练习本|作业本|作业单|试卷'
@@ -3468,7 +3468,12 @@ def _school_native_change_target(text,actions):
     # An object this ledger cannot check (周记第5题, 书法课不用做) proves no listed outcome.
     lead=re.split(r'第|'+_SCHOOL_NATIVE_CHANGE,text,maxsplit=1)[0]
     lead=re.sub(r'《[^》]*》|unit\s*\d+[^\u4e00-\u9fff]*|第[一二三四五六七八九十0-9]+课','',lead,flags=re.I)
-    if re.sub(_SCHOOL_NATIVE_WORKSHEET+'|'+_SCHOOL_NATIVE_SUBJECTS+'|'+_SCHOOL_NATIVE_FILLER,'',lead):return None
+    bare=re.sub(_SCHOOL_NATIVE_WORKSHEET+'|'+_SCHOOL_NATIVE_SUBJECTS+'|'+_SCHOOL_NATIVE_FILLER,'',lead)
+    if bare:
+        # "口算改成6道": a bare object word naming no title, page, sheet or question binds only the one outcome whose own original has it.
+        if not re.fullmatch('[一-鿿]{2,6}',bare) or named or sheets or pages or questions:return None
+        owners=[a for a in actions if bare in a['primary'] and (not subjects or subjects=={a['subject']})]
+        return owners[0] if len(owners)==1 else None
     if not (named or sheets or pages or subjects or questions):return None
     owners=[]
     for action in actions:
@@ -3532,7 +3537,7 @@ _SCHOOL_NATIVE_BESIDE=r'(?:也|并且)?(?:不用|无需|不必)(?:再)?(?:交|�
 
 def _school_native_withdrawn(clause):
     """"取消语文练习本第18页作业" or "第1-6题都不用做": the withdrawing word with nothing but this outcome's own objects."""
-    return re.fullmatch('(?:'+_SCHOOL_NATIVE_WITHDRAW+')',re.sub(_SCHOOL_NATIVE_OWN,'',clause,flags=re.I)) is not None
+    return re.fullmatch('(?:'+_SCHOOL_NATIVE_WITHDRAW+')了?',re.sub(_SCHOOL_NATIVE_OWN,'',clause,flags=re.I)) is not None
 
 
 def _school_native_cancelled(action):
@@ -3576,6 +3581,21 @@ def _school_native_affirmed(clause,sentence):
     return rest!=clause and not re.search(r'[不非未没无否]',rest) and not re.search(_SCHOOL_NATIVE_UNSETTLED,sentence)
 
 
+def _school_native_restated(clause,sentence,action,siblings):
+    """"第2页订正仍只做第3、5、7题": this outcome's own page and work word restated with exactly its own questions, so unchanged.
+
+    A negation, question, condition or unsettled word, another page, work word or question set, or a sibling with the same
+    work and questions proves nothing.
+    """
+    own=action['primary']
+    found=re.fullmatch('\\s*(第\\s*\\d+\\s*页)?([一-鿿]{1,6}?)仍(?:然)?只(?:做|订正|完成)(第\\s*[0-9][0-9\\s、\\-–—~～至到]*题)\\s*',clause)
+    if (not found or re.search(_SCHOOL_NATIVE_UNSETTLED,sentence) or re.search('[不非未没无否]',clause) or found[2] not in own
+            or found[1] and re.sub(r'\s','',found[1]) not in re.sub(r'\s','',own)):return False
+    questions=_school_native_questions(found[3])
+    return bool(questions) and questions==_school_native_questions(own) and [
+        a['id'] for a in siblings if found[2] in a['primary'] and _school_native_questions(a['primary'])==questions]==[action['id']]
+
+
 def _school_native_kept(action,actions,entries):
     """Strictly later, complete messages by the same publisher and source whose own clause names only this outcome as unchanged.
 
@@ -3594,6 +3614,8 @@ def _school_native_kept(action,actions,entries):
             if owner is None or owner['id']==action['id']:continue
         for sentence,clause in ((s,c) for s in re.split(r'(?<=[。！!？?\n])',later['text']) for c in re.split(r'[。；;，,\n]',s)):
             name=re.match(r'^\s*(?:不更改|不改变)?\s*([^的]{2,24}?)的',clause)
+            if _school_native_restated(clause,sentence,action,siblings) and not set(re.findall(_SCHOOL_NATIVE_SUBJECTS,sentence))-{action['subject']}:
+                kept.add(later['ref']);continue
             if (not _school_native_affirmed(clause,sentence) or re.search(_SCHOOL_NATIVE_CHANGE,clause) or not name
                     or set(re.findall(_SCHOOL_NATIVE_SUBJECTS,sentence))-{action['subject']}
                     or [a['id'] for a in siblings if a['primary'].count(name[1])==1]!=[action['id']]
