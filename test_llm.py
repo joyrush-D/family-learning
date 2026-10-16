@@ -787,4 +787,119 @@ def school_reread_contract():
 
 school_reread_contract()
 
+def light_effort_transport_contract():
+    """Frozen fictional Request.data goldens: only the actually selected light role may change effort."""
+    import hashlib,io
+    raw=Path(__file__).with_name('test_llm_transport_baselines.json').read_bytes()
+    assert hashlib.sha256(raw).hexdigest()=='b5151bb840db76e2b101e17166251171ca64615ef5a848c2c8e7b55b9c8560eb'
+    golden=json.loads(raw);inputs=golden['inputs'];config=inputs['config'];schema=inputs['schema']
+    cases={case['id']:case for case in inputs['cases']}
+    assert golden['count']==len(golden['captures'])==14 and len(cases)==7 and golden['actual_product_API_calls']==0
+    class Transport:
+        def __init__(self,protocol):self.protocol=protocol;self.requests=[]
+        def open(self,request,timeout):
+            self.requests.append((request.data,timeout))
+            text=json.dumps(inputs['fake_result'])
+            if self.protocol=='chat':return io.BytesIO(json.dumps({'choices':[{'finish_reason':'stop','message':{'content':text}}]}).encode())
+            return io.BytesIO(json.dumps({'status':'completed','output':[{'type':'message','role':'assistant','status':'completed',
+                                                                           'content':[{'type':'output_text','text':text}]}]}).encode())
+    def environment(protocol,**change):
+        values=dict(FAMILY_LLM_BASE_URL=inputs['protocols'][protocol],FAMILY_LLM_MODEL=config['model'],FAMILY_LLM_LIGHT_MODEL=config['light_model'],
+                    FAMILY_LLM_API_KEY=config['api_key'],FAMILY_LLM_REASONING_EFFORT=config['reasoning_effort'])
+        return {**values,**change}
+    def send(protocol,case,env=None,data_path=None):
+        transport=Transport(protocol)
+        with patch.dict(os.environ,env or {},clear=True),patch.object(llm,'build_opener',return_value=transport):
+            assert llm._chat_json(case['messages'],schema,case['task'],case['timeout'],data_path=data_path)==inputs['fake_result']
+        (data,wait),=transport.requests
+        return data,wait
+    def effort_of(body,protocol):
+        return body['reasoning']['effort'] if protocol=='responses' else body['reasoning_effort']
+    report=[]
+    with TemporaryDirectory() as temporary:
+        data_path=Path(temporary)
+        for capture in golden['captures']:
+            protocol=capture['protocol'];case=cases[capture['case']];base=capture['request_data_utf8'].encode('utf-8')
+            assert hashlib.sha256(base).hexdigest()==capture['body_sha256'] and len(base)==capture['body_bytes']
+            # 1 legacy/missing/empty: environment and both saved file shapes keep the complete original bytes and timeout.
+            for env in (environment(protocol),environment(protocol,FAMILY_LLM_LIGHT_REASONING_EFFORT='')):
+                assert send(protocol,case,env,data_path)==(base,capture['timeout'])
+            file_config={**config,'base_url':inputs['protocols'][protocol]}
+            for shape in (file_config,{**file_config,'light_reasoning_effort':''}):
+                (data_path/'model.json').write_text(json.dumps(shape))
+                assert send(protocol,case,None,data_path)==(base,capture['timeout'])
+            legacy={key:value for key,value in file_config.items() if key!='light_model'}
+            for shape in (legacy,{**legacy,'light_reasoning_effort':'none'}):
+                (data_path/'model.json').write_text(json.dumps(shape))
+                if capture['selected_model']==config['model']:
+                    assert send(protocol,case,None,data_path)==(base,capture['timeout'])
+                elif case['task']=='family_light_connection_test':
+                    try:send(protocol,case,None,data_path)
+                    except llm.LLMUnavailable:pass
+                    else:raise AssertionError('light connection test accepted without a light model')
+            (data_path/'model.json').unlink()
+            # 2/3 explicit light none: only the light role changes its effort field; P2/default/multimodal stay byte-identical.
+            data,wait=send(protocol,case,environment(protocol,FAMILY_LLM_LIGHT_REASONING_EFFORT='none'),data_path)
+            body=json.loads(data);expected=json.loads(base)
+            assert wait==capture['timeout']==case['timeout'] and body.get('max_tokens',body.get('max_output_tokens'))==capture['output_tokens']
+            if capture['selected_model']==config['light_model']:
+                assert effort_of(body,protocol)=='none' and effort_of(expected,protocol)=='low'
+                if protocol=='responses':expected['reasoning']['effort']='none'
+                else:expected['reasoning_effort']='none'
+                assert body==expected and data==json.dumps(expected,ensure_ascii=False,allow_nan=False).encode('utf-8')
+            else:
+                assert data==base and effort_of(body,protocol)=='low'
+            report.append(dict(protocol=protocol,case=capture['case'],baseline_sha256=capture['body_sha256'],
+                               light_none_sha256=hashlib.sha256(data).hexdigest(),timeout=wait,model=body['model'],effort=effort_of(body,protocol)))
+            # 4 same model name for both roles: only the light branch takes none; P2/default/multimodal fallback keep low bytes.
+            data,wait=send(protocol,case,environment(protocol,FAMILY_LLM_LIGHT_MODEL=config['model'],FAMILY_LLM_LIGHT_REASONING_EFFORT='none'),data_path)
+            body=json.loads(data)
+            if capture['selected_model']==config['light_model']:
+                assert body['model']==config['model'] and effort_of(body,protocol)=='none'
+            else:
+                assert data==base and effort_of(body,protocol)=='low'
+            # 4 light model empty: the default model and global low, never the light none.
+            env=environment(protocol,FAMILY_LLM_LIGHT_MODEL='',FAMILY_LLM_LIGHT_REASONING_EFFORT='none')
+            if case['task']=='family_light_connection_test':
+                try:send(protocol,case,env,data_path)
+                except llm.LLMUnavailable:pass
+                else:raise AssertionError('light connection test accepted without a light model')
+            else:
+                data,wait=send(protocol,case,env,data_path);body=json.loads(data)
+                assert body['model']==config['model'] and effort_of(body,protocol)=='low' and wait==case['timeout']
+                if capture['selected_model']==config['model']:assert data==base
+        # 5 strict rejection before any HTTP: environment values, saved values, types and unknown keys.
+        case=cases['school_text'];transport=Transport('chat')
+        for value in ('off','LOW','None','x'*201,'no\x01ne','none\x7f'):
+            with patch.dict(os.environ,environment('chat',FAMILY_LLM_LIGHT_REASONING_EFFORT=value),clear=True),patch.object(llm,'build_opener',return_value=transport):
+                try:llm._chat_json(case['messages'],schema,case['task'],case['timeout'],data_path=data_path)
+                except llm.LLMUnavailable:pass
+                else:raise AssertionError('invalid light reasoning effort accepted')
+        saved={**config,'base_url':inputs['protocols']['chat']}
+        for bad in ({**saved,'light_reasoning_effort':None},{**saved,'light_reasoning_effort':True},{**saved,'light_reasoning_effort':7},
+                    {**saved,'light_reasoning_effort':'off'},{**saved,'light_reasoning_effort':' none'},{**saved,'light_reasoning_effort':'x'*201},
+                    {**saved,'light_reasoning_effort':'none','light_effort':'none'},{**saved,'light_reasoning_effort':{'effort':'none'}}):
+            (data_path/'model.json').write_text(json.dumps(bad))
+            with patch.dict(os.environ,{},clear=True),patch.object(llm,'build_opener',return_value=transport):
+                try:llm._chat_json(case['messages'],schema,case['task'],case['timeout'],data_path=data_path)
+                except llm.LLMUnavailable:pass
+                else:raise AssertionError('invalid saved light reasoning effort accepted')
+        assert transport.requests==[]
+        # 6 the environment owns the whole configuration: the new variable alone never borrows the saved endpoint or key.
+        (data_path/'model.json').write_text(json.dumps({**saved,'light_reasoning_effort':'none'}))
+        with patch.dict(os.environ,{},clear=True):
+            loaded=llm.model_values(data_path)
+            assert loaded['origin']=='file' and loaded['light_reasoning_effort']=='none' and loaded['reasoning_effort']=='low'
+        with patch.dict(os.environ,{'FAMILY_LLM_LIGHT_REASONING_EFFORT':'none'},clear=True),patch.object(llm,'build_opener',return_value=transport):
+            loaded=llm.model_values(data_path)
+            assert loaded['origin']=='environment' and loaded['base_url']=='' and loaded['api_key']=='' and loaded['light_reasoning_effort']=='none'
+            try:llm._chat_json(case['messages'],schema,case['task'],case['timeout'],data_path=data_path)
+            except llm.LLMUnavailable:pass
+            else:raise AssertionError('incomplete environment borrowed the saved model configuration')
+        assert transport.requests==[]
+    return report
+
+light_reports=light_effort_transport_contract()
+assert len(light_reports)==14 and sum(row['effort']=='none' for row in light_reports)==4
+
 print('PASS: draft, reading feedback, guided hints, audio and bounded usage ledger; isolated HTTP, redaction, failure and interruption checks')
