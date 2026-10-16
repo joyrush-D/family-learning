@@ -130,6 +130,103 @@ class SchoolNativeCoverageTests(unittest.TestCase):
             task_reason='虚构回执：家长个人询问，不是老师要求。')
         return payload, refs, [excerpt, dictation, question]
 
+    def _disclosed_save(self, texts, publishers, replies, index):
+        """Known fictional regressions: unchanged replies, only each cited ref bound to its ingested message by position."""
+        payload, refs = self._ingest(texts, publishers)
+        replies = copy.deepcopy(replies)
+        for reply in replies: reply['evidence'] = [dict(ref=refs[index[e['ref']]]) for e in reply['evidence']]
+        self._use_replies(payload, [dict(proposals=replies)])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual(result['failed'], 0)
+        with self.store._db() as c:
+            saved = {r['title']: dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")}
+            rows = [tuple(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['processed'], replay['created']), (0, 0))
+        with self.store._db() as c:
+            self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')], rows, 'no second task')
+        return saved, refs
+
+    def test_a_complete_completion_prefix_or_title_named_correction_or_dated_activity_saves_its_own_final_day(self):
+        geo = ['地理：2026年10月22日19:00前完成《等高线观察》纸质记录表，标出山脊和河谷各一处并各写两句判断依据；纸质记录表2026年10月23日下午课前交给地理老师；2026年10月24日地理课做3分钟口头说明，说明等高线疏密与坡度的关系。',
+               '更正：纸质记录表改为2026年10月24日下午课前交给地理老师；完成时间仍是2026年10月22日19:00前；3分钟口头说明的时间和要求不变。']
+        art = ['美术：2026年10月20日19:30前完成《树叶拓印》作品，在背面写上姓名和日期；作品2026年10月21日上午交给美术老师。',
+               '更正：《树叶拓印》作品改为2026年10月22日上午交给美术老师；完成时间仍是2026年10月20日19:30前。']
+        talk = ['2026年10月29日美术课上向同组同学介绍自己的画，并回答同学提出的一个问题；2026年10月30日美术课带油画棒一盒。']
+        cases = [
+            (geo, ['t1', 't1'], [fixtures.school_proposal(
+                title_quote='2026年10月22日19:00前完成《等高线观察》纸质记录表，标出山脊和河谷各一处并各写两句判断依据', due='2026-10-24',
+                evidence=[dict(ref='c1'), dict(ref='c3')], task_title='地理：完成《等高线观察》纸质记录表', learning_subject='地理',
+                task_goal='2026年10月22日19:00前完成《等高线观察》纸质记录表。\n标出山脊和河谷各一处，并各写两句判断依据。\n纸质记录表2026年10月24日下午课前交给地理老师（原为10月23日下午课前，已更正）。',
+                task_state='ready', task_purpose='learning', task_reason='虚构回执。', task_submission='纸质记录表2026年10月24日下午课前交给地理老师。'),
+                fixtures.school_proposal(
+                title_quote='2026年10月24日地理课做3分钟口头说明，说明等高线疏密与坡度的关系', due='2026-10-24', evidence=[dict(ref='c1'), dict(ref='c3')],
+                task_title='地理：3分钟口头说明等高线疏密与坡度', learning_subject='地理', task_state='ready', task_purpose='learning', task_reason='虚构回执。',
+                task_goal='2026年10月24日地理课做3分钟口头说明。\n说明等高线疏密与坡度的关系。\n该口头说明的时间和要求不变。')],
+             {'c1': 0, 'c3': 1}, '《等高线观察》', '2026-10-24', ('2026年10月22日19:00前完成', '山脊和河谷各一处', '两句判断依据', '2026年10月24日下午课前交给地理老师')),
+            (art, ['a1', 'a1'], [fixtures.school_proposal(
+                title_quote=art[0], due='2026-10-22', evidence=[dict(ref='d1'), dict(ref='d3')], task_title='美术：完成《树叶拓印》作品', learning_subject='美术',
+                task_goal='2026年10月20日19:30前完成《树叶拓印》作品。\n作品背面写上姓名和日期。\n2026年10月22日上午交给美术老师（原为10月21日上午，已更正）。',
+                task_state='ready', task_purpose='learning', task_reason='虚构回执。', task_submission='2026年10月22日上午将作品交给美术老师')],
+             {'d1': 0, 'd3': 1}, '《树叶拓印》', '2026-10-22', ('2026年10月20日19:30前完成', '背面写上姓名和日期', '2026年10月22日上午交给美术老师')),
+            (talk, ['e1'], [fixtures.school_proposal(
+                title_quote='2026年10月29日美术课上向同组同学介绍自己的画，并回答同学提出的一个问题', due='2026-10-29', evidence=[dict(ref='e1')],
+                task_title='美术：向同组介绍自己的画并答问', learning_subject='美术', task_state='ready', task_purpose='learning', task_reason='虚构回执。',
+                task_goal='10月29日美术课上向同组同学介绍自己的画；回答同学提出的一个问题。'),
+                fixtures.school_proposal(
+                title_quote='2026年10月30日美术课带油画棒一盒', due='2026-10-30', evidence=[dict(ref='e1')], task_title='美术：10月30日带油画棒一盒',
+                task_state='ready', task_purpose='admin', task_reason='虚构回执。', task_goal='10月30日美术课带油画棒一盒。')],
+             {'e1': 0}, '介绍自己的画', '2026-10-29', ('向同组同学介绍自己的画', '回答同学提出的一个问题')),
+        ]
+        for texts, publishers, replies, index, name, due, words in cases:
+            with self.subTest(name=name):
+                self.setUp()
+                saved, refs = self._disclosed_save(texts, publishers, replies, index)
+                row, = [r for t, r in saved.items() if name in t]
+                self.assertEqual((row['due'], row['state']), (due, 'accepted'))
+                for word in words: self.assertIn(word, row['body'])
+                self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs[:len(index)])
+                self.doCleanups()
+        # Another publisher's correction, or a correction naming another title, never moves the work's day.
+        for publishers, fix in ((['a1', 'a2'], art[1]), (['a1', 'a1'], art[1].replace('《树叶拓印》', '《枫叶拓印》'))):
+            with self.subTest(publishers=publishers, fix=fix[:12]):
+                self.setUp()
+                saved, refs = self._disclosed_save([art[0], fix], publishers, cases[1][2], cases[1][3])
+                row, = [r for t, r in saved.items() if '树叶拓印' in t]
+                self.assertEqual((row['due'], json.loads(row['plan'])['school_task']['state']), ('', 'review'))
+                self.doCleanups()
+
+    def test_an_unconfirmed_history_note_keeps_the_excerpt_for_review_and_tonight_stays_in_the_copying(self):
+        payload, refs, replies = self._excerpt_batch('2026-10-20')
+        for note, expected in (('（原为10月19日早读，已更正）', ('2026-10-20', 'accepted')),
+                               ('（原为10月19日早读交，尚未更正为10月20日早读）', ('', 'pending'))):
+            with self.subTest(note=note):
+                self.setUp()
+                payload, refs, replies = self._excerpt_batch('2026-10-20')
+                replies[0]['task_goal'] = replies[0]['task_goal'].replace('（原为10月19日早读，已更正）', note)
+                self._use_replies(payload, [dict(proposals=replies)])
+                self.assertEqual(agent.run_once(self.app, self.now)['failed'], 0)
+                with self.store._db() as c:
+                    excerpt, = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'") if '河岸随记' in r['title']]
+                self.assertEqual(json.loads(excerpt['plan'])['school_task']['state'], 'ready' if expected[1] == 'accepted' else 'review')
+                self.doCleanups()
+        self.setUp()
+        text = '英语：今晚把Unit 3单词每个抄写两遍，明天交；周五听写Unit 3单词。'
+        payload, refs = self._ingest([text])
+        copying = fixtures.school_proposal(
+            title_quote='今晚把Unit 3单词每个抄写两遍，明天交', due='2026-10-06', evidence=[dict(ref=refs[0])], learning_subject='英语',
+            task_title='英语：Unit 3单词每个抄写两遍', task_goal='把Unit 3单词每个抄写两遍；明天交。', task_state='ready',
+            task_purpose='learning', task_reason='虚构回执。', task_submission='明天交')
+        dictation = fixtures.school_proposal(
+            title_quote='周五听写Unit 3单词', due='2026-10-09', evidence=[dict(ref=refs[0])], learning_subject='英语',
+            task_title='英语：听写Unit 3单词', task_goal='周五听写Unit 3单词', task_state='ready', task_purpose='learning', task_reason='虚构回执。')
+        self._use_replies(payload, [dict(proposals=[copying, dictation])])
+        self.assertEqual(agent.run_once(self.app, self.now)['failed'], 0)
+        with self.store._db() as c:
+            rows = {r['title']: dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")}
+        self.assertIn('今晚把Unit 3单词每个抄写两遍', rows['英语：Unit 3单词每个抄写两遍']['body'])
+        self.assertNotIn('今晚', rows['英语：听写Unit 3单词']['body'], 'the dictation stays its own item')
+
     def test_corrected_handback_day_saves_one_excerpt_task_with_its_completion_time(self):
         payload, refs, replies = self._excerpt_batch('2026-10-20')
         self._use_replies(payload, [dict(proposals=replies)])
