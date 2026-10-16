@@ -4127,7 +4127,7 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(model.call_count, 3)
             self.assertIn('自动尝试上限', reopened.snapshot()['last_error'])
         with self.app.connect() as c:
-            job = dict(c.execute('SELECT * FROM agent_jobs').fetchone())
+            job = dict(c.execute("SELECT * FROM agent_jobs WHERE id NOT LIKE 'school-audit-%'").fetchone())  # not the one-time audit boundary row
             self.assertEqual(job['attempts'], agent.MAX_ATTEMPTS)
             self.assertIn('达到自动重试上限', job['error'])
             self.assertIn('人工重试', job['error'])
