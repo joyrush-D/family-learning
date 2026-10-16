@@ -162,12 +162,18 @@ class SavedSchoolRereadTests(unittest.TestCase):
         with self.app.connect() as c:  # a parent-side edit of the saved draft; created/updated are left equal on purpose
             c.execute('UPDATE agent_items SET title=? WHERE id=?', ('家长改过的标题', item['id']))
         before = self.rows()
-        calls, _ = self.run_round(dict(side_effect=AssertionError('edited draft must not be reread')), self.now)
-        self.assertEqual(calls, 0)
+        # The edited row is never rewritten, but its batch may still be audited once (Root's route): SYNTHETIC
+        # history-mode reply mapping the one action onto the edited row.
+        reply = dict(proposals=[dict(SYNTHETIC['proposals'][0], action_quote=TEXT.split('。')[0] + '。', existing_item_id=item['id'])])
+        calls, _ = self.run_round(dict(return_value=reply), self.now)
+        self.assertLessEqual(calls, 1)
         after = self.rows()
-        boundary = after['jobs'].pop('school-audit-boundary')  # the one-time audit boundary bookkeeping row only
+        boundary = after['jobs'].pop('school-audit-boundary')  # bookkeeping rows only: boundary, scope mark, audit receipt
         self.assertEqual(boundary['done'], 1)
-        self.assertEqual(after, before)
+        added = {k for k in after['jobs'] if k not in before['jobs']}
+        self.assertTrue(all(k.startswith(('school-audit-scope:', 'school-history:')) for k in added), added)
+        for k in added: after['jobs'].pop(k)
+        self.assertEqual(after, before, 'the edited draft, its receipt, messages and cursor are unchanged')
 
     def test_failures_keep_one_identity_backoff_and_the_three_attempt_limit(self):
         before = self.rows()
