@@ -4,6 +4,7 @@ import json
 import re
 import family_agent
 import family_calendar
+import family_study
 
 
 def date(value):
@@ -440,7 +441,7 @@ def _stored_date_quote(plan):
 
 def enrich(app,c,tasks):
     owners={p['name']:p['id'] for p in app.profiles(c)}
-    reported={r['task_id']:r['day'] for r in c.execute('SELECT task_id,day FROM study_items WHERE id=task_id')} if c.execute("SELECT 1 FROM sqlite_master WHERE name='study_items'").fetchone() else {}
+    reported={r['task_id']:(r['child_id'],r['day']) for r in c.execute('SELECT task_id,child_id,day FROM study_items WHERE id=task_id')} if c.execute("SELECT 1 FROM sqlite_master WHERE name='study_items'").fetchone() else {}
     for task in tasks:
         refs=[x.strip() for x in task['source'].splitlines() if x.strip().startswith('message:')]
         focus=task.get('focus') or {}
@@ -456,11 +457,12 @@ def enrich(app,c,tasks):
                 publication_ref=family_agent.school_original_publication_ref(store,c,proposal)
                 date_quote=_stored_date_quote(plan) or re.sub(r'^待核对[：:]?\s*','',proposal['title']).strip()
         due=task['due']
-        if task['id'] in reported and task['source'] in ('家庭放学后录入','孩子自述功课，待家长核对'):
+        captured=reported.get(task['id'])
+        if captured and captured[0]==owners.get(task['child']) and task['source'] in family_study.CAPTURE_SOURCES:
             # The capture day is a plan date, not a teacher deadline; preserve explicit later edits.
             focus=dict(focus)
             if not focus.get('category'):focus['category']='homework'
-            if not focus.get('scheduled_on') and not focus.get('version'):focus['scheduled_on']=reported[task['id']]
+            if not focus.get('scheduled_on') and not focus.get('version'):focus['scheduled_on']=captured[1]
             due=task['due']=''
         task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal)
     return tasks

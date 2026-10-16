@@ -9,6 +9,11 @@ import sqlite3
 
 TZ = dt.timezone(dt.timedelta(hours=8))
 RESULTS = ('完成', '做了一部分', '需要帮助')
+FAMILY_CAPTURE = '家庭放学后录入'
+CHILD_REPORT_PENDING = '孩子自述功课，待家长核对'
+CHILD_REPORT_CONFIRMED = '孩子自述功课，家长已核对要求'
+# Confirming the requirement only changes the displayed status; the capture identity stays the same.
+CAPTURE_SOURCES = (FAMILY_CAPTURE, CHILD_REPORT_PENDING, CHILD_REPORT_CONFIRMED)
 
 
 class StudyError(ValueError):
@@ -273,7 +278,7 @@ class Store:
                         if not title: raise StudyError('请填写功课，或选择已有待办')
                         task_id = ident
                         c.execute('INSERT INTO manual_tasks VALUES (?,?,?,?,?,?,?)',
-                            (task_id, child['name'], title, day, '待跟进', '孩子自述功课，待家长核对' if self.actor=='child' else '家庭放学后录入', report.get('goal','')))
+                            (task_id, child['name'], title, day, '待跟进', CHILD_REPORT_PENDING if self.actor=='child' else FAMILY_CAPTURE, report.get('goal','')))
                     if c.execute('SELECT 1 FROM study_items WHERE child_id=? AND day=? AND task_id=?', (child_id, day, task_id)).fetchone():
                         raise StudyError('这项待办已加入当天安排，请刷新核对', 409, 'study_task_duplicate')
                     c.execute('''INSERT INTO study_items (id,child_id,day,task_id,title,subject,planned_minutes,version,
@@ -342,7 +347,7 @@ class Store:
                         report=json.loads(row.get('report','{}'))
                         if not report: raise StudyError('这项功课没有待核对的原始材料')
                         report['confirmed_at']=now.isoformat();row['report']=_json(report)
-                        c.execute("UPDATE manual_tasks SET source='孩子自述功课，家长已核对要求' WHERE id=? AND source='孩子自述功课，待家长核对'",(row['task_id'],))
+                        c.execute('UPDATE manual_tasks SET source=? WHERE id=? AND source=?',(CHILD_REPORT_CONFIRMED,row['task_id'],CHILD_REPORT_PENDING))
                     elif action == 'start':
                         if day != now.date().isoformat(): raise StudyError('实时计时只用于今天；过去用时请手动补录')
                         if row['result'] == '完成': raise StudyError('这项功课已确认完成；需要继续时先更正本次结果')
