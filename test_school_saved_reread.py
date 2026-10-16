@@ -917,6 +917,29 @@ class SiblingNotOwnedTests(unittest.TestCase):  # Root counter 3: one reread row
         self.assertFalse([t for t in state['tasks'] if SIBLING_MATH in t['action']])
         self.assertEqual((state['messages'], state['cursor']), (before['messages'], before['cursor']))
 
+    def test_parent_acceptance_during_the_audit_rejects_the_in_place_rewrite(self):  # SR03/SR04
+        before = self.rows()
+        admin, math = sorted(before['items'], key=lambda i: SIBLING_MATH in i['body'])
+        accepted = {}
+        def model(messages, *args, **kwargs):  # SYNTHETIC; the parent accepts the math review while the audit call runs
+            if 'existing_actions' not in json.loads(messages[1]['content']):
+                return BRIEF
+            self.store.act(dict(id=math['id'], action='accept'))
+            with self.app.connect() as c:
+                accepted.update(dict(c.execute('SELECT * FROM agent_items WHERE id=?', (math['id'],)).fetchone()))
+            return dict(proposals=[
+                dict(SYNTHETIC['proposals'][0], evidence=[dict(ref='message:postcandidate-samebatch-sibling:1')], action_quote=TEXT,
+                     existing_item_id=admin['id']),
+                dict(SIBLING_OLD_REPLY['proposals'][1], action_quote=SIBLING_MATH, existing_item_id=math['id'], task_state='ready')])
+        for i in range(2):
+            self.run_round(dict(side_effect=model), self.now + dt.timedelta(minutes=41 * i))
+        state = self.rows()
+        self.assertEqual(accepted.get('state'), 'accepted', 'the parent decision happened inside the audit call')
+        self.assertEqual(next(i for i in state['items'] if i['id'] == math['id']), accepted, 'the parent decision is kept exactly')
+        self.assertEqual(sorted(i['id'] for i in state['items']), sorted([admin['id'], math['id']]), 'no copy')
+        self.assertEqual(len([t for t in state['tasks'] if SIBLING_MATH in t['action']]), 1, 'only the parent-accepted task')
+        self.assertEqual((state['messages'], state['cursor']), (before['messages'], before['cursor']))
+
 
 class EmptyInstallTests(unittest.TestCase):
     def test_no_old_batch_means_zero_audit_calls_and_a_fixed_empty_boundary(self):  # SR05 all-empty
