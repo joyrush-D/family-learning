@@ -683,8 +683,8 @@ class SchoolNativeCoverageTests(unittest.TestCase):
                                 ('虚构观察表', '孩子姓名', '家长签字'), title='填写观察表并签字交回', due='2026-11-18')
 
     def test_a_signer_named_in_the_earlier_step_of_the_same_part_must_still_sign(self):
-        text = '请家长检查《虚构口算卡》并签字，2026年11月6日交回班主任。'
-        self._partial_then_full(text, '请孩子检查《虚构口算卡》并签字，2026年11月6日交回班主任。', text, ('家长检查', '签字'), title='口算卡检查签字')
+        text = '请家长填写《虚构接送卡》的联系电话并签字，2026年11月6日交回班主任。'
+        self._partial_then_full(text, '请孩子填写《虚构接送卡》的联系电话并签字，2026年11月6日交回班主任。', text, ('家长填写', '签字'), title='填写接送卡并签字')
 
     def test_the_same_parent_role_in_other_words_signs_on_its_first_receipt(self):
         self._clause_saved('请填写《虚构观察表》的孩子姓名并请家长签字，2026年11月18日交回班主任。',
