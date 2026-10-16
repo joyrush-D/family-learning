@@ -597,6 +597,71 @@ class SchoolNativeCoverageTests(unittest.TestCase):
     def test_a_negated_second_title_is_no_second_outcome(self):
         self._compound_control('请于10月22日前填写《虚构营地报名表》并交回班主任，《虚构交通回执》并不是本次要交的材料。', '10月22日前填写《虚构营地报名表》并交回班主任。')
 
+    def _clause_reply(self, ref, text, goal, *, purpose='admin', subject='', title='填写两份表并交回', due='2026-11-06'):
+        return dict(proposals=[dict(title_quote=text, focus='school', due=due, evidence=[dict(ref=ref)],
+                                    learning_subject=subject, learning_goal_id='', task_title=title, task_goal=goal,
+                                    task_advice='', task_state='ready', task_reason='虚构固定回执，仅作程序验证。', task_change='new',
+                                    task_target_id='', task_purpose=purpose, task_submission='')])
+
+    def _partial_then_full(self, text, partial, full, words, **reply):
+        payload, refs = self._ingest([text])
+        self._use_replies(payload, [self._clause_reply(refs[0], text, partial, **reply), self._clause_reply(refs[0], text, full, **reply)])
+        first = agent.run_once(self.app, self.now)
+        # The complete original and its complete title_quote were read; a goal dropping one stated requirement is no complete summary.
+        self._assert_rejected_batch(payload, first)
+        recovered = agent.run_once(self.app, self.now + dt.timedelta(minutes=6))
+        self.assertEqual((recovered['failed'], recovered['processed']), (0, 1))
+        self.assertEqual(self.model.call_count, 2)
+        with self.store._db() as c:
+            saved = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+            self.assertEqual(len(saved), 1, 'one faithful combined task is complete; no task count is forced')
+            self.assertEqual((saved[0]['state'], saved[0]['due'], saved[0]['body']), ('accepted', reply.get('due', '2026-11-06'), full))
+            for word in words:self.assertIn(word, saved[0]['body'])
+            task = c.execute('SELECT * FROM manual_tasks').fetchone()
+            self.assertEqual(task['action'], full)
+            self.assertEqual([json.loads(r[0])['text'] for r in c.execute('SELECT payload FROM agent_messages')], [text])
+            rows = [tuple(r) for r in c.execute('SELECT * FROM agent_items ORDER BY id')], [tuple(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['processed'], replay['created'], self.model.call_count), (0, 0, 2))
+        with self.store._db() as c:
+            self.assertEqual(([tuple(r) for r in c.execute('SELECT * FROM agent_items ORDER BY id')], [tuple(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]), rows)
+
+    def test_root_h1_a_learning_goal_dropping_its_unnamed_recording_is_rejected_then_the_full_reply_saves(self):
+        text = '科学：制作《发芽观察卡》并录一段30秒讲解，2026年11月6日交回。'
+        self._partial_then_full(text, '制作《发芽观察卡》，2026年11月6日交回。', '制作《发芽观察卡》并录一段30秒讲解，2026年11月6日交回。',
+                                ('发芽观察卡', '录', '30秒', '讲解', '交回'), purpose='learning', subject='科学', title='科学：制作发芽观察卡')
+
+    def test_root_h2s_both_names_kept_but_the_parent_signature_dropped_is_rejected_then_the_full_reply_saves(self):
+        text = '2026年11月6日前，请将《植物角报名表》填写联系电话以及将《校外出行确认单》交家长签字，两份均交回班主任。'
+        self._partial_then_full(text, '2026年11月6日前，填写《植物角报名表》的联系电话并将《校外出行确认单》交回班主任，两份都交回。', text,
+                                ('植物角报名表', '联系电话', '校外出行确认单', '家长签字', '两份', '交回班主任'))
+
+    def test_both_forms_and_signature_kept_but_the_two_copy_handback_dropped_is_rejected(self):
+        text = '2026年10月22日前，请填写《虚构营地报名表》的学生姓名并在《虚构交通回执》上完成家长签字，两份分别交回班主任。'
+        self._partial_then_full(text, '2026年10月22日前，请填写《虚构营地报名表》的学生姓名并在《虚构交通回执》上完成家长签字。', text,
+                                ('两份', '交回班主任'), due='2026-10-22')
+
+    def test_an_unnamed_photo_step_after_a_named_drawing_is_kept_or_rejected(self):
+        text = '美术：画一幅《虚构秋叶》并拍一张照片，10月9日前交回。'
+        self._partial_then_full(text, '画一幅《虚构秋叶》，10月9日前交回。', '画一幅《虚构秋叶》并拍照片，10月9日前交回。',
+                                ('虚构秋叶', '拍', '照片'), purpose='learning', title='美术：画虚构秋叶', due='2026-10-09')
+
+    def _clause_saved(self, text, goal, **reply):
+        payload, refs = self._ingest([text])
+        self._use_replies(payload, [self._clause_reply(refs[0], text, goal, **reply)])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        with self.store._db() as c:
+            self.assertEqual([(r['state'], r['body']) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")], [('accepted', goal)])
+
+    def test_a_faithful_paraphrase_of_every_requirement_saves_on_its_first_receipt(self):
+        self._clause_saved('科学：制作《发芽观察卡》并录一段30秒讲解，2026年11月6日交回。', '制作发芽观察卡，再录30秒的讲解，2026年11月6日前交回。',
+                           purpose='learning', subject='科学', title='科学：制作发芽观察卡')
+
+    def test_a_voluntary_extra_in_the_same_quote_is_no_obligation(self):
+        self._clause_saved('科学：制作《发芽观察卡》，2026年11月6日交回；有兴趣的同学可以自愿录一段30秒讲解。', '制作《发芽观察卡》，2026年11月6日交回。',
+                           purpose='learning', subject='科学', title='科学：制作发芽观察卡')
+
     def test_pending_message_counts_are_source_scoped_and_reject_stale_bindings(self):
         self.assertEqual(self.store.snapshot()['sources'][0]['pending_message_count'], 0)
         self._two_actions()
