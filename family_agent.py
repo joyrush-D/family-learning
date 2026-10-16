@@ -1836,8 +1836,11 @@ class Store:
                     if (not history_context or not origin or not origin[0] or origin[0][2]!='audit' or old is None
                             or old['child_id']!=item['child_id'] or not _school_untouched_review(c,old,origin[0][0])):
                         raise AgentError('原生成事项已变化，复核结果未保存；原记录保留。',409,'school_history_stale')
+                    # The complete old row (its generated plan, model receipt, reasons, evidence, due and batch job) is kept
+                    # verbatim beside the new understanding, bound to this reread; the marker excludes any later rewrite.
                     plan=dict(item['plan'],school_generated_snapshot=json.loads(old['plan'])['school_generated_snapshot'],
-                              school_batch_reread=dict(job=key,fingerprint=fingerprint,previous=_hash(dict(old))))
+                              school_batch_reread=dict(job=key,fingerprint=fingerprint,previous=_hash(dict(old)),previous_row=dict(old),
+                                                       policy=SCHOOL_TASK_POLICY,revision=SCHOOL_SELECTION_REVISION))
                     c.execute("UPDATE agent_items SET title=?,body=?,evidence=?,due=?,plan=?,updated=? WHERE id=? AND state='pending'",
                               (item['title'],item['body'],_json(item['evidence']),item.get('due',''),_json(plan),now.isoformat(),target))
                     continue
