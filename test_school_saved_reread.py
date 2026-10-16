@@ -255,6 +255,42 @@ class SavedSchoolRereadTests(unittest.TestCase):
         self.assertEqual((item['id'], item['state']), (old_item['id'], 'accepted'))
         self.assertEqual(len(self.rows()['tasks']), 1)
 
+    def test_source_revoked_while_the_model_runs_rejects_the_late_result(self):  # SR04
+        item, = self.rows()['items']
+        def late(*args, **kwargs):
+            config = json.loads((self.data / 'agent.json').read_text())  # isolated fictional config file only
+            config['sources'][0]['enabled'] = False
+            (self.data / 'agent.json').write_text(json.dumps(config))
+            return BRIEF
+        calls, _ = self.run_round(dict(side_effect=late), self.now)
+        self.assertEqual(calls, 1)
+        state = self.rows()
+        saved, = state['items']
+        self.assertEqual((saved['state'], saved['title'], saved['body'], saved['plan']), (item['state'], item['title'], item['body'], item['plan']))
+        self.assertEqual(state['tasks'], [])
+
+    def test_a_later_normal_message_still_moves_in_the_reread_round(self):  # SR05
+        later = '2026年10月24日前，请在《图书借阅登记表》上填写学生姓名，家长签字后交回班主任。'
+        later_ref = 'message:p1-title-boundary-tb02:2'
+        self.store.ingest(dict(source_id=SOURCE['id'], expected_cursor='11', cursor='12', checked_at=self.now.isoformat(),
+            last_message_time='2026-10-17T02:00:00+08:00', error='', messages=[dict(id='2', message_order='2',
+            time='2026-10-17T02:00:00+08:00', kind='text', sender='示例班主任', sender_id='school', text=later, unread=False)]))
+        names = []
+        def reply(messages, schema, name, **kwargs):  # SYNTHETIC replies for both jobs
+            names.append(name)
+            if name == 'family_school_task':
+                return BRIEF
+            return dict(proposals=[dict(SYNTHETIC['proposals'][0], title_quote=later, due='2026-10-24', evidence=[dict(ref=later_ref)],
+                                        task_title='填写《图书借阅登记表》并交回', task_goal=later)])
+        calls, _ = self.run_round(dict(side_effect=reply), self.now)
+        self.assertLessEqual(calls, 3, 'the original three-call round')
+        self.assertEqual(names[0], 'family_agent_selection', 'ordinary new work goes first')
+        state = self.rows()
+        self.assertEqual(sorted(m['processed'] for m in state['messages']), [1, 1])
+        self.assertEqual(state['cursor'], '12', 'the cursor only moves by intake')
+        self.assertTrue(any(later in i['body'] for i in state['items']))
+        self.assertIn('family_school_task', names, 'the saved reread shares the same round after ordinary work')
+
 
 # SR02: the exact old source auto-accepted the first of two independent actions in one notice and never saw the second.
 # Seed probes the old source rejected or held for review (not old-accepted, so not SR02 seeds): two messages with one
