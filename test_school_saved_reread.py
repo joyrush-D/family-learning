@@ -194,6 +194,67 @@ class SavedSchoolRereadTests(unittest.TestCase):
         self.assertEqual((saved['state'], saved['title'], saved['plan']), ('dismissed', item['title'], item['plan']))
         self.assertEqual(state['tasks'], [])
 
+    # Root's disclosed TB02 counterexamples against 5bf5274 (known-counterexamples.json); synthetic replies only.
+    def assert_original_kept(self, old_item):
+        state = self.rows()
+        item, = state['items']
+        self.assertEqual(item['id'], old_item['id'])
+        self.assertEqual(item['due'], '2026-10-22')
+        for text in [item['body']] + [t['action'] for t in state['tasks']]:
+            self.assertNotIn('10月23日', text, 'a reread may not change the original date')
+        if item['state'] == 'accepted' or state['tasks']:
+            # Saved work keeps the complete original requirements (name, count, signature, hand-back, scope).
+            self.assertIn(TEXT, item['body'])
+            for task in state['tasks']:
+                self.assertIn(TEXT, task['action'])
+        else:
+            self.assertEqual(state['tasks'], [])
+        return state
+
+    def test_reread_cannot_save_a_changed_date(self):
+        before = self.rows()
+        old_item, = before['items']
+        calls, _ = self.run_round(dict(return_value=dict(BRIEF, goal=TEXT.replace('10月22日', '10月23日'))), self.now)
+        self.assertEqual(calls, 1)
+        state = self.assert_original_kept(old_item)
+        self.assertEqual(state['jobs'][old_item['job_id']], before['jobs'][old_item['job_id']])
+        if state['items'][0]['state'] != 'accepted':
+            job = state['jobs']['school-task:' + old_item['id']]
+            self.assertEqual((job['attempts'], job['done']), (1, 0), 'rejected under the same bounded identity')
+
+    def test_reread_cannot_drop_original_requirements(self):
+        old_item, = self.rows()['items']
+        calls, _ = self.run_round(dict(return_value=dict(BRIEF, goal='2026年10月22日前，填写材料领取登记单并交回班主任。')), self.now)
+        self.assertEqual(calls, 1)
+        self.assert_original_kept(old_item)
+
+    def test_renamed_source_does_not_restore_an_exhausted_budget(self):
+        old_item, = self.rows()['items']
+        key = 'school-task:' + old_item['id']
+        at, calls = self.now, []
+        for _ in range(4):
+            count, _ = self.run_round(dict(side_effect=agent.family_llm.LLMDraftError('synthetic failure')), at)
+            calls.append(count)
+            at += dt.timedelta(minutes=41)
+        self.assertEqual(sum(calls), 3, calls)
+        exhausted = self.rows()['jobs'][key]
+        self.assertEqual(exhausted['attempts'], 3)
+        config = json.loads((self.data / 'agent.json').read_text())  # isolated fictional config file only
+        config['sources'][0]['name'] = '虚构班级改名'
+        (self.data / 'agent.json').write_text(json.dumps(config))
+        for _ in range(3):
+            count, _ = self.run_round(dict(side_effect=AssertionError('a display rename must not wash the limit')), at)
+            self.assertEqual(count, 0)
+            at += dt.timedelta(minutes=41)
+        job = self.rows()['jobs'][key]
+        self.assertEqual((job['attempts'], job['done'], job['next_try']), (3, 0, ''))
+        self.store.act(dict(action='retry', id=key))
+        count, _ = self.run_round(dict(return_value=BRIEF), at)
+        self.assertEqual(count, 1, 'explicit retry keeps the same identity')
+        item, = self.rows()['items']
+        self.assertEqual((item['id'], item['state']), (old_item['id'], 'accepted'))
+        self.assertEqual(len(self.rows()['tasks']), 1)
+
 
 if __name__ == '__main__':
     unittest.main()
