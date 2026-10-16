@@ -3253,8 +3253,9 @@ _SCHOOL_NATIVE_EXAMPLE=re.compile(r'^(?:示例|例如|格式示例)[：:]')
 def _school_native_command(clause):
     """A literal addressed outcome, not a verb search inside examples or reports."""
     value=re.sub(r'^'+_SCHOOL_NATIVE_MARKER,'',clause.strip())
-    # A date may carry its own clock time or lesson ("21:00前", "数学课前") before the outcome it limits.
-    prefix=(r'(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')[，,:：]\s*|'+_SCHOOL_NATIVE_DATE
+    # A date may carry its own clock time or lesson ("21:00前", "数学课前") before the outcome it limits,
+    # and its own time preposition ("请于11月6日前阅读…"); a date alone, or one not followed by an outcome, is no command.
+    prefix=(r'(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')[，,:：]\s*|(?:于|在)?\s*'+_SCHOOL_NATIVE_DATE
             +r'\s*(?:\d{1,2}[:：]\d{2}|(?:'+_SCHOOL_NATIVE_SUBJECTS+r')课)?\s*(?:前|之前|以前|内)?\s*|请(?:各位)?(?:家长|同学们?|大家)?\s*|只需\s*|独立\s*|另(?:外)?\s*)')
     lead=re.match(r'^(?:'+prefix+r')*',value)[0];value=value[len(lead):]
     # "订正本/口算本" followed by its day or handback is the notebook, not another 订正/口算 outcome.
