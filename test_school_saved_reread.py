@@ -58,7 +58,7 @@ print(json.dumps(dict(calls=model.call_count, result=result, policy=agent.SCHOOL
 '''
 
 
-def seed(root, source=SOURCE, text=TEXT, reply=SYNTHETIC):
+def seed(root, source=SOURCE, text=TEXT, reply=SYNTHETIC, script=SEED):
     """Exact old source, real ingest/run_once/save; returns the old run's own report."""
     old = root / 'old-source'
     old.mkdir()
@@ -66,7 +66,7 @@ def seed(root, source=SOURCE, text=TEXT, reply=SYNTHETIC):
     subprocess.run(['tar', '-x', '-C', str(old)], input=archive, check=True)
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
     out = subprocess.run([sys.executable, '-I', '-c', 'import sys;p,s=sys.argv[1:3];del sys.argv[1:3];sys.path.insert(0,p);exec(s)',
-                          str(old), SEED, str(root / 'family'), json.dumps(source), text, json.dumps(reply)],
+                          str(old), script, str(root / 'family'), json.dumps(source), text, json.dumps(reply)],
                          check=True, capture_output=True, text=True, cwd=old, env=env).stdout
     return json.loads(out.strip().splitlines()[-1])
 
@@ -702,6 +702,186 @@ class MixedStoreTests(unittest.TestCase):  # SR05: eligible + exhausted + parent
         for key, job in before['jobs'].items():
             self.assertEqual(state['jobs'][key], job, key)
         self.assertEqual([m['processed'] for m in state['messages']], [1] * 4)
+
+
+def natural(case, prefix, source, text, reply, script=SEED):
+    """setUp shared by Root's counters: exact old source, real ingest/run_once/save, then the new source's own store."""
+    directory = tempfile.TemporaryDirectory(prefix=prefix)
+    case.addCleanup(directory.cleanup)
+    case.root = Path(directory.name).resolve()
+    case.old = seed(case.root, source, text, reply, script)
+    case.data = case.root / 'family' / 'private'
+    case.app = family_review.load_app(case.root / 'family', case.data)
+    case.store = agent.Store(case.app.connect, case.app.profiles, case.data, app=case.app)
+    case.stack = ExitStack(); case.addCleanup(case.stack.close)
+    case.stack.enter_context(patch('family_qq_capture.run_one', return_value=dict(state='disabled')))
+    case.stack.enter_context(patch.object(agent.family_teacher_public, 'run_one', return_value=dict(state='disabled')))
+    case.stack.enter_context(patch.object(family_media, 'run_one', return_value=dict(state='ready')))
+    case.stack.enter_context(patch.object(family_media, 'prepare_draft', return_value=dict(used=0, failed=0)))
+    case.stack.enter_context(patch('family_goals.Store.run', return_value=dict(used=0, failed=0, created=0, children=set())))
+    case.now = dt.datetime(2026, 10, 17, 3, 0, tzinfo=agent.TZ)
+
+
+# Root counter 1 (ROOT-actual-counterexample.json): one message, one shared header deadline, two independent forms.
+SHARED_SOURCE = dict(SOURCE, id='root-shared-forms-A')
+SHARED_REF = 'message:root-shared-forms-A:1'
+SHARED_FIRST = '在《阅读资料领取登记表》上填写学生姓名和领取份数，家长签字后交回班主任'
+SHARED_SECOND = '在《朗读材料预约登记表》上填写学生姓名和预约份数，家长签字后交回班主任'
+SHARED_TEXT = '2026年10月22日前，请分别办理以下两项：' + SHARED_FIRST + '；' + SHARED_SECOND + '。'
+SHARED_OLD_REPLY = dict(proposals=[dict(  # Root's old_synthetic_first_only_reply (SYNTHETIC), refs unchanged
+    due='2026-10-22', evidence=[dict(ref=SHARED_REF)], focus='school', learning_goal_id='', learning_subject='', task_advice='',
+    task_change='new', task_goal=SHARED_FIRST + '。完成时间：2026年10月22日前。', task_purpose='admin',
+    task_reason='SYNTHETIC：故意只返回第一独立表单；0真实provider，非实际模型准确性样本。', task_state='ready',
+    task_submission='家长签字后交回班主任', task_target_id='', task_title='填写签领登记并交回班主任',
+    title_quote='2026年10月22日前，请分别办理以下两项：' + SHARED_FIRST)])
+
+
+def shared_history_reply(old_id):  # Root's case1_frozen_history_reply (SYNTHETIC), both dues 22, own contiguous quotes
+    first = dict(SHARED_OLD_REPLY['proposals'][0], action_quote=SHARED_FIRST, existing_item_id=old_id, title_quote=SHARED_FIRST)
+    second = dict(first, action_quote=SHARED_SECOND, existing_item_id='', title_quote=SHARED_SECOND,
+                  task_goal=SHARED_SECOND + '。完成时间：2026年10月22日前。', task_title='填写预约登记并交回班主任',
+                  task_reason='SYNTHETIC：第二独立行政表单，适用原文明确共同截止；0真实provider。')
+    return dict(proposals=[first, second])
+
+
+class SharedDeadlineAcceptedFormTests(unittest.TestCase):
+    rows = SavedSchoolRereadTests.rows
+    run_round = SavedSchoolRereadTests.run_round
+
+    def setUp(self):
+        natural(self, 'synthetic-shared-forms-', SHARED_SOURCE, SHARED_TEXT, SHARED_OLD_REPLY)
+
+    def test_old_seed_is_the_auto_accepted_first_form(self):
+        state = self.rows()
+        item, = state['items']
+        plan = json.loads(item['plan'])
+        self.assertEqual((item['state'], plan['school_task'].get('auto_added'), item['due']), ('accepted', True, '2026-10-22'))
+        self.assertEqual(SHARED_TEXT.count(item['body']), 0, 'the old body is a normalized goal, not an original substring')
+        self.assertEqual(SHARED_TEXT.count(plan['school_date_quote']), 1, 'the saved date quote is one contiguous original span')
+        self.assertNotIn('school_action_anchor', plan)
+        task, = state['tasks']
+        self.assertEqual((task['id'], task['due']), (item['task_id'], '2026-10-22'))
+
+    def test_saved_action_proof_locates_the_old_form_and_the_second_form_is_saved_once(self):
+        before = self.rows()
+        old_item, = before['items']
+        sent = []
+        def model(messages, *args, **kwargs):  # SYNTHETIC history-mode reply only
+            body = json.loads(messages[1]['content'])
+            sent.append(body.get('existing_actions'))
+            return shared_history_reply(old_item['id'])
+        calls = [self.run_round(dict(side_effect=model), self.now + dt.timedelta(minutes=41 * i))[0] for i in range(3)]
+        self.assertEqual(sum(calls), 1, calls)
+        self.assertTrue(sent and sent[0] and sent[0][0]['action_anchor'], 'the old form is offered with its located original action')
+        state = self.rows()
+        audit = [j for k, j in state['jobs'].items() if k.startswith('school-history:')]
+        self.assertEqual([(j['done'], j['error']) for j in audit], [(1, '')])
+        self.assertEqual(next(i for i in state['items'] if i['id'] == old_item['id']), old_item, 'old accepted row byte-identical')
+        self.assertEqual([t for t in state['tasks'] if t['id'] == old_item['task_id']], before['tasks'], 'old task unchanged')
+        new = [i for i in state['items'] if i['id'] != old_item['id']]
+        self.assertEqual(len(new), 1, new)
+        self.assertIn(SHARED_SECOND, new[0]['body'])
+        self.assertNotIn('阅读资料领取登记表', new[0]['body'])
+        self.assertEqual(new[0]['due'], '2026-10-22', 'the explicit shared header deadline, read from the original')
+        self.assertEqual(json.loads(new[0]['plan'])['school_action_anchor'], {SHARED_REF: SHARED_SECOND})
+        self.assertIn(SHARED_REF, new[0]['evidence'])
+        for text in [t['action'] for t in state['tasks']] + [i['body'] for i in state['items']]:
+            self.assertFalse('阅读资料领取登记表' in text and '朗读材料预约登记表' in text, 'merged: ' + text)
+        self.assertEqual(state['jobs'][old_item['job_id']], before['jobs'][old_item['job_id']])
+        self.assertEqual((state['messages'], state['cursor']), (before['messages'], before['cursor']))
+        self.store = agent.Store(self.app.connect, self.app.profiles, self.data, app=self.app)
+        for minutes in (200, 241, 400):
+            count, _ = self.run_round(dict(side_effect=AssertionError('once per old batch')), self.now + dt.timedelta(minutes=minutes))
+            self.assertEqual(count, 0)
+        again = self.rows()
+        self.assertEqual((again['items'], again['tasks']), (state['items'], state['tasks']))
+
+
+class RouteSwitchBudgetTests(unittest.TestCase):  # Root counter 2: one recovery budget per old batch across routes
+    rows = SavedSchoolRereadTests.rows
+    run_round = SavedSchoolRereadTests.run_round
+
+    def setUp(self):
+        natural(self, 'synthetic-route-budget-', SOURCE, TEXT, SYNTHETIC)
+
+    def test_crossing_the_original_due_does_not_refill_the_exhausted_budget(self):
+        before = self.rows()
+        old_item, = before['items']
+        fail = dict(side_effect=agent.family_llm.LLMDraftError('SYNTHETIC：同一旧批次固定失败；0真实provider。'))
+        timeline = []
+        late = dt.datetime(2026, 10, 23, 18, 0, tzinfo=agent.TZ)  # only the clock passes the original due 2026-10-22
+        for at in [self.now + dt.timedelta(minutes=m) for m in (0, 41, 82)] + [late + dt.timedelta(minutes=m) for m in (0, 41, 82)]:
+            count, _ = self.run_round(fail, at)
+            jobs = self.rows()['jobs']
+            timeline.append((at.isoformat(), count, sorted((k.split(':')[0], j['attempts'], j['done']) for k, j in jobs.items()
+                                                         if k.startswith(('school-task:', 'school-history:')))))
+        self.assertEqual(sum(t[1] for t in timeline), 3, timeline)
+        state = self.rows()
+        self.assertEqual(state['items'], before['items'])
+        self.assertEqual(state['jobs'][old_item['job_id']], before['jobs'][old_item['job_id']])
+        self.assertEqual((state['messages'], state['cursor']), (before['messages'], before['cursor']))
+        # Only the existing explicit retry of the failed identity renews it.
+        self.store.act(dict(action='retry', id='school-task:' + old_item['id']))
+        count, _ = self.run_round(fail, late + dt.timedelta(minutes=200))
+        self.assertEqual(count, 1)
+
+
+SEED_PAIR = SEED.replace("messages=[dict(id='1', message_order='1',\n    time='2026-10-16T18:00:00+08:00', kind='text', sender='示例班主任', sender_id='school', text=text, unread=False)]",
+                         "messages=[dict(id=str(n + 1), message_order=str(n + 1),\n    time='2026-10-16T18:00:00+08:00', kind='text', sender='示例班主任', sender_id='school', text=t, unread=False) for n, t in enumerate(json.loads(text))]")
+SIBLING_SOURCE = dict(SOURCE, id='postcandidate-samebatch-sibling')
+SIBLING_MATH = '2026年10月22日前，完成数学《练习册》第18页第1至4题，写清计算过程。'
+SIBLING_OLD_REPLY = dict(proposals=[  # Root's old_synthetic_selection_reply (SYNTHETIC)
+    dict(SYNTHETIC['proposals'][0], evidence=[dict(ref='message:postcandidate-samebatch-sibling:1')]),
+    dict(SYNTHETIC['proposals'][0], title_quote=SIBLING_MATH, evidence=[dict(ref='message:postcandidate-samebatch-sibling:2')],
+         task_title='完成数学《练习册》第18页第1至4题', task_goal=SIBLING_MATH, task_state='review', task_purpose='learning',
+         task_reason='synthetic：模型谨慎保留复核，本项原文与期限完整。')])
+
+
+class SiblingNotOwnedTests(unittest.TestCase):  # Root counter 3: one reread row is not the owner of its whole batch
+    rows = SavedSchoolRereadTests.rows
+    run_round = SavedSchoolRereadTests.run_round
+
+    def setUp(self):
+        natural(self, 'synthetic-sibling-', SIBLING_SOURCE, json.dumps([TEXT, SIBLING_MATH], ensure_ascii=False), SIBLING_OLD_REPLY, SEED_PAIR)
+
+    def test_old_seed_is_one_done_batch_with_two_pending_reviews(self):
+        state = self.rows()
+        self.assertEqual([(i['state'], json.loads(i['plan'])['school_task']['state']) for i in state['items']], [('pending', 'review')] * 2)
+        self.assertEqual(len({i['job_id'] for i in state['items']}), 1)
+        self.assertEqual((state['tasks'], [m['processed'] for m in state['messages']]), ([], [1, 1]))
+
+    def test_the_sibling_review_is_understood_again_not_left_as_covered(self):
+        before = self.rows()
+        admin, math = sorted(before['items'], key=lambda i: SIBLING_MATH in i['body'])
+        asked = []
+        def model(messages, *args, **kwargs):  # SYNTHETIC: the single reread gets BRIEF, a batch audit both actions
+            content = messages[1]['content']
+            asked.append(content)
+            if 'existing_actions' not in json.loads(content):
+                return BRIEF
+            return dict(proposals=[
+                dict(SYNTHETIC['proposals'][0], evidence=[dict(ref='message:postcandidate-samebatch-sibling:1')], action_quote=TEXT,
+                     existing_item_id=admin['id']),
+                dict(SIBLING_OLD_REPLY['proposals'][1], action_quote=SIBLING_MATH, existing_item_id=math['id'], task_state='ready',
+                     task_reason='synthetic：新理解，原文与期限完整。')])
+        for i in range(4):
+            self.run_round(dict(side_effect=model), self.now + dt.timedelta(minutes=41 * i))
+        state = self.rows()
+        self.assertTrue([c for c in asked if SIBLING_MATH in c], 'the second message is read again by the model')
+        after = next(i for i in state['items'] if i['id'] == math['id'])
+        revisions = [i for i in state['items'] if i['id'] not in (admin['id'], math['id'])]
+        self.assertTrue(after != math or [i for i in revisions if math['id'] in i['plan']],
+                        'the sibling gets its new understanding in place or a traceable same-item revision')
+        self.assertFalse([i for i in revisions if '听写背诵订正材料领取登记单' in i['body']], 'no copy of the first action')
+        self.assertLessEqual(len([t for t in state['tasks'] if '听写背诵订正材料领取登记单' in t['action']]), 1)
+        self.assertEqual(state['jobs'][admin['job_id']], before['jobs'][admin['job_id']])
+        self.assertEqual((state['messages'], state['cursor']), (before['messages'], before['cursor']))
+        self.store = agent.Store(self.app.connect, self.app.profiles, self.data, app=self.app)
+        for minutes in (300, 341, 500):
+            count, _ = self.run_round(dict(side_effect=AssertionError('once per old batch')), self.now + dt.timedelta(minutes=minutes))
+            self.assertEqual(count, 0)
+        again = self.rows()
+        self.assertEqual((again['items'], again['tasks']), (state['items'], state['tasks']))
 
 
 class EmptyInstallTests(unittest.TestCase):
