@@ -2234,6 +2234,8 @@ class SchoolActionPurposeTests(unittest.TestCase):
     """
     setUp = SchoolNativeCoverageTests.setUp
     _use_replies = SchoolNativeCoverageTests._use_replies
+    _ingest = SchoolNativeCoverageTests._ingest
+    _assert_rejected_batch = SchoolNativeCoverageTests._assert_rejected_batch
     F_MESSAGES = (
         ('2026-10-16T19:00:00+08:00', '示例科学老师', 'p1-heldout-f-science',
          '科学：请于2026年11月2日18:30前写好《叶片观察》记录卡，分别记录两种叶片的颜色和边缘形状；记录卡2026年11月3日科学课交给科学老师。'),
@@ -2505,6 +2507,127 @@ class SchoolActionPurposeTests(unittest.TestCase):
         brief = agent._school_brief(dict(value, title='《听写课文生字登记单》', goal='在《听写课文生字登记单》上填写学生姓名后交回。'),
                                     evidence=evidence, separate_learning=True)
         self.assertEqual(brief['state'], 'review')
+
+    # Known fictional K12: the actual parsed Flash reply (configured effort none) on c131 was reference/optional with no title,
+    # goal or due; only the native ledger read 阅读 in the material's name as a required reading and refused it. The request now
+    # carries no required native action for this message, so this exact old reply is a fixed program control, not prompt accuracy.
+    K12_TEXT = '阅读活动参考资料仅供了解，自愿查看。下一次全班具体任务及日期将另行通知。'
+    K12_RAW = dict(title_quote='阅读活动参考资料仅供了解，自愿查看。', focus='school', due='', evidence=[0], task_title='', task_goal='',
+                   task_advice='', learning_subject='', learning_goal_id='', task_change='new', task_target_id='', task_state='reference',
+                   task_reason='该消息说明阅读活动参考资料仅供了解、自愿查看，且下一次全班具体任务及日期将另行通知，本身没有新增行动要求，不生成待办任务。',
+                   task_purpose='optional', task_submission='')
+
+    def _k12_facts(self, app, store):
+        from family_goals import Store as Goals
+        with store._db() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")]
+            originals = [json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
+            manual = c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0]
+        with app.connect() as c:
+            tasks = {t['id']: t for t in app.tasks(c)}
+        return rows, tasks, originals, manual, Goals(app, store).school_candidates(self.source['child_id'])
+
+    def test_known_k12_voluntary_reference_saves_one_reference_through_auto_intake_and_fresh_store_reopen(self):
+        self.fixture.now = self.now = dt.datetime(2026, 10, 16, 20, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='11')
+        payload['messages'] = [dict(id='11', message_order='11', time='2026-10-16T18:03:00+08:00', kind='text', sender='示例学校发布人',
+                                    sender_id='p1-classification-k12-school', text=self.K12_TEXT, unread=False)]
+        self.store.ingest(payload)
+        ref = 'message:' + self.source['id'] + ':11'
+        self._use_replies(payload, [dict(proposals=[dict(copy.deepcopy(self.K12_RAW), evidence=[dict(ref=ref)])])])
+        requests = []
+        saved_reply = self.model.side_effect
+        self.model.side_effect = lambda messages, *args, **kwargs: (requests.append(json.loads(messages[-1]['content'])), saved_reply(messages, *args, **kwargs))[1]
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        self.assertNotIn('required_native_actions', requests[0], 'material only for information is no required native action')
+        import family_review
+
+        def check(rows, tasks, originals, manual, goals):
+            row, = rows
+            plan = json.loads(row['plan']);brief = plan['school_task']
+            self.assertEqual((brief['state'], brief['purpose'], row['due'], row['task_id'] or '', plan.get('school_learning'), plan.get('school_goal_id', '')),
+                             ('reference', 'optional', '', '', None, ''), 'one reference: no to-do, date, learning link or goal')
+            self.assertFalse({'school_native_action', 'school_original_action', 'school_native_cover'} & set(plan))
+            self.assertEqual((brief['title'], brief['goal']), ('', ''))
+            self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], [ref])
+            self.assertEqual([self.K12_TEXT in e['text'] for e in json.loads(row['evidence'])], [True], 'the complete original is kept')
+            self.assertFalse({'pdf_evidence', 'material_evidence', 'page_evidence'} & set(brief), 'no attachment was read or prepared')
+            self.assertEqual((tasks, manual), ({}, 0), 'nothing to do was created')
+            self.assertEqual(originals, payload['messages'], 'the complete original stays unchanged')
+            self.assertEqual(goals, [], 'no school learning goal')
+
+        first = self._k12_facts(self.app, self.store);check(*first)
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['failed'], replay['processed'], replay['created']), (0, 0, 0))
+        app = family_review.load_app(self.fixture.root, self.fixture.data)
+        fresh = self._k12_facts(app, agent.Store(app.connect, app.profiles, self.fixture.data, app=app))
+        check(*fresh)
+        self.assertEqual([r['id'] for r in fresh[0]], [r['id'] for r in first[0]], 'reopen keeps the one item without duplicates')
+        self.assertEqual(self.model.call_count, 1)
+
+    def test_reference_scope_is_its_own_clause_and_never_hides_or_creates_a_required_outcome(self):
+        def actions(text):
+            entry = dict(ref='message:synthetic-reference:1', text=text, kind='text', publisher='p', time='2026-10-16T18:03:00+08:00')
+            return [(a['quote'], a['purpose']) for a in agent._school_native_actions([entry])]
+        self.assertEqual(actions(self.K12_TEXT), [], 'a later "另行通知" does not make the material a required activity')
+        first = self.K12_TEXT.split('。')[0] + '。'
+        cases = {
+            first + '请阅读课文第3页。': [('请阅读课文第3页', 'learning')],
+            '请完成练习册第5页。' + self.K12_TEXT: [('请完成练习册第5页', 'learning')],
+            first[:-1] + '，请完成第3题。': [('请完成第3题', 'learning')],
+            '1. 朗读课文三遍。2. 阅读拓展资料仅供了解，自愿查看。3. 背诵第一段。': [('朗读课文三遍', 'learning'), ('背诵第一段', 'learning')],
+            # The voluntary use binds only material its own clause limits; an addressed or further requirement stays required.
+            '阅读第10页，自愿查看拓展资料。': [('阅读第10页，自愿查看拓展资料', 'learning')],
+            '阅读活动参考资料仅供了解，周五前交读后感。': [('阅读活动参考资料仅供了解，周五前交读后感', 'learning')],
+            '阅读活动参考资料仅供了解，自愿读3篇。': [('阅读活动参考资料仅供了解，自愿读3篇', 'learning')],
+            '请阅读资料仅供了解。': [('请阅读资料仅供了解', 'learning')],
+            '朗读课文供家长检查。': [('朗读课文供家长检查', 'learning')],
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):self.assertEqual(actions(text), expected)
+
+    def _k12_mixed(self, reference_state):
+        self.fixture.now = self.now = dt.datetime(2026, 10, 16, 20, tzinfo=agent.TZ)
+        texts = [self.K12_TEXT.split('。')[0] + '。请阅读课文第3页，写一句理由。', '请家长在安全确认单上签字，2026年10月21日交回班主任。']
+        payload, refs = self._ingest(texts, ['p1-classification-k12-school'] * 2)
+        reference = dict(copy.deepcopy(self.K12_RAW), evidence=[dict(ref=refs[0])])
+        reading = fixtures.school_proposal(
+            title_quote='请阅读课文第3页，写一句理由', evidence=[dict(ref=refs[0])], task_title='阅读课文第3页并写理由',
+            task_goal='阅读课文第3页，写一句理由。', task_state=reference_state, task_reason='虚构回执。',
+            task_purpose='learning' if reference_state == 'ready' else 'optional')
+        form = fixtures.school_proposal(
+            title_quote=texts[1], due='2026-10-21', evidence=[dict(ref=refs[1])], task_title='安全确认单签字交回',
+            task_goal=texts[1], task_state='ready', task_reason='虚构回执。', task_purpose='admin', task_submission='交回班主任')
+        return payload, refs, [reference, reading, form]
+
+    def test_reference_beside_a_real_reading_and_errand_keeps_both_required_while_a_mislabelled_reading_rejects_the_batch(self):
+        payload, refs, replies = self._k12_mixed('ready')
+        self._use_replies(payload, [dict(proposals=replies)])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 2))
+        rows, tasks, originals, manual, goals = self._k12_facts(self.app, self.store)
+        states = sorted((json.loads(r['plan'])['school_task']['state'], json.loads(r['plan'])['school_task']['purpose'], bool(r['task_id'])) for r in rows)
+        self.assertEqual(states, [('ready', 'admin', True), ('ready', 'learning', True), ('reference', 'optional', False)])
+        reading = next(t for t in tasks.values() if '课文第3页' in t['action'])
+        self.assertIn('写一句理由', reading['action'], 'the real requirement keeps its complete standard')
+        self.assertNotIn('仅供了解', reading['action'], 'the reference is not merged into it')
+        self.assertEqual(originals, payload['messages'])
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['failed'], replay['processed'], replay['created']), (0, 0, 0))
+
+    def test_mislabelled_reference_of_a_real_requirement_still_rejects_the_whole_batch(self):
+        for variant in ('reading', 'whole'):
+            with self.subTest(variant=variant):
+                t = type(self)(methodName='runTest');t.setUp()
+                try:
+                    payload, refs, replies = t._k12_mixed('reference')
+                    if variant == 'whole':
+                        # One reference quoting the whole message cannot swallow its located reading.
+                        replies = [dict(copy.deepcopy(self.K12_RAW), title_quote=payload['messages'][0]['text'], evidence=[dict(ref=refs[0])]), replies[2]]
+                    t._use_replies(payload, [dict(proposals=replies)])
+                    t._assert_rejected_batch(payload, agent.run_once(t.app, t.now))
+                finally:t.doCleanups()
 
     def test_one_action_purpose_contract_reaches_batch_single_candidate_and_original_recovery(self):
         for prompt in (agent.SCHOOL_PROMPT, agent._task_prompt(None), agent._school_original_prompt(None, None, None)):
