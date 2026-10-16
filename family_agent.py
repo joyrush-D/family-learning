@@ -2226,7 +2226,7 @@ def _school_own_dates(quote,published):
 
     A second, recurring, past, ranged or open-ended day, or a day this clause does not arrange, is not this action's date.
     """
-    from family_agenda import _relative_weekday,date,deadlines
+    from family_agenda import _in_title,_relative_weekday,date,deadlines
     values=deadlines(quote,published)
     if values or not date(published):return values
     def iso(match):
@@ -2237,7 +2237,7 @@ def _school_own_dates(quote,published):
     text=_relative_weekday(re.sub(r'(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日',iso,quote),published)
     days=re.findall(r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}|今天|今日|今晚|明天|明日|明早|明晚|后天|昨天|前天|每天|每晚|(?:周|星期|礼拜)[一二三四五六日天]',text)
     found=re.search(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)(?!\s*(?:起|开始|以后|之后|以来|至|到|[-–—~～]))[^。；;，,\n]{0,8}?'+_SCHOOL_ARRANGEMENT,text)
-    if len(days)!=1 or not found or re.search(r'每\s*$',text[:found.start()]):return set()
+    if len(days)!=1 or not found or _in_title(text,found.start(1)) or re.search(r'每\s*$',text[:found.start()]):return set()
     offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}
     value=date(found[1]) or (dt.date.fromisoformat(published)+dt.timedelta(days=offset[found[1]])).isoformat()
     return {value} if value>=published else set()

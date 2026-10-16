@@ -56,6 +56,16 @@ def deadlines(text,published):
     return _action_deadlines(text,published)|event_days(text,published)
 
 
+def _in_title(text,index):
+    """A 《》 title is an object's name, not a sentence: a day or verb written inside it is not one the text states."""
+    return text.count('《',0,index)>text.count('》',0,index)
+
+
+def _own(match):
+    """The match's day and its last action word both stand outside any 《》 title."""
+    return not _in_title(match.string,match.start(1)) and not _in_title(match.string,match.end()-1)
+
+
 def _action_deadlines(text,published):
     """Every date the text ties to a required action, grounded on the sending day."""
     anchor=date(published)
@@ -65,23 +75,26 @@ def _action_deadlines(text,published):
     candidates=set()
     # 把 right after the day names the object its own verb acts on. A complete name ending in its own noun
     # (把校内参观活动回执签字交回) is one object however long, so only that noun counts toward the window below; a
-    # state, another day or a clause word inside the name (把已取消的活动回执) leaves the text as it was.
+    # state, another day or a clause word inside the name (把已取消的活动回执), or a day that is itself written inside a
+    # 《》 title (资料标题为《明天把…回执交回指南》), leaves the text as it was.
     text=re.sub(r'((?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:(?:由家长|家长|孩子|学生|请)[ \t]*){0,2}把)'
                 r'(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|'+_EVENT_CLAUSE_WORD+r')[一-鿿A-Za-z0-9])*?'
-                r'('+_EVENT_OBJECT_NOUN+r')(?=签字|盖章|交|带|上交|提交)',r'\1\2',text or '')
+                r'('+_EVENT_OBJECT_NOUN+r')(?=签字|盖章|交|带|上交|提交)',lambda m:m[0] if _in_title(m.string,m.start()) else m[1]+m[2],text or '')
     action=r'(?:前|截止|完成|订正|提交|上交|交齐|带到|带来|交作业|朗读|背诵|抄写|预习|听[^。；;，,\n]{0,12}录音|带|穿|交(?!流|通|换|谈)|测验|考试|听写|默写|检测)'
     # A 《》 title ends at its own closing bracket, and a page/lesson number ends a plain book name the same way, so
-    # 把《图形与证明综合练习》的第4页完成 or 把数学练习册第4页完成 is likewise one object for the same action list below; a
-    # state or another day inside it, a clause word in the plain name, or anything else before the action leaves the
-    # text as it was.
+    # 把《图形与证明综合练习》的第4页完成, 把《单位换算强化训练》练习第2页订正 or 把数学练习册第4页完成 is likewise one object
+    # for the same action list below; a state or another day inside it, a clause word in the plain name, or anything
+    # else before the action leaves the text as it was.
     locator=r'(?:[、和]?的?第?[0-9一二三四五六七八九十百]+(?:[-–~～至到]第?[0-9一二三四五六七八九十百]+)?(?:页|题|课|单元|章|节))'
+    plain=r'(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|'+_EVENT_CLAUSE_WORD+r')[一-鿿A-Za-z])'
     text=re.sub(r'((?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:(?:由家长|家长|孩子|学生|请)[ \t]*){0,2}把)'
-                r'(?:《(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r')[^《》。；;，,\n])+》'+locator+r'*'
-                r'|(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|'+_EVENT_CLAUSE_WORD+r')[一-鿿A-Za-z])+?'+locator+r'+)'
-                r'(?='+action+r')',r'\1《》',text)
+                r'(?:《(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r')[^《》。；;，,\n])+》(?:'+plain+r'*?'+locator+r'+)?'
+                r'|'+plain+r'+?'+locator+r'+)'
+                r'(?='+action+r')',lambda m:m[0] if _in_title(m.string,m.start()) else m[1]+'《》',text)
     # A date alone is not a deadline; it must be tied to an explicit action or dated school event.
     pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:[^。；;，,\n]{0,8}?)'+action
     for match in re.finditer(pattern,text or ''):
+        if not _own(match):continue
         token=match[1];value=date(token)
         if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):
             offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[token]
@@ -89,13 +102,14 @@ def _action_deadlines(text,published):
             except OverflowError:pass
         if value:candidates.add(value)
     for match in re.finditer(r'截止(?:时间|日期)?\s*[：:为是]*\s*(\d{4}-\d{2}-\d{2})',text):
-        if date(match[1]): candidates.add(match[1])
+        if _own(match) and date(match[1]): candidates.add(match[1])
     # A directly dated revision/parent action is just as explicit as 完成 or
     # 提交. Keep this grammar narrow: do not turn 公布复习资料, 打印机指南 or
     # 签字安排 into a deadline by searching arbitrarily past the date.
     direct_prefix=r'[ \t：:]*(?:(?:需要|务必|由家长|同学们|家长|孩子|学生|请|需|须|要|先)[ \t]*){0,2}(?:(?:语文|数学|英语|科学|历史|地理|生物|物理|化学)[ \t：:]*)?'
     direct_action=r'(?:复习|打印|签字|盖章)(?!资料|材料|计划|安排|通知|要求|时间|指南|方法|建议|结果|情况|方式|入口|功能|机)'
     for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)'+direct_prefix+direct_action,text):
+        if not _own(match):continue
         token=match[1];value=date(token)
         if not value and anchor and token in ('今天','今日','今晚','明天','明日','后天'):
             offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[token]
@@ -117,6 +131,7 @@ def _action_deadlines(text,published):
     # Unit/title names can separate the date from the reading action. Do not
     # cross a different date or clause, or treat a material's name as an action.
     for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)'+span+r'(?:'+reading_event+r')',text or ''):
+        if not _own(match):continue
         token=match[1];value=date(token)
         if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):
             offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[token]
@@ -133,6 +148,7 @@ def _action_deadlines(text,published):
         if date(match[2]):candidates.update((relative,match[2]))
     exam_event=r'单元测|体育测试|小测|月考|期中|期末|测验|考试|统考|联考|水平测|质检|摸底'
     for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)'+span+r'(?:'+exam_event+r')',text or ''):
+        if not _own(match):continue
         token=match[1];value=date(token)
         if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):
             offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[token]

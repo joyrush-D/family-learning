@@ -3391,6 +3391,28 @@ class AgentTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(deadlines(text,'2026-10-16'),set(),'state, other day, negation, no own action or publication day stays undated')
 
+    def test_title_is_an_object_not_a_dated_action_and_its_part_keeps_the_outer_date(self):
+        from family_agenda import deadlines
+        for text in ['资料标题为《明天把校园参观活动回执交回指南》。',
+                     '请把《2026年10月20日课堂练习》第3页完成，实际完成日期另行通知。',
+                     '请把《周末计算材料》第5页完成，完成时间另行通知。',
+                     '请阅读《明天交作业须知》。']:
+            with self.subTest(text=text):
+                self.assertEqual(deadlines(text,'2026-10-16'),set(),'a day or verb inside a title is not one the text states')
+                self.assertEqual(agent._school_own_dates(text,'2026-10-16'),set())
+        for text in ['数学：请2026年10月23日把《单位换算强化训练》练习第2页订正并写出理由。',
+                     '请2026年10月23日把《单位换算强化训练》配套练习的第2页订正。']:
+            with self.subTest(text=text):
+                self.assertEqual(deadlines(text,'2026-10-16'),{'2026-10-23'})
+        for text in ['请2026年10月23日把《单位换算强化训练》已发练习第2页订正。',
+                     '请2026年10月23日把《单位换算强化训练》练习答案发到群里。',
+                     '请2026年10月23日把《单位换算强化训练》练习订正。']:
+            with self.subTest(text=text):
+                self.assertEqual(deadlines(text,'2026-10-16'),set(),'state/clause word, no own action or no page still refuses')
+        quote='数学：请2026年10月23日把《单位换算强化训练》练习第2页订正并写出理由；请把《周末计算材料》第5页完成，完成时间另行通知。'
+        self.assertEqual(deadlines(quote,'2026-10-16'),{'2026-10-23'})
+        self.assertEqual(deadlines('请把《周末计算材料》第5页完成，完成时间另行通知','2026-10-16'),set(),'the adjacent item borrows no day')
+
     def test_literal_independent_admin_date_cannot_borrow_or_truncate_an_action(self):
         quote='家长事务：2026-02-13签字交回独立活动回执，无需盖章。'
         evidence=[dict(text='2026-02-11朗读第5课两遍。\n'+quote,time=self.now.isoformat())]
