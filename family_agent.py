@@ -1761,7 +1761,7 @@ class Store:
             if school_context:
                 source,values=school_context
                 originals=[dict(ref='message:'+source['id']+':'+v['id'],text=v['text'],time=v['time'],
-                    publisher=_publisher(source['id'],v),kind=v['kind'],content_incomplete=v['unread']) for v in values]
+                    publisher=_publisher(source['id'],v),kind=v['kind'],content_incomplete=v['unread'],message_order=v.get('message_order','')) for v in values]
                 for original,v in zip(originals,values):
                     original['attachments']=[r['upload_id'] for r in c.execute(
                         'SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=?',(source['id'],v['id']))]
@@ -3389,12 +3389,19 @@ _SCHOOL_NATIVE_FILLER=r'补充|更正|另外|关于|还有|大家|同学们?|孩
 
 
 def _school_native_later_text(entry,later):
-    """A complete text message strictly after this list, from the same publisher and source."""
+    """A complete text message strictly after this list, from the same publisher and source.
+
+    Within one stored second only the collector's own message_order of both originals orders them; a numeric id or ref tail
+    proves no order, and an unknown, equal or reversed order or a missing publisher keeps the later message unbound.
+    """
     if (later is entry or later.get('publisher')!=entry.get('publisher') or later.get('kind','text')!='text'
             or later.get('content_incomplete') or later.get('unread') or later.get('attachments')
             or later['ref'][8:].rsplit(':',1)[0]!=entry['ref'][8:].rsplit(':',1)[0]):return False
-    try:return dt.datetime.fromisoformat(later['time'])>dt.datetime.fromisoformat(entry['time'])
+    try:gap=(dt.datetime.fromisoformat(later['time'])-dt.datetime.fromisoformat(entry['time'])).total_seconds()
     except (KeyError,ValueError,TypeError):return False
+    if gap:return gap>0
+    order=[str(e.get('message_order') or '') for e in (entry,later)]
+    return bool(entry.get('publisher')) and all(re.fullmatch(r'[0-9]{1,40}',o) for o in order) and int(order[1])>int(order[0])
 
 
 def _school_native_shared_later(entry,evidence,count):
@@ -3883,7 +3890,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     routing = mode == 'school' and school_goals is not None
     native_actions=_school_native_actions(evidence) if routing and school_existing is None else []
     native_assigned=set();native_spans=set()
-    content = {'mode': mode, 'as_of': as_of, 'child': profile or {}, 'evidence': evidence}
+    content = {'mode': mode, 'as_of': as_of, 'child': profile or {}, 'evidence': [{k:v for k,v in e.items() if k!='message_order'} for e in evidence]}
     # The program's late-standard proof is checked here, not shown to the model: its input stays unchanged.
     if routing: content.update(learning_goals=school_goals,school_tasks=[{k:v for k,v in t.items() if k!='shared_standard'} for t in school_tasks])
     if native_actions:content['required_native_actions']=[_school_native_view(a) for a in native_actions]
@@ -5637,7 +5644,7 @@ def run_once(app, now=None):
                     evidence = [dict(ref='message:' + source['id'] + ':' + row['id'], text=row['text'],
                         source=source['name'], time=row['time'], sender=row['sender'], publisher=_publisher(source['id'], row),
                         related_messages=related[row['id']], attachments=view['attachments'],
-                        kind=row['kind'], content_incomplete=row['unread']) for row, view in zip(values, views)]
+                        kind=row['kind'], content_incomplete=row['unread'], message_order=row.get('message_order', '')) for row, view in zip(values, views)]
                     budget -= 1
                     try:
                         proposals = _select('school', evidence, profiles[source['child_id']], as_of=now.date().isoformat(), data_path=store.data,
