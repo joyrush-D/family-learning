@@ -2334,6 +2334,82 @@ class SchoolActionPurposeTests(unittest.TestCase):
                     self.assertEqual((parent['brief_state'], parent['task_id'], parent['school_learning']), ('reference', '', None))
                 finally:t.doCleanups()
 
+    # Known fictional K03: the actual parsed Flash reply (configured effort none) on c131 was admin/ready/due 10-29 with
+    # no subject; only the program's guard read 阅读 inside the closed form name. Fixed here as a program control.
+    K03_TEXT = '请于2026年10月29日前填写《语文阅读调查登记表》的学生姓名和家长联系方式，家长签字后交回班主任。本次只登记这些信息。'
+    K03_RAW = dict(title_quote='请于2026年10月29日前填写《语文阅读调查登记表》的学生姓名和家长联系方式，家长签字后交回班主任。', focus='school',
+                   due='2026-10-29', evidence=[0], task_title='填写《语文阅读调查登记表》并交回',
+                   task_goal='填写《语文阅读调查登记表》的学生姓名和家长联系方式。\n本次只登记这些信息。\n家长签字后交回班主任。\n2026年10月29日前完成。',
+                   task_advice='可先确认学生姓名与家长联系方式无误，再请家长签字，按班主任要求交回。', learning_subject='', learning_goal_id='',
+                   task_change='new', task_target_id='', task_state='ready',
+                   task_reason='已读文字明确要求填写登记表、家长签字并交回班主任，属全班或本孩子需办理的行政事务。', task_purpose='admin',
+                   task_submission='家长签字后交回班主任')
+
+    def test_known_k03_form_name_is_not_learning_through_save_auto_intake_and_fresh_store_reopen(self):
+        self.fixture.now = self.now = dt.datetime(2026, 10, 16, 20, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='11')
+        payload['messages'] = [dict(id='11', message_order='11', time='2026-10-16T18:03:00+08:00', kind='text', sender='示例学校发布人',
+                                    sender_id='p1-classification-k03-school', text=self.K03_TEXT, unread=False)]
+        self.store.ingest(payload)
+        ref = 'message:' + self.source['id'] + ':11'
+        self._use_replies(payload, [dict(proposals=[dict(copy.deepcopy(self.K03_RAW), evidence=[dict(ref=ref)])])])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        from family_goals import Store as Goals
+        import family_review
+
+        def facts(app, store):
+            with store._db() as c:
+                rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")]
+                originals = [json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
+            with app.connect() as c:
+                tasks = {t['id']: t for t in app.tasks(c)}
+            return rows, tasks, originals, Goals(app, store).school_candidates(self.source['child_id'])
+
+        def check(rows, tasks, originals, goals):
+            row, = rows
+            plan = json.loads(row['plan']);brief = plan['school_task'];task = tasks[row['task_id']]
+            self.assertEqual((row['state'], row['due'], brief['state'], brief['purpose'], plan.get('school_learning'), plan.get('school_goal_id', '')),
+                             ('accepted', '2026-10-29', 'ready', 'admin', None, ''), 'a pure registration stays a pending administrative to-do')
+            self.assertEqual((task['agenda']['category'], task['agenda']['due_on']), ('todo', '2026-10-29'))
+            self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], [ref])
+            for standard in ('《语文阅读调查登记表》', '学生姓名', '家长联系方式', '家长签字', '交回班主任', '本次只登记这些信息'):
+                self.assertIn(standard, task['action'])
+            self.assertEqual(plan['school_selection_receipt']['purpose'], 'admin')
+            self.assertFalse({'pdf_evidence', 'material_evidence', 'page_evidence'} & set(brief), 'no attachment was read or prepared')
+            self.assertEqual(originals, payload['messages'], 'the complete original stays unchanged')
+            self.assertEqual(goals, [], 'no school learning goal')
+
+        first = facts(self.app, self.store);check(*first)
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['failed'], replay['processed'], replay['created']), (0, 0, 0))
+        app = family_review.load_app(self.fixture.root, self.fixture.data)
+        fresh = facts(app, agent.Store(app.connect, app.profiles, self.fixture.data, app=app))
+        check(*fresh)
+        self.assertEqual([r['id'] for r in fresh[0]], [r['id'] for r in first[0]], 'reopen keeps the one item without duplicates')
+        self.assertEqual(sorted(fresh[1]), sorted(first[1]))
+        self.assertEqual(self.model.call_count, 1)
+
+    def test_closed_form_name_is_an_object_while_outside_learning_open_or_other_names_stay_guarded(self):
+        value = dict(title='', goal='', advice='', state='ready', reason='', purpose='admin')
+        ready = (self.K03_TEXT, '请家长在《数学练习安排确认单》上签字，2026年10月21日交回班主任。')
+        review = (self.K03_TEXT + '另请阅读课文第3段。', self.K03_TEXT + '完成第1-3题后再签字。',
+                  self.K03_TEXT.replace('》', ''), '请完成《阅读理解专项练习》第3页并签字交回。',
+                  '请填写《阅读，调查登记表》并交回。', '朗读《语文阅读调查登记表》后签字交回。')
+        for text, state in [(t, 'ready') for t in ready] + [(t, 'review') for t in review]:
+            for separate in (False, True):
+                with self.subTest(text=text, separate=separate):
+                    evidence = [dict(ref='message:synthetic-form-name:1', text=text, kind='text', unread=False)]
+                    brief = agent._school_brief(dict(value, title='登记事务', goal=text), evidence=evidence, separate_learning=separate)
+                    self.assertEqual((brief['state'], brief['purpose'], brief['goal']), (state, 'admin', text))
+                    self.assertEqual(evidence[0]['text'], text)
+                    if state == 'review':self.assertIn('同时提到学习活动', brief['reason'])
+        # A reply's own closed name that the original never wrote cannot hide the original's reading.
+        evidence = [dict(ref='message:synthetic-form-name:2', text='请阅读课文并填写登记表交回。', kind='text', unread=False)]
+        brief = agent._school_brief(dict(value, title='《阅读课文并填写登记表》', goal='《阅读课文并填写登记表》交回。'),
+                                    evidence=evidence, separate_learning=True)
+        self.assertEqual(brief['state'], 'review')
+
     def test_one_action_purpose_contract_reaches_batch_single_candidate_and_original_recovery(self):
         for prompt in (agent.SCHOOL_PROMPT, agent._task_prompt(None), agent._school_original_prompt(None, None, None)):
             self.assertIn('用途按本项明确的行动及其独立成果判定，不按老师称呼、科目或课程背景、文件名/材料名、任务标题或单一关键词判定', prompt)
