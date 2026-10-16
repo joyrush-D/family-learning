@@ -48,6 +48,54 @@ class SettingsTests(unittest.TestCase):
                 self.assertTrue(store.model_state()['configured']);self.assertEqual(store.model_state()['origin'],'file')
                 self.assertEqual(store.model_state()['light_model'],'synthetic-light-model')
 
+    def test_optional_light_effort_roundtrip_keeps_old_form_saves_and_guards(self):
+        with tempfile.TemporaryDirectory(prefix='synthetic-light-effort-') as directory, patch.dict(os.environ,{},clear=True):
+            root=Path(directory);data=root/'private';data.mkdir()
+            with patch.multiple(app,ROOT=root,DATA=data,DB=data/'family.sqlite3'):
+                store=app.settings_store();empty=store.model_state()
+                self.assertEqual(empty['light_reasoning_effort'],'')
+                old_form=dict(base_url='http://127.0.0.1:32123/v1',model='fictional-main',light_model='fictional-light',api_key='SYNTHETIC-FILE-KEY')
+                store.save_model(dict(revision=empty['revision'],reasoning_effort='low',**old_form))
+                # Without the optional value the saved file keeps the existing five-key shape.
+                self.assertEqual(set(json.loads((data/'model.json').read_text())),family_llm.MODEL_FILE_KEYS)
+                state=store.model_state();self.assertEqual((state['reasoning_effort'],state['light_reasoning_effort']),('low',''))
+                store.save_model(dict(revision=state['revision'],base_url=state['base_url'],model=state['model'],light_reasoning_effort='none'))
+                reopened=app.settings_store().model_state()
+                self.assertEqual((reopened['reasoning_effort'],reopened['light_reasoning_effort'],reopened['light_model']),('low','none','fictional-light'))
+                self.assertTrue(reopened['configured']);self.assertNotIn('SYNTHETIC-FILE-KEY',json.dumps(reopened))
+                # The settings page form never sends either effort; a save keeps both saved values.
+                settings_form=dict(revision=reopened['revision'],base_url=reopened['base_url'],model=reopened['model'],light_model='fictional-light-2',api_key='',clear_api_key=False)
+                store.save_model(settings_form)
+                kept=store.model_state()
+                self.assertEqual((kept['reasoning_effort'],kept['light_reasoning_effort'],kept['light_model'],kept['has_api_key']),('low','none','fictional-light-2',True))
+                saved=json.loads((data/'model.json').read_text())
+                self.assertEqual(saved['light_reasoning_effort'],'none');self.assertEqual(saved['reasoning_effort'],'low')
+                before=(data/'model.json').read_bytes()
+                # A stale revision, an endpoint change without a key, invalid values and environment ownership change nothing.
+                with self.assertRaises(family_settings.SettingsError) as failure:
+                    store.save_model(dict(settings_form,light_model='fictional-light-3'))
+                self.assertEqual((failure.exception.status,failure.exception.code),(409,'settings_version_conflict'))
+                with self.assertRaises(family_settings.SettingsError) as failure:
+                    store.save_model(dict(revision=kept['revision'],base_url='http://127.0.0.1:32124/v1',model='fictional-main',light_reasoning_effort='low'))
+                self.assertEqual((failure.exception.status,failure.exception.code),(409,'model_key_endpoint_changed'))
+                for bad in ('off','LOW','x'*201,'no\x01ne',None,True,7):
+                    with self.subTest(value=bad),self.assertRaises(family_settings.SettingsError):
+                        store.save_model(dict(revision=kept['revision'],base_url=kept['base_url'],model=kept['model'],light_reasoning_effort=bad))
+                with self.assertRaises(family_settings.SettingsError):
+                    store.save_model(dict(revision=kept['revision'],base_url=kept['base_url'],model=kept['model'],light_effort='none'))
+                with patch.dict(os.environ,{'FAMILY_LLM_LIGHT_REASONING_EFFORT':'none'},clear=True):
+                    managed=store.model_state()
+                    self.assertEqual(managed['origin'],'environment');self.assertFalse(managed['configured']);self.assertTrue(managed['error'])
+                    self.assertEqual((managed['base_url'],managed['light_reasoning_effort']),('',''))
+                    with self.assertRaises(family_settings.SettingsError) as failure:
+                        store.save_model(dict(revision=kept['revision'],base_url=kept['base_url'],model=kept['model'],light_reasoning_effort='low'))
+                    self.assertEqual((failure.exception.status,failure.exception.code),(409,'model_environment_managed'))
+                self.assertEqual((data/'model.json').read_bytes(),before)
+                # Clearing it returns to the five-key file and inherits the unchanged global effort.
+                store.save_model(dict(revision=kept['revision'],base_url=kept['base_url'],model=kept['model'],light_reasoning_effort=''))
+                self.assertEqual(set(json.loads((data/'model.json').read_text())),family_llm.MODEL_FILE_KEYS)
+                cleared=store.model_state();self.assertEqual((cleared['reasoning_effort'],cleared['light_reasoning_effort']),('low',''))
+
     def test_first_visit_household_bindings_model_and_access(self):
         with tempfile.TemporaryDirectory(prefix='synthetic-settings-') as directory, patch.dict(os.environ,{},clear=True):
             root=Path(directory); data=root/'private';data.mkdir()

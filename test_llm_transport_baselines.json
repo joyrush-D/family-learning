@@ -1,0 +1,366 @@
+{
+  "kind": "IMMUTABLE_FICTIONAL_REQUEST_DATA_GOLDENS_NOT_MODEL_ACCURACY",
+  "baseline_main": "9514b51a8b971054a3a5b4dd9983b3cd504600a5",
+  "baseline_module_sha256": "d305da87c5fa17025ff678244de5b566b905a57dc295b28a5fdce63e0a6c195a",
+  "frozen_inputs_sha256": "6321e20200b98bf453bfdea773d509b511d8e3ea7cbe4802ef4f6e87a5d411a6",
+  "inputs": {
+    "baseline_main": "9514b51a8b971054a3a5b4dd9983b3cd504600a5",
+    "baseline_module_sha256": "d305da87c5fa17025ff678244de5b566b905a57dc295b28a5fdce63e0a6c195a",
+    "created_utc": "2026-10-16T11:32:43.786814+00:00",
+    "scope": "Root-only fictional transport baseline; no business/schema accuracy inference",
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "fake_result": {
+      "ok": true
+    },
+    "config": {
+      "base_url": "PROTOCOL_SPECIFIC",
+      "model": "fictional-main",
+      "light_model": "fictional-light",
+      "api_key": "fictional-key-not-a-credential",
+      "reasoning_effort": "low"
+    },
+    "protocols": {
+      "chat": "https://fictional-provider.invalid/v1",
+      "responses": "https://fictional-provider.invalid/v1/responses"
+    },
+    "cases": [
+      {
+        "id": "school_text",
+        "task": "family_agent_selection",
+        "messages": [
+          {
+            "role": "system",
+            "content": "只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。"
+          },
+          {
+            "role": "user",
+            "content": "虚构记录：只测试路由和序列化。"
+          }
+        ],
+        "timeout": 45,
+        "expected_model": "fictional-light",
+        "expected_output_tokens": 6000
+      },
+      {
+        "id": "light_connection",
+        "task": "family_light_connection_test",
+        "messages": [
+          {
+            "role": "system",
+            "content": "只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。"
+          },
+          {
+            "role": "user",
+            "content": "虚构记录：只测试路由和序列化。"
+          }
+        ],
+        "timeout": 10,
+        "expected_model": "fictional-light",
+        "expected_output_tokens": 3000
+      },
+      {
+        "id": "default_connection",
+        "task": "family_connection_test",
+        "messages": [
+          {
+            "role": "system",
+            "content": "只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。"
+          },
+          {
+            "role": "user",
+            "content": "虚构记录：只测试路由和序列化。"
+          }
+        ],
+        "timeout": 10,
+        "expected_model": "fictional-main",
+        "expected_output_tokens": 3000
+      },
+      {
+        "id": "P2_wrong_image",
+        "task": "family_wrong_questions_annotate",
+        "messages": [
+          {
+            "role": "system",
+            "content": "只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "全虚构小图，只供请求序列化，不做批改。"
+              },
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII="
+                }
+              }
+            ]
+          }
+        ],
+        "timeout": 90,
+        "expected_model": "fictional-main",
+        "expected_output_tokens": 6000
+      },
+      {
+        "id": "P2_homework_image",
+        "task": "family_homework_reference",
+        "messages": [
+          {
+            "role": "system",
+            "content": "只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "全虚构小图，只供请求序列化，不做批改。"
+              },
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII="
+                }
+              }
+            ]
+          }
+        ],
+        "timeout": 90,
+        "expected_model": "fictional-main",
+        "expected_output_tokens": 6000
+      },
+      {
+        "id": "P2_wrong_text",
+        "task": "family_wrong_questions_annotate",
+        "messages": [
+          {
+            "role": "system",
+            "content": "只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。"
+          },
+          {
+            "role": "user",
+            "content": "虚构记录：只测试路由和序列化。"
+          }
+        ],
+        "timeout": 60,
+        "expected_model": "fictional-main",
+        "expected_output_tokens": 6000
+      },
+      {
+        "id": "school_nontext_fallback",
+        "task": "family_agent_selection",
+        "messages": [
+          {
+            "role": "system",
+            "content": "只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "全虚构小图，只供请求序列化，不做批改。"
+              },
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII="
+                }
+              }
+            ]
+          }
+        ],
+        "timeout": 45,
+        "expected_model": "fictional-main",
+        "expected_output_tokens": 6000
+      }
+    ]
+  },
+  "captures": [
+    {
+      "protocol": "chat",
+      "case": "school_text",
+      "task": "family_agent_selection",
+      "body_sha256": "3e9fbb7e99d5bcb2608e29343e2b81e4019b308ba6dd3134d617f1cd1cf2e940",
+      "body_bytes": 554,
+      "selected_model": "fictional-light",
+      "reasoning_effort": "low",
+      "output_tokens": 6000,
+      "timeout": 45,
+      "request_data_utf8": "{\"model\": \"fictional-light\", \"messages\": [{\"role\": \"system\", \"content\": \"只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。\"}, {\"role\": \"user\", \"content\": \"虚构记录：只测试路由和序列化。\"}], \"response_format\": {\"type\": \"json_schema\", \"json_schema\": {\"name\": \"family_agent_selection\", \"strict\": true, \"schema\": {\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"ok\": {\"type\": \"boolean\"}}, \"required\": [\"ok\"]}}}, \"temperature\": 0, \"max_tokens\": 6000, \"stream\": false, \"reasoning_effort\": \"low\"}"
+    },
+    {
+      "protocol": "chat",
+      "case": "light_connection",
+      "task": "family_light_connection_test",
+      "body_sha256": "52ebe1f1ee1e182e416a0db98c240537d6d94fdab6f141fd0720fcd0c401bbe8",
+      "body_bytes": 560,
+      "selected_model": "fictional-light",
+      "reasoning_effort": "low",
+      "output_tokens": 3000,
+      "timeout": 10,
+      "request_data_utf8": "{\"model\": \"fictional-light\", \"messages\": [{\"role\": \"system\", \"content\": \"只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。\"}, {\"role\": \"user\", \"content\": \"虚构记录：只测试路由和序列化。\"}], \"response_format\": {\"type\": \"json_schema\", \"json_schema\": {\"name\": \"family_light_connection_test\", \"strict\": true, \"schema\": {\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"ok\": {\"type\": \"boolean\"}}, \"required\": [\"ok\"]}}}, \"temperature\": 0, \"max_tokens\": 3000, \"stream\": false, \"reasoning_effort\": \"low\"}"
+    },
+    {
+      "protocol": "chat",
+      "case": "default_connection",
+      "task": "family_connection_test",
+      "body_sha256": "0631f66c40ee943d402d41b82e291569cc1de10dac0f6d762c65300afa9f1a4d",
+      "body_bytes": 553,
+      "selected_model": "fictional-main",
+      "reasoning_effort": "low",
+      "output_tokens": 3000,
+      "timeout": 10,
+      "request_data_utf8": "{\"model\": \"fictional-main\", \"messages\": [{\"role\": \"system\", \"content\": \"只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。\"}, {\"role\": \"user\", \"content\": \"虚构记录：只测试路由和序列化。\"}], \"response_format\": {\"type\": \"json_schema\", \"json_schema\": {\"name\": \"family_connection_test\", \"strict\": true, \"schema\": {\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"ok\": {\"type\": \"boolean\"}}, \"required\": [\"ok\"]}}}, \"temperature\": 0, \"max_tokens\": 3000, \"stream\": false, \"reasoning_effort\": \"low\"}"
+    },
+    {
+      "protocol": "chat",
+      "case": "P2_wrong_image",
+      "task": "family_wrong_questions_annotate",
+      "body_sha256": "e6657163ec091c3407a305a7eee78f13fafed6a5a064074872e978369998f431",
+      "body_bytes": 765,
+      "selected_model": "fictional-main",
+      "reasoning_effort": "low",
+      "output_tokens": 6000,
+      "timeout": 90,
+      "request_data_utf8": "{\"model\": \"fictional-main\", \"messages\": [{\"role\": \"system\", \"content\": \"只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。\"}, {\"role\": \"user\", \"content\": [{\"type\": \"text\", \"text\": \"全虚构小图，只供请求序列化，不做批改。\"}, {\"type\": \"image_url\", \"image_url\": {\"url\": \"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII=\"}}]}], \"response_format\": {\"type\": \"json_schema\", \"json_schema\": {\"name\": \"family_wrong_questions_annotate\", \"strict\": true, \"schema\": {\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"ok\": {\"type\": \"boolean\"}}, \"required\": [\"ok\"]}}}, \"temperature\": 0, \"max_tokens\": 6000, \"stream\": false, \"reasoning_effort\": \"low\"}"
+    },
+    {
+      "protocol": "chat",
+      "case": "P2_homework_image",
+      "task": "family_homework_reference",
+      "body_sha256": "8a47977fc5b144808fda827885d8a46ef2e319c2a51ccb8fd2f1f32ce3c32294",
+      "body_bytes": 759,
+      "selected_model": "fictional-main",
+      "reasoning_effort": "low",
+      "output_tokens": 6000,
+      "timeout": 90,
+      "request_data_utf8": "{\"model\": \"fictional-main\", \"messages\": [{\"role\": \"system\", \"content\": \"只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。\"}, {\"role\": \"user\", \"content\": [{\"type\": \"text\", \"text\": \"全虚构小图，只供请求序列化，不做批改。\"}, {\"type\": \"image_url\", \"image_url\": {\"url\": \"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII=\"}}]}], \"response_format\": {\"type\": \"json_schema\", \"json_schema\": {\"name\": \"family_homework_reference\", \"strict\": true, \"schema\": {\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"ok\": {\"type\": \"boolean\"}}, \"required\": [\"ok\"]}}}, \"temperature\": 0, \"max_tokens\": 6000, \"stream\": false, \"reasoning_effort\": \"low\"}"
+    },
+    {
+      "protocol": "chat",
+      "case": "P2_wrong_text",
+      "task": "family_wrong_questions_annotate",
+      "body_sha256": "f9a5874ccf1677a19d0a9e3bc104e1fd1faacbe207b61581c65d28ce411d45e7",
+      "body_bytes": 562,
+      "selected_model": "fictional-main",
+      "reasoning_effort": "low",
+      "output_tokens": 6000,
+      "timeout": 60,
+      "request_data_utf8": "{\"model\": \"fictional-main\", \"messages\": [{\"role\": \"system\", \"content\": \"只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。\"}, {\"role\": \"user\", \"content\": \"虚构记录：只测试路由和序列化。\"}], \"response_format\": {\"type\": \"json_schema\", \"json_schema\": {\"name\": \"family_wrong_questions_annotate\", \"strict\": true, \"schema\": {\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"ok\": {\"type\": \"boolean\"}}, \"required\": [\"ok\"]}}}, \"temperature\": 0, \"max_tokens\": 6000, \"stream\": false, \"reasoning_effort\": \"low\"}"
+    },
+    {
+      "protocol": "chat",
+      "case": "school_nontext_fallback",
+      "task": "family_agent_selection",
+      "body_sha256": "0c75f4272b5886517c61d443db65317fcb3665a618b0b029773c4a00f98121e7",
+      "body_bytes": 756,
+      "selected_model": "fictional-main",
+      "reasoning_effort": "low",
+      "output_tokens": 6000,
+      "timeout": 45,
+      "request_data_utf8": "{\"model\": \"fictional-main\", \"messages\": [{\"role\": \"system\", \"content\": \"只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。\"}, {\"role\": \"user\", \"content\": [{\"type\": \"text\", \"text\": \"全虚构小图，只供请求序列化，不做批改。\"}, {\"type\": \"image_url\", \"image_url\": {\"url\": \"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII=\"}}]}], \"response_format\": {\"type\": \"json_schema\", \"json_schema\": {\"name\": \"family_agent_selection\", \"strict\": true, \"schema\": {\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"ok\": {\"type\": \"boolean\"}}, \"required\": [\"ok\"]}}}, \"temperature\": 0, \"max_tokens\": 6000, \"stream\": false, \"reasoning_effort\": \"low\"}"
+    },
+    {
+      "protocol": "responses",
+      "case": "school_text",
+      "task": "family_agent_selection",
+      "body_sha256": "42bb8a34a75ef18eaee0e7287011db5f0115153c4436a3f8c2e59816a42aaae2",
+      "body_bytes": 563,
+      "selected_model": "fictional-light",
+      "reasoning_effort": "low",
+      "output_tokens": 6000,
+      "timeout": 45,
+      "request_data_utf8": "{\"model\": \"fictional-light\", \"input\": [{\"role\": \"system\", \"content\": \"只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。\"}, {\"role\": \"user\", \"content\": \"虚构记录：只测试路由和序列化。\"}], \"text\": {\"format\": {\"type\": \"json_schema\", \"name\": \"family_agent_selection\", \"strict\": true, \"schema\": {\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"ok\": {\"type\": \"boolean\"}}, \"required\": [\"ok\"]}}}, \"temperature\": 0, \"max_output_tokens\": 6000, \"stream\": false, \"store\": false, \"reasoning\": {\"effort\": \"low\"}}"
+    },
+    {
+      "protocol": "responses",
+      "case": "light_connection",
+      "task": "family_light_connection_test",
+      "body_sha256": "a5f32e3197c827f76ddc5aabf305bb81880b79b316a1e22f128e8483c671d800",
+      "body_bytes": 569,
+      "selected_model": "fictional-light",
+      "reasoning_effort": "low",
+      "output_tokens": 3000,
+      "timeout": 10,
+      "request_data_utf8": "{\"model\": \"fictional-light\", \"input\": [{\"role\": \"system\", \"content\": \"只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。\"}, {\"role\": \"user\", \"content\": \"虚构记录：只测试路由和序列化。\"}], \"text\": {\"format\": {\"type\": \"json_schema\", \"name\": \"family_light_connection_test\", \"strict\": true, \"schema\": {\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"ok\": {\"type\": \"boolean\"}}, \"required\": [\"ok\"]}}}, \"temperature\": 0, \"max_output_tokens\": 3000, \"stream\": false, \"store\": false, \"reasoning\": {\"effort\": \"low\"}}"
+    },
+    {
+      "protocol": "responses",
+      "case": "default_connection",
+      "task": "family_connection_test",
+      "body_sha256": "a87b4dfdf9ed2ddc691b933fbc03aaf79bd9f4a9dbd51df661da1be0dfadf5dc",
+      "body_bytes": 562,
+      "selected_model": "fictional-main",
+      "reasoning_effort": "low",
+      "output_tokens": 3000,
+      "timeout": 10,
+      "request_data_utf8": "{\"model\": \"fictional-main\", \"input\": [{\"role\": \"system\", \"content\": \"只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。\"}, {\"role\": \"user\", \"content\": \"虚构记录：只测试路由和序列化。\"}], \"text\": {\"format\": {\"type\": \"json_schema\", \"name\": \"family_connection_test\", \"strict\": true, \"schema\": {\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"ok\": {\"type\": \"boolean\"}}, \"required\": [\"ok\"]}}}, \"temperature\": 0, \"max_output_tokens\": 3000, \"stream\": false, \"store\": false, \"reasoning\": {\"effort\": \"low\"}}"
+    },
+    {
+      "protocol": "responses",
+      "case": "P2_wrong_image",
+      "task": "family_wrong_questions_annotate",
+      "body_sha256": "c071394294b05eac12f91b185b3414c3b7017410f771785d99bc8f94c62c7a47",
+      "body_bytes": 773,
+      "selected_model": "fictional-main",
+      "reasoning_effort": "low",
+      "output_tokens": 6000,
+      "timeout": 90,
+      "request_data_utf8": "{\"model\": \"fictional-main\", \"input\": [{\"role\": \"system\", \"content\": \"只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。\"}, {\"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"全虚构小图，只供请求序列化，不做批改。\"}, {\"type\": \"input_image\", \"image_url\": \"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII=\"}]}], \"text\": {\"format\": {\"type\": \"json_schema\", \"name\": \"family_wrong_questions_annotate\", \"strict\": true, \"schema\": {\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"ok\": {\"type\": \"boolean\"}}, \"required\": [\"ok\"]}}}, \"temperature\": 0, \"max_output_tokens\": 6000, \"stream\": false, \"store\": false, \"reasoning\": {\"effort\": \"low\"}}"
+    },
+    {
+      "protocol": "responses",
+      "case": "P2_homework_image",
+      "task": "family_homework_reference",
+      "body_sha256": "6aa2eeaba98c48e6dfb5f3db506368e6b71c893c6335c352f624df9ccc542575",
+      "body_bytes": 767,
+      "selected_model": "fictional-main",
+      "reasoning_effort": "low",
+      "output_tokens": 6000,
+      "timeout": 90,
+      "request_data_utf8": "{\"model\": \"fictional-main\", \"input\": [{\"role\": \"system\", \"content\": \"只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。\"}, {\"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"全虚构小图，只供请求序列化，不做批改。\"}, {\"type\": \"input_image\", \"image_url\": \"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII=\"}]}], \"text\": {\"format\": {\"type\": \"json_schema\", \"name\": \"family_homework_reference\", \"strict\": true, \"schema\": {\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"ok\": {\"type\": \"boolean\"}}, \"required\": [\"ok\"]}}}, \"temperature\": 0, \"max_output_tokens\": 6000, \"stream\": false, \"store\": false, \"reasoning\": {\"effort\": \"low\"}}"
+    },
+    {
+      "protocol": "responses",
+      "case": "P2_wrong_text",
+      "task": "family_wrong_questions_annotate",
+      "body_sha256": "a6ba23c241e5ad6bc709ef563ebdb6ff8a89c301474cc2488fe09ba496f2b435",
+      "body_bytes": 571,
+      "selected_model": "fictional-main",
+      "reasoning_effort": "low",
+      "output_tokens": 6000,
+      "timeout": 60,
+      "request_data_utf8": "{\"model\": \"fictional-main\", \"input\": [{\"role\": \"system\", \"content\": \"只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。\"}, {\"role\": \"user\", \"content\": \"虚构记录：只测试路由和序列化。\"}], \"text\": {\"format\": {\"type\": \"json_schema\", \"name\": \"family_wrong_questions_annotate\", \"strict\": true, \"schema\": {\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"ok\": {\"type\": \"boolean\"}}, \"required\": [\"ok\"]}}}, \"temperature\": 0, \"max_output_tokens\": 6000, \"stream\": false, \"store\": false, \"reasoning\": {\"effort\": \"low\"}}"
+    },
+    {
+      "protocol": "responses",
+      "case": "school_nontext_fallback",
+      "task": "family_agent_selection",
+      "body_sha256": "18077778daab083472976a9c773b08f680cce6aae905ebdb413a2460a27d3e6c",
+      "body_bytes": 764,
+      "selected_model": "fictional-main",
+      "reasoning_effort": "low",
+      "output_tokens": 6000,
+      "timeout": 45,
+      "request_data_utf8": "{\"model\": \"fictional-main\", \"input\": [{\"role\": \"system\", \"content\": \"只处理全虚构传输合同示例。返回给定JSON；不生成真实作业。\"}, {\"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"全虚构小图，只供请求序列化，不做批改。\"}, {\"type\": \"input_image\", \"image_url\": \"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII=\"}]}], \"text\": {\"format\": {\"type\": \"json_schema\", \"name\": \"family_agent_selection\", \"strict\": true, \"schema\": {\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"ok\": {\"type\": \"boolean\"}}, \"required\": [\"ok\"]}}}, \"temperature\": 0, \"max_output_tokens\": 6000, \"stream\": false, \"store\": false, \"reasoning\": {\"effort\": \"low\"}}"
+    }
+  ],
+  "count": 14,
+  "headers_credentials_omitted": true,
+  "actual_product_API_calls": 0,
+  "family_data": false
+}
