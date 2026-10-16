@@ -209,6 +209,84 @@ class SchoolNativeCoverageTests(unittest.TestCase):
                     self.assertIn(words, excerpt['plan']['school_task']['goal'])
                 self.assertEqual([q['ref'] for q in excerpt['evidence']], refs[:2])
 
+    def _correction_batch(self, quote):
+        texts = ['数学：2026年10月17日21:00前订正《小数运算练习》第2页第3、5、7题，每题写出正确过程并写一句错因；订正本2026年10月18日第一节课前交给数学课代表；2026年10月18日数学课前独立完成10道两位小数加减口算，写在口算本上。',
+                 '更正：口算改成6道，其他要求和2026年10月18日的时间不变；第2页订正仍只做第3、5、7题。',
+                 '家长：孩子说不用交订正本，这个说法还需要问老师。']
+        payload, refs = self._ingest(texts, ['synthetic-teacher-1', 'synthetic-teacher-1', 'synthetic-parent-1'])
+        fix = fixtures.school_proposal(
+            title_quote=quote, due='2026-10-18', evidence=[dict(ref=refs[0]), dict(ref=refs[1])], learning_subject='数学',
+            task_title='数学：订正《小数运算练习》第2页', task_state='ready', task_purpose='learning', task_reason='虚构回执。',
+            task_goal='订正《小数运算练习》第2页第3、5、7题；每题写出正确过程并写一句错因；2026年10月17日21:00前完成；订正本2026年10月18日第一节课前交给数学课代表。',
+            task_submission='订正本2026年10月18日第一节课前交给数学课代表。')
+        oral = fixtures.school_proposal(
+            title_quote='2026年10月18日数学课前独立完成10道两位小数加减口算，写在口算本上', due='2026-10-18',
+            evidence=[dict(ref=refs[0]), dict(ref=refs[1])], learning_subject='数学', task_title='数学：完成6道两位小数加减口算',
+            task_goal='2026年10月18日数学课前独立完成6道两位小数加减口算，写在口算本上；口算数量已由10道更正为6道。',
+            task_state='ready', task_purpose='learning', task_reason='虚构回执。')
+        question = fixtures.school_proposal(title_quote=texts[2], evidence=[dict(ref=refs[2])], task_state='reference',
+                                            task_purpose='optional', task_reason='虚构回执：家长转述，不是老师要求。')
+        return payload, refs, [fix, oral, question]
+
+    def test_full_completion_and_handback_anchor_saves_the_handback_day_and_a_short_anchor_stays_unproven(self):
+        full = '数学：2026年10月17日21:00前订正《小数运算练习》第2页第3、5、7题，每题写出正确过程并写一句错因；订正本2026年10月18日第一节课前交给数学课代表'
+        short = '订正《小数运算练习》第2页第3、5、7题，每题写出正确过程并写一句错因'
+        for quote, expected in ((full, ('2026-10-18', 'accepted')), (short, ('2026-10-18', 'pending'))):
+            with self.subTest(quote=quote[:12]):
+                self.setUp()
+                payload, refs, replies = self._correction_batch(quote)
+                self._use_replies(payload, [dict(proposals=replies)])
+                self.assertEqual(agent.run_once(self.app, self.now)['failed'], 0)
+                with self.store._db() as c:
+                    rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+                    row, = [r for r in rows if '小数运算练习' in r['title']]
+                    state = json.loads(row['plan'])['school_task']['state']
+                    self.assertEqual(state, 'ready' if expected[1] == 'accepted' else 'review')
+                    for words in ('2026年10月17日21:00前完成', '每题写出正确过程并写一句错因', '订正本2026年10月18日第一节课前交给数学课代表'):
+                        self.assertIn(words, row['body'])
+                    self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs[:2])
+                    oral, = [r for r in rows if '口算' in r['title']]
+                    self.assertEqual(oral['due'], '2026-10-18')
+                    tasks = [dict(r) for r in c.execute('SELECT * FROM manual_tasks')]
+                    self.assertEqual(any('小数运算练习' in t['title'] for t in tasks), expected[1] == 'accepted')
+                    self.assertFalse(any('不用交订正本' in t['action'] for t in tasks), 'the parent relay stays reference')
+                self.doCleanups()
+
+    def test_a_clause_headed_by_its_full_date_states_that_day_whatever_its_verb(self):
+        ref = 'message:m4-geo:1'
+        for clause, expected in (('2026年10月24日地理课做3分钟口头说明，说明等高线疏密与坡度的关系', ('2026-10-24', 'ready')),
+                                 ('2026年10月24日地理课口头说明取消', ('', 'review')),
+                                 ('2026年10月24日地理课要做口头说明吗？', ('', 'review')),
+                                 ('2026年10月24日起地理课做口头说明', ('', 'review'))):
+            text = clause + '；2026年10月20日前把地图册交给地理课代表。'
+            evidence = [dict(ref=ref, text=text, time='2026-10-16T18:00:00+08:00', kind='text', publisher='publisher:m4-geo',
+                             content_incomplete=False, attachments=[], unread=False)]
+            talk = fixtures.school_proposal(title_quote=clause, due='2026-10-24', evidence=[dict(ref=ref)], learning_subject='地理',
+                                            task_title='地理：口头说明', task_goal=clause + '。', task_state='ready',
+                                            task_purpose='learning', task_reason='虚构回执。')
+            atlas = fixtures.school_proposal(title_quote='2026年10月20日前把地图册交给地理课代表', due='2026-10-20', evidence=[dict(ref=ref)],
+                                             task_title='地理：交地图册', task_goal='2026年10月20日前把地图册交给地理课代表。',
+                                             task_state='ready', task_purpose='admin', task_reason='虚构回执。')
+            with self.subTest(clause=clause), patch.object(agent.family_llm, '_chat_json', return_value=dict(proposals=[talk, atlas])):
+                items = agent._select('school', evidence, school_goals=[], school_tasks=[], as_of='2026-10-16')
+                item, = [i for i in items if '口头说明' in i['title']]
+                self.assertEqual((item['due'], item['plan']['school_task']['state']), expected)
+                other, = [i for i in items if '地图册' in i['title']]
+                self.assertEqual((other['due'], other['plan']['school_task']['state']), ('2026-10-20', 'ready'))
+
+    def test_a_handback_of_other_work_keeps_both_days_unconfirmed(self):
+        ref = 'message:m4-math:1'
+        text = '数学：2026年10月17日21:00前订正第2页第3题；回执2026年10月18日交给数学课代表。'
+        evidence = [dict(ref=ref, text=text, time='2026-10-16T17:00:00+08:00', kind='text', publisher='publisher:m4-math',
+                         content_incomplete=False, attachments=[], unread=False)]
+        quote = '数学：2026年10月17日21:00前订正第2页第3题；回执2026年10月18日交给数学课代表。'
+        item = fixtures.school_proposal(title_quote=quote, due='2026-10-18', evidence=[dict(ref=ref)], learning_subject='数学',
+                                        task_title='数学：订正第2页', task_goal=quote, task_state='ready', task_purpose='learning',
+                                        task_reason='虚构回执。')
+        with patch.object(agent.family_llm, '_chat_json', return_value=dict(proposals=[item])):
+            result, = agent._select('school', evidence, school_goals=[], school_tasks=[], as_of='2026-10-16')
+        self.assertEqual(result['plan']['school_task']['state'], 'review')
+
     def test_missing_second_action_and_supplement_keeps_batch_retryable(self):
         payload, refs, reading, exercise = self._two_actions()
         # Both message refs are present, so the old ref-only coverage guard
