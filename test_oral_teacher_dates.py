@@ -212,4 +212,12 @@ with tempfile.TemporaryDirectory(prefix='synthetic-oral-dates-') as temporary:
         revise(early,'independent-oral-early-clear-0002','')
         m=task(early)['agenda']
         assert (m['due_on'],m['scheduled_on'])==('2026-10-24','2026-10-19'), m
+        # A finished item stays closed whether or not its teacher day can still be corrected; the task form cannot reopen it.
+        done=race_store.save_item(dict(race_create('independent-oral-close-create'),report=dict(text='虚构原话：20日完成',goal='口算虚构第3页',attachments=[],complete_on='2026-10-20',handback_on='')))['saved_item_id']
+        race_store.action(dict(child_id='child-1',day='2026-10-17',id=done,version=rows()[done][2],request_key='independent-oral-close-0001',action='finish',result='完成',assistance='',note='',actual_minutes=2))
+        try: race_store.save_item(dict(child_id='child-1',day='2026-10-17',id=done,version=rows()[done][2],request_key='independent-oral-close-fix-0001',teacher_dates=dict(complete_on='2026-10-21')))
+        except family_study.StudyError: pass
+        try: family_task_focus.save(app,standard(done,'independent-oral-close-focus-0001','','2026-10-17',task(done)['focus']['version']))
+        except family_task_focus.FocusError as error: assert error.code=='task_focus_closed', error.code
+        else: raise AssertionError('closed item reopened by the task form')
 print('test_oral_teacher_dates: ok')
