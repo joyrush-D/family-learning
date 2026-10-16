@@ -2764,6 +2764,134 @@ class SchoolActionPurposeTests(unittest.TestCase):
                     t._assert_rejected_batch(payload, agent.run_once(t.app, t.now))
                 finally:t.doCleanups()
 
+    # Root's postcandidate independent C (fictional; authored replies, not provider output): the requirement's own date opens with
+    # the time preposition 于 after 请. It is one required reading with its written outcome, never a voluntary reference.
+    C_TEXT = '语文：请于11月6日前阅读第3期参考资料，并写一句理由。'
+    C_QUOTE = '请于11月6日前阅读第3期参考资料，并写一句理由'
+    C_RAW = dict(title_quote=C_QUOTE, focus='school', due='2026-11-06', evidence=[0], task_title='语文：阅读第3期参考资料并写一句理由',
+                 task_goal='阅读第3期参考资料，并写一句理由。11月6日前完成。', task_advice='', learning_subject='语文', learning_goal_id='',
+                 task_change='new', task_target_id='', task_state='ready', task_reason='原文有明确阅读成果及自身日期，按该项要求保留。',
+                 task_purpose='learning', task_submission='')
+    C_WRONG_RAW = dict(C_RAW, due='', task_title='', task_goal='', learning_subject='', task_state='reference', task_purpose='optional',
+                       task_reason='故意错误的私有合成控制：把原文明示阅读与写出成果错归自愿参考；不是实际模型返回。')
+
+    def _c_ingest(self, text=C_TEXT):
+        self.fixture.now = self.now = dt.datetime(2026, 11, 5, 20, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='11')
+        payload['messages'] = [dict(id='11', message_order='11', time='2026-11-05T18:00:00+08:00', kind='text', sender='虚构学校发布人',
+                                    sender_id='fictional-native-name-c', text=text, unread=False)]
+        self.store.ingest(payload)
+        return payload, 'message:' + self.source['id'] + ':11'
+
+    def _c_facts(self, app, store):
+        rows, tasks, originals, manual, goals = self._k12_facts(app, store)
+        return ([(r['id'], r['state'], r['due'], r['task_id'], json.loads(r['plan'])) for r in rows], tasks, originals, manual,
+                [(g['subject'], g['id']) for g in goals])
+
+    def test_c_dated_required_reading_with_its_outcome_saves_one_learning_task_through_auto_intake_and_fresh_store_reopen(self):
+        payload, ref = self._c_ingest()
+        self._use_replies(payload, [dict(proposals=[dict(copy.deepcopy(self.C_RAW), evidence=[dict(ref=ref)])])])
+        requests = []
+        saved_reply = self.model.side_effect
+        self.model.side_effect = lambda messages, *args, **kwargs: (requests.append(json.loads(messages[-1]['content'])), saved_reply(messages, *args, **kwargs))[1]
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed'], result['created']), (0, 1, 1))
+        self.assertEqual([(a['quote'], a['purpose'], a['subject']) for a in requests[0]['required_native_actions']],
+                         [(self.C_QUOTE, 'learning', '语文')], 'the dated reading is one required native action')
+        import family_review
+
+        def check(rows, tasks, originals, manual, goals):
+            (_, state, due, task_id, plan), = rows
+            brief = plan['school_task']
+            self.assertEqual((state, due, brief['state'], brief['purpose'], plan.get('school_learning')),
+                             ('accepted', '2026-11-06', 'ready', 'learning', dict(subject='语文', goal_id='')))
+            self.assertEqual(plan['school_native_action']['quote'], self.C_QUOTE)
+            task, = tasks.values()
+            self.assertEqual((task['id'], task['agenda']['category'], task['agenda']['due_on']), (task_id, 'homework', '2026-11-06'))
+            for standard in ('阅读第3期参考资料', '写一句理由', '11月6日前'):self.assertIn(standard, task['action'])
+            self.assertFalse({'pdf_evidence', 'material_evidence', 'page_evidence'} & set(brief), 'no material was read or prepared')
+            self.assertEqual(manual, 0)
+            self.assertEqual(originals, payload['messages'], 'the complete original and its time stay unchanged')
+            self.assertEqual(goals, [('语文', plan['school_goal_id'])], 'the one reading routes to one Chinese learning goal')
+
+        first = self._c_facts(self.app, self.store);check(*first)
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['failed'], replay['processed'], replay['created']), (0, 0, 0))
+        app = family_review.load_app(self.fixture.root, self.fixture.data)
+        fresh = self._c_facts(app, agent.Store(app.connect, app.profiles, self.fixture.data, app=app));check(*fresh)
+        self.assertEqual([r[0] for r in fresh[0]], [r[0] for r in first[0]], 'reopen keeps the one item without duplicates')
+        self.assertEqual(self.model.call_count, 1)
+
+    def test_c_wrong_reference_over_a_dated_required_reading_rejects_the_batch_and_the_kept_original_retries(self):
+        payload, ref = self._c_ingest()
+        wrong = dict(copy.deepcopy(self.C_WRONG_RAW), evidence=[dict(ref=ref)])
+        self._use_replies(payload, [dict(proposals=[wrong]), dict(proposals=[dict(copy.deepcopy(self.C_RAW), evidence=[dict(ref=ref)])])])
+        self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
+        with self.store._db() as c:
+            self.assertIn('整批保留重试', c.execute("SELECT error FROM agent_jobs WHERE id LIKE 'messages:%'").fetchone()[0])
+        self.assertEqual(self._c_facts(self.app, self.store)[4], [], 'the rejected batch routes no learning goal')
+        # The kept original retries under the same guard; only the complete required reading finishes it.
+        retry = agent.run_once(self.app, self.now + dt.timedelta(minutes=6))
+        self.assertEqual((retry['failed'], retry['processed'], retry['created']), (0, 1, 1))
+        rows, tasks, originals, manual, goals = self._c_facts(self.app, self.store)
+        self.assertEqual([(r[2], r[4]['school_task']['state'], r[4]['school_task']['purpose']) for r in rows], [('2026-11-06', 'ready', 'learning')])
+        self.assertEqual((len(tasks), originals), (1, payload['messages']))
+        self.assertEqual(self.model.call_count, 2)
+
+    def test_c_tampered_selection_without_the_ledger_is_refused_by_the_save_guard(self):
+        payload, ref = self._c_ingest()
+        self._use_replies(payload, [dict(proposals=[dict(copy.deepcopy(self.C_WRONG_RAW), evidence=[dict(ref=ref)])])])
+        real_select = agent._select
+
+        def tampered(*args, **kwargs):
+            # A selection that skipped the literal ledger still meets the original guard inside the write transaction.
+            with patch.object(agent, '_school_native_actions', return_value=[]):
+                return real_select(*args, **kwargs)
+        with patch.object(agent, '_select', side_effect=tampered):
+            self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
+        with self.store._db() as c:
+            self.assertIn('整批未写入', c.execute("SELECT error FROM agent_jobs WHERE id LIKE 'messages:%'").fetchone()[0])
+
+    def test_own_date_preposition_opens_an_outcome_only_when_an_outcome_follows_it(self):
+        def actions(text):
+            entry = dict(ref='message:synthetic-required-prefix:1', text=text, kind='text', publisher='p', time='2026-11-05T18:00:00+08:00')
+            return [(a['quote'], a['purpose'], a['subject']) for a in agent._school_native_actions([entry])]
+        cases = {
+            self.C_TEXT: [(self.C_QUOTE, 'learning', '语文')],
+            '数学：请在周五前复习第2单元，并写出三个问题。': [('请在周五前复习第2单元，并写出三个问题', 'learning', '数学')],
+            '英语：请同学们于明天前背诵Unit 3对话，并录一段音频。': [('请同学们于明天前背诵Unit 3对话，并录一段音频', 'learning', '英语')],
+            '于2026年11月6日前朗读课文两遍。': [('于2026年11月6日前朗读课文两遍', 'learning', '')],
+            # A negation stays inside its own outcome's quote.
+            '请于11月6日前阅读第3期参考资料，不用写理由。': [('请于11月6日前阅读第3期参考资料，不用写理由', 'learning', '')],
+            # A dated reading beside a voluntary reference keeps its own clause; the reference adds nothing.
+            self.N07_TEXT.split('。')[0] + '。请于11月7日前阅读第4期参考资料，写一句理由。': [('请于11月7日前阅读第4期参考资料，写一句理由', 'learning', '')],
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):self.assertEqual(actions(text), expected)
+        # A publication or event date, a date and verb inside a closed title, a cancellation or a voluntary reference is no outcome.
+        for text in ('第3期参考资料于11月6日发布，仅供了解。', '请于11月6日到校参加读书会。', '于11月6日举行阅读分享会，自愿参加。',
+                     '《11月6日前阅读》参考资料仅供了解，自愿查看。', '取消：请于11月6日前阅读第3期参考资料。',
+                     self.K12_TEXT, self.N07_TEXT, self.A2_TEXT, self.A3_TEXT):
+            with self.subTest(text=text):self.assertEqual(actions(text), [])
+        # A dated administrative form alone keeps its own guards, outside this ledger.
+        self.assertEqual(actions(self.K03_TEXT), [])
+        due, = agent._school_native_dates(agent._school_native_actions([dict(ref='message:synthetic-required-prefix:1', text=self.C_TEXT,
+            kind='text', publisher='p', time='2026-11-05T18:00:00+08:00')])[0])
+        self.assertEqual(due, '2026-11-06')
+
+    def test_wrong_reference_over_other_dated_required_readings_still_rejects_the_whole_batch(self):
+        texts = ('数学：请在周五前复习第2单元，并写出三个问题。', '英语：请同学们于明天前背诵Unit 3对话，并录一段音频。',
+                 self.N07_TEXT.split('。')[0] + '。请于11月7日前阅读第4期参考资料，写一句理由。')
+        for text in texts:
+            with self.subTest(text=text):
+                t = type(self)(methodName='runTest');t.setUp()
+                try:
+                    payload, ref = t._c_ingest(text)
+                    raw = dict(copy.deepcopy(self.C_WRONG_RAW), title_quote=text, evidence=[dict(ref=ref)])
+                    t._use_replies(payload, [dict(proposals=[raw])])
+                    t._assert_rejected_batch(payload, agent.run_once(t.app, t.now))
+                finally:t.doCleanups()
+
     # Root's postcandidate exploratory A2/A3 (fictional; authored replies, not provider output): the closed material title itself
     # carries a date or a comma. Its contents are the name; dates, counts and parts outside the title stay the clause's own.
     A2_TEXT = '阅读《11月6日札记》活动参考资料仅供了解，自愿查看。下一次全班具体任务及日期将另行通知。'
