@@ -2254,15 +2254,20 @@ def _school_handback_day(text,published,values):
     for back,day in backs:
         held=re.match(r'\s*([^\d，,：:（(]*?)\s*(?:于|在)?\s*\d',back)
         name=re.sub(r'[本册]$','',held[1]) if held else None
+        # A holder may carry the very title this item's own words give it before (完成《树叶拓印》作品 … 《树叶拓印》作品…交).
+        named=re.fullmatch(r'(《[^》]{1,40}》)\s*(.*)',name or '');holder=named[2] if named else name
         if (day!=late or not re.search(r'交(?:给|回|到|至)|提交|上交|交\s*$',back)
-                or name is None or name and (len(name)<2 or name not in _titles_read_as_objects(text)[:text.find(back)])):return values
+                or name is None or name and (len(holder)<2 or holder not in _titles_read_as_objects(text)[:text.find(back)]
+                                             or named and named[1]+holder not in text[:text.find(back)])):return values
     return late
 
 
-def _school_own_dates(quote,published):
+def _school_own_dates(quote,published,summary=False):
     """Dates one action clause states for itself: its deadlines, else one school arrangement day (明天早读抽查, 周四学校体检).
 
     A second, recurring, past, ranged or open-ended day, or a day this clause does not arrange, is not this action's date.
+    A summary (summary=True) may head the same clause with the month and day alone (10月29日美术课上…); an original
+    still writes its year, and the summary only declares the day the original states.
     """
     from family_agenda import _in_title,_relative_weekday,_titles_read_as_objects,date,deadlines
     values=deadlines(quote,published)
@@ -2279,7 +2284,8 @@ def _school_own_dates(quote,published):
     # A complete clause headed by its one explicit full date (2026年10月24日地理课做3分钟口头说明) states that day for
     # itself whatever its verb; a changed, cancelled, negated, asked or open-ended day still states none.
     if not found and not re.search(_EVENT_STATE+'|'+_EVENT_STATE_OBJECT+r'|[？?]',_titles_read_as_objects(quote)):
-        found=re.match(r'\s*(\d{4}-\d{2}-\d{2})(?!\s*(?:起|开始|以后|之后|以来|至|到|前|之前|以前|[-–—~～]))',text) if re.match(r'\s*\d{4}\s*年',quote) else None
+        head=r'\s*(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*日' if summary else r'\s*\d{4}\s*年'
+        found=re.match(r'\s*(\d{4}-\d{2}-\d{2})(?!\s*(?:起|开始|以后|之后|以来|至|到|前|之前|以前|[-–—~～]))',text) if re.match(head,quote) else None
     if len(days)!=1 or not found or _in_title(text,found.start(1)) or re.search(r'每\s*$',text[:found.start()]):return set()
     offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}
     value=date(found[1]) or (dt.date.fromisoformat(published)+dt.timedelta(days=offset[found[1]])).isoformat()
@@ -2296,13 +2302,17 @@ def _school_goal_dates(goal,cited):
     # A note recording the superseded day (（原为10月19日早读交，已更正为10月20日早读）) is the originals' history, not another
     # day of this item: it is set aside only when every day it names is one a cited original states, its old day is named
     # nowhere else in the summary and each other day it names the summary states outside it. The originals still decide.
+    # The note must say positively that the change took effect (（原为…）, （原为…，已更正为…）): one that is not yet,
+    # maybe or asked (（原为10月19日早读交，尚未更正为10月20日早读）) contradicts the day and stays read.
     named=lambda text:{(int(m),int(d)) for m,d in re.findall(r'(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]',text)}
     stated=set().union(*(named(e['text']) for e in cited))
     def history(m):
-        old=named(re.match(r'[（(]\s*原(?:为|定|是)\s*([^，,；;）)]*)',m[0])[1]);rest=named(goal[:m.start()]+goal[m.end():])
+        note=re.fullmatch(r'[（(]\s*原(?:为|定|是)\s*([^，,；;）)]*)(?:[，,；;]\s*(?:已|现已|现)?(?:更正|更改|改)(?:为|到|至)?[^，,；;（）()]*)?\s*[）)]',m[0])
+        if not note or re.search(r'未|没|不|尚|待|否|如果|若|假如|拟|将|可能|也许|[？?]',m[0]):return m[0]
+        old=named(note[1]);rest=named(goal[:m.start()]+goal[m.end():])
         return '' if old and named(m[0])<=stated and not old&rest and named(m[0])-old<=rest else m[0]
     goal=re.sub(r'[（(]\s*原(?:为|定|是)[^（）()]*[）)]',history,goal)
-    return set().union(*(_school_own_dates(goal,day) for day in {sent_day(e.get('time','')) for e in cited} if day))
+    return set().union(*(_school_own_dates(goal,day,True) for day in {sent_day(e.get('time','')) for e in cited} if day))
 
 
 # Only a subject label and the work's own completion limit may stand before a short anchor in its clause (语文：2026年10月18日20:00前).
@@ -2318,10 +2328,14 @@ def _school_item_span(text,start,end,published):
     each directly following dated handback clause. Whether those clauses hand back this same work is not decided here:
     _school_handback_day proves it on the range, so another object, a second day or any other clause keeps every day.
     Anything else before the anchor (another action, half a predicate) leaves it unproven.
+    A complete anchor that itself opens with that limit after the label (2026年10月22日19:00前完成《等高线观察》纸质记录表，…)
+    reads the same range: its handback clauses still follow it.
     """
     from family_agenda import deadlines
     head=max(text.rfind(mark,0,start) for mark in '。；;\n')+1
-    if not re.fullmatch(_SCHOOL_LIMIT_LEAD,text[head:start]) or not _school_complete_span(text,head,end):return None
+    lead=re.fullmatch(_SCHOOL_LIMIT_LEAD,text[head:start]) or (
+        re.fullmatch(r'\s*(?:[^：:，,。；;\n\d]{1,6}[：:])?\s*',text[head:start]) and re.match(_SCHOOL_LIMIT_LEAD+r'[^，,。；;\n]',text[start:end]))
+    if not lead or not _school_complete_span(text,head,end):return None
     while ((back:=re.match(r'[。；;]([^。；;\n]+)',text[end:])) and re.search(r'交(?:给|回|到|至)|提交|上交|交\s*$',back[1])
            and len(deadlines(back[1],published))==1):
         end+=back.end()
@@ -2339,9 +2353,13 @@ def _school_own_clause_dates(quote,cited,others):
     homes=[e for e in cited if quote and quote in e['text']]
     if len(homes)!=1 or homes[0]['text'].count(quote)!=1:return set()
     text=homes[0]['text'];start=text.index(quote);end=start+len(quote)
+    published=sent_day(homes[0].get('time',''))
+    span=_school_item_span(text,start,end,published)
     if not _school_complete_span(text,start,end):
-        span=_school_item_span(text,start,end,sent_day(homes[0].get('time','')))
         if not span:return set()
+        (start,end),quote=span,text[span[0]:span[1]]
+    elif span and span[1]>end and len(_school_own_dates(_school_corrected_quote(text[span[0]:span[1]],homes[0],cited),published))==1:
+        # A complete prefix reads its handbacks only where they prove the same work's one day; else its own words decide.
         (start,end),quote=span,text[span[0]:span[1]]
     for other in others:  # Another proposal quoting any of this clause makes it shared, not this item's own.
         at=0
@@ -2378,7 +2396,11 @@ def _school_corrected_quote(quote,home,cited):
             new=cut(fix,r'改为|改到|改至',1);days=deadlines(new,sent_day(entry.get('time','')))
             if len(days)!=1 or deadlines(new,published)!=days:continue
             for old in re.split(r'[。；;\n]',quote):
-                if old.strip() and bare(old)==bare(new) and deadlines(old,published) not in (set(),days):quote=quote.replace(old.strip(),new,1)
+                # The fix may name the holder by the title this quote gave it before (《树叶拓印》作品 for 作品 after 完成《树叶拓印》作品).
+                titled=re.fullmatch(r'(《[^》]{1,40}》)(.+)',bare(new));holder=re.match(r'[^\d，,：:（(《]{2,}?(?=\s*(?:于|在)?\s*\d)',old.strip())
+                same=bare(old)==bare(new) or bool(titled and holder and titled[2]==bare(old)
+                                                  and titled[1]+holder[0] in quote[:quote.find(old.strip())])
+                if old.strip() and same and deadlines(old,published) not in (set(),days):quote=quote.replace(old.strip(),new,1)
     return quote
 
 
