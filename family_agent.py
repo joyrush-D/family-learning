@@ -3282,10 +3282,14 @@ def _school_native_reference(clause):
 
     Only a material noun directly followed by 仅供/只供, with every further comma part a bare voluntary use, counts.
     Inside that noun's own name a closed book title (《四季花园》) or an edition number (第3期) is a name, not a count.
+    A title closed within its own clause is one object before any date or comma is read, so 《11月6日札记》 and
+    《四季，花园》 are names too; an unclosed, nested or cross-clause title stays raw text and keeps the clause an outcome.
     A verb-first, dated, counted, quoted or obliged part, or any other part, keeps the clause an outcome. Later
     sentences keep their own reading either way: a reference clause neither absorbs nor is absorbed by them.
     """
     value=re.sub(r'^'+_SCHOOL_NATIVE_MARKER,'',clause.strip())
+    # Mask closed titles only in this syntax copy, never in the saved original; outside the name position they still fail.
+    value=re.sub(r'《[^《》。；;\n]{1,30}》',lambda m:'《'+'□'*(len(m[0])-2)+'》',value)
     if re.search(_SCHOOL_NATIVE_DATE,value):return False
     plain=r'(?:(?!请|须|需|必|务|应|要求)[^\d，,“”"‘’「」『』（）()《》\s])'
     name=r'(?:'+plain+r'|《[^《》，,。；;]{1,30}》|第[0-9一二三四五六七八九十]{1,3}(?:期|版|辑|册|卷))'
