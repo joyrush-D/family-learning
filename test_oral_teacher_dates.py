@@ -166,4 +166,50 @@ with tempfile.TemporaryDirectory(prefix='synthetic-oral-dates-') as temporary:
         store.save_item(request(id=planned,version=rows()[planned][2],teacher_dates=dict(handback_on='')))
         m=same_views(planned)
         assert (m['due_on'],m['scheduled_on'])==('2026-09-18','2026-09-09') and m['due_kind']!='handback', m
+        # Root race (ROOT-RACE-FROZEN payloads): a task form opened while the teacher handback day was 22 must not save that
+        # old day as the parent's deadline after another session corrected it to 23; clearing it then leaves no deadline.
+        race_store=family_study.Store(app); race_store._now=lambda:dt.datetime(2026,10,17,18,0,tzinfo=family_study.TZ)
+        def race_create(key):
+            return dict(child_id='child-1',day='2026-10-17',title='虚构数学口算',request_key=key,
+                report=dict(text='虚构原话：22日交回',goal='口算虚构第2页',attachments=[],complete_on='',handback_on='2026-10-22'))
+        def standard(ident, key, due_on, scheduled_on, version=0):
+            return dict(id=ident,version=version,request_key=key,mode='next',next_action='先核对原要求',waiting_for='',review_on='',category='homework',
+                published_on='',due_on=due_on,scheduled_on=scheduled_on,box='inbox',title='虚构数学口算',goal='口算虚构第2页')
+        def revise(ident, key, day):
+            return race_store.save_item(dict(child_id='child-1',day='2026-10-17',id=ident,version=rows()[ident][2],request_key=key,teacher_dates=dict(handback_on=day)))
+        raced=race_store.save_item(race_create('independent-oral-clear-handback-0002'))['saved_item_id']
+        opened=standard(raced,'independent-oral-focus-0001','2026-10-22','2026-10-17')
+        assert task(raced)['focus']['version']==0 and task(raced)['agenda']['due_on']=='2026-10-22'
+        revise(raced,'independent-oral-race-revise-0001','2026-10-23')
+        m=task(raced)['agenda']
+        assert (m['due_on'],m['due_kind'],m['scheduled_on'])==('2026-10-23','handback','2026-10-17'), m
+        try: family_task_focus.save(app,opened)
+        except family_task_focus.FocusError as error: assert (error.status,error.code)==(409,'task_focus_conflict'), error.code
+        else: raise AssertionError('stale task form saved the old teacher day')
+        assert task(raced)['focus']['due_on']==''
+        revise(raced,'independent-oral-race-clear-0002','')
+        m=task(raced)['agenda']
+        assert (m['due_on'],m['due_kind'],m['scheduled_on'])==('','','2026-10-17'), m
+        report=json.loads(rows()[raced][1])
+        assert (report['text'],report['goal'],[h['handback_on'] for h in report['date_history']])==('虚构原话：22日交回','口算虚构第2页',['2026-10-22','2026-10-23'])
+        # The parent's genuinely different due 24 / plan 19 in the same stale form is saved after reading the latest version.
+        genuine=race_store.save_item(race_create('independent-oral-true-parent-create'))['saved_item_id']
+        stale=standard(genuine,'independent-oral-true-parent-0001','2026-10-24','2026-10-19')
+        revise(genuine,'independent-oral-true-revise-0001','2026-10-23')
+        try: family_task_focus.save(app,stale)
+        except family_task_focus.FocusError as error: assert error.code=='task_focus_conflict', error.code
+        else: raise AssertionError('stale task form accepted')
+        family_task_focus.save(app,dict(stale,version=task(genuine)['focus']['version'],request_key='independent-oral-true-parent-0002'))
+        revise(genuine,'independent-oral-true-clear-0002','')
+        m=task(genuine)['agenda']
+        assert (m['due_on'],m['scheduled_on'])==('2026-10-24','2026-10-19') and m['due_kind']!='handback', m
+        # A choice saved before the correction stays; its lost-receipt retry still reads back the same success.
+        early=race_store.save_item(race_create('independent-oral-early-create'))['saved_item_id']
+        sent=standard(early,'independent-oral-early-focus-0001','2026-10-24','2026-10-19')
+        family_task_focus.save(app,sent)
+        revise(early,'independent-oral-early-revise-0001','2026-10-23')
+        assert family_task_focus.save(app,sent)['request_replayed']
+        revise(early,'independent-oral-early-clear-0002','')
+        m=task(early)['agenda']
+        assert (m['due_on'],m['scheduled_on'])==('2026-10-24','2026-10-19'), m
 print('test_oral_teacher_dates: ok')
