@@ -148,7 +148,7 @@ class SavedSchoolRereadTests(unittest.TestCase):
         item, = self.rows()['items']
         self.store.act(dict(id=item['id'], action='dismiss'))
         before = self.rows()
-        claimed_new = dict(proposals=[dict(SYNTHETIC['proposals'][0], action_quote=TEXT, existing_item_id='')])  # SYNTHETIC
+        claimed_new = dict(proposals=[dict(SYNTHETIC['proposals'][0], action_quote=TEXT.split('。')[0] + '。', existing_item_id='')])  # SYNTHETIC, one action clause
         calls = [self.run_round(dict(return_value=claimed_new), self.now + dt.timedelta(minutes=41 * i))[0] for i in range(3)]
         self.assertLessEqual(sum(calls), 1, 'at most the one bounded audit call')
         after = self.rows()
@@ -164,7 +164,10 @@ class SavedSchoolRereadTests(unittest.TestCase):
         before = self.rows()
         calls, _ = self.run_round(dict(side_effect=AssertionError('edited draft must not be reread')), self.now)
         self.assertEqual(calls, 0)
-        self.assertEqual(self.rows(), before)
+        after = self.rows()
+        boundary = after['jobs'].pop('school-audit-boundary')  # the one-time audit boundary bookkeeping row only
+        self.assertEqual(boundary['done'], 1)
+        self.assertEqual(after, before)
 
     def test_failures_keep_one_identity_backoff_and_the_three_attempt_limit(self):
         before = self.rows()
