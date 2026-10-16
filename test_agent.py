@@ -3364,6 +3364,30 @@ class AgentTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(deadlines(text,'2026-10-16'),set(),'publication day, state, negation or no own action stays undated')
 
+    def test_dated_ba_title_and_page_object_keeps_its_own_date_through_select(self):
+        from family_agenda import deadlines
+        quote='数学：请于2026年10月22日把《图形与证明综合练习》的第4页完成并逐题检查。'
+        for text in [quote,'请于2026年10月22日把《因数与倍数》第3-5页订正。','请2026年10月22日把《古诗三首》第二课背诵。']:
+            with self.subTest(text=text):
+                self.assertEqual(deadlines(text,'2026-10-16'),{'2026-10-22'})
+        ref='message:synthetic-ba-title:1'
+        evidence=[dict(ref=ref,text=quote,time='2026-10-16T08:00:00+08:00',content_incomplete=False)]
+        proposal=school_proposal(title_quote='数学',due='2026-10-22',evidence=[dict(ref=ref)],learning_subject='数学',
+            task_title='数学：图形与证明综合练习第4页',task_goal='把《图形与证明综合练习》的第4页完成并逐题检查。',
+            task_state='ready',task_reason='原文要求明确。',task_purpose='learning')
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal])):
+            items=agent._select('school',evidence,school_goals=[],as_of='2026-10-16')
+        self.assertEqual([(i['due'],i['body'],i['plan']['school_task']['state']) for i in items],
+                         [('2026-10-22','把《图形与证明综合练习》的第4页完成并逐题检查。','ready')])
+        self.assertEqual(evidence[0]['text'],quote,'original text unchanged')
+        for text in ['请于2026年10月22日把《已取消的综合练习》第4页完成。',
+                     '请于2026年10月22日把《10月25日综合练习》第4页完成。',
+                     '请于2026年10月22日把不需要的《图形与证明综合练习》第4页完成。',
+                     '请于2026年10月22日把《图形与证明综合练习》的第4页答案发到群里。',
+                     '2026年10月16日通知：请把《图形与证明综合练习》的第4页完成。']:
+            with self.subTest(text=text):
+                self.assertEqual(deadlines(text,'2026-10-16'),set(),'state, other day, negation, no own action or publication day stays undated')
+
     def test_literal_independent_admin_date_cannot_borrow_or_truncate_an_action(self):
         quote='家长事务：2026-02-13签字交回独立活动回执，无需盖章。'
         evidence=[dict(text='2026-02-11朗读第5课两遍。\n'+quote,time=self.now.isoformat())]
