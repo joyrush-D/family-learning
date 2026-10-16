@@ -180,7 +180,7 @@ class ExplicitOwnCompletionDayTests(unittest.TestCase):
 class ExplicitOwnCompletionDayStoreTests(unittest.TestCase):
     setUp = native.SchoolNativeCoverageTests.setUp
 
-    def test_saved_h01_is_one_task_on_its_work_day_and_its_handback_day_after_reopen_and_replay(self):
+    def _save_h01(self):
         self.now = self.fixture.now = dt.datetime(2026, 10, 16, 20, tzinfo=agent.TZ)
         payload = self.fixture.payload(cursor='11')
         time, publisher, sender, text = H01
@@ -199,7 +199,10 @@ class ExplicitOwnCompletionDayStoreTests(unittest.TestCase):
         with self.store._db() as c:
             tasks = [dict(r) for r in c.execute('SELECT * FROM manual_tasks')]
         self.assertEqual(len(tasks), 1, tasks)
-        task = tasks[0]
+        return payload, tasks[0]
+
+    def test_saved_h01_is_one_task_on_its_work_day_and_its_handback_day_after_reopen_and_replay(self):
+        payload, task = self._save_h01()
         self.assertEqual(task['due'], '2026-10-20')
 
         def listed(day):
@@ -223,5 +226,23 @@ class ExplicitOwnCompletionDayStoreTests(unittest.TestCase):
         self.assertEqual([x['agenda']['complete_on'] for x in listed('2026-10-18')], ['2026-10-18'])
 
 
+def saved_h01_state(path):
+    """The app's own state and day calendars after the fictional H01 is saved by run_once, for the Chrome Today check."""
+    case = ExplicitOwnCompletionDayStoreTests('test_saved_h01_is_one_task_on_its_work_day_and_its_handback_day_after_reopen_and_replay')
+    case.setUp()
+    try:
+        case._save_h01()
+        state = case.app.snapshot()
+        state['saved_calendars'] = {day: case.app.calendar_snapshot(day, day) for day in ('2026-10-16', '2026-10-18', '2026-10-20')}
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(state, f, ensure_ascii=False, default=str)
+    finally:
+        case.doCleanups()
+
+
 if __name__ == '__main__':
-    unittest.main()
+    import sys
+    if sys.argv[1:2] == ['--saved-h01-state']:
+        saved_h01_state(sys.argv[2])
+    else:
+        unittest.main()

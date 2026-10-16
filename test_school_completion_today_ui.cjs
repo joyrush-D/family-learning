@@ -53,6 +53,29 @@ async function demoServer(){
     assert.deepEqual(errors,[]);
    }finally{await p.close()}
   }
+  // H01 as the app itself saved it (run_once -> stored task -> state/calendar snapshot), not hand-written agenda data.
+  const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+  const file=path.join(fs.mkdtempSync(path.join(os.tmpdir(),'school-h01-')),'state.json');
+  const made=spawn(process.env.FAMILY_TEST_PYTHON||'python3',['test_school_completion_today.py','--saved-h01-state',file],{cwd:__dirname,stdio:['ignore','ignore','inherit']});
+  const [code]=await once(made,'exit');assert.equal(code,0,'saved H01 state');
+  const saved=JSON.parse(fs.readFileSync(file,'utf8'));assert.equal(saved.tasks.length,1,'one saved task');
+  const h01=saved.tasks[0];assert.equal(h01.due,'2026-10-20');
+  for(const width of [360,1440])for(const [day,inToday,label] of [['2026-10-16',false,/完成：2026-10-18[\s\S]*截止：2026-10-20/],['2026-10-18',true,/今天完成：2026-10-18[\s\S]*截止：2026-10-20/],['2026-10-20',true,/完成：2026-10-18[\s\S]*截止：2026-10-20/]]){
+   const p=await browser.newPage({viewport:{width,height:820}}),errors=[];
+   p.on('pageerror',e=>errors.push(e.message));
+   try{
+    await p.route('**/api/state',route=>route.fulfill({json:{...base,children:saved.children,today:day,tasks:saved.tasks,agent:{...base.agent,items:[]},today_calendar:saved.saved_calendars[day]}}));
+    await p.goto(server.url,{waitUntil:'load'});
+    await eventually(async()=>await p.locator('body[data-page="home"] #task-group-homework').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','Today ready '+day);
+    const card=scope=>scope.locator('[data-query-target="task:'+h01.id+'"]');
+    assert.equal(await card(p).count(),1,day+' the saved task appears once');
+    assert.equal(await card(p.locator('#task-group-homework')).count(),inToday?1:0,day+' first-layer Today only on its work and handback days');
+    assert.match(await card(p).locator('.agenda-dates').innerText(),label,day+' both roles with the original handback due');
+    assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page has no horizontal overflow');
+    assert.deepEqual(errors,[]);
+   }finally{await p.close()}
+  }
   console.log('PASS: own today/tonight work is in Today once with its completion and handback days; handback-only work stays in other homework');
+  console.log('PASS: saved H01 is in Today once on 2026-10-18 (work) and 2026-10-20 (handback), not on 2026-10-16');
  }finally{await browser?.close();await server?.stop()}
 })().catch(e=>{console.error(e);process.exit(1)});
