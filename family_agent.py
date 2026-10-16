@@ -2770,7 +2770,7 @@ def _school_untouched_batch_correction(store,c,row,evidence):
     return proof
 
 
-def _school_saved_reread(store,c,row,evidence):
+def _school_saved_reread(store,c,row,evidence,now):
     """Prove a saved current-policy review is still the untouched first output of its own finished original batch.
 
     processed=1/done=1 only end the old round; they never prove its review right. Such an item may be read again once,
@@ -2799,6 +2799,9 @@ def _school_saved_reread(store,c,row,evidence):
                             evidence=evidence,separate_learning=True)
     except (AgentError,ValueError,KeyError,TypeError):return None
     if fresh.get('state')!='ready':return None
+    # Date and cancellation guards hold a review by leaving its day unknown; an unknown or past day stays for review
+    # and is never poured into today by a reread.
+    if not row['due'] or row['due']<now.date().isoformat():return None
     job=c.execute('SELECT fingerprint,done FROM agent_jobs WHERE id=?',(row['job_id'],)).fetchone()
     if job is None or not job['done']:return None
     for e in evidence:
@@ -5342,7 +5345,7 @@ def _refresh_school(app, store, now, budget):
         saved_reread=None
         if current and not (page_changed or pdf_changed or material_changed or original_changed or source_error or legacy_correction):
             # An untouched saved review of a finished batch: one reread in this item's own job, never a fresh budget.
-            with store._db() as c:saved_reread=_school_saved_reread(store,c,row,evidence)
+            with store._db() as c:saved_reread=_school_saved_reread(store,c,row,evidence,now)
         if plan.get('school_history_job') and (not current or page_changed or pdf_changed or material_changed):
             # This audit proves a literal message action only. A generic whole-notice refresh cannot change its identity.
             brief.update(state='review',reason='补漏依据限于这项原消息动作；新资料或规则变化尚未核其对应关系，原事项与要求保留。')
@@ -5451,7 +5454,7 @@ def _refresh_school(app, store, now, budget):
                     raise AgentError('学校消息原文暂不可读取') from source_error
                 # Revoked, detached, corrected or dismissed between the claim and the call: no model round at all.
                 with store._db() as c:
-                    intact=_school_current(store,c,row,evidence,page_key,pdf_key,material_key) and (not original_parts or _school_original_known(store,c,row)[0]==original_key) and _school_pdf_mapping_intact(store,c,row,mapping_scope) and (not legacy_correction or _school_legacy_batch_correction(store,c,row,evidence)==legacy_correction) and (not policy_scope or _school_legacy_policy_scope(store,c,row,evidence)==policy_scope) and (not saved_reread or _school_saved_reread(store,c,row,evidence)==saved_reread)
+                    intact=_school_current(store,c,row,evidence,page_key,pdf_key,material_key) and (not original_parts or _school_original_known(store,c,row)[0]==original_key) and _school_pdf_mapping_intact(store,c,row,mapping_scope) and (not legacy_correction or _school_legacy_batch_correction(store,c,row,evidence)==legacy_correction) and (not policy_scope or _school_legacy_policy_scope(store,c,row,evidence)==policy_scope) and (not saved_reread or _school_saved_reread(store,c,row,evidence,now)==saved_reread)
                     if not intact: _discard_job(c,key,fp)
                 if not intact: continue
                 if reference: brief=dict(reference)
@@ -5527,7 +5530,7 @@ def _refresh_school(app, store, now, budget):
                 with store._db() as c:
                     c.execute('BEGIN IMMEDIATE')
                     if (not _school_current(store,c,row,evidence,page_key,pdf_key,material_key) or policy_scope and _school_legacy_policy_scope(store,c,row,evidence)!=policy_scope
-                            or saved_reread and _school_saved_reread(store,c,row,evidence)!=saved_reread):
+                            or saved_reread and _school_saved_reread(store,c,row,evidence,now)!=saved_reread):
                         # Candidate, message, binding/authorization, fragments or PDF groups changed while the model ran: drop the result.
                         _discard_job(c,key,fp);continue
                     updated=now.isoformat()
