@@ -7,6 +7,8 @@ import math
 import re
 import sqlite3
 
+import family_task_focus
+
 TZ = dt.timezone(dt.timedelta(hours=8))
 RESULTS = ('完成', '做了一部分', '需要帮助')
 FAMILY_CAPTURE = '家庭放学后录入'
@@ -288,6 +290,9 @@ class Store:
                         # The original words stay; each correction keeps the teacher days it replaced.
                         history=original.get('date_history',[])+[dict({k:original.get(k,'') for k in TEACHER_DAYS},replaced_at=self._now().isoformat(),actor=self.actor)]
                         c.execute('UPDATE study_items SET report=? WHERE id=?',(_json(dict(original,**corrected,date_history=history)),ident))
+                        # The task form shows these days; one opened before this correction must reload, not resend an old day.
+                        if any(original.get(k,'')!=v for k,v in corrected.items()):
+                            family_task_focus.advance(c,old['task_id'] or ident,self._now().isoformat(),old['day'])
                     if old['record_id']:
                         updated = dict(c.execute('SELECT * FROM study_items WHERE id=?', (ident,)).fetchone())
                         self._record(c, updated, child)
