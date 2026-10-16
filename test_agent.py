@@ -3226,6 +3226,108 @@ class AgentTests(unittest.TestCase):
             reference=c.execute("SELECT plan FROM agent_items WHERE state='pending'").fetchone()
             self.assertEqual(json.loads(reference['plan'])['school_task']['state'],'reference')
 
+    # Root's immutable, entirely fictional counter-example: one school evening with five actions and a parent
+    # reference, replayed with the model's actual parsed reply. The product model is never called.
+    FICTIONAL_DAY = json.loads(r'''{"actual_parsed_reply": {"proposals": [{"due": "2026-10-12", "evidence": [{"ref": "message:synthetic-school-b:1"}], "focus": "school", "learning_goal_id": "", "learning_subject": "科学", "task_advice": "", "task_change": "new", "task_goal": "观察豆芽生长，连续记录3天，下周一（10月12日）带记录表到校", "task_purpose": "learning", "task_reason": "", "task_state": "ready", "task_submission": "带记录表到校", "task_target_id": "", "task_title": "科学：观察豆芽生长带记录表到校", "title_quote": "科学：观察豆芽生长，连续记录3天，下周一（10月12日）带记录表到校。"}, {"due": "2026-10-09", "evidence": [{"ref": "message:synthetic-school-b:2"}], "focus": "school", "learning_goal_id": "", "learning_subject": "", "task_advice": "", "task_change": "new", "task_goal": "10月9日前打印《视力检查回执》，签字后交回", "task_purpose": "admin", "task_reason": "", "task_state": "ready", "task_submission": "交回", "task_target_id": "", "task_title": "admin：打印交回视力检查回执", "title_quote": "请家长10月9日前打印《视力检查回执》，签字后交回；"}, {"due": "2026-10-14", "evidence": [{"ref": "message:synthetic-school-b:2"}], "focus": "school", "learning_goal_id": "", "learning_subject": "", "task_advice": "", "task_change": "new", "task_goal": "《学籍信息确认表》需家长单位盖章，下周三前交", "task_purpose": "admin", "task_reason": "", "task_state": "ready", "task_submission": "交回", "task_target_id": "", "task_title": "admin：交回盖章后的学籍信息确认表", "title_quote": "《学籍信息确认表》需要家长单位盖章，下周三前交。"}, {"due": "2026-10-09", "evidence": [{"ref": "message:synthetic-school-b:3"}], "focus": "school", "learning_goal_id": "", "learning_subject": "语文", "task_advice": "", "task_change": "new", "task_goal": "写日记一篇，不少于200字，后天交", "task_purpose": "learning", "task_reason": "", "task_state": "ready", "task_submission": "交日记", "task_target_id": "", "task_title": "语文：写不少于200字的日记", "title_quote": "语文：写日记一篇，不少于200字，后天交。"}, {"due": "2026-10-08", "evidence": [{"ref": "message:synthetic-school-b:5"}], "focus": "school", "learning_goal_id": "", "learning_subject": "数学", "task_advice": "", "task_change": "new", "task_goal": "完成同步练习第3课，周四交", "task_purpose": "learning", "task_reason": "", "task_state": "ready", "task_submission": "交同步练习第3课作业", "task_target_id": "", "task_title": "数学：完成同步练习第3课", "title_quote": "数学：同步练习第3课，周四交。"}, {"due": "", "evidence": [{"ref": "message:synthetic-school-b:4"}], "focus": "school", "learning_goal_id": "", "learning_subject": "", "task_advice": "", "task_change": "new", "task_goal": "", "task_purpose": "optional", "task_reason": "仅提供数学练习卷答案供家长参考，无学生需完成的行动要求", "task_state": "reference", "task_submission": "", "task_target_id": "", "task_title": "", "title_quote": "数学练习卷答案见群文件，仅供家长参考。"}]}, "inputs": {"as_of": "2026-10-07", "child": {}, "evidence": [{"attachments": [], "content_incomplete": false, "kind": "text", "publisher": "publisher:synthetic-science", "ref": "message:synthetic-school-b:1", "related_messages": ["message:synthetic-school-b:1"], "sender": "示例科学老师", "source": "虚构班级群", "text": "科学：观察豆芽生长，连续记录3天，下周一（10月12日）带记录表到校。", "time": "2026-10-07T19:00:00+08:00"}, {"attachments": [], "content_incomplete": false, "kind": "text", "publisher": "publisher:synthetic-head", "ref": "message:synthetic-school-b:2", "related_messages": ["message:synthetic-school-b:2"], "sender": "示例班主任", "source": "虚构班级群", "text": "请家长10月9日前打印《视力检查回执》，签字后交回；《学籍信息确认表》需要家长单位盖章，下周三前交。", "time": "2026-10-07T19:05:00+08:00"}, {"attachments": [], "content_incomplete": false, "kind": "text", "publisher": "publisher:synthetic-chinese", "ref": "message:synthetic-school-b:3", "related_messages": ["message:synthetic-school-b:3"], "sender": "示例语文老师", "source": "虚构班级群", "text": "语文：写日记一篇，不少于200字，后天交。", "time": "2026-10-07T19:10:00+08:00"}, {"attachments": [], "content_incomplete": false, "kind": "text", "publisher": "publisher:synthetic-math", "ref": "message:synthetic-school-b:4", "related_messages": ["message:synthetic-school-b:4", "message:synthetic-school-b:5"], "sender": "示例数学老师", "source": "虚构班级群", "text": "数学练习卷答案见群文件，仅供家长参考。", "time": "2026-10-07T19:15:00+08:00"}, {"attachments": [], "content_incomplete": false, "kind": "text", "publisher": "publisher:synthetic-math", "ref": "message:synthetic-school-b:5", "related_messages": ["message:synthetic-school-b:5", "message:synthetic-school-b:4"], "sender": "示例数学老师", "source": "虚构班级群", "text": "数学：同步练习第3课，周四交。", "time": "2026-10-07T19:20:00+08:00"}], "learning_goals": [], "mode": "school", "school_tasks": []}}''')
+
+    def _fictional_day(self, reply=None):
+        case=self.FICTIONAL_DAY
+        self.source.update(id='synthetic-school-b',name='虚构班级群',cursor='0');self.config()
+        messages=[dict(id=e['ref'].rsplit(':',1)[1],time=e['time'],kind='text',sender=e['sender'],sender_id=e['publisher'],
+                       text=e['text'],unread=False) for e in case['inputs']['evidence']]
+        self.store.ingest(dict(source_id=self.source['id'],expected_cursor='0',cursor='5',checked_at=messages[-1]['time'],
+                               last_message_time=messages[-1]['time'],error='',messages=messages))
+        calls=[]
+        def model(messages,schema,name,timeout,*,data_path=None):
+            calls.append(name)
+            if name!='family_agent_selection':raise agent.family_llm.LLMDraftError('fixture: no model for '+name)
+            sent=json.loads(messages[1]['content'])
+            self.assertEqual([(e['ref'],e['text']) for e in sent['evidence']],[(e['ref'],e['text']) for e in case['inputs']['evidence']])
+            return json.loads(json.dumps(case['actual_parsed_reply'] if reply is None else reply))
+        now=dt.datetime(2026,10,7,19,30,tzinfo=agent.TZ)
+        with patch.object(agent.family_llm,'_chat_json',side_effect=model):
+            agent.run_once(self.app,now)
+        return calls,now
+
+    def test_fictional_day_lists_admin_actions_without_internal_label_and_keeps_reference_as_material(self):
+        raw=self.FICTIONAL_DAY['actual_parsed_reply']['proposals']
+        self.assertEqual([p['task_title'] for p in raw if p['task_purpose']=='admin'],['admin：打印交回视力检查回执','admin：交回盖章后的学籍信息确认表'])
+        calls,now=self._fictional_day()
+        self.assertEqual(calls.count('family_agent_selection'),1)
+        ref=lambda n:'message:synthetic-school-b:'+str(n)
+        expected=[('数学：完成同步练习第3课','2026-10-08','完成同步练习第3课，周四交\n提交要求：交同步练习第3课作业',ref(5)),
+                  ('打印交回视力检查回执','2026-10-09','家长：2026-10-09前打印《视力检查回执》，签字后交回',ref(2)),
+                  ('语文：写不少于200字的日记','2026-10-09','写日记一篇，不少于200字，后天交\n提交要求：交日记',ref(3)),
+                  ('科学：观察豆芽生长带记录表到校','2026-10-12','观察豆芽生长，连续记录3天，下周一（10月12日）带记录表到校',ref(1)),
+                  ('交回盖章后的学籍信息确认表','2026-10-14','《学籍信息确认表》需家长单位盖章，下周三前交',ref(2))]
+        with self.app.connect() as c:
+            tasks=[dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY due,title')]
+            items=[dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")]
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0,'collection never completes a task')
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_messages WHERE processed=1').fetchone()[0],5)
+        self.assertEqual([(t['title'],t['due'],t['action']) for t in tasks],[e[:3] for e in expected])
+        for task,(_,_,_,cited) in zip(tasks,expected):
+            self.assertEqual((task['child'],task['original_status']),('示例甲','待跟进'))
+            self.assertIn(cited,task['source'].split('\n'))
+            self.assertNotIn(ref(4),task['source'],'the parent reference is never a cited action')
+            self.assertNotIn('admin',task['title'].lower())
+        self.assertEqual(len({t['id'] for t in tasks}),5,'two administrative actions of one notice stay separate')
+        by_task={i['task_id']:i for i in items if i['task_id']}
+        for task in tasks:
+            plan=json.loads(by_task[task['id']]['plan']);brief=plan['school_task']
+            self.assertEqual((brief['state'],brief['change'],brief['title']),('ready','new',task['title']))
+            receipt=next(p for p in raw if p['task_goal'] and p['evidence'][0]['ref']==json.loads(by_task[task['id']]['evidence'])[0]['ref'] and p['task_title'].endswith(task['title']))
+            self.assertEqual(plan['school_selection_receipt']['title'],receipt['task_title'],'the raw model title stays in its receipt')
+            self.assertEqual(brief['purpose'],receipt['task_purpose'],'the purpose enum itself is kept')
+            self.assertEqual('school_learning' in plan,receipt['task_purpose']=='learning')
+        reference,=[i for i in items if not i['task_id']]
+        plan=json.loads(reference['plan']);brief=plan['school_task']
+        self.assertEqual((reference['state'],reference['due'],[e['ref'] for e in json.loads(reference['evidence'])]),('pending','',[ref(4)]))
+        self.assertEqual((reference['title'],reference['body']),('参考资料：数学练习卷答案见群文件，仅供家长参考。',agent.SCHOOL_REFERENCE_NOTE))
+        self.assertEqual((brief['state'],brief['purpose'],brief['title'],brief['goal'],brief['reason']),
+                         ('reference','optional','','',raw[5]['task_reason']))
+        self.assertNotIn('school_learning',plan,'reference material never becomes a learning goal')
+        self.assertNotIn('待核对',reference['title']+reference['body'])
+        self.assertNotIn('确认后可加入待办',reference['body'])
+        view=self.store.school_messages(dict(child_id='child-1',day='2026-10-07'),dict)
+        listed={i['id']:i for g in view['groups'] for m in g['messages'] for i in m['items']}
+        self.assertEqual(listed[reference['id']]['school_state'],'reference')
+        self.assertEqual({listed[i['id']]['school_state'] for i in items if i['task_id']},{'ready'})
+        self.assertEqual(self.store.school_messages(dict(child_id='child-2',day='2026-10-07'),dict)['total'],0)
+        before=[tuple(r.values()) for r in tasks]
+        with patch.object(agent.family_llm,'_chat_json',side_effect=AssertionError('saved fictional day needs no model')):
+            agent._refresh_school(self.app,self.store,now+dt.timedelta(minutes=1),0)
+        with self.app.connect() as c:
+            again=[tuple(dict(r).values()) for r in c.execute('SELECT * FROM manual_tasks ORDER BY due,title')]
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_items WHERE kind='school'").fetchone()[0],6)
+        self.assertEqual(again,before,'reopening keeps the same five tasks, titles, dates and sources')
+
+    def test_fictional_day_incomplete_reply_writes_no_task(self):
+        partial=dict(proposals=self.FICTIONAL_DAY['actual_parsed_reply']['proposals'][:5])
+        calls,_=self._fictional_day(partial)
+        self.assertEqual(calls.count('family_agent_selection'),1)
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0],0)
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_items WHERE kind='school'").fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_messages WHERE processed=1').fetchone()[0],0,'the unread batch stays for its retry')
+            job,=c.execute("SELECT done,attempts,error FROM agent_jobs WHERE id LIKE 'messages:%'").fetchall()
+        self.assertEqual(job['done'],0)
+        self.assertIn('遗漏',job['error'])
+
+    def test_school_title_label_only_drops_internal_purpose_word(self):
+        notice=[dict(text='请家长10月9日前打印《视力检查回执》，签字后交回。')]
+        self.assertEqual(agent._school_title_label('admin：打印交回视力检查回执',notice),'打印交回视力检查回执')
+        self.assertEqual(agent._school_title_label('Admin: 打印交回视力检查回执',notice),'打印交回视力检查回执')
+        self.assertEqual(agent._school_title_label('learning：语文日记',notice),'语文日记')
+        english=[dict(text='Optional: read chapter 3 tonight.')]
+        for title,evidence in [('Optional: read chapter 3',english),('语文：写日记',notice),('Administration: 交回回执',notice),
+                               ('admin：',notice),('admin：打印回执',[]),('打印admin：回执',notice)]:
+            with self.subTest(title=title):
+                self.assertEqual(agent._school_title_label(title,evidence),title,'ordinary or original words stay')
+        brief=agent._school_brief(dict(title='admin：打印交回视力检查回执',goal='10月9日前打印《视力检查回执》，签字后交回',
+                                       state='ready',purpose='admin',change='new'),evidence=[dict(notice[0],kind='text')])
+        self.assertEqual((brief['title'],brief['purpose'],brief['state']),('打印交回视力检查回执','admin','ready'))
+
     def test_resource_request_independent_admin_action_survives_same_message(self):
         cases=[('谁有活动回执文件，发一下。','家长事务：明天签字交回独立活动回执，无需盖章。'),
                ('谁有活动回执文件，发一下，','家长事务：明天签字并盖章后交回独立活动回执。')]
