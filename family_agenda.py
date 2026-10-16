@@ -63,6 +63,12 @@ def _action_deadlines(text,published):
     if date(text): return {text}
     text=_relative_weekday(text,anchor)
     candidates=set()
+    # 把 right after the day names the object its own verb acts on. A complete name ending in its own noun
+    # (把校内参观活动回执签字交回) is one object however long, so only that noun counts toward the window below; a
+    # state, another day or a clause word inside the name (把已取消的活动回执) leaves the text as it was.
+    text=re.sub(r'((?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:(?:由家长|家长|孩子|学生|请)[ \t]*){0,2}把)'
+                r'(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|'+_EVENT_CLAUSE_WORD+r')[一-鿿A-Za-z0-9])*?'
+                r'('+_EVENT_OBJECT_NOUN+r')(?=签字|盖章|交|带|上交|提交)',r'\1\2',text or '')
     # A date alone is not a deadline; it must be tied to an explicit action or dated school event.
     pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:[^。；;，,\n]{0,8}?)(?:前|截止|完成|订正|提交|上交|交齐|带到|带来|交作业|朗读|背诵|抄写|预习|听[^。；;，,\n]{0,12}录音|带|穿|交(?!流|通|换|谈)|测验|考试|听写|默写|检测)'
     for match in re.finditer(pattern,text or ''):
