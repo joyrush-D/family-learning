@@ -78,7 +78,6 @@
 !/test_learning_ui.cjs
 
 !/test_sources_ui.cjs
-!/test_school_processing_status_ui.cjs
 
 !/family_review.py
 !/test_review.py

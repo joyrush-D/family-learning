@@ -410,3 +410,31 @@ test('list materials request the exact task and reject unscoped or wrong-task or
  let release;s=state();c.apiFetch=()=>new Promise(resolve=>release=resolve);const read=c.readSchoolOriginal();c.child='小岚';release({ok:true,json:async()=>value()});await read;assert.equal(s.view,null,'late reply cannot cross into the next child');
  c.child='小溪';s=state();c.apiFetch=()=>new Promise(resolve=>release=resolve);const changed=c.readSchoolOriginal();task.source='Agent建议:changed';release({ok:true,json:async()=>value()});await changed;assert.equal(s.view,null,'changed task source rejects the prior material');
 });
+test('school processing notice stays per child and status separates a running third attempt from the exhausted global count',()=>{
+ // Fictional data only; app.js slices run without network or model calls.
+ const core=readFileSync(__dirname+'/app.js','utf8'),c=vm.createContext({data:null,currentChild:()=>c.data.children[0],esc:escape,sourceCoverageHTML:()=>'',agentPending:()=>[],agentTime:()=>'',currentSourceCardsHTML:()=>'',empty:s=>s,Date});
+ vm.runInContext(core.slice(core.indexOf('const currentSources='),core.indexOf('function collectionCheckHTML('))+core.slice(core.indexOf('function agentStatusHTML('),core.indexOf('let schoolInbox=')),c);
+ const src=(child_id,n)=>({id:'src-'+child_id,child_id,pending_message_count:n}),now=new Date().toISOString();
+ const run=agent=>{c.data={children:[{id:'SYNTHETIC-A'},{id:'SYNTHETIC-B'}],agent:{enabled:true,last_run:now,...agent}};return{today:vm.runInContext('schoolProcessingHTML()',c),status:vm.runInContext('agentStatusHTML(true)',c)}};
+ // Same child pending with a global exhausted count: today stays short, status keeps the scope unknown and the global retry.
+ let r=run({state:'ready',failed_jobs:1,sources:[src('SYNTHETIC-A',6),src('SYNTHETIC-B',3)]});
+ assert.match(r.today,/还有 6 条学校消息尚未整理，作业清单可能不完整。原消息已保存。<button data-page="agent">查看整理状态<\/button>/);
+ assert.doesNotMatch(r.today,/全部孩子|自动尝试|上限|data-page="sources"/);
+ assert.match(r.status,/本孩子还有 6 条学校消息尚未整理，原消息已保存；下方计数为全部孩子合计，未确认是否含这些消息。/);
+ assert.match(r.status,/1 批资料已用满3次自动尝试、尚未成功（全部孩子与资料类型合计）：不会自动恢复；原资料保留。 <button data-agent-retry>重新尝试全部孩子未成功的资料<\/button>/);
+ assert.doesNotMatch(r.status,/本孩子[^<]*已停止|重试本孩子/);
+ // Only the other child has pending messages and a failure: the current child gets no notice.
+ r=run({state:'ready',failed_jobs:2,last_error:'另一孩子失败',sources:[src('SYNTHETIC-A',0),src('SYNTHETIC-B',4)]});
+ assert.equal(r.today,'');assert.doesNotMatch(r.status,/data-agent-school-pending/);assert.match(r.status,/2 批资料[^<]*全部孩子与资料类型合计/);
+ // Third attempt still running: the count already includes it, so nothing claims it has stopped.
+ r=run({state:'running',failed_jobs:1,sources:[src('SYNTHETIC-A',6)]});
+ assert.match(r.status,/后台正在整理，本轮结果返回前仍可能成功；原资料保留。/);assert.doesNotMatch(r.status,/不会自动恢复/);
+ assert.match(r.status,/下方计数为全部孩子合计，未确认是否含这些消息。/);
+ // A stale running state is interrupted, not proof of a live attempt.
+ r=run({state:'running',last_run:'2000-01-01T00:00:00Z',failed_jobs:1,sources:[src('SYNTHETIC-A',6)]});assert.match(r.status,/不会自动恢复/);
+ // Explicit global retry accepted and processing finished: both notices disappear.
+ r=run({state:'ready',failed_jobs:0,sources:[src('SYNTHETIC-A',0)]});assert.equal(r.today,'');assert.doesNotMatch(r.status,/data-agent-school-pending|data-agent-failed-jobs|data-agent-retry/);
+ // Running without exhausted jobs and a disabled backend keep their own plain wording.
+ assert.match(run({state:'running',failed_jobs:0,sources:[src('SYNTHETIC-A',2)]}).status,/本孩子还有 2 条学校消息尚未整理，原消息已保存；后台正在整理。/);
+ c.sourceCoverageHTML=()=>'<div data-synthetic-coverage></div>';assert.match(run({enabled:false,state:'disabled',failed_jobs:0,sources:[src('SYNTHETIC-A',2)]}).status,/后台整理尚未启用。/);
+});
