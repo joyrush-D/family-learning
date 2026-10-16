@@ -621,8 +621,10 @@ class MixedStoreTests(unittest.TestCase):  # SR05: eligible + exhausted + parent
         a_old, c_old = by[self.A['id']][0], next(i for i in decided['items'] if i['id'] == by[self.C['id']][0]['id'])
         audit_a = TwoFormsInOneMessageTests.audit_reply(TwoFormsInOneMessageTests, a_old['id'])
         audit_a = dict(proposals=[dict(p, evidence=[dict(ref='message:p1-mix-a:1')]) for p in audit_a['proposals']])
+        # The dismissed whole-notice row has no located action, so mapping onto it is refused by the existing guard
+        # (observed: 3 failed attempts); this reply claims the action as new, which the audit must not re-offer.
         audit_c = dict(proposals=[dict(SYNTHETIC['proposals'][0], evidence=[dict(ref='message:p1-mix-c:1')],
-                                       action_quote=TEXT.split('。')[0] + '。', existing_item_id=c_old['id'])])
+                                       action_quote=TEXT.split('。')[0] + '。', existing_item_id='')])
         later = dict(proposals=[dict(SYNTHETIC['proposals'][0], title_quote=self.LATER, task_title='填写《图书借阅登记表》并交回',
                                      task_goal=self.LATER, due='2026-10-24', evidence=[dict(ref='message:p1-mix-a:2')])])
         seen = []
