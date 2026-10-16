@@ -96,6 +96,41 @@ class SettingsTests(unittest.TestCase):
                 self.assertEqual(set(json.loads((data/'model.json').read_text())),family_llm.MODEL_FILE_KEYS)
                 cleared=store.model_state();self.assertEqual((cleared['reasoning_effort'],cleared['light_reasoning_effort']),('low',''))
 
+    def test_unconfigured_light_effort_refuses_unknown_values_without_writing(self):
+        with tempfile.TemporaryDirectory(prefix='synthetic-light-effort-blank-') as directory, patch.dict(os.environ,{},clear=True):
+            root=Path(directory);data=root/'private';data.mkdir();path=data/'model.json'
+            blank_file={key:'' for key in family_llm.MODEL_FILE_KEYS}
+            with patch.multiple(app,ROOT=root,DATA=data,DB=data/'family.sqlite3'):
+                store=app.settings_store();empty=store.model_state()
+                blank=dict(revision=empty['revision'],base_url='',model='')
+                # Nothing is configured, yet an unknown light effort is refused and no file is written.
+                for bad in ('off','LOW'):
+                    with self.subTest(value=bad),self.assertRaises(family_settings.SettingsError):
+                        store.save_model(dict(blank,light_reasoning_effort=bad))
+                    self.assertFalse(path.exists())
+                # Missing and empty keep the unconfigured five-key file; an explicit none is a valid unconfigured value.
+                store.save_model(blank)
+                self.assertEqual(json.loads(path.read_text()),blank_file)
+                state=store.model_state()
+                store.save_model(dict(blank,revision=state['revision'],light_reasoning_effort=''))
+                self.assertEqual(json.loads(path.read_text()),blank_file)
+                state=store.model_state()
+                self.assertEqual((state['configured'],state['error'],state['light_reasoning_effort']),(False,'',''))
+                store.save_model(dict(blank,revision=state['revision'],light_reasoning_effort='none'))
+                state=store.model_state()
+                self.assertEqual((state['configured'],state['error'],state['reasoning_effort'],state['light_reasoning_effort']),(False,'','','none'))
+                before=path.read_bytes()
+                for bad in ('off','LOW'):
+                    with self.subTest(saved='none',value=bad),self.assertRaises(family_settings.SettingsError):
+                        store.save_model(dict(blank,revision=state['revision'],light_reasoning_effort=bad))
+                    self.assertEqual(path.read_bytes(),before)
+                # A hidden invalid value in an otherwise blank file reads as unreadable, so a later save does not keep it.
+                path.write_text(json.dumps({**blank_file,'light_reasoning_effort':'off'}))
+                hidden=store.model_state()
+                self.assertEqual((hidden['configured'],hidden['light_reasoning_effort']),(False,''));self.assertTrue(hidden['error'])
+                store.save_model(dict(blank,revision=hidden['revision']))
+                self.assertEqual(json.loads(path.read_text()),blank_file)
+
     def test_first_visit_household_bindings_model_and_access(self):
         with tempfile.TemporaryDirectory(prefix='synthetic-settings-') as directory, patch.dict(os.environ,{},clear=True):
             root=Path(directory); data=root/'private';data.mkdir()

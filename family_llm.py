@@ -144,6 +144,9 @@ def validate_model(config,allow_empty=False):
     if any(not isinstance(value,str) or len(value)>limits[key] or any(ord(char)<32 or ord(char)==127 for char in value)
            for key,value in values.items()):
         raise LLMUnavailable('模型服务配置不正确，请检查后台配置')
+    # The optional light effort keeps its strict values even before any endpoint or model is configured.
+    if values['light_reasoning_effort'] not in ('',*REASONING_EFFORTS):
+        raise LLMUnavailable('模型服务配置不正确，请检查后台配置')
     base=values['base_url'].strip().rstrip('/');model=values['model'].strip();light=values['light_model'].strip()
     if not base and not model and not light and allow_empty: return None
     if not base or not model:
@@ -152,7 +155,7 @@ def validate_model(config,allow_empty=False):
         parsed=urlsplit(base)
         if parsed.scheme not in ('http','https') or not parsed.hostname or parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment or parsed.port==0:
             raise ValueError()
-        if any(values[key] not in ('',*REASONING_EFFORTS) for key in ('reasoning_effort','light_reasoning_effort')): raise ValueError()
+        if values['reasoning_effort'] not in ('',*REASONING_EFFORTS): raise ValueError()
     except ValueError:
         raise LLMUnavailable('模型服务配置不正确，请检查后台配置') from None
     return (base if parsed.path.rstrip('/').endswith('/responses') else

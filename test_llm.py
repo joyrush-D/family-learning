@@ -897,6 +897,24 @@ def light_effort_transport_contract():
             except llm.LLMUnavailable:pass
             else:raise AssertionError('incomplete environment borrowed the saved model configuration')
         assert transport.requests==[]
+        # 5 with no endpoint, model or light model: an unknown light effort is still refused; missing, empty and none stay unconfigured.
+        blank={key:'' for key in llm.MODEL_ENV};blank_file={key:'' for key in llm.MODEL_FILE_KEYS}
+        for value in ('off','LOW'):
+            try:llm.validate_model({**blank,'light_reasoning_effort':value},allow_empty=True)
+            except llm.LLMUnavailable:pass
+            else:raise AssertionError('unconfigured invalid light reasoning effort accepted')
+            (data_path/'model.json').write_text(json.dumps({**blank_file,'light_reasoning_effort':value}))
+            with patch.dict(os.environ,{},clear=True):
+                try:llm.model_values(data_path)
+                except llm.LLMUnavailable:pass
+                else:raise AssertionError('unconfigured saved invalid light reasoning effort accepted')
+        missing={key:value for key,value in blank.items() if key!='light_reasoning_effort'}
+        for valid in (missing,blank,{**blank,'light_reasoning_effort':'none'}):
+            assert llm.validate_model(valid,allow_empty=True) is None
+        for shape in (blank_file,{**blank_file,'light_reasoning_effort':''},{**blank_file,'light_reasoning_effort':'none'}):
+            (data_path/'model.json').write_text(json.dumps(shape))
+            with patch.dict(os.environ,{},clear=True):loaded=llm.model_values(data_path)
+            assert loaded['origin']=='file' and loaded['light_reasoning_effort']==shape.get('light_reasoning_effort','')
     return report
 
 light_reports=light_effort_transport_contract()
