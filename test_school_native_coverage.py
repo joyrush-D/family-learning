@@ -2677,6 +2677,93 @@ class SchoolActionPurposeTests(unittest.TestCase):
         for text, expected in cases.items():
             with self.subTest(text=text):self.assertEqual(actions(text), expected)
 
+    # Root's postcandidate exploratory N07/N08 (fictional; authored replies, not provider output): the same voluntary material whose
+    # own name carries an edition number or a closed book title. The name stays a name; pages, counts and dates outside it stay required.
+    N07_TEXT = '阅读活动第3期参考资料仅供了解，自愿查看。下一次全班具体任务及日期将另行通知。'
+    N08_TEXT = '阅读《四季花园》活动参考资料仅供了解，自愿查看。下一次全班具体任务及日期将另行通知。'
+
+    def _material_name_run_once(self, text):
+        self.fixture.now = self.now = dt.datetime(2026, 11, 5, 20, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='11')
+        payload['messages'] = [dict(id='11', message_order='11', time='2026-11-05T18:00:00+08:00', kind='text', sender='虚构学校发布人',
+                                    sender_id='fictional-material-name', text=text, unread=False)]
+        self.store.ingest(payload)
+        ref = 'message:' + self.source['id'] + ':11'
+        raw = dict(copy.deepcopy(self.K12_RAW), title_quote=text.split('。')[0] + '。', evidence=[dict(ref=ref)],
+                   task_reason='该条明确只供自愿查看，具体任务及日期另行通知；名称和期号不是行动要求。')
+        self._use_replies(payload, [dict(proposals=[raw])])
+        requests = []
+        saved_reply = self.model.side_effect
+        self.model.side_effect = lambda messages, *args, **kwargs: (requests.append(json.loads(messages[-1]['content'])), saved_reply(messages, *args, **kwargs))[1]
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        self.assertNotIn('required_native_actions', requests[0], 'a name inside material only for information is no required native action')
+        import family_review
+
+        def check(rows, tasks, originals, manual, goals):
+            row, = rows
+            plan = json.loads(row['plan']);brief = plan['school_task']
+            self.assertEqual((brief['state'], brief['purpose'], row['due'], row['task_id'] or '', plan.get('school_learning'), plan.get('school_goal_id', '')),
+                             ('reference', 'optional', '', '', None, ''), 'one reference: no to-do, date, learning link or goal')
+            self.assertFalse({'school_native_action', 'school_original_action', 'school_native_cover'} & set(plan))
+            self.assertEqual((brief['title'], brief['goal']), ('', ''))
+            self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], [ref])
+            self.assertEqual([text in e['text'] for e in json.loads(row['evidence'])], [True], 'the complete original keeps its name')
+            self.assertFalse({'pdf_evidence', 'material_evidence', 'page_evidence'} & set(brief), 'no attachment was read or prepared')
+            self.assertEqual((tasks, manual), ({}, 0), 'nothing to do was created')
+            self.assertEqual(originals, payload['messages'], 'the complete original stays unchanged')
+            self.assertEqual(goals, [], 'no school learning goal')
+
+        first = self._k12_facts(self.app, self.store);check(*first)
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['failed'], replay['processed'], replay['created']), (0, 0, 0))
+        app = family_review.load_app(self.fixture.root, self.fixture.data)
+        fresh = self._k12_facts(app, agent.Store(app.connect, app.profiles, self.fixture.data, app=app))
+        check(*fresh)
+        self.assertEqual([r['id'] for r in fresh[0]], [r['id'] for r in first[0]], 'reopen keeps the one item without duplicates')
+        self.assertEqual(self.model.call_count, 1)
+
+    def test_n07_edition_number_in_a_voluntary_material_name_saves_one_reference_through_auto_intake_and_fresh_store_reopen(self):
+        self._material_name_run_once(self.N07_TEXT)
+
+    def test_n08_closed_book_title_in_a_voluntary_material_name_saves_one_reference_through_auto_intake_and_fresh_store_reopen(self):
+        self._material_name_run_once(self.N08_TEXT)
+
+    def test_material_name_is_a_name_only_inside_its_own_reference_clause(self):
+        def actions(text):
+            entry = dict(ref='message:synthetic-material-name:1', text=text, kind='text', publisher='p', time='2026-11-05T18:00:00+08:00')
+            return [(a['quote'], a['purpose']) for a in agent._school_native_actions([entry])]
+        for text in (self.N07_TEXT, self.N08_TEXT, '阅读《四季花园》第2版参考资料仅供了解，自愿查看。'):
+            with self.subTest(text=text):self.assertEqual(actions(text), [])
+        cases = {
+            # A page or piece is no edition, and a title does not cover a count, date or obligation outside it.
+            '阅读活动第3页参考资料仅供了解，自愿查看。': [('阅读活动第3页参考资料仅供了解，自愿查看', 'learning')],
+            '阅读《四季花园》第3页，参考资料仅供了解，自愿查看。': [('阅读《四季花园》第3页，参考资料仅供了解，自愿查看', 'learning')],
+            '阅读《四季花园》活动参考资料仅供了解，自愿读3篇。': [('阅读《四季花园》活动参考资料仅供了解，自愿读3篇', 'learning')],
+            '阅读活动第3期参考资料仅供了解，周五前交读后感。': [('阅读活动第3期参考资料仅供了解，周五前交读后感', 'learning')],
+            '请阅读《四季花园》参考资料仅供了解。': [('请阅读《四季花园》参考资料仅供了解', 'learning')],
+            # A sibling requirement before or after the reference keeps its own action, page and date.
+            self.N08_TEXT.split('。')[0] + '。请阅读《四季花园》第3页，11月7日前交读后感。': [('请阅读《四季花园》第3页，11月7日前交读后感', 'learning')],
+            '请完成练习册第5页。' + self.N07_TEXT: [('请完成练习册第5页', 'learning')],
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):self.assertEqual(actions(text), expected)
+
+    def test_wrong_reference_over_a_real_page_date_or_count_beside_a_material_name_still_rejects_the_whole_batch(self):
+        texts = (self.N08_TEXT.split('。')[0] + '。请阅读《四季花园》第3页，11月7日前交读后感。',
+                 '阅读《四季花园》第3页，参考资料仅供了解，自愿查看。',
+                 '阅读活动第3期参考资料仅供了解，自愿读3篇。')
+        for text in texts:
+            with self.subTest(text=text):
+                t = type(self)(methodName='runTest');t.setUp()
+                try:
+                    t.fixture.now = t.now = dt.datetime(2026, 11, 5, 20, tzinfo=agent.TZ)
+                    payload, refs = t._ingest([text], ['fictional-material-name'])
+                    raw = dict(copy.deepcopy(self.K12_RAW), title_quote=text, evidence=[dict(ref=refs[0])], task_reason='故意错误的合成回执。')
+                    t._use_replies(payload, [dict(proposals=[raw])])
+                    t._assert_rejected_batch(payload, agent.run_once(t.app, t.now))
+                finally:t.doCleanups()
+
     def _k12_mixed(self, reference_state):
         self.fixture.now = self.now = dt.datetime(2026, 10, 16, 20, tzinfo=agent.TZ)
         texts = [self.K12_TEXT.split('。')[0] + '。请阅读课文第3页，写一句理由。', '请家长在安全确认单上签字，2026年10月21日交回班主任。']
