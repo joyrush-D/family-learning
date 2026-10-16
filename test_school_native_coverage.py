@@ -2810,7 +2810,7 @@ class SchoolActionPurposeTests(unittest.TestCase):
             self.assertEqual((task['id'], task['agenda']['category'], task['agenda']['due_on']), (task_id, 'homework', '2026-11-06'))
             for standard in ('阅读第3期参考资料', '写一句理由', '11月6日前'):self.assertIn(standard, task['action'])
             self.assertFalse({'pdf_evidence', 'material_evidence', 'page_evidence'} & set(brief), 'no material was read or prepared')
-            self.assertEqual(manual, 0)
+            self.assertEqual(manual, 1, 'the one to-do is its one stored task, no other')
             self.assertEqual(originals, payload['messages'], 'the complete original and its time stay unchanged')
             self.assertEqual(goals, [('语文', plan['school_goal_id'])], 'the one reading routes to one Chinese learning goal')
 
