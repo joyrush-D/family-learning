@@ -168,6 +168,47 @@ class SchoolNativeCoverageTests(unittest.TestCase):
                 question, = [i for i in items if i['evidence'][0]['ref'] == refs[2]]
                 self.assertEqual(question['plan']['school_task']['state'], 'reference')
 
+    def test_a_title_naming_another_day_or_a_change_word_never_corrects_the_old_material(self):
+        for old, new in (('《10月18日课堂摘记》', '更正：《10月20日课堂摘记》改为'), ('《实操指南》', '《改为实操指南》')):
+            with self.subTest(old=old):
+                self.setUp()
+                payload, refs = self._ingest([old + '2026年10月19日交回', new + '2026年10月21日交回'])
+                named = new.split('《')[1].split('》')[0]
+                first = fixtures.school_proposal(
+                    title_quote=old + '2026年10月19日交回', due='2026-10-21', evidence=[dict(ref=r) for r in refs],
+                    learning_subject='语文', task_title='交回' + old, task_goal=old + '2026年10月21日交回。',
+                    task_state='ready', task_reason='虚构对抗回执。', task_purpose='admin')
+                second = fixtures.school_proposal(
+                    title_quote=new + '2026年10月21日交回', due='2026-10-21', evidence=[dict(ref=refs[1])],
+                    learning_subject='语文', task_title='交回《' + named + '》', task_goal='《' + named + '》2026年10月21日交回。',
+                    task_state='ready', task_reason='虚构独立新材料。', task_purpose='admin')
+                self._use_replies(payload, [dict(proposals=[first, second])])
+                self.assertEqual(agent.run_once(self.app, self.now)['failed'], 0)
+                with self.store._db() as c:
+                    rows = {r['title']: dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")}
+                    tasks = [dict(r) for r in c.execute('SELECT * FROM manual_tasks')]
+                self.assertEqual((rows['交回' + old]['due'], json.loads(rows['交回' + old]['plan'])['school_task']['state']), ('', 'review'))
+                self.assertIn(old + '2026年10月19日交回', json.loads(rows['交回' + old]['evidence'])[0]['text'])
+                self.assertEqual((rows['交回《' + named + '》']['due'], rows['交回《' + named + '》']['state']), ('2026-10-21', 'accepted'))
+                self.assertEqual([(t['title'], t['due']) for t in tasks], [('交回《' + named + '》', '2026-10-21')])
+                self.doCleanups()
+
+    def test_only_a_positive_same_publisher_corrects_the_excerpt_handback(self):
+        payload, refs, original = self._excerpt_batch('2026-10-20')
+        for publisher, expected in (('t1', ('2026-10-20', 'ready')), ('', ('', 'review')), (None, ('', 'review'))):
+            with self.subTest(publisher=publisher), patch.object(agent.family_llm, '_chat_json',
+                                                                 return_value=dict(proposals=copy.deepcopy(original))):
+                evidence = [dict(ref=r, text=m['text'], time=m['time'], kind='text', content_incomplete=False, attachments=[],
+                                 unread=False, **({} if publisher is None and n < 2 else
+                                                  dict(publisher='publisher:p1' if n == 2 else publisher and 'publisher:' + publisher)))
+                            for n, (r, m) in enumerate(zip(refs, payload['messages']))]
+                items = agent._select('school', evidence, school_goals=[], school_tasks=[], as_of='2026-10-05')
+                excerpt, = [i for i in items if '河岸随记' in i['title']]
+                self.assertEqual((excerpt['due'], excerpt['plan']['school_task']['state']), expected)
+                for words in ('2026年10月18日20:00前完成', '摘录两句', '各写一句选择理由'):
+                    self.assertIn(words, excerpt['plan']['school_task']['goal'])
+                self.assertEqual([q['ref'] for q in excerpt['evidence']], refs[:2])
+
     def test_missing_second_action_and_supplement_keeps_batch_retryable(self):
         payload, refs, reading, exercise = self._two_actions()
         # Both message refs are present, so the old ref-only coverage guard
