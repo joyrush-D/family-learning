@@ -274,9 +274,9 @@ test('daily UI keeps collection navigation in inbox and pending notifications di
  vm.runInContext('schoolInbox',inbox).view={child_id:'child-a',day:'2026-10-07',days:['2026-10-07'],total:2,offset:0,next_offset:'',publishers:[],groups:[{sender:'示例数学老师',source:'虚构班级群',publisher:'p',reason:'',messages:[
   message('4',quote,[{id:'reference',title:'参考资料：'+quote,goal:'',state:'pending',school_state:'reference',purpose:'optional',reason:why}]),
   message('5','数学：同步练习第3课，周四交。',[{id:'math',title:'数学：完成同步练习第3课',goal:'完成同步练习第3课，周四交',state:'accepted',school_state:'ready',purpose:'learning',reason:''}])]}]};
- const summary=inbox.schoolInboxHTML(),start=summary.indexOf('data-school-reference'),block=summary.slice(start,summary.indexOf('</div>',start));
+ const summary=inbox.schoolInboxHTML(),at=summary.indexOf('data-school-reference'),block=summary.slice(at,summary.indexOf('</div>',at));
  assert.ok(summary.includes('<h3>数学：完成同步练习第3课</h3>'),'the publication heading names its action, not the reference');
- assert.ok(start>0&&block.includes('参考资料：'+quote)&&block.includes('参考资料 · 不自动加入待办 · '+why),'the message summary carries the reference state');
+ assert.ok(at>0&&block.includes('参考资料：'+quote)&&block.includes('参考资料 · 不自动加入待办 · '+why),'the message summary carries the reference state');
  assert.doesNotMatch(block,/要做什么|具体要求尚未明确|Agent 已整理/,'reference material is not summarized as a requirement');
  assert.match(summary,/已收集为事项/);assert.ok(summary.includes('完成同步练习第3课，周四交'),'the collected action keeps its full requirement');
 });
