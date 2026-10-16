@@ -1859,14 +1859,14 @@ class SchoolActionAnchorTests(unittest.TestCase):
         ('4', '2026-10-16T17:15:00+08:00', 'p1-heldout-a-parent', '虚构家长', '家长问：摘记本是不是只交一本？活动回执有没有电子版？')]
     _A_REPLY = json.loads('{"proposals": [{"title_quote": "完成《河岸随记》的阅读摘记，摘录两句并各写一句选择理由", "focus": "school", "due": "2026-10-20", "evidence": [{"ref": "message:p1-heldout-a:1"}, {"ref": "message:p1-heldout-a:3"}], "task_title": "语文：完成《河岸随记》阅读摘记", "task_goal": "完成《河岸随记》的阅读摘记：摘录两句，并各写一句选择理由。\\n摘记须在2026年10月18日20:00前完成。\\n摘记本于2026年10月20日早读交给语文课代表（原为10月19日早读交，已更正为10月20日早读）。", "task_advice": "可先通读《河岸随记》，选定两句后分别写下选择理由，再誊入摘记本。", "learning_subject": "语文", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "ready", "task_reason": "已读文字明确要求完成摘记、摘录两句并各写一句理由，且更正后交回时间明确。", "task_purpose": "learning", "task_submission": "摘记本于2026年10月20日早读交给语文课代表。"}, {"title_quote": "2026年10月19日早读默写《山行》全文", "focus": "school", "due": "2026-10-19", "evidence": [{"ref": "message:p1-heldout-a:1"}, {"ref": "message:p1-heldout-a:3"}], "task_title": "语文：早读默写《山行》全文", "task_goal": "2026年10月19日早读默写《山行》全文。\\n《山行》默写安排不变。", "task_advice": "可提前熟记《山行》全文，默写前自查易错字。", "learning_subject": "语文", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "ready", "task_reason": "已读文字明确安排2026年10月19日早读默写《山行》全文，且更正说明该安排不变。", "task_purpose": "learning", "task_submission": ""}, {"title_quote": "请家长2026年10月20日前把秋季活动回执签字交班主任", "focus": "school", "due": "2026-10-20", "evidence": [{"ref": "message:p1-heldout-a:2"}], "task_title": "秋季活动回执签字交班主任", "task_goal": "请家长在2026年10月20日前把秋季活动回执签字后交班主任。\\n老师会在班会说明活动安排，此说明仅供参考。", "task_advice": "可先签字回执，再按班主任要求交回。", "learning_subject": "", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "ready", "task_reason": "已读文字明确要求家长在2026年10月20日前将秋季活动回执签字交班主任。", "task_purpose": "admin", "task_submission": "签字后的秋季活动回执交班主任。"}, {"title_quote": "家长问：摘记本是不是只交一本？活动回执有没有电子版？", "focus": "school", "due": "", "evidence": [{"ref": "message:p1-heldout-a:4"}], "task_title": "", "task_goal": "", "task_advice": "", "learning_subject": "", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "reference", "task_reason": "家长提问，不是新增学校要求，不生成任务。", "task_purpose": "optional", "task_submission": ""}]}')
 
-    def _a_select(self, texts=None, publishers=None, excerpt=None):
+    def _a_select(self, texts=None, publishers=None, excerpt=None, extra=()):
         """Real _select on A's originals and reply; a variant replaces only the named texts, publishers or excerpt fields."""
         texts = texts or {};publishers = publishers if publishers is not None else {}
         evidence = [dict(ref='message:p1-heldout-a:' + n, text=texts.get(n, text), time=time, kind='text', content_incomplete=False,
                          attachments=[], unread=False, sender=sender,
                          **({} if publishers.get(n, publisher) is None else dict(publisher=publishers.get(n, 'publisher:' + publisher))))
                     for n, time, publisher, sender, text in self._A_MESSAGES]
-        reply = copy.deepcopy(self._A_REPLY);reply['proposals'][0].update(excerpt or {})
+        reply = copy.deepcopy(self._A_REPLY);reply['proposals'][0].update(excerpt or {});reply['proposals'][1:1] = copy.deepcopy(list(extra))
         with patch.object(agent.family_llm, '_chat_json', return_value=reply):
             items = agent._select('school', evidence, school_goals=[], school_tasks=[], as_of='2026-10-16')
         return items
@@ -1949,6 +1949,10 @@ class SchoolActionAnchorTests(unittest.TestCase):
             'the handback does not follow the completion': dict(texts={'1': first.replace('2026年10月18日20:00前', '2026年10月21日20:00前'),
                                                                        '3': fix.replace('2026年10月18日20:00前', '2026年10月21日20:00前')}),
             'the anchor is in two originals': dict(texts={'3': fix + '完成《河岸随记》的阅读摘记，摘录两句并各写一句选择理由。'}),
+            # Another proposal quoting the handback clause makes the range shared, so it is not this excerpt's own.
+            'another proposal claims the handback clause': dict(extra=[dict(
+                self._A_REPLY['proposals'][1], title_quote='摘记本2026年10月19日早读交给语文课代表', due='2026-10-20',
+                task_title='语文：交摘记本', task_goal='摘记本2026年10月20日早读交给语文课代表。')]),
             # The old day kept as the item's own while its note claims an unproven change: the note is not history, so it stays read.
             'an unproven change note on the old day': dict(publishers={'3': 'publisher:p1-heldout-a-head'}, excerpt=dict(
                 due='2026-10-19', task_goal=self._A_REPLY['proposals'][0]['task_goal'].replace('摘记本于2026年10月20日', '摘记本于2026年10月19日'))),
