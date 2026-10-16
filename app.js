@@ -2357,6 +2357,7 @@ function openTaskFocus(id){
  if(busy)return;const t=data.tasks.find(t=>t.id===id);if(!t||taskClosed(t))return;
  const f=$('#taskFocusForm'),focus=taskFocus(t);f.reset();f.elements.id.value=id;f.elements.version.value=focus.version;f.elements.request_key.value=crypto.randomUUID();
  for(const key of ['mode','next_action','waiting_for','review_on','category','published_on','due_on','scheduled_on'])f.elements[key].value=['category','published_on','due_on','scheduled_on'].includes(key)?(t.agenda?.[key]||(key==='category'?'todo':'')):(focus[key]||'');
+ f.dataset.shown=JSON.stringify(Object.fromEntries(['category','published_on','due_on','scheduled_on'].map(key=>[key,f.elements[key].value])));
  f.elements.title.value=t.title;f.elements.goal.value=t.action||'';f.elements.box.value=focus.box||'inbox';f.elements.scheduled_on.required=false;f.classList.toggle('wish-mode',focus.box==='wish');$('#taskFocusDeadline').hidden=focus.box==='wish';$('#taskFocusTask').hidden=true;$('#taskFocusScheduleLabel').textContent='计划在哪天做 · 可选';$('#taskFocusTitle').textContent=focus.box==='wish'?'编辑心愿':'整理任务与目标';
  $('#taskFocusTask').textContent=t.title;$('#taskFocusDeadline').textContent='原日期要求：'+(t.due||'尚未明确');
  $('#taskFocusError').textContent='';$('#taskFocusLatest').textContent='';$('#taskFocusReload').hidden=true;taskFocusFields();$('#taskFocusDialog').showModal();
@@ -2373,7 +2374,10 @@ $('#taskFocusForm').onsubmit=async e=>{
 };
 $('#taskFocusReload').onclick=async()=>{
  if(busy)return;busy=true;const f=$('#taskFocusForm'),b=$('#taskFocusReload');b.disabled=true;
- try{await load();const t=data.tasks.find(t=>t.id===f.elements.id.value);if(!t)throw Error('原事项已不可用');const focus=taskFocus(t);f.elements.version.value=focus.version;f.elements.request_key.value=crypto.randomUUID();$('#taskFocusLatest').textContent='最新标题：'+t.title+'；完成目标：'+(t.action||'待明确')+'；计划日期：'+(t.agenda?.scheduled_on||'未定')+'；'+agendaDueLabel(t.agenda)+'：'+(t.agenda?.due_on||'待核对')+'；最新安排：'+({next:'下一步',waiting:'等待中',later:'以后再说'}[focus.mode])+' · '+(focus.next_action||'未写下一步')+(focus.waiting_for?' · 等待'+focus.waiting_for:'')+(focus.review_on?' · '+focus.review_on+'回看':'')+'；事项状态：'+taskStatusLabel(status(t));$('#taskFocusError').textContent='输入仍保留，请核对后再保存。';b.hidden=true}
+ try{await load();const t=data.tasks.find(t=>t.id===f.elements.id.value);if(!t)throw Error('原事项已不可用');const focus=taskFocus(t);f.elements.version.value=focus.version;f.elements.request_key.value=crypto.randomUUID();
+  // Dates still as first shown (e.g. a teacher day since corrected elsewhere) take the latest; ones the parent typed stay.
+  const shown=JSON.parse(f.dataset.shown||'{}');for(const key of ['category','published_on','due_on','scheduled_on'])if(f.elements[key].value===shown[key])shown[key]=f.elements[key].value=t.agenda?.[key]||(key==='category'?'todo':'');f.dataset.shown=JSON.stringify(shown);
+  $('#taskFocusLatest').textContent='最新标题：'+t.title+'；完成目标：'+(t.action||'待明确')+'；计划日期：'+(t.agenda?.scheduled_on||'未定')+'；'+agendaDueLabel(t.agenda)+'：'+(t.agenda?.due_on||'待核对')+'；最新安排：'+({next:'下一步',waiting:'等待中',later:'以后再说'}[focus.mode])+' · '+(focus.next_action||'未写下一步')+(focus.waiting_for?' · 等待'+focus.waiting_for:'')+(focus.review_on?' · '+focus.review_on+'回看':'')+'；事项状态：'+taskStatusLabel(status(t));$('#taskFocusError').textContent='输入仍保留，请核对后再保存。';b.hidden=true}
  catch(err){$('#taskFocusError').textContent=err.message||'读取失败，请重试'}finally{busy=false;b.disabled=false}
 };
 $('#taskFocusDialog').addEventListener('cancel',e=>{if(busy)e.preventDefault()});
