@@ -1,5 +1,6 @@
 """Synthetic homework capture, originals, model boundary and child/parent review."""
 import base64
+import datetime as dt
 import io
 import json
 import os
@@ -172,6 +173,65 @@ class HomeworkReportTests(unittest.TestCase):
         changed=next(t for t in app.snapshot()['tasks'] if t['id']==ident)
         self.assertEqual(changed['agenda']['category'],'todo')
         self.assertEqual(changed['agenda']['scheduled_on'],'')
+
+    def assert_planned_homework(self,ident):
+        task=next(t for t in app.snapshot()['tasks'] if t['id']==ident)
+        self.assertEqual((task['agenda']['category'],task['agenda']['scheduled_on'],task['agenda']['due_on'],task['due']),('homework',self.day,'',''))
+        inbox=next(x for x in app.snapshot()['today_calendar']['inbox'] if x['task_id']==ident)
+        self.assertEqual((inbox['agenda']['category'],inbox['closed']),('homework',False));self.assertNotIn(inbox['status'],app.TASK_CLOSED)
+        later=(dt.date.fromisoformat(self.day)+dt.timedelta(days=1)).isoformat()
+        calendar=app.calendar_snapshot(self.day,later)['agenda']
+        self.assertEqual([(x['day'],x['agenda']['category'],x['agenda']['due_on']) for x in calendar if x['task_id']==ident],[(self.day,'homework','')])
+        return task
+
+    def test_confirming_a_child_report_keeps_the_same_planned_homework(self):
+        for title in ['读三段并回答','数学：小练习册第3页']:
+            photo=self.photo('child-1');raw=(self.data/'uploads'/photo).read_bytes()
+            # The form has no deadline field, so 明天 in the child's words stays words, not a due date.
+            report=self.report()|dict(text='读三段，明天交',attachments=[photo])
+            body=self.request(title=title,report=report)
+            ident=self.child('item',body)['saved_item_id'];self.assert_planned_homework(ident)
+            item=next(i for i in self.store.snapshot('child-1',self.day)['items'] if i['id']==ident)
+            confirm=dict(self.request(id=ident,action='confirm_report'),version=item['version'])
+            self.store.action(confirm);after=self.counts()
+            # A lost confirmation or creation receipt replays the saved rows without another task or status.
+            self.store.action(confirm);self.child('item',body)
+            self.assertEqual(self.counts(),after)
+            with app.connect() as c:
+                self.assertEqual(c.execute('SELECT source FROM manual_tasks WHERE id=?',(ident,)).fetchone()[0],family_study.CHILD_REPORT_CONFIRMED)
+                self.assertEqual(c.execute('SELECT child_id FROM child_uploads WHERE upload_id=?',(photo,)).fetchone()[0],'child-1')
+            task=self.assert_planned_homework(ident)
+            self.assertFalse(task['homework_report']['needs_review']);self.assertEqual(task['title'],title)
+            reopened=next(i for i in app.study_store().snapshot('child-1',self.day)['items'] if i['id']==ident)
+            self.assertEqual((reopened['task_id'],reopened['version'],reopened['result']),(ident,item['version']+1,''))
+            self.assertEqual({k:reopened['report'][k] for k in ['actor','text','explanation','goal','attachments']},
+                             dict(actor='child',text='读三段，明天交',explanation=report['explanation'],goal=report['goal'],attachments=[photo]))
+            self.assertTrue(reopened['report']['confirmed_at']);self.assertEqual((self.data/'uploads'/photo).read_bytes(),raw)
+        # An explicit parent correction after the confirmation still wins over the capture day.
+        later=(dt.date.fromisoformat(self.day)+dt.timedelta(days=2)).isoformat()
+        family_task_focus.save(app,dict(id=ident,version=0,request_key=uuid.uuid4().hex,mode='next',next_action='',waiting_for='',
+                                        review_on='',category='todo',scheduled_on=later))
+        self.store.action(confirm);self.child('item',body)
+        changed=next(t for t in app.snapshot()['tasks'] if t['id']==ident)
+        self.assertEqual((changed['agenda']['category'],changed['agenda']['scheduled_on'],changed['agenda']['due_on']),('todo',later,''))
+
+    def test_capture_identity_does_not_spread_to_linked_tasks_or_unreported_items(self):
+        with app.connect() as c:
+            c.execute('INSERT INTO manual_tasks VALUES (?,?,?,?,?,?,?)',('M-linked','示例甲','虚构家长待办',self.day,'待跟进','家长录入',''))
+        before=next(t for t in app.snapshot()['tasks'] if t['id']=='M-linked')['agenda'];counts=self.counts()
+        with self.assertRaises(family_study.StudyError):self.store.save_item(self.request(task_id='M-linked',report=self.report()))
+        self.assertEqual(self.counts(),counts)
+        # A study item linked to an existing task keeps that task's own category and date.
+        self.store.save_item(self.request(task_id='M-linked'))
+        after=next(t for t in app.snapshot()['tasks'] if t['id']=='M-linked')
+        self.assertEqual(after['agenda'],before);self.assertEqual(after['agenda']['due_on'],self.day);self.assertNotEqual(after['agenda']['scheduled_on'],self.day)
+        other=self.store.save_item(dict(self.request(title='虚构另孩功课'),child_id='child-2'))['saved_item_id'];before=self.counts()
+        with self.assertRaises(family_study.StudyError):self.store.save_item(self.request(task_id=other,report=self.report()))
+        self.assertEqual(self.counts(),before)
+        plain=self.child('item',self.request(title='读第四段'))['saved_item_id'];self.assert_planned_homework(plain)
+        item=next(i for i in self.store.snapshot('child-1',self.day)['items'] if i['id']==plain);before=self.counts()
+        with self.assertRaises(family_study.StudyError):self.store.action(dict(self.request(id=plain,action='confirm_report'),version=item['version']))
+        self.assertEqual(self.counts(),before);self.assert_planned_homework(plain)
 
 
 if __name__=='__main__':unittest.main()
