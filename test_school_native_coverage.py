@@ -2764,6 +2764,90 @@ class SchoolActionPurposeTests(unittest.TestCase):
                     t._assert_rejected_batch(payload, agent.run_once(t.app, t.now))
                 finally:t.doCleanups()
 
+    # Root's postcandidate exploratory A2/A3 (fictional; authored replies, not provider output): the closed material title itself
+    # carries a date or a comma. Its contents are the name; dates, counts and parts outside the title stay the clause's own.
+    A2_TEXT = '阅读《11月6日札记》活动参考资料仅供了解，自愿查看。下一次全班具体任务及日期将另行通知。'
+    A3_TEXT = '阅读《四季，花园》活动参考资料仅供了解，自愿查看。下一次全班具体任务及日期将另行通知。'
+
+    def test_a2_date_inside_a_closed_material_title_saves_one_reference_through_auto_intake_and_fresh_store_reopen(self):
+        self._material_name_run_once(self.A2_TEXT)
+
+    def test_a3_comma_inside_a_closed_material_title_saves_one_reference_through_auto_intake_and_fresh_store_reopen(self):
+        self._material_name_run_once(self.A3_TEXT)
+
+    def test_closed_title_contents_are_a_name_only_inside_its_own_reference_clause(self):
+        def actions(text):
+            entry = dict(ref='message:synthetic-material-name:1', text=text, kind='text', publisher='p', time='2026-11-05T18:00:00+08:00')
+            return [(a['quote'], a['purpose']) for a in agent._school_native_actions([entry])]
+        for text in (self.A2_TEXT, self.A3_TEXT, '阅读《周五，11月6日》第2版参考资料仅供了解，自愿查看。'):
+            with self.subTest(text=text):self.assertEqual(actions(text), [])
+        cases = {
+            # A date, page, count or obligation outside the closed title stays required.
+            '阅读《11月6日札记》，11月7日前交读后感。': [('阅读《11月6日札记》，11月7日前交读后感', 'learning')],
+            '阅读《11月6日札记》活动参考资料仅供了解，11月7日前交读后感。': [('阅读《11月6日札记》活动参考资料仅供了解，11月7日前交读后感', 'learning')],
+            '阅读《四季，花园》第3页，写一句理由。': [('阅读《四季，花园》第3页，写一句理由', 'learning')],
+            '阅读《四季，花园》活动参考资料仅供了解，自愿读3篇。': [('阅读《四季，花园》活动参考资料仅供了解，自愿读3篇', 'learning')],
+            '请阅读《11月6日札记》参考资料仅供了解。': [('请阅读《11月6日札记》参考资料仅供了解', 'learning')],
+            # A sibling requirement after the reference keeps its own action, page and date.
+            self.A2_TEXT.split('。')[0] + '。请阅读《四季，花园》第3页，11月7日前交读后感。': [('请阅读《四季，花园》第3页，11月7日前交读后感', 'learning')],
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):self.assertEqual(actions(text), expected)
+        # An unclosed, nested or cross-clause title is no name: its clause stays a required outcome.
+        for text in ('阅读《四季，花园活动参考资料仅供了解，自愿查看。', '阅读《四季《11月6日》花园》活动参考资料仅供了解，自愿查看。',
+                     '阅读《四季。花园》活动参考资料仅供了解，自愿查看。'):
+            with self.subTest(text=text):
+                found = actions(text)
+                self.assertTrue(found and all(purpose == 'learning' for _, purpose in found), found)
+
+    def test_a2_a3_reference_beside_a_real_titled_reading_keeps_the_reading_required_through_replay_and_reopen(self):
+        import family_review
+        for first in (self.A2_TEXT, self.A3_TEXT):
+            text = first.split('。')[0] + '。请阅读《四季，花园》第3页，写一句理由。'
+            with self.subTest(text=text):
+                t = type(self)(methodName='runTest');t.setUp()
+                try:
+                    t.fixture.now = t.now = dt.datetime(2026, 11, 5, 20, tzinfo=agent.TZ)
+                    payload, refs = t._ingest([text], ['fictional-material-name'])
+                    reference = dict(copy.deepcopy(self.K12_RAW), title_quote=text.split('。')[0] + '。', evidence=[dict(ref=refs[0])])
+                    reading = fixtures.school_proposal(
+                        title_quote='请阅读《四季，花园》第3页，写一句理由', evidence=[dict(ref=refs[0])], task_title='阅读《四季，花园》第3页并写理由',
+                        task_goal='阅读《四季，花园》第3页，写一句理由。', task_state='ready', task_reason='虚构回执。', task_purpose='learning')
+                    t._use_replies(payload, [dict(proposals=[reference, reading])])
+                    result = agent.run_once(t.app, t.now)
+                    self.assertEqual((result['failed'], result['processed']), (0, 1))
+
+                    def check(rows, tasks, originals, manual, goals):
+                        states = sorted((json.loads(r['plan'])['school_task']['state'], json.loads(r['plan'])['school_task']['purpose'], bool(r['task_id'])) for r in rows)
+                        self.assertEqual(states, [('ready', 'learning', True), ('reference', 'optional', False)])
+                        reading_task, = tasks.values()
+                        self.assertIn('写一句理由', reading_task['action'], 'the real requirement keeps its complete standard')
+                        self.assertNotIn('仅供了解', reading_task['action'], 'the reference is not merged into it')
+                        self.assertEqual(originals, payload['messages'], 'the complete original stays unchanged')
+
+                    first_facts = t._k12_facts(t.app, t.store);check(*first_facts)
+                    replay = agent.run_once(t.app, t.now + dt.timedelta(minutes=7))
+                    self.assertEqual((replay['failed'], replay['processed'], replay['created']), (0, 0, 0))
+                    app = family_review.load_app(t.fixture.root, t.fixture.data)
+                    fresh = t._k12_facts(app, agent.Store(app.connect, app.profiles, t.fixture.data, app=app));check(*fresh)
+                    self.assertEqual([r['id'] for r in fresh[0]], [r['id'] for r in first_facts[0]], 'reopen keeps the items without duplicates')
+                finally:t.doCleanups()
+
+    def test_wrong_reference_over_a_real_reading_beside_a_dated_or_comma_title_still_rejects_the_whole_batch(self):
+        texts = (self.A2_TEXT.split('。')[0] + '。请阅读《四季，花园》第3页，11月7日前交读后感。',
+                 '阅读《11月6日札记》，11月7日前交读后感。',
+                 '阅读《四季，花园》活动参考资料仅供了解，自愿读3篇。')
+        for text in texts:
+            with self.subTest(text=text):
+                t = type(self)(methodName='runTest');t.setUp()
+                try:
+                    t.fixture.now = t.now = dt.datetime(2026, 11, 5, 20, tzinfo=agent.TZ)
+                    payload, refs = t._ingest([text], ['fictional-material-name'])
+                    raw = dict(copy.deepcopy(self.K12_RAW), title_quote=text, evidence=[dict(ref=refs[0])], task_reason='故意错误的合成回执。')
+                    t._use_replies(payload, [dict(proposals=[raw])])
+                    t._assert_rejected_batch(payload, agent.run_once(t.app, t.now))
+                finally:t.doCleanups()
+
     def _k12_mixed(self, reference_state):
         self.fixture.now = self.now = dt.datetime(2026, 10, 16, 20, tzinfo=agent.TZ)
         texts = [self.K12_TEXT.split('。')[0] + '。请阅读课文第3页，写一句理由。', '请家长在安全确认单上签字，2026年10月21日交回班主任。']
