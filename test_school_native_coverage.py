@@ -1546,6 +1546,30 @@ class SchoolActionAnchorTests(unittest.TestCase):
                 finally:
                     t.doCleanups()
 
+    def test_quote_after_a_leading_filler_keeps_only_its_own_clause_day(self):
+        text = '各位家长：请打印《秋游安全告知书》，家长签字后于10月10日前交回班主任，不需要盖章。另外周四学校体检，请孩子穿运动服。'
+        ref = 'message:synthetic-school-a:3'
+        evidence = [dict(ref=ref, text=text, time='2026-10-07T19:10:00+08:00', kind='text', publisher='publisher:synthetic-head',
+                         content_incomplete=False, attachments=[], unread=False)]
+        form = fixtures.school_proposal(
+            title_quote='请打印《秋游安全告知书》，家长签字后于10月10日前交回班主任，不需要盖章。', due='2026-10-10',
+            evidence=[dict(ref=ref)], task_title='打印《秋游安全告知书》并签字交回', task_state='ready', task_purpose='admin',
+            task_goal='打印《秋游安全告知书》，家长签字后于10月10日前交回班主任，不需要盖章。', task_reason='虚构回执。')
+        for quote, due, expected in (('周四学校体检，请孩子穿运动服', '2026-10-08', ('2026-10-08', 'ready')),
+                                     ('另外周四学校体检，请孩子穿运动服', '2026-10-08', ('2026-10-08', 'ready')),
+                                     ('周四学校体检，请孩子穿运动服', '2026-10-10', ('', 'review')),
+                                     ('学校体检，请孩子穿运动服', '2026-10-08', ('', 'review'))):
+            exam = fixtures.school_proposal(
+                title_quote=quote, due=due, evidence=[dict(ref=ref)], task_title='周四体检：穿运动服', task_state='ready',
+                task_goal='周四学校体检，请孩子穿运动服。', task_purpose='admin', task_reason='虚构回执。')
+            with self.subTest(quote=quote, due=due), patch.object(agent.family_llm, '_chat_json',
+                                                                 return_value=dict(proposals=[form, exam])):
+                items = agent._select('school', evidence, school_goals=[], school_tasks=[], as_of='2026-10-07')
+                item, = [i for i in items if '体检' in i['title']]
+                self.assertEqual((item['due'], item['plan']['school_task']['state']), expected)
+                other, = [i for i in items if '告知书' in i['title']]
+                self.assertEqual((other['due'], other['plan']['school_task']['state']), ('2026-10-10', 'ready'))
+
     def test_later_correction_batch_reviews_only_the_action_it_names(self):
         payload, ref = self._notice()
         correction = '更正：周五的Unit 3单词听写改到下周一。'
