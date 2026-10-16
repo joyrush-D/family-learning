@@ -3514,6 +3514,30 @@ def _school_plain(text):
 
 
 _SCHOOL_CLAUSE_MEASURE=r'(\d+)(?:秒钟|秒|分钟|小时|遍|次|份|张|页|篇|字|题|段|句|首|道|幅|个|项|行)'
+# Who acts or receives: each word names one fixed role, so 父母签字 keeps 家长签字 but 孩子签字 never does.
+_SCHOOL_CLAUSE_ROLES={'家长':'家长|父母|监护人|爸爸|妈妈|父亲|母亲','学生':'学生本人|学生|孩子|本人|小孩|同学','老师':'班主任|老师|教师'}
+
+
+def _school_roles(text):
+    """The fixed roles a text names, in order, outside closed names (《家长会通知》 names no parent)."""
+    words={word:role for role,alts in _SCHOOL_CLAUSE_ROLES.items() for word in alts.split('|')}
+    return [words[m[0]] for m in re.finditer('|'.join(sorted(words,key=len,reverse=True)),re.sub(r'《[^》]*》','',text or ''))]
+
+
+def _school_signers(text):
+    """The role signing or stamping in each part of a text: the last role named before 签/盖章 in its own comma part."""
+    return {(_school_roles(part[:m.start()]) or [''])[-1] for part in re.findall(r'(?:《[^》]*》|[^，,。；;！!？?\n])+',text or '')
+            for m in re.finditer(r'签|盖章',re.sub(r'《[^》]*》',lambda n:'_'*len(n[0]),part))}
+
+
+def _school_own_sentences(quote, text):
+    """The complete teacher sentences a verified quote lies in: a clipped quote still answers for its whole sentence."""
+    start=text.find(quote) if quote else -1
+    if start<0:return quote
+    end=start+len(quote);stops='。；;！!？?\n'
+    left=max(text.rfind(stop,0,start) for stop in stops)+1
+    right=end if quote[-1] in stops else min([i+1 for i in (text.find(stop,end) for stop in stops) if i>=0]+[len(text)])
+    return text[left:right]
 
 
 def _school_clause_requirements(quote):
@@ -3523,33 +3547,42 @@ def _school_clause_requirements(quote):
     this way is compound (a single action or a notice's background keeps the existing checks). A heading before a colon
     (科学：) is a label. A comma part with a negation, change, condition, question or reference use (不、取消、如果、仅供、
     自愿) proves nothing. Each part keeps its closed names, its explicit counts and durations other than one (30秒、两份、
-    3遍), its signature or stamp, and its own remaining words; a part left with none of these (a bare date) states nothing.
+    3遍), its signature or stamp with the role signing it (家长签字), the roles it names, and its own remaining words; a part
+    left with none of these (a bare date) states nothing.
     """
     units=[]
     for sentence in re.findall(r'[^。；;！!？?\n]+',quote or ''):
         sentence=re.split(r'(?<!\d)[：:](?!\d)(?![^《]*》)',sentence)[-1];found=[];compound=False
         for part in re.findall(r'(?:《[^》]*》|[^，,])+',sentence):
             if re.search(r'不|无需|无须|免|勿|仅供|只供|参考|自愿|选做|可选|'+_SCHOOL_NATIVE_CHANGE+'|'+_SCHOOL_NATIVE_UNSETTLED,re.sub(r'《[^》]*》','',part)):continue
-            own=[]
+            own=[];before=''
             for piece in re.split(r'(?:并且|并|以及|然后|同时)(?![^《]*》)',part):
                 names=[name[1:-1] for name in re.findall(r'《[^》]{1,40}》',piece)]
+                # One part's signer may be named in its earlier piece (请家长检查并签字).
+                signers=sorted(_school_signers(before+piece)-_school_signers(before));roles=sorted(set(_school_roles(piece)));before+=piece
                 piece=re.sub(r'(?:于|在)?\s*'+_SCHOOL_NATIVE_DATE+r'\s*(?:\d{1,2}[:：]\d{2})?\s*(?:前|之前|以前|内)?','',re.sub(r'《[^》]*》','',piece))
                 plain=_school_plain(piece)
                 counts=[m[0] for m in re.finditer(_SCHOOL_CLAUSE_MEASURE,plain) if m[1]!='1']
                 words=re.sub(r'请|将|把|在|上|的|分别|均|都|也|再|各|于','',re.sub(_SCHOOL_CLAUSE_MEASURE,'',plain))
                 if names or counts or words:
-                    own.append(dict(names=names,counts=counts,signs=sorted(set(re.findall(r'签|盖章',words))),words=words))
+                    own.append(dict(names=names,counts=counts,signs=sorted(set(re.findall(r'签|盖章',words))),signers=signers,roles=roles,words=words))
             compound|=len(own)>1;found+=own
         if compound:units+=found
     return units
 
 
 def _school_clause_kept(quote,goal):
-    """Whether a goal keeps every requirement part its own teacher clause states: each closed name, explicit count, signature
-    or stamp, and at least half of each part's own words, so a paraphrase may reorder or shorten a part but never drop it."""
-    kept=_school_plain(goal)
+    """Whether a goal keeps every requirement part its own teacher clause states.
+
+    Mandatory standards are proven only by their own carriers: each closed name, explicit count, signature or stamp, each
+    role the part names, and a signature or stamp signed in the goal by the very role the teacher named (孩子签字 is no
+    家长签字, wherever 家长 appears). The part's remaining words are a screen only: a part keeping under half of them was
+    dropped, yet no share of characters ever stands in for a name, count, role or signer.
+    """
+    kept=_school_plain(goal);roles=set(_school_roles(goal));signers=_school_signers(goal)
     for unit in _school_clause_requirements(quote):
         if any(_school_plain(value) not in kept for value in unit['names']+unit['counts']+unit['signs']):return False
+        if not set(unit['roles'])<=roles or not set(unit['signers'])-{''}<=signers:return False
         if 2*sum(char in kept for char in unit['words'])<len(unit['words']):return False
     return True
 
@@ -4358,14 +4391,17 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             due=proposed_due=proposal['due']
         # The ledger keeps no single administrative or unlisted clause; a complete original is no proof its shorter summary
         # kept every part its compound sentence states, learning or administrative. The goals this batch gives that one
-        # message (one combined task or several) must keep each part, name, count and signature; otherwise the whole batch
-        # stays for the existing retry.
+        # message (one combined task or several) must keep each part, name, count, role and signer; otherwise the whole batch
+        # stays for the existing retry. A clipped quote answers for its whole own sentence, and only a visible task's goal
+        # carries a requirement: a reference or cancel sibling, or a quote, proves nothing.
         single=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}]
-        own_goals='\n'.join(str(p.get('task_goal','')) for p in result['proposals'] if isinstance(p,dict) and isinstance(p.get('evidence'),list)
+        own_goals='\n'.join(p['task_goal'] for p in result['proposals'] if isinstance(p,dict) and isinstance(p.get('evidence'),list)
+                            and isinstance(p.get('task_goal'),str) and isinstance(p.get('task_title'),str) and p['task_title'].strip()
+                            and p.get('task_state')!='reference' and p.get('task_change')!='cancel'
                             and any(isinstance(q,dict) and single and q.get('ref')==single[0]['ref'] for q in p['evidence']))
         if (routing and not historical and not native_action and proposal['task_state']!='reference' and proposal['task_change']!='cancel'
                 and len(single)==1 and single[0].get('kind','text')=='text' and not (single[0].get('unread') or single[0].get('content_incomplete'))
-                and title and title in refs[single[0]['ref']] and not _school_clause_kept(title,own_goals)):
+                and title and title in refs[single[0]['ref']] and not _school_clause_kept(_school_own_sentences(title,refs[single[0]['ref']]),own_goals)):
             raise AgentError('同一句老师要求中的明确要求未完整归纳，整批保留重试',code='school_action_coverage')
         # Publication groups are reading hints only. Each task keeps exactly its
         # verified citations; unrelated task originals must never be added here.
