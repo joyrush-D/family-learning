@@ -426,6 +426,50 @@ class TwoFormsInOneMessageTests(unittest.TestCase):
         self.assertEqual(next(i for i in state['items'] if i['id'] == old_item['id']), old_item)
 
 
+class OneDeadlineTwoActionsTests(unittest.TestCase):
+    """One deadline, two actions: the old single-action review never covered the second clause, so the saved reread
+    must not compile it into the same task; the batch audit keeps the two outcomes apart."""
+    rows = SavedSchoolRereadTests.rows
+    run_round = SavedSchoolRereadTests.run_round
+    SECOND = '另请家长在《秋游安全告知书》上签字，一并交回班主任。'
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(prefix='synthetic-one-date-')
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.old = seed(self.root, dict(SOURCE, id='p1-one-date'), TEXT + self.SECOND,
+                        dict(proposals=[dict(SYNTHETIC['proposals'][0], evidence=[dict(ref='message:p1-one-date:1')])]))
+        self.data = self.root / 'family' / 'private'
+        self.app = family_review.load_app(self.root / 'family', self.data)
+        self.store = agent.Store(self.app.connect, self.app.profiles, self.data, app=self.app)
+        self.stack = ExitStack(); self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch('family_qq_capture.run_one', return_value=dict(state='disabled')))
+        self.stack.enter_context(patch.object(agent.family_teacher_public, 'run_one', return_value=dict(state='disabled')))
+        self.stack.enter_context(patch.object(family_media, 'run_one', return_value=dict(state='ready')))
+        self.stack.enter_context(patch.object(family_media, 'prepare_draft', return_value=dict(used=0, failed=0)))
+        self.stack.enter_context(patch('family_goals.Store.run', return_value=dict(used=0, failed=0, created=0, children=set())))
+        self.now = dt.datetime(2026, 10, 17, 3, 0, tzinfo=agent.TZ)
+
+    def test_one_deadline_two_actions_are_not_merged_by_the_saved_reread(self):
+        before = self.rows()
+        old_item, = before['items']
+        self.assertEqual((old_item['state'], old_item['task_id']), ('pending', ''))
+        ref = [dict(ref='message:p1-one-date:1')]
+        first = dict(SYNTHETIC['proposals'][0], evidence=ref, action_quote=TEXT.split('。')[0] + '。', existing_item_id=old_item['id'])
+        audit = dict(proposals=[first, dict(first, title_quote=self.SECOND, task_title='家长签《秋游安全告知书》并交回',
+                                            task_goal=self.SECOND, action_quote=self.SECOND, existing_item_id='')])
+        def model(messages, *args, **kwargs):  # SYNTHETIC: the saved reread gets BRIEF, the batch audit the two outcomes
+            return audit if 'existing_actions' in json.loads(messages[1]['content']) else BRIEF
+        for i in range(3):
+            self.run_round(dict(side_effect=model), self.now + dt.timedelta(minutes=41 * i))
+        state = self.rows()
+        for text in [t['action'] for t in state['tasks']] + [i['body'] for i in state['items']]:
+            self.assertFalse('听写背诵订正材料领取登记单' in text and '秋游安全告知书' in text, 'merged: ' + text)
+        self.assertEqual(len([i for i in state['items'] if '秋游安全告知书' in i['body']]), 1)
+        self.assertEqual(next(i for i in state['items'] if i['id'] == old_item['id']), old_item)
+        self.assertEqual(state['jobs'][old_item['job_id']], before['jobs'][old_item['job_id']])
+
+
 # SR02: the exact old source auto-accepted the first of two independent actions in one notice and never saw the second.
 # Seed probes the old source rejected or held for review (not old-accepted, so not SR02 seeds): two messages with one
 # proposal (old integrity guard: 学校消息归纳有遗漏, batch left unprocessed); the TB02 sentence plus a second action, or
