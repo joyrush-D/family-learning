@@ -427,5 +427,24 @@ class AutoAcceptedOldBatchTests(unittest.TestCase):
         self.assertEqual([t['title'] for t in state['tasks']], ['家长改过的任务'])
 
 
+def saved_sr02_state(path):
+    """The app's own state after the SR02 audit is saved by run_once (synthetic reply), for the Chromium original-entry check."""
+    case = AutoAcceptedOldBatchTests('test_reread_finds_the_missing_action_without_copying_the_accepted_one')
+    case.setUp()
+    try:
+        old_item, = case.rows()['items']
+        case.run_round(dict(return_value=case.audit_reply(old_item['id'])), case.now)
+        state = case.app.snapshot()
+        state['saved_calendar'] = case.app.calendar_snapshot('2026-10-17', '2026-10-17')
+        state['sr02'] = dict(old_item=old_item['id'], old_task=old_item['task_id'], old_action=SR02_FIRST, second=SR02_SECOND)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(state, f, ensure_ascii=False, default=str)
+    finally:
+        case.doCleanups()
+
+
 if __name__ == '__main__':
-    unittest.main()
+    if sys.argv[1:2] == ['--saved-sr02-state']:
+        saved_sr02_state(sys.argv[2])
+    else:
+        unittest.main()
