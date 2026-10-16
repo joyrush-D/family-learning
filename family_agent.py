@@ -2370,6 +2370,20 @@ def _school_own_clause_dates(quote,cited,others):
     return _school_own_dates(_school_corrected_quote(quote,homes[0],cited),published)-later_dropped_days(quote,text[start:],published)
 
 
+def _school_quote_lead(quote,text,goal):
+    """The original completion words heading this item's own complete clause, kept where its summary restates the rest.
+
+    今晚把Unit 3单词每个抄写两遍，明天交 summarised as 把Unit 3单词每个抄写两遍；明天交。 keeps 今晚: the words are copied from
+    the one original clause, never a day read from the summary, and a summary already holding them is left as written.
+    """
+    at=text.find(quote)
+    if text.count(quote)!=1 or not _school_complete_span(text,at,at+len(quote)):return goal
+    lead=re.match(r'\s*(今天|今日|今晚|明天|明日|明早|明晚|后天)(?=[^\d，,。；;\n])',quote)
+    rest=lead and re.match(r'[^，,。；;\n]{4,}',quote[lead.end():])
+    if not rest or lead[1] in goal or goal.count(rest[0])!=1:return goal
+    return goal.replace(rest[0],lead[1]+rest[0],1)
+
+
 def _school_corrected_quote(quote,home,cited):
     """The quote with each own clause that a cited later message of its same publisher explicitly corrects restated at the new day.
 
@@ -4129,6 +4143,8 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                     brief.update(state='review',reason=brief['reason'][:300]+' 更正涉及另一日期，原日期与更正日期待核对；未自动改期。')
                 elif due and declared and declared!={due}:
                     brief.update(state='review',reason=brief['reason'][:300]+' 摘要中的日期与本项原文日期不一致，未自动确认；请核对原通知。')
+            if brief['title'] and brief['goal'] and dated_quote and not historical and not native_action and len(cited_evidence)==1:
+                brief['goal']=_school_quote_lead(dated_quote,cited_evidence[0]['text'],brief['goal'])
             if brief['title'] and brief['goal']: item.update(title=brief['title'],body=brief['goal'])
             elif brief['state']=='reference' and title!='[资料]':
                 # Same classification, same wording everywhere: material is not a todo waiting for its details.
