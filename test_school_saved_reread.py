@@ -58,7 +58,7 @@ print(json.dumps(dict(calls=model.call_count, result=result, policy=agent.SCHOOL
 '''
 
 
-def seed(root):
+def seed(root, source=SOURCE, text=TEXT, reply=SYNTHETIC):
     """Exact old source, real ingest/run_once/save; returns the old run's own report."""
     old = root / 'old-source'
     old.mkdir()
@@ -66,7 +66,7 @@ def seed(root):
     subprocess.run(['tar', '-x', '-C', str(old)], input=archive, check=True)
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
     out = subprocess.run([sys.executable, '-I', '-c', 'import sys;p,s=sys.argv[1:3];del sys.argv[1:3];sys.path.insert(0,p);exec(s)',
-                          str(old), SEED, str(root / 'family'), json.dumps(SOURCE), TEXT, json.dumps(SYNTHETIC)],
+                          str(old), SEED, str(root / 'family'), json.dumps(source), text, json.dumps(reply)],
                          check=True, capture_output=True, text=True, cwd=old, env=env).stdout
     return json.loads(out.strip().splitlines()[-1])
 
@@ -254,6 +254,73 @@ class SavedSchoolRereadTests(unittest.TestCase):
         item, = self.rows()['items']
         self.assertEqual((item['id'], item['state']), (old_item['id'], 'accepted'))
         self.assertEqual(len(self.rows()['tasks']), 1)
+
+
+# SR02: the exact old source auto-accepted the first of two independent actions in one notice and never saw the second.
+# Seed probes the old source rejected or held for review (not old-accepted, so not SR02 seeds): two messages with one
+# proposal (old integrity guard: 学校消息归纳有遗漏, batch left unprocessed); the TB02 sentence plus a second action, or
+# TB02 with a shortened goal (both saved as pending review).
+SR02_SOURCE = dict(SOURCE, id='p1-sr02-fictional')
+SR02_FIRST = '2026年10月22日前，在《材料领取登记单》上填写学生姓名和领取份数，家长签字后交回班主任。'
+SR02_SECOND = '2026年10月22日前，请家长在《秋游安全告知书》上签字，由学生交回班主任。'
+SR02_REF = 'message:p1-sr02-fictional:1'
+SR02_OLD_REPLY = dict(proposals=[dict(  # SYNTHETIC: covers only the first action
+    title_quote=SR02_FIRST, focus='school', due='2026-10-22', evidence=[dict(ref=SR02_REF)], learning_subject='',
+    learning_goal_id='', task_title='填写《材料领取登记单》并交回', task_goal=SR02_FIRST, task_advice='', task_state='ready',
+    task_reason='synthetic：本项行动和完成标准明确。', task_change='new', task_target_id='', task_purpose='admin', task_submission='')])
+SR02_FULL_REPLY = dict(proposals=[SR02_OLD_REPLY['proposals'][0], dict(  # SYNTHETIC: both actions
+    SR02_OLD_REPLY['proposals'][0], title_quote=SR02_SECOND, task_title='家长签《秋游安全告知书》并交回', task_goal=SR02_SECOND)])
+
+
+class AutoAcceptedOldBatchTests(unittest.TestCase):
+    rows = SavedSchoolRereadTests.rows
+    run_round = SavedSchoolRereadTests.run_round
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(prefix='synthetic-sr02-')
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.old = seed(self.root, SR02_SOURCE, SR02_FIRST + SR02_SECOND, SR02_OLD_REPLY)
+        self.data = self.root / 'family' / 'private'
+        self.app = family_review.load_app(self.root / 'family', self.data)
+        self.store = agent.Store(self.app.connect, self.app.profiles, self.data, app=self.app)
+        self.stack = ExitStack(); self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch('family_qq_capture.run_one', return_value=dict(state='disabled')))
+        self.stack.enter_context(patch.object(agent.family_teacher_public, 'run_one', return_value=dict(state='disabled')))
+        self.stack.enter_context(patch.object(family_media, 'run_one', return_value=dict(state='ready')))
+        self.stack.enter_context(patch.object(family_media, 'prepare_draft', return_value=dict(used=0, failed=0)))
+        self.stack.enter_context(patch('family_goals.Store.run', return_value=dict(used=0, failed=0, created=0, children=set())))
+        self.now = dt.datetime(2026, 10, 17, 3, 0, tzinfo=agent.TZ)
+
+    def test_old_seed_is_a_natural_auto_accepted_batch_missing_an_action(self):
+        self.assertEqual((self.old['calls'], self.old['policy'], self.old['revision']), (1, 10, 2))
+        state = self.rows()
+        item, = state['items']
+        plan = json.loads(item['plan'])
+        self.assertEqual((item['state'], plan['school_task']['state'], plan['school_task'].get('auto_added')), ('accepted', 'ready', True))
+        task, = state['tasks']
+        self.assertEqual((task['id'], task['action'], task['due']), (item['task_id'], SR02_FIRST, '2026-10-22'))
+        self.assertNotIn('秋游安全告知书', json.dumps(state, ensure_ascii=False), 'the second action was never saved')
+        self.assertEqual([m['processed'] for m in state['messages']], [1])
+        self.assertEqual(state['jobs'][item['job_id']]['done'], 1)
+
+    @unittest.expectedFailure  # OPEN GAP (SR02 not implemented): auto-accepted batches are not reread yet
+    def test_reread_finds_the_missing_action_without_copying_the_accepted_one(self):
+        before = self.rows()
+        old_item, = before['items']
+        calls = [self.run_round(dict(return_value=SR02_FULL_REPLY), self.now + dt.timedelta(minutes=41 * i))[0] for i in range(3)]
+        self.assertGreaterEqual(sum(calls), 1)
+        self.assertLessEqual(max(calls), 3)
+        state = self.rows()
+        kept = next(i for i in state['items'] if i['id'] == old_item['id'])
+        self.assertEqual(kept, old_item, 'the accepted item is not overwritten')
+        self.assertEqual(state['jobs'][old_item['job_id']], before['jobs'][old_item['job_id']])
+        self.assertEqual((state['messages'], state['cursor']), (before['messages'], before['cursor']))
+        found = [i for i in state['items'] if i['id'] != old_item['id'] and SR02_SECOND in i['body']]
+        self.assertEqual(len(found), 1, 'one traceable item for the missing action')
+        self.assertIn(SR02_REF, found[0]['evidence'])
+        self.assertEqual(found[0]['due'], '2026-10-22')
+        self.assertEqual([t['action'] for t in state['tasks'] if SR02_FIRST in t['action']], [SR02_FIRST], 'no copy')
 
 
 if __name__ == '__main__':
