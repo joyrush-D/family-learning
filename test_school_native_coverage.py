@@ -1430,5 +1430,158 @@ class SchoolNativeCoverageTests(unittest.TestCase):
                          {t: ('pending', 'review') for t in targets})
         self.assertEqual(len(state['records']), 1)
 
+
+class SchoolActionAnchorTests(unittest.TestCase):
+    """One fictional notice holding two English actions joined by a semicolon, through run_once's real _select/_save.
+
+    The ledger locates only the dictation; the copying is an unlisted action on the existing general route. The
+    retained real-model shape quoted the whole sentence for the copying, reaching into the listed dictation, so the
+    batch stays refused with nothing written. Own-segment receipts are fixed local substitutes: they show the anchor
+    contract reaches the model and the unchanged guards save, replay, date and correct each action, never that a
+    product model now quotes this way.
+    """
+    setUp = SchoolNativeCoverageTests.setUp
+    _assert_rejected_batch = SchoolNativeCoverageTests._assert_rejected_batch
+    NOTICE = '英语：今晚把Unit 3单词每个抄写两遍，明天交；周五听写Unit 3单词。'
+    SENT = '2026-10-07T19:15:00+08:00'
+
+    def _notice(self):
+        self.now = self.fixture.now = dt.datetime(2026, 10, 7, 20, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='11')
+        payload['messages'] = [dict(id='11', message_order='11', time=self.SENT, kind='text', sender='示例英语老师',
+                                    sender_id='synthetic-english', text=self.NOTICE, unread=False)]
+        self.store.ingest(payload)
+        return payload, 'message:' + self.source['id'] + ':11'
+
+    def _replies(self, replies):
+        calls = []
+
+        def reply(messages, schema, name, timeout=60, *, data_path=None):
+            self.assertEqual((name, data_path), ('family_agent_selection', self.app.DATA))
+            calls.append((messages[0]['content'], json.loads(messages[-1]['content'])))
+            self.assertLessEqual(len(calls), len(replies), 'replay must not request another model receipt')
+            value = replies[len(calls) - 1]
+            return copy.deepcopy(value(calls[-1][1]) if callable(value) else value)
+
+        self.model.side_effect = reply
+        return calls
+
+    def _copying(self, ref, quote):
+        # The retained receipt's own content; only title_quote varies between the refused and the own-segment shape.
+        return fixtures.school_proposal(
+            title_quote=quote, due='2026-10-08', evidence=[dict(ref=ref)], learning_subject='英语',
+            task_title='英语：Unit 3单词抄写两遍', task_goal='今晚把Unit 3单词每个抄写两遍。\n明天交。',
+            task_advice='抄写时按单词逐个核对拼写，完成后检查遍数。', task_state='ready',
+            task_reason='原消息明确要求今晚抄写Unit 3单词每个两遍并明天交，按发送日2026-10-07换算为2026-10-08。',
+            task_purpose='learning', task_submission='明天交抄写')
+
+    def _dictation(self, ref):
+        return fixtures.school_proposal(
+            title_quote='周五听写Unit 3单词。', due='2026-10-09', evidence=[dict(ref=ref)], learning_subject='英语',
+            task_title='英语：Unit 3单词听写（周五）', task_goal='周五听写Unit 3单词。',
+            task_advice='可提前按Unit 3单词表自测拼写。', task_state='ready',
+            task_reason='原消息明确周五听写Unit 3单词，按发送日2026-10-07换算为2026-10-09。', task_purpose='learning')
+
+    def _rows(self):
+        with self.store._db() as c:
+            return [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")]
+
+    def _assert_two_actions_saved(self, quote):
+        rows = self._rows()
+        self.assertEqual(len(rows), 2, 'copying and dictation are two independent outcomes')
+        copying, = [r for r in rows if '抄写' in r['title']]
+        dictation, = [r for r in rows if '听写' in r['title']]
+        # Each action keeps its own day: the copying's handback is tomorrow, the dictation is on Friday.
+        self.assertEqual((copying['state'], copying['due']), ('accepted', '2026-10-08'))
+        self.assertEqual((dictation['state'], dictation['due']), ('accepted', '2026-10-09'))
+        for own in ('每个抄写两遍', '明天交'):
+            self.assertIn(own, copying['body'])
+        self.assertNotIn('听写', copying['body'])
+        self.assertNotIn('抄写', dictation['body'])
+        copy_plan, dictation_plan = json.loads(copying['plan']), json.loads(dictation['plan'])
+        self.assertNotIn('school_native_action', copy_plan, 'the unlisted action keeps the existing general route')
+        self.assertEqual(copy_plan['school_date_quote'], quote.strip())
+        self.assertEqual(dictation_plan['school_native_action']['quote'], '周五听写Unit 3单词')
+        with self.store._db() as c:
+            tasks = {r['id']: r['due'] for r in c.execute('SELECT id,due FROM manual_tasks')}
+            self.assertEqual(tasks, {copying['task_id']: '2026-10-08', dictation['task_id']: '2026-10-09'})
+            self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages')], [1])
+            self.assertEqual([json.loads(r[0])['text'] for r in c.execute('SELECT payload FROM agent_messages')], [self.NOTICE])
+        return copying, dictation
+
+    def test_retained_whole_sentence_quote_stays_refused_until_an_own_segment_retry(self):
+        payload, ref = self._notice()
+        retained = [self._copying(ref, self.NOTICE[3:]), self._dictation(ref)]
+        own = [self._copying(ref, '今晚把Unit 3单词每个抄写两遍，明天交'), self._dictation(ref)]
+        calls = self._replies([dict(proposals=retained), dict(proposals=own)])
+        self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
+        prompt, context = calls[0]
+        # Why the unchanged guard refuses: only the dictation is located and the copying quote reaches into it.
+        self.assertEqual([a['quote'] for a in context['required_native_actions']], ['周五听写Unit 3单词'])
+        self.assertIn(agent.SCHOOL_ACTION_ANCHOR, prompt)
+        for clause in ('逐字使用该项quote', '不一定齐全', '不能包含或重叠任一已列项的quote和conditions'):
+            self.assertIn(clause, prompt)
+        retry = agent.run_once(self.app, self.now + dt.timedelta(minutes=6))
+        self.assertEqual((retry['failed'], retry['processed']), (0, 1))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1], calls[0], 'the retry sends the same contract and context')
+        self._assert_two_actions_saved('今晚把Unit 3单词每个抄写两遍，明天交')
+
+    def test_own_segment_anchor_saves_each_action_once_with_its_own_date(self):
+        # The segment may keep or drop its leading subject label and closing mark; neither reaches the dictation.
+        for quote in ('今晚把Unit 3单词每个抄写两遍，明天交', '英语：今晚把Unit 3单词每个抄写两遍，明天交；'):
+            with self.subTest(quote=quote):
+                t = type(self)(methodName='runTest')
+                t.setUp()
+                try:
+                    payload, ref = t._notice()
+                    t._replies([dict(proposals=[t._copying(ref, quote), t._dictation(ref)])])
+                    result = agent.run_once(t.app, t.now)
+                    self.assertEqual((result['failed'], result['processed']), (0, 1))
+                    before = t._assert_two_actions_saved(quote)
+                    replay = agent.run_once(t.app, t.now + dt.timedelta(minutes=6))
+                    self.assertEqual((replay['failed'], replay['processed'], replay['created']), (0, 0, 0))
+                    self.assertEqual(t.model.call_count, 1)
+                    self.assertEqual(t._assert_two_actions_saved(quote), before, 'a replay never duplicates or rewrites')
+                finally:
+                    t.doCleanups()
+
+    def test_later_correction_batch_reviews_only_the_action_it_names(self):
+        payload, ref = self._notice()
+        correction = '更正：周五的Unit 3单词听写改到下周一。'
+
+        def update(context):
+            target, = [t['id'] for t in context['school_tasks'] if '听写' in t['title']]
+            return dict(proposals=[fixtures.school_proposal(
+                title_quote=correction, due='', evidence=[dict(ref=later_ref)], learning_subject='英语',
+                task_title='英语：Unit 3单词听写改期', task_goal='Unit 3单词听写由周五改到下周一。', task_state='review',
+                task_reason='老师更正了原听写日期，原事项待家长核对后改期。', task_change='update',
+                task_target_id=target, task_purpose='learning')])
+
+        later_ref = 'message:' + self.source['id'] + ':12'
+        calls = self._replies([dict(proposals=[self._copying(ref, '今晚把Unit 3单词每个抄写两遍，明天交'),
+                                               self._dictation(ref)]), update])
+        self.assertEqual(agent.run_once(self.app, self.now)['processed'], 1)
+        copying, dictation = self._assert_two_actions_saved('今晚把Unit 3单词每个抄写两遍，明天交')
+        later = dict(id='12', message_order='12', time='2026-10-08T07:30:00+08:00', kind='text', sender='示例英语老师',
+                     sender_id='synthetic-english', text=correction, unread=False)
+        self.store.ingest(dict(source_id=self.source['id'], expected_cursor='11', cursor='12', checked_at=later['time'],
+                               last_message_time=later['time'], error='', messages=[later]))
+        result = agent.run_once(self.app, dt.datetime(2026, 10, 8, 8, tzinfo=agent.TZ))
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        self.assertEqual([e['ref'] for e in calls[1][1]['evidence']], [later_ref], 'the later batch reads only the new message')
+        rows = self._rows()
+        change, = [r for r in rows if later_ref in r['evidence']]
+        brief = json.loads(change['plan'])['school_task']
+        self.assertEqual((change['state'], brief['change'], brief['target_id'], brief['state']),
+                         ('pending', 'update', dictation['task_id'], 'review'))
+        # Until the parent decides, both saved tasks keep their own days and the copying is untouched.
+        with self.store._db() as c:
+            tasks = {r['id']: r['due'] for r in c.execute('SELECT id,due FROM manual_tasks')}
+        self.assertEqual(tasks, {copying['task_id']: '2026-10-08', dictation['task_id']: '2026-10-09'})
+        self.assertEqual({r['id']: r for r in rows if r['id'] in (copying['id'], dictation['id'])},
+                         {copying['id']: copying, dictation['id']: dictation})
+
+
 if __name__ == '__main__':
     unittest.main()
