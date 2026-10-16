@@ -596,7 +596,9 @@ def visible_on(item,day):
     if day==published or day==scheduled or (complete and day==complete):return True
     # An undated item remains in the inbox; a deadline carries forward until a parent closes it.
     # Unknown publication stays unknown, but a known deadline must not hide from today's work.
-    return bool(due and day>=(published or min(due,scheduled or due,dt.datetime.now(family_agent.TZ).date().isoformat())))
+    # A known teacher complete day with no handback day carries forward the same way; it is never made a handback/due day.
+    known=due or complete
+    return bool(known and day>=(published or min(known,scheduled or known,dt.datetime.now(family_agent.TZ).date().isoformat())))
 
 
 def snapshot(app,start,end):
