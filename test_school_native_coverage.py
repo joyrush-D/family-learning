@@ -2123,6 +2123,12 @@ class SchoolActionAnchorTests(unittest.TestCase):
                 self.assertEqual(quote, corrected if proven else original)
                 self.assertEqual(agent._school_own_dates(quote, sent_day(home['time'])), {'2026-10-20' if proven else '2026-10-19'})
                 self.assertEqual(evidence, self._a_evidence(**change), 'the originals are read, never rewritten')
+        # An order that is not both sides' plain decimal collector position orders nothing within the same second.
+        for orders in (('11', '12a'), ('11', '-12'), ('11', ' 12'), ('11', '１２'), ('11', ''), ('', '12'), ('11', '1' * 41)):
+            with self.subTest(orders=orders):
+                evidence = self._a_evidence(time=self._SAME, orders=orders)
+                self.assertFalse(agent._school_native_later_text(evidence[0], evidence[2]))
+                self.assertEqual(agent._school_corrected_quote(original, evidence[0], [evidence[0], evidence[2]]), original)
 
     def test_the_shared_later_proof_needs_one_positive_stable_publisher_at_every_gap(self):
         original = self._A_MESSAGES[0][4].split('；2026年10月19日早读默写')[0]
