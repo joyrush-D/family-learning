@@ -2315,16 +2315,24 @@ def _school_corrected_quote(quote,home,cited):
     更正：摘记本改为2026年10月20日早读交给语文课代表 replaces only 摘记本2026年10月19日早读交给语文课代表: the same words
     apart from the day and the change word. Another publisher, a clause naming other work or keeping no day of its own
     (《山行》默写安排不变), and a relative day that reads differently on the two sending days change nothing.
+    The same teacher is a positive identity: an empty or missing publisher proves no one, so it corrects nothing.
+    A 《》 title keeps its own words as the object's name (_titles_read_as_objects): its days and verbs are neither removed
+    nor read, so 《10月20日课堂摘记》 is not 《10月18日课堂摘记》 and 《改为实操指南》 holds no change word.
     """
-    from family_agenda import deadlines,sent_day
+    from family_agenda import _titles_read_as_objects,deadlines,sent_day
     published=sent_day(home.get('time',''))
-    bare=lambda clause:re.sub(r'(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*[日号]?|\d{4}-\d{2}-\d{2}','',clause).strip()
+    def cut(clause,pattern,count=0):  # Remove pattern only where it stands outside every title.
+        spans=list(re.finditer(pattern,_titles_read_as_objects(clause)))[:count or None]
+        for span in reversed(spans):clause=clause[:span.start()]+clause[span.end():]
+        return clause
+    bare=lambda clause:cut(clause,r'(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*[日号]?|\d{4}-\d{2}-\d{2}').strip()
+    if not home.get('publisher'):return quote
     for entry in cited:
         if entry is home or entry.get('publisher')!=home.get('publisher') or entry.get('time','')<home.get('time',''):continue
         for fix in re.split(r'[。；;\n]',entry['text']):
             fix=re.sub(r'^(?:'+_SCHOOL_NATIVE_FILLER+r')+','',fix.strip())
-            if not re.search(r'改为|改到|改至',fix):continue
-            new=re.sub(r'改为|改到|改至','',fix,count=1);days=deadlines(new,sent_day(entry.get('time','')))
+            if not re.search(r'改为|改到|改至',_titles_read_as_objects(fix)):continue
+            new=cut(fix,r'改为|改到|改至',1);days=deadlines(new,sent_day(entry.get('time','')))
             if len(days)!=1 or deadlines(new,published)!=days:continue
             for old in re.split(r'[。；;\n]',quote):
                 if old.strip() and bare(old)==bare(new) and deadlines(old,published) not in (set(),days):quote=quote.replace(old.strip(),new,1)
