@@ -448,6 +448,28 @@ class AutoAcceptedOldBatchTests(unittest.TestCase):
         self.assertEqual(state['items'], before['items'])
         self.assertEqual(state['tasks'], before['tasks'])
 
+    def test_exhausted_audit_yields_to_a_later_normal_message(self):  # SR05
+        old_item, = self.rows()['items']
+        at = self.now
+        for _ in range(3):
+            self.run_round(dict(side_effect=agent.family_llm.LLMDraftError('synthetic failure')), at)
+            at += dt.timedelta(minutes=41)
+        later = '2026年10月24日前，请在《图书借阅登记表》上填写学生姓名，家长签字后交回班主任。'
+        self.store.ingest(dict(source_id=SR02_SOURCE['id'], expected_cursor='11', cursor='12', checked_at=at.isoformat(),
+            last_message_time='2026-10-17T05:00:00+08:00', error='', messages=[dict(id='2', message_order='2',
+            time='2026-10-17T05:00:00+08:00', kind='text', sender='示例班主任', sender_id='school', text=later, unread=False)]))
+        names = []
+        def reply(messages, schema, name, **kwargs):  # SYNTHETIC
+            names.append('existing_actions' in json.dumps(messages, ensure_ascii=False))
+            return dict(proposals=[dict(SR02_OLD_REPLY['proposals'][0], title_quote=later, due='2026-10-24',
+                evidence=[dict(ref='message:p1-sr02-fictional:2')], task_title='填写《图书借阅登记表》并交回', task_goal=later)])
+        calls, _ = self.run_round(dict(side_effect=reply), at)
+        self.assertEqual((calls, names), (1, [False]), 'only the ordinary new batch is called; the exhausted audit yields')
+        state = self.rows()
+        self.assertEqual(sorted(m['processed'] for m in state['messages']), [1, 1])
+        self.assertTrue(any(later in i['body'] for i in state['items']))
+        self.assertEqual(next(i for i in state['items'] if i['id'] == old_item['id']), old_item)
+
     def test_parent_completion_during_the_audit_rejects_the_late_result(self):  # SR03/SR04
         old_item, = self.rows()['items']
         def late(*args, **kwargs):
@@ -459,6 +481,30 @@ class AutoAcceptedOldBatchTests(unittest.TestCase):
         state = self.rows()
         self.assertEqual([i['id'] for i in state['items']], [old_item['id']], 'stale result rejected; nothing added')
         self.assertEqual([t['title'] for t in state['tasks']], ['家长改过的任务'])
+
+
+class EmptyInstallTests(unittest.TestCase):
+    def test_no_old_batch_means_zero_audit_calls_and_a_fixed_empty_boundary(self):  # SR05 all-empty
+        directory = tempfile.TemporaryDirectory(prefix='synthetic-empty-')
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name).resolve() / 'family'; data = root / 'private'; data.mkdir(parents=True)
+        (root / '家庭运行规则.md').write_text('| child-1 | 示例甲 | 男 | 10岁 | 四年级 |\n')
+        (data / 'agent.json').write_text(json.dumps({'enabled': True, 'sources': [SOURCE]}))
+        app = family_review.load_app(root, data)
+        agent.Store(app.connect, app.profiles, data, app=app)
+        with ExitStack() as stack:
+            stack.enter_context(patch('family_qq_capture.run_one', return_value=dict(state='disabled')))
+            stack.enter_context(patch.object(agent.family_teacher_public, 'run_one', return_value=dict(state='disabled')))
+            stack.enter_context(patch.object(family_media, 'run_one', return_value=dict(state='ready')))
+            stack.enter_context(patch.object(family_media, 'prepare_draft', return_value=dict(used=0, failed=0)))
+            stack.enter_context(patch('family_goals.Store.run', return_value=dict(used=0, failed=0, created=0, children=set())))
+            model = stack.enter_context(patch.object(agent.family_llm, '_chat_json', side_effect=AssertionError('no audit call')))
+            for minutes in (0, 41, 82):
+                agent.run_once(app, dt.datetime(2026, 10, 17, 3, 0, tzinfo=agent.TZ) + dt.timedelta(minutes=minutes))
+        self.assertEqual(model.call_count, 0)
+        with app.connect() as c:
+            rows = [dict(r) for r in c.execute("SELECT id,done,attempts FROM agent_jobs WHERE id LIKE 'school-audit%'")]
+        self.assertEqual(rows, [dict(id='school-audit-boundary', done=1, attempts=0)])
 
 
 def saved_sr02_state(path):
