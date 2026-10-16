@@ -597,8 +597,8 @@ class SchoolNativeCoverageTests(unittest.TestCase):
     def test_a_negated_second_title_is_no_second_outcome(self):
         self._compound_control('请于10月22日前填写《虚构营地报名表》并交回班主任，《虚构交通回执》并不是本次要交的材料。', '10月22日前填写《虚构营地报名表》并交回班主任。')
 
-    def _clause_reply(self, ref, text, goal, *, purpose='admin', subject='', title='填写两份表并交回', due='2026-11-06'):
-        return dict(proposals=[dict(title_quote=text, focus='school', due=due, evidence=[dict(ref=ref)],
+    def _clause_reply(self, ref, text, goal, *, purpose='admin', subject='', title='填写两份表并交回', due='2026-11-06', quote=None):
+        return dict(proposals=[dict(title_quote=quote or text, focus='school', due=due, evidence=[dict(ref=ref)],
                                     learning_subject=subject, learning_goal_id='', task_title=title, task_goal=goal,
                                     task_advice='', task_state='ready', task_reason='虚构固定回执，仅作程序验证。', task_change='new',
                                     task_target_id='', task_purpose=purpose, task_submission='')])
@@ -661,6 +661,64 @@ class SchoolNativeCoverageTests(unittest.TestCase):
     def test_a_voluntary_extra_in_the_same_quote_is_no_obligation(self):
         self._clause_saved('科学：制作《发芽观察卡》，2026年11月6日交回；有兴趣的同学可以自愿录一段30秒讲解。', '制作《发芽观察卡》，2026年11月6日交回。',
                            purpose='learning', subject='科学', title='科学：制作发芽观察卡')
+
+    H5Q = '2026年11月6日前，请将《植物角报名表》填写联系电话以及将《校外出行确认单》交家长签字，两份均交回班主任。'
+
+    def test_root_h5q_a_clipped_quote_of_the_first_form_is_no_proof_the_whole_sentence_was_organized(self):
+        # The quote is a literal prefix; the teacher's own sentence still states the second form, its signature and the handback.
+        self._partial_then_full(self.H5Q, '2026年11月6日前，将《植物角报名表》填写联系电话。', self.H5Q,
+                                ('植物角报名表', '联系电话', '校外出行确认单', '家长签字', '两份', '交回班主任'),
+                                title='填写植物角报名表', quote='2026年11月6日前，请将《植物角报名表》填写联系电话')
+
+    def test_root_h6a_a_child_signature_is_not_the_parent_signature_the_teacher_requires(self):
+        self._partial_then_full('请填写《虚构观察表》的孩子姓名并请家长签字，2026年11月18日交回班主任。',
+                                '填写《虚构观察表》的孩子姓名并请孩子签字，2026年11月18日交回班主任。',
+                                '填写《虚构观察表》的孩子姓名并请家长签字，2026年11月18日交回班主任。',
+                                ('虚构观察表', '孩子姓名', '家长签字', '交回班主任'), title='填写观察表并签字交回', due='2026-11-18')
+
+    def test_actual_flash24_paraphrase_of_the_whole_sentence_saves_as_one_task(self):
+        text = '2026年10月22日前，请填写《虚构营地报名表》的学生姓名并在《虚构交通回执》上完成家长签字，两份分别交回班主任。'
+        goal = '在2026年10月22日前，填写《虚构营地报名表》的学生姓名；在《虚构交通回执》上完成家长签字；两份材料分别交回班主任。'
+        payload, refs = self._ingest([text])
+        self._use_replies(payload, [dict(proposals=[dict(
+            title_quote=text, focus='school', due='2026-10-22', evidence=[dict(ref=refs[0])], task_title='填写营地报名表并签交通回执', task_goal=goal,
+            task_advice='可先填好报名表姓名，再请家长在交通回执上签字，两份材料分开放置以免混淆。', learning_subject='', learning_goal_id='',
+            task_change='new', task_target_id='', task_state='ready', task_reason='已读文字明确要求填写报名表姓名、家长签字并分别交回班主任，属全班事务性待办，日期明确。',
+            task_purpose='admin', task_submission='两份材料分别交回班主任，截止2026年10月22日。')])])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        with self.store._db() as c:
+            self.assertEqual([(r['state'], r['due'], r['body']) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")], [('accepted', '2026-10-22', goal)])
+            self.assertEqual([r['action'] for r in c.execute('SELECT * FROM manual_tasks')], [goal])
+
+    def _several(self, text, proposals):
+        payload, refs = self._ingest([text])
+        self._use_replies(payload, [dict(proposals=[dict(quote, evidence=[dict(ref=refs[0])], focus='school', learning_subject='', learning_goal_id='',
+                                                         task_advice='', task_reason='虚构固定回执，仅作程序验证。', task_change='new', task_target_id='',
+                                                         task_submission='') for quote in proposals])])
+        return payload, agent.run_once(self.app, self.now)
+
+    def test_several_tasks_each_keeping_its_own_part_of_one_sentence_save_without_a_forced_count(self):
+        text = '2026年10月22日前，请填写《虚构营地报名表》的学生姓名并在《虚构交通回执》上完成家长签字，两份分别交回班主任。'
+        goals = ['2026年10月22日前填写《虚构营地报名表》的学生姓名，交回班主任。', '2026年10月22日前在《虚构交通回执》上完成家长签字，两份分别交回班主任。']
+        payload, result = self._several(text, [
+            dict(title_quote='请填写《虚构营地报名表》的学生姓名', due='2026-10-22', task_title='填写营地报名表', task_goal=goals[0], task_state='ready', task_purpose='admin'),
+            dict(title_quote='在《虚构交通回执》上完成家长签字，两份分别交回班主任', due='2026-10-22', task_title='交通回执家长签字', task_goal=goals[1],
+                 task_state='ready', task_purpose='admin')])
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        with self.store._db() as c:
+            saved = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")]
+        self.assertEqual(sorted(r['state'] for r in saved), ['accepted', 'accepted'])
+        bodies = '\n'.join(r['body'] for r in saved)
+        for word in ('虚构营地报名表', '学生姓名', '虚构交通回执', '家长签字', '两份', '交回班主任'):self.assertIn(word, bodies)
+
+    def test_a_reference_sibling_carrying_the_rest_of_the_sentence_is_no_visible_requirement(self):
+        payload, result = self._several(self.H5Q, [
+            dict(title_quote='2026年11月6日前，请将《植物角报名表》填写联系电话', due='2026-11-06', task_title='填写植物角报名表',
+                 task_goal='2026年11月6日前，将《植物角报名表》填写联系电话。', task_state='ready', task_purpose='admin'),
+            dict(title_quote='将《校外出行确认单》交家长签字，两份均交回班主任', due='', task_title='出行确认单说明',
+                 task_goal='将《校外出行确认单》交家长签字，两份均交回班主任。', task_state='reference', task_purpose='optional')])
+        self._assert_rejected_batch(payload, result)
 
     def test_pending_message_counts_are_source_scoped_and_reject_stale_bindings(self):
         self.assertEqual(self.store.snapshot()['sources'][0]['pending_message_count'], 0)
