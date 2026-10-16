@@ -3503,22 +3503,51 @@ def _school_native_object(text):
     return match[1] if match else ''
 
 
-def _school_named_outcomes(quote):
-    """Closed names one sentence's own positive form verbs act on (填写《甲》…在《乙》上完成…签字), only when it names two or more.
+def _school_plain(text):
+    """A comparison copy only: no title marks, spaces or punctuation, and small Chinese numbers as digits (两份→2份)."""
+    digit={'零':0,'一':1,'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9}
+    def number(m):
+        tens,ten,ones=m[0].partition('十')
+        return str((digit[tens] if tens else 1)*10+(digit[ones] if ones else 0)) if ten else str(digit[m[0]])
+    text=re.sub(r'[一二两三四五六七八九]?十[一二三四五六七八九]?|[零一二两三四五六七八九]',number,text or '')
+    return re.sub(r'[\s《》“”"‘’「」『』（）()，,。；;：:、！!？?]','',text)
 
-    A name is an outcome when the stretch before it (from its comma part's start or the previous name) or after it (to the
-    next name or the part's end) holds the form verbs _school_native_command reads. A comma part with a negation, change,
-    condition, question or reference use (不、取消、如果、仅供、自愿) proves nothing, and one name's own steps are one outcome.
+
+_SCHOOL_CLAUSE_MEASURE=r'(\d+)(?:秒钟|秒|分钟|小时|遍|次|份|张|页|篇|字|题|段|句|首|道|幅|个|项|行)'
+
+
+def _school_clause_requirements(quote):
+    """Each positive requirement part of one teacher sentence, with the standards it makes explicit.
+
+    A sentence's comma parts split again at 并/以及/然后/同时 outside closed names; a heading before a colon (科学：) is a label.
+    A comma part with a negation, change, condition, question or reference use (不、取消、如果、仅供、自愿) proves nothing.
+    Each part keeps its closed names, its explicit counts and durations other than one (30秒、两份、3遍), its signature or
+    stamp, and its own remaining words; a part left with none of these (a bare date) states nothing.
     """
-    found=[]
+    units=[]
     for sentence in re.findall(r'[^。；;！!？?\n]+',quote or ''):
+        sentence=re.split(r'(?<!\d)[：:](?!\d)(?![^《]*》)',sentence)[-1]
         for part in re.findall(r'(?:《[^》]*》|[^，,])+',sentence):
-            if re.search(r'不|无需|无须|免|别|勿|仅供|只供|参考|自愿|选做|'+_SCHOOL_NATIVE_CHANGE+'|'+_SCHOOL_NATIVE_UNSETTLED,re.sub(r'《[^》]*》','',part)):continue
-            names=list(re.finditer(r'《[^》]{1,40}》',part))
-            for n,name in enumerate(names):
-                before=part[names[n-1].end() if n else 0:name.start()];after=part[name.end():names[n+1].start() if n+1<len(names) else len(part)]
-                if re.search(r'签署|签字|填写|填好|提交|交回|打印|盖章|完成|核对',before+'\n'+after) and name[0] not in found:found.append(name[0])
-    return found if len(found)>1 else []
+            if re.search(r'不|无需|无须|免|勿|仅供|只供|参考|自愿|选做|可选|'+_SCHOOL_NATIVE_CHANGE+'|'+_SCHOOL_NATIVE_UNSETTLED,re.sub(r'《[^》]*》','',part)):continue
+            for piece in re.split(r'(?:并且|并|以及|然后|同时)(?![^《]*》)',part):
+                names=[name[1:-1] for name in re.findall(r'《[^》]{1,40}》',piece)]
+                piece=re.sub(r'(?:于|在)?\s*'+_SCHOOL_NATIVE_DATE+r'\s*(?:\d{1,2}[:：]\d{2})?\s*(?:前|之前|以前|内)?','',re.sub(r'《[^》]*》','',piece))
+                plain=_school_plain(piece)
+                counts=[m[0] for m in re.finditer(_SCHOOL_CLAUSE_MEASURE,plain) if m[1]!='1']
+                words=re.sub(r'请|将|把|在|上|的|分别|均|都|也|再|各|于','',re.sub(_SCHOOL_CLAUSE_MEASURE,'',plain))
+                if names or counts or words:
+                    units.append(dict(names=names,counts=counts,signs=sorted(set(re.findall(r'签|盖章',words))),words=words))
+    return units
+
+
+def _school_clause_kept(quote,goal):
+    """Whether a goal keeps every requirement part its own teacher clause states: each closed name, explicit count, signature
+    or stamp, and at least half of each part's own words, so a paraphrase may reorder or shorten a part but never drop it."""
+    kept=_school_plain(goal)
+    for unit in _school_clause_requirements(quote):
+        if any(_school_plain(value) not in kept for value in unit['names']+unit['counts']+unit['signs']):return False
+        if 2*sum(char in kept for char in unit['words'])<len(unit['words']):return False
+    return True
 
 
 def _school_native_spans(text, start):
@@ -4323,14 +4352,14 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         if native_actions:
             proposal,native_action=_school_native_bind(proposal,native_actions,native_assigned,{e['ref']:e for e in evidence},native_spans)
             due=proposed_due=proposal['due']
-        # The ledger keeps no single administrative clause; a complete original naming two form outcomes in that clause
-        # is no proof its shorter summary kept both. A goal dropping one leaves the whole batch for the existing retry.
+        # The ledger keeps no single administrative or unlisted clause; a complete original is no proof its shorter summary
+        # kept every stated part, learning or administrative. A goal dropping a part, name, count or signature leaves the
+        # whole batch for the existing retry; the complete or faithfully paraphrased reply saves as one task.
         single=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}]
-        if (routing and not historical and not native_action and proposal['task_purpose']=='admin' and proposal['task_state']!='reference'
+        if (routing and not historical and not native_action and proposal['task_state']!='reference' and proposal['task_change']!='cancel'
                 and len(single)==1 and single[0].get('kind','text')=='text' and not (single[0].get('unread') or single[0].get('content_incomplete'))
-                and title and title in refs[single[0]['ref']]
-                and any(name[1:-1] not in str(proposal.get('task_goal','')) for name in _school_named_outcomes(title))):
-            raise AgentError('同一句老师要求中的明确成果未完整归纳，整批保留重试',code='school_action_coverage')
+                and title and title in refs[single[0]['ref']] and not _school_clause_kept(title,str(proposal.get('task_goal','')))):
+            raise AgentError('同一句老师要求中的明确要求未完整归纳，整批保留重试',code='school_action_coverage')
         # Publication groups are reading hints only. Each task keeps exactly its
         # verified citations; unrelated task originals must never be added here.
         dated_quote=title if title and any(title in refs[entry['ref']] for entry in cited) else ''
