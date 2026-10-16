@@ -349,7 +349,7 @@ class ConfirmedSchoolHandbackCorrectionTests(unittest.TestCase):
 
     def _confirm_t08(self):
         _, task = self._save_h01()
-        payload = self.fixture.payload(cursor='12')
+        payload = self.fixture.payload(expected='11', cursor='12', offset=9)
         payload['messages'] = [dict(id='12', message_order='12', time=T08[0], kind='text', sender=H01[2], sender_id=H01[1],
                                     text=T08[1], unread=False)]
         self.store.ingest(payload)
