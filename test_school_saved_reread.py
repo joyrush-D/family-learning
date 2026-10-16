@@ -93,7 +93,7 @@ class SavedSchoolRereadTests(unittest.TestCase):
             return dict(items=[dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")],
                         jobs={r['id']: dict(r) for r in c.execute('SELECT * FROM agent_jobs')},
                         messages=[dict(r) for r in c.execute('SELECT id,processed,payload FROM agent_messages')],
-                        tasks=[dict(r) for r in c.execute('SELECT id,title,due,status,action FROM manual_tasks')],
+                        tasks=[dict(r) for r in c.execute('SELECT id,title,due,original_status,action FROM manual_tasks')],
                         cursor=c.execute('SELECT cursor FROM agent_sources').fetchone()[0])
 
     def run_round(self, reply, at):
