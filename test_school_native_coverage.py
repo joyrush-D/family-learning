@@ -274,8 +274,9 @@ class SchoolNativeCoverageTests(unittest.TestCase):
             with self.subTest(due=due, publisher=publisher):
                 replies = copy.deepcopy(original);replies[0]['due'] = due
                 with patch.object(agent.family_llm, '_chat_json', return_value=dict(proposals=replies)):
+                    # The ingested originals share one second; their collector order (11, 12, 13) is what proves the fix later.
                     evidence = [dict(ref=r, text=m['text'], time=m['time'], kind='text', publisher='publisher:' + p,
-                                     content_incomplete=False, attachments=[], unread=False)
+                                     message_order=m['message_order'], content_incomplete=False, attachments=[], unread=False)
                                 for r, m, p in zip(refs, payload['messages'], ['t1', publisher, 'p1'])]
                     items = agent._select('school', evidence, school_goals=[], school_tasks=[], as_of='2026-10-05')
                 excerpt, = [i for i in items if '河岸随记' in i['title']]
@@ -315,7 +316,7 @@ class SchoolNativeCoverageTests(unittest.TestCase):
             with self.subTest(publisher=publisher), patch.object(agent.family_llm, '_chat_json',
                                                                  return_value=dict(proposals=copy.deepcopy(original))):
                 evidence = [dict(ref=r, text=m['text'], time=m['time'], kind='text', content_incomplete=False, attachments=[],
-                                 unread=False, **({} if publisher is None and n < 2 else
+                                 unread=False, message_order=m['message_order'], **({} if publisher is None and n < 2 else
                                                   dict(publisher='publisher:p1' if n == 2 else publisher and 'publisher:' + publisher)))
                             for n, (r, m) in enumerate(zip(refs, payload['messages']))]
                 items = agent._select('school', evidence, school_goals=[], school_tasks=[], as_of='2026-10-05')
@@ -2079,6 +2080,142 @@ class SchoolActionAnchorTests(unittest.TestCase):
                 excerpt, = [i for i in self._a_select(**case) if '河岸随记' in i['title']]
                 self.assertEqual(excerpt['plan']['school_task']['state'], 'review')
                 self.assertEqual([q['ref'] for q in excerpt['evidence']], ['message:p1-heldout-a:1', 'message:p1-heldout-a:3'])
+
+    # Frozen synthetic chronology variants of A (criteria 1352afeb…): only the declared time, collector message_order or ref of
+    # A's first original and its correction change; every text, publisher, as_of and the saved reply stay as they were.
+    _SAME = '2026-10-16T17:00:00+08:00'
+    _A_CHRONOLOGY = {
+        'T00-original-strictly-later': (dict(), True),
+        'T01-same-instant-no-order': (dict(time=_SAME), False),
+        'T02-same-instant-equal-order': (dict(time=_SAME, orders=('11', '11')), False),
+        'T03-same-instant-reversed-order': (dict(time=_SAME, orders=('12', '11')), False),
+        'T04-same-instant-explicit-increasing-order': (dict(time=_SAME, orders=('11', '12')), True),
+        'T05-same-instant-numeric-ref-900-to12-no-order': (
+            dict(time=_SAME, refs=('message:p1-heldout-a:900', 'message:p1-heldout-a:12')), False),
+        'T06-different-source-same-symbolic-publisher': (dict(refs=(None, 'message:fictional-other-source:3')), False),
+        'T07-earlier-correction-time': (dict(time='2026-10-16T16:59:00+08:00'), False),
+        'T08-same-instant-numeric-ref-900-to12-positive-order': (
+            dict(time=_SAME, refs=('message:p1-heldout-a:900', 'message:p1-heldout-a:12'), orders=('11', '12')), True),
+    }
+    # T05, T06 and T08 remap refs the unchanged reply does not cite, so they stay direct-helper evidence only.
+    _A_SAVED = ('T00-original-strictly-later', 'T01-same-instant-no-order', 'T02-same-instant-equal-order',
+                'T03-same-instant-reversed-order', 'T04-same-instant-explicit-increasing-order', 'T07-earlier-correction-time')
+
+    def _a_evidence(self, time=None, orders=(None, None), refs=(None, None)):
+        evidence = [dict(ref='message:p1-heldout-a:' + n, text=text, time=t, kind='text', content_incomplete=False, attachments=[],
+                         unread=False, sender=sender, publisher='publisher:' + publisher)
+                    for n, t, publisher, sender, text in self._A_MESSAGES]
+        if time:evidence[2]['time'] = time
+        for entry, order, ref in zip((evidence[0], evidence[2]), orders, refs):
+            if order is not None:entry['message_order'] = order
+            if ref is not None:entry['ref'] = ref
+        return evidence
+
+    def test_frozen_a_chronology_corrects_the_handback_only_when_strictly_later_from_the_same_teacher_and_source(self):
+        from family_agenda import sent_day
+        original = self._A_MESSAGES[0][4].split('；2026年10月19日早读默写')[0]
+        corrected = original.replace('摘记本2026年10月19日', '摘记本2026年10月20日')
+        for name, (change, proven) in self._A_CHRONOLOGY.items():
+            with self.subTest(name):
+                evidence = self._a_evidence(**change);home, fix = evidence[0], evidence[2]
+                self.assertEqual(agent._school_native_later_text(home, fix), proven)
+                quote = agent._school_corrected_quote(original, home, [home, fix])
+                self.assertEqual(quote, corrected if proven else original)
+                self.assertEqual(agent._school_own_dates(quote, sent_day(home['time'])), {'2026-10-20' if proven else '2026-10-19'})
+                self.assertEqual(evidence, self._a_evidence(**change), 'the originals are read, never rewritten')
+
+    def test_the_shared_later_proof_needs_one_positive_stable_publisher_at_every_gap(self):
+        original = self._A_MESSAGES[0][4].split('；2026年10月19日早读默写')[0]
+        stable = lambda sender:agent._publisher('p1-heldout-a', {} if sender is None else dict(sender_id=sender))
+        self.assertEqual(stable('p1-heldout-a-language'), stable('p1-heldout-a-language'))
+        self.assertNotIn(stable('p1-heldout-a-language'), ('publisher:p1-heldout-a-language', stable('p1-heldout-a-head')))
+        cases = {
+            'the same symbolic publisher': ('publisher:p1-heldout-a-language', 'publisher:p1-heldout-a-language', True),
+            'one stable collector hash': (stable('p1-heldout-a-language'), stable('p1-heldout-a-language'), True),
+            'another symbolic publisher': ('publisher:p1-heldout-a-language', 'publisher:p1-heldout-a-head', False),
+            'another stable collector hash': (stable('p1-heldout-a-language'), stable('p1-heldout-a-head'), False),
+            'a raw symbolic string is not its stable hash': ('publisher:p1-heldout-a-language', stable('p1-heldout-a-language'), False),
+            'both publishers missing': (None, None, False),
+            'both publishers empty': ('', '', False),
+            'both publishers blank': (' ', ' ', False),
+            'no sender id hashes to no one': (stable(None), stable(None), False),
+        }
+        for change in (dict(), dict(time=self._SAME, orders=('11', '12'))):
+            for name, (first, second, proven) in cases.items():
+                with self.subTest(name, same_instant=bool(change)):
+                    evidence = self._a_evidence(**change)
+                    for entry, publisher in ((evidence[0], first), (evidence[2], second)):
+                        entry.pop('publisher')
+                        if publisher is not None:entry['publisher'] = publisher
+                    self.assertEqual(agent._school_native_later_text(evidence[0], evidence[2]), proven)
+                    self.assertEqual(agent._school_corrected_quote(original, evidence[0], [evidence[0], evidence[2]]) != original, proven)
+
+    def test_frozen_a_chronology_variants_save_only_a_proven_correction_through_ingest_reopen_and_replay(self):
+        for case in self._A_SAVED:
+            change, proven = self._A_CHRONOLOGY[case]
+            with self.subTest(case):
+                self.setUp()
+                self.fixture.source['id'] = 'p1-heldout-a';self.fixture.config()
+                stamp = '2026-10-16T17:20:00+08:00'
+                messages = [dict(id=n, time=time, kind='text', sender=sender, sender_id=publisher, text=text, unread=False)
+                            for n, time, publisher, sender, text in self._A_MESSAGES]
+                if change.get('time'):messages[2]['time'] = change['time']
+                for message, order in zip((messages[0], messages[2]), change.get('orders', (None, None))):
+                    if order is not None:message['message_order'] = order
+                self.store.ingest(dict(source_id='p1-heldout-a', expected_cursor='10', cursor='14', checked_at=stamp,
+                                       last_message_time=stamp, error='', messages=copy.deepcopy(messages)))
+                calls = []
+
+                def saved_reply(prompt, schema, name, timeout=60, *, data_path=None):
+                    context = json.loads(prompt[-1]['content'])
+                    self.assertEqual([e['publisher'] for e in context['evidence']],
+                                     [agent._publisher('p1-heldout-a', m) for m in messages])
+                    self.assertFalse(any('message_order' in e for e in context['evidence']))
+                    calls.append(name)
+                    return copy.deepcopy(self._A_REPLY)
+
+                self.model.side_effect = saved_reply
+                now = dt.datetime(2026, 10, 16, 17, 30, tzinfo=agent.TZ)
+                result = agent.run_once(self.app, now)
+                self.assertEqual((result['failed'], result['processed'], len(calls)), (0, 4, 1))
+
+                def saved(store):
+                    with store._db() as c:
+                        return ([dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY rowid")],
+                                [dict(t) for t in c.execute('SELECT * FROM manual_tasks ORDER BY id')],
+                                [json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')],
+                                c.execute('SELECT COUNT(*) FROM records').fetchone()[0],
+                                c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0])
+
+                items, tasks, originals, records, updates = saved(self.store)
+                self.assertEqual([(m['id'], m['time'], m['text'], m.get('message_order')) for m in originals],
+                                 [(m['id'], m['time'], m['text'], m.get('message_order')) for m in messages], 'only declared order')
+                self.assertEqual((records, updates), (0, 0))
+                excerpt, = [i for i in items if '河岸随记' in i['title']]
+                plan = json.loads(excerpt['plan'])
+                self.assertEqual(plan['school_selection_receipt']['goal'], self._A_REPLY['proposals'][0]['task_goal'])
+                self.assertEqual([e['ref'] for e in json.loads(excerpt['evidence'])], ['message:p1-heldout-a:1', 'message:p1-heldout-a:3'])
+                due = {t['title']: t['due'] for t in tasks}
+                if proven:
+                    self.assertEqual((excerpt['due'], excerpt['state'], plan['school_task']['state']), ('2026-10-20', 'accepted', 'ready'))
+                    self.assertEqual(due.pop('语文：完成《河岸随记》阅读摘记'), '2026-10-20')
+                else:
+                    # Unproven order: neither accepted nor a mandatory corrected task; the item waits for a parent's review.
+                    self.assertNotEqual(excerpt['state'], 'accepted')
+                    self.assertEqual(plan['school_task']['state'], 'review')
+                    self.assertFalse(excerpt['task_id'])
+                    self.assertNotIn('语文：完成《河岸随记》阅读摘记', due)
+                    self.assertFalse(any('河岸随记' in t['action'] for t in tasks))
+                # The independent dictation and receipt keep their own days; neither dates A, and the parent question stays reference.
+                self.assertEqual(due, {'语文：早读默写《山行》全文': '2026-10-19', '秋季活动回执签字交班主任': '2026-10-20'})
+                question, = [i for i in items if json.loads(i['evidence'])[0]['ref'] == 'message:p1-heldout-a:4']
+                self.assertEqual((json.loads(question['plan'])['school_task']['state'], question['task_id']), ('reference', ''))
+                reopened = agent.Store(self.app.connect, self.app.profiles, self.fixture.data, app=self.app)
+                self.assertEqual(saved(reopened), (items, tasks, originals, records, updates), 'a reopened store reads the same save')
+                replay = agent.run_once(self.app, now + dt.timedelta(minutes=7))
+                self.assertEqual((replay['failed'], replay['processed'], replay['created'], len(calls)), (0, 0, 0, 1))
+                self.assertEqual(saved(self.store), (items, tasks, originals, records, updates), 'the same numbering saves nothing twice')
+                self.doCleanups()
 
 
 if __name__ == '__main__':
