@@ -529,8 +529,9 @@ def _stored_date_header(plan,quote):
 def _school_focus(c,task,proposal,plan):
     """Every saved focus version of this task is a parent-confirmed school change of its own accepted item, none a parent's choice.
 
-    Each version's history row is the save of a change item accepted onto this same task for this item, recorded on the item
-    with the same written due/title/requirements, and the last saved state is still the task's focus."""
+    Each version's history row is the save of a change item accepted onto this same task for this item whose receipt records
+    that it really wrote the focus (a deduplicated append wrote none, so its key proves nothing), recorded on the item with the
+    same written due/title/requirements, and the last saved state is still the task's focus."""
     focus=task.get('focus') or {};version=focus.get('version') or 0
     if not version or not c.execute("SELECT 1 FROM sqlite_master WHERE name='task_focus_history'").fetchone():return False
     rows={}
@@ -542,8 +543,8 @@ def _school_focus(c,task,proposal,plan):
         key,current=rows.get(number,('',{}));event=events.get(key)
         change=event and c.execute("SELECT plan FROM agent_items WHERE id=? AND kind='school' AND state='accepted' AND task_id=? AND child_id=?",
                                    (event['item_id'],task['id'],proposal['child_id'])).fetchone()
-        receipt=json.loads(change['plan']) if change else {}
-        if (receipt.get('school_change_of')!=proposal['id'] or (receipt.get('school_change_receipt') or {}).get('task_id')!=task['id']
+        receipt=json.loads(change['plan']) if change else {};written=receipt.get('school_change_receipt') or {}
+        if (receipt.get('school_change_of')!=proposal['id'] or written.get('task_id')!=task['id'] or written.get('deduplicated') is not False
                 or (current.get('due_on'),current.get('title'),current.get('goal'))!=(event['due'],event['title'],event.get('applied_goal',event['goal']))):
             return False
     return all(focus.get(k)==value for k,value in rows[version][1].items())
