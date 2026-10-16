@@ -503,7 +503,8 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
         # A legible screenshot can supply a draft, but never establishes complete history or a deadline.
         read_text = any(e.get('kind') in ('text','quote') and not (e.get('unread') or e.get('content_incomplete'))
                         and _COLLECTOR_PLACEHOLDER.sub('',e.get('text','')).strip() for e in evidence)
-        if not fragments and not material and not read_text: brief.update(title='',goal='',advice='')
+        # Nothing of the original was read: its purpose is as unknown as its content (the raw receipt keeps the model's claim).
+        if not fragments and not material and not read_text: brief.update(title='',goal='',advice='');purpose='unknown'
         state='review';brief['reason']='仅截图可见内容，文字识别可能有误；请核对原图、发布日期和附件。' if fragments else '原消息还有未核明的附件；已读要求保留，缺失部分待补充。' if material else '原件或具体要求尚未读全，请先核对。'
         if read_text and not material:
             brief['reason']='已读正文要求已保留；本条所附图片、文件或其他未读内容仍待整理。'
