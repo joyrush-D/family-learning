@@ -167,9 +167,8 @@ const sourcePendingCount=s=>Number.isSafeInteger(s.pending_message_count)&&s.pen
 const currentSchoolPending=()=>currentSources().filter(s=>s.child_id===currentChild()?.id).reduce((n,s)=>n+sourcePendingCount(s),0);
 function schoolProcessingHTML(){
  const count=currentSchoolPending();
- // failed_jobs counts every child and kind; never present it as this child's school batch having stopped.
- const failed=Number.isSafeInteger(data.agent?.failed_jobs)&&data.agent.failed_jobs>0?data.agent.failed_jobs:0;
- return count?`<p class="note" role="status" data-school-processing>还有 ${count} 条学校消息尚未整理，作业清单可能不完整。原消息已保存。${failed?`另有 ${failed} 批资料已达3次自动尝试上限（全部孩子与资料类型合计，未确认是否含这些消息）。`:''}<button data-page="agent">查看整理状态</button></p>`:'';
+ // The global failed_jobs scope is explained only on the status page; the daily list stays per child.
+ return count?`<p class="note" role="status" data-school-processing>还有 ${count} 条学校消息尚未整理，作业清单可能不完整。原消息已保存。<button data-page="agent">查看整理状态</button></p>`:'';
 }
 function collectionCheckHTML(s){
  const check=s.collection_check||{};
@@ -2242,8 +2241,10 @@ function agentChildHTML(c){const items=agentPending(c.id).filter(item=>['school'
 function agentStatusHTML(full){
  const a=data.agent,coverage=sourceCoverageHTML();if(!a||(!a.enabled&&!a.last_error&&!coverage))return '';
  const stale=a.enabled&&a.last_run&&Date.now()-Date.parse(a.last_run)>10*60*1000;
+ // failed_jobs is done=0 AND attempts>=3, which already holds while the third attempt runs.
+ const running=a.enabled&&a.state==='running'&&!stale;
  const state={waiting:'等待首次整理',running:'正在整理',ready:'已完成本轮整理',idle:'已完成本轮整理',error:'整理遇到问题',partial:'部分资料待重试',needs_attention:'部分资料待重试',interrupted:'整理中断，等待恢复',disabled:'尚未启用'}[a.state]||'已保存运行状态';
- return `<section class="agent-status" aria-label="成长助手运行状态"><div><strong>成长助手</strong><span class="small">后台整理：${a.last_error||stale?'有资料待核对':state} · ${agentPending(currentChild()?.id).length} 条本孩子待看</span></div>${coverage}${full?'':'<button data-page="agent">查看提醒与状态 →</button>'}${full?`<p class="small">上次整理：${agentTime(a.last_run)}${stale?' · 已超过10分钟，请检查后台服务':''}</p>${currentSchoolPending()?`<p class="note" data-agent-school-pending>本孩子还有 ${currentSchoolPending()} 条学校消息尚未整理，原消息已保存；${!a.enabled?'后台整理尚未启用。':a.failed_jobs?'下方上限计数为全部孩子合计，未确认是否含这些消息。':'等待后台整理。'}</p>`:''}${a.last_error?`<p role="status" class="error">${esc(a.last_error)}</p>`:''}${a.failed_jobs?`<p class="error" data-agent-failed-jobs>${a.failed_jobs} 批资料仍未整理成功（全部孩子与资料类型合计）：已达3次自动尝试上限，不会自动恢复；原资料保留。 <button data-agent-retry>重新尝试</button></p>`:''}<details><summary>消息来源与读取情况</summary>${currentSourceCardsHTML()||empty('尚未配置消息来源')}</details><p class="small muted">后台整理只处理已保存资料，不代表所有群的新消息已同步。此处提醒不代表已向微信或手机发送通知。</p>`:''}</section>`;
+ return `<section class="agent-status" aria-label="成长助手运行状态"><div><strong>成长助手</strong><span class="small">后台整理：${a.last_error||stale?'有资料待核对':state} · ${agentPending(currentChild()?.id).length} 条本孩子待看</span></div>${coverage}${full?'':'<button data-page="agent">查看提醒与状态 →</button>'}${full?`<p class="small">上次整理：${agentTime(a.last_run)}${stale?' · 已超过10分钟，请检查后台服务':''}</p>${currentSchoolPending()?`<p class="note" data-agent-school-pending>本孩子还有 ${currentSchoolPending()} 条学校消息尚未整理，原消息已保存；${!a.enabled?'后台整理尚未启用。':a.failed_jobs?'下方计数为全部孩子合计，未确认是否含这些消息。':running?'后台正在整理。':'等待后台整理。'}</p>`:''}${a.last_error?`<p role="status" class="error">${esc(a.last_error)}</p>`:''}${a.failed_jobs?`<p class="error" data-agent-failed-jobs>${a.failed_jobs} 批资料已用满3次自动尝试、尚未成功（全部孩子与资料类型合计）：${running?'后台正在整理，本轮结果返回前仍可能成功':'不会自动恢复'}；原资料保留。 <button data-agent-retry>重新尝试全部孩子未成功的资料</button></p>`:''}<details><summary>消息来源与读取情况</summary>${currentSourceCardsHTML()||empty('尚未配置消息来源')}</details><p class="small muted">后台整理只处理已保存资料，不代表所有群的新消息已同步。此处提醒不代表已向微信或手机发送通知。</p>`:''}</section>`;
 }
 let schoolInbox={child_id:'',day:'',offset:'0',view:null,busy:false,error:''};
 function schoolMessageHTML(v,index){
