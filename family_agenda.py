@@ -450,7 +450,7 @@ def task_category(title,purpose=None):
     return 'todo'
 
 
-def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal='',date_header=''):
+def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal='',date_header='',school_focus=False):
     focus=focus or {};messages=[];publications=[];original_time=''
     store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
     for ref in refs:
@@ -502,11 +502,13 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
     sent=original_time[:10] if original_time else days[0] if len(days)==1 else ''
     due_kind=date_meaning(date_quote,due_on,sent,subject,goal) if original and due_on==original else 'deadline' if due_on else ''
     # The work's own day is read only from this child's one original holding the item's own words; a parent's explicit
-    # plan or edit keeps priority, and the handback due stays as it is.
+    # plan or edit keeps priority, and the handback due stays as it is. A focus saved only by parent-confirmed school changes
+    # of this same item is no parent choice: the own day stays while the confirmed words still give that same day.
     own=[m for m in messages if date_quote and date_quote in m.get('text','')]
     heading=date_header if len(own)==1 and date_header and 0<=own[0]['text'].find(date_header)<own[0]['text'].find(date_quote) else ''
     complete_on=(completion_day(date_quote,heading,own[0].get('time',''),due_on)
-                 if len(own)==1 and not focus.get('scheduled_on') and not focus.get('version') else '')
+                 if len(own)==1 and not focus.get('scheduled_on') and (not focus.get('version') or school_focus) else '')
+    if complete_on and focus.get('version') and completion_day(focus.get('goal',''),heading,own[0].get('time',''),due_on)!=complete_on:complete_on=''
     return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,due_kind=due_kind,complete_on=complete_on,scheduled_on=focus.get('scheduled_on',''),
                 category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox')
 
@@ -524,13 +526,36 @@ def _stored_date_header(plan,quote):
     return native.get('header','') if isinstance(native,dict) and native.get('quote')==quote and isinstance(native.get('header'),str) else ''
 
 
+def _school_focus(c,task,proposal,plan):
+    """Every saved focus version of this task is a parent-confirmed school change of its own accepted item, none a parent's choice.
+
+    Each version's history row is the save of a change item accepted onto this same task for this item, recorded on the item
+    with the same written due/title/requirements, and the last saved state is still the task's focus."""
+    focus=task.get('focus') or {};version=focus.get('version') or 0
+    if not version or not c.execute("SELECT 1 FROM sqlite_master WHERE name='task_focus_history'").fetchone():return False
+    rows={}
+    for row in c.execute('SELECT request_key,current FROM task_focus_history WHERE task_id=?',(task['id'],)):
+        current=json.loads(row['current']);rows[current.get('version')]=(row['request_key'],current)
+    events={'school-change-'+family_agent._hash(e['item_id'])[:32]:e for e in plan.get('school_changes',[])
+            if isinstance(e,dict) and isinstance(e.get('item_id'),str) and e.get('change') in ('update','append')}
+    for number in range(1,version+1):
+        key,current=rows.get(number,('',{}));event=events.get(key)
+        change=event and c.execute("SELECT plan FROM agent_items WHERE id=? AND kind='school' AND state='accepted' AND task_id=? AND child_id=?",
+                                   (event['item_id'],task['id'],proposal['child_id'])).fetchone()
+        receipt=json.loads(change['plan']) if change else {}
+        if (receipt.get('school_change_of')!=proposal['id'] or (receipt.get('school_change_receipt') or {}).get('task_id')!=task['id']
+                or (current.get('due_on'),current.get('title'),current.get('goal'))!=(event['due'],event['title'],event.get('applied_goal',event['goal']))):
+            return False
+    return all(focus.get(k)==value for k,value in rows[version][1].items())
+
+
 def enrich(app,c,tasks):
     owners={p['name']:p['id'] for p in app.profiles(c)}
     reported={r['task_id']:(r['child_id'],r['day']) for r in c.execute('SELECT task_id,child_id,day FROM study_items WHERE id=task_id')} if c.execute("SELECT 1 FROM sqlite_master WHERE name='study_items'").fetchone() else {}
     for task in tasks:
         refs=[x.strip() for x in task['source'].splitlines() if x.strip().startswith('message:')]
         focus=task.get('focus') or {}
-        purpose=None;publication_ref='';date_quote='';goal='';date_header=''
+        purpose=None;publication_ref='';date_quote='';goal='';date_header='';school_focus=False
         if task.get('school_origin'):
             origin=task['source'].splitlines()[0].removeprefix('Agent建议:')
             proposal=c.execute("SELECT * FROM agent_items WHERE id=? AND task_id=? AND child_id=? AND kind='school' AND state='accepted'",
@@ -542,6 +567,7 @@ def enrich(app,c,tasks):
                 publication_ref=family_agent.school_original_publication_ref(store,c,proposal)
                 date_quote=_stored_date_quote(plan) or re.sub(r'^待核对[：:]?\s*','',proposal['title']).strip()
                 date_header=_stored_date_header(plan,date_quote)
+                school_focus=_school_focus(c,task,proposal,plan)
         due=task['due']
         captured=reported.get(task['id'])
         if captured and captured[0]==owners.get(task['child']) and task['source'] in family_study.CAPTURE_SOURCES:
@@ -550,7 +576,7 @@ def enrich(app,c,tasks):
             if not focus.get('category'):focus['category']='homework'
             if not focus.get('scheduled_on') and not focus.get('version'):focus['scheduled_on']=captured[1]
             due=task['due']=''
-        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header)
+        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus)
     return tasks
 
 
