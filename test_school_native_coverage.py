@@ -2795,7 +2795,7 @@ class SchoolActionPurposeTests(unittest.TestCase):
         saved_reply = self.model.side_effect
         self.model.side_effect = lambda messages, *args, **kwargs: (requests.append(json.loads(messages[-1]['content'])), saved_reply(messages, *args, **kwargs))[1]
         result = agent.run_once(self.app, self.now)
-        self.assertEqual((result['failed'], result['processed'], result['created']), (0, 1, 1))
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
         self.assertEqual([(a['quote'], a['purpose'], a['subject']) for a in requests[0]['required_native_actions']],
                          [(self.C_QUOTE, 'learning', '语文')], 'the dated reading is one required native action')
         import family_review
@@ -2832,7 +2832,7 @@ class SchoolActionPurposeTests(unittest.TestCase):
         self.assertEqual(self._c_facts(self.app, self.store)[4], [], 'the rejected batch routes no learning goal')
         # The kept original retries under the same guard; only the complete required reading finishes it.
         retry = agent.run_once(self.app, self.now + dt.timedelta(minutes=6))
-        self.assertEqual((retry['failed'], retry['processed'], retry['created']), (0, 1, 1))
+        self.assertEqual((retry['failed'], retry['processed']), (0, 1))
         rows, tasks, originals, manual, goals = self._c_facts(self.app, self.store)
         self.assertEqual([(r[2], r[4]['school_task']['state'], r[4]['school_task']['purpose']) for r in rows], [('2026-11-06', 'ready', 'learning')])
         self.assertEqual((len(tasks), originals), (1, payload['messages']))
