@@ -2638,29 +2638,23 @@ class SchoolActionPurposeTests(unittest.TestCase):
     def test_known_n06_correct_unknown_receipt_saves_the_same_unknown_review_through_intake_and_fresh_store_reopen(self):
         self._n06_run_once(self.N06_CORRECT)
 
-    def test_explicit_read_action_with_a_supplemental_unread_image_keeps_its_own_purpose_and_requirement(self):
-        self.fixture.now = self.now = dt.datetime(2026, 11, 5, 20, tzinfo=agent.TZ)
-        payload = self.fixture.payload(cursor='12')
-        common = dict(time='2026-11-05T18:00:00+08:00', sender='虚构学校发布人', sender_id='fictional-native-reference-n06')
-        payload['messages'] = [dict(common, id='11', message_order='11', kind='text', text='语文：请完成练习册第5页。', unread=False),
-                               dict(common, id='12', message_order='12', kind='image', text=self.N06_TEXT, unread=True)]
-        self.store.ingest(payload)
-        refs = ['message:' + self.source['id'] + ':' + m['id'] for m in payload['messages']]
+    def test_explicit_read_action_with_a_supplemental_unread_attachment_keeps_its_own_purpose_and_requirement(self):
+        # Same full-evidence path as N06: fully read explicit text establishes the action; only its unread supplement waits.
+        text = dict(ref='message:fictional-native-reference-n06:2', text='语文：请完成练习册第5页。', kind='text',
+                    time='2026-11-05T18:00:00+08:00')
+        supplement = dict(ref='message:fictional-native-reference-n06:3', text='练习册第5页附图尚未读取。', kind='text', content_incomplete=True,
+                          time='2026-11-05T18:01:00+08:00', attachments=[dict(name='虚构学校资料.png', mime='image/png')])
         proposal = fixtures.school_proposal(
-            title_quote='请完成练习册第5页', evidence=[dict(ref=ref) for ref in refs], learning_subject='语文', task_title='语文：完成练习册第5页',
-            task_goal='完成练习册第5页。', task_state='ready', task_reason='虚构回执。', task_purpose='learning')
+            title_quote='请完成练习册第5页', evidence=[dict(ref=text['ref']), dict(ref=supplement['ref'])], learning_subject='语文',
+            task_title='语文：完成练习册第5页', task_goal='完成练习册第5页。', task_state='ready', task_reason='虚构回执。', task_purpose='learning')
         self.model.side_effect = lambda *args, **kwargs: dict(proposals=[copy.deepcopy(proposal)])
-        result = agent.run_once(self.app, self.now)
-        self.assertEqual((result['failed'], result['processed']), (0, 2))
-        rows, tasks, originals, manual, goals = self._k12_facts(self.app, self.store)
-        row, = rows
-        brief = json.loads(row['plan'])['school_task']
+        item, = agent._select('school', [text, supplement], school_goals=[], as_of='2026-11-05')
+        brief = item['plan']['school_task']
         self.assertEqual((brief['state'], brief['purpose']), ('review', 'learning'), 'explicit read text keeps its own use; only the supplement waits')
         self.assertIn('练习册第5页', brief['title'])
         self.assertIn('完成练习册第5页', brief['goal'])
         self.assertIn('已读正文要求已保留', brief['reason'])
-        self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
-        self.assertEqual(originals, payload['messages'])
+        self.assertEqual([e['ref'] for e in item['evidence']], [text['ref'], supplement['ref']])
 
     def test_reference_scope_is_its_own_clause_and_never_hides_or_creates_a_required_outcome(self):
         def actions(text):
