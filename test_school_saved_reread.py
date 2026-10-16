@@ -300,7 +300,8 @@ class AutoAcceptedOldBatchTests(unittest.TestCase):
         self.assertEqual((item['state'], plan['school_task']['state'], plan['school_task'].get('auto_added')), ('accepted', 'ready', True))
         task, = state['tasks']
         self.assertEqual((task['id'], task['action'], task['due']), (item['task_id'], SR02_FIRST, '2026-10-22'))
-        self.assertNotIn('秋游安全告知书', json.dumps(state, ensure_ascii=False), 'the second action was never saved')
+        saved_work = [item['title'], item['body'], task['title'], task['action']]  # the original payload keeps it, of course
+        self.assertFalse([text for text in saved_work if '秋游安全告知书' in text], 'the second action was never saved as work')
         self.assertEqual([m['processed'] for m in state['messages']], [1])
         self.assertEqual(state['jobs'][item['job_id']]['done'], 1)
 
