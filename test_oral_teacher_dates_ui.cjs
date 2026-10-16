@@ -73,7 +73,21 @@ async function saveThroughFailures(page,dialog,form,count){
     const state=await(await fetch(host.url+'api/state')).json(),task=state.tasks.find(t=>t.title===title);
     assert.deepEqual([task.agenda.complete_on,task.agenda.due_on,task.agenda.due_kind,task.agenda.scheduled_on],[complete,handback,'handback',day]);
     const other_items=await study(other.id);assert.equal(other_items.filter(i=>i.title===title).length,0,'current child only');
-    await proof(p,'parent-today-reopen-'+width);assert.equal(drafts,0,'manual flow sends no model request');assert.deepEqual(errors,[]);
+    await proof(p,'parent-today-reopen-'+width);
+    if(width===1440){
+     // The parent corrects one teacher day and clears the other on the same saved item through the existing edit form.
+     const later=shift(day,9);await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="study"]').click();await p.locator('[data-study-ready]').waitFor();
+     const row=p.locator('[data-study-item]').filter({hasText:title});await row.locator('[data-study-editor="item"]').click();const edit=p.locator('[data-study-form="item"]');
+     assert.equal(await edit.locator('[name="complete_on"]').inputValue(),complete);assert.equal(await edit.locator('[name="handback_on"]').inputValue(),handback);
+     await edit.locator('[name="handback_on"]').fill(later);await edit.locator('[name="complete_on"]').fill('');await proof(p,'parent-correct-'+width);await edit.locator('[type="submit"]').click();
+     await eventually(async()=>(await study()).find(i=>i.title===title).report.handback_on===later,'correction saved');
+     const fixed=(await study()).find(i=>i.title===title);
+     assert.deepEqual([fixed.id,fixed.report.complete_on,fixed.report.text,fixed.report.date_history.length,fixed.report.date_history[0].handback_on],[saved.id,'',words,1,handback]);
+     const again=(await(await fetch(host.url+'api/state')).json()).tasks.find(t=>t.title===title);
+     assert.deepEqual([again.agenda.complete_on,again.agenda.due_on,again.agenda.due_kind,again.agenda.scheduled_on],['',later,'handback',day]);
+     assert.equal((await study()).filter(i=>i.title===title).length,1,'same one item after correction');
+    }
+    assert.equal(drafts,0,'manual flow sends no model request');assert.deepEqual(errors,[]);
     checks.push({width,role:'parent',closeReopenDraft:true,first503ZeroWrite:true,lostReceiptSameKey:true,oneTask:true,reloadSameDays:true,agenda:{complete_on:complete,due_on:handback,due_kind:'handback',scheduled_on:day},draftRequests:drafts});
    }catch(e){await proof(p,'parent-failure-'+width);throw e}finally{await p.close()}
    const invitation=await post('child-access/invite',{child_id:who.id});
