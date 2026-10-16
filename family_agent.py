@@ -2980,11 +2980,20 @@ def _school_correction_window_current(store,c,row):
 
 
 def _history_anchor(row, originals):
-    """Only a unique literal clause can identify an old action; never a title similarity."""
+    """Only a unique literal clause can identify an old action; never a title similarity.
+
+    A history save recorded its anchor; an older save kept the original words it dated the item from (school_date_quote),
+    which still prove its action when they are one unique complete span of today's unchanged original, even though its
+    body was rewritten into a normalized goal that is no original substring.
+    """
     plan=json.loads(row['plan']);saved=plan.get('school_action_anchor',{})
     quotes=json.loads(row['evidence'])
     for e in quotes:
         ref=e['ref'];text=originals.get(ref,'');quote=saved.get(ref) or row['body'].strip()
+        dated=plan.get('school_date_quote')
+        if (not saved.get(ref) and text and quote and text.count(quote)!=1 and isinstance(dated,str) and dated.strip()
+                and text.count(dated)==1 and _school_complete_span(text,text.index(dated),text.index(dated)+len(dated))):
+            quote=dated
         brief=plan.get('school_task',{})
         if (row['state']=='pending' and not row['task_id'] and brief.get('state')=='reference'
                 and row['title']==brief.get('title')=='群内资料求助'):
@@ -3092,6 +3101,33 @@ def _school_audit_mark(old_key):
     return 'school-audit-scope:'+_hash([old_key])[:40]
 
 
+def _school_recovery_keys(c,old_key,child_id):
+    """Every automatic recovery identity of one original batch: the saved reread of each of its rows and its one audit."""
+    rows=c.execute("SELECT id FROM agent_items WHERE job_id=? AND kind='school' AND child_id=? ORDER BY id",(old_key,child_id)).fetchall()
+    return ['school-task:'+r['id'] for r in rows]+['school-history:'+_hash(['saved-batch-audit',old_key,child_id])[:40]]
+
+
+def _school_recovery_spent(c,keys):
+    """One automatic budget per original batch, whichever route holds it: the most attempts any unfinished identity used."""
+    found=[c.execute('SELECT attempts,next_try,error,done FROM agent_jobs WHERE id=?',(k,)).fetchone() for k in keys]
+    return [dict(r) for r in found if r and not r['done'] and r['attempts']]
+
+
+def _school_recovery_inherit(store,key,old_key,child_id):
+    """A route first opened for an old batch (date, rule or ownership changed) starts from its spent attempts and backoff.
+
+    Only the existing explicit retry renews an identity; a route switch never grants a fresh three-attempt budget.
+    """
+    with store._db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        if c.execute('SELECT 1 FROM agent_jobs WHERE id=?',(key,)).fetchone():return
+        spent=_school_recovery_spent(c,[k for k in _school_recovery_keys(c,old_key,child_id) if k!=key])
+        if spent:
+            top=max(spent,key=lambda r:r['attempts'])
+            c.execute('INSERT INTO agent_jobs(id,fingerprint,attempts,next_try,error,done) VALUES(?,?,?,?,?,0)',
+                      (key,'',top['attempts'],max(r['next_try'] for r in spent),top['error']))
+
+
 def _school_audit_boundary(store):
     """Fix once, before the first permitted round's intake, which done school batches predate the saved-batch audit.
 
@@ -3194,11 +3230,15 @@ def _history_scopes(store,config,now=None):
             if any(r['child_id']!=source['child_id'] for r in rows) or any(v['kind']!='text' or v['unread'] for v in values): continue
             # One reread per batch: a review already reread whole, or one the saved reread is about to take, is not
             # audited too. Anything it refuses (several outcomes, edits, decisions) is audited here with old rows kept.
-            if any(json.loads(r['plan']).get('school_saved_reread') for r in rows): continue
-            if now and all(r['state']=='pending' for r in rows) and any(_school_saved_owner(store,c,r,now) for r in rows): continue
+            # One row's proof covers only the originals it cites, never its siblings: the saved reread owns the batch
+            # only when it takes or already took every row; otherwise the whole original scope is audited once.
+            if all(json.loads(r['plan']).get('school_saved_reread') or now and r['state']=='pending' and _school_saved_owner(store,c,r,now)
+                   for r in rows): continue
             key='school-history:'+_hash(['saved-batch-audit',old_key,source['child_id']])[:40]
             done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone()
             if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS): continue
+            # The batch's one automatic budget, already spent by its saved reread, is not refilled by switching route.
+            if any(r['attempts']>=MAX_ATTEMPTS for r in _school_recovery_spent(c,_school_recovery_keys(c,old_key,source['child_id']))): continue
             result.append((source,values,key,(old_key,jobs[old_key]['fingerprint'],'audit')))
     return result
 
@@ -3280,6 +3320,7 @@ def _recheck_school_history(app,store,now,budget,scopes):
     goals=Goals(app,store)
     for scope in scopes:
         source,values,key=scope[:3];origin=scope[3] if len(scope)>3 else None
+        if origin and origin[2]=='audit':_school_recovery_inherit(store,key,origin[0],source['child_id'])
         fp=store._job(key,dict(revision=SCHOOL_SELECTION_REVISION,source=source,messages=values),now,model=True,
                       keep_budget=bool(origin and origin[2]=='audit'))
         if not fp: continue
@@ -4238,8 +4279,14 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         uncertain_due=ambiguous_due=False
         from family_agenda import date, deadlines, sent_day
         cited_evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}]
+        def anchored(e):
+            # A history action states its own day, or reads the one rule every path uses: a day its notice's header or
+            # leading deadline gives the items after it, never another independent item's own day.
+            quote=action_anchor.get(e['ref'],'');published=sent_day(e.get('time',''))
+            return deadlines(quote,published) or {d for d in deadlines(e['text'],published) if quote and not _school_borrowed_day(
+                quote,[e],d,str(proposal.get('task_goal','')),str(proposal.get('task_title','')))}
         relative=(_school_native_dates(native_action)
-            if native_action else set().union(*(deadlines(action_anchor.get(e['ref'],'') if historical else e['text'],sent_day(e.get('time',''))) for e in cited_evidence))) if mode=='school' else set()
+            if native_action else set().union(*(anchored(e) if historical else deadlines(e['text'],sent_day(e.get('time',''))) for e in cited_evidence))) if mode=='school' else set()
         def borrowed(day):
             # Every path reads one rule: a day that another action's clause states never becomes this item's own.
             return bool(routing and day and dated_quote and not historical and not native_action
@@ -5523,7 +5570,9 @@ def _refresh_school(app, store, now, budget):
                 context['pdf_material']=[dict(doc,requirements_in='original_parts' if original_parts else 'complete_action_requirements',
                     groups=[{k:v for k,v in group.items() if k!='requirements'} for group in doc['groups']])
                     for doc in pdf_evidence['model']]
-            key='school-task:'+row['id'];fp=store._job(key,value,now,model=reference is None,keep_budget=bool(saved_reread))
+            key='school-task:'+row['id']
+            if saved_reread:_school_recovery_inherit(store,key,row['job_id'],row['child_id'])
+            fp=store._job(key,value,now,model=reference is None,keep_budget=bool(saved_reread))
             if not fp: continue
             paged+=bool(page_changed or pdf_changed or material_changed or original_changed or saved_reread)
             try:
