@@ -2347,7 +2347,8 @@ class LiveEvidenceTest(unittest.TestCase):
                                                        light_model='fake-light', api_key='fake-secret-key', reasoning_effort='low')))
         self.cfg, self.out = str(cfg), self.root / 'out'
         self.env = patch.dict(os.environ); self.env.start()
-        for key in ('FAMILY_LLM_BASE_URL', 'FAMILY_LLM_MODEL', 'FAMILY_LLM_LIGHT_MODEL', 'FAMILY_LLM_API_KEY', 'FAMILY_LLM_REASONING_EFFORT'):
+        for key in ('FAMILY_LLM_BASE_URL', 'FAMILY_LLM_MODEL', 'FAMILY_LLM_LIGHT_MODEL', 'FAMILY_LLM_API_KEY', 'FAMILY_LLM_REASONING_EFFORT',
+                    'FAMILY_LLM_LIGHT_REASONING_EFFORT'):
             os.environ.pop(key, None)
 
     def tearDown(self):
