@@ -676,6 +676,20 @@ class SchoolNativeCoverageTests(unittest.TestCase):
                                 '填写《虚构观察表》的孩子姓名并请家长签字，2026年11月18日交回班主任。',
                                 ('虚构观察表', '孩子姓名', '家长签字', '交回班主任'), title='填写观察表并签字交回', due='2026-11-18')
 
+    def test_a_parent_named_elsewhere_in_the_goal_does_not_make_a_child_signature_the_parent_one(self):
+        self._partial_then_full('请填写《虚构观察表》的孩子姓名并请家长签字，2026年11月18日交回班主任。',
+                                '填写《虚构观察表》的家长姓名和孩子姓名并请孩子签字，2026年11月18日交回班主任。',
+                                '填写《虚构观察表》的孩子姓名并请家长签字，2026年11月18日交回班主任。',
+                                ('虚构观察表', '孩子姓名', '家长签字'), title='填写观察表并签字交回', due='2026-11-18')
+
+    def test_a_signer_named_in_the_earlier_step_of_the_same_part_must_still_sign(self):
+        text = '请家长检查《虚构口算卡》并签字，2026年11月6日交回班主任。'
+        self._partial_then_full(text, '请孩子检查《虚构口算卡》并签字，2026年11月6日交回班主任。', text, ('家长检查', '签字'), title='口算卡检查签字')
+
+    def test_the_same_parent_role_in_other_words_signs_on_its_first_receipt(self):
+        self._clause_saved('请填写《虚构观察表》的孩子姓名并请家长签字，2026年11月18日交回班主任。',
+                           '填写《虚构观察表》的孩子姓名，请父母签字，2026年11月18日交回班主任。', title='填写观察表并签字交回', due='2026-11-18')
+
     def test_actual_flash24_paraphrase_of_the_whole_sentence_saves_as_one_task(self):
         text = '2026年10月22日前，请填写《虚构营地报名表》的学生姓名并在《虚构交通回执》上完成家长签字，两份分别交回班主任。'
         goal = '在2026年10月22日前，填写《虚构营地报名表》的学生姓名；在《虚构交通回执》上完成家长签字；两份材料分别交回班主任。'
