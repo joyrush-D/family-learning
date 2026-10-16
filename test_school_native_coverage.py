@@ -35,7 +35,7 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         self.model = self.stack.enter_context(patch.object(
             agent.family_llm, '_chat_json', side_effect=AssertionError('no real model transport')))
 
-    def _ingest(self, texts, publishers=None):
+    def _ingest(self, texts, publishers=None, orders=None):
         publishers = publishers or ['synthetic-teacher-1'] * len(texts)
         payload = self.fixture.payload(cursor=str(10 + len(texts)))
         common = dict(time=self.now.isoformat(), kind='text', sender='虚构英语老师',
@@ -43,6 +43,10 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         payload['messages'] = [dict(common, id=str(11 + index), message_order=str(11 + index),
                                     sender_id=publisher, text=text)
                                for index, (text, publisher) in enumerate(zip(texts, publishers))]
+        for message, order in zip(payload['messages'], orders or ()):
+            # A collector without a stored position for this message sends no order at all.
+            if order is None: message.pop('message_order')
+            else: message['message_order'] = order
         self.assertEqual(len(payload['messages']), len(texts))
         self.store.ingest(payload)
         refs = ['message:' + self.source['id'] + ':' + m['id'] for m in payload['messages']]
@@ -209,12 +213,12 @@ class SchoolNativeCoverageTests(unittest.TestCase):
                     self.assertIn(words, excerpt['plan']['school_task']['goal'])
                 self.assertEqual([q['ref'] for q in excerpt['evidence']], refs[:2])
 
-    def _correction_batch(self, quote):
+    def _correction_batch(self, quote, corrector='synthetic-teacher-1', orders=None):
         texts = ['数学：2026年10月17日21:00前订正《小数运算练习》第2页第3、5、7题，每题写出正确过程并写一句错因；订正本2026年10月18日第一节课前交给数学课代表；2026年10月18日数学课前独立完成10道两位小数加减口算，写在口算本上。',
                  '2026年10月19日科学课请带透明塑料杯一个和纸巾两张，装在同一个袋子里；这些用品用于课堂观察，不要求在家提前做实验。',
                  '更正：口算改成6道，其他要求和2026年10月18日的时间不变；第2页订正仍只做第3、5、7题。',
                  '家长：孩子说不用交订正本，这个说法还需要问老师；我也想知道纸巾能不能改成毛巾。']
-        payload, refs = self._ingest(texts, ['synthetic-teacher-1', 'synthetic-teacher-2', 'synthetic-teacher-1', 'synthetic-parent-1'])
+        payload, refs = self._ingest(texts, ['synthetic-teacher-1', 'synthetic-teacher-2', corrector, 'synthetic-parent-1'], orders)
         texts, refs = [texts[0], texts[2], texts[3], texts[1]], [refs[0], refs[2], refs[3], refs[1]]
         fix = fixtures.school_proposal(
             title_quote=quote, due='2026-10-18', evidence=[dict(ref=refs[0]), dict(ref=refs[1])], learning_subject='数学',
@@ -235,10 +239,11 @@ class SchoolNativeCoverageTests(unittest.TestCase):
             task_goal='2026年10月19日科学课带透明塑料杯一个和纸巾两张，装在同一个袋子里；这些用品用于课堂观察，不要求在家提前做实验。')
         return payload, refs, [fix, oral, cups, question]
 
-    def test_full_completion_and_handback_anchor_saves_the_handback_day_and_a_short_anchor_stays_unproven(self):
+    def test_full_completion_and_handback_anchor_saves_the_handback_day_and_a_proven_short_anchor_keeps_the_whole_outcome(self):
         full = '数学：2026年10月17日21:00前订正《小数运算练习》第2页第3、5、7题，每题写出正确过程并写一句错因；订正本2026年10月18日第一节课前交给数学课代表'
         short = '订正《小数运算练习》第2页第3、5、7题，每题写出正确过程并写一句错因'
-        for quote, expected in ((full, ('2026-10-18', 'accepted')), (short, ('2026-10-18', 'pending'))):
+        # All four originals share one stored second; only their collector order puts the correction after the list.
+        for quote in (full, short):
             with self.subTest(quote=quote[:12]):
                 self.setUp()
                 payload, refs, replies = self._correction_batch(quote)
@@ -246,17 +251,50 @@ class SchoolNativeCoverageTests(unittest.TestCase):
                 self.assertEqual(agent.run_once(self.app, self.now)['failed'], 0)
                 with self.store._db() as c:
                     rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+                    self.assertEqual(len(rows), 4, 'three independent outcomes and the parent relay')
                     row, = [r for r in rows if '小数运算练习' in r['title']]
-                    state = json.loads(row['plan'])['school_task']['state']
-                    self.assertEqual(state, 'ready' if expected[1] == 'accepted' else 'review')
-                    for words in ('2026年10月17日21:00前完成', '每题写出正确过程并写一句错因', '订正本2026年10月18日第一节课前交给数学课代表'):
+                    # The short anchor lies inside the one located outcome, so the program states that outcome's whole original.
+                    self.assertEqual((row['due'], row['state'], json.loads(row['plan'])['school_task']['state']),
+                                     ('2026-10-18', 'accepted', 'ready'))
+                    for words in ('2026年10月17日21:00前订正', '第3、5、7题', '每题写出正确过程并写一句错因',
+                                  '订正本2026年10月18日第一节课前交给数学课代表'):
                         self.assertIn(words, row['body'])
+                    self.assertNotIn('口算', row['body'], 'the independent oral drill keeps its own outcome')
                     self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs[:2])
                     oral, = [r for r in rows if '口算' in r['title']]
                     self.assertEqual(oral['due'], '2026-10-18')
+                    self.assertIn('6道', oral['body'])
+                    self.assertNotIn('小数运算练习', oral['body'])
+                    self.assertEqual([e['ref'] for e in json.loads(oral['evidence'])], refs[:2])
+                    cups, = [r for r in rows if '塑料杯' in r['title']]
+                    self.assertEqual((cups['due'], [e['ref'] for e in json.loads(cups['evidence'])]), ('2026-10-19', refs[3:]))
+                    relay, = [r for r in rows if '不用交订正本' in r['title']]
+                    self.assertEqual((json.loads(relay['plan'])['school_task']['state'], relay['task_id']), ('reference', ''))
                     tasks = [dict(r) for r in c.execute('SELECT * FROM manual_tasks')]
-                    self.assertEqual(any('小数运算练习' in t['title'] for t in tasks), expected[1] == 'accepted')
+                    self.assertTrue(any('小数运算练习' in t['title'] for t in tasks))
                     self.assertFalse(any('不用交订正本' in t['action'] for t in tasks), 'the parent relay stays reference')
+                self.doCleanups()
+
+    def test_a_same_second_correction_binds_only_a_known_later_order_from_the_same_teacher(self):
+        oral_quote = '2026年10月18日数学课前独立完成10道两位小数加减口算，写在口算本上'
+        cases = (('another teacher', dict(corrector='synthetic-teacher-3')),
+                 ('equal order', dict(orders=['11', '12', '11', '14'])),
+                 ('unknown order', dict(orders=['11', '12', None, '14'])),
+                 ('reversed order', dict(orders=['13', '12', '11', '14'])),
+                 # A short anchor in both the correction's restated questions and the list, or another outcome's own clause.
+                 ('ambiguous anchor', dict(quote='第3、5、7题')),
+                 ('cross-item anchor', dict(quote=oral_quote)))
+        for name, options in cases:
+            with self.subTest(case=name):
+                self.setUp()
+                quote = options.pop('quote', '订正《小数运算练习》第2页第3、5、7题，每题写出正确过程并写一句错因')
+                payload, refs, replies = self._correction_batch(quote, **options)
+                self._use_replies(payload, [dict(proposals=replies)])
+                self.assertEqual(agent.run_once(self.app, self.now)['failed'], 1, 'the whole batch stays for retry')
+                self.assertEqual(self.store.snapshot()['sources'][0]['pending_message_count'], 4)
+                with self.store._db() as c:
+                    self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_items WHERE kind='school'").fetchone()[0], 0)
+                    self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0], 0)
                 self.doCleanups()
 
     def test_a_clause_headed_by_its_full_date_states_that_day_whatever_its_verb(self):
