@@ -17,7 +17,10 @@ async function demoServer(){
  const child=spawn(process.env.FAMILY_TEST_PYTHON||'python3',['demo.py','--port',String(port)],{cwd:__dirname,env,stdio:['ignore','pipe','pipe']});
  let failure;child.on('error',e=>failure=e);child.stdout.resume();child.stderr.resume();
  const stop=async()=>{if(failure||child.exitCode!==null||child.signalCode!==null)return;const exited=once(child,'exit');child.kill('SIGINT');await Promise.race([exited,delay(2500)]);if(child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await exited}};
- try{await eventually(async()=>{
+ try{await eventually(async()=>{if(failure)throw failure;if(child.exitCode!==null)throw Error('Synthetic demo exited');try{return (await fetch(url,{signal:AbortSignal.timeout(400)})).ok}catch{return false}},'temporary demo startup');return {url,stop}}catch(e){await stop();throw e}
+}
+
+(async()=>{
  let server,browser;
  try{
   // The state the app itself saved: exact old source seed -> new natural run_once audit (synthetic reply) -> snapshot.
