@@ -335,6 +335,35 @@ class TwoFormsInOneMessageTests(unittest.TestCase):
             self.assertFalse('听写背诵订正材料领取登记单' in text and '秋游安全告知书' in text, 'two dated forms merged into one task: ' + text)
         self.assertEqual(state['jobs'][before['items'][0]['job_id']], before['jobs'][before['items'][0]['job_id']])
 
+    def test_two_form_pending_batch_is_audited_into_two_separate_outcomes(self):
+        # Root's actual counter: the old source saved one pending review for the first form only; refusing the merge
+        # must not leave the second form unread forever. SYNTHETIC history-mode reply: first covered, second independent.
+        before = self.rows()
+        old_item, = before['items']
+        ref = [dict(ref='message:p1-two-forms:1')]
+        first = dict(SYNTHETIC['proposals'][0], evidence=ref, action_quote=TEXT.split('。')[0] + '。', existing_item_id=old_item['id'])
+        second = dict(first, title_quote=self.SECOND, task_title='家长签《秋游安全告知书》并交回', task_goal=self.SECOND,
+                      action_quote=self.SECOND, existing_item_id='')
+        calls = [self.run_round(dict(return_value=dict(proposals=[first, second])), self.now + dt.timedelta(minutes=41 * i))[0]
+                 for i in range(3)]
+        self.assertEqual(sum(calls), 1, 'one bounded audit call for the old batch')
+        state = self.rows()
+        self.assertEqual(next(i for i in state['items'] if i['id'] == old_item['id']), old_item, 'the untouched old review keeps its ID')
+        found = [i for i in state['items'] if i['id'] != old_item['id'] and '秋游安全告知书' in i['body']]
+        self.assertEqual(len(found), 1, 'the second form is its own traceable outcome')
+        self.assertNotIn('听写背诵订正材料领取登记单', found[0]['body'])
+        self.assertIn('message:p1-two-forms:1', found[0]['evidence'])
+        self.assertEqual(found[0]['due'], '2026-10-22')
+        for text in [t['action'] for t in state['tasks']] + [i['body'] for i in state['items']]:
+            self.assertFalse('听写背诵订正材料领取登记单' in text and '秋游安全告知书' in text, 'merged: ' + text)
+        self.assertEqual(state['jobs'][old_item['job_id']], before['jobs'][old_item['job_id']])
+        self.assertEqual((state['messages'], state['cursor']), (before['messages'], before['cursor']))
+        self.store = agent.Store(self.app.connect, self.app.profiles, self.data, app=self.app)
+        for minutes in (200, 241, 400):
+            count, _ = self.run_round(dict(side_effect=AssertionError('the audit is once per old batch')), self.now + dt.timedelta(minutes=minutes))
+            self.assertEqual(count, 0)
+        self.assertEqual(self.rows()['items'], state['items'])
+
 
 # SR02: the exact old source auto-accepted the first of two independent actions in one notice and never saw the second.
 # Seed probes the old source rejected or held for review (not old-accepted, so not SR02 seeds): two messages with one
