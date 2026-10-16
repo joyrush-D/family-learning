@@ -524,6 +524,69 @@ class SchoolNativeCoverageTests(unittest.TestCase):
             self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM agent_items ORDER BY id')], item_rows)
             self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')], task_rows)
 
+    _COMPOUND = '2026年10月22日前，请填写《虚构营地报名表》的学生姓名并在《虚构交通回执》上完成家长签字，两份分别交回班主任。'
+
+    def _compound_reply(self, ref, goal, text=None):
+        return dict(proposals=[dict(title_quote=text or self._COMPOUND, focus='school', due='2026-10-22', evidence=[dict(ref=ref)],
+                                    learning_subject='', learning_goal_id='', task_title='填写营地报名表并交回', task_goal=goal,
+                                    task_advice='', task_state='ready', task_reason='虚构固定回执，仅作程序验证。', task_change='new',
+                                    task_target_id='', task_purpose='admin', task_submission='')])
+
+    def test_one_clause_with_two_named_outcomes_rejects_a_goal_missing_one_then_saves_the_complete_reply(self):
+        payload, refs = self._ingest([self._COMPOUND])
+        partial = self._compound_reply(refs[0], '2026年10月22日前填写《虚构营地报名表》的学生姓名并交回班主任。')
+        full = self._compound_reply(refs[0], self._COMPOUND)
+        self._use_replies(payload, [partial, full])
+        first = agent.run_once(self.app, self.now)
+        # The full original and its full title_quote were read; a goal dropping the second form is no complete summary.
+        self._assert_rejected_batch(payload, first)
+        recovered = agent.run_once(self.app, self.now + dt.timedelta(minutes=6))
+        self.assertEqual((recovered['failed'], recovered['processed']), (0, 1))
+        self.assertEqual(self.model.call_count, 2)
+        with self.store._db() as c:
+            saved = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+            self.assertEqual(len(saved), 1, 'one combined task with both outcomes is a complete reading; no task count is forced')
+            row = saved[0]
+            self.assertEqual((row['state'], row['due']), ('accepted', '2026-10-22'))
+            for words in ('《虚构营地报名表》', '学生姓名', '《虚构交通回执》', '家长签字', '两份', '交回班主任'):
+                self.assertIn(words, row['body'])
+            self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
+            task = c.execute('SELECT * FROM manual_tasks').fetchone()
+            self.assertEqual((task['action'], task['due']), (row['body'], '2026-10-22'))
+            self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages')], [1])
+            self.assertEqual([json.loads(r[0])['text'] for r in c.execute('SELECT payload FROM agent_messages')], [self._COMPOUND])
+            item_rows = [tuple(r) for r in c.execute('SELECT * FROM agent_items ORDER BY id')]
+            task_rows = [tuple(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['processed'], replay['created']), (0, 0))
+        self.assertEqual(self.model.call_count, 2)
+        with self.store._db() as c:
+            self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM agent_items ORDER BY id')], item_rows)
+            self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')], task_rows)
+
+    def _compound_control(self, text, goal):
+        payload, refs = self._ingest([text])
+        self._use_replies(payload, [self._compound_reply(refs[0], goal, text)])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        with self.store._db() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+            self.assertEqual(len(rows), 1, 'one form keeps one task')
+            self.assertEqual(rows[0]['state'], 'accepted')
+            self.assertIn(goal.rstrip('。'), rows[0]['body'])
+
+    def test_one_named_form_with_its_continuous_steps_keeps_the_short_goal(self):
+        self._compound_control('请于10月22日前填写《虚构营地报名表》并交回班主任。', '10月22日前填写《虚构营地报名表》并交回班主任。')
+
+    def test_a_conjunction_inside_one_title_is_no_second_outcome(self):
+        self._compound_control('请于10月22日前填写《虚构营地并联活动报名表》并交回班主任。', '10月22日前填写《虚构营地并联活动报名表》并交回班主任。')
+
+    def test_a_reference_title_beside_the_form_is_no_second_outcome(self):
+        self._compound_control('请于10月22日前填写《虚构营地报名表》并交回班主任，《虚构营地说明》仅供了解。', '10月22日前填写《虚构营地报名表》并交回班主任。')
+
+    def test_a_negated_second_title_is_no_second_outcome(self):
+        self._compound_control('请于10月22日前填写《虚构营地报名表》并交回班主任，《虚构交通回执》并不是本次要交的材料。', '10月22日前填写《虚构营地报名表》并交回班主任。')
+
     def test_pending_message_counts_are_source_scoped_and_reject_stale_bindings(self):
         self.assertEqual(self.store.snapshot()['sources'][0]['pending_message_count'], 0)
         self._two_actions()
