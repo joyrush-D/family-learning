@@ -3276,6 +3276,21 @@ def _school_native_command(clause):
     return ''
 
 
+def _school_native_reference(clause):
+    """Material its own clause limits to information (阅读活动参考资料仅供了解，自愿查看) assigns no outcome.
+
+    Only a material noun directly followed by 仅供/只供, with every further comma part a bare voluntary use, counts.
+    A verb-first, dated, counted, quoted or obliged part, or any other part, keeps the clause an outcome. Later
+    sentences keep their own reading either way: a reference clause neither absorbs nor is absorbed by them.
+    """
+    value=re.sub(r'^'+_SCHOOL_NATIVE_MARKER,'',clause.strip())
+    if re.search(_SCHOOL_NATIVE_DATE,value):return False
+    plain=r'(?:(?!请|须|需|必|务|应|要求)[^\d，,“”"‘’「」『』（）()《》\s])'
+    first,*rest=re.split(r'[，,]',value)
+    if not re.fullmatch(plain+r'{1,30}?(?:资料|材料)(?:仅|只)供'+plain+r'{1,12}',first.strip()):return False
+    return all(re.fullmatch(r'(?:可以?|请)?(?:家长|孩子|学生|同学们?|大家)?(?:可以?)?自愿[^\W\d_]{0,4}',part.strip()) for part in rest)
+
+
 def _school_native_object(text):
     """Only a literal worksheet name can join another answer step to it."""
     match=re.search(r'(?:完成|做|写|订正|打印|准备|领取)(?:好)?\s*(?:一份|这份|该份|该)?([^。；;，,：:\n]{0,20}(?:练习卷|练习册|作业本|试卷))',text)
@@ -3432,7 +3447,10 @@ def _school_native_blocks(text):
         # not another worksheet. Other reading/learning outcomes still split.
         step=(container and bool(re.match(r'^(?:完成|做|写)[^。；;]*(?:题|这份|该卷)',clause))
               and (not _school_native_object(clause) or _school_native_object(clause)==container_object))
-        if purpose and not step:
+        if purpose and not step and _school_native_reference(clause):
+            # Its own segment, so following notes stay where they were; it is never emitted as a required outcome.
+            pieces.append(dict(start=start,end=end,purpose='reference',primary=clause))
+        elif purpose and not step:
             obj=_school_native_object(clause)
             conditions=[]
             if preparation and obj and all(_school_native_object(text[left:right])==obj for left,right in preparation):
@@ -3461,6 +3479,7 @@ def _school_native_blocks(text):
             preparation.append((start,end))
     if preparation and pieces:
         raise AgentError('准备资料尚未能归到唯一学校行动，完整原批次保留',code='school_action_coverage')
+    pieces=[part for part in pieces if part['purpose']!='reference']
     if any(count!=len(pieces) for count,_ in shared):
         raise AgentError('共同标准的项数与独立行动不一致，完整原批次保留',code='school_action_coverage')
     # A stated total is an extra consistency check, never a prerequisite.
