@@ -71,6 +71,16 @@ def seed(root, source=SOURCE, text=TEXT, reply=SYNTHETIC, script=SEED):
     return json.loads(out.strip().splitlines()[-1])
 
 
+def assert_reread_in_place(case, old, new):
+    """Root counter 3: an untouched generated review the batch audit reads again keeps its ID, batch, child and original
+    generated snapshot; its new understanding is written once under the same row (never a copy), traceable to the old row."""
+    case.assertEqual({k: new[k] for k in ('id', 'job_id', 'child_id', 'kind', 'created')}, {k: old[k] for k in ('id', 'job_id', 'child_id', 'kind', 'created')})
+    plan, before = json.loads(new['plan']), json.loads(old['plan'])
+    case.assertEqual(plan['school_generated_snapshot'], before['school_generated_snapshot'], 'the original proof stays')
+    case.assertEqual(plan['school_batch_reread']['previous'], agent._hash(old), 'traceable to the exact old row')
+    case.assertTrue(plan['school_history_job'].startswith('school-history:'))
+
+
 class SavedSchoolRereadTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory(prefix='synthetic-saved-reread-')
@@ -354,7 +364,7 @@ class TwoFormsInOneMessageTests(unittest.TestCase):
                  for i in range(3)]
         self.assertEqual(sum(calls), 1, 'one bounded audit call for the old batch')
         state = self.rows()
-        self.assertEqual(next(i for i in state['items'] if i['id'] == old_item['id']), old_item, 'the untouched old review keeps its ID')
+        assert_reread_in_place(self, old_item, next(i for i in state['items'] if i['id'] == old_item['id']))  # was byte-identical (v4)
         found = [i for i in state['items'] if i['id'] != old_item['id'] and '秋游安全告知书' in i['body']]
         self.assertEqual(len(found), 1, 'the second form is its own traceable outcome')
         self.assertNotIn('听写背诵订正材料领取登记单', found[0]['body'])
@@ -423,7 +433,7 @@ class TwoFormsInOneMessageTests(unittest.TestCase):
         self.assertEqual([k for k in state['jobs'] if k.startswith('school-history:')], keys, 'no new identity after retry')
         self.assertEqual(state['jobs'][keys[0]]['done'], 1)
         self.assertEqual(len([i for i in state['items'] if '秋游安全告知书' in i['body']]), 1)
-        self.assertEqual(next(i for i in state['items'] if i['id'] == old_item['id']), old_item)
+        assert_reread_in_place(self, old_item, next(i for i in state['items'] if i['id'] == old_item['id']))  # was byte-identical (v4)
 
 
 class OneDeadlineTwoActionsTests(unittest.TestCase):
@@ -466,7 +476,7 @@ class OneDeadlineTwoActionsTests(unittest.TestCase):
         for text in [t['action'] for t in state['tasks']] + [i['body'] for i in state['items']]:
             self.assertFalse('听写背诵订正材料领取登记单' in text and '秋游安全告知书' in text, 'merged: ' + text)
         self.assertEqual(len([i for i in state['items'] if '秋游安全告知书' in i['body']]), 1)
-        self.assertEqual(next(i for i in state['items'] if i['id'] == old_item['id']), old_item)
+        assert_reread_in_place(self, old_item, next(i for i in state['items'] if i['id'] == old_item['id']))  # was byte-identical (v4)
         self.assertEqual(state['jobs'][old_item['job_id']], before['jobs'][old_item['job_id']])
 
 
@@ -696,7 +706,8 @@ class MixedStoreTests(unittest.TestCase):  # SR05: eligible + exhausted + parent
         self.assertEqual(seen.count(['message:p1-mix-b:1']), 3, 'the failing audit stops at three attempts')
         self.assertEqual(len([i for i in state['items'] if '秋游安全告知书' in i['body'] and 'p1-mix-a' in i['evidence']]), 1)
         self.assertLessEqual(seen.count(['message:p1-mix-c:1']), 1)
-        for old in [a_old, c_old, by[self.B['id']][0]]:
+        assert_reread_in_place(self, a_old, next(i for i in state['items'] if i['id'] == a_old['id']))  # untouched review: was byte-identical (v4)
+        for old in [c_old, by[self.B['id']][0]]:  # dismissed and auto-accepted rows are never rewritten
             self.assertEqual(next(i for i in state['items'] if i['id'] == old['id']), old, 'old rows kept')
         self.assertFalse([i for i in state['items'] if 'p1-mix-c' in i['evidence'] and i['id'] != c_old['id']], 'dismissed not copied')
         for key, job in before['jobs'].items():
