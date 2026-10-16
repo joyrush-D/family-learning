@@ -33,6 +33,8 @@ FOCUS = {
     'listen': '可以先问问孩子愿意谈哪一部分、有什么困难、希望得到什么帮助。',
     'clarify': '这份记录还有哪些不清楚的地方？可以补充当时情境、原件或孩子自己的说法。',
 }
+# A school reference the model left without its own summary is kept as material, never as a todo awaiting details.
+SCHOOL_REFERENCE_NOTE = '按参考资料保留，不自动加入待办或学习目标；内容以原通知为准。'
 
 _COLLECTOR_PLACEHOLDER = re.compile(r'\[(?:[a-z_]{1,40}\s*[:：]\s*内容未读取[^\]]*|图片|图片原件：\d+份，内容未读|语音|视频|文件|资料|包含未读取的非文字内容|已撤回[，,]\s*正文未读取)\]', re.IGNORECASE)
 
@@ -421,8 +423,33 @@ def _school_handback(brief, submission, evidence):
     return submission
 
 
+_SCHOOL_PURPOSE_LABEL=re.compile(r'^\s*('+'|'.join(PURPOSES)+r')\s*[：:]\s*',re.IGNORECASE)
+
+
+def _school_title_label(title, evidence):
+    """The model may fill the title's subject slot with its internal purpose word ("admin："). Only that
+    leading label goes; the purpose itself is kept, and a word the original message says stays."""
+    match=_SCHOOL_PURPOSE_LABEL.match(title)
+    if not match or not title[match.end():].strip() or not evidence:return title
+    if any(match.group(1).lower() in str(e.get('text','')).lower() for e in evidence):return title
+    return title[match.end():].strip()
+
+
+def _school_reference_title(quote):
+    """A short heading for reference material: the first meaningful original line, labelled as material."""
+    lines=[s.strip() for s in str(quote or '').split('\n') if s.strip()]
+    line=next((s for s in lines if re.sub(r'[\W_]','',s) not in ('','通知','重要通知','温馨提醒','提醒','所有人')),lines[0] if lines else '')
+    return '参考资料：'+(line[:60]+'…' if len(line)>60 else line) if line else '参考资料'
+
+
+def _school_unsummarized(row, brief):
+    """A generated candidate still without the model's own summary: the review placeholder or its reference wording."""
+    return row['body'] in (FOCUS['school'],SCHOOL_REFERENCE_NOTE) and not brief.get('title') and not brief.get('goal')
+
+
 def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=None, pdf=None, material=None, *, separate_learning=False):
     brief={key:_text(value,key,limit).strip() for key,limit in [('title',80),('goal',2000),('advice',1200),('reason',400)]}
+    brief['title']=_school_title_label(brief['title'],evidence)
     state=value.get('state','review')
     if state not in ('ready','review','reference'): raise AgentError('学校事项状态无法核对')
     purpose=value.get('purpose','');submission=_text(value,'submission',600).strip()
@@ -1274,7 +1301,7 @@ class Store:
                 brief = json.loads(raw['plan']).get('school_task', {})
                 refs = [e['ref'] for e in json.loads(raw['evidence'])]
                 item = dict(id=raw['id'], title=brief.get('title') or raw['title'], goal=brief.get('goal', ''),
-                    state=raw['state'], purpose=brief.get('purpose', ''), reason=brief.get('reason', ''), refs=refs)
+                    state=raw['state'], school_state=brief.get('state', ''), purpose=brief.get('purpose', ''), reason=brief.get('reason', ''), refs=refs)
                 for ref in refs: by_ref.setdefault(ref, []).append(item)
             for _, source, message, _ in selected:
                 view = self._message_view(c, source, message, upload_info)
@@ -3930,6 +3957,9 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 elif due and declared and declared!={due}:
                     brief.update(state='review',reason=brief['reason'][:300]+' 摘要中的日期与本项原文日期不一致，未自动确认；请核对原通知。')
             if brief['title'] and brief['goal']: item.update(title=brief['title'],body=brief['goal'])
+            elif brief['state']=='reference' and title!='[资料]':
+                # Same classification, same wording everywhere: material is not a todo waiting for its details.
+                item.update(title=brief['title'] or _school_reference_title(title),body=brief['goal'] or SCHOOL_REFERENCE_NOTE)
             if not _keeps_learning(brief): item.get('plan',{}).pop('school_learning',None)
             item.setdefault('plan',{})['school_task']=brief
             linked_cited=sorted({q['ref'] for q in cited}&set(native_action.get('linked',[]))) if native_action else []
@@ -4507,7 +4537,7 @@ def _school_pending_original(row):
     if row['state']!='pending' or row['task_id']:return False
     plan=json.loads(row['plan']);brief=plan.get('school_task',{});action=plan.get('school_original_action',{})
     if plan.get('school_history_job') or plan.get('school_history_uncertain'):return False
-    if row['body']==FOCUS['school'] and not brief.get('title') and not brief.get('goal'):return True
+    if _school_unsummarized(row,brief):return True
     if row['title']!=brief.get('title') or row['body']!=brief.get('goal') or not brief.get('origin_basis'):return False
     if action.get('requirements'):return False
     from family_agenda import deadlines
@@ -4820,8 +4850,8 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
             raise AgentError('已有原件行动须保留原编号，不能重复新增')
         if old and not old_anchor.get('identity'):
             old_plan=json.loads(old['plan']);old_brief=old_plan.get('school_task',{})
-            pointer=(old['state']=='pending' and not old['task_id'] and old['body']==FOCUS['school']
-                     and not old_brief.get('title') and not old_brief.get('goal') and not old_plan.get('school_history_job'))
+            pointer=(old['state']=='pending' and not old['task_id'] and _school_unsummarized(old,old_brief)
+                     and not old_plan.get('school_history_job'))
             literal=_history_anchor(old,{e['ref']:e['text'] for e in evidence})
             matched=bool(literal) and all(any(a['ref']==ref and quote in a['quote'] for a in anchors) for ref,quote in literal.items())
             if not pointer and not matched and not generated_match:
