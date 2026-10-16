@@ -74,21 +74,44 @@ async function saveThroughFailures(page,dialog,form,count){
     assert.deepEqual([task.agenda.complete_on,task.agenda.due_on,task.agenda.due_kind,task.agenda.scheduled_on],[complete,handback,'handback',day]);
     const other_items=await study(other.id);assert.equal(other_items.filter(i=>i.title===title).length,0,'current child only');
     await proof(p,'parent-today-reopen-'+width);
-    if(width===1440){
-     // The parent corrects one teacher day and clears the other on the same saved item through the existing edit form.
-     const later=shift(day,9);await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="study"]').click();await p.locator('[data-study-ready]').waitFor();
+    {
+     // The existing generic task form ("修改标题 / 日期") shows the teacher handback day and sends it back unchanged; one 503
+     // before any write and one lost receipt resend the same key; the copy is not saved as the parent's own deadline.
+     const card=p.locator('article.task').filter({hasText:title}).first();await card.locator('details.task-more > summary').click();await card.locator('[data-task-focus]').click();
+     const fd=p.locator('#taskFocusDialog'),ff=p.locator('#taskFocusForm'),bodies=[];let phase=0;
+     assert.equal(await ff.locator('[name="due_on"]').inputValue(),handback);await ff.locator('[name="next_action"]').fill('先核对原要求 '+width);await fit(p);await proof(p,'parent-task-form-'+width);
+     await p.route('**/api/task/focus',async r=>{bodies.push(r.request().postData());phase++;
+      if(phase===1)return r.fulfill({status:503,json:{error:'虚构安排首次不可用'}});
+      if(phase===2){await r.fetch();return r.fulfill({status:503,json:{error:'虚构安排回执丢失'}})}
+      return r.continue()});
+     const current=async()=>(await(await fetch(host.url+'api/state')).json()).tasks.find(t=>t.title===title);
+     await ff.locator('[type="submit"]').click();await eventually(async()=>/首次不可用/.test(await fd.innerText()),'task form 503 shown');
+     assert.equal((await current()).focus.version,0,'503 before write leaves the task form unsaved');
+     await ff.locator('[type="submit"]').click();await eventually(async()=>/回执丢失/.test(await fd.innerText()),'task form lost receipt shown');
+     assert.equal((await current()).focus.version,1,'committed once before the lost receipt');
+     await ff.locator('[type="submit"]').click();await eventually(async()=>!(await fd.evaluate(x=>x.open)),'task form closed');await p.unroute('**/api/task/focus');
+     assert.equal(bodies.length,3);assert.equal(new Set(bodies).size,1,'same task-form key and payload on every retry');assert.equal(JSON.parse(bodies[0]).due_on,handback);
+     const focused=await current();
+     assert.deepEqual([focused.focus.version,focused.focus.due_on,focused.focus.next_action,focused.agenda.due_on,focused.agenda.due_kind,focused.agenda.scheduled_on],[1,'','先核对原要求 '+width,handback,'handback',day]);
+     // The parent corrects or clears teacher days on the same saved item through the existing study edit form.
+     const later=shift(day,9),next=width===360?{complete_on:later,handback_on:''}:{complete_on:'',handback_on:later};
+     await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="study"]').click();await p.locator('[data-study-ready]').waitFor();
      const row=p.locator('[data-study-item]').filter({hasText:title});await row.locator('[data-study-editor="item"]').click();const edit=p.locator('[data-study-form="item"]');
      assert.equal(await edit.locator('[name="complete_on"]').inputValue(),complete);assert.equal(await edit.locator('[name="handback_on"]').inputValue(),handback);
-     await edit.locator('[name="handback_on"]').fill(later);await edit.locator('[name="complete_on"]').fill('');await proof(p,'parent-correct-'+width);await edit.locator('[type="submit"]').click();
-     await eventually(async()=>(await study()).find(i=>i.title===title).report.handback_on===later,'correction saved');
+     await edit.locator('[name="handback_on"]').fill(next.handback_on);await edit.locator('[name="complete_on"]').fill(next.complete_on);await fit(p);await proof(p,'parent-correct-'+width);await edit.locator('[type="submit"]').click();
+     await eventually(async()=>{const i=(await study()).find(i=>i.title===title);return i.report.handback_on===next.handback_on&&i.report.complete_on===next.complete_on},'correction saved');
      const fixed=(await study()).find(i=>i.title===title);
-     assert.deepEqual([fixed.id,fixed.report.complete_on,fixed.report.text,fixed.report.date_history.length,fixed.report.date_history[0].handback_on],[saved.id,'',words,1,handback]);
-     const again=(await(await fetch(host.url+'api/state')).json()).tasks.find(t=>t.title===title);
-     assert.deepEqual([again.agenda.complete_on,again.agenda.due_on,again.agenda.due_kind,again.agenda.scheduled_on],['',later,'handback',day]);
+     assert.deepEqual([fixed.id,fixed.report.complete_on,fixed.report.handback_on,fixed.report.text,fixed.report.date_history.length,fixed.report.date_history[0].handback_on,fixed.report.date_history[0].complete_on],[saved.id,next.complete_on,next.handback_on,words,1,handback,complete]);
+     const again=await current();
+     assert.deepEqual([again.agenda.complete_on,again.agenda.due_on,again.agenda.due_kind,again.agenda.scheduled_on,again.focus.due_on,again.focus.next_action],[next.complete_on,next.handback_on,next.handback_on?'handback':'',day,'','先核对原要求 '+width]);
+     // Reopened Today reads the same saved days: after the clear no handback/deadline is left from the task-form copy.
+     await p.goto(host.url);const reopened=p.locator('article.task').filter({hasText:title}).first();await reopened.waitFor();const shown=await reopened.innerText();
+     if(next.handback_on)assert.match(shown,new RegExp(later));else{assert.doesNotMatch(shown,new RegExp(handback+'|交回'));assert.match(shown,/截止待核对/);assert.match(shown,new RegExp('完成：'+later))}
+     await fit(p);await proof(p,'parent-after-correct-'+width);
      assert.equal((await study()).filter(i=>i.title===title).length,1,'same one item after correction');
     }
     assert.equal(drafts,0,'manual flow sends no model request');assert.deepEqual(errors,[]);
-    checks.push({width,role:'parent',closeReopenDraft:true,first503ZeroWrite:true,lostReceiptSameKey:true,oneTask:true,reloadSameDays:true,agenda:{complete_on:complete,due_on:handback,due_kind:'handback',scheduled_on:day},draftRequests:drafts});
+    checks.push({width,role:'parent',closeReopenDraft:true,first503ZeroWrite:true,lostReceiptSameKey:true,oneTask:true,reloadSameDays:true,agenda:{complete_on:complete,due_on:handback,due_kind:'handback',scheduled_on:day},taskForm503ZeroWrite:true,taskFormLostReceiptSameKey:true,taskFormCopyNotParentDeadline:true,studyEditCorrection:width===360?'handback cleared, complete changed':'handback changed, complete cleared',draftRequests:drafts});
    }catch(e){await proof(p,'parent-failure-'+width);throw e}finally{await p.close()}
    const invitation=await post('child-access/invite',{child_id:who.id});
    const context=await browser.newContext({viewport:{width,height:900}}),c=await context.newPage(),childErrors=[];let childDrafts=0;c.on('pageerror',e=>childErrors.push(e.message));c.on('dialog',d=>d.accept());
