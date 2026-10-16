@@ -226,6 +226,91 @@ class ExplicitOwnCompletionDayStoreTests(unittest.TestCase):
         self.assertEqual([x['agenda']['complete_on'] for x in listed('2026-10-18')], ['2026-10-18'])
 
 
+H02 = ('2026-10-17T16:30:00Z', 'publisher:fictional-today-h02:teacher', '虚构英语教师',
+       '英语：今晚把Unit 5词表每个单词抄写两遍，明天交给英语老师。')
+H02_STANDARDS = ('Unit 5词表', '每个单词', '两遍', '交给英语老师')
+
+
+class LabelledOwnTonightTests(unittest.TestCase):
+    def test_own_tonight_after_its_own_subject_label_is_its_completion_day_with_or_without_a_saved_heading(self):
+        sent = '2026-10-18T00:30:00+08:00'
+        cases = [
+            (H02[3], '', sent, '2026-10-19', '2026-10-18'),
+            (H02[3], '英语', sent, '2026-10-19', '2026-10-18'),
+            ('今晚把Unit 5词表每个单词抄写两遍，明天交给英语老师。', '', sent, '2026-10-19', '2026-10-18'),
+            # Only a handback day, a day inside a title, a negated clause, a handback not after the work, or no offset stays unknown.
+            ('英语：把Unit 5词表每个单词抄写两遍，明天交给英语老师。', '', sent, '2026-10-19', ''),
+            ('英语：《今晚》词表每个单词抄写两遍，明天交给英语老师。', '', sent, '2026-10-19', ''),
+            ('英语：今晚不用抄写Unit 5词表，明天交给英语老师。', '', sent, '2026-10-19', ''),
+            ('英语：今晚把Unit 5词表每个单词抄写两遍，今晚交给英语老师。', '', sent, '2026-10-18', ''),
+            (H02[3], '', '2026-10-18T00:30:00', '2026-10-19', ''),
+        ]
+        for quote, header, time, due, expected in cases:
+            with self.subTest(quote=quote, header=header, time=time, due=due):
+                self.assertEqual(family_agenda.completion_day(quote, header, time, due), expected)
+
+
+class LabelledOwnTonightStoreTests(unittest.TestCase):
+    setUp = native.SchoolNativeCoverageTests.setUp
+
+    def _save_h02(self, text, title):
+        self.now = self.fixture.now = dt.datetime(2026, 10, 18, 0, 31, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='11')
+        time, publisher, sender, _ = H02
+        payload['messages'] = [dict(id='11', message_order='11', time=time, kind='text', sender=sender, sender_id=publisher,
+                                    text=text, unread=False)]
+        self.store.ingest(payload)
+        ref = 'message:' + self.source['id'] + ':11'
+        reply = dict(proposals=[dict(title_quote=text, focus='school', due='2026-10-19', evidence=[dict(ref=ref)],
+                                     task_title=title, task_goal=text, task_advice='', learning_subject='英语', learning_goal_id='',
+                                     task_change='new', task_target_id='', task_state='ready', task_reason='原文明确。',
+                                     task_purpose='learning', task_submission='')])
+        self.model.side_effect = lambda *args, **kwargs: copy.deepcopy(reply)
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual(result['failed'], 0, result)
+        with self.store._db() as c:
+            tasks = [dict(r) for r in c.execute('SELECT * FROM manual_tasks')]
+            plans = [json.loads(r['plan']) for r in c.execute("SELECT plan FROM agent_items WHERE kind='school' AND state='accepted'")]
+        self.assertEqual((len(tasks), len(plans)), (1, 1), tasks)
+        # The disclosed shape: the saved own words keep their subject label and no native heading was saved with them.
+        self.assertEqual((plans[0].get('school_date_quote'), plans[0].get('school_native_action')), (text, None))
+        return payload, tasks[0]
+
+    def _roles(self, task, day):
+        return [(x['agenda']['complete_on'], x['agenda']['due_on'])
+                for x in self.app.calendar_snapshot(day, day)['agenda'] if x['task_id'] == task['id']]
+
+    def test_saved_h02_is_one_task_on_its_own_local_tonight_and_its_handback_day_after_replay_and_reopen(self):
+        payload, task = self._save_h02(H02[3], '英语：Unit 5词表每词抄写两遍')
+        self.assertEqual((task['due'], task['title']), ('2026-10-19', '英语：Unit 5词表每词抄写两遍'))
+        self.assertTrue(all(s in task['action'] for s in H02_STANDARDS), task['action'])
+        # The UTC sending date (17) is not its tonight; the local sending day 18 is its work day and 19 its handback.
+        self.assertEqual(self._roles(task, '2026-10-17'), [])
+        for day in ('2026-10-18', '2026-10-19'):
+            self.assertEqual(self._roles(task, day), [('2026-10-18', '2026-10-19')], (day, 'one ID counted once with its own roles'))
+        with self.app.connect() as c:
+            saved = [(t['due'], t['agenda']['complete_on'], t['agenda']['due_on']) for t in self.app.tasks(c) if t['id'] == task['id']]
+        self.assertEqual(saved, [('2026-10-19', '2026-10-18', '2026-10-19')])
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=6))
+        self.assertEqual((replay['failed'], replay['created'], self.model.call_count), (0, 0, 1))
+        with self.store._db() as c:
+            self.assertEqual([r['id'] for r in c.execute('SELECT id FROM manual_tasks')], [task['id']])
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0], 0)
+            self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')], payload['messages'])
+        reopened = agent.Store(self.app.connect, self.app.profiles, self.app.DATA, initialize=False)
+        self.assertIsNotNone(reopened)
+        with self.app.connect() as c:
+            again = [(t['due'], t['agenda']['complete_on']) for t in self.app.tasks(c) if t['id'] == task['id']]
+        self.assertEqual(again, [('2026-10-19', '2026-10-18')])
+        self.assertEqual(self._roles(task, '2026-10-18'), [('2026-10-18', '2026-10-19')])
+
+    def test_saved_labelled_handback_only_words_keep_no_completion_day_whatever_the_title_says(self):
+        payload, task = self._save_h02('英语：把Unit 5词表每个单词抄写两遍，明天交给英语老师。', '英语：今晚抄写Unit 5词表两遍')
+        self.assertEqual(task['due'], '2026-10-19')
+        for day in ('2026-10-18', '2026-10-19'):
+            self.assertEqual(self._roles(task, day), [('', '2026-10-19')], day)
+
+
 def saved_h01_state(path):
     """The app's own state and day calendars after the fictional H01 is saved by run_once, for the Chrome Today check."""
     case = ExplicitOwnCompletionDayStoreTests('test_saved_h01_is_one_task_on_its_work_day_and_its_handback_day_after_reopen_and_replay')
