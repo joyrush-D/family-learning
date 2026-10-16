@@ -2245,6 +2245,8 @@ function agentStatusHTML(full){
  const state={waiting:'等待首次整理',running:'正在整理',ready:'已完成本轮整理',idle:'已完成本轮整理',error:'整理遇到问题',partial:'部分资料待重试',needs_attention:'部分资料待重试',interrupted:'整理中断，等待恢复',disabled:'尚未启用'}[a.state]||'已保存运行状态';
  return `<section class="agent-status" aria-label="成长助手运行状态"><div><strong>成长助手</strong><span class="small">后台整理：${a.last_error||stale?'有资料待核对':state} · ${agentPending(currentChild()?.id).length} 条本孩子待看</span></div>${coverage}${full?'':'<button data-page="agent">查看提醒与状态 →</button>'}${full?`<p class="small">上次整理：${agentTime(a.last_run)}${stale?' · 已超过10分钟，请检查后台服务':''}</p>${currentSchoolPending()?`<p class="note" data-agent-school-pending>本孩子还有 ${currentSchoolPending()} 条学校消息尚未整理，原消息已保存；${!a.enabled?'后台整理尚未启用。':a.failed_jobs?'下方上限计数为全部孩子合计，未确认是否含这些消息。':'等待后台整理。'}</p>`:''}${a.last_error?`<p role="status" class="error">${esc(a.last_error)}</p>`:''}${a.failed_jobs?`<p class="error" data-agent-failed-jobs>${a.failed_jobs} 批资料仍未整理成功（全部孩子与资料类型合计）：已达3次自动尝试上限，不会自动恢复；原资料保留。 <button data-agent-retry>重新尝试</button></p>`:''}<details><summary>消息来源与读取情况</summary>${currentSourceCardsHTML()||empty('尚未配置消息来源')}</details><p class="small muted">后台整理只处理已保存资料，不代表所有群的新消息已同步。此处提醒不代表已向微信或手机发送通知。</p>`:''}</section>`;
 }
+// Registered after the page navigation listener: the today notice lands on its status line, not the top of the page.
+document.addEventListener('click',e=>{if(e.target.closest('[data-school-processing] [data-page=agent]'))revealLearningTarget($('[data-agent-school-pending]'))});
 let schoolInbox={child_id:'',day:'',offset:'0',view:null,busy:false,error:''};
 function schoolMessageHTML(v,index){
  const m=v.message,d=v.pdf_material||v.material_draft,ready=d?.state==='ready',ref=`message:${v.source_id}:${v.message_id}`;
