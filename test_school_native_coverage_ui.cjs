@@ -280,7 +280,8 @@ async function screenshot(page,name){await noOverflow(page);await page.screensho
    const pending=page.locator('#content [data-school-processing]');await pending.waitFor();assert.match(await pending.innerText(),new RegExp(proof.intake.pending_count+' 条学校消息尚未整理，作业清单可能不完整'));
    assert.equal(await page.locator('#content [data-today-task]').count(),0);assert.equal(await page.locator('#content .today-source-gap').count(),0,'successful collection and complete originals do not hide pending processing');
    await page.reload();await pending.waitFor();await screenshot(page,'processing-pending-'+width+'.png');
-   await pending.locator('[data-page=sources]').click();await page.locator('[data-current-source-pending]').waitFor();assert.match(await page.locator('[data-current-source-pending]').innerText(),new RegExp(proof.intake.pending_count+' 条消息尚未整理'));
+   await pending.locator('[data-page=agent]').click();await page.locator('[data-agent-school-pending]').waitFor();assert.match(await page.locator('[data-agent-school-pending]').innerText(),new RegExp('本孩子还有 '+proof.intake.pending_count+' 条学校消息尚未整理，原消息已保存'));await screenshot(page,'processing-status-'+width+'.png');
+   await page.locator('.agent-status summary').click();await page.locator('[data-current-source-pending]').waitFor();assert.match(await page.locator('[data-current-source-pending]').innerText(),new RegExp(proof.intake.pending_count+' 条消息尚未整理'));
    await page.locator('nav [data-page=home]').click();await page.locator('[data-child-filter="child-2"]').click();assert.equal(await pending.count(),0,'another child does not inherit the first child processing warning');
    await page.locator('[data-child-filter="child-1"]').click();await pending.waitFor();
    await page.unroute('**/api/state',failedRoute);await page.reload();

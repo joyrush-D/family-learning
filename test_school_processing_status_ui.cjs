@@ -20,5 +20,6 @@ assert.doesNotMatch(html,/另一孩子|已停止整理这些消息/);
 assert.strictEqual(run({failed_jobs:0,sources:[src('SYNTHETIC-A',0)]}),'');
 // The shared status component keeps the original manual retry and labels its global scope.
 const status=core.slice(core.indexOf('function agentStatusHTML('),core.indexOf('let schoolInbox='));
+assert.match(status,/本孩子还有 \$\{currentSchoolPending\(\)\} 条学校消息尚未整理，原消息已保存；\$\{!a\.enabled\?'后台整理尚未启用。':a\.failed_jobs\?'下方上限计数为全部孩子合计，未确认是否含这些消息。':'等待后台整理。'\}/);
 assert.match(status,/批资料仍未整理成功（全部孩子与资料类型合计）：已达3次自动尝试上限，不会自动恢复；原资料保留。 <button data-agent-retry>重新尝试<\/button>/);
 console.log('school processing status ok');
