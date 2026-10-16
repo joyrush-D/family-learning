@@ -573,6 +573,91 @@ class AutoAcceptedOldBatchTests(unittest.TestCase):
         self.assertEqual([t['title'] for t in state['tasks']], ['家长改过的任务'])
 
 
+SEED_MANY = SEED.replace("source, text, reply = json.loads(sys.argv[2]), sys.argv[3], json.loads(sys.argv[4])\n", "steps = json.loads(sys.argv[2])\n") \
+    .replace("[source]}", "[s['source'] for s in steps]}").replace("now = dt.datetime(2026, 10, 16, 18, 5, tzinfo=agent.TZ)\n", "calls = 0\nfor n, step in enumerate(steps):\n  source, text, reply = step['source'], step['text'], step['reply']\n  now = dt.datetime(2026, 10, 16, 18, 5 + 10 * n, tzinfo=agent.TZ)\n") \
+    .replace("\nstore.ingest(", "\n  store.ingest(").replace("\nwith patch(", "\n  with patch(").replace("\n    result = agent.run_once(app, now)\n", "\n    result = agent.run_once(app, now)\n  calls += model.call_count\n") \
+    .replace("calls=model.call_count", "calls=calls")
+
+
+class MixedStoreTests(unittest.TestCase):  # SR05: eligible + exhausted + parent-decided old batches + a later normal message
+    rows = SavedSchoolRereadTests.rows
+    run_round = SavedSchoolRereadTests.run_round
+    A, B, C = dict(SOURCE, id='p1-mix-a'), dict(SOURCE, id='p1-mix-b'), dict(SOURCE, id='p1-mix-c')
+    LATER = '2026年10月24日前，请在《图书借阅登记表》上填写学生姓名，家长签字后交回班主任。'
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(prefix='synthetic-mixed-')
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        one = lambda s, p: dict(proposals=[dict(p, evidence=[dict(ref='message:' + s['id'] + ':1')])])
+        steps = [dict(source=self.A, text=TEXT + TwoFormsInOneMessageTests.SECOND, reply=one(self.A, SYNTHETIC['proposals'][0])),
+                 dict(source=self.B, text=SR02_FIRST + SR02_SECOND, reply=one(self.B, SR02_OLD_REPLY['proposals'][0])),
+                 dict(source=self.C, text=TEXT, reply=one(self.C, SYNTHETIC['proposals'][0]))]
+        old = root_old = self.root / 'old-source'
+        root_old.mkdir()
+        archive = subprocess.run(['git', '-C', str(HERE), 'archive', OLD], check=True, capture_output=True).stdout
+        subprocess.run(['tar', '-x', '-C', str(old)], input=archive, check=True)
+        subprocess.run([sys.executable, '-I', '-c', 'import sys;p,s=sys.argv[1:3];del sys.argv[1:3];sys.path.insert(0,p);exec(s)',
+                        str(old), SEED_MANY, str(self.root / 'family'), json.dumps(steps)],
+                       check=True, capture_output=True, text=True, cwd=old, env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'))
+        self.data = self.root / 'family' / 'private'
+        self.app = family_review.load_app(self.root / 'family', self.data)
+        self.store = agent.Store(self.app.connect, self.app.profiles, self.data, app=self.app)
+        self.stack = ExitStack(); self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch('family_qq_capture.run_one', return_value=dict(state='disabled')))
+        self.stack.enter_context(patch.object(agent.family_teacher_public, 'run_one', return_value=dict(state='disabled')))
+        self.stack.enter_context(patch.object(family_media, 'run_one', return_value=dict(state='ready')))
+        self.stack.enter_context(patch.object(family_media, 'prepare_draft', return_value=dict(used=0, failed=0)))
+        self.stack.enter_context(patch('family_goals.Store.run', return_value=dict(used=0, failed=0, created=0, children=set())))
+        self.now = dt.datetime(2026, 10, 17, 3, 0, tzinfo=agent.TZ)
+
+    def test_mixed_old_batches_and_a_later_message_are_all_served_fairly(self):
+        before = self.rows()
+        by = {s['id']: [i for i in before['items'] if 'message:' + s['id'] + ':1' in i['evidence']] for s in (self.A, self.B, self.C)}
+        self.assertEqual([(len(by[s['id']]), by[s['id']][0]['state']) for s in (self.A, self.B, self.C)],
+                         [(1, 'pending'), (1, 'accepted'), (1, 'pending')], 'natural old store: two-form review, auto-accepted, TB02 review')
+        self.store.act(dict(action='dismiss', id=by[self.C['id']][0]['id']))  # the parent decides before the new code runs
+        decided = self.rows()
+        a_old, c_old = by[self.A['id']][0], next(i for i in decided['items'] if i['id'] == by[self.C['id']][0]['id'])
+        audit_a = TwoFormsInOneMessageTests.audit_reply(TwoFormsInOneMessageTests, a_old['id'])
+        audit_a = dict(proposals=[dict(p, evidence=[dict(ref='message:p1-mix-a:1')]) for p in audit_a['proposals']])
+        audit_c = dict(proposals=[dict(SYNTHETIC['proposals'][0], evidence=[dict(ref='message:p1-mix-c:1')],
+                                       action_quote=TEXT.split('。')[0] + '。', existing_item_id=c_old['id'])])
+        later = dict(proposals=[dict(SYNTHETIC['proposals'][0], title_quote=self.LATER, task_title='填写《图书借阅登记表》并交回',
+                                     task_goal=self.LATER, due='2026-10-24', evidence=[dict(ref='message:p1-mix-a:2')])])
+        seen = []
+        def model(messages, *args, **kwargs):  # SYNTHETIC replies chosen by the batch actually sent; B always fails
+            refs = {e['ref'] for e in json.loads(messages[1]['content'])['evidence']}
+            seen.append(sorted(refs))
+            if refs == {'message:p1-mix-a:2'}: return later
+            if refs == {'message:p1-mix-b:1'}: raise agent.family_llm.LLMDraftError('synthetic failure')
+            if refs == {'message:p1-mix-a:1'}: return audit_a
+            if refs == {'message:p1-mix-c:1'}: return audit_c
+            raise AssertionError(refs)
+        at, calls = self.now, []
+        for n in range(10):  # 40-minute steps keep every round in the shared five-minute history window
+            if n == 1:  # a later ordinary message arrives after the boundary was fixed
+                self.store.ingest(dict(source_id=self.A['id'], expected_cursor='11', cursor='12', checked_at=at.isoformat(),
+                    last_message_time='2026-10-17T03:30:00+08:00', error='', messages=[dict(id='2', message_order='2',
+                    time='2026-10-17T03:30:00+08:00', kind='text', sender='示例班主任', sender_id='school', text=self.LATER, unread=False)]))
+            count, _ = self.run_round(dict(side_effect=model), at)
+            self.assertLessEqual(count, 3)
+            calls.append(count)
+            at += dt.timedelta(minutes=40)
+        state = self.rows()
+        self.assertIn(['message:p1-mix-a:2'], seen[:3], 'the later normal message is not starved by the audits')
+        self.assertTrue(any(self.LATER in i['body'] for i in state['items']))
+        self.assertEqual(seen.count(['message:p1-mix-b:1']), 3, 'the failing audit stops at three attempts')
+        self.assertEqual(len([i for i in state['items'] if '秋游安全告知书' in i['body'] and 'p1-mix-a' in i['evidence']]), 1)
+        self.assertLessEqual(seen.count(['message:p1-mix-c:1']), 1)
+        for old in [a_old, c_old, by[self.B['id']][0]]:
+            self.assertEqual(next(i for i in state['items'] if i['id'] == old['id']), old, 'old rows kept')
+        self.assertFalse([i for i in state['items'] if 'p1-mix-c' in i['evidence'] and i['id'] != c_old['id']], 'dismissed not copied')
+        for key, job in before['jobs'].items():
+            self.assertEqual(state['jobs'][key], job, key)
+        self.assertEqual([m['processed'] for m in state['messages']], [1] * 4)
+
+
 class EmptyInstallTests(unittest.TestCase):
     def test_no_old_batch_means_zero_audit_calls_and_a_fixed_empty_boundary(self):  # SR05 all-empty
         directory = tempfile.TemporaryDirectory(prefix='synthetic-empty-')
