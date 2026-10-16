@@ -146,5 +146,82 @@ class KnownOriginalSixTodayTests(unittest.TestCase):
                          {'背诵': '2026-10-07', '抄写': '2026-10-07', '口算': ''})
 
 
+H01 = ('2026-10-16T18:00:00+08:00', 'publisher:fictional-today-h01:teacher', '虚构学校教师',
+       '语文：2026年10月18日20:00前完成《秋日观察》第2页，摘录两句，每句写一句理由；2026年10月20日早读交回语文老师。')
+H01_BODY = '2026年10月18日20:00前完成《秋日观察》第2页，摘录两句，每句写一句理由；2026年10月20日早读交回语文老师'
+
+
+class ExplicitOwnCompletionDayTests(unittest.TestCase):
+    def test_the_own_work_clause_explicit_day_is_its_completion_day_and_opposites_stay_unknown(self):
+        sent = H01[0]
+        cases = [
+            (H01[3], '语文', sent, '2026-10-20', '2026-10-18'),
+            (H01_BODY, '语文', sent, '2026-10-20', '2026-10-18'),
+            (H01_BODY, '', sent, '2026-10-20', '2026-10-18'),
+            # A same-item handback correction keeps the work's own day; a weekday is read on its own sending day.
+            (H01_BODY, '语文', sent, '2026-10-21', '2026-10-18'),
+            ('周日前完成《秋日观察》第2页，下周二早读交回', '语文', sent, '2026-10-20', '2026-10-18'),
+            # Only a handback day, a title's day, a handback/second day or negation in the work clause stays unknown.
+            ('语文：完成《秋日观察》第2页，摘录两句；2026年10月20日早读交回语文老师。', '语文', sent, '2026-10-20', ''),
+            ('语文：完成《2026年10月18日秋日观察》第2页，摘录两句；2026年10月20日早读交回语文老师。', '语文', sent, '2026-10-20', ''),
+            ('2026年10月20日早读交回语文老师', '语文', sent, '2026-10-20', ''),
+            ('语文：2026年10月18日前交回已写好的《秋日观察》第2页。', '语文', sent, '2026-10-18', ''),
+            ('语文：2026年10月18日或19日完成《秋日观察》第2页；2026年10月20日早读交回。', '语文', sent, '2026-10-20', ''),
+            ('语文：2026年10月18日不用完成《秋日观察》第2页；2026年10月20日早读交回。', '语文', sent, '2026-10-20', ''),
+            # A work day not before the handback keeps the one due role; no offset proves no day.
+            ('语文：2026年10月20日前完成《秋日观察》第2页；2026年10月20日早读交回。', '语文', sent, '2026-10-20', ''),
+            (H01_BODY, '语文', '2026-10-16T18:00:00', '2026-10-20', ''),
+        ]
+        for quote, header, time, due, expected in cases:
+            with self.subTest(quote=quote, header=header, time=time, due=due):
+                self.assertEqual(family_agenda.completion_day(quote, header, time, due), expected)
+
+
+class ExplicitOwnCompletionDayStoreTests(unittest.TestCase):
+    setUp = native.SchoolNativeCoverageTests.setUp
+
+    def test_saved_h01_is_one_task_on_its_work_day_and_its_handback_day_after_reopen_and_replay(self):
+        self.now = self.fixture.now = dt.datetime(2026, 10, 16, 20, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='11')
+        time, publisher, sender, text = H01
+        payload['messages'] = [dict(id='11', message_order='11', time=time, kind='text', sender=sender, sender_id=publisher,
+                                    text=text, unread=False)]
+        self.store.ingest(payload)
+        ref = 'message:' + self.source['id'] + ':11'
+        reply = dict(proposals=[dict(title_quote=H01_BODY, focus='school', due='2026-10-20', evidence=[dict(ref=ref)],
+                                     task_title='语文：完成《秋日观察》第2页摘录', task_goal='完成《秋日观察》第2页，摘录两句，每句写一句理由。\n2026年10月20日早读交回语文老师。',
+                                     task_advice='', learning_subject='语文', learning_goal_id='', task_change='new', task_target_id='',
+                                     task_state='ready', task_reason='原文明确。', task_purpose='learning',
+                                     task_submission='2026年10月20日早读交回语文老师')])
+        self.model.side_effect = lambda *args, **kwargs: copy.deepcopy(reply)
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual(result['failed'], 0, result)
+        with self.store._db() as c:
+            tasks = [dict(r) for r in c.execute('SELECT * FROM manual_tasks')]
+        self.assertEqual(len(tasks), 1, tasks)
+        task = tasks[0]
+        self.assertEqual(task['due'], '2026-10-20')
+
+        def listed(day):
+            return [x for x in self.app.calendar_snapshot(day, day)['agenda'] if x['task_id'] == task['id']]
+
+        for day, expected in (('2026-10-16', 1), ('2026-10-17', 1), ('2026-10-18', 1), ('2026-10-20', 1)):
+            found = listed(day)
+            self.assertEqual(len(found), expected, (day, 'one ID counted once that day'))
+            self.assertEqual((found[0]['agenda']['complete_on'], found[0]['agenda']['due_on']), ('2026-10-18', '2026-10-20'))
+        with self.app.connect() as c:
+            saved = [t for t in self.app.tasks(c) if t['id'] == task['id']]
+        self.assertEqual([(t['due'], t['agenda']['complete_on']) for t in saved], [('2026-10-20', '2026-10-18')])
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=6))
+        self.assertEqual((replay['failed'], replay['created']), (0, 0))
+        with self.store._db() as c:
+            self.assertEqual([r['id'] for r in c.execute('SELECT id FROM manual_tasks')], [task['id']])
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0], 0)
+            self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')], payload['messages'])
+        reopened = agent.Store(self.app.connect, self.app.profiles, self.app.DATA, initialize=False)
+        self.assertIsNotNone(reopened)
+        self.assertEqual([x['agenda']['complete_on'] for x in listed('2026-10-18')], ['2026-10-18'])
+
+
 if __name__ == '__main__':
     unittest.main()
