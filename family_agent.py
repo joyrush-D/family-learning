@@ -3091,8 +3091,9 @@ def _school_audit_mark(old_key):
 def _school_audit_boundary(store):
     """Fix once, before the first permitted round's intake, which done school batches predate the saved-batch audit.
 
-    Only current-revision batches with a non-pending row are marked (legacy revisions keep their own path; untouched
-    pending reviews keep the saved reread). Batches saved later are never added; no model call happens here.
+    Every current-revision batch of one child is marked, pending ones included: whether a batch may be read again is
+    separate from whether its old rows may be rewritten (legacy revisions keep their own path; a pending review the
+    saved reread takes is not audited as well). Batches saved later are never added; no model call happens here.
     """
     with store._db() as c:
         c.execute('BEGIN IMMEDIATE')
@@ -3102,14 +3103,21 @@ def _school_audit_boundary(store):
             groups.setdefault(r['job_id'],[]).append(r)
         for job in c.execute("SELECT id,fingerprint FROM agent_jobs WHERE id LIKE 'messages:%' AND done=1 ORDER BY id").fetchall():
             rows=groups.get(job['id'],[])
-            if (rows and len({r['child_id'] for r in rows})==1 and any(r['state']!='pending' for r in rows) and
+            if (rows and len({r['child_id'] for r in rows})==1 and
                     all(json.loads(r['plan']).get('school_selection_revision')==SCHOOL_SELECTION_REVISION for r in rows)):
                 c.execute('INSERT OR IGNORE INTO agent_jobs(id,fingerprint,done) VALUES(?,?,1)',(_school_audit_mark(job['id']),job['fingerprint']))
                 marked.append(job['id'])
         c.execute("INSERT OR IGNORE INTO agent_jobs(id,fingerprint,done) VALUES('school-audit-boundary',?,1)",(_hash(marked),))
 
 
-def _history_scopes(store,config):
+def _school_saved_owner(store,c,row,now):
+    """The saved reread takes this untouched pending review itself; its batch is not audited a second time."""
+    try:evidence,_=_school_material(store,c,row)
+    except (AgentError,ValueError,KeyError,TypeError):return False
+    return bool(_school_saved_reread(store,c,row,evidence,now))
+
+
+def _history_scopes(store,config,now=None):
     """Prefer exact original batches; retain explicitly limited cited-only fallback."""
     sources={s['id']:s for s in config['sources'] if s['enabled']};groups={}
     with store._db() as c:
@@ -3180,6 +3188,10 @@ def _history_scopes(store,config):
             if old_key not in matches: continue
             source,values=matches[old_key]
             if any(r['child_id']!=source['child_id'] for r in rows) or any(v['kind']!='text' or v['unread'] for v in values): continue
+            # One reread per batch: a review already reread whole, or one the saved reread is about to take, is not
+            # audited too. Anything it refuses (several outcomes, edits, decisions) is audited here with old rows kept.
+            if any(json.loads(r['plan']).get('school_saved_reread') for r in rows): continue
+            if now and all(r['state']=='pending' for r in rows) and any(_school_saved_owner(store,c,r,now) for r in rows): continue
             key='school-history:'+_hash(['saved-batch-audit',old_key,source['child_id']])[:40]
             done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone()
             if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS): continue
@@ -5889,7 +5901,7 @@ def run_once(app, now=None):
             recovered=_recover_school_ack_originals(store,config,now)
             created+=recovered['created'];failed+=recovered['failed']
             _school_audit_boundary(store)  # before this round's intake; fixed once, zero model calls
-            history_scopes=_history_scopes(store,config)
+            history_scopes=_history_scopes(store,config,now)
             # Share the original three-call budget; alternate five-minute windows under the one-minute Agent service.
             history_reserve=int(bool(history_scopes) and now.minute//5%2==0 and budget>0)
             from family_goals import Store as Goals
