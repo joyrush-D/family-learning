@@ -3575,8 +3575,9 @@ class AgentTests(unittest.TestCase):
             with patch.object(agent.family_llm,'_chat_json',return_value={'proposals':[dict(base,title_quote=text[:20],**m) for m in models]}):
                 return agent._select('school',[dict(ref=ref,text=text,content_incomplete=incomplete)],school_goals=[],as_of='2026-02-10')
         # Pure sign-in and mandatory receipt: at most a school to-do, never a learning goal even if the model names a subject.
-        for text,title in [('请各位家长点击链接完成今日到校签到 https://example.invalid/sign','完成到校签到'),('请全体家长今晚前填写防溺水回执并提交 https://example.invalid/receipt','填写防溺水回执')]:
-            item=select(text,dict(task_title=title,task_goal=title+'。',task_state='ready',task_reason='全班明确要求。',task_purpose='admin',learning_subject='语文'))[0]
+        # The receipt goal keeps its explicit handback (并提交): a compound clause's summary may not drop a stated part.
+        for text,title,goal in [('请各位家长点击链接完成今日到校签到 https://example.invalid/sign','完成到校签到','完成到校签到。'),('请全体家长今晚前填写防溺水回执并提交 https://example.invalid/receipt','填写防溺水回执','填写防溺水回执并提交。')]:
+            item=select(text,dict(task_title=title,task_goal=goal,task_state='ready',task_reason='全班明确要求。',task_purpose='admin',learning_subject='语文'))[0]
             brief=item['plan']['school_task'];self.assertEqual((brief['state'],brief['purpose'],brief['link_read']),('ready','admin',False))
             self.assertNotIn('school_learning',item['plan']);self.assertIn('链接页面未读取',brief['reason']);self.assertIn(brief['links'][0],item['evidence'][0]['text'])
         # Optional publicity stays material: never an automatic must-do or a goal.
