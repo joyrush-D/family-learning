@@ -138,6 +138,8 @@
 !/test_study.py
 !/test_study_http.py
 !/test_study_ui.cjs
+!/test_oral_teacher_dates.py
+!/test_oral_teacher_dates_ui.cjs
 
 !/family_settings.py
 !/settings.js
