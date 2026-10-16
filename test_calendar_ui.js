@@ -257,6 +257,28 @@ test('daily UI keeps collection navigation in inbox and pending notifications di
  assert.match(html,/通知 · 有信息待补充/);assert.match(html,/<h3>阅读要求<\/h3>/);assert.match(html,/发布：2026-09-08/);assert.match(html,/data-agent-accept="synthetic-school"/);assert.doesNotMatch(html,/type="checkbox"|<script>/);assert.match(html,/&lt;script/);assert.ok(html.includes(escape(title)),'full source title is preserved in the original notification');
  const goal='1. 阅读虚构课文\n2. 写出三句话\n3. '+('很长的虚构具体要求'.repeat(30))+'\n4. 带回原卷核对',ready={...item,plan:{school_task:{state:'ready',title:'语文：阅读与写作',goal,reason:'虚构老师要求'}}};
  const readyHTML=ctx.agentItemHTML(ready,{compact:true,agenda:{category:'homework'}});assert.match(readyHTML,/作业 · 已整理/);assert.match(readyHTML,/加入事项/);assert.doesNotMatch(readyHTML,/展开完整要求/);assert.equal((readyHTML.match(/<li>/g)||[]).length,4,'all saved requirements are directly visible');for(const line of goal.split('\n'))assert.ok(readyHTML.includes('<li>'+escape(line)+'</li>'),'long and fourth requirements remain complete without expansion');
+ // A reference the model left without its own summary reads as material, never as a todo awaiting details,
+ // whether saved before this wording existed (pending placeholder) or after it.
+ const referenceNote='按参考资料保留，不自动加入待办或学习目标；内容以原通知为准。',why='仅提供数学练习卷答案供家长参考，无学生需完成的行动要求',quote='数学练习卷答案见群文件，仅供家长参考。';
+ for(const [label,saved] of [['legacy placeholder',{title:'待核对：'+quote,body:'请核对这条通知是否适用于本孩子，以及要准备什么、何时完成；确认后可加入待办。'}],['current wording',{title:'参考资料：'+quote,body:referenceNote}]]){
+  const reference={...item,...saved,evidence:[{text:quote,ref:'message:synthetic-school-b:4'}],plan:{school_task:{state:'reference',purpose:'optional',title:'',goal:'',reason:why}}};
+  for(const options of [{},{compact:true,agenda:{category:'todo'}}]){
+   const html=ctx.agentItemHTML(reference,options);
+   assert.ok(html.includes('<h3>参考资料：'+quote+'</h3>'),label);assert.ok(html.includes(referenceNote),label);assert.ok(html.includes('参考说明 · '+why),label);assert.match(html,/资料要点/);assert.match(html,/>仍要加入待办</);
+   assert.doesNotMatch(html,/<h3>待核对|尚待核对具体成果与要求|>加入事项</,label+' is not presented as a todo awaiting details');
+  }
+ }
+ const inbox=vm.createContext({data:{token:'synthetic-token',children:[{id:'child-a',name:'虚构孩子'}],agent:{sources:[]}},currentChild:()=>({id:'child-a'}),esc:escape,agentTime:x=>x,schoolPdfDocuments:()=>[],schoolPdfProgress:()=>'',schoolPdfDraftTextHTML:()=>''});
+ vm.runInContext(core.slice(core.indexOf('function requirementHTML('),core.indexOf('function taskFocus(')),inbox);vm.runInContext(core.slice(core.indexOf('let schoolInbox='),core.indexOf('async function readSchoolInbox(')),inbox);inbox.schoolInboxHTML();
+ const message=(id,text,items)=>({source_id:'synthetic-school-b',message_id:id,child_id:'child-a',message:{text,time:'2026-10-07T19:15:00+08:00',kind:'text',unread:false},attachments:[],unavailable_attachment_ids:[],items});
+ vm.runInContext('schoolInbox',inbox).view={child_id:'child-a',day:'2026-10-07',days:['2026-10-07'],total:2,offset:0,next_offset:'',publishers:[],groups:[{sender:'示例数学老师',source:'虚构班级群',publisher:'p',reason:'',messages:[
+  message('4',quote,[{id:'reference',title:'参考资料：'+quote,goal:'',state:'pending',school_state:'reference',purpose:'optional',reason:why}]),
+  message('5','数学：同步练习第3课，周四交。',[{id:'math',title:'数学：完成同步练习第3课',goal:'完成同步练习第3课，周四交',state:'accepted',school_state:'ready',purpose:'learning',reason:''}])]}]};
+ const summary=inbox.schoolInboxHTML(),start=summary.indexOf('data-school-reference'),block=summary.slice(start,summary.indexOf('</div>',start));
+ assert.ok(summary.includes('<h3>数学：完成同步练习第3课</h3>'),'the publication heading names its action, not the reference');
+ assert.ok(start>0&&block.includes('参考资料：'+quote)&&block.includes('参考资料 · 不自动加入待办 · '+why),'the message summary carries the reference state');
+ assert.doesNotMatch(block,/要做什么|具体要求尚未明确|Agent 已整理/,'reference material is not summarized as a requirement');
+ assert.match(summary,/已收集为事项/);assert.ok(summary.includes('完成同步练习第3课，周四交'),'the collected action keeps its full requirement');
 });
 
 test('week overview includes every day, preserves child/status boundaries and deduplicates linked study',()=>{
