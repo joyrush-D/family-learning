@@ -3276,6 +3276,10 @@ def _recheck_school_history(app,store,now,budget,scopes):
             used=1
             proposals=_select('school',evidence,profile,as_of=now.date().isoformat(),data_path=store.data,
                 school_goals=goals.school_candidates(source['child_id']),school_tasks=school_targets(app,store,source['child_id']),school_existing=known)
+            if origin and origin[2]=='audit':
+                # A dismissed outcome whose action cannot be located is never offered again under a new item.
+                dismissed={ref for k in known if k['state']=='dismissed' for ref in k['refs'] if not k['action_anchor'].get(ref)}
+                proposals=[p for p in proposals if not (p['plan'].get('school_history_uncertain') and dismissed&{e['ref'] for e in p['evidence']})]
             for item in proposals:
                 item.update(child_id=source['child_id'],kind='school')
                 item['plan']['school_history_job']=key
