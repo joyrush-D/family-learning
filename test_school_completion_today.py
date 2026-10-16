@@ -296,7 +296,9 @@ class LabelledOwnTonightStoreTests(unittest.TestCase):
         with self.store._db() as c:
             self.assertEqual([r['id'] for r in c.execute('SELECT id FROM manual_tasks')], [task['id']])
             self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0], 0)
-            self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')], payload['messages'])
+            # The original words stay as sent; ingest keeps the same sending instant in the family's own offset.
+            self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')],
+                             [dict(m, time='2026-10-18T00:30:00+08:00') for m in payload['messages']])
         reopened = agent.Store(self.app.connect, self.app.profiles, self.app.DATA, initialize=False)
         self.assertIsNotNone(reopened)
         with self.app.connect() as c:
