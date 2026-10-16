@@ -87,6 +87,12 @@ def save(app, obj, connection=None, *, allow_closed=False):
             previous=task['focus']
             if previous['version']!=version:
                 raise FocusError('事项安排已在别处更新，请读取最新安排后核对；本次输入尚未保存',409,'task_focus_conflict')
+            # A captured item shows its explicit teacher handback day as due_on; sent back unchanged it stays that teacher
+            # fact on the item (family_agenda.enrich), not a second parent deadline, so the task keeps its own saved due_on.
+            if organization.get('due_on') and (task.get('agenda') or {}).get('due_kind')=='handback' and c.execute("SELECT 1 FROM sqlite_master WHERE name='study_items'").fetchone():
+                captured=c.execute('SELECT report FROM study_items WHERE id=task_id AND task_id=?',(ident,)).fetchone()
+                if captured and json.loads(captured['report'] or '{}').get('handback_on')==organization['due_on']:
+                    organization['due_on']=previous.get('due_on','')
             focus.update({k:organization.get(k,previous.get(k,'')) for k in ('category','published_on','due_on','scheduled_on','box','title','goal')})
             updated=dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat()
             focus.update(version=version+1,updated=updated)
