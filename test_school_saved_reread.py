@@ -143,12 +143,19 @@ class SavedSchoolRereadTests(unittest.TestCase):
         self.assertEqual((again['items'], again['tasks']), (after['items'], after['tasks']))
 
     def test_parent_decisions_are_never_reread(self):
+        # Root route (ROOT-route-decision.json): a parent-decided batch may still be audited once, but the decided row is
+        # never rewritten, resurrected or copied. The old "0 calls" expectation predates that route.
         item, = self.rows()['items']
         self.store.act(dict(id=item['id'], action='dismiss'))
         before = self.rows()
-        calls, _ = self.run_round(dict(side_effect=AssertionError('decided item must not be reread')), self.now)
-        self.assertEqual(calls, 0, 'nothing eligible: zero recovery calls')
-        self.assertEqual(self.rows(), before)
+        claimed_new = dict(proposals=[dict(SYNTHETIC['proposals'][0], action_quote=TEXT, existing_item_id='')])  # SYNTHETIC
+        calls = [self.run_round(dict(return_value=claimed_new), self.now + dt.timedelta(minutes=41 * i))[0] for i in range(3)]
+        self.assertLessEqual(sum(calls), 1, 'at most the one bounded audit call')
+        after = self.rows()
+        self.assertEqual(after['items'], before['items'], 'the dismissed item stays dismissed and unchanged; no copy')
+        self.assertEqual(after['tasks'], [])
+        self.assertEqual((after['messages'], after['cursor']), (before['messages'], before['cursor']))
+        self.assertEqual(after['jobs'][item['job_id']], before['jobs'][item['job_id']])
 
     def test_changed_generated_snapshot_fails_closed(self):
         item, = self.rows()['items']
@@ -341,12 +348,16 @@ class AutoAcceptedOldBatchTests(unittest.TestCase):
         self.assertEqual([m['processed'] for m in state['messages']], [1])
         self.assertEqual(state['jobs'][item['job_id']]['done'], 1)
 
-    @unittest.expectedFailure  # OPEN GAP (SR02 not implemented): auto-accepted batches are not reread yet
+    def audit_reply(self, old_id):  # SYNTHETIC history-mode reply (existing_actions given): first covered, second independent
+        first, second = SR02_FULL_REPLY['proposals']
+        return dict(proposals=[dict(first, action_quote=SR02_FIRST, existing_item_id=old_id),
+                               dict(second, action_quote=SR02_SECOND, existing_item_id='')])
+
     def test_reread_finds_the_missing_action_without_copying_the_accepted_one(self):
         before = self.rows()
         old_item, = before['items']
-        calls = [self.run_round(dict(return_value=SR02_FULL_REPLY), self.now + dt.timedelta(minutes=41 * i))[0] for i in range(3)]
-        self.assertGreaterEqual(sum(calls), 1)
+        calls = [self.run_round(dict(return_value=self.audit_reply(old_item['id'])), self.now + dt.timedelta(minutes=41 * i))[0] for i in range(3)]
+        self.assertEqual(sum(calls), 1, 'one bounded audit call for the old batch')
         self.assertLessEqual(max(calls), 3)
         state = self.rows()
         kept = next(i for i in state['items'] if i['id'] == old_item['id'])
@@ -358,6 +369,59 @@ class AutoAcceptedOldBatchTests(unittest.TestCase):
         self.assertIn(SR02_REF, found[0]['evidence'])
         self.assertEqual(found[0]['due'], '2026-10-22')
         self.assertEqual([t['action'] for t in state['tasks'] if SR02_FIRST in t['action']], [SR02_FIRST], 'no copy')
+        self.assertNotIn(SR02_FIRST, found[0]['body'], 'the missing action is not merged with the covered one')
+        # Restart: a new Store and later rounds neither audit again nor copy.
+        self.store = agent.Store(self.app.connect, self.app.profiles, self.data, app=self.app)
+        for minutes in (200, 241, 400):
+            count, _ = self.run_round(dict(side_effect=AssertionError('the audit is once per old batch')), self.now + dt.timedelta(minutes=minutes))
+            self.assertEqual(count, 0)
+        self.assertEqual(self.rows()['items'], state['items'])
+
+    def test_batches_saved_after_the_boundary_are_not_audited(self):
+        # The first permitted round fixes the boundary before its intake; a batch first saved in or after it is not audited.
+        old_item, = self.rows()['items']
+        later = '2026年10月24日前，请在《图书借阅登记表》上填写学生姓名，家长签字后交回班主任。'
+        self.store.ingest(dict(source_id=SR02_SOURCE['id'], expected_cursor='11', cursor='12', checked_at=self.now.isoformat(),
+            last_message_time='2026-10-17T02:00:00+08:00', error='', messages=[dict(id='2', message_order='2',
+            time='2026-10-17T02:00:00+08:00', kind='text', sender='示例班主任', sender_id='school', text=later, unread=False)]))
+        names = []
+        def reply(messages, schema, name, **kwargs):  # SYNTHETIC
+            names.append((name, 'existing_actions' in json.dumps(messages, ensure_ascii=False)))
+            if 'existing_actions' in json.dumps(messages, ensure_ascii=False):
+                return self.audit_reply(old_item['id'])
+            return dict(proposals=[dict(SR02_OLD_REPLY['proposals'][0], title_quote=later, due='2026-10-24',
+                evidence=[dict(ref='message:p1-sr02-fictional:2')], task_title='填写《图书借阅登记表》并交回', task_goal=later)])
+        for i in range(4):
+            self.run_round(dict(side_effect=reply), self.now + dt.timedelta(minutes=41 * i))
+        audits = [n for n in names if n[1]]
+        self.assertEqual(len(audits), 1, names)
+        self.assertLessEqual(len(names), 3 * 4)
+
+    def test_failed_audit_keeps_one_identity_and_the_three_attempt_limit(self):  # SR04
+        before = self.rows()
+        at, calls = self.now, []
+        for _ in range(6):
+            count, _ = self.run_round(dict(side_effect=agent.family_llm.LLMDraftError('synthetic failure')), at)
+            calls.append(count)
+            at += dt.timedelta(minutes=41)
+        self.assertEqual(sum(calls), 3, calls)
+        state = self.rows()
+        audit = [j for k, j in state['jobs'].items() if k.startswith('school-history:')]
+        self.assertEqual([(j['attempts'], j['done']) for j in audit], [(3, 0)])
+        self.assertEqual(state['items'], before['items'])
+        self.assertEqual(state['tasks'], before['tasks'])
+
+    def test_parent_completion_during_the_audit_rejects_the_late_result(self):  # SR03/SR04
+        old_item, = self.rows()['items']
+        def late(*args, **kwargs):
+            with self.app.connect() as c:  # the parent edits the accepted task while the model runs
+                c.execute('UPDATE manual_tasks SET title=? WHERE id=?', ('家长改过的任务', old_item['task_id']))
+            return self.audit_reply(old_item['id'])
+        calls, _ = self.run_round(dict(side_effect=late), self.now)
+        self.assertEqual(calls, 1)
+        state = self.rows()
+        self.assertEqual([i['id'] for i in state['items']], [old_item['id']], 'stale result rejected; nothing added')
+        self.assertEqual([t['title'] for t in state['tasks']], ['家长改过的任务'])
 
 
 if __name__ == '__main__':
