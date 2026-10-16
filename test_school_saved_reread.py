@@ -9,7 +9,6 @@ import json
 import os
 import subprocess
 import sys
-import tarfile
 import tempfile
 import unittest
 from contextlib import ExitStack
@@ -64,9 +63,7 @@ def seed(root):
     old = root / 'old-source'
     old.mkdir()
     archive = subprocess.run(['git', '-C', str(HERE), 'archive', OLD], check=True, capture_output=True).stdout
-    with tempfile.TemporaryFile(dir=root) as handle:
-        handle.write(archive); handle.seek(0)
-        with tarfile.open(fileobj=handle) as tar: tar.extractall(old, filter='data')
+    subprocess.run(['tar', '-x', '-C', str(old)], input=archive, check=True)
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
     out = subprocess.run([sys.executable, '-I', '-c', 'import sys;p,s=sys.argv[1:3];del sys.argv[1:3];sys.path.insert(0,p);exec(s)',
                           str(old), SEED, str(root / 'family'), json.dumps(SOURCE), TEXT, json.dumps(SYNTHETIC)],
