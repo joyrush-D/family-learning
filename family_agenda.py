@@ -369,6 +369,34 @@ def later_dropped_days(quote,text,published,own=None,title=''):
     return {value for value,event in _held_events(quote,published) if (value,event) not in kept and (value not in mine or _attends(title,event))}
 
 
+_COMPLETION_VERB=r'背诵|背熟|抄写|默写|朗读|预习|复习|订正|完成|练习|阅读|读|写|做|背'
+
+
+def completion_day(quote,header,time,due_on):
+    """The day this item's own original words give its work, kept apart from its handback/check day (due_on).
+
+    今天/今日/今晚 counts only when it opens the item's own work clause (今晚把Unit 3单词每个抄写两遍，明天交), or is its own
+    list heading (今天语文作业：1. 背诵《秋夜》第2自然段，明天早读抽查) while its own words check/hand it back 明天, read on its
+    own message's sending day in that message's own written timezone. A time without an offset, a heading item with a later
+    deadline of its own (本周五交), a day inside a 《》 title, or only a handback day (口算本第8页全部完成，明天交给课代表) stays
+    unknown; due_on is never rewritten.
+    """
+    stamp=(time or '').strip()
+    if not quote or not re.search(r'(?:[+-]\d{2}:?\d{2}|Z)$',stamp):return ''
+    try:sent=dt.datetime.fromisoformat(stamp.replace('Z','+00:00')).date()
+    except ValueError:return ''
+    words=_titles_read_as_objects(quote).strip()
+    first,_,rest=(re.split(r'([，,。；;\n])',words,maxsplit=1)+['',''])[:3]
+    lead=re.match(r'(今天|今日|今晚)',first)
+    work=first[lead.end():] if lead else first
+    if not re.search(_COMPLETION_VERB,work) or re.search(_DAY_WORDS,work):return ''
+    if not lead and not (re.fullmatch(r'\s*(?:今天|今日|今晚)的?[^，,。；;\n\d]{0,8}?作业\s*[：:]?\s*',header or '')
+                         and re.match(r'\s*(?:明天|明日|明早)',rest) and not re.search(_DAY_WORDS,re.sub(r'^\s*(?:明天|明日|明早)','',rest))):
+        return ''
+    day=sent.isoformat()
+    return day if not due_on or due_on>day else ''
+
+
 def deadline(text,published):
     """Only an unambiguous deadline phrase; several different dates need review."""
     candidates=deadlines(text,published)
@@ -411,7 +439,7 @@ def task_category(title,purpose=None):
     return 'todo'
 
 
-def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal=''):
+def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal='',date_header=''):
     focus=focus or {};messages=[];publications=[];original_time=''
     store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
     for ref in refs:
@@ -462,7 +490,13 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
     original=date(due) if date_quote else ''
     sent=original_time[:10] if original_time else days[0] if len(days)==1 else ''
     due_kind=date_meaning(date_quote,due_on,sent,subject,goal) if original and due_on==original else 'deadline' if due_on else ''
-    return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,due_kind=due_kind,scheduled_on=focus.get('scheduled_on',''),
+    # The work's own day is read only from this child's one original holding the item's own words; a parent's explicit
+    # plan or edit keeps priority, and the handback due stays as it is.
+    own=[m for m in messages if date_quote and date_quote in m.get('text','')]
+    heading=date_header if len(own)==1 and date_header and 0<=own[0]['text'].find(date_header)<own[0]['text'].find(date_quote) else ''
+    complete_on=(completion_day(date_quote,heading,own[0].get('time',''),due_on)
+                 if len(own)==1 and not focus.get('scheduled_on') and not focus.get('version') else '')
+    return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,due_kind=due_kind,complete_on=complete_on,scheduled_on=focus.get('scheduled_on',''),
                 category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox')
 
 
@@ -473,13 +507,19 @@ def _stored_date_quote(plan):
                  if isinstance(v,str) and v.strip()),'')
 
 
+def _stored_date_header(plan,quote):
+    """The list heading saved with the same native action whose own words are quote; any other source gives none."""
+    native=plan.get('school_native_action') or {}
+    return native.get('header','') if isinstance(native,dict) and native.get('quote')==quote and isinstance(native.get('header'),str) else ''
+
+
 def enrich(app,c,tasks):
     owners={p['name']:p['id'] for p in app.profiles(c)}
     reported={r['task_id']:(r['child_id'],r['day']) for r in c.execute('SELECT task_id,child_id,day FROM study_items WHERE id=task_id')} if c.execute("SELECT 1 FROM sqlite_master WHERE name='study_items'").fetchone() else {}
     for task in tasks:
         refs=[x.strip() for x in task['source'].splitlines() if x.strip().startswith('message:')]
         focus=task.get('focus') or {}
-        purpose=None;publication_ref='';date_quote='';goal=''
+        purpose=None;publication_ref='';date_quote='';goal='';date_header=''
         if task.get('school_origin'):
             origin=task['source'].splitlines()[0].removeprefix('Agent建议:')
             proposal=c.execute("SELECT * FROM agent_items WHERE id=? AND task_id=? AND child_id=? AND kind='school' AND state='accepted'",
@@ -490,6 +530,7 @@ def enrich(app,c,tasks):
                 store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
                 publication_ref=family_agent.school_original_publication_ref(store,c,proposal)
                 date_quote=_stored_date_quote(plan) or re.sub(r'^待核对[：:]?\s*','',proposal['title']).strip()
+                date_header=_stored_date_header(plan,date_quote)
         due=task['due']
         captured=reported.get(task['id'])
         if captured and captured[0]==owners.get(task['child']) and task['source'] in family_study.CAPTURE_SOURCES:
@@ -498,18 +539,18 @@ def enrich(app,c,tasks):
             if not focus.get('category'):focus['category']='homework'
             if not focus.get('scheduled_on') and not focus.get('version'):focus['scheduled_on']=captured[1]
             due=task['due']=''
-        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal)
+        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header)
     return tasks
 
 
 def visible_on(item,day):
     m=item['agenda']
     if m.get('box')=='wish': return False
-    published=m['published_on'];due=m['due_on'];scheduled=m['scheduled_on']
+    published=m['published_on'];due=m['due_on'];scheduled=m['scheduled_on'];complete=m.get('complete_on','')
     if published and day<published:return False
     if item['closed']:
-        return day in {published,scheduled,due,item.get('closed_on','')} and (not item.get('closed_on') or day<=item['closed_on'])
-    if day==published or day==scheduled:return True
+        return day in {published,scheduled,due,complete,item.get('closed_on','')}-{''} and (not item.get('closed_on') or day<=item['closed_on'])
+    if day==published or day==scheduled or (complete and day==complete):return True
     # An undated item remains in the inbox; a deadline carries forward until a parent closes it.
     # Unknown publication stays unknown, but a known deadline must not hide from today's work.
     return bool(due and day>=(published or min(due,scheduled or due,dt.datetime.now(family_agent.TZ).date().isoformat())))
@@ -538,7 +579,7 @@ def snapshot(app,start,end):
                 category=task_category((brief.get('title') or row['title']) if purpose in family_agent.PURPOSES else row['title'],purpose)
                 # A candidate reads its day from the same stored original words and publication as its accepted item.
                 m=metadata(app,c,row['child_id'],row['title'],row['due'],refs,publication_ref=family_agent.school_original_publication_ref(store,c,row),
-                           date_quote=_stored_date_quote(plan),goal=str(brief.get('goal') or ''))
+                           date_quote=_stored_date_quote(plan),goal=str(brief.get('goal') or ''),date_header=_stored_date_header(plan,_stored_date_quote(plan)))
                 m['category']=category
                 items.append(dict(id=row['id'],task_id='',kind='school',child_ids=[row['child_id']],title=row['title'],
                     agenda=m,status='待核对',closed=False,closed_on='',body=row['body']))
