@@ -1830,6 +1830,17 @@ class Store:
                         plan['school_generated_snapshot']=_school_generated_snapshot(item)
             c.execute("UPDATE agent_items SET state='superseded',updated=? WHERE job_id=? AND state='pending'", (now.isoformat(), key))
             for index, item in enumerate(items):
+                target=item.get('plan',{}).get('school_reread_of')
+                if target:
+                    old=c.execute('SELECT * FROM agent_items WHERE id=?',(target,)).fetchone()
+                    if (not history_context or not origin or not origin[0] or origin[0][2]!='audit' or old is None
+                            or old['child_id']!=item['child_id'] or not _school_untouched_review(c,old,origin[0][0])):
+                        raise AgentError('原生成事项已变化，复核结果未保存；原记录保留。',409,'school_history_stale')
+                    plan=dict(item['plan'],school_generated_snapshot=json.loads(old['plan'])['school_generated_snapshot'],
+                              school_batch_reread=dict(job=key,fingerprint=fingerprint,previous=_hash(dict(old))))
+                    c.execute("UPDATE agent_items SET title=?,body=?,evidence=?,due=?,plan=?,updated=? WHERE id=? AND state='pending'",
+                              (item['title'],item['body'],_json(item['evidence']),item.get('due',''),_json(plan),now.isoformat(),target))
+                    continue
                 ident = 'agent-' + _hash([key, fingerprint, index])[:32]
                 c.execute('INSERT OR IGNORE INTO agent_items(id,job_id,child_id,kind,title,body,evidence,due,care_id,record_id,created,updated,plan,task_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                     (ident, key, item['child_id'], item['kind'], item['title'], item['body'], _json(item['evidence']), item.get('due', ''),
@@ -3007,7 +3018,8 @@ def _history_anchor(row, originals):
                     return {ref:prefix}
         if not text or not quote or len(quote)>600 or text.count(quote)!=1: continue
         # A legacy whole multi-clause notice does not establish which independent action was saved.
-        if not saved.get(ref) and quote==text.strip() and len([v for v in re.split(r'[。；\n]',quote) if v.strip()])>1: continue
+        if (not saved.get(ref) and quote==text.strip() and len([v for v in re.split(r'[。；\n]',quote) if v.strip()])>1
+                and not plan.get('school_saved_reread')): continue
         return {ref:quote}
     return {}
 
@@ -3150,6 +3162,21 @@ def _school_audit_boundary(store):
         c.execute("INSERT OR IGNORE INTO agent_jobs(id,fingerprint,done) VALUES('school-audit-boundary',?,1)",(_hash(marked),))
 
 
+def _school_untouched_review(c,row,old_key):
+    """Positive proof that only the Agent ever wrote this pending review of the old batch: its generated snapshot still matches,
+    and no parent decision, task, record, feedback, link or earlier reread exists. Unknown stays unknown (False)."""
+    try:row=dict(row);plan=json.loads(row['plan'])
+    except (ValueError,TypeError):return False
+    if (row['kind']!='school' or row['job_id']!=old_key or row['state']!='pending' or row['task_id'] or row['record_id'] is not None
+            or row['care_id'] or plan.get('school_task',{}).get('state')!='review'):return False
+    if not plan.get('school_generated_snapshot') or plan['school_generated_snapshot']!=_school_generated_snapshot(row):return False
+    if any(plan.get(k) for k in ('school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id',
+                                 'approved','school_original_action','school_first_batch_correction','school_previous_policy',
+                                 'school_learning','school_saved_reread','school_batch_reread')):return False
+    return not (c.execute('SELECT 1 FROM records WHERE source=? LIMIT 1',('Agent建议:'+row['id'],)).fetchone()
+                or c.execute('SELECT 1 FROM manual_tasks WHERE source LIKE ? LIMIT 1',('Agent建议:'+row['id']+'\n%',)).fetchone())
+
+
 def _school_saved_owner(store,c,row,now):
     """The saved reread takes this untouched pending review itself; its batch is not audited a second time."""
     try:evidence,_=_school_material(store,c,row)
@@ -3232,8 +3259,10 @@ def _history_scopes(store,config,now=None):
             # audited too. Anything it refuses (several outcomes, edits, decisions) is audited here with old rows kept.
             # One row's proof covers only the originals it cites, never its siblings: the saved reread owns the batch
             # only when it takes or already took every row; otherwise the whole original scope is audited once.
-            if all(json.loads(r['plan']).get('school_saved_reread') or now and r['state']=='pending' and _school_saved_owner(store,c,r,now)
-                   for r in rows): continue
+            if all(json.loads(r['plan']).get('school_saved_reread') for r in rows): continue
+            # While the saved reread still holds a row it goes first (it shares the batch's one budget); the audit then
+            # reads the whole original scope with that row's proven reading as known.
+            if now and any(r['state']=='pending' and _school_saved_owner(store,c,r,now) for r in rows): continue
             key='school-history:'+_hash(['saved-batch-audit',old_key,source['child_id']])[:40]
             done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone()
             if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS): continue
@@ -3276,7 +3305,7 @@ def _history_proposal(proposal,known,evidence):
     if existing:
         matched=next((v for v in overlap if v[0]['id']==existing and v[1]<=start and end<=v[2]),None)
         if matched is None: raise AgentError('历史动作与原决定不是同一项，未采用模型对应关系',code='school_history_identity')
-    covered=any(left<=start and end<=right for _,left,right in overlap)
+    covered=next((row['id'] for row,left,right in overlap if left<=start and end<=right),'')
     if overlap and not covered: raise AgentError('历史补漏把已处理要求与独立行动合在同一原句，整组保留待重试',code='school_history_overlap')
     if not covered:
         clauses=[v.strip() for v in re.split(r'[。；\n]+|(?=(?:另项|另外|此外)\s*[：:])',texts[ref]) if v.strip()]
@@ -3331,13 +3360,16 @@ def _recheck_school_history(app,store,now,budget,scopes):
                 if not store._school_selection_current(c,key,fp,source,values,processed=1):
                     raise AgentError('原消息或来源已变化',409,'school_history_stale')
                 basis,known=_history_context(store,c,source,values,key)
+                rewrite={r['id'] for r in c.execute("SELECT * FROM agent_items WHERE job_id=? AND kind='school'",(origin[0],))
+                         if _school_untouched_review(c,r,origin[0])} if origin and origin[2]=='audit' else set()
             if len(known)>36 or len(_json(known))>14000: raise AgentError('既有决定超过本轮历史核对范围，未截断',code='school_history_bounds')
             evidence=[dict(ref='message:'+source['id']+':'+v['id'],text=v['text'],source=source['name'],
                 time=v['time'],sender=v['sender'],publisher=_publisher(source['id'],v),kind=v['kind'],content_incomplete=v['unread']) for v in values]
             profile=next(p for p in app.profiles() if p['id']==source['child_id'])
             used=1
             proposals=_select('school',evidence,profile,as_of=now.date().isoformat(),data_path=store.data,
-                school_goals=goals.school_candidates(source['child_id']),school_tasks=school_targets(app,store,source['child_id']),school_existing=known)
+                school_goals=goals.school_candidates(source['child_id']),school_tasks=school_targets(app,store,source['child_id']),school_existing=known,
+                school_rewrite=rewrite)
             if origin and origin[2]=='audit':
                 # A dismissed outcome whose action cannot be located is never offered again under a new item.
                 dismissed={ref for k in known if k['state']=='dismissed' for ref in k['refs'] if not k['action_anchor'].get(ref)}
@@ -4195,7 +4227,7 @@ def _school_native_saved(items,evidence):
         raise AgentError('学校独立要求保存时仍有遗漏，整批未写入',409,'school_action_coverage')
 
 
-def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None, school_tasks=(),school_existing=None):
+def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None, school_tasks=(),school_existing=None,school_rewrite=()):
     original_pointers=[]
     if mode == 'school':
         original_pointers=[item for e in evidence if (item:=_school_ack_original(e))]
@@ -4241,7 +4273,9 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 raise AgentError('历史补漏类别或原任务编号不正确')
             proposal,action_anchor,covered,history_uncertain=_history_proposal(proposal,school_existing,evidence)
             accounted.update(q['ref'] for q in proposal['evidence'])
-            if covered: continue
+            # An already covered action is skipped, unless its old row is a provably untouched generated review: that row
+            # is no proof it was understood right, so the new reading is saved under the same item (never a copy).
+            if covered and covered not in school_rewrite: continue
             ref,quote=next(iter(action_anchor.items()));start=refs[ref].index(quote);end=start+len(quote)
             if any(ref==old_ref and max(start,left)<min(end,right) for old_ref,left,right in history_actions):
                 raise AgentError('历史补漏重复或合并了同一动作，整组保留重试',code='school_history_duplicate')
@@ -4393,6 +4427,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             if historical:
                 item['plan']['school_action_anchor']=action_anchor
                 item['plan']['school_history_uncertain']=history_uncertain
+                if covered:item['plan']['school_reread_of']=covered
                 if history_uncertain or brief.get('change')!='new':
                     brief.update(state='review',reason='本条已有决定的动作原句无法核对或涉及原事项变更，不能确认是否为独立漏项；已有作业与家长决定保留。')
 
