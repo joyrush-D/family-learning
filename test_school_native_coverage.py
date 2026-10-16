@@ -196,6 +196,21 @@ class SchoolNativeCoverageTests(unittest.TestCase):
                 self.assertEqual((row['due'], json.loads(row['plan'])['school_task']['state']), ('', 'review'))
                 self.doCleanups()
 
+    def test_a_complete_prefix_never_takes_another_objects_handback_day(self):
+        text = '数学：2026年10月18日20:00前完成《分数练习》第3页；回执2026年10月19日交给班主任。'
+        for due, expected in (('2026-10-18', ('2026-10-18', 'ready')), ('2026-10-19', ('', 'review'))):
+            with self.subTest(due=due):
+                work = fixtures.school_proposal(
+                    title_quote='2026年10月18日20:00前完成《分数练习》第3页', due=due, evidence=[dict(ref='message:x:1')],
+                    learning_subject='数学', task_title='数学：完成《分数练习》第3页', task_goal='2026年10月18日20:00前完成《分数练习》第3页。',
+                    task_state='ready', task_purpose='learning', task_reason='虚构对抗回执。')
+                evidence = [dict(ref='message:x:1', text=text, time=self.now.isoformat(), kind='text', publisher='publisher:t1',
+                                 content_incomplete=False, attachments=[], unread=False)]
+                with patch.object(agent.family_llm, '_chat_json', return_value=dict(proposals=[work])):
+                    item, = agent._select('school', evidence, school_goals=[], school_tasks=[], as_of='2026-10-05')
+                self.assertEqual((item['due'], item['plan']['school_task']['state']), expected,
+                                 'the receipt handback is another object, so the work keeps its own day only')
+
     def test_an_unconfirmed_history_note_keeps_the_excerpt_for_review_and_tonight_stays_in_the_copying(self):
         payload, refs, replies = self._excerpt_batch('2026-10-20')
         for note, expected in (('（原为10月19日早读，已更正）', ('2026-10-20', 'accepted')),
