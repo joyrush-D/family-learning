@@ -2802,6 +2802,8 @@ def _school_saved_reread(store,c,row,evidence,now):
     # Date and cancellation guards hold a review by leaving its day unknown; an unknown or past day stays for review
     # and is never poured into today by a reread.
     if not row['due'] or row['due']<now.date().isoformat():return None
+    import family_agenda  # the originals, read at their own sending time, must prove exactly this one saved day
+    if set().union(*(family_agenda.deadlines(e['text'],family_agenda.sent_day(e.get('time'))) for e in evidence))!={row['due']}:return None
     job=c.execute('SELECT fingerprint,done FROM agent_jobs WHERE id=?',(row['job_id'],)).fetchone()
     if job is None or not job['done']:return None
     for e in evidence:
