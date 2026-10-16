@@ -375,8 +375,8 @@ _COMPLETION_VERB=r'背诵|背熟|抄写|默写|朗读|预习|复习|订正|完�
 def completion_day(quote,header,time,due_on):
     """The day this item's own original words give its work, kept apart from its handback/check day (due_on).
 
-    今天/今日/今晚 counts only when it opens the item's own work clause (今晚把Unit 3单词每个抄写两遍，明天交), or is its own
-    list heading (今天语文作业：1. 背诵《秋夜》第2自然段，明天早读抽查) while its own words check/hand it back 明天, read on its
+    今天/今日/今晚 counts only when it opens the item's own work clause, after at most its own subject label whether or not
+    that label was saved as a heading (英语：今晚把Unit 5词表每个单词抄写两遍，明天交给英语老师), or is its own list heading (今天语文作业：1. 背诵《秋夜》第2自然段，明天早读抽查) while its own words check/hand it back 明天, read on its
     own message's sending day in that message's own written timezone. Otherwise the one day that same first work clause ties
     to its own work by the deadline parse (语文：2026年10月18日20:00前完成…；2026年10月20日早读交回) is its day. A time without
     an offset, a heading item with a later deadline of its own (本周五交), a day inside a 《》 title, a second or handback day
@@ -388,8 +388,10 @@ def completion_day(quote,header,time,due_on):
     try:sent=dt.datetime.fromisoformat(stamp.replace('Z','+00:00')).date()
     except ValueError:return ''
     words=_titles_read_as_objects(quote).strip()
-    # The item's own subject label (语文：) names it; its work clause starts after it.
-    if (header or '').strip():words=re.sub(r'^'+re.escape(header.strip())+r'\s*[：:]\s*','',words)
+    # The item's own subject label (语文：), its saved heading or the shared subject opening its own words, names it; its
+    # work clause starts after it.
+    label='|'.join(filter(None,(re.escape((header or '').strip()),family_agent._SCHOOL_NATIVE_SUBJECTS)))
+    words=re.sub(r'^(?:'+label+r')\s*[：:]\s*','',words)
     first,_,rest=(re.split(r'([，,。；;\n])',words,maxsplit=1)+['',''])[:3]
     lead=re.match(r'(今天|今日|今晚)',first)
     work=first[lead.end():] if lead else first
