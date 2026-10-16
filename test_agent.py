@@ -3343,6 +3343,27 @@ class AgentTests(unittest.TestCase):
         self.assertEqual([(t['title'],t['action'],t['due']) for t in tasks],
                          [('事务：独立活动回执',action,'2026-02-11')])
 
+    def test_dated_ba_object_length_does_not_clear_its_own_date(self):
+        from family_agenda import deadlines
+        for short,long in [('请家长2026年10月20日把回执签字交回班主任。','请家长2026年10月20日把校内参观活动回执签字交回班主任。'),
+                           ('请2026年10月20日把报名表交回。','请2026年10月20日把秋季研学社会实践活动报名表交回。')]:
+            for quote in (short,long):
+                with self.subTest(quote=quote):
+                    evidence=[dict(text='2026-10-16朗读第5课两遍。\n'+quote,time='2026-10-16T08:00:00+08:00')]
+                    self.assertEqual(deadlines(quote,'2026-10-16'),{'2026-10-20'})
+                    self.assertEqual(agent._school_own_dates(quote,'2026-10-16'),{'2026-10-20'})
+                    self.assertEqual(agent._school_own_clause_dates(quote,evidence,[]),{'2026-10-20'})
+                    self.assertEqual(agent._school_own_clause_dates(quote[:-6],evidence,[]),set(),'no partial quote')
+                    self.assertEqual(agent._school_own_clause_dates(quote,evidence,[quote[3:12]]),set(),'shared clause')
+                    self.assertEqual(agent._school_own_clause_dates(quote,evidence*2,[]),set(),'repeated original')
+        for text in ['2026年10月16日通知：请家长把校内参观活动回执签字交回班主任。',
+                     '请家长2026年10月20日把已取消的校内参观活动回执交回。',
+                     '请家长2026年10月20日把不需要的校内参观活动回执交回。',
+                     '请家长2026年10月20日把校内参观活动回执的照片发到群里。',
+                     '请家长2026年10月20日讨论校内参观活动回执签字交回事宜。']:
+            with self.subTest(text=text):
+                self.assertEqual(deadlines(text,'2026-10-16'),set(),'publication day, state, negation or no own action stays undated')
+
     def test_literal_independent_admin_date_cannot_borrow_or_truncate_an_action(self):
         quote='家长事务：2026-02-13签字交回独立活动回执，无需盖章。'
         evidence=[dict(text='2026-02-11朗读第5课两遍。\n'+quote,time=self.now.isoformat())]
