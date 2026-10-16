@@ -3152,10 +3152,13 @@ _SCHOOL_NATIVE_EXAMPLE=re.compile(r'^(?:示例|例如|格式示例)[：:]')
 def _school_native_command(clause):
     """A literal addressed outcome, not a verb search inside examples or reports."""
     value=re.sub(r'^'+_SCHOOL_NATIVE_MARKER,'',clause.strip())
-    prefix=r'(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')[，,:：]\s*|'+_SCHOOL_NATIVE_DATE+r'\s*(?:前|之前|以前|内)?\s*|请(?:各位)?(?:家长|同学们?|大家)?\s*|只需\s*|另(?:外)?\s*)'
+    # A date may carry its own clock time or lesson ("21:00前", "数学课前") before the outcome it limits.
+    prefix=(r'(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')[，,:：]\s*|'+_SCHOOL_NATIVE_DATE
+            +r'\s*(?:\d{1,2}[:：]\d{2}|(?:'+_SCHOOL_NATIVE_SUBJECTS+r')课)?\s*(?:前|之前|以前|内)?\s*|请(?:各位)?(?:家长|同学们?|大家)?\s*|只需\s*|独立\s*|另(?:外)?\s*)')
     lead=re.match(r'^(?:'+prefix+r')*',value)[0];value=value[len(lead):]
-    learning=r'(?:朗读|背诵|抄写|默写|听写|跟读|订正|预习|复习|阅读|口算|习作|练习)(?!后|完|已|完成|录音|音频)[^：:。；;]{2,}'
-    exercise=r'(?:完成|做|写)(?!后|完|过|了)(?:好)?\s*[^：:。；;]{0,35}(?:练习卷|练习册|作业本|作业单|试卷|习题|作文|第[^。；;]{1,16}题)[^：:。；;]*'
+    # "订正本/口算本" followed by its day or handback is the notebook, not another 订正/口算 outcome.
+    learning=r'(?:朗读|背诵|抄写|默写|听写|跟读|订正|预习|复习|阅读|口算|习作|练习)(?!后|完|已|完成|录音|音频|本\s*(?:[0-9今明后下]|交|带))[^：:。；;]{2,}'
+    exercise=r'(?:完成|做|写)(?!后|完|过|了)(?:好)?\s*[^：:。；;]{0,35}(?:练习卷|练习册|作业本|作业单|试卷|习题|作文|口算(?!本)|第[^。；;]{1,16}题)[^：:。；;]*'
     object_first=r'(?:[^：:。；;，,]{0,16}(?:练习卷|练习册|作业本|试卷)第[^：:。；;，,]{1,16}题)[^：:。；;]{0,15}(?:完成|交)[^：:。；;]*'
     compact=r'(?:Unit\s*[0-9]+[^。；;，,]{0,24}|《[^》]+》|课文)[^。；;，,]{0,12}(?:读|背)[一二两三四五六七八九十0-9]+遍'
     admin=r'(?:签署|签字|填写|填好|提交|交回|打印|盖章|完成|核对)[^：:。；;]{0,35}(?:回执|同意书|确认单|登记表|申请表|报名表|证明|安全承诺书)[^：:。；;]*'
@@ -3747,7 +3750,12 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
             value=_text(proposal,name,field.get('maxLength',4000))
             if 'enum' in field and value not in field['enum']:raise AgentError('学校独立要求字段无法核对')
     refs={q['ref'] for q in proposal['evidence']};quote=proposal['title_quote'].strip().rstrip('；;。').strip()
-    matches=[a for a in actions if a['ref'] in refs and quote and (any(quote in own for own in [a['quote']]+a.get('conditions',[]))
+    def labelled(action):
+        # The message's own heading label written directly before this outcome adds no requirement or day.
+        text=(entries or {}).get(action['ref'],{}).get('text','')
+        found=action['header'] and re.search(re.escape(action['header'])+r'\s*[：:]\s*'+re.escape(action['quote']),text)
+        return [found[0]] if found else []
+    matches=[a for a in actions if a['ref'] in refs and quote and (any(quote in own for own in [a['quote']]+a.get('conditions',[])+labelled(a))
         or any(quote in c['quote'] for c in a['changes']))]
     if not matches:
         owned={a['ref'] for a in actions}|{s['ref'] for a in actions for s in _school_native_later(a)}
@@ -3779,7 +3787,7 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
     value=_school_native_value(action)
     dates=_school_native_dates(action)
     # A bound change may move the day: both originals stay for review instead of choosing one.
-    if len(dates)>1 and not action['changes']:raise AgentError('本项学校日期尚无法唯一核对，原文保留',code='school_action_coverage')
+    # Days this outcome's own text cannot attribute (回执…交给… after 订正…) keep no due and stay for review below.
     due=next(iter(dates)) if len(dates)==1 else '' if dates else proposal['due']
     assigned.add(action['id'])
     unread=any(entries and (entries[r].get('content_incomplete') or entries[r].get('unread')) for r in linked)
@@ -3792,7 +3800,9 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
 def _school_native_dates(action):
     from family_agenda import deadlines,sent_day
     published=sent_day(action['time'])
-    dates=deadlines('\n'.join([action['header'],action['quote'],*action.get('conditions',[]),*action.get('shared_conditions',[])]),published)
+    own='\n'.join([action['header'],action['quote'],*action.get('conditions',[]),*action.get('shared_conditions',[])])
+    # One work's completion limit and its own handback (订正本…交给…) read as the handback day; another object keeps both.
+    dates=_school_handback_day(own,published,deadlines(own,published))
     # A school arrangement in this outcome's own quote (明天早读抽查) is its day; a header date is never borrowed.
     if not dates:dates=_school_own_dates(action['quote'],published)
     for supplement in action.get('shared_supplements',[])+action['supplements']:
@@ -4023,6 +4033,9 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             elif ambiguous_due and brief['state']=='ready' and not _school_dated_quote(dated_quote,cited_evidence,due,brief):
                 brief.update(state='review',reason=brief['reason'][:300]+' 原通知含多个日期，已按原文取'+due+'；请核对这一天是否属于本事项。')
             # A summary that names another day than this item's date, or a change that moves its day, is not ready.
+            if (brief['state']=='ready' and native_action and not native_action['changes'] and not historical
+                    and len(_school_native_dates(native_action))>1):
+                brief.update(state='review',reason=brief['reason'][:300]+' 本项原文含多个日期，未能确定截止；原日期待核对，未自动选择。')
             if brief['state']=='ready' and not historical and (not native_action or native_action['changes'] or set(native_action.get('linked',[]))&{q['ref'] for q in cited}):
                 declared=_school_goal_dates(brief['goal'],cited_evidence)
                 if native_action and len(_school_native_dates(native_action))>1:
