@@ -940,6 +940,58 @@ class SiblingNotOwnedTests(unittest.TestCase):  # Root counter 3: one reread row
         self.assertEqual(len([t for t in state['tasks'] if SIBLING_MATH in t['action']]), 1, 'only the parent-accepted task')
         self.assertEqual((state['messages'], state['cursor']), (before['messages'], before['cursor']))
 
+    def test_the_rewritten_sibling_keeps_its_complete_old_generated_row(self):  # Root v6 counter: readable old history
+        before = self.rows()
+        admin, math = sorted(before['items'], key=lambda i: SIBLING_MATH in i['body'])
+        old_plan = json.loads(math['plan'])
+        self.assertEqual(old_plan['school_selection_receipt'], ROOT_OLD_MATH_RECEIPT, "the natural old seed holds Root's old receipt")
+        def model(messages, *args, **kwargs):  # SYNTHETIC: the single reread gets BRIEF, the batch audit Root's frozen new reason
+            if 'existing_actions' not in json.loads(messages[1]['content']):
+                return BRIEF
+            return dict(proposals=[
+                dict(SYNTHETIC['proposals'][0], evidence=[dict(ref='message:postcandidate-samebatch-sibling:1')], action_quote=TEXT,
+                     existing_item_id=admin['id']),
+                dict(SIBLING_OLD_REPLY['proposals'][1], action_quote=SIBLING_MATH, existing_item_id=math['id'], task_state='ready',
+                     task_reason=ROOT_NEW_MATH_REASON)])
+        for i in range(4):
+            self.run_round(dict(side_effect=model), self.now + dt.timedelta(minutes=41 * i))
+        self.store = agent.Store(self.app.connect, self.app.profiles, self.data, app=self.app)  # reopen before reading back
+        state = self.rows()
+        after = next(i for i in state['items'] if i['id'] == math['id'])
+        assert_reread_in_place(self, math, after)
+        plan = json.loads(after['plan']);reread = plan['school_batch_reread']
+        kept = reread.get('previous_row')
+        self.assertEqual(kept, math, 'the complete old generated row is kept verbatim, not only its hash')
+        self.assertEqual(agent._hash(kept), reread['previous'], 'the kept row is the exact row the hash names')
+        kept_plan = json.loads(kept['plan'])
+        self.assertEqual(kept_plan, old_plan)
+        self.assertEqual(kept_plan['school_selection_receipt'], ROOT_OLD_MATH_RECEIPT, 'the old model receipt word for word')
+        self.assertEqual(kept_plan['school_task']['reason'], ROOT_OLD_MATH_REASON, 'the old guarded reason')
+        self.assertEqual(kept_plan['school_date_quote'], SIBLING_MATH)
+        self.assertEqual((kept['job_id'], kept['due'], kept['evidence'], kept['created']), (math['job_id'], '2026-10-22', math['evidence'], math['created']))
+        self.assertEqual((reread['job'], reread['fingerprint']), (plan['school_history_job'], state['jobs'][reread['job']]['fingerprint']))
+        # The new understanding is the current plan; the old words stay only inside the kept row, never mixed into it.
+        self.assertEqual((plan['school_selection_receipt']['reason'], plan['school_task']['reason']), (ROOT_NEW_MATH_REASON,) * 2)
+        self.assertNotIn(ROOT_OLD_MATH_REASON, json.dumps({k: v for k, v in plan.items() if k != 'school_batch_reread'}, ensure_ascii=False))
+        # History is no second todo and never authorizes another rewrite: one row, one task, later rounds read nothing.
+        with self.app.connect() as c:
+            self.assertFalse(agent._school_untouched_review(c, dict(after, state='pending', task_id=''), math['job_id']))
+        self.assertEqual(sorted(i['id'] for i in state['items']), sorted([admin['id'], math['id']]), 'no copy')
+        self.assertEqual(len([t for t in state['tasks'] if SIBLING_MATH in t['action']]), 1)
+        self.assertEqual((state['messages'], state['cursor'], state['jobs'][math['job_id']]),
+                         (before['messages'], before['cursor'], before['jobs'][math['job_id']]))
+        for minutes in (300, 341, 500):
+            count, _ = self.run_round(dict(side_effect=AssertionError('once per old batch')), self.now + dt.timedelta(minutes=minutes))
+            self.assertEqual(count, 0)
+        self.assertEqual(self.rows()['items'], state['items'])
+
+
+ROOT_OLD_MATH_REASON = 'synthetic：模型谨慎保留复核，本项原文与期限完整。'
+ROOT_NEW_MATH_REASON = 'synthetic：完整原文给出本项成果、步骤与明确期限。'
+ROOT_OLD_MATH_RECEIPT = dict(  # ROOT-actual-counterexample.json old_selection_receipt (SYNTHETIC), unchanged
+    advice='', change='new', goal=SIBLING_MATH, purpose='learning', reason=ROOT_OLD_MATH_REASON, state='review', submission='',
+    target_id='', title='完成数学《练习册》第18页第1至4题')
+
 
 class EmptyInstallTests(unittest.TestCase):
     def test_no_old_batch_means_zero_audit_calls_and_a_fixed_empty_boundary(self):  # SR05 all-empty
