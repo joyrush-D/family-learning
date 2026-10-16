@@ -2226,5 +2226,122 @@ class SchoolActionAnchorTests(unittest.TestCase):
                 self.doCleanups()
 
 
+class SchoolActionPurposeTests(unittest.TestCase):
+    """Known fictional F: learning or administrative use follows each item's own action and outcome.
+
+    Fixed receipts are local substitutes. The old Flash receipt came from the previous prompt and is only a
+    program control; none of these replies measures the changed prompt's real model accuracy.
+    """
+    setUp = SchoolNativeCoverageTests.setUp
+    _use_replies = SchoolNativeCoverageTests._use_replies
+    F_MESSAGES = (
+        ('2026-10-16T19:00:00+08:00', '示例科学老师', 'p1-heldout-f-science',
+         '科学：请于2026年11月2日18:30前写好《叶片观察》记录卡，分别记录两种叶片的颜色和边缘形状；记录卡2026年11月3日科学课交给科学老师。'),
+        ('2026-10-16T19:03:00+08:00', '示例班主任', 'p1-heldout-f-head',
+         '班主任：2026年11月4日科学课前带两片不同的落叶，用一个透明袋装好，不用购买标本。'),
+        ('2026-10-16T19:10:00+08:00', '示例科学老师', 'p1-heldout-f-science',
+         '更正：《叶片观察》记录卡改为2026年11月5日科学课交给科学老师；11月2日18:30前写好的要求不变。'),
+        ('2026-10-16T19:15:00+08:00', '示例家长', 'p1-heldout-f-parent', '家长问：记录卡拍照提交是否就不用交纸质了？'))
+    # The unchanged projected fields of the known Flash receipt (old prompt), evidence by message position.
+    F_RAW = (
+        dict(title_quote='请于2026年11月2日18:30前写好《叶片观察》记录卡，分别记录两种叶片的颜色和边缘形状', focus='school', due='2026-11-05',
+             evidence=[0, 2], task_title='科学：完成《叶片观察》记录卡',
+             task_goal='2026年11月2日18:30前写好《叶片观察》记录卡。\n分别记录两种叶片的颜色和边缘形状。\n记录卡于2026年11月5日科学课交给科学老师（原为11月3日，已更正）。',
+             task_advice='可先观察两种叶片，再分别填写颜色和边缘形状，写完后按更正后的日期带去科学课。', learning_subject='科学', learning_goal_id='',
+             task_change='new', task_target_id='', task_state='ready',
+             task_reason='科学老师明确要求全班完成记录卡，并给出完成时间、记录内容和更正后的交回时间。', task_purpose='learning',
+             task_submission='2026年11月5日科学课交给科学老师'),
+        dict(title_quote='2026年11月4日科学课前带两片不同的落叶，用一个透明袋装好，不用购买标本。', focus='school', due='2026-11-04',
+             evidence=[1], task_title='科学：带两片不同落叶（11月4日）',
+             task_goal='2026年11月4日科学课前带两片不同的落叶。\n用一个透明袋装好。\n不用购买标本。',
+             task_advice='可提前捡拾两片不同落叶，装入透明袋并确认日期。', learning_subject='科学', learning_goal_id='',
+             task_change='new', task_target_id='', task_state='ready',
+             task_reason='班主任明确要求2026年11月4日科学课前带两片不同落叶，并说明不用购买标本。', task_purpose='learning',
+             task_submission=''),
+        dict(title_quote='家长问：记录卡拍照提交是否就不用交纸质了？', focus='school', due='', evidence=[3], task_title='', task_goal='',
+             task_advice='', learning_subject='', learning_goal_id='', task_change='new', task_target_id='', task_state='reference',
+             task_reason='家长仅询问拍照提交是否可替代纸质提交，属于个人提问，不是新增学校要求，也不改变已明确的交回方式。',
+             task_purpose='optional', task_submission=''))
+
+    def _known_f(self, replies):
+        """Ingest F, run the real intake once, then reopen (replay) it; return the saved facts per original role."""
+        self.fixture.now = self.now = dt.datetime(2026, 10, 16, 20, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='14')
+        payload['messages'] = [dict(id=str(11 + i), message_order=str(11 + i), time=time, kind='text', sender=sender,
+                                    sender_id=publisher, text=text, unread=False)
+                               for i, (time, sender, publisher, text) in enumerate(self.F_MESSAGES)]
+        self.store.ingest(payload)
+        refs = ['message:' + self.source['id'] + ':' + m['id'] for m in payload['messages']]
+        replies = [dict(copy.deepcopy(r), evidence=[dict(ref=refs[i]) for i in r['evidence']]) for r in replies]
+        self._use_replies(payload, [dict(proposals=replies)])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 4))
+
+        def facts():
+            with self.store._db() as c:
+                rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")]
+                originals = [json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
+            with self.app.connect() as c:
+                tasks = {t['id']: t for t in self.app.tasks(c)}
+            roles = {}
+            for row in rows:
+                cited = [e['ref'] for e in json.loads(row['evidence'])]
+                plan = json.loads(row['plan'])
+                task = tasks.get(row['task_id'])
+                roles[{refs[0]: 'F1', refs[1]: 'F2', refs[3]: 'parent'}[cited[0]]] = dict(
+                    id=row['id'], task_id=row['task_id'], state=row['state'], due=row['due'], refs=cited,
+                    brief_state=plan['school_task']['state'], purpose=plan['school_task'].get('purpose'),
+                    school_learning=plan.get('school_learning'), goal_id=plan.get('school_goal_id', ''),
+                    category=task['agenda']['category'] if task else '', due_on=task['agenda']['due_on'] if task else '',
+                    action=task['action'] if task else '')
+            goals = goals_store.school_candidates(self.source['child_id'])
+            return roles, sorted(tasks), originals, goals
+
+        from family_goals import Store as Goals
+        goals_store = Goals(self.app, self.store)
+        first = facts()
+        self.assertEqual(first[2], payload['messages'], 'the complete originals stay unchanged')
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['failed'], replay['processed'], replay['created']), (0, 0, 0))
+        self.assertEqual(facts(), first, 'reopen keeps the same items, tasks, links and goals without duplicates')
+        self.assertEqual(self.model.call_count, 1)
+        return first[0], first[3]
+
+    def test_known_f_carrying_is_admin_and_the_record_card_stays_learning_through_save_and_reopen(self):
+        # The changed contract's expected reply; the second variant is a model that labels the carrying admin but
+        # still fills a subject: an administrative action never keeps a learning link either way.
+        for subject in ('', '科学'):
+            with self.subTest(subject=subject):
+                t = type(self)(methodName='runTest')
+                t.setUp()
+                try:
+                    replies = copy.deepcopy(self.F_RAW)
+                    replies[1].update(task_purpose='admin', learning_subject=subject)
+                    roles, goals = t._known_f(replies)
+                    self.assertEqual(set(roles), {'F1', 'F2', 'parent'})
+                    f1, f2, parent = roles['F1'], roles['F2'], roles['parent']
+                    self.assertEqual((f2['purpose'], f2['school_learning'], f2['goal_id'], f2['state'], f2['due'], f2['category'], f2['due_on']),
+                                     ('admin', None, '', 'accepted', '2026-11-04', 'todo', '2026-11-04'),
+                                     'carrying stays a pending administrative to-do without a learning link')
+                    for standard in ('两片不同的落叶', '一个透明袋', '不用购买标本'):self.assertIn(standard, f2['action'])
+                    self.assertEqual(f2['refs'], ['message:' + t.source['id'] + ':12'])
+                    self.assertEqual((f1['purpose'], f1['school_learning'], f1['state'], f1['due'], f1['category']),
+                                     ('learning', dict(subject='科学', goal_id=''), 'accepted', '2026-11-05', 'homework'))
+                    self.assertTrue(f1['goal_id'], 'the record card alone routes to a school learning goal')
+                    self.assertIn('2026年11月2日18:30前', f1['action'])
+                    self.assertEqual([(g['subject'], g['id']) for g in goals], [('科学', f1['goal_id'])],
+                                     'only the learning outcome creates the one science goal')
+                    self.assertEqual((parent['brief_state'], parent['task_id'], parent['school_learning']), ('reference', '', None))
+                finally:t.doCleanups()
+
+    def test_one_action_purpose_contract_reaches_batch_single_candidate_and_original_recovery(self):
+        for prompt in (agent.SCHOOL_PROMPT, agent._task_prompt(None), agent._school_original_prompt(None, None, None)):
+            self.assertIn('用途按本项明确的行动及其独立成果判定，不按老师称呼、科目或课程背景、文件名/材料名、任务标题或单一关键词判定', prompt)
+            self.assertIn('只要求携带、准备、领取或购买物品/资料而本项没写学习成果', prompt)
+            self.assertIn('不能只留提交而漏掉学习本身', prompt)
+            self.assertIn('不为避免漏收或误收而猜成admin或learning', prompt)
+            self.assertNotIn('learning：教学材料、课程', prompt)
+
+
 if __name__ == '__main__':
     unittest.main()
