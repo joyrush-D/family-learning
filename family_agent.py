@@ -2788,6 +2788,17 @@ def _school_saved_reread(store,c,row,evidence):
     if any(plan.get(k) for k in ('school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id',
                                  'approved','school_original_action','school_first_batch_correction','school_previous_policy','school_learning')):return None
     if not evidence or brief.get('origin_basis')!=_school_message_basis(evidence):return None
+    # Positive proof that only an older rule held it: today's guards read the very same saved receipt as ready.
+    # A review the current rules also hold is not reread, so a fresh review never earns a second call.
+    raw=plan.get('school_selection_receipt')
+    if not isinstance(raw,dict):return None
+    try:
+        fresh=_school_brief({key:raw.get(key) or ('review' if key=='state' else 'new' if key=='change' else '') for key in
+                             ['title','goal','advice','state','reason','change','target_id','purpose','submission']},
+                            incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence),
+                            evidence=evidence,separate_learning=True)
+    except (AgentError,ValueError,KeyError,TypeError):return None
+    if fresh.get('state')!='ready':return None
     job=c.execute('SELECT fingerprint,done FROM agent_jobs WHERE id=?',(row['job_id'],)).fetchone()
     if job is None or not job['done']:return None
     for e in evidence:
@@ -2800,7 +2811,7 @@ def _school_saved_reread(store,c,row,evidence):
         if table in tables and c.execute('SELECT 1 FROM '+table+' WHERE '+column+'=? LIMIT 1',(task_id,)).fetchone():return None
     if c.execute('SELECT 1 FROM records WHERE linked_task_id=? OR source=? LIMIT 1',(task_id,'Agent建议:'+row['id'])).fetchone():return None
     if c.execute('SELECT 1 FROM manual_tasks WHERE source LIKE ? LIMIT 1',('Agent建议:'+row['id']+'\n%',)).fetchone():return None
-    return dict(snapshot=snapshot,job_id=row['job_id'],job_fingerprint=job['fingerprint'],origin_basis=brief['origin_basis'])
+    return dict(snapshot=snapshot,job_id=row['job_id'],job_fingerprint=job['fingerprint'],origin_basis=brief['origin_basis'],receipt=_hash(raw))
 
 
 def _school_legacy_batch_correction(store,c,row,evidence):
