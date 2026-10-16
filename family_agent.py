@@ -2294,10 +2294,14 @@ def _school_goal_dates(goal,cited):
     """
     from family_agenda import sent_day
     # A note recording the superseded day (（原为10月19日早读交，已更正为10月20日早读）) is the originals' history, not another
-    # day of this item: it is set aside only when every day it names is one a cited original states. The originals still decide.
+    # day of this item: it is set aside only when every day it names is one a cited original states, its old day is named
+    # nowhere else in the summary and each other day it names the summary states outside it. The originals still decide.
     named=lambda text:{(int(m),int(d)) for m,d in re.findall(r'(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]',text)}
     stated=set().union(*(named(e['text']) for e in cited))
-    goal=re.sub(r'[（(]\s*原(?:为|定|是)[^（）()]*[）)]',lambda m:'' if named(m[0]) and named(m[0])<=stated else m[0],goal)
+    def history(m):
+        old=named(re.match(r'[（(]\s*原(?:为|定|是)\s*([^，,；;）)]*)',m[0])[1]);rest=named(goal[:m.start()]+goal[m.end():])
+        return '' if old and named(m[0])<=stated and not old&rest and named(m[0])-old<=rest else m[0]
+    goal=re.sub(r'[（(]\s*原(?:为|定|是)[^（）()]*[）)]',history,goal)
     return set().union(*(_school_own_dates(goal,day) for day in {sent_day(e.get('time','')) for e in cited} if day))
 
 

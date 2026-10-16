@@ -1949,6 +1949,9 @@ class SchoolActionAnchorTests(unittest.TestCase):
             'the handback does not follow the completion': dict(texts={'1': first.replace('2026年10月18日20:00前', '2026年10月21日20:00前'),
                                                                        '3': fix.replace('2026年10月18日20:00前', '2026年10月21日20:00前')}),
             'the anchor is in two originals': dict(texts={'3': fix + '完成《河岸随记》的阅读摘记，摘录两句并各写一句选择理由。'}),
+            # The old day kept as the item's own while its note claims an unproven change: the note is not history, so it stays read.
+            'an unproven change note on the old day': dict(publishers={'3': 'publisher:p1-heldout-a-head'}, excerpt=dict(
+                due='2026-10-19', task_goal=self._A_REPLY['proposals'][0]['task_goal'].replace('摘记本于2026年10月20日', '摘记本于2026年10月19日'))),
         }
         for name, case in cases.items():
             with self.subTest(name):
