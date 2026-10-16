@@ -564,6 +564,16 @@ class SchoolNativeCoverageTests(unittest.TestCase):
             self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM agent_items ORDER BY id')], item_rows)
             self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')], task_rows)
 
+    def test_a_complete_goal_writing_both_names_without_title_marks_saves_on_its_first_receipt(self):
+        payload, refs = self._ingest([self._COMPOUND])
+        goal = '2026年10月22日前填写虚构营地报名表的学生姓名，在虚构交通回执上完成家长签字，两份分别交回班主任。'
+        self._use_replies(payload, [self._compound_reply(refs[0], goal)])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        with self.store._db() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+            self.assertEqual([(r['state'], r['body']) for r in rows], [('accepted', goal)])
+
     def _compound_control(self, text, goal):
         payload, refs = self._ingest([text])
         self._use_replies(payload, [self._compound_reply(refs[0], goal, text)])
