@@ -2799,6 +2799,10 @@ def _school_saved_reread(store,c,row,evidence,now):
     from family_agenda import deadlines,sent_day
     dated=[v for e in evidence for v in re.split(r'[。；\n]+',e.get('text','')) if v.strip() and deadlines(v,sent_day(e.get('time','')))]
     if len(dated)>1:return None
+    # Nor may it complete a single-action review by compiling original clauses its own receipt never covered, even
+    # under one shared deadline: such a batch goes to the one-time batch audit, which keeps outcomes apart.
+    covered=brief.get('goal','')+'\n'+row['body']
+    if any(v.strip() not in covered for e in evidence for v in re.split(r'[。；\n]+',e.get('text','')) if v.strip()):return None
     # Positive proof that only an older rule held it: today's guards read the very same saved receipt as ready.
     # A review the current rules also hold is not reread, so a fresh review never earns a second call.
     raw=plan.get('school_selection_receipt')
