@@ -370,6 +370,61 @@ class TwoFormsInOneMessageTests(unittest.TestCase):
             self.assertEqual(count, 0)
         self.assertEqual(self.rows()['items'], state['items'])
 
+    def audit_reply(self, old_id):  # SYNTHETIC history-mode reply: first form covered by the old review, second independent
+        ref = [dict(ref='message:p1-two-forms:1')]
+        first = dict(SYNTHETIC['proposals'][0], evidence=ref, action_quote=TEXT.split('。')[0] + '。', existing_item_id=old_id)
+        return dict(proposals=[first, dict(first, title_quote=self.SECOND, task_title='家长签《秋游安全告知书》并交回',
+                                           task_goal=self.SECOND, action_quote=self.SECOND, existing_item_id='')])
+
+    def late_change(self, change):
+        before = self.rows()
+        old_item, = before['items']
+        def late(*args, **kwargs):
+            change()
+            return self.audit_reply(old_item['id'])
+        calls, _ = self.run_round(dict(side_effect=late), self.now)
+        self.assertEqual(calls, 1)
+        state = self.rows()
+        self.assertEqual(state['items'], before['items'], 'late audit result rejected: old review kept, nothing added')
+        self.assertEqual(state['tasks'], before['tasks'])
+        self.assertEqual(state['jobs'][old_item['job_id']], before['jobs'][old_item['job_id']])
+
+    def test_child_reassigned_during_the_audit_rejects_the_late_result(self):  # SR04
+        rules = self.root / 'family' / '家庭运行规则.md'
+        rules.write_text(rules.read_text() + '| child-2 | 示例乙 | 女 | 9岁 | 三年级 |\n')
+        def move():
+            config = json.loads((self.data / 'agent.json').read_text())  # isolated fictional config file only
+            config['sources'][0]['child_id'] = 'child-2'
+            (self.data / 'agent.json').write_text(json.dumps(config))
+        self.late_change(move)
+
+    def test_original_changed_during_the_audit_rejects_the_late_result(self):  # SR04
+        def edit():
+            with self.app.connect() as c:  # race simulation only: the stored original changes while the model runs
+                payload = json.loads(c.execute('SELECT payload FROM agent_messages').fetchone()[0])
+                payload['text'] = payload['text'].replace('10月22日', '10月23日', 1)
+                c.execute('UPDATE agent_messages SET payload=?', (json.dumps(payload, ensure_ascii=False),))
+        self.late_change(edit)
+
+    def test_exhausted_audit_is_retried_explicitly_under_the_same_identity(self):  # SR04
+        old_item, = self.rows()['items']
+        at, calls = self.now, []
+        for _ in range(6):
+            calls.append(self.run_round(dict(side_effect=agent.family_llm.LLMDraftError('synthetic failure')), at)[0])
+            at += dt.timedelta(minutes=41)
+        self.assertEqual(sum(calls), 3, calls)
+        keys = [k for k in self.rows()['jobs'] if k.startswith('school-history:')]
+        self.assertEqual(len(keys), 1)
+        self.assertEqual((self.rows()['jobs'][keys[0]]['attempts'], self.rows()['jobs'][keys[0]]['done']), (3, 0))
+        self.store.act(dict(action='retry', id=keys[0]))  # the existing explicit retry, same job ID
+        count, _ = self.run_round(dict(return_value=self.audit_reply(old_item['id'])), self.now + dt.timedelta(minutes=300))
+        self.assertEqual(count, 1)
+        state = self.rows()
+        self.assertEqual([k for k in state['jobs'] if k.startswith('school-history:')], keys, 'no new identity after retry')
+        self.assertEqual(state['jobs'][keys[0]]['done'], 1)
+        self.assertEqual(len([i for i in state['items'] if '秋游安全告知书' in i['body']]), 1)
+        self.assertEqual(next(i for i in state['items'] if i['id'] == old_item['id']), old_item)
+
 
 # SR02: the exact old source auto-accepted the first of two independent actions in one notice and never saw the second.
 # Seed probes the old source rejected or held for review (not old-accepted, so not SR02 seeds): two messages with one
