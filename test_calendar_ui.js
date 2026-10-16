@@ -162,6 +162,28 @@ test('task card puts completion goal before optional advice',()=>{
  vm.runInContext(core.slice(start,end),ctx);const html=ctx.taskActionHTML({action:'虚构成果目标',focus:{mode:'next',next_action:'虚构可选做法'}});
  assert.ok(html.indexOf('要做什么')<html.indexOf('操作建议'));assert.ok(html.indexOf('虚构成果目标')<html.indexOf('虚构可选做法'));
 });
+test('task card reads a requirement identical to its title once and keeps every differing condition',()=>{
+ const core=readFileSync(__dirname+'/app.js','utf8'),slice=(a,b)=>core.slice(core.indexOf(a),core.indexOf(b,core.indexOf(a))),ctx=vm.createContext({esc:escape,taskFocus:t=>t.focus||{mode:'next'},taskReviewDue:()=>false});
+ vm.runInContext(slice('function requirementHTML','function taskFocus')+slice('function taskActionHTML','function taskHTML'),ctx);
+ const long='朗读材料'.repeat(16),cases=[
+  ['读三段并回答','读三段并回答',['读三段并回答']],
+  ['写生词','写生词10个，每个3遍；家长签字',['10个','每个3遍','家长签字']],
+  ['复习第3课','复习第3课，不用抄写；口头回答后家长签字',['不用抄写','口头回答','家长签字']],
+  ['读三段并回答','读三段并回答\n每题写出依据，不少于20字\n提交要求：交纸质稿',['每题写出依据','不少于20字','交纸质稿']],
+  ['英语：第2项选做','阅读第3课并回答问题',['第2项选做','阅读第3课并回答问题']],
+  ['打印试卷','10月19日前只打印附件第2页，双面；签字后交回',['10月19日前','只打印附件第2页','双面','签字后交回']],
+  [long+'A组',long+'B组；录音只交B组',['A组','B组','录音只交B组']],
+  ['数学：完成同步练习第3课','完成同步练习第3课，周四交\n提交要求：交同步练习第3课作业',['第3课','周四交','提交要求：交同步练习第3课作业']]];
+ for(const [title,action,required] of cases)for(const compact of [false,true]){
+  const t={title,action,focus:{mode:'next',next_action:'虚构可选做法'}},before=JSON.stringify(t),html=ctx.taskActionHTML(t,compact),shown='<h3>'+escape(title)+'</h3>'+html;
+  assert.equal(JSON.stringify(t),before,'original title and action stay unchanged');assert.doesNotMatch(html,/完成目标待明确|具体要求尚未明确/);
+  for(const x of required)assert.ok(shown.includes(escape(x)),title.slice(0,8)+' keeps '+x);
+  if(title===action){assert.equal(shown.split(escape(action)).length-1,1,'identical requirement is read once');assert.doesNotMatch(html,/要做什么/)}
+  else for(const line of action.split('\n'))assert.ok(html.includes(escape(line)),'the complete differing requirement stays under the title: '+line);
+  assert.equal(html.includes('虚构可选做法'),!compact,'optional advice keeps its original place');
+ }
+ assert.match(ctx.taskActionHTML({title:'虚构',action:''}),/完成目标待明确/);assert.match(ctx.taskActionHTML({title:'虚构',action:'请核对这条通知是否适用：虚构'}),/完成目标待明确/);
+});
 
 test('today and inbox group legacy undated tasks without reopening closed items or showing future plans',()=>{
  const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.taskHTML=t=>`<article>${t.title}</article>`;h.ctx.taskView='Inbox';
