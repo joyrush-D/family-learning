@@ -3079,6 +3079,31 @@ def _history_scope_mark(store,origin,source,values,cited_key,receipt,scope_key):
         return True
 
 
+def _school_audit_mark(old_key):
+    return 'school-audit-scope:'+_hash([old_key])[:40]
+
+
+def _school_audit_boundary(store):
+    """Fix once, before the first permitted round's intake, which done school batches predate the saved-batch audit.
+
+    Only current-revision batches with a non-pending row are marked (legacy revisions keep their own path; untouched
+    pending reviews keep the saved reread). Batches saved later are never added; no model call happens here.
+    """
+    with store._db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        if c.execute("SELECT 1 FROM agent_jobs WHERE id='school-audit-boundary'").fetchone():return
+        groups={};marked=[]
+        for r in c.execute("SELECT job_id,child_id,state,plan FROM agent_items WHERE kind='school' AND state!='superseded' AND job_id LIKE 'messages:%'"):
+            groups.setdefault(r['job_id'],[]).append(r)
+        for job in c.execute("SELECT id,fingerprint FROM agent_jobs WHERE id LIKE 'messages:%' AND done=1 ORDER BY id").fetchall():
+            rows=groups.get(job['id'],[])
+            if (rows and len({r['child_id'] for r in rows})==1 and any(r['state']!='pending' for r in rows) and
+                    all(json.loads(r['plan']).get('school_selection_revision')==SCHOOL_SELECTION_REVISION for r in rows)):
+                c.execute('INSERT OR IGNORE INTO agent_jobs(id,fingerprint,done) VALUES(?,?,1)',(_school_audit_mark(job['id']),job['fingerprint']))
+                marked.append(job['id'])
+        c.execute("INSERT OR IGNORE INTO agent_jobs(id,fingerprint,done) VALUES('school-audit-boundary',?,1)",(_hash(marked),))
+
+
 def _history_scopes(store,config):
     """Prefer exact original batches; retain explicitly limited cited-only fallback."""
     sources={s['id']:s for s in config['sources'] if s['enabled']};groups={}
@@ -3093,6 +3118,10 @@ def _history_scopes(store,config):
         empty={key for key in jobs if not c.execute('SELECT 1 FROM agent_items WHERE job_id=? LIMIT 1',(key,)).fetchone()}
         eligible={key:(jobs[key]['fingerprint'],(7,8)) for key in legacy}
         eligible.update({key:(jobs[key]['fingerprint'],(7,)) for key in empty})
+        audit={}
+        for key,rows in groups.items():
+            mark=c.execute('SELECT fingerprint FROM agent_jobs WHERE id=?',(_school_audit_mark(key),)).fetchone() if key in jobs and key not in legacy else None
+            if mark and mark['fingerprint']==jobs[key]['fingerprint']:audit[key]=rows;eligible[key]=(jobs[key]['fingerprint'],(8,))
         matches=_history_batch_matches(store,c,sources,eligible) if eligible else {}
         result=[]
         for old_key,rows in legacy.items():
@@ -3141,6 +3170,15 @@ def _history_scopes(store,config):
             done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone()
             if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS): continue
             result.append((source,values,key,(old_key,jobs[old_key]['fingerprint'],'empty')))
+        for old_key,rows in sorted(audit.items()):
+            # Only the exact full original batch, same child, once under one stable key (no revision/day/config in it).
+            if old_key not in matches: continue
+            source,values=matches[old_key]
+            if any(r['child_id']!=source['child_id'] for r in rows) or any(v['kind']!='text' or v['unread'] for v in values): continue
+            key='school-history:'+_hash(['saved-batch-audit',old_key,source['child_id']])[:40]
+            done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone()
+            if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS): continue
+            result.append((source,values,key,(old_key,jobs[old_key]['fingerprint'],'audit')))
     return result
 
 
@@ -3150,6 +3188,9 @@ def _history_origin_current(c,origin,child_id):
     if not receipt or not receipt['done'] or receipt['fingerprint']!=fingerprint: return False
     if mode=='empty':return not c.execute('SELECT 1 FROM agent_items WHERE job_id=? LIMIT 1',(old_key,)).fetchone()
     rows=c.execute("SELECT child_id,plan FROM agent_items WHERE job_id=? AND kind='school' AND state!='superseded'",(old_key,)).fetchall()
+    if mode=='audit':
+        mark=c.execute('SELECT fingerprint FROM agent_jobs WHERE id=?',(_school_audit_mark(old_key),)).fetchone()
+        return bool(mark and mark['fingerprint']==fingerprint and rows and all(r['child_id']==child_id for r in rows))
     return bool(rows and all(r['child_id']==child_id for r in rows) and
                 any(json.loads(r['plan']).get('school_selection_revision')!=SCHOOL_SELECTION_REVISION for r in rows))
 
@@ -3218,7 +3259,8 @@ def _recheck_school_history(app,store,now,budget,scopes):
     goals=Goals(app,store)
     for scope in scopes:
         source,values,key=scope[:3];origin=scope[3] if len(scope)>3 else None
-        fp=store._job(key,dict(revision=SCHOOL_SELECTION_REVISION,source=source,messages=values),now,model=True)
+        fp=store._job(key,dict(revision=SCHOOL_SELECTION_REVISION,source=source,messages=values),now,model=True,
+                      keep_budget=bool(origin and origin[2]=='audit'))
         if not fp: continue
         try:
             with store._db() as c:
@@ -5837,6 +5879,7 @@ def run_once(app, now=None):
             budget -= material['used']; processed += material['used']; failed += material['failed']
             recovered=_recover_school_ack_originals(store,config,now)
             created+=recovered['created'];failed+=recovered['failed']
+            _school_audit_boundary(store)  # before this round's intake; fixed once, zero model calls
             history_scopes=_history_scopes(store,config)
             # Share the original three-call budget; alternate five-minute windows under the one-minute Agent service.
             history_reserve=int(bool(history_scopes) and now.minute//5%2==0 and budget>0)
