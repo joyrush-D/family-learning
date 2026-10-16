@@ -14,7 +14,7 @@
 
 M4证据（先提交后验证）：
 - 精确`95770f7`：新增3项退出0（虚构整日逐字重放、模型未完成回执零写入、标题用途词边界）；完整test_agent 260项OK；test_calendar_ui 36项通过；用打包Chromium跑test_pending_admin_ui和test_message_page_ui，360/1440均退出0。
-- 精确`cfcb07a`：test_calendar_ui 36项通过（在原有成长助手卡片测试内新增参考卡与消息摘要的显示合同断言）；同一测试文件换用main的`app.js`作反向对照，失败于“legacy placeholder”，说明断言能检出旧显示。相邻11个Python套件（学校PDF/原件/历史/行动清单/原生覆盖/页面/确认原件、日程、消息页、功课、Agent HTTP），用Python 3.9共358项，352项通过；其余3项失败、3项错误，在main `1f75e82`上逐项同样出现（附件回执多出sha256字段、后到共同标准运行计数、Python 3.9的sqlite3缺`sqlite_errorcode`），属既有失败，不是本改动引入。改用Python 3.12跑test_agent加相邻套件共618项，615项通过；剩余3项失败与main在3.12下逐项相同（sqlite3错误在3.12下不出现）。
+- 精确`cfcb07a`：test_calendar_ui 36项通过（在原有成长助手卡片测试内新增参考卡与消息摘要的显示合同断言）；同一测试文件换用main的`app.js`作反向对照，失败于“legacy placeholder”，说明断言能检出旧显示。相邻11个Python套件（学校PDF/原件/历史/行动清单/原生覆盖/页面/确认原件、日程、消息页、功课、Agent HTTP），用Python 3.9共358项，352项通过；其余3项失败、3项错误，在main `1f75e82`上逐项同样出现（附件视图与上传回执的sha256字段预期不一致，本次未修；后到共同标准运行计数；Python 3.9的sqlite3缺`sqlite_errorcode`），属既有失败，不是本改动引入。改用Python 3.12跑test_agent加相邻套件共618项，615项通过；剩余3项失败与main在3.12下逐项相同（sqlite3错误在3.12下不出现）。
 - 虚构整日重放（原Store.ingest→run_once→_select→_save→自动收录）：5项自动收录，各自保留日期、完整要求和出处；两项行政事项各自独立，不带admin前缀；参考留在待看，不收录、不进学习目标。去掉参考一项的不完整回执：整批0任务、0候选，消息保持未处理，等原后台重试。重开不调用模型，5项不变。
 
 保留失败与未达项：
