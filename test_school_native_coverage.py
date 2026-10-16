@@ -211,9 +211,11 @@ class SchoolNativeCoverageTests(unittest.TestCase):
 
     def _correction_batch(self, quote):
         texts = ['数学：2026年10月17日21:00前订正《小数运算练习》第2页第3、5、7题，每题写出正确过程并写一句错因；订正本2026年10月18日第一节课前交给数学课代表；2026年10月18日数学课前独立完成10道两位小数加减口算，写在口算本上。',
+                 '2026年10月19日科学课请带透明塑料杯一个和纸巾两张，装在同一个袋子里；这些用品用于课堂观察，不要求在家提前做实验。',
                  '更正：口算改成6道，其他要求和2026年10月18日的时间不变；第2页订正仍只做第3、5、7题。',
-                 '家长：孩子说不用交订正本，这个说法还需要问老师。']
-        payload, refs = self._ingest(texts, ['synthetic-teacher-1', 'synthetic-teacher-1', 'synthetic-parent-1'])
+                 '家长：孩子说不用交订正本，这个说法还需要问老师；我也想知道纸巾能不能改成毛巾。']
+        payload, refs = self._ingest(texts, ['synthetic-teacher-1', 'synthetic-teacher-2', 'synthetic-teacher-1', 'synthetic-parent-1'])
+        texts, refs = [texts[0], texts[2], texts[3], texts[1]], [refs[0], refs[2], refs[3], refs[1]]
         fix = fixtures.school_proposal(
             title_quote=quote, due='2026-10-18', evidence=[dict(ref=refs[0]), dict(ref=refs[1])], learning_subject='数学',
             task_title='数学：订正《小数运算练习》第2页', task_state='ready', task_purpose='learning', task_reason='虚构回执。',
@@ -224,9 +226,14 @@ class SchoolNativeCoverageTests(unittest.TestCase):
             evidence=[dict(ref=refs[0]), dict(ref=refs[1])], learning_subject='数学', task_title='数学：完成6道两位小数加减口算',
             task_goal='2026年10月18日数学课前独立完成6道两位小数加减口算，写在口算本上；口算数量已由10道更正为6道。',
             task_state='ready', task_purpose='learning', task_reason='虚构回执。')
-        question = fixtures.school_proposal(title_quote=texts[2], evidence=[dict(ref=refs[2])], task_state='reference',
+        question = fixtures.school_proposal(title_quote='孩子说不用交订正本，这个说法还需要问老师；我也想知道纸巾能不能改成毛巾',
+                                            evidence=[dict(ref=refs[2])], task_state='reference',
                                             task_purpose='optional', task_reason='虚构回执：家长转述，不是老师要求。')
-        return payload, refs, [fix, oral, question]
+        cups = fixtures.school_proposal(
+            title_quote='2026年10月19日科学课请带透明塑料杯一个和纸巾两张，装在同一个袋子里', due='2026-10-19', evidence=[dict(ref=refs[3])],
+            task_title='科学：带透明塑料杯和纸巾', task_state='ready', task_purpose='admin', task_reason='虚构回执。',
+            task_goal='2026年10月19日科学课带透明塑料杯一个和纸巾两张，装在同一个袋子里；这些用品用于课堂观察，不要求在家提前做实验。')
+        return payload, refs, [fix, oral, cups, question]
 
     def test_full_completion_and_handback_anchor_saves_the_handback_day_and_a_short_anchor_stays_unproven(self):
         full = '数学：2026年10月17日21:00前订正《小数运算练习》第2页第3、5、7题，每题写出正确过程并写一句错因；订正本2026年10月18日第一节课前交给数学课代表'
