@@ -2293,7 +2293,35 @@ def _school_goal_dates(goal,cited):
     so a day that differs between them or from the saved date never equals that date.
     """
     from family_agenda import sent_day
+    # A note recording the superseded day (（原为10月19日早读交，已更正为10月20日早读）) is the originals' history, not another
+    # day of this item: it is set aside only when every day it names is one a cited original states. The originals still decide.
+    named=lambda text:{(int(m),int(d)) for m,d in re.findall(r'(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]',text)}
+    stated=set().union(*(named(e['text']) for e in cited))
+    goal=re.sub(r'[（(]\s*原(?:为|定|是)[^（）()]*[）)]',lambda m:'' if named(m[0]) and named(m[0])<=stated else m[0],goal)
     return set().union(*(_school_own_dates(goal,day) for day in {sent_day(e.get('time','')) for e in cited} if day))
+
+
+# Only a subject label and the work's own completion limit may stand before a short anchor in its clause (语文：2026年10月18日20:00前).
+_SCHOOL_LIMIT_LEAD=(r'\s*(?:[^：:，,。；;\n\d]{1,6}[：:])?\s*(?:请|须|需)?\s*(?:于|在)?\s*(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*[日号]'
+                    r'\s*(?:\d{1,2}[:：]\d{2}\s*)?(?:之前|以前|前)\s*')
+
+
+def _school_item_span(text,start,end,published):
+    """The whole original range of one work whose short anchor omits its own completion limit and its handback.
+
+    完成《河岸随记》的阅读摘记，摘录两句并各写一句选择理由 stands in 语文：2026年10月18日20:00前…；摘记本2026年10月19日早读交给语文课代表：
+    the anchor ends its clause and only the label and its completion limit precede it, so the range is that whole clause and
+    each directly following dated handback clause. Whether those clauses hand back this same work is not decided here:
+    _school_handback_day proves it on the range, so another object, a second day or any other clause keeps every day.
+    Anything else before the anchor (another action, half a predicate) leaves it unproven.
+    """
+    from family_agenda import deadlines
+    head=max(text.rfind(mark,0,start) for mark in '。；;\n')+1
+    if not re.fullmatch(_SCHOOL_LIMIT_LEAD,text[head:start]) or not _school_complete_span(text,head,end):return None
+    while ((back:=re.match(r'[。；;]([^。；;\n]+)',text[end:])) and re.search(r'交(?:给|回|到|至)|提交|上交|交\s*$',back[1])
+           and len(deadlines(back[1],published))==1):
+        end+=back.end()
+    return head,end
 
 
 def _school_own_clause_dates(quote,cited,others):
@@ -2301,12 +2329,16 @@ def _school_own_clause_dates(quote,cited,others):
 
     The quote may stop before the rest of its notice, which still states the event it holds: 现通知该家长会取消 after the
     quoted meeting leaves it no day, so neither the local quote nor the summary can make a cancelled day valid.
+    A short anchor reads its whole item's range (_school_item_span) from the same original, never the model's words.
     """
     from family_agenda import later_dropped_days,sent_day
     homes=[e for e in cited if quote and quote in e['text']]
     if len(homes)!=1 or homes[0]['text'].count(quote)!=1:return set()
     text=homes[0]['text'];start=text.index(quote);end=start+len(quote)
-    if not _school_complete_span(text,start,end):return set()
+    if not _school_complete_span(text,start,end):
+        span=_school_item_span(text,start,end,sent_day(homes[0].get('time','')))
+        if not span:return set()
+        (start,end),quote=span,text[span[0]:span[1]]
     for other in others:  # Another proposal quoting any of this clause makes it shared, not this item's own.
         at=0
         while other and (at:=text.find(other,at))!=-1:

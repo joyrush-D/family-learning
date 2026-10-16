@@ -1844,6 +1844,123 @@ class SchoolActionAnchorTests(unittest.TestCase):
         self.assertEqual({r['id']: r for r in rows if r['id'] in (copying['id'], dictation['id'])},
                          {copying['id']: copying, dictation['id']: dictation})
 
+    # Fictional known regression A, byte-for-byte: four originals and the saved model reply whose excerpt anchor omits its
+    # own completion limit and its handback. Only the collector identity is supplied: each symbolic publisher becomes the
+    # same sender_id (publisher:p1-heldout-a-language -> sender_id p1-heldout-a-language -> one natural publisher hash), so
+    # one teacher stays one identity and the head teacher and parent stay others. Times, refs, texts and the reply are kept;
+    # the originals carry no message_order, so none is invented.
+    _A_MESSAGES = [
+        ('1', '2026-10-16T17:00:00+08:00', 'p1-heldout-a-language', '虚构语文老师',
+         '语文：2026年10月18日20:00前完成《河岸随记》的阅读摘记，摘录两句并各写一句选择理由；摘记本2026年10月19日早读交给语文课代表；2026年10月19日早读默写《山行》全文。'),
+        ('2', '2026-10-16T17:03:00+08:00', 'p1-heldout-a-head', '虚构班主任',
+         '请家长2026年10月20日前把秋季活动回执签字交班主任；老师会在班会说明活动安排，此说明仅供参考。'),
+        ('3', '2026-10-16T17:10:00+08:00', 'p1-heldout-a-language', '虚构语文老师',
+         '更正：摘记本改为2026年10月20日早读交给语文课代表；摘记仍须2026年10月18日20:00前完成；《山行》默写安排不变。'),
+        ('4', '2026-10-16T17:15:00+08:00', 'p1-heldout-a-parent', '虚构家长', '家长问：摘记本是不是只交一本？活动回执有没有电子版？')]
+    _A_REPLY = json.loads('{"proposals": [{"title_quote": "完成《河岸随记》的阅读摘记，摘录两句并各写一句选择理由", "focus": "school", "due": "2026-10-20", "evidence": [{"ref": "message:p1-heldout-a:1"}, {"ref": "message:p1-heldout-a:3"}], "task_title": "语文：完成《河岸随记》阅读摘记", "task_goal": "完成《河岸随记》的阅读摘记：摘录两句，并各写一句选择理由。\\n摘记须在2026年10月18日20:00前完成。\\n摘记本于2026年10月20日早读交给语文课代表（原为10月19日早读交，已更正为10月20日早读）。", "task_advice": "可先通读《河岸随记》，选定两句后分别写下选择理由，再誊入摘记本。", "learning_subject": "语文", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "ready", "task_reason": "已读文字明确要求完成摘记、摘录两句并各写一句理由，且更正后交回时间明确。", "task_purpose": "learning", "task_submission": "摘记本于2026年10月20日早读交给语文课代表。"}, {"title_quote": "2026年10月19日早读默写《山行》全文", "focus": "school", "due": "2026-10-19", "evidence": [{"ref": "message:p1-heldout-a:1"}, {"ref": "message:p1-heldout-a:3"}], "task_title": "语文：早读默写《山行》全文", "task_goal": "2026年10月19日早读默写《山行》全文。\\n《山行》默写安排不变。", "task_advice": "可提前熟记《山行》全文，默写前自查易错字。", "learning_subject": "语文", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "ready", "task_reason": "已读文字明确安排2026年10月19日早读默写《山行》全文，且更正说明该安排不变。", "task_purpose": "learning", "task_submission": ""}, {"title_quote": "请家长2026年10月20日前把秋季活动回执签字交班主任", "focus": "school", "due": "2026-10-20", "evidence": [{"ref": "message:p1-heldout-a:2"}], "task_title": "秋季活动回执签字交班主任", "task_goal": "请家长在2026年10月20日前把秋季活动回执签字后交班主任。\\n老师会在班会说明活动安排，此说明仅供参考。", "task_advice": "可先签字回执，再按班主任要求交回。", "learning_subject": "", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "ready", "task_reason": "已读文字明确要求家长在2026年10月20日前将秋季活动回执签字交班主任。", "task_purpose": "admin", "task_submission": "签字后的秋季活动回执交班主任。"}, {"title_quote": "家长问：摘记本是不是只交一本？活动回执有没有电子版？", "focus": "school", "due": "", "evidence": [{"ref": "message:p1-heldout-a:4"}], "task_title": "", "task_goal": "", "task_advice": "", "learning_subject": "", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "reference", "task_reason": "家长提问，不是新增学校要求，不生成任务。", "task_purpose": "optional", "task_submission": ""}]}')
+
+    def _a_select(self, texts=None, publishers=None, excerpt=None):
+        """Real _select on A's originals and reply; a variant replaces only the named texts, publishers or excerpt fields."""
+        texts = texts or {};publishers = publishers if publishers is not None else {}
+        evidence = [dict(ref='message:p1-heldout-a:' + n, text=texts.get(n, text), time=time, kind='text', content_incomplete=False,
+                         attachments=[], unread=False, sender=sender,
+                         **({} if publishers.get(n, publisher) is None else dict(publisher=publishers.get(n, 'publisher:' + publisher))))
+                    for n, time, publisher, sender, text in self._A_MESSAGES]
+        reply = copy.deepcopy(self._A_REPLY);reply['proposals'][0].update(excerpt or {})
+        with patch.object(agent.family_llm, '_chat_json', return_value=reply):
+            items = agent._select('school', evidence, school_goals=[], school_tasks=[], as_of='2026-10-16')
+        return items
+
+    def test_known_a_short_excerpt_anchor_saves_the_corrected_handback_day_from_its_whole_original(self):
+        self.fixture.source['id'] = 'p1-heldout-a';self.fixture.config()
+        stamp = '2026-10-16T17:20:00+08:00'
+        payload = dict(source_id='p1-heldout-a', expected_cursor='10', cursor='14', checked_at=stamp, last_message_time=stamp, error='',
+                       messages=[dict(id=n, time=time, kind='text', sender=sender, sender_id=publisher, text=text, unread=False)
+                                 for n, time, publisher, sender, text in self._A_MESSAGES])
+        self.store.ingest(copy.deepcopy(payload))
+        calls = []
+
+        def saved_reply(messages, schema, name, timeout=60, *, data_path=None):
+            context = json.loads(messages[-1]['content'])
+            self.assertEqual([(e['ref'], e['text'], e['time']) for e in context['evidence']],
+                             [('message:p1-heldout-a:' + n, text, time) for n, time, _, _, text in self._A_MESSAGES])
+            self.assertEqual(len({e['publisher'] for e in context['evidence']}), 3)
+            self.assertEqual(context['evidence'][0]['publisher'], context['evidence'][2]['publisher'])
+            calls.append(name)
+            return copy.deepcopy(self._A_REPLY)
+
+        self.model.side_effect = saved_reply
+        now = dt.datetime(2026, 10, 16, 17, 30, tzinfo=agent.TZ)
+        result = agent.run_once(self.app, now)
+        self.assertEqual((result['failed'], result['processed'], len(calls)), (0, 4, 1))
+        with self.store._db() as c:
+            items = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY rowid")]
+            tasks = {t['title']: dict(t) for t in c.execute('SELECT * FROM manual_tasks')}
+            rows = [tuple(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+            originals = [json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
+        self.assertEqual([(m['id'], m['time'], m['text']) for m in originals], [(n, t, x) for n, t, _, _, x in self._A_MESSAGES])
+        self.assertFalse(any('message_order' in m for m in originals), 'no collector order is invented')
+        excerpt, = [i for i in items if '河岸随记' in i['title']]
+        self.assertEqual((excerpt['due'], excerpt['state']), ('2026-10-20', 'accepted'))
+        self.assertEqual([e['ref'] for e in json.loads(excerpt['evidence'])], ['message:p1-heldout-a:1', 'message:p1-heldout-a:3'])
+        plan = json.loads(excerpt['plan'])
+        self.assertEqual(plan['school_selection_receipt']['goal'], self._A_REPLY['proposals'][0]['task_goal'], 'the reply is kept as said')
+        for words in ('2026年10月18日20:00前完成', '摘录两句', '各写一句选择理由', '2026年10月20日早读交给语文课代表'):
+            self.assertIn(words, tasks['语文：完成《河岸随记》阅读摘记']['action'])
+        self.assertIn('摘记本2026年10月19日早读交给语文课代表', tasks['语文：完成《河岸随记》阅读摘记']['source'], 'the old handback stays in its original')
+        self.assertEqual({t: tasks[t]['due'] for t in tasks},
+                         {'语文：完成《河岸随记》阅读摘记': '2026-10-20', '语文：早读默写《山行》全文': '2026-10-19', '秋季活动回执签字交班主任': '2026-10-20'})
+        self.assertNotIn('河岸随记', tasks['语文：早读默写《山行》全文']['action'])
+        self.assertNotIn('摘记', tasks['秋季活动回执签字交班主任']['action'])
+        question, = [i for i in items if json.loads(i['evidence'])[0]['ref'] == 'message:p1-heldout-a:4']
+        self.assertEqual(json.loads(question['plan'])['school_task']['state'], 'reference')
+        self.assertFalse(question['task_id'], 'the parent question stays reference, never a todo')
+        replay = agent.run_once(self.app, now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['processed'], replay['created'], len(calls)), (0, 0, 1))
+        with self.store._db() as c:
+            self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')], rows, 'no second task')
+
+    def test_a_same_shaped_excerpt_of_another_subject_and_book_reads_its_whole_original_range(self):
+        texts = {'1': '英语：2026年11月3日19:30前完成《海边灯塔》的读书卡，写出三个生词并各造一个句子；读书卡2026年11月4日第一节课前交给英语课代表；2026年10月19日早读默写《山行》全文。',
+                 '3': '更正：读书卡改为2026年11月5日第一节课前交给英语课代表；读书卡仍须2026年11月3日19:30前完成；《山行》默写安排不变。'}
+        items = self._a_select(texts, excerpt=dict(
+            title_quote='完成《海边灯塔》的读书卡，写出三个生词并各造一个句子', due='2026-11-05', task_title='英语：完成《海边灯塔》读书卡',
+            task_goal='完成《海边灯塔》的读书卡：写出三个生词，并各造一个句子。\n读书卡须在2026年11月3日19:30前完成。\n读书卡于2026年11月5日第一节课前交给英语课代表（原为11月4日，已更正）。',
+            task_submission='读书卡于2026年11月5日第一节课前交给英语课代表。', learning_subject='英语'))
+        card, = [i for i in items if '海边灯塔' in i['title']]
+        self.assertEqual((card['due'], card['plan']['school_task']['state']), ('2026-11-05', 'ready'))
+        dictation, = [i for i in items if '山行' in i['title']]
+        self.assertEqual((dictation['due'], dictation['plan']['school_task']['state']), ('2026-10-19', 'ready'))
+
+    def test_an_unproven_excerpt_range_or_correction_keeps_the_short_anchor_for_review(self):
+        self.assertEqual([(i['due'], i['plan']['school_task']['state']) for i in self._a_select() if '河岸随记' in i['title']],
+                         [('2026-10-20', 'ready')])
+        first = self._A_MESSAGES[0][4];fix = self._A_MESSAGES[2][4]
+        cases = {
+            'another teacher corrects': dict(publishers={'3': 'publisher:p1-heldout-a-head'}),
+            'no publisher proves the teacher': dict(publishers={'1': None, '3': None}),
+            'an empty publisher proves no one': dict(publishers={'1': '', '3': ''}),
+            'another object is handed back': dict(texts={'1': first.replace('摘记本2026', '回执2026'), '3': fix.replace('摘记本改为', '回执改为')}),
+            'the correction names another book': dict(texts={'3': fix.replace('摘记本改为', '《湖畔随记》摘记本改为')}),
+            'the anchor drops its verb': dict(excerpt=dict(title_quote='《河岸随记》的阅读摘记，摘录两句并各写一句选择理由')),
+            'the anchor stops inside its clause': dict(excerpt=dict(title_quote='完成《河岸随记》的阅读摘记')),
+            'another action precedes the anchor': dict(texts={'1': first.replace('20:00前完成', '20:00前朗读课文，完成'),
+                                                              '3': fix.replace('摘记仍须2026年10月18日20:00前完成', '摘记仍须按时完成')}),
+            'the handback does not follow the completion': dict(texts={'1': first.replace('2026年10月18日20:00前', '2026年10月21日20:00前'),
+                                                                       '3': fix.replace('2026年10月18日20:00前', '2026年10月21日20:00前')}),
+            'the anchor is in two originals': dict(texts={'3': fix + '完成《河岸随记》的阅读摘记，摘录两句并各写一句选择理由。'}),
+        }
+        for name, case in cases.items():
+            with self.subTest(name):
+                if name == 'another action precedes the anchor':
+                    # The listed reading action is an outcome of its own, so this reply leaves the whole batch retried.
+                    with self.assertRaises(agent.AgentError) as refused:self._a_select(**case)
+                    self.assertEqual(refused.exception.code, 'school_action_coverage')
+                    continue
+                excerpt, = [i for i in self._a_select(**case) if '河岸随记' in i['title']]
+                self.assertEqual(excerpt['plan']['school_task']['state'], 'review')
+                self.assertEqual([q['ref'] for q in excerpt['evidence']], ['message:p1-heldout-a:1', 'message:p1-heldout-a:3'])
+
 
 if __name__ == '__main__':
     unittest.main()
