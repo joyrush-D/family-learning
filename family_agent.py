@@ -5698,7 +5698,8 @@ def _refresh_school(app, store, now, budget):
                 plan['school_task']=brief
                 if not current:plan['school_previous_policy']=copy.deepcopy(row)
                 if policy_scope:plan['school_policy_reread_scope']=policy_scope
-                if saved_reread:plan['school_saved_reread']=saved_reread  # once per item; the generated snapshot stays the original proof
+                if saved_reread:  # once per item; the generated snapshot stays the original proof, the complete old row stays readable
+                    plan['school_saved_reread']=dict(saved_reread,previous=_hash(row),previous_row=copy.deepcopy(row))
                 with store._db() as c:
                     c.execute('BEGIN IMMEDIATE')
                     if (not _school_current(store,c,row,evidence,page_key,pdf_key,material_key) or policy_scope and _school_legacy_policy_scope(store,c,row,evidence)!=policy_scope
