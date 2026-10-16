@@ -152,6 +152,22 @@ class SavedSchoolRereadTests(unittest.TestCase):
         again = self.rows()
         self.assertEqual((again['items'], again['tasks']), (after['items'], after['tasks']))
 
+    def test_single_reread_keeps_the_complete_old_generated_row(self):  # Root v6 counter, the sibling single-row path
+        before = self.rows()
+        old_item, = before['items']
+        old_plan = json.loads(old_item['plan'])
+        calls, _ = self.run_round(dict(return_value=BRIEF), self.now)
+        self.assertEqual(calls, 1)
+        self.store = agent.Store(self.app.connect, self.app.profiles, self.data, app=self.app)  # reopen before reading back
+        item, = self.rows()['items']
+        plan = json.loads(item['plan']);marker = plan['school_saved_reread']
+        self.assertEqual(marker.get('previous_row'), old_item, 'the complete old generated row is kept verbatim, not only hashes')
+        self.assertEqual(agent._hash(marker['previous_row']), marker.get('previous'), 'the kept row is the exact row the hash names')
+        kept = json.loads(marker['previous_row']['plan'])
+        self.assertEqual(kept, old_plan, 'old receipt, old guarded school_task reason and date quote word for word')
+        self.assertEqual(plan['school_task']['reason'], BRIEF['reason'], 'the new understanding is the current plan')
+        self.assertEqual(plan['school_selection_receipt'], old_plan['school_selection_receipt'])
+
     def test_parent_decisions_are_never_reread(self):
         # Root route (ROOT-route-decision.json): a parent-decided batch may still be audited once, but the decided row is
         # never rewritten, resurrected or copied. The old "0 calls" expectation predates that route.
