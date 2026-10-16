@@ -21,6 +21,30 @@ def read_all(connection):
     return {row['task_id']:{key:dict(row).get(key,value) for key,value in default().items()} for row in connection.execute('SELECT * FROM task_focus')}
 
 
+def _tables(c):
+    c.execute('''CREATE TABLE IF NOT EXISTS task_focus (
+        task_id TEXT PRIMARY KEY, mode TEXT NOT NULL, next_action TEXT NOT NULL,
+        waiting_for TEXT NOT NULL, review_on TEXT NOT NULL,
+        version INTEGER NOT NULL, updated TEXT NOT NULL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS task_focus_history (
+        request_key TEXT PRIMARY KEY, task_id TEXT NOT NULL, request_hash TEXT NOT NULL,
+        previous TEXT NOT NULL, current TEXT NOT NULL, updated TEXT NOT NULL)''')
+    columns={r['name'] for r in c.execute('PRAGMA table_info(task_focus)')}
+    for key in ('category','published_on','due_on','scheduled_on','box','title','goal'):
+        if key not in columns: c.execute('ALTER TABLE task_focus ADD COLUMN '+key+" TEXT NOT NULL DEFAULT '"+str(default()[key])+"'")
+
+
+def advance(c, task_id, updated, scheduled_on):
+    """The item's own source days changed: a form opened on the old days fails the existing version check.
+
+    Only the version moves; a never-saved focus keeps the plan day it already showed (the capture day)."""
+    _tables(c)
+    fields=list(default())
+    focus=dict(default(),version=1,updated=updated,scheduled_on=scheduled_on)
+    c.execute('INSERT INTO task_focus (task_id,'+','.join(fields)+') VALUES ('+','.join('?' for _ in range(len(fields)+1))+') ON CONFLICT(task_id) DO UPDATE SET version=version+1,updated=excluded.updated',
+              (task_id,*(focus[key] for key in fields)))
+
+
 def _text(obj, key, limit):
     value=obj.get(key,'')
     if not isinstance(value,str) or len(value)>limit or any(ord(c)<32 and c not in '\n\t' or ord(c)==127 for c in value):
@@ -67,16 +91,7 @@ def save(app, obj, connection=None, *, allow_closed=False):
             if task is None: raise FocusError('事项不存在，请刷新',404,'task_missing')
             update=c.execute('SELECT * FROM task_updates WHERE id=?',(ident,)).fetchone()
             task['update']=dict(update) if update else None
-            c.execute('''CREATE TABLE IF NOT EXISTS task_focus (
-                task_id TEXT PRIMARY KEY, mode TEXT NOT NULL, next_action TEXT NOT NULL,
-                waiting_for TEXT NOT NULL, review_on TEXT NOT NULL,
-                version INTEGER NOT NULL, updated TEXT NOT NULL)''')
-            c.execute('''CREATE TABLE IF NOT EXISTS task_focus_history (
-                request_key TEXT PRIMARY KEY, task_id TEXT NOT NULL, request_hash TEXT NOT NULL,
-                previous TEXT NOT NULL, current TEXT NOT NULL, updated TEXT NOT NULL)''')
-            columns={r['name'] for r in c.execute('PRAGMA table_info(task_focus)')}
-            for key in ('category','published_on','due_on','scheduled_on','box','title','goal'):
-                if key not in columns: c.execute('ALTER TABLE task_focus ADD COLUMN '+key+" TEXT NOT NULL DEFAULT '"+str(default()[key])+"'")
+            _tables(c)
             receipt=c.execute('SELECT * FROM task_focus_history WHERE request_key=?',(request_key,)).fetchone()
             if receipt:
                 if receipt['task_id']!=ident or receipt['request_hash']!=digest:
