@@ -3479,12 +3479,13 @@ def _school_native_command(clause):
 def _school_native_reference(clause):
     """Material its own clause limits to information (阅读活动参考资料仅供了解，自愿查看) assigns no outcome.
 
-    Only a material noun directly followed by 仅供/只供, with every further comma part a bare voluntary use, counts.
-    Inside that noun's own name a closed book title (《四季花园》) or an edition number (第3期) is a name, not a count.
-    A title closed within its own clause is one object before any date or comma is read, so 《11月6日札记》 and
-    《四季，花园》 are names too; an unclosed, nested or cross-clause title stays raw text and keeps the clause an outcome.
-    A verb-first, dated, counted, quoted or obliged part, or any other part, keeps the clause an outcome. Later
-    sentences keep their own reading either way: a reference clause neither absorbs nor is absorbed by them.
+    Only a material noun followed by 仅供/只供, directly or as its very next comma part (资料，仅供了解), with every further
+    comma part a bare voluntary use, counts. Inside that noun's own name a closed book title (《四季花园》) or an edition
+    number (第3期) is a name, not a count. A title closed within its own clause is one object before any date or comma is
+    read, so 《11月6日札记》, 《四季，花园》 and the verbs of 《请填表并签字》 are names too; an unclosed, nested or
+    cross-clause title stays raw text and keeps the clause an outcome. A verb-first, dated, counted, quoted or obliged
+    part, or any other part, keeps the clause an outcome. Later sentences keep their own reading either way: a reference
+    clause neither absorbs nor is absorbed by them.
     """
     value=re.sub(r'^'+_SCHOOL_NATIVE_MARKER,'',clause.strip())
     # Mask closed titles only in this syntax copy, never in the saved original; outside the name position they still fail.
@@ -3492,7 +3493,10 @@ def _school_native_reference(clause):
     if re.search(_SCHOOL_NATIVE_DATE,value):return False
     plain=r'(?:(?!请|须|需|必|务|应|要求)[^\d，,“”"‘’「」『』（）()《》\s])'
     name=r'(?:'+plain+r'|《[^《》，,。；;]{1,30}》|第[0-9一二三四五六七八九十]{1,3}(?:期|版|辑|册|卷))'
-    first,*rest=re.split(r'[，,]',value)
+    parts=re.split(r'[，,]',value)
+    # A limit standing as the next comma part is read in the same position as 资料仅供, so it still needs the material noun.
+    if len(parts)>1 and re.match(r'\s*(?:仅|只)供',parts[1]):parts[:2]=[parts[0].strip()+parts[1].strip()]
+    first,*rest=parts
     if not re.fullmatch(name+r'{1,30}?(?:资料|材料)(?:仅|只)供'+plain+r'{1,12}',first.strip()):return False
     return all(re.fullmatch(r'(?:可以?|请)?(?:家长|孩子|学生|同学们?|大家)?(?:可以?)?自愿[^\W\d_]{0,4}',part.strip()) for part in rest)
 
