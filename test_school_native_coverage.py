@@ -3228,6 +3228,126 @@ class SchoolActionPurposeTests(unittest.TestCase):
                     t._assert_rejected_batch(payload, agent.run_once(t.app, t.now))
                 finally:t.doCleanups()
 
+    # Root's frozen C1 (fictional, base 5bdb5dc; the fixed reply is an authored program control, not provider output): the material's
+    # own limit stands as its next comma part (资料，仅供了解), and the words of its closed title (请填表并签字) are its name, not actions.
+    # The exact reference/optional reply is complete: nothing to do, no date, learning link or goal, and no retry left waiting.
+    C1_TEXT = '阅读《请填表并签字》活动参考资料，仅供了解，自愿查看。'
+    C1_RAW = dict(title_quote=C1_TEXT, focus='school', due='', evidence=[0], task_title='', task_goal='', task_advice='',
+                  learning_subject='', learning_goal_id='', task_change='new', task_target_id='', task_state='reference',
+                  task_reason='仅虚构程序对照。', task_purpose='optional', task_submission='')
+
+    def _c1_ingest(self, text=C1_TEXT):
+        self.fixture.now = self.now = dt.datetime(2026, 11, 2, 20, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='11')
+        payload['messages'] = [dict(id='11', message_order='11', time='2026-11-02T17:20:00+08:00', kind='text', sender='虚构学校发布人',
+                                    sender_id='fictional-root-c1', text=text, unread=False)]
+        self.store.ingest(payload)
+        return payload, 'message:' + self.source['id'] + ':11'
+
+    def test_root_c1_comma_limited_reference_saves_one_reference_through_ingest_run_once_replay_and_fresh_store_reopen(self):
+        payload, ref = self._c1_ingest()
+        self._use_replies(payload, [dict(proposals=[dict(copy.deepcopy(self.C1_RAW), evidence=[dict(ref=ref)])])])
+        requests = []
+        saved_reply = self.model.side_effect
+        self.model.side_effect = lambda messages, *args, **kwargs: (requests.append(json.loads(messages[-1]['content'])), saved_reply(messages, *args, **kwargs))[1]
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1), 'the exact reference reply completes its batch on the first receipt')
+        self.assertNotIn('required_native_actions', requests[0], 'a comma-limited material is no required native action')
+        with self.store._db() as c:
+            job = c.execute("SELECT attempts,done,error,next_try FROM agent_jobs WHERE id LIKE 'messages:%'").fetchone()
+            self.assertEqual(tuple(job), (1, 1, '', ''), 'no retry is left waiting')
+            self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages')], [1])
+        import family_review
+
+        def check(rows, tasks, originals, manual, goals):
+            row, = rows
+            plan = json.loads(row['plan']);brief = plan['school_task']
+            self.assertEqual((brief['state'], brief['purpose'], row['due'], row['task_id'] or '', plan.get('school_learning'), plan.get('school_goal_id', '')),
+                             ('reference', 'optional', '', '', None, ''), 'one reference: no to-do, date, learning link or goal')
+            self.assertFalse({'school_native_action', 'school_original_action', 'school_native_cover'} & set(plan))
+            self.assertEqual((brief['title'], brief['goal']), ('', ''))
+            self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], [ref])
+            self.assertEqual([self.C1_TEXT in e['text'] for e in json.loads(row['evidence'])], [True], 'the complete original keeps its title')
+            self.assertFalse({'pdf_evidence', 'material_evidence', 'page_evidence'} & set(brief), 'no attachment was read or prepared')
+            self.assertEqual((tasks, manual), ({}, 0), 'nothing to do was created')
+            self.assertEqual(originals, payload['messages'], 'the complete original stays unchanged')
+            self.assertEqual(goals, [], 'no school learning goal')
+
+        first = self._k12_facts(self.app, self.store);check(*first)
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['failed'], replay['processed'], replay['created']), (0, 0, 0))
+        app = family_review.load_app(self.fixture.root, self.fixture.data)
+        fresh = self._k12_facts(app, agent.Store(app.connect, app.profiles, self.fixture.data, app=app))
+        check(*fresh)
+        self.assertEqual([r['id'] for r in fresh[0]], [r['id'] for r in first[0]], 'reopen keeps the one item without duplicates')
+        self.assertEqual(self.model.call_count, 1)
+
+    def test_root_c1_material_limit_as_its_next_comma_part_is_read_only_in_its_own_name_position(self):
+        def actions(text):
+            entry = dict(ref='message:synthetic-root-c1:1', text=text, kind='text', publisher='p', time='2026-11-02T17:20:00+08:00')
+            return [(a['quote'], a['purpose']) for a in agent._school_native_actions([entry])]
+        # The limit as the very next comma part reads like 资料仅供了解; a closed title's own words, verbs or dates are its name.
+        for text in (self.C1_TEXT, '阅读活动参考资料，仅供了解，自愿查看。下一次全班具体任务及日期将另行通知。',
+                     '阅读《请于周五前填表并签字》第2期参考资料，只供了解。'):
+            with self.subTest(text=text):self.assertEqual(actions(text), [])
+        cases = {
+            # An addressed reading, or a date, count or further outcome after the limit, keeps the clause required.
+            '请阅读《请填表并签字》活动参考资料，仅供了解，自愿查看。': [('请阅读《请填表并签字》活动参考资料，仅供了解，自愿查看', 'learning')],
+            '阅读《请填表并签字》活动参考资料，仅供了解，11月6日前交读后感。': [('阅读《请填表并签字》活动参考资料，仅供了解，11月6日前交读后感', 'learning')],
+            '阅读活动参考资料，仅供了解，自愿读3篇。': [('阅读活动参考资料，仅供了解，自愿读3篇', 'learning')],
+            '阅读活动参考资料，仅供了解，并写一句理由。': [('阅读活动参考资料，仅供了解，并写一句理由', 'learning')],
+            # A page is no material name, whatever limit follows it.
+            '阅读《四季花园》第3页，仅供了解，自愿查看。': [('阅读《四季花园》第3页，仅供了解，自愿查看', 'learning')],
+            # A real outcome in the same sentence or the next keeps its own clause and date; the reference adds nothing to it.
+            self.C1_TEXT[:-1] + '，请完成练习册第5页。': [('请完成练习册第5页', 'learning')],
+            self.C1_TEXT + '请于11月6日前阅读第3期参考资料，并写一句理由。': [('请于11月6日前阅读第3期参考资料，并写一句理由', 'learning')],
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):self.assertEqual(actions(text), expected)
+
+    def test_root_c1_reference_beside_a_same_sentence_homework_keeps_the_homework_required_through_replay_and_reopen(self):
+        import family_review
+        text = self.C1_TEXT[:-1] + '，请完成练习册第5页。'
+        payload, ref = self._c1_ingest(text)
+        reference = dict(copy.deepcopy(self.C1_RAW), title_quote=self.C1_TEXT[:-1], evidence=[dict(ref=ref)])
+        homework = fixtures.school_proposal(
+            title_quote='请完成练习册第5页', evidence=[dict(ref=ref)], task_title='完成练习册第5页',
+            task_goal='完成练习册第5页。', task_state='ready', task_reason='虚构回执。', task_purpose='learning')
+        self._use_replies(payload, [dict(proposals=[reference, homework])])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+
+        def check(rows, tasks, originals, manual, goals):
+            states = sorted((json.loads(r['plan'])['school_task']['state'], json.loads(r['plan'])['school_task']['purpose'], bool(r['task_id'])) for r in rows)
+            self.assertEqual(states, [('ready', 'learning', True), ('reference', 'optional', False)])
+            task, = tasks.values()
+            self.assertIn('练习册第5页', task['action'], 'the real homework keeps its own requirement')
+            self.assertNotIn('仅供了解', task['action'], 'the reference is not merged into it')
+            self.assertEqual(manual, 1, 'the one to-do is the homework')
+            self.assertEqual(originals, payload['messages'], 'the complete original stays unchanged')
+
+        first = self._k12_facts(self.app, self.store);check(*first)
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['failed'], replay['processed'], replay['created']), (0, 0, 0))
+        app = family_review.load_app(self.fixture.root, self.fixture.data)
+        fresh = self._k12_facts(app, agent.Store(app.connect, app.profiles, self.fixture.data, app=app));check(*fresh)
+        self.assertEqual([r['id'] for r in fresh[0]], [r['id'] for r in first[0]], 'reopen keeps the items without duplicates')
+        self.assertEqual(self.model.call_count, 1)
+
+    def test_wrong_reference_over_a_comma_limited_required_reading_or_same_sentence_homework_still_rejects_the_whole_batch(self):
+        texts = ('请阅读《请填表并签字》活动参考资料，仅供了解，自愿查看。',
+                 '阅读《请填表并签字》活动参考资料，仅供了解，11月6日前交读后感。',
+                 self.C1_TEXT[:-1] + '，请完成练习册第5页。')
+        for text in texts:
+            with self.subTest(text=text):
+                t = type(self)(methodName='runTest');t.setUp()
+                try:
+                    payload, ref = t._c1_ingest(text)
+                    raw = dict(copy.deepcopy(self.C1_RAW), title_quote=text, evidence=[dict(ref=ref)], task_reason='故意错误的合成回执。')
+                    t._use_replies(payload, [dict(proposals=[raw])])
+                    t._assert_rejected_batch(payload, agent.run_once(t.app, t.now))
+                finally:t.doCleanups()
+
     def test_one_action_purpose_contract_reaches_batch_single_candidate_and_original_recovery(self):
         for prompt in (agent.SCHOOL_PROMPT, agent._task_prompt(None), agent._school_original_prompt(None, None, None)):
             self.assertIn('用途按本项明确的行动及其独立成果判定，不按老师称呼、科目或课程背景、文件名/材料名、任务标题或单一关键词判定', prompt)
