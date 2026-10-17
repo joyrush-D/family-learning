@@ -3404,9 +3404,12 @@ def _recheck_school_history(app,store,now,budget,scopes):
     goals=Goals(app,store)
     for scope in scopes:
         source,values,key=scope[:3];origin=scope[3] if len(scope)>3 else None
-        if origin and origin[2]=='audit':_school_recovery_inherit(store,key,origin[0],source['child_id'])
+        # A batch's audit and revision reread share its one budget and backoff, under any later request (a source
+        # display rename included); only the existing explicit retry renews them.
+        recovery=bool(origin and origin[2] in ('audit','revision'))
+        if recovery:_school_recovery_inherit(store,key,origin[0],source['child_id'])
         fp=store._job(key,dict(revision=SCHOOL_SELECTION_REVISION,source=source,messages=values),now,model=True,
-                      keep_budget=bool(origin and origin[2]=='audit'))
+                      keep_budget=recovery)
         if not fp: continue
         try:
             with store._db() as c:
@@ -3645,15 +3648,31 @@ def _school_clause_kept(quote,goal):
     return True
 
 
+def _school_revision_negated(part):
+    """The shared negation reading of one revision part: a positive noun (在不干胶登记单上填写) is no negation. The predicate
+    it reads may end a longer verb (填写's 写), so a negation left between the part's place and that predicate still
+    refuses it (在登记单上不填写); only one closed inside the place, or in the object the reader clears, is a noun's."""
+    negative=r'不|无须|无需|免|勿|毋'
+    if not re.search(negative,part):return False
+    if _school_native_common_negative(part):return True
+    addressed=_school_native_common_addressed(part)
+    if addressed is None:return True
+    before=part[:addressed.start()]+(addressed['object'] or '')
+    return bool(re.search(negative,re.sub(r'在[^，,]*?[上中里内]','',before,count=1)))
+
+
 def _school_revision_parts(sentence):
     """Each positive literal part of one teacher sentence: comma parts split again at joining words outside closed names,
-    its dates removed. A part with a negation, change, condition or reference use proves nothing."""
+    its dates removed. A sentence with a change, condition, option or reference use proves nothing; a part the shared
+    negation reading refuses proves nothing."""
     parts=[]
-    for part in re.findall(r'(?:《[^》]*》|[^，,。；;！!？?\n])+',sentence or ''):
-        if re.search(r'不|无需|无须|免|勿|仅供|只供|参考|自愿|选做|可选|'+_SCHOOL_NATIVE_CHANGE+'|'+_SCHOOL_NATIVE_UNSETTLED,re.sub(r'《[^》]*》','',part)):continue
-        for piece in re.split(r'(?:并且|以及|并|和|及|与|、)(?![^《]*》)',part):
-            plain=_school_plain(re.sub(r'(?:于|在)?\s*'+_SCHOOL_NATIVE_DATE+r'\s*(?:\d{1,2}[:：]\d{2})?\s*(?:前|之前|以前|内)?','',piece))
-            if len(plain)>=2:parts.append(plain)
+    for one in re.findall(r'[^。；;！!？?\n]+[。；;！!？?]?',sentence or ''):
+        if re.search(r'仅供|只供|参考|自愿|选做|可选|'+_SCHOOL_NATIVE_CHANGE+'|'+_SCHOOL_NATIVE_UNSETTLED,re.sub(r'《[^》]*》','',one)):continue
+        for part in re.findall(r'(?:《[^》]*》|[^，,。；;！!？?\n])+',one):
+            if _school_revision_negated(re.sub(r'《[^》]*》','',part)):continue
+            for piece in re.split(r'(?:并且|以及|并|和|及|与|、)(?![^《]*》)',part):
+                plain=_school_plain(re.sub(r'(?:于|在)?\s*'+_SCHOOL_NATIVE_DATE+r'\s*(?:\d{1,2}[:：]\d{2})?\s*(?:前|之前|以前|内)?','',piece))
+                if len(plain)>=2:parts.append(plain)
     return parts
 
 
