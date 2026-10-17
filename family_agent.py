@@ -3494,8 +3494,9 @@ def _school_native_reference(clause):
     plain=r'(?:(?!请|须|需|必|务|应|要求)[^\d，,“”"‘’「」『』（）()《》\s])'
     name=r'(?:'+plain+r'|《[^《》，,。；;]{1,30}》|第[0-9一二三四五六七八九十]{1,3}(?:期|版|辑|册|卷))'
     parts=re.split(r'[，,]',value)
-    # A limit standing as the next comma part is read in the same position as 资料仅供, so it still needs the material noun.
-    if len(parts)>1 and re.match(r'\s*(?:仅|只)供',parts[1]):parts[:2]=[parts[0].strip()+parts[1].strip()]
+    # Only the material noun's own limit, standing as its next comma part, is read in the same position as 资料仅供.
+    if len(parts)>1 and re.search(r'(?:资料|材料)\s*$',parts[0]) and re.match(r'\s*(?:仅|只)供',parts[1]):
+        parts[:2]=[parts[0].strip()+parts[1].strip()]
     first,*rest=parts
     if not re.fullmatch(name+r'{1,30}?(?:资料|材料)(?:仅|只)供'+plain+r'{1,12}',first.strip()):return False
     return all(re.fullmatch(r'(?:可以?|请)?(?:家长|孩子|学生|同学们?|大家)?(?:可以?)?自愿[^\W\d_]{0,4}',part.strip()) for part in rest)
