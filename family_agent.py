@@ -1849,6 +1849,10 @@ class Store:
                     (ident, key, item['child_id'], item['kind'], item['title'], item['body'], _json(item['evidence']), item.get('due', ''),
                      item.get('care_id', ''), item.get('record_id'), now.isoformat(), now.isoformat(), _json(item.get('plan', {})), item.get('task_id', '')))
             c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=? AND fingerprint=?", (key, fingerprint))
+            if history_context and origin and origin[0] and origin[0][2]=='audit':
+                # This audit could already keep a revision of an accepted action: the batch needs no revision reread.
+                c.execute('INSERT OR IGNORE INTO agent_jobs(id,fingerprint,done) VALUES(?,?,1)',
+                          (_school_revision_key(origin[0][0],history_context[0]['child_id']),fingerprint))
             c.executemany('UPDATE agent_messages SET processed=1 WHERE source_id=? AND id=?', message_ids)
 
     def _fail(self, key, now, *, fingerprint=None, reason=''):
@@ -3117,9 +3121,45 @@ def _school_audit_mark(old_key):
 
 
 def _school_recovery_keys(c,old_key,child_id):
-    """Every automatic recovery identity of one original batch: the saved reread of each of its rows and its one audit."""
+    """Every automatic recovery identity of one original batch: the saved reread of each of its rows, its one audit and
+    its one revision reread."""
     rows=c.execute("SELECT id FROM agent_items WHERE job_id=? AND kind='school' AND child_id=? ORDER BY id",(old_key,child_id)).fetchall()
-    return ['school-task:'+r['id'] for r in rows]+['school-history:'+_hash(['saved-batch-audit',old_key,child_id])[:40]]
+    return ['school-task:'+r['id'] for r in rows]+['school-history:'+_hash(['saved-batch-audit',old_key,child_id])[:40],
+                                                    _school_revision_key(old_key,child_id)]
+
+
+def _school_revision_key(old_key,child_id):
+    """One stable revision reread per original batch: no day, config or revision in it."""
+    return 'school-history:'+_hash(['saved-batch-revision',old_key,child_id])[:40]
+
+
+def _school_revisable(c,old_key,child_id):
+    """Accepted rows of this batch whose original task still exists and that no revision was offered for yet, with the
+    retained understanding the parent was given (receipt, brief and body) that a new reading is compared with."""
+    offered={json.loads(r['plan']).get('school_revision_of') for r in c.execute(
+        "SELECT plan FROM agent_items WHERE kind='school' AND child_id=? AND plan LIKE '%school_revision_of%'",(child_id,))}
+    result={}
+    for r in c.execute("SELECT * FROM agent_items WHERE job_id=? AND kind='school' AND child_id=? AND state='accepted' AND task_id IS NOT NULL AND task_id!='' ORDER BY id",(old_key,child_id)):
+        if r['id'] in offered or not c.execute('SELECT 1 FROM manual_tasks WHERE id=?',(r['task_id'],)).fetchone():continue
+        try:plan=json.loads(r['plan'])
+        except (ValueError,TypeError):continue
+        goal=(plan.get('school_selection_receipt') or {}).get('goal') or r['body']
+        receipt='\n'.join(v for v in (goal,(plan.get('school_task') or {}).get('goal',''),r['body']) if isinstance(v,str))
+        result[r['id']]=dict(goal=goal,receipt=receipt,task_id=r['task_id'])
+    return result
+
+
+def _school_revision_due(store,c,old_key,source,values):
+    """Program-only proof that a done batch still holds an accepted action whose own teacher sentence has a literal part its
+    retained receipt and the parent's task both lack; without it no revision reread is opened."""
+    refs={'message:'+source['id']+':'+v['id']:v['text'] for v in values}
+    effective={t['id']:t for t in store.app.tasks(c)} if store.app else {}
+    for ident,base in _school_revisable(c,old_key,source['child_id']).items():
+        row=c.execute('SELECT * FROM agent_items WHERE id=?',(ident,)).fetchone()
+        current=(effective.get(base['task_id']) or {}).get('action','')
+        if any(ref in refs and quote and _school_revision_gap(quote,refs[ref],base['receipt'],current)
+               for ref,quote in _history_anchor(row,refs).items()):return True
+    return False
 
 
 def _school_recovery_spent(c,keys):
@@ -3267,11 +3307,17 @@ def _history_scopes(store,config,now=None):
             # reads the whole original scope with that row's proven reading as known.
             if now and any(r['state']=='pending' and _school_saved_owner(store,c,r,now) for r in rows): continue
             key='school-history:'+_hash(['saved-batch-audit',old_key,source['child_id']])[:40]
-            done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone()
+            done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone();mode='audit'
+            if done and done['done']:
+                # An audit done before it could keep a new reading of an accepted action (its save now also closes this)
+                # opens one revision reread of the same batch, only when the program itself sees the receipt's gap.
+                key=_school_revision_key(old_key,source['child_id']);mode='revision'
+                done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone()
+                if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS) or not _school_revision_due(store,c,old_key,source,values): continue
             if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS): continue
             # The batch's one automatic budget, already spent by its saved reread, is not refilled by switching route.
             if any(r['attempts']>=MAX_ATTEMPTS for r in _school_recovery_spent(c,_school_recovery_keys(c,old_key,source['child_id']))): continue
-            result.append((source,values,key,(old_key,jobs[old_key]['fingerprint'],'audit')))
+            result.append((source,values,key,(old_key,jobs[old_key]['fingerprint'],mode)))
     return result
 
 
@@ -3281,7 +3327,7 @@ def _history_origin_current(c,origin,child_id):
     if not receipt or not receipt['done'] or receipt['fingerprint']!=fingerprint: return False
     if mode=='empty':return not c.execute('SELECT 1 FROM agent_items WHERE job_id=? LIMIT 1',(old_key,)).fetchone()
     rows=c.execute("SELECT child_id,plan FROM agent_items WHERE job_id=? AND kind='school' AND state!='superseded'",(old_key,)).fetchall()
-    if mode=='audit':
+    if mode in ('audit','revision'):
         mark=c.execute('SELECT fingerprint FROM agent_jobs WHERE id=?',(_school_audit_mark(old_key),)).fetchone()
         return bool(mark and mark['fingerprint']==fingerprint and rows and all(r['child_id']==child_id for r in rows))
     return bool(rows and all(r['child_id']==child_id for r in rows) and
@@ -3365,6 +3411,7 @@ def _recheck_school_history(app,store,now,budget,scopes):
                 basis,known=_history_context(store,c,source,values,key)
                 rewrite={r['id'] for r in c.execute("SELECT * FROM agent_items WHERE job_id=? AND kind='school'",(origin[0],))
                          if _school_untouched_review(c,r,origin[0])} if origin and origin[2]=='audit' else set()
+                revisable=_school_revisable(c,origin[0],source['child_id']) if origin and origin[2] in ('audit','revision') else {}
             if len(known)>36 or len(_json(known))>14000: raise AgentError('既有决定超过本轮历史核对范围，未截断',code='school_history_bounds')
             evidence=[dict(ref='message:'+source['id']+':'+v['id'],text=v['text'],source=source['name'],
                 time=v['time'],sender=v['sender'],publisher=_publisher(source['id'],v),kind=v['kind'],content_incomplete=v['unread']) for v in values]
@@ -3372,8 +3419,8 @@ def _recheck_school_history(app,store,now,budget,scopes):
             used=1
             proposals=_select('school',evidence,profile,as_of=now.date().isoformat(),data_path=store.data,
                 school_goals=goals.school_candidates(source['child_id']),school_tasks=school_targets(app,store,source['child_id']),school_existing=known,
-                school_rewrite=rewrite)
-            if origin and origin[2]=='audit':
+                school_rewrite=rewrite,school_revisable=revisable)
+            if origin and origin[2] in ('audit','revision'):
                 # A dismissed outcome whose action cannot be located is never offered again under a new item.
                 dismissed={ref for k in known if k['state']=='dismissed' for ref in k['refs'] if not k['action_anchor'].get(ref)}
                 proposals=[p for p in proposals if not (p['plan'].get('school_history_uncertain') and dismissed&{e['ref'] for e in p['evidence']})]
@@ -3590,6 +3637,32 @@ def _school_clause_kept(quote,goal):
         if not set(unit['roles'])<=roles or not set(unit['signers'])-{''}<=signers:return False
         if 2*sum(char in kept for char in unit['words'])<len(unit['words']):return False
     return True
+
+
+def _school_revision_parts(sentence):
+    """Each positive literal part of one teacher sentence: comma parts split again at joining words outside closed names,
+    its dates removed. A part with a negation, change, condition or reference use proves nothing."""
+    parts=[]
+    for part in re.findall(r'(?:《[^》]*》|[^，,。；;！!？?\n])+',sentence or ''):
+        if re.search(r'不|无需|无须|免|勿|仅供|只供|参考|自愿|选做|可选|'+_SCHOOL_NATIVE_CHANGE+'|'+_SCHOOL_NATIVE_UNSETTLED,re.sub(r'《[^》]*》','',part)):continue
+        for piece in re.split(r'(?:并且|以及|并|和|及|与|、)(?![^《]*》)',part):
+            plain=_school_plain(re.sub(r'(?:于|在)?\s*'+_SCHOOL_NATIVE_DATE+r'\s*(?:\d{1,2}[:：]\d{2})?\s*(?:前|之前|以前|内)?','',piece))
+            if len(plain)>=2:parts.append(plain)
+    return parts
+
+
+def _school_revision_gap(quote,text,previous,current=''):
+    """The literal parts of this action's own teacher sentence that neither its retained receipt nor the parent's task holds."""
+    old,task=_school_plain(previous),_school_plain(current)
+    return [p for p in _school_revision_parts(_school_own_sentences(quote,text)) if p not in old and p not in task]
+
+
+def _school_revision_new(quote,text,previous,goal,current=''):
+    """A provably new reading of the same action: the new goal keeps every literal part of its own teacher sentence the
+    retained receipt kept, and adds at least one both the receipt and the parent's task lack. Rewording proves nothing."""
+    old,new=_school_plain(previous),_school_plain(goal)
+    if any(p in old and p not in new for p in _school_revision_parts(_school_own_sentences(quote,text))):return False
+    return any(p in new for p in _school_revision_gap(quote,text,previous,current))
 
 
 def _school_native_spans(text, start):
@@ -4319,7 +4392,7 @@ def _school_native_saved(items,evidence):
         raise AgentError('学校独立要求保存时仍有遗漏，整批未写入',409,'school_action_coverage')
 
 
-def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None, school_tasks=(),school_existing=None,school_rewrite=()):
+def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None, school_tasks=(),school_existing=None,school_rewrite=(),school_revisable=None):
     original_pointers=[]
     if mode == 'school':
         original_pointers=[item for e in evidence if (item:=_school_ack_original(e))]
@@ -4356,7 +4429,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     title_quotes=[p['title_quote'].strip() if isinstance(p,dict) and isinstance(p.get('title_quote'),str) else '' for p in result['proposals']]
     for index,proposal in enumerate(result['proposals']):
         native_action=None
-        action_anchor={};history_uncertain=False
+        action_anchor={};history_uncertain=False;revision=None
         if historical:
             for name,field in _school_fields['properties'].items():
                 if field.get('type')=='string' and (not isinstance(proposal[name],str) or len(proposal[name])>field.get('maxLength',4000) or ('enum' in field and proposal[name] not in field['enum'])):
@@ -4367,8 +4440,16 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             accounted.update(q['ref'] for q in proposal['evidence'])
             # An already covered action is skipped, unless its old row is a provably untouched generated review: that row
             # is no proof it was understood right, so the new reading is saved under the same item (never a copy).
-            if covered and covered not in school_rewrite: continue
-            ref,quote=next(iter(action_anchor.items()));start=refs[ref].index(quote);end=start+len(quote)
+            ref,quote=next(iter(action_anchor.items()))
+            if covered and covered not in school_rewrite:
+                # An accepted action keeps its decision, task, parent text and feedback. Only a reading that keeps every
+                # literal part of its own teacher sentence the retained receipt kept and adds one the receipt and the
+                # parent's task both lack becomes a pending revision of that same task; anything else stays deduplicated.
+                base=(school_revisable or {}).get(covered)
+                current=next((r.get('current_task',{}).get('action','') for r in school_existing if r['id']==covered),'')
+                if not base or not _school_revision_new(quote,refs[ref],base['receipt'],proposal['task_goal'],current): continue
+                revision=(covered,ref,quote)
+            start=refs[ref].index(quote);end=start+len(quote)
             if any(ref==old_ref and max(start,left)<min(end,right) for old_ref,left,right in history_actions):
                 raise AgentError('历史补漏重复或合并了同一动作，整组保留重试',code='school_history_duplicate')
             history_actions.append((ref,start,end))
@@ -4533,9 +4614,16 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             if historical:
                 item['plan']['school_action_anchor']=action_anchor
                 item['plan']['school_history_uncertain']=history_uncertain
-                if covered:item['plan']['school_reread_of']=covered
+                if covered and not revision:item['plan']['school_reread_of']=covered
                 if history_uncertain or brief.get('change')!='new':
                     brief.update(state='review',reason='本条已有决定的动作原句无法核对或涉及原事项变更，不能确认是否为独立漏项；已有作业与家长决定保留。')
+                if revision:
+                    # Offered through the existing correction of the same task; only the parent's confirmation appends it.
+                    base=school_revisable[revision[0]]
+                    brief.update(change='append',target_id=base['task_id'],state='review',
+                                 reason='同一老师原句的完成标准比原归纳多出部分；原任务、家长安排和反馈保留，请核对后补充到原任务，不另建事项。')
+                    item['plan'].update(school_revision_of=revision[0],school_revision_basis=dict(
+                        previous_goal=base['goal'],task_id=base['task_id'],ref=revision[1],quote=revision[2]))
 
         if item not in output: output.append(item)
     if routing:
