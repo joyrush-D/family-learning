@@ -250,6 +250,32 @@ class MissingStandardTests(ParentEditedReviewTests):
         self.assertEqual(state['focus'][-1]['scheduled_on'], '2026-10-20')
 
 
+class DismissedDecisionTests(ParentEditedReviewTests):
+    def parent_edits(self):
+        self.store.act(dict(action='dismiss', id=self.item['id']))
+        self.task_id = ''
+
+    def test_dismissed_action_is_not_revived(self):
+        before = self.rows()
+        self.round(self.now, reread_reply(self.item['id']))
+        after = self.rows()
+        self.assertEqual(after['items'], before['items'], 'a parent decision to drop the action is no new teacher requirement')
+        self.assertEqual(after['tasks'], [])
+
+
+class ParentAlreadyWroteItTests(ParentEditedReviewTests):
+    def parent_edits(self):
+        result = self.store.act(dict(action='accept', id=self.item['id'], title='家长确认：领取登记单交回', body=ACCEPT_BODY + '\n记得写领取份数。'))
+        self.task_id = result['task_id']
+
+    def test_task_that_already_holds_the_part_gets_no_revision(self):
+        before = self.rows()
+        self.round(self.now, reread_reply(self.item['id']))
+        after = self.rows()
+        self.protected(before, after)
+        self.assertEqual(len(after['items']), 1)
+
+
 class CompleteReceiptTests(ParentEditedReviewTests):
     old_goal = TEACHER
 
