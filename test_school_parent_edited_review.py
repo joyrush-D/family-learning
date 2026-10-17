@@ -159,7 +159,7 @@ class MissingStandardTests(ParentEditedReviewTests):
         self.assertEqual((plan['school_task']['change'], plan['school_task']['target_id'], plan['school_task']['state']),
                          ('append', self.task_id, 'review'), 'offered through the existing task correction entry')
         self.assertIn(TEACHER, revision['body'])
-        self.assertEqual(plan['school_revision_basis']['previous_goal'], SHORT, 'the retained receipt it revises')
+        self.assertEqual(plan['school_revision_basis']['previous_goal'], SHORT, 'the retained model receipt it revises')
         self.assertEqual([e['ref'] for e in json.loads(revision['evidence'])], [REF])
         self.assertEqual(revision['child_id'], self.item['child_id'])
         return revision
@@ -209,7 +209,7 @@ class MissingStandardTests(ParentEditedReviewTests):
         self.open()
         r257 = self.rows()
         self.assertEqual(len(r257['items']), 1, 'r257 dropped the new understanding (the reproduced gap)')
-        names = self.round(self.now + dt.timedelta(minutes=5), reread_reply(self.item['id']))
+        names = self.round(self.now + dt.timedelta(minutes=10), reread_reply(self.item['id']))  # an even five-minute history window
         self.assertEqual(names.count('family_agent_selection'), 1, 'one bounded recovery call')
         self.assertLessEqual(len(names), 3)
         after = self.rows()
@@ -221,7 +221,7 @@ class MissingStandardTests(ParentEditedReviewTests):
         self.open()
         before = self.rows()
         calls = 0
-        for minutes in (5, 60, 300, 900, 2000):
+        for minutes in (10, 70, 310, 910, 2010):  # even five-minute history windows, past each backoff
             names = []
             def model(messages, schema, name, **kw):
                 names.append(name)
@@ -268,7 +268,7 @@ class CompleteReceiptTests(ParentEditedReviewTests):
     def test_r257_done_complete_receipt_is_not_reread_again(self):
         run_at_commit(self.root, R257, reread_reply(self.item['id']))
         self.open()
-        self.assertNotIn('family_agent_selection', self.round(self.now + dt.timedelta(minutes=5), reread_reply(self.item['id'])))
+        self.assertNotIn('family_agent_selection', self.round(self.now + dt.timedelta(minutes=10), reread_reply(self.item['id'])))
         self.assertEqual(len(self.rows()['items']), 1)
 
 
