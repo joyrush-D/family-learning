@@ -3296,6 +3296,8 @@ class SchoolActionPurposeTests(unittest.TestCase):
             '阅读《请填表并签字》活动参考资料，仅供了解，11月6日前交读后感。': [('阅读《请填表并签字》活动参考资料，仅供了解，11月6日前交读后感', 'learning')],
             '阅读活动参考资料，仅供了解，自愿读3篇。': [('阅读活动参考资料，仅供了解，自愿读3篇', 'learning')],
             '阅读活动参考资料，仅供了解，并写一句理由。': [('阅读活动参考资料，仅供了解，并写一句理由', 'learning')],
+            # Only the material noun's own limit joins it: another 仅供 part after a complete limit is any other part.
+            '阅读活动参考资料仅供了解，仅供家长检查后签字。': [('阅读活动参考资料仅供了解，仅供家长检查后签字', 'learning')],
             # A page is no material name, whatever limit follows it.
             '阅读《四季花园》第3页，仅供了解，自愿查看。': [('阅读《四季花园》第3页，仅供了解，自愿查看', 'learning')],
             # A real outcome in the same sentence or the next keeps its own clause and date; the reference adds nothing to it.
