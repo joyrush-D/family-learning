@@ -1849,10 +1849,10 @@ class Store:
                     (ident, key, item['child_id'], item['kind'], item['title'], item['body'], _json(item['evidence']), item.get('due', ''),
                      item.get('care_id', ''), item.get('record_id'), now.isoformat(), now.isoformat(), _json(item.get('plan', {})), item.get('task_id', '')))
             c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=? AND fingerprint=?", (key, fingerprint))
-            if history_context and origin and origin[0] and origin[0][2]=='audit':
-                # This audit could already keep a revision of an accepted action: the batch needs no revision reread.
+            if history_context and origin and origin[0] and origin[0][2] in ('audit','revision'):
+                # This reread could already keep a revision of an accepted action: the batch needs no revision reread.
                 c.execute('INSERT OR IGNORE INTO agent_jobs(id,fingerprint,done) VALUES(?,?,1)',
-                          (_school_revision_key(origin[0][0],history_context[0]['child_id']),fingerprint))
+                          (_school_revision_mark(origin[0][0],history_context[0]['child_id']),fingerprint))
             c.executemany('UPDATE agent_messages SET processed=1 WHERE source_id=? AND id=?', message_ids)
 
     def _fail(self, key, now, *, fingerprint=None, reason=''):
@@ -3133,6 +3133,11 @@ def _school_revision_key(old_key,child_id):
     return 'school-history:'+_hash(['saved-batch-revision',old_key,child_id])[:40]
 
 
+def _school_revision_mark(old_key,child_id):
+    """Zero-call mark: this batch's audit or revision reread was saved by a release that keeps revisions."""
+    return 'school-revision-scope:'+_hash([old_key,child_id])[:40]
+
+
 def _school_revisable(c,old_key,child_id):
     """Accepted rows of this batch whose original task still exists and that no revision was offered for yet, with the
     retained understanding the parent was given (receipt, brief and body) that a new reading is compared with."""
@@ -3311,6 +3316,7 @@ def _history_scopes(store,config,now=None):
             if done and done['done']:
                 # An audit done before it could keep a new reading of an accepted action (its save now also closes this)
                 # opens one revision reread of the same batch, only when the program itself sees the receipt's gap.
+                if c.execute('SELECT 1 FROM agent_jobs WHERE id=?',(_school_revision_mark(old_key,source['child_id']),)).fetchone(): continue
                 key=_school_revision_key(old_key,source['child_id']);mode='revision'
                 done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone()
                 if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS) or not _school_revision_due(store,c,old_key,source,values): continue
