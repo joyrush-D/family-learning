@@ -235,6 +235,36 @@ class MissingStandardTests(ParentEditedReviewTests):
         self.protected(before, after)
         self.assertEqual(len(after['items']), 1)
 
+    def test_source_display_rename_keeps_the_revision_budget_and_backoff(self):
+        # Only the fictional source display name changes before each failing round (id, child, binding and cursor kept).
+        run_at_commit(self.root, R257, reread_reply(self.item['id']))
+        self.open()
+        before = self.rows()
+        key = agent._school_revision_key(self.item['job_id'], self.item['child_id'])
+        calls = []
+        for n, minutes in enumerate((0, 10, 20, 30)):  # even five-minute history windows
+            config = json.loads((self.data / 'agent.json').read_text())  # isolated fictional config file only
+            config['sources'][0]['name'] = SRC['name'] + '改名' + str(n)
+            (self.data / 'agent.json').write_text(json.dumps(config))
+            names = []
+            def model(messages, schema, name, **kw):
+                names.append(name)
+                if name == 'family_agent_selection': raise agent.family_llm.LLMDraftError('synthetic 503')
+                return dict(proposal=None)
+            with patch.object(agent.family_llm, '_chat_json', side_effect=model):
+                agent.run_once(self.app, self.now + dt.timedelta(minutes=minutes))
+            calls.append(names.count('family_agent_selection'))
+            if n == 0:
+                first = self.rows()['jobs'][key]
+                self.assertEqual((first['attempts'], first['next_try']), (1, (self.now + dt.timedelta(minutes=5)).isoformat()))
+        self.assertEqual(calls, [1, 1, 1, 0], 'a rename keeps the attempts and backoff; the three-attempt limit is not refilled')
+        after = self.rows()
+        job = after['jobs'][key]
+        self.assertEqual((job['attempts'], job['done'], job['next_try']), (agent.MAX_ATTEMPTS, 0, ''))
+        self.assertIn('自动尝试共3次', job['error'])
+        self.protected(before, after)
+        self.assertEqual(len(after['items']), 1)
+
     def test_parent_change_during_the_call_is_refused(self):
         def model(messages, schema, name, **kw):
             if name == 'family_agent_selection':
@@ -296,6 +326,41 @@ class CompleteReceiptTests(ParentEditedReviewTests):
         self.open()
         self.assertNotIn('family_agent_selection', self.round(self.now + dt.timedelta(minutes=10), reread_reply(self.item['id'])))
         self.assertEqual(len(self.rows()['items']), 1)
+
+
+class RevisionPartTests(unittest.TestCase):
+    """Deterministic helper probe of the literal revision parts; fictional sentences, no model."""
+    TEXT = '在不干胶登记单上填写学生姓名和领取份数，家长签字后交回班主任。'
+    PREVIOUS = '在不干胶登记单上填写学生姓名，家长签字后交回班主任。'
+
+    def test_a_positive_noun_holding_a_negative_character_is_no_negation(self):
+        self.assertEqual(agent._school_revision_gap(self.TEXT, self.TEXT, self.PREVIOUS), ['领取份数'])
+        self.assertTrue(agent._school_revision_new(self.TEXT, self.TEXT, self.PREVIOUS, self.TEXT))
+        self.assertFalse(agent._school_revision_new(self.TEXT, self.TEXT, self.PREVIOUS, self.PREVIOUS))
+        # The known seed keeps its gap, and a clipped quote still answers for its whole teacher sentence.
+        for quote in (TEACHER, '填写学生姓名'):
+            self.assertEqual(agent._school_revision_gap(quote, TEACHER, SHORT), ['领取份数'])
+        self.assertTrue(agent._school_revision_new(TEACHER, TEACHER, SHORT, TEACHER))
+        self.assertEqual(agent._school_revision_gap(TEACHER, TEACHER, SHORT, SHORT + '记得写领取份数。'), [])
+
+    def test_true_negation_correction_condition_and_reference_stay_refused(self):
+        for text in ('在不干胶登记单上填写学生姓名，不填写领取份数，家长签字后交回班主任。',
+                     '在不干胶登记单上不填写领取份数，家长签字后交回班主任。',
+                     '在不干胶登记单上不要填写领取份数，家长签字后交回班主任。',
+                     '在登记单上不用再填写领取份数，家长签字后交回班主任。',
+                     '请勿在不干胶登记单上填写领取份数，家长签字后交回班主任。',
+                     '领取份数无需填写，家长签字后交回班主任。',
+                     '在不干胶登记单上填写领取份数后不交回，家长签字后交回班主任。',
+                     '更正，在不干胶登记单上填写学生姓名和领取份数，家长签字后交回班主任。',
+                     '在不干胶登记单上填写学生姓名和领取份数，改为家长签字后交回班主任。',
+                     '如果需要，在不干胶登记单上填写学生姓名和领取份数，家长签字后交回班主任。',
+                     '如果需要，' + TEACHER[TEACHER.index('在'):],
+                     '在不干胶登记单上填写学生姓名和领取份数，仅供参考，家长签字后交回班主任。',
+                     '在不干胶登记单上填写学生姓名，自愿填写领取份数，家长签字后交回班主任。'):
+            with self.subTest(text=text):
+                gap = agent._school_revision_gap(text, text, self.PREVIOUS)
+                self.assertFalse(any('份数' in part for part in gap), gap)
+                self.assertFalse(agent._school_revision_new(text, text, self.PREVIOUS, text))
 
 
 if __name__ == '__main__':
