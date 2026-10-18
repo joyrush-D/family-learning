@@ -2893,6 +2893,71 @@ class SchoolActionPurposeTests(unittest.TestCase):
                 brief = agent._school_brief(dict(value, title='家长阅读并签字', goal=text), evidence=evidence, separate_learning=True)
                 self.assertEqual((brief['state'], brief['goal']), (state, text))
 
+    def _parent_signed_notice(self, message_id, time, sender_id, text, title, due):
+        """Root's fictional admin notice with an own correct fixed 15-field admin reply, beside the English read-aloud."""
+        self.fixture.now = self.now = dt.datetime(2026, 10, 26, 16, 30, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='105')
+        payload['messages'] = [
+            dict(id=message_id, message_order=message_id, time=time, kind='text', sender='虚构班主任', sender_id=sender_id, text=text, unread=False),
+            dict(id='105', message_order='105', time='2026-10-26T16:25:00+08:00', kind='text', sender='虚构英语老师',
+                 sender_id='synthetic-english-teacher', text=self.READ_ALOUD_TEXT, unread=False)]
+        self.store.ingest(payload)
+        refs = ['message:' + self.source['id'] + ':' + m['id'] for m in payload['messages']]
+        notice = dict(title_quote=text.rstrip('。'), focus='school', due=due, evidence=[dict(ref=refs[0])], learning_subject='',
+                      learning_goal_id='', task_title=title, task_goal=text, task_advice='', task_change='new', task_target_id='',
+                      task_state='ready', task_reason='纯虚构程序验证固定回复，不是实际模型产物。', task_purpose='admin', task_submission='')
+        reading = fixtures.school_proposal(
+            title_quote='今晚朗读课本第20页三遍，请家长听完后在这一页签字', due='2026-10-26', evidence=[dict(ref=refs[1])],
+            learning_subject='英语', task_title='英语：朗读课本第20页三遍', task_goal='今晚朗读课本第20页三遍，请家长听完后在这一页签字。',
+            task_state='ready', task_reason='虚构回执。', task_purpose='learning')
+        self._use_replies(payload, [dict(proposals=[notice, reading])])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 2), 'the faithful admin reply finishes the batch')
+
+        def facts():
+            with self.store._db() as c:
+                rows = {json.loads(r['evidence'])[0]['ref']: dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")}
+                manual = [dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+                originals = [json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
+            with self.app.connect() as c:
+                tasks = {t['id']: t for t in self.app.tasks(c) if t['id'] in {m['id'] for m in manual}}
+            return rows, manual, tasks, originals
+
+        rows, manual, tasks, originals = first = facts()
+        self.assertEqual((sorted(rows), len(manual), len(tasks)), (sorted(refs), 2, 2))
+        row = rows[refs[0]];plan = json.loads(row['plan']);task = tasks[row['task_id']]
+        self.assertEqual((row['state'], row['due'], plan['school_task']['state'], plan['school_task']['purpose'], plan.get('school_learning')),
+                         ('accepted', due, 'ready', 'admin', None))
+        self.assertEqual((task['agenda']['category'], task['title']), ('todo', title))
+        self.assertIn(text.rstrip('。'), task['action'], 'the whole original, its executor, carrier, field and days stay in the action')
+        self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], [refs[0]])
+        homework = rows[refs[1]];lesson = json.loads(homework['plan'])
+        self.assertEqual((homework['state'], lesson['school_task']['purpose'], lesson['school_learning']['subject'],
+                          tasks[homework['task_id']]['agenda']['category']), ('accepted', 'learning', '英语', 'homework'))
+        self.assertEqual(originals, payload['messages'], 'the complete originals stay unchanged')
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['failed'], replay['processed'], replay['created']), (0, 0, 0))
+        self.assertEqual(facts(), first, 'reopen and the next round keep both tasks without duplicates')
+        self.assertEqual(self.model.call_count, 1)
+        return task
+
+    def test_a_child_handing_back_the_signed_slip_by_a_ba_phrase_keeps_the_parent_reading_administrative(self):
+        # Root's A01: the parent reads tonight and signs the slip's guardian field; the child only hands that slip back tomorrow morning.
+        text = '请家长今晚阅读学校发回的《校车乘坐须知》，在随附回条的“监护人确认”栏签字，孩子明早将回条交给班主任。'
+        task = self._parent_signed_notice('201', '2026-10-26T16:10:00+08:00', 'qa-teacher-head-a01', text, '《校车乘坐须知》家长阅读并签字', '2026-10-27')
+        self.assertEqual((task['agenda']['complete_on'], task['agenda']['due_on'], task['agenda']['due_kind']), ('2026-10-26', '2026-10-27', 'handback'))
+        # The child's own different outcome handed in by the same phrase is no carried slip: it stays the child's.
+        actions = lambda value:[a['purpose'] for a in agent._school_native_actions([dict(
+            ref='message:s:1', text=value, kind='text', publisher='synthetic-teacher-1', time='2026-10-26T16:10:00+08:00')])]
+        self.assertEqual(actions(text), [])
+        self.assertEqual(actions('请家长今晚阅读学校发回的《校车乘坐须知》，在随附回条的“监护人确认”栏签字，孩子明早将作文交给班主任。'), ['learning'])
+
+    def test_a_guardian_reading_signed_today_lists_today_and_keeps_the_parent_handback_day(self):
+        # Root's A02: the guardian reads and signs 已阅 today (26th); the parent hands the receipt to the gate office tomorrow (27th).
+        text = '请监护人今天阅读纸质《学生接送安排告知书》，在签收联写明“已阅”并签字。请家长明天把签收联交到校门口值班室。'
+        task = self._parent_signed_notice('202', '2026-10-26T16:20:00+08:00', 'qa-teacher-head-a02', text, '《学生接送安排告知书》监护人阅读签字并交回', '2026-10-27')
+        self.assertEqual((task['agenda']['complete_on'], task['agenda']['due_on'], task['agenda']['due_kind']), ('2026-10-26', '2026-10-27', 'handback'))
+
     # Known fictional TB02: the actual parsed Flash reply (configured effort none) on 632a778 was admin/ready/due 10-22 with
     # no subject, and so was a synthetic correct reply; only the program's guard read 听写/背诵/订正 inside the closed name
     # of the form the original itself has filled in. Both are fixed here as program controls.
