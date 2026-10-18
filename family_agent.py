@@ -4113,7 +4113,9 @@ def _school_parent_readings(text):
                 # no actor but the parent (a child there only hands the slip back), no other closed name and no negation or
                 # condition continues this parent's own reading.
                 after=text[sentences[at_sentence+1].start():sentences[at_sentence+1].end()]
-                if (set(_school_roles(after))<={'家长','学生'} and bystanding(sentences[at_sentence+1])
+                # The teacher the slip is handed to (交回班主任, 交给老师) is its destination, not another actor there.
+                handed=re.sub(r'(?:'+carry+r')(?:回|给|到|至)?\s*(?:'+_SCHOOL_CLAUSE_ROLES['老师']+r')','',after)
+                if (set(_school_roles(handed))<={'家长','学生'} and bystanding(sentences[at_sentence+1])
                         and not re.search(r'不|无需|无须|勿|未|没|免|如|若',after)
                         and set(re.findall(r'《[^》]*》',after))<=set(re.findall(r'《[^》]*》',text[sentence.start():sentence.end()]))):
                     signers=_school_signers(after,r'签|盖章|勾选')
