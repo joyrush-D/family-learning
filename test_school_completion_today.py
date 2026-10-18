@@ -1045,7 +1045,7 @@ class OwnedEventAndCorrectionTests(unittest.TestCase):
         self.setUp()
         self.now = self.fixture.now = dt.datetime(2026, 10, 21, 16, 40, tzinfo=agent.TZ)
         payload, refs = owned_time_payload(self, notices, '2026-10-21T16:19:00+08:00')
-        self.store.ingest(payload)
+        self.store.ingest(payload);self.refs = refs
         reply = dict(proposals=[native.fixtures.school_proposal(**dict(p, evidence=[dict(ref=refs[n - 1]) for n in p['evidence']]))
                                 for p in proposals])
         self.model.side_effect = lambda *args, **kwargs: copy.deepcopy(reply)
@@ -1083,16 +1083,21 @@ class OwnedEventAndCorrectionTests(unittest.TestCase):
                 ('家长会定在10月24日14:20，地点是学校报告厅。每家一位家长参加，家长不用来。', set()),
                 ('家长会定在10月24日14:20，地点是学校报告厅。', set()),
                 ('家长会延期到10月24日14:20。每家一位家长参加，孩子不用来。', set()),
-                ('家长会定在10月24日14:20，地点是学校报告厅。家长自愿参加，孩子不用来。', set())]:
+                ('家长会定在10月24日14:20，地点是学校报告厅。家长自愿参加，孩子不用来。', set()),
+                # The next sentence's attending belongs to another event it names: the lecture is asked of no one.
+                ('讲座定在10月24日14:20。另一个家长会每家一位家长参加，孩子不用来。', set())]:
             with self.subTest(text=text):
                 self.assertEqual(family_agenda.event_days(text, sent), expected)
 
     def correction(self, fix, quote, goal, publishers=('teacher-class', 'teacher-class')):
         meeting = '原定10月23日19:00的家长会取消'
+        # The meeting reference quotes the variant's own words only (RED b42f136 mocked fix[:12] as a cancelled meeting
+        # for a variant that never cancelled it; each variant now states the cancel it is quoted for).
+        self.assertIn(meeting, fix)
         return self.run_reply([(publishers[0], self.ORIGINAL), (publishers[1], fix)], [
             dict(title_quote=quote, due='', evidence=[1, 2], task_title='交回兴趣班回执', task_goal=goal, task_state='ready',
                  task_reason='同一老师后发更正了交回日期。', task_purpose='admin', task_change='new'),
-            dict(title_quote=meeting if meeting in fix else fix[:12], due='', evidence=[1, 2], task_state='reference',
+            dict(title_quote=meeting, due='', evidence=[1, 2], task_state='reference',
                  task_reason='原定家长会已取消，无需行动。', task_purpose='optional', task_change='new')])
 
     def test_one_teacher_s_correction_gives_the_named_form_its_corrected_handback_day(self):
@@ -1105,18 +1110,47 @@ class OwnedEventAndCorrectionTests(unittest.TestCase):
                 self.assertEqual(self._agenda(row['task_id'])['due_kind'], 'deadline')
 
     def test_another_object_teacher_or_an_open_cancelled_or_postponed_change_never_moves_the_day(self):
+        meeting = '原定10月23日19:00的家长会取消，不用到校。'
+        # (label, later words, sent by another teacher, the form's due). Each keeps the form a current task: another object's
+        # change or cancel, the meeting's cancel, another teacher, an open date or a postponement cancels nothing of it.
         cases = [
-            # Another object's correction leaves the form's own day; the meeting's 23 is never the form's.
-            ('other_object', '更正：作业本改为10月24日前交回；原定10月23日19:00的家长会取消，不用到校。', None, '2026-10-22'),
-            ('other_teacher', self.FIX, ('teacher-class', 'teacher-other'), ''),
-            ('undated', '更正：兴趣班回执的交回日期另行通知；原定10月23日19:00的家长会取消，不用到校。', None, ''),
-            ('cancelled', '更正：兴趣班回执不用交了；原定10月23日19:00的家长会取消，不用到校。', None, ''),
-            ('postponed', '更正：兴趣班回执延期交回，时间另行通知。', None, '')]
-        for label, fix, publishers, expected in cases:
+            ('other_object', '更正：作业本改为10月24日前交回；' + meeting, False, '2026-10-22'),
+            ('other_object_cancel', '更正：作业本不用交了；' + meeting, False, '2026-10-22'),
+            ('meeting_only', '更正：' + meeting, False, '2026-10-22'),
+            ('other_teacher', self.FIX, True, ''),
+            ('other_teacher_cancel', '更正：兴趣班回执不用交了；' + meeting, True, ''),
+            ('undated', '更正：兴趣班回执的交回日期另行通知；' + meeting, False, ''),
+            ('postponed', '更正：兴趣班回执延期交回，时间另行通知；' + meeting, False, '')]
+        for label, fix, other, expected in cases:
             with self.subTest(label):
-                rows, tasks = self.correction(fix, '请家长10月22日前交回兴趣班回执', '交回兴趣班回执。', publishers or ('teacher-class', 'teacher-class'))
-                self.assertEqual(rows['交回兴趣班回执']['due'], expected)
+                rows, tasks = self.correction(fix, '请家长10月22日前交回兴趣班回执', '交回兴趣班回执。', ('teacher-class', 'teacher-other' if other else 'teacher-class'))
+                row = rows['交回兴趣班回执']
+                self.assertEqual((row['state'], row['due']), ('accepted', expected))
+                self.assertEqual([(t['id'], t['title']) for t in tasks.values()], [(row['task_id'], '交回兴趣班回执')])
                 self.assertFalse({'2026-10-23'} & {t['due'] for t in tasks.values()})
+
+    def test_one_teacher_s_explicit_cancel_keeps_the_form_as_its_cancelled_original_never_a_current_todo(self):
+        fix = '更正：兴趣班回执不用交了；原定10月23日19:00的家长会取消，不用到校。'
+        rows, tasks = self.run_reply([('teacher-class', self.ORIGINAL), ('teacher-class', fix), ('teacher-math', '数学今晚完成练习册第3页第1、2题。')], [
+            dict(title_quote='请家长10月22日前交回兴趣班回执', due='', evidence=[1, 2], task_title='交回兴趣班回执', task_goal='交回兴趣班回执。',
+                 task_state='ready', task_reason='同一老师后发更正了交回日期。', task_purpose='admin', task_change='new'),
+            dict(title_quote='原定10月23日19:00的家长会取消', due='', evidence=[1, 2], task_state='reference',
+                 task_reason='原定家长会已取消，无需行动。', task_purpose='optional', task_change='new'),
+            dict(title_quote='数学今晚完成练习册第3页第1、2题。', due='', evidence=[3], task_title='数学：练习册第3页第1、2题',
+                 task_goal='完成练习册第3页第1、2题。', task_state='ready', task_reason='老师要求明确。', task_purpose='learning',
+                 learning_subject='数学', task_change='new')])
+        row = rows['交回兴趣班回执'];plan = json.loads(row['plan'])
+        # The cancelled form is kept with its originals and the reason, as reference: no current todo, no review to confirm again.
+        self.assertEqual((row['state'], row['task_id'], row['due'], plan['school_task']['state']), ('pending', '', '', 'reference'))
+        self.assertIn('取消', plan['school_task']['reason'])
+        evidence = json.loads(row['evidence'])
+        self.assertEqual([e['ref'] for e in evidence], self.refs[:2])
+        self.assertIn(self.ORIGINAL, evidence[0]['text']);self.assertIn(fix, evidence[1]['text'])
+        self.assertEqual(plan['school_selection_receipt']['state'], 'ready', 'the reply as given stays readable')
+        self.assertFalse(any('兴趣班回执' in t['title'] + t['action'] for t in tasks.values()))
+        # The same batch's ordinary homework is still collected on its own day.
+        self.assertEqual([(t['title'], t['due']) for t in tasks.values()], [('数学：练习册第3页第1、2题', '2026-10-21')])
+        self.assertFalse([x for x in self.app.calendar_snapshot('2026-10-21', '2026-10-21')['inbox'] if '兴趣班回执' in x['title']])
 
 
 def saved_flash27_state(path):
