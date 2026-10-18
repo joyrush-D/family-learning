@@ -15,6 +15,7 @@ import family_agent as agent
 import family_study
 import family_task_focus
 import test_school_native_coverage as native
+import test_school_old_pending_recovery as recovery
 
 
 # The fictional unseen mixed day (HANDOFF unseen-mixed-school-day-20261019-v1): its 7 originals and the actual Flash27
@@ -605,7 +606,80 @@ class Flash27ReadableCardTests(unittest.TestCase):
                 self.assertEqual((row['source_task_complete_on'], row['source_task_due']), ('2026-10-19', '2026-10-20'))
 
 
+# Root's isolated actual Flash reply for the cleared English 34 gave its goal as one paragraph (fictional words). The
+# ordinary run_once saved reread replays that fixed reply here through its mocked transport: no request, no hand edit.
+ENGLISH_PARAGRAPH = '英语：听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在记录本上签字。今晚完成，明天早读检查记录本。'
+ENGLISH_PARAGRAPH_LINES = ['听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在记录本上签字。', '今晚完成，明天早读检查记录本。']
+
+
+def card_lines(task):
+    """As a parent card reads them: its own lines where the projection differs, else the saved lines."""
+    return task.get('action_lines', [x.strip() for x in task['action'].splitlines() if x.strip()])
+
+
+class RecoveredParagraphCardTests(unittest.TestCase):
+    """The R09 recovered English 34, saved as one paragraph, reads as its own sentences on the parent and child cards."""
+    setUp = recovery.R259ClearedDateRereadTests.setUp
+    _old_store = recovery.R259ClearedDateRereadTests._old_store
+    _replies = recovery.R259ClearedDateRereadTests._replies
+    _at = recovery.R259ClearedDateRereadTests._at
+    _listed = recovery.R259OldPendingRecoveryTests._listed
+
+    def save_recovered(self):
+        self._old_store()
+        self._replies(dict(recovery.NEW_RECEIPT, goal=ENGLISH_PARAGRAPH))
+        result = self._at(0)
+        self.assertEqual((result['failed'], result['created'], len(self.calls)), (0, 5, 1), result)
+        with self.store._db() as c:
+            saved = {r['id']: dict(r) for r in c.execute('SELECT * FROM manual_tasks')}
+        return {key: next(i for i, t in saved.items() if key in t['title']) for key in recovery.KEYS}, saved
+
+    def test_the_recovered_paragraph_reads_as_its_own_sentences_and_stays_saved_byte_for_byte(self):
+        ids, saved = self.save_recovered()
+        english = saved[ids['Unit 4']]
+        self.assertEqual((english['title'], english['action'], english['due']), ('英语：跟读Unit 4两遍并家长签字', ENGLISH_PARAGRAPH, '2026-10-20'))
+        tasks = {t['id']: t for t in self.app.tasks()}
+        task = tasks[ids['Unit 4']]
+        self.assertEqual((task['title'], task['action'], task['due']), (english['title'], ENGLISH_PARAGRAPH, '2026-10-20'), 'API original fields')
+        self.assertEqual(card_lines(task), ENGLISH_PARAGRAPH_LINES)
+        agenda = self._listed('2026-10-19')[ids['Unit 4']]['agenda']
+        self.assertEqual((agenda['complete_on'], agenda['due_on'], agenda['category']), ('2026-10-19', '2026-10-20', 'homework'))
+        self.assertNotEqual(agenda['due_kind'], 'handback', 'a check day is not a handback')
+        for key in ('星芽', '数格', '回执', '塑料瓶'):  # the four recovered rows read as in r261
+            with self.subTest(item=key):
+                self.assertEqual(card_lines(tasks[ids[key]]), FLASH27_CARD_LINES[key])
+        # The child card reads the same projection from the same task, added by the parent's existing 作业计时.
+        child_id = next(c['id'] for c in self.app.snapshot()['children'] if c['name'] == english['child'])
+        study = family_study.Store(SimpleNamespace(**vars(self.app)))
+        study.save_item(dict(child_id=child_id, day='2026-10-19', request_key='recovered-english-paragraph', version=0,
+                             task_id=ids['Unit 4'], planned_minutes=20))
+        row = next(r for r in study.snapshot(child_id, '2026-10-19')['items'] if r['task_id'] == ids['Unit 4'])
+        self.assertEqual((row['title'], row['source_task_action']), (english['title'], ENGLISH_PARAGRAPH))
+        self.assertEqual(row['source_task_action_lines'], ENGLISH_PARAGRAPH_LINES)
+        with self.store._db() as c:
+            self.assertEqual(dict(c.execute('SELECT * FROM manual_tasks WHERE id=?', (ids['Unit 4'],)).fetchone()), english, 'storage unchanged')
+
+
 class ActionLinesTests(unittest.TestCase):
+    def test_a_saved_line_reads_as_its_own_sentences_and_an_exact_heading_label_once(self):
+        # Only a full-width 。！？ outside 《》, quotes and brackets ends a sentence; nothing else is cut or reworded.
+        for title, action, shown in [
+                ('英语：跟读Unit 4两遍并家长签字', ENGLISH_PARAGRAPH, ENGLISH_PARAGRAPH_LINES),
+                ('语文：读《你好。再见！》', '读《你好。再见！》第2页。今晚完成。', ['读《你好。再见！》第2页。', '今晚完成。']),
+                ('语文：摘抄', '摘抄“春天来了。花开了。”两句。明天交。', ['摘抄“春天来了。花开了。”两句。', '明天交。']),
+                ('数学：练习', '完成第2.5节练习，Mr. Li will check it. 明天交。', ['完成第2.5节练习，Mr. Li will check it. 明天交。']),
+                ('语文：A', '读第3课（重点段。今晚完成。', ['读第3课（重点段。今晚完成。']),
+                ('语文：A', '不用抄写。口头回答后家长签字！明天检查？', ['不用抄写。', '口头回答后家长签字！', '明天检查？']),
+                ('语文：A', '读B！！今晚完成', ['读B！！', '今晚完成']),
+                ('英语：跟读', '英语听录音。今晚完成。', ['英语听录音。', '今晚完成。']),
+                ('语文：A', '英语：读B。今晚完成。', ['英语：读B。', '今晚完成。']),
+                ('英语：跟读', '英语：', ['英语：']),
+                ('读三段并回答', '读三段并回答。每题写出依据。', ['每题写出依据。'])]:
+            with self.subTest(title=title, action=action):
+                self.assertEqual(family_agenda.action_lines(title, action), shown)
+                # Every word, mark and order kept: at most a leading exact repetition of the heading is left out.
+                self.assertTrue(action.replace('\n', '').endswith(''.join(shown)), shown)
+
     def test_only_the_title_s_own_line_and_a_restated_handback_clause_are_left_out(self):
         for title, action, shown in [
                 ('读三段并回答', '读三段并回答', []),
@@ -636,11 +710,28 @@ def saved_flash27_state(path):
         case.doCleanups()
 
 
+def saved_recovered_state(path):
+    """The app's own state and 2026-10-19 calendar after the R09 reread saved the English paragraph (mocked transport)."""
+    case = RecoveredParagraphCardTests('test_the_recovered_paragraph_reads_as_its_own_sentences_and_stays_saved_byte_for_byte')
+    case.setUp()
+    try:
+        ids, _ = case.save_recovered()
+        state = case.app.snapshot()
+        state['saved_calendar'] = case.app.calendar_snapshot('2026-10-19', '2026-10-19')
+        state['recovered_ids'] = ids
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(state, f, ensure_ascii=False, default=str)
+    finally:
+        case.doCleanups()
+
+
 if __name__ == '__main__':
     import sys
     if sys.argv[1:2] == ['--saved-h01-state']:
         saved_h01_state(sys.argv[2])
     elif sys.argv[1:2] == ['--saved-flash27-state']:
         saved_flash27_state(sys.argv[2])
+    elif sys.argv[1:2] == ['--saved-recovered-state']:
+        saved_recovered_state(sys.argv[2])
     else:
         unittest.main()

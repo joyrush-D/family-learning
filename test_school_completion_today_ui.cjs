@@ -120,8 +120,40 @@ async function demoServer(){
     assert.deepEqual(errors,[]);
    }finally{await p.close()}
   }
+  // The R09 recovered day: English 34 saved as one paragraph by the ordinary run_once reread of a fixed reply (mocked
+  // transport). Its card reads its own sentences under its title; the four other cards read as above.
+  const recoveredFile=path.join(fs.mkdtempSync(path.join(os.tmpdir(),'school-recovered-')),'state.json');
+  const recoveredMade=spawn(process.env.FAMILY_TEST_PYTHON||'python3',['test_school_completion_today.py','--saved-recovered-state',recoveredFile],{cwd:__dirname,stdio:['ignore','ignore','inherit']});
+  const [recoveredCode]=await once(recoveredMade,'exit');assert.equal(recoveredCode,0,'saved recovered state');
+  const recovered=JSON.parse(fs.readFileSync(recoveredFile,'utf8')),rid=recovered.recovered_ids,paragraph='英语：听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在记录本上签字。今晚完成，明天早读检查记录本。';
+  assert.equal(recovered.tasks.find(t=>t.id===rid['Unit 4']).action,paragraph,'the saved paragraph as the reread stored it');
+  const recoveredLines={...lines,'Unit 4':['听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在记录本上签字。','今晚完成，明天早读检查记录本。']};
+  for(const width of [360,1440]){
+   const p=await browser.newPage({viewport:{width,height:820}}),errors=[];
+   p.on('pageerror',e=>errors.push(e.message));
+   try{
+    await p.route('**/api/state',route=>route.fulfill({json:{...base,children:recovered.children,sources:recovered.sources,today:'2026-10-19',tasks:recovered.tasks,records:recovered.records,agent:{...recovered.agent,items:[]},today_calendar:recovered.saved_calendar}}));
+    for(const pass of ['open','reopen','list']){
+     if(pass==='open')await p.goto(server.url,{waitUntil:'load'});else await p.reload({waitUntil:'load'});
+     await eventually(async()=>await p.locator('body[data-page="home"] #task-group-homework').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','recovered Today ready');
+     if(pass==='list'){await p.locator('[data-task-all="homework"]').click();await eventually(async()=>/所有作业与待办/.test(await p.locator('#content h1').first().innerText()),'all homework and todo list')}
+     else{assert.match(await p.locator('#task-group-homework h2').innerText(),/今日作业 · 3/);assert.match(await p.locator('#task-group-todo h2').innerText(),/要办的事 · 2/)}
+     for(const [key,want] of Object.entries(recoveredLines)){
+      const card=p.locator('[data-query-target="task:'+rid[key]+'"]'),saved=recovered.tasks.find(t=>t.id===rid[key]);
+      assert.equal(await card.count(),1,key+' one card');assert.equal(await card.locator('h3').innerText(),saved.title);
+      assert.deepEqual(await card.locator('.task-requirement li, p.task-requirement').allInnerTexts(),want,pass+' '+width+' '+key+' recovered card lines');
+      const text=await card.innerText();assert.match(text,new RegExp(teacher[key]));
+      if(key==='Unit 4'){assert.equal(text.split('英语：').length-1,1,'the subject label only in the heading');assert.match(await card.locator('.agenda-dates').innerText(),/完成：2026-10-19[\s\S]*截止：2026-10-20/)}
+     }
+     assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page has no horizontal overflow');
+    }
+    if(process.env.TODAY_UI_PROOF_DIR){await p.goto(server.url,{waitUntil:'load'});await eventually(async()=>await p.locator('#content').getAttribute('data-ready')==='true','proof ready');await p.screenshot({path:path.join(process.env.TODAY_UI_PROOF_DIR,'recovered-today-'+width+'.png'),fullPage:true})}
+    assert.deepEqual(errors,[]);
+   }finally{await p.close()}
+  }
   console.log('PASS: own today/tonight work is in Today once with its completion and handback days; handback-only work stays in other homework');
   console.log('PASS: saved H01 is in Today once on 2026-10-18 (work) and 2026-10-20 (handback), not on 2026-10-16');
   console.log('PASS: saved Flash27 day shows each own condition once under its title with its date roles, teacher and originals, open/reopen/list at 360 and 1440');
+  console.log('PASS: the R09 recovered English paragraph reads as its own sentences under its title, the other four as before, open/reopen/list at 360 and 1440');
  }finally{await browser?.close();await server?.stop()}
 })().catch(e=>{console.error(e);process.exit(1)});
