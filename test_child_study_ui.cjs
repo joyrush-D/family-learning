@@ -76,6 +76,30 @@ async function launchDemo(){
    await parent.evaluate(()=>scrollTo(0,0));if(shots)await parent.screenshot({path:path.join(shots,'synthetic-parent-study-'+width+'.png'),fullPage:true});
    checks.push(width+'px: report, estimate, timer, help, self-report, parent confirmation, refresh and layout');
   }
+  // The same five fictional teacher requirements (the saved Flash27 words) entered by the parent's existing entries: a
+  // task each, then 作业计时 adds it to the child's day; nothing is arranged for the child automatically.
+  const teacherItems=[['语文：完成《星芽阅读练习册》第28页第1、2题','完成《星芽阅读练习册》第28页第1、2题。\n答案写在练习册上。\n今晚完成，明天早上交。\n提交要求：明天早上交练习册。',['答案写在练习册上。','今晚完成，明天早上交练习册。']],
+   ['数学：完成《数格练习册》第34页第1—4题','完成《数格练习册》第34页第1—4题。\n第34页第4题要把计算过程写完整，写在原题下面即可。\n今晚完成，明天早上交。\n提交要求：明天早上交练习册。',['第34页第4题要把计算过程写完整，写在原题下面即可。','今晚完成，明天早上交练习册。']],
+   ['英语：跟读Unit 4两遍并家长签字','听录音跟读 Unit 4 A day at the lake 两遍。\n读完请家长在记录本上签字。\n今晚完成，明天早读检查记录本。',['听录音跟读 Unit 4 A day at the lake 两遍。','读完请家长在记录本上签字。','今晚完成，明天早读检查记录本。']],
+   ['交《秋季校园开放日回执》','《秋季校园开放日回执》今晚请家长签字。\n明天早上让孩子交给班主任。',['《秋季校园开放日回执》今晚请家长签字。','明天早上让孩子交给班主任。']],
+   ['科学：带一个空透明塑料瓶','明天来校带一个空透明塑料瓶，科学课用。',['明天来校带一个空透明塑料瓶，科学课用。']]];
+  const before=(await read()).items.length,teacherIDs=[];
+  for(const [title,action] of teacherItems){const made=await post('task/new',{child:initial.children[0].name,title,action,due:'2026-10-20',request_key:randomUUID().replaceAll('-','')});const added=await post('study/item',{child_id:who,day,request_key:randomUUID(),version:0,task_id:made.task.id,planned_minutes:20});teacherIDs.push(added.item?.id||(await read()).items.find(i=>i.task_id===made.task.id).id)}
+  assert.equal((await read()).items.length,before+5,'only the five the parent added');
+  for(const width of [360,1440])for(const pass of ['open','reopen']){
+   await child.setViewportSize({width,height:900});if(pass==='open')await child.locator('#refresh').click();else{await child.reload();await child.locator('#study-tab').click()}
+   for(const [i,[title,action,want]] of teacherItems.entries()){
+    const card=child.locator('#study-items [data-study-item="'+teacherIDs[i]+'"]');await card.waitFor();
+    assert.equal(await card.locator('h3').innerText(),title,width+' '+pass+' child card title as saved');
+    assert.deepEqual(await card.locator('.study-requirement-lines li, p.study-requirement-lines').allInnerTexts(),want,width+' '+pass+' '+title+' each own condition once');
+    const text=await card.innerText();assert.doesNotMatch(text,/提交要求/);
+    if(i<2)assert.equal(text.split(title.replace(/^[^：]+：/,'')).length-1,1,title+' title words once');
+    assert.equal((await read()).items.find(x=>x.id===teacherIDs[i]).source_task_action,action,'saved words unchanged');
+   }
+   assert.equal(await child.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'child fits '+width);assert.equal(await child.locator('#child-study button:visible').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'44px child controls');
+   if(shots&&pass==='reopen'){await child.evaluate(()=>scrollTo(0,0));await child.screenshot({path:path.join(shots,'synthetic-child-teacher-items-'+width+'.png'),fullPage:true})}
+  }
+  checks.push('five teacher requirements added by the parent read title, own conditions once and keep the saved words on the child card at 360/1440 and after reopen');
   await parent.goto(server.url);await parent.locator('nav [data-page="more"]').click();await parent.locator('.more-links [data-page="settings"]').click();await parent.locator('[data-child-access="'+who+'"]').click();await parent.locator('[data-child-study="'+who+'"]').click();await eventually(async()=>!(await(await fetch(server.url+'api/child-access')).json()).children.find(c=>c.child_id===who).study_enabled,'study access removed');await child.locator('#refresh').click();await child.locator('#child-study').waitFor({state:'hidden'});assert.equal((await child.locator('#study-items').textContent()).includes('虚构自主功课'),false,'study DOM removed');assert.equal(await child.locator('#journey').isVisible(),true,'reading entrance remains');
   assert.deepEqual(errors,[]);checks.push('revoke daily homework removes its data while reading entrance stays usable');
   console.log(JSON.stringify({passed:checks.length,checks,syntheticOnly:true,actualPhoneTested:false,screenshots:shots||null},null,2));

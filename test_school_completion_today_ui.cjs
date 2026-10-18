@@ -75,7 +75,53 @@ async function demoServer(){
     assert.deepEqual(errors,[]);
    }finally{await p.close()}
   }
+  // The fictional Flash27 day as run_once saved it (7 originals, 3 homework + 2 todo): each card reads title, its own
+  // conditions once and its date roles; the saved words, teacher, originals, gap and missing timetable stay.
+  const flashFile=path.join(fs.mkdtempSync(path.join(os.tmpdir(),'school-flash27-')),'state.json');
+  const flashMade=spawn(process.env.FAMILY_TEST_PYTHON||'python3',['test_school_completion_today.py','--saved-flash27-state',flashFile],{cwd:__dirname,stdio:['ignore','ignore','inherit']});
+  const [flashCode]=await once(flashMade,'exit');assert.equal(flashCode,0,'saved Flash27 state');
+  const flash=JSON.parse(fs.readFileSync(flashFile,'utf8')),ids=flash.flash27_ids;assert.equal(flash.tasks.length,5,'five saved actions');
+  const lines={'星芽':['答案写在练习册上。','今晚完成，明天早上交练习册。'],'数格':['第34页第4题要把计算过程写完整，写在原题下面即可。','今晚完成，明天早上交练习册。'],
+   'Unit 4':['听录音跟读 Unit 4 A day at the lake 两遍。','读完请家长在记录本上签字。','今晚完成，明天早读检查记录本。'],
+   '回执':['《秋季校园开放日回执》今晚请家长签字。','明天早上让孩子交给班主任。'],'塑料瓶':['明天来校带一个空透明塑料瓶，科学课用。']};
+  const teacher={'星芽':'虚构语文许老师','数格':'虚构数学魏老师','Unit 4':'虚构英语乔老师','回执':'虚构班主任温老师','塑料瓶':'虚构班主任温老师'};
+  for(const width of [360,1440]){
+   const p=await browser.newPage({viewport:{width,height:820}}),errors=[];
+   p.on('pageerror',e=>errors.push(e.message));
+   try{
+    await p.route('**/api/state',route=>route.fulfill({json:{...base,children:flash.children,sources:flash.sources,today:'2026-10-19',tasks:flash.tasks,records:flash.records,agent:{...base.agent,items:[]},today_calendar:flash.saved_calendar}}));
+    for(const pass of ['open','reopen','list']){
+     if(pass==='open')await p.goto(server.url,{waitUntil:'load'});else await p.reload({waitUntil:'load'});
+     await eventually(async()=>await p.locator('body[data-page="home"] #task-group-homework').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','Flash27 Today ready');
+     if(pass==='list'){await p.locator('[data-task-all="homework"]').click();await eventually(async()=>/所有作业与待办/.test(await p.locator('#content h1').first().innerText()),'all homework and todo list')}
+     else{
+      assert.match(await p.locator('#task-group-homework h2').innerText(),/今日作业 · 3/);assert.match(await p.locator('#task-group-todo h2').innerText(),/要办的事 · 2/);
+      assert.match(await p.locator('#today-courses').innerText(),/当天课表尚未提供/,'the missing timetable stays said');
+     }
+     for(const [key,want] of Object.entries(lines)){
+      const card=p.locator('[data-query-target="task:'+ids[key]+'"]'),saved=flash.tasks.find(t=>t.id===ids[key]);
+      assert.equal(await card.count(),1,key+' one card');
+      assert.equal(await card.locator('h3').innerText(),saved.title,key+' title as saved');
+      assert.deepEqual(await card.locator('.task-requirement li, p.task-requirement').allInnerTexts(),want,pass+' '+width+' '+key+' each own condition once');
+      const text=await card.innerText();
+      assert.doesNotMatch(text,/提交要求/,key+' no restated handback line');
+      // Only where the first saved line is the title itself; the bottle's line overlaps its title in part and stays whole.
+      if(['星芽','数格'].includes(key))assert.equal(text.split(saved.title.replace(/^[^：]+：/,'')).length-1,1,key+' the title words appear once');
+      assert.match(text,new RegExp(teacher[key]),key+' teacher kept by the originals');
+      const dates=await card.locator('.agenda-dates').innerText();
+      assert.match(dates,/发布：2026-10-19 1\d:\d\d/,key+' publication time');
+      if(key==='塑料瓶')assert.doesNotMatch(dates,/完成：/,'the bottle borrows no completion day');else assert.match(dates,/完成：2026-10-19[\s\S]*截止：2026-10-20/,key+' completion and handback/check days');
+      assert.match(dates,/截止：2026-10-20/);
+     }
+     assert.deepEqual(await p.locator('[data-query-target="task:'+ids['数格']+'"] [data-school-original-ref]').allInnerTexts(),['原件 1','原件 2'],'both math originals');
+     assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page has no horizontal overflow');
+    }
+    if(process.env.TODAY_UI_PROOF_DIR){await p.reload({waitUntil:'load'});await eventually(async()=>await p.locator('#content').getAttribute('data-ready')==='true','proof ready');await p.screenshot({path:path.join(process.env.TODAY_UI_PROOF_DIR,'flash27-today-'+width+'.png'),fullPage:true})}
+    assert.deepEqual(errors,[]);
+   }finally{await p.close()}
+  }
   console.log('PASS: own today/tonight work is in Today once with its completion and handback days; handback-only work stays in other homework');
   console.log('PASS: saved H01 is in Today once on 2026-10-18 (work) and 2026-10-20 (handback), not on 2026-10-16');
+  console.log('PASS: saved Flash27 day shows each own condition once under its title with its date roles, teacher and originals, open/reopen/list at 360 and 1440');
  }finally{await browser?.close();await server?.stop()}
 })().catch(e=>{console.error(e);process.exit(1)});
