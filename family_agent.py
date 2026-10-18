@@ -2832,6 +2832,74 @@ def _school_generated_snapshot(row):
     return _hash([row['child_id'],row['title'],row['body'],row.get('due',''),evidence,plan])
 
 
+def _school_role_reselect(store,c,row,evidence,now):
+    """Prove an untouched saved review is held only by an older reading of its own date roles; never a model call.
+
+    The current selection reading (its own completion and handback/check roles, or its own clause's one day, never
+    another proposal's or another original's) runs again on the unchanged stored receipt, quote and originals. The due
+    is the one day both the receipt's own words and the original give; a day the older program cleared comes back only
+    from them, never from the upload or current day. A parent decision, edit, link, task, record or feedback, a changed
+    or rebound original, an unfinished batch, a past day or an item already reread returns None: its saved state stays.
+    """
+    plan=json.loads(row['plan']);brief=plan.get('school_task',{})
+    if row['state']!='pending' or brief.get('state')!='review' or row['task_id'] or row['record_id'] is not None or row['care_id']:return None
+    if not row['job_id'].startswith('messages:') or brief.get('policy')!=SCHOOL_TASK_POLICY:return None
+    if plan.get('school_selection_revision')!=SCHOOL_SELECTION_REVISION:return None
+    snapshot=plan.get('school_generated_snapshot');routed=plan.get('school_goal_id')
+    # Only the program's own learning-goal routing (same child, its own subject goal) may have written after generation.
+    if routed:
+        goal_row=c.execute("SELECT child_id FROM agent_items WHERE id=? AND kind='care'",(routed,)).fetchone()
+        if not plan.get('school_learning') or goal_row is None or goal_row['child_id']!=row['child_id']:return None
+    unrouted=dict(row,plan={k:v for k,v in plan.items() if k!='school_goal_id'})
+    if not snapshot or snapshot not in (_school_generated_snapshot(row),_school_generated_snapshot(unrouted)):return None
+    if any(plan.get(k) for k in ('school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id',
+                                 'approved','school_original_action','school_first_batch_correction','school_previous_policy',
+                                 'school_saved_reread','school_batch_reread','school_role_reselect')):return None
+    if not evidence or brief.get('origin_basis')!=_school_message_basis(evidence):return None
+    raw=plan.get('school_selection_receipt');quote=plan.get('school_date_quote','')
+    if not isinstance(raw,dict) or raw.get('state')!='ready' or (raw.get('change') or 'new')!='new' or raw.get('target_id') or not quote:return None
+    import family_agenda
+    sent={family_agenda.sent_day(e.get('time','')) for e in evidence}
+    if len(sent)!=1 or not all(sent):return None
+    # The same batch's other proposals, by the quotes they were saved with, are the siblings the selection read.
+    others=[json.loads(r['plan']).get('school_date_quote','') for r in c.execute(
+        "SELECT plan FROM agent_items WHERE kind='school' AND child_id=? AND job_id=? AND id<>?",(row['child_id'],row['job_id'],row['id']))]
+    goal=str(raw.get('goal',''));title=str(raw.get('title',''))
+    clause=_school_own_clause_dates(quote,evidence,others);roles=_school_role_days(quote,evidence,others)
+    if roles:
+        due=roles[1];own=roles[0]|{due}
+        if clause and not clause<=own:return None
+    elif len(clause)==1:due=next(iter(clause));own={due}
+    else:return None
+    goal_days=_school_goal_dates(goal,evidence)
+    if row['due'] and row['due']!=due or not goal_days<=own:return None
+    if due not in goal_days:
+        # A role day the receipt's goal words do not date is restored only from the receipt's own handback/check words,
+        # verbatim the original's own clause and no sibling's; never from the upload or current day.
+        submission=str(raw.get('submission','')).strip().rstrip('。；;.')
+        if (not roles or not submission or sum(e['text'].count(submission) for e in evidence)!=1
+                or any(submission in other for other in others if other)):return None
+    if _school_borrowed_day(quote,evidence,due,goal,title) or _school_event_dropped(quote,evidence,title,goal):return None
+    if not roles and due not in set().union(*(family_agenda.deadlines(e['text'],family_agenda.sent_day(e.get('time'))) for e in evidence)):return None
+    if due<now.date().isoformat():return None
+    job=c.execute('SELECT done FROM agent_jobs WHERE id=?',(row['job_id'],)).fetchone()
+    if job is None or not job['done']:return None
+    for e in evidence:
+        source_id,message_id=e['ref'][len('message:'):].rsplit(':',1)
+        message=c.execute('SELECT processed FROM agent_messages WHERE source_id=? AND id=?',(source_id,message_id)).fetchone()
+        if message is None or message['processed']!=1:return None
+    if (c.execute('SELECT 1 FROM records WHERE source=? LIMIT 1',('Agent建议:'+row['id'],)).fetchone()
+            or c.execute('SELECT 1 FROM manual_tasks WHERE source LIKE ? LIMIT 1',('Agent建议:'+row['id']+'\n%',)).fetchone()):return None
+    try:
+        fresh=_school_brief({key:raw.get(key) or ('review' if key=='state' else 'new' if key=='change' else '') for key in
+                             ['title','goal','advice','state','reason','change','target_id','purpose','submission']},
+                            incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence),
+                            evidence=evidence,separate_learning=True)
+    except (AgentError,ValueError,KeyError,TypeError):return None
+    if fresh.get('state')!='ready' or fresh.get('change')!='new':return None
+    return dict(due=due,quote=quote,receipt=_hash(raw),origin_basis=brief['origin_basis'],snapshot=snapshot,brief=fresh)
+
+
 def _school_untouched_batch_correction(store,c,row,evidence):
     """Recheck the initial output, original bytes and all local dependencies before remapping."""
     plan=json.loads(row['plan']);brief=plan.get('school_task',{});proof=plan.get('school_first_batch_correction')
@@ -5894,6 +5962,25 @@ def _refresh_school(app, store, now, budget):
         if current and not (page_changed or pdf_changed or material_changed or original_changed or source_error or legacy_correction):
             # An untouched saved review of a finished batch: one reread in this item's own job, never a fresh budget.
             with store._db() as c:saved_reread=_school_saved_reread(store,c,row,evidence,now)
+            reselect=None
+            if not saved_reread:
+                with store._db() as c:reselect=_school_role_reselect(store,c,row,evidence,now)
+            if reselect:
+                # Same row and ID, no model call: the stored receipt's own day is restored and the complete old row stays
+                # readable; a row or original changed while this round waited is left as it now is.
+                fresh=reselect['brief'];brief=dict(brief,**{k:v for k,v in fresh.items() if k not in ('policy','origin_basis')})
+                plan['school_task']=brief
+                plan['school_role_reselect']=dict({k:v for k,v in reselect.items() if k!='brief'},previous=_hash(row),previous_row=copy.deepcopy(row))
+                with store._db() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    now_row=c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone()
+                    try:same=now_row is not None and dict(now_row)==row and _school_role_reselect(store,c,row,_school_material(store,c,row)[0],now)==reselect
+                    except (AgentError,ValueError,KeyError,TypeError):same=False
+                    if not same:continue
+                    updated=now.isoformat()
+                    c.execute('UPDATE agent_items SET title=?,body=?,plan=?,updated=?,due=? WHERE id=?',
+                              (brief.get('title') or row['title'],brief.get('goal') or row['body'],_json(plan),updated,reselect['due'],row['id']))
+                    row.update(title=brief.get('title') or row['title'],body=brief.get('goal') or row['body'],plan=_json(plan),updated=updated,due=reselect['due'])
         if plan.get('school_history_job') and (not current or page_changed or pdf_changed or material_changed):
             # This audit proves a literal message action only. A generic whole-notice refresh cannot change its identity.
             brief.update(state='review',reason='补漏依据限于这项原消息动作；新资料或规则变化尚未核其对应关系，原事项与要求保留。')
