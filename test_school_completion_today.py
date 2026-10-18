@@ -7,10 +7,12 @@ import copy
 import datetime as dt
 import json
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import family_agenda
 import family_agent as agent
+import family_study
 import family_task_focus
 import test_school_native_coverage as native
 
@@ -526,9 +528,98 @@ class Flash27OwnRoleDaysTodayTests(unittest.TestCase):
         check(self._listed('2026-10-20'))
 
 
+# What each saved Flash27 card shows under its own title: every condition once, in the saved order and words; the
+# title's own first line and the program's restated 提交要求 are not repeated. Partial overlaps stay as written.
+FLASH27_CARD_LINES = {
+    '星芽': ['答案写在练习册上。', '今晚完成，明天早上交练习册。'],
+    '数格': ['第34页第4题要把计算过程写完整，写在原题下面即可。', '今晚完成，明天早上交练习册。'],
+    'Unit 4': ['听录音跟读 Unit 4 A day at the lake 两遍。', '读完请家长在记录本上签字。', '今晚完成，明天早读检查记录本。'],
+    '回执': ['《秋季校园开放日回执》今晚请家长签字。', '明天早上让孩子交给班主任。'],
+    '塑料瓶': ['明天来校带一个空透明塑料瓶，科学课用。'],
+}
+
+
+class Flash27ReadableCardTests(unittest.TestCase):
+    """Display only: the saved Flash27 day reads as title, own conditions and date roles; nothing saved is rewritten."""
+    setUp = native.SchoolNativeCoverageTests.setUp
+
+    def save_flash27(self):
+        self.now = self.fixture.now = dt.datetime(2026, 10, 19, 20, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='37')
+        payload['messages'] = copy.deepcopy(FLASH27_MESSAGES)
+        self.store.ingest(payload)
+        reply = json.loads(json.dumps(FLASH27_REPLY, ensure_ascii=False).replace('message:' + FLASH27_SOURCE + ':', 'message:' + self.source['id'] + ':'))
+        self.model.side_effect = lambda *args, **kwargs: copy.deepcopy(reply)
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed'], self.model.call_count), (0, 6, 1), result)
+        with self.store._db() as c:
+            saved = {r['id']: dict(r) for r in c.execute('SELECT * FROM manual_tasks')}
+        ids = {key: next(i for i, t in saved.items() if key in t['title']) for key in FLASH27_CARD_LINES}
+        return ids, saved
+
+    def test_each_card_shows_its_own_conditions_once_and_keeps_the_saved_words(self):
+        ids, saved = self.save_flash27()
+        self.assertEqual(len(saved), 5)
+        self.assertIn('\n提交要求：明天早上交练习册。', saved[ids['星芽']]['action'], 'the program-added line stays saved')
+        tasks = {t['id']: t for t in self.app.tasks()}
+        for key, lines in FLASH27_CARD_LINES.items():
+            with self.subTest(item=key):
+                task = tasks[ids[key]]
+                self.assertEqual(task['agenda']['action_lines'], lines)
+                self.assertEqual((task['title'], task['action'], task['due']), tuple(saved[ids[key]][k] for k in ('title', 'action', 'due')))
+                shown = [task['title']] + lines
+                self.assertEqual(len(shown), len(set(x.rstrip('。') for x in shown)), 'no condition repeated on one card')
+                self.assertFalse(any(x.startswith('提交要求') for x in lines))
+        # The facts the parent must still read on each card (title or its own lines), each kept whole.
+        for key, facts in {'星芽': ('《星芽阅读练习册》第28页第1、2题', '答案写在练习册上', '今晚完成', '明天早上交练习册'),
+                           '数格': ('《数格练习册》第34页第1—4题', '第34页第4题要把计算过程写完整，写在原题下面即可', '今晚完成', '明天早上交练习册'),
+                           'Unit 4': ('听录音跟读 Unit 4 A day at the lake 两遍', '读完请家长在记录本上签字', '今晚完成，明天早读检查记录本'),
+                           '回执': ('《秋季校园开放日回执》今晚请家长签字', '明天早上让孩子交给班主任'),
+                           '塑料瓶': ('明天来校带一个空透明塑料瓶，科学课用',)}.items():
+            card = '\n'.join([tasks[ids[key]]['title']] + tasks[ids[key]]['agenda']['action_lines'])
+            for fact in facts:
+                self.assertIn(fact, card, (key, fact))
+        self.assertEqual(sum('第4题' in x for x in tasks[ids['数格']]['agenda']['action_lines']), 1, 'the 4th-question note stays its own line')
+        self.assertNotIn('今晚', '\n'.join(tasks[ids['塑料瓶']]['agenda']['action_lines']))
+
+    def test_the_child_card_reads_the_same_projection_from_the_same_task(self):
+        ids, saved = self.save_flash27()
+        study = family_study.Store(SimpleNamespace(**vars(self.app)))
+        child_id = self.source['child_id']
+        for key in ('星芽', 'Unit 4'):
+            # The parent's existing 作业计时 entry adds the task to the day; nothing is arranged for the child automatically.
+            study.save_item(dict(child_id=child_id, day='2026-10-19', request_key='flash27-readable-' + str(len(key)) + 'x' * 12,
+                                 version=0, task_id=ids[key], planned_minutes=20))
+        rows = {r['task_id']: r for r in study.snapshot(child_id, '2026-10-19')['items']}
+        self.assertEqual(set(rows), {ids['星芽'], ids['Unit 4']}, 'only the two items the parent added')
+        for key in ('星芽', 'Unit 4'):
+            with self.subTest(item=key):
+                row = rows[ids[key]]
+                self.assertEqual(row['source_task_action'], saved[ids[key]]['action'], 'the saved words are still read as they are')
+                self.assertEqual(row['source_task_action_lines'], FLASH27_CARD_LINES[key])
+                self.assertEqual((row['source_task_complete_on'], row['source_task_due']), ('2026-10-19', '2026-10-20'))
+
+
+def saved_flash27_state(path):
+    """The app's own state and 2026-10-19 calendar after the fictional Flash27 day is saved by run_once (no model)."""
+    case = Flash27ReadableCardTests('test_each_card_shows_its_own_conditions_once_and_keeps_the_saved_words')
+    case.setUp()
+    try:
+        ids, _ = case.save_flash27()
+        state = case.app.snapshot()
+        state['saved_calendar'] = case.app.calendar_snapshot('2026-10-19', '2026-10-19')
+        state['flash27_ids'] = ids
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(state, f, ensure_ascii=False, default=str)
+    finally:
+        case.doCleanups()
+
+
 if __name__ == '__main__':
     import sys
     if sys.argv[1:2] == ['--saved-h01-state']:
         saved_h01_state(sys.argv[2])
+    elif sys.argv[1:2] == ['--saved-flash27-state']:
+        saved_flash27_state(sys.argv[2])
     else:
         unittest.main()
