@@ -3952,6 +3952,14 @@ def _recover_school_ack_originals(store,config,now):
 
 
 _SCHOOL_NATIVE_SUBJECTS=r'语文|数学|英语|科学|历史|地理|物理|化学|生物'
+
+
+def _school_native_subjects(text):
+    """The subjects a school text names outside closed 《》 titles, as _titles_read_as_objects reads them.
+
+    A title is the material's whole name (阅读《数学家的故事》 is no 数学 outcome); an unclosed 《 keeps its words read.
+    """
+    return set(re.findall(_SCHOOL_NATIVE_SUBJECTS,re.sub(r'《[^《》]*》','',text or '')))
 _SCHOOL_NATIVE_DAY=r'(?:今天|今晚|明天|明晚|后天|(?:\d{4}年)?\d{1,2}月\d{1,2}日?|\d{4}-\d{2}-\d{2})'
 _SCHOOL_NATIVE_DATE=r'(?:'+_SCHOOL_NATIVE_DAY+r'|(?:本|下)?(?:周|星期|礼拜)[一二三四五六日天])'
 _SCHOOL_NATIVE_MARKER=r'(?:[1-9][0-9]?[.．、]|第[一二三四五六七八九十0-9]+项\s*[:：]?)\s*'
@@ -4652,10 +4660,10 @@ def _school_native_kept(action,actions,entries):
             if owner is None or owner['id']==action['id']:continue
         for sentence,clause in ((s,c) for s in re.split(r'(?<=[。！!？?\n])',later['text']) for c in re.split(r'[。；;，,\n]',s)):
             name=re.match(r'^\s*(?:不更改|不改变)?\s*([^的]{2,24}?)的',clause)
-            if _school_native_restated(clause,sentence,action,siblings) and not set(re.findall(_SCHOOL_NATIVE_SUBJECTS,sentence))-{action['subject']}:
+            if _school_native_restated(clause,sentence,action,siblings) and not _school_native_subjects(sentence)-{action['subject']}:
                 kept.add(later['ref']);continue
             if (not _school_native_affirmed(clause,sentence) or re.search(_SCHOOL_NATIVE_CHANGE,clause) or not name
-                    or set(re.findall(_SCHOOL_NATIVE_SUBJECTS,sentence))-{action['subject']}
+                    or _school_native_subjects(sentence)-{action['subject']}
                     or [a['id'] for a in siblings if a['primary'].count(name[1])==1]!=[action['id']]
                     or not _school_named_objects(clause)<=_school_named_objects(own) or not marks(clause)<=marks(own)
                     or any(own.count(sheet)!=1 for sheet in re.findall(_SCHOOL_NATIVE_WORKSHEET,clause))):continue
@@ -4710,7 +4718,7 @@ def _school_native_actions(evidence):
             if (part['purpose']=='learning' and optional and '题' not in part['primary'][:optional.start()]
                     and '题' not in part['primary'][optional.end():] and '必做' not in quote):
                 part['purpose']='optional'
-            named=set(re.findall(_SCHOOL_NATIVE_SUBJECTS,part['primary']));shared=set(re.findall(_SCHOOL_NATIVE_SUBJECTS,header))
+            named=_school_native_subjects(part['primary']);shared=_school_native_subjects(header)
             subject=next(iter(named)) if len(named)==1 else next(iter(shared)) if not named and len(shared)==1 else ''
             own.append(dict(id='native:'+_hash([entry['ref'],part['start'],part['end'],quote])[:24],ref=entry['ref'],quote=quote,
                 header=header,primary=part['primary'],purpose=part['purpose'],subject=subject if part['purpose'] in ('learning','optional') else '',
