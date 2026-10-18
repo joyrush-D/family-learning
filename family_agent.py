@@ -4819,14 +4819,17 @@ def _school_native_actions(evidence):
         # required and may cite it only for review. Another publisher, source or object, a noun several outcomes name, or
         # a message without the material keeps the existing readers; no file name is read.
         for later in evidence[index+1:]:
-            head=re.match(r'^\s*(?:补上|补发|补传)(?:刚才|上面|前面|之前)?的?([^。；;，,：:！!？?\n]{2,12}?)\s*[。；;，,：:！!\n]',later['text'])
+            head=re.match(r'^\s*(?:补上|补发|补传)\s*(?:刚才|上面|前面|之前)?\s*(?:布置|发)?\s*的?\s*([^。；;，,：:！!？?\n]{2,30}?)\s*[。；;，,：:！!？?\n]',later['text'])
             if (not head or not later.get('attachments') or later.get('content_incomplete') or later.get('unread')
                     or later.get('kind','text')!='text' or not entry.get('publisher') or later.get('publisher')!=entry['publisher']
                     or later['ref'][8:].rsplit(':',1)[0]!=entry['ref'][8:].rsplit(':',1)[0]):continue
             try:gap=(dt.datetime.fromisoformat(later['time'])-dt.datetime.fromisoformat(entry['time'])).total_seconds()
             except (KeyError,ValueError,TypeError):continue
-            owners=[a for a in own if head[1] in a['primary']]
-            if (0<=gap<=120 and len(owners)==1 and sum(t.endswith(head[1]) for t in re.findall(r'《([^《》]+)》',owners[0]['primary']))==1
+            # It names the material by the outcome's own complete closed title (补发刚才布置的《分组记录练习单》原件) or by the noun
+            # that exactly one of its titles ends in (补上刚才的练习单).
+            titled=re.fullmatch(r'(《[^《》]+》)\s*(?:原件)?',head[1]);noun=titled[1] if titled else head[1]
+            owners=[a for a in own if noun in a['primary']]
+            if (0<=gap<=120 and len(owners)==1 and (titled or sum(t.endswith(noun) for t in re.findall(r'《([^《》]+)》',owners[0]['primary']))==1)
                     and later['ref'] not in owners[0].get('linked',[])+[s['ref'] for s in _school_native_later(owners[0])]):
                 owners[0]['linked']=sorted(owners[0].get('linked',[])+[later['ref']])
                 resent.setdefault(later['ref'],set()).add(owners[0]['id'])
@@ -4968,6 +4971,10 @@ def _school_native_dates(action):
     own='\n'.join([action['header'],action['quote'],*action.get('conditions',[]),*action.get('shared_conditions',[])])
     # One work's completion limit and its own handback (订正本…交给…) read as the handback day; another object keeps both.
     dates=_school_handback_day(own,published,deadlines(own,published))
+    # Its own quote's two time roles (今天完成…。明天交给数学课代表) are one item dated by its handback, read as the ordinary
+    # path reads them (_school_role_days); only when those roles account for every own day, never another item's.
+    roles=_school_role_days(action['quote'],[dict(text=action['quote'],time=action['time'])],[]) if len(dates)>1 else None
+    if roles and roles[0]|{roles[1]}==dates:dates={roles[1]}
     # A school arrangement in this outcome's own quote (明天早读抽查) is its day; a header date is never borrowed.
     if not dates:dates=_school_own_dates(action['quote'],published)
     for supplement in action.get('shared_supplements',[])+action['supplements']:
