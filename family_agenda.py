@@ -381,14 +381,15 @@ def date_meaning(quote,due,published,title='',goal=''):
     if not date(due):return ''
     held=[event for value,event in _held_events(quote,published) if value==due]
     if not held:
-        # Read by the item's own clauses naming this day and their own predicates: only checking (明天早读检查) makes it the
-        # teacher's check; a handback, any other or a mixed role on that day stays the deadline it was.
-        own=[c for c in re.split(r'[，,。；;！!？?\n]',quote or '') if date(published) and family_agent._school_clause_day(c,published)==due]
+        # Read by the item's own clauses naming this day and their own predicates (《》 titles are objects): only checking
+        # (明天早读检查) makes it the teacher's check, and only handing it in on that day itself (由孩子明早交给班主任、明天早上
+        # 交) makes it the teacher's handback. A day it must come before (于10月22日前交回), a negation ahead of the predicate
+        # (不用明天交回), any other or a second role on that day stays the ordinary deadline it was.
+        own=[_titles_read_as_objects(c) for c in re.split(r'[，,。；;！!？?\n]',quote or '') if date(published) and family_agent._school_clause_day(c,published)==due]
         roles=[family_agent._school_clause_roles(c) for c in own]
         if roles and all(r=={'check'} for r in roles):return 'inspection'
-        # Handing it in on that day itself (由孩子明早交给班主任、明天早上交) is the teacher's handback day; a day it must come
-        # before (于10月22日前交回) stays the ordinary deadline, and so does a day with any other or a second role.
-        if roles and all(r=={'handback'} for r in roles) and not any(re.search(r'(?:之前|以前|前)',c) for c in own):return 'handback'
+        if (roles and all(r=={'handback'} for r in roles) and not any(re.search(r'之前|以前|前',c) for c in own)
+                and not any(re.search(r'不|没|无|未|别|勿|免',c[:re.search(r'上交|提交|交',c).start()]) for c in own)):return 'handback'
         return 'deadline'
     if due not in _action_deadlines(quote,published):return 'event'
     words,placed=family_agent._school_own_words(quote,0,len(quote.rstrip('。；;！!？? \n')),title,goal)
