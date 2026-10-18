@@ -1032,6 +1032,93 @@ class SavedOwnedTimeCopyTests(unittest.TestCase):
                 self.assertEqual(self.model.call_count, 0)
 
 
+class OwnedEventAndCorrectionTests(unittest.TestCase):
+    """Root's two held-out ordinary shapes (fictional, same child and teachers, first sent 2026-10-21 16:20), reply due empty:
+    a fixed meeting day (定在) asked of one parent per family while the child need not come, and one teacher's later
+    correction of a named form's handback day sent with a cancelled meeting."""
+    setUp = native.SchoolNativeCoverageTests.setUp
+    MEETING = '家长会定在10月24日14:20，地点是学校报告厅。每家一位家长参加，孩子不用来。'
+    ORIGINAL = '请家长10月22日前交回兴趣班回执。10月23日19:00召开家长会。'
+    FIX = '更正：兴趣班回执改为10月24日前交回；原定10月23日19:00的家长会取消，不用到校。'
+
+    def run_reply(self, notices, proposals):
+        self.setUp()
+        self.now = self.fixture.now = dt.datetime(2026, 10, 21, 16, 40, tzinfo=agent.TZ)
+        payload, refs = owned_time_payload(self, notices, '2026-10-21T16:19:00+08:00')
+        self.store.ingest(payload)
+        reply = dict(proposals=[native.fixtures.school_proposal(**dict(p, evidence=[dict(ref=refs[n - 1]) for n in p['evidence']]))
+                                for p in proposals])
+        self.model.side_effect = lambda *args, **kwargs: copy.deepcopy(reply)
+        result = agent.run_once(self.app, self.now)
+        with self.store._db() as c:
+            errors = [r['error'] for r in c.execute("SELECT error FROM agent_jobs WHERE id LIKE 'messages:%'")]
+            rows = {r['title']: dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")}
+            tasks = {r['id']: dict(r) for r in c.execute('SELECT * FROM manual_tasks')}
+        self.assertEqual((result['failed'], result['processed']), (0, len(notices)), (result, errors))
+        return rows, tasks
+
+    def _agenda(self, task_id):
+        return {x['task_id']: x['agenda'] for x in self.app.calendar_snapshot('2026-10-21', '2026-10-21')['inbox'] if x['task_id']}[task_id]
+
+    def test_a_fixed_meeting_day_asked_of_one_parent_is_its_event_never_homework(self):
+        rows, tasks = self.run_reply([('teacher-class', self.MEETING)], [dict(
+            title_quote=self.MEETING, due='', evidence=[1], task_title='家长会', task_goal=self.MEETING, task_state='ready',
+            task_reason='老师通知家长会时间、地点和参加人。', task_purpose='admin', task_change='new')])
+        row = rows['家长会']
+        self.assertEqual((row['state'], row['due']), ('accepted', '2026-10-24'))
+        task = tasks[row['task_id']]
+        self.assertEqual(task['due'], '2026-10-24')
+        for words in ('14:20', '学校报告厅', '每家一位家长参加', '孩子不用来'):
+            self.assertIn(words, task['title'] + task['action'])
+        agenda = self._agenda(task['id'])
+        self.assertEqual((agenda['category'], agenda['due_on'], agenda['due_kind']), ('todo', '2026-10-24', 'event'), 'the meeting is no handback')
+
+    def test_a_fixed_meeting_day_keeps_its_guards(self):
+        sent = '2026-10-21'
+        for text, expected in [
+                (self.MEETING, {'2026-10-24'}),
+                ('家长会定在10月24日 14:20，地点是学校报告厅。每家一位家长参加，孩子不用来。', {'2026-10-24'}),
+                ('家长会时间待定，地点是学校报告厅。每家一位家长参加，孩子不用来。', set()),
+                (self.MEETING + '现通知该家长会取消。', set()),
+                ('家长会定在10月24日14:20，地点是学校报告厅。每家一位家长参加，家长不用来。', set()),
+                ('家长会定在10月24日14:20，地点是学校报告厅。', set()),
+                ('家长会延期到10月24日14:20。每家一位家长参加，孩子不用来。', set()),
+                ('家长会定在10月24日14:20，地点是学校报告厅。家长自愿参加，孩子不用来。', set())]:
+            with self.subTest(text=text):
+                self.assertEqual(family_agenda.event_days(text, sent), expected)
+
+    def correction(self, fix, quote, goal, publishers=('teacher-class', 'teacher-class')):
+        meeting = '原定10月23日19:00的家长会取消'
+        return self.run_reply([(publishers[0], self.ORIGINAL), (publishers[1], fix)], [
+            dict(title_quote=quote, due='', evidence=[1, 2], task_title='交回兴趣班回执', task_goal=goal, task_state='ready',
+                 task_reason='同一老师后发更正了交回日期。', task_purpose='admin', task_change='new'),
+            dict(title_quote=meeting if meeting in fix else fix[:12], due='', evidence=[1, 2], task_state='reference',
+                 task_reason='原定家长会已取消，无需行动。', task_purpose='optional', task_change='new')])
+
+    def test_one_teacher_s_correction_gives_the_named_form_its_corrected_handback_day(self):
+        for quote in ('兴趣班回执改为10月24日前交回', '请家长10月22日前交回兴趣班回执'):
+            with self.subTest(quote=quote):
+                rows, tasks = self.correction(self.FIX, quote, '兴趣班回执改为10月24日前交回。')
+                row = rows['交回兴趣班回执']
+                self.assertEqual((row['state'], row['due']), ('accepted', '2026-10-24'))
+                self.assertEqual([t['due'] for t in tasks.values()], ['2026-10-24'], 'one task; the cancelled meeting is none')
+                self.assertEqual(self._agenda(row['task_id'])['due_kind'], 'deadline')
+
+    def test_another_object_teacher_or_an_open_cancelled_or_postponed_change_never_moves_the_day(self):
+        cases = [
+            # Another object's correction leaves the form's own day; the meeting's 23 is never the form's.
+            ('other_object', '更正：作业本改为10月24日前交回；原定10月23日19:00的家长会取消，不用到校。', None, '2026-10-22'),
+            ('other_teacher', self.FIX, ('teacher-class', 'teacher-other'), ''),
+            ('undated', '更正：兴趣班回执的交回日期另行通知；原定10月23日19:00的家长会取消，不用到校。', None, ''),
+            ('cancelled', '更正：兴趣班回执不用交了；原定10月23日19:00的家长会取消，不用到校。', None, ''),
+            ('postponed', '更正：兴趣班回执延期交回，时间另行通知。', None, '')]
+        for label, fix, publishers, expected in cases:
+            with self.subTest(label):
+                rows, tasks = self.correction(fix, '请家长10月22日前交回兴趣班回执', '交回兴趣班回执。', publishers or ('teacher-class', 'teacher-class'))
+                self.assertEqual(rows['交回兴趣班回执']['due'], expected)
+                self.assertFalse({'2026-10-23'} & {t['due'] for t in tasks.values()})
+
+
 def saved_flash27_state(path):
     """The app's own state and 2026-10-19 calendar after the fictional Flash27 day is saved by run_once (no model)."""
     case = Flash27ReadableCardTests('test_each_card_shows_its_own_conditions_once_and_keeps_the_saved_words')
