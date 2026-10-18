@@ -4329,6 +4329,24 @@ def _school_native_common_addressed(value):
     return _school_repeated_before(value,prefixes,r'(?:(?:把|将)(?P<object>[^。；;，,]{1,60}?))?(?:'+_SCHOOL_NATIVE_PREDICATE+r')').get(0)
 
 
+# A performance quality set for how an activity is done (声音清楚、字迹工整): a small closed class, read only as the words
+# ending a manner's own part; it is no general adjective reader.
+_SCHOOL_NATIVE_QUALITY=r'清楚|清晰|准确|正确|流利|流畅|通顺|响亮|工整|整洁|端正|规范|完整|熟练'
+
+
+def _school_native_affirmed_manner(activity,part):
+    """Whether the part after 'activity时' affirms how that activity is done, so 时 closes its time clause.
+
+    Two bounded forms only: the activity's own verb restated first (朗读时读准字音, 背诵时背熟), or a performance
+    quality ending the part after at most a two-character subject (朗读时声音清楚, 抄写时字迹工整). The part names no
+    closed name, lesson, worksheet, activity, count or day of its own, so an object opening with 时 that states its
+    scope (朗读时间管理短文一遍) or a second outcome is never a manner. Any other part keeps its own outcome reading.
+    """
+    if not part or _school_native_marks(part) or re.search(_SCHOOL_CLAUSE_MEASURE,_school_plain(part)) or re.search(_SCHOOL_NATIVE_DATE,part):
+        return False
+    return part[0] in activity or bool(re.fullmatch(r'[^\W\d_]{0,2}(?:'+_SCHOOL_NATIVE_QUALITY+r')',part))
+
+
 # "以上两项都…", "两项都…", "以上作业都…": the one scope reading a list's common standard uses, in or after its message.
 _SCHOOL_NATIVE_COMMON=r'^(?:(?:以上|上述|这)?([二两三四五六七八九十2-9])项(?:作业|任务|要求)?|(?:以上|上述|这些|所有)(?:作业|任务|要求))(?:都|均)'
 _SCHOOL_NATIVE_COUNT={'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}
@@ -4365,10 +4383,13 @@ def _school_native_blocks(text):
                 and not _school_native_common_negative(clause)):purpose='directed'
         # How an earlier outcome's own activity is done (背诵时不看书，不用录音) is that outcome's standard, not another
         # outcome: only when 时 closes the activity's own time clause, so a pause or that clause's predicate follows it
-        # directly (不/无需/勿/别…, 要/须/需/应/请, 注意/保持), and the one owner the condition reading finds names the
-        # activity written directly before 时. An object opening with 时 (朗读时间管理短文一遍) stays that activity's object;
+        # directly (不/无需/勿/别…, 要/须/需/应/请, 注意/保持) or the part after it affirms how that activity is done
+        # (朗读时读准字音, 朗读时声音清楚), and the one owner the condition reading finds names the activity written
+        # directly before 时. An object opening with 时 (朗读时间管理短文一遍) stays that activity's object;
         # a numbered item, another activity, several owners or a comma outcome after it keep their own readings too.
-        manner=re.match(r'(朗读|跟读|背诵|抄写|听写|默写|口算)时(?=\s*[，,]|不|无需|无须|勿|别|要|须|需|应|请|注意|保持)',clause)
+        manner=re.match(r'(朗读|跟读|背诵|抄写|听写|默写|口算)时',clause)
+        if manner and not (re.match(r'\s*[，,]|不|无需|无须|勿|别|要|须|需|应|请|注意|保持',clause[manner.end():])
+                           or _school_native_affirmed_manner(manner[1],re.split(r'[，,]',clause[manner.end():])[0].strip())):manner=None
         if purpose=='learning' and manner and pieces and not (listed and marker):
             owner=_school_native_condition_owner(clause,pieces)
             if owner and _school_native_marks(manner[1])&_school_native_marks(owner['primary']):purpose=''

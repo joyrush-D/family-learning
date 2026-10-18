@@ -4208,5 +4208,20 @@ class RecitationMethodHeldoutTests(unittest.TestCase):
                                                               ('今晚背诵《山风》第一节，明天早读抽背。背诵时不看书，不用抄写', 'learning')])
 
 
+class RecitationMethodAffirmedBoundaryTests(unittest.TestCase):
+    """M4's own boundary analysis of the affirmed manner reading (pure fiction, ledger only, no reply)."""
+
+    def test_only_an_affirmed_manner_naming_no_scope_of_its_own_joins_the_outcome_naming_its_activity(self):
+        blocks = lambda text:[(a['quote'], a['purpose']) for a in agent._school_native_blocks(text)]
+        for text in ('今晚抄写第3课生字两遍；抄写时字迹工整。', '今晚背诵《溪边》前两节；背诵时背熟，不用录音。'):
+            with self.subTest(text=text):self.assertEqual(blocks(text), [(text.rstrip('。'), 'learning')])
+        # A bare object opening with 时, a quality after an object counting its own scope, or the activity restated with a
+        # closed name of its own is no manner: each keeps its own outcome reading.
+        for first, second in (('朗读第3课课文两遍', '朗读时间管理短文'), ('抄写第3课生字两遍', '抄写时刻表'),
+                              ('背诵《溪边》前两节', '背诵时令儿歌一首要熟练'), ('朗读《晨光》两遍', '朗读时读《小船》')):
+            with self.subTest(second=second):
+                self.assertEqual(blocks(first+'；'+second+'。'), [(first, 'learning'), (second, 'learning')])
+
+
 if __name__ == '__main__':
     unittest.main()
