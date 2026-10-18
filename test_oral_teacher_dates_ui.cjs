@@ -104,10 +104,15 @@ async function saveThroughFailures(page,dialog,form,count){
      // The parent corrects or clears teacher days on the same saved item through the existing study edit form.
      const later=shift(day,9),next=width===360?{complete_on:later,handback_on:''}:{complete_on:'',handback_on:later};
      await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="study"]').click();await p.locator('[data-study-ready]').waitFor();
-     const row=p.locator('[data-study-item]').filter({hasText:title});await row.locator('[data-study-editor="item"]').click();const edit=p.locator('[data-study-form="item"]');
+     const row=p.locator('[data-study-item]').filter({hasText:title});
+     // Root OD-CARD: the parent's execution card shows the same task's current teacher days, each by its own meaning.
+     assert.match(await row.innerText(),new RegExp('老师要求完成：'+complete+' · 老师要求交回：'+handback));assert.doesNotMatch(await row.innerText(),/原截止/);
+     await row.locator('[data-study-editor="item"]').click();const edit=p.locator('[data-study-form="item"]');
      assert.equal(await edit.locator('[name="complete_on"]').inputValue(),complete);assert.equal(await edit.locator('[name="handback_on"]').inputValue(),handback);
      await edit.locator('[name="handback_on"]').fill(next.handback_on);await edit.locator('[name="complete_on"]').fill(next.complete_on);await fit(p);await proof(p,'parent-correct-'+width);await edit.locator('[type="submit"]').click();
      await eventually(async()=>{const i=(await study()).find(i=>i.title===title);return i.report.handback_on===next.handback_on&&i.report.complete_on===next.complete_on},'correction saved');
+     // The corrected/cleared day reads the same on the re-rendered card; a cleared day leaves no old teacher day.
+     await eventually(async()=>{const t=await row.innerText();return next.handback_on?t.includes('老师要求交回：'+later)&&!t.includes('老师要求完成'):t.includes('老师要求完成：'+later)&&!t.includes('老师要求交回')},'card shows corrected teacher days');
      const fixed=(await study()).find(i=>i.title===title);
      assert.deepEqual([fixed.id,fixed.report.complete_on,fixed.report.handback_on,fixed.report.text,fixed.report.date_history.length,fixed.report.date_history[0].handback_on,fixed.report.date_history[0].complete_on],[saved.id,next.complete_on,next.handback_on,words,1,handback,complete]);
      const again=await current();
