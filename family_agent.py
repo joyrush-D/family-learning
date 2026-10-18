@@ -3508,9 +3508,10 @@ def _school_native_command(clause):
     """A literal addressed outcome, not a verb search inside examples or reports."""
     value=re.sub(r'^'+_SCHOOL_NATIVE_MARKER,'',clause.strip())
     # A date may carry its own clock time or lesson ("21:00前", "数学课前") before the outcome it limits,
-    # and its own time preposition ("请于11月6日前阅读…"); a date alone, or one not followed by an outcome, is no command.
+    # and its own time preposition ("请于11月6日前阅读…") or part of that day ("20日晚完成…"); a date alone, or one not
+    # followed by an outcome, is no command.
     prefix=(r'(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')[，,:：]\s*|(?:于|在)?\s*'+_SCHOOL_NATIVE_DATE
-            +r'\s*(?:\d{1,2}[:：]\d{2}|(?:'+_SCHOOL_NATIVE_SUBJECTS+r')课)?\s*(?:前|之前|以前|内)?\s*|请(?:各位)?(?:家长|同学们?|大家)?\s*|只需\s*|独立\s*|另(?:外)?\s*)')
+            +r'\s*(?:早上|上午|中午|下午|傍晚|晚上|早|晚)?\s*(?:\d{1,2}[:：]\d{2}|(?:'+_SCHOOL_NATIVE_SUBJECTS+r')课)?\s*(?:前|之前|以前|内)?\s*|请(?:各位)?(?:家长|同学们?|大家)?\s*|只需\s*|独立\s*|另(?:外)?\s*)')
     lead=re.match(r'^(?:'+prefix+r')*',value)[0];value=value[len(lead):]
     # "订正本/口算本" followed by its day or handback is the notebook, not another 订正/口算 outcome.
     learning=r'(?:朗读|背诵|抄写|默写|听写|跟读|订正|预习|复习|阅读|口算|习作|练习)(?!后|完|已|完成|录音|音频|本\s*(?:[0-9今明后下]|交|带))[^：:。；;]{2,}'
@@ -3690,18 +3691,19 @@ def _school_revision_new(quote,text,previous,goal,current=''):
     return any(p in new for p in _school_revision_gap(quote,text,previous,current))
 
 
-def _school_native_spans(text, start):
-    """Reuse quote-safe layout; commas split only a following addressed outcome."""
+def _school_native_spans(text, start, listed=False):
+    """Reuse quote-safe layout; commas split only a following addressed outcome, never inside a counted list's numbered item."""
     cursor=start
     for full in _school_instruction_clauses(text[start:]):
         left=text.index(full,cursor);right=left+len(full);cursor=right
         closing=[];boundary=left
         pairs={'“':'”','‘':'’','《':'》','（':'）','(':')','「':'」','『':'』','"':'"'}
+        numbered=listed and re.match(r'\s*'+_SCHOOL_NATIVE_MARKER,full)
         for i in range(left,right):
             char=text[i]
             if closing and char==closing[-1]:closing.pop()
             elif char in pairs:closing.append(pairs[char])
-            if (char in '，,' and not closing and _school_native_command(text[boundary:i])
+            if (char in '，,' and not closing and not numbered and _school_native_command(text[boundary:i])
                     and _school_native_command(text[i+1:right])):
                 yield boundary,i
                 boundary=i+1
@@ -3728,11 +3730,26 @@ def _school_native_heading(text):
     if head:
         lead=head[1]
         container=bool(re.search(r'(?:完成|做|订正)[^。；;]{0,35}(?:练习卷|练习册|试卷)',lead))
-        common=bool(re.search(r'(?:作业|要求|任务|事项|通知|完成(?:[二两三四五六七八九十2-9]项)?(?:要求|作业|任务|练习|事项|通知)?)\s*$',lead))
+        heading=r'(?:作业|要求|任务|事项|通知|完成(?:[二两三四五六七八九十2-9]项)?(?:要求|作业|任务|练习|事项|通知)?)\s*$'
+        common=bool(re.search(heading,lead))
         label=bool(re.fullmatch(r'(?:'+_SCHOOL_NATIVE_SUBJECTS+r')(?:和(?:'+_SCHOOL_NATIVE_SUBJECTS+r'))*',lead))
         if container:body_start=head.end()
-        elif common or label:header=lead;body_start=head.end()
+        elif common or label:
+            header=lead;body_start=head.end()
+            # The list's own intro after its label (历史：请在…晚完成两项：1. …) heads the same numbered items,
+            # so its date and count stay the heading, never a first outcome; an intro that is itself an outcome stays one.
+            intro=re.match(r'([^。；;\n：:]{1,60}?)[：:]\s*(?='+_SCHOOL_NATIVE_MARKER+r')',text[body_start:])
+            if intro and re.search(heading,intro[1]) and not _school_native_command(intro[1]):
+                header=text[:body_start+intro.end(1)];body_start+=intro.end()
     return head,header,body_start,container
+
+
+def _school_native_listed(text,header,body_start):
+    """A heading's stated count (完成两项, 有两项作业) met by exactly the literal numbers 1..N: each number bounds one outcome."""
+    count=re.search(r'([二两三四五六七八九十2-9])项',header)
+    if not count:return False
+    numbers=re.findall(r'(?:^|(?<=[。；;：:\s]))([1-9][0-9]?)[.．、]',text[body_start:])
+    return numbers==[str(i) for i in range(1,(int(count[1]) if count[1].isdigit() else _SCHOOL_NATIVE_COUNT[count[1]])+1)]
 
 
 def _school_native_common_negative(value):
@@ -3812,10 +3829,11 @@ def _school_native_blocks(text):
     pieces=[];preparation=[];shared=[];examples=[]
     def crosses_example(left,right):return any(left<end and start<right for start,end in examples)
     container_object=_school_native_object(head[1]) if container else ''
+    listed=not container and _school_native_listed(text,header,body_start)
     if container:
         # The worksheet's own heading is a requirement; its first body clause can already be an example.
         pieces.append(dict(start=0,end=head.end(),purpose='learning',primary=head[1]))
-    for start,end in _school_native_spans(text,body_start):
+    for start,end in _school_native_spans(text,body_start,listed):
         marker=re.match(r'\s*'+_SCHOOL_NATIVE_MARKER,text[start:end])
         if marker:start+=marker.end()
         clause=text[start:end].strip().rstrip('。；;').strip()
@@ -3824,17 +3842,25 @@ def _school_native_blocks(text):
             examples.append((start,end))
             continue
         purpose=_school_native_command(clause)
+        # A counted list's numbered item is one outcome by its number, whatever its first verb (听录音并跟读…);
+        # its use is still read below. A negated or changed item keeps the unread gap, so the count check holds the batch.
+        if (listed and marker and not purpose and not re.search(_SCHOOL_NATIVE_CHANGE+r'|选做',clause)
+                and not _school_native_common_negative(clause)):purpose='directed'
         common=re.match(_SCHOOL_NATIVE_COMMON,clause)
         if common and pieces:
-            # ponytail: do not share a comma's possible subject switch; richer scope needs a proved clause allocation.
-            if re.search(r'[，,]',clause):raise AgentError('共同标准含未核明的单项条件，完整原批次保留',code='school_action_coverage')
             # Changes and optionality still need the existing semantic reader.
             if re.search(r'选做|必做|更正|取消|撤销|撤回|改为|改期|不再(?:做|完成)|不用(?:做|完成)|无需(?:做|完成)',clause):return []
             # ponytail: only positive common standards are compiled; negated scope needs a proved semantic allocation.
             if _school_native_common_negative(clause[common.end():]):
                 raise AgentError('共同标准含未核明的否定条件，完整原批次保留',code='school_action_coverage')
+            # A later comma part binds only when it names exactly one outcome by its literal object and keeps the shared
+            # day (两项都…检查，《字词随练》交给课代表); its own day (练习卷明天交) or any other part may switch scope and keeps the batch.
+            first,*rest=re.split(r'[，,]',clause)
+            owners=[not re.search(_SCHOOL_NATIVE_DATE,part) and _school_native_condition_owner(part,pieces) for part in rest]
+            if not all(owners):raise AgentError('共同标准含未核明的单项条件，完整原批次保留',code='school_action_coverage')
+            for owner,part in zip(owners,rest):owner.setdefault('conditions',[]).append(part.strip())
             count=(int(common[1]) if common[1].isdigit() else _SCHOOL_NATIVE_COUNT[common[1]]) if common[1] else len(pieces)
-            shared.append((count,clause))
+            shared.append((count,first.strip()))
             continue
         # The container's numbered "complete questions" is its answer step,
         # not another worksheet. Other reading/learning outcomes still split.

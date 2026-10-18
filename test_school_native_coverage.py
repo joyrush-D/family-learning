@@ -1991,6 +1991,62 @@ class SchoolNativeCoverageTests(unittest.TestCase):
                          {t: ('pending', 'review') for t in targets})
         self.assertEqual(len(state['records']), 1)
 
+    def _daily_lists(self):
+        """Root's held-out fictional day (heldout-natural-day-20261020-v1): six complete posts, unchanged."""
+        self.now = self.fixture.now = dt.datetime(2026, 10, 20, 18, tzinfo=agent.TZ)
+        posts = [
+            ('synthetic-heldout-chinese-lin', '虚构语文林老师', '16:10', '语文作业：2026年10月20日晚完成两项：1. 朗读《山谷的早晨》第3自然段三遍；2. 完成《字词随练》第8页，做完自行检查。两项都在2026年10月21日早读检查，《字词随练》交给语文课代表。'),
+            ('synthetic-heldout-math-xu', '虚构数学许老师', '16:12', '数学：2026年10月20日晚完成《计算练习》第12页第1至6题，列出计算过程，做完自行检查；2026年10月21日上午交给数学课代表。'),
+            ('synthetic-heldout-history-tao', '虚构历史陶老师', '16:14', '历史：请在2026年10月20日晚完成两项：1. 复习第4课《河畔聚落》，完成课后练习第1、2题；2. 订正上周《历史小练习》中做错的题，每题写一句错因。两项都在2026年10月21日历史课检查。'),
+            ('synthetic-heldout-english-shen', '虚构英语沈老师', '16:16', '英语：今天有两项作业：1. 听录音并跟读Lesson 3《The Garden》两遍；2. 抄写本课单词表前6个单词，每个写3遍。'),
+            ('synthetic-heldout-english-shen', '虚构英语沈老师', '16:17', '补充英语作业：以上两项均在2026年10月20日晚完成，完成后请家长在英语作业记录本上签字；2026年10月21日英语课检查这两项作业。'),
+            ('synthetic-heldout-headteacher-yu', '虚构班主任余老师', '16:20', '家长通知：请家长在《秋季安全教育回执》上签字，并于2026年10月22日前交回班主任；无需盖章。')]
+        payload = self.fixture.payload(cursor='16')
+        payload['messages'] = [dict(id=str(11 + i), message_order=str(11 + i), time='2026-10-20T' + clock + ':00+08:00', kind='text',
+                                    sender=sender, sender_id=publisher, text=text, unread=False)
+                               for i, (publisher, sender, clock, text) in enumerate(posts)]
+        self.store.ingest(payload)
+        refs = ['message:' + self.source['id'] + ':' + m['id'] for m in payload['messages']]
+        academic = '\n2026年10月20日晚完成。\n'
+        reply = [fixtures.school_proposal(
+            title_quote=quote, due='2026-10-21', evidence=[dict(ref=refs[i]) for i in cited], learning_subject=subject,
+            task_title=subject + '：' + title, task_goal=quote + '。' + academic + check, task_state='ready',
+            task_reason='虚构回执：完成日与检查日各自保留。', task_purpose='learning', task_submission=handback)
+            for quote, cited, subject, title, check, handback in (
+                ('朗读《山谷的早晨》第3自然段三遍', [0], '语文', '朗读《山谷的早晨》第3自然段三遍', '2026年10月21日早读检查。', ''),
+                ('完成《字词随练》第8页，做完自行检查', [0], '语文', '完成《字词随练》第8页', '2026年10月21日早读检查。', '《字词随练》交给语文课代表。'),
+                ('完成《计算练习》第12页第1至6题，列出计算过程，做完自行检查', [1], '数学', '完成《计算练习》第12页第1至6题', '2026年10月21日上午交给数学课代表。', '2026年10月21日上午交给数学课代表。'),
+                ('复习第4课《河畔聚落》，完成课后练习第1、2题', [2], '历史', '复习第4课《河畔聚落》并完成课后练习第1、2题', '2026年10月21日历史课检查。', ''),
+                ('订正上周《历史小练习》中做错的题，每题写一句错因', [2], '历史', '订正《历史小练习》错题并写错因', '2026年10月21日历史课检查。', ''),
+                ('听录音并跟读Lesson 3《The Garden》两遍', [3, 4], '英语', '听录音并跟读Lesson 3《The Garden》两遍', '完成后请家长在英语作业记录本上签字。\n2026年10月21日英语课检查。', ''),
+                ('抄写本课单词表前6个单词，每个写3遍', [3, 4], '英语', '抄写本课单词表前6个单词', '完成后请家长在英语作业记录本上签字。\n2026年10月21日英语课检查。', ''))]
+        reply.append(fixtures.school_proposal(
+            title_quote='请家长在《秋季安全教育回执》上签字，并于2026年10月22日前交回班主任', due='2026-10-22', evidence=[dict(ref=refs[5])],
+            task_title='家长签字并交回《秋季安全教育回执》', task_goal='请家长在《秋季安全教育回执》上签字，并于2026年10月22日前交回班主任；无需盖章。',
+            task_state='ready', task_reason='虚构回执：行政回执。', task_purpose='admin', task_submission='2026年10月22日前交回班主任。'))
+        return payload, refs, reply
+
+    def test_a_labelled_counted_list_intro_is_its_heading_so_a_held_out_day_reaches_the_ordinary_caller(self):
+        payload, refs, reply = self._daily_lists()
+        native = agent._school_native_blocks(payload['messages'][2]['text'])
+        self.assertEqual([(a['purpose'], a['quote']) for a in native],
+                         [('learning', '复习第4课《河畔聚落》，完成课后练习第1、2题'), ('learning', '订正上周《历史小练习》中做错的题，每题写一句错因')])
+        self.assertEqual(native[0]['header'], '历史：请在2026年10月20日晚完成两项')
+        self.assertEqual([a['quote'] for a in agent._school_native_blocks(payload['messages'][3]['text'])],
+                         ['听录音并跟读Lesson 3《The Garden》两遍', '抄写本课单词表前6个单词，每个写3遍'])
+        self._use_replies(payload, [dict(proposals=reply)])
+        # Known gap, not a pass: the batch now reaches the one ordinary caller, but the next same-teacher message is a
+        # clause list (补充英语作业：以上两项均…，…；…这两项作业), which the shared-later reader still binds to no outcome,
+        # so the complete reply is held with every original kept for retry instead of being saved.
+        self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
+        with self.store._db() as c:
+            self.assertIn('学校补充要求未归到对应作业', c.execute("SELECT error FROM agent_jobs WHERE id LIKE 'messages:%'").fetchone()[0])
+
+    def test_a_held_out_day_reply_missing_a_numbered_item_is_not_silently_ready(self):
+        payload, refs, reply = self._daily_lists()
+        self._use_replies(payload, [dict(proposals=[p for p in reply if not p['title_quote'].startswith('复习第4课')])])
+        self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
+
 
 class SchoolActionAnchorTests(unittest.TestCase):
     """One fictional notice holding two English actions joined by a semicolon, through run_once's real _select/_save.
