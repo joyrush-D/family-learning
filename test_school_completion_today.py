@@ -1213,7 +1213,11 @@ class ClearStandardsTests(unittest.TestCase):
                 # Another signed object (N01).
                 '今晚朗读课本第20页三遍，家长听完后在第20页签字。\n提交要求：请家长在《朗读活动确认单》上签字，明早交给老师。',
                 # A restated line with a requirement of its own.
-                CLEAR_EN_GOAL + '\n提交要求：家长听完后在第20页签字，明天早读检查，带回课本。']:
+                CLEAR_EN_GOAL + '\n提交要求：家长听完后在第20页签字，明天早读检查，带回课本。',
+                # Root's exact counter-proof on 941547c: 本页 names another material's page (听写本), never 课本第20页.
+                '朗读课本第20页；家长在听写本本页签字。\n提交要求：家长在听写本第20页签字。',
+                # Root's frozen guard (static before this run): another material taken out between the page and 本页.
+                '朗读课本第20页；取出听写本；家长在本页签字。\n提交要求：家长在第20页签字。']:
             with self.subTest(action=action):
                 self.assertTrue(any(x.startswith('提交要求') for x in family_agenda.action_lines('英语：朗读', action)))
 
