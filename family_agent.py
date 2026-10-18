@@ -4332,8 +4332,11 @@ def _school_native_actions(evidence):
 
 
 def _school_native_lesson(action,text):
-    """The one lesson this same original names explicitly, for an outcome saying only 本课; none if it names two or none."""
-    if not re.search(r'本课(?!时)',action['quote']) or re.search(_SCHOOL_NATIVE_LESSON,action['quote']):return ''
+    """The one lesson this same original names explicitly, for an outcome saying only 本课; none if it names two or none.
+
+    本课 inside a closed literal name (抄写《本课单词表》) is that material's own title, no 本课 of this outcome.
+    """
+    if not re.search(r'本课(?!时)',re.sub(r'《[^》]*》','',action['quote'])) or re.search(_SCHOOL_NATIVE_LESSON,action['quote']):return ''
     lessons=set(re.findall(_SCHOOL_NATIVE_LESSON,text))
     return next(iter(lessons)) if len(lessons)==1 else ''
 
@@ -4359,8 +4362,9 @@ def _school_native_value(action,text=''):
     from family_agenda import _relative_weekday,deadlines,sent_day
     primary=re.sub(r'^(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')[，,:：]\s*|'+_SCHOOL_NATIVE_WHEN+r')+','',action['primary'])
     # 本课 reads as the one lesson its own original names (1. 跟读Lesson 3《The Garden》；2. 抄写本课…), shown only; the anchor stays literal.
+    # A closed literal name (《本课单词表》) is never rewritten.
     lesson=_school_native_lesson(action,text)
-    named=lambda value:re.sub(r'本课(?!时)',lambda _:lesson,value) if lesson else value
+    named=lambda value:re.sub(r'《[^》]*》|本课(?!时)',lambda m:m[0] if m[0][0]=='《' else lesson,value) if lesson else value
     title=named(primary.split('，',1)[0].split(',',1)[0])
     if action['subject'] and not title.startswith(action['subject']):title=action['subject']+'：'+title
     if len(title)>80:raise AgentError('本项行动标题超过可核对范围，原文保留',code='school_action_coverage')
