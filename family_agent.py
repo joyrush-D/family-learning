@@ -3017,8 +3017,9 @@ def _school_role_reselect(store,c,row,evidence,now):
         if not plan.get('school_learning') or goal_row is None or goal_row['child_id']!=row['child_id']:return None
     unrouted=dict(row,plan={k:v for k,v in plan.items() if k!='school_goal_id'})
     if not snapshot or snapshot not in (_school_generated_snapshot(row),_school_generated_snapshot(unrouted)):return None
+    # A review held by unread linked material of its native outcome (school_native_cover) is never a date-role reselection.
     if any(plan.get(k) for k in ('school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id',
-                                 'approved','school_original_action','school_first_batch_correction','school_previous_policy',
+                                 'approved','school_original_action','school_native_cover','school_first_batch_correction','school_previous_policy',
                                  'school_saved_reread','school_batch_reread','school_role_reselect')):return None
     if not evidence or brief.get('origin_basis')!=_school_message_basis(evidence):return None
     raw=plan.get('school_selection_receipt');quote=plan.get('school_date_quote','')
@@ -5017,6 +5018,7 @@ def _school_native_saved(items,evidence):
             linked=cited&set(action.get('linked',[]));value=_school_native_value(action,entries[action['ref']]['text']);dates=_school_native_dates(action)
             unread=any(e['ref'] in linked and (e.get('content_incomplete') or e.get('unread')) for e in evidence)
             if (not expected<=cited or cited-expected-linked-_school_native_kept(action,actions,entries) or not linked or sorted(linked)!=cover.get('linked')
+                    or cover.get('quote')!=action['quote']
                     or brief.get('state')=='ready' or not _school_native_purpose(action,brief.get('purpose')) or brief.get('target_id')
                     or brief.get('change')!='new' and not (action.get('changes') and brief.get('change') in ('update','cancel'))
                     or (brief.get('change')=='cancel')!=_school_native_cancelled(action)
@@ -5289,7 +5291,9 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             linked_cited=sorted({q['ref'] for q in cited}&set(native_action.get('linked',[]))) if native_action else []
             if linked_cited:
                 # Linked material stays on its existing original route; the outcome is still counted exactly once.
-                item['plan']['school_native_cover']=dict(id=native_action['id'],linked=linked_cited)
+                # Its own verified quote stays with the cover for the read-only agenda only (never school_date_quote, which the
+                # role reselection reads to accept a held review).
+                item['plan']['school_native_cover']=dict(id=native_action['id'],linked=linked_cited,quote=native_action['quote'])
                 # Already in review for another reason (several own days), it still names the unverified material.
                 if brief['state'] in ('ready','review'):
                     brief.update(state='review',reason=brief['reason'][:300]+' 同一老师的关联消息或附件尚未核实，是否改变本项待核对；原文要求保留。')

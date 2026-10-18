@@ -593,7 +593,9 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
 def _stored_date_quote(plan):
     """An item's own stored original words; its rewritten short title (参加家长会) states no day or request."""
     anchors=list((plan.get('school_action_anchor') or {}).values())[:1]
-    return next((v.strip() for v in (plan.get('school_date_quote'),(plan.get('school_native_action') or {}).get('quote'),*anchors)
+    # A native outcome kept for review by unread linked material keeps its own verified quote in its cover (read-only here).
+    return next((v.strip() for v in (plan.get('school_date_quote'),(plan.get('school_native_action') or {}).get('quote'),
+                                     (plan.get('school_native_cover') or {}).get('quote'),*anchors)
                  if isinstance(v,str) and v.strip()),'')
 
 
