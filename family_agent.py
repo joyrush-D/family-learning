@@ -5024,9 +5024,10 @@ def _school_native_dates(action):
     # One work's completion limit and its own handback (订正本…交给…) read as the handback day; another object keeps both.
     dates=_school_handback_day(own,published,deadlines(own,published))
     # Its own quote's two time roles (今天完成…。明天交给数学课代表) are one item dated by its handback, read as the ordinary
-    # path reads them (_school_role_days); only when those roles account for every own day, never another item's.
-    roles=_school_native_roles(action) if len(dates)>1 else None
-    if roles and roles[0]|{roles[1]}==dates:dates={roles[1]}
+    # path reads them (_school_role_days); only when those roles account for every own day, never another item's. The
+    # generic reader may see only the completion day (今晚完成…；明早交给数学课代表): its days must be exactly those roles' own.
+    roles=_school_native_roles(action) if dates else None
+    if roles and roles[0]<=dates<=roles[0]|{roles[1]}:dates={roles[1]}
     # A school arrangement in this outcome's own quote (明天早读抽查) is its day; a header date is never borrowed.
     if not dates:dates=_school_own_dates(action['quote'],published)
     for supplement in action.get('shared_supplements',[])+action['supplements']:
