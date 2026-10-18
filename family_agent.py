@@ -2443,7 +2443,7 @@ def _school_role_days(quote,cited,others):
     another cited original stating a day, a clause with two days or both roles, or any change, cancel or uncertain word
     returns None, so the existing date protections decide. Returns (completion days, due day).
     """
-    from family_agenda import _COMPLETION_VERB,sent_day
+    from family_agenda import _COMPLETION_VERB,_titles_read_as_objects,sent_day
     homes=[e for e in cited if quote and quote in e['text']]
     if len(homes)!=1 or homes[0]['text'].count(quote)!=1:return None
     text=homes[0]['text'];published=sent_day(homes[0].get('time',''))
@@ -2480,10 +2480,13 @@ def _school_role_days(quote,cited,others):
         # 今天语文作业： labels the work its sending day publishes; it states no role day of its own.
         clause=re.sub(r'^\s*(?:今天|今日)\s*[^，,：:\d]{0,6}?(?:作业|任务)\s*[：:]','',clause)
         days=_school_own_dates(clause,published) if re.search(day,clause) else set()
-        if not days and re.search(day,clause) and _school_clause_roles(clause):
+        own_day=_school_clause_day(clause,published) if not days and re.search(day,clause) else ''
+        if own_day and (_school_clause_roles(clause) or own_day==published and not re.search(r'交|检查',clause)
+                        and re.search(_COMPLETION_VERB,_titles_read_as_objects(clause))):
             # A role clause's own predicate after its day and only its asker, actor or place (请家长今晚在《秋游意见回执》上签字)
-            # takes that one day, read as a new receipt's clause is (_school_clause_roles, _school_clause_day).
-            days={_school_clause_day(clause,published)}-{''}
+            # takes that one day, read as a new receipt's clause is (_school_clause_roles, _school_clause_day); so does the
+            # sending day's own work clause (请监护人今天阅读…), the completion read below.
+            days={own_day}
         if not days:
             if re.search(day,clause):return None
             continue
@@ -3230,9 +3233,10 @@ def _school_cleared_reread(store,c,row,evidence,now):
 _SCHOOL_ROLE_DAY=(r'(?:\d{4}-\d{2}-\d{2}|(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*[日号]?|今天|今日|今晚|明天|明日|明早|明晚|后天|昨天|前天'
                   r'|每天|每晚|(?:本|这|下)?(?:周|星期|礼拜)[一二三四五六日天])')
 _SCHOOL_ROLE_HEAD=_SCHOOL_ROLE_DAY+r'\s*(?:早上|早晨|上午|中午|下午|傍晚|晚上|早读|课前|到校后?)?\s*(?:之前|以前|前)?'
-_SCHOOL_ROLE_LEAD=(r'\s*(?:请|让|由)?\s*(?:各位|全体)?(?:家长|学生|孩子|同学们?|班主任|老师)?\s*(?:准时|按时|务必|必须|须|需|要)?\s*'
-                   r'(?:在[^，,在]{1,12}?(?:上|里|中|内)\s*)?')
 _SCHOOL_ROLE_VERBS=(('handback',r'上交|提交|交'),('check',r'检查'),('finish',r'完成|做完|写完|读完|签字'))
+# Its own object may stand before the predicate as a ba-phrase (把签收联交到…, 将回条交给…): still that clause's own predicate.
+_SCHOOL_ROLE_LEAD=(r'\s*(?:请|让|由)?\s*(?:各位|全体)?(?:家长|学生|孩子|同学们?|班主任|老师)?\s*(?:准时|按时|务必|必须|须|需|要)?\s*'
+                   r'(?:在[^，,在]{1,12}?(?:上|里|中|内)\s*)?(?:(?:把|将)[^，,把将]{1,12}?(?=(?:'+'|'.join(v for _,v in _SCHOOL_ROLE_VERBS)+r')))?')
 
 
 def _school_clause_roles(clause):
@@ -4072,10 +4076,17 @@ def _school_parent_readings(text):
     (孩子带回的…). A child's own reading, a parent reading the child's work (孩子的作文) or any other actor keeps the text as written.
     """
     spans=[];masked=re.sub(r'《[^》]*》',lambda m:'_'*len(m[0]),text or '')
+    carry=r'带(?:回|来|到|去)|拿回|上交|交'
     for sentence in re.finditer(r'[^。；;！!？?\n]+',masked):
-        own=sentence[0]
-        if any(not re.match(r'\s*(?:'+_SCHOOL_NATIVE_WHEN+r')?(?:带(?:回|来|到|去)|拿回|上交|交)',own[m.end():])
-               for m in re.finditer(_SCHOOL_CLAUSE_ROLES['学生'],own)):continue
+        own=sentence[0];base=sentence.start()
+        def carries(m):
+            # After its own day, the child carries or hands back nothing else than what this sentence already names before it
+            # (孩子明早将回条交给班主任 after 在随附回条…签字); another object (将作文交给…) is the child's own outcome.
+            at=m.end()+re.match(r'\s*(?:于|在)?\s*(?:'+_SCHOOL_ROLE_HEAD+r')?\s*',own[m.end():]).end()
+            ba=re.match(r'(?:把|将)([^，,把将]{1,12}?)\s*(?='+carry+r')',own[at:])
+            if ba and text[base+at+ba.start(1):base+at+ba.end(1)] not in text[base:base+m.start()]:return False
+            return bool(re.match(carry,own[at+(ba.end() if ba else 0):]))
+        if not all(carries(m) for m in re.finditer(_SCHOOL_CLAUSE_ROLES['学生'],own)):continue
         for m in re.finditer(r'(?:'+_SCHOOL_CLAUSE_ROLES['家长']+r')\s*(?:'+_SCHOOL_NATIVE_WHEN+r')?(?:认真|仔细)?\s*(阅读)',own):
             signers=_school_signers(text[sentence.start()+m.start():sentence.end()])
             if signers and signers<={'家长',''}:spans.append((sentence.start()+m.start(1),sentence.start()+m.end(1)))
