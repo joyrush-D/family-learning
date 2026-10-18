@@ -1275,7 +1275,11 @@ class HandbackRoleTests(unittest.TestCase):
                 ('请家长于10月22日前交回回执。', 'deadline'),
                 ('今晚将课本第20页的对话朗读三遍，请家长听完后在这一页签字，明天早读检查。', 'inspection'),
                 ('今晚完成练习册第3页，明天交回练习册，明天早读检查。', 'deadline'),
-                ('明天来校带一个空透明塑料瓶，科学课用。', 'deadline')]:
+                ('明天来校带一个空透明塑料瓶，科学课用。', 'deadline'),
+                # Root's two pure-function counter-proofs on 9006d1a: 前 inside a 《》 title is no before-day, and a negation
+                # before the day and the handback (不用明天交回) states no handback at all, so it stays the generic label.
+                ('明天交回《前沿阅读》。', 'handback'),
+                ('不用明天交回回执。', 'deadline')]:
             with self.subTest(quote=quote):
                 self.assertEqual(family_agenda.date_meaning(quote, '2026-10-22', sent), want)
 
