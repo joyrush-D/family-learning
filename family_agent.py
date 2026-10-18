@@ -71,6 +71,8 @@ learning_goal_id只从输入learning_goals选择同一科目且适合本要求�
 # One saved interpretation feeds the task list; it never records child performance.
 SCHOOL_TASK_POLICY = 10
 SCHOOL_SELECTION_REVISION = 2
+# The selection's own note for a model day it did not adopt; the day itself is kept beside it as school_unadopted_due.
+SCHOOL_UNADOPTED_NOTE = ' 截止日期尚无法从原文核对，未采用模型日期；请核对原通知。'
 _SCHOOL_DATE_MENTION=re.compile(r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}\s*[日号]|今天|今日|今晚|明天|明日|后天|(?:本|这|下)(?:个)?(?:周|星期|礼拜)|(?:周|星期|礼拜)[一二三四五六日天]|截止|期限|日期|完成时间')
 TASK_BRIEF_SCHEMA = {'type':'object','additionalProperties':False,'required':['title','goal','advice','state','reason'],
     'properties':{**{key:{'type':'string','maxLength':limit} for key,limit in [('title',80),('goal',2000),('advice',1200),('reason',400)]},
@@ -1724,11 +1726,11 @@ class Store:
                 if row['done'] or (model and row['attempts'] >= MAX_ATTEMPTS) or row['next_try'] > now.isoformat(): return None
                 if model: c.execute('UPDATE agent_jobs SET attempts=attempts+1 WHERE id=?', (key,))
                 return fingerprint
-            if keep_budget and row and not row['done']:
-                # A recovery identity keeps its attempts, backoff and error history under any later request: only the
-                # existing explicit retry renews it, never a changed fingerprint.
+            if keep_budget and row and (not row['done'] or row['fingerprint'].startswith('discarded:')):
+                # A recovery identity keeps its attempts, backoff and error history under any later request, a round dropped
+                # while it waited (paused, changed) included: only the existing explicit retry renews it, never a changed fingerprint.
                 if (model and row['attempts'] >= MAX_ATTEMPTS) or row['next_try'] > now.isoformat(): return None
-                c.execute('UPDATE agent_jobs SET fingerprint=?,attempts=attempts+? WHERE id=?', (fingerprint, int(model), key))
+                c.execute('UPDATE agent_jobs SET fingerprint=?,attempts=attempts+?,done=0 WHERE id=?', (fingerprint, int(model), key))
                 return fingerprint
             c.execute('INSERT OR REPLACE INTO agent_jobs(id,fingerprint,attempts) VALUES(?,?,?)', (key, fingerprint, int(model)))
         return fingerprint
@@ -2981,6 +2983,115 @@ def _school_saved_reread(store,c,row,evidence,now):
     if c.execute('SELECT 1 FROM records WHERE linked_task_id=? OR source=? LIMIT 1',(task_id,'Agent建议:'+row['id'])).fetchone():return None
     if c.execute('SELECT 1 FROM manual_tasks WHERE source LIKE ? LIMIT 1',('Agent建议:'+row['id']+'\n%',)).fetchone():return None
     return dict(snapshot=snapshot,job_id=row['job_id'],job_fingerprint=job['fingerprint'],origin_basis=brief['origin_basis'],receipt=_hash(raw))
+
+
+def _school_cleared_reread(store,c,row,evidence,now):
+    """Prove an untouched old review held only by the day an earlier selection cleared may get one new receipt.
+
+    That selection did not adopt the model's day and kept none, so its stored receipt cannot tell an older date reading
+    from a contradiction: the day is never guessed or refilled (the stored-receipt reselect keeps it unknown). The current
+    selection keeps the day it did not adopt (school_unadopted_due); such a known contradiction is never read again. Only a
+    review whose stored receipt today's guards still read as ready/new, whose own single original (no other item cites it)
+    gives one own day or its own completion and handback/check roles not yet past, is read again once, through the existing
+    saved-reread caller under its own school-task job and the batch's one shared recovery budget, and only while a model is
+    configured: an unavailable service would spend that budget with no request. A parent decision, edit, link, task or
+    record, a changed or rebound original, an unfinished or audited batch, a paused source or Agent or an earlier reread
+    returns None, so the saved state stays.
+    """
+    plan=json.loads(row['plan']);brief=plan.get('school_task',{})
+    if row['state']!='pending' or brief.get('state')!='review' or row['task_id'] or row['record_id'] is not None or row['care_id'] or row['due']:return None
+    if not row['job_id'].startswith('messages:') or brief.get('policy')!=SCHOOL_TASK_POLICY or not str(brief.get('reason','')).endswith(SCHOOL_UNADOPTED_NOTE):return None
+    if not _school_active(store,c,row) or plan.get('school_selection_revision')!=SCHOOL_SELECTION_REVISION:return None
+    snapshot=plan.get('school_generated_snapshot');routed=plan.get('school_goal_id')
+    if routed:  # only the program's own learning-goal routing (same child, its own subject goal) wrote after generation
+        goal_row=c.execute("SELECT child_id FROM agent_items WHERE id=? AND kind='care'",(routed,)).fetchone()
+        if not plan.get('school_learning') or goal_row is None or goal_row['child_id']!=row['child_id']:return None
+    unrouted=dict(row,plan={k:v for k,v in plan.items() if k!='school_goal_id'})
+    if not snapshot or snapshot not in (_school_generated_snapshot(row),_school_generated_snapshot(unrouted)):return None
+    if any(plan.get(k) for k in ('school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id',
+                                 'approved','school_original_action','school_first_batch_correction','school_previous_policy',
+                                 'school_saved_reread','school_batch_reread','school_role_reselect','school_unadopted_due')):return None
+    if not evidence or brief.get('origin_basis')!=_school_message_basis(evidence):return None
+    raw=plan.get('school_selection_receipt');quote=plan.get('school_date_quote','')
+    if not isinstance(raw,dict) or raw.get('state')!='ready' or (raw.get('change') or 'new')!='new' or raw.get('target_id') or not quote:return None
+    import family_agenda
+    sent={family_agenda.sent_day(e.get('time','')) for e in evidence}
+    if len(sent)!=1 or not all(sent):return None
+    # The reread saves its originals' complete text as this item's one goal: an original another item also cites is shared.
+    refs={e['ref'] for e in evidence}
+    for r in c.execute("SELECT evidence FROM agent_items WHERE kind='school' AND child_id=? AND state!='superseded' AND id<>?",(row['child_id'],row['id'])):
+        if refs&{q.get('ref') for q in json.loads(r['evidence']) if isinstance(q,dict)}:return None
+    others=[json.loads(r['plan']).get('school_date_quote','') for r in c.execute(
+        "SELECT plan FROM agent_items WHERE kind='school' AND child_id=? AND job_id=? AND id<>?",(row['child_id'],row['job_id'],row['id']))]
+    goal=str(raw.get('goal',''));title=str(raw.get('title',''))
+    clause=_school_own_clause_dates(quote,evidence,others);roles=_school_role_days(quote,evidence,others)
+    if roles:
+        due=roles[1];done=roles[0]
+        if clause and not clause<=done|{due}:return None
+    elif len(clause)==1:due=next(iter(clause));done=set()
+    else:return None
+    if not _school_goal_dates(goal,evidence)<=done|{due}:return None
+    if _school_borrowed_day(quote,evidence,due,goal,title) or _school_event_dropped(quote,evidence,title,goal):return None
+    if not roles and due not in set().union(*(family_agenda.deadlines(e['text'],family_agenda.sent_day(e.get('time'))) for e in evidence)):return None
+    if due<now.date().isoformat():return None
+    job=c.execute('SELECT fingerprint,done FROM agent_jobs WHERE id=?',(row['job_id'],)).fetchone()
+    if job is None or not job['done']:return None
+    if c.execute('SELECT 1 FROM agent_jobs WHERE id=?',(_school_audit_mark(row['job_id']),)).fetchone():return None
+    for e in evidence:
+        source_id,message_id=e['ref'][len('message:'):].rsplit(':',1)
+        message=c.execute('SELECT processed FROM agent_messages WHERE source_id=? AND id=?',(source_id,message_id)).fetchone()
+        if message is None or message['processed']!=1:return None
+    tables={r['name'] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    task_id='AGENT-'+_hash(row['id'])[:24]
+    for table,column in [('manual_tasks','id'),('task_focus','task_id'),('task_updates','id'),('task_history','task_id'),('study_items','task_id')]:
+        if table in tables and c.execute('SELECT 1 FROM '+table+' WHERE '+column+'=? LIMIT 1',(task_id,)).fetchone():return None
+    if c.execute('SELECT 1 FROM records WHERE linked_task_id=? OR source=? LIMIT 1',(task_id,'Agent建议:'+row['id'])).fetchone():return None
+    if c.execute('SELECT 1 FROM manual_tasks WHERE source LIKE ? LIMIT 1',('Agent建议:'+row['id']+'\n%',)).fetchone():return None
+    try:
+        fresh=_school_brief({key:raw.get(key) or ('review' if key=='state' else 'new' if key=='change' else '') for key in
+                             ['title','goal','advice','state','reason','change','target_id','purpose','submission']},
+                            incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence),
+                            evidence=evidence,separate_learning=True)
+    except (AgentError,ValueError,KeyError,TypeError):return None
+    if fresh.get('state')!='ready' or fresh.get('change')!='new':return None
+    try:family_llm.configuration(store.data)
+    except family_llm.LLMDraftError:return None
+    return dict(cleared=True,due=due,done=sorted(done),quote=quote,purpose=str(raw.get('purpose','')),
+                subject=(plan.get('school_learning') or {}).get('subject',''),snapshot=snapshot,job_id=row['job_id'],
+                job_fingerprint=job['fingerprint'],origin_basis=brief['origin_basis'],receipt=_hash(raw))
+
+
+def _school_cleared_receipt(result,evidence,proof):
+    """A new receipt collects a cleared old review only when it supports the item itself; otherwise it raises.
+
+    It must be ready and new, keep the stored receipt's purpose (and learning subject) and its own teacher sentence's
+    requirements, and every day it states must be one of the original's own days in its own role: completion words a
+    completion day, 交/检查 words the due, with the due itself stated; 检查 is not rewritten as 交 where the originals say no 交.
+    A raise keeps the old row, its unknown day and every original as saved, under the job's own attempts and backoff.
+    """
+    from family_agenda import sent_day
+    if result.get('state')!='ready' or result.get('change')!='new' or result.get('target_id'):
+        raise AgentError('新回执未确认本项可收录，原内容与未知日期保留')
+    if result.get('purpose')!=proof['purpose'] or proof['subject'] and str(result.get('learning_subject','')).strip()!=proof['subject']:
+        raise AgentError('新回执的用途或科目与原回执不一致，原内容与未知日期保留')
+    home=next((e['text'] for e in evidence if proof['quote'] in e['text']),'')
+    if not home or not _school_clause_kept(_school_own_sentences(proof['quote'],home),str(result.get('goal',''))):
+        raise AgentError('新回执未完整保留本项要求，原内容与未知日期保留')
+    published=sent_day(evidence[0].get('time',''));done=set(proof['done']);due=proof['due'];stated=False
+    day=r'今天|今日|今晚|明天|明日|明早|明晚|后天|昨天|前天|\d{1,2}\s*月\s*\d{1,2}|\d{4}-\d{2}-\d{2}|(?:周|星期|礼拜)[一二三四五六日天]'
+    handback=any('交' in e['text'] for e in evidence)
+    for field in ('title','goal','submission'):
+        for clause in re.split(r'[，,。；;！!？?\n]',str(result.get(field,''))):
+            if not re.search(day,clause):continue
+            days=_school_own_dates(clause,published)
+            finish=bool(re.search(r'完成|做完|写完|读完|签字',clause));back=bool(re.search(r'交|检查',clause))
+            if len(days)!=1 or finish and back:raise AgentError('新回执的日期无法逐项核对，原内容与未知日期保留')
+            value=next(iter(days))
+            if (back and (value!=due or '交' in clause and not handback) or finish and value not in (done or {due})
+                    or not (finish or back) and value not in done|{due}):
+                raise AgentError('新回执的日期与本项原文日期不一致，原内容与未知日期保留')
+            stated|=value==due and (back or not done)
+    if not stated:raise AgentError('新回执未写明本项原文日期，原内容与未知日期保留')
 
 
 def _school_legacy_batch_correction(store,c,row,evidence):
@@ -4846,8 +4957,10 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             if status_reply and raw_change=='new' and target and brief['title'].strip()==target['title'].strip() and brief['goal'].strip()==target['goal'].strip() and (not due or due==target.get('due','')):
                 continue
             if (uncertain_due or void) and brief['state']!='reference':
-                brief.update(state='review',reason=brief['reason'][:300]+(' 截止日期尚无法从原文核对，未采用模型日期；请核对原通知。' if uncertain_due else
+                brief.update(state='review',reason=brief['reason'][:300]+(SCHOOL_UNADOPTED_NOTE if uncertain_due else
                                                                           ' 原通知后文改变了本项活动的安排，原日期不能作为本项日期；请核对原通知。'))
+                # The model day this reading did not adopt stays known: a contradiction it saw is never read again for a day.
+                if uncertain_due:item['plan']['school_unadopted_due']=proposed_due
             elif due and due<as_of and brief['state']!='reference':
                 brief.update(state='review',reason=brief['reason'][:300]+' 原截止日期已过，请核对是否已处理或仍需补办；不推定完成或安排今天补做。')
             elif not due and brief['state']=='ready' and any((sent_day(e.get('time','')) or as_of)<as_of for e in cited_evidence):
@@ -5966,7 +6079,7 @@ def _refresh_school(app, store, now, budget):
         pdf_changed=current and pdf_key!=recorded_pdf.get('fingerprint','')
         recorded_material=brief.get('material_evidence') or {}
         material_changed=current and material_key!=recorded_material.get('fingerprint','')
-        saved_reread=None
+        saved_reread=cleared=None
         if current and not (page_changed or pdf_changed or material_changed or original_changed or source_error or legacy_correction):
             # An untouched saved review of a finished batch: one reread in this item's own job, never a fresh budget.
             with store._db() as c:saved_reread=_school_saved_reread(store,c,row,evidence,now)
@@ -5989,6 +6102,11 @@ def _refresh_school(app, store, now, budget):
                     c.execute('UPDATE agent_items SET title=?,body=?,plan=?,updated=?,due=? WHERE id=?',
                               (brief.get('title') or row['title'],brief.get('goal') or row['body'],_json(plan),updated,reselect['due'],row['id']))
                     row.update(title=brief.get('title') or row['title'],body=brief.get('goal') or row['body'],plan=_json(plan),updated=updated,due=reselect['due'])
+            elif not saved_reread:
+                # A day an earlier selection cleared without keeping it is never guessed: only one new receipt, through the
+                # same saved-reread caller and job budget, may collect it on the original's own day.
+                with store._db() as c:saved_reread=cleared=_school_cleared_reread(store,c,row,evidence,now)
+        reread=_school_cleared_reread if cleared else _school_saved_reread
         if plan.get('school_history_job') and (not current or page_changed or pdf_changed or material_changed):
             # This audit proves a literal message action only. A generic whole-notice refresh cannot change its identity.
             brief.update(state='review',reason='补漏依据限于这项原消息动作；新资料或规则变化尚未核其对应关系，原事项与要求保留。')
@@ -6102,7 +6220,7 @@ def _refresh_school(app, store, now, budget):
                     raise AgentError('学校消息原文暂不可读取') from source_error
                 # Revoked, detached, corrected or dismissed between the claim and the call: no model round at all.
                 with store._db() as c:
-                    intact=_school_current(store,c,row,evidence,page_key,pdf_key,material_key) and (not original_parts or _school_original_known(store,c,row)[0]==original_key) and _school_pdf_mapping_intact(store,c,row,mapping_scope) and (not legacy_correction or _school_legacy_batch_correction(store,c,row,evidence)==legacy_correction) and (not policy_scope or _school_legacy_policy_scope(store,c,row,evidence)==policy_scope) and (not saved_reread or _school_saved_reread(store,c,row,evidence,now)==saved_reread)
+                    intact=_school_current(store,c,row,evidence,page_key,pdf_key,material_key) and (not original_parts or _school_original_known(store,c,row)[0]==original_key) and _school_pdf_mapping_intact(store,c,row,mapping_scope) and (not legacy_correction or _school_legacy_batch_correction(store,c,row,evidence)==legacy_correction) and (not policy_scope or _school_legacy_policy_scope(store,c,row,evidence)==policy_scope) and (not saved_reread or reread(store,c,row,evidence,now)==saved_reread)
                     if not intact: _discard_job(c,key,fp)
                 if not intact: continue
                 if reference: brief=dict(reference)
@@ -6137,8 +6255,10 @@ def _refresh_school(app, store, now, budget):
                         # A reread decides again but never rewrites its originals: any day it states must be the one day
                         # they prove, and the goal carries their complete requirements through the shared compilation.
                         import family_agenda
-                        stated=set().union(*(family_agenda.deadlines(result[field],family_agenda.sent_day(e.get('time'))) for field in ('title','goal') for e in evidence))
-                        if stated-{row['due']}: raise AgentError('重新理解的日期与原消息不一致，原内容与日期保留')
+                        if cleared:_school_cleared_receipt(result,evidence,cleared)
+                        else:
+                            stated=set().union(*(family_agenda.deadlines(result[field],family_agenda.sent_day(e.get('time'))) for field in ('title','goal') for e in evidence))
+                            if stated-{row['due']}: raise AgentError('重新理解的日期与原消息不一致，原内容与日期保留')
                         result=_school_requirement_goal(result,[e['text'] for e in evidence])
                     learning=_school_learning(result,school_goals)
                     brief=_school_brief(result,incomplete=any(e['unread'] or _needs_task_details(e['text']) for e in evidence),evidence=evidence,school_tasks=targets,pages=page_evidence,pdf=pdf_evidence,material=material,
@@ -6148,6 +6268,10 @@ def _refresh_school(app, store, now, budget):
                 if material: brief.setdefault('material_evidence',dict(fingerprint=material_key))
                 if plan.get('school_original_action'): brief['original_actions_revision']=SCHOOL_ORIGINAL_REVISION
                 due=row['due']
+                if cleared:
+                    # Only a reading that stays ready under every guard collects it, on the original's own day; else the row stays as saved.
+                    if brief['state']!='ready':raise AgentError('新回执未通过本项核对，原内容与未知日期保留')
+                    due=cleared['due']
                 if (material or page_evidence or pdf_evidence) and brief['state']=='ready':
                     import family_agenda
                     stamps={e['ref']:family_agenda.sent_day(e.get('time')) for e in evidence}
@@ -6186,7 +6310,7 @@ def _refresh_school(app, store, now, budget):
                 with store._db() as c:
                     c.execute('BEGIN IMMEDIATE')
                     if (not _school_current(store,c,row,evidence,page_key,pdf_key,material_key) or policy_scope and _school_legacy_policy_scope(store,c,row,evidence)!=policy_scope
-                            or saved_reread and _school_saved_reread(store,c,row,evidence,now)!=saved_reread):
+                            or saved_reread and reread(store,c,row,evidence,now)!=saved_reread):
                         # Candidate, message, binding/authorization, fragments or PDF groups changed while the model ran: drop the result.
                         _discard_job(c,key,fp);continue
                     updated=now.isoformat()
