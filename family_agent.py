@@ -2583,17 +2583,28 @@ def _school_own_cancelled(quote,cited):
     …的家长会取消) or any other wording withdraws nothing of it.
     """
     homes=[e for e in cited if quote and quote in e['text']]
-    objects={o for c in re.split(r'[，,。；;！!？?\n]',quote) if _school_clause_roles(c) and (o:=_school_role_object(c))}
-    if len(homes)!=1 or len(objects)!=1:return False
-    home=homes[0];obj=next(iter(objects))
-    withdraw=(r'取消(.+?)(?:的?交回)?了?|(.+?)(?:的?交回)?(?:已)?取消了?'
+    # Every one of the item's own clauses must be a role of that one object: another action (打印、朗读…) never goes with it.
+    clauses=[c for c in re.split(r'[，,。；;！!？?\n]',quote) if c.strip()];roles=[_school_clause_roles(c) for c in clauses]
+    objects={_school_role_object(c) for c,r in zip(clauses,roles) if r}
+    if len(homes)!=1 or len(objects)!=1 or not roles or not all(roles):return False
+    home=homes[0];obj=next(iter(objects));own=set().union(*roles)
+    # Withdrawing its handback (…不用交了、取消…的交回) leaves every other role (今晚完成、签字); only the object's own cancel withdraws all.
+    handback=(r'取消(.+?)的?交回了?|(.+?)的?交回(?:已)?取消了?'
               r'|(.+?)(?:都|也)?(?:不用|不必|无需|无须|不需要?|不再)(?:再)?(?:交|交回|上交|提交)了?')
+    whole=r'取消(.+?)了?|(.+?)(?:已)?取消了?'
+    def mentions(e):  # the object named again in a message
+        return any(obj[-2:] in clause for clause in re.split(r'[。；;，,！!\n]',e['text']))
     for e in cited:
         if e is home or not _school_native_later_text(home,e):continue
         for clause in re.split(r'[。；;，,！!\n]',e['text']):
             body=re.sub(r'^\s*(?:更正|补充|通知|另外)?\s*[：:]?\s*','',clause.strip())
-            found=not re.search(_SCHOOL_NATIVE_UNSETTLED,body) and re.fullmatch(withdraw,body)
-            if found and next(g for g in found.groups() if g is not None).strip()==obj:return True
+            if re.search(_SCHOOL_NATIVE_UNSETTLED,body):continue
+            for pattern,withdrawn in ((handback,{'handback'}),(whole,own)):
+                found=re.fullmatch(pattern,body)
+                if found and next(g for g in found.groups() if g is not None).strip()==obj:
+                    # Only the same teacher's latest word about the object holds: a later message naming it again restores it.
+                    if own<=withdrawn and not any(_school_native_later_text(e,later) and mentions(later) for later in cited):return True
+                    break
     return False
 
 
