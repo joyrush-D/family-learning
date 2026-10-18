@@ -4076,12 +4076,14 @@ def _school_parent_readings(text):
     """The spans of each 阅读 a parent does to sign it (请家长今天阅读…，在末页“监护人”栏签字): the parent's own step, no child outcome.
 
     The reader is a parent word directly before 阅读 (only a date or 认真/仔细 between), outside closed names; later in the same
-    sentence every signature or stamp names the parent or no one; a child it names only carries or hands the material back
+    sentence (or, when it signs nothing, in its very next parent-only sentence) every signature or stamp names the parent or
+    no one; a child it names only carries or hands the material back
     (孩子带回的…). A child's own reading, a parent reading the child's work (孩子的作文) or any other actor keeps the text as written.
     """
     spans=[];masked=re.sub(r'《[^》]*》',lambda m:'_'*len(m[0]),text or '')
     carry=r'带(?:回|来|到|去)|拿回|上交|交'
-    for sentence in re.finditer(r'[^。；;！!？?\n]+',masked):
+    sentences=list(re.finditer(r'[^。；;！!？?\n]+',masked))
+    for at_sentence,sentence in enumerate(sentences):
         own=sentence[0];base=sentence.start()
         def carries(m):
             # After its own day, the child carries or hands back nothing else than what this sentence already names before it
@@ -4093,6 +4095,13 @@ def _school_parent_readings(text):
         if not all(carries(m) for m in re.finditer(_SCHOOL_CLAUSE_ROLES['学生'],own)):continue
         for m in re.finditer(r'(?:'+_SCHOOL_CLAUSE_ROLES['家长']+r')\s*(?:'+_SCHOOL_NATIVE_WHEN+r')?(?:认真|仔细)?\s*(阅读)',own):
             signers=_school_signers(text[sentence.start()+m.start():sentence.end()])
+            if not signers and at_sentence+1<len(sentences):
+                # A split notice (家长今天阅读…《…》。在末页“监护人”栏签字。) signs in its very next sentence: only a step naming
+                # no actor but the parent, no other closed name and no negation or condition continues this parent's own reading.
+                after=text[sentences[at_sentence+1].start():sentences[at_sentence+1].end()]
+                if (set(_school_roles(after))<={'家长'} and not re.search(r'不|无需|无须|勿|未|没|免|如|若',after)
+                        and set(re.findall(r'《[^》]*》',after))<=set(re.findall(r'《[^》]*》',text[sentence.start():sentence.end()]))):
+                    signers=_school_signers(after)
             if signers and signers<={'家长',''}:spans.append((sentence.start()+m.start(1),sentence.start()+m.end(1)))
     return spans
 
