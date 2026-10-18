@@ -555,6 +555,32 @@ def _school_focus(c,task,proposal,plan):
     return all(focus.get(k)==value for k,value in rows[version][1].items())
 
 
+_TITLE_LABEL=re.compile(r'[^：:\s，,。；;、《》()（）]{1,8}[：:]\s*')
+_LINE_END='。.；;！!？? '
+
+
+def action_lines(title,action):
+    """The saved action's lines as a card under this title shows them; display only, nothing is saved or rewritten.
+
+    Only words the card would repeat are left out: a first line that is the title's own words (with or without its
+    leading label such as 语文：), and a 提交要求 line whose words begin with the previous line's last clause, which
+    then reads once in that line. Every other line stays whole, in its saved words and order; partial overlaps stay."""
+    lines=[x.strip() for x in str(action or '').splitlines() if x.strip()]
+    heading=str(title or '').strip().rstrip(_LINE_END);label=_TITLE_LABEL.match(heading)
+    if lines and heading and lines[0].rstrip(_LINE_END) and lines[0].rstrip(_LINE_END) in (heading,heading[label.end():] if label else heading):
+        lines=lines[1:]
+    shown=[]
+    for line in lines:
+        restated=re.fullmatch(r'提交要求[：:]\s*(.+?)[。.；;！!\s]*',line)
+        if restated and shown:
+            previous=shown[-1].rstrip(_LINE_END);clause=re.split(r'[，,；;]',previous)[-1].strip()
+            if clause and restated[1].startswith(clause):
+                shown[-1]=previous[:len(previous)-len(clause)]+restated[1]+shown[-1][len(previous):]
+                continue
+        shown.append(line)
+    return shown
+
+
 def enrich(app,c,tasks):
     owners={p['name']:p['id'] for p in app.profiles(c)}
     reported={r['task_id']:(r['child_id'],r['day'],r['report']) for r in c.execute('SELECT task_id,child_id,day,report FROM study_items WHERE id=task_id')} if c.execute("SELECT 1 FROM sqlite_master WHERE name='study_items'").fetchone() else {}
@@ -599,6 +625,7 @@ def enrich(app,c,tasks):
         task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus,date_siblings=date_siblings)
         if teacher.get('handback_on'):task['agenda']['due_kind']='handback'
         if teacher.get('complete_on'):task['agenda']['complete_on']=teacher['complete_on']
+        task['agenda']['action_lines']=action_lines(task['title'],task.get('action',''))
     return tasks
 
 
