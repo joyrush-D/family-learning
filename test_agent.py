@@ -25,6 +25,41 @@ def school_proposal(**values):
     return result
 
 
+# A fictional mixed day (HANDOFF unseen-mixed-school-day-20261019-v1) and its actual Flash27 reply, unchanged.
+ORDINARY_ROLE_DAY={31:'今天语文作业：《星芽阅读练习册》第28页第1、2题，答案写在练习册上。今晚完成，明天早上交。',
+                   32:'数学作业是《数格练习册》第34页第1—4题，今晚完成，明天早上交。',
+                   33:'补充一下，第34页第4题要把计算过程写完整，写在原题下面即可。',
+                   34:'英语：听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在记录本上签字。今晚完成，明天早读检查记录本。',
+                   35:'《秋季校园开放日回执》今晚请家长签字，明天早上让孩子交给班主任。另外，明天来校带一个空透明塑料瓶，科学课用。',
+                   36:'今天科学课学完了“水的三种状态”，课堂演示也结束了。这是本周的课程进度，供家长了解。'}
+ORDINARY_ROLE_TIMES={31:'16:08',32:'16:12',33:'16:13',34:'16:22',35:'17:10',36:'17:35'}
+ORDINARY_ROLE_SENDERS={31:'cn-xu',32:'math-wei',33:'math-wei',34:'en-qiao',35:'head-wen',36:'science-tang'}
+
+
+def ordinary_role_day(source):
+    ref=lambda n:'message:'+source+':'+str(n)
+    texts=ORDINARY_ROLE_DAY
+    evidence=[dict(ref=ref(n),text=text,time='2026-10-19T'+ORDINARY_ROLE_TIMES[n]+':00+08:00',kind='text',source='虚构岚溪学园初一班群',
+                   sender='虚构老师'+ORDINARY_ROLE_SENDERS[n],publisher='publisher:synthetic-unseen-'+ORDINARY_ROLE_SENDERS[n],
+                   related_messages=[ref(n)],content_incomplete=False,attachments=[]) for n,text in texts.items()]
+    raw=[('今天语文作业：《星芽阅读练习册》第28页第1、2题，答案写在练习册上。','2026-10-20',[31],'语文：完成《星芽阅读练习册》第28页第1、2题',
+          '完成《星芽阅读练习册》第28页第1、2题。\n答案写在练习册上。\n今晚完成，明天早上交。','语文','learning','明天早上交练习册。','ready'),
+         (texts[32],'2026-10-20',[32,33],'数学：完成《数格练习册》第34页第1—4题',
+          '完成《数格练习册》第34页第1—4题。\n第34页第4题要把计算过程写完整，写在原题下面即可。\n今晚完成，明天早上交。','数学','learning','明天早上交练习册。','ready'),
+         ('英语：听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在记录本上签字。','2026-10-20',[34],'英语：跟读Unit 4两遍并家长签字',
+          '听录音跟读 Unit 4 A day at the lake 两遍。\n读完请家长在记录本上签字。\n今晚完成，明天早读检查记录本。','英语','learning','明天早读检查记录本。','ready'),
+         ('《秋季校园开放日回执》今晚请家长签字，明天早上让孩子交给班主任。','2026-10-20',[35],'交《秋季校园开放日回执》',
+          '《秋季校园开放日回执》今晚请家长签字。\n明天早上让孩子交给班主任。','','admin','明天早上交给班主任。','ready'),
+         ('明天来校带一个空透明塑料瓶，科学课用。','2026-10-20',[35],'科学：带一个空透明塑料瓶',
+          '明天来校带一个空透明塑料瓶，科学课用。','','admin','','ready'),
+         (texts[36],'',[36],'','','','optional','','reference')]
+    proposals=[dict(title_quote=quote,focus='school',due=due,evidence=[dict(ref=ref(n)) for n in cited],task_title=title,task_goal=goal,
+                    task_advice='',learning_subject=subject,learning_goal_id='',task_change='new',task_target_id='',task_state=state,
+                    task_reason='已读文字明确要求。' if state=='ready' else '仅为课程进度说明。',task_purpose=purpose,task_submission=submission)
+               for quote,due,cited,title,goal,subject,purpose,submission,state in raw]
+    return evidence,proposals
+
+
 class AgentTests(unittest.TestCase):
     def _school_selection_authorization_change(self, change):
         from family_settings import Store as Settings
@@ -226,33 +261,8 @@ class AgentTests(unittest.TestCase):
         # 今晚完成，明天早上交 / 明天早读检查 are one item's completion and handback or check roles, not an ambiguity;
         # the bottle line of 35 states only 明天 and never borrows the receipt's 今晚.
         source='synthetic-unseen-daygroup-20261019'
-        texts={31:'今天语文作业：《星芽阅读练习册》第28页第1、2题，答案写在练习册上。今晚完成，明天早上交。',
-               32:'数学作业是《数格练习册》第34页第1—4题，今晚完成，明天早上交。',
-               33:'补充一下，第34页第4题要把计算过程写完整，写在原题下面即可。',
-               34:'英语：听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在记录本上签字。今晚完成，明天早读检查记录本。',
-               35:'《秋季校园开放日回执》今晚请家长签字，明天早上让孩子交给班主任。另外，明天来校带一个空透明塑料瓶，科学课用。',
-               36:'今天科学课学完了“水的三种状态”，课堂演示也结束了。这是本周的课程进度，供家长了解。'}
-        times={31:'16:08',32:'16:12',33:'16:13',34:'16:22',35:'17:10',36:'17:35'}
-        senders={31:'cn-xu',32:'math-wei',33:'math-wei',34:'en-qiao',35:'head-wen',36:'science-tang'}
         ref=lambda n:'message:'+source+':'+str(n)
-        evidence=[dict(ref=ref(n),text=text,time='2026-10-19T'+times[n]+':00+08:00',kind='text',source='虚构岚溪学园初一班群',
-                       sender='虚构老师'+senders[n],publisher='publisher:synthetic-unseen-'+senders[n],related_messages=[ref(n)],
-                       content_incomplete=False,attachments=[]) for n,text in texts.items()]
-        raw=[(31,'今天语文作业：《星芽阅读练习册》第28页第1、2题，答案写在练习册上。','2026-10-20',[31],'语文：完成《星芽阅读练习册》第28页第1、2题',
-              '完成《星芽阅读练习册》第28页第1、2题。\n答案写在练习册上。\n今晚完成，明天早上交。','语文','learning','明天早上交练习册。','ready'),
-             (32,texts[32],'2026-10-20',[32,33],'数学：完成《数格练习册》第34页第1—4题',
-              '完成《数格练习册》第34页第1—4题。\n第34页第4题要把计算过程写完整，写在原题下面即可。\n今晚完成，明天早上交。','数学','learning','明天早上交练习册。','ready'),
-             (34,'英语：听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在记录本上签字。','2026-10-20',[34],'英语：跟读Unit 4两遍并家长签字',
-              '听录音跟读 Unit 4 A day at the lake 两遍。\n读完请家长在记录本上签字。\n今晚完成，明天早读检查记录本。','英语','learning','明天早读检查记录本。','ready'),
-             (35,'《秋季校园开放日回执》今晚请家长签字，明天早上让孩子交给班主任。','2026-10-20',[35],'交《秋季校园开放日回执》',
-              '《秋季校园开放日回执》今晚请家长签字。\n明天早上让孩子交给班主任。','','admin','明天早上交给班主任。','ready'),
-             (35,'明天来校带一个空透明塑料瓶，科学课用。','2026-10-20',[35],'科学：带一个空透明塑料瓶',
-              '明天来校带一个空透明塑料瓶，科学课用。','','admin','','ready'),
-             (36,texts[36],'',[36],'','','','optional','','reference')]
-        proposals=[dict(title_quote=quote,focus='school',due=due,evidence=[dict(ref=ref(n)) for n in cited],task_title=title,task_goal=goal,
-                        task_advice='',learning_subject=subject,learning_goal_id='',task_change='new',task_target_id='',task_state=state,
-                        task_reason='已读文字明确要求。' if state=='ready' else '仅为课程进度说明。',task_purpose=purpose,task_submission=submission)
-                   for _,quote,due,cited,title,goal,subject,purpose,submission,state in raw]
+        evidence,proposals=ordinary_role_day(source)
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
             items=agent._select('school',json.loads(json.dumps(evidence)),school_goals=[],as_of='2026-10-19')
         tasks=[i['plan']['school_task'] for i in items]
@@ -3217,6 +3227,31 @@ class AgentTests(unittest.TestCase):
             self.assertTrue(all(t['original_status']=='待跟进' for t in tasks))
         self.assertEqual(first['created'],len(tasks))
         return tasks
+
+    def test_ordinary_notice_role_days_save_reopen_and_collect_on_the_existing_path(self):
+        # The fictional day's five own-role actions save, reread and collect with no model call; the progress note stays reference.
+        self.now=dt.datetime(2026,10,19,20,tzinfo=agent.TZ)
+        evidence,proposals=ordinary_role_day(self.source['id'])
+        messages=[dict(id=str(n),time=e['time'],kind='text',sender=e['sender'],text=e['text'],unread=False)
+                  for n,e in zip(ORDINARY_ROLE_DAY,evidence)]
+        self.store.ingest(dict(source_id=self.source['id'],expected_cursor='10',cursor='36',checked_at=self.now.isoformat(),
+                               last_message_time=messages[-1]['time'],error='',messages=messages))
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)) as model:
+            items=agent._select('school',evidence,school_goals=[],as_of='2026-10-19')
+        self.assertEqual(model.call_count,1)
+        key='synthetic-ordinary-role-day';fp=self.store._job(key,dict(text='\n'.join(ORDINARY_ROLE_DAY.values())),self.now)
+        self.store._save(key,fp,[dict(item,child_id='child-1',kind='school') for item in items],self.now,
+                         [(self.source['id'],str(n)) for n in ORDINARY_ROLE_DAY],school_context=(self.source,messages))
+        with patch.object(agent.family_llm,'_chat_json',side_effect=AssertionError('saved fictional selection needs no model')):
+            first=agent._refresh_school(self.app,self.store,self.now,0)
+            repeated=agent._refresh_school(self.app,self.store,self.now,0)
+        self.assertEqual(repeated,dict(used=0,failed=0,created=0))
+        with self.app.connect() as c:
+            tasks=[dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_messages').fetchone()[0],6,'every original stays in the library')
+        self.assertEqual(first['created'],5)
+        self.assertEqual(sorted((t['title'],t['due']) for t in tasks),sorted((p['task_title'],'2026-10-20') for p in proposals[:5]))
+        self.assertFalse(any('水的三种状态' in t['title']+t['action'] for t in tasks),'course progress never becomes a task')
 
     def test_resource_request_only_keeps_reference_without_tasks(self):
         text='谁有语文课本第5课照片，发一下。'

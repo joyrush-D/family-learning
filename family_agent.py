@@ -4535,8 +4535,12 @@ def _school_native_saved(items,evidence):
         # A ready summary may not name another day than the date it is saved with (literal ledger text excepted).
         cover=plan.get('school_native_cover')
         if (brief.get('state')=='ready' and item.get('due') and 'school_action_anchor' not in plan and (not saved or saved.get('changes'))):
-            declared=_school_goal_dates(brief.get('goal',''),[e for e in evidence if e['ref'] in {q.get('ref') for q in item.get('evidence',[])}])
-            if declared and declared!={item['due']}:
+            cited=[e for e in evidence if e['ref'] in {q.get('ref') for q in item.get('evidence',[])}]
+            declared=_school_goal_dates(brief.get('goal',''),cited)
+            # The same role reading as selection, rechecked on the stored originals: one item's completion and handback days.
+            roles=(_school_role_days(plan.get('school_date_quote',''),cited,[other.get('plan',{}).get('school_date_quote','')
+                                     for other in items if other is not item]) if not saved and plan.get('school_date_quote') else None)
+            if declared and declared!={item['due']} and not (roles and roles[1]==item['due'] and declared<=roles[0]|{roles[1]}):
                 raise AgentError('学校事项摘要日期与保存日期不符，整批未写入',409,'school_action_coverage')
         if cover:
             action=lookup.get(cover.get('id'));cited={e['ref'] for e in item['evidence']}
