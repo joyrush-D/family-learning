@@ -335,16 +335,24 @@ class R259ClearedDateRereadTests(unittest.TestCase):
         expected = {'星芽': ('2026-10-19', '2026-10-20', 'homework'), '数格': ('2026-10-19', '2026-10-20', 'homework'),
                     'Unit 4': ('2026-10-19', '2026-10-20', 'homework'), '回执': ('2026-10-19', '2026-10-20', 'todo'),
                     '塑料瓶': ('', '2026-10-20', 'todo')}
+        # Each item's own handback words stay its own: 语文/数学 hand their workbooks in, the receipt goes to the head teacher,
+        # the bottle is brought; English is only checked on the 20th, never turned into a handback.
+        handback = {'星芽': '明天早上交练习册', '数格': '明天早上交练习册', '回执': '明天早上让孩子交给班主任', '塑料瓶': '明天来校带'}
         for day in ('2026-10-19', '2026-10-20'):
             listed = self._listed(day)
             for k, (complete, due, category) in expected.items():
                 with self.subTest(item=k, day=day):
                     agenda = listed[named[k][0]['id']]['agenda']
                     self.assertEqual((agenda['complete_on'], agenda['due_on'], agenda['category']), (complete, due, category))
-                    self.assertNotEqual(agenda['due_kind'], 'handback', 'a check day is not a handback')
+                    if k == UNKNOWN:
+                        self.assertNotEqual(agenda['due_kind'], 'handback', 'a check day is not a handback')
+                    else:
+                        self.assertEqual(agenda['due_kind'], 'deadline', 'its own 20th is its own deadline')
+                        self.assertIn(handback[k], named[k][0]['action'])
         task = named[UNKNOWN][0]
         self.assertEqual(task['due'], '2026-10-20')
         self.assertIn('明天早读检查记录本', task['action'])
+        self.assertNotIn('交给', task['action'])
         self.assertNotIn('交', task['title'], 'checking the record book is not handing it in')
 
     def test_a_new_reply_that_does_not_support_the_item_keeps_it_unknown(self):
@@ -444,6 +452,249 @@ class R259ClearedDateRereadTests(unittest.TestCase):
         self.assertEqual(item['plan'].get('school_unadopted_due'), '2026-10-09', 'the day it did not adopt is kept, never adopted')
         for marker in ('school_saved_reread', 'school_role_reselect'):
             self.assertNotIn(marker, item['plan'])
+
+    def test_a_reread_dropped_three_times_stops_and_only_the_explicit_retry_continues(self):
+        # Root B1 on the ordinary path: the source is paused right after each real claim (eligibility and CAS run for real),
+        # restored before the next round; the dropped rounds keep their attempts, no automatic fourth attempt follows, the
+        # exhausted identity is visible, and the existing explicit retry of the same identity continues it.
+        before = self._old_store()
+        key = 'school-task:' + self._item(before, UNKNOWN)['id']
+        self._replies(NEW_RECEIPT)
+        real = agent.Store._job; drops = []; pausing = [True]
+
+        def claim(store, k, *args, **kwargs):
+            value = real(store, k, *args, **kwargs)
+            if k == key and value and pausing[0]:
+                drops.append(value); self.source['enabled'] = False; self.fixture.config()
+            return value
+        with patch.object(agent.Store, '_job', claim):
+            for minutes in (0, 1, 2):
+                self.source['enabled'] = True; self.fixture.config()
+                self._at(minutes)
+            pausing[0] = False
+            self.source['enabled'] = True; self.fixture.config()
+            for minutes in (3, 9, 60): self._at(minutes)
+        self.assertEqual((len(drops), len(self.calls)), (3, 0), 'three dropped rounds, then no automatic fourth attempt')
+        job = self._english_kept(before)
+        self.assertEqual((job['attempts'], job['done'], job['next_try']), (3, 0, ''), 'the exhausted identity stays visible')
+        self.assertGreaterEqual(self.store.snapshot()['failed_jobs'], 1)
+        self.store.act(dict(action='retry', id=key))
+        self.assertEqual(self._at(61)['created'], 1)
+        self.assertEqual(len(self.calls), 1, 'the explicit retry continues on the ordinary path')
+        _, _, jobs, items, _ = self._state()
+        self.assertEqual((items[key[len('school-task:'):]]['state'], jobs[key]['done'], jobs[key]['attempts']), ('accepted', 1, 1))
+
+    def test_the_shared_entry_spends_dropped_rounds_once_per_batch_and_retry_renews_only_unfinished(self):
+        # Root B1/B2 at the shared entry: three claims dropped by _discard_job spend the batch's one budget for every identity
+        # of the same original batch; only the explicit retry renews it, and a real done receipt is neither failure budget
+        # nor replayed.
+        before = self._old_store()
+        batch = self._item(before, UNKNOWN)['job_id']
+        first, second, third = ('school-task:' + self._item(before, k)['id'] for k in (UNKNOWN, '星芽', '数格'))
+        value = dict(fixture='the same request')
+        claim = lambda key: self.store._job(key, value, self.now, model=True, keep_budget=True)
+        for _ in range(3):
+            fp = claim(first)
+            with self.store._db() as c: agent._discard_job(c, first, fp)
+        self.assertIsNone(claim(first), 'no fourth automatic attempt')
+        agent._school_recovery_inherit(self.store, second, batch, 'child-1')
+        self.assertIsNone(claim(second), 'another identity of the same batch inherits the spent attempts')
+        self.store.act(dict(action='retry', id=first))
+        self.assertTrue(claim(first), 'the explicit retry renews the dropped identity')
+        with self.store._db() as c:  # that round now succeeds: a real done receipt
+            c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=?", (first,))
+            done = dict(c.execute('SELECT * FROM agent_jobs WHERE id=?', (first,)).fetchone())
+        self.store.act(dict(action='retry', id=first))
+        self.assertIsNone(claim(first), 'a real done receipt is never replayed')
+        with self.store._db() as c:
+            self.assertEqual(dict(c.execute('SELECT * FROM agent_jobs WHERE id=?', (first,)).fetchone()), done)
+            c.execute('DELETE FROM agent_jobs WHERE id=?', (second,))
+        agent._school_recovery_inherit(self.store, third, batch, 'child-1')
+        self.assertTrue(claim(third), 'a real success spends no failure budget of the batch')
+
+
+# Root's frozen noun cases (cases.json, frozen before execution): one English original, its old review made by the public
+# r259 source f0941d0's own Store.ingest -> run_once, then read again by the current ordinary run_once. Only the model
+# boundary is fictional: the old selection reply is the Flash27 English proposal with this case's noun, the new receipt is
+# the frozen reply. 交流 is inside the noun 家校交流本; it grants no handback.
+NOUN_CASES = json.loads(r'''{"as_of": "2026-10-19", "now": "2026-10-19T20:08:00+08:00", "sent": "2026-10-19T16:22:00+08:00",
+ "truth": "听录音跟读Unit 4 A day at the lake两遍，读完家长在指定本签字，19日晚完成，20日早读仅检查；交流是本名词内部，不授予交回许可。",
+ "cases": [
+  {"id": "P1-check-only-noun", "expected": "accept",
+   "text": "英语：听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在家校交流本上签字。今晚完成，明天早读检查家校交流本。",
+   "reply": {"advice": "", "change": "new", "goal": "听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在家校交流本上签字。今晚完成，明天早读检查家校交流本。", "learning_goal_id": "", "learning_subject": "英语", "purpose": "learning", "reason": "虚构离线新回执，按本项原文核对。", "state": "ready", "submission": "明天早读检查家校交流本。", "target_id": "", "title": "英语：跟读Unit 4两遍并家长签字"}},
+  {"id": "P2-correct-signing-title", "expected": "accept",
+   "text": "英语：听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在家校交流本上签字。今晚完成，明天早读检查家校交流本。",
+   "reply": {"advice": "", "change": "new", "goal": "听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在家校交流本上签字。今晚完成，明天早读检查家校交流本。", "learning_goal_id": "", "learning_subject": "英语", "purpose": "learning", "reason": "虚构离线新回执，按本项原文核对。", "state": "ready", "submission": "明天早读检查家校交流本。", "target_id": "", "title": "英语：今晚跟读并请家长在家校交流本上签字"}},
+  {"id": "N1-false-handback-noun", "expected": "reject",
+   "text": "英语：听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在家校交流本上签字。今晚完成，明天早读检查家校交流本。",
+   "reply": {"advice": "", "change": "new", "goal": "听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在家校交流本上签字。今晚完成，明天早读检查家校交流本。", "learning_goal_id": "", "learning_subject": "英语", "purpose": "learning", "reason": "虚构离线新回执，按本项原文核对。", "state": "ready", "submission": "明天早读检查家校交流本。", "target_id": "", "title": "英语：明天早上交回家校交流本"}},
+  {"id": "N2-false-handback-plain-control", "expected": "reject",
+   "text": "英语：听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在记录本上签字。今晚完成，明天早读检查记录本。",
+   "reply": {"advice": "", "change": "new", "goal": "听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在记录本上签字。今晚完成，明天早读检查记录本。", "learning_goal_id": "", "learning_subject": "英语", "purpose": "learning", "reason": "虚构离线新回执，按本项原文核对。", "state": "ready", "submission": "明天早读检查记录本。", "target_id": "", "title": "英语：明天早上交回记录本"}}]}''')
+R259_SOURCE_COMMIT = 'f0941d0ae99ee4689087c2f254a6efa4e8e7d7a7'
+NOUN_SOURCE = dict(id='synthetic-noun-group', platform='wechat', child_id='child-1', name='虚构班级', cursor='33', enabled=True)
+OLD_FLASH27_ENGLISH = dict(  # the Flash27 English proposal for message 34 (fictional HANDOFF raw), refs and noun of this case
+    title_quote='英语：听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在记录本上签字。', focus='school', due='2026-10-20',
+    evidence=[dict(ref='message:synthetic-noun-group:34')], task_title='英语：跟读Unit 4两遍并家长签字',
+    task_goal='听录音跟读 Unit 4 A day at the lake 两遍。\n读完请家长在记录本上签字。\n今晚完成，明天早读检查记录本。',
+    task_advice='可跟读时注意模仿录音语音语调，读完后请家长及时签字。', learning_subject='英语', learning_goal_id='', task_change='new',
+    task_target_id='', task_state='ready', task_reason='已读文字明确要求听录音跟读Unit 4两遍，家长在记录本上签字，今晚完成、明天早读检查记录本。',
+    task_purpose='learning', task_submission='明天早读检查记录本。')
+R259_SEED = r'''
+import datetime as dt, json, sys
+from pathlib import Path
+from unittest.mock import patch
+root = Path(sys.argv[1]); data = root / 'private'; data.mkdir(parents=True)
+(root / '家庭运行规则.md').write_text('| child-1 | 示例甲 | 男 | 10岁 | 四年级 |\n')
+source, text, reply, sent, now = json.loads(sys.argv[2]), sys.argv[3], json.loads(sys.argv[4]), sys.argv[5], dt.datetime.fromisoformat(sys.argv[6])
+(data / 'agent.json').write_text(json.dumps({'enabled': True, 'sources': [source]}))
+import family_review, family_agent as agent, family_media
+app = family_review.load_app(root, data)
+store = agent.Store(app.connect, app.profiles, data, app=app)
+store.ingest(dict(source_id=source['id'], expected_cursor='33', cursor='34', checked_at=now.isoformat(), last_message_time=sent, error='',
+    messages=[dict(id='34', message_order='34', time=sent, kind='text', sender='虚构英语乔老师', sender_id='synthetic-unseen-en-qiao', text=text, unread=False)]))
+with patch('family_qq_capture.run_one', return_value=dict(state='disabled')), \
+     patch.object(agent.family_teacher_public, 'run_one', return_value=dict(state='disabled')), \
+     patch.object(family_media, 'run_one', return_value=dict(state='ready')), \
+     patch.object(family_media, 'prepare_draft', return_value=dict(used=0, failed=0)), \
+     patch('family_goals.Store.run', return_value=dict(used=0, failed=0, created=0, children=set())), \
+     patch.object(agent.family_llm, '_chat_json', return_value=reply) as model:
+    result = agent.run_once(app, now)
+print(json.dumps(dict(calls=model.call_count, result=result)))
+'''
+
+
+class FrozenNounCaseTests(unittest.TestCase):
+    """The new receipt's own action decides its role: 交流 inside 家校交流本 is the notebook's name, 交回 hands one in."""
+
+    def _seed(self, text):
+        import subprocess
+        import sys
+        import tempfile
+        from contextlib import ExitStack
+        from pathlib import Path
+        import family_media
+        import family_review
+        directory = tempfile.TemporaryDirectory(prefix='synthetic-noun-case-')
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name).resolve(); old = root / 'r259-source'; old.mkdir()
+        here = Path(__file__).resolve().parent
+        archive = subprocess.run(['git', '-C', str(here), 'archive', R259_SOURCE_COMMIT], check=True, capture_output=True).stdout
+        subprocess.run(['tar', '-x', '-C', str(old)], input=archive, check=True)
+        noun = '家校交流本' if '家校交流本' in text else '记录本'
+        reply = json.loads(json.dumps(dict(proposals=[OLD_FLASH27_ENGLISH]), ensure_ascii=False).replace('记录本', noun))
+        self.assertEqual(reply['proposals'][0]['title_quote'], text[:text.index('。') + 1])
+        out = subprocess.run([sys.executable, '-I', '-c', 'import sys;p,s=sys.argv[1:3];del sys.argv[1:3];sys.path.insert(0,p);exec(s)',
+                              str(old), R259_SEED, str(root / 'family'), json.dumps(NOUN_SOURCE), text, json.dumps(reply),
+                              NOUN_CASES['sent'], '2026-10-19T20:00:00+08:00'],
+                             check=True, capture_output=True, text=True, cwd=old, env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1')).stdout
+        self.assertEqual(json.loads(out.strip().splitlines()[-1])['calls'], 1, 'the old source ran its own ordinary selection once')
+        self.data = root / 'family' / 'private'
+        self.app = family_review.load_app(root / 'family', self.data)
+        self.store = agent.Store(self.app.connect, self.app.profiles, self.data, app=self.app)
+        stack = ExitStack(); self.addCleanup(stack.close)
+        for target in ('family_qq_capture.run_one',):
+            stack.enter_context(patch(target, return_value=dict(state='disabled')))
+        stack.enter_context(patch.object(agent.family_teacher_public, 'run_one', return_value=dict(state='disabled')))
+        stack.enter_context(patch.object(family_media, 'run_one', return_value=dict(state='ready')))
+        stack.enter_context(patch.object(family_media, 'prepare_draft', return_value=dict(used=0, failed=0)))
+        stack.enter_context(patch('family_goals.Store.run', return_value=dict(used=0, failed=0, created=0, children=set())))
+        stack.enter_context(patch.dict(os.environ, {k: v for k, v in os.environ.items() if not k.startswith('FAMILY_LLM_')}, clear=True))
+        (self.data / 'model.json').write_text(json.dumps(FICTIONAL_MODEL))
+        self.model = stack.enter_context(patch.object(agent.family_llm, '_chat_json', side_effect=AssertionError('no request')))
+        return self._state()
+
+    def _state(self):
+        with self.app.connect() as c:
+            return ({r['id']: dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")},
+                    {r['id']: dict(r) for r in c.execute('SELECT * FROM agent_jobs')},
+                    [dict(r) for r in c.execute('SELECT * FROM manual_tasks')])
+
+    def test_the_new_receipt_is_read_by_its_own_actions_not_by_a_character_inside_a_noun(self):
+        for case in NOUN_CASES['cases']:
+            with self.subTest(case=case['id']):
+                items, jobs, tasks = self._seed(case['text'])
+                old, = items.values()
+                self.assertEqual((old['state'], old['due'], tasks), ('pending', '', []), 'the r259 source left an empty-day review')
+                self.assertTrue(json.loads(old['plan'])['school_task']['reason'].endswith('未采用模型日期；请核对原通知。'))
+                calls = []
+
+                def model(messages, schema, name, timeout=60, *, data_path=None, reply=case['reply']):
+                    calls.append((name, len(schema['required']), timeout, [e['ref'] for e in json.loads(messages[-1]['content'])['evidence']]))
+                    return copy.deepcopy(reply)
+                self.model.side_effect = model
+                result = agent.run_once(self.app, dt.datetime.fromisoformat(NOUN_CASES['now']))
+                self.assertEqual(calls, [('family_school_task', 11, 45, ['message:synthetic-noun-group:34'])], 'the existing caller, unchanged')
+                items, jobs, tasks = self._state()
+                row = items[old['id']]
+                if case['expected'] == 'accept':
+                    self.assertEqual((result['failed'], result['created']), (0, 1), result)
+                    task, = tasks
+                    self.assertEqual((row['state'], row['task_id'], row['due'], task['due'], task['title']),
+                                     ('accepted', task['id'], '2026-10-20', '2026-10-20', case['reply']['title']))
+                    self.assertEqual(json.loads(row['plan'])['school_saved_reread']['previous_row'], old)
+                    agenda = next(x for x in self.app.calendar_snapshot('2026-10-19', '2026-10-19')['inbox'] if x['task_id'] == task['id'])['agenda']
+                    self.assertEqual((agenda['complete_on'], agenda['due_on']), ('2026-10-19', '2026-10-20'))
+                    self.assertNotEqual(agenda['due_kind'], 'handback')
+                else:
+                    self.assertEqual((result['failed'], result['created'], tasks), (1, 0, []), result)
+                    self.assertEqual(row, old, 'old row, unknown day and receipt kept verbatim')
+                    job = jobs['school-task:' + old['id']]
+                    self.assertEqual((job['attempts'], job['done']), (1, 0))
+                    self.assertIn('原始资料保留', job['error'])
+
+
+class DroppedSavedRereadBatchBudgetTests(unittest.TestCase):
+    """Root B2 on the ordinary path: the TB02 review the exact old source 632a778 saved is read again by the saved reread;
+    each claim is dropped because the source is paused right after it (eligibility and CAS run for real), then restored.
+    Once the original due passes, the batch audit would be its second identity: it must inherit the three spent attempts."""
+
+    def setUp(self):
+        import test_school_saved_reread as saved
+        self.saved = saved
+        saved.natural(self, 'synthetic-dropped-budget-', saved.SOURCE, saved.TEXT, saved.SYNTHETIC)
+
+    def rows(self):
+        return self.saved.SavedSchoolRereadTests.rows(self)
+
+    def run_round(self, reply, at):
+        return self.saved.SavedSchoolRereadTests.run_round(self, reply, at)
+
+    def _enabled(self, value):
+        config = json.loads((self.data / 'agent.json').read_text())  # the isolated fictional config only
+        config['sources'][0]['enabled'] = value
+        (self.data / 'agent.json').write_text(json.dumps(config))
+
+    def test_a_saved_reread_dropped_three_times_is_not_refilled_by_the_batch_audit(self):
+        before = self.rows()
+        old_item, = before['items']
+        key = 'school-task:' + old_item['id']
+        fail = dict(side_effect=agent.family_llm.LLMDraftError('SYNTHETIC：同一旧批次固定失败；0真实provider。'))
+        real = agent.Store._job; drops = []
+
+        def claim(store, k, *args, **kwargs):
+            value = real(store, k, *args, **kwargs)
+            if k == key and value:
+                drops.append(k); self._enabled(False)
+            return value
+        with patch.object(agent.Store, '_job', claim):
+            for minutes in (0, 1, 2):
+                self._enabled(True)
+                self.assertEqual(self.run_round(fail, self.now + dt.timedelta(minutes=minutes))[0], 0)
+        self._enabled(True)
+        job = self.rows()['jobs'][key]
+        self.assertEqual((len(drops), job['attempts'], job['done']), (3, 3, 1), 'three dropped rounds spent three attempts')
+        late = dt.datetime(2026, 10, 23, 18, 0, tzinfo=agent.TZ)  # past the original due: the saved reread no longer owns it
+        counts = [self.run_round(fail, late + dt.timedelta(minutes=m))[0] for m in (0, 41, 82)]
+        self.assertEqual(counts, [0, 0, 0], 'no fourth automatic attempt under another identity of the same batch')
+        state = self.rows()
+        self.assertFalse([k for k in state['jobs'] if k.startswith('school-history:')], 'the audit is not opened on a spent budget')
+        self.assertEqual((state['items'], state['tasks']), (before['items'], []))
+        self.assertEqual(state['jobs'][old_item['job_id']], before['jobs'][old_item['job_id']])
+        self.assertEqual((state['messages'], state['cursor']), (before['messages'], before['cursor']))
+        self.store.act(dict(action='retry', id=key))  # only the existing explicit retry renews the batch's budget
+        self.assertEqual(self.run_round(fail, late + dt.timedelta(minutes=200))[0], 1, 'the explicit retry continues')
 
 
 if __name__ == '__main__':
