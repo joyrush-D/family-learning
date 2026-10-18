@@ -4469,11 +4469,12 @@ def _school_native_blocks(text):
             if shared:raise AgentError('行动条件无法连续核对，完整原批次保留',code='school_action_coverage')
             # A later condition naming one earlier outcome (朗读录音上传…) belongs to it, not to the last outcome.
             owner=_school_native_condition_owner(clause,pieces)
-            if not owner and _school_native_errand(clause,[text[p['start']:p['end']] for p in pieces]+[c for p in pieces for c in p.get('conditions',[])]):
-                # Without that proof a thing to bring that no outcome names is no condition of the last one: it keeps its own
-                # segment, so later notes stay with it, and is never listed here; the reply returns it on its own, read by the
-                # existing checks for an outcome this ledger does not list (_school_native_unlocated).
-                pieces.append(dict(start=start,end=end,purpose='errand',primary=clause))
+            if (not owner and pieces[-1]['purpose']=='learning'
+                    and _school_native_errand(clause,[text[p['start']:p['end']] for p in pieces]+[c for p in pieces for c in p.get('conditions',[])])):
+                # Without that proof a thing to bring that no outcome names is no condition of the last learning outcome: it is an
+                # administrative outcome of its own, listed and checked like every other, so a reply leaving it out keeps the
+                # whole batch. Its own day and errand head it (the connector 另外， stays only in its quote); later notes stay with it.
+                pieces.append(dict(start=start,end=end,purpose='admin',primary=re.sub(r'^\s*(?:另外|此外|还有|同时)\s*[，,]?\s*','',clause)))
                 continue
             owner=owner or pieces[-1]
             separated=crosses_example(owner['start'],end)
@@ -4493,7 +4494,7 @@ def _school_native_blocks(text):
             preparation.append((start,end))
     if preparation and pieces:
         raise AgentError('准备资料尚未能归到唯一学校行动，完整原批次保留',code='school_action_coverage')
-    pieces=[part for part in pieces if part['purpose'] not in ('reference','errand')]
+    pieces=[part for part in pieces if part['purpose']!='reference']
     if any(count!=len(pieces) for count,_ in shared):
         raise AgentError('共同标准的项数与独立行动不一致，完整原批次保留',code='school_action_coverage')
     # A stated total is an extra consistency check, never a prerequisite.
