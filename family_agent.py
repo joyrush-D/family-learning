@@ -4255,6 +4255,21 @@ def _school_native_marks(text):
     return _school_named_objects(text)|set(re.findall(_SCHOOL_NATIVE_WORKSHEET,text))|verbs
 
 
+def _school_native_errand(clause,owned):
+    """Bringing a thing no earlier outcome's own words name (另外，明天体育课带跳绳，不要求在家训练): its own errand, no condition.
+
+    Only its first comma part is read, after a connector (另外/此外/还有/同时): its own day, part of day, lesson or arrival and its
+    asker may stand before the carrying predicate itself (带/带上/带好/带齐/带来/携带), which must take an object of its own.
+    Carrying the work itself (明天带来、带到学校), a ba-phrase (把单词卡带到学校) or a thing whose words an outcome already writes
+    (带上记录页 after 明早检查记录页) proves nothing, so the existing reading keeps it with its outcome.
+    """
+    part=re.split(r'[，,]',re.sub(r'^\s*(?:另外|此外|还有|同时)\s*[，,]?\s*','',clause),maxsplit=1)[0].strip()
+    carried=re.fullmatch(r'(?:请\s*)?(?:(?:'+_SCHOOL_NATIVE_DATE+r'|明早)\s*)?(?:(?:早上|上午|中午|下午|晚上)\s*)?(?:(?:[一-鿿]{1,4}课(?:上|前)?|到校后?|来校时?)\s*)?'
+                         r'(?:请\s*)?(?:(?:孩子|学生|同学们?)\s*)?(?:(?:要|需|须|记得|务必)\s*)?(?:带(?:上|好|齐|来)?|携带)(?![回到去领着读])\s*(\S[^，,]*)',part)
+    thing=re.sub(r'\s','',carried[1]) if carried else ''
+    return bool(thing) and not any(thing[i:i+2] in own for own in owned for i in range(max(len(thing)-1,1)))
+
+
 def _school_native_heading(text):
     """The same literal header/body boundary for requirement allocation and extra-outcome checks."""
     # A heading may share a date only when it names the following requirements.
@@ -4453,7 +4468,14 @@ def _school_native_blocks(text):
         elif pieces:
             if shared:raise AgentError('行动条件无法连续核对，完整原批次保留',code='school_action_coverage')
             # A later condition naming one earlier outcome (朗读录音上传…) belongs to it, not to the last outcome.
-            owner=_school_native_condition_owner(clause,pieces) or pieces[-1]
+            owner=_school_native_condition_owner(clause,pieces)
+            if not owner and _school_native_errand(clause,[text[p['start']:p['end']] for p in pieces]+[c for p in pieces for c in p.get('conditions',[])]):
+                # Without that proof a thing to bring that no outcome names is no condition of the last one: it keeps its own
+                # segment, so later notes stay with it, and is never listed here; the reply returns it on its own, read by the
+                # existing checks for an outcome this ledger does not list (_school_native_unlocated).
+                pieces.append(dict(start=start,end=end,purpose='errand',primary=clause))
+                continue
+            owner=owner or pieces[-1]
             separated=crosses_example(owner['start'],end)
             if separated and (_school_named_objects(clause)-_school_named_objects(owner['primary'])
                     or set(re.findall(_SCHOOL_NATIVE_SUBJECTS,clause))-set(re.findall(_SCHOOL_NATIVE_SUBJECTS,owner['primary']+'\n'+header))
@@ -4471,7 +4493,7 @@ def _school_native_blocks(text):
             preparation.append((start,end))
     if preparation and pieces:
         raise AgentError('准备资料尚未能归到唯一学校行动，完整原批次保留',code='school_action_coverage')
-    pieces=[part for part in pieces if part['purpose']!='reference']
+    pieces=[part for part in pieces if part['purpose'] not in ('reference','errand')]
     if any(count!=len(pieces) for count,_ in shared):
         raise AgentError('共同标准的项数与独立行动不一致，完整原批次保留',code='school_action_coverage')
     # A stated total is an extra consistency check, never a prerequisite.
@@ -5053,6 +5075,10 @@ def _school_native_dates(action):
     if roles and roles[0]<=dates<=roles[0]|{roles[1]}:dates={roles[1]}
     # A school arrangement in this outcome's own quote (明天早读抽查) is its day; a header date is never borrowed.
     if not dates:dates=_school_own_dates(action['quote'],published)
+    # Two own roles the generic reader sees no day of (今晚跟读…三遍，…，明早检查记录页) still date it by that one check/handback
+    # day, as the ordinary path reads the same words; separate conditions or common standards leave it as read.
+    if not dates and not action.get('conditions') and not action.get('shared_conditions') and (roles:=_school_native_roles(action)):
+        dates={roles[1]}
     for supplement in action.get('shared_supplements',[])+action['supplements']:
         dates.update(deadlines(supplement['goal'],sent_day(supplement['time'])))
     for change in action.get('changes',[]):
