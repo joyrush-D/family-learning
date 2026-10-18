@@ -491,3 +491,53 @@ test('school processing notice stays per child and status separates a running th
  assert.match(run({state:'running',failed_jobs:0,sources:[src('SYNTHETIC-A',2)]}).status,/本孩子还有 2 条学校消息尚未整理，原消息已保存；后台正在整理。/);
  c.sourceCoverageHTML=()=>'<div data-synthetic-coverage></div>';assert.match(run({enabled:false,state:'disabled',failed_jobs:0,sources:[src('SYNTHETIC-A',2)]}).status,/后台整理尚未启用。/);
 });
+
+test('a school review the model read as ready shows only the program gap on the shared card',()=>{
+ // Minimal fields of the saved fictional math item: the model's own explanation restates the five listed requirements.
+ const h=harness(),core=readFileSync(__dirname+'/app.js','utf8'),refs=['message:qa-ordinary-mixed-day-01:101','message:qa-ordinary-mixed-day-01:102'];
+ const goal='完成《平均分练习单》第1、2题。\n答案直接写在练习单上。\n第2题要画出分组过程，不用抄题。\n第3题不用做。\n明天交给数学课代表。';
+ const why='老师明确要求全班完成练习单第1、2题并明天交给数学课代表，补充消息进一步说明第2题画分组过程、不用抄题、第3题不用做。',cover=' 同一老师的关联消息或附件尚未核实，是否改变本项待核对；原文要求保留。';
+ const receipt={advice:'可先让孩子口述第2题的分组思路，再动笔画在练习单上。',change:'new',goal,purpose:'learning',reason:why,state:'ready',submission:'明天交给数学课代表',target_id:'',title:'数学：完成《平均分练习单》第1、2题'};
+ const math={id:'agent-dbeed3e0c7a71efb7f98e2f71f3484ae',child_id:'child-a',kind:'school',state:'pending',title:receipt.title,body:goal,due:'2026-10-23',task_id:'',
+  evidence:[{ref:refs[0],text:'晴川三年级五班（纯虚构） · 2026-10-22T16:05:00+08:00\n数学：今天完成《平均分练习单》第1、2题，把答案直接写在练习单上。明天交给数学课代表。'},{ref:refs[1],text:'晴川三年级五班（纯虚构） · 2026-10-22T16:06:00+08:00\n补上刚才的练习单。第2题要画出分组过程，不用抄题。第3题不用做。'}],
+  plan:{school_native_cover:{id:'native:9fd59d86a61751038898d23f',linked:[refs[1]],quote:'今天完成《平均分练习单》第1、2题，把答案直接写在练习单上。明天交给数学课代表'},school_selection_receipt:receipt,school_selection_revision:2,
+   school_task:{...receipt,origin_basis:{},policy:10,reason:why+cover,state:'review'}}};
+ const saved=clean(math),agenda={category:'homework',published_on:'2026-10-22',complete_on:'2026-10-22',due_on:'2026-10-23'};
+ vm.runInContext(core.slice(core.indexOf('function requirementHTML('),core.indexOf('function taskFocus(')),h.ctx);vm.runInContext(core.slice(core.indexOf('function agentItemHTML'),core.indexOf('function agentChildHTML')),h.ctx);
+ Object.assign(h.ctx,{esc:escape,schoolOriginalButtons:xs=>xs.map(x=>`<button data-school-original-ref="${escape(x)}">原通知与原件</button>`).join('')});h.ctx.data.agent={items:[math]};
+ const split=html=>{const at=html.indexOf('<details class="task-reference task-more">');assert.ok(at>0,'the existing details remain');return [html.slice(0,at),html.slice(at)]};
+ const gapText=main=>{const m=main.match(/data-school-review-gap>([^<]*)</g)||[];assert.equal(m.length,1,'exactly one gap on the card');return m[0].replace(/^data-school-review-gap>|<$/g,'')};
+ const card=html=>{const [main,more]=split(html);return {main,more,gap:gapText(main)}};
+ // Today, the full list and the agent page share one compact card.
+ const pending={id:math.id,kind:'school',child_ids:['child-a'],title:math.title,agenda};
+ for(const [label,html] of [['today',h.ctx.taskGroupsHTML([pending],'今日作业')],['list',h.ctx.taskGroupsHTML([pending],'所有作业')],['agent page',h.ctx.agentItemHTML(math,{compact:true,agenda})]]){
+  const {main,more,gap}=card(html);
+  assert.equal(gap,'待补充：'+escape(cover.trim()),label+': the unverified linked material is the visible gap');
+  assert.ok(!main.includes(escape(why))&&!main.includes('补充消息进一步说明'),label+': the listed requirements are not restated');
+  assert.deepEqual([...main.matchAll(/<li>([^<]*)<\/li>/g)].map(x=>x[1]),goal.split('\n').map(escape),label+': all five requirements stay one per row');
+  assert.match(main,/发布：2026-10-22/,label);assert.match(main,/2026-10-23/,label);
+  for(const ref of refs){assert.ok(main.includes('data-school-original-ref="'+escape(ref)+'"'),label+': both originals reachable');assert.ok(more.includes(escape(ref)),label)}
+  assert.ok(more.includes(escape(why+cover)),label+': the complete saved reason stays in the existing details');
+  assert.match(main,/有信息待补充/,label);assert.match(main,/>补充缺失信息</,label);assert.doesNotMatch(html,/type="checkbox"|data-check|>加入事项</,label+' remains a review, never a task');
+ }
+ assert.deepEqual(clean(math),saved,'rendering never rewrites the saved record');assert.equal(h.ctx.data.tasks.length,0);
+ // Anything not proven to be the model's own ready explanation followed by program checks keeps its complete wording.
+ const variant=(task,extra={})=>({...math,plan:{...math.plan,...extra,school_task:{...math.plan.school_task,...task}}});
+ const late=' 原截止日期已过，请核对是否已处理或仍需补办；不推定完成或安排今天补做。',fix=' 更正涉及另一日期，原日期与更正日期待核对；未自动改期。';
+ for(const [label,item,shown] of [
+  ['unknown legacy reason',variant({},{school_selection_receipt:undefined}),why+cover],
+  ['model already doubted',variant({},{school_selection_receipt:{...receipt,state:'review'}}),why+cover],
+  ['truncated explanation',variant({reason:why.slice(0,20)+cover}),why.slice(0,20)+cover],
+  ['changed goal',variant({goal:goal+'\n另附说明。'}),why+cover],
+  ['no program check',variant({reason:why}),why],
+  ['joined without a separate check',variant({reason:why+'另有说明。'}),why+'另有说明。']]){
+  const {more,gap}=card(h.ctx.agentItemHTML(item,{compact:true,agenda}));
+  assert.equal(gap,'待补充：'+escape(shown),label+' keeps the whole reason on the card');assert.ok(!more.includes(escape(shown)),label+' is not repeated in the details');
+ }
+ for(const [label,suffix] of [['past date',late+cover],['correction',fix+cover],['date only',late]]){
+  const {main,more,gap}=card(h.ctx.agentItemHTML(variant({reason:why+suffix}),{compact:true,agenda}));
+  assert.equal(gap,'待补充：'+escape(suffix.trim()),label+': every program check stays visible');assert.ok(!main.includes(escape(why)),label);assert.ok(more.includes(escape(why+suffix)),label);
+ }
+ const unsafe='<b>老师</b>要求\n照原单作答',check=' <img src=x onerror=alert(1)>关联原件待核对。',escaped=h.ctx.agentItemHTML(variant({reason:unsafe+check},{school_selection_receipt:{...receipt,reason:unsafe}}),{compact:true,agenda});
+ assert.doesNotMatch(escaped,/<b>|<img/);const {gap,more}=card(escaped);assert.equal(gap,'待补充：'+escape(check.trim()));assert.ok(more.includes(escape(unsafe+check)));
+});
