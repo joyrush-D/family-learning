@@ -558,6 +558,7 @@ def _school_focus(c,task,proposal,plan):
 def enrich(app,c,tasks):
     owners={p['name']:p['id'] for p in app.profiles(c)}
     reported={r['task_id']:(r['child_id'],r['day'],r['report']) for r in c.execute('SELECT task_id,child_id,day,report FROM study_items WHERE id=task_id')} if c.execute("SELECT 1 FROM sqlite_master WHERE name='study_items'").fetchone() else {}
+    cited_by=None  # read once per enrich, only when a school item needs its siblings
     for task in tasks:
         refs=[x.strip() for x in task['source'].splitlines() if x.strip().startswith('message:')]
         focus=task.get('focus') or {}
@@ -575,10 +576,15 @@ def enrich(app,c,tasks):
                 date_header=_stored_date_header(plan,date_quote)
                 school_focus=_school_focus(c,task,proposal,plan)
                 # Every other live item of this child citing one of the same originals: its own words are never this item's role.
-                cited={e.get('ref') for e in json.loads(proposal['evidence'] or '[]') if isinstance(e,dict)}
-                date_siblings=[_stored_date_quote(json.loads(r['plan'])) for r in c.execute(
-                    "SELECT id,plan,evidence FROM agent_items WHERE kind='school' AND child_id=? AND id!=? AND state!='superseded'",(proposal['child_id'],proposal['id']))
-                    if cited & {e.get('ref') for e in json.loads(r['evidence'] or '[]') if isinstance(e,dict)}]
+                if cited_by is None:
+                    cited_by={}
+                    for r in c.execute("SELECT id,child_id,plan,evidence FROM agent_items WHERE kind='school' AND state!='superseded'"):
+                        for ref in {e.get('ref') for e in json.loads(r['evidence'] or '[]') if isinstance(e,dict)}:
+                            cited_by.setdefault((r['child_id'],ref),{})[r['id']]=_stored_date_quote(json.loads(r['plan']))
+                others={}
+                for e in json.loads(proposal['evidence'] or '[]'):
+                    if isinstance(e,dict):others.update(cited_by.get((proposal['child_id'],e.get('ref')),{}))
+                others.pop(proposal['id'],None);date_siblings=list(others.values())
         due=task['due'];teacher={}
         captured=reported.get(task['id'])
         if captured and captured[0]==owners.get(task['child']) and task['source'] in family_study.CAPTURE_SOURCES:
