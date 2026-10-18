@@ -2532,10 +2532,14 @@ def _school_list_heading_day(quote,cited,others=()):
 
 def _school_role_object(clause):
     """A role clause's own object: its words less days and clock times, 前, change words, its asker/actor and role verbs
-    (请家长10月22日前交回兴趣班回执 and 更正：兴趣班回执改为10月24日前交回 both name 兴趣班回执)."""
-    text=re.sub(_SCHOOL_ROLE_DAY+r'|\d{1,2}[:：]\d{2}|之前|以前|前|更正|改为|改到|改至|[\s：:，,。；;]','',clause)
+    (请家长10月22日前交回兴趣班回执 and 更正：兴趣班回执改为10月24日前交回 both name 兴趣班回执). A 《》 title is a whole name:
+    its own days and words stay (《10月18日课堂摘记》 is not 《10月20日课堂摘记》)."""
+    titles=re.findall(r'《[^《》]*》',clause);text=re.sub(r'《[^《》]*》','\0',clause)
+    text=re.sub(_SCHOOL_ROLE_DAY+r'|\d{1,2}[:：]\d{2}|之前|以前|前|更正|改为|改到|改至|[\s：:，,。；;]','',text)
     text=re.sub(r'^(?:请|让|由)?(?:各位|全体)?(?:家长|学生|孩子|同学们?)?(?:于|在)?','',text)
-    return re.sub(r'交回|上交|提交|交给?|检查|完成|签字','',text)
+    text=re.sub(r'交回|上交|提交|交给?|检查|完成|签字','',text)
+    for title in titles:text=text.replace('\0',title,1)
+    return text
 
 
 # A clause changing, cancelling, deferring or excusing an action (更正、改为、取消、延期、另行通知、不用交).
