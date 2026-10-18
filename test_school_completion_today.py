@@ -565,7 +565,7 @@ class Flash27ReadableCardTests(unittest.TestCase):
         for key, lines in FLASH27_CARD_LINES.items():
             with self.subTest(item=key):
                 task = tasks[ids[key]]
-                self.assertEqual(task['agenda']['action_lines'], lines)
+                self.assertEqual(task['action_lines'], lines)
                 self.assertEqual((task['title'], task['action'], task['due']), tuple(saved[ids[key]][k] for k in ('title', 'action', 'due')))
                 shown = [task['title']] + lines
                 self.assertEqual(len(shown), len(set(x.rstrip('。') for x in shown)), 'no condition repeated on one card')
@@ -576,11 +576,11 @@ class Flash27ReadableCardTests(unittest.TestCase):
                            'Unit 4': ('听录音跟读 Unit 4 A day at the lake 两遍', '读完请家长在记录本上签字', '今晚完成，明天早读检查记录本'),
                            '回执': ('《秋季校园开放日回执》今晚请家长签字', '明天早上让孩子交给班主任'),
                            '塑料瓶': ('明天来校带一个空透明塑料瓶，科学课用',)}.items():
-            card = '\n'.join([tasks[ids[key]]['title']] + tasks[ids[key]]['agenda']['action_lines'])
+            card = '\n'.join([tasks[ids[key]]['title']] + tasks[ids[key]]['action_lines'])
             for fact in facts:
                 self.assertIn(fact, card, (key, fact))
-        self.assertEqual(sum('第4题' in x for x in tasks[ids['数格']]['agenda']['action_lines']), 1, 'the 4th-question note stays its own line')
-        self.assertNotIn('今晚', '\n'.join(tasks[ids['塑料瓶']]['agenda']['action_lines']))
+        self.assertEqual(sum('第4题' in x for x in tasks[ids['数格']]['action_lines']), 1, 'the 4th-question note stays its own line')
+        self.assertNotIn('今晚', '\n'.join(tasks[ids['塑料瓶']]['action_lines']))
 
     def test_the_child_card_reads_the_same_projection_from_the_same_task(self):
         ids, saved = self.save_flash27()
@@ -598,6 +598,22 @@ class Flash27ReadableCardTests(unittest.TestCase):
                 self.assertEqual(row['source_task_action'], saved[ids[key]]['action'], 'the saved words are still read as they are')
                 self.assertEqual(row['source_task_action_lines'], FLASH27_CARD_LINES[key])
                 self.assertEqual((row['source_task_complete_on'], row['source_task_due']), ('2026-10-19', '2026-10-20'))
+
+
+class ActionLinesTests(unittest.TestCase):
+    def test_only_the_title_s_own_line_and_a_restated_handback_clause_are_left_out(self):
+        for title, action, shown in [
+                ('读三段并回答', '读三段并回答', []),
+                ('读三段并回答', '读三段并回答。\n每题写出依据，不少于20字\n提交要求：交纸质稿', ['每题写出依据，不少于20字', '提交要求：交纸质稿']),
+                ('写生词', '写生词10个，每个3遍；家长签字', ['写生词10个，每个3遍；家长签字']),
+                ('数学：完成同步练习第3课', '完成同步练习第3课，周四交\n提交要求：交同步练习第3课作业', ['完成同步练习第3课，周四交', '提交要求：交同步练习第3课作业']),
+                ('科学：带一个空透明塑料瓶', '明天来校带一个空透明塑料瓶，科学课用。', ['明天来校带一个空透明塑料瓶，科学课用。']),
+                ('英语：跟读Unit 4两遍并家长签字', '听录音跟读 Unit 4 A day at the lake 两遍。', ['听录音跟读 Unit 4 A day at the lake 两遍。']),
+                ('语文：A', '今晚完成，明天交。\n提交要求：明天交。', ['今晚完成，明天交。']),
+                ('语文：A', '今晚完成，不用明天交。\n提交要求：明天交练习册。', ['今晚完成，不用明天交。', '提交要求：明天交练习册。']),
+                ('语文：A', '提交要求：明天交练习册。', ['提交要求：明天交练习册。'])]:
+            with self.subTest(title=title, action=action):
+                self.assertEqual(family_agenda.action_lines(title, action), shown)
 
 
 def saved_flash27_state(path):

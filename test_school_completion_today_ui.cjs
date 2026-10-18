@@ -89,7 +89,7 @@ async function demoServer(){
    const p=await browser.newPage({viewport:{width,height:820}}),errors=[];
    p.on('pageerror',e=>errors.push(e.message));
    try{
-    await p.route('**/api/state',route=>route.fulfill({json:{...base,children:flash.children,sources:flash.sources,today:'2026-10-19',tasks:flash.tasks,records:flash.records,agent:{...base.agent,items:[]},today_calendar:flash.saved_calendar}}));
+    await p.route('**/api/state',route=>route.fulfill({json:{...base,children:flash.children,sources:flash.sources,today:'2026-10-19',tasks:flash.tasks,records:flash.records,agent:{...flash.agent,items:[]},today_calendar:flash.saved_calendar}}));
     for(const pass of ['open','reopen','list']){
      if(pass==='open')await p.goto(server.url,{waitUntil:'load'});else await p.reload({waitUntil:'load'});
      await eventually(async()=>await p.locator('body[data-page="home"] #task-group-homework').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','Flash27 Today ready');

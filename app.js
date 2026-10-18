@@ -120,10 +120,10 @@ function taskFocus(t){return t.focus||{mode:'next',next_action:'',waiting_for:''
 // Only the family's own entry sources count; a school message, an accepted school item or a free-text source keeps its publication check.
 function taskFamilyEntry(t){const source=String(t.source||'').trim();return !t.school_origin&&!(t.agenda?.publications||[]).length&&(['家长录入','家庭放学后录入','孩子自述功课，待家长核对','孩子自述功课，家长已核对要求'].includes(source)||/^学习目标:\S+$/.test(source))}
 function taskReviewDue(t){if(taskClosed(t))return false;const f=taskFocus(t);return f.mode!=='next'&&exactTaskDay(f.review_on)&&f.review_on<=data.today}
-// The card heading already shows the title: the shared read-only projection (agenda.action_lines) leaves out a first
+// The card heading already shows the title: the shared read-only projection (task.action_lines) leaves out a first
 // line in the title's own words and a 提交要求 that restates its previous line; any other wording, line or condition stays below it.
-function taskActionLines(t,goal){return Array.isArray(t.agenda?.action_lines)?t.agenda.action_lines:String(goal).trim()===String(t.title||'').trim()?[]:String(goal).split(/\r?\n/).map(x=>x.trim()).filter(Boolean)}
 function taskActionHTML(t,compact=false){const f=taskFocus(t),advice=f.next_action||t.advice||'',goal=t.action?.startsWith('请核对这条通知是否适用')?'':t.action,lines=goal?taskActionLines(t,goal):[];return `${!lines.length?goal?'':'<p class="task-needs-action">完成目标待明确</p>':compact?requirementHTML(lines):`<div class="task-goal"><span class="small muted">要做什么</span><p class="task-requirement">${esc(lines.join('\n'))}</p></div>`}${advice&&!compact?`<div class="task-next"><span>操作建议</span><p>${esc(advice)}</p></div>`:''}${f.mode==='waiting'?`<p class="task-waiting">等待：${esc(f.waiting_for)}${f.review_on?' · '+esc(f.review_on)+' 回看':''}</p>`:f.mode==='later'?`<p class="task-waiting">${f.review_on?'改天回看：'+esc(f.review_on):'以后再说 · 尚未约定回看日期'}</p>`:''}${taskReviewDue(t)?'<p class="task-review-due">到了回看日期，确认现在能否推进。</p>':''}`}
+function taskActionLines(t,goal){return Array.isArray(t.action_lines)?t.action_lines:String(goal).trim()===String(t.title||'').trim()?[]:String(goal).split(/\r?\n/).map(x=>x.trim()).filter(Boolean)}
 
 function taskHTML(t,options={}){
  const compact=options.compact===true,done=status(t)==='已完成',dismissed=taskClosed(t)&&!done,pending=pendingTask?.id===t.id,open=!taskClosed(t);

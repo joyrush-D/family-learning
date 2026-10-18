@@ -236,7 +236,7 @@ def _study(app, secret, action, obj):
     state=store.snapshot(child['id'],day) if action=='state' else getattr(store,'save_item' if action=='item' else 'action')(payload)
     fields=('id','day','title','subject','planned_minutes','elapsed_seconds','running_since','status','result','result_actor',
             'assistance','note','actual_minutes','time_source','time_needs_review','version',
-            'source_task_action','source_task_next_action','source_task_due','source_task_complete_on','source_task_handback_on')
+            'source_task_action','source_task_action_lines','source_task_next_action','source_task_due','source_task_complete_on','source_task_handback_on')
     items=[]
     for row in state['items']:
         item={key:row[key] for key in fields}
