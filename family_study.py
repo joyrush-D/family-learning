@@ -480,6 +480,10 @@ class Store:
                 missing = None if row['task_id'] else ''
                 row['source_task_action'] = task.get('action', '') if task else missing
                 row['source_task_due'] = task.get('due', '') if task else missing
+                # Teacher days come from the same agenda projection as Today; a parent plan/due or capture day is never one.
+                agenda = (task.get('agenda') or {}) if task else {}
+                row['source_task_complete_on'] = agenda.get('complete_on', '') if task else missing
+                row['source_task_handback_on'] = (agenda.get('due_on', '') if agenda.get('due_kind') == 'handback' else '') if task else missing
                 row['source_task_next_action'] = (task.get('focus') or {}).get('next_action', '') if task else missing
             used = {r['task_id'] for r in items}
             available = [dict(id=t['id'],title=t['title'],due=t['due'],status=self.app.task_status(t,updates.get(t['id'])))
