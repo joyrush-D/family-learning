@@ -5290,6 +5290,8 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             if linked_cited:
                 # Linked material stays on its existing original route; the outcome is still counted exactly once.
                 item['plan']['school_native_cover']=dict(id=native_action['id'],linked=linked_cited)
+                # Its own verified words still date it on the read-only agenda (its completion and handback roles).
+                item['plan']['school_date_quote']=native_action['quote']
                 # Already in review for another reason (several own days), it still names the unverified material.
                 if brief['state'] in ('ready','review'):
                     brief.update(state='review',reason=brief['reason'][:300]+' 同一老师的关联消息或附件尚未核实，是否改变本项待核对；原文要求保留。')
