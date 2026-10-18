@@ -709,7 +709,8 @@ OWNED_TIME_DAYS = {
     '《秋天的小院》': ('homework', '', '2026-10-21', 'deadline'),
     '观察植物': ('homework', '', '2026-10-21', 'deadline'),
     '第18页': ('homework', '', '2026-10-21', 'deadline'),
-    '第20页': ('homework', '2026-10-21', '2026-10-22', 'deadline'),
+    # Its 22nd is the teacher's 明天早读检查 (frozen CLARITY truth C01): an inspection, never a generic deadline or handback.
+    '第20页': ('homework', '2026-10-21', '2026-10-22', 'inspection'),
     '《秋游意见回执》': ('todo', '2026-10-21', '2026-10-22', 'deadline'),
     '家长会': ('todo', '', '2026-10-23', 'event'),
 }
@@ -971,7 +972,7 @@ class SavedOwnedTimeCopyTests(unittest.TestCase):
                     '英语：朗读课本第20页对话三遍': ('homework', '2026-10-21', '2026-10-22'),
                     '签字《秋游意见回执》并明早交班主任': ('todo', '2026-10-21', '2026-10-22')}
         self.assertEqual({t: (a['category'], a['complete_on'], a['due_on']) for t, a in listed.items()}, expected)
-        self.assertEqual(listed['英语：朗读课本第20页对话三遍']['due_kind'], 'deadline', 'the check day is no handback')
+        self.assertEqual(listed['英语：朗读课本第20页对话三遍']['due_kind'], 'inspection', 'the check day is the teacher check, no handback')
         today = [x['title'] for x in self.app.calendar_snapshot('2026-10-21', '2026-10-21')['agenda'] if x['task_id']]
         for title in expected:
             self.assertEqual(today.count(title), 1, title)
@@ -1192,6 +1193,57 @@ class OwnedEventAndCorrectionTests(unittest.TestCase):
         self.assertNotIn('取消本项', brief['reason'])
         self.assertEqual(bool(row['task_id']), row['state'] == 'accepted')
         self.assertFalse({'2026-10-23'} & {t['due'] for t in tasks.values()})
+
+
+CLEAR_EN_GOAL = '今晚将课本第20页的对话朗读三遍；请家长听完后在这一页签字；明天早读检查。'
+
+
+class ClearStandardsTests(unittest.TestCase):
+    """Frozen CLARITY truth C01 and its display guards: one English requirement read once, its 22nd shown as the check."""
+    setUp = native.SchoolNativeCoverageTests.setUp
+
+    def test_a_restated_line_every_clause_of_which_the_card_already_states_reads_once(self):
+        action = CLEAR_EN_GOAL + '\n提交要求：家长听完后在第20页签字，明天早读检查。'
+        self.assertEqual(family_agenda.action_lines('英语：朗读课本第20页对话三遍', action), [CLEAR_EN_GOAL])
+        for action in [
+                # Two pages: 这一页 has no single antecedent in its instruction.
+                '今晚朗读课本第20页和第21页的对话；请家长听完后在这一页签字；明天早读检查。\n提交要求：家长听完后在第20页签字，明天早读检查。',
+                # Another place on the same page is another signature (N02).
+                '完成第20页后，请家长在本页右上角签字，并在本页下方家长栏再签一次。\n提交要求：家长在第20页签字。',
+                # Another signed object (N01).
+                '今晚朗读课本第20页三遍，家长听完后在第20页签字。\n提交要求：请家长在《朗读活动确认单》上签字，明早交给老师。',
+                # A restated line with a requirement of its own.
+                CLEAR_EN_GOAL + '\n提交要求：家长听完后在第20页签字，明天早读检查，带回课本。']:
+            with self.subTest(action=action):
+                self.assertTrue(any(x.startswith('提交要求') for x in family_agenda.action_lines('英语：朗读', action)))
+
+    def test_only_the_item_s_own_check_words_make_its_day_a_check(self):
+        sent = '2026-10-21'
+        for quote, want in [
+                ('今晚将课本第20页的对话朗读三遍，请家长听完后在这一页签字，明天早读检查。', 'inspection'),
+                ('今晚朗读课本第20页，明早检查。', 'inspection'),
+                # N05: the receipt's own 22nd is its handback, never a check.
+                ('今晚请家长签好《活动回执》，由孩子明早交给班主任。', 'deadline'),
+                ('今晚完成练习册第3页，明天交，后天检查。', 'deadline'),
+                ('今晚完成练习册第3页并检查，明天交。', 'deadline')]:
+            with self.subTest(quote=quote):
+                self.assertEqual(family_agenda.date_meaning(quote, '2026-10-22', sent), want)
+
+    def test_the_saved_english_card_reads_once_with_its_check_day_for_parent_and_child(self):
+        ids, tasks, items, refs = OrdinaryOwnedTimeTests.save_day(self)
+        saved = tasks[ids['第20页']]
+        self.assertIn('\n提交要求：家长听完后在第20页签字，明天早读检查。', saved['action'], 'storage unchanged')
+        task = {t['id']: t for t in self.app.tasks()}[ids['第20页']]
+        self.assertEqual(task['action_lines'], [CLEAR_EN_GOAL])
+        self.assertEqual((task['action'], task['due']), (saved['action'], saved['due']))
+        self.assertEqual((task['agenda']['complete_on'], task['agenda']['due_on'], task['agenda']['due_kind']), ('2026-10-21', '2026-10-22', 'inspection'))
+        receipt = {t['id']: t for t in self.app.tasks()}[ids['《秋游意见回执》']]
+        self.assertEqual(receipt['agenda']['due_kind'], 'deadline', 'the receipt handback is no check')
+        study = family_study.Store(SimpleNamespace(**vars(self.app)))
+        study.save_item(dict(child_id=self.source['child_id'], day='2026-10-21', request_key='clear-standards-en' + 'x' * 16,
+                             version=0, task_id=ids['第20页'], planned_minutes=15))
+        row = {r['task_id']: r for r in study.snapshot(self.source['child_id'], '2026-10-21')['items']}[ids['第20页']]
+        self.assertEqual((row['source_task_action'], row['source_task_action_lines']), (saved['action'], [CLEAR_EN_GOAL]))
 
 
 def saved_flash27_state(path):

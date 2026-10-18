@@ -30,6 +30,14 @@ test('new notices do not hide older or undated pending administrative requiremen
  assert.equal(h.ctx.todayTasksHTML(),html,'reopening retains the complete pending list');
  h.ctx.child='小岚';const sibling=h.ctx.todayTasksHTML();assert.match(sibling,/data-notice="sibling"/);assert.doesNotMatch(sibling,/data-notice="print-and-sign"|data-notice="activity-receipt"|data-notice="unknown-publication"/);
 });
+test('a teacher check day reads as the check; deadline, handback and event keep their own labels',()=>{
+ const h=harness(),m={published_at:'2026-10-21T16:10:00+08:00',published_on:'2026-10-21',complete_on:'2026-10-21',due_on:'2026-10-22',due_kind:'inspection'};
+ const html=h.ctx.agendaDateHTML(m,'2026-10-21');
+ assert.match(html,/今天完成：2026-10-21/);assert.match(html,/老师检查：2026-10-22/);assert.doesNotMatch(html,/(?:截止|交回)：2026-10-22/);assert.match(html,/发布：2026-10-21 16:10/);
+ assert.match(h.ctx.agendaDateHTML({...m,due_kind:'deadline'},'2026-10-21'),/截止：2026-10-22/);
+ assert.match(h.ctx.agendaDateHTML({...m,due_kind:'handback'},'2026-10-21'),/老师要求交回：2026-10-22/);
+ assert.match(h.ctx.agendaDateHTML({...m,due_kind:'event'},'2026-10-21'),/活动日期：2026-10-22/);
+});
 test('date navigation crosses month/year and leap day without local timezone shifts',()=>{
  const h=harness();assert.equal(h.ctx.calendarMonday('2027-01-01'),'2026-12-28');assert.equal(h.ctx.calendarAdd('2024-02-28',1),'2024-02-29');assert.equal(h.ctx.calendarAdd('2026-12-31',1),'2027-01-01');
  h.ctx.calendarNavigate('2027-01-03');assert.deepEqual(clean(h.ctx.calendarDays()),['2026-12-28','2026-12-29','2026-12-30','2026-12-31','2027-01-01','2027-01-02','2027-01-03']);
