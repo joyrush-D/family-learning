@@ -36,10 +36,10 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         self.model = self.stack.enter_context(patch.object(
             agent.family_llm, '_chat_json', side_effect=AssertionError('no real model transport')))
 
-    def _ingest(self, texts, publishers=None, orders=None):
+    def _ingest(self, texts, publishers=None, orders=None, sender='虚构英语老师'):
         publishers = publishers or ['synthetic-teacher-1'] * len(texts)
         payload = self.fixture.payload(cursor=str(10 + len(texts)))
-        common = dict(time=self.now.isoformat(), kind='text', sender='虚构英语老师',
+        common = dict(time=self.now.isoformat(), kind='text', sender=sender,
                       unread=False)
         payload['messages'] = [dict(common, id=str(11 + index), message_order=str(11 + index),
                                     sender_id=publisher, text=text)
@@ -654,6 +654,64 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         self.assertEqual((result['failed'], result['processed']), (0, 1))
         with self.store._db() as c:
             self.assertEqual([(r['state'], r['body']) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")], [('accepted', goal)])
+
+    def _named_material(self, book):
+        """Root's synthetic counterexample through run_once, _save, manual_tasks and app.tasks; the fixed reply is the correct one."""
+        text = '语文作业：阅读' + book + '，写三句话读后感，今晚完成。'
+        title, goal = '语文：阅读' + book, '阅读' + book + '，写三句话读后感，今晚完成。'
+        payload, refs = self._ingest([text], ['synthetic-chinese-teacher'], sender='虚构语文老师')
+        self._use_replies(payload, [dict(proposals=[dict(
+            title_quote='阅读' + book, focus='school', due='2026-10-05', evidence=[dict(ref=refs[0])], learning_subject='语文',
+            learning_goal_id='', task_title=title, task_goal=goal, task_advice='', task_state='ready',
+            task_reason='虚构固定回执，仅作程序验证。', task_change='new', task_target_id='', task_purpose='learning', task_submission='')])])
+        result = agent.run_once(self.app, self.now)
+
+        def saved():
+            with self.store._db() as c:
+                rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+                manual = [dict(r) for r in c.execute('SELECT * FROM manual_tasks')]
+                originals = [json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
+            with self.app.connect() as c:
+                tasks = [t for t in self.app.tasks(c) if t['id'] in {m['id'] for m in manual}]
+            return rows, manual, tasks, originals
+
+        rows, manual, tasks, originals = saved()
+        self.assertEqual((result['failed'], len(rows), len(manual), len(tasks)), (0, 1, 1, 1), 'one outcome, one saved task')
+        plan = json.loads(rows[0]['plan'])
+        self.assertEqual(plan['school_learning']['subject'], '语文')
+        self.assertEqual(plan['school_task']['purpose'], 'learning')
+        self.assertEqual((rows[0]['state'], rows[0]['due'], rows[0]['task_id']), ('accepted', '2026-10-05', manual[0]['id']))
+        # The saved card, its main-list task and its learning link name one subject; the book keeps its own words.
+        self.assertEqual((rows[0]['title'], manual[0]['title'], tasks[0]['title']), (title, title, title))
+        self.assertEqual(tasks[0]['title'].split('：', 1)[0], plan['school_learning']['subject'])
+        for words in (book, '三句话', '读后感', '今晚'):
+            self.assertIn(words, manual[0]['action'])
+        self.assertEqual([e['ref'] for e in json.loads(rows[0]['evidence'])], refs)
+        self.assertEqual(originals, payload['messages'], 'the original stays unchanged')
+        self.assertEqual((originals[0]['sender_id'], originals[0]['text']), ('synthetic-chinese-teacher', text))
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['failed'], replay['processed'], replay['created']), (0, 0, 0))
+        self.assertEqual(saved(), (rows, manual, tasks, originals), 'reopen keeps the same card without a duplicate')
+        self.assertEqual(self.model.call_count, 1)
+
+    def test_a_subject_word_inside_a_closed_book_title_is_never_the_saved_subject(self):
+        # 《数学家的故事》 is the 语文 reading's material, not a 数学 outcome; 《小河边的故事》 is the unchanged control.
+        for book in ('《数学家的故事》', '《小河边的故事》'):
+            with self.subTest(book=book):
+                case = type(self)(methodName='runTest')
+                case.setUp()
+                try:case._named_material(book)
+                finally:case.doCleanups()
+
+    def test_native_subject_ignores_closed_titles_but_keeps_an_explicit_subject_outside_them(self):
+        actions = lambda text:[(a['subject'], a['primary']) for a in agent._school_native_actions([dict(
+            ref='message:s:1', text=text, kind='text', publisher='synthetic-teacher-1', time='2026-10-05T08:00:00+08:00')])]
+        # Two outcomes each naming their own subject outside titles keep them; a title's subject word never decides.
+        self.assertEqual(actions('今晚两项作业：1. 语文：阅读《数学家的故事》并写三句话读后感；2. 数学：完成练习册第18页。'),
+                         [('语文', '语文：阅读《数学家的故事》并写三句话读后感'), ('数学', '数学：完成练习册第18页')])
+        # Without any subject outside a title, a closed book name supplies none; an explicit one outside it stays.
+        self.assertEqual(agent._school_native_subjects('阅读《数学家的故事》，写三句话读后感'), set())
+        self.assertEqual(agent._school_native_subjects('数学：完成《语文园地》旁的练习'), {'数学'})
 
     def test_a_faithful_paraphrase_of_every_requirement_saves_on_its_first_receipt(self):
         self._clause_saved('科学：制作《发芽观察卡》并录一段30秒讲解，2026年11月6日交回。', '制作发芽观察卡，再录30秒的讲解，2026年11月6日前交回。',
