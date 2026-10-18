@@ -14,6 +14,13 @@ import family_agent as agent
 import family_task_focus
 import test_school_native_coverage as native
 
+
+# The fictional unseen mixed day (HANDOFF unseen-mixed-school-day-20261019-v1): its 7 originals and the actual Flash27
+# reply, both unchanged; the reply cites the originals by their own source and message IDs.
+FLASH27_SOURCE = 'synthetic-unseen-daygroup-20261019'
+FLASH27_MESSAGES = json.loads('[{"id": "31", "kind": "text", "message_order": "31", "sender": "虚构语文许老师", "sender_id": "synthetic-unseen-cn-xu", "text": "今天语文作业：《星芽阅读练习册》第28页第1、2题，答案写在练习册上。今晚完成，明天早上交。", "time": "2026-10-19T16:08:00+08:00", "unread": false}, {"id": "32", "kind": "text", "message_order": "32", "sender": "虚构数学魏老师", "sender_id": "synthetic-unseen-math-wei", "text": "数学作业是《数格练习册》第34页第1—4题，今晚完成，明天早上交。", "time": "2026-10-19T16:12:00+08:00", "unread": false}, {"id": "33", "kind": "text", "message_order": "33", "sender": "虚构数学魏老师", "sender_id": "synthetic-unseen-math-wei", "text": "补充一下，第34页第4题要把计算过程写完整，写在原题下面即可。", "time": "2026-10-19T16:13:00+08:00", "unread": false}, {"id": "34", "kind": "text", "message_order": "34", "sender": "虚构英语乔老师", "sender_id": "synthetic-unseen-en-qiao", "text": "英语：听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在记录本上签字。今晚完成，明天早读检查记录本。", "time": "2026-10-19T16:22:00+08:00", "unread": false}, {"id": "35", "kind": "text", "message_order": "35", "sender": "虚构班主任温老师", "sender_id": "synthetic-unseen-head-wen", "text": "《秋季校园开放日回执》今晚请家长签字，明天早上让孩子交给班主任。另外，明天来校带一个空透明塑料瓶，科学课用。", "time": "2026-10-19T17:10:00+08:00", "unread": false}, {"id": "36", "kind": "text", "message_order": "36", "sender": "虚构科学唐老师", "sender_id": "synthetic-unseen-science-tang", "text": "今天科学课学完了“水的三种状态”，课堂演示也结束了。这是本周的课程进度，供家长了解。", "time": "2026-10-19T17:35:00+08:00", "unread": false}, {"id": "37", "kind": "text", "message_order": "37", "sender": "虚构予澄家长", "sender_id": "synthetic-unseen-parent-yucheng", "text": "收到，谢谢老师。", "time": "2026-10-19T17:42:00+08:00", "unread": false}]')
+FLASH27_REPLY = json.loads('{"proposals": [{"title_quote": "今天语文作业：《星芽阅读练习册》第28页第1、2题，答案写在练习册上。", "focus": "school", "due": "2026-10-20", "evidence": [{"ref": "message:synthetic-unseen-daygroup-20261019:31"}], "task_title": "语文：完成《星芽阅读练习册》第28页第1、2题", "task_goal": "完成《星芽阅读练习册》第28页第1、2题。\\n答案写在练习册上。\\n今晚完成，明天早上交。", "task_advice": "可先读题再作答，完成后自查是否两题都已写在练习册上。", "learning_subject": "语文", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "ready", "task_reason": "已读文字明确要求完成练习册第28页第1、2题，答案写在练习册上，今晚完成、明天早上交。", "task_purpose": "learning", "task_submission": "明天早上交练习册。"}, {"title_quote": "数学作业是《数格练习册》第34页第1—4题，今晚完成，明天早上交。", "focus": "school", "due": "2026-10-20", "evidence": [{"ref": "message:synthetic-unseen-daygroup-20261019:32"}, {"ref": "message:synthetic-unseen-daygroup-20261019:33"}], "task_title": "数学：完成《数格练习册》第34页第1—4题", "task_goal": "完成《数格练习册》第34页第1—4题。\\n第34页第4题要把计算过程写完整，写在原题下面即可。\\n今晚完成，明天早上交。", "task_advice": "可先完成第1—3题，再重点检查第4题计算过程是否写完整。", "learning_subject": "数学", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "ready", "task_reason": "已读文字明确要求完成练习册第34页第1—4题，并补充第4题写完整计算过程，今晚完成、明天早上交。", "task_purpose": "learning", "task_submission": "明天早上交练习册。"}, {"title_quote": "英语：听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在记录本上签字。", "focus": "school", "due": "2026-10-20", "evidence": [{"ref": "message:synthetic-unseen-daygroup-20261019:34"}], "task_title": "英语：跟读Unit 4两遍并家长签字", "task_goal": "听录音跟读 Unit 4 A day at the lake 两遍。\\n读完请家长在记录本上签字。\\n今晚完成，明天早读检查记录本。", "task_advice": "可跟读时注意模仿录音语音语调，读完后请家长及时签字。", "learning_subject": "英语", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "ready", "task_reason": "已读文字明确要求听录音跟读Unit 4两遍，家长在记录本上签字，今晚完成、明天早读检查记录本。", "task_purpose": "learning", "task_submission": "明天早读检查记录本。"}, {"title_quote": "《秋季校园开放日回执》今晚请家长签字，明天早上让孩子交给班主任。", "focus": "school", "due": "2026-10-20", "evidence": [{"ref": "message:synthetic-unseen-daygroup-20261019:35"}], "task_title": "交《秋季校园开放日回执》", "task_goal": "《秋季校园开放日回执》今晚请家长签字。\\n明天早上让孩子交给班主任。", "task_advice": "可今晚请家长签字后，明早提醒孩子带回学校交给班主任。", "learning_subject": "", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "ready", "task_reason": "已读文字明确要求家长今晚签字，明天早上让孩子把回执交给班主任。", "task_purpose": "admin", "task_submission": "明天早上交给班主任。"}, {"title_quote": "明天来校带一个空透明塑料瓶，科学课用。", "focus": "school", "due": "2026-10-20", "evidence": [{"ref": "message:synthetic-unseen-daygroup-20261019:35"}], "task_title": "科学：带一个空透明塑料瓶", "task_goal": "明天来校带一个空透明塑料瓶，科学课用。", "task_advice": "可今晚把空透明塑料瓶放进书包，避免明早遗忘。", "learning_subject": "", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "ready", "task_reason": "已读文字明确要求明天来校带一个空透明塑料瓶，科学课用。", "task_purpose": "admin", "task_submission": ""}, {"title_quote": "今天科学课学完了“水的三种状态”，课堂演示也结束了。这是本周的课程进度，供家长了解。", "focus": "school", "due": "", "evidence": [{"ref": "message:synthetic-unseen-daygroup-20261019:36"}], "task_title": "", "task_goal": "", "task_advice": "", "learning_subject": "", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "reference", "task_reason": "该消息仅为本周课程进度说明，供家长了解，没有新增行动要求。", "task_purpose": "optional", "task_submission": ""}]}')
+
 MESSAGES = [  # (time, publisher, sender, text, related)
     ('2026-10-07T19:00:00+08:00', 'synthetic-chinese', '示例语文老师',
      '今天语文作业：1. 背诵《秋夜》第2自然段，明天早读抽查；2. 完成练习册第12页第1-5题，本周五交。', (6,)),
@@ -456,6 +463,67 @@ class ConfirmedSchoolHandbackCorrectionTests(unittest.TestCase):
                     self.setUp()
                 agenda = self._parent_note_after_a_duplicate_append(use_duplicate_key)
                 self.assertEqual((agenda['complete_on'], agenda['due_on']), ('', '2026-10-21'), 'a parent next_action save is no school-change write')
+
+
+class Flash27OwnRoleDaysTodayTests(unittest.TestCase):
+    """The ordinary normal path for the fictional day: tonight's own work is listed on its own day, apart from its handback/check."""
+    setUp = native.SchoolNativeCoverageTests.setUp
+
+    def _listed(self, day):
+        calendar = self.app.calendar_snapshot(day, day)
+        return {x['task_id']: x for x in calendar['inbox'] if x['task_id'] and self.source['child_id'] in x['child_ids']}
+
+    def test_flash27_tonight_work_is_on_its_sending_day_and_its_handback_or_check_day_stays_its_own(self):
+        self.now = self.fixture.now = dt.datetime(2026, 10, 19, 20, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='37')
+        payload['messages'] = copy.deepcopy(FLASH27_MESSAGES)
+        self.store.ingest(payload)
+        reply = json.loads(json.dumps(FLASH27_REPLY, ensure_ascii=False).replace('message:' + FLASH27_SOURCE + ':', 'message:' + self.source['id'] + ':'))
+        self.model.side_effect = lambda *args, **kwargs: copy.deepcopy(reply)
+        first = agent.run_once(self.app, self.now)
+        self.assertEqual((first['failed'], first['processed']), (0, 6), first)
+        self.assertEqual(self.model.call_count, 1)
+        with self.store._db() as c:
+            tasks = {r['id']: dict(r) for r in c.execute('SELECT * FROM manual_tasks')}
+        named = {key: [t for t in tasks.values() if key in t['title']] for key in ('星芽', '数格', 'Unit 4', '回执', '塑料瓶')}
+        for key, found in named.items():
+            self.assertEqual(len(found), 1, (key, [t['title'] for t in tasks.values()]))
+        ids = {key: found[0]['id'] for key, found in named.items()}
+        self.assertFalse(any('水的三种状态' in t['title'] + t['action'] for t in tasks.values()), 'course progress is no task')
+        # (own completion day, own handback/check day, category): tonight 19th and tomorrow 20th are each the item's own role.
+        expected = {'星芽': ('2026-10-19', '2026-10-20', 'homework'), '数格': ('2026-10-19', '2026-10-20', 'homework'),
+                    'Unit 4': ('2026-10-19', '2026-10-20', 'homework'), '回执': ('2026-10-19', '2026-10-20', 'todo'),
+                    '塑料瓶': ('', '2026-10-20', 'todo')}
+
+        def check(day_listed):
+            for key, (complete, due, category) in expected.items():
+                with self.subTest(item=key):
+                    agenda = day_listed[ids[key]]['agenda']
+                    self.assertEqual((agenda['complete_on'], agenda['due_on'], agenda['category']), (complete, due, category))
+                    self.assertNotEqual(agenda['due_kind'], 'handback', 'a check day is not rewritten as a handback')
+        check(self._listed('2026-10-19'))
+        today = [x['task_id'] for x in self.app.calendar_snapshot('2026-10-19', '2026-10-19')['agenda'] if x['task_id']]
+        for key in ('星芽', '数格', 'Unit 4'):
+            self.assertEqual(today.count(ids[key]), 1, (key, 'tonight\'s own work is on the 19th, counted once'))
+        english = tasks[ids['Unit 4']]
+        self.assertIn('明天早读检查记录本', english['action'])
+        self.assertNotIn('交', english['title'], 'checking the record book is not handing it in')
+        bottle = tasks[ids['塑料瓶']]
+        self.assertNotIn('今晚', bottle['action'], 'the bottle never borrows the receipt\'s tonight')
+        self.assertEqual({t['due'] for t in tasks.values()}, {'2026-10-20'}, 'each task keeps its own handback/check due')
+
+        # The next round reads the parent's thanks alone: no model, no task; reopening keeps the same IDs and roles.
+        second = agent.run_once(self.app, self.now + dt.timedelta(minutes=6))
+        self.assertEqual((second['failed'], second['created']), (0, 0), second)
+        self.assertEqual(self.model.call_count, 1)
+        with self.store._db() as c:
+            self.assertEqual({r['id'] for r in c.execute('SELECT id FROM manual_tasks')}, set(tasks))
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_messages').fetchone()[0], 7, 'all 7 originals stay')
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_messages WHERE processed=1').fetchone()[0], 7)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0], 0)
+        agent.Store(self.app.connect, self.app.profiles, self.app.DATA, initialize=False)
+        check(self._listed('2026-10-19'))
+        check(self._listed('2026-10-20'))
 
 
 if __name__ == '__main__':
