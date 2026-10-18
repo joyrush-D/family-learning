@@ -2819,6 +2819,80 @@ class SchoolActionPurposeTests(unittest.TestCase):
                                     evidence=evidence, separate_learning=True)
         self.assertEqual(brief['state'], 'review')
 
+    # Root's frozen fictional 104 (a program counterexample, not a model result): the parent reads an administrative agreement
+    # and signs its guardian field, the child only hands it back. The 15-field correct fixed reply is kept unchanged.
+    P104_TEXT = '请家长今天阅读孩子带回的《图书借阅约定》，在末页“监护人”栏签字。孩子明天交给班主任。'
+    P104_RAW = dict(title_quote='请家长今天阅读孩子带回的《图书借阅约定》，在末页“监护人”栏签字。孩子明天交给班主任', focus='school',
+                    due='2026-10-23', evidence=[0], learning_subject='', learning_goal_id='', task_title='《图书借阅约定》家长阅读并签字',
+                    task_goal=P104_TEXT, task_advice='', task_change='new', task_target_id='', task_state='ready',
+                    task_reason='独立冻结的纯虚构程序验证固定回复，不是实际模型产物。', task_purpose='admin', task_submission='')
+    READ_ALOUD_TEXT = '英语：今晚朗读课本第20页三遍，请家长听完后在这一页签字。'
+
+    def test_a_parent_reading_what_the_parent_signs_saves_as_a_todo_beside_the_same_batch_learning(self):
+        self.fixture.now = self.now = dt.datetime(2026, 10, 22, 16, 30, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='105')
+        payload['messages'] = [
+            dict(id='104', message_order='104', time='2026-10-22T16:20:00+08:00', kind='text', sender='蒋老师（虚构）',
+                 sender_id='qa-teacher-head-jiang', text=self.P104_TEXT, unread=False),
+            dict(id='105', message_order='105', time='2026-10-22T16:22:00+08:00', kind='text', sender='虚构英语老师',
+                 sender_id='synthetic-english-teacher', text=self.READ_ALOUD_TEXT, unread=False)]
+        self.store.ingest(payload)
+        refs = ['message:' + self.source['id'] + ':' + m['id'] for m in payload['messages']]
+        reading = fixtures.school_proposal(
+            title_quote='今晚朗读课本第20页三遍，请家长听完后在这一页签字', due='2026-10-22', evidence=[dict(ref=refs[1])],
+            learning_subject='英语', task_title='英语：朗读课本第20页三遍', task_goal='今晚朗读课本第20页三遍，请家长听完后在这一页签字。',
+            task_state='ready', task_reason='虚构回执。', task_purpose='learning')
+        self._use_replies(payload, [dict(proposals=[dict(copy.deepcopy(self.P104_RAW), evidence=[dict(ref=refs[0])]), reading])])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 2), 'the faithful admin reply finishes the batch')
+
+        def facts():
+            with self.store._db() as c:
+                rows = {json.loads(r['evidence'])[0]['ref']: dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")}
+                manual = [dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+                originals = [json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
+            with self.app.connect() as c:
+                tasks = {t['id']: t for t in self.app.tasks(c) if t['id'] in {m['id'] for m in manual}}
+            return rows, manual, tasks, originals
+
+        rows, manual, tasks, originals = first = facts()
+        self.assertEqual((sorted(rows), len(manual), len(tasks)), (sorted(refs), 2, 2))
+        notice, homework = rows[refs[0]], rows[refs[1]]
+        plan = json.loads(notice['plan']);brief = plan['school_task'];task = tasks[notice['task_id']]
+        self.assertEqual((notice['state'], notice['due'], brief['state'], brief['purpose'], plan.get('school_learning')),
+                         ('accepted', '2026-10-23', 'ready', 'admin', None), 'a parent reading and signing is an administrative to-do')
+        self.assertEqual((task['agenda']['category'], task['title']), ('todo', '《图书借阅约定》家长阅读并签字'))
+        for words in ('请家长今天阅读', '《图书借阅约定》', '末页“监护人”栏签字', '孩子明天交给班主任'):self.assertIn(words, task['action'])
+        self.assertEqual([e['ref'] for e in json.loads(notice['evidence'])], [refs[0]])
+        self.assertEqual(plan['school_selection_receipt']['purpose'], 'admin')
+        # The child's own reading aloud that a parent signs after listening stays the same batch's homework.
+        lesson = json.loads(homework['plan'])
+        self.assertEqual((homework['state'], lesson['school_task']['purpose'], lesson['school_learning']['subject'],
+                          tasks[homework['task_id']]['agenda']['category']), ('accepted', 'learning', '英语', 'homework'))
+        self.assertEqual(originals, payload['messages'], 'the complete originals stay unchanged')
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['failed'], replay['processed'], replay['created']), (0, 0, 0))
+        self.assertEqual(facts(), first, 'reopen and the next round keep both tasks without duplicates')
+        self.assertEqual(self.model.call_count, 1)
+
+    def test_who_reads_decides_a_reading_purpose_while_the_child_reading_stays_learning(self):
+        actions = lambda text:[a['purpose'] for a in agent._school_native_actions([dict(
+            ref='message:s:1', text=text, kind='text', publisher='synthetic-teacher-1', time='2026-10-22T16:20:00+08:00')])]
+        # A sole administrative outcome leaves the ledger to its existing guards; in a list it keeps its own purpose.
+        self.assertEqual(actions(self.P104_TEXT), [])
+        self.assertEqual(actions('请家长今天阅读孩子带回的《图书借阅约定》，在末页“监护人”栏签字；今晚朗读课文三遍，家长听完后签字。'),
+                         ['admin', 'learning'])
+        # The child reads, or the parent reads the child's own work: still learning.
+        self.assertEqual(actions('今晚阅读课文第3段，请家长听完后签字。'), ['learning'])
+        self.assertEqual(actions('请家长阅读孩子的作文并签字。'), ['learning'])
+        value = dict(title='', goal='', advice='', state='ready', reason='', purpose='admin')
+        for text, state in ((self.P104_TEXT, 'ready'), ('今晚阅读课文第3段，请家长听完后签字。', 'review'),
+                            ('请家长阅读孩子的作文并签字。', 'review'), ('请家长今天阅读《图书借阅约定》后，孩子朗读课文三遍。', 'review')):
+            with self.subTest(text=text):
+                evidence = [dict(ref='message:s:1', text=text, kind='text', unread=False)]
+                brief = agent._school_brief(dict(value, title='家长阅读并签字', goal=text), evidence=evidence, separate_learning=True)
+                self.assertEqual((brief['state'], brief['goal']), (state, text))
+
     # Known fictional TB02: the actual parsed Flash reply (configured effort none) on 632a778 was admin/ready/due 10-22 with
     # no subject, and so was a synthetic correct reply; only the program's guard read 听写/背诵/订正 inside the closed name
     # of the form the original itself has filled in. Both are fixed here as program controls.
