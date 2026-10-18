@@ -557,18 +557,39 @@ def _school_focus(c,task,proposal,plan):
 
 _TITLE_LABEL=re.compile(r'[^：:\s，,。；;、《》()（）]{1,8}[：:]\s*')
 _LINE_END='。.；;！!？? '
+_PAIRS={'《':'》','“':'”','‘':'’','「':'」','『':'』','（':'）','(':')','【':'】','[':']'}
+_SENTENCE_END='。！？'
+
+
+def _sentences(line):
+    """A saved line as its own sentences, each ending after a full-width 。！？ (a run of them stays together) outside
+    《》, quotes and brackets. A line with an unbalanced pair or an ASCII double quote stays whole; no word is changed."""
+    if '"' in line: return [line]
+    parts,closing,start=[],[],0
+    for i,ch in enumerate(line):
+        if ch in _PAIRS: closing.append(_PAIRS[ch])
+        elif ch in _PAIRS.values():
+            if not closing or closing.pop()!=ch: return [line]
+        elif ch in _SENTENCE_END and not closing and (i+1==len(line) or line[i+1] not in _SENTENCE_END):
+            parts.append(line[start:i+1].strip());start=i+1
+    if closing: return [line]
+    return [x for x in parts+[line[start:].strip()] if x]
 
 
 def action_lines(title,action):
     """The saved action's lines as a card under this title shows them; display only, nothing is saved or rewritten.
 
-    Only words the card would repeat are left out: a first line that is the title's own words (with or without its
-    leading label such as 语文：), and a 提交要求 line whose words begin with the previous line's last clause, which
-    then reads once in that line. Every other line stays whole, in its saved words and order; partial overlaps stay."""
-    lines=[x.strip() for x in str(action or '').splitlines() if x.strip()]
+    Each saved line reads as its own sentences. Only words the card would repeat are left out: a first sentence that is
+    the title's own words (with or without its leading label such as 语文：), else the title's exact label opening it,
+    and a 提交要求 line whose words begin with the previous line's last clause, which then reads once in that line.
+    Every other word stays, in its saved order; partial overlaps stay."""
+    lines=[x for line in str(action or '').splitlines() if line.strip() for x in _sentences(line.strip())]
     heading=str(title or '').strip().rstrip(_LINE_END);label=_TITLE_LABEL.match(heading)
     if lines and heading and lines[0].rstrip(_LINE_END) and lines[0].rstrip(_LINE_END) in (heading,heading[label.end():] if label else heading):
         lines=lines[1:]
+    elif lines and label:
+        own=heading[:label.end()].rstrip()  # the heading already shows this exact label (英语：)
+        if lines[0].startswith(own) and lines[0][len(own):].strip():lines[0]=lines[0][len(own):].strip()
     shown=[]
     for line in lines:
         restated=re.fullmatch(r'提交要求[：:]\s*(.+?)[。.；;！!\s]*',line)
