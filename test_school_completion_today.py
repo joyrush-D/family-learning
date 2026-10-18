@@ -238,8 +238,48 @@ class ExplicitOwnCompletionDayStoreTests(unittest.TestCase):
         self.assertIsNotNone(reopened)
         self.assertEqual([x['agenda']['complete_on'] for x in listed('2026-10-18')], ['2026-10-18'])
 
+    def test_saved_h01_card_reads_its_own_work_clock_before_the_same_work_words_and_the_saved_goal_stays(self):
+        _, task = self._save_h01()
+        with self.store._db() as c:
+            plan = json.loads(c.execute("SELECT plan FROM agent_items WHERE kind='school' AND state='accepted'").fetchone()[0])
+        # The frozen reply left 20:00 out of its goal; that saved goal and action stay exactly as written.
+        self.assertNotIn('20:00', task['action'])
+        self.assertNotIn('20:00', plan['school_task']['goal'])
+        with self.app.connect() as c:
+            [shown] = [t for t in self.app.tasks(c) if t['id'] == task['id']]
+        self.assertEqual((shown['action'], shown['due'], shown['agenda']['complete_on'], shown['agenda']['due_on']),
+                         (task['action'], '2026-10-20', '2026-10-18', '2026-10-20'))
+        lines = shown.get('action_lines') or []
+        self.assertTrue(lines and lines[0].startswith('2026年10月18日20:00前完成《秋日观察》第2页，摘录两句，每句写一句理由'), lines)
+        self.assertIn('2026年10月20日早读交回语文老师', '\n'.join(lines[1:]))
+        # The handback keeps no clock of its own, and the sending time is never one.
+        self.assertEqual(''.join(lines).count('20:00'), 1, lines)
+        self.assertNotIn('18:00', ''.join(lines))
+        # The child card reads the same projection under its own title.
+        self.assertEqual(family_agenda.action_lines(shown['title'], shown['action'], shown['agenda'].get('complete_words')), lines)
 
-H02 = ('2026-10-17T16:30:00Z', 'publisher:fictional-today-h02:teacher', '虚构英语教师',
+
+class OwnWorkClockTests(unittest.TestCase):
+    def test_only_a_clock_heading_the_own_proven_work_clause_is_shown_before_its_same_work_words(self):
+        sent = H01[0]
+        goal = '完成《秋日观察》第2页，摘录两句，每句写一句理由。\n2026年10月20日早读交回语文老师。'
+        cases = [
+            (H01_BODY, goal, '2026年10月18日20:00前'),
+            # A day without a clock, a clock inside a title or in the handback clause, a goal already holding it, no own day.
+            ('2026年10月18日前完成《秋日观察》第2页，摘录两句，每句写一句理由；2026年10月20日早读交回语文老师', goal, ''),
+            ('2026年10月18日前完成《20:00秋日观察》第2页，摘录两句；2026年10月20日早读交回语文老师', '完成《20:00秋日观察》第2页，摘录两句。', ''),
+            ('2026年10月18日前完成《秋日观察》第2页，摘录两句；2026年10月20日8:00前交回语文老师', '完成《秋日观察》第2页，摘录两句。', ''),
+            (H01_BODY, '2026年10月18日20:00前完成《秋日观察》第2页，摘录两句，每句写一句理由。', ''),
+            ('完成《秋日观察》第2页，摘录两句；2026年10月20日20:00前交回语文老师', '完成《秋日观察》第2页，摘录两句。', ''),
+        ]
+        for quote, action, lead in cases:
+            with self.subTest(quote=quote, action=action):
+                day = family_agenda.completion_day(quote, '语文', sent, '2026-10-20')
+                words = family_agenda.completion_words(quote, '语文', day, action)
+                self.assertEqual((words or {}).get('lead', ''), lead)
+
+
+H02 =('2026-10-17T16:30:00Z', 'publisher:fictional-today-h02:teacher', '虚构英语教师',
        '英语：今晚把Unit 5词表每个单词抄写两遍，明天交给英语老师。')
 H02_STANDARDS = ('Unit 5词表', '每个单词', '两遍', '交给英语老师')
 
