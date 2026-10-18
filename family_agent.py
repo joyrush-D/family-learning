@@ -222,6 +222,8 @@ def _school_learning_text(parts, originals=None):
     checked=[]
     for part in parts:
         text=_URL.sub('',part)
+        # Who reads decides: a parent's own reading of what the parent signs is no child learning activity.
+        for left,right in reversed(_school_parent_readings(text)):text=text[:left]+text[right:]
         def direct(match):
             prefix=text[:match.start()]
             # A punctuation boundary inside parentheses may still be in an
@@ -3985,6 +3987,11 @@ def _school_native_command(clause):
     compact=r'(?:Unit\s*[0-9]+[^。；;，,]{0,24}|《[^》]+》|课文)[^。；;，,]{0,12}(?:读|背)[一二两三四五六七八九十0-9]+遍'
     admin=r'(?:签署|签字|填写|填好|提交|交回|打印|盖章|完成|核对)[^：:。；;]{0,35}(?:回执|同意书|确认单|登记表|申请表|报名表|证明|安全承诺书)[^：:。；;]*'
     if re.match(admin,value):return 'admin'
+    # The addressed parent reading what the parent then signs is that signature's step: learning only if the clause still
+    # names the child's learning once that reading is set aside, otherwise the parent's administrative outcome.
+    if '家长' in lead and any(left==len(lead) for left,_ in _school_parent_readings(lead+value)):
+        rest=_school_learning_text([lead+value])
+        return 'learning' if _LEARNING_ACTIVITY.search(rest) or _LEARNING_ACTION.search(rest) else 'admin'
     if re.match(learning+'|'+exercise+'|'+object_first+'|'+compact,value):return 'learning'
     # A ba-phrase writing its own object to a short destination its own clause closes is one more outcome;
     # the destination is bounded by length and punctuation, not a word list. Answers, working, names, media,
@@ -4055,6 +4062,24 @@ def _school_signers(text):
     """The role signing or stamping in each part of a text: the last role named before 签/盖章 in its own comma part."""
     return {(_school_roles(part[:m.start()]) or [''])[-1] for part in re.findall(r'(?:《[^》]*》|[^，,。；;！!？?\n])+',text or '')
             for m in re.finditer(r'签|盖章',re.sub(r'《[^》]*》',lambda n:'_'*len(n[0]),part))}
+
+
+def _school_parent_readings(text):
+    """The spans of each 阅读 a parent does to sign it (请家长今天阅读…，在末页“监护人”栏签字): the parent's own step, no child outcome.
+
+    The reader is a parent word directly before 阅读 (only a date or 认真/仔细 between), outside closed names; later in the same
+    sentence every signature or stamp names the parent or no one; a child it names only carries or hands the material back
+    (孩子带回的…). A child's own reading, a parent reading the child's work (孩子的作文) or any other actor keeps the text as written.
+    """
+    spans=[];masked=re.sub(r'《[^》]*》',lambda m:'_'*len(m[0]),text or '')
+    for sentence in re.finditer(r'[^。；;！!？?\n]+',masked):
+        own=sentence[0]
+        if any(not re.match(r'\s*(?:'+_SCHOOL_NATIVE_WHEN+r')?(?:带(?:回|来|到|去)|拿回|上交|交)',own[m.end():])
+               for m in re.finditer(_SCHOOL_CLAUSE_ROLES['学生'],own)):continue
+        for m in re.finditer(r'(?:'+_SCHOOL_CLAUSE_ROLES['家长']+r')\s*(?:'+_SCHOOL_NATIVE_WHEN+r')?(?:认真|仔细)?\s*(阅读)',own):
+            signers=_school_signers(text[sentence.start()+m.start():sentence.end()])
+            if signers and signers<={'家长',''}:spans.append((sentence.start()+m.start(1),sentence.start()+m.end(1)))
+    return spans
 
 
 def _school_own_sentences(quote, text):
