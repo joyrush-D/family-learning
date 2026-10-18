@@ -4149,5 +4149,64 @@ class RecitationMethodObjectBoundaryTests(unittest.TestCase):
             with self.subTest(text=text):self.assertEqual(blocks(text), [(text.rstrip('。'), 'learning')])
 
 
+class RecitationMethodHeldoutTests(unittest.TestCase):
+    """Root's followup02 H01/H04 (pure fiction, REGRESSION.json frozen before execution): an affirmative manner or standard
+    (朗读时读准字音、朗读时声音清楚) is the standard of the outcome naming that activity, like a negated one. Each RAW is the
+    frozen fixed correct reply, not model output. Only the method allocation is asserted here; the frozen dates are not."""
+    setUp = SchoolNativeCoverageTests.setUp
+    _facts = OrdinaryMixedSchooldayTests._facts
+    H01 = dict(
+        source=dict(id='qa-method-heldout-h01', name='虚构晴屿三年级班群'),
+        message=dict(id='11', message_order='11', time='2026-10-28T16:10:00+08:00', kind='text', sender='范老师（虚构）', sender_id='qa-method-teacher-fan',
+                     text='语文：今晚朗读《晨光》两遍，明天早读检查；朗读时读准字音，不用录音。', unread=False),
+        raw=({'title_quote': '语文：今晚朗读《晨光》两遍，明天早读检查', 'focus': 'school', 'due': '2026-10-29', 'evidence': [{'ref': 'message:qa-method-heldout-h01:11'}], 'learning_subject': '语文', 'learning_goal_id': '', 'task_title': '语文：朗读《晨光》两遍', 'task_goal': '今晚朗读《晨光》两遍，明天早读检查；朗读时读准字音，不用录音。', 'task_advice': '', 'task_state': 'ready', 'task_reason': '虚构固定正确回复：按原文保留本项成果和对应方法要求。', 'task_change': 'new', 'task_target_id': '', 'task_purpose': 'learning', 'task_submission': ''},),
+        items=((('朗读《晨光》两遍', '明天早读检查', '朗读时读准字音', '不用录音'), ()),))
+    H04 = dict(
+        source=dict(id='qa-method-heldout-h04', name='虚构晴屿三年级班群'),
+        message=dict(id='11', message_order='11', time='2026-10-28T16:10:00+08:00', kind='text', sender='范老师（虚构）', sender_id='qa-method-teacher-fan',
+                     text='语文：今晚朗读《小船》全文，明天早读检查。朗读时声音清楚，不用录音。今晚背诵《山风》第一节，明天早读抽背。背诵时不看书，不用抄写。', unread=False),
+        raw=({'title_quote': '语文：今晚朗读《小船》全文，明天早读检查', 'focus': 'school', 'due': '2026-10-29', 'evidence': [{'ref': 'message:qa-method-heldout-h04:11'}], 'learning_subject': '语文', 'learning_goal_id': '', 'task_title': '语文：朗读《小船》全文', 'task_goal': '今晚朗读《小船》全文，明天早读检查。朗读时声音清楚，不用录音。', 'task_advice': '', 'task_state': 'ready', 'task_reason': '虚构固定正确回复：按原文保留本项成果和对应方法要求。', 'task_change': 'new', 'task_target_id': '', 'task_purpose': 'learning', 'task_submission': ''},
+             {'title_quote': '今晚背诵《山风》第一节，明天早读抽背', 'focus': 'school', 'due': '2026-10-29', 'evidence': [{'ref': 'message:qa-method-heldout-h04:11'}], 'learning_subject': '语文', 'learning_goal_id': '', 'task_title': '语文：背诵《山风》第一节', 'task_goal': '今晚背诵《山风》第一节，明天早读抽背。背诵时不看书，不用抄写。', 'task_advice': '', 'task_state': 'ready', 'task_reason': '虚构固定正确回复：按原文保留本项成果和对应方法要求。', 'task_change': 'new', 'task_target_id': '', 'task_purpose': 'learning', 'task_submission': ''}),
+        items=((('今晚朗读《小船》全文', '明天早读检查', '朗读时声音清楚', '不用录音'), ('《山风》', '背诵时不看书', '不用抄写')),
+               (('今晚背诵《山风》第一节', '明天早读抽背', '背诵时不看书', '不用抄写'), ('《小船》', '朗读时声音清楚', '不用录音'))))
+
+    def _run(self, case):
+        self.fixture.source.update(case['source']);self.fixture.config()
+        self.fixture.now = self.now = dt.datetime(2026, 10, 28, 16, 10, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='11')
+        payload['messages'] = [dict(case['message'])]
+        self.store.ingest(payload)
+        self.model.side_effect = lambda *args, **kwargs:dict(proposals=copy.deepcopy(list(case['raw'])))
+        return payload, agent.run_once(self.app, self.now)
+
+    def _assert_saved(self, case):
+        payload, result = self._run(case)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        with self.store._db() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY rowid")]
+        with self.app.connect() as c:
+            tasks = {t['id']: t for t in self.app.tasks(c)}
+        self.assertEqual([r['state'] for r in rows], ['accepted'] * len(case['items']))
+        self.assertEqual(len({r['task_id'] for r in rows} & set(tasks)), len(case['items']), 'one formal task per outcome')
+        briefs = [json.loads(r['plan'])['school_task'] for r in rows]
+        for brief, (required, forbidden) in zip(briefs, case['items']):
+            self.assertEqual(brief['purpose'], 'learning')
+            for words in required:self.assertIn(words, brief['goal'])
+            for words in forbidden:self.assertNotIn(words, brief['goal'])
+        self.assertEqual(self._facts()[3], payload['messages'], 'the complete original stays unchanged')
+
+    def test_h01_an_affirmative_manner_stays_the_reading_outcome_standard(self):
+        self._assert_saved(self.H01)
+
+    def test_h04_each_activity_keeps_its_own_affirmative_or_negated_manner(self):
+        self._assert_saved(self.H04)
+
+    def test_the_ledger_reads_each_manner_as_the_standard_of_the_outcome_naming_its_activity(self):
+        blocks = lambda text:[(a['quote'], a['purpose']) for a in agent._school_native_blocks(text)]
+        self.assertEqual(blocks(self.H01['message']['text']), [('今晚朗读《晨光》两遍，明天早读检查；朗读时读准字音，不用录音', 'learning')])
+        self.assertEqual(blocks(self.H04['message']['text']), [('今晚朗读《小船》全文，明天早读检查。朗读时声音清楚，不用录音', 'learning'),
+                                                              ('今晚背诵《山风》第一节，明天早读抽背。背诵时不看书，不用抄写', 'learning')])
+
+
 if __name__ == '__main__':
     unittest.main()
