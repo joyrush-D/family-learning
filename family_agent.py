@@ -2530,18 +2530,58 @@ def _school_list_heading_day(quote,cited,others=()):
     return published
 
 
+def _school_role_object(clause):
+    """A role clause's own object: its words less days and clock times, 前, change words, its asker/actor and role verbs
+    (请家长10月22日前交回兴趣班回执 and 更正：兴趣班回执改为10月24日前交回 both name 兴趣班回执)."""
+    text=re.sub(_SCHOOL_ROLE_DAY+r'|\d{1,2}[:：]\d{2}|之前|以前|前|更正|改为|改到|改至|[\s：:，,。；;]','',clause)
+    text=re.sub(r'^(?:请|让|由)?(?:各位|全体)?(?:家长|学生|孩子|同学们?)?(?:于|在)?','',text)
+    return re.sub(r'交回|上交|提交|交给?|检查|完成|签字','',text)
+
+
+# A clause changing, cancelling, deferring or excusing an action (更正、改为、取消、延期、另行通知、不用交).
+_SCHOOL_CHANGE=(r'改为|改到|改至|改成|更正|取消|撤销|撤回|推迟|延期|顺延|另行|待定|未定|暂停'
+                r'|(?:不用|不必|无需|无须|不需要?|不再)\s*(?:再)?\s*(?:交|提交|上交|交回|检查|签字)')
+
+
+def _school_others_settled(quote,cited):
+    """Whether no other cited original can move this item's own day.
+
+    Each of their clauses naming a day or a change either names none of this item's own role objects (another object's or
+    event's: 原定…的家长会取消、更正：作业本改为…), or is one teacher's explicit later correction of this item's own clause
+    that the own-clause reader applies (_school_corrected_quote) -- the later words correcting the quoted original, or the
+    quoted correction correcting the earlier original. Anything else (another teacher, an open date, a cancel or a
+    postponement of the same object), and an item without a role object to tell objects apart, keeps the day unknown.
+    """
+    from family_agenda import _titles_read_as_objects,deadlines,sent_day
+    homes=[e for e in cited if quote and quote in e['text']]
+    if len(homes)!=1:return False
+    home=homes[0]
+    objects={o for c in re.split(r'[，,。；;！!？?\n]',quote) if _school_clause_roles(c) and (o:=_school_role_object(c))}
+    for e in cited:
+        if e is home:continue
+        for clause in re.split(r'[。；;\n]',e['text']):
+            own=clause.strip()
+            if not re.search(_SCHOOL_ANY_DAY+'|'+_SCHOOL_CHANGE,_titles_read_as_objects(own)):continue
+            if objects and not any(o[-2:] in own for o in objects):continue
+            if objects and _school_corrected_quote(quote,home,[dict(e,text=own)])!=quote:continue
+            fixed=_school_corrected_quote(own,e,[home]) if objects else own
+            if fixed!=own and deadlines(fixed,sent_day(e.get('time','')))==deadlines(quote,sent_day(home.get('time',''))):continue
+            return False
+    return True
+
+
 def _school_own_due(quote,cited,others):
     """The due this item's own words prove when its reply gave none, or ''.
 
     Read from those words alone, by the readers that check a reply's day: its own handback/check day after its own
-    completion (_school_role_days), else the one day its own complete clause states, else the 今晚 its list heading
-    gives it. Another cited original naming any day (a later supplement, correction or another teacher's note) leaves
-    it unknown; the selection's borrowed, cancelled and summary guards still decide whether the day is kept.
+    completion (_school_role_days), else the one day its own complete clause states (with one teacher's explicit later
+    correction of that clause, _school_corrected_quote), else the 今晚 its list heading gives it. Any other cited
+    original that could move it (_school_others_settled) leaves it unknown; the selection's borrowed, cancelled and
+    summary guards still decide whether the day is kept.
     """
-    from family_agenda import _titles_read_as_objects,sent_day
+    from family_agenda import sent_day
     homes=[e for e in cited if quote and quote in e['text']]
-    if (len(homes)!=1 or len({sent_day(e.get('time','')) for e in cited})!=1
-            or any(re.search(_SCHOOL_ANY_DAY,_titles_read_as_objects(e['text'])) for e in cited if e is not homes[0])):return ''
+    if len(homes)!=1 or len({sent_day(e.get('time','')) for e in cited})!=1 or not _school_others_settled(quote,cited):return ''
     roles=_school_role_days(quote,cited,others)
     if roles:return roles[1]
     clause=_school_own_clause_dates(quote,cited,others)
@@ -2594,6 +2634,10 @@ def _school_corrected_quote(quote,home,cited):
                 titled=re.fullmatch(r'(《[^》]{1,40}》)(.+)',bare(new));holder=re.match(r'[^\d，,：:（(《]{2,}?(?=\s*(?:于|在)?\s*\d)',old.strip())
                 same=bare(old)==bare(new) or bool(titled and holder and titled[2]==bare(old)
                                                   and titled[1]+holder[0] in quote[:quote.find(old.strip())])
+                # The same named object in the same one role, whatever the word order (请家长10月22日前交回兴趣班回执 /
+                # 兴趣班回执改为10月24日前交回); another object, role or a second role in the clause is not this clause.
+                roles=_school_clause_roles(old)
+                same=same or bool(len(roles)==1 and roles==_school_clause_roles(new) and _school_role_object(old) and _school_role_object(old)==_school_role_object(new))
                 if old.strip() and same and deadlines(old,published) not in (set(),days):quote=quote.replace(old.strip(),new,1)
     return quote
 
@@ -5081,7 +5125,8 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 ['title','goal','advice','state','reason','change','target_id','purpose','submission']}
             if not due and not proposed_due and not historical and not native_action and not void:
                 due=_school_explicit_action_due(brief,cited_evidence)
-                if borrowed(due):due=''
+                # Nor one another cited original changes, defers or cancels (another teacher, 另行通知, 不用交).
+                if borrowed(due) or due and len(cited_evidence)>1 and dated_quote and not _school_others_settled(dated_quote,cited_evidence):due=''
                 item['due']=due
             target=next((t for t in school_tasks if t['id']==raw_target),None)
             if (uncertain_due and brief.get('change')=='append' and brief['state']=='ready'
