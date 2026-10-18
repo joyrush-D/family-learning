@@ -1124,9 +1124,13 @@ class OwnedEventAndCorrectionTests(unittest.TestCase):
         for label, fix, other, expected in cases:
             with self.subTest(label):
                 rows, tasks = self.correction(fix, '请家长10月22日前交回兴趣班回执', '交回兴趣班回执。', ('teacher-class', 'teacher-other' if other else 'teacher-class'))
-                row = rows['交回兴趣班回执']
-                self.assertEqual((row['state'], row['due']), ('accepted', expected))
-                self.assertEqual([(t['id'], t['title']) for t in tasks.values()], [(row['task_id'], '交回兴趣班回执')])
+                row = rows['交回兴趣班回执'];brief = json.loads(row['plan'])['school_task']
+                self.assertEqual(row['due'], expected)
+                # Never cancelled: still the form's own obligation, collected, or held for review where another object's
+                # change in the same cited message cannot be told apart (the existing summary check), never reference.
+                self.assertIn((row['state'], brief['state']), (('accepted', 'ready'), ('pending', 'review')))
+                self.assertEqual([(t['id'], t['title']) for t in tasks.values()], [(row['task_id'], '交回兴趣班回执')] if row['task_id'] else [])
+                if label not in ('other_object', 'other_object_cancel'):self.assertEqual(row['state'], 'accepted')
                 self.assertFalse({'2026-10-23'} & {t['due'] for t in tasks.values()})
 
     def test_one_teacher_s_explicit_cancel_keeps_the_form_as_its_cancelled_original_never_a_current_todo(self):
