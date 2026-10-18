@@ -472,6 +472,7 @@ class Store:
             days = {r['day']:dict(r) for r in c.execute('SELECT * FROM study_days WHERE child_id=? AND day BETWEEN ? AND ?', (child_id,first,day))}
             updates = {r['id']:r['status'] for r in c.execute('SELECT id,status FROM task_updates')}
             tasks = {t['id']:t for t in self.app.tasks(c)}
+            from family_agenda import action_lines  # family_agenda imports this module
             for row in week_items:
                 task = tasks.get(row['task_id'])
                 if task and task['child'] != child['name']: task = None
@@ -485,6 +486,8 @@ class Store:
                 row['source_task_complete_on'] = agenda.get('complete_on', '') if task else missing
                 row['source_task_handback_on'] = (agenda.get('due_on', '') if agenda.get('due_kind') == 'handback' else '') if task else missing
                 row['source_task_next_action'] = (task.get('focus') or {}).get('next_action', '') if task else missing
+                # The same read-only card projection as Today, under the title this card shows.
+                row['source_task_action_lines'] = action_lines(row['title'], task.get('action', '')) if task else missing
             used = {r['task_id'] for r in items}
             available = [dict(id=t['id'],title=t['title'],due=t['due'],status=self.app.task_status(t,updates.get(t['id'])))
                 for t in tasks.values() if t['child'] == child['name'] and t['id'] not in used and t.get('focus',{}).get('box')!='wish'
