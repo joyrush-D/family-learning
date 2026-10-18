@@ -504,7 +504,8 @@ class Flash27OwnRoleDaysTodayTests(unittest.TestCase):
                 with self.subTest(item=key):
                     agenda = day_listed[ids[key]]['agenda']
                     self.assertEqual((agenda['complete_on'], agenda['due_on'], agenda['category']), (complete, due, category))
-                    self.assertNotEqual(agenda['due_kind'], 'handback', 'a check day is not rewritten as a handback')
+                    # The check day is never a handback; the workbook's and the receipt's own 明天早上交 are.
+                    self.assertEqual(agenda['due_kind'] == 'handback', key in ('数格', '回执'), 'a check day is not rewritten as a handback')
         check(self._listed('2026-10-19'))
         today = [x['task_id'] for x in self.app.calendar_snapshot('2026-10-19', '2026-10-19')['agenda'] if x['task_id']]
         for key in ('星芽', '数格', 'Unit 4'):
@@ -711,7 +712,8 @@ OWNED_TIME_DAYS = {
     '第18页': ('homework', '', '2026-10-21', 'deadline'),
     # Its 22nd is the teacher's 明天早读检查 (frozen CLARITY truth C01): an inspection, never a generic deadline or handback.
     '第20页': ('homework', '2026-10-21', '2026-10-22', 'inspection'),
-    '《秋游意见回执》': ('todo', '2026-10-21', '2026-10-22', 'deadline'),
+    # Its own 由孩子明早交给班主任 makes its 22nd the handback (Root's counter-example on a6c1443), not a generic deadline.
+    '《秋游意见回执》': ('todo', '2026-10-21', '2026-10-22', 'handback'),
     '家长会': ('todo', '', '2026-10-23', 'event'),
 }
 
@@ -1226,10 +1228,11 @@ class ClearStandardsTests(unittest.TestCase):
         for quote, want in [
                 ('今晚将课本第20页的对话朗读三遍，请家长听完后在这一页签字，明天早读检查。', 'inspection'),
                 ('今晚朗读课本第20页，明早检查。', 'inspection'),
-                # N05: the receipt's own 22nd is its handback, never a check.
-                ('今晚请家长签好《活动回执》，由孩子明早交给班主任。', 'deadline'),
-                ('今晚完成练习册第3页，明天交，后天检查。', 'deadline'),
-                ('今晚完成练习册第3页并检查，明天交。', 'deadline')]:
+                # N05: the receipt's own 22nd is its handback, never a check (handback since its own role is read).
+                ('今晚请家长签好《活动回执》，由孩子明早交给班主任。', 'handback'),
+                # A later check or a same-day completion check never makes the 22nd's own 明天交 a check.
+                ('今晚完成练习册第3页，明天交，后天检查。', 'handback'),
+                ('今晚完成练习册第3页并检查，明天交。', 'handback')]:
             with self.subTest(quote=quote):
                 self.assertEqual(family_agenda.date_meaning(quote, '2026-10-22', sent), want)
 
@@ -1242,7 +1245,7 @@ class ClearStandardsTests(unittest.TestCase):
         self.assertEqual((task['action'], task['due']), (saved['action'], saved['due']))
         self.assertEqual((task['agenda']['complete_on'], task['agenda']['due_on'], task['agenda']['due_kind']), ('2026-10-21', '2026-10-22', 'inspection'))
         receipt = {t['id']: t for t in self.app.tasks()}[ids['《秋游意见回执》']]
-        self.assertEqual(receipt['agenda']['due_kind'], 'deadline', 'the receipt handback is no check')
+        self.assertEqual(receipt['agenda']['due_kind'], 'handback', 'the receipt handback is no check')
         study = family_study.Store(SimpleNamespace(**vars(self.app)))
         study.save_item(dict(child_id=self.source['child_id'], day='2026-10-21', request_key='clear-standards-en' + 'x' * 16,
                              version=0, task_id=ids['第20页'], planned_minutes=15))

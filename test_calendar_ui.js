@@ -48,7 +48,7 @@ test('the child and after-school cards read the same teacher check day as the pa
   // An older payload without the field, a plain deadline, a handback and a parent's own date keep their own labels.
   assert.equal(days({...c01,source_task_inspection_on:undefined}),'老师要求完成：2026-10-21 · 原截止：2026-10-22');
   assert.equal(days({...c01,source_task_inspection_on:''}),'老师要求完成：2026-10-21 · 原截止：2026-10-22');
-  assert.equal(days({...c01,source_task_inspection_on:'',source_task_handback_on:'2026-10-22'}),'老师要求完成：2026-10-21 · 老师要求交回：2026-10-22 · 原截止：2026-10-22');
+  assert.equal(days({...c01,source_task_inspection_on:'',source_task_handback_on:'2026-10-22'}),'老师要求完成：2026-10-21 · 老师要求交回：2026-10-22');
   assert.equal(days({source_task_complete_on:'',source_task_due:'2026-10-23',source_task_handback_on:'',source_task_inspection_on:''}),'原截止：2026-10-23');
  }
 });
