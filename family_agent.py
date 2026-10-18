@@ -3980,8 +3980,11 @@ _SCHOOL_NATIVE_WHEN=(r'(?:于|在)?\s*'+_SCHOOL_NATIVE_DATE+r'\s*(?:早上|上�
 _SCHOOL_NATIVE_LESSON=r'Lesson\s*[0-9]+(?:\s*《[^《》\n]{1,40}》)?|第[0-9一二三四五六七八九十]+课(?!时)(?:\s*《[^《》\n]{1,40}》)?'
 
 
-def _school_native_command(clause):
-    """A literal addressed outcome, not a verb search inside examples or reports."""
+def _school_native_command(clause, later=''):
+    """A literal addressed outcome, not a verb search inside examples or reports.
+
+    later is the rest of this outcome's own text once known (…；确认后在通知回条上勾选“已阅”…): it only completes the
+    parent's own reading proof, never another outcome."""
     value=re.sub(r'^'+_SCHOOL_NATIVE_MARKER,'',clause.strip())
     # A date may carry its own clock time or lesson ("21:00前", "数学课前") before the outcome it limits,
     # and its own time preposition ("请于11月6日前阅读…") or part of that day ("20日晚完成…"); a date alone, or one not
@@ -3997,8 +4000,8 @@ def _school_native_command(clause):
     if re.match(admin,value):return 'admin'
     # The addressed parent reading what the parent then signs is that signature's step: learning only if the clause still
     # names the child's learning once that reading is set aside, otherwise the parent's administrative outcome.
-    if '家长' in lead and any(left==len(lead) for left,_ in _school_parent_readings(lead+value)):
-        rest=_school_learning_text([lead+value])
+    if '家长' in lead and any(left==len(lead) for left,_ in _school_parent_readings(lead+value+later)):
+        rest=_school_learning_text([lead+value+later])
         return 'learning' if _LEARNING_ACTIVITY.search(rest) or _LEARNING_ACTION.search(rest) else 'admin'
     if re.match(learning+'|'+exercise+'|'+object_first+'|'+compact,value):return 'learning'
     # A ba-phrase writing its own object to a short destination its own clause closes is one more outcome;
@@ -4083,7 +4086,8 @@ def _school_parent_readings(text):
     spans=[];masked=re.sub(r'《[^》]*》',lambda m:'_'*len(m[0]),text or '')
     carry=r'带(?:回|来|到|去)|拿回|上交|交'
     sentences=list(re.finditer(r'[^。；;！!？?\n]+',masked))
-    for at_sentence,sentence in enumerate(sentences):
+    def bystanding(sentence):
+        """Every child word of a sentence only carries the material back or owns another object: no child outcome."""
         own=sentence[0];base=sentence.start()
         def carries(m):
             # After its own day, the child carries or hands back nothing else than what this sentence already names before it
@@ -4097,15 +4101,20 @@ def _school_parent_readings(text):
             # holding 阅读, so a parent reading the child's own work (阅读孩子的作文) keeps the text as written.
             part=re.search(r'[^，,]*$',own[:m.start()])[0]+re.match(r'[^，,]*',own[m.start():])[0]
             return own[m.end():m.end()+1]=='的' and '阅读' not in part
-        if not all(carries(m) or modifies(m) for m in re.finditer(_SCHOOL_CLAUSE_ROLES['学生'],own)):continue
+        return all(carries(m) or modifies(m) for m in re.finditer(_SCHOOL_CLAUSE_ROLES['学生'],own))
+    for at_sentence,sentence in enumerate(sentences):
+        own=sentence[0]
+        if not bystanding(sentence):continue
         for m in re.finditer(r'(?:'+_SCHOOL_CLAUSE_ROLES['家长']+r')\s*(?:'+_SCHOOL_NATIVE_WHEN+r')?(?:认真|仔细)?\s*(阅读)',own):
             # Ticking 已阅 on the slip (在通知回条上勾选“已阅”) is the same own mark as a signature.
             signers=_school_signers(text[sentence.start()+m.start():sentence.end()],r'签|盖章|勾选')
             if not signers and at_sentence+1<len(sentences):
                 # A split notice (家长今天阅读…《…》。在末页“监护人”栏签字。) signs in its very next sentence: only a step naming
-                # no actor but the parent, no other closed name and no negation or condition continues this parent's own reading.
+                # no actor but the parent (a child there only hands the slip back), no other closed name and no negation or
+                # condition continues this parent's own reading.
                 after=text[sentences[at_sentence+1].start():sentences[at_sentence+1].end()]
-                if (set(_school_roles(after))<={'家长'} and not re.search(r'不|无需|无须|勿|未|没|免|如|若',after)
+                if (set(_school_roles(after))<={'家长','学生'} and bystanding(sentences[at_sentence+1])
+                        and not re.search(r'不|无需|无须|勿|未|没|免|如|若',after)
                         and set(re.findall(r'《[^》]*》',after))<=set(re.findall(r'《[^》]*》',text[sentence.start():sentence.end()]))):
                     signers=_school_signers(after,r'签|盖章|勾选')
             if signers and signers<={'家长',''}:spans.append((sentence.start()+m.start(1),sentence.start()+m.end(1)))
@@ -4449,7 +4458,13 @@ def _school_native_blocks(text):
                     or set(re.findall(_SCHOOL_NATIVE_WORKSHEET,clause))-set(re.findall(_SCHOOL_NATIVE_WORKSHEET,owner['primary']))):
                 raise AgentError('示例后的条件尚未能唯一归到学校行动，完整原批次保留',code='school_action_coverage')
             if owner is not pieces[-1] or separated:owner.setdefault('conditions',[]).append(clause)
-            else:pieces[-1]['end']=end
+            else:
+                # The step this outcome continues with (确认后在回条上勾选“已阅”) can complete the parent's own reading of its
+                # first clause: the same parent-reading proof, read on the whole outcome, decides its use.
+                whole=text[pieces[-1]['start']:end].strip();primary=pieces[-1]['primary']
+                if (pieces[-1]['purpose']=='learning' and whole.startswith(primary) and _school_native_command(primary)=='learning'
+                        and _school_native_command(primary,whole[len(primary):])=='admin'):pieces[-1]['purpose']='admin'
+                pieces[-1]['end']=end
         elif _school_native_object(clause):
             preparation.append((start,end))
     if preparation and pieces:
