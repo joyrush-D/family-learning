@@ -52,6 +52,22 @@ test('the child and after-school cards read the same teacher check day as the pa
   assert.equal(days({source_task_complete_on:'',source_task_due:'2026-10-23',source_task_handback_on:'',source_task_inspection_on:''}),'原截止：2026-10-23');
  }
 });
+test('the parent after-school card reads the same requirement lines as Today and the child card',()=>{
+ const study=readFileSync(__dirname+'/study.js','utf8'),ctx=vm.createContext({});
+ const line=study.slice(study.indexOf('const taskRequirement='));vm.runInContext(line.slice(0,line.indexOf('\n')),ctx);
+ const requirement=vm.runInContext('taskRequirement',ctx);
+ const raw='今晚将课本第20页的对话朗读三遍；请家长听完后在这一页签字；明天早读检查。\n提交要求：家长听完后在第20页签字，明天早读检查。';
+ const lines=['今晚将课本第20页的对话朗读三遍；请家长听完后在这一页签字；明天早读检查。'];
+ const shown=requirement({source_task_action:raw,source_task_action_lines:lines});
+ assert.equal(shown,lines[0]);assert.equal((shown.match(/签字/g)||[]).length,1);assert.equal((shown.match(/早读检查/g)||[]).length,1);
+ // An older payload without the lines keeps the saved action; N08's two materials stay exactly as the shared projection gives them.
+ assert.equal(requirement({source_task_action:raw}),raw);
+ const n08=['朗读课本第20页；家长在听写本本页签字。','提交要求：家长在听写本第20页签字。'];
+ assert.equal(requirement({source_task_action:n08.join('\n'),source_task_action_lines:n08}),n08.join('\n'));
+ // The card's 行动要求 consumes it, under the existing next-step and unavailable-source rules.
+ assert.match(study,/行动要求：\$\{esc\(taskRequirement\(item\)\)\}/);
+ assert.match(study,/item\.source_task_action===null\?'<p class="study-warning">原事项暂时无法核对/);
+});
 test('date navigation crosses month/year and leap day without local timezone shifts',()=>{
  const h=harness();assert.equal(h.ctx.calendarMonday('2027-01-01'),'2026-12-28');assert.equal(h.ctx.calendarAdd('2024-02-28',1),'2024-02-29');assert.equal(h.ctx.calendarAdd('2026-12-31',1),'2027-01-01');
  h.ctx.calendarNavigate('2027-01-03');assert.deepEqual(clean(h.ctx.calendarDays()),['2026-12-28','2026-12-29','2026-12-30','2026-12-31','2027-01-01','2027-01-02','2027-01-03']);
