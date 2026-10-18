@@ -450,7 +450,7 @@ def task_category(title,purpose=None):
     return 'todo'
 
 
-def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal='',date_header='',school_focus=False):
+def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal='',date_header='',school_focus=False,date_siblings=None):
     focus=focus or {};messages=[];publications=[];original_time=''
     store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
     for ref in refs:
@@ -509,6 +509,11 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
     complete_on=(completion_day(date_quote,heading,own[0].get('time',''),due_on)
                  if len(own)==1 and not focus.get('scheduled_on') and (not focus.get('version') or school_focus) else '')
     if complete_on and focus.get('version') and completion_day(focus.get('goal',''),heading,own[0].get('time',''),due_on)!=complete_on:complete_on=''
+    if (not complete_on and len(own)==1 and due_on and date_siblings is not None and not focus.get('scheduled_on') and not focus.get('version')):
+        # The same own-role reading the item was selected and saved with (今晚完成，明天早上交 / 今晚请家长签字，明天早上让孩子交给…):
+        # its one earlier completion day is listed on that day; its handback/check due stays. Another item's quote or day gives none.
+        roles=family_agent._school_role_days(date_quote,[dict(text=m.get('text',''),time=m.get('time','')) for m in messages],date_siblings)
+        if roles and roles[1]==due_on and len(roles[0])==1 and next(iter(roles[0]))<due_on:complete_on=next(iter(roles[0]))
     return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,due_kind=due_kind,complete_on=complete_on,scheduled_on=focus.get('scheduled_on',''),
                 category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox')
 
@@ -556,7 +561,7 @@ def enrich(app,c,tasks):
     for task in tasks:
         refs=[x.strip() for x in task['source'].splitlines() if x.strip().startswith('message:')]
         focus=task.get('focus') or {}
-        purpose=None;publication_ref='';date_quote='';goal='';date_header='';school_focus=False
+        purpose=None;publication_ref='';date_quote='';goal='';date_header='';school_focus=False;date_siblings=None
         if task.get('school_origin'):
             origin=task['source'].splitlines()[0].removeprefix('Agent建议:')
             proposal=c.execute("SELECT * FROM agent_items WHERE id=? AND task_id=? AND child_id=? AND kind='school' AND state='accepted'",
@@ -569,6 +574,11 @@ def enrich(app,c,tasks):
                 date_quote=_stored_date_quote(plan) or re.sub(r'^待核对[：:]?\s*','',proposal['title']).strip()
                 date_header=_stored_date_header(plan,date_quote)
                 school_focus=_school_focus(c,task,proposal,plan)
+                # Every other live item of this child citing one of the same originals: its own words are never this item's role.
+                cited={e.get('ref') for e in json.loads(proposal['evidence'] or '[]') if isinstance(e,dict)}
+                date_siblings=[_stored_date_quote(json.loads(r['plan'])) for r in c.execute(
+                    "SELECT id,plan,evidence FROM agent_items WHERE kind='school' AND child_id=? AND id!=? AND state!='superseded'",(proposal['child_id'],proposal['id']))
+                    if cited & {e.get('ref') for e in json.loads(r['evidence'] or '[]') if isinstance(e,dict)}]
         due=task['due'];teacher={}
         captured=reported.get(task['id'])
         if captured and captured[0]==owners.get(task['child']) and task['source'] in family_study.CAPTURE_SOURCES:
@@ -580,7 +590,7 @@ def enrich(app,c,tasks):
             # Only days the parent or child explicitly entered as the teacher's own are teacher days; a plan never writes them.
             teacher={k:v for k,v in json.loads(captured[2] or '{}').items() if k in family_study.TEACHER_DAYS and v}
             if teacher.get('handback_on'):focus['due_on']=teacher['handback_on']
-        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus)
+        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus,date_siblings=date_siblings)
         if teacher.get('handback_on'):task['agenda']['due_kind']='handback'
         if teacher.get('complete_on'):task['agenda']['complete_on']=teacher['complete_on']
     return tasks
