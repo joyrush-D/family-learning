@@ -221,6 +221,50 @@ class AgentTests(unittest.TestCase):
     def test_pending_school_refresh_keeps_old_draft_if_source_paused_during_model(self):
         self._pending_school_refresh_after_pause('during',False)
 
+    def test_ordinary_notice_completion_and_handback_or_check_days_are_one_items_own_roles(self):
+        # A fictional mixed day (HANDOFF unseen-mixed-school-day-20261019-v1, actual Flash27 reply unchanged):
+        # 今晚完成，明天早上交 / 明天早读检查 are one item's completion and handback or check roles, not an ambiguity;
+        # the bottle line of 35 states only 明天 and never borrows the receipt's 今晚.
+        source='synthetic-unseen-daygroup-20261019'
+        texts={31:'今天语文作业：《星芽阅读练习册》第28页第1、2题，答案写在练习册上。今晚完成，明天早上交。',
+               32:'数学作业是《数格练习册》第34页第1—4题，今晚完成，明天早上交。',
+               33:'补充一下，第34页第4题要把计算过程写完整，写在原题下面即可。',
+               34:'英语：听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在记录本上签字。今晚完成，明天早读检查记录本。',
+               35:'《秋季校园开放日回执》今晚请家长签字，明天早上让孩子交给班主任。另外，明天来校带一个空透明塑料瓶，科学课用。',
+               36:'今天科学课学完了“水的三种状态”，课堂演示也结束了。这是本周的课程进度，供家长了解。'}
+        times={31:'16:08',32:'16:12',33:'16:13',34:'16:22',35:'17:10',36:'17:35'}
+        senders={31:'cn-xu',32:'math-wei',33:'math-wei',34:'en-qiao',35:'head-wen',36:'science-tang'}
+        ref=lambda n:'message:'+source+':'+str(n)
+        evidence=[dict(ref=ref(n),text=text,time='2026-10-19T'+times[n]+':00+08:00',kind='text',source='虚构岚溪学园初一班群',
+                       sender='虚构老师'+senders[n],publisher='publisher:synthetic-unseen-'+senders[n],related_messages=[ref(n)],
+                       content_incomplete=False,attachments=[]) for n,text in texts.items()]
+        raw=[(31,'今天语文作业：《星芽阅读练习册》第28页第1、2题，答案写在练习册上。','2026-10-20',[31],'语文：完成《星芽阅读练习册》第28页第1、2题',
+              '完成《星芽阅读练习册》第28页第1、2题。\n答案写在练习册上。\n今晚完成，明天早上交。','语文','learning','明天早上交练习册。','ready'),
+             (32,texts[32],'2026-10-20',[32,33],'数学：完成《数格练习册》第34页第1—4题',
+              '完成《数格练习册》第34页第1—4题。\n第34页第4题要把计算过程写完整，写在原题下面即可。\n今晚完成，明天早上交。','数学','learning','明天早上交练习册。','ready'),
+             (34,'英语：听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在记录本上签字。','2026-10-20',[34],'英语：跟读Unit 4两遍并家长签字',
+              '听录音跟读 Unit 4 A day at the lake 两遍。\n读完请家长在记录本上签字。\n今晚完成，明天早读检查记录本。','英语','learning','明天早读检查记录本。','ready'),
+             (35,'《秋季校园开放日回执》今晚请家长签字，明天早上让孩子交给班主任。','2026-10-20',[35],'交《秋季校园开放日回执》',
+              '《秋季校园开放日回执》今晚请家长签字。\n明天早上让孩子交给班主任。','','admin','明天早上交给班主任。','ready'),
+             (35,'明天来校带一个空透明塑料瓶，科学课用。','2026-10-20',[35],'科学：带一个空透明塑料瓶',
+              '明天来校带一个空透明塑料瓶，科学课用。','','admin','','ready'),
+             (36,texts[36],'',[36],'','','','optional','','reference')]
+        proposals=[dict(title_quote=quote,focus='school',due=due,evidence=[dict(ref=ref(n)) for n in cited],task_title=title,task_goal=goal,
+                        task_advice='',learning_subject=subject,learning_goal_id='',task_change='new',task_target_id='',task_state=state,
+                        task_reason='已读文字明确要求。' if state=='ready' else '仅为课程进度说明。',task_purpose=purpose,task_submission=submission)
+                   for _,quote,due,cited,title,goal,subject,purpose,submission,state in raw]
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
+            items=agent._select('school',json.loads(json.dumps(evidence)),school_goals=[],as_of='2026-10-19')
+        tasks=[i['plan']['school_task'] for i in items]
+        self.assertEqual([(t['state'],i['due']) for t,i in zip(tasks,items)],[('ready','2026-10-20')]*5+[('reference','')],
+                         [t['reason'] for t in tasks])
+        # Each card keeps its own completion and handback or check roles in its own words; the bottle has only its own day.
+        self.assertIn('今晚完成，明天早上交。',items[0]['body']);self.assertIn('今晚完成，明天早上交。',items[1]['body'])
+        self.assertIn('今晚完成，明天早读检查记录本。',items[2]['body'])
+        self.assertIn('今晚请家长签字',items[3]['body']);self.assertIn('明天早上让孩子交给班主任',items[3]['body'])
+        self.assertNotIn('今晚',items[4]['body'])
+        self.assertEqual([[q['ref'] for q in i['evidence']] for i in items[:5]],[[ref(31)],[ref(32),ref(33)],[ref(34)],[ref(35)],[ref(35)]])
+
     def test_separate_school_conclusions_do_not_borrow_related_attachments(self):
         sent='2026-10-05T16:00:00+08:00'
         refs=['message:synthetic-minutes:'+str(i) for i in range(1,6)]
