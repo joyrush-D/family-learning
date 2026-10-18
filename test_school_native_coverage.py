@@ -4030,5 +4030,72 @@ class OrdinaryMixedSchooldayTests(unittest.TestCase):
             with self.subTest(text=other):self.assertIsNone(agent._school_role_days(other, cited(other), []))
 
 
+class RecitationMethodConditionTests(unittest.TestCase):
+    """Root's 301 (pure fiction): how an outcome's own activity is done (背诵时不看书，不用录音) is that outcome's standard, not
+    a second outcome. FLASH31 is the unedited first proposal of Flash trial31's reply (ACTUAL-RAW.json), a real model reply."""
+    setUp = SchoolNativeCoverageTests.setUp
+    _facts = OrdinaryMixedSchooldayTests._facts
+    SOURCE = dict(id='qa-root-day-20261104', platform='qq', name='虚构青禾学校消息')
+    TEXT = '今晚背诵《溪边》前两节，明天早读抽背；背诵时不看书，不用录音。'
+    MESSAGE = dict(id='301', time='2026-11-04T19:01:00+08:00', kind='text', sender='虚构语文老师', sender_id='qa-cn-river', text=TEXT, unread=False, message_order='301')
+    FLASH31 = {'title_quote': '今晚背诵《溪边》前两节，明天早读抽背', 'focus': 'school', 'due': '', 'evidence': [{'ref': 'message:qa-root-day-20261104:301'}], 'task_title': '语文：背诵《溪边》前两节', 'task_goal': '今晚背诵《溪边》前两节。\n明天早读抽背。\n背诵时不看书，不用录音。', 'task_advice': '可先分节熟读再合起来背，睡前和早起各复述一遍。', 'learning_subject': '语文', 'learning_goal_id': '', 'task_change': 'new', 'task_target_id': '', 'task_state': 'ready', 'task_reason': '已读文字明确要求今晚背诵并说明明天早读抽背，背诵时不看书、不用录音。', 'task_purpose': 'learning', 'task_submission': ''}
+    PARALLEL = '今晚背诵《溪边》前两节，明天早读抽背；背诵时不看书，抄写《溪边》第一节一遍。'
+
+    def _run(self, text, proposals):
+        self.fixture.source.update(self.SOURCE);self.fixture.config()
+        self.fixture.now = self.now = dt.datetime(2026, 11, 4, 19, 40, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='301')
+        payload['messages'] = [dict(self.MESSAGE, text=text)]
+        self.store.ingest(payload)
+        self.model.side_effect = lambda *args, **kwargs:dict(proposals=copy.deepcopy(list(proposals)))
+        return payload, agent.run_once(self.app, self.now)
+
+    def _briefs(self):
+        with self.store._db() as c:
+            return [json.loads(r['plan'])['school_task'] for r in c.execute("SELECT plan FROM agent_items WHERE kind='school' ORDER BY rowid")]
+
+    def test_flash31_recitation_keeps_its_manner_and_spot_check_as_one_outcome(self):
+        payload, result = self._run(self.TEXT, [self.FLASH31])
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        rows, manual, links, originals, tasks = self._facts()
+        self.assertEqual(sorted(rows), [('301',)])
+        brief, = self._briefs()
+        self.assertEqual(brief['purpose'], 'learning')
+        for words in ('背诵《溪边》前两节', '明天早读抽背', '背诵时不看书', '不用录音'):self.assertIn(words, brief['goal'])
+        # No recording is asked for: every mention keeps its own 不用.
+        self.assertEqual([line for line in brief['goal'].splitlines() if '录音' in line and '不用录音' not in line], [])
+        self.assertEqual(originals, payload['messages'], 'the complete original stays unchanged')
+
+    def test_a_reply_leaving_out_the_manner_still_keeps_it_from_the_original(self):
+        reply = dict(self.FLASH31, task_goal='今晚背诵《溪边》前两节。\n明天早读抽背。', task_reason='虚构对照：回复漏写方法条件，不是实际模型产物。')
+        self.assertEqual(self._run(self.TEXT, [reply])[1]['failed'], 0)
+        brief, = self._briefs()
+        for words in ('背诵时不看书', '不用录音'):self.assertIn(words, brief['goal'])
+
+    def test_an_activity_manner_stays_the_standard_of_the_one_outcome_naming_that_activity(self):
+        blocks = lambda text:[(a['quote'], a['purpose']) for a in agent._school_native_blocks(text)]
+        for text in (self.TEXT, '今晚朗读《溪边》第三节三遍；朗读时不拖音，不用录音。'):
+            with self.subTest(text=text):self.assertEqual(blocks(text), [(text.rstrip('。'), 'learning')])
+        # An outcome after the manner, or a manner of an activity no earlier outcome names, stays its own outcome.
+        self.assertEqual(blocks(self.PARALLEL)[-1], ('抄写《溪边》第一节一遍', 'learning'))
+        self.assertEqual(blocks('今晚朗读《溪边》前两节；背诵时不看书。'), [('今晚朗读《溪边》前两节', 'learning'), ('背诵时不看书', 'learning')])
+
+    def test_a_parallel_outcome_after_the_manner_stays_its_own_task(self):
+        recite = dict(self.FLASH31, task_goal='今晚背诵《溪边》前两节。\n明天早读抽背。\n背诵时不看书。', task_reason='虚构对照，不是实际模型产物。')
+        copy_out = dict(self.FLASH31, title_quote='抄写《溪边》第一节一遍', task_title='语文：抄写《溪边》第一节', task_goal='抄写《溪边》第一节一遍。',
+                        task_advice='', task_reason='虚构对照，不是实际模型产物。')
+        self.assertEqual(self._run(self.PARALLEL, [recite, copy_out])[1]['failed'], 0)
+        goals = [b['goal'] for b in self._briefs()]
+        self.assertEqual(len(goals), 2)
+        self.assertEqual([('背诵时不看书' in goal, '抄写《溪边》第一节一遍' in goal) for goal in goals], [(True, False), (False, True)])
+
+    def test_a_reply_merging_the_parallel_outcome_into_the_recitation_is_refused(self):
+        merged = dict(self.FLASH31, task_goal='今晚背诵《溪边》前两节。\n明天早读抽背。\n背诵时不看书，抄写《溪边》第一节一遍。', task_reason='虚构对照，不是实际模型产物。')
+        payload, result = self._run(self.PARALLEL, [merged])
+        self.assertEqual((result['failed'], result['processed'], result['created']), (1, 0, 0))
+        self.assertEqual(self._briefs(), [])
+        self.assertEqual(self._facts()[3], payload['messages'], 'the complete original stays for retry')
+
+
 if __name__ == '__main__':
     unittest.main()
