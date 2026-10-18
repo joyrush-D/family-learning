@@ -4363,6 +4363,13 @@ def _school_native_blocks(text):
         # its use is still read below. A negated or changed item keeps the unread gap, so the count check holds the batch.
         if (listed and marker and not purpose and not re.search(_SCHOOL_NATIVE_CHANGE+r'|选做',clause)
                 and not _school_native_common_negative(clause)):purpose='directed'
+        # How an earlier outcome's own activity is done (背诵时不看书，不用录音) is that outcome's standard, not another
+        # outcome: only when the one owner the condition reading finds names the activity written directly before 时.
+        # A numbered item, another activity, several owners or a comma outcome after it keep their own readings.
+        manner=re.match(r'(朗读|跟读|背诵|抄写|听写|默写|口算)时',clause)
+        if purpose=='learning' and manner and pieces and not (listed and marker):
+            owner=_school_native_condition_owner(clause,pieces)
+            if owner and _school_native_marks(manner[1])&_school_native_marks(owner['primary']):purpose=''
         common=re.match(_SCHOOL_NATIVE_COMMON,clause)
         if common and pieces:
             # Changes and optionality still need the existing semantic reader.
