@@ -1605,11 +1605,12 @@ class Store:
         with self._db() as c:
             c.execute('BEGIN IMMEDIATE')
             if action == 'retry':
+                # A round dropped while it waited (discarded) is unfinished work with spent attempts; a real done receipt is not.
                 if 'id' in obj:
                     key = _text(obj, 'id', 100, True)
-                    c.execute("UPDATE agent_jobs SET attempts=0,next_try='',error='' WHERE done=0 AND id=?", (key,))
+                    c.execute("UPDATE agent_jobs SET attempts=0,next_try='',error='' WHERE (done=0 OR fingerprint LIKE 'discarded:%') AND id=?", (key,))
                 else:
-                    c.execute("UPDATE agent_jobs SET attempts=0,next_try='',error='' WHERE done=0")
+                    c.execute("UPDATE agent_jobs SET attempts=0,next_try='',error='' WHERE done=0 OR fingerprint LIKE 'discarded:%'")
                 return {'ok': True, 'state': 'retry_pending'}
             ident = _text(obj, 'id', 80, True)
             row = c.execute('SELECT * FROM agent_items WHERE id=?', (ident,)).fetchone()
@@ -1729,7 +1730,10 @@ class Store:
             if keep_budget and row and (not row['done'] or row['fingerprint'].startswith('discarded:')):
                 # A recovery identity keeps its attempts, backoff and error history under any later request, a round dropped
                 # while it waited (paused, changed) included: only the existing explicit retry renews it, never a changed fingerprint.
-                if (model and row['attempts'] >= MAX_ATTEMPTS) or row['next_try'] > now.isoformat(): return None
+                if (model and row['attempts'] >= MAX_ATTEMPTS) or row['next_try'] > now.isoformat():
+                    # Reclaimed while exhausted, a dropped identity is unfinished again, so the status and explicit retry see it.
+                    if row['done']: c.execute('UPDATE agent_jobs SET fingerprint=?,done=0 WHERE id=?', (fingerprint, key))
+                    return None
                 c.execute('UPDATE agent_jobs SET fingerprint=?,attempts=attempts+?,done=0 WHERE id=?', (fingerprint, int(model), key))
                 return fingerprint
             c.execute('INSERT OR REPLACE INTO agent_jobs(id,fingerprint,attempts) VALUES(?,?,?)', (key, fingerprint, int(model)))
@@ -2317,6 +2321,9 @@ def _school_handback_day(text,published,values):
     return late
 
 
+_SCHOOL_DAY_OFFSET={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}
+
+
 def _school_own_dates(quote,published,summary=False):
     """Dates one action clause states for itself: its deadlines, else one school arrangement day (明天早读抽查, 周四学校体检).
 
@@ -2342,8 +2349,7 @@ def _school_own_dates(quote,published,summary=False):
         head=r'\s*(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*日' if summary else r'\s*\d{4}\s*年'
         found=re.match(r'\s*(\d{4}-\d{2}-\d{2})(?!\s*(?:起|开始|以后|之后|以来|至|到|前|之前|以前|[-–—~～]))',text) if re.match(head,quote) else None
     if len(days)!=1 or not found or _in_title(text,found.start(1)) or re.search(r'每\s*$',text[:found.start()]):return set()
-    offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}
-    value=date(found[1]) or (dt.date.fromisoformat(published)+dt.timedelta(days=offset[found[1]])).isoformat()
+    value=date(found[1]) or (dt.date.fromisoformat(published)+dt.timedelta(days=_SCHOOL_DAY_OFFSET[found[1]])).isoformat()
     return {value} if value>=published else set()
 
 
@@ -3056,20 +3062,79 @@ def _school_cleared_reread(store,c,row,evidence,now):
     if fresh.get('state')!='ready' or fresh.get('change')!='new':return None
     try:family_llm.configuration(store.data)
     except family_llm.LLMDraftError:return None
-    return dict(cleared=True,due=due,done=sorted(done),quote=quote,purpose=str(raw.get('purpose','')),
+    # The original's own handback/check role of the due, read from its own actions, is the only role a new receipt may give it.
+    home=next((e for e in evidence if quote in e['text']),None)
+    if home is None:return None
+    due_roles=_school_due_roles(home['text'],family_agenda.sent_day(home.get('time','')),due)
+    return dict(cleared=True,due=due,done=sorted(done),due_roles=sorted(due_roles),quote=quote,purpose=str(raw.get('purpose','')),
                 subject=(plan.get('school_learning') or {}).get('subject',''),snapshot=snapshot,job_id=row['job_id'],
                 job_fingerprint=job['fingerprint'],origin_basis=brief['origin_basis'],receipt=_hash(raw))
+
+
+# A clause's own time role is read where its predicate stands: after its day (with that day's part, 前 or 到校后), its asker,
+# actor and place phrase, a joining word or the clause start. A Chinese verb comes before its object, so a character inside
+# that object (家校交流本) is never its action, and 《》 titles are objects. The verbs are the role words the original's own
+# role reading uses: the work done (完成、做完、写完、读完、签字), handed in (交、交回、上交、提交) or checked (检查).
+_SCHOOL_ROLE_DAY=(r'(?:\d{4}-\d{2}-\d{2}|(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*[日号]?|今天|今日|今晚|明天|明日|明早|明晚|后天|昨天|前天'
+                  r'|每天|每晚|(?:本|这|下)?(?:周|星期|礼拜)[一二三四五六日天])')
+_SCHOOL_ROLE_HEAD=_SCHOOL_ROLE_DAY+r'\s*(?:早上|早晨|上午|中午|下午|傍晚|晚上|早读|课前|到校后?)?\s*(?:之前|以前|前)?'
+_SCHOOL_ROLE_LEAD=(r'\s*(?:请|让|由)?\s*(?:各位|全体)?(?:家长|学生|孩子|同学们?|班主任|老师)?\s*(?:准时|按时|务必|必须|须|需|要)?\s*'
+                   r'(?:在[^，,在]{1,12}?(?:上|里|中|内)\s*)?')
+_SCHOOL_ROLE_VERBS=(('handback',r'上交|提交|交'),('check',r'检查'),('finish',r'完成|做完|写完|读完|签字'))
+
+
+def _school_clause_roles(clause):
+    """The time roles (finish, handback, check) of one clause's own predicates, never of a character inside an object."""
+    from family_agenda import _titles_read_as_objects
+    text=_titles_read_as_objects(clause)
+    starts={0}|{m.end() for m in re.finditer(_SCHOOL_ROLE_HEAD,text)}|{m.end() for m in re.finditer(r'并且|并|且|然后|同时|再|后',text)}
+    roles=set()
+    for at in starts:  # a leading label (英语：、提交要求：) names the clause, not its predicate
+        rest=re.sub('^'+_SCHOOL_ROLE_LEAD,'',re.sub(r'^\s*[^：:，,]{1,6}[：:]','',text[at:]) if at==0 else text[at:])
+        roles.update(role for role,verbs in _SCHOOL_ROLE_VERBS if re.match(verbs,rest))
+    return roles
+
+
+def _school_clause_day(clause,published):
+    """The one day a clause names for itself on its original's sending day; '' when none, several, ranged, recurring or past.
+
+    A new receipt states its days in its own words (今晚跟读并请家长签字), so no deadline or arrangement verb is required.
+    """
+    from family_agenda import _relative_weekday,_titles_read_as_objects,date
+    def iso(m):
+        year,month,day=m.groups()
+        if not year and int(month)!=int(published[5:7]):return m[0]
+        value=f'{int(year or published[:4]):04d}-{int(month):02d}-{int(day):02d}'
+        return value if date(value) else m[0]
+    text=_relative_weekday(re.sub(r'(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]',iso,_titles_read_as_objects(clause)),published)
+    days=re.findall(_SCHOOL_ROLE_DAY,text)
+    if len(days)!=1 or re.search(re.escape(days[0])+r'\s*(?:起|开始|以后|之后|以来|至|到|[-–—~～])',text):return ''
+    value=date(days[0]) or ((dt.date.fromisoformat(published)+dt.timedelta(days=_SCHOOL_DAY_OFFSET[days[0]])).isoformat()
+                            if days[0] in _SCHOOL_DAY_OFFSET else '')
+    return value if value>=published else ''
+
+
+def _school_due_roles(text,published,due):
+    """The handback/check roles the original's own sentences that state the due give it (检查 only, or 交回)."""
+    roles=set()
+    for sentence in re.split(r'[。；;！!？?\n]',text):
+        parts=re.split(r'[，,]',sentence)
+        if any(_school_clause_day(part,published)==due for part in parts):
+            roles|=set().union(*(_school_clause_roles(part) for part in parts))&{'handback','check'}
+    return roles
 
 
 def _school_cleared_receipt(result,evidence,proof):
     """A new receipt collects a cleared old review only when it supports the item itself; otherwise it raises.
 
     It must be ready and new, keep the stored receipt's purpose (and learning subject) and its own teacher sentence's
-    requirements, and every day it states must be one of the original's own days in its own role: completion words a
-    completion day, 交/检查 words the due, with the due itself stated; 检查 is not rewritten as 交 where the originals say no 交.
-    A raise keeps the old row, its unknown day and every original as saved, under the job's own attempts and backoff.
+    requirements, and every day it states must be one of the original's own days in the role its own predicate gives it:
+    a work or completion clause a completion day, a 交/检查 clause the due and only a role the original's own due sentence
+    gives (检查 is never rewritten as 交回), with the due itself stated. The roles come from each clause's own actions
+    (_school_clause_roles), never from a character inside a noun such as 家校交流本. A raise keeps the old row, its unknown
+    day and every original as saved, under the job's own attempts and backoff.
     """
-    from family_agenda import sent_day
+    from family_agenda import _titles_read_as_objects,sent_day
     if result.get('state')!='ready' or result.get('change')!='new' or result.get('target_id'):
         raise AgentError('新回执未确认本项可收录，原内容与未知日期保留')
     if result.get('purpose')!=proof['purpose'] or proof['subject'] and str(result.get('learning_subject','')).strip()!=proof['subject']:
@@ -3077,20 +3142,15 @@ def _school_cleared_receipt(result,evidence,proof):
     home=next((e['text'] for e in evidence if proof['quote'] in e['text']),'')
     if not home or not _school_clause_kept(_school_own_sentences(proof['quote'],home),str(result.get('goal',''))):
         raise AgentError('新回执未完整保留本项要求，原内容与未知日期保留')
-    published=sent_day(evidence[0].get('time',''));done=set(proof['done']);due=proof['due'];stated=False
-    day=r'今天|今日|今晚|明天|明日|明早|明晚|后天|昨天|前天|\d{1,2}\s*月\s*\d{1,2}|\d{4}-\d{2}-\d{2}|(?:周|星期|礼拜)[一二三四五六日天]'
-    handback=any('交' in e['text'] for e in evidence)
+    published=sent_day(evidence[0].get('time',''));done=set(proof['done']);due=proof['due'];kinds=set(proof['due_roles']);stated=False
     for field in ('title','goal','submission'):
         for clause in re.split(r'[，,。；;！!？?\n]',str(result.get(field,''))):
-            if not re.search(day,clause):continue
-            days=_school_own_dates(clause,published)
-            finish=bool(re.search(r'完成|做完|写完|读完|签字',clause));back=bool(re.search(r'交|检查',clause))
-            if len(days)!=1 or finish and back:raise AgentError('新回执的日期无法逐项核对，原内容与未知日期保留')
-            value=next(iter(days))
-            if (back and (value!=due or '交' in clause and not handback) or finish and value not in (done or {due})
-                    or not (finish or back) and value not in done|{due}):
+            if not re.search(_SCHOOL_ROLE_DAY,_titles_read_as_objects(clause)):continue
+            value=_school_clause_day(clause,published);roles=_school_clause_roles(clause);back=roles&{'handback','check'}
+            if not value or done and back and 'finish' in roles:raise AgentError('新回执的日期无法逐项核对，原内容与未知日期保留')
+            if back and not back<=kinds or (value!=due if back or not done else value not in (done if 'finish' in roles else done|{due})):
                 raise AgentError('新回执的日期与本项原文日期不一致，原内容与未知日期保留')
-            stated|=value==due and (back or not done)
+            stated|=value==due and bool(back or not done)
     if not stated:raise AgentError('新回执未写明本项原文日期，原内容与未知日期保留')
 
 
@@ -3410,9 +3470,11 @@ def _school_revision_due(store,c,old_key,source,values):
 
 
 def _school_recovery_spent(c,keys):
-    """One automatic budget per original batch, whichever route holds it: the most attempts any unfinished identity used."""
-    found=[c.execute('SELECT attempts,next_try,error,done FROM agent_jobs WHERE id=?',(k,)).fetchone() for k in keys]
-    return [dict(r) for r in found if r and not r['done'] and r['attempts']]
+    """One automatic budget per original batch, whichever route holds it: the most attempts any unfinished identity used.
+
+    A round dropped while it waited (discarded: paused, changed) spent its attempts too; a real done receipt spent none."""
+    found=[c.execute('SELECT attempts,next_try,error,done,fingerprint FROM agent_jobs WHERE id=?',(k,)).fetchone() for k in keys]
+    return [dict(r) for r in found if r and r['attempts'] and (not r['done'] or r['fingerprint'].startswith('discarded:'))]
 
 
 def _school_recovery_inherit(store,key,old_key,child_id):
