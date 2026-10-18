@@ -3032,6 +3032,48 @@ class SchoolActionPurposeTests(unittest.TestCase):
                 brief = agent._school_brief(dict(value, title='家长阅读并签字', goal=text), evidence=evidence, separate_learning=True)
                 self.assertEqual((brief['state'], brief['goal']), (state, text))
 
+    # Root's frozen C01 (pure fiction): the fixed correct semantic reply, not a provider output; one item, all words kept.
+    C01_TEXT = '数学：今晚完成《面积随练》第9页第2、3题；画出辅助线并写出单位，答案写在原题下；明早交给数学课代表。'
+
+    def test_c01_tonight_completion_and_tomorrow_morning_handback_keep_both_days_on_one_item(self):
+        self.fixture.now = self.now = dt.datetime(2026, 11, 4, 16, 30, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='11')
+        payload['messages'] = [dict(id='11', message_order='11', time='2026-11-04T16:00:00+08:00', kind='text', sender='虚构老师C01',
+                                    sender_id='synthetic-publisher-C01', text=self.C01_TEXT, unread=False)]
+        self.store.ingest(payload)
+        ref = 'message:' + self.source['id'] + ':11'
+        raw = dict(title_quote=self.C01_TEXT[3:-1], focus='school', due='2026-11-05', evidence=[dict(ref=ref)], learning_subject='数学',
+                   learning_goal_id='', task_title='数学：完成《面积随练》第9页第2、3题', task_goal=self.C01_TEXT, task_advice='',
+                   task_state='ready', task_reason='仅虚构独立固定回复：按老师明确原文整理；不是实际模型输出。', task_change='new',
+                   task_target_id='', task_purpose='learning', task_submission='明早交给数学课代表。')
+        self._use_replies(payload, [dict(proposals=[raw])])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+
+        def facts():
+            with self.store._db() as c:
+                rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+                manual = [dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+                originals = [json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
+            with self.app.connect() as c:
+                tasks = [t for t in self.app.tasks(c) if t['id'] in {m['id'] for m in manual}]
+            return rows, manual, tasks, originals
+
+        rows, manual, tasks, originals = first = facts()
+        (row,), (task,) = rows, tasks
+        self.assertEqual(len(manual), 1, 'one formal homework, never a second item for the handback')
+        self.assertEqual((row['state'], row['due'], json.loads(row['plan'])['school_task']['purpose']), ('accepted', '2026-11-05', 'learning'))
+        self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], [ref])
+        agenda = task['agenda']
+        # 今晚完成 is its completion day (4th) and 明早交给数学课代表 its own handback (5th): neither replaces the other.
+        self.assertEqual((agenda['category'], agenda['complete_on'], agenda['due_on'], agenda['published_at']),
+                         ('homework', '2026-11-04', '2026-11-05', '2026-11-04T16:00:00+08:00'))
+        self.assertEqual([(p['ref'], p['sender']) for p in agenda['publications']], [(ref, '虚构老师C01')])
+        for words in ('第9页第2、3题', '画出辅助线', '写出单位', '答案写在原题下', '明早交给数学课代表'):self.assertIn(words, task['action'])
+        self.assertEqual([o['text'] for o in originals], [self.C01_TEXT])
+        self.assertEqual(agent.run_once(self.app, self.now)['processed'], 0)
+        self.assertEqual(facts(), first, 'reopening reads the same saved item without another write')
+
     def _parent_signed_notice(self, message_id, time, sender_id, text, title, due):
         """Root's fictional admin notice with an own correct fixed 15-field admin reply, beside the English read-aloud."""
         self.fixture.now = self.now = dt.datetime(2026, 10, 26, 16, 30, tzinfo=agent.TZ)
