@@ -92,6 +92,11 @@ async function launchDemo(){
    ['数学：完成口算本第8页','口算本第8页全部完成。\n明天交给课代表。','先做前两行，做完请家长看一眼。',['口算本第8页全部完成。','明天交给课代表。']]],nextIDs=[];
   for(const [title,action,next] of nextItems){const made=await post('task/new',{child:initial.children[0].name,title,action,advice:next??action,due:'2026-10-20',request_key:randomUUID().replaceAll('-','')});const added=await post('study/item',{child_id:who,day,request_key:randomUUID(),version:0,task_id:made.task.id,planned_minutes:15});nextIDs.push(added.item?.id||(await read()).items.find(i=>i.task_id===made.task.id).id)}
   assert.equal((await read()).items.length,before+7,'and only the two with a next step');
+  // The R09 recovered English words saved as one paragraph, through the same entries: without a next step, and with one
+  // identical to it; both read its own sentences under the heading, once.
+  const paragraph='英语：听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在记录本上签字。今晚完成，明天早读检查记录本。',paragraphLines=['听录音跟读 Unit 4 A day at the lake 两遍，读完请家长在记录本上签字。','今晚完成，明天早读检查记录本。'],paragraphIDs=[];
+  for(const advice of ['',paragraph]){const made=await post('task/new',{child:initial.children[0].name,title:'英语：跟读Unit 4两遍并家长签字',action:paragraph,advice,due:'2026-10-20',request_key:randomUUID().replaceAll('-','')});const added=await post('study/item',{child_id:who,day,request_key:randomUUID(),version:0,task_id:made.task.id,planned_minutes:15});paragraphIDs.push(added.item?.id||(await read()).items.find(i=>i.task_id===made.task.id).id)}
+  assert.equal((await read()).items.length,before+9,'and only the two paragraph items');
   for(const width of [360,1440])for(const pass of ['open','reopen']){
    await child.setViewportSize({width,height:900});if(pass==='open')await child.locator('#refresh').click();else{await child.reload();await child.locator('#study-tab').click()}
    for(const [i,[title,action,want]] of teacherItems.entries()){
@@ -111,11 +116,20 @@ async function launchDemo(){
     if(next===null){assert.equal(text.split('要做：').length-1,1,title+' one requirement');assert.doesNotMatch(text,/要求：/,title+' an identical next step is no second copy')}
     else{assert.equal(text.split('要做：'+next).length-1,1,title+' the different next step stays');assert.equal(text.split('要求：').length-1,1,title+' and the action stays below it')}
    }
+   for(const id of paragraphIDs){
+    const card=child.locator('#study-items [data-study-item="'+id+'"]');await card.waitFor();const saved=(await read()).items.find(x=>x.id===id);
+    assert.equal(saved.source_task_action,paragraph,'saved paragraph unchanged');assert.equal(await card.locator('h3').innerText(),'英语：跟读Unit 4两遍并家长签字');
+    assert.deepEqual(await card.locator('.study-requirement-lines li, p.study-requirement-lines').allInnerTexts(),paragraphLines,width+' '+pass+' paragraph read as its own sentences');
+    const text=await card.innerText();assert.equal(text.split('英语：').length-1,1,'the subject label only in the heading');
+    for(const line of paragraphLines)assert.equal(text.split(line).length-1,1,width+' '+pass+' once: '+line);
+    assert.doesNotMatch(text,/要求：/,'no second copy');
+   }
    assert.equal(await child.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'child fits '+width);assert.equal(await child.locator('#child-study button:visible').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'44px child controls');
    if(shots&&pass==='reopen'){await child.evaluate(()=>scrollTo(0,0));await child.screenshot({path:path.join(shots,'synthetic-child-teacher-items-'+width+'.png'),fullPage:true})}
   }
   checks.push('five teacher requirements added by the parent read title, own conditions once and keep the saved words on the child card at 360/1440 and after reopen');
   checks.push('a parent next step identical to the saved action reads once; a different next step and the action both stay, at 360/1440 and after reopen');
+  checks.push('one saved English paragraph reads as its own sentences under its heading, with or without an identical next step, at 360/1440 and after reopen');
   await parent.goto(server.url);await parent.locator('nav [data-page="more"]').click();await parent.locator('.more-links [data-page="settings"]').click();await parent.locator('[data-child-access="'+who+'"]').click();await parent.locator('[data-child-study="'+who+'"]').click();await eventually(async()=>!(await(await fetch(server.url+'api/child-access')).json()).children.find(c=>c.child_id===who).study_enabled,'study access removed');await child.locator('#refresh').click();await child.locator('#child-study').waitFor({state:'hidden'});assert.equal((await child.locator('#study-items').textContent()).includes('虚构自主功课'),false,'study DOM removed');assert.equal(await child.locator('#journey').isVisible(),true,'reading entrance remains');
   assert.deepEqual(errors,[]);checks.push('revoke daily homework removes its data while reading entrance stays usable');
   console.log(JSON.stringify({passed:checks.length,checks,syntheticOnly:true,actualPhoneTested:false,screenshots:shots||null},null,2));
