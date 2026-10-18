@@ -10,12 +10,18 @@ import copy
 import datetime as dt
 import io
 import json
+import re
 import time
 import unittest
 from unittest.mock import patch
 
 import family_agent as agent
 import test_agent as fixtures
+
+
+def bound(shared):
+    """A bound all-items standard as each card shows it: its list words (两项都, 以上作业都) add nothing once bound."""
+    return re.sub(agent._SCHOOL_NATIVE_COMMON, '', shared)
 import test_school_native_coverage as native
 
 
@@ -327,7 +333,7 @@ class SchoolActionInventoryTests(unittest.TestCase):
                 with self.subTest(action=own, surface=surface):
                     self.assertIn(own, body)
                     self.assertNotIn(foreign, body, 'the shared standard must not merge independent actions')
-                    self.assertIn(shared, body, 'a trailing all-actions standard belongs to both outcomes')
+                    self.assertIn(bound(shared), body, 'a trailing all-actions standard belongs to both outcomes')
 
     def test_positive_shared_predicate_keeps_negative_characters_in_its_object(self):
         for shared in ('两项都圈出不规则动词', '两项都要圈出不规则动词',
@@ -350,7 +356,7 @@ class SchoolActionInventoryTests(unittest.TestCase):
                     self.assertEqual(t.model.call_count, 1)
                     for row in rows:
                         self.assertEqual(row['due'], '2026-10-06')
-                        self.assertEqual(shared in row['body'], '数学' not in row['title'])
+                        self.assertEqual(bound(shared) in row['body'], '数学' not in row['title'])
                         anchors = json.loads(row['plan'])['school_original_action']['anchors']
                         self.assertTrue(all(a['quote'] in payload['messages'][0 if '数学' not in row['title'] else 1]['text'] for a in anchors))
                     with t.store._db() as c:
@@ -434,7 +440,7 @@ class SchoolActionInventoryTests(unittest.TestCase):
             self.assertEqual(json.loads(row['plan'])['school_task']['state'], 'ready')
             for body in (row['body'], collected[row['task_id']]['body']):
                 self.assertIn(own, body)
-                self.assertIn(shared, body)
+                self.assertIn(bound(shared), body)
                 self.assertNotIn(foreign, body, 'a common standard must not merge the two outcomes')
             self.assertEqual(collected[row['task_id']]['child_ids'], [self.source['child_id']])
             self.assertEqual(collected[row['task_id']]['agenda']['due_on'], '2026-10-06')
@@ -481,7 +487,7 @@ class SchoolActionInventoryTests(unittest.TestCase):
         rows = self.saved(payload, self.run_receipt(payload, [self.proposal(quote, refs) for quote in quotes]), 2)
         for row in rows:
             self.assertEqual((row['state'], row['due']), ('accepted', ''))
-            self.assertIn(shared, row['body'])
+            self.assertIn(bound(shared), row['body'])
             self.assertNotIn('10月7日', row['body'])
             self.assertNotIn('示例', row['body'])
             self.assertEqual([a['quote'] for a in json.loads(row['plan'])['school_original_action']['anchors']][-1], shared)
