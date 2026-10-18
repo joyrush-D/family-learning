@@ -149,8 +149,11 @@ def _action_deadlines(text,published):
         try:relative=(dt.date.fromisoformat(published)+dt.timedelta(days=offset)).isoformat()
         except OverflowError:continue
         if date(match[2]):candidates.update((relative,match[2]))
+    # A dated pickup the family is asked to do: when and where (放学、东门) stand between the day and 接孩子, past the
+    # tight window above. It stays inside its clause; another day or a negation (不用接) before it leaves the day unread.
+    pickup=r'(?:(?!\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天|不|无|勿|别|免|未|没)[^。；;，,\n]){0,16}?接\s*(?:'+_PARTICIPANTS['学生']+r')'
     exam_event=r'单元测|体育测试|小测|月考|期中|期末|测验|考试|统考|联考|水平测|质检|摸底'
-    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)'+span+r'(?:'+exam_event+r')',text or ''):
+    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:'+span+r'(?:'+exam_event+r')|'+pickup+r')',text or ''):
         token=match[1];value=date(token)
         if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):
             offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[token]
