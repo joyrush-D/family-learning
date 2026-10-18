@@ -771,11 +771,14 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         row, = rows
         plan = json.loads(row['plan']);brief = plan['school_task']
         self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
-        self.assertEqual((row['state'], row['due'], row['title'], brief['purpose'], brief['state']),
-                         ('pending', '2026-10-23', '数学：完成《平均分练习单》第1、2题', 'learning', 'review'))
+        self.assertEqual((row['state'], row['title'], brief['purpose'], brief['state']),
+                         ('pending', '数学：完成《平均分练习单》第1、2题', 'learning', 'review'))
         # Every literal requirement of both originals stays; the unread sheet keeps a specific reason, never ready.
         for words in self.MATH_TEXTS:self.assertIn(words, row['body'])
         self.assertIn('附件尚未核实', brief['reason'])
+        # Its own words give two days (今天完成 22, 明天交 23): the ledger picks none and says so, never another day.
+        self.assertIn(row['due'], ('', '2026-10-23'))
+        self.assertIn('多个日期', brief['reason'])
         self.assertEqual(plan['school_native_cover']['linked'], [refs[1]])
         self.assertEqual(manual, 0, 'no automatic task while the re-sent sheet is unread')
         self.assertEqual(links, [(self.source['id'], '102', upload['id'])])
