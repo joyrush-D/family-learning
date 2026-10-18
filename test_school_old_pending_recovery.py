@@ -153,7 +153,7 @@ class R259OldPendingRecoveryTests(unittest.TestCase):
         with self.store._db() as c:
             row = dict(c.execute('SELECT * FROM agent_items WHERE id=?', (old['id'],)).fetchone())
             titles = [r['title'] for r in c.execute('SELECT title FROM manual_tasks')]
-        self.assertEqual((row['state'], row['task_id'], row['due']), ('pending', None, ''))
+        self.assertEqual((row['state'], row['task_id'], row['due']), ('pending', old['task_id'], ''))
         self.assertTrue(row['title'].endswith('（家长改）'))
         self.assertFalse(any('Unit 4' in t for t in titles), titles)
 
