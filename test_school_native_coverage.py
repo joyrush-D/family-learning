@@ -776,9 +776,9 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         # Every literal requirement of both originals stays; the unread sheet keeps a specific reason, never ready.
         for words in self.MATH_TEXTS:self.assertIn(words, row['body'])
         self.assertIn('附件尚未核实', brief['reason'])
-        # Its own words give two days (今天完成 22, 明天交 23): the ledger picks none and says so, never another day.
-        self.assertIn(row['due'], ('', '2026-10-23'))
-        self.assertIn('多个日期', brief['reason'])
+        # Its own words give two roles of one item (今天完成 22, 明天交 23): due is the handback day, no date conflict.
+        self.assertEqual(row['due'], '2026-10-23')
+        self.assertNotIn('多个日期', brief['reason'])
         self.assertEqual(plan['school_native_cover']['linked'], [refs[1]])
         self.assertEqual(manual, 0, 'no automatic task while the re-sent sheet is unread')
         self.assertEqual(links, [(self.source['id'], '102', upload['id'])])
@@ -788,6 +788,55 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         self.assertEqual((replay['failed'], replay['processed'], replay['created']), (0, 0, 0))
         self.assertEqual(facts(), first, 'reopen and the next round keep the one item without duplicates')
         self.assertEqual(len(calls), 1)
+
+    def _resent(self, texts, times, sender_id, proposal, now, cursor):
+        """One teacher's outcome and its re-sent original through Store.ingest, save_upload/message_attachment and run_once."""
+        self.fixture.now = self.now = now
+        payload = self.fixture.payload(cursor=cursor)
+        first = int(cursor) - 1
+        payload['messages'] = [dict(id=str(first + i), message_order=str(first + i), time=time, kind='text', sender='虚构数学老师',
+                                    sender_id=sender_id, text=text, unread=False) for i, (time, text) in enumerate(zip(times, texts))]
+        self.store.ingest(payload)
+        refs = ['message:' + self.source['id'] + ':' + m['id'] for m in payload['messages']]
+        sheet = '虚构练习单原件测试字节（内容未解释）\n'.encode()
+        upload = self.app.save_upload(io.BytesIO(sheet), len(sheet), 'resent-sheet.txt')
+        self.store.message_attachment(dict(child_id='child-1', source_id=self.source['id'], message_id=payload['messages'][1]['id'],
+                                           attachment_id=upload['id'], action='attach'), dict)
+        self.model.side_effect = lambda *args, **kwargs:dict(proposals=[dict(copy.deepcopy(proposal), evidence=[dict(ref=ref) for ref in refs])])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 2), 'the faithful merged reply is not rejected as an extra source')
+        with self.store._db() as c:
+            row, = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+        self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
+        for words in texts:self.assertIn(words, row['body'])
+        brief = json.loads(row['plan'])['school_task']
+        self.assertEqual((row['state'], brief['state'], brief['purpose']), ('pending', 'review', 'learning'))
+        self.assertIn('附件尚未核实', brief['reason'])
+        return row, refs
+
+    def test_the_resent_worksheet_keeps_its_own_completion_and_handback_days_through_acceptance(self):
+        row, refs = self._resent(self.MATH_TEXTS, ('2026-10-22T16:05:00+08:00', '2026-10-22T16:06:00+08:00'), 'qa-teacher-math-lan',
+                                 self.MATH_PROPOSAL, dt.datetime(2026, 10, 22, 16, 30, tzinfo=agent.TZ), '102')
+        self.assertEqual(row['due'], '2026-10-23')
+        # The parent's own accept through the existing path: the task's read-only agenda lists 22 and keeps the 23rd handback.
+        result = self.store.act(dict(id=row['id'], action='accept', expected_updated=row['updated']))
+        with self.app.connect() as c:
+            task, = [t for t in self.app.tasks(c) if t['id'] == result['task_id']]
+        self.assertEqual((task['agenda']['complete_on'], task['agenda']['due_on'], task['agenda']['due_kind']), ('2026-10-22', '2026-10-23', 'handback'))
+        for words in ('第1、2题', '直接写在练习单上', '第2题要画出分组过程', '不用抄题', '第3题不用做', '明天交给数学课代表'):
+            self.assertIn(words, task['action'])
+
+    def test_a_resend_naming_the_same_complete_title_binds_to_its_outcome(self):
+        # Root's J01 (pure fiction; the original file's own bytes were not provided, a stand-in sheet is linked instead).
+        texts = ('数学：明天完成《分组记录练习单》第1、2题，把答案写在这张练习单上。', '补发刚才布置的《分组记录练习单》原件。第2题要画出每组的分法，不用抄题。')
+        proposal = dict(title_quote='明天完成《分组记录练习单》第1、2题，把答案写在这张练习单上。', focus='school', due='2026-10-28', evidence=[0, 1],
+                        learning_subject='数学', learning_goal_id='', task_title='数学：完成《分组记录练习单》第1、2题',
+                        task_goal=texts[0] + '\n' + texts[1], task_advice='', task_state='review',
+                        task_reason='两条正文明确对应同一张练习单，已读完成标准合并；所附原件尚未由产品读取，原件内容仍待核。', task_change='new',
+                        task_target_id='', task_purpose='learning', task_submission='')
+        row, _ = self._resent(texts, ('2026-10-27T16:10:00+08:00', '2026-10-27T16:11:00+08:00'), 'qa-heldout-sheet-qian', proposal,
+                              dt.datetime(2026, 10, 27, 16, 30, tzinfo=agent.TZ), '12')
+        self.assertEqual(row['due'], '2026-10-28')
 
     def test_only_a_same_teacher_resend_naming_one_outcome_material_links_to_it(self):
         linked = lambda entries:[a.get('linked') for a in agent._school_native_actions(entries)]
