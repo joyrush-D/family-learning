@@ -625,7 +625,7 @@ def enrich(app,c,tasks):
         task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus,date_siblings=date_siblings)
         if teacher.get('handback_on'):task['agenda']['due_kind']='handback'
         if teacher.get('complete_on'):task['agenda']['complete_on']=teacher['complete_on']
-        task['agenda']['action_lines']=action_lines(task['title'],task.get('action',''))
+        task['action_lines']=action_lines(task['title'],task.get('action',''))
     return tasks
 
 
