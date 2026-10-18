@@ -4966,6 +4966,12 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
     return dict(proposal,task_title=value['title'],task_goal=value['goal'],task_submission='',due=due),action
 
 
+def _school_native_roles(action):
+    """This outcome's own completion and handback roles in its own quote only (今天完成…。明天交给数学课代表), read as the
+    ordinary path reads them (_school_role_days); no header, sibling, other teacher or attachment day."""
+    return _school_role_days(action['quote'],[dict(text=action['quote'],time=action['time'])],[])
+
+
 def _school_native_dates(action):
     from family_agenda import deadlines,sent_day
     published=sent_day(action['time'])
@@ -4974,7 +4980,7 @@ def _school_native_dates(action):
     dates=_school_handback_day(own,published,deadlines(own,published))
     # Its own quote's two time roles (今天完成…。明天交给数学课代表) are one item dated by its handback, read as the ordinary
     # path reads them (_school_role_days); only when those roles account for every own day, never another item's.
-    roles=_school_role_days(action['quote'],[dict(text=action['quote'],time=action['time'])],[]) if len(dates)>1 else None
+    roles=_school_native_roles(action) if len(dates)>1 else None
     if roles and roles[0]|{roles[1]}==dates:dates={roles[1]}
     # A school arrangement in this outcome's own quote (明天早读抽查) is its day; a header date is never borrowed.
     if not dates:dates=_school_own_dates(action['quote'],published)
@@ -5278,8 +5284,11 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 declared=_school_goal_dates(brief['goal'],cited_evidence)
                 if native_action and len(_school_native_dates(native_action))>1:
                     brief.update(state='review',reason=brief['reason'][:300]+' 更正涉及另一日期，原日期与更正日期待核对；未自动改期。')
-                elif due and declared and declared!={due} and not (roles and roles[1]==due and declared<=role_days):
-                    brief.update(state='review',reason=brief['reason'][:300]+' 摘要中的日期与本项原文日期不一致，未自动确认；请核对原通知。')
+                elif due and declared and declared!={due}:
+                    # A native outcome without a bound change is checked by its own quote's roles, the reading its due came from.
+                    own=roles or (_school_native_roles(native_action) if native_action and not native_action['changes'] else None)
+                    if not (own and own[1]==due and declared<=own[0]|{own[1]}):
+                        brief.update(state='review',reason=brief['reason'][:300]+' 摘要中的日期与本项原文日期不一致，未自动确认；请核对原通知。')
             if brief['title'] and brief['goal'] and dated_quote and not historical and not native_action and len(cited_evidence)==1:
                 brief['goal']=_school_quote_lead(dated_quote,cited_evidence[0]['text'],brief['goal'])
             if brief['title'] and brief['goal']: item.update(title=brief['title'],body=brief['goal'])
