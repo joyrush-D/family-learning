@@ -52,6 +52,18 @@ test('the child and after-school cards read the same teacher check day as the pa
   assert.equal(days({source_task_complete_on:'',source_task_due:'2026-10-23',source_task_handback_on:'',source_task_inspection_on:''}),'原截止：2026-10-23');
  }
 });
+test('a teacher handback day equal to the saved due reads once on the child and after-school cards',()=>{
+ const child=readFileSync(__dirname+'/child.js','utf8'),study=readFileSync(__dirname+'/study.js','utf8'),ctx=vm.createContext({});
+ vm.runInContext(child.slice(child.indexOf('function studyDays('),child.indexOf('\n// The same read-only projection')),ctx);
+ const line=study.slice(study.indexOf('const taskDays='));vm.runInContext(line.slice(0,line.indexOf('\n')),ctx);
+ const receipt={source_task_complete_on:'2026-10-21',source_task_due:'2026-10-22',source_task_handback_on:'2026-10-22',source_task_inspection_on:''};
+ for(const days of [vm.runInContext('studyDays',ctx),vm.runInContext('taskDays',ctx)]){
+  assert.equal(days(receipt),'老师要求完成：2026-10-21 · 老师要求交回：2026-10-22');
+  // A different saved due still shows; an older payload without the role keeps its old fallback.
+  assert.equal(days({...receipt,source_task_due:'2026-10-23'}),'老师要求完成：2026-10-21 · 老师要求交回：2026-10-22 · 原截止：2026-10-23');
+  assert.equal(days({source_task_complete_on:'2026-10-21',source_task_due:'2026-10-22'}),'老师要求完成：2026-10-21 · 原截止：2026-10-22');
+ }
+});
 test('the parent after-school card reads the same requirement lines as Today and the child card',()=>{
  const study=readFileSync(__dirname+'/study.js','utf8'),ctx=vm.createContext({});
  const line=study.slice(study.indexOf('const taskRequirement='));vm.runInContext(line.slice(0,line.indexOf('\n')),ctx);

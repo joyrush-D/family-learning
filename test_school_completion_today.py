@@ -1257,6 +1257,46 @@ class ClearStandardsTests(unittest.TestCase):
         self.assertEqual(rows[ids['《秋游意见回执》']]['source_task_inspection_on'], '')
 
 
+class HandbackRoleTests(unittest.TestCase):
+    """Root's counter-example on a6c1443: the receipt's own 明早交给班主任 is its handback day, never a generic deadline."""
+    setUp = native.SchoolNativeCoverageTests.setUp
+
+    def test_only_the_item_s_own_handback_on_that_day_makes_it_a_handback(self):
+        sent = '2026-10-21'
+        for quote, want in [
+                ('请家长今晚在《秋游意见回执》上签字，由孩子明早交给班主任。', 'handback'),
+                ('今晚请家长签好《活动回执》，由孩子明早交给班主任。', 'handback'),
+                ('数学作业是《数格练习册》第34页第1—4题，今晚完成，明天早上交。', 'handback'),
+                # A day the handback must come before is the ordinary deadline; a check stays a check; two roles on one
+                # day keep both obligations under the generic label; bringing an item is no handback.
+                ('请家长于10月22日前交回回执。', 'deadline'),
+                ('今晚将课本第20页的对话朗读三遍，请家长听完后在这一页签字，明天早读检查。', 'inspection'),
+                ('今晚完成练习册第3页，明天交回练习册，明天早读检查。', 'deadline'),
+                ('明天来校带一个空透明塑料瓶，科学课用。', 'deadline')]:
+            with self.subTest(quote=quote):
+                self.assertEqual(family_agenda.date_meaning(quote, '2026-10-22', sent), want)
+
+    def test_the_saved_receipt_reads_its_handback_day_for_parent_and_child_without_any_change(self):
+        ids, tasks, items, refs = OrdinaryOwnedTimeTests.save_day(self)
+        key = '《秋游意见回执》';saved = tasks[ids[key]]
+        self.assertEqual(sum(key in t['title'] for t in tasks.values()), 1, 'still one receipt todo')
+        listed = {t['id']: t for t in self.app.tasks()}
+        agenda = listed[ids[key]]['agenda']
+        self.assertEqual((agenda['category'], agenda['complete_on'], agenda['due_on'], agenda['due_kind']), ('todo', '2026-10-21', '2026-10-22', 'handback'))
+        self.assertEqual({k: listed[ids[key]][k] for k in ('title', 'action', 'due', 'source')}, {k: saved[k] for k in ('title', 'action', 'due', 'source')})
+        # Every other item keeps its own role.
+        self.assertEqual({k: listed[ids[k]]['agenda']['due_kind'] for k in ('第20页', '第18页', '家长会')},
+                         {'第20页': 'inspection', '第18页': 'deadline', '家长会': 'event'})
+        study = family_study.Store(SimpleNamespace(**vars(self.app)))
+        study.save_item(dict(child_id=self.source['child_id'], day='2026-10-21', request_key='handback-role-receipt' + 'x' * 12,
+                             version=0, task_id=ids[key], planned_minutes=5))
+        row = {r['task_id']: r for r in study.snapshot(self.source['child_id'], '2026-10-21')['items']}[ids[key]]
+        self.assertEqual((row['source_task_complete_on'], row['source_task_handback_on'], row['source_task_inspection_on'], row['source_task_due']),
+                         ('2026-10-21', '2026-10-22', '', '2026-10-22'))
+        with self.store._db() as c:
+            self.assertEqual(dict(c.execute('SELECT * FROM manual_tasks WHERE id=?', (ids[key],)).fetchone()), saved, 'storage unchanged')
+
+
 def saved_flash27_state(path):
     """The app's own state and 2026-10-19 calendar after the fictional Flash27 day is saved by run_once (no model)."""
     case = Flash27ReadableCardTests('test_each_card_shows_its_own_conditions_once_and_keeps_the_saved_words')
