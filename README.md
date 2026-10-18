@@ -1,5 +1,9 @@
 # 一起成长 · Family Agent
 
+## 候选（未Root验收/未合入/未部署，不是新家庭版号；家庭仍为r265，整体ACTIVE）：H01主卡读出本项原话的完成钟点（R04/R14，①内有限增量）
+
+分支 `codex/daily-todo-completion-clock`（基线 `dedf86a`；RED `b95784f`，修补 `dba78d0`）。共因：固定H01 mock回复的要求省掉“2026年10月18日20:00前”，`completion_day`只给出日期18，主卡只读已存要求，所以两端都没有20:00。修补只在共同只读投影：`family_agenda.metadata`在本项完成日由本项第一完成分句证明时，从同一已存 `school_date_quote` 原句逐字取完成动词前带钟点的头词（`completion_words`），`action_lines` 把它放在唯一以同一完成内容开头的已存行前；家长今天/所有事项（`action_lines`）、放学后安排与孩子主卡（`source_task_action_lines`）读同一投影。已存goal/action、due20、交回20、原文/出处/版本/家长更正与反馈均不改写，旧条与新条同样读出；20日交回原话无时分，不猜。书名内钟点、交回分句钟点、他项、发送时刻、已含钟点的要求不借用。未加模型调用，未改prompt/采集/游标/生产。验证与未验见run目录 `report.json`；浏览器截图未验。
+
 ## r265 本项当天交回的日期标为“老师要求交回”（R04/R09/R14，①内有限增量）：家庭LAN技术切换通过
 
 [PR165](https://github.com/joyrush-D/family-learning/pull/165) 已rebase合入main `d1dc7fe`（tree `8f21db1`，与Root受测`f32c11c`同树，8个提交逐树、作者与说明一致）。Root于北京2026-10-18 18:17完成家庭LAN代码切换并独立只读复核。本说明提交时正式元数据仍为r264；本说明合入后Root只同步两份文档并登记r265，不再切码或重启。下方候选节与r264节为当时历史。
