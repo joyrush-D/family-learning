@@ -8,6 +8,7 @@ the saved replies are fixtures, not a measurement of model extraction accuracy.
 import copy
 import datetime as dt
 import json
+import re
 import unittest
 from contextlib import ExitStack
 from unittest.mock import patch
@@ -2035,17 +2036,64 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         self.assertEqual([a['quote'] for a in agent._school_native_blocks(payload['messages'][3]['text'])],
                          ['听录音并跟读Lesson 3《The Garden》两遍', '抄写本课单词表前6个单词，每个写3遍'])
         self._use_replies(payload, [dict(proposals=reply)])
-        # Known gap, not a pass: the batch now reaches the one ordinary caller, but the next same-teacher message is a
-        # clause list (补充英语作业：以上两项均…，…；…这两项作业), which the shared-later reader still binds to no outcome,
-        # so the complete reply is held with every original kept for retry instead of being saved.
-        self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
+        # The same English teacher's next message is a clause list of the two items' one scope (以上两项均…晚完成，完成后
+        # 请家长…签字；…英语课检查这两项作业): it binds to both English items, so the complete reply is saved whole.
+        result = agent.run_once(self.app, self.now)
         with self.store._db() as c:
-            self.assertIn('学校补充要求未归到对应作业', c.execute("SELECT error FROM agent_jobs WHERE id LIKE 'messages:%'").fetchone()[0])
+            error = c.execute("SELECT error FROM agent_jobs WHERE id LIKE 'messages:%'").fetchone()
+        self.assertEqual((result["failed"], result["processed"]), (0, 6), error and error[0])
+        self.assertEqual(self.model.call_count, 1)
+        # Reopened through new connections: every original processed and kept, each semantic unit one saved school row.
+        with self.store._db() as c:
+            self.assertEqual([r[0] for r in c.execute('SELECT processed FROM agent_messages ORDER BY rowid')], [1] * 6)
+            self.assertEqual([json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')], payload['messages'])
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY rowid")]
+        with self.app.connect() as c:
+            visible = {t['id']: t for t in self.app.tasks(c)}
+        saved = [(json.loads(r['plan'])['school_task'], r['due'], {q['ref'] for q in json.loads(r['evidence'])}, r) for r in rows]
+        self.assertEqual(len(saved), 8, [b['title'] for b, *_ in saved])
+        def unit(literal):
+            found = [s for s in saved if literal in s[0]['goal']]
+            self.assertEqual(len(found), 1, literal)
+            return found[0]
+        for literal, subject, purpose, standards, due, cited in (
+                ('朗读《山谷的早晨》第3自然段三遍', '语文', 'learning', ['2026年10月20日晚完成', '2026年10月21日早读检查'], '2026-10-20', {refs[0]}),
+                ('完成《字词随练》第8页', '语文', 'learning', ['做完自行检查', '2026年10月20日晚完成', '2026年10月21日早读检查', '《字词随练》交给语文课代表'], '2026-10-20', {refs[0]}),
+                ('《计算练习》第12页第1至6题', '数学', 'learning', ['列出计算过程', '做完自行检查', '2026年10月20日晚完成', '2026年10月21日上午交给数学课代表'], '2026-10-21', {refs[1]}),
+                ('复习第4课《河畔聚落》', '历史', 'learning', ['完成课后练习第1、2题', '2026年10月20日晚完成', '2026年10月21日历史课检查'], '2026-10-20', {refs[2]}),
+                ('订正上周《历史小练习》中做错的题', '历史', 'learning', ['每题写一句错因', '2026年10月20日晚完成', '2026年10月21日历史课检查'], '2026-10-20', {refs[2]}),
+                ('听录音并跟读Lesson 3《The Garden》两遍', '英语', 'learning', ['2026年10月20日晚完成', '完成后请家长在英语作业记录本上签字', '2026年10月21日英语课检查'], '2026-10-20', {refs[3], refs[4]}),
+                ('抄写本课单词表前6个单词，每个写3遍', '英语', 'learning', ['2026年10月20日晚完成', '完成后请家长在英语作业记录本上签字', '2026年10月21日英语课检查'], '2026-10-20', {refs[3], refs[4]}),
+                ('《秋季安全教育回执》上签字', '', 'admin', ['2026年10月22日前交回班主任', '无需盖章'], '2026-10-22', {refs[5]})):
+            brief, saved_due, saved_refs, row = unit(literal)
+            self.assertTrue(all(s in brief['goal'] for s in standards), (literal, brief['goal']))
+            self.assertEqual((brief['purpose'], saved_due, saved_refs), (purpose, due, cited), literal)
+            self.assertTrue(brief['title'].startswith(subject + '：') if subject else not re.search(agent._SCHOOL_NATIVE_SUBJECTS, brief['title']), brief['title'])
+            if row['task_id']:
+                self.assertEqual(visible[row['task_id']]['agenda']['due_on'], due, literal)
+        # The receipt keeps its own day and stays administrative; the signature is no third English task, and the
+        # English supplement is no other teacher's standard.
+        receipt = unit('《秋季安全教育回执》上签字')[0]['goal']
+        self.assertNotIn('2026年10月20日', receipt);self.assertNotIn('盖章', receipt.replace('无需盖章', ''))
+        self.assertEqual(sum('英语作业记录本' in b['goal'] for b, *_ in saved), 2)
+        self.assertEqual({b['title'][:2] for b, _, cited, _ in saved if refs[4] in cited}, {'英语'})
 
     def test_a_held_out_day_reply_missing_a_numbered_item_is_not_silently_ready(self):
         payload, refs, reply = self._daily_lists()
         self._use_replies(payload, [dict(proposals=[p for p in reply if not p['title_quote'].startswith('复习第4课')])])
         self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
+
+    def test_the_same_clause_list_from_another_teacher_binds_to_no_english_item(self):
+        """The supplement's identity is the list's own teacher: the same words from another teacher bind to nothing."""
+        evidence = [dict(ref='message:s:' + n, text=text, time='2026-10-20T16:' + clock + ':00+08:00', kind='text', content_incomplete=False,
+                         attachments=[], unread=False, publisher=publisher, message_order=n)
+                    for n, clock, publisher, text in (
+                        ('14', '16', 'publisher:english', '英语：今天有两项作业：1. 听录音并跟读Lesson 3《The Garden》两遍；2. 抄写本课单词表前6个单词，每个写3遍。'),
+                        ('15', '17', 'publisher:english', '补充英语作业：以上两项均在2026年10月20日晚完成，完成后请家长在英语作业记录本上签字；2026年10月21日英语课检查这两项作业。'))]
+        bound = lambda: [len(a.get('shared_supplements', [])) for a in agent._school_native_actions(evidence)]
+        self.assertEqual(bound(), [1, 1])
+        evidence[1]['publisher'] = 'publisher:history'
+        self.assertEqual(bound(), [0, 0])
 
 
 class SchoolActionAnchorTests(unittest.TestCase):
