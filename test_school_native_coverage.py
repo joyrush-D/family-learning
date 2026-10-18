@@ -3124,6 +3124,75 @@ class SchoolActionPurposeTests(unittest.TestCase):
         self.assertEqual(agent.run_once(self.app, self.now)['processed'], 0)
         self.assertEqual(facts(), first, 'reopening reads the same saved item without another write')
 
+    # Root's frozen C08 (pure fiction): the two fixed correct 15-field replies, not provider outputs. The English reading with its
+    # own signature and check is one homework; tomorrow's PE supplies, naming nothing of it, are a separate administrative to-do.
+    C08_TEXT = '英语：今晚跟读Lesson 5《A Quiet Park》三遍，读完家长在同一页签名，明早检查记录页；另外，明天体育课带跳绳，不要求在家训练。'
+
+    def test_c08_supplies_naming_nothing_of_the_english_reading_save_as_their_own_todo_beside_it(self):
+        # The ledger keeps the reading's own signature and check with it and never lists the supplies inside it.
+        actions = agent._school_native_actions([dict(
+            ref='message:s:1', text=self.C08_TEXT, kind='text', publisher='synthetic-teacher-1', time='2026-11-04T16:21:00+08:00')])
+        self.assertIn('今晚跟读Lesson 5《A Quiet Park》三遍，读完家长在同一页签名，明早检查记录页', [a['quote'] for a in actions])
+        self.assertFalse([a['quote'] for a in actions if '跳绳' in a['quote'] and 'Lesson 5' in a['quote']])
+        self.fixture.now = self.now = dt.datetime(2026, 11, 4, 16, 30, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='18')
+        payload['messages'] = [dict(id='18', message_order='18', time='2026-11-04T16:21:00+08:00', kind='text', sender='虚构老师C08',
+                                    sender_id='synthetic-publisher-C08', text=self.C08_TEXT, unread=False)]
+        self.store.ingest(payload)
+        ref = 'message:' + self.source['id'] + ':18'
+        reason = '仅虚构独立固定回复：按老师明确原文整理；不是实际模型输出。'
+        reading = dict(title_quote='今晚跟读Lesson 5《A Quiet Park》三遍，读完家长在同一页签名，明早检查记录页', focus='school', due='2026-11-05',
+                       evidence=[dict(ref=ref)], learning_subject='英语', learning_goal_id='', task_title='英语：跟读Lesson 5三遍并签名',
+                       task_goal='今晚跟读Lesson 5《A Quiet Park》三遍，读完家长在同一页签名，明早检查记录页', task_advice='', task_state='ready',
+                       task_reason=reason, task_change='new', task_target_id='', task_purpose='learning', task_submission='明早检查记录页。')
+        supplies = dict(title_quote='另外，明天体育课带跳绳，不要求在家训练', focus='school', due='2026-11-05', evidence=[dict(ref=ref)],
+                        learning_subject='', learning_goal_id='', task_title='体育课准备：带跳绳', task_goal='明天体育课带跳绳，不要求在家训练',
+                        task_advice='', task_state='ready', task_reason=reason, task_change='new', task_target_id='', task_purpose='admin',
+                        task_submission='')
+        self._use_replies(payload, [dict(proposals=[reading, supplies])])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+
+        def facts():
+            with self.store._db() as c:
+                rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY id")]
+                manual = [dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+                originals = [json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
+                closed = [c.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0] for table in ('task_updates', 'records')]
+            with self.app.connect() as c:
+                tasks = {t['id']: t for t in self.app.tasks(c) if t['id'] in {m['id'] for m in manual}}
+            return rows, manual, tasks, originals, closed
+
+        rows, manual, tasks, originals, closed = first = facts()
+        self.assertEqual((len(rows), len(manual), len(tasks)), (2, 2, 2), 'two formal items: never one merged item or a third for training')
+        own = {json.loads(row['plan'])['school_task']['purpose']: row for row in rows}
+        self.assertEqual(sorted(own), ['admin', 'learning'])
+        reading_row, supplies_row = own['learning'], own['admin']
+        reading_plan, supplies_plan = json.loads(reading_row['plan']), json.loads(supplies_row['plan'])
+        reading_task, supplies_task = tasks[reading_row['task_id']], tasks[supplies_row['task_id']]
+        self.assertEqual((reading_row['state'], reading_row['due'], reading_plan['school_task']['state'], reading_plan['school_learning']['subject']),
+                         ('accepted', '2026-11-05', 'ready', '英语'))
+        self.assertEqual((supplies_row['state'], supplies_row['due'], supplies_plan['school_task']['state'], supplies_plan.get('school_learning')),
+                         ('accepted', '2026-11-05', 'ready', None), 'the supplies stay an administrative to-do with no learning link')
+        # Tonight's reading is its completion day (4th) and tomorrow morning's check its own due (5th); the supplies state no
+        # completion day of their own, so none is invented and neither item borrows the other's.
+        for task, category, complete_on in ((reading_task, 'homework', '2026-11-04'), (supplies_task, 'todo', '')):
+            agenda = task['agenda']
+            self.assertEqual((agenda['category'], agenda['complete_on'], agenda['due_on'], agenda['published_at']),
+                             (category, complete_on, '2026-11-05', '2026-11-04T16:21:00+08:00'))
+            self.assertEqual([(p['ref'], p['sender']) for p in agenda['publications']], [(ref, '虚构老师C08')])
+        self.assertEqual([[e['ref'] for e in json.loads(row['evidence'])] for row in (reading_row, supplies_row)], [[ref], [ref]])
+        for words in ('Lesson 5《A Quiet Park》三遍', '家长在同一页签名', '明早检查记录页'):self.assertIn(words, reading_task['action'])
+        for words in ('体育课带跳绳', '不要求在家训练'):self.assertIn(words, supplies_task['action'])
+        self.assertNotIn('跳绳', reading_task['action'], 'the reading never takes the supplies')
+        for words in ('Lesson 5', '签名', '记录页'):
+            self.assertNotIn(words, supplies_task['action'], 'the supplies never take the reading, its signature or its check')
+        self.assertEqual([o['text'] for o in originals], [self.C08_TEXT])
+        self.assertEqual(closed, [0, 0], 'nothing is marked done or recorded as learned')
+        self.assertEqual(agent.run_once(self.app, self.now)['processed'], 0)
+        self.assertEqual(facts(), first, 'reopening reads the same two saved items without another write')
+        self.assertEqual(self.model.call_count, 1)
+
     def _parent_signed_notice(self, message_id, time, sender_id, text, title, due):
         """Root's fictional admin notice with an own correct fixed 15-field admin reply, beside the English read-aloud."""
         self.fixture.now = self.now = dt.datetime(2026, 10, 26, 16, 30, tzinfo=agent.TZ)
