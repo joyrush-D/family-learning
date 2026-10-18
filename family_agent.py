@@ -4364,9 +4364,11 @@ def _school_native_blocks(text):
         if (listed and marker and not purpose and not re.search(_SCHOOL_NATIVE_CHANGE+r'|选做',clause)
                 and not _school_native_common_negative(clause)):purpose='directed'
         # How an earlier outcome's own activity is done (背诵时不看书，不用录音) is that outcome's standard, not another
-        # outcome: only when the one owner the condition reading finds names the activity written directly before 时.
-        # A numbered item, another activity, several owners or a comma outcome after it keep their own readings.
-        manner=re.match(r'(朗读|跟读|背诵|抄写|听写|默写|口算)时',clause)
+        # outcome: only when 时 closes the activity's own time clause, so a pause or that clause's predicate follows it
+        # directly (不/无需/勿/别…, 要/须/需/应/请, 注意/保持), and the one owner the condition reading finds names the
+        # activity written directly before 时. An object opening with 时 (朗读时间管理短文一遍) stays that activity's object;
+        # a numbered item, another activity, several owners or a comma outcome after it keep their own readings too.
+        manner=re.match(r'(朗读|跟读|背诵|抄写|听写|默写|口算)时(?=\s*[，,]|不|无需|无须|勿|别|要|须|需|应|请|注意|保持)',clause)
         if purpose=='learning' and manner and pieces and not (listed and marker):
             owner=_school_native_condition_owner(clause,pieces)
             if owner and _school_native_marks(manner[1])&_school_native_marks(owner['primary']):purpose=''
