@@ -3857,6 +3857,15 @@ class OrdinaryMixedSchooldayTests(unittest.TestCase):
     )
     SAFE6_SHEET = ('平均分练习单\n（纯虚构验收材料，不含真实学生信息）\n\n1.把12颗糖平均分给3个小朋友，每人分到几颗？\n答：________________\n\n'
                    '2.把8张卡片平均分成2组，每组几张？\n画图和作答：________________\n\n3.把20颗珠子平均分成5份，每份几颗？\n答：________________\n').encode()
+    # Flash trial30's unedited parsed reply to the same six originals (PARSED-RAW.json, a real model reply, not a fixed one):
+    # 104 splits the parent's reading, the signing and the handback into three sentences and adds no child reading.
+    FLASH30_PROPOSALS = (
+        {'title_quote': '今天完成《平均分练习单》第1、2题，把答案直接写在练习单上。明天交给数学课代表', 'focus': 'school', 'due': '2026-10-23', 'evidence': [{'ref': 'message:qa-ordinary-mixed-day-01:101'}, {'ref': 'message:qa-ordinary-mixed-day-01:102'}], 'task_title': '数学：完成《平均分练习单》第1、2题', 'task_goal': '完成《平均分练习单》第1、2题。\n答案直接写在练习单上。\n第2题要画出分组过程，不用抄题。\n第3题不用做。\n明天交给数学课代表。', 'task_advice': '可先让孩子口述第2题的分组思路，再动笔画在练习单上。', 'learning_subject': '数学', 'learning_goal_id': '', 'task_change': 'new', 'task_target_id': '', 'task_state': 'ready', 'task_reason': '老师明确要求全班完成练习单第1、2题并明天交给数学课代表，补充消息进一步说明第2题画分组过程、不用抄题、第3题不用做。', 'task_purpose': 'learning', 'task_submission': '明天交给数学课代表'},
+        {'title_quote': '明天音乐课请孩子带音乐书和竖笛。今晚只要把这两样装进书包，不用在家练习', 'focus': 'school', 'due': '', 'evidence': [{'ref': 'message:qa-ordinary-mixed-day-01:103'}], 'task_title': '音乐：带音乐书和竖笛', 'task_goal': '明天音乐课带音乐书和竖笛。\n今晚把这两样装进书包即可，不用在家练习。', 'task_advice': '可今晚睡前按清单检查书包是否已放入音乐书和竖笛。', 'learning_subject': '', 'learning_goal_id': '', 'task_change': 'new', 'task_target_id': '', 'task_state': 'ready', 'task_reason': '老师明确要求明天音乐课携带音乐书和竖笛，并说明今晚只需装进书包、不用在家练习，属于带物事务。', 'task_purpose': 'admin', 'task_submission': ''},
+        {'title_quote': '请家长今天阅读孩子带回的《图书借阅约定》，在末页“监护人”栏签字。孩子明天交给班主任', 'focus': 'school', 'due': '2026-10-23', 'evidence': [{'ref': 'message:qa-ordinary-mixed-day-01:104'}], 'task_title': '家长签字《图书借阅约定》并交回', 'task_goal': '家长今天阅读孩子带回的《图书借阅约定》。\n在末页“监护人”栏签字。\n孩子明天交给班主任。', 'task_advice': '可今晚阅读后立即签字，并让孩子把材料放回书包。', 'learning_subject': '', 'learning_goal_id': '', 'task_change': 'new', 'task_target_id': '', 'task_state': 'ready', 'task_reason': '老师明确要求家长今天阅读并在末页监护人栏签字，孩子明天交给班主任，属于签字交回事务。', 'task_purpose': 'admin', 'task_submission': '孩子明天交给班主任'},
+        {'title_quote': '10月23日放学请家长统一到东门接孩子，南门当天不开放。其他日期照常', 'focus': 'school', 'due': '2026-10-23', 'evidence': [{'ref': 'message:qa-ordinary-mixed-day-01:105'}], 'task_title': '10月23日放学东门接孩子', 'task_goal': '10月23日放学请家长统一到东门接孩子。\n南门当天不开放。\n其他日期照常。', 'task_advice': '可提前告知接送家人当天改到东门。', 'learning_subject': '', 'learning_goal_id': '', 'task_change': 'new', 'task_target_id': '', 'task_state': 'ready', 'task_reason': '老师明确通知10月23日放学接送地点改为东门、南门当天不开放，属于需家长办理的接送安排。', 'task_purpose': 'admin', 'task_submission': ''},
+        {'title_quote': '选读分享：《校园树木小记》。感兴趣的孩子可以自己找来读，不是作业，不用写读后感，也不用提交', 'focus': 'school', 'due': '', 'evidence': [{'ref': 'message:qa-ordinary-mixed-day-01:106'}], 'task_title': '', 'task_goal': '', 'task_advice': '', 'learning_subject': '', 'learning_goal_id': '', 'task_change': 'new', 'task_target_id': '', 'task_state': 'reference', 'task_reason': '老师明确说明这是选读分享，感兴趣的孩子可自己找来读，不是作业，不用写读后感，也不用提交，属于自愿参考资料，不生成必做任务。', 'task_purpose': 'optional', 'task_submission': ''},
+    )
 
     def test_the_embedded_fixture_is_the_frozen_safe6_content(self):
         canon = lambda value:hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -3953,6 +3962,53 @@ class OrdinaryMixedSchooldayTests(unittest.TestCase):
         with self.app.connect() as c:
             task, = [t for t in self.app.tasks(c) if t['id'] == accepted['task_id']]
         self.assertEqual((task['agenda']['complete_on'], task['agenda']['due_on'], task['agenda']['due_kind']), ('2026-10-22', '2026-10-23', 'handback'))
+
+    def test_flash30_parent_reading_signed_in_its_next_sentence_stays_the_admin_signing(self):
+        canon = lambda value:hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        self.assertEqual(canon(dict(proposals=list(self.FLASH30_PROPOSALS))), '00e9a8bad7159ff127388cbcd858e64c29566d3cd4b39beeca9d2d4c0a84ab0f')
+        self.fixture.source.update(self.SAFE6_SOURCE);self.fixture.config()
+        self.fixture.now = self.now = dt.datetime(2026, 10, 22, 16, 40, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='106')
+        payload['messages'] = copy.deepcopy(list(self.SAFE6_MESSAGES))
+        self.store.ingest(payload)
+        upload = self.app.save_upload(io.BytesIO(self.SAFE6_SHEET), len(self.SAFE6_SHEET), '平均分练习单.txt')
+        self.store.message_attachment(dict(child_id='child-1', source_id=self.source['id'], message_id='102',
+                                           attachment_id=upload['id'], action='attach'), dict)
+        self.model.side_effect = lambda *args, **kwargs:dict(proposals=copy.deepcopy(list(self.FLASH30_PROPOSALS)))
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 6))
+        rows, manual, links, originals, tasks = self._facts()
+        self.assertEqual(sorted(rows), [('101', '102'), ('103',), ('104',), ('105',), ('106',)])
+        brief = lambda key:json.loads(rows[key]['plan'])['school_task']
+        # 104: the parent reads what the parent signs, the child only carries it back: one administrative signing.
+        sign = rows[('104',)]
+        self.assertEqual((sign['state'], sign['due'], brief(('104',))['state'], brief(('104',))['purpose']), ('accepted', '2026-10-23', 'ready', 'admin'))
+        self.assertNotIn('同时提到学习活动', brief(('104',))['reason'])
+        sign_task = tasks[sign['task_id']]
+        for words in ('家长今天阅读孩子带回的《图书借阅约定》', '在末页“监护人”栏签字', '孩子明天交给班主任'):self.assertIn(words, sign_task['action'])
+        self.assertEqual((sign_task['agenda']['complete_on'], sign_task['agenda']['due_on'], sign_task['agenda']['due_kind']), ('2026-10-22', '2026-10-23', 'handback'))
+        # The peers keep their own outcomes: the pickup's own 23rd, math waiting on its unread sheet, 106 reference only.
+        pickup = rows[('105',)]
+        self.assertEqual((pickup['state'], pickup['due'], brief(('105',))['purpose']), ('accepted', '2026-10-23', 'admin'))
+        self.assertEqual((tasks[pickup['task_id']]['agenda']['due_on'], tasks[pickup['task_id']]['agenda']['complete_on']), ('2026-10-23', ''))
+        math = rows[('101', '102')]
+        self.assertEqual((math['state'], math['task_id'] or '', brief(('101', '102'))['state'], brief(('101', '102'))['purpose']), ('pending', '', 'review', 'learning'))
+        self.assertIn('附件尚未核实', brief(('101', '102'))['reason'])
+        self.assertEqual((rows[('106',)]['state'], rows[('106',)]['task_id'] or '', brief(('106',))['state']), ('pending', '', 'reference'))
+        self.assertEqual(links, [(self.source['id'], '102', upload['id'])])
+        self.assertEqual(originals, payload['messages'])
+
+    def test_bounded_readers_of_a_parent_reading_signed_in_its_next_sentence(self):
+        value = dict(title='签字交回', goal='', advice='', state='ready', reason='', purpose='admin')
+        brief = lambda text:agent._school_brief(dict(value, goal=text), evidence=[dict(ref='message:s:1', text=text, kind='text', unread=False)],
+                                                separate_learning=True)
+        self.assertEqual(brief('家长今天阅读孩子带回的《图书借阅约定》。\n在末页“监护人”栏签字。\n孩子明天交给班主任。')['state'], 'ready')
+        # Another signer, a child's own reading, another material, a negated or conditional signing, or study left over still reads as learning.
+        for text in ('家长今天阅读孩子带回的《图书借阅约定》。\n孩子在末页签字。', '孩子今天阅读《图书借阅约定》。\n在末页“监护人”栏签字。',
+                     '家长今天阅读《图书借阅约定》。\n在《安全承诺书》末页签字。', '家长今天阅读《图书借阅约定》。\n不用签字。',
+                     '家长今天阅读《图书借阅约定》。\n如有疑问再签字。', '家长今天阅读《图书借阅约定》。\n孩子朗读课文三遍，家长签字。',
+                     '家长今天阅读孩子的作文。\n在末页签字。'):
+            with self.subTest(text=text):self.assertEqual(brief(text)['state'], 'review')
 
     def test_bounded_readers_of_the_home_negation_the_packing_and_the_pickup_day(self):
         value = dict(title='课堂准备', goal='', advice='', state='ready', reason='', purpose='admin')
