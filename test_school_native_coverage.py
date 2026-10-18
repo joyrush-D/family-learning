@@ -4223,5 +4223,46 @@ class RecitationMethodAffirmedBoundaryTests(unittest.TestCase):
                 self.assertEqual(blocks(first+'；'+second+'。'), [(first, 'learning'), (second, 'learning')])
 
 
+class RecitationMethodCountedObjectTests(unittest.TestCase):
+    """Root's followup04 counterexample (pure fiction, REGRESSION.json frozen before product execution): in a stated two-item
+    list, 抄写时刻表工整 copies its own object 时刻表 to the standard 工整; it is no manner of the first copying. RAW is the
+    frozen fixed correct reply, not model output; GOLD's two tasks, purposes and days are asserted as frozen."""
+    setUp = SchoolNativeCoverageTests.setUp
+    _facts = OrdinaryMixedSchooldayTests._facts
+    MESSAGE = dict(id='501', message_order='501', time='2026-11-10T18:10:00+08:00', kind='text', sender='虚构语文教师',
+                   sender_id='fictional-cn-timetable', text='语文，今晚完成两项要求：抄写第6课生字一遍；抄写时刻表工整。', unread=False)
+    RAW = (
+        {'title_quote': '抄写第6课生字一遍', 'focus': 'school', 'due': '2026-11-10', 'evidence': [{'ref': 'message:qa-timetable-own-object:501'}], 'learning_subject': '语文', 'learning_goal_id': '', 'task_title': '语文：抄写第6课生字一遍', 'task_goal': '今晚抄写第6课生字一遍。', 'task_advice': '', 'task_state': 'ready', 'task_reason': '虚构原文明确两项不同对象的抄写要求，第二项为时刻表，工整是完成标准。', 'task_change': 'new', 'task_target_id': '', 'task_purpose': 'learning', 'task_submission': ''},
+        {'title_quote': '抄写时刻表工整', 'focus': 'school', 'due': '2026-11-10', 'evidence': [{'ref': 'message:qa-timetable-own-object:501'}], 'learning_subject': '语文', 'learning_goal_id': '', 'task_title': '语文：抄写时刻表', 'task_goal': '今晚抄写时刻表，书写工整。', 'task_advice': '', 'task_state': 'ready', 'task_reason': '虚构原文明确两项不同对象的抄写要求，第二项为时刻表，工整是完成标准。', 'task_change': 'new', 'task_target_id': '', 'task_purpose': 'learning', 'task_submission': ''},
+    )
+
+    def test_the_frozen_two_copying_items_save_as_two_tasks(self):
+        self.fixture.source.update(id='qa-timetable-own-object');self.fixture.config()
+        self.fixture.now = self.now = dt.datetime(2026, 11, 10, 18, 30, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='501')
+        payload['messages'] = [dict(self.MESSAGE)]
+        self.store.ingest(payload)
+        self.model.side_effect = lambda *args, **kwargs:dict(proposals=copy.deepcopy(list(self.RAW)))
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        with self.store._db() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY rowid")]
+        with self.app.connect() as c:
+            tasks = {t['id']: t for t in self.app.tasks(c)}
+        self.assertEqual([r['state'] for r in rows], ['accepted', 'accepted'])
+        self.assertEqual(len({r['task_id'] for r in rows} & set(tasks)), 2, 'two formal tasks')
+        briefs = [json.loads(r['plan'])['school_task'] for r in rows]
+        self.assertEqual([b['purpose'] for b in briefs], ['learning', 'learning'])
+        self.assertEqual(sorted(('第6课生字' in b['goal'], '时刻表' in b['goal'], '工整' in b['goal']) for b in briefs),
+                         [(False, True, True), (True, False, False)])
+        self.assertEqual([(r['due'], tasks[r['task_id']]['agenda']['due_on'], tasks[r['task_id']]['agenda'].get('complete_on', '')) for r in rows],
+                         [('2026-11-10', '2026-11-10', '')] * 2)
+        self.assertEqual(self._facts()[3], payload['messages'], 'the complete original stays unchanged')
+
+    def test_the_ledger_counts_the_timetable_as_its_own_item(self):
+        blocks = lambda text:[(a['quote'], a['purpose']) for a in agent._school_native_blocks(text)]
+        self.assertEqual(blocks(self.MESSAGE['text']), [('抄写第6课生字一遍', 'learning'), ('抄写时刻表工整', 'learning')])
+
+
 if __name__ == '__main__':
     unittest.main()
