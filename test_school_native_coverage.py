@@ -923,7 +923,7 @@ class SchoolNativeCoverageTests(unittest.TestCase):
             for quote, other in (self.SHARED_ACTIONS, self.SHARED_ACTIONS[::-1]):
                 row = next(r for r in rows if quote in r['body'])
                 self.assertNotIn(other, row['body'])
-                self.assertIn('以上两项均请家长核对并在记录本签字', row['body'])
+                self.assertIn('请家长核对并在记录本签字', row['body']);self.assertNotIn('以上两项', row['body'])
                 self.assertEqual((row['due'], row['state']), ('2026-10-16', 'accepted'))
                 self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
                 scope = json.loads(row['plan'])['school_original_action']
@@ -947,8 +947,9 @@ class SchoolNativeCoverageTests(unittest.TestCase):
                               [tuple(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]), before)
         return sorted((r['title'], r['body'], r['due'], r['state']) for r in rows)
 
-    SHARED_SAVED = [('英语：完成练习卷第2–4题', '明天\n完成练习卷第2–4题\n以上两项均请家长核对并在记录本签字', '2026-10-16', 'accepted'),
-                    ('英语：朗读Unit 8课文两遍', '明天\n朗读Unit 8课文两遍\n以上两项均请家长核对并在记录本签字', '2026-10-16', 'accepted')]
+    # Each card: its action, the heading's day, then the bound standard without its list words (以上两项均).
+    SHARED_SAVED = [('英语：完成练习卷第2–4题', '完成练习卷第2–4题\n明天\n请家长核对并在记录本签字', '2026-10-16', 'accepted'),
+                    ('英语：朗读Unit 8课文两遍', '朗读Unit 8课文两遍\n明天\n请家长核对并在记录本签字', '2026-10-16', 'accepted')]
 
     def test_list_and_its_next_shared_standard_message_save_like_one_message(self):
         saved = self._assert_shared_saved(*self._shared_messages([self.SHARED_LIST, self.SHARED_STANDARD]))
@@ -1034,7 +1035,7 @@ class SchoolNativeCoverageTests(unittest.TestCase):
             for quote, other in (self.SHARED_ACTIONS, self.SHARED_ACTIONS[::-1]):
                 row = next(r for r in standard_rows if quote in r['body'])
                 self.assertNotIn(other, row['body'])
-                self.assertIn('以上两项均请家长核对并在记录本签字', row['body'])
+                self.assertIn('请家长核对并在记录本签字', row['body']);self.assertNotIn('以上两项', row['body'])
                 self.assertEqual((row['due'], row['state']), ('2026-10-16', 'accepted'))
                 self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs[5:])
                 self.assertEqual({a['ref'] for a in json.loads(row['plan'])['school_original_action']['anchors']}, set(refs[5:]))
@@ -1108,7 +1109,7 @@ class SchoolNativeCoverageTests(unittest.TestCase):
                 merged = self._saved_fresh([listing + standard], stamps[1:] if listing is undated else stamps[:1])
                 self.assertEqual(split, merged)
                 self.assertEqual([('2026-10-16', 'accepted')] * 2, [(row[2], row[3]) for row in split])
-                self.assertTrue(all(standard.rstrip('。') in row[1] for row in split))
+                self.assertTrue(all(re.sub(agent._SCHOOL_NATIVE_COMMON, '', standard.rstrip('。')) in row[1].split('\n') for row in split))
 
     def test_p11_claimed_batch_recovers_completely_when_due_without_a_new_budget(self):
         payload, refs = self._p11_payload()
@@ -1158,7 +1159,7 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         standard_rows = [r for r in rows if refs[6] in [e['ref'] for e in json.loads(r['evidence'])]]
         self.assertEqual(len(standard_rows), 2, 'no generic pending item for the standard')
         for row in standard_rows:
-            self.assertIn('以上两项均请家长核对并在记录本签字', row['body'])
+            self.assertIn('请家长核对并在记录本签字', row['body']);self.assertNotIn('以上两项', row['body'])
             self.assertEqual((row['due'], row['state']), ('2026-10-16', 'accepted'))
 
     def _p11_old_prefix_jobs(self, prefix_value=None):
@@ -1212,7 +1213,7 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         self.assertIn(five, after[six]['error']);self.assertIn(tail, after[six]['error'])
         standard_rows = [r for r in rows if refs[6] in [e['ref'] for e in json.loads(r['evidence'])]]
         self.assertEqual([(r['due'], r['state']) for r in standard_rows], [('2026-10-16', 'accepted')] * 2)
-        self.assertTrue(all('以上两项均请家长核对并在记录本签字' in r['body'] for r in standard_rows))
+        self.assertTrue(all('请家长核对并在记录本签字' in r['body'] and '以上两项' not in r['body'] for r in standard_rows))
         self.assertEqual(self.store.snapshot()['sources'][0]['pending_message_count'], 0)
 
     def test_p11_conflicting_successor_key_runs_nothing_and_keeps_every_original(self):
@@ -2063,7 +2064,7 @@ class SchoolNativeCoverageTests(unittest.TestCase):
                 ('复习第4课《河畔聚落》', '历史', 'learning', ['完成课后练习第1、2题', '2026年10月20日晚完成', '2026年10月21日历史课检查'], '2026-10-20', {refs[2]}),
                 ('订正上周《历史小练习》中做错的题', '历史', 'learning', ['每题写一句错因', '2026年10月20日晚完成', '2026年10月21日历史课检查'], '2026-10-20', {refs[2]}),
                 ('听录音并跟读Lesson 3《The Garden》两遍', '英语', 'learning', ['2026年10月20日晚完成', '完成后请家长在英语作业记录本上签字', '2026年10月21日英语课检查'], '2026-10-20', {refs[3], refs[4]}),
-                ('抄写本课单词表前6个单词，每个写3遍', '英语', 'learning', ['2026年10月20日晚完成', '完成后请家长在英语作业记录本上签字', '2026年10月21日英语课检查'], '2026-10-20', {refs[3], refs[4]}),
+                ('抄写Lesson 3《The Garden》单词表前6个单词，每个写3遍', '英语', 'learning', ['2026年10月20日晚完成', '完成后请家长在英语作业记录本上签字', '2026年10月21日英语课检查'], '2026-10-20', {refs[3], refs[4]}),
                 ('《秋季安全教育回执》上签字', '', 'admin', ['2026年10月22日前交回班主任', '无需盖章'], '2026-10-22', {refs[5]})):
             brief, saved_due, saved_refs, row = unit(literal)
             self.assertTrue(all(s in brief['goal'] for s in standards), (literal, brief['goal']))
@@ -2077,6 +2078,35 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         self.assertNotIn('2026年10月20日', receipt);self.assertNotIn('盖章', receipt.replace('无需盖章', ''))
         self.assertEqual(sum('英语作业记录本' in b['goal'] for b, *_ in saved), 2)
         self.assertEqual({b['title'][:2] for b, _, cited, _ in saved if refs[4] in cited}, {'英语'})
+        # Each card reads alone: its action first, then its own completion, signature and check lines. The date lead is one
+        # reading (数学：完成…, never 晚完成…) and the goal keeps 晚完成; 本课 shows its own original's one lesson; no bare
+        # 今天 line or list words (以上两项/这两项作业/两项都) remain. The anchors and originals stay literal.
+        self.assertEqual(unit('《计算练习》第12页第1至6题')[0]['title'], '数学：完成《计算练习》第12页第1至6题')
+        self.assertIn('2026年10月20日晚完成《计算练习》', unit('《计算练习》第12页第1至6题')[0]['goal'])
+        copy, *_, copy_row = unit('抄写Lesson 3《The Garden》单词表前6个单词')
+        self.assertEqual((copy['title'], copy['goal']), ('英语：抄写Lesson 3《The Garden》单词表前6个单词',
+                         '抄写Lesson 3《The Garden》单词表前6个单词，每个写3遍\n2026年10月20日晚完成\n完成后请家长在英语作业记录本上签字\n2026年10月21日英语课检查'))
+        self.assertIn('抄写本课单词表前6个单词，每个写3遍', [a['quote'] for a in json.loads(copy_row['plan'])['school_original_action']['anchors']])
+        for brief, *_ in saved:
+            self.assertFalse(set(brief['goal'].split('\n')) & {'今天'} or re.search('以上两项|这两项作业|两项都', brief['goal']), brief['goal'])
+
+    def test_this_lesson_reads_only_its_own_originals_one_lesson_and_a_date_lead_keeps_its_day_part_in_the_goal(self):
+        """本课 is never guessed from two lessons or another message; one date-lead reading strips 20日晚 but not 早读."""
+        def values(*texts):
+            evidence = [dict(ref='message:s:' + str(n), text=text, time='2026-10-20T16:%02d:00+08:00' % n, kind='text', content_incomplete=False,
+                             attachments=[], unread=False, publisher='publisher:english', message_order=str(n)) for n, text in enumerate(texts, 10)]
+            texts = {e['ref']: e['text'] for e in evidence}
+            return {a['quote']: agent._school_native_value(a, texts[a['ref']]) for a in agent._school_native_actions(evidence)}
+        copy = '抄写本课单词表前6个单词，每个写3遍'
+        for texts in (['英语：今天有两项作业：1. 跟读Lesson 3《The Garden》和Lesson 4《The River》各两遍；2. ' + copy + '。'],
+                      ['英语：本周学习Lesson 3《The Garden》。', '英语：今天有两项作业：1. 听录音并跟读课文两遍；2. ' + copy + '。']):
+            value = values(*texts)[copy]
+            self.assertEqual((value['title'], value['goal'].split('\n')[0]), ('英语：抄写本课单词表前6个单词', copy), texts)
+        dated = values('数学：2026年10月20日晚完成《计算练习》第12页第1至6题，列出计算过程；2026年10月21日上午交给数学课代表。')
+        self.assertEqual([(v['title'], v['goal']) for v in dated.values()],
+                         [('数学：完成《计算练习》第12页第1至6题', '2026年10月20日晚完成《计算练习》第12页第1至6题，列出计算过程；2026年10月21日上午交给数学课代表')])
+        early = values('语文：今天完成两项：1. 2026年10月21日早读前背诵《春》第一段；2. 抄写《春》生字每个两遍。')
+        self.assertEqual(early['2026年10月21日早读前背诵《春》第一段']['title'], '语文：早读前背诵《春》第一段')
 
     def test_a_held_out_day_reply_missing_a_numbered_item_is_not_silently_ready(self):
         payload, refs, reply = self._daily_lists()

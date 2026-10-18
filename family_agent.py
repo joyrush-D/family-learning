@@ -3503,6 +3503,10 @@ _SCHOOL_NATIVE_DAY=r'(?:今天|今晚|明天|明晚|后天|(?:\d{4}年)?\d{1,2}�
 _SCHOOL_NATIVE_DATE=r'(?:'+_SCHOOL_NATIVE_DAY+r'|(?:本|下)?(?:周|星期|礼拜)[一二三四五六日天])'
 _SCHOOL_NATIVE_MARKER=r'(?:[1-9][0-9]?[.．、]|第[一二三四五六七八九十0-9]+项\s*[:：]?)\s*'
 _SCHOOL_NATIVE_EXAMPLE=re.compile(r'^(?:示例|例如|格式示例)[：:]')
+# One reading of a date's own lead (于11月6日前, 20日晚, 21:00前, 数学课前) for the command and its title alike; 早读/晚自习 are no part of day.
+_SCHOOL_NATIVE_WHEN=(r'(?:于|在)?\s*'+_SCHOOL_NATIVE_DATE+r'\s*(?:早上|上午|中午|下午|傍晚|晚上|早(?!读)|晚(?!读|自习))?\s*(?:\d{1,2}[:：]\d{2}|(?:'
+                     +_SCHOOL_NATIVE_SUBJECTS+r')课)?\s*(?:前|之前|以前|内)?\s*')
+_SCHOOL_NATIVE_LESSON=r'Lesson\s*[0-9]+(?:\s*《[^《》\n]{1,40}》)?|第[0-9一二三四五六七八九十]+课(?!时)(?:\s*《[^《》\n]{1,40}》)?'
 
 
 def _school_native_command(clause):
@@ -3511,8 +3515,7 @@ def _school_native_command(clause):
     # A date may carry its own clock time or lesson ("21:00前", "数学课前") before the outcome it limits,
     # and its own time preposition ("请于11月6日前阅读…") or part of that day ("20日晚完成…"); a date alone, or one not
     # followed by an outcome, is no command.
-    prefix=(r'(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')[，,:：]\s*|(?:于|在)?\s*'+_SCHOOL_NATIVE_DATE
-            +r'\s*(?:早上|上午|中午|下午|傍晚|晚上|早|晚)?\s*(?:\d{1,2}[:：]\d{2}|(?:'+_SCHOOL_NATIVE_SUBJECTS+r')课)?\s*(?:前|之前|以前|内)?\s*|请(?:各位)?(?:家长|同学们?|大家)?\s*|只需\s*|独立\s*|另(?:外)?\s*)')
+    prefix=(r'(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')[，,:：]\s*|'+_SCHOOL_NATIVE_WHEN+r'|请(?:各位)?(?:家长|同学们?|大家)?\s*|只需\s*|独立\s*|另(?:外)?\s*)')
     lead=re.match(r'^(?:'+prefix+r')*',value)[0];value=value[len(lead):]
     # "订正本/口算本" followed by its day or handback is the notebook, not another 订正/口算 outcome.
     learning=r'(?:朗读|背诵|抄写|默写|听写|跟读|订正|预习|复习|阅读|口算|习作|练习)(?!后|完|已|完成|录音|音频|本\s*(?:[0-9今明后下]|交|带))[^：:。；;]{2,}'
@@ -4328,19 +4331,51 @@ def _school_native_actions(evidence):
     return actions
 
 
-def _school_native_value(action):
-    """A short source-derived heading and all of this outcome's literal standards."""
-    from family_agenda import _relative_weekday,sent_day
-    primary=action['primary']
-    primary=re.sub(r'^(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')[，,:：]\s*|'+_SCHOOL_NATIVE_DATE+r'\s*(?:前|之前|以前|内)?\s*)+','',primary)
-    title=primary.split('，',1)[0].split(',',1)[0]
+def _school_native_lesson(action,text):
+    """The one lesson this same original names explicitly, for an outcome saying only 本课; none if it names two or none."""
+    if not re.search(r'本课(?!时)',action['quote']) or re.search(_SCHOOL_NATIVE_LESSON,action['quote']):return ''
+    lessons=set(re.findall(_SCHOOL_NATIVE_LESSON,text))
+    return next(iter(lessons)) if len(lessons)==1 else ''
+
+
+def _school_native_shared_lines(text):
+    """A bound all-items standard as this outcome's own lines: only its scope words (以上两项均, 这两项作业) are dropped.
+
+    Its binding to every outcome is already proven, so each semicolon clause keeps its day, predicate and completion step
+    (完成后请家长…签字) as one line; a clause left empty keeps the whole original instead.
+    """
+    lines=[]
+    for clause in re.split(r'[；;]',text.strip().rstrip('。；;')):
+        clause=clause.strip();common=re.match(_SCHOOL_NATIVE_COMMON,clause)
+        if common:
+            first,*rest=re.split(r'[，,]',clause[common.end():])
+            lines+=[re.sub(r'^\s*在\s*(?='+_SCHOOL_NATIVE_DATE+')','',first).strip()]+[part.strip() for part in rest]
+        else:lines.append(re.sub(r'(?:(?:这|以上|上述)[二两三四五六七八九十2-9]项|这些|以上|上述|所有)(?:作业|任务|要求)?$','',clause).strip())
+    return lines if all(lines) else [text]
+
+
+def _school_native_value(action,text=''):
+    """A short source-derived heading and all of this outcome's literal standards, its action first."""
+    from family_agenda import _relative_weekday,deadlines,sent_day
+    primary=re.sub(r'^(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')[，,:：]\s*|'+_SCHOOL_NATIVE_WHEN+r')+','',action['primary'])
+    # 本课 reads as the one lesson its own original names (1. 跟读Lesson 3《The Garden》；2. 抄写本课…), shown only; the anchor stays literal.
+    lesson=_school_native_lesson(action,text)
+    named=lambda value:re.sub(r'本课(?!时)',lambda _:lesson,value) if lesson else value
+    title=named(primary.split('，',1)[0].split(',',1)[0])
     if action['subject'] and not title.startswith(action['subject']):title=action['subject']+'：'+title
     if len(title)>80:raise AgentError('本项行动标题超过可核对范围，原文保留',code='school_action_coverage')
     # Only resolved weekdays can supply a shared day; never crop a recurring, past or ranged phrase.
-    header=_relative_weekday(action['header'],sent_day(action['time']))
+    published=sent_day(action['time']);header=_relative_weekday(action['header'],published)
     # A heading's part of day stays with its day (2026年10月20日晚完成两项 keeps 晚完成, never only the date).
     shared_date=re.search(_SCHOOL_NATIVE_DAY+r'\s*(?:(?:早上|上午|中午|下午|晚上|晚)\s*完成|之前|以前|前|内)?',header)
-    standards=([shared_date[0]] if shared_date else [])+[action['quote']]+action.get('conditions',[])+action.get('shared_conditions',[])+[s['goal'] for s in action.get('shared_supplements',[])+action['supplements']]
+    later=action.get('shared_supplements',[])+action['supplements']
+    # A bare heading day (今天有两项作业) that a bound standard of this outcome already dates adds no line of its own.
+    if shared_date and shared_date[0] in ('今天','明天','后天'):
+        day=(dt.date.fromisoformat(published)+dt.timedelta(days=('今天','明天','后天').index(shared_date[0]))).isoformat()
+        if any(day in deadlines(s['goal'],sent_day(s['time'])) for s in later):shared_date=None
+    shared=[line for clause in action.get('shared_conditions',[])+[s['goal'] for s in action.get('shared_supplements',[])]
+            for line in _school_native_shared_lines(clause)]
+    standards=[named(action['quote'])]+([shared_date[0]] if shared_date else [])+action.get('conditions',[])+shared+[s['goal'] for s in action['supplements']]
     return _school_requirement_goal(dict(title=title),standards)
 
 
@@ -4396,7 +4431,7 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
         raise AgentError('学校补充要求未归到对应作业，整批保留重试',code='school_action_coverage')
     if any(other['quote'] in proposal['task_goal'] for other in actions if other['id']!=action['id']):
         raise AgentError('不同学校成果被合并，整批保留重试',code='school_action_coverage')
-    value=_school_native_value(action)
+    value=_school_native_value(action,(entries or {}).get(action['ref'],{}).get('text',''))
     dates=_school_native_dates(action)
     # A bound change may move the day: both originals stay for review instead of choosing one.
     # Days this outcome's own text cannot attribute (回执…交给… after 订正…) keep no due and stay for review below.
@@ -4450,7 +4485,7 @@ def _school_native_saved(items,evidence):
             if not action or saved or plan.get('school_original_action') or action['id'] in assigned:
                 raise AgentError('学校独立要求的保存依据已变化，整批未写入',409,'school_action_coverage')
             expected={action['ref']}|{s['ref'] for s in _school_native_later(action)}
-            linked=cited&set(action.get('linked',[]));value=_school_native_value(action);dates=_school_native_dates(action)
+            linked=cited&set(action.get('linked',[]));value=_school_native_value(action,entries[action['ref']]['text']);dates=_school_native_dates(action)
             unread=any(e['ref'] in linked and (e.get('content_incomplete') or e.get('unread')) for e in evidence)
             if (not expected<=cited or cited-expected-linked-_school_native_kept(action,actions,entries) or not linked or sorted(linked)!=cover.get('linked')
                     or brief.get('state')=='ready' or not _school_native_purpose(action,brief.get('purpose')) or brief.get('target_id')
@@ -4464,7 +4499,7 @@ def _school_native_saved(items,evidence):
         ident=saved.get('id');action=lookup.get(ident)
         if not action or saved!=action or ident in assigned or plan.get('school_original_action')!=_school_native_scope(action):
             raise AgentError('学校独立要求的保存依据已变化，整批未写入',409,'school_action_coverage')
-        value=_school_native_value(action)
+        value=_school_native_value(action,entries[action['ref']]['text'])
         expected={action['ref']}|{s['ref'] for s in _school_native_later(action)}
         # A changed outcome keeps the checked summary; refs, purpose and its own date still match the ledger.
         literal=not action.get('changes')
