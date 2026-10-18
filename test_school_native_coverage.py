@@ -2102,6 +2102,11 @@ class SchoolNativeCoverageTests(unittest.TestCase):
                       ['英语：本周学习Lesson 3《The Garden》。', '英语：今天有两项作业：1. 听录音并跟读课文两遍；2. ' + copy + '。']):
             value = values(*texts)[copy]
             self.assertEqual((value['title'], value['goal'].split('\n')[0]), ('英语：抄写本课单词表前6个单词', copy), texts)
+        # The same original's one lesson still names an outside 本课; a closed literal name (《本课单词表》) stays whole.
+        value = values('英语：今天有两项作业：1. 听录音并跟读Lesson 3《The Garden》两遍；2. ' + copy + '。')[copy]
+        self.assertEqual(value['title'], '英语：抄写Lesson 3《The Garden》单词表前6个单词')
+        literal = values('英语：今天完成两项：1. 跟读Lesson 3《The Garden》两遍；2. 抄写《本课单词表》第1页。')['抄写《本课单词表》第1页']
+        self.assertEqual((literal['title'], literal['goal'].split('\n')[0]), ('英语：抄写《本课单词表》第1页', '抄写《本课单词表》第1页'))
         dated = values('数学：2026年10月20日晚完成《计算练习》第12页第1至6题，列出计算过程；2026年10月21日上午交给数学课代表。')
         self.assertEqual([(v['title'], v['goal']) for v in dated.values()],
                          [('数学：完成《计算练习》第12页第1至6题', '2026年10月20日晚完成《计算练习》第12页第1至6题，列出计算过程；2026年10月21日上午交给数学课代表')])
