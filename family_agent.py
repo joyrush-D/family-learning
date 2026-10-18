@@ -2574,6 +2574,29 @@ def _school_others_settled(quote,cited):
     return True
 
 
+def _school_own_cancelled(quote,cited):
+    """Whether one teacher's strictly later cited message withdraws this item's own role object outright.
+
+    A clause of it, after its 更正/补充 header, names only that same object and a closed withdrawal of it (更正：兴趣班回执不用
+    交了、取消兴趣班回执、兴趣班回执取消 for 请家长10月22日前交回兴趣班回执), with no question, condition or unsettled word.
+    Another publisher, another object (作业本不用交了), a changed or open day (改为…、另行通知、延期), a cancelled event (原定
+    …的家长会取消) or any other wording withdraws nothing of it.
+    """
+    homes=[e for e in cited if quote and quote in e['text']]
+    objects={o for c in re.split(r'[，,。；;！!？?\n]',quote) if _school_clause_roles(c) and (o:=_school_role_object(c))}
+    if len(homes)!=1 or len(objects)!=1:return False
+    home=homes[0];obj=next(iter(objects))
+    withdraw=(r'取消(.+?)(?:的?交回)?了?|(.+?)(?:的?交回)?(?:已)?取消了?'
+              r'|(.+?)(?:都|也)?(?:不用|不必|无需|无须|不需要?|不再)(?:再)?(?:交|交回|上交|提交)了?')
+    for e in cited:
+        if e is home or not _school_native_later_text(home,e):continue
+        for clause in re.split(r'[。；;，,！!\n]',e['text']):
+            body=re.sub(r'^\s*(?:更正|补充|通知|另外)?\s*[：:]?\s*','',clause.strip())
+            found=not re.search(_SCHOOL_NATIVE_UNSETTLED,body) and re.fullmatch(withdraw,body)
+            if found and next(g for g in found.groups() if g is not None).strip()==obj:return True
+    return False
+
+
 def _school_own_due(quote,cited,others):
     """The due this item's own words prove when its reply gave none, or ''.
 
@@ -5132,6 +5155,12 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 # Nor one another cited original changes, defers or cancels (another teacher, 另行通知, 不用交).
                 if borrowed(due) or due and len(cited_evidence)>1 and dated_quote and not _school_others_settled(dated_quote,cited_evidence):due=''
                 item['due']=due
+            if (not historical and not native_action and dated_quote and brief.get('change')=='new' and brief['state']!='reference'
+                    and _school_own_cancelled(dated_quote,cited_evidence)):
+                # One teacher's own later words withdraw this very object (更正：兴趣班回执不用交了): its originals and the reason
+                # stay as reference, never a current todo nor a review asking the parent to confirm the cancel again.
+                due=item['due']='';uncertain_due=ambiguous_due=False
+                brief.update(state='reference',reason=brief['reason'][:300]+' 同一老师后续消息已明确取消本项，不生成待办；原消息与原要求保留。')
             target=next((t for t in school_tasks if t['id']==raw_target),None)
             if (uncertain_due and brief.get('change')=='append' and brief['state']=='ready'
                     and brief.get('target_basis') and not relative

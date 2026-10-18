@@ -323,7 +323,9 @@ def _held_events(text,published):
         # Who attends may be asked in the very next sentence when it names no day (…学校报告厅。每家一位家长参加，孩子不用来。).
         following=sentences[at+1] if at+1<len(sentences) else ''
         if (not re.search(_ATTEND_REQUEST,sentence) and re.search(_ATTEND_REQUEST,following) and not re.search(_DAY_WORDS,following)
-                and len(held)==1):
+                and len(held)==1
+                # …unless it names another event (讲座定在…。另一个家长会每家一位家长参加): that attending is not this event's.
+                and not re.search(r'(?<!参)会|讲座|活动|典礼|仪式|比赛|开放日',re.sub('|'.join(map(re.escape,_event_names(clauses[held[0]]))) or '$^','',following))):
             sentence=sentence+'，'+following;clauses=clauses+[c for c in re.split(r'[，,]',following) if c.strip()]
         if len(values)!=1 or '' in values or len(held)!=1 or not re.search(_ATTEND_REQUEST,sentence):continue
         value=next(iter(values));event=clauses[held[0]]
