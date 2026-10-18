@@ -512,6 +512,43 @@ class R259ClearedDateRereadTests(unittest.TestCase):
         agent._school_recovery_inherit(self.store, third, batch, 'child-1')
         self.assertTrue(claim(third), 'a real success spends no failure budget of the batch')
 
+    def _saved_rows(self):
+        """Every saved row the reread, its acceptance and its task could touch (the runtime heartbeat aside)."""
+        with self.store._db() as c:
+            tables = {r['name'] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            return {t: sorted(json.dumps(dict(r), sort_keys=True, ensure_ascii=False) for r in c.execute('SELECT * FROM ' + t))
+                    for t in ('agent_items', 'agent_jobs', 'agent_sources', 'agent_messages', 'manual_tasks', 'task_updates',
+                              'task_history', 'task_focus', 'study_items', 'records') if t in tables}
+
+    def test_a_natural_success_is_never_replayed_by_the_explicit_retry(self):
+        # The ordinary entry closes the chain the shared-entry test builds by hand: the reread succeeds on its own run_once
+        # (no SQL, no removed identity), then the existing explicit retry -- by its id, then of everything -- and further
+        # ordinary rounds and a reopen make no further model call and leave the task, the job, the old row's kept history
+        # and every other saved row exactly as that success saved them.
+        before = self._old_store()
+        unknown = self._item(before, UNKNOWN)
+        key = 'school-task:' + unknown['id']
+        self._replies(NEW_RECEIPT)
+        first = self._at(0)
+        self.assertEqual((first['failed'], first['created'], len(self.calls)), (0, 5, 1), first)
+        saved = self._saved_rows()
+        _, _, jobs, items, tasks = self._state()
+        self.assertEqual((jobs[key]['done'], jobs[key]['attempts'], jobs[key]['error'], jobs[key]['next_try']), (1, 1, '', ''))
+        self.assertFalse(jobs[key]['fingerprint'].startswith('discarded:'), 'a real done receipt, made by the success itself')
+        english = items[unknown['id']]
+        self.assertEqual((english['state'], json.loads(english['plan'])['school_saved_reread']['previous_row']), ('accepted', unknown))
+        self.assertEqual([t['id'] for t in tasks.values() if 'Unit 4' in t['title']], [english['task_id']])
+        for minutes, retry in ((6, dict(action='retry', id=key)), (12, dict(action='retry'))):
+            with self.subTest(retry=retry):
+                self.assertEqual(self.store.act(retry), dict(ok=True, state='retry_pending'))
+                result = self._at(minutes)
+                self.assertEqual((result['failed'], result['created']), (0, 0), result)
+                self.assertEqual(len(self.calls), 1, 'no further logical model call')
+                self.assertEqual(self._saved_rows(), saved, 'no duplicate task and no job, row or history change')
+        agent.Store(self.app.connect, self.app.profiles, self.app.DATA, initialize=False)
+        self.assertEqual(self._at(30)['created'], 0)
+        self.assertEqual((len(self.calls), self._saved_rows()), (1, saved))
+
 
 # Root's frozen noun cases (cases.json, frozen before execution): one English original, its old review made by the public
 # r259 source f0941d0's own Store.ingest -> run_once, then read again by the current ordinary run_once. Only the model
