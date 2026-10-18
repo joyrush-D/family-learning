@@ -19,6 +19,14 @@
 
 边界与下一步：书名里的科目词改写作业科目，在上述有限真值内已修。另有一个独立新问题尚未修：Root虚构完整普通流程中，家长阅读行政约定后由监护人签字的一项被native强制定为learning，正确的admin回复被拒，整批needs_attention、0个任务；本次科目补丁不能称已解决。仍开放：其他未见过的书名/资料名变体，有限“；”词法、H01家长改日期整链与日期两层，已存/家长更正后/跨批次与来源原件缺口；真实家长省事、手机、出纸、整体准确率、教育效果与获奖品质未验。全部42项与R01–R34/S01–S08保留，①②③顺序不变，整体ACTIVE、未完成。
 
+## 候选（未Root验收/未合入/未部署，不是新家庭版号；家庭仍为r268，整体ACTIVE）：同一老师补发本项练习单并加要求，不再整批被拒（R09/R14，①内有限增量）
+
+分支 `codex/school-supplement-original-link`（基线main `9b2df24`；RED `c6c16f9`，修补 `1d6ea43`，测试期望更正 `9f34378`，补丁 `aaeb8a4`）。Root冻结材料MATH-M4-SAFE（纯虚构，来自保留的六消息普通回放链，未单独运行过）：同源同一稳定发布者16:05“数学：今天完成《平均分练习单》第1、2题，把答案直接写在练习单上。明天交给数学课代表。”、16:06“补上刚才的练习单。第2题要画出分组过程，不用抄题。第3题不用做。”（只有后一条带“平均分练习单.txt”）。正确合并回复引用101与102、保留全部原话，却因102既不是“补充X：”字面补充、也不在发布分组里，被`_school_native_bind`当额外出处拒绝（`school_action_coverage`），整批重试。
+
+修补：`_school_native_actions`把“同发布者、同来源、在原有120秒补充窗口内、开头补上/补发/补传…的X、带着原件，且X恰为本消息唯一一项闭合书名的结尾名词”的后续消息记为该项的关联原件（linked），沿用已有关联原件路径：该项仍是必做行动、合并回复可引用、保存为待核并写明“同一老师的关联消息或附件尚未核实”；同一补发被多项认领照旧拒绝。`aaeb8a4`让已因其他原因待核的项也写上这句原因。其他发布者/来源/对象、多项同名、没带原件，以及文件名，都不参与；prompt、schema、模型与原守卫不改。
+
+检查（本run精确克隆，`/Users/mashuo/.local/bin/python3.12`，真实save_upload/message_attachment虚构附件，固定mock，产品模型调用0）：RED `c6c16f9`上2个新测试失败（run_once failed 1/processed 0；未关联）。`1d6ea43`后整批保存为1项待核（引用101、102，两条原话完整），但due为空——本项自己的“今天完成…明天交”被已有native日期读法读成两天、不选（不是本次归属修补引入），原测试期望的23日未达；`9f34378`把新测试改为“不得是别的日期、两天原话保留、写明多个日期”，并把此缺口记为开放；随后发现原因里缺附件说明，`aaeb8a4`补上后2个新测试通过，`test_agent`与`test_school_native_coverage`/`test_school_action_inventory`/`test_school_saved_reread`/`test_school_parent_edited_review`/`test_school_old_pending_recovery`/`test_school_completion_today`/`test_school_history`/`test_agenda`/`test_school_page_evidence`/`test_school_pdf_evidence`共733项通过（0失败，原有断言未改；全仓未跑）。未验：本项22日完成/23日交回的日期角色投影（开放）、两消息单独运行、Root六消息严格重放、未给开发的对照、API/Chrome保存重开与另行准入的Flash call30；附件内容未解释，该项保持待核。全部42项与R01–R34/S01–S08保留，①②③不变。
+
 ## 候选（未Root验收/未合入/未部署，不是新家庭版号；家庭仍为r268，整体ACTIVE）：家长阅读后签字的行政约定不再被当成孩子学习（R09/R14，①内有限增量）
 
 分支 `codex/parent-reading-admin-purpose`（基线main `7169213`；RED `a8e5627`，修补 `473ecdd`；Root复核反例后RED `a393a6f`，修补 `a7a65d7`）。对应家长反馈“内容不清楚或归类不对”。Root虚构完整普通流程的程序反例（固定正确回复，不是模型产物，无实际LLM调用）：“请家长今天阅读孩子带回的《图书借阅约定》，在末页“监护人”栏签字。孩子明天交给班主任。”是家长行政阅读与监护人签字、孩子只交回。共享学校台账`_school_native_command`去掉“请家长今天”后只看到“阅读”就定为learning，正确的admin回复在`_school_native_bind`被`school_action_coverage`拒绝，整批needs_attention、0任务；台账即使改对，共享分类副本`_school_learning_text`里同一“阅读”仍会让admin守卫把回复降为待核，无法自动收为待办。
