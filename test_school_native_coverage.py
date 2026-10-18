@@ -3128,12 +3128,8 @@ class SchoolActionPurposeTests(unittest.TestCase):
     # own signature and check is one homework; tomorrow's PE supplies, naming nothing of it, are a separate administrative to-do.
     C08_TEXT = '英语：今晚跟读Lesson 5《A Quiet Park》三遍，读完家长在同一页签名，明早检查记录页；另外，明天体育课带跳绳，不要求在家训练。'
 
-    def test_c08_supplies_naming_nothing_of_the_english_reading_save_as_their_own_todo_beside_it(self):
-        # The ledger keeps the reading's own signature and check with it and never lists the supplies inside it.
-        actions = agent._school_native_actions([dict(
-            ref='message:s:1', text=self.C08_TEXT, kind='text', publisher='synthetic-teacher-1', time='2026-11-04T16:21:00+08:00')])
-        self.assertIn('今晚跟读Lesson 5《A Quiet Park》三遍，读完家长在同一页签名，明早检查记录页', [a['quote'] for a in actions])
-        self.assertFalse([a['quote'] for a in actions if '跳绳' in a['quote'] and 'Lesson 5' in a['quote']])
+    def _c08_batch(self, purposes):
+        """Ingest the frozen C08 original and run one ordinary intake on its fixed correct replies of these purposes, in order."""
         self.fixture.now = self.now = dt.datetime(2026, 11, 4, 16, 30, tzinfo=agent.TZ)
         payload = self.fixture.payload(cursor='18')
         payload['messages'] = [dict(id='18', message_order='18', time='2026-11-04T16:21:00+08:00', kind='text', sender='虚构老师C08',
@@ -3141,16 +3137,26 @@ class SchoolActionPurposeTests(unittest.TestCase):
         self.store.ingest(payload)
         ref = 'message:' + self.source['id'] + ':18'
         reason = '仅虚构独立固定回复：按老师明确原文整理；不是实际模型输出。'
-        reading = dict(title_quote='今晚跟读Lesson 5《A Quiet Park》三遍，读完家长在同一页签名，明早检查记录页', focus='school', due='2026-11-05',
-                       evidence=[dict(ref=ref)], learning_subject='英语', learning_goal_id='', task_title='英语：跟读Lesson 5三遍并签名',
-                       task_goal='今晚跟读Lesson 5《A Quiet Park》三遍，读完家长在同一页签名，明早检查记录页', task_advice='', task_state='ready',
-                       task_reason=reason, task_change='new', task_target_id='', task_purpose='learning', task_submission='明早检查记录页。')
-        supplies = dict(title_quote='另外，明天体育课带跳绳，不要求在家训练', focus='school', due='2026-11-05', evidence=[dict(ref=ref)],
-                        learning_subject='', learning_goal_id='', task_title='体育课准备：带跳绳', task_goal='明天体育课带跳绳，不要求在家训练',
-                        task_advice='', task_state='ready', task_reason=reason, task_change='new', task_target_id='', task_purpose='admin',
-                        task_submission='')
-        self._use_replies(payload, [dict(proposals=[reading, supplies])])
-        result = agent.run_once(self.app, self.now)
+        replies = dict(
+            learning=dict(title_quote='今晚跟读Lesson 5《A Quiet Park》三遍，读完家长在同一页签名，明早检查记录页', focus='school', due='2026-11-05',
+                          evidence=[dict(ref=ref)], learning_subject='英语', learning_goal_id='', task_title='英语：跟读Lesson 5三遍并签名',
+                          task_goal='今晚跟读Lesson 5《A Quiet Park》三遍，读完家长在同一页签名，明早检查记录页', task_advice='', task_state='ready',
+                          task_reason=reason, task_change='new', task_target_id='', task_purpose='learning', task_submission='明早检查记录页。'),
+            admin=dict(title_quote='另外，明天体育课带跳绳，不要求在家训练', focus='school', due='2026-11-05', evidence=[dict(ref=ref)],
+                       learning_subject='', learning_goal_id='', task_title='体育课准备：带跳绳', task_goal='明天体育课带跳绳，不要求在家训练',
+                       task_advice='', task_state='ready', task_reason=reason, task_change='new', task_target_id='', task_purpose='admin',
+                       task_submission=''))
+        self._use_replies(payload, [dict(proposals=[replies[purpose] for purpose in purposes])])
+        return payload, ref, agent.run_once(self.app, self.now)
+
+    def test_c08_supplies_naming_nothing_of_the_english_reading_save_as_their_own_todo_beside_it(self):
+        # The ledger keeps the reading's own signature and check with it and lists the supplies as their own outcome.
+        actions = agent._school_native_actions([dict(
+            ref='message:s:1', text=self.C08_TEXT, kind='text', publisher='synthetic-teacher-1', time='2026-11-04T16:21:00+08:00')])
+        self.assertEqual([(a['purpose'], a['quote']) for a in actions],
+                         [('learning', '今晚跟读Lesson 5《A Quiet Park》三遍，读完家长在同一页签名，明早检查记录页'),
+                          ('admin', '另外，明天体育课带跳绳，不要求在家训练')])
+        payload, ref, result = self._c08_batch(('learning', 'admin'))
         self.assertEqual((result['failed'], result['processed']), (0, 1))
 
         def facts():
@@ -3192,6 +3198,12 @@ class SchoolActionPurposeTests(unittest.TestCase):
         self.assertEqual(agent.run_once(self.app, self.now)['processed'], 0)
         self.assertEqual(facts(), first, 'reopening reads the same two saved items without another write')
         self.assertEqual(self.model.call_count, 1)
+
+    def test_c08_reply_leaving_out_the_independent_supplies_keeps_the_whole_batch_for_retry(self):
+        # Root's negative control: the same original with only its English reply. The supplies are a listed outcome of their own,
+        # so the reply is incomplete: nothing is saved, the original stays and its first attempt keeps the existing retry budget.
+        payload, _, result = self._c08_batch(('learning',))
+        self._assert_rejected_batch(payload, result)
 
     def _parent_signed_notice(self, message_id, time, sender_id, text, title, due):
         """Root's fictional admin notice with an own correct fixed 15-field admin reply, beside the English read-aloud."""
