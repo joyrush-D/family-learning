@@ -3074,6 +3074,56 @@ class SchoolActionPurposeTests(unittest.TestCase):
         self.assertEqual(agent.run_once(self.app, self.now)['processed'], 0)
         self.assertEqual(facts(), first, 'reopening reads the same saved item without another write')
 
+    # Root's frozen C07 (pure fiction): the fixed correct semantic reply, not a provider output; one parent admin item.
+    C07_TEXT = '请家长今晚阅读《校车乘坐须知》，核对孩子的候车站点；确认后在通知回条上勾选“已阅”，孩子明早交回班主任。'
+
+    def test_c07_parent_reading_checking_and_ticking_the_slip_the_child_hands_back_saves_one_admin_todo(self):
+        # Both readers share one proof: the ledger's own purpose and the admin mixed-learning guard.
+        actions = lambda text:[a['purpose'] for a in agent._school_native_actions([dict(
+            ref='message:s:1', text=text, kind='text', publisher='synthetic-teacher-1', time='2026-11-04T16:18:00+08:00')])]
+        self.assertNotIn('learning', actions(self.C07_TEXT))
+        value = dict(title='家长核对校车须知并勾选已阅', goal=self.C07_TEXT, advice='', state='ready', reason='', purpose='admin')
+        evidence = [dict(ref='message:s:1', text=self.C07_TEXT, kind='text', unread=False)]
+        self.assertEqual(agent._school_brief(value, evidence=evidence, separate_learning=True)['state'], 'ready')
+        self.fixture.now = self.now = dt.datetime(2026, 11, 4, 16, 30, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='17')
+        payload['messages'] = [dict(id='17', message_order='17', time='2026-11-04T16:18:00+08:00', kind='text', sender='虚构老师C07',
+                                    sender_id='synthetic-publisher-C07', text=self.C07_TEXT, unread=False)]
+        self.store.ingest(payload)
+        ref = 'message:' + self.source['id'] + ':17'
+        raw = dict(title_quote=self.C07_TEXT[:-1], focus='school', due='2026-11-05', evidence=[dict(ref=ref)], learning_subject='',
+                   learning_goal_id='', task_title='家长核对校车须知并勾选已阅', task_goal=self.C07_TEXT, task_advice='',
+                   task_state='ready', task_reason='仅虚构独立固定回复：按老师明确原文整理；不是实际模型输出。', task_change='new',
+                   task_target_id='', task_purpose='admin', task_submission='')
+        self._use_replies(payload, [dict(proposals=[raw])])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+
+        def facts():
+            with self.store._db() as c:
+                rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+                manual = [dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+                originals = [json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
+            with self.app.connect() as c:
+                tasks = [t for t in self.app.tasks(c) if t['id'] in {m['id'] for m in manual}]
+            return rows, manual, tasks, originals
+
+        rows, manual, tasks, originals = first = facts()
+        (row,), (task,) = rows, tasks
+        self.assertEqual(len(manual), 1)
+        plan = json.loads(row['plan'])
+        self.assertEqual((row['state'], row['due'], plan['school_task']['state'], plan['school_task']['purpose'], plan.get('school_learning')),
+                         ('accepted', '2026-11-05', 'ready', 'admin', None))
+        self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], [ref])
+        agenda = task['agenda']
+        self.assertEqual((agenda['category'], agenda['complete_on'], agenda['due_on'], agenda['published_at']),
+                         ('todo', '2026-11-04', '2026-11-05', '2026-11-04T16:18:00+08:00'))
+        self.assertEqual([(p['ref'], p['sender']) for p in agenda['publications']], [(ref, '虚构老师C07')])
+        for words in ('家长今晚阅读《校车乘坐须知》', '核对孩子的候车站点', '通知回条上勾选“已阅”', '明早交回班主任'):self.assertIn(words, task['action'])
+        self.assertEqual([o['text'] for o in originals], [self.C07_TEXT])
+        self.assertEqual(agent.run_once(self.app, self.now)['processed'], 0)
+        self.assertEqual(facts(), first, 'reopening reads the same saved item without another write')
+
     def _parent_signed_notice(self, message_id, time, sender_id, text, title, due):
         """Root's fictional admin notice with an own correct fixed 15-field admin reply, beside the English read-aloud."""
         self.fixture.now = self.now = dt.datetime(2026, 10, 26, 16, 30, tzinfo=agent.TZ)
