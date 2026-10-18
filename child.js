@@ -65,7 +65,8 @@ function tickStudy() {
 // Only the task's own teacher days (and an ordinary source's due) reach the child; unknown stays unshown.
 function studyDays(item) {
   return [item.source_task_complete_on && item.source_task_complete_on !== item.source_task_due ? `老师要求完成：${item.source_task_complete_on}` : '',
-    item.source_task_handback_on ? `老师要求交回：${item.source_task_handback_on}` : '', item.source_task_due ? `原截止：${item.source_task_due}` : ''].filter(Boolean).join(' · ');
+    item.source_task_handback_on ? `老师要求交回：${item.source_task_handback_on}` : '', item.source_task_inspection_on ? `老师检查：${item.source_task_inspection_on}` : '',
+    item.source_task_due && item.source_task_due !== item.source_task_inspection_on ? `原截止：${item.source_task_due}` : ''].filter(Boolean).join(' · ');
 }
 // The same read-only projection as the parent's card (source_task_action_lines): the saved action's own lines without
 // words this card's title already shows; the saved action itself is unchanged. A next step identical to the saved

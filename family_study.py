@@ -485,6 +485,8 @@ class Store:
                 agenda = (task.get('agenda') or {}) if task else {}
                 row['source_task_complete_on'] = agenda.get('complete_on', '') if task else missing
                 row['source_task_handback_on'] = (agenda.get('due_on', '') if agenda.get('due_kind') == 'handback' else '') if task else missing
+                # The item's own teacher check day, as Today shows it (明天早读检查); a parent's own date or a deadline is none.
+                row['source_task_inspection_on'] = (agenda.get('due_on', '') if agenda.get('due_kind') == 'inspection' else '') if task else missing
                 row['source_task_next_action'] = (task.get('focus') or {}).get('next_action', '') if task else missing
                 # The same read-only card projection as Today, under the title this card shows.
                 row['source_task_action_lines'] = action_lines(row['title'], task.get('action', '')) if task else missing
