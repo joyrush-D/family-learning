@@ -726,7 +726,8 @@ class ActionLinesTests(unittest.TestCase):
         for title, action, shown in [
                 ('读三段并回答', '读三段并回答', []),
                 ('读三段并回答', '读三段并回答。\n每题写出依据，不少于20字\n提交要求：交纸质稿', ['每题写出依据，不少于20字', '提交要求：交纸质稿']),
-                ('写生词', '写生词10个，每个3遍；家长签字', ['写生词10个，每个3遍；家长签字']),
+                # A partial overlap with the title is never left out; its own ； parts read as its steps (every word kept).
+                ('写生词', '写生词10个，每个3遍；家长签字', ['写生词10个，每个3遍；', '家长签字']),
                 ('数学：完成同步练习第3课', '完成同步练习第3课，周四交\n提交要求：交同步练习第3课作业', ['完成同步练习第3课，周四交', '提交要求：交同步练习第3课作业']),
                 ('科学：带一个空透明塑料瓶', '明天来校带一个空透明塑料瓶，科学课用。', ['明天来校带一个空透明塑料瓶，科学课用。']),
                 ('英语：跟读Unit 4两遍并家长签字', '听录音跟读 Unit 4 A day at the lake 两遍。', ['听录音跟读 Unit 4 A day at the lake 两遍。']),
@@ -1257,7 +1258,10 @@ class ClearStandardsTests(unittest.TestCase):
 
     def test_a_restated_line_every_clause_of_which_the_card_already_states_reads_once(self):
         action = CLEAR_EN_GOAL + '\n提交要求：家长听完后在第20页签字，明天早读检查。'
-        self.assertEqual(family_agenda.action_lines('英语：朗读课本第20页对话三遍', action), [CLEAR_EN_GOAL])
+        # Still read once against the whole line; the one line then reads as its own three ； parts, every word in order.
+        shown = family_agenda.action_lines('英语：朗读课本第20页对话三遍', action)
+        self.assertEqual(shown, STEP_CARD_LINES['第20页'])
+        self.assertEqual(''.join(shown), CLEAR_EN_GOAL)
         for action in [
                 # Two pages: 这一页 has no single antecedent in its instruction.
                 '今晚朗读课本第20页和第21页的对话；请家长听完后在这一页签字；明天早读检查。\n提交要求：家长听完后在第20页签字，明天早读检查。',
@@ -1292,7 +1296,9 @@ class ClearStandardsTests(unittest.TestCase):
         saved = tasks[ids['第20页']]
         self.assertIn('\n提交要求：家长听完后在第20页签字，明天早读检查。', saved['action'], 'storage unchanged')
         task = {t['id']: t for t in self.app.tasks()}[ids['第20页']]
-        self.assertEqual(task['action_lines'], [CLEAR_EN_GOAL])
+        # The one C01 requirement, read once, now as its own three ； parts: the same words and order (CLEAR_EN_GOAL).
+        self.assertEqual(task['action_lines'], STEP_CARD_LINES['第20页'])
+        self.assertEqual(''.join(task['action_lines']), CLEAR_EN_GOAL)
         self.assertEqual((task['action'], task['due']), (saved['action'], saved['due']))
         self.assertEqual((task['agenda']['complete_on'], task['agenda']['due_on'], task['agenda']['due_kind']), ('2026-10-21', '2026-10-22', 'inspection'))
         receipt = {t['id']: t for t in self.app.tasks()}[ids['《秋游意见回执》']]
@@ -1304,7 +1310,8 @@ class ClearStandardsTests(unittest.TestCase):
                              version=0, task_id=ids['《秋游意见回执》'], planned_minutes=5))
         rows = {r['task_id']: r for r in study.snapshot(self.source['child_id'], '2026-10-21')['items']}
         row = rows[ids['第20页']]
-        self.assertEqual((row['source_task_action'], row['source_task_action_lines']), (saved['action'], [CLEAR_EN_GOAL]))
+        self.assertEqual((row['source_task_action'], row['source_task_action_lines']), (saved['action'], STEP_CARD_LINES['第20页']))
+        self.assertEqual(''.join(row['source_task_action_lines']), CLEAR_EN_GOAL)
         # C02: the after-school and child cards read the same agenda roles: completion 21 and the teacher check 22 (the saved
         # due stays as it is); the receipt's 22nd is no check.
         self.assertEqual((row['source_task_complete_on'], row['source_task_inspection_on'], row['source_task_due']), ('2026-10-21', '2026-10-22', '2026-10-22'))
