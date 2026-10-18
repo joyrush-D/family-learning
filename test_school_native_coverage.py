@@ -7,6 +7,7 @@ the saved replies are fixtures, not a measurement of model extraction accuracy.
 """
 import copy
 import datetime as dt
+import io
 import json
 import re
 import unittest
@@ -712,6 +713,87 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         # Without any subject outside a title, a closed book name supplies none; an explicit one outside it stays.
         self.assertEqual(agent._school_native_subjects('阅读《数学家的故事》，写三句话读后感'), set())
         self.assertEqual(agent._school_native_subjects('数学：完成《语文园地》旁的练习'), {'数学'})
+
+    # Root's MATH-M4-SAFE case math-supplement-101-102 (pure fiction; source chain from a retained trace, never run alone):
+    # the same teacher re-sends this outcome's own worksheet a minute later with more requirements; only 102 has the sheet.
+    MATH_TEXTS = ('数学：今天完成《平均分练习单》第1、2题，把答案直接写在练习单上。明天交给数学课代表。',
+                  '补上刚才的练习单。第2题要画出分组过程，不用抄题。第3题不用做。')
+    MATH_PROPOSAL = dict(title_quote='今天完成《平均分练习单》第1、2题，把答案直接写在练习单上。明天交给数学课代表', focus='school',
+                         due='2026-10-23', evidence=[0, 1], learning_subject='数学', learning_goal_id='',
+                         task_title='数学：完成《平均分练习单》第1、2题', task_goal=MATH_TEXTS[0] + '\n' + MATH_TEXTS[1], task_advice='',
+                         task_change='new', task_target_id='', task_state='ready',
+                         task_reason='独立冻结的纯虚构程序验证固定回复，不是实际模型产物。', task_purpose='learning', task_submission='')
+
+    def _math_entries(self, second=None, publisher='publisher:math-lan', first=None):
+        return [dict(ref='message:s:101', text=first or self.MATH_TEXTS[0], kind='text', publisher='publisher:math-lan',
+                     time='2026-10-22T16:05:00+08:00', attachments=[], content_incomplete=False, related_messages=['message:s:101']),
+                dict(ref='message:s:102', text=second or self.MATH_TEXTS[1], kind='text', publisher=publisher, time='2026-10-22T16:06:00+08:00',
+                     attachments=[dict(name='平均分练习单.txt', mime='text/plain; charset=utf-8')], content_incomplete=False,
+                     related_messages=['message:s:102'])]
+
+    def test_a_same_teacher_resent_worksheet_with_more_requirements_binds_to_its_one_outcome_as_review(self):
+        self.fixture.now = self.now = dt.datetime(2026, 10, 22, 16, 30, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='102')
+        payload['messages'] = [dict(id=str(101 + i), message_order=str(101 + i), time=time, kind='text', sender='岚老师（虚构）',
+                                    sender_id='qa-teacher-math-lan', text=text, unread=False)
+                               for i, (time, text) in enumerate(zip(('2026-10-22T16:05:00+08:00', '2026-10-22T16:06:00+08:00'), self.MATH_TEXTS))]
+        self.store.ingest(payload)
+        refs = ['message:' + self.source['id'] + ':' + m['id'] for m in payload['messages']]
+        sheet = '虚构练习单原件测试字节（内容未解释）\n'.encode()
+        upload = self.app.save_upload(io.BytesIO(sheet), len(sheet), '平均分练习单.txt')
+        self.store.message_attachment(dict(child_id='child-1', source_id=self.source['id'], message_id='102',
+                                           attachment_id=upload['id'], action='attach'), dict)
+        calls = []
+
+        def reply(messages, schema, name, timeout=60, *, data_path=None):
+            self.assertEqual((name, data_path), ('family_agent_selection', self.app.DATA))
+            context = json.loads(messages[-1]['content'])
+            self.assertEqual([(e['ref'], e['text'], e['attachments']) for e in context['evidence']],
+                             [(refs[0], self.MATH_TEXTS[0], []), (refs[1], self.MATH_TEXTS[1], [dict(name='平均分练习单.txt', mime=upload['mime'])])])
+            calls.append(name)
+            return dict(proposals=[dict(copy.deepcopy(self.MATH_PROPOSAL), evidence=[dict(ref=ref) for ref in refs])])
+
+        self.model.side_effect = reply
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 2), 'the faithful merged reply is not rejected as an extra source')
+
+        def facts():
+            with self.store._db() as c:
+                rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+                manual = c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0]
+                links = [tuple(r) for r in c.execute('SELECT * FROM agent_message_attachments')]
+                originals = [json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
+            with self.app.connect() as c:
+                stored = [tuple(r) for r in c.execute('SELECT id,name,size FROM uploads')]
+            return rows, manual, links, originals, stored
+
+        rows, manual, links, originals, stored = first = facts()
+        row, = rows
+        plan = json.loads(row['plan']);brief = plan['school_task']
+        self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
+        self.assertEqual((row['state'], row['due'], row['title'], brief['purpose'], brief['state']),
+                         ('pending', '2026-10-23', '数学：完成《平均分练习单》第1、2题', 'learning', 'review'))
+        # Every literal requirement of both originals stays; the unread sheet keeps a specific reason, never ready.
+        for words in self.MATH_TEXTS:self.assertIn(words, row['body'])
+        self.assertIn('附件尚未核实', brief['reason'])
+        self.assertEqual(plan['school_native_cover']['linked'], [refs[1]])
+        self.assertEqual(manual, 0, 'no automatic task while the re-sent sheet is unread')
+        self.assertEqual(links, [(self.source['id'], '102', upload['id'])])
+        self.assertEqual(stored, [(upload['id'], '平均分练习单.txt', len(sheet))])
+        self.assertEqual(originals, payload['messages'], 'the complete originals stay unchanged')
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['failed'], replay['processed'], replay['created']), (0, 0, 0))
+        self.assertEqual(facts(), first, 'reopen and the next round keep the one item without duplicates')
+        self.assertEqual(len(calls), 1)
+
+    def test_only_a_same_teacher_resend_naming_one_outcome_material_links_to_it(self):
+        linked = lambda entries:[a.get('linked') for a in agent._school_native_actions(entries)]
+        self.assertEqual(linked(self._math_entries()), [['message:s:102']])
+        # Another teacher, another object, or a material two outcomes name stays unlinked and keeps the existing rejection.
+        self.assertEqual(linked(self._math_entries(publisher='publisher:someone-else')), [None])
+        self.assertEqual(linked(self._math_entries('补上刚才的口算本。第2题要画出分组过程。')), [None])
+        two = '数学：1. 完成《平均分练习单》第1题；2. 完成《除法练习单》第2题。'
+        self.assertEqual(linked(self._math_entries(first=two)), [None, None])
 
     def test_a_faithful_paraphrase_of_every_requirement_saves_on_its_first_receipt(self):
         self._clause_saved('科学：制作《发芽观察卡》并录一段30秒讲解，2026年11月6日交回。', '制作发芽观察卡，再录30秒的讲解，2026年11月6日前交回。',
