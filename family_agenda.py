@@ -164,7 +164,9 @@ _EVENT_DAY=r'\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天'
 _DAY_WORDS=r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}|今天|今日|今晚|明天|明日|明早|明晚|后天|昨天|前天|(?:周|星期|礼拜)[一二三四五六日天]'
 # Who is asked to attend: everyone, a counted few (一位家长、两名学生) or a named group.
 _ATTENDEE=r'(?:各位|全体|(?:至少)?[一二两1-2]\s*(?:位|名))?(?:家长|学生|同学们?|孩子们?)?'
-_ATTEND_REQUEST=r'(?:请|务必|必须|须|需)'+_ATTENDEE+r'(?:准时|按时|届时|务必|必须|须|需)?(?:参加|出席|到场|参会)(?!安排|通知|方式|时间|人员|名单)'
+_ATTEND_REQUEST=r'(?:请|务必|必须|须|需|每(?:家|户))'+_ATTENDEE+r'(?:准时|按时|届时|务必|必须|须|需)?(?:参加|出席|到场|参会)(?!安排|通知|方式|时间|人员|名单)'
+# Excusing someone from attending or coming (孩子不用来、可不参加).
+_EXCUSE=r'(?:可以?不|不必|无需|无须|不用|不需要?)\s*(?:参加|出席|到场|参会|来|到校)'
 # The two kinds of participant a notice asks or excuses (家长 / 孩子、学生).
 _PARTICIPANTS={'家长':r'家长|父母|爸爸|妈妈','学生':r'孩子们?|学生|同学们?|小朋友'}
 # Not (yet) held on that day, or attending it is optional.
@@ -302,8 +304,7 @@ def _excused_others(sentence):
     kinds=[words for words in _PARTICIPANTS.values() if asked and re.search(words,asked[0])]
     if len(kinds)!=1:return set()
     other=next(words for words in _PARTICIPANTS.values() if words!=kinds[0])
-    return {c.strip() for c in re.split(r'[，,]',sentence)
-            if re.fullmatch(r'\s*(?:'+other+r')\s*(?:可以?不|不必|无需|无须|不用|不需要?)\s*(?:参加|出席|到场|参会)\s*',c)}
+    return {c.strip() for c in re.split(r'[，,]',sentence) if re.fullmatch(r'\s*(?:'+other+r')\s*'+_EXCUSE+r'\s*',c)}
 
 
 def _held_events(text,published):
@@ -316,13 +317,22 @@ def _held_events(text,published):
         values={date(d) or (anchor and d in relative and (dt.date.fromisoformat(anchor)+dt.timedelta(days=relative[d])).isoformat()) or '' for d in re.findall(_DAY_WORDS,sentence)}
         clauses=[c for c in re.split(r'[，,]',sentence) if c.strip()]
         # A long place or gathering note between the day and 举行 is still the same clause; another day is not.
-        held=[n for n,c in enumerate(clauses) if re.search(r'(?:'+_EVENT_DAY+r')(?:(?!'+_EVENT_DAY+r').)*?(?:举行|召开|举办)',c)]
+        # The event is held on its day (…举行/召开), or its day is fixed (家长会定在10月24日14:20).
+        held=[n for n,c in enumerate(clauses) if re.search(r'(?:'+_EVENT_DAY+r')(?:(?!'+_EVENT_DAY+r').)*?(?:举行|召开|举办)'
+                                                           r'|^\s*[^，,]{2,12}?(?:定在|定于)\s*(?:'+_EVENT_DAY+r')',c)]
+        # Who attends may be asked in the very next sentence when it names no day (…学校报告厅。每家一位家长参加，孩子不用来。).
+        following=sentences[at+1] if at+1<len(sentences) else ''
+        if (not re.search(_ATTEND_REQUEST,sentence) and re.search(_ATTEND_REQUEST,following) and not re.search(_DAY_WORDS,following)
+                and len(held)==1):
+            sentence=sentence+'，'+following;clauses=clauses+[c for c in re.split(r'[，,]',following) if c.strip()]
         if len(values)!=1 or '' in values or len(held)!=1 or not re.search(_ATTEND_REQUEST,sentence):continue
         value=next(iter(values));event=clauses[held[0]]
         if (anchor and value<anchor or re.search(_EVENT_STATE,event) or re.search(_EVENT_OTHER_DAY,event)
                 or re.search(r'(?:不是|并非|而非|并不在|不在|不于|不会在)\s*(?:于|在)?\s*(?:'+_EVENT_DAY+r')|(?:不|未|没有?|无法|不能|不会|不再)\s*(?:如期|按时|正常)?\s*(?:举行|召开|举办)',event)
                 or re.search(r'(?:根据|依据|按照|参照|参见|据|按|见|同)\s*(?:'+_EVENT_DAY+r')|(?:'+_EVENT_DAY+r')[^，,]{0,6}?(?:通知|公告|文件|来函|消息|发布|发出)',event)):continue
         mention=_event_mention(event);excused=_excused_others(sentence)
+        # Excusing the asked attendee, or anyone unnamed, from coming leaves the event unconfirmed (家长不用来).
+        if any(re.search(_EXCUSE,c) and c.strip() not in excused for n,c in enumerate(clauses) if n!=held[0]):continue
         if any(_modifies_event(part,mention) for n,c in enumerate(clauses) if n!=held[0] and c.strip() not in excused
                for part in re.split(r'、|(?<!\d)[：:]|[：:](?!\d)',c)):continue
         # A sentence end does not end the same notice: a later part naming the event itself, as a whole object, is read by the same rule.
