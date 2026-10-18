@@ -5,8 +5,10 @@ store (no real model, collector or device). The current program reads them again
 model call: an item whose unchanged original, generated snapshot and selection receipt prove its own day is collected
 on the existing acceptance path; anything a parent, a link, a later change or a past day touched keeps its saved state.
 """
+import copy
 import datetime as dt
 import json
+import os
 import unittest
 from unittest.mock import patch
 
@@ -216,6 +218,230 @@ class R259OldPendingRecoveryTests(unittest.TestCase):
                 self.assertEqual(self._saved(), before, 'nothing written after the pause')
                 self.assertEqual(self.model.call_count, 0)
                 self._resumed(1)
+
+
+ENGLISH_REF = 'message:synthetic-group:34'
+# A fictional new receipt for English 34 in the existing saved-reread reply shape; the transport is mocked, no request.
+NEW_RECEIPT = dict(title='英语：跟读Unit 4两遍并家长签字',
+                   goal='听录音跟读 Unit 4 A day at the lake 两遍。\n读完请家长在记录本上签字。\n今晚完成，明天早读检查记录本。',
+                   advice='跟读时可模仿录音语调，读完请家长及时签字。', state='ready',
+                   reason='虚构新回执：原文写明跟读两遍、家长签字，今晚完成、明天早读检查记录本。', change='new', target_id='',
+                   purpose='learning', submission='明天早读检查记录本。', learning_subject='英语', learning_goal_id='')
+BAD_RECEIPTS = dict(  # each is a new reply that does not support the item itself; none may collect it
+    other_check_day=dict(NEW_RECEIPT, goal=NEW_RECEIPT['goal'].replace('明天早读', '后天早读'), submission='后天早读检查记录本。'),
+    other_completion_day=dict(NEW_RECEIPT, goal=NEW_RECEIPT['goal'].replace('今晚完成', '明晚完成')),
+    no_day=dict(NEW_RECEIPT, goal='听录音跟读 Unit 4 A day at the lake 两遍。\n读完请家长在记录本上签字。', submission=''),
+    check_as_handback=dict(NEW_RECEIPT, goal=NEW_RECEIPT['goal'].replace('明天早读检查记录本', '明天早上交记录本'), submission='明天早上交记录本。'),
+    other_purpose=dict(NEW_RECEIPT, purpose='admin', learning_subject=''),
+    other_subject=dict(NEW_RECEIPT, learning_subject='语文'),
+    still_review=dict(NEW_RECEIPT, state='review', reason='虚构：仍待核对。'),
+)
+FICTIONAL_MODEL = dict(base_url='http://127.0.0.1:9/v1', model='synthetic-reread-model', api_key='', reasoning_effort='')
+
+
+class R259ClearedDateRereadTests(unittest.TestCase):
+    """English 34: its old program cleared the day and kept no model day, so only a new receipt may collect it.
+
+    The ordinary run_once reads it once more through the existing saved-reread caller (its own school-task job, the batch's
+    shared recovery budget, the round's one refresh call), with a configured fictional model whose transport is mocked.
+    The new receipt itself must keep the item's purpose and subject and state the original's own days; the lost old model
+    day is never guessed and the four rows the stored receipts already proved are not rebuilt.
+    """
+
+    def setUp(self):
+        native.SchoolNativeCoverageTests.setUp(self)
+        self.stack.enter_context(patch.dict(os.environ, {k: v for k, v in os.environ.items() if not k.startswith('FAMILY_LLM_')}, clear=True))
+        (self.fixture.data / 'model.json').write_text(json.dumps(FICTIONAL_MODEL))
+        self.calls = []
+
+    _old_store = R259OldPendingRecoveryTests._old_store
+    _item = R259OldPendingRecoveryTests._item
+    _listed = R259OldPendingRecoveryTests._listed
+    _saved = R259OldPendingRecoveryTests._saved
+
+    def _replies(self, *replies, during=None):
+        def model(messages, schema, name, timeout=60, *, data_path=None):
+            self.assertEqual(name, 'family_school_task', 'only the existing saved-reread caller')
+            self.assertEqual(data_path, self.app.DATA)
+            context = json.loads(messages[-1]['content'])
+            self.assertEqual([e['ref'] for e in context['evidence']], [ENGLISH_REF], 'only the English original is read again')
+            self.calls.append(context)
+            self.assertLessEqual(len(self.calls), len(replies), 'no further model request')
+            if during: during()
+            reply = replies[len(self.calls) - 1]
+            if isinstance(reply, Exception): raise reply
+            return copy.deepcopy(reply)
+        self.model.side_effect = model
+
+    def _at(self, minutes):
+        return agent.run_once(self.app, self.now + dt.timedelta(minutes=minutes))
+
+    def _state(self):
+        with self.store._db() as c:
+            return (dict(c.execute('SELECT * FROM agent_sources').fetchone()),
+                    [dict(r) for r in c.execute('SELECT * FROM agent_messages ORDER BY rowid')],
+                    {r['id']: dict(r) for r in c.execute('SELECT * FROM agent_jobs')},
+                    {r['id']: dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")},
+                    {r['id']: dict(r) for r in c.execute('SELECT * FROM manual_tasks')})
+
+    def _english_kept(self, before):
+        """English 34 is exactly as saved and has no task; the four proven rows are still collected once each."""
+        unknown = self._item(before, UNKNOWN)
+        source, messages, jobs, items, tasks = self._state()
+        self.assertEqual(items[unknown['id']], unknown, 'old row, unknown day and receipt kept verbatim')
+        titles = [t['title'] for t in tasks.values()]
+        self.assertEqual([sum(key in t for t in titles) for key in KEYS], [0 if key == UNKNOWN else 1 for key in KEYS], titles)
+        return jobs.get('school-task:' + unknown['id'])
+
+    def test_a_new_receipt_collects_the_cleared_english_once_under_its_original_id(self):
+        before = self._old_store()
+        unknown = self._item(before, UNKNOWN)
+        source, messages, jobs, _, _ = self._state()
+        self._replies(NEW_RECEIPT)
+        first = self._at(0)
+        self.assertEqual((first['failed'], first['created']), (0, 5), first)
+        self.assertEqual(len(self.calls), 1, 'one new ordinary call of the existing saved-reread caller')
+        self.assertEqual(self.calls[0]['as_of'], '2026-10-19')
+        # Later rounds and a reopen never read or collect it again.
+        self.model.side_effect = AssertionError('no second reread')
+        self.assertEqual([self._at(6 * i)['created'] for i in range(1, 4)], [0, 0, 0])
+        agent.Store(self.app.connect, self.app.profiles, self.app.DATA, initialize=False)
+        self.assertEqual(self._at(30)['created'], 0)
+        now_source, now_messages, now_jobs, after, tasks = self._state()
+        self.assertEqual((now_source, now_messages), (source, messages), 'cursor and originals kept')
+        self.assertEqual(set(after), set(before), 'same item IDs, nothing new')
+        named = {key: [t for t in tasks.values() if key in t['title']] for key in KEYS}
+        self.assertEqual({key: len(found) for key, found in named.items()}, {key: 1 for key in KEYS})
+        self.assertEqual(len(tasks), 5)
+        english = after[unknown['id']]
+        self.assertEqual((english['state'], english['task_id'], english['due']), ('accepted', named[UNKNOWN][0]['id'], '2026-10-20'))
+        plan, old_plan = json.loads(english['plan']), json.loads(unknown['plan'])
+        for field in ('school_selection_receipt', 'school_generated_snapshot', 'school_date_quote'):
+            self.assertEqual(plan.get(field), old_plan.get(field), field)
+        self.assertEqual(plan['school_saved_reread']['previous_row'], unknown, 'the complete old row stays readable')
+        self.assertEqual(plan['school_saved_reread']['previous'], agent._hash(unknown))
+        self.assertNotIn('school_role_reselect', plan, 'the lost old model day is never guessed')
+        self.assertEqual((plan['school_task']['state'], plan['school_task']['purpose'], plan['school_learning']['subject']), ('ready', 'learning', '英语'))
+        for key in RECOVERED:  # the zero-model recovery of the four saved days is not rebuilt by the reread
+            old = self._item(before, key)
+            kept = json.loads(after[old['id']]['plan'])
+            self.assertEqual(kept['school_role_reselect']['previous_row'], old)
+            self.assertNotIn('school_saved_reread', kept)
+        key = 'school-task:' + unknown['id']
+        self.assertEqual({k: v for k, v in now_jobs.items() if k != key}, jobs, 'the original receipts are untouched')
+        self.assertEqual((now_jobs[key]['done'], now_jobs[key]['attempts'], now_jobs[key]['error']), (1, 1, ''))
+        expected = {'星芽': ('2026-10-19', '2026-10-20', 'homework'), '数格': ('2026-10-19', '2026-10-20', 'homework'),
+                    'Unit 4': ('2026-10-19', '2026-10-20', 'homework'), '回执': ('2026-10-19', '2026-10-20', 'todo'),
+                    '塑料瓶': ('', '2026-10-20', 'todo')}
+        for day in ('2026-10-19', '2026-10-20'):
+            listed = self._listed(day)
+            for k, (complete, due, category) in expected.items():
+                with self.subTest(item=k, day=day):
+                    agenda = listed[named[k][0]['id']]['agenda']
+                    self.assertEqual((agenda['complete_on'], agenda['due_on'], agenda['category']), (complete, due, category))
+                    self.assertNotEqual(agenda['due_kind'], 'handback', 'a check day is not a handback')
+        task = named[UNKNOWN][0]
+        self.assertEqual(task['due'], '2026-10-20')
+        self.assertIn('明天早读检查记录本', task['action'])
+        self.assertNotIn('交', task['title'], 'checking the record book is not handing it in')
+
+    def test_a_new_reply_that_does_not_support_the_item_keeps_it_unknown(self):
+        cases = dict(BAD_RECEIPTS, failure=agent.family_llm.LLMDraftError('虚构：模型服务连接失败'))
+        for name, reply in cases.items():
+            with self.subTest(reply=name):
+                self.setUp()
+                before = self._old_store()
+                self._replies(reply)
+                result = self._at(0)
+                self.assertEqual((len(self.calls), result['failed']), (1, 1), result)
+                job = self._english_kept(before)
+                self.assertEqual((job['done'], job['attempts']), (0, 1), job)
+                self.assertIn('原始资料保留', job['error'], 'a readable status')
+                self.assertEqual(job['next_try'], (self.now + dt.timedelta(minutes=5)).isoformat(), 'the original backoff')
+                self._at(2)
+                self.assertEqual(len(self.calls), 1, 'no retry inside the backoff')
+
+    def test_failed_receipts_keep_the_original_limit_and_backoff_and_a_rename_never_renews_them(self):
+        before = self._old_store()
+        self._replies(agent.family_llm.LLMDraftError('虚构：模型服务连接失败'), BAD_RECEIPTS['other_check_day'], BAD_RECEIPTS['no_day'])
+        for minutes in (0, 2, 6, 12, 17, 30, 60): self._at(minutes)
+        self.assertEqual(len(self.calls), 3, 'three attempts, five and ten minutes apart')
+        job = self._english_kept(before)
+        self.assertEqual((job['done'], job['attempts'], job['next_try']), (0, 3, ''))
+        self.assertIn('上限', job['error'])
+        self.source['name'] = '虚构班级（改名）'; self.fixture.config()
+        for minutes in (90, 120): self._at(minutes)
+        self.assertEqual(len(self.calls), 3, 'a source rename never renews the exhausted identity')
+        self.assertEqual(self._english_kept(before)['attempts'], 3)
+
+    def test_a_paused_source_or_agent_makes_no_reread_and_the_resumed_round_collects_once(self):
+        for case in ('source', 'agent'):
+            with self.subTest(case=case):
+                self.setUp()
+                self._old_store()
+                if case == 'source': self.source['enabled'] = False
+                self.fixture.config(enabled=case != 'agent')
+                self._replies(NEW_RECEIPT)
+                saved = self._saved()
+                for minutes in (0, 6, 12): self._at(minutes)
+                self.assertEqual((self._saved(), len(self.calls)), (saved, 0), 'every row, job and cursor kept; no call')
+                self.source['enabled'] = True; self.fixture.config(enabled=True)
+                self.assertEqual(self._at(18)['created'], 5)
+                self.assertEqual((self._at(24)['created'], len(self.calls)), (0, 1))
+
+    def test_a_pause_while_the_reread_waits_writes_nothing_and_keeps_the_spent_attempts(self):
+        before = self._old_store()
+        unknown = self._item(before, UNKNOWN)
+        self._replies(agent.family_llm.LLMDraftError('虚构：模型服务连接失败'), NEW_RECEIPT)
+        self._at(0)  # attempt 1 fails
+        real = agent.Store._job; paused = []
+
+        def claim(store, key, *args, **kwargs):
+            value = real(store, key, *args, **kwargs)
+            if key == 'school-task:' + unknown['id'] and value and not paused:
+                paused.append(key); self.source['enabled'] = False; self.fixture.config()
+            return value
+        with patch.object(agent.Store, '_job', claim):
+            self._at(6)  # claimed, then paused before the call
+        self.assertEqual((paused, len(self.calls)), (['school-task:' + unknown['id']], 1), 'no call after the pause')
+        self.assertEqual(self._english_kept(before)['attempts'], 2)
+        self.source['enabled'] = True; self.fixture.config()
+        self.assertEqual(self._at(7)['created'], 1)
+        _, _, jobs, items, _ = self._state()
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual((items[unknown['id']]['state'], items[unknown['id']]['due']), ('accepted', '2026-10-20'))
+        self.assertEqual(jobs['school-task:' + unknown['id']]['attempts'], 3, 'the failed and the dropped attempts are never renewed')
+
+    def test_a_parent_edit_while_the_model_runs_is_not_overwritten(self):
+        before = self._old_store()
+        unknown = self._item(before, UNKNOWN)
+
+        def edit():
+            with self.store._db() as other:
+                other.execute("UPDATE agent_items SET title=title||'（家长改）',updated=? WHERE id=?", ('2026-10-19T20:31:00+08:00', unknown['id']))
+        self._replies(NEW_RECEIPT, during=edit)
+        self._at(0)
+        for minutes in (6, 12, 18): self._at(minutes)
+        _, _, jobs, items, tasks = self._state()
+        row = items[unknown['id']]
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual((row['state'], row['due'], row['task_id'], row['plan']), ('pending', '', '', unknown['plan']))
+        self.assertTrue(row['title'].endswith('（家长改）'))
+        self.assertFalse(any('Unit 4' in t['title'] for t in tasks.values()))
+        self.assertEqual(len(tasks), 4)
+
+    def test_a_contradiction_the_current_selection_rejected_is_never_reread(self):
+        # School B 同步练习 (model 10-09 against the original's 周四 10-08) is saved by the current selection with the day it
+        # did not adopt: a known contradiction stays review on this and later rounds even with a configured model.
+        import test_model_quality as quality
+        with patch.object(agent.family_llm, 'configuration', return_value=('http://127.0.0.1:9/v1/chat/completions', 'synthetic-reread-model')):
+            run = quality.ingest_school('school-b', dict(proposals=quality._school_b_reply(wrong_date=True)), runs=3)
+        self.assertEqual(len(run['calls']), 1, run['results'])
+        item = next(i for i in run['items'] if '同步练习' in i['title'] + i['body'])
+        self.assertEqual((item['state'], item['due'], item['plan']['school_task']['state']), ('pending', '', 'review'), item)
+        self.assertEqual(item['plan'].get('school_unadopted_due'), '2026-10-09', 'the day it did not adopt is kept, never adopted')
+        for marker in ('school_saved_reread', 'school_role_reselect'):
+            self.assertNotIn(marker, item['plan'])
 
 
 if __name__ == '__main__':
