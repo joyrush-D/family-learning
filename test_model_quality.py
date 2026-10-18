@@ -1598,8 +1598,12 @@ class ActionDateTest(unittest.TestCase):
                 self.assertNotEqual(row['due'], bad, row)
                 kept_truth = evidence_edit is None and row['due'] == truth[key]
                 self.assertTrue(row['state'] != 'ready' or kept_truth, row)
-        # 模型没给日期时不补今天，也不借同条另一项日期。
+        # 模型没给日期时不补今天，也不借同条另一项日期：本项自己原句“周四学校体检”的日期照常读出，与模型给出同一天时一致；
+        # 本项原句没有日期时仍为空（原断言“为空”是只有单项批次才补日期时的旧边界，2026-10-18按Root要求整批也读本项原句）。
         row = self.rows(None, due(4, ''))['运动服']
+        self.assertNotIn(row['due'], ('2026-10-07', '2026-10-10'), row)
+        self.assertEqual((row['due'], row['state']), (truth['运动服'], 'ready'), row)
+        row = self.rows(clause(2, '周四学校体检', '学校体检'), quote(4, '周四学校体检', '学校体检', ''))['运动服']
         self.assertEqual(row['due'], '', row)
 
     # 独立虚构反例（accept5原包，逐字）：10月7日完整通知原定10月10日，同一发布者10月8日只补充“交回班主任”；
