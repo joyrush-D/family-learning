@@ -36,7 +36,7 @@
  function timerText(item){const total=Math.floor(elapsed(item));return `${Math.floor(total/60)}:${String(total%60).padStart(2,'0')}`}
  function itemOrder(item){return ['不参加','不适用'].includes(item.source_task_status)?3:item.status==='running'?-1:item.status==='finished'&&item.result_actor==='child'?0:item.result==='完成'?2:1}
  // The source task's current teacher days and an ordinary source's own due, each by its own meaning; unknown stays unshown.
- const taskDays=item=>[item.source_task_complete_on&&item.source_task_complete_on!==item.source_task_due?`老师要求完成：${item.source_task_complete_on}`:'',item.source_task_handback_on?`老师要求交回：${item.source_task_handback_on}`:'',item.source_task_inspection_on?`老师检查：${item.source_task_inspection_on}`:'',item.source_task_due&&item.source_task_due!==item.source_task_inspection_on?`原截止：${item.source_task_due}`:''].filter(Boolean).join(' · ');
+ const taskDays=item=>[item.source_task_complete_on&&item.source_task_complete_on!==item.source_task_due?`老师要求完成：${item.source_task_complete_on}`:'',item.source_task_handback_on?`老师要求交回：${item.source_task_handback_on}`:'',item.source_task_inspection_on?`老师检查：${item.source_task_inspection_on}`:'',item.source_task_due&&![item.source_task_inspection_on,item.source_task_handback_on].includes(item.source_task_due)?`原截止：${item.source_task_due}`:''].filter(Boolean).join(' · ');
  // The same read-only requirement lines as Today and the child card (source_task_action_lines); an older payload keeps the saved action.
  const taskRequirement=item=>Array.isArray(item.source_task_action_lines)?item.source_task_action_lines.join('\n'):item.source_task_action||'';
  function itemHTML(item){
