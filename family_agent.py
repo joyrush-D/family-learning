@@ -197,10 +197,11 @@ _LEARNING_FORM_DENIES_COMPOUND = re.compile(
 # “并非不用抄写” / “不要忘记朗读” cannot match, and the rest of the clause stays
 # available to the positive/mixed-learning guard. This is a classification copy;
 # the original notice and its complete negative requirements are never changed.
+# The negated verb may keep its own home place (不用在家练习): still the same direct negation.
 _LEARNING_NEGATED_ACTION = re.compile(
     r'(^|[。；;，,！？!?])\s*(?:请\s*)?(?:(?:家长|孩子|学生|同学们?)\s*)?'
     r'(?:不用|不必|不需(?:要)?|不要求|无需|无须|不要|不得|禁止|切?勿)\s*'
-    r'(?:(?:再|额外|另行)\s*)?(?:(?:让|要求)\s*)?(?:(?:孩子|学生|同学们?)\s*)?'
+    r'(?:(?:再|额外|另行)\s*)?(?:(?:让|要求)\s*)?(?:(?:孩子|学生|同学们?)\s*)?(?:在家里?\s*)?'
     r'(?:朗读|背诵|抄写|默写|听写|跟读|练习|订正|预习|复习|阅读|口算|习作|作文)'
     r'(?=\s*(?:[。；;，,！？!?\n）)]|$))')
 
@@ -2476,13 +2477,15 @@ def _school_role_days(quote,cited,others):
             if max(head,at)<min(end,at+len(other)):return None
             at+=len(other)
     done,due=set(),set()
+    # Packing its own things into the schoolbag on the sending day (今晚把这两样装进书包) is that day's own work too.
+    work=_COMPLETION_VERB+r'|(?:装|放)(?:进|入|到)\s*书包'
     for clause in re.split(r'[，,。；;！!？?\n]',span):
         # 今天语文作业： labels the work its sending day publishes; it states no role day of its own.
         clause=re.sub(r'^\s*(?:今天|今日)\s*[^，,：:\d]{0,6}?(?:作业|任务)\s*[：:]','',clause)
         days=_school_own_dates(clause,published) if re.search(day,clause) else set()
         own_day=_school_clause_day(clause,published) if not days and re.search(day,clause) else ''
         if own_day and (_school_clause_roles(clause) or own_day==published and not re.search(r'交|检查',clause)
-                        and re.search(_COMPLETION_VERB,_titles_read_as_objects(clause))):
+                        and re.search(work,_titles_read_as_objects(clause))):
             # A role clause's own predicate after its day and only its asker, actor or place (请家长今晚在《秋游意见回执》上签字)
             # takes that one day, read as a new receipt's clause is (_school_clause_roles, _school_clause_day); so does the
             # sending day's own work clause (请监护人今天阅读…), the completion read below.
@@ -2492,7 +2495,7 @@ def _school_role_days(quote,cited,others):
             continue
         back=bool(re.search(r'交|检查',clause))
         # The sending day's own work (今晚将课本第20页的对话朗读三遍) is its completion, as completion_day reads it.
-        finish=bool(re.search(r'完成|做完|写完|读完|签字',clause) or days=={published} and not back and re.search(_COMPLETION_VERB,clause))
+        finish=bool(re.search(r'完成|做完|写完|读完|签字',clause) or days=={published} and not back and re.search(work,clause))
         if len(days)!=1 or (finish and back):return None
         (done if finish else due).update(days)
     if len(due)!=1 or any(d>next(iter(due)) for d in done):return None
