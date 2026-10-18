@@ -2884,6 +2884,8 @@ def _school_role_reselect(store,c,row,evidence,now):
     if due<now.date().isoformat():return None
     job=c.execute('SELECT done FROM agent_jobs WHERE id=?',(row['job_id'],)).fetchone()
     if job is None or not job['done']:return None
+    # A batch the one-time saved-batch audit owns stays with that audit, which keeps separate outcomes apart.
+    if c.execute('SELECT 1 FROM agent_jobs WHERE id=?',(_school_audit_mark(row['job_id']),)).fetchone():return None
     for e in evidence:
         source_id,message_id=e['ref'][len('message:'):].rsplit(':',1)
         message=c.execute('SELECT processed FROM agent_messages WHERE source_id=? AND id=?',(source_id,message_id)).fetchone()
