@@ -380,7 +380,12 @@ def date_meaning(quote,due,published,title='',goal=''):
     """
     if not date(due):return ''
     held=[event for value,event in _held_events(quote,published) if value==due]
-    if not held:return 'deadline'
+    if not held:
+        # Read by the item's own clauses naming this day and their own predicates: only checking (明天早读检查) makes it the
+        # teacher's check; a handback, any other or a mixed role on that day stays the deadline it was.
+        roles=[family_agent._school_clause_roles(c) for c in re.split(r'[，,。；;！!？?\n]',quote or '')
+               if date(published) and family_agent._school_clause_day(c,published)==due]
+        return 'inspection' if roles and all(r=={'check'} for r in roles) else 'deadline'
     if due not in _action_deadlines(quote,published):return 'event'
     words,placed=family_agent._school_own_words(quote,0,len(quote.rstrip('。；;！!？? \n')),title,goal)
     if placed:return 'deadline' if any(due in _action_deadlines(own,published) for s,own in words) else 'event'
@@ -613,6 +618,17 @@ def _sentences(line):
     return [x for x in parts+[line[start:].strip()] if x]
 
 
+_THIS_PAGE=r'这一页|这页|本页|该页|此页'
+
+
+def _stated_clauses(text):
+    """A line's own clauses as the card reads them: 这一页/本页 is its one 第N页 only when the line names exactly one page,
+    and a leading 请 asks nothing more."""
+    pages=set(re.findall(r'第\s*\d+\s*页',text))
+    if len(pages)==1:text=re.sub(_THIS_PAGE,next(iter(pages)),text)
+    return {re.sub(r'^请','',c.strip()) for c in re.split(r'[，,；;。！!？?]',text) if c.strip()}
+
+
 def action_lines(title,action):
     """The saved action's lines as a card under this title shows them; display only, nothing is saved or rewritten.
 
@@ -635,6 +651,9 @@ def action_lines(title,action):
             if clause and restated[1].startswith(clause):
                 shown[-1]=previous[:len(previous)-len(clause)]+restated[1]+shown[-1][len(previous):]
                 continue
+            # Every clause it restates is one the card already shows (家长听完后在第20页签字 for 请家长听完后在这一页签字 of
+            # the one 第20页 line): read once. Another page, place, object or any added clause keeps the line.
+            if _stated_clauses(restated[1])<=set().union(*map(_stated_clauses,shown)):continue
         shown.append(line)
     return shown
 
