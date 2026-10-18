@@ -2839,11 +2839,14 @@ def _school_role_reselect(store,c,row,evidence,now):
     another proposal's or another original's) runs again on the unchanged stored receipt, quote and originals. The due
     is the one day both the receipt's own words and the original give; a day the older program cleared comes back only
     from them, never from the upload or current day. A parent decision, edit, link, task, record or feedback, a changed
-    or rebound original, an unfinished batch, a past day or an item already reread returns None: its saved state stays.
+    or rebound original, an unfinished batch, a past day, a paused source or Agent or an item already reread returns
+    None: its saved state stays.
     """
     plan=json.loads(row['plan']);brief=plan.get('school_task',{})
     if row['state']!='pending' or brief.get('state')!='review' or row['task_id'] or row['record_id'] is not None or row['care_id']:return None
     if not row['job_id'].startswith('messages:') or brief.get('policy')!=SCHOOL_TASK_POLICY:return None
+    # The same current authorization as all automatic school work: a paused source or Agent leaves the saved row as it is.
+    if not _school_active(store,c,row):return None
     if plan.get('school_selection_revision')!=SCHOOL_SELECTION_REVISION:return None
     snapshot=plan.get('school_generated_snapshot');routed=plan.get('school_goal_id')
     # Only the program's own learning-goal routing (same child, its own subject goal) may have written after generation.
@@ -5969,7 +5972,7 @@ def _refresh_school(app, store, now, budget):
                 with store._db() as c:reselect=_school_role_reselect(store,c,row,evidence,now)
             if reselect:
                 # Same row and ID, no model call: the stored receipt's own day is restored and the complete old row stays
-                # readable; a row or original changed while this round waited is left as it now is.
+                # readable; a row, original or source/Agent authorization changed while this round waited is left as it now is.
                 fresh=reselect['brief'];brief=dict(brief,**{k:v for k,v in fresh.items() if k not in ('policy','origin_basis')})
                 plan['school_task']=brief
                 plan['school_role_reselect']=dict({k:v for k,v in reselect.items() if k!='brief'},previous=_hash(row),previous_row=copy.deepcopy(row))
