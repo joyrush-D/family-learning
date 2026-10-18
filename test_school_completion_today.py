@@ -695,6 +695,236 @@ class ActionLinesTests(unittest.TestCase):
                 self.assertEqual(family_agenda.action_lines(title, action), shown)
 
 
+# Six new fictional notices Root froze before any model receipt (daily-unseen-classification-20261018-truth-v1, messages.json
+# sha256 a36c1281…234214) and the one actual Flash trial29 reply to the unchanged ordinary request (ACTUAL-PARSED-RAW.json
+# sha256 655f0689…2ef99), both byte for byte; the reply cites the notices by their own group and message IDs. It left every
+# due empty but the meeting's (10月23日): each item's own words still give its days.
+OWNED_TIME_GROUP = 'fictional-group-20261021-01'
+OWNED_TIME_MESSAGES = json.loads('[{"id": "m01", "group_id": "fictional-group-20261021-01", "sender_id": "teacher-cn", "sender_name": "岑老师", "sender_role": "语文", "sent_at": "2026-10-21T16:00:00+08:00", "text": "今晚语文：1.朗读《秋天的小院》第2、3自然段两遍。2.观察家里的一种植物，在观察本上写三句话。", "attachments": []}, {"id": "m02", "group_id": "fictional-group-20261021-01", "sender_id": "teacher-cn", "sender_name": "岑老师", "sender_role": "语文", "sent_at": "2026-10-21T16:01:00+08:00", "text": "补充上条第二项：三句话分别写颜色、形状和气味，不用抄写课文。", "attachments": []}, {"id": "m03", "group_id": "fictional-group-20261021-01", "sender_id": "teacher-math", "sender_name": "柳老师", "sender_role": "数学", "sent_at": "2026-10-21T16:05:00+08:00", "text": "数学今晚完成练习册第18页第2、4、6题。每题先列式，再写完整计算过程，算完后逐题验算。", "attachments": []}, {"id": "m04", "group_id": "fictional-group-20261021-01", "sender_id": "teacher-en", "sender_name": "邵老师", "sender_role": "英语", "sent_at": "2026-10-21T16:10:00+08:00", "text": "英语：今晚将课本第20页的对话朗读三遍，请家长听完后在这一页签字，明天早读检查。", "attachments": []}, {"id": "m05", "group_id": "fictional-group-20261021-01", "sender_id": "teacher-class", "sender_name": "唐老师", "sender_role": "班主任", "sent_at": "2026-10-21T16:15:00+08:00", "text": "请家长今晚在《秋游意见回执》上签字，由孩子明早交给班主任。另通知：10月23日19:30在本班教室召开家长会，请一位家长参加，孩子不用参加。", "attachments": []}, {"id": "m06", "group_id": "fictional-group-20261021-01", "sender_id": "teacher-science", "sender_name": "柏老师", "sender_role": "科学", "sent_at": "2026-10-21T16:20:00+08:00", "text": "分享一段校园种植园介绍文字：种植园里有薄荷、番茄和向日葵，大家可以了解。仅供参考，不是作业，不用摘抄，也不用提交。", "attachments": []}]')
+OWNED_TIME_REPLY = json.loads('{"proposals": [{"title_quote": "朗读《秋天的小院》第2、3自然段两遍。", "focus": "school", "due": "", "evidence": [{"ref": "message:fictional-group-20261021-01:m01"}], "task_title": "语文：朗读《秋天的小院》第2、3段两遍", "task_goal": "朗读《秋天的小院》第2、3自然段两遍。", "task_advice": "可分两次朗读，每次读完稍作停顿，注意读准字音、读通句子。", "learning_subject": "语文", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "ready", "task_reason": "老师明确要求全班今晚完成的语文朗读作业，范围与遍数已读清。", "task_purpose": "learning", "task_submission": ""}, {"title_quote": "观察家里的一种植物，在观察本上写三句话。", "focus": "school", "due": "", "evidence": [{"ref": "message:fictional-group-20261021-01:m01"}, {"ref": "message:fictional-group-20261021-01:m02"}], "task_title": "语文：观察植物写三句话", "task_goal": "观察家里的一种植物，在观察本上写三句话；三句话分别写颜色、形状和气味，不用抄写课文。", "task_advice": "先看一看、闻一闻，再按颜色、形状、气味的顺序各写一句。", "learning_subject": "语文", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "ready", "task_reason": "老师明确要求全班今晚完成，补充消息已说明三句话的写作角度和不用抄写课文。", "task_purpose": "learning", "task_submission": ""}, {"title_quote": "数学今晚完成练习册第18页第2、4、6题。", "focus": "school", "due": "", "evidence": [{"ref": "message:fictional-group-20261021-01:m03"}], "task_title": "数学：练习册第18页第2、4、6题", "task_goal": "完成练习册第18页第2、4、6题；每题先列式，再写完整计算过程，算完后逐题验算。", "task_advice": "每题做完后回头验算一遍，确认列式与计算过程完整。", "learning_subject": "数学", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "ready", "task_reason": "老师明确要求今晚完成的数学练习，题号、作答步骤和验算要求已读清。", "task_purpose": "learning", "task_submission": ""}, {"title_quote": "今晚将课本第20页的对话朗读三遍，请家长听完后在这一页签字，明天早读检查。", "focus": "school", "due": "", "evidence": [{"ref": "message:fictional-group-20261021-01:m04"}], "task_title": "英语：朗读课本第20页对话三遍", "task_goal": "将课本第20页的对话朗读三遍；请家长听完后在这一页签字；明天早读检查。", "task_advice": "可分段朗读后再连读，家长听完后在第20页签字。", "learning_subject": "英语", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "ready", "task_reason": "老师明确要求今晚完成的英语朗读，遍数、家长签字和检查时间已读清。", "task_purpose": "learning", "task_submission": "家长听完后在第20页签字，明天早读检查。"}, {"title_quote": "请家长今晚在《秋游意见回执》上签字，由孩子明早交给班主任。", "focus": "school", "due": "", "evidence": [{"ref": "message:fictional-group-20261021-01:m05"}], "task_title": "签字《秋游意见回执》并明早交班主任", "task_goal": "请家长今晚在《秋游意见回执》上签字，由孩子明早交给班主任。", "task_advice": "签字后提醒孩子明早带回交给班主任。", "learning_subject": "", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "ready", "task_reason": "老师明确要求家长签字并由孩子明早交回，属待完成的行政事务。", "task_purpose": "admin", "task_submission": "家长签字后由孩子明早交给班主任。"}, {"title_quote": "10月23日19:30在本班教室召开家长会，请一位家长参加，孩子不用参加。", "focus": "school", "due": "2026-10-23", "evidence": [{"ref": "message:fictional-group-20261021-01:m05"}], "task_title": "家长会：10月23日19:30本班教室", "task_goal": "10月23日19:30在本班教室召开家长会，请一位家长参加，孩子不用参加。", "task_advice": "提前安排好时间，由一位家长准时参加。", "learning_subject": "", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "ready", "task_reason": "老师明确通知的家长会日期、时间、地点和参加要求，属需办理的行政事项。", "task_purpose": "admin", "task_submission": ""}, {"title_quote": "仅供参考，不是作业，不用摘抄，也不用提交。", "focus": "school", "due": "", "evidence": [{"ref": "message:fictional-group-20261021-01:m06"}], "task_title": "", "task_goal": "", "task_advice": "", "learning_subject": "", "learning_goal_id": "", "task_change": "new", "task_target_id": "", "task_state": "reference", "task_reason": "校园种植园介绍文字明确说明仅供参考、不是作业、不用摘抄也不用提交，无新增行动要求。", "task_purpose": "optional", "task_submission": ""}]}')
+# (category, own completion day shown apart, due, due kind) each item's own words give, by the frozen truth: a completion-only
+# item is due on that day; the English check and the receipt's return are the due after tonight's work; the meeting is its event.
+OWNED_TIME_DAYS = {
+    '《秋天的小院》': ('homework', '', '2026-10-21', 'deadline'),
+    '观察植物': ('homework', '', '2026-10-21', 'deadline'),
+    '第18页': ('homework', '', '2026-10-21', 'deadline'),
+    '第20页': ('homework', '2026-10-21', '2026-10-22', 'deadline'),
+    '《秋游意见回执》': ('todo', '2026-10-21', '2026-10-22', 'deadline'),
+    '家长会': ('todo', '', '2026-10-23', 'event'),
+}
+
+
+def owned_time_payload(case, notices, start='2026-10-21T16:00:00+08:00'):
+    """notices: frozen message dicts, or (publisher, text) a minute apart from start; returns the payload and its refs."""
+    first = dt.datetime.fromisoformat(start)
+    rows = [m if isinstance(m, dict) else dict(id='v%02d' % n, sender_id=m[0], sender_name='虚构' + m[0],
+                                               sent_at=(first + dt.timedelta(minutes=n)).isoformat(), text=m[1])
+            for n, m in enumerate(notices, 1)]
+    payload = case.fixture.payload(cursor=rows[-1]['id'])
+    payload['messages'] = [dict(id=m['id'], message_order=str(n), time=m['sent_at'], kind='text', sender=m['sender_name'],
+                                sender_id=m['sender_id'], text=m['text'], unread=False) for n, m in enumerate(rows, 1)]
+    return payload, ['message:' + case.source['id'] + ':' + m['id'] for m in rows]
+
+
+class OrdinaryOwnedTimeTests(unittest.TestCase):
+    """Root's six frozen notices and the actual trial29 reply through the ordinary ingest -> run_once (mocked transport):
+    every item keeps the days its own words state although the reply left them out; reference material is no todo."""
+    setUp = native.SchoolNativeCoverageTests.setUp
+
+    def save_day(self):
+        self.now = self.fixture.now = dt.datetime(2026, 10, 21, 16, 30, tzinfo=agent.TZ)
+        payload, refs = owned_time_payload(self, OWNED_TIME_MESSAGES)
+        self.store.ingest(payload)
+        reply = json.loads(json.dumps(OWNED_TIME_REPLY, ensure_ascii=False).replace('message:' + OWNED_TIME_GROUP + ':', 'message:' + self.source['id'] + ':'))
+        requests = []
+
+        def model(messages, schema, name, timeout=60, *, data_path=None):
+            self.assertEqual((name, timeout), ('family_agent_selection', 45))
+            requests.append(json.loads(messages[-1]['content']))
+            return copy.deepcopy(reply)
+        self.model.side_effect = model
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed'], self.model.call_count), (0, 6, 1), result)
+        # The unchanged ordinary request: every original verbatim, no program-located list (the ledger reads none of these).
+        self.assertEqual([(e['ref'], e['text']) for e in requests[0]['evidence']], list(zip(refs, [m['text'] for m in OWNED_TIME_MESSAGES])))
+        self.assertNotIn('required_native_actions', requests[0])
+        with self.store._db() as c:
+            tasks = {r['id']: dict(r) for r in c.execute('SELECT * FROM manual_tasks')}
+            items = {r['id']: dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")}
+        ids = {}
+        for key in OWNED_TIME_DAYS:
+            found = [i for i, t in tasks.items() if key in t['title']]
+            self.assertEqual(len(found), 1, (key, [t['title'] for t in tasks.values()]))
+            ids[key] = found[0]
+        return ids, tasks, items, refs
+
+    def _listed(self, day):
+        calendar = self.app.calendar_snapshot(day, day)
+        return {x['task_id']: x for x in calendar['inbox'] if x['task_id'] and self.source['child_id'] in x['child_ids']}
+
+    def test_the_frozen_reply_saves_four_homework_and_two_parent_items_on_their_own_days(self):
+        ids, tasks, items, refs = self.save_day()
+        self.assertEqual(len(tasks), 6, [t['title'] for t in tasks.values()])
+        # Every actionable item is collected on the existing acceptance path, none held for an unadopted day.
+        actionable = [r for r in items.values() if json.loads(r['plan'])['school_task']['state'] != 'reference']
+        self.assertEqual(sorted(r['state'] for r in actionable), ['accepted'] * 6)
+        self.assertFalse(any('未采用模型日期' in json.loads(r['plan'])['school_task']['reason'] for r in items.values()))
+        # The science introduction stays reference material only: kept, cited, no todo.
+        reference = [r for r in items.values() if json.loads(r['plan'])['school_task']['state'] == 'reference']
+        self.assertEqual([(r['state'], r['task_id'], [e['ref'] for e in json.loads(r['evidence'])]) for r in reference],
+                         [('pending', '', [refs[5]])])
+        self.assertFalse(any('种植园' in t['title'] + t['action'] + t['due'] for t in tasks.values()))
+
+        def check(listed):
+            for key, (category, complete, due, kind) in OWNED_TIME_DAYS.items():
+                with self.subTest(item=key):
+                    agenda = listed[ids[key]]['agenda']
+                    self.assertEqual((agenda['category'], agenda['complete_on'], agenda['due_on'], agenda['due_kind']),
+                                     (category, complete, due, kind))
+                    self.assertEqual(tasks[ids[key]]['due'], due)
+        check(self._listed('2026-10-21'))
+        today = [x['task_id'] for x in self.app.calendar_snapshot('2026-10-21', '2026-10-21')['agenda'] if x['task_id']]
+        for key in OWNED_TIME_DAYS:
+            self.assertEqual(today.count(ids[key]), 1, (key, 'listed once on its own sending day'))
+        # Each item keeps its own standard; a supplement or another item's words never move.
+        observe, read = tasks[ids['观察植物']], tasks[ids['《秋天的小院》']]
+        for words in ('三句话', '颜色、形状和气味', '不用抄写课文'):
+            self.assertIn(words, observe['action'])
+            self.assertNotIn(words, read['action'])
+        self.assertIn(refs[1], observe['source'])
+        self.assertNotIn(refs[1], read['source'] + tasks[ids['第18页']]['source'])
+        self.assertIn('第2、4、6题', tasks[ids['第18页']]['action'])
+        english = tasks[ids['第20页']]
+        for words in ('朗读三遍', '请家长听完后在这一页签字', '明天早读检查'):
+            self.assertIn(words, english['action'])
+        self.assertNotIn('交', english['title'], 'checking is not handing in')
+        self.assertNotRegex(english['action'], '交(?:回|给|到)', 'no handback invented')
+        receipt, meeting = tasks[ids['《秋游意见回执》']], tasks[ids['家长会']]
+        self.assertIn('明早交给班主任', receipt['action'])
+        for words in ('19:30', '本班教室', '一位家长参加', '孩子不用参加'):
+            self.assertIn(words, meeting['title'] + meeting['action'])
+        self.assertNotIn('10-23', receipt['due'] + receipt['action'], 'the meeting day is not the receipt deadline')
+        # The next round reads nothing new: no model, no task; reopening keeps the same IDs, days and roles.
+        second = agent.run_once(self.app, self.now + dt.timedelta(minutes=6))
+        self.assertEqual((second['failed'], second['created'], self.model.call_count), (0, 0, 1), second)
+        agent.Store(self.app.connect, self.app.profiles, self.app.DATA, initialize=False)
+        with self.store._db() as c:
+            self.assertEqual({r['id']: dict(r) for r in c.execute('SELECT * FROM manual_tasks')}, tasks)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_messages WHERE processed=1').fetchone()[0], 6)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0], 0)
+        for day in ('2026-10-21', '2026-10-22', '2026-10-23'):
+            check(self._listed(day))
+
+    def run_day(self, notices, proposals):
+        """A fresh store, one ordinary round for notices and one reply; each proposal is (key, quote, model due, message
+        numbers, purpose, subject). Returns each key's saved item due/state and its task due ('' when none)."""
+        self.setUp()
+        self.now = self.fixture.now = dt.datetime(2026, 10, 21, 16, 30, tzinfo=agent.TZ)
+        payload, refs = owned_time_payload(self, notices)
+        self.store.ingest(payload)
+        reply = dict(proposals=[native.fixtures.school_proposal(
+            title_quote=quote, due=due, evidence=[dict(ref=refs[n - 1]) for n in numbers], task_title=key,
+            task_goal=quote.split('：', 1)[-1], task_state='ready', task_reason='老师原文要求明确。', task_purpose=purpose,
+            learning_subject=subject) for key, quote, due, numbers, purpose, subject in proposals])
+        cited = {r for p in reply['proposals'] for r in (e['ref'] for e in p['evidence'])}
+        reply['proposals'] += [native.fixtures.school_proposal(title_quote=m['text'][:20], evidence=[dict(ref=r)], task_state='reference',
+                                                        task_reason='无行动要求。', task_purpose='optional')
+                               for r, m in zip(refs, payload['messages']) if r not in cited]
+        self.model.side_effect = lambda *args, **kwargs: copy.deepcopy(reply)
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, len(notices)), result)
+        out = {}
+        with self.store._db() as c:
+            for key, *_ in proposals:
+                row = c.execute("SELECT * FROM agent_items WHERE kind='school' AND title=?", (key,)).fetchone()
+                self.assertIsNotNone(row, key)
+                task = c.execute('SELECT due FROM manual_tasks WHERE id=?', (row['task_id'],)).fetchone() if row['task_id'] else None
+                out[key] = (row['due'], json.loads(row['plan'])['school_task']['state'], task['due'] if task else '')
+        return out
+
+    def test_an_omitted_day_is_read_only_from_the_item_s_own_words(self):
+        # Own days in other shapes: a list heading's 今晚 over items stating none (a 《》 title's 明天 is a name), a receipt
+        # signed tonight in a named form and returned 明早 with a clock (spaced or not), a spaced meeting time, the subject
+        # label left out of the quote, and a sibling that states no day of its own.
+        days = self.run_day([
+            ('teacher-cn', '今晚语文：1.朗读《明天的太阳》第2段两遍。2.观察家里的一种植物，在观察本上写三句话。'),
+            ('teacher-class', '请家长今晚在《10月25日活动回执》上签字，由孩子明早 7:30 交给班主任。另通知：10月23日 19:30在本班教室召开家长会，请一位家长参加，孩子不用参加。'),
+            ('teacher-en', '英语：今晚将课本第20页的对话朗读三遍，请家长听完后在这一页签字，明天早读检查。'),
+            ('teacher-math', '数学今晚完成练习册第18页第2、4、6题。另外，请准备一把量角器。'),
+            ('teacher-class2', '请家长今晚在《秋游意见回执》上签字，由孩子明早7:30交给班主任。'),
+        ], [
+            ('语文：朗读《明天的太阳》', '朗读《明天的太阳》第2段两遍。', '', [1], 'learning', '语文'),
+            ('语文：观察植物', '观察家里的一种植物，在观察本上写三句话。', '', [1], 'learning', '语文'),
+            ('签字《10月25日活动回执》', '请家长今晚在《10月25日活动回执》上签字，由孩子明早 7:30 交给班主任。', '', [2], 'admin', ''),
+            ('家长会（10月23日）', '10月23日 19:30在本班教室召开家长会，请一位家长参加，孩子不用参加。', '', [2], 'admin', ''),
+            ('英语：朗读第20页对话', '今晚将课本第20页的对话朗读三遍，请家长听完后在这一页签字，明天早读检查。', '', [3], 'learning', '英语'),
+            ('数学：第18页', '数学今晚完成练习册第18页第2、4、6题。', '', [4], 'learning', '数学'),
+            ('准备量角器', '请准备一把量角器。', '', [4], 'admin', ''),
+            ('签字《秋游意见回执》', '请家长今晚在《秋游意见回执》上签字，由孩子明早7:30交给班主任。', '', [5], 'admin', ''),
+        ])
+        self.assertEqual(days, {
+            '语文：朗读《明天的太阳》': ('2026-10-21', 'accepted', '2026-10-21'),
+            '语文：观察植物': ('2026-10-21', 'accepted', '2026-10-21'),
+            '签字《10月25日活动回执》': ('2026-10-22', 'accepted', '2026-10-22'),
+            '家长会（10月23日）': ('2026-10-23', 'accepted', '2026-10-23'),
+            '英语：朗读第20页对话': ('2026-10-22', 'accepted', '2026-10-22'),
+            '数学：第18页': ('2026-10-21', 'accepted', '2026-10-21'),
+            '准备量角器': ('', 'accepted', '无明确截止'),
+            '签字《秋游意见回执》': ('2026-10-22', 'accepted', '2026-10-22'),
+        })
+        listed = {x['title']: x['agenda'] for x in self.app.calendar_snapshot('2026-10-21', '2026-10-21')['inbox'] if x['task_id']}
+        for title in ('签字《10月25日活动回执》', '英语：朗读第20页对话', '签字《秋游意见回执》'):
+            self.assertEqual((listed[title]['complete_on'], listed[title]['due_on']), ('2026-10-21', '2026-10-22'), title)
+        self.assertEqual(listed['家长会（10月23日）']['due_kind'], 'event')
+
+    def test_unknown_changed_cancelled_conflicting_or_borrowed_days_stay_unknown(self):
+        days = self.run_day([
+            # 今天…作业： labels what was published today; its items state no day of their own.
+            ('teacher-cn', '今天语文作业：1.朗读《秋天的小院》第2、3自然段两遍。2.观察家里的一种植物，在观察本上写三句话。'),
+            ('teacher-cn2', '观察家里的一种植物，在观察本上写三句话。'),
+            ('teacher-class', '另通知：10月23日19:30在本班教室召开家长会，请一位家长参加，孩子不用参加。现通知该家长会取消。'),
+            ('teacher-class2', '10月23日19:30在本班教室召开家长会，请一位家长参加。家长会延期，时间另行通知。'),
+            ('teacher-class3', '10月23日19:30在本班教室召开家长会，家长自愿参加，孩子不用参加。'),
+            ('teacher-math', '今晚完成练习册第3页，明天交或后天交。'),
+        ], [
+            ('今天：朗读', '朗读《秋天的小院》第2、3自然段两遍。', '', [1], 'learning', '语文'),
+            ('今天：观察', '观察家里的一种植物，在观察本上写三句话。', '', [1], 'learning', '语文'),
+            ('无日期：观察', '观察家里的一种植物，在观察本上写三句话。', '', [2], 'learning', '语文'),
+            ('取消的家长会', '10月23日19:30在本班教室召开家长会，请一位家长参加，孩子不用参加。', '2026-10-23', [3], 'admin', ''),
+            ('延期的家长会', '10月23日19:30在本班教室召开家长会，请一位家长参加。', '2026-10-23', [4], 'admin', ''),
+            ('自愿的家长会', '10月23日19:30在本班教室召开家长会，家长自愿参加，孩子不用参加。', '2026-10-23', [5], 'admin', ''),
+            ('两个交回日', '今晚完成练习册第3页，明天交或后天交。', '', [6], 'learning', '数学'),
+        ])
+        for key in ('今天：朗读', '今天：观察', '无日期：观察', '两个交回日'):
+            self.assertEqual(days[key][0], '', key)
+        for key in ('取消的家长会', '延期的家长会', '自愿的家长会'):
+            self.assertEqual(days[key], ('', 'pending', ''), key)
+        # Another teacher's later day is never the list's: only the item its own heading covers keeps 今晚.
+        days = self.run_day([
+            ('teacher-cn', '今晚语文：1.朗读《秋天的小院》第2、3自然段两遍。2.观察家里的一种植物，在观察本上写三句话。'),
+            ('teacher-sci', '补充上条第二项：明天交观察本。'),
+        ], [
+            ('跨老师：朗读', '朗读《秋天的小院》第2、3自然段两遍。', '', [1], 'learning', '语文'),
+            ('跨老师：观察', '观察家里的一种植物，在观察本上写三句话。', '', [1, 2], 'learning', '语文'),
+        ])
+        self.assertEqual(days['跨老师：朗读'][0], '2026-10-21')
+        self.assertEqual(days['跨老师：观察'][0], '')
+
+    def test_a_meeting_another_participant_need_not_attend_keeps_its_day(self):
+        sent = '2026-10-21'
+        head = '请家长今晚在《秋游意见回执》上签字，由孩子明早交给班主任。另通知：'
+        for text, expected in [
+                (head + '10月23日19:30在本班教室召开家长会，请一位家长参加，孩子不用参加。', {'2026-10-23'}),
+                (head + '10月23日 19:30在本班教室召开家长会，请一位家长参加，孩子不用参加。', {'2026-10-23'}),
+                ('10月23日19:30在本班教室召开家长会，请孩子参加，家长不用参加。', {'2026-10-23'}),
+                (head + '10月23日19:30在本班教室召开家长会，请一位家长参加，孩子不用参加。现通知该家长会取消。', set()),
+                ('10月23日19:30在本班教室召开家长会，请家长参加，可不参加。', set()),
+                ('10月23日19:30在本班教室召开家长会，家长自愿参加，孩子不用参加。', set()),
+                ('10月23日19:30在本班教室召开家长会，请一位家长参加，家长不用参加。', set())]:
+            with self.subTest(text=text):
+                self.assertEqual(family_agenda.event_days(text, sent), expected)
+
+
 def saved_flash27_state(path):
     """The app's own state and 2026-10-19 calendar after the fictional Flash27 day is saved by run_once (no model)."""
     case = Flash27ReadableCardTests('test_each_card_shows_its_own_conditions_once_and_keeps_the_saved_words')
@@ -725,6 +955,21 @@ def saved_recovered_state(path):
         case.doCleanups()
 
 
+def saved_owned_time_state(path):
+    """The app's own state and 2026-10-21..23 calendar after Root's six frozen notices are saved from the actual trial29 reply."""
+    case = OrdinaryOwnedTimeTests('test_the_frozen_reply_saves_four_homework_and_two_parent_items_on_their_own_days')
+    case.setUp()
+    try:
+        ids = case.save_day()[0]
+        state = case.app.snapshot()
+        state['saved_calendar'] = case.app.calendar_snapshot('2026-10-21', '2026-10-23')
+        state['owned_time_ids'] = ids
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(state, f, ensure_ascii=False, default=str)
+    finally:
+        case.doCleanups()
+
+
 if __name__ == '__main__':
     import sys
     if sys.argv[1:2] == ['--saved-h01-state']:
@@ -733,5 +978,7 @@ if __name__ == '__main__':
         saved_flash27_state(sys.argv[2])
     elif sys.argv[1:2] == ['--saved-recovered-state']:
         saved_recovered_state(sys.argv[2])
+    elif sys.argv[1:2] == ['--saved-owned-time-state']:
+        saved_owned_time_state(sys.argv[2])
     else:
         unittest.main()
