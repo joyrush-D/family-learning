@@ -1238,6 +1238,17 @@ class OwnedEventAndCorrectionTests(unittest.TestCase):
 
 
 CLEAR_EN_GOAL = '今晚将课本第20页的对话朗读三遍；请家长听完后在这一页签字；明天早读检查。'
+# Root's frozen step-layout truth (fully fictional FROZEN-CARDS.json sha256 708277b0…61e5, TRUTH.json cf33805e…6274) for
+# the same six saved cards: where a card's own saved words already join requirements with a top-level ；, each part reads
+# as its own line of that one card, in the saved order with every word and mark; nothing is renamed, added or moved.
+STEP_CARD_LINES = {
+    '第18页': ['完成练习册第18页第2、4、6题；', '每题先列式，再写完整计算过程，算完后逐题验算。'],
+    '第20页': ['今晚将课本第20页的对话朗读三遍；', '请家长听完后在这一页签字；', '明天早读检查。'],
+    '观察植物': ['观察家里的一种植物，在观察本上写三句话；', '三句话分别写颜色、形状和气味，不用抄写课文。'],
+    '《秋天的小院》': ['朗读《秋天的小院》第2、3自然段两遍。'],
+    '《秋游意见回执》': ['请家长今晚在《秋游意见回执》上签字，由孩子明早交给班主任。'],
+    '家长会': ['10月23日19:30在本班教室召开家长会，请一位家长参加，孩子不用参加。'],
+}
 
 
 class ClearStandardsTests(unittest.TestCase):
@@ -1342,6 +1353,82 @@ class HandbackRoleTests(unittest.TestCase):
                          ('2026-10-21', '2026-10-22', '', '2026-10-22'))
         with self.store._db() as c:
             self.assertEqual(dict(c.execute('SELECT * FROM manual_tasks WHERE id=?', (ids[key],)).fetchone()), saved, 'storage unchanged')
+
+
+class RequirementStepTests(unittest.TestCase):
+    """Display only: a card's own top-level ； parts read as its steps in the saved order; storage, days and roles stay."""
+    setUp = native.SchoolNativeCoverageTests.setUp
+    _old_store = SavedOwnedTimeCopyTests._old_store
+    _tables = SavedOwnedTimeCopyTests._tables
+
+    def test_a_line_s_own_top_level_semicolons_read_as_its_steps_in_saved_order(self):
+        for title, action, shown in [
+                ('数学：练习册第18页第2、4、6题', '完成练习册第18页第2、4、6题；每题先列式，再写完整计算过程，算完后逐题验算。', STEP_CARD_LINES['第18页']),
+                ('语文：观察植物写三句话', '观察家里的一种植物，在观察本上写三句话；三句话分别写颜色、形状和气味，不用抄写课文。', STEP_CARD_LINES['观察植物']),
+                # The restated 提交要求 is still read against the whole line first (这一页 is that line's 第20页), then laid out.
+                ('英语：朗读课本第20页对话三遍', CLEAR_EN_GOAL + '\n提交要求：家长听完后在第20页签字，明天早读检查。', STEP_CARD_LINES['第20页']),
+                # A ； inside 《》, quotes or brackets is no step; an unbalanced pair or an ASCII double quote keeps the line whole.
+                ('语文：A', '朗读《春；夏》第2段；家长签字。', ['朗读《春；夏》第2段；', '家长签字。']),
+                ('语文：A', '摘抄“甲；乙”两句；明天交。', ['摘抄“甲；乙”两句；', '明天交。']),
+                ('数学：A', '完成第3题（选做；可不交）；第4题必做。', ['完成第3题（选做；可不交）；', '第4题必做。']),
+                ('语文：A', '读第3课（重点段；今晚完成。', ['读第3课（重点段；今晚完成。']),
+                ('语文：A', '读第3课重点段）；今晚完成。', ['读第3课重点段）；今晚完成。']),
+                ('语文：A', '摘抄"甲"两句；明天交。', ['摘抄"甲"两句；明天交。']),
+                # Only the full-width ；: commas and an ASCII ; never cut, and a one-sentence card keeps its one line.
+                ('数学：A', '每题先列式，再写完整计算过程，算完后逐题验算。', ['每题先列式，再写完整计算过程，算完后逐题验算。']),
+                ('英语：A', 'Read page 20; ask a parent to sign.', ['Read page 20; ask a parent to sign.']),
+                # A negation, a quantity and a part in the title's own words all stay: no new omission.
+                ('语文：A', '不用抄写课文；只读第2段两遍。', ['不用抄写课文；', '只读第2段两遍。']),
+                ('英语：朗读课本第20页对话三遍', '朗读课本第20页对话三遍；家长签字。', ['朗读课本第20页对话三遍；', '家长签字。']),
+                # Marks alone never make a line.
+                ('语文：A', '读第1段；。', ['读第1段；。']),
+                ('语文：A', '读第1段；；读第2段。', ['读第1段；；', '读第2段。'])]:
+            with self.subTest(action=action):
+                self.assertEqual(family_agenda.action_lines(title, action), shown)
+                # Same words, marks and order: the parts join back into the text the card read before (CLEAR_EN_GOAL for C01).
+                self.assertEqual(''.join(shown), CLEAR_EN_GOAL if '提交要求' in action else action)
+        # The own completion clock still heads the same work words, now on its own step.
+        words = dict(lead='2026年10月18日20:00前', work='完成《秋日观察》第2页')
+        self.assertEqual(family_agenda.action_lines('语文：A', '完成《秋日观察》第2页，摘录两句；每句写一句理由。', words),
+                         ['2026年10月18日20:00前完成《秋日观察》第2页，摘录两句；', '每句写一句理由。'])
+
+    def test_the_frozen_six_cards_read_their_steps_on_parent_and_child_cards_and_keep_every_saved_value(self):
+        ids, tasks, items, refs = OrdinaryOwnedTimeTests.save_day(self)
+        listed = {t['id']: t for t in self.app.tasks()}
+        for key, lines in STEP_CARD_LINES.items():
+            with self.subTest(item=key):
+                task = listed[ids[key]]
+                self.assertEqual(card_lines(task), lines)
+                # Only a card that lays out more than its saved lines carries its own lines; a one-line card keeps its shape.
+                self.assertEqual('action_lines' in task, len(lines) > 1)
+                self.assertEqual({k: task[k] for k in ('title', 'action', 'due', 'source')}, {k: tasks[ids[key]][k] for k in ('title', 'action', 'due', 'source')})
+                category, complete, due, kind = OWNED_TIME_DAYS[key]
+                self.assertEqual(tuple(task['agenda'][k] for k in ('category', 'complete_on', 'due_on', 'due_kind')), (category, complete, due, kind))
+        english = '\n'.join(card_lines(listed[ids['第20页']]))
+        self.assertEqual((english.count('签字'), english.count('早读检查'), english.count('提交要求')), (1, 1, 0))
+        # The after-school and child cards read the same projection from the same task, added by the parent's 作业计时.
+        study = family_study.Store(SimpleNamespace(**vars(self.app)))
+        for n, key in enumerate(STEP_CARD_LINES):
+            study.save_item(dict(child_id=self.source['child_id'], day='2026-10-21', request_key='step-layout-%02d' % n + 'x' * 16,
+                                 version=0, task_id=ids[key], planned_minutes=10))
+        rows = {r['task_id']: r for r in study.snapshot(self.source['child_id'], '2026-10-21')['items']}
+        for key, lines in STEP_CARD_LINES.items():
+            with self.subTest(child=key):
+                self.assertEqual((rows[ids[key]]['source_task_action'], rows[ids[key]]['source_task_action_lines']), (tasks[ids[key]]['action'], lines))
+        with self.store._db() as c:
+            self.assertEqual({r['id']: dict(r) for r in c.execute('SELECT * FROM manual_tasks')}, tasks, 'storage unchanged')
+            self.assertEqual({r['id']: dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")}, items)
+
+    def test_the_saved_r262_rows_read_the_same_steps_by_their_frozen_ids_without_any_write(self):
+        before = self._old_store()
+        listed = {t['id']: t for t in self.app.tasks()}
+        for task_id, key in (('AGENT-197de67f1ad60d9ae5d5096f', '第18页'), ('AGENT-47d69320426840b7989d616b', '第20页'),
+                             ('AGENT-7f717a7ce1b10fce394db2e0', '观察植物'), ('AGENT-bbec4c1a168671f34688d3cc', '《秋天的小院》'),
+                             ('AGENT-baef0382d64d3bd88a52f208', '《秋游意见回执》')):
+            with self.subTest(task=task_id):
+                self.assertEqual(card_lines(listed[task_id]), STEP_CARD_LINES[key])
+        self.assertEqual(self._tables(), before, 'reading the cards writes nothing')
+        self.assertEqual(self.model.call_count, 0)
 
 
 def saved_flash27_state(path):
