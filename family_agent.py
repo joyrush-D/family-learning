@@ -2441,7 +2441,7 @@ def _school_role_days(quote,cited,others):
     another cited original stating a day, a clause with two days or both roles, or any change, cancel or uncertain word
     returns None, so the existing date protections decide. Returns (completion days, due day).
     """
-    from family_agenda import sent_day
+    from family_agenda import _COMPLETION_VERB,sent_day
     homes=[e for e in cited if quote and quote in e['text']]
     if len(homes)!=1 or homes[0]['text'].count(quote)!=1:return None
     text=homes[0]['text'];published=sent_day(homes[0].get('time',''))
@@ -2450,7 +2450,10 @@ def _school_role_days(quote,cited,others):
     if any(_school_own_dates(e['text'],sent_day(e.get('time',''))) or re.search(day,e['text']) for e in cited if e is not homes[0]):return None
     start=text.index(quote);end=start+len(quote)
     head=max(text.rfind(mark,0,start) for mark in '。；;！!？?\n')+1
-    if not re.fullmatch(r'\s*(?:(?:另外|此外|还有|同时)[，,]?\s*)?',text[head:start]):return None
+    # Only a connector, the item's own label (英语：、另通知：) or its list number may stand before its quoted words; a label
+    # naming a day (今晚语文：) heads a whole list and is read by its own rule (_school_list_heading_day).
+    lead=re.fullmatch(r'\s*(?:([^：:，,。；;！!？?\n\d]{1,6})[：:])?\s*(?:[1-9][0-9]?[.．、]\s*)?(?:(?:另外|此外|还有|同时)[，,]?\s*)?',text[head:start])
+    if not lead or lead[1] and re.search(day,lead[1]):return None
     if not quote.rstrip(' ').endswith(tuple('。；;！!？?\n')):
         tail=re.match(r'[^。；;！!？?\n]*[。；;！!？?\n]?',text[end:])
         if tail[0].strip('。；;！!？? \n'):return None  # The quote stops inside its sentence: not this item's whole own words.
@@ -2475,14 +2478,75 @@ def _school_role_days(quote,cited,others):
         # 今天语文作业： labels the work its sending day publishes; it states no role day of its own.
         clause=re.sub(r'^\s*(?:今天|今日)\s*[^，,：:\d]{0,6}?(?:作业|任务)\s*[：:]','',clause)
         days=_school_own_dates(clause,published) if re.search(day,clause) else set()
+        if not days and re.search(day,clause) and _school_clause_roles(clause):
+            # A role clause's own predicate after its day and only its asker, actor or place (请家长今晚在《秋游意见回执》上签字)
+            # takes that one day, read as a new receipt's clause is (_school_clause_roles, _school_clause_day).
+            days={_school_clause_day(clause,published)}-{''}
         if not days:
             if re.search(day,clause):return None
             continue
-        finish=bool(re.search(r'完成|做完|写完|读完|签字',clause));back=bool(re.search(r'交|检查',clause))
+        back=bool(re.search(r'交|检查',clause))
+        # The sending day's own work (今晚将课本第20页的对话朗读三遍) is its completion, as completion_day reads it.
+        finish=bool(re.search(r'完成|做完|写完|读完|签字',clause) or days=={published} and not back and re.search(_COMPLETION_VERB,clause))
         if len(days)!=1 or (finish and back):return None
         (done if finish else due).update(days)
     if len(due)!=1 or any(d>next(iter(due)) for d in done):return None
     return done,next(iter(due))
+
+
+# Any day a text names: a date, a month-day, a numbered day, a relative, recurring or week day (_SCHOOL_ROLE_DAY).
+_SCHOOL_ANY_DAY=r'\d{1,2}\s*[日号]|今天|今日|今晚|明天|明日|明早|明晚|后天|昨天|前天|每天|每晚|(?:周|星期|礼拜)[一二三四五六日天]|\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}'
+
+
+def _school_list_heading_day(quote,cited,others=()):
+    """The sending day a list heading's 今晚 gives the numbered item holding quote (今晚语文：1.朗读…。2.观察…。), or ''.
+
+    Only 今晚 opening its original with at most a subject label (and 作业/任务), directly before item 1 of items numbered
+    1..N, heads them, and only while it is the one day that original names outside 《》 titles and no other cited original
+    names any (a later supplement's or another teacher's day is no item's here). The quote must lie inside one item no
+    other proposal quotes. A change, cancel, condition or question keeps it unknown; so does a 今天…： label, which only
+    names what was published, or a heading naming another day.
+    """
+    from family_agenda import _titles_read_as_objects,sent_day
+    homes=[e for e in cited if quote and quote in e['text']]
+    if len(homes)!=1 or homes[0]['text'].count(quote)!=1:return ''
+    text=homes[0]['text'];published=sent_day(homes[0].get('time',''));read=_titles_read_as_objects(text)
+    head=re.match(r'\s*今晚\s*(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')\s*)?(?:作业|任务)?\s*[：:]\s*',text)
+    if (not published or not head or len(re.findall(_SCHOOL_ANY_DAY,read))!=1
+            or any(re.search(_SCHOOL_ANY_DAY,_titles_read_as_objects(e['text'])) for e in cited if e is not homes[0])
+            or re.search(_SCHOOL_DEFERRED+r'|取消|改为|改到|改成|推迟|延期|顺延|更正|待定|另行通知|或|如果|若|可能|大概|左右|[？?]',read)):return ''
+    marks=list(re.finditer(r'(?:^|(?<=[。；;\s]))([1-9][0-9]?)[.．、]',text[head.end():]))
+    if not marks or marks[0].start() or [int(m[1]) for m in marks]!=list(range(1,len(marks)+1)):return ''
+    start=text.index(quote);end=start+len(quote)
+    items=[(head.end()+m.end(),head.end()+(marks[n+1].start() if n+1<len(marks) else len(text)-head.end())) for n,m in enumerate(marks)]
+    own=[(left,right) for left,right in items if left<=start and end<=right]
+    if len(own)!=1:return ''
+    left,right=own[0]
+    for other in others:  # Another proposal quoting any of this item makes it shared, not this item's own.
+        at=0
+        while other and (at:=text.find(other,at))!=-1:
+            if max(left,at)<min(right,at+len(other)):return ''
+            at+=len(other)
+    return published
+
+
+def _school_own_due(quote,cited,others):
+    """The due this item's own words prove when its reply gave none, or ''.
+
+    Read from those words alone, by the readers that check a reply's day: its own handback/check day after its own
+    completion (_school_role_days), else the one day its own complete clause states, else the 今晚 its list heading
+    gives it. Another cited original naming any day (a later supplement, correction or another teacher's note) leaves
+    it unknown; the selection's borrowed, cancelled and summary guards still decide whether the day is kept.
+    """
+    from family_agenda import _titles_read_as_objects,sent_day
+    homes=[e for e in cited if quote and quote in e['text']]
+    if (len(homes)!=1 or len({sent_day(e.get('time','')) for e in cited})!=1
+            or any(re.search(_SCHOOL_ANY_DAY,_titles_read_as_objects(e['text'])) for e in cited if e is not homes[0])):return ''
+    roles=_school_role_days(quote,cited,others)
+    if roles:return roles[1]
+    clause=_school_own_clause_dates(quote,cited,others)
+    if clause:return next(iter(clause)) if len(clause)==1 else ''
+    return _school_list_heading_day(quote,cited,others)
 
 
 def _school_quote_lead(quote,text,goal):
@@ -2677,6 +2741,8 @@ def _school_borrowed_day(quote,cited,due,goal='',title=''):
     from family_agenda import deadlines,sent_day
     homes=[e for e in cited if quote and quote in e['text']]
     if not due or len(homes)!=1 or homes[0]['text'].count(quote)!=1:return False
+    # A list heading's own 今晚 covers each numbered item naming no day (今晚语文：1.…。2.…。), not only the first.
+    if due==_school_list_heading_day(quote,cited):return False
     text=homes[0]['text'];start=text.index(quote);end=start+len(quote.rstrip('。；;！!？? \n'))
     published=sent_day(homes[0].get('time',''))
     day=r'\d{4}\s*[-年]|\d{1,2}\s*月\s*\d{1,2}|今天|今日|今晚|明天|明日|明早|明晚|后天|(?:周|星期|礼拜)[一二三四五六日天]'
@@ -2885,8 +2951,10 @@ def _school_role_reselect(store,c,row,evidence,now):
     else:return None
     goal_days=_school_goal_dates(goal,evidence)
     # Only a saved day (the model's own, or the program's own fill when the model gave none) is read again; a cleared
-    # one is no proof of a missing day, so the original model day stays unknown and the review stays as saved.
-    if not row['due'] or row['due']!=due or not goal_days<=own:return None
+    # one is no proof of a missing day, so the original model day stays unknown and the review stays as saved. A reply
+    # day the selection kept beside its note as not adopted (school_unadopted_due) is known: only that same day is read.
+    saved=row['due'] or (str(plan.get('school_unadopted_due') or '') if str(brief.get('reason','')).endswith(SCHOOL_UNADOPTED_NOTE) else '')
+    if not saved or saved!=due or not goal_days<=own:return None
     if due not in goal_days:
         # A role day the receipt's goal words do not date is restored only from the receipt's own handback/check words,
         # verbatim the original's own clause and no sibling's; never from the upload or current day.
@@ -4955,6 +5023,12 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 and not borrowed(next(iter(relative)))):
             # The model may omit a date that the single original notice states explicitly.
             due=next(iter(relative))
+        recovered=False
+        if (routing and not due and not historical and not native_action and dated_quote
+                and proposal['task_state']!='reference' and proposal['task_change']=='new'):
+            # In a whole day's batch too, the reply may leave out the day this item's own words state: it is read from those
+            # words alone (_school_own_due) and kept only where every guard below a reply's own day meets accepts it.
+            due=_school_own_due(dated_quote,cited_evidence,title_quotes[:index]+title_quotes[index+1:]);recovered=bool(due)
         # This item's own complete clause decides its date only when its summary declares that same day;
         # another item's date in the same notice, or a summary naming another day, never grounds it.
         clause=(_school_own_clause_dates(dated_quote,cited_evidence,title_quotes[:index]+title_quotes[index+1:])
@@ -4969,11 +5043,16 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         if (not owned and roles and roles[1]==due and (not clause or clause<=role_days) and not borrowed(due)
                 and _school_goal_dates(str(proposal.get('task_goal','')),cited_evidence)<=role_days):
             owned=True
+        if recovered and not owned and not borrowed(due):
+            # A day read from the item's own words is its own unless its own clause or its summary names another.
+            own_days=role_days if roles and roles[1]==due else {due}
+            owned=clause<=own_days and _school_goal_dates(str(proposal.get('task_goal','')),cited_evidence)<=own_days
         if due:
             # One notice may carry several dated requirements; the model's date must be one the sending day grounds.
             grounded=due in relative if mode=='school' else any(due in item['text'] for item in cited)
-            if clause and due not in clause:grounded=False
-            elif owned:grounded=True
+            # Owned already holds the own clause's days within this item's own roles (今晚…朗读 then 明天早读检查).
+            if owned:grounded=True
+            elif clause and due not in clause:grounded=False
             elif borrowed(due):grounded=False
             if not date(due) or not grounded:
                 if not routing: raise AgentError('模型日期缺少原文依据')
@@ -4981,6 +5060,9 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             elif len(relative)>1 and not owned:
                 if not routing: raise AgentError('原文含多个日期，需家长核对')
                 ambiguous_due=True
+        if recovered and (uncertain_due or ambiguous_due):
+            # The reply gave no day: one the guards do not accept stays unknown, never a review of a day nobody proposed.
+            due='';uncertain_due=ambiguous_due=False
         # An item whose own event its notice later cancels, postpones or reschedules has no day on any path, quoted or not.
         void=bool(routing and dated_quote and not historical and not native_action
                   and _school_event_dropped(dated_quote,cited_evidence,str(proposal.get('task_title','')),str(proposal.get('task_goal',''))))
