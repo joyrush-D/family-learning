@@ -7,6 +7,7 @@ the saved replies are fixtures, not a measurement of model extraction accuracy.
 """
 import copy
 import datetime as dt
+import hashlib
 import io
 import json
 import re
@@ -14,6 +15,7 @@ import unittest
 from contextlib import ExitStack
 from unittest.mock import patch
 
+import family_agenda
 import family_agent as agent
 import family_media
 import test_agent as fixtures
@@ -3830,6 +3832,146 @@ class SchoolActionPurposeTests(unittest.TestCase):
             self.assertIn('不能只留提交而漏掉学习本身', prompt)
             self.assertIn('不为避免漏收或误收而猜成admin或learning', prompt)
             self.assertNotIn('learning：教学材料、课程', prompt)
+
+
+class OrdinaryMixedSchooldayTests(unittest.TestCase):
+    """Root's SAFE-6 (pure fiction): the six originals 101–106, the five frozen 15-field correct fixed replies (not model
+    output) and the 322-byte original worksheet, through Store.ingest → save_upload/message_attachment (102 only) →
+    run_once → app.tasks and the agenda snapshot. Technical mapping: qa-mixed-child-01 is the fixture's child-1."""
+    setUp = SchoolNativeCoverageTests.setUp
+    SAFE6_SOURCE = dict(id='qa-ordinary-mixed-day-01', platform='qq', name='晴川三年级五班（纯虚构）')
+    SAFE6_MESSAGES = (
+        dict(id='101', time='2026-10-22T16:05:00+08:00', kind='text', sender='岚老师（虚构）', text='数学：今天完成《平均分练习单》第1、2题，把答案直接写在练习单上。明天交给数学课代表。', unread=False, sender_id='qa-teacher-math-lan', message_order='101'),
+        dict(id='102', time='2026-10-22T16:06:00+08:00', kind='text', sender='岚老师（虚构）', text='补上刚才的练习单。第2题要画出分组过程，不用抄题。第3题不用做。', unread=False, sender_id='qa-teacher-math-lan', message_order='102'),
+        dict(id='103', time='2026-10-22T16:12:00+08:00', kind='text', sender='禾老师（虚构）', text='明天音乐课请孩子带音乐书和竖笛。今晚只要把这两样装进书包，不用在家练习。', unread=False, sender_id='qa-teacher-music-he', message_order='103'),
+        dict(id='104', time='2026-10-22T16:20:00+08:00', kind='text', sender='蒋老师（虚构）', text='请家长今天阅读孩子带回的《图书借阅约定》，在末页“监护人”栏签字。孩子明天交给班主任。', unread=False, sender_id='qa-teacher-head-jiang', message_order='104'),
+        dict(id='105', time='2026-10-22T16:24:00+08:00', kind='text', sender='蒋老师（虚构）', text='10月23日放学请家长统一到东门接孩子，南门当天不开放。其他日期照常。', unread=False, sender_id='qa-teacher-head-jiang', message_order='105'),
+        dict(id='106', time='2026-10-22T16:35:00+08:00', kind='text', sender='陆老师（虚构）', text='选读分享：《校园树木小记》。感兴趣的孩子可以自己找来读，不是作业，不用写读后感，也不用提交。', unread=False, sender_id='qa-teacher-cn-lu', message_order='106'),
+    )
+    SAFE6_PROPOSALS = (
+        dict(title_quote='请家长今天阅读孩子带回的《图书借阅约定》，在末页“监护人”栏签字。孩子明天交给班主任', focus='school', due='2026-10-23', evidence=[{'ref': 'message:qa-ordinary-mixed-day-01:104'}], learning_subject='', learning_goal_id='', task_title='《图书借阅约定》家长阅读并签字', task_goal='请家长今天阅读孩子带回的《图书借阅约定》，在末页“监护人”栏签字。孩子明天交给班主任。', task_advice='', task_change='new', task_target_id='', task_state='ready', task_reason='独立冻结的纯虚构程序验证固定回复，不是实际模型产物。', task_purpose='admin', task_submission=''),
+        dict(title_quote='今天完成《平均分练习单》第1、2题，把答案直接写在练习单上。明天交给数学课代表', focus='school', due='2026-10-23', evidence=[{'ref': 'message:qa-ordinary-mixed-day-01:101'}, {'ref': 'message:qa-ordinary-mixed-day-01:102'}], learning_subject='数学', learning_goal_id='', task_title='数学：完成《平均分练习单》第1、2题', task_goal='数学：今天完成《平均分练习单》第1、2题，把答案直接写在练习单上。明天交给数学课代表。\n补上刚才的练习单。第2题要画出分组过程，不用抄题。第3题不用做。', task_advice='', task_change='new', task_target_id='', task_state='ready', task_reason='独立冻结的纯虚构程序验证固定回复，不是实际模型产物。', task_purpose='learning', task_submission=''),
+        dict(title_quote='明天音乐课请孩子带音乐书和竖笛。今晚只要把这两样装进书包，不用在家练习。', focus='school', due='2026-10-23', evidence=[{'ref': 'message:qa-ordinary-mixed-day-01:103'}], learning_subject='', learning_goal_id='', task_title='音乐课准备：带音乐书和竖笛', task_goal='明天音乐课请孩子带音乐书和竖笛。今晚只要把这两样装进书包，不用在家练习。', task_advice='', task_change='new', task_target_id='', task_state='ready', task_reason='独立冻结的纯虚构程序验证固定回复，不是实际模型产物。', task_purpose='admin', task_submission=''),
+        dict(title_quote='10月23日放学请家长统一到东门接孩子，南门当天不开放。其他日期照常。', focus='school', due='2026-10-23', evidence=[{'ref': 'message:qa-ordinary-mixed-day-01:105'}], learning_subject='', learning_goal_id='', task_title='10月23日放学到东门接孩子', task_goal='10月23日放学请家长统一到东门接孩子，南门当天不开放。其他日期照常。', task_advice='', task_change='new', task_target_id='', task_state='ready', task_reason='独立冻结的纯虚构程序验证固定回复，不是实际模型产物。', task_purpose='admin', task_submission=''),
+        dict(title_quote='选读分享：《校园树木小记》。感兴趣的孩子可以自己找来读，不是作业，不用写读后感，也不用提交。', focus='school', due='', evidence=[{'ref': 'message:qa-ordinary-mixed-day-01:106'}], learning_subject='', learning_goal_id='', task_title='选读参考：《校园树木小记》', task_goal='选读分享：《校园树木小记》。感兴趣的孩子可以自己找来读，不是作业，不用写读后感，也不用提交。', task_advice='', task_change='new', task_target_id='', task_state='reference', task_reason='独立冻结的纯虚构程序验证固定回复，不是实际模型产物。', task_purpose='optional', task_submission=''),
+    )
+    SAFE6_SHEET = ('平均分练习单\n（纯虚构验收材料，不含真实学生信息）\n\n1.把12颗糖平均分给3个小朋友，每人分到几颗？\n答：________________\n\n'
+                   '2.把8张卡片平均分成2组，每组几张？\n画图和作答：________________\n\n3.把20颗珠子平均分成5份，每份几颗？\n答：________________\n').encode()
+
+    def test_the_embedded_fixture_is_the_frozen_safe6_content(self):
+        canon = lambda value:hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        # Canonical JSON of messages.json's messages and of fixed-mock.json, and the worksheet's own bytes (MANIFEST 715af705…).
+        self.assertEqual(canon(list(self.SAFE6_MESSAGES)), 'df582b8fb12093dd6315dd036c94783da5ab89a9394391d4a3cfe30d7f23ee4f')
+        self.assertEqual(canon(dict(proposals=list(self.SAFE6_PROPOSALS))), 'ba136e236a53f1774c59d020744491373e4b540cae22b083322462d56cab2bd0')
+        self.assertEqual((len(self.SAFE6_SHEET), hashlib.sha256(self.SAFE6_SHEET).hexdigest()),
+                         (322, '715af7053d82bec66797ea740961a1cdcc564bd18308b45c97fa225ab7223a9c'))
+
+    def _facts(self):
+        with self.store._db() as c:
+            rows = {tuple(e['ref'].rsplit(':', 1)[1] for e in json.loads(r['evidence'])): dict(r)
+                    for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")}
+            manual = c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0]
+            links = [tuple(r) for r in c.execute('SELECT * FROM agent_message_attachments')]
+            originals = [json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
+        with self.app.connect() as c:
+            tasks = {t['id']: t for t in self.app.tasks(c)}
+        return rows, manual, links, originals, tasks
+
+    def test_the_six_originals_keep_music_preparation_and_the_dated_pickup_beside_math_signing_and_reading(self):
+        self.fixture.source.update(self.SAFE6_SOURCE);self.fixture.config()
+        self.fixture.now = self.now = dt.datetime(2026, 10, 22, 16, 40, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='106')
+        payload['messages'] = copy.deepcopy(list(self.SAFE6_MESSAGES))
+        self.store.ingest(payload)
+        upload = self.app.save_upload(io.BytesIO(self.SAFE6_SHEET), len(self.SAFE6_SHEET), '平均分练习单.txt')
+        self.store.message_attachment(dict(child_id='child-1', source_id=self.source['id'], message_id='102',
+                                           attachment_id=upload['id'], action='attach'), dict)
+        calls = []
+
+        def reply(messages, schema, name, timeout=60, *, data_path=None):
+            self.assertEqual((name, data_path), ('family_agent_selection', self.app.DATA))
+            context = json.loads(messages[-1]['content'])
+            # Only 102 carries the sheet; 103 and 105 have no attachment of their own and borrow none.
+            self.assertEqual([(e['ref'], e['text'], [a['name'] for a in e['attachments']]) for e in context['evidence']],
+                             [('message:' + self.source['id'] + ':' + m['id'], m['text'], ['平均分练习单.txt'] if m['id'] == '102' else [])
+                              for m in self.SAFE6_MESSAGES])
+            calls.append(name)
+            return dict(proposals=copy.deepcopy(list(self.SAFE6_PROPOSALS)))
+
+        self.model.side_effect = reply
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 6))
+        rows, manual, links, originals, tasks = first = self._facts()
+        self.assertEqual(sorted(rows), [('101', '102'), ('103',), ('104',), ('105',), ('106',)], 'five items; math 101+102 stays one')
+        brief = lambda key:json.loads(rows[key]['plan'])['school_task']
+        plan = lambda key:json.loads(rows[key]['plan'])
+        # 103: an administrative class preparation; 不用在家练习 assigns no learning.
+        prep = rows[('103',)]
+        self.assertEqual((prep['state'], prep['due'], brief(('103',))['state'], brief(('103',))['purpose'], plan(('103',)).get('school_learning'),
+                          plan(('103',)).get('school_goal_id', '')), ('accepted', '2026-10-23', 'ready', 'admin', None, ''))
+        self.assertNotIn('同时提到学习活动', brief(('103',))['reason'])
+        prep_task = tasks[prep['task_id']]
+        # Its own 今晚 packing is listed on the 22nd while its own 明天音乐课 bringing keeps the 23rd.
+        self.assertEqual((prep_task['agenda']['category'], prep_task['agenda']['complete_on'], prep_task['agenda']['due_on']),
+                         ('todo', '2026-10-22', '2026-10-23'))
+        for words in ('明天音乐课请孩子带音乐书和竖笛', '今晚只要把这两样装进书包', '不用在家练习'):self.assertIn(words, prep_task['action'])
+        # 105: the parent's own dated pickup keeps its 23rd with every limit; no preparation day, no clock.
+        pickup = rows[('105',)]
+        self.assertEqual((pickup['state'], pickup['due'], brief(('105',))['state'], brief(('105',))['purpose'], plan(('105',)).get('school_learning'),
+                          'school_unadopted_due' in plan(('105',))), ('accepted', '2026-10-23', 'ready', 'admin', None, False))
+        self.assertNotIn(agent.SCHOOL_UNADOPTED_NOTE.strip(), brief(('105',))['reason'])
+        pickup_task = tasks[pickup['task_id']]
+        self.assertEqual((pickup_task['agenda']['category'], pickup_task['agenda']['due_on'], pickup_task['agenda']['complete_on']), ('todo', '2026-10-23', ''))
+        for words in ('10月23日放学请家长统一到东门接孩子', '南门当天不开放', '其他日期照常'):self.assertIn(words, pickup_task['action'])
+        # 104 signing, the math outcome waiting on its unread sheet, and 106 optional reading are unchanged.
+        sign = rows[('104',)];sign_task = tasks[sign['task_id']]
+        self.assertEqual((sign['state'], sign['due'], brief(('104',))['state'], brief(('104',))['purpose']), ('accepted', '2026-10-23', 'ready', 'admin'))
+        self.assertEqual((sign_task['agenda']['complete_on'], sign_task['agenda']['due_on'], sign_task['agenda']['due_kind']), ('2026-10-22', '2026-10-23', 'handback'))
+        math = rows[('101', '102')]
+        self.assertEqual((math['state'], math['due'], math['task_id'] or '', brief(('101', '102'))['state'], brief(('101', '102'))['purpose']),
+                         ('pending', '2026-10-23', '', 'review', 'learning'))
+        self.assertIn('附件尚未核实', brief(('101', '102'))['reason'])
+        reading = rows[('106',)]
+        self.assertEqual((reading['state'], reading['due'], reading['task_id'] or '', brief(('106',))['state']), ('pending', '', '', 'reference'))
+        self.assertEqual(manual, 3)
+        self.assertEqual(links, [(self.source['id'], '102', upload['id'])], 'the sheet stays linked to 102 alone')
+        self.assertEqual(originals, payload['messages'], 'the complete originals stay unchanged')
+        # Existing agenda snapshot and Today (calendar.js todayTasksHTML lists a task on its own due, plan or completion day).
+        snap = family_agenda.snapshot(self.app, '2026-10-22', '2026-10-23')
+        today = lambda day:{x['task_id'] for x in snap['inbox'] if x['kind'] == 'task' and not x['closed']
+                            and day in (x['agenda']['due_on'], x['agenda']['scheduled_on'], x['agenda'].get('complete_on'))}
+        self.assertEqual(today('2026-10-22'), {prep['task_id'], sign['task_id']}, 'the pickup is not borrowed into the 22nd')
+        self.assertEqual(today('2026-10-23'), {prep['task_id'], sign['task_id'], pickup['task_id']})
+        for day in ('2026-10-22', '2026-10-23'):
+            self.assertLessEqual({prep['task_id'], sign['task_id']}, {x['task_id'] for x in snap['agenda'] if x['day'] == day})
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['failed'], replay['processed'], replay['created']), (0, 0, 0))
+        self.assertEqual(self._facts()[:4], first[:4], 'reopen and the next round keep the five items without duplicates')
+        self.assertEqual(len(calls), 1)
+        # The parent's own accept of the math outcome keeps its 22nd completion and 23rd handback.
+        accepted = self.store.act(dict(id=math['id'], action='accept', expected_updated=math['updated']))
+        with self.app.connect() as c:
+            task, = [t for t in self.app.tasks(c) if t['id'] == accepted['task_id']]
+        self.assertEqual((task['agenda']['complete_on'], task['agenda']['due_on'], task['agenda']['due_kind']), ('2026-10-22', '2026-10-23', 'handback'))
+
+    def test_bounded_readers_of_the_home_negation_the_packing_and_the_pickup_day(self):
+        value = dict(title='课堂准备', goal='', advice='', state='ready', reason='', purpose='admin')
+        brief = lambda text:agent._school_brief(dict(value, goal=text), evidence=[dict(ref='message:s:1', text=text, kind='text', unread=False)],
+                                                separate_learning=True)
+        self.assertEqual(brief('明天请孩子带竖笛，不用在家练习。')['state'], 'ready')
+        # An inverse, a remaining study clause or a home practice actually asked for still reads as learning.
+        for text in ('明天请孩子带竖笛，并非不用在家练习。', '明天请孩子带竖笛，不用在家练习，今晚背诵课文。', '明天请孩子带竖笛，今晚在家练习两遍。'):
+            with self.subTest(text=text):self.assertEqual(brief(text)['state'], 'review')
+        # The pickup's own day; a negated pickup or another day's pickup gives none of it.
+        self.assertEqual(family_agenda.deadlines('10月23日放学请家长统一到东门接孩子，南门当天不开放。', '2026-10-22'), {'2026-10-23'})
+        for text in ('10月23日放学不用到东门接孩子。', '10月23日放学后，请家长到东门接孩子。'):
+            with self.subTest(text=text):self.assertEqual(family_agenda.deadlines(text, '2026-10-22'), set())
+        # Packing tonight is the same item's completion before its own bringing day; another day or no bringing day is not.
+        cited = lambda text:[dict(ref='message:s:1', text=text, time='2026-10-22T16:12:00+08:00')]
+        text = '明天音乐课请孩子带音乐书和竖笛。今晚只要把这两样装进书包，不用在家练习。'
+        self.assertEqual(agent._school_role_days(text, cited(text), []), ({'2026-10-22'}, '2026-10-23'))
+        for other in ('明天音乐课请孩子带音乐书和竖笛。后天把这两样装进书包。', '今晚把音乐书和竖笛装进书包。'):
+            with self.subTest(text=other):self.assertIsNone(agent._school_role_days(other, cited(other), []))
 
 
 if __name__ == '__main__':
