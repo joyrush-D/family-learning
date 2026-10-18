@@ -4736,7 +4736,7 @@ def _school_native_unlocated(quote,refs,actions,entries,spans):
 
 def _school_native_actions(evidence):
     """One shared ledger for complete literal outcomes, standards and own dates."""
-    actions=[]
+    actions=[];resent={}
     for index,entry in enumerate(evidence):
         text=entry['text']
         if (entry.get('kind')!='text' or not entry.get('publisher') or entry.get('content_incomplete')
@@ -4814,6 +4814,22 @@ def _school_native_actions(evidence):
             if len(own)==1 and not own[0]['changes']:own=[]
             bound={s['ref'] for a in own for s in _school_native_later(a)}
             for action in own:action['linked']=sorted(e['ref'] for e in group if e['ref'] not in bound)
+        # The same teacher re-sending this list's own material within the supplement window (补上刚才的练习单。… with the
+        # sheet attached) is linked to the one outcome whose closed title ends in the noun it re-sends: that outcome stays
+        # required and may cite it only for review. Another publisher, source or object, a noun several outcomes name, or
+        # a message without the material keeps the existing readers; no file name is read.
+        for later in evidence[index+1:]:
+            head=re.match(r'^\s*(?:补上|补发|补传)(?:刚才|上面|前面|之前)?的?([^。；;，,：:！!？?\n]{2,12}?)\s*[。；;，,：:！!\n]',later['text'])
+            if (not head or not later.get('attachments') or later.get('content_incomplete') or later.get('unread')
+                    or later.get('kind','text')!='text' or not entry.get('publisher') or later.get('publisher')!=entry['publisher']
+                    or later['ref'][8:].rsplit(':',1)[0]!=entry['ref'][8:].rsplit(':',1)[0]):continue
+            try:gap=(dt.datetime.fromisoformat(later['time'])-dt.datetime.fromisoformat(entry['time'])).total_seconds()
+            except (KeyError,ValueError,TypeError):continue
+            owners=[a for a in own if head[1] in a['primary']]
+            if (0<=gap<=120 and len(owners)==1 and sum(t.endswith(head[1]) for t in re.findall(r'《([^《》]+)》',owners[0]['primary']))==1
+                    and later['ref'] not in owners[0].get('linked',[])+[s['ref'] for s in _school_native_later(owners[0])]):
+                owners[0]['linked']=sorted(owners[0].get('linked',[])+[later['ref']])
+                resent.setdefault(later['ref'],set()).add(owners[0]['id'])
         actions.extend(own)
     owners={}
     for action in actions:
@@ -4823,7 +4839,8 @@ def _school_native_actions(evidence):
     lists={}
     for action in actions:
         for shared in action.get('shared_supplements',[]):lists.setdefault(shared['ref'],set()).add(action['ref'])
-    if any(len(values)!=1 for values in owners.values()) or set(lists)&set(owners) or any(len(values)!=1 for values in lists.values()):
+    if (any(len(values)!=1 for values in owners.values()) or set(lists)&set(owners) or any(len(values)!=1 for values in lists.values())
+            or any(len(values)!=1 for values in resent.values()) or set(resent)&(set(owners)|set(lists))):
         raise AgentError('学校补充同时对应多项作业，原文保留待明确归属',code='school_action_coverage')
     return actions
 
