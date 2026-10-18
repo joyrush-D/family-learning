@@ -4332,19 +4332,22 @@ def _school_native_common_addressed(value):
 # A performance quality set for how an activity is done (声音清楚、字迹工整): a small closed class, read only as the words
 # ending a manner's own part; it is no general adjective reader.
 _SCHOOL_NATIVE_QUALITY=r'清楚|清晰|准确|正确|流利|流畅|通顺|响亮|工整|整洁|端正|规范|完整|熟练'
+# What that quality is said of: the doing itself (its voice, pronunciation, handwriting or posture), a small closed class.
+# Any other noun before a quality (抄写时刻表工整 copies its own 时刻表) is the activity's object, never this subject.
+_SCHOOL_NATIVE_ASPECT=r'声音|发音|读音|字音|吐字|语速|语调|语气|字迹|书写|笔画|笔顺|姿势|坐姿'
 
 
 def _school_native_affirmed_manner(activity,part):
     """Whether the part after 'activity时' affirms how that activity is done, so 时 closes its time clause.
 
     Two bounded forms only: the activity's own verb restated first (朗读时读准字音, 背诵时背熟), or a performance
-    quality ending the part after at most a two-character subject (朗读时声音清楚, 抄写时字迹工整). The part names no
-    closed name, lesson, worksheet, activity, count or day of its own, so an object opening with 时 that states its
-    scope (朗读时间管理短文一遍) or a second outcome is never a manner. Any other part keeps its own outcome reading.
+    quality said of an aspect of that doing and nothing else (朗读时声音清楚, 抄写时字迹工整). The part names no
+    closed name, lesson, worksheet, activity, count or day of its own, so an object opening with 时 (朗读时间管理短文一遍,
+    抄写时刻表工整) or a second outcome is never a manner. Any other part keeps its own outcome reading.
     """
     if not part or _school_native_marks(part) or re.search(_SCHOOL_CLAUSE_MEASURE,_school_plain(part)) or re.search(_SCHOOL_NATIVE_DATE,part):
         return False
-    return part[0] in activity or bool(re.fullmatch(r'[^\W\d_]{0,2}(?:'+_SCHOOL_NATIVE_QUALITY+r')',part))
+    return part[0] in activity or bool(re.fullmatch(r'(?:'+_SCHOOL_NATIVE_ASPECT+r')(?:'+_SCHOOL_NATIVE_QUALITY+r')',part))
 
 
 # "以上两项都…", "两项都…", "以上作业都…": the one scope reading a list's common standard uses, in or after its message.
