@@ -72,6 +72,8 @@ with tempfile.TemporaryDirectory(prefix='synthetic-study-') as temporary:
         first=store.save_item(create)['items'][0]; ident=first['id']
         assert first['actual_minutes'] is None and first['time_source']=='' and first['version']==1
         assert first['source_task_action']=='虚构要求' and first['source_task_due']=='2026-09-08'
+        # An ordinary source keeps its own due; no teacher complete/handback day is invented from it.
+        assert (first['source_task_complete_on'],first['source_task_handback_on'])==('','')
         assert first['source_task_next_action']==''
         # Requirements are read from the current source, without rewriting the timer or calendar.
         source_file=root/'跟踪台账.md'; source_text=source_file.read_text()
@@ -87,7 +89,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-study-') as temporary:
         source_file.write_text(source_text.replace('| T01 | 示例甲 |','| T01 | 示例乙 |'))
         missing=item(ident)
         assert missing['source_task_status']=='待核对'
-        assert all(missing[key] is None for key in ('source_task_action','source_task_due','source_task_next_action'))
+        assert all(missing[key] is None for key in ('source_task_action','source_task_due','source_task_next_action','source_task_complete_on','source_task_handback_on'))
         source_file.write_text(source_text.replace(source_text.splitlines()[0]+'\n',''))
         assert item(ident)['source_task_action'] is None
         source_file.write_text(source_text)

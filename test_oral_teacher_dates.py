@@ -220,4 +220,59 @@ with tempfile.TemporaryDirectory(prefix='synthetic-oral-dates-') as temporary:
         try: family_task_focus.save(app,standard(done,'independent-oral-close-focus-0001','','2026-10-17',task(done)['focus']['version']))
         except family_task_focus.FocusError as error: assert error.code=='task_focus_closed', error.code
         else: raise AssertionError('closed item reopened by the task form')
+
+        # Root OD-CARD (Chrome 360/1440 at 59af64d): the same captured task's current teacher days reach the parent's study
+        # card and the child's own study card from the shared projection. Unknown stays blank; the capture day, a parent plan
+        # or a parent's own due is never a teacher day; the child gets only those task days, never the parent's report.
+        import family_child, secrets, time
+        now=dt.datetime.now(family_study.TZ); today=now.date().isoformat()
+        def later(days): return (now.date()+dt.timedelta(days=days)).isoformat()
+        card_store=family_study.Store(app); card_store._now=lambda:dt.datetime.now(family_study.TZ)
+        def card_create(key, title, **days):
+            return card_store.save_item(dict(child_id='child-1',day=today,request_key='synthetic-oral-card-'+key,title=title,subject='语文',planned_minutes=10,
+                report=dict(text='虚构原话：PARENT_REPORT_PRIVATE_CANARY',goal='朗读第二段三遍，请家长签字。',attachments=[],**days)))['saved_item_id']
+        def card_fix(ident, key, **days):
+            card_store.save_item(dict(child_id='child-1',day=today,id=ident,version=rows()[ident][2],request_key='synthetic-oral-card-fix-'+key,teacher_dates=days))
+        CARD=('source_task_complete_on','source_task_handback_on','source_task_due')
+        def parent_cards(child_id='child-1'): return {i['id']:i for i in card_store.snapshot(child_id,today)['items']}
+        def parent_card(ident): return tuple(parent_cards()[ident].get(k) for k in CARD)
+        family_child.parent_action(app,'study',dict(child_id='child-1',enabled=True))
+        def session(ident):
+            secret=secrets.token_urlsafe(32)
+            with family_child._db(app) as c: c.execute('INSERT INTO child_sessions VALUES (?,?,?)',(family_child._digest(secret),ident,int(time.time())+600))
+            return secret
+        mine=session('child-1')
+        def child_cards(): return {i['id']:i for i in family_child._study(app,mine,'state',dict(day=today))['items']}
+        def child_card(ident): return tuple(child_cards()[ident].get(k) for k in CARD)
+        oral=card_create('both','虚构口头作业：朗读第二段',complete_on=later(1),handback_on=later(2))
+        assert task(oral)['agenda']['complete_on']==later(1) and task(oral)['agenda']['due_on']==later(2)
+        assert parent_card(oral)==(later(1),later(2),''), parent_card(oral)
+        assert child_card(oral)==(later(1),later(2),''), child_card(oral)
+        # Privacy: the parent's report, original words and history stay out of the child's card; only the two task days pass.
+        shown=child_cards()[oral]
+        assert shown['report']=={} and 'PARENT_REPORT_PRIVATE_CANARY' not in json.dumps(shown,ensure_ascii=False), shown
+        assert not {'date_history','task_id','record_id','child_id'}&set(shown), set(shown)
+        # Correction and clear read the same on both cards (save, reopen = fresh snapshot).
+        card_fix(oral,'0001',handback_on=later(3))
+        assert parent_card(oral)==child_card(oral)==(later(1),later(3),''), (parent_card(oral),child_card(oral))
+        card_fix(oral,'0002',complete_on='')
+        assert parent_card(oral)==child_card(oral)==('',later(3),''), (parent_card(oral),child_card(oral))
+        card_fix(oral,'0003',handback_on='')
+        assert parent_card(oral)==child_card(oral)==('','',''), (parent_card(oral),child_card(oral))
+        # Unknown days stay unknown; the capture (creation) day is never shown as a due/teacher day.
+        unknown=card_create('unknown','虚构口头作业：背诵',complete_on='',handback_on='')
+        assert parent_card(unknown)==child_card(unknown)==('','',''), (parent_card(unknown),child_card(oral))
+        # Only a complete day never invents a handback day, and vice versa.
+        single=card_create('single','虚构口头作业：抄写',complete_on=later(1),handback_on='')
+        assert parent_card(single)==child_card(single)==(later(1),'',''), parent_card(single)
+        # A parent's own plan and own due in the task form are not teacher days on either card.
+        own=card_create('own','虚构口头作业：听写',complete_on='',handback_on=later(2))
+        family_task_focus.save(app,focus_payload(own,'card-0001',scheduled_on=later(1),due_on=later(5)))
+        assert parent_card(own)==child_card(own)==('',later(2),''), parent_card(own)
+        card_fix(own,'0004',handback_on='')
+        assert task(own)['agenda']['due_on']==later(5) and task(own)['agenda']['due_kind']!='handback'
+        assert parent_card(own)[:2]==child_card(own)[:2]==('',''), (parent_card(own),child_card(own))
+        # Cross-child: the other child's study cards never list or date this child's task.
+        other=session('child-2');family_child.parent_action(app,'study',dict(child_id='child-2',enabled=True))
+        assert oral not in parent_cards('child-2') and oral not in {i['id'] for i in family_child._study(app,other,'state',dict(day=today))['items']}
 print('test_oral_teacher_dates: ok')
