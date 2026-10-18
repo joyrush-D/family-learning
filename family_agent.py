@@ -4066,10 +4066,10 @@ def _school_roles(text):
     return [words[m[0]] for m in re.finditer('|'.join(sorted(words,key=len,reverse=True)),re.sub(r'《[^》]*》','',text or ''))]
 
 
-def _school_signers(text):
+def _school_signers(text, marks=r'签|盖章'):
     """The role signing or stamping in each part of a text: the last role named before 签/盖章 in its own comma part."""
     return {(_school_roles(part[:m.start()]) or [''])[-1] for part in re.findall(r'(?:《[^》]*》|[^，,。；;！!？?\n])+',text or '')
-            for m in re.finditer(r'签|盖章',re.sub(r'《[^》]*》',lambda n:'_'*len(n[0]),part))}
+            for m in re.finditer(marks,re.sub(r'《[^》]*》',lambda n:'_'*len(n[0]),part))}
 
 
 def _school_parent_readings(text):
@@ -4092,16 +4092,22 @@ def _school_parent_readings(text):
             ba=re.match(r'(?:把|将)([^，,把将]{1,12}?)\s*(?='+carry+r')',own[at:])
             if ba and text[base+at+ba.start(1):base+at+ba.end(1)] not in text[base:base+m.start()]:return False
             return bool(re.match(carry,own[at+(ba.end() if ba else 0):]))
-        if not all(carries(m) for m in re.finditer(_SCHOOL_CLAUSE_ROLES['学生'],own)):continue
+        def modifies(m):
+            # 核对孩子的候车站点: a child word directly owning another object (孩子的…) names no actor; only outside the part
+            # holding 阅读, so a parent reading the child's own work (阅读孩子的作文) keeps the text as written.
+            part=re.search(r'[^，,]*$',own[:m.start()])[0]+re.match(r'[^，,]*',own[m.start():])[0]
+            return own[m.end():m.end()+1]=='的' and '阅读' not in part
+        if not all(carries(m) or modifies(m) for m in re.finditer(_SCHOOL_CLAUSE_ROLES['学生'],own)):continue
         for m in re.finditer(r'(?:'+_SCHOOL_CLAUSE_ROLES['家长']+r')\s*(?:'+_SCHOOL_NATIVE_WHEN+r')?(?:认真|仔细)?\s*(阅读)',own):
-            signers=_school_signers(text[sentence.start()+m.start():sentence.end()])
+            # Ticking 已阅 on the slip (在通知回条上勾选“已阅”) is the same own mark as a signature.
+            signers=_school_signers(text[sentence.start()+m.start():sentence.end()],r'签|盖章|勾选')
             if not signers and at_sentence+1<len(sentences):
                 # A split notice (家长今天阅读…《…》。在末页“监护人”栏签字。) signs in its very next sentence: only a step naming
                 # no actor but the parent, no other closed name and no negation or condition continues this parent's own reading.
                 after=text[sentences[at_sentence+1].start():sentences[at_sentence+1].end()]
                 if (set(_school_roles(after))<={'家长'} and not re.search(r'不|无需|无须|勿|未|没|免|如|若',after)
                         and set(re.findall(r'《[^》]*》',after))<=set(re.findall(r'《[^》]*》',text[sentence.start():sentence.end()]))):
-                    signers=_school_signers(after)
+                    signers=_school_signers(after,r'签|盖章|勾选')
             if signers and signers<={'家长',''}:spans.append((sentence.start()+m.start(1),sentence.start()+m.end(1)))
     return spans
 
