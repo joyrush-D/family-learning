@@ -4097,5 +4097,57 @@ class RecitationMethodConditionTests(unittest.TestCase):
         self.assertEqual(self._facts()[3], payload['messages'], 'the complete original stays for retry')
 
 
+class RecitationMethodObjectBoundaryTests(unittest.TestCase):
+    """Root's resume01 counterexample (pure fiction, REGRESSION.json frozen before execution): in 朗读时间管理短文一遍 the
+    object 时间管理短文 opens with 时; it is a second reading, not the manner 朗读时…. RAW is the frozen correct reply, not model output."""
+    setUp = SchoolNativeCoverageTests.setUp
+    _facts = OrdinaryMixedSchooldayTests._facts
+    SOURCE = dict(id='qa-method-title-prefix', platform='qq', name='虚构方法边界来源')
+    MESSAGE = dict(id='401', message_order='401', time='2026-11-09T18:10:00+08:00', kind='text', sender='虚构语文教师',
+                   sender_id='fictional-cn-method-boundary', text='语文：朗读第3课课文两遍；朗读时间管理短文一遍。', unread=False)
+    RAW = (
+        {'title_quote': '朗读第3课课文两遍', 'focus': 'school', 'due': '', 'evidence': [{'ref': 'message:qa-method-title-prefix:401'}], 'learning_subject': '语文', 'learning_goal_id': '', 'task_title': '语文：朗读第3课课文两遍', 'task_goal': '朗读第3课课文两遍。', 'task_advice': '', 'task_state': 'ready', 'task_reason': '完整虚构原文明确列出两个独立朗读成果，日期未提供。', 'task_change': 'new', 'task_target_id': '', 'task_purpose': 'learning', 'task_submission': ''},
+        {'title_quote': '朗读时间管理短文一遍', 'focus': 'school', 'due': '', 'evidence': [{'ref': 'message:qa-method-title-prefix:401'}], 'learning_subject': '语文', 'learning_goal_id': '', 'task_title': '语文：朗读时间管理短文一遍', 'task_goal': '朗读时间管理短文一遍。', 'task_advice': '', 'task_state': 'ready', 'task_reason': '完整虚构原文明确列出两个独立朗读成果，日期未提供。', 'task_change': 'new', 'task_target_id': '', 'task_purpose': 'learning', 'task_submission': ''},
+    )
+
+    def _rows(self):
+        with self.store._db() as c:
+            return [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY rowid")]
+
+    def test_the_frozen_two_readings_save_as_two_tasks(self):
+        self.fixture.source.update(self.SOURCE);self.fixture.config()
+        self.fixture.now = self.now = dt.datetime(2026, 11, 9, 18, 30, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor='401')
+        payload['messages'] = [dict(self.MESSAGE)]
+        self.store.ingest(payload)
+        self.model.side_effect = lambda *args, **kwargs:dict(proposals=copy.deepcopy(list(self.RAW)))
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        rows = self._rows()
+        with self.app.connect() as c:
+            tasks = {t['id']: t for t in self.app.tasks(c)}
+        self.assertEqual([r['state'] for r in rows], ['accepted', 'accepted'])
+        self.assertEqual(len({r['task_id'] for r in rows} & set(tasks)), 2, 'two formal tasks')
+        briefs = [json.loads(r['plan'])['school_task'] for r in rows]
+        self.assertEqual(sorted((b['purpose'], '第3课课文' in b['goal'], '时间管理短文' in b['goal']) for b in briefs),
+                         [('learning', False, True), ('learning', True, False)])
+        # No day is written: neither reading gets a due or completion day.
+        self.assertEqual([(r['due'], tasks[r['task_id']]['agenda']['due_on'], tasks[r['task_id']]['agenda'].get('complete_on', '')) for r in rows],
+                         [('', '', '')] * 2)
+        self.assertEqual(self._facts()[3], payload['messages'], 'the complete original stays unchanged')
+
+    def test_an_object_opening_with_时_is_the_activity_object_not_its_manner(self):
+        blocks = lambda text:[(a['quote'], a['purpose']) for a in agent._school_native_blocks(text)]
+        self.assertEqual(blocks(self.MESSAGE['text']), [('朗读第3课课文两遍', 'learning'), ('朗读时间管理短文一遍', 'learning')])
+        # Other objects opening with 时 after the same activity are no manner either: no word list of 时 nouns decides it.
+        self.assertEqual(blocks('背诵《溪边》前两节；背诵时令儿歌一首。'), [('背诵《溪边》前两节', 'learning'), ('背诵时令儿歌一首', 'learning')])
+        self.assertEqual(blocks('抄写第3课生字两遍；抄写时刻表一遍。'), [('抄写第3课生字两遍', 'learning'), ('抄写时刻表一遍', 'learning')])
+
+    def test_a_manner_whose_predicate_follows_时_still_joins_the_outcome_naming_that_activity(self):
+        blocks = lambda text:[(a['quote'], a['purpose']) for a in agent._school_native_blocks(text)]
+        for text in ('今晚背诵《溪边》前两节；背诵时，不看书。', '今晚朗读《溪边》第三节三遍；朗读时注意停顿。'):
+            with self.subTest(text=text):self.assertEqual(blocks(text), [(text.rstrip('。'), 'learning')])
+
+
 if __name__ == '__main__':
     unittest.main()
