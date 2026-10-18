@@ -383,9 +383,13 @@ def date_meaning(quote,due,published,title='',goal=''):
     if not held:
         # Read by the item's own clauses naming this day and their own predicates: only checking (明天早读检查) makes it the
         # teacher's check; a handback, any other or a mixed role on that day stays the deadline it was.
-        roles=[family_agent._school_clause_roles(c) for c in re.split(r'[，,。；;！!？?\n]',quote or '')
-               if date(published) and family_agent._school_clause_day(c,published)==due]
-        return 'inspection' if roles and all(r=={'check'} for r in roles) else 'deadline'
+        own=[c for c in re.split(r'[，,。；;！!？?\n]',quote or '') if date(published) and family_agent._school_clause_day(c,published)==due]
+        roles=[family_agent._school_clause_roles(c) for c in own]
+        if roles and all(r=={'check'} for r in roles):return 'inspection'
+        # Handing it in on that day itself (由孩子明早交给班主任、明天早上交) is the teacher's handback day; a day it must come
+        # before (于10月22日前交回) stays the ordinary deadline, and so does a day with any other or a second role.
+        if roles and all(r=={'handback'} for r in roles) and not any(re.search(r'(?:之前|以前|前)',c) for c in own):return 'handback'
+        return 'deadline'
     if due not in _action_deadlines(quote,published):return 'event'
     words,placed=family_agent._school_own_words(quote,0,len(quote.rstrip('。；;！!？? \n')),title,goal)
     if placed:return 'deadline' if any(due in _action_deadlines(own,published) for s,own in words) else 'event'
