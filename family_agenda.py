@@ -631,9 +631,10 @@ _TITLE_LABEL=re.compile(r'[^：:\s，,。；;、《》()（）]{1,8}[：:]\s*')
 _LINE_END='。.；;！!？? '
 _PAIRS={'《':'》','“':'”','‘':'’','「':'」','『':'』','（':'）','(':')','【':'】','[':']'}
 _SENTENCE_END='。！？'
+_STEP_END='；'
 
 
-def _sentences(line):
+def _sentences(line,ends=_SENTENCE_END):
     """A saved line as its own sentences, each ending after a full-width 。！？ (a run of them stays together) outside
     《》, quotes and brackets. A line with an unbalanced pair or an ASCII double quote stays whole; no word is changed."""
     if '"' in line: return [line]
@@ -642,10 +643,21 @@ def _sentences(line):
         if ch in _PAIRS: closing.append(_PAIRS[ch])
         elif ch in _PAIRS.values():
             if not closing or closing.pop()!=ch: return [line]
-        elif ch in _SENTENCE_END and not closing and (i+1==len(line) or line[i+1] not in _SENTENCE_END):
+        elif ch in ends and not closing and (i+1==len(line) or line[i+1] not in ends):
             parts.append(line[start:i+1].strip());start=i+1
     if closing: return [line]
     return [x for x in parts+[line[start:].strip()] if x]
+
+
+def _steps(line):
+    """A shown line as the parts its own top-level full-width ； joins, in order, each keeping its ；: the same guard as
+    _sentences (never inside 《》, quotes or brackets; an unbalanced pair or an ASCII double quote keeps the line whole), and
+    marks alone never make a line. Commas and an ASCII ; never cut. Lines of the same card, never items of their own."""
+    steps=[]
+    for part in _sentences(line,_STEP_END):
+        if steps and not (re.search(r'\w',part) and re.search(r'\w',steps[-1])):steps[-1]+=part
+        else:steps.append(part)
+    return steps
 
 
 _THIS_PAGE=r'这一页|这页|本页|该页|此页'
@@ -676,7 +688,8 @@ def action_lines(title,action,words=None):
     the title's own words (with or without its leading label such as 语文：), else the title's exact label opening it,
     and a 提交要求 line whose words begin with the previous line's last clause, which then reads once in that line.
     Every other word stays, in its saved order; partial overlaps stay. The own completion words (completion_words) the
-    item's agenda carries head the one saved line opening with the same work words."""
+    item's agenda carries head the one saved line opening with the same work words. Only after every repeat is read
+    against whole lines (这一页 needs its line's 第N页) does each shown line read as its own top-level ； parts (_steps)."""
     saved=[x.strip() for x in str(action or '').splitlines()]
     if words:saved=[words['lead']+x if x.startswith(words['work']) else x for x in saved]
     lines=[x for line in saved if line for x in _sentences(line)]
@@ -698,7 +711,7 @@ def action_lines(title,action,words=None):
             # the one 第20页 line): read once. Another page, place, object or any added clause keeps the line.
             if _stated_clauses(restated[1])<=set().union(*map(_stated_clauses,shown)):continue
         shown.append(line)
-    return shown
+    return [x for line in shown for x in _steps(line)]
 
 
 def enrich(app,c,tasks):
