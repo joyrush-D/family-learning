@@ -19,6 +19,14 @@
 
 边界与下一步：书名里的科目词改写作业科目，在上述有限真值内已修。另有一个独立新问题尚未修：Root虚构完整普通流程中，家长阅读行政约定后由监护人签字的一项被native强制定为learning，正确的admin回复被拒，整批needs_attention、0个任务；本次科目补丁不能称已解决。仍开放：其他未见过的书名/资料名变体，有限“；”词法、H01家长改日期整链与日期两层，已存/家长更正后/跨批次与来源原件缺口；真实家长省事、手机、出纸、整体准确率、教育效果与获奖品质未验。全部42项与R01–R34/S01–S08保留，①②③顺序不变，整体ACTIVE、未完成。
 
+## 候选（未Root验收/未合入/未部署，不是新家庭版号；家庭仍为r268，整体ACTIVE）：家长阅读后签字的行政约定不再被当成孩子学习（R09/R14，①内有限增量）
+
+分支 `codex/parent-reading-admin-purpose`（基线main `7169213`；RED `a8e5627`，修补 `473ecdd`）。对应家长反馈“内容不清楚或归类不对”。Root虚构完整普通流程的程序反例（固定正确回复，不是模型产物，无实际LLM调用）：“请家长今天阅读孩子带回的《图书借阅约定》，在末页“监护人”栏签字。孩子明天交给班主任。”是家长行政阅读与监护人签字、孩子只交回。共享学校台账`_school_native_command`去掉“请家长今天”后只看到“阅读”就定为learning，正确的admin回复在`_school_native_bind`被`school_action_coverage`拒绝，整批needs_attention、0任务；台账即使改对，共享分类副本`_school_learning_text`里同一“阅读”仍会让admin守卫把回复降为待核，无法自动收为待办。
+
+修补（同一读法两处共用）：新增`_school_parent_readings`——阅读者是紧挨“阅读”之前的家长词（中间只容日期或认真/仔细，闭合书名内不算），同句其后每个签字/盖章都由家长或未写签字人完成，句中孩子只带回/交回，这次“阅读”才算家长为签字做的步骤、不是孩子的学习成果。台账遇到以这种阅读开头的家长项：放下这次阅读后共享分类副本仍写着孩子学习才是learning，否则为admin（单独一项照旧交给原行政守卫，清单里保持admin一项）；`_school_learning_text`同样放下这次阅读。孩子自己阅读/朗读、家长听完后签字、家长阅读孩子的作文后签字、孩子或其他角色签字、书名/文件名及完整性、引用、日期、跨孩、同老师更正/取消、家长修改与CAS守卫均不变；不新增分类器、服务、表、字段、界面入口或模型调用。
+
+检查（开发端，本run精确克隆，`/Users/mashuo/.local/bin/python3.12`，产品模型调用0）：RED `a8e5627`上2个新测试失败（普通run_once为failed 1/processed 0；台账把104读成learning）。修补`473ecdd`上2个新测试通过：同批104与虚构英语朗读（家长听完后签字）经run_once→_select→_save→manual_tasks→app.tasks，104存为admin/ready、2026-10-23、todo，原文、执行者、监护人栏、出处完整，英语朗读仍为learning/homework，重开与下一轮不重复，固定mock只调用1次；`test_agent` 265项与相邻`test_school_native_coverage`/`test_school_action_inventory`/`test_school_saved_reread`/`test_school_parent_edited_review`/`test_school_old_pending_recovery`/`test_school_completion_today`/`test_school_history`/`test_agenda` 361项通过（共626项，0失败，旧断言未改）；全仓未跑。未验：浏览器、Node VM、孩子端、真实家长、手机、出纸与整体分类准确率；只覆盖家长词紧挨“阅读”且同句签字的写法，“请家长阅读《致家长的一封信》”这类无签字的家长阅读、“孩子书包里的《…》”等非带回/交回的孩子提法仍按原读法（可能仍被台账读成learning），待Root。全部42项与R01–R34/S01–S08保留，①②③顺序不变。
+
 ## 历史：候选（当时未Root验收/未合入/未部署，不是新家庭版号；当时家庭正式为r267，整体ACTIVE；已经PR171合入并随上方r268节技术切换）：书名里的科目词不再改写作业科目（R09/R14，①内有限增量）
 
 分支 `codex/school-subject-named-material`（基线main `4741a2f`；RED `c48e592`，修补 `3c84694`）。家长反馈“内容不清楚或归类不对”，Root用虚构例子确认一处程序缺陷（不是模型能力）：虚构语文老师（`synthetic-chinese-teacher`，2026-10-05 08:00）发“语文作业：阅读《数学家的故事》，写三句话读后感，今晚完成。”，正确的固定模型回复为语文、标题“语文：阅读《数学家的故事》”，但共享学校行动台账（`_school_native_actions`）把整段正文里的科目词都当本项科目，书名里的“数学”压过了“语文作业”，`_school_native_value`再把它加到标题上，保存卡、手动任务与主清单都成了“数学：阅读《数学家的故事》”，而学习科目仍是语文，同一项前后矛盾。书名改成《小河边的故事》时一直正确。
