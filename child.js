@@ -68,10 +68,11 @@ function studyDays(item) {
     item.source_task_handback_on ? `老师要求交回：${item.source_task_handback_on}` : '', item.source_task_due ? `原截止：${item.source_task_due}` : ''].filter(Boolean).join(' · ');
 }
 // The same read-only projection as the parent's card (source_task_action_lines): the saved action's own lines without
-// words this card's title already shows; the saved action itself is unchanged.
+// words this card's title already shows; the saved action itself is unchanged. A next step identical to the saved
+// action is that action and reads once; a different next step stays above it.
 function studyRequirementHTML(item) {
   const lines = Array.isArray(item.source_task_action_lines) ? item.source_task_action_lines : String(item.source_task_action || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-  const next = item.source_task_next_action, label = next ? '要求：' : '<strong>要做：</strong>';
+  const next = item.source_task_next_action !== item.source_task_action ? item.source_task_next_action : '', label = next ? '要求：' : '<strong>要做：</strong>';
   return `${next?`<p class="study-requirement"><strong>要做：</strong>${esc(next)}</p>`:''}${lines.length?`<div class="study-requirement">${label}${lines.length > 1?`<ul class="study-requirement-lines">${lines.map(x => `<li>${esc(x)}</li>`).join('')}</ul>`:`<p class="study-requirement-lines">${esc(lines[0])}</p>`}</div>`:''}`;
 }
 function studyCard(item) {
