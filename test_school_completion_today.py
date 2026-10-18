@@ -1156,6 +1156,43 @@ class OwnedEventAndCorrectionTests(unittest.TestCase):
         self.assertEqual([(t['title'], t['due']) for t in tasks.values()], [('数学：练习册第3页第1、2题', '2026-10-21')])
         self.assertFalse([x for x in self.app.calendar_snapshot('2026-10-21', '2026-10-21')['inbox'] if '兴趣班回执' in x['title']])
 
+    def test_excusing_only_the_handback_keeps_tonight_s_work_as_the_one_current_homework(self):
+        # Root's exact reproduction on 7122367 (fixed reply, teacher-en v01 16:20 / v02 16:21): 不用交了 withdraws one role of
+        # the workbook, never 今晚完成, so the homework stays one current task on 21 with no handback day left.
+        quote = '今晚完成《英语练习册》，明天交回《英语练习册》。'
+        rows, tasks = self.run_reply([('teacher-en', '英语：' + quote), ('teacher-en', '更正：《英语练习册》不用交了。')], [dict(
+            title_quote=quote, due='', evidence=[1, 2], task_title='英语：完成《英语练习册》', task_goal='今晚完成《英语练习册》；《英语练习册》不用交了。',
+            task_advice='', learning_subject='英语', learning_goal_id='', task_change='new', task_target_id='', task_state='ready',
+            task_reason='仍须今晚完成，后续消息只免交。', task_purpose='learning', task_submission='《英语练习册》不用交了。')])
+        row = rows['英语：完成《英语练习册》'];plan = json.loads(row['plan'])
+        self.assertEqual((row['state'], plan['school_task']['state']), ('accepted', 'ready'))
+        self.assertNotIn('取消本项', plan['school_task']['reason'])
+        self.assertEqual(plan['school_selection_receipt']['goal'], '今晚完成《英语练习册》；《英语练习册》不用交了。', 'the reply stays readable')
+        self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], self.refs)
+        self.assertEqual([t['id'] for t in tasks.values()], [row['task_id']], 'one English homework task')
+        task = tasks[row['task_id']]
+        for words in ('今晚完成《英语练习册》', '不用交了'):
+            self.assertIn(words, task['action'])
+        today = [x for x in self.app.calendar_snapshot('2026-10-21', '2026-10-21')['agenda'] if x['task_id'] == task['id']]
+        self.assertEqual(len(today), 1, 'listed once on Today 21')
+        agenda = today[0]['agenda']
+        self.assertEqual(agenda['category'], 'homework')
+        self.assertIn('2026-10-21', (agenda['complete_on'], agenda['due_on']))
+        self.assertNotIn('2026-10-22', (agenda['complete_on'], agenda['due_on'], task['due']), 'the excused handback day is no longer shown')
+
+    def test_a_later_restore_by_the_same_teacher_keeps_the_form_a_current_obligation(self):
+        rows, tasks = self.run_reply([('teacher-class', self.ORIGINAL), ('teacher-class', '更正：兴趣班回执不用交了；原定10月23日19:00的家长会取消，不用到校。'),
+                                      ('teacher-class', '通知：兴趣班回执仍按原要求交回，明天交给班主任。')], [
+            dict(title_quote='请家长10月22日前交回兴趣班回执', due='', evidence=[1, 2, 3], task_title='交回兴趣班回执', task_goal='交回兴趣班回执。',
+                 task_state='ready', task_reason='同一老师后续又恢复了交回要求。', task_purpose='admin', task_change='new'),
+            dict(title_quote='原定10月23日19:00的家长会取消', due='', evidence=[2], task_state='reference',
+                 task_reason='原定家长会已取消，无需行动。', task_purpose='optional', task_change='new')])
+        row = rows['交回兴趣班回执'];brief = json.loads(row['plan'])['school_task']
+        self.assertIn(brief['state'], ('ready', 'review'), 'the latest words restore it: the earlier cancel no longer holds')
+        self.assertNotIn('取消本项', brief['reason'])
+        self.assertEqual(bool(row['task_id']), row['state'] == 'accepted')
+        self.assertFalse({'2026-10-23'} & {t['due'] for t in tasks.values()})
+
 
 def saved_flash27_state(path):
     """The app's own state and 2026-10-19 calendar after the fictional Flash27 day is saved by run_once (no model)."""
