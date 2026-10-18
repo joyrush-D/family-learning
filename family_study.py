@@ -489,7 +489,7 @@ class Store:
                 row['source_task_inspection_on'] = (agenda.get('due_on', '') if agenda.get('due_kind') == 'inspection' else '') if task else missing
                 row['source_task_next_action'] = (task.get('focus') or {}).get('next_action', '') if task else missing
                 # The same read-only card projection as Today, under the title this card shows.
-                row['source_task_action_lines'] = action_lines(row['title'], task.get('action', '')) if task else missing
+                row['source_task_action_lines'] = action_lines(row['title'], task.get('action', ''), agenda.get('complete_words')) if task else missing
             used = {r['task_id'] for r in items}
             available = [dict(id=t['id'],title=t['title'],due=t['due'],status=self.app.task_status(t,updates.get(t['id'])))
                 for t in tasks.values() if t['child'] == child['name'] and t['id'] not in used and t.get('focus',{}).get('box')!='wish'

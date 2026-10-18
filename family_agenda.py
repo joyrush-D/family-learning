@@ -449,6 +449,28 @@ def completion_day(quote,header,time,due_on):
     return day if not due_on or due_on>day else ''
 
 
+def completion_words(quote,header,day,action):
+    """The own words heading this item's work clause that its day was proven from, when they hold its clock and the saved
+    action left them out: 2026年10月18日20:00前 before 完成《秋日观察》第2页 for a goal saved as 完成《秋日观察》第2页，….
+
+    Copied as written from the same first work clause completion_day read, never from a title, another clause (the
+    handback's own words), another item or the sending time; a saved action already holding the clock, or not opening
+    exactly one line with the same work words, keeps its lines. Display only: nothing is saved or rewritten.
+    """
+    text=(quote or '').strip();masked=_titles_read_as_objects(text)
+    if not day or not text:return None
+    label='|'.join(filter(None,(re.escape((header or '').strip()),family_agent._SCHOOL_NATIVE_SUBJECTS)))
+    at=(re.match(r'^(?:'+label+r')\s*[：:]\s*',masked) or re.match('',masked)).end()
+    first=re.split(r'[，,。；;\n]',masked[at:],maxsplit=1)[0]
+    verb=re.search(_COMPLETION_VERB,first)
+    clock=verb and re.search(r'\d{1,2}\s*[:：]\s*\d{2}',first[:verb.start()])
+    if not clock or '_' in first[:verb.start()]:return None
+    lead=text[at:at+verb.start()].strip();work=text[at+verb.start():at+len(first)].strip()
+    lines=[x.lstrip() for x in str(action or '').splitlines()]
+    if len(work)<4 or clock[0] in str(action or '') or sum(x.startswith(work) for x in lines)!=1:return None
+    return dict(lead=lead,work=work)
+
+
 def deadline(text,published):
     """Only an unambiguous deadline phrase; several different dates need review."""
     candidates=deadlines(text,published)
@@ -491,7 +513,7 @@ def task_category(title,purpose=None):
     return 'todo'
 
 
-def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal='',date_header='',school_focus=False,date_siblings=None):
+def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal='',date_header='',school_focus=False,date_siblings=None,action=''):
     focus=focus or {};messages=[];publications=[];original_time=''
     store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
     for ref in refs:
@@ -556,13 +578,16 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
     complete_on=(completion_day(date_quote,heading,own[0].get('time',''),due_on)
                  if len(own)==1 and not focus.get('scheduled_on') and (not focus.get('version') or school_focus) else '')
     if complete_on and focus.get('version') and completion_day(focus.get('goal',''),heading,own[0].get('time',''),due_on)!=complete_on:complete_on=''
+    # The clock its own work clause gives that same day (20:00前) belongs to it on every card; the saved action stays.
+    words=completion_words(date_quote,heading,complete_on,action) if complete_on else None
     if (not complete_on and len(own)==1 and due_on and date_siblings is not None and not focus.get('scheduled_on') and not focus.get('version')):
         # The same own-role reading the item was selected and saved with (今晚完成，明天早上交 / 今晚请家长签字，明天早上让孩子交给…):
         # its one earlier completion day is listed on that day; its handback/check due stays. Another item's quote or day gives none.
         roles=family_agent._school_role_days(date_quote,[dict(text=m.get('text',''),time=m.get('time','')) for m in messages],date_siblings)
         if roles and roles[1]==due_on and len(roles[0])==1 and next(iter(roles[0]))<due_on:complete_on=next(iter(roles[0]))
     return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,due_kind=due_kind,complete_on=complete_on,scheduled_on=focus.get('scheduled_on',''),
-                category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox')
+                category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox',
+                **({'complete_words':words} if words else {}))
 
 
 def _stored_date_quote(plan):
@@ -644,14 +669,17 @@ def _stated_clauses(text):
     return {re.sub(r'^请','',c) for c in clauses}
 
 
-def action_lines(title,action):
+def action_lines(title,action,words=None):
     """The saved action's lines as a card under this title shows them; display only, nothing is saved or rewritten.
 
     Each saved line reads as its own sentences. Only words the card would repeat are left out: a first sentence that is
     the title's own words (with or without its leading label such as 语文：), else the title's exact label opening it,
     and a 提交要求 line whose words begin with the previous line's last clause, which then reads once in that line.
-    Every other word stays, in its saved order; partial overlaps stay."""
-    lines=[x for line in str(action or '').splitlines() if line.strip() for x in _sentences(line.strip())]
+    Every other word stays, in its saved order; partial overlaps stay. The own completion words (completion_words) the
+    item's agenda carries head the one saved line opening with the same work words."""
+    saved=[x.strip() for x in str(action or '').splitlines()]
+    if words:saved=[words['lead']+x if x.startswith(words['work']) else x for x in saved]
+    lines=[x for line in saved if line for x in _sentences(line)]
     heading=str(title or '').strip().rstrip(_LINE_END);label=_TITLE_LABEL.match(heading)
     if lines and heading and lines[0].rstrip(_LINE_END) and lines[0].rstrip(_LINE_END) in (heading,heading[label.end():] if label else heading):
         lines=lines[1:]
@@ -714,12 +742,13 @@ def enrich(app,c,tasks):
             # Only days the parent or child explicitly entered as the teacher's own are teacher days; a plan never writes them.
             teacher={k:v for k,v in json.loads(captured[2] or '{}').items() if k in family_study.TEACHER_DAYS and v}
             if teacher.get('handback_on'):focus['due_on']=teacher['handback_on']
-        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus,date_siblings=date_siblings)
+        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus,date_siblings=date_siblings,action=task.get('action',''))
         if teacher.get('handback_on'):task['agenda']['due_kind']='handback'
-        if teacher.get('complete_on'):task['agenda']['complete_on']=teacher['complete_on']
+        if teacher.get('complete_on'):
+            task['agenda']['complete_on']=teacher['complete_on'];task['agenda'].pop('complete_words',None)
         # Only a card that leaves repeated words out carries its own lines; every other task keeps its exact shape and
         # its card reads the saved lines as they are.
-        lines=action_lines(task['title'],task.get('action',''))
+        lines=action_lines(task['title'],task.get('action',''),task['agenda'].get('complete_words'))
         if lines!=[x.strip() for x in str(task.get('action') or '').splitlines() if x.strip()]:task['action_lines']=lines
     return tasks
 
