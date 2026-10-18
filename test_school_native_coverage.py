@@ -779,6 +779,8 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         # Its own words give two roles of one item (今天完成 22, 明天交 23): due is the handback day, no date conflict.
         self.assertEqual(row['due'], '2026-10-23')
         self.assertNotIn('多个日期', brief['reason'])
+        # The summary's 今天/明天 are this outcome's own two roles, not a contradiction of its date.
+        self.assertNotIn('摘要中的日期与本项原文日期不一致', brief['reason'])
         self.assertEqual(plan['school_native_cover']['linked'], [refs[1]])
         self.assertEqual(manual, 0, 'no automatic task while the re-sent sheet is unread')
         self.assertEqual(links, [(self.source['id'], '102', upload['id'])])
@@ -812,6 +814,7 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         brief = json.loads(row['plan'])['school_task']
         self.assertEqual((row['state'], brief['state'], brief['purpose']), ('pending', 'review', 'learning'))
         self.assertIn('附件尚未核实', brief['reason'])
+        self.assertNotIn('摘要中的日期与本项原文日期不一致', brief['reason'])
         return row, refs
 
     def test_the_resent_worksheet_keeps_its_own_completion_and_handback_days_through_acceptance(self):
