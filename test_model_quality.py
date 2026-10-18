@@ -1505,6 +1505,20 @@ class RealIngestTest(unittest.TestCase):
         row = next(r for r in school_rows(ingest_school('school-b', dict(proposals=borrowed))['items']) if '学籍' in r['text'])
         self.assertNotEqual(row['due'], '2026-10-09', row); self.assertNotEqual(row['state'], 'ready', row)
 
+    def test_school_b_rejected_model_date_stays_review_on_later_rounds(self):
+        # A model day the selection rejected (同步练习 10-09 against the original's 周四 10-08) is a contradiction, not a
+        # missing day: the cleared due is never refilled from the original on this or any later ordinary round.
+        run = ingest_school('school-b', dict(proposals=_school_b_reply(wrong_date=True)), runs=3)
+        self.assertEqual(len(run['calls']), 1, run['results'])
+        result = score_school('school-b', school_rows(run['items']))
+        self.assertIn('同步练习:无≠2026-10-08', result['due_errors'], result)
+        self.assertTrue(any(r.startswith('同步练习:') for r in result['review']), result)
+        self.assertFalse(result['passed'], result)
+        item = next(i for i in run['items'] if '同步练习' in i['title'] + i['body'])
+        self.assertEqual((item['state'], item['due'], item['plan']['school_task']['state']), ('pending', '', 'review'), item)
+        self.assertNotIn('school_role_reselect', item['plan'])
+        self.assertIn('未采用模型日期', item['plan']['school_task']['reason'])
+
 
 class ActionDateTest(unittest.TestCase):
     """本项安排日只来自本项原句；借日期、周期、过去、范围、发送日当截止、无日期补今天和模型编日都不能成为ready日期。"""
