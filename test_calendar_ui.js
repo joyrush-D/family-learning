@@ -38,6 +38,20 @@ test('a teacher check day reads as the check; deadline, handback and event keep 
  assert.match(h.ctx.agendaDateHTML({...m,due_kind:'handback'},'2026-10-21'),/老师要求交回：2026-10-22/);
  assert.match(h.ctx.agendaDateHTML({...m,due_kind:'event'},'2026-10-21'),/活动日期：2026-10-22/);
 });
+test('the child and after-school cards read the same teacher check day as the parent card',()=>{
+ const child=readFileSync(__dirname+'/child.js','utf8'),study=readFileSync(__dirname+'/study.js','utf8'),ctx=vm.createContext({});
+ vm.runInContext(child.slice(child.indexOf('function studyDays('),child.indexOf('\n// The same read-only projection')),ctx);
+ const line=study.slice(study.indexOf('const taskDays='));vm.runInContext(line.slice(0,line.indexOf('\n')),ctx);
+ const c01={source_task_complete_on:'2026-10-21',source_task_due:'2026-10-22',source_task_handback_on:'',source_task_inspection_on:'2026-10-22'};
+ for(const days of [vm.runInContext('studyDays',ctx),vm.runInContext('taskDays',ctx)]){
+  assert.equal(days(c01),'老师要求完成：2026-10-21 · 老师检查：2026-10-22');
+  // An older payload without the field, a plain deadline, a handback and a parent's own date keep their own labels.
+  assert.equal(days({...c01,source_task_inspection_on:undefined}),'老师要求完成：2026-10-21 · 原截止：2026-10-22');
+  assert.equal(days({...c01,source_task_inspection_on:''}),'老师要求完成：2026-10-21 · 原截止：2026-10-22');
+  assert.equal(days({...c01,source_task_inspection_on:'',source_task_handback_on:'2026-10-22'}),'老师要求完成：2026-10-21 · 老师要求交回：2026-10-22 · 原截止：2026-10-22');
+  assert.equal(days({source_task_complete_on:'',source_task_due:'2026-10-23',source_task_handback_on:'',source_task_inspection_on:''}),'原截止：2026-10-23');
+ }
+});
 test('date navigation crosses month/year and leap day without local timezone shifts',()=>{
  const h=harness();assert.equal(h.ctx.calendarMonday('2027-01-01'),'2026-12-28');assert.equal(h.ctx.calendarAdd('2024-02-28',1),'2024-02-29');assert.equal(h.ctx.calendarAdd('2026-12-31',1),'2027-01-01');
  h.ctx.calendarNavigate('2027-01-03');assert.deepEqual(clean(h.ctx.calendarDays()),['2026-12-28','2026-12-29','2026-12-30','2026-12-31','2027-01-01','2027-01-02','2027-01-03']);

@@ -1246,8 +1246,15 @@ class ClearStandardsTests(unittest.TestCase):
         study = family_study.Store(SimpleNamespace(**vars(self.app)))
         study.save_item(dict(child_id=self.source['child_id'], day='2026-10-21', request_key='clear-standards-en' + 'x' * 16,
                              version=0, task_id=ids['第20页'], planned_minutes=15))
-        row = {r['task_id']: r for r in study.snapshot(self.source['child_id'], '2026-10-21')['items']}[ids['第20页']]
+        study.save_item(dict(child_id=self.source['child_id'], day='2026-10-21', request_key='clear-standards-receipt' + 'x' * 12,
+                             version=0, task_id=ids['《秋游意见回执》'], planned_minutes=5))
+        rows = {r['task_id']: r for r in study.snapshot(self.source['child_id'], '2026-10-21')['items']}
+        row = rows[ids['第20页']]
         self.assertEqual((row['source_task_action'], row['source_task_action_lines']), (saved['action'], [CLEAR_EN_GOAL]))
+        # C02: the after-school and child cards read the same agenda roles: completion 21 and the teacher check 22 (the saved
+        # due stays as it is); the receipt's 22nd is no check.
+        self.assertEqual((row['source_task_complete_on'], row['source_task_inspection_on'], row['source_task_due']), ('2026-10-21', '2026-10-22', '2026-10-22'))
+        self.assertEqual(rows[ids['《秋游意见回执》']]['source_task_inspection_on'], '')
 
 
 def saved_flash27_state(path):
