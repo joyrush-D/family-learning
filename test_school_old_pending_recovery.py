@@ -157,6 +157,58 @@ class R259OldPendingRecoveryTests(unittest.TestCase):
         self.assertTrue(row['title'].endswith('（家长改）'))
         self.assertFalse(any('Unit 4' in t for t in titles), titles)
 
+    def _saved(self):
+        with self.store._db() as c:
+            return ({r['id']: dict(r) for r in c.execute('SELECT * FROM agent_items')},
+                    [dict(r) for r in c.execute('SELECT * FROM agent_jobs ORDER BY id')],
+                    [dict(r) for r in c.execute('SELECT * FROM agent_sources ORDER BY id')],
+                    c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0])
+
+    def _resumed(self, start):
+        # The unpaused control: the same untouched rows are collected once and never twice.
+        self.source['enabled'] = True; self.fixture.config(enabled=True)
+        self.assertEqual(self._rounds(5, start=start), 5)
+        self.assertEqual(self._rounds(3, start=start + 5), 0)
+        with self.store._db() as c:
+            titles = [r['title'] for r in c.execute('SELECT title FROM manual_tasks')]
+        self.assertEqual([sum(key in t for t in titles) for key in KEYS], [1] * 5, titles)
+        self.assertEqual(len(titles), 5)
+        self.assertEqual(self.model.call_count, 0)
+
+    def test_a_paused_source_or_agent_keeps_every_saved_review_verbatim(self):
+        for case in ('source', 'agent'):
+            with self.subTest(case=case):
+                self.setUp()
+                self._old_store()
+                if case == 'source': self.source['enabled'] = False
+                self.fixture.config(enabled=case != 'agent')
+                before = self._saved()
+                for i in range(5): agent.run_once(self.app, self.now + dt.timedelta(minutes=6 * i))
+                self.assertEqual(self._saved(), before, 'every saved row, job and cursor kept; no task')
+                self.assertEqual(self.model.call_count, 0)
+                self._resumed(5)
+
+    def test_a_pause_between_proof_and_save_writes_nothing(self):
+        for case in ('source', 'agent'):
+            with self.subTest(case=case):
+                self.setUp()
+                self._old_store()
+                before = self._saved()
+                real = agent._school_role_reselect; calls = []
+                def racing(store, c, row, *args, **kwargs):
+                    proof = real(store, c, row, *args, **kwargs)
+                    if proof and not calls:  # proven while authorized, paused before the save
+                        calls.append(row['id'])
+                        if case == 'source': self.source['enabled'] = False
+                        self.fixture.config(enabled=case != 'agent')
+                    return proof
+                with patch.object(agent, '_school_role_reselect', side_effect=racing):
+                    agent.run_once(self.app, self.now)
+                self.assertTrue(calls, 'the proof was made before the pause')
+                self.assertEqual(self._saved(), before, 'nothing written after the pause')
+                self.assertEqual(self.model.call_count, 0)
+                self._resumed(1)
+
 
 if __name__ == '__main__':
     unittest.main()
