@@ -81,6 +81,11 @@ try:
             '英语作业：朗读Unit 2课文两遍，今天完成；完成练习卷第1–3题，今天完成。')
     texts=[notice,
            '以上两项均请家长核对并在记录本签字。' if cross else '补充英语练习卷：单面打印；完成后自查并请家长签字；第4题选做。']
+    # Each card states a bound all-items standard without its scope words (以上作业都, 两项都, 以上两项均); the complete
+    # scope sentence stays literal in the native shared conditions/supplements and the source anchors checked below, and a
+    # late standard is appended whole. Fixed expectations, never computed by the reader under test.
+    card_shared='今天完成并请家长检查' if shared else ''
+    card_cross=texts[1].rstrip('。') if late else '请家长核对并在记录本签字' if cross else ''
     if cross:
         payload=fixture.fixture.payload(cursor='12')
         payload['messages']=[dict(id=str(11+i),message_order=str(11+i),time=(now-dt.timedelta(minutes=2-i)).isoformat(),kind='text',
@@ -181,13 +186,13 @@ try:
             listing=next(call for call in reversed(calls) if call['required_native_actions'])
             expected_anchors=[dict(ref=refs[0],upload_ids=[],pages=[],quote=listing['required_native_actions'][0 if role=='reading' else 1]['quote'])]
             if shared:
-                assert shared in row['body'] and shared in task['action']
+                assert card_shared in row['body'] and card_shared in task['action']
                 expected_anchors.append(dict(ref=refs[0],upload_ids=[],pages=[],quote=shared))
             if late:
                 # Saved as its own list outcome first; the late standard is then appended to the same task, its record unchanged.
                 assert texts[1] not in row['body'] and api_tasks[row['task_id']]['action']==row['body']+'\n补充要求：'+texts[1]
             elif cross:
-                assert texts[1].rstrip('。') in row['body'] and texts[1].rstrip('。') in task['action']
+                assert card_cross in row['body'] and card_cross in task['action']
                 expected_anchors.append(dict(ref=refs[1],upload_ids=[],pages=[],quote=texts[1]))
             elif role=='exercise':expected_anchors.append(dict(ref=refs[1],upload_ids=[],pages=[],quote=texts[1]))
             assert anchors==expected_anchors,'anchors must be literal clauses for this outcome, never the whole mixed notice'
@@ -212,7 +217,8 @@ try:
         assert [dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]==saved_tasks
     fixture.model.side_effect=AssertionError('no further model receipt allowed')
     proof=dict(synthetic_only=True,real_model_calls=0,collector_calls=0,printer_calls=0,
-        form=form,shared_condition=shared,cross_message_standard=texts[1].rstrip('。') if cross else '',today=today,child='虚构甲',source_id=fixture.source['id'],messages=payload['messages'],items=items,date_control=date_control,
+        form=form,shared_condition=shared,cross_message_standard=texts[1].rstrip('。') if cross else '',
+        shared_card_standard=card_shared,cross_message_card_standard=card_cross,today=today,child='虚构甲',source_id=fixture.source['id'],messages=payload['messages'],items=items,date_control=date_control,
         first=first,failed_state=failed_state,failed_job=failed_job,delayed=delayed,recovered=recovered,done_job=done_job,replay=replay,
         late_run=late_run,expected_receipts=3 if late else 2,pending_count=pending_count,
         mock_calls=calls,originals_preserved=True,source_cursor_preserved=True,
@@ -292,8 +298,9 @@ async function screenshot(page,name){await noOverflow(page);await page.screensho
    assert.match(await card(reading.task_id).innerText(),/朗读Unit 2课文两遍/);assert(!(await card(reading.task_id).innerText()).includes('练习卷'));
    for(const clause of proof.intake.cross_message_standard?['完成练习卷第1–3题']:['完成练习卷第1–3题','单面打印','完成后自查并请家长签字','第4题选做'])assert((await card(exercise.task_id).innerText()).includes(clause));assert(!(await card(exercise.task_id).innerText()).includes('朗读'));
    for(const item of items){const title=await card(item.task_id).locator('h3').innerText();assert.equal(title,item.title);assert(title.length<=40&&!/单面打印|自查|签字/.test(title),'main list title stays short while the body retains standards');assert(!title.includes('选做')||(title.endsWith('（第4题选做）')&&title.split('选做').length===2),'only the compact optional-question boundary belongs in the title')}
-   if(proof.intake.shared_condition)for(const item of items)assert((await card(item.task_id).innerText()).includes(proof.intake.shared_condition),'both tasks keep the explicit all-items standard');
-   if(proof.intake.cross_message_standard)for(const item of items)assert((await card(item.task_id).innerText()).includes(proof.intake.cross_message_standard),'both tasks keep the next message all-items standard');
+   // Cards show the bound standard without its scope words; the complete scope stays checked in the anchors below.
+   if(proof.intake.shared_condition){assert(proof.intake.shared_card_standard);for(const item of items)assert((await card(item.task_id).innerText()).includes(proof.intake.shared_card_standard),'both tasks keep the explicit all-items standard')}
+   if(proof.intake.cross_message_standard){assert(proof.intake.cross_message_card_standard);for(const item of items)assert((await card(item.task_id).innerText()).includes(proof.intake.cross_message_card_standard),'both tasks keep the next message all-items standard')}
    await screenshot(page,'today-'+width+'.png');
    const scopedViews=[];
    for(const item of items){
