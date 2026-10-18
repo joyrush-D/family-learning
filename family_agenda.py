@@ -621,12 +621,22 @@ def _sentences(line):
 _THIS_PAGE=r'这一页|这页|本页|该页|此页'
 
 
+# Before a 这一页 that points back: only its asker and a word back to the same work (请家长听完后在…), no material of its own.
+_BACK_TO_SAME_WORK=r'\s*(?:请|让|由)?\s*(?:家长|学生|孩子|同学们?)?\s*(?:[听读看做写]完(?:后|以后|之后)?|完成后)?\s*(?:在|于)?\s*'
+
+
 def _stated_clauses(text):
-    """A line's own clauses as the card reads them: 这一页/本页 is its one 第N页 only when the line names exactly one page,
-    and a leading 请 asks nothing more."""
-    pages=set(re.findall(r'第\s*\d+\s*页',text))
-    if len(pages)==1:text=re.sub(_THIS_PAGE,next(iter(pages)),text)
-    return {re.sub(r'^请','',c.strip()) for c in re.split(r'[，,；;。！!？?]',text) if c.strip()}
+    """A line's own clauses as the card reads them; a leading 请 asks nothing more.
+
+    这一页/本页 is the line's one 第N页 only when it stands in the very next clause after nothing but its asker and a word
+    back to the same work (…课本第20页的对话朗读三遍；请家长听完后在这一页签字). Another material named before it
+    (听写本本页) or taken out in between (取出听写本；…本页) leaves its page unknown, so no clause is read as the same."""
+    clauses=[c.strip() for c in re.split(r'[，,；;。！!？?]',text) if c.strip()]
+    pages=[(n,m[0]) for n,c in enumerate(clauses) for m in re.finditer(r'第\s*\d+\s*页',c)]
+    if len(pages)==1 and pages[0][0]+1<len(clauses):
+        n,page=pages[0];back=re.match(_BACK_TO_SAME_WORK+'('+_THIS_PAGE+')',clauses[n+1])
+        if back:clauses[n+1]=clauses[n+1][:back.start(1)]+page+clauses[n+1][back.end(1):]
+    return {re.sub(r'^请','',c) for c in clauses}
 
 
 def action_lines(title,action):
