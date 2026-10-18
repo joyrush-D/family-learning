@@ -2301,7 +2301,8 @@ def _school_handback_day(text,published,values):
     dated=[(re.sub(r'^\s*[^：:，,]{0,6}[：:]','',c),d) for c in re.split(r'[。；;\n]',text) if (d:=deadlines(c,published))]
     if len(values)!=2 or len(dated)<2 or any(len(d)!=1 for c,d in dated):return values
     (done,early),*backs=dated;late=values-early
-    work=re.search(r'(?:[日号]|\d{1,2}[:：]\d{2})\s*(?:之前|以前|前)\s*[^，,。；;\n（(]',done)
+    # A completion time may also be the day's part (2026年10月20日晚完成…；2026年10月21日上午交给数学课代表 is due 21日).
+    work=re.search(r'(?:[日号]|\d{1,2}[:：]\d{2})\s*(?:(?:之前|以前|前)\s*[^，,。；;\n（(]|(?:早上|上午|中午|下午|晚上|晚)\s*完成)',done)
     if not work or '交' in done or len(late)!=1 or min(early)>=min(late):return values
     for back,day in backs:
         held=re.match(r'\s*([^\d，,：:（(]*?)\s*(?:于|在)?\s*\d',back)
@@ -3712,13 +3713,16 @@ def _school_native_spans(text, start, listed=False):
 
 def _school_native_condition_owner(clause,pieces):
     """The one outcome a trailing condition names by its literal object or activity; none or several stay with the last."""
-    def marks(text):
-        verbs={'读' if verb in ('朗读','跟读','读') else verb for verb in
-               re.findall(r'朗读|跟读|背诵|抄写|听写|默写|口算|读(?=[一二两三四五六七八九十0-9]+遍)',text)}
-        return _school_named_objects(text)|set(re.findall(_SCHOOL_NATIVE_WORKSHEET,text))|verbs
-    named=marks(clause)
-    owners=[piece for piece in pieces if named&marks(piece['primary'])] if named else []
+    named=_school_native_marks(clause)
+    owners=[piece for piece in pieces if named&_school_native_marks(piece['primary'])] if named else []
     return owners[0] if len(owners)==1 else None
+
+
+def _school_native_marks(text):
+    """The literal objects and activities by which a clause names one outcome."""
+    verbs={'读' if verb in ('朗读','跟读','读') else verb for verb in
+           re.findall(r'朗读|跟读|背诵|抄写|听写|默写|口算|读(?=[一二两三四五六七八九十0-9]+遍)',text)}
+    return _school_named_objects(text)|set(re.findall(_SCHOOL_NATIVE_WORKSHEET,text))|verbs
 
 
 def _school_native_heading(text):
@@ -3945,12 +3949,14 @@ def _school_native_later_text(entry,later):
     return all(re.fullmatch(r'[0-9]{1,40}',o) for o in order) and int(order[1])>int(order[0])
 
 
-def _school_native_shared_later(entry,evidence,count):
+def _school_native_shared_later(entry,evidence,own):
     """The source's very next message, when it is wholly one positive common standard for this list's every outcome.
 
     "以上两项均请家长核对并在记录本签字" sent within the supplement window by the same publisher in the same source reads as
-    if it closed the list itself. Another message between them, a later day, a clause list, a change, optionality, a negation or
-    no stated count binds nothing; a stated count other than this list's outcomes keeps the whole batch.
+    if it closed the list itself, and so does a supplement to this list made only of that one scope's clauses
+    (补充英语作业：以上两项均…晚完成，完成后请家长…签字；…英语课检查这两项作业). Another message between them, a later
+    day, a clause naming one outcome, another subject, a change, optionality, a negation or no stated count binds nothing;
+    a stated count other than this list's outcomes keeps the whole batch.
     """
     source=entry['ref'][8:].rsplit(':',1)[0]
     later=next((e for e in evidence if e['ref'][8:].rsplit(':',1)[0]==source),None)
@@ -3959,10 +3965,45 @@ def _school_native_shared_later(entry,evidence,count):
         if not 0<(dt.datetime.fromisoformat(later['time'])-dt.datetime.fromisoformat(entry['time'])).total_seconds()<=120:return None
     except (KeyError,ValueError,TypeError):return None
     shared=_school_shared_standard(later['text'])
+    shared=([shared[0]],shared[1]) if shared else _school_shared_clauses(later['text'],own)
     if not shared:return None
-    if shared[0] is not None and shared[0]!=count:
+    if any(stated is not None and stated!=len(own) for stated in shared[0]):
         raise AgentError('共同标准的项数与独立行动不一致，完整原批次保留',code='school_action_coverage')
     return dict(ref=later['ref'],quote=later['text'].strip(),goal=shared[1],time=later['time'])
+
+
+def _school_shared_clauses(text,own):
+    """([stated counts], body) when a supplement to this list is wholly clauses of its one common scope, else None.
+
+    Each semicolon clause either opens with the list's scope (以上两项均…完成), its comma parts only continuing that
+    completion (完成后请家长…签字) with no day or outcome object of their own, or closes on the scope as its object after
+    one day, lesson and predicate (2026年10月21日英语课检查这两项作业). Every subject it names is the list's own.
+    """
+    head=re.match(r'^补充((?:'+_SCHOOL_NATIVE_SUBJECTS+r')?)(?:作业|要求|任务)?[：:]\s*(.+)$',text.strip(),re.S)
+    if not head:return None
+    body=head[2].strip().rstrip('。；;').strip()
+    subjects={a['subject'] for a in own}
+    if ('' in subjects or not set(re.findall(_SCHOOL_NATIVE_SUBJECTS,text))<=subjects or re.search(r'[。！!？?\n]',body)
+            or re.search(_SCHOOL_NATIVE_CHANGE+r'|选做|必做',body)):return None
+    counts=[]
+    for clause in re.split(r'[；;]',body):
+        clause=clause.strip()
+        common=re.match(_SCHOOL_NATIVE_COMMON,clause)
+        if common:
+            first,*rest=re.split(r'[，,]',clause[common.end():])
+            parts=[first]
+            for part in rest:
+                then=re.match(r'\s*(?:完成|做完|写完|读完)\s*(?:后|之后|以后)\s*',part)
+                if not then or re.search(_SCHOOL_NATIVE_DATE,part) or _school_native_marks(part):return None
+                parts.append(part[then.end():])
+            if any(_school_native_common_negative(part) or not _school_native_common_addressed(part) for part in parts):return None
+            counts.append((int(common[1]) if common[1].isdigit() else _SCHOOL_NATIVE_COUNT[common[1]]) if common[1] else None)
+            continue
+        closing=re.fullmatch(r'(?:'+_SCHOOL_NATIVE_DATE+r')?\s*(?:早上|上午|中午|下午|晚上|晚)?\s*(?:在\s*)?(?:(?:'+_SCHOOL_NATIVE_SUBJECTS
+            +r')课(?:上)?|早读)?\s*(?:'+_SCHOOL_NATIVE_PREDICATE+r')\s*(?:(?:这|以上|上述)([二两三四五六七八九十2-9])项|(?:这些|以上|上述|所有))(?:作业|任务|要求)?',clause)
+        if not closing or not (closing[1] or re.search(r'(?:作业|任务|要求)$',clause)):return None
+        counts.append((int(closing[1]) if closing[1].isdigit() else _SCHOOL_NATIVE_COUNT[closing[1]]) if closing[1] else None)
+    return counts,body
 
 
 def _school_shared_standard(text):
@@ -4254,7 +4295,7 @@ def _school_native_actions(evidence):
             if len(owners)==1:
                 owners[0]['supplements'].append(dict(ref=supplement['ref'],quote=supplement['text'].strip(),goal=head[2].strip(),time=supplement['time']))
         # A common standard sent as the list's next message belongs to every outcome here, never a task of its own.
-        if len(own)>1 and (shared:=_school_native_shared_later(entry,evidence[index+1:],len(own))):
+        if len(own)>1 and (shared:=_school_native_shared_later(entry,evidence[index+1:],own)):
             for action in own:action['shared_supplements']=[shared]
         # A later change ("补充：练习册第5题不用做") binds only to the one outcome it names; siblings stay literal.
         for later in evidence:
@@ -4297,7 +4338,8 @@ def _school_native_value(action):
     if len(title)>80:raise AgentError('本项行动标题超过可核对范围，原文保留',code='school_action_coverage')
     # Only resolved weekdays can supply a shared day; never crop a recurring, past or ranged phrase.
     header=_relative_weekday(action['header'],sent_day(action['time']))
-    shared_date=re.search(_SCHOOL_NATIVE_DAY+r'\s*(?:之前|以前|前|内)?',header)
+    # A heading's part of day stays with its day (2026年10月20日晚完成两项 keeps 晚完成, never only the date).
+    shared_date=re.search(_SCHOOL_NATIVE_DAY+r'\s*(?:(?:早上|上午|中午|下午|晚上|晚)\s*完成|之前|以前|前|内)?',header)
     standards=([shared_date[0]] if shared_date else [])+[action['quote']]+action.get('conditions',[])+action.get('shared_conditions',[])+[s['goal'] for s in action.get('shared_supplements',[])+action['supplements']]
     return _school_requirement_goal(dict(title=title),standards)
 
