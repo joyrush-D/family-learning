@@ -2837,8 +2837,9 @@ def _school_role_reselect(store,c,row,evidence,now):
 
     The current selection reading (its own completion and handback/check roles, or its own clause's one day, never
     another proposal's or another original's) runs again on the unchanged stored receipt, quote and originals. The due
-    is the one day both the receipt's own words and the original give; a day the older program cleared comes back only
-    from them, never from the upload or current day. A parent decision, edit, link, task, record or feedback, a changed
+    is the one day both the receipt's own words and the original give, and it must be the saved day; a cleared due stays
+    unknown, since a model day the selection rejected as contradicting the original is saved the same way and the
+    receipt keeps no model day. A parent decision, edit, link, task, record or feedback, a changed
     or rebound original, an unfinished batch, a past day, a paused source or Agent or an item already reread returns
     None: its saved state stays.
     """
@@ -2875,7 +2876,9 @@ def _school_role_reselect(store,c,row,evidence,now):
     elif len(clause)==1:due=next(iter(clause));own={due}
     else:return None
     goal_days=_school_goal_dates(goal,evidence)
-    if row['due'] and row['due']!=due or not goal_days<=own:return None
+    # Only a saved day (the model's own, or the program's own fill when the model gave none) is read again; a cleared
+    # one is no proof of a missing day, so the original model day stays unknown and the review stays as saved.
+    if not row['due'] or row['due']!=due or not goal_days<=own:return None
     if due not in goal_days:
         # A role day the receipt's goal words do not date is restored only from the receipt's own handback/check words,
         # verbatim the original's own clause and no sibling's; never from the upload or current day.
