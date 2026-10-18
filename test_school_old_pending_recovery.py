@@ -23,7 +23,10 @@ RECOVERED = tuple(k for k in KEYS if k != UNKNOWN)
 
 
 class R259OldPendingRecoveryTests(unittest.TestCase):
-    setUp = native.SchoolNativeCoverageTests.setUp
+    def setUp(self):
+        native.SchoolNativeCoverageTests.setUp(self)
+        # No model is configured here (no model.json, no FAMILY_LLM_* environment): these rounds are the zero-model boundary.
+        self.stack.enter_context(patch.dict(os.environ, {k: v for k, v in os.environ.items() if not k.startswith('FAMILY_LLM_')}, clear=True))
 
     def _old_store(self, change=None):
         self.now = self.fixture.now = dt.datetime(2026, 10, 19, 20, 30, tzinfo=agent.TZ)
@@ -249,8 +252,7 @@ class R259ClearedDateRereadTests(unittest.TestCase):
     """
 
     def setUp(self):
-        native.SchoolNativeCoverageTests.setUp(self)
-        self.stack.enter_context(patch.dict(os.environ, {k: v for k, v in os.environ.items() if not k.startswith('FAMILY_LLM_')}, clear=True))
+        R259OldPendingRecoveryTests.setUp(self)
         (self.fixture.data / 'model.json').write_text(json.dumps(FICTIONAL_MODEL))
         self.calls = []
 
