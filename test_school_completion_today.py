@@ -562,10 +562,15 @@ class Flash27ReadableCardTests(unittest.TestCase):
         self.assertEqual(len(saved), 5)
         self.assertIn('\n提交要求：明天早上交练习册。', saved[ids['星芽']]['action'], 'the program-added line stays saved')
         tasks = {t['id']: t for t in self.app.tasks()}
+
+        def card_lines(task):  # as the card reads them: its own lines where it leaves words out, else the saved lines
+            return task.get('action_lines', [x.strip() for x in task['action'].splitlines() if x.strip()])
         for key, lines in FLASH27_CARD_LINES.items():
             with self.subTest(item=key):
                 task = tasks[ids[key]]
-                self.assertEqual(task['action_lines'], lines)
+                self.assertEqual(card_lines(task), lines)
+                # Only the two cards that leave words out carry their own lines; the others keep the exact task shape.
+                self.assertEqual('action_lines' in task, key in ('星芽', '数格'))
                 self.assertEqual((task['title'], task['action'], task['due']), tuple(saved[ids[key]][k] for k in ('title', 'action', 'due')))
                 shown = [task['title']] + lines
                 self.assertEqual(len(shown), len(set(x.rstrip('。') for x in shown)), 'no condition repeated on one card')
@@ -576,11 +581,11 @@ class Flash27ReadableCardTests(unittest.TestCase):
                            'Unit 4': ('听录音跟读 Unit 4 A day at the lake 两遍', '读完请家长在记录本上签字', '今晚完成，明天早读检查记录本'),
                            '回执': ('《秋季校园开放日回执》今晚请家长签字', '明天早上让孩子交给班主任'),
                            '塑料瓶': ('明天来校带一个空透明塑料瓶，科学课用',)}.items():
-            card = '\n'.join([tasks[ids[key]]['title']] + tasks[ids[key]]['action_lines'])
+            card = '\n'.join([tasks[ids[key]]['title']] + card_lines(tasks[ids[key]]))
             for fact in facts:
                 self.assertIn(fact, card, (key, fact))
-        self.assertEqual(sum('第4题' in x for x in tasks[ids['数格']]['action_lines']), 1, 'the 4th-question note stays its own line')
-        self.assertNotIn('今晚', '\n'.join(tasks[ids['塑料瓶']]['action_lines']))
+        self.assertEqual(sum('第4题' in x for x in card_lines(tasks[ids['数格']])), 1, 'the 4th-question note stays its own line')
+        self.assertNotIn('今晚', '\n'.join(card_lines(tasks[ids['塑料瓶']])))
 
     def test_the_child_card_reads_the_same_projection_from_the_same_task(self):
         ids, saved = self.save_flash27()

@@ -625,7 +625,10 @@ def enrich(app,c,tasks):
         task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus,date_siblings=date_siblings)
         if teacher.get('handback_on'):task['agenda']['due_kind']='handback'
         if teacher.get('complete_on'):task['agenda']['complete_on']=teacher['complete_on']
-        task['action_lines']=action_lines(task['title'],task.get('action',''))
+        # Only a card that leaves repeated words out carries its own lines; every other task keeps its exact shape and
+        # its card reads the saved lines as they are.
+        lines=action_lines(task['title'],task.get('action',''))
+        if lines!=[x.strip() for x in str(task.get('action') or '').splitlines() if x.strip()]:task['action_lines']=lines
     return tasks
 
 
