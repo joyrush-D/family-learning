@@ -81,6 +81,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-child-study-') as folder, pat
             snapshot=state();item=snapshot['items'][0]
             assert item['id']==assigned['id'] and item['editable'] and item['result_actor']=='parent' and item['note']==''
             assert item['source_task_action']=='先做练习一，再核对例题' and item['source_task_due']==today
+            assert (item['source_task_complete_on'],item['source_task_handback_on'])==('','')
             text=json.dumps(snapshot)
             for hidden in ('CANARY','record_id','task_id','available_tasks','week','child_id',app.TOKEN): assert hidden not in text,hidden
             assert call('item',req(task_id='T03',planned_minutes=10))[0]==400
