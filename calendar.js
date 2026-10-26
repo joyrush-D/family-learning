@@ -97,6 +97,19 @@ function subjectFiled(rows,keyOf){
  const rank=key=>key===subjectUnknown?2:key===subjectGeneral?1:0;
  return [...groups].sort(([a],[b])=>rank(a)-rank(b));
 }
+// A record or reading item with no saved subject is shown, read-only, under the one original it is reliably tied to: the
+// same child's existing task, or the same child's related record. A missing, other-child or conflicting link stays
+// 科目待定; a saved subject always wins and nothing is written back. Titles, book names and file names are never read.
+function savedSubjectKey(value){const s=String(value||'').trim();return s==='综合'?subjectGeneral:s}
+function linkedTaskSubjectKey(id,childName){if(!id)return null;const t=(data.tasks||[]).filter(t=>t.id===id);return t.length===1&&t[0].child===childName?taskSubjectKey(t[0]):undefined}
+function recordSubjectKey(r,seen=new Set()){
+ const own=savedSubjectKey(r?.subject);if(own||!r||seen.has(r.id))return own||subjectUnknown;seen.add(r.id);
+ const source=String(r.source||''),task=linkedTaskSubjectKey(source.startsWith('事项:')?source.slice(3):r.linked_task_id,r.child);
+ let parent=null;if(r.related_record_id!=null){const p=(data.records||[]).filter(x=>x.id===r.related_record_id);parent=p.length===1&&p[0].child===r.child?recordSubjectKey(p[0],seen):undefined}
+ const keys=new Set([task,parent].filter(k=>k&&k!==subjectUnknown));
+ return task===undefined||parent===undefined||keys.size!==1?subjectUnknown:[...keys][0];
+}
+function readingSubjectKey(t){return savedSubjectKey(t?.subject)||linkedTaskSubjectKey(t?.source_task_id,t?.child)||subjectUnknown}
 function subjectFiledHTML(rows,keyOf,rowHTML,name){return subjectFiled(rows,keyOf).map(([key,list])=>`<section class="subject-filed" data-${name}="${esc(key)}"><h3 class="subject-filed-heading">${esc(key)} · ${list.length}</h3>${list.map(rowHTML).join('')}</section>`).join('')}
 // The kind is said once at the start of a run of same-kind cards; every card still carries its own kind for checks.
 function taskKindLabel(x){return x.kind==='event'||x.agenda?.box==='wish'?'':x.agenda?.category==='homework'||x.kind==='study'?'作业':'要办的事'}

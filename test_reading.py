@@ -67,6 +67,32 @@ class ReadingTests(unittest.TestCase):
             with self.subTest(changes=changes):
                 with self.assertRaises(ReadingError): self.draft(**changes)
         with self.assertRaises(ReadingError): self.call('unknown_action')
+    def test_optional_subject_follows_create_edit_version_and_repeat_request(self):
+        # An older reading table gains the column empty: no saved task is given a subject from its book or source.
+        old=self.draft(book='English Picture Book',subject='')
+        with self.connect() as c: c.execute('ALTER TABLE reading_tasks DROP COLUMN subject')
+        self.store=Store(self.connect,lambda:self.children,lambda:self.sources)
+        reopened=next(t for t in self.store.snapshot()['tasks'] if t['id']==old['id'])
+        self.assertEqual((reopened['subject'],reopened['version'],reopened['book']),('',old['version'],'English Picture Book'))
+        request=self.payload(book='虚构数学绘本',subject=' 数学 ',source_task_id='T01',stamps=1)
+        task=self.store.mutate('create',request)['task']
+        self.assertEqual(task['subject'],'数学')
+        self.assertEqual(self.store.mutate('create',dict(request))['task']['id'],task['id'],'a repeated request returns the saved task')
+        with self.assertRaises(ReadingError) as caught: self.store.mutate('create',dict(request,subject='语文'))
+        self.assertEqual(caught.exception.code,'idempotency_conflict')
+        with self.assertRaises(ReadingError): self.call('create',book='虚构',subject='科'*61)
+        with self.assertRaises(ReadingError) as caught: self.call('edit',dict(task,version=task['version']+1),subject='语文')
+        self.assertEqual(caught.exception.code,'version_conflict')
+        kept=self.call('edit',task,scope='第二章')
+        self.assertEqual((kept['subject'],kept['version']),('数学',task['version']+1),'an edit without a subject keeps the saved one')
+        cleared=self.call('edit',kept,subject='')
+        self.assertEqual(cleared['subject'],'');self.assertEqual(cleared['history'][-1]['previous']['subject'],'数学')
+        started=self.call('start',self.call('edit',cleared,subject='综合'),note='虚构孩子选择开始')
+        with self.assertRaises(ReadingError): self.call('edit',started,subject='美术')
+        moved=self.call('edit',started,subject='美术',reason='虚构家长更正科目')
+        saved=[t for t in self.store.snapshot()['tasks'] if t['id'] in (old['id'],task['id'])]
+        self.assertEqual({t['id']:t['subject'] for t in saved},{old['id']:'',task['id']:'美术'})
+        self.assertEqual((moved['state'],moved['stamps'],moved['source_task_id']),('进行中',1,'T01'))
     def test_agreement_start_pause_and_history(self):
         task=self.draft();task=self.call('edit',task,scope='前两节',stamps=2)
         with self.assertRaises(ReadingError): self.call('start',task)

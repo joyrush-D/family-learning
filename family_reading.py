@@ -63,7 +63,7 @@ def validate_record_attachments(connection,child_id,attachment_ids):
 
 
 class Store:
-    AGREEMENT={'book':200,'edition':200,'scope':1000,'method':100,'criteria':1000,'source_task_id':100}
+    AGREEMENT={'book':200,'edition':200,'scope':1000,'method':100,'criteria':1000,'source_task_id':100,'subject':60}
     TASK_ACTIONS={'create','edit','start','submit','confirm','request_more','pause','resume','revoke'}
     REDEMPTION_ACTIONS={'reserve','fulfill','cancel_redemption','correct_redemption'}
 
@@ -104,7 +104,7 @@ class Store:
                     upload_id TEXT PRIMARY KEY, child_id TEXT NOT NULL);
             ''')
             columns={r['name'] for r in c.execute('PRAGMA table_info(reading_tasks)')}
-            for name in ('cover_upload_id','cover_sha256'):
+            for name in ('cover_upload_id','cover_sha256','subject'):
                 if name not in columns: c.execute('ALTER TABLE reading_tasks ADD COLUMN '+name+" TEXT NOT NULL DEFAULT ''")
             c.commit()
 

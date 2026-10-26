@@ -247,14 +247,20 @@ test('task card reads a requirement identical to its title once and keeps every 
  assert.match(ctx.taskActionHTML({title:'虚构',action:''}),/完成目标待明确/);assert.match(ctx.taskActionHTML({title:'虚构',action:'请核对这条通知是否适用：虚构'}),/完成目标待明确/);
 });
 
+// Today's first layer is one subject list: read each card's own category and today mark instead of the removed
+// 今日作业/要办的事/其他未完成作业 groups, keeping the counts they asserted. School items awaiting review are listed but,
+// as in those groups' headings, not counted as confirmed work.
+const todayCards=html=>[...html.matchAll(/<div class="subject-item" data-subject-item="([^"]*)" data-category="(homework|todo)" data-kind="([^"]*)"( data-today)?>/g)].map(m=>({id:m[1],category:m[2],kind:m[3],today:!!m[4]}));
+const todayCounts=cards=>{const confirmed=cards.filter(c=>c.kind!=='school');return {today:confirmed.filter(c=>c.category==='homework'&&c.today).length,todo:confirmed.filter(c=>c.category==='todo').length,other:confirmed.filter(c=>c.category==='homework'&&!c.today).length}};
+const firstLayer=html=>(html.split('id="task-groups">')[1]||'').split('id="today-courses"')[0].split('<details')[0];
 test('today and inbox group legacy undated tasks without reopening closed items or showing future plans',()=>{
  const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.taskHTML=t=>`<article>${t.title}</article>`;h.ctx.taskView='Inbox';
  const row=(id,category,extra={})=>({id,task_id:id,kind:'task',child_ids:['child-a'],closed:false,agenda:{category,box:'inbox',scheduled_on:'',published_on:'',...extra}});
  const rows=[row('assignment','homework'),row('undated-admin','todo'),row('legacy-admin',''),{...row('closed','homework'),closed:true},row('future-plan','todo',{scheduled_on:'2026-09-15'}),row('future-notice','homework',{published_on:'2026-09-15'}),{...row('other-child','todo'),child_ids:['child-b']}];
  d.tasks=rows.map(x=>({id:x.id,title:x.id,child:x.child_ids[0]==='child-a'?'小溪':'小岚',focus:{box:'inbox'}}));d.today_calendar={inbox:rows,agenda:[],events:[],timetables:[]};h.ctx.child='小溪';
- const today=h.ctx.todayTasksHTML();assert.match(today,/今日作业 · 0/);assert.match(today,/要办的事 · 2/);assert.match(today,/其他未完成作业 · 1/);assert.doesNotMatch(today,/today-backlog/);for(const id of ['undated-admin','legacy-admin']){assert.match(today,new RegExp('<article>'+id+'</article>'));assert.ok(today.indexOf('<article>'+id+'</article>')<today.indexOf('today-recent-homework'),'undated administration stays in the direct to-do list')};assert.doesNotMatch(today,/<article>(?:closed|future-plan|future-notice|other-child)<\/article>|待分类/);
- const inbox=h.ctx.taskInboxHTML();assert.match(inbox,/课内作业 · 2/);assert.match(inbox,/待办事项 · 3/);assert.match(inbox,/<article>future-plan<\/article>/);assert.doesNotMatch(inbox,/<article>closed<\/article>|待分类/);
- rows[0].closed=true;assert.match(h.ctx.todayTasksHTML(),/今日作业 · 0/);
+ const today=h.ctx.todayTasksHTML(),cards=todayCards(today);assert.deepEqual(todayCounts(cards),{today:0,todo:2,other:1});assert.doesNotMatch(today,/today-backlog/);for(const id of ['undated-admin','legacy-admin']){assert.match(today,new RegExp('<article>'+id+'</article>'));assert.ok(firstLayer(today).includes('<article>'+id+'</article>')&&cards.some(c=>c.id===id&&c.category==='todo'),'undated administration stays in the direct to-do list')};assert.doesNotMatch(today,/<article>(?:closed|future-plan|future-notice|other-child)<\/article>|待分类/);
+ const inbox=h.ctx.taskInboxHTML(),boxed=todayCards(inbox).filter(c=>c.kind!=='school');assert.equal(boxed.filter(c=>c.category==='homework').length,2);assert.equal(boxed.filter(c=>c.category==='todo').length,3);assert.match(inbox,/<article>future-plan<\/article>/);assert.doesNotMatch(inbox,/<article>closed<\/article>|待分类/);
+ rows[0].closed=true;{const after=h.ctx.todayTasksHTML();assert.equal(todayCounts(todayCards(after)).today,0);assert.doesNotMatch(after,/<article>assignment<\/article>/)}
 });
 test('today counts only current dated work and marks source gaps without changing the inbox',()=>{
  const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.taskHTML=t=>`<article>${t.title}</article>`;
@@ -262,7 +268,7 @@ test('today counts only current dated work and marks source gaps without changin
  const rows=[row('today',{due_on:d.today}),row('old'),row('future',{due_on:'2026-09-22'})];
  d.tasks=rows.map(x=>({id:x.id,title:x.id,child:'小溪'}));d.today_calendar={inbox:rows,events:[],timetables:[]};
  h.ctx.currentSources=()=>[{child_id:'child-a',unread_count:2,enabled:true}];h.ctx.currentSourceStatus=()=> '最近读取成功';
- const html=h.ctx.todayTasksHTML();assert.match(html,/今日作业 · 1/);assert.match(html,/其他未完成作业 · 2/);assert.doesNotMatch(html,/today-backlog/);assert.match(html,/部分消息原件尚未读全。/);assert.doesNotMatch(html,/data-collection-check/);assert.equal(h.ctx.taskBoxes().Inbox.length,3);
+ const html=h.ctx.todayTasksHTML(),counts=todayCounts(todayCards(html));assert.equal(counts.today,1);assert.equal(counts.other,2);assert.deepEqual(todayCards(html).filter(c=>c.today).map(c=>c.id),['today']);assert.doesNotMatch(html,/today-backlog/);assert.match(html,/部分消息原件尚未读全。/);assert.doesNotMatch(html,/data-collection-check/);assert.equal(h.ctx.taskBoxes().Inbox.length,3);
  h.ctx.currentSourceStatus=()=> '最近读取未成功';assert.match(h.ctx.todayTasksHTML(),/消息读取有缺口，作业可能缺项。/);assert.match(h.ctx.todayTasksHTML(),/data-collection-check/);
  h.ctx.child='小岚';assert.doesNotMatch(h.ctx.todayTasksHTML(),/作业可能缺项|原件尚未读全/);
 });
@@ -291,10 +297,10 @@ test('each selected child unfinished school homework stays visible across days',
  const row=(id,day,kind='school',owner='child-a',due='')=>({id,task_id:kind==='task'?id:'',kind,child_ids:[owner],title:id,closed:false,agenda:{category:'homework',box:'inbox',published_on:day,due_on:due,scheduled_on:''}});
  const rows=[row('due-today','2026-09-02','task','child-a',d.today),row('collected-undated','2026-09-07','task'),...Array.from({length:5},(_,n)=>row('same-day-'+n,'2026-09-07')),row('older','2026-09-02'),row('sibling','2026-09-06','task','child-b')];
  d.tasks=rows.filter(x=>x.kind==='task').map(x=>({id:x.id,title:x.title,source:'Agent建议:synthetic-school',child:x.child_ids[0]==='child-a'?'小溪':'小岚'}));d.today_calendar={inbox:rows,events:[],timetables:[]};
- const html=h.ctx.todayTasksHTML(),recent=html.split('today-recent-homework">')[1]?.split('</section>')[0]||'',backlog=html.split('today-backlog">')[1]?.split('</details>')[0]||'';
- assert.match(html,/今日作业 · 1/);
- for(const id of ['older','collected-undated','same-day-0','same-day-1','same-day-2','same-day-3','same-day-4']){assert.match(recent,new RegExp('data-notice="'+id+'"'));assert.equal((html.match(new RegExp('data-notice="'+id+'"','g'))||[]).length,1)}
- assert.doesNotMatch(backlog,/data-notice="older"/);assert.doesNotMatch(recent,/data-notice="due-today"/);
+ const html=h.ctx.todayTasksHTML(),cards=todayCards(html),recent=cards.filter(c=>c.category==='homework'&&!c.today).map(c=>c.id);
+ assert.equal(todayCounts(cards).today,1);
+ for(const id of ['older','collected-undated','same-day-0','same-day-1','same-day-2','same-day-3','same-day-4']){assert.ok(recent.includes(id)&&firstLayer(html).includes('data-notice="'+id+'"'),id);assert.equal((html.match(new RegExp('data-notice="'+id+'"','g'))||[]).length,1)}
+ assert.doesNotMatch(html,/today-backlog/);assert.ok(!recent.includes('due-today')&&cards.some(c=>c.id==='due-today'&&c.today));
  assert.doesNotMatch(html,/data-notice="sibling"/);h.ctx.child='小岚';const sibling=h.ctx.todayTasksHTML();assert.equal((sibling.match(/data-notice="sibling"/g)||[]).length,1);assert.doesNotMatch(sibling,/data-notice="collected-undated"|data-notice="same-day-\d"|data-notice="due-today"|data-notice="older"/);
 });
 
@@ -304,7 +310,7 @@ test('recent homework keeps each child confirmed work before their missing detai
  const confirmed=['confirmed-a','confirmed-b'],pending=['pending-a-18','pending-a-17'];
  const rows=[row(confirmed[0],'task','child-a','20'),row(confirmed[1],'task','child-b','19'),row(pending[0],'school','child-a','18'),row(pending[1],'school','child-a','17')];
  d.tasks=rows.filter(x=>x.kind==='task').map(x=>({id:x.id,title:x.title,source:'Agent建议:synthetic-school',child:x.child_ids[0]==='child-a'?'小溪':'小岚'}));d.today_calendar={inbox:rows,events:[],timetables:[]};
- const html=h.ctx.todayTasksHTML();assert.match(html,/today-recent-homework/);assert.match(html,/今日作业 · 0/);
+ const html=h.ctx.todayTasksHTML(),cards=todayCards(html);assert.deepEqual(cards.filter(c=>c.category==='homework'&&!c.today).map(c=>c.id).sort(),[confirmed[0],...pending].sort());assert.equal(todayCounts(cards).today,0);
  for(const id of [confirmed[0],...pending])assert.equal((html.match(new RegExp('data-notice="'+id+'"','g'))||[]).length,1,'each recent homework for this child appears once: '+id);assert.doesNotMatch(html,/data-notice="confirmed-b"/);
  for(const missing of pending)assert.ok(html.indexOf('data-notice="'+confirmed[0]+'"')<html.indexOf('data-notice="'+missing+'"'),'confirmed work stays ahead of the selected child missing details');
  h.ctx.child='小岚';const filtered=h.ctx.todayTasksHTML();assert.equal((filtered.match(/data-notice="confirmed-b"/g)||[]).length,1,'filtering the second child retains their recent homework');assert.doesNotMatch(filtered,/data-notice="confirmed-a"|data-notice="pending-a-18"|data-notice="pending-a-17"/);
@@ -314,7 +320,7 @@ test('a due review stays visible today even when the task is planned for a later
  const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.taskHTML=t=>`<article>${t.title}</article>`;
  d.tasks=[{id:'review',title:'虚构今日回看',focus:{mode:'later',review_on:d.today}},{id:'future',title:'虚构未来回看',focus:{mode:'later',review_on:'2026-09-12'}}];
  d.today_calendar={inbox:d.tasks.map(t=>({id:t.id,task_id:t.id,kind:'task',child_ids:['child-a'],closed:false,agenda:{category:'todo',box:'inbox',published_on:'2026-09-01',due_on:'',scheduled_on:'2026-09-15'}})),events:[],timetables:[]};
- const html=h.ctx.todayTasksHTML();assert.match(html,/今天回看 · 1/);assert.match(html,/<article>虚构今日回看<\/article>/);assert.doesNotMatch(html,/虚构未来回看/);assert.equal((html.match(/<article>虚构今日回看<\/article>/g)||[]).length,1);
+ const html=h.ctx.todayTasksHTML();assert.deepEqual(todayCards(html).map(c=>c.id),['review'],'the due review is listed on the first layer');assert.ok(firstLayer(html).includes('<article>虚构今日回看</article>'));assert.doesNotMatch(html,/虚构未来回看/);assert.equal((html.match(/<article>虚构今日回看<\/article>/g)||[]).length,1);
 });
 
 test('completion acknowledges both today and inbox without reloading all data',async()=>{
@@ -398,9 +404,9 @@ test('unfinished school homework remains exposed across publication days without
  const row=(id,day,extra={})=>({id,kind:'school',child_ids:['child-a'],title:id,closed:false,agenda:{category:'homework',box:'inbox',published_on:day,due_on:'',scheduled_on:''},...extra});
  const rows=[row('older-undated','2026-09-02'),row('newer-undated','2026-09-07'),row('older-overdue','2026-09-03',{agenda:{category:'homework',box:'inbox',published_on:'2026-09-03',due_on:'2026-09-04',scheduled_on:''}}),row('closed','2026-09-02',{closed:true}),row('sibling','2026-09-03',{child_ids:['child-b']})];
  d.today_calendar={inbox:rows,events:[],timetables:[]};h.ctx.child='小溪';
- const html=h.ctx.todayTasksHTML(),received=html.split('today-recent-homework">')[1]?.split('</section>')[0]||'';
- for(const id of ['older-undated','newer-undated','older-overdue']){assert.match(received,new RegExp('data-notice="'+id+'"'));assert.equal((html.match(new RegExp('data-notice="'+id+'"','g'))||[]).length,1)}
- assert.doesNotMatch(html,/data-notice="closed"|data-notice="sibling"/);assert.match(html,/今日作业 · 0/);
+ const html=h.ctx.todayTasksHTML(),cards=todayCards(html),received=cards.filter(c=>c.category==='homework'&&!c.today).map(c=>c.id);
+ for(const id of ['older-undated','newer-undated','older-overdue']){assert.ok(received.includes(id)&&firstLayer(html).includes('data-notice="'+id+'"'),id);assert.equal((html.match(new RegExp('data-notice="'+id+'"','g'))||[]).length,1)}
+ assert.doesNotMatch(html,/data-notice="closed"|data-notice="sibling"/);assert.equal(todayCounts(cards).today,0);
  assert.equal(rows[0].agenda.published_on,'2026-09-02');assert.equal(rows[0].agenda.due_on,'');assert.equal(rows[2].agenda.due_on,'2026-09-04');
 });
 
@@ -408,10 +414,10 @@ test('unfinished school homework due for review appears once in the direct revie
  const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.taskHTML=t=>'<article>'+t.title+'</article>';
  d.tasks=[{id:'review-homework',title:'虚构作业订正回看',source:'Agent建议:synthetic-school',focus:{mode:'later',review_on:d.today},child:'小溪'}];
  d.today_calendar={inbox:[{id:'review-homework',task_id:'review-homework',kind:'task',child_ids:['child-a'],closed:false,agenda:{category:'homework',box:'inbox',published_on:'2026-09-02',due_on:'',scheduled_on:''}}],events:[],timetables:[]};
- const html=h.ctx.todayTasksHTML();assert.match(html,/今天回看 · 1/);assert.match(html,/<article>虚构作业订正回看<\/article>/);
- assert.doesNotMatch(html.split('today-recent-homework">')[1]?.split('</section>')[0]||'',/虚构作业订正回看/);
+ const html=h.ctx.todayTasksHTML(),cards=todayCards(html);assert.deepEqual(cards.map(c=>[c.id,c.category,c.today]),[['review-homework','homework',false]],'the homework due for review is listed directly, not as due today');
+ assert.ok(firstLayer(html).includes('<article>虚构作业订正回看</article>'));
  assert.equal((html.match(/<article>虚构作业订正回看<\/article>/g)||[]).length,1,'one original homework must not appear twice');
- assert.match(html,/今日作业 · 0/);assert.equal(d.tasks[0].focus.review_on,d.today);
+ assert.equal(todayCounts(cards).today,0);assert.equal(d.tasks[0].focus.review_on,d.today);
 });
 
 // Shared task-list contract: known completion steps stay visible; group names stay in the original-message view.
@@ -451,9 +457,9 @@ test('all-date-unknown collected homework is exposed once for the selected child
  const row=(id,owner='child-a',when={})=>({id,task_id:id,kind:'task',child_ids:[owner],title:id,closed:false,agenda:{category:'homework',box:'inbox',published_on:'',due_on:'',scheduled_on:'',...when}});
  const rows=[...Array.from({length:8},(_,n)=>row('unknown-'+n)),row('other-child','child-b'),row('future-family','child-a',{scheduled_on:'2026-09-15'})];
  d.tasks=rows.map(x=>({id:x.id,title:x.title,source:'Agent建议:synthetic-school',child:x.child_ids[0]==='child-a'?'小溪':'小岚'}));d.today_calendar={inbox:rows,events:[],timetables:[]};
- const before=JSON.stringify(d),html=h.ctx.todayTasksHTML(),recent=html.split('today-recent-homework">')[1]?.split('</section>')[0]||'';
- assert.match(html,/今日作业 · 0/);assert.match(recent,/其他未完成作业 · 8/);
- for(let n=0;n<8;n++)assert.equal((recent.match(new RegExp('data-notice="unknown-'+n+'"','g'))||[]).length,1);
+ const before=JSON.stringify(d),html=h.ctx.todayTasksHTML(),recent=firstLayer(html);
+ assert.deepEqual(todayCounts(todayCards(html)),{today:0,todo:0,other:8});
+ for(let n=0;n<8;n++){assert.equal((recent.match(new RegExp('data-notice="unknown-'+n+'"','g'))||[]).length,1);assert.equal((html.match(new RegExp('data-notice="unknown-'+n+'"','g'))||[]).length,1)}
  assert.doesNotMatch(html,/today-backlog|data-notice="other-child"|data-notice="future-family"/);assert.equal(JSON.stringify(d),before,'display never invents dates or changes work');
 });
 
@@ -562,7 +568,7 @@ test('subject filing keeps each wrong question, its own correction and new quest
  const learning=readFileSync(__dirname+'/learning.js','utf8'),ctx=vm.createContext({});
  vm.runInContext(learning.slice(learning.indexOf('function learningCases('),learning.indexOf('function learningDateGap(')),ctx);
  vm.runInContext(source.slice(source.indexOf('const subjectGeneral='),source.indexOf('function subjectFiledHTML(')),ctx);
- const learningCases=vm.runInContext('learningCases',ctx),subjectFiled=vm.runInContext('subjectFiled',ctx);
+ const learningCases=vm.runInContext('learningCases',ctx),subjectFiled=vm.runInContext('subjectFiled',ctx),recordSubjectKey=vm.runInContext('recordSubjectKey',ctx),readingSubjectKey=vm.runInContext('readingSubjectKey',ctx);
  const rows=[
   {id:11,child:'甲',day:'2026-10-20',category:'学习进展',subject:'数学',title:'练习一 第3题',note:'知识点：进位加法',task_id:'T-MATH'},
   {id:12,child:'甲',day:'2026-10-20',category:'学习进展',subject:'数学',title:'练习一 第5题',note:'知识点：单位换算',task_id:'T-MATH'},
@@ -571,7 +577,8 @@ test('subject filing keeps each wrong question, its own correction and new quest
   {id:15,child:'甲',day:'2026-10-22',category:'学习进展',subject:'数学',title:'练习二 第3题',note:'知识点：进位加法'},
   {id:16,child:'甲',day:'2026-10-22',category:'学习进展',subject:'',title:'完成第3页'},
   {id:17,child:'乙',day:'2026-10-22',category:'学习进展',subject:'数学',title:'练习一 第3题'}];
- const before=JSON.stringify(rows),cases=learningCases(rows,'甲'),filed=subjectFiled(cases,g=>g.root.subject);
+ ctx.data={tasks:[],records:rows};
+ const before=JSON.stringify(rows),cases=learningCases(rows,'甲'),filed=subjectFiled(cases,g=>recordSubjectKey(g.root));
  assert.deepEqual(filed.map(([key,list])=>[key,list.map(g=>g.root.id).sort((a,b)=>a-b)]),[['数学',[11,12,15]],['科目待定',[16]]],'one subject section, three separate lines, unknown kept apart');
  assert.ok(cases.every(g=>g.items.every(r=>r.child==='甲')),'another child never enters the filing');
  const q3=cases.find(g=>g.root.id===11);
@@ -579,7 +586,23 @@ test('subject filing keeps each wrong question, its own correction and new quest
  assert.equal(q3.parents.get(q3.items[2]).id,11);assert.equal(q3.items[2].assistance,'独立尝试');
  assert.deepEqual(cases.find(g=>g.root.id===12).items.map(r=>r.id),[12],'question 5 borrows no correction from question 3');
  assert.deepEqual(cases.find(g=>g.root.id===15).items.map(r=>r.id),[15],'another paper with the same number is its own line');
- // The growth list files by each record's own saved subject: a linked record without one is not given 数学.
- assert.deepEqual(subjectFiled(rows.filter(r=>r.child==='甲'),r=>r.subject).map(([key,list])=>[key,list.map(r=>r.id)]),[['数学',[11,12,13,15]],['科目待定',[14,16]]]);
+ // Growth files the linked re-test without its own subject under its original question's 数学; the unlinked one stays 科目待定.
+ assert.deepEqual(subjectFiled(rows.filter(r=>r.child==='甲'),r=>recordSubjectKey(r)).map(([key,list])=>[key,list.map(r=>r.id)]),[['数学',[11,12,13,14,15]],['科目待定',[16]]]);
  assert.equal(JSON.stringify(rows),before,'filing writes no subject, note or relation back');
+ // Original homework feedback -> two wrong questions -> a correction, all saved without a subject, reach the same child's
+ // math task; a saved subject wins; missing, other-child, duplicated, conflicting or unknown links stay 科目待定.
+ const task=(id,child,agenda)=>({id,child,agenda}),known=s=>({subject_state:'known',subjects:[s]});
+ const tasks=[task('T-MATH','甲',known('数学')),task('T-OTHER','乙',known('语文')),task('T-DUP','甲',known('数学')),task('T-DUP','甲',known('英语')),task('T-GEN','甲',{subject_state:'general',subjects:[]}),task('T-UNK','甲',{subject_state:'unknown',subjects:[]})];
+ const rec=(id,extra)=>({id,child:'甲',day:'2026-10-24',category:'学习进展',subject:'',title:'记录'+id,source:'',...extra});
+ const linked=[rec(21,{source:'事项:T-MATH',followup_kind:'作业检查'}),rec(22,{source:'错题照片核对',linked_task_id:'T-MATH',title:'第3题'}),rec(23,{source:'错题照片核对',linked_task_id:'T-MATH',title:'第5题'}),
+  rec(24,{related_record_id:22,followup_kind:'订正',linked_task_id:'T-MATH'}),rec(25,{subject:'英语',linked_task_id:'T-MATH'}),rec(26,{related_record_id:25}),
+  rec(27,{linked_task_id:'T-OTHER'}),rec(28,{linked_task_id:'T-GONE'}),rec(29,{linked_task_id:'T-DUP'}),rec(30,{linked_task_id:'T-MATH',related_record_id:25}),
+  rec(31,{related_record_id:99}),rec(32,{linked_task_id:'T-GEN'}),rec(33,{linked_task_id:'T-UNK'}),rec(34,{title:'数学口算'}),{...rec(99,{subject:'数学'}),child:'乙'}];
+ ctx.data={tasks,records:linked};const saved=JSON.stringify(ctx.data);
+ assert.deepEqual(linked.map(r=>[r.id,recordSubjectKey(r)]),[[21,'数学'],[22,'数学'],[23,'数学'],[24,'数学'],[25,'英语'],[26,'英语'],[27,'科目待定'],[28,'科目待定'],[29,'科目待定'],[30,'科目待定'],[31,'科目待定'],[32,'综合事务'],[33,'科目待定'],[34,'科目待定'],[99,'数学']]);
+ assert.deepEqual(subjectFiled(linked.filter(r=>r.child==='甲'&&[22,23,24].includes(r.id)),r=>recordSubjectKey(r)).map(([key,list])=>[key,list.map(r=>r.id)]),[['数学',[22,23,24]]],'the two wrong questions and the correction stay three records');
+ // Reading follows its own subject, else the same child's source task; a book name in any language is never read.
+ const book=(subject,source_task_id,name)=>({child:'甲',subject,source_task_id,book:name});
+ assert.deepEqual([book('','T-MATH','English Reader'),book('','','英语分级读物 English'),book('','T-OTHER','语文课外读'),book('综合','T-MATH','自然观察'),book('语文','T-MATH','古诗'),book('','T-GEN','手工')].map(readingSubjectKey),['数学','科目待定','科目待定','综合事务','语文','综合事务']);
+ assert.equal(JSON.stringify(ctx.data),saved,'the projection writes nothing back');
 });
