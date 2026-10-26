@@ -113,7 +113,7 @@ function readingSubjectKey(t){return savedSubjectKey(t?.subject)||linkedTaskSubj
 function subjectFiledHTML(rows,keyOf,rowHTML,name){return subjectFiled(rows,keyOf).map(([key,list])=>`<section class="subject-filed" data-${name}="${esc(key)}"><h3 class="subject-filed-heading">${esc(key)} · ${list.length}</h3>${list.map(rowHTML).join('')}</section>`).join('')}
 // The kind is said once at the start of a run of same-kind cards; every card still carries its own kind for checks.
 function taskKindLabel(x){return x.kind==='event'||x.agenda?.box==='wish'?'':x.agenda?.category==='homework'||x.kind==='study'?'作业':'要办的事'}
-function taskKindHTML(x,previous){const label=taskKindLabel(x);return !label||previous&&taskKindLabel(previous)===label?'':`<p class="subject-item-kind" data-category="${x.agenda.category==='homework'?'homework':'todo'}">${label}</p>`}
+function taskKindHTML(x,previous){const label=taskKindLabel(x);return !label||previous&&taskKindLabel(previous)===label?'':`<p class="subject-item-kind" data-category="${label==='作业'?'homework':'todo'}">${label}</p>`}
 // data-today marks the cards the subject heading counts as 今天, so the first layer stays checkable inside each subject.
 function taskIsToday(x){return [x.agenda?.due_on,x.agenda?.scheduled_on,x.agenda?.complete_on].some(day=>exactTaskDay(day)===data.today)}
 function subjectItemHTML(x,i,list){return `<div class="subject-item" data-subject-item="${esc(x.id)}" data-category="${x.agenda?.category==='homework'?'homework':'todo'}" data-kind="${esc(x.kind)}"${taskIsToday(x)?' data-today':''}>${taskKindHTML(x,list[i-1])}${agendaItemHTML(x)}</div>`}
