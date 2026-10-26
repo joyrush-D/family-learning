@@ -407,7 +407,7 @@ class PointerBackIdentityHoldoutTests(unittest.TestCase):
                 self.setUp()
                 payload, refs = self._day([(self.R16[0][0], 'cn-teacher-a', first), (self.R16[1][0], 'cn-teacher-a', self.R16[1][1])])
                 result, rows, listed, _ = self._run(payload, self._r16(refs, first.rstrip('。')), case)
-                self.assertEqual((result['failed'], result['processed'], result['created']), (0, 2, 1))
+                self.assertEqual((result['failed'], result['processed'], len(rows)), (0, 2, 1))
                 item, = listed
                 self.assertEqual(item['publications'], refs, 'both originals stay cited')
                 self.assertIn('签字', item['body'])
@@ -419,7 +419,7 @@ class PointerBackIdentityHoldoutTests(unittest.TestCase):
             self._proposal('今晚朗读《暮色》3遍', refs[:1], '语文', '今晚朗读《暮色》3遍。'),
             self._proposal('抄写生字一遍', refs[1:], '语文', '抄写生字一遍。')], 'R16-missing-ids-own-actions')
         self.assertTrue(all('sender_id' not in m for m in payload['messages']))
-        self.assertEqual((result['failed'], result['processed'], result['created']), (0, 2, 2))
+        self.assertEqual((result['failed'], result['processed'], len(rows), len(listed)), (0, 2, 2, 2))
         self.assertEqual(sorted(i['publications'] for i in listed), [refs[:1], refs[1:]], 'each keeps only its own original')
         self._replay_adds_nothing('R16-missing-ids-own-actions')
 
