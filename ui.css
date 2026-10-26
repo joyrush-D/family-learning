@@ -225,3 +225,4 @@ body[data-page=sources] .source-cards{grid-template-columns:1fr}
 .subject-item-kind{margin:0 0 .15rem;font-size:.78rem;color:var(--muted,#6b6b6b);letter-spacing:.02em}
 .today-subject-note{margin:.25rem 0 .5rem}
 .subject-lesson{margin:.25rem 0}.calendar-day-timetables{margin-top:.75rem}
+.subject-filed+.subject-filed{margin-top:18px}.subject-filed-heading{font-size:15px;margin:10px 0 6px;padding-bottom:6px;border-bottom:1px solid var(--line)}.goal-subjects .toolbar{align-items:center;flex-wrap:wrap}.goal-subject-name{font-weight:650;min-width:4em}
