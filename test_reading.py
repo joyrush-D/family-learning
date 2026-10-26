@@ -74,7 +74,7 @@ class ReadingTests(unittest.TestCase):
         self.store=Store(self.connect,lambda:self.children,lambda:self.sources)
         reopened=next(t for t in self.store.snapshot()['tasks'] if t['id']==old['id'])
         self.assertEqual((reopened['subject'],reopened['version'],reopened['book']),('',old['version'],'English Picture Book'))
-        request=self.payload(book='虚构数学绘本',subject=' 数学 ',source_task_id='T01',stamps=1)
+        request=self.payload(book='虚构数学绘本',subject=' 数学 ',source_task_id='T01',stamps=1,scope='第一章',method='语音',criteria='分享一处发现')
         task=self.store.mutate('create',request)['task']
         self.assertEqual(task['subject'],'数学')
         self.assertEqual(self.store.mutate('create',dict(request))['task']['id'],task['id'],'a repeated request returns the saved task')
