@@ -368,6 +368,9 @@ def _attends(title,event):
     return bool(re.fullmatch(_ATTEND_TITLE+r'[^，,、；;。！!？?：:]*?'+name+joined+r'|'+name+r'(?:[，,、；;：:]*'+_ATTEND_TITLE+joined+r')?',words))
 
 
+_CARRIED=r'(?:带(?:上|好|齐)?|携带)(?![回到去来领着读])\s*[^\s，,]'
+
+
 def date_meaning(quote,due,published,title='',goal=''):
     """'event' when due is the arranged day of the held event this item's own action attends.
 
@@ -394,6 +397,10 @@ def date_meaning(quote,due,published,title='',goal=''):
         if roles and all(r=={'check'} for r in roles):return 'inspection'
         if (roles and all(r=={'handback'} for r in roles) and not any(re.search(r'之前|以前|前',c) for c in own)
                 and not any(re.search(r'不|没|无|未|别|勿|免',c[:re.search(r'上交|提交|交',c).start()]) for c in own)):return 'handback'
+        # Only carrying a thing of its own on that day, at its lesson or arrival (明天体育课带跳绳), is the day's arrangement:
+        # a day it must come before (11月5日前带跳绳), a negation, another predicate (准备好、不用带) or the work itself (明天带来)
+        # stays the deadline, and the parent's own plan day is never touched.
+        if own and not any(roles) and all(family_agent._school_native_errand(c,()) and re.search(_CARRIED,c) for c in own):return 'arranged'
         return 'deadline'
     if due not in _action_deadlines(quote,published):return 'event'
     words,placed=family_agent._school_own_words(quote,0,len(quote.rstrip('。；;！!？? \n')),title,goal)
