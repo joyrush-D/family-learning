@@ -556,3 +556,30 @@ test('a school review the model read as ready shows only the program gap on the 
  const unsafe='<b>老师</b>要求\n照原单作答',check=' <img src=x onerror=alert(1)>关联原件待核对。',escaped=h.ctx.agentItemHTML(variant({reason:unsafe+check},{school_selection_receipt:{...receipt,reason:unsafe}}),{compact:true,agenda});
  assert.doesNotMatch(escaped,/<b>|<img/);const {gap,more}=card(escaped);assert.equal(gap,'待补充：'+escape(check.trim()));assert.ok(more.includes(escape(unsafe+check)));
 });
+test('subject filing keeps each wrong question, its own correction and new question, and another paper apart',()=>{
+ // G02: one homework's two wrong questions on different knowledge points, a correction and an independent new question
+ // for one of them only, another paper with the same question number, an unsubjected record, and another child.
+ const learning=readFileSync(__dirname+'/learning.js','utf8'),ctx=vm.createContext({});
+ vm.runInContext(learning.slice(learning.indexOf('function learningCases('),learning.indexOf('function learningDateGap(')),ctx);
+ vm.runInContext(source.slice(source.indexOf('const subjectGeneral='),source.indexOf('function subjectFiledHTML(')),ctx);
+ const learningCases=vm.runInContext('learningCases',ctx),subjectFiled=vm.runInContext('subjectFiled',ctx);
+ const rows=[
+  {id:11,child:'甲',day:'2026-10-20',category:'学习进展',subject:'数学',title:'练习一 第3题',note:'知识点：进位加法',task_id:'T-MATH'},
+  {id:12,child:'甲',day:'2026-10-20',category:'学习进展',subject:'数学',title:'练习一 第5题',note:'知识点：单位换算',task_id:'T-MATH'},
+  {id:13,child:'甲',day:'2026-10-21',category:'学习进展',subject:'数学',title:'订正第3题',related_record_id:11,followup_kind:'订正',assistance:'提示后完成'},
+  {id:14,child:'甲',day:'2026-10-23',category:'学习进展',subject:'',title:'新题 38+5',related_record_id:11,followup_kind:'复测',assistance:'独立尝试',practice_relation:'相近的新题或新片段'},
+  {id:15,child:'甲',day:'2026-10-22',category:'学习进展',subject:'数学',title:'练习二 第3题',note:'知识点：进位加法'},
+  {id:16,child:'甲',day:'2026-10-22',category:'学习进展',subject:'',title:'完成第3页'},
+  {id:17,child:'乙',day:'2026-10-22',category:'学习进展',subject:'数学',title:'练习一 第3题'}];
+ const before=JSON.stringify(rows),cases=learningCases(rows,'甲'),filed=subjectFiled(cases,g=>g.root.subject);
+ assert.deepEqual(filed.map(([key,list])=>[key,list.map(g=>g.root.id).sort((a,b)=>a-b)]),[['数学',[11,12,15]],['科目待定',[16]]],'one subject section, three separate lines, unknown kept apart');
+ assert.ok(cases.every(g=>g.items.every(r=>r.child==='甲')),'another child never enters the filing');
+ const q3=cases.find(g=>g.root.id===11);
+ assert.deepEqual(q3.items.map(r=>r.id),[11,13,14],'the correction and the new question stay on question 3 only');
+ assert.equal(q3.parents.get(q3.items[2]).id,11);assert.equal(q3.items[2].assistance,'独立尝试');
+ assert.deepEqual(cases.find(g=>g.root.id===12).items.map(r=>r.id),[12],'question 5 borrows no correction from question 3');
+ assert.deepEqual(cases.find(g=>g.root.id===15).items.map(r=>r.id),[15],'another paper with the same number is its own line');
+ // The growth list files by each record's own saved subject: a linked record without one is not given 数学.
+ assert.deepEqual(subjectFiled(rows.filter(r=>r.child==='甲'),r=>r.subject).map(([key,list])=>[key,list.map(r=>r.id)]),[['数学',[11,12,13,15]],['科目待定',[14,16]]]);
+ assert.equal(JSON.stringify(rows),before,'filing writes no subject, note or relation back');
+});
