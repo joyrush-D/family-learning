@@ -1329,11 +1329,12 @@ class HandbackRoleTests(unittest.TestCase):
                 ('今晚请家长签好《活动回执》，由孩子明早交给班主任。', 'handback'),
                 ('数学作业是《数格练习册》第34页第1—4题，今晚完成，明天早上交。', 'handback'),
                 # A day the handback must come before is the ordinary deadline; a check stays a check; two roles on one
-                # day keep both obligations under the generic label; bringing an item is no handback.
+                # day keep both obligations under the generic label; bringing an item is no handback: it is that
+                # lesson day's arrangement (frozen T02 安排日), never a deadline.
                 ('请家长于10月22日前交回回执。', 'deadline'),
                 ('今晚将课本第20页的对话朗读三遍，请家长听完后在这一页签字，明天早读检查。', 'inspection'),
                 ('今晚完成练习册第3页，明天交回练习册，明天早读检查。', 'deadline'),
-                ('明天来校带一个空透明塑料瓶，科学课用。', 'deadline'),
+                ('明天来校带一个空透明塑料瓶，科学课用。', 'arranged'),
                 # Root's two pure-function counter-proofs on 9006d1a: 前 inside a 《》 title is no before-day, and a negation
                 # before the day and the handback (不用明天交回) states no handback at all, so it stays the generic label.
                 ('明天交回《前沿阅读》。', 'handback'),
