@@ -146,7 +146,9 @@ const taskStatus=task=>task.update?.status||task.original_status;
    const pending=async ids=>{
     assert.deepEqual((await todos.locator('[data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem))).sort(),[...ids].sort(),'all eligible pending admin notices are in the existing direct list');
     for(const id of ids){assert.equal(await notice(id).isVisible(),true);assert.equal(await notice(id).evaluate(x=>!!x.closest('details')),false,'pending notice needs no backlog expansion');assert.equal(await notice(id).locator('[data-check]').count(),0,'pending notice cannot be completed')}
-    assert.equal(await todos.locator('.review-link').innerText(),'待核对 '+ids.length);
+    const heads=await page.locator('#task-groups .subject-group').filter({has:page.locator('.subject-item[data-category="todo"][data-kind="school"]')}).evaluateAll(gs=>gs.map(g=>({badge:g.querySelector(':scope > .task-group-heading .review-link')?.innerText.trim()||'',school:g.querySelectorAll('.subject-item[data-kind="school"]').length,todo:g.querySelectorAll('.subject-item[data-kind="school"][data-category="todo"]').length})));
+    assert.equal(heads.reduce((n,g)=>n+g.todo,0),ids.length,'every pending admin notice is counted under its subject heading');
+    for(const g of heads)assert.equal(g.badge,'待核对 '+g.school,'each subject heading counts its own pending items');
    };
    const guards=async()=>{
     const visible=await page.locator('#content').innerText();

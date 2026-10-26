@@ -24,7 +24,7 @@ test('new notices do not hide older or undated pending administrative requiremen
  d.today_calendar.inbox.push(newer,unknown,...excluded);const before=JSON.stringify(d.today_calendar),html=h.ctx.todayTasksHTML(),todo=html.split('id="subject-科目待定"')[1].split('</section>')[0];
  for(const id of ['print-and-sign','activity-receipt','unknown-publication']){assert.match(todo,new RegExp('data-notice="'+id+'"'),'received pending administration is directly visible: '+id);assert.equal((html.match(new RegExp('data-notice="'+id+'"','g'))||[]).length,1)}
  // No subject in their own words: one 科目待定 section, never a parallel type section or a folded backlog; type stays on each card.
- assert.match(todo,/科目待定 · 0/);assert.match(todo,/待核对 3/);assert.equal((todo.match(/data-category="todo"/g)||[]).length,3);assert.doesNotMatch(html,/id="task-group-|today-backlog/);
+ assert.match(todo,/科目待定 · 0/);assert.match(todo,/待核对 3/);assert.equal((todo.match(/data-subject-item="[^"]+" data-category="todo"/g)||[]).length,3,'three pending cards, each typed as a todo');assert.equal((todo.match(/class="subject-item-kind" data-category="todo"/g)||[]).length,1,'consecutive todo cards share one type label, which is not a card');assert.doesNotMatch(html,/id="task-group-|today-backlog/);
  for(const x of excluded)assert.doesNotMatch(html,new RegExp('data-notice="'+x.id+'"'));
  assert.ok(todo.indexOf('data-notice="activity-receipt"')<todo.indexOf('data-notice="print-and-sign"'));assert.ok(todo.indexOf('data-notice="print-and-sign"')<todo.indexOf('data-notice="unknown-publication"'));
  assert.equal(JSON.stringify(d.today_calendar),before,'rendering preserves original dates, states and requirements');
@@ -287,7 +287,7 @@ test('agent-classified homework and notices share their subject section while ea
 
 test('agent accepted details contain only the current child after switching',()=>{
  const h=harness(),core=readFileSync(__dirname+'/app.js','utf8');h.ctx.data.agent={items:[{id:'accepted-a',state:'accepted',child_id:'child-a'},{id:'accepted-b',state:'accepted',child_id:'child-b'}]};
- Object.assign(h.ctx,{schoolInboxHTML:()=>'',agentStatusHTML:()=>'',agentPending:()=>[],agentItemHTML:x=>`<article data-test-accepted="${x.id}"></article>`,empty:()=>''});vm.runInContext(core.slice(core.indexOf('function agentPageHTML()'),core.indexOf('async function agentAction(')),h.ctx);
+ Object.assign(h.ctx,{schoolInboxHTML:()=>'',agentStatusHTML:()=>'',agentPending:()=>[],agentItemHTML:x=>`<article data-test-accepted="${x.id}"></article>`,empty:()=>''});vm.runInContext(core.slice(core.indexOf('function agentSubjectKey('),core.indexOf('async function agentAction(')),h.ctx);
  let html=h.ctx.agentPageHTML();assert.match(html,/最近加入的待办与依据/);assert.match(html,/data-test-accepted="accepted-a"/);assert.doesNotMatch(html,/data-test-accepted="accepted-b"/);
  h.ctx.selectChild('child-b');html=h.ctx.agentPageHTML();assert.match(html,/data-test-accepted="accepted-b"/);assert.doesNotMatch(html,/data-test-accepted="accepted-a"/);
 });
@@ -336,7 +336,7 @@ test('daily UI keeps collection navigation in inbox and pending notifications di
  const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.taskHTML=t=>`<article>${t.title}</article>`;h.ctx.taskView='Inbox';
  d.today_calendar={inbox:[],agenda:[],events:[],timetables:[]};
  assert.doesNotMatch(h.ctx.todayTasksHTML(),/data-task-box=/);assert.doesNotMatch(h.ctx.calendarHTML(),/data-task-box=/);
- assert.match(h.ctx.taskInboxHTML(),/data-task-box="Wish"/);assert.match(h.ctx.todayTasksHTML(),/href="#today-courses"/);assert.match(h.ctx.todayTasksHTML(),/当前没有已整理的未完成事项/);assert.doesNotMatch(h.ctx.todayTasksHTML(),/task-group-(?:homework|todo)/,'subject is the only first-level grouping');
+ assert.match(h.ctx.taskInboxHTML(),/data-task-box="Wish"/);{const courses=h.ctx.todayTasksHTML().split('id="today-courses"')[1]?.split('</section>')[0]||'';assert.match(courses,/今日课程与安排/);assert.match(courses,/data-page="calendar"/,'today courses keep the real calendar entry')}assert.match(h.ctx.todayTasksHTML(),/当前没有已整理的未完成事项/);assert.doesNotMatch(h.ctx.todayTasksHTML(),/task-group-(?:homework|todo)/,'subject is the only first-level grouping');
  const math={category:'homework',subjects:['数学'],subject_state:'known'},pending=id=>({id,kind:'school',child_ids:['child-a'],title:'虚构待核对要求',agenda:math}),confirmed={id:'synthetic-confirmed',task_id:'synthetic-confirmed',kind:'task',child_ids:['child-a'],agenda:math};d.tasks=[{id:confirmed.id,title:'虚构已确认作业'}];
  const grouped=h.ctx.taskGroupsHTML([pending('synthetic-pending'),confirmed,pending('synthetic-pending-2'),pending('synthetic-pending-3')],true);assert.match(grouped,/>数学 · 1/);assert.equal((grouped.match(/class="card agenda-group task-list subject-group"/g)||[]).length,1,'one subject, one section');assert.match(grouped,/href="#school-review-synthetic-pending">待核对 3/);assert.match(grouped,/id="school-review-synthetic-pending" data-query-target="school-review:synthetic-pending" tabindex="-1"/);assert.ok(grouped.indexOf('虚构已确认作业')<grouped.indexOf('id="school-review-synthetic-pending"'),'confirmed work remains visible before a long review queue');
  d.tasks=['poster','consent','page','english'].map(id=>({id,title:'虚构'+id}));const task=(id,agenda)=>({id,task_id:id,kind:'task',child_ids:['child-a'],agenda:{category:'homework',...agenda}});
@@ -579,15 +579,16 @@ test('subject filing keeps each wrong question, its own correction and new quest
   {id:17,child:'乙',day:'2026-10-22',category:'学习进展',subject:'数学',title:'练习一 第3题'}];
  ctx.data={tasks:[],records:rows};
  const before=JSON.stringify(rows),cases=learningCases(rows,'甲'),filed=subjectFiled(cases,g=>recordSubjectKey(g.root));
- assert.deepEqual(filed.map(([key,list])=>[key,list.map(g=>g.root.id).sort((a,b)=>a-b)]),[['数学',[11,12,15]],['科目待定',[16]]],'one subject section, three separate lines, unknown kept apart');
+ // The filing runs in its own VM: compare its plain JSON values, not the other realm's Array prototype.
+ assert.deepEqual(clean(filed.map(([key,list])=>[key,list.map(g=>g.root.id).sort((a,b)=>a-b)])),[['数学',[11,12,15]],['科目待定',[16]]],'one subject section, three separate lines, unknown kept apart');
  assert.ok(cases.every(g=>g.items.every(r=>r.child==='甲')),'another child never enters the filing');
  const q3=cases.find(g=>g.root.id===11);
- assert.deepEqual(q3.items.map(r=>r.id),[11,13,14],'the correction and the new question stay on question 3 only');
+ assert.deepEqual(clean(q3.items.map(r=>r.id)),[11,13,14],'the correction and the new question stay on question 3 only');
  assert.equal(q3.parents.get(q3.items[2]).id,11);assert.equal(q3.items[2].assistance,'独立尝试');
- assert.deepEqual(cases.find(g=>g.root.id===12).items.map(r=>r.id),[12],'question 5 borrows no correction from question 3');
- assert.deepEqual(cases.find(g=>g.root.id===15).items.map(r=>r.id),[15],'another paper with the same number is its own line');
+ assert.deepEqual(clean(cases.find(g=>g.root.id===12).items.map(r=>r.id)),[12],'question 5 borrows no correction from question 3');
+ assert.deepEqual(clean(cases.find(g=>g.root.id===15).items.map(r=>r.id)),[15],'another paper with the same number is its own line');
  // Growth files the linked re-test without its own subject under its original question's 数学; the unlinked one stays 科目待定.
- assert.deepEqual(subjectFiled(rows.filter(r=>r.child==='甲'),r=>recordSubjectKey(r)).map(([key,list])=>[key,list.map(r=>r.id)]),[['数学',[11,12,13,14,15]],['科目待定',[16]]]);
+ assert.deepEqual(clean(subjectFiled(rows.filter(r=>r.child==='甲'),r=>recordSubjectKey(r)).map(([key,list])=>[key,list.map(r=>r.id)])),[['数学',[11,12,13,14,15]],['科目待定',[16]]]);
  assert.equal(JSON.stringify(rows),before,'filing writes no subject, note or relation back');
  // Original homework feedback -> two wrong questions -> a correction, all saved without a subject, reach the same child's
  // math task; a saved subject wins; missing, other-child, duplicated, conflicting or unknown links stay 科目待定.
@@ -600,7 +601,7 @@ test('subject filing keeps each wrong question, its own correction and new quest
   rec(31,{related_record_id:99}),rec(32,{linked_task_id:'T-GEN'}),rec(33,{linked_task_id:'T-UNK'}),rec(34,{title:'数学口算'}),{...rec(99,{subject:'数学'}),child:'乙'}];
  ctx.data={tasks,records:linked};const saved=JSON.stringify(ctx.data);
  assert.deepEqual(linked.map(r=>[r.id,recordSubjectKey(r)]),[[21,'数学'],[22,'数学'],[23,'数学'],[24,'数学'],[25,'英语'],[26,'英语'],[27,'科目待定'],[28,'科目待定'],[29,'科目待定'],[30,'科目待定'],[31,'科目待定'],[32,'综合事务'],[33,'科目待定'],[34,'科目待定'],[99,'数学']]);
- assert.deepEqual(subjectFiled(linked.filter(r=>r.child==='甲'&&[22,23,24].includes(r.id)),r=>recordSubjectKey(r)).map(([key,list])=>[key,list.map(r=>r.id)]),[['数学',[22,23,24]]],'the two wrong questions and the correction stay three records');
+ assert.deepEqual(clean(subjectFiled(linked.filter(r=>r.child==='甲'&&[22,23,24].includes(r.id)),r=>recordSubjectKey(r)).map(([key,list])=>[key,list.map(r=>r.id)])),[['数学',[22,23,24]]],'the two wrong questions and the correction stay three records');
  // Reading follows its own subject, else the same child's source task; a book name in any language is never read.
  const book=(subject,source_task_id,name)=>({child:'甲',subject,source_task_id,book:name});
  assert.deepEqual([book('','T-MATH','English Reader'),book('','','英语分级读物 English'),book('','T-OTHER','语文课外读'),book('综合','T-MATH','自然观察'),book('语文','T-MATH','古诗'),book('','T-GEN','手工')].map(readingSubjectKey),['数学','科目待定','科目待定','综合事务','语文','综合事务']);

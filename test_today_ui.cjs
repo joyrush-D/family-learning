@@ -266,7 +266,7 @@ function fixtures(base){
     const recentNoticeOrder=()=>orderPage.locator('#task-groups .subject-item[data-category="todo"] [data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem));
     const olderNoticeOrder=()=>orderPage.locator('.today-backlog [data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem));
     assert.deepEqual(await taskOrder(),['DUE-TODAY']);
-    assert.equal(await orderPage.locator('.today-reviews [data-today-task="REVIEW-HOMEWORK"]').isVisible(),true);assert.equal(await orderPage.locator('[data-today-task="REVIEW-HOMEWORK"]').count(),1,'one original homework appears once when its review is due');
+    assert.equal(await orderPage.locator('#task-groups .subject-group .subject-item[data-kind="task"] [data-today-task="REVIEW-HOMEWORK"]').isVisible(),true);assert.equal(await orderPage.locator('[data-today-task="REVIEW-HOMEWORK"]').count(),1,'one original homework appears once when its review is due');
     assert.deepEqual(await earlierTasks(),[]);
     for(const id of ['DUE-RECENT','DUE-OLD','OLD'])assert.equal(await orderPage.locator('#task-groups .subject-item[data-category="homework"]:not([data-today]) [data-today-task="'+id+'"]').isVisible(),true,'unfinished school homework from older days is exposed');
     assert.equal(await orderPage.locator('#task-groups .subject-item[data-category="homework"][data-today]:not([data-kind="school"])').count(),1,'pending notices do not become confirmed homework');
@@ -277,7 +277,7 @@ function fixtures(base){
     await proof(orderPage,'recent-school-review-'+width);
     await fit(orderPage);await orderPage.reload({waitUntil:'load'});await ready(orderPage);
     assert.deepEqual(await taskOrder(),['DUE-TODAY'],'current-day count persists after reload');
-    assert.equal(await orderPage.locator('.today-reviews [data-today-task="REVIEW-HOMEWORK"]').isVisible(),true);assert.equal(await orderPage.locator('[data-today-task="REVIEW-HOMEWORK"]').count(),1,'direct review stays single after reopening');
+    assert.equal(await orderPage.locator('#task-groups .subject-group .subject-item[data-kind="task"] [data-today-task="REVIEW-HOMEWORK"]').isVisible(),true);assert.equal(await orderPage.locator('[data-today-task="REVIEW-HOMEWORK"]').count(),1,'direct review stays single after reopening');
     assert.deepEqual(await earlierTasks(),[],'unfinished school homework remains outside the folded backlog');
     for(const id of ['DUE-RECENT','DUE-OLD','OLD'])assert.equal(await orderPage.locator('#task-groups .subject-item[data-category="homework"]:not([data-today]) [data-today-task="'+id+'"]').isVisible(),true,'older unfinished homework survives reload');
     assert.deepEqual(await recentNoticeOrder(),['notice-4','notice-3','notice-2','notice-1','notice-0'],'complete source order persists after reload');
@@ -295,7 +295,7 @@ function fixtures(base){
     assert.equal(await received.locator('[data-today-task="COLLECTED-UNDATED"]').isVisible(),true);
     for(let n=0;n<5;n++){const candidate=received.locator('[data-agent-item="same-day-homework-'+n+'"]');assert.equal(await candidate.isVisible(),true,'all work from the same sending day is exposed');assert.equal(await candidate.locator('[data-check]').count(),0,'unresolved work cannot be marked complete')}
     assert.equal(await orderPage.locator('[data-today-task="COLLECTED-UNDATED"]').count(),1);
-    await fit(orderPage);await received.scrollIntoViewIfNeeded();await proof(orderPage,'all-received-homework-'+width);
+    await fit(orderPage);await received.first().scrollIntoViewIfNeeded();await proof(orderPage,'all-received-homework-'+width);
     await orderPage.reload({waitUntil:'load'});await ready(orderPage);assert.equal(await orderPage.locator('#task-groups .subject-item[data-category="homework"]:not([data-today]) [data-agent-item]').count(),5,'same-day homework stays available after reopening');
     checks.push({width,kind:'today-business-sort',confirmedDates:true,backfilledNoticeDates:true,reload:true,noOverflow:true});
    }finally{await orderPage.close()}

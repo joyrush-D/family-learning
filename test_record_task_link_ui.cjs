@@ -103,7 +103,12 @@ const fs=require('node:fs/promises'),path=require('node:path');(async()=>{let br
   // Same task shows the original record, image, transcript and provenance; no duplicate or task completion changes.
   const openOriginalTask=async()=>{await p.locator('nav [data-page=home]').click();await p.locator('nav [data-page="tasks"]').click();await p.locator('[data-task-box="全部"]').click();await p.locator('[data-task-box="已完成"]').click();await p.locator('[data-task="'+a.id+'"]').first().click();await p.locator('#taskDialog[open]').waitFor()};
   await openOriginalTask();
-  const history=p.locator('#taskFeedbackHistory');assert.match(await history.innerText(),/虚构核对转写/);assert.match(await history.innerText(),/试卷 \/ 作业核对/);assert.equal(await history.locator('img').count(),1);assert.equal(await history.locator('[data-task-feedback-edit]').count(),0);
+  const history=p.locator('#taskFeedbackHistory');assert.match(await history.innerText(),/虚构核对转写/);assert.match(await history.innerText(),/试卷 \/ 作业核对/);
+  // The saved record shows its original once, and the review picker shows the same original once as its selectable source; no other file appears.
+  const images=await history.locator('img').evaluateAll(xs=>xs.map(x=>{const pick=x.closest('[data-review-source]');return {src:x.getAttribute('src')||'',source:pick?.dataset.reviewSource||'',choice:pick?.querySelector('[data-homework-review-photo]')?.value||''}}));
+  assert.ok(images.length&&images.every(x=>x.src.endsWith('/upload/'+encodeURIComponent(up.attachment.id))),'every history image is the one saved original: '+JSON.stringify(images));
+  assert.equal(images.filter(x=>!x.source).length,1,'the saved record shows its original once');assert.deepEqual(images.filter(x=>x.source).map(x=>[x.source,x.choice]),[[up.attachment.id,up.attachment.id]],'the review picker offers the same original once');
+  assert.equal(await p.evaluate(async src=>(await fetch(src)).ok,images[0].src),true,'the parent session can open the shown original');assert.equal(await history.locator('[data-task-feedback-edit]').count(),0);
   assert.equal(await history.locator('[data-homework-review="'+id+'"]').count(),1,'explicitly linked ordinary answer is checkable from the same homework');
   assert.equal(await history.locator('[data-task-wrong-form="'+id+'"]').count(),1,'explicitly linked ordinary answer keeps the wrong-item entry');
   // The same saved ordinary answer uses the real review validator, feedback, wrong-item and correction endpoints.
