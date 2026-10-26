@@ -23,6 +23,47 @@ async function demoServer(){
  let server,browser;
  try{
   server=await demoServer();browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
+  // T02 as the real run_once saved it in a disposable Store, read through the real app HTTP server on 2026-11-04; the page
+  // writes nothing. Tomorrow's PE rope reads its lesson's 安排日 (no 截止/交回/完成/计划), tonight's English keeps its own day.
+  {
+   const probe=net.createServer();probe.listen(0,'127.0.0.1');await once(probe,'listening');const port=probe.address().port;await new Promise(r=>probe.close(r));
+   const env={...process.env};for(const k of Object.keys(env))if(k.startsWith('FAMILY_'))delete env[k];
+   const t02=spawn(process.env.FAMILY_TEST_PYTHON||'python3',['test_daily_list_frozen.py','--serve-t02',String(port)],{cwd:__dirname,env,stdio:['ignore','pipe','pipe']});
+   let err='';t02.stdout.resume();t02.stderr.on('data',b=>err=(err+b).slice(-4000));
+   const url='http://127.0.0.1:'+port+'/';
+   try{
+    await eventually(async()=>{if(t02.exitCode!==null)throw Error('T02 Store server exited: '+err);try{return (await fetch(url,{signal:AbortSignal.timeout(400)})).ok}catch{return false}},'T02 Store server',30000);
+    assert.equal((await(await fetch(url+'api/state')).json()).today,'2026-11-04','served as of the contract day');
+    for(const width of [360,1440]){
+     const p=await browser.newPage({viewport:{width,height:820}}),errors=[],writes=[];
+     p.on('pageerror',e=>errors.push(e.message));p.on('request',r=>{if(r.method()!=='GET')writes.push(r.method()+' '+r.url())});
+     try{
+      for(const pass of ['open','reopen','list','calendar']){
+       if(pass==='open')await p.goto(url,{waitUntil:'load'});else if(pass==='reopen')await p.reload({waitUntil:'load'});
+       if(pass!=='calendar')await eventually(async()=>await p.locator('#content').getAttribute('data-ready')==='true','T02 '+pass+' ready');
+       if(pass==='list'){await p.locator('nav [data-page="tasks"]').click();await p.locator('[data-task-box="全部"]').click();await eventually(async()=>/所有作业与待办/.test(await p.locator('#content h1').first().innerText()),'T02 all homework and todo')}
+       if(pass==='calendar')await p.locator('nav [data-page="calendar"]').click();
+       const cards=async()=>p.locator('.agenda-dates').evaluateAll(xs=>xs.filter(x=>x.offsetParent!==null).map(x=>{const c=x.closest('[data-query-target]')||x.parentElement;return {card:c.innerText,dates:x.innerText}}));
+       let rope=[],english=[];
+       await eventually(async()=>{const all=await cards();rope=all.filter(c=>/跳绳/.test(c.card));english=all.filter(c=>/Unit 5/.test(c.card));return rope.length>0&&(pass==='calendar'||english.length>0)},'T02 '+pass+' '+width+' cards');
+       for(const c of rope){
+        assert.match(c.dates,/安排日：2026-11-05/,pass+' '+width+' the rope reads its lesson day');
+        assert.doesNotMatch(c.dates,/截止|老师要求交回|老师检查|完成：|计划：/,pass+' '+width+' no deadline, handback, check, completion or made-up plan');
+        assert.match(c.card,/体育/);assert.doesNotMatch(c.card,/Unit 5|英语|在家训练/,pass+' '+width+' rope keeps only its own words');
+       }
+       for(const c of english){
+        assert.doesNotMatch(c.dates,/2026-11-05|安排日/,pass+' '+width+' English never borrows 11/5');assert.match(c.dates,/2026-11-04/);
+        assert.match(c.card,/英语/);assert.doesNotMatch(c.card,/跳绳/,pass+' '+width+' English keeps only its own words');
+       }
+       assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'no horizontal overflow');
+       if(process.env.TODAY_UI_PROOF_DIR&&['open','calendar'].includes(pass)){const pth=require('node:path');await require('node:fs/promises').mkdir(process.env.TODAY_UI_PROOF_DIR,{recursive:true});await p.screenshot({path:pth.join(process.env.TODAY_UI_PROOF_DIR,'t02-'+pass+'-'+width+'.png'),fullPage:true})}
+      }
+      assert.deepEqual(errors,[]);assert.deepEqual(writes,[],'reading the list and calendar writes nothing');
+     }finally{await p.close()}
+    }
+   }finally{if(t02.exitCode===null&&t02.signalCode===null){const end=once(t02,'exit');t02.kill('SIGINT');await Promise.race([end,delay(2500)]);if(t02.exitCode===null&&t02.signalCode===null){t02.kill('SIGKILL');await end}}}
+   console.log('PASS: T02 saved by run_once and served over HTTP: the PE rope reads 安排日：2026-11-05, English keeps 2026-11-04, open/reopen/list/calendar at 360 and 1440');
+  }
   const base=await(await fetch(server.url+'api/state')).json(),first=base.children[0],today='2026-10-07';
   const task=(id,title,action,complete_on,due_on)=>({id,child:first.name,title,due:due_on,original_status:'待跟进',source:'虚构班级群',action,history:[],
    agenda:{category:'homework',published_on:today,published_at:today+'T19:00:00+08:00',due_on,due_kind:'deadline',complete_on,scheduled_on:'',box:'inbox'}});

@@ -103,12 +103,17 @@ class DailyListFrozenTests(unittest.TestCase):
         self.assertEqual(on_day, [item['title']])
         self._replay_adds_nothing('T01')
 
-    def test_t02_independent_supply_is_its_own_admin_item_on_its_own_day(self):
+    def _t02_batch(self):
+        """T02's frozen message and its fixed fictional receipt: tonight's English reading and tomorrow's PE rope."""
         text = '今晚跟读Unit 5两遍；另外，明天体育课带跳绳，不要求在家训练。'
         payload, refs = self._day([('18:10', '老师乙', 'teacher-b', text)])
         reading = self._proposal('今晚跟读Unit 5两遍', refs, '英语', '今晚跟读Unit 5两遍。')
         rope = self._proposal('明天体育课带跳绳', refs, '', '11月5日体育课带跳绳；不要求在家训练。', due='2026-11-05', purpose='admin')
-        result, rows, listed, (on_day, visible) = self._run(payload, [reading, rope], 'T02')
+        return payload, [reading, rope]
+
+    def test_t02_independent_supply_is_its_own_admin_item_on_its_own_day(self):
+        payload, proposals = self._t02_batch()
+        result, rows, listed, (on_day, visible) = self._run(payload, proposals, 'T02')
         self.assertEqual((result['failed'], result['processed']), (0, 1))
         self.assertEqual(len(listed), 2)
         english, = [i for i in listed if 'Unit 5' in i['body']]
@@ -138,6 +143,19 @@ class DailyListFrozenTests(unittest.TestCase):
         self.assertEqual(meaning('明早检查跳绳'), 'inspection')
         self.assertNotEqual(meaning('明天英语课听写'), 'arranged')
         self.assertEqual(meaning('运动会定于11月5日举行，请家长参加', title='参加运动会'), 'event')
+
+    def test_t06_carrying_the_sheet_to_tomorrows_class_is_its_arranged_day(self):
+        """T06's date reading only; its unread attachment is a separate open question. 带去课堂的<thing> carries a thing of
+        its own to that day's lesson as T02's 带 does, so 11/5 is its arranged day. Without a thing of its own (the work
+        itself), before that day, negated, with another predicate or handed in, it is not."""
+        meaning = lambda quote, due='2026-11-05': family_agenda.date_meaning(quote, due, '2026-11-04')
+        self.assertEqual(meaning('附件是明天带去课堂的实验观察表，今晚不填'), 'arranged')
+        self.assertEqual(meaning('明天带去课堂的实验观察表'), 'arranged')
+        self.assertNotEqual(meaning('附件是明天带去课堂的实验观察表，今晚不填', '2026-11-04'), 'arranged', 'tonight is not tomorrow')
+        for quote in ('今晚完成练习，明天带去', '今晚填好观察表，明天带去课堂', '11月5日前带去课堂的实验观察表',
+                      '明天不用带去课堂的实验观察表', '明天带去课堂的观察表要填好', '明天把作品带去参加展览'):
+            self.assertEqual(meaning(quote), 'deadline', quote)
+        self.assertEqual(meaning('明天把观察表带去学校交给老师'), 'handback')
 
     def test_t03_same_subject_from_two_teachers_stays_two_signed_items(self):
         payload, refs = self._day([('18:20', '数学老师甲', 'math-teacher-a', '今晚做练习二第1、2题。'),
@@ -655,5 +673,50 @@ class RootRoleHoldoutTests(unittest.TestCase):
         self.assertEqual(family_agenda.deadline('孩子后天交给班主任或课代表', sent), '2026-11-06', 'a receiver choice names no day')
 
 
+def serve_t02(port):
+    """Browser fixture: T02 saved by the real run_once into this disposable Store, read through the real app HTTP server
+    as of 2026-11-04 20:00 Asia/Shanghai. Opening a page calls no model; no collector, device or household path is used."""
+    case = DailyListFrozenTests('test_t02_independent_supply_is_its_own_admin_item_on_its_own_day')
+    case.setUp()
+    try:
+        payload, proposals = case._t02_batch()
+        case._run(payload, proposals, 'T02-served')
+        app, fixed = case.app, case.now
+
+        def deny(*args, **kwargs):
+            raise AssertionError('opening the list or calendar must not call a model')
+        app.family_llm._chat_json = deny
+
+        class FrozenDateTime(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                value = fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
+                return cls(value.year, value.month, value.day, value.hour, value.minute, value.second, tzinfo=value.tzinfo)
+
+            def date(self):
+                return FrozenDate(self.year, self.month, self.day)
+
+        class FrozenDate(dt.date):
+            @classmethod
+            def today(cls):
+                return cls(fixed.year, fixed.month, fixed.day)
+        dt.datetime, dt.date = FrozenDateTime, FrozenDate
+        app.prepare_assets()
+        server = app.ThreadingHTTPServer(('127.0.0.1', port), app.Handler)
+        print('T02 Store served', flush=True)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.server_close()
+    finally:
+        case.doCleanups()
+
+
 if __name__ == '__main__':
-    unittest.main()
+    import sys
+    if sys.argv[1:2] == ['--serve-t02']:
+        serve_t02(int(sys.argv[2]))
+    else:
+        unittest.main()
