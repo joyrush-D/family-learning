@@ -475,9 +475,15 @@ def completion_words(quote,header,day,action):
 
 
 def deadline(text,published):
-    """Only an unambiguous deadline phrase; several different dates need review."""
+    """Only an unambiguous deadline phrase; several different dates need review, and so does a day the clause stating it
+    leaves to choose (孩子明早或后天交给班主任, family_agent._SCHOOL_DAY_OR): the parse recognizes only one of its options.
+    Another clause's choice (今晚或明晚请家长签字) or one between receivers names no day, so an explicit single day is kept."""
     candidates=deadlines(text,published)
-    return next(iter(candidates)) if len(candidates)==1 else ''
+    if len(candidates)!=1:return ''
+    value=next(iter(candidates))
+    if any(value in deadlines(clause,published) and re.search(family_agent._SCHOOL_DAY_OR,_titles_read_as_objects(clause))
+           for clause in re.split(r'[，,。；;！!？?\n]',text or '')):return ''
+    return value
 
 
 _EXAM_RE = re.compile(r'测验|测试|考试|单元测|小测|月考|期中|期末|检测|统考|联考|水平测|质检|摸底')

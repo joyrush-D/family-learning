@@ -2434,24 +2434,25 @@ def _school_own_clause_dates(quote,cited,others):
     return _school_own_dates(_school_corrected_quote(quote,homes[0],cited),published)-later_dropped_days(quote,text[start:],published)
 
 
-# One closed choice a parent ticks between quoted options (勾选‘参加’或‘不参加’, 圈选“美术”、“篮球”或“合唱”).
-_SCHOOL_CHOICE_OPTION=r'‘[^‘’]{1,12}’|“[^“”]{1,12}”|「[^「」]{1,12}」|『[^『』]{1,12}』'
+# One closed choice a parent ticks between quoted options (勾选‘参加’或‘不参加’, 圈选“美术”、“篮球”或“合唱”), of any length
+# inside its own sentence.
+_SCHOOL_CHOICE_OPTION=r'‘[^‘’。；;！!？?\n]+’|“[^“”。；;！!？?\n]+”|「[^「」。；;！!？?\n]+」|『[^『』。；;！!？?\n]+』'
 _SCHOOL_CHOICE=(r'(?:'+_SCHOOL_CHOICE_OPTION+r')(?:\s*[、/]\s*(?:'+_SCHOOL_CHOICE_OPTION+r'))*\s*(?:或者|或是|或)\s*(?:'
                 +_SCHOOL_CHOICE_OPTION+r')')
 
 
 def _school_choices_read(text):
-    """text with each choice between quoted options read as one object (选项): its 或 joins two answers, not two days.
+    """text with each choice between quoted options read as one object (选项), or None when its options may set this item's role.
 
-    Only options naming no day, role verb, change, condition or question are a choice; 明早或后天交, 家长或孩子签字, an unquoted
-    参加或不参加 or ‘明天参加’或‘后天参加’ keep their 或, which still leaves the day unknown.
+    The options are the answers the parent picks, not this item's time: a day inside one (‘明天出发’或‘后天出发’) is the
+    activity's, so this item's days are only those its own words state outside the options, and none there leaves it unknown.
+    Options naming this item's own role (‘明早交’或‘后天交’, ‘同意签字’), a change, condition, question or another 或 may decide
+    its role or day, so they return None.
     """
-    def choice(found):
-        options=re.findall(_SCHOOL_CHOICE_OPTION,found[0])
-        if any(re.search(_SCHOOL_ANY_DAY+r'|交|检查|完成|做完|写完|读完|签字|或|'+_SCHOOL_CHANGE+'|'+_SCHOOL_NATIVE_UNSETTLED,o)
-               for o in options):return found[0]
-        return '选项'
-    return re.sub(_SCHOOL_CHOICE,choice,text)
+    choices=[re.findall(_SCHOOL_CHOICE_OPTION,found[0]) for found in re.finditer(_SCHOOL_CHOICE,text)]
+    if any(re.search(r'交|检查|完成|做完|写完|读完|签字|或|'+_SCHOOL_CHANGE+'|'+_SCHOOL_NATIVE_UNSETTLED,o) for c in choices for o in c):
+        return None
+    return re.sub(_SCHOOL_CHOICE,'选项',text)
 
 
 def _school_role_days(quote,cited,others):
@@ -2490,7 +2491,10 @@ def _school_role_days(quote,cited,others):
                          for c in re.split(r'[，,]',following[0].strip('。；;！!？? \n'))):
         end+=following.end()
     span=_school_choices_read(text[head:end])
-    if re.search(_SCHOOL_DEFERRED+r'|取消|改为|改到|改成|推迟|延期|顺延|更正|待定|另行通知|或者|或|如果|若|可能|大概|左右|[？?]',span):return None
+    # Only a 或 a day borders leaves this item's day to choose (_SCHOOL_DAY_OR); one between answers, people, receivers or ways
+    # (勾选参加或不参加, 交给班主任或课代表) is kept in its words for the family and names no day.
+    if span is None or re.search(_SCHOOL_DEFERRED+r'|取消|改为|改到|改成|推迟|延期|顺延|更正|待定|另行通知|'+_SCHOOL_DAY_OR
+                                 +r'|或许|也许|如果|若|可能|大概|左右|[？?]',span):return None
     for other in others:  # Another proposal quoting any of this range makes it shared, not this item's own.
         at=0
         while other and (at:=text.find(other,at))!=-1:
@@ -2509,9 +2513,9 @@ def _school_role_days(quote,cited,others):
             roles=_school_clause_roles(clause) if own_day else set()
             sent_work=(own_day==published and not re.search(r'交|检查',clause) and re.search(work,_titles_read_as_objects(clause)))
             # A dated step with no role of its own (今晚请家长在《研学活动回执》勾选选项) ends in the same sentence's directly
-            # following undated 然后/再 step that only finishes it (然后签字): that is its finish on its day, never a day of its own.
-            step=bool(own_day and not roles and not sent_work and n+1<len(clauses)
-                      and re.match(r'\s*(?:然后|随后|接着|再|并且|并)',clauses[n+1]) and not re.search(day,clauses[n+1])
+            # following undated step that only finishes it (然后签字, 签字后拍照上传), with or without a connector: that is its
+            # finish on its day, never a day of its own.
+            step=bool(own_day and not roles and not sent_work and n+1<len(clauses) and not re.search(day,clauses[n+1])
                       and _school_clause_roles(clauses[n+1])=={'finish'})
             if own_day and (roles or sent_work or step):
                 # A role clause's own predicate after its day and only its asker, actor or place (请家长今晚在《秋游意见回执》上签字)
@@ -2532,6 +2536,10 @@ def _school_role_days(quote,cited,others):
 
 # Any day a text names: a date, a month-day, a numbered day, a relative, recurring or week day (_SCHOOL_ROLE_DAY).
 _SCHOOL_ANY_DAY=r'\d{1,2}\s*[日号]|今天|今日|今晚|明天|明日|明早|明晚|后天|昨天|前天|每天|每晚|(?:周|星期|礼拜)[一二三四五六日天]|\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}'
+# A 或 a day borders (明早或后天交, 今晚或明晚签字, 明天交或后天交, 拍照上传或明早交纸质版) leaves the day to choose; one joining
+# two answers, people, receivers or ways (参加或不参加, 家长或孩子, 班主任或课代表) names no day of its own.
+_SCHOOL_DAY_OR=(r'(?:'+_SCHOOL_ANY_DAY+r')\s*(?:早上|早晨|上午|中午|下午|晚上|早读|课前|放学前?|到校后?|之前|以前|前)?\s*[’”」』]?\s*'
+                r'(?:或者|或是|或(?!许))|(?:或者|或是|或(?!许))\s*[‘“「『]?\s*(?:在|于)?\s*(?:'+_SCHOOL_ANY_DAY+r')')
 
 
 def _school_list_heading_day(quote,cited,others=()):
