@@ -5,8 +5,6 @@ import hashlib
 import json
 import re
 
-import family_agenda
-
 
 class FocusError(ValueError):
     def __init__(self, message, status=400, code='invalid_task_focus'):
@@ -47,6 +45,15 @@ def advance(c, task_id, updated, scheduled_on):
               (task_id,*(focus[key] for key in fields)))
 
 
+def parse_subjects(value):
+    """A parent's subject choice: empty (automatic), 综合 (no subject) or up to three course names."""
+    parts=[p.strip() for p in re.split(r'[·、,，/+＋\s]+',str(value or '')) if p.strip()]
+    if not parts: return ''
+    if parts==['综合']: return '综合'
+    if '综合' in parts or len(parts)>3 or len(set(parts))!=len(parts) or any(len(p)>12 for p in parts): raise ValueError(value)
+    return '·'.join(parts)
+
+
 def _text(obj, key, limit):
     value=obj.get(key,'')
     if not isinstance(value,str) or len(value)>limit or any(ord(c)<32 and c not in '\n\t' or ord(c)==127 for c in value):
@@ -85,7 +92,7 @@ def save(app, obj, connection=None, *, allow_closed=False):
     if details.get('box','inbox') not in ('inbox','wish'): raise FocusError('请选择收集箱或心愿清单')
     if 'subject' in obj:
         # A parent's explicit course choice outranks the automatic reading; empty reopens it, 综合 says it has none.
-        try: details['subject']=family_agenda.parse_subjects(_text(obj,'subject',40))
+        try: details['subject']=parse_subjects(_text(obj,'subject',40))
         except ValueError: raise FocusError('科目请填写最多三个科目名称，或填写“综合”；留空按原消息归类') from None
     organization.update(details)
     digest=hashlib.sha256(json.dumps(dict(id=ident,version=version,**focus,**organization),ensure_ascii=False,sort_keys=True).encode()).hexdigest()

@@ -1,5 +1,6 @@
 """Calendar views of existing tasks, school inbox and study sessions; no copied tasks."""
 import datetime as dt
+import functools
 import json
 import re
 import family_agent
@@ -525,28 +526,24 @@ def task_category(title,purpose=None):
 # Every tracked item is filed under the courses its own words name. The school's native learning subjects come first; the
 # other school courses keep their own admin items (体育课带跳绳) without making them learning work. A teacher, class
 # representative or other recipient (交给数学课代表、英语老师) only addresses the item and never names its subject.
-SUBJECTS=family_agent._SCHOOL_NATIVE_SUBJECTS+'|道德与法治|体育|美术|音乐|信息科技|劳动|书法'
+_OTHER_COURSES='道德与法治|体育|美术|音乐|信息科技|劳动|书法'
 GENERAL='综合'
-_SUBJECT_RE=re.compile(SUBJECTS)
-_ADDRESSEE_RE=re.compile('(?:'+SUBJECTS+')(?:课代表|老师|教师|组长)')
+
+
+@functools.cache
+def _subject_patterns():
+    # Read on first use: family_agent imports this module before its own subject list exists.
+    names=family_agent._SCHOOL_NATIVE_SUBJECTS+'|'+_OTHER_COURSES
+    return re.compile(names),re.compile('(?:'+names+')(?:课代表|老师|教师|组长)')
 _ADMIN_TITLE_RE=re.compile(r'打印|报名|缴费|回执|签字|签署|署名|登记|同意书|确认书|请假|接送|家长会|带|携带|准备|交费')
 
 
 def named_subjects(text):
     """The subjects an item's own words file it under, in order and without repeats."""
-    seen=[]
-    for m in _SUBJECT_RE.finditer(_ADDRESSEE_RE.sub('',re.sub(r'^待核对[：:]?\s*','',text or ''))):
+    seen=[];subject,addressee=_subject_patterns()
+    for m in subject.finditer(addressee.sub('',re.sub(r'^待核对[：:]?\s*','',text or ''))):
         if m[0] not in seen:seen.append(m[0])
     return seen
-
-
-def parse_subjects(value):
-    """A parent's subject choice: empty (automatic), 综合 (no subject) or up to three course names."""
-    parts=[p.strip() for p in re.split(r'[·、,，/+＋\s]+',str(value or '')) if p.strip()]
-    if not parts:return ''
-    if parts==[GENERAL]:return GENERAL
-    if GENERAL in parts or len(parts)>3 or len(set(parts))!=len(parts) or any(len(p)>12 for p in parts):raise ValueError(value)
-    return '·'.join(parts)
 
 
 def subject_fields(title,quote='',*,purpose=None,saved='',corrected='',category='',confirmed=False):
