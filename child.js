@@ -71,6 +71,13 @@ function studyDays(item) {
 // The same read-only projection as the parent's card (source_task_action_lines): the saved action's own lines without
 // words this card's title already shows; the saved action itself is unchanged. A next step identical to the saved
 // action is that action and reads once; a different next step stays above it.
+// The child's own list is filed in one flat level by the subject each item was saved with, written as saved (a custom
+// course keeps its name); an item saved without one stays 科目待定 and is never guessed. Card order inside stays the same.
+function studySubjectSections(items) {
+  const groups = new Map();
+  for (const item of items) { const key = String(item.subject || '').trim() || '科目待定'; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(item); }
+  return [...groups].sort(([a],[b]) => Number(a==='科目待定')-Number(b==='科目待定')).map(([key,list]) => `<section class="study-subject" data-subject="${esc(key)}"><h3 class="study-subject-title">${esc(key)} · ${list.length}</h3>${list.map(studyCard).join('')}</section>`).join('');
+}
 function studyRequirementHTML(item) {
   const lines = Array.isArray(item.source_task_action_lines) ? item.source_task_action_lines : String(item.source_task_action || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
   const next = item.source_task_next_action !== item.source_task_action ? item.source_task_next_action : '', label = next ? '要求：' : '<strong>要做：</strong>';
@@ -96,7 +103,7 @@ function renderStudy() {
   if (!data) { $('study-summary').replaceChildren(); $('study-items').replaceChildren(); $('study-add').hidden = true; lockStudy(); return; }
   const d = data.day, s = data.summary, otherActive = data.active_item && data.active_item.day !== d.day;
   $('study-summary').innerHTML = `${otherActive?`<p class="notice error">${esc(data.active_item.day)} 的“${esc(data.active_item.title)}”还在计时。<br><button type="button" data-study-day="${esc(data.active_item.day)}">打开那天，暂停并核对</button></p>`:''}<div class="study-summary"><span>${esc(s.unfinished_count ?? data.items.filter(i=>i.result!=='完成').length)} 项尚需跟进</span>${d.stop_time?`<span>停止学习 <strong>${esc(d.stop_time)}</strong></span>`:''}${d.bed_time?`<span>准备睡觉 <strong>${esc(d.bed_time)}</strong></span>`:''}</div>${s.warning?`<p class="notice error">${esc(s.warning)}</p>`:''}`;
-  $('study-items').innerHTML = [...data.items].sort((a,b) => Number(b.status==='running')-Number(a.status==='running') || Number(b.editable)-Number(a.editable)).map(studyCard).join('') || '<p class="empty">今天还没有功课记录。先说一项要做的事吧。</p>';
+  $('study-items').innerHTML = studySubjectSections([...data.items].sort((a,b) => Number(b.status==='running')-Number(a.status==='running') || Number(b.editable)-Number(a.editable))) || '<p class="empty">今天还没有功课记录。先说一项要做的事吧。</p>';
   $('study-add').hidden = study.day !== today();
   for (const [name,value] of Object.entries(study.add)) if ($('study-add').elements[name]) $('study-add').elements[name].value = value;
   renderStudyEditor(); lockStudy(); tickStudy();
