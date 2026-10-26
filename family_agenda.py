@@ -526,42 +526,60 @@ def task_category(title,purpose=None):
 # Every tracked item is filed under the courses its own words name. The school's native learning subjects come first; the
 # other school courses keep their own admin items (体育课带跳绳) without making them learning work. A teacher, class
 # representative or other recipient (交给数学课代表、英语老师) only addresses the item and never names its subject.
+# The list only recognises a course word where that word ends: 美术史 or 科学馆 is its own noun, never 美术 or 科学, and a
+# course the family saved under its own name (美术史) is kept as written instead of being cut to a listed one.
 _OTHER_COURSES='道德与法治|体育|美术|音乐|信息科技|劳动|书法'
+_LONGER_NOUN='史馆家展会节院系界角团社'
 GENERAL='综合'
+# Only the item's own non-course matter says it has no subject. An admin or optional purpose, a signing step or a parent's
+# to-do category is what the item is for, never proof that it belongs to no course (老师发的卷子上签字 stays 科目待定).
+_NO_SUBJECT_RE=re.compile(r'同意书|确认书|回执|报名|缴费|交费|请假|接送|家长会|校外|参观|体检')
 
 
 @functools.cache
 def _subject_patterns():
     # Read on first use: family_agent imports this module before its own subject list exists.
     names=family_agent._SCHOOL_NATIVE_SUBJECTS+'|'+_OTHER_COURSES
-    return re.compile(names),re.compile('(?:'+names+')(?:课代表|老师|教师|组长)')
-_ADMIN_TITLE_RE=re.compile(r'打印|报名|缴费|回执|签字|签署|署名|登记|同意书|确认书|请假|接送|家长会|带|携带|准备|交费')
+    return re.compile('(?:'+names+')(?!['+_LONGER_NOUN+'])'),re.compile('(?:'+names+')(?:课代表|老师|教师|组长)'),re.compile(names)
 
 
 def named_subjects(text):
     """The subjects an item's own words file it under, in order and without repeats."""
-    seen=[];subject,addressee=_subject_patterns()
+    seen=[];subject,addressee,_=_subject_patterns()
     for m in subject.finditer(addressee.sub('',re.sub(r'^待核对[：:]?\s*','',text or ''))):
         if m[0] not in seen:seen.append(m[0])
     return seen
 
 
-def subject_fields(title,quote='',*,purpose=None,saved='',corrected='',category='',confirmed=False):
+def saved_subjects(value):
+    """Saved course names as written. 道德与法治 or 美术史 stays one course; only a joint 科学与美术 of listed courses splits."""
+    whole=_subject_patterns()[2];out=[]
+    for part in re.split(r'[·、,，/+＋\s]+',value or ''):
+        pieces=re.split(r'[与和及]',part)
+        out.extend(pieces if len(pieces)>1 and all(whole.fullmatch(p) for p in pieces) else [part] if part else [])
+    return list(dict.fromkeys(out))
+
+
+def subject_fields(title,quote='',*,saved='',corrected='',no_subject=False):
     """File one item once under its own subjects, never by merging, sibling words or guessing.
 
     A parent's correction wins and can be cleared to reopen the automatic reading. Then a subject saved with the item
     (the school's learning subject, a child's or parent's capture), then the item's own title, then its own original
-    words. Without any of them an item known to carry no subject (an admin, optional or family to-do) is 综合 and
-    everything else stays 科目待定; a cross-subject item keeps all its subjects on the one card."""
+    words. A saved learning subject names only the learning outcome: when the item's own title names that subject together
+    with other courses, the one joint result keeps all of them on its one card. Without any subject an item is 综合 only
+    on positive evidence (its own non-course matter, or a family plan that names no course); everything else is 科目待定."""
     if corrected:
         return dict(subjects=[],subject_state='general',subject_basis='parent') if corrected==GENERAL else \
             dict(subjects=corrected.split('·'),subject_state='known',subject_basis='parent')
-    saved=[s for s in re.split(r'[·、,，/+＋\s]+',saved or '') if s]
-    for basis,subjects in (('saved',saved),('own_words',named_subjects(title)),('own_words',named_subjects(quote))):
-        if subjects:return dict(subjects=subjects,subject_state='known',subject_basis=basis)
-    if purpose in ('admin','optional'):general=True
-    elif purpose in ('learning','unknown'):general=False
-    else:general=category=='todo' and (confirmed or bool(_ADMIN_TITLE_RE.search(title or '')))
+    saved=saved_subjects(saved);title=title or ''
+    if saved:
+        rest=title
+        for s in saved:rest=rest.replace(s,'·')
+        joint=[s for s in named_subjects(rest) if s not in saved] if all(s in title for s in saved) else []
+        return dict(subjects=saved+joint,subject_state='known',subject_basis='saved')
+    for subjects in (named_subjects(title),named_subjects(quote)):
+        if subjects:return dict(subjects=subjects,subject_state='known',subject_basis='own_words')
+    general=no_subject or bool(_NO_SUBJECT_RE.search(title+'\n'+(quote or '')))
     return dict(subjects=[],subject_state='general' if general else 'unknown',subject_basis='')
 
 
@@ -817,8 +835,7 @@ def enrich(app,c,tasks):
         if teacher.get('handback_on'):task['agenda']['due_kind']='handback'
         if teacher.get('complete_on'):
             task['agenda']['complete_on']=teacher['complete_on'];task['agenda'].pop('complete_words',None)
-        task['agenda'].update(subject_fields(subject_title,own_quote,purpose=purpose,saved=saved_subject,corrected=(task.get('focus') or {}).get('subject',''),
-                                             category=task['agenda'].get('category',''),confirmed=bool(task['agenda'].get('category_confirmed'))))
+        task['agenda'].update(subject_fields(subject_title,own_quote,saved=saved_subject,corrected=(task.get('focus') or {}).get('subject','')))
         # Only a card that leaves repeated words out carries its own lines; every other task keeps its exact shape and
         # its card reads the saved lines as they are.
         lines=action_lines(task['title'],task.get('action',''),task['agenda'].get('complete_words'))
@@ -866,8 +883,7 @@ def snapshot(app,start,end):
                 m=metadata(app,c,row['child_id'],row['title'],row['due'],refs,publication_ref=family_agent.school_original_publication_ref(store,c,row),
                            date_quote=_stored_date_quote(plan),goal=str(brief.get('goal') or ''),date_header=_stored_date_header(plan,_stored_date_quote(plan)))
                 m['category']=category
-                m.update(subject_fields(row['title'],_stored_date_quote(plan),purpose=purpose,saved=str((plan.get('school_learning') or {}).get('subject') or ''),
-                                        category=category,confirmed=bool(m.get('category_confirmed'))))
+                m.update(subject_fields(row['title'],_stored_date_quote(plan),saved=str((plan.get('school_learning') or {}).get('subject') or '')))
                 items.append(dict(id=row['id'],task_id='',kind='school',child_ids=[row['child_id']],title=row['title'],
                     agenda=m,status='待核对',closed=False,closed_on='',body=row['body']))
         study=[]
@@ -878,7 +894,7 @@ def snapshot(app,start,end):
                     title=row['title'],status=row['status'],result=row['result'],result_actor=dict(row).get('result_actor','parent'))
                 if start<=row['day']<=end:study.append(entry)
                 if not row['task_id']:
-                    items.append(dict(entry,agenda=dict(category='homework',published_on='',due_on='',scheduled_on=row['day'],**subject_fields(row['title'],saved=row['subject'],category='homework')),
+                    items.append(dict(entry,agenda=dict(category='homework',published_on='',due_on='',scheduled_on=row['day'],**subject_fields(row['title'],saved=row['subject'])),
                         closed=row['result']=='完成' and entry['result_actor']=='parent',closed_on=row['day']))
         plans=[]
         if 'calendar_events' in tables:
@@ -889,7 +905,7 @@ def snapshot(app,start,end):
                 if event['occurrence']:
                     event['occurrence']=dict(event['occurrence'],version=event['version'],series_version=parents[event['occurrence']['series_id']]['version'])
                 plans.append(dict(id='calendar:'+event['id'],task_id='',kind='event',child_ids=event['child_ids'],title=event['title'],
-                    agenda=dict(category='todo',published_on='',due_on='',scheduled_on=event['day'],**subject_fields(event['title'],category='todo',confirmed=True)),closed=event['status'] in ('cancelled','completed'),event=event))
+                    agenda=dict(category='todo',published_on='',due_on='',scheduled_on=event['day'],**subject_fields(event['title'],no_subject=True)),closed=event['status'] in ('cancelled','completed'),event=event))
     first=dt.date.fromisoformat(start);count=(dt.date.fromisoformat(end)-first).days+1
     agenda=[]
     for offset in range(count):

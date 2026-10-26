@@ -1,6 +1,8 @@
 """Synthetic inbox-to-calendar workflow, without a model or message collector."""
 import datetime as dt
 import json
+import threading
+from http.client import HTTPConnection
 from pathlib import Path
 import tempfile
 import unittest
@@ -106,7 +108,7 @@ class AgendaTest(unittest.TestCase):
         base=dict(id=ident,mode='next',next_action='',waiting_for='',review_on='')
         version=task['focus']['version']
         with app.connect() as c:before='\n'.join(c.iterdump())
-        for bad in ('数学·数学','综合·数学','一·二·三·四'):
+        for bad in ('数学·数学','综合·数学','长'*13):
             with self.assertRaises(focus.FocusError):focus.save(app,dict(base,version=version,request_key='synthetic-subject-bad-'+str(len(bad)),subject=bad))
         with self.assertRaises(focus.FocusError) as stale:focus.save(app,dict(base,version=version+5,request_key='synthetic-subject-stale',subject='数学'))
         self.assertEqual(stale.exception.status,409)
@@ -125,6 +127,57 @@ class AgendaTest(unittest.TestCase):
         self.assertEqual((auto['agenda']['subjects'],auto['agenda']['subject_basis']),(['科学'],'saved'))
         legacy=focus.save(app,dict(base,version=auto['focus']['version'],request_key='synthetic-subject-old-client',next_action='先读题'))['task']
         self.assertEqual(legacy['agenda']['subjects'],['科学'])  # An old client without the field keeps the saved choice.
+
+    def test_subject_reading_keeps_a_joint_result_admin_purpose_and_whole_course_names_apart(self):
+        stamp='2026-11-04T19:00:00+08:00'
+        rows=self.school_items(stamp,[('科学老师','科学和美术共同完成一张校园树叶海报；数学做练习五第2题；英语跟读Unit 7。'),('老师丙','请在老师发的卷子上签字，明天交。'),
+                                      ('班主任','请家长在校外活动同意书上勾参加或不参加并签字，明天交回。'),('老师丁','阅读美术史小故事一篇。')],
+            [('科学、美术：共同完成一张海报','learning','1','科学'),('数学：练习五第2题','learning','1','数学'),('英语：跟读Unit 7','learning','1','英语'),
+             ('卷子签字交回','admin','2',''),('校外活动同意书签字交回','admin','3',''),('阅读美术史小故事','unknown','4','')])
+        poster,math,english,paper,consent,history=rows
+        # The saved learning subject names the learning outcome only; the item's own title keeps both courses of its one poster.
+        self.assertEqual((poster['agenda']['subjects'],poster['agenda']['subject_state']),(['科学','美术'],'known'))
+        self.assertEqual([math['agenda']['subjects'],english['agenda']['subjects']],[['数学'],['英语']])  # Siblings never inherit each other's courses.
+        snap=app.calendar_snapshot('2026-11-04','2026-11-04')
+        self.assertEqual(len([x for x in snap['inbox'] if x['id']==poster['id']]),1)
+        # An admin purpose is what the item is for, not proof of no subject; only its own non-course matter is.
+        self.assertEqual((paper['agenda']['subject_state'],paper['agenda']['subjects'],paper['agenda']['category']),('unknown',[],'todo'))
+        self.assertEqual((consent['agenda']['subject_state'],consent['agenda']['subjects']),('general',[]))
+        # A listed course word inside a longer noun is not that course; a saved course keeps its whole name.
+        self.assertEqual((history['agenda']['subject_state'],history['agenda']['subjects']),('unknown',[]))
+        self.assertEqual(agenda.named_subjects('美术史手抄报；科学馆参观'),[])
+        self.assertEqual(agenda.named_subjects('道德与法治：交通安全'),['道德与法治'])
+        self.assertEqual([agenda.saved_subjects(x) for x in ('美术史','道德与法治','科学与美术','科学·美术·音乐·劳动')],[['美术史'],['道德与法治'],['科学','美术'],['科学','美术','音乐','劳动']])
+        self.assertEqual(agenda.subject_fields('美术史：读书报告',saved='美术史')['subjects'],['美术史'])
+        # A parent's to-do category is not a subject check, and an own family plan naming no course stays general.
+        todo=app.new_task(dict(child='示例甲',title='准备材料',action='准备好',due='',category='todo',request_key='synthetic-subject-family-todo'))['id']
+        self.assertEqual(next(x for x in app.calendar_snapshot('2026-11-04','2026-11-04')['inbox'] if x['id']==todo)['agenda']['subject_state'],'unknown')
+        self.assertEqual(agenda.subject_fields('游泳',no_subject=True)['subject_state'],'general')
+
+    def test_subject_correction_over_http_replays_a_lost_receipt_and_reopens(self):
+        server=app.ThreadingHTTPServer(('127.0.0.1',0),app.Handler);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        self.addCleanup(server.server_close);self.addCleanup(server.shutdown)
+        def request(path,obj=None):
+            c=HTTPConnection('127.0.0.1',server.server_port,timeout=10)
+            try:
+                c.request('GET' if obj is None else 'POST',path,None if obj is None else json.dumps(obj,ensure_ascii=False),
+                          {} if obj is None else {'X-Family-Token':app.TOKEN,'Content-Type':'application/json'})
+                r=c.getresponse();return r.status,json.loads(r.read())
+            finally:c.close()
+        ident=app.new_task(dict(child='示例甲',title='科学、美术：共同完成一张海报',action='完成海报',due='',category='homework',request_key='synthetic-subject-http-poster'))['id']
+        def task():return next(t for t in request('/api/state')[1]['tasks'] if t['id']==ident)
+        first=task();self.assertEqual(first['agenda']['subjects'],['科学','美术'])
+        with patch.object(app.family_llm,'_chat_json',side_effect=AssertionError('No model when filing a subject')):
+            base=dict(id=ident,version=first['focus']['version'],request_key='synthetic-subject-http-fix',mode='next',next_action='',waiting_for='',review_on='',subject='美术史')
+            code,saved=request('/api/task/focus',base);self.assertEqual(code,200,saved)
+            self.assertEqual((saved['task']['agenda']['subjects'],saved['task']['agenda']['subject_basis']),(['美术史'],'parent'))
+            # The receipt was lost: the same key and body replay the one change instead of writing it twice.
+            code,again=request('/api/task/focus',base);self.assertEqual(code,200,again);self.assertTrue(again['request_replayed'])
+            self.assertEqual(request('/api/task/focus',dict(base,subject='数学'))[0],409)
+            self.assertEqual(request('/api/task/focus',dict(base,request_key='synthetic-subject-http-stale',subject='数学'))[0],409)
+            reopened=task();self.assertEqual((reopened['agenda']['subjects'],reopened['focus']['version']),(['美术史'],first['focus']['version']+1))
+            code,auto=request('/api/task/focus',dict(base,version=reopened['focus']['version'],request_key='synthetic-subject-http-auto',subject=''));self.assertEqual(code,200,auto)
+            self.assertEqual(task()['agenda']['subjects'],['科学','美术'])
 
     def test_task_carries_until_closed_and_undated_stays_inbox(self):
         result=self.organize();self.assertEqual(result['focus']['version'],1)
