@@ -369,6 +369,9 @@ def _attends(title,event):
 
 
 _CARRIED=r'(?:带(?:上|好|齐)?|携带)(?![回到去来领着读])\s*[^\s，,]'
+# The same carrying with the lesson named first (T06: 附件是明天带去课堂的实验观察表): a thing of its own after 的, no other predicate.
+_CARRIED_TO=(r'(?:(?:附件|这份?|此表)(?:是|为)\s*)?(?:'+family_agent._SCHOOL_NATIVE_DATE+r'|明早)\s*(?:(?:早上|上午|中午|下午)\s*)?(?:要|需|须|请)?\s*'
+             r'带去(?:课堂|教室|学校|[一-鿿]{1,4}课)上?的\s*(?:(?!填|写|做|完成|交|签|订正|背|读|练|准备)[^\s，,])+')
 
 
 def date_meaning(quote,due,published,title='',goal=''):
@@ -400,7 +403,8 @@ def date_meaning(quote,due,published,title='',goal=''):
         # Only carrying a thing of its own on that day, at its lesson or arrival (明天体育课带跳绳), is the day's arrangement:
         # a day it must come before (11月5日前带跳绳), a negation, another predicate (准备好、不用带) or the work itself (明天带来)
         # stays the deadline, and the parent's own plan day is never touched.
-        if own and not any(roles) and all(family_agent._school_native_errand(c,()) and re.search(_CARRIED,c) for c in own):return 'arranged'
+        if own and not any(roles) and all(family_agent._school_native_errand(c,()) and re.search(_CARRIED,c) or re.fullmatch(_CARRIED_TO,c.strip())
+                                          for c in own):return 'arranged'
         return 'deadline'
     if due not in _action_deadlines(quote,published):return 'event'
     words,placed=family_agent._school_own_words(quote,0,len(quote.rstrip('。；;！!？? \n')),title,goal)
