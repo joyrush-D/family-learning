@@ -351,6 +351,98 @@ class ContinuedSupplementVariantTests(unittest.TestCase):
         self.assertIn('学校补充要求未归到对应作业', error)
 
 
+class PointerBackIdentityHoldoutTests(unittest.TestCase):
+    """Root's R16 holdout and its neighbours, fictional, on the same run_once→Store→calendar path: one shared nickname
+    proves no publisher, so a follow-up pointing back (刚刚的朗读还要家长签字) joins an earlier message's item only from the
+    same stable sender id and source and the one message it can mean. A missing or another id, another source or an
+    unclear object keeps the whole batch for the existing retry (no new budget, nothing saved, originals kept); a sole
+    message without an id still stands as its own action. Fixed receipts prove only the program layer."""
+    setUp, _use_replies, _proposal = DailyListFrozenTests.setUp, DailyListFrozenTests._use_replies, DailyListFrozenTests._proposal
+    _report, _run, _replay_adds_nothing, _job = (DailyListFrozenTests._report, DailyListFrozenTests._run,
+                                                 DailyListFrozenTests._replay_adds_nothing, DailyListFrozenTests._job)
+    _rejected = ContinuedSupplementVariantTests._rejected
+    R16 = (('18:00', '今晚朗读《暮色》3遍。'), ('18:01', '刚刚的朗读还要家长签字。'))
+
+    def _day(self, messages, day='2026-11-04'):
+        """messages: (HH:MM, stable sender id or None when missing, text), all sent under one shared nickname."""
+        payload = self.fixture.payload(cursor=str(100 + len(messages)))
+        payload['messages'] = [dict(id=str(101 + i), message_order=str(101 + i), time=day + 'T' + hm + ':00+08:00', kind='text',
+                                    sender='虚构语文老师', text=text, unread=False, **({'sender_id': p} if p else {}))
+                               for i, (hm, p, text) in enumerate(messages)]
+        self.store.ingest(payload)
+        return payload, ['message:' + self.source['id'] + ':' + m['id'] for m in payload['messages']]
+
+    def _r16(self, refs, quote='今晚朗读《暮色》3遍'):
+        """R16-fixed-exchange.json's one receipt: one reading-and-signature item citing every given original."""
+        return [fixtures.school_proposal(
+            title_quote=quote, evidence=[dict(ref=r) for r in refs], learning_subject='语文', task_title='语文：' + quote,
+            task_goal=quote + '；朗读后家长签字。', task_state='ready', task_reason='虚构固定回执，只验校验/保存/展示。',
+            task_purpose='learning')]
+
+    def _held(self, ids, first, case):
+        error = self._rejected([(hm, i, text) for (hm, text), i in zip(((self.R16[0][0], first), self.R16[1]), ids)],
+                               lambda refs: self._r16(refs, first.rstrip('。')), case)
+        self.assertIn('学校补充要求未归到对应作业', error)
+
+    def test_r16_one_nickname_without_sender_ids_merges_nothing(self):
+        self._held((None, None), self.R16[0][1], 'R16-missing-ids')
+
+    def test_one_nickname_with_one_missing_sender_id_merges_nothing(self):
+        self._held((None, 'cn-teacher-a'), self.R16[0][1], 'R16-first-id-missing')
+
+    def test_one_nickname_with_the_later_sender_id_missing_merges_nothing(self):
+        self._held(('cn-teacher-a', None), self.R16[0][1], 'R16-later-id-missing')
+
+    def test_one_nickname_with_another_sender_id_merges_nothing(self):
+        self._held(('cn-teacher-a', 'cn-teacher-b'), self.R16[0][1], 'R16-other-id')
+
+    def test_one_nickname_with_another_sender_id_merges_nothing_outside_the_ledger(self):
+        # A sole noun-first reading stays with the general reader, the path R16 itself took.
+        self._held(('cn-teacher-a', 'cn-teacher-b'), '《暮色》朗读3遍。', 'R16-other-id-noun-first')
+
+    def test_the_same_stable_sender_id_keeps_one_item_with_both_originals(self):
+        for first, case in (('今晚朗读《暮色》3遍。', 'R16-same-id'), ('《暮色》朗读3遍。', 'R16-same-id-noun-first')):
+            with self.subTest(case):
+                self.doCleanups()
+                self.setUp()
+                payload, refs = self._day([(self.R16[0][0], 'cn-teacher-a', first), (self.R16[1][0], 'cn-teacher-a', self.R16[1][1])])
+                result, rows, listed, _ = self._run(payload, self._r16(refs, first.rstrip('。')), case)
+                self.assertEqual((result['failed'], result['processed'], result['created']), (0, 2, 1))
+                item, = listed
+                self.assertEqual(item['publications'], refs, 'both originals stay cited')
+                self.assertIn('签字', item['body'])
+                self._replay_adds_nothing(case)
+
+    def test_messages_without_sender_ids_still_stand_as_their_own_actions(self):
+        payload, refs = self._day([('18:00', None, self.R16[0][1]), ('18:01', None, '抄写生字一遍。')])
+        result, rows, listed, _ = self._run(payload, [
+            self._proposal('今晚朗读《暮色》3遍', refs[:1], '语文', '今晚朗读《暮色》3遍。'),
+            self._proposal('抄写生字一遍', refs[1:], '语文', '抄写生字一遍。')], 'R16-missing-ids-own-actions')
+        self.assertTrue(all('sender_id' not in m for m in payload['messages']))
+        self.assertEqual((result['failed'], result['processed'], result['created']), (0, 2, 2))
+        self.assertEqual(sorted(i['publications'] for i in listed), [refs[:1], refs[1:]], 'each keeps only its own original')
+        self._replay_adds_nothing('R16-missing-ids-own-actions')
+
+    def test_the_shared_check_needs_the_one_same_source_message_it_names(self):
+        sent = dt.datetime(2026, 11, 4, 18, tzinfo=agent.TZ)
+
+        def unproven(*rows):
+            evidence = [dict(ref='message:%s:%d' % (source, 101 + i), text=text, time=(sent + dt.timedelta(minutes=i)).isoformat(),
+                             publisher=publisher, kind='text', content_incomplete=False, unread=False, attachments=[],
+                             message_order=str(101 + i)) for i, (source, publisher, text) in enumerate(rows)]
+            return agent._school_native_pointer_unproven(evidence, {e['ref'] for e in evidence})
+        g, a, follow = 'synthetic-group', 'publisher:a', self.R16[1][1]
+        self.assertFalse(unproven((g, a, '《暮色》朗读3遍。'), (g, a, follow)))
+        for rows in (((g, '', '《暮色》朗读3遍。'), (g, '', follow)),  # one nickname, both ids missing
+                     ((g, a, '《暮色》朗读3遍。'), (g, 'publisher:b', follow)),  # another id
+                     ((g, a, '《暮色》朗读3遍。'), ('synthetic-other', a, follow)),  # another source
+                     ((g, a, '《暮色》背诵3遍。'), (g, a, follow)),  # an object no cited original names
+                     ((g, a, '《暮色》朗读3遍。'), (g, a, '《春》朗读1遍。'), (g, a, follow))):  # two it could mean
+            self.assertTrue(unproven(*rows), rows)
+        self.assertFalse(unproven((g, '', follow)), 'a follow-up cited alone keeps the general checks')
+        self.assertFalse(unproven((g, '', '今晚朗读《暮色》3遍。'), (g, '', '抄写生字一遍。')), 'no pointer, no new check')
+
+
 class ReplySlipChoiceVariantTests(unittest.TestCase):
     """Fictional variants of T10's shared cause, not frozen contract cases, on the same run_once→Store→calendar path: a choice
     between answers, people or receivers (quoted or not, options of any length, the activity's own days inside options) and

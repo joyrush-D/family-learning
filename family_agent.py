@@ -4601,6 +4601,30 @@ def _school_native_continued(entry,later):
     return '',found[1],found[1]+found[2]
 
 
+# A message opening by pointing back to an object sent before it (刚刚的朗读…, 上面布置的练习卷…).
+_SCHOOL_NATIVE_POINTER=r'^\s*(?:刚才|刚刚|上面|前面|之前)\s*(?:布置|发)?\s*的'
+
+
+def _school_native_pointer_unproven(evidence,refs):
+    """True when one task cites a follow-up pointing back to an object together with another message, while no positive
+    identity proves the one message it means.
+
+    The ledger binds such a follow-up only under _school_native_continued; outside it the same identity holds: the same
+    stable publisher and source sent the one earlier complete text naming that object, and this task cites it. A shared
+    nickname, two missing publishers, another teacher or source, an object no such message names, or two it could mean
+    leave the model's merge unproven, and the whole batch keeps the existing retry. A follow-up cited alone and every other
+    message keep the general checks, so a sole message without a publisher still stands as its own action.
+    """
+    cited=[e for e in evidence if e['ref'] in refs]
+    for later in cited:
+        if len(cited)<2 or not re.match(_SCHOOL_NATIVE_POINTER,later['text']):continue
+        named=re.match(_SCHOOL_NATIVE_POINTER+r'\s*([^，,。；;：:！!？?\n的]{2,20}?)\s*(?:还|也|要|需|请|得|[，,。；;：:！!？?\n]|$)',later['text'])
+        meant=[e for e in evidence if named and e is not later and e.get('kind','text')=='text' and named[1] in e['text']
+               and not re.match(_SCHOOL_NATIVE_POINTER,e['text']) and _school_native_later_text(e,later)]
+        if len(meant)!=1 or meant[0]['ref'] not in refs:return True
+    return False
+
+
 def _school_native_shared_later(entry,evidence,own):
     """The source's very next message, when it is wholly one positive common standard for this list's every outcome.
 
@@ -5296,6 +5320,11 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         if native_actions:
             proposal,native_action=_school_native_bind(proposal,native_actions,native_assigned,{e['ref']:e for e in evidence},native_spans)
             due=proposed_due=proposal['due']
+        # Without the ledger's bound supplement, a pointed-back follow-up joins another message only under the same positive
+        # identity; the model's merge alone, e.g. across one shared nickname, is no proof.
+        if (routing and not native_action and proposal['task_state']!='reference'
+                and _school_native_pointer_unproven(evidence,{q['ref'] for q in cited})):
+            raise AgentError('学校补充要求未归到对应作业，整批保留重试',code='school_action_coverage')
         # The ledger keeps no single administrative or unlisted clause; a complete original is no proof its shorter summary
         # kept every part its compound sentence states, learning or administrative. The goals this batch gives that one
         # message (one combined task or several) must keep each part, name, count, role and signer; otherwise the whole batch
