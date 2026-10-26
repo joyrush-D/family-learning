@@ -254,9 +254,10 @@ class DailyListFrozenTests(unittest.TestCase):
 
 class ReplySlipChoiceVariantTests(unittest.TestCase):
     """Fictional variants of T10's shared cause, not frozen contract cases, on the same run_once→Store→calendar path: a choice
-    between quoted options and the same item's undated 然后/再 signing step keep both role days; a real day alternative, a
-    condition, options naming days or another item's day still leave the day unknown. Fixed receipts again prove only the
-    program layer."""
+    between answers, people or receivers (quoted or not, options of any length, the activity's own days inside options) and
+    the same item's undated signing step (with or without 然后/再) keep both role days; a real day alternative, a condition,
+    options naming this item's own role or day, or another item's day still leave the day unknown. Fixed receipts again
+    prove only the program layer."""
     setUp, _use_replies, _day, _proposal = (DailyListFrozenTests.setUp, DailyListFrozenTests._use_replies,
                                             DailyListFrozenTests._day, DailyListFrozenTests._proposal)
     _report, _run, _replay_adds_nothing = DailyListFrozenTests._report, DailyListFrozenTests._run, DailyListFrozenTests._replay_adds_nothing
@@ -301,9 +302,11 @@ class ReplySlipChoiceVariantTests(unittest.TestCase):
         self._unknown('今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；孩子明早或后天交给班主任。', 'V-day-alternative',
                       '今晚家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；孩子11月5日或6日交给班主任。')
 
-    def test_options_naming_days_stay_unknown(self):
-        self._unknown('今晚请家长在《研学活动回执》勾选‘明天出发’或‘后天出发’，然后签字；孩子明早交给班主任。', 'V-day-options',
-                      '今晚家长在《研学活动回执》勾选‘明天出发’或‘后天出发’，然后签字；' + self.HANDBACK)
+    def test_options_naming_the_activitys_days_keep_the_slips_own_roles(self):
+        # Revised negative control (Root P5): the days inside ‘明天出发’或‘后天出发’ are the trip's answer, not this slip's; its
+        # own 今晚…签字 and 明早交 stay outside the options. Options naming this slip's own role or day stay unknown below.
+        self._both_roles('今晚请家长在《研学活动回执》勾选‘明天出发’或‘后天出发’，然后签字；孩子明早交给班主任。', 'V-day-options',
+                         '今晚家长在《研学活动回执》勾选‘明天出发’或‘后天出发’，然后签字；' + self.HANDBACK, ('‘明天出发’', '‘后天出发’'))
 
     def test_a_conditional_handback_stays_unknown(self):
         self._unknown('今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；如果参加，孩子明早交给班主任。', 'V-condition',
@@ -328,7 +331,15 @@ class ReplySlipChoiceVariantTests(unittest.TestCase):
         positives = ('今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；孩子明早交给班主任。',
                      '今晚请家长在《午餐意向单》勾选“同意”或“不同意”，然后签字；孩子明早交给班主任。',
                      '今晚请家长在《社团报名表》圈选‘美术’、‘篮球’或者‘合唱’，再签字；孩子明早交给班主任。',
-                     '今晚请家长核对《通讯录信息表》，然后签字；孩子明早交回。')
+                     '今晚请家长核对《通讯录信息表》，然后签字；孩子明早交回。',
+                     # Revised controls: a 或 between people, receivers or unquoted answers and options holding the activity's
+                     # own days name no day of this slip; the choice stays in its words for the family.
+                     '今晚请家长或孩子在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；孩子明早交给班主任。',
+                     '今晚请家长在《研学活动回执》勾选参加或不参加，然后签字；孩子明早交给班主任。',
+                     '今晚请家长在《研学活动回执》勾选‘明天出发’或‘后天出发’，然后签字；孩子明早交给班主任。',
+                     '今晚请家长在《参观回执》勾选‘同意’或‘不同意’，然后签字；孩子明早交给班主任或课代表。',
+                     '今晚请家长在《参观回执》勾选‘同意’或‘不同意’，签字后拍照上传；孩子明早交纸质版。',
+                     '今晚请家长在《参观回执》勾选‘同意参加本学期全部四次周末社区志愿服务活动’或‘不同意’，然后签字；孩子明早交回。')
         missed = [text for text in positives if read(text) != ({'2026-11-04'}, '2026-11-05')]
         self.assertEqual(missed, [], 'each closed choice or same-item signing step keeps both role days')
 
@@ -337,15 +348,17 @@ class ReplySlipChoiceVariantTests(unittest.TestCase):
         read = lambda text, others=(): agent._school_role_days(text, cited(text), list(others))
         negatives = ('今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；孩子明早或后天交给班主任。',  # a real day alternative
                      '今晚或明晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；孩子明早交给班主任。',
-                     '今晚请家长在《研学活动回执》勾选‘明天出发’或‘后天出发’，然后签字；孩子明早交给班主任。',  # options naming days
+                     '今晚请家长在《研学活动回执》签字；孩子明天交或后天交给班主任。',
+                     '今晚请家长在《参观回执》签字后拍照上传或明早交纸质版；孩子明早交给班主任。',  # a way bound to its own day
+                     '今晚请家长在《研学活动回执》勾选‘明早交’或‘后天交’，然后签字。',  # options setting this slip's own day
+                     '今晚请家长在《研学活动回执》签字；孩子‘明早’或‘后天’交给班主任。',  # its handback day only in options
                      '今晚请家长在《研学活动回执》勾选‘同意签字’或‘不同意’，然后签字；孩子明早交给班主任。',  # an option naming a role
+                     '今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；孩子明早或许交给班主任。',
                      '今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；如果参加，孩子明早交给班主任。',  # a condition
                      '若参加，今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；孩子明早交给班主任。',
                      '今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；孩子明早交给班主任吗？',  # a question
                      '今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；回执取消，明早不用交。',  # a withdrawal
                      '今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；孩子明早可能交给班主任。',
-                     '今晚请家长或孩子在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；孩子明早交给班主任。',  # whose step it is
-                     '今晚请家长在《研学活动回执》勾选参加或不参加，然后签字；孩子明早交给班主任。',  # an unquoted alternative
                      '今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后交给班主任；孩子明早交回。',  # a handback step
                      '今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，明早签字；孩子明早交给班主任。',  # a step of its own day
                      '今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’；孩子明早交给班主任。',  # no finishing step
@@ -355,6 +368,81 @@ class ReplySlipChoiceVariantTests(unittest.TestCase):
         self.assertIsNone(read(shared, ['孩子明早交给班主任']), "another proposal's quote of the range")
         other = cited(shared) + [dict(ref='message:s:2', text='研学活动改到后天。', time='2026-11-04T19:30:00+08:00')]
         self.assertIsNone(agent._school_role_days(shared, other, []), 'another cited original naming a day')
+
+
+class RootRoleHoldoutTests(unittest.TestCase):
+    """Root's independent fictional role-day holdouts, on the same run_once→Store→calendar path with Root's receipt shape:
+    the goal is the original and the submission its last sentence word for word (no receiver added). A non-day choice
+    (answers, receivers, people, ways) keeps both role days and stays in the family's words; a day the original leaves to
+    choose stays open in both the stored item and its listed projection, while another role's explicit day is kept."""
+    setUp, _use_replies, _day, _proposal = (DailyListFrozenTests.setUp, DailyListFrozenTests._use_replies,
+                                            DailyListFrozenTests._day, DailyListFrozenTests._proposal)
+    _report, _run, _replay_adds_nothing = DailyListFrozenTests._report, DailyListFrozenTests._run, DailyListFrozenTests._replay_adds_nothing
+
+    def _root(self, case, text, due='2026-11-05'):
+        payload, refs = self._day([('19:05', '虚构班主任', 'root-fiction-teacher', text)])
+        slip = self._proposal(text.rstrip('。'), refs, '', text, due=due, purpose='admin', submission=text.rsplit('；', 1)[-1].rstrip('。'))
+        return self._run(payload, [slip], case)
+
+    def _clear(self, case, text, kept):
+        result, rows, listed, (on_day, visible) = self._root(case, text)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        item, = listed  # one slip: no second task, no trip or receiver chosen for the family
+        self.assertEqual((item['kind'], item['category'], item['complete_on'], item['due_on'], item['due_kind']),
+                         ('task', 'todo', '2026-11-04', '2026-11-05', 'handback'))
+        self.assertEqual(item['body'], text)
+        self.assertIn(kept, item['title'], 'the choice stays in its own words')
+        self.assertEqual(on_day, [item['title']])
+        self._replay_adds_nothing(case)
+
+    def test_p2_a_receiver_choice_is_no_day_choice(self):
+        self._clear('ROOT-P2', '今晚请家长在《参观回执》勾选‘同意’或‘不同意’，然后签字；孩子明早交给班主任或课代表。', '交给班主任或课代表')
+
+    def test_p3_the_same_items_signing_step_needs_no_then(self):
+        self._clear('ROOT-P3', '今晚请家长在《参观回执》勾选‘同意’或‘不同意’，签字后拍照上传；孩子明早交纸质版。', '签字后拍照上传')
+
+    def test_p4_unquoted_answers_are_as_clear(self):
+        self._clear('ROOT-P4', '今晚请家长在《研学活动回执》勾选参加或不参加，然后签字；孩子明早交给班主任。', '勾选参加或不参加')
+
+    def test_p5_the_trips_days_inside_options_are_not_the_slips(self):
+        self._clear('ROOT-P5', '今晚请家长在《出行意向回执》勾选‘明天出发’或‘后天出发’，然后签字；孩子明早交回执给班主任。',
+                    '‘明天出发’或‘后天出发’')
+
+    def _open(self, case, text, due, field, explicit):
+        result, rows, listed, _ = self._root(case, text, due)
+        self._report(case=case + '-outcome', listed=listed, stored=[dict(state=r['state'], due=r['due']) for r in rows])
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        item, = listed
+        self.assertEqual(item[field], '', 'a day the original leaves to choose is never one certain day')
+        self.assertEqual(item['body'], text)
+        return item, rows
+
+    def test_n1_a_signing_day_choice_keeps_only_the_explicit_handback(self):
+        item, _ = self._open('ROOT-N1', '今晚或明晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；孩子后天交给班主任。',
+                             '2026-11-06', 'complete_on', '2026-11-06')
+        self.assertEqual((item['due_on'], item['due_kind']), ('2026-11-06', 'handback'), 'the explicit handback day is kept')
+
+    def test_n2_a_handback_day_choice_is_open_in_the_stored_item_and_its_projection(self):
+        item, rows = self._open('ROOT-N2', '今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；孩子明早或后天交给班主任。',
+                                '2026-11-05', 'due_on', '')
+        self.assertEqual((item['kind'], item['due_kind']), ('school', ''), 'kept for review with no deadline shown')
+        self.assertEqual([r['due'] for r in rows], [''], 'the stored item holds no due either')
+
+    def test_n3_a_condition_keeps_its_completion_open(self):
+        item, _ = self._open('ROOT-N3', '如果参加，今晚请家长在《研学活动回执》签字；如果不参加，明晚再填写；孩子后天交给班主任。',
+                             '2026-11-06', 'complete_on', '2026-11-06')
+        self.assertEqual((item['due_on'], item['due_kind']), ('2026-11-06', 'handback'))
+
+    def test_the_deadline_reader_keeps_a_day_choice_open_and_a_single_day(self):
+        import family_agenda
+        sent = '2026-11-04'
+        self.assertEqual(family_agenda.deadline('孩子明早或后天交给班主任', sent), '')
+        self.assertEqual(family_agenda.deadline('今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；孩子明早或后天交给班主任', sent), '')
+        self.assertEqual(family_agenda.deadline('孩子明天交或后天交给班主任', sent), '')
+        self.assertEqual(family_agenda.deadline('孩子后天交给班主任', sent), '2026-11-06', 'an explicit single day stays')
+        self.assertEqual(family_agenda.deadline('今晚或明晚请家长签字；孩子后天交给班主任', sent), '2026-11-06',
+                         "another role's day choice does not clear this explicit day")
+        self.assertEqual(family_agenda.deadline('孩子后天交给班主任或课代表', sent), '2026-11-06', 'a receiver choice names no day')
 
 
 if __name__ == '__main__':
