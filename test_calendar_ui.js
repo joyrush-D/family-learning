@@ -319,9 +319,13 @@ test('daily UI keeps collection navigation in inbox and pending notifications di
  const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';h.ctx.taskHTML=t=>`<article>${t.title}</article>`;h.ctx.taskView='Inbox';
  d.today_calendar={inbox:[],agenda:[],events:[],timetables:[]};
  assert.doesNotMatch(h.ctx.todayTasksHTML(),/data-task-box=/);assert.doesNotMatch(h.ctx.calendarHTML(),/data-task-box=/);
- assert.match(h.ctx.taskInboxHTML(),/data-task-box="Wish"/);assert.match(h.ctx.todayTasksHTML(),/href="#task-group-todo"/);
- const pending=id=>({id,kind:'school',child_ids:['child-a'],title:'虚构待核对要求',agenda:{category:'homework'}}),confirmed={id:'synthetic-confirmed',task_id:'synthetic-confirmed',kind:'task',child_ids:['child-a'],agenda:{category:'homework'}};d.tasks=[{id:confirmed.id,title:'虚构已确认作业'}];
- const grouped=h.ctx.taskGroupsHTML([pending('synthetic-pending'),confirmed,pending('synthetic-pending-2'),pending('synthetic-pending-3')],'今日作业');assert.match(grouped,/今日作业 · 1/);assert.match(grouped,/href="#school-review-synthetic-pending">待核对 3/);assert.match(grouped,/id="school-review-synthetic-pending" data-query-target="school-review:synthetic-pending" tabindex="-1"/);assert.ok(grouped.indexOf('虚构已确认作业')<grouped.indexOf('id="school-review-synthetic-pending"'),'confirmed work remains visible before a long review queue');
+ assert.match(h.ctx.taskInboxHTML(),/data-task-box="Wish"/);assert.match(h.ctx.todayTasksHTML(),/href="#today-courses"/);assert.match(h.ctx.todayTasksHTML(),/当前没有已整理的未完成事项/);assert.doesNotMatch(h.ctx.todayTasksHTML(),/task-group-(?:homework|todo)/,'subject is the only first-level grouping');
+ const math={category:'homework',subjects:['数学'],subject_state:'known'},pending=id=>({id,kind:'school',child_ids:['child-a'],title:'虚构待核对要求',agenda:math}),confirmed={id:'synthetic-confirmed',task_id:'synthetic-confirmed',kind:'task',child_ids:['child-a'],agenda:math};d.tasks=[{id:confirmed.id,title:'虚构已确认作业'}];
+ const grouped=h.ctx.taskGroupsHTML([pending('synthetic-pending'),confirmed,pending('synthetic-pending-2'),pending('synthetic-pending-3')],true);assert.match(grouped,/>数学 · 1/);assert.equal((grouped.match(/class="card agenda-group task-list subject-group"/g)||[]).length,1,'one subject, one section');assert.match(grouped,/href="#school-review-synthetic-pending">待核对 3/);assert.match(grouped,/id="school-review-synthetic-pending" data-query-target="school-review:synthetic-pending" tabindex="-1"/);assert.ok(grouped.indexOf('虚构已确认作业')<grouped.indexOf('id="school-review-synthetic-pending"'),'confirmed work remains visible before a long review queue');
+ d.tasks=['poster','consent','page','english'].map(id=>({id,title:'虚构'+id}));const task=(id,agenda)=>({id,task_id:id,kind:'task',child_ids:['child-a'],agenda:{category:'homework',...agenda}});
+ const mixed=h.ctx.taskGroupsHTML([task('page',{subject_state:'unknown',subjects:[]}),task('consent',{category:'todo',subject_state:'general',subjects:[]}),task('poster',{subject_state:'known',subjects:['科学','美术']}),task('english',{subject_state:'known',subjects:['英语']})]);
+ assert.deepEqual([...mixed.matchAll(/data-subject="([^"]+)"/g)].map(m=>m[1]),['科学 · 美术','英语','综合事务','科目待定'],'known subjects first; general and unknown stay separate and visible');
+ assert.equal((mixed.match(/<article>虚构poster<\/article>/g)||[]).length,1,'a cross-subject item is one card, counted once');assert.match(mixed,/data-category="todo">要办的事</);assert.match(mixed,/原消息没有说明科目/);
  const core=readFileSync(__dirname+'/app.js','utf8'),start=core.indexOf('function agentItemHTML'),end=core.indexOf('function agentChildHTML',start);
  const ctx=vm.createContext({data:{children:[{id:'child-a',name:'虚构孩子'}],tasks:[]},esc:escape,agendaDateHTML:h.ctx.agendaDateHTML,schoolOriginalButtons:()=>''});vm.runInContext(core.slice(core.indexOf('function requirementHTML('),core.indexOf('function taskFocus(')),ctx);vm.runInContext(core.slice(start,end),ctx);
  const title='待核对：阅读要求\n'+('很长的虚构原通知。'.repeat(40)),item={id:'synthetic-school',kind:'school',child_id:'child-a',state:'pending',title,body:'请核对这条通知是否适用',evidence:[{text:'<script>unsafe</script>',ref:'synthetic:notice'}]};
@@ -510,7 +514,7 @@ test('a school review the model read as ready shows only the program gap on the 
  const card=html=>{const [main,more]=split(html);return {main,more,gap:gapText(main)}};
  // Today, the full list and the agent page share one compact card.
  const pending={id:math.id,kind:'school',child_ids:['child-a'],title:math.title,agenda};
- for(const [label,html] of [['today',h.ctx.taskGroupsHTML([pending],'今日作业')],['list',h.ctx.taskGroupsHTML([pending],'所有作业')],['agent page',h.ctx.agentItemHTML(math,{compact:true,agenda})]]){
+ for(const [label,html] of [['today',h.ctx.taskGroupsHTML([pending],true)],['list',h.ctx.taskGroupsHTML([pending])],['agent page',h.ctx.agentItemHTML(math,{compact:true,agenda})]]){
   const {main,more,gap}=card(html);
   assert.equal(gap,'待补充：'+escape(cover.trim()),label+': the unverified linked material is the visible gap');
   assert.ok(!main.includes(escape(why))&&!main.includes('补充消息进一步说明'),label+': the listed requirements are not restated');

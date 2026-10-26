@@ -24,6 +24,108 @@ class AgendaTest(unittest.TestCase):
     def organize(self,**values):
         return focus.save(app,dict(id='T01',version=0,request_key='synthetic-organize-01',mode='next',next_action='',waiting_for='',review_on='',category='homework',published_on='2026-09-12',due_on='2026-09-14',scheduled_on='',**values))
 
+    def school_items(self,stamp,messages,items):
+        """Fictional collected messages and their school candidates; returns each candidate's pending inbox row."""
+        self.store.ingest(dict(source_id='synthetic-class',expected_cursor='0',cursor=str(len(messages)),checked_at=stamp,last_message_time=stamp,
+            error='',messages=[dict(id=str(i+1),time=stamp,kind='text',sender=sender,text=text,unread=False) for i,(sender,text) in enumerate(messages)]))
+        for index,(title,purpose,ref,learning) in enumerate(items):
+            plan=dict(school_task=dict(title=title,goal=title+'。',advice='',state='ready',policy=agent.SCHOOL_TASK_POLICY,purpose=purpose,change='new',target_id=''))
+            if learning:plan['school_learning']=dict(subject=learning,goal_id='')
+            self.store._save('synthetic-subject-'+str(index),'subject-fingerprint-'+str(index),[dict(child_id='child-1',kind='school',title=title,
+                body=title+'。',due='',evidence=[dict(ref='message:synthetic-class:'+ref,text=messages[int(ref)-1][1])],plan=plan)],dt.datetime.fromisoformat(stamp))
+        day=stamp[:10];rows={x['title']:x for x in app.calendar_snapshot(day,day)['inbox'] if x['kind']=='school'}
+        return [rows[title] for title,*_ in items]
+
+    def test_subject_grouping_keeps_same_subject_sources_apart_and_admin_course_items_out_of_learning(self):
+        stamp='2026-11-04T18:20:00+08:00'
+        rows=self.school_items(stamp,[('数学老师甲','今晚做练习二第1、2题。'),('数学老师乙','今晚做练习二第4题。'),('英语老师乙','今晚跟读Unit 5两遍；另外，明天体育课带跳绳，不要求在家训练。')],
+            [('数学：练习二第1、2题','learning','1','数学'),('数学：练习二第4题','learning','2','数学'),('英语：跟读Unit 5两遍','learning','3','英语'),('明天体育课带跳绳','admin','3','')])
+        math1,math2,english,rope=rows
+        self.assertEqual([x['agenda']['subjects'] for x in rows],[['数学'],['数学'],['英语'],['体育']])
+        # Same subject, different teachers: still two items with their own publications; never merged or re-dated.
+        self.assertNotEqual(math1['id'],math2['id'])
+        self.assertEqual([p['sender'] for p in math1['agenda']['publications']],['数学老师甲'])
+        self.assertEqual([p['sender'] for p in math2['agenda']['publications']],['数学老师乙'])
+        # The PE item is a course admin to-do: no learning subject, no learning goal, no training homework.
+        self.assertEqual((rope['agenda']['category'],rope['agenda']['subject_basis']),('todo','own_words'))
+        self.assertEqual(english['agenda']['subject_basis'],'saved')
+        with app.connect() as c:before='\n'.join(c.iterdump())
+        app.calendar_snapshot('2026-11-04','2026-11-06');app.tasks()
+        with app.connect() as c:
+            self.assertEqual(before,'\n'.join(c.iterdump()))  # Grouping is a read: no merge, rewrite or goal is written.
+            self.assertFalse(c.execute("SELECT 1 FROM sqlite_master WHERE name='learning_goals'").fetchone() and c.execute('SELECT 1 FROM learning_goals').fetchone())
+        # A recipient never names the subject; the item's own words do.
+        self.assertEqual(agenda.named_subjects('请家长签署同意书后，明早交给数学课代表'),[])
+        self.assertEqual(agenda.named_subjects('待核对：英语老师：今晚跟读'),[])
+
+    def test_subject_grouping_separates_general_unknown_and_counts_cross_subject_once(self):
+        stamp='2026-11-04T18:40:00+08:00'
+        rows=self.school_items(stamp,[('班主任','请家长签署校外活动同意书后交回。'),('老师甲','完成第3页。'),('科学老师','科学和美术共同完成一张海报。'),('老师乙','数学做练习四第1题；英语抄写Unit 6单词一遍。')],
+            [('签署校外活动同意书','admin','1',''),('完成第3页','learning','2',''),('科学和美术共同完成海报','learning','3',''),('数学：练习四第1题','learning','4','数学'),('英语：抄写Unit 6单词一遍','learning','4','英语')])
+        consent,page,poster,math,english=rows
+        self.assertEqual(consent['agenda']['subject_state'],'general')
+        self.assertEqual((page['agenda']['subject_state'],page['agenda']['subjects']),('unknown',[]))  # Not guessed from the sender or a sibling.
+        self.assertEqual(poster['agenda']['subjects'],['科学','美术'])
+        snap=app.calendar_snapshot('2026-11-04','2026-11-04')
+        self.assertEqual(len([x for x in snap['inbox'] if x['id']==poster['id']]),1)  # One card, one count, both subjects.
+        accepted={}
+        for row in (poster,math,english):
+            accepted[row['id']]=self.store.act(dict(id=row['id'],action='accept',expected_updated=stamp),school_auto=True)['task_id']
+            collected=next(x for x in app.calendar_snapshot('2026-11-04','2026-11-04')['inbox'] if x['task_id']==accepted[row['id']])
+            self.assertEqual(collected['agenda'],row['agenda'])  # Accepting keeps the subjects it was filed under.
+        app.save_task(dict(id=accepted[math['id']],status='已完成',note='虚构家长核对完成'))
+        inbox={x['task_id']:x for x in app.calendar_snapshot('2026-11-04','2026-11-04')['inbox'] if x['kind']=='task'}
+        self.assertTrue(inbox[accepted[math['id']]]['closed'])
+        self.assertFalse(inbox[accepted[english['id']]]['closed'])  # Same message, separate actions: separate states.
+        self.assertFalse(inbox[accepted[poster['id']]]['closed'])
+
+    def test_subject_grouping_keeps_dates_states_corrections_and_children_apart(self):
+        today=dt.datetime.now(app.dt.timezone(app.dt.timedelta(hours=8))).date()
+        days={name:(today+dt.timedelta(days=n)).isoformat() for name,n in (('today',0),('overdue',-2),('later',3))}
+        made={}
+        for name,due in (('today',days['today']),('overdue',days['overdue']),('later',days['later']),('undated',''),('cancelled',days['today'])):
+            made[name]=app.new_task(dict(child='示例甲',title='数学：练习'+name,action='完成练习',due=due,category='homework',request_key='synthetic-subject-day-'+name))['id']
+        app.save_task(dict(id=made['cancelled'],status=next(s for s in app.TASK_CLOSED if s!='已完成'),note='虚构老师取消'))
+        other=app.new_task(dict(child='示例乙',title='数学：示例乙练习',action='完成',due=days['today'],category='homework',request_key='synthetic-subject-other-child'))['id']
+        snap=app.calendar_snapshot(days['overdue'],days['later'])
+        inbox={x['id']:x for x in snap['inbox']}
+        self.assertTrue(all(inbox[i]['agenda']['subjects']==['数学'] for i in made.values()))
+        self.assertEqual(inbox[made['overdue']]['agenda']['due_on'],days['overdue'])  # Overdue keeps its own day, never re-dated to today.
+        self.assertEqual(inbox[made['undated']]['agenda']['due_on'],'')
+        self.assertTrue(inbox[made['cancelled']]['closed'])
+        self.assertEqual(inbox[other]['child_ids'],['child-2'])
+        self.assertFalse(any(x['id']==other for x in snap['inbox'] if 'child-1' in x['child_ids']))
+        # A dated item still carries from its own publication until closed; grouping never moves it into earlier days.
+        self.assertEqual([x['day'] for x in snap['agenda'] if x['id']==made['later']],[(today+dt.timedelta(days=n)).isoformat() for n in range(4)])
+        # Oral capture keeps its own subject, then a parent's correction wins, replays, conflicts safely and reopens.
+        store=app.study_store();key='synthetic-subject-capture-0001'
+        saved=store.save_item(dict(child_id='child-1',day=days['today'],request_key=key,title='科学观察记录',subject='科学'))
+        ident=saved['saved_item_id']
+        task=next(t for t in app.tasks() if t['id']==ident)
+        self.assertEqual((task['agenda']['subjects'],task['agenda']['subject_basis']),(['科学'],'saved'))
+        base=dict(id=ident,mode='next',next_action='',waiting_for='',review_on='')
+        version=task['focus']['version']
+        with app.connect() as c:before='\n'.join(c.iterdump())
+        for bad in ('数学·数学','综合·数学','一·二·三·四'):
+            with self.assertRaises(focus.FocusError):focus.save(app,dict(base,version=version,request_key='synthetic-subject-bad-'+str(len(bad)),subject=bad))
+        with self.assertRaises(focus.FocusError) as stale:focus.save(app,dict(base,version=version+5,request_key='synthetic-subject-stale',subject='数学'))
+        self.assertEqual(stale.exception.status,409)
+        with app.connect() as c:self.assertEqual(before,'\n'.join(c.iterdump()))  # Failures write nothing.
+        corrected=focus.save(app,dict(base,version=version,request_key='synthetic-subject-fix',subject='数学'))
+        self.assertEqual((corrected['task']['agenda']['subjects'],corrected['task']['agenda']['subject_basis']),(['数学'],'parent'))
+        self.assertTrue(focus.save(app,dict(base,version=version,request_key='synthetic-subject-fix',subject='数学'))['request_replayed'])
+        with self.assertRaises(focus.FocusError) as reused:focus.save(app,dict(base,version=version,request_key='synthetic-subject-fix',subject='英语'))
+        self.assertEqual(reused.exception.status,409)
+        reopened=next(t for t in app.tasks() if t['id']==ident)
+        self.assertEqual(reopened['agenda']['subjects'],['数学'])
+        self.assertEqual(reopened['source'],task['source'])  # The child's own capture stays the item's source.
+        general=focus.save(app,dict(base,version=reopened['focus']['version'],request_key='synthetic-subject-general',subject='综合'))['task']
+        self.assertEqual(general['agenda']['subject_state'],'general')
+        auto=focus.save(app,dict(base,version=general['focus']['version'],request_key='synthetic-subject-auto',subject=''))['task']
+        self.assertEqual((auto['agenda']['subjects'],auto['agenda']['subject_basis']),(['科学'],'saved'))
+        legacy=focus.save(app,dict(base,version=auto['focus']['version'],request_key='synthetic-subject-old-client',next_action='先读题'))['task']
+        self.assertEqual(legacy['agenda']['subjects'],['科学'])  # An old client without the field keeps the saved choice.
+
     def test_task_carries_until_closed_and_undated_stays_inbox(self):
         result=self.organize();self.assertEqual(result['focus']['version'],1)
         self.assertEqual(result['task']['agenda']['due_on'],'2026-09-14')
