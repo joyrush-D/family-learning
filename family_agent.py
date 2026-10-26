@@ -7022,8 +7022,26 @@ def _refresh_diagnosis(app, store, now):
     return dict(used=0, failed=0)
 
 
+def _round_connect(connect):
+    """Run the app's idempotent schema checks once per Agent round, not again on each of its short connections.
+
+    Every block still opens, commits and closes its own connection to the same database file; only the repeated
+    CREATE/PRAGMA checks (about 35 statements each, thousands of connections per round) are skipped once they succeeded.
+    """
+    path = ''
+    def open_round():
+        nonlocal path
+        if path:
+            c = sqlite3.connect(path); c.row_factory = sqlite3.Row
+            return c
+        c = connect()
+        path = next((row[2] for row in c.execute('PRAGMA database_list') if row[1] == 'main'), '') or ''
+        return c
+    return open_round
+
+
 def run_once(app, now=None):
-    now = _now(now); store = Store(app.connect, app.profiles, app.DATA, app=app)
+    now = _now(now); store = Store(_round_connect(app.connect), app.profiles, app.DATA, app=app)
     config = store._config()
     if not config['enabled']: return {'state': 'disabled', 'created': 0, 'processed': 0}
     with _lock(store.data / '.agent.lock') as locked:
