@@ -5590,9 +5590,29 @@ def school_original_upload_ids(store,c,row,ref,ids):
     return selected
 
 
+def _school_text_scope(store,c,row,bare):
+    """row with a read-only text scope (each anchor its own message's words, no file), or None unless every message it
+    cites under the current child binding is plain, fully read text needing no details; bare also requires that none
+    carries a file or page, whose share in this item stays unknown. The original record and decision are unchanged."""
+    evidence,pages=_school_material(store,c,row)
+    if any(e.get('kind') not in ('text','quote') or e.get('unread') or e.get('content_incomplete')
+           or _needs_task_details(e.get('text','')) for e in evidence):return None
+    if bare and (pages or any(c.execute('SELECT 1 FROM agent_message_attachments WHERE source_id=? AND message_id=? LIMIT 1',
+                                        tuple(e['ref'][8:].rsplit(':',1))).fetchone() for e in evidence)):return None
+    row=dict(row);plan=json.loads(row['plan'])
+    plan['school_original_action']=dict(anchors=[dict(ref=e['ref'],upload_ids=[],pages=[],quote=e['text']) for e in evidence])
+    row['plan']=_json(plan)
+    return row
+
+
 def school_original_source_row(store,c,canonical,ref):
     """Use the accepted source's own basis; supplements and repeats never expand the original file scope."""
-    if ref in {e['ref'] for e in json.loads(canonical['evidence'])}:return canonical
+    if ref in {e['ref'] for e in json.loads(canonical['evidence'])}:
+        # An accepted task saved from its reply's own quotes, not a native action, proves the words of its originals; only
+        # when they carry no file or page at all is that its whole scope, so the parent can read them. Any file keeps it unknown.
+        if (json.loads(canonical['plan']).get('school_original_action') is None and canonical['state']=='accepted'
+                and canonical['task_id']):return _school_text_scope(store,c,canonical,True) or canonical
+        return canonical
     owners=[]
     for saved in c.execute("SELECT * FROM agent_items WHERE child_id=? AND task_id=? AND kind='school' AND state='accepted' ORDER BY id",
                            (canonical['child_id'],canonical['task_id'])):
@@ -5604,12 +5624,8 @@ def school_original_source_row(store,c,canonical,ref):
     if json.loads(canonical['plan']).get('school_original_action') and not plan.get('school_original_action'):
         # Legacy append/repeat decisions prove native body text, not the set of
         # files sharing that message. Give them an explicit empty file scope.
-        evidence,_=_school_material(store,c,row)
-        if any(e.get('kind') not in ('text','quote') or e.get('unread') or e.get('content_incomplete')
-               or _needs_task_details(e.get('text','')) for e in evidence):
-            raise AgentError('补充原件尚无独立行动依据，请核对原消息',409,'school_original_scope_stale')
-        plan['school_original_action']=dict(anchors=[dict(ref=e['ref'],upload_ids=[],pages=[],quote=e['text']) for e in evidence])
-        row['plan']=_json(plan)  # A read scope only; the original record and decision are unchanged.
+        row=_school_text_scope(store,c,row,False)
+        if row is None:raise AgentError('补充原件尚无独立行动依据，请核对原消息',409,'school_original_scope_stale')
     return row
 
 
