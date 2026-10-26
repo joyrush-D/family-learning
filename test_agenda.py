@@ -160,7 +160,7 @@ class AgendaTest(unittest.TestCase):
         def request(path,obj=None):
             c=HTTPConnection('127.0.0.1',server.server_port,timeout=10)
             try:
-                c.request('GET' if obj is None else 'POST',path,None if obj is None else json.dumps(obj,ensure_ascii=False),
+                c.request('GET' if obj is None else 'POST',path,None if obj is None else json.dumps(obj,ensure_ascii=False).encode(),
                           {} if obj is None else {'X-Family-Token':app.TOKEN,'Content-Type':'application/json'})
                 r=c.getresponse();return r.status,json.loads(r.read())
             finally:c.close()
