@@ -1,7 +1,8 @@
 // Synthetic software acceptance only; no real model, collector, household data or printer.
 // Set SCHOOL_NATIVE_PROOF_DIR outside the checkout. Run only after committing this file.
 // Both ordinary notice forms say today; a separate fixed-receipt control checks
-// that an undated reading never borrows the exercise's date.
+// that an undated reading never borrows the exercise's date. The continued form is the same teacher's follow-up
+// (刚才的练习卷还要家长签字) that joins only the item it points back to.
 const assert=require('node:assert/strict');
 const {spawn}=require('node:child_process');
 const {once}=require('node:events');
@@ -67,26 +68,27 @@ try:
     fixture.stack.enter_context(patch('subprocess.Popen',side_effect=AssertionError('external CLI forbidden')))
     printer=fixture.stack.enter_context(patch.object(app.family_print.PrintStore,'enqueue',side_effect=AssertionError('printing forbidden')))
     app.printer_config=lambda:dict(printers=[],error='')
-    form=os.environ['SCHOOL_NATIVE_NOTICE_FORM'];assert form in ('numbered','semicolon','shared','shared_all','weekday','cross_message','late_message')
+    form=os.environ['SCHOOL_NATIVE_NOTICE_FORM'];assert form in ('numbered','semicolon','shared','shared_all','weekday','cross_message','late_message','continued')
     # cross_message: the same teacher's all-items standard arrives as the next message 60 seconds after the list.
     # late_message: the same standard is collected only after the list was already saved as two tasks (a later run_once).
-    late=form=='late_message';cross=form=='cross_message' or late
+    late=form=='late_message';cross=form=='cross_message' or late;continued=form=='continued'
     shared=('以上作业都今天完成并请家长检查' if form=='shared_all' else
             '两项都今天完成并请家长检查' if form=='shared' else '')
     weekday='一二三四五六日'[now.weekday()]
     notice=('英语作业：1. 周'+weekday+'前朗读Unit 2课文两遍；2. 星期'+weekday+'前完成练习卷第1–3题。' if form=='weekday' else
             '英语，今天完成：1. 朗读Unit 2课文两遍；2. 完成练习卷第1–3题。' if form=='numbered' else
-            '英语，今天完成两项要求：1. 朗读Unit 2课文两遍；2. 完成练习卷第1–3题。' if cross else
+            '英语，今天完成两项要求：1. 朗读Unit 2课文两遍；2. 完成练习卷第1–3题。' if cross or continued else
             '英语作业：朗读Unit 2课文两遍。完成练习卷第1–3题。'+shared+'。' if shared else
             '英语作业：朗读Unit 2课文两遍，今天完成；完成练习卷第1–3题，今天完成。')
     texts=[notice,
-           '以上两项均请家长核对并在记录本签字。' if cross else '补充英语练习卷：单面打印；完成后自查并请家长签字；第4题选做。']
+           '以上两项均请家长核对并在记录本签字。' if cross else '刚才的练习卷还要家长签字。' if continued else '补充英语练习卷：单面打印；完成后自查并请家长签字；第4题选做。']
     # Each card states a bound all-items standard without its scope words (以上作业都, 两项都, 以上两项均); the complete
     # scope sentence stays literal in the native shared conditions/supplements and the source anchors checked below, and a
     # late standard is appended whole. Fixed expectations, never computed by the reader under test.
     card_shared='今天完成并请家长检查' if shared else ''
     card_cross=texts[1].rstrip('。') if late else '请家长核对并在记录本签字' if cross else ''
-    if cross:
+    card_continued='练习卷还要家长签字' if continued else ''
+    if cross or continued:
         payload=fixture.fixture.payload(cursor='12')
         payload['messages']=[dict(id=str(11+i),message_order=str(11+i),time=(now-dt.timedelta(minutes=2-i)).isoformat(),kind='text',
             sender='虚构英语老师',sender_id='synthetic-teacher-1',unread=False,text=text) for i,text in enumerate(texts)]
@@ -173,7 +175,7 @@ try:
         reading_row=next(r for r in rows if reading['title_quote'] in r['body'])
         exercise_row=next(r for r in rows if exercise['title_quote'] in r['body'])
         assert reading_row['id']!=exercise_row['id'] and reading_row['task_id']!=exercise_row['task_id']
-        for clause in ((exercise['title_quote'],) if cross else (exercise['title_quote'],'单面打印','完成后自查并请家长签字','第4题选做')):
+        for clause in ((exercise['title_quote'],) if cross else (exercise['title_quote'],card_continued) if continued else (exercise['title_quote'],'单面打印','完成后自查并请家长签字','第4题选做')):
             assert clause in exercise_row['body'] and clause not in reading_row['body']
         assert reading['title_quote'] not in exercise_row['body']
         tasks={r['id']:dict(r) for r in c.execute('SELECT * FROM manual_tasks')}
@@ -218,7 +220,7 @@ try:
     fixture.model.side_effect=AssertionError('no further model receipt allowed')
     proof=dict(synthetic_only=True,real_model_calls=0,collector_calls=0,printer_calls=0,
         form=form,shared_condition=shared,cross_message_standard=texts[1].rstrip('。') if cross else '',
-        shared_card_standard=card_shared,cross_message_card_standard=card_cross,today=today,child='虚构甲',source_id=fixture.source['id'],messages=payload['messages'],items=items,date_control=date_control,
+        shared_card_standard=card_shared,cross_message_card_standard=card_cross,continued_standard=card_continued,today=today,child='虚构甲',source_id=fixture.source['id'],messages=payload['messages'],items=items,date_control=date_control,
         first=first,failed_state=failed_state,failed_job=failed_job,delayed=delayed,recovered=recovered,done_job=done_job,replay=replay,
         late_run=late_run,expected_receipts=3 if late else 2,pending_count=pending_count,
         mock_calls=calls,originals_preserved=True,source_cursor_preserved=True,
@@ -266,7 +268,7 @@ async function screenshot(page,name){await noOverflow(page);await page.screensho
   assert(proofDir,'SCHOOL_NATIVE_PROOF_DIR is required');const sourcePath=await fs.realpath(__dirname),proofPath=path.resolve(proofDir);assert(proofPath!==sourcePath&&!proofPath.startsWith(sourcePath+path.sep),'proof must stay outside the checkout');await fs.mkdir(proofDir,{recursive:true});const actualProofPath=await fs.realpath(proofDir);assert(actualProofPath!==sourcePath&&!actualProofPath.startsWith(sourcePath+path.sep),'proof symlink must stay outside the checkout');proofReady=true;
   browser=await chromium.launch({headless:true,channel:process.env.PLAYWRIGHT_CHANNEL||'chrome'});
   // SCHOOL_NATIVE_FORMS may narrow the run to forms an unchanged-UI patch affects; the default keeps every form.
-  for(const form of (process.env.SCHOOL_NATIVE_FORMS||'numbered,semicolon,shared,shared_all,weekday,cross_message').split(',')){
+  for(const form of (process.env.SCHOOL_NATIVE_FORMS||'numbered,semicolon,shared,shared_all,weekday,cross_message,continued').split(',')){
   host=await server(form);proof.intake=await json(host.url+'__fixture/proof');proof.scenarios.push({form,intake:proof.intake});assert.equal(proof.intake.model_receipts,proof.intake.expected_receipts);assert.equal(proof.intake.print_attempts,0);
   for(const width of [360,1440]){
    const page=await browser.newPage({viewport:{width,height:850},timezoneId:'Asia/Shanghai'});lastPage=page;page.noticeForm=form;page.setDefaultTimeout(10000);
@@ -296,7 +298,7 @@ async function screenshot(page,name){await noOverflow(page);await page.screensho
    assert.equal(await pending.count(),0,'the actual successful retry clears the processing warning');assert.equal(state.agent.sources[0].pending_message_count,0);
    assert.equal(await page.locator('#content [data-today-task]').count(),2,'today shows two independent school tasks for the selected child');
    assert.match(await card(reading.task_id).innerText(),/朗读Unit 2课文两遍/);assert(!(await card(reading.task_id).innerText()).includes('练习卷'));
-   for(const clause of proof.intake.cross_message_standard?['完成练习卷第1–3题']:['完成练习卷第1–3题','单面打印','完成后自查并请家长签字','第4题选做'])assert((await card(exercise.task_id).innerText()).includes(clause));assert(!(await card(exercise.task_id).innerText()).includes('朗读'));
+   for(const clause of proof.intake.cross_message_standard?['完成练习卷第1–3题']:proof.intake.continued_standard?['完成练习卷第1–3题',proof.intake.continued_standard]:['完成练习卷第1–3题','单面打印','完成后自查并请家长签字','第4题选做'])assert((await card(exercise.task_id).innerText()).includes(clause));assert(!(await card(exercise.task_id).innerText()).includes('朗读'));
    for(const item of items){const title=await card(item.task_id).locator('h3').innerText();assert.equal(title,item.title);assert(title.length<=40&&!/单面打印|自查|签字/.test(title),'main list title stays short while the body retains standards');assert(!title.includes('选做')||(title.endsWith('（第4题选做）')&&title.split('选做').length===2),'only the compact optional-question boundary belongs in the title')}
    // Cards show the bound standard without its scope words; the complete scope stays checked in the anchors below.
    if(proof.intake.shared_condition){assert(proof.intake.shared_card_standard);for(const item of items)assert((await card(item.task_id).innerText()).includes(proof.intake.shared_card_standard),'both tasks keep the explicit all-items standard')}

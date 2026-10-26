@@ -4577,6 +4577,30 @@ def _school_native_later_text(entry,later):
     return all(re.fullmatch(r'[0-9]{1,40}',o) for o in order) and int(order[1])>int(order[0])
 
 
+# A follow-up opening with a pointer back to one object and only adding a step to it (刚才的朗读还要家长签字).
+_SCHOOL_NATIVE_CONTINUED=(r'^\s*(?:刚才|刚刚|上面|前面|之前)\s*(?:布置|发)?\s*的\s*([^，,。；;：:！!？?\n的]{2,20}?)\s*'
+                          r'((?:还|也)(?:要|需要|需|请|得)\s*[^，,。；;：:！!？?\n]{2,30}?)\s*[。！!]?\s*$')
+
+
+def _school_native_continued(entry,later):
+    """('', object, requirement) when a later message continues an object of this list with one added step, else None.
+
+    The same publisher and source send it strictly after this list, complete and within the supplement window; it opens by
+    pointing back (刚才/上面…的) to the object and only adds to it (还要/也请…家长签字) in one clause. A change, question,
+    condition, negation, subject, or a day, count, title, page, question or worksheet of its own step, a second clause or
+    no pointer binds nothing: the existing readers and the whole-batch retry stay in charge.
+    """
+    if not _school_native_later_text(entry,later):return None
+    try:
+        if (dt.datetime.fromisoformat(later['time'])-dt.datetime.fromisoformat(entry['time'])).total_seconds()>120:return None
+    except (KeyError,ValueError,TypeError):return None
+    found=re.match(_SCHOOL_NATIVE_CONTINUED,later['text'])
+    if (not found or re.search(_SCHOOL_NATIVE_CHANGE+'|'+_SCHOOL_NATIVE_UNSETTLED+'|'+_SCHOOL_NATIVE_SUBJECTS,later['text'])
+            or re.search(r'[不非未没无否别勿]|《|第|\d|unit|[一二两三四五六七八九十]\s*[遍次个页题道份张]|[今明昨前后][天日晚早晨]|早上|上午|中午|下午|晚上|周|星期|礼拜|'
+                         +_SCHOOL_NATIVE_DATE+'|'+_SCHOOL_NATIVE_WORKSHEET,found[2],re.I)):return None
+    return '',found[1],found[1]+found[2]
+
+
 def _school_native_shared_later(entry,evidence,own):
     """The source's very next message, when it is wholly one positive common standard for this list's every outcome.
 
@@ -4900,7 +4924,7 @@ def _school_native_actions(evidence):
         # and later-supplement identity; the ledger only adds it to a multi-outcome list.
         if len(own)==1 and re.match(r'^(?:Unit\s*[0-9]+|课文|《)',own[0]['primary']):continue
         for supplement in evidence[index+1:]:
-            head=re.match(r'^补充([^：:\n]{2,40})[：:]\s*(.+)$',supplement['text'].strip(),re.S)
+            head=re.match(r'^补充([^：:\n]{2,40})[：:]\s*(.+)$',supplement['text'].strip(),re.S) or _school_native_continued(entry,supplement)
             if not head:continue
             publisher=entry.get('publisher','')
             if (not publisher or supplement.get('publisher')!=publisher or supplement['ref'][8:].rsplit(':',1)[0]!=entry['ref'][8:].rsplit(':',1)[0]
