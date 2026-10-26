@@ -43,7 +43,7 @@ async function demoServer(){
        if(pass!=='calendar')await eventually(async()=>await p.locator('#content').getAttribute('data-ready')==='true','T02 '+pass+' ready');
        if(pass==='list'){await p.locator('nav [data-page="tasks"]').click();await p.locator('[data-task-box="全部"]').click();await eventually(async()=>/所有作业与待办/.test(await p.locator('#content h1').first().innerText()),'T02 all homework and todo')}
        if(pass==='calendar')await p.locator('nav [data-page="calendar"]').click();
-       const cards=async()=>p.locator('.agenda-dates').evaluateAll(xs=>xs.filter(x=>x.offsetParent!==null).map(x=>{const c=x.closest('[data-query-target]')||x.parentElement;return {card:c.innerText,dates:x.innerText}}));
+       const cards=async()=>p.locator('.agenda-dates').evaluateAll(xs=>xs.filter(x=>x.offsetParent!==null).map(x=>{const c=x.closest('[data-query-target]')||x.parentElement;return {card:c.innerText,dates:x.innerText,group:x.closest('.subject-group')?.querySelector('.task-group-heading h2')?.innerText||''}}));
        let all=[],rope=[],english=[];
        await eventually(async()=>{all=await cards();rope=all.filter(c=>/跳绳/.test(c.card));english=all.filter(c=>/Unit 5/.test(c.card));return rope.length>0&&(pass==='calendar'||english.length>0)},'T02 '+pass+' '+width+' cards');
        assert.deepEqual(all.filter(c=>/训练/.test(c.card)&&!/跳绳/.test(c.card)),[],pass+' '+width+' no training item is generated');
@@ -51,11 +51,11 @@ async function demoServer(){
         assert.match(c.dates,/安排日：2026-11-05/,pass+' '+width+' the rope reads its lesson day');
         assert.doesNotMatch(c.dates,/截止|老师要求交回|老师检查|完成：|计划：/,pass+' '+width+' no deadline, handback, check, completion or made-up plan');
         assert.match(c.card,/体育/);assert.match(c.card,/不要求在家训练/,'its own no-training condition kept as said');
-        assert.doesNotMatch(c.card,/Unit 5|英语/,pass+' '+width+' rope keeps only its own words');
+        assert.doesNotMatch(c.group+'\n'+c.card,/Unit 5|英语/,pass+' '+width+' rope keeps only its own words and is not under English');
        }
        for(const c of english){
         assert.doesNotMatch(c.dates,/2026-11-05|安排日/,pass+' '+width+' English never borrows 11/5');assert.match(c.dates,/2026-11-04/);
-        assert.match(c.card,/英语/);assert.doesNotMatch(c.card,/跳绳/,pass+' '+width+' English keeps only its own words');
+        if(pass!=='calendar')assert.match(c.group,/英语/,pass+' '+width+' English under its own subject heading');assert.doesNotMatch(c.card,/跳绳/,pass+' '+width+' English keeps only its own words');
        }
        assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'no horizontal overflow');
        if(process.env.TODAY_UI_PROOF_DIR&&['open','calendar'].includes(pass)){const pth=require('node:path');await require('node:fs/promises').mkdir(process.env.TODAY_UI_PROOF_DIR,{recursive:true});await p.screenshot({path:pth.join(process.env.TODAY_UI_PROOF_DIR,'t02-'+pass+'-'+width+'.png'),fullPage:true})}
