@@ -54,9 +54,8 @@ function calendarAgendaHTML(){
  if(calendarState.error)return `<p class="error" role="alert">${esc(calendarState.error)}</p><button data-calendar-retry>重试</button>`;
  if(!calendarState.result)return '<p role="status">准备读取日历…</p>';
  const r=calendarState.result,day=calendarState.day,items=calendarDayItems(day);
- const groups=[['homework','课内作业'],['todo','待办事项']];
  const section=(title,html)=>`<section class="card agenda-group"><h2>${title}</h2>${html||'<p class="small muted">没有已收录的事项</p>'}</section>`;
- return `${r.source_error?`<p class="error">${esc(r.source_error)}</p>`:''}${calendarWeekHTML()}<h2 class="agenda-day-title" id="calendarDayDetails" tabindex="-1">${esc(day)}${day===data.today?' · 今天':''} · 当天详情</h2><div class="agenda-groups">${groups.map(([kind,label])=>section(label,items.filter(x=>(x.kind==='study'||x.agenda?.category==='homework'?'homework':'todo')===kind).map(agendaItemHTML).join(''))).join('')}${section('手动计划与课程',(calendarItems(r.timetables,day).map(calendarTimetableHTML).join('')||'<p class="small muted">当天课表尚未提供</p>')+calendarItems(r.events,day).map(calendarEventHTML).join(''))}</div><p class="small muted">限期事项每天显示直到完成；逾期继续保留。未明确日期的事项在收集箱核对。</p>`;
+ return `${r.source_error?`<p class="error">${esc(r.source_error)}</p>`:''}${calendarWeekHTML()}<h2 class="agenda-day-title" id="calendarDayDetails" tabindex="-1">${esc(day)}${day===data.today?' · 今天':''} · 当天详情</h2><div class="agenda-groups">${taskSubjectGroups(items).map(([key,rows])=>section(esc(key),rows.map(x=>`<div class="subject-item" data-subject-item="${esc(x.id)}">${taskKindHTML(x)}${agendaItemHTML(x)}</div>`).join(''))).join('')||section('作业与待办','')}${section('手动计划与课程',(calendarItems(r.timetables,day).map(calendarTimetableHTML).join('')||'<p class="small muted">当天课表尚未提供</p>')+calendarItems(r.events,day).map(calendarEventHTML).join(''))}</div><p class="small muted">限期事项每天显示直到完成；逾期继续保留。未明确日期的事项在收集箱核对。</p>`;
 }
 function calendarHTML(){
  if(!calendarState.week){calendarState.week=calendarMonday(data.today);calendarState.day=data.today;calendarState.result=data.today_calendar;calendarState.range=data.today+'/'+data.today}
@@ -72,16 +71,29 @@ function wishTaskHTML(t){return `<article class="task wish-task" data-query-targ
 function homeworkByChildHTML(items){
  return items.length?`<div class="homework-child task-list" data-homework-child="${esc(currentChild()?.id)}">${items.map(agendaItemHTML).join('')}</div>`:'';
 }
-function taskGroupsHTML(items,homeworkLabel='课内作业',otherItems=items){
- return [['homework',homeworkLabel],['todo',homeworkLabel==='今日作业'?'要办的事':'待办事项']].map(([kind,label])=>{
-  const rows=(kind==='homework'?items:otherItems).filter(x=>(x.agenda.category==='homework'?'homework':'todo')===kind),confirmed=rows.filter(x=>x.kind!=='school'),pending=rows.filter(x=>x.kind==='school');
-  return `<section class="card agenda-group task-list" id="task-group-${kind}" tabindex="-1"><div class="task-group-heading"><h2>${label} · ${confirmed.length}${pending.length?` <a class="review-badge review-link" href="#school-review-${esc(pending[0].id)}">待核对 ${pending.length}</a>`:''}</h2>${homeworkLabel==='今日作业'?`<button class="task-show-all" data-task-all="${kind}">所有${kind==='homework'?'作业':'待办'} →</button>`:''}</div>${confirmed.length?homeworkByChildHTML(confirmed):'<p class="small muted">暂无已确认事项</p>'}${pending.map(agendaItemHTML).join('')}</section>`;
+// Subject is the first and only grouping: one flat section per subject that has items. Type, date and status stay on
+// each card; a cross-subject item is one card in its joint section, and 综合事务 and 科目待定 never mix.
+const subjectGeneral='综合事务',subjectUnknown='科目待定';
+function taskSubjectKey(x){const a=x.agenda||{};return a.subject_state==='known'&&(a.subjects||[]).length?a.subjects.join(' · '):a.subject_state==='general'?subjectGeneral:subjectUnknown}
+function taskSubjectID(key){return 'subject-'+key.replace(/\s+/g,'')}
+function taskSubjectGroups(items){
+ const groups=new Map();for(const x of items){const key=taskSubjectKey(x);if(!groups.has(key))groups.set(key,[]);if(!groups.get(key).includes(x))groups.get(key).push(x)}
+ const rank=key=>key===subjectUnknown?2:key===subjectGeneral?1:0;
+ return [...groups].sort(([a],[b])=>rank(a)-rank(b));
+}
+function taskKindHTML(x){return x.kind==='event'?'':`<p class="subject-item-kind" data-category="${x.agenda.category==='homework'?'homework':'todo'}">${x.agenda.category==='homework'||x.kind==='study'?'作业':'要办的事'}</p>`}
+function taskGroupsHTML(items,today=false){
+ const groups=taskSubjectGroups(items);
+ if(!groups.length)return `<section class="card agenda-group task-list subject-group subject-empty"><p class="small muted">${today?'当前没有已整理的未完成事项。':'这里暂时没有事项。'}</p></section>`;
+ return groups.map(([key,rows])=>{
+  const confirmed=rows.filter(x=>x.kind!=='school'),pending=rows.filter(x=>x.kind==='school'),due=today?confirmed.filter(x=>[x.agenda.due_on,x.agenda.scheduled_on,x.agenda.complete_on].some(day=>exactTaskDay(day)===data.today)).length:0;
+  return `<section class="card agenda-group task-list subject-group" id="${esc(taskSubjectID(key))}" data-subject="${esc(key)}" tabindex="-1"><div class="task-group-heading"><h2>${esc(key)} · ${confirmed.length}${due?`<span class="subject-today">今天 ${due}</span>`:''}${pending.length?` <a class="review-badge review-link" href="#school-review-${esc(pending[0].id)}">待核对 ${pending.length}</a>`:''}</h2></div>${key===subjectUnknown?'<p class="small muted">原消息没有说明科目；可在事项里补充，未补充也照常保留。</p>':''}<div class="homework-child task-list" data-homework-child="${esc(currentChild()?.id)}">${[...confirmed,...pending].map(x=>`<div class="subject-item" data-subject-item="${esc(x.id)}">${taskKindHTML(x)}${agendaItemHTML(x)}</div>`).join('')}</div></section>`;
  }).join('');
 }
 function taskInboxHTML(){
  if(!Array.isArray(data.today_calendar?.inbox))return `<h1>事务收集箱</h1><p role="alert" class="error">${esc(data.today_calendar?.source_error||'收集箱暂时无法读取，请刷新记录；不能据此判断没有待办。')}</p>`;
  const views=taskBoxes();if(!(taskView in views))taskView='Inbox';
- return `<header class="today-heading"><h1>${taskView==='Wish'?'心愿清单':taskView==='全部'?'所有作业与待办':'收集箱'}</h1><button class="primary" data-new-task="${taskView==='Wish'?'wish':'yes'}">${taskView==='Wish'?'＋ 记心愿':'＋ 记一件事'}</button></header>${filters()}${taskBoxesHTML()}<p class="small muted">${({'Inbox':'所有未完成事务，包含已安排和已逾期的事项。','Wish':'想做的事先留在这里，选定日期再转成计划。','计划':'已安排日期、尚未完成的事项。','已完成':'已确认完成的事项，可撤销完成。','已逾期':'截止日已过；未填截止日时按计划日判断。重复安排不计入。','已搁置':'不参加、无需处理、已取消等事项，保留原决定。','全部':'所有日期的作业与待办，包含未完成、已完成及已搁置；心愿单独标注。'})[taskView]}</p>${taskView==='Wish'?`<section class="card checklist">${views[taskView].map(agendaItemHTML).join('')||'<p>这里暂时没有心愿。</p>'}</section>`:`<div class="today-task-groups">${taskGroupsHTML(views[taskView])}</div>`}`;
+ return `<header class="today-heading"><h1>${taskView==='Wish'?'心愿清单':taskView==='全部'?'所有作业与待办':'收集箱'}</h1><button class="primary" data-new-task="${taskView==='Wish'?'wish':'yes'}">${taskView==='Wish'?'＋ 记心愿':'＋ 记一件事'}</button></header>${filters()}${taskBoxesHTML()}<p class="small muted">${({'Inbox':'所有未完成事务，包含已安排和已逾期的事项。','Wish':'想做的事先留在这里，选定日期再转成计划。','计划':'已安排日期、尚未完成的事项。','已完成':'已确认完成的事项，可撤销完成。','已逾期':'截止日已过；未填截止日时按计划日判断。重复安排不计入。','已搁置':'不参加、无需处理、已取消等事项，保留原决定。','全部':'所有日期的作业与待办，包含未完成、已完成及已搁置；心愿单独标注。'})[taskView]}</p>${taskView==='Wish'?`<section class="card checklist">${views[taskView].map(agendaItemHTML).join('')||'<p>这里暂时没有心愿。</p>'}</section>`:`<div class="today-task-groups" id="task-groups">${taskGroupsHTML(views[taskView])}</div>`}`;
 }
 function todayTaskOrder(a,b){
  const key=x=>{
@@ -100,19 +112,11 @@ function todayTasksHTML(){
  const matches=x=>(x.child_ids||[x.child_id]).includes(currentChild()?.id);
  const reviewDue=x=>x.kind==='task'&&data.tasks.some(t=>t.id===x.task_id&&taskReviewDue(t));
  const items=taskInboxItems().filter(x=>!x.closed&&x.kind!=='event'&&x.agenda.box!=='wish'&&(!x.agenda.published_on||x.agenda.published_on<=data.today)&&(!x.agenda.scheduled_on||x.agenda.scheduled_on<=data.today||x.agenda.due_on||reviewDue(x))).sort(todayTaskOrder);
- const today=items.filter(x=>[x.agenda.due_on,x.agenda.scheduled_on,x.agenda.complete_on].some(day=>exactTaskDay(day)===data.today));
- const receivedHomework=items.filter(x=>x.agenda.category==='homework');
- const recentHomework=receivedHomework.filter(x=>!today.includes(x)&&!reviewDue(x))
-  .sort((a,b)=>(b.agenda.published_at||b.agenda.published_on||'').localeCompare(a.agenda.published_at||a.agenda.published_on||''));
- const recentPending=recentHomework.filter(x=>x.kind==='school');
- const actionItems=items.filter(x=>x.agenda.category!=='homework'&&(!reviewDue(x)||today.includes(x)));
- const reviews=items.filter(x=>!today.includes(x)&&!actionItems.includes(x)&&reviewDue(x));
- const earlier=items.filter(x=>!today.includes(x)&&!recentHomework.includes(x)&&!actionItems.includes(x)&&!reviews.includes(x));
  const sources=currentSources().filter(s=>matches({child_ids:[s.child_id]}));
  const readGap=sources.some(s=>currentSourceStatus(s)!=='最近读取成功')||!!data.sync_error||(!currentSources().length&&!!data.agent?.last_error);
  const originalGap=sources.some(s=>s.unread_count>0);
  const plans=(r.timetables||[]).filter(matches).map(t=>calendarTimetableHTML(t,{open:true})).join('')+(r.events||[]).filter(x=>matches(x)&&!['cancelled','completed'].includes(x.status)).map(calendarEventHTML).join('');
- return `<header class="today-heading"><div><h1>今天</h1><p>${esc(data.today)}</p></div><div class="toolbar">${data.children.filter(c=>c.name===child).map(c=>`<button class="primary" data-homework-new="${esc(c.id)}">＋ 记${esc(c.name)}的作业</button>`).join('')}</div></header>${r.source_error?`<p class="error" role="status">${esc(r.source_error)}</p>`:''}${readGap?'<p class="note today-source-gap" role="status">消息读取有缺口，作业可能缺项。<button data-page="sources" data-collection-check>检查最新消息</button></p>':originalGap?'<p class="note today-source-gap">部分消息原件尚未读全。<button data-page="sources">查看消息来源</button></p>':''}${schoolProcessingHTML()}<div class="today-controls">${filters()}<div class="today-sections" aria-label="跳到事务分类"><a href="#task-group-homework">作业 ${today.filter(x=>x.agenda.category==='homework'&&x.kind!=='school').length}</a><a href="#task-group-todo">要办的事 ${actionItems.filter(x=>x.kind!=='school').length}</a><a href="#today-courses">课程</a></div></div><div class="today-task-groups">${taskGroupsHTML(today,'今日作业',actionItems)}</div>${recentHomework.length?`<section class="card agenda-group task-list today-recent-homework"><h2>其他未完成作业 · ${recentHomework.length}${recentPending.length?` <a class="review-badge review-link" href="#school-review-${esc(recentPending[0].id)}">待核对 ${recentPending.length}</a>`:''}</h2><p class="small muted">未完成作业保留原日期。</p>${homeworkByChildHTML(recentHomework.filter(x=>x.kind!=='school'))}${recentPending.length?`<p class="homework-pending-heading">以下作业有信息待补充</p>${homeworkByChildHTML(recentPending)}`:''}</section>`:''}${reviews.length?`<section class="card agenda-group task-list today-reviews"><h2>今天回看 · ${reviews.length}</h2>${reviews.map(agendaItemHTML).join('')}</section>`:''}${earlier.length?`<details class="card today-backlog"><summary>其他未完成及日期待核对 · ${earlier.length}</summary>${earlier.map(agendaItemHTML).join('')}</details>`:''}<section id="today-courses" class="card agenda-group task-list today-plans"><h2>今日课程与安排</h2>${plans||'<p class="small muted">当天课表尚未提供。</p><button data-page="calendar">查看日历 / 导入课表</button>'}</section><details class="today-extra"><summary>其他记录与计数说明</summary><button data-new-task="yes">记其他事项</button><p class="small muted">作业按截止或计划日期展示；要办的事保留原期限，未填日期不算今天到期。</p></details>`;
+ return `<header class="today-heading"><div><h1>今天</h1><p>${esc(data.today)}</p></div><div class="toolbar">${data.children.filter(c=>c.name===child).map(c=>`<button class="primary" data-homework-new="${esc(c.id)}">＋ 记${esc(c.name)}的作业</button>`).join('')}</div></header>${r.source_error?`<p class="error" role="status">${esc(r.source_error)}</p>`:''}${readGap?'<p class="note today-source-gap" role="status">消息读取有缺口，作业可能缺项。<button data-page="sources" data-collection-check>检查最新消息</button></p>':originalGap?'<p class="note today-source-gap">部分消息原件尚未读全。<button data-page="sources">查看消息来源</button></p>':''}${schoolProcessingHTML()}<div class="today-controls">${filters()}<div class="today-sections" aria-label="跳到科目">${taskSubjectGroups(items).map(([key,rows])=>`<a href="#${esc(taskSubjectID(key))}">${esc(key)} ${rows.filter(x=>x.kind!=='school').length}</a>`).join('')}<a href="#today-courses">课程</a></div></div><p class="small muted today-subject-note">各科按今天、逾期、以后、日期待定排列；未完成事项保留原日期，没有反馈不等于没做。</p><div class="today-task-groups" id="task-groups">${taskGroupsHTML(items,true)}</div><section id="today-courses" class="card agenda-group task-list today-plans"><h2>今日课程与安排</h2>${plans||'<p class="small muted">当天课表尚未提供。</p><button data-page="calendar">查看日历 / 导入课表</button>'}</section><details class="today-extra"><summary>其他记录与计数说明</summary><button data-new-task="yes">记其他事项</button><p class="small muted">事项按科目分区，作业和要办的事都保留原期限；未填日期不算今天到期。</p></details>`;
 }
 async function calendarRead(){
  const start=calendarState.week,end=calendarAdd(start,6),range=start+'/'+end;

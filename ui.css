@@ -217,3 +217,10 @@ body[data-page=sources] .source-cards{grid-template-columns:1fr}
 
 /* Local, parent-owned originals stay recognisable without external cover requests. */
 .book-cover:has([data-reading-cover]){padding:0;overflow:hidden;position:relative}.book-cover [data-reading-cover]{width:100%;height:100%;object-fit:contain}.book-cover [data-cover-error]{display:block;padding:8px;font-size:11px;letter-spacing:0;line-height:1.6;writing-mode:horizontal-tb}.book-cover [hidden],.original-preview [hidden]{display:none}.reading-cover-choice{border:1px solid var(--line);border-radius:12px;padding:12px;margin:14px 0}.reading-cover-choice img{max-width:160px;max-height:180px;object-fit:contain;border-radius:8px}.original-preview{margin:12px 0;max-width:240px;min-height:70px;border:1px solid var(--line);border-radius:12px;padding:10px;overflow:hidden}.original-preview img{max-width:100%;max-height:250px;object-fit:contain;display:block;margin:0 auto}.original-preview img[hidden]{display:none}.original-preview figcaption{font-size:12px;color:var(--muted);line-height:1.6;margin-top:8px}.original-preview button{font-size:12px;margin-top:8px}.reading-cover-choice input[type=file]{max-width:100%}@media(max-width:600px){.original-preview{max-width:200px}.original-preview img{max-height:220px}}
+
+/* Subject-first flat list: the subject heads each section; type, dates and state stay on each card. */
+.subject-group .task-group-heading h2{display:flex;flex-wrap:wrap;align-items:baseline;gap:.4rem}
+.subject-today{font-size:.8em;font-weight:600;color:var(--accent,#2f6f4f)}
+.subject-item+.subject-item{margin-top:.5rem}
+.subject-item-kind{margin:0 0 .15rem;font-size:.78rem;color:var(--muted,#6b6b6b);letter-spacing:.02em}
+.today-subject-note{margin:.25rem 0 .5rem}

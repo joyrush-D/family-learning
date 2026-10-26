@@ -522,6 +522,52 @@ def task_category(title,purpose=None):
     return 'todo'
 
 
+# Every tracked item is filed under the courses its own words name. The school's native learning subjects come first; the
+# other school courses keep their own admin items (体育课带跳绳) without making them learning work. A teacher, class
+# representative or other recipient (交给数学课代表、英语老师) only addresses the item and never names its subject.
+SUBJECTS=family_agent._SCHOOL_NATIVE_SUBJECTS+'|道德与法治|体育|美术|音乐|信息科技|劳动|书法'
+GENERAL='综合'
+_SUBJECT_RE=re.compile(SUBJECTS)
+_ADDRESSEE_RE=re.compile('(?:'+SUBJECTS+')(?:课代表|老师|教师|组长)')
+_ADMIN_TITLE_RE=re.compile(r'打印|报名|缴费|回执|签字|签署|署名|登记|同意书|确认书|请假|接送|家长会|带|携带|准备|交费')
+
+
+def named_subjects(text):
+    """The subjects an item's own words file it under, in order and without repeats."""
+    seen=[]
+    for m in _SUBJECT_RE.finditer(_ADDRESSEE_RE.sub('',re.sub(r'^待核对[：:]?\s*','',text or ''))):
+        if m[0] not in seen:seen.append(m[0])
+    return seen
+
+
+def parse_subjects(value):
+    """A parent's subject choice: empty (automatic), 综合 (no subject) or up to three course names."""
+    parts=[p.strip() for p in re.split(r'[·、,，/+＋\s]+',str(value or '')) if p.strip()]
+    if not parts:return ''
+    if parts==[GENERAL]:return GENERAL
+    if GENERAL in parts or len(parts)>3 or len(set(parts))!=len(parts) or any(len(p)>12 for p in parts):raise ValueError(value)
+    return '·'.join(parts)
+
+
+def subject_fields(title,quote='',*,purpose=None,saved='',corrected='',category='',confirmed=False):
+    """File one item once under its own subjects, never by merging, sibling words or guessing.
+
+    A parent's correction wins and can be cleared to reopen the automatic reading. Then a subject saved with the item
+    (the school's learning subject, a child's or parent's capture), then the item's own title, then its own original
+    words. Without any of them an item known to carry no subject (an admin, optional or family to-do) is 综合 and
+    everything else stays 科目待定; a cross-subject item keeps all its subjects on the one card."""
+    if corrected:
+        return dict(subjects=[],subject_state='general',subject_basis='parent') if corrected==GENERAL else \
+            dict(subjects=corrected.split('·'),subject_state='known',subject_basis='parent')
+    saved=[s for s in re.split(r'[·、,，/+＋\s]+',saved or '') if s]
+    for basis,subjects in (('saved',saved),('own_words',named_subjects(title)),('own_words',named_subjects(quote))):
+        if subjects:return dict(subjects=subjects,subject_state='known',subject_basis=basis)
+    if purpose in ('admin','optional'):general=True
+    elif purpose in ('learning','unknown'):general=False
+    else:general=category=='todo' and (confirmed or bool(_ADMIN_TITLE_RE.search(title or '')))
+    return dict(subjects=[],subject_state='general' if general else 'unknown',subject_basis='')
+
+
 def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal='',date_header='',school_focus=False,date_siblings=None,action=''):
     focus=focus or {};messages=[];publications=[];original_time=''
     store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
@@ -727,12 +773,13 @@ def action_lines(title,action,words=None):
 
 def enrich(app,c,tasks):
     owners={p['name']:p['id'] for p in app.profiles(c)}
-    reported={r['task_id']:(r['child_id'],r['day'],r['report']) for r in c.execute('SELECT task_id,child_id,day,report FROM study_items WHERE id=task_id')} if c.execute("SELECT 1 FROM sqlite_master WHERE name='study_items'").fetchone() else {}
+    reported={r['task_id']:(r['child_id'],r['day'],r['report'],r['subject']) for r in c.execute('SELECT task_id,child_id,day,report,subject FROM study_items WHERE id=task_id')} if c.execute("SELECT 1 FROM sqlite_master WHERE name='study_items'").fetchone() else {}
     cited_by=None  # read once per enrich, only when a school item needs its siblings
     for task in tasks:
         refs=[x.strip() for x in task['source'].splitlines() if x.strip().startswith('message:')]
         focus=task.get('focus') or {}
         purpose=None;publication_ref='';date_quote='';goal='';date_header='';school_focus=False;date_siblings=None
+        subject_title=task.get('original_title',task['title']);own_quote='';saved_subject=''
         if task.get('school_origin'):
             origin=task['source'].splitlines()[0].removeprefix('Agent建议:')
             proposal=c.execute("SELECT * FROM agent_items WHERE id=? AND task_id=? AND child_id=? AND kind='school' AND state='accepted'",
@@ -744,6 +791,8 @@ def enrich(app,c,tasks):
                 publication_ref=family_agent.school_original_publication_ref(store,c,proposal)
                 date_quote=_stored_date_quote(plan) or re.sub(r'^待核对[：:]?\s*','',proposal['title']).strip()
                 date_header=_stored_date_header(plan,date_quote)
+                # The same saved row, words and subject its pending candidate was filed with.
+                subject_title=proposal['title'];own_quote=_stored_date_quote(plan);saved_subject=str((plan.get('school_learning') or {}).get('subject') or '')
                 school_focus=_school_focus(c,task,proposal,plan)
                 # Every other live item of this child citing one of the same originals: its own words are never this item's role.
                 if cited_by is None:
@@ -766,10 +815,13 @@ def enrich(app,c,tasks):
             # Only days the parent or child explicitly entered as the teacher's own are teacher days; a plan never writes them.
             teacher={k:v for k,v in json.loads(captured[2] or '{}').items() if k in family_study.TEACHER_DAYS and v}
             if teacher.get('handback_on'):focus['due_on']=teacher['handback_on']
+            saved_subject=captured[3] or ''
         task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus,date_siblings=date_siblings,action=task.get('action',''))
         if teacher.get('handback_on'):task['agenda']['due_kind']='handback'
         if teacher.get('complete_on'):
             task['agenda']['complete_on']=teacher['complete_on'];task['agenda'].pop('complete_words',None)
+        task['agenda'].update(subject_fields(subject_title,own_quote,purpose=purpose,saved=saved_subject,corrected=(task.get('focus') or {}).get('subject',''),
+                                             category=task['agenda'].get('category',''),confirmed=bool(task['agenda'].get('category_confirmed'))))
         # Only a card that leaves repeated words out carries its own lines; every other task keeps its exact shape and
         # its card reads the saved lines as they are.
         lines=action_lines(task['title'],task.get('action',''),task['agenda'].get('complete_words'))
@@ -817,6 +869,8 @@ def snapshot(app,start,end):
                 m=metadata(app,c,row['child_id'],row['title'],row['due'],refs,publication_ref=family_agent.school_original_publication_ref(store,c,row),
                            date_quote=_stored_date_quote(plan),goal=str(brief.get('goal') or ''),date_header=_stored_date_header(plan,_stored_date_quote(plan)))
                 m['category']=category
+                m.update(subject_fields(row['title'],_stored_date_quote(plan),purpose=purpose,saved=str((plan.get('school_learning') or {}).get('subject') or ''),
+                                        category=category,confirmed=bool(m.get('category_confirmed'))))
                 items.append(dict(id=row['id'],task_id='',kind='school',child_ids=[row['child_id']],title=row['title'],
                     agenda=m,status='待核对',closed=False,closed_on='',body=row['body']))
         study=[]
@@ -827,7 +881,7 @@ def snapshot(app,start,end):
                     title=row['title'],status=row['status'],result=row['result'],result_actor=dict(row).get('result_actor','parent'))
                 if start<=row['day']<=end:study.append(entry)
                 if not row['task_id']:
-                    items.append(dict(entry,agenda=dict(category='homework',published_on='',due_on='',scheduled_on=row['day']),
+                    items.append(dict(entry,agenda=dict(category='homework',published_on='',due_on='',scheduled_on=row['day'],**subject_fields(row['title'],saved=row['subject'],category='homework')),
                         closed=row['result']=='完成' and entry['result_actor']=='parent',closed_on=row['day']))
         plans=[]
         if 'calendar_events' in tables:
@@ -838,7 +892,7 @@ def snapshot(app,start,end):
                 if event['occurrence']:
                     event['occurrence']=dict(event['occurrence'],version=event['version'],series_version=parents[event['occurrence']['series_id']]['version'])
                 plans.append(dict(id='calendar:'+event['id'],task_id='',kind='event',child_ids=event['child_ids'],title=event['title'],
-                    agenda=dict(category='todo',published_on='',due_on='',scheduled_on=event['day']),closed=event['status'] in ('cancelled','completed'),event=event))
+                    agenda=dict(category='todo',published_on='',due_on='',scheduled_on=event['day'],**subject_fields(event['title'],category='todo',confirmed=True)),closed=event['status'] in ('cancelled','completed'),event=event))
     first=dt.date.fromisoformat(start);count=(dt.date.fromisoformat(end)-first).days+1
     agenda=[]
     for offset in range(count):

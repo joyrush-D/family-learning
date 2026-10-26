@@ -5,6 +5,8 @@ import hashlib
 import json
 import re
 
+import family_agenda
+
 
 class FocusError(ValueError):
     def __init__(self, message, status=400, code='invalid_task_focus'):
@@ -12,7 +14,7 @@ class FocusError(ValueError):
 
 
 def default():
-    return dict(mode='next',next_action='',waiting_for='',review_on='',version=0,updated='',category='',published_on='',due_on='',scheduled_on='',box='inbox',title='',goal='')
+    return dict(mode='next',next_action='',waiting_for='',review_on='',version=0,updated='',category='',published_on='',due_on='',scheduled_on='',box='inbox',title='',goal='',subject='')
 
 
 def read_all(connection):
@@ -30,7 +32,7 @@ def _tables(c):
         request_key TEXT PRIMARY KEY, task_id TEXT NOT NULL, request_hash TEXT NOT NULL,
         previous TEXT NOT NULL, current TEXT NOT NULL, updated TEXT NOT NULL)''')
     columns={r['name'] for r in c.execute('PRAGMA table_info(task_focus)')}
-    for key in ('category','published_on','due_on','scheduled_on','box','title','goal'):
+    for key in ('category','published_on','due_on','scheduled_on','box','title','goal','subject'):
         if key not in columns: c.execute('ALTER TABLE task_focus ADD COLUMN '+key+" TEXT NOT NULL DEFAULT '"+str(default()[key])+"'")
 
 
@@ -81,6 +83,10 @@ def save(app, obj, connection=None, *, allow_closed=False):
         except ValueError: raise FocusError('请填写有效日期') from None
     details={key:_text(obj,key,limit) for key,limit in [('box',10),('title',200),('goal',4000)] if key in obj}
     if details.get('box','inbox') not in ('inbox','wish'): raise FocusError('请选择收集箱或心愿清单')
+    if 'subject' in obj:
+        # A parent's explicit course choice outranks the automatic reading; empty reopens it, 综合 says it has none.
+        try: details['subject']=family_agenda.parse_subjects(_text(obj,'subject',40))
+        except ValueError: raise FocusError('科目请填写最多三个科目名称，或填写“综合”；留空按原消息归类') from None
     organization.update(details)
     digest=hashlib.sha256(json.dumps(dict(id=ident,version=version,**focus,**organization),ensure_ascii=False,sort_keys=True).encode()).hexdigest()
     c=connection or app.connect()
@@ -108,7 +114,7 @@ def save(app, obj, connection=None, *, allow_closed=False):
                 captured=c.execute('SELECT report FROM study_items WHERE id=task_id AND task_id=?',(ident,)).fetchone()
                 if captured and json.loads(captured['report'] or '{}').get('handback_on')==organization['due_on']:
                     organization['due_on']=previous.get('due_on','')
-            focus.update({k:organization.get(k,previous.get(k,'')) for k in ('category','published_on','due_on','scheduled_on','box','title','goal')})
+            focus.update({k:organization.get(k,previous.get(k,'')) for k in ('category','published_on','due_on','scheduled_on','box','title','goal','subject')})
             updated=dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat()
             focus.update(version=version+1,updated=updated)
             if focus['box']=='wish' and c.execute("SELECT 1 FROM sqlite_master WHERE name='study_items'").fetchone() and c.execute('SELECT 1 FROM study_items WHERE task_id=?',(ident,)).fetchone():
