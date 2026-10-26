@@ -54,7 +54,7 @@ async function proof(p,name){if(process.env.LAN_HTTPS_UI_PROOF_DIR){await fs.mkd
     assert.equal(await p.locator('#certificateHint').isVisible(),true,'home HTTPS shows how to install the certificate');
     assert.equal(await p.locator('#certificateLink').getAttribute('href'),'./family-ca.crt');await fit(p);await proof(p,'login-'+width);
     await p.locator('#username').fill('parent');await p.locator('#password').fill(password);await p.locator('#loginSubmit').click();
-    await eventually(()=>p.locator('body[data-page="home"] [data-task-all="todo"]').isVisible(),'authenticated home');
+    await eventually(()=>p.locator('body[data-page="home"] #task-groups').isVisible(),'authenticated home');
     const cookie=(await context.cookies(home)).find(x=>x.name==='family_parent_session');assert.ok(cookie&&cookie.secure&&cookie.httpOnly&&cookie.sameSite==='Lax');assert.equal(cookie.path,'/');
     assert.equal(await p.evaluate(()=>typeof crypto.randomUUID==='function'&&!!navigator.mediaDevices?.getUserMedia&&!!window.MediaRecorder),true,'recording APIs exist on the home HTTPS page');
     // Browser recording: a real MediaRecorder clip uploads as an original through the family certificate.
@@ -74,7 +74,7 @@ async function proof(p,name){if(process.env.LAN_HTTPS_UI_PROOF_DIR){await fs.mkd
     const ics=await fetchTLS(server.securePort,server.ca,'/calendar.ics',{authorization:'Basic '+Buffer.from('parent:'+password).toString('base64')});assert.equal(ics.status,200);assert.match(ics.body.toString(),/BEGIN:VCALENDAR/);
     await p.locator('#calendarSyncDialog [data-close="calendarSyncDialog"]').click();
     // Saved state survives reopening, and logout ends the session on this device only.
-    await p.reload();await eventually(()=>p.locator('body[data-page="home"] [data-task-all="todo"]').isVisible(),'home after reload keeps the session');
+    await p.reload();await eventually(()=>p.locator('body[data-page="home"] #task-groups').isVisible(),'home after reload keeps the session');
     assert.equal((await read()).uploads.length,uploadsBefore+1);
     await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="sources"]').click();await eventually(async()=>/语音-/.test(await p.locator('#content').innerText()),'the recorded original is listed under pending materials after reopening');await fit(p);await proof(p,'reopened-'+width);
     await p.locator('nav [data-page="more"]').click();await p.locator('[data-parent-logout]').click();await p.locator('#parentLogoutConfirm').click();await eventually(()=>p.locator('#loginForm').isVisible(),'logout landing');

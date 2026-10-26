@@ -27,7 +27,7 @@ async function proof(p,name){if(process.env.TASK_FOCUS_UI_PROOF_DIR){const fs=re
    const server=await demoServer(),p=await browser.newPage({viewport:{width,height:900}}),errors=[],writes=[];
    p.on('pageerror',e=>errors.push(e.message));p.on('request',r=>{if(r.method()==='POST'&&new URL(r.url()).pathname==='/api/task/focus')writes.push(r.postDataJSON())});
    const read=async()=>await(await fetch(server.url+'api/state')).json(),post=async(path,body)=>{const state=await read(),r=await fetch(server.url+path,{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify(body)});const value=await r.json();assert.equal(r.ok,true,JSON.stringify(value));return value};
-   const ready=()=>eventually(()=>p.locator('body[data-page="home"] #task-group-homework').isVisible(),'home ready'),tasks=async()=>{await p.locator('[data-page="tasks"]').first().click();await eventually(()=>p.locator('[data-task-box="Inbox"]').isVisible(),'action list ready')};
+   const ready=()=>eventually(()=>p.locator('body[data-page="home"] #task-groups').isVisible(),'home ready'),tasks=async()=>{await p.locator('[data-page="tasks"]').first().click();await eventually(()=>p.locator('[data-task-box="Inbox"]').isVisible(),'action list ready')};
    const card=id=>p.locator('[data-query-target="task:'+id+'"]'),form=p.locator('#taskFocusForm'),save=()=>form.locator('[type="submit"]').click();
    let id;
    // Editing focus and declining sit in the card's closed "详情与原通知" disclosure (formerly "更多操作与原通知"); when hidden, open that summary as a parent would, then click.

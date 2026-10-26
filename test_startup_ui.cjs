@@ -34,7 +34,7 @@ async function newPage(browser,width=400){
  await p.route(url=>url.pathname==='/',async r=>{const response=await r.fetch(),html=await response.text();await r.fulfill({response,body:html.replace('<head>','<head><script src="./__startup-global-fixture.js"></script>')})});
  return {p,errors,posts};
 }
-async function homeReady(p){await eventually(async()=>await p.locator('body[data-page="home"] .today-task-groups').isVisible()&&await p.locator('#task-group-homework').isVisible()&&await p.locator('#task-group-todo').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','ready home with homework and todo groups')}
+async function homeReady(p){await eventually(async()=>await p.locator('body[data-page="home"] .today-task-groups').isVisible()&&await p.locator('#task-groups').isVisible()&&await p.locator('#task-groups').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','ready home with homework and todo groups')}
 async function checkIsolation(p){
  const result=await p.evaluate(()=>({original:window.__startupFixture(),leaked:['load','render','esc','apiFetch','readingHomeHTML','calendarHomeHTML'].filter(k=>typeof window[k]!=='undefined')}));
  assert.deepEqual(result.original,{page:'fixture-page',data:{source:'fixture-only'},basePath:'fixture-base'});assert.deepEqual(result.leaked,[]);

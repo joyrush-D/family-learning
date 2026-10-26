@@ -292,7 +292,7 @@ async function splitPdfFlow(p,host,width){
  const task=(await post('api/task/new',{child,title:'虚构果园分页 '+width,category:'homework',action:'虚构果园分页：核对第1题。',due:state.today})).task;
  const answer=await upload('synthetic-orchard-answer-'+width+'.txt',Buffer.from('SYNTHETIC ORCHARD TEST\n第1题 2+3=?\n孩子作答：4\n')),teacher=await upload(pdfName,pdf);
  const original=await post('api/task/feedback',{task_id:task.id,child,day:state.today,request_key:'synthetic-split-original-'+width,note:'虚构果园卷第1题。',attachments:[answer,teacher]});
- const open=async()=>{await p.locator('nav [data-page=tasks]').click();await p.locator('body[data-page=tasks] #task-group-homework').waitFor();await p.locator('[data-task-box=Inbox]').click();await p.locator('#content [data-task="'+task.id+'"]:visible').first().click();await p.locator('#taskDialog[open]').waitFor()};
+ const open=async()=>{await p.locator('nav [data-page=tasks]').click();await p.locator('body[data-page=tasks] #task-groups').waitFor();await p.locator('[data-task-box=Inbox]').click();await p.locator('#content [data-task="'+task.id+'"]:visible').first().click();await p.locator('#taskDialog[open]').waitFor()};
  const panel=()=>p.locator('#taskFeedbackHistory [data-homework-review="'+original.record_id+'"]'),row=id=>panel().locator('[data-review-source="'+id+'"]');
  const choose=async()=>{
   if(!await panel().locator(':scope > details').evaluate(x=>x.open))await panel().locator(':scope > details > summary').click();
@@ -811,7 +811,7 @@ async function splitPdfFlow(p,host,width){
   // The synthetic image is readable fixture material; this does not test OCR or model accuracy.
   const readCause=async()=>await(await fetch(host.url+'api/state')).json();state=await readCause();
   const causeTask=(await post('api/task/new',{child,title:'虚构错因独立校验 '+width,category:'homework',action:'虚构错因独立校验：虚构甲卷第1题，2+3=?，对照本卷教师参考核对最终作答。',due:state.today})).task;
-  const openCause=async()=>{await p.locator('nav [data-page=tasks]').click();await p.locator('body[data-page=tasks] #task-group-homework').waitFor();await p.locator('[data-task-box=Inbox]').click();await p.locator('#content [data-task="'+causeTask.id+'"]:visible').first().click();await p.locator('#taskDialog[open]').waitFor()};
+  const openCause=async()=>{await p.locator('nav [data-page=tasks]').click();await p.locator('body[data-page=tasks] #task-groups').waitFor();await p.locator('[data-task-box=Inbox]').click();await p.locator('#content [data-task="'+causeTask.id+'"]:visible').first().click();await p.locator('#taskDialog[open]').waitFor()};
   const sheet=await browser.newPage({viewport:{width:500,height:240}});
   await sheet.setContent('<html><body style="font:24px sans-serif;background:white;color:black"><h2>SYNTHETIC PAPER A</h2><p>Question 1: 2 + 3 = ?</p><p>Student final answer: 4</p></body></html>');
   const causeImage=await sheet.screenshot();await sheet.close();await p.reload();await openCause();
@@ -855,7 +855,7 @@ async function splitPdfFlow(p,host,width){
   await p.locator('#taskDialog [data-close="taskDialog"]').click();assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),false);
   const unitResponse=await fetch(host.url+'__fixture/unit-identity?width='+width),unit=await unitResponse.json();assert.equal(unitResponse.status,200,JSON.stringify(unit));
   assert(unit.synthetic_only&&unit.shared_guard&&unit.classification_preserved_sources&&unit.wrong_preserved_canonical&&unit.accepted_original_preserved);assert.equal(unit.real_model_calls,0);assert.equal(unit.calls.length,3);assert.equal(unit.wrong_state,'review');assert.equal(unit.correct_state,'ready');assert.match(unit.title,/Unit30/);assert.match(unit.action,/只补Unit 30朗读/);assert(!unit.action.includes('只补Unit3朗读'));
-  const readUnit=readCause,openUnit=async()=>{await p.locator('nav [data-page=tasks]').click();await p.locator('body[data-page=tasks] #task-group-homework').waitFor();await p.locator('[data-task-box=Inbox]').click();await p.locator('#content [data-task="'+unit.task_id+'"]:visible').first().click();await p.locator('#taskDialog[open]').waitFor()};
+  const readUnit=readCause,openUnit=async()=>{await p.locator('nav [data-page=tasks]').click();await p.locator('body[data-page=tasks] #task-groups').waitFor();await p.locator('[data-task-box=Inbox]').click();await p.locator('#content [data-task="'+unit.task_id+'"]:visible').first().click();await p.locator('#taskDialog[open]').waitFor()};
   await p.reload();await openUnit();assert.equal(await p.locator('#taskRequirement').innerText(),unit.action);assert.match(await p.locator('#taskTitle').innerText(),/Unit30/);
   const unitFeedbackNote='虚构Unit30反馈：保留原朗读要求，第1个词读音需订正。';await p.locator('#taskForm [name=note]').fill(unitFeedbackNote);
   await p.locator('#taskDialog [data-school-original-ref="'+unit.original_ref+'"]:visible').first().click();await p.locator('#schoolOriginalDialog[open]').waitFor();await eventually(async()=> (await p.locator('#schoolOriginalDialog').innerText()).includes(unit.original_text),'Unit original message loaded');
@@ -878,7 +878,7 @@ async function splitPdfFlow(p,host,width){
   // Only the model transport is fixed; no actual OCR, model call or household write.
   await p.locator('#taskDialog [data-close="taskDialog"]').click();state=await readCause();
   const consistencyTask=(await post('api/task/new',{child,title:'虚构结论一致 '+width,category:'homework',action:'虚构结论一致：逐题核对乙卷三题及教师参考，冲突题不判错。',due:state.today})).task;
-  const openConsistency=async()=>{await p.locator('nav [data-page=tasks]').click();await p.locator('body[data-page=tasks] #task-group-homework').waitFor();await p.locator('[data-task-box=Inbox]').click();await p.locator('#content [data-task="'+consistencyTask.id+'"]:visible').first().click();await p.locator('#taskDialog[open]').waitFor()};
+  const openConsistency=async()=>{await p.locator('nav [data-page=tasks]').click();await p.locator('body[data-page=tasks] #task-groups').waitFor();await p.locator('[data-task-box=Inbox]').click();await p.locator('#content [data-task="'+consistencyTask.id+'"]:visible').first().click();await p.locator('#taskDialog[open]').waitFor()};
   const consistencySheet=await browser.newPage({viewport:{width:500,height:330}});
   await consistencySheet.setContent('<html><body style="font:22px sans-serif;background:white;color:black"><h2>SYNTHETIC PAPER B</h2><p>Q1: 2 + 3 = ? Student: ______</p><p>Q2: 6 - 2 = ? Student: 3</p><p>Q3: 1 + 1 = ? Student: 2</p><p>Q4: Choose A, B, C or D. Student: C</p></body></html>');
   const consistencyImage=await consistencySheet.screenshot();await consistencySheet.close();await p.reload();await openConsistency();
@@ -939,7 +939,7 @@ async function splitPdfFlow(p,host,width){
   // gap, reopen it, then actually recheck the second question under the same task.
   await p.locator('#taskDialog [data-close="taskDialog"]').click();state=await readCause();
   const coverageTask=(await post('api/task/new',{child,title:'虚构漏题覆盖 '+width,category:'homework',action:'虚构漏题覆盖：检查甲卷两题，第2题不得漏查。',due:state.today})).task;
-  const openCoverage=async()=>{await p.locator('nav [data-page=tasks]').click();await p.locator('body[data-page=tasks] #task-group-homework').waitFor();await p.locator('[data-task-box=Inbox]').click();await p.locator('#content [data-task="'+coverageTask.id+'"]:visible').first().click();await p.locator('#taskDialog[open]').waitFor()};
+  const openCoverage=async()=>{await p.locator('nav [data-page=tasks]').click();await p.locator('body[data-page=tasks] #task-groups').waitFor();await p.locator('[data-task-box=Inbox]').click();await p.locator('#content [data-task="'+coverageTask.id+'"]:visible').first().click();await p.locator('#taskDialog[open]').waitFor()};
   await p.reload();await openCoverage();await p.locator('#taskForm [name=note]').fill('虚构甲卷，孩子第1题作答5，第2题作答3。');
   const coverageAnswerName='synthetic-paper-a-answer.txt',coverageTeacherName='synthetic-paper-a-teacher.txt';
   for(const [name,text] of [[coverageAnswerName,'虚构甲卷\n第1题 2+3，孩子作答5。\n第2题 6-2，孩子作答3。'],[coverageTeacherName,'虚构甲卷\n第1题5。\n第2题4。']]){
@@ -1048,7 +1048,7 @@ async function splitPdfFlow(p,host,width){
   const originFormalRow=originTrace.records.find(r=>r.id===originFormal.record_id);assert.equal(originFormalRow.followup_kind,'作业检查');assert.equal(originFormalRow.related_record_id,originOriginal.record_id);assert.deepEqual(JSON.parse(originFormalRow.review_output_ids),[originOpinion.id],'formal output binding excludes the retained same-name teacher TXT');
   const originSources=await(await fetch(host.url+'api/print/homework/sources?task_id='+originTask.id+'&record_id='+originR2.record_id)).json();assert.equal(originSources.created,originR2.feedback.created);
   assert.equal(originSources.sources.find(a=>a.id===originOpinion.id).origin,'review_result');assert.equal(originSources.sources.find(a=>a.id===originTeacher.id).origin,'same_task');assert.deepEqual((await readOrigin()).records,originTrace.records,'source listing does not rewrite original bindings');
-  const openOrigin=async()=>{await p.locator('nav [data-page=tasks]').click();await p.locator('body[data-page=tasks] #task-group-homework').waitFor();await p.locator('[data-task-box=Inbox]').click();await p.locator('#content [data-task="'+originTask.id+'"]:visible').first().click();await p.locator('#taskDialog[open]').waitFor()};
+  const openOrigin=async()=>{await p.locator('nav [data-page=tasks]').click();await p.locator('body[data-page=tasks] #task-groups').waitFor();await p.locator('[data-task-box=Inbox]').click();await p.locator('#content [data-task="'+originTask.id+'"]:visible').first().click();await p.locator('#taskDialog[open]').waitFor()};
   const originPanel=()=>p.locator('#taskFeedbackHistory [data-homework-review="'+originR2.record_id+'"]');
   const originRows=()=>({photo:originPanel().locator('[data-review-source="'+originPhoto.id+'"]'),teacher:originPanel().locator('[data-review-source="'+originTeacher.id+'"]'),previous:originPanel().locator('[data-review-source="'+originOpinion.id+'"]')});
   const checkOriginChoices=async()=>{const rows=originRows();await rows.teacher.waitFor();await eventually(async()=>JSON.stringify(await rows.previous.locator('[data-homework-review-role] option').evaluateAll(xs=>xs.map(x=>x.value)))==='["previous"]','reattached output exposes only the previous-opinion role');assert.deepEqual(await rows.previous.locator('[data-homework-review-role] option').allTextContents(),['上次 AI 检查 · 供复核']);assert((await rows.teacher.locator('[data-homework-review-role] option').evaluateAll(xs=>xs.map(x=>x.value))).includes('reference'));return rows};

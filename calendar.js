@@ -101,12 +101,14 @@ function subjectFiledHTML(rows,keyOf,rowHTML,name){return subjectFiled(rows,keyO
 // The kind is said once at the start of a run of same-kind cards; every card still carries its own kind for checks.
 function taskKindLabel(x){return x.kind==='event'||x.agenda?.box==='wish'?'':x.agenda?.category==='homework'||x.kind==='study'?'作业':'要办的事'}
 function taskKindHTML(x,previous){const label=taskKindLabel(x);return !label||previous&&taskKindLabel(previous)===label?'':`<p class="subject-item-kind" data-category="${x.agenda.category==='homework'?'homework':'todo'}">${label}</p>`}
-function subjectItemHTML(x,i,list){return `<div class="subject-item" data-subject-item="${esc(x.id)}" data-category="${x.agenda?.category==='homework'?'homework':'todo'}" data-kind="${esc(x.kind)}">${taskKindHTML(x,list[i-1])}${agendaItemHTML(x)}</div>`}
+// data-today marks the cards the subject heading counts as 今天, so the first layer stays checkable inside each subject.
+function taskIsToday(x){return [x.agenda?.due_on,x.agenda?.scheduled_on,x.agenda?.complete_on].some(day=>exactTaskDay(day)===data.today)}
+function subjectItemHTML(x,i,list){return `<div class="subject-item" data-subject-item="${esc(x.id)}" data-category="${x.agenda?.category==='homework'?'homework':'todo'}" data-kind="${esc(x.kind)}"${taskIsToday(x)?' data-today':''}>${taskKindHTML(x,list[i-1])}${agendaItemHTML(x)}</div>`}
 function taskGroupsHTML(items,today=false,emptyText=''){
  const groups=taskSubjectGroups(items);
  if(!groups.length)return `<section class="card agenda-group task-list subject-group subject-empty"><p class="small muted">${emptyText||(today?'当前没有已整理的未完成事项。':'这里暂时没有事项。')}</p></section>`;
  return groups.map(([key,rows])=>{
-  const confirmed=rows.filter(x=>x.kind!=='school'),pending=rows.filter(x=>x.kind==='school'),due=today?confirmed.filter(x=>[x.agenda.due_on,x.agenda.scheduled_on,x.agenda.complete_on].some(day=>exactTaskDay(day)===data.today)).length:0;
+  const confirmed=rows.filter(x=>x.kind!=='school'),pending=rows.filter(x=>x.kind==='school'),due=today?confirmed.filter(taskIsToday).length:0;
   return `<section class="card agenda-group task-list subject-group" id="${esc(taskSubjectID(key))}" data-subject="${esc(key)}" tabindex="-1"><div class="task-group-heading"><h2>${esc(key)} · ${confirmed.length}${due?`<span class="subject-today">今天 ${due}</span>`:''}${pending.length?` <a class="review-badge review-link" href="#school-review-${esc(pending[0].id)}">待核对 ${pending.length}</a>`:''}</h2></div>${key===subjectUnknown?`<p class="small muted">${rows.every(x=>x.agenda?.box==='wish')?'没有填写科目；编辑心愿时可以补充，未补充也照常保留。':'原消息没有说明科目；可在事项里补充，未补充也照常保留。'}</p>`:''}<div class="homework-child task-list" data-homework-child="${esc(currentChild()?.id)}">${[...confirmed,...pending].map(subjectItemHTML).join('')}</div></section>`;
  }).join('');
 }

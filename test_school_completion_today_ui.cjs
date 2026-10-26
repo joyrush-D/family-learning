@@ -37,15 +37,15 @@ async function demoServer(){
     await p.route('**/api/state',route=>route.fulfill({json:state}));
     for(const pass of ['open','reopen']){
      if(pass==='open')await p.goto(server.url,{waitUntil:'load'});else await p.reload({waitUntil:'load'});
-     await eventually(async()=>await p.locator('body[data-page="home"] #task-group-homework').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','Today ready');
-     const todayGroup=p.locator('#task-group-homework'),card=(scope,id)=>scope.locator('[data-query-target="task:'+id+'"]');
-     assert.match(await todayGroup.locator('h2').innerText(),/今日作业 · 2/,'today and tonight work is counted once each');
+     await eventually(async()=>await p.locator('body[data-page="home"] #task-groups').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','Today ready');
+     const todayGroup=p.locator('#task-groups .subject-item[data-category="homework"][data-today]'),card=(scope,id)=>scope.locator('[data-query-target="task:'+id+'"]');
+     assert.equal(await todayGroup.evaluateAll(xs=>xs.filter(x=>x.dataset.kind!=='school').length),2,'today and tonight work is counted once each');
      for(const id of ['RECITE','COPY']){
       assert.equal(await card(p,id).count(),1,id+' appears once');assert.equal(await card(todayGroup,id).isVisible(),true,id+' is directly in Today');
       assert.match(await card(todayGroup,id).locator('.agenda-dates').innerText(),/今天完成：2026-10-07[\s\S]*截止：2026-10-08/,id+' shows both roles in the first layer');
      }
      assert.equal(await card(todayGroup,'ORAL').count(),0,'only a handback day is not guessed as today');
-     assert.match(await p.locator('.today-recent-homework').innerText(),/数学：完成口算本第8页[\s\S]*截止：2026-10-08/);
+     assert.match(await p.locator('#task-groups .subject-item[data-category="homework"]:not([data-today])').filter({hasText:'数学：完成口算本第8页'}).innerText(),/截止：2026-10-08/);
      assert.doesNotMatch(await card(p,'ORAL').locator('.agenda-dates').innerText(),/完成：/);
      assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page has no horizontal overflow');
     }
@@ -66,10 +66,10 @@ async function demoServer(){
    try{
     await p.route('**/api/state',route=>route.fulfill({json:{...base,children:saved.children,today:day,tasks:saved.tasks,agent:{...base.agent,items:[]},today_calendar:saved.saved_calendars[day]}}));
     await p.goto(server.url,{waitUntil:'load'});
-    await eventually(async()=>await p.locator('body[data-page="home"] #task-group-homework').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','Today ready '+day);
+    await eventually(async()=>await p.locator('body[data-page="home"] #task-groups').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','Today ready '+day);
     const card=scope=>scope.locator('[data-query-target="task:'+h01.id+'"]');
     assert.equal(await card(p).count(),1,day+' the saved task appears once');
-    assert.equal(await card(p.locator('#task-group-homework')).count(),inToday?1:0,day+' first-layer Today only on its work and handback days');
+    assert.equal(await card(p.locator('#task-groups .subject-item[data-category="homework"][data-today]')).count(),inToday?1:0,day+' first-layer Today only on its work and handback days');
     assert.match(await card(p).locator('.agenda-dates').innerText(),label,day+' both roles with the original handback due');
     assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page has no horizontal overflow');
     assert.deepEqual(errors,[]);
@@ -92,10 +92,10 @@ async function demoServer(){
     await p.route('**/api/state',route=>route.fulfill({json:{...base,children:flash.children,sources:flash.sources,today:'2026-10-19',tasks:flash.tasks,records:flash.records,agent:{...flash.agent,items:[]},today_calendar:flash.saved_calendar}}));
     for(const pass of ['open','reopen','list']){
      if(pass==='open')await p.goto(server.url,{waitUntil:'load'});else await p.reload({waitUntil:'load'});
-     await eventually(async()=>await p.locator('body[data-page="home"] #task-group-homework').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','Flash27 Today ready');
-     if(pass==='list'){await p.locator('[data-task-all="homework"]').click();await eventually(async()=>/所有作业与待办/.test(await p.locator('#content h1').first().innerText()),'all homework and todo list')}
+     await eventually(async()=>await p.locator('body[data-page="home"] #task-groups').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','Flash27 Today ready');
+     if(pass==='list'){await p.locator('nav [data-page="tasks"]').click();await p.locator('[data-task-box="全部"]').click();await eventually(async()=>/所有作业与待办/.test(await p.locator('#content h1').first().innerText()),'all homework and todo list')}
      else{
-      assert.match(await p.locator('#task-group-homework h2').innerText(),/今日作业 · 3/);assert.match(await p.locator('#task-group-todo h2').innerText(),/要办的事 · 2/);
+      assert.equal(await p.locator('#task-groups .subject-item[data-category="homework"][data-today]:not([data-kind="school"])').count(),3);assert.equal(await p.locator('#task-groups .subject-item[data-category="todo"]:not([data-kind="school"])').count(),2);
       assert.match(await p.locator('#today-courses').innerText(),/当天课表尚未提供/,'the missing timetable stays said');
      }
      for(const [key,want] of Object.entries(lines)){
@@ -135,9 +135,9 @@ async function demoServer(){
     await p.route('**/api/state',route=>route.fulfill({json:{...base,children:recovered.children,sources:recovered.sources,today:'2026-10-19',tasks:recovered.tasks,records:recovered.records,agent:{...recovered.agent,items:[]},today_calendar:recovered.saved_calendar}}));
     for(const pass of ['open','reopen','list']){
      if(pass==='open')await p.goto(server.url,{waitUntil:'load'});else await p.reload({waitUntil:'load'});
-     await eventually(async()=>await p.locator('body[data-page="home"] #task-group-homework').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','recovered Today ready');
-     if(pass==='list'){await p.locator('[data-task-all="homework"]').click();await eventually(async()=>/所有作业与待办/.test(await p.locator('#content h1').first().innerText()),'all homework and todo list')}
-     else{assert.match(await p.locator('#task-group-homework h2').innerText(),/今日作业 · 3/);assert.match(await p.locator('#task-group-todo h2').innerText(),/要办的事 · 2/)}
+     await eventually(async()=>await p.locator('body[data-page="home"] #task-groups').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','recovered Today ready');
+     if(pass==='list'){await p.locator('nav [data-page="tasks"]').click();await p.locator('[data-task-box="全部"]').click();await eventually(async()=>/所有作业与待办/.test(await p.locator('#content h1').first().innerText()),'all homework and todo list')}
+     else{assert.equal(await p.locator('#task-groups .subject-item[data-category="homework"][data-today]:not([data-kind="school"])').count(),3);assert.equal(await p.locator('#task-groups .subject-item[data-category="todo"]:not([data-kind="school"])').count(),2)}
      for(const [key,want] of Object.entries(recoveredLines)){
       const card=p.locator('[data-query-target="task:'+rid[key]+'"]'),saved=recovered.tasks.find(t=>t.id===rid[key]);
       assert.equal(await card.count(),1,key+' one card');assert.equal(await card.locator('h3').innerText(),saved.title);

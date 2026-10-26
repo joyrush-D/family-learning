@@ -55,7 +55,7 @@ async function start(){
   const proof=async(name,target=p)=>{if(process.env.DIAGNOSIS_UI_PROOF_DIR){await fs.mkdir(process.env.DIAGNOSIS_UI_PROOF_DIR,{recursive:true});await target.screenshot({path:path.join(process.env.DIAGNOSIS_UI_PROOF_DIR,name+'-'+width+'.png'),...(target===p?{fullPage:true}:{})})}};
   const seeded=await state(),byTitle=t=>seeded.records.find(r=>r.title===t).id,first=byTitle('数学错题：第3题'),second=byTitle('数学错题：第5题');
   // Agent reminders (更多 → 助手跟进): the due re-check names its evidence and offers the two real next steps, not just "seen".
-  await p.goto(url);await p.locator('body[data-page="home"] [data-task-all="homework"]').waitFor();
+  await p.goto(url);await p.locator('body[data-page="home"] #task-groups').waitFor();
   await p.locator('nav [data-page="more"]').click();await p.locator('.more-links [data-page="agent"]').click();
   const reminder=p.locator('[data-agent-item]').filter({hasText:'到期复测：数学 · 两位数进位加法'});await reminder.waitFor();
   assert.match(await reminder.innerText(),/不代表已经掌握/);

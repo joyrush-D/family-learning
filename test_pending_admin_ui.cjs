@@ -18,7 +18,7 @@ async function fit(page){
  assert.equal(await page.locator('dialog[open]').evaluateAll(ds=>ds.some(d=>d.scrollWidth>d.clientWidth)),false,'no dialog overflow');
 }
 async function ready(page){
- await eventually(async()=>await page.locator('body[data-page="home"] #task-group-todo').isVisible()&&await page.locator('#content').getAttribute('data-ready')==='true','today is ready');
+ await eventually(async()=>await page.locator('body[data-page="home"] #task-groups').isVisible()&&await page.locator('#content').getAttribute('data-ready')==='true','today is ready');
 }
 async function proof(page,name){
  if(!process.env.PENDING_ADMIN_UI_PROOF_DIR)return;
@@ -142,7 +142,7 @@ const taskStatus=task=>task.update?.status||task.original_status;
     await route.continue();
    });
    await page.goto(server.url,{waitUntil:'load'});await ready(page);
-   const todos=page.locator('#task-group-todo'),notice=id=>page.locator('#school-review-'+id),card=id=>page.locator('[data-today-task="'+id+'"]');
+   const todos=page.locator('#task-groups .subject-item[data-category="todo"]'),notice=id=>page.locator('#school-review-'+id),card=id=>page.locator('[data-today-task="'+id+'"]');
    const pending=async ids=>{
     assert.deepEqual((await todos.locator('[data-agent-item]').evaluateAll(xs=>xs.map(x=>x.dataset.agentItem))).sort(),[...ids].sort(),'all eligible pending admin notices are in the existing direct list');
     for(const id of ids){assert.equal(await notice(id).isVisible(),true);assert.equal(await notice(id).evaluate(x=>!!x.closest('details')),false,'pending notice needs no backlog expansion');assert.equal(await notice(id).locator('[data-check]').count(),0,'pending notice cannot be completed')}
@@ -153,8 +153,8 @@ const taskStatus=task=>task.update?.status||task.original_status;
     for(const marker of ['FUTURE_PUBLICATION_CANARY','DISMISSED_NOTICE_CANARY','REFERENCE_NOTICE_CANARY','DONE_TASK_CANARY','DECLINED_TASK_CANARY','NA_TASK_CANARY','WISH_TASK_CANARY','FUTURE_PLAN_CANARY','SIBLING_NOTICE_CANARY'])assert.equal(visible.includes(marker),false,'today guards stay intact: '+marker);
    };
    await pending([a.id,c.id]);await guards();await fit(page);
-   assert.match(await todos.locator('h2').innerText(),/要办的事 · 0/);
-   assert.equal(await page.locator('.today-sections a[href="#task-group-todo"]').innerText(),'要办的事 0','pending notices do not count as confirmed tasks');
+   assert.equal(await todos.evaluateAll(xs=>xs.filter(x=>x.dataset.kind!=='school').length),0);
+   assert.equal(await page.locator('#task-groups .subject-item[data-category="todo"]:not([data-kind="school"])').count(),0,'pending notices do not count as confirmed tasks');
    assert.match(await notice(a.id).locator('.agenda-dates').innerText(),new RegExp('发布：'+row(a.id).agenda.published_on));
    assert.match(await notice(c.id).locator('.agenda-dates').innerText(),/发布：待核对/);
    assert.match(await notice(a.id).locator('.agenda-dates').innerText(),/截止待核对/);
@@ -198,7 +198,7 @@ const taskStatus=task=>task.update?.status||task.original_status;
    assert.equal(task.child,'示例甲');assert.equal(task.title,title);assert.equal(task.action,goal);assert.equal(task.advice,advice);assert.equal(task.school_origin,true);assert.equal(task.due,'无明确截止','empty manual due uses the established storage contract');assert.equal(task.agenda.due_on,'');assert.equal(task.agenda.published_on,row(a.id).agenda.published_on);assert.equal(task.agenda.category,'todo');assert.equal(taskStatus(task),'待跟进');assert.equal(task.history.length,0);
    assert.equal(task.source,'Agent建议:'+a.id+'\n'+ref+'\n'+a.evidence[0].text,'manual task preserves its proposal, original reference and complete source text');
    await pending([b.id,c.id]);assert.equal(await notice(a.id).count(),0);assert.equal(await card(task.id).isVisible(),true);assert.equal(await card(task.id).locator('[data-check]').isChecked(),false);
-   assert.match(await todos.locator('h2').innerText(),/要办的事 · 1/);assert.equal(await page.locator('.today-sections a[href="#task-group-todo"]').innerText(),'要办的事 1');
+   assert.equal(await todos.evaluateAll(xs=>xs.filter(x=>x.dataset.kind!=='school').length),1);assert.equal(await page.locator('#task-groups .subject-item[data-category="todo"]:not([data-kind="school"])').count(),1);
    await page.reload({waitUntil:'load'});await ready(page);await pending([b.id,c.id]);await guards();await fit(page);
    assert.equal(await card(task.id).isVisible(),true,'the same saved undated task stays directly visible after reopening');
    assert.equal(await card(task.id).locator('.task-owner').innerText(),'示例甲');assert.equal(await card(task.id).locator('[data-school-original-ref]').getAttribute('data-school-original-ref'),ref);assert.equal(await card(task.id).locator('[data-school-original-ref]').getAttribute('data-school-original-child'),'child-1');

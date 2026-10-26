@@ -108,7 +108,7 @@ async function apiFetchChecks(){
     await p.locator('#showPassword').click();assert.equal(await p.locator('#password').getAttribute('type'),'password');
     await login(p,'synthetic-wrong-password');await eventually(async()=>/账号或密码不正确/.test(await p.locator('#loginStatus').innerText()),'wrong password');
     assert.equal(await p.locator('#username').inputValue(),'parent');await fit(p);
-    await login(p);await eventually(()=>p.locator('body[data-page="home"] [data-task-all="todo"]').isVisible(),'authenticated home');
+    await login(p);await eventually(()=>p.locator('body[data-page="home"] #task-groups').isVisible(),'authenticated home');
     assert.equal(p.url(),home+'#synthetic-place');
     const cookie=(await context.cookies(home)).find(x=>x.name==='family_parent_session');
     assert.ok(cookie&&cookie.secure&&cookie.httpOnly&&cookie.sameSite==='Lax');assert.equal(cookie.path,'/family/');assert.ok(cookie.expires-Date.now()/1000>604700);
@@ -168,7 +168,7 @@ async function apiFetchChecks(){
     assert.deepEqual(errors,[]);results.push({width,realAPI:true,mountPrefix:true,secureCookie:true,wrongPassword:true,draftPreserved:true,inlineLogin:true,stateFailureRetry:true,noAutomaticReplay:true,explicitRetrySaved:true,mountedTokenRefreshed:true,cookieValidTokenRotation:true,realProcessRestart:true,sameRequestKeyAndBody:true,noRecoveryRender:true,retryVisibleAndFocused:true,singlePersistedItem:true,logout:true,timeout:true,pageErrors:0});
    }catch(error){await proof(p,'failure-'+width).catch(()=>{});throw error}finally{await context.close()}
   }
-  const local=await browser.newPage();await local.goto('http://127.0.0.1:'+server.port+'/');await eventually(()=>local.locator('body[data-page="home"] [data-task-all="todo"]').isVisible(),'loopback home');await local.locator('nav [data-page="more"]').click();assert.equal(await local.locator('[data-parent-logout]').count(),0);await local.close();
+  const local=await browser.newPage();await local.goto('http://127.0.0.1:'+server.port+'/');await eventually(()=>local.locator('body[data-page="home"] #task-groups').isVisible(),'loopback home');await local.locator('nav [data-page="more"]').click();assert.equal(await local.locator('[data-parent-logout]').count(),0);await local.close();
   console.log(JSON.stringify({passed:results.length,results,fetchBoundaries,loopbackUnauthenticated:true,syntheticOnly:true,phoneHardwareTested:false},null,2));
  }finally{await browser?.close();await server?.stop()}
 })().catch(e=>{console.error(e.stack||e.message);process.exitCode=1});

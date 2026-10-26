@@ -32,7 +32,7 @@ runpy.run_path('demo.py',run_name='__main__')`;
  const url='http://127.0.0.1:'+port+'/',stop=async()=>{if(child.exitCode!==null||child.signalCode!==null)return;const exited=once(child,'exit');child.kill('SIGINT');await Promise.race([exited,delay(2500)]);if(child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await exited}};
  try{await eventually(async()=>{if(child.exitCode!==null)throw Error(error||'Demo exited');try{return(await fetch(url,{signal:AbortSignal.timeout(400)})).ok}catch{return false}},'synthetic server');return{url,stop}}catch(e){await stop();throw e}
 }
-async function ready(p){await p.locator('#task-group-homework').waitFor();await eventually(async()=>await p.locator('#content').getAttribute('data-ready')==='true','home ready')}
+async function ready(p){await p.locator('#task-groups').waitFor();await eventually(async()=>await p.locator('#content').getAttribute('data-ready')==='true','home ready')}
 async function selectedChild(p,children,selected){assert.equal(await p.locator('[data-child-filter=""]').count(),0,'there is no all-children choice');assert.equal(await p.locator('.child-filters [data-child-filter]').count(),children.length);assert.deepEqual(await p.locator('.child-filters [aria-pressed="true"]').evaluateAll(xs=>xs.map(x=>x.dataset.childFilter)),[selected.id],'exactly the selected child is active')}
 async function fit(p){assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await p.locator('dialog[open]').evaluateAll(xs=>xs.some(x=>x.scrollWidth>x.clientWidth)),false)}
 async function proof(p,name){if(process.env.SCENARIOS_UI_PROOF_DIR){await fs.mkdir(process.env.SCENARIOS_UI_PROOF_DIR,{recursive:true});await p.screenshot({path:path.join(process.env.SCENARIOS_UI_PROOF_DIR,name+'.png')})}}
@@ -116,7 +116,7 @@ function daily(base){
    const p=await browser.newPage({viewport:{width,height:850}}),errors=[];p.on('pageerror',e=>errors.push(e.message));
    try{
     const state=daily(base);await p.route('**/api/state',r=>r.fulfill({json:state}));await p.goto(host.url);await ready(p);
-    const todo=p.locator('#task-group-todo');await selectedChild(p,state.children,state.children[0]);assert.equal(await todo.locator('[data-query-target="task:stamp"]').count(),0,'default first child omits the other child task');
+    const todo=p.locator('#task-groups .subject-item[data-category="todo"]');await selectedChild(p,state.children,state.children[0]);assert.equal(await todo.locator('[data-query-target="task:stamp"]').count(),0,'default first child omits the other child task');
     await fit(p);await proof(p,'daily-'+width);
     for(const [k,kid] of state.children.entries()){
      await p.locator('[data-child-filter="'+kid.id+'"]').click();await selectedChild(p,state.children,kid);const tasks=state.tasks.filter(t=>t.child===kid.name);assert.match(await todo.locator('h2').innerText(),new RegExp('要办的事 · '+tasks.length+'[\\s\\S]*待核对 4'));assert.equal(await todo.locator('[data-agent-item]').count(),4);

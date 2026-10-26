@@ -23,7 +23,7 @@ async function eventually(check,label){for(let n=0;n<250;n++){if(await check())r
 async function readJSON(file){return JSON.parse(await fs.readFile(file,'utf8'))}
 async function digest(file){return crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex')}
 async function ordinaryFile(file){const stat=await fs.lstat(file);assert(stat.isFile()&&!stat.isSymbolicLink(),'Only an ordinary synthetic file is allowed: '+file)}
-async function ready(page){await eventually(async()=>await page.locator('body[data-page=home] #task-group-homework').isVisible()&&await page.locator('#content').getAttribute('data-ready')==='true','real Today entry ready')}
+async function ready(page){await eventually(async()=>await page.locator('body[data-page=home] #task-groups').isVisible()&&await page.locator('#content').getAttribute('data-ready')==='true','real Today entry ready')}
 async function fit(page){
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page has no horizontal overflow');
  assert.equal(await page.locator('dialog[open]').evaluateAll(ds=>ds.some(d=>d.scrollWidth>d.clientWidth)),false,'open dialogs have no horizontal overflow');
@@ -207,10 +207,10 @@ async function zeroWriteRetry(page,host,route,button,error,success){
    if(replayStage.startsWith('legacy-recovery-')){assert.match(observation.action,/^2026-10-04完成《桥的观察单》。/);assert.doesNotMatch(observation.action,/明天完成两项/)}
    assert.doesNotMatch(observation.action,/补发|稍后附件|更正10月3日|其余要求和原期限不变/,'transport and correction provenance stays in the original source');assert.equal(observation.action.split('C栏改为选做').length-1,1,'effective C condition appears only once');
    await page.goto(host.url);await ready(page);assert.equal(await page.evaluate(()=>new Date().toISOString()),new Date(FIXED_TIME).toISOString());
-   const card=id=>page.locator('[data-query-target="task:'+id+'"]'),homework=page.locator('#task-group-homework'),todos=page.locator('#task-group-todo');
+   const card=id=>page.locator('[data-query-target="task:'+id+'"]'),homework=page.locator('#task-groups .subject-item[data-category="homework"][data-today]'),todos=page.locator('#task-groups .subject-item[data-category="todo"]');
    assert.deepEqual((await homework.locator('[data-today-task]').evaluateAll(xs=>xs.map(x=>x.dataset.todayTask))).sort(),[observation.id,reading.id].sort());
    assert.deepEqual(await todos.locator('[data-today-task]').evaluateAll(xs=>xs.map(x=>x.dataset.todayTask)),[admin.id]);
-   assert.match(await homework.locator('h2').innerText(),/今日作业 · 2/);assert.match(await card(admin.id).innerText(),/2026-10-05/);
+   assert.equal(await homework.evaluateAll(xs=>xs.filter(x=>x.dataset.kind!=='school').length),2);assert.match(await card(admin.id).innerText(),/2026-10-05/);
    for(const task of [observation,reading,admin]){assert.equal(await card(task.id).isVisible(),true);assert.equal(await card(task.id).locator('[data-check]').isChecked(),false)}
    assert.match(await card(observation.id).locator('.agenda-dates').innerText(),/发布：2026-10-03 16:10/,'Today displays the original time rather than an unknown or correction time');
    await fit(page);await page.screenshot({path:path.join(input.proof,'frozen-today-'+width+'.png'),fullPage:true});

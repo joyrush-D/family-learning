@@ -189,7 +189,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
  browser=await chromium.launch({headless:true,args:['--host-resolver-rules=MAP family.test 127.0.0.1'],...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
  for(const width of [360,1440]){
   const page=await browser.newPage({viewport:{width,height:820},extraHTTPHeaders:{'Tailscale-User-Login':'synthetic-parent'}}),pageErrors=[],alerts=[];page.on('pageerror',e=>pageErrors.push(e.message));page.on('dialog',async d=>{alerts.push(d.message());await d.dismiss()});
-  await page.goto(origin);await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();
+  await page.goto(origin);await page.locator('body[data-page="home"] #task-groups').waitFor();
   const before=await state(),facts=s=>JSON.stringify([s.tasks,s.records,s.agent.items.map(x=>[x.id,x.state])]);let factsBefore=facts(before);
   const item=kind=>before.agent.items.find(x=>x.title==='虚构'+(kind.startsWith('docx')?'Word':'PDF')+'资料 '+kind+' '+width),ref=kind=>item(kind).evidence[0].ref,identity=kind=>({child_id:'child-1',source_id:'qq:123456',message_id:ref(kind).slice('message:qq:123456:'.length)});
   const existing=before.uploads.find(x=>x.name==='synthetic-existing.png');
@@ -578,7 +578,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   await open(ref('ready'));await panel.waitFor();text=await panel.innerText();
   assert.equal(await panel.getAttribute('data-school-pdf-state'),'ready');assert.match(text,/全部 11 页已整理/);assert.doesNotMatch(text,/未读页|暂未成功/);assert.equal(await batches.count(),4);assert.equal(await retry.count(),0);assert.match(await panel.innerText(),/练习第1至3题必做；第4题选做并检查，无需家长签字/);assert.equal(await panel.locator('[data-school-pdf-requirement]').count(),4);
   assert.match(await batches.nth(3).innerText(),/第 10、11 页[\s\S]*虚构页组 10-11/);await fits(page);await proof(page,'school-pdf-ready-'+width);await close();
-  await page.reload();await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();await open(ref('ready'));await panel.waitFor();assert.equal(await batches.count(),4);assert.match(await panel.innerText(),/全部 11 页已整理/);
+  await page.reload();await page.locator('body[data-page="home"] #task-groups').waitFor();await open(ref('ready'));await panel.waitFor();assert.equal(await batches.count(),4);assert.match(await panel.innerText(),/全部 11 页已整理/);
   // Withdrawn authorization (fictional GET reply) hides the old groups; a real re-read restores them; detaching the PDF removes the panel.
   const withdrawn=async route=>{const body=await(await real(route)).json();body.pdf_material={state:'unavailable',kind:'school_material',explanation:'虚构撤权说明 <img src=x onerror=alert(1)>'};await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)})};
   await page.route(isMessage,withdrawn);await refresh.click();await until(async()=>/虚构撤权说明/.test(await panel.innerText()),'unavailable state shown');
@@ -617,7 +617,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   await open(ref('docx-ready'));await panel.waitFor();text=await panel.innerText();
   assert.equal(await panel.getAttribute('data-school-pdf-state'),'ready');assert.match(text,/Word逐页整理/);assert.match(text,/虚构练习卷-docx-ready-\d+\.docx/);assert.match(text,/全部 11 页已整理/);assert.match(text,/页码可能与Word里显示的分页不同/);assert.doesNotMatch(text,/未读页|暂未成功|PDF逐页整理/);assert.equal(await batches.count(),4);assert.equal(await retry.count(),0);assert.match(await panel.innerText(),/练习第1至3题必做；第4题选做并检查，无需家长签字/);assert.equal(await panel.locator('[data-school-pdf-requirement]').count(),4);
   assert.match(await batches.nth(3).innerText(),/第 10、11 页[\s\S]*虚构页组 10-11/);await fits(page);await proof(page,'school-docx-ready-'+width);await close();
-  await page.reload();await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();await open(ref('docx-ready'));await panel.waitFor();assert.equal(await batches.count(),4);assert.match(await panel.innerText(),/Word逐页整理[\s\S]*全部 11 页已整理/);
+  await page.reload();await page.locator('body[data-page="home"] #task-groups').waitFor();await open(ref('docx-ready'));await panel.waitFor();assert.equal(await batches.count(),4);assert.match(await panel.innerText(),/Word逐页整理[\s\S]*全部 11 页已整理/);
   const extraDocx=before.uploads.find(x=>x.name==='synthetic-extra.docx'),readyDocx=await linked('docx-ready');
   await dialog.locator('[name="attachment_id"]').selectOption(extraDocx.id);await dialog.locator('[data-school-original-attach]').click();await until(async()=>(await panel.getAttribute('data-school-pdf-state'))==='unavailable','a second Word original is refused');text=await panel.innerText();
   assert.match(text,/关联了多个DOCX原件/);assert.match(text,/学校资料 · 本次未整理/);assert.doesNotMatch(text,/PDF资料|Word资料|逐页整理|已整理|全部 \d+ 页/,'a refusal without a kind claims neither a native PDF nor a finished conversion');assert.equal(await batches.count(),0);assert.equal(await retry.count(),0);
@@ -706,7 +706,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-pdf-ui-') as tmp:
   const native=before.agent.items.find(x=>x.title==='虚构QQ原生PDF资料 '+width),nativeIdentity={child_id:'child-1',source_id:'qq:123456',message_id:'native-'+width};
   await open(native.evidence[0].ref);await panel.waitFor();assert.match(await panel.innerText(),/已整理 3 \/ 11 页[\s\S]*虚构已读页组/);
   assert.equal((await readView(nativeIdentity)).attachments.length,1,'the native QQ file needs no screenshot');
-  await fits(page);await close();await page.reload();await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();
+  await fits(page);await close();await page.reload();await page.locator('body[data-page="home"] #task-groups').waitFor();
   await open(native.evidence[0].ref);await panel.waitFor();assert.match(await panel.innerText(),/虚构原生PDF-[\s\S]*已整理 3 \/ 11 页/);await close();
   assert.equal(facts(await state()),factsBefore,'no task, record or item changed');assert.deepEqual(pageErrors,[]);assert.deepEqual(alerts,[]);
   await page.close();

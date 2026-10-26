@@ -72,7 +72,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-page-ui-') as tmp:
  for(const width of [360,1440]){
   const page=await browser.newPage({viewport:{width,height:820},extraHTTPHeaders:{'Tailscale-User-Login':'synthetic-parent'}}),pageErrors=[];page.on('pageerror',e=>pageErrors.push(e.message));
   const posts=[];page.on('request',r=>{if(r.url().includes('/api/agent/message/page')&&r.method()==='POST')posts.push(r.postDataJSON())});
-  await page.goto('http://family.test:'+port+'/');await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();
+  await page.goto('http://family.test:'+port+'/');await page.locator('body[data-page="home"] #task-groups').waitFor();
   const st=await state(),items=Object.fromEntries(['link','other','flaky','iso','answer'].map(k=>[k,st.agent.items.find(x=>x.title==='虚构'+k+'通知 '+width)]));
   for(const k of Object.keys(items))assert(items[k],'fixture item '+k);
   const attached=st.uploads.find(x=>x.name==='synthetic-attached.png'),spare=st.uploads.find(x=>x.name==='synthetic-spare.png');assert(attached&&spare,'fixture uploads');
@@ -115,7 +115,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-page-ui-') as tmp:
   const postsBefore=posts.length;await close();await open('link');
   assert.equal(posts.length,postsBefore,'reopening reads the cache through GET only');
   assert.match(await rowText(LONG),/第1次抓取/);assert.match(await rowText(LINK),/第1次抓取/);assert.equal(await dialog.locator('[data-school-page-read]').count(),0);
-  await page.reload();await page.locator('body[data-page="home"] [data-task-all="todo"]').waitFor();await open('link');
+  await page.reload();await page.locator('body[data-page="home"] #task-groups').waitFor();await open('link');
   assert.match(await rowText(LINK),/第1次抓取/);assert.equal(posts.length,postsBefore);await close();
   // 5. 401 opens the login dialog and keeps the retry for the same address; a lost reply is retried and served from the cache.
   await open('other');
