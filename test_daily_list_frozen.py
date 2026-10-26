@@ -266,12 +266,18 @@ class DailyListFrozenTests(unittest.TestCase):
                 agent.school_original_upload_ids(self.store, c, row, ref, ['u-added'])
             self.assertEqual((added.exception.status, added.exception.code), (409, 'school_original_scope_stale'))
             c.execute('DELETE FROM agent_message_attachments WHERE upload_id=?', ('u-added',))
+            plan = json.loads(row['plan']); plan['school_task'].pop('origin_basis')
+            with self.assertRaises(agent.AgentError) as legacy:  # a legacy decision that never recorded its basis
+                agent.school_original_upload_ids(self.store, c, dict(row, plan=json.dumps(plan, ensure_ascii=False)), ref, [])
+            self.assertEqual((legacy.exception.status, legacy.exception.code, str(legacy.exception)),
+                             (409, 'school_original_scope_stale', '本项资料范围尚未核明，请查看老师完整原消息'), 'unverified, not changed')
             payload = json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?', (source_id, message_id)).fetchone()[0])
             c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
                       (json.dumps(dict(payload, text=text.replace('明早', '后天')), ensure_ascii=False), source_id, message_id))
         with self.assertRaises(agent.AgentError) as changed:
             self.store.message(ask, None)
-        self.assertEqual((changed.exception.status, changed.exception.code), (409, 'school_original_scope_stale'), 'a changed original')
+        self.assertEqual((changed.exception.status, changed.exception.code, str(changed.exception)),
+                         (409, 'school_original_scope_stale', '本项原消息已变化，请回原消息重新核对'), 'a changed original')
 
     def test_t01_counterexample_a_send_day_due_for_tonight_work_states_no_handback(self):
         payload, refs = self._day([('18:00', '语文老师甲', 'cn-teacher-a', '今晚朗读《荷塘》2遍。')])

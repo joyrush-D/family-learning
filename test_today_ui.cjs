@@ -291,7 +291,11 @@ function fixtures(base){
     }
     await orderPage.reload({waitUntil:'load'});await ready(orderPage);
     assert.deepEqual(await taskOrder(),['DUE-TODAY']);assert.equal(await orderPage.locator('#task-groups .subject-item[data-category="homework"][data-today]:not([data-kind="school"])').count(),1);
-    const received=orderPage.locator('#task-groups .subject-item[data-category="homework"]:not([data-today])');assert.equal(await received.count(),10);
+    const received=orderPage.locator('#task-groups .subject-item[data-category="homework"]:not([data-today])'),receivedIds=['OLD','DUE-OLD','DUE-RECENT','DUE-NEXT','COLLECTED-UNDATED',...Array.from({length:5},(_,n)=>'same-day-homework-'+n)];
+    // The ten received items, plus REVIEW-HOMEWORK whose family review falls due today: filed with its subject's unfinished homework, not as a teacher deadline today.
+    assert.deepEqual((await received.evaluateAll(xs=>xs.map(x=>(x.querySelector('[data-today-task]')?.dataset.todayTask)||x.querySelector('[data-agent-item]')?.dataset.agentItem))).sort(),[...receivedIds,'REVIEW-HOMEWORK'].sort(),'each received item and the due review appear once');
+    for(const id of receivedIds)assert.equal(await orderPage.locator('[data-today-task="'+id+'"],[data-agent-item="'+id+'"]').count(),1,'received item appears once: '+id);
+    const dueReview=received.filter({has:orderPage.locator('[data-today-task="REVIEW-HOMEWORK"]')});assert.equal(await dueReview.isVisible(),true);assert.equal(await dueReview.locator('.task-review-due').isVisible(),true,'the due review says it is a review');assert.match(await dueReview.innerText(),new RegExp('改天回看：'+orderState.today+'[\\s\\S]*截止待核对'),'a family review date is not a teacher deadline');
     assert.equal(await received.locator('[data-today-task="COLLECTED-UNDATED"]').isVisible(),true);
     for(let n=0;n<5;n++){const candidate=received.locator('[data-agent-item="same-day-homework-'+n+'"]');assert.equal(await candidate.isVisible(),true,'all work from the same sending day is exposed');assert.equal(await candidate.locator('[data-check]').count(),0,'unresolved work cannot be marked complete')}
     assert.equal(await orderPage.locator('[data-today-task="COLLECTED-UNDATED"]').count(),1);
