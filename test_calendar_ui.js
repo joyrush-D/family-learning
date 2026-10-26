@@ -91,6 +91,17 @@ test('shared activities appear once per selected child; read-only schools link t
 test('calendar has no all-children choice and new plans start with the current child',()=>{
  const h=harness();assert.doesNotMatch(h.ctx.calendarHTML(),/data-calendar-child=""/);assert.match(h.ctx.calendarHTML(),/data-calendar-child="child-a" aria-pressed="true"/);h.ctx.calendarOpen();assert.match(h.get('#calendarChildChoices').innerHTML,/value="child-a" checked/);assert.doesNotMatch(h.get('#calendarChildChoices').innerHTML,/value="child-b" checked/);h.ctx.selectChild('child-b');h.ctx.calendarOpen();assert.match(h.get('#calendarChildChoices').innerHTML,/value="child-b" checked/);assert.doesNotMatch(h.get('#calendarChildChoices').innerHTML,/value="child-a" checked/);assert.equal(h.calls.length,0,'opening an arrangement never saves it');
 });
+test('one day files its lessons, family plans and items under their own subjects instead of a plans-and-lessons section',()=>{
+ const h=harness(),day='2026-09-08',lesson=(slot,title)=>({slot,title});
+ h.state().result={source_error:'',events:[event({id:'b'.repeat(32),title:'虚构数学补习',day,repeat:'none'}),event({id:'c'.repeat(32),title:'虚构游泳',day,repeat:'none'})],
+  timetables:[{id:'synthetic-tt',child_id:'child-a',day,title:'虚构课表',sessions:[lesson('第1节','数学'),lesson('第2节','美术史'),lesson('第3节','班会')],note:'',source:'',uploads:[]}],
+  inbox:[{id:'calendar:'+'b'.repeat(32),kind:'event',title:'虚构数学补习',child_ids:['child-a'],agenda:{subjects:['数学'],subject_state:'known'}},{id:'calendar:'+'c'.repeat(32),kind:'event',title:'虚构游泳',child_ids:['child-a'],agenda:{subjects:[],subject_state:'general'}}]};
+ const html=h.ctx.calendarAgendaHTML(),heads=[...html.matchAll(/<section class="card agenda-group"><h2>([^<]+)<\/h2>/g)].map(m=>m[1]);
+ assert.deepEqual(heads,['数学','美术史','班会','综合事务']);  // A custom course keeps the timetable's own name; never cut to 美术.
+ assert.match(html,/<h2>数学<\/h2><p class="subject-lesson"><span class="chip">课表 第1节<\/span> <strong>数学<\/strong><\/p>[^]*虚构数学补习/);
+ assert.doesNotMatch(html,/手动计划与课程|作业与待办/);
+ assert.match(html,/calendar-day-timetables[^]*data-query-target="timetable:synthetic-tt:2026-09-08"[^]*3 个节次/);  // The record, its slots and correction stay reachable.
+});
 test('source/title fields are escaped and the selected day keeps missing timetable explicit',()=>{
  const h=harness();h.state().result={events:[],timetables:[],source_error:''};assert.match(h.ctx.calendarAgendaHTML(),/当天课表尚未提供/);assert.match(h.ctx.calendarAgendaHTML(),/2026-09-08/);
  const html=h.ctx.calendarEventHTML(event({title:'<img src=x onerror="bad()">',note:'<script>bad()</script>',source:'"<&',status:'cancelled'}));assert.doesNotMatch(html,/<img|<script>/);assert.match(html,/已取消/);assert.match(html,/&lt;img/);assert.match(html,/时间未填写/);

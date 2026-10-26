@@ -44,7 +44,8 @@ function calendarWeekHTML(){
  const r=calendarState.result;
  return `<p class="small muted calendar-week-help">一周总览 · 可滚动查看全部事项，点击日期在下方跟进。<span>左右滑动查看整周。</span></p><div class="calendar-week-scroll" tabindex="0" role="region" aria-label="一周事项总览"><div class="calendar-week-grid">${calendarDays().map((day,i)=>{
   const rows=calendarDayItems(day),events=calendarItems(r.events,day),tables=calendarItems(r.timetables,day);
-  const groups=[['作业',rows.filter(x=>x.kind==='study'||x.agenda?.category==='homework')],['待办',rows.filter(x=>x.kind!=='study'&&x.agenda?.category!=='homework')]];
+  // The week keeps its time line for plans and lessons; its items are summarised by subject, never by two type counts.
+  const groups=taskSubjectGroups(rows).map(([key,list])=>[esc(key)+' · '+list.length,list]);
   const item=(title,meta,closed=false)=>`<button class="calendar-week-item${closed?' is-closed':''}" data-calendar-day="${day}" data-calendar-detail><strong>${esc(title)}</strong><small>${esc(meta)}</small></button>`;
   return `<section class="calendar-day${day===data.today?' is-today':''}" data-calendar-column="${day}"><button class="calendar-day-heading" data-calendar-day="${day}" data-calendar-detail aria-pressed="${day===calendarState.day}" ${day===data.today?'aria-current="date"':''}><span>周${'一二三四五六日'[i]}</span><strong>${Number(day.slice(5,7))}/${Number(day.slice(8))}</strong>${day===data.today?'<small>今天</small>':''}</button><div class="calendar-day-body">${groups.map(([label,list])=>list.length?`<h3>${label}</h3>${list.map(x=>item(x.title||data.tasks.find(t=>t.id===x.task_id)?.title||'事项待核对',[calendarNames(x.child_ids),x.kind==='school'?'待核对':x.kind==='study'?calendarStudyStatus(x):taskStatusLabel(x.status)].filter(Boolean).join(' · '),x.closed)).join('')}`:'').join('')}${events.length?`<h3>计划</h3>${events.map(x=>item(x.title,[x.start_time||'时间待定',calendarNames(x.child_ids),calendarStatuses[x.status]].join(' · '),['completed','cancelled'].includes(x.status))).join('')}`:''}${tables.length?`<h3>课表</h3>${tables.map(x=>calendarTimetableHTML(x)).join('')}`:''}${!rows.length&&!events.length&&!tables.length?'<p class="small muted">暂无已收录安排</p>':''}</div></section>`;
  }).join('')}</div></div>`;
@@ -53,9 +54,21 @@ function calendarAgendaHTML(){
  if(calendarState.loading&&!calendarState.result)return '<p role="status">正在读取安排…</p>';
  if(calendarState.error)return `<p class="error" role="alert">${esc(calendarState.error)}</p><button data-calendar-retry>重试</button>`;
  if(!calendarState.result)return '<p role="status">准备读取日历…</p>';
- const r=calendarState.result,day=calendarState.day,items=calendarDayItems(day);
+ const r=calendarState.result,day=calendarState.day,items=calendarDayItems(day),tables=calendarItems(r.timetables,day);
  const section=(title,html)=>`<section class="card agenda-group"><h2>${title}</h2>${html||'<p class="small muted">没有已收录的事项</p>'}</section>`;
- return `${r.source_error?`<p class="error">${esc(r.source_error)}</p>`:''}${calendarWeekHTML()}<h2 class="agenda-day-title" id="calendarDayDetails" tabindex="-1">${esc(day)}${day===data.today?' · 今天':''} · 当天详情</h2><div class="agenda-groups">${taskSubjectGroups(items).map(([key,rows])=>section(esc(key),rows.map(x=>`<div class="subject-item" data-subject-item="${esc(x.id)}">${taskKindHTML(x)}${agendaItemHTML(x)}</div>`).join(''))).join('')||section('作业与待办','')}${section('手动计划与课程',(calendarItems(r.timetables,day).map(calendarTimetableHTML).join('')||'<p class="small muted">当天课表尚未提供</p>')+calendarItems(r.events,day).map(calendarEventHTML).join(''))}</div><p class="small muted">限期事项每天显示直到完成；逾期继续保留。未明确日期的事项在收集箱核对。</p>`;
+ return `${r.source_error?`<p class="error">${esc(r.source_error)}</p>`:''}${calendarWeekHTML()}<h2 class="agenda-day-title" id="calendarDayDetails" tabindex="-1">${esc(day)}${day===data.today?' · 今天':''} · 当天详情</h2><div class="agenda-groups">${calendarDayGroups(items,calendarItems(r.events,day),tables).map(([key,g])=>section(esc(key),[...g.lessons.map(({s})=>`<p class="subject-lesson"><span class="chip">课表 ${esc(s.slot)}</span> <strong>${esc(s.title)}</strong></p>`),...g.plans.map(calendarEventHTML),...g.rows.map(x=>`<div class="subject-item" data-subject-item="${esc(x.id)}">${taskKindHTML(x)}${agendaItemHTML(x)}</div>`)].join(''))).join('')||section('当天事项','')}</div>${tables.length?`<div class="calendar-day-timetables">${tables.map(t=>calendarTimetableHTML(t)).join('')}</div>`:'<p class="small muted">当天课表尚未提供</p>'}<p class="small muted">限期事项每天显示直到完成；逾期继续保留。未明确日期的事项在收集箱核对。</p>`;
+}
+// One day is filed by subject too: each lesson sits under its own course name as the timetable writes it (slot and
+// repeat rules unchanged), a family plan under the subject its own title names, then that subject's tracked items. The
+// timetable record itself (original, correction, unchecked slots) stays below as its own management view.
+function calendarDayGroups(items,plans,tables){
+ const groups=new Map(taskSubjectGroups(items).map(([key,rows])=>[key,{rows,plans:[],lessons:[]}]));
+ const add=(key,kind,x)=>{if(!groups.has(key))groups.set(key,{rows:[],plans:[],lessons:[]});groups.get(key)[kind].push(x)};
+ for(const t of tables)for(const s of t.sessions)add(s.title||subjectUnknown,'lessons',{t,s});
+ // A plan's subject is read from its own title on the server; plans of the same title read the same.
+ for(const e of plans){const x=(calendarState.result?.inbox||[]).find(x=>x.kind==='event'&&x.title===e.title);add(x?taskSubjectKey(x):subjectGeneral,'plans',e)}
+ const rank=key=>key===subjectUnknown?2:key===subjectGeneral?1:0;
+ return [...groups].sort(([a],[b])=>rank(a)-rank(b));
 }
 function calendarHTML(){
  if(!calendarState.week){calendarState.week=calendarMonday(data.today);calendarState.day=data.today;calendarState.result=data.today_calendar;calendarState.range=data.today+'/'+data.today}

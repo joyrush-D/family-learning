@@ -224,3 +224,4 @@ body[data-page=sources] .source-cards{grid-template-columns:1fr}
 .subject-item+.subject-item{margin-top:.5rem}
 .subject-item-kind{margin:0 0 .15rem;font-size:.78rem;color:var(--muted,#6b6b6b);letter-spacing:.02em}
 .today-subject-note{margin:.25rem 0 .5rem}
+.subject-lesson{margin:.25rem 0}.calendar-day-timetables{margin-top:.75rem}
