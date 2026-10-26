@@ -10,6 +10,7 @@ import json
 import os
 import unittest
 
+import family_agenda
 import family_agent as agent
 import test_agent as fixtures
 import test_school_native_coverage as native
@@ -116,9 +117,27 @@ class DailyListFrozenTests(unittest.TestCase):
         self.assertIn('2026-11-04', (english['complete_on'], english['due_on']))
         self.assertNotIn('跳绳', english['body'])
         self.assertEqual((supply['category'], supply['due_on'], supply['complete_on']), ('todo', '2026-11-05', ''))
+        # 11/5 is the PE lesson's arranged day for carrying the rope, not a deadline, handback or check; no parent plan is made up.
+        self.assertEqual((supply['due_kind'], supply['scheduled_on']), ('arranged', ''))
+        self.assertNotEqual(english['due_kind'], 'arranged')
+        self.assertNotIn('2026-11-05', (english['due_on'], english['complete_on'], english['scheduled_on']), 'tonight never borrows tomorrow')
         self.assertNotIn('Unit 5', supply['body'])
         self.assertFalse(any(i['title'].endswith('训练') or '在家训练' in i['title'] for i in listed), 'no training item is generated')
         self._replay_adds_nothing('T02')
+
+    def test_t02_only_carrying_to_that_days_lesson_is_an_arranged_day(self):
+        meaning = lambda quote, due='2026-11-05', title='': family_agenda.date_meaning(quote, due, '2026-11-04', title)
+        self.assertEqual(meaning('明天体育课带跳绳'), 'arranged')
+        self.assertEqual(meaning('另外，明天体育课带跳绳，不要求在家训练'), 'arranged')
+        self.assertEqual(meaning('今晚跟读Unit 5两遍；另外，明天体育课带跳绳，不要求在家训练'), 'arranged')
+        self.assertEqual(meaning('今晚跟读Unit 5两遍；另外，明天体育课带跳绳，不要求在家训练', '2026-11-04'), 'deadline', 'tonight is not tomorrow')
+        self.assertEqual(meaning('今晚跟读Unit 5两遍', '2026-11-05'), 'deadline')
+        for quote in ('11月5日前准备好跳绳', '11月5日前带跳绳', '明天体育课不用带跳绳', '明天体育课取消，不用带跳绳', '今晚完成练习，明天带来'):
+            self.assertEqual(meaning(quote), 'deadline', quote)
+        self.assertEqual(meaning('今晚完成第4题，明早交给数学课代表'), 'handback')
+        self.assertEqual(meaning('明早检查跳绳'), 'inspection')
+        self.assertNotEqual(meaning('明天英语课听写'), 'arranged')
+        self.assertEqual(meaning('运动会定于11月5日举行，请家长参加', title='参加运动会'), 'event')
 
     def test_t03_same_subject_from_two_teachers_stays_two_signed_items(self):
         payload, refs = self._day([('18:20', '数学老师甲', 'math-teacher-a', '今晚做练习二第1、2题。'),
