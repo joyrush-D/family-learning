@@ -47,6 +47,9 @@ from urllib.parse import urlparse, urlsplit, unquote, quote, parse_qs
 
 
 class ThreadingHTTPServer(_ThreadingHTTPServer):
+    # Each page opens several asset connections at once; past the stock listen queue of 5,
+    # macOS resets the extra connections (ERR_CONNECTION_RESET) instead of waiting for accept.
+    request_queue_size = 64
     def server_bind(self):
         TCPServer.server_bind(self)
         # Local listening does not need reverse DNS, which can block while offline.

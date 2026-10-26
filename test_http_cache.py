@@ -122,5 +122,42 @@ def check():
     print('HTTP cache, access boundaries and immediate data freshness: OK')
 
 
+def check_listen_queue():
+    # Real loopback TCP, nothing mocked: while the accept loop is held (a busy server), a page's
+    # burst of asset connections must wait in the kernel queue instead of being reset or dropped.
+    held = threading.Event()
+
+    class Held(app.ThreadingHTTPServer):
+        def get_request(self):
+            held.wait(10)
+            return super().get_request()
+
+    assert app.TLSServer.request_queue_size == app.ThreadingHTTPServer.request_queue_size
+    server = Held(('127.0.0.1', 0), app.Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connections = []
+    try:
+        for _ in range(24):
+            conn = HTTPConnection('127.0.0.1', server.server_port, timeout=5)
+            conn.connect()
+            conn.putrequest('GET', '/startup.js')
+            conn.endheaders()
+            connections.append(conn)
+        held.set()
+        for conn in connections:
+            response = conn.getresponse()
+            assert response.status == 200 and response.read() == (app.ROOT / 'startup.js').read_bytes()
+    finally:
+        held.set()
+        for conn in connections:
+            conn.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+    print('Listen queue keeps a held burst of 24 asset connections: OK')
+
+
 if __name__ == '__main__':
     check()
+    check_listen_queue()
