@@ -154,7 +154,9 @@ async function demoServer(){
       const dates=await card.locator('.agenda-dates').innerText();
       assert.match(dates,/发布：2026-10-19 1\d:\d\d/,key+' publication time');
       if(key==='塑料瓶')assert.doesNotMatch(dates,/完成：/,'the bottle borrows no completion day');else assert.match(dates,/完成：2026-10-19[\s\S]*截止：2026-10-20/,key+' completion and handback/check days');
-      assert.match(dates,/截止：2026-10-20/);
+      // Bringing the bottle to science class is that day's arrangement (the frozen T02 meaning), still no handback or deadline.
+      if(key==='塑料瓶'){assert.match(dates,/安排日：2026-10-20/,'the bottle reads its science lesson day');assert.doesNotMatch(dates,/截止|老师要求交回/,'the bottle is no deadline or handback')}
+      else assert.match(dates,/截止：2026-10-20/);
      }
      assert.deepEqual(await p.locator('[data-query-target="task:'+ids['数格']+'"] [data-school-original-ref]').allInnerTexts(),['原件 1','原件 2'],'both math originals');
      assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page has no horizontal overflow');
