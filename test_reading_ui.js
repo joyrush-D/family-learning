@@ -34,3 +34,19 @@ test('reading agreement actions stay visible while source, work and history stay
  assert.ok(html.indexOf(task.work_text)>collapsed);assert.ok(html.indexOf(task.edition)>collapsed);assert.match(html,/<summary>作品、出处与记录<\/summary>/);
  assert.doesNotMatch(h.context.readingCard({...task,method:'<img>',criteria:'<script>'}),/<img>|<script>/);
 });
+
+test('the reading shelf files each agreement once by its own subject, else its same-child source task',()=>{
+ const h=harness(),calendar=readFileSync(__dirname+'/calendar.js','utf8');Object.assign(h.context,{esc:s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),recordUploads:()=>'',empty:s=>'<p>'+s+'</p>',selected:rows=>rows.filter(t=>t.child==='小溪'),filters:()=>'',readingRewards:()=>''});
+ vm.runInContext(calendar.slice(calendar.indexOf('const subjectGeneral='),calendar.indexOf('// The kind is said once')),h.context);
+ h.context.data.tasks=[{id:'T-MATH',child:'小溪',agenda:{subject_state:'known',subjects:['数学']}},{id:'T-SIBLING',child:'小岚',agenda:{subject_state:'known',subjects:['语文']}}];
+ const t=(id,extra)=>({id,child:'小溪',state:'进行中',book:'虚构'+id,scope:'第一节',method:'讲述',criteria:'分享一个发现',stamps:1,attachments:[],history:[],work_text:'',edition:'',source_task_id:'',subject:'',...extra});
+ h.context.data.reading={tasks:[t('r1',{source_task_id:'T-MATH',book:'English Reader'}),t('r2',{book:'英语分级绘本'}),t('r3',{subject:'综合'}),t('r4',{source_task_id:'T-SIBLING'}),t('r5',{subject:'语文',source_task_id:'T-MATH'}),{...t('r6',{subject:'数学'}),child:'小岚'}]};
+ const before=JSON.stringify(h.context.data),html=vm.runInContext('readingHTML()',h.context);
+ assert.deepEqual([...html.matchAll(/data-reading-subject="([^"]*)"><h3 class="subject-filed-heading">/g)].map(m=>m[1]),['数学','语文','综合事务','科目待定'],'a book name never files an agreement; 综合 and 科目待定 stay apart and last');
+ for(const id of ['r1','r2','r3','r4','r5'])assert.equal(html.split('data-reading-target="'+id+'"').length-1,1,id+' keeps one card');
+ assert.doesNotMatch(html,/data-reading-target="r6"/);assert.match(html,/在读 · 5/);
+ const at=id=>html.indexOf('data-reading-target="'+id+'"'),from=key=>html.indexOf('data-reading-subject="'+key+'"');
+ assert.ok(from('数学')<at('r1')&&at('r1')<from('语文')&&from('语文')<at('r5')&&at('r5')<from('综合事务'));
+ assert.ok(from('综合事务')<at('r3')&&at('r3')<from('科目待定')&&from('科目待定')<at('r2')&&from('科目待定')<at('r4'),'another child\'s source task gives no subject');
+ assert.equal(JSON.stringify(h.context.data),before,'filing writes nothing back');
+});
