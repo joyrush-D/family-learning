@@ -4,6 +4,24 @@
 
 核查日期：2026-09-08；候选与实际状态更新至2026-09-14。以下分清已使用的代码、可接入的接口，以及交互参考；候选不代表已经接通。组件许可与本项目 MIT 许可分别保留。
 
+## 知识点体系复用（2026-10-26，尚未接入）
+
+用户希望复用 [cn-math-taxonomy](https://github.com/xiaoyang111222/cn-math-taxonomy)，作为学校教学要求与孩子成长证据之间的知识点参照，避免重建全套分类与题库。核查固定提交 [`ddea0bfd0dbe7bf728e9ea1a6baf866fe5f736f9`](https://github.com/xiaoyang111222/cn-math-taxonomy/tree/ddea0bfd0dbe7bf728e9ea1a6baf866fe5f736f9)，仅只读公开资料，没有运行上游脚本、调用产品模型、上传家庭资料或部署。
+
+| 可复用部分 | 本项目接法与限制 |
+| --- | --- |
+| `data/topics.json` 的知识点 ID、名称、学科、册章、可观察要求 | 作为现有错题候选与 `family_diagnosis.knowledge_components` 的可选规范身份；保留原名称、原作答/反馈引用及未匹配状态。保存来源、固定版本、教材范围、匹配依据与审核状态，不能只凭标题/年级断言匹配。 |
+| `data/dependencies.json` 的前置关系与理由 | 用于提出少量“下一步核查哪项基础”的候选，不从图上的关系推断孩子已有或缺失的能力，不把软关系变成必学门槛。 |
+| `data/questions.json` 与诊断流程 | 作为待核参考；题目需先核题意、答案、实际测量的知识点及内容权利。首批不接自动判题、不自动给孩子出全套测评；复用原件/教师参考优先和原引导/复测流程。 |
+
+上游 [README 状态说明](https://github.com/xiaoyang111222/cn-math-taxonomy/blob/ddea0bfd0dbe7bf728e9ea1a6baf866fe5f736f9/README.md)明确为 AI 初稿、尚未经过教师审核；知识点粒度、题目与 hard/soft 关系均需核对。[教材对照说明](https://github.com/xiaoyang111222/cn-math-taxonomy/blob/ddea0bfd0dbe7bf728e9ea1a6baf866fe5f736f9/docs/edition-mappings.md)以人教版为基底，其他版本对照仍不能视为已完成。教材册次不是孩子水平或学校实际教学进度。
+
+不照搬的判断：上游 [诊断算法](https://github.com/xiaoyang111222/cn-math-taxonomy/blob/ddea0bfd0dbe7bf728e9ea1a6baf866fe5f736f9/diagnose/README.md#算法)会以第一题正确标本点掌握并推断祖先掌握；题量不足时也可能由单次错误暂标薄弱。本项目保留“待验证/有支持/有反证”、帮助程度、原题与相近新题、间隔后独立表现的区别，不把这些启发式状态转成孩子的掌握结论、根因事实或自动补课计划。
+
+许可：固定版本 [LICENSE](https://github.com/xiaoyang111222/cn-math-taxonomy/blob/ddea0bfd0dbe7bf728e9ea1a6baf866fe5f736f9/LICENSE) 与 README 的许可证节将图谱数据、题库、诊断工具代码及文档列为 **CC BY-NC 4.0**；`assets/vendor/` 的部分第三方库另为 MIT，这不改变项目自身许可。主选是家庭自选、本地只读、按原许可独立保留的资料包，保署名、许可、版本和改动说明；不把上游代码/数据改标 MIT 或默认打包进公开产品。商业分发或用途另核作者授权；未获授权时可保留独立外部链接和本项目既有手工候选流程，不替用户联系作者。
+
+实施由 M4 Claude 负责，Codex 独立验收；先完成原诊断的证据/版本有效性核查，再以一组全虚构数学材料验证规范匹配、歧义/未知、前置核查与同原作业复测。尚无导入器、稳定知识点映射、接入 UI 或家庭效果证据。①每日待办优先及全部既有未完成需求不变。
+
 ## 已直接使用
 
 | 组件 | 当前用途和文件 | 许可与来源 |
