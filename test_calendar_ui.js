@@ -20,10 +20,11 @@ test('new notices do not hide older or undated pending administrative requiremen
  const row=(id,published,extra={})=>({id,task_id:'',kind:'school',child_ids:['child-a'],title:id,closed:false,agenda:{category:'todo',box:'inbox',published_on:published,due_on:'',scheduled_on:''},...extra});
  const older=row('print-and-sign','2026-09-02'),unknown=row('unknown-publication',''),newer=row('activity-receipt','2026-09-07');
  const excluded=[row('sibling','2026-09-07',{child_ids:['child-b']}),row('closed','2026-09-07',{closed:true}),row('wish','2026-09-07',{agenda:{...older.agenda,box:'wish'}}),row('future-plan','2026-09-07',{agenda:{...older.agenda,scheduled_on:'2026-09-09'}}),row('future-publication','2026-09-09')];
- d.today_calendar={inbox:[older],events:[],timetables:[]};assert.match(h.ctx.todayTasksHTML().split('id="task-group-todo"')[1].split('</section>')[0],/data-notice="print-and-sign"/);
- d.today_calendar.inbox.push(newer,unknown,...excluded);const before=JSON.stringify(d.today_calendar),html=h.ctx.todayTasksHTML(),todo=html.split('id="task-group-todo"')[1].split('</section>')[0];
+ d.today_calendar={inbox:[older],events:[],timetables:[]};assert.match(h.ctx.todayTasksHTML().split('id="subject-科目待定"')[1].split('</section>')[0],/data-notice="print-and-sign"/);
+ d.today_calendar.inbox.push(newer,unknown,...excluded);const before=JSON.stringify(d.today_calendar),html=h.ctx.todayTasksHTML(),todo=html.split('id="subject-科目待定"')[1].split('</section>')[0];
  for(const id of ['print-and-sign','activity-receipt','unknown-publication']){assert.match(todo,new RegExp('data-notice="'+id+'"'),'received pending administration is directly visible: '+id);assert.equal((html.match(new RegExp('data-notice="'+id+'"','g'))||[]).length,1)}
- assert.match(todo,/要办的事 · 0/);assert.match(todo,/待核对 3/);assert.match(html,/今日作业 · 0/);assert.doesNotMatch(html,/today-backlog/);
+ // No subject in their own words: one 科目待定 section, never a parallel type section or a folded backlog; type stays on each card.
+ assert.match(todo,/科目待定 · 0/);assert.match(todo,/待核对 3/);assert.equal((todo.match(/data-category="todo"/g)||[]).length,3);assert.doesNotMatch(html,/id="task-group-|today-backlog/);
  for(const x of excluded)assert.doesNotMatch(html,new RegExp('data-notice="'+x.id+'"'));
  assert.ok(todo.indexOf('data-notice="activity-receipt"')<todo.indexOf('data-notice="print-and-sign"'));assert.ok(todo.indexOf('data-notice="print-and-sign"')<todo.indexOf('data-notice="unknown-publication"'));
  assert.equal(JSON.stringify(d.today_calendar),before,'rendering preserves original dates, states and requirements');
@@ -184,7 +185,7 @@ if(process.argv.includes('--browser'))test('phone subscription dialog works at m
     const dialog=p.locator('#calendarSyncDialog'),address=p.locator('#calendarSyncURL'),copy=p.locator('#calendarSyncCopy'),entry=p.locator('[data-calendar-sync]');
     const fit=async()=>{assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page fits '+width);assert.equal(await dialog.evaluate(x=>x.scrollWidth>x.clientWidth),false,'dialog fits '+width);assert.equal(await dialog.locator('button:visible,summary:visible').evaluateAll(xs=>xs.some(x=>x.getBoundingClientRect().height<44)),false,'44px dialog controls '+width)};
     const open=async()=>{await entry.focus();await p.keyboard.press('Enter');await eventually(()=>dialog.isVisible(),'subscription dialog')};
-    await p.goto(remote+'?child=example#week');await eventually(()=>p.locator('body[data-page="home"] #task-group-homework').isVisible(),'synthetic home');await p.locator('nav [data-page="calendar"]').click();await p.locator('.calendar-tools > summary').click();await eventually(()=>entry.isVisible(),'calendar settings');
+    await p.goto(remote+'?child=example#week');await eventually(()=>p.locator('body[data-page="home"] #task-groups').isVisible(),'synthetic home');await p.locator('nav [data-page="calendar"]').click();await p.locator('.calendar-tools > summary').click();await eventually(()=>entry.isVisible(),'calendar settings');
     await open();assert.equal(await address.inputValue(),remote+'calendar.ics');assert.equal(await address.getAttribute('readonly'),'');assert.equal(await p.locator('#calendarSyncHelp').getAttribute('open'),null);assert.equal(await p.locator('#calendarSyncStatus').getAttribute('role'),'status');await fit();await proof(p,'https-'+width);
     await copy.click();assert.deepEqual(await p.evaluate(()=>window.__copied),[remote+'calendar.ics']);assert.match(await p.locator('#calendarSyncStatus').innerText(),/已复制/);
     await p.evaluate(()=>window.__copyDenied=true);await copy.click();await eventually(async()=>/手动复制/.test(await p.locator('#calendarSyncStatus').innerText()),'manual copy fallback');
@@ -192,7 +193,7 @@ if(process.argv.includes('--browser'))test('phone subscription dialog works at m
     await p.locator('#calendarSyncHelp summary').click();assert.match(await dialog.innerText(),/夫妻各自订阅/);assert.match(await dialog.innerText(),/不是 Apple／iCloud 密码/);assert.match(await dialog.innerText(),/不保证即时/);await fit();await proof(p,'help-'+width);
     await p.keyboard.press('Escape');await eventually(async()=>!await dialog.isVisible(),'Escape closes dialog');assert.equal(await entry.evaluate(x=>document.activeElement===x),true,'Escape restores opener focus');
     await open();assert.equal(await p.locator('#calendarSyncHelp').getAttribute('open'),null);await p.locator('[data-close="calendarSyncDialog"]').click();await eventually(async()=>!await dialog.isVisible(),'shared close handler');assert.equal(await entry.evaluate(x=>document.activeElement===x),true,'close button restores opener focus');
-    await p.goto(local);await eventually(()=>p.locator('body[data-page="home"] #task-group-homework').isVisible(),'HTTP home');await p.locator('nav [data-page="calendar"]').click();await p.locator('.calendar-tools > summary').click();await eventually(()=>entry.isVisible(),'HTTP calendar settings');await open();
+    await p.goto(local);await eventually(()=>p.locator('body[data-page="home"] #task-groups').isVisible(),'HTTP home');await p.locator('nav [data-page="calendar"]').click();await p.locator('.calendar-tools > summary').click();await eventually(()=>entry.isVisible(),'HTTP calendar settings');await open();
     assert.equal(await p.locator('#calendarSyncAddress').isVisible(),false);assert.equal(await address.inputValue(),'');assert.equal(await copy.isDisabled(),true);assert.match(await p.locator('#calendarSyncStatus').innerText(),/已登录的 HTTPS/);await fit();await proof(p,'http-'+width);
     assert.deepEqual(errors,[]);assert.deepEqual(unexpected,[],'subscription setup never fetches ICS or posts data');results.push({width,httpsSubpath:true,copyAndFallback:true,nativeCloseAndFocus:true,noOverflow:true,httpUnavailable:true,pageErrors:0});
    }finally{await p.close()}
@@ -265,18 +266,17 @@ test('today counts only current dated work and marks source gaps without changin
  h.ctx.currentSourceStatus=()=> '最近读取未成功';assert.match(h.ctx.todayTasksHTML(),/消息读取有缺口，作业可能缺项。/);assert.match(h.ctx.todayTasksHTML(),/data-collection-check/);
  h.ctx.child='小岚';assert.doesNotMatch(h.ctx.todayTasksHTML(),/作业可能缺项|原件尚未读全/);
 });
-test('agent-classified homework appears with homework while notices stay separate',()=>{
+test('agent-classified homework and notices share their subject section while each card keeps its own type',()=>{
  const h=harness(),d=h.ctx.data;h.ctx.filters=()=>'';
  h.ctx.agendaItemHTML=x=>`<article data-notice="${x.id}">${x.title}</article>`;
  const school=(id,published,category='homework')=>({id,kind:'school',child_ids:['child-a'],title:id,closed:false,agenda:{category,box:'inbox',published_on:published,due_on:'',scheduled_on:''}});
  const rows=[school('older','2026-09-02'),school('yesterday-a','2026-09-07'),school('yesterday-b','2026-09-07'),school('today-notice',d.today,'todo'),school('unknown','')];
  d.today_calendar={inbox:rows,events:[],timetables:[]};h.ctx.child='小溪';
- const html=h.ctx.todayTasksHTML(),recent=html.split('id="task-group-todo"')[1]?.split('</section>')[0],homework=html.split('today-recent-homework">')[1]?.split('</section>')[0],backlog=html.split('today-backlog">')[1]?.split('</details>')[0]||'';
- assert.match(html,/今日作业 · 0/);assert.match(homework,/待核对 4/);assert.match(recent,/待核对 1/);
- for(const id of ['older','yesterday-b','yesterday-a'])assert.match(homework,new RegExp('data-notice="'+id+'"'));
- assert.match(recent,/data-notice="today-notice"/);assert.doesNotMatch(recent,/yesterday-a|yesterday-b|older|unknown/);
- assert.match(homework,/data-notice="unknown"/);assert.doesNotMatch(backlog,/data-notice="older"|data-notice="unknown"/);
- assert.equal((html.match(/data-notice="yesterday-a"/g)||[]).length,1);
+ const html=h.ctx.todayTasksHTML(),group=html.split('id="subject-科目待定"')[1]?.split('</section>')[0]||'',kind=id=>group.split('data-subject-item="'+id+'"')[1]?.match(/data-category="(\w+)"/)?.[1];
+ assert.match(group,/科目待定 · 0/);assert.match(group,/待核对 5/);assert.doesNotMatch(html,/id="task-group-|today-backlog|today-recent-homework/);
+ for(const id of ['older','yesterday-b','yesterday-a','unknown'])assert.equal(kind(id),'homework','agent-classified homework keeps its type: '+id);
+ assert.equal(kind('today-notice'),'todo');
+ for(const x of rows)assert.equal((html.match(new RegExp('data-notice="'+x.id+'"','g'))||[]).length,1,'every item stays directly visible once: '+x.id);
 });
 
 test('agent accepted details contain only the current child after switching',()=>{
