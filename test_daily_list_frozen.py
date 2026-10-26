@@ -8,7 +8,6 @@ Set DAILY_LIST_REPORT to a file path to record each case's actual list view for 
 import datetime as dt
 import json
 import os
-import traceback
 import unittest
 
 import family_agent as agent
@@ -87,7 +86,7 @@ class DailyListFrozenTests(unittest.TestCase):
             items = c.execute('SELECT COUNT(*) FROM agent_items').fetchone()[0]
         return job, processed, originals, items
 
-    def _t01(self):
+    def test_t01_continued_supplement_is_one_chinese_item_with_both_originals(self):
         payload, refs = self._day([('18:00', '语文老师甲', 'cn-teacher-a', '今晚朗读《荷塘》2遍。'),
                                    ('18:02', '语文老师甲', 'cn-teacher-a', '刚才的朗读还要家长签字。')])
         reading = self._proposal('今晚朗读《荷塘》2遍', refs, '语文', '今晚朗读《荷塘》2遍；朗读后请家长签字。')
@@ -102,39 +101,6 @@ class DailyListFrozenTests(unittest.TestCase):
         self.assertEqual(item['published_at'][:16], '2026-11-04T18:00')
         self.assertEqual(on_day, [item['title']])
         self._replay_adds_nothing('T01')
-
-    @unittest.expectedFailure  # Reproduced product defect, frozen expectation unchanged: the 刚才的朗读 supplement is not bound to
-    def test_t01_continued_supplement_is_one_chinese_item_with_both_originals(self):  # its reading (pinned by the next test).
-        self._t01()
-
-    def test_t01_expected_failure_is_the_first_pass_product_result(self):
-        """Pins T01's expected failure to the product's own first-pass result, never the reply seam or a replay, then checks
-        the rejected batch's retries with a fixed receipt for each attempt: the original limit, nothing saved, originals kept.
-        Remove together with T01's expectedFailure once the supplement is bound."""
-        try:  # assertRaises drops the traceback, which is the evidence here
-            self._t01()
-        except self.failureException as failure:
-            message, frames = str(failure), traceback.extract_tb(failure.__traceback__)
-        else:
-            self.fail('T01 passes now: remove its expectedFailure and this pin')
-        own = [f for f in frames if os.path.basename(f.filename) == os.path.basename(__file__)]
-        self.assertEqual((own[-1].name, own[-1].line), ('_t01', "self.assertEqual((result['failed'], result['processed']), (0, 2))"))
-        self.assertIn('(1, 0) != (0, 2)', message)
-        self.assertNotIn(os.path.basename(native.__file__), {os.path.basename(f.filename) for f in frames}, 'not the reply seam')
-        self.assertEqual(self.model.call_count, 1, 'the first pass alone: no replay was reached')
-        job, processed, originals, items = self._job()
-        self.assertEqual((job['attempts'], job['done'], processed, items), (1, 0, [0, 0], 0))
-        self.assertIn('学校补充要求未归到对应作业', job['error'])
-        payload, proposals = self._batch
-        self._use_replies(payload, [dict(proposals=proposals)] * (agent.MAX_ATTEMPTS - 1))
-        for minutes in (7, 18, 60):  # attempt 2 after its 5-minute wait, attempt 3 after 10 more, then none
-            agent.run_once(self.app, self._ran_at + dt.timedelta(minutes=minutes))
-        job, processed, originals, items = self._job()
-        self.assertEqual(self.model.call_count, agent.MAX_ATTEMPTS, 'one fixed receipt per attempt, never past the original limit')
-        self.assertEqual((job['attempts'], job['done'], job['next_try'], processed, items), (agent.MAX_ATTEMPTS, 0, '', [0, 0], 0))
-        self.assertIn('学校补充要求未归到对应作业', job['error'])
-        self.assertIn('达到自动重试上限', job['error'])
-        self.assertEqual(originals, payload['messages'])
 
     def test_t02_independent_supply_is_its_own_admin_item_on_its_own_day(self):
         text = '今晚跟读Unit 5两遍；另外，明天体育课带跳绳，不要求在家训练。'
@@ -287,6 +253,102 @@ class DailyListFrozenTests(unittest.TestCase):
         self.assertNotEqual(item['due_kind'], 'handback')
         self.assertIn('2026-11-04', (item['complete_on'], item['due_on']))
         self._replay_adds_nothing('T01-send-day-due')
+
+
+class ContinuedSupplementVariantTests(unittest.TestCase):
+    """Fictional variants of T01's shared cause, not frozen contract cases: the same teacher's follow-up in the same source,
+    within two minutes, pointing back to one listed object and only adding a step to it (刚才的朗读还要家长签字) is that one
+    item's supplement. Another teacher or source, a later or earlier message, two items it could mean, a question, change,
+    condition, negation, subject, or a day, count, title or worksheet of its own, a second clause or no pointer binds
+    nothing: the whole batch stays for the existing retry, nothing saved, originals kept. Fixed receipts prove only the
+    program layer."""
+    setUp, _use_replies, _day, _proposal = (DailyListFrozenTests.setUp, DailyListFrozenTests._use_replies,
+                                            DailyListFrozenTests._day, DailyListFrozenTests._proposal)
+    _report, _run, _replay_adds_nothing, _job = (DailyListFrozenTests._report, DailyListFrozenTests._run,
+                                                 DailyListFrozenTests._replay_adds_nothing, DailyListFrozenTests._job)
+
+    def _ledger(self, *later, first='今晚朗读《荷塘》2遍。'):
+        """Each listed outcome of the first original and the supplement goals the shared ledger binds to it.
+        later: (text, seconds after the list, publisher, source) of each following original."""
+        sent = dt.datetime(2026, 11, 4, 18, tzinfo=agent.TZ)
+        evidence = [dict(ref='message:synthetic-group:11', text=first, time=sent.isoformat(), publisher='cn-teacher-a')]
+        evidence += [dict(ref='message:%s:%d' % (source, 12 + i), text=text, time=(sent + dt.timedelta(seconds=gap)).isoformat(),
+                          publisher=publisher) for i, (text, gap, publisher, source) in enumerate(later)]
+        for i, e in enumerate(evidence):
+            e.update(kind='text', content_incomplete=False, unread=False, attachments=[], message_order=str(11 + i))
+        return {a['quote']: [s['goal'] for s in a['supplements']] for a in agent._school_native_actions(evidence)
+                if a['ref'] == evidence[0]['ref']}
+
+    def test_the_ledger_binds_a_pointer_back_with_one_added_step(self):
+        for text, goal in (('刚才的朗读还要家长签字。', '朗读还要家长签字'), ('上面的朗读也要家长签字', '朗读也要家长签字'),
+                           ('刚刚布置的朗读还需要家长签字！', '朗读还需要家长签字'), ('前面的《荷塘》也请家长签字。', '《荷塘》也请家长签字')):
+            self.assertEqual(self._ledger((text, 120, 'cn-teacher-a', 'synthetic-group')), {'今晚朗读《荷塘》2遍': [goal]}, text)
+        self.assertEqual(self._ledger(('刚才的朗读还要家长签字。', 60, 'cn-teacher-a', 'synthetic-group'), first='今晚朗读《荷塘》2遍；抄写生字一遍。'),
+                         {'今晚朗读《荷塘》2遍': ['朗读还要家长签字'], '抄写生字一遍': []}, 'only the item it names')
+
+    def test_the_ledger_binds_nothing_without_one_clear_continuation(self):
+        same = ('cn-teacher-a', 'synthetic-group')
+        unbound = {'今晚朗读《荷塘》2遍': []}
+        for later in (('刚才的朗读还要家长签字。', 60, 'cn-teacher-b', 'synthetic-group'),  # another teacher
+                      ('刚才的朗读还要家长签字。', 60, 'cn-teacher-a', 'synthetic-other'),  # another source or child binding
+                      ('刚才的朗读还要家长签字。', 600, *same), ('刚才的朗读还要家长签字。', -60, *same),  # no near, later context
+                      ('刚才的朗读还要家长签字吗？', 60, *same), ('刚才的朗读如果读完还要家长签字。', 60, *same),
+                      ('刚才的朗读还要改为家长签字。', 60, *same), ('刚才的朗读也不用家长签字。', 60, *same),
+                      ('刚才的语文朗读还要家长签字。', 60, *same), ('刚才的朗读还要家长明早签字。', 60, *same),
+                      ('刚才的朗读还要再读1遍。', 60, *same), ('刚才的朗读还要抄写生字两遍。', 60, *same),
+                      ('刚才的朗读还要背诵《春》。', 60, *same), ('刚才的朗读还要完成练习册。', 60, *same),
+                      ('刚才的朗读还要家长签字，明天体育课带跳绳。', 60, *same), ('刚才的朗读还要家长签字。明天体育课带跳绳。', 60, *same),
+                      ('朗读还要家长签字。', 60, *same), ('刚才的背诵还要家长签字。', 60, *same)):
+            self.assertEqual(self._ledger(later), unbound, later)
+        self.assertEqual(self._ledger(('刚才的朗读还要家长签字。', 60, *same), first='今晚朗读《荷塘》2遍；朗读《春》1遍。'),
+                         {'今晚朗读《荷塘》2遍': [], '朗读《春》1遍': []}, 'two items it could mean')
+        with self.assertRaises(agent.AgentError) as both:  # two lists' items it could mean
+            self._ledger(('今晚朗读《春》1遍。', 30, *same), ('刚才的朗读还要家长签字。', 60, *same))
+        self.assertIn('学校补充同时对应多项作业', str(both.exception))
+
+    def test_the_continued_step_joins_only_the_item_it_names(self):
+        payload, refs = self._day([('18:00', '语文老师甲', 'cn-teacher-a', '今晚朗读《荷塘》2遍；抄写生字一遍。'),
+                                   ('18:01', '语文老师甲', 'cn-teacher-a', '刚才的朗读还要家长签字。')])
+        reading = self._proposal('今晚朗读《荷塘》2遍', refs, '语文', '今晚朗读《荷塘》2遍；朗读后请家长签字。')
+        copying = self._proposal('抄写生字一遍', refs[:1], '语文', '抄写生字一遍。')
+        result, rows, listed, _ = self._run(payload, [reading, copying], 'T01-variant-two-items')
+        self.assertEqual((result['failed'], result['processed']), (0, 2))
+        read, = [i for i in listed if '《荷塘》' in i['body']]
+        copy, = [i for i in listed if '抄写生字一遍' in i['body']]
+        self.assertEqual((read['publications'], copy['publications']), (refs, refs[:1]), 'each keeps its own originals')
+        self.assertIn('签字', read['body'])
+        self.assertNotIn('签字', copy['body'])
+        self.assertNotIn('抄写', read['body'])
+        self._replay_adds_nothing('T01-variant-two-items')
+
+    def _rejected(self, messages, proposals, case):
+        """The whole batch stays for the original retry limit: nothing saved, originals kept, no further receipt."""
+        payload, refs = self._day(messages)
+        result, rows, listed, _ = self._run(payload, proposals(refs), case)
+        self.assertEqual((result['failed'], result['processed'], result['created'], listed), (1, 0, 0, []))
+        self._use_replies(payload, [dict(proposals=proposals(refs))] * (agent.MAX_ATTEMPTS - 1))
+        for minutes in (7, 18, 60):  # attempt 2 after its 5-minute wait, attempt 3 after 10 more, then none
+            agent.run_once(self.app, self._ran_at + dt.timedelta(minutes=minutes))
+        job, processed, originals, items = self._job()
+        self.assertEqual(self.model.call_count, agent.MAX_ATTEMPTS, 'one fixed receipt per attempt, never past the original limit')
+        self.assertEqual((job['attempts'], job['done'], job['next_try'], processed, items), (agent.MAX_ATTEMPTS, 0, '', [0, 0], 0))
+        self.assertEqual(originals, payload['messages'])
+        return job['error']
+
+    def test_another_teachers_follow_up_is_no_supplement(self):
+        error = self._rejected([('18:00', '语文老师甲', 'cn-teacher-a', '今晚朗读《荷塘》2遍。'),
+                                ('18:02', '语文老师乙', 'cn-teacher-b', '刚才的朗读还要家长签字。')],
+                               lambda refs: [self._proposal('今晚朗读《荷塘》2遍', refs, '语文', '今晚朗读《荷塘》2遍；朗读后请家长签字。')],
+                               'T01-variant-other-teacher')
+        self.assertIn('学校补充要求未归到对应作业', error)
+
+    def test_a_follow_up_two_items_could_mean_is_no_supplement(self):
+        error = self._rejected([('18:00', '语文老师甲', 'cn-teacher-a', '今晚朗读《荷塘》2遍；朗读《春》1遍。'),
+                                ('18:02', '语文老师甲', 'cn-teacher-a', '刚才的朗读还要家长签字。')],
+                               lambda refs: [self._proposal('今晚朗读《荷塘》2遍', refs, '语文', '今晚朗读《荷塘》2遍；朗读后请家长签字。'),
+                                             self._proposal('朗读《春》1遍', refs[:1], '语文', '朗读《春》1遍。')],
+                               'T01-variant-two-antecedents')
+        self.assertIn('学校补充要求未归到对应作业', error)
 
 
 class ReplySlipChoiceVariantTests(unittest.TestCase):
