@@ -9,6 +9,7 @@ import datetime as dt
 import json
 import os
 import unittest
+from pathlib import Path
 
 import family_agenda
 import family_agent as agent
@@ -701,6 +702,10 @@ def serve_t02(port):
             def today(cls):
                 return cls(fixed.year, fixed.month, fixed.day)
         dt.datetime, dt.date = FrozenDateTime, FrozenDate
+        # The fixture's fictional family rules stay the only documents read; pages come from this source tree.
+        docs = {name: (app.ROOT / name).read_text() for name in ('家庭运行规则.md',)}
+        app.read = lambda name: docs.get(name, '')
+        app.ROOT = Path(__file__).resolve().parent
         app.prepare_assets()
         server = app.ThreadingHTTPServer(('127.0.0.1', port), app.Handler)
         print('T02 Store served', flush=True)
