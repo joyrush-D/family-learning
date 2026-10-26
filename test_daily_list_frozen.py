@@ -228,7 +228,6 @@ class DailyListFrozenTests(unittest.TestCase):
         self.assertEqual(on_day, [tonight['title']], 'only the follow-reading is tonight\'s work')
         self._replay_adds_nothing('T09')
 
-    @unittest.expectedFailure  # Reproduced defect, frozen expectation unchanged: _school_role_days rejects any 或 and the undated 然后签字 role.
     def test_t10_reply_slip_choice_keeps_both_roles_and_both_options(self):
         text = '今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；孩子明早交给班主任。'
         payload, refs = self._day([('19:05', '班主任', 'head-teacher', text)])
@@ -278,17 +277,14 @@ class ReplySlipChoiceVariantTests(unittest.TestCase):
         self.assertEqual(on_day, [item['title']])
         self._replay_adds_nothing(case)
 
-    @unittest.expectedFailure  # Reproduced before the fix: the same 或 guard and undated 然后签字 role as T10.
     def test_another_choice_between_quoted_options_keeps_both_roles(self):
         self._both_roles('今晚请家长在《午餐意向单》勾选“同意”或“不同意”，然后签字；孩子明早交给班主任。', 'V-choice-quoted',
                          '今晚家长在《午餐意向单》勾选“同意”或“不同意”，然后签字；' + self.HANDBACK, ('“同意”', '“不同意”', '签字'))
 
-    @unittest.expectedFailure  # Reproduced before the fix: the same 或 guard and undated 再签字 role as T10.
     def test_three_options_and_a_then_signing_step_keep_both_roles(self):
         self._both_roles('今晚请家长在《社团报名表》圈选‘美术’、‘篮球’或‘合唱’，再签字；孩子明早交给班主任。', 'V-choice-three',
                          '今晚家长在《社团报名表》圈选‘美术’、‘篮球’或‘合唱’，再签字；' + self.HANDBACK, ('‘美术’', '‘篮球’', '‘合唱’', '签字'))
 
-    @unittest.expectedFailure  # Reproduced before the fix: the undated 然后签字 step alone loses both role days.
     def test_the_same_items_signing_step_without_a_choice_keeps_both_roles(self):
         self._both_roles('今晚请家长核对《通讯录信息表》，然后签字；孩子明早交回。', 'V-step-sign',
                          '今晚家长核对《通讯录信息表》，然后签字；孩子11月5日早上交回。', ('核对', '签字', '交回'), submission='孩子明早交回')
@@ -296,9 +292,10 @@ class ReplySlipChoiceVariantTests(unittest.TestCase):
     def _unknown(self, text, case, goal):
         result, rows, listed, (on_day, visible) = self._slip(text, case, goal)
         self._report(case=case + '-outcome', listed=listed, result={k: result[k] for k in ('failed', 'processed', 'created')})
-        self.assertFalse(any(i['complete_on'] == '2026-11-04' and i['due_kind'] == 'handback' for i in listed),
-                         'a day the original leaves open is never read as both role days')
-        return result, listed
+        item, = listed
+        self.assertEqual((result['failed'], result['processed'], item['kind'], item['complete_on']), (0, 1, 'school', ''),
+                         'kept for review: a day the original leaves open is never read as both role days')
+        self.assertNotEqual(item['due_kind'], 'handback')
 
     def test_a_real_day_alternative_stays_unknown(self):
         self._unknown('今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；孩子明早或后天交给班主任。', 'V-day-alternative',
@@ -320,10 +317,11 @@ class ReplySlipChoiceVariantTests(unittest.TestCase):
         book = self._proposal('数学练习册明早交给数学老师', refs, '数学', '数学练习册11月5日早上交给数学老师。', due='2026-11-05')
         result, rows, listed, _ = self._run(payload, [slip, book], 'V-sibling-day')
         self._report(case='V-sibling-day-outcome', listed=listed, result={k: result[k] for k in ('failed', 'processed', 'created')})
-        self.assertFalse(any('回执' in i['body'] and (i['due_on'] or i['due_kind'] == 'handback') for i in listed),
-                         "the workbook's handback day is never the slip's")
+        receipt, = [i for i in listed if '回执' in i['body']]
+        workbook, = [i for i in listed if '练习册' in i['body']]
+        self.assertEqual((receipt['complete_on'], receipt['due_on'], receipt['due_kind']), ('', '', ''), "the workbook's day is never the slip's")
+        self.assertEqual((workbook['due_on'], workbook['due_kind']), ('2026-11-05', 'handback'))
 
-    @unittest.expectedFailure  # Reproduced before the fix: every one reads None.
     def test_the_role_reader_takes_a_closed_choice_and_the_same_items_signing_step(self):
         cited = lambda text: [dict(ref='message:s:1', text=text, time='2026-11-04T19:05:00+08:00')]
         read = lambda text: agent._school_role_days(text, cited(text), [])

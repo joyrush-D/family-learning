@@ -2434,6 +2434,26 @@ def _school_own_clause_dates(quote,cited,others):
     return _school_own_dates(_school_corrected_quote(quote,homes[0],cited),published)-later_dropped_days(quote,text[start:],published)
 
 
+# One closed choice a parent ticks between quoted options (勾选‘参加’或‘不参加’, 圈选“美术”、“篮球”或“合唱”).
+_SCHOOL_CHOICE_OPTION=r'‘[^‘’]{1,12}’|“[^“”]{1,12}”|「[^「」]{1,12}」|『[^『』]{1,12}』'
+_SCHOOL_CHOICE=(r'(?:'+_SCHOOL_CHOICE_OPTION+r')(?:\s*[、/]\s*(?:'+_SCHOOL_CHOICE_OPTION+r'))*\s*(?:或者|或是|或)\s*(?:'
+                +_SCHOOL_CHOICE_OPTION+r')')
+
+
+def _school_choices_read(text):
+    """text with each choice between quoted options read as one object (选项): its 或 joins two answers, not two days.
+
+    Only options naming no day, role verb, change, condition or question are a choice; 明早或后天交, 家长或孩子签字, an unquoted
+    参加或不参加 or ‘明天参加’或‘后天参加’ keep their 或, which still leaves the day unknown.
+    """
+    def choice(found):
+        options=re.findall(_SCHOOL_CHOICE_OPTION,found[0])
+        if any(re.search(_SCHOOL_ANY_DAY+r'|交|检查|完成|做完|写完|读完|签字|或|'+_SCHOOL_CHANGE+'|'+_SCHOOL_NATIVE_UNSETTLED,o)
+               for o in options):return found[0]
+        return '选项'
+    return re.sub(_SCHOOL_CHOICE,choice,text)
+
+
 def _school_role_days(quote,cited,others):
     """The one due day of an ordinary item whose own words give it a completion role and a handback, check or own-action role.
 
@@ -2469,7 +2489,7 @@ def _school_role_days(quote,cited,others):
                          or ((m:=re.fullmatch(role+r'检查([^，,]{1,8})\s*',c)) and m[1] in own)
                          for c in re.split(r'[，,]',following[0].strip('。；;！!？? \n'))):
         end+=following.end()
-    span=text[head:end]
+    span=_school_choices_read(text[head:end])
     if re.search(_SCHOOL_DEFERRED+r'|取消|改为|改到|改成|推迟|延期|顺延|更正|待定|另行通知|或者|或|如果|若|可能|大概|左右|[？?]',span):return None
     for other in others:  # Another proposal quoting any of this range makes it shared, not this item's own.
         at=0
@@ -2479,25 +2499,33 @@ def _school_role_days(quote,cited,others):
     done,due=set(),set()
     # Packing its own things into the schoolbag on the sending day (今晚把这两样装进书包) is that day's own work too.
     work=_COMPLETION_VERB+r'|(?:装|放)(?:进|入|到)\s*书包'
-    for clause in re.split(r'[，,。；;！!？?\n]',span):
-        # 今天语文作业： labels the work its sending day publishes; it states no role day of its own.
-        clause=re.sub(r'^\s*(?:今天|今日)\s*[^，,：:\d]{0,6}?(?:作业|任务)\s*[：:]','',clause)
-        days=_school_own_dates(clause,published) if re.search(day,clause) else set()
-        own_day=_school_clause_day(clause,published) if not days and re.search(day,clause) else ''
-        if own_day and (_school_clause_roles(clause) or own_day==published and not re.search(r'交|检查',clause)
-                        and re.search(work,_titles_read_as_objects(clause))):
-            # A role clause's own predicate after its day and only its asker, actor or place (请家长今晚在《秋游意见回执》上签字)
-            # takes that one day, read as a new receipt's clause is (_school_clause_roles, _school_clause_day); so does the
-            # sending day's own work clause (请监护人今天阅读…), the completion read below.
-            days={own_day}
-        if not days:
-            if re.search(day,clause):return None
-            continue
-        back=bool(re.search(r'交|检查',clause))
-        # The sending day's own work (今晚将课本第20页的对话朗读三遍) is its completion, as completion_day reads it.
-        finish=bool(re.search(r'完成|做完|写完|读完|签字',clause) or days=={published} and not back and re.search(work,clause))
-        if len(days)!=1 or (finish and back):return None
-        (done if finish else due).update(days)
+    for sentence in re.split(r'[。；;！!？?\n]',span):
+        clauses=re.split(r'[，,]',sentence)
+        for n,clause in enumerate(clauses):
+            # 今天语文作业： labels the work its sending day publishes; it states no role day of its own.
+            clause=re.sub(r'^\s*(?:今天|今日)\s*[^，,：:\d]{0,6}?(?:作业|任务)\s*[：:]','',clause)
+            days=_school_own_dates(clause,published) if re.search(day,clause) else set()
+            own_day=_school_clause_day(clause,published) if not days and re.search(day,clause) else ''
+            roles=_school_clause_roles(clause) if own_day else set()
+            sent_work=(own_day==published and not re.search(r'交|检查',clause) and re.search(work,_titles_read_as_objects(clause)))
+            # A dated step with no role of its own (今晚请家长在《研学活动回执》勾选选项) ends in the same sentence's directly
+            # following undated 然后/再 step that only finishes it (然后签字): that is its finish on its day, never a day of its own.
+            step=bool(own_day and not roles and not sent_work and n+1<len(clauses)
+                      and re.match(r'\s*(?:然后|随后|接着|再|并且|并)',clauses[n+1]) and not re.search(day,clauses[n+1])
+                      and _school_clause_roles(clauses[n+1])=={'finish'})
+            if own_day and (roles or sent_work or step):
+                # A role clause's own predicate after its day and only its asker, actor or place (请家长今晚在《秋游意见回执》上签字)
+                # takes that one day, read as a new receipt's clause is (_school_clause_roles, _school_clause_day); so does the
+                # sending day's own work clause (请监护人今天阅读…), the completion read below.
+                days={own_day}
+            if not days:
+                if re.search(day,clause):return None
+                continue
+            back=bool(re.search(r'交|检查',clause))
+            # The sending day's own work (今晚将课本第20页的对话朗读三遍) is its completion, as completion_day reads it.
+            finish=bool(re.search(r'完成|做完|写完|读完|签字',clause) or step or days=={published} and not back and re.search(work,clause))
+            if len(days)!=1 or (finish and back):return None
+            (done if finish else due).update(days)
     if len(due)!=1 or any(d>next(iter(due)) for d in done):return None
     return done,next(iter(due))
 
