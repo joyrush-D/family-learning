@@ -241,6 +241,37 @@ class DailyListFrozenTests(unittest.TestCase):
         for words in ('参加', '不参加', '签字', '班主任'): self.assertIn(words, item['body'])
         self.assertEqual(on_day, [item['title']])
         self._replay_adds_nothing('T10')
+        self._t10_original_reads(refs[0], text)
+
+    def _t10_original_reads(self, ref, text):
+        """The accepted slip's own teacher message opens from its task (Root: GET /api/agent/message returned 409). The slip
+        was saved from its quoted words, no native action, and its message carries no file: its text is its whole scope.
+        A changed original, another child's binding or a file added later still keep the old refusals."""
+        source_id, message_id = ref[8:].rsplit(':', 1)
+        with self.store._db() as c:
+            row = dict(c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='accepted'").fetchone())
+        self.assertNotIn('school_original_action', json.loads(row['plan']), 'saved from its reply, not a native action')
+        ask = dict(child_id='child-1', source_id=source_id, message_id=message_id, task_id=row['task_id'])
+        view = self.store.message(ask, None)
+        self.assertEqual((view['task_id'], view['attachments'], view['action_material']['scoped']), (row['task_id'], [], True))
+        self.assertEqual([q['text'] for q in view['action_material']['quotes']], [text])
+        self.assertEqual([q['upload_ids'] for q in view['action_material']['quotes']], [[]], 'text only, no file bound')
+        with self.store._db() as c:
+            self.assertEqual(json.loads(c.execute('SELECT plan FROM agent_items WHERE id=?', (row['id'],)).fetchone()[0]),
+                             json.loads(row['plan']), 'reading saves nothing')
+            with self.assertRaises(agent.AgentError):  # another child's binding of the same message
+                agent.school_original_source_row(self.store, c, dict(row, child_id='child-other'), ref)
+            c.execute('INSERT INTO agent_message_attachments(source_id,message_id,upload_id) VALUES(?,?,?)', (source_id, message_id, 'u-added'))
+            with self.assertRaises(agent.AgentError) as added:  # a file now sharing the message: its share stays unknown
+                agent.school_original_upload_ids(self.store, c, row, ref, ['u-added'])
+            self.assertEqual((added.exception.status, added.exception.code), (409, 'school_original_scope_stale'))
+            c.execute('DELETE FROM agent_message_attachments WHERE upload_id=?', ('u-added',))
+            payload = json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?', (source_id, message_id)).fetchone()[0])
+            c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
+                      (json.dumps(dict(payload, text=text.replace('明早', '后天')), ensure_ascii=False), source_id, message_id))
+        with self.assertRaises(agent.AgentError) as changed:
+            self.store.message(ask, None)
+        self.assertEqual((changed.exception.status, changed.exception.code), (409, 'school_original_scope_stale'), 'a changed original')
 
     def test_t01_counterexample_a_send_day_due_for_tonight_work_states_no_handback(self):
         payload, refs = self._day([('18:00', '语文老师甲', 'cn-teacher-a', '今晚朗读《荷塘》2遍。')])
