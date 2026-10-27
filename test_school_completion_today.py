@@ -1347,7 +1347,7 @@ class SameMessageWithdrawnRoleTests(unittest.TestCase):
     change or leave it open; another subject's or another named thing's cancel withdraws nothing of it."""
     setUp = native.SchoolNativeCoverageTests.setUp
 
-    def run_text(self, text, quote=G02_QUOTE, goal='', submission='', title='语文：完成《晨光练习册》第2页', subject='语文'):
+    def run_text(self, text, quote=G02_QUOTE, goal='', submission='', title='语文：完成《晨光练习册》第2页', subject='语文', held=False):
         self.setUp()
         self.now = self.fixture.now = dt.datetime(2026, 11, 4, 18, 30, tzinfo=agent.TZ)
         payload, refs = owned_time_payload(self, [('teacher-cn', text)], '2026-11-04T18:09:00+08:00')
@@ -1362,6 +1362,8 @@ class SameMessageWithdrawnRoleTests(unittest.TestCase):
             rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
             tasks = {r['id']: dict(r) for r in c.execute('SELECT * FROM manual_tasks')}
         self.assertEqual((result['failed'], result['processed']), (0, 1), result)
+        if held:  # the selection itself keeps it pending: no task, so no day of it reads as a handback
+            return self.assertEqual(([r['state'] for r in rows], tasks), (['pending'], {}))
         accepted = [r for r in rows if r['state'] == 'accepted']
         self.assertEqual((len(accepted), list(tasks)), (1, [accepted[0]['task_id']]), 'one accepted homework task')
         return tasks[accepted[0]['task_id']]
@@ -1385,8 +1387,8 @@ class SameMessageWithdrawnRoleTests(unittest.TestCase):
                             ('原定明天的运动会取消。', 'handback'), ('《口算练习本》不用交了。', 'handback')):
             with self.subTest(later=later):
                 self.assertEqual(self.agenda(self.run_text(G02_RANGE + later)['id'])['due_kind'], role)
-        within = self.run_text('语文今晚完成《晨光练习册》第2页。明天早上交给语文课代表，明天不用交了。')
-        self.assertEqual(self.agenda(within['id'])['due_kind'], 'deadline', 'withdrawn inside its own role sentence')
+        # Withdrawn inside its own role sentence: the selection already holds it, as before the range was read.
+        self.run_text('语文今晚完成《晨光练习册》第2页。明天早上交给语文课代表，明天不用交了。', held=True)
         # The teacher's check reads by the same principle.
         check = '英语：听录音跟读Unit 5两遍，读完请家长在记录本上签字。今晚完成，明天早读检查记录本。'
         for later, role in (('', 'inspection'), ('补充：明天早读不检查了。', 'deadline'), ('数学：明天的听写取消。', 'inspection')):
