@@ -1336,6 +1336,110 @@ STEP_CARD_LINES = {
 }
 
 
+G02_TEXT = '语文今晚完成《晨光练习册》第2页。明天早上交给语文课代表。补充通知：取消明天交回，暂时放在家里。'
+G02_QUOTE = '语文今晚完成《晨光练习册》第2页'
+G02_RANGE = '语文今晚完成《晨光练习册》第2页。明天早上交给语文课代表。'
+
+
+class SameMessageWithdrawnRoleTests(unittest.TestCase):
+    """Root's held-out G02 (fictional, one teacher, sent 2026-11-04 18:10, reply due 11/5): a quote stopping before its own
+    role sentence reads that day's role from its proven range only while no other words of the item's originals withdraw,
+    change or leave it open; another subject's or another named thing's cancel withdraws nothing of it."""
+    setUp = native.SchoolNativeCoverageTests.setUp
+
+    def run_text(self, text, quote=G02_QUOTE, goal='', submission='', title='语文：完成《晨光练习册》第2页', subject='语文'):
+        self.setUp()
+        self.now = self.fixture.now = dt.datetime(2026, 11, 4, 18, 30, tzinfo=agent.TZ)
+        payload, refs = owned_time_payload(self, [('teacher-cn', text)], '2026-11-04T18:09:00+08:00')
+        self.store.ingest(payload)
+        reply = dict(proposals=[native.fixtures.school_proposal(
+            title_quote=quote, due='2026-11-05', evidence=[dict(ref=refs[0])], task_title=title, task_goal=goal or text,
+            task_advice='', learning_subject=subject, learning_goal_id='', task_change='new', task_target_id='', task_state='ready',
+            task_reason='老师要求明确。', task_purpose='learning', task_submission=submission)])
+        self.model.side_effect = lambda *args, **kwargs: copy.deepcopy(reply)
+        result = agent.run_once(self.app, self.now)
+        with self.store._db() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+            tasks = {r['id']: dict(r) for r in c.execute('SELECT * FROM manual_tasks')}
+        self.assertEqual((result['failed'], result['processed']), (0, 1), result)
+        accepted = [r for r in rows if r['state'] == 'accepted']
+        self.assertEqual((len(accepted), list(tasks)), (1, [accepted[0]['task_id']]), 'one accepted homework task')
+        return tasks[accepted[0]['task_id']]
+
+    def agenda(self, task_id, day='2026-11-04'):
+        return {x['task_id']: x['agenda'] for x in self.app.calendar_snapshot(day, day)['inbox'] if x['task_id']}[task_id]
+
+    def test_g02_a_handback_cancelled_later_in_the_same_message_is_never_read_back(self):
+        # The model's old goal (only the first two sentences, its 提交要求 added) and a legitimate goal holding the whole
+        # original both stay one task: tonight's work is still asked, the cancelled handback never reads as one.
+        for goal, submission in ((G02_RANGE, '明天早上交给语文课代表。'), (G02_TEXT, '')):
+            with self.subTest(goal=goal):
+                task = self.run_text(G02_TEXT, goal=goal, submission=submission)
+                self.assertEqual(task['due'], '2026-11-05', 'the saved due stays as saved')
+                agenda = self.agenda(task['id'])
+                self.assertEqual((agenda['complete_on'], agenda['due_on'], agenda['due_kind']), ('2026-11-04', '2026-11-05', 'deadline'))
+
+    def test_only_a_withdrawal_naming_this_item_or_nothing_else_keeps_its_role_unread(self):
+        for later, role in (('', 'handback'), ('明天不用交了。', 'deadline'), ('交回安排取消。', 'deadline'),
+                            ('补充：《晨光练习册》不用交了。', 'deadline'), ('数学：明天的听写取消。', 'handback'),
+                            ('原定明天的运动会取消。', 'handback'), ('《口算练习本》不用交了。', 'handback')):
+            with self.subTest(later=later):
+                self.assertEqual(self.agenda(self.run_text(G02_RANGE + later)['id'])['due_kind'], role)
+        within = self.run_text('语文今晚完成《晨光练习册》第2页。明天早上交给语文课代表，明天不用交了。')
+        self.assertEqual(self.agenda(within['id'])['due_kind'], 'deadline', 'withdrawn inside its own role sentence')
+        # The teacher's check reads by the same principle.
+        check = '英语：听录音跟读Unit 5两遍，读完请家长在记录本上签字。今晚完成，明天早读检查记录本。'
+        for later, role in (('', 'inspection'), ('补充：明天早读不检查了。', 'deadline'), ('数学：明天的听写取消。', 'inspection')):
+            with self.subTest(check=later):
+                task = self.run_text(check + later, quote='英语：听录音跟读Unit 5两遍，读完请家长在记录本上签字',
+                                     title='英语：跟读Unit 5两遍并家长签字', subject='英语')
+                self.assertEqual(self.agenda(task['id'])['due_kind'], role)
+
+    def test_the_proven_range_reads_no_role_another_word_of_the_item_may_withdraw(self):
+        def read(text, *later, words=True):
+            cited = [dict(text=text, time='2026-11-04T18:10:00+08:00')] + [dict(text=t, time='2026-11-04T18:20:00+08:00') for t in later]
+            return agent._school_role_days(G02_QUOTE, cited, [], words=words)
+        kept = ({'2026-11-04'}, '2026-11-05', G02_RANGE)
+        self.assertEqual(read(G02_RANGE), kept)
+        for later in ('补充通知：取消明天交回，暂时放在家里。', '明天不用交了。', '交回安排取消。', '取消明天的交回。', '补充：《晨光练习册》不用交了。',
+                      '更正：练习册改为后天交。', '如有变化另行通知。', '语文作业明天先不交。', '第2页不用交了。', '明天全班都不用交了。',
+                      '如果明天下雨就不用交了。', '数学和语文作业都不用交了。'):
+            with self.subTest(later=later):
+                self.assertIsNone(read(G02_RANGE + later), 'this item, a general word or no scope: no role read back')
+                self.assertEqual(read(G02_RANGE + later, words=False), kept[:2], 'the old reading is unchanged')
+        for later in ('数学：明天的听写取消。', '原定明天的运动会取消。', '《口算练习本》不用交了。', '口算本不用交了。', '英语练习册不用交了。',
+                      '数学：明天不用交了。'):
+            with self.subTest(other=later):
+                self.assertEqual(read(G02_RANGE + later), kept, "another subject's or thing's cancel")
+                self.assertEqual(read(later + G02_RANGE), kept, 'also before the item')
+        self.assertIsNone(read(G02_RANGE, '更正：《晨光练习册》不用交了。'), "a later original's withdrawal of it")
+        self.assertEqual(read(G02_RANGE, '数学：听写取消。'), kept, "a later original's cancel of another subject's thing")
+
+    def test_a_parents_plan_or_due_beside_a_withdrawn_handback_stays_theirs(self):
+        for text, role in ((G02_TEXT, 'deadline'), (G02_RANGE, 'handback')):
+            with self.subTest(text=text):
+                saved = self.run_text(text)
+                with self.store._db() as c:
+                    rows = [dict(r) for r in c.execute('SELECT * FROM agent_items ORDER BY id')]
+                    originals = [dict(r) for r in c.execute('SELECT * FROM agent_messages ORDER BY rowid')]
+
+                def plan(key, **change):
+                    task = {t['id']: t for t in self.app.tasks()}[saved['id']];f, m = task['focus'], task['agenda']
+                    family_task_focus.save(self.app, dict(dict(
+                        id=task['id'], version=f['version'], request_key=key, mode=f['mode'], next_action='', waiting_for=f['waiting_for'],
+                        review_on=f['review_on'], category=m['category'], published_on=m['published_on'], due_on=m['due_on'],
+                        scheduled_on='2026-11-04', box=f['box'], title=task['title'], goal=task['action']), **change))
+                plan('g02-parent-plan-0001')
+                m = self.agenda(saved['id'])
+                self.assertEqual((m['due_on'], m['due_kind'], m['scheduled_on']), ('2026-11-05', role, '2026-11-04'), "the parent's plan")
+                plan('g02-parent-due-00001', due_on='2026-11-06')
+                m = self.agenda(saved['id'])
+                self.assertEqual((m['due_on'], m['due_kind'], m['scheduled_on']), ('2026-11-06', 'deadline', '2026-11-04'), "the parent's due")
+                with self.store._db() as c:
+                    self.assertEqual([dict(r) for r in c.execute('SELECT * FROM agent_items ORDER BY id')], rows, 'saved rows unchanged')
+                    self.assertEqual([dict(r) for r in c.execute('SELECT * FROM agent_messages ORDER BY rowid')], originals, 'originals unchanged')
+
+
 class ClearStandardsTests(unittest.TestCase):
     """Frozen CLARITY truth C01 and its display guards: one English requirement read once, its 22nd shown as the check."""
     setUp = native.SchoolNativeCoverageTests.setUp
