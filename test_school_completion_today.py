@@ -509,6 +509,10 @@ class ConfirmedSchoolHandbackCorrectionTests(unittest.TestCase):
                 self.assertEqual((agenda['complete_on'], agenda['due_on']), ('', '2026-10-21'), 'a parent next_action save is no school-change write')
 
 
+# Each saved Flash27 item's 10/20 role as its own teacher wrote it, independent of any reply or saved quote.
+FLASH27_ROLES = {'星芽': 'handback', '数格': 'handback', 'Unit 4': 'inspection', '回执': 'handback', '塑料瓶': 'arranged'}
+
+
 class Flash27OwnRoleDaysTodayTests(unittest.TestCase):
     """The ordinary normal path for the fictional day: tonight's own work is listed on its own day, apart from its handback/check."""
     setUp = native.SchoolNativeCoverageTests.setUp
@@ -544,8 +548,9 @@ class Flash27OwnRoleDaysTodayTests(unittest.TestCase):
                 with self.subTest(item=key):
                     agenda = day_listed[ids[key]]['agenda']
                     self.assertEqual((agenda['complete_on'], agenda['due_on'], agenda['category']), (complete, due, category))
-                    # The check day is never a handback; the workbook's and the receipt's own 明天早上交 are.
-                    self.assertEqual(agenda['due_kind'] == 'handback', key in ('数格', '回执'), 'a check day is not rewritten as a handback')
+                    # The 20th as its teacher wrote it: 明天早上交 (31, 32) and 明天早上让孩子交给班主任 (35) hand it back,
+                    # 明天早读检查记录本 (34) is the teacher's check, never a handback, 明天来校带…科学课用 (35) the lesson's day.
+                    self.assertEqual(agenda['due_kind'], FLASH27_ROLES[key], 'each 10/20 reads its teacher-stated role')
         check(self._listed('2026-10-19'))
         today = [x['task_id'] for x in self.app.calendar_snapshot('2026-10-19', '2026-10-19')['agenda'] if x['task_id']]
         for key in ('星芽', '数格', 'Unit 4'):
@@ -630,6 +635,30 @@ class Flash27ReadableCardTests(unittest.TestCase):
         self.assertEqual(sum('第4题' in x for x in card_lines(tasks[ids['数格']])), 1, 'the 4th-question note stays its own line')
         self.assertNotIn('今晚', '\n'.join(card_lines(tasks[ids['塑料瓶']])))
 
+    def test_a_parents_own_plan_keeps_each_teachers_role_day(self):
+        """The parent plans three items for tonight through the real task-focus save (the generic form fields the card sends
+        back): each keeps its teacher's own 10/20 role beside the plan; the saved rows and originals stay as saved."""
+        ids, saved = self.save_flash27()
+        with self.store._db() as c:
+            rows = [dict(r) for r in c.execute('SELECT * FROM agent_items ORDER BY id')]
+            originals = [dict(r) for r in c.execute('SELECT * FROM agent_messages ORDER BY rowid')]
+        tasks = {t['id']: t for t in self.app.tasks()}
+        for key, name in (('星芽', 'xingya'), ('数格', 'shuge'), ('Unit 4', 'unit4')):
+            task = tasks[ids[key]];f, m = task['focus'], task['agenda']
+            family_task_focus.save(self.app, dict(id=task['id'], version=f['version'], request_key='flash27-plan-' + name, mode=f['mode'],
+                                                  next_action='', waiting_for=f['waiting_for'], review_on=f['review_on'], category=m['category'],
+                                                  published_on=m['published_on'], due_on=m['due_on'], scheduled_on='2026-10-19', box=f['box'],
+                                                  title=task['title'], goal=task['action']))
+        listed = {x['task_id']: x['agenda'] for x in self.app.calendar_snapshot('2026-10-19', '2026-10-19')['inbox'] if x['task_id']}
+        for key in ('星芽', '数格', 'Unit 4'):
+            with self.subTest(item=key):
+                m = listed[ids[key]]
+                self.assertEqual((m['due_on'], m['due_kind'], m['scheduled_on']), ('2026-10-20', FLASH27_ROLES[key], '2026-10-19'))
+        with self.store._db() as c:
+            self.assertEqual([dict(r) for r in c.execute('SELECT * FROM agent_items ORDER BY id')], rows, 'saved rows unchanged')
+            self.assertEqual([dict(r) for r in c.execute('SELECT * FROM agent_messages ORDER BY rowid')], originals, 'originals unchanged')
+            self.assertEqual({r['id']: dict(r) for r in c.execute('SELECT * FROM manual_tasks')}, saved, 'saved words unchanged')
+
     def test_the_child_card_reads_the_same_projection_from_the_same_task(self):
         ids, saved = self.save_flash27()
         study = family_study.Store(SimpleNamespace(**vars(self.app)))
@@ -684,12 +713,14 @@ class RecoveredParagraphCardTests(unittest.TestCase):
         task = tasks[ids['Unit 4']]
         self.assertEqual((task['title'], task['action'], task['due']), (english['title'], ENGLISH_PARAGRAPH, '2026-10-20'), 'API original fields')
         self.assertEqual(card_lines(task), ENGLISH_PARAGRAPH_LINES)
-        agenda = self._listed('2026-10-19')[ids['Unit 4']]['agenda']
+        listed = self._listed('2026-10-19')
+        agenda = listed[ids['Unit 4']]['agenda']
         self.assertEqual((agenda['complete_on'], agenda['due_on'], agenda['category']), ('2026-10-19', '2026-10-20', 'homework'))
-        self.assertNotEqual(agenda['due_kind'], 'handback', 'a check day is not a handback')
+        self.assertEqual(agenda['due_kind'], 'inspection', 'its own 明天早读检查记录本 is the teacher\'s check, not a handback')
         for key in ('星芽', '数格', '回执', '塑料瓶'):  # the four recovered rows read as in r261
             with self.subTest(item=key):
                 self.assertEqual(card_lines(tasks[ids[key]]), FLASH27_CARD_LINES[key])
+                self.assertEqual(listed[ids[key]]['agenda']['due_kind'], FLASH27_ROLES[key], 'each 10/20 reads its teacher-stated role')
         # The child card reads the same projection from the same task, added by the parent's existing 作业计时.
         child_id = next(c['id'] for c in self.app.snapshot()['children'] if c['name'] == english['child'])
         study = family_study.Store(SimpleNamespace(**vars(self.app)))
