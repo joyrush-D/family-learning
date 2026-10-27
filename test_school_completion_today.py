@@ -1286,6 +1286,28 @@ class OwnedEventAndCorrectionTests(unittest.TestCase):
         self.assertIn('2026-10-21', (agenda['complete_on'], agenda['due_on']))
         self.assertNotIn('2026-10-22', (agenda['complete_on'], agenda['due_on'], task['due']), 'the excused handback day is no longer shown')
 
+    def test_a_handback_withdrawn_after_a_quote_stopping_before_it_is_never_read_back(self):
+        # The quote stops before its own role sentence, as Flash27 星芽's does: alone, the range its day was proven from gives
+        # that day its handback; once the same teacher's later 不用交了 withdraws it, no day of this homework reads as one.
+        text = '英语：完成《英语练习册》第5页，答案写在练习册上。今晚完成，明天早上交。'
+        quote = '英语：完成《英语练习册》第5页，答案写在练习册上。'
+        for notices, goal, submission in (
+                ([('teacher-en', text)], '完成《英语练习册》第5页，答案写在练习册上。\n今晚完成，明天早上交。', '明天早上交练习册。'),
+                ([('teacher-en', text), ('teacher-en', '更正：《英语练习册》不用交了。')],
+                 '完成《英语练习册》第5页，答案写在练习册上。\n今晚完成；《英语练习册》不用交了。', '《英语练习册》不用交了。')):
+            with self.subTest(withdrawn=len(notices) == 2):
+                rows, tasks = self.run_reply(notices, [dict(
+                    title_quote=quote, due='', evidence=list(range(1, len(notices) + 1)), task_title='英语：完成《英语练习册》第5页',
+                    task_goal=goal, task_advice='', learning_subject='英语', learning_goal_id='', task_change='new', task_target_id='',
+                    task_state='ready', task_reason='老师要求明确。', task_purpose='learning', task_submission=submission)])
+                row = rows['英语：完成《英语练习册》第5页']
+                self.assertEqual((row['state'], [t['id'] for t in tasks.values()]), ('accepted', [row['task_id']]), 'one English homework task')
+                agenda = self._agenda(row['task_id'])
+                if len(notices) == 1:
+                    self.assertEqual((agenda['complete_on'], agenda['due_on'], agenda['due_kind']), ('2026-10-21', '2026-10-22', 'handback'))
+                else:
+                    self.assertNotEqual(agenda['due_kind'], 'handback', 'the withdrawn handback is never read back')
+
     def test_a_later_restore_by_the_same_teacher_keeps_the_form_a_current_obligation(self):
         rows, tasks = self.run_reply([('teacher-class', self.ORIGINAL), ('teacher-class', '更正：兴趣班回执不用交了；原定10月23日19:00的家长会取消，不用到校。'),
                                       ('teacher-class', '通知：兴趣班回执仍按原要求交回，明天交给班主任。')], [
