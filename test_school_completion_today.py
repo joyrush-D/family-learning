@@ -1391,7 +1391,7 @@ class SameMessageWithdrawnRoleTests(unittest.TestCase):
         self.run_text('语文今晚完成《晨光练习册》第2页。明天早上交给语文课代表，明天不用交了。', held=True)
         # The teacher's check reads by the same principle.
         check = '英语：听录音跟读Unit 5两遍，读完请家长在记录本上签字。今晚完成，明天早读检查记录本。'
-        for later, role in (('', 'inspection'), ('补充：明天早读不检查了。', 'deadline'), ('数学：明天的听写取消。', 'inspection')):
+        for later, role in (('', 'inspection'), ('补充：明天早读不检查了。', 'deadline'), ('原定明天的运动会取消。', 'inspection')):
             with self.subTest(check=later):
                 task = self.run_text(check + later, quote='英语：听录音跟读Unit 5两遍，读完请家长在记录本上签字',
                                      title='英语：跟读Unit 5两遍并家长签字', subject='英语')
@@ -1416,6 +1416,13 @@ class SameMessageWithdrawnRoleTests(unittest.TestCase):
                 self.assertEqual(read(later + G02_RANGE), kept, 'also before the item')
         self.assertIsNone(read(G02_RANGE, '更正：《晨光练习册》不用交了。'), "a later original's withdrawal of it")
         self.assertEqual(read(G02_RANGE, '数学：听写取消。'), kept, "a later original's cancel of another subject's thing")
+        # The teacher's check by the same principle (the selection keeps this English item pending beside another
+        # subject's words in its message, so that pair is read here only).
+        check, quote = '英语：听录音跟读Unit 5两遍，读完请家长在记录本上签字。今晚完成，明天早读检查记录本。', '英语：听录音跟读Unit 5两遍，读完请家长在记录本上签字'
+        own = lambda later: agent._school_role_days(quote, [dict(text=check + later, time='2026-11-04T18:10:00+08:00')], [], words=True)
+        self.assertEqual(own('数学：明天的听写取消。'), ({'2026-11-04'}, '2026-11-05', check))
+        for later in ('补充：明天早读不检查了。', '取消明天早读检查。', '记录本明天不用检查了。'):
+            self.assertIsNone(own(later), later)
 
     def test_a_parents_plan_or_due_beside_a_withdrawn_handback_stays_theirs(self):
         for text, role in ((G02_TEXT, 'deadline'), (G02_RANGE, 'handback')):
