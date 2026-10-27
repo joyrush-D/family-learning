@@ -2464,7 +2464,8 @@ def _school_role_days(quote,cited,others,words=False):
     made only of such role clauses, whose checked object the item's own sentence names. Another proposal quoting any of it,
     another cited original stating a day, a clause with two days or both roles, or any change, cancel or uncertain word
     returns None, so the existing date protections decide. Returns (completion days, due day); with words, also the range's
-    own words as its days were read (choices as one object), so the agenda reads that due's role from them and no others.
+    own words as its days were read (choices as one object), so the agenda reads that due's role from them and no others,
+    and only while no other words of the item's originals may withdraw or change those roles (_school_range_withdrawn).
     """
     from family_agenda import _COMPLETION_VERB,_titles_read_as_objects,sent_day
     homes=[e for e in cited if quote and quote in e['text']]
@@ -2532,7 +2533,48 @@ def _school_role_days(quote,cited,others,words=False):
             if len(days)!=1 or (finish and back):return None
             (done if finish else due).update(days)
     if len(due)!=1 or any(d>next(iter(due)) for d in done):return None
+    if words and _school_range_withdrawn(span,[text[:head],text[end:]]+[e['text'] for e in cited if e is not homes[0]]):return None
     return (done,next(iter(due)),span) if words else (done,next(iter(due)))
+
+
+def _school_range_withdrawn(span,texts):
+    """Whether other words of an item's own originals may withdraw, change or leave open the roles its range span states.
+
+    A clause there changing, cancelling, excusing or deferring something (取消明天交回、明天不用交了、交回安排取消、更正：练习册
+    改为后天交、如有变化另行通知) leaves those roles only when what it withdraws is another's alone: another subject's
+    (数学：明天不用交了、英语练习册不用交了), another 《》 title or a named thing none of span's words hold (原定明天的运动会取消、
+    《口算练习本》不用交了、语文听写取消). This item's subject or words, a general or pointing word (这项作业、全班), nothing at
+    all, a question or condition, or words it cannot read withdraw them: the item's scope is never assumed.
+    """
+    from family_agenda import _OTHER_COURSES,_titles_read_as_objects
+    subjects=_SCHOOL_NATIVE_SUBJECTS+'|'+_OTHER_COURSES;change=_SCHOOL_CHANGE+r'|(?:不|免)\s*(?:交|检查|签字|收)|改期|停办'
+    if re.search(change,_titles_read_as_objects(span)):return True
+    mine=set(re.findall(subjects,re.sub(r'《[^《》]*》','',span)));plain=re.sub(r'[《》]','',span)
+    withdrawn=(r'(?:取消|撤销|撤回|暂停|停办)(.*?)(?:的?(?:交回|上交|提交|交|检查|签字))?了?'
+               r'|(.*?)(?:已|也|都)?(?:取消|撤销|撤回|暂停|停办|延期|推迟|顺延|改期|待定|未定)了?'
+               r'|(.*?)(?:不用|不必|无需|无须|不需要?|不再|不|免)(?:再)?(?:交回|上交|提交|交|检查|签字|收)了?'
+               r'|(.*?)(?:改为|改到|改至|改成).*')
+    general=(r'《[^《》]*》|'+subjects+'|'+_SCHOOL_ANY_DAY+r'|\d{1,2}[:：]\d{2}|早上|早晨|上午|中午|下午|晚上|早读|课前|到校后?'
+             r'|原定|原来|原先|之前|以前|前|这项|该项|此项|本项|这个|这份|本次|这次|上述|以上|作业|任务|安排|要求|事项'
+             r'|交回|上交|提交|交给?|检查|签字|完成|的|了|[\s、]')
+    thing=r'(?:本|册|书|卷|纸|单|表|卡|回执|材料|资料|作品|模型|用品|物品|会|赛|活动|讲座|演出|典礼|仪式|课|考试|测验|测试|听写|默写)$'
+    for text in texts:
+        for sentence in re.split(r'[。；;！!？?\n]',text):
+            read=_titles_read_as_objects(sentence)
+            if not re.search(change,read):continue
+            if re.search(_SCHOOL_NATIVE_UNSETTLED,read):return True
+            named=set(re.findall(subjects,re.sub(r'《[^《》]*》','',sentence)))
+            for clause in re.split(r'[，,]',sentence):
+                if not re.search(change,_titles_read_as_objects(clause)):continue
+                found=re.fullmatch(withdrawn,re.sub(r'^\s*(?:[^：:，,《》]{1,8}[：:])?\s*(?:(?:另外|此外|还有|同时)\s*)?','',clause))
+                if not found:return True
+                what=next(g for g in found.groups() if g is not None)
+                titles=re.findall(r'《[^《》]*》',what);rest=re.sub(general,'',what)
+                if any(t in span for t in titles):return True
+                if titles or named and mine and not named&mine:continue  # another title's or another subject's own words
+                # Only a named thing sharing none of this item's words is another's (运动会、口算本); 练习册、第2页 are its own.
+                if len(rest)<2 or not re.search(thing,rest) or any(rest[i:i+2] in plain for i in range(len(rest)-1)):return True
+    return False
 
 
 # Any day a text names: a date, a month-day, a numbered day, a relative, recurring or week day (_SCHOOL_ROLE_DAY).
