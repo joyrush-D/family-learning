@@ -2455,7 +2455,7 @@ def _school_choices_read(text):
     return re.sub(_SCHOOL_CHOICE,'选项',text)
 
 
-def _school_role_days(quote,cited,others):
+def _school_role_days(quote,cited,others,words=False):
     """The one due day of an ordinary item whose own words give it a completion role and a handback, check or own-action role.
 
     今晚完成，明天早上交 (or 今晚请家长签字，明天早上让孩子交给班主任, 今晚完成，明天早读检查记录本) is one item's two time roles,
@@ -2463,7 +2463,8 @@ def _school_role_days(quote,cited,others):
     The range is the quote's own sentence (a leading 另外，/此外， is only a connector) plus a directly following sentence
     made only of such role clauses, whose checked object the item's own sentence names. Another proposal quoting any of it,
     another cited original stating a day, a clause with two days or both roles, or any change, cancel or uncertain word
-    returns None, so the existing date protections decide. Returns (completion days, due day).
+    returns None, so the existing date protections decide. Returns (completion days, due day); with words, also the range's
+    own words as its days were read (choices as one object), so the agenda reads that due's role from them and no others.
     """
     from family_agenda import _COMPLETION_VERB,_titles_read_as_objects,sent_day
     homes=[e for e in cited if quote and quote in e['text']]
@@ -2531,7 +2532,7 @@ def _school_role_days(quote,cited,others):
             if len(days)!=1 or (finish and back):return None
             (done if finish else due).update(days)
     if len(due)!=1 or any(d>next(iter(due)) for d in done):return None
-    return done,next(iter(due))
+    return (done,next(iter(due)),span) if words else (done,next(iter(due)))
 
 
 # Any day a text names: a date, a month-day, a numbered day, a relative, recurring or week day (_SCHOOL_ROLE_DAY).
