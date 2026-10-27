@@ -17,6 +17,9 @@ import test_agent as fixtures
 import test_school_native_coverage as native
 
 
+T06_TEXT = '附件是明天带去课堂的实验观察表，今晚不填。'  # 科学老师18:40 in 验收-每日清单.md; its attachment is not read here
+
+
 def view(item):
     m = item['agenda']
     return dict(kind=item['kind'], title=item['title'], status=item['status'], category=m['category'],
@@ -104,13 +107,36 @@ class DailyListFrozenTests(unittest.TestCase):
         self.assertEqual(on_day, [item['title']])
         self._replay_adds_nothing('T01')
 
-    def _t02_batch(self):
-        """T02's frozen message and its fixed fictional receipt: tonight's English reading and tomorrow's PE rope."""
+    def _t02_batch(self, t06=False):
+        """T02's frozen message and its fixed fictional receipt: tonight's English reading and tomorrow's PE rope. With t06,
+        T06's frozen text in the same day (date only; its unread attachment is a separate open question)."""
         text = '今晚跟读Unit 5两遍；另外，明天体育课带跳绳，不要求在家训练。'
-        payload, refs = self._day([('18:10', '老师乙', 'teacher-b', text)])
-        reading = self._proposal('今晚跟读Unit 5两遍', refs, '英语', '今晚跟读Unit 5两遍。')
-        rope = self._proposal('明天体育课带跳绳', refs, '', '11月5日体育课带跳绳；不要求在家训练。', due='2026-11-05', purpose='admin')
-        return payload, [reading, rope]
+        payload, refs = self._day([('18:10', '老师乙', 'teacher-b', text)] + ([('18:40', '科学老师', 'teacher-science', T06_TEXT)] if t06 else []))
+        reading = self._proposal('今晚跟读Unit 5两遍', refs[:1], '英语', '今晚跟读Unit 5两遍。')
+        rope = self._proposal('明天体育课带跳绳', refs[:1], '', '11月5日体育课带跳绳；不要求在家训练。', due='2026-11-05', purpose='admin')
+        sheet = self._proposal('明天带去课堂的实验观察表', refs[1:], '', '11月5日带去课堂的实验观察表；今晚不填。', due='2026-11-05', purpose='admin')
+        return payload, [reading, rope] + ([sheet] if t06 else [])
+
+    def test_t06_sheet_saved_beside_t02_reads_its_arranged_day(self):
+        """Only T06's date meaning through the real run_once and saved list, not the whole T06 (its attachment is unread):
+        the sheet keeps 11/5 as its arranged day and its own words and original; T02's two siblings keep their own days."""
+        payload, proposals = self._t02_batch(t06=True)
+        result, rows, listed, _ = self._run(payload, proposals, 'T06-date')
+        self.assertEqual((result['failed'], result['processed']), (0, 2))
+        english, = [i for i in listed if 'Unit 5' in i['body']]
+        rope, = [i for i in listed if '跳绳' in i['body']]
+        sheet, = [i for i in listed if '实验观察表' in i['body']]
+        self.assertEqual(len(listed), 3)
+        self.assertEqual((sheet['category'], sheet['due_on'], sheet['due_kind'], sheet['complete_on'], sheet['scheduled_on']),
+                         ('todo', '2026-11-05', 'arranged', '', ''), 'its arranged day; no completion day or parent plan made up')
+        self.assertIn('今晚不填', sheet['body'])
+        self.assertEqual(sheet['published_at'][:16], '2026-11-04T18:40')
+        self.assertEqual(len(sheet['publications']), 1)
+        self.assertNotIn(sheet['publications'][0], english['publications'] + rope['publications'], 'its own original only')
+        self.assertEqual((rope['due_on'], rope['due_kind'], rope['scheduled_on']), ('2026-11-05', 'arranged', ''))
+        self.assertIn('2026-11-04', (english['complete_on'], english['due_on']))
+        self.assertNotIn('2026-11-05', (english['due_on'], english['complete_on'], english['scheduled_on']))
+        self._replay_adds_nothing('T06-date')
 
     def test_t02_independent_supply_is_its_own_admin_item_on_its_own_day(self):
         payload, proposals = self._t02_batch()
@@ -680,7 +706,7 @@ def serve_t02(port):
     case = DailyListFrozenTests('test_t02_independent_supply_is_its_own_admin_item_on_its_own_day')
     case.setUp()
     try:
-        payload, proposals = case._t02_batch()
+        payload, proposals = case._t02_batch(t06=True)
         case._run(payload, proposals, 'T02-served')
         app, fixed = case.app, case.now
 

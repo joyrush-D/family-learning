@@ -25,6 +25,7 @@ async function demoServer(){
   server=await demoServer();browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
   // T02 as the real run_once saved it in a disposable Store, read through the real app HTTP server on 2026-11-04; the page
   // writes nothing. Tomorrow's PE rope reads its lesson's 安排日 (no 截止/交回/完成/计划), tonight's English keeps its own day.
+  // T06's text saved beside it (date only, not the whole T06: its attachment stays unread) reads the same 安排日 with its own words.
   {
    const probe=net.createServer();probe.listen(0,'127.0.0.1');await once(probe,'listening');const port=probe.address().port;await new Promise(r=>probe.close(r));
    const env={...process.env};for(const k of Object.keys(env))if(k.startsWith('FAMILY_'))delete env[k];
@@ -44,8 +45,15 @@ async function demoServer(){
        if(pass==='list'){await p.locator('nav [data-page="tasks"]').click();await p.locator('[data-task-box="全部"]').click();await eventually(async()=>/所有作业与待办/.test(await p.locator('#content h1').first().innerText()),'T02 all homework and todo')}
        if(pass==='calendar')await p.locator('nav [data-page="calendar"]').click();
        const cards=async()=>p.locator('.agenda-dates').evaluateAll(xs=>xs.filter(x=>x.offsetParent!==null).map(x=>{const c=x.closest('[data-query-target]')||x.parentElement;return {card:c.innerText,dates:x.innerText,group:x.closest('.subject-group')?.querySelector('.task-group-heading h2')?.innerText||''}}));
-       let all=[],rope=[],english=[];
-       await eventually(async()=>{all=await cards();rope=all.filter(c=>/跳绳/.test(c.card));english=all.filter(c=>/Unit 5/.test(c.card));return rope.length>0&&(pass==='calendar'||english.length>0)},'T02 '+pass+' '+width+' cards');
+       let all=[],rope=[],english=[],sheet=[];
+       await eventually(async()=>{all=await cards();rope=all.filter(c=>/跳绳/.test(c.card));english=all.filter(c=>/Unit 5/.test(c.card));sheet=all.filter(c=>/实验观察表/.test(c.card));return rope.length>0&&sheet.length>0&&(pass==='calendar'||english.length>0)},'T02 '+pass+' '+width+' cards');
+       if(pass!=='calendar')assert.equal(sheet.length,1,pass+' '+width+' one T06 sheet card');
+       for(const c of sheet){
+        assert.match(c.dates,/安排日：2026-11-05/,pass+' '+width+' the sheet reads its class day');
+        assert.doesNotMatch(c.dates,/截止|老师要求交回|老师检查|完成：|计划：/,pass+' '+width+' sheet: no deadline, handback, check, completion or made-up plan');
+        if(pass!=='calendar')assert.match(c.card,/今晚不填/,'its own not-tonight words kept');
+        assert.doesNotMatch(c.group+'\n'+c.card,/跳绳|Unit 5|英语/,pass+' '+width+' the sheet keeps only its own words');
+       }
        assert.deepEqual(all.filter(c=>/训练/.test(c.card)&&!/跳绳/.test(c.card)),[],pass+' '+width+' no training item is generated');
        for(const c of rope){
         assert.match(c.dates,/安排日：2026-11-05/,pass+' '+width+' the rope reads its lesson day');
@@ -103,7 +111,7 @@ async function demoServer(){
   const [code]=await once(made,'exit');assert.equal(code,0,'saved H01 state');
   const saved=JSON.parse(fs.readFileSync(file,'utf8'));assert.equal(saved.tasks.length,1,'one saved task');
   const h01=saved.tasks[0];assert.equal(h01.due,'2026-10-20');
-  for(const width of [360,1440])for(const [day,inToday,label] of [['2026-10-16',false,/完成：2026-10-18[\s\S]*截止：2026-10-20/],['2026-10-18',true,/今天完成：2026-10-18[\s\S]*截止：2026-10-20/],['2026-10-20',true,/完成：2026-10-18[\s\S]*截止：2026-10-20/]]){
+  for(const width of [360,1440])for(const [day,inToday,label] of [['2026-10-16',false,/完成：2026-10-18[\s\S]*老师要求交回：2026-10-20/],['2026-10-18',true,/今天完成：2026-10-18[\s\S]*老师要求交回：2026-10-20/],['2026-10-20',true,/完成：2026-10-18[\s\S]*老师要求交回：2026-10-20/]]){
    const p=await browser.newPage({viewport:{width,height:820}}),errors=[];
    p.on('pageerror',e=>errors.push(e.message));
    try{
@@ -113,7 +121,9 @@ async function demoServer(){
     const card=scope=>scope.locator('[data-query-target="task:'+h01.id+'"]');
     assert.equal(await card(p).count(),1,day+' the saved task appears once');
     assert.equal(await card(p.locator('#task-groups .subject-item[data-category="homework"][data-today]')).count(),inToday?1:0,day+' first-layer Today only on its work and handback days');
-    assert.match(await card(p).locator('.agenda-dates').innerText(),label,day+' both roles with the original handback due');
+    // H01: “2026年10月20日早读交回语文老师” names handing it back that day, so 10/20 is the teacher's handback, not a deadline.
+    const h01Dates=await card(p).locator('.agenda-dates').innerText();assert.match(h01Dates,label,day+' both roles with the original handback due');
+    assert.doesNotMatch(h01Dates,/截止|计划：/,day+' no deadline or made-up plan');
     assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page has no horizontal overflow');
     assert.deepEqual(errors,[]);
    }finally{await p.close()}
@@ -127,6 +137,10 @@ async function demoServer(){
   const lines={'星芽':['答案写在练习册上。','今晚完成，明天早上交练习册。'],'数格':['第34页第4题要把计算过程写完整，写在原题下面即可。','今晚完成，明天早上交练习册。'],
    'Unit 4':['听录音跟读 Unit 4 A day at the lake 两遍。','读完请家长在记录本上签字。','今晚完成，明天早读检查记录本。'],
    '回执':['《秋季校园开放日回执》今晚请家长签字。','明天早上让孩子交给班主任。'],'塑料瓶':['明天来校带一个空透明塑料瓶，科学课用。']};
+  // Each own 10/20 role as its teacher wrote it: “明天早上交”(31, 32) and “明天早上让孩子交给班主任”(35) hand it back,
+  // “明天早读检查记录本”(34) is the teacher's check, “明天来校带…科学课用”(35) is the science lesson's arrangement.
+  const role={'星芽':'老师要求交回','数格':'老师要求交回','Unit 4':'老师检查','回执':'老师要求交回','塑料瓶':'安排日'},roleGaps=[];
+  const roleOf=(where,key,dates)=>{if(!new RegExp(role[key]+'：2026-10-20').test(dates)||/截止/.test(dates))roleGaps.push(where+' '+key+' wants '+role[key]+'：2026-10-20, shows '+dates.replace(/\s+/g,' '))};
   const teacher={'星芽':'虚构语文许老师','数格':'虚构数学魏老师','Unit 4':'虚构英语乔老师','回执':'虚构班主任温老师','塑料瓶':'虚构班主任温老师'};
   for(const width of [360,1440]){
    const p=await browser.newPage({viewport:{width,height:820}}),errors=[];
@@ -153,10 +167,10 @@ async function demoServer(){
       assert.match(text,new RegExp(teacher[key]),key+' teacher kept by the originals');
       const dates=await card.locator('.agenda-dates').innerText();
       assert.match(dates,/发布：2026-10-19 1\d:\d\d/,key+' publication time');
-      if(key==='塑料瓶')assert.doesNotMatch(dates,/完成：/,'the bottle borrows no completion day');else assert.match(dates,/完成：2026-10-19[\s\S]*截止：2026-10-20/,key+' completion and handback/check days');
+      if(key==='塑料瓶')assert.doesNotMatch(dates,/完成：/,'the bottle borrows no completion day');else assert.match(dates,/完成：2026-10-19[\s\S]*2026-10-20/,key+' completion day before its 10/20');
+      assert.doesNotMatch(dates,/计划：/,key+' no made-up parent plan');roleOf('Flash27 '+pass+' '+width,key,dates);
       // Bringing the bottle to science class is that day's arrangement (the frozen T02 meaning), still no handback or deadline.
       if(key==='塑料瓶'){assert.match(dates,/安排日：2026-10-20/,'the bottle reads its science lesson day');assert.doesNotMatch(dates,/截止|老师要求交回/,'the bottle is no deadline or handback')}
-      else assert.match(dates,/截止：2026-10-20/);
      }
      assert.deepEqual(await p.locator('[data-query-target="task:'+ids['数格']+'"] [data-school-original-ref]').allInnerTexts(),['原件 1','原件 2'],'both math originals');
      assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page has no horizontal overflow');
@@ -188,7 +202,7 @@ async function demoServer(){
       assert.equal(await card.count(),1,key+' one card');assert.equal(await card.locator('h3').innerText(),saved.title);
       assert.deepEqual(await card.locator('.task-requirement li, p.task-requirement').allInnerTexts(),want,pass+' '+width+' '+key+' recovered card lines');
       const text=await card.innerText();assert.match(text,new RegExp(teacher[key]));
-      if(key==='Unit 4'){assert.equal(text.split('英语：').length-1,1,'the subject label only in the heading');assert.match(await card.locator('.agenda-dates').innerText(),/完成：2026-10-19[\s\S]*截止：2026-10-20/)}
+      if(key==='Unit 4'){assert.equal(text.split('英语：').length-1,1,'the subject label only in the heading');const dates=await card.locator('.agenda-dates').innerText();assert.match(dates,/完成：2026-10-19[\s\S]*2026-10-20/);roleOf('recovered '+pass+' '+width,key,dates)}
      }
      assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page has no horizontal overflow');
     }
@@ -198,6 +212,8 @@ async function demoServer(){
   }
   console.log('PASS: own today/tonight work is in Today once with its completion and handback days; handback-only work stays in other homework');
   console.log('PASS: saved H01 is in Today once on 2026-10-18 (work) and 2026-10-20 (handback), not on 2026-10-16');
+  // Run to the end at both widths first; a 10/20 shown other than its teacher's own role then fails here, listed in full.
+  assert.deepEqual(roleGaps,[],'each 10/20 reads its teacher-stated role');
   console.log('PASS: saved Flash27 day shows each own condition once under its title with its date roles, teacher and originals, open/reopen/list at 360 and 1440');
   console.log('PASS: the R09 recovered English paragraph reads as its own sentences under its title, the other four as before, open/reopen/list at 360 and 1440');
  }finally{await browser?.close();await server?.stop()}
