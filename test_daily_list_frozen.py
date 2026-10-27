@@ -138,6 +138,47 @@ class DailyListFrozenTests(unittest.TestCase):
         self.assertNotIn('2026-11-05', (english['due_on'], english['complete_on'], english['scheduled_on']))
         self._replay_adds_nothing('T06-date')
 
+    def test_a_parents_own_plan_day_for_a_carried_thing_stays_beside_its_arranged_day(self):
+        """The parent plans the rope and the sheet on days of their own through the real task-focus save (the same generic
+        form fields the card sends back), then the real snapshot: each still reads 11/5 as its 安排日 and shows its own plan;
+        the originals, saved rows and words stay as saved, and the same plan request replayed writes nothing."""
+        import family_task_focus
+        payload, proposals = self._t02_batch(t06=True)
+        self._run(payload, proposals, 'T06-plan')
+
+        def stored():
+            with self.store._db() as c:
+                return ([dict(r) for r in c.execute('SELECT * FROM agent_items ORDER BY id')],
+                        [dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')],
+                        [json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')])
+        before = stored()
+        tasks = {t['id']: t for t in self.app.tasks()}
+        rope = next(t for t in tasks.values() if '跳绳' in t['action'])
+        sheet = next(t for t in tasks.values() if '实验观察表' in t['action'])
+        plans = {rope['id']: '2026-11-04', sheet['id']: '2026-11-05'}
+
+        def form(task, key):
+            f, m = task['focus'], task['agenda']
+            return dict(id=task['id'], version=f['version'], request_key='t06-carried-plan-' + key, mode=f['mode'], next_action='',
+                        waiting_for=f['waiting_for'], review_on=f['review_on'], category=m['category'], published_on=m['published_on'],
+                        due_on=m['due_on'], scheduled_on=plans[task['id']], box=f['box'], title=task['title'], goal=task['action'])
+        requests = [form(rope, 'rope'), form(sheet, 'sheet')]
+        for request in requests:
+            self.assertFalse(family_task_focus.save(self.app, request)['request_replayed'])
+        planned = {t['id']: t['focus'] for t in self.app.tasks()}
+        for day in ('2026-11-04', '2026-11-05'):
+            listed = {i['id']: i['agenda'] for i in self.app.calendar_snapshot(day, day)['inbox'] if i['kind'] == 'task'}
+            for task in (rope, sheet):
+                with self.subTest(day=day, task=task['title']):
+                    m = listed[task['id']]
+                    self.assertEqual((m['due_on'], m['due_kind'], m['complete_on'], m['scheduled_on']),
+                                     ('2026-11-05', 'arranged', '', plans[task['id']]), 'its 安排日 beside the parent\'s own plan')
+        self.assertEqual(stored(), before, 'originals, saved rows and saved words unchanged')
+        for request in requests:
+            self.assertTrue(family_task_focus.save(self.app, request)['request_replayed'])
+        self.assertEqual({t['id']: t['focus'] for t in self.app.tasks()}, planned, 'the replayed plan writes nothing')
+        self.assertEqual(self.model.call_count, 1)
+
     def test_t02_independent_supply_is_its_own_admin_item_on_its_own_day(self):
         payload, proposals = self._t02_batch()
         result, rows, listed, (on_day, visible) = self._run(payload, proposals, 'T02')
@@ -183,6 +224,52 @@ class DailyListFrozenTests(unittest.TestCase):
                       '明天不用带去课堂的实验观察表', '明天带去课堂的观察表要填好', '明天把作品带去参加展览'):
             self.assertEqual(meaning(quote), 'deadline', quote)
         self.assertEqual(meaning('明天把观察表带去学校交给老师'), 'handback')
+
+    # Root's independent counterexamples to the T06 reading: each original only names the thing carried to tomorrow's class,
+    # as T06 names its 实验观察表, so 11/5 is that thing's arranged day. 练/读/写 inside the thing's own name are no
+    # completion, reading or writing it asks for.
+    # (original, quoted own words, goal in T06's receipt shape, own words the card keeps)
+    ROOT_CARRIED = (('附件是明天带去课堂的英语练习册，今晚不用做。', '明天带去课堂的英语练习册', '11月5日带去课堂的英语练习册；今晚不用做。', '今晚不用做'),
+                    ('附件是明天带去课堂的读书记录表，今晚不填。', '明天带去课堂的读书记录表', '11月5日带去课堂的读书记录表；今晚不填。', '今晚不填'),
+                    ('明天带去课堂的书写练习本。', '明天带去课堂的书写练习本', '11月5日带去课堂的书写练习本。', '书写练习本'))
+
+    def test_root_a_verbs_character_inside_the_carried_things_name_is_no_predicate(self):
+        meaning = lambda quote, due='2026-11-05': family_agenda.date_meaning(quote, due, '2026-11-04')
+        for text, quote, _, _ in self.ROOT_CARRIED:
+            for words in (text, quote):
+                self.assertEqual(meaning(words), 'arranged', words)
+            self.assertNotEqual(meaning(text, '2026-11-04'), 'arranged', 'tonight is not tomorrow')
+        # A real predicate after the thing, a before-day, a negation, a handback or a check reads as before.
+        for quote in ('明天带去课堂的观察表要填好', '明天带去课堂的英语练习册要做完', '明天带去课堂的读书记录表要填写',
+                      '明天带去课堂的读书记录表填好', '明天带去课堂的书写练习本写好名字', '明天带去课堂的英语练习册填进记录表',
+                      '11月5日前带去课堂的英语练习册', '明天不用带去课堂的读书记录表', '今晚完成英语练习册，明天带去课堂'):
+            self.assertEqual(meaning(quote), 'deadline', quote)
+        self.assertEqual(meaning('明天把英语练习册带去学校交给老师'), 'handback')
+        self.assertEqual(meaning('明天早读检查读书记录表'), 'inspection')
+
+    def _root_carried(self, case, text, quote, goal, kept):
+        """One original sent at T06's 18:40 with T06's receipt shape, through the real run_once and saved single-child list."""
+        payload, refs = self._day([('18:40', '虚构任课老师', 'teacher-carry', text)])
+        thing = self._proposal(quote, refs, '', goal, due='2026-11-05', purpose='admin')
+        result, rows, listed, _ = self._run(payload, [thing], case)
+        self.assertEqual((result['failed'], result['processed']), (0, 1))
+        item, = listed
+        self.assertEqual((item['category'], item['due_on'], item['due_kind'], item['complete_on'], item['scheduled_on']),
+                         ('todo', '2026-11-05', 'arranged', '', ''), 'its arranged day; no completion day or parent plan made up')
+        self.assertIn(kept, item['body'], 'its own words kept')
+        self.assertEqual(item['published_at'][:16], '2026-11-04T18:40')
+        self.assertEqual(item['publications'], refs, 'its own original only')
+        self.assertEqual([json.loads(r['plan']).get('school_date_quote') for r in rows], [quote], 'the saved quote stays word for word')
+        self._replay_adds_nothing(case)
+
+    def test_root_a1_the_workbook_carried_to_class_reads_its_arranged_day(self):
+        self._root_carried('ROOT-A1', *self.ROOT_CARRIED[0])
+
+    def test_root_a2_the_reading_record_sheet_carried_to_class_reads_its_arranged_day(self):
+        self._root_carried('ROOT-A2', *self.ROOT_CARRIED[1])
+
+    def test_root_a3_the_writing_book_carried_to_class_reads_its_arranged_day(self):
+        self._root_carried('ROOT-A3', *self.ROOT_CARRIED[2])
 
     def test_t03_same_subject_from_two_teachers_stays_two_signed_items(self):
         payload, refs = self._day([('18:20', '数学老师甲', 'math-teacher-a', '今晚做练习二第1、2题。'),
