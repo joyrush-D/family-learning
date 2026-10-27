@@ -1393,6 +1393,31 @@ class SameMessageWithdrawnRoleTests(unittest.TestCase):
                     self.assertEqual((task['due'], agenda['complete_on'], agenda['due_on'], agenda['due_kind']),
                                      ('2026-11-05', '2026-11-04', '2026-11-05', role))
 
+    def test_a_pointing_remark_carrying_another_subjects_cancel_to_this_item_leaves_its_role_unread(self):
+        # Root's held-out single item: 语文的也一样 carries 数学阅读记录表's cancel on to 语文, this message's only 语文 item,
+        # so through the metadata, the old goal and the whole original its handback is never read back; the due stays.
+        later = '补充通知：数学阅读记录表不用交了，语文的也一样。'
+        for goal, submission in ((G02_RANGE, '明天早上交给语文课代表。'), (G02_RANGE, ''), (G02_RANGE + later, '')):
+            with self.subTest(goal=goal, submission=submission):
+                task = self.run_text(G02_RANGE + later, goal=goal, submission=submission)
+                agenda = self.agenda(task['id'])
+                self.assertEqual((task['due'], agenda['complete_on'], agenda['due_on'], agenda['due_kind']),
+                                 ('2026-11-05', '2026-11-04', '2026-11-05', 'deadline'))
+        read = lambda text, quote=G02_QUOTE, words=True: agent._school_role_days(
+            quote, [dict(text=text, time='2026-11-04T18:10:00+08:00')], [], words=words)
+        kept = ({'2026-11-04'}, '2026-11-05', G02_RANGE)
+        for withdrawn in (later, '补充通知：数学阅读记录表取消明天交回，语文的同样。', '数学阅读记录表不用交了。语文的也是。'):
+            with self.subTest(withdrawn=withdrawn):
+                self.assertIsNone(read(G02_RANGE + withdrawn), 'the cancel carried to this subject: no role read back')
+                self.assertEqual(read(G02_RANGE + withdrawn, words=False), kept[:2], 'the old reading is unchanged')
+        for other in ('数学阅读记录表不用交了，英语的也一样。', '数学取消，语文照常交。', '数学阅读记录表不用交了，暂时放在家里。'):
+            with self.subTest(other=other):
+                self.assertEqual(read(G02_RANGE + other), kept, "carried to another subject only, or this one's kept as usual")
+        # The teacher's check by the same principle.
+        check, quote = '英语：听录音跟读Unit 5两遍，读完请家长在记录本上签字。今晚完成，明天早读检查记录本。', '英语：听录音跟读Unit 5两遍，读完请家长在记录本上签字'
+        self.assertIsNone(read(check + '数学口算本不用检查了，英语的也一样。', quote))
+        self.assertEqual(read(check + '数学口算本不用检查了，语文的也一样。', quote), ({'2026-11-04'}, '2026-11-05', check))
+
     def test_only_a_withdrawal_naming_this_item_or_nothing_else_keeps_its_role_unread(self):
         for later, role in (('', 'handback'), ('明天不用交了。', 'deadline'), ('交回安排取消。', 'deadline'),
                             ('补充：《晨光练习册》不用交了。', 'deadline'), ('数学：明天的听写取消。', 'handback'),
