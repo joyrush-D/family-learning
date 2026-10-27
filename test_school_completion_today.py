@@ -576,6 +576,37 @@ class Flash27OwnRoleDaysTodayTests(unittest.TestCase):
         check(self._listed('2026-10-20'))
 
 
+class Flash27RoleRangeTests(unittest.TestCase):
+    """The words a quote that stops before its own role sentence reads that day's role from: only the range its due was
+    proven from (the quote's sentence and a directly following sentence of its roles alone), never another item's."""
+
+    def setUp(self):
+        self.text = {m['id']: m['text'] for m in FLASH27_MESSAGES}
+        self.quotes = {p['task_title']: p['title_quote'] for p in FLASH27_REPLY['proposals']}
+
+    def read(self, quote, texts, others=(), words=True):
+        cited = [dict(text=t, time='2026-10-19T16:08:00+08:00') for t in texts]
+        return agent._school_role_days(quote, cited, list(others), words=words)
+
+    def test_the_range_is_the_quotes_sentence_and_its_own_role_sentence(self):
+        xingya, english = self.quotes['语文：完成《星芽阅读练习册》第28页第1、2题'], self.quotes['英语：跟读Unit 4两遍并家长签字']
+        self.assertEqual(self.read(xingya, [self.text['31']]), ({'2026-10-19'}, '2026-10-20', self.text['31']))
+        self.assertEqual(self.read(english, [self.text['34']]), ({'2026-10-19'}, '2026-10-20', self.text['34']))
+        receipt, bottle = self.quotes['交《秋季校园开放日回执》'], self.quotes['科学：带一个空透明塑料瓶']
+        self.assertEqual(self.read(receipt, [self.text['35']], [bottle])[2], receipt, "the bottle's sentence is not the receipt's")
+        self.assertEqual(self.read(xingya, [self.text['31']], words=False), ({'2026-10-19'}, '2026-10-20'), 'the old shape unchanged')
+        for quote, words, role in ((xingya, self.text['31'], 'handback'), (english, self.text['34'], 'inspection')):
+            self.assertEqual(family_agenda.date_meaning(quote, '2026-10-20', '2026-10-19'), 'deadline', 'the quote alone names no 10/20')
+            self.assertEqual(family_agenda.date_meaning(words, '2026-10-20', '2026-10-19'), role)
+
+    def test_no_range_reaches_a_siblings_words_another_object_or_a_later_change(self):
+        xingya = self.quotes['语文：完成《星芽阅读练习册》第28页第1、2题']
+        self.assertIsNone(self.read(xingya, [self.text['31']], ['今晚完成，明天早上交']), "another item's quote of the role sentence")
+        self.assertIsNone(self.read(xingya, [self.text['31'].replace('明天早上交', '明天早读检查口算本')]), "another object's check")
+        for later in ('更正：星芽练习册改为后天交。', '星芽练习册明天不用交了。'):
+            self.assertIsNone(self.read(xingya, [self.text['31'], later]), later)
+
+
 # What each saved Flash27 card shows under its own title: every condition once, in the saved order and words; the
 # title's own first line and the program's restated 提交要求 are not repeated. Partial overlaps stay as written.
 FLASH27_CARD_LINES = {

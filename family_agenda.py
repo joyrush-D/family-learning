@@ -380,6 +380,11 @@ _CARRIED_TO=(r'(?:(?:附件|这份?|此表)(?:是|为)\s*)?(?:'+family_agent._SC
              r'带去(?:课堂|教室|学校|[一-鿿]{1,4}课)上?的\s*(?:(?:(?!'+_CARRIED_VERB+r')[^\s，,])+|'+_CARRIED_NAME+r')')
 
 
+def _day_clauses(quote,due,published):
+    """The quote's own clauses naming due for themselves on their sending day, 《》 titles read as objects."""
+    return [_titles_read_as_objects(c) for c in re.split(r'[，,。；;！!？?\n]',quote or '') if date(published) and family_agent._school_clause_day(c,published)==due]
+
+
 def date_meaning(quote,due,published,title='',goal=''):
     """'event' when due is the arranged day of the held event this item's own action attends.
 
@@ -401,7 +406,7 @@ def date_meaning(quote,due,published,title='',goal=''):
         # (明天早读检查) makes it the teacher's check, and only handing it in on that day itself (由孩子明早交给班主任、明天早上
         # 交) makes it the teacher's handback. A day it must come before (于10月22日前交回), a negation ahead of the predicate
         # (不用明天交回), any other or a second role on that day stays the ordinary deadline it was.
-        own=[_titles_read_as_objects(c) for c in re.split(r'[，,。；;！!？?\n]',quote or '') if date(published) and family_agent._school_clause_day(c,published)==due]
+        own=_day_clauses(quote,due,published)
         roles=[family_agent._school_clause_roles(c) for c in own]
         if roles and all(r=={'check'} for r in roles):return 'inspection'
         if (roles and all(r=={'handback'} for r in roles) and not any(re.search(r'之前|以前|前',c) for c in own)
@@ -661,6 +666,14 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
     # plan or edit keeps priority, and the handback due stays as it is. A focus saved only by parent-confirmed school changes
     # of this same item is no parent choice: the own day stays while the confirmed words still give that same day.
     own=[m for m in messages if date_quote and date_quote in m.get('text','')]
+    home=sent_day(own[0].get('time','')) if len(own)==1 else ''
+    if (due_kind=='deadline' and due_on in (original,own_day) and home and date_siblings is not None
+            and not _day_clauses(date_quote,due_on,home)):
+        # A quote stopping before its own role sentence (…答案写在练习册上。 before 今晚完成，明天早上交。) names no clause of that day:
+        # its role is read from the one own range the due was proven from, the quote's sentence and a directly following sentence
+        # of its roles alone (family_agent._school_role_days); a sibling's words, another original or a summary give none.
+        ranged=family_agent._school_role_days(date_quote,[dict(text=m.get('text',''),time=m.get('time','')) for m in messages],date_siblings,words=True)
+        if ranged and ranged[1]==due_on:due_kind=date_meaning(ranged[2],due_on,home,subject,goal)
     heading=date_header if len(own)==1 and date_header and 0<=own[0]['text'].find(date_header)<own[0]['text'].find(date_quote) else ''
     complete_on=(completion_day(date_quote,heading,own[0].get('time',''),due_on)
                  if len(own)==1 and not focus.get('scheduled_on') and (not focus.get('version') or school_focus) else '')
