@@ -1381,6 +1381,18 @@ class SameMessageWithdrawnRoleTests(unittest.TestCase):
                 agenda = self.agenda(task['id'])
                 self.assertEqual((agenda['complete_on'], agenda['due_on'], agenda['due_kind']), ('2026-11-04', '2026-11-05', 'deadline'))
 
+    def test_w04_w05_another_named_things_cancel_with_its_remark_keeps_the_handback(self):
+        # Root's W04/W05 in the same message: the cancel names 数学练习册 or another 阅读记录表, never this book, so its
+        # handback stays through both goals; the same remark beside W02/W03's unscoped withdrawal still leaves it unread.
+        for later, role in (('数学练习册取消明天交回，暂时放在家里。', 'handback'), ('语文阅读记录表取消明天交回，暂时放在家里。', 'handback'),
+                            ('明天不用交了，暂时放在家里。', 'deadline'), ('取消交回，暂时放在家里。', 'deadline')):
+            for goal, submission in ((G02_RANGE, '明天早上交给语文课代表。'), (G02_RANGE + later, '')):
+                with self.subTest(later=later, goal=goal):
+                    task = self.run_text(G02_RANGE + later, goal=goal, submission=submission)
+                    agenda = self.agenda(task['id'])
+                    self.assertEqual((task['due'], agenda['complete_on'], agenda['due_on'], agenda['due_kind']),
+                                     ('2026-11-05', '2026-11-04', '2026-11-05', role))
+
     def test_only_a_withdrawal_naming_this_item_or_nothing_else_keeps_its_role_unread(self):
         for later, role in (('', 'handback'), ('明天不用交了。', 'deadline'), ('交回安排取消。', 'deadline'),
                             ('补充：《晨光练习册》不用交了。', 'deadline'), ('数学：明天的听写取消。', 'handback'),
@@ -1405,12 +1417,12 @@ class SameMessageWithdrawnRoleTests(unittest.TestCase):
         self.assertEqual(read(G02_RANGE), kept)
         for later in ('补充通知：取消明天交回，暂时放在家里。', '明天不用交了。', '交回安排取消。', '取消明天的交回。', '补充：《晨光练习册》不用交了。',
                       '更正：练习册改为后天交。', '如有变化另行通知。', '语文作业明天先不交。', '第2页不用交了。', '明天全班都不用交了。',
-                      '如果明天下雨就不用交了。', '数学和语文作业都不用交了。'):
+                      '如果明天下雨就不用交了。', '数学和语文作业都不用交了。', '练习册取消明天交回，暂时放在家里。'):
             with self.subTest(later=later):
                 self.assertIsNone(read(G02_RANGE + later), 'this item, a general word or no scope: no role read back')
                 self.assertEqual(read(G02_RANGE + later, words=False), kept[:2], 'the old reading is unchanged')
         for later in ('数学：明天的听写取消。', '原定明天的运动会取消。', '《口算练习本》不用交了。', '口算本不用交了。', '英语练习册不用交了。',
-                      '数学：明天不用交了。'):
+                      '数学：明天不用交了。', '数学练习册取消明天交回，暂时放在家里。', '语文阅读记录表取消明天交回，暂时放在家里。'):
             with self.subTest(other=later):
                 self.assertEqual(read(G02_RANGE + later), kept, "another subject's or thing's cancel")
                 self.assertEqual(read(later + G02_RANGE), kept, 'also before the item')
@@ -1421,7 +1433,8 @@ class SameMessageWithdrawnRoleTests(unittest.TestCase):
         check, quote = '英语：听录音跟读Unit 5两遍，读完请家长在记录本上签字。今晚完成，明天早读检查记录本。', '英语：听录音跟读Unit 5两遍，读完请家长在记录本上签字'
         own = lambda later: agent._school_role_days(quote, [dict(text=check + later, time='2026-11-04T18:10:00+08:00')], [], words=True)
         self.assertEqual(own('数学：明天的听写取消。'), ({'2026-11-04'}, '2026-11-05', check))
-        for later in ('补充：明天早读不检查了。', '取消明天早读检查。', '记录本明天不用检查了。'):
+        self.assertEqual(own('数学记录本取消明天早读检查，暂时放在家里。'), ({'2026-11-04'}, '2026-11-05', check))
+        for later in ('补充：明天早读不检查了。', '取消明天早读检查。', '记录本明天不用检查了。', '记录本取消明天早读检查。'):
             self.assertIsNone(own(later), later)
 
     def test_a_parents_plan_or_due_beside_a_withdrawn_handback_stays_theirs(self):
