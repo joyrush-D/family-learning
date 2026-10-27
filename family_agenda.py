@@ -369,9 +369,15 @@ def _attends(title,event):
 
 
 _CARRIED=r'(?:带(?:上|好|齐)?|携带)(?![回到去来领着读])\s*[^\s，,]'
+_CARRIED_VERB=r'填|写|做|完成|交|签|订正|背|读|练|准备'
+# A name ends in its own object noun, as 把…回执 reads it in _action_deadlines, so a verb's character inside the name (英语练习册、
+# 读书记录表、书写练习本) is none of its predicates. One taking its complement (填好、写完、交给), a modal, state, day or clause
+# word, or any word after that noun is another predicate; without such a noun ending the name, the verb's character stays one.
+_CARRIED_NAME=(r'(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|'+_EVENT_CLAUSE_WORD+r'|要|需|须|请|应|(?:'+_CARRIED_VERB+r')(?:好|完|进|入|到|给|回|在|上|齐|成|了|过|着))'
+               r'[^\s，,])*?(?:'+_EVENT_OBJECT_NOUN+r'|'+family_agent._SCHOOL_NATIVE_WORKSHEET+r')')
 # The same carrying with the lesson named first (T06: 附件是明天带去课堂的实验观察表): a thing of its own after 的, no other predicate.
 _CARRIED_TO=(r'(?:(?:附件|这份?|此表)(?:是|为)\s*)?(?:'+family_agent._SCHOOL_NATIVE_DATE+r'|明早)\s*(?:(?:早上|上午|中午|下午)\s*)?(?:要|需|须|请)?\s*'
-             r'带去(?:课堂|教室|学校|[一-鿿]{1,4}课)上?的\s*(?:(?!填|写|做|完成|交|签|订正|背|读|练|准备)[^\s，,])+')
+             r'带去(?:课堂|教室|学校|[一-鿿]{1,4}课)上?的\s*(?:(?:(?!'+_CARRIED_VERB+r')[^\s，,])+|'+_CARRIED_NAME+r')')
 
 
 def date_meaning(quote,due,published,title='',goal=''):
