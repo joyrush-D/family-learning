@@ -874,10 +874,10 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                 ('B01_file_name','虚构完整要求',{},'依据没有本项动作和对象'),
                 ('B02_label_title_date','科学：数学练习要求（11月6日前）',{},'依据没有本项动作和对象'),
                 ('B03_weekday','下周一之前',{},'依据没有本项动作和对象'),
-                ('B04_doubt',self.OBSERVE,dict(uncertainties=['第二行字迹模糊，记录单位不清。']),None),
-                ('B05_unlinked_unread',self.OBSERVE,dict(notice='学校要求见图片。\n[图片原件：2份，内容未读]'),'依据没有本项动作和对象'),
-                ('B06_partial',self.OBSERVE,dict(quote=self.OBSERVE[:12]),'截取或重复分配'),
-                ('B07_listed_twice',self.OBSERVE,dict(requirements=[self.OBSERVE,self.OBSERVE]),'依据没有本项动作和对象'),
+                ('B04_doubt',OBSERVE,dict(uncertainties=['第二行字迹模糊，记录单位不清。']),None),
+                ('B05_unlinked_unread',OBSERVE,dict(notice='学校要求见图片。\n[图片原件：2份，内容未读]'),'依据没有本项动作和对象'),
+                ('B06_partial',OBSERVE,dict(quote=OBSERVE[:12]),'截取或重复分配'),
+                ('B07_listed_twice',OBSERVE,dict(requirements=[OBSERVE,OBSERVE]),'依据没有本项动作和对象'),
                 # Considered while choosing this round's rule, headings the reader also used as the title: a predicate word
                 # in a bare heading, a heading too long for the label rule before a date, and an event heading.
                 ('B08_heading_with_predicate_word','英语阅读要求',dict(title='英语阅读要求'),'依据没有本项动作和对象'),
