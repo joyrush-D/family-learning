@@ -257,3 +257,6 @@
 
 !/family_preview.py
 !/test_original_cover.py
+
+!/family_taxonomy.py
+!/test_taxonomy.py
