@@ -16,11 +16,16 @@
 
 上游 [README 状态说明](https://github.com/xiaoyang111222/cn-math-taxonomy/blob/ddea0bfd0dbe7bf728e9ea1a6baf866fe5f736f9/README.md)明确为 AI 初稿、尚未经过教师审核；知识点粒度、题目与 hard/soft 关系均需核对。[教材对照说明](https://github.com/xiaoyang111222/cn-math-taxonomy/blob/ddea0bfd0dbe7bf728e9ea1a6baf866fe5f736f9/docs/edition-mappings.md)以人教版为基底，其他版本对照仍不能视为已完成。教材册次不是孩子水平或学校实际教学进度。
 
-不照搬的判断：上游 [诊断算法](https://github.com/xiaoyang111222/cn-math-taxonomy/blob/ddea0bfd0dbe7bf728e9ea1a6baf866fe5f736f9/diagnose/README.md#算法)会以第一题正确标本点掌握并推断祖先掌握；题量不足时也可能由单次错误暂标薄弱。本项目保留“待验证/有支持/有反证”、帮助程度、原题与相近新题、间隔后独立表现的区别，不把这些启发式状态转成孩子的掌握结论、根因事实或自动补课计划。
+不照搬的判断：上游 [诊断算法](https://github.com/xiaoyang111222/cn-math-taxonomy/blob/ddea0bfd0dbe7bf728e9ea1a6baf866fe5f736f9/diagnose/README.md#算法)在当时核查的 `ddea…` 版本会以第一题正确标本点掌握；现固定的 [`e0f931b`](https://github.com/xiaoyang111222/cn-math-taxonomy/tree/e0f931badaed994fa8e10cfc7a30cdbdffc2dfd5) 改为默认连续答对 3 题（`DEFAULT_CONFIRM=3`）才标本点，仍会推断祖先掌握；题量不足时也可能由单次错误暂标薄弱。本项目保留“待验证/有支持/有反证”、帮助程度、原题与相近新题、间隔后独立表现的区别，不把这些启发式状态转成孩子的掌握结论、根因事实或自动补课计划。
 
 许可：固定版本 [LICENSE](https://github.com/xiaoyang111222/cn-math-taxonomy/blob/ddea0bfd0dbe7bf728e9ea1a6baf866fe5f736f9/LICENSE) 与 README 的许可证节将图谱数据、题库、诊断工具代码及文档列为 **CC BY-NC 4.0**；`assets/vendor/` 的部分第三方库另为 MIT，这不改变项目自身许可。主选是家庭自选、本地只读、按原许可独立保留的资料包，保署名、许可、版本和改动说明；不把上游代码/数据改标 MIT 或默认打包进公开产品。商业分发或用途另核作者授权；未获授权时可保留独立外部链接和本项目既有手工候选流程，不替用户联系作者。
 
 实施由 M4 Claude 负责，Codex 独立验收；先完成原诊断的证据/版本有效性核查，再以一组全虚构数学材料验证规范匹配、歧义/未知、前置核查与同原作业复测。尚无导入器、稳定知识点映射、接入 UI 或家庭效果证据。①每日待办优先及全部既有未完成需求不变。
+
+### 原错题内知识点诊断候选（2026-10-28，分支候选，未部署）
+
+- **cn-math-taxonomy `e0f931b`（CC BY-NC 4.0）**：公开仓库只放固定清单（URL、sha256、字节数、Git blob，engine.js 47863 B / blob `a35cedd9`，已按上游 Git 树逐字节核对）与 MIT 适配代码；engine 与数据由家庭本机放入 Git 忽略的 `knowledge/`，不提交、不改标许可。浏览器原样运行 `diagnose/engine.js`（createSession/nextItem/judgeQuestion/applyAnswer/summarize/replay），服务端只下发目标点先修闭包的原条目、核对题号范围并逐题幂等保存。上游“掌握/推断掌握”只显示为本轮线索；题目与说明标“AI初稿，未经教师审核”。缺包时显示未安装，原错题、引导和每日待办不受影响。
+- **HKUDS/DeepTutor `a31d826`（Apache-2.0）**：`third_party/deeptutor/` 保留 LICENSE、上游 THIRD_PARTY_NOTICES 与新增 NOTICE；`learning` 确定性子集逐字节复制，唯 `lesson_evidence.py` 把顶层 RAG 导入移入使用它的函数（逻辑未改，文件头已标修改，diff 与原/新 hash 见 `patches/`、`PROVENANCE.json`）。只在“新题再试”时经隔离 py≥3.11+pydantic2 子进程运行原 `register_question`/`grade_interaction`（离线、临时目录用完即弃，家庭 SQLite 仍是唯一主数据）；不接 semantic/LLM、RAG、Agent、MCP、联网搜索或其聊天/讲解生成。未配置时只降级这一步。
 
 ## 可视化教学资料与生成器（2026-10-26，尚未接入）
 
