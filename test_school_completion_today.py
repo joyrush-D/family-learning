@@ -1734,7 +1734,8 @@ class TeacherActivityDateTests(unittest.TestCase):
                     own = item['complete_on'] or (item['due_on'] if item['due_kind'] == 'deadline' else '')
                     back = item['due_on'] if item['due_kind'] not in ('', 'deadline') else ''
                     self.assertEqual((own, back, item['due_kind'] if back else ''), (completion, due, kind), item)
-                    self.assertEqual((item['publications'], tasks[0]['done']), (refs, 0), 'its own original; not done')
+                    self.assertEqual((item['publications'], [t['due'] for t in tasks]), (refs, [item['due_on'] or '无明确截止']),
+                                     'its own original and one saved task')
                     self.assertIn(text, item['body'], 'the original words are kept')
 
     def test_b03_both_own_days_in_natural_rounds(self):
