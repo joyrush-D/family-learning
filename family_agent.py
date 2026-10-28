@@ -4437,6 +4437,11 @@ _SCHOOL_NATIVE_WHEN=(r'(?:于|在)?\s*'+_SCHOOL_NATIVE_DATE+r'\s*(?:早上|上�
 _SCHOOL_NATIVE_LESSON=r'Lesson\s*[0-9]+(?:\s*《[^《》\n]{1,40}》)?|第[0-9一二三四五六七八九十]+课(?!时)(?:\s*《[^《》\n]{1,40}》)?'
 
 
+# The child's own learning activities an addressed clause names (跟读Unit 5、口算第1题); the native reader and the day
+# reader (family_agenda._action_deadlines) read the same ones.
+_SCHOOL_LEARNING_ACTS=r'朗读|背诵|抄写|默写|听写|跟读|订正|预习|复习|阅读|口算|习作|练习'
+
+
 def _school_native_command(clause, later=''):
     """A literal addressed outcome, not a verb search inside examples or reports.
 
@@ -4449,7 +4454,7 @@ def _school_native_command(clause, later=''):
     prefix=(r'(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')[，,:：]\s*|'+_SCHOOL_NATIVE_WHEN+r'|请(?:各位)?(?:家长|同学们?|大家)?\s*|只需\s*|独立\s*|另(?:外)?\s*)')
     lead=re.match(r'^(?:'+prefix+r')*',value)[0];value=value[len(lead):]
     # "订正本/口算本" followed by its day or handback is the notebook, not another 订正/口算 outcome.
-    learning=r'(?:朗读|背诵|抄写|默写|听写|跟读|订正|预习|复习|阅读|口算|习作|练习)(?!后|完|已|完成|录音|音频|本\s*(?:[0-9今明后下]|交|带))[^：:。；;]{2,}'
+    learning=r'(?:'+_SCHOOL_LEARNING_ACTS+r')(?!后|完|已|完成|录音|音频|本\s*(?:[0-9今明后下]|交|带))[^：:。；;]{2,}'
     exercise=r'(?:完成|做|写)(?!后|完|过|了)(?:好)?\s*[^：:。；;]{0,35}(?:练习卷|练习册|作业本|作业单|试卷|习题|作文|口算(?!本)|第[^。；;]{1,16}题)[^：:。；;]*'
     object_first=r'(?:[^：:。；;，,]{0,16}(?:练习卷|练习册|作业本|试卷)第[^：:。；;，,]{1,16}题)[^：:。；;]{0,15}(?:完成|交)[^：:。；;]*'
     compact=r'(?:Unit\s*[0-9]+[^。；;，,]{0,24}|《[^》]+》|课文)[^。；;，,]{0,12}(?:读|背)[一二两三四五六七八九十0-9]+遍'
@@ -5819,6 +5824,11 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         roles=(_school_role_days(dated_quote,cited_evidence,title_quotes[:index]+title_quotes[index+1:])
                if routing and due and not historical and not native_action and dated_quote and len(sent)==1 and all(sent) else None)
         role_days=roles[0]|{roles[1]} if roles else set()
+        if (roles and due in roles[0] and due!=roles[1] and (not clause or clause<=role_days) and not borrowed(roles[1])
+                and _school_goal_dates(str(proposal.get('task_goal','')),cited_evidence)<=role_days):
+            # The one day the reply or the single-day shortcut chose is only this item's own completion day, while its own
+            # words also prove its later handback/check (今晚完成…，明早交练习册): its roles decide, whatever that scalar was.
+            due=roles[1];owned=True
         if (not owned and roles and roles[1]==due and (not clause or clause<=role_days) and not borrowed(due)
                 and _school_goal_dates(str(proposal.get('task_goal','')),cited_evidence)<=role_days):
             owned=True

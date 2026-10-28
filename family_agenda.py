@@ -121,6 +121,18 @@ def _action_deadlines(text,published):
             try:value=(dt.date.fromisoformat(anchor)+dt.timedelta(days=offset)).isoformat()
             except OverflowError:pass
         if value:candidates.add(value)
+    # A day directly heading one of the child's own learning activities, after at most its asker and subject (今晚跟读Unit 5、
+    # 语文今晚阅读《晨星故事》、数学今晚口算第1题、英语明天跟读、今晚读《长叶读本》), ties it just as 今晚复习 does: the native
+    # reader's activities and the completion verbs, no list of its own. A report or question after the verb (读了、读过的、
+    # 跟读吗), a negation or condition (not an asker word), or a question or condition in its clause states no requirement.
+    learning=r'(?:'+family_agent._SCHOOL_LEARNING_ACTS+'|'+_COMPLETION_VERB+r')(?![了过的着吗册本卷]|资料|材料|计划|安排|通知|要求|时间|指南|方法|建议|结果|情况)'
+    for match in re.finditer(r'(今天|今日|今晚|明天|明日|后天)'+direct_prefix+learning,text):
+        clause=re.split(r'[。；;，,\n]',text[:match.start()])[-1]+re.split(r'[。；;，,\n]',text[match.start():])[0]
+        if re.search(r'吗|[？?]|如果|假如|若是|要是|是否',clause):continue
+        offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[match[1]]
+        if not anchor:continue
+        try:candidates.add((dt.date.fromisoformat(anchor)+dt.timedelta(days=offset)).isoformat())
+        except OverflowError:pass
     for match in re.finditer(r'(?:报名|填报|选课|提交|上交)时间\s*[：:为是]*\s*(\d{4}-\d{2}-\d{2})([^。；;\n]*)',text):
         day,tail=match.groups()
         clock=r'(?:[01]?\d|2[0-3])[:：][0-5]\d'
