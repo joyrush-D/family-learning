@@ -175,6 +175,128 @@ PRODUCT_SIX_REPLY = r'''{
 }
 '''
 
+# Root's actual product reply for the next four fictional originals (development run late-admin-date-20261028): their
+# truth froze before the call and the reply is replayed byte for byte here (no new call).
+NEXT_FOUR = (('18:30', '虚构数学老师', 'qa-math', '今晚完成第4题，明早交给数学课代表。'),
+             ('18:45', '虚构班主任', 'qa-head', '请家长签署同意书后交回。'),
+             ('19:00', '虚构英语老师', 'qa-en', '今晚听音频跟读Unit 5第1至8个单词，每个两遍，不用抄写；明天英语课听写。'),
+             ('19:05', '虚构班主任', 'qa-head', '今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；孩子明早交给班主任。'))
+# Each outcome by its own title anchor: its original, completion day and (due day, due role); a None role is tonight's
+# homework, whose day may stand as its plain deadline but never a handback, check or arranged day.
+NEXT_FOUR_TRUTH = {'第4题': (0, '2026-11-04', ('2026-11-05', 'handback')), '同意书': (1, '', ('', '')),
+                   '跟读': (2, '2026-11-04', None), '听写': (2, '', ('2026-11-05', None)),
+                   '研学活动回执': (3, '2026-11-04', ('2026-11-05', 'handback'))}
+NEXT_FOUR_REPLY = r'''{
+  "proposals": [
+    {
+      "title_quote": "今晚完成第4题，明早交给数学课代表",
+      "focus": "school",
+      "due": "2026-11-05",
+      "evidence": [
+        {
+          "ref": "message:synthetic-group:11"
+        }
+      ],
+      "task_title": "数学：完成第4题并明早交",
+      "task_goal": "今晚完成第4题；明早交给数学课代表。",
+      "task_advice": "可先独立完成第4题，再检查一遍书写和答案后装好，明早交给数学课代表。",
+      "learning_subject": "数学",
+      "learning_goal_id": "",
+      "task_change": "new",
+      "task_target_id": "",
+      "task_state": "ready",
+      "task_reason": "已读文字明确要求今晚完成第4题，明早交给数学课代表，属具体数学作业。",
+      "task_purpose": "learning",
+      "task_submission": "明早交给数学课代表"
+    },
+    {
+      "title_quote": "请家长签署同意书后交回",
+      "focus": "school",
+      "due": "",
+      "evidence": [
+        {
+          "ref": "message:synthetic-group:12"
+        }
+      ],
+      "task_title": "签署同意书并交回",
+      "task_goal": "请家长签署同意书后交回。",
+      "task_advice": "可先确认同意书内容，再由家长签署并按要求交回。",
+      "learning_subject": "",
+      "learning_goal_id": "",
+      "task_change": "new",
+      "task_target_id": "",
+      "task_state": "ready",
+      "task_reason": "已读文字明确要求家长签署同意书后交回，属需办理的行政事务；未写明具体交回日期。",
+      "task_purpose": "admin",
+      "task_submission": "交回同意书"
+    },
+    {
+      "title_quote": "今晚听音频跟读Unit 5第1至8个单词，每个两遍，不用抄写",
+      "focus": "school",
+      "due": "",
+      "evidence": [
+        {
+          "ref": "message:synthetic-group:13"
+        }
+      ],
+      "task_title": "英语：跟读Unit 5第1至8个单词",
+      "task_goal": "今晚听音频跟读Unit 5第1至8个单词，每个两遍；不用抄写。",
+      "task_advice": "可跟音频逐词朗读，每个单词读两遍，读完后可再听一遍确认发音。",
+      "learning_subject": "英语",
+      "learning_goal_id": "",
+      "task_change": "new",
+      "task_target_id": "",
+      "task_state": "ready",
+      "task_reason": "已读文字明确要求今晚听音频跟读Unit 5第1至8个单词，每个两遍，不用抄写，属具体英语学习任务。",
+      "task_purpose": "learning",
+      "task_submission": ""
+    },
+    {
+      "title_quote": "明天英语课听写",
+      "focus": "school",
+      "due": "2026-11-05",
+      "evidence": [
+        {
+          "ref": "message:synthetic-group:13"
+        }
+      ],
+      "task_title": "英语：明天课堂听写",
+      "task_goal": "明天英语课听写。",
+      "task_advice": "可在今晚跟读后自行回顾Unit 5第1至8个单词的读音和拼写，为明天课堂听写做准备。",
+      "learning_subject": "英语",
+      "learning_goal_id": "",
+      "task_change": "new",
+      "task_target_id": "",
+      "task_state": "ready",
+      "task_reason": "已读文字明确说明明天英语课听写，属需单独保留的考试/听写安排。",
+      "task_purpose": "learning",
+      "task_submission": ""
+    },
+    {
+      "title_quote": "今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；孩子明早交给班主任",
+      "focus": "school",
+      "due": "2026-11-05",
+      "evidence": [
+        {
+          "ref": "message:synthetic-group:14"
+        }
+      ],
+      "task_title": "研学活动回执勾选签字并明早交",
+      "task_goal": "今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’，然后签字；孩子明早交给班主任。",
+      "task_advice": "可先由家长确认参加或不参加并勾选，再签字，孩子明早带回交给班主任。",
+      "learning_subject": "",
+      "learning_goal_id": "",
+      "task_change": "new",
+      "task_target_id": "",
+      "task_state": "ready",
+      "task_reason": "已读文字明确要求家长在《研学活动回执》勾选并签字，孩子明早交给班主任，属需办理的行政事务。",
+      "task_purpose": "admin",
+      "task_submission": "孩子明早交给班主任"
+    }
+  ]
+}
+'''
+
 
 def view(item):
     m = item['agenda']
@@ -592,6 +714,63 @@ class DailyListFrozenTests(unittest.TestCase):
         self.assertNotEqual(item['due_kind'], 'handback')
         self.assertIn('2026-11-04', (item['complete_on'], item['due_on']))
         self._replay_adds_nothing('T01-send-day-due')
+
+    def _next_four(self, case, late=False):
+        """The four originals and the actual reply through the real run_once, as of 11-04 20:00 or first organized 11-06 20:00."""
+        now = dt.datetime(2026, 11, 6 if late else 4, 20, tzinfo=agent.TZ)
+        self.fixture.now = now
+        payload, refs = self._day(NEXT_FOUR)
+        result, rows, listed, _ = self._run(payload, json.loads(NEXT_FOUR_REPLY)['proposals'], case, today=now.date().isoformat(), now=now)
+        self.assertEqual((result['failed'], self.model.call_count), (0, 1))
+        self.assertEqual(len(listed), 5, 'five outcomes, no manual item')
+        return refs, rows, listed
+
+    def _next_four_days(self, refs, listed):
+        for anchor, (index, complete, due) in NEXT_FOUR_TRUTH.items():
+            with self.subTest(anchor=anchor):
+                item, = [i for i in listed if anchor in i['title']]
+                self.assertEqual(item['publications'], [refs[index]], 'its own original only')
+                self.assertEqual(item['published_at'][:16], '2026-11-04T' + NEXT_FOUR[index][0], 'not a new 11-06 assignment')
+                if due is None:
+                    self.assertIn(complete, (item['complete_on'], item['due_on']))
+                    self.assertNotIn(item['due_kind'], ('handback', 'inspection', 'arranged', 'event'))
+                    continue
+                self.assertEqual((item['complete_on'], item['due_on']), (complete, due[0]))
+                if due[1]: self.assertEqual(item['due_kind'], due[1])
+                else: self.assertNotEqual(item['due_kind'], 'handback')
+
+    def test_next_four_accepted_on_the_day_keep_each_own_days(self):
+        refs, rows, listed = self._next_four('NEXT-FOUR-11-04')
+        self.assertEqual({i['kind'] for i in listed}, {'task'})
+        self._next_four_days(refs, listed)
+        self._replay_adds_nothing('NEXT-FOUR-11-04')
+
+    def test_next_four_first_organized_late_stay_pending_with_each_own_days(self):
+        """Root's independent reproduction: the same reply first organized on 11-06 stays for review under the history guard,
+        never accepted or made 11-06 work, while the slip's own words still name its 11-04 signing (今晚…然后签字；孩子明早交给
+        班主任) as on its accepted card. The undated consent borrows no day; listing writes nothing."""
+        refs, rows, listed = self._next_four('NEXT-FOUR-11-06', late=True)
+        self.assertEqual({(i['kind'], i['status']) for i in listed}, {('school', '待核对')}, 'no old item is accepted automatically')
+        self.assertEqual({r['state'] for r in rows}, {'pending'})
+        self._next_four_days(refs, listed)
+        source_id, message_id = refs[3][8:].rsplit(':', 1)
+        self.assertIn(NEXT_FOUR[3][3], json.dumps(self.store.message(dict(child_id='child-1', source_id=source_id, message_id=message_id), None),
+                                                  ensure_ascii=False), 'the same original opens')
+        with self.store._db() as c:
+            before = '\n'.join(c.iterdump())
+        self.app.calendar_snapshot('2026-11-04', '2026-11-06')
+        with self.store._db() as c:
+            self.assertEqual('\n'.join(c.iterdump()), before, 'listing saves nothing')
+            # Another live item quoting the slip's own handback words makes that range shared: no role is read from it.
+            row = dict(c.execute("SELECT * FROM agent_items WHERE kind='school' AND evidence LIKE ?", ('%:' + message_id + '"%',)).fetchone())
+            plan = json.loads(row['plan']); plan['school_date_quote'] = '孩子明早交给班主任'
+            shared = dict(row, id=row['id'] + '-shared', title='孩子明早交给班主任', plan=json.dumps(plan, ensure_ascii=False))
+            c.execute('INSERT INTO agent_items(%s) VALUES(%s)' % (','.join(shared), ','.join('?' * len(shared))), list(shared.values()))
+        slip, = [view(i) for i in self.app.calendar_snapshot('2026-11-06', '2026-11-06')['inbox'] if i['id'] == row['id']]
+        self.assertEqual((slip['complete_on'], slip['due_on']), ('', '2026-11-05'), "a sibling's overlapping words date nothing")
+        with self.store._db() as c:
+            c.execute('DELETE FROM agent_items WHERE id=?', (shared['id'],))
+        self._replay_adds_nothing('NEXT-FOUR-11-06')
 
 
 class ContinuedSupplementVariantTests(unittest.TestCase):
