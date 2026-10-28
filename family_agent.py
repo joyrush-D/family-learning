@@ -3698,13 +3698,15 @@ _SCHOOL_ROLE_VERBS=(('handback',r'上交|提交|交'),('check',r'检查'),('fini
 # Its own object may stand before the predicate as a ba-phrase (把签收联交到…, 将回条交给…): still that clause's own predicate.
 _SCHOOL_ROLE_LEAD=(r'\s*(?:请|让|由)?\s*(?:各位|全体)?(?:家长|学生|孩子|同学们?|班主任|老师)?\s*(?:准时|按时|务必|必须|须|需|要)?\s*'
                    r'(?:在[^，,在]{1,12}?(?:上|里|中|内)\s*)?(?:(?:把|将)[^，,把将]{1,12}?(?=(?:'+'|'.join(v for _,v in _SCHOOL_ROLE_VERBS)+r')))?')
+# The joining words after which a clause's own next predicate starts (签字并交回、签字后交回).
+_SCHOOL_CLAUSE_JOIN=r'并且|并|且|然后|同时|再|后'
 
 
 def _school_clause_roles(clause):
     """The time roles (finish, handback, check) of one clause's own predicates, never of a character inside an object."""
     from family_agenda import _titles_read_as_objects
     text=_titles_read_as_objects(clause)
-    starts={0}|{m.end() for m in re.finditer(_SCHOOL_ROLE_HEAD,text)}|{m.end() for m in re.finditer(r'并且|并|且|然后|同时|再|后',text)}
+    starts={0}|{m.end() for m in re.finditer(_SCHOOL_ROLE_HEAD,text)}|{m.end() for m in re.finditer(_SCHOOL_CLAUSE_JOIN,text)}
     roles=set()
     for at in starts:  # a leading label (英语：、提交要求：) names the clause, not its predicate
         rest=re.sub('^'+_SCHOOL_ROLE_LEAD,'',re.sub(r'^\s*[^：:，,]{1,6}[：:]','',text[at:]) if at==0 else text[at:])
@@ -6819,20 +6821,32 @@ def _school_requirement_names(part,pdf,material,names=None):
 
 
 def _school_stated_action(text):
-    """Whether a line's own words state an action by a predicate the existing recognizers know: the native action predicates,
-    _LEARNING_ACTION and the administrative actions. A study kind's own name (练习、作业、课文…), which the native predicates
-    leave out, only says what a heading is about."""
-    return bool(re.search(_SCHOOL_NATIVE_PREDICATE,text) or _LEARNING_ACTION.search(text) or re.search(_SCHOOL_ADMIN_ACTION,text))
+    """Whether a line's own words state an action, read by the existing predicate–object grammar: never by a predicate's
+    characters inside a name (家长签字表、英语阅读要求) and never by its sentence marks, which only bound its clauses.
+
+    Each clause is read with and without its own leading actor (家长、学生…: who acts, not whether anyone does): a predicate
+    with its own object (_school_native_command: 签字并交回活动回执、完成第1至3题), a predicate after an explicit address,
+    modal, manner, day or place (_school_native_common_addressed: 请家长在通知单上签字…), or a predicate opening a later
+    part, after the joining words _school_clause_roles reads (…并写一句观察发现) or after another clause. A name says no
+    further doing; a bare predicate at the head of the only clause may still be a name's own first word (签字表), so it alone
+    proves nothing."""
+    actor=r'^\s*(?:'+'|'.join(_SCHOOL_CLAUSE_ROLES.values())+r')\s*'
+    for index,clause in enumerate(c for c in re.split(r'[。；;！!？?，,\n]+',text) if c.strip()):
+        for at in [0]+[m.end() for m in re.finditer(_SCHOOL_CLAUSE_JOIN,clause)]:
+            own=re.sub(actor,'',clause[at:]);addressed=_school_native_common_addressed(own)
+            if _school_native_command(clause[at:]) or _school_native_command(own) or (addressed and (index or at or addressed.start())):
+                return True
+    return False
 
 
 def _school_requirement_substance(text,names):
     """Whether a requirement line says anything beyond reading progress, a short label, its original's own title/name,
     the subject and dates. Structure first, never a verb/noun list of its own.
 
-    The original's own title/name is identity: it can show a line to be only that original's heading, never take away the
-    action of a sentence. A line those names wholly cover is still its action when it is itself a sentence (。；！？ or a
-    clause break) stating an action (_school_stated_action), as when the reader also titles the original 家长签字并交回活动回执。;
-    a bare heading (数学练习要求), the file name (虚构完整要求.png) or a heading before a date never is."""
+    The original's own title/name is identity: it says which original a line belongs to, never whether the line commands.
+    A line those names wholly cover (the reader also titled the original with it) is read by its own words alone
+    (_school_stated_action), with or without a closing mark: 家长签字并交回活动回执 keeps its action, 家长签字表。 or a bare
+    heading (数学练习要求) gains none. A line its own whole file name covers (虚构完整要求.png) is that file, never an action."""
     from family_agenda import _DAY_WORDS
     if family_llm.school_requirement_has_reading_progress(text):return False
     def said(names):
@@ -6841,7 +6855,8 @@ def _school_requirement_substance(text,names):
         prefix=r'(?:每个|上个|本个|这个|下个|每|上|本|这|下)?'  # the weekday prefixes family_agenda grounds
         for pattern in (_SCHOOL_ACTION_OPEN,_SCHOOL_DATE_MENTION.pattern,_DAY_WORDS):rest=re.sub(prefix+'(?:'+pattern+')','',rest)
         return bool(re.sub(r'[\W_\d年月日号]+','',rest))
-    return said(names) or (said([]) and bool(re.search(r'[。；;！!？?，,]',text)) and _school_stated_action(text))
+    files=[n for n in names if '.' in n and n.rsplit('.',1)[0] in names]  # whole file names: _school_requirement_names lists each beside its stem
+    return said(names) or (said([]) and said(files) and _school_stated_action(text))
 
 
 def _school_own_requirement(part,pdf,material,subject='',names=None):

@@ -572,7 +572,7 @@ class DailyListFrozenTests(unittest.TestCase):
         # The existing candidate-identity guard is untouched: a ready action dropping the item's literal words is refused.
         self._u02_held([self.U02_REQUIREMENT], cite='requirement', reason='旧事项缺少可核对的同行动依据')
 
-    def _image_chain(self, requirements, title='虚构实验观察图'):
+    def _image_chain(self, requirements, title='虚构实验观察图', words='请按照图片里的要求完成实验观察。', brief_changes=None):
         """A fictional teacher message and a PNG really saved by save_upload and linked by message_attachment, through
         actual run_once rounds only (no act(accept), no seeded rows): the original selection, the original school-material
         reader (fake fixed receipt: the first read fails, the existing bounded retry reads it) and the existing refresh,
@@ -585,12 +585,12 @@ class DailyListFrozenTests(unittest.TestCase):
         from test_media import png
         (self.app.ROOT / '家庭运行规则.md').write_text(PRODUCT_SIX_FAMILY)
         self.source.update(id='qq:123456', platform='qq'); self.fixture.config()
-        payload, refs = self._day([('18:40', '虚构科学老师', 'qa-science', '请按照图片里的要求完成实验观察。')])
+        payload, refs = self._day([('18:40', '虚构科学老师', 'qa-science', words)])
         raw = png(64, 96)
         upload = self.app.save_upload(io.BytesIO(raw), len(raw), quote('示例观察图.png'))
         keys = dict(child_id='child-1', source_id='qq:123456', message_id='11')
         self.store.message_attachment(dict(keys, attachment_id=upload['id'], action='attach'), self.app.upload_info)
-        review = dict(proposals=[dict(title_quote='请按照图片里的要求完成实验观察。', focus='school', due='', evidence=[dict(ref=refs[0])],
+        review = dict(proposals=[dict(title_quote=words, focus='school', due='', evidence=[dict(ref=refs[0])],
             task_title='科学：完成实验观察', task_goal='按图片中的要求完成实验观察。\n图片内容尚未读取，具体要求未知。', task_advice='',
             learning_subject='', learning_goal_id='', task_change='new', task_target_id='', task_state='review',
             task_reason='具体要求写在未读取的图片中。', task_purpose='learning', task_submission='')])
@@ -601,6 +601,7 @@ class DailyListFrozenTests(unittest.TestCase):
             if name == 'family_agent_selection': return copy.deepcopy(review)
             brief = dict(title='科学：完成实验观察', goal='完成实验观察', advice='', state='ready', reason='虚构固定回执。', purpose='learning',
                          submission='', change='new', target_id='', learning_subject='科学', learning_goal_id='')
+            brief.update(brief_changes or {})
             if 'original_parts' not in context: return dict(brief, state='review', reason='虚构固定回执：图片未读。')
             parts = context['original_parts']
             words = [p for p in parts if not p.get('requirement') and not p.get('background_only') and not p['upload_ids']]
@@ -671,6 +672,26 @@ class DailyListFrozenTests(unittest.TestCase):
         self.assertEqual((final['state'], final['auto_added'], schools[0]['task_id']), ('ready', True, tasks[0]['id']))
         self.assertIn(refs[0], tasks[0]['source'])
         self._report(case='TITLE_ACTION_linked_image_reader_chain', calls=calls, task=tasks[0]['action'], goal=final['goal'])
+
+    # Root-punctuation-truth.json on the natural chain: the reader also titles the slip with its one line. An unpunctuated
+    # command keeps its one task; a form's heading with a closing mark gains none (the mark decides neither).
+    ADMIN = dict(words='请按照图片里的要求办理。', brief_changes=dict(title='事务：老师要求', purpose='admin', learning_subject=''))
+
+    def test_linked_image_unpunctuated_command_the_reader_also_used_as_its_title_keeps_its_one_task(self):
+        line = '家长签字并交回活动回执'
+        schools, tasks, _, refs, calls = self._image_chain([line], title=line, **self.ADMIN)
+        self.assertEqual(([s['state'] for s in schools], len(tasks)), (['accepted'], 1))
+        final = json.loads(schools[0]['plan'])['school_task']
+        for text in (tasks[0]['action'], schools[0]['body'], final['goal']): self.assertIn(line, text)
+        self.assertEqual((final['state'], final['auto_added'], schools[0]['task_id']), ('ready', True, tasks[0]['id']))
+        self.assertIn(refs[0], tasks[0]['source'])
+        self._report(case='ACTION_ADMIN_NO_PUNCTUATION_linked_image_reader_chain', calls=calls, task=tasks[0]['action'], goal=final['goal'])
+
+    def test_linked_image_form_heading_with_a_period_the_reader_also_used_as_its_title_gains_nothing(self):
+        line = '家长签字表。'
+        schools, tasks, errors, _, _ = self._image_chain([line], title=line, **self.ADMIN)
+        self.assertEqual(([s['state'] for s in schools], tasks), (['pending'], []))
+        self.assertTrue(any('依据没有本项动作和对象' in e for e in errors), errors)
 
     def _report(self, **line):
         report = os.environ.get('DAILY_LIST_REPORT')

@@ -889,6 +889,55 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                 result,calls,tasks,errors=self.image_probe(text,subject,case,purpose=purpose,title=text)
                 self.assertEqual((result['created'],calls,tasks,errors),(1,1,1,['']))
 
+    # Root-punctuation-truth.json (driver sha256 0265c0d3…): only the reader's title and the one requirement line change.
+    PUNCTUATION_TRUTH=[('ACTION_ADMIN_NO_PUNCTUATION','家长签字并交回活动回执','','admin',1),
+                       ('NOMINAL_ADMIN_WITH_PERIOD','家长签字表。','','admin',0)]
+    # Root-previous-guard-variants.json and same-class lines written here; each is also run with its closing mark
+    # added or removed, so the mark never decides a line the reader also used as its title.
+    TITLED_LINES=[('TITLE_ACTION_MATH_NO_LABEL','完成第1至3题，写明单位。','数学','learning',1),
+                  ('TITLE_NOMINAL_ADMIN_FORM','家长签字表','','admin',0),
+                  ('W01_actor_place_sign','家长在活动回执上签字','','admin',1),
+                  ('W02_sign_then_return','家长签字后交回班主任','','admin',1),
+                  ('W03_heading_reading','英语阅读要求','科学','learning',0),
+                  ('W04_event_heading','家长会通知','','admin',0),
+                  ('W05_bare_heading','数学练习要求','','learning',0)]
+
+    def test_a_titled_line_is_read_by_its_own_predicate_and_object_never_by_its_closing_mark(self):
+        rows=self.PUNCTUATION_TRUTH+self.TITLED_LINES+[(c,t,s,p,1) for c,t,s,p in self.TITLED_ACTIONS]
+        for case,text,subject,purpose,expected in rows:
+            for line in dict.fromkeys([text,text.rstrip('。'),text.rstrip('。')+'。']):
+                with self.subTest(case=case,line=line):
+                    result,calls,tasks,errors=self.image_probe(line,subject,case,purpose=purpose,title=line)
+                    self.assertEqual((result['created'],calls,tasks),(expected,1,expected))
+                    if not expected:self.assertIn('依据没有本项动作和对象',errors[0])
+
+    def test_docx_requirement_the_reader_also_used_as_its_title_is_read_like_an_image_line(self):
+        # A safe plain-text DOCX through the actual Word text extraction (only the reader's receipt is fixed): the same
+        # protocol as an image line. A command keeps its task; a form's heading or the file's own whole name gains none.
+        from test_media import MediaTests,docx,para
+        for case,text,expected in [('D01_command_as_title','家长签字并交回活动回执',1),('D02_form_heading','家长签字表。',0),
+                                   ('D03_whole_file_name','虚构活动回执.docx',0)]:
+            with self.subTest(case=case):
+                probe=type(self)('runTest');probe.setUp()
+                try:
+                    upload='b'*32;keys=probe.native_notice(case)
+                    probe.link(keys,probe.pdf,action=DETACH)
+                    probe.link(keys,MediaTests.seed_docx(probe,upload,docx(para(text)),name='虚构活动回执.docx'))
+                    item_id=probe.candidate(keys=keys,ident=case)
+                    reply=dict(originals=[dict(upload_id=upload,title=text,note='空白栏只是背景。',uncertainties=[],requirements=[text])])
+                    with patch.object(family_llm,'extract_draft',return_value=reply) as model:
+                        self.assertEqual(media.prepare_draft(probe.store,probe.now),dict(used=1,failed=0))
+                    self.assertEqual([d['text'] for d in model.call_args.kwargs['documents']],[text])
+                    ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
+                    part='material:'+upload+'@'+ref+':requirement:'+agent._hash(text)[:16]
+                    result,calls=probe.refresh({'actions':[dict(draft(title='事务：老师要求',goal=text,purpose='admin',learning_subject=''),
+                                                               due='',existing_item_id=item_id,basis=[dict(part=part,text=text)])]})
+                    errors=[r[0] for r in probe.rows("SELECT error FROM agent_jobs WHERE id LIKE 'school-task:%'")]
+                    self.assertEqual((result['created'],len(calls),probe.count('manual_tasks')),(expected,1,expected))
+                    if expected:self.assertEqual(probe.rows('SELECT action FROM manual_tasks')[0][0],text)
+                    else:self.assertIn('依据没有本项动作和对象',errors[0])
+                finally:probe.doCleanups()
+
     def test_complete_requirements_replace_a_later_lossy_or_added_action_summary(self):
         requirement='数学：2026-02-12前完成练习；第1至3题必做，第3题写明单位；第4题选做，若选做须用两种方法；做完检查，不需要家长签字。'
         ident,parts,keys=self.required_image([requirement])
