@@ -1,6 +1,6 @@
 """DeepTutor LearningService的子进程客户端（只给“新题再试”的登记/判定用）。
 
-由隔离的py>=3.11+pydantic2解释器（FAMILY_DEEPTUTOR_PYTHON）以`python -I`运行deeptutor_sidecar.py：
+由隔离的py>=3.11+pydantic2解释器（显式FAMILY_DEEPTUTOR_PYTHON；未设置或为空时用本应用目录下固定的private/runtime/deeptutor/bin/python）以`python -I`运行deeptutor_sidecar.py：
 清空环境（不设HOME、不碰用户目录；临时数据只在FAMILY_DEEPTUTOR_TMP或系统临时目录下的
 family-deeptutor里，用DeepTutor原DEEPTUTOR_HOME参数显式指向）、无网络、一次请求一行JSON、带超时。没配置或运行失败时只降级当前这一步，原错题、诊断、
 引导和每日待办照常可用；家庭SQLite仍是唯一主数据，子进程的临时目录用完即弃。"""
@@ -8,6 +8,7 @@ import json, os, subprocess, tempfile
 from pathlib import Path
 
 SIDECAR = Path(__file__).resolve().parent / 'deeptutor_sidecar.py'
+DEFAULT_PYTHON = Path(__file__).resolve().parent / 'private' / 'runtime' / 'deeptutor' / 'bin' / 'python'  # 部署方事先装好的私有隔离解释器；本应用不安装、不下载、不创建
 TIMEOUT = 30
 
 
@@ -16,8 +17,9 @@ class DeepTutorUnavailable(RuntimeError):
 
 
 def python():
-    path = os.environ.get('FAMILY_DEEPTUTOR_PYTHON', '')
-    return path if path and Path(path).is_file() and os.access(path, os.X_OK) else ''
+    """显式FAMILY_DEEPTUTOR_PYTHON非空时只按它判定（无效即不可用，不改找默认）；缺失或空值才找DEFAULT_PYTHON。都须是已存在的可执行文件。"""
+    path = os.environ.get('FAMILY_DEEPTUTOR_PYTHON') or str(DEFAULT_PYTHON)
+    return path if Path(path).is_file() and os.access(path, os.X_OK) else ''
 
 
 def status():
