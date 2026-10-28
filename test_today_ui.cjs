@@ -253,7 +253,8 @@ function fixtures(base){
    orderState.today='2026-09-28';
    const orderTask=(id,published,due='')=>({...baseTask,id,title:'虚构事项 '+id,source:'Agent建议:synthetic-school',due,agenda:{...baseTask.agenda,published_on:published,due_on:due}});
    orderState.tasks=[orderTask('OLD','2026-09-02'),orderTask('DUE-OLD','2026-09-20','2026-09-20'),orderTask('DUE-RECENT','2026-09-22','2026-09-27'),orderTask('DUE-TODAY','2026-09-27','2026-09-28'),orderTask('DUE-NEXT','2026-09-27','2026-09-29')];
-   orderState.tasks.push({...orderTask('REVIEW-HOMEWORK','2026-09-02'),focus:{mode:'later',review_on:orderState.today,box:'inbox'}});
+   // Saved with the storage contract for a teacher day the original never gave (无明确截止); LIST-n keep an empty one, still to check.
+   orderState.tasks.push({...orderTask('REVIEW-HOMEWORK','2026-09-02'),due:'无明确截止',focus:{mode:'later',review_on:orderState.today,box:'inbox'}});
    const published=['2026-09-02','2026-09-20','2026-09-22','2026-09-27','2026-09-27'];
    orderState.agent.items=published.map((day,n)=>({...school,id:'notice-'+n,title:'虚构学校消息 '+n,child_id:owner.id}));
    orderState.today_calendar={inbox:[...orderState.tasks.map(t=>({id:t.id,task_id:t.id,kind:'task',child_ids:[owner.id],title:t.title,agenda:t.agenda,status:'待跟进',closed:false})),...published.map((day,n)=>({id:'notice-'+n,task_id:'',kind:'school',child_ids:[owner.id],title:'虚构学校消息 '+n,agenda:{category:'todo',published_on:day,published_at:n===3?'2026-09-27T08:00:00+08:00':n===4?'2026-09-27T18:00:00+08:00':'',due_on:'',scheduled_on:'',box:'inbox'},status:'待核对',closed:false}))],agenda:[],events:[],timetables:[],source_error:''};
@@ -295,7 +296,7 @@ function fixtures(base){
     // The ten received items, plus REVIEW-HOMEWORK whose family review falls due today: filed with its subject's unfinished homework, not as a teacher deadline today.
     assert.deepEqual((await received.evaluateAll(xs=>xs.map(x=>(x.querySelector('[data-today-task]')?.dataset.todayTask)||x.querySelector('[data-agent-item]')?.dataset.agentItem))).sort(),[...receivedIds,'REVIEW-HOMEWORK'].sort(),'each received item and the due review appear once');
     for(const id of receivedIds)assert.equal(await orderPage.locator('[data-today-task="'+id+'"],[data-agent-item="'+id+'"]').count(),1,'received item appears once: '+id);
-    const dueReview=received.filter({has:orderPage.locator('[data-today-task="REVIEW-HOMEWORK"]')});assert.equal(await dueReview.isVisible(),true);assert.equal(await dueReview.locator('.task-review-due').isVisible(),true,'the due review says it is a review');assert.match(await dueReview.innerText(),new RegExp('改天回看：'+orderState.today+'[\\s\\S]*截止待核对'),'a family review date is not a teacher deadline');
+    const dueReview=received.filter({has:orderPage.locator('[data-today-task="REVIEW-HOMEWORK"]')});assert.equal(await dueReview.isVisible(),true);assert.equal(await dueReview.locator('.task-review-due').isVisible(),true,'the due review says it is a review');assert.match(await dueReview.innerText(),new RegExp('改天回看：'+orderState.today+'[\\s\\S]*原日期要求：无明确截止'),'a family review date is not a teacher deadline');assert.doesNotMatch(await dueReview.innerText(),/截止待核对|截止：|逾期/,'no teacher day was given, so none is asked for or invented');
     assert.equal(await received.locator('[data-today-task="COLLECTED-UNDATED"]').isVisible(),true);
     for(let n=0;n<5;n++){const candidate=received.locator('[data-agent-item="same-day-homework-'+n+'"]');assert.equal(await candidate.isVisible(),true,'all work from the same sending day is exposed');assert.equal(await candidate.locator('[data-check]').count(),0,'unresolved work cannot be marked complete')}
     assert.equal(await orderPage.locator('[data-today-task="COLLECTED-UNDATED"]').count(),1);

@@ -39,6 +39,16 @@ test('a teacher check day reads as the check; deadline, handback and event keep 
  assert.match(h.ctx.agendaDateHTML({...m,due_kind:'handback'},'2026-10-21'),/老师要求交回：2026-10-22/);
  assert.match(h.ctx.agendaDateHTML({...m,due_kind:'event'},'2026-10-21'),/活动日期：2026-10-22/);
 });
+test('a saved "none given" teacher day asks nothing to check; any other missing day still does, and known days keep their labels',()=>{
+ const h=harness(),none=h.ctx.agendaDateHTML({published_on:'2026-10-21',due_on:'',scheduled_on:'2026-10-23'},'2026-10-22',false,true);
+ assert.doesNotMatch(none,/截止/,'the teacher gave no day: no deadline and nothing to check');assert.match(none,/发布：2026-10-21/);assert.match(none,/计划：2026-10-23/,'a family plan stays a plan');
+ assert.match(h.ctx.agendaDateHTML({published_on:'2026-10-21',due_on:'',scheduled_on:'2026-10-23'},'2026-10-22'),/截止待核对/,'an unread, ambiguous or old-cache missing day stays to check');
+ const kept={published_on:'2026-10-15',complete_on:'2026-10-24',due_on:'2026-10-27',due_kind:'handback'};
+ assert.match(h.ctx.agendaDateHTML(kept,'2026-10-22',false,true),/完成：2026-10-24[\s\S]*老师要求交回：2026-10-27/,'a known day is never hidden');
+ assert.match(h.ctx.agendaDateHTML({...kept,complete_on:'',due_on:'2026-10-20',due_kind:'inspection'},'2026-10-22',false,true),/已过 · 老师检查：2026-10-20/);
+ assert.match(h.ctx.agendaDateHTML({...kept,complete_on:'',due_on:'2026-10-20',due_kind:'deadline'},'2026-10-22',false,true),/逾期 · 截止：2026-10-20/);
+ assert.match(h.ctx.agendaDateHTML({...kept,complete_on:'',due_on:'2026-10-25',due_kind:'event'},'2026-10-22',false,true),/活动日期：2026-10-25/);
+});
 test('the child and after-school cards read the same teacher check day as the parent card',()=>{
  const child=readFileSync(__dirname+'/child.js','utf8'),study=readFileSync(__dirname+'/study.js','utf8'),ctx=vm.createContext({});
  vm.runInContext(child.slice(child.indexOf('function studyDays('),child.indexOf('\n// The same read-only projection')),ctx);
