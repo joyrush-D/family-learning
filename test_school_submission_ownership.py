@@ -598,11 +598,12 @@ class SchoolIndependentOutcomeTests(unittest.TestCase):
         self._use_replies(payload, copy.deepcopy([first] * 3))
         self._rounds()
         rows, job, _, tasks, _ = self._state()
-        self.assertEqual((job['done'], len(tasks), self.model.call_count), (1, 2, 1), [t['action'] for t in tasks])
-        own, = [t for t in tasks if '长叶读本' in t['action']]
+        self.assertEqual((job['done'], len(rows), self.model.call_count), (1, 2, 1), [r['body'] for r in rows])
+        # Alone (英语今晚读《长叶读本》第3页。) the short 读 item is held for review without a day too: that date fix is separate.
+        own, = [r for r in rows if '长叶读本' in r['title'] + r['body']]
         other, = [t for t in tasks if '长叶写本' in t['action']]
         self.assertEqual(other['due'], '2026-11-05')
-        self.assertNotIn('长叶写本', own['title'] + own['action'])
+        self.assertNotIn('长叶写本', own['title'] + own['body'])
         self.assertNotIn('长叶读本', other['title'] + other['action'])
 
     def test_closed_name_identity_reader(self):
