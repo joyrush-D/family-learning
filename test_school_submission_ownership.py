@@ -431,6 +431,19 @@ SCOPE_BASIS.update({('D5_explicit_common_scope', '数学完成《算数卡》第
 A01_OWN = '语文今晚完成《溪桥练习册》第8页'
 
 
+# Root v7 closed-object truth (closed-name-truth.json without C02, isolated-suffix-truth.json): distinct closed names
+# sharing characters are other objects; the same book's same page before the item is its own step. C02's prepared
+# 晨光练习册 stops before the model on the fixture's preparation ambiguity, another path, so it stays out of this set.
+ROOT_V7_CLOSED = json.loads('''[{"expected_tasks": 2, "first_response_mode": "omit_other", "id": "C01_common_prefix_distinct_closed_books", "items": [{"due": "2026-11-04", "forbidden": ["长叶写本", "第2页"], "goal": "英语今晚完成《长叶读本》第3页。", "purpose": "learning", "quote": "英语今晚完成《长叶读本》第3页", "required": ["长叶读本", "第3页"], "subject": "英语", "submission": ""}, {"due": "2026-11-05", "forbidden": ["长叶读本", "第3页"], "goal": "明天完成《长叶写本》第2页。", "purpose": "learning", "quote": "明天完成《长叶写本》第2页", "required": ["长叶写本", "第2页"], "subject": "英语", "submission": ""}], "messages": ["英语今晚完成《长叶读本》第3页；明天完成《长叶写本》第2页。"]}, {"expected_tasks": 1, "first_response_mode": "correct", "id": "C03_same_closed_object_signature_stays_one", "items": [{"due": "2026-11-04", "forbidden": [], "goal": "英语今晚完成《长叶读本》第3页，请家长在《长叶读本》第3页签字。", "purpose": "learning", "quote": "英语今晚完成《长叶读本》第3页", "required": ["长叶读本", "第3页", "家长", "签字"], "subject": "英语", "submission": "请家长在《长叶读本》第3页签字。"}], "messages": ["请家长在《长叶读本》第3页签字；英语今晚完成《长叶读本》第3页。"]}, {"expected_tasks": 2, "first_response_mode": "omit_other", "id": "C04_common_suffix_without_seeded_prepared_book", "items": [{"due": "2026-11-04", "forbidden": ["翠云同步册", "第2页"], "goal": "英语今晚完成《青石同步册》第3页。", "purpose": "learning", "quote": "英语今晚完成《青石同步册》第3页", "required": ["青石同步册", "第3页"], "subject": "英语", "submission": ""}, {"due": "2026-11-05", "forbidden": ["青石同步册", "第3页"], "goal": "明天完成《翠云同步册》第2页。", "purpose": "learning", "quote": "明天完成《翠云同步册》第2页", "required": ["翠云同步册", "第2页"], "subject": "英语", "submission": ""}], "messages": ["英语今晚完成《青石同步册》第3页；明天完成《翠云同步册》第2页。"]}]''')
+OTHER_OBJECT_SIGNATURE = dict(
+    id='V7_other_closed_object_signature_before_the_item', expected_tasks=2, first_response_mode='merge_all_into_first',
+    messages=['请家长在《长叶写本》第3页签字；英语今晚完成《长叶读本》第3页。'],
+    items=[dict(quote='英语今晚完成《长叶读本》第3页', subject='英语', purpose='learning', goal='英语今晚完成《长叶读本》第3页。',
+                submission='', due='2026-11-04', required=['长叶读本', '第3页'], forbidden=['长叶写本', '签字']),
+           dict(quote='请家长在《长叶写本》第3页签字', subject='', purpose='admin', goal='请家长在《长叶写本》第3页签字。',
+                submission='', due='', required=['长叶写本', '家长', '签字'], forbidden=['长叶读本'])])
+
+
 class SchoolIndependentOutcomeTests(unittest.TestCase):
     """An explicit independent outcome of the original (another closed-name object with its own affirmed action, whatever
     it is called) gets its own item from the original's words, whether the reply merged it into another proposal or left it
@@ -464,6 +477,7 @@ class SchoolIndependentOutcomeTests(unittest.TestCase):
         """One case at natural rounds 0/6/12: one call, each outcome's own task, words, category and day, raw receipts
         kept, the program's item marked with its source, and nothing added later."""
         mode = mode or case['first_response_mode']
+        mode = 'omit_all_but_first' if mode == 'omit_other' else mode  # Root v7's name for the same reply
         self.setUp()
         payload, refs = self._day([('18:10', '虚构老师', 'qa-teacher', text) for text in case['messages']])
         first, split = self._replies(case, refs, mode)
@@ -556,6 +570,55 @@ class SchoolIndependentOutcomeTests(unittest.TestCase):
                 rows, _, _, tasks, _ = self._state()
                 self.assertEqual((result['failed'], len(rows), len(tasks), self.model.call_count), (0, 1, 1, 1))
                 self.assertFalse({'school_split', 'school_split_from'} & set(json.loads(rows[0]['plan'])))
+
+    def test_distinct_closed_names_sharing_characters_are_separate_objects(self):
+        """v7 (Root C01/C04): 《长叶写本》 beside 《长叶读本》 and 《翠云同步册》 beside 《青石同步册》 are other objects however many
+        characters they share. Whether the reply returns only the first outcome or merges both, the other one is its own
+        item with its own day on the first call, and natural rounds add nothing."""
+        for case in ROOT_V7_CLOSED:
+            if case['expected_tasks'] < 2:continue
+            for mode in (case['first_response_mode'], 'merge_all_into_first'):
+                with self.subTest(case=case['id'], mode=mode):
+                    self._check(case, mode)
+
+    def test_same_closed_object_step_before_the_item_stays_its_own(self):
+        """v7 (Root C03, beside A03): 请家长在《长叶读本》第3页签字 before 英语今晚完成《长叶读本》第3页 is the same book's same page:
+        one item whose saved goal keeps the parent's signature, never an extra administrative item. Another closed object's
+        signature in the same place (《长叶写本》) is no step of this item: it is its own item."""
+        for case in [c for c in ROOT_V7_CLOSED if c['expected_tasks'] == 1] + [ROOT_V4_HELDOUT[2], OTHER_OBJECT_SIGNATURE]:
+            with self.subTest(case=case['id']):
+                self._check(case)
+
+    def test_short_read_item_beside_a_distinct_closed_name_keeps_the_other_object(self):
+        """B03's shape: the other closed object is its own item with its own day. The first item's short 读 day is a separate
+        date fix, so only its words are checked here."""
+        self.setUp()
+        payload, refs = self._day([('18:10', '虚构老师', 'qa-teacher', '英语今晚读《长叶读本》第3页；明天完成《长叶写本》第2页。')])
+        first = dict(proposals=[self._proposal('英语今晚读《长叶读本》第3页', refs, '英语', '英语今晚读《长叶读本》第3页。', due='2026-11-04')])
+        self._use_replies(payload, copy.deepcopy([first] * 3))
+        self._rounds()
+        rows, job, _, tasks, _ = self._state()
+        self.assertEqual((job['done'], len(tasks), self.model.call_count), (1, 2, 1), [t['action'] for t in tasks])
+        own, = [t for t in tasks if '长叶读本' in t['action']]
+        other, = [t for t in tasks if '长叶写本' in t['action']]
+        self.assertEqual(other['due'], '2026-11-05')
+        self.assertNotIn('长叶写本', own['title'] + own['action'])
+        self.assertNotIn('长叶读本', other['title'] + other['action'])
+
+    def test_closed_name_identity_reader(self):
+        """Root's reader facts: a closed name is its object's whole identity; an unclosed short name and a clause's own words
+        beside another closed name still name the item. Before the item, only the same book's same range and day is its step."""
+        names = agent._school_step_names
+        self.assertFalse(names('明天完成《长叶写本》第2页', '《长叶读本》'))
+        self.assertFalse(names('明天完成《翠云同步册》第2页', '《青石同步册》'))
+        self.assertTrue(names('请家长在《长叶读本》第3页签字', '《长叶读本》'))
+        self.assertTrue(names('完成后请家长在练习册上签字', '《晨光练习册》'))
+        self.assertTrue(names('《长叶写本》和读本都请家长签字', '《长叶读本》'))
+        owned = lambda step, text: agent._school_step_owned('英语今晚完成《长叶读本》第3页，' + step + '。', step + '。', [text])[0]
+        self.assertTrue(owned('请家长在《长叶读本》第3页签字', '请家长在《长叶读本》第3页签字；英语今晚完成《长叶读本》第3页。'))
+        for other in ('请家长在《长叶写本》第3页签字', '请家长在《长叶读本》第4页签字', '明天请家长在《长叶读本》第3页签字'):
+            with self.subTest(other=other):
+                self.assertFalse(owned(other, other + '；英语今晚完成《长叶读本》第3页。'))
 
     # --- v6: what the program may not compile, and the Store state machine around a compiled item ---
 
