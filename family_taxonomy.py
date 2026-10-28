@@ -33,6 +33,7 @@ LINK_STATES = ('confirmed', 'candidate', 'unclear', 'no_match')
 WRONG_SOURCE = '错题照片核对'
 RETRY_SOURCE = '知识点诊断·新题再试'
 DIAG_LIMIT = 8  # createSession的limit；confirm用上游DEFAULT_CONFIRM=3（连续答对3题）
+ANSWER_MAX = 500  # 原答字数上限：超长整笔400拒收，不截断后再保存、比对或交判定
 KINDS = ('answer', 'skip', 'unknown')
 REQUEST = re.compile(r'^[A-Za-z0-9_-]{16,128}$')
 
@@ -236,6 +237,15 @@ def _fields(obj, allowed, required=()):
         raise TaxonomyError('提交标识不正确', 'bad_request')
 
 
+def _answer(obj):
+    """原答=保存=幂等比对=判定依据，一字不改；非文字或超长整笔拒收，此时还没读写任何表、没调判定组件。"""
+    text = obj['answer']
+    if not isinstance(text, str): raise TaxonomyError('原答格式不正确，这一步没有保存', 'bad_answer')
+    if len(text) > ANSWER_MAX:
+        raise TaxonomyError(f'原答超过{ANSWER_MAX}个字，这一步没有保存；请缩短后再提交，输入框里的原答还在', 'answer_too_long')
+    return text
+
+
 def _diagnosis(conn, child_id, record, diagnosis_id):
     row = conn.execute('SELECT * FROM topic_diagnoses WHERE id=? AND child_id=? AND record_id=?',
                        (diagnosis_id, child_id, str(record['id']))).fetchone() if type(diagnosis_id) is int else None
@@ -392,6 +402,7 @@ def answer(app, obj, root=None):
     """逐题保存：同一序号同一内容重放不重复写；同序号不同内容409。题号须属于本次知识点子图。"""
     keys = ('child_id', 'record_id', 'diagnosis_id', 'seq', 'topic_id', 'qid', 'kind', 'answer', 'verdict', 'engine_result', 'session', 'summary')
     _fields(obj, keys, keys)
+    text = _answer(obj)  # 先于任何读写和比对
     kind, verdict, result = obj['kind'], obj['verdict'], obj['engine_result']
     expected = verdict if verdict in ('correct', 'wrong') else 'skip'
     if kind not in KINDS or (kind == 'answer') != (verdict in ('correct', 'wrong', 'manual')) or (kind != 'answer' and verdict != 'skip') or result != expected:
@@ -423,7 +434,7 @@ def answer(app, obj, root=None):
         if q is None or q['topicId'] != obj['topic_id'] or obj['topic_id'] not in closure(pack, d['topic_id']):
             raise TaxonomyError('题号不属于这次知识点范围', 'qid_outside_scope')
         c.execute('INSERT INTO topic_diagnosis_items(diagnosis_id,seq,topic_id,qid,kind,answer,verdict,engine_result,payload_hash,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
-                  (d['id'], obj['seq'], obj['topic_id'], obj['qid'], kind, str(obj['answer'])[:500], verdict, result, _payload_hash(fact), time.time()))
+                  (d['id'], obj['seq'], obj['topic_id'], obj['qid'], kind, text, verdict, result, _payload_hash(fact), time.time()))
         c.execute('UPDATE topic_diagnoses SET session=?,summary=?,state=?,version=version+1,updated_at=? WHERE id=?',
                   (blob, sblob, 'finished' if summary.get('finished') else 'active', time.time(), d['id']))
     return state(app, _base(obj), root)
@@ -478,13 +489,14 @@ def _same_retry(prev, mine, record):
 
 def retry(app, obj, root=None):
     """帮助之后的新题再试：这题须先由面板登记为本次诊断的“新题再试”出示，且同孩历次诊断从没出示、作答、
-    看过说明或再试过；DeepTutor原register_question/grade_interaction登记并判定。两个判题器一致且DeepTutor
-    判为独立才写“复测”原记录；见过的题记not_new，不调判定器。"""
+    看过说明或再试过；DeepTutor原register_question/grade_interaction登记并判定。题库核对（上游judgeQuestion）
+    与DeepTutor复核一致且判为独立才写“复测”原记录；见过的题记not_new，不调判定组件。"""
     keys = ('child_id', 'record_id', 'diagnosis_id', 'qid', 'answer', 'verdict', 'request_id')
     _fields(obj, keys, keys)
-    if obj['verdict'] not in ('correct', 'wrong', 'manual'): raise TaxonomyError('上游判题结果不正确', 'bad_result')
+    text = _answer(obj)  # 先于任何读写、比对和判定
+    if obj['verdict'] not in ('correct', 'wrong', 'manual'): raise TaxonomyError('题库核对结果不正确', 'bad_result')
     pack = load_pack(root)
-    mine = (str(obj['record_id']), obj['diagnosis_id'], obj['qid'], str(obj['answer'])[:500], obj['verdict'])
+    mine = (str(obj['record_id']), obj['diagnosis_id'], obj['qid'], text, obj['verdict'])
     with app.connect() as c:
         record = wrong_record(app, c, obj['child_id'], obj['record_id'])
         ensure_schema(c)
@@ -506,7 +518,7 @@ def retry(app, obj, root=None):
         topic = {'id': d['topic_id'], 'name': pack['by_id'][d['topic_id']].get('name', '')}
         session = f"diag-{d['id']}"
         reg = family_deeptutor.call('register', snapshot, topic=topic, question=_dt_question(q), session_id=session, turn_id=obj['request_id'] + '-q')
-        graded = family_deeptutor.call('grade', reg['snapshot'], topic=topic, question_id=q['id'], answer=str(obj['answer'])[:500],
+        graded = family_deeptutor.call('grade', reg['snapshot'], topic=topic, question_id=q['id'], answer=text,
                                        session_id=session, turn_id=obj['request_id'] + '-a')
         result = (graded.get('interaction') or {}).get('result') or {}
         dt = {'is_correct': result.get('is_correct'), 'independent': result.get('independent'), 'replayed': graded.get('replayed'),
@@ -527,8 +539,8 @@ def retry(app, obj, root=None):
         followup = None
         if outcome.startswith('independent_'):
             topic = pack['by_id'][q['topicId']]
-            note = '\n'.join([f"新题（{REVIEW_STATUS}）：{q.get('prompt', '')}", f"孩子作答：{obj['answer']}",
-                              f"上游判题：{ {'correct': '对', 'wrong': '错'}[obj['verdict']] }；DeepTutor判定：{'对' if dt['is_correct'] else '错'}（独立作答）",
+            note = '\n'.join([f"新题（{REVIEW_STATUS}）：{q.get('prompt', '')}", f"孩子作答：{text}",
+                              f"题库核对：{ {'correct': '对', 'wrong': '错'}[obj['verdict']] }；复核结果：{'对' if dt['is_correct'] else '错'}（独立作答，两项检查一致）",
                               f"知识点：{topic.get('name', '')}（{q['topicId']}，知识包{TAXONOMY_SHA[:7]}）",
                               '这题此前各次诊断都没出示、没答过、没看过说明；一次结果不等于掌握。'])
             saved = app.save_record(dict(child=record['child'], day=time.strftime('%Y-%m-%d'), category='学习进展', subject=record['subject'] or '数学',
@@ -539,7 +551,7 @@ def retry(app, obj, root=None):
         snap = dt.pop('snapshot', None)
         c.execute('INSERT INTO topic_retries(diagnosis_id,child_id,record_id,record_hash,topic_id,qid,answer,taxonomy_verdict,deeptutor,outcome,followup_record_id,request_id,created_at) '
                   'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)', (d['id'], record['child_id'], str(record['id']), record_hash(record), q['topicId'], q['id'],
-                                                        str(obj['answer'])[:500], obj['verdict'], json.dumps(dt), outcome, followup, obj['request_id'], time.time()))
+                                                        text, obj['verdict'], json.dumps(dt), outcome, followup, obj['request_id'], time.time()))
         c.execute('UPDATE topic_diagnoses SET deeptutor_snapshot=?,version=version+1,updated_at=? WHERE id=?', (snap or snapshot, time.time(), d['id']))
     return state(app, _base(obj), root)
 

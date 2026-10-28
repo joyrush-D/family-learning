@@ -5,8 +5,9 @@
 (function(root,factory){const api=factory();if(typeof module!=='undefined'&&module.exports)module.exports=api;else root.FamilyTopicDiagnosis=api})(typeof self!=='undefined'?self:this,function(){
  'use strict';
  const STATUS={mastered_direct:'本轮连续答对（线索，不等于掌握）',mastered_inferred:'未直接测（图谱推断）',shaky:'有对有错，不稳（线索）',weak:'两次未答对（线索）',unconfirmed:'答错一题后题量用完（未确认）',unknown:'未测'};
- const OUTCOME={independent_correct:'独立做对新题（两个判题器一致）· 已记为原错题的“复测”',independent_wrong:'独立再试新题未做对（两个判题器一致）· 已记为原错题的“复测”',parent_check:'两个判题器结果不一致或需要人工判断：请家长看原答核对，这次没有写复测',not_new:'这题此前出现过、答过或看过说明，不算独立再试',not_independent:'这题有帮助记录，不算独立再试'};
+ const OUTCOME={independent_correct:'独立做对新题（两项检查一致）· 已记为原错题的“复测”',independent_wrong:'独立再试新题未做对（两项检查一致）· 已记为原错题的“复测”',parent_check:'需核对：两项检查结果不一致或无法自动判断，请家长看原答；这次没有写复测',not_new:'这题此前出现过、答过或看过说明，不算独立再试',not_independent:'这题有帮助记录，不算独立再试'};
  const VERDICT={correct:'判对',wrong:'判错',manual:'待家长核对',skip:'跳过/不会（上游计为未答对）'};
+ const ANSWER_MAX=500; // 与服务端family_taxonomy.ANSWER_MAX一致；只防误输，超长以服务端400为准
  // 由服务端已保存的逐题事实重建上游会话；题号与保存的不一致说明知识包或引擎变了，不继续出题。
  function restore(E,graph,diag){const answers=diag.items.map(i=>({id:i.topic_id,result:i.engine_result,text:i.answer}));const s=E.replay(graph,[diag.topic_id],answers,diag.opts);const bad=s.answers.some((a,k)=>a.qid!==diag.items[k].qid);return bad?null:s}
  function judge(E,q,kind,text){if(kind!=='answer')return {verdict:'skip',engine:'skip'};const v=E.judgeQuestion(q,text).verdict;return {verdict:v,engine:v==='manual'?'skip':v}}
@@ -18,7 +19,7 @@
  function retryItem(E,raw,full,diag,seen){const qs=raw.questions.filter(q=>!seen.has(q.id));const g=E.buildGraph(raw.topics,raw.dependencies,qs);const s=E.createSession(g,[diag.topic_id],{limit:1,seed:'retry-'+diag.id});const it=E.nextItem(g,s);const orig=it&&E.questionById(full,it.question.id);return it&&!seen.has(it.question.id)&&orig&&orig.prompt===it.question.prompt?it:null}
  // 长推断祖先不堆屏幕：直接测过的点逐条列出，图谱推断的先修点合成一行（全部原样保存在服务端summary里）。
  function summaryLines(graph,session,E){const sum=E.summarize(graph,session),unc=new Set(sum.unconfirmed);return session.order.filter(id=>session.status[id]||session.attempts[id]).map(id=>{const st=session.status[id];const key=!st?'unknown':st.s==='mastered'?'mastered_'+st.src:st.s==='weak'&&unc.has(id)?'unconfirmed':st.s;return {id,name:graph.byId[id]?.name||id,label:STATUS[key]||STATUS.unknown,asked:(session.attempts[id]||[]).length,inferred:key==='mastered_inferred'}})}
- const logic={STATUS,OUTCOME,VERDICT,restore,judge,seenQids,retryItem,summaryLines};
+ const logic={STATUS,OUTCOME,VERDICT,ANSWER_MAX,restore,judge,seenQids,retryItem,summaryLines};
  if(typeof document==='undefined')return logic;
 
  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
@@ -38,7 +39,7 @@
   try{const v=await post(path,body);p.pending=null;if(v&&v.pack&&Array.isArray(v.diagnoses)&&Array.isArray(v.links))await apply(p,v);else await load(p);p.message=done(v)||''}
   catch(e){if(e.status&&e.status<500&&e.code!=='deeptutor_unavailable')p.pending=null;const msg=e.message+(p.pending?'。点“重试保存”会原样再发，不会重复保存':'');if(e.status===409)await load(p);p.message=msg}
   p.busy=false;draw(p)}
- const field=(p,k,ph)=>`<input form="topic-diagnosis-none" data-topic-input="${esc(k)}" autocomplete="off" placeholder="${esc(ph)}" value="${esc(p.draft[k]||'')}">`;
+ const field=(p,k,ph,max)=>`<input form="topic-diagnosis-none" data-topic-input="${esc(k)}" autocomplete="off"${max?` maxlength="${max}"`:''} placeholder="${esc(ph)}" value="${esc(p.draft[k]||'')}">`;
  function linkHTML(p,st,current){const s=p.search;let h='';
   if(current&&['unclear','no_match'].includes(current.state))h+=`<p class="small">已记为“${current.state==='no_match'?'知识包里没有匹配':'暂时说不清'}”：请回原题和原材料核对；也可以再查一次。</p>`;
   h+=`<div class="topic-row">${field(p,'search','知识点名称或册章，如：有理数的加法法则')}<button type="button" data-topic-search>查找</button></div>`;
@@ -46,7 +47,7 @@
   return h}
  // 已答只留一行：原答与判定；答错且有上游说明的，在“当前操作”空出来时给一小步说明。
  function itemLine(p,i,helpable){const q=p.E.questionById(p.graph,i.qid),seen=i.help.includes('explanation');return `<li data-topic-item="${i.seq}">第${i.seq}题 原答“${esc(i.answer||'—')}” · ${VERDICT[i.verdict]}${seen?' · 看过说明':''}${helpable&&i.verdict!=='correct'&&q?.explanation&&!seen?` <button type="button" data-topic-help="${i.seq}">看一小步说明</button>`:''}${seen&&q?.explanation?`<span class="topic-explain">说明（AI初稿，未经教师审核）：${esc(q.explanation)}</span>`:''}</li>`}
- function questionHTML(p,q,mode){const k=mode+':'+q.id,name='td-'+p.child_id+'-'+p.record_id+'-'+mode;const input=q.type==='choice'&&q.choices?.length?`<div class="topic-choices" role="radiogroup">${q.choices.map(c=>`<label class="topic-choice"><input type="radio" form="topic-diagnosis-none" name="${esc(name)}" data-topic-input="${esc(k)}" value="${esc(c.key)}"${p.draft[k]===c.key?' checked':''}><span>${esc(c.key)}. ${esc(c.text)}</span></label>`).join('')}</div>`:field(p,k,'写答案');
+ function questionHTML(p,q,mode){const k=mode+':'+q.id,name='td-'+p.child_id+'-'+p.record_id+'-'+mode;const input=q.type==='choice'&&q.choices?.length?`<div class="topic-choices" role="radiogroup">${q.choices.map(c=>`<label class="topic-choice"><input type="radio" form="topic-diagnosis-none" name="${esc(name)}" data-topic-input="${esc(k)}" value="${esc(c.key)}"${p.draft[k]===c.key?' checked':''}><span>${esc(c.key)}. ${esc(c.text)}</span></label>`).join('')}</div>`:field(p,k,'写答案',ANSWER_MAX);
   return `<div class="topic-question" data-topic-form="${mode}" data-qid="${esc(q.id)}"><p>${esc(q.prompt)}</p>${input}<div class="topic-actions"><button type="button" class="primary" data-topic-submit>提交</button>${mode==='answer'?'<button type="button" data-topic-kind="skip">跳过</button><button type="button" data-topic-kind="unknown">不会</button><button type="button" data-topic-pause>先暂停</button>':''}</div></div>`}
  function diagHTML(p,st,linked){const d=st.diagnoses.find(x=>x.basis==='current');p.view=null;
   const startBtn=`<button type="button" data-topic-start="${esc(linked.topic_id)}">${d?'按这个知识点重新诊断':'开始诊断（最多8题，可随时暂停）'}</button>`;
@@ -56,7 +57,7 @@
   let h=`<p class="small muted">已做 ${d.items.length}/${d.opts.limit} 题${d.state==='paused'&&!p.resume?' · 已暂停，随时可继续':''}</p>`;
   const idle=!(offer?.fresh)&&!asking;
   if(d.items.length)h+=`<ol class="topic-done">${d.items.map(i=>itemLine(p,i,idle)).join('')}</ol>`;
-  h+=d.retries.map(x=>`<p class="small" data-topic-retry-result="${esc(x.outcome)}">新题再试 原答“${esc(x.answer)}” · ${esc(OUTCOME[x.outcome]||x.outcome)}${x.outcome==='parent_check'?`（上游：${VERDICT[x.taxonomy_verdict]}；DeepTutor：${x.deeptutor.is_correct==null?'未判定':x.deeptutor.is_correct?'对':'错'}）`:''}</p>`).join('');
+  h+=d.retries.map(x=>`<p class="small" data-topic-retry-result="${esc(x.outcome)}">新题再试 原答“${esc(x.answer)}” · ${esc(OUTCOME[x.outcome]||x.outcome)}${x.outcome==='parent_check'?`（题库核对：${VERDICT[x.taxonomy_verdict]}；复核结果：${x.deeptutor.is_correct==null?'未判定':x.deeptutor.is_correct?'对':'错'}）`:''}</p>`).join('');
   // 当前操作只有一个：新题再试 > 诊断下一题 > 小结与下一步。题目先登记“已出示”才显示。
   if(offer?.fresh){p.view={mode:'retry',qid:offer.qid,diag:d.id};const q=p.E.questionById(p.graph,offer.qid);return h+(q?`<p><b>独立再试一道新题</b> <span class="small muted">先别看说明；提交后才判定</span></p>${questionHTML(p,q,'retry')}`:'<p class="error">新题不在当前知识包里，请刷新。</p>')}
   if(offer&&!offer.fresh)h+='<p class="small">上次出示的新题后来又在别处出现过，不再算独立；可以换一道没见过的。</p>';
