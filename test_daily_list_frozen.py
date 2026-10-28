@@ -274,11 +274,14 @@ class DailyListFrozenTests(unittest.TestCase):
         result, rows, listed, (on_day, visible) = self._run(payload, json.loads(PRODUCT_SIX_REPLY)['proposals'], 'product-six')
         self._report(case='product-six-request', request=self.model.call_args_list[0].args[0])
         self.assertEqual((result['failed'], result['processed'], len(rows), len(listed)), (0, 6, 6, 6))
+        learning = {r['title']: json.loads(r['plan']).get('school_learning') for r in rows}
         for subject, category, anchors, sent, needs, forbidden, complete, due in PRODUCT_SIX_TRUTH:
             item, = [i for i in listed if all(a in i['body'] for a in anchors)]
             words = item['title'] + '\n' + item['body']
             self.assertEqual(item['category'], category, anchors)
-            if subject: self.assertIn(subject, words, anchors)
+            # Each homework keeps its own subject's learning record (both math items too); a notice keeps its own words.
+            if category == 'homework': self.assertEqual(learning[item['title']], dict(subject=subject, goal_id=''), anchors)
+            else: self.assertTrue(learning[item['title']] is None and subject in words, anchors)
             for need in needs: self.assertRegex(item['body'], need)
             for word in forbidden: self.assertNotIn(word, words, anchors)
             self.assertEqual(item['publications'], [refs[i] for i in sent], 'only its own originals')
