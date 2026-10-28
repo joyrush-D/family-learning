@@ -6,6 +6,7 @@ list path (validation, save, dates, display data), never the product model's own
 Set DAILY_LIST_REPORT to a file path to record each case's actual list view for the difference report.
 """
 import datetime as dt
+import hashlib
 import json
 import os
 import unittest
@@ -18,6 +19,161 @@ import test_school_native_coverage as native
 
 
 T06_TEXT = '附件是明天带去课堂的实验观察表，今晚不填。'  # 科学老师18:40 in 验收-每日清单.md; its attachment is not read here
+
+# Root's one paid product-model call (development run daily-pointer-completion-20261028): the six fictional originals frozen
+# before it, the fictional family rules it ran under and the selection it returned, kept byte for byte (no new call).
+PRODUCT_SIX = (('18:00', '虚构语文老师', 'qa-cn-teacher', '语文今晚朗读《荷塘》2遍。'),
+               ('18:02', '虚构语文老师', 'qa-cn-teacher', '刚才的朗读完成后还要请家长签字。'),
+               ('18:05', '虚构数学老师', 'qa-math-teacher', '数学今晚完成《口算卡》第1题。'),
+               ('18:06', '虚构数学老师', 'qa-math-teacher', '数学今晚完成《方格练习册》第3页第2题。'),
+               ('18:10', '虚构老师乙', 'qa-mixed-teacher', '今晚跟读Unit 5两遍；另外，明天体育课带跳绳，不要求在家训练。'),
+               ('18:20', '虚构班主任', 'qa-head-teacher', '《活动回执》今晚请家长签字，孩子明天早上交给班主任。'))
+PRODUCT_SIX_FAMILY = '| child-1 | 虚构甲 | — | 10岁 | 四年级 |\n| child-2 | 虚构乙 | — | 13岁 | 初一 |\n'
+# Its truth.json outcomes: (subject, category, anchors, originals, requirements, forbidden words, completion day, (due day,
+# due role) or None for tonight's homework, whose day may stand as its plain deadline but never a handback, check or arranged day).
+PRODUCT_SIX_TRUTH = (
+    ('语文', 'homework', ('荷塘', '朗读'), (0, 1), (r'(?:2|两)遍', r'家长.{0,12}签字', r'(?:朗读|读完|完成).{0,18}(?:后|完).{0,18}家长.{0,12}签字'),
+     ('交给', '交回', '课代表', '拍照', '上传', '跳绳'), '2026-11-04', None),
+    ('数学', 'homework', ('口算卡',), (2,), (r'第?1题',), ('方格练习册', '家长', '签字', '课代表', '交回', '跳绳'), '2026-11-04', None),
+    ('数学', 'homework', ('方格练习册',), (3,), (r'第?3页', r'第?2题'), ('口算卡', '家长', '签字', '课代表', '交回', '跳绳'), '2026-11-04', None),
+    ('英语', 'homework', ('Unit 5', '跟读'), (4,), (r'(?:2|两)遍',), ('跳绳', '家长', '签字', '回执', '交回'), '2026-11-04', None),
+    ('体育', 'todo', ('跳绳',), (4,), (r'体育课.{0,12}带.{0,8}跳绳', '不要求在家训练'), ('Unit 5', '签字', '回执'), '', ('2026-11-05', 'arranged')),
+    ('', 'todo', ('活动回执',), (5,), (r'家长.{0,12}签字', r'孩子.{0,25}(?:交给|交回|交到).{0,12}班主任', r'(?:明天早上|明早|11月5日早上|2026-11-05.{0,4}早上)'),
+     ('荷塘', 'Unit 5', '跳绳', '口算卡', '方格练习册'), '2026-11-04', ('2026-11-05', 'handback')))
+PRODUCT_SIX_REPLY = r'''{
+  "proposals": [
+    {
+      "title_quote": "语文今晚朗读《荷塘》2遍。",
+      "focus": "school",
+      "due": "",
+      "evidence": [
+        {
+          "ref": "message:synthetic-group:11"
+        },
+        {
+          "ref": "message:synthetic-group:12"
+        }
+      ],
+      "task_title": "语文：朗读《荷塘》2遍并请家长签字",
+      "task_goal": "今晚朗读《荷塘》2遍。\n朗读完成后请家长签字。",
+      "task_advice": "可先通读一遍熟悉内容，再完整朗读第二遍；读完后请家长签字确认。",
+      "learning_subject": "语文",
+      "learning_goal_id": "",
+      "task_change": "new",
+      "task_target_id": "",
+      "task_state": "ready",
+      "task_reason": "已读文字明确要求今晚朗读《荷塘》2遍，并由家长在完成后签字，属于具体学习任务。",
+      "task_purpose": "learning",
+      "task_submission": "朗读完成后请家长签字。"
+    },
+    {
+      "title_quote": "数学今晚完成《口算卡》第1题。",
+      "focus": "school",
+      "due": "",
+      "evidence": [
+        {
+          "ref": "message:synthetic-group:13"
+        }
+      ],
+      "task_title": "数学：完成《口算卡》第1题",
+      "task_goal": "今晚完成《口算卡》第1题。",
+      "task_advice": "可先看清题目要求再作答，完成后自行检查一遍。",
+      "learning_subject": "数学",
+      "learning_goal_id": "",
+      "task_change": "new",
+      "task_target_id": "",
+      "task_state": "ready",
+      "task_reason": "已读文字明确要求今晚完成《口算卡》第1题，属于具体数学练习。",
+      "task_purpose": "learning",
+      "task_submission": ""
+    },
+    {
+      "title_quote": "数学今晚完成《方格练习册》第3页第2题。",
+      "focus": "school",
+      "due": "",
+      "evidence": [
+        {
+          "ref": "message:synthetic-group:14"
+        }
+      ],
+      "task_title": "数学：完成《方格练习册》第3页第2题",
+      "task_goal": "今晚完成《方格练习册》第3页第2题。",
+      "task_advice": "可先读题再在方格练习册上作答，完成后检查书写和答案。",
+      "learning_subject": "数学",
+      "learning_goal_id": "",
+      "task_change": "new",
+      "task_target_id": "",
+      "task_state": "ready",
+      "task_reason": "已读文字明确要求今晚完成《方格练习册》第3页第2题，属于具体数学练习。",
+      "task_purpose": "learning",
+      "task_submission": ""
+    },
+    {
+      "title_quote": "今晚跟读Unit 5两遍",
+      "focus": "school",
+      "due": "",
+      "evidence": [
+        {
+          "ref": "message:synthetic-group:15"
+        }
+      ],
+      "task_title": "英语：跟读Unit 5两遍",
+      "task_goal": "今晚跟读Unit 5两遍。",
+      "task_advice": "可跟着音频或录音逐句跟读，完成两遍后确认已读完整。",
+      "learning_subject": "英语",
+      "learning_goal_id": "",
+      "task_change": "new",
+      "task_target_id": "",
+      "task_state": "ready",
+      "task_reason": "已读文字明确要求今晚跟读Unit 5两遍，属于具体英语学习任务。",
+      "task_purpose": "learning",
+      "task_submission": ""
+    },
+    {
+      "title_quote": "另外，明天体育课带跳绳，不要求在家训练",
+      "focus": "school",
+      "due": "2026-11-05",
+      "evidence": [
+        {
+          "ref": "message:synthetic-group:15"
+        }
+      ],
+      "task_title": "体育：明天体育课带跳绳",
+      "task_goal": "明天体育课带跳绳。\n不要求在家训练。",
+      "task_advice": "今晚可把跳绳放进书包，避免明天忘带。",
+      "learning_subject": "",
+      "learning_goal_id": "",
+      "task_change": "new",
+      "task_target_id": "",
+      "task_state": "ready",
+      "task_reason": "已读文字明确要求明天体育课带跳绳，并说明不要求在家训练，属于需携带物品的行政事项。",
+      "task_purpose": "admin",
+      "task_submission": ""
+    },
+    {
+      "title_quote": "《活动回执》今晚请家长签字，孩子明天早上交给班主任。",
+      "focus": "school",
+      "due": "2026-11-05",
+      "evidence": [
+        {
+          "ref": "message:synthetic-group:16"
+        }
+      ],
+      "task_title": "活动回执：家长签字后明早交班主任",
+      "task_goal": "《活动回执》今晚请家长签字。\n孩子明天早上交给班主任。",
+      "task_advice": "签字后可将回执放入书包固定位置，明早到校后交给班主任。",
+      "learning_subject": "",
+      "learning_goal_id": "",
+      "task_change": "new",
+      "task_target_id": "",
+      "task_state": "ready",
+      "task_reason": "已读文字明确要求家长今晚签字，孩子明天早上交给班主任，属于需办理并交回表单的行政事项。",
+      "task_purpose": "admin",
+      "task_submission": "孩子明天早上交给班主任。"
+    }
+  ]
+}
+'''
 
 
 def view(item):
@@ -106,6 +262,35 @@ class DailyListFrozenTests(unittest.TestCase):
         self.assertEqual(item['published_at'][:16], '2026-11-04T18:00')
         self.assertEqual(on_day, [item['title']])
         self._replay_adds_nothing('T01')
+
+    def test_product_six_paid_receipt_keeps_six_items_with_their_own_originals(self):
+        """The paid receipt replayed unaltered: 刚才的朗读完成后还要请家长签字 is the same teacher's supplement two minutes after
+        the reading it points back to (完成后 orders the signing after it and names no object of its own), so the whole batch
+        saves six items, each with only its own object, count, executor, order, originals, send time and days."""
+        self.assertEqual(hashlib.sha256(PRODUCT_SIX_REPLY.encode()).hexdigest(),
+                         '8def450bb2ada557972a50f30ceb6e9e0306061b323b25bc70bf9bbde63fe88b', 'the paid receipt, unaltered')
+        (self.fixture.root / '家庭运行规则.md').write_text(PRODUCT_SIX_FAMILY)
+        payload, refs = self._day(PRODUCT_SIX)
+        result, rows, listed, (on_day, visible) = self._run(payload, json.loads(PRODUCT_SIX_REPLY)['proposals'], 'product-six')
+        self._report(case='product-six-request', request=self.model.call_args_list[0].args[0])
+        self.assertEqual((result['failed'], result['processed'], len(rows), len(listed)), (0, 6, 6, 6))
+        for subject, category, anchors, sent, needs, forbidden, complete, due in PRODUCT_SIX_TRUTH:
+            item, = [i for i in listed if all(a in i['body'] for a in anchors)]
+            words = item['title'] + '\n' + item['body']
+            self.assertEqual(item['category'], category, anchors)
+            if subject: self.assertIn(subject, words, anchors)
+            for need in needs: self.assertRegex(item['body'], need)
+            for word in forbidden: self.assertNotIn(word, words, anchors)
+            self.assertEqual(item['publications'], [refs[i] for i in sent], 'only its own originals')
+            self.assertEqual(item['published_at'][:16], payload['messages'][sent[0]]['time'][:16])
+            self.assertEqual(item['scheduled_on'], '', 'no planned day is invented')
+            if due:
+                self.assertEqual((item['complete_on'], item['due_on'], item['due_kind']), (complete,) + due, anchors)
+            else:
+                self.assertNotIn(item['due_kind'], ('handback', 'inspection', 'arranged'), anchors)
+                self.assertIn(complete, (item['complete_on'], item['due_on'] if item['due_kind'] in ('', 'deadline') else ''), anchors)
+        self.assertEqual(sorted(on_day), sorted(i['title'] for i in listed if i['due_kind'] != 'arranged'), 'tonight lists all but the rope')
+        self._replay_adds_nothing('product-six')
 
     def _t02_batch(self, t06=False):
         """T02's frozen message and its fixed fictional receipt: tonight's English reading and tomorrow's PE rope. With t06,
