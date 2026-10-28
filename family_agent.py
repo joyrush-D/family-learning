@@ -4632,8 +4632,12 @@ def _school_native_later_text(entry,later):
     return all(re.fullmatch(r'[0-9]{1,40}',o) for o in order) and int(order[1])>int(order[0])
 
 
+# Only orders a step after the pointed-back object (朗读完成后还要…, 练习做完以后也请…); it names no object of its own.
+_SCHOOL_NATIVE_AFTER=r'(?:完成|做完|读完|写完|背完)\s*(?:之|以)?后'
+
+
 # A follow-up opening with a pointer back to one object and only adding a step to it (刚才的朗读还要家长签字).
-_SCHOOL_NATIVE_CONTINUED=(r'^\s*(?:刚才|刚刚|上面|前面|之前)\s*(?:布置|发)?\s*的\s*([^，,。；;：:！!？?\n的]{2,20}?)\s*'
+_SCHOOL_NATIVE_CONTINUED=(r'^\s*(?:刚才|刚刚|上面|前面|之前)\s*(?:布置|发)?\s*的\s*([^，,。；;：:！!？?\n的]{2,20}?)\s*((?:'+_SCHOOL_NATIVE_AFTER+r')?)\s*'
                           r'((?:还|也)(?:要|需要|需|请|得)\s*[^，,。；;：:！!？?\n]{2,30}?)\s*[。！!]?\s*$')
 
 
@@ -4641,9 +4645,10 @@ def _school_native_continued(entry,later):
     """('', object, requirement) when a later message continues an object of this list with one added step, else None.
 
     The same publisher and source send it strictly after this list, complete and within the supplement window; it opens by
-    pointing back (刚才/上面…的) to the object and only adds to it (还要/也请…家长签字) in one clause. A change, question,
-    condition, negation, subject, or a day, count, title, page, question or worksheet of its own step, a second clause or
-    no pointer binds nothing: the existing readers and the whole-batch retry stay in charge.
+    pointing back (刚才/上面…的) to the object and only adds to it (还要/也请…家长签字) in one clause, at most ordering it after
+    the object (完成后, kept in the requirement). A change, question, condition, negation, subject, or a day, count, title,
+    page, question or worksheet of its own step, a second clause or no pointer binds nothing: the existing readers and the
+    whole-batch retry stay in charge.
     """
     if not _school_native_later_text(entry,later):return None
     try:
@@ -4652,8 +4657,8 @@ def _school_native_continued(entry,later):
     found=re.match(_SCHOOL_NATIVE_CONTINUED,later['text'])
     if (not found or re.search(_SCHOOL_NATIVE_CHANGE+'|'+_SCHOOL_NATIVE_UNSETTLED+'|'+_SCHOOL_NATIVE_SUBJECTS,later['text'])
             or re.search(r'[不非未没无否别勿]|《|第|\d|unit|[一二两三四五六七八九十]\s*[遍次个页题道份张]|[今明昨前后][天日晚早晨]|早上|上午|中午|下午|晚上|周|星期|礼拜|'
-                         +_SCHOOL_NATIVE_DATE+'|'+_SCHOOL_NATIVE_WORKSHEET,found[2],re.I)):return None
-    return '',found[1],found[1]+found[2]
+                         +_SCHOOL_NATIVE_DATE+'|'+_SCHOOL_NATIVE_WORKSHEET,found[3],re.I)):return None
+    return '',found[1],found[1]+found[2]+found[3]
 
 
 # A message opening by pointing back to an object sent before it (刚刚的朗读…, 上面布置的练习卷…).
@@ -4673,7 +4678,8 @@ def _school_native_pointer_unproven(evidence,refs):
     cited=[e for e in evidence if e['ref'] in refs]
     for later in cited:
         if len(cited)<2 or not re.match(_SCHOOL_NATIVE_POINTER,later['text']):continue
-        named=re.match(_SCHOOL_NATIVE_POINTER+r'\s*([^，,。；;：:！!？?\n的]{2,20}?)\s*(?:还|也|要|需|请|得|[，,。；;：:！!？?\n]|$)',later['text'])
+        named=re.match(_SCHOOL_NATIVE_POINTER+r'\s*([^，,。；;：:！!？?\n的]{2,20}?)\s*(?:(?:'+_SCHOOL_NATIVE_AFTER+r')\s*)?'
+                       r'(?:还|也|要|需|请|得|[，,。；;：:！!？?\n]|$)',later['text'])
         meant=[e for e in evidence if named and e is not later and e.get('kind','text')=='text' and named[1] in e['text']
                and not re.match(_SCHOOL_NATIVE_POINTER,e['text']) and _school_native_later_text(e,later)]
         if len(meant)!=1 or meant[0]['ref'] not in refs:return True
