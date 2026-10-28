@@ -303,11 +303,15 @@ class SchoolFormOutcomeTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.setUp()
                 payload, refs = self._day([('18:10', '虚构老师', 'qa-teacher', text)])
-                self._use_replies(payload, [dict(proposals=[self._proposal(quote, refs, subject, goal, submission=step)])])
+                # A reply states the item's final handback day when its own words give one (the prompt's due rule).
+                due = '2026-11-05' if '明早交回' in text else ''
+                self._use_replies(payload, [dict(proposals=[self._proposal(quote, refs, subject, goal, due=due, submission=step)])])
                 result = agent.run_once(self.app, self.now)
                 rows, _, _, tasks, listed = self._state()
-                self.assertEqual((result['failed'], len(rows), len(listed), len(tasks)), (0, 1, 1, 1))
-                self.assertNotIn('school_split', json.loads(rows[0]['plan']))
+                # One item, never split. Whether it is collected today is the existing date-role reading (a separate
+                # 今晚…；…明早交回 sentence stays for review on base too), not this check.
+                self.assertEqual((result['failed'], len(rows), len(listed)), (0, 1, 1))
+                self.assertFalse({'school_split', 'school_split_from'} & set(json.loads(rows[0]['plan'])))
                 for word in required: self.assertIn(word, listed[0]['body'])
 
     def test_omitted_form_holds_the_batch_for_the_bounded_retry(self):
