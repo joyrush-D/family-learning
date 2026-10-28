@@ -1030,6 +1030,100 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                     result,calls=probe.refresh(reply)
                     errors=[r[0] for r in probe.rows("SELECT error FROM agent_jobs WHERE id LIKE 'school-task:%'")]
                     self.assertEqual((result['created'],result['failed'],len(calls),probe.count('manual_tasks'),errors),(0,0,1,0,['']))
+                    # What is saved and shown, not only the absent task: read material stays reference under the same
+                    # candidate, never a confirmation todo, and reopening asks nothing again.
+                    probe.assert_read_reference(ident,text,purpose,reply['actions'][0]['reason'])
+                    self.assertEqual(probe.refresh(reply,minutes=1),(dict(used=0,failed=0,created=0),[]))
+                finally:probe.doCleanups()
+
+    def assert_read_reference(self, ident, text, purpose, reason):
+        import family_agenda
+        saved=self.item(ident);plan=json.loads(saved['plan']);brief=plan['school_task'];day=self.now.date().isoformat()
+        self.assertEqual((saved['state'],saved['task_id'],saved['due'],brief['state'],brief['purpose'],brief['reason']),
+                         ('pending','','','reference',purpose,reason))
+        self.assertEqual((saved['title'],saved['body']),('参考资料：'+text,agent.SCHOOL_REFERENCE_NOTE))
+        self.assertNotIn('待核对',saved['title']+saved['body']);self.assertNotIn('school_learning',plan)
+        # The original stays reachable: the same message, the same upload and its whole read line.
+        action=plan['school_original_action']
+        self.assertEqual([(r['text'],r['upload_ids']) for r in action['requirements']],[(text,['b'*32])])
+        self.assertEqual([e['ref'] for e in json.loads(saved['evidence'])],[a['ref'] for a in action['anchors']])
+        listed={i['id']:i for g in self.store.school_messages(dict(child_id='child-1',day=day),dict)['groups'] for m in g['messages'] for i in m['items']}
+        self.assertEqual(listed[ident]['school_state'],'reference')
+        self.assertNotIn(ident,json.dumps(family_agenda.snapshot(self.app,day,day),ensure_ascii=False,default=str),'no confirmation todo in the main list')
+        self.assertEqual(self.count('manual_tasks'),0)
+        return saved
+
+    def test_a_reference_reply_over_a_real_reading_gap_stays_for_review(self):
+        # Program layer: a purpose-less reference cannot cover what was not read (material gap, unread link, collection or
+        # screenshot gap, conflict); only an original read in full keeps reference.
+        import family_agenda
+        text='课后阅读要求';ident,parts,keys=self.required_image([text],ident='REF_GAP',title=text,uncertainties=['图片下半部分被遮挡，未读清。'])
+        reply={'actions':[dict(draft(title='',goal='',state='reference',reason='原件已读；该行只是材料名称。',purpose='unknown',learning_subject=''),
+                               due='',existing_item_id=ident,basis=[dict(part=parts[0],text=text)])]}
+        result,calls=self.refresh(reply);brief=self.brief(ident);day=self.now.date().isoformat()
+        self.assertEqual((result['created'],len(calls),self.count('manual_tasks'),brief['state'],brief['purpose']),(0,1,0,'review','unknown'))
+        self.assertIn(ident,json.dumps(family_agenda.snapshot(self.app,day,day),ensure_ascii=False,default=str),'the real gap stays in front of the parent')
+        value=dict(title='',goal='',advice='',state='reference',reason='只是材料。',purpose='unknown')
+        ref='message:qq:1:X'
+        for name,evidence,extra in [('read in full',[dict(ref=ref,kind='text',text='本周升旗仪式由三年级主持。')],{}),
+                                    ('bare link',[dict(ref=ref,kind='text',text='https://example.invalid/a')],{}),
+                                    ('unread link',[dict(ref=ref,kind='text',text='阅读资料见 https://example.invalid/a')],{}),
+                                    ('unread collection',[dict(ref=ref,kind='text',text='学校通知见图片。',unread=True)],{}),
+                                    ('screenshot',[dict(ref=ref,kind='qq_window_fragment',text='升旗仪式')],{}),
+                                    ('conflict',[dict(ref=ref,kind='text',text='本周升旗仪式由三年级主持。')],dict(change='update'))]:
+            with self.subTest(name):
+                got=agent._school_brief(dict(value,**extra),evidence=evidence,school_tasks=[])
+                self.assertEqual((got['state'],got['title'],got['goal']),('reference' if name=='read in full' else 'review','',''))
+
+    # Actual isolated Flash returns (effort low, 6000 output budget) under the current prompt, Root's run of 6bceda7
+    # (product code identical at 1cd1ba8): fixed reader extraction, not OCR or the formal main model. Each reply is the
+    # receipt byte for byte (sha256 of its file) and answers the exact request it was given (sha256 of the messages).
+    ACTUAL_FLASH=[('READING_HEADING','课后阅读要求',0,'ec76171985275b4b27bdb653db01941ac4e0e2b30a4975b5f82ca0cfc2325fd7',
+                   'e819cfceeb6d0ce0a6631086144e964a1565548c02b5246be6a8f765c69a3ff7',
+                   dict(title='课后阅读要求',goal='',advice='',reason='原件已读，原文仅出现“课后阅读要求”这一材料名称/标题，未写出具体阅读范围、数量、完成标准或提交要求，不能据此创建作业或待办。',
+                        state='reference',purpose='unknown',existing='agent-083462614bdf41531d51e87ab7e1389b',part='df25a84237fe0b80')),
+                  ('FORM_HEADING','家长签字表。',0,'917798386e3f5c66e5455da721d9668bdad6d727299dc1b5113001e1d103c31c',
+                   'c8877ac744a0100d000a81fb60cb4b7fc1bfab69667069d7078af27c8e6dd5f6',
+                   dict(title='',goal='',advice='',reason='原件已读，仅见材料名称“家长签字表”，未写明需谁完成签字、提交或截止等行动要求，不能据此生成待办。',
+                        state='reference',purpose='unknown',existing='agent-4073f1730ebe2db53496ec38e40bd547',part='110a84552e56676a')),
+                  ('HELDOUT_INTERVIEW','向家中长辈采访一次，概括两代人上学方式的差别。',1,'fdd6e5bd04825cec43920a665fbb3a9894bc802a881b2e9836b4915e633192d9',
+                   'acb9c8478c9768b5128a997ae55352ee3ea2c390a41e55bde94198196a88a43a',
+                   dict(title='向家中长辈采访一次并概括两代人上学方式差别',goal='向家中长辈采访一次。\n概括两代人上学方式的差别。',
+                        advice='可选：先列出采访问题，记录长辈的上学方式，再与自己的上学方式对比整理差别。',
+                        reason='原件已读清学校要求：向家中长辈采访一次并概括两代人上学方式的差别；未写截止和提交方式，不另增要求。',
+                        state='ready',purpose='learning',existing='agent-590b6c61f431b54e4789263c28e9e8eb',part='c1b1d080227b17f9')),
+                  ('HELDOUT_SHADOW','量取两次影长，标出各次测量时刻，并对照记录。',1,'6855564e1b3c1cd9bf51c12bb5e979a058618fa54b8573ff712419e7c3f276ee',
+                   '8cf32c7d2932c8777e71fd0f15f565f1af9190311c83544ac350271474d6d84a',
+                   dict(title='量取两次影长，标出各次测量时刻，并对照记录',goal='量取两次影长；标出各次测量时刻；完成两次测量记录的对照。\n完成标准：两次影长均需量取，各次测量时刻均需标出，并完成对照记录。',
+                        advice='',reason='原件已读清一条完整学习要求，属动手测量与记录任务；要求明确，未写明截止或提交方式。',
+                        state='ready',purpose='learning',existing='agent-655dfbe9e2e9e487ced7847627b039c3',part='8bff0d13828654ec'))]
+
+    def test_actual_flash_replies_under_the_current_prompt_replay_unchanged_through_the_store(self):
+        import hashlib
+        for case,text,expected,reply_sha,request_sha,v in self.ACTUAL_FLASH:
+            with self.subTest(case):
+                probe=type(self)('runTest');probe.setUp()
+                try:
+                    ident,parts,keys=probe.required_image([text],ident=case,title=text)
+                    reply={'actions':[{'title':v['title'],'goal':v['goal'],'advice':v['advice'],'reason':v['reason'],'state':v['state'],
+                        'change':'new','target_id':'','purpose':v['purpose'],'submission':'','learning_subject':'','learning_goal_id':'',
+                        'due':'','existing_item_id':v['existing'],'basis':[{'part':parts[0],'text':text}],'condition_changes':[]}]}
+                    self.assertEqual((ident,parts[0][-16:]),(v['existing'],v['part']))
+                    self.assertEqual(hashlib.sha256((json.dumps(reply,ensure_ascii=False,indent=2)+'\n').encode()).hexdigest(),reply_sha)
+                    image=probe.data/'uploads'/('b'*32);before=hashlib.sha256(image.read_bytes()).hexdigest()
+                    def exact(messages):
+                        self.assertEqual(hashlib.sha256(json.dumps(messages,ensure_ascii=False,sort_keys=True).encode()).hexdigest(),request_sha)
+                        return copy.deepcopy(reply)
+                    result,calls=probe.refresh(exact)
+                    errors=[r[0] for r in probe.rows("SELECT error FROM agent_jobs WHERE id LIKE 'school-task:%'")]
+                    self.assertEqual((result,len(calls),probe.count('manual_tasks'),errors),(dict(used=1,failed=0,created=expected),1,expected,['']))
+                    if expected:
+                        saved=probe.item(ident);brief=probe.brief(ident);(task_id,action,due),=probe.rows('SELECT id,action,due FROM manual_tasks')
+                        self.assertEqual((saved['state'],saved['task_id'],saved['due'],due),('accepted',task_id,'','无明确截止'))
+                        for whole in (action,saved['body'],brief['goal']):self.assertIn(text,whole)
+                    else:saved=probe.assert_read_reference(ident,text,'unknown',v['reason'])
+                    self.assertEqual(probe.refresh(exact,minutes=1),(dict(used=0,failed=0,created=0),[]))
+                    self.assertEqual((probe.item(ident),probe.count('manual_tasks'),hashlib.sha256(image.read_bytes()).hexdigest()),(saved,expected,before))
                 finally:probe.doCleanups()
 
     def test_complete_requirements_replace_a_later_lossy_or_added_action_summary(self):

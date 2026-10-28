@@ -792,7 +792,7 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
         if pdf: reference['pdf_evidence']=dict(fingerprint=pdf['fingerprint'],documents=pdf['documents'])
         if material: reference['material_evidence']=dict(fingerprint=material['fingerprint'])
         return reference
-    _,fragments,covered=_school_original_coverage(evidence,pdf,material)
+    complete_refs,fragments,covered=_school_original_coverage(evidence,pdf,material)
     if fragments or incomplete and not covered:
         # A legible screenshot can supply a draft, but never establishes complete history or a deadline.
         read_text = any(e.get('kind') in ('text','quote') and not (e.get('unread') or e.get('content_incomplete'))
@@ -805,9 +805,16 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
     links=_links(evidence);bare=bool(evidence) and all(_link_only(e.get('text','')) for e in evidence);read=pages['read'] if pages else []
     if (bare and not read) or purpose=='unknown':
         # An address alone says nothing about purpose; a model guess must not become a task or a goal.
-        brief.update(title='',goal='',advice='');purpose='unknown';state='review'
+        brief.update(title='',goal='',advice='');purpose='unknown'
+        # No purpose is not unread content: an original read in full and classified as reference stays reference, never a
+        # todo awaiting confirmation. An unread link/page, PDF group, material or collection gap keeps the review.
+        unread=(bare and not read or links and not (read and not pages['unread'] and not pages['omitted'])
+                or pdf and (pdf.get('uncertainties') or any(d['omitted'] or d['truncated'] for d in pdf['documents']))
+                or material and material['uncertainties']
+                or any((e.get('unread') or e.get('content_incomplete')) and e.get('ref') not in complete_refs for e in evidence))
+        if state!='reference' or unread: state='review'
         if bare and not read: brief['reason']='只有链接或短链，页面未读取，用途和内容待核对；请打开原链接核对后再填写具体要求。'
-        elif not incomplete: brief['reason']=brief['reason'] or '用途或内容无法从已读文字判断，请核对原消息。'
+        elif not incomplete: brief['reason']=brief['reason'] or (SCHOOL_REFERENCE_NOTE if state=='reference' else '用途或内容无法从已读文字判断，请核对原消息。')
     if state=='ready' and (not brief['title'] or not brief['goal']):
         state='review';brief['reason']='原件或具体要求尚未读全，请先核对。'
     withdrawal=r'(?:练习卷|练习册|试卷|作业本)(?:不用|无需|不再)(?:做|完成)了'
@@ -7022,8 +7029,11 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         if old and old_anchor.get('identity') and old_anchor['identity']!=identity:
             plan['previous_pdf_action']=dict(action=old_anchor,school_task=json.loads(old['plan']).get('school_task',{}),
                 title=old['title'],body=old['body'],due=old['due'],evidence=json.loads(old['evidence']),updated=old['updated'])
+        # Same classification, same wording everywhere: read material kept for reference is not a todo awaiting its details.
+        reference=brief['state']=='reference' and not (brief['title'] and brief['goal'])
         output.append(dict(id=chosen or 'agent-'+identity[:32],old=old,child_id=row['child_id'],kind='school',
-            title=brief['title'] or (old or row)['title'],body=brief['goal'] or (old or row)['body'],due=due,
+            title=brief['title'] or (_school_reference_title('\n'.join(a['quote'] for a in anchors)) if reference else (old or row)['title']),
+            body=brief['goal'] or (SCHOOL_REFERENCE_NOTE if reference else (old or row)['body']),due=due,
             evidence=json.loads(item_row['evidence']),plan=plan,brief=brief,reading=cited))
     if row['id'] not in used: raise AgentError('原件清单未保留原候选，整组保留重试')
     if not legacy_owners.keys()<=used: raise AgentError('原件清单遗漏旧行动编号，原要求与决定保留')
