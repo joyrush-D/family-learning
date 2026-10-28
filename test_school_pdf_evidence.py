@@ -1041,8 +1041,11 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         saved=self.item(ident);plan=json.loads(saved['plan']);brief=plan['school_task'];day=self.now.date().isoformat()
         self.assertEqual((saved['state'],saved['task_id'],saved['due'],brief['state'],brief['purpose'],brief['reason']),
                          ('pending','','','reference',purpose,reason))
-        self.assertEqual((saved['title'],saved['body']),('参考资料：'+text,agent.SCHOOL_REFERENCE_NOTE))
+        # The existing reference projection: its whole read line when one is kept, otherwise the reference note.
+        self.assertIn(brief['goal'],('',text))
+        self.assertEqual((saved['title'],saved['body']),('参考资料：'+text,brief['goal'] or agent.SCHOOL_REFERENCE_NOTE))
         self.assertNotIn('待核对',saved['title']+saved['body']);self.assertNotIn('school_learning',plan)
+        self.assertNotIn('确认后可加入待办',saved['body'])
         # The original stays reachable: the same message, the same upload and its whole read line.
         action=plan['school_original_action']
         self.assertEqual([(r['text'],r['upload_ids']) for r in action['requirements']],[(text,['b'*32])])
