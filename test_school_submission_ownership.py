@@ -9,6 +9,7 @@ import copy
 import datetime as dt
 import json
 import unittest
+from unittest.mock import patch
 
 import family_agent as agent
 import family_task_focus
@@ -754,6 +755,177 @@ class SchoolIndependentOutcomeTests(unittest.TestCase):
         kept = next(t for t in self.app.tasks() if t['id'] == form['id'])
         self.assertEqual((kept['title'], kept['action'], kept['focus']), (edited['title'], edited['action'], edited['focus']), 'the parent edit stays')
         self.assertEqual(len(tasks_last), 3)
+
+
+# Root's original C02 truth (school-native-prefix-20261029-v1/C02-original-contract.json), verbatim.
+ROOT_C02 = json.loads('''{"expected_tasks": 2, "first_response_mode": "omit_other", "id": "C02_common_generic_suffix_distinct_closed_books", "items": [{"due": "2026-11-04", "forbidden": ["暮光练习册", "第2页"], "goal": "英语今晚完成《晨光练习册》第3页。", "purpose": "learning", "quote": "英语今晚完成《晨光练习册》第3页", "required": ["晨光练习册", "第3页"], "subject": "英语", "submission": ""}, {"due": "2026-11-05", "forbidden": ["晨光练习册", "第3页"], "goal": "明天完成《暮光练习册》第2页。", "purpose": "learning", "quote": "明天完成《暮光练习册》第2页", "required": ["暮光练习册", "第2页"], "subject": "英语", "submission": ""}], "messages": ["英语今晚完成《晨光练习册》第3页；明天完成《暮光练习册》第2页。"]}''')
+C02_OLD_ERROR = '准备资料尚未能归到唯一学校行动，完整原批次保留'
+C02_OTHER = '；明天完成《暮光练习册》第2页。'
+
+
+class SchoolNativeBareSubjectDayTests(unittest.TestCase):
+    """Root C02: 英语今晚完成《晨光练习册》第3页 beside 明天完成《暮光练习册》第2页 held the whole batch before any model call as
+    unattributed preparation, because the native command reader takes a subject only with its punctuation (英语：今晚…).
+    Only on that path, a clause that is itself the child's affirmed dated learning outcome on its closed name and range is
+    its own piece; the command reader, the ordinary [] route and every other hold stay as they were."""
+    setUp = SchoolIndependentOutcomeTests.setUp
+    _use_replies = SchoolIndependentOutcomeTests._use_replies
+    _day = SchoolIndependentOutcomeTests._day
+    _proposal = SchoolIndependentOutcomeTests._proposal
+    _state = SchoolIndependentOutcomeTests._state
+    _replies = SchoolIndependentOutcomeTests._replies
+    _rounds = SchoolIndependentOutcomeTests._rounds
+    _check = SchoolIndependentOutcomeTests._check
+
+    def _key(self):
+        with self.store._db() as c:
+            return c.execute("SELECT id FROM agent_jobs WHERE id LIKE 'messages:%'").fetchone()[0]
+
+    def _job_rows(self):
+        with self.store._db() as c:
+            return [tuple(r) for r in c.execute("SELECT * FROM agent_jobs WHERE id LIKE 'messages:%' ORDER BY id")]
+
+    def _old_reader(self):
+        """The pre-fix reader's own result for this exact original (Root's string fact), every other text read as now."""
+        current = agent._school_native_blocks
+
+        def old(text, **kw):
+            if text == ROOT_C02['messages'][0]:
+                raise agent.AgentError(C02_OLD_ERROR, code='school_action_coverage')
+            return current(text, **kw)
+        return patch.object(agent, '_school_native_blocks', old)
+
+    def test_c02_reader_reads_the_subject_day_outcome_as_its_own_piece(self):
+        blocks = agent._school_native_blocks(ROOT_C02['messages'][0])
+        self.assertEqual([(b['purpose'], b['quote']) for b in blocks], [(i['purpose'], i['quote']) for i in ROOT_C02['items']])
+        # The same shape in other subjects.
+        for subject in ('语文', '数学'):
+            text = ROOT_C02['messages'][0].replace('英语', subject, 1)
+            self.assertEqual([(b['purpose'], b['quote']) for b in agent._school_native_blocks(text)],
+                             [('learning', subject + '今晚完成《晨光练习册》第3页'), ('learning', '明天完成《暮光练习册》第2页')], text)
+        # The ledger: two required learning actions of this original, the first one's own subject; the second names none.
+        entry = dict(ref='message:s:11', text=ROOT_C02['messages'][0], kind='text', publisher='qa-teacher', time='2026-11-04T18:10:00+08:00')
+        self.assertEqual([(a['purpose'], a['subject'], a['quote']) for a in agent._school_native_actions([entry])],
+                         [('learning', '英语', ROOT_C02['items'][0]['quote']), ('learning', '', ROOT_C02['items'][1]['quote'])])
+
+    def test_c02_command_reader_and_ordinary_routes_are_unchanged(self):
+        """The prefix stays punctuation-only (94e55b0f's global change is not repeated): a sole bare-subject clause, the
+        comma-joined form, two bare-subject clauses and 青石/翠云同步册 keep the ordinary [] route; 英语：… keeps its reading."""
+        self.assertEqual(agent._school_native_command('英语今晚完成《晨光练习册》第3页'), '')
+        self.assertEqual(agent._school_native_command('英语：今晚完成《晨光练习册》第3页'), 'learning')
+        for text in ('英语今晚完成《青石同步册》第3页；明天完成《翠云同步册》第2页。', '英语今晚完成《晨光练习册》第3页。',
+                     '英语今晚完成《晨光练习册》第3页，明天完成《暮光练习册》第2页。',
+                     '英语今晚完成《晨光练习册》第3页；数学明天完成《暮光练习册》第2页。'):
+            self.assertEqual(agent._school_native_blocks(text), [], text)
+        self.assertEqual([b['quote'] for b in agent._school_native_blocks('英语：今晚完成《晨光练习册》第3页；明天完成《暮光练习册》第2页。')],
+                         ['今晚完成《晨光练习册》第3页', '明天完成《暮光练习册》第2页'])
+
+    def test_c02_unproven_first_clause_keeps_the_whole_batch(self):
+        """Not the child's own affirmed dated outcome on a closed name and range: the existing hold stays, word for word."""
+        for first in ('英语《今晚完成练习册》第3页',           # its action and day only inside a title
+                      '英语今晚准备《晨光练习册》', '英语今晚领取《晨光练习册》',  # preparation only
+                      '英语今晚不用完成《晨光练习册》第3页', '英语今晚完成《晨光练习册》第3页的同学不用交',  # negation
+                      '英语今晚完成《晨光练习册》第3页吗',      # question
+                      '英语今晚完成《晨光练习册》第3页，如果做不完可以明天交',  # condition
+                      '英语今晚已完成《晨光练习册》第3页', '英语今天完成了《晨光练习册》第3页', '英语昨天完成《晨光练习册》第3页',  # past
+                      '英语今晚完成练习册第3页', '英语今晚完成《晨光练习册》',  # no closed name, no range
+                      '英语今晚请家长完成《晨光练习册》第3页'):  # another person's role
+            with self.subTest(first=first):
+                with self.assertRaisesRegex(agent.AgentError, C02_OLD_ERROR):
+                    agent._school_native_blocks(first + C02_OTHER)
+
+    def test_c02_correct_first_reply_is_one_call_and_two_accepted_tasks(self):
+        """Natural rounds 0/6/12 and reopen: one call, two accepted tasks with their own words, days, original and ids."""
+        rows, tasks, refs = self._check(ROOT_C02, 'correct')
+        self.assertEqual(sorted(r['state'] for r in rows), ['accepted', 'accepted'])
+        for item in ROOT_C02['items']:
+            row, = [r for r in rows if item['required'][0] in r['title'] + r['body']]
+            task, = [t for t in tasks if t['id'] == row['task_id']]
+            plan = json.loads(row['plan'])
+            self.assertEqual((row['due'], task['due'], plan['school_task']['purpose']), (item['due'], item['due'], 'learning'))
+            self.assertEqual([e['ref'] for e in json.loads(row['evidence'])], refs)
+            self.assertIn('Agent建议:' + row['id'], task['source'])
+
+    def test_c02_reply_leaving_out_the_other_outcome_fails_bounded_and_the_next_reply_completes_it(self):
+        """Root's first_response_mode omit_other at the native input: round 0 is one counted failure with nothing saved and the
+        originals kept; the next natural round's real reply returns both; later rounds add nothing."""
+        payload, refs = self._day([('18:10', '虚构老师', 'qa-teacher', ROOT_C02['messages'][0])])
+        first, split = self._replies(ROOT_C02, refs, 'omit_all_but_first')
+        self._use_replies(payload, copy.deepcopy([first, split, split]))
+        r0, = self._rounds([0])
+        rows, job, originals, tasks, _ = self._state()
+        self.assertEqual((r0['failed'], job['attempts'], job['done'], len(rows), len(tasks), self.model.call_count), (1, 1, 0, 0, 0, 1))
+        self.assertIn('学校独立要求有遗漏', job['error'])
+        self.assertEqual(originals, payload['messages'])
+        self._rounds([6])
+        rows, job, originals, tasks, listed = self._state()
+        self.assertEqual((job['attempts'], job['done'], self.model.call_count, len(tasks), len(listed)), (2, 1, 2, 2, 2))
+        for item in ROOT_C02['items']:
+            task, = [t for t in tasks if all(w in t['action'] for w in item['required'])]
+            self.assertEqual(task['due'], item['due'])
+            for word in item['forbidden']:self.assertNotIn(word, task['action'] + task['title'])
+        before = self._state()
+        self._rounds([12, 30, 60])
+        self.assertEqual((self._state(), self.model.call_count), (before, 2), 'no resend, no duplicate')
+
+    def test_c02_batch_failed_twice_by_the_old_reader_succeeds_on_its_remaining_attempt(self):
+        """The Store already holds two failures of the old reader (no model call, originals and cursor as collected): the
+        corrected reader spends the remaining attempt at the next allowed natural round, once."""
+        payload, refs = self._day([('18:10', '虚构老师', 'qa-teacher', ROOT_C02['messages'][0])])
+        _, split = self._replies(ROOT_C02, refs, 'correct')
+        self._use_replies(payload, copy.deepcopy([split]))
+        with self._old_reader():
+            self._rounds([0, 6])
+        rows, job, originals, tasks, _ = self._state()
+        self.assertEqual((job['attempts'], job['done'], len(rows), len(tasks), self.model.call_count), (2, 0, 0, 0, 0))
+        self.assertIn(C02_OLD_ERROR, job['error'])
+        self.assertEqual(originals, payload['messages'])
+        cooling = self._job_rows()
+        self._rounds([12])  # 6 + 10 minutes of backoff not yet over
+        self.assertEqual((self._job_rows(), self.model.call_count), (cooling, 0))
+        self._rounds([30])
+        rows, job, originals, tasks, listed = self._state()
+        self.assertEqual((job['attempts'], job['done'], self.model.call_count, len(tasks), len(listed)), (3, 1, 1, 2, 2))
+        self.assertEqual(sorted(t['due'] for t in tasks), ['2026-11-04', '2026-11-05'])
+        self.assertEqual(originals, payload['messages'])
+        before = self._state()
+        self._rounds([60, 120])
+        self.assertEqual((self._state(), self.model.call_count), (before, 1), 'no resend, no duplicate')
+
+    def test_c02_batch_exhausted_by_the_old_reader_waits_for_the_explicit_retry(self):
+        """Three spent attempts stay spent: no 4th request, attempts and error history untouched, until the existing explicit
+        retry entry (its own receipt) renews this one batch; then one call and nothing more."""
+        payload, refs = self._day([('18:10', '虚构老师', 'qa-teacher', ROOT_C02['messages'][0])])
+        _, split = self._replies(ROOT_C02, refs, 'correct')
+        self._use_replies(payload, copy.deepcopy([split]))
+        with self._old_reader():
+            self._rounds([0, 6, 30])
+        rows, job, _, tasks, _ = self._state()
+        self.assertEqual((job['attempts'], job['done'], len(rows), len(tasks), self.model.call_count), (3, 0, 0, 0, 0))
+        self.assertIn('需人工重试', job['error'])
+        spent = self._job_rows()
+        self._rounds([60, 120, 240])
+        self.assertEqual((self._job_rows(), self.model.call_count, len(self._state()[0])), (spent, 0, 0), 'no 4th attempt')
+        receipt = self.store.act(dict(action='retry', id=self._key()))
+        self.assertEqual(receipt, {'ok': True, 'state': 'retry_pending'})
+        self._rounds([241])
+        rows, job, originals, tasks, _ = self._state()
+        self.assertEqual((job['attempts'], job['done'], self.model.call_count, len(tasks)), (1, 1, 1, 2))
+        self.assertEqual(originals, payload['messages'])
+        before = self._state()
+        self._rounds([250, 300])
+        self.assertEqual((self._state(), self.model.call_count), (before, 1))
+
+    def test_c02_later_named_supplement_keeps_its_own_window(self):
+        """The same teacher naming one book 15 minutes later is outside the native supplement window: the ledger stays the
+        original's own two actions. Within the window it binds only to the book it names."""
+        entry = dict(ref='message:s:11', text=ROOT_C02['messages'][0], kind='text', publisher='qa-teacher', time='2026-11-04T18:10:00+08:00')
+        later = dict(entry, ref='message:s:12', text='补充《晨光练习册》：做完请家长签字。', time='2026-11-04T18:25:00+08:00')
+        alone = agent._school_native_actions([entry])
+        self.assertEqual(agent._school_native_actions([entry, later]), alone)
+        near = agent._school_native_actions([entry, dict(later, time='2026-11-04T18:11:00+08:00')])
+        self.assertEqual([[s['ref'] for s in a['supplements']] for a in near], [['message:s:12'], []])
+        self.assertEqual([a['quote'] for a in near], [a['quote'] for a in alone])
 
 
 if __name__ == '__main__':
