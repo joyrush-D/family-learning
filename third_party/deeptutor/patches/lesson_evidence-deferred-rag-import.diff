@@ -1,0 +1,81 @@
+--- a/deeptutor/learning/lesson_evidence.py@a31d826
++++ b/deeptutor/learning/lesson_evidence.py
+@@ -1,3 +1,6 @@
++# Modified by family-agent (2026-10-28) from HKUDS/DeepTutor@a31d82624c27d75f4e771d4fcb78dce16470b383, Apache-2.0.
++# Change: the top-level source_pages (RAG) import is deferred into the functions that use it,
++# so register_question/grade_interaction do not import the RAG service. No logic changed.
+ """Prepare bounded, objective-bound PDF lessons using the configured model.
+ 
+ Source identity and quotes are checked in code. The model's suitability judgment
+@@ -19,16 +22,7 @@
+ 
+ from deeptutor.core.capability_protocol import CapabilityPrerequisiteError
+ from deeptutor.learning.policy import find_knowledge_point
+-from deeptutor.services.rag.source_pages import (
+-    CATALOG_FILENAME,
+-    SOURCE_SCHEMA_VERSION,
+-    SourcePageError,
+-    SourceRef,
+-    public_source,
+-    render_source_page,
+-    resolve_source,
+-)
+-
++# family-agent: deeptutor.services.rag.source_pages is imported inside the functions that use it.
+ SCHEMA = 1
+ PREPARATION_VERSION = 2
+ MAX_LESSON_PAGES = 6
+@@ -111,6 +105,7 @@
+ 
+ def _enrich_pages(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+     """Read only retrieved, authorized physical pages; retain parsed/OCR text."""
++    from deeptutor.services.rag.source_pages import SourcePageError, SourceRef, resolve_source
+     import pymupdf
+ 
+     for candidate in candidates:
+@@ -270,6 +265,7 @@
+     topic: Any, progress: Any, kp_id: str, *, prepare_legacy: bool = False
+ ) -> tuple[str, dict[str, Any]]:
+     """Authorize KBs first, then fingerprint published page catalogs and selection."""
++    from deeptutor.services.rag.source_pages import CATALOG_FILENAME, SOURCE_SCHEMA_VERSION, SourcePageError
+     from deeptutor.multi_user.knowledge_access import resolve_for_rag
+     from deeptutor.services.rag.embedding_signature import signature_from_embedding_config
+     from deeptutor.services.rag.index_versioning import resolve_storage_dir_for_read
+@@ -373,6 +369,7 @@
+             "The selected sources or their index changed. Prepare the lesson again."
+         )
+     from deeptutor.services.workspace.knowledge import learning_source_access
++    from deeptutor.services.rag.source_pages import SourcePageError, SourceRef, resolve_source
+ 
+     try:
+         with learning_source_access(list(scope)):
+@@ -447,6 +444,7 @@
+ 
+ 
+ def image_message(sources: list[dict[str, Any]]) -> dict[str, Any]:
++    from deeptutor.services.rag.source_pages import SourceRef, render_source_page
+     if not 1 <= len(sources) <= 6:
+         raise LessonUnavailable("A lesson must use between one and six original pages.")
+     parts: list[dict[str, Any]] = [
+@@ -500,6 +498,7 @@
+     sources: list[dict[str, Any]], start: int, repair: dict[str, Any], indices: dict[str, Any]
+ ) -> list[dict[str, Any]]:
+     """Only an existing batch page or its catalogued neighbor can be inspected."""
++    from deeptutor.services.rag.source_pages import SourceRef, resolve_source
+     local = repair.get("source_index")
+     if type(local) is not int or not 0 <= local < min(2, len(sources) - start):
+         raise LessonUnavailable("Invalid repair source index.")
+@@ -586,6 +585,7 @@
+     refresh: bool = False,
+ ) -> dict[str, Any]:
+     """No write transaction is held across retrieval or model calls."""
++    from deeptutor.services.rag.source_pages import SOURCE_SCHEMA_VERSION, SourceRef, resolve_source
+     from deeptutor.services.llm.capabilities import supports_vision
+     from deeptutor.services.prompt import get_prompt_manager
+     from deeptutor.services.prompt.lookup import prompt_text
+@@ -1103,4 +1103,5 @@
+ 
+ 
+ def public_sources(evidence: dict[str, Any]) -> list[dict[str, Any]]:
++    from deeptutor.services.rag.source_pages import SourceRef, public_source
+     return [public_source(SourceRef.model_validate(s["ref"])) for s in evidence.get("sources", [])]

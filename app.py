@@ -37,6 +37,8 @@ import family_agenda
 import family_guided
 import family_goals
 import family_task_video
+import family_taxonomy
+import family_deeptutor
 from types import SimpleNamespace
 from contextlib import nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer as _ThreadingHTTPServer
@@ -90,7 +92,7 @@ TASK_CHECK_NOTE = '家长通过清单勾选确认此事项已完成。'
 TASK_DISMISSED = ('不参加', '不适用')
 TASK_CLOSED = ('已完成', *TASK_DISMISSED, '已归档')
 TASK_STATUSES = ('待跟进', '进行中', '已完成', *TASK_DISMISSED)
-BUNDLE = ('app.js', 'reading.js', 'calendar.js', 'child-access.js', 'learning.js', 'study.js', 'homework-input.js', 'settings.js', 'guided.js', 'teachers.js', 'goals.js', 'wrong-review.js')
+BUNDLE = ('app.js', 'reading.js', 'calendar.js', 'child-access.js', 'learning.js', 'study.js', 'homework-input.js', 'settings.js', 'guided.js', 'teachers.js', 'goals.js', 'wrong-review.js', 'topic-diagnosis.js')
 STATIC = {'/': 'index.html', **{'/'+name: name for name in (
     *BUNDLE, 'startup.js', 'ui.css', 'learning.css', 'study.css', 'homework-input.css', 'teachers.css', 'wrong-review.css', 'growth-world.js',
     'vendor/three.module.min.js', 'vendor/three.core.min.js')}}
@@ -2331,6 +2333,9 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith('/api/print/preview/'):
                 body,name=print_store().preview(path[len('/api/print/preview/'):])
                 return self.reply(200,body,'application/pdf',"inline; filename*=UTF-8''"+quote(name,safe=''),preview=True)
+            if path=='/api/topic/engine.js':
+                try: return self.reply(200,family_taxonomy.engine_bytes(),'text/javascript; charset=utf-8')
+                except family_taxonomy.TaxonomyError as e: return self.reply(e.status,dict(error=str(e),code=e.code))
             if path=='/app.bundle.js':
                 return self.reply_static(tuple(ROOT/name for name in BUNDLE),'text/javascript; charset=utf-8')
             if path in STATIC:
@@ -2388,7 +2393,7 @@ class Handler(BaseHTTPRequestHandler):
                 try: attachment=save_upload(self.rfile,n,self.headers.get('X-File-Name',''))
                 except ValueError: return self.reply(400,{'error':'文件为空、文件名不正确或内容与支持的类型不符'})
                 return self.reply(200,dict(ok=True,attachment=attachment))
-            max_json=2*1024*1024 if path in ('/api/agent/ingest','/api/agent/fragment') else 65536 if path in ('/api/guided/material','/api/goals/action','/api/task/feedback','/api/print/homework/draft') else 20000
+            max_json=2*1024*1024 if path in ('/api/agent/ingest','/api/agent/fragment') else 65536 if path in ('/api/guided/material','/api/goals/action','/api/task/feedback','/api/print/homework/draft','/api/topic/diagnosis/answer') else 20000
             if not 0<n<=max_json: raise ValueError('请求过大或为空')
             if path in ('/api/agent/ingest','/api/agent/fragment'):
                 self.close_connection=True
@@ -2548,6 +2553,10 @@ class Handler(BaseHTTPRequestHandler):
                 except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
                 except family_diagnosis.DiagnosisError as e: return self.reply(e.status,dict(error=str(e),code=e.code))
                 except ValueError as e: return self.reply(400,dict(error=str(e)))
+            if path in family_taxonomy.ROUTES:
+                try: return self.reply(200,family_taxonomy.ROUTES[path](SimpleNamespace(**globals()),obj))
+                except family_taxonomy.TaxonomyError as e: return self.reply(e.status,dict(error=str(e),code=e.code))
+                except family_deeptutor.DeepTutorUnavailable as e: return self.reply(503,dict(error=str(e),code='deeptutor_unavailable',not_saved=True))
             if self.path=='/api/wrong/remediate':
                 try: return self.reply(200,family_remediation.from_wrong_question(SimpleNamespace(**globals()),obj))
                 except family_remediation.RemediationError as e: return self.reply(e.status,dict(error=str(e),code=e.code))
