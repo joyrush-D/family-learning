@@ -123,6 +123,48 @@ class BridgeTest(unittest.TestCase):
         self.assertTrue(again['replayed']); self.assertEqual(self.counts(), before); self.assertEqual(again['diagnoses'][0]['retries'][0]['answer'], 'D')
         self.assertEqual([op for op, _ in self.dt_calls], ['register', 'grade'])
 
+    def test_answers_over_500_or_not_text_are_400_before_any_write_or_grader_call(self):
+        # 原答=保存=幂等比对=判定依据，不截断：501字（同前缀只差末字）或非文字整笔400，零新表零写、不调判定组件，
+        # 提交编号不被占用；500字原样保存，同编号只差末字仍409，原样重发才replayed。
+        graded, ok, near = [], '0' * 499 + '1', '0' * 499 + '2'
+        def dt(op, snapshot, **kw):
+            if op == 'grade': graded.append(kw['answer'])
+            return self.fake_dt(op, snapshot, **kw)
+        def dump():
+            with app.connect() as c:
+                return {t: [tuple(r) for r in c.execute(f'SELECT * FROM {t} ORDER BY rowid')] for t in sorted(self.tables()) + ['records']}
+        self.dt_calls, fresh = [], self.tables()
+        for fn, extra in ((ft.retry, dict(qid='cnm_t2_q2', verdict='wrong', request_id='retry-request-long00')),
+                          (ft.answer, dict(seq=1, topic_id='cnm_t2', qid='cnm_t2_q1', kind='answer', verdict='wrong', engine_result='wrong', session={}, summary={}))):
+            with self.assertRaises(ft.TaxonomyError) as e: self.call(fn, diagnosis_id=1, answer='0' * 500 + '1', **extra)
+            self.assertEqual((e.exception.status, e.exception.code), (400, 'answer_too_long'))
+        self.assertEqual(self.tables(), fresh)
+        d = self.started(); self.call(ft.mark, diagnosis_id=d['id'], action='shown', mode='diagnosis', qid='cnm_t2_q1'); before = dump()
+        for bad, code in (('0' * 500 + '1', 'answer_too_long'), ('0' * 500 + '2', 'answer_too_long'), (5, 'bad_answer'), (None, 'bad_answer')):
+            with self.assertRaises(ft.TaxonomyError) as e: self.answer(d, 1, 'cnm_t2_q1', 'cnm_t2', text=bad)
+            self.assertEqual((e.exception.status, e.exception.code), (400, code), bad)
+        self.assertEqual(dump(), before)
+        self.assertEqual(self.answer(d, 1, 'cnm_t2_q1', 'cnm_t2', text=ok)['diagnoses'][0]['items'][0]['answer'], ok)
+        with self.assertRaises(ft.TaxonomyError) as e: self.answer(d, 1, 'cnm_t2_q1', 'cnm_t2', text=near)
+        self.assertEqual((e.exception.status, e.exception.code), (409, 'item_conflict'))
+        self.offer(d, 'cnm_t2_q2'); before = dump()
+        body = dict(diagnosis_id=d['id'], qid='cnm_t2_q2', verdict='wrong', request_id='retry-request-long01')
+        with mock.patch.object(family_deeptutor, 'call', side_effect=dt):
+            for bad, code in (('0' * 500 + '1', 'answer_too_long'), ('0' * 500 + '2', 'answer_too_long'), (['0'], 'bad_answer')):
+                with self.assertRaises(ft.TaxonomyError) as e: self.call(ft.retry, answer=bad, **body)
+                self.assertEqual((e.exception.status, e.exception.code), (400, code), bad)
+            self.assertEqual((dump(), self.dt_calls), (before, []))
+            self.assertEqual(self.call(ft.retry, answer=ok, **body)['diagnoses'][0]['retries'][0]['answer'], ok)  # 同一编号，缩短后首次保存
+            saved = dump()
+            for bad, status, code in ((near, 409, 'request_conflict'), (ok + '1', 400, 'answer_too_long')):
+                with self.assertRaises(ft.TaxonomyError) as e: self.call(ft.retry, answer=bad, **body)
+                self.assertEqual((e.exception.status, e.exception.code), (status, code), bad)
+            self.assertTrue(self.call(ft.retry, answer=ok, **body)['replayed'])
+        self.assertEqual((dump(), graded), (saved, [ok]))
+        note = saved['records'][-1]
+        self.assertTrue(any('孩子作答：' + ok + '\n' in str(v) and '题库核对：错；复核结果：错（独立作答，两项检查一致）' in str(v) for v in note), note)
+        self.assertFalse(any(w in str(note) for w in ('上游判题', 'DeepTutor判定', '两个判题器')))
+
     def test_history_across_diagnoses_blocks_seen_shown_or_helped_questions(self):
         # R1：诊断A答错并看过说明的题、A里只出示没提交的题，在同一原错题重开的诊断B里都不算新题；不调判定器、不写复测。
         d = self.started(); self.answer(d, 1, 'cnm_t2_q1', 'cnm_t2'); self.call(ft.mark, diagnosis_id=d['id'], action='help_explanation', seq=1)

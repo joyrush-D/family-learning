@@ -67,4 +67,9 @@ ok(r3 && !allButLast.has(r3.question.id), 'with unseen questions left the filter
 ok(T.retryItem(E, raw, sub, diag, new Set(bank)) === null, 'when every target question was seen there is no new question (no seed change)');
 const one = E.buildGraph(raw.topics, raw.dependencies, raw.questions.filter(q => q.topicId !== TARGET || q.id === bank[bank.length - 1]));
 ok(E.needConfirm(sub, null, TARGET) === 3 && E.needConfirm(one, null, TARGET) === 1, 'filtering changes upstream needConfirm (3 -> 1), so a single retry only records this attempt');
+// 原答上限：真实judgeQuestion对cnm_010_q4的501字A/B（同前缀只差末字）与500字边界都判错；服务端整笔保存或整笔400，不截断。
+const q4 = E.questionById(full, 'cnm_010_q4');
+ok(T.ANSWER_MAX === 500 && ['0'.repeat(500) + '1', '0'.repeat(500) + '2', '0'.repeat(499) + '1'].every(t => E.judgeQuestion(q4, t).verdict === 'wrong'), 'real judgeQuestion: q4 501-char A/B and the 500-char boundary answer are all wrong');
+const panelCode = read(HERE + '/topic-diagnosis.js').split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+ok(!/上游判题|DeepTutor判定|两个判题器|上游：|DeepTutor：/.test(panelCode) && panelCode.includes("field(p,k,'写答案',ANSWER_MAX)") && panelCode.includes(' maxlength="${max}"'), 'panel says 题库核对/复核结果/两项检查; answer inputs carry maxlength=500');
 say(passed + ' passed');
