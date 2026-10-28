@@ -347,9 +347,9 @@ class R259ClearedDateRereadTests(unittest.TestCase):
                     if k == UNKNOWN:
                         self.assertNotEqual(agenda['due_kind'], 'handback', 'a check day is not a handback')
                     else:
-                        # Its own 20th stays its own: the workbook's and the receipt's own 明天早上交 read as their handback
-                        # (whose saved quotes hold those words); the reading book's quote and the bottle hold no handback.
-                        self.assertEqual(agenda['due_kind'], 'handback' if k in ('数格', '回执') else 'deadline', 'its own 20th is its own')
+                        # Its own 20th stays its own: both workbooks' and the receipt's own 明天早上交 read as their handback
+                        # (星芽's own original: 今晚完成，明天早上交); the bottle is brought to class, an arranged day, never a deadline.
+                        self.assertEqual(agenda['due_kind'], 'arranged' if k == '塑料瓶' else 'handback', 'its own 20th is its own')
                         self.assertIn(handback[k], named[k][0]['action'])
         task = named[UNKNOWN][0]
         self.assertEqual(task['due'], '2026-10-20')
