@@ -259,4 +259,14 @@
 !/test_original_cover.py
 
 !/family_taxonomy.py
+!/family_deeptutor.py
+!/deeptutor_sidecar.py
+!/topic-diagnosis.js
+!/test_deeptutor_bridge.py
+!/test_topic_diagnosis_ui.cjs
+# DeepTutor a31d826 Apache-2.0 learning子集：原字节+一处惰性导入适配（见NOTICE、patches/、PROVENANCE.json）。
+!/third_party/
+/third_party/*
+!/third_party/deeptutor/
+/third_party/deeptutor/**/__pycache__/
 !/test_taxonomy.py

@@ -1,0 +1,248 @@
+{
+ "upstream": "https://github.com/HKUDS/DeepTutor",
+ "commit": "a31d82624c27d75f4e771d4fcb78dce16470b383",
+ "license": "Apache-2.0",
+ "files": [
+  {
+   "path": "LICENSE",
+   "git_blob": "ae1dbfc5e74c6c9ebb3e46ea9ea8dde8a4a04ed8",
+   "sha256": "cd2f54e1e5066644023203dcbd956776a9f4ef6eb8b6225afe1ffa2d380fede4",
+   "bytes": 11408,
+   "modified": false
+  },
+  {
+   "path": "THIRD_PARTY_NOTICES.md",
+   "git_blob": "260a8cb01a440a3fba8cdfd5f51cfd58d919599c",
+   "sha256": "d59dc01b43d1916db9418bc1ebcc213a4859047dc07e2766c4234391f9db033c",
+   "bytes": 5165,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/__init__.py",
+   "git_blob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "bytes": 0,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/core/__init__.py",
+   "git_blob": "6dc1ce175bbe38e77e2f18adaecaf751c0a9fb1a",
+   "sha256": "5d3d958a7da8b7cf6822760490b2e622affcf3d273dd86f45e50361b824bc52e",
+   "bytes": 1017,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/core/capability_protocol.py",
+   "git_blob": "cf15d45e19e9752061a8f656e0419bb79b134561",
+   "sha256": "9cfcbc8e6aa366de25cb7456b729cb5cb35ee401f8e764514c1619b07e69dae5",
+   "bytes": 2840,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/core/context.py",
+   "git_blob": "313e54621b27f692ebc9aea394effe4dc2c086d5",
+   "sha256": "dd72267facf728c0457b4dd6254a41e4fa36d1259da85570321d724f047a5304",
+   "bytes": 6847,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/core/stream.py",
+   "git_blob": "1fe2ffd9403f9f68cd20e06a78aa156ff4416f25",
+   "sha256": "1c896c97e59cd0f32d0e5296a7f67edeea81c729e8ed02d099d088c723b1b1f8",
+   "bytes": 2030,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/core/tool_protocol.py",
+   "git_blob": "60f94d6c55a1e1aea283b45a9cbd94cb978db2a2",
+   "sha256": "08064010fe6d35cbd7e9af324ea5b67348a34db82c13ff9bf122162e38b782be",
+   "bytes": 12386,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/core/trace.py",
+   "git_blob": "01cd939b74f2aa86296f10a7ca3a74c4150ceb54",
+   "sha256": "56c0fce34c7ddb04710afdea1105b25f074fbfaf603616ad7ff33eefdfc16224",
+   "bytes": 3072,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/learning/__init__.py",
+   "git_blob": "53fc83f47198e3de3e88f35a88dfc321d205848f",
+   "sha256": "50e6e072fdf3b5f0268fcbf0bfeeca957ad03ce9767a1d98d660a0cba1208287",
+   "bytes": 1390,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/learning/event_hub.py",
+   "git_blob": "2ec8b786fbec60670c10a10245fceb77ba1c3833",
+   "sha256": "5fc23f250ca337517ea64bdb46f9ba783ecac8a7dd80d3cde1e3716b9844df90",
+   "bytes": 4275,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/learning/grading.py",
+   "git_blob": "3028e5b753f167ec09fd7fe7697755a297bb2a85",
+   "sha256": "7f35f9d4dbf6169aa32139a7808eed20be19d41a939d585237b3566d0f8f3c1c",
+   "bytes": 1982,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/learning/identity.py",
+   "git_blob": "ae70068ed4ba924238e887f28e0199c483e3d26f",
+   "sha256": "99d21bef5ac6e73f173a2426ec92d4cdcef01daf767ebfb25e1c2c13619fab10",
+   "bytes": 1959,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/learning/lesson_evidence.py",
+   "git_blob": "8b3a4c956b72dcdf925a743136e9365fea7dd205",
+   "sha256": "99ae65c92f8739cd1a9f858edd921414d2ce0c6a7dacf94a5b9c32b43606eeb4",
+   "bytes": 52182,
+   "modified": true,
+   "upstream_git_blob": "13fc9bec792fab8e3d6837f9934ab78cc9d12e76",
+   "upstream_sha256": "9c4f8f24a634fea34dac7e789d1ccdd0479eed8489e7cac4ca63d77cfcce84fd",
+   "patch": "patches/lesson_evidence-deferred-rag-import.diff"
+  },
+  {
+   "path": "src/deeptutor/learning/mastery.py",
+   "git_blob": "95d1e87b549a78138af735b21f66c74e455711a6",
+   "sha256": "1ad23b09afe70f89fe652bc31a893db57702e00f6869d16daca7fe1dc7698758",
+   "bytes": 1589,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/learning/models.py",
+   "git_blob": "33ac04b03cde27a1a30714308cdb36e41c197a68",
+   "sha256": "da990512532bc9bbc14ada6b80b87c44ef4408efcc3b91c1a2a6688695906f55",
+   "bytes": 26051,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/learning/objective_relations.py",
+   "git_blob": "87361ecb09169d9a6f8c662e4f256b88bd0b68a0",
+   "sha256": "5dc9c07625f96081634a09ed690a48b9d7eb98aad97d03bdd1c160a7b1acb87a",
+   "bytes": 6668,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/learning/outline_revision.py",
+   "git_blob": "91ef955e0298dc1420924b8efe2a294d6da3287b",
+   "sha256": "cff8f6acd2ba1f0a20d687e3a583691439f8d0a911fd88b1e945d3bce8f15df5",
+   "bytes": 2825,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/learning/pending.py",
+   "git_blob": "362ba5b33c0be7b303039f33bf77a98ab5603b3e",
+   "sha256": "e24cd6ea6c5a4701592dc5c2830214d60465e76e1ec94a0112ada2cc4469e6c5",
+   "bytes": 10793,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/learning/policy.py",
+   "git_blob": "1980fd2b8a97248ca05c34bfa7376d68e03e35df",
+   "sha256": "cd9f43fee2b4d8cfbcf2756f1414ea210bbb729cf8f303504bb283f94dd1016c",
+   "bytes": 22286,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/learning/question_card.py",
+   "git_blob": "60f47566f6a96b3c3bafc88f3b4e0825ed36fb43",
+   "sha256": "2b4471c91da8f00d73eeef98c037e9e72d59f394749ef6edc4e5d40840d871c6",
+   "bytes": 5468,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/learning/scheduler.py",
+   "git_blob": "0f295ec6fbd37e5f36b90c13f456773edda5b61d",
+   "sha256": "07146a2075a9230a5be7cea8b23f38d227c2390b2636cfa82c9d238f46303864",
+   "bytes": 22241,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/learning/semantic_assessment.py",
+   "git_blob": "04255086ec23655e619e5856ff639851ea84019a",
+   "sha256": "f577b88b5b4b7fe9e8a6022a91c67712d4b3b38b45ed987f03a42632494a53c4",
+   "bytes": 13539,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/learning/service.py",
+   "git_blob": "de56fdfd09713cd73fd0eccbd31e0d0fc988f6f1",
+   "sha256": "bca8c512439f1184fef3d1ed73531a8732698878837d2532e8be5b83d39eda2a",
+   "bytes": 146477,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/learning/storage.py",
+   "git_blob": "d403ad7293070e55d16a42131ad63c2f1102aeb1",
+   "sha256": "2efc166c869215514d01eddbd8cbc07f202fe514154507b7f1d010e0bf072893",
+   "bytes": 88327,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/learning/teaching.py",
+   "git_blob": "de451bf0d62aa675342b4bc1f19af9172b256bd3",
+   "sha256": "79839b2d29c16146ba4ca6eba438941eacdd8cef2920ebca81e8541305013b4b",
+   "bytes": 8374,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/runtime/__init__.py",
+   "git_blob": "3963d9676564aa02803101dc4a2476f2a2a1b12a",
+   "sha256": "ebcf818daf9584a67ea160561be98d2a1313ecd459fcab4eb6c839e58578aced",
+   "bytes": 757,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/runtime/home.py",
+   "git_blob": "b865076598a146ee6c10328dec1a688774b51fd6",
+   "sha256": "3a352f23e409a33670c3d00d513c0b50f0510f625d596ef42e838fb04b2513e3",
+   "bytes": 1675,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/runtime/mode.py",
+   "git_blob": "4d1acc22adde7138eaf23450905567dcf8f912e5",
+   "sha256": "f2d9a7e19171af15212a3232f0b62eb88be7de9b51a1ae9b61b49af47171bf44",
+   "bytes": 985,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/services/__init__.py",
+   "git_blob": "3ceadb2134595d2488fc295a223d8a2e51754b6e",
+   "sha256": "5bb885f4a3ed250fe8755cd6a7e75cc89f71d26d291aeb21aac3d4daa71687f9",
+   "bytes": 2426,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/services/file_io.py",
+   "git_blob": "4ada6ae3563ebd600d65f9daaefe29902c04cdbe",
+   "sha256": "942e4ed3197ccc1e3417f72befcc6236a15eb049304f44b17a9fa4a59adad21f",
+   "bytes": 4541,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/services/path_service.py",
+   "git_blob": "380c2671ce474c85681533508c7bf401c35eb995",
+   "sha256": "f062145770e101c30bffbac514b7762a88b6610e575857bab481055aa3fc9758",
+   "bytes": 18983,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/utils/secret_files.py",
+   "git_blob": "9beb698b42f62a4a77019fafb4b44f7c3a339890",
+   "sha256": "ed15926577a979462d78f05f6143b9b48bf5ffdf7de76526b7a3f63769527e31",
+   "bytes": 1503,
+   "modified": false
+  },
+  {
+   "path": "src/deeptutor/utils/text_display.py",
+   "git_blob": "0365ce0177bca828a1711aaef9d57a450ec2ce2b",
+   "sha256": "113003811d93ca85f824a075d92f05b106ecb1a7b7a8c056e4ec2815536e8d65",
+   "bytes": 1432,
+   "modified": false
+  }
+ ]
+}

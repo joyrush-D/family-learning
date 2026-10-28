@@ -1,0 +1,20 @@
+DeepTutor learning subset used by family-agent
+==============================================
+
+Upstream: https://github.com/HKUDS/DeepTutor at commit a31d82624c27d75f4e771d4fcb78dce16470b383 (v1.6.15)
+License: Apache License 2.0 (see LICENSE, copied unchanged). Upstream third-party notices: THIRD_PARTY_NOTICES.md (unchanged).
+Upstream ships no NOTICE file at this commit; this NOTICE is added by family-agent.
+
+Files under src/ are byte-for-byte copies of the upstream Git blobs listed in PROVENANCE.json, except:
+
+  src/deeptutor/learning/lesson_evidence.py  (MODIFIED by family-agent, 2026-10-28)
+    The module-level `from deeptutor.services.rag.source_pages import (...)` is moved into the seven
+    functions that use those names (for validate_evidence: after its no-PDF-scope early return).
+    No logic, message or control flow changed. Reason: the original top-level import loads
+    deeptutor.services.rag (RAG service) whenever register_question runs, which this deterministic,
+    offline use does not need. Exact diff: patches/lesson_evidence-deferred-rag-import.diff.
+    Upstream blob 13fc9bec792fab8e3d6837f9934ab78cc9d12e76; modified file hashes in PROVENANCE.json.
+
+Only the deterministic LearningService path is run (register_question, grade_interaction,
+abandon_active_question, repair_question). The semantic/LLM, RAG, Agent, MCP and web-search parts of
+DeepTutor are not included and are not called. family-agent's own adapter code is MIT (repository LICENSE).
