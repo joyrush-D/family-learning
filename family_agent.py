@@ -559,6 +559,101 @@ def _school_step_owned(goal, step, texts, others=()):
     return True,repeated,''
 
 
+_SCHOOL_RECEIPT_KEYS=('title','goal','advice','state','reason','change','target_id','purpose','submission')
+
+
+def _school_separate_forms(proposals, evidence, native_refs=()):
+    """An explicit separate administrative form in an item's own original gets its own action, from the original's words.
+
+    The form is a run of the item's home original (the cited text message holding its verified quote) starting at a part
+    naming a closed form title (_LEARNING_FORM_TITLE) that the item's own first quoted part does not name, up to its sentence
+    end or a part naming the item's own object or another closed object again. It must be an affirmed addressed outcome (a
+    signer, a handback or a fill predicate; no negation outside reminders, change, condition, question or reference use), not
+    the list's common scope, and no other proposal may quote it (then the sibling proof already holds). A proposal carrying
+    that form name in its goal or submission merged it: it keeps only its own words (its goal/submission sentences of the
+    run and a reply day only the run states leave), and one proposal is formed from the run alone, compiled like a ledger
+    outcome, with no reply day (read from its own words later). A form no proposal quotes or carries, or one that cannot be
+    taken out of the reply's title or of a goal sentence also naming the item's own object, keeps the whole batch for the
+    existing retry. Returns the proposals and marks: index -> dict(receipt, split) for a cleaned one, dict(formed) for a formed one.
+    """
+    from family_agenda import deadlines,sent_day
+    entries={e['ref']:e for e in evidence};out=[dict(p) for p in proposals];marks={};runs=set();carried=set();formed=set()
+    quotes=[p['title_quote'].strip() if isinstance(p['title_quote'],str) else '' for p in proposals]
+    plain=lambda value:_school_plain(value or '')
+    def unsplit(reason):return AgentError(reason+'，整批保留重试',code='school_action_coverage')
+    for index,p in enumerate(proposals):
+        # A malformed reply is refused by the selection's own field checks; nothing is read from it here.
+        if (any(not isinstance(p[k],str) for k in ('due','task_title','task_goal','task_state','task_change','task_target_id','task_purpose','task_submission'))
+                or not isinstance(p['evidence'],list) or any(not isinstance(q,dict) or not isinstance(q.get('ref'),str) for q in p['evidence'])):continue
+        if p['task_state']=='reference' or p['task_change']!='new' or p['task_target_id'] or p['task_purpose'] not in ('learning','admin'):continue
+        quote=quotes[index]
+        homes=[entries[q['ref']] for q in p['evidence'] if q['ref'] in entries and quote and entries[q['ref']]['text'].count(quote)==1]
+        if len(homes)!=1:continue
+        home=homes[0];text=home['text']
+        if (home['ref'] in native_refs or home.get('kind','text')!='text' or home.get('content_incomplete') or home.get('unread')
+                or home.get('attachments') or _needs_task_details(text)):continue
+        q0=text.index(quote);q1=q0+len(quote)
+        parts=[(m.start(),m.end(),m[0]) for m in re.finditer(_SCHOOL_STEP_PART,text)]
+        head=next((x for x in parts if x[0]<q1 and q0<x[1]),None)
+        if head is None:continue
+        own=_school_named_objects(head[2])
+        for at,(start,end,part) in enumerate(parts):
+            forms=set(_LEARNING_FORM_TITLE.findall(part))-own
+            if start==head[0] or not forms:continue
+            stop=min([i for i in (text.find(c,start) for c in '。；;！!？?\n') if i>=0]+[len(text)])
+            last=end
+            for left,right,later in parts[at+1:]:
+                if (left>=stop or left<=head[0]<right or _school_step_names(later,head[2])
+                        or _school_named_objects(later)-_school_named_objects(part)):break
+                last=right
+            run=text[start:last].strip();bare=re.sub(r'《[^》]*》','',run)
+            if (re.match(_SCHOOL_NATIVE_COMMON,run) or _school_step_names(part,head[2]) or _school_step_negated(run)
+                    or re.search(_SCHOOL_NATIVE_UNSETTLED+'|'+_SCHOOL_NATIVE_CHANGE+r'|仅供|只供|参考|自愿|选做|可选',bare)
+                    or text[last:last+1] in '？?'
+                    or not (_school_signers(run)-{''} or 'handback' in _school_clause_roles(run) or re.search(r'填写|填好|盖章',run))):continue
+            if any(j!=index and other and any(max(start,m.start())<min(last,m.end()) for m in re.finditer(re.escape(other),text))
+                   for j,other in enumerate(quotes)):continue
+            key=(home['ref'],start,last);runs.add(key)
+            names={plain(f) for f in forms}
+            if not any(n in plain(p['task_goal']+'\n'+p['task_submission']) for n in names):continue
+            carried.add(key)
+            if any(n in plain(p['task_title']) for n in names) or start<=q0<last:
+                raise unsplit('同一消息另一表单的独立要求无法从本项标题或锚点分开')
+            cleaned=out[index]
+            if q0<start<q1:
+                cleaned['title_quote']=text[q0:start].rstrip(' ，,；;')
+                if not cleaned['title_quote']:raise unsplit('同一消息另一表单的独立要求无法从本项锚点分开')
+            def own_lines(value):
+                kept=[]
+                for line in re.findall(r'[^。；;！!？?\n]+[。；;！!？?\n]*',value):
+                    words=plain(line)
+                    if any(n in words for n in names):
+                        if _school_step_names(line,head[2]):raise unsplit('同一句归纳同时含本项与另一表单的要求')
+                        continue
+                    if words and words in plain(run) and words not in plain(head[2]):continue
+                    kept.append(line)
+                return ''.join(kept).strip()
+            cleaned['task_goal']=own_lines(cleaned['task_goal']);cleaned['task_submission']=own_lines(cleaned['task_submission'])
+            if not cleaned['task_goal']:raise unsplit('另一表单分出后本项没有自己的要求')
+            published=sent_day(home.get('time',''))
+            def days(words,beside):  # the days these words state, read as every own-day reading reads them
+                return deadlines(words,published)|({own_day} if (own_day:=_school_own_due(words,[home],[beside])) else set())
+            if cleaned['due'] and cleaned['due'] in days(run,cleaned['title_quote']) and cleaned['due'] not in days(cleaned['title_quote'],run):
+                cleaned['due']=''
+            receipt={k:p.get('task_'+k,'') for k in _SCHOOL_RECEIPT_KEYS}
+            marks.setdefault(index,dict(receipt=receipt,split=[]))['split'].append(dict(ref=home['ref'],quote=run))
+            if key in formed:continue
+            formed.add(key)
+            value=_school_native_value(dict(primary=run,subject='',time=home.get('time',''),header='',quote=run,supplements=[]),text)
+            marks[len(out)]=dict(formed=dict(index=index,receipt=receipt,ref=home['ref'],quote=run))
+            out.append(dict(title_quote=run,focus='school',due='',evidence=[dict(ref=home['ref'])],learning_subject='',learning_goal_id='',
+                task_title=value['title'],task_goal=value['goal'],task_advice='',task_state=p['task_state'],
+                task_reason='原文另有《》表单的独立办理要求，模型将它并入同批另一项；已按原文单独成项，模型原归纳保留在原项回执。',
+                task_change='new',task_target_id='',task_purpose='admin',task_submission=''))
+    if runs-carried:raise unsplit('学校原文另一表单的独立要求未归纳')
+    return out,marks
+
+
 def _school_sibling_quotes(c, row):
     """The quotes the same batch's other items citing one of this item's originals were saved with: the siblings its
     selection read (_school_step_owned), so a recovery rereading the stored receipt reaches the same proof."""
@@ -3235,7 +3330,7 @@ def _school_role_reselect(store,c,row,evidence,now):
     # A review held by unread linked material of its native outcome (school_native_cover) is never a date-role reselection.
     if any(plan.get(k) for k in ('school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id',
                                  'approved','school_original_action','school_native_cover','school_first_batch_correction','school_previous_policy',
-                                 'school_saved_reread','school_batch_reread','school_role_reselect')):return None
+                                 'school_saved_reread','school_batch_reread','school_role_reselect','school_split','school_split_from')):return None
     if not evidence or brief.get('origin_basis')!=_school_message_basis(evidence):return None
     raw=plan.get('school_selection_receipt');quote=plan.get('school_date_quote','')
     if not isinstance(raw,dict) or raw.get('state')!='ready' or (raw.get('change') or 'new')!='new' or raw.get('target_id') or not quote:return None
@@ -3320,7 +3415,8 @@ def _school_saved_reread(store,c,row,evidence,now):
     snapshot=plan.get('school_generated_snapshot')
     if not snapshot or snapshot!=_school_generated_snapshot(row):return None
     if any(plan.get(k) for k in ('school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id',
-                                 'approved','school_original_action','school_first_batch_correction','school_previous_policy','school_learning')):return None
+                                 'approved','school_original_action','school_first_batch_correction','school_previous_policy','school_learning',
+                                 'school_split','school_split_from')):return None
     if not evidence or brief.get('origin_basis')!=_school_message_basis(evidence):return None
     # The reread saves the complete original text as one goal. Originals with more than one clause carrying its own
     # deadline may hold separate forms or outcomes, so they stay for review instead of being merged into one task.
@@ -3387,7 +3483,8 @@ def _school_cleared_reread(store,c,row,evidence,now):
     if not snapshot or snapshot not in (_school_generated_snapshot(row),_school_generated_snapshot(unrouted)):return None
     if any(plan.get(k) for k in ('school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id',
                                  'approved','school_original_action','school_first_batch_correction','school_previous_policy',
-                                 'school_saved_reread','school_batch_reread','school_role_reselect','school_unadopted_due')):return None
+                                 'school_saved_reread','school_batch_reread','school_role_reselect','school_unadopted_due',
+                                 'school_split','school_split_from')):return None
     if not evidence or brief.get('origin_basis')!=_school_message_basis(evidence):return None
     raw=plan.get('school_selection_receipt');quote=plan.get('school_date_quote','')
     if not isinstance(raw,dict) or raw.get('state')!='ready' or (raw.get('change') or 'new')!='new' or raw.get('target_id') or not quote:return None
@@ -3896,7 +3993,7 @@ def _school_untouched_review(c,row,old_key):
     if not plan.get('school_generated_snapshot') or plan['school_generated_snapshot']!=_school_generated_snapshot(row):return False
     if any(plan.get(k) for k in ('school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id',
                                  'approved','school_original_action','school_first_batch_correction','school_previous_policy',
-                                 'school_learning','school_saved_reread','school_batch_reread')):return False
+                                 'school_learning','school_saved_reread','school_batch_reread','school_split','school_split_from')):return False
     return not (c.execute('SELECT 1 FROM records WHERE source=? LIMIT 1',('Agent建议:'+row['id'],)).fetchone()
                 or c.execute('SELECT 1 FROM manual_tasks WHERE source LIKE ? LIMIT 1',('Agent建议:'+row['id']+'\n%',)).fetchone())
 
@@ -5452,6 +5549,10 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     required=set(_school_fields['required']) | ({'action_quote','existing_item_id'} if historical else set())
     if routing and any(not isinstance(p,dict) or set(p)!=required for p in result['proposals']):
         raise AgentError('模型筛选字段不正确')
+    split_marks={}
+    if routing and not historical:
+        # A separate closed-name form the reply merged into another proposal is given its own action from the original.
+        result['proposals'],split_marks=_school_separate_forms(result['proposals'],evidence,{a['ref'] for a in native_actions})
     refs = {entry['ref']: entry['text'] for entry in evidence}; output = []; accounted = set();history_actions=[]
     title_quotes=[p['title_quote'].strip() if isinstance(p,dict) and isinstance(p.get('title_quote'),str) else '' for p in result['proposals']]
     title_refs=[{q.get('ref') for q in p['evidence'] if isinstance(q,dict)} if isinstance(p,dict) and isinstance(p.get('evidence'),list) else set()
@@ -5605,8 +5706,14 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             brief=_school_brief({key:proposal.get('task_'+key,'review' if key=='state' else 'new' if key=='change' else '') for key in ['title','goal','advice','state','reason','change','target_id','purpose','submission']},
                                 incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence if e['ref'] in {q['ref'] for q in cited}),evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}],school_tasks=school_tasks,separate_learning=True,
                                 others=[q for i,q in enumerate(title_quotes) if i!=index and title_refs[i]&{c['ref'] for c in cited}])
-            item.setdefault('plan',{})['school_selection_receipt']={key:proposal.get('task_'+key,'') for key in
-                ['title','goal','advice','state','reason','change','target_id','purpose','submission']}
+            mark=split_marks.get(index,{})
+            if 'formed' in mark:
+                # No model receipt: the proposal it was taken out of, verbatim, and the original run it was formed from.
+                item.setdefault('plan',{})['school_split_from']=mark['formed']
+            else:
+                item.setdefault('plan',{})['school_selection_receipt']=mark.get('receipt') or {key:proposal.get('task_'+key,'') for key in
+                    ['title','goal','advice','state','reason','change','target_id','purpose','submission']}
+                if mark:item['plan']['school_split']=mark['split']
             if not due and not proposed_due and not historical and not native_action and not void:
                 due=_school_explicit_action_due(brief,cited_evidence)
                 # Nor one another cited original changes, defers or cancels (another teacher, 另行通知, 不用交).
