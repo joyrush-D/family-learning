@@ -605,7 +605,7 @@ def subject_fields(title,quote='',*,saved='',corrected='',no_subject=False):
     return dict(subjects=[],subject_state='general' if general else 'unknown',subject_basis='')
 
 
-def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal='',date_header='',school_focus=False,date_siblings=None,action=''):
+def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal='',date_header='',school_focus=False,date_siblings=None,action='',pending=False):
     focus=focus or {};messages=[];publications=[];original_time=''
     store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
     for ref in refs:
@@ -645,8 +645,9 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
     due_on=focus.get('due_on','') if organized else deadline(due,published) or deadline(title,published) or source_due
     # A collected school task saved with no day (its reply left the day out) reads the one its own words prove, by the same
     # reading the selection now uses (family_agent._school_own_due); a parent's plan or edit keeps priority, nothing is saved.
+    # A pending candidate's stored due is that selection's own verdict (a day it leaves to choose stays open): never re-read.
     own_day=(family_agent._school_own_due(date_quote,[dict(text=m.get('text',''),time=m.get('time','')) for m in messages],date_siblings)
-             if not organized and not due_on and date_quote and date_siblings is not None and not focus.get('scheduled_on')
+             if not pending and not organized and not due_on and date_quote and date_siblings is not None and not focus.get('scheduled_on')
              and not focus.get('version') else '')
     due_on=due_on or own_day
     # A school item's day not saved with it is its own only by the same shared placement its proposal passed: a sibling's
@@ -922,7 +923,7 @@ def snapshot(app,start,end):
                 # A candidate reads its day from the same stored original words, publication and siblings as its accepted item.
                 m=metadata(app,c,row['child_id'],row['title'],row['due'],refs,publication_ref=family_agent.school_original_publication_ref(store,c,row),
                            date_quote=_stored_date_quote(plan),goal=str(brief.get('goal') or ''),date_header=_stored_date_header(plan,_stored_date_quote(plan)),
-                           date_siblings=_date_siblings(cited_by,row))
+                           date_siblings=_date_siblings(cited_by,row),pending=True)
                 m['category']=category
                 m.update(subject_fields(row['title'],_stored_date_quote(plan),saved=str((plan.get('school_learning') or {}).get('subject') or '')))
                 items.append(dict(id=row['id'],task_id='',kind='school',child_ids=[row['child_id']],title=row['title'],
