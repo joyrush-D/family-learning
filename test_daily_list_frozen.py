@@ -435,7 +435,7 @@ class DailyListFrozenTests(unittest.TestCase):
 
     U02_REQUIREMENT = '连续观察绿豆发芽3天，每天记录芽长（毫米）和子叶颜色，并写一句观察发现。'
 
-    def _u02_variant(self, requirements, cite='requirement', title='虚构实验观察表', uncertainties=()):
+    def _u02_variant(self, requirements, cite='all', title='虚构实验观察表', uncertainties=()):
         """The U02 message and its linked one-page fictional PDF; the fake page receipt reads at once. The fake ready
         refresh receipt cites each requirement part alone ('requirement'), beside the teacher's words ('all'), or the
         words alone ('message'). Fake receipts prove the state machine only, not reading accuracy."""
@@ -477,17 +477,22 @@ class DailyListFrozenTests(unittest.TestCase):
             tasks = [dict(x) for x in c.execute('SELECT * FROM manual_tasks')]
         return schools, tasks, contexts
 
-    def _u02_held(self, requirements, reached=True, **kw):
+    def _u02_held(self, requirements, reached=True, reason='依据没有本项动作和对象', **kw):
+        """Held pending with no task. With the default 'all' receipt the candidate keeps its own words, so only the
+        requirement's own structure stands between it and acceptance (the exact positive is accepted)."""
         schools, tasks, contexts = self._u02_variant(requirements, **kw)
         self.assertEqual((bool(contexts), [s['state'] for s in schools], tasks), (reached, ['pending'], []))
         for text in requirements: self.assertNotEqual(schools[0]['body'].strip(), text)
+        with self.store._db() as c:
+            errors = [r[0] for r in c.execute("SELECT error FROM agent_jobs WHERE id LIKE 'school-task:%' AND error!=''")]
+        self.assertEqual(any(reason in e for e in errors) if reason else errors, True if reason else [])
         return schools, contexts
 
-    def test_u02_complete_page_requirement_alone_is_its_own_action_and_only_its_exact_structure_counts(self):
+    def test_u02_complete_page_requirement_is_its_own_action_and_only_its_exact_structure_counts(self):
         import copy
         schools, tasks, contexts = self._u02_variant([self.U02_REQUIREMENT])
         self.assertEqual(([s['state'] for s in schools], len(tasks), len(contexts)), (['accepted'], 1, 1))
-        self.assertEqual((tasks[0]['action'].strip(), schools[0]['body'].strip()), (self.U02_REQUIREMENT, self.U02_REQUIREMENT))
+        for text in (tasks[0]['action'], schools[0]['body']): self.assertIn(self.U02_REQUIREMENT, text)
         with self.store._db() as c:
             pdf = agent._pdf_evidence(agent._school_pdf(self.store, c, schools[0]))
         parts = agent._school_original_parts([], pdf, None); [part] = [p for p in parts if p.get('requirement')]
@@ -505,25 +510,30 @@ class DailyListFrozenTests(unittest.TestCase):
         self._u02_held(['2026年11月6日前'])
 
     def test_u02_page_requirement_that_is_only_a_weekday_deadline_gains_nothing(self):
-        self._u02_held(['下周一之前'], cite='all')
+        self._u02_held(['下周一之前'])
 
     def test_u02_page_requirement_that_is_only_the_originals_title_gains_nothing(self):
         self._u02_held(['虚构实验观察表'])
 
     def test_u02_page_requirement_that_is_only_a_label_title_and_date_gains_nothing(self):
-        self._u02_held(['科学：虚构实验观察表（11月6日前）'], cite='all')
+        self._u02_held(['科学：虚构实验观察表（11月6日前）'])
 
     def test_u02_page_requirement_that_is_only_the_file_name_gains_nothing(self):
         self._u02_held(['示例观察表'])
 
     def test_u02_page_reading_progress_never_becomes_a_complete_requirement(self):
-        self._u02_held([self.U02_REQUIREMENT + '第2页本轮未送入。'], reached=False)
+        self._u02_held([self.U02_REQUIREMENT + '第2页本轮未送入。'], reached=False, reason='')
 
     def test_u02_doubted_complete_page_requirement_still_waits(self):
-        self._u02_held([self.U02_REQUIREMENT], uncertainties=['表格第二栏字迹模糊，记录单位不清。'])
+        schools, _ = self._u02_held([self.U02_REQUIREMENT], uncertainties=['表格第二栏字迹模糊，记录单位不清。'], reason='')
+        self.assertEqual(json.loads(schools[0]['plan'])['school_task']['state'], 'review')
 
     def test_u02_teacher_words_alone_cannot_stand_for_the_unassigned_page_requirement(self):
         self._u02_held([self.U02_REQUIREMENT], cite='message')
+
+    def test_u02_page_requirement_cannot_replace_the_candidates_own_words(self):
+        # The existing candidate-identity guard is untouched: a ready action dropping the item's literal words is refused.
+        self._u02_held([self.U02_REQUIREMENT], cite='requirement', reason='旧事项缺少可核对的同行动依据')
 
     def _report(self, **line):
         report = os.environ.get('DAILY_LIST_REPORT')
