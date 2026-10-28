@@ -597,16 +597,18 @@ class SchoolIndependentOutcomeTests(unittest.TestCase):
             proposals.append(ref)
         return dict(proposals=proposals)
 
-    def _assert_not_compiled(self, name, originals):
+    def _assert_not_compiled(self, name, originals, calls=3):
         """The program never compiled an item for name; the batch either kept the model's own reading or the existing bounded
-        retry (at most three calls, exhaustion stated), and the originals stay."""
-        rows, job, saved, tasks, _ = self._state()
+        retry (at most three calls per evidence version, exhaustion stated), and the originals stay."""
+        rows, _, saved, tasks, _ = self._state()
+        with self.store._db() as c:
+            jobs = [dict(r) for r in c.execute("SELECT attempts,done,error FROM agent_jobs WHERE id LIKE 'messages:%'")]
         self.assertFalse([r['id'] for r in rows if 'school_split_from' in json.loads(r['plan'])], 'no program item')
         self.assertFalse([t['id'] for t in tasks if name in t['title'] + t['action']], 'no task from the uncertain words')
-        self.assertLessEqual(self.model.call_count, 3)
+        self.assertLessEqual(self.model.call_count, calls)
         self.assertEqual(saved, originals)
-        if not job['done']:self.assertEqual((job['attempts'], '上限' in job['error']), (3, True), job['error'])
-        return rows, job, tasks
+        if not any(j['done'] for j in jobs):self.assertTrue(any(j['attempts'] == 3 and '上限' in j['error'] for j in jobs), jobs)
+        return rows, jobs, tasks
 
     def test_uncertain_or_unread_outcome_is_never_compiled(self):
         """Not the original's affirmed current requirement, so never the program's: a question, a condition earlier in the
@@ -642,7 +644,8 @@ class SchoolIndependentOutcomeTests(unittest.TestCase):
             with self.subTest(corrected=corrected):
                 self.setUp()
                 originals, refs = self._ingest([dict(hm='18:10', text=ROOT_V4_HELDOUT[0]['messages'][0])])
-                seen = self._seam([agent.AgentError('虚构模型请求失败')] + [lambda context, own=refs[0]: self._own_reply(context, own)] * 2)
+                # A new evidence version gets its own bounded attempts (MAX_ATTEMPTS each), so at most 1 + 3 calls here.
+                seen = self._seam([agent.AgentError('虚构模型请求失败')] + [lambda context, own=refs[0]: self._own_reply(context, own)] * 3)
                 first, = self._rounds([0])
                 self.assertEqual((first['failed'], self.model.call_count), (1, 1))
                 if corrected:
@@ -650,7 +653,7 @@ class SchoolIndependentOutcomeTests(unittest.TestCase):
                     originals = originals + more
                 self._rounds([6, 12, 30, 60, 120])
                 if corrected:
-                    self._assert_not_compiled('秋游告知单', originals)
+                    self._assert_not_compiled('秋游告知单', originals, calls=4)
                     self.assertTrue(any(any('不用交了' in e['text'] for e in evidence) for evidence in seen[1:]), 'the retry read the correction')
                 else:
                     rows, job, _, tasks, _ = self._state()
