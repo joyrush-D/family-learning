@@ -488,17 +488,18 @@ def _school_step_names(clause, anchor):
 
 
 def _school_step_topic(clause, anchor):
-    """The words a clause states before its own requirement opens, when they name another object than this item's
-    (告知书请家长签字, 另有一份告知书…, 《安全告知书》请监护人签名). A pointer (这一页、该页) or a step done before
-    (录音后、完成后) is no topic; a clause naming this item's own object or opening with its requirement has none."""
-    # Where its own requirement opens: its asker, an actor, a place, or the existing predicate, arrangement, signature
-    # and submission verbs.
-    opening=('请|把|将|在|到|给|'+'|'.join(a for alts in _SCHOOL_CLAUSE_ROLES.values() for a in alts.split('|'))
-             +'|'+_SCHOOL_NATIVE_PREDICATE+'|'+_SCHOOL_ARRANGEMENT+r'|签|盖章|提交|上传|交回|签到|打卡')
+    """The words a clause states before its asker or actor, when they name another object than this item's
+    (告知书请家长签字, 另有一份告知书请家长签字, 《安全告知书》请监护人签名). A pointer (这一页、该页) or a step done
+    before (录音后、读完、完成后) is no topic; a clause naming this item's own object, or with no asker or actor after
+    its first words (录音上传班级作业区, 连续记录3天), states none: the clause screen still reads it.
+    """
     text=re.sub(r'^[\s，,]*','',re.sub(_SCHOOL_ROLE_DAY,'',_URL.sub('',clause)))
-    opened=re.search(opening,re.sub(r'《[^》]*》',lambda m:'_'*len(m[0]),text))
+    actor='请|'+'|'.join(a for alts in _SCHOOL_CLAUSE_ROLES.values() for a in alts.split('|'))
+    opened=re.search(actor,re.sub(r'《[^》]*》',lambda m:'_'*len(m[0]),text))
     lead=text[:opened.start()] if opened else ''
-    if not _school_step_chars(lead) or re.match(r'(?:这|该|此|本|上述|以上)',lead) or re.search(r'(?:之|以)?后\s*$',lead):return ''
+    # A role after its own handover (交回语文老师, 交给地理老师) is the recipient, not an actor opening the clause.
+    if (not _school_step_chars(lead) or re.match(r'(?:这|该|此|本|上述|以上)',lead) or re.search(r'(?:完|好|后)\s*$',lead)
+            or re.search(r'交|给|到|至|向',re.sub(r'《[^》]*》','',lead))):return ''
     return '' if _school_step_names(clause,anchor) else lead
 
 
