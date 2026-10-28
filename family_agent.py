@@ -465,6 +465,46 @@ def _school_handback(brief, submission, evidence):
     return submission
 
 
+_SCHOOL_STEP_PART=r'(?:《[^》]*》|[^，,。；;！!？?\n])+'
+
+
+def _school_step_chars(text):
+    """The content characters a step or clause states: its comparison copy without the filler the clause screen ignores."""
+    return re.sub(r'请|将|把|在|上|的|分别|均|都|也|再|各|于','',_school_plain(text))
+
+
+def _school_step_owned(goal, step, texts):
+    """Whether this item's own fully read originals state a step the model gives it, and the goal parts repeating that step.
+
+    The unit is one clause (comma or sentence part) of the originals. The item's own clause is the one sharing most words with
+    its goal outside the parts repeating the step: only the stored receipt and the originals decide, so direct selection and
+    every recovery reread reach the same proof. Of what the step adds to that own clause, at least half must be read in one
+    clause from the own clause's sentence on, or in another original cited for it (that original's ownership is the existing
+    citation and supplement proof). A clause, or one before it after the own clause, whose words beyond the own clause and
+    the step outnumber those it shares with the own clause speaks of another object (另有一份告知书请家长签字); a clause adding
+    nothing continues the item (明天交给语文课代表). No model proposal ever owns a clause.
+    """
+    need=_school_step_chars(step)
+    parts=re.findall(_SCHOOL_STEP_PART,goal or '')
+    repeated=[p for p in parts[1:] if need and 2*sum(c in _school_step_chars(p) for c in need)>=len(need)]
+    own=set(_school_step_chars(''.join(p for p in parts if p not in repeated)))
+    clauses=[(index,m.start(),set(_school_step_chars(m[0]))) for index,text in enumerate(texts) for m in re.finditer(_SCHOOL_STEP_PART,text)]
+    anchor=max(clauses,key=lambda c:len(c[2]&own),default=None)
+    if not need or not anchor or not anchor[2]&own:return True,repeated
+    added=[c for c in need if c not in anchor[2]]
+    if not added:return True,repeated
+    home=texts[anchor[0]];sentence=max(home.rfind(stop,0,anchor[1]) for stop in '。；;！!？?\n')+1
+    later=[c for c in clauses if c[0]!=anchor[0] or c[1]>=sentence]
+    best=max(later,key=lambda c:(sum(char in c[2] for char in added),c[0]==anchor[0],-c[0],-c[1]))
+    if 2*sum(char in best[2] for char in added)<len(added):return False,repeated
+    def foreign(clause,base):
+        return len(clause-base-set(need))>len(clause&base)
+    if best[0]==anchor[0]:
+        between=[c for c in clauses if c[0]==anchor[0] and anchor[1]<c[1]<best[1]]
+        if foreign(best[2],anchor[2]) or any(foreign(c[2],anchor[2]|own) for c in between):return False,repeated
+    return True,repeated
+
+
 _SCHOOL_PURPOSE_LABEL=re.compile(r'^\s*('+'|'.join(PURPOSES)+r')\s*[：:]\s*',re.IGNORECASE)
 
 
@@ -537,6 +577,16 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
         # Carrying or printing a named material is not itself the learning action.
         state='review';brief['reason']='原文同时提到学习活动和打卡/提交，请核对是否含作业；暂未关联学习目标。'
     if purpose!='learning' or not brief['goal']: submission=''
+    if (submission and evidence and not incomplete and not fragments and not pdf and not material
+            and all(e.get('kind','text') in ('text','quote') and not (e.get('unread') or e.get('content_incomplete') or e.get('attachments'))
+                    for e in evidence)):
+        # A step the item's own originals do not state, or state for another object, is not this item's requirement:
+        # neither the step nor the goal parts repeating it stay; every requirement of its own stays as it was.
+        owned,repeated=_school_step_owned(brief['goal'],submission,[e.get('text','') for e in evidence]
+                                          +[p['text'] for p in (pages or {}).get('model_pages',[])])
+        if not owned:
+            kept=''.join(p for p in re.findall(_SCHOOL_STEP_PART+r'[，,。；;！!？?\n]*',brief['goal']) if not any(p.startswith(r) for r in repeated))
+            brief['goal']=re.sub(r'[，,；;\s]+$','',kept)+('。' if kept and not re.search(r'[。！!？?]\s*$',kept) else '');submission=''
     if state=='ready': submission=_school_handback(brief,submission,evidence)
     if submission and submission not in brief['goal']:
         if len(brief['goal'])+len(submission)+6<=2000: brief['goal']+='\n提交要求：'+submission
@@ -2489,6 +2539,7 @@ def _school_role_days(quote,cited,others,words=False):
     following=re.match(r'[^。；;！!？?\n]+[。；;！!？?\n]?',text[end:])
     if following and all(re.fullmatch(role+r'(?:完成|做完|写完|读完|(?:请家长)?签字)\s*',c)
                          or re.fullmatch(role+r'(?:让孩子)?(?:交|交回|上交|提交)(?:给[^，,]{1,8})?\s*',c)
+                         or ((m:=re.fullmatch(role+r'(?:让孩子)?(?:交回|上交|交)([^，,给至到]{1,8})\s*',c)) and m[1] in own)
                          or ((m:=re.fullmatch(role+r'检查([^，,]{1,8})\s*',c)) and m[1] in own)
                          for c in re.split(r'[，,]',following[0].strip('。；;！!？? \n'))):
         end+=following.end()
