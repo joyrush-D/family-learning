@@ -505,8 +505,8 @@ def _school_step_owned(goal, step, texts, others=()):
     relation the date reading uses: the quotes of the batch's other items from the same original (others; the selection's
     other proposals, or what their saved rows keep) — never from which words look like an object:
       - a clause another item quotes is that item's (回执签字, 联系册签字, 告知书请家长签字);
-      - a clause after another item's own words continues that nearer item, unless it opens with the list's common scope
-        (两项都…, 以上作业都…, _SCHOOL_NATIVE_COMMON);
+      - a clause after another item's own words continues that nearer item, unless it names this item again or opens with the list's common scope
+        (语文和数学都…; 两项都…, 以上作业都…, _SCHOOL_NATIVE_COMMON);
       - a clause before the item in its sentence only when it names the item's own object (请家长在《星雨作业本》上签字);
       - otherwise the item's own clause, one after it, or another original cited for it.
     An owned clause with a negation keeps that clause's own words in the goal and gives no submission; the goal parts
@@ -550,8 +550,11 @@ def _school_step_owned(goal, step, texts, others=()):
         if best[0]==anchor[0] and best[1]<anchor[1]:
             if not _school_step_names(best[3],anchor[3]):return False,repeated,''
         elif best[0]==anchor[0] and best[1]>anchor[1]:
-            between=[c for c in clauses if c[0]==anchor[0] and anchor[1]<c[1]<best[1]]
-            if any(quoted(c) for c in between) and not re.match(_SCHOOL_NATIVE_COMMON,best[3].strip()):return False,repeated,''
+            between=[c for c in clauses if c[0]==anchor[0] and anchor[1]<c[1]<best[1] and quoted(c)]
+            # It still continues this item when it names it again: words of this item's own clause that the other items'
+            # words between do not state (语文和数学都请家长签字), or the list's common scope.
+            again=(best[2]-set(need)-set().union(*(c[2] for c in between)))&anchor[2]
+            if between and not again and not re.match(_SCHOOL_NATIVE_COMMON,best[3].strip()):return False,repeated,''
     if _school_step_negated(best[3]):return False,positive,best[3].strip()
     return True,repeated,''
 
