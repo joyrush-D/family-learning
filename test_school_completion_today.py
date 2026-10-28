@@ -15,8 +15,10 @@ import family_agenda
 import family_agent as agent
 import family_study
 import family_task_focus
+import test_daily_list_frozen as frozen
 import test_school_native_coverage as native
 import test_school_old_pending_recovery as recovery
+import test_school_submission_ownership as ownership
 
 
 # The fictional unseen mixed day (HANDOFF unseen-mixed-school-day-20261019-v1): its 7 originals and the actual Flash27
@@ -1672,6 +1674,82 @@ class RequirementStepTests(unittest.TestCase):
                 self.assertEqual(card_lines(listed[task_id]), STEP_CARD_LINES[key])
         self.assertEqual(self._tables(), before, 'reading the cards writes nothing')
         self.assertEqual(self.model.call_count, 0)
+
+
+# Root's frozen explicit teacher date truth (fully fictional truth.json sha256 d44ed84b…0992), sent 2026-11-04, read the
+# same day: (id, original, subject, completion, due, due_kind). One completion day alone is saved as its deadline due.
+ROOT_DATE_TRUTH = [
+    ('D01', '英语今晚跟读Unit 5两遍。', '英语', '2026-11-04', '', ''),
+    ('D02', '语文今晚复习《小溪》课文。', '语文', '2026-11-04', '', ''),
+    ('D03', '语文今晚阅读《晨星故事》第2页。', '语文', '2026-11-04', '', ''),
+    ('D04', '数学今晚口算第1题。', '数学', '2026-11-04', '', ''),
+    ('D05', '语文今晚朗读《春晓》三遍。', '语文', '2026-11-04', '', ''),
+    ('D06', '数学今晚完成《方格练习册》第5页，明早交练习册。', '数学', '2026-11-04', '2026-11-05', 'handback'),
+    ('D07', '英语跟读Unit 6两遍。', '英语', '', '', ''),
+    ('D08', '英语明天跟读Unit 6两遍。', '英语', '2026-11-05', '', ''),
+]
+# Root's B03 original contract (fully fictional B03-original-contract.json sha256 103dc346…07): the reply keeps only the
+# first outcome; both own days are its teacher's own.
+ROOT_B03 = dict(id='B03_omitted_learning_own_tomorrow_overrides', expected_tasks=2, first_response_mode='omit_other',
+                messages=['英语今晚读《长叶读本》第3页两遍；明天完成《长叶写本》第2页。'],
+                items=[dict(quote='英语今晚读《长叶读本》第3页两遍', subject='英语', purpose='learning', goal='英语今晚读《长叶读本》第3页两遍。',
+                            submission='', due='2026-11-04', required=['长叶读本', '第3页', '两遍'], forbidden=['长叶写本', '第2页']),
+                       dict(quote='明天完成《长叶写本》第2页', subject='英语', purpose='learning', goal='明天完成《长叶写本》第2页。',
+                            submission='', due='2026-11-05', required=['长叶写本', '第2页'], forbidden=['长叶读本', '第3页'])])
+
+
+class TeacherActivityDateTests(unittest.TestCase):
+    """An original's own explicit learning activity day (今晚跟读/阅读/口算/读, 明天跟读) is read by the same day-to-action
+    reader as 今晚复习/朗读, and one item's own completion and handback roles decide its days whatever single day the reply
+    gave. Real run_once→Store→calendar; the seam returns the fixed fictional reply only."""
+    setUp = frozen.DailyListFrozenTests.setUp
+    _day = frozen.DailyListFrozenTests._day
+    _proposal = frozen.DailyListFrozenTests._proposal
+    _use_replies = native.SchoolNativeCoverageTests._use_replies
+    _replies = ownership.SchoolIndependentOutcomeTests._replies
+    _rounds = ownership.SchoolIndependentOutcomeTests._rounds
+    _state = ownership.SchoolIndependentOutcomeTests._state
+    _check = ownership.SchoolIndependentOutcomeTests._check
+
+    def _saved(self, text, subject, due):
+        self.setUp()
+        payload, refs = self._day([('18:10', '虚构老师', 'qa-teacher', text)])
+        self._use_replies(payload, [dict(proposals=[self._proposal(text.rstrip('。'), refs, subject, text, due=due)])] * 3)
+        result = agent.run_once(self.app, self.now)
+        listed = [frozen.view(i) for i in self.app.calendar_snapshot('2026-11-04', '2026-11-04')['inbox']
+                  if i['kind'] in ('task', 'school')]
+        with self.store._db() as c:
+            tasks = [dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+        return result, listed, tasks, refs
+
+    def test_root_frozen_dates_whatever_single_day_the_reply_gave(self):
+        for case, text, subject, completion, due, kind in ROOT_DATE_TRUTH:
+            for model_due in sorted({'', completion, due}):
+                with self.subTest(case=case, model_due=model_due):
+                    result, listed, tasks, refs = self._saved(text, subject, model_due)
+                    self.assertEqual((result['failed'], self.model.call_count), (0, 1), result)
+                    item, = listed
+                    # Teacher-required work is a task to follow, never the child's completion.
+                    self.assertEqual((item['kind'], item['status'], item['scheduled_on']), ('task', '待跟进', ''), item)
+                    own = item['complete_on'] or (item['due_on'] if item['due_kind'] == 'deadline' else '')
+                    back = item['due_on'] if item['due_kind'] not in ('', 'deadline') else ''
+                    self.assertEqual((own, back, item['due_kind'] if back else ''), (completion, due, kind), item)
+                    self.assertEqual((item['publications'], tasks[0]['done']), (refs, 0), 'its own original; not done')
+                    self.assertIn(text, item['body'], 'the original words are kept')
+
+    def test_b03_both_own_days_in_natural_rounds(self):
+        self._check(ROOT_B03)
+
+    def test_day_binds_only_an_affirmed_own_activity(self):
+        day = lambda text: sorted(family_agenda.deadlines(text, '2026-11-04'))
+        for text, expected in (('英语今晚跟读Unit 5两遍', ['2026-11-04']), ('语文今晚阅读《晨星故事》第2页', ['2026-11-04']),
+                               ('数学今晚口算第1题', ['2026-11-04']), ('英语明天跟读Unit 6两遍', ['2026-11-05']),
+                               ('英语今晚读《长叶读本》第3页两遍', ['2026-11-04']), ('英语跟读Unit 6两遍', []),
+                               # A past report, a question, a negation or a day inside a title states no requirement day.
+                               ('今天课上读了《晨星故事》第2页', []), ('今天读过的课文很有趣', []), ('今晚要跟读吗？', []),
+                               ('英语今晚不用跟读Unit 5', []), ('请看《今晚跟读指南》', [])):
+            with self.subTest(text=text):
+                self.assertEqual(day(text), expected)
 
 
 def saved_flash27_state(path):
