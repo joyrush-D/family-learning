@@ -566,6 +566,8 @@ _SCHOOL_OUTCOME_LEARN=r'(?:完成|做|写|读|朗读|背诵|抄写|默写|听写
 _SCHOOL_OUTCOME_VERB=r'(?:'+_SCHOOL_OUTCOME_LEARN[3:-1]+r'|签署|填写|填好|交回|提交|上交)'
 _SCHOOL_OUTCOME_RANGE=(r'(?:第[一二三四五六七八九十百0-9]+(?:页|题|课|章|单元|篇|首|段|节|小节)'
                        r'|[一二两三四五六七八九十0-9]+(?:遍|页|题|篇|首|段))')
+# Words reporting the outcome as already done (家长已签字交回), not requesting it.
+_SCHOOL_OUTCOME_DONE=r'已(?:经)?\s*(?:签|填|交|提交|上交|收|完成|做完|写完|读完|带)'
 
 
 def _school_outcome_objects(part):
@@ -586,23 +588,57 @@ def _school_separate_outcomes(proposals, evidence, native_refs=()):
     The outcome is a run of the item's home original (the cited text message holding its verified quote) starting at a part
     whose own object (_school_outcome_objects) is a closed name the item's own first quoted part does not name, up to its
     sentence end or a part naming the item's own object or another closed object again. What the object is called decides
-    nothing: the run must state an affirmed outcome of it, administrative (a signer, a handback or a fill predicate) or
-    learning (a learning verb on the name with the run's own range, 完成《图形册》第3题), with no negation outside reminders,
-    change, condition, question or reference use; it may not open with the list's common scope or name the item's own object
-    again (then it is that item's step: 请家长在《雨桐阅读本》第5页签名 beside 读《雨桐阅读本》第5页), and no other proposal may
-    quote it (then the sibling proof already holds). A proposal carrying that name in its goal or submission merged it: it
-    keeps only its own words (its goal/submission sentences of the run and a reply day only the run states leave), and one
-    proposal is formed from the run alone, compiled like a ledger outcome with the message's later common standard
-    (两项做完都要检查), its purpose from that predicate, a learning subject only from its own original, and no reply day (read
-    from its own words later). An outcome no proposal quotes or carries, or one that cannot be taken out of the reply's title
-    or of a goal sentence also naming the item's own object, keeps the whole batch for the existing retry. Returns the
-    proposals and marks: index -> dict(receipt, split) for a cleaned one, dict(formed) for a formed one.
+    nothing: the run must state an affirmed current outcome of it, administrative (a signer, a handback or a fill predicate)
+    or learning (a learning verb on the name with the run's own range, 完成《图形册》第3题), with no negation outside
+    reminders, change, condition (in the run or earlier in its own clause chain: 如果参加秋游，…), past completion
+    (家长已签字交回), question or reference use; it may not open with the list's common scope or name the item's own object
+    again (then it is that item's step: 请家长在《雨桐阅读本》第5页签名 beside 读《雨桐阅读本》第5页), and no other proposal
+    may quote it (then the sibling proof already holds).
+
+    The run itself, never whether a reply mentions it, is the evidence the requirement exists. A proposal carrying that name
+    in its goal or submission merged it: it keeps only its own words (its goal/submission sentences of the run and a reply day
+    only the run states leave). A run no proposal quotes or names was omitted. Either way one proposal is formed from the
+    run alone, compiled like a ledger outcome with the message's later common standard (两项做完都要检查, 两项今晚都要完成),
+    its purpose from that predicate, a learning subject only from its own original, and no reply day (read later from its
+    own words and their proven scope); it is the program's, marked with the cited proposal's receipt verbatim (omitted when
+    no proposal carried it). The batch keeps the existing bounded retry instead when the run cannot be taken out of the
+    reply's title or of a goal sentence also naming the item's own object, when a proposal names it without a quote that
+    separates it, or when its source is not settled: another original of the batch names the object (a correction,
+    withdrawal or new version), or a later one of the same publisher cannot be read whole (recalled, unread, not text).
+    Returns the proposals and marks: index -> dict(receipt, split) for a cleaned one, dict(formed) for a formed one.
     """
     from family_agenda import deadlines,sent_day
-    entries={e['ref']:e for e in evidence};out=[dict(p) for p in proposals];marks={};runs=set();carried=set();formed=set()
+    entries={e['ref']:e for e in evidence};out=[dict(p) for p in proposals];marks={};runs=set();carried=set();formed=set();found={}
     quotes=[p['title_quote'].strip() if isinstance(p['title_quote'],str) else '' for p in proposals]
     plain=lambda value:_school_plain(value or '')
     def unsplit(reason):return AgentError(reason+'，整批保留重试',code='school_action_coverage')
+    def unsettled(home,forms):  # Another original names the object, or a later one of the same publisher is not read whole.
+        inner={plain(f.strip('《》')) for f in forms}-{''}
+        publisher=home.get('publisher') if isinstance(home.get('publisher'),str) and home['publisher'].strip() else None
+        for e in evidence:
+            if e is home:continue
+            if any(n in plain(str(e.get('text',''))) for n in inner):return True
+            if (publisher and e.get('publisher')==publisher and str(e.get('time',''))>=str(home.get('time',''))
+                    and (e.get('kind','text')!='text' or e.get('unread') or e.get('content_incomplete') or e.get('attachments'))):return True
+        return False
+    def form(index,run,forms,learning,last,home,omitted=False):
+        p=proposals[index];text=home['text']
+        # Its learning subject only from its own original: the run's own, else the one its message names (outside titles).
+        subjects=_school_native_subjects(run) or _school_native_subjects(text)
+        subject=next(iter(subjects)) if learning and len(subjects)==1 else ''
+        # A later sentence of the same message opening with the list's common scope (a day inside it too) is its standard.
+        common=[s.strip() for s in re.findall(r'[^。；;！!？?\n]+',text[last:]) if re.match(_SCHOOL_NATIVE_COMMON,re.sub(_SCHOOL_ANY_DAY,'',s.strip()))]
+        primary=re.sub(r'^\s*(?:另外|此外|还有|还要|还需要?|同时|再)\s*[，,]?\s*','',run)
+        value=_school_native_value(dict(primary=primary,subject=subject,time=home.get('time',''),header='',quote=run,supplements=[],
+                                        conditions=common),text)
+        source=dict(index=index,receipt={k:p.get('task_'+k,'') for k in _SCHOOL_RECEIPT_KEYS},ref=home['ref'],quote=run)
+        if omitted:source['omitted']=True
+        marks[len(out)]=dict(formed=source)
+        out.append(dict(title_quote=run,focus='school',due='',evidence=[dict(ref=home['ref'])],learning_subject=subject,learning_goal_id='',
+            task_title=value['title'],task_goal=value['goal'],task_advice='',task_state=p['task_state'],
+            task_reason=('原文另有独立对象的明确要求，模型回执未归纳；已按原文单独成项，模型原回执保留在同消息原项。' if omitted else
+                         '原文另有独立对象的明确要求，模型将它并入同批另一项；已按原文单独成项，模型原归纳保留在原项回执。'),
+            task_change='new',task_target_id='',task_purpose='learning' if learning else 'admin',task_submission=''))
     for index,p in enumerate(proposals):
         # A malformed reply is refused by the selection's own field checks; nothing is read from it here.
         if (any(not isinstance(p[k],str) for k in ('due','task_title','task_goal','task_state','task_change','task_target_id','task_purpose','task_submission'))
@@ -639,14 +675,20 @@ def _school_separate_outcomes(proposals, evidence, native_refs=()):
                     or re.search(_SCHOOL_NATIVE_UNSETTLED+'|'+_SCHOOL_NATIVE_CHANGE+r'|仅供|只供|参考|自愿|选做|可选',bare)
                     or text[last:last+1] in '？?'
                     or not (learning or _school_signers(run)-{''} or 'handback' in _school_clause_roles(run) or re.search(r'填写|填好|盖章',run))):continue
+            # Nor affirmed and current: a condition earlier in its own clause chain, or words reporting it as done.
+            lead=text[max(text.rfind(c,0,start) for c in '。；;！!？?\n')+1:start]
+            if re.search(_SCHOOL_NATIVE_UNSETTLED,re.sub(r'《[^》]*》','',lead)) or re.search(_SCHOOL_OUTCOME_DONE,bare):continue
             if any(j!=index and other and any(max(start,m.start())<min(last,m.end()) for m in re.finditer(re.escape(other),text))
                    for j,other in enumerate(quotes)):continue
             key=(home['ref'],start,last);runs.add(key)
             names={plain(f) for f in forms}
-            if not any(n in plain(p['task_goal']+'\n'+p['task_submission']) for n in names):continue
+            if not any(n in plain(p['task_goal']+'\n'+p['task_submission']) for n in names):
+                found.setdefault(key,(index,run,forms,learning,last,home))
+                continue
             carried.add(key)
             if any(n in plain(p['task_title']) for n in names) or start<=q0<last:
                 raise unsplit('同一消息另一对象的独立要求无法从本项标题或锚点分开')
+            if unsettled(home,forms):raise unsplit('同一消息另一对象的独立要求另有更正、撤回或未读内容，未按旧依据分项')
             cleaned=out[index]
             if q0<start<q1:
                 cleaned['title_quote']=text[q0:start].rstrip(' ，,；;')
@@ -672,20 +714,16 @@ def _school_separate_outcomes(proposals, evidence, native_refs=()):
             marks.setdefault(index,dict(receipt=receipt,split=[]))['split'].append(dict(ref=home['ref'],quote=run))
             if key in formed:continue
             formed.add(key)
-            # Its learning subject only from its own original: the run's own, else the one its message names (outside titles).
-            subjects=_school_native_subjects(run) or _school_native_subjects(text)
-            subject=next(iter(subjects)) if learning and len(subjects)==1 else ''
-            # A later sentence of the same message opening with the list's common scope is this outcome's standard too.
-            common=[s.strip() for s in re.findall(r'[^。；;！!？?\n]+',text[last:]) if re.match(_SCHOOL_NATIVE_COMMON,s.strip())]
-            primary=re.sub(r'^\s*(?:另外|此外|还有|还要|还需要?|同时|再)\s*[，,]?\s*','',run)
-            value=_school_native_value(dict(primary=primary,subject=subject,time=home.get('time',''),header='',quote=run,supplements=[],
-                                            conditions=common),text)
-            marks[len(out)]=dict(formed=dict(index=index,receipt=receipt,ref=home['ref'],quote=run))
-            out.append(dict(title_quote=run,focus='school',due='',evidence=[dict(ref=home['ref'])],learning_subject=subject,learning_goal_id='',
-                task_title=value['title'],task_goal=value['goal'],task_advice='',task_state=p['task_state'],
-                task_reason='原文另有独立对象的明确要求，模型将它并入同批另一项；已按原文单独成项，模型原归纳保留在原项回执。',
-                task_change='new',task_target_id='',task_purpose='learning' if learning else 'admin',task_submission=''))
-    if runs-carried:raise unsplit('学校原文另一对象的独立要求未归纳')
+            form(index,run,forms,learning,last,home)
+    for key in sorted(runs-carried):
+        index,run,forms,learning,last,home=found[key]
+        names={plain(f) for f in forms}
+        # Named by a proposal without a quote separating it: which item holds it is the reply's reading, not provable here.
+        if any(isinstance(q.get(k),str) and n in plain(q[k]) for q in proposals for k in ('task_title','task_goal','task_submission') for n in names):
+            raise unsplit('学校原文另一对象的独立要求未能从模型归纳中分开')
+        if unsettled(home,forms):raise unsplit('学校原文另一对象的独立要求另有更正、撤回或未读内容，未按旧依据补项')
+        formed.add(key)
+        form(index,run,forms,learning,last,home,omitted=True)
     return out,marks
 
 
@@ -2880,6 +2918,57 @@ def _school_list_heading_day(quote,cited,others=()):
     return published
 
 
+# A continuation of the same assignment opening the item's own clause (还要完成…, 也要…, 还需…).
+_SCHOOL_CONTINUED=r'(?:同时)?(?:还|也)(?:要|需要?|得)'
+
+
+def _school_scope_day(quote,cited,others=()):
+    """The day a positively proven coordination scope of this item's own original gives its own words that state none:
+    dict(day, ref, quote=the scope's own words, kind) or None.
+
+    Only while that one original names one day (one day word, one date) outside 《》 titles, no other cited original names any,
+    no change, condition, question or deferral is written anywhere in it, and no other proposal quotes this item's words:
+      - continued: the item's own clause opens with 还要/还需/也要, is the child's own learning work (a learning verb; no
+        parent, teacher, signature, fill, handback or bring) and names no subject but the original's single one; the words
+        before it in its own sentence (；and ，join, 。ends) are a learning outcome of that subject stating the day:
+        数学今晚完成《算数卡》第2题；还要完成《图形册》第3题 gives 图形册 今晚;
+      - common: a later sentence of the same original opening with the list's common scope states one completion day for
+        every item before it: 两项今晚都要完成.
+    The sending day, a reply's day, another item's own day and another original never stand in for either: 还要明天完成…
+    keeps its own 明天 (two days, no scope), 还要请家长在《…》上签字 and 英语还要读… have none, a dateless original stays dateless.
+    """
+    from family_agenda import _titles_read_as_objects,deadlines,sent_day
+    homes=[e for e in cited if quote and quote in e['text']]
+    if len(homes)!=1 or homes[0]['text'].count(quote)!=1:return None
+    home=homes[0];text=home['text'];published=sent_day(home.get('time',''));read=_titles_read_as_objects(text)
+    if (not published or len(set(re.findall(_SCHOOL_ANY_DAY,read)))!=1 or len(deadlines(text,published))!=1
+            or re.search(_SCHOOL_ANY_DAY,_titles_read_as_objects(quote))
+            or any(re.search(_SCHOOL_ANY_DAY,_titles_read_as_objects(e['text'])) for e in cited if e is not home)
+            or re.search(_SCHOOL_DEFERRED+'|'+_SCHOOL_NATIVE_UNSETTLED+'|'+_SCHOOL_NATIVE_CHANGE+r'|或|左右|改到|改至|推迟|顺延',read)):return None
+    start=text.index(quote);end=start+len(quote)
+    for other in others:  # Another proposal quoting any of this item's words makes them shared, not this item's own.
+        at=0
+        while other and (at:=text.find(other,at))!=-1:
+            if max(start,at)<min(end,at+len(other)):return None
+            at+=len(other)
+    subjects=_school_native_subjects(text)
+    if (re.match(r'\s*'+_SCHOOL_CONTINUED,quote) and re.search(_SCHOOL_OUTCOME_LEARN,quote) and len(subjects)==1
+            and _school_native_subjects(quote)<=subjects
+            and not re.search(r'家长|监护人|爸爸|妈妈|老师|班主任|课代表|签|盖章|填写|填好|交|带',re.sub(r'《[^》]*》','',quote))):
+        before=text[max(text.rfind(stop,0,start) for stop in '。！!？?\n')+1:start].strip(' ，,；;')
+        days=deadlines(before,published)
+        if (before and len(days)==1 and _school_native_subjects(before)==subjects and re.search(_SCHOOL_OUTCOME_LEARN,before)
+                and re.search(_SCHOOL_ANY_DAY,_titles_read_as_objects(before))):
+            return dict(day=next(iter(days)),ref=home['ref'],quote=before,kind='continued')
+    for sentence in re.findall(r'[^。；;！!？?\n]+',text[end:]):
+        words=sentence.strip()
+        if (re.match(_SCHOOL_NATIVE_COMMON,re.sub(_SCHOOL_ANY_DAY,'',words)) and re.search(_SCHOOL_ANY_DAY,words)
+                and re.search(_SCHOOL_OUTCOME_LEARN,words) and 'handback' not in _school_clause_roles(words)):
+            days=deadlines(words,published)
+            return dict(day=next(iter(days)),ref=home['ref'],quote=words,kind='common') if len(days)==1 else None
+    return None
+
+
 def _school_role_object(clause):
     """A role clause's own object: its words less days and clock times, 前, change words, its asker/actor and role verbs
     (请家长10月22日前交回兴趣班回执 and 更正：兴趣班回执改为10月24日前交回 both name 兴趣班回执). A 《》 title is a whole name:
@@ -2974,7 +3063,10 @@ def _school_own_due(quote,cited,others):
     if roles:return roles[1]
     clause=_school_own_clause_dates(quote,cited,others)
     if clause:return next(iter(clause)) if len(clause)==1 else ''
-    return _school_list_heading_day(quote,cited,others)
+    heading=_school_list_heading_day(quote,cited,others)
+    if heading:return heading
+    scope=_school_scope_day(quote,cited,others)
+    return scope['day'] if scope else ''
 
 
 def _school_quote_lead(quote,text,goal):
@@ -3175,6 +3267,9 @@ def _school_borrowed_day(quote,cited,due,goal='',title=''):
     if not due or len(homes)!=1 or homes[0]['text'].count(quote)!=1:return False
     # A list heading's own 今晚 covers each numbered item naming no day (今晚语文：1.…。2.…。), not only the first.
     if due==_school_list_heading_day(quote,cited):return False
+    # Nor the day a proven continuation or common scope of its own original gives it (_school_scope_day).
+    scope=_school_scope_day(quote,cited)
+    if scope and due==scope['day']:return False
     text=homes[0]['text'];start=text.index(quote);end=start+len(quote.rstrip('。；;！!？? \n'))
     published=sent_day(homes[0].get('time',''))
     day=r'\d{4}\s*[-年]|\d{1,2}\s*月\s*\d{1,2}|今天|今日|今晚|明天|明日|明早|明晚|后天|(?:周|星期|礼拜)[一二三四五六日天]'
@@ -5775,6 +5870,11 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             if (brief.get('change')=='append' and brief['state']=='ready' and brief.get('target_basis')
                     and brief['target_basis']['due'] and brief['target_basis']['due']<as_of):
                 brief.update(state='review',reason='原事项截止已过，是否仍需办理补充要求待核对；原要求、安排和反馈保留。')
+            # A day this item's own clause does not state but a proven scope of its own original gives: its basis is kept.
+            if (not historical and not native_action and dated_quote and item['due'] and not clause
+                    and (scope:=_school_scope_day(dated_quote,cited_evidence,title_quotes[:index]+title_quotes[index+1:]))
+                    and scope['day']==item['due']):
+                item['plan']['school_date_scope']=dict(ref=scope['ref'],quote=scope['quote'],kind=scope['kind'])
             accounted.update(e['ref'] for e in cited)
             status_reply=cited and all(e['text'].strip('。！! ') in {'已签署','已完成','已处理','已确认','已提交','已报名','已打卡','已阅读','已知悉'} for e in cited)
             if status_reply and raw_change=='new' and target and brief['title'].strip()==target['title'].strip() and brief['goal'].strip()==target['goal'].strip() and (not due or due==target.get('due','')):
