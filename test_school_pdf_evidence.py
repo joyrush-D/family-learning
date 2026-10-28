@@ -1094,11 +1094,13 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                     finally:probe.doCleanups()
 
     def test_a_reference_classification_never_covers_a_reading_gap_for_any_purpose(self):
-        # Program layer, the same guards for every purpose: a model's reference never settles an unread link/page, PDF group,
-        # material doubt, uncovered collection gap, screenshot or conflict; an original read in full keeps reference.
-        ref='message:qq:1:X';link='阅读资料见 https://example.invalid/a';both=link+' 和 https://example.invalid/b'
+        # Program layer, the same guards for every purpose: a model's reference never settles a bare link, a read page left
+        # partly unread or truncated, a PDF group, material doubt, uncovered collection gap, screenshot or conflict; an
+        # original read in full keeps reference. A link beside complete text keeps the purpose read from that text (the
+        # existing optional-publicity path), and stays unknown only when no purpose was read.
+        ref='message:qq:1:X';link='自愿参加：周末科普讲座，感兴趣的家庭可以了解 https://example.invalid/a';both=link+' 和 https://example.invalid/b'
         page=dict(original_url='https://example.invalid/a',fetched_at='2026-10-29T08:00',text_truncated=False)
-        pages=lambda unread:dict(read=[page],unread=unread,omitted=[],fingerprint='p',model_pages=[dict(text='第一单元阅读材料。')])
+        pages=lambda unread,cut=False:dict(read=[dict(page,text_truncated=cut)],unread=unread,omitted=[],fingerprint='p',model_pages=[dict(text='讲座介绍。')])
         doc=lambda omitted:dict(ref=ref,name='资料.pdf',omitted=omitted,truncated=[],page_count=4,sent=1,groups=2 if omitted else 1,original='pdf')
         pdf=lambda omitted=(),doubts=():dict(fingerprint='f',documents=[doc(list(omitted))],uncertainties=list(doubts))
         material=lambda doubts=():dict(fingerprint='m',refs=[ref],complete_refs=[ref],model=[],uncertainties=list(doubts))
@@ -1110,6 +1112,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
               ('bare link',[dict(ref=ref,kind='text',text='https://example.invalid/a')],{},{},'页面未读取'),
               ('unread link',[dict(ref=ref,kind='text',text=link)],{},{},'链接页面未读取'),
               ('page partly read',[dict(ref=ref,kind='text',text=both)],dict(pages=pages(['https://example.invalid/b'])),{},'未读取：https://example.invalid/b'),
+              ('page truncated',[dict(ref=ref,kind='text',text=link)],dict(pages=pages([],cut=True)),{},'文字已截断'),
               ('PDF group not sent',attached,dict(pdf=pdf(omitted=['3-4'])),{},'未送核或已截断页组'),
               ('PDF doubt',attached,dict(pdf=pdf(doubts=['第2页表格未读清。'])),{},'原件整理待补充：第2页表格未读清。'),
               ('material doubt',attached,dict(material=material(['下半部分被遮挡。'])),{},'待补充：下半部分被遮挡。'),
@@ -1119,6 +1122,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         for purpose in ('unknown','optional','learning','admin'):
             value=dict(title='',goal='',advice='',state='reference',reason='只是材料。',purpose=purpose)
             for name,evidence,reading,extra,gap in rows:
+                if name=='unread link' and purpose!='unknown':gap=''
                 with self.subTest(purpose=purpose,case=name):
                     got=agent._school_brief(dict(value,**extra),incomplete=any(e.get('unread') for e in evidence),
                                             evidence=evidence,school_tasks=[],**reading)
