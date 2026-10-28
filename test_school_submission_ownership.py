@@ -675,8 +675,9 @@ class SchoolIndependentOutcomeTests(unittest.TestCase):
                                               title='家长改：《秋游告知单》周四交', goal='家长已改：告知单签好后周四交给班主任。'))
         self.app.save_task(dict(id=form['id'], status='待跟进', note='虚构家长安排保留。'))
         rows_edit, _, _, tasks_edit, _ = self._state()
-        edited, = [t for t in tasks_edit if t['id'] == form['id']]
-        self.assertEqual(edited['title'], '家长改：《秋游告知单》周四交')
+        edited = next(t for t in self.app.tasks() if t['id'] == form['id'])  # the parent's view: title, text and arrangement
+        self.assertEqual((edited['title'], edited['focus']['scheduled_on']), ('家长改：《秋游告知单》周四交', '2026-11-05'))
+        self.assertTrue(edited['action'].startswith('家长已改：'), edited['action'])
         self._rounds([6, 12])
         rows_after, _, _, tasks_after, _ = self._state()
         self.assertEqual((rows_after, tasks_after, self.model.call_count), (rows_edit, tasks_edit, 1), 'the parent edit stays')
@@ -686,8 +687,8 @@ class SchoolIndependentOutcomeTests(unittest.TestCase):
         self.assertEqual(saved, originals + more)
         self.assertEqual(self.model.call_count, 2)
         self.assertEqual(len([t for t in tasks_last if '秋游告知单' in t['title'] + t['action']]), 1, 'compiled once')
-        kept, = [t for t in tasks_last if t['id'] == form['id']]
-        self.assertEqual((kept['title'], kept['action']), (edited['title'], edited['action']), 'the parent edit stays')
+        kept = next(t for t in self.app.tasks() if t['id'] == form['id'])
+        self.assertEqual((kept['title'], kept['action'], kept['focus']), (edited['title'], edited['action'], edited['focus']), 'the parent edit stays')
         self.assertEqual(len(tasks_last), 3)
 
 
