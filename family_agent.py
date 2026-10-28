@@ -803,16 +803,19 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
         if read_text and not material:
             brief['reason']='已读正文要求已保留；本条所附图片、文件或其他未读内容仍待整理。'
     links=_links(evidence);bare=bool(evidence) and all(_link_only(e.get('text','')) for e in evidence);read=pages['read'] if pages else []
+    # Whatever the purpose, reference settles only what was read: an unread link/page, PDF group, material or collection
+    # gap keeps the review (each guard below then states its own gap). An original read in full stays reference.
+    unread=(bare and not read or links and not (read and not pages['unread'] and not pages['omitted'])
+            or pdf and (pdf.get('uncertainties') or any(d['omitted'] or d['truncated'] for d in pdf['documents']))
+            or material and material['uncertainties']
+            or any((e.get('unread') or e.get('content_incomplete')) and e.get('ref') not in complete_refs for e in evidence))
+    if state=='reference' and unread: state='review'
     if (bare and not read) or purpose=='unknown':
         # An address alone says nothing about purpose; a model guess must not become a task or a goal.
         brief.update(title='',goal='',advice='');purpose='unknown'
         # No purpose is not unread content: an original read in full and classified as reference stays reference, never a
-        # todo awaiting confirmation. An unread link/page, PDF group, material or collection gap keeps the review.
-        unread=(bare and not read or links and not (read and not pages['unread'] and not pages['omitted'])
-                or pdf and (pdf.get('uncertainties') or any(d['omitted'] or d['truncated'] for d in pdf['documents']))
-                or material and material['uncertainties']
-                or any((e.get('unread') or e.get('content_incomplete')) and e.get('ref') not in complete_refs for e in evidence))
-        if state!='reference' or unread: state='review'
+        # todo awaiting confirmation.
+        if state!='reference': state='review'
         if bare and not read: brief['reason']='只有链接或短链，页面未读取，用途和内容待核对；请打开原链接核对后再填写具体要求。'
         elif not incomplete: brief['reason']=brief['reason'] or (SCHOOL_REFERENCE_NOTE if state=='reference' else '用途或内容无法从已读文字判断，请核对原消息。')
     if state=='ready' and (not brief['title'] or not brief['goal']):

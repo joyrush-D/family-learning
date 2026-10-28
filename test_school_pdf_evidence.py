@@ -1057,26 +1057,74 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         return saved
 
     def test_a_reference_reply_over_a_real_reading_gap_stays_for_review(self):
-        # Program layer: a purpose-less reference cannot cover what was not read (material gap, unread link, collection or
-        # screenshot gap, conflict); only an original read in full keeps reference.
-        import family_agenda
-        text='课后阅读要求';ident,parts,keys=self.required_image([text],ident='REF_GAP',title=text,uncertainties=['图片下半部分被遮挡，未读清。'])
-        reply={'actions':[dict(draft(title='',goal='',state='reference',reason='原件已读；该行只是材料名称。',purpose='unknown',learning_subject=''),
-                               due='',existing_item_id=ident,basis=[dict(part=parts[0],text=text)])]}
-        result,calls=self.refresh(reply);brief=self.brief(ident);day=self.now.date().isoformat()
-        self.assertEqual((result['created'],len(calls),self.count('manual_tasks'),brief['state'],brief['purpose']),(0,1,0,'review','unknown'))
-        self.assertIn(ident,json.dumps(family_agenda.snapshot(self.app,day,day),ensure_ascii=False,default=str),'the real gap stays in front of the parent')
-        value=dict(title='',goal='',advice='',state='reference',reason='只是材料。',purpose='unknown')
-        ref='message:qq:1:X'
-        for name,evidence,extra in [('read in full',[dict(ref=ref,kind='text',text='本周升旗仪式由三年级主持。')],{}),
-                                    ('bare link',[dict(ref=ref,kind='text',text='https://example.invalid/a')],{}),
-                                    ('unread link',[dict(ref=ref,kind='text',text='阅读资料见 https://example.invalid/a')],{}),
-                                    ('unread collection',[dict(ref=ref,kind='text',text='学校通知见图片。',unread=True)],{}),
-                                    ('screenshot',[dict(ref=ref,kind='qq_window_fragment',text='升旗仪式')],{}),
-                                    ('conflict',[dict(ref=ref,kind='text',text='本周升旗仪式由三年级主持。')],dict(change='update'))]:
-            with self.subTest(name):
-                got=agent._school_brief(dict(value,**extra),evidence=evidence,school_tasks=[])
-                self.assertEqual((got['state'],got['title'],got['goal']),('reference' if name=='read in full' else 'review','',''))
+        # Root's reproduction through the Store: the same notice (学校要求见图片), the same image and read line 家长签字表。, one
+        # fixed reference reply; only the purpose and whether the reader left a real doubt change. Whatever the purpose, the
+        # doubt keeps a review in the parent's list with its own reason and original; read in full it stays reference.
+        import family_agenda,hashlib
+        text='家长签字表。';doubt='表格下方的学校要求被遮挡，无法确认需要做什么。';model_reason='这是表名，无行动要求。'
+        for purpose in ('unknown','optional','learning','admin'):
+            for gap in ([],[doubt]):
+                with self.subTest(purpose=purpose,doubt=bool(gap)):
+                    probe=type(self)('runTest');probe.setUp()
+                    try:
+                        ident,parts,keys=probe.required_image([text],ident='REF_GAP_'+purpose,title=text,uncertainties=gap)
+                        reply={'actions':[dict(draft(title='',goal='',state='reference',reason=model_reason,purpose=purpose,learning_subject=''),
+                                               due='',existing_item_id=ident,basis=[dict(part=parts[0],text=text)])]}
+                        image=probe.data/'uploads'/('b'*32);before=hashlib.sha256(image.read_bytes()).hexdigest()
+                        result,calls=probe.refresh(reply)
+                        errors=[r[0] for r in probe.rows("SELECT error FROM agent_jobs WHERE id LIKE 'school-task:%'")]
+                        self.assertEqual((result,len(calls),probe.count('manual_tasks'),errors),(dict(used=1,failed=0,created=0),1,0,['']))
+                        if not gap:saved=probe.assert_read_reference(ident,text,purpose,model_reason)
+                        else:
+                            saved=probe.item(ident);plan=json.loads(saved['plan']);brief=plan['school_task'];day=probe.now.date().isoformat()
+                            reason='待补充：'+doubt
+                            self.assertEqual((saved['state'],saved['task_id'],saved['due'],brief['state'],brief['purpose'],brief['reason']),
+                                             ('pending','','','review',purpose,reason))
+                            self.assertNotEqual(saved['body'],agent.SCHOOL_REFERENCE_NOTE);self.assertNotIn('school_learning',plan)
+                            # The same candidate keeps its message, upload and whole read line; the parent sees it with its reason.
+                            action=plan['school_original_action']
+                            self.assertEqual([(r['text'],r['upload_ids']) for r in action['requirements']],[(text,['b'*32])])
+                            self.assertEqual([e['ref'] for e in json.loads(saved['evidence'])],[a['ref'] for a in action['anchors']])
+                            listed={i['id']:i for g in probe.store.school_messages(dict(child_id='child-1',day=day),dict)['groups'] for m in g['messages'] for i in m['items']}
+                            self.assertEqual((listed[ident]['school_state'],listed[ident]['reason']),('review',reason))
+                            self.assertIn(ident,json.dumps(family_agenda.snapshot(probe.app,day,day),ensure_ascii=False,default=str),'the real gap stays in front of the parent')
+                        # Reopening asks nothing again, adds nothing and keeps the original's bytes.
+                        self.assertEqual(probe.refresh(reply,minutes=1),(dict(used=0,failed=0,created=0),[]))
+                        self.assertEqual((probe.item(ident),probe.count('manual_tasks'),hashlib.sha256(image.read_bytes()).hexdigest()),(saved,0,before))
+                    finally:probe.doCleanups()
+
+    def test_a_reference_classification_never_covers_a_reading_gap_for_any_purpose(self):
+        # Program layer, the same guards for every purpose: a model's reference never settles an unread link/page, PDF group,
+        # material doubt, uncovered collection gap, screenshot or conflict; an original read in full keeps reference.
+        ref='message:qq:1:X';link='阅读资料见 https://example.invalid/a';both=link+' 和 https://example.invalid/b'
+        page=dict(original_url='https://example.invalid/a',fetched_at='2026-10-29T08:00',text_truncated=False)
+        pages=lambda unread:dict(read=[page],unread=unread,omitted=[],fingerprint='p',model_pages=[dict(text='第一单元阅读材料。')])
+        doc=lambda omitted:dict(ref=ref,name='资料.pdf',omitted=omitted,truncated=[],page_count=4,sent=1,groups=2 if omitted else 1,original='pdf')
+        pdf=lambda omitted=(),doubts=():dict(fingerprint='f',documents=[doc(list(omitted))],uncertainties=list(doubts))
+        material=lambda doubts=():dict(fingerprint='m',refs=[ref],complete_refs=[ref],model=[],uncertainties=list(doubts))
+        attached=[dict(ref=ref,kind='text',text='资料见附件。',unread=True)]
+        rows=[('read in full',[dict(ref=ref,kind='text',text='本周升旗仪式由三年级主持。')],{},{},''),
+              ('page read in full',[dict(ref=ref,kind='text',text=link)],dict(pages=pages([])),{},''),
+              ('PDF read in full',attached,dict(pdf=pdf()),{},''),
+              ('material read in full',attached,dict(material=material()),{},''),
+              ('bare link',[dict(ref=ref,kind='text',text='https://example.invalid/a')],{},{},'页面未读取'),
+              ('unread link',[dict(ref=ref,kind='text',text=link)],{},{},'链接页面未读取'),
+              ('page partly read',[dict(ref=ref,kind='text',text=both)],dict(pages=pages(['https://example.invalid/b'])),{},'未读取：https://example.invalid/b'),
+              ('PDF group not sent',attached,dict(pdf=pdf(omitted=['3-4'])),{},'未送核或已截断页组'),
+              ('PDF doubt',attached,dict(pdf=pdf(doubts=['第2页表格未读清。'])),{},'原件整理待补充：第2页表格未读清。'),
+              ('material doubt',attached,dict(material=material(['下半部分被遮挡。'])),{},'待补充：下半部分被遮挡。'),
+              ('unread collection',[dict(ref=ref,kind='text',text='学校通知见图片。',unread=True)],{},{},'尚未读全'),
+              ('screenshot',[dict(ref=ref,kind='qq_window_fragment',text='升旗仪式')],{},{},'仅截图可见内容'),
+              ('conflict',[dict(ref=ref,kind='text',text='本周升旗仪式由三年级主持。')],{},dict(change='update'),'学校要求有变更')]
+        for purpose in ('unknown','optional','learning','admin'):
+            value=dict(title='',goal='',advice='',state='reference',reason='只是材料。',purpose=purpose)
+            for name,evidence,reading,extra,gap in rows:
+                with self.subTest(purpose=purpose,case=name):
+                    got=agent._school_brief(dict(value,**extra),incomplete=any(e.get('unread') for e in evidence),
+                                            evidence=evidence,school_tasks=[],**reading)
+                    self.assertEqual((got['state'],got['title'],got['goal']),('review' if gap else 'reference','',''))
+                    if gap:self.assertIn(gap,got['reason'])
+                    else:self.assertEqual((got['reason'],got['purpose']),('只是材料。',purpose))
 
     # Actual isolated Flash returns (effort low, 6000 output budget) under the current prompt, Root's run of 6bceda7
     # (product code identical at 1cd1ba8): fixed reader extraction, not OCR or the formal main model. Each reply is the
