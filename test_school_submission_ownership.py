@@ -36,6 +36,23 @@ CASES = (
     ('S07', '英语今晚跟读Unit 5两遍。',
      (('英语今晚跟读Unit 5两遍', '英语', 'learning', '英语今晚跟读Unit 5两遍。', '明晚录音上传班级小程序打卡。', '',
        ('Unit 5', '两遍'), ('录音', '上传', '小程序', '明晚')),)),
+    # Root's v1 rejection controls (run school-step-ownership-20261028-v2): a clause naming its own other object owns its
+    # step wherever it stands in the sentence; a clause naming this item's own object owns it even before the item.
+    ('I03', '《安全告知书》请监护人签名，语文今晚朗读《春晓》三遍。',
+     (('语文今晚朗读《春晓》三遍', '语文', 'learning', '语文今晚朗读《春晓》三遍。', '请监护人签名。', '',
+       ('春晓', '三遍'), ('签名', '告知书', '监护人')),
+      ('《安全告知书》请监护人签名', '', 'admin', '《安全告知书》请监护人签名。', '', '', ('告知书', '监护人', '签名'), ('春晓',)))),
+    ('P02', '语文今晚完成《晨光练习册》第2页，告知书请家长签字。',
+     (('语文今晚完成《晨光练习册》第2页', '语文', 'learning', '语文今晚完成《晨光练习册》第2页。', '请家长签字。', '',
+       ('第2页',), ('签字', '告知书')),
+      ('告知书请家长签字', '', 'admin', '告知书请家长签字。', '', '', ('告知书', '家长', '签字'), ('第2页',)))),
+    ('P01', '请家长在《星雨作业本》上签字，语文今晚完成《星雨作业本》第3页。',
+     (('语文今晚完成《星雨作业本》第3页', '语文', 'learning', '语文今晚完成《星雨作业本》第3页。', '请家长在《星雨作业本》上签字。', '',
+       ('第3页', '星雨作业本', '家长', '签字'), ()),)),
+    # The original says no signature is needed: the goal keeps that sentence, no trusted field turns it into a requirement.
+    ('I06', '语文今晚写《春日练习册》第4页，不需要家长签名。',
+     (('语文今晚写《春日练习册》第4页', '语文', 'learning', '语文今晚写《春日练习册》第4页，不需要家长签名。', '家长签名。', '',
+       ('第4页', '不需要家长签名'), ('提交要求',)),)),
 )
 RECEIPT = ['title', 'goal', 'advice', 'state', 'reason', 'change', 'target_id', 'purpose', 'submission']
 
@@ -83,6 +100,18 @@ class SchoolSubmissionOwnershipTests(unittest.TestCase):
             with self.subTest(case=case):
                 self.setUp()
                 self._case(case + '-goal', text, items, goal=lambda own, step: own.rstrip('。') + '，' + step)
+
+    def test_negated_step_is_never_a_trusted_requirement(self):
+        """I06: the raw receipt keeps the model's step for tracing; the trusted task fields never hold it as a requirement."""
+        case, text, items = next(c for c in CASES if c[0] == 'I06')
+        for goal in (None, lambda own, step: own.rstrip('。') + '，' + step):
+            with self.subTest(goal=bool(goal)):
+                self.setUp()
+                rows = self._case(case + ('-goal' if goal else ''), text, items, goal=goal)
+                plan, = [json.loads(row['plan']) for row in rows]
+                self.assertEqual(plan['school_selection_receipt']['submission'], '家长签名。')
+                self.assertNotIn('submission', plan['school_task'])
+                self.assertEqual(plan['school_task']['goal'], '语文今晚写《春日练习册》第4页，不需要家长签名。')
 
     def test_recovery_rereads_the_saved_receipt_with_the_same_proof(self):
         """Every saved reread, untouched correction and cleared reread re-runs _school_brief on the stored receipt and the
