@@ -582,7 +582,7 @@ def _school_outcome_objects(part):
     return found
 
 
-def _school_separate_outcomes(proposals, evidence, native_refs=(), later=None):
+def _school_separate_outcomes(proposals, evidence, native_refs=(), source_later=None):
     """An explicit independent outcome in an item's own original gets its own action, from the original's words.
 
     The outcome is a run of the item's home original (the cited text message holding its verified quote) starting at a part
@@ -605,7 +605,7 @@ def _school_separate_outcomes(proposals, evidence, native_refs=(), later=None):
     reply's title or of a goal sentence also naming the item's own object, when a proposal names it without a quote that
     separates it, or when its source is not settled: another original of the batch names the object (a correction,
     withdrawal or new version), or a later one of the same publisher cannot be read whole (recalled, unread, not text). Those
-    are read in the batch and in later: the source's own stored messages after the batch, which a claimed retry no longer
+    are read in the batch and in source_later: the source's own stored messages after the batch, which a claimed retry no longer
     regroups (a correction four minutes later is another batch); an omitted run is compiled only when the caller gave them.
     Returns the proposals and marks: index -> dict(receipt, split) for a cleaned one, dict(formed) for a formed one.
     """
@@ -617,7 +617,7 @@ def _school_separate_outcomes(proposals, evidence, native_refs=(), later=None):
     def unsettled(home,forms):  # Another original names the object, or a later one of the same publisher is not read whole.
         inner={plain(f.strip('《》')) for f in forms}-{''}
         publisher=home.get('publisher') if isinstance(home.get('publisher'),str) and home['publisher'].strip() else None
-        for e in list(evidence)+list(later or ()):
+        for e in list(evidence)+list(source_later or ()):
             if e is home or e.get('ref')==home.get('ref'):continue
             if any(n in plain(str(e.get('text',''))) for n in inner):return True
             if (publisher and e.get('publisher')==publisher and str(e.get('time',''))>=str(home.get('time',''))
@@ -724,7 +724,7 @@ def _school_separate_outcomes(proposals, evidence, native_refs=(), later=None):
         if any(isinstance(q.get(k),str) and n in plain(q[k]) for q in proposals for k in ('task_title','task_goal','task_submission') for n in names):
             raise unsplit('学校原文另一对象的独立要求未能从模型归纳中分开')
         # Without the source's later words the program cannot know the run is still current: the existing retry stays.
-        if later is None:raise unsplit('学校原文另一对象的独立要求未归纳')
+        if source_later is None:raise unsplit('学校原文另一对象的独立要求未归纳')
         if unsettled(home,forms):raise unsplit('学校原文另一对象的独立要求另有更正、撤回或未读内容，未按旧依据补项')
         formed.add(key)
         form(index,run,forms,learning,last,home,omitted=True)
@@ -5689,7 +5689,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     if routing and not historical:
         # An explicit independent outcome the reply merged into another proposal is given its own action from the original.
         # school_later (the source's own later stored messages) only guards that compile; the model never sees it.
-        result['proposals'],split_marks=_school_separate_outcomes(result['proposals'],evidence,{a['ref'] for a in native_actions},later=school_later)
+        result['proposals'],split_marks=_school_separate_outcomes(result['proposals'],evidence,{a['ref'] for a in native_actions},source_later=school_later)
     refs = {entry['ref']: entry['text'] for entry in evidence}; output = []; accounted = set();history_actions=[]
     title_quotes=[p['title_quote'].strip() if isinstance(p,dict) and isinstance(p.get('title_quote'),str) else '' for p in result['proposals']]
     title_refs=[{q.get('ref') for q in p['evidence'] if isinstance(q,dict)} if isinstance(p,dict) and isinstance(p.get('evidence'),list) else set()
