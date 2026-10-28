@@ -3,7 +3,7 @@
 上游：HKUDS/DeepTutor@a31d82624c27d75f4e771d4fcb78dce16470b383（Apache-2.0），文件见third_party/deeptutor/；
 除lesson_evidence.py把RAG导入移入实际使用的函数（NOTICE与patches/）外均为原字节。只走确定性的register_question、grade_interaction、
 abandon_active_question、repair_question；不导入semantic/Agent/LLM/RAG模块，禁止联网。
-家庭SQLite是唯一权威：每次请求把上一份快照写入临时目录，原Service运算后序列化返回，
+家庭SQLite是唯一权威：每次请求把上一份快照写入父进程给定的一次性work_dir（环境不含HOME），原Service运算后序列化返回，
 临时目录随即丢弃。由family_deeptutor.py用`python -I`启动，输入输出各一行JSON。"""
 import base64, json, socket, sqlite3, sys, tempfile
 from pathlib import Path
@@ -57,7 +57,7 @@ def run(request):
     from deeptutor.learning.service import LearningService
     from deeptutor.learning.storage import LearningStore
     op = request.get('op')
-    with tempfile.TemporaryDirectory(prefix='family-deeptutor-') as tmp:
+    with tempfile.TemporaryDirectory(prefix='family-deeptutor-', dir=request.get('work_dir') or None) as tmp:
         root = Path(tmp)
         _restore(root, request.get('snapshot'))
         service = LearningService(store=LearningStore(root=root))

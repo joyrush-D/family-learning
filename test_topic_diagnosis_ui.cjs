@@ -51,9 +51,20 @@ ok(lines.length > 0 && lines.every(l => !/已掌握|掌握了/.test(l.label)), '
 ok(!sum.mastered.some(id => s.status[id].src === 'inferred') || lines.some(l => l.label === T.STATUS.mastered_inferred), 'inferred ancestors are labelled as graph inference');
 ok(T.judge(E, { type: 'self', prompt: 'x' }, 'answer', 'x').engine === 'skip', 'manual verdict goes to the engine as skip, never as correct');
 ok(T.judge(E, { type: 'numeric', answer: '0.5' }, 'answer', '1/2').verdict === 'correct', 'upstream numeric judge accepts 1/2 for 0.5 (a case DeepTutor text grading can disagree with)');
-const r1 = T.retryItem(E, sub, diag);
-ok(r1 && !T.seenQids(diag).has(r1.question.id), 'retry offers a question not seen in this session: ' + (r1 && r1.question.id));
+// 新题再试：真实原题集先滤掉同孩历次见过的题号（服务端state.seen_qids），再交原buildGraph/createSession/nextItem。
+const raw = { topics: topics.filter(t => ids.has(t.id)), dependencies: deps.filter(d => ids.has(d.topicId) && ids.has(d.prerequisiteId)), questions: questions.filter(q => ids.has(q.topicId)) };
+const seen1 = T.seenQids({ seen_qids: facts.map(x => x.qid) });
+const r1 = T.retryItem(E, raw, sub, diag, seen1);
+ok(r1 && !seen1.has(r1.question.id), 'retry offers a question this child never saw in any diagnosis: ' + (r1 && r1.question.id));
+const earlier = new Set([...seen1, r1.question.id]);
+const r2 = T.retryItem(E, raw, sub, diag, earlier);
+ok(!r2 || !earlier.has(r2.question.id), 'a question shown in an earlier diagnosis is never offered as new again: ' + (r2 && r2.question.id));
 const bank = sub.bank[TARGET].map(q => q.id);
-const exhausted = { ...diag, items: bank.map((qid, k) => ({ seq: k + 1, topic_id: TARGET, qid, engine_result: 'wrong', answer: '' })) };
-ok(T.retryItem(E, sub, exhausted) === null, 'when avoid is exhausted (engine falls back to a seen question) there is no independent retry');
+const allButLast = new Set(bank.slice(0, -1));
+const avoidOnly = E.nextItem(sub, E.createSession(sub, [TARGET], { limit: 1, seed: 'retry-7', avoid: [...allButLast] }));
+const r3 = T.retryItem(E, raw, sub, diag, allButLast);
+ok(r3 && !allButLast.has(r3.question.id), 'with unseen questions left the filtered bank still offers one (avoid-only picked ' + (avoidOnly && avoidOnly.question.id) + ', filtered picked ' + (r3 && r3.question.id) + ')');
+ok(T.retryItem(E, raw, sub, diag, new Set(bank)) === null, 'when every target question was seen there is no new question (no seed change)');
+const one = E.buildGraph(raw.topics, raw.dependencies, raw.questions.filter(q => q.topicId !== TARGET || q.id === bank[bank.length - 1]));
+ok(E.needConfirm(sub, null, TARGET) === 3 && E.needConfirm(one, null, TARGET) === 1, 'filtering changes upstream needConfirm (3 -> 1), so a single retry only records this attempt');
 say(passed + ' passed');
