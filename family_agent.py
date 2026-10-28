@@ -562,19 +562,41 @@ def _school_step_owned(goal, step, texts, others=()):
 _SCHOOL_RECEIPT_KEYS=('title','goal','advice','state','reason','change','target_id','purpose','submission')
 
 
-def _school_separate_forms(proposals, evidence, native_refs=()):
-    """An explicit separate administrative form in an item's own original gets its own action, from the original's words.
+_SCHOOL_OUTCOME_LEARN=r'(?:完成|做|写|读|朗读|背诵|抄写|默写|听写|跟读|订正|预习|复习|阅读|练习)'
+_SCHOOL_OUTCOME_VERB=r'(?:'+_SCHOOL_OUTCOME_LEARN[3:-1]+r'|签署|填写|填好|交回|提交|上交)'
+_SCHOOL_OUTCOME_RANGE=(r'(?:第[一二三四五六七八九十百0-9]+(?:页|题|课|章|单元|篇|首|段|节|小节)'
+                       r'|[一二两三四五六七八九十0-9]+(?:遍|页|题|篇|首|段))')
 
-    The form is a run of the item's home original (the cited text message holding its verified quote) starting at a part
-    naming a closed form title (_LEARNING_FORM_TITLE) that the item's own first quoted part does not name, up to its sentence
-    end or a part naming the item's own object or another closed object again. It must be an affirmed addressed outcome (a
-    signer, a handback or a fill predicate; no negation outside reminders, change, condition, question or reference use), not
-    the list's common scope, and no other proposal may quote it (then the sibling proof already holds). A proposal carrying
-    that form name in its goal or submission merged it: it keeps only its own words (its goal/submission sentences of the
-    run and a reply day only the run states leave), and one proposal is formed from the run alone, compiled like a ledger
-    outcome, with no reply day (read from its own words later). A form no proposal quotes or carries, or one that cannot be
-    taken out of the reply's title or of a goal sentence also naming the item's own object, keeps the whole batch for the
-    existing retry. Returns the proposals and marks: index -> dict(receipt, split) for a cleaned one, dict(formed) for a formed one.
+
+def _school_outcome_objects(part):
+    """The closed names one part states as the object of its own outcome, whatever they are called: the part opens with the
+    name (《秋游告知单》家长签字), a signer or filler acts on it (家长在《物品领用单》上签名, 在《…》上填写), or an outcome verb
+    takes it directly (还要完成《图形册》第3题, 签署《…》). A name the work is checked against or sent to (对照《参考答案》,
+    上传到《班级小程序》) is no object of its own."""
+    lead=r'(?:请|另外|另|此外|还有|还要|还需要?|再|并)?\s*[，,]?\s*'
+    found=set(re.findall(r'^\s*'+lead+r'(《[^《》]{1,40}》)',part))
+    found|={m[1] for m in re.finditer(r'在\s*(《[^《》]{1,40}》)[^，,。；;《》]{0,12}?(?:签|盖章|填写|填好|登记)',part)}
+    found|={m[1] for m in re.finditer(_SCHOOL_OUTCOME_VERB+r'(?:好|完)?\s*(?:一份|这份|该份|该)?\s*(《[^《》]{1,40}》)',part)}
+    return found
+
+
+def _school_separate_outcomes(proposals, evidence, native_refs=()):
+    """An explicit independent outcome in an item's own original gets its own action, from the original's words.
+
+    The outcome is a run of the item's home original (the cited text message holding its verified quote) starting at a part
+    whose own object (_school_outcome_objects) is a closed name the item's own first quoted part does not name, up to its
+    sentence end or a part naming the item's own object or another closed object again. What the object is called decides
+    nothing: the run must state an affirmed outcome of it, administrative (a signer, a handback or a fill predicate) or
+    learning (a learning verb on the name with the run's own range, 完成《图形册》第3题), with no negation outside reminders,
+    change, condition, question or reference use; it may not open with the list's common scope or name the item's own object
+    again (then it is that item's step: 请家长在《雨桐阅读本》第5页签名 beside 读《雨桐阅读本》第5页), and no other proposal may
+    quote it (then the sibling proof already holds). A proposal carrying that name in its goal or submission merged it: it
+    keeps only its own words (its goal/submission sentences of the run and a reply day only the run states leave), and one
+    proposal is formed from the run alone, compiled like a ledger outcome with the message's later common standard
+    (两项做完都要检查), its purpose from that predicate, a learning subject only from its own original, and no reply day (read
+    from its own words later). An outcome no proposal quotes or carries, or one that cannot be taken out of the reply's title
+    or of a goal sentence also naming the item's own object, keeps the whole batch for the existing retry. Returns the
+    proposals and marks: index -> dict(receipt, split) for a cleaned one, dict(formed) for a formed one.
     """
     from family_agenda import deadlines,sent_day
     entries={e['ref']:e for e in evidence};out=[dict(p) for p in proposals];marks={};runs=set();carried=set();formed=set()
@@ -599,20 +621,24 @@ def _school_separate_forms(proposals, evidence, native_refs=()):
         head=next((x for x in quoted if _school_named_objects(x[2])),quoted[0] if quoted else None)
         if head is None:continue
         own=_school_named_objects(head[2])
+        # The item's own object is read by its own names when it has them: shared verbs (完成, 签字) name no object.
+        mine=''.join(sorted(own)) or head[2]
         for at,(start,end,part) in enumerate(parts):
-            forms=set(_LEARNING_FORM_TITLE.findall(part))-own
+            forms={f for f in _school_outcome_objects(part) if f.lower() not in own}
             if start==head[0] or not forms:continue
             stop=min([i for i in (text.find(c,start) for c in '。；;！!？?\n') if i>=0]+[len(text)])
             last=end
             for left,right,later in parts[at+1:]:
-                if (left>=stop or left<=head[0]<right or _school_step_names(later,head[2])
+                if (left>=stop or left<=head[0]<right or _school_step_names(later,mine)
                         or _school_named_objects(later)-_school_named_objects(part)):break
                 last=right
             run=text[start:last].strip();bare=re.sub(r'《[^》]*》','',run)
-            if (re.match(_SCHOOL_NATIVE_COMMON,run) or _school_step_names(part,head[2]) or _school_step_negated(run)
+            learning=any(re.search(_SCHOOL_OUTCOME_LEARN+r'(?:好|完)?\s*(?:一份|这份|该份|该)?\s*'+re.escape(f)+r'[^，,。；;《》]{0,6}?'+_SCHOOL_OUTCOME_RANGE,run)
+                         for f in forms)
+            if (re.match(_SCHOOL_NATIVE_COMMON,run) or _school_step_names(part,mine) or _school_step_negated(run)
                     or re.search(_SCHOOL_NATIVE_UNSETTLED+'|'+_SCHOOL_NATIVE_CHANGE+r'|仅供|只供|参考|自愿|选做|可选',bare)
                     or text[last:last+1] in '？?'
-                    or not (_school_signers(run)-{''} or 'handback' in _school_clause_roles(run) or re.search(r'填写|填好|盖章',run))):continue
+                    or not (learning or _school_signers(run)-{''} or 'handback' in _school_clause_roles(run) or re.search(r'填写|填好|盖章',run))):continue
             if any(j!=index and other and any(max(start,m.start())<min(last,m.end()) for m in re.finditer(re.escape(other),text))
                    for j,other in enumerate(quotes)):continue
             key=(home['ref'],start,last);runs.add(key)
@@ -620,23 +646,23 @@ def _school_separate_forms(proposals, evidence, native_refs=()):
             if not any(n in plain(p['task_goal']+'\n'+p['task_submission']) for n in names):continue
             carried.add(key)
             if any(n in plain(p['task_title']) for n in names) or start<=q0<last:
-                raise unsplit('同一消息另一表单的独立要求无法从本项标题或锚点分开')
+                raise unsplit('同一消息另一对象的独立要求无法从本项标题或锚点分开')
             cleaned=out[index]
             if q0<start<q1:
                 cleaned['title_quote']=text[q0:start].rstrip(' ，,；;')
-                if not cleaned['title_quote']:raise unsplit('同一消息另一表单的独立要求无法从本项锚点分开')
+                if not cleaned['title_quote']:raise unsplit('同一消息另一对象的独立要求无法从本项锚点分开')
             def own_lines(value):
                 kept=[]
                 for line in re.findall(r'[^。；;！!？?\n]+[。；;！!？?\n]*',value):
                     words=plain(line)
                     if any(n in words for n in names):
-                        if _school_step_names(line,head[2]):raise unsplit('同一句归纳同时含本项与另一表单的要求')
+                        if _school_step_names(line,mine):raise unsplit('同一句归纳同时含本项与另一对象的要求')
                         continue
                     if words and words in plain(run) and words not in plain(head[2]):continue
                     kept.append(line)
                 return ''.join(kept).strip()
             cleaned['task_goal']=own_lines(cleaned['task_goal']);cleaned['task_submission']=own_lines(cleaned['task_submission'])
-            if not cleaned['task_goal']:raise unsplit('另一表单分出后本项没有自己的要求')
+            if not cleaned['task_goal']:raise unsplit('另一独立要求分出后本项没有自己的要求')
             published=sent_day(home.get('time',''))
             def days(words,beside):  # the days these words state, read as every own-day reading reads them
                 return deadlines(words,published)|({own_day} if (own_day:=_school_own_due(words,[home],[beside])) else set())
@@ -646,13 +672,20 @@ def _school_separate_forms(proposals, evidence, native_refs=()):
             marks.setdefault(index,dict(receipt=receipt,split=[]))['split'].append(dict(ref=home['ref'],quote=run))
             if key in formed:continue
             formed.add(key)
-            value=_school_native_value(dict(primary=run,subject='',time=home.get('time',''),header='',quote=run,supplements=[]),text)
+            # Its learning subject only from its own original: the run's own, else the one its message names (outside titles).
+            subjects=_school_native_subjects(run) or _school_native_subjects(text)
+            subject=next(iter(subjects)) if learning and len(subjects)==1 else ''
+            # A later sentence of the same message opening with the list's common scope is this outcome's standard too.
+            common=[s.strip() for s in re.findall(r'[^。；;！!？?\n]+',text[last:]) if re.match(_SCHOOL_NATIVE_COMMON,s.strip())]
+            primary=re.sub(r'^\s*(?:另外|此外|还有|还要|还需要?|同时|再)\s*[，,]?\s*','',run)
+            value=_school_native_value(dict(primary=primary,subject=subject,time=home.get('time',''),header='',quote=run,supplements=[],
+                                            conditions=common),text)
             marks[len(out)]=dict(formed=dict(index=index,receipt=receipt,ref=home['ref'],quote=run))
-            out.append(dict(title_quote=run,focus='school',due='',evidence=[dict(ref=home['ref'])],learning_subject='',learning_goal_id='',
+            out.append(dict(title_quote=run,focus='school',due='',evidence=[dict(ref=home['ref'])],learning_subject=subject,learning_goal_id='',
                 task_title=value['title'],task_goal=value['goal'],task_advice='',task_state=p['task_state'],
-                task_reason='原文另有《》表单的独立办理要求，模型将它并入同批另一项；已按原文单独成项，模型原归纳保留在原项回执。',
-                task_change='new',task_target_id='',task_purpose='admin',task_submission=''))
-    if runs-carried:raise unsplit('学校原文另一表单的独立要求未归纳')
+                task_reason='原文另有独立对象的明确要求，模型将它并入同批另一项；已按原文单独成项，模型原归纳保留在原项回执。',
+                task_change='new',task_target_id='',task_purpose='learning' if learning else 'admin',task_submission=''))
+    if runs-carried:raise unsplit('学校原文另一对象的独立要求未归纳')
     return out,marks
 
 
@@ -4694,7 +4727,9 @@ def _school_native_affirmed_manner(activity,part):
 
 
 # "以上两项都…", "两项都…", "以上作业都…": the one scope reading a list's common standard uses, in or after its message.
-_SCHOOL_NATIVE_COMMON=r'^(?:(?:以上|上述|这)?([二两三四五六七八九十2-9])项(?:作业|任务|要求)?|(?:以上|上述|这些|所有)(?:作业|任务|要求))(?:都|均)'
+# A finishing word before 都/均 (两项做完都要检查, 以上作业完成后均…) is the same scope; the match ends before it, so its words stay.
+_SCHOOL_NATIVE_COMMON=(r'^(?:(?:以上|上述|这)?([二两三四五六七八九十2-9])项(?:作业|任务|要求)?|(?:以上|上述|这些|所有)(?:作业|任务|要求))'
+                       r'(?:都|均|(?=(?:(?:做|写|读|背)完|完成)(?:之后|以后|后)?(?:都|均)))')
 _SCHOOL_NATIVE_COUNT={'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}
 
 
@@ -5553,8 +5588,8 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         raise AgentError('模型筛选字段不正确')
     split_marks={}
     if routing and not historical:
-        # A separate closed-name form the reply merged into another proposal is given its own action from the original.
-        result['proposals'],split_marks=_school_separate_forms(result['proposals'],evidence,{a['ref'] for a in native_actions})
+        # An explicit independent outcome the reply merged into another proposal is given its own action from the original.
+        result['proposals'],split_marks=_school_separate_outcomes(result['proposals'],evidence,{a['ref'] for a in native_actions})
     refs = {entry['ref']: entry['text'] for entry in evidence}; output = []; accounted = set();history_actions=[]
     title_quotes=[p['title_quote'].strip() if isinstance(p,dict) and isinstance(p.get('title_quote'),str) else '' for p in result['proposals']]
     title_refs=[{q.get('ref') for q in p['evidence'] if isinstance(q,dict)} if isinstance(p,dict) and isinstance(p.get('evidence'),list) else set()
