@@ -816,6 +816,24 @@ def action_lines(title,action,words=None):
     return [x for line in shown for x in _steps(line)]
 
 
+def _cited_by(c):
+    """Every live school item's own stored words by the child and original it cites, read once per listing."""
+    cited_by={}
+    for r in c.execute("SELECT id,child_id,plan,evidence FROM agent_items WHERE kind='school' AND state!='superseded'"):
+        for ref in {e.get('ref') for e in json.loads(r['evidence'] or '[]') if isinstance(e,dict)}:
+            cited_by.setdefault((r['child_id'],ref),{})[r['id']]=_stored_date_quote(json.loads(r['plan']))
+    return cited_by
+
+
+def _date_siblings(cited_by,row):
+    """Every other live item of this child citing one of the same originals: its own words are never this item's role."""
+    others={}
+    for e in json.loads(row['evidence'] or '[]'):
+        if isinstance(e,dict):others.update(cited_by.get((row['child_id'],e.get('ref')),{}))
+    others.pop(row['id'],None)
+    return list(others.values())
+
+
 def enrich(app,c,tasks):
     owners={p['name']:p['id'] for p in app.profiles(c)}
     reported={r['task_id']:(r['child_id'],r['day'],r['report'],r['subject']) for r in c.execute('SELECT task_id,child_id,day,report,subject FROM study_items WHERE id=task_id')} if c.execute("SELECT 1 FROM sqlite_master WHERE name='study_items'").fetchone() else {}
@@ -839,16 +857,8 @@ def enrich(app,c,tasks):
                 # The same saved row, words and subject its pending candidate was filed with.
                 subject_title=proposal['title'];own_quote=_stored_date_quote(plan);saved_subject=str((plan.get('school_learning') or {}).get('subject') or '')
                 school_focus=_school_focus(c,task,proposal,plan)
-                # Every other live item of this child citing one of the same originals: its own words are never this item's role.
-                if cited_by is None:
-                    cited_by={}
-                    for r in c.execute("SELECT id,child_id,plan,evidence FROM agent_items WHERE kind='school' AND state!='superseded'"):
-                        for ref in {e.get('ref') for e in json.loads(r['evidence'] or '[]') if isinstance(e,dict)}:
-                            cited_by.setdefault((r['child_id'],ref),{})[r['id']]=_stored_date_quote(json.loads(r['plan']))
-                others={}
-                for e in json.loads(proposal['evidence'] or '[]'):
-                    if isinstance(e,dict):others.update(cited_by.get((proposal['child_id'],e.get('ref')),{}))
-                others.pop(proposal['id'],None);date_siblings=list(others.values())
+                if cited_by is None:cited_by=_cited_by(c)
+                date_siblings=_date_siblings(cited_by,proposal)
         due=task['due'];teacher={}
         captured=reported.get(task['id'])
         if captured and captured[0]==owners.get(task['child']) and task['source'] in family_study.CAPTURE_SOURCES:
@@ -902,16 +912,17 @@ def snapshot(app,start,end):
                 title=task['title'],agenda=task['agenda'],status=status,closed=status in app.TASK_CLOSED,
                 closed_on=date(u.get('updated','')[:10]),body=task['action']))
         if 'agent_items' in tables:
-            store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
+            store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False);cited_by=_cited_by(c)
             for row in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='pending' ORDER BY created DESC,id DESC"):
                 plan=json.loads(row['plan']);brief=plan.get('school_task',{})
                 if row['child_id'] not in ids or brief.get('state')=='reference':continue
                 refs=[e['ref'] for e in json.loads(row['evidence'])]
                 purpose=brief.get('purpose')
                 category=task_category((brief.get('title') or row['title']) if purpose in family_agent.PURPOSES else row['title'],purpose)
-                # A candidate reads its day from the same stored original words and publication as its accepted item.
+                # A candidate reads its day from the same stored original words, publication and siblings as its accepted item.
                 m=metadata(app,c,row['child_id'],row['title'],row['due'],refs,publication_ref=family_agent.school_original_publication_ref(store,c,row),
-                           date_quote=_stored_date_quote(plan),goal=str(brief.get('goal') or ''),date_header=_stored_date_header(plan,_stored_date_quote(plan)))
+                           date_quote=_stored_date_quote(plan),goal=str(brief.get('goal') or ''),date_header=_stored_date_header(plan,_stored_date_quote(plan)),
+                           date_siblings=_date_siblings(cited_by,row))
                 m['category']=category
                 m.update(subject_fields(row['title'],_stored_date_quote(plan),saved=str((plan.get('school_learning') or {}).get('subject') or '')))
                 items.append(dict(id=row['id'],task_id='',kind='school',child_ids=[row['child_id']],title=row['title'],
