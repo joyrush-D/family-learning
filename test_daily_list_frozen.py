@@ -689,6 +689,55 @@ class ContinuedSupplementVariantTests(unittest.TestCase):
                                'T01-variant-two-antecedents')
         self.assertIn('学校补充要求未归到对应作业', error)
 
+    def test_an_order_after_the_object_is_no_object_of_its_own(self):
+        """完成后/做完以后 only orders the added step after the pointed-back object: it binds under the same identity and
+        window, kept in the requirement, and hides no other teacher, source, candidate, change, negation, day or count."""
+        same = ('cn-teacher-a', 'synthetic-group')
+        for text, goal in (('刚才的朗读完成后还要请家长签字。', '朗读完成后还要请家长签字'), ('上面的朗读读完以后也要家长签字', '朗读读完以后也要家长签字'),
+                           ('刚刚布置的《荷塘》读完之后还需要家长签字！', '《荷塘》读完之后还需要家长签字')):
+            self.assertEqual(self._ledger((text, 120, *same)), {'今晚朗读《荷塘》2遍': [goal]}, text)
+        self.assertEqual(self._ledger(('刚才的朗读完成后还要请家长签字。', 60, *same), first='今晚朗读《荷塘》2遍；抄写生字一遍。'),
+                         {'今晚朗读《荷塘》2遍': ['朗读完成后还要请家长签字'], '抄写生字一遍': []}, 'only the item it names')
+        unbound = {'今晚朗读《荷塘》2遍': []}
+        for later in (('刚才的朗读完成后还要请家长签字。', 60, 'cn-teacher-b', 'synthetic-group'),  # another teacher
+                      ('刚才的朗读完成后还要请家长签字。', 60, 'cn-teacher-a', 'synthetic-other'),  # another source or child binding
+                      ('刚才的朗读完成后还要请家长签字。', 600, *same), ('刚才的朗读完成后改为家长签字。', 60, *same),
+                      ('刚才的朗读完成后取消家长签字。', 60, *same), ('刚才的朗读完成后也不用家长签字。', 60, *same),
+                      ('刚才的朗读完成后还要家长签字吗？', 60, *same), ('刚才的朗读完成后明天还要家长签字。', 60, *same),
+                      ('刚才的朗读完成后还要家长明早签字。', 60, *same), ('刚才的朗读完成后还要再读1遍。', 60, *same),
+                      ('刚才的朗读完成后还要再读两遍。', 60, *same), ('刚才的作业完成后还要家长签字。', 60, *same),
+                      ('刚才的完成后还要家长签字。', 60, *same)):
+            self.assertEqual(self._ledger(later), unbound, later)
+        self.assertEqual(self._ledger(('刚才的朗读完成后还要请家长签字。', 60, *same), first='今晚朗读《荷塘》2遍；朗读《春》1遍。'),
+                         {'今晚朗读《荷塘》2遍': [], '朗读《春》1遍': []}, 'two items it could mean')
+
+    def test_an_after_completion_step_joins_only_the_item_it_names(self):
+        payload, refs = self._day([('18:00', '语文老师甲', 'cn-teacher-a', '今晚朗读《荷塘》2遍；抄写生字一遍。'),
+                                   ('18:01', '语文老师甲', 'cn-teacher-a', '刚才的朗读完成后还要请家长签字。')])
+        reading = self._proposal('今晚朗读《荷塘》2遍', refs, '语文', '今晚朗读《荷塘》2遍。\n朗读完成后请家长签字。')
+        copying = self._proposal('抄写生字一遍', refs[:1], '语文', '抄写生字一遍。')
+        result, rows, listed, _ = self._run(payload, [reading, copying], 'T01-variant-after-completion')
+        self.assertEqual((result['failed'], result['processed']), (0, 2))
+        read, = [i for i in listed if '《荷塘》' in i['body']]
+        copy, = [i for i in listed if '抄写生字一遍' in i['body']]
+        self.assertEqual((read['publications'], copy['publications']), (refs, refs[:1]), 'each keeps its own originals')
+        self.assertRegex(read['body'], '朗读完成后.{0,6}家长签字')
+        self.assertNotIn('签字', copy['body'])
+        self._replay_adds_nothing('T01-variant-after-completion')
+
+    def test_an_after_completion_follow_up_from_another_teacher_or_for_two_items_is_no_supplement(self):
+        error = self._rejected([PRODUCT_SIX[0], ('18:02', '虚构语文老师乙', 'qa-cn-teacher-b', PRODUCT_SIX[1][3])],
+                               lambda refs: json.loads(PRODUCT_SIX_REPLY)['proposals'][:1], 'product-six-other-teacher')
+        self.assertIn('学校补充要求未归到对应作业', error)
+        self.doCleanups()
+        self.setUp()
+        error = self._rejected([('18:00', '语文老师甲', 'cn-teacher-a', '今晚朗读《荷塘》2遍；朗读《春》1遍。'),
+                                ('18:02', '语文老师甲', 'cn-teacher-a', '刚才的朗读完成后还要请家长签字。')],
+                               lambda refs: [self._proposal('今晚朗读《荷塘》2遍', refs, '语文', '今晚朗读《荷塘》2遍；朗读完成后请家长签字。'),
+                                             self._proposal('朗读《春》1遍', refs[:1], '语文', '朗读《春》1遍。')],
+                               'T01-variant-after-completion-two-antecedents')
+        self.assertIn('学校补充要求未归到对应作业', error)
+
 
 class PointerBackIdentityHoldoutTests(unittest.TestCase):
     """Root's R16 holdout and its neighbours, fictional, on the same run_once→Store→calendar path: one shared nickname
@@ -780,6 +829,25 @@ class PointerBackIdentityHoldoutTests(unittest.TestCase):
             self.assertTrue(unproven(*rows), rows)
         self.assertFalse(unproven((g, '', follow)), 'a follow-up cited alone keeps the general checks')
         self.assertFalse(unproven((g, '', '今晚朗读《暮色》3遍。'), (g, '', '抄写生字一遍。')), 'no pointer, no new check')
+
+    def test_an_order_after_the_object_keeps_the_one_message_identity(self):
+        sent = dt.datetime(2026, 11, 4, 18, tzinfo=agent.TZ)
+
+        def unproven(*rows):
+            evidence = [dict(ref='message:%s:%d' % (source, 11 + i), text=text, time=(sent + dt.timedelta(minutes=2 * i)).isoformat(),
+                             publisher=publisher, kind='text', content_incomplete=False, unread=False, attachments=[],
+                             message_order=str(11 + i)) for i, (source, publisher, text) in enumerate(rows)]
+            return agent._school_native_pointer_unproven(evidence, {e['ref'] for e in evidence})
+        g, a, first, follow = 'synthetic-group', 'qa-cn-teacher', PRODUCT_SIX[0][3], PRODUCT_SIX[1][3]
+        self.assertFalse(unproven((g, a, first), (g, a, follow)))
+        self.assertFalse(unproven((g, a, first), (g, a, '刚刚的朗读做完以后请家长签字。')))
+        for rows in (((g, '', first), (g, '', follow)),  # one nickname, both ids missing
+                     ((g, a, first), (g, 'qa-cn-teacher-b', follow)),  # another teacher
+                     ((g, a, first), ('synthetic-other', a, follow)),  # another source or child binding
+                     ((g, a, '语文今晚背诵《荷塘》2遍。'), (g, a, follow)),  # an object no cited original names
+                     ((g, a, first), (g, a, '今晚朗读《春》1遍。'), (g, a, follow)),  # two it could mean
+                     ((g, a, first), (g, a, '刚才的朗读完成后明天还要家长签字。'))):  # a day the order word cannot hide
+            self.assertTrue(unproven(*rows), rows)
 
 
 class ReplySlipChoiceVariantTests(unittest.TestCase):
