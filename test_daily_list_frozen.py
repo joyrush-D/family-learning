@@ -531,6 +531,40 @@ class DailyListFrozenTests(unittest.TestCase):
     def test_u02_teacher_words_alone_cannot_stand_for_the_unassigned_page_requirement(self):
         self._u02_held([self.U02_REQUIREMENT], cite='message')
 
+    def test_t06_carrying_action_is_accepted_while_its_own_linked_pdf_stays_unread(self):
+        """T06's clear carrying text keeps working through run_once while every page read of its own linked fictional PDF
+        fails. The selection reply is a fixed fake receipt; no refresh may receive page parts it has not read."""
+        import io
+        from urllib.parse import quote
+        import test_pdf, test_pdf_material
+        (self.app.ROOT / '家庭运行规则.md').write_text(PRODUCT_SIX_FAMILY)
+        self.source.update(id='qq:123456', platform='qq'); self.fixture.config()
+        _, refs = self._day([('18:40', '科学老师', 'teacher-science', T06_TEXT)])
+        raw = test_pdf.build_pdf(1)
+        upload = self.app.save_upload(io.BytesIO(raw), len(raw), quote('示例观察表.pdf'))
+        keys = dict(child_id='child-1', source_id='qq:123456', message_id='11')
+        self.store.message_attachment(dict(keys, attachment_id=upload['id'], action='attach'), self.app.upload_info)
+        proposal = self._proposal('明天带去课堂的实验观察表', refs, '', '11月5日带去课堂的实验观察表；今晚不填。', due='2026-11-05', purpose='admin')
+        names = []
+
+        def model(messages, schema, name, timeout=60, *, data_path=None):
+            context = json.loads(messages[-1]['content']); names.append(name)
+            self.assertNotIn('original_parts', context)
+            if name == 'family_agent_selection': return dict(proposals=[proposal])
+            return dict(title='明天带去课堂的实验观察表', goal='11月5日带去课堂的实验观察表；今晚不填。', advice='', state='ready',
+                        reason='虚构固定回执。', purpose='admin', submission='', change='new', target_id='', learning_subject='', learning_goal_id='')
+        self.model.side_effect = model
+        with test_pdf_material.renderer(page_count=1), test_pdf_material.page_model([ValueError('虚构页组读取失败')] * 6):
+            for minutes in (0, 6, 20, 40): agent.run_once(self.app, self.now + dt.timedelta(minutes=minutes))
+        with self.store._db() as c:
+            schools = [dict(x) for x in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+            tasks = [dict(x) for x in c.execute('SELECT * FROM manual_tasks')]
+        message = self.store.message(keys, self.app.upload_info)
+        self.assertEqual(([s['state'] for s in schools], len(tasks), schools[0]['due']), (['accepted'], 1, '2026-11-05'))
+        self.assertIn('今晚不填', schools[0]['body']); self.assertNotEqual(message['pdf_material'].get('state'), 'ready')
+        self.assertEqual([a['id'] for a in message['attachments']], [upload['id']])
+        self.assertEqual(names.count('family_agent_selection'), 1)
+
     def test_u02_page_requirement_cannot_replace_the_candidates_own_words(self):
         # The existing candidate-identity guard is untouched: a ready action dropping the item's literal words is refused.
         self._u02_held([self.U02_REQUIREMENT], cite='requirement', reason='旧事项缺少可核对的同行动依据')
