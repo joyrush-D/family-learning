@@ -334,7 +334,7 @@ class DailyListFrozenTests(unittest.TestCase):
         replayed (no new model call); the page reader (test_pdf_material.renderer/page_model) and the school refresh are
         deterministic fake receipts. They prove the state machine, not original-reading accuracy. REQUIREMENT is
         fictional teacher text that exists only in the fake page receipt."""
-        import hashlib, io
+        import copy, hashlib, io
         from urllib.parse import quote
         import test_pdf, test_pdf_material
         requirement = '连续观察绿豆发芽3天，每天记录芽长（毫米）和子叶颜色，并写一句观察发现。'
