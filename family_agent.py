@@ -582,7 +582,7 @@ def _school_outcome_objects(part):
     return found
 
 
-def _school_separate_outcomes(proposals, evidence, native_refs=()):
+def _school_separate_outcomes(proposals, evidence, native_refs=(), later=None):
     """An explicit independent outcome in an item's own original gets its own action, from the original's words.
 
     The outcome is a run of the item's home original (the cited text message holding its verified quote) starting at a part
@@ -604,7 +604,9 @@ def _school_separate_outcomes(proposals, evidence, native_refs=()):
     no proposal carried it). The batch keeps the existing bounded retry instead when the run cannot be taken out of the
     reply's title or of a goal sentence also naming the item's own object, when a proposal names it without a quote that
     separates it, or when its source is not settled: another original of the batch names the object (a correction,
-    withdrawal or new version), or a later one of the same publisher cannot be read whole (recalled, unread, not text).
+    withdrawal or new version), or a later one of the same publisher cannot be read whole (recalled, unread, not text). Those
+    are read in the batch and in later: the source's own stored messages after the batch, which a claimed retry no longer
+    regroups (a correction four minutes later is another batch); an omitted run is compiled only when the caller gave them.
     Returns the proposals and marks: index -> dict(receipt, split) for a cleaned one, dict(formed) for a formed one.
     """
     from family_agenda import deadlines,sent_day
@@ -615,8 +617,8 @@ def _school_separate_outcomes(proposals, evidence, native_refs=()):
     def unsettled(home,forms):  # Another original names the object, or a later one of the same publisher is not read whole.
         inner={plain(f.strip('《》')) for f in forms}-{''}
         publisher=home.get('publisher') if isinstance(home.get('publisher'),str) and home['publisher'].strip() else None
-        for e in evidence:
-            if e is home:continue
+        for e in list(evidence)+list(later or ()):
+            if e is home or e.get('ref')==home.get('ref'):continue
             if any(n in plain(str(e.get('text',''))) for n in inner):return True
             if (publisher and e.get('publisher')==publisher and str(e.get('time',''))>=str(home.get('time',''))
                     and (e.get('kind','text')!='text' or e.get('unread') or e.get('content_incomplete') or e.get('attachments'))):return True
@@ -721,6 +723,8 @@ def _school_separate_outcomes(proposals, evidence, native_refs=()):
         # Named by a proposal without a quote separating it: which item holds it is the reply's reading, not provable here.
         if any(isinstance(q.get(k),str) and n in plain(q[k]) for q in proposals for k in ('task_title','task_goal','task_submission') for n in names):
             raise unsplit('学校原文另一对象的独立要求未能从模型归纳中分开')
+        # Without the source's later words the program cannot know the run is still current: the existing retry stays.
+        if later is None:raise unsplit('学校原文另一对象的独立要求未归纳')
         if unsettled(home,forms):raise unsplit('学校原文另一对象的独立要求另有更正、撤回或未读内容，未按旧依据补项')
         formed.add(key)
         form(index,run,forms,learning,last,home,omitted=True)
@@ -5648,7 +5652,7 @@ def _school_native_saved(items,evidence):
         raise AgentError('学校独立要求保存时仍有遗漏，整批未写入',409,'school_action_coverage')
 
 
-def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None, school_tasks=(),school_existing=None,school_rewrite=(),school_revisable=None):
+def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None, school_tasks=(),school_existing=None,school_rewrite=(),school_revisable=None,school_later=None):
     original_pointers=[]
     if mode == 'school':
         original_pointers=[item for e in evidence if (item:=_school_ack_original(e))]
@@ -5684,7 +5688,8 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     split_marks={}
     if routing and not historical:
         # An explicit independent outcome the reply merged into another proposal is given its own action from the original.
-        result['proposals'],split_marks=_school_separate_outcomes(result['proposals'],evidence,{a['ref'] for a in native_actions})
+        # school_later (the source's own later stored messages) only guards that compile; the model never sees it.
+        result['proposals'],split_marks=_school_separate_outcomes(result['proposals'],evidence,{a['ref'] for a in native_actions},later=school_later)
     refs = {entry['ref']: entry['text'] for entry in evidence}; output = []; accounted = set();history_actions=[]
     title_quotes=[p['title_quote'].strip() if isinstance(p,dict) and isinstance(p.get('title_quote'),str) else '' for p in result['proposals']]
     title_refs=[{q.get('ref') for q in p['evidence'] if isinstance(q,dict)} if isinstance(p,dict) and isinstance(p.get('evidence'),list) else set()
@@ -7600,10 +7605,23 @@ def run_once(app, now=None):
                         source=source['name'], time=row['time'], sender=row['sender'], publisher=_publisher(source['id'], row),
                         related_messages=related[row['id']], attachments=view['attachments'],
                         kind=row['kind'], content_incomplete=row['unread'], message_order=row.get('message_order', '')) for row, view in zip(values, views)]
+                    # The source's own stored messages after this batch's first (at most 200), never sent to the model: a
+                    # claimed retry keeps its grouping, so a later correction, recall or version is read here before the program
+                    # compiles an outcome from these originals (_school_separate_outcomes).
+                    ids = {row['id'] for row in values}
+                    with store._db() as c:
+                        first = c.execute('SELECT MIN(rowid) FROM agent_messages WHERE source_id=? AND id IN (' + ','.join('?' * len(ids)) + ')',
+                                          (source['id'], *ids)).fetchone()[0] or 0
+                        later = [dict(ref='message:' + source['id'] + ':' + m['id'], text=m.get('text', ''), time=m.get('time', ''),
+                                      publisher=_publisher(source['id'], m), kind=m.get('kind', 'text'), content_incomplete=m.get('unread', False),
+                                      attachments=[]) for m in (json.loads(r['payload']) for r in c.execute(
+                                          'SELECT payload FROM agent_messages WHERE source_id=? AND rowid>? ORDER BY rowid LIMIT 200', (source['id'], first)))
+                                 if m['id'] not in ids]
                     budget -= 1
                     try:
                         proposals = _select('school', evidence, profiles[source['child_id']], as_of=now.date().isoformat(), data_path=store.data,
-                                            school_goals=goals.school_candidates(source['child_id']),school_tasks=school_targets(app,store,source['child_id'],shared=True))
+                                            school_goals=goals.school_candidates(source['child_id']),school_tasks=school_targets(app,store,source['child_id'],shared=True),
+                                            school_later=later)
                         anchors = {entry['ref']: entry for entry in evidence}
                         for item in proposals:
                             for quote in item['evidence']:
