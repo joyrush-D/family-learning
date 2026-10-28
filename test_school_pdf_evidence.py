@@ -796,7 +796,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         self.assertEqual(selected['uncertainties'],[])
         self.assertEqual(whole['uncertainties'],['回执下方小字模糊'])
 
-    def required_image(self, requirements, ident='required-image'):
+    def required_image(self, requirements, ident='required-image', notice='学校要求见图片。\n[图片原件：1份，内容未读]', **original):
         from test_media import png
         upload='b'*32;body=png(64,96)
         (self.data/'uploads'/upload).write_bytes(body)
@@ -808,15 +808,60 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             raw=json.loads(c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',
                                     (keys['source_id'],keys['message_id'])).fetchone()[0])
             c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
-                      (json.dumps(dict(raw,text='学校要求见图片。\n[图片原件：1份，内容未读]',unread=True)),keys['source_id'],keys['message_id']))
-        reply=dict(originals=[dict(upload_id=upload,title='数学练习要求',note='题面和空白栏只是背景。',
-                                   uncertainties=[],requirements=requirements)])
+                      (json.dumps(dict(raw,text=notice,unread=True)),keys['source_id'],keys['message_id']))
+        reply=dict(originals=[dict(dict(upload_id=upload,title='数学练习要求',note='题面和空白栏只是背景。',
+                                        uncertainties=[],requirements=requirements),**original)])
         with patch.object(family_llm,'extract_draft',return_value=reply):
             self.assertEqual(media.prepare_draft(self.store,self.now),dict(used=1,failed=0))
         item_id=self.candidate(keys=keys,ident=ident)
         ref='message:%s:%s'%(keys['source_id'],keys['message_id'])
         parts=['material:'+upload+'@'+ref+':requirement:'+agent._hash(n)[:16] for n in requirements]
         return item_id,parts,keys
+
+    # Root's frozen independent truth (truth.json sha256 7df1dc40…): fictional fixed reader/refresh receipts, the same
+    # candidate wording for every case, so only each requirement's own structure decides. No OCR or model accuracy claim.
+    IMAGE_TRUTH=[('I01_observe','连续观察绿豆发芽3天，每天记录芽长（毫米）和子叶颜色，并写一句观察发现。','科学',1),
+                 ('I02_measure','测量三颗绿豆的芽长，各记录三次结果，比较变化。','科学',1),
+                 ('I03_draw','画出绿豆发芽前后的样子，圈出发生变化的部位。','科学',1),
+                 ('C01_known_math','数学：完成第1至3题，写明单位。','数学',1),
+                 ('N01_date_only','2026年11月6日前','',0),
+                 ('N02_title_only','数学练习要求','',0)]
+    OBSERVE='连续观察绿豆发芽3天，每天记录芽长（毫米）和子叶颜色，并写一句观察发现。'
+
+    def image_probe(self, text, subject, case, quote=None, requirements=None, **kw):
+        """Root's probe in a fresh fixture: the existing required_image (actual media.prepare_draft) and _refresh_school/Store."""
+        probe=type(self)('runTest');probe.setUp()
+        try:
+            ident,parts,keys=probe.required_image(requirements or [text],ident=case,**kw)
+            reply={'actions':[dict(draft(title=(subject or '科目待定')+'：实验观察',goal=text,learning_subject=subject),
+                due='',existing_item_id=ident,basis=[dict(part=parts[0],text=text if quote is None else quote)])]}
+            result,calls=probe.refresh(reply)
+            errors=[r[0] for r in probe.rows("SELECT error FROM agent_jobs WHERE id LIKE 'school-task:%'")]
+            return result,len(calls),probe.count('manual_tasks'),errors
+        finally:probe.doCleanups()
+
+    def test_image_complete_requirement_is_its_own_action_by_structure_not_a_verb_list(self):
+        for case,text,subject,expected in self.IMAGE_TRUTH:
+            with self.subTest(case=case):
+                result,calls,tasks,errors=self.image_probe(text,subject,case)
+                self.assertEqual((result['created'],calls,tasks),(expected,1,expected))
+                if not expected:self.assertIn('依据没有本项动作和对象',errors[0])
+
+    def test_image_requirement_boundaries_outside_the_truth_set_gain_nothing(self):
+        # Not used to shape the fix: own file name, label+title+date, a weekday deadline, a doubt, a message naming an
+        # unlinked unread original, a partial quote and a line the reader listed twice (no unique mapping).
+        for case,text,kw,reason in [
+                ('B01_file_name','虚构完整要求',{},'依据没有本项动作和对象'),
+                ('B02_label_title_date','科学：数学练习要求（11月6日前）',{},'依据没有本项动作和对象'),
+                ('B03_weekday','下周一之前',{},'依据没有本项动作和对象'),
+                ('B04_doubt',self.OBSERVE,dict(uncertainties=['第二行字迹模糊，记录单位不清。']),None),
+                ('B05_unlinked_unread',self.OBSERVE,dict(notice='学校要求见图片。\n[图片原件：2份，内容未读]'),'依据没有本项动作和对象'),
+                ('B06_partial',self.OBSERVE,dict(quote=self.OBSERVE[:12]),'截取或重复分配'),
+                ('B07_listed_twice',self.OBSERVE,dict(requirements=[self.OBSERVE,self.OBSERVE]),'依据没有本项动作和对象')]:
+            with self.subTest(case=case):
+                result,calls,tasks,errors=self.image_probe(text,'科学',case,**kw)
+                self.assertEqual((result['created'],calls,tasks),(0,1,0))
+                if reason:self.assertIn(reason,errors[0])
 
     def test_complete_requirements_replace_a_later_lossy_or_added_action_summary(self):
         requirement='数学：2026-02-12前完成练习；第1至3题必做，第3题写明单位；第4题选做，若选做须用两种方法；做完检查，不需要家长签字。'

@@ -6804,28 +6804,51 @@ def _school_action_read_evidence(evidence,anchors,requirements):
     return result
 
 
-def _school_own_requirement(part,pdf,material,subject=''):
-    """A page-reader requirement line is its own action evidence by structure, not by a verb/noun list.
+def _school_requirement_names(part,pdf,material,names=None):
+    """The titles and file name of a requirement line's own original: words that cannot be its action."""
+    if part['id'].startswith('pdf:'):
+        doc=next((d for d in (pdf or {}).get('model',[]) if d['ref']==part['ref'] and [d['upload_id']]==part['upload_ids']),None)
+        return [doc['name'].rsplit('.',1)[0]]+[g['text'].split('\n',1)[0] for g in doc['groups']] if doc else []
+    return ([e['draft']['title'] for e in (material or {}).get('model',[]) if e['ref']==part['ref'] and e['upload_ids']==part['upload_ids']]
+            +[(names or {}).get(u,'').rsplit('.',1)[0] for u in part['upload_ids']])
 
-    Only a part re-derived unchanged (message, upload, pages, whole literal text) from the current complete page-group
-    protocol of every page of its own original counts, with no doubt or reading gap. Reading progress, or a line that
-    says nothing beyond a date, a label and the original's own title/name, never does. Message, material and
-    background parts keep the vocabulary rule. Whether the page reader typed a line as a requirement is its model's
-    classification; this check only refuses lines that cannot be one.
-    """
+
+def _school_requirement_substance(text,names):
+    """Whether a requirement line says anything beyond reading progress, a short label, its original's own title/name,
+    the subject and dates. Structure only, never a verb/noun list."""
     from family_agenda import _DAY_WORDS
-    if not (part.get('requirement') and part['id'].startswith('pdf:') and pdf and pdf.get('requirements_complete')):return False
-    if (pdf.get('uncertainties') or any(d['omitted'] or d['truncated'] for d in pdf.get('documents',[]))
-            or (material or {}).get('uncertainties') or part not in _school_original_parts([],pdf,None)):return False
-    doc=next((d for d in pdf['model'] if d['ref']==part['ref'] and [d['upload_id']]==part['upload_ids']),None)
-    if not doc or doc['processed_pages']!=list(range(1,doc['page_count']+1)) or not set(part['pages'])<=set(doc['processed_pages']):return False
-    if family_llm.school_requirement_has_reading_progress(part['text']):return False
-    rest=re.sub(r'^\s*(?:[^：:\n]{1,8}[：:]\s*)?','',part['text'])
-    for name in [doc['name'].rsplit('.',1)[0],subject]+[g['text'].split('\n',1)[0] for g in doc['groups']]:
+    if family_llm.school_requirement_has_reading_progress(text):return False
+    rest=re.sub(r'^\s*(?:[^：:\n]{1,8}[：:]\s*)?','',text)
+    for name in names:
         if name.strip():rest=rest.replace(name.strip(),'')
     prefix=r'(?:每个|上个|本个|这个|下个|每|上|本|这|下)?'  # the weekday prefixes family_agenda grounds
     for pattern in (_SCHOOL_ACTION_OPEN,_SCHOOL_DATE_MENTION.pattern,_DAY_WORDS):rest=re.sub(prefix+'(?:'+pattern+')','',rest)
     return bool(re.sub(r'[\W_\d年月日号]+','',rest))
+
+
+def _school_own_requirement(part,pdf,material,subject='',names=None):
+    """A complete requirement line of a read original is its own action evidence by structure, not by a verb/noun list.
+
+    Only a part re-derived unchanged (message, upload, pages, whole literal text) from its original's current complete
+    protocol counts, with no doubt or reading gap: every page group of a PDF, or the per-original requirement list of a
+    current-revision school material (image/DOCX, bytes and binding rechecked) whose message has no unlinked unread
+    original, mapped to exactly one line. Reading progress, or a line that says nothing beyond a date, a label and the
+    original's own title/name, never does. Message, legacy-note and background parts keep the vocabulary rule. Whether
+    the reader typed a line as a requirement is its model's classification; this check only refuses lines that cannot be one.
+    """
+    if not part.get('requirement') or ((pdf or {}).get('uncertainties') or any(d['omitted'] or d['truncated'] for d in (pdf or {}).get('documents',[]))
+            or (material or {}).get('uncertainties')):return False
+    if part['id'].startswith('pdf:'):
+        if not (pdf and pdf.get('requirements_complete')) or part not in _school_original_parts([],pdf,None):return False
+        doc=next((d for d in pdf['model'] if d['ref']==part['ref'] and [d['upload_id']]==part['upload_ids']),None)
+        if not doc or doc['processed_pages']!=list(range(1,doc['page_count']+1)) or not set(part['pages'])<=set(doc['processed_pages']):return False
+    elif part['id'].startswith('material:') and material:
+        derived=[p for p in _school_original_parts([],None,material) if p['id']==part['id']]
+        entry=next((e for e in material['model'] if e.get('original_id') and e['ref']==part['ref']
+                    and e['upload_ids']==part['upload_ids']==[e['original_id']] and 'requirements' in e['draft']),None)
+        if not entry or derived!=[part] or part['ref'] not in material.get('complete_refs',[]):return False
+    else:return False
+    return _school_requirement_substance(part['text'],_school_requirement_names(part,pdf,material,names)+[subject])
 
 
 def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,material,targets,goals,now,*,legacy_correction=None):
@@ -6835,6 +6858,9 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         raise AgentError('原件行动清单结构无法核对')
     lookup={p['id']:p for p in parts};existing={r['id']:r for r in known};used=set();identities=set();output=[]
     required={p['id'] for p in parts if p.get('requirement')};assigned=set()
+    material_ids=sorted({u for p in parts if p['id'].startswith('material:') for u in p['upload_ids']})
+    with store._db() as c:  # file names only: a requirement line naming just its own file is no action
+        names={r[0]:r[1] or '' for r in c.execute('SELECT id,name FROM uploads WHERE id IN (%s)'%','.join('?'*len(material_ids)),material_ids)} if material_ids else {}
     legacy_owners={old['id']:_school_pdf_previous_action(old,parts,known) for old in known
                    if _school_pdf_reflow(old,pdf,known)}
     fields=set(TASK_BRIEF_SCHEMA['required'])|{'due','existing_item_id','basis'}
@@ -6884,11 +6910,15 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
                 and p['upload_ids']==a['upload_ids'] and p['pages']==a['pages'] for p in parts)]
             compiled=[a['quote'] for a in action_anchors]
         if requirements and not conditions:value=_school_requirement_goal(value,compiled)
+        subject=value.get('learning_subject','')
+        # A requirement line that is only its original's own title/name or a date is no action whatever words it holds.
+        titles=[dict(ref=p['ref'],upload_ids=p['upload_ids'],pages=p['pages'],quote=p['text']) for p in (lookup[q['part']] for q in basis)
+                if p.get('requirement') and not _school_requirement_substance(p['text'],_school_requirement_names(p,pdf,material,names)+[subject])]
         has_action=any(_LEARNING_ACTIVITY.search(a['quote']) or _LEARNING_ACTION.search(a['quote'])
             or conditions and re.search(r'(?:完成|做|写)\s*(?:第[一二三四五六七八九十0-9]+项\s*[:：]?\s*)?《[^》\n]{2,40}》',a['quote'])
-            or re.search(r'打印|签字|交回|盖章|提交|上传|带|携带|准备|领取|报名|缴|考试|测验|比赛|家长会',a['quote']) for a in action_anchors)
+            or re.search(r'打印|签字|交回|盖章|提交|上传|带|携带|准备|领取|报名|缴|考试|测验|比赛|家长会',a['quote']) for a in action_anchors if a not in titles)
         own=[] if has_action or conditions or legacy_correction else [lookup[q['part']] for q in basis
-            if _school_own_requirement(lookup[q['part']],pdf,material,value.get('learning_subject',''))]
+            if _school_own_requirement(lookup[q['part']],pdf,material,subject,names)]
         has_action=has_action or bool(own)
         if value['state']=='ready' and not has_action and any(lookup[q['part']].get('background_only') for q in basis):
             raise AgentError('原件背景没有完整行动要求，不能自动新增任务')
@@ -6936,7 +6966,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
             _,cited_pages=_school_material(store,c,item_row)
             cited_pdf=_pdf_evidence(_school_pdf(store,c,item_row))
             cited_material=_school_drafts(store,c,item_row)
-        if own and not all(_school_own_requirement(p,cited_pdf,cited_material,value.get('learning_subject','')) for p in own):
+        if own and not all(_school_own_requirement(p,cited_pdf,cited_material,subject,names) for p in own):
             raise AgentError('完整要求与本项原件页组不一致，原要求保留')  # the item's own scoped evidence must hold the same lines
         cited_page=_page_evidence(cited,cited_pages) if cited_pages else None
         if cited_page and not cited_page['read']: cited_page=None

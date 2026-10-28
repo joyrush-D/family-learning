@@ -569,6 +569,90 @@ class DailyListFrozenTests(unittest.TestCase):
         # The existing candidate-identity guard is untouched: a ready action dropping the item's literal words is refused.
         self._u02_held([self.U02_REQUIREMENT], cite='requirement', reason='旧事项缺少可核对的同行动依据')
 
+    def _image_chain(self, requirements, title='虚构实验观察图'):
+        """A fictional teacher message and a PNG really saved by save_upload and linked by message_attachment, through
+        actual run_once rounds only (no act(accept), no seeded rows): the original selection, the original school-material
+        reader (fake fixed receipt: the first read fails, the existing bounded retry reads it) and the existing refresh,
+        whose fake receipt cites the teacher's words beside each requirement. Fake receipts prove the state machine only,
+        not OCR or model accuracy."""
+        import copy, hashlib, io
+        from unittest.mock import patch
+        from urllib.parse import quote
+        import family_llm
+        from test_media import png
+        (self.app.ROOT / '家庭运行规则.md').write_text(PRODUCT_SIX_FAMILY)
+        self.source.update(id='qq:123456', platform='qq'); self.fixture.config()
+        payload, refs = self._day([('18:40', '虚构科学老师', 'qa-science', '请按照图片里的要求完成实验观察。')])
+        raw = png(64, 96)
+        upload = self.app.save_upload(io.BytesIO(raw), len(raw), quote('示例观察图.png'))
+        keys = dict(child_id='child-1', source_id='qq:123456', message_id='11')
+        self.store.message_attachment(dict(keys, attachment_id=upload['id'], action='attach'), self.app.upload_info)
+        review = dict(proposals=[dict(title_quote='请按照图片里的要求完成实验观察。', focus='school', due='', evidence=[dict(ref=refs[0])],
+            task_title='科学：完成实验观察', task_goal='按图片中的要求完成实验观察。\n图片内容尚未读取，具体要求未知。', task_advice='',
+            learning_subject='', learning_goal_id='', task_change='new', task_target_id='', task_state='review',
+            task_reason='具体要求写在未读取的图片中。', task_purpose='learning', task_submission='')])
+        calls = []
+
+        def model(messages, schema, name, timeout=60, *, data_path=None):
+            context = json.loads(messages[-1]['content']); calls.append(name)
+            if name == 'family_agent_selection': return copy.deepcopy(review)
+            brief = dict(title='科学：完成实验观察', goal='完成实验观察', advice='', state='ready', reason='虚构固定回执。', purpose='learning',
+                         submission='', change='new', target_id='', learning_subject='科学', learning_goal_id='')
+            if 'original_parts' not in context: return dict(brief, state='review', reason='虚构固定回执：图片未读。')
+            parts = context['original_parts']
+            words = [p for p in parts if not p.get('requirement') and not p.get('background_only') and not p['upload_ids']]
+            owned = [p for p in parts if p.get('requirement')]
+            return dict(actions=[dict(brief, due='', existing_item_id=context['candidate_id'] if i == 0 else '',
+                                      basis=[dict(part=p['id'], text=p['text']) for p in words + [o]]) for i, o in enumerate(owned)])
+        self.model.side_effect = model
+        reader = dict(originals=[dict(upload_id=upload['id'], title=title, note='老师写明的观察要求，未见孩子填写。',
+                                      uncertainties=[], requirements=list(requirements))])
+
+        def state():
+            with self.store._db() as c:
+                schools = [dict(x) for x in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+                tasks = [dict(x) for x in c.execute('SELECT * FROM manual_tasks')]
+                originals = [json.loads(x[0]) for x in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
+                errors = [r[0] for r in c.execute("SELECT error FROM agent_jobs WHERE id LIKE 'school-task:%' AND error!=''")]
+            return schools, tasks, originals, self.store.message(keys, self.app.upload_info), errors
+        with patch.object(family_llm, 'extract_draft', side_effect=[family_llm.LLMDraftError('虚构图片读取失败'), reader]) as reads:
+            agent.run_once(self.app, self.now)
+            schools, tasks, originals, message, _ = state()
+            # Failed reading: the requirement stays unknown and held; nothing is invented or accepted.
+            self.assertEqual((reads.call_count, [s['state'] for s in schools], tasks), (1, ['pending'], []))
+            self.assertEqual(json.loads(schools[0]['plan'])['school_task']['state'], 'review')
+            agent.run_once(self.app, self.now + dt.timedelta(minutes=2))  # inside the existing back-off
+            self.assertEqual((reads.call_count, state()[1]), (1, []))
+            for minutes in (6, 7, 8): agent.run_once(self.app, self.now + dt.timedelta(minutes=minutes))  # bounded retry, refresh
+            first = state(); made = list(calls)
+            again = agent.run_once(self.app, self.now + dt.timedelta(minutes=40))
+            if first[1]:  # reopen of the accepted task: no repeat call, write or duplicate
+                self.assertEqual((state()[:2], calls, again['created']), (first[:2], made, 0))
+            else: first = state()  # a held line keeps only the existing bounded retries
+            self.assertEqual(reads.call_count, 2)  # the saved reading is reused, never re-read
+        schools, tasks, originals, message, errors = first
+        self.assertEqual(originals, payload['messages'])  # sender, publisher, sent time and text exact
+        self.assertEqual([a['id'] for a in message['attachments']], [upload['id']])
+        self.assertEqual(hashlib.sha256((self.app.DATA / 'uploads' / upload['id']).read_bytes()).hexdigest(), hashlib.sha256(raw).hexdigest())
+        self.assertEqual(calls.count('family_agent_selection'), 1)
+        return schools, tasks, errors, refs, calls
+
+    def test_i01_linked_image_requirement_reaches_one_task_through_the_original_reader(self):
+        schools, tasks, _, refs, calls = self._image_chain([self.U02_REQUIREMENT])
+        self.assertEqual(([s['state'] for s in schools], len(tasks)), (['accepted'], 1))
+        final = json.loads(schools[0]['plan'])['school_task']
+        for text in (tasks[0]['action'], schools[0]['body'], final['goal']):
+            self.assertIn(self.U02_REQUIREMENT, text)
+            for vague in ('按图片', '未知', '尚未读取'): self.assertNotIn(vague, text)
+        self.assertEqual((final['state'], final['auto_added'], schools[0]['task_id']), ('ready', True, tasks[0]['id']))
+        self.assertIn(refs[0], tasks[0]['source'])
+        self._report(case='I01_linked_image_reader_chain', calls=calls, task=tasks[0]['action'], goal=final['goal'], due=schools[0]['due'])
+
+    def test_n02_linked_image_line_that_is_only_its_own_title_gains_nothing(self):
+        schools, tasks, errors, _, _ = self._image_chain(['虚构实验观察图'])
+        self.assertEqual(([s['state'] for s in schools], tasks), (['pending'], []))
+        self.assertTrue(any('依据没有本项动作和对象' in e for e in errors), errors)
+
     def _report(self, **line):
         report = os.environ.get('DAILY_LIST_REPORT')
         if report:
