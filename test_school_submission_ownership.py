@@ -11,6 +11,7 @@ import json
 import unittest
 
 import family_agent as agent
+import family_task_focus
 import test_daily_list_frozen as frozen
 import test_school_native_coverage as native
 
@@ -314,35 +315,60 @@ class SchoolFormOutcomeTests(unittest.TestCase):
                 self.assertFalse({'school_split', 'school_split_from'} & set(json.loads(rows[0]['plan'])))
                 for word in required: self.assertIn(word, listed[0]['body'])
 
-    def test_omitted_form_holds_the_batch_for_the_bounded_retry(self):
-        """No proposal quotes or carries the separate form: nothing is saved, the originals stay, and only the next natural
-        round's receipt may complete it. Three such receipts exhaust the batch with no fourth call."""
+    def test_omitted_form_is_compiled_from_the_original_on_the_first_call(self):
+        """v6 changes v4/v5's expectation (hold, then the identical temperature-0 request up to three times): no proposal
+        quotes or carries the separate form, but its own complete original states it affirmatively (closed name, own signer,
+        own handback), and that run, not the model's goal, is the evidence the requirement exists. The first call compiles it
+        by the same chain as a merged one, marked as the program's; the model's own item keeps its receipt untouched. Later
+        natural rounds add nothing. Replies that cannot be taken apart and failed requests keep the bounded retry (below)."""
         omitted = self._reply(ROOT_V3_RAW)
         omitted['proposals'][0].update(task_goal='完成《朝露练习册》第4页第1、2题。\n第2题只写第一小问，其余要求不变。', task_submission='', due='')
-        for repaired in (True, False):
-            with self.subTest(repaired=repaired):
+        payload, refs = self._day(ROOT_V3_MESSAGES)
+        self._use_replies(payload, copy.deepcopy([omitted]))
+        first = agent.run_once(self.app, self.now)
+        rows, job, originals, tasks, listed = self._state()
+        self.assertEqual((first['failed'], first['processed'], job['attempts'], job['done'], self.model.call_count), (0, 6, 1, 1, 1))
+        self.assertEqual(originals, payload['messages'])
+        self._assert_root_five(listed, refs)
+        self.assertEqual(len(tasks), 5)
+        cn, = [r for r in rows if '朝露练习册' in r['title']]
+        form, = [r for r in rows if '返校回执' in r['title']]
+        receipt = {k: omitted['proposals'][0]['task_' + k] for k in RECEIPT}
+        self.assertEqual(json.loads(cn['plan'])['school_selection_receipt'], receipt, 'the model reading stays verbatim')
+        self.assertNotIn('school_split', json.loads(cn['plan']), 'nothing was taken out of the model item')
+        self.assertNotIn('school_selection_receipt', json.loads(form['plan']))
+        self.assertEqual(json.loads(form['plan'])['school_split_from'],
+                         dict(index=0, receipt=receipt, ref=refs[0], quote='《返校回执》请家长签字，明早交回', omitted=True))
+        before = [dict(r) for r in rows]
+        at = self.now
+        for minutes in (6, 11, 30, 60):
+            at += dt.timedelta(minutes=minutes)
+            agent.run_once(self.app, at)
+        after, _, _, tasks_after, _ = self._state()
+        self.assertEqual((after, len(tasks_after), self.model.call_count), (before, 5, 1), 'no repeat, no duplicate')
+
+    def test_unseparable_or_failed_replies_keep_the_bounded_retry(self):
+        """Kept failure-limit controls: a reply naming the form in its own title cannot be taken apart, and a failed request
+        is no reply; each keeps the failure count, saves nothing and exhausts after three attempts with no fourth call."""
+        unseparable = self._reply(ROOT_V3_RAW)
+        unseparable['proposals'][0]['task_title'] = '语文：完成《朝露练习册》第4页并交《返校回执》'
+        for name in ('unseparable', 'request failure'):
+            with self.subTest(name):
                 self.setUp()
                 payload, refs = self._day(ROOT_V3_MESSAGES)
-                replies = [omitted, self._reply(ROOT_V3_SPLIT)] if repaired else [omitted] * 3
-                self._use_replies(payload, copy.deepcopy(replies))
+                if name == 'unseparable':self._use_replies(payload, copy.deepcopy([unseparable] * 3))
+                else:self.model.side_effect = agent.AgentError('虚构模型请求失败')
                 first = agent.run_once(self.app, self.now)
                 rows, job, originals, tasks, _ = self._state()
-                self.assertEqual((first['failed'], first['processed'], first['created']), (1, 0, 0))
-                self.assertEqual((rows, tasks, originals, job['attempts'], job['done']), ([], [], payload['messages'], 1, 0))
-                self.assertIn('独立', job['error'])
+                self.assertEqual((first['failed'], rows, tasks, originals, job['attempts'], job['done']), (1, [], [], payload['messages'], 1, 0))
                 at = self.now
                 for minutes in (6, 11, 30, 60):
                     at += dt.timedelta(minutes=minutes)
                     agent.run_once(self.app, at)
-                rows, job, originals, tasks, listed = self._state()
-                if repaired:
-                    self.assertEqual((self.model.call_count, job['attempts'], job['done']), (2, 2, 1))
-                    self._assert_root_five(listed, refs)
-                    self.assertEqual(len(tasks), 5)
-                else:
-                    self.assertEqual((self.model.call_count, job['attempts'], job['done'], rows, tasks), (3, 3, 0, [], []))
-                    self.assertIn('上限', job['error'])
-                    self.assertEqual(originals, payload['messages'])
+                rows, job, originals, tasks, _ = self._state()
+                self.assertEqual((self.model.call_count, job['attempts'], job['done'], rows, tasks), (3, 3, 0, [], []))
+                self.assertIn('上限', job['error'])
+                self.assertEqual(originals, payload['messages'])
 
     def test_old_merged_batch_is_split_but_never_poured_into_today(self):
         """The same merged reply for messages sent two days ago: the form still gets its own item, but every own day is past,
@@ -363,25 +389,67 @@ class SchoolFormOutcomeTests(unittest.TestCase):
 ROOT_V4_HELDOUT = json.loads('''[{"expected_tasks":2,"first_response_mode":"merge_all_into_first","id":"A01_other_named_form_no_sibling","intent":"First raw gives only one combined learning proposal; no sibling model quote can supply missing ownership.","items":[{"due":"2026-11-04","forbidden":["秋游告知单","签字"],"goal":"语文今晚完成《溪桥练习册》第8页。","purpose":"learning","quote":"语文今晚完成《溪桥练习册》第8页","required":["溪桥练习册","第8页"],"subject":"语文","submission":""},{"due":"2026-11-05","forbidden":["溪桥练习册","第8页"],"goal":"《秋游告知单》家长签字，明早交回。","purpose":"admin","quote":"《秋游告知单》家长签字，明早交回","required":["秋游告知单","家长","签字","交回"],"subject":"","submission":"明早交回。"}],"messages":["语文今晚完成《溪桥练习册》第8页；《秋游告知单》家长签字，明早交回。"]},{"expected_tasks":2,"first_response_mode":"merge_all_into_first","id":"A02_distinct_claim_form_not_receipt_keyword","intent":"No 回执/告知书 object name, same common independent-object requirement.","items":[{"due":"2026-11-04","forbidden":["物品领用单","签名"],"goal":"数学今晚完成《双格练习册》第2页。","purpose":"learning","quote":"数学今晚完成《双格练习册》第2页","required":["双格练习册","第2页"],"subject":"数学","submission":""},{"due":"2026-11-05","forbidden":["双格练习册","第2页"],"goal":"家长在《物品领用单》上签名，明天交回。","purpose":"admin","quote":"家长在《物品领用单》上签名，明天交回","required":["物品领用单","家长","签名","交回"],"subject":"","submission":"明天交回。"}],"messages":["数学今晚完成《双格练习册》第2页；家长在《物品领用单》上签名，明天交回。"]},{"expected_tasks":1,"first_response_mode":"correct","id":"A03_same_book_signature_and_reading_one_outcome","intent":"A same named book and page, parent signature before primary across semicolon: one outcome, zero spurious repair or administrative duplicate.","items":[{"due":"2026-11-05","forbidden":[],"goal":"英语今晚读《雨桐阅读本》第5页两遍，请家长在《雨桐阅读本》第5页签名，明早交给英语老师。","purpose":"learning","quote":"英语今晚读《雨桐阅读本》第5页两遍，明早交给英语老师","required":["雨桐阅读本","第5页","两遍","家长","签名","交给英语老师"],"subject":"英语","submission":"请家长在《雨桐阅读本》第5页签名，明早交给英语老师。"}],"messages":["请家长在《雨桐阅读本》第5页签名；英语今晚读《雨桐阅读本》第5页两遍，明早交给英语老师。"]},{"expected_tasks":2,"first_response_mode":"merge_all_into_first","id":"A04_two_same_subject_learning_objects","intent":"Two independent learning outcomes in one subject stay distinct, shared check condition belongs to both.","items":[{"due":"2026-11-04","forbidden":["图形册","第3题"],"goal":"数学今晚完成《算数卡》第2题，做完检查。","purpose":"learning","quote":"数学今晚完成《算数卡》第2题","required":["算数卡","第2题","检查"],"subject":"数学","submission":""},{"due":"2026-11-04","forbidden":["算数卡","第2题"],"goal":"今晚完成《图形册》第3题，做完检查。","purpose":"learning","quote":"还要完成《图形册》第3题","required":["图形册","第3题","检查"],"subject":"数学","submission":""}],"messages":["数学今晚完成《算数卡》第2题；还要完成《图形册》第3题。两项做完都要检查。"]}]''')
 
 
-OPEN_DAY_QUOTES = {'还要完成《图形册》第3题'}
+# Each item's own day must hold for every case (v5 left A04's 图形册 open). Where a positive scope of the original gives
+# it, the saved item names that basis: (case id, quote) -> (the scope's own words, kind).
+SCOPE_BASIS = {('A04_two_same_subject_learning_objects', '还要完成《图形册》第3题'): ('数学今晚完成《算数卡》第2题', 'continued')}
+
+# v6 date-scope controls (fictional, same shape as Root's cases): a continued item reads a day only from a proven scope.
+SCOPE_CONTROLS = [
+    dict(id='D1_same_subject_explicit_tomorrow', expected_tasks=2, first_response_mode='merge_all_into_first',
+         messages=['数学今晚完成《算数卡》第2题；还要明天完成《图形册》第3题。两项做完都要检查。'],
+         items=[dict(quote='数学今晚完成《算数卡》第2题', subject='数学', purpose='learning', goal='数学今晚完成《算数卡》第2题，做完检查。',
+                     submission='', due='2026-11-04', required=['算数卡', '第2题', '检查'], forbidden=['图形册', '第3题']),
+                dict(quote='还要明天完成《图形册》第3题', subject='数学', purpose='learning', goal='明天完成《图形册》第3题，做完检查。',
+                     submission='', due='2026-11-05', required=['图形册', '第3题', '检查'], forbidden=['算数卡', '第2题'])]),
+    dict(id='D2_parent_administrative_never_borrows_tonight', expected_tasks=2, first_response_mode='merge_all_into_first',
+         messages=['数学今晚完成《算数卡》第2题；还要请家长在《安全告知单》上签字。'],
+         items=[dict(quote='数学今晚完成《算数卡》第2题', subject='数学', purpose='learning', goal='数学今晚完成《算数卡》第2题。',
+                     submission='', due='2026-11-04', required=['算数卡', '第2题'], forbidden=['安全告知单', '签字']),
+                dict(quote='还要请家长在《安全告知单》上签字', subject='', purpose='admin', goal='请家长在《安全告知单》上签字。',
+                     submission='', due='', required=['安全告知单', '家长', '签字'], forbidden=['算数卡', '第2题'])]),
+    dict(id='D3_other_subject_never_borrows_tonight', expected_tasks=2, first_response_mode='merge_all_into_first',
+         messages=['数学今晚完成《算数卡》第2题；英语还要读《晨读本》第3页。'],
+         items=[dict(quote='数学今晚完成《算数卡》第2题', subject='数学', purpose='learning', goal='数学今晚完成《算数卡》第2题。',
+                     submission='', due='2026-11-04', required=['算数卡', '第2题'], forbidden=['晨读本', '第3页']),
+                dict(quote='英语还要读《晨读本》第3页', subject='英语', purpose='learning', goal='英语读《晨读本》第3页。',
+                     submission='', due='', required=['晨读本', '第3页'], forbidden=['算数卡', '第2题'])]),
+    dict(id='D4_no_day_is_never_guessed', expected_tasks=2, first_response_mode='merge_all_into_first',
+         messages=['数学完成《算数卡》第2题；还要完成《图形册》第3题。两项做完都要检查。'],
+         items=[dict(quote='数学完成《算数卡》第2题', subject='数学', purpose='learning', goal='数学完成《算数卡》第2题，做完检查。',
+                     submission='', due='', required=['算数卡', '第2题', '检查'], forbidden=['图形册', '第3题']),
+                dict(quote='还要完成《图形册》第3题', subject='数学', purpose='learning', goal='完成《图形册》第3题，做完检查。',
+                     submission='', due='', required=['图形册', '第3题', '检查'], forbidden=['算数卡', '第2题'])]),
+    dict(id='D5_explicit_common_scope', expected_tasks=2, first_response_mode='merge_all_into_first',
+         messages=['数学完成《算数卡》第2题；还要完成《图形册》第3题。两项今晚都要完成。'],
+         items=[dict(quote='数学完成《算数卡》第2题', subject='数学', purpose='learning', goal='数学完成《算数卡》第2题，今晚完成。',
+                     submission='', due='2026-11-04', required=['算数卡', '第2题'], forbidden=['图形册', '第3题']),
+                dict(quote='还要完成《图形册》第3题', subject='数学', purpose='learning', goal='完成《图形册》第3题，今晚完成。',
+                     submission='', due='2026-11-04', required=['图形册', '第3题'], forbidden=['算数卡', '第2题'])]),
+]
+SCOPE_BASIS.update({('D5_explicit_common_scope', '数学完成《算数卡》第2题'): ('两项今晚都要完成', 'common'),
+                    ('D5_explicit_common_scope', '还要完成《图形册》第3题'): ('两项今晚都要完成', 'common')})
+A01_OWN = '语文今晚完成《溪桥练习册》第8页'
 
 
 class SchoolIndependentOutcomeTests(unittest.TestCase):
     """An explicit independent outcome of the original (another closed-name object with its own affirmed action, whatever
-    it is called) that the reply merged into another proposal gets its own item from the original's words. Real
-    run_once→Store→calendar list at Root's natural rounds 0/6/12; the seam returns Root's first reply, then correct splits."""
+    it is called) gets its own item from the original's words, whether the reply merged it into another proposal or left it
+    out. Real run_once→Store→calendar list at Root's natural rounds 0/6/12; the seam returns the case's first reply."""
     _use_replies = native.SchoolNativeCoverageTests._use_replies
     setUp = frozen.DailyListFrozenTests.setUp
     _day = frozen.DailyListFrozenTests._day
     _proposal = frozen.DailyListFrozenTests._proposal
     _state = SchoolFormOutcomeTests._state
 
-    def _replies(self, case, refs):
+    def _replies(self, case, refs, mode=None):
         def own(item):
             return self._proposal(item['quote'], refs, item['subject'], item['goal'], due=item['due'], purpose=item['purpose'],
                                   submission=item['submission'])
         split = dict(proposals=[own(item) for item in case['items']])
-        if case['first_response_mode'] == 'correct':return split, split
+        mode = mode or case['first_response_mode']
+        if mode == 'correct':return split, split
+        # v6 omission: the reply returns only the first outcome, exactly as its own correct proposal.
+        if mode == 'omit_all_but_first':return dict(proposals=[own(case['items'][0])]), split
         # Root's merge_all_into_first: the first outcome's quote, title, subject and purpose carrying every outcome's goal.
         merged = own(case['items'][0])
         merged.update(task_goal='\n'.join(i['goal'] for i in case['items']),
@@ -392,47 +460,88 @@ class SchoolIndependentOutcomeTests(unittest.TestCase):
     def _rounds(self, offsets=(0, 6, 12)):
         return [agent.run_once(self.app, self.now + dt.timedelta(minutes=m)) for m in offsets]
 
+    def _check(self, case, mode=None):
+        """One case at natural rounds 0/6/12: one call, each outcome's own task, words, category and day, raw receipts
+        kept, the program's item marked with its source, and nothing added later."""
+        mode = mode or case['first_response_mode']
+        self.setUp()
+        payload, refs = self._day([('18:10', '虚构老师', 'qa-teacher', text) for text in case['messages']])
+        first, split = self._replies(case, refs, mode)
+        self._use_replies(payload, copy.deepcopy([first, split, split]))
+        results = self._rounds([0])
+        rows, job, originals, tasks, listed = self._state()
+        self.assertEqual(originals, payload['messages'], 'originals and send times are kept unchanged')
+        self.assertEqual((results[0]['failed'], job['attempts'], job['done']), (0, 1, 1), (case['id'], job['error']))
+        self.assertEqual(self.model.call_count, 1, 'the original itself proves the outcome: no repair call')
+        self.assertEqual((len(tasks), len(listed)), (case['expected_tasks'],) * 2, [t['action'] for t in tasks])
+        for item in case['items']:
+            task, = [t for t in tasks if all(w in t['action'] for w in item['required'])]
+            view, = [i for i in listed if all(w in i['title'] + '\n' + i['body'] for w in item['required'])]
+            row, = [r for r in rows if all(w in r['title'] + '\n' + r['body'] for w in item['required'])]
+            for word in item['forbidden']:
+                self.assertNotIn(word, task['action'] + task['title'], (case['id'], item['quote']))
+                self.assertNotIn(word, view['title'] + '\n' + view['body'], (case['id'], item['quote']))
+            self.assertEqual((view['kind'], view['status']), ('task', '待跟进'), (case['id'], item['quote']))
+            self.assertEqual(view['category'], 'homework' if item['purpose'] == 'learning' else 'todo', item['quote'])
+            self.assertEqual(view['publications'], refs, 'its own original only')
+            # Every outcome's own frozen day, A04's continued 图形册 included (no open-day exemption any more).
+            self.assertEqual((task['due'], row['due']), (item['due'],) * 2, (case['id'], item['quote']))
+            basis = SCOPE_BASIS.get((case['id'], item['quote']))
+            plan = json.loads(row['plan'])
+            if basis:
+                self.assertEqual(plan.get('school_date_scope'), dict(ref=refs[0], quote=basis[0], kind=basis[1]), item['quote'])
+            else:
+                self.assertNotIn('school_date_scope', plan, item['quote'])
+        plans = [json.loads(r['plan']) for r in rows]
+        receipt = {k: first['proposals'][0]['task_' + k] for k in RECEIPT}
+        if mode == 'correct':
+            self.assertFalse([p for p in plans if {'school_split', 'school_split_from'} & set(p)], 'a correct reply needs no repair')
+        elif mode == 'omit_all_but_first':
+            model, = [p for p in plans if 'school_selection_receipt' in p]
+            formed = [p for p in plans if 'school_split_from' in p]
+            self.assertEqual((model['school_selection_receipt'], 'school_split' in model), (receipt, False), 'model item untouched')
+            self.assertEqual(len(formed), case['expected_tasks'] - 1)
+            for plan in formed:
+                mark = plan['school_split_from']
+                self.assertEqual((mark['index'], mark['receipt'], mark['ref'], mark['omitted']), (0, receipt, refs[0], True))
+                self.assertIn(mark['quote'], case['messages'][0], 'compiled from the original run')
+        else:
+            merged, = [p for p in plans if 'school_split' in p]
+            formed, = [p for p in plans if 'school_split_from' in p]
+            self.assertEqual(merged['school_selection_receipt'], receipt, 'the model reading stays verbatim')
+            self.assertNotIn('school_selection_receipt', formed)
+            self.assertEqual((formed['school_split_from']['receipt'], formed['school_split_from']['ref']), (receipt, refs[0]))
+            self.assertNotIn('omitted', formed['school_split_from'])
+            self.assertIn(formed['school_split_from']['quote'], case['messages'][0], 'formed from the original run')
+        before = [dict(r) for r in rows]
+        later = self._rounds([6, 12])
+        after, _, _, tasks_after, _ = self._state()
+        self.assertEqual([(r['created'], r['failed']) for r in later], [(0, 0), (0, 0)])
+        self.assertEqual((after, len(tasks_after), self.model.call_count), (before, case['expected_tasks'], 1), 'reopen adds nothing')
+        return rows, tasks, refs
+
     def test_root_heldout_outcomes_reach_their_own_tasks_in_natural_rounds(self):
         for case in ROOT_V4_HELDOUT:
             with self.subTest(case=case['id']):
-                self.setUp()
-                payload, refs = self._day([('18:10', '虚构老师', 'qa-teacher', text) for text in case['messages']])
-                first, split = self._replies(case, refs)
-                self._use_replies(payload, copy.deepcopy([first, split, split]))
-                results = self._rounds([0])
-                rows, job, originals, tasks, listed = self._state()
-                self.assertEqual(originals, payload['messages'], 'originals and send times are kept unchanged')
-                self.assertEqual((results[0]['failed'], job['attempts'], job['done']), (0, 1, 1), case['id'])
-                self.assertEqual(self.model.call_count, 1, 'the original itself proves the outcome: no repair call')
-                self.assertEqual((len(tasks), len(listed)), (case['expected_tasks'],) * 2, [t['action'] for t in tasks])
-                for item in case['items']:
-                    task, = [t for t in tasks if all(w in t['action'] for w in item['required'])]
-                    view, = [i for i in listed if all(w in i['title'] + '\n' + i['body'] for w in item['required'])]
-                    for word in item['forbidden']:
-                        self.assertNotIn(word, task['action'] + task['title'], (case['id'], item['quote']))
-                        self.assertNotIn(word, view['title'] + '\n' + view['body'], (case['id'], item['quote']))
-                    self.assertEqual((view['kind'], view['status']), ('task', '待跟进'), (case['id'], item['quote']))
-                    self.assertEqual(view['category'], 'homework' if item['purpose'] == 'learning' else 'todo', item['quote'])
-                    self.assertEqual(view['publications'], refs, 'its own original only')
-                    # Each outcome's own day. A04's elliptical 还要完成《图形册》第3题 states none of its own: the truth's 11-04
-                    # would be item 1's 今晚, an open date-role gap this round does not claim (ROOT_CAUSE "Unknown: day").
-                    if item['quote'] not in OPEN_DAY_QUOTES:self.assertEqual(task['due'], item['due'], (case['id'], item['quote']))
-                plans = [json.loads(r['plan']) for r in rows]
-                if case['first_response_mode'] == 'correct':
-                    self.assertFalse([p for p in plans if {'school_split', 'school_split_from'} & set(p)], 'a correct reply needs no repair')
-                else:
-                    receipt = {k: first['proposals'][0]['task_' + k] for k in RECEIPT}
-                    merged, = [p for p in plans if 'school_split' in p]
-                    formed, = [p for p in plans if 'school_split_from' in p]
-                    self.assertEqual(merged['school_selection_receipt'], receipt, 'the model reading stays verbatim')
-                    self.assertNotIn('school_selection_receipt', formed)
-                    self.assertEqual((formed['school_split_from']['receipt'], formed['school_split_from']['ref']), (receipt, refs[0]))
-                    self.assertIn(formed['school_split_from']['quote'], case['messages'][0], 'formed from the original run')
-                before = [dict(r) for r in rows]
-                later = self._rounds([6, 12])
-                after, _, _, tasks_after, _ = self._state()
-                self.assertEqual([(r['created'], r['failed']) for r in later], [(0, 0), (0, 0)])
-                self.assertEqual((after, len(tasks_after), self.model.call_count), (before, case['expected_tasks'], 1), 'reopen adds nothing')
+                self._check(case)
+
+    def test_continued_item_reads_its_day_only_from_a_proven_scope(self):
+        """A04's 还要完成《图形册》第3题 continues 数学今晚完成《算数卡》第2题 (same subject, the child, a learning verb, no day,
+        condition or change of its own, one day in the whole original), so 今晚 is its own scope. Controls: its own 明天 wins;
+        a parent's administrative item or another subject never takes 今晚; a dateless original stays dateless; an explicit
+        common scope (两项今晚都要完成) gives both items its day."""
+        for case in SCOPE_CONTROLS:
+            with self.subTest(case=case['id']):
+                self._check(case)
+
+    def test_omitted_outcome_is_compiled_from_the_original_on_the_first_call(self):
+        """v6 changes v5's expectation (hold, then the identical request until exhausted): the reply returns only the first
+        outcome, yet the complete original states the other affirmatively. The first call compiles it from the original run;
+        no repair call, the model item untouched, nothing new in later rounds."""
+        for case in ROOT_V4_HELDOUT + SCOPE_CONTROLS:
+            if case['expected_tasks'] < 2:continue
+            with self.subTest(case=case['id']):
+                self._check(case, 'omit_all_but_first')
 
     def test_instrument_or_destination_name_is_no_separate_outcome(self):
         """A closed name the work is checked against or uploaded to is no object of its own: one item, never split."""
@@ -444,35 +553,139 @@ class SchoolIndependentOutcomeTests(unittest.TestCase):
                 payload, refs = self._day([('18:10', '虚构老师', 'qa-teacher', text)])
                 self._use_replies(payload, [dict(proposals=[self._proposal(quote, refs, text[:2], goal)])])
                 result = agent.run_once(self.app, self.now)
-                rows, _, _, tasks, listed = self._state()
+                rows, _, _, tasks, _ = self._state()
                 self.assertEqual((result['failed'], len(rows), len(tasks), self.model.call_count), (0, 1, 1, 1))
                 self.assertFalse({'school_split', 'school_split_from'} & set(json.loads(rows[0]['plan'])))
 
-    def test_omitted_named_outcome_holds_for_the_bounded_retry(self):
-        """A01 with the 告知单 left out entirely: no item is invented and nothing is saved; the next natural round's receipt
-        may complete it, and three omitting receipts exhaust with no fourth call (rounds 0/6/12 then later)."""
-        case = ROOT_V4_HELDOUT[0]
-        for repaired in (True, False):
-            with self.subTest(repaired=repaired):
+    # --- v6: what the program may not compile, and the Store state machine around a compiled item ---
+
+    def _ingest(self, messages, first=11):
+        """messages: dicts (hm, text, optional sender/publisher/kind/unread) stored as one collector payload."""
+        payload = self.fixture.payload(cursor=str(first - 1 + len(messages)))
+        payload['messages'] = [dict(id=str(first + i), message_order=str(first + i), time='2026-11-04T' + m['hm'] + ':00+08:00',
+                                    kind=m.get('kind', 'text'), sender=m.get('sender', '虚构老师'), sender_id=m.get('publisher', 'qa-teacher'),
+                                    text=m['text'], unread=m.get('unread', False)) for i, m in enumerate(messages)]
+        self.store.ingest(payload)
+        return payload['messages'], ['message:' + self.source['id'] + ':' + m['id'] for m in payload['messages']]
+
+    def _seam(self, steps):
+        """Replies by step: a reply, an exception (a failed request) or a function of the request's own evidence."""
+        seen = []
+
+        def reply(messages, schema, name, timeout=60, *, data_path=None):
+            self.assertEqual((name, data_path), ('family_agent_selection', self.app.DATA))
+            context = json.loads(messages[-1]['content'])
+            seen.append(context['evidence'])
+            self.assertLessEqual(len(seen), len(steps), 'no call beyond the bounded attempts')
+            step = steps[len(seen) - 1]
+            if isinstance(step, Exception):raise step
+            return copy.deepcopy(step(context) if callable(step) else step)
+        self.model.side_effect = reply
+        return seen
+
+    def _own_reply(self, context, own_ref):
+        """The A01 learning item alone for its own original (the form left out); any other evidence cited as reference."""
+        refs = [e['ref'] for e in context['evidence']]
+        proposals = [self._proposal(A01_OWN, [own_ref], '语文', A01_OWN + '。', due='2026-11-04')] if own_ref in refs else []
+        for e in context['evidence']:
+            if e['ref'] == own_ref:continue
+            if '青叶英语' in e['text']:
+                proposals.append(self._proposal('英语今晚朗读《青叶英语》第2页两遍', [e['ref']], '英语', '英语今晚朗读《青叶英语》第2页两遍。', due='2026-11-04'))
+                continue
+            ref = self._proposal(e['text'].strip('。'), [e['ref']], '', '', purpose='optional')
+            ref.update(task_state='reference', task_title='', task_goal='', task_reason='虚构固定回执：更正或撤回，仅保留原文。')
+            proposals.append(ref)
+        return dict(proposals=proposals)
+
+    def _assert_not_compiled(self, name, originals):
+        """The program never compiled an item for name; the batch either kept the model's own reading or the existing bounded
+        retry (at most three calls, exhaustion stated), and the originals stay."""
+        rows, job, saved, tasks, _ = self._state()
+        self.assertFalse([r['id'] for r in rows if 'school_split_from' in json.loads(r['plan'])], 'no program item')
+        self.assertFalse([t['id'] for t in tasks if name in t['title'] + t['action']], 'no task from the uncertain words')
+        self.assertLessEqual(self.model.call_count, 3)
+        self.assertEqual(saved, originals)
+        if not job['done']:self.assertEqual((job['attempts'], '上限' in job['error']), (3, True), job['error'])
+        return rows, job, tasks
+
+    def test_uncertain_or_unread_outcome_is_never_compiled(self):
+        """Not the original's affirmed current requirement, so never the program's: a question, a condition earlier in the
+        clause chain, a past completion, a change; and an unread original whose words are incomplete."""
+        for text, unread in ((A01_OWN + '；《秋游告知单》需要家长签字吗？', False),
+                             (A01_OWN + '；如果参加秋游，《秋游告知单》家长签字，明早交回。', False),
+                             (A01_OWN + '；《秋游告知单》家长已签字交回，谢谢。', False),
+                             (A01_OWN + '；《秋游告知单》改为下周一交回。', False),
+                             (ROOT_V4_HELDOUT[0]['messages'][0], True)):
+            with self.subTest(text=text, unread=unread):
                 self.setUp()
-                payload, refs = self._day([('18:10', '虚构老师', 'qa-teacher', case['messages'][0])])
-                _, split = self._replies(case, refs)
-                omitted = dict(proposals=[split['proposals'][0]])
-                self._use_replies(payload, copy.deepcopy([omitted, split] if repaired else [omitted] * 3))
-                first = agent.run_once(self.app, self.now)
-                rows, job, originals, tasks, _ = self._state()
-                self.assertEqual((first['failed'], rows, tasks, originals, job['attempts'], job['done']), (1, [], [], payload['messages'], 1, 0))
-                self._rounds([6, 12])
-                rows, job, _, tasks, _ = self._state()
-                if repaired:
-                    self.assertEqual((self.model.call_count, job['attempts'], job['done'], len(tasks)), (2, 2, 1, 2))
+                originals, refs = self._ingest([dict(hm='18:10', text=text, unread=unread)])
+                self._seam([lambda context, own=refs[0]: self._own_reply(context, own)] * 3)
+                self._rounds([0, 6, 12, 30, 60, 120])
+                self._assert_not_compiled('秋游告知单', originals)
+
+    def test_withdrawn_or_recalled_source_is_not_compiled_from_the_old_basis(self):
+        """The same teacher's later correction names the form, or a later message of that teacher is recalled (content
+        unknown): the program does not compile the form from the earlier words; the batch keeps the bounded retry."""
+        for later in (dict(hm='18:40', text='更正：《秋游告知单》不用交了。'), dict(hm='18:40', kind='recalled', text='[已撤回，正文未读取]')):
+            with self.subTest(later=later['text']):
+                self.setUp()
+                originals, refs = self._ingest([dict(hm='18:10', text=ROOT_V4_HELDOUT[0]['messages'][0]), later])
+                self._seam([lambda context, own=refs[0]: self._own_reply(context, own)] * 3)
+                self._rounds([0, 6, 12, 30, 60, 120])
+                self._assert_not_compiled('秋游告知单', originals)
+
+    def test_version_change_after_a_failed_request_is_read_whole(self):
+        """Round 0's request fails (counted). The teacher's correction arrives before the next natural round: that round reads
+        the current evidence, so the form is never compiled from the old basis; with no correction (control) the same retry
+        compiles it once."""
+        for corrected in (True, False):
+            with self.subTest(corrected=corrected):
+                self.setUp()
+                originals, refs = self._ingest([dict(hm='18:10', text=ROOT_V4_HELDOUT[0]['messages'][0])])
+                seen = self._seam([agent.AgentError('虚构模型请求失败')] + [lambda context, own=refs[0]: self._own_reply(context, own)] * 2)
+                first, = self._rounds([0])
+                self.assertEqual((first['failed'], self.model.call_count), (1, 1))
+                if corrected:
+                    more, _ = self._ingest([dict(hm='18:14', text='更正：《秋游告知单》不用交了。')], first=12)
+                    originals = originals + more
+                self._rounds([6, 12, 30, 60, 120])
+                if corrected:
+                    self._assert_not_compiled('秋游告知单', originals)
+                    self.assertTrue(any(any('不用交了' in e['text'] for e in evidence) for evidence in seen[1:]), 'the retry read the correction')
                 else:
-                    self.assertEqual((self.model.call_count, job['attempts'], job['done'], rows, tasks), (2, 2, 0, [], []))
-                    self._rounds([30, 60, 120])
-                    rows, job, originals, tasks, _ = self._state()
-                    self.assertEqual((self.model.call_count, job['attempts'], job['done'], rows, tasks), (3, 3, 0, [], []))
-                    self.assertIn('上限', job['error'])
-                    self.assertEqual(originals, payload['messages'])
+                    rows, job, _, tasks, _ = self._state()
+                    self.assertEqual((self.model.call_count, job['attempts'], job['done'], len(tasks)), (2, 2, 1, 2))
+                    self.assertEqual(len([t for t in tasks if '秋游告知单' in t['title'] + t['action']]), 1)
+
+    def test_compiled_task_is_neither_repeated_nor_overwritten(self):
+        """Store state machine around a compiled item: a parent's edit of that task between natural rounds is kept, later
+        rounds and a later batch of the same day never compile the same outcome again."""
+        self.setUp()
+        originals, refs = self._ingest([dict(hm='18:10', text=ROOT_V4_HELDOUT[0]['messages'][0])])
+        self._seam([lambda context, own=refs[0]: self._own_reply(context, own)] * 2)
+        self._rounds([0])
+        rows, job, _, tasks, _ = self._state()
+        self.assertEqual((job['done'], len(tasks), self.model.call_count), (1, 2, 1))
+        form, = [t for t in tasks if '秋游告知单' in t['title'] + t['action']]
+        family_task_focus.save(self.app, dict(id=form['id'], version=0, request_key='synthetic-v6-parent-edit', mode='next',
+                                              next_action='', waiting_for='', review_on='', scheduled_on='2026-11-05',
+                                              title='家长改：《秋游告知单》周四交', goal='家长已改：告知单签好后周四交给班主任。'))
+        self.app.save_task(dict(id=form['id'], status='待跟进', note='虚构家长安排保留。'))
+        rows_edit, _, _, tasks_edit, _ = self._state()
+        edited, = [t for t in tasks_edit if t['id'] == form['id']]
+        self.assertEqual(edited['title'], '家长改：《秋游告知单》周四交')
+        self._rounds([6, 12])
+        rows_after, _, _, tasks_after, _ = self._state()
+        self.assertEqual((rows_after, tasks_after, self.model.call_count), (rows_edit, tasks_edit, 1), 'the parent edit stays')
+        more, _ = self._ingest([dict(hm='18:40', text='英语今晚朗读《青叶英语》第2页两遍。', sender='虚构英语老师', publisher='qa-teacher-en')], first=12)
+        self._rounds([30, 60])
+        rows_last, job, saved, tasks_last, _ = self._state()
+        self.assertEqual(saved, originals + more)
+        self.assertEqual(self.model.call_count, 2)
+        self.assertEqual(len([t for t in tasks_last if '秋游告知单' in t['title'] + t['action']]), 1, 'compiled once')
+        kept, = [t for t in tasks_last if t['id'] == form['id']]
+        self.assertEqual((kept['title'], kept['action']), (edited['title'], edited['action']), 'the parent edit stays')
+        self.assertEqual(len(tasks_last), 3)
 
 
 if __name__ == '__main__':
