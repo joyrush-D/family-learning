@@ -328,6 +328,108 @@ class DailyListFrozenTests(unittest.TestCase):
             task_title=(subject + '：' if subject else '') + quote, task_goal=goal, task_state='ready',
             task_purpose=purpose, task_submission=submission, task_reason='虚构固定回执，只验校验/保存/展示。')
 
+    def test_u02_linked_pdf_requirements_reach_one_task_only_through_the_page_reader(self):
+        """U02 with its linked one-page fictional PDF through actual run_once rounds only (no act(accept), no seeded rows).
+        Mocked layers, labelled: the selection reply is Root's actual configured-Flash return for this exact request,
+        replayed (no new model call); the page reader (test_pdf_material.renderer/page_model) and the school refresh are
+        deterministic fake receipts. They prove the state machine, not original-reading accuracy. REQUIREMENT is
+        fictional teacher text that exists only in the fake page receipt."""
+        import hashlib, io
+        from urllib.parse import quote
+        import test_pdf, test_pdf_material
+        requirement = '连续观察绿豆发芽3天，每天记录芽长（毫米）和子叶颜色，并写一句观察发现。'
+        (self.app.ROOT / '家庭运行规则.md').write_text(PRODUCT_SIX_FAMILY)
+        self.source.update(id='qq:123456', platform='qq'); self.fixture.config()
+        payload, refs = self._day([('18:40', '虚构科学老师', 'qa-science', '请按照附件里的要求完成实验观察表。')])
+        raw = test_pdf.build_pdf(1)
+        upload = self.app.save_upload(io.BytesIO(raw), len(raw), quote('示例观察表.pdf'))
+        keys = dict(child_id='child-1', source_id='qq:123456', message_id='11')
+        self.store.message_attachment(dict(keys, attachment_id=upload['id'], action='attach'), self.app.upload_info)
+        actual = dict(proposals=[dict(
+            title_quote='请按照附件里的要求完成实验观察表。', focus='school', due='', evidence=[dict(ref=refs[0])],
+            task_title='科学：完成实验观察表',
+            task_goal='按附件《示例观察表.pdf》中的要求完成实验观察表。\n附件内容尚未读取，具体观察项目、填写范围与完成标准未知。',
+            task_advice='', learning_subject='', learning_goal_id='', task_change='new', task_target_id='', task_state='review',
+            task_reason='正文明确要求完成实验观察表，但具体要求写在未读取的附件中，缺附件内的观察项目、填写范围与完成标准。',
+            task_purpose='learning', task_submission='')])
+        calls = []
+
+        def model(messages, schema, name, timeout=60, *, data_path=None):
+            self.assertEqual(data_path, self.app.DATA)
+            context = json.loads(messages[-1]['content']); calls.append((name, context))
+            if name == 'family_agent_selection':
+                self.assertEqual([(e['ref'], e['text'], e['attachments']) for e in context['evidence']],
+                                 [(refs[0], '请按照附件里的要求完成实验观察表。', [dict(mime='application/pdf', name='示例观察表.pdf')])])
+                return copy.deepcopy(actual)
+            docs = context.get('pdf_material') or []
+            read = bool(docs) and all(d['complete'] and not d['omitted_groups'] and not d['truncated_groups'] for d in docs)
+            brief = dict(title='科学：完成实验观察表', goal=requirement if read else actual['proposals'][0]['task_goal'], advice='',
+                         state='ready' if read else 'review', reason='虚构固定回执：附件页组要求' + ('已整理。' if read else '未读。'),
+                         purpose='learning', submission='', change='new', target_id='', learning_subject='科学', learning_goal_id='')
+            if 'original_parts' not in context: return brief
+            # The same deterministic assignment as test_school_pdf_evidence.refresh: one action per distinct literal requirement.
+            parts = context['original_parts']; groups = []
+            for part in parts:
+                if not part.get('requirement'): continue
+                group = next((g for g in groups if g[0]['text'] == part['text']), None)
+                if group is None: groups.append([part])
+                else: group.append(part)
+            for group in groups:
+                owned = {p['ref'] for p in group}; seen = {u for p in group for u in p['upload_ids']}
+                for part in parts:
+                    if part.get('background_only') and part['ref'] in owned and part['text'].strip() and not set(part['upload_ids']) <= seen:
+                        group.append(part); seen.update(part['upload_ids'])
+            return dict(actions=[dict(brief, due='', existing_item_id=context['candidate_id'] if i == 0 else '',
+                                      basis=[dict(part=p['id'], text=p['text'] if p.get('requirement') else p['text'][:2000]) for p in g])
+                                 for i, g in enumerate(groups)])
+        self.model.side_effect = model
+        page = dict(originals=[dict(upload_id=upload['id'], title='虚构实验观察表', note='老师写明的观察要求，未见孩子填写。',
+                                    uncertainties=[], requirements=[requirement], deferred_contexts=[])])
+
+        def state():
+            with self.store._db() as c:
+                schools = [dict(x) for x in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+                tasks = [dict(x) for x in c.execute('SELECT * FROM manual_tasks')]
+                originals = [json.loads(x[0]) for x in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
+            return schools, tasks, originals, self.store.message(keys, self.app.upload_info)
+
+        def unchanged(originals, message):
+            self.assertEqual(originals, payload['messages'])  # sender, publisher, sent time and text exact
+            self.assertEqual([a['id'] for a in message['attachments']], [upload['id']])
+            self.assertEqual(hashlib.sha256((self.app.DATA / 'uploads' / upload['id']).read_bytes()).hexdigest(),
+                             hashlib.sha256(raw).hexdigest())
+        with test_pdf_material.renderer(page_count=1), test_pdf_material.page_model([ValueError('虚构页组读取失败'), page]) as pages:
+            first = agent.run_once(self.app, self.now)
+            schools, tasks, originals, message = state()
+            # Failed reading: the dependent requirement stays unknown and held; nothing is invented or accepted.
+            self.assertEqual((first['failed'], len(schools), schools[0]['state'], tasks, pages.call_count), (1, 1, 'pending', [], 1))
+            held = json.loads(schools[0]['plan'])['school_task']
+            self.assertEqual(held['state'], 'review'); self.assertIn('未知', schools[0]['body']); self.assertNotIn(requirement, schools[0]['body'])
+            self.assertEqual((message['pdf_material']['state'], message['pdf_material']['requirements_complete']), ('error', False))
+            unchanged(originals, message)
+            waited = agent.run_once(self.app, self.now + dt.timedelta(minutes=2))  # inside the existing 5-minute back-off
+            self.assertEqual((pages.call_count, state()[1], waited['created']), (1, [], 0))
+            agent.run_once(self.app, self.now + dt.timedelta(minutes=6))  # the bounded retry reads the whole page
+            schools, tasks, originals, message = state()
+            self.assertEqual((pages.call_count, message['pdf_material']['state'], message['pdf_material']['requirements_complete']), (2, 'ready', True))
+            agent.run_once(self.app, self.now + dt.timedelta(minutes=7))  # existing automatic refresh and acceptance
+            schools, tasks, originals, message = state()
+            self.assertEqual(([s['state'] for s in schools], len(tasks)), (['accepted'], 1))
+            final = json.loads(schools[0]['plan'])['school_task']
+            for text in (tasks[0]['action'], schools[0]['body'], final['goal']):
+                self.assertIn(requirement, text)
+                for vague in ('附件里的要求', '按附件', '未知'): self.assertNotIn(vague, text)
+            self.assertEqual((final['state'], final['auto_added'], schools[0]['task_id'], tasks[0]['id']), ('ready', True, tasks[0]['id'], schools[0]['task_id']))
+            self.assertIn(refs[0], tasks[0]['source'])
+            unchanged(originals, message)
+            names = [n for n, _ in calls]
+            accepted = (schools, tasks)
+            again = agent.run_once(self.app, self.now + dt.timedelta(minutes=20))  # reopen: no repeat call, write or duplicate
+            schools, tasks, originals, message = state()
+            self.assertEqual(((schools, tasks), [n for n, _ in calls], pages.call_count, again['created']), (accepted, names, 2, 0))
+        self.assertEqual(names[0], 'family_agent_selection'); self.assertEqual(names.count('family_agent_selection'), 1)
+        self._report(case='U02_linked_pdf_page_reader_chain', calls=names, page_calls=2, task=tasks[0]['action'])
+
     def _report(self, **line):
         report = os.environ.get('DAILY_LIST_REPORT')
         if report:
