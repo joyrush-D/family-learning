@@ -594,7 +594,9 @@ def _school_separate_forms(proposals, evidence, native_refs=()):
                 or home.get('attachments') or _needs_task_details(text)):continue
         q0=text.index(quote);q1=q0+len(quote)
         parts=[(m.start(),m.end(),m[0]) for m in re.finditer(_SCHOOL_STEP_PART,text)]
-        head=next((x for x in parts if x[0]<q1 and q0<x[1]),None)
+        # The item's own object is the first quoted part naming one: a leading day or condition (2026年11月6日前，如果参加，) names none.
+        quoted=[x for x in parts if x[0]<q1 and q0<x[1]]
+        head=next((x for x in quoted if _school_named_objects(x[2])),quoted[0] if quoted else None)
         if head is None:continue
         own=_school_named_objects(head[2])
         for at,(start,end,part) in enumerate(parts):
