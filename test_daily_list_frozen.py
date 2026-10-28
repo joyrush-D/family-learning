@@ -14,8 +14,11 @@ from pathlib import Path
 
 import family_agenda
 import family_agent as agent
+import family_media
 import test_agent as fixtures
 import test_school_native_coverage as native
+
+READ_ORIGINALS = family_media.prepare_draft  # the real reader; the shared fixture stubs it, the image chain restores it
 
 
 T06_TEXT = '附件是明天带去课堂的实验观察表，今晚不填。'  # 科学老师18:40 in 验收-每日清单.md; its attachment is not read here
@@ -615,7 +618,8 @@ class DailyListFrozenTests(unittest.TestCase):
                 originals = [json.loads(x[0]) for x in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
                 errors = [r[0] for r in c.execute("SELECT error FROM agent_jobs WHERE id LIKE 'school-task:%' AND error!=''")]
             return schools, tasks, originals, self.store.message(keys, self.app.upload_info), errors
-        with patch.object(family_llm, 'extract_draft', side_effect=[family_llm.LLMDraftError('虚构图片读取失败'), reader]) as reads:
+        with patch.object(family_media, 'prepare_draft', READ_ORIGINALS), \
+                patch.object(family_llm, 'extract_draft', side_effect=[family_llm.LLMDraftError('虚构图片读取失败'), reader]) as reads:
             agent.run_once(self.app, self.now)
             schools, tasks, originals, message, _ = state()
             # Failed reading: the requirement stays unknown and held; nothing is invented or accepted.
