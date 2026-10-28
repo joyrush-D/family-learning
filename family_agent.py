@@ -6804,6 +6804,30 @@ def _school_action_read_evidence(evidence,anchors,requirements):
     return result
 
 
+def _school_own_requirement(part,pdf,material,subject=''):
+    """A page-reader requirement line is its own action evidence by structure, not by a verb/noun list.
+
+    Only a part re-derived unchanged (message, upload, pages, whole literal text) from the current complete page-group
+    protocol of every page of its own original counts, with no doubt or reading gap. Reading progress, or a line that
+    says nothing beyond a date, a label and the original's own title/name, never does. Message, material and
+    background parts keep the vocabulary rule. Whether the page reader typed a line as a requirement is its model's
+    classification; this check only refuses lines that cannot be one.
+    """
+    from family_agenda import _DAY_WORDS
+    if not (part.get('requirement') and part['id'].startswith('pdf:') and pdf and pdf.get('requirements_complete')):return False
+    if (pdf.get('uncertainties') or any(d['omitted'] or d['truncated'] for d in pdf.get('documents',[]))
+            or (material or {}).get('uncertainties') or part not in _school_original_parts([],pdf,None)):return False
+    doc=next((d for d in pdf['model'] if d['ref']==part['ref'] and [d['upload_id']]==part['upload_ids']),None)
+    if not doc or doc['processed_pages']!=list(range(1,doc['page_count']+1)) or not set(part['pages'])<=set(doc['processed_pages']):return False
+    if family_llm.school_requirement_has_reading_progress(part['text']):return False
+    rest=re.sub(r'^\s*(?:[^：:\n]{1,8}[：:]\s*)?','',part['text'])
+    for name in [doc['name'].rsplit('.',1)[0],subject]+[g['text'].split('\n',1)[0] for g in doc['groups']]:
+        if name.strip():rest=rest.replace(name.strip(),'')
+    prefix=r'(?:每个|上个|本个|这个|下个|每|上|本|这|下)?'  # the weekday prefixes family_agenda grounds
+    for pattern in (_SCHOOL_ACTION_OPEN,_SCHOOL_DATE_MENTION.pattern,_DAY_WORDS):rest=re.sub(prefix+'(?:'+pattern+')','',rest)
+    return bool(re.sub(r'[\W_\d年月日号]+','',rest))
+
+
 def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,material,targets,goals,now,*,legacy_correction=None):
     """Validate every independent action before any write; each deadline has its own bounded basis."""
     from family_agenda import date,deadlines,sent_day
@@ -6863,6 +6887,9 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         has_action=any(_LEARNING_ACTIVITY.search(a['quote']) or _LEARNING_ACTION.search(a['quote'])
             or conditions and re.search(r'(?:完成|做|写)\s*(?:第[一二三四五六七八九十0-9]+项\s*[:：]?\s*)?《[^》\n]{2,40}》',a['quote'])
             or re.search(r'打印|签字|交回|盖章|提交|上传|带|携带|准备|领取|报名|缴|考试|测验|比赛|家长会',a['quote']) for a in action_anchors)
+        own=[] if has_action or conditions or legacy_correction else [lookup[q['part']] for q in basis
+            if _school_own_requirement(lookup[q['part']],pdf,material,value.get('learning_subject',''))]
+        has_action=has_action or bool(own)
         if value['state']=='ready' and not has_action and any(lookup[q['part']].get('background_only') for q in basis):
             raise AgentError('原件背景没有完整行动要求，不能自动新增任务')
         reading_gap=bool((pdf or {}).get('uncertainties') or any(d['omitted'] or d['truncated'] for d in (pdf or {}).get('documents',[])) or (material or {}).get('uncertainties'))
@@ -6909,6 +6936,8 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
             _,cited_pages=_school_material(store,c,item_row)
             cited_pdf=_pdf_evidence(_school_pdf(store,c,item_row))
             cited_material=_school_drafts(store,c,item_row)
+        if own and not all(_school_own_requirement(p,cited_pdf,cited_material,value.get('learning_subject','')) for p in own):
+            raise AgentError('完整要求与本项原件页组不一致，原要求保留')  # the item's own scoped evidence must hold the same lines
         cited_page=_page_evidence(cited,cited_pages) if cited_pages else None
         if cited_page and not cited_page['read']: cited_page=None
         # A native body action has no file scope. Its literal anchor is readable

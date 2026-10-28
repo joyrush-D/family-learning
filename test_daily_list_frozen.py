@@ -433,6 +433,98 @@ class DailyListFrozenTests(unittest.TestCase):
         self.assertEqual(names[0], 'family_agent_selection'); self.assertEqual(names.count('family_agent_selection'), 1)
         self._report(case='U02_linked_pdf_page_reader_chain', calls=names, page_calls=2, task=tasks[0]['action'], goal=final['goal'], due=schools[0]['due'])
 
+    U02_REQUIREMENT = '连续观察绿豆发芽3天，每天记录芽长（毫米）和子叶颜色，并写一句观察发现。'
+
+    def _u02_variant(self, requirements, cite='requirement', title='虚构实验观察表', uncertainties=()):
+        """The U02 message and its linked one-page fictional PDF; the fake page receipt reads at once. The fake ready
+        refresh receipt cites each requirement part alone ('requirement'), beside the teacher's words ('all'), or the
+        words alone ('message'). Fake receipts prove the state machine only, not reading accuracy."""
+        import copy, io
+        from urllib.parse import quote
+        import test_pdf, test_pdf_material
+        (self.app.ROOT / '家庭运行规则.md').write_text(PRODUCT_SIX_FAMILY)
+        self.source.update(id='qq:123456', platform='qq'); self.fixture.config()
+        _, refs = self._day([('18:40', '虚构科学老师', 'qa-science', '请按照附件里的要求完成实验观察表。')])
+        raw = test_pdf.build_pdf(1)
+        upload = self.app.save_upload(io.BytesIO(raw), len(raw), quote('示例观察表.pdf'))
+        self.store.message_attachment(dict(child_id='child-1', source_id='qq:123456', message_id='11', attachment_id=upload['id'],
+                                           action='attach'), self.app.upload_info)
+        review = dict(proposals=[dict(title_quote='请按照附件里的要求完成实验观察表。', focus='school', due='', evidence=[dict(ref=refs[0])],
+            task_title='科学：完成实验观察表', task_goal='按附件中的要求完成实验观察表。\n附件内容尚未读取，具体要求未知。', task_advice='',
+            learning_subject='', learning_goal_id='', task_change='new', task_target_id='', task_state='review',
+            task_reason='具体要求写在未读取的附件中。', task_purpose='learning', task_submission='')])
+        contexts = []
+
+        def model(messages, schema, name, timeout=60, *, data_path=None):
+            context = json.loads(messages[-1]['content'])
+            if name == 'family_agent_selection': return copy.deepcopy(review)
+            brief = dict(title='科学：完成实验观察表', goal='完成实验观察表', advice='', state='ready', reason='虚构固定回执。', purpose='learning',
+                         submission='', change='new', target_id='', learning_subject='科学', learning_goal_id='')
+            if 'original_parts' not in context: return dict(brief, state='review', reason='虚构固定回执：附件未读。')
+            contexts.append(context); parts = context['original_parts']
+            words = [p for p in parts if not p.get('requirement') and not p.get('background_only') and not p['upload_ids']]
+            owned = [p for p in parts if p.get('requirement')]
+            groups = [words] if cite == 'message' else [(words if cite == 'all' else []) + [p] for p in owned]
+            return dict(actions=[dict(brief, due='', existing_item_id=context['candidate_id'] if i == 0 else '',
+                                      basis=[dict(part=p['id'], text=p['text']) for p in g]) for i, g in enumerate(groups)])
+        self.model.side_effect = model
+        page = dict(originals=[dict(upload_id=upload['id'], title=title, note='老师写明的观察要求，未见孩子填写。',
+                                    uncertainties=list(uncertainties), requirements=list(requirements), deferred_contexts=[])])
+        with test_pdf_material.renderer(page_count=1), test_pdf_material.page_model([page] * 4):
+            for minutes in (0, 1, 8, 20, 40): agent.run_once(self.app, self.now + dt.timedelta(minutes=minutes))
+        with self.store._db() as c:
+            schools = [dict(x) for x in c.execute("SELECT * FROM agent_items WHERE kind='school'")]
+            tasks = [dict(x) for x in c.execute('SELECT * FROM manual_tasks')]
+        return schools, tasks, contexts
+
+    def _u02_held(self, requirements, reached=True, **kw):
+        schools, tasks, contexts = self._u02_variant(requirements, **kw)
+        self.assertEqual((bool(contexts), [s['state'] for s in schools], tasks), (reached, ['pending'], []))
+        for text in requirements: self.assertNotEqual(schools[0]['body'].strip(), text)
+        return schools, contexts
+
+    def test_u02_complete_page_requirement_alone_is_its_own_action_and_only_its_exact_structure_counts(self):
+        import copy
+        schools, tasks, contexts = self._u02_variant([self.U02_REQUIREMENT])
+        self.assertEqual(([s['state'] for s in schools], len(tasks), len(contexts)), (['accepted'], 1, 1))
+        self.assertEqual((tasks[0]['action'].strip(), schools[0]['body'].strip()), (self.U02_REQUIREMENT, self.U02_REQUIREMENT))
+        with self.store._db() as c:
+            pdf = agent._pdf_evidence(agent._school_pdf(self.store, c, schools[0]))
+        parts = agent._school_original_parts([], pdf, None); [part] = [p for p in parts if p.get('requirement')]
+        own = lambda p=part, q=pdf, m=None: agent._school_own_requirement(p, q, m, '科学')
+        partial = copy.deepcopy(pdf); partial['model'][0].update(page_count=2)
+        self.assertEqual([own(), own(dict(part, text=part['text'][:-1])), own(dict(part, upload_ids=['0' * 32])),
+                          own(dict(part, ref='message:qq:123456:12')), own(dict(part, pages=[2])), own(q=partial),
+                          own(q=dict(pdf, uncertainties=['表格第二栏模糊'])), own(q=dict(pdf, requirements_complete=False)),
+                          own(m=dict(uncertainties=['图片待核'])), own(q=None)],
+                         [True] + [False] * 9)
+        for p in parts:
+            if not p.get('requirement'): self.assertFalse(own(p))
+
+    def test_u02_page_requirement_that_is_only_a_date_gains_nothing(self):
+        self._u02_held(['2026年11月6日前'])
+
+    def test_u02_page_requirement_that_is_only_a_weekday_deadline_gains_nothing(self):
+        self._u02_held(['下周一之前'], cite='all')
+
+    def test_u02_page_requirement_that_is_only_the_originals_title_gains_nothing(self):
+        self._u02_held(['虚构实验观察表'])
+
+    def test_u02_page_requirement_that_is_only_a_label_title_and_date_gains_nothing(self):
+        self._u02_held(['科学：虚构实验观察表（11月6日前）'], cite='all')
+
+    def test_u02_page_requirement_that_is_only_the_file_name_gains_nothing(self):
+        self._u02_held(['示例观察表'])
+
+    def test_u02_page_reading_progress_never_becomes_a_complete_requirement(self):
+        self._u02_held([self.U02_REQUIREMENT + '第2页本轮未送入。'], reached=False)
+
+    def test_u02_doubted_complete_page_requirement_still_waits(self):
+        self._u02_held([self.U02_REQUIREMENT], uncertainties=['表格第二栏字迹模糊，记录单位不清。'])
+
+    def test_u02_teacher_words_alone_cannot_stand_for_the_unassigned_page_requirement(self):
+        self._u02_held([self.U02_REQUIREMENT], cite='message')
+
     def _report(self, **line):
         report = os.environ.get('DAILY_LIST_REPORT')
         if report:
