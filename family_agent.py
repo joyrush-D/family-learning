@@ -530,9 +530,13 @@ def _school_step_owned(goal, step, texts, others=()):
             tail=re.match(r'[^\W\d_]{1,2}$',plain[i+run:])
             if tail and not any(c in written for c in tail[0]):named|=set(range(i+run,len(plain)))
     added=[c for i,c in enumerate(plain) if c not in anchor[2] and i not in named]
-    def quoted(clause):  # Another item's quote covers any of this clause in its own original.
+    # Another item is another object only when its quote names words neither this item's own clause nor the step states
+    # (回执签字 beside 签字); one quoting just this step (录音上传 of 录音上传班级作业区) is the same activity's submission,
+    # which the batch marks as a duplicate of this item (_school_submission_step).
+    distinct=[o for o in others if o and set(_school_step_chars(o))-anchor[2]-set(need)]
+    def quoted(clause):  # Another object's quote covers any of this clause in its own original.
         text=texts[clause[0]];end=clause[1]+len(clause[3])
-        for other in others:
+        for other in distinct:
             at=0
             while other and (at:=text.find(other,at))!=-1:
                 if max(clause[1],at)<min(end,at+len(other)):return True
