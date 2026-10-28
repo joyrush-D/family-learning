@@ -6804,26 +6804,44 @@ def _school_action_read_evidence(evidence,anchors,requirements):
     return result
 
 
+# The administrative actions and events an action's own words name (has_action in _school_original_actions).
+_SCHOOL_ADMIN_ACTION=r'打印|签字|交回|盖章|提交|上传|带|携带|准备|领取|报名|缴|考试|测验|比赛|家长会'
+
+
 def _school_requirement_names(part,pdf,material,names=None):
-    """The titles and file name of a requirement line's own original: words that cannot be its action."""
+    """The titles and file name (whole and without its extension) of a requirement line's own original: its identity."""
+    file=lambda name:[name,name.rsplit('.',1)[0]] if name else []
     if part['id'].startswith('pdf:'):
         doc=next((d for d in (pdf or {}).get('model',[]) if d['ref']==part['ref'] and [d['upload_id']]==part['upload_ids']),None)
-        return [doc['name'].rsplit('.',1)[0]]+[g['text'].split('\n',1)[0] for g in doc['groups']] if doc else []
+        return file(doc['name'])+[g['text'].split('\n',1)[0] for g in doc['groups']] if doc else []
     return ([e['draft']['title'] for e in (material or {}).get('model',[]) if e['ref']==part['ref'] and e['upload_ids']==part['upload_ids']]
-            +[(names or {}).get(u,'').rsplit('.',1)[0] for u in part['upload_ids']])
+            +[n for u in part['upload_ids'] for n in file((names or {}).get(u,''))])
+
+
+def _school_stated_action(text):
+    """Whether a line's own words state an action by a predicate the existing recognizers know: the native action predicates,
+    _LEARNING_ACTION and the administrative actions. A study kind's own name (练习、作业、课文…), which the native predicates
+    leave out, only says what a heading is about."""
+    return bool(re.search(_SCHOOL_NATIVE_PREDICATE,text) or _LEARNING_ACTION.search(text) or re.search(_SCHOOL_ADMIN_ACTION,text))
 
 
 def _school_requirement_substance(text,names):
     """Whether a requirement line says anything beyond reading progress, a short label, its original's own title/name,
-    the subject and dates. Structure only, never a verb/noun list."""
+    the subject and dates. Structure first, never a verb/noun list of its own.
+
+    The original's own title/name is identity: it can show a line to be only that original's heading, never take away the
+    action of a sentence. A line those names wholly cover is still its action when it is itself a sentence (。；！？ or a
+    clause break) stating an action (_school_stated_action), as when the reader also titles the original 家长签字并交回活动回执。;
+    a bare heading (数学练习要求), the file name (虚构完整要求.png) or a heading before a date never is."""
     from family_agenda import _DAY_WORDS
     if family_llm.school_requirement_has_reading_progress(text):return False
-    rest=re.sub(r'^\s*(?:[^：:\n]{1,8}[：:]\s*)?','',text)
-    for name in names:
-        if name.strip():rest=rest.replace(name.strip(),'')
-    prefix=r'(?:每个|上个|本个|这个|下个|每|上|本|这|下)?'  # the weekday prefixes family_agenda grounds
-    for pattern in (_SCHOOL_ACTION_OPEN,_SCHOOL_DATE_MENTION.pattern,_DAY_WORDS):rest=re.sub(prefix+'(?:'+pattern+')','',rest)
-    return bool(re.sub(r'[\W_\d年月日号]+','',rest))
+    def said(names):
+        rest=re.sub(r'^\s*(?:[^：:\n]{1,8}[：:]\s*)?','',text)
+        for name in sorted({n.strip() for n in names if n.strip()},key=len,reverse=True):rest=rest.replace(name,'')
+        prefix=r'(?:每个|上个|本个|这个|下个|每|上|本|这|下)?'  # the weekday prefixes family_agenda grounds
+        for pattern in (_SCHOOL_ACTION_OPEN,_SCHOOL_DATE_MENTION.pattern,_DAY_WORDS):rest=re.sub(prefix+'(?:'+pattern+')','',rest)
+        return bool(re.sub(r'[\W_\d年月日号]+','',rest))
+    return said(names) or (said([]) and bool(re.search(r'[。；;！!？?，,]',text)) and _school_stated_action(text))
 
 
 def _school_own_requirement(part,pdf,material,subject='',names=None):
@@ -6911,12 +6929,12 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
             compiled=[a['quote'] for a in action_anchors]
         if requirements and not conditions:value=_school_requirement_goal(value,compiled)
         subject=value.get('learning_subject','')
-        # A requirement line that is only its original's own title/name or a date is no action whatever words it holds.
+        # A requirement line that is only its original's own heading, file name or a date is no action (_school_requirement_substance).
         titles=[dict(ref=p['ref'],upload_ids=p['upload_ids'],pages=p['pages'],quote=p['text']) for p in (lookup[q['part']] for q in basis)
                 if p.get('requirement') and not _school_requirement_substance(p['text'],_school_requirement_names(p,pdf,material,names)+[subject])]
         has_action=any(_LEARNING_ACTIVITY.search(a['quote']) or _LEARNING_ACTION.search(a['quote'])
             or conditions and re.search(r'(?:完成|做|写)\s*(?:第[一二三四五六七八九十0-9]+项\s*[:：]?\s*)?《[^》\n]{2,40}》',a['quote'])
-            or re.search(r'打印|签字|交回|盖章|提交|上传|带|携带|准备|领取|报名|缴|考试|测验|比赛|家长会',a['quote']) for a in action_anchors if a not in titles)
+            or re.search(_SCHOOL_ADMIN_ACTION,a['quote']) for a in action_anchors if a not in titles)
         own=[] if has_action or conditions or legacy_correction else [lookup[q['part']] for q in basis
             if _school_own_requirement(lookup[q['part']],pdf,material,subject,names)]
         has_action=has_action or bool(own)

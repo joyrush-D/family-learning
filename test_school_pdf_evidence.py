@@ -825,15 +825,21 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                  ('I03_draw','画出绿豆发芽前后的样子，圈出发生变化的部位。','科学',1),
                  ('C01_known_math','数学：完成第1至3题，写明单位。','数学',1),
                  ('N01_date_only','2026年11月6日前','',0),
-                 ('N02_title_only','数学练习要求','',0)]
+                 ('N02_title_only','数学练习要求','',0),
+                 # Root's held-out truth (Root-heldout-truth.json sha256 0415e07b…), frozen before the image fix.
+                 ('H01_bridge','沿折线折成纸桥，放置三枚硬币，记录承重变化。','科学',1),
+                 ('H02_compare','分别称量干燥和浸湿的海绵，比较重量，并在表中记录两次数据。','科学',1),
+                 ('H03_labeled_own_title_and_date','数学练习要求：2026年11月6日前。','',0),
+                 ('H04_own_filename','虚构完整要求.png','',0)]
     OBSERVE='连续观察绿豆发芽3天，每天记录芽长（毫米）和子叶颜色，并写一句观察发现。'
 
-    def image_probe(self, text, subject, case, quote=None, requirements=None, **kw):
+    def image_probe(self, text, subject, case, quote=None, requirements=None, purpose='learning', **kw):
         """Root's probe in a fresh fixture: the existing required_image (actual media.prepare_draft) and _refresh_school/Store."""
         probe=type(self)('runTest');probe.setUp()
         try:
             ident,parts,keys=probe.required_image(requirements or [text],ident=case,**kw)
-            reply={'actions':[dict(draft(title=(subject or '科目待定')+'：实验观察',goal=text,learning_subject=subject),
+            title=(subject or ('事务' if purpose=='admin' else '科目待定'))+('：老师要求' if purpose=='admin' else '：实验观察')
+            reply={'actions':[dict(draft(title=title,goal=text,purpose=purpose,learning_subject=subject),
                 due='',existing_item_id=ident,basis=[dict(part=parts[0],text=text if quote is None else quote)])]}
             result,calls=probe.refresh(reply)
             errors=[r[0] for r in probe.rows("SELECT error FROM agent_jobs WHERE id LIKE 'school-task:%'")]
@@ -857,11 +863,31 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                 ('B04_doubt',self.OBSERVE,dict(uncertainties=['第二行字迹模糊，记录单位不清。']),None),
                 ('B05_unlinked_unread',self.OBSERVE,dict(notice='学校要求见图片。\n[图片原件：2份，内容未读]'),'依据没有本项动作和对象'),
                 ('B06_partial',self.OBSERVE,dict(quote=self.OBSERVE[:12]),'截取或重复分配'),
-                ('B07_listed_twice',self.OBSERVE,dict(requirements=[self.OBSERVE,self.OBSERVE]),'依据没有本项动作和对象')]:
+                ('B07_listed_twice',self.OBSERVE,dict(requirements=[self.OBSERVE,self.OBSERVE]),'依据没有本项动作和对象'),
+                # Considered while choosing this round's rule, headings the reader also used as the title: a predicate word
+                # in a bare heading, a heading too long for the label rule before a date, and an event heading.
+                ('B08_heading_with_predicate_word','英语阅读要求',dict(title='英语阅读要求'),'依据没有本项动作和对象'),
+                ('B09_long_heading_before_date','第三单元数学练习要求：2026年11月6日前。',dict(title='第三单元数学练习要求'),'依据没有本项动作和对象'),
+                ('B10_event_heading','家长会通知',dict(title='家长会通知'),'依据没有本项动作和对象')]:
             with self.subTest(case=case):
                 result,calls,tasks,errors=self.image_probe(text,'科学',case,**kw)
                 self.assertEqual((result['created'],calls,tasks),(0,1,0))
                 if reason:self.assertIn(reason,errors[0])
+
+    # Root-action-title-probe.py's two cases (only the reader's title becomes the whole requirement) and same-class
+    # variants written here: math without a subject label, another sign-and-return line and a science line. A complete
+    # command the reader also used as the original's title keeps its one task; identity never takes its action away.
+    TITLED_ACTIONS=[('TITLE_ACTION_MATH','数学：完成第1至3题，写明单位。','数学','learning'),
+                    ('TITLE_ACTION_ADMIN','家长签字并交回活动回执。','','admin'),
+                    ('V01_math_without_label','完成第4至6题，写出计算过程。','数学','learning'),
+                    ('V02_sign_then_return','请家长在通知单上签字后交回班主任。','','admin'),
+                    ('V03_science_observe',OBSERVE,'科学','learning')]
+
+    def test_image_requirement_the_reader_also_used_as_its_title_keeps_its_action(self):
+        for case,text,subject,purpose in self.TITLED_ACTIONS:
+            with self.subTest(case=case):
+                result,calls,tasks,errors=self.image_probe(text,subject,case,purpose=purpose,title=text)
+                self.assertEqual((result['created'],calls,tasks,errors),(1,1,1,['']))
 
     def test_complete_requirements_replace_a_later_lossy_or_added_action_summary(self):
         requirement='数学：2026-02-12前完成练习；第1至3题必做，第3题写明单位；第4题选做，若选做须用两种方法；做完检查，不需要家长签字。'

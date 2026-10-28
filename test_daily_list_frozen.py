@@ -657,6 +657,21 @@ class DailyListFrozenTests(unittest.TestCase):
         self.assertEqual(([s['state'] for s in schools], tasks), (['pending'], []))
         self.assertTrue(any('依据没有本项动作和对象' in e for e in errors), errors)
 
+    def test_linked_image_line_that_is_only_its_whole_file_name_gains_nothing(self):
+        schools, tasks, errors, _, _ = self._image_chain(['示例观察图.png'])
+        self.assertEqual(([s['state'] for s in schools], tasks), (['pending'], []))
+        self.assertTrue(any('依据没有本项动作和对象' in e for e in errors), errors)
+
+    def test_linked_image_requirement_the_reader_also_used_as_its_title_keeps_its_one_task(self):
+        # Root's action-title boundary on the natural chain: only the reader's title becomes the whole requirement.
+        schools, tasks, _, refs, calls = self._image_chain([self.U02_REQUIREMENT], title=self.U02_REQUIREMENT)
+        self.assertEqual(([s['state'] for s in schools], len(tasks)), (['accepted'], 1))
+        final = json.loads(schools[0]['plan'])['school_task']
+        for text in (tasks[0]['action'], schools[0]['body'], final['goal']): self.assertIn(self.U02_REQUIREMENT, text)
+        self.assertEqual((final['state'], final['auto_added'], schools[0]['task_id']), ('ready', True, tasks[0]['id']))
+        self.assertIn(refs[0], tasks[0]['source'])
+        self._report(case='TITLE_ACTION_linked_image_reader_chain', calls=calls, task=tasks[0]['action'], goal=final['goal'])
+
     def _report(self, **line):
         report = os.environ.get('DAILY_LIST_REPORT')
         if report:
