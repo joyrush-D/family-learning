@@ -904,16 +904,16 @@ class SchoolNativeBareSubjectDayTests(unittest.TestCase):
         self.assertEqual((job['attempts'], job['done'], len(rows), len(tasks), self.model.call_count), (3, 0, 0, 0, 0))
         self.assertIn('需人工重试', job['error'])
         spent = self._job_rows()
-        self._rounds([60, 120, 240])
+        self._rounds([60, 120, 140])
         self.assertEqual((self._job_rows(), self.model.call_count, len(self._state()[0])), (spent, 0, 0), 'no 4th attempt')
         receipt = self.store.act(dict(action='retry', id=self._key()))
         self.assertEqual(receipt, {'ok': True, 'state': 'retry_pending'})
-        self._rounds([241])
+        self._rounds([150])  # still the original's own day
         rows, job, originals, tasks, _ = self._state()
         self.assertEqual((job['attempts'], job['done'], self.model.call_count, len(tasks)), (1, 1, 1, 2))
         self.assertEqual(originals, payload['messages'])
         before = self._state()
-        self._rounds([250, 300])
+        self._rounds([160, 200])
         self.assertEqual((self._state(), self.model.call_count), (before, 1))
 
     def test_c02_later_named_supplement_keeps_its_own_window(self):
