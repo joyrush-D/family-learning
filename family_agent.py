@@ -469,39 +469,95 @@ _SCHOOL_STEP_PART=r'(?:《[^》]*》|[^，,。；;！!？?\n])+'
 
 
 def _school_step_chars(text):
-    """The content characters a step or clause states: its comparison copy without the filler the clause screen ignores."""
-    return re.sub(r'请|将|把|在|上|的|分别|均|都|也|再|各|于','',_school_plain(text))
+    """The content characters a step or clause states: its comparison copy without addresses, days (the date proofs own
+    them) and the filler the clause screen ignores."""
+    return re.sub(r'请|将|把|在|上|的|分别|均|都|也|再|各|于','',_school_plain(re.sub(_SCHOOL_ROLE_DAY,'',_URL.sub('',text or ''))))
+
+
+_SCHOOL_STEP_NEGATIVE=r'不(?:需要?|用|必|要|再)?|无需|无须|免|勿|毋|别'
+_SCHOOL_STEP_REMINDER=r'(?:不要|不|别|切勿|勿)(?:忘(?:记)?|漏(?:掉)?)(?:了)?'
+
+
+def _school_step_names(clause, anchor):
+    """Whether a clause names this item's own object: a closed name, or two or more running words of its own clause beyond
+    a bare subject label (练习册 of 《晨光练习册》, 数学本 of 交数学本; 语文 alone names no object)."""
+    if _school_named_objects(clause)&_school_named_objects(anchor):return True
+    own=_school_step_chars(anchor);text=_school_step_chars(clause)
+    return any(text[i:i+n] in own and not re.fullmatch(_SCHOOL_NATIVE_SUBJECTS,text[i:i+n])
+               for n in (3,2) for i in range(len(text)-n+1))
+
+
+def _school_step_topic(clause, anchor):
+    """The words a clause states before its own requirement opens, when they name another object than this item's
+    (告知书请家长签字, 另有一份告知书…, 《安全告知书》请监护人签名). A pointer (这一页、该页) or a step done before
+    (录音后、完成后) is no topic; a clause naming this item's own object or opening with its requirement has none."""
+    # Where its own requirement opens: its asker, an actor, a place, or the existing predicate, arrangement, signature
+    # and submission verbs.
+    opening=('请|把|将|在|到|给|'+'|'.join(a for alts in _SCHOOL_CLAUSE_ROLES.values() for a in alts.split('|'))
+             +'|'+_SCHOOL_NATIVE_PREDICATE+'|'+_SCHOOL_ARRANGEMENT+r'|签|盖章|提交|上传|交回|签到|打卡')
+    text=re.sub(r'^[\s，,]*','',re.sub(_SCHOOL_ROLE_DAY,'',_URL.sub('',clause)))
+    opened=re.search(opening,re.sub(r'《[^》]*》',lambda m:'_'*len(m[0]),text))
+    lead=text[:opened.start()] if opened else ''
+    if not _school_step_chars(lead) or re.match(r'(?:这|该|此|本|上述|以上)',lead) or re.search(r'(?:之|以)?后\s*$',lead):return ''
+    return '' if _school_step_names(clause,anchor) else lead
+
+
+def _school_step_negated(clause, step):
+    """Whether the clause where a step is read says it is not required (不需要家长签名) while the step affirms it.
+    A reminder (请不要忘记交数学本) is no negation; a step saying the same negation keeps its own polarity."""
+    said=lambda text:re.sub(_SCHOOL_STEP_REMINDER,'',text)
+    plain=_school_step_chars(step)
+    if re.search(_SCHOOL_STEP_NEGATIVE,said(step)):return False
+    runs=[i for i in range(len(clause)-1) if _school_step_chars(clause[i:i+2]) and _school_step_chars(clause[i:i+2]) in plain]
+    return bool(runs) and bool(re.search(r'(?:'+_SCHOOL_STEP_NEGATIVE+r')\s*$',said(clause[:runs[0]])))
 
 
 def _school_step_owned(goal, step, texts):
-    """Whether this item's own fully read originals state a step the model gives it, and the goal parts repeating that step.
+    """Whether this item's own fully read originals state a step the model gives it, and the goal parts that go with it.
 
-    The unit is one clause (comma or sentence part) of the originals. The item's own clause is the one sharing most words with
-    its goal outside the parts repeating the step: only the stored receipt and the originals decide, so direct selection and
-    every recovery reread reach the same proof. Of what the step adds to that own clause, at least half must be read in one
-    clause from the own clause's sentence on, or in another original cited for it (that original's ownership is the existing
-    citation and supplement proof). A clause, or one before it after the own clause, more than half made of words neither the
-    own clause nor the step states speaks of another object (另有一份告知书请家长签字); a clause adding nothing, or only a
-    pointer or actor (明天交给语文课代表, 请家长听完后在这一页签字), continues the item. No model proposal ever owns a clause.
+    The unit is one clause (comma or sentence part) of the originals. The item's own clause is the one sharing most words
+    with its goal outside the parts repeating the step: only the stored receipt and the originals decide, so direct
+    selection and every recovery reread reach the same proof. Sharing characters is only a screen: of what the step adds
+    to that own clause (a short word the originals never write, directly after the item's own object, only names it:
+    同步练习第3课作业), at least half must be read in one clause. The proof is that clause's relation to the item:
+      - the item's own clause, or one after it that names no other object before its own requirement opens, with no
+        clause between naming another object (完成后请家长在练习册上签字, 明天交给语文课代表, 录音后上传…);
+      - a clause before the item in its sentence only when it names the item's own object (请家长在《星雨作业本》上签字);
+      - another original cited for it (its ownership is the existing citation and supplement proof).
+    A clause naming another object before its requirement (告知书请家长签字) owns its step; a clause saying the step is not
+    required (不需要家长签名) keeps that sentence in the goal and gives no requirement. No model proposal ever owns a clause.
     """
     need=_school_step_chars(step)
     parts=re.findall(_SCHOOL_STEP_PART,goal or '')
     repeated=[p for p in parts[1:] if need and 2*sum(c in _school_step_chars(p) for c in need)>=len(need)]
+    positive=[p for p in repeated if not re.search(_SCHOOL_STEP_NEGATIVE,re.sub(_SCHOOL_STEP_REMINDER,'',p))]
     own=set(_school_step_chars(''.join(p for p in parts if p not in repeated)))
-    clauses=[(index,m.start(),set(_school_step_chars(m[0]))) for index,text in enumerate(texts) for m in re.finditer(_SCHOOL_STEP_PART,text)]
+    clauses=[(index,m.start(),set(_school_step_chars(m[0])),m[0]) for index,text in enumerate(texts) for m in re.finditer(_SCHOOL_STEP_PART,text)]
     anchor=max(clauses,key=lambda c:len(c[2]&own),default=None)
     if not need or not anchor or not anchor[2]&own:return True,repeated
-    added=[c for c in need if c not in anchor[2]]
-    if not added:return True,repeated
     home=texts[anchor[0]];sentence=max(home.rfind(stop,0,anchor[1]) for stop in '。；;！!？?\n')+1
+    # The model's own name for the item's object (a word no original writes, right after a run the own clause states).
+    written=set(_school_step_chars(''.join(texts)));plain=need;named=set()
+    for i in range(len(plain)):
+        run=next((n for n in range(len(plain)-i,1,-1) if plain[i:i+n] in _school_step_chars(anchor[3])
+                  and not re.fullmatch(_SCHOOL_NATIVE_SUBJECTS,plain[i:i+n])),0)
+        if run:
+            tail=re.match(r'[^\W\d_]{1,2}$',plain[i+run:])
+            if tail and not any(c in written for c in tail[0]):named|=set(range(i+run,len(plain)))
+    added=[c for i,c in enumerate(plain) if c not in anchor[2] and i not in named]
+    if not added:
+        return (False,positive) if _school_step_negated(anchor[3],step) else (True,repeated)
     later=[c for c in clauses if c[0]!=anchor[0] or c[1]>=sentence]
     best=max(later,key=lambda c:(sum(char in c[2] for char in added),c[0]==anchor[0],-c[0],-c[1]))
     if 2*sum(char in best[2] for char in added)<len(added):return False,repeated
+    if _school_step_negated(best[3],step):return False,positive
     def foreign(clause,base):
-        return 2*len(clause-base-set(need))>len(clause)
-    if best[0]==anchor[0]:
+        return bool(_school_step_topic(clause[3],anchor[3])) or 2*len(clause[2]-base-set(need))>len(clause[2])
+    if best[0]==anchor[0] and best[1]<anchor[1]:
+        if not _school_step_names(best[3],anchor[3]):return False,repeated
+    elif best[0]==anchor[0] and best[1]>anchor[1]:
         between=[c for c in clauses if c[0]==anchor[0] and anchor[1]<c[1]<best[1]]
-        if foreign(best[2],anchor[2]) or any(foreign(c[2],anchor[2]|own) for c in between):return False,repeated
+        if foreign(best,anchor[2]) or any(foreign(c,anchor[2]|own) for c in between):return False,repeated
     return True,repeated
 
 
@@ -582,12 +638,14 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
                     for e in evidence)):
         # A step the item's own originals do not state, or state for another object, is not this item's requirement:
         # neither the step nor the goal parts repeating it stay; every requirement of its own stays as it was.
+        # A named physical item the model misread as an address (交至数学本) is first read as the original writes it.
+        if state=='ready': submission=_school_handback(brief,submission,evidence)
         owned,repeated=_school_step_owned(brief['goal'],submission,[e.get('text','') for e in evidence]
                                           +[p['text'] for p in (pages or {}).get('model_pages',[])])
         if not owned:
             kept=''.join(p for p in re.findall(_SCHOOL_STEP_PART+r'[，,。；;！!？?\n]*',brief['goal']) if not any(p.startswith(r) for r in repeated))
             brief['goal']=re.sub(r'[，,；;\s]+$','',kept)+('。' if kept and not re.search(r'[。！!？?]\s*$',kept) else '');submission=''
-    if state=='ready': submission=_school_handback(brief,submission,evidence)
+    elif state=='ready': submission=_school_handback(brief,submission,evidence)
     if submission and submission not in brief['goal']:
         if len(brief['goal'])+len(submission)+6<=2000: brief['goal']+='\n提交要求：'+submission
         else: state='review';brief['reason']='要求较长，提交要求未并入正文，请核对：'+submission[:200]
