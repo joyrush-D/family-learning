@@ -480,8 +480,13 @@ _SCHOOL_STEP_REMINDER=r'(?:不要|不|别|切勿|勿)(?:忘(?:记)?|漏(?:掉)?)
 
 def _school_step_names(clause, anchor):
     """Whether a clause names this item's own object: a closed name, or two or more running words of its own clause beyond
-    a bare subject label (练习册 of 《晨光练习册》, 数学本 of 交数学本; 语文 alone names no object)."""
-    if _school_named_objects(clause)&_school_named_objects(anchor):return True
+    a bare subject label (练习册 of 《晨光练习册》, 数学本 of 交数学本; 语文 alone names no object). A closed name is its
+    object's whole identity: beside the item's own closed name another one names another object, whatever characters
+    they share (《长叶写本》 of 《长叶读本》, 《翠云同步册》 of 《青石同步册》); only the clause's words outside it may still name
+    the item (读本 in 《长叶写本》和读本都…)."""
+    named=_school_named_objects(anchor)
+    if _school_named_objects(clause)&named:return True
+    if any(n.startswith('《') for n in named):clause=re.sub(r'《[^》]*》','',clause)
     own=_school_step_chars(anchor);text=_school_step_chars(clause)
     return any(text[i:i+n] in own and not re.fullmatch(_SCHOOL_NATIVE_SUBJECTS,text[i:i+n])
                for n in (3,2) for i in range(len(text)-n+1))
@@ -508,6 +513,9 @@ def _school_step_owned(goal, step, texts, others=()):
       - a clause after another item's own words continues that nearer item, unless it names this item again or opens with the list's common scope
         (语文和数学都…; 两项都…, 以上作业都…, _SCHOOL_NATIVE_COMMON);
       - a clause before the item in its sentence only when it names the item's own object (请家长在《星雨作业本》上签字);
+      - a clause of an earlier sentence only as the same requirement: the item's own complete name, no range or day its own
+        clause does not state, and no other item's words from that sentence to the item (请家长在《长叶读本》第3页签字；
+        英语今晚完成《长叶读本》第3页); another book, page or day there stays no step of it;
       - otherwise the item's own clause, one after it, or another original cited for it.
     An owned clause with a negation keeps that clause's own words in the goal and gives no submission; the goal parts
     restating the step without it go (家长签名不需要). No model proposal ever owns a clause.
@@ -544,8 +552,14 @@ def _school_step_owned(goal, step, texts, others=()):
         return False
     best=anchor
     if added:
-        later=[c for c in clauses if c[0]!=anchor[0] or c[1]>=sentence]
-        best=max(later,key=lambda c:(sum(char in c[2] for char in added),c[0]==anchor[0],-c[0],-c[1]))
+        def stated(pattern,clause):return set(re.findall(pattern,re.sub(r'《[^》]*》','',clause)))
+        def before(c):  # An earlier sentence of the item's own original states the same requirement (同书同页) or nothing of it.
+            if c[0]!=anchor[0] or c[1]>=sentence or not _school_named_objects(c[3])&_school_named_objects(anchor[3]):return False
+            if any(not stated(p,c[3])<=stated(p,anchor[3]) for p in (_SCHOOL_OUTCOME_RANGE,_SCHOOL_ANY_DAY)):return False
+            start=max(home.rfind(stop,0,c[1]) for stop in '。；;！!？?\n')+1
+            return not any(quoted(x) for x in clauses if x[0]==anchor[0] and start<=x[1]<anchor[1])
+        later=[c for c in clauses if c[0]!=anchor[0] or c[1]>=sentence or before(c)]
+        best=max(later,key=lambda c:(sum(char in c[2] for char in added),c[0]==anchor[0],c[0]!=anchor[0] or c[1]>=sentence,-c[0],-c[1]))
         if 2*sum(char in best[2] for char in added)<len(added) or quoted(best):return False,repeated,''
         if best[0]==anchor[0] and best[1]<anchor[1]:
             if not _school_step_names(best[3],anchor[3]):return False,repeated,''
