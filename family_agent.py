@@ -4851,12 +4851,36 @@ _SCHOOL_NATIVE_COMMON=(r'^(?:(?:以上|上述|这)?([二两三四五六七八九
 _SCHOOL_NATIVE_COUNT={'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}
 
 
-def _school_native_blocks(text):
+def _school_native_dated(clause):
+    """英语今晚完成《晨光练习册》第3页: the child's own affirmed learning outcome, its subject directly before its day.
+
+    The command reader takes a subject only with its punctuation (英语：今晚…), so a sole bare-subject clause keeps the
+    ordinary route. Beside another outcome such a clause would only stay unattributed preparation: it is read by the same
+    command reader with nothing but its own subject set aside, and only when the child's verb follows the day directly (no
+    addressee or connector), it names one subject outside titles, the object the reader found is a closed 《》 name with
+    its own range, and nothing outside closed titles questions, conditions, negates, reports, offers or changes it.
+    """
+    value=re.sub(r'^'+_SCHOOL_NATIVE_MARKER,'',clause.strip())
+    subject=re.match(r'(?:'+_SCHOOL_NATIVE_SUBJECTS+r')(?='+_SCHOOL_NATIVE_DATE+r')',value)
+    if not subject:return False
+    rest=value[subject.end():];when=re.match(_SCHOOL_NATIVE_WHEN,rest)
+    if (not when or not re.match(r'(?:'+_SCHOOL_LEARNING_ACTS+r'|完成|做|写)',rest[when.end():])
+            or _school_native_command(rest)!='learning' or _school_native_subjects(value)!={subject[0]}):return False
+    plain=re.sub(r'《[^《》]*》','《》',value)
+    if plain.count('《')!=plain.count('《》') or plain.count('》')!=plain.count('《》'):return False
+    if re.search(r'[不没未非无别勿免否]|已|曾|了|过|可以|自愿|选做|'+_SCHOOL_NATIVE_UNSETTLED+'|'+_SCHOOL_NATIVE_CHANGE,plain):return False
+    obj=_school_native_object(value)
+    named=re.search(r'(《[^《》]{1,40}》)\s*第\s*[0-9一二三四五六七八九十百]+(?:\s*[-–~～至到、]\s*第?\s*[0-9一二三四五六七八九十百]+)*\s*(?:页|题|课|单元)',value)
+    return bool(obj and named and named[1].startswith(obj))
+
+
+def _school_native_blocks(text,*,dated=frozenset()):
     """Keep each action's literal requirement fragments; punctuation alone is not a task.
 
     Numbered and ordinary native text use the same ledger. A worksheet's print,
     answer, check and handback steps stay together. Corrections, quoted examples,
     reports and materials retain the existing semantic reader, not inferred tasks.
+    dated holds the clause starts _school_native_dated proved on this text's own unattributed-preparation path.
     """
     if re.match(r'^\s*(?:补充|更正|取消|撤销|撤回)',text):return []
     head,header,body_start,container=_school_native_heading(text)
@@ -4875,7 +4899,7 @@ def _school_native_blocks(text):
         if _SCHOOL_NATIVE_EXAMPLE.match(clause):
             examples.append((start,end))
             continue
-        purpose=_school_native_command(clause)
+        purpose=_school_native_command(clause) or ('learning' if start in dated else '')
         # A counted list's numbered item is one outcome by its number, whatever its first verb (听录音并跟读…);
         # its use is still read below. A negated or changed item keeps the unread gap, so the count check holds the batch.
         if (listed and marker and not purpose and not re.search(_SCHOOL_NATIVE_CHANGE+r'|选做',clause)
@@ -4957,6 +4981,11 @@ def _school_native_blocks(text):
         elif _school_native_object(clause):
             preparation.append((start,end))
     if preparation and pieces:
+        # Material before an outcome on another object would hold the whole batch. Only when every such clause is itself
+        # the child's affirmed dated outcome (英语今晚完成《晨光练习册》第3页 beside 明天完成《暮光练习册》第2页) is the text read
+        # once more with those clauses as outcomes, so later conditions bind as they do after 英语：今晚完成…
+        if not dated and all(_school_native_dated(text[left:right].strip().rstrip('。；;').strip()) for left,_right in preparation):
+            return _school_native_blocks(text,dated=frozenset(left for left,_right in preparation))
         raise AgentError('准备资料尚未能归到唯一学校行动，完整原批次保留',code='school_action_coverage')
     pieces=[part for part in pieces if part['purpose']!='reference']
     if any(count!=len(pieces) for count,_ in shared):
