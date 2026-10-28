@@ -4984,8 +4984,8 @@ def _school_native_blocks(text,*,dated=frozenset()):
         # Material before an outcome on another object would hold the whole batch. Only when every such clause is itself
         # the child's affirmed dated outcome (英语今晚完成《晨光练习册》第3页 beside 明天完成《暮光练习册》第2页) is the text read
         # once more with those clauses as outcomes, so later conditions bind as they do after 英语：今晚完成…
-        if not dated and all(_school_native_dated(text[left:right].strip().rstrip('。；;').strip()) for left,_right in preparation):
-            return _school_native_blocks(text,dated=frozenset(left for left,_right in preparation))
+        if not dated and all(_school_native_dated(text[left:right].strip().rstrip('。；;').strip()) for left,right in preparation):
+            return _school_native_blocks(text,dated=frozenset(left for left,_ in preparation))
         raise AgentError('准备资料尚未能归到唯一学校行动，完整原批次保留',code='school_action_coverage')
     pieces=[part for part in pieces if part['purpose']!='reference']
     if any(count!=len(pieces) for count,_ in shared):
