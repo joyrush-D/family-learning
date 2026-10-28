@@ -3698,15 +3698,13 @@ _SCHOOL_ROLE_VERBS=(('handback',r'上交|提交|交'),('check',r'检查'),('fini
 # Its own object may stand before the predicate as a ba-phrase (把签收联交到…, 将回条交给…): still that clause's own predicate.
 _SCHOOL_ROLE_LEAD=(r'\s*(?:请|让|由)?\s*(?:各位|全体)?(?:家长|学生|孩子|同学们?|班主任|老师)?\s*(?:准时|按时|务必|必须|须|需|要)?\s*'
                    r'(?:在[^，,在]{1,12}?(?:上|里|中|内)\s*)?(?:(?:把|将)[^，,把将]{1,12}?(?=(?:'+'|'.join(v for _,v in _SCHOOL_ROLE_VERBS)+r')))?')
-# The joining words after which a clause's own next predicate starts (签字并交回、签字后交回).
-_SCHOOL_CLAUSE_JOIN=r'并且|并|且|然后|同时|再|后'
 
 
 def _school_clause_roles(clause):
     """The time roles (finish, handback, check) of one clause's own predicates, never of a character inside an object."""
     from family_agenda import _titles_read_as_objects
     text=_titles_read_as_objects(clause)
-    starts={0}|{m.end() for m in re.finditer(_SCHOOL_ROLE_HEAD,text)}|{m.end() for m in re.finditer(_SCHOOL_CLAUSE_JOIN,text)}
+    starts={0}|{m.end() for m in re.finditer(_SCHOOL_ROLE_HEAD,text)}|{m.end() for m in re.finditer(r'并且|并|且|然后|同时|再|后',text)}
     roles=set()
     for at in starts:  # a leading label (英语：、提交要求：) names the clause, not its predicate
         rest=re.sub('^'+_SCHOOL_ROLE_LEAD,'',re.sub(r'^\s*[^：:，,]{1,6}[：:]','',text[at:]) if at==0 else text[at:])
@@ -6788,7 +6786,7 @@ def _school_original_prompt(pages,pdf,material):
         '\n每条basis.text必须是所选part的text中连续的原文子串，字词、标点和换行均保持原样，禁止跳字、改标点或把不连续句子拼成一次引用。需要引用相隔的句子时，用同一个part的多个basis，每条分别连续引用，不能删掉中间的对照说明后拼接。'+\
         '\n表头和空白填写栏不是学校行动要求。例如原件只要求打印、家长签字并交回，仅另设“日期：____”空栏而未明确要求填写日期时，goal和submission都不得新增“填写日期”；仅保留明确要求的打印、签字、交回。'+\
         '\n每项goal/submission分别保留必做和选做部分明确的具体输出与完成标准，包括方法数量、单位、过程及签字等，并保留各自条件。标题、总范围或笼统的“完成后检查”不能代替这些逐项标准；不得因压缩描述而丢掉要求或条件。题目本身可留在原件中，明确的完成标准仍须写入对应行动。'+\
-        '\n带requirement=true的part已经包含一个完整独立行动及条件，后续只映射科目/事务、状态、日期和归属。每个requirement part必须恰好在一项action中被完整引用，basis.text等于该part的完整text，不能只摘一句总范围、跳过标准或遗漏整项；相关要求可以归同一行动，但不能混合不同对象或截止。系统由完整要求生成任务正文，goal的短摘要不能替代它。background_only=true只提供背景/疑点，不能据此返回ready。题面、表头、空白填写栏及材料对照不是新要求。'+\
+        '\nrequirement=true只是原件读取模型把该行归为完整行动的分类结果，不是已核的命令事实；仍按原文判断是否写明需要谁做什么。写明动作和对象的完整要求即使没写截止、提交或科目，也按已读要求整理，不因此降为review；该行只是原件、表格、栏目或材料的名称/标题，没有写出要做什么时返回reference，reason说明原件已读、该行只是名称，不写成资料未读，也不要求家长补原文没有的科目、范围、提交方式或截止。每个requirement part必须恰好在一项action中被完整引用，basis.text等于该part的完整text，不能只摘一句总范围、跳过标准或遗漏整项；相关要求可以归同一行动，但不能混合不同对象或截止。系统由完整要求生成任务正文，goal的短摘要不能替代它。background_only=true只提供背景/疑点，不能据此返回ready。题面、表头、空白填写栏及材料对照不是新要求。'+\
         '\nverified_first_batch_correction是服务端核过的首次同批原要求与后发更正，candidate尚未形成正式作业；existing_actions中的pending也不是已保存正式作业。这项沿原candidate_id返回new，不能仅因含“更正”返回update。独立更正、已有正式任务和取消保留原保护。'+\
         '\n没有条件替换时condition_changes返回[]。有上述已核首次同批关系时，仅将明确被更正的栏目必做/选做短句分别填old_part/old_text与new_part/new_text；两边均逐字连续引用，各旧句须唯一。不能替换动作、数量、输出标准、否定限制或期限，不能将整段旧要求当替换短句。所有原通知和原件中的相反旧条件都须各自列出；完整requirement仍照原文保存，选做时的具体输出标准也保留。系统只编译这些已核精确条件变化，不能用自由摘要覆盖完整标准。'
 
@@ -6806,57 +6804,26 @@ def _school_action_read_evidence(evidence,anchors,requirements):
     return result
 
 
-# The administrative actions and events an action's own words name (has_action in _school_original_actions).
-_SCHOOL_ADMIN_ACTION=r'打印|签字|交回|盖章|提交|上传|带|携带|准备|领取|报名|缴|考试|测验|比赛|家长会'
-
-
-def _school_requirement_names(part,pdf,material,names=None):
-    """The titles and file name (whole and without its extension) of a requirement line's own original: its identity."""
-    file=lambda name:[name,name.rsplit('.',1)[0]] if name else []
+def _school_requirement_files(part,pdf,names=None):
+    """The whole file name (with its extension) of a requirement line's own original: its upload's identity metadata."""
     if part['id'].startswith('pdf:'):
         doc=next((d for d in (pdf or {}).get('model',[]) if d['ref']==part['ref'] and [d['upload_id']]==part['upload_ids']),None)
-        return file(doc['name'])+[g['text'].split('\n',1)[0] for g in doc['groups']] if doc else []
-    return ([e['draft']['title'] for e in (material or {}).get('model',[]) if e['ref']==part['ref'] and e['upload_ids']==part['upload_ids']]
-            +[n for u in part['upload_ids'] for n in file((names or {}).get(u,''))])
+        return [doc['name']] if doc and doc['name'] else []
+    return [n for u in part['upload_ids'] for n in [(names or {}).get(u,'')] if n]
 
 
-def _school_stated_action(text):
-    """Whether a line's own words state an action, read by the existing predicate–object grammar: never by a predicate's
-    characters inside a name (家长签字表、英语阅读要求) and never by its sentence marks, which only bound its clauses.
-
-    Each clause is read with and without its own leading actor (家长、学生…: who acts, not whether anyone does): a predicate
-    with its own object (_school_native_command: 签字并交回活动回执、完成第1至3题), a predicate after an explicit address,
-    modal, manner, day or place (_school_native_common_addressed: 请家长在通知单上签字…), or a predicate opening a later
-    part, after the joining words _school_clause_roles reads (…并写一句观察发现) or after another clause. A name says no
-    further doing; a bare predicate at the head of the only clause may still be a name's own first word (签字表), so it alone
-    proves nothing."""
-    actor=r'^\s*(?:'+'|'.join(_SCHOOL_CLAUSE_ROLES.values())+r')\s*'
-    for index,clause in enumerate(c for c in re.split(r'[。；;！!？?，,\n]+',text) if c.strip()):
-        for at in [0]+[m.end() for m in re.finditer(_SCHOOL_CLAUSE_JOIN,clause)]:
-            own=re.sub(actor,'',clause[at:]);addressed=_school_native_common_addressed(own)
-            if _school_native_command(clause[at:]) or _school_native_command(own) or (addressed and (index or at or addressed.start())):
-                return True
-    return False
-
-
-def _school_requirement_substance(text,names):
-    """Whether a requirement line says anything beyond reading progress, a short label, its original's own title/name,
-    the subject and dates. Structure first, never a verb/noun list of its own.
-
-    The original's own title/name is identity: it says which original a line belongs to, never whether the line commands.
-    A line those names wholly cover (the reader also titled the original with it) is read by its own words alone
-    (_school_stated_action), with or without a closing mark: 家长签字并交回活动回执 keeps its action, 家长签字表。 or a bare
-    heading (数学练习要求) gains none. A line its own whole file name covers (虚构完整要求.png) is that file, never an action."""
+def _school_requirement_substance(text,files,subject=''):
+    """Whether a requirement line is more than structural metadata: reading progress, a short label, the subject, dates
+    or its original's whole file name. Structure only, never a verb/noun list: whether the words ask anyone to do
+    anything is the reader's and the formatter's classification (a bare name is the formatter's reference). The reader's
+    free title is identity too, but it never takes away an action the line itself states, so it is not removed here."""
     from family_agenda import _DAY_WORDS
     if family_llm.school_requirement_has_reading_progress(text):return False
-    def said(names):
-        rest=re.sub(r'^\s*(?:[^：:\n]{1,8}[：:]\s*)?','',text)
-        for name in sorted({n.strip() for n in names if n.strip()},key=len,reverse=True):rest=rest.replace(name,'')
-        prefix=r'(?:每个|上个|本个|这个|下个|每|上|本|这|下)?'  # the weekday prefixes family_agenda grounds
-        for pattern in (_SCHOOL_ACTION_OPEN,_SCHOOL_DATE_MENTION.pattern,_DAY_WORDS):rest=re.sub(prefix+'(?:'+pattern+')','',rest)
-        return bool(re.sub(r'[\W_\d年月日号]+','',rest))
-    files=[n for n in names if '.' in n and n.rsplit('.',1)[0] in names]  # whole file names: _school_requirement_names lists each beside its stem
-    return said(names) or (said([]) and said(files) and _school_stated_action(text))
+    rest=re.sub(r'^\s*(?:[^：:\n]{1,8}[：:]\s*)?','',text)
+    for name in sorted({n.strip() for n in [*files,subject] if n.strip()},key=len,reverse=True):rest=rest.replace(name,'')
+    prefix=r'(?:每个|上个|本个|这个|下个|每|上|本|这|下)?'  # the weekday prefixes family_agenda grounds
+    for pattern in (_SCHOOL_ACTION_OPEN,_SCHOOL_DATE_MENTION.pattern,_DAY_WORDS):rest=re.sub(prefix+'(?:'+pattern+')','',rest)
+    return bool(re.sub(r'[\W_\d年月日号]+','',rest))
 
 
 def _school_own_requirement(part,pdf,material,subject='',names=None):
@@ -6865,8 +6832,8 @@ def _school_own_requirement(part,pdf,material,subject='',names=None):
     Only a part re-derived unchanged (message, upload, pages, whole literal text) from its original's current complete
     protocol counts, with no doubt or reading gap: every page group of a PDF, or the per-original requirement list of a
     current-revision school material (image/DOCX, bytes and binding rechecked) whose message has no unlinked unread
-    original, mapped to exactly one line. Reading progress, or a line that says nothing beyond a date, a label and the
-    original's own title/name, never does. Message, legacy-note and background parts keep the vocabulary rule. Whether
+    original, mapped to exactly one line. Reading progress, or a line that says nothing beyond a date, a label, the subject
+    and the original's whole file name, never does. Message, legacy-note and background parts keep the vocabulary rule. Whether
     the reader typed a line as a requirement is its model's classification; this check only refuses lines that cannot be one.
     """
     if not part.get('requirement') or ((pdf or {}).get('uncertainties') or any(d['omitted'] or d['truncated'] for d in (pdf or {}).get('documents',[]))
@@ -6881,7 +6848,7 @@ def _school_own_requirement(part,pdf,material,subject='',names=None):
                     and e['upload_ids']==part['upload_ids']==[e['original_id']] and 'requirements' in e['draft']),None)
         if not entry or derived!=[part] or part['ref'] not in material.get('complete_refs',[]):return False
     else:return False
-    return _school_requirement_substance(part['text'],_school_requirement_names(part,pdf,material,names)+[subject])
+    return _school_requirement_substance(part['text'],_school_requirement_files(part,pdf,names),subject)
 
 
 def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,material,targets,goals,now,*,legacy_correction=None):
@@ -6892,7 +6859,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
     lookup={p['id']:p for p in parts};existing={r['id']:r for r in known};used=set();identities=set();output=[]
     required={p['id'] for p in parts if p.get('requirement')};assigned=set()
     material_ids=sorted({u for p in parts if p['id'].startswith('material:') for u in p['upload_ids']})
-    with store._db() as c:  # file names only: a requirement line naming just its own file is no action
+    with store._db() as c:  # file names only: a requirement line that is just its own whole file name is no action
         names={r[0]:r[1] or '' for r in c.execute('SELECT id,name FROM uploads WHERE id IN (%s)'%','.join('?'*len(material_ids)),material_ids)} if material_ids else {}
     legacy_owners={old['id']:_school_pdf_previous_action(old,parts,known) for old in known
                    if _school_pdf_reflow(old,pdf,known)}
@@ -6944,12 +6911,12 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
             compiled=[a['quote'] for a in action_anchors]
         if requirements and not conditions:value=_school_requirement_goal(value,compiled)
         subject=value.get('learning_subject','')
-        # A requirement line that is only its original's own heading, file name or a date is no action (_school_requirement_substance).
-        titles=[dict(ref=p['ref'],upload_ids=p['upload_ids'],pages=p['pages'],quote=p['text']) for p in (lookup[q['part']] for q in basis)
-                if p.get('requirement') and not _school_requirement_substance(p['text'],_school_requirement_names(p,pdf,material,names)+[subject])]
+        # A requirement line that is only structural metadata (a date, reading progress, its whole file name) is no action.
+        metadata=[dict(ref=p['ref'],upload_ids=p['upload_ids'],pages=p['pages'],quote=p['text']) for p in (lookup[q['part']] for q in basis)
+                if p.get('requirement') and not _school_requirement_substance(p['text'],_school_requirement_files(p,pdf,names),subject)]
         has_action=any(_LEARNING_ACTIVITY.search(a['quote']) or _LEARNING_ACTION.search(a['quote'])
             or conditions and re.search(r'(?:完成|做|写)\s*(?:第[一二三四五六七八九十0-9]+项\s*[:：]?\s*)?《[^》\n]{2,40}》',a['quote'])
-            or re.search(_SCHOOL_ADMIN_ACTION,a['quote']) for a in action_anchors if a not in titles)
+            or re.search(r'打印|签字|交回|盖章|提交|上传|带|携带|准备|领取|报名|缴|考试|测验|比赛|家长会',a['quote']) for a in action_anchors if a not in metadata)
         own=[] if has_action or conditions or legacy_correction else [lookup[q['part']] for q in basis
             if _school_own_requirement(lookup[q['part']],pdf,material,subject,names)]
         has_action=has_action or bool(own)
