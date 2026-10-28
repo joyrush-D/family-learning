@@ -480,9 +480,9 @@ def _school_step_owned(goal, step, texts):
     its goal outside the parts repeating the step: only the stored receipt and the originals decide, so direct selection and
     every recovery reread reach the same proof. Of what the step adds to that own clause, at least half must be read in one
     clause from the own clause's sentence on, or in another original cited for it (that original's ownership is the existing
-    citation and supplement proof). A clause, or one before it after the own clause, whose words beyond the own clause and
-    the step outnumber those it shares with the own clause speaks of another object (另有一份告知书请家长签字); a clause adding
-    nothing continues the item (明天交给语文课代表). No model proposal ever owns a clause.
+    citation and supplement proof). A clause, or one before it after the own clause, more than half made of words neither the
+    own clause nor the step states speaks of another object (另有一份告知书请家长签字); a clause adding nothing, or only a
+    pointer or actor (明天交给语文课代表, 请家长听完后在这一页签字), continues the item. No model proposal ever owns a clause.
     """
     need=_school_step_chars(step)
     parts=re.findall(_SCHOOL_STEP_PART,goal or '')
@@ -498,7 +498,7 @@ def _school_step_owned(goal, step, texts):
     best=max(later,key=lambda c:(sum(char in c[2] for char in added),c[0]==anchor[0],-c[0],-c[1]))
     if 2*sum(char in best[2] for char in added)<len(added):return False,repeated
     def foreign(clause,base):
-        return len(clause-base-set(need))>len(clause&base)
+        return 2*len(clause-base-set(need))>len(clause)
     if best[0]==anchor[0]:
         between=[c for c in clauses if c[0]==anchor[0] and anchor[1]<c[1]<best[1]]
         if foreign(best[2],anchor[2]) or any(foreign(c[2],anchor[2]|own) for c in between):return False,repeated
