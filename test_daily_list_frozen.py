@@ -376,6 +376,8 @@ class DailyListFrozenTests(unittest.TestCase):
                 else: group.append(part)
             for group in groups:
                 owned = {p['ref'] for p in group}; seen = {u for p in group for u in p['upload_ids']}
+                # The teacher's own message words name the action (完成实验观察表); the page requirement adds its content.
+                group[:0] = [p for p in parts if p['ref'] in owned and not p.get('requirement') and not p.get('background_only') and not p['upload_ids']]
                 for part in parts:
                     if part.get('background_only') and part['ref'] in owned and part['text'].strip() and not set(part['upload_ids']) <= seen:
                         group.append(part); seen.update(part['upload_ids'])
@@ -418,7 +420,8 @@ class DailyListFrozenTests(unittest.TestCase):
             final = json.loads(schools[0]['plan'])['school_task']
             for text in (tasks[0]['action'], schools[0]['body'], final['goal']):
                 self.assertIn(requirement, text)
-                for vague in ('附件里的要求', '按附件', '未知'): self.assertNotIn(vague, text)
+                self.assertNotEqual(text.strip(), '请按照附件里的要求完成实验观察表。')  # the teacher's words may stay beside the read requirement
+                for vague in ('按附件', '未知', '尚未读取'): self.assertNotIn(vague, text)
             self.assertEqual((final['state'], final['auto_added'], schools[0]['task_id'], tasks[0]['id']), ('ready', True, tasks[0]['id'], schools[0]['task_id']))
             self.assertIn(refs[0], tasks[0]['source'])
             unchanged(originals, message)
@@ -428,7 +431,7 @@ class DailyListFrozenTests(unittest.TestCase):
             schools, tasks, originals, message = state()
             self.assertEqual(((schools, tasks), [n for n, _ in calls], pages.call_count, again['created']), (accepted, names, 2, 0))
         self.assertEqual(names[0], 'family_agent_selection'); self.assertEqual(names.count('family_agent_selection'), 1)
-        self._report(case='U02_linked_pdf_page_reader_chain', calls=names, page_calls=2, task=tasks[0]['action'])
+        self._report(case='U02_linked_pdf_page_reader_chain', calls=names, page_calls=2, task=tasks[0]['action'], goal=final['goal'], due=schools[0]['due'])
 
     def _report(self, **line):
         report = os.environ.get('DAILY_LIST_REPORT')
