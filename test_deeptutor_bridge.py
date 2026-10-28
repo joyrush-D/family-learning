@@ -1,7 +1,8 @@
 """原错题→知识点→上游诊断逐题保存→看说明→新题再试（DeepTutor原LearningService）→复测原记录。合成数据。
 
 知识包是虚构小图谱（不是上游题库，也不代表教师审核）；DeepTutor判定在设置FAMILY_DEEPTUTOR_PYTHON
-（py>=3.11+pydantic2）时真实运行deeptutor_sidecar.py，未设置时只验证“未配置只降级这一步、零写入”。"""
+（py>=3.11+pydantic2）时真实运行deeptutor_sidecar.py，未设置时只验证“未配置只降级这一步、零写入”。
+应用目录下的固定默认解释器在测试里一律换成临时虚构路径，不读也不依赖真实部署环境。"""
 import hashlib, json, os, shutil, sqlite3, subprocess, sys, tempfile, unittest
 from pathlib import Path
 from unittest import mock
@@ -40,6 +41,7 @@ class BridgeTest(unittest.TestCase):
             (pack / rel).write_bytes(raw); manifest[rel] = (hashlib.sha256(raw).hexdigest(), len(raw))
         self.pack = pack
         patcher = mock.patch.object(ft, 'MANIFEST', manifest); patcher.start(); self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(family_deeptutor, 'DEFAULT_PYTHON', root / 'no-runtime' / 'python'); patcher.start(); self.addCleanup(patcher.stop)  # “未配置”不因真实默认解释器存在而变
         ft._PACKS.clear(); ft._VERIFIED.clear()
         self.ns = app  # 与app.py路由一致：connect/profiles/save_record
 
@@ -238,7 +240,7 @@ class BridgeTest(unittest.TestCase):
         private = ['third_party/deeptutor/.env', 'third_party/deeptutor/private/child.json', 'third_party/deeptutor/runtime.sqlite3',
                    'third_party/deeptutor/logs/trace.log', 'third_party/deeptutor/src/deeptutor/learning/data.json',
                    'third_party/deeptutor/src/deeptutor/data/user/x.json', 'third_party/deeptutor/patches/new.diff', 'third_party/other/x.py',
-                   'third_party/deeptutor/src/deeptutor/learning/__pycache__/service.cpython-311.pyc']
+                   'third_party/deeptutor/src/deeptutor/learning/__pycache__/service.cpython-311.pyc', 'private/runtime/deeptutor/bin/python']
         out = subprocess.run([git, 'check-ignore', '--no-index', '--stdin'], cwd=repo, input='\n'.join(reviewed + private) + '\n',
                              capture_output=True, text=True).stdout.split()
         self.assertEqual(len(reviewed), 37); self.assertEqual(sorted(out), sorted(private))
@@ -333,6 +335,47 @@ class BridgeTest(unittest.TestCase):
         self.assertTrue(attempts and all(a['voided'] for a in attempts), attempts)
         self.assertTrue(all(not a['voided'] for a in family_deeptutor.call('status', before, topic={'id': 'cnm_t2', 'name': '小数加法'})['attempts']))
         with app.connect() as c: self.assertEqual(c.execute("SELECT count(*) FROM records WHERE followup_kind='复测'").fetchone()[0], 1)
+
+
+class InterpreterTest(unittest.TestCase):
+    """解释器发现：显式FAMILY_DEEPTUTOR_PYTHON非空时只按它判定；缺失或空值才找应用目录下固定的private/runtime/deeptutor/bin/python。全是临时虚构文件。"""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name).resolve(); self.real_default, self.work = family_deeptutor.DEFAULT_PYTHON, str(root / 'dt-work')
+        self.default, self.explicit, self.plain = root / 'app/private/runtime/deeptutor/bin/python', root / 'explicit/bin/python', root / 'plain/python'
+        for p, mode in ((self.default, 0o755), (self.explicit, 0o755), (self.plain, 0o644)):
+            p.parent.mkdir(parents=True); p.write_text('#!/bin/sh\nexit 1\n'); p.chmod(mode)
+        patcher = mock.patch.object(family_deeptutor, 'DEFAULT_PYTHON', self.default); patcher.start(); self.addCleanup(patcher.stop)
+
+    def found(self, value=None):  # None=未设置；每次都核对查找前后os.environ一字不变（不设HOME/CODEX_HOME等）
+        with mock.patch.dict(os.environ):
+            os.environ.pop('FAMILY_DEEPTUTOR_PYTHON', None)
+            if value is not None: os.environ['FAMILY_DEEPTUTOR_PYTHON'] = value
+            before = dict(os.environ); py, available = family_deeptutor.python(), family_deeptutor.status()['available']
+            self.assertEqual(dict(os.environ), before)
+        self.assertEqual(available, bool(py)); return py
+
+    def test_unset_or_empty_uses_only_the_fixed_default_under_the_app_directory(self):
+        self.assertEqual(self.real_default, Path(family_deeptutor.__file__).resolve().parent / 'private' / 'runtime' / 'deeptutor' / 'bin' / 'python')  # 不看cwd或HOME
+        for value in (None, ''):
+            self.assertEqual(self.found(value), str(self.default))
+            self.default.chmod(0o644); self.assertEqual(self.found(value), '', '存在但不可执行'); self.default.chmod(0o755)
+        self.default.unlink(); self.assertEqual((self.found(), self.found('')), ('', ''))
+
+    def test_explicit_value_wins_and_an_invalid_one_never_falls_back(self):
+        self.assertEqual(self.found(str(self.explicit)), str(self.explicit))  # 默认也存在时显式优先
+        for bad in (str(self.plain), str(self.plain.parent / 'missing'), str(self.explicit.parent), ' '):  # 不可执行/不存在/目录/空白
+            self.assertEqual(self.found(bad), '', bad)  # 默认解释器仍在，也不静默改用
+
+    def test_call_spawns_only_the_found_interpreter(self):
+        seen = []
+        def run(cmd, **kw):
+            seen.append((cmd[:3], sorted(kw['env']))); return mock.Mock(stdout=json.dumps({'ok': True}) + '\n')
+        with mock.patch.dict(os.environ, {'FAMILY_DEEPTUTOR_TMP': self.work}), mock.patch.object(family_deeptutor.subprocess, 'run', side_effect=run):
+            os.environ.pop('FAMILY_DEEPTUTOR_PYTHON', None); family_deeptutor.call('status', '')
+            os.environ['FAMILY_DEEPTUTOR_PYTHON'] = str(self.plain)
+            with self.assertRaises(family_deeptutor.DeepTutorUnavailable): family_deeptutor.call('status', '')
+        self.assertEqual(seen, [([str(self.default), '-I', '-B'], ['DEEPTUTOR_HOME', 'LANG', 'PATH'])])
 
 
 if __name__ == '__main__':
