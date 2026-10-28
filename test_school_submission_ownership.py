@@ -485,7 +485,7 @@ class SchoolIndependentOutcomeTests(unittest.TestCase):
             self.assertEqual(view['category'], 'homework' if item['purpose'] == 'learning' else 'todo', item['quote'])
             self.assertEqual(view['publications'], refs, 'its own original only')
             # Every outcome's own frozen day, A04's continued 图形册 included (no open-day exemption any more).
-            self.assertEqual((task['due'], row['due']), (item['due'],) * 2, (case['id'], item['quote']))
+            self.assertEqual((task['due'], row['due']), (item['due'] or '无明确截止', item['due']), (case['id'], item['quote']))
             basis = SCOPE_BASIS.get((case['id'], item['quote']))
             plan = json.loads(row['plan'])
             if basis:
@@ -559,9 +559,9 @@ class SchoolIndependentOutcomeTests(unittest.TestCase):
 
     # --- v6: what the program may not compile, and the Store state machine around a compiled item ---
 
-    def _ingest(self, messages, first=11):
-        """messages: dicts (hm, text, optional sender/publisher/kind/unread) stored as one collector payload."""
-        payload = self.fixture.payload(cursor=str(first - 1 + len(messages)))
+    def _ingest(self, messages, first=11, offset=0):
+        """messages: dicts (hm, text, optional sender/publisher/kind/unread) stored as one collector payload after the last."""
+        payload = self.fixture.payload(expected=str(first - 1), cursor=str(first - 1 + len(messages)), offset=offset)
         payload['messages'] = [dict(id=str(first + i), message_order=str(first + i), time='2026-11-04T' + m['hm'] + ':00+08:00',
                                     kind=m.get('kind', 'text'), sender=m.get('sender', '虚构老师'), sender_id=m.get('publisher', 'qa-teacher'),
                                     text=m['text'], unread=m.get('unread', False)) for i, m in enumerate(messages)]
@@ -646,7 +646,7 @@ class SchoolIndependentOutcomeTests(unittest.TestCase):
                 first, = self._rounds([0])
                 self.assertEqual((first['failed'], self.model.call_count), (1, 1))
                 if corrected:
-                    more, _ = self._ingest([dict(hm='18:14', text='更正：《秋游告知单》不用交了。')], first=12)
+                    more, _ = self._ingest([dict(hm='18:14', text='更正：《秋游告知单》不用交了。')], first=12, offset=1)
                     originals = originals + more
                 self._rounds([6, 12, 30, 60, 120])
                 if corrected:
@@ -677,7 +677,7 @@ class SchoolIndependentOutcomeTests(unittest.TestCase):
         self._rounds([6, 12])
         rows_after, _, _, tasks_after, _ = self._state()
         self.assertEqual((rows_after, tasks_after, self.model.call_count), (rows_edit, tasks_edit, 1), 'the parent edit stays')
-        more, _ = self._ingest([dict(hm='18:40', text='英语今晚朗读《青叶英语》第2页两遍。', sender='虚构英语老师', publisher='qa-teacher-en')], first=12)
+        more, _ = self._ingest([dict(hm='18:40', text='英语今晚朗读《青叶英语》第2页两遍。', sender='虚构英语老师', publisher='qa-teacher-en')], first=12, offset=13)
         self._rounds([30, 60])
         rows_last, job, saved, tasks_last, _ = self._state()
         self.assertEqual(saved, originals + more)
