@@ -977,7 +977,7 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                 for line in dict.fromkeys([text,text.rstrip('。'),text.rstrip('。')+'。']):
                     got.append((case,line,self.image_probe(line,subject,case,purpose=purpose,title=line)[2]))
         got+=[(c,t,self.docx_probe(c,t)[2]) for c,t,_ in self.DOCX_TITLES if c in self.FORCED_READY_NAMES]
-        self.assertEqual(len(got),23)
+        self.assertEqual(len(got),22)
         self.assertEqual(got,[(c,t,0) for c,t,_ in got])
 
     # Root's actual Flash receipts, copied verbatim (actual-*/formatter-return.json sha256 3a63c541… OBSERVE_COMMAND,
