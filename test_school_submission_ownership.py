@@ -53,6 +53,43 @@ CASES = (
     ('I06', '语文今晚写《春日练习册》第4页，不需要家长签名。',
      (('语文今晚写《春日练习册》第4页', '语文', 'learning', '语文今晚写《春日练习册》第4页，不需要家长签名。', '家长签名。', '',
        ('第4页', '不需要家长签名'), ('提交要求',)),)),
+    # Root's v2 rejection boundaries (run school-step-ownership-20261028-v3), frozen before v3: a short other object with no
+    # asker is its own item's (V01, V04); a postposed negation is read (V02); a reminder is no object and no negation (V03).
+    ('V01', '语文今晚完成《朝露练习册》第4页，回执签字。',
+     (('语文今晚完成《朝露练习册》第4页', '语文', 'learning', '语文今晚完成《朝露练习册》第4页。', '签字。', '',
+       ('第4页',), ('签字', '回执')),
+      ('回执签字', '', 'admin', '回执签字。', '', '', ('回执', '签字'), ('第4页',)))),
+    ('V02', '语文今晚写《春日练习册》第4页，家长签名不需要。',
+     (('语文今晚写《春日练习册》第4页', '语文', 'learning', '语文今晚写《春日练习册》第4页，家长签名不需要。', '家长签名。', '',
+       ('第4页', '家长签名不需要'), ('提交要求',)),)),
+    ('V03', '英语今晚朗读《青叶英语》第2页，不要忘记请家长签字。',
+     (('英语今晚朗读《青叶英语》第2页', '英语', 'learning', '英语今晚朗读《青叶英语》第2页。', '请家长签字。', '',
+       ('第2页', '家长', '签字'), ()),)),
+    ('V04', '数学今晚写练习册第3页，联系册签字。',
+     (('数学今晚写练习册第3页', '数学', 'learning', '数学今晚写练习册第3页。', '签字。', '',
+       ('第3页',), ('签字', '联系册')),
+      ('联系册签字', '', 'admin', '联系册签字。', '', '', ('联系册', '签字'), ('第3页',)))),
+    # v3 controls: a negation the summary left out stays in the teacher's own words, never as a requirement (N01 inner,
+    # N02 postposed); a negation of another action keeps the step in the teacher's words (N03); a step after another
+    # item's own words is that item's (N04), unless the original states it for both (C01).
+    ('N01', '语文今晚写《春日练习册》第4页，家长不用签字。',
+     (('语文今晚写《春日练习册》第4页', '语文', 'learning', '语文今晚写《春日练习册》第4页。', '请家长签字。', '',
+       ('第4页', '家长不用签字'), ('提交要求',)),)),
+    ('N02', '语文今晚写《春日练习册》第4页，家长签名不需要。',
+     (('语文今晚写《春日练习册》第4页', '语文', 'learning', '语文今晚写《春日练习册》第4页。', '家长签名。', '',
+       ('第4页', '家长签名不需要'), ('提交要求',)),)),
+    ('N03', '数学今晚完成《数格练习册》第5页，家长签字后不用交。',
+     (('数学今晚完成《数格练习册》第5页', '数学', 'learning', '数学今晚完成《数格练习册》第5页。', '请家长签字。', '',
+       ('第5页', '家长签字后不用交'), ('提交要求',)),)),
+    ('N04', '语文今晚完成《晨光练习册》第2页，回执请家长签字，明天交给班主任。',
+     (('语文今晚完成《晨光练习册》第2页', '语文', 'learning', '语文今晚完成《晨光练习册》第2页。', '明天交给班主任。', '',
+       ('第2页',), ('班主任', '回执', '提交要求')),
+      ('回执请家长签字', '', 'admin', '回执请家长签字，明天交给班主任。', '', '', ('回执', '签字', '班主任'), ('第2页',)))),
+    ('C01', '语文今晚完成《晨光练习册》第2页，数学今晚完成《数格练习册》第5页，两项都请家长签字。',
+     (('语文今晚完成《晨光练习册》第2页', '语文', 'learning', '语文今晚完成《晨光练习册》第2页。', '请家长签字。', '',
+       ('第2页', '家长', '签字'), ('第5页',)),
+      ('数学今晚完成《数格练习册》第5页', '数学', 'learning', '数学今晚完成《数格练习册》第5页。', '请家长签字。', '',
+       ('第5页', '家长', '签字'), ('第2页',)))),
 )
 RECEIPT = ['title', 'goal', 'advice', 'state', 'reason', 'change', 'target_id', 'purpose', 'submission']
 
@@ -102,20 +139,29 @@ class SchoolSubmissionOwnershipTests(unittest.TestCase):
                 self._case(case + '-goal', text, items, goal=lambda own, step: own.rstrip('。') + '，' + step)
 
     def test_negated_step_is_never_a_trusted_requirement(self):
-        """I06: the raw receipt keeps the model's step for tracing; the trusted task fields never hold it as a requirement."""
-        case, text, items = next(c for c in CASES if c[0] == 'I06')
-        for goal in (None, lambda own, step: own.rstrip('。') + '，' + step):
-            with self.subTest(goal=bool(goal)):
-                self.setUp()
-                rows = self._case(case + ('-goal' if goal else ''), text, items, goal=goal)
-                plan, = [json.loads(row['plan']) for row in rows]
-                self.assertEqual(plan['school_selection_receipt']['submission'], '家长签名。')
-                self.assertNotIn('submission', plan['school_task'])
-                self.assertEqual(plan['school_task']['goal'], '语文今晚写《春日练习册》第4页，不需要家长签名。')
+        """I06, V02, N01–N03: the raw receipt keeps the model's step for tracing; the trusted task fields never hold it as a
+        requirement, and the teacher's own clause stays in the goal word for word."""
+        expected = {'I06': '语文今晚写《春日练习册》第4页，不需要家长签名。',
+                    'V02': '语文今晚写《春日练习册》第4页，家长签名不需要。',
+                    'N01': '语文今晚写《春日练习册》第4页。家长不用签字。',
+                    'N02': '语文今晚写《春日练习册》第4页。家长签名不需要。',
+                    'N03': '数学今晚完成《数格练习册》第5页。家长签字后不用交。'}
+        for case, text, items in CASES:
+            if case not in expected: continue
+            for goal in (None, lambda own, step: own.rstrip('。') + '，' + step):
+                with self.subTest(case=case, goal=bool(goal)):
+                    self.setUp()
+                    rows = self._case(case + ('-goal' if goal else ''), text, items, goal=goal)
+                    plan, = [json.loads(row['plan']) for row in rows]
+                    self.assertEqual(plan['school_selection_receipt']['submission'], items[0][4])
+                    self.assertNotIn('submission', plan['school_task'])
+                    self.assertEqual(plan['school_task']['goal'], expected[case])
 
     def test_recovery_rereads_the_saved_receipt_with_the_same_proof(self):
         """Every saved reread, untouched correction and cleared reread re-runs _school_brief on the stored receipt and the
-        item's own originals, without the selection's quote: it must reach the very goal the direct path saved."""
+        item's own originals with the quotes its same-original siblings were saved with (what _school_sibling_quotes
+        reads): it must reach the very goal the direct path saved. This replays the shared brief check only; the saved
+        reread state machine itself is Root's R259 reference."""
         for case, text, items in CASES:
             with self.subTest(case=case):
                 self.setUp()
@@ -124,8 +170,10 @@ class SchoolSubmissionOwnershipTests(unittest.TestCase):
                     plan = json.loads(row['plan']);raw = plan.get('school_selection_receipt')
                     if not raw or plan['school_task']['state'] == 'reference': continue
                     evidence = [dict(e, kind='text') for e in json.loads(row['evidence'])]
+                    others = [json.loads(r['plan']).get('school_date_quote', '') for r in rows if r['id'] != row['id']]
                     fresh = agent._school_brief({key: raw.get(key) or ('review' if key == 'state' else 'new' if key == 'change' else '')
-                                                 for key in RECEIPT}, evidence=evidence, separate_learning=True)
+                                                 for key in RECEIPT}, evidence=evidence, separate_learning=True,
+                                                **({'others': others} if others else {}))
                     self.assertEqual(fresh['goal'], plan['school_task']['goal'], (case, row['title']))
 
 
