@@ -4,7 +4,7 @@
 
 核查日期：2026-09-08；候选与实际状态更新至2026-09-14。以下分清已使用的代码、可接入的接口，以及交互参考；候选不代表已经接通。组件许可与本项目 MIT 许可分别保留。
 
-## 知识点体系复用（2026-10-26，尚未接入）
+## 知识点体系复用（2026-10-26首次评估；现行接法见下方r277）
 
 用户希望复用 [cn-math-taxonomy](https://github.com/xiaoyang111222/cn-math-taxonomy)，作为学校教学要求与孩子成长证据之间的知识点参照，避免重建全套分类与题库。核查固定提交 [`ddea0bfd0dbe7bf728e9ea1a6baf866fe5f736f9`](https://github.com/xiaoyang111222/cn-math-taxonomy/tree/ddea0bfd0dbe7bf728e9ea1a6baf866fe5f736f9)，仅只读公开资料，没有运行上游脚本、调用产品模型、上传家庭资料或部署。
 
@@ -20,13 +20,13 @@
 
 许可：固定版本 [LICENSE](https://github.com/xiaoyang111222/cn-math-taxonomy/blob/ddea0bfd0dbe7bf728e9ea1a6baf866fe5f736f9/LICENSE) 与 README 的许可证节将图谱数据、题库、诊断工具代码及文档列为 **CC BY-NC 4.0**；`assets/vendor/` 的部分第三方库另为 MIT，这不改变项目自身许可。主选是家庭自选、本地只读、按原许可独立保留的资料包，保署名、许可、版本和改动说明；不把上游代码/数据改标 MIT 或默认打包进公开产品。商业分发或用途另核作者授权；未获授权时可保留独立外部链接和本项目既有手工候选流程，不替用户联系作者。
 
-实施由 M4 Claude 负责，Codex 独立验收；先完成原诊断的证据/版本有效性核查，再以一组全虚构数学材料验证规范匹配、歧义/未知、前置核查与同原作业复测。尚无导入器、稳定知识点映射、接入 UI 或家庭效果证据。①每日待办优先及全部既有未完成需求不变。
+实施由 M4 Claude 负责，Codex 独立验收；先完成原诊断的证据/版本有效性核查，再以一组全虚构数学材料验证规范匹配、歧义/未知、前置核查与同原作业复测。下方r277已交付固定包读取、候选点确认和原错题内有限流程；稳定知识点映射与家庭效果仍未证明。①每日待办优先及全部既有未完成需求不变。
 
-### 原错题内知识点诊断候选（2026-10-28，分支候选，未部署）
+### 原错题内知识点诊断（2026-10-28，r277技术部署；真实效果待验）
 
 - **cn-math-taxonomy `e0f931b`（CC BY-NC 4.0）**：公开仓库只放固定清单（URL、sha256、字节数、Git blob，engine.js 47863 B / blob `a35cedd9`，已按上游 Git 树逐字节核对）与 MIT 适配代码；engine 与数据由家庭本机放入 Git 忽略的 `knowledge/`，不提交、不改标许可。浏览器原样运行 `diagnose/engine.js`（createSession/nextItem/judgeQuestion/applyAnswer/summarize/replay），服务端只下发目标点先修闭包的原条目、核对题号范围并逐题幂等保存。上游“掌握/推断掌握”只显示为本轮线索；题目与说明标“AI初稿，未经教师审核”。缺包时显示未安装，原错题、引导和每日待办不受影响。
 - **HKUDS/DeepTutor `a31d826`（Apache-2.0）**：`third_party/deeptutor/` 保留 LICENSE、上游 THIRD_PARTY_NOTICES 与新增 NOTICE；`learning` 确定性子集逐字节复制，唯 `lesson_evidence.py` 把顶层 RAG 导入移入使用它的函数（逻辑未改，文件头已标修改，diff 与原/新 hash 见 `patches/`、`PROVENANCE.json`）。只在“新题再试”时经隔离 py≥3.11+pydantic2 子进程运行原 `register_question`/`grade_interaction`（离线、临时目录用完即弃，家庭 SQLite 仍是唯一主数据）；不接 semantic/LLM、RAG、Agent、MCP、联网搜索或其聊天/讲解生成。未配置时只降级这一步。解释器先看显式 `FAMILY_DEEPTUTOR_PYTHON`：非空时只按它判定，不存在或不可执行即视为不可用、不改找默认；未设置或为空时才找本应用目录下固定的 `private/runtime/deeptutor/bin/python`（同样须是已存在的可执行文件，由部署方事先装好；应用不会安装、下载或创建解释器）。
-- **v3 修正（同一候选，仍未部署）**：入口同时放在“今天→作业反馈”对话框里已保存的原错题卡和成长记录原错题卡上，沿同一孩子/原错题/作业，复测仍按原 `save_record` 关联到原错题所在作业；面板按“孩子:原错题”分开，每个写操作返回完整状态。每道题显示前先登记“已出示”（新表 `topic_exposures`）。独立新题只认这孩子历次诊断里从没出示、作答、看过说明或再试过的题号，重新诊断或更正原错题都不会恢复“未见”。选题时先从真实原题集滤掉见过的题，再交原 `buildGraph/createSession/nextItem`；过滤后上游 `needConfirm` 会变小，但再试会话 limit=1，单题对错只记这一次尝试。没有未见题就停在“没有新题”，不换 seed。原错题更正后，旧诊断里 DeepTutor 已判定的作答经原 `repair_question(action="void")` 作废，并在版本核对后保存新快照；组件不可用时记为“待作废”（新表 `topic_basis_voids`），旧结果不当当前，下次打开再重试。link/start/retry 的提交编号绑定原错题、诊断、题号、原答和判定，同编号换内容返回 409 且零写入。`third_party/` 按已审文件逐个放行，其余默认忽略。子进程不设 HOME，临时数据只放在显式目录（`FAMILY_DEEPTUTOR_TMP`，或系统临时目录下的 family-deeptutor），用上游 `DEEPTUTOR_HOME` 参数指向。新增表共6张：`topic_links`、`topic_diagnoses`、`topic_diagnosis_items`、`topic_retries`、`topic_exposures`、`topic_basis_voids`，都是 `CREATE TABLE IF NOT EXISTS`，不改旧表和旧行。
+- **已部署的来源与新题保护**：入口同时放在“今天→作业反馈”对话框里已保存的原错题卡和成长记录原错题卡上，沿同一孩子/原错题/作业，复测仍按原 `save_record` 关联到原错题所在作业；面板按“孩子:原错题”分开，每个写操作返回完整状态。每道题显示前先登记“已出示”（新表 `topic_exposures`）。独立新题只认这孩子历次诊断里从没出示、作答、看过说明或再试过的题号，重新诊断或更正原错题都不会恢复“未见”。选题时先从真实原题集滤掉见过的题，再交原 `buildGraph/createSession/nextItem`；过滤后上游 `needConfirm` 会变小，但再试会话 limit=1，单题对错只记这一次尝试。没有未见题就停在“没有新题”，不换 seed。原错题更正后，旧诊断里 DeepTutor 已判定的作答经原 `repair_question(action="void")` 作废，并在版本核对后保存新快照；组件不可用时记为“待作废”（新表 `topic_basis_voids`），旧结果不当当前，下次打开再重试。link/start/retry 的提交编号绑定原错题、诊断、题号、原答和判定，同编号换内容返回 409 且零写入。`third_party/` 按已审文件逐个放行，其余默认忽略。子进程不设 HOME，临时数据只放在显式目录（`FAMILY_DEEPTUTOR_TMP`，或系统临时目录下的 family-deeptutor），用上游 `DEEPTUTOR_HOME` 参数指向。新增表共6张：`topic_links`、`topic_diagnoses`、`topic_diagnosis_items`、`topic_retries`、`topic_exposures`、`topic_basis_voids`，都是 `CREATE TABLE IF NOT EXISTS`，不改旧表和旧行。
 
 ## 可视化教学资料与生成器（2026-10-26，尚未接入）
 
