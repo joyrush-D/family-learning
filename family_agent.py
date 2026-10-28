@@ -487,55 +487,39 @@ def _school_step_names(clause, anchor):
                for n in (3,2) for i in range(len(text)-n+1))
 
 
-def _school_step_topic(clause, anchor):
-    """The words a clause states before its asker or actor, when they name another object than this item's
-    (告知书请家长签字, 另有一份告知书请家长签字, 《安全告知书》请监护人签名). A pointer (这一页、该页) or a step done
-    before (录音后、读完、完成后) is no topic; a clause naming this item's own object, or with no asker or actor after
-    its first words (录音上传班级作业区, 连续记录3天), states none: the clause screen still reads it.
-    """
-    text=re.sub(r'^[\s，,]*','',re.sub(_SCHOOL_ROLE_DAY,'',_URL.sub('',clause)))
-    actor='请|'+'|'.join(a for alts in _SCHOOL_CLAUSE_ROLES.values() for a in alts.split('|'))
-    opened=re.search(actor,re.sub(r'《[^》]*》',lambda m:'_'*len(m[0]),text))
-    lead=text[:opened.start()] if opened else ''
-    # A role after its own handover (交回语文老师, 交给地理老师) is the recipient, not an actor opening the clause.
-    if (not _school_step_chars(lead) or re.match(r'(?:这|该|此|本|上述|以上)',lead) or re.search(r'(?:完|好|后)\s*$',lead)
-            or re.search(r'交|给|到|至|向',re.sub(r'《[^》]*》','',lead))):return ''
-    return '' if _school_step_names(clause,anchor) else lead
+def _school_step_negated(clause):
+    """Whether a teacher clause says a negation outside its reminders (不要忘记、别忘了) and closed names. Its own words, not a
+    summary of them, are then the requirement: 家长签名不需要 and 家长不用签字 are kept as written, and so is 签字后不用交,
+    whose step stays in those words instead of being lost to a guess at the negation's scope."""
+    return bool(re.search(_SCHOOL_STEP_NEGATIVE,re.sub(_SCHOOL_STEP_REMINDER,'',re.sub(r'《[^》]*》','',clause))))
 
 
-def _school_step_negated(clause, step):
-    """Whether the clause where a step is read says it is not required (不需要家长签名) while the step affirms it.
-    A reminder (请不要忘记交数学本) is no negation; a step saying the same negation keeps its own polarity."""
-    said=lambda text:re.sub(_SCHOOL_STEP_REMINDER,'',text)
-    plain=_school_step_chars(step)
-    if re.search(_SCHOOL_STEP_NEGATIVE,said(step)):return False
-    runs=[i for i in range(len(clause)-1) if _school_step_chars(clause[i:i+2]) and _school_step_chars(clause[i:i+2]) in plain]
-    return bool(runs) and bool(re.search(r'(?:'+_SCHOOL_STEP_NEGATIVE+r')\s*$',said(clause[:runs[0]])))
-
-
-def _school_step_owned(goal, step, texts):
-    """Whether this item's own fully read originals state a step the model gives it, and the goal parts that go with it.
+def _school_step_owned(goal, step, texts, others=()):
+    """Whether this item's own fully read originals state a step the model gives it: (owned, goal parts to drop, the
+    teacher's own clause to keep instead of the step).
 
     The unit is one clause (comma or sentence part) of the originals. The item's own clause is the one sharing most words
-    with its goal outside the parts repeating the step: only the stored receipt and the originals decide, so direct
-    selection and every recovery reread reach the same proof. Sharing characters is only a screen: of what the step adds
-    to that own clause (a short word the originals never write, directly after the item's own object, only names it:
-    同步练习第3课作业), at least half must be read in one clause. The proof is that clause's relation to the item:
-      - the item's own clause, or one after it that names no other object before its own requirement opens, with no
-        clause between naming another object (完成后请家长在练习册上签字, 明天交给语文课代表, 录音后上传…);
+    with its goal outside the parts repeating the step. Sharing characters is only a screen: of what the step adds to that
+    own clause (a short word the originals never write, directly after the item's own object, only names it:
+    同步练习第3课作业), at least half must be read in one clause. Whose that clause is, is read from the same positive
+    relation the date reading uses: the quotes of the batch's other items from the same original (others; the selection's
+    other proposals, or what their saved rows keep) — never from which words look like an object:
+      - a clause another item quotes is that item's (回执签字, 联系册签字, 告知书请家长签字);
+      - a clause after another item's own words continues that nearer item, unless it opens with the list's common scope
+        (两项都…, 以上作业都…, _SCHOOL_NATIVE_COMMON);
       - a clause before the item in its sentence only when it names the item's own object (请家长在《星雨作业本》上签字);
-      - another original cited for it (its ownership is the existing citation and supplement proof).
-    A clause naming another object before its requirement (告知书请家长签字) owns its step; a clause saying the step is not
-    required (不需要家长签名) keeps that sentence in the goal and gives no requirement. No model proposal ever owns a clause.
+      - otherwise the item's own clause, one after it, or another original cited for it.
+    An owned clause with a negation keeps that clause's own words in the goal and gives no submission; the goal parts
+    restating the step without it go (家长签名不需要). No model proposal ever owns a clause.
     """
     need=_school_step_chars(step)
     parts=re.findall(_SCHOOL_STEP_PART,goal or '')
     repeated=[p for p in parts[1:] if need and 2*sum(c in _school_step_chars(p) for c in need)>=len(need)]
-    positive=[p for p in repeated if not re.search(_SCHOOL_STEP_NEGATIVE,re.sub(_SCHOOL_STEP_REMINDER,'',p))]
+    positive=[p for p in repeated if not _school_step_negated(p)]
     own=set(_school_step_chars(''.join(p for p in parts if p not in repeated)))
     clauses=[(index,m.start(),set(_school_step_chars(m[0])),m[0]) for index,text in enumerate(texts) for m in re.finditer(_SCHOOL_STEP_PART,text)]
     anchor=max(clauses,key=lambda c:len(c[2]&own),default=None)
-    if not need or not anchor or not anchor[2]&own:return True,repeated
+    if not need or not anchor or not anchor[2]&own:return True,repeated,''
     home=texts[anchor[0]];sentence=max(home.rfind(stop,0,anchor[1]) for stop in '。；;！!？?\n')+1
     # The model's own name for the item's object (a word no original writes, right after a run the own clause states).
     written=set(_school_step_chars(''.join(texts)));plain=need;named=set()
@@ -546,20 +530,35 @@ def _school_step_owned(goal, step, texts):
             tail=re.match(r'[^\W\d_]{1,2}$',plain[i+run:])
             if tail and not any(c in written for c in tail[0]):named|=set(range(i+run,len(plain)))
     added=[c for i,c in enumerate(plain) if c not in anchor[2] and i not in named]
-    if not added:
-        return (False,positive) if _school_step_negated(anchor[3],step) else (True,repeated)
-    later=[c for c in clauses if c[0]!=anchor[0] or c[1]>=sentence]
-    best=max(later,key=lambda c:(sum(char in c[2] for char in added),c[0]==anchor[0],-c[0],-c[1]))
-    if 2*sum(char in best[2] for char in added)<len(added):return False,repeated
-    if _school_step_negated(best[3],step):return False,positive
-    def foreign(clause,base):
-        return bool(_school_step_topic(clause[3],anchor[3])) or 2*len(clause[2]-base-set(need))>len(clause[2])
-    if best[0]==anchor[0] and best[1]<anchor[1]:
-        if not _school_step_names(best[3],anchor[3]):return False,repeated
-    elif best[0]==anchor[0] and best[1]>anchor[1]:
-        between=[c for c in clauses if c[0]==anchor[0] and anchor[1]<c[1]<best[1]]
-        if foreign(best,anchor[2]) or any(foreign(c,anchor[2]|own) for c in between):return False,repeated
-    return True,repeated
+    def quoted(clause):  # Another item's quote covers any of this clause in its own original.
+        text=texts[clause[0]];end=clause[1]+len(clause[3])
+        for other in others:
+            at=0
+            while other and (at:=text.find(other,at))!=-1:
+                if max(clause[1],at)<min(end,at+len(other)):return True
+                at+=len(other)
+        return False
+    best=anchor
+    if added:
+        later=[c for c in clauses if c[0]!=anchor[0] or c[1]>=sentence]
+        best=max(later,key=lambda c:(sum(char in c[2] for char in added),c[0]==anchor[0],-c[0],-c[1]))
+        if 2*sum(char in best[2] for char in added)<len(added) or quoted(best):return False,repeated,''
+        if best[0]==anchor[0] and best[1]<anchor[1]:
+            if not _school_step_names(best[3],anchor[3]):return False,repeated,''
+        elif best[0]==anchor[0] and best[1]>anchor[1]:
+            between=[c for c in clauses if c[0]==anchor[0] and anchor[1]<c[1]<best[1]]
+            if any(quoted(c) for c in between) and not re.match(_SCHOOL_NATIVE_COMMON,best[3].strip()):return False,repeated,''
+    if _school_step_negated(best[3]):return False,positive,best[3].strip()
+    return True,repeated,''
+
+
+def _school_sibling_quotes(c, row):
+    """The quotes the same batch's other items citing one of this item's originals were saved with: the siblings its
+    selection read (_school_step_owned), so a recovery rereading the stored receipt reaches the same proof."""
+    refs={e['ref'] for e in json.loads(row['evidence'])}
+    return [json.loads(r['plan']).get('school_date_quote','') for r in c.execute(
+        "SELECT plan,evidence FROM agent_items WHERE kind='school' AND child_id=? AND job_id=? AND id<>?",(row['child_id'],row['job_id'],row['id']))
+        if refs&{e['ref'] for e in json.loads(r['evidence'])}]
 
 
 _SCHOOL_PURPOSE_LABEL=re.compile(r'^\s*('+'|'.join(PURPOSES)+r')\s*[：:]\s*',re.IGNORECASE)
@@ -586,7 +585,7 @@ def _school_unsummarized(row, brief):
     return row['body'] in (FOCUS['school'],SCHOOL_REFERENCE_NOTE) and not brief.get('title') and not brief.get('goal')
 
 
-def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=None, pdf=None, material=None, *, separate_learning=False):
+def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=None, pdf=None, material=None, *, separate_learning=False, others=()):
     brief={key:_text(value,key,limit).strip() for key,limit in [('title',80),('goal',2000),('advice',1200),('reason',400)]}
     brief['title']=_school_title_label(brief['title'],evidence)
     state=value.get('state','review')
@@ -641,11 +640,15 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
         # neither the step nor the goal parts repeating it stay; every requirement of its own stays as it was.
         # A named physical item the model misread as an address (交至数学本) is first read as the original writes it.
         if state=='ready': submission=_school_handback(brief,submission,evidence)
-        owned,repeated=_school_step_owned(brief['goal'],submission,[e.get('text','') for e in evidence]
-                                          +[p['text'] for p in (pages or {}).get('model_pages',[])])
+        owned,repeated,words=_school_step_owned(brief['goal'],submission,[e.get('text','') for e in evidence]
+                                                +[p['text'] for p in (pages or {}).get('model_pages',[])],others)
         if not owned:
-            kept=''.join(p for p in re.findall(_SCHOOL_STEP_PART+r'[，,。；;！!？?\n]*',brief['goal']) if not any(p.startswith(r) for r in repeated))
+            # A negated own clause stays in the teacher's words (words); no summary of it is a requirement.
+            kept=''.join(p for p in re.findall(_SCHOOL_STEP_PART+r'[，,。；;！!？?\n]*',brief['goal']) if re.sub(r'[，,。；;！!？?\n]+$','',p) not in repeated)
             brief['goal']=re.sub(r'[，,；;\s]+$','',kept)+('。' if kept and not re.search(r'[。！!？?]\s*$',kept) else '');submission=''
+            if words and words not in brief['goal']:
+                if len(brief['goal'])+len(words)+1<=2000: brief['goal']+=words+'。'
+                else: state='review';brief['reason']='要求较长，原文要求未并入正文，请核对：'+words[:200]
     elif state=='ready': submission=_school_handback(brief,submission,evidence)
     if submission and submission not in brief['goal']:
         if len(brief['goal'])+len(submission)+6<=2000: brief['goal']+='\n提交要求：'+submission
@@ -1935,7 +1938,8 @@ class Store:
                     occupied=proof and any(proof['original_ref'] in {e['ref'] for e in json.loads(old['evidence'])} for old in prior)
                     if proof and not occupied and raw and raw['state']=='ready' and raw['change']=='update' and not raw['target_id']:
                         fresh=_school_brief(dict(raw,change='new'),incomplete=any(e['content_incomplete'] for e in evidence),
-                            evidence=evidence,separate_learning=True)
+                            evidence=evidence,separate_learning=True,others=[(i.get('plan') or {}).get('school_date_quote','') for i in items
+                                                                             if i is not item and refs&{e['ref'] for e in i['evidence']}])
                         from family_agenda import deadlines,sent_day
                         original_dates=deadlines(proof['action_text']+'\n'+proof['shared_date_text'],sent_day(proof['original_time']))
                         all_dates=set().union(*(deadlines(e['text'],sent_day(e.get('time',''))) for e in evidence))
@@ -3270,7 +3274,7 @@ def _school_role_reselect(store,c,row,evidence,now):
         fresh=_school_brief({key:raw.get(key) or ('review' if key=='state' else 'new' if key=='change' else '') for key in
                              ['title','goal','advice','state','reason','change','target_id','purpose','submission']},
                             incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence),
-                            evidence=evidence,separate_learning=True)
+                            evidence=evidence,separate_learning=True,others=_school_sibling_quotes(c,row))
     except (AgentError,ValueError,KeyError,TypeError):return None
     if fresh.get('state')!='ready' or fresh.get('change')!='new':return None
     return dict(due=due,quote=quote,receipt=_hash(raw),origin_basis=brief['origin_basis'],snapshot=snapshot,brief=fresh)
@@ -3328,7 +3332,7 @@ def _school_saved_reread(store,c,row,evidence,now):
         fresh=_school_brief({key:raw.get(key) or ('review' if key=='state' else 'new' if key=='change' else '') for key in
                              ['title','goal','advice','state','reason','change','target_id','purpose','submission']},
                             incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence),
-                            evidence=evidence,separate_learning=True)
+                            evidence=evidence,separate_learning=True,others=_school_sibling_quotes(c,row))
     except (AgentError,ValueError,KeyError,TypeError):return None
     if fresh.get('state')!='ready':return None
     # Date and cancellation guards hold a review by leaving its day unknown; an unknown or past day stays for review
@@ -3417,7 +3421,7 @@ def _school_cleared_reread(store,c,row,evidence,now):
         fresh=_school_brief({key:raw.get(key) or ('review' if key=='state' else 'new' if key=='change' else '') for key in
                              ['title','goal','advice','state','reason','change','target_id','purpose','submission']},
                             incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence),
-                            evidence=evidence,separate_learning=True)
+                            evidence=evidence,separate_learning=True,others=_school_sibling_quotes(c,row))
     except (AgentError,ValueError,KeyError,TypeError):return None
     if fresh.get('state')!='ready' or fresh.get('change')!='new':return None
     try:family_llm.configuration(store.data)
@@ -5443,6 +5447,8 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         raise AgentError('模型筛选字段不正确')
     refs = {entry['ref']: entry['text'] for entry in evidence}; output = []; accounted = set();history_actions=[]
     title_quotes=[p['title_quote'].strip() if isinstance(p,dict) and isinstance(p.get('title_quote'),str) else '' for p in result['proposals']]
+    title_refs=[{q.get('ref') for q in p['evidence'] if isinstance(q,dict)} if isinstance(p,dict) and isinstance(p.get('evidence'),list) else set()
+                for p in result['proposals']]
     for index,proposal in enumerate(result['proposals']):
         native_action=None
         action_anchor={};history_uncertain=False;revision=None
@@ -5590,7 +5596,8 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 item['plan'] = {'school_learning': learning}
             raw_change=proposal.get('task_change','new');raw_target=proposal.get('task_target_id','')
             brief=_school_brief({key:proposal.get('task_'+key,'review' if key=='state' else 'new' if key=='change' else '') for key in ['title','goal','advice','state','reason','change','target_id','purpose','submission']},
-                                incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence if e['ref'] in {q['ref'] for q in cited}),evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}],school_tasks=school_tasks,separate_learning=True)
+                                incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence if e['ref'] in {q['ref'] for q in cited}),evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}],school_tasks=school_tasks,separate_learning=True,
+                                others=[q for i,q in enumerate(title_quotes) if i!=index and title_refs[i]&{c['ref'] for c in cited}])
             item.setdefault('plan',{})['school_selection_receipt']={key:proposal.get('task_'+key,'') for key in
                 ['title','goal','advice','state','reason','change','target_id','purpose','submission']}
             if not due and not proposed_due and not historical and not native_action and not void:
