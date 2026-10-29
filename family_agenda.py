@@ -710,7 +710,8 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
         if len(parts)!=2:continue
         try:
             source,msg=store._message_context(c,dict(child_id=child_id,source_id=parts[0],message_id=parts[1]))
-            messages.append(msg)
+            # Its identity (ref, publisher) lets the shared role reader prove one teacher's own later restatement.
+            messages.append(dict(msg,ref=ref,publisher=family_agent._publisher(parts[0],msg)))
             if ref==publication_ref:original_time=sent_at(msg.get('time',''))
             if not any(p['ref']==ref for p in publications):
                 publications.append(dict(ref=ref,source_name=source['name'],sender=msg.get('sender','')))
@@ -769,7 +770,7 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
         # A quote stopping before its own role sentence (…答案写在练习册上。 before 今晚完成，明天早上交。) names no clause of that day:
         # its role is read from the one own range the due was proven from, the quote's sentence and a directly following sentence
         # of its roles alone (family_agent._school_role_days); a sibling's words, another original or a summary give none.
-        ranged=family_agent._school_role_days(date_quote,[dict(text=m.get('text',''),time=m.get('time','')) for m in messages],date_siblings,words=True)
+        ranged=family_agent._school_role_days(date_quote,messages,date_siblings,words=True)
         if ranged and ranged[1]==due_on:due_kind=date_meaning(ranged[2],due_on,home,subject,goal)
     heading=date_header if len(own)==1 and date_header and 0<=own[0]['text'].find(date_header)<own[0]['text'].find(date_quote) else ''
     complete_on=(completion_day(date_quote,heading,own[0].get('time',''),due_on)
@@ -780,7 +781,7 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
     if (not complete_on and len(own)==1 and due_on and date_siblings is not None and not focus.get('scheduled_on') and not focus.get('version')):
         # The same own-role reading the item was selected and saved with (今晚完成，明天早上交 / 今晚请家长签字，明天早上让孩子交给…):
         # its one earlier completion day is listed on that day; its handback/check due stays. Another item's quote or day gives none.
-        roles=family_agent._school_role_days(date_quote,[dict(text=m.get('text',''),time=m.get('time','')) for m in messages],date_siblings)
+        roles=family_agent._school_role_days(date_quote,messages,date_siblings)
         if roles and roles[1]==due_on and len(roles[0])==1 and next(iter(roles[0]))<due_on:complete_on=next(iter(roles[0]))
     return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,due_kind=due_kind,complete_on=complete_on,scheduled_on=focus.get('scheduled_on',''),
                 category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox',

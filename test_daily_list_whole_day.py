@@ -247,5 +247,176 @@ class WholeDayTests(unittest.TestCase):
         self.assertEqual(self._check_school(self._list()[0], refs), listed)
 
 
+FRIDAY = '2026-11-06'
+# A fictional Friday whose correct reply quotes each action short: the later check, the ordered second step's 今晚 and the
+# carrying arrangement are only in each item's own complete original words.
+FRIDAY_MESSAGES = (('801', 'fictional-cn', '虚构语文老师', '语文今晚完成《溪边》课后第1、3题，只写答案；明早语文课检查。', '17:01'),
+                   ('802', 'fictional-cn', '虚构语文老师', '更正：刚才《溪边》的课后题要写出理由，不是只写答案。其他要求不变。', '17:04'),
+                   ('803', 'fictional-math', '虚构数学老师', '数学今晚先完成《口算本》第6页第2、5题，每题写计算过程。再订正《单元卷》第4题，订正写在原题旁。', '17:10'),
+                   ('804', 'fictional-science', '虚构科学老师', '科学课下周一带《叶片记录表》；本周末不用填写，课堂上再做。', '17:21'))
+
+
+class FridayOwnRangeTests(unittest.TestCase):
+    """Short quotes and split actions keep the time, later check and carrying their own complete original words state."""
+    setUp = frozen.DailyListFrozenTests.setUp
+    _use_replies = frozen.DailyListFrozenTests._use_replies
+    _list = WholeDayTests._list
+
+    def _run(self, messages, replies):
+        self.fixture.now = self.now = dt.datetime(2026, 11, 6, 18, tzinfo=agent.TZ)
+        payload = self.fixture.payload(cursor=messages[-1][0])
+        payload['messages'] = [dict(id=i, message_order=i, time=FRIDAY + 'T' + hm + ':00+08:00', kind='text', sender=sender,
+                                    sender_id=publisher, text=text, unread=False) for i, publisher, sender, text, hm in messages]
+        self.store.ingest(payload)
+        refs = {i: 'message:' + self.source['id'] + ':' + i for i, *_ in messages}
+        self._use_replies(payload, [dict(proposals=replies(refs))])
+        result = agent.run_once(self.app, self.now)
+        self.assertEqual((result['failed'], result['processed']), (0, len(messages)))
+        with self.store._db() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY rowid")]
+        snapshot = self.app.calendar_snapshot(FRIDAY, '2026-11-12')
+        listed = {i['id']: i for i in snapshot['inbox'] if i['kind'] in ('task', 'school') and i['child_ids'] == ['child-1']}
+        return rows, listed, refs
+
+    @staticmethod
+    def _replies(cn='语文今晚完成《溪边》课后第1、3题', second='再订正《单元卷》第4题，订正写在原题旁',
+                 carry='科学课下周一带《叶片记录表》；本周末不用填写，课堂上再做'):
+        return lambda r: [
+            proposal(cn, [r['801'], r['802']], '语文：完成溪边课后题并写出理由', '今晚完成《溪边》课后第1、3题，每题写出理由。明早语文课检查。',
+                     '语文', '2026-11-07'),
+            proposal('数学今晚先完成《口算本》第6页第2、5题，每题写计算过程', [r['803']], '数学：口算本第6页第2、5题',
+                     '今晚完成《口算本》第6页第2、5题，每题写计算过程。', '数学'),
+            proposal(second, [r['803']], '数学：订正单元卷第4题', '今晚订正《单元卷》第4题，订正写在原题旁。', '数学'),
+            proposal(carry, [r['804']], '科学：下周一带叶片记录表', '科学课下周一带《叶片记录表》；本周末不用填写，课堂上再做。',
+                     '', '2026-11-09', 'admin')]
+
+    def _agenda(self, rows, listed, anchor):
+        row, = [r for r in rows if anchor in json.loads(r['plan'])['school_task']['goal']]
+        brief = json.loads(row['plan'])['school_task']
+        return row, brief, listed[row['task_id'] or row['id']]['agenda']
+
+    def _check_friday(self, rows, listed):
+        self.assertEqual(len(rows), 4)
+        row, brief, a = self._agenda(rows, listed, '溪边')
+        self.assertEqual((row['state'], brief['state']), ('accepted', 'ready'), brief['reason'])
+        self.assertEqual((a['complete_on'], a['due_on'], a['due_kind'], a['subjects']), (FRIDAY, '2026-11-07', 'inspection', ['语文']))
+        self.assertNotIn('只写答案', brief['goal'])
+        for anchor in ('口算本', '单元卷'):
+            row, brief, a = self._agenda(rows, listed, anchor)
+            self.assertEqual((row['state'], brief['state']), ('accepted', 'ready'), anchor)
+            self.assertTrue(a['complete_on'] == FRIDAY or (a['due_on'], a['due_kind']) == (FRIDAY, 'deadline'), (anchor, a))
+            self.assertNotIn(a['due_kind'], ('handback', 'inspection', 'arranged'), anchor)
+        row, brief, a = self._agenda(rows, listed, '叶片记录表')
+        self.assertEqual((row['state'], a['category'], a['complete_on'], a['due_on'], a['due_kind']), ('accepted', 'todo', '', '2026-11-09', 'arranged'))
+
+    def test_friday_short_quotes_keep_their_own_check_ordered_step_and_carrying_through_the_store(self):
+        rows, listed, _ = self._run(FRIDAY_MESSAGES, self._replies())
+        self._check_friday(rows, listed)
+        # Reopen after a restart: nothing asked or written again, the same days and roles.
+        before = [dict(r) for r in rows]
+        agent.Store(self.app.connect, self.app.profiles, self.app.DATA, app=self.app)
+        replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
+        self.assertEqual((replay['failed'], replay['processed'], replay['created'], self.model.call_count), (0, 0, 0, 1))
+        with self.store._db() as c:
+            self.assertEqual([dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY rowid")], before)
+
+    def test_friday_variants_read_the_same_own_range(self):
+        """The whole own clause quoted, 然后再, and the lesson after its day read the same; the reply's goal never dates it."""
+        texts = {i: t for i, _, _, t, _ in FRIDAY_MESSAGES}
+        for name, change, kwargs in (
+                ('complete short quote', {}, dict(cn='语文今晚完成《溪边》课后第1、3题，只写答案')),
+                ('然后再', {'803': texts['803'].replace('。再', '。然后再')}, dict(second='然后再订正《单元卷》第4题，订正写在原题旁')),
+                ('day before lesson', {'804': '下周一科学课带《叶片记录表》；本周末不用填写，课堂上再做。'},
+                 dict(carry='下周一科学课带《叶片记录表》；本周末不用填写，课堂上再做'))):
+            with self.subTest(name):
+                self.setUp()
+                messages = tuple((i, p, s, change.get(i, t), hm) for i, p, s, t, hm in FRIDAY_MESSAGES)
+                self._check_friday(*self._run(messages, self._replies(**kwargs))[:2])
+
+    def test_friday_other_actions_teachers_days_and_negations_never_lend_their_words(self):
+        sent = FRIDAY + 'T17:01:00+08:00'
+        cited = lambda *texts: [dict(ref='message:fictional:%d' % n, text=t, time=sent) for n, t in enumerate(texts)]
+        own = '语文今晚完成《溪边》课后第1、3题'
+        self.assertEqual(agent._school_role_days(own, cited(FRIDAY_MESSAGES[0][3], FRIDAY_MESSAGES[1][3]), []), ({FRIDAY}, '2026-11-07'))
+        for text in ('语文今晚完成《溪边》课后第1、3题，数学明天交练习册；明早语文课检查。',   # another action's own day in the rest
+                     '语文今晚完成《溪边》课后第1、3题，只写答案；明早数学课检查。',          # another subject's lesson
+                     '语文今晚完成《溪边》课后第1、3题，只写答案；后天或明早语文课检查。'):  # an open day
+            with self.subTest(text):self.assertIsNone(agent._school_role_days(own, cited(text), []))
+        self.assertIsNone(agent._school_role_days(own, cited(FRIDAY_MESSAGES[0][3]), ['明早语文课检查']), 'another proposal quotes the check')
+        span = '语文今晚完成《溪边》课后第1、3题，只写答案；明早语文课检查。'
+        for later in ('更正：刚才《溪边》的课后题改为后天检查。', '更正：《溪边》课后题明早不用检查了。', '更正：刚才《溪边》的课后题要带到学校再写。'):
+            with self.subTest(later):self.assertTrue(agent._school_range_withdrawn(span, ['', '', later]))
+        self.assertFalse(agent._school_range_withdrawn(span, ['', '', FRIDAY_MESSAGES[1][3]]), 'only how the work is written changed')
+        math = FRIDAY_MESSAGES[2][3]
+        self.assertEqual(agent._school_scope_day('再订正《单元卷》第4题，订正写在原题旁', cited(math))['day'], FRIDAY)
+        for text, quote in ((math.replace('今晚先完成', '今晚完成'), '再订正《单元卷》第4题，订正写在原题旁'),  # no ordered 先
+                            (math.replace('再订正', '再明天订正'), '再明天订正《单元卷》第4题，订正写在原题旁'),  # its own other day
+                            (math.replace('再订正', '英语再订正'), '英语再订正《单元卷》第4题，订正写在原题旁'),  # another subject
+                            (math.replace('再订正', '再请家长签字并订正'), '再请家长签字并订正《单元卷》第4题，订正写在原题旁')):
+            with self.subTest(text):self.assertNotEqual((agent._school_scope_day(quote, cited(text)) or {}).get('kind'), 'continued')
+        from family_agenda import date_meaning
+        self.assertEqual(date_meaning('科学课下周一带《叶片记录表》', '2026-11-09', FRIDAY), 'arranged')
+        for text in ('科学课下周一不用带《叶片记录表》', '科学课下周一前带《叶片记录表》', '科学课下周一交《叶片记录表》'):
+            with self.subTest(text):self.assertNotEqual(date_meaning(text, '2026-11-09', FRIDAY), 'arranged')
+
+    def test_friday_counted_heading_and_same_day_restating_correction_through_the_store(self):
+        """数学今晚有两项：1.…；2.…，订正写在原题旁 keeps two items reading the shared 今晚; 今天照常完成，明天照常检查 moves no role."""
+        messages = (('811', 'fictional-cn', '虚构语文老师', '语文今天先做《溪边》课后第1、3题，答案只需写结论。明天早读检查。', '17:01'),
+                    ('812', 'fictional-cn', '虚构语文老师', '更正刚才《溪边》课后题：每题还要写出理由，今天照常完成，明天照常检查。', '17:04'),
+                    ('813', 'fictional-math', '虚构数学老师', '数学今晚有两项：1.完成《口算本》第6页第2、5题，每题写计算过程；2.订正《单元卷》第4题，订正写在原题旁。', '17:10'))
+        rows, listed, _ = self._run(messages, lambda r: [
+            proposal('语文今天先做《溪边》课后第1、3题', [r['811'], r['812']], '语文：溪边课后题写出理由',
+                     '今天完成《溪边》课后第1、3题，每题写出理由。明天早读检查。', '语文', '2026-11-07'),
+            proposal('完成《口算本》第6页第2、5题，每题写计算过程', [r['813']], '数学：口算本第6页', '今晚完成《口算本》第6页第2、5题，每题写计算过程。', '数学'),
+            proposal('订正《单元卷》第4题，订正写在原题旁', [r['813']], '数学：订正单元卷第4题', '今晚订正《单元卷》第4题，订正写在原题旁。', '数学')])
+        self.assertEqual(len(rows), 3)
+        row, brief, a = self._agenda(rows, listed, '溪边')
+        self.assertEqual((row['state'], brief['state']), ('accepted', 'ready'), brief['reason'])
+        self.assertEqual((a['complete_on'], a['due_on'], a['due_kind']), (FRIDAY, '2026-11-07', 'inspection'))
+        for anchor, kept in (('口算本', '计算过程'), ('单元卷', '原题旁')):
+            row, brief, a = self._agenda(rows, listed, anchor)
+            self.assertEqual((row['state'], brief['state'], a['subjects']), ('accepted', 'ready', ['数学']), anchor)
+            self.assertIn(kept, brief['goal'])
+            self.assertTrue(a['complete_on'] == FRIDAY or (a['due_on'], a['due_kind']) == (FRIDAY, 'deadline'), (anchor, a))
+
+    def test_friday_counted_heading_and_restating_correction_never_widen(self):
+        sent = FRIDAY + 'T17:10:00+08:00'
+        math = '数学今晚有两项：1.完成《口算本》第6页第2、5题，每题写计算过程；2.订正《单元卷》第4题，订正写在原题旁。'
+        first, second = '完成《口算本》第6页第2、5题，每题写计算过程', '订正《单元卷》第4题，订正写在原题旁'
+        ledger = lambda text: agent._school_native_actions([dict(ref='message:fictional:813', text=text, kind='text', publisher='p-math', time=sent)])
+        # The standard 订正写在原题旁 stays with its own item: exactly two outcomes, each its whole numbered words.
+        self.assertEqual([a['quote'] for a in ledger(math)], [first, second])
+        cited = lambda text: [dict(text=text, time=sent)]
+        self.assertEqual([agent._school_list_heading_day(q, cited(math), [o]) for q, o in ((first, second), (second, first))], [FRIDAY, FRIDAY])
+        for text in (math.replace('两项', '三项'),               # numbers that do not meet the stated count head nothing
+                     math.replace('今晚', '明天'),               # another heading day
+                     math.replace('2.订正', '2.明天订正'),        # an item's own other day
+                     math.replace('今晚有两项', '今晚第2项')):    # an ordinal is no count
+            with self.subTest(text):
+                self.assertEqual({agent._school_list_heading_day(q, cited(text), []) for q in (first, second) if q in text} - {''}, set())
+        self.assertNotEqual([a['quote'] for a in ledger(math.replace('两项', '三项'))], [first, second])
+        own, t1 = '语文今天先做《溪边》课后第1、3题', '语文今天先做《溪边》课后第1、3题，答案只需写结论。明天早读检查。'
+        fix = '更正刚才《溪边》课后题：每题还要写出理由，今天照常完成，明天照常检查。'
+        pair = lambda later, publisher='p-cn', hm='17:04': [
+            dict(ref='message:fictional:811', text=t1, time=FRIDAY + 'T17:01:00+08:00', publisher='p-cn', kind='text', message_order='811'),
+            dict(ref='message:fictional:812', text=later, time=FRIDAY + 'T' + hm + ':00+08:00', publisher=publisher, kind='text', message_order='812')]
+        self.assertEqual(agent._school_role_days(own, pair(fix), []), ({FRIDAY}, '2026-11-07'))
+        self.assertEqual(agent._school_role_days(own, pair(fix), [], words=True)[1], '2026-11-07')
+        for later in (fix.replace('明天照常检查', '后天检查'),              # a changed day
+                      fix.replace('明天照常检查', '明天不用检查'),          # a withdrawn check
+                      fix.replace('明天照常检查', '明天或后天检查'),        # an open day
+                      fix.replace('《溪边》', '《山行》'),                 # another title
+                      fix.replace('《溪边》', '数学'),                     # another subject
+                      fix + '后天再交一次。'):                             # a further sentence of its own
+            with self.subTest(later):self.assertIsNone(agent._school_role_days(own, pair(later), []))
+        self.assertIsNone(agent._school_role_days(own, pair(fix, 'p-other'), []), 'another teacher')
+        self.assertIsNone(agent._school_role_days(own, pair(fix, 'p-cn', '16:00'), []), 'not later')
+        self.assertIsNone(agent._school_role_days(own, [dict(text=t1, time=FRIDAY + 'T17:01:00+08:00'), dict(text=fix, time=FRIDAY + 'T17:04:00+08:00')], []),
+                          'no proven teacher')
+        # A bare check names this item only when the message holds nothing else.
+        self.assertIsNone(agent._school_role_days(own, cited('英语今晚读Unit 2。' + t1), []))
+        self.assertIsNone(agent._school_role_days(own, cited(t1 + '数学明天交练习册。'), []))
+
+
 if __name__ == '__main__':
     unittest.main()

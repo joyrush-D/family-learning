@@ -2444,6 +2444,35 @@ class SchoolActionAnchorTests(unittest.TestCase):
         self.assertEqual(calls[1], calls[0], 'the retry sends the same contract and context')
         self._assert_two_actions_saved('今晚把Unit 3单词每个抄写两遍，明天交')
 
+    def test_an_anchor_running_over_a_sibling_clause_is_cut_back_only_where_one_original_proves_both(self):
+        text = '英语今晚跟读Unit 9第1至6个单词各2遍，读完请家长签字，不用上传录音；下周一英语课听写。'
+        evidence = [dict(ref='m:1', text=text, time='2026-11-06T17:15:00+08:00'),
+                    dict(ref='m:2', text='下周一英语课听写。', time='2026-11-06T17:16:00+08:00')]
+        reading = dict(title_quote=text, evidence=[dict(ref='m:1')], due='', task_goal='跟读Unit 9第1至6个单词，各2遍。')
+        dictation = dict(title_quote='下周一英语课听写', evidence=[dict(ref='m:1')], due='2026-11-09', task_goal='下周一英语课听写。')
+        own = '英语今晚跟读Unit 9第1至6个单词各2遍，读完请家长签字，不用上传录音'
+        self.assertEqual(agent._school_sibling_scopes([reading, dictation], evidence), {0: (own, '下周一英语课听写')})
+        cases = {
+            'the wider item dates itself on the clause': [dict(reading, due='2026-11-09'), dictation],
+            'the wider summary uses the same day': [dict(reading, task_goal='跟读并准备下周一听写。'), dictation],
+            'a third anchor touches the clause': [reading, dictation, dict(dictation, title_quote='英语课听写')],
+            'the sibling quotes a part of its clause': [reading, dict(dictation, title_quote='英语课听写')],
+            'the sibling cites another original': [reading, dict(dictation, evidence=[dict(ref='m:2')])],
+            'the wider item cites two originals': [dict(reading, evidence=[dict(ref='m:1'), dict(ref='m:2')]), dictation],
+            'the wider anchor is inexact': [dict(reading, title_quote=text + '谢谢'), dictation],
+        }
+        for name, proposals in cases.items():
+            with self.subTest(name):
+                self.assertEqual(agent._school_sibling_scopes(proposals, evidence), {})
+        middle = '英语今晚跟读单词；下周一英语课听写；周二交练习册。'
+        wide = dict(reading, title_quote=middle)
+        self.assertEqual(agent._school_sibling_scopes([wide, dictation], [dict(evidence[0], text=middle)]), {}, 'a middle clause')
+        same = '英语下周一交跟读签字单；下周一英语课听写。'
+        self.assertEqual(agent._school_sibling_scopes([dict(reading, title_quote=same), dictation], [dict(evidence[0], text=same)]),
+                         {}, 'its own words use the same day')
+        self.assertEqual(agent._school_sibling_scopes([reading, dictation], evidence, {0}), {}, 'a split-formed item stays')
+        self.assertEqual(agent._school_sibling_scopes([reading, dictation], evidence, (), {'m:1'}), {}, 'a ledger-located original')
+
     def test_own_segment_anchor_saves_each_action_once_with_its_own_date(self):
         # The segment may keep or drop its leading subject label and closing mark; neither reaches the dictation.
         for quote in ('今晚把Unit 3单词每个抄写两遍，明天交', '英语：今晚把Unit 3单词每个抄写两遍，明天交；'):
