@@ -655,7 +655,8 @@ def _chat_json(messages,schema,name,timeout=60,*,data_path=None):
     # a selection carrying product-bound changes keeps reasoning_effort on that same light model.
     light_effort_tier=light_model_selected and name in LIGHT_EFFORT_TASKS and not _bound_change_selection(name,messages)
     # 错题图片标注每页最多30个区域并转写题面，3000输出token会截断整批草稿。
-    output_tokens = 6000 if name in ('family_agent_selection', 'family_wrong_questions_annotate', 'family_homework_reference') else 3000
+    # 学校文字整理曾把3000全部用于推理、未返回最终结果（incomplete/length），明确事项因此无法生成。
+    output_tokens = 6000 if name in ('family_agent_selection', 'family_wrong_questions_annotate', 'family_homework_reference', 'family_school_task') else 3000
     output_name={'family_learning_answer':'回答','family_reading_feedback':'反馈','family_guided_hint':'提示'}.get(name,'草稿')
     if type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=180:
         raise ValueError('模型请求等待时间不正确')
