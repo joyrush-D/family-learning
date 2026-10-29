@@ -199,6 +199,56 @@ with tempfile.TemporaryDirectory(prefix='synthetic-task-feedback-') as folder:
             assert len(saved['feedback']['attachments'])==5
         finally: server.shutdown();server.server_close();worker.join()
 
+        # New feedback without its own subject is filed under the subject its task card shows: parent correction first, then
+        # saved subject or own words. Unknown and no-course items stay empty; a joint item stays one record; retries, explicit
+        # request subjects, corrections of stored records and the other child keep their own saved subject.
+        from types import SimpleNamespace
+        (root/'跟踪台账.md').write_text((root/'跟踪台账.md').read_text()
+            +'| T03 | 示例甲 | 数学：虚构练习第1至4题 | 本周 | 待跟进 | 虚构学校通知 | 虚构要求 |\n'
+            +'| T04 | 示例甲 | 虚构回执签字 | 本周 | 待跟进 | 虚构学校通知 | 虚构要求 |\n'
+            +'| T05 | 示例乙 | 科学：虚构观察记录 | 本周 | 待跟进 | 虚构学校通知 | 虚构要求 |\n'
+            +'| T06 | 示例甲 | 数学与科学虚构联合小报 | 本周 | 待跟进 | 虚构学校通知 | 虚构要求 |\n')
+        def card(task_id): return next(t for t in app.tasks() if t['id']==task_id)['agenda']
+        def fed(task_id,key,child='示例甲',**extra):
+            return app.save_task_feedback(dict(task_id=task_id,child=child,day='2026-09-21',request_key=key,note='虚构进展',**extra))
+        def focus(task_id,subject):
+            version=next(t for t in app.tasks() if t['id']==task_id)['focus'].get('version',0)
+            app.family_task_focus.save(SimpleNamespace(**vars(app)),dict(id=task_id,version=version,request_key='synthetic-focus-'+task_id+str(version),
+                mode='next',next_action='虚构下一步',waiting_for='',review_on='',subject=subject))
+        assert card('T03')['subjects']==['数学'] and card('T03')['subject_state']=='known'
+        math=fed('T03','synthetic-subject-0001')
+        assert math['feedback']['subject']=='数学' and not math['completion_changed'] and math['task']['update'] is None
+        assert next(r for r in app.snapshot()['records'] if r['id']==math['record_id'])['subject']=='数学'
+        # A check of that original carries the task's subject as well.
+        up=upload('synthetic-subject-answer.txt',b'synthetic child answer')
+        answer=fed('T03','synthetic-subject-0002',attachments=[up])
+        check=fed('T03','synthetic-subject-0003',attachments=[up],review_basis=dict(record_id=answer['record_id'],created=answer['feedback']['created'],photo_ids=[up]))
+        assert answer['feedback']['subject']==check['feedback']['subject']=='数学'
+        # The parent's correction wins; a retry keeps what its first save stored; clearing reopens the task's own words.
+        focus('T03','语文')
+        assert card('T03')['subjects']==['语文'] and card('T03')['subject_basis']=='parent'
+        before=dump(app);again=fed('T03','synthetic-subject-0001')
+        assert again['replayed'] and again['record_id']==math['record_id'] and again['feedback']['subject']=='数学' and dump(app)==before
+        assert fed('T03','synthetic-subject-0004')['feedback']['subject']=='语文'
+        focus('T03','综合')
+        assert fed('T03','synthetic-subject-0005')['feedback']['subject']==''
+        focus('T03','')
+        assert card('T03')['subject_basis']=='own_words' and fed('T03','synthetic-subject-0006')['feedback']['subject']=='数学'
+        # Unknown and no-course items are never guessed (not from file names either); a joint item is one record.
+        named=upload('数学作业.txt',b'synthetic named file')
+        assert card('T01')['subject_state']=='unknown' and fed('T01','synthetic-subject-0007',attachments=[named])['feedback']['subject']==''
+        assert card('T04')['subject_state']=='general' and fed('T04','synthetic-subject-0008')['feedback']['subject']==''
+        joint=fed('T06','synthetic-subject-0009')
+        assert joint['feedback']['subject']=='数学·科学' and joint['task']['feedback_ids']==[joint['record_id']]
+        # An explicit request subject, even empty, is the caller's own; correcting a stored record keeps its saved subject.
+        assert fed('T03','synthetic-subject-0010',subject='英语')['feedback']['subject']=='英语'
+        old=fed('T03','synthetic-subject-0011',subject='')
+        fixed=app.save_task_feedback(dict(task_id='T03',child='示例甲',record_id=old['record_id'],expected_created=old['feedback']['created'],note='虚构更正'))
+        assert fixed['feedback']['subject']=='' and fixed['feedback']['note']=='虚构更正'
+        # Each child keeps their own task's subject; another child's task is still refused.
+        assert fed('T05','synthetic-subject-0012',child='示例乙')['feedback']['subject']=='科学'
+        refused(app,dict(task_id='T03',child='示例乙',day='2026-09-21',request_key='synthetic-subject-0013',note='虚构'),'record_task_mismatch',409)
+
         # Ordinary task and record paths keep working.
         app.save_task(dict(id='T02',status='已完成',note=app.TASK_CHECK_NOTE))
         try: app.save_record(dict(child='示例乙',day='2026-09-20',category='学习进展',title='虚构跨孩',source='事项:T01'))

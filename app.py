@@ -1403,7 +1403,7 @@ def save_task_feedback(obj):
         if previous is not None and previous['followup_kind']=='作业检查':
             raise RecordError('已保存的检查意见保留原记录；请从原作答追加一次复核',409,'review_result_immutable')
         # A retry keeps the title saved the first time, so a task retitled in between is not a different submission.
-        titled=previous or (c.execute('SELECT title,followup_kind FROM records WHERE request_key=?',(request_key,)).fetchone() if request_key else None)
+        titled=previous or (c.execute('SELECT title,followup_kind,subject FROM records WHERE request_key=?',(request_key,)).fetchone() if request_key else None)
         record=dict(child=child,source=source,title=titled['title'] if titled else ('反馈：'+task['title'])[:200])
         if basis is not None: record['review_basis']=basis  # Include the basis in the retry fingerprint.
         # A receipt from an older version retains its original payload hash and ordinary record role.
@@ -1411,6 +1411,10 @@ def save_task_feedback(obj):
             record.update(related_record_id=basis['record_id'],followup_kind='作业检查',comparison_note=clean(obj,'comparison_note',1000))
         for key,limit in [('day',10),('category',20),('subject',80),('note',4000),('transcript',4000),('transcript_state',10),('assistance',30)]:
             record[key]=clean(obj,key,limit) if key in obj or previous is None else previous[key]
+        if previous is None and 'subject' not in obj:
+            # New feedback names no subject of its own: it is filed where the task's own card files it (parent correction,
+            # then saved subject, then own words). A retry keeps the subject saved the first time, like its title.
+            record['subject']=titled['subject'] if titled else task_subject(task)
         record['category']=record['category'] or '学习进展'
         if record['category'] not in ('学习进展','家长观察'): raise RecordError('任务反馈只能保存为学习进展或家长观察')
         saved=json.loads(previous['attachments']) if previous else []
@@ -1479,6 +1483,13 @@ def save_task_feedback(obj):
         feedback.update(record_id=row['id'],task_id=task_id,child=task['child'],attachments=[upload_info(c.execute('SELECT * FROM uploads WHERE id=?',(i,)).fetchone()) for i in json.loads(row['attachments'])])
         task_feedback_projection(c,task,names)
     return result|dict(feedback=feedback,task=task,completion_changed=changed)
+
+def task_subject(task):
+    """The one saved subject of a task's new feedback, read from the subjects its card already shows. A joint item keeps
+    all of them on one record (数学·科学); an unknown subject or an item of no course (综合, 回执) stays empty, never guessed."""
+    agenda=task.get('agenda') or {}
+    subject='·'.join(agenda.get('subjects') or []) if agenda.get('subject_state')=='known' else ''
+    return subject if len(subject)<=80 else ''
 
 def task_feedback_projection(c,task,names):
     """The task as returned after feedback or an explicit record link: its status history and both kinds of attached records."""
