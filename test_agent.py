@@ -5940,5 +5940,75 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
                                                   '2026-10-06',brief),'a dated material announcement is not an instruction to do the paper')
 
 
+class SchoolRefreshClaimCostTest(unittest.TestCase):
+    """Invented data only: done, backing-off and exhausted school notices never project every saved task again."""
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(prefix='synthetic-agent-')
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve(); self.data = self.root / 'private'; self.data.mkdir()
+        (self.root / '家庭运行规则.md').write_text('| child-1 | 示例甲 | 男 | 10岁 | 四年级 |\n| child-2 | 示例乙 | 男 | 13岁 | 初一 |\n')
+        self.app = family_review.load_app(self.root, self.data)
+        self.store = agent.Store(self.app.connect, self.app.profiles, self.data, app=self.app)
+        self.now = dt.datetime(2026, 2, 10, 8, tzinfo=agent.TZ)
+        source = dict(id='synthetic-group', platform='wechat', child_id='child-1', name='虚构班级', cursor='10', enabled=True)
+        (self.data / 'agent.json').write_text(json.dumps({'enabled': True, 'sources': [source]}))
+        stamp = self.now.isoformat()
+        self.store.ingest(dict(source_id=source['id'], expected_cursor='10', cursor='11', checked_at=stamp, last_message_time=stamp, error='',
+            messages=[dict(id='11', time=stamp, kind='text', sender='示例老师', text='语文：完成虚构练习第3页，明天交。', unread=False)]))
+        evidence = json.dumps([dict(ref='message:synthetic-group:11', text='虚构')])
+        with self.app.connect() as c:
+            c.execute('INSERT INTO manual_tasks VALUES (?,?,?,?,?,?,?)', ('M1', '示例甲', '虚构作业', '2026-02-11', '待开始',
+                      'Agent建议:synthetic-accepted\nmessage:synthetic-group:11', '完成虚构练习'))
+            # A recovered (non-batch) school job id: a not-current notice reaches the claim without a legacy batch scope.
+            for ident, state, task in [('synthetic-accepted', 'accepted', 'M1')] + [('synthetic-pending-%d' % n, 'pending', '') for n in range(4)]:
+                c.execute('INSERT INTO agent_items(id,job_id,child_id,kind,title,body,evidence,due,state,created,updated,task_id,plan) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (ident, 'school-ack-originals:synthetic', 'child-1', 'school', '语文：虚构练习', '完成虚构练习第3页', evidence, '', state, stamp, stamp, task,
+                     json.dumps(dict(school_task=dict(advice='', purpose='', goal='完成虚构练习第3页')))))
+        self.keys = ['school-task:synthetic-pending-%d' % n for n in range(4)]
+
+    def refresh(self, targets=None):
+        counted = unittest.mock.Mock(wraps=agent.school_targets); sent = []
+        def model(messages, *args, **kwargs):
+            sent.append(messages[-1]['content']); raise agent.family_llm.LLMDraftError('synthetic model failure')
+        with patch.object(agent, 'school_targets', targets or counted), patch.object(agent.family_llm, '_chat_json', side_effect=model):
+            agent._refresh_school(self.app, self.store, self.now, 4)
+        return counted.call_count, sent
+
+    def jobs(self):
+        with self.app.connect() as c:
+            return {r['id']: dict(r) for r in c.execute("SELECT * FROM agent_jobs WHERE id LIKE 'school-task:%' ORDER BY id")}
+
+    def test_refused_claims_skip_targets_and_lookup_failure_spends_no_attempt(self):
+        projected, first = self.refresh()
+        self.assertEqual((projected, len(first), list(self.jobs()), [j['attempts'] for j in self.jobs().values()]), (4, 4, self.keys, [1, 1, 1, 1]))
+        context = json.loads(first[3])
+        self.assertEqual(list(context)[:6], ['as_of', 'candidate', 'child_id', 'evidence', 'learning_goals', 'school_tasks'])  # _json sorts keys
+        self.assertEqual([t['id'] for t in context['school_tasks']], ['M1'])
+        with self.app.connect() as c:  # done, still backing off, exhausted, and one due again
+            c.execute('UPDATE agent_jobs SET done=1 WHERE id=?', (self.keys[0],))
+            c.execute("UPDATE agent_jobs SET next_try='2026-02-11T08:00:00+08:00' WHERE id=?", (self.keys[1],))
+            c.execute("UPDATE agent_jobs SET attempts=?,next_try='' WHERE id=?", (agent.MAX_ATTEMPTS, self.keys[2]))
+            c.execute("UPDATE agent_jobs SET next_try='' WHERE id=?", (self.keys[3],))
+        before = self.jobs()
+        with self.assertRaises(agent.sqlite3.OperationalError):
+            self.refresh(unittest.mock.Mock(side_effect=agent.sqlite3.OperationalError('synthetic target failure')))
+        with patch('family_goals.Store.school_candidates', side_effect=agent.sqlite3.OperationalError('synthetic goal failure')):
+            with self.assertRaises(agent.sqlite3.OperationalError): self.refresh()
+        self.assertEqual(self.jobs(), before)  # a failed lookup still precedes the claim: no attempt spent
+        projected, second = self.refresh()
+        self.assertEqual((projected, second), (1, [first[3]]))  # only the due notice, with the same input and key order
+        self.assertEqual({k: v for k, v in self.jobs().items() if k != self.keys[3]}, {k: v for k, v in before.items() if k != self.keys[3]})
+        self.assertEqual(self.jobs()[self.keys[3]]['attempts'], 2)
+        # A later request reads current tasks and ownership: rename the child and correct the task between requests.
+        with self.app.connect() as c:
+            c.execute("UPDATE manual_tasks SET title='虚构作业（已更正）' WHERE id='M1'")
+            c.execute("UPDATE agent_jobs SET next_try='' WHERE id=?", (self.keys[3],))
+        self.app.save_profile(dict(child_id='child-1', name='示例丙', grade='四年级', classroom='', reason='虚构更正', version=0))
+        projected, third = self.refresh()
+        tasks = json.loads(third[0])['school_tasks']; text = json.dumps(tasks, ensure_ascii=False)
+        self.assertEqual((projected, [t['id'] for t in tasks]), (1, ['M1']))
+        self.assertIn('虚构作业（已更正）', text); self.assertNotIn('"虚构作业"', text)
+
+
 if __name__ == '__main__':
     unittest.main()
