@@ -46,6 +46,12 @@
 !/vendor/three.module.min.js
 !/vendor/three.core.min.js
 !/vendor/THREE-LICENSE.txt
+!/vendor/wrong-notebook/
+/vendor/wrong-notebook/*
+!/vendor/wrong-notebook/LICENSE
+!/vendor/wrong-notebook/image-crop.ts
+!/vendor/wrong-notebook/image-crop.js
+!/vendor/wrong-notebook/PROVENANCE.json
 
 !/test_print_ui.js
 
@@ -204,6 +210,7 @@
 
 !/family_wrong_review.py
 !/test_wrong_review.py
+!/test_wrong_regions.py
 !/wrong-review.js
 !/wrong-review.css
 !/test_wrong_review_ui.cjs

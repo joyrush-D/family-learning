@@ -172,3 +172,10 @@ CLI每次在独立子进程加载库，强制只读，限定显式配置的群�
 该SDK的[历史缓冲](https://github.com/tencent-connect/qqbot-nodejs/blob/ca55d9c395b582b7fcfad0ec27209c35dd04e0b3/src/middleware/history-buffer.ts)只缓存已收到的消息，不能证明可拉取入群前或断线期间的历史。SDK也提供会话RESUME与持久化接口，不能断言所有离线消息永远丢失；有效会话恢复与任意历史拉取是不同能力，恢复范围仍需实测。隔离网关检查发现该版本先保存接收序号，再调用异步业务处理；不得把此序号直接当作本产品已入库位置，接入前必须验证业务落盘、恢复位置和失败重放的先后关系。历史缺口、重连、重复事件、原件下载和桌面同时使用均需实测，不能沿用或推进旧个人QQ协议游标。当前未安装到生产、未启用来源；LLBot、具名Cua宿主和人工导入候选继续保留。
 
 SDK源码标示MIT；本轮只在私有实验目录执行公开解析代码，未把SDK或其依赖打包到产品。以后接入时核对实际分发版本和依赖许可。QQDecrypt的Mac ARM教程仍无当前QQ版本验证且要求调试/SIP配合，不作为默认本地数据库读取路线；不修改客户端或系统保护来试错。
+
+## wrong-notebook（原图框题，MIT）
+
+- 来源：[margrop/wrong-notebook](https://github.com/margrop/wrong-notebook) 固定提交 `03153ef7f9050f8df20247610888fc16c04c55e5`；MIT，Copyright (c) 2025 wttwins、(c) 2026 margrop，完整许可见 `vendor/wrong-notebook/LICENSE`。
+- 只复用 `src/lib/image-crop.ts` 的 `toSafeImageSrc`、`regionFromPoints`、`cropImageRegions`：原 TS 原样保留，浏览器加载的 `image-crop.js` 仅由 Node 24 `stripTypeScriptTypes` 去类型，算法未改；版本、哈希与改动见 `vendor/wrong-notebook/PROVENANCE.json`。
+- 运行位置：原作业已存作答下的“手记错题”表单，家长可选在原图上框题；裁片只在浏览器临时生成预览，不新增上传或附件，原图不变。保存仍是原错题记录，另以 `wrong_regions` 窄表记原图、原作答版本与 0–1 范围。
+- 未接：上游 Next/Prisma 应用与数据库、打印/组卷、相似题、AI 掌握概率、复习调度与标签后台。

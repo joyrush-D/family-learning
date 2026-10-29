@@ -5,7 +5,10 @@
 普通学习记录（category=学习进展、来源“错题照片核对”）；原作业反馈可手填并复用照片，
 不判知识点、错因或掌握程度，后续订正/复测沿用既有学习记录链。
 """
+import functools
+import hashlib
 import json
+import math
 import re
 import sqlite3
 
@@ -18,6 +21,16 @@ IMAGE_MIMES = {'image/jpeg', 'image/png', 'image/webp'}
 ANNOTATE_TIMEOUT = 150
 MAX_SAVE_ITEMS = 30
 SOURCE = '错题照片核对'
+# 原图框题（wrong-notebook image-crop.ts 的 0–1 范围）只是原错题记录的窄元数据：原图、原作答版本与范围冻结在这里，
+# records 的来源、附件与诊断依据不变；裁片只在浏览器临时生成，不进 uploads/attachments。
+REGION_KEYS = {'x', 'y', 'width', 'height', 'natural_width', 'natural_height'}
+MIN_REGION_PX = 16
+REGION_TABLE = ('CREATE TABLE IF NOT EXISTS wrong_regions (record_id INTEGER PRIMARY KEY, child_id TEXT NOT NULL, '
+                'task_id TEXT NOT NULL, feedback_record_id INTEGER NOT NULL, feedback_created TEXT NOT NULL, '
+                'upload_id TEXT NOT NULL, upload_sha256 TEXT NOT NULL, natural_w INTEGER NOT NULL, natural_h INTEGER NOT NULL, '
+                'x REAL NOT NULL, y REAL NOT NULL, width REAL NOT NULL, height REAL NOT NULL, created TEXT NOT NULL)')
+REGION_FIELDS = ('child_id', 'task_id', 'feedback_record_id', 'feedback_created', 'upload_id', 'upload_sha256',
+                 'natural_w', 'natural_h', 'x', 'y', 'width', 'height')
 
 
 class WrongReviewError(ValueError):
@@ -37,6 +50,75 @@ def _text(obj, key, limit, *, required=False, name=None):
     if len(value) > limit:
         raise WrongReviewError('%s过长，请缩短后重试' % (name or key))
     return value
+
+
+def _region(value, index):
+    """浏览器经 regionFromPoints 得到的范围：有限数字、落在图内且不小于最小像素；服务端不信任客户端。"""
+    if not isinstance(value, dict) or set(value) != REGION_KEYS:
+        raise WrongReviewError('第%d条错题的框选范围格式不正确' % index)
+    for key in REGION_KEYS:
+        number = value[key]
+        if type(number) not in (int, float) or not math.isfinite(number):
+            raise WrongReviewError('第%d条错题的框选范围格式不正确' % index)
+    w, h = value['natural_width'], value['natural_height']
+    if type(w) is not int or type(h) is not int or not (0 < w <= 65535 and 0 < h <= 65535):
+        raise WrongReviewError('第%d条错题的原图尺寸无法核对' % index)
+    x, y, width, height = (float(value[k]) for k in ('x', 'y', 'width', 'height'))
+    if x < 0 or y < 0 or width <= 0 or height <= 0 or x + width > 1 + 1e-9 or y + height > 1 + 1e-9:
+        raise WrongReviewError('第%d条错题的框选超出原图范围' % index)
+    if width * w < MIN_REGION_PX or height * h < MIN_REGION_PX:
+        raise WrongReviewError('第%d条错题的框选太小，请框住整道题' % index)
+    return dict(x=x, y=y, width=width, height=height, natural_width=w, natural_height=h)
+
+
+def _image_size(data, mime):
+    """复用打印模块已有的 JPEG/PNG 头读取；不支持的格式返回 None，不猜尺寸。"""
+    import family_print
+    try:
+        size = (family_print._jpeg(data) if mime == 'image/jpeg' else family_print._png(data) if mime == 'image/png' else None)
+    except family_print.PrintError:
+        return None
+    return size[:2] if size else None
+
+
+@functools.lru_cache(maxsize=64)
+def _file_sha256(path, mtime_ns, size):
+    return hashlib.sha256(pathlib_read(path)).hexdigest()
+
+
+def pathlib_read(path):
+    with open(path, 'rb') as handle:
+        return handle.read()
+
+
+def read_regions(app, c, records, names):
+    """只读：表存在才附带范围；原孩子/事项/原作答版本/原图任一变化即为旧依据，不移挂、不写回。"""
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wrong_regions'").fetchone():
+        return
+    by_id = {r['id']: r for r in records}
+    profile_ids = {p['name']: p['id'] for p in app.profiles(c)}
+    for row in c.execute('SELECT * FROM wrong_regions ORDER BY record_id'):
+        record = by_id.get(row['record_id'])
+        if record is None:
+            continue
+        feedback = by_id.get(row['feedback_record_id'])
+        path = app.DATA / 'uploads' / row['upload_id']
+        try:
+            stat = path.stat()
+            same_file = not path.is_symlink() and _file_sha256(str(path), stat.st_mtime_ns, stat.st_size) == row['upload_sha256']
+        except OSError:
+            same_file = False
+        current = bool(
+            feedback is not None and same_file
+            and profile_ids.get(names.get(record['child'], record['child'])) == row['child_id']
+            and profile_ids.get(names.get(feedback['child'], feedback['child'])) == row['child_id']
+            and record['related_record_id'] == row['feedback_record_id'] and record['linked_task_id'] == row['task_id']
+            and record['source'] == SOURCE and feedback['created'] == row['feedback_created']
+            and row['upload_id'] in feedback['attachments']
+            and (feedback['source'] == '事项:' + row['task_id'] or feedback['linked_task_id'] == row['task_id']))
+        record['wrong_region'] = dict(upload_id=row['upload_id'], feedback_record_id=row['feedback_record_id'],
+                                      task_id=row['task_id'], x=row['x'], y=row['y'], width=row['width'], height=row['height'],
+                                      natural_width=row['natural_w'], natural_height=row['natural_h'], current=current)
 
 
 class Store:
@@ -131,11 +213,18 @@ class Store:
                 if not isinstance(item, dict):
                     raise WrongReviewError('第%d条错题格式不正确' % index)
                 attachment = item.get('attachment')
+                region = item.get('region')
                 if attachment in (None, '') and task_id:
                     attachment = ''
+                    mime = ''
                 else:
                     row, _ = self._image_row(c, attachment)
                     attachment = row['id']
+                    mime = row['mime']
+                if region is not None:
+                    if not task_id or not attachment:
+                        raise WrongReviewError('原图框题只能从原作业已保存的照片记录')
+                    region = _region(region, index)
                 label = _text(item, 'label', fwq.LIMITS['label'], name='题号')
                 text = _text(item, 'text', fwq.LIMITS['text'], name='题面')
                 answer = _text(item, 'answer', fwq.LIMITS['answer'], name='原答案')
@@ -147,7 +236,7 @@ class Store:
                     raise WrongReviewError('第%d条错题没有可保存的内容' % index)
                 parsed.append(dict(attachment=attachment, label=label, text=text,
                                    answer=answer, correction=correction, note=note_extra,
-                                   topic_hint=topic_hint, error_hint=error_hint))
+                                   topic_hint=topic_hint, error_hint=error_hint, region=region, mime=mime))
 
         records = []
         for index, item in enumerate(parsed, 1):
@@ -177,6 +266,9 @@ class Store:
             if feedback_id is not None:
                 record['related_record_id'] = feedback_id
                 record['linked_task_id'] = task_id
+            if item['region'] is not None:
+                # 范围进入原提交指纹：同一提交标识改了框即 request_conflict，零写入。
+                record['wrong_region'] = dict(item['region'], upload_id=item['attachment'])
             if len(record['note']) > 4000:
                 raise WrongReviewError('第%d条错题总内容超过4000字，本批尚未保存；请精简题面、原答、订正或备注后重试，草稿仍保留。' % index)
             records.append(record)
@@ -197,8 +289,35 @@ class Store:
                         feedback['created'] != feedback_created or
                         any(item['attachment'] and item['attachment'] not in json.loads(feedback['attachments']) for item in parsed)):
                     raise WrongReviewError('原作业反馈、孩子或照片已变化，请从原作业重新核对', 409, 'wrong_feedback_changed')
-            for record in records:
+            framed = [item for item in parsed if item['region'] is not None]
+            if framed:
+                if (feedback['subject'] or '') != subject:
+                    raise WrongReviewError('错题科目与原作答不一致，请从原作业重新核对', 409, 'wrong_feedback_changed')
+                child_id = next(p['id'] for p in self.app.profiles(c) if p['name'] == child)
+                for item in framed:
+                    data = (self.app.DATA / 'uploads' / item['attachment']).read_bytes()
+                    size = _image_size(data, item['mime'])
+                    region = item['region']
+                    # 浏览器按方向显示的自然尺寸只能等于原文件尺寸或其90°旋转；其他一律不核准。
+                    if size is None or (region['natural_width'], region['natural_height']) not in (size, size[::-1]):
+                        raise WrongReviewError('照片尺寸无法与原件核对，未保存框选；可不框直接保存', 409, 'wrong_region_unverified')
+                    item['meta'] = dict(child_id=child_id, task_id=task_id, feedback_record_id=feedback_id,
+                                        feedback_created=feedback_created, upload_id=item['attachment'],
+                                        upload_sha256=hashlib.sha256(data).hexdigest(),
+                                        natural_w=region['natural_width'], natural_h=region['natural_height'],
+                                        x=region['x'], y=region['y'], width=region['width'], height=region['height'])
+                c.execute(REGION_TABLE)
+            for record, item in zip(records, parsed):
                 result = self.app.save_record(record, connection=c)
+                if item['region'] is not None:
+                    meta = item['meta']
+                    prior = c.execute('SELECT * FROM wrong_regions WHERE record_id=?', (result['record_id'],)).fetchone()
+                    if result.get('replayed'):
+                        if prior is None or any(prior[k] != meta[k] for k in REGION_FIELDS):
+                            raise WrongReviewError('同一提交标识的框选与已保存的不一致，请先核对原提交', 409, 'request_conflict')
+                    else:
+                        c.execute('INSERT INTO wrong_regions (record_id,%s,created) VALUES (?,%s,?)' % (','.join(REGION_FIELDS), ','.join('?' * len(REGION_FIELDS))),
+                                  (result['record_id'], *(meta[k] for k in REGION_FIELDS), self.app.dt.datetime.now().isoformat(timespec='seconds')))
                 saved.append(dict(id=result.get('record_id'),
                                   existing=bool(result.get('replayed')), title=record['title']))
         return dict(ok=True, saved=saved, count=len(saved))
