@@ -110,7 +110,10 @@ LEGACY_MODEL_FILE_KEYS=MODEL_FILE_KEYS-{'light_model'}
 # The light effort is one optional key on either saved shape; missing or empty inherits reasoning_effort.
 MODEL_FILE_SHAPES=(LEGACY_MODEL_FILE_KEYS,MODEL_FILE_KEYS,LEGACY_MODEL_FILE_KEYS|{'light_reasoning_effort'},MODEL_FILE_KEYS|{'light_reasoning_effort'})
 REASONING_EFFORTS=('none','minimal','low','medium','high','xhigh','max')
-LIGHT_TASKS={'family_agent_selection','family_light_connection_test'}
+# Plain-text message screening and its connection check take the light effort tier.
+LIGHT_EFFORT_TASKS={'family_agent_selection','family_light_connection_test'}
+# Plain-text school drafting from already-read originals also runs on the light model, but keeps reasoning_effort.
+LIGHT_TASKS=LIGHT_EFFORT_TASKS|{'family_school_task'}
 LEDGER_TABLE='llm_usage_ledger'
 
 
@@ -625,14 +628,16 @@ def _chat_json(messages,schema,name,timeout=60,*,data_path=None):
     config=model_values(data_path)
     endpoint,model=validate_model(config)
     light=config.get('light_model','').strip()
-    # The light effort follows the light role actually chosen here, never a model name match.
-    light_selected=False
+    # The model follows the task and plain-text content actually sent here, never a model name match or a retry.
+    light_model_selected=False
     if name=='family_light_connection_test':
         if not light or not _light_request(name,messages):
             raise LLMUnavailable('轻模型未配置，无法检查轻模型连接')
-        model=light;light_selected=True
+        model=light;light_model_selected=True
     elif _light_request(name,messages) and light:
-        model=light;light_selected=True
+        model=light;light_model_selected=True
+    # The effort tier is a separate choice: only screening tasks on the light model take light_reasoning_effort.
+    light_effort_tier=light_model_selected and name in LIGHT_EFFORT_TASKS
     # 错题图片标注每页最多30个区域并转写题面，3000输出token会截断整批草稿。
     output_tokens = 6000 if name in ('family_agent_selection', 'family_wrong_questions_annotate', 'family_homework_reference') else 3000
     output_name={'family_learning_answer':'回答','family_reading_feedback':'反馈','family_guided_hint':'提示'}.get(name,'草稿')
@@ -662,7 +667,7 @@ def _chat_json(messages,schema,name,timeout=60,*,data_path=None):
         body=dict(model=model,input=inputs,text=dict(format=dict(type='json_schema',name=name,strict=True,schema=schema)),
                   temperature=0,max_output_tokens=output_tokens,stream=False,store=False)
     effort=config['reasoning_effort']
-    if light_selected and config.get('light_reasoning_effort',''):
+    if light_effort_tier and config.get('light_reasoning_effort',''):
         effort=config['light_reasoning_effort']
     if effort:
         if effort not in REASONING_EFFORTS:

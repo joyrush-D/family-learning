@@ -920,4 +920,67 @@ def light_effort_transport_contract():
 light_reports=light_effort_transport_contract()
 assert len(light_reports)==14 and sum(row['effort']=='none' for row in light_reports)==4
 
+def school_task_light_route_contract():
+    """Plain-text school drafting takes the light model with reasoning_effort; screening keeps the light tier; non-text or no light model keeps the default."""
+    import io
+    captured=[]
+    class Transport:
+        def __init__(self,responses,fail=False):self.responses=responses;self.fail=fail
+        def open(self,request,timeout):
+            captured.append((json.loads(request.data),timeout))
+            if self.fail:raise OSError('fictional transport failure')
+            text=json.dumps({'ok':True})
+            if not self.responses:return io.BytesIO(json.dumps({'choices':[{'finish_reason':'stop','message':{'content':text}}]}).encode())
+            return io.BytesIO(json.dumps({'status':'completed','output':[{'type':'message','role':'assistant','status':'completed',
+                                                                           'content':[{'type':'output_text','text':text}]}]}).encode())
+    schema=dict(type='object',additionalProperties=False,required=['ok'],properties=dict(ok=dict(type='boolean')))
+    text=[dict(role='system',content='只处理全虚构学校整理示例。'),dict(role='user',content='{"fictional":"已读原件文字"}')]
+    image=[dict(role='system',content='只处理全虚构示例。'),dict(role='user',content=[dict(type='text',text='虚构'),dict(type='image_url',image_url=dict(url='data:image/png;base64,AA=='))])]
+    video=[dict(role='system',content='只处理全虚构示例。'),dict(role='user',content=[dict(type='video_url',video_url=dict(url='data:video/mp4;base64,AA=='))])]
+    base=dict(FAMILY_LLM_BASE_URL='https://fictional-provider.invalid/v1',FAMILY_LLM_MODEL='fictional-main',FAMILY_LLM_LIGHT_MODEL='fictional-light',
+              FAMILY_LLM_API_KEY='',FAMILY_LLM_REASONING_EFFORT='low',FAMILY_LLM_LIGHT_REASONING_EFFORT='none')
+    def send(messages,task,timeout=45,responses=False,fail=False,**change):
+        env={**base,**change}
+        if responses:env['FAMILY_LLM_BASE_URL']=env['FAMILY_LLM_BASE_URL']+'/responses'
+        with patch.dict(os.environ,env,clear=True),patch.object(llm,'build_opener',return_value=Transport(responses,fail)):
+            assert llm._chat_json(messages,schema,task,timeout)=={'ok':True}
+        return captured[-1]
+    effort=lambda body:body['reasoning']['effort'] if 'reasoning' in body else body.get('reasoning_effort')
+    tokens=lambda body:body.get('max_tokens',body.get('max_output_tokens'))
+    for responses in (False,True):
+        # Already-read school text: light model, the main reasoning_effort (never the light none), 3000/45 unchanged.
+        body,wait=send(text,'family_school_task',responses=responses)
+        assert (body['model'],effort(body),tokens(body),wait)==('fictional-light','low',3000,45)
+        # Message screening on the light model keeps the light tier and its 6000/45 budget.
+        body,wait=send(text,'family_agent_selection',responses=responses)
+        assert (body['model'],effort(body),tokens(body),wait)==('fictional-light','none',6000,45)
+        # An empty or none main effort is followed as configured, not replaced by a hard-coded low.
+        body,_=send(text,'family_school_task',responses=responses,FAMILY_LLM_REASONING_EFFORT='')
+        assert body['model']=='fictional-light' and 'reasoning' not in body and 'reasoning_effort' not in body
+        body,_=send(text,'family_school_task',responses=responses,FAMILY_LLM_REASONING_EFFORT='none',FAMILY_LLM_LIGHT_REASONING_EFFORT='')
+        assert body['model']=='fictional-light' and effort(body)=='none'
+        body,_=send(text,'family_school_task',responses=responses,FAMILY_LLM_REASONING_EFFORT='medium',FAMILY_LLM_LIGHT_REASONING_EFFORT='minimal')
+        assert body['model']=='fictional-light' and effort(body)=='medium'
+        # No light model: the default model with the main effort.
+        body,wait=send(text,'family_school_task',responses=responses,FAMILY_LLM_LIGHT_MODEL='')
+        assert (body['model'],effort(body),tokens(body),wait)==('fictional-main','low',3000,45)
+        # Any non-string message keeps the default model, for school drafting and screening alike.
+        for messages in (image,)+((video,) if not responses else ()):
+            for task in ('family_school_task','family_agent_selection'):
+                body,_=send(messages,task,responses=responses)
+                assert body['model']=='fictional-main' and effort(body)=='low'
+        # Other text tasks, even with the same name pattern, stay on the default model.
+        for task in ('family_wrong_questions_annotate','family_homework_reference','family_learning_draft','family_school_task_review'):
+            body,_=send(text,task,responses=responses)
+            assert body['model']=='fictional-main' and effort(body)=='low'
+        # A light failure is reported as is: one request, no second call to the default model.
+        before=len(captured)
+        try:send(text,'family_school_task',responses=responses,fail=True)
+        except llm.LLMDraftError:pass
+        else:raise AssertionError('light school drafting failure unexpectedly succeeded')
+        assert len(captured)==before+1 and captured[-1][0]['model']=='fictional-light'
+    return len(captured)
+
+assert school_task_light_route_contract()==28
+
 print('PASS: draft, reading feedback, guided hints, audio and bounded usage ledger; isolated HTTP, redaction, failure and interruption checks')
