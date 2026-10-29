@@ -256,6 +256,9 @@
 !/test_school_material_requirements_ui.cjs
 !/test_school_action_inventory.py
 !/test_daily_list_frozen.py
+!/test_daily_list_progress.py
+!/test_daily_list_whole_day.py
+!/test_daily_list_progress_ui.cjs
 
 !/family_preview.py
 !/test_original_cover.py

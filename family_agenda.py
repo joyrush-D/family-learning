@@ -141,6 +141,18 @@ def _action_deadlines(text,published):
         if not anchor:continue
         try:candidates.add((dt.date.fromisoformat(anchor)+dt.timedelta(days=offset)).isoformat())
         except OverflowError:pass
+    # A day directly heading the child's own preparation of a thing (明天准备好一条短绳、周四请家长准备齐三支彩笔) ties it as
+    # 明天带 does. A negation (不用准备好), an option (可以准备、自愿准备) or a question or condition in its clause (如果下雨、
+    # 是否准备好) states no requirement, and a name or state after the word (准备活动、准备好的材料) is no predicate (_PREPARE).
+    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)([^。；;，,\n]{0,8}?)'+_PREPARE,text):
+        clause=re.split(r'[。；;，,\n]',text[:match.start()])[-1]+re.split(r'[。；;，,\n]',text[match.start():])[0]
+        if (re.search(_NEGATED_LEAD+r'$',match[2]) or re.search(r'可|自愿|自选|酌情|视情况|建议|尽量|最好|如有|有条件',match[2])
+                or re.search(r'吗|[？?]|如果|假如|若是|要是|是否|万一|如需|仅供参考',clause)):continue
+        value=date(match[1])
+        if not value and anchor:
+            try:value=(dt.date.fromisoformat(anchor)+dt.timedelta(days={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[match[1]])).isoformat()
+            except OverflowError:pass
+        if value:candidates.add(value)
     for match in re.finditer(r'(?:报名|填报|选课|提交|上交)时间\s*[：:为是]*\s*(\d{4}-\d{2}-\d{2})([^。；;\n]*)',text):
         day,tail=match.groups()
         clock=r'(?:[01]?\d|2[0-3])[:：][0-5]\d'
@@ -185,6 +197,9 @@ def _action_deadlines(text,published):
 
 
 _EVENT_DAY=r'\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天'
+# Preparing a thing as the predicate: 准备 completed by 好/齐 or taking a counted thing (准备好一条短绳、准备两支彩笔), never a
+# name or state it stands in (准备活动、准备好的材料、准备好了吗).
+_PREPARE=r'准备(?:好|齐|(?=[一二两三四五六七八九十几0-9]+\s*[个条支张本份根把件双套盒包瓶块片枚只袋副]))(?![了过的着吗])'
 _DAY_WORDS=r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}|今天|今日|今晚|明天|明日|明早|明晚|后天|昨天|前天|(?:周|星期|礼拜)[一二三四五六日天]'
 # Who is asked to attend: everyone, a counted few (一位家长、两名学生) or a named group.
 _ATTENDEE=r'(?:各位|全体|(?:至少)?[一二两1-2]\s*(?:位|名))?(?:家长|学生|同学们?|孩子们?)?'
@@ -398,11 +413,55 @@ _CARRIED_NAME=(r'(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|'+_EVENT_CLAUSE_WORD+r'
 # The same carrying with the lesson named first (T06: 附件是明天带去课堂的实验观察表): a thing of its own after 的, no other predicate.
 _CARRIED_TO=(r'(?:(?:附件|这份?|此表)(?:是|为)\s*)?(?:'+family_agent._SCHOOL_NATIVE_DATE+r'|明早)\s*(?:(?:早上|上午|中午|下午)\s*)?(?:要|需|须|请)?\s*'
              r'带去(?:课堂|教室|学校|[一-鿿]{1,4}课)上?的\s*(?:(?:(?!'+_CARRIED_VERB+r')[^\s，,])+|'+_CARRIED_NAME+r')')
+# Who is asked, before a clause's day or its predicate (请家长今晚…、明天请孩子…), and how firmly (要、须、记得).
+_PREPARED_ASKER=r'\s*(?:请\s*)?(?:(?:家长|孩子|学生|同学们?)\s*)?(?:(?:要|需|须|务必|记得)\s*)?'
+# One thing a clause prepares as its own object (两张实验观察表、一条短绳、《_____》): its count, then a name ending in its own
+# noun or a plain name with no other predicate, carrying, state, day or clause word in it.
+_PREPARED_THING=(r'(?:[一二两三四五六七八九十几0-9]+\s*[个条支张本份根把件双套盒包瓶块片枚只袋副]\s*)?'
+                 r'(?:'+_CARRIED_NAME+r'|(?:(?!'+_CARRIED_VERB+r'|带|'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|'+_EVENT_CLAUSE_WORD+r')[^\s，,])+)')
+
+
+def _own_clauses(sentence):
+    """One sentence's clauses as _day_clauses reads them: 《》 titles as objects, each after its own course label."""
+    course=_subject_patterns()[2].pattern
+    label=r'^\s*(?:'+course+r')(?:\s*[和与及、]\s*(?:'+course+r'))*\s*[：:]\s*'
+    return [re.sub(label,'',_titles_read_as_objects(c)) for c in re.split(r'[，,]',sentence or '')]
+
+
+def prepared_carry(sentence,published):
+    """(i, i+1) when clause i of one sentence prepares one thing at home on its own day by the proven preparation predicate
+    (_PREPARE) and the directly following clause only carries it (bare 带去) to its lesson or school on a later own day.
+
+    今晚准备好两张实验观察表，明天科学课带去 is one item's two phases, as 今晚请家长签字，明天交回 is: the carried thing is the
+    one this sentence proves, never guessed as handed in. Another object or a second thing, a negated, optional or conditional
+    preparation, another predicate or role in either clause, a question, condition or change anywhere in the sentence, or a
+    carrying day not after the preparation day gives None.
+    """
+    if not date(published) or re.search(r'如果|假如|若|要是|是否|吗|[？?]|万一|如需|可能|或许|也许|或|'+_EVENT_STATE,
+                                        _titles_read_as_objects(sentence or '')):return None
+    raw=re.split(r'[，,]',sentence);own=_own_clauses(sentence)
+    day=family_agent._SCHOOL_ROLE_DAY
+    for i in range(len(own)-1):
+        prep=re.fullmatch(_PREPARED_ASKER+r'('+day+r')\s*(?:早上|上午|中午|下午|晚上)?'+_PREPARED_ASKER+_PREPARE+r'\s*('+_PREPARED_THING+r')\s*',own[i])
+        carry=re.fullmatch(_PREPARED_ASKER+r'('+day+r')(?:'+family_agent._SCHOOL_LESSON_PLACE+r'(?:上|时)?|\s*(?:早上|上午|到校后?))?'
+                           +_PREPARED_ASKER+r'带去(?:课堂|教室|学校)?\s*',own[i+1])
+        if not prep or not carry or re.search(r'和|及|与|、',prep[2]):continue
+        done=family_agent._school_clause_day(raw[i],published);due=family_agent._school_clause_day(raw[i+1],published)
+        if done and due and done<due and _action_deadlines(raw[i],published)=={done}:return i,i+1
+    return None
 
 
 def _day_clauses(quote,due,published):
-    """The quote's own clauses naming due for themselves on their sending day, 《》 titles read as objects."""
-    return [_titles_read_as_objects(c) for c in re.split(r'[，,。；;！!？?\n]',quote or '') if date(published) and family_agent._school_clause_day(c,published)==due]
+    """The quote's own clauses naming due for themselves on their sending day, 《》 titles read as objects.
+
+    A clause's own course label (英语：、体育：、语文和数学：) names the item, not its predicate, as _school_clause_roles and
+    completion_day read it: each clause is read after it, so a quote keeping its subject header reads the same role as the
+    same words without it. Any other heading stays part of its clause.
+    """
+    course=_subject_patterns()[2].pattern
+    label=r'^\s*(?:'+course+r')(?:\s*[和与及、]\s*(?:'+course+r'))*\s*[：:]\s*'
+    return [re.sub(label,'',_titles_read_as_objects(c)) for c in re.split(r'[，,。；;！!？?\n]',quote or '')
+            if date(published) and family_agent._school_clause_day(c,published)==due]
 
 
 def date_meaning(quote,due,published,title='',goal=''):
@@ -434,14 +493,25 @@ def date_meaning(quote,due,published,title='',goal=''):
         # Only carrying a thing of its own on that day, at its lesson or arrival (明天体育课带跳绳), is the day's arrangement:
         # a day it must come before (11月5日前带跳绳), a negation, another predicate (准备好、不用带) or the work itself (明天带来)
         # stays the deadline, and the parent's own plan day is never touched.
+        # A bare 带去 carries what its own sentence proved prepared just before it (今晚准备好两张实验观察表，明天科学课带去): the same.
+        carried=[_own_clauses(s)[pair[1]] for s in re.split(r'[。；;！!？?\n]',quote or '') if (pair:=prepared_carry(s,published))]
         if own and not any(roles) and all(family_agent._school_native_errand(c,()) and re.search(_CARRIED,c) or re.fullmatch(_CARRIED_TO,c.strip())
-                                          for c in own):return 'arranged'
+                                          or c in carried for c in own):return 'arranged'
         # So is a lesson its own day directly heads (周五课堂用时间轴口头讲述、周五历史课…): what is done there is that lesson's,
         # never a home completion or deadline. A negated clause, a check, test or handing in there (明天英语课听写、周四数学课
-        # 交练习册) or another role on that day stays as it was.
+        # 交练习册), a thing prepared at home for it or a bound before it (明天体育课前准备好短绳) or another role on that day
+        # stays as it was.
         if own and not any(roles) and all(re.search(family_agent._SCHOOL_ROLE_DAY+family_agent._SCHOOL_LESSON_PLACE,c)
-                                          and not re.search(family_agent._SCHOOL_ARRANGEMENT+r'|完成|做完|写完|读完|'+family_agent._SCHOOL_SIGN+'|'+_EVENT_STATE_OBJECT,c)
+                                          and not re.search(family_agent._SCHOOL_ARRANGEMENT+r'|完成|做完|写完|读完|'+family_agent._SCHOOL_SIGN+'|'+_EVENT_STATE_OBJECT
+                                                            +'|'+_PREPARE+r'|(?:之前|以前|前)(?![一二两三四五六七八九十\d])',c)
                                           and not family_agent._school_negated_day(c) for c in own):return 'arranged'
+        # An assessment held at that lesson or 早读 (明天英语课听写、周五数学课测验、下周一早读抽背《山野》) is the teacher's check
+        # there, as 明天上课检查 is, never a home completion. A day it must come before, a negation, a change, a completion or
+        # another role on that day stays the deadline it was.
+        if own and not any(roles) and all(family_agent._school_lesson_assessment(c)
+                                          and not re.search(r'(?:之前|以前|前)(?![一二两三四五六七八九十\d])|完成|做完|写完|读完|'
+                                                            +family_agent._SCHOOL_SIGN+'|'+_EVENT_STATE+'|'+family_agent._SCHOOL_CHANGE,c)
+                                          and not family_agent._school_negated_day(c) for c in own):return 'inspection'
         return 'deadline'
     if due not in _action_deadlines(quote,published):return 'event'
     words,placed=family_agent._school_own_words(quote,0,len(quote.rstrip('。；;！!？? \n')),title,goal)
