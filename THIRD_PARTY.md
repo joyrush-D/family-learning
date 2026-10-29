@@ -1,5 +1,16 @@
 # 第三方复用与取舍
 
+## wrong-notebook：已评审的错题组件接法（2026-10-30，尚未接入）
+
+用户指定[margrop/wrong-notebook](https://github.com/margrop/wrong-notebook)，固定[03153ef](https://github.com/margrop/wrong-notebook/tree/03153ef7f9050f8df20247610888fc16c04c55e5)。该版本[LICENSE](https://github.com/margrop/wrong-notebook/blob/03153ef7f9050f8df20247610888fc16c04c55e5/LICENSE)标MIT，须保Copyright 2025 wttwins、2026 margrop及完整许可；当前只核代码，不导入题库、教材文本、示例或用户图片。计划保原TS、仅去类型JS、固定版本/哈希与改动清单，不能只复制未调用的文件称集成。
+
+首期复用[`image-crop.ts`](https://github.com/margrop/wrong-notebook/blob/03153ef7f9050f8df20247610888fc16c04c55e5/src/lib/image-crop.ts)的`toSafeImageSrc`、`regionFromPoints`、`cropImageRegions`，从原作业已存作答的现有错题表单进入。取原图为本地blob后框题，临时生成裁片；正式只保原图标识/哈希/尺寸、范围及原作答版本，重开仍从原图生成，不把裁片加入same_task原件。拟用现有主库中一对一关联原错题的最小范围元数据，避免改原记录与taxonomy依据；只在显式保存的事务中创建/写入，读取检查表存在而不建表。实现前须核原提交哈希、记录读取和409恢复契约，不镜像上游库或新造来源文本键。
+
+后续复用[`print-preview.ts`](https://github.com/margrop/wrong-notebook/blob/03153ef7f9050f8df20247610888fc16c04c55e5/src/lib/print-preview.ts)和[`exam-print.ts`](https://github.com/margrop/wrong-notebook/blob/03153ef7f9050f8df20247610888fc16c04c55e5/src/lib/exam-print.ts)的选择/留白/版式，经现有打印桥接，孩子题页与家长参考分别处理。`buildExamHtmlDocument`正文原样插入且默认CSS联网；必须由可信本地渲染提供正文并核离线资源后才能接。相似算法仅给同孩同科候选：Root执行原函数时数字123改124仍约97%，仅变图示可100%，不得据此自动合并题目或多记一次错误。不接上游AI概率50%即已掌握、非空原答即wrong_attempt、默认复习与另一套标签/模型后台；知识点和再试继续沿现有taxonomy/DeepTutor。
+
+已核：固定原函数在Node和浏览器的全虚构探针通过，浏览器一图两块裁剪尺寸/像素符合预期且原图不变，零产品模型调用。M4实际`claude-opus-5-5`完成限定评审（effort请求max，实际值未独立返回）；第一轮超时保留，补齐缺失schema和真实入口后同会话返回CHANGE，Root采纳上述限定。尚未将组件加入产品包、完成产品UI保存重开或部署，不以探针/评审当家庭功能或教学效果。
+
+
 2026-09-29 状态补充：家庭私有环境已使用专用 QQ 账号的隔离 NapCat 服务读取接口可见消息，原件和家长核对仍按本项目规则处理。NapCat 本体、登录态和配置均不随本仓库分发；下文“未安装/尚未持续采集”是早期候选研究记录，不代表当前家庭状态。公开代码继续只分发自有适配逻辑，第三方组件按各自许可独立使用。
 
 核查日期：2026-09-08；候选与实际状态更新至2026-09-14。以下分清已使用的代码、可接入的接口，以及交互参考；候选不代表已经接通。组件许可与本项目 MIT 许可分别保留。
