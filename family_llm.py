@@ -174,6 +174,21 @@ def _light_request(name,messages):
         isinstance(message,dict) and isinstance(message.get('content'),str) for message in messages)
 
 
+def _bound_change_selection(name,messages):
+    """A plain-text screening request whose one user JSON object carries product-bound changes (required_native_actions
+    with a change of ref, quote and time): reading that change is no screening, so it keeps reasoning_effort on the light
+    model. Any other name, shape, malformed or unrelated content is no bound change."""
+    users=[message['content'] for message in messages if message.get('role')=='user'] if _light_request(name,messages) else []
+    if name!='family_agent_selection' or len(users)!=1:return False
+    try:content=json.loads(users[0])
+    except (ValueError,RecursionError):return False
+    actions=content.get('required_native_actions') if isinstance(content,dict) else None
+    return isinstance(actions,list) and any(
+        isinstance(action,dict) and isinstance(action.get('changes'),list) and any(
+            isinstance(change,dict) and all(isinstance(change.get(key),str) and change[key].strip() for key in ('ref','quote','time'))
+            for change in action['changes']) for action in actions)
+
+
 def _ledger_path(data_path=None):
     value=data_path if data_path is not None else os.environ.get('FAMILY_DATA')
     if value is None or not str(value).strip(): return None
@@ -636,8 +651,9 @@ def _chat_json(messages,schema,name,timeout=60,*,data_path=None):
         model=light;light_model_selected=True
     elif _light_request(name,messages) and light:
         model=light;light_model_selected=True
-    # The effort tier is a separate choice: only screening tasks on the light model take light_reasoning_effort.
-    light_effort_tier=light_model_selected and name in LIGHT_EFFORT_TASKS
+    # The effort tier is a separate choice: only screening tasks on the light model take light_reasoning_effort;
+    # a selection carrying product-bound changes keeps reasoning_effort on that same light model.
+    light_effort_tier=light_model_selected and name in LIGHT_EFFORT_TASKS and not _bound_change_selection(name,messages)
     # 错题图片标注每页最多30个区域并转写题面，3000输出token会截断整批草稿。
     output_tokens = 6000 if name in ('family_agent_selection', 'family_wrong_questions_annotate', 'family_homework_reference') else 3000
     output_name={'family_learning_answer':'回答','family_reading_feedback':'反馈','family_guided_hint':'提示'}.get(name,'草稿')

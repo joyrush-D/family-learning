@@ -983,4 +983,84 @@ def school_task_light_route_contract():
 
 assert school_task_light_route_contract()==28
 
+def bound_change_selection_tier_contract():
+    """A screening request whose product-built required_native_actions carry a bound change keeps reasoning_effort on the
+    same light model; every other selection, the light connection check and other tasks keep their wire bytes and tier."""
+    import io
+    captured=[]
+    class Transport:
+        def __init__(self,responses):self.responses=responses
+        def open(self,request,timeout):
+            captured.append((request.data,timeout))
+            text=json.dumps({'ok':True})
+            if not self.responses:return io.BytesIO(json.dumps({'choices':[{'finish_reason':'stop','message':{'content':text}}]}).encode())
+            return io.BytesIO(json.dumps({'status':'completed','output':[{'type':'message','role':'assistant','status':'completed',
+                                                                           'content':[{'type':'output_text','text':text}]}]}).encode())
+    schema=dict(type='object',additionalProperties=False,required=['ok'],properties=dict(ok=dict(type='boolean')))
+    change=dict(ref='message:fictional-tier:2',quote='刚才的朗读不用家长签名。',time='2026-11-04T16:01:00+08:00',waived='朗读不用家长签名。')
+    def selection(actions=None,**extra):
+        content={'mode':'school','evidence':[{'ref':'message:fictional-tier:1','text':'语文：今晚朗读《虚构》2遍。'}],**extra}
+        if actions is not None:content['required_native_actions']=actions
+        return [dict(role='system',content='只处理全虚构筛选示例。'),dict(role='user',content=json.dumps(content,ensure_ascii=False,sort_keys=True))]
+    bound=selection([dict(quote='今晚朗读《虚构》2遍',changes=[change])])
+    base=dict(FAMILY_LLM_BASE_URL='https://fictional-provider.invalid/v1',FAMILY_LLM_MODEL='fictional-main',FAMILY_LLM_LIGHT_MODEL='fictional-light',
+              FAMILY_LLM_API_KEY='',FAMILY_LLM_REASONING_EFFORT='low',FAMILY_LLM_LIGHT_REASONING_EFFORT='none')
+    def send(messages,task,responses=False,**change_env):
+        env={**base,**change_env}
+        if responses:env['FAMILY_LLM_BASE_URL']=env['FAMILY_LLM_BASE_URL']+'/responses'
+        before=len(captured)
+        with patch.dict(os.environ,env,clear=True),patch.object(llm,'build_opener',return_value=Transport(responses)):
+            assert llm._chat_json(messages,schema,task,45)=={'ok':True}
+        assert len(captured)==before+1,'one request, no extra call or retry'
+        return captured[-1]
+    effort=lambda body:body['reasoning']['effort'] if 'reasoning' in body else body.get('reasoning_effort')
+    tokens=lambda body:body.get('max_tokens',body.get('max_output_tokens'))
+    # Unrelated or malformed content is no bound change: no actions, empty changes, a change missing ref/quote/time or
+    # blank, changes of another type, the same words in evidence or plain text, another top-level shape, two user messages.
+    ordinary=[selection(),selection([]),selection([dict(quote='q',changes=[])]),selection([dict(quote='q',changes=[{**change,'time':''}])]),
+              selection([dict(quote='q',changes=[{k:v for k,v in change.items() if k!='ref'}])]),selection([dict(quote='q',changes='changes')]),
+              selection([dict(quote='q',changes=[[change]])]),selection(['changes']),selection(evidence_note={'required_native_actions':[{'changes':[change]}]}),
+              [bound[0],dict(role='user',content='required_native_actions changes ref quote time 不用家长签名')],
+              [bound[0],dict(role='user',content=json.dumps([json.loads(bound[1]['content'])]))],
+              [bound[0],dict(role='user',content=bound[1]['content'][:-1])],
+              [bound[0],bound[1],dict(role='user',content=bound[1]['content'])]]
+    for responses in (False,True):
+        data,wait=send(bound,'family_agent_selection',responses=responses);body=json.loads(data)
+        # The configured light model, the configured default effort, the unchanged 6000/45 limits.
+        assert (body['model'],effort(body),tokens(body),wait)==('fictional-light','low',6000,45)
+        plain,plain_wait=send(selection([dict(quote='今晚朗读《虚构》2遍',changes=[])]),'family_agent_selection',responses=responses)
+        assert (json.loads(plain)['model'],effort(json.loads(plain)),tokens(json.loads(plain)),plain_wait)==('fictional-light','none',6000,45)
+        # Only the effort field differs from the same bytes sent on the screening tier.
+        with patch.object(llm,'_bound_change_selection',return_value=False):screened,_=send(bound,'family_agent_selection',responses=responses)
+        expected=json.loads(screened)
+        if responses:expected['reasoning']['effort']='low'
+        else:expected['reasoning_effort']='low'
+        assert data==json.dumps(expected,ensure_ascii=False,allow_nan=False).encode('utf-8')
+        for messages in ordinary:
+            assert not llm._bound_change_selection('family_agent_selection',messages)
+            body=json.loads(send(messages,'family_agent_selection',responses=responses)[0])
+            assert (body['model'],effort(body),tokens(body))==('fictional-light','none',6000)
+        # The configured effort is followed as is: empty sends none, medium sends medium; never a hard-coded value.
+        body=json.loads(send(bound,'family_agent_selection',responses=responses,FAMILY_LLM_REASONING_EFFORT='')[0])
+        assert body['model']=='fictional-light' and 'reasoning' not in body and 'reasoning_effort' not in body
+        body=json.loads(send(bound,'family_agent_selection',responses=responses,FAMILY_LLM_REASONING_EFFORT='medium')[0])
+        assert (body['model'],effort(body))==('fictional-light','medium')
+        # No light effort configured: the default effort, as every light selection already had.
+        body=json.loads(send(bound,'family_agent_selection',responses=responses,FAMILY_LLM_LIGHT_REASONING_EFFORT='')[0])
+        assert (body['model'],effort(body))==('fictional-light','low')
+        # No light model: the default model with its effort, as before.
+        body=json.loads(send(bound,'family_agent_selection',responses=responses,FAMILY_LLM_LIGHT_MODEL='')[0])
+        assert (body['model'],effort(body),tokens(body))==('fictional-main','low',6000)
+        # The same content under the light connection check or another task keeps that task's tier and model.
+        body=json.loads(send(bound,'family_light_connection_test',responses=responses)[0])
+        assert (body['model'],effort(body),tokens(body))==('fictional-light','none',3000)
+        body=json.loads(send(bound,'family_school_task',responses=responses)[0])
+        assert (body['model'],effort(body),tokens(body))==('fictional-light','low',3000)
+        for task in ('family_learning_draft','family_connection_test'):
+            body=json.loads(send(bound,task,responses=responses)[0])
+            assert (body['model'],effort(body))==('fictional-main','low')
+    return len(captured)
+
+assert bound_change_selection_tier_contract()==2*(3+13+8)
+
 print('PASS: draft, reading feedback, guided hints, audio and bounded usage ledger; isolated HTTP, redaction, failure and interruption checks')

@@ -1066,6 +1066,26 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         self._use_replies(payload, [dict(proposals=[reading, foreign_link])])
         self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
 
+    def test_another_book_or_page_besides_the_worksheet_is_never_its_step(self):
+        """第4题选做 of the worksheet whose 第1–3题 the item states is that paper's option; 另完成习字册第6页 or 另做第5题 is
+        a separate outcome, so a reply merging it into the exercise keeps the whole batch for retry."""
+        for later in ('补充英语练习卷：另完成习字册第6页。', '补充英语练习卷：另做第5题。', '补充英语练习卷：完成口算本第4题。'):
+            with self.subTest(later=later):
+                self.setUp()
+                payload, refs = self._ingest(['英语，明天完成两项要求：1. 朗读Unit 2课文两遍；2. 完成练习卷第1–3题。', later],
+                                             ['synthetic-teacher-1', 'synthetic-teacher-1'])
+                reading = fixtures.school_proposal(
+                    title_quote='朗读Unit 2课文两遍', due='2026-10-06', evidence=[dict(ref=refs[0])],
+                    learning_subject='英语', task_title='英语：朗读Unit 2课文', task_goal='朗读Unit 2课文两遍。',
+                    task_state='ready', task_reason='原文第一项朗读要求明确。', task_purpose='learning')
+                merged = fixtures.school_proposal(
+                    title_quote='完成练习卷第1–3题', due='2026-10-06', evidence=[dict(ref=ref) for ref in refs],
+                    learning_subject='英语', task_title='英语：完成练习卷',
+                    task_goal='完成练习卷第1–3题；' + later.split('：', 1)[1], task_state='ready',
+                    task_reason='虚构错误回执把另一成果并进练习卷。', task_purpose='learning')
+                self._use_replies(payload, [dict(proposals=[reading, merged])])
+                self._assert_rejected_batch(payload, agent.run_once(self.app, self.now))
+
     def test_two_notices_cannot_compete_for_the_same_ambiguous_supplement(self):
         payload,refs=self._ingest([
             '英语，明天完成两项要求：1. 朗读Unit 1课文两遍；2. 完成甲练习卷第1–3题。',
