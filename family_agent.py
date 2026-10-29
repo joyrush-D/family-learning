@@ -4543,9 +4543,20 @@ def _school_roles(text):
 
 
 def _school_signers(text, marks=r'签|盖章'):
-    """The role signing or stamping in each part of a text: the last role named before 签/盖章 in its own comma part."""
-    return {(_school_roles(part[:m.start()]) or [''])[-1] for part in re.findall(r'(?:《[^》]*》|[^，,。；;！!？?\n])+',text or '')
-            for m in re.finditer(marks,re.sub(r'《[^》]*》',lambda n:'_'*len(n[0]),part))}
+    """The roles signing or stamping in each part of a text: the last role named before 签/盖章 in its own comma part, with
+    every role joined to it directly by 和/与/及/、 (家长和孩子签名 is both's). The doer of an earlier action
+    (家长检查后孩子签名) is not joined to it."""
+    words={word:role for role,alts in _SCHOOL_CLAUSE_ROLES.items() for word in alts.split('|')}
+    found=set()
+    for part in re.findall(r'(?:《[^》]*》|[^，,。；;！!？?\n])+',text or ''):
+        masked=re.sub(r'《[^》]*》',lambda n:'_'*len(n[0]),part)
+        for m in re.finditer(marks,masked):
+            named=list(re.finditer('|'.join(sorted(words,key=len,reverse=True)),masked[:m.start()]))
+            doers=named[-1:]
+            while len(doers)<len(named) and re.fullmatch(r'\s*(?:和|与|以及|及|跟|、)\s*',masked[named[-len(doers)-1].end():doers[-1].start()]):
+                doers.append(named[-len(doers)-1])
+            found|={words[d[0]] for d in doers} or {''}
+    return found
 
 
 def _school_parent_readings(text):
@@ -4606,7 +4617,7 @@ def _school_own_sentences(quote, text):
     return text[left:right]
 
 
-def _school_clause_requirements(quote):
+def _school_clause_requirements(quote,every=False):
     """Each positive requirement part of one compound teacher sentence, with the standards it makes explicit.
 
     A sentence's comma parts split again at 并/以及/然后/同时 outside closed names; only a sentence joining two or more parts
@@ -4614,24 +4625,27 @@ def _school_clause_requirements(quote):
     (科学：) is a label. A comma part with a negation, change, condition, question or reference use (不、取消、如果、仅供、
     自愿) proves nothing. Each part keeps its closed names, its explicit counts and durations other than one (30秒、两份、
     3遍), its signature or stamp with the role signing it (家长签字), the roles it names, and its own remaining words; a part
-    left with none of these (a bare date) states nothing.
+    left with none of these (a bare date) states nothing. every reads every part of every sentence the same way, negative
+    and single ones too: the whole requirement of one outcome whose one step a later message withdrew.
     """
     units=[]
     for sentence in re.findall(r'[^。；;！!？?\n]+',quote or ''):
-        sentence=re.split(r'(?<!\d)[：:](?!\d)(?![^《]*》)',sentence)[-1];found=[];compound=False
+        sentence=re.split(r'(?<!\d)[：:](?!\d)(?![^《]*》)',sentence)[-1];found=[];compound=every
         for part in re.findall(r'(?:《[^》]*》|[^，,])+',sentence):
-            if re.search(r'不|无需|无须|免|勿|仅供|只供|参考|自愿|选做|可选|'+_SCHOOL_NATIVE_CHANGE+'|'+_SCHOOL_NATIVE_UNSETTLED,re.sub(r'《[^》]*》','',part)):continue
+            if not every and re.search(r'不|无需|无须|免|勿|仅供|只供|参考|自愿|选做|可选|'+_SCHOOL_NATIVE_CHANGE+'|'+_SCHOOL_NATIVE_UNSETTLED,re.sub(r'《[^》]*》','',part)):continue
             own=[];before=''
             for piece in re.split(r'(?:并且|并|以及|然后|同时)(?![^《]*》)',part):
-                names=[name[1:-1] for name in re.findall(r'《[^》]{1,40}》',piece)]
+                names=[name[1:-1] for name in re.findall(r'《[^》]{1,40}》',piece)];text=piece
                 # One part's signer may be named in its earlier piece (请家长检查并签字).
                 signers=sorted(_school_signers(before+piece)-_school_signers(before));roles=sorted(set(_school_roles(piece)));before+=piece
                 piece=re.sub(r'(?:于|在)?\s*'+_SCHOOL_NATIVE_DATE+r'\s*(?:\d{1,2}[:：]\d{2})?\s*(?:前|之前|以前|内)?','',re.sub(r'《[^》]*》','',piece))
                 plain=_school_plain(piece)
-                counts=[m[0] for m in re.finditer(_SCHOOL_CLAUSE_MEASURE,plain) if m[1]!='1']
+                # A whole requirement keeps even its one count (1遍 is no 2遍).
+                counts=[m[0] for m in re.finditer(_SCHOOL_CLAUSE_MEASURE,plain) if every or m[1]!='1']
                 words=re.sub(r'请|将|把|在|上|的|分别|均|都|也|再|各|于','',re.sub(_SCHOOL_CLAUSE_MEASURE,'',plain))
                 if names or counts or words:
-                    own.append(dict(names=names,counts=counts,signs=sorted(set(re.findall(r'签|盖章',words))),signers=signers,roles=roles,words=words))
+                    own.append(dict(names=names,counts=counts,signs=sorted(set(re.findall(r'签|盖章',words))),signers=signers,roles=roles,words=words,
+                                    text=text))
             compound|=len(own)>1;found+=own
         if compound:units+=found
     return units
@@ -5078,6 +5092,137 @@ def _school_native_continued(entry,later):
 _SCHOOL_NATIVE_POINTER=r'^\s*(?:刚才|刚刚|上面|前面|之前)\s*(?:布置|发)?\s*的'
 
 
+def _school_native_pointed(text):
+    """The text after a pointer back to an object sent before it, whether the follow-up opens with it (刚才的朗读只签一次名…)
+    or names it as a supplement (补充刚才的朗读：…); None otherwise. The pointer itself names nothing."""
+    found=re.match(r'^\s*(?:补充\s*)?'+_SCHOOL_NATIVE_POINTER[1:],text)
+    return text[found.end():].strip() if found else None
+
+
+def _school_native_pointed_object(rest,text):
+    """The longest opening words of a pointed-back object that this earlier text states literally, else ''."""
+    span=re.match(r'[^，,。；;：:！!？?\n的]{2,20}',rest)
+    return next((span[0][:n] for n in range(len(span[0]),1,-1) if span[0][:n] in text),'') if span else ''
+
+
+def _school_native_own_object(goal,primary):
+    """True when a supplement names an object of its own (another title, lesson, unit, worksheet, page or question) that
+    the outcome it points to does not state: that is a separate outcome to allocate, never a step of this one.
+
+    A question opening its own clause (第4题选做, 练习卷第4题…) where the outcome states a question range of its one named
+    worksheet (完成练习卷第1–3题) is that same paper's range or option, kept as its condition; another worksheet, page,
+    lesson or an outcome added besides it (另完成习字册第6页, 另做第5题) stays its own."""
+    if _school_named_objects(goal)-_school_named_objects(primary):return True
+    paper=re.search(_SCHOOL_NATIVE_WORKSHEET,primary)
+    ranged=paper and re.search(r'第\s*[0-9一二三四五六七八九十]+\s*(?:[-–—~～至到]\s*第?\s*[0-9一二三四五六七八九十]+\s*)?题',primary)
+    for clause in re.split(r'[，,；;。！!\n]',goal):
+        for found in re.finditer(_SCHOOL_NATIVE_WORKSHEET+r'|第\s*[0-9一二三四五六七八九十]+\s*[页题课]',clause):
+            if found[0] in primary:continue
+            if (ranged and found[0].endswith('题')
+                    and re.fullmatch(r'\s*(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')?'+re.escape(paper[0])+r')?\s*',clause[:found.start()])):continue
+            return True
+    return False
+
+
+# The few steps of one reading/recording record a follow-up may restrict or withdraw; 签字 and 签名 are one signature.
+_SCHOOL_NATIVE_STEPS=(('签字','签'),('签名','签'),('签','签'),('录音','录音'),('上传','上传'),('拍照','拍照'),('打卡','打卡'))
+_SCHOOL_NATIVE_WAIVE=(r'(?:不用|不需要|不需|无需|无须|不必|(?<!以)免)\s*(?:再\s*)?(?:请\s*)?(?:(?:'+'|'.join(_SCHOOL_CLAUSE_ROLES.values())
+                      +r')\s*)?(?:在[^，,。；;]{0,8}?)?([一-鿿]{1,4})')
+# One role's one step that alone opens its clause before a trailing 不用做 (家长签名不用做) is that same withdrawal.
+_SCHOOL_NATIVE_WAIVE_AFTER=(r'(?:^|(?<=[，,。；;！!？?\n]))\s*('+'|'.join(_SCHOOL_CLAUSE_ROLES.values())+r')\s*(?:的\s*)?('
+                            +'|'.join(word for word,_ in _SCHOOL_NATIVE_STEPS)+r')\s*(?:也\s*)?(?:不用|不需要|不需|无需|无须|不必)\s*做\s*了?'
+                            r'(?=$|[，,。；;！!？?\n])')
+
+
+def _school_native_step_key(words):
+    return next((key for word,key in _SCHOOL_NATIVE_STEPS if words.startswith(word)),'')
+
+
+def _school_native_waived(text):
+    """Each (step, role) a text withdraws: the role named after the withdrawal (不用老师签字) or as its subject before it in
+    the same clause (家长不用签字), read by the fixed roles of _school_roles; '' when it names none. A clause that is only
+    one role's step before 不用做 (家长签名不用做) withdraws that step of that role; two roles, another word before them or
+    a nested negative leave its 不用做 naming no step."""
+    text=text or '';after=list(re.finditer(_SCHOOL_NATIVE_WAIVE_AFTER,text));steps=[]
+    for found in re.finditer(_SCHOOL_NATIVE_WAIVE,text):
+        if any(m.start()<=found.start()<m.end() for m in after):continue
+        before=re.split(r'[，,。；;！!？?\n]',text[:found.start()])[-1]
+        roles=_school_roles(text[found.start():found.start(1)]) or _school_roles(before)[-1:]
+        steps.append((_school_native_step_key(found[1]),roles[0] if roles else ''))
+    return steps+[(_school_native_step_key(m[2]),_school_roles(m[1])[0]) for m in after]
+
+
+def _school_native_unwaived(text):
+    """A text without the withdrawals _school_native_waived reads in it."""
+    return re.sub(_SCHOOL_NATIVE_WAIVE,'',re.sub(_SCHOOL_NATIVE_WAIVE_AFTER,'',text or ''))
+
+
+def _school_native_asks(text,key,role=''):
+    """Whether a text asks one step; a signature by the role signing it (家长签字 is no 老师签字), where one signing with
+    no named role may be anyone's. With no role every such step counts."""
+    words=[word for word,k in _SCHOOL_NATIVE_STEPS if k==key]
+    if key!='签' or not role:return any(re.search(word,text or '') for word in words)
+    return any(role in signers or '' in signers for signers in (_school_signers(text,word) for word in words))
+
+
+def _school_native_step_kind(requirement,own):
+    """How a bound follow-up's requirement reads against its outcome's own text: 'step' adds to it or only limits it
+    (also 不用家长签字 where it asked no signature, 不用老师签字 where only a parent signs; 只签一次名 where it did),
+    'waive' withdraws one step it states of that same role (读完请家长签字 → 也不用家长签字), None changes its count,
+    withdraws the activity itself, swaps in another requirement (只要录音) or names another outcome: the existing readers
+    and whole-batch retry stay in charge."""
+    stated=lambda key,role='':_school_native_asks(_school_native_unwaived(own),key,role)
+    if re.search(r'再\s*(?:读|朗读|做|写|抄|背|练)',requirement) or (
+            re.search(r'(?:\d+|[一二两三四五六七八九十]+)\s*遍',requirement) and re.search(r'(?:\d+|[一二两三四五六七八九十]+)\s*遍',own)):return None
+    kind='step'
+    for key,role in _school_native_waived(requirement):
+        if not key:return None
+        if stated(key,role):kind='waive'
+    # 只要录音 after withdrawing a stated step swaps the requirement; 只需要签一次名 only limits or adds that step.
+    for found in re.finditer(r'只(?:需)?要\s*(?:请\s*)?(?:家长\s*)?([一-鿿]{1,4})',requirement):
+        key=_school_native_step_key(found[1])
+        if not key or kind=='waive' and not stated(key):return None
+    return kind
+
+
+def _school_native_waive_kept(action,waived,goal):
+    """Whether a summary of an outcome whose one step the same teacher withdrew keeps exactly everything else.
+
+    The outcome's whole own requirement (its quote, conditions and bound standards) is read part by part as the complete
+    clause check reads it (_school_clause_requirements, every part, 并/以及 splitting a sentence without a comma; 两遍 reads
+    as 2遍). Only the parts asking the withdrawn step of the withdrawn role leave (读完请家长签字 for 不用家长签字); every
+    other part keeps its closed names, counts, activity, signatures with their signers, roles and words as _school_clause_kept
+    requires, read in the summary without its withdrawal. The summary states the same withdrawal of the same role and asks
+    that role's step nowhere else; a summary dropping or changing anything else is not ready.
+    """
+    steps={s for s in _school_native_waived(waived) if s[0]}
+    texts=[action['quote'],*action.get('conditions',[]),*action.get('shared_conditions',[]),
+           *(s['goal'] for s in action.get('shared_supplements',[])+action['supplements'])]
+    units=[u for text in texts for u in _school_clause_requirements(text,every=True)]
+    # Every step a part asks, with the role doing it, read as a signer is read (请家长拍照 is the parent's, 录音上传 no one's).
+    asked=lambda u:{(key,doer) for word,key in _SCHOOL_NATIVE_STEPS if word in u['text']
+                    for doer in (u['signers'] or ['']) if key=='签'} | {(key,doer) for word,key in _SCHOOL_NATIVE_STEPS
+                    if key!='签' and word in u['text'] for doer in _school_signers(u['text'],word)}
+    gone=lambda key,doer:any(key==k and (not role or doer in (role,'')) for k,role in steps)
+    withdrawn=[u for u in units if any(gone(*s) for s in asked(u))]
+    rest=[u for u in units if u not in withdrawn]
+    left=_school_native_unwaived(goal);kept=_school_plain(left);roles=set(_school_roles(left));signers=_school_signers(left)
+    does=lambda text,key,doer:any(doer in found or '' in found for word,k in _SCHOOL_NATIVE_STEPS if k==key
+                                  for found in [_school_signers(text,word)] if found)
+    stated=_school_native_waived(goal);marks=_school_native_marks(goal)
+    # The summary's parts read as the clause check reads them; a part stating a withdrawal asks nothing, so 录音 named only
+    # as what 不用上传 withdraws (录音不用上传) is no recording kept, while 并录音，不用上传 keeps it.
+    asks='，'.join(u['text'] for u in _school_clause_requirements(goal,every=True) if not _school_native_waived(u['text']))
+    return (bool(steps) and bool(rest)
+            and all((key,role) in stated or (key,'') in stated and not any(u['signs'] for u in rest) for key,role in steps)
+            and not any(does(left,key,role) if role else _school_native_asks(left,key) for key,role in steps)
+            # A part that leaves for its withdrawn step keeps every other step it asks, by the same role (录音 of 录音上传).
+            and all(does(asks,key,doer) for u in withdrawn for key,doer in asked(u) if not gone(key,doer))
+            and all(all(_school_plain(v) in kept for v in u['names']+u['counts']+u['signs']) and set(u['roles'])<=roles
+                    and set(u['signers'])-{''}<=signers and _school_native_marks(u['text'])<=marks
+                    and 2*sum(c in kept for c in u['words'])>=len(u['words']) for u in rest))
+
+
 def _school_native_pointer_unproven(evidence,refs):
     """True when one task cites a follow-up pointing back to an object together with another message, while no positive
     identity proves the one message it means.
@@ -5090,12 +5235,16 @@ def _school_native_pointer_unproven(evidence,refs):
     """
     cited=[e for e in evidence if e['ref'] in refs]
     for later in cited:
-        if len(cited)<2 or not re.match(_SCHOOL_NATIVE_POINTER,later['text']):continue
-        named=re.match(_SCHOOL_NATIVE_POINTER+r'\s*([^，,。；;：:！!？?\n的]{2,20}?)\s*(?:(?:'+_SCHOOL_NATIVE_AFTER+r')\s*)?'
-                       r'(?:还|也|要|需|请|得|[，,。；;：:！!？?\n]|$)',later['text'])
-        meant=[e for e in evidence if named and e is not later and e.get('kind','text')=='text' and named[1] in e['text']
-               and not re.match(_SCHOOL_NATIVE_POINTER,e['text']) and _school_native_later_text(e,later)]
+        rest=_school_native_pointed(later['text'])
+        if len(cited)<2 or rest is None:continue
+        meant=[e for e in evidence if e is not later and e.get('kind','text')=='text' and _school_native_pointed_object(rest,e['text'])
+               and _school_native_pointed(e['text']) is None and _school_native_later_text(e,later)]
         if len(meant)!=1 or meant[0]['ref'] not in refs:return True
+        # The ledger's own reading: a change, question, condition, own day, or no step/limit of that one object is unproven.
+        named=re.match(r'([^：:\n]{2,40})[：:]\s*(.+)$',rest,re.S)
+        if (re.search(_SCHOOL_NATIVE_CHANGE+'|'+_SCHOOL_NATIVE_UNSETTLED+r'|[今明昨前后][天日晚早晨]|早上|上午|中午|下午|晚上|周|星期|礼拜|'
+                      +_SCHOOL_NATIVE_DATE,rest) or _school_native_step_kind((named[2] if named else rest).strip(),meant[0]['text']) is None):
+            return True
     return False
 
 
@@ -5422,7 +5571,16 @@ def _school_native_actions(evidence):
         # and later-supplement identity; the ledger only adds it to a multi-outcome list.
         if len(own)==1 and re.match(r'^(?:Unit\s*[0-9]+|课文|《)',own[0]['primary']):continue
         for supplement in evidence[index+1:]:
-            head=re.match(r'^补充([^：:\n]{2,40})[：:]\s*(.+)$',supplement['text'].strip(),re.S) or _school_native_continued(entry,supplement)
+            rest=_school_native_pointed(supplement['text']);head=_school_native_continued(entry,supplement)
+            if not head and rest is None:head=re.match(r'^补充([^：:\n]{2,40})[：:]\s*(.+)$',supplement['text'].strip(),re.S)
+            # A change, question, condition or a day of its own is no added step: the existing readers stay in charge.
+            elif (not head and _school_native_later_text(entry,supplement) and not re.search(_SCHOOL_NATIVE_CHANGE+'|'+_SCHOOL_NATIVE_UNSETTLED
+                    +r'|[今明昨前后][天日晚早晨]|早上|上午|中午|下午|晚上|周|星期|礼拜|'+_SCHOOL_NATIVE_DATE,rest)):
+                # 刚才的朗读只签一次名… or 补充刚才的朗读：… names its object by the words one outcome here states; the
+                # whole requirement (after a colon, else the whole follow-up) stays with it.
+                named=re.match(r'([^：:\n]{2,40})[：:]\s*(.+)$',rest,re.S)
+                found=max((_school_native_pointed_object(named[1] if named else rest,a['primary']) for a in own),key=len,default='')
+                head=found and ('',found,(named[2] if named else rest).strip())
             if not head:continue
             publisher=entry.get('publisher','')
             if (not publisher or supplement.get('publisher')!=publisher or supplement['ref'][8:].rsplit(':',1)[0]!=entry['ref'][8:].rsplit(':',1)[0]
@@ -5436,14 +5594,20 @@ def _school_native_actions(evidence):
             if re.search(_SCHOOL_NATIVE_CHANGE,head[2]):
                 if len(own)==1 and not _school_native_change_owner(entry,supplement,own):own=[];break
                 continue
-            object_text=head[1]
-            object_text=re.sub(r'^(?:'+_SCHOOL_NATIVE_SUBJECTS+r')','',object_text)
+            object_text=re.sub(r'^(?:'+_SCHOOL_NATIVE_SUBJECTS+r')','',head[1])
             specific=_school_named_objects(object_text)
             # ponytail: only one literal action object proves ownership; mixed named mentions stay unbound.
             owners=[a for a in own if len(object_text)>=2 and a['primary'].count(object_text)==1
                     and (not specific or specific==_school_named_objects(a['primary']))]
-            if len(owners)==1:
-                owners[0]['supplements'].append(dict(ref=supplement['ref'],quote=supplement['text'].strip(),goal=head[2].strip(),time=supplement['time']))
+            # A supplement naming its own title, worksheet, page or question is a separate outcome, not this one's step.
+            if len(owners)==1 and not _school_native_own_object(head[2],owners[0]['primary']) and _school_native_later_text(entry,supplement):
+                own_text='\n'.join([owners[0]['quote'],*owners[0].get('conditions',[]),*owners[0].get('shared_conditions',[])])
+                kind=_school_native_step_kind(head[2],own_text)
+                # Withdrawing one step it states (免签) is a change of that condition: the summary is checked, never re-joined.
+                if kind=='waive':
+                    owners[0]['changes'].append(dict(ref=supplement['ref'],quote=supplement['text'].strip(),time=supplement['time'],waived=head[2].strip()))
+                elif kind:
+                    owners[0]['supplements'].append(dict(ref=supplement['ref'],quote=supplement['text'].strip(),goal=head[2].strip(),time=supplement['time']))
         # A common standard sent as the list's next message belongs to every outcome here, never a task of its own.
         if len(own)>1 and (shared:=_school_native_shared_later(entry,evidence[index+1:],own)):
             for action in own:action['shared_supplements']=[shared]
@@ -5735,6 +5899,8 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     if routing: schema['properties']['proposals']['items']['properties']['task_target_id']['enum']=['']+[t['id'] for t in school_tasks]
     prompt=SCHOOL_PROMPT if routing else PROMPT
     if native_actions:prompt+='\nrequired_native_actions是程序按原文定位的独立成果及其完整条件，不要求老师写明总数或编号。每项必须单独返回一次，title_quote逐字使用该项quote，或conditions中包含动作和对象的一段原句，不加段首标签或相邻文字，不能拼接片段；格式示例不是行动或截止。task_purpose与本项purpose一致；没有purpose而给出purpose_options的写入成果，按完整原消息的实际用途从中选择，科目词或把/将写入句式本身不决定用途。打印、作答、自查、签字等同一份资料的步骤已归本项，不另起任务。shared_conditions是本消息明确适用于所有本项的共同标准，每项都须保留。supplements是同一稳定发布者明确点名的本项补充，必须一起引用对应ref，不分给其他作业；shared_supplements是同一发布者紧接本清单发出、明确适用于本清单每一项的共同标准，每项都须保留并引用对应ref，不另起任务；不能合并独立成果，也不能只引用消息编号后漏掉要求。完整标准由程序保留，日期只按该项header/quote/conditions/shared_conditions和各自原发送日核对，不借同通知另一项的截止。清单只列程序能逐字定位的行动，不一定齐全：同一消息里未列出的其他独立行动仍须各自单独返回，title_quote按锚点规则只引用它自己的那段原文，不能包含或重叠任一已列项的quote和conditions，即使它们同在一句、只隔分号或逗号。'
+    # Only a request sending a bound change explains it; every other request keeps its exact prompt.
+    if any(a['changes'] for a in native_actions):prompt+='\nchanges是同一发布者随后明确针对本项的变更原文，必须一起引用对应ref。变更只改动原要求中实际被替换、改写或取消的部分，前述“未明确保留的旧要求不补造”仅指这部分，变更未涉及的原要求照常写入task_goal；明确取消整项时仍按前述整项取消规则。带waived的change是部分免除：只免去waived写明的那一步，写明角色时只免该角色的这一步；原要求其余的对象、角色、步骤、范围、数量、日期和条件都不变，同一步骤的其他角色仍须完成，task_goal全部保留并写明已免去的这一步，不按整项更正或取消处理。除整项取消外，task_goal只写变更后最终有效的完整要求：被替换、改写、取消或免去的旧内容不能仍作为要做的要求出现，已免去的步骤只简要写明不用做；不能先照抄原要求再接“后续更正……”拼成变更经过。原话和变更由ref保留为依据，变更经过可写在task_reason。'
     if historical: prompt+='\n这是已处理消息的独立行动补漏。逐项对照existing_actions，保留家长当前修改与accepted/dismissed/pending决定，不恢复原任务。action_quote逐字引用包含本项动作和对象的完整原句，不将多个独立事项合并；existing_item_id只有同一具体行动才填旧编号，新漏项填空。已归纳/已忽略事项也返回以覆盖输入，但不会另建。不能按标题相似合并；同消息另项仍单独返回。due只从本项action_quote按原发送日换算，不能借用同通知另一项或旧任务日期。适用性/原件仍未读保留具体缺口。'
     result = family_llm._chat_json([{'role': 'system', 'content': prompt},
         {'role': 'user', 'content': _json(content)}], schema, 'family_agent_selection', timeout=45, data_path=data_path)
@@ -5972,6 +6138,14 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                     own=roles or (_school_native_roles(native_action) if native_action and not native_action['changes'] else None)
                     if not (own and own[1]==due and declared<=own[0]|{own[1]}):
                         brief.update(state='review',reason=brief['reason'][:300]+' 摘要中的日期与本项原文日期不一致，未自动确认；请核对原通知。')
+            # A step the same teacher withdrew (读完请家长签字 → 也不用家长签字): ready only when the summary keeps the
+            # remaining activity, states the withdrawal and no longer asks the withdrawn step anywhere.
+            for change in (native_action or {}).get('changes',[]) if brief['state']=='ready' else []:
+                if not change.get('waived'):continue
+                if not _school_native_waive_kept(native_action,change['waived'],brief['goal']):
+                    brief.update(state='review',reason=brief['reason'][:300]+' 原要求“'+native_action['quote']+'”，同老师后发“'+change['quote']
+                                 +'”免去其中一步；摘要未同时保留原活动并只写免去后的要求，两条原文保留待核对，未自动确认。')
+                    break
             if brief['title'] and brief['goal'] and dated_quote and not historical and not native_action and len(cited_evidence)==1:
                 brief['goal']=_school_quote_lead(dated_quote,cited_evidence[0]['text'],brief['goal'])
             if brief['title'] and brief['goal']: item.update(title=brief['title'],body=brief['goal'])

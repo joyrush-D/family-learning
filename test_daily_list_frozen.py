@@ -15,6 +15,7 @@ from pathlib import Path
 import family_agenda
 import family_agent as agent
 import family_media
+import family_review
 import test_agent as fixtures
 import test_school_native_coverage as native
 
@@ -1184,6 +1185,34 @@ class ContinuedSupplementVariantTests(unittest.TestCase):
         self.assertEqual(self._ledger(('刚才的朗读还要家长签字。', 60, 'cn-teacher-a', 'synthetic-group'), first='今晚朗读《荷塘》2遍；抄写生字一遍。'),
                          {'今晚朗读《荷塘》2遍': ['朗读还要家长签字'], '抄写生字一遍': []}, 'only the item it names')
 
+    def test_a_named_supplement_pointing_back_keeps_its_whole_requirement(self):
+        # 补充刚才的朗读：… names its object through the same pointer; counts, method limits and negations stay in it whole.
+        same = ('cn-teacher-a', 'synthetic-group')
+        first = '语文：今晚朗读《雨后小径》第3、4段各两遍，读后请家长在记录页签名。明早语文课检查。'
+        reading = '今晚朗读《雨后小径》第3、4段各两遍，读后请家长在记录页签名。明早语文课检查'
+        for text in ('补充刚才的朗读：只需要签一次名，不用录音，不需要上传。', '补充上面布置的朗读：只需要签一次名。'):
+            self.assertEqual(self._ledger((text, 60, *same), first=first), {reading: [text.split('：', 1)[1]]}, text)
+        two = '今晚朗读《荷塘》2遍；抄写生字一遍。'
+        self.assertEqual(self._ledger(('补充刚才的朗读：只需要签一次名，不用录音。', 60, *same), first=two),
+                         {'今晚朗读《荷塘》2遍': ['只需要签一次名，不用录音。'], '抄写生字一遍': []}, 'only the item it names')
+        for later in (('补充刚才的朗读：只需要签一次名。', 60, 'cn-teacher-b', 'synthetic-group'),  # another teacher
+                      ('补充刚才的朗读：只需要签一次名。', 60, 'cn-teacher-a', 'synthetic-other'),  # another source
+                      ('补充刚才的朗读：只需要签一次名。', 600, *same), ('补充刚才的朗读：只需要签一次名。', -60, *same),
+                      ('补充刚才的背诵：只需要签一次名。', 60, *same)):  # an object the list does not name
+            self.assertEqual(self._ledger(later, first=two), {'今晚朗读《荷塘》2遍': [], '抄写生字一遍': []}, later)
+        self.assertEqual(self._ledger(('补充刚才的朗读：只需要签一次名。', 60, *same), first='今晚朗读《荷塘》2遍；朗读《春》1遍。'),
+                         {'今晚朗读《荷塘》2遍': [], '朗读《春》1遍': []}, 'two items it could mean')
+        sent = dt.datetime(2026, 11, 4, 18, tzinfo=agent.TZ).isoformat()
+        evidence = [dict(ref='message:synthetic-group:%d' % n, text=text, time=sent, publisher=publisher, kind='text',
+                         content_incomplete=False, unread=False, attachments=[])
+                    for n, text, publisher in ((11, two, 'cn-teacher-a'), (12, '补充刚才的朗读：只需要签一次名。', 'cn-teacher-a'))]
+        self.assertEqual([a['supplements'] for a in agent._school_native_actions(evidence) if a['ref'] == evidence[0]['ref']],
+                         [[], []], 'the same second without the collector order proves no order')
+        evidence[1]['publisher'] = ''
+        evidence[1]['time'] = (dt.datetime(2026, 11, 4, 18, 1, tzinfo=agent.TZ)).isoformat()
+        self.assertEqual([a['supplements'] for a in agent._school_native_actions(evidence) if a['ref'] == evidence[0]['ref']],
+                         [[], []], 'no publisher proves no one')
+
     def test_the_ledger_binds_nothing_without_one_clear_continuation(self):
         same = ('cn-teacher-a', 'synthetic-group')
         unbound = {'今晚朗读《荷塘》2遍': []}
@@ -1191,13 +1220,17 @@ class ContinuedSupplementVariantTests(unittest.TestCase):
                       ('刚才的朗读还要家长签字。', 60, 'cn-teacher-a', 'synthetic-other'),  # another source or child binding
                       ('刚才的朗读还要家长签字。', 600, *same), ('刚才的朗读还要家长签字。', -60, *same),  # no near, later context
                       ('刚才的朗读还要家长签字吗？', 60, *same), ('刚才的朗读如果读完还要家长签字。', 60, *same),
-                      ('刚才的朗读还要改为家长签字。', 60, *same), ('刚才的朗读也不用家长签字。', 60, *same),
+                      ('刚才的朗读还要改为家长签字。', 60, *same),
                       ('刚才的语文朗读还要家长签字。', 60, *same), ('刚才的朗读还要家长明早签字。', 60, *same),
                       ('刚才的朗读还要再读1遍。', 60, *same), ('刚才的朗读还要抄写生字两遍。', 60, *same),
                       ('刚才的朗读还要背诵《春》。', 60, *same), ('刚才的朗读还要完成练习册。', 60, *same),
                       ('刚才的朗读还要家长签字，明天体育课带跳绳。', 60, *same), ('刚才的朗读还要家长签字。明天体育课带跳绳。', 60, *same),
-                      ('朗读还要家长签字。', 60, *same), ('刚才的背诵还要家长签字。', 60, *same)):
-            self.assertEqual(self._ledger(later), unbound, later)
+                      ('朗读还要家长签字。', 60, *same), ('刚才的背诵还要家长签字。', 60, *same),
+                      ('刚才的朗读不用读了。', 60, *same)):
+            with self.subTest(later=later):
+                self.assertEqual(self._ledger(later), unbound, later)
+        # W01: where the reading asked no signature, 不用家长签字 only limits it and stays with that one item.
+        self.assertEqual(self._ledger(('刚才的朗读也不用家长签字。', 60, *same)), {'今晚朗读《荷塘》2遍': ['朗读也不用家长签字。']})
         self.assertEqual(self._ledger(('刚才的朗读还要家长签字。', 60, *same), first='今晚朗读《荷塘》2遍；朗读《春》1遍。'),
                          {'今晚朗读《荷塘》2遍': [], '朗读《春》1遍': []}, 'two items it could mean')
         with self.assertRaises(agent.AgentError) as both:  # two lists' items it could mean
@@ -1218,6 +1251,404 @@ class ContinuedSupplementVariantTests(unittest.TestCase):
         self.assertNotIn('签字', copy['body'])
         self.assertNotIn('抄写', read['body'])
         self._replay_adds_nothing('T01-variant-two-items')
+
+    def _waiver_ledger(self, first, text):
+        sent = dt.datetime(2026, 11, 4, 16, tzinfo=agent.TZ)
+        evidence = [dict(ref='message:synthetic-group:%d' % (11 + i), text=t, time=(sent + dt.timedelta(minutes=i)).isoformat(),
+                         publisher='cn-teacher-a', kind='text', content_incomplete=False, unread=False, attachments=[],
+                         message_order=str(11 + i)) for i, t in enumerate((first, text))]
+        action, = [a for a in agent._school_native_actions(evidence) if a['ref'] == evidence[0]['ref']]
+        return [s['goal'] for s in action['supplements']], [c['quote'] for c in action['changes']]
+
+    def test_a_withdrawn_step_is_a_change_never_a_joined_supplement(self):
+        """W02: the reading asked a signature and the same teacher then waives it: a change of that condition, not a line
+        joined back onto the original; W01/C04 limits that keep or never asked the step stay supplements."""
+        signed = '语文：今晚朗读《荷塘》2遍，读完请家长签字。'
+        for text in ('刚才的朗读也不用家长签字。', '刚才的朗读不需要家长签名了。'):
+            with self.subTest(text=text):
+                self.assertEqual(self._waiver_ledger(signed, text), ([], [text]))
+        for first, text, goal in (('语文：今晚朗读《荷塘》2遍。', '刚才的朗读也不用家长签字。', '朗读也不用家长签字。'),
+                                  ('语文：今晚朗读《雨后小径》第3、4段各两遍，读后请家长在记录页签名。明早语文课检查。',
+                                   '补充刚才的朗读：只需要签一次名，不用录音，不需要上传。', '只需要签一次名，不用录音，不需要上传。')):
+            with self.subTest(text=text):
+                self.assertEqual(self._waiver_ledger(first, text), ([goal], []))
+        for text in ('刚才的朗读不用读了。', '刚才的朗读还要再读1遍。', '刚才的朗读还要抄写生字两遍。', '刚才的朗读不需要签字，只要录音。',
+                     '刚才的朗读明天家长签字。', '刚才的朗读不用家长签字吗？'):
+            with self.subTest(text=text):
+                self.assertEqual(self._waiver_ledger(signed, text), ([], []))
+
+    def _waiver_day(self, goal, case, first='语文：今晚朗读《荷塘》2遍，读完请家长签字。', later='刚才的朗读也不用家长签字。'):
+        payload, refs = self._day([('16:00', '语文老师甲', 'cn-teacher-a', first),
+                                   ('16:01', '语文老师甲', 'cn-teacher-a', later)])
+        reading = self._proposal(first.split('：', 1)[1].rstrip('。'), refs, '语文', goal)
+        result, rows, listed, _ = self._run(payload, [reading], case)
+        self.assertEqual((result['failed'], result['processed']), (0, 2))
+        row, = rows
+        self.assertEqual(json.loads(row['plan'])['school_task']['goal'], goal, 'the saved goal is the summary checked')
+        return result, listed, refs, json.loads(row['plan'])['school_task'], row
+
+    def test_w02_correct_summary_is_ready_with_both_originals(self):
+        result, listed, refs, task, row = self._waiver_day('今晚朗读《荷塘》2遍，不用家长签字。', 'W02-correct')
+        item, = listed
+        self.assertEqual(item['publications'], refs, 'both originals cited')
+        self.assertEqual(item['body'], '今晚朗读《荷塘》2遍，不用家长签字。', 'the correct summary is not re-joined with the old signing')
+        self.assertNotIn('请家长签字', item['body'])
+        self.assertEqual((task['state'], task['change']), ('ready', 'new'))
+        self.assertEqual(set(task['origin_basis']), set(refs), 'both original bases kept')
+        self._replay_adds_nothing('W02-correct')
+
+    def test_w02_contradictory_summary_is_never_ready(self):
+        result, listed, refs, task, row = self._waiver_day('今晚朗读《荷塘》2遍，读完请家长签字\n朗读也不用家长签字。', 'W02-contradictory')
+        item, = listed
+        self.assertEqual(task['state'], 'review', 'two contradicting requirements are never an automatic task')
+        self.assertIn('免去其中一步', task['reason'])
+        self.assertIn('读完请家长签字', task['reason'])
+        self.assertEqual(item['publications'], refs, 'both originals kept')
+        self.assertEqual(set(task['origin_basis']), set(refs))
+        self.assertNotEqual(task['change'], 'cancel', 'a waived signature never cancels the reading')
+        self._replay_adds_nothing('W02-contradictory')
+
+    def test_w02_summary_dropping_the_reading_is_never_ready(self):
+        result, listed, refs, task, row = self._waiver_day('不用家长签字。', 'W02-reading-dropped')
+        self.assertEqual(task['state'], 'review')
+        self.assertEqual(listed[0]['publications'], refs, 'both originals kept')
+
+    def test_waiving_another_role_keeps_the_parent_signature(self):
+        """F05: the parent signs and the teacher's signature is waived: a compatible limit of another role, kept with the
+        parent's signing on the one item, never read as withdrawing 签字 itself."""
+        first = '语文：今晚朗读《荷塘》2遍，读完请家长签字。'
+        for text, expected in (('补充刚才的朗读：不用老师签字。', (['不用老师签字。'], [])),
+                               ('刚才的朗读老师也不用签字。', (['朗读老师也不用签字。'], [])),
+                               ('刚才的朗读家长也不用签字。', ([], ['刚才的朗读家长也不用签字。'])),
+                               ('补充刚才的朗读：不用家长签字。', ([], ['补充刚才的朗读：不用家长签字。']))):
+            with self.subTest(text=text):
+                self.assertEqual(self._waiver_ledger(first, text), expected)
+        payload, refs = self._day([('16:00', '语文老师甲', 'cn-teacher-a', first),
+                                   ('16:01', '语文老师甲', 'cn-teacher-a', '补充刚才的朗读：不用老师签字。')])
+        reading = self._proposal('今晚朗读《荷塘》2遍，读完请家长签字', refs, '语文', '今晚朗读《荷塘》2遍，读完请家长签字；不用老师签字。')
+        result, rows, listed, _ = self._run(payload, [reading], 'F05-other-signer')
+        self.assertEqual((result['failed'], result['processed']), (0, 2))
+        row, = rows
+        task = json.loads(row['plan'])['school_task']
+        item, = listed
+        self.assertEqual((task['state'], task['change']), ('ready', 'new'))
+        self.assertEqual(item['publications'], refs, 'both originals cited')
+        self.assertIn('读完请家长签字', task['goal'], 'the parent still signs')
+        self.assertIn('不用老师签字', task['goal'], 'only the teacher signature is waived')
+        self.assertEqual(set(task['origin_basis']), set(refs))
+        self._replay_adds_nothing('F05-other-signer')
+
+    def test_a_waived_step_summary_keeps_a_chinese_count(self):
+        """X01: 两遍 is 2遍; a summary that keeps the title but reads 一遍 changed the count and is never ready."""
+        first = '语文：今晚朗读《河湾》两遍，读完请家长签字。'
+        result, listed, refs, task, row = self._waiver_day('今晚朗读《河湾》一遍，不用家长签字。', 'X01-count-changed', first=first)
+        self.assertEqual(task['state'], 'review')
+        self.assertIn('免去其中一步', task['reason'])
+        self.assertEqual(listed[0]['publications'], refs, 'both originals kept')
+
+    def test_a_waived_step_summary_with_the_chinese_count_is_ready(self):
+        first = '语文：今晚朗读《河湾》两遍，读完请家长签字。'
+        result, listed, refs, task, row = self._waiver_day('今晚朗读《河湾》两遍，不用家长签字。', 'X01-correct', first=first)
+        self.assertEqual((task['state'], listed[0]['publications']), ('ready', refs))
+        self._replay_adds_nothing('X01-correct')
+
+    def test_a_waived_step_summary_keeps_every_remaining_standard(self):
+        """X02: only the parent's signing leaves; dropping 圈出三个关键词 is never ready."""
+        first = '语文：今晚朗读《河湾》2遍，圈出三个关键词，读完请家长签字。'
+        result, listed, refs, task, row = self._waiver_day('今晚朗读《河湾》2遍，不用家长签字。', 'X02-standard-dropped', first=first)
+        self.assertEqual(task['state'], 'review')
+        self.assertIn('免去其中一步', task['reason'])
+        self.assertNotEqual(task['change'], 'cancel', 'a waived signature never cancels the reading')
+
+    def test_a_waived_step_summary_keeping_every_remaining_standard_is_ready(self):
+        first = '语文：今晚朗读《河湾》2遍，圈出三个关键词，读完请家长签字。'
+        result, listed, refs, task, row = self._waiver_day('今晚朗读《河湾》2遍，圈出三个关键词，不用家长签字。', 'X02-correct', first=first)
+        self.assertEqual((task['state'], listed[0]['publications']), ('ready', refs))
+        self._replay_adds_nothing('X02-correct')
+
+    def test_a_step_waived_inside_one_clause_needs_no_comma(self):
+        """X03: 朗读2遍并请家长签字 waives only 请家长签字; the reading stays, so the correct summary is ready."""
+        first = '语文：今晚朗读《河湾》2遍并请家长签字。'
+        result, listed, refs, task, row = self._waiver_day('今晚朗读《河湾》2遍，不用家长签字。', 'X03-correct', first=first)
+        self.assertEqual((task['state'], task['change'], listed[0]['publications']), ('ready', 'new', refs))
+        self._replay_adds_nothing('X03-correct')
+
+    def test_a_step_waived_inside_one_clause_still_checks_the_reading(self):
+        first = '语文：今晚朗读《河湾》2遍并请家长签字。'
+        for goal, case in (('今晚朗读《河湾》3遍，不用家长签字。', 'X03-count-changed'), ('今晚背诵《河湾》2遍，不用家长签字。', 'X03-activity-changed'),
+                           ('今晚朗读《河湾》2遍并请家长签字，不用家长签字。', 'X03-still-signs'), ('今晚朗读《河湾》2遍，不用老师签字。', 'X03-other-role')):
+            with self.subTest(case=case):
+                self.setUp()
+                result, listed, refs, task, row = self._waiver_day(goal, case, first=first)
+                self.assertEqual(task['state'], 'review', goal)
+
+    def _english_waiver_day(self, first, later, goal, case):
+        payload, refs = self._day([('16:00', '英语老师甲', 'en-teacher-a', first), ('16:01', '英语老师甲', 'en-teacher-a', later)])
+        result, rows, listed, _ = self._run(payload, [self._proposal(first.split('：', 1)[1].rstrip('。'), refs, '英语', goal)], case)
+        self.assertEqual((result['failed'], result['processed']), (0, 2))
+        row, = rows
+        task = json.loads(row['plan'])['school_task']
+        self.assertEqual(task['goal'], goal, 'the saved goal is the summary checked')
+        self.assertEqual(listed[0]['publications'], refs, 'both originals kept')
+        self.assertEqual(set(task['origin_basis']), set(refs), 'both original bases kept')
+        return task
+
+    def test_waiving_one_of_two_steps_in_one_part_keeps_the_other(self):
+        """Y01/Y02: 录音上传 then 不用上传 withdraws only 上传; the recording stays and a summary dropping it is not ready."""
+        first, later = '英语：今晚朗读《林间小路》2遍并录音上传。', '刚才的朗读不用上传。'
+        for goal, state, case in (('今晚朗读《林间小路》2遍并录音，不用上传。', 'ready', 'Y02-correct'),
+                                  ('今晚朗读《林间小路》2遍，不用上传。', 'review', 'Y01-recording-dropped'),
+                                  ('今晚朗读《林间小路》2遍并录音上传，不用上传。', 'review', 'Y02-still-uploads')):
+            with self.subTest(case=case):
+                self.setUp()
+                task = self._english_waiver_day(first, later, goal, case)
+                self.assertEqual((task['state'], task['change']), (state, 'new'), goal)
+                if state == 'ready':
+                    self._replay_adds_nothing(case)
+
+    def test_waiving_another_roles_step_keeps_the_parents_step(self):
+        """Y03/Y04: the parent photographs and the teacher's photo is waived; dropping 请家长拍照 is never ready."""
+        first, later = '英语：今晚朗读《林间小路》2遍，请家长拍照。', '刚才的朗读不用老师拍照。'
+        for goal, state, case in (('今晚朗读《林间小路》2遍，请家长拍照，不用老师拍照。', 'ready', 'Y03-correct'),
+                                  ('今晚朗读《林间小路》2遍，不用老师拍照。', 'review', 'Y04-parent-photo-dropped'),
+                                  ('今晚朗读《林间小路》2遍，请孩子拍照，不用老师拍照。', 'review', 'Y04-other-photographer')):
+            with self.subTest(case=case):
+                self.setUp()
+                task = self._english_waiver_day(first, later, goal, case)
+                self.assertEqual((task['state'], task['change']), (state, 'new'), goal)
+                if state == 'ready':
+                    self._replay_adds_nothing(case)
+
+    def test_one_step_reads_every_signer_it_joins(self):
+        """家长和孩子签名 is both roles' signature; the doer of an earlier action (家长检查后孩子签名) or a title is not."""
+        for text, signers in (('读完请家长和孩子签名', {'家长', '学生'}), ('家长与孩子共同签字', {'家长', '学生'}),
+                              ('家长、老师签字', {'家长', '老师'}), ('家长和孩子都签名', {'家长', '学生'}),
+                              ('家长检查后孩子签名', {'学生'}), ('请家长督促孩子签名', {'学生'}), ('请家长检查并签字', {'家长'}),
+                              ('读完请孩子签名', {'学生'}), ('《家长和孩子》签名', {''}), ('签字', {''})):
+            with self.subTest(text=text):
+                self.assertEqual(agent._school_signers(text), signers)
+        joint = '语文：今晚朗读《青石桥》2遍，读完请家长和孩子签名。'
+        for text, expected in (('刚才的朗读不用家长签名。', ([], ['刚才的朗读不用家长签名。'])),
+                               ('刚才的朗读孩子不用签名。', ([], ['刚才的朗读孩子不用签名。'])),
+                               ('刚才的朗读不用老师签名。', (['朗读不用老师签名。'], []))):
+            with self.subTest(text=text):
+                self.assertEqual(self._waiver_ledger(joint, text), expected, 'a waived joint signer is a change, never re-joined')
+        # The bystander of an earlier action signs nothing, so waiving that parent's signature only limits the reading.
+        self.assertEqual(self._waiver_ledger('语文：今晚朗读《青石桥》2遍，家长检查后孩子签名。', '刚才的朗读不用家长签名。'),
+                         (['朗读不用家长签名。'], []))
+
+    def _reopened(self, row_id):
+        """The saved row and single-child list read back through a freshly loaded app and Store on the same files."""
+        app = family_review.load_app(self.fixture.root, self.fixture.data)
+        store = agent.Store(app.connect, app.profiles, self.fixture.data, app=app)
+        with store._db() as c:
+            row = dict(c.execute('SELECT * FROM agent_items WHERE id=?', (row_id,)).fetchone())
+            originals = [json.loads(r[0]) for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
+        listed = [view(i) for i in app.calendar_snapshot('2026-11-04', '2026-11-04')['inbox']
+                  if i['kind'] in ('task', 'school') and i['child_ids'] == ['child-1']]
+        return row, originals, listed
+
+    def _joint_waiver_saved(self, goal, case):
+        """Z01/Z02 through the actual run: the saved goal, both originals, their source entries and versions survive a
+        reopened Store and a same-id replay unchanged; the raw joint signing stays only in the original and its history."""
+        first, later = '语文：今晚朗读《青石桥》2遍，读完请家长和孩子签名。', '刚才的朗读不用家长签名。'
+        payload, refs = self._day([('16:00', '语文老师甲', 'cn-teacher-a', first), ('16:01', '语文老师甲', 'cn-teacher-a', later)])
+        result, rows, listed, _ = self._run(payload, [self._proposal(first.split('：', 1)[1].rstrip('。'), refs, '语文', goal)], case)
+        self.assertEqual((result['failed'], result['processed']), (0, 2))
+        row, = rows
+        item, = listed
+        plan = json.loads(row['plan'])
+        task, action = plan['school_task'], plan['school_native_action']
+        self.assertEqual((task['goal'], item['body']), (goal, goal), 'the model summary is checked, never overwritten')
+        self.assertEqual(item['publications'], refs, 'both originals keep their own source entry')
+        self.assertEqual(set(task['origin_basis']), set(refs), 'both original bases kept')
+        self.assertEqual((action['quote'], [c['quote'] for c in action['changes']], action['supplements']),
+                         ('今晚朗读《青石桥》2遍，读完请家长和孩子签名', [later], []), 'the original and its withdrawal stay as history')
+        self.assertEqual(plan['school_selection_revision'], agent.SCHOOL_SELECTION_REVISION)
+        self.assertNotEqual(task['change'], 'cancel', 'waiving one signer never cancels the reading')
+        self._replay_adds_nothing(case)
+        again, originals, reopened = self._reopened(row['id'])
+        self.assertEqual(originals, payload['messages'], 'originals, publishers and send times kept unchanged')
+        self.assertEqual({k: again[k] for k in row}, row, 'a reopened Store reads the same saved row after the same-id replay')
+        self.assertEqual(reopened, listed, 'a reopened list shows the same item and source entries')
+        return task, item
+
+    def test_z01_a_summary_keeping_the_child_signer_is_ready(self):
+        task, item = self._joint_waiver_saved('今晚朗读《青石桥》2遍，孩子签名，不用家长签名。', 'Z01-correct')
+        self.assertEqual((task['state'], task['change']), ('ready', 'new'))
+        self.assertEqual(item['body'], '今晚朗读《青石桥》2遍，孩子签名，不用家长签名。')
+        self.assertNotIn('家长和孩子签名', item['body'], 'no joint parent signing beside its own waiver')
+        for words in ('《青石桥》', '2遍', '孩子签名', '不用家长签名'): self.assertIn(words, item['body'])
+
+    def test_z02_a_summary_dropping_or_contradicting_the_child_signer_is_never_ready(self):
+        for goal, case in (('今晚朗读《青石桥》2遍，不用家长签名。', 'Z02-child-dropped'),
+                           ('今晚朗读《青石桥》2遍，读完请家长和孩子签名\n朗读不用家长签名。', 'Z02-raw-rejoined'),
+                           ('今晚朗读《青石桥》2遍，读完请家长和孩子签名，不用家长签名。', 'Z02-still-joint'),
+                           ('今晚朗读《青石桥》1遍，孩子签名，不用家长签名。', 'Z02-count-changed'),
+                           ('今晚朗读《青石桥》2遍，家长签名，不用孩子签名。', 'Z02-roles-swapped')):
+            with self.subTest(case=case):
+                self.setUp()
+                task, item = self._joint_waiver_saved(goal, case)
+                self.assertEqual(task['state'], 'review', goal)
+                self.assertIn('免去其中一步', task['reason'])
+                self.assertIn('读完请家长和孩子签名', task['reason'], 'both originals stay quoted for review')
+
+    def test_z03_a_recording_roles_waiver_keeps_the_parents_recording(self):
+        """Z03, Root's frozen variant not part of this repair: the parent records and the teacher's recording is waived."""
+        first, later = '英语：今晚朗读《画中小船》两遍，请家长录音。', '刚才的朗读不用老师录音。'
+        for goal, state, case in (('今晚朗读《画中小船》两遍，请家长录音，不用老师录音。', 'ready', 'Z03-correct'),
+                                  ('今晚朗读《画中小船》两遍，不用老师录音。', 'review', 'Z03-parent-recording-dropped')):
+            with self.subTest(case=case):
+                self.setUp()
+                task = self._english_waiver_day(first, later, goal, case)
+                self.assertEqual((task['state'], task['change']), (state, 'new'), goal)
+                if state == 'ready':
+                    self._replay_adds_nothing(case)
+
+    # Root's configured-Flash request for the joint waiver (run school-supplement-basis-20261029-implementation-v8; its none
+    # reply dropped the remaining signer and was held for review): the fictional originals and the sha256 and length of the
+    # system prompt, the sha256 of the user JSON and schema it sent. No reply is replayed here.
+    JOINT_WAIVER_EVIDENCE = tuple(dict(attachments=[], content_incomplete=False, kind='text', publisher='publisher:3899f4398fc9ac4e3f9b',
+                                       ref='message:qa-flash-1017-joint-waiver-01:' + n, related_messages=['message:qa-flash-1017-joint-waiver-01:' + n],
+                                       sender='虚构语文老师', source='联合签名纯虚构验收来源', text=text, time='2026-11-04T16:0%d:00+08:00' % i,
+                                       message_order=n)
+                                  for i, (n, text) in enumerate((('901', '语文：今晚朗读《青石桥》2遍，读完请家长和孩子签名。'),
+                                                                 ('902', '刚才的朗读不用家长签名。'))))
+    JOINT_WAIVER_CHILD = dict(age='10岁', classroom='', grade='四年级', id='child-1', name='示例甲')
+    JOINT_WAIVER_SENT = dict(system=('1fa9535f61e81c557f932ea7318232184441430b836462a76b330b195be133e5', 7425),
+                             user='e2d2fe660b67fe61c9f4262c5dc5cf29ca92e1a9a92cb02c7c61875c518ced02',
+                             schema='6cb16f7da1a261d96163724c61742dffb10016e5089fe4b7d945c2be4cf472bd')
+    CHANGE_EXPLAINED = ('\nchanges是同一发布者随后明确针对本项的变更原文，必须一起引用对应ref。变更只改动原要求中实际被替换、改写或取消的部分，'
+                        '前述“未明确保留的旧要求不补造”仅指这部分，变更未涉及的原要求照常写入task_goal；明确取消整项时仍按前述整项取消规则。'
+                        '带waived的change是部分免除：只免去waived写明的那一步，写明角色时只免该角色的这一步；原要求其余的对象、角色、步骤、'
+                        '范围、数量、日期和条件都不变，同一步骤的其他角色仍须完成，task_goal全部保留并写明已免去的这一步，不按整项更正或取消处理。')
+    # Root's later none reply to the explained request (fictional, FICTIONAL-MODEL-RETURN.json of the final-only followup)
+    # kept the remaining signer but copied the joint signing before its correction; the same request now asks for the final
+    # instruction only, generic words again.
+    FINAL_GOAL_EXPLAINED = ('除整项取消外，task_goal只写变更后最终有效的完整要求：被替换、改写、取消或免去的旧内容不能仍作为要做的要求出现，'
+                            '已免去的步骤只简要写明不用做；不能先照抄原要求再接“后续更正……”拼成变更经过。原话和变更由ref保留为依据，'
+                            '变更经过可写在task_reason。')
+    JOINT_WAIVER_REJOINED = '今晚朗读《青石桥》2遍。\n读完请家长和孩子签名；后续更正：朗读不用家长签名，孩子签名仍按原要求保留。'
+
+    def _selection_request(self, evidence):
+        """The one request _select sends for these fictional originals; the seam stops it before any reply is read."""
+        class Sent(Exception):
+            pass
+        sent = []
+
+        def seam(messages, schema, name, timeout=60, *, data_path=None):
+            sent.append((messages, schema, name, timeout))
+            raise Sent
+        self.model.side_effect = seam
+        with self.assertRaises(Sent):
+            agent._select('school', [dict(e) for e in evidence], dict(self.JOINT_WAIVER_CHILD), as_of='2026-11-04',
+                          school_goals=[], school_tasks=[])
+        request, = sent
+        return request
+
+    def test_the_selection_request_explains_a_bound_change_and_its_waived_step(self):
+        """Root's failed joint-waiver request rebuilt byte for byte: its one difference is the explanation of the bound change
+        after the native-action rules; the user JSON (with changes[].waived), schema, task name and timeout are unchanged, and
+        the same original without a change keeps its exact prompt. Proves the request only, never a model's reply."""
+        sha = lambda text: hashlib.sha256(text.encode('utf-8')).hexdigest()
+        old_sha, old_len = self.JOINT_WAIVER_SENT['system']
+        messages, schema, name, timeout = self._selection_request(self.JOINT_WAIVER_EVIDENCE)
+        changed = messages
+        system, user = messages[0]['content'], messages[1]['content']
+        self.assertEqual((name, timeout, [m['role'] for m in messages]), ('family_agent_selection', 45, ['system', 'user']))
+        self.assertEqual((sha(system[:old_len]), system[old_len:]), (old_sha, self.CHANGE_EXPLAINED + self.FINAL_GOAL_EXPLAINED),
+                         'only the change explanation and its final-instruction sentence are added')
+        self.assertEqual(sha(user), self.JOINT_WAIVER_SENT['user'], 'the same originals and bound change are sent')
+        self.assertEqual(sha(json.dumps(schema, ensure_ascii=False, sort_keys=True, separators=(',', ':'))), self.JOINT_WAIVER_SENT['schema'],
+                         'no schema field or limit changes')
+        change, = json.loads(user)['required_native_actions'][0]['changes']
+        self.assertEqual((change['ref'], change['waived']), (self.JOINT_WAIVER_EVIDENCE[1]['ref'], '朗读不用家长签名。'))
+        # Generic words only: no title, count, signer or step of this case is the model's answer.
+        for words in ('青石桥', '《', '2遍', '孩子', '家长', '签', '朗读'):
+            self.assertNotIn(words, self.CHANGE_EXPLAINED + self.FINAL_GOAL_EXPLAINED)
+        # The existing whole-item correction, whole cancel and no-guess rules stay, once each and word for word.
+        for rule in ('已有保存的原事项被替换、改期、改变必做/选做或取消时，用update/cancel并review',
+                     'title/goal保留已读的完整变更要求，未明确保留的旧要求不补造；取消写原取消内容。',
+                     '同批明确取消整项行动时不能用new/ready生成执行任务，沿取消待核流程保留。',
+                     '后续明确更正优先，原话冲突仍review；没有写出的要求不补造。',
+                     '归纳的每项提交、签字、数量、截止要求都必须由当前原消息或已读完整原件支持，不能从打印、签字或参考说明补造提交动作。'):
+            self.assertEqual(system.count(rule), 1, rule)
+        self.assertEqual(system.count('带waived的change'), 1)
+        self.assertEqual(system.count('task_goal只写变更后最终有效的完整要求'), 1)
+        # Without a bound change the same original is sent with the exact prompt it had; no other entry carries the rule.
+        messages, *_ = self._selection_request(self.JOINT_WAIVER_EVIDENCE[:1])
+        self.assertEqual((sha(messages[0]['content']), len(messages[0]['content'])), (old_sha, old_len))
+        self.assertEqual(json.loads(messages[1]['content'])['required_native_actions'][0]['changes'], [])
+        # The transport reads this product-built bound change, and only it, as one keeping reasoning_effort.
+        self.assertTrue(agent.family_llm._bound_change_selection(name, changed))
+        self.assertFalse(agent.family_llm._bound_change_selection(name, messages))
+        for prompt in (agent.SCHOOL_PROMPT, agent._task_prompt(None), agent._school_original_prompt(None, None, None)):
+            self.assertNotIn('带waived的change', prompt)
+            self.assertNotIn('最终有效的完整要求', prompt)
+        self.assertEqual(self.model.call_count, 2, 'one request per selection, never a retry')
+
+    def test_a_joint_waiver_goal_is_its_final_instruction_and_a_rejoined_one_stays_held(self):
+        """Root's later reply to the explained request, its task_goal word for word through the whole Store: the joint
+        signing copied before its correction stays held for review, never rewritten; the final instruction alone is ready."""
+        task, item = self._joint_waiver_saved(self.JOINT_WAIVER_REJOINED, 'Z02-old-positive-before-correction')
+        self.assertEqual((task['state'], item['body']), ('review', self.JOINT_WAIVER_REJOINED), 'held, never stripped')
+        self.assertIn('免去其中一步', task['reason'])
+        self.setUp()
+        final = '今晚朗读《青石桥》2遍，读完请孩子签名，不用家长签名。'
+        task, item = self._joint_waiver_saved(final, 'Z01-final-instruction')
+        self.assertEqual((task['state'], task['change'], item['body']), ('ready', 'new', final))
+        for words in ('家长和孩子签名', '后续更正', '原要求'): self.assertNotIn(words, item['body'])
+
+    # Root's low-effort reply to the same two messages: task_goal word for word.
+    JOINT_WAIVER_LOW = '朗读《青石桥》2遍。\n读完后由孩子签名；家长签名不用做。\n今晚（2026-11-04）完成。'
+
+    def test_a_role_step_before_a_trailing_buyongzuo_is_the_same_waiver(self):
+        """家长签名不用做 opening its own clause withdraws the parent's signature exactly as 不用家长签名: the low reply keeps
+        the child signer and is ready, unrewritten. Dropping the child signer, waiving the wrong role, both roles or a
+        nested negative before the same 不用做 stays held."""
+        task, item = self._joint_waiver_saved(self.JOINT_WAIVER_LOW, 'Z01-low-trailing-waiver')
+        self.assertEqual((task['state'], task['change'], item['body']), ('ready', 'new', self.JOINT_WAIVER_LOW))
+        for goal, case in (('朗读《青石桥》2遍。\n家长签名不用做。', 'Z02-child-dropped-trailing'),
+                           ('朗读《青石桥》2遍。\n读完后由家长签名；孩子签名不用做。', 'Z02-wrong-role-trailing'),
+                           ('朗读《青石桥》2遍。\n读完后由孩子签名；家长和孩子签名不用做。', 'Z02-both-roles-trailing'),
+                           ('朗读《青石桥》2遍。\n读完后由孩子签名；家长签名不是不用做。', 'Z02-nested-negative-trailing')):
+            with self.subTest(case=case):
+                self.setUp()
+                task, item = self._joint_waiver_saved(goal, case)
+                self.assertEqual((task['state'], item['body']), ('review', goal), 'held, never stripped')
+
+    # Six frozen fictional summaries where the same teacher withdrew only the upload (FICTIONAL-POSITIVE-STEP-TRUTH).
+    REMAINING_STEP_CASES = (
+        ('P01_PROVIDER_NOUN_ONLY', '语文：今晚背诵《晚照》2遍并录音上传，请家长签字。', '补充刚才的背诵：录音不用上传了。',
+         '今晚背诵《晚照》2遍。\n请家长签字；后续补充明确录音不用上传。', 'review'),
+        ('P02_NOUN_ONLY', '语文：今晚背诵《晚照》2遍并录音上传，请家长签字。', '补充刚才的背诵：录音不用上传了。',
+         '今晚背诵《晚照》2遍，请家长签字，录音不用上传。', 'review'),
+        ('P03_CLEAR_RECORD', '语文：今晚背诵《晚照》2遍并录音上传，请家长签字。', '补充刚才的背诵：录音不用上传了。',
+         '今晚背诵《晚照》2遍并录音，请家长签字，不用上传。', 'ready'),
+        ('P04_RECORD_AND_NOUN', '语文：今晚背诵《晚照》2遍并录音上传，请家长签字。', '补充刚才的背诵：录音不用上传了。',
+         '今晚背诵《晚照》2遍并录音；请家长签字，录音不用上传。', 'ready'),
+        ('P05_PHOTO_NOUN', '语文：今晚朗读《石径》2遍并拍照上传。', '补充刚才的朗读：拍照不用上传了。',
+         '今晚朗读《石径》2遍，拍照不用上传。', 'review'),
+        ('P06_PHOTO_CLEAR', '语文：今晚朗读《石径》2遍并拍照上传。', '补充刚才的朗读：拍照不用上传了。',
+         '今晚朗读《石径》2遍并拍照，不用上传。', 'ready'))
+
+    def test_a_step_named_only_in_its_no_upload_statement_is_not_kept(self):
+        """Only the upload was withdrawn, so recording or photographing is still asked: a summary naming 录音/拍照 only as
+        what 不用上传 withdraws is held, never rebuilt; one asking 并录音/并拍照 beside the same withdrawal stays ready.
+        Every case runs the actual Store with the withdrawal bound as a change of its one outcome."""
+        for case, first, later, goal, state in self.REMAINING_STEP_CASES:
+            with self.subTest(case=case):
+                self.setUp()
+                payload, refs = self._day([('16:00', '语文老师甲', 'cn-teacher-a', first), ('16:01', '语文老师甲', 'cn-teacher-a', later)])
+                result, rows, listed, _ = self._run(payload, [self._proposal(first.split('：', 1)[1].rstrip('。'), refs, '语文', goal)], case)
+                self.assertEqual((result['failed'], result['processed']), (0, 2))
+                row, = rows
+                item, = listed
+                plan = json.loads(row['plan'])
+                task, action = plan['school_task'], plan['school_native_action']
+                self.assertEqual([c['quote'] for c in action['changes']], [later], 'the withdrawal is bound as a change')
+                self.assertEqual((task['state'], task['goal'], item['body']), (state, goal, goal), 'checked, never rewritten')
+                if state == 'review': self.assertIn('免去其中一步', task['reason'])
 
     def _rejected(self, messages, proposals, case):
         """The whole batch stays for the original retry limit: nothing saved, originals kept, no further receipt."""
@@ -1261,12 +1692,16 @@ class ContinuedSupplementVariantTests(unittest.TestCase):
         for later in (('刚才的朗读完成后还要请家长签字。', 60, 'cn-teacher-b', 'synthetic-group'),  # another teacher
                       ('刚才的朗读完成后还要请家长签字。', 60, 'cn-teacher-a', 'synthetic-other'),  # another source or child binding
                       ('刚才的朗读完成后还要请家长签字。', 600, *same), ('刚才的朗读完成后改为家长签字。', 60, *same),
-                      ('刚才的朗读完成后取消家长签字。', 60, *same), ('刚才的朗读完成后也不用家长签字。', 60, *same),
+                      ('刚才的朗读完成后取消家长签字。', 60, *same),
                       ('刚才的朗读完成后还要家长签字吗？', 60, *same), ('刚才的朗读完成后明天还要家长签字。', 60, *same),
                       ('刚才的朗读完成后还要家长明早签字。', 60, *same), ('刚才的朗读完成后还要再读1遍。', 60, *same),
                       ('刚才的朗读完成后还要再读两遍。', 60, *same), ('刚才的作业完成后还要家长签字。', 60, *same),
                       ('刚才的完成后还要家长签字。', 60, *same)):
-            self.assertEqual(self._ledger(later), unbound, later)
+            with self.subTest(later=later):
+                self.assertEqual(self._ledger(later), unbound, later)
+        # W01 again: no signature was asked, so 也不用家长签字 is a compatible limit kept whole on that item.
+        self.assertEqual(self._ledger(('刚才的朗读完成后也不用家长签字。', 60, *same)),
+                         {'今晚朗读《荷塘》2遍': ['朗读完成后也不用家长签字。']})
         self.assertEqual(self._ledger(('刚才的朗读完成后还要请家长签字。', 60, *same), first='今晚朗读《荷塘》2遍；朗读《春》1遍。'),
                          {'今晚朗读《荷塘》2遍': [], '朗读《春》1遍': []}, 'two items it could mean')
 
