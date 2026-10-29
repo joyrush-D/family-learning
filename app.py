@@ -280,12 +280,17 @@ def tasks(connection=None):
         if task['source'].startswith('Agent建议:'):
             origin=task['source'].splitlines()[0].removeprefix('Agent建议:')
             if connection.execute("SELECT 1 FROM sqlite_master WHERE name='agent_items'").fetchone():
-                proposal=connection.execute('SELECT plan,kind,state,task_id FROM agent_items WHERE id=?',(origin,)).fetchone()
+                proposal=connection.execute('SELECT * FROM agent_items WHERE id=?',(origin,)).fetchone()
                 if proposal:
                     task['advice']=json.loads(proposal['plan']).get('school_task',{}).get('advice','')
                     task['school_origin']=proposal['kind']=='school' and proposal['state']=='accepted' and proposal['task_id']==task['id']
                     changes=json.loads(proposal['plan']).get('school_changes',[]);last=changes[-1] if changes else {};update=updates.get(task['id'],{})
                     task['school_completion_needs_review']=bool(task['school_origin'] and last.get('change') in ('update','append') and update.get('status')=='已完成' and update.get('updated','')<last.get('confirmed_at',''))
+                    if task['school_origin']:
+                        # An earlier release's saved words read by the current sibling guard: display only, the saved task stays.
+                        title,action=family_agent.school_saved_own_words(connection,proposal,task['title'],task['action'])
+                        if not task['focus']['title']: task['title']=title
+                        if not task['focus']['goal']: task['action']=action
         if task['focus']['title']: task['original_title']=task['title'];task['title']=task['focus']['title']
         if task['focus']['goal']: task['original_action']=task['action'];task['action']=task['focus']['goal']
     profile_ids={p['name']:p['id'] for p in profiles(connection)}

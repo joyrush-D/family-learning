@@ -2045,41 +2045,48 @@ def serve_t02(port):
     try:
         payload, proposals = case._t02_batch(t06=True)
         case._run(payload, proposals, 'T02-served')
-        app, fixed = case.app, case.now
-
-        def deny(*args, **kwargs):
-            raise AssertionError('opening the list or calendar must not call a model')
-        app.family_llm._chat_json = deny
-
-        class FrozenDateTime(dt.datetime):
-            @classmethod
-            def now(cls, tz=None):
-                value = fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
-                return cls(value.year, value.month, value.day, value.hour, value.minute, value.second, tzinfo=value.tzinfo)
-
-            def date(self):
-                return FrozenDate(self.year, self.month, self.day)
-
-        class FrozenDate(dt.date):
-            @classmethod
-            def today(cls):
-                return cls(fixed.year, fixed.month, fixed.day)
-        dt.datetime, dt.date = FrozenDateTime, FrozenDate
-        # The fixture's fictional family rules stay the only documents read; pages come from this source tree.
-        docs = {name: (app.ROOT / name).read_text() for name in ('家庭运行规则.md',)}
-        app.read = lambda name: docs.get(name, '')
-        app.ROOT = Path(__file__).resolve().parent
-        app.prepare_assets()
-        server = app.ThreadingHTTPServer(('127.0.0.1', port), app.Handler)
-        print('T02 Store served', flush=True)
-        try:
-            server.serve_forever()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            server.server_close()
+        serve_store(case, port, 'T02 Store served')
     finally:
         case.doCleanups()
+
+
+
+def serve_store(case, port, label):
+    """Serve one disposable case's saved Store through the real app HTTP server, frozen at the case's own time. Opening a page
+    calls no model; no collector, device or household path is used; only this server stops on SIGINT."""
+    app, fixed = case.app, case.now
+
+    def deny(*args, **kwargs):
+        raise AssertionError('opening the list or calendar must not call a model')
+    app.family_llm._chat_json = deny
+
+    class FrozenDateTime(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
+            return cls(value.year, value.month, value.day, value.hour, value.minute, value.second, tzinfo=value.tzinfo)
+
+        def date(self):
+            return FrozenDate(self.year, self.month, self.day)
+
+    class FrozenDate(dt.date):
+        @classmethod
+        def today(cls):
+            return cls(fixed.year, fixed.month, fixed.day)
+    dt.datetime, dt.date = FrozenDateTime, FrozenDate
+    # The fixture's fictional family rules stay the only documents read; pages come from this source tree.
+    docs = {name: (app.ROOT / name).read_text() for name in ('家庭运行规则.md',)}
+    app.read = lambda name: docs.get(name, '')
+    app.ROOT = Path(__file__).resolve().parent
+    app.prepare_assets()
+    server = app.ThreadingHTTPServer(('127.0.0.1', port), app.Handler)
+    print(label, flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
 
 
 if __name__ == '__main__':

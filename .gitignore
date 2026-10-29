@@ -132,6 +132,7 @@
 !/test_school_parent_edited_review.py
 !/test_school_ack_originals_ui.cjs
 !/test_school_frozen_workflow_ui.cjs
+!/test_daily_list_actual_scope_ui.cjs
 !/test_school_history.py
 !/test_agent_http.py
 !/test_agent_ui.cjs
