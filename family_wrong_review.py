@@ -300,7 +300,7 @@ class Store:
                     region = item['region']
                     # 浏览器按方向显示的自然尺寸只能等于原文件尺寸或其90°旋转；其他一律不核准。
                     if size is None or (region['natural_width'], region['natural_height']) not in (size, size[::-1]):
-                        raise WrongReviewError('照片尺寸无法与原件核对，未保存框选；可不框直接保存', 409, 'wrong_region_unverified')
+                        raise WrongReviewError('这张照片的尺寸或格式无法与原件核对，框选未保存；请点“清除框”后直接保存这条错题', 409, 'wrong_region_unverified')
                     item['meta'] = dict(child_id=child_id, task_id=task_id, feedback_record_id=feedback_id,
                                         feedback_created=feedback_created, upload_id=item['attachment'],
                                         upload_sha256=hashlib.sha256(data).hexdigest(),

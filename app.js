@@ -993,7 +993,7 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
     const prior=data.records.find(r=>r.request_key===body.request_key+'-01'&&r.related_record_id===record.id&&r.linked_task_id===task.id&&r.child===task.child&&sameWrongRegion(r.wrong_region,body.items[0].region&&{...body.items[0].region,upload_id:body.items[0].attachment}));
     if(prior)saved=true;
    }
-   if(!saved){knownFailure=response.status>=400&&response.status<500&&out.code!=='request_record_changed';throw Error(out.error||'错题保存结果尚未核对')}
+   if(!saved){knownFailure=response.status>=400&&response.status<500&&out.code!=='request_record_changed';throw Object.assign(Error(out.error||'错题保存结果尚未核对'),{code:out.code})}
   }else if(out.ok&&out.saved?.length===1&&Number.isInteger(out.saved[0].id))saved=true;
   else throw Error('错题保存回执不完整');
   taskWrongPending=null;
@@ -1001,6 +1001,7 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
   catch{$('#taskFeedbackStatus').textContent='错题已保存，列表暂未刷新；请重新打开这份作业核对。';panel.querySelectorAll('[data-wrong-field]').forEach(x=>x.value='')}
  }catch(error){
   if(knownFailure)taskWrongPending=null;
+  if(knownFailure&&body.items[0].region&&['wrong_region_unverified','wrong_feedback_changed'].includes(error.code))panel.querySelector('[data-task-wrong-frame-status]').textContent='框选未保存；可点“清除框”后不框继续保存，原作业不受影响。';
   status.textContent=(error.name==='AbortError'?'连接超时':error.message)+(taskWrongPending?'；结果尚未核对，请用原内容重试。':'；输入仍保留。');
  }finally{clearTimeout(timer);button.disabled=false;if(!taskWrongPending)panel.querySelectorAll('input,textarea,select').forEach(x=>x.disabled=false);if(taskWrongPending)button.textContent='核对并重试'}
 });

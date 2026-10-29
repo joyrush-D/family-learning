@@ -2,6 +2,7 @@
 import hashlib
 import struct
 import unittest
+import unittest.mock
 import uuid
 import zlib
 
@@ -92,6 +93,37 @@ class WrongRegionTest(unittest.TestCase):
                                     note='原作答后来更正', attachments=[photo]))
         framed = next(r for r in self.records() if '第3题' in r['title'])
         self.assertFalse(framed['wrong_region']['current'])
+
+    def test_state_read_never_writes_regions_and_upload_identity_is_by_id(self):
+        image = png(200, 100)
+        photo = self.upload('虚构作答.png', image)
+        twin = self.upload('同字节另一上传.png', image)
+        self.assertNotEqual(photo, twin)  # 同哈希不同上传身份
+        task = app.new_task(dict(child='示例甲', title='虚构语文作业', category='homework'))
+        feedback = app.save_task_feedback(dict(task_id=task['id'], child='示例甲', day='2026-09-18',
+                                               request_key=uuid.uuid4().hex, attachments=[photo]))
+        answer = next(r for r in self.request('/api/state')[1]['records'] if r['id'] == feedback['record_id'])
+        region = dict(x=0, y=0, width=0.5, height=0.5, natural_width=200, natural_height=100)
+        body = dict(child='示例甲', day='2026-09-18', subject=answer['subject'] or '', task_id=task['id'],
+                    feedback_record_id=answer['id'], feedback_created=answer['created'])
+        item = dict(label='第1题', answer='甲', correction='乙')
+        status, out = self.request('/api/wrong/save', body | dict(request_key=uuid.uuid4().hex,
+                                                                  items=[item | dict(attachment=twin, region=region)]))
+        self.assertEqual(status, 409, out)  # 同字节但不属于原作答的上传不能冒充
+        self.assertFalse(self.table())
+        self.assertEqual(self.request('/api/wrong/save', body | dict(request_key=uuid.uuid4().hex,
+                                                                     items=[item | dict(attachment=photo, region=region)]))[0], 200)
+        statements = []
+        connect = app.connect
+        def traced():
+            c = connect()
+            c.set_trace_callback(statements.append)
+            return c
+        with unittest.mock.patch.object(app, 'connect', traced):
+            self.assertEqual(self.request('/api/state')[0], 200)
+        touched = [s for s in statements if 'wrong_regions' in s]
+        self.assertTrue(touched)
+        self.assertFalse([s for s in touched if not s.lstrip().upper().startswith('SELECT')], touched)
 
 
 if __name__ == '__main__':
