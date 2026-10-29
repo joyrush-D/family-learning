@@ -2779,6 +2779,44 @@ def _school_own_clause_dates(quote,cited,others):
     return _school_own_dates(_school_corrected_quote(quote,homes[0],cited),published)-later_dropped_days(quote,text[start:],published)
 
 
+def _school_sibling_scopes(proposals,evidence,skip=(),native=()):
+    """{index: (own part, sibling clause)} for an anchor that runs on over a sibling proposal's whole own clause.
+
+    The anchor contract keeps each title_quote inside its own action, yet a reply may let one run on across a separator
+    (英语今晚跟读…，不用上传录音；下周一英语课听写。) while another proposal quotes exactly that next clause. Only where one
+    original proves both scopes is the wider anchor read as its own part: both cite that same single original and occur in it
+    once, the sibling's quote is one whole clause at the head or tail of the wider one, no third anchor touches that clause,
+    and the wider proposal's due, summary and own words use no day the clause states. Anything else stays shared. An original
+    whose actions the ledger located keeps its own guard: an anchor reaching into a listed action stays refused for retry.
+    """
+    from family_agenda import sent_day
+    marks='。；;！!？?\n';texts={e['ref']:e for e in evidence}
+    def anchor(p):
+        if not isinstance(p,dict) or not isinstance(p.get('title_quote'),str) or not isinstance(p.get('evidence'),list):return None
+        refs={q.get('ref') for q in p['evidence'] if isinstance(q,dict)};quote=p['title_quote'].strip()
+        entry=texts.get(next(iter(refs))) if len(refs)==1 and not refs&set(native) else None
+        if not quote or not entry or entry['text'].count(quote)!=1:return None
+        return entry,entry['text'].index(quote),entry['text'].index(quote)+len(quote)
+    anchors=[anchor(p) for p in proposals];out={}
+    for i,own in enumerate(anchors):
+        if not own or i in skip:continue
+        entry,start,end=own;text=entry['text']
+        if not ((start==0 or text[start-1] in marks) and (end==len(text) or text[end] in marks or text[end-1] in marks)):continue
+        touching=[j for j,p in enumerate(proposals) if j!=i and isinstance(p,dict) and isinstance(p.get('title_quote'),str) and p['title_quote'].strip()
+                  and any(max(start,m.start())<min(end,m.end()) for m in re.finditer(re.escape(p['title_quote'].strip()),text))]
+        if len(touching)!=1 or touching[0] in skip or touching[0] in out or not anchors[touching[0]] or anchors[touching[0]][0] is not entry:continue
+        j=touching[0];_,left,right=anchors[j]
+        if left<start and (right==end or right==end+1 and text[end] in marks):part=text[left:start].rstrip(marks+' ，,')
+        elif left==start and right>end:part=text[end:right].lstrip(marks+' ，,')
+        else:continue
+        published=sent_day(entry.get('time',''));days=_school_own_dates(text[start:end],published) if published else set()
+        wider=proposals[j]
+        if not part or not published or ({str(wider.get('due',''))}|_school_goal_dates(str(wider.get('task_goal','')),[entry])
+                                         |_school_own_dates(part,published))&days:continue
+        out[j]=(part,text[start:end])
+    return out
+
+
 # One closed choice a parent ticks between quoted options (勾选‘参加’或‘不参加’, 圈选“美术”、“篮球”或“合唱”), of any length
 # inside its own sentence.
 _SCHOOL_CHOICE_OPTION=r'‘[^‘’。；;！!？?\n]+’|“[^“”。；;！!？?\n]+”|「[^「」。；;！!？?\n]+」|『[^『』。；;！!？?\n]+』'
@@ -2819,7 +2857,17 @@ def _school_role_days(quote,cited,others,words=False):
     if not published:return None
     # A weekday (孩子周五交给班主任) is a role day as much as 明天 is; _school_clause_day grounds it on the sending day.
     day=r'(?:今天|今日|今晚|明天|明日|明早|明晚|后天|\d{1,2}\s*月\s*\d{1,2}\s*[日号]|(?:本|这|下)?(?:周|星期|礼拜)[一二三四五六日天])'
-    if any(_school_own_dates(e['text'],sent_day(e.get('time',''))) or re.search(day,e['text']) for e in cited if e is not homes[0]):return None
+    def restating(e):
+        # The same teacher's strictly later correction of this item (更正刚才《山间》课后题：每题还要写出理由，今天照常完成，明天照常
+        # 检查。) whose header names nothing but this item and whose one body sentence holds no change, cancel, excuse or open
+        # word: its body is read below by this same reader and must give exactly this range's roles at their own days.
+        found=re.match(r'\s*(?:更正|补充)([^：:。；;！!？?\n]{0,30})[：:]\s*',e['text']);body=e['text'][found.end():] if found else ''
+        if (not found or not _school_native_later_text(homes[0],e) or len([s for s in re.split(r'[。；;！!？?\n]',body) if s.strip()])!=1
+                or re.search(_SCHOOL_CHANGE+r'|(?:不|免)\s*(?:交|检查|'+_SCHOOL_SIGN+r'|收)|改期|停办|'+_SCHOOL_NATIVE_UNSETTLED,_titles_read_as_objects(body))):return None
+        return found[1],body
+    dated=[e for e in cited if e is not homes[0] and (_school_own_dates(e['text'],sent_day(e.get('time',''))) or re.search(day,e['text']))]
+    restated=[(e,restating(e)) for e in dated]
+    if not all(r for _,r in restated):return None
     start=text.index(quote);end=start+len(quote)
     head=max(text.rfind(mark,0,start) for mark in '。；;！!？?\n')+1
     # Only a connector, the item's own label (英语：、另通知：) or its list number may stand before its quoted words; a label
@@ -2828,15 +2876,25 @@ def _school_role_days(quote,cited,others,words=False):
     if not lead or lead[1] and re.search(day,lead[1]):return None
     if not quote.rstrip(' ').endswith(tuple('。；;！!？?\n')):
         tail=re.match(r'[^。；;！!？?\n]*[。；;！!？?\n]?',text[end:])
-        if tail[0].strip('。；;！!？? \n'):return None  # The quote stops inside its sentence: not this item's whole own words.
+        # The quote stops inside its sentence: the rest is still this item's own words only while it adds a standard of the
+        # same work (，只写答案；), no day, role, carrying or change of its own; any other rest is not this item's whole words.
+        if tail[0].strip('。；;！!？? \n') and re.search(day+r'|'+_SCHOOL_ANY_DAY+r'|周末|交|检查|'+_SCHOOL_SIGN+r'|带|'+_SCHOOL_CHANGE,
+                                                       _titles_read_as_objects(tail[0])):return None
         end+=tail.end()
     own=text[head:end]
     role=(r'\s*'+day+r'\s*(?:早上|早晨|上午|中午|下午|晚上|早读|课前|到校后?)?\s*(?:之前|以前|前)?\s*')
     following=re.match(r'[^。；;！!？?\n]+[。；;！!？?\n]?',text[end:])
+    # A message holding only this item's sentence and that following one leaves no other words a bare check could name.
+    alone=bool(following) and not text[:head].strip() and not text[end+following.end():].strip()
     if following and all(re.fullmatch(role+r'(?:完成|做完|写完|读完|(?:请家长)?(?:'+_SCHOOL_SIGN+r'))\s*',c)
+                         # 明天早读检查 closing such a message (语文今天先做《山间》课后第2、4题，答案只需写结论。明天早读检查。) checks it.
+                         or alone and re.fullmatch(role+r'检查\s*',c)
                          or re.fullmatch(role+r'(?:让孩子)?(?:交|交回|上交|提交)(?:给[^，,]{1,8})?\s*',c)
                          or ((m:=re.fullmatch(role+r'(?:让孩子)?(?:交回|上交|交)([^，,给至到]{1,8})\s*',c)) and m[1] in own)
                          or ((m:=re.fullmatch(role+r'检查([^，,]{1,8})\s*',c)) and m[1] in own)
+                         # Checked at its own subject's lesson (明早语文课检查 after 语文今晚完成…): the lesson the item's own words name.
+                         or ((m:=re.fullmatch(role+r'('+_SCHOOL_LESSON_PLACE+r')(?:上|时)?\s*检查\s*',c))
+                             and (named:=set(re.findall(_SCHOOL_NATIVE_SUBJECTS,m[1]))) and all(s in own for s in named))
                          for c in re.split(r'[，,]',following[0].strip('。；;！!？? \n'))):
         end+=following.end()
     span=_school_choices_read(text[head:end])
@@ -2886,7 +2944,14 @@ def _school_role_days(quote,cited,others,words=False):
             if len(days)!=1 or (finish and back):return None
             (done if finish else due).update(days)
     if len(due)!=1 or any(d>next(iter(due)) for d in done):return None
-    if words and _school_range_withdrawn(span,[text[:head],text[end:]]+[e['text'] for e in cited if e is not homes[0]]):return None
+    for e,(named,body) in restated:
+        # Its header's titles and subjects are this item's own, and its body states this range's very roles at their days;
+        # a changed or open day, another role, another title or subject keeps the existing protections (None).
+        if (any(t not in own for t in re.findall(r'《[^《》]*》',named))
+                or set(re.findall(_SCHOOL_NATIVE_SUBJECTS,named))-set(re.findall(_SCHOOL_NATIVE_SUBJECTS,own))
+                or _school_role_days(body,[dict(e,text=body)],[])!=(done,next(iter(due)))):return None
+    if words and _school_range_withdrawn(span,[text[:head],text[end:]]+[e['text'] for e in cited if e is not homes[0]
+                                                                         and all(e is not r for r,_ in restated)]):return None
     return (done,next(iter(due)),span) if words else (done,next(iter(due)))
 
 
@@ -2921,6 +2986,11 @@ def _school_range_withdrawn(span,texts):
     for text in texts:
         for sentence in re.split(r'[。；;！!？?\n]',text):
             read=_titles_read_as_objects(sentence);clauses=re.split(r'[，,]',sentence)
+            # A correction that only changes how the work is written (更正：…课后题要写出理由，不是只写答案) names no day, role,
+            # carrying, change or open word after its header: it withdraws none of the roles; any of those still decides.
+            header=re.match(r'\s*(?:更正|补充)\s*[：:]',sentence)
+            if header and not re.search(change+r'|'+_SCHOOL_ANY_DAY+r'|周末|交|检查|'+_SCHOOL_SIGN+r'|带|收|'+_SCHOOL_NATIVE_UNSETTLED,
+                                        _titles_read_as_objects(sentence[header.end():])):continue
             if not re.search(change,read) and not (changed and any(re.fullmatch(carried,re.sub(lead,'',c)) for c in clauses)):continue
             changed=True
             # A question, condition or unsettled word leaves the change open, except in a remark beside it holding no general
@@ -2963,12 +3033,16 @@ def _school_list_heading_day(quote,cited,others=()):
     homes=[e for e in cited if quote and quote in e['text']]
     if len(homes)!=1 or homes[0]['text'].count(quote)!=1:return ''
     text=homes[0]['text'];published=sent_day(homes[0].get('time',''));read=_titles_read_as_objects(text)
-    head=re.match(r'\s*今晚\s*(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r')\s*)?(?:作业|任务)?\s*[：:]\s*',text)
+    # The one subject label may stand before 今晚 too, and the heading may state the count of its items (数学今晚有两项：).
+    subject=r'(?:'+_SCHOOL_NATIVE_SUBJECTS+r')'
+    head=re.match(r'\s*(?:'+subject+r'\s*今晚|今晚\s*(?:'+subject+r'\s*)?)(?:作业|任务|(?:有|共)?([二两三四五六七八九十2-9])项(?:作业|任务)?)?\s*[：:]\s*',text)
     if (not published or not head or len(re.findall(_SCHOOL_ANY_DAY,read))!=1
             or any(re.search(_SCHOOL_ANY_DAY,_titles_read_as_objects(e['text'])) for e in cited if e is not homes[0])
             or re.search(_SCHOOL_DEFERRED+r'|取消|改为|改到|改成|推迟|延期|顺延|更正|待定|另行通知|或|如果|若|可能|大概|左右|[？?]',read)):return ''
     marks=list(re.finditer(r'(?:^|(?<=[。；;\s]))([1-9][0-9]?)[.．、]',text[head.end():]))
     if not marks or marks[0].start() or [int(m[1]) for m in marks]!=list(range(1,len(marks)+1)):return ''
+    # A stated count heads only items numbered exactly 1..that count, the proof the ledger's heading reads (_school_native_listed).
+    if head[1] and len(marks)!=(int(head[1]) if head[1].isdigit() else _SCHOOL_NATIVE_COUNT[head[1]]):return ''
     start=text.index(quote);end=start+len(quote)
     items=[(head.end()+m.end(),head.end()+(marks[n+1].start() if n+1<len(marks) else len(text)-head.end())) for n,m in enumerate(marks)]
     own=[(left,right) for left,right in items if left<=start and end<=right]
@@ -3016,10 +3090,18 @@ def _school_scope_day(quote,cited,others=()):
             if max(start,at)<min(end,at+len(other)):return None
             at+=len(other)
     subjects=_school_native_subjects(text)
-    if (re.match(r'\s*'+_SCHOOL_CONTINUED,quote) and re.search(_SCHOOL_OUTCOME_LEARN,quote) and len(subjects)==1
+    # The second of one ordered sequence (数学今晚先完成《计算册》…。再订正《周练》第5题…) continues the 先 step its directly
+    # preceding sentence states, as 还要 continues its own sentence: only that one sentence is read before it.
+    then=re.match(r'\s*(?:然后|接着)?再',quote)
+    if ((re.match(r'\s*'+_SCHOOL_CONTINUED,quote) or then) and re.search(_SCHOOL_OUTCOME_LEARN,quote) and len(subjects)==1
             and _school_native_subjects(quote)<=subjects
             and not re.search(r'家长|监护人|爸爸|妈妈|老师|班主任|课代表|签|盖章|填写|填好|交|带',re.sub(r'《[^》]*》','',quote))):
         before=text[max(text.rfind(stop,0,start) for stop in '。！!？?\n')+1:start].strip(' ，,；;')
+        if then:
+            stop=max(text.rfind(mark,0,start) for mark in '。！!？?\n')
+            before=(text[max(text.rfind(mark,0,stop) for mark in '。！!？?\n')+1:stop].strip(' ，,；;')
+                    if stop>=0 and not text[stop+1:start].strip() and text[stop]=='。' else '')
+            if not re.search(r'先',_titles_read_as_objects(before)):before=''
         days=deadlines(before,published)
         if (before and len(days)==1 and _school_native_subjects(before)==subjects and re.search(_SCHOOL_OUTCOME_LEARN,before)
                 and re.search(_SCHOOL_ANY_DAY,_titles_read_as_objects(before))):
@@ -4807,7 +4889,10 @@ def _school_native_errand(clause,owned):
     """
     from family_agenda import _PREPARE,_PREPARED_THING,_titles_read_as_objects
     part=re.split(r'[，,]',re.sub(r'^\s*(?:另外|此外|还有|同时)\s*[，,]?\s*','',clause),maxsplit=1)[0].strip()
-    when=r'(?:请\s*)?(?:(?:'+_SCHOOL_NATIVE_DATE+r'|明早)\s*)?(?:(?:早上|上午|中午|下午|晚上)\s*)?(?:(?:[一-鿿]{1,4}课(?:上|前)?|到校后?|来校时?)\s*)?'
+    # The lesson may name itself before or after its day (明天科学课带…, 科学课下周一带…): the order does not change the errand.
+    lesson=r'[一-鿿]{1,4}课(?:上|前)?'
+    when=(r'(?:请\s*)?(?:(?:'+lesson+r')\s*(?:'+_SCHOOL_NATIVE_DATE+r'|明早)\s*(?:(?:早上|上午|中午|下午|晚上)\s*)?'
+          r'|(?:(?:'+_SCHOOL_NATIVE_DATE+r'|明早)\s*)?(?:(?:早上|上午|中午|下午|晚上)\s*)?(?:(?:'+lesson+r'|到校后?|来校时?)\s*)?)')
     asker=lambda who:r'(?:请\s*)?(?:(?:'+who+r')\s*)?(?:(?:要|需|须|记得|务必)\s*)?'
     carried=re.fullmatch(when+asker(r'孩子|学生|同学们?')+r'(?:带(?:上|好|齐|来)?|携带)(?![回到去领着读])\s*(\S[^，,]*)',part)
     # A parent may be asked to prepare (今晚请家长准备好一条短绳). The title-blanked copy keeps every position, so the thing
@@ -4833,8 +4918,11 @@ def _school_native_heading(text):
         heading=r'(?:作业|要求|任务|事项|通知|完成(?:[二两三四五六七八九十2-9]项)?(?:要求|作业|任务|练习|事项|通知)?)\s*$'
         common=bool(re.search(heading,lead))
         label=bool(re.fullmatch(r'(?:'+_SCHOOL_NATIVE_SUBJECTS+r')(?:和(?:'+_SCHOOL_NATIVE_SUBJECTS+r'))*',lead))
+        # A lead ending in the count its numbered items meet exactly (数学今晚有两项：1.…；2.…) heads them as 有两项作业 does:
+        # the same stated-count proof _school_native_listed reads; an ordinal (第2项) or numbers that differ head nothing.
+        counted=bool(re.search(r'(?<!第)[二两三四五六七八九十2-9]项\s*$',lead)) and _school_native_listed(text,lead,head.end())
         if container:body_start=head.end()
-        elif common or label:
+        elif common or label or counted:
             header=lead;body_start=head.end()
             # The list's own intro after its label (历史：请在…晚完成两项：1. …) heads the same numbered items,
             # so its date and count stay the heading, never a first outcome; an intro that is itself an outcome stays one.
@@ -5979,6 +6067,12 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         # An explicit independent outcome the reply merged into another proposal is given its own action from the original.
         # school_later (the source's own later stored messages) only guards that compile; the model never sees it.
         result['proposals'],split_marks=_school_separate_outcomes(result['proposals'],evidence,{a['ref'] for a in native_actions},source_later=school_later)
+    # An anchor that ran on over a sibling's own clause is read as its own part; the model's quote stays with the item.
+    sibling_scopes=(_school_sibling_scopes(result['proposals'],evidence,set(split_marks),{a['ref'] for a in native_actions})
+                    if routing and not historical else {})
+    for index,(part,clause) in list(sibling_scopes.items()):
+        sibling_scopes[index]=dict(quote=result['proposals'][index]['title_quote'],own=part,sibling=clause)
+        result['proposals'][index]=dict(result['proposals'][index],title_quote=part)
     refs = {entry['ref']: entry['text'] for entry in evidence}; output = []; accounted = set();history_actions=[]
     title_quotes=[p['title_quote'].strip() if isinstance(p,dict) and isinstance(p.get('title_quote'),str) else '' for p in result['proposals']]
     title_refs=[{q.get('ref') for q in p['evidence'] if isinstance(q,dict)} if isinstance(p,dict) and isinstance(p.get('evidence'),list) else set()
@@ -6233,6 +6327,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             item['plan']['school_selection_revision']=SCHOOL_SELECTION_REVISION
             # The verified original words this item was dated from; its saved title is the rewritten short one.
             if dated_quote and not native_action and not historical:item['plan']['school_date_quote']=dated_quote
+            if index in sibling_scopes:item['plan']['school_anchor_receipt']=sibling_scopes[index]
             if historical:
                 item['plan']['school_action_anchor']=action_anchor
                 item['plan']['school_history_uncertain']=history_uncertain
