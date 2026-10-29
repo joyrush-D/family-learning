@@ -1130,7 +1130,8 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                     if gap:self.assertIn(gap,got['reason'])
                     else:self.assertEqual((got['reason'],got['purpose']),('只是材料。',purpose))
 
-    # Actual isolated Flash returns (effort low, 6000 output budget) under the current prompt, Root's run of 6bceda7
+    # Actual isolated Flash returns (effort low, 6000 output budget) under the prompt before be97a3e, Root's run of 6bceda7
+    # (be97a3e only rewrote three original-prompt sentences, undone below before hashing: these are not current-prompt receipts).
     # (product code identical at 1cd1ba8): fixed reader extraction, not OCR or the formal main model. Each reply is the
     # receipt byte for byte (sha256 of its file) and answers the exact request it was given (sha256 of the messages).
     ACTUAL_FLASH=[('READING_HEADING','课后阅读要求',0,'ec76171985275b4b27bdb653db01941ac4e0e2b30a4975b5f82ca0cfc2325fd7',
@@ -1153,8 +1154,11 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                         advice='',reason='原件已读清一条完整学习要求，属动手测量与记录任务；要求明确，未写明截止或提交方式。',
                         state='ready',purpose='learning',existing='agent-655dfbe9e2e9e487ced7847627b039c3',part='8bff0d13828654ec'))]
 
-    def test_actual_flash_replies_under_the_current_prompt_replay_unchanged_through_the_store(self):
+    def test_actual_flash_replies_under_the_previous_prompt_replay_unchanged_through_the_store(self):
         import hashlib
+        previous=[('candidate是本轮原件的原候选，不是整份行动清单。candidate和existing_actions的title/goal是已保存的旧文字，只用于对应编号和保留决定；其中读原件前生成的“内容未读”“请核对是否适用、准备什么、何时完成”等待核占位及原消息正文里的“内容未读”标记都是收集时状态，不是本轮原件内容或当前缺口，当前读取范围以content_incomplete和已读原件为准。','candidate是本轮原件的原候选，不是整份行动清单。'),
+            ('title/goal/advice留空且state=review；已读完整原件中只是名称/标题的requirement行是已读资料，用途unknown时也按下方规则state=reference，','title/goal/advice留空且state=review，'),
+            ('当前candidate_id须恰好在一项的existing_item_id中返回一次，不默认将数组第一项当原候选；change=new只说明与已保存school_tasks的关系，不表示另建候选或清空编号。不对应任何existing_actions的另一独立行动existing_item_id留空。','当前candidate_id须恰好返回一次，不默认将数组第一项当原候选。新独立行动existing_item_id留空。')]
         for case,text,expected,reply_sha,request_sha,v in self.ACTUAL_FLASH:
             with self.subTest(case):
                 probe=type(self)('runTest');probe.setUp()
@@ -1167,7 +1171,11 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                     self.assertEqual(hashlib.sha256((json.dumps(reply,ensure_ascii=False,indent=2)+'\n').encode()).hexdigest(),reply_sha)
                     image=probe.data/'uploads'/('b'*32);before=hashlib.sha256(image.read_bytes()).hexdigest()
                     def exact(messages):
-                        self.assertEqual(hashlib.sha256(json.dumps(messages,ensure_ascii=False,sort_keys=True).encode()).hexdigest(),request_sha)
+                        sent=copy.deepcopy(messages);system=sent[0]['content']
+                        for now,before in previous:
+                            self.assertEqual(system.count(now),1);system=system.replace(now,before)
+                        sent[0]['content']=system
+                        self.assertEqual(hashlib.sha256(json.dumps(sent,ensure_ascii=False,sort_keys=True).encode()).hexdigest(),request_sha)
                         return copy.deepcopy(reply)
                     result,calls=probe.refresh(exact)
                     errors=[r[0] for r in probe.rows("SELECT error FROM agent_jobs WHERE id LIKE 'school-task:%'")]
