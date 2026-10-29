@@ -948,9 +948,10 @@ def school_task_light_route_contract():
     effort=lambda body:body['reasoning']['effort'] if 'reasoning' in body else body.get('reasoning_effort')
     tokens=lambda body:body.get('max_tokens',body.get('max_output_tokens'))
     for responses in (False,True):
-        # Already-read school text: light model, the main reasoning_effort (never the light none), 3000/45 unchanged.
+        # Already-read school text: light model, the main reasoning_effort (never the light none), 45 s unchanged; the
+        # output limit is the approved school-task resource change from 3000 to 6000.
         body,wait=send(text,'family_school_task',responses=responses)
-        assert (body['model'],effort(body),tokens(body),wait)==('fictional-light','low',3000,45)
+        assert (body['model'],effort(body),tokens(body),wait)==('fictional-light','low',6000,45)
         # Message screening on the light model keeps the light tier and its 6000/45 budget.
         body,wait=send(text,'family_agent_selection',responses=responses)
         assert (body['model'],effort(body),tokens(body),wait)==('fictional-light','none',6000,45)
@@ -963,7 +964,7 @@ def school_task_light_route_contract():
         assert body['model']=='fictional-light' and effort(body)=='medium'
         # No light model: the default model with the main effort.
         body,wait=send(text,'family_school_task',responses=responses,FAMILY_LLM_LIGHT_MODEL='')
-        assert (body['model'],effort(body),tokens(body),wait)==('fictional-main','low',3000,45)
+        assert (body['model'],effort(body),tokens(body),wait)==('fictional-main','low',6000,45)
         # Any non-string message keeps the default model, for school drafting and screening alike.
         for messages in (image,)+((video,) if not responses else ()):
             for task in ('family_school_task','family_agent_selection'):
@@ -1055,12 +1056,91 @@ def bound_change_selection_tier_contract():
         body=json.loads(send(bound,'family_light_connection_test',responses=responses)[0])
         assert (body['model'],effort(body),tokens(body))==('fictional-light','none',3000)
         body=json.loads(send(bound,'family_school_task',responses=responses)[0])
-        assert (body['model'],effort(body),tokens(body))==('fictional-light','low',3000)
+        assert (body['model'],effort(body),tokens(body))==('fictional-light','low',6000)
         for task in ('family_learning_draft','family_connection_test'):
             body=json.loads(send(bound,task,responses=responses)[0])
             assert (body['model'],effort(body))==('fictional-main','low')
     return len(captured)
 
 assert bound_change_selection_tier_contract()==2*(3+13+8)
+
+def school_task_output_budget_contract():
+    """Already-read school text asks for 6000 output tokens on Chat and Responses, on the light model or its default-model
+    fallback, with the configured effort and the 45-second wait; every other task keeps its limit. An incomplete reply,
+    a length cut-off included, is still refused after one request, with one failed ledger row and no second model."""
+    import io
+    captured=[]
+    class Transport:
+        def __init__(self,reply):self.reply=reply
+        def open(self,request,timeout):
+            captured.append((json.loads(request.data),timeout))
+            return io.BytesIO(json.dumps(self.reply).encode())
+    schema=dict(type='object',additionalProperties=False,required=['ok'],properties=dict(ok=dict(type='boolean')))
+    text=[dict(role='system',content='只处理全虚构学校整理示例。'),dict(role='user',content='{"fictional":"家长签字并交回活动回执"}')]
+    image=[dict(role='system',content='只处理全虚构示例。'),dict(role='user',content=[dict(type='text',text='虚构'),dict(type='image_url',image_url=dict(url='data:image/png;base64,AA=='))])]
+    answer=json.dumps({'ok':True})
+    message=dict(type='message',role='assistant',status='completed',content=[dict(type='output_text',text=answer)])
+    def completed(responses):
+        if responses:return dict(model='fictional-reported',status='completed',output=[dict(type='reasoning',summary=[]),message])
+        return dict(model='fictional-reported',choices=[dict(finish_reason='stop',message=dict(content=answer))])
+    # The shape the fictional packet recorded: every output token spent on reasoning, no final message.
+    length_cut=dict(model='fictional-reported',status='incomplete',incomplete_details=dict(reason='length'),output=[dict(type='reasoning',summary=[])],
+                    usage=dict(input_tokens=4760,output_tokens=6000,total_tokens=10760,output_tokens_details=dict(reasoning_tokens=6000)))
+    refused={True:[length_cut,dict(length_cut,incomplete_details=None,output=[message])],
+             False:[dict(model='fictional-reported',choices=[dict(finish_reason='length',message=dict(content='{"ok":'))],
+                         usage=dict(prompt_tokens=4760,completion_tokens=6000,total_tokens=10760)),
+                    dict(model='fictional-reported',choices=[dict(finish_reason='content_filter',message=dict(content=answer))],
+                         usage=dict(prompt_tokens=4760,completion_tokens=6000,total_tokens=10760))]}
+    base=dict(FAMILY_LLM_BASE_URL='https://fictional-provider.invalid/v1',FAMILY_LLM_MODEL='fictional-main',FAMILY_LLM_LIGHT_MODEL='fictional-light',
+              FAMILY_LLM_API_KEY='',FAMILY_LLM_REASONING_EFFORT='low',FAMILY_LLM_LIGHT_REASONING_EFFORT='none')
+    def send(messages,task,responses,reply=None,data_path=None,**change):
+        env={**base,**change}
+        if responses:env['FAMILY_LLM_BASE_URL']=env['FAMILY_LLM_BASE_URL']+'/responses'
+        before=len(captured)
+        try:
+            with patch.dict(os.environ,env,clear=True),patch.object(llm,'build_opener',return_value=Transport(reply or completed(responses))):
+                assert llm._chat_json(messages,schema,task,45,data_path=data_path)=={'ok':True}
+        finally:assert len(captured)==before+1,'one request, no automatic retry or second model'
+        return captured[-1]
+    effort=lambda body:body['reasoning']['effort'] if 'reasoning' in body else body.get('reasoning_effort')
+    tokens=lambda body:body.get('max_tokens',body.get('max_output_tokens'))
+    # Every other task keeps the limit it had; only family_school_task moved from 3000 to 6000.
+    others=dict(family_agent_selection=6000,family_wrong_questions_annotate=6000,family_homework_reference=6000,
+                family_light_connection_test=3000,family_connection_test=3000,family_school_task_review=3000,
+                family_school_material_draft=3000,family_learning_draft=3000,family_homework_draft=3000,family_timetable_draft=3000,
+                family_calendar_draft=3000,family_learning_answer=3000,family_reading_feedback=3000,family_guided_hint=3000,
+                family_guided_plan=3000,family_agent_plan=3000,family_video_feedback_draft=3000)
+    for responses in (False,True):
+        field='max_output_tokens' if responses else 'max_tokens'
+        body,wait=send(text,'family_school_task',responses)
+        assert (body['model'],effort(body),body[field],wait)==('fictional-light','low',6000,45)
+        assert not {'max_tokens','max_output_tokens'}-{field}&body.keys()
+        body,wait=send(text,'family_school_task',responses,FAMILY_LLM_LIGHT_MODEL='')
+        assert (body['model'],effort(body),body[field],wait)==('fictional-main','low',6000,45)
+        body,wait=send(image,'family_school_task',responses)
+        assert (body['model'],effort(body),body[field],wait)==('fictional-main','low',6000,45)
+        body,wait=send(text,'family_school_task',responses,FAMILY_LLM_REASONING_EFFORT='medium',FAMILY_LLM_LIGHT_REASONING_EFFORT='minimal')
+        assert (body['model'],effort(body),body[field],wait)==('fictional-light','medium',6000,45)
+        for task,limit in others.items():
+            body,wait=send(text,task,responses)
+            assert (tokens(body),wait)==(limit,45),task
+        with TemporaryDirectory() as temporary:
+            data_path=Path(temporary)
+            def ledger():
+                with closing(sqlite3.connect(llm._ledger_path(data_path))) as connection:
+                    return connection.execute(f'SELECT task,model,reported_model,state,input_tokens,output_tokens,total_tokens FROM {llm.LEDGER_TABLE} ORDER BY id').fetchall()
+            for reply in refused[responses]:
+                try:send(text,'family_school_task',responses,reply=reply,data_path=data_path)
+                except llm.LLMDraftError:pass
+                else:raise AssertionError('an incomplete school reply was accepted')
+                assert (captured[-1][0]['model'],captured[-1][0][field])==('fictional-light',6000)
+            rows=ledger()
+            assert rows==[('family_school_task','fictional-light','fictional-reported','failed',4760,6000,10760)]*2,rows
+            # A later call is the caller's own explicit attempt: one more request and one more row, nothing replayed.
+            send(text,'family_school_task',responses,data_path=data_path)
+            assert ledger()[2:]==[('family_school_task','fictional-light','fictional-reported','returned',None,None,None)]
+    return len(captured)
+
+assert school_task_output_budget_contract()==2*(4+17+2+1)
 
 print('PASS: draft, reading feedback, guided hints, audio and bounded usage ledger; isolated HTTP, redaction, failure and interruption checks')
