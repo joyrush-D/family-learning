@@ -3233,6 +3233,105 @@ def _school_quote_lead(quote,text,goal):
     return goal.replace(rest[0],lead[1]+rest[0],1)
 
 
+_SCHOOL_SHARED_SCOPE=r'上述|以上|上面|前面|前述|刚才|这些|这组|该组|同一组|同组|同样的|相同的|这几个'
+
+
+def _school_pairs(*parts):
+    """Each part's character pairs inside its punctuation-free pieces."""
+    return {piece[i:i+2] for part in parts for piece in re.split(r'[\s，,。；;：:！!？?、]+',part) for i in range(len(piece)-1)}
+
+
+def _school_sibling_words(quote,text,others):
+    """The character pairs only another action quoted from this same original states, never this item's own.
+
+    Words of this item's own quote, or of the original outside every quote (the 英语： header), are its own; bare numerals
+    prove nothing either way. None where the quote points back (明天听写上述同一组单词) and so shares its sibling's scope.
+    """
+    if not quote or text.count(quote)!=1:return set()
+    siblings=[q for q in others if q and q not in quote and quote not in q and text.count(q)==1]
+    if not siblings or re.search(_SCHOOL_SHARED_SCOPE,quote):return set()
+    rest=text
+    for q in [quote]+siblings:rest=rest.replace(q,'\n')
+    return {g for g in _school_pairs(*siblings)-_school_pairs(quote,rest) if not re.fullmatch(r'[0-9.]+',g)}
+
+
+def _school_sibling_free_goal(quote,text,goal,others):
+    """This item's summary without the sentences that restate only another action quoted from the same original.
+
+    英语：今晚听音频跟读Unit 7第3至10个单词，每词3遍，不用抄写；明天英语课听写。 read as two items keeps 明天英语课听写 to its
+    own words: a summary sentence 听写范围与今晚跟读的Unit 7第3至10个单词相关 carries words only the sibling's quote states, so it
+    is not this item's requirement (the advice field keeps any suggestion). Words of this item's own quote, or of the original
+    outside every quote (the 英语： header), are its own; bare numerals prove nothing either way. A quote pointing back
+    (明天听写上述同一组单词) shares its sibling's scope and keeps the summary. A summary left with nothing of its own, or no
+    longer keeping its own clause, becomes the teacher's own clause.
+    """
+    foreign=_school_sibling_words(quote,text,others)
+    if not foreign:return goal
+    sentences=re.findall(r'[^。；;！!？?\n]+[。；;！!？?\n]*',goal)
+    kept=''.join(s for s in sentences if not _school_pairs(s)&foreign).strip()
+    if kept==goal.strip():return goal
+    if kept and _school_clause_kept(quote,kept):return kept
+    return quote+('' if re.search(r'[。！!？?]$',quote) else '。')
+
+
+def _school_sibling_free_title(quote,text,title,others):
+    """This item's title, or a heading from the teacher's own clause where the title names another action's words.
+
+    英语：Unit 7单词听写（明天） for 明天英语课听写 shows the sibling's range as this item's own, though the teacher gave it none.
+    The heading then reads the item's own quote as a native action's heading does (_school_native_value): its leading subject
+    label dropped, its first clause only, kept to a short line so a long original never fills the title; the teacher's own
+    day and lesson words stay (明天英语课听写), and the title's own label (英语：) stays where it borrows nothing. A title
+    borrowing nothing stays the model's own.
+    """
+    foreign=_school_sibling_words(quote,text,others)
+    if not _school_pairs(title)&foreign:return title
+    label=re.match(r'\s*([^：:]{1,8})[：:]',title)
+    label=label[1].strip() if label and not _school_pairs(label[1])&foreign else ''
+    head=re.sub(r'^(?:'+_SCHOOL_NATIVE_SUBJECTS+r')[，,:：]\s*','',quote).strip()
+    head=next((h for h in (re.split(r'[，,；;。！!？?\n]',part,maxsplit=1)[0].strip() for part in (head,quote)) if h),quote)
+    prefix='' if not label or head.startswith(label) else label+'：'
+    return prefix+(head if len(prefix+head)<=30 else head[:30-len(prefix)]+'…')
+
+
+def school_saved_own_words(c,row,title,action):
+    """A saved school task's title and action as its own selection's sibling guard reads them now; display only.
+
+    A task an earlier release saved from one original holding two actions (英语：今晚…跟读Unit 7第3至10个单词…；明天英语课听写。)
+    may still show its sibling's range as its own (英语：Unit 7单词听写（明天）, 听写范围与今晚跟读的Unit 7第3至10个单词相关). Only the
+    Agent's own untouched words are read again, by the same _school_sibling_free_title/_goal and the siblings its batch saved
+    (_school_sibling_quotes) in the current full text of its one original, never the saved display quote: an accepted item of a
+    ready new receipt, its original still processed under a source bound to this child, giving the complete basis its selection
+    saved and a fully read text message, its task still the very title and action the item saved, and no native, history, change,
+    correction or split route. Nothing is
+    written: the saved row, receipt, original and task stay, a parent's own title or goal (task focus) is applied after
+    this by the caller, and anything else returns the saved words unchanged.
+    """
+    try:
+        plan=json.loads(row['plan']);evidence=json.loads(row['evidence']);home=evidence[0] if len(evidence)==1 else None
+        raw=plan.get('school_selection_receipt');quote=plan.get('school_date_quote','');brief=plan.get('school_task') or {}
+        if row['kind']!='school' or row['state']!='accepted' or not isinstance(home,dict) or not isinstance(quote,str) or not quote:return title,action
+        if not isinstance(raw,dict) or raw.get('state')!='ready' or (raw.get('change') or 'new')!='new' or raw.get('target_id'):return title,action
+        if any(plan.get(k) for k in ('school_native_action','school_original_action','school_changes','school_history_job','school_history_uncertain',
+                                     'school_change_of','school_duplicate_of','school_first_batch_correction','school_revision_of',
+                                     'school_split','school_split_from')):return title,action
+        if (title,action)!=(row['title'],row['body']) or (brief.get('title'),brief.get('goal'))!=(row['title'],row['body']):return title,action
+        # The original as its selection read it: the saved evidence is a display quote (source · time, then the text, maybe
+        # clipped), so the complete saved basis is checked on the current message of the same ref, as every other reread builds it.
+        if not str(home.get('ref','')).startswith('message:') or not brief.get('origin_basis'):return title,action
+        source_id,message_id=home['ref'][len('message:'):].rsplit(':',1)
+        message=c.execute('SELECT payload,processed FROM agent_messages WHERE source_id=? AND id=?',(source_id,message_id)).fetchone()
+        source=c.execute('SELECT binding FROM agent_sources WHERE id=?',(source_id,)).fetchone()
+        if message is None or message['processed']!=1 or source is None or json.loads(source['binding'])[1]!=row['child_id']:return title,action
+        current=dict(json.loads(message['payload']),ref=home['ref']);text=current.get('text')
+        if brief['origin_basis']!=_school_message_basis([current]):return title,action
+        if current.get('kind','text')!='text' or current.get('unread') or current.get('content_incomplete') or not isinstance(text,str):return title,action
+        # That text, never the display one, holds this item's own quote once and is where its siblings' words are read.
+        others=_school_sibling_quotes(c,row)
+        if text.count(quote)!=1 or any(q and text.count(q)>1 for q in others):return title,action
+    except (ValueError,TypeError,KeyError,AttributeError,IndexError,sqlite3.Error):return title,action
+    return _school_sibling_free_title(quote,text,title,others),_school_sibling_free_goal(quote,text,action,others)
+
+
 def _school_corrected_quote(quote,home,cited):
     """The quote with each own clause that a cited later message of its same publisher explicitly corrects restated at the new day.
 
@@ -6309,6 +6408,10 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                                  +'”免去其中一步；摘要未同时保留原活动并只写免去后的要求，两条原文保留待核对，未自动确认。')
                     break
             if brief['title'] and brief['goal'] and dated_quote and not historical and not native_action and len(cited_evidence)==1:
+                # Another action quoted from this same original lends no requirement or range to this item's title or summary.
+                siblings=title_quotes[:index]+title_quotes[index+1:]
+                brief['goal']=_school_sibling_free_goal(dated_quote,cited_evidence[0]['text'],brief['goal'],siblings)
+                brief['title']=_school_sibling_free_title(dated_quote,cited_evidence[0]['text'],brief['title'],siblings)
                 brief['goal']=_school_quote_lead(dated_quote,cited_evidence[0]['text'],brief['goal'])
             if brief['title'] and brief['goal']: item.update(title=brief['title'],body=brief['goal'])
             elif brief['state']=='reference' and title!='[资料]':
