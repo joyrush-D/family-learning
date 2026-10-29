@@ -1,5 +1,9 @@
 # 第三方复用与取舍
 
+## wrong-notebook桌面打包参考（2026-10-30，未接入）
+
+同一固定03153ef的[`packaging/desktop`](https://github.com/margrop/wrong-notebook/tree/03153ef7f9050f8df20247610888fc16c04c55e5/packaging/desktop)使用Electron45/electron-builder26，Mac输出dmg/zip；[`packages.yml`](https://github.com/margrop/wrong-notebook/blob/03153ef7f9050f8df20247610888fc16c04c55e5/.github/workflows/packages.yml)明确unsigned、关闭签名自动发现。这证明其打包路线，不证明本项目已有安装包或正式签名。拟复用单实例、窗口与健康等待的有限壳代码并保MIT；原Node/Prisma服务、默认种子账号、同源前缀匹配与退出杀后台语义不照搬，按现有Python服务、认证、后台独立及唯一主库适配。Electron及所含Chromium/Node、Python与实际依赖须随选定版本另核许可和安全更新；正式分发签名公证按[Apple说明](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)，窗口隔离与权限按[Electron官方安全要求](https://www.electronjs.org/docs/latest/tutorial/security)。
+
 ## wrong-notebook：已评审的错题组件接法（2026-10-30，尚未接入）
 
 用户指定[margrop/wrong-notebook](https://github.com/margrop/wrong-notebook)，固定[03153ef](https://github.com/margrop/wrong-notebook/tree/03153ef7f9050f8df20247610888fc16c04c55e5)。该版本[LICENSE](https://github.com/margrop/wrong-notebook/blob/03153ef7f9050f8df20247610888fc16c04c55e5/LICENSE)标MIT，须保Copyright 2025 wttwins、2026 margrop及完整许可；当前只核代码，不导入题库、教材文本、示例或用户图片。计划保原TS、仅去类型JS、固定版本/哈希与改动清单，不能只复制未调用的文件称集成。
