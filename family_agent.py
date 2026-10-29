@@ -2047,13 +2047,15 @@ class Store:
         with self._db() as c:
             c.execute('INSERT OR REPLACE INTO agent_runtime(id,state,last_run,last_error) VALUES(1,?,?,?)', (state, now.isoformat(), error))
 
-    def _job(self, key, value, now, *, model=False, keep_budget=False):
+    def _job(self, key, value, now, *, model=False, keep_budget=False, claim=True):
+        # claim=False makes the same decision: a refusal keeps its own writes, an allowed claim is only reported, not taken.
         fingerprint = _hash(value)
         with self._db() as c:
             c.execute('BEGIN IMMEDIATE')
             row = c.execute('SELECT * FROM agent_jobs WHERE id=?', (key,)).fetchone()
             if row and row['fingerprint'] == fingerprint:
                 if row['done'] or (model and row['attempts'] >= MAX_ATTEMPTS) or row['next_try'] > now.isoformat(): return None
+                if not claim: return fingerprint
                 if model: c.execute('UPDATE agent_jobs SET attempts=attempts+1 WHERE id=?', (key,))
                 return fingerprint
             if keep_budget and row and (not row['done'] or row['fingerprint'].startswith('discarded:')):
@@ -2063,8 +2065,10 @@ class Store:
                     # Reclaimed while exhausted, a dropped identity is unfinished again, so the status and explicit retry see it.
                     if row['done']: c.execute('UPDATE agent_jobs SET fingerprint=?,done=0 WHERE id=?', (fingerprint, key))
                     return None
+                if not claim: return fingerprint
                 c.execute('UPDATE agent_jobs SET fingerprint=?,attempts=attempts+?,done=0 WHERE id=?', (fingerprint, int(model), key))
                 return fingerprint
+            if not claim: return fingerprint
             c.execute('INSERT OR REPLACE INTO agent_jobs(id,fingerprint,attempts) VALUES(?,?,?)', (key, fingerprint, int(model)))
         return fingerprint
 
@@ -7545,12 +7549,11 @@ def _refresh_school(app, store, now, budget):
         if not current or page_changed or pdf_changed or material_changed or original_changed or saved_reread:
             reference=_reference_brief(evidence) if not source_error else None
             if not reference and used>=budget: continue
-            targets=school_targets(app,store,row['child_id'])
-            from family_goals import Store as Goals
-            school_goals=Goals(app,store).school_candidates(row['child_id'])
+            # Saved tasks and goals keep their key order but are read only when this item's own job can be claimed (below):
+            # a done, backing-off or exhausted pending item never projects every task each round.
             context=dict(as_of=now.date().isoformat(),candidate=candidate,child_id=row['child_id'],
                          evidence=_school_model_evidence(reading_evidence,pdf_evidence,material),
-                         school_tasks=targets,learning_goals=school_goals)
+                         school_tasks=None,learning_goals=None)
             value=dict(policy=SCHOOL_TASK_POLICY,candidate=candidate,child_id=row['child_id'],evidence=evidence,plan=row['plan'],updated=row['updated'])
             if legacy_correction:value['legacy_correction_scope']=legacy_correction['scope']
             if saved_reread:
@@ -7624,6 +7627,12 @@ def _refresh_school(app, store, now, budget):
                     groups=[{k:v for k,v in group.items() if k!='requirements'} for group in doc['groups']])
                     for doc in pdf_evidence['model']]
             key='school-task:'+row['id']
+            # The claim's own decision without taking it; a lookup failure below still precedes the claim and spends no attempt.
+            if not store._job(key,value,now,model=reference is None,keep_budget=bool(saved_reread),claim=False): continue
+            targets=school_targets(app,store,row['child_id'])
+            from family_goals import Store as Goals
+            school_goals=Goals(app,store).school_candidates(row['child_id'])
+            context.update(school_tasks=targets,learning_goals=school_goals)
             if saved_reread:_school_recovery_inherit(store,key,row['job_id'],row['child_id'])
             fp=store._job(key,value,now,model=reference is None,keep_budget=bool(saved_reread))
             if not fp: continue
