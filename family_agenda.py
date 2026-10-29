@@ -72,6 +72,12 @@ def _titles_read_as_objects(text):
     return ''.join(out)
 
 
+# The direct negation of the predicate that follows it (不、不用、无需再…); 不晚于/不迟于/不超过 bound a day instead, and
+# 别 ending another word (分别、特别、区别) negates nothing.
+_NEGATED_LEAD=(r'(?:不(?!晚于|迟于|超过)|没有?|未|无需|无须|免|(?<![分区特告个差识辨离派级类性])别|勿)'
+               r'(?:用|必|需要?|要求?|得)?\s*(?:再|额外|另行)?\s*')
+
+
 def _action_deadlines(text,published):
     """Every date the text ties to a required action, grounded on the sending day."""
     anchor=date(published)
@@ -99,8 +105,10 @@ def _action_deadlines(text,published):
                 r'(?='+action+r')',lambda m:m[0] if _in_title(m.string,m.start()) else m[1]+'《》',text)
     text=_titles_read_as_objects(text)
     # A date alone is not a deadline; it must be tied to an explicit action or dated school event.
-    pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:[^。；;，,\n]{0,8}?)'+action
+    pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)([^。；;，,\n]{0,8}?)'+action
     for match in re.finditer(pattern,text or ''):
+        # A direct negation right before the action (今晚不交纸质作业、明天不用带) ties the day to no action of its own.
+        if re.search(_NEGATED_LEAD+r'$',match[2]):continue
         token=match[1];value=date(token)
         if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):
             offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[token]
@@ -415,7 +423,7 @@ def date_meaning(quote,due,published,title='',goal=''):
     held=[event for value,event in _held_events(quote,published) if value==due]
     if not held:
         # Read by the item's own clauses naming this day and their own predicates (《》 titles are objects): only checking
-        # (明天早读检查) makes it the teacher's check, and only handing it in on that day itself (由孩子明早交给班主任、明天早上
+        # (明天早读检查、明天上课检查) makes it the teacher's check, and only handing it in on that day itself (由孩子明早交给班主任、明天早上
         # 交) makes it the teacher's handback. A day it must come before (于10月22日前交回), a negation ahead of the predicate
         # (不用明天交回), any other or a second role on that day stays the ordinary deadline it was.
         own=_day_clauses(quote,due,published)
@@ -428,6 +436,12 @@ def date_meaning(quote,due,published,title='',goal=''):
         # stays the deadline, and the parent's own plan day is never touched.
         if own and not any(roles) and all(family_agent._school_native_errand(c,()) and re.search(_CARRIED,c) or re.fullmatch(_CARRIED_TO,c.strip())
                                           for c in own):return 'arranged'
+        # So is a lesson its own day directly heads (周五课堂用时间轴口头讲述、周五历史课…): what is done there is that lesson's,
+        # never a home completion or deadline. A negated clause, a check, test or handing in there (明天英语课听写、周四数学课
+        # 交练习册) or another role on that day stays as it was.
+        if own and not any(roles) and all(re.search(family_agent._SCHOOL_ROLE_DAY+family_agent._SCHOOL_LESSON_PLACE,c)
+                                          and not re.search(family_agent._SCHOOL_ARRANGEMENT+r'|完成|做完|写完|读完|'+family_agent._SCHOOL_SIGN+'|'+_EVENT_STATE_OBJECT,c)
+                                          and not family_agent._school_negated_day(c) for c in own):return 'arranged'
         return 'deadline'
     if due not in _action_deadlines(quote,published):return 'event'
     words,placed=family_agent._school_own_words(quote,0,len(quote.rstrip('。；;！!？? \n')),title,goal)
