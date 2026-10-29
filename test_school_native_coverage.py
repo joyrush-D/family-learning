@@ -4006,6 +4006,20 @@ class SchoolActionPurposeTests(unittest.TestCase):
             self.assertIn('不为避免漏收或误收而猜成admin或learning', prompt)
             self.assertNotIn('learning：教学材料、课程', prompt)
 
+    def test_original_prompt_has_one_name_identity_and_draft_contract(self):
+        # Root's fictional Flash receipts: a bare name read in full came back unknown/review "图片未读", the old pointer
+        # draft's questions were re-asked, and change=new dropped the candidate ID. One rule each, not a stacked override.
+        original = agent._school_original_prompt(None, None, None)
+        self.assertIn('已读完整原件中只是名称/标题的requirement行是已读资料，用途unknown时也按下方规则state=reference', original)
+        self.assertIn('该行只是原件、表格、栏目或材料的名称/标题，没有写出要做什么时返回reference', original)
+        self.assertIn('当前candidate_id须恰好在一项的existing_item_id中返回一次，不默认将数组第一项当原候选；change=new只说明与已保存school_tasks的关系', original)
+        self.assertNotIn('恰好返回一次，不默认将数组第一项当原候选。新独立行动existing_item_id留空', original)
+        self.assertIn('原消息正文里的“内容未读”标记都是收集时状态，不是本轮原件内容或当前缺口，当前读取范围以content_incomplete和已读原件为准', original)
+        self.assertEqual(original.count('unknown：只有链接/短链'), 1)
+        for prompt in (agent.SCHOOL_PROMPT, agent._task_prompt(None)):  # no requirement lines there: the shared rule is unchanged
+            self.assertIn('文字不足以判断，title/goal/advice留空且state=review，不按', prompt)
+            self.assertNotIn('requirement行是已读资料', prompt)
+
 
 class OrdinaryMixedSchooldayTests(unittest.TestCase):
     """Root's SAFE-6 (pure fiction): the six originals 101–106, the five frozen 15-field correct fixed replies (not model
