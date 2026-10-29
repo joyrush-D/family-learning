@@ -2110,7 +2110,7 @@ class ExactAnswerTest(unittest.TestCase):
 class UnitWritingPermissionTest(unittest.TestCase):
     """A page fact grants no permission; complete own writing still guards raw transcription."""
     def review(self, question, student='270', judgment='incorrect', *, original=None, field='孩子作答', uncertainty='',
-               teacher='270厘米。', quote=None, displayed_teacher=None):
+               teacher='270厘米。', quote=None, displayed_teacher=None, shown=None):
         import family_llm
         reason = (('原答只写270，未写本题要求的厘米单位。' if student == '270' else
                    '原答%s，与教师参考的数值不同。' % student) if judgment == 'incorrect' else '')
@@ -2129,7 +2129,7 @@ class UnitWritingPermissionTest(unittest.TestCase):
                 question_documents=documents, reference_documents=teachers)['questions']
         model.assert_called_once(); self.assertEqual(raw, frozen); self.assertEqual((documents, teachers), originals)
         self.assertEqual((result['student_answer'], result['answer']),
-                         (student, '教师参考：' + (teacher if displayed_teacher is None else displayed_teacher)))
+                         (student if shown is None else shown, '教师参考：' + (teacher if displayed_teacher is None else displayed_teacher)))
         return result
 
     def test_absent_print_and_unwritten_answer_are_not_writing_waivers(self):
@@ -2195,7 +2195,8 @@ class UnitWritingPermissionTest(unittest.TestCase):
         question = '2.7米改写为厘米。空格外未印单位。'
         for original in ('270厘米', ''):
             with self.subTest(original=original):
-                q = self.review(question, original=original)
+                # A blank original field never shows the model's 270 as the child's answer.
+                q = self.review(question, original=original, shown=None if original else '')
                 self.assertEqual((q['judgment'], q['error_reason'], q['steps']), ('unknown', '', ''))
                 self.assertIn('原答抄写尚未核明', q['uncertainty']); self.assertIn('模型抄为“270”', q['uncertainty'])
                 self.assertIn('作答为“%s”' % original, q['uncertainty'])

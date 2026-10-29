@@ -1832,6 +1832,145 @@ def bare_title_scope_checks():
         assert entries(reference)==want,(reference,entries(reference))
 
 
+def book_title_scope_checks():
+    """T06: the frozen fictional request and its unmodified recorded reply first. Titled labels 「林桥数学小练习-第N题」 read the
+    teacher's bare numbers under the one book title both originals give, the claim adding the same teacher's own 要求 note on 第2题
+    agrees, and the question original's four numbered rows are known: correct, incorrect, correct, and the blank answer unknown and
+    pending. Normalised variants hold the same for plain and quoted labels. A piece of the title, another title, two titles, a version
+    or unit, the title only in file names or an image prove no title; another question's, paper's or version's note, a second note,
+    a numbered note or a reordered quote keeps 第2题 pending. Every child answer is kept."""
+    frozen={'paper_name': '林桥数学小练习-孩子作答.txt',
+            'paper_text': '《林桥数学小练习》孩子作答（全虚构）\n'
+                          '第1题：8+7=（15）。\n'
+                          '第2题：2/3+1/6=（5/9）。\n'
+                          '第3题：一个长方形长9厘米、宽4厘米，面积是多少平方厘米？\n'
+                          '孩子作答：9×4=36（平方厘米）。\n'
+                          '第4题：解方程3x-2=10。\n'
+                          '孩子作答：（未作答）',
+            'teacher_name': '林桥数学小练习-教师参考.txt',
+            'teacher_text': '《林桥数学小练习》教师参考（全虚构）\n第1题：15。\n第2题：5/6。\n第3题：36平方厘米。\n第4题：x=4。\n要求：第2题写最简分数并列出通分过程，第3题写单位。',
+            'raw_model_return': {'items': [{'label': '林桥数学小练习-第1题',
+                                            'question': '8+7=（ ）。',
+                                            'student_answer': '15',
+                                            'answer': '教师参考：15。',
+                                            'judgment': 'correct',
+                                            'error_reason': '',
+                                            'possible_cause': '',
+                                            'steps': '',
+                                            'uncertainty': '',
+                                            'question_kind': 'objective'},
+                                           {'label': '林桥数学小练习-第2题',
+                                            'question': '2/3+1/6=（ ）。',
+                                            'student_answer': '5/9',
+                                            'answer': '教师参考：5/6；要求写最简分数并列出通分过程。',
+                                            'judgment': 'incorrect',
+                                            'error_reason': '孩子答案为5/9，与教师参考5/6不符；且未见通分过程，不符合作答要求。',
+                                            'possible_cause': '',
+                                            'steps': '先独立重做并写出过程；轻提示：两个分数的公分母是6，2/3=4/6；再自己计算4/6+1/6，并检查结果是否为最简分数。',
+                                            'uncertainty': '',
+                                            'question_kind': 'objective'},
+                                           {'label': '林桥数学小练习-第3题',
+                                            'question': '一个长方形长9厘米、宽4厘米，面积是多少平方厘米？',
+                                            'student_answer': '9×4=36（平方厘米）。',
+                                            'answer': '教师参考：36平方厘米。',
+                                            'judgment': 'correct',
+                                            'error_reason': '',
+                                            'possible_cause': '',
+                                            'steps': '',
+                                            'uncertainty': '',
+                                            'question_kind': 'objective'},
+                                           {'label': '林桥数学小练习-第4题',
+                                            'question': '解方程3x-2=10。',
+                                            'student_answer': '',
+                                            'answer': '教师参考：x=4。',
+                                            'judgment': 'unknown',
+                                            'error_reason': '',
+                                            'possible_cause': '',
+                                            'steps': '',
+                                            'uncertainty': '孩子未作答，无法判断；需补看孩子的实际解题过程或完成后再核对。',
+                                            'question_kind': 'objective'}],
+                                 'coverage': '本次读取题目/孩子作答《林桥数学小练习-孩子作答.txt》完整文字，覆盖第1至4题；读取教师参考《林桥数学小练习-教师参考.txt》完整文字。未提供图片/PDF页。第4题原件显示未作答。',
+                                 'question_labels': ['林桥数学小练习-第1题', '林桥数学小练习-第2题', '林桥数学小练习-第3题', '林桥数学小练习-第4题'],
+                                 'comparison': '第1、3题与教师参考一致；第2题答案错误且未见通分过程；第4题未作答，暂不判定。'}}
+    def run_draft(raw,question=frozen['paper_text'],teacher=frozen['teacher_text'],images=()):
+        with patch.object(family_llm,'_chat_json',return_value=json.loads(json.dumps(raw))) as model:
+            result=family_llm.homework_reference_draft(list(images),review=True,
+                question_documents=[dict(name=frozen['paper_name'],text=question)],
+                reference_documents=[dict(name=frozen['teacher_name'],text=teacher)])
+        assert model.call_count==1
+        return result
+    result=run_draft(frozen['raw_model_return'])
+    got=[(q['label'],q['judgment'],q['student_answer'],q['answer']) for q in result['questions']]
+    assert got==[('林桥数学小练习-第1题','correct','15','教师参考：15。'),
+                 ('林桥数学小练习-第2题','incorrect','5/9','教师参考：5/6；要求写最简分数并列出通分过程。'),
+                 ('林桥数学小练习-第3题','correct','9×4=36（平方厘米）。','教师参考：36平方厘米。'),
+                 ('林桥数学小练习-第4题','unknown','','教师参考：x=4。')],got
+    assert (result['items'],result['wrong_items'],result['unknown_items'])==(4,1,1),result
+    assert '孩子未作答' in result['questions'][3]['uncertainty'] and '已核对所选文字原件的4个明确题号' in result['coverage'],result
+    assert '无法唯一核明' not in result['coverage']+result['text'],result['coverage']
+    def blank_variant(plain=False):  # only 第4题's recorded transcription and grade change; both originals stay as they are
+        raw=json.loads(json.dumps(frozen['raw_model_return']))
+        raw['items'][3].update(student_answer='x=4',judgment='correct',uncertainty='')
+        for x in raw['items'] if plain else ():x['label']=x['label'].removeprefix('林桥数学小练习-')
+        raw['question_labels']=[x['label'] for x in raw['items']]
+        return raw
+    for plain in (False,True):  # the original's closed 孩子作答 field is blank: no teacher or model value fills it
+        for text,said in ((frozen['paper_text'],'（未作答）'),(frozen['paper_text'].replace('孩子作答：（未作答）','孩子作答：'),'')):
+            result=run_draft(blank_variant(plain),question=text)
+            got=[(q['judgment'],q['student_answer']) for q in result['questions']]
+            assert got==[('correct','15'),('incorrect','5/9'),('correct','9×4=36（平方厘米）。'),('unknown','')],(plain,said,got)
+            q4=result['questions'][3]
+            assert q4['answer']=='教师参考：x=4。' and q4['uncertainty'].startswith('原答抄写尚未核明：同题完整文字作答为“%s”，模型抄为“x=4”'%said),q4
+            assert '在原件中没有依据' in q4['uncertainty'] and (result['wrong_items'],result['unknown_items'])==(1,1),result
+    result=run_draft(blank_variant(),images=[dict(mime='image/png',data=png())])  # an image proves no blank field: nothing cleared
+    assert (result['questions'][3]['judgment'],result['questions'][3]['student_answer'])==('unknown','x=4'),result['questions'][3]
+    rows,unresolved=family_llm._source_question_inventory([dict(name=frozen['paper_name'],text=frozen['paper_text'])])
+    assert [(row['label'],row['rest'],row['titled']) for row in rows]==[('第%d题'%n,'','林桥数学小练习') for n in range(1,5)],rows
+    assert not unresolved
+    for heading in ('《林桥数学小练习》第二单元孩子作答（全虚构）','《林桥数学小练习》《林桥语文小练习》孩子作答（全虚构）'):
+        text=frozen['paper_text'].replace('《林桥数学小练习》孩子作答（全虚构）',heading)
+        rows,unresolved=family_llm._source_question_inventory([dict(name='q.txt',text=text)])
+        assert not rows and unresolved,(heading,rows)
+    question,teacher=frozen['paper_text'],frozen['teacher_text']
+    rows=((1,'8+7=（ ）。','15','教师参考：15。','correct'),(2,'2/3+1/6=（ ）。','5/9','教师参考：5/6；要求写最简分数并列出通分过程。','incorrect'),
+          (3,'一个长方形长9厘米、宽4厘米，面积是多少平方厘米？','9×4=36（平方厘米）。','教师参考：36平方厘米。','correct'),
+          (4,'解方程3x-2=10。','','教师参考：x=4。','unknown'))
+    def draft(prefix,question=question,teacher=teacher,images=(),quote=None):
+        items=[dict(label='%s第%d题'%(prefix,n),question=stem,student_answer=student,answer=quote if n==2 and quote else answer,
+                    judgment=judgment,question_kind='objective',error_reason='5/9与教师参考5/6不符。' if n==2 else '',possible_cause='',
+                    steps='',uncertainty='孩子未作答，无法判断。' if n==4 else '') for n,stem,student,answer,judgment in rows]
+        result=run_draft(dict(items=items,question_labels=[x['label'] for x in items],coverage='读取两份完整文字，覆盖第1至4题。'),
+                         question,teacher,images)
+        return [(q['judgment'],q['answer'],q['student_answer']) for q in result['questions']]
+    graded=[('correct','教师参考：15。','15'),('incorrect','教师参考：5/6','5/9'),
+            ('correct','教师参考：36平方厘米。','9×4=36（平方厘米）。'),('unknown','教师参考：x=4。','')]
+    noted=[graded[0],('incorrect','教师参考：5/6；要求写最简分数并列出通分过程。','5/9')]+graded[2:]
+    for prefix in ('','林桥数学小练习-','《林桥数学小练习》'):
+        got=draft(prefix,quote='教师参考：5/6');assert got==graded,(prefix,got)
+        got=draft(prefix);assert got==noted,(prefix,got)  # the teacher's own 要求 note on 第2题, quoted after its answer
+    note='要求：第2题写最简分数并列出通分过程，第3题写单位。'
+    for quote,t in (('教师参考：5/6；要求写单位。',teacher),  # 第3题's note
+                    (None,teacher+'\n要求：第2题写成带分数。'),  # a second note on 第2题
+                    (None,teacher.replace(note,'乙卷'+note)),(None,teacher.replace(note,note.replace('要求','要求（B版）'))),
+                    ('教师参考：5/6；要求写成5/6的最简形式。',teacher.replace(note,'要求：第2题写成5/6的最简形式，第3题写单位。')),
+                    ('教师参考：要求写最简分数并列出通分过程；5/6。',teacher)):
+        for prefix in ('','林桥数学小练习-'):
+            got=draft(prefix,teacher=t,quote=quote)
+            assert got[1][::2]==('unknown','5/9') and [got[0],got[2],got[3]]==[graded[0],graded[2],graded[3]],(quote,t,got)
+    for prefix,q,t,images in (('数学小练习-',question,teacher,()),
+            ('林桥数学小练习-',question,teacher.replace('林桥数学小练习','林桥语文小练习'),()),
+            ('林桥数学小练习-',question.replace('《林桥数学小练习》',''),teacher,()),  # the title in file names alone
+            ('林桥数学小练习-',question,teacher.replace('（全虚构）','（A版）'),()),
+            ('林桥数学小练习-',question,teacher.replace('》教师参考','》第二单元教师参考'),()),
+            ('林桥数学小练习-',question,teacher+'\n《林桥数学练习》教师参考（全虚构）\n第1题：16。',()),
+            ('林桥数学小练习-',question,teacher,[dict(mime='image/png',data=png())])):
+        got=draft(prefix,q,t,images,quote='教师参考：5/6')
+        # A label naming no known row leaves the question original's four known numbers listed first, unchecked, never graded.
+        known=[('unknown','','')]*4 if prefix=='数学小练习-' else []
+        assert got[:len(known)]==known,(prefix,t,got);got=got[len(known):]
+        assert [(j,a) for j,a,_ in got]==[('unknown','')]*4 and [s for *_,s in got]==[s for *_,s in graded],(prefix,t,got)
+
+
 def repeated_question_title_checks():
     """T05: a title field closing an answer's paragraph proves nothing by the reset or repeated question past the blank line.
     「标题：春天；还需说明理由。」, a blank line and another 「第1题：秋天」 keep 本卷第1题's whole 「春天\n标题：春天；还需说明理由」
@@ -2596,6 +2735,7 @@ def run():
     owned_title_field_checks()
     next_title_spacing_checks()
     bare_title_scope_checks()
+    book_title_scope_checks()
     repeated_question_title_checks()
     nested_sub_checks()
     with tempfile.TemporaryDirectory(prefix='synthetic-homework-review-') as temporary:

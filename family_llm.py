@@ -1237,7 +1237,7 @@ def _ref_continued(lines,at,titles=frozenset(),number=None):
 def _teacher_reference_entries(documents,titles=frozenset(),continued=None):
     """Each original read in order; `continued`, when a list, gets each original's lines that go on with an answer."""
     entries=[]
-    for document in documents:
+    for index,document in enumerate(documents):
         paper=section=None;title='';first=len(entries);lines=document['text'].splitlines();owner=parent=None;skip=set()
         for at,line in enumerate(lines):
             if at in skip: continue
@@ -1292,7 +1292,7 @@ def _teacher_reference_entries(documents,titles=frozenset(),continued=None):
                 for one in here if isinstance(here,tuple) else (here,):  # 「甲卷与乙卷第1题均为5」 names each paper once.
                     # Named without an answer is kept: that scope's answer is missing, never the model's to supply.
                     entries.append(dict(paper=one,section=section,rest=rest,number=int(next(g for g in mark.groups() if g)),
-                                                   sub=sub,answer=answer))
+                                                   sub=sub,answer=answer,document_index=index))
                 if after:
                     new,section,words=_ref_scope(tail[after.start(1):],section,titles,listed)
                     if new is not None: paper=here=new;title=rest=''
@@ -1403,6 +1403,32 @@ def _ref_request_title(questions,references,entries,titles=frozenset()):
     return title
 
 
+_REF_BOOK=re.compile(r'《([^《》\n]{1,60})》')  # a title written whole in book-title marks 「《林桥数学小练习》」
+_REF_BOOK_ROLE=re.compile(r'(?:(?:孩子|学生)的?)?(?:作答|答卷)?')  # the role a heading gives its original 「孩子作答」, never a scope
+
+
+def _ref_book_title(documents,titles=frozenset()):
+    """The one title every given original writes whole in book-title marks on its heading before its first question or 大题
+    「《林桥数学小练习》孩子作答（虚构）」「《林桥数学小练习》教师参考（虚构）」, read as a label's words are, or None. Beside it a heading holds
+    only source or role words and the same bracketed notes on every original: a version 「（A版）」, a unit 「第二单元」, a paper, 大题 or
+    other words leave none, as do another book title on any line's heading, two titles or an original without one. A bare teacher
+    number then also stands under that title, word for word: a piece 「数学小练习」, another prefix or a file name names nothing."""
+    if not documents: return None
+    names,notes=set(),set()
+    for document in documents:
+        lines=document['text'].splitlines()
+        at=next((n for n,line in enumerate(lines) if _ref_line_heading(line)!=line),len(lines))
+        top='\n'.join(lines[:at]+[_ref_line_heading(line) for line in lines[at:at+1]])
+        if not _REF_BOOK.search(top): return None
+        names.update(name for line in lines for name in _REF_BOOK.findall(_ref_teacher_heading(line)))  # later headings too
+        rest=_REF_BOOK.sub('，',top);notes.add(frozenset(_ref_scope(note,titles=titles)[2] for note in _REF_TITLE_NOTE.findall(rest)))
+        paper,section,words=_ref_scope(_REF_TITLE_NOTE.sub('，',rest),titles=titles)
+        if paper is not None or section is not None or not _REF_BOOK_ROLE.fullmatch(words): return None
+    if len(names)!=1 or len(notes)!=1: return None
+    title,=names;paper,section,words=_ref_scope(title,titles=titles)
+    return words if words and paper is None and section is None and not _REF_QUESTION.search(title) else None
+
+
 def _ref_relation(label,entry,titles=frozenset()):
     """same / different / unsure: an unnamed or ambiguous paper, section or sub-question is never guessed."""
     mark=_REF_QUESTION.search(label) or re.fullmatch(r'(.*?)(?<![\d.．])(\d{1,3})\s*',label)  # 「1」「一、1」「虚构乙卷1」
@@ -1411,8 +1437,10 @@ def _ref_relation(label,entry,titles=frozenset()):
     if number!=entry['number']: return 'different'
     sub=None if bare else _ref_sub(label,mark.end())[0];paper,section,rest=_ref_scope(mark[1] if bare else label[:mark.start()],titles=titles)
     paper='*' if isinstance(paper,tuple) else paper  # A label naming two papers identifies neither.
-    # Unnamed papers only match word for word; a bare teacher number also stands under the request's one whole title.
-    part=paper is None and entry['paper'] is None and rest!=entry['rest'] and rest!=entry.get('request')
+    # Unnamed papers only match word for word; a bare teacher number also stands under the request's one whole title,
+    # and under the one book title every original proves (_ref_book_title).
+    part=(paper is None and entry['paper'] is None and rest!=entry['rest'] and rest!=entry.get('request')
+          and rest!=entry.get('titled'))
     unsure=False
     for n,(mine,theirs) in enumerate(((paper,entry['paper']),(section,entry['section']),(sub,entry['sub']))):
         if mine is None and theirs is None: continue
@@ -2245,6 +2273,23 @@ def _source_final_answer(item,rows,titles,images,*,identity_only=False,unambiguo
     return field
 
 
+_SOURCE_BLANK=re.compile(r'[（(【\[]?\s*(?:未作答|未答|没有作答|空白)?\s*[)）】\]]?\s*[。.]?')  # 「孩子作答：」「孩子作答：（未作答）」
+
+
+def _source_blank_veto(item,rows,titles,images,unambiguous):
+    """A child answer the original's own closed field leaves blank is never made from a model's or a teacher's value.
+    Only the uniquely matched question's one complete text field proves it (_source_final_answer); an image, an unresolved
+    inventory or an ambiguous field proves nothing. The unsupported transcription leaves the shown answer, and the grade is unknown."""
+    student=item['student_answer'].strip()
+    if not student or _SOURCE_BLANK.fullmatch(student): return False
+    field=_source_final_answer(item,rows,titles,images,identity_only=True,unambiguous=unambiguous)
+    if field is None or not _SOURCE_BLANK.fullmatch(field.strip()): return False
+    item.update(student_answer='',judgment='unknown',error_reason='',possible_cause='',steps='',uncertainty=(
+        '原答抄写尚未核明：同题完整文字作答为“%s”，模型抄为“%s”；原件本题未作答，所抄作答在原件中没有依据，未采用，未判定，请对照原件补查。'%(
+            field.strip(),student if len(student)<=60 else student[:60]+'…')+item['uncertainty'].strip())[:300])
+    return True
+
+
 def _source_final_value(item,rows,titles,images):
     """The same own-field evidence, restricted to a whole numeric final value."""
     field=_source_final_answer(item,rows,titles,images)
@@ -2290,6 +2335,25 @@ def _ref_caption_requirement(item,caption,rows,titles,images):
     return True
 
 
+_REF_NOTE_FIELD=re.compile('要求|说明|备注|注意|提示|注')  # a field giving the teacher's note on the questions it lists 「要求：第2题…」
+
+
+def _ref_noted(claimed,label,entries,titles=frozenset()):
+    """Whether a claim quotes this question's one teacher answer and then that same teacher's own note on exactly this question,
+    「5/6；要求写最简分数并列出通分过程」 from 「第2题：5/6。」 and 「要求：第2题写最简分数并列出通分过程，第3题写单位。」 of one original.
+    The note field names this very path in the answer's own original, whose other lines name no scope but the answer's, and gives
+    no number. Another question's, level's, paper's, version's or original's note, a second note on this path, an unresolved
+    continuation, a note with a number or a reordered or partial quote proves nothing; teacher values are compared whole."""
+    answers=[entry for entry in entries if entry['answer'] and _ref_relation(label,entry,titles)=='same']
+    if len(answers)!=1: return False
+    answer,=answers;path=lambda entry:(entry.get('document_index'),entry['paper'],entry['section'],entry['sub'],entry['number'])
+    if any(entry['paper']!=answer['paper'] or entry['rest']!=answer['rest'] and not _REF_NOTE_FIELD.fullmatch(entry['rest'])
+           for entry in entries if entry.get('document_index')==answer.get('document_index')): return False
+    notes=[entry for entry in entries if entry is not answer and path(entry)==path(answer) and _REF_NOTE_FIELD.fullmatch(entry['rest'])]
+    if len(notes)!=1 or not notes[0]['answer'] or notes[0].get('continuation_unresolved') or re.search(r'\d',notes[0]['answer']): return False
+    return any(_ref_agrees(claimed,answer['answer']+'\n'+notes[0]['rest']+join+notes[0]['answer']) for join in ('','：'))
+
+
 def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset()):
     """A question the supplied teacher text covers is compared by that text, whatever source the model claims."""
     if not item['answer'].strip(): return  # No answer is the existing missing-basis path, not a claimed source.
@@ -2330,7 +2394,7 @@ def _prefer_teacher_reference(item,question_kind,entries,images,titles=frozenset
     if caption and (_ref_agrees(listed,teacher) or _ref_agrees(listed,caption['value'])):
         item['answer']='教师参考：'+shown(teacher)
         return caption  # Comparison-only value; the complete original still owns the answer field.
-    if claimed is not None and _ref_agrees(claimed,teacher): return
+    if claimed is not None and (_ref_agrees(claimed,teacher) or _ref_noted(claimed,item['label'],entries,titles)): return
     mine,theirs,where=_ref_pair(claimed,teacher,(40,60)) if claimed is not None else ('','','')  # Cut where they part.
     misquoted=('模型所称教师参考“%s”只写了教师参考原文“%s”的开头，与全文附注的对应尚未核明，未判定；请对照教师原件核对。'%(mine,theirs) if _ref_leads(claimed,teacher)
                else '模型所称教师参考“%s”与教师参考原文“%s”不一致%s，未判定；请对照教师原件核对。'%(mine,theirs,where)) if claimed is not None else ''
@@ -2479,6 +2543,7 @@ def _source_question_inventory(documents, *, limit=25, layouts=None):
         scoped.append((document,lines,dict(document,text='\n'.join(line for _,line in lines)),teacher_headings,issues))
     for document_index,(document,lines,question_text,teacher_headings,issues) in enumerate(scoped):
         ordinary=_ref_request_title([question_text],(),[],titles)
+        book=None if ordinary is not None else _ref_book_title([question_text],titles)  # 「《林桥数学小练习》孩子作答（虚构）」
         paper=None;section=None;parent=None;instruction='';local=[];boundaries=[];headings=dict(teacher_headings);answer_fields=set();owners={}
         first=next((n for n,(_,line) in enumerate(lines) if _REF_QUESTION.match(line.strip())),len(lines))
         bare=not any(line.strip() for _,line in lines[:first])
@@ -2512,7 +2577,7 @@ def _source_question_inventory(documents, *, limit=25, layouts=None):
                 if words and words!=ordinary or new=='*' or isinstance(new,tuple):
                     continue
                 current=new if new is not None else paper
-                if current is None and ordinary is None and not bare:
+                if current is None and ordinary is None and not bare and book is None:
                     unresolved=True;continue
                 number=int(next(g for g in mark.groups() if g))
                 if new is not None and new!=paper: instruction=''
@@ -2544,6 +2609,7 @@ def _source_question_inventory(documents, *, limit=25, layouts=None):
                 '第%d题'%number+''.join('（%d）'%n for n in sub or ())) if value)
             if len(label)>80: unresolved=True;continue
             local.append(dict(paper=current,section=part,rest=ordinary or '' if current is None else '',
+                titled=book if current is None and ordinary is None else None,
                 number=number,sub=sub,label=label,question=line if len(line)<=800 else '',
                 document=document['name'],line=at,heading_end=end,document_index=document_index,original_text=document['text']))
         # A parent introducing explicitly numbered children is not an extra
@@ -2793,6 +2859,11 @@ def homework_reference_draft(images, *, data_path=None, timeout=90, review=False
     # Only text originals are read whole: with any image the request's one title is unproven and nothing is inherited.
     request_title=None if images or reference_images else _ref_request_title(question_documents,reference_documents,teacher_entries,titles)
     for entry in teacher_entries if request_title else (): entry['request']=request_title
+    # The same holds for one book title every text original names; a teacher line naming its own paper or words keeps them.
+    book_title=(_ref_book_title([*question_documents,*reference_documents],titles)
+                if question_documents and reference_documents and not (images or reference_images) else None)
+    for entry in teacher_entries if book_title else ():
+        if entry['paper'] is None and not entry['rest']: entry['titled']=book_title
     field = lambda limit: dict(type='string',maxLength=limit)
     schema=dict(type='object',additionalProperties=False,required=['items','coverage'],properties=dict(
         items=dict(type='array',minItems=1,maxItems=25,items=dict(type='object',additionalProperties=False,
@@ -2921,6 +2992,8 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
             if not question_label or question_label in seen_question_labels:
                 raise LLMDraftError('检查结果的卷别或题号为空或重复，无法分别核对；请明确卷别、题号与小题后再次检查')
             seen_question_labels.add(question_label)
+        if review and source_inventory and not images:  # before any reference: a blank original is never filled from one
+            _source_blank_veto(item,source_inventory,_ref_titles(question_documents),False,not source_unresolved)
         caption=_prefer_teacher_reference(item,question_kind,teacher_entries,bool(reference_images),titles) if teacher_entries else None
         if caption and caption['kind']=='wording':
             _ref_caption_requirement(item,caption,source_inventory,_ref_titles(question_documents),bool(images))
