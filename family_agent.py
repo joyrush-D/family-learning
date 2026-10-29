@@ -204,6 +204,11 @@ _LEARNING_NEGATED_ACTION = re.compile(
     r'(?:(?:再|额外|另行)\s*)?(?:(?:让|要求)\s*)?(?:(?:孩子|学生|同学们?)\s*)?(?:(?:在家里?|居家)\s*)?'
     r'(?:朗读|背诵|抄写|默写|听写|跟读|练习|订正|预习|复习|阅读|口算|习作|作文)'
     r'(?=\s*(?:[。；;，,！？!?\n）)]|$))')
+# A closed name the original carries (带《单词听写本》) or prepares by the proven preparation predicate (准备好《单词听写本》,
+# family_agenda._PREPARE, its count included) names that thing, not a study activity; a summary may repeat it after either
+# predicate without its marks (携带单词听写本、准备好单词听写本). Study words outside the name stay guarded.
+_LEARNING_CARRY = r'(?:带(?:来|上|好|齐)?|携带)'
+_LEARNING_COUNT = r'(?:[一二两三四五六七八九十几0-9]+\s*[个条支张本份根把件双套盒包瓶块片枚只袋副]\s*)?'
 
 
 def _learning_form_names(texts):
@@ -218,8 +223,10 @@ def _learning_form_names(texts):
 
 
 def _school_learning_text(parts, originals=None):
-    from family_agenda import _titles_read_as_objects
+    from family_agenda import _PREPARE,_titles_read_as_objects
     names=_learning_form_names(parts if originals is None else originals)
+    held=r'(?:'+_LEARNING_CARRY+r'|'+_PREPARE+r')\s*'+_LEARNING_COUNT
+    carried={m[1] for t in (parts if originals is None else originals) for m in re.finditer(held+r'《([^《》。；;，,！!？?\n]{1,38})》',t)}
     checked=[]
     for part in parts:
         text=_URL.sub('',part)
@@ -237,6 +244,9 @@ def _school_learning_text(parts, originals=None):
         text=_LEARNING_FORM_DENIES_COMPOUND.sub(direct,text)
         text=_LEARNING_NEGATED_OBJECT.sub('',_LEARNING_ADMIN_COMPARISON.sub('',text))
         for name in names:text=text.replace(name,_titles_read_as_objects(name))
+        for inner in carried:
+            text=text.replace('《'+inner+'》',_titles_read_as_objects('《'+inner+'》'))
+            text=re.sub('('+held+r')'+re.escape(inner),lambda m:m[1]+'_'*len(inner),text)
         checked.append(_LEARNING_FORM.sub('',_LEARNING_MATERIAL.sub('',text)))
     return '\n'.join(checked)
 
@@ -2842,8 +2852,12 @@ def _school_role_days(quote,cited,others,words=False):
     done,due=set(),set()
     # Packing its own things into the schoolbag on the sending day (今晚把这两样装进书包) is that day's own work too.
     work=_COMPLETION_VERB+r'|(?:装|放)(?:进|入|到)\s*书包'
+    from family_agenda import prepared_carry
     for sentence in re.split(r'[。；;！!？?\n]',span):
         clauses=re.split(r'[，,]',sentence)
+        # A thing prepared at home on its day and then carried bare to its lesson (今晚准备好两张实验观察表，明天科学课带去):
+        # the preparation is this item's completion, the carrying its due.
+        prepared=prepared_carry(sentence,published)
         for n,clause in enumerate(clauses):
             # 今天语文作业： labels the work its sending day publishes; it states no role day of its own.
             clause=re.sub(r'^\s*(?:今天|今日)\s*[^，,：:\d]{0,6}?(?:作业|任务)\s*[：:]','',clause)
@@ -2868,7 +2882,7 @@ def _school_role_days(quote,cited,others,words=False):
             # The sending day's own work (今晚将课本第20页的对话朗读三遍) is its completion, as completion_day reads it; so is a
             # signature however written (并签名), read as the clause's own predicate, never inside a name (交回签名回执).
             finish=bool(re.search(r'完成|做完|写完|读完|签字',clause) or 'finish' in _school_clause_roles(clause) or step
-                        or days=={published} and not back and re.search(work,clause))
+                        or days=={published} and not back and re.search(work,clause) or prepared and n==prepared[0])
             if len(days)!=1 or (finish and back):return None
             (done if finish else due).update(days)
     if len(due)!=1 or any(d>next(iter(due)) for d in done):return None
@@ -3744,6 +3758,20 @@ def _school_clause_roles(clause):
         rest=re.sub('^'+_SCHOOL_ROLE_LEAD,'',re.sub(r'^\s*[^：:，,]{1,6}[：:]','',text[at:]) if at==0 else text[at:])
         roles.update(role for role,verbs in _SCHOOL_ROLE_VERBS if re.match(verbs,rest))
     return roles
+
+
+# The assessment a teacher holds at the lesson or 早读 its own day directly heads (明天英语课听写、周五数学课测验、下周一早读抽背
+# 《山野》) is read where its predicate stands, as _school_clause_roles reads one: a verb inside its object (带《单词听写本》、
+# 带单词听写本), at home (今晚在家听写) or after 前 (明天英语课前完成听写练习) is none.
+_SCHOOL_LESSON_ASSESSMENT=r'听写|默写|测验|测试|小测|抽背|抽查|抽测|考试'
+
+
+def _school_lesson_assessment(clause):
+    """Whether one clause's own predicate is the assessment held at the lesson or 早读 its own day directly heads."""
+    from family_agenda import _titles_read_as_objects
+    text=_titles_read_as_objects(clause)
+    head=_SCHOOL_ROLE_DAY+r'(?:'+_SCHOOL_LESSON_PLACE+r'(?:上|时|的时候)?|\s*早读(?:时)?)'
+    return any(re.match(_SCHOOL_ROLE_LEAD+r'(?:'+_SCHOOL_LESSON_ASSESSMENT+r')',text[m.end():]) for m in re.finditer(head,text))
 
 
 def _school_clause_day(clause,published):
@@ -4766,18 +4794,31 @@ def _school_native_marks(text):
 
 
 def _school_native_errand(clause,owned):
-    """Bringing a thing no earlier outcome's own words name (另外，明天体育课带跳绳，不要求在家训练): its own errand, no condition.
+    """Bringing or preparing a thing no earlier outcome's own words name (另外，明天体育课带跳绳，不要求在家训练；今晚准备好《单词听写本》，
+    明天英语课带去): its own errand, no condition.
 
     Only its first comma part is read, after a connector (另外/此外/还有/同时): its own day, part of day, lesson or arrival and its
-    asker may stand before the carrying predicate itself (带/带上/带好/带齐/带来/携带), which must take an object of its own.
-    Carrying the work itself (明天带来、带到学校), a ba-phrase (把单词卡带到学校) or a thing whose words an outcome already writes
-    (带上记录页 after 明早检查记录页) proves nothing, so the existing reading keeps it with its outcome.
+    asker may stand before the carrying predicate itself (带/带上/带好/带齐/带来/携带), which must take an object of its own, or before
+    the proven preparation predicate taking one thing (family_agenda._PREPARE, _PREPARED_THING), read as prepared_carry reads it.
+    Carrying the work itself (明天带来、带到学校), a ba-phrase (把单词卡带到学校), a bare 准备 or 准备活动, or a thing whose words an
+    outcome already writes (带上记录页 after 明早检查记录页) proves nothing, so the existing reading keeps it with its outcome.
+    A closed 《》 name is the thing's whole name, as _school_native_subjects reads titles: an outcome names it only by writing
+    that name, never by a word inside it (the 单词 of 《单词听写本》 beside 跟读…单词); words outside the name still count.
     """
+    from family_agenda import _PREPARE,_PREPARED_THING,_titles_read_as_objects
     part=re.split(r'[，,]',re.sub(r'^\s*(?:另外|此外|还有|同时)\s*[，,]?\s*','',clause),maxsplit=1)[0].strip()
-    carried=re.fullmatch(r'(?:请\s*)?(?:(?:'+_SCHOOL_NATIVE_DATE+r'|明早)\s*)?(?:(?:早上|上午|中午|下午|晚上)\s*)?(?:(?:[一-鿿]{1,4}课(?:上|前)?|到校后?|来校时?)\s*)?'
-                         r'(?:请\s*)?(?:(?:孩子|学生|同学们?)\s*)?(?:(?:要|需|须|记得|务必)\s*)?(?:带(?:上|好|齐|来)?|携带)(?![回到去领着读])\s*(\S[^，,]*)',part)
-    thing=re.sub(r'\s','',carried[1]) if carried else ''
-    return bool(thing) and not any(thing[i:i+2] in own for own in owned for i in range(max(len(thing)-1,1)))
+    when=r'(?:请\s*)?(?:(?:'+_SCHOOL_NATIVE_DATE+r'|明早)\s*)?(?:(?:早上|上午|中午|下午|晚上)\s*)?(?:(?:[一-鿿]{1,4}课(?:上|前)?|到校后?|来校时?)\s*)?'
+    asker=lambda who:r'(?:请\s*)?(?:(?:'+who+r')\s*)?(?:(?:要|需|须|记得|务必)\s*)?'
+    carried=re.fullmatch(when+asker(r'孩子|学生|同学们?')+r'(?:带(?:上|好|齐|来)?|携带)(?![回到去领着读])\s*(\S[^，,]*)',part)
+    # A parent may be asked to prepare (今晚请家长准备好一条短绳). The title-blanked copy keeps every position, so the thing
+    # is cut from the original words.
+    prepared=not carried and re.fullmatch(when+asker(r'家长|孩子|学生|同学们?')+_PREPARE+r'\s*('+_PREPARED_THING+r')\s*',
+                                          _titles_read_as_objects(part))
+    found=carried or prepared
+    thing=re.sub(r'\s','',part[found.start(1):found.end(1)]) if found else ''
+    names=re.findall(r'《([^《》]+)》',thing);rest=re.split(r'《[^《》]*》',thing)
+    return bool(thing) and not any(name in own for own in owned for name in names) and not any(
+        words[i:i+2] in own for own in owned for words in rest if words for i in range(max(len(words)-1,1)))
 
 
 def _school_native_heading(text):

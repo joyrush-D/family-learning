@@ -288,6 +288,10 @@ def tasks(connection=None):
                     task['school_completion_needs_review']=bool(task['school_origin'] and last.get('change') in ('update','append') and update.get('status')=='已完成' and update.get('updated','')<last.get('confirmed_at',''))
         if task['focus']['title']: task['original_title']=task['title'];task['title']=task['focus']['title']
         if task['focus']['goal']: task['original_action']=task['action'];task['action']=task['focus']['goal']
+    profile_ids={p['name']:p['id'] for p in profiles(connection)}
+    for task in manual+result:
+        progress=task_progress(connection,task,names,profile_ids)
+        if progress: task['progress']=progress
     return family_agenda.enrich(SimpleNamespace(**globals()),connection,manual+result)
 
 def care_notes(connection=None):
@@ -1484,7 +1488,38 @@ def task_feedback_projection(c,task,names):
     task['feedback_ids']=[r['id'] for r in c.execute('SELECT id,child FROM records WHERE source=? ORDER BY id DESC',('事项:'+task_id,)) if names.get(r['child'])==task['child']]
     # Records saved elsewhere and attached by the parent keep their own source, so they are listed apart from the task's own feedback.
     task['linked_record_ids']=[r['id'] for r in c.execute('SELECT id,child FROM records WHERE linked_task_id=? ORDER BY id DESC',(task_id,)) if names.get(r['child'])==task['child']]
+    # The list line is read again here because the task was read before this save; the row then shows what is now saved.
+    progress=task_progress(c,task,names,{p['name']:p['id'] for p in profiles(c)})
+    if progress: task['progress']=progress
+    else: task.pop('progress',None)
     return task
+
+def task_progress(c,task,names,profile_ids):
+    """Read-only progress of one task from what is already saved for it and its child: its own feedback, explicitly linked
+    wrong records and their current-basis topic clues and new attempts. Nothing is written, settled or created; missing topic
+    tables give no clue, and a diagnosis of an earlier basis is history, never current progress. No saved record gives None."""
+    import family_taxonomy
+    task_id=task['id'];source='事项:'+task_id
+    rows=[r for r in c.execute('SELECT id,child,day,subject,title,note,source,attachments,created,linked_task_id FROM records WHERE source=? OR linked_task_id=? ORDER BY id',(source,task_id))
+          if names.get(r['child'])==task['child'] and ((r['source'] or '')==source or not (r['source'] or '').startswith('事项:') and r['linked_task_id']==task_id)]
+    if not rows: return None
+    wrong=[r for r in rows if family_taxonomy.WRONG_SOURCE in (r['source'] or '')]
+    out=dict(feedback=sum((r['source'] or '')==source for r in rows),wrong=len(wrong),wrong_ids=[r['id'] for r in wrong],clues=0,retries=0,history=0)
+    tables={r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('topic_diagnoses','topic_retries','topic_basis_voids')")}
+    if 'topic_diagnoses' not in tables: return out
+    for r in wrong:
+        child_id=profile_ids.get(r['child'])
+        if child_id is None: continue
+        # The same fields the wrong-record card reads, so the basis is the card's own basis.
+        now=family_taxonomy.record_hash({k:r[k] for k in ('id','child','day','subject','title','note','source','attachments','created')}|dict(child_id=child_id))
+        for d in c.execute('SELECT id,record_hash FROM topic_diagnoses WHERE child_id=? AND record_id=?',(child_id,str(r['id']))).fetchall():
+            voided='topic_basis_voids' in tables and c.execute('SELECT 1 FROM topic_basis_voids WHERE diagnosis_id=?',(d['id'],)).fetchone()
+            if d['record_hash']!=now or voided: out['history']+=1;continue
+            out['clues']+=1
+            # Only an independent new attempt counts; not_new, parent_check and not_independent are saved but are not one.
+            if 'topic_retries' in tables: out['retries']+=c.execute("SELECT COUNT(*) FROM topic_retries WHERE diagnosis_id=? AND child_id=? AND record_id=? AND record_hash=? AND outcome IN ('independent_correct','independent_wrong')",
+                                                                    (d['id'],child_id,str(r['id']),now)).fetchone()[0]
+    return out
 
 def link_record_task(obj, connection=None):
     """The parent attaches an already saved record to an existing task of the same child; the record itself is not rewritten."""
@@ -1516,7 +1551,10 @@ def link_record_task(obj, connection=None):
             c.execute('UPDATE records SET linked_task_id=?,linked_task_at=? WHERE id=?',(task_id,linked_at,ident))
         link=dict(record_id=ident,task_id=task_id,child=owner,linked_at=linked_at,
                   previous_task_id=previous['task_id'] if changed else '',previous_linked_at=previous['linked_at'] if changed else '')
-        return record_result(c,ident,not changed)|dict(changed=changed,link=link,task=task_feedback_projection(c,task,names) if task else None)
+        # The task the record left is returned too, so its row stops counting the record without reloading the whole list.
+        left=next((t for t in tasks(c) if t['id']==previous['task_id'] and t['child']==owner),None) if changed and previous['task_id'] else None
+        return record_result(c,ident,not changed)|dict(changed=changed,link=link,task=task_feedback_projection(c,task,names) if task else None)|(
+            dict(previous_task=task_feedback_projection(c,left,names)) if left else {})
 
 def create_record_task(obj):
     """The parent writes a new task for a saved record that hangs on no task; the task and the link are saved together or not at all."""
