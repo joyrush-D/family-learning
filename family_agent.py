@@ -197,11 +197,11 @@ _LEARNING_FORM_DENIES_COMPOUND = re.compile(
 # “并非不用抄写” / “不要忘记朗读” cannot match, and the rest of the clause stays
 # available to the positive/mixed-learning guard. This is a classification copy;
 # the original notice and its complete negative requirements are never changed.
-# The negated verb may keep its own home place (不用在家练习): still the same direct negation.
+# The negated verb may keep its own home place (不用在家练习、不用居家练习): still the same direct negation.
 _LEARNING_NEGATED_ACTION = re.compile(
     r'(^|[。；;，,！？!?])\s*(?:请\s*)?(?:(?:家长|孩子|学生|同学们?)\s*)?'
     r'(?:不用|不必|不需(?:要)?|不要求|无需|无须|不要|不得|禁止|切?勿)\s*'
-    r'(?:(?:再|额外|另行)\s*)?(?:(?:让|要求)\s*)?(?:(?:孩子|学生|同学们?)\s*)?(?:在家里?\s*)?'
+    r'(?:(?:再|额外|另行)\s*)?(?:(?:让|要求)\s*)?(?:(?:孩子|学生|同学们?)\s*)?(?:(?:在家里?|居家)\s*)?'
     r'(?:朗读|背诵|抄写|默写|听写|跟读|练习|订正|预习|复习|阅读|口算|习作|作文)'
     r'(?=\s*(?:[。；;，,！？!?\n）)]|$))')
 
@@ -2611,6 +2611,19 @@ def _school_complete_span(text,start,end):
 
 
 _SCHOOL_ARRANGEMENT=r'(?:抽查|检查|抽背|抽测|默写|听写|背诵|朗读|体检|测试|测验|考试|上交|交|带|穿)'
+# 签字 and 签名 are one signature (as _SCHOOL_NATIVE_STEPS reads a follow-up's steps): the role readers and their change and
+# withdrawal guards read either word the same.
+_SCHOOL_SIGN=r'签字|签名'
+# The class session a day directly heads (周五课堂、明天历史课上、明天上课、周五的第二节体育课): what is done there is on that day.
+_SCHOOL_LESSON_PLACE=(r'\s*的?\s*(?:(?:早上|上午|下午)\s*)?(?:第[一二三四五六七八九\d]节\s*)?'
+                      r'(?:课堂|课上|上课|(?:语文|数学|英语|科学|历史|地理|物理|化学|生物|道德与法治|道法|体育|美术|音乐|信息科技|劳动|书法)课)')
+
+
+def _school_negated_day(clause):
+    """Whether one clause's own day directly heads a negated predicate (今晚不交纸质作业、明天不用带): no day of an action."""
+    from family_agenda import _NEGATED_LEAD
+    return bool(re.search(r'(?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)\s*(?:早上|早晨|上午|中午|下午|傍晚|晚上)?\s*'
+                          r'(?:都|也)?\s*'+_NEGATED_LEAD+r'[一-鿿]',clause))
 
 
 def _school_handback_day(text,published,values):
@@ -2660,14 +2673,19 @@ def _school_own_dates(quote,published,summary=False):
         value=f'{int(year or published[:4]):04d}-{int(month):02d}-{int(day):02d}'
         return value if date(value) else match[0]
     text=_relative_weekday(re.sub(r'(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日',iso,quote),published)
+    # A clause whose own day directly heads a negated predicate (今晚不交纸质作业) states no day of any action.
+    text=''.join(part for part in re.split(r'([，,。；;！!？?\n])',text) if not _school_negated_day(part))
     days=re.findall(r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}|今天|今日|今晚|明天|明日|明早|明晚|后天|昨天|前天|每天|每晚|(?:周|星期|礼拜)[一二三四五六日天]',text)
     found=re.search(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)(?!\s*(?:起|开始|以后|之后|以来|至|到|[-–—~～]))[^。；;，,\n]{0,8}?'+_SCHOOL_ARRANGEMENT,text)
     from family_agenda import _EVENT_STATE,_EVENT_STATE_OBJECT
     # A complete clause headed by its one explicit full date (2026年10月24日地理课做3分钟口头说明) states that day for
-    # itself whatever its verb; a changed, cancelled, negated, asked or open-ended day still states none.
-    if not found and not re.search(_EVENT_STATE+'|'+_EVENT_STATE_OBJECT+r'|[？?]',_titles_read_as_objects(quote)):
+    # itself whatever its verb, as does a day its own lesson directly follows (周五课堂…、周五历史课…): the lesson's day;
+    # a changed, cancelled, negated, asked or open-ended day still states none. That is read on the clauses left: another
+    # day's negated clause set aside above (今晚不用交纸质作业) changes nothing of this one.
+    if not found and not re.search(_EVENT_STATE+'|'+_EVENT_STATE_OBJECT+r'|[？?]',_titles_read_as_objects(text)):
         head=r'\s*(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*日' if summary else r'\s*\d{4}\s*年'
-        found=re.match(r'\s*(\d{4}-\d{2}-\d{2})(?!\s*(?:起|开始|以后|之后|以来|至|到|前|之前|以前|[-–—~～]))',text) if re.match(head,quote) else None
+        found=((re.match(r'\s*(\d{4}-\d{2}-\d{2})(?!\s*(?:起|开始|以后|之后|以来|至|到|前|之前|以前|[-–—~～]))',text) if re.match(head,quote) else None)
+               or re.search(r'(\d{4}-\d{2}-\d{2}|今天|今日|明天|明日|后天)'+_SCHOOL_LESSON_PLACE,text))
     if len(days)!=1 or not found or _in_title(text,found.start(1)) or re.search(r'每\s*$',text[:found.start()]):return set()
     value=date(found[1]) or (dt.date.fromisoformat(published)+dt.timedelta(days=_SCHOOL_DAY_OFFSET[found[1]])).isoformat()
     return {value} if value>=published else set()
@@ -2767,7 +2785,7 @@ def _school_choices_read(text):
     its role or day, so they return None.
     """
     choices=[re.findall(_SCHOOL_CHOICE_OPTION,found[0]) for found in re.finditer(_SCHOOL_CHOICE,text)]
-    if any(re.search(r'交|检查|完成|做完|写完|读完|签字|或|'+_SCHOOL_CHANGE+'|'+_SCHOOL_NATIVE_UNSETTLED,o) for c in choices for o in c):
+    if any(re.search(r'交|检查|完成|做完|写完|读完|'+_SCHOOL_SIGN+r'|或|'+_SCHOOL_CHANGE+'|'+_SCHOOL_NATIVE_UNSETTLED,o) for c in choices for o in c):
         return None
     return re.sub(_SCHOOL_CHOICE,'选项',text)
 
@@ -2789,7 +2807,8 @@ def _school_role_days(quote,cited,others,words=False):
     if len(homes)!=1 or homes[0]['text'].count(quote)!=1:return None
     text=homes[0]['text'];published=sent_day(homes[0].get('time',''))
     if not published:return None
-    day=r'(?:今天|今日|今晚|明天|明日|明早|明晚|后天|\d{1,2}\s*月\s*\d{1,2}\s*[日号])'
+    # A weekday (孩子周五交给班主任) is a role day as much as 明天 is; _school_clause_day grounds it on the sending day.
+    day=r'(?:今天|今日|今晚|明天|明日|明早|明晚|后天|\d{1,2}\s*月\s*\d{1,2}\s*[日号]|(?:本|这|下)?(?:周|星期|礼拜)[一二三四五六日天])'
     if any(_school_own_dates(e['text'],sent_day(e.get('time',''))) or re.search(day,e['text']) for e in cited if e is not homes[0]):return None
     start=text.index(quote);end=start+len(quote)
     head=max(text.rfind(mark,0,start) for mark in '。；;！!？?\n')+1
@@ -2804,7 +2823,7 @@ def _school_role_days(quote,cited,others,words=False):
     own=text[head:end]
     role=(r'\s*'+day+r'\s*(?:早上|早晨|上午|中午|下午|晚上|早读|课前|到校后?)?\s*(?:之前|以前|前)?\s*')
     following=re.match(r'[^。；;！!？?\n]+[。；;！!？?\n]?',text[end:])
-    if following and all(re.fullmatch(role+r'(?:完成|做完|写完|读完|(?:请家长)?签字)\s*',c)
+    if following and all(re.fullmatch(role+r'(?:完成|做完|写完|读完|(?:请家长)?(?:'+_SCHOOL_SIGN+r'))\s*',c)
                          or re.fullmatch(role+r'(?:让孩子)?(?:交|交回|上交|提交)(?:给[^，,]{1,8})?\s*',c)
                          or ((m:=re.fullmatch(role+r'(?:让孩子)?(?:交回|上交|交)([^，,给至到]{1,8})\s*',c)) and m[1] in own)
                          or ((m:=re.fullmatch(role+r'检查([^，,]{1,8})\s*',c)) and m[1] in own)
@@ -2846,8 +2865,10 @@ def _school_role_days(quote,cited,others,words=False):
                 if re.search(day,clause):return None
                 continue
             back=bool(re.search(r'交|检查',clause))
-            # The sending day's own work (今晚将课本第20页的对话朗读三遍) is its completion, as completion_day reads it.
-            finish=bool(re.search(r'完成|做完|写完|读完|签字',clause) or step or days=={published} and not back and re.search(work,clause))
+            # The sending day's own work (今晚将课本第20页的对话朗读三遍) is its completion, as completion_day reads it; so is a
+            # signature however written (并签名), read as the clause's own predicate, never inside a name (交回签名回执).
+            finish=bool(re.search(r'完成|做完|写完|读完|签字',clause) or 'finish' in _school_clause_roles(clause) or step
+                        or days=={published} and not back and re.search(work,clause))
             if len(days)!=1 or (finish and back):return None
             (done if finish else due).update(days)
     if len(due)!=1 or any(d>next(iter(due)) for d in done):return None
@@ -2867,17 +2888,17 @@ def _school_range_withdrawn(span,texts):
     read the same way; a subject kept as usual beside it (数学取消，语文照常交) is none the change names.
     """
     from family_agenda import _OTHER_COURSES,_titles_read_as_objects
-    subjects=_SCHOOL_NATIVE_SUBJECTS+'|'+_OTHER_COURSES;change=_SCHOOL_CHANGE+r'|(?:不|免)\s*(?:交|检查|签字|收)|改期|停办'
+    subjects=_SCHOOL_NATIVE_SUBJECTS+'|'+_OTHER_COURSES;change=_SCHOOL_CHANGE+r'|(?:不|免)\s*(?:交|检查|'+_SCHOOL_SIGN+r'|收)|改期|停办'
     if re.search(change,_titles_read_as_objects(span)):return True
     mine=set(re.findall(subjects,re.sub(r'《[^《》]*》','',span)));plain=re.sub(r'[《》]','',span)
-    withdrawn=(r'(?:取消|撤销|撤回|暂停|停办)(.*?)(?:的?(?:交回|上交|提交|交|检查|签字))?了?'
+    withdrawn=(r'(?:取消|撤销|撤回|暂停|停办)(.*?)(?:的?(?:交回|上交|提交|交|检查|'+_SCHOOL_SIGN+r'))?了?'
                r'|(.*?)(?:已|也|都)?(?:取消|撤销|撤回|暂停|停办|延期|推迟|顺延|改期|待定|未定)了?'
-               r'|(.*?)(?:不用|不必|无需|无须|不需要?|不再|不|免)(?:再)?(?:交回|上交|提交|交|检查|签字|收)了?'
+               r'|(.*?)(?:不用|不必|无需|无须|不需要?|不再|不|免)(?:再)?(?:交回|上交|提交|交|检查|'+_SCHOOL_SIGN+r'|收)了?'
                r'|(.*?)(?:改为|改到|改至|改成).*'
-               r'|(.*?)(?:取消|撤销|撤回|暂停|停办)(.*?)的?(?:交回|上交|提交|交|检查|签字)了?')  # 数学练习册取消明天交回
+               r'|(.*?)(?:取消|撤销|撤回|暂停|停办)(.*?)的?(?:交回|上交|提交|交|检查|'+_SCHOOL_SIGN+r')了?')  # 数学练习册取消明天交回
     general=(r'《[^《》]*》|'+subjects+'|'+_SCHOOL_ANY_DAY+r'|\d{1,2}[:：]\d{2}|早上|早晨|上午|中午|下午|晚上|早读|课前|到校后?'
              r'|原定|原来|原先|之前|以前|前|这项|该项|此项|本项|这个|这份|本次|这次|上述|以上|作业|任务|安排|要求|事项'
-             r'|交回|上交|提交|交给?|检查|签字|完成|的|了|[\s、]')
+             r'|交回|上交|提交|交给?|检查|'+_SCHOOL_SIGN+r'|完成|的|了|[\s、]')
     thing=r'(?:本|册|书|卷|纸|单|表|卡|回执|材料|资料|作品|模型|用品|物品|会|赛|活动|讲座|演出|典礼|仪式|课|考试|测验|测试|听写|默写)$'
     carried=r'(.*?)(?:(?:也|亦|都|均)\s*(?:是\s*)?(?:一样|同样|如此|这样)|(?:也|亦)是|同样|同理|同上|亦然|照此(?:处理|办理)?)\s*[的了]?'
     usual=r'照常|照旧|照样|如常|正常|仍然|仍旧|依然|依旧|不变'
@@ -3012,7 +3033,7 @@ def _school_role_object(clause):
 
 # A clause changing, cancelling, deferring or excusing an action (更正、改为、取消、延期、另行通知、不用交).
 _SCHOOL_CHANGE=(r'改为|改到|改至|改成|更正|取消|撤销|撤回|推迟|延期|顺延|另行|待定|未定|暂停'
-                r'|(?:不用|不必|无需|无须|不需要?|不再)\s*(?:再)?\s*(?:交|提交|上交|交回|检查|签字)')
+                r'|(?:不用|不必|无需|无须|不需要?|不再)\s*(?:再)?\s*(?:交|提交|上交|交回|检查|'+_SCHOOL_SIGN+r')')
 
 
 def _school_others_settled(quote,cited):
@@ -3698,14 +3719,16 @@ def _school_cleared_reread(store,c,row,evidence,now):
                 job_fingerprint=job['fingerprint'],origin_basis=brief['origin_basis'],receipt=_hash(raw))
 
 
-# A clause's own time role is read where its predicate stands: after its day (with that day's part, 前 or 到校后), its asker,
-# actor and place phrase, a joining word or the clause start. A Chinese verb comes before its object, so a character inside
-# that object (家校交流本) is never its action, and 《》 titles are objects. The verbs are the role words the original's own
-# role reading uses: the work done (完成、做完、写完、读完、签字), handed in (交、交回、上交、提交) or checked (检查).
+# A clause's own time role is read where its predicate stands: after its day (with that day's part, its lesson as
+# _SCHOOL_LESSON_PLACE reads it — 明天上课、周四英语课上 — 前 or 到校后), its asker, actor and place phrase, a joining word or
+# the clause start. A Chinese verb comes before its object, so a character inside that object (家校交流本) is never its
+# action, and 《》 titles are objects. The verbs are the role words the original's own role reading uses: the work done
+# (完成、做完、写完、读完、签字/签名), handed in (交、交回、上交、提交) or checked (检查).
 _SCHOOL_ROLE_DAY=(r'(?:\d{4}-\d{2}-\d{2}|(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*[日号]?|今天|今日|今晚|明天|明日|明早|明晚|后天|昨天|前天'
                   r'|每天|每晚|(?:本|这|下)?(?:周|星期|礼拜)[一二三四五六日天])')
-_SCHOOL_ROLE_HEAD=_SCHOOL_ROLE_DAY+r'\s*(?:早上|早晨|上午|中午|下午|傍晚|晚上|早读|课前|到校后?)?\s*(?:之前|以前|前)?'
-_SCHOOL_ROLE_VERBS=(('handback',r'上交|提交|交'),('check',r'检查'),('finish',r'完成|做完|写完|读完|签字'))
+_SCHOOL_ROLE_HEAD=(_SCHOOL_ROLE_DAY+r'(?:'+_SCHOOL_LESSON_PLACE+r'(?:上|时|的时候)?|\s*(?:早上|早晨|上午|中午|下午|傍晚|晚上|早读|课前|到校后?))?'
+                   r'\s*(?:之前|以前|前)?')
+_SCHOOL_ROLE_VERBS=(('handback',r'上交|提交|交'),('check',r'检查'),('finish',r'完成|做完|写完|读完|'+_SCHOOL_SIGN))
 # Its own object may stand before the predicate as a ba-phrase (把签收联交到…, 将回条交给…): still that clause's own predicate.
 _SCHOOL_ROLE_LEAD=(r'\s*(?:请|让|由)?\s*(?:各位|全体)?(?:家长|学生|孩子|同学们?|班主任|老师)?\s*(?:准时|按时|务必|必须|须|需|要)?\s*'
                    r'(?:在[^，,在]{1,12}?(?:上|里|中|内)\s*)?(?:(?:把|将)[^，,把将]{1,12}?(?=(?:'+'|'.join(v for _,v in _SCHOOL_ROLE_VERBS)+r')))?')
