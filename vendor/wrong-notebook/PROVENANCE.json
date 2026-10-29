@@ -1,0 +1,14 @@
+{
+  "repo": "https://github.com/margrop/wrong-notebook",
+  "commit": "03153ef7f9050f8df20247610888fc16c04c55e5",
+  "license": "MIT (Copyright (c) 2025 wttwins; Copyright (c) 2026 margrop)",
+  "files": {
+    "LICENSE": {"upstream": "LICENSE", "sha256": "991f4dcfa89349d205795331822b58b1b9ef782ba86b826c3e7f2ad289f8f675", "changes": "none"},
+    "image-crop.ts": {"upstream": "src/lib/image-crop.ts", "sha256": "4f2e5b7bf9410d5b6e895571197272cce155fc90724cad3d2be30b40b3cf9925", "changes": "none"},
+    "image-crop.js": {"derived_from": "image-crop.ts", "sha256": "cc39f096fc8f7078afe8c52626ebfc283be1fb7af475a418a728d5ddae30b18d",
+                      "changes": "type annotations replaced by whitespace only; no algorithm edits",
+                      "command": "node v24.19.0: module.stripTypeScriptTypes(image-crop.ts) (dev tool only; not shipped)"}
+  },
+  "used_functions": ["toSafeImageSrc", "regionFromPoints", "cropImageRegions"],
+  "runtime_caller": "app.js saved original-answer wrong form ([data-task-wrong-form]) and saved wrong-record reopen"
+}

@@ -95,7 +95,7 @@ TASK_STATUSES = ('待跟进', '进行中', '已完成', *TASK_DISMISSED)
 BUNDLE = ('app.js', 'reading.js', 'calendar.js', 'child-access.js', 'learning.js', 'study.js', 'homework-input.js', 'settings.js', 'guided.js', 'teachers.js', 'goals.js', 'wrong-review.js', 'topic-diagnosis.js')
 STATIC = {'/': 'index.html', **{'/'+name: name for name in (
     *BUNDLE, 'startup.js', 'ui.css', 'learning.css', 'study.css', 'homework-input.css', 'teachers.css', 'wrong-review.css', 'growth-world.js',
-    'vendor/three.module.min.js', 'vendor/three.core.min.js')}}
+    'vendor/three.module.min.js', 'vendor/three.core.min.js', 'vendor/wrong-notebook/image-crop.js')}}
 
 
 @lru_cache(maxsize=32)
@@ -371,6 +371,7 @@ def snapshot():
         children=profiles(c);names=child_names(c);ts=tasks(c);care=care_notes(c)
         records = [dict(r) for r in c.execute('SELECT * FROM records ORDER BY day DESC,id DESC')]
         for r in records: r['attachments'] = json.loads(r['attachments'])
+        family_wrong_review.read_regions(SimpleNamespace(**globals()),c,records,names)
         uploads = [upload_info(r) for r in c.execute('SELECT * FROM uploads ORDER BY created DESC,id DESC')]
         updates = {r['id']:dict(r) for r in c.execute('SELECT * FROM task_updates')}
         report_meta={}
