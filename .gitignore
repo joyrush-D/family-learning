@@ -211,6 +211,7 @@
 !/family_wrong_review.py
 !/test_wrong_review.py
 !/test_wrong_regions.py
+!/test_wrong_regions_ui.cjs
 !/wrong-review.js
 !/wrong-review.css
 !/test_wrong_review_ui.cjs
