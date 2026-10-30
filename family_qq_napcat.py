@@ -15,6 +15,7 @@ import re
 import stat
 import sys
 import time
+import urllib.error
 import urllib.request
 
 if Path(__file__).resolve().parent.name == 'private':
@@ -63,9 +64,20 @@ def request(cfg, action, body=None):
         data=None if body is None else json.dumps(body, separators=(',', ':')).encode(),
         headers={'Authorization': 'Bearer ' + cfg['token'], 'Content-Type': 'application/json'})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), collect.NoRedirect())
-    with opener.open(req, timeout=8) as response:
-        collect.checked(response.status == 200 and response.geturl() == req.full_url, 'qq_read_failed')
-        raw = response.read(collect.MAX_RESPONSE + 1)
+    try:
+        with opener.open(req, timeout=8) as response:
+            collect.checked(response.status == 200 and response.geturl() == req.full_url, 'qq_read_failed')
+            raw = response.read(collect.MAX_RESPONSE + 1)
+    except urllib.error.HTTPError as error:
+        # The loopback endpoint answered and refused this request's authorization; that says nothing about the QQ login.
+        raise collect.CollectError('qq_endpoint_auth_rejected' if error.code in (401, 403) else 'qq_read_failed') from None
+    except (urllib.error.URLError, ConnectionError) as error:
+        reason = error.reason if isinstance(error, urllib.error.URLError) else error
+        if isinstance(reason, ConnectionRefusedError):
+            raise collect.CollectError('qq_endpoint_refused') from None
+        if isinstance(reason, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+            raise collect.CollectError('qq_endpoint_disconnected') from None
+        raise collect.CollectError('qq_read_failed') from None
     collect.checked(len(raw) <= collect.MAX_RESPONSE, 'qq_response_too_large')
     value = json.loads(raw)
     collect.checked(isinstance(value, dict) and value.get('status') == 'ok' and value.get('retcode') == 0,
