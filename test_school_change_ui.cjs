@@ -103,6 +103,28 @@ async function boundSummary(page,label){const dialog=page.locator('#agentDialog'
  assert.equal(await dialog.locator('select:visible').count(),0,label+': no visible selector');assert.equal(await dialog.locator('input:visible,textarea:visible').count(),0,label+': no edit field before 修改本次整理');
  await inView(page,dialog.locator('#agentForm [type="submit"]'),label+' confirm');await inView(page,dialog.locator('[data-close="agentDialog"]'),label+' close');
  assert.equal(await dialog.locator('h2').innerText(),'核对学校变更');assert.equal(await dialog.locator('[data-school-change-edit]').isVisible(),true);await fits(page)}
+// After a confirmed change the same original task still opens its school materials and every original from Today, text only.
+const original=ref=>{const [,source_id,message_id]=ref.split(':');return {source_id,message_id}};
+async function apiOriginals(page,label,taskID,refs){
+ const out=await page.evaluate(async([id,asks])=>{const m=await fetch('/api/print/homework/materials?task_id='+encodeURIComponent(id)),views=[];for(const ask of asks){const r=await fetch('/api/agent/message?'+new URLSearchParams({child_id:'child-1',...ask,task_id:id}));views.push({status:r.status,body:await r.json()})}return {status:m.status,materials:await m.json(),views}},[taskID,refs.map(original)]);
+ assert.equal(out.status,200);assert.equal(out.materials.school_error,'',label+': the school materials stay readable after the change');assert.deepEqual(out.materials.files.filter(f=>f.origin==='school'),[],label+': no school file is bound');
+ out.views.forEach((v,i)=>{assert.equal(v.status,200,label+' '+refs[i]+': '+JSON.stringify(v.body));assert.equal(v.body.action_material?.scoped,true);assert.deepEqual(v.body.attachments,[],label+': text only');
+  assert.deepEqual(v.body.action_material.quotes.map(q=>[q.text,q.upload_ids]),[[recorded.texts[recorded.message_ids.indexOf(original(refs[i]).message_id)],[]]])})}
+async function todayOriginals(page,label,taskID,refs,failFirst){
+ await page.locator('nav [data-page="home"]').click();await apiOriginals(page,label,taskID,refs);const dialog=page.locator('#schoolOriginalDialog');
+ for(const ref of refs){const button=page.locator('#content [data-school-original-ref="'+ref+'"][data-school-task-material="'+taskID+'"]');
+  await until(async()=>await button.count()>0,label+': Today shows the same task original '+ref);entries.push('today-original:'+label+':'+ref.split(':').pop());
+  const details=button.first().locator('xpath=ancestor::details[1]');if(await details.count()&&await details.getAttribute('open')===null)await details.locator(':scope > summary').click();
+  let refused=0;const isRead=u=>u.pathname==='/api/agent/message',fail=async route=>{if(refused++===0)return route.fulfill({status:503,json:{error:'虚构原消息读取失败'}});await route.continue()};
+  if(failFirst)await page.route(isRead,fail);await button.first().click();await dialog.waitFor({state:'visible'});
+  if(failFirst){await until(async()=>/虚构原消息读取失败/.test(await dialog.innerText()),label+': the refused read is shown');const retry=dialog.locator('[data-school-original-retry]').first();await inView(page,retry,label+' retry');await proof(page,'school-change-original-retry-'+label);await retry.click()}
+  // The task scope opens first (text only, no file), then the teacher's complete original words from the same entry.
+  await until(async()=>/本项资料/.test(await dialog.innerText())&&/本项没有关联附件/.test(await dialog.innerText()),label+': the same task scope opens for '+ref);await proof(page,'school-change-scope-'+label+'-'+original(ref).message_id);
+  const full=dialog.getByRole('button',{name:'查看老师完整原消息'});await inView(page,full,label+' full original');await full.click();
+  const words=recorded.texts[recorded.message_ids.indexOf(original(ref).message_id)];await until(async()=>(await dialog.innerText()).includes(words),label+': the original words are shown for '+ref).catch(async e=>{e.message+=' | dialog: '+JSON.stringify(await dialog.innerText());throw e});
+  assert.doesNotMatch(await dialog.innerText(),/本项资料范围尚未核明|原件出处当前无法核对|虚构原消息读取失败/,label+': no unknown scope or stale error');await fits(page);
+  if(failFirst){await page.unroute(isRead,fail);assert.ok(refused>=3,label+': one refused read, then the retry and the full original read')}
+  await proof(page,'school-change-original-'+label+'-'+original(ref).message_id);await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'})}}
 const entries=[];
 async function openChange(page,id){await page.locator('nav [data-page="home"]').click();const button=page.locator('#content [data-agent-accept="'+id+'"]');
  await until(async()=>await button.count()>0,'the current Today entry must contain this notice: '+id);entries.push('today:'+id);
@@ -155,8 +177,12 @@ if(require.main===module)(async()=>{let proc,browser;try{
  await phone.reload();await phone.locator('body[data-page="home"]').waitFor();const changed=await state(),same=changed.tasks.find(t=>t.id===target.id);
  assert.equal(changed.tasks.length,afterNew.tasks.length,'update creates no copy');assert.equal(same.action,sent[0].body);assert.equal(same.agenda.due_on,'2026-11-05');assert.equal(same.update.note,'做了第1题');assert.match(same.source,/message:synthetic-group:12/);
  assert.notEqual(changed.agent.items.find(i=>i.id===update.id).state,'pending');assert.equal(await phone.locator('[data-agent-accept="'+update.id+'"]').count(),0,'a saved change is not offered again');
+ const corrected=['11','12'].map(n=>'message:synthetic-group:'+n),laterErrors=[];await todayOriginals(phone,'360-after-update',target.id,corrected,true);
+ const deskAgain=await browser.newPage({viewport:{width:1440,height:900}});deskAgain.on('pageerror',e=>laterErrors.push(e.message));await deskAgain.clock.setFixedTime(CLOCK);await deskAgain.goto(url);await deskAgain.locator('body[data-page="home"]').waitFor();
+ await todayOriginals(deskAgain,'1440-after-update',target.id,corrected,true);
  await openChange(phone,cancel.id);await boundSummary(phone,'360 cancel');await form.locator('[type="submit"]').click();await phone.locator('#agentDialog').waitFor({state:'hidden'});await phone.reload();await phone.locator('body[data-page="home"]').waitFor();
  const cancelled=await state(),stopped=cancelled.tasks.find(t=>t.id===target.id);assert.equal(cancelled.tasks.length,changed.tasks.length);assert.equal(stopped.update.status,'不适用');assert.ok((stopped.history||[]).some(h=>h.note==='做了第1题'),'earlier feedback stays in history');
+ await apiOriginals(phone,'360-after-cancel',target.id,['11','12','13'].map(n=>'message:synthetic-group:'+n));await deskAgain.reload();await deskAgain.locator('body[data-page="home"]').waitFor();await apiOriginals(deskAgain,'1440-after-cancel',target.id,['11','12','13'].map(n=>'message:synthetic-group:'+n));assert.equal(laterErrors.length,0,laterErrors.join('; '));
  const pickStable=t=>({title:t.title,action:t.action,update:t.update,due:t.agenda?.due_on});assert.deepEqual(pickStable(cancelled.tasks.find(t=>t.id===siblingTask.id)),pickStable(siblingTask),'the other child task is untouched');assert.equal(sent.length,3);assert.equal(sent[2].change,'cancel');
  // Switching to the other child never shows this child's change.
  await phone.locator('nav [data-page="more"]').click();await phone.locator('#content [data-page="agent"]').click();const childPick=phone.locator('[data-school-inbox-child]');
