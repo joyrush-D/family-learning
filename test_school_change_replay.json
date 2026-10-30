@@ -1,0 +1,103 @@
+{
+  "all_fictional": true,
+  "as_of": "2026-11-04",
+  "texts": [
+    "数学练习三第1至5题，11月5日交。",
+    "更正刚才练习三：只做1至3题，交回日不变。",
+    "取消练习三，今晚不用做。"
+  ],
+  "source_id": "synthetic-group",
+  "sender": "虚构数学老师甲",
+  "sender_id": "fictional-math-teacher",
+  "message_ids": [
+    "11",
+    "12",
+    "13"
+  ],
+  "send_times": [
+    "18:00",
+    "18:10",
+    "18:20"
+  ],
+  "feedback": "做了第1题",
+  "replies": [
+    {
+      "proposals": [
+        {
+          "title_quote": "数学练习三第1至5题，11月5日交。",
+          "focus": "school",
+          "due": "2026-11-05",
+          "evidence": [
+            {
+              "ref": "message:synthetic-group:11"
+            }
+          ],
+          "task_title": "数学：完成练习三第1至5题",
+          "task_goal": "完成数学练习三第1至5题。\n11月5日交。",
+          "task_advice": "可先按题号顺序完成，做完后自查一遍再交。",
+          "learning_subject": "数学",
+          "learning_goal_id": "",
+          "task_change": "new",
+          "task_target_id": "",
+          "task_state": "ready",
+          "task_reason": "已读文字明确要求完成练习三第1至5题并于11月5日交，要求完整。",
+          "task_purpose": "learning",
+          "task_submission": "11月5日交"
+        }
+      ]
+    },
+    {
+      "proposals": [
+        {
+          "title_quote": "更正刚才练习三：只做1至3题，交回日不变。",
+          "focus": "school",
+          "due": "2026-11-05",
+          "evidence": [
+            {
+              "ref": "message:synthetic-group:12"
+            }
+          ],
+          "task_title": "数学：练习三改做第1至3题",
+          "task_goal": "数学练习三只做第1至3题，不再做第4、5题。\n交回日不变，仍为11月5日交。",
+          "task_advice": "可先核对已写部分，把第4、5题划去，避免误交。",
+          "learning_subject": "数学",
+          "learning_goal_id": "goal-abb032574f6a363eeb620734538938c2",
+          "task_change": "update",
+          "task_target_id": "AGENT-6df816233e5bcfaaa3a7b87c",
+          "task_state": "review",
+          "task_reason": "本条为对已保存练习三的更正，范围由第1至5题改为第1至3题，交回日不变；需按更正更新原事项，不新增副本。",
+          "task_purpose": "learning",
+          "task_submission": "11月5日交回"
+        }
+      ]
+    },
+    {
+      "proposals": [
+        {
+          "title_quote": "取消练习三，今晚不用做。",
+          "focus": "school",
+          "due": "",
+          "evidence": [
+            {
+              "ref": "message:synthetic-group:13"
+            }
+          ],
+          "task_title": "数学：练习三取消",
+          "task_goal": "练习三已取消，今晚不用做。",
+          "task_advice": "",
+          "learning_subject": "",
+          "learning_goal_id": "",
+          "task_change": "cancel",
+          "task_target_id": "AGENT-6df816233e5bcfaaa3a7b87c",
+          "task_state": "review",
+          "task_reason": "老师明确取消练习三，与已保存的练习三改做第1至3题事项对应，按取消处理待核。",
+          "task_purpose": "learning",
+          "task_submission": ""
+        }
+      ]
+    }
+  ],
+  "model_reported": "deepseek-v4-1-flash-261017",
+  "new_model_calls_authorized_for_this_UI_change": 0,
+  "source_commit": "3fe5a89d4ab36cd59b8f0ff983d494a01f5269f0"
+}
