@@ -1022,15 +1022,36 @@ extension AppDelegate {
         guard let policy = config.policy, let web = webView, AppDelegate.webIntents.contains(intent) else { return }
         guard workspace?.hasUnsavedInput != true || confirmDiscard("打开网页版") else { return }
         workspace?.sheet = nil; workspace?.sheetDirty = false
-        surface = "web"
         var c = URLComponents(url: policy.origin.url, resolvingAgainstBaseURL: false)!
         if !task.isEmpty {
             let id = task.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-_."))) ?? ""
             c.percentEncodedFragment = "task=" + id + (intent.isEmpty ? "" : "&do=" + intent)
         }
-        status("正在打开网页版…", retry: false)
-        web.load(URLRequest(url: c.url!))
-        emit(["state": "web_tools_opened", "task": task, "intent": intent])
+        let target = c.url!
+        // 每次从原生进入都整页重新载入，网页按 #task= 重读这一项最新保存的状态；同一页面只差 # 时 WebKit 只做同文档跳转、不会重读。
+        // 重新载入前沿网页原有 beforeunload 判断（含知识点面板未提交的作答、保存中或回执不明）：有就先问，不同意就原样显示那页、不丢输入。
+        unsaved(web) { [weak self] dirty in
+            guard let self, web === self.webView else { return }
+            self.surface = "web"
+            if dirty && !self.confirmDiscard("重新打开网页版") {
+                self.statusView.isHidden = true; self.setupView.isHidden = true; web.isHidden = false
+                emit(["state": "web_tools_kept_unsaved", "task": task, "intent": intent]); return
+            }
+            self.status("正在打开网页版…", retry: false)
+            let same = web.url.map { AppDelegate.sameDocument($0, target) } ?? false
+            if same, let literal = String(data: (try? JSONSerialization.data(withJSONObject: [target.absoluteString])) ?? Data(), encoding: .utf8) {
+                web.evaluateJavaScript("history.replaceState(history.state,'',\(literal)[0]);true") { _, error in
+                    if error == nil { web.reload() } else { web.load(URLRequest(url: target)) }
+                }
+            } else { web.load(URLRequest(url: target)) }
+            emit(["state": "web_tools_opened", "task": task, "intent": intent, "reload": same])
+        }
+    }
+
+    /// 只差 # 片段（或完全相同）的两个网址是同一网页文档。
+    static func sameDocument(_ a: URL, _ b: URL) -> Bool {
+        func base(_ u: URL) -> String? { var c = URLComponents(url: u, resolvingAgainstBaseURL: false); c?.fragment = nil; return c?.string }
+        return base(a) != nil && base(a) == base(b)
     }
 
     /// 登录用原服务自己的登录页（同一 origin、同一网页数据存储），开在单独的登录窗口：工作台视图不被替换，打开着的填写框、
@@ -1197,6 +1218,7 @@ extension AppDelegate {
         let scrolled = await reveal(id)
         guard let node = find(id, contains: contains) else { return ["ok": false, "error": "control not found", "id": id] }
         var center = NSPoint(x: node.frame.midX, y: node.frame.midY), row = -1
+        var rowTable: NSTableView?
         // 列表里的一行：用表格自己的那一行（锚点所在的那一行）的位置；先让表格自己滚到这一行，再点这一行的中间。
         if let (anchor, _) = TestTargets.live(id), let (table, index) = TestTargets.row(of: anchor), let tw = table.window {
             // 滚到这一行在可见区域中间（贴着顶边时会被浮动的科目标题盖住）。
@@ -1205,7 +1227,7 @@ extension AppDelegate {
                 scroll.contentView.scroll(to: NSPoint(x: page.origin.x, y: max(0, min(target.midY - page.height / 2, doc.bounds.height - page.height))))
                 scroll.reflectScrolledClipView(scroll.contentView)
             } else { table.scrollRowToVisible(index) }
-            await sleep(0.4); row = index
+            await sleep(0.4); row = index; rowTable = table
             let r = tw.convertToScreen(table.convert(table.rect(ofRow: index), to: nil)); center = NSPoint(x: r.midX, y: r.midY)
         }
         guard let w = testWindows().first(where: { $0.frame.contains(center) }) else { return ["ok": false, "error": "control outside the test window", "id": id, "scrolled": scrolled, "has_scroll_view": TestTargets.live(id)?.0.enclosingScrollView != nil] }
@@ -1214,14 +1236,21 @@ extension AppDelegate {
         if !w.isKeyWindow { NSApp.activate(ignoringOtherApps: true); w.makeKeyAndOrderFront(nil); await sleep(0.5); activated = true }
         let local = w.convertFromScreen(NSRect(origin: center, size: .zero)).origin
         let hit = w.contentView?.hitTest(w.contentView?.convert(local, from: nil) ?? local)
-        // 列表行必须点在那一行上；点到列表空白处不算点了这一行。
-        if id.hasPrefix("row-"), row < 0 || hit is NSTableView || hit.map({ String(describing: type(of: $0)).contains("HeaderForSection") }) == true {
-            return ["ok": false, "error": "not on this list row", "id": id, "row": row, "hit": hit.map { String(describing: type(of: $0)) } ?? "none"]
+        // 测试定位：新版 SwiftUI 会由表格本身接收行内点击。核真实行坐标和随后读回的选中项，不能仅凭命中视图类型拒绝它。
+        // 空白处、科目标题、另一窗口仍拒绝；下面只投递鼠标事件，不直接设置选择。
+        let atRow = rowTable.map { $0.row(at: $0.convert(local, from: nil)) } ?? -1
+        if id.hasPrefix("row-"), row < 0 || atRow != row || rowTable?.window !== w || hit.map({ String(describing: type(of: $0)).contains("HeaderForSection") }) == true {
+            return ["ok": false, "error": "not on this list row", "id": id, "row": row, "point_row": atRow, "hit": hit.map { String(describing: type(of: $0)) } ?? "none"]
         }
         post(.leftMouseDown, at: center, in: w); post(.leftMouseUp, at: center, in: w)
         await sleep(0.6)
+        let target = String(id.dropFirst(4))
+        if id.hasPrefix("row-") {
+            for _ in 0..<20 where workspace?.selection != target { await sleep(0.1) }
+            guard workspace?.selection == target else { return ["ok": false, "error": "mouse click did not select the intended original item", "id": id, "row": row, "point_row": atRow, "selected": workspace?.selection ?? ""] }
+        }
         return ["ok": true, "id": id, "hit": hit.map { String(describing: type(of: $0)) } ?? "none", "sheet": w !== window,
-                "located_by": nodes().contains { $0.id == id } ? "accessibility" : "workbench_frame", "scrolled": scrolled, "row": row, "key": w.isKeyWindow, "activated": activated]
+                "located_by": nodes().contains { $0.id == id } ? "accessibility" : "workbench_frame", "scrolled": scrolled, "row": row, "point_row": atRow, "selected": workspace?.selection ?? "", "key": w.isKeyWindow, "activated": activated]
     }
 
     func key(_ chars: String, _ modifiers: [String], code: UInt16 = 0) async {
@@ -1238,6 +1267,14 @@ extension AppDelegate {
 
     func nativeStep(_ step: [String: Any]) async -> [String: Any] {
         let limit = step["timeout"] as? Double ?? 10
+        // 仅 --smoke-test 隔离 Support 与受信虚构 origin 上的网页面板：把测试声明交给现有 runStep，不新增接口或正式入口。
+        if let declared = step["web_step"] as? [String: Any] {
+            guard smoke, testModeAllowed(), surface == "web", let web = webView, let origin = testOrigin, origin.matches(web.url) else {
+                return ["ok": false, "error": "web_step only runs in the smoke test on the web surface of the test origin", "surface": surface]
+            }
+            let value = await runStep(web, declared)
+            return ["ok": (value as? [String: Any])?["ok"] as? Bool == true, "web": value]
+        }
         if let faults = step["faults"] as? [String] { workspaceTestFaults = faults; return ["ok": true, "faults": faults] }
         if let id = step["click"] as? String { return await click(id, contains: step["contains"] as? String ?? "") }
         if let prefix = step["click_prefix"] as? String {

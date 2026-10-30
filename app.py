@@ -377,6 +377,7 @@ def snapshot():
         records = [dict(r) for r in c.execute('SELECT * FROM records ORDER BY day DESC,id DESC')]
         for r in records: r['attachments'] = json.loads(r['attachments'])
         family_wrong_review.read_regions(SimpleNamespace(**globals()),c,records,names)
+        attach_retry_views(c,records,children)
         uploads = [upload_info(r) for r in c.execute('SELECT * FROM uploads ORDER BY created DESC,id DESC')]
         updates = {r['id']:dict(r) for r in c.execute('SELECT * FROM task_updates')}
         report_meta={}
@@ -431,6 +432,7 @@ def day_view(child_id,day):
         c.execute('BEGIN')
         children=profiles(c);ts=tasks(c)
         records=[dict(r) for r in c.execute('SELECT * FROM records ORDER BY day DESC,id DESC')]
+        attach_retry_views(c,records,children)
     for r in records: r['attachments']=json.loads(r['attachments'])
     child=next((p for p in children if p['id']==child_id),None) if child_id else (children[0] if children else None)
     if child_id and child is None: raise TaskError('这个孩子的档案不存在，请刷新后重新选择',404,'child_missing')
@@ -1590,6 +1592,13 @@ def task_feedback_projection(c,task,names):
     if progress: task['progress']=progress
     else: task.pop('progress',None)
     return task
+
+def attach_retry_views(c,records,children):
+    """One short read-only view of each saved new-question attempt, the same for the web and Mac lists; the record is unchanged."""
+    import family_taxonomy
+    views=family_taxonomy.retry_views(c,records,{p['name']:p['id'] for p in children})
+    for r in records:
+        if r['id'] in views: r['retry']=views[r['id']]
 
 def task_progress(c,task,names,profile_ids):
     """Read-only progress of one task from what is already saved for it and its child: its own feedback, explicitly linked

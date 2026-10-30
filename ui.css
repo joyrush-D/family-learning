@@ -237,3 +237,12 @@ body[data-page=sources] .source-cards{grid-template-columns:1fr}
 .task-wrong-crop img{display:block;max-width:100%;max-height:240px;margin:6px 0;border:1px solid #ddd}
 /* A recognised school change keeps confirm and close reachable while longer text scrolls inside the dialog. */
 #agentForm[data-school-changing] .dialog-actions{position:sticky;bottom:0;z-index:1;background:#132136;padding-top:4px;box-shadow:0 -14px 14px -14px #000a}#agentForm[data-school-changing] .dialog-actions .toolbar{margin:8px 0 0}#agentDialog:has(#agentForm[data-school-changing]){scroll-padding-bottom:120px}#agentForm [data-school-change-body]{white-space:pre-wrap;overflow-wrap:anywhere;margin:6px 0 10px}#agentForm [data-school-change-summary] .small{margin:6px 0}
+
+/* A saved new-question attempt: short labelled lines first, next step, then one muted trace line. */
+.retry-view{display:grid;gap:6px;margin:6px 0}
+.retry-lines{display:grid;gap:4px;margin:0}
+.retry-lines div{display:grid;grid-template-columns:5em minmax(0,1fr);gap:8px;align-items:baseline}
+.retry-lines dt{color:var(--muted,#7a6a55);font-size:.85em}
+.retry-lines dd{margin:0;overflow-wrap:anywhere}
+.retry-next,.retry-status,.retry-trace{margin:0;overflow-wrap:anywhere}
+.retry-status{color:var(--coral-700);font-weight:600}

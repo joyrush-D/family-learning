@@ -1158,7 +1158,8 @@ def _record_row(r):
     note = str(r.get('note') or '')
     return dict(id=r['id'], day=r.get('day', ''), created=r.get('created', ''), title=r.get('title', ''), subject=r.get('subject', ''),
                 note=note[:600], note_truncated=len(note) > 600, attachments=list(r.get('attachments') or []),
-                followup_kind=r.get('followup_kind', ''), related_record_id=r.get('related_record_id'))
+                followup_kind=r.get('followup_kind', ''), related_record_id=r.get('related_record_id'),
+                **({'retry': r['retry']} if r.get('retry') else {}))
 
 
 def day_view(inbox, tasks, records, child, day, today, wrong_source):

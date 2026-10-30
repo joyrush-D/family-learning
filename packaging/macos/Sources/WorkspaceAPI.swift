@@ -24,7 +24,11 @@ struct SavedRecord: Decodable, Hashable, Identifiable {
     let related_record_id: Int?
     let state: String?
     let followups: [SavedRecord]?
+    let retry: RetryView?
 }
+
+/// 已保存的新题再试：后台 family_taxonomy.retry_views 的同一份只读短视图（网页同用）；show_note 时仍显示这条记录原文。
+struct RetryView: Decodable, Hashable { let state: String; let lines: [[String]]; let status: String; let show_note: Bool; let next: String; let trace: String }
 
 struct Publication: Decodable, Hashable { let ref: String; let source_name: String; let sender: String }
 

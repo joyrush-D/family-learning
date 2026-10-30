@@ -103,6 +103,9 @@
    if(v.mode==='answer')return answer('answer',t);
    const q=p.E.questionById(p.graph,v.qid),rid=p.keys[d.id+':'+v.qid]??=key();
    send(p,'/api/topic/diagnosis/retry',{...base,diagnosis_id:d.id,qid:q.id,answer:t,verdict:judge(p.E,q,'answer',t).verdict,request_id:rid},x=>{delete p.draft[k];return OUTCOME[x.diagnoses?.find(y=>y.id===d.id)?.retries?.at(-1)?.outcome]||''})})}
+ // 未保存：保存中或回执不明（有“重试保存”），或当前显示的作答/新题框里还没提交的原答；搜索词和空框不算。接页面原有 beforeunload 判断（原生重开网页前也读它）。
+ function hasUnsaved(){return Object.values(panels).some(p=>p.busy||!!p.pending||!!p.box?.isConnected&&[...p.box.querySelectorAll('[data-topic-input]')].some(x=>/^(answer|retry):/.test(x.dataset.topicInput||'')&&(x.type==='radio'?x.checked:String(x.value||'').trim()!=='')))}
+ if(typeof window!=='undefined'&&window.addEventListener)window.addEventListener('beforeunload',e=>{if(hasUnsaved()){e.preventDefault();e.returnValue=''}});
  document.addEventListener('click',e=>{const b=e.target.closest('[data-topic-open]');if(b)open(b.closest('[data-topic-diagnosis]'))});
- return {...logic,slot,open};
+ return {...logic,slot,open,hasUnsaved};
 });
