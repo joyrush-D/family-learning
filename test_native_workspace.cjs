@@ -10,7 +10,14 @@
 // same task, the oral addition source-signed with its subject and words each in its own field and its teacher date unknown,
 // and nothing on the other child.
 // The fixture is imported rather than run as a script: a system Python 3.9 misreads that file's long UTF-8 lines as a script.
-// Usage: node test_native_workspace.cjs   Optional: FAMILY_TEST_PYTHON, NATIVE_WORKSPACE_OUT (keeps build, logs, screenshots).
+// Usage: node test_native_workspace.cjs --allow-visible-test-window   Optional: FAMILY_TEST_PYTHON, NATIVE_WORKSPACE_OUT (keeps build, logs, screenshots).
+// A visible native test is opt-in. Ordinary test discovery or a local invocation must never open a window.
+if (process.argv.includes('--help')) {
+ console.log('Use on a separate test Mac: node test_native_workspace.cjs --allow-visible-test-window');process.exit(0);
+}
+if (!process.argv.includes('--allow-visible-test-window')) {
+ console.error('This opens a test window. Use a separate test Mac and pass --allow-visible-test-window explicitly.');process.exit(2);
+}
 const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),net=require('node:net'),http=require('node:http'),crypto=require('node:crypto');
 const {spawn,execFileSync}=require('node:child_process'),{once}=require('node:events'),{setTimeout:delay}=require('node:timers/promises');
 const out=process.env.NATIVE_WORKSPACE_OUT||fs.mkdtempSync(path.join(os.tmpdir(),'grove-native-'));fs.mkdirSync(out,{recursive:true});
@@ -110,12 +117,25 @@ function loginProxy(appPort,user,password){
   const env={...env0,FAMILY_DESKTOP_SUPPORT_DIR:support,FAMILY_DESKTOP_TEST_ORIGIN:origin,FAMILY_DESKTOP_TEST_SETUP_INPUTS:JSON.stringify([origin]),
    FAMILY_DESKTOP_TEST_SURFACE:'native',FAMILY_DESKTOP_TEST_LOGIN:JSON.stringify([USER,PASS]),FAMILY_DESKTOP_TEST_NATIVE_STEPS:stepsFile,FAMILY_DESKTOP_TEST_SNAPSHOT_DIR:shots,FAMILY_DESKTOP_SMOKE_HOLD:'1'};
   const proc=spawn(path.join(app,'Contents/MacOS/YiqiChengzhang'),['--smoke-test'],{env,stdio:['ignore','pipe','pipe']});
-  let text='';proc.stdout.on('data',d=>{text+=d;fs.appendFileSync(path.join(out,'native.jsonl'),d)});proc.stderr.on('data',d=>fs.appendFileSync(path.join(out,'native.stderr.log'),d));
+  let text='',stoppedForFailure=false;
+  // The driver has already stopped and recorded a failed step. Reap only this runner's fictional App,
+  // including a still-open draft sheet, instead of waiting five/seven minutes for the watchdog.
+  function stopFinishedFailedRun(){
+   if(stoppedForFailure)return;
+   for(const line of text.split('\n')){
+    let state;try{state=JSON.parse(line)}catch{continue}
+    if(state.state==='native_loaded'&&state.steps.some(s=>s.result?.ok===false)){
+     stoppedForFailure=true;if(proc.exitCode===null)proc.kill('SIGTERM');return;
+    }
+   }
+  }
+  proc.stdout.on('data',d=>{text+=d;fs.appendFileSync(path.join(out,'native.jsonl'),d);stopFinishedFailedRun()});proc.stderr.on('data',d=>fs.appendFileSync(path.join(out,'native.stderr.log'),d));
   const done=once(proc,'exit');const killer=setTimeout(()=>proc.kill('SIGKILL'),420000);const [code]=await done;clearTimeout(killer);
   const lines=text.split('\n').filter(Boolean).map(l=>{try{return JSON.parse(l)}catch{return {raw:l}}});
   const final=lines.find(l=>l.state==='native_loaded');
   assert.ok(final,'native run finished: '+lines.slice(-3).map(l=>JSON.stringify(l).slice(0,400)).join('\n'));
   const failed=final.steps.filter(s=>s.result.ok===false);assert.deepEqual(failed,[],'native steps');
+  assert.equal(code,0,'the successful native test App must exit normally');
   const r=Object.fromEntries(final.steps.map(s=>[s.name,s.result]));
   assert.equal(r['still dirty'].dirty,true,'Esc on a dirty sheet keeps editing');
   assert.match(r['list'].text,/以后安排 2/);assert.ok(!/以后交|明早/.test(r['list'].text),'no invented handback or morning in the summary: '+r['list'].text);
@@ -131,7 +151,18 @@ function loginProxy(appPort,user,password){
   const leave=r['draft-safe close/quit'];
   assert.equal(leave.dirty,true);assert.equal(leave.window_open_after_close,true);
   assert.equal(leave.quit_key_posted,true,'a real Command-Q was posted to the active sheet');
-  assert.equal(leave.quit_key_window,true,'the quit shortcut reached the app own key window');
+  // An inactive independent test Mac need not designate a key window. Observe the actual targeted key dispatch,
+  // then require a separate real Quit request to reach and be cancelled by the application's own draft guard.
+  // Global hardware-keyboard focus is not claimed by this event-driver acceptance.
+  assert.equal(leave.quit_key_delivered_to_target,true,'Command-Q reached the declared own test window');
+  if(leave.guarded_quit_delegate_calls>0){
+   assert.equal(leave.guarded_quit_reply,'cancelled','the App draft guard cancelled the actual Quit request');
+  }else{
+   // Cocoa may stop Quit while its own sheet is open, before asking the delegate. Verify that exact
+   // visible own-sheet context still exists; never manufacture a delegate reply or call that branch exercised.
+   assert.equal(leave.quit_own_modal_preserved,true,'the actual Quit request left the same visible own sheet open');
+   assert.equal(leave.guarded_quit_reply,'none','no cancellation callback is invented');
+  }
   assert.equal(leave.window_open_after_quit,true);assert.equal(leave.still_dirty,true,'Command-Q did not discard the draft');
   // A native modal may stop Command-Q before applicationShouldTerminate. Never invent its callback;
   // the subsequent real retry and exact saved-note/key readback below still have to pass.

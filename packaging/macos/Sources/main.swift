@@ -199,6 +199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     var closeApproved = false
     var quitApproved = false
     var lastQuitReply: Bool?
+    var smokeQuitRequests = 0  // read-only test observation; no production branch changes
     var lockHandle: Int32 = -1
     var scriptedInputs: [String] = smoke ? ((try? JSONSerialization.jsonObject(with: Data((environment["FAMILY_DESKTOP_TEST_SETUP_INPUTS"] ?? "[]").utf8))) as? [String] ?? []) : []
     var testEvents: [[String: Any]] = []
@@ -261,6 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
     // 退出（含 Cmd+Q）先按页面原有 beforeunload 判断；有未保存内容时默认继续编辑。后台服务不受影响。
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if smoke { smokeQuitRequests += 1 }
         if backendBusy && !quitApproved {
             if !smoke {
                 let alert = NSAlert(); alert.messageText = "后台正在安装或更新"
@@ -1232,34 +1234,82 @@ extension AppDelegate {
         var rowTable: NSTableView?
         // 列表里的一行：用表格自己的那一行（锚点所在的那一行）的位置；先让表格自己滚到这一行，再点这一行的中间。
         if let (anchor, _) = TestTargets.live(id), let (table, index) = TestTargets.row(of: anchor), let tw = table.window {
-            // 滚到这一行在可见区域中间（贴着顶边时会被浮动的科目标题盖住）。
-            if let scroll = table.enclosingScrollView, let doc = scroll.documentView {
-                let target = doc.convert(table.rect(ofRow: index), from: table), page = scroll.contentView.bounds
-                scroll.contentView.scroll(to: NSPoint(x: page.origin.x, y: max(0, min(target.midY - page.height / 2, doc.bounds.height - page.height))))
-                scroll.reflectScrolledClipView(scroll.contentView)
-            } else { table.scrollRowToVisible(index) }
+            // 用表格公开的显露行操作；不直接改 clip-view 偏移去强行居中。
+            // SwiftUI 的 cell-hosting 命中布局必须跟着其真实滚动更新，已可见的行无需再移动。
+            table.scrollRowToVisible(index)
             await sleep(0.4); row = index; rowTable = table
-            let r = tw.convertToScreen(table.convert(table.rect(ofRow: index), to: nil)); center = NSPoint(x: r.midX, y: r.midY)
+            // Click the current control's own frame, not the arbitrary centre of its layout row.
+            // The row can include empty padding beside a short SwiftUI label. The selected original ID below is still mandatory.
+            let r = tw.convertToScreen(anchor.convert(anchor.bounds, to: nil)); center = NSPoint(x: r.midX, y: r.midY)
         }
         guard let w = testWindows().first(where: { $0.frame.contains(center) }) else { return ["ok": false, "error": "control outside the test window", "id": id, "scrolled": scrolled, "has_scroll_view": TestTargets.live(id)?.0.enclosingScrollView != nil] }
         // 像家长先把窗口点到最前面：App 不在前台、窗口不是当前窗口时先激活（只激活，不算这一步的点击）。
         var activated = false
         if !w.isKeyWindow { NSApp.activate(ignoringOtherApps: true); w.makeKeyAndOrderFront(nil); await sleep(0.5); activated = true }
         let local = w.convertFromScreen(NSRect(origin: center, size: .zero)).origin
-        // NSView.hitTest 接收的是父视图坐标：内容视图的父视图（窗口框架视图）与窗口坐标一致。
+        // NSView.hitTest 接收父视图坐标；这里只修正测试定位，不修改控件选择。
         let hit = w.contentView?.hitTest(w.contentView?.superview?.convert(local, from: nil) ?? local)
         // 测试定位：新版 SwiftUI 会由表格本身接收行内点击。核真实行坐标和随后读回的选中项，不能仅凭命中视图类型拒绝它。
         // 空白处、科目标题、另一窗口仍拒绝；下面只投递鼠标事件，不直接设置选择。
         let atRow = rowTable.map { $0.row(at: $0.convert(local, from: nil)) } ?? -1
         if id.hasPrefix("row-"), row < 0 || atRow != row || rowTable?.window !== w || hit.map({ String(describing: type(of: $0)).contains("HeaderForSection") }) == true {
-            return ["ok": false, "error": "not on this list row", "id": id, "row": row, "point_row": atRow, "hit": hit.map { String(describing: type(of: $0)) } ?? "none"]
+            let correctedHit = w.contentView?.hitTest(w.contentView?.superview?.convert(local, from: nil) ?? local)
+            var chain: [String] = [], next = hit
+            while let v = next, chain.count < 12 { chain.append("\(String(describing: type(of: v))) frame=\(v.frame) bounds=\(v.bounds)"); next = v.superview }
+            return ["ok": false, "error": "not on this list row", "id": id, "row": row, "point_row": atRow, "hit": hit.map { String(describing: type(of: $0)) } ?? "none",
+                    "corrected_hit": correctedHit.map { String(describing: type(of: $0)) } ?? "none", "hit_chain": chain,
+                    "table_bounds": rowTable.map { NSStringFromRect($0.bounds) } ?? "", "table_visible": rowTable.map { NSStringFromRect($0.visibleRect) } ?? "",
+                    "row_rect": rowTable.map { NSStringFromRect($0.rect(ofRow: row)) } ?? "", "click_screen": NSStringFromPoint(center), "click_window": NSStringFromPoint(local),
+                    "app_active": NSApp.isActive, "key": w.isKeyWindow, "app_key_window": NSApp.keyWindow?.windowNumber ?? -1, "window_number": w.windowNumber,
+                    "window_can_key": w.canBecomeKey, "window_visible": w.isVisible, "window_sheet": w.attachedSheet?.windowNumber ?? -1]
         }
+        workspaceTestSelectCalls = []; workspaceTestTableChanges = []
+        let watch = NotificationCenter.default.addObserver(forName: NSTableView.selectionDidChangeNotification, object: rowTable, queue: nil) { note in
+            workspaceTestTableChanges.append(Array((note.object as? NSTableView)?.selectedRowIndexes ?? []))
+        }
+        var observedMouse: [[String: Any]] = []
+        let mouseWatch = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { event in
+            observedMouse.append(["type": event.type.rawValue, "window": event.windowNumber,
+                                  "location": NSStringFromPoint(event.locationInWindow), "event_window": event.window?.windowNumber ?? -1])
+            return event
+        }
+        defer { NotificationCenter.default.removeObserver(watch); if let mouseWatch { NSEvent.removeMonitor(mouseWatch) } }
         post(.leftMouseDown, at: center, in: w); post(.leftMouseUp, at: center, in: w)
         await sleep(0.6)
         let target = String(id.dropFirst(4))
         if id.hasPrefix("row-") {
             for _ in 0..<20 where workspace?.selection != target { await sleep(0.1) }
-            guard workspace?.selection == target else { return ["ok": false, "error": "mouse click did not select the intended original item", "id": id, "row": row, "point_row": atRow, "selected": workspace?.selection ?? ""] }
+            guard workspace?.selection == target else {
+                // 只读诊断：表格自己的点击/选中行、命中视图是否在这一行里、各行挂着的锚点、清单选择回调是否被调用。
+                let rv = rowTable?.rowView(atRow: row, makeIfNecessary: false)
+                let anchors = TestTargets.anchors.flatMap { key, list in list.compactMap(\.view).filter { key.hasPrefix("row-") && $0.window != nil }
+                    .map { "\($0.probeID.suffix(6))@\(TestTargets.row(of: $0)?.1 ?? -1)\($0.isHiddenOrHasHiddenAncestor ? "h" : "")" } }.sorted()
+                func chain(_ start: NSView?) -> [String] {
+                    var result: [String] = [], next = start
+                    while let v = next, result.count < 16 {
+                        result.append("\(String(describing: type(of: v))) frame=\(v.frame) bounds=\(v.bounds)")
+                        next = v.superview
+                    }
+                    return result
+                }
+                let content = w.contentView
+                let correctedHit = content?.hitTest(content?.superview?.convert(local, from: nil) ?? local)
+                let pointInTable = rowTable?.convert(local, from: nil) ?? .zero
+                return ["ok": false, "error": "mouse click did not select the intended original item", "id": id, "row": row, "point_row": atRow, "selected": workspace?.selection ?? "",
+                        "app_active": NSApp.isActive, "app_key_window": NSApp.keyWindow?.windowNumber ?? -1, "window_number": w.windowNumber,
+                        "window_can_key": w.canBecomeKey, "window_visible": w.isVisible, "window_main": w.isMainWindow,
+                        "window_sheet": w.attachedSheet?.windowNumber ?? -1,
+                        "click_screen": NSStringFromPoint(center), "click_window": NSStringFromPoint(local), "click_table": NSStringFromPoint(pointInTable),
+                        "table_bounds": rowTable.map { NSStringFromRect($0.bounds) } ?? "", "table_visible": rowTable.map { NSStringFromRect($0.visibleRect) } ?? "",
+                        "row_rect": rowTable.map { NSStringFromRect($0.rect(ofRow: row)) } ?? "", "row_view_frame": rv.map { NSStringFromRect($0.frame) } ?? "",
+                        "hit_row": hit.flatMap { h in rowTable.map { $0.row(for: h) } } ?? -1,
+                        "hit_chain": chain(hit), "row_chain": chain(rv), "corrected_hit_chain": chain(correctedHit),
+                        "windows": NSApp.windows.map { "\($0.windowNumber):visible=\($0.isVisible):key=\($0.isKeyWindow):frame=\($0.frame)" },
+                        "hit": hit.map { String(describing: type(of: $0)) } ?? "none", "hit_in_row_view": hit.flatMap { h in rv.map { h.isDescendant(of: $0) } } ?? false,
+                        "row_view_selected": rv?.isSelected ?? false, "table_selected": Array(rowTable?.selectedRowIndexes ?? []), "clicked_row": rowTable?.clickedRow ?? -2,
+                        "table_changes": workspaceTestTableChanges, "select_calls": workspaceTestSelectCalls, "mouse_dispatch": observedMouse, "rows": rowTable?.numberOfRows ?? -1, "row_anchors": anchors,
+                        "key": w.isKeyWindow, "activated": activated, "first_responder": w.firstResponder.map { String(describing: type(of: $0)) } ?? "none"]
+            }
         }
         return ["ok": true, "id": id, "hit": hit.map { String(describing: type(of: $0)) } ?? "none", "sheet": w !== window,
                 "located_by": nodes().contains { $0.id == id } ? "accessibility" : "workbench_frame", "scrolled": scrolled, "row": row, "point_row": atRow, "selected": workspace?.selection ?? "", "key": w.isKeyWindow, "activated": activated]
@@ -1288,6 +1338,11 @@ extension AppDelegate {
             return ["ok": (value as? [String: Any])?["ok"] as? Bool == true, "web": value]
         }
         if let faults = step["faults"] as? [String] { workspaceTestFaults = faults; return ["ok": true, "faults": faults] }
+        // 系统文件选择框在这里无法自动操作：声明下一次点“选择照片或 PDF…”交回的文件（null 为取消），走弹出层同一个选取结果处理；这不是真实选择框测试。
+        if let pick = step["pick"] {
+            let files = (pick as? [String])?.map { URL(fileURLWithPath: $0) }
+            workspaceTestPicks.append(files); return ["ok": true, "pick": files?.map(\.lastPathComponent) ?? ["cancel"]]
+        }
         if let id = step["click"] as? String { return await click(id, contains: step["contains"] as? String ?? "") }
         if let prefix = step["click_prefix"] as? String {
             let id = nodes().first(where: { $0.id.hasPrefix(prefix) && $0.frame.width > 0 })?.id ?? TestTargets.anchors.keys.sorted().first { $0.hasPrefix(prefix) && TestTargets.live($0) != nil }
@@ -1399,10 +1454,29 @@ extension AppDelegate {
             lastQuitReply = nil
             // 验收实际 Cmd+Q：原来的 perform(afterDelay:) 在 sheet 的事件循环里可能根本没被投递。
             // 系统可能在调用应用委托之前拦住退出；用实际窗口/草稿与后续保存读回验，不伪造委托回执。
-            let quitKeyWindow = testWindows().first?.isKeyWindow == true
+            let keyTarget = testWindows().first
+            let quitKeyWindow = keyTarget?.isKeyWindow == true
+            var keyDeliveredToTarget = false
+            let keyWatch = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                if event.windowNumber == keyTarget?.windowNumber, event.modifierFlags.contains(.command),
+                   event.charactersIgnoringModifiers?.lowercased() == "q" { keyDeliveredToTarget = true }
+                return event
+            }
             await key("q", ["command"], code: 12); await sleep(1.5)
-            return ["ok": true, "dirty": dirty, "window_open_after_close": open, "quit_reply": lastQuitReply.map { $0 ? "terminate" : "cancelled" } ?? "none",
-                    "quit_key_posted": true, "quit_key_window": quitKeyWindow,
+            if let keyWatch { NSEvent.removeMonitor(keyWatch) }
+            let keyboardReply = lastQuitReply
+            // A direct Quit action separately exercises the real App delegate guard, even on an inactive test Mac.
+            // Do not infer keyboard focus from successful posted events or invent a cancellation callback.
+            lastQuitReply = nil
+            let requestsBefore = smokeQuitRequests
+            let ownModalBefore = keyTarget != nil && window.attachedSheet === keyTarget && keyTarget?.isVisible == true
+            NSApp.terminate(nil); await sleep(0.8)
+            let ownModalAfter = keyTarget != nil && window.attachedSheet === keyTarget && keyTarget?.isVisible == true
+            return ["ok": true, "dirty": dirty, "window_open_after_close": open, "quit_reply": keyboardReply.map { $0 ? "terminate" : "cancelled" } ?? "none",
+                    "quit_key_posted": true, "quit_key_window": quitKeyWindow, "quit_key_delivered_to_target": keyDeliveredToTarget,
+                    "guarded_quit_delegate_calls": smokeQuitRequests - requestsBefore,
+                    "quit_own_modal_preserved": ownModalBefore && ownModalAfter,
+                    "guarded_quit_reply": lastQuitReply.map { $0 ? "terminate" : "cancelled" } ?? "none",
                     "window_open_after_quit": self.window === window && window.isVisible,
                     "still_dirty": workspace?.hasUnsavedInput == true]
         case "state":

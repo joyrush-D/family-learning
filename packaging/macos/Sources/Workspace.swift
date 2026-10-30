@@ -98,6 +98,7 @@ final class WorkspaceStore: ObservableObject {
     }
 
     func select(_ id: String?) {
+        if TestTargets.enabled { workspaceTestSelectCalls.append(id ?? "nil") }
         selection = id
         if let item = selected, !item.task_id.isEmpty, materials[item.task_id] == nil { Task { await loadMaterials(item) } }
     }
@@ -688,17 +689,37 @@ struct FeedbackSheet: View {
                    saveTitle: "保存反馈", onSave: submit) {
             Section {
                 LabeledContent("反馈内容") {
-                    TextEditor(text: $note).multilineTextAlignment(.leading).frame(minHeight: 120).probe("feedback-note").accessibilityLabel("反馈内容")
+                    TextEditor(text: $note).multilineTextAlignment(.leading).frame(minHeight: 120).probe("feedback-note", text: note).accessibilityLabel("反馈内容")
                 }
             }
             Section("照片（可不加）") {
-                ForEach(photos, id: \.self) { Text($0.lastPathComponent) }
-                Button("选择照片或 PDF…") { picking = true }.probe("feedback-photo")
+                if photos.isEmpty { Text("还没有选；只写文字也能保存。").font(.caption).foregroundStyle(Palette.ink2).probe("feedback-files-empty", text: "还没有选") }
+                ForEach(Array(photos.enumerated()), id: \.element) { index, url in
+                    HStack {
+                        Text(url.lastPathComponent).lineLimit(1).truncationMode(.middle).probe("feedback-file-\(index)", text: url.lastPathComponent)
+                        Spacer()
+                        // 只从这次填写里去掉：已上传的原件不删不改，保存时只带留下的附件；再选同一文件沿用已上传的那份。
+                        Button("移除") { photos.removeAll { $0 == url } }.buttonStyle(.borderless).controlSize(.small)
+                            .help("只从这次反馈里去掉，不删除原件").accessibilityLabel("移除 \(url.lastPathComponent)").probe("feedback-file-remove-\(index)", text: url.lastPathComponent)
+                    }
+                }
+                Button(photos.isEmpty ? "选择照片或 PDF…" : "再加照片或 PDF…") { pick() }.probe("feedback-photo")
             }
         }
-        .fileImporter(isPresented: $picking, allowedContentTypes: [.image, .pdf], allowsMultipleSelection: true) { result in
-            if case .success(let urls) = result { photos.append(contentsOf: urls.filter { !photos.contains($0) }) }
+        .fileImporter(isPresented: $picking, allowedContentTypes: [.image, .pdf], allowsMultipleSelection: true) { picked($0) }
+    }
+
+    /// 只在 --smoke-test 的原生验收里：系统选择框无法自动操作，取测试声明的文件（或取消）交给同一个选取结果处理。
+    func pick() {
+        if TestTargets.enabled, !workspaceTestPicks.isEmpty {
+            let next = workspaceTestPicks.removeFirst()
+            return picked(next.map { .success($0) } ?? .failure(CocoaError(.userCancelled)))
         }
+        picking = true
+    }
+
+    func picked(_ result: Result<[URL], Error>) {
+        if case .success(let urls) = result { photos.append(contentsOf: urls.filter { !photos.contains($0) }) }
     }
 
     func submit() {
