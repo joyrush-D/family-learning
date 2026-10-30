@@ -69,6 +69,7 @@
 !/workbench.css
 !/test_native_workspace.py
 !/test_native_workspace.cjs
+!/test_native_feedback_files.cjs
 !/test_native_host_reentry.cjs
 !/test_native_context.py
 !/test_native_context.swift

@@ -108,6 +108,9 @@ enum PostOutcome {
 
 /// 测试模式（--smoke-test）才读的写入故障：按顺序作用于接下来的写入；正常使用从不注入。
 var workspaceTestFaults: [String] = []
+var workspaceTestPicks: [[URL]?] = []  // 仅 --smoke-test：代替系统选择框交回的文件，nil 为取消
+var workspaceTestSelectCalls: [String] = []  // 仅 --smoke-test 诊断：清单选择回调收到的值
+var workspaceTestTableChanges: [[Int]] = []  // 仅 --smoke-test 诊断：表格自己的选中行变化
 
 final class WorkspaceClient: NSObject, URLSessionTaskDelegate {
     let origin: ServiceOrigin
